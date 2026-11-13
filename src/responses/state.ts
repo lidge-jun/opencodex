@@ -1229,7 +1229,7 @@ export function rememberResponseState(
   requestBody: unknown,
   response: { id?: unknown; output?: unknown; status?: unknown; incomplete_details?: unknown },
   providerState?: OcxProviderContinuationState | string,
-  opts?: { force?: boolean; clientThreadId?: string; retainForToolContinuation?: boolean; replayOwnerKey?: string | null },
+  opts?: { force?: boolean; clientThreadId?: string; retainForToolContinuation?: boolean; replayOwnerKey?: string | null; compiledPlaintext?: boolean },
 ): void {
   if (!requestBody || typeof requestBody !== "object" || Array.isArray(requestBody)) return;
   const request = requestBody as Record<string, unknown>;
@@ -1248,7 +1248,7 @@ export function rememberResponseState(
     if (!details || typeof details !== "object" || Array.isArray(details)
       || (details as { reason?: unknown }).reason !== "max_output_tokens") return;
   } else if (response.status !== undefined && response.status !== "completed") return;
-  if (opts?.replayOwnerKey === null || (opts?.replayOwnerKey !== undefined && !validReplayOwnerKey(opts.replayOwnerKey))) return;
+  if ((opts?.compiledPlaintext && !validReplayOwnerKey(opts.replayOwnerKey)) || opts?.replayOwnerKey === null || (opts?.replayOwnerKey !== undefined && !validReplayOwnerKey(opts.replayOwnerKey))) return;
   ensureLoaded();
   const existing = states.get(response.id);
   // Never let a colliding upstream id replace a different caller's retained response.

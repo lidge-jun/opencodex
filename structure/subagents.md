@@ -27,7 +27,7 @@ the first input item's developer `additional_tools` catalog used by Responses Li
 top-level catalogs take precedence; user-role and later historical catalogs do not opt in.
 The compiler preserves caller objects,
 aliases the namespace and three message functions, and removes only their true encryption marker.
-Declaration/reference collisions refuse the whole rewrite without changing the request.
+Declaration/reference collisions refuse the whole rewrite without changing the request. The request-level mode decision is captured once for combo children and internal retries; a disabled setting at normalization prevents compilation while keeping the captured replay scope strict.
 
 `src/adapters/openai-responses.ts` returns request-local alias capabilities. The Responses core
 refreshes them after every request rebuild and restores JSON, SSE and WebSocket identities after

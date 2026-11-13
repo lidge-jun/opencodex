@@ -13,6 +13,20 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const ownerA = "a".repeat(64), ownerB = "b".repeat(64);
+test("compiled request requires a valid owner before retention", () => {
+  clearResponseStateForTests();
+  const body = { input: [] };
+  for (const replayOwnerKey of [undefined, null, "invalid"]) {
+    const options = { compiledPlaintext: true, force: true, replayOwnerKey };
+    rememberResponseState(body, { id: "resp-compiled-owner", output: [{ type: "message", content: "synthetic output" }] }, undefined, options);
+    const replay = { previous_response_id: "resp-compiled-owner", input: [] };
+    expect(expandPreviousResponseInput(replay)).toBe(replay);
+  }
+  rememberResponseState(body, { id: "resp-compiled-owner", output: [{ type: "message", content: "synthetic output" }] }, undefined,
+    { compiledPlaintext: true, replayOwnerKey: ownerA });
+  expect(JSON.stringify(expandPreviousResponseInput({ previous_response_id: "resp-compiled-owner", input: [] }, undefined, ownerA))).toContain("synthetic output");
+  clearResponseStateForTests();
+});
 let release: () => void;
 let home: string;
 let previousHome: string | undefined;

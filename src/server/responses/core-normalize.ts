@@ -196,11 +196,12 @@ export async function applyFinalRouteRequestNormalization(args: {
     args.claudeGoAffinity ? args.claudeGoAffinity.sessionLane : getOrAllocateRequestSessionLane(req),
     routedProvider);
   parsed._plaintextV2AgentMessages = shouldPreparePlaintextV2AgentMessages({
-    enabled: isPlaintextV2AgentMessagesEnabled(config),
+    enabled: parsed._plaintextV2Decision === true && isPlaintextV2AgentMessagesEnabled(config),
     inboundWire,
     canonicalChatGpt: isCanonicalOpenAiForwardProvider(route.provider),
     requestBody: parsed._rawBody,
   });
+  if (parsed._plaintextV2AgentMessages) parsed._plaintextV2EverPrepared = true;
   // Recompute from the original wire preference on every route, including fallback.
   // A provider default never converts raw reasoning into a summary.
   if (inboundWire === "responses" && parsed._rawBody) {

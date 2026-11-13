@@ -9,6 +9,7 @@ import { CODEX_FORWARD_BASE_URL } from "../../src/providers/openai-tiers";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import type { OcxConfig } from "../../src/types";
+import { resetSubagentModelFallbackStateForTests, setSubagentQuotaPrimeForTests } from "../../src/codex/subagent-model-fallback";
 
 const originalFetch = globalThis.fetch;
 const originalCatalog = process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
@@ -24,6 +25,7 @@ beforeEach(() => {
   clearResponseStateForTests();
 });
 afterEach(() => {
+  resetSubagentModelFallbackStateForTests();
   globalThis.fetch = originalFetch;
   if (originalCatalog === undefined) delete process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE;
   else process.env.OPENCODEX_APP_SERVER_CATALOG_STATE_OVERRIDE = originalCatalog;
@@ -42,6 +44,40 @@ function config(mode: "v1" | "v2-plaintext", combo = false): OcxConfig {
     apiKeys: [{ id: "a", key: "synthetic-a" }, { id: "b", key: "synthetic-b" }],
     ...(combo ? { combos: { owned: { strategy: "failover", targets: [{ provider: "native", model: "gpt-5.6-sol" }] } } } : {}),
   };
+}
+for (const combo of [false, true]) for (const initiallyEnabled of [false, true]) {
+  test(`${combo ? "combo" : "direct"}: request mode remains bounded across quota wait`, async () => {
+    const cfg = config(initiallyEnabled ? "v2-plaintext" : "v1", combo);
+    const sent = upstream();
+    let resume!: () => void;
+    let entered!: () => void;
+    const waiting = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { resume = resolve; });
+    setSubagentQuotaPrimeForTests(async () => { entered(); await gate; });
+    const req = request("own-a", "synthetic-a", "shared-parent", undefined, combo);
+    req.headers.set("x-openai-subagent", "collab_spawn");
+    const pending = handleResponses(req, cfg, { model: "", provider: "" }, {
+      admission: resolveDataPlaneAdmissionSecret("synthetic-a", cfg)!, inboundWire: "responses",
+    });
+    await waiting;
+    cfg.multiAgentMode = initiallyEnabled ? "v1" : "v2-plaintext";
+    resume();
+    const response = await pending;
+    await response.text();
+    expect(response.status).toBe(200);
+    expect(sent).toHaveLength(1);
+    const body = JSON.parse(sent[0]!) as { tools: Array<{ name: string }> };
+    expect(body.tools[0]?.name).not.toBe("collaboration-optimize");
+    if (initiallyEnabled) {
+      expect((await send(cfg, "own-a", "synthetic-b", "shared-parent", "resp-owner-a")).status).toBe(400);
+      expect(sent).toHaveLength(1);
+      expect((await send(cfg, "own-a", "synthetic-a", "shared-parent", "resp-owner-a")).status).toBe(400);
+      expect(sent).toHaveLength(1);
+      cfg.multiAgentMode = "v2-plaintext";
+      expect((await send(cfg, "own-a", "synthetic-a", "shared-parent", "resp-owner-a")).status).toBe(200);
+      expect(sent).toHaveLength(2);
+    }
+  });
 }
 function request(own: string | undefined, key: string, parent?: string, previous?: string, combo = false): Request {
   return new Request("http://localhost/v1/responses", {

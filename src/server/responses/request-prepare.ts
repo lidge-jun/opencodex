@@ -440,7 +440,7 @@ export async function prepareResponsesRequest(
   const inboundOwnThreadId = req.headers.get("thread-id")?.trim() || undefined;
   const replayPrincipal = options.replayPrincipal
     ? options.replayPrincipal.clientPrincipalId : resolveContextPrincipal(req, config, options.admission);
-  const strictReplay = isPlaintextV2AgentMessagesEnabled(config);
+  const strictReplay = options.plaintextV2Decision ?? isPlaintextV2AgentMessagesEnabled(config);
   const replayOwnerKey = strictReplay ? responseReplayOwnerKey(replayPrincipal, inboundOwnThreadId) : undefined;
   const replayThreadId = strictReplay ? inboundOwnThreadId : inboundClientThreadId;
   const cursorClientThreadId = codexPoolAffinityKey(req.headers);
@@ -626,9 +626,11 @@ export async function prepareResponsesRequest(
     }
     return formatErrorResponse(400, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
+  parsed._plaintextV2Decision = strictReplay;
   options.onRequestBodyRead?.();
   const responseStateOptions = (force = false) => ({
     replayOwnerKey,
+    compiledPlaintext: parsed._plaintextV2EverPrepared === true,
     ...(force ? { force: true } : {}),
     ...((strictReplay ? inboundOwnThreadId : parsed._clientThreadId) ? { clientThreadId: strictReplay ? inboundOwnThreadId : parsed._clientThreadId } : {}),
   });
@@ -1181,6 +1183,8 @@ export async function prepareResponsesRequest(
         try {
           const reparsed = parseRequest(body);
           const kept: Array<keyof OcxParsedRequest> = [
+            "_plaintextV2Decision",
+            "_plaintextV2EverPrepared",
             "_previousResponseInputExpanded",
             "_providerContinuation",
             "_providerContinuationCandidate",
