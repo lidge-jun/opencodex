@@ -519,7 +519,8 @@ describe("tombstone bound, cleanup and the operator's way out", () => {
 
   test("forced revokes beyond the bound are refused, never dropped, and the link stays", async () => {
     for (let i = 0; i < MAX_TOMBSTONES; i++) recordTombstone(tombstone("lnk_" + i.toString(16).padStart(16, "0")));
-    // The CLI says nothing was changed for this refusal (src/cli/link.ts REVOKE_REFUSALS): no stop, no key revoke.
+    // A fresh forced revoke at the limit stops nothing and revokes no key; the CLI (journalledRevokeError in src/cli/link.ts)
+    // says only that the attempt did not touch the link, its key or the Child, which also holds for a resumed revoke.
     let stops = 0, keyRevokes = 0;
     const h = harness([link()], { duringStop: () => { stops += 1; }, duringKeyRevoke: () => { keyRevokes += 1; } });
     const res = await h.request("DELETE", "/api/link/" + ID, { force: true });
