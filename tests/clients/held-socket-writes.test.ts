@@ -24,11 +24,12 @@ test("a success is held until released, and settles once", () => {
   const calls: Array<Error | null | undefined> = [];
   write(new EventEmitter(), calls);
   pending[0]!();
-  expect(calls).toEqual([]);
+  expect(calls).toHaveLength(0);
   expect(heldSocketWriteCountForTests()).toBe(1);
   releaseHeldSocketWrites();
   releaseHeldSocketWrites();
-  expect(calls).toEqual([undefined]);
+  expect(calls).toHaveLength(1);
+  expect(calls[0]).toBeUndefined();
   expect(heldSocketWriteCountForTests()).toBe(0);
 });
 
@@ -67,6 +68,7 @@ test("a completion arriving after restore settles at once, even after a new hold
   const second = controlledBase();
   holdLargeSocketWrites(1, second.base);
   first.pending[0]!();
-  expect(calls).toEqual([undefined]);
+  expect(calls).toHaveLength(1);
+  expect(calls[0]).toBeUndefined();
   expect(heldSocketWriteCountForTests()).toBe(0);
 });
