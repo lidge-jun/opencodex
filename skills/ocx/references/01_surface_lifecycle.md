@@ -85,18 +85,21 @@ Drives no management route.
 
 ### `ocx sync`
 
-Usage: `ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only] [--child <linkId>]... [--restart-children[=app-server] | --restart-children=codex --yes]`
+Usage: `ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--overwrite-conflict [--overwrite-client <id>]] [--local-only] [--json] [--restart-codex] [--restart-app-server-only] [--child <linkId>]... [--restart-children[=app-server] | --restart-children=codex --yes]`
 
-Synchronize client catalogs, including Aside profiles through the running server's mutation owner.
+Synchronize client catalogs, including Aside profiles and Pi through the running server's mutation owner.
 
 State-changing: yes. JSON mode: `payload`.
 
 | Method | Route |
 |---|---|
 | POST | `/api/client-integrations/aside/sync` |
+| POST | `/api/client-integrations/pi/sync` |
 
 | Flag | Value | Meaning |
 |---|---|---|
+| `--overwrite-conflict` | boolean | Allow conflicting route materialization only for this explicit sync. |
+| `--overwrite-client` | string | Restrict takeover to one client; requires --overwrite-conflict. |
 | `--local-only` | boolean | Do not fan out the Home sync to linked Children. |
 | `--json` | boolean | Emit the sync fan-out result as JSON. |
 | `--restart-codex` | boolean | Restart the Codex app-servers and fully quit and relaunch the Codex desktop app after a catalog, cache, or changed configuration write, on macOS, Linux and Windows. |

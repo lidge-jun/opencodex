@@ -76,6 +76,30 @@ describe("OAuth status privacy", () => {
     expect(cancelLoginFlow("xai")).toBe(false);
   });
 
+  test("xAI cancellation selects only the requested flow and rejects malformed IDs", async () => {
+    loginState.set("old-xai", { provider: "xai", flowId: "old-xai", done: true });
+    loginState.set("later-xai", { provider: "xai", flowId: "later-xai", done: false });
+    loginState.set("other-flow", { provider: "anthropic", flowId: "other-flow", done: false });
+    const config = { defaultProvider: "xai", providers: {} } as OcxConfig;
+    try {
+      for (const flowId of ["old-xai", "unknown", "other-flow", null, 123, "x".repeat(129)]) {
+        const request = new ManagementRequest("http://localhost/api/oauth/login/cancel", {
+          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: "xai", flowId }),
+        });
+        const response = await handleManagementAPI(request, new URL(request.url), config);
+        if (typeof flowId !== "string" || flowId.length > 128) expect(response?.status).toBe(404);
+        else expect(await response!.json()).toEqual({ ok: true, cancelled: false });
+        expect(loginState.get("later-xai")?.done).toBe(false);
+        expect(loginState.get("other-flow")?.done).toBe(false);
+      }
+      const request = new ManagementRequest("http://localhost/api/oauth/login/cancel", {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: "xai", flowId: "later-xai" }),
+      });
+      const response = await handleManagementAPI(request, new URL(request.url), config);
+      expect(await response!.json()).toEqual({ ok: true, cancelled: true });
+    } finally { clearLoginState("anthropic"); }
+  });
+
   test("failed-flow dismissal is exact and provider scoped", () => {
     loginState.set("failed-xai", { provider: "xai", flowId: "failed-xai", done: true, error: PUBLIC_OAUTH_ERROR });
     loginState.set("pending-xai", { provider: "xai", flowId: "pending-xai", done: false });

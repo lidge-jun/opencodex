@@ -71,6 +71,45 @@ ocx disconnect   # 경량 모듈 Child인 경우 ~/.cache/opencodex/bin/ocx-chil
 
 자식 연결을 끊으려면 자식에서 `ocx disconnect`를 실행합니다. 이 명령은 클라이언트 터널을 끊고 SSH를 통해 홈에서 링크를 폐기합니다. 홈에서 폐기하지 못하면 다음 문구를 출력합니다: `Home revoke failed; run ocx link revoke --link-id <linkId> on the home.`
 
+## 기기별 Route to
+
+Home의 Route to 의도는 Child에 기본으로 동기화됩니다. 각 기기는 자신의 설치된 클라이언트, 경로, 수신 포트, 제공 모델 카탈로그로 설정을 생성합니다. 우선순위는 기기 override > Home 기본값 > 내장 기본값(Codex·Claude Code만 켜짐)입니다.
+
+등록 시 클라이언트를 명시적으로 선택하지 않으면 Child는 Home 기본값과 이후 변경을 상속합니다. 클라이언트별 명령은 해당 클라이언트의 실패를 반환하고 다른 클라이언트의 미해결 충돌은 경고하며, 전체 sync는 모든 미해결 실패를 보고합니다. Claude Desktop first-party 모드는 이미 OpenCodex를 거치므로 켜기 의도는 아무것도 쓰지 않고 `current`로 표시합니다. 끄기 의도는 실행할 모드 전환 명령(Home에서는 `ocx integrations native claude-desktop off`, Child에서는 `ocx claude desktop apply --gateway` 후 `ocx route to sync`)을 알려 주는 충돌로 표시합니다.
+
+Home 자신에서 Codex, Claude Code, Grok, Claude Desktop은 Home의 켜기/끄기 스위치를 따릅니다. `ocx restore`, `ocx restore back`, `ocx claude desktop apply`, Messages API 끄기, 에이전트 설정, 대시보드 토글이 바꾸는 바로 그 스위치입니다. 명시적인 `false`만 꺼짐이고 설정하지 않은 스위치는 켜짐입니다. Home 기본값과 기기 override는 Home에서 이 네 클라이언트를 결정하지 않습니다. 어떤 route 쓰기도 결정하고 있지 않은 Grok·Claude Desktop 스위치가 설정되지 않았거나 켜져 있으면 시작 시 동작과 같은 범위만 적용합니다. Grok은 시작 시 동기화 규칙을 따르고, Claude Desktop은 OpenCodex가 이미 소유한 gateway 프로필만 갱신하며 새로 만들거나 Desktop 모드를 바꾸지 않습니다. OpenCodex가 쓴 뒤 바뀐 소유 프로필은 갱신하지 않고 충돌로 보고합니다. OpenCodex가 소유한 적 없는 Desktop 라이브러리는 건드리지 않고 current로 보고하므로 전체 sync가 이 때문에 실패하지 않습니다. Desktop 프로필을 만들려면 `ocx route to claude-desktop on --device home`(또는 `ocx route to claude-desktop on`)을 실행하세요. 이것만으로 Child의 Grok·Claude Desktop이 켜지지는 않습니다.
+
+Child는 Home의 스위치를 읽지 않습니다. Child는 기기 override, 저장된 Home 기본값, 내장 기본값 순으로 따릅니다. Home은 이 네 클라이언트의 기본값을 한 번만 저장합니다. Codex와 Claude Code는 저장 시점의 Home 스위치 값(명시적으로 끄지 않았다면 켜짐)으로, Grok과 Claude Desktop은 꺼짐으로 저장합니다. Home 기본값 쓰기(`--device` 없는 `ocx route to <client> on|off`)와 Child 등록은 항상 저장합니다. Home에 링크가 있으면 Home 전용 작업이 스위치를 바꾸기 전에도 저장합니다. 링크 리스너를 시작할 때, 그리고 `ocx restore`, `ocx restore back`, `ocx claude desktop apply`, Messages API 끄기, Claude 토글, native 토글, `--device home` route 쓰기 안에서입니다. Home 전용 통합 변경(대시보드 토글, `ocx integration client enable|disable`, 통합 기록에서의 되돌리기, Aside 프로필 변경) 전에는 링크가 있는 Home이 Child가 상속하는 모든 기본값을 파일 통합까지 포함해 저장하며, 링크 리스너도 시작할 때 같은 일을 합니다. 그래서 이 네 기본값만 저장하던 버전에서 업그레이드한 Home도 무엇이 바뀌기 전에 나머지를 고정합니다. 경량 `ocx-child` 링크는 여기서 링크로 세지 않습니다. route 의도를 읽지 않으므로 경량 링크만 있는 Home에는 보호할 Child가 없습니다. 링크가 없는 Home에서는 이 Home 전용 명령이 기본값을 저장하지 않으므로, 나중에 등록한 Child는 등록 시점의 스위치 값을 상속합니다. 단, Home 기본값 쓰기로 기본값이 이미 저장되어 있으면 그 값을 상속합니다. 이전 기본값 쓰기로 이미 route 의도를 쓰고 있는 Home이라면, Home 전용 통합 변경은 `ocx sync`가 유지하도록 Home 자신의 행으로 기록되며, 이 행은 Child가 상속하지 않습니다. 링크 리스너가 시작할 때 저장에 실패하면(예: 다른 프로세스가 설정 잠금을 잡고 있을 때) 백그라운드에서 계속 다시 시도합니다. `ocx route to status`나 Child가 route 의도를 읽는 것은 아무것도 저장하지 않습니다. 그 뒤 Child가 상속하는 값은 Home 기본값 쓰기로만 바뀝니다. 위의 Home 전용 명령은 Home만 바꿉니다. 저장된 route 의도 파일(OpenCodex 설정 디렉터리의 `route-intent.json`)을 읽을 수 없으면, 링크가 있는 Home의 이 명령들과 모든 `ocx route to` 변경은 아무것도 바꾸지 않고 거부하며, 고치거나 지울 파일을 알려 줍니다. 링크가 없는 Home에서는 native 토글, `ocx restore`, Home 전용 통합 변경이 그대로 동작합니다. 이때 통합 변경은 아무것도 기록하지 않으며, `ocx sync`도 이 파일을 읽지 못하므로 그 변경을 되돌릴 수 없습니다.
+
+`ocx route to <client> on|off --device home`이 Codex, Claude Code, Grok, Claude Desktop을 결정하면 먼저 그 클라이언트의 스위치를 저장한 뒤 적용합니다. 적용이 충돌이나 실패로 끝나면(예: 외부 Codex provider, 불완전한 Grok 블록, 바뀐 Claude Desktop 프로필) 명령은 실패하고 스위치가 저장되었는지 알려 줍니다. "The Home's grok switch was saved, but applying it ended in conflict"는 스위치가 바뀌었다는 뜻이고, "The Home did not apply"는 아무것도 바뀌지 않았다는 뜻입니다. first-party 모드의 Claude Desktop은 저장하기 전에 거부합니다.
+
+이 Home이 route 의도를 쓰기 시작하면(저장된 기본값이나 Home override가 있으면) `ocx sync`는 Home의 모든 클라이언트에 route 의도를 적용합니다. 그래서 Home 전용 통합 변경은 그 클라이언트에 대한 이 Home의 결정으로 기록되고 `ocx sync`가 유지합니다. 대시보드 토글, `ocx integration client enable|disable`(같은 Home 전용 결정이며, Child가 상속하는 값은 `ocx route to <client> on|off`로 바꿉니다), 통합 기록에서의 되돌리기, Aside 프로필 변경이 여기에 해당합니다. Aside는 변경 뒤 Home이 라우팅하는 모든 프로필의 안정적인 Aside userId로 기록합니다. 링크된 Child는 기본값을 그대로 따릅니다. Aside의 `accounts.json`에 안정적인 userId가 없는 프로필이 있으면 이런 Home의 Aside 프로필 변경은 아무것도 바꾸기 전에 거부합니다(`route_intent_aside_unresolved`). 명세를 고치거나 `ocx route to aside on|off --device home`으로 Home의 Aside를 직접 결정하세요. 이 명령은 Home의 `devices.home.aside` 결정을 저장하며, 이후 `ocx sync`도 그 결정을 유지합니다. Child의 기본값을 확인할 수 없는 경우에는 `--device` 없이 `ocx route to aside on|off`로 기본값을 정하기 전까지 별도 Aside 결정이 없는 Child가 route 의도를 동기화할 수 없습니다. 해당 Child의 상태는 `unresolved`로 남으며, Child에 직접 지정한 결정은 계속 적용됩니다. route 의도를 쓰기 전부터 이런 프로필을 라우팅하던 Home(예: 링크가 있는 상태로 업그레이드한 경우)에서도 `ocx sync`는 계속 동작합니다. Aside를 결정하거나 명세를 고치기 전까지 sync는 Aside를 그대로 두고 나머지 클라이언트만 적용하며, 해결 방법을 알려 줍니다. `ocx route to sync`도 같게 동작하며, 이 명령과 `ocx route to status`는 Aside의 의도를 `off`가 아닌 `unresolved`로 표시하고 같은 안내를 보여 줍니다.
+
+```sh
+ocx route to status --device all --json
+ocx route to aside on --accounts all
+ocx route to aside on --device my-child --accounts stable-aside-user-id
+ocx route to pi off --device my-child
+ocx route to pi inherit --device my-child
+ocx route to sync --device my-child
+```
+
+`--device` 없는 Home 쓰기는 기본값을 바꾸고 Home에는 지정한 클라이언트만 같은 적용 경로로 반영합니다. Codex, Claude Code, Grok, Claude Desktop은 Home의 스위치를 써서 반영하므로 `ocx route to codex off`는 Home의 Codex를 끄고 Child가 상속하는 기본값도 바꿉니다. `--device home`(Home에서는 `this`)은 Home만 결정합니다. 이 네 클라이언트는 Home의 스위치만 쓰고 Child 기본값은 그대로 두며, `inherit`는 Home의 스위치를 현재 기본값(저장된 기본값이 없으면 내장 기본값)으로 맞춥니다. 다른 클라이언트는 Home override를 기록합니다. 다른 클라이언트에 대한 route 쓰기, `ocx route to sync`, Home에서 실행한 일반 `ocx sync`는 Home의 native 스위치를 바꾸지 않고 각 스위치가 가리키는 상태만 갱신하므로 `ocx restore`, `ocx restore back`, Messages API 끄기, 대시보드 토글을 되돌리지 않습니다. Child는 다음 동기화 tick에 반영합니다. Home이 추가한 Child는 명시적 sync로 즉시 적용합니다. `--overwrite-conflict`(`ocx route to`나 `ocx sync`)를 쓰면 Home은 OpenCodex 2.100.0 이상인 Child에서만 그 sync를 실행합니다. 이전 버전은 이 플래그를 무시하고 일반 sync를 성공으로 보고하기 때문이며, 그런 Child는 `child-ocx-lacks-overwrite`로 건너뜁니다. Child가 먼저 연결한 링크는 인증된 읽기 watch를 유지하며, Home sync가 이를 즉시 깨웁니다. 적용 보고가 도착하기 전에는 `pending`으로 표시하고, 활성 watch가 없으면 다음 tick을 기다린다고 안내합니다. 이 링크의 충돌 덮어쓰기는 Child에서 사람이 `ocx route to sync --overwrite-conflict`로 허용해야 합니다. Child의 로컬 sync는 즉시 적용합니다.
+
+Aside 계정은 로컬 `u/N` 번호가 아닌 **userId**로 선택합니다. `all`은 해당 기기의 모든 계정 프로필, `none`은 선택 없음입니다. Child의 일반 쓰기는 실행할 정확한 Home 명령을 안내하며 거부합니다. Child 사용자는 `ocx route to aside off --local`로 자신의 기기만 제외하고 `inherit --local`로 복귀할 수 있습니다. 로컬 `on`은 허용하지 않습니다. 연결된 Child에서 실행한 native 명령보다도 Home 의도가 우선합니다. 그곳의 `ocx restore`는 약 1분 뒤 다음 동기화가 Home 의도를 다시 적용할 때까지만 Codex 라우팅을 끕니다. 해당 Child에서 Codex를 계속 끄려면 `ocx route to codex off --local`을 사용하세요. Child는 1분마다 조정하며, 적용할 때마다 무엇을 바꾸기 전에 이전 적용 확인을 철회하므로 적용 중에 보낸 상태 보고는 다음 보고 전까지 잠시 미적용으로 보일 수 있습니다. 적용 중단이나 로컬 제외가 발생하면 Home의 이전 적용 확인을 철회합니다. 의도나 카탈로그 조회가 지연된 명시적 로컬 sync는 캐시된 off 상태가 정리되어 있어도 0이 아닌 종료 코드를 반환합니다. 토글에서 생략한 계정·모델 이름 정책은 유지됩니다. 소유 기록이 있는데 Aside 계정 명세에서 사라진 프로필은 소유권을 해결하기 전까지 완료로 표시하지 않습니다.
+
+상태 JSON은 `ocx.route-to/1`이며 의도·출처·적용 결과를 구분합니다. 출처는 `builtin`, `default`, `device`, `local`(Child 제외)이며, Home의 Codex·Claude Code·Grok·Claude Desktop 행은 Home 자신의 스위치를 뜻하는 `native`로 표시합니다. `not_installed`, `conflict`, `failed`는 성공으로 처리하지 않습니다. 의도가 바뀌면 이전 충돌이나 실패를 포함한 이전 결과는 모두 `stale`이 됩니다. 충돌 덮어쓰기는 해당 실행의 명시적 `--overwrite-conflict`가 필요합니다. 쓰기가 route 정책이나 Home 스위치를 저장한 뒤 적용이 예상치 못하게 실패하면 오류가 그 사실을 알리고 `desiredCommitted: true`를 담습니다. 경량 `ocx-child` Child는 `ocx sync`로 Home 카탈로그만 갱신하며 route 의도를 읽지 않습니다. `ocx route to status`는 이 Child를 `route intent unsupported (ephemeral-child-no-route-intent)`로 표시하고, 이 Child를 `--device`로 지정한 route 쓰기와 `ocx route to sync --device`는 아무것도 바꾸기 전에 `409 route_intent_unsupported`로 거부하며, `ocx route to sync --device all`은 접속하지 않고 `unsupported`로 보고합니다. 등록할 때 route 의도를 저장하지 않으며, `ocx sync`는 `--overwrite-conflict`가 있어도 일반 카탈로그 sync를 보냅니다. 자세한 동작은 [영문 가이드](/guides/remote-link/#route-clients-per-device)를 참고하세요.
+
+기존에 소유권 기록이 있는 연동은 Home 기본값으로 이전합니다. 명시적인 `connect --clients` 선택은 초기 기기 override로 유지하며, Home의 해당 기기 `on|off|inherit`가 그 선택을 대체합니다. Child 보고는 Home 정책을 변경하지 않습니다.
+
+Home이 결정한 클라이언트를 Home에 적용하지 못하면 그 쓰기는 실패합니다. first-party 모드인 Home에서 `ocx route to claude-desktop off`를 실행하면 `--device home` 여부와 관계없이 409로 응답하고, 해당 클라이언트의 충돌과 모드 전환 명령을 알려 주며, CLI는 0이 아닌 코드로 끝납니다. Home의 스위치를 쓰지 못한 경우도 같습니다. 기본값 쓰기라면 Child 기본값은 그대로 저장됩니다.
+
+연결된 Child는 Home의 실효 의도를 자신의 Codex, Claude Code, Claude Desktop, Grok 켜기/끄기 스위치에 기록합니다. Claude Code를 끄면 Messages API 설정도 고정될 수 있습니다. Child는 처음 바꾸기 전에 각 스위치의 독립형 값을, 설정되지 않았던 상태까지 포함해 기록합니다. `ocx disconnect`와 실패한 등록은 그 값을 되돌립니다. 실패한 등록이 값을 되돌리지 못하면 서비스 토큰을 유지하고 복원하지 못한 기록 파일을 알려 줍니다. 보고된 문제를 해결한 뒤 `ocx disconnect`를 실행하면 연결되지 않은 상태에서도 스위치를 복원하고 그 토큰을 제거합니다. 연결 중 사용자가 직접 바꾼 스위치는 그 값을 유지합니다. 다만 Home이 마지막으로 적용한 값과 정확히 같은 값으로 직접 설정한 스위치는 Home의 기록과 구별할 수 없어 복원됩니다. 로컬 제외(`--local`)는 해당 Child 사용자의 선택이므로 disconnect 후에도 유지됩니다.
+
+파일 연동도 같은 방식으로 되돌립니다. 링크 후 첫 적용 때 Child는 스스로 설정해 둔 파일 연동을 기록합니다(Aside 프로필은 제외). `ocx disconnect`는 아직 설정된 연동은 유지하고, Home이 끈 연동은 다시 설정하며, 링크가 추가한 연동만 제거합니다. 로컬 제외나 연결 중 직접 작성한 블록은 유지합니다. 복원된 연동은 처음에는 Child가 Home에서 마지막으로 받은 모델 목록을 쓰며, 다음 독립형 시작 때 로컬 카탈로그로 갱신됩니다. 이 기록을 남기는 버전을 실행하기 전에 이미 Home의 route 의도를 적용한 Child에는 기록이 없으므로, `ocx disconnect`는 링크가 소유한 연동만 제거하고 Home이 끈 연동을 다시 설정하지 않습니다. disconnect 후 직접 다시 설정하세요.
+
+disconnect는 소유한 키만 복구하므로 이후 편집한 모델·훅·신뢰 프로젝트·Computer Use 설정이 남습니다. 중단된 작업은 `ocx disconnect`로 재개하며 최초 사용한 `--keep-catalog`를 유지하세요. 소유 키 충돌이나 소유권 근거가 남은 이전 저널은 `ocx disconnect --recover-config --yes`로 현재 상태를 비공개 백업한 뒤 키 단위로 복구합니다. 소유권을 확인할 수 없거나 프로필이 편집되어 검증할 수 없으면 계속 거부합니다. 백업 경로를 보존하고, disconnect 후 `ocx service restart`로 독립형 런타임을 시작한 다음 다시 연결하세요.
+
 ## 보안
 
 Child는 링크를 통해 Home 컴퓨터의 프로바이더와 프로바이더 인증 정보를 사용합니다. Home은 Child마다 별도의 링크 키를 만들며, 링크를 제거하면 그 키를 폐기합니다. 확인 전에 호스트 지문을 비교하여 잘못된 컴퓨터나 변경된 호스트 키를 실수로 허용하지 않도록 하세요. Tailscale identity로 발급된 대시보드 세션은 머신 링크를 관리할 수 없습니다. Child에서 키는 OpenCodex 안에만 머뭅니다. Codex나 Claude Code가 Child에서 보내는 인증 정보는 Home으로 전달되지 않으며, Child에서 `127.0.0.1:<port>`에 접근하는 프로그램은 키 없이 Home을 사용합니다. 이는 독립형 설치가 로컬 프로그램에 주는 것과 같은 신뢰 수준입니다. 다른 사이트의 웹 페이지는 거부됩니다.
@@ -94,11 +133,37 @@ ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wai
 
 비대화형 실행(TTY 없음)에서는 `--expect-fingerprint`가 필수입니다. 대화형 터미널에서는 옵션을 생략할 수 있지만, 제시된 지문을 명시적으로 확인해야 합니다.
 
+대시보드와 `ocx integrations native <client> on|off`의 native 토글은 Home의 스위치를 바꾸고 해당 클라이언트의 전환(Claude Desktop first-party 전환 포함)을 실행하여 Child 기본값을 유지하며, Home에 대한 route 의도는 기록하지 않습니다. 이전 버전이 저장한 이 네 클라이언트의 Home override는 무시하고 다음 route 변경 때 제거합니다. Child에서 CLI는 거부하고 해당 기기의 Home 명령을 출력합니다. 링크를 폐기하면 그 기기의 override도 정리합니다. Claude Desktop의 first-party 모드는 보존합니다. 켜기 의도는 쓰기 없이 `current`이며, 끄기 의도는 모드 전환을 마칠 때까지 conflict로 표시합니다.
+
 Home에서 `ocx link check (--link-id <id> | --all)`를 실행하면 Home이 추가한 각 Child의 설치 버전, 설치 종류, 업데이트 경로를 읽습니다. 링크의 SSH로 Child의 `ocx update --plan`을 실행하며(Child마다 60초, 동시에 세 대), 이 명령은 계획만 계산하고 아무것도 바꾸지 않습니다. 2.97.0보다 오래된 Child는 `owner-action`(`legacy-ocx`)으로 표시되고, 버전은 macOS와 Linux에서는 읽기 전용 SSH 호출을 한 번 더 해서, Windows에서는 링크로 보고된 버전에서 가져옵니다. Child 쪽에서 연결한 링크와 `ocx-child` Child는 SSH 없이 보고됩니다. `ocx link status --json`은 각 행에 `child` 블록(버전, 버전 차이, 카탈로그 최신 여부, 활동, 마지막 작업)을 추가합니다. 자세한 내용과 종료 코드는 [Child install, catalog and activity](/guides/remote-link/#child-install-catalog-and-activity)(영문)를 참고하세요.
 
 ### Home에서 Child 운영하기
 
-`ocx link sync`, `ocx link restart-codex`, `ocx link update`는 Home이 추가한 Child에서 링크의 SSH 연결로 실행되며 작업을 JSON으로 출력합니다. `sync`는 고정된 `ocx sync --expect-link`를 실행합니다(Child 2.93.0 이상). `restart-codex`는 동기화한 뒤 Child의 Codex app-server를 재시작해 실행 중인 Codex가 현재 카탈로그를 읽게 합니다. `--scope codex`는 데스크톱 앱도 다시 실행합니다. 재시작은 링크 하나만 지정합니다. `restart-codex`와 `--restart-codex`에는 `--yes`가 필요하지만 `ocx link sync --link-id <id> --restart-app-server-only`는 확인 없이 app-server를 재시작합니다. Home이 그 Child의 모델 요청을 중계하는 동안에는 재시작을 건너뜁니다(`restart-skipped:link-active`). 2.69보다 오래된 Child에서는 스트리밍이 아닌 요청이 응답이 시작된 뒤에야 보입니다. `update --yes`는 Child 자체 업데이트 도구로 Child의 OpenCodex를 이 Home의 버전으로만 업데이트합니다(Child 2.97.0 이상. npm과 pnpm은 Node 런처로 적용하므로 `ocx link check`도 그곳에서 읽기 전용 `node --version`을 실행합니다). 한 번에 Child 하나씩 처리하며, 적용이 성공, 실패, 롤백된 뒤에는 다시 동기화합니다. 결과를 알 수 없는 적용은 다시 실행하거나 동기화하지 않으므로 `ocx link check`로 확인하세요. 그 Child로 중계 중인 요청은 끝납니다. Windows Child는 `sync`만 지원하고, `ocx-child` Child는 재시작과 업데이트를 지원하지 않는다고 보고합니다. CLI는 루프백에 바인딩된 Home이 필요합니다. 그렇지 않은 Home에서는 이 작업을 실행할 수 없으며, 대시보드에도 이 작업은 없습니다. 자세한 내용과 종료 코드는 [Operating Children from the Home](/guides/remote-link/#operating-children-from-the-home)(영문)를 참고하세요. 이 보호는 최선의 노력일 뿐입니다. 확인과 재시작 사이에 시작된 요청은 끝날 수 있으므로, 턴을 보존해야 하면 그 Child에서 새 요청을 멈추세요. `ocx sync --restart-children`(또는 `--restart-children=codex --yes`)는 Home 동기화를 전파할 때 모든 Child 또는 `--child <linkId>`로 지정한 Child에 같은 규칙을 적용합니다. 각 Child는 동기화되고, 중계 중인 요청이 있는 동안에는 재시작만 건너뜁니다(`restart-skipped:link-active`).
+`ocx link sync`, `ocx link restart-codex`, `ocx link update`는 Home이 추가한 Child에서 링크의 SSH 연결로 실행되며 작업을 JSON으로 출력합니다. `sync`는 고정된 `ocx sync --expect-link`를 실행합니다(Child 2.93.0 이상). `restart-codex`는 동기화한 뒤 Child의 Codex app-server를 재시작해 실행 중인 Codex가 현재 카탈로그를 읽게 합니다. `--scope codex`는 데스크톱 앱도 다시 실행합니다. 재시작은 링크 하나만 지정합니다. `restart-codex`와 `--restart-codex`에는 `--yes`가 필요하지만 `ocx link sync --link-id <id> --restart-app-server-only`는 확인 없이 app-server를 재시작합니다. Home이 그 Child의 모델 요청을 중계하는 동안에는 재시작을 건너뜁니다(`restart-skipped:link-active`). 2.69보다 오래된 Child에서는 스트리밍이 아닌 요청이 응답이 시작된 뒤에야 보입니다. `update --yes`는 Child 자체 업데이트 도구로 Child의 OpenCodex를 이 Home의 버전으로만 업데이트합니다(Child 2.97.0 이상. npm과 pnpm은 Node 런처로 적용하므로 `ocx link check`도 그곳에서 읽기 전용 `node --version`을 실행합니다). 한 번에 Child 하나씩 처리하며, 적용이 성공, 실패, 롤백된 뒤에는 다시 동기화합니다. 결과를 알 수 없는 적용은 다시 실행하거나 동기화하지 않으므로 `ocx link check`로 확인하세요. 그 Child로 중계 중인 요청은 끝납니다. Windows Child는 `sync`만 지원하고, `ocx-child` Child는 재시작과 업데이트를 지원하지 않는다고 보고합니다. CLI는 루프백에 바인딩된 Home이 필요합니다. 그렇지 않은 Home에서는 이 작업을 실행할 수 없으며, 대시보드의 Remote Link 페이지에서는 Home이 추가한 Child에 대해 같은 작업을 제공합니다. 자세한 내용과 종료 코드는 [Operating Children from the Home](/guides/remote-link/#operating-children-from-the-home)(영문)를 참고하세요. 이 보호는 최선의 노력일 뿐입니다. 확인과 재시작 사이에 시작된 요청은 끝날 수 있으므로, 턴을 보존해야 하면 그 Child에서 새 요청을 멈추세요. Home은 Codex가 모델 요청이 아니라 도구를 실행하는 턴 중인지도 알 수 없으므로, 그 Child에서 Codex를 재시작하거나 OpenCodex를 업데이트하기 전에 진행 중인 Codex 턴이 끝나기를 기다리십시오. 수동 업데이트는 그 Child의 OpenCodex를 재시작하며 그 Child를 위해 아직 중계 중인 턴을 끝냅니다. 자동 업데이트는 Child가 유휴 상태가 될 때까지 기다립니다. `ocx sync --restart-children`(또는 `--restart-children=codex --yes`)는 Home 동기화를 전파할 때 모든 Child 또는 `--child <linkId>`로 지정한 Child에 같은 규칙을 적용합니다. 각 Child는 동기화되고, 중계 중인 요청이 있는 동안에는 재시작만 건너뜁니다(`restart-skipped:link-active`).
+
+### Child 버전과 작업
+
+Home에서는 모든 Remote Link 행에 Home이 그 Child에 대해 마지막으로 확인한 내용이 표시되며, Home이 시작한 행에는 그 Child를 제어하는 버튼도 함께 표시됩니다. 배지는 다음을 나타냅니다.
+
+- Child의 버전과 그 옆의 `Behind Home (<home version>)`, `Same version as Home`, `Newer than Home`, 그리고 업데이트를 적용할 수 있을 때의 `Update available: <home version>`. Child가 자체 대시보드에서 시작한 링크라면 버전만 표시되고 버전 차이 배지는 없으며, `ocx-child` Child는 항상 `unknown`으로 표시됩니다.
+- 설치 종류(`Desktop app`, `GOAT`, `Source checkout`), 또는 이 릴리스에서 이름을 붙이지 않는 토큰은 고정폭 글꼴로 표시됩니다.
+- `Catalog current` 또는 `Catalog out of date`. `Codex restart needed (<n>)`와 `Codex not running` 배지는 Child가 자신의 Codex 상태를 보고한 뒤에만 표시되며, 그 보고는 이후 릴리스에서 추가됩니다. 아직 이를 보내는 Child 릴리스가 없으므로 지금은 이 두 배지가 나타나지 않습니다.
+- 마지막 작업을 `Last <operation>: <state>`로 표시하고 그 사유는 고정폭으로 표시하며, 작업이 링크를 점유하는 동안에는 실행 중인 작업을 표시합니다.
+
+Home이 그 Child를 직접 업데이트할 수 없으면 행에 대신 무엇을 해야 하는지 표시됩니다. 그 Child의 OpenCodex Desktop에서 Check for Updates를 사용하거나, 직접 업데이트하거나, `mise`를 통해 업데이트하거나, GOAT가 처리하도록 두십시오. 알 수 없는 사유는 추측한 문장 대신 토큰으로 표시됩니다.
+
+네 가지 작업은 CLI와 같은 작업을 시작하므로 Child에도 같은 버전이 필요합니다.
+
+- **Check**는 `ocx link check`처럼 Child의 설치 정보를 읽습니다.
+- **Sync now**는 `ocx link sync`처럼 고정된 `ocx sync --expect-link`를 실행합니다.
+- **Restart Codex**는 범위를 선택하게 합니다. `Codex app-servers`는 Child의 백그라운드 app-server를 재시작해 현재 카탈로그를 읽게 하며, Codex 데스크톱 앱 자체의 app-server는 새로 고치지 않으므로 그 경우에는 데스크톱 앱을 재시작하십시오. `Codex desktop app`은 데스크톱 앱도 종료하고 다시 실행하며, 그곳에서 열린 대화가 끝납니다.
+- **Update**는 `ocx link update`처럼 Child 자체 업데이트 도구로 Child의 OpenCodex를 이 Home의 버전으로 올립니다. 확인 문구에는 Child의 OpenCodex가 재시작되어 그 Child를 위해 아직 중계 중인 턴이 끝난다는 점과, 자동 업데이트는 Child가 유휴 상태가 될 때까지 기다린다는 점이 나옵니다.
+
+**Check all**과 **Update all**은 대상이 되는 모든 Home 시작 링크에 적용됩니다. Update all도 한 번에 Child 하나씩 실행하며 다른 버전을 대상으로 삼지 않습니다. 실행 중인 작업은 Child마다 한 줄로 상태, 옮겨 간 버전(이전과 이후), 카탈로그 동기화 결과, 재시작 결과를 보여 줍니다. 작업이 끝나면 패널이 사라지고 행이 새로 고쳐집니다. Home이 더 이상 알지 못하는 작업(Home이 재시작된 경우)은 그렇다고 표시하고 각 행의 상태를 답으로 남깁니다. 작업이 링크를 점유하는 동안에는 그 링크의 작업과 Disconnect가 비활성화됩니다. 서버도 어차피 그 요청을 거부합니다.
+
+목록 아래의 **Child automation** 패널은 `ocx link policy`와 같은 정책 파일을 보여 주고 편집합니다. 카탈로그 전파(기본값 자동), Codex 재시작(기본값 안 함), 업데이트(기본값 유휴 시 자동, 이 릴리스에서는 아직 활성화되지 않음), 유휴 기간이 있습니다. 저장할 때는 변경한 값만 씁니다. 정책 파일이 손상된 경우 패널은 자동 카탈로그 전파와 자동 업데이트가 꺼져 있다고 알리고, 그때 저장하면 선택한 모드가 그대로 유지되도록 모든 설정을 씁니다. 이 컨트롤은 서버를 우회하지 않습니다. 서버는 작업마다 정책, 링크 상태, Child 활동을 다시 확인합니다.
+
+소유하지 않은 컴퓨터는 링크하지 마십시오. Home은 여러분의 SSH 키로 그곳에서 명령을 실행합니다.
 
 ### 카탈로그 자동 전파와 Child 정책
 

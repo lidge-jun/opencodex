@@ -10,6 +10,7 @@ import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { sanitizeLogMetadataString } from "../lib/redact";
 import { usageDisplayTotalTokens } from "./totals";
+import { linkLogField, type LinkRequestLogCarrier } from "./link-log-fields";
 import { normalizeRecordedClient, type UsageClient } from "./client";
 import {
   normalizePersistedJevDecision,
@@ -22,9 +23,10 @@ import {
   type RequestCloseReason,
   type RequestTerminalStatus,
 } from "./request-outcome";
-import type { AttemptTierOutcome, OcxUsage } from "../types";
+import type { AttemptTierOutcome, CacheAffinityLogReason, CacheAffinityOutcome, OcxUsage } from "../types";
 import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
 import { parseProtocolTraceV1, type ProtocolTraceV1 } from "../protocols/dto";
+import { requestBodyField, type RequestBodyFacts } from "./request-body";
 import { ACCOUNT_LOG_LABEL_RE, CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { claudeCompatibilityReason, normalizeClaudeFeatureCodes, type ClaudeFeatureCode } from "../claude/compatibility";
 import type { UpstreamCondition } from "../lib/upstream-condition";
@@ -309,7 +311,7 @@ export function normalizeRequestSpend(value: unknown): PersistedRequestSpend | u
   };
 }
 
-export interface PersistedUsageEntry {
+export interface PersistedUsageEntry extends LinkRequestLogCarrier {
   requestedAlias?: string;
   requestId: string;
   /** Best-effort classified client; absent only for records predating attribution. */
@@ -409,6 +411,9 @@ export interface PersistedUsageEntry {
    */
   affinity?: CodexAffinityMove;
   affinityReason?: CodexAffinityReason;
+  /** Provider cache-affinity outcome for key-pool routes; additive, older rows omit it. */
+  cacheAffinity?: CacheAffinityOutcome;
+  cacheAffinityReason?: CacheAffinityLogReason;
   /**
    * Set when this request dropped account-bound continuation after a Codex pool
    * account change. Never an account identifier.
@@ -429,6 +434,8 @@ export interface PersistedUsageEntry {
    * rows and rows that fail validation carry none, and are never back-filled by guessing.
    */
   protocolTrace?: ProtocolTraceV1;
+  /** The request body as received (#3023): wire bytes, Content-Encoding, decoded bytes. Absent on older rows. */
+  requestBody?: RequestBodyFacts;
   /**
    * How far this request got and why it failed (#2366). Projected from the attempt that ended
    * the request so every surface reads the answer off the same row. Absent on a completed
@@ -550,6 +557,21 @@ export function isKnownAffinityMove(value: unknown): value is NonNullable<Persis
 
 export function isKnownAffinityReason(value: unknown): value is NonNullable<PersistedUsageEntry["affinityReason"]> {
   return typeof value === "string" && KNOWN_AFFINITY_REASONS.has(value as NonNullable<PersistedUsageEntry["affinityReason"]>);
+}
+
+const KNOWN_CACHE_AFFINITY = new Set<NonNullable<PersistedUsageEntry["cacheAffinity"]>>([
+  "kept", "bound", "released",
+]);
+const KNOWN_CACHE_AFFINITY_REASONS = new Set<NonNullable<PersistedUsageEntry["cacheAffinityReason"]>>([
+  "cache", "session", "turn", "continuation", "new", "quota", "auth",
+]);
+
+export function isKnownCacheAffinity(value: unknown): value is NonNullable<PersistedUsageEntry["cacheAffinity"]> {
+  return typeof value === "string" && KNOWN_CACHE_AFFINITY.has(value as NonNullable<PersistedUsageEntry["cacheAffinity"]>);
+}
+
+export function isKnownCacheAffinityReason(value: unknown): value is NonNullable<PersistedUsageEntry["cacheAffinityReason"]> {
+  return typeof value === "string" && KNOWN_CACHE_AFFINITY_REASONS.has(value as NonNullable<PersistedUsageEntry["cacheAffinityReason"]>);
 }
 
 export function usageLogPath(configDir?: string): string {
@@ -1036,6 +1058,10 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const affinityReason = affinity !== undefined && isKnownAffinityReason(entry.affinityReason)
     ? entry.affinityReason
     : undefined;
+  const cacheAffinity = isKnownCacheAffinity(entry.cacheAffinity) ? entry.cacheAffinity : undefined;
+  const cacheAffinityReason = cacheAffinity !== undefined && isKnownCacheAffinityReason(entry.cacheAffinityReason)
+    ? entry.cacheAffinityReason
+    : undefined;
   const conversationStateScrub = typeof entry.conversationStateScrub === "string"
     && KNOWN_CONVERSATION_STATE_SCRUBS.has(entry.conversationStateScrub)
     ? entry.conversationStateScrub
@@ -1063,6 +1089,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
       : {}),
     ...(isKnownAdmissionKind(entry.admissionKind) ? { admissionKind: entry.admissionKind } : {}),
     ...(isKnownInboundProtocol(entry.inboundProtocol) ? { inboundProtocol: entry.inboundProtocol } : {}),
+    ...linkLogField(entry.link),
     ...(isCodexUsageAccountLogLabel(entry.accountLogLabel)
       ? { accountLogLabel: entry.accountLogLabel }
       : {}),
@@ -1133,6 +1160,8 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(terminalSource ? { terminalSource } : {}),
     ...(affinity ? { affinity } : {}),
     ...(affinityReason ? { affinityReason } : {}),
+    ...(cacheAffinity ? { cacheAffinity } : {}),
+    ...(cacheAffinityReason ? { cacheAffinityReason } : {}),
     ...(conversationStateScrub ? { conversationStateScrub } : {}),
     // Closed code, classified condition and numeric reset only; upstream text is never kept.
     ...errorDetailFor(entry),
@@ -1145,6 +1174,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(jevDecision ? { jevDecision } : {}),
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
     ...(protocolTrace ? { protocolTrace } : {}),
+    ...requestBodyField(entry.requestBody),
     ...normalizeRequestFailureAttribution(entry),
   };
   if (normalized.attemptNormalizationDropped !== true && (entry.attemptNormalizationDropped === true

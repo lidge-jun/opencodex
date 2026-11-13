@@ -193,6 +193,8 @@ export const configSchema = z.object({
   // Match the per-body load/degrade contract: malformed hand edits retain providers.
   // The shared resolver clamps runtime admission to 512 MiB..2 GiB even when the
   // caller bypasses this schema; omission and zero retain the 512 MiB default.
+  // Home-side per-body zstd advertisement on Remote Links (#3023); anything but a boolean reads as unset, which is on.
+  linkRequestCompression: z.boolean().optional().catch(undefined),
   maxConcurrentInboundBodyBytes: z.number().int()
     .min(0)
     .optional()

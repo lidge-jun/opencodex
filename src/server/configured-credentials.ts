@@ -32,7 +32,14 @@ import { join } from "node:path";
 import { getConfigDir } from "../config/paths";
 import { resolveEnvValue } from "../config/proxy-env";
 import { isKeychainReference, providerKeyResolutionGeneration, resolveProviderApiKeyQuietly } from "../providers/api-key-resolve";
-import { credentialComponents, credentialSetMatches } from "../lib/outbound-credential-registry";
+import {
+  MAX_CREDENTIAL_EXCERPT_WINDOWS,
+  containsExcerptWindow,
+  credentialComponents,
+  credentialExcerptWindows,
+  credentialSetMatches,
+  credentialContainmentIndex,
+} from "../lib/outbound-credential-registry";
 import { SENSITIVE_KEY_PATTERN } from "../lib/redact";
 
 const CREDENTIAL_FIELD = /(?:key|token|secret|password|passwd|credential|cookie|authorization)$/i;
@@ -47,6 +54,8 @@ export interface ConfiguredCredentials {
 interface Snapshot {
   /** The only object handed out: cache metadata (including env values) stays private here. */
   readonly view: ConfiguredCredentials;
+  /** Excerpt windows of configured credential keys and tokens (see containsConfiguredCredentialExcerpt). */
+  readonly excerptWindows: ReadonlySet<string>;
   readonly signature: string;
   readonly envNames: readonly string[];
   readonly envFingerprint: string;
@@ -105,10 +114,22 @@ function envReference(raw: string): string | undefined {
 
 function build(configRead: StoreRead, authRead: StoreRead, signature: string, now: number): Snapshot {
   const values = new Set<string>();
+  // Excerpt windows of credential-field values (keys, tokens): copy that repeats 8+ characters of a
+  // configured credential is refused like the whole value. Provider header values are matched whole
+  // only: they are often ordinary text (titles, referrer URLs) whose words would refuse common copy.
+  const windows = new Set<string>();
+  let producedWindows = 0;
   const envNames = new Set<string>();
   let complete = true;
-  const add = (raw: string | undefined) => {
-    if (raw) for (const part of credentialComponents(raw)) values.add(part);
+  const add = (raw: string | undefined, credential = true) => {
+    if (!raw) return;
+    for (const part of credentialComponents(raw)) values.add(part);
+    if (!credential || producedWindows > MAX_CREDENTIAL_EXCERPT_WINDOWS) return;
+    const produced = credentialExcerptWindows(raw, MAX_CREDENTIAL_EXCERPT_WINDOWS - producedWindows);
+    producedWindows += produced.length;
+    // Unbounded excerpt coverage would be unbounded work: past the cap the set fails closed.
+    if (producedWindows > MAX_CREDENTIAL_EXCERPT_WINDOWS) complete = false;
+    else for (const window of produced) windows.add(window);
   };
   const noteEnv = (raw: string) => {
     const name = envReference(raw);
@@ -131,7 +152,7 @@ function build(configRead: StoreRead, authRead: StoreRead, signature: string, no
         for (const header of Object.values(value)) {
           if (typeof header !== "string") continue;
           noteEnv(header);
-          add(resolveEnvValue(header) ?? header);
+          add(resolveEnvValue(header) ?? header, false);
         }
       } else if (typeof value === "string") {
         if (isCredentialField(field)) addReference(value);
@@ -171,12 +192,14 @@ function build(configRead: StoreRead, authRead: StoreRead, signature: string, no
   if (isRecord(auth.value)) walkAuth(auth.value, 0);
 
   const names = [...envNames].sort();
+  const containment = credentialContainmentIndex(values);
   const view: ConfiguredCredentials = Object.freeze({
     complete,
-    matches: (value: string) => credentialSetMatches(values, candidate => values.has(candidate), value),
+    matches: (value: string) => credentialSetMatches(values, candidate => values.has(candidate), value, 1, containment),
   });
   return {
     view,
+    excerptWindows: windows,
     signature,
     envNames: names,
     envFingerprint: envFingerprint(names),
@@ -196,4 +219,13 @@ export function configuredCredentials(now = Date.now()): ConfiguredCredentials {
     || (!cached.view.complete && now - cached.builtAt >= INCOMPLETE_RETRY_MS);
   if (stale) cached = build(configRead, authRead, signature, now);
   return cached!.view;
+}
+
+/**
+ * Whether value holds an 8+ character excerpt of a configured credential key or token, against the
+ * same fresh snapshot {@link configuredCredentials} serves. Whole-value matching stays in the view.
+ */
+export function containsConfiguredCredentialExcerpt(value: string, now = Date.now()): boolean {
+  configuredCredentials(now);
+  return cached !== undefined && containsExcerptWindow(value, cached.excerptWindows);
 }

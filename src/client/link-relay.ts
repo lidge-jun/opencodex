@@ -11,6 +11,15 @@ import type { LinkDiagnosticRecord, LinkDiagnosticSink } from "../link/diagnosti
 import { linkRouteAllowed } from "../link/routes";
 import { isLinkPort } from "../link/ports";
 import { resolveInboundBodyLimitBytes } from "../server/request-decompress";
+import type { LinkTrafficBook } from "../link/traffic";
+import { LINK_REQUEST_ZSTD_FEATURE } from "../link/request-compression";
+import { linkHomeAcceptsRequestZstd } from "./link-home-features";
+import {
+  chooseLinkBody, compressLinkBody, linkRequestCompressible, linkRequestPrepareBudget, readDeclaredBody, type LinkBodyCompressor,
+  type PreparedLinkBody,
+} from "./link-request-compression";
+import type { InboundBodyBudget } from "../server/inbound-body-budget";
+import { linkChildRelayWaitObserver } from "./link-websocket-limits";
 
 export interface LinkRelayTarget {
   tunnelPort: number;
@@ -52,6 +61,13 @@ export interface LinkTunnelGate {
    * when the tunnel stops being re-established (failed or stopped), or when too many requests wait.
    */
   waitForConnected(timeoutMs: number, signal?: AbortSignal): Promise<boolean>;
+  /**
+   * Optional: `listener` runs once, synchronously, when the gate's owner starts stopping, before the
+   * tunnel goes away: the supervisor's stop(), or the link ending (its sidecar gone, naming another link,
+   * or the connected link id unreadable for several checks in a row) before the runtime recycles. The link
+   * WebSocket drains its sockets here.
+   */
+  onStopping?(listener: () => void): void;
 }
 
 /**
@@ -87,6 +103,14 @@ export interface LinkRelayDeps {
    * authenticated management relay passes the read-only management table (#6957).
    */
   routeAllowed?: (url: URL, req: Request) => boolean;
+  /** Where the link transport counts the bodies it carries; this process's Child book by default. */
+  traffic?: LinkTrafficBook;
+  /**
+   * Per-body zstd toward the Home (#3023). On by default; it applies only when the Home named
+   * `link-request-zstd/1` on its last verified answer and again on the connection carrying the body.
+   * Test seams: the compressor and the Home's last answer.
+   */
+  requestCompression?: { enabled?: boolean; compress?: LinkBodyCompressor; homeAccepts?: (linkId: string) => boolean; budget?: InboundBodyBudget };
 }
 
 export const LINK_RELAY_RETRY_AFTER_SECONDS = 1;
@@ -178,6 +202,24 @@ export function forwardLinkRequestHeaders(source: Headers, admissionKey: string,
   const validation = validateHubRelayRequestHeaders(linkFramingHeaders(source));
   if (!validation.ok) return new Headers();
   return linkRequestHeaders(source, admissionKey, pathname, validation.connectionNamed);
+}
+
+/** The handshake headers of Codex's own upgrade, which the Home leg replaces with its own (link-ws-transport.ts). */
+const UPGRADE_HANDSHAKE_HEADERS = ["connection", "upgrade", "origin", "sec-websocket-key", "sec-websocket-version", "sec-websocket-extensions", "sec-websocket-protocol"];
+
+/**
+ * The headers a link WebSocket's upgrade sends to the Home: Codex's headers without its handshake, then
+ * the same filter an HTTP request gets (hop-by-hop, Connection-nominated and caller credentials dropped)
+ * and the link key as a Bearer. Null when the rest would be refused as malformed or too large.
+ */
+export function forwardLinkUpgradeHeaders(source: Headers, admissionKey: string): Headers | null {
+  const connectionNamed = new Set((source.get("connection") ?? "").split(",").map(token => token.trim().toLowerCase()).filter(Boolean));
+  const rest = new Headers(source);
+  for (const name of UPGRADE_HANDSHAKE_HEADERS) rest.delete(name);
+  const validation = validateHubRelayRequestHeaders(linkFramingHeaders(rest));
+  if (!validation.ok) return null;
+  const headers = linkRequestHeaders(rest, admissionKey, "/v1/responses", new Set([...validation.connectionNamed, ...connectionNamed]));
+  return headersWithinLimit(headers) ? headers : null;
 }
 
 function linkRequestHeaders(
@@ -343,6 +385,61 @@ function idleBoundedStream(
 }
 
 /**
+ * Test-only (link-websocket-limits.ts): the relayed body passed through unchanged, with the observer told from each
+ * chunk handed over until the reader asks again, and when the body ends, errors or is cancelled. A high-water mark of 0
+ * means it reads only when the reader does, so the wait it reports is the reader's. `ended` runs from the relay's own
+ * cleanup, so a relay that ends underneath a reader holding a chunk (a caller abort, the SSE idle limit) stops being
+ * reported as waiting at once and is never reported again. The signal follows the relay's own lifetime: a Home
+ * failure the relay has not read yet (its read-ahead chunk is queued and nothing reads the Home) keeps it reported as
+ * waiting, as the Home's signal does, because the relay still holds that chunk and its request until its next read, a
+ * reader cancel, a caller abort or (SSE) the idle limit ends it. Used only while a test sets an observer.
+ */
+function waitObservation(observer: (waiting: boolean) => void) {
+  let waiting = false;
+  let ended = false;
+  const tell = (value: boolean): void => {
+    if (waiting === value || (value && ended)) return;
+    waiting = value;
+    try { observer(value); } catch { /* a test observer never breaks the relay */ }
+  };
+  const end = (): void => { ended = true; tell(false); };
+  const stream = (body: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> => {
+    const reader = body.getReader();
+    return new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        tell(false);
+        try {
+          const next = await reader.read();
+          if (next.done) { controller.close(); return; }
+          controller.enqueue(next.value);
+          tell(true);
+        } catch (error) {
+          controller.error(error);
+        }
+      },
+      async cancel(reason) {
+        tell(false);
+        try { await reader.cancel(reason); } catch { /* best effort */ }
+      },
+    }, { highWaterMark: 0 });
+  };
+  return { ended: end, stream };
+}
+
+/**
+ * The fetch seam has no relay-auth answer, so a prepared body is chosen from the Home's last
+ * recorded features, as the transport would choose it from this connection's.
+ */
+function seamInit(init: RequestInit, select: ((features: readonly string[] | null) => { body: Uint8Array<ArrayBuffer>; headers: Record<string, string> }) | undefined,
+  linkId: string | undefined): RequestInit {
+  if (!select) return init;
+  const chosen = select(linkId && linkHomeAcceptsRequestZstd(linkId) ? [LINK_REQUEST_ZSTD_FEATURE] : null);
+  const headers = new Headers(init.headers);
+  for (const [name, value] of Object.entries(chosen.headers)) headers.set(name, value);
+  return { ...init, headers, body: chosen.body };
+}
+
+/**
  * Admit an allowlisted route and stream it through the authenticated tunnel with bounded bodies.
  * Owner/auth preflight deadlines share one recovery attempt before data dispatch; an ambiguous
  * post-dispatch failure never earns that recovery. Diagnostic failures cannot change admission.
@@ -393,20 +490,54 @@ export async function relayLinkDataRequest(
   };
   const onClientAbort = () => relayAbort.abort(req.signal.reason);
   req.signal.addEventListener("abort", onClientAbort, { once: true });
+  let releasePrepared = () => {};
   const cleanup = () => {
+    releasePrepared();
     stopHeaderDeadline();
     req.signal.removeEventListener("abort", onClientAbort);
   };
   if (req.signal.aborted) onClientAbort();
 
+  // Per-body zstd (#3023): a compressible body for a Home that named the capability is read into
+  // one buffer of its declared length (at most LINK_REQUEST_COMPRESSION_MAX_BYTES) and compressed
+  // once; every other body streams exactly as before.
+  const compression = deps.requestCompression;
+  let prepared: PreparedLinkBody | null = null;
+  // A shared allowance bounds the bodies held at once; without room now, the body streams unchanged.
+  const lease = compression?.enabled !== false && target.linkId && declaredLength !== null && Number(declaredLength) <= bodyLimit
+    && linkRequestCompressible(url, req, declaredLength) && (compression?.homeAccepts ?? linkHomeAcceptsRequestZstd)(target.linkId)
+    ? await (compression?.budget ?? linkRequestPrepareBudget).acquire(2 * Number(declaredLength), relayAbort.signal, 0).catch(() => null)
+    : null;
+  releasePrepared = () => { lease?.release(); };
+  // The allowance covers the prepared bytes for as long as anything here can still send them: until
+  // the Home answered (a refused or timed-out preflight sends them again) and the transport settled
+  // the upload. Then the references go with the charge.
+  let uploadSettled = false, answered = false;
+  const releaseWhenSent = () => {
+    if (!uploadSettled || !answered) return;
+    prepared = null;
+    releasePrepared();
+  };
+  if (lease) {
+    let raw: Uint8Array<ArrayBuffer>;
+    try {
+      raw = await readDeclaredBody(req.body!, Number(declaredLength), relayAbort.signal);
+    } catch {
+      cleanup();
+      // An aborted caller or the header deadline: the same answer a wait for the tunnel ends with.
+      return relayAbort.signal.aborted ? homeUnreachable("link tunnel unavailable") : jsonError(400, "link relay request body unreadable");
+    }
+    prepared = { raw, zstd: await compressLinkBody(raw, compression?.compress) };
+  }
   let bodyOverflow = false;
   let bodyCancelled = false;
-  const body = req.method === "GET" || req.method === "HEAD" || !req.body
+  const body = prepared || req.method === "GET" || req.method === "HEAD" || !req.body
     ? null
     : byteCappedRequestBody(req.body, bodyLimit, () => { bodyOverflow = true; }, () => { bodyCancelled = true; });
   // A streamed body keeps the caller's Content-Length, so the Home sees the same framing a
   // buffered body produced instead of a chunked upload.
   if (body && declaredLength !== null) headers.set("content-length", declaredLength);
+  if (prepared) headers.set("content-length", String(prepared.raw.byteLength));
 
   // The hold: only while the tunnel is connecting or reconnecting, and at most `holdMs` from the
   // first wait. A positive connected verdict is required again before every fetch.
@@ -464,9 +595,14 @@ export async function relayLinkDataRequest(
         headers,
         redirect: "manual",
         signal: relayAbort.signal,
-        ...(body ? { body, duplex: "half" } : {}),
+        ...(body ? { body, duplex: "half" } : prepared ? { body: prepared.raw } : {}),
       };
-      upstream = await (deps.fetchImpl ? deps.fetchImpl(destination, init) : fetchBoundLinkRelay(target, destination, init));
+      const selectBody = prepared ? (features: readonly string[] | null) => chooseLinkBody(prepared!, features) : undefined;
+      upstream = await (deps.fetchImpl
+        ? deps.fetchImpl(destination, seamInit(init, selectBody, target.linkId))
+        : fetchBoundLinkRelay(target, destination, init, {
+          traffic: deps.traffic, ...(selectBody ? { selectBody, onBodySettled: () => { uploadSettled = true; releaseWhenSent(); } } : {}),
+        }));
     } catch (error) {
       if (error instanceof LinkRelayAuthenticationError) {
         return await tunnelUnavailable("auth_failed", error.message);
@@ -488,6 +624,10 @@ export async function relayLinkDataRequest(
       if (!tunnel || !resendable || !tunnel.pending() || !await holdForTunnel(tunnel)) return await tunnelUnavailable("transport_error");
     }
   }
+  // The fetch seam has no socket to wait for; the transport settles the upload itself.
+  answered = true;
+  if (deps.fetchImpl) uploadSettled = true;
+  releaseWhenSent();
   if (relayAbort.signal.aborted) {
     try { await upstream.body?.cancel(); } catch { /* best effort */ }
     return await tunnelUnavailable();
@@ -516,9 +656,13 @@ export async function relayLinkDataRequest(
 
   // The header deadline ends once a response exists. The body owns cleanup after that.
   stopHeaderDeadline();
+  const waitObserver = linkChildRelayWaitObserver();
+  const observed = waitObserver ? waitObservation(waitObserver) : null;
+  const bodyCleanup = observed ? () => { observed.ended(); cleanup(); } : cleanup;
   const responseBody = sse
     ? idleBoundedStream(upstream.body, relayAbort.signal, clock,
-      deps.sseIdleTimeoutMs ?? LINK_RELAY_SSE_IDLE_TIMEOUT_MS, () => relayAbort.abort(new DOMException("link relay SSE idle timeout", "TimeoutError")), cleanup)
-    : boundedRelayResponseStream(upstream.body, bodyLimit, relayAbort.signal, cleanup);
-  return new Response(responseBody, { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders });
+      deps.sseIdleTimeoutMs ?? LINK_RELAY_SSE_IDLE_TIMEOUT_MS, () => relayAbort.abort(new DOMException("link relay SSE idle timeout", "TimeoutError")), bodyCleanup)
+    : boundedRelayResponseStream(upstream.body, bodyLimit, relayAbort.signal, bodyCleanup);
+  return new Response(observed ? observed.stream(responseBody) : responseBody,
+    { status: upstream.status, statusText: upstream.statusText, headers: responseHeaders });
 }

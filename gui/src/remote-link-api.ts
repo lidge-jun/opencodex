@@ -1,3 +1,5 @@
+import { parseChildOps, type ChildOpsRowView } from "./remote-link-child-ops-api";
+
 export const LINK_ERROR_CODES = [
   "admission_timeout",
   "admission_failed",
@@ -8,9 +10,11 @@ export const LINK_ERROR_CODES = [
   "forbidden",
   "host_confirmation_expired",
   "host_fingerprint_mismatch",
+  "host_key_changed",
   "host_not_confirmed",
   "invalid_alias",
   "invalid_body",
+  "invalid_job_id",
   "invalid_link_id",
   "join_connect_failed",
   "join_in_progress",
@@ -20,15 +24,22 @@ export const LINK_ERROR_CODES = [
   "join_restart_failed",
   "join_rollback_failed",
   "join_tunnel_failed",
+  "job_not_found",
+  "key_cleanup_failed",
   "key_issue_failed",
   "key_revoke_failed",
   "link_apply_failed",
+  "link_cleanup_uncertain",
   "link_exists",
   "link_not_found",
   "link_not_home_initiated",
+  "link_operation_in_progress",
+  "link_pin_conflict",
   "link_remove_failed",
   "link_unavailable",
   "listener_unavailable",
+  "no_eligible_links",
+  "policy_write_failed",
   "probe_failed",
   "purge_unsupported",
   "remote_connect_failed",
@@ -40,8 +51,10 @@ export const LINK_ERROR_CODES = [
   "remote_plant_timeout",
   "remote_plant_unavailable",
   "remote_port_failed",
+  "runtime_role_client",
   "standalone_required",
   "tailscale_session_refused",
+  "trust_file_unexpected",
   "version_probe_failed",
 ] as const;
 
@@ -76,6 +89,8 @@ export interface LinkRowWire {
   tunnelPort: number;
   childKind?: "full" | "ephemeral" | null;
   appliedCodexSettingsDigest?: string | null;
+  /** Present only on a Home that runs wp2 or later; absent rows render exactly as before. */
+  child?: ChildOpsRowView | null;
 }
 export interface RemoteLinkStatusWire {
   role: "standalone" | "home" | "child";
@@ -96,24 +111,48 @@ export interface RemoteLinkStatusWire {
 const LINK_STATES: readonly LinkWireState[] = ["connecting", "connected", "reconnecting", "failed", "idle"];
 const LINK_ROLES = ["standalone", "home", "child"] as const;
 
+/**
+ * The Child may still be connected after a refused apply (`residual: true`). The server's closed
+ * words (`residualKind`, `remotePlatform`) pick the purge variant for the Child's platform; otherwise
+ * the recovery line is matched against the fixed lines it writes
+ * (src/server/management/link-enrollment.ts, liveResidual). Either way only one of these variants is
+ * kept, so the server's text is never shown as such.
+ */
+/** purgeAny: a plant whose Child platform is not known (a journalled reply), so every managed location is named. */
+export type LinkResidualStep = "purge" | "purgeWindows" | "purgeAny" | "ephemeral" | "full" | "unknown";
+const RESIDUAL_RECOVERY: Readonly<Record<string, LinkResidualStep>> = {
+  "Run ~/.cache/opencodex/bin/ocx-child detach --purge on the Child before retrying.": "purge",
+  "Run \"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe\" detach --purge in Command Prompt on the Child, or \"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe\" detach --purge where LOCALAPPDATA is not set, before retrying.": "purgeWindows",
+  "Run ocx-child detach (or ocx disconnect) on the Child before retrying.": "ephemeral",
+  "Run ocx disconnect and ocx restart on the Child before retrying.": "full",
+};
+
+function residualStep(body: Record<string, unknown>): LinkResidualStep {
+  if (body.residualKind === "plant") return body.remotePlatform === "windows" ? "purgeWindows" : body.remotePlatform === "posix" ? "purge" : "purgeAny";
+  return typeof body.recovery === "string" && Object.hasOwn(RESIDUAL_RECOVERY, body.recovery) ? RESIDUAL_RECOVERY[body.recovery]! : "unknown";
+}
+
 export class LinkApiError extends Error {
   readonly code: string;
   readonly status: number;
   /** The server's bounded hint line (ssh stderr, the ssh runner's own failure, or the parsed remote version), shown under the translated message. */
   readonly hint: string | null;
+  /** Set when the server says the Child may still be connected; null otherwise. */
+  readonly residual: LinkResidualStep | null;
 
-  constructor(code: string, status: number, hint: string | null = null) {
+  constructor(code: string, status: number, hint: string | null = null, residual: LinkResidualStep | null = null) {
     super(code);
     this.name = "LinkApiError";
     this.code = code;
     this.status = status;
     this.hint = hint;
+    this.residual = residual;
   }
 }
 
 const HINT_MAX_CHARS = 160;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
@@ -136,6 +175,9 @@ export function boundLinkHint(value: unknown): string | null {
 }
 
 function nonEmpty(value: unknown): value is string { return typeof value === "string" && value.length > 0; }
+// The store's own link-id form (src/link/store.ts). The dashboard copies an id into shell commands, so nothing else passes.
+const LINK_ID = /^lnk_[0-9a-f]{16}$/;
+function isLinkId(value: unknown): value is string { return typeof value === "string" && LINK_ID.test(value); }
 function isLinkState(value: unknown): value is LinkWireState { return typeof value === "string" && LINK_STATES.includes(value as LinkWireState); }
 
 export function parseRemoteLinkStatus(value: unknown): RemoteLinkStatusWire {
@@ -144,10 +186,11 @@ export function parseRemoteLinkStatus(value: unknown): RemoteLinkStatusWire {
   if (!isRecord(listener) || !["off", "listening", "failed"].includes(String(listener.state)) || (listener.port !== null && typeof listener.port !== "number")) throw new Error("invalid listener");
   if (!Array.isArray(value.links)) throw new Error("invalid links");
   const links = value.links.map(item => {
-    if (!isRecord(item) || !nonEmpty(item.id) || !nonEmpty(item.alias) || !["hub-initiated", "client-initiated"].includes(String(item.direction)) || !isLinkState(item.state) || !nonEmpty(item.since) || (item.reason !== null && typeof item.reason !== "string") || typeof item.tunnelPort !== "number") throw new Error("invalid link");
+    if (!isRecord(item) || !isLinkId(item.id) || !nonEmpty(item.alias) || !["hub-initiated", "client-initiated"].includes(String(item.direction)) || !isLinkState(item.state) || !nonEmpty(item.since) || (item.reason !== null && typeof item.reason !== "string") || typeof item.tunnelPort !== "number") throw new Error("invalid link");
     const childKind: "full" | "ephemeral" | null = item.childKind === "full" || item.childKind === "ephemeral" ? item.childKind : null;
     const appliedCodexSettingsDigest = nonEmpty(item.appliedCodexSettingsDigest) ? item.appliedCodexSettingsDigest : null;
-    return { id: item.id, alias: item.alias, direction: item.direction as LinkWireDirection, state: item.state, since: item.since, reason: item.reason as string | null, tunnelPort: item.tunnelPort, childKind, appliedCodexSettingsDigest };
+    return { id: item.id, alias: item.alias, direction: item.direction as LinkWireDirection, state: item.state, since: item.since, reason: item.reason as string | null, tunnelPort: item.tunnelPort, childKind, appliedCodexSettingsDigest,
+      child: parseChildOps(item.child) };
   });
   let child: RemoteLinkStatusWire["child"] = null;
   if (value.child !== null) {
@@ -194,7 +237,8 @@ export async function readLinkJson<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const error = isRecord(body) && isRecord(body.error) ? body.error : null;
     const code = error && typeof error.code === "string" ? error.code : "unknown";
-    throw new LinkApiError(code, response.status, boundLinkHint(error?.hint));
+    const residual = isRecord(body) && body.residual === true ? residualStep(body) : null;
+    throw new LinkApiError(code, response.status, boundLinkHint(error?.hint), residual);
   }
   if (body === null || body === undefined) throw new LinkApiError("invalid_body", response.status);
   return body as T;

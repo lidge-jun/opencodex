@@ -1,6 +1,6 @@
 import type { AdapterEvent, OcxParsedRequest, OcxUsage } from "../../types";
 import { KIRO_STRUCTURED_OUTPUT_TOOL_NAME } from "../kiro-constants";
-import { sanitizeKiroSchema } from "../kiro-tools";
+import { kiroRejectedSchemaKeys, sanitizeKiroSchema } from "../kiro-tools";
 import { readKiroJson } from "./structured-output-json";
 import { assertKiroStrictSchemaSupported, kiroStrictSchemaProblem, rewriteKiroWrappedRefs } from "./structured-output-schema";
 
@@ -27,7 +27,7 @@ export interface KiroStructuredOutputSpec {
   schema?: Record<string, unknown>;
   /** True when the caller asked for `strict: true`, so the value must conform to the whole schema. */
   strict?: boolean;
-  /** The tool input schema actually advertised: sanitized, and wrapped when `wrapped` is true. */
+  /** The tool input schema actually advertised: stripped of what this model rejects, and wrapped when `wrapped` is true. */
   toolSchema: Record<string, unknown>;
   /**
    * True when the answer rides the tool input's `value` property instead of BEING the input.
@@ -79,7 +79,7 @@ export function kiroStructuredOutputSpec(parsed: OcxParsedRequest): KiroStructur
   if (!schema) return { toolSchema: { type: "object" }, wrapped: false, ...meta };
   if (strict) assertKiroStrictSchemaSupported(schema);
   const contract = { schema, ...(strict ? { strict } : {}) };
-  const sanitized = sanitizeKiroSchema(schema) as JsonRecord;
+  const sanitized = sanitizeKiroSchema(schema, kiroRejectedSchemaKeys(parsed.modelId)) as JsonRecord;
   if (isPlainObjectRoot(schema)) return { ...contract, toolSchema: sanitized, wrapped: false, ...meta };
   // `#/$defs/...` references resolve against the document root, which is now the wrapper. Hoist the
   // definitions with them so a referenced schema still resolves after it moves under `value`, and
@@ -102,7 +102,7 @@ export function kiroStructuredOutputSpec(parsed: OcxParsedRequest): KiroStructur
   };
 }
 
-/** The private terminal tool advertised for a structured-output turn, with the caller's (sanitized, possibly wrapped) schema as its input schema. */
+/** The private terminal tool advertised for a structured-output turn, with the caller's (possibly stripped, possibly wrapped) schema as its input schema. */
 export function kiroStructuredOutputTool(spec: KiroStructuredOutputSpec): Record<string, unknown> {
   const delivery = spec.wrapped
     ? "Put the complete final JSON value in `value`."
@@ -122,10 +122,12 @@ export function kiroStructuredOutputTool(spec: KiroStructuredOutputSpec): Record
 /**
  * The prose half of the structured-output contract, at most `maxChars` long.
  *
- * The caller's schema is restated verbatim because the advertised one is sanitized: Kiro's
- * validator rejects `additionalProperties`, `pattern`, length and range keywords, so the tool schema
- * alone would let the model miss constraints the caller wrote. A schema that does not fit the
- * injected-instruction budget is dropped whole rather than cut mid-JSON.
+ * The caller's schema is restated verbatim because the advertised one is sanitized for most models:
+ * `kiroRejectedSchemaKeys` drops `additionalProperties`, `pattern`, length and range keywords
+ * unless a probe measured that model id taking them, so the tool schema alone can leave the model
+ * without constraints the caller wrote. Keywords the model does keep are repeated here as well. A
+ * schema that does not fit the injected-instruction budget is dropped whole rather than cut
+ * mid-JSON.
  */
 export function kiroStructuredOutputInstructions(
   spec: KiroStructuredOutputSpec,

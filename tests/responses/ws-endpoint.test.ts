@@ -17,6 +17,11 @@ import {
 } from "../../src/server/index/live-sideband";
 import { RESPONSE_TTL_MS } from "../../src/responses/state";
 import type { ServerWebSocket } from "bun";
+import { relaySseWithFailedTail } from "../../src/server/relay";
+import { relaySseEagerBounded } from "../../src/server/relay-eager";
+import { relaySseWithBlockRewrite } from "../../src/server/sse-payload-rewrite";
+import { createOutboundCredentialMask, createTerminalErrorRedactionBlockRewrite } from "../../src/server/responses/terminal-error-redaction";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { buildResponsesTransport } from "../../src/adapters/openai-responses/transport";
 
 function mockWs(sendResult = 1): { ws: ServerWebSocket<WsData>; sent: string[] } {
@@ -43,6 +48,66 @@ function sseStream(frames: string[], onCancel?: () => void): ReadableStream<Uint
 }
 
 describe("WS endpoint re-framer (120/132)", () => {
+  test.each(["tee", "eager"] as const)("%s delivers an untyped refusal without echoing the selected credential", async mode => {
+    const secret = 'fixture"chosen\\credential';
+    const headers = { authorization: `Bearer ${secret}` };
+    const maskCredential = createOutboundCredentialMask(headers);
+    const rewrite = createTerminalErrorRedactionBlockRewrite(headers, maskCredential);
+    const source = sseStream([`data: ${JSON.stringify({ error: { code: "cyber_policy", message: `blocked ${secret}` } })}\n\n`]);
+    const body = mode === "tee"
+      ? relaySseWithFailedTail(relaySseWithBlockRewrite(source, rewrite, createTranslatorBudget()), new AbortController(), undefined, { maskCredential })
+      : relaySseEagerBounded(source, new AbortController(), {
+        inspectChunk() {}, finishInspection() {}, sawTerminal: () => false, onSynthetic() {}, onClientCancel() {}, onDone() {}, rewriteBlocks: rewrite,
+      }, { maskCredential });
+    const { ws, sent } = mockWs();
+    await pumpResponsesSseToWebSocket(ws, body);
+    const messages = sent.map(frame => JSON.parse(frame));
+    expect(messages.map(frame => frame.type)).toEqual(["response.failed"]);
+    expect(messages[0].response.error.code).toBe("cyber_policy");
+    expect(messages[0].response.error.message).toContain("[REDACTED]");
+    expect(messages[0].response.error.message).not.toContain(secret);
+  });
+  test.each(["tee", "eager"] as const)("%s keeps no prefix of a selected credential that contains a pattern token", async mode => {
+    // A pattern rule (sk-..., Bearer ...) matching inside the credential must not split it
+    // before the exact mask runs, or the unpatterned prefix survives everywhere downstream.
+    const secret = `${"W".repeat(80)}-sk-abcdefgHIJK`;
+    const prefix = "W".repeat(40);
+    const headers = { authorization: `Bearer ${secret}` };
+    const maskCredential = createOutboundCredentialMask(headers);
+    const rewrite = createTerminalErrorRedactionBlockRewrite(headers, maskCredential);
+    const source = sseStream([`data: ${JSON.stringify({ error: { message: `echo ${secret} tail` } })}\n\n`]);
+    const body = mode === "tee"
+      ? relaySseWithFailedTail(relaySseWithBlockRewrite(source, rewrite, createTranslatorBudget()), new AbortController(), undefined, { maskCredential })
+      : relaySseEagerBounded(source, new AbortController(), {
+        inspectChunk() {}, finishInspection() {}, sawTerminal: () => false, onSynthetic() {}, onClientCancel() {}, onDone() {}, rewriteBlocks: rewrite,
+      }, { maskCredential });
+    const { ws, sent } = mockWs();
+    const observed: string[] = [];
+    await pumpResponsesSseToWebSocket(ws, body, { untilEof: true, onSsePayload: payload => observed.push(payload) });
+    expect(sent.map(frame => (JSON.parse(frame) as { type?: string }).type)).toContain("response.failed");
+    expect([sent.join("\n").includes(prefix), observed.join("\n").includes(prefix)]).toEqual([false, false]);
+  });
+  test.each(["tee", "eager"] as const)("%s never returns a quoted selected credential through an object key", async mode => {
+    const secret = 'fixture"keyed\\credential';
+    const headers = { authorization: `Bearer ${secret}` };
+    const maskCredential = createOutboundCredentialMask(headers);
+    const rewrite = createTerminalErrorRedactionBlockRewrite(headers, maskCredential);
+    const source = sseStream([`data: ${JSON.stringify({ [secret]: "kept", nested: { [secret]: 1 }, error: { code: "cyber_policy", message: "blocked" } })}\n\n`]);
+    const body = mode === "tee"
+      ? relaySseWithFailedTail(relaySseWithBlockRewrite(source, rewrite, createTranslatorBudget()), new AbortController(), undefined, { maskCredential })
+      : relaySseEagerBounded(source, new AbortController(), {
+        inspectChunk() {}, finishInspection() {}, sawTerminal: () => false, onSynthetic() {}, onClientCancel() {}, onDone() {}, rewriteBlocks: rewrite,
+      }, { maskCredential });
+    const { ws, sent } = mockWs();
+    await pumpResponsesSseToWebSocket(ws, body);
+    const messages = sent.map(frame => JSON.parse(frame) as Record<string, unknown>);
+    expect(messages.map(frame => frame.type)).toEqual(["response.failed"]);
+    // Parsed, so an escaped spelling in the wire text cannot hide the secret from this check.
+    const keys = (value: unknown): string[] => value && typeof value === "object"
+      ? Object.entries(value).flatMap(([key, item]) => [key, ...keys(item)]) : [];
+    expect(keys(messages).some(key => key.includes(secret))).toBe(false);
+    expect(sent.join("\n")).not.toContain(JSON.stringify(secret).slice(1, -1));
+  });
   test("server config declares explicit websocket idle timeout policy", () => {
     // src/server/index.ts is a facade now. The idle-timeout constant moved to the
     // live-sideband leaf, the handler body to the websocket-handler leaf, and the wiring

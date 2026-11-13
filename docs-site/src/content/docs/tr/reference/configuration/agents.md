@@ -11,8 +11,8 @@ kontrol eder.
 
 | Alan | Tip | Varsayılan | Anlamı |
 | --- | --- | --- | --- |
-| `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` her katalog modelini v1 olarak damgalar; `v2` her modeli v2 olarak damgalar. `default` yukarı akış sabitlemelerini geri yükler (Sol/Terra v2, Luna v1) ve aksi takdirde yerel `multi_agent_v2` bayrağını takip eder. Yeni oturumlara uygulanır. |
-| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna` | Alt ajan seçicisinde ilk olarak öne çıkan en fazla beş yalın yerel, hesap nitelikli `<secici>/<yerel-openai-modeli>` veya yönlendirilen `saglayici/model` kimliği. Kontrol paneli yalnızca yalın yerel ve yönlendirilen kimlikleri sunar ve kaydederken tam hesap nitelikli seçimleri atlar; tam seçimler için `ocx agent subagents set` kullanın veya yapılandırmayı düzenleyin. [Tek seferlik Astra yükseltmesinden](/reference/configuration/agents/#astra-roster-upgrade) sonra açık bir boş liste korunur. |
+| `multiAgentMode?` | `"v1" \| "default" \| "v2" \| "v2-plaintext"` | `"default"` | `v1` her katalog modelini v1 olarak damgalar; `v2` her modeli v2 olarak damgalar. `default` yukarı akış sabitlemelerini geri yükler (Sol/Terra v2, Luna v1) ve aksi takdirde yerel `multi_agent_v2` bayrağını takip eder. Katalog sabitlemeleri yeni oturumlara uygulanır. `v2-plaintext` genel zorlamayı kapalı tutarak V2 seçer ve uygun görevleri düz metin iletir; derleme mevcut V2 oturumlarının sonraki uygun isteklerini de etkiler. Giriş için `--acknowledge-plaintext-agent-messages` gerekir. |
+| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna` | Alt ajan seçicisinde öne çıkan en fazla beş yalın yerel, hesap nitelikli `<selector>/<native-openai-model>` veya yönlendirilen `provider/model` kimliği. Kontrol paneli yeni seçimler için yalın yerel ve yönlendirilen kimlikleri sunar. Kaydederken, geçerli katalogda bulunmayanlar dahil, önceden yapılandırılmış tam hesap nitelikli kimlikleri korur. Yeni bir tam hesap nitelikli kimlik eklemek için `ocx agent subagents set` kullanın veya yapılandırmayı düzenleyin. [Tek seferlik Astra yükseltmesinden](/reference/configuration/agents/#astra-roster-upgrade) sonra açıkça boş bırakılan liste korunur. |
 | `injectionModel?` | `string` | — | Proxy kaynaklı v2 yetkilendirme rehberliğinde kullanılan tercih edilen yerel veya yönlendirilen alt ajan modeli. |
 | `injectionEffort?` | `string` | — | Yalnızca `injectionModel` ile anlamlı olan tercih edilen çaba (`low` ile `ultra` arası). |
 | `injectionPrompt?` | `string` | — | Yerleşik v2 rehberlik gövdesinin yerini alır. `{{model}}`, `{{effort}}`, `{{roster}}` ve `{{fallback}}` destekler. Yapılandırılmış bir `injectionModel`, özel istemi oluşturmak için yeterlidir. |
@@ -23,11 +23,11 @@ kontrol eder.
 | `subagentModelFallbackPollMs?` | `number` | `60000` | Kullanılabilirlik probu önbellek aralığı. 1000 ms'nin altındaki değerler varsayılana geri döner. |
 | `effortCap?` | `string` | — | Uygun v2 ana turları ve işaretlenmiş çocuk turları için kesin tavan. `low` ile `ultra` arasını kabul eder. |
 | `subagentEffortCap?` | `string` | — | Yalnızca oluşturulan çocuk turları için ek tavan. Her iki sınır da geçerli olduğunda daha düşük olan kazanır. |
+| `plaintextV2AgentMessages?` | `boolean` | — (ayarlanmamış) | Deneysel tercih. Açık `true` veya `multiAgentMode: "v2-plaintext"`, uygun yerel ChatGPT v2 ebeveynlerinin `spawn_agent`, `send_message` ve `followup_task` mesaj argümanlarını düz metin üretmesini ister. Bkz. [Düz metin v2 ajan mesajları](#düz-metin-v2-ajan-mesajları). |
 | `agentTaskRecovery?` | `object` | — | Yönlendirilen sağlayıcılara gönderilen arka uçta şifrelenmiş v2 görevleri için deneysel isteğe bağlı kurtarma. `enabled: true` olmadıkça devre dışıdır; bkz. [Şifrelenmiş v2 görev kurtarma](#şifrelenmiş-v2-görev-kurtarma). |
 
-Arayüzü kontrol paneli veya `ocx v2 status|on|off|mode <v1|default|v2>|threads
-<n>|mode-hint <metin|--clear>` ile yönetin. Mod değişiklikleri yeni oturumlara
-uygulanır. `maxConcurrentThreadsPerSession`, bir `config.json` anahtarı değil,
+Arayüzü kontrol paneli veya `ocx v2 status|on|off|mode <v1|default|v2|v2-plaintext>|keep-native-v1 <on|off>|threads
+<n>|mode-hint <text|--clear>` ile yönetin. Katalog sabitlemesi değişiklikleri yeni oturumlara uygulanır; düz metin derleyicisi mevcut ayarı, mevcut V2 oturumlarının sonraki uygun istekleri dahil uygun isteklerde izler. `maxConcurrentThreadsPerSession`, bir `config.json` anahtarı değil,
 bir `PUT /api/v2` alanıdır; `ocx v2 threads <n>`, v2 etkinleştirildikten sonra
 Codex'in `$CODEX_HOME/config.toml` dosyasındaki `[features.multi_agent_v2]`
 altına `max_concurrent_threads_per_session` yazar.
@@ -44,8 +44,9 @@ yürütme çabasını **değiştirmez**. Bir `null` değeri anahtarı kaldırır
 çabadan türetilen politika (ultra = proaktif, aksi takdirde açık) devam eder;
 boş veya yalnızca boşluk içeren değerler reddedilir çünkü mevcut bir boş
 geçersiz kılma ultra kaynaklı Proaktif mesajı bile bastırır. Alt Ajanlar kontrol
-panelinin Ultra modu **açık** anahtarı hem yerel özelliği hem de açık bir v2
-yüzeyini (`multiAgentMode: "v2"`, `ocx v2 mode v2` ile eşdeğer) gerektirir; tek
+panelinin Ultra modu **açık** anahtarı, yerel özellik etkinken açık v2
+yüzeyini (`multiAgentMode: "v2"`, `ocx v2 mode v2` ile eşdeğer) veya genel
+zorlamayı kapalı tutan `multiAgentMode: "v2-plaintext"` modunu gerektirir; tek
 başına `ocx v2 on` bu kontrol paneli geçidini karşılamaz.
 
 Yönetim API'si `GET`/`PUT /api/v2`, `/api/injection-model`, `/api/effort-caps`,
@@ -134,18 +135,37 @@ kurtarır.
 ```json
 {
   "multiAgentMode": "v2",
-  "subagentModels": ["gpt-5.5", "anthropic/claude-sonnet-5"],
-  "injectionModel": "gpt-5.5",
+  "subagentModels": ["gpt-6.1-sol", "anthropic/claude-sonnet-5"],
+  "injectionModel": "gpt-6.1-sol",
   "injectionEffort": "high",
   "syncCodexSubagentDefaults": true,
-  "subagentModelFallback": ["gpt-5.6-luna"],
+  "subagentModelFallback": ["gpt-6-luna"],
   "subagentModelFallbackByModel": {
-    "gpt-5.5": ["gpt-5.6-luna"]
+    "gpt-6.1-sol": ["gpt-6-luna"]
   },
   "subagentModelFallbackPollMs": 60000,
   "subagentEffortCap": "high"
 }
 ```
+
+## Düz metin v2 ajan mesajları
+
+`plaintextV2AgentMessages` yeni yapılandırmada ayarlanmamıştır. Açık `true` veya
+ayrı seçilen `multiAgentMode: "v2-plaintext"` bu deneysel yolu etkinleştirir. Mod,
+genel zorlamayı kapatırken yeni oturumlar için V2 katalog sabitlemelerini ayarlar.
+Kontrol panelindeki onayla veya `ocx v2 mode v2-plaintext --live --acknowledge-plaintext-agent-messages`
+ile girin; `PUT /api/v2` üzerinden giriş için `plaintextAgentMessagesAcknowledged: true`
+gerekir. Mod bağımsız boole değerini değiştirmez; moddan çıkınca önceki davranışı korunur.
+
+Derleyici mevcut V2 oturumları dahil sonraki uygun isteklerde geçerli ayarı izler.
+Çağıran Responses protokolünü kullanmalı ve son hedef kurallı ChatGPT Codex iletimi
+olmalıdır: `adapter: "openai-responses"`, `authMode: "forward"` ve tam olarak
+`https://chatgpt.com/backend-api/codex`. API anahtarlı OpenAI sağlayıcıları, özel
+uyumlu ağ geçitleri, diğer sağlayıcılara rotalar ve Responses dışı çağıranlar hariçtir.
+Mevcut şifreli metin çözülmez, kayıtlı geçmiş yeniden yazılmaz ve devre dışı bırakma
+geçmişte, sağlayıcı isteklerinde veya yerel yanıt/hata ayıklama durumunda tutulmuş
+kopyaları silmez. [Alt ajan yüzeyleri](/tr/guides/sub-agent-surface/) ve
+[v1 varsayılanı](/tr/guides/subagent-v1-default/) kapsamı ve riskleri açıklar.
 
 ## Şifrelenmiş v2 görev kurtarma
 

@@ -377,7 +377,7 @@ than nudged.
   `workflow_dispatch` on `dev`. A successful complete `lane=all` run establishes
   evidence for its exact dev commit; a PR run or narrower manual lane does not.
 - A manual `lane=all` dispatch is a **batch check on `dev`**, never a per-PR gate.
-  One run is about 31 jobs (11 Windows, at least 5 macOS, 15 Linux) and five runner-hours, and the
+  One run is 46 jobs (18 Windows, 9 macOS, 19 Linux) and more than five runner-hours, and the
   account has only five macOS slots (a macOS job can queue), so per-PR dispatches starve
   every other check. On 2026-10-27, parallel agent lanes dispatched 48 of them in twelve hours (about 13,000
   runner-minutes). The queue passed 200 runs, and ordinary PR checks waited hours to start.

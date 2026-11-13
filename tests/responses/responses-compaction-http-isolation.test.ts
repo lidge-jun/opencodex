@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -11,19 +11,11 @@ import { clearUpstreamHostHealth } from "../../src/codex/upstream-host-health";
 import type { OcxConfig } from "../../src/types";
 import type { RequestLogContext } from "../../src/server/request-log";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
-import { baseCompactionBody, compactionRequest, completedPayload, drainCompactionResponseState, installCompactionRoutingAclFixture, jsonResponse, removeCompactionFixture, sseResponse, twoAccountPoolConfig } from "../helpers/compaction-routing-fixtures";
+import { providerFetch } from "../../src/server/responses/fetch-helpers";
+import * as proxyEnvironment from "../../src/lib/proxy-env";
+import { baseCompactionBody, compactionRequest, completedPayload, drainCompactionResponseState, installCompactionRoutingAclFixture, installCompactionHttpMock as installHttpMock, jsonResponse, removeCompactionFixture, sseResponse, twoAccountPoolConfig } from "../helpers/compaction-routing-fixtures";
 
 installCompactionRoutingAclFixture();
-
-// These contracts exercise HTTP compact/replay, not transport selection. Bind the
-// synthetic executor at the physical-send seam so inherited proxy settings cannot
-// bypass global fetch mocks. Keep WebSocket out of these HTTP/SSE fixtures as well.
-function installHttpMock(config: OcxConfig, mock: typeof fetch): void {
-  globalThis.fetch = mock;
-  for (const provider of Object.values(config.providers)) {
-    Object.assign(provider, { fetch: mock, upstreamWebsocket: false });
-  }
-}
 
 async function withPoolEnv<T>(name: string, run: (config: OcxConfig, signal: AbortSignal) => Promise<T>, deadlineMs = 10_000): Promise<T> {
   const testDir = mkdtempSync(join(tmpdir(), name));
@@ -75,6 +67,43 @@ async function withPoolEnv<T>(name: string, run: (config: OcxConfig, signal: Abo
 }
 
 describe("HTTP compaction replay isolation", () => {
+  test("the HTTP fixture reaches only its physical sentinel with ordinary HTTP and WebSocket blocked", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalSocket = globalThis.WebSocket;
+    let physicalCalls = 0;
+    let globalCalls = 0;
+    let socketCalls = 0;
+    const blockedFetch = (() => { globalCalls++; throw new Error("HTTP fixture blocked global fetch"); }) as typeof fetch;
+    const configuredFetch = spyOn(proxyEnvironment, "configuredOutboundFetch").mockImplementation(() => {
+      throw new Error("HTTP fixture blocked configured fetch");
+    });
+    globalThis.WebSocket = class {
+      constructor() { socketCalls++; throw new Error("HTTP fixture blocked WebSocket"); }
+    } as unknown as typeof WebSocket;
+    const mock = (async () => { physicalCalls++; return new Response("compaction-physical-sentinel"); }) as typeof fetch;
+    const url = "https://chatgpt.com/backend-api/codex/responses";
+    const init = { method: "POST", body: JSON.stringify({ model: "gpt-5.5", stream: true, input: [] }) };
+    try {
+      // The old global-only setup cannot escape into a real connection in this control.
+      globalThis.fetch = blockedFetch;
+      await expect(providerFetch(twoAccountPoolConfig().providers.openai!, "1.4.4")(url, init))
+        .rejects.toThrow("HTTP fixture blocked");
+      expect(physicalCalls).toBe(0);
+      const blockedBefore = [globalCalls, socketCalls, configuredFetch.mock.calls.length];
+      const config = twoAccountPoolConfig();
+      installHttpMock(config, mock);
+      globalThis.fetch = blockedFetch;
+      const response = await providerFetch(config.providers.openai!, "1.4.4")(url, init);
+      expect(await response.text()).toBe("compaction-physical-sentinel");
+      expect(physicalCalls).toBe(1);
+      expect([globalCalls, socketCalls, configuredFetch.mock.calls.length]).toEqual(blockedBefore);
+    } finally {
+      configuredFetch.mockRestore();
+      globalThis.fetch = originalFetch;
+      globalThis.WebSocket = originalSocket;
+    }
+  });
+
   test("fixture abort settles mocked work before restoring homes and fetch", async () => {
     const previousHome = process.env.OPENCODEX_HOME;
     const previousCodexHome = process.env.CODEX_HOME;

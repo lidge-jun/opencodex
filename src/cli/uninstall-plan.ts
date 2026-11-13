@@ -24,24 +24,73 @@ export type UninstallObservation = {
   /** Service removal outcome, or null when the step threw. */
   serviceRemoval: "absent" | "removed" | "failed" | null;
   /**
-   * For a Task Scheduler backend: was the restart window verified AFTER removal?
+   * Was the restart window verified AFTER removal? Needed after an older CLI's
+   * `stopped-respawnable` and, on Windows, after every `stopped`: there it is Part B of the
+   * checked stop (#7771), which proves the port stays free and no wrapper came back.
    *
    * Deleting the registration does not prove an already-running `:loop` wrapper died —
-   * killing it is best-effort (#764). `ocx stop` polls across the window; uninstall has
-   * to do the same before it may take shared config down.
+   * `ocx stop` confirms across the window; uninstall has to do the same before it may take
+   * shared config down (#764).
    */
   respawnWindowVerified: boolean;
 };
 
-export function sharedTeardownAuthorized(o: UninstallObservation): boolean {
+/** Whether the restart window must be verified before shared config may come down. */
+export function respawnWindowRequired(
+  o: Pick<UninstallObservation, "serviceStop">,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return o.serviceStop === "stopped-respawnable" || (platform === "win32" && o.serviceStop === "stopped");
+}
+
+/**
+ * Whether the uninstall may remove the installed manager.
+ *
+ * On Windows the removal deletes a Task Scheduler registration and stops/deletes a WinSW
+ * service. Both are only safe once Part A proved the manager stopped or that none is
+ * registered: `ocx service uninstall` refuses in the same states, and removing the
+ * registration of a manager that could not be stopped hides the reason the proxy may
+ * come back instead of fixing it. Other platforms remove after their own stop attempt, as
+ * before.
+ */
+export function serviceRemovalAllowed(
+  o: Pick<UninstallObservation, "serviceStop">,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (platform !== "win32") return true;
+  return o.serviceStop === "stopped" || o.serviceStop === "absent";
+}
+
+export function sharedTeardownAuthorized(o: UninstallObservation, platform: NodeJS.Platform = process.platform): boolean {
   if (o.serviceStop === null) return false;
   // "absent" and a clean stop are the only service states that prove nothing is managing
   // the proxy.
   if (o.serviceStop === "failed" || o.serviceStop === "state-unknown") return false;
   // Removing the registration is not the same as proving the running wrapper is gone.
-  if (o.serviceStop === "stopped-respawnable" && !o.respawnWindowVerified) return false;
+  if (respawnWindowRequired(o, platform) && !o.respawnWindowVerified) return false;
   if (o.serviceRemoval === null || o.serviceRemoval === "failed") return false;
   return o.proxyProvenDown;
+}
+
+/**
+ * The "service removed" step: gate, then remove.
+ *
+ * Kept beside the rule so the command body stays a call, and so the refusal is testable
+ * without reading `handleUninstall`. A refused gate throws, which the step records as a
+ * failure and which keeps the shared teardown blocked.
+ */
+export function uninstallServiceRemoval(
+  o: Pick<UninstallObservation, "serviceStop">,
+  remove: () => "absent" | "removed" | "failed",
+  platform: NodeJS.Platform = process.platform,
+): "absent" | "removed" | "failed" {
+  if (!serviceRemovalAllowed(o, platform)) {
+    throw new Error(
+      "the service manager could not be proven stopped, so its registration was left in place; "
+      + "resolve the 'service stopped' failure, then rerun 'ocx uninstall'",
+    );
+  }
+  return remove();
 }
 
 /** An endpoint an uninstall must account for before shared config comes down. */
@@ -92,4 +141,27 @@ export async function everyEndpointProvenDownAsync(
   if (endpoints.length === 0) return false;
   const results = await Promise.all(endpoints.map(e => probe(e)));
   return results.every(result => result === "dead");
+}
+
+/**
+ * The uninstall's "nothing answers on any endpoint this home could serve" proof, with the
+ * candidate set captured NOW. The proxy stop removes the runtime record (and a stopped proxy
+ * may remove its own), so a set read after the stop would silently drop the stopped proxy's
+ * port. Every candidate, not just the preferred one: a stale runtime record pointing at a
+ * closed port would otherwise "prove" a live proxy on the configured port is gone. Any
+ * failure to read or probe is not proof.
+ */
+export function captureUninstallEndpointProof(
+  readCandidates: () => ProbeEndpoint[],
+  probe: (e: ProbeEndpoint) => Promise<"live" | "dead" | "unknown"> | "live" | "dead" | "unknown",
+): () => Promise<boolean> {
+  let candidates: ProbeEndpoint[] | null = null;
+  try { candidates = readCandidates(); } catch { candidates = null; }
+  return async () => {
+    try {
+      return candidates !== null && await everyEndpointProvenDownAsync(candidates, probe);
+    } catch {
+      return false;
+    }
+  };
 }

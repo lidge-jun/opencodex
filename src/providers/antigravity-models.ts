@@ -114,11 +114,11 @@ const ANTIGRAVITY_WIRE_IDS_BY_PICKER_MODEL: Record<string, string[]> = Object.en
 }, {});
 
 const ANTIGRAVITY_DISCOVERY_EFFORTS = ["low", "medium", "high"] as const;
-type AntigravityDiscoveryEffort = typeof ANTIGRAVITY_DISCOVERY_EFFORTS[number];
+type AntigravityDiscoveryEffort = typeof ANTIGRAVITY_DISCOVERY_EFFORTS[number] | "xhigh";
 type AntigravityEffortWireModelIds = Partial<Record<AntigravityDiscoveryEffort, string>>;
 
 function isAntigravityDiscoveryEffort(value: string): value is AntigravityDiscoveryEffort {
-  return (ANTIGRAVITY_DISCOVERY_EFFORTS as readonly string[]).includes(value);
+  return [...ANTIGRAVITY_DISCOVERY_EFFORTS, "xhigh"].includes(value as AntigravityDiscoveryEffort);
 }
 
 function pickerModelIdForDiscoveredWireId(
@@ -144,7 +144,7 @@ function pickerModelIdForDiscoveredWireId(
     if (isKnownAntigravityPickerModelId(baseId)) return baseId;
   }
 
-  const effortMatch = /^(.*)-(low|medium|high)$/.exec(wireId);
+  const effortMatch = /^(.*)-(low|medium|high|xhigh)$/.exec(wireId);
   if (effortMatch) {
     const baseId = effortMatch[1]!;
     if (isValidModelDiscoveryModelId(baseId)
@@ -278,7 +278,7 @@ function completeDiscoveredEffortWireModelIds(
   const explicitEffortMap = Object.hasOwn(ANTIGRAVITY_EFFORT_WIRE_MAP, pickerId)
     ? ANTIGRAVITY_EFFORT_WIRE_MAP[pickerId] : undefined;
   if (explicitEffortMap && Object.values(explicitEffortMap).every(wireId => available.has(wireId))) {
-    return { ...explicitEffortMap };
+    return { ...explicitEffortMap, ...(available.has(`${pickerId}-xhigh`) ? { xhigh: `${pickerId}-xhigh` } : {}) };
   }
 
   if (!isValidModelDiscoveryModelId(pickerId)) return undefined;
@@ -288,7 +288,26 @@ function completeDiscoveredEffortWireModelIds(
     if (!available.has(wireId)) return undefined;
     suffixEffortMap[effort] = wireId;
   }
+  if (available.has(`${pickerId}-xhigh`)) suffixEffortMap.xhigh = `${pickerId}-xhigh`;
   return suffixEffortMap;
+}
+
+/**
+ * Default rung for a model known only from live discovery. Gemini 4 Hydrogen defaults to high:
+ * its low/medium/high/xhigh ladder and high default were verified on Vertex AI by #8583's author
+ * (2026-11-13). On CCA it is entitlement-gated: an account whose discovery listed the four
+ * `gemini-4-hydrogen-*` tiers answered an xhigh request with 200 (2026-11-12), so this applies only
+ * once that account's CCA discovery lists the family. Other discovered families keep medium when they have it.
+ */
+const ANTIGRAVITY_DISCOVERED_DEFAULT_EFFORT: Record<string, string> = {
+  "gemini-4-hydrogen": "high",
+};
+
+/** Default effort the catalog publishes, and routing applies, for a discovered effort family. */
+export function discoveredAntigravityDefaultEffort(modelId: string, hasMedium: boolean): string {
+  return Object.hasOwn(ANTIGRAVITY_DISCOVERED_DEFAULT_EFFORT, modelId)
+    ? ANTIGRAVITY_DISCOVERED_DEFAULT_EFFORT[modelId]!
+    : hasMedium ? "medium" : "high";
 }
 
 // ── Default effort per Gemini base model ──
@@ -327,8 +346,11 @@ function pickerToWireId(pickerId: string): string {
   return ANTIGRAVITY_PICKER_TO_WIRE[pickerId] ?? pickerId;
 }
 
+/** Requested efforts above `high`: they select a discovered xhigh tier when one exists, else `high`. */
+const ANTIGRAVITY_ABOVE_HIGH_EFFORTS = new Set(["xhigh", "max", "ultra"]);
+
 function resolveAntigravityThinkingLevel(effort: string): string | undefined {
-  if (effort === "xhigh" || effort === "max" || effort === "ultra") return "high";
+  if (ANTIGRAVITY_ABOVE_HIGH_EFFORTS.has(effort)) return "high";
   return ANTIGRAVITY_THINKING_LEVELS.has(effort) ? effort : undefined;
 }
 
@@ -517,7 +539,7 @@ export function registerAntigravityDiscoveredWireModels(
     const families: Record<string, AntigravitySuffixMap> = Object.create(null);
     for (const model of models) {
       if (ANTIGRAVITY_DISCOVERY_EFFORTS.every(effort => model.effortWireModelIds?.[effort] === `${model.id}-${effort}`)) {
-        families[model.id] = { low: `${model.id}-low`, medium: `${model.id}-medium`, high: `${model.id}-high` };
+        families[model.id] = { low: `${model.id}-low`, medium: `${model.id}-medium`, high: `${model.id}-high`, ...(model.effortWireModelIds?.xhigh === `${model.id}-xhigh` ? { xhigh: `${model.id}-xhigh` } : {}) };
       }
     }
     writeAntigravityWireSnapshot(key, { version: 1, provider: generation.provider, families });
@@ -575,14 +597,14 @@ function discoveredAntigravityEffortWireModelId(
   const effortMap = discoveredAntigravityMapping(baseUrl)?.effortModels.get(modelId);
   if (!effortMap) return undefined;
 
-  const requestedEffort = effort ? resolveAntigravityThinkingLevel(effort) : undefined;
+  const requestedEffort = effort && ANTIGRAVITY_ABOVE_HIGH_EFFORTS.has(effort) && effortMap.xhigh ? "xhigh" : effort ? resolveAntigravityThinkingLevel(effort) : undefined;
   if (requestedEffort && isAntigravityDiscoveryEffort(requestedEffort) && effortMap[requestedEffort]) {
     return effortMap[requestedEffort];
   }
 
   const defaultEffort = ANTIGRAVITY_DEFAULT_EFFORT[modelId]
     ?? ANTIGRAVITY_THINKING_LEVEL_MODELS[modelId]
-    ?? "medium";
+    ?? discoveredAntigravityDefaultEffort(modelId, !!effortMap.medium);
   if (defaultEffort && isAntigravityDiscoveryEffort(defaultEffort) && effortMap[defaultEffort]) {
     return effortMap[defaultEffort];
   }
@@ -837,7 +859,8 @@ export function resolveAntigravityEffortWireModel(
   if (effortMap) {
     const suffixTiered = ANTIGRAVITY_SUFFIX_TIER_MODELS.has(modelId);
     // Normalize FIRST for suffix-tiered models. The discovery path clamps max/xhigh/ultra to
-    // `high` before its own lookup, so a static path that skipped the clamp answered `medium`
+    // `high` for a family without a discovered xhigh tier (a family that has one selects it, see
+    // ANTIGRAVITY_ABOVE_HIGH_EFFORTS), so a static path that skipped the clamp answered `medium`
     // for the same request: one input, two tiers, decided by whether discovery happened to run.
     const requested = suffixTiered && effort
       ? resolveAntigravityThinkingLevel(effort) ?? effort

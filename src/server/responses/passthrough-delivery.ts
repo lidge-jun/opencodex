@@ -1,5 +1,7 @@
 import { clientFacingModelText } from "../../lib/error-destination";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
+import { noteRelaySyntheticTail, noteRequestSentValueGuard } from "../request-log-terminal-status";
+import { createSentValueGuard } from "../../lib/outbound-credential-registry";
 import { carryPolicyCandidateRefusal } from "./policy-request-scope";
 import { markProxyError, rememberProxyErrorMessage, carryProxyError } from "../../lib/client-error-body";
 import { releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
@@ -11,7 +13,7 @@ import { isNativeControlResponse } from "./native-response-control";
 import { guardBufferedComboRequiredTool } from "./combo-required-tool-contract";
 import { createComboRequiredToolStreamGuard } from "./combo-required-tool-stream";
 import { attachResponseToolOwnership } from "./response-tool-ownership";
-import { createOutboundCredentialMask, createTerminalErrorRedactionBlockRewrite } from "./terminal-error-redaction";
+import { createForwardedEvidenceRedaction, createOutboundCredentialMask, createSynthesizedCopyMask, createTerminalErrorRedactionBlockRewrite } from "./terminal-error-redaction";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -33,7 +35,9 @@ import {
 import { isUsageDebugEnabled } from "../../usage/debug";
 import { isNonReplayableResponse, isReplayRefusalResponse } from "../../lib/upstream-retry";
 import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
-import { teeWithBoundedInspection } from "../inspection-tee";
+import { sliceChunks, teeWithBoundedInspection } from "../inspection-tee";
+import { markPacedStream } from "../../lib/paced-stream";
+import { LINK_PACED_SLICE_BYTES, linkTurnPacesReads } from "../link-turn";
 import {
   codexForwardTerminalOutcomeRecorder,
   usesCodexForwardPoolAuth,
@@ -174,11 +178,13 @@ import { restoreRoutedToolSearchCallsInJson } from "../../responses/tool-search-
 import { responsesJsonToSseStream } from "../responses-json-events";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import {
+  BUFFERED_RESPONSES_TOTAL_TIMEOUT_MS,
   bufferedResponsesReadOptions,
   collectBufferedResponsesSse,
   type BufferedResponsesSseFailure,
   type BufferedResponsesSseResult,
 } from "./buffered-sse-json";
+import { bufferedResetSelectionStartedAt } from "./passthrough-completion";
 
 const PLAINTEXT_V2_SSE_PREFIX_LIMIT = 4096;
 
@@ -867,6 +873,12 @@ export async function deliverPassthroughResponse(
         }, { dispose: () => plaintextInspector.dispose() })
         : undefined;
       const maskCredential = createOutboundCredentialMask(nativeExchange.request.headers);
+      // Copy a boundary synthesizes from upstream evidence, and the row's copy, also refuse any value
+      // this request sent, decided from its own headers.
+      const repeatsSentValue = createSentValueGuard(nativeExchange.request.headers);
+      noteRequestSentValueGuard(logCtx, repeatsSentValue);
+      const synthesizedCopyMask = createSynthesizedCopyMask(nativeExchange.request.headers, repeatsSentValue);
+      const forwardedEvidenceRedaction = createForwardedEvidenceRedaction(nativeExchange.request.headers, maskCredential);
       const requiredStreamEvidence = { replayUnsafe: !!webSearchBridgePlan };
       const normalizeRequiredToolItem = (item: unknown) => {
         item = restoreImageGenCalls(item, imageGenCallAliases).value;
@@ -977,10 +989,11 @@ export async function deliverPassthroughResponse(
 
       if (canonicalBufferedJson) {
         const signal = options.abortSignal ?? req.signal;
+        // A turn whose head waited on reset selection keeps the deadline that wait already spent.
         const bufferedRead = bufferedResponsesReadOptions(resolveStallTimeoutMs(
           config.stallTimeoutSec,
           { localUpstream: nativeExchange.localUpstream },
-        ));
+        ), BUFFERED_RESPONSES_TOTAL_TIMEOUT_MS, bufferedResetSelectionStartedAt(nativeExchange.upstreamResponse) ?? Date.now());
         const failBufferedTurn = (
           message: string,
           failure?: BufferedResponsesSseFailure,
@@ -994,9 +1007,9 @@ export async function deliverPassthroughResponse(
           const presentation = rawPresentation === undefined ? undefined : {
             status: rawPresentation.status,
             error: {
-              type: maskCredential(rawPresentation.error.type),
-              code: maskCredential(rawPresentation.error.code),
-              message: maskCredential(rawPresentation.error.message),
+              type: synthesizedCopyMask(rawPresentation.error.type),
+              code: synthesizedCopyMask(rawPresentation.error.code),
+              message: synthesizedCopyMask(rawPresentation.error.message),
             },
           };
           if (upstreamError !== undefined) {
@@ -1048,7 +1061,7 @@ export async function deliverPassthroughResponse(
         let raw: BufferedResponsesSseResult | undefined = await collectBufferedResponsesSse(
           passthroughSseBody,
           upstream,
-          { signal, terminalBoundary: codexSafetyBufferingOptions, read: bufferedRead, retainTranscript: true },
+          { signal, terminalBoundary: codexSafetyBufferingOptions, read: bufferedRead, retainTranscript: true, maskCredential: synthesizedCopyMask },
         );
         if (!raw.ok) {
           if (raw.kind === "aborted" || signal.aborted) {
@@ -1080,7 +1093,7 @@ export async function deliverPassthroughResponse(
           )
           : replayBufferedSse(rawBytes);
         const client = await collectBufferedResponsesSse(bufferedClientBody, upstream, {
-          signal,
+          signal, maskCredential: synthesizedCopyMask,
           read: bufferedRead,
           retainTranscript: false,
         });
@@ -1196,6 +1209,10 @@ export async function deliverPassthroughResponse(
       }
 
       const relayPlatform = relayPlatformForTests ?? process.platform;
+      // A Remote Link turn while the link WebSocket feature is on reads its upstream only as its client drains (#8601);
+      // every other request keeps the relays' read-ahead below. Its chunks travel in slices, and the paced mark makes the
+      // tee, the eager relay and every stage after them read one slice at a time as the client asks (src/lib/paced-stream.ts).
+      if (linkTurnPacesReads(logCtx)) passthroughSseBody = markPacedStream(sliceChunks(passthroughSseBody, LINK_PACED_SLICE_BYTES));
       // #864: win32 rewrite traffic must never enter the tee()+JS-pull chain
       // (Bun#32111 JS-sink segfault — text frames pass, the terminal block is
       // lost). The eager single reader applies the same rewrites inline.
@@ -1276,7 +1293,9 @@ export async function deliverPassthroughResponse(
         }, {
           clientGoneSignal: options.abortSignal,
           terminalBoundary: codexSafetyBufferingOptions,
-          maskCredential,
+          maskCredential: synthesizedCopyMask,
+          redactForwardedEvidence: forwardedEvidenceRedaction,
+          onSyntheticTail: (payload, verdict) => noteRelaySyntheticTail(logCtx, payload, verdict),
           ...(inlineEagerRewrite ? { rewriteBudget: translatorBudget } : {}),
           ...(logCtx.upstreamError === undefined ? {} : { upstreamError: logCtx.upstreamError }),
         });
@@ -1371,7 +1390,8 @@ export async function deliverPassthroughResponse(
           responseEffects.responseCompletionCancelled = true;
           clientGone.abort(reason);
         },
-        { upstreamError: logCtx.upstreamError, terminalBoundary: codexSafetyBufferingOptions, maskCredential },
+        { upstreamError: logCtx.upstreamError, terminalBoundary: codexSafetyBufferingOptions, maskCredential: synthesizedCopyMask, redactForwardedEvidence: forwardedEvidenceRedaction,
+          onSyntheticTail: (payload, verdict) => noteRelaySyntheticTail(logCtx, payload, verdict) },
       );
       return markNativePassthroughSseResponse(new Response(clientBody, {
         status: upstreamResponse.status,

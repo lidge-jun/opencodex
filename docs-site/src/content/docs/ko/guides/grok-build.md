@@ -97,11 +97,11 @@ model = "anthropic/claude-opus-4-8"
 model_provider = "opencodex"
 ```
 
-네트워크에서 닿을 수 있는 프록시라면 `base_url`을 `grok`가 실제로 연결할 수 있는 주소로 두고 승인 토큰을 사용합니다:
+토큰을 제공하기 전에 TLS 프런트엔드를 구성하고 HTTPS URL을 사용하거나, 로컬 터널의 루프백 주소를 사용하세요. Grok은 `api_key` 값을 `~/.grok/config.toml`에 그대로 저장하므로 접근 권한을 제한하고 버전 관리와 공유 백업에서 제외하세요.
 
 ```toml
 [model_providers.opencodex]
-base_url = "http://192.168.1.10:10100/v1"   # the reachable host, not 127.0.0.1
+base_url = "https://proxy.example.com/v1"   # configured TLS frontend
 api_backend = "responses"
 api_key = "your-OPENCODEX_API_AUTH_TOKEN"
 

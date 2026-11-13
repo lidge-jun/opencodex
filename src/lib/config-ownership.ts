@@ -651,6 +651,19 @@ export function recordOwnedConfigPath(configDir: string, candidatePath: string):
   return registerOwnedConfigPath(configDir, candidatePath) === "recorded";
 }
 
+/**
+ * Read-only: whether the manifest lists `candidatePath` or one of its ancestors ("listed"), lists
+ * neither ("unlisted"), or the home has no ownership metadata ("unowned"). Writes nothing; throws
+ * {@link ConfigUninstallInProgressError} under an uninstall tombstone, as a registration would.
+ */
+export function configPathOwnership(configDir: string, candidatePath: string): "listed" | "unlisted" | "unowned" {
+  const current = loadOwnership(configDir) ?? tombstonedManifestWithoutOwner(configDir);
+  if (!current) return "unowned";
+  if (current.manifest.uninstallStartedAt !== undefined && teardownDepth === 0) throw new ConfigUninstallInProgressError();
+  const parts = manifestRelativePath(configDir, candidatePath)?.split("/") ?? [];
+  return parts.some((_, index) => current.manifest.paths.includes(parts.slice(0, index + 1).join("/"))) ? "listed" : "unlisted";
+}
+
 function entryExists(path: string): boolean {
   try {
     lstatSync(path);

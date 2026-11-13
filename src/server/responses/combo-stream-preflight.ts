@@ -6,6 +6,7 @@ import {
   hasConflictingCodexModelRefusalEnvelopes,
   isMalformedResponseFormatRecord,
   isOpenRouterOpaque400EnvelopeRoot,
+  isProviderModerationRefusal,
   isOpenRouterOpaque400Record,
   type CodexAccountModelRefusal,
 } from "../../combos/failover";
@@ -20,9 +21,10 @@ import { createSseInspector } from "../relay";
 import { sseDataPayload } from "../sse-payload-rewrite";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
 import { REQUIRED_TOOL_CONTRACT_CODE } from "../../lib/errors";
-import { isPausedTurn } from "../../lib/client-error-body";
+import { attachComboFailureEvidence, isPausedTurn } from "../../lib/client-error-body";
 import { requiredToolReasoningPrelude } from "./combo-required-tool-stream";
 import { ProtocolPreOutputEof } from "../../lib/upstream-retry";
+import { carryPacedStream, pacedQueuingStrategy } from "../../lib/paced-stream";
 
 const COMBO_STREAM_PREFLIGHT_MAX_BYTES = MAX_CLIENT_SSE_FRAME_BYTES;
 // Required-tool reasoning may delay delivery, but never for an unbounded/trickling prelude.
@@ -193,8 +195,29 @@ const RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS = new Set([
   "upstream_stall_timeout",
 ]);
 
-// SSE uses the last event field, with an empty value resetting it to the default.
-// A mismatched or unreadable frame is not a proven lifecycle prelude.
+export function explicitErrorEventStatus(payload: unknown): number | undefined {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+  const event = payload as Record<string, unknown>;
+  const nested = event.error;
+  const error = nested && typeof nested === "object" && !Array.isArray(nested)
+    ? nested as Record<string, unknown>
+    : event;
+  return [
+    event.status,
+    event.status_code,
+    event.http_status,
+    error.status,
+    error.status_code,
+    error.http_status,
+  ]
+    .map(value => typeof value === "number" && Number.isInteger(value)
+      ? value
+      : typeof value === "string" && /^\d{3}$/.test(value.trim())
+        ? Number(value)
+        : undefined)
+    .find(value => value !== undefined && value >= 400 && value <= 599);
+}
+
 function ambiguousSseFrame(frame: string): boolean {
   let event: string | undefined;
   let hasNonComment = false;
@@ -228,20 +251,7 @@ function bareErrorStatus(payload: unknown): number | undefined {
   const error = nested && typeof nested === "object" && !Array.isArray(nested)
     ? nested as Record<string, unknown>
     : event;
-  const explicitStatus = [
-    event.status,
-    event.status_code,
-    event.http_status,
-    error.status,
-    error.status_code,
-    error.http_status,
-  ]
-    .map(value => typeof value === "number" && Number.isInteger(value)
-      ? value
-      : typeof value === "string" && /^\d{3}$/.test(value.trim())
-        ? Number(value)
-        : undefined)
-    .find(value => value !== undefined && value >= 400 && value <= 599);
+  const explicitStatus = explicitErrorEventStatus(payload);
   const rawCode = error.code ?? event.code;
   const code = typeof rawCode === "string"
     ? rawCode
@@ -249,6 +259,11 @@ function bareErrorStatus(payload: unknown): number | undefined {
       ? String(rawCode)
       : null;
   if (explicitStatus === undefined && code === "invalid_request_error") return 400;
+  // A structured moderation verdict with no stated status is the request-level 400 the HTTP and
+  // native readers judge it as, not an unknown code's 5xx.
+  if (explicitStatus === undefined && isProviderModerationRefusal(400, JSON.stringify(event), undefined, true)) {
+    return 400;
+  }
   // Status is the record's own evidence; whether that record speaks for the envelope is the
   // decision's question, so a root hard stop still reports 400 instead of inventing a 5xx.
   if (explicitStatus === undefined && isOpenRouterOpaque400Record(envelopeErrorRecord(event))) {
@@ -312,12 +327,15 @@ function bareErrorIsRetryable(payload: unknown): boolean {
   };
   const malformedResponseFormat = status === 400 ? isMalformedResponseFormatRecord(rawRecord, message) : undefined;
   const openRouterOpaque400 = status === 400 ? isOpenRouterOpaque400EnvelopeRoot(event) : undefined;
+  // The parsed event is the whole terminal record, so its moderation verdict is not cut short.
+  const providerModerationRefusal = status === 400 || status === 422
+    ? isProviderModerationRefusal(status, JSON.stringify(event), undefined, true) : undefined;
   // A conflicting root and record code hop only when each would hop on its own, so a root hard
   // stop is never hidden behind a retryable record code (and a retryable pair keeps dev's hop).
   return comboFailureDecision(status, message, {
     code: recordCode ?? rootCode, rootCode,
     codexModelRefusal: terminalModelRefusal(status, event),
-    malformedResponseFormat, openRouterOpaque400,
+    malformedResponseFormat, openRouterOpaque400, providerModerationRefusal,
   }) === "hop";
 }
 
@@ -467,17 +485,24 @@ function observedResponsesStage(state: {
   return "headers-only";
 }
 
-function replayBufferedResponse(
+/** A released replay slot. */
+const EMPTY_CHUNK = new Uint8Array(0);
+
+/** Exported for its regression tests (#8601). */
+export function replayBufferedResponse(
   response: Response,
   reader: ReadableStreamDefaultReader<Uint8Array>,
   buffered: Uint8Array[],
   pendingRead?: ReturnType<typeof reader.read>,
 ): Response {
   let index = 0;
-  const body = new ReadableStream<Uint8Array>({
+  const body = carryPacedStream(response.body, new ReadableStream<Uint8Array>({
     async pull(controller) {
       if (index < buffered.length) {
-        controller.enqueue(buffered[index++]!);
+        // Hand each replayed chunk over once: the replay keeps no reference to a prefix the client already took (#8601).
+        const chunk = buffered[index]!;
+        buffered[index++] = EMPTY_CHUNK;
+        controller.enqueue(chunk);
         return;
       }
       try {
@@ -490,9 +515,10 @@ function replayBufferedResponse(
       }
     },
     cancel(reason) {
+      buffered.fill(EMPTY_CHUNK);
       reader.cancel(reason).catch(() => undefined);
     },
-  });
+  }, pacedQueuingStrategy(response.body)));
   return carryResponseToolOwnership(response, new Response(body, {
     status: response.status,
     statusText: response.statusText,
@@ -559,7 +585,14 @@ function failedTerminalResponse(
       ...(usage && typeof usage === "object" && !Array.isArray(usage) ? { usage } : {}),
     },
   }), {
-    status: logCtx.terminalHttpStatus ?? bareErrorStatus(terminalPayload) ?? 502,
+    // A structured moderation verdict on any carrier (`error` or `response.failed`) is the
+    // request-level 400 the HTTP and native readers judge it as. The verdict already vetoes any
+    // stated status other than 400/422, so this only replaces a status the log tap inferred (the
+    // synthetic 502 for an unrecognized code).
+    status: (logCtx.terminalHttpStatus !== 400 && logCtx.terminalHttpStatus !== 422
+      && isProviderModerationRefusal(400, JSON.stringify(terminalPayload), undefined, true))
+      ? 400
+      : logCtx.terminalHttpStatus ?? bareErrorStatus(terminalPayload) ?? 502,
     headers,
   });
 }
@@ -724,6 +757,17 @@ export async function preflightComboStreamResponse(
         && !outputCommitted && retryableTerminalPayload) {
         await reader.cancel("retrying zero-output combo stream terminal").catch(() => undefined);
         const failed = failedTerminalResponse(response, retryableTerminalPayload, logCtx);
+        // The rebuilt envelope keeps only the record. When either the whole frame or that slim
+        // envelope reads as a moderation verdict, the combo loop must judge the whole frame: a
+        // verdict needs the evidence the envelope dropped (a root code, an innererror), and a veto
+        // the envelope dropped (a root verdict, a nested hard code) must not turn into a hop.
+        if (failed.status === 400 || failed.status === 422) {
+          const whole = JSON.stringify(retryableTerminalPayload);
+          if (isProviderModerationRefusal(failed.status, whole, undefined, true)
+            || isProviderModerationRefusal(failed.status, await failed.clone().text(), undefined, true)) {
+            attachComboFailureEvidence(failed, whole);
+          }
+        }
         return { kind: "failed", response: failed,
           ...(failed.status === 400
             ? { codexModelRefusal: terminalModelRefusal(failed.status, retryableTerminalPayload) } : {}) };

@@ -1,3 +1,4 @@
+import { isRouteClientId, type RouteClientId } from "./route-intent";
 /**
  * Argument vectors for the system OpenSSH client used by machine links.
  *
@@ -19,7 +20,8 @@
  */
 
 import { isAbsolute } from "node:path";
-import { POWERSHELL_ENCODED_MAX, PowerShellCommandTooLongError, windowsGatedOcxArgv, windowsOcxArgv } from "./remote-windows";
+import { ExplicitRouteError, explicitRouteSshOptions, type ExplicitRoute } from "./explicit-route";
+import { POWERSHELL_ENCODED_MAX, PowerShellCommandTooLongError, ROUTE_OVERWRITE_MIN_CHILD_VERSION, windowsGatedOcxArgv, windowsOcxArgv, windowsOverwriteSyncArgv } from "./remote-windows";
 
 export type TunnelDirection = "R" | "L";
 
@@ -70,8 +72,36 @@ function optionPath(path: string): string {
 /** ERROR everywhere; DEBUG1 only for a tunnel spawned while opt-in SSH capture is on (src/link/ssh-capture.ts). */
 export type SshLogLevel = "ERROR" | "DEBUG1";
 
-function commonOptions(alias: string, knownHostsFile: string, strict: "yes" | "accept-new", logLevel: SshLogLevel = "ERROR"): string[] {
+/**
+ * The link's explicit route (src/link/explicit-route.ts) as command-line options, which ssh takes before
+ * anything in ssh_config. It names how to reach the link's own alias, so it is refused with any other
+ * destination; null adds nothing, which is the argv of a link without one.
+ */
+function routeOptions(route: ExplicitRoute | null | undefined, alias: string, destination: string): RouteArgs {
+  if (!route) return NO_ROUTE;
+  if (destination !== alias) throw new LinkSshArgumentError("an explicit route reaches the link alias only");
+  try {
+    // Decided by the route itself, never by what its options happen to be: a link with a route reads no ssh_config.
+    return { configFile: ["-F", "none"], options: explicitRouteSshOptions(route) };
+  } catch (error) {
+    if (error instanceof ExplicitRouteError) throw new LinkSshArgumentError(error.message);
+    throw error;
+  }
+}
+
+/**
+ * What a route adds to the argv. configFile is ["-F", "none"] for every explicit route and comes first: an explicit route
+ * names the transport, user and port and the host key is pinned, so such a link reads no ssh_config at all (list-valued
+ * settings such as forwards, SendEnv and IdentityFile would add to ours, a RemoteCommand would break every exec, and no
+ * option can remove a configured forward from the tunnel). Links without a route keep reading the owner's ssh_config,
+ * which is how they reach their host.
+ */
+interface RouteArgs { configFile: readonly string[]; options: readonly string[] }
+const NO_ROUTE: RouteArgs = { configFile: [], options: [] };
+
+function commonOptions(alias: string, knownHostsFile: string, strict: "yes" | "accept-new", logLevel: SshLogLevel, route: RouteArgs): string[] {
   return [
+    ...route.configFile,
     "-o", "BatchMode=yes",
     "-o", "ConnectTimeout=10",
     "-o", "ServerAliveInterval=15",
@@ -91,11 +121,17 @@ function commonOptions(alias: string, knownHostsFile: string, strict: "yes" | "a
     "-o", "ForwardX11=no",
     "-o", "PermitLocalCommand=no",
     "-o", `LogLevel=${logLevel}`,
+    ...route.options,
   ];
 }
 
 export interface TunnelArgvOptions {
   alias: string;
+  /**
+   * Where ssh connects, when it is another route to the same machine. HostKeyAlias stays alias, so
+   * the route is checked against the key pinned for the link. Omitted: alias (today's argv).
+   */
+  destination?: string;
   /** "R": listen on the remote host and reach this host. "L": listen here and reach the remote host. */
   direction: TunnelDirection;
   /** Port the forward listens on (remote for "R", local for "L"). */
@@ -105,10 +141,16 @@ export interface TunnelArgvOptions {
   knownHostsFile: string;
   /** Defaults to ERROR. DEBUG1 is requested only by opt-in SSH capture; the argv is otherwise unchanged. */
   logLevel?: SshLogLevel;
+  /**
+   * The link's explicit route, or null. Required so every caller decides: a Home-initiated link passes
+   * its record's explicitRoute (absent: null); Child-initiated and messaging commands pass null.
+   */
+  route: ExplicitRoute | null;
 }
 
 export function buildTunnelArgv(options: TunnelArgvOptions): string[] {
   const alias = assertSshAlias(options.alias);
+  const destination = assertSshAlias(options.destination ?? alias);
   const bind = assertPort(options.bindPort, "bindPort");
   const target = assertPort(options.targetPort, "targetPort");
   if (options.direction !== "R" && options.direction !== "L") throw new LinkSshArgumentError("direction must be R or L");
@@ -116,28 +158,36 @@ export function buildTunnelArgv(options: TunnelArgvOptions): string[] {
   if (logLevel !== "ERROR" && logLevel !== "DEBUG1") throw new LinkSshArgumentError("logLevel must be ERROR or DEBUG1");
   return [
     "ssh", "-N", "-T",
-    ...commonOptions(alias, options.knownHostsFile, "yes", logLevel),
+    ...commonOptions(alias, options.knownHostsFile, "yes", logLevel, routeOptions(options.route, alias, destination)),
     "-o", "ExitOnForwardFailure=yes",
     `-${options.direction}`, `127.0.0.1:${bind}:127.0.0.1:${target}`,
-    "--", alias,
+    "--", destination,
   ];
 }
 
 export interface ExecArgvOptions {
   alias: string;
+  /** Another route to the same machine; HostKeyAlias stays alias. Omitted: alias. */
+  destination?: string;
   /** Remote argv. The command must be sh; its arguments are quoted for the remote shell. */
   argv: readonly string[];
   knownHostsFile: string;
+  /**
+   * The link's explicit route, or null. Required so every caller decides: a Home-initiated link passes
+   * its record's explicitRoute (absent: null); Child-initiated and messaging commands pass null.
+   */
+  route: ExplicitRoute | null;
 }
 
 export function buildExecArgv(options: ExecArgvOptions): string[] {
   const alias = assertSshAlias(options.alias);
+  const destination = assertSshAlias(options.destination ?? alias);
   if (options.argv.length === 0) throw new LinkSshArgumentError("remote argv must not be empty");
   return [
     "ssh", "-T",
-    ...commonOptions(alias, options.knownHostsFile, "yes"),
+    ...commonOptions(alias, options.knownHostsFile, "yes", "ERROR", routeOptions(options.route, alias, destination)),
     "-o", "ClearAllForwardings=yes",
-    "--", alias,
+    "--", destination,
     quoteRemote(options.argv),
   ];
 }
@@ -264,6 +314,11 @@ export interface ProbeArgvOptions {
   alias: string;
   /** An empty, private, temporary file. The probe records the offered host key here. */
   tempKnownHostsFile: string;
+  /**
+   * The link's explicit route, or null. Required so every caller decides: a Home-initiated link passes
+   * its record's explicitRoute (absent: null); Child-initiated and messaging commands pass null.
+   */
+  route: ExplicitRoute | null;
 }
 
 /**
@@ -275,9 +330,40 @@ export function buildProbeArgv(options: ProbeArgvOptions): string[] {
   const alias = assertSshAlias(options.alias);
   return [
     "ssh", "-T",
-    ...commonOptions(alias, options.tempKnownHostsFile, "accept-new"),
+    ...commonOptions(alias, options.tempKnownHostsFile, "accept-new", "ERROR", routeOptions(options.route, alias, alias)),
     "-o", "ClearAllForwardings=yes",
     "--", alias,
+    "echo ocx-link-probe",
+  ];
+}
+
+export interface RouteProbeArgvOptions {
+  /** The link's alias: the name its host key is pinned under. */
+  alias: string;
+  /** The route being tried. */
+  destination: string;
+  /** The link known_hosts file. It is only read: the route must offer the key already pinned. */
+  knownHostsFile: string;
+  /**
+   * The link's explicit route, or null. Required so every caller decides: a Home-initiated link passes
+   * its record's explicitRoute (absent: null); Child-initiated and messaging commands pass null.
+   */
+  route: ExplicitRoute | null;
+}
+
+/**
+ * Does this route reach the pinned machine and accept our key? Strict host-key checking against
+ * the link file under HostKeyAlias=alias: a route that answers with any other key fails with "Host
+ * key verification failed" and nothing is learned or written. Success prints exactly ocx-link-probe.
+ */
+export function buildRouteProbeArgv(options: RouteProbeArgvOptions): string[] {
+  const alias = assertSshAlias(options.alias);
+  const destination = assertSshAlias(options.destination);
+  return [
+    "ssh", "-T",
+    ...commonOptions(alias, options.knownHostsFile, "yes", "ERROR", routeOptions(options.route, alias, destination)),
+    "-o", "ClearAllForwardings=yes",
+    "--", destination,
     "echo ocx-link-probe",
   ];
 }
@@ -290,13 +376,14 @@ export function buildProbeArgv(options: ProbeArgvOptions): string[] {
 export const WINDOWS_OS_PROBE = "cmd /c echo %OS%";
 
 /** Run WINDOWS_OS_PROBE against an already trusted (pinned or just-probed) host key only. */
-export function buildWindowsProbeArgv(options: { alias: string; knownHostsFile: string }): string[] {
+export function buildWindowsProbeArgv(options: { alias: string; knownHostsFile: string; destination?: string; route: ExplicitRoute | null }): string[] {
   const alias = assertSshAlias(options.alias);
+  const destination = assertSshAlias(options.destination ?? alias);
   return [
     "ssh", "-T",
-    ...commonOptions(alias, options.knownHostsFile, "yes"),
+    ...commonOptions(alias, options.knownHostsFile, "yes", "ERROR", routeOptions(options.route, alias, destination)),
     "-o", "ClearAllForwardings=yes",
-    "--", alias,
+    "--", destination,
     WINDOWS_OS_PROBE,
   ];
 }
@@ -330,8 +417,9 @@ export function quoteRemote(argv: readonly string[]): string {
 }
 
 /** Minimum served ocx for a gated command. Closed set: the literals are spliced into awk and PowerShell. */
-export type GatedMinVersion = "2.93.0" | "2.97.0";
-export type GatedLacksMarker = "child-ocx-lacks-expect-link" | "child-ocx-lacks-orchestrated-update";
+export { ROUTE_OVERWRITE_MIN_CHILD_VERSION };
+export type GatedMinVersion = "2.93.0" | "2.97.0" | "2.100.0";
+export type GatedLacksMarker = "child-ocx-lacks-expect-link" | "child-ocx-lacks-orchestrated-update" | "child-ocx-lacks-overwrite";
 export interface GatedOcxCommand {
   minVersion: GatedMinVersion;
   lacksMarker: GatedLacksMarker;
@@ -354,9 +442,9 @@ export interface GatedOcxCommand {
   args: readonly string[];
 }
 export const GATED_VERSION_PARTS: Readonly<Record<GatedMinVersion, readonly [string, string, string]>> = {
-  "2.93.0": ["2", "93", "0"], "2.97.0": ["2", "97", "0"],
+  "2.93.0": ["2", "93", "0"], "2.97.0": ["2", "97", "0"], "2.100.0": ["2", "100", "0"],
 };
-const LACKS_MARKERS: ReadonlySet<string> = new Set(["child-ocx-lacks-expect-link", "child-ocx-lacks-orchestrated-update"]);
+const LACKS_MARKERS: ReadonlySet<string> = new Set(["child-ocx-lacks-expect-link", "child-ocx-lacks-orchestrated-update", "child-ocx-lacks-overwrite"]);
 export const LINK_ID_PATTERN = /^lnk_[0-9a-f]{16}$/;
 
 function assertGated(cmd: GatedOcxCommand): readonly [string, string, string] {
@@ -376,7 +464,9 @@ function assertGated(cmd: GatedOcxCommand): readonly [string, string, string] {
  */
 function remoteGatedScript(cmd: GatedOcxCommand): string {
   const [major, minor, patch] = assertGated(cmd);
-  const ephemeral = cmd.acceptEphemeral ? "" : `
+  const overwriteEphemeral = cmd.lacksMarker === "child-ocx-lacks-overwrite" ? `
+  case "\${c##*/}" in ocx-child*) printf '%s\\n' 'ocx-fanout:child-ephemeral-no-overwrite' >&2; exit 121;; esac` : "";
+  const ephemeral = cmd.acceptEphemeral || overwriteEphemeral ? "" : `
   case "\${c##*/}" in ocx-child*) printf '%s\\n' 'ocx-fanout:child-ocx-ephemeral' >&2; exit 121;; esac`;
   // Only a pinned sync that carries a restart asks for this, so the plain sync's stderr stays exact.
   const kind = cmd.acceptEphemeral && cmd.reportSelectedKind ? `
@@ -412,7 +502,7 @@ find_launcher_node() {
 }
 try_ocx() {
   c=$1; shift
-  [ -x "$c" ] || return
+  [ -x "$c" ] || return${overwriteEphemeral}
   ( ulimit -c 0; ulimit -f 1; exec "$c" \${ocx_entry:+"$ocx_entry"} --version ) >"$tmp" 2>/dev/null & vp=$!
   ( sleep 10 & timer=$!; trap 'kill "$timer" 2>/dev/null; wait "$timer" 2>/dev/null; exit' TERM HUP INT; : > "$ready"; wait "$timer" 2>/dev/null; kill -9 "$vp" 2>/dev/null ) >/dev/null 2>&1 & watchdog=$!
   while [ ! -f "$ready" ]; do kill -0 "$watchdog" 2>/dev/null || break; sleep 0.01 >/dev/null 2>&1; done
@@ -483,17 +573,25 @@ export function remoteGatedOcxArgv(cmd: GatedOcxCommand, platform: "posix" | "wi
 }
 
 export type ChildRestartRequest = "app-server" | "codex";
-export interface PinnedSyncOptions { restart?: ChildRestartRequest }
+export interface PinnedSyncOptions { restart?: ChildRestartRequest; overwrite?: boolean; overwriteClient?: RouteClientId }
 const RESTART_FLAG: Readonly<Record<ChildRestartRequest, string>> = { "app-server": "--restart-app-server-only", codex: "--restart-codex" };
 
-export function remotePinnedSyncArgv(linkId: string, platform: "posix" | "windows" = "posix", opts: PinnedSyncOptions = {}): string[] {
+export function remotePinnedSyncArgv(linkId: string, platform: "posix" | "windows" = "posix", opts: PinnedSyncOptions | boolean = {}, overwriteClient?: RouteClientId): string[] {
+  if (typeof opts === "boolean") opts = { overwrite: opts, ...(overwriteClient !== undefined ? { overwriteClient } : {}) };
+  else if (overwriteClient !== undefined) throw new LinkSshArgumentError("invalid overwrite client");
+  const overwrite = opts.overwrite === true;
+  overwriteClient = opts.overwriteClient;
+  if (overwriteClient !== undefined && (!overwrite || !isRouteClientId(overwriteClient))) throw new LinkSshArgumentError("invalid overwrite client");
   if (!LINK_ID_PATTERN.test(linkId)) throw new LinkSshArgumentError("invalid link id");
   if (opts.restart !== undefined && !Object.hasOwn(RESTART_FLAG, opts.restart)) throw new LinkSshArgumentError("invalid restart request");
   // D20: the Home never sends a restart to a Windows Child.
   if (opts.restart !== undefined && platform === "windows") throw new LinkSshArgumentError("unsupported:windows-restart");
   const restart = opts.restart === undefined ? [] : [RESTART_FLAG[opts.restart]];
-  return remoteGatedOcxArgv({ minVersion: "2.93.0", lacksMarker: "child-ocx-lacks-expect-link", acceptEphemeral: true,
+  if (overwrite && platform === "windows") {
+    try { return windowsOverwriteSyncArgv(linkId, true, overwriteClient); }
+    catch (error) { if (error instanceof PowerShellCommandTooLongError) throw new LinkSshArgumentError("windows-command-too-long"); throw error; }
+  }
+  return remoteGatedOcxArgv({ minVersion: overwrite ? "2.100.0" : "2.93.0", lacksMarker: overwrite ? "child-ocx-lacks-overwrite" : "child-ocx-lacks-expect-link", acceptEphemeral: !overwrite,
     reportEntry: false, reportClock: false, reportSelectedKind: restart.length > 0, launcher: "none",
-    args: ["sync", "--expect-link", linkId, "--json", ...restart] }, platform);
+    args: ["sync", "--expect-link", linkId, "--json", ...restart, ...(overwrite ? ["--overwrite-conflict"] : []), ...(overwriteClient ? ["--overwrite-client", overwriteClient] : [])] }, platform);
 }
-

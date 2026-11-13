@@ -1,4 +1,4 @@
-import { comboFailureDecision } from "../../combos/failover";
+import { comboFailureDecision, isProviderModerationRefusal } from "../../combos/failover";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { isVerifiedModelNotInPlanResponse } from "../../lib/errors";
 import { isShadowSourceModel } from "../../lib/shadow-call";
@@ -138,6 +138,9 @@ async function shouldHopPolicyCandidate(response: Response, signal?: AbortSignal
       code: upstreamCodeForComboFailure(response, errorCodeFromText(text)),
       // A passthrough candidate returns its upstream body unchanged, so the code is not provenance.
       verifiedPlanRefusal: isVerifiedModelNotInPlanResponse(response),
+      // The text is the whole bounded body, judged as the combo reader judges it.
+      ...(text && (response.status === 400 || response.status === 422)
+        ? { providerModerationRefusal: isProviderModerationRefusal(response.status, text, undefined, true) } : {}),
     }) === "hop";
   } catch {
     return false;
@@ -161,8 +164,17 @@ function finishFailedPolicyAttempt(logCtx: RequestLogContext, status: number): v
   delete logCtx.usageFromBridge;
   delete logCtx.upstreamError;
   delete logCtx.terminalHttpStatus;
+  delete logCtx.observedTerminalStatus;
   delete logCtx.terminalErrorCode;
   delete logCtx.terminalIncompleteReason;
+  delete logCtx.cacheAffinity;
+  delete logCtx.cacheAffinityReason;
+  delete logCtx.affinityKeptEntryId;
+  delete logCtx.affinityKeyEntryId;
+  delete logCtx.affinityProviderName;
+  delete logCtx.affinityModel;
+  delete logCtx.cacheAffinityApplicable;
+  delete logCtx.terminalSource;
 }
 
 /**

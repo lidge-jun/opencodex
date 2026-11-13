@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 68.
+Declared capabilities: 71.
 
 ### `ocx agent subagents force`
 
@@ -182,9 +182,9 @@ Drives no management route.
 
 ### `ocx message mcp`
 
-Usage: `ocx message mcp --codex <absolute-cli-path> --codex-home <absolute-existing-home> [--allow-reply-read]`
+Usage: `ocx message mcp --codex <absolute-cli-path> --codex-home <absolute-existing-home> [--allow-reply-read] [--allow-resume --resume-socket <absolute-existing-unix-socket> --resume-permissions <profile-id>]`
 
-Serve MCP tools for stored Codex metadata, queued text and explicitly enabled stored-turn reply reads and bounded waits.
+Serve MCP tools for stored Codex metadata, queued text, opt-in stored-turn reply reads, bounded waits and guarded existing-server resume preflight.
 
 State-changing: yes. JSON mode: `none`.
 
@@ -195,9 +195,12 @@ Drives no management route.
 | `--codex` | string | Explicit local Codex CLI executable. |
 | `--codex-home` | string | Explicit existing Codex home; no creation or login. |
 | `--allow-reply-read` | boolean | Explicitly expose stored final-turn text through codex_read_reply and codex_wait_reply; disabled by default. |
+| `--allow-resume` | boolean | Expose existing-thread resume preflight; requires --resume-socket and --resume-permissions. Execution is blocked pending native atomic resume support. |
+| `--resume-socket` | string | Existing trusted local Unix App Server socket; requires --allow-resume, --resume-permissions and matching Codex home. |
+| `--resume-permissions` | string | Host-selected native profile for resume preflight; does not bypass the atomicity refusal or preserve saved permissions automatically. |
 
-- macOS/Linux only. No proxy/control socket required. Starts bounded stdio helpers only when a tool is called; existing sessions/send behavior stays unchanged.
-- Stored threads are not verified live sessions. queued is not processing; unknown is never replayed. --allow-reply-read exposes bounded same-turn final text, not exclusive reply ownership or goal completion. No daemon start, thread resume, steer, automatic replies or registration.
+- macOS/Linux only. Default queue/read tools need no proxy/control socket; resume uses the explicitly configured existing Unix socket. Starts bounded stdio helpers only when a tool is called; existing sessions/send behavior stays unchanged.
+- Stored threads are not verified live sessions. queued is not processing; unknown is never replayed. --allow-reply-read exposes bounded same-turn final text, not exclusive reply ownership or goal completion. No daemon start, steer, automatic replies or registration. Resume preflight is separate opt-in through a same-home existing Unix server; managed requirements and unavailable profiles refuse. The checked native API cannot enforce unloaded-only resume atomically, so execution is blocked with resume_atomicity_unsupported; no thread/resume is sent.
 
 ### `ocx advisor`
 
@@ -217,7 +220,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--context-mode` | string | With set: context (default) or question-only; question-only pauses automatic consultations. |
 
 - `status` (the default) reads the resolved settings; `on`/`off` toggle the sidecar; `consent` records or revokes context-sharing consent; `set` updates model, effort, policy, context mode, task limit, or timeout.
-- `on` does not grant consent. Without current consent it refuses and prints the disclosure. `on --ack-context-sharing` records consent v1 and enables. `consent --revoke` removes consent and stops task-context transfer.
+- `on` does not grant consent. Without current consent it refuses and prints the disclosure. `on --ack-context-sharing` records consent v1 and enables. `consent --revoke` removes consent: consultations not yet dispatched are blocked, but it cannot cancel a dispatched consultation or retract task context already sent.
 - The advisor model may be any routable model string: a bare native model, an explicit `provider/model`, or an account-qualified native model.
 - `policy: preflight` makes OpenCodex attempt one automatic consultation per task with a stable conversation identity once the task shows orientation evidence (an assistant tool call or a tool result after the latest user message). Without a stable identity, each eligible request may trigger another consultation. `policy: manual` consults only when the worker calls the synthetic `advisor` tool. Neither path sends task context without current context-sharing consent.
 - `policy: adaptive` adds evidence-based failed-repair consultation after the same validation fails, a file edit completes, and validation fails again. Automatic calls require a stable conversation identity. `set --max-consultations <1-3>` caps adaptive task attempts, including manual calls, in a durable 24-hour budget. No semantic stuck detection is claimed.
@@ -860,7 +863,7 @@ State-changing: yes. JSON mode: `envelope`.
 
 ### `ocx v2 mode`
 
-Usage: `ocx v2 mode <v1|default|v2> [--live] [--json] [--acknowledge-surface-advisory]`
+Usage: `ocx v2 mode <v1|default|v2|v2-plaintext> [--live] [--json] [--acknowledge-surface-advisory] [--acknowledge-plaintext-agent-messages]`
 
 Set local model-catalog multi-agent mode.
 
@@ -875,6 +878,7 @@ State-changing: yes. JSON mode: `envelope`.
 | `--live` | boolean | Use the selected runtime; otherwise preserve the local native/config operation. |
 | `--json` | boolean | Emit the validated task result as one JSON document. |
 | `--acknowledge-surface-advisory` | boolean | Explicit live mode only; never implicitly acknowledged. |
+| `--acknowledge-plaintext-agent-messages` | boolean | Required when entering v2-plaintext; task text may remain in history, provider requests and debug state. |
 
 - Local and live targets never fall back into each other. Parse failures occur before native effects; JSON is one safe state/change/sync result, not collected log text.
 - Local mode/keep-native and changed on/off preserve their existing sync calls even without a discovered port; threads/hints and unchanged toggles do not gain sync. Unknown or failed sync evidence is nonzero with landed state visible.
@@ -1342,3 +1346,71 @@ State-changing: no. JSON mode: `payload`.
 | `--json` | boolean | Emit the result as JSON. |
 
 - Alias of observe memory.
+
+### `ocx route to`
+
+Usage: `ocx route to <client> <on|off|inherit> [--device <alias|id|this>] [--accounts <all|none|userId,...>] [--model-names <alias|routed>] [--overwrite-conflict] [--local] [--json]`
+
+Set Home-default or per-device route intent, or opt out locally on a Child.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| PUT | `/api/route-to` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--device` | string | Home: alias, id, all or this. Child: this or its own link id only. |
+| `--json` | boolean | Emit the ocx.route-to/1 status matrix. |
+| `--overwrite-conflict` | boolean | Explicitly permit replacing conflicting managed blocks. |
+| `--local` | boolean | Child only: opt out with off, or clear the opt-out with inherit. |
+| `--accounts` | string | Aside on only: all, none, or comma-separated stable userIds; never u/N slots. |
+| `--model-names` | string | Hermes/Command Code on only: alias or routed model names. |
+
+- Clients: codex, claude, claude-desktop, grok and the supported file integrations. Without --device a Home updates its default and materializes itself; all is only for status/sync.
+- inherit requires --device unless clearing a Child --local opt-out. Child writes print the exact Home command with the Child link id; --local supports off/inherit only. --overwrite-conflict applies only to on or sync.
+- On the Home, codex, claude, grok and claude-desktop follow the Home's own native switches: a Home default or --device home write for them writes that switch (Home inherit sets it to the default).
+
+### `ocx route to status`
+
+Usage: `ocx route to status [--device <alias|id|all|this>] [--json]`
+
+Read per-device route intent, its source and actual client apply outcomes.
+
+State-changing: no. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/route-to` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--device` | string | Home: alias, id, all or this. Child: this or its own link id only. |
+| `--json` | boolean | Emit the ocx.route-to/1 status matrix. |
+
+- On a Child this reads local receipts without a Home management relay. Intent and applied state are distinct; null applied means no recorded outcome.
+- Sources: builtin, default, device, local (Child opt-out) and native (a Home row governed by the Home's own switch). An outcome recorded for an earlier intent reads stale.
+- Intent unresolved appears only for Aside, while the Home's existing Aside profiles have no stable userIds and nothing decided Aside; warnings[] then names the fix (ocx route to aside on|off --device home).
+
+### `ocx route to sync`
+
+Usage: `ocx route to sync [--device <alias|id|all|this>] [--overwrite-conflict] [--json]`
+
+Reapply route intent on selected devices, or locally on a Child.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/route-to/sync` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--device` | string | Home: alias, id, all or this. Child: this or its own link id only. |
+| `--overwrite-conflict` | boolean | Explicitly permit replacing conflicting managed blocks. |
+| `--json` | boolean | Emit the ocx.route-to/1 status matrix. |
+
+- No conflict retry or implicit overwrite. Child sync calls its local materializer and sends no Home management write.
+- Home sync never changes the Home's native switches for codex, claude, grok or claude-desktop; it refreshes what each switch says.
+- On a Home whose Aside ownership is unresolved, sync applies every other client, leaves Aside unchanged, reports it unresolved and prints the warning; that alone does not fail the sync.

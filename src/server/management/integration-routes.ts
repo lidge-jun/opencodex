@@ -9,6 +9,7 @@
  * Design of record: devlog/_fin/260802_client_toggle_api/040_wp4_management_api.md.
  */
 import { readFileSync } from "node:fs";
+import { LinkApplyBusyError, withLinkApply } from "../../client/link-home";
 import { saveConfigPreservingClaudeCode } from "../../config";
 import { listAsideProfileStates, type AsideProfilesInput } from "../../integrations/aside-profiles";
 import {
@@ -48,6 +49,8 @@ import {
   setIntegrationMutationFlightTestHook,
 } from "../../integrations/mutation-flight";
 import { jsonResponse } from "../auth-cors";
+import { isRouteClientId, type RouteClientIntent } from "../../link/route-intent";
+import { prepareHomeIntegrationDecision, recordHomeIntegrationDecision } from "./home-integration-decision";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import { managementInferencePort, type ManagementContext } from "./context";
 import { exportSnapshotIdentity, loadExportModels, previewExportSnapshot } from "./model-rows";
@@ -150,6 +153,8 @@ let integrationMutationTestHooks: {
    */
   store?: IntegrationStateStore;
   run?: (operation: () => Promise<unknown>) => Promise<unknown>;
+  afterWriterStart?: () => void;
+  afterBoundSnapshot?: () => Promise<void>;
 } | null = null;
 
 /**
@@ -240,6 +245,8 @@ export function setIntegrationMutationFlightTestHooks(
     /** Binds the WHOLE request — reads, writes and journal — to one store. */
     store?: IntegrationStateStore;
     run?: (operation: () => Promise<unknown>) => Promise<unknown>;
+    afterWriterStart?: () => void;
+    afterBoundSnapshot?: () => Promise<void>;
   } | null,
 ): void {
   integrationMutationTestHooks = hooks;
@@ -281,6 +288,33 @@ function asideOptions(ctx: ManagementContext): AsideProfileRouteOptions {
   };
 }
 
+/**
+ * Which Aside requests are a Home decision, and the profiles each may enable: a toggle of one
+ * profile or all of them, or a profile restore. Undefined for reads, previews, journal and sync.
+ */
+async function asideDecisionScope(ctx: ManagementContext, known: unknown): Promise<readonly number[] | "all" | undefined> {
+  // The paths handleAsideProfileRoutes owns: the whole set, the profile collection, one profile,
+  // and one profile's restore.
+  const match = /^\/api\/client-integrations\/aside(?:\/profiles(?:\/(0|[1-9][0-9]*)(\/restore)?)?)?$/.exec(ctx.url.pathname);
+  if (!match) return undefined;
+  const restore = match[2] !== undefined && ctx.req.method === "POST";
+  const toggle = match[2] === undefined && ctx.req.method === "PUT";
+  if (!toggle && !restore) return undefined;
+  const raw = match[1] ?? ctx.url.searchParams.get("profile");
+  const id = raw !== null && /^(0|[1-9][0-9]*)$/.test(raw) && Number.isSafeInteger(Number(raw)) ? Number(raw) : undefined;
+  if (restore) return id === undefined ? [] : [id];
+  const body = known !== undefined ? known : await readJsonBody({ ...ctx, req: ctx.req.clone() });
+  if (!isPlainRecord(body) || body.enabled !== true) return [];
+  return id === undefined ? "all" : [id];
+}
+
+/** A file client's Home decision as its ownership record stands after a restore. */
+function ownedIntent(store: IntegrationStateStore, clientId: IntegrationClientId): RouteClientIntent {
+  const owner = store.readRecords()[clientId];
+  return { enabled: Boolean(owner),
+    ...(owner?.modelNames && (clientId === "hermes" || clientId === "commandcode") ? { modelNames: owner.modelNames } : {}) };
+}
+
 async function buildIntegrationWriteInput(
   clientId: IntegrationClientId,
   ctx: ManagementContext,
@@ -309,13 +343,13 @@ async function buildIntegrationWriteInput(
  * that persists configuration. Everything else is shared, so a preview and the commit that follows
  * it cannot disagree for any reason except the state genuinely moving.
  */
-async function buildIntegrationPreviewInput(
+function buildIntegrationPreviewInput(
   clientId: IntegrationClientId,
   ctx: ManagementContext,
   store: IntegrationStateStore,
   droidReasoningDefaults?: Record<string, string>,
   modelNames?: ExportModelNames,
-): Promise<{ input: IntegrationWriteInput; identity: string } | null> {
+): { input: IntegrationWriteInput; identity: string } | null {
   const snapshot = previewExportSnapshot(ctx.config);
   // No cached roster means no honest snapshot to plan against. Gathering one here would make a
   // read refresh credentials and write the provider cache, which is the thing preview must not do.
@@ -530,6 +564,34 @@ async function readJsonBody(ctx: ManagementContext): Promise<unknown | Response>
   }
 }
 
+/**
+ * `ocx sync` refreshes an already-connected Pi file through this route instead of rebuilding it
+ * in the CLI process. Pi may carry raw nested selectors, and a raw selector is only safe when the
+ * proxy that will serve it proves it routes to the same model (#8172). Proving it against the
+ * CLI's own saved configuration and router cache could write a selector this proxy routes
+ * elsewhere, so the refresh runs here, against this process's config, router and roster.
+ */
+export const PI_SYNC_PATH = "/api/client-integrations/pi/sync";
+
+async function piSyncResponse(ctx: ManagementContext): Promise<Response> {
+  const body = await readJsonBody(ctx);
+  if (body instanceof Response) return body;
+  if (!isPlainRecord(body) || Object.keys(body).length !== 0) {
+    return jsonResponse({ error: "Pi sync expects an empty object", code: "invalid_pi_sync_body" }, 400, ctx.req, ctx.config);
+  }
+  const { refreshOwnedCatalogIntegrations } = await import("../../integrations/catalog-refresh");
+  const results = await refreshOwnedCatalogIntegrations({
+    config: ctx.config,
+    port: managementInferencePort(ctx),
+    models: () => loadExportModels(ctx.config),
+    store: integrationStore(),
+    ...pathOverrides(),
+    ...(integrationMutationTestHooks?.io ? { io: integrationMutationTestHooks.io } : {}),
+  }, ["pi"]);
+  const ok = results.every(result => result.ok);
+  return jsonResponse({ ok, clientId: "pi", results }, ok ? 200 : 207, ctx.req, ctx.config);
+}
+
 function writerFailureResponse(
   clientId: IntegrationClientId,
   /*
@@ -686,10 +748,12 @@ async function handleJournalDelete(ctx: ManagementContext): Promise<Response> {
 export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<Response | null> {
   // Aside delegates before the ordinary client handler. Reject unsupported intent before that
   // delegation can enumerate profiles, load catalogs, or write a different preference.
+  let asideBody: unknown;
   if (/^\/api\/client-integrations\/aside\/profiles(?:\/|$)/.test(ctx.url.pathname)
     && (ctx.req.method === "PUT" || ctx.req.method === "POST")) {
     const body = await readJsonBody({ ...ctx, req: ctx.req.clone() });
     if (body instanceof Response) return body;
+    asideBody = body;
     if (isPlainRecord(body)) {
       const naming = readModelNames(ctx, body, "aside", "apply");
       if (naming instanceof Response) return naming;
@@ -708,8 +772,22 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
   if (hermesScoped) ctx = hermesScoped;
   const { req, url } = ctx;
   const profileOptions = asideOptions(ctx);
-  const aside = await handleAsideProfileRoutes(ctx, profileOptions);
+  // An Aside profile change is the Home's decision (home-integration-decision.ts).
+  const asideDecision = ctx.config.runtimeRole === "client" ? undefined : await asideDecisionScope(ctx, asideBody);
+  let aside: Response | null;
+  try {
+    aside = asideDecision === undefined ? await handleAsideProfileRoutes(ctx, profileOptions) : await withLinkApply(async () => {
+      const refused = prepareHomeIntegrationDecision(ctx, "aside", asideDecision);
+      if (refused) return refused;
+      const response = await handleAsideProfileRoutes(ctx, profileOptions);
+      return response && response.status >= 200 && response.status < 300 ? recordHomeIntegrationDecision(ctx, "aside", response) : response;
+    });
+  } catch (error) {
+    if (error instanceof LinkApplyBusyError) return jsonResponse({ error: "integration mutation busy", code: "integration_mutation_busy", clientId: "aside" }, 409, req, ctx.config);
+    throw error;
+  }
   if (aside) return aside;
+  if (url.pathname === PI_SYNC_PATH && req.method === "POST") return piSyncResponse(ctx);
   if (url.searchParams.has("profile")
     && (url.pathname === INTEGRATION_COLLECTION_PATH || url.pathname.startsWith(INTEGRATION_ROUTE_PREFIX))
     && !INTEGRATION_HISTORY_PATHS.includes(url.pathname)) {
@@ -966,12 +1044,27 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
     // The binding travels with the request. Dropping it here routed a bound Aside restore into
     // the unbound path, which executed the mutation while its confirmation went unexamined.
     // A Hermes-scoped restore never delegates: its operation lives in the selected Hermes store.
-    const asideRestore = hermesRequestScope(req) ? null : await asideRestoreResponse(ctx, {
+    // A restore on the Home is its decision (home-integration-decision.ts); a Hermes profile's is not.
+    const restoreDecides = ctx.config.runtimeRole !== "client" && !hermesRequestScope(req)?.resolvedPaths;
+    const restoreAside = () => asideRestoreResponse(ctx, {
       opId,
       confirmDrift,
       ...(parsed.operation === undefined ? {} : { operation: parsed.operation }),
       ...(parsed.planFingerprint === undefined ? {} : { planFingerprint: parsed.planFingerprint }),
     }, profileOptions);
+    let asideRestore: Response | null;
+    try {
+      const rootEntry = integrationStore(ctx).findOperation(opId);
+      asideRestore = hermesRequestScope(req) ? null : rootEntry && rootEntry.clientId !== "aside" ? await restoreAside() : restoreDecides ? await withLinkApply(async () => {
+        const refused = prepareHomeIntegrationDecision(ctx, undefined);
+        if (refused) return refused;
+        const response = await restoreAside();
+        return response && response.status >= 200 && response.status < 300 ? recordHomeIntegrationDecision(ctx, "aside", response) : response;
+      }) : await restoreAside();
+    } catch (error) {
+      if (error instanceof LinkApplyBusyError) return jsonResponse({ error: "integration mutation busy", code: "integration_mutation_busy" }, 409, req, ctx.config);
+      return internalErrorResponse(error, ctx);
+    }
     if (asideRestore) return asideRestore;
     let restoreClientId: IntegrationClientId | undefined;
     try {
@@ -994,53 +1087,63 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
         }, 410, req, ctx.config);
       }
 
+      // Every caller must hold a current passive roster before it can join a flight.
       const boundRestore = restoreBinding === "none"
         ? null
         : await buildIntegrationPreviewInput(operation.clientId, ctx, store);
       if (restoreBinding !== "none" && boundRestore === null) return previewUnavailableResponse(ctx);
-      const writeInput = boundRestore
-        ? boundRestore.input
-        : await buildIntegrationWriteInput(operation.clientId, ctx, store);
-      const restoreGuard = restoreBinding === "none" ? null : stalePlanGuard(
-        operation.clientId,
-        ctx,
-        store,
-      { operation: "restore", opId, confirmDrift },
-      restoreBinding.fingerprint,
-        boundRestore === null ? null : boundRestore.identity,
-    );
-      const restoreInput: IntegrationRestoreInput = {
-        ...writeInput,
-        opId,
-        confirmDrift,
-      };
-      const result = await runIntegrationMutationFlight(
-        operation.clientId,
-        scopedFlightKey(ctx, `restore:${opId}:${confirmDrift}`),
-        writeInput.io?.now ?? Date.now,
-        () => restoreIntegrationCoordinated(restoreInput, {
-          lockSeams: integrationMutationTestHooks?.lockSeams,
-          ...(restoreGuard ? { revalidate: restoreGuard.revalidate } : {}),
-          restoreGuard: () => hermesBoundaryRefusal(ctx),
-        }),
-      );
-      const restoreStale = restoreGuard?.response();
-      if (restoreStale) return restoreStale;
-      if (!result.ok) {
-        /*
-         * Drift is NOT special-cased here.
-         *
-         * It used to be, and the hand-written branch dropped the writer's
-         * `message` — which is the only thing that tells the user WHICH file
-         * drifted and where its backup went. Every refusal leaves through the
-         * one serializer, so a refusal cannot lose its recovery fields by
-         * being routed through a shorter path.
-         */
-        return writerFailureResponse(operation.clientId, result, ctx);
+      if (boundRestore && integrationMutationTestHooks?.afterBoundSnapshot) await integrationMutationTestHooks.afterBoundSnapshot();
+      if (boundRestore && exportSnapshotIdentity(ctx.config) !== boundRestore.identity) {
+        const current = buildIntegrationPreviewInput(operation.clientId, ctx, store);
+        return current === null ? previewUnavailableResponse(ctx) : jsonResponse({
+          error: "integration preview is stale", code: "integration_preview_stale",
+          plan: previewIntegration(current.input, { operation: "restore", opId, confirmDrift }),
+        }, 409, req, ctx.config);
       }
-      return jsonResponse(result satisfies IntegrationRestoreEnvelope, 200, req, ctx.config);
+
+      const response = await runIntegrationMutationFlight(
+        operation.clientId,
+        scopedFlightKey(ctx, `restore:${opId}:${confirmDrift}:${restoreBinding === "none" ? "unbound" : JSON.stringify([restoreBinding.fingerprint, boundRestore?.identity])}`),
+        integrationMutationTestHooks?.io?.now ?? Date.now,
+        async () => {
+          const apply = async () => {
+            if (restoreDecides) {
+              const refused = prepareHomeIntegrationDecision(ctx, operation.clientId);
+              if (refused) return refused;
+            }
+            const writeInput = boundRestore
+              ? boundRestore.input
+              : await buildIntegrationWriteInput(operation.clientId, ctx, store);
+            const restoreGuard = restoreBinding === "none" ? null : stalePlanGuard(
+              operation.clientId,
+              ctx,
+              store,
+              { operation: "restore", opId, confirmDrift },
+              restoreBinding.fingerprint,
+              boundRestore === null ? null : boundRestore.identity,
+            );
+            const restoreInput: IntegrationRestoreInput = {
+              ...writeInput,
+              opId,
+              confirmDrift,
+            };
+            const result = await restoreIntegrationCoordinated(restoreInput, {
+              lockSeams: integrationMutationTestHooks?.lockSeams,
+              ...(restoreGuard ? { revalidate: restoreGuard.revalidate } : {}),
+              restoreGuard: () => hermesBoundaryRefusal(ctx),
+            });
+            const stale = restoreGuard?.response();
+            if (stale) return stale;
+            if (!result.ok) return writerFailureResponse(operation.clientId, result, ctx);
+            const restored = jsonResponse(result satisfies IntegrationRestoreEnvelope, 200, req, ctx.config);
+            return restoreDecides ? recordHomeIntegrationDecision(ctx, operation.clientId, restored, () => ownedIntent(store, operation.clientId)) : restored;
+          };
+          return restoreDecides ? withLinkApply(apply) : apply();
+        },
+      );
+      return jsonResponse(await response.clone().json(), response.status, req, ctx.config);
     } catch (error) {
-      if (error instanceof IntegrationMutationBusyError || error instanceof IntegrationWriterLockBusyError) {
+      if (error instanceof IntegrationMutationBusyError || error instanceof IntegrationWriterLockBusyError || error instanceof LinkApplyBusyError) {
         return jsonResponse({
           error: "integration mutation busy",
           code: "integration_mutation_busy",
@@ -1131,55 +1234,79 @@ export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<R
   }
 
   try {
+    // The toggle is the Home's decision (home-integration-decision.ts): Children's defaults are
+    // saved first, an unreadable route-intent.json refuses while nothing has changed, and the
+    // result is recorded below. A selected Hermes profile is not the Home's client.
+    const recordsDecision = ctx.config.runtimeRole !== "client" && isRouteClientId(requestedClient) && !hermesRequestScope(req)?.resolvedPaths;
+    const boundToggle = binding === "none"
+      ? null
+      : await buildIntegrationPreviewInput(requestedClient, ctx, integrationStore(ctx), droidDefaults, modelNames);
+    if (binding !== "none" && boundToggle === null) return previewUnavailableResponse(ctx);
+    if (boundToggle && integrationMutationTestHooks?.afterBoundSnapshot) await integrationMutationTestHooks.afterBoundSnapshot();
     /*
      * A bound request is built from the same passive roster the guard re-plans against, and an
      * unbound one keeps its existing refreshing path. Building the refreshing input first would
      * have had the mutation and its own confirmation check disagree about the roster by
      * construction, which is the disagreement this binding exists to detect.
      */
-    const boundToggle = binding === "none"
-      ? null
-      : await buildIntegrationPreviewInput(requestedClient, ctx, integrationStore(ctx), droidDefaults, modelNames);
-    if (binding !== "none" && boundToggle === null) return previewUnavailableResponse(ctx);
-    const input = boundToggle
-      ? boundToggle.input
-      : await buildIntegrationWriteInput(requestedClient, ctx, integrationStore(ctx), droidDefaults, modelNames);
-    if (droidDefaults !== undefined) {
-      const invalid = validateDroidReasoningDefaults(input.models, droidDefaults);
-      if (invalid) return invalidDroidDefaultsResponse(ctx, invalid);
+    if (boundToggle && exportSnapshotIdentity(ctx.config) !== boundToggle.identity) {
+      const current = buildIntegrationPreviewInput(requestedClient, ctx, integrationStore(ctx), droidDefaults, modelNames);
+      return current === null ? previewUnavailableResponse(ctx) : jsonResponse({
+        error: "integration preview is stale", code: "integration_preview_stale",
+        plan: previewIntegration(current.input, { operation: requestedOperation }),
+      }, 409, req, ctx.config);
     }
-    const guard = binding === "none" ? null : stalePlanGuard(
+    const response = await runIntegrationMutationFlight(
       requestedClient,
-      ctx,
-      integrationStore(ctx),
-      { operation: binding.operation },
-      binding.fingerprint,
-      boundToggle === null ? null : boundToggle.identity,
-      droidDefaults,
-      modelNames,
-    );
-    const result = await runIntegrationMutationFlight(
-      requestedClient,
-      scopedFlightKey(ctx, `${requestedOperation}:modelNames:${modelNames ?? "omitted"}`),
-      input.io?.now ?? Date.now,
-      () => {
-        const options = {
-          lockSeams: integrationMutationTestHooks?.lockSeams,
-          ...(guard ? { revalidate: guard.revalidate } : {}),
-          guard: () => hermesBoundaryRefusal(ctx),
+      scopedFlightKey(ctx, `${requestedOperation}:modelNames:${modelNames ?? "omitted"}:binding:${binding === "none" ? "unbound" : JSON.stringify([binding.fingerprint, boundToggle?.identity])}:defaults:${JSON.stringify(droidDefaults ?? null)}`),
+      integrationMutationTestHooks?.io?.now ?? Date.now,
+      async () => {
+        const apply = async () => {
+          if (recordsDecision) {
+            const refused = prepareHomeIntegrationDecision(ctx, requestedClient);
+            if (refused) return refused;
+          }
+          const input = boundToggle
+            ? boundToggle.input
+            : await buildIntegrationWriteInput(requestedClient, ctx, integrationStore(ctx), droidDefaults, modelNames);
+          if (droidDefaults !== undefined) {
+            const invalid = validateDroidReasoningDefaults(input.models, droidDefaults);
+            if (invalid) return invalidDroidDefaultsResponse(ctx, invalid);
+          }
+          const guard = binding === "none" ? null : stalePlanGuard(
+            requestedClient,
+            ctx,
+            integrationStore(ctx),
+            { operation: binding.operation },
+            binding.fingerprint,
+            boundToggle === null ? null : boundToggle.identity,
+            droidDefaults,
+            modelNames,
+          );
+          const options = {
+            lockSeams: integrationMutationTestHooks?.lockSeams,
+            ...(guard ? { revalidate: guard.revalidate } : {}),
+            guard: () => hermesBoundaryRefusal(ctx),
+          };
+          const pending = !parsed.enabled ? disableIntegrationCoordinated(input, options)
+            : parsed.overwriteConflict === true ? overwriteIntegrationCoordinated(input, options)
+            : applyIntegrationCoordinated(input, options);
+          // Coordinators freeze their input synchronously before returning the promise.
+          integrationMutationTestHooks?.afterWriterStart?.();
+          const result = await pending;
+          const stale = guard?.response();
+          if (stale) return stale;
+          if (!result.ok) return writerFailureResponse(requestedClient, result, ctx);
+          const toggled = jsonResponse(result satisfies IntegrationToggleEnvelope, 200, req, ctx.config);
+          return recordsDecision ? recordHomeIntegrationDecision(ctx, requestedClient, toggled, () => ({ enabled: parsed.enabled === true,
+            ...(modelNames !== undefined && (requestedClient === "hermes" || requestedClient === "commandcode") ? { modelNames } : {}) })) : toggled;
         };
-        if (!parsed.enabled) return disableIntegrationCoordinated(input, options);
-        return parsed.overwriteConflict === true
-          ? overwriteIntegrationCoordinated(input, options)
-          : applyIntegrationCoordinated(input, options);
+        return recordsDecision ? withLinkApply(apply) : apply();
       },
     );
-    const stale = guard?.response();
-    if (stale) return stale;
-    if (!result.ok) return writerFailureResponse(requestedClient, result, ctx);
-    return jsonResponse(result satisfies IntegrationToggleEnvelope, 200, req, ctx.config);
+    return jsonResponse(await response.clone().json(), response.status, req, ctx.config);
   } catch (error) {
-    if (error instanceof IntegrationMutationBusyError || error instanceof IntegrationWriterLockBusyError) {
+    if (error instanceof IntegrationMutationBusyError || error instanceof IntegrationWriterLockBusyError || error instanceof LinkApplyBusyError) {
       return jsonResponse({
         error: "integration mutation busy",
         code: "integration_mutation_busy",

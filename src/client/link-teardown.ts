@@ -49,6 +49,7 @@ export async function teardownClientLink(
         alias: sidecar.alias,
         argv: remoteOcxArgv(["link", "revoke", "--link-id", sidecar.linkId]),
         knownHostsFile: deps.knownHostsFile,
+        route: null,
       }),
       { timeoutMs: deps.timeoutMs ?? HOME_REVOKE_TIMEOUT_MS },
     );

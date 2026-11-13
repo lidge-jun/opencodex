@@ -15,6 +15,8 @@ attempt-loss marker.
 `tests/usage/usage-client-attribution.test.ts` and
 `tests/usage/request-log-normalization.test.ts` cover those boundaries.
 
+Request-log rows and usage.jsonl rows carry `requestBody` (#3023): `wireBytes` as received, the `encoding` (`identity`, `zstd`, `gzip` or `deflate`) and `decodedBytes`. `readBoundedJsonRequestBody` in `src/server/request-decompress.ts` records them in `src/server/request-body-facts.ts` once a body was read and decoded in full, into a holder keyed by the Request; `src/server/admitted-http-turn.ts` binds the holder of the request it hands to the handler to that turn's log context, so every admitted JSON data route records it and a route that reads no JSON body records nothing. `src/usage/request-body.ts` validates the field on every write and read; a row without it, or with a malformed one, keeps every other field, and a reader that predates the field drops it because `src/usage/log.ts` rebuilds rows from known fields. `/api/logs` and `ocx logs --json` show it as part of the row. Coverage: `tests/usage/request-body-log.test.ts`.
+
 `src/usage/source-filter.ts` defines app and device filters. A Codex filter includes recognized
 Codex clients and legacy Codex-surface rows; it reports the latter as a separate unclassified
 count, without assigning a client subtype. A no-key filter means the stored key ID is absent,
@@ -199,3 +201,4 @@ tag; the row's tag comes from the row's provider in `src/server/request-log.ts`.
 and the request-log hydration keep only `p` plus six lowercase hex digits and drop anything else.
 Per-account summaries still key on `accountLogLabel` and ignore the tag
 (`tests/usage/request-log-anthropic-account-tag.test.ts`).
+Remote Link rows may carry an optional `link` object (transport, continuation, hashed thread and turn refs) while the link WebSocket feature is on; it is validated in `src/usage/link-log-fields.ts` and spread into the row, the persisted entry and hydration, and described in `structure/remote-link.md`.

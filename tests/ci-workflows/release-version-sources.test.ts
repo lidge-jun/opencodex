@@ -7,6 +7,7 @@ import {
   readVersionSources,
   writeVersionSources,
 } from "../../scripts/release-version-sources";
+import { fixtureGitEnv } from "../helpers/git-fixture";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { INTERNAL_DEADLINE_MS } from "../helpers/test-budget";
@@ -248,9 +249,7 @@ describe("every version move covers all four sources", () => {
       const trusted = join(root, "trusted-release-policy", "scripts");
       mkdirSync(trusted, { recursive: true });
       copyFileSync(CLI, join(trusted, "release-version-sources.ts"));
-      const env = { ...process.env, HOME: root, GIT_CONFIG_NOSYSTEM: "1",
-        GIT_AUTHOR_NAME: "fixture", GIT_AUTHOR_EMAIL: "fixture@example.test",
-        GIT_COMMITTER_NAME: "fixture", GIT_COMMITTER_EMAIL: "fixture@example.test" };
+      const env = fixtureGitEnv({ HOME: root });
       const git = (...args: string[]) => {
         const result = Bun.spawnSync(["git", ...args], { cwd: root, env, timeout: INTERNAL_DEADLINE_MS, stdout: "pipe", stderr: "pipe" });
         expect(result.exitCode, result.stderr.toString()).toBe(0);

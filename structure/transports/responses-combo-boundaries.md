@@ -195,7 +195,7 @@ comment, cannot extend it, and the reset gate never resends a guard timeout. For
 JSON, the collector reports the guard's failure as a stall timeout. The hold emits a comment only when
 it reads non-empty upstream bytes or a replacement head lands behind a committed head, so the collector's own clock, which starts after
 selection and sees only delivered bytes, never ends a turn before the guard would. The byte and chunk
-caps and the collector's whole-turn ceiling remain in force.
+caps and the collector's whole-turn ceiling remain in force. That ceiling runs from the moment selection began holding the head (`bufferedResetSelectionStartedAt` in `src/server/responses/passthrough-completion.ts`), so the selection wait counts against it while sends before selection do not (#8343).
 Downstream cancellation or the request's abort signal ends the selection or hold at once, aborts an
 in-flight replacement, and never awaits upstream cleanup.
 
@@ -217,7 +217,8 @@ in-flight replacement, and never awaits upstream cleanup.
   may advance while errors explicitly classified as non-retryable 4xx remain committed;
   a bare error with no status field of its own but an integral numeric `code` in 400..599 takes
   that code as its HTTP status (`bareErrorStatus`), so it gets the same decision and cooldown scope
-  as the same HTTP response; non-integral, out-of-range and string codes keep the symbolic mapping;
+  as the same HTTP response; non-integral, out-of-range and string codes keep the symbolic mapping; an untyped
+  error envelope commits the target and the relay reports its eventual failure without replay;
 - another completed/incomplete terminal or the aggregate preflight byte or retained-chunk cap is reached,
   in which case the current target is committed conservatively.
 

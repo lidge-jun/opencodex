@@ -7,6 +7,8 @@ Management API 是 opencodex 的控制平面。`http://localhost:10100` 上的�
 
 请使用 [Web 仪表板](/guides/web-dashboard/) 作为交互式客户端，或者在构建自动化时参考本文档。持久化值最终遵循 [配置](/reference/configuration/)。
 
+<a id="authentication-model"></a>
+
 ## 身份验证模型
 
 Management API 有自己独立的管理员凭证，与数据平面 API 密钥无关。启动时，opencodex 会按以下顺序解析它：
@@ -81,7 +83,7 @@ Authorization: Bearer <admin-token>
 
 在 **Providers > xAI Grok > Accounts** 中，每个账号的票据徽章可查看剩余优惠券及有效期。对话框发送客户端生成的 `operationId`。请求送达或结果不确定时，仪表板会在浏览器标签页会话期间保留同一次尝试，关闭并重新打开对话框、切换页面或重新加载后也会保留。该记录在发送请求之前写入，只有收到同一 `operationId` 的确定响应时才会清除。刷新只发送 GET，不允许额外的兑换 POST。对应的终端命令是 `ocx account grok-reset-coupons`。
 
-Claude 用量重置同样可以从 **Providers > Anthropic > Accounts** 操作。每个已登录账号行都带有显示剩余重置次数的票据徽章，对话框会在再次确认后使用一次重置机会。重置会恢复 5 小时和每周用量额度，但不会改变每周额度的重置日期。如果请求未及时返回结果，对话框会保留其 `operationId`，并在十分钟内提供使用同一 ID 重试的选项；Claude Code 客户端也以此方式恢复。在此期间，同一重置机会的新操作会被拒绝。重置机会只能通过仪表板使用：仅凭管理员令牌会收到 `403 session_required`。
+Claude 用量重置同样可以从 **Providers > Anthropic > Accounts** 操作。每个已登录账号行都带有显示剩余重置次数的票据徽章，对话框会在再次确认后使用一次重置机会。每个重置机会的过期时间和可重置的额度各不相同，因此对话框允许选择要使用的重置机会：默认选中当前可用且最先过期的一个，当前不可用的会显示为禁用并注明原因；确认步骤会显示所选重置机会的名称、过期时间和可重置的额度，然后发送对应的 `grantId`。服务器会再次检查所选重置机会，不可用时以 `409 grant_not_usable` 拒绝。重置会恢复该重置机会可重置的额度（通常是 5 小时和每周用量额度），但不会改变每周额度的重置日期。如果请求未及时返回结果，对话框会保留其 `operationId`，并在十分钟内提供使用同一 ID 重试的选项；Claude Code 客户端也以此方式恢复。在此期间，该账号的任何新操作（无论哪个重置机会）都会被拒绝。重置机会只能通过仪表板使用：仅凭管理员令牌会收到 `403 session_required`。
 
 关于模型名录和加密工作任务行为的概念，请参见 [子代理界面](/guides/sub-agent-surface/)。
 
