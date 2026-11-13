@@ -12,7 +12,7 @@ import type { LinkDiagnosticRecord } from "../../src/link/diagnostics";
 import type { LinkTunnelGate } from "../../src/client/link-relay";
 import { startMachineListener } from "../../src/client/machine-listener";
 import { probeLinkRelayPreflight } from "../../src/client/link-relay-transport";
-import { forgetLinkWebsocketAdvertisementsForTests, linkWebsocketAdvertised } from "../../src/client/link-ws-advertisement";
+import { forgetLinkWebsocketAdvertisementsForTests, linkWebsocketAdvertisement } from "../../src/client/link-ws-advertisement";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { childConnection } from "../helpers/link-ws-child";
@@ -26,11 +26,14 @@ import { completed, expectCompleted, gate, runGateCodex, toolCall, untilOrExit }
 // drains the relay (open sockets close 1001, every upgrade gets the transient 503), the old listener stays bound for
 // the drain phase, it then stops (connections refused), and a replacement listener binds the same port. A restarted
 // process remembers no advertisement, so the replacement starts with none and runs no preflight before Codex's next
-// attempt. Variants model the two Child changes lane T6 proposed, before they exist:
-//   today: 503 for the drain phase, then refused, then the replacement answers 426 (not advertised) until it learns;
-//   close-at-drain: the listener closes when the drain starts, so the whole restart is refused;
-//   try-when-unknown: the replacement treats "no advertisement seen since start" as "try" (the relay's advertised seam);
-//   both.
+// attempt. Variants model the two Child changes lane T6 proposed. Since #8682 the product's rule is try-when-unknown;
+// the old rule is kept for comparison, and close-at-drain is still only proposed:
+//   try-when-unknown: dev's rule since #8682: the replacement tries the Home unless it holds a cached "off", so with no
+//     answer seen since start it tries (the same expression as the relay's default advertised rule);
+//   old-rule: the rule before #8682: 503 for the drain phase, then refused, then the replacement answers 426 (not
+//     advertised) until a preflight teaches it the advertisement;
+//   old-rule+close-at-drain and try-when-unknown+close-at-drain: the listener closes when the drain starts, so the
+//     whole restart is refused.
 // Each case runs with Codex's stream_max_retries 3 (the gate's setting) and 5 (Codex's default), for a restart of
 // about 5.5 s (the supervisor's TERM bound of 5 s plus a bind) and of about 1 s. The cases assert only that the turn
 // completes; what they measure (every 503, Codex's retry and fallback notices, the transport that completed the
@@ -66,7 +69,7 @@ afterEach(async () => {
   dir = "";
 });
 
-type Variant = "today" | "close-at-drain" | "try-when-unknown" | "both";
+type Variant = "try-when-unknown" | "old-rule" | "try-when-unknown+close-at-drain" | "old-rule+close-at-drain";
 const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
 /** A tunnel gate that is connected and lets the test fire its owner's onStopping, as the supervisor's stop() does. */
@@ -125,8 +128,8 @@ async function measureRestart(variant: Variant, retries: number, restartMs: numb
   };
   const old = child("old", 0);
   const port = old.listener.port!;
-  const closeAtDrain = variant === "close-at-drain" || variant === "both";
-  const tryWhenUnknown = variant === "try-when-unknown" || variant === "both";
+  const closeAtDrain = variant.endsWith("+close-at-drain");
+  const tryWhenUnknown = variant.startsWith("try-when-unknown");
   const bindMs = 500;
   const drainMs = closeAtDrain ? 0 : restartMs - bindMs;
 
@@ -149,9 +152,9 @@ async function measureRestart(variant: Variant, retries: number, restartMs: numb
   // Every upgrade the replacement judges is marked: "try" goes on to the Home, "426" is the Child's not-advertised answer
   // (counted in memory only, so it is not in the diagnostics).
   child("new", port, linkId => {
-    const advertisedNow = linkWebsocketAdvertised(linkId);
-    const decision = tryWhenUnknown || advertisedNow;
-    mark("new upgrade judged: advertised " + advertisedNow + " -> " + (decision ? "try" : "426"));
+    const cached = linkWebsocketAdvertisement(linkId);
+    const decision = tryWhenUnknown ? cached !== "off" : cached === "on";
+    mark("new upgrade judged: advertisement " + cached + " -> " + (decision ? "try" : "426"));
     return decision;
   });
   mark("new listener bound");
@@ -173,7 +176,7 @@ async function measureRestart(variant: Variant, retries: number, restartMs: numb
 describe("link WebSocket release gate through the real Child: a Child restart under a running turn (measurement)", () => {
   for (const restartMs of [5_500, 1_000])
     for (const retries of [3, 5])
-      for (const variant of ["today", "close-at-drain", "try-when-unknown", "both"] as const)
+      for (const variant of ["try-when-unknown", "old-rule", "try-when-unknown+close-at-drain", "old-rule+close-at-drain"] as const)
         gate("restart " + restartMs + " ms, stream_max_retries " + retries + ", " + variant + ": the turn completes; the transport it ends on is measured",
           () => measureRestart(variant, retries, restartMs));
 });
