@@ -1715,6 +1715,7 @@
   "link-websocket-pump.test.ts": "server",
   "link-websocket-rss.test.ts": "e2e-style",
   "link-websocket-holds.test.ts": "server",
+  "link-websocket-traffic.test.ts": "server",
   "stalled-reader-memory.test.ts": "responses",
   "link-ws-activity-holds.test.ts": "clients",
   "link-ws-framer.test.ts": "clients",

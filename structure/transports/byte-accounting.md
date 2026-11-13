@@ -508,3 +508,16 @@ events and opaque usage are charged until emitted or replaced; cancellation, rea
 identity/argument refusal release every relay-owned buffer. Failed terminals close outstanding calls
 incomplete and replay queued semantics before the error; diagnostic usage keeps only numeric counters,
 releasing any previously retained opaque usage. Ciphertext alone transfers with its done lease.
+
+## Link traffic counters
+
+`src/link/traffic.ts` counts what a Remote Link carried, per link, in one book per process
+(the Child's and the Home's); the counters are plain additions with no lock, timer or disk, and
+`structure/remote-link.md` owns their definition. Relayed HTTP counts body bytes. A link
+WebSocket is one request in the same book on both sides: message payload bytes each way, without
+WebSocket framing, handshake or control frames, complete when a close ended it. On the Home the
+gate in `src/server/index/link-websocket.ts` opens the flow when it opens an admitted socket,
+counts each message that reached it, and ends the flow on close; `sendTextFrame` in
+`src/server/ws-bridge.ts` counts each message Bun took for a link socket (a dropped send is not
+counted). A local socket has no flow, and link sockets exist only while the link WebSocket's
+switch and release gate are on.

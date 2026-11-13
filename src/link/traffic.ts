@@ -30,8 +30,10 @@
  * it is written, even when the Home reads only part of it. A Home's hub-link listener (`src/server/index/link-relay-sessions.ts`) counts the
  * response-body bytes it streams back and, for requests, each declared Content-Length (it cannot
  * wrap Bun's native request without losing its identity); a request body without one is counted in
- * `toHomeUncounted` instead. Neither counts HTTP headers, the relay-auth challenge, SSH or TCP
- * framing, or what any relay between the machines adds.
+ * `toHomeUncounted` instead. A link WebSocket is one request in either book: message payload bytes each way (the Child
+ * once its socket write completed and per complete message from the Home; the Home per message received and per message
+ * Bun took for the socket), complete when a close ended it. Neither counts HTTP headers, WebSocket framing or control
+ * frames, the relay-auth challenge, SSH or TCP framing, or what any relay between the machines adds.
  */
 export const MAX_LINKS = 256;
 
