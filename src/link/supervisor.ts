@@ -69,12 +69,17 @@ interface WatchedProcess {
 }
 
 interface OrphanWatch {
-  /** The link record instance it belongs to; a removed, replaced or one-route record retires it. */
+  /**
+   * The link record instance it belongs to; a removed or one-route record retires it. A reload that
+   * replaces a flagged multi-route record re-keys it to the new instance as observe-only.
+   */
   instance: string;
   /** The pidfile content the watch last saw; only this file is ever removed by it. */
   file: { pid: number; argv: readonly string[]; startTime?: number };
   /** Every process this pidfile has named since the watch began; the link stays blocked until all are gone. */
   processes: WatchedProcess[];
+  /** Set once its record was replaced: it never signals or removes the pidfile, also when it ends. */
+  observeOnly?: true;
 }
 
 interface Pidfile {
@@ -257,8 +262,11 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   const recordInstances = new Map<string, string>();
   /** Multi-route links blocked by an earlier tunnel, watched until it is gone (src/link/route-rounds.ts relies on it). */
   const orphanWatches = new Map<string, OrphanWatch>();
-  /** Multi-route links blocked by a pidfile that exists but cannot be read or parsed; read again every tick. */
-  const unreadablePidfiles = new Set<string>();
+  /**
+   * Multi-route links blocked by a pidfile that exists but cannot be read or parsed, read again every
+   * tick; false once a reload replaced the record, so the watch that file may become only observes.
+   */
+  const unreadablePidfiles = new Map<string, boolean>();
   const history = createTunnelHistoryBook({
     diagnostic: deps.diagnostic,
     tunnelPort: linkId => store.links.find(link => link.id === linkId)?.tunnelPort,
@@ -350,7 +358,9 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       killProcess(pidfile.pid, "SIGTERM");
       watched.signal = { at: now(), killed: false };
     }
-    orphanWatches.set(record.id, { instance: recordInstance(record, store.listenerPort), file: fileIdentity(pidfile), processes: [watched] });
+    orphanWatches.set(record.id, {
+      instance: recordInstance(record, store.listenerPort), file: fileIdentity(pidfile), processes: [watched], ...(act ? {} : { observeOnly: true as const }),
+    });
   };
 
   /**
@@ -363,7 +373,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     let file: Pidfile | null;
     try { file = loadPidfile(pidfilePath(record.id)); } catch {
       if (!unreadablePidfiles.has(record.id)) warn(`[link] pidfile unreadable; link stays blocked link=${record.id}`);
-      unreadablePidfiles.add(record.id);
+      unreadablePidfiles.set(record.id, (unreadablePidfiles.get(record.id) ?? true) && act);
       orphanUnverified.add(record.id);
       return;
     }
@@ -410,7 +420,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       if (watch.processes.length === 0) {
         orphanWatches.delete(linkId);
         orphanUnverified.delete(linkId);
-        if (file !== null && file.linkId === linkId && sameFile(file, watch.file)) removePidfile(pidfilePath(linkId));
+        if (!watch.observeOnly && file !== null && file.linkId === linkId && sameFile(file, watch.file)) removePidfile(pidfilePath(linkId));
         // The link was waiting for this: start its first round now.
         const record = store.links.find(link => link.id === linkId);
         if (record && !children.has(linkId) && (states.get(linkId) ?? IDLE).kind === "idle") spawnFor(record);
@@ -418,7 +428,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       }
       for (const watched of watch.processes) {
         const signal = watched.signal;
-        if (!signal || watched.startTime === undefined) continue;
+        if (!signal || watched.startTime === undefined || watch.observeOnly) continue;
         if (file === null || processIdentity(watched.pid, watched.argv, watched.startTime) !== "same") {
           // Cannot tell it is ours any more: no further signal; the watch goes on.
           delete watched.signal;
@@ -431,13 +441,13 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         }
       }
     }
-    for (const linkId of [...unreadablePidfiles]) {
+    for (const [linkId, act] of [...unreadablePidfiles]) {
       const record = store.links.find(link => link.id === linkId);
       if (!record || !rounds.isMultiRoute(record) || !orphanUnverified.has(linkId) || orphanWatches.has(linkId)) {
         unreadablePidfiles.delete(linkId);
         continue;
       }
-      recheckPidfile(record);
+      recheckPidfile(record, act);
       // Nothing is left to wait for: start the link's first round now, as a watch that ends does.
       if (!orphanUnverified.has(linkId) && !children.has(linkId) && (states.get(linkId) ?? IDLE).kind === "idle") spawnFor(record);
     }
@@ -752,10 +762,22 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         // Nothing of a changed or removed link's old round may advance while the stops below await,
         // and no orphan watch acts for a record instance that is gone or no longer has several routes.
         // A changed record does not end an earlier tunnel that may still hold the Child's port (a new
-        // listener port changes every instance and keeps every tunnel port), so a flagged link is
-        // settled again from its pidfile below instead of losing its flag.
+        // listener port changes every instance and keeps every tunnel port). A flagged link that stays
+        // multi-route keeps its watch, re-keyed to the new instance and observe-only (it never acts for
+        // a replaced instance); one with nothing watched is settled again from its pidfile below.
         const flaggedChanged = [...changed].filter(linkId => orphanUnverified.has(linkId));
-        for (const linkId of changed) { rounds.cancel(linkId); orphanWatches.delete(linkId); }
+        for (const linkId of changed) {
+          rounds.cancel(linkId);
+          const watch = orphanWatches.get(linkId);
+          const next = nextStore.links.find(link => link.id === linkId);
+          if (watch && orphanUnverified.has(linkId) && next && rounds.isMultiRoute(next)) {
+            watch.instance = recordInstance(next, nextStore.listenerPort);
+            watch.observeOnly = true;
+            for (const watched of watch.processes) delete watched.signal;
+          } else {
+            orphanWatches.delete(linkId);
+          }
+        }
         for (const linkId of recordInstances.keys()) if (!nextInstances.has(linkId)) { rounds.cancel(linkId); orphanWatches.delete(linkId); }
         for (const record of nextStore.links) if (!rounds.isMultiRoute(record)) orphanWatches.delete(record.id);
         store = nextStore;
@@ -787,7 +809,9 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         }
         for (const linkId of flaggedChanged) {
           const record = nextStore.links.find(link => link.id === linkId);
-          if (record && rounds.isMultiRoute(record)) recheckPidfile(record, false);
+          if (!record || !rounds.isMultiRoute(record)) continue;
+          if (orphanWatches.has(linkId)) orphanUnverified.add(linkId);
+          else recheckPidfile(record, false);
         }
         for (const linkId of [...states.keys()]) {
           if (!nextInstances.has(linkId)) { history.forget(linkId); rounds.forget(linkId); }

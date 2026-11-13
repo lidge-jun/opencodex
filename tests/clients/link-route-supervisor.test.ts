@@ -972,6 +972,73 @@ test("a reload that changes a flagged link's record keeps it blocked while the e
   expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(1);
 });
 
+
+test("a reload that changes a watched link's record keeps watching the earlier process after its pidfile is gone", async () => {
+  let current: LinkStore = { version: 1, listenerPort: LISTENER_PORT, links: [record(["alpha-lan", "pen-alpha"])] };
+  let alive = true;
+  let file: Pidfile | null = { version: 1, linkId: LINK, pid: 4848, argv: ["ssh"] };
+  const h = await started({ store: () => current, pidfile: () => file, processArgv: () => alive ? ["ssh"] : null, processAlive: () => alive });
+  expect(h.state().orphan).toBe("orphan-unverified");
+  // The pidfile goes while its ssh still runs; the watch already holds that process.
+  file = null;
+  current = { ...current, listenerPort: LISTENER_PORT + 10 };
+  await h.supervisor.reload();
+  await h.advance(5_000);
+  expect(h.state().orphan).toBe("orphan-unverified");
+  expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(0);
+  alive = false;
+  await h.advance(1_000);
+  expect(h.state().orphan).toBeUndefined();
+  await h.tick();
+  expect(h.runs.filter(run => run.kind === "probe")).toHaveLength(1);
+});
+
+test("after a reload that replaced its record, a watch only observes: no signal, and no pidfile removal when the process ends", async () => {
+  let current: LinkStore = { version: 1, listenerPort: LISTENER_PORT, links: [record(["alpha-lan", "pen-alpha"])] };
+  let alive = true;
+  const argv = ["ssh", "-N", "old"];
+  const h = await started({
+    store: () => current, stubborn: true,
+    pidfile: { version: 1, linkId: LINK, pid: 4949, argv, startTime: 888 },
+    processArgv: () => alive ? argv : null, processStart: () => alive ? 888 : null, processAlive: () => alive,
+  });
+  expect(h.kills).toEqual([{ pid: 4949, signal: "SIGTERM" }]);
+  current = { ...current, listenerPort: LISTENER_PORT + 10 };
+  await h.supervisor.reload();
+  for (let i = 0; i < 5; i += 1) await h.advance(1_000);
+  expect(h.kills).toEqual([{ pid: 4949, signal: "SIGTERM" }]);
+  alive = false;
+  await h.advance(1_000);
+  expect(h.state().orphan).toBeUndefined();
+  expect(h.removed).toEqual([]);
+});
+
+test("a pidfile unreadable at a reload that replaced the record is never acted on once it becomes readable", async () => {
+  await withPidfileDir(async (dir, path) => {
+    mkdirSync(path);
+    let current: LinkStore = { version: 1, listenerPort: LISTENER_PORT, links: [record(["alpha-lan", "pen-alpha"])] };
+    let alive = true;
+    const argv = ["ssh", "-N", "old"];
+    const h = await started({
+      store: () => current, pidfileDir: dir,
+      processArgv: () => alive ? argv : null, processStart: () => alive ? 999 : null, processAlive: () => alive,
+    });
+    current = { ...current, listenerPort: LISTENER_PORT + 10 };
+    await h.supervisor.reload();
+    await h.tick();
+    rmSync(path, { recursive: true });
+    writeFileSync(path, JSON.stringify({ version: 1, linkId: LINK, pid: 5050, argv, startTime: 999 }) + "\n");
+    await h.advance(1_000);
+    await h.advance(3_000);
+    expect(h.state().orphan).toBe("orphan-unverified");
+    expect(h.kills).toEqual([]);
+    alive = false;
+    await h.advance(1_000);
+    expect(h.state().orphan).toBeUndefined();
+    expect(h.removed).toEqual([]);
+  });
+});
+
 test("a reload that changes the record of a link blocked by an unreadable pidfile keeps it blocked", async () => {
   await withPidfileDir(async (dir, path) => {
     mkdirSync(path);
