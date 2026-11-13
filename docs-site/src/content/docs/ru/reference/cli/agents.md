@@ -28,9 +28,9 @@ ocx agent sidecar web --enabled off
 иначе завершающая строка `Codex config:`) и предлагает `ocx sync`, если запись не
 удалась. Флаг работает и для `vision`.
 
-### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>>`
+### `ocx v2 <status|on|off|mode <v1|default|v2|v2-plaintext>|threads <n>>`
 
-Управляйте feature flag'ом Codex `multi_agent_v2` и трёхсостоянием multi-agent surface mode.
+Управляйте feature flag'ом Codex `multi_agent_v2` и четырёхсостоянием multi-agent surface mode.
 
 | Подкоманда | Действие |
 | --- | --- |
@@ -40,6 +40,7 @@ ocx agent sidecar web --enabled off
 | `mode v1` | Принудительно перевести все модели на v1, отключить native v2 и сохранить текущий thread limit. |
 | `mode default` | Уважать upstream pin'ы surface у моделей. |
 | `mode v2` | Принудительно перевести все модели на v2, включить native v2 и сохранить текущий thread limit. |
+| `mode v2-plaintext --acknowledge-plaintext-agent-messages` | Выбирает V2 для новых сессий и передаёт подходящие задачи открытым текстом без глобального принуждения. Для включения нужен `--acknowledge-plaintext-agent-messages`. |
 | `threads <n>` | Задать активный v1/v2 thread limit как целое число не меньше 1. |
 
 ```bash

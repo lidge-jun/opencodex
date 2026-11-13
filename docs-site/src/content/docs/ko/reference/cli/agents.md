@@ -46,9 +46,9 @@ ocx effort set --subagent -
 설정을 유지하면서 두 상한을 해제합니다. 상한이 적용되는 요청 surface는
 [Sub-agent surfaces](/ko/guides/sub-agent-surface/)를 참고하세요.
 
-### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>>`
+### `ocx v2 <status|on|off|mode <v1|default|v2|v2-plaintext>|threads <n>>`
 
-Codex `multi_agent_v2` 기능 플래그와 세 상태 멀티 에이전트 surface mode를 관리합니다.
+Codex `multi_agent_v2` 기능 플래그와 네 상태 멀티 에이전트 surface mode를 관리합니다.
 
 | 하위 명령 | 동작 |
 | --- | --- |
@@ -58,6 +58,7 @@ Codex `multi_agent_v2` 기능 플래그와 세 상태 멀티 에이전트 surfac
 | `mode v1` | 모든 모델을 v1으로 고정하고, native v2를 끄며, 활성 thread 한도를 유지합니다. |
 | `mode default` | 업스트림에서 지정한 model surface pin을 따릅니다. |
 | `mode v2` | 모든 모델을 v2로 고정하고, native v2를 켜며, 활성 thread 한도를 유지합니다. |
+| `mode v2-plaintext --acknowledge-plaintext-agent-messages` | V2를 새 세션에 선택하고 전역 강제를 끈 채 적격 작업을 평문으로 전달합니다. 진입하려면 `--acknowledge-plaintext-agent-messages`가 필요합니다. |
 | `threads <n>` | 활성 v1/v2 thread 한도를 1 이상의 정수로 설정합니다. |
 
 ```bash

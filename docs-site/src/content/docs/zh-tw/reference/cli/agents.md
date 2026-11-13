@@ -22,9 +22,9 @@ Codex 整合會把 `web_search = "disabled"` 寫入 `~/.codex/config.toml`，這
 指令會回報由此觸發的 Codex 端寫入（`--json` 中的 `codexWebSearch`，否則為結尾的
 `Codex config:` 行），並在無法寫入時提示 `ocx sync`。該旗標對 `vision` 同樣有效。
 
-### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>>`
+### `ocx v2 <status|on|off|mode <v1|default|v2|v2-plaintext>|threads <n>>`
 
-管理 Codex 的 `multi_agent_v2` 功能旗標與三態多代理介面模式。
+管理 Codex 的 `multi_agent_v2` 功能旗標與四態多代理介面模式。
 
 | 子指令 | 動作 |
 | --- | --- |
@@ -34,6 +34,7 @@ Codex 整合會把 `web_search = "disabled"` 寫入 `~/.codex/config.toml`，這
 | `mode v1` | 將所有模型強制為 v1、停用原生 v2，並保留現用執行緒上限。 |
 | `mode default` | 遵循上游模型介面 pin。 |
 | `mode v2` | 將所有模型強制為 v2、啟用原生 v2，並保留現用執行緒上限。 |
+| `mode v2-plaintext --acknowledge-plaintext-agent-messages` | 為新工作階段選擇 V2、關閉全域強制，並以明文傳遞符合條件的工作。進入需要 `--acknowledge-plaintext-agent-messages`。 |
 | `threads <n>` | 將現用 v1/v2 執行緒上限設為不小於 1 的整數。 |
 
 ```bash

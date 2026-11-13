@@ -21,6 +21,7 @@ ajanınızın ne zaman devretmesi gerektiğine karar vermez.
 | **v1** | Klasik ad alanlı `spawn_agent`, `send_input`, `resume_agent` ve `close_agent` araçları. Bir spawn doğrudan başka bir modeli seçebilir. | Farklı sağlayıcılar arasında, özellikle yerelden yönlendirilen çocuklara güvenilir delegasyona ihtiyaç duyan yeni başlayanlar. |
 | **base** (varsayılan) | Yukarı akış model sabitlemeleri: GPT-5.6 Sol/Terra v2 kullanır, Luna v1 kullanır ve sabitlenmemiş modeller Codex'in `multi_agent_v2` özellik bayrağını takip eder. | Çoğu kullanıcı. Küresel olarak birini zorlamadan her model için Codex'in hedeflenen arayüzünü takip eder. |
 | **v2** | Eşzamanlı oturumlarla düz `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent` ve ajan listesi araçları. | Daha yeni eşzamanlı iş akışını isteyen ve model kalıtımını ve aşağıdaki şifrelenmiş görev sınırlamasını anlayan kullanıcılar. |
+| **v2-plaintext** | V2 | Yeni oturumlar için V2 seçer ve genel zorlamayı kapalı tutarak uygun görevleri düz metin iletir. Giriş için `--acknowledge-plaintext-agent-messages` gerekir. |
 
 :::tip[Emin değil misiniz?]
 **base** ile başlayın. Sağlayıcılar arası yetkilendirmenin öngörülebilir şekilde

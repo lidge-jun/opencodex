@@ -11,7 +11,7 @@ kontrol eder.
 
 | Alan | Tip | Varsayılan | Anlamı |
 | --- | --- | --- | --- |
-| `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` her katalog modelini v1 olarak damgalar; `v2` her modeli v2 olarak damgalar. `default` yukarı akış sabitlemelerini geri yükler (Sol/Terra v2, Luna v1) ve aksi takdirde yerel `multi_agent_v2` bayrağını takip eder. Yeni oturumlara uygulanır. |
+| `multiAgentMode?` | `"v1" \| "default" \| "v2" \| "v2-plaintext"` | `"default"` | `v1` her katalog modelini v1 olarak damgalar; `v2` her modeli v2 olarak damgalar. `default` yukarı akış sabitlemelerini geri yükler (Sol/Terra v2, Luna v1) ve aksi takdirde yerel `multi_agent_v2` bayrağını takip eder. Yeni oturumlara uygulanır. `v2-plaintext` yeni oturumlar için V2 seçer ve genel zorlamayı kapalı tutarak uygun görevleri düz metin iletir. Giriş için `--acknowledge-plaintext-agent-messages` gerekir. |
 | `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna` | Alt ajan seçicisinde ilk olarak öne çıkan en fazla beş yalın yerel, hesap nitelikli `<secici>/<yerel-openai-modeli>` veya yönlendirilen `saglayici/model` kimliği. Kontrol paneli yalnızca yalın yerel ve yönlendirilen kimlikleri sunar ve kaydederken tam hesap nitelikli seçimleri atlar; tam seçimler için `ocx agent subagents set` kullanın veya yapılandırmayı düzenleyin. [Tek seferlik Astra yükseltmesinden](/reference/configuration/agents/#astra-roster-upgrade) sonra açık bir boş liste korunur. |
 | `injectionModel?` | `string` | — | Proxy kaynaklı v2 yetkilendirme rehberliğinde kullanılan tercih edilen yerel veya yönlendirilen alt ajan modeli. |
 | `injectionEffort?` | `string` | — | Yalnızca `injectionModel` ile anlamlı olan tercih edilen çaba (`low` ile `ultra` arası). |
@@ -25,7 +25,7 @@ kontrol eder.
 | `subagentEffortCap?` | `string` | — | Yalnızca oluşturulan çocuk turları için ek tavan. Her iki sınır da geçerli olduğunda daha düşük olan kazanır. |
 | `agentTaskRecovery?` | `object` | — | Yönlendirilen sağlayıcılara gönderilen arka uçta şifrelenmiş v2 görevleri için deneysel isteğe bağlı kurtarma. `enabled: true` olmadıkça devre dışıdır; bkz. [Şifrelenmiş v2 görev kurtarma](#şifrelenmiş-v2-görev-kurtarma). |
 
-Arayüzü kontrol paneli veya `ocx v2 status|on|off|mode <v1|default|v2>|threads
+Arayüzü kontrol paneli veya `ocx v2 status|on|off|mode <v1|default|v2|v2-plaintext>|threads
 <n>|mode-hint <metin|--clear>` ile yönetin. Mod değişiklikleri yeni oturumlara
 uygulanır. `maxConcurrentThreadsPerSession`, bir `config.json` anahtarı değil,
 bir `PUT /api/v2` alanıdır; `ocx v2 threads <n>`, v2 etkinleştirildikten sonra
@@ -44,8 +44,9 @@ yürütme çabasını **değiştirmez**. Bir `null` değeri anahtarı kaldırır
 çabadan türetilen politika (ultra = proaktif, aksi takdirde açık) devam eder;
 boş veya yalnızca boşluk içeren değerler reddedilir çünkü mevcut bir boş
 geçersiz kılma ultra kaynaklı Proaktif mesajı bile bastırır. Alt Ajanlar kontrol
-panelinin Ultra modu **açık** anahtarı hem yerel özelliği hem de açık bir v2
-yüzeyini (`multiAgentMode: "v2"`, `ocx v2 mode v2` ile eşdeğer) gerektirir; tek
+panelinin Ultra modu **açık** anahtarı, yerel özellik etkinken açık v2
+yüzeyini (`multiAgentMode: "v2"`, `ocx v2 mode v2` ile eşdeğer) veya genel
+zorlamayı kapalı tutan `multiAgentMode: "v2-plaintext"` modunu gerektirir; tek
 başına `ocx v2 on` bu kontrol paneli geçidini karşılamaz.
 
 Yönetim API'si `GET`/`PUT /api/v2`, `/api/injection-model`, `/api/effort-caps`,

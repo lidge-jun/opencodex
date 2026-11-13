@@ -24,9 +24,9 @@ Codex 側の書き込み（`--json` では `codexWebSearch`、それ以外では
 `Codex config:` 行）を報告し、書き込みできなかった場合は `ocx sync` を案内します。
 このフラグは `vision` でも機能します。
 
-### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>>`
+### `ocx v2 <status|on|off|mode <v1|default|v2|v2-plaintext>|threads <n>>`
 
-Codex `multi_agent_v2` 機能フラグとスリーステート マルチエージェント サーフェス モードを管理します。
+Codex `multi_agent_v2` 機能フラグと4 状態のマルチエージェント サーフェス モードを管理します。
 
 |サブコマンド |アクション |
 | --- | --- |
@@ -36,6 +36,7 @@ Codex `multi_agent_v2` 機能フラグとスリーステート マルチエー�
 | `mode v1` |すべてのモデルを強制的に v1 にし、ネイティブ v2 を無効にして、アクティブなスレッド制限を保持します。 |
 | `mode default` |上流のモデル サーフェス ピンを尊重します。 |
 | `mode v2` |すべてのモデルを強制的に v2 にし、ネイティブ v2 を有効にして、アクティブなスレッド制限を維持します。 |
+| `mode v2-plaintext --acknowledge-plaintext-agent-messages` | 新しいセッションで V2 を選び、グローバル強制を無効にしたまま対象タスクを平文で送信します。開始には `--acknowledge-plaintext-agent-messages` が必要です。 |
 | `threads <n>` |アクティブな v1/v2 スレッド制限を少なくとも 1 の整数に設定します。
 
 ```bash

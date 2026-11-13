@@ -19,12 +19,13 @@ Choisissez le mode pour les **nouvelles sessions**. Les sessions existantes cons
 | **v1** | Outils classiques avec espace de noms `spawn_agent`, `send_input`, `resume_agent` et `close_agent`. Un spawn peut sélectionner directement un autre modèle. | Les débutants qui ont besoin d'une délégation fiable entre différents fournisseurs, en particulier les enfants natifs vers routés. |
 | **base** (par défaut) | Paramètres de modèle en amont : GPT-5.6 Sol/Terra utilisent la v2, Luna utilise la v1, et les modèles non définis explicitement suivent l’indicateur de fonctionnalité `multi_agent_v2` de Codex. | La plupart des utilisateurs. Ce mode respecte la surface prévue par Codex pour chaque modèle, sans en imposer une globalement. |
 | **v2** | Outils plats `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent` et liste d'agents, avec sessions simultanées. | Utilisateurs souhaitant utiliser le flux de travail simultané le plus récent et comprenant l'héritage de modèle et la limitation des tâches chiffrées ci-dessous. |
+| **v2-plaintext** | V2 | Sélectionne V2 pour les nouvelles sessions et transmet les tâches admissibles en clair sans priorité globale. L’entrée exige `--acknowledge-plaintext-agent-messages`. |
 
 En **v2**, l'option facultative **Garder ChatGPT sur v1** (`keepNativeChatGptOnV1`) laisse Sol/Terra
 sur la surface v1 afin qu'ils puissent encore lancer Grok ou Claude. Les parents natifs ChatGPT
 chiffrent les corps `NEW_TASK` v2 ; les modèles routés ne peuvent pas les lire. Les parents routés
 restent sur v2, où les tâches enfants sont en texte clair. C'est un interrupteur *à l'intérieur*
-de v2, pas un quatrième mode de catalogue. CLI : `ocx v2 mode v2` puis `ocx v2 keep-native-v1 on`.
+de v2, distinct du mode `v2-plaintext`. CLI : `ocx v2 mode v2` puis `ocx v2 keep-native-v1 on`.
 
 :::tip[Pas sûr ?]
 Commencez par **base**. Choisissez **v1** lorsque la délégation entre fournisseurs doit fonctionner de manière prévisible. Forcer **v2**

@@ -22,9 +22,9 @@ Codex 集成会把 `web_search = "disabled"` 写入 `~/.codex/config.toml`，这
 命令会报告由此触发的 Codex 侧写入（`--json` 中的 `codexWebSearch`，否则为末尾的
 `Codex config:` 行），并在无法写入时提示 `ocx sync`。该标志对 `vision` 同样有效。
 
-### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>>`
+### `ocx v2 <status|on|off|mode <v1|default|v2|v2-plaintext>|threads <n>>`
 
-管理 Codex 的 `multi_agent_v2` 功能标志和三态多代理 surface 模式。
+管理 Codex 的 `multi_agent_v2` 功能标志和四态多代理 surface 模式。
 
 | 子命令 | 动作 |
 | --- | --- |
@@ -34,6 +34,7 @@ Codex 集成会把 `web_search = "disabled"` 写入 `~/.codex/config.toml`，这
 | `mode v1` | 强制所有模型使用 v1，禁用原生 v2，并保留当前线程上限。 |
 | `mode default` | 遵循上游模型的 surface 固定配置。 |
 | `mode v2` | 强制所有模型使用 v2，启用原生 v2，并保留当前线程上限。 |
+| `mode v2-plaintext --acknowledge-plaintext-agent-messages` | 为新会话选择 V2，关闭全局强制，并以明文传递符合条件的任务。进入需要 `--acknowledge-plaintext-agent-messages`。 |
 | `threads <n>` | 将当前 v1/v2 线程上限设为一个至少为 1 的整数。 |
 
 ```bash
