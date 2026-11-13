@@ -333,9 +333,12 @@ describe("through a real Home: a cut WebSocket turn and its HTTP resend", () => 
     const port = JSON.parse(readFileSync(linkStorePath(), "utf8")).listenerPort as number;
     const holdsPath = join(dir, "link", "activity-holds.json");
     const marks = () => ((JSON.parse(readFileSync(holdsPath, "utf8")) as { links: Record<string, { holds: Array<{ marks?: unknown[] }> }> }).links[LINK]?.holds ?? []).reduce((sum, hold) => sum + (hold.marks?.length ?? 0), 0);
-    // The Home writes the holds file with an atomic rename: until it exists, the count is not there yet.
-    const marksAre = (n: number) => () => {
-      try { return marks() === n; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+    // Each wait is for a change of state and the exact count is asserted after it: a holds file first written
+    // with a wrong count, or a 200 resend that moves the count to anything but 0, fails as a mismatch; a holds
+    // file never written, or a count that stays 1 after the resend, still fails at the runner's timeout. The Home
+    // writes the holds file with an atomic rename.
+    const holdsWritten = () => {
+      try { readFileSync(holdsPath); return true; } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
     };
     const request = { model: "fixture/fixture", input: ITEMS, client_metadata: { turn_id: "turn-cut" }, stream: true };
 
@@ -346,7 +349,7 @@ describe("through a real Home: a cut WebSocket turn and its HTTP resend", () => 
     ws.sendJson({ type: "response.create", ...request });
     expect(frameType(await ws.nextMessage())).toBe("response.created");
     ws.destroy();
-    await holds.until(marksAre(1));
+    await holds.until(holdsWritten);
     expect(marks()).toBe(1);
 
     const http = await LinkWireClient.open(port);
@@ -357,7 +360,7 @@ describe("through a real Home: a cut WebSocket turn and its HTTP resend", () => 
     const head = await http.readHead();
     expect(head.status).toBe(resendStatus);
     // A resend answered 200 releases the fingerprinted mark; one refused leaves it, with nothing to wait for.
-    if (resendStatus === 200) await holds.until(marksAre(0));
+    if (resendStatus === 200) await holds.until(() => marks() !== 1);
     expect(marks()).toBe(left);
     // The token header never reaches the upstream, on either transport.
     expect(turnHeaders).toEqual([null, null]);

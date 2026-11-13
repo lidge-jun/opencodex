@@ -1,4 +1,4 @@
-//! The link WebSocket through the real ocx-child binary (T6-4): the relay route decides between today's
+//! The link WebSocket through the real ocx-child binary: the relay route decides between today's
 //! 426 and the link WebSocket, and a daemon built with the test feature carries frames both ways.
 //! Requires the link-ws-test-gate feature (Cargo.toml [[test]] required-features).
 
@@ -410,7 +410,7 @@ fn with_the_gate_an_advertising_home_carries_frames_both_ways() {
     );
 }
 
-/// Discovery (design S4): only a verified preflight of the serving process turns the state on, a failed
+/// Discovery: only a verified preflight of the serving process turns the state on, a failed
 /// one teaches nothing, the parity loop is not needed, and a Home that switches off ends on HTTP.
 #[test]
 fn a_failed_preflight_teaches_nothing_and_a_home_that_switches_off_ends_on_http() {
