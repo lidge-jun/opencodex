@@ -23,7 +23,6 @@ import type { ProviderQuota, ProviderRoutingQuota } from "../quota-types";
 export const LAST_GOOD_MAX_AGE_MS = CODEX_CAPACITY_MAX_QUOTA_AGE_MS;
 const nativeMainReportGenerations = new WeakMap<ProviderQuotaReport, number>();
 export const accountReportCurrent = new WeakMap<ProviderQuotaReport, () => boolean>();
-export const reportObservationIdentity = new WeakMap<ProviderQuotaReport, string>();
 const reportOwners = new WeakMap<ProviderQuotaReport, { name: string; signature: string; credentialBound: boolean }>();
 function ownerSignature(provider: OcxProviderConfig, credentialBound = false): string {
   return createHash("sha256").update(JSON.stringify([provider.adapter, provider.baseUrl, provider.authMode ?? "key", credentialBound ? undefined : provider.apiKey, provider.disabled])).digest("hex");

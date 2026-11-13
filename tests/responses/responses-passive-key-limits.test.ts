@@ -98,7 +98,7 @@ test("provider quotas isolate a malformed unobserved keychain account", async ()
   } finally { setProviderKeychainEntryFactoryForTests(null); observations.clearPassiveKeyLimits(); }
 });
 
-test("a proxied response without rate headers publishes nothing and sends no probe", async () => {
+test("a proxied response without rate headers shows unknown headroom and sends no probe", async () => {
   const config = getDefaultConfig();
   config.defaultProvider = "unknown-fixture";
   config.defaultModel = "unknown-model";
@@ -115,9 +115,18 @@ test("a proxied response without rate headers publishes nothing and sends no pro
   await (await handleResponses(request, config, { provider: "", model: "" }, {})).text();
   const url = new URL("http://localhost/api/provider-quotas");
   const body = await (await handleManagementAPI(new ManagementRequest(url), url, config))!.json();
-  // A headerless response proves nothing about the account's counters, so it neither becomes a
-  // row of its own nor fences a real reading with a send sequence it cannot support.
-  expect(body.passiveKeyLimits).toEqual([]);
+  // A headerless response proves nothing about the account's counters: the first one shows the
+  // key as observed with unknown headroom, carrying no count, remaining value or reset.
+  expect(body.passiveKeyLimits).toHaveLength(1);
+  const [row] = body.passiveKeyLimits;
+  expect(row).toMatchObject({ provider: "unknown-fixture", model: "unknown-model" });
+  expect(row.windows.map((window: { dimension: string }) => window.dimension)).toEqual(["requests", "tokens"]);
+  for (const window of row.windows) {
+    expect(window.stale).toBe(false);
+    expect(window).not.toHaveProperty("remaining");
+    expect(window).not.toHaveProperty("limit");
+    expect(window).not.toHaveProperty("resetAt");
+  }
   expect(sends).toBe(1);
 });
 

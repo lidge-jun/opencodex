@@ -169,7 +169,6 @@ reads the same key and a renamed row neither probes nor borrows the canonical ac
 Only Gem/Cla five-hour and weekly buckets contribute. A same-owner display-only refresh may retain
 previous family observations with their original clocks; without a matching observation it stays unknown.
 Per-model rows, Argon and last-good display data never create or restamp family evidence.
-Provider report bindings and the probed account generation are checked before advisory publication; a rejected receipt is retired even if the old provider configuration returns. Display ownership uses the independent loaded-store fence described in [Providers And Adapters](../providers-and-adapters.md#antigravity-effort-families), without changing advisory receipt eligibility.
 
 `src/combos/jev-quota.ts` uses the worst valid relevant 5h/weekly/monthly/requested-family
 window per account, then the best usable pool tier in stable order. Observations older than

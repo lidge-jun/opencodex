@@ -3,10 +3,10 @@ import { DestinationDnsResolutionError } from "../../lib/destination-policy";
 import { PinnedHttpError, type PinnedHttpErrorCode } from "../../lib/pinned-http";
 import { ProviderOutboundPolicyError, providerOutboundPost, providerRedirectError, type ProviderOutboundDependencies } from "../../lib/provider-outbound";
 import { getValidAccessToken } from "../../oauth";
-import { antigravityLoadedRevision, getAccountCredential, getAccountSet, getCredential } from "../../oauth/store";
+import { getAccountCredential, getAccountSet, getCredential } from "../../oauth/store";
 import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS, toFiniteNumber } from "../quota-wire";
-import { accountReportCurrent, antigravityEvidence, report, reportObservationIdentity, type ProviderQuotaReport } from "./report-cache";
-import { captureAntigravityQuotaReceipt } from "../../lib/decision-quota-sink";
+import { antigravityEvidence, report, type ProviderQuotaReport } from "./report-cache";
+import { captureAntigravityQuotaReceipt, decisionQuotaSinkActive } from "../../lib/decision-quota-sink";
 import { antigravityDecisionWindows } from "../quota-decision-publication";
 import { antigravityQuotaCredentialGeneration, isAntigravityArgonIdentity } from "../antigravity-quota-identity";
 import type { OcxProviderConfig } from "../../types";
@@ -363,40 +363,22 @@ export async function fetchAntigravityUsageQuota(accessToken: string, projectId:
 
 /** Every store read uses `provider`, the same key inference resolves, so a row never probes another row's account. */
 export async function fetchAntigravityQuota(provider: string, config: OcxProviderConfig): Promise<ProviderQuotaReport | null> {
-  const initial = getAccountSet(provider);
-  const selected = initial?.accounts.find(row => row.id === initial.activeAccountId);
   const credential = getCredential(provider);
-  if (!credential?.projectId || !selected || !initial) return null;
+  if (!credential?.projectId) return null;
   let accessToken: string;
   try { accessToken = await getValidAccessToken(provider); } catch { return null; }
-  const set = getAccountSet(provider);
+  const set = decisionQuotaSinkActive() ? getAccountSet(provider) : undefined;
   const account = set?.accounts.find(row => row.id === set.activeAccountId);
-  const probed = set?.activeAccountId === selected.id && set.selectionRevision === initial.selectionRevision
-    && account?.loginId === selected.loginId && account?.addedAt === selected.addedAt
-    && account?.credential.access === accessToken && account.credential.projectId === credential.projectId ? account : undefined;
-  if (!probed) return null;
-  const loadedRevision = antigravityLoadedRevision();
+  const probed = account?.credential.access === accessToken && account.credential.projectId === credential.projectId ? account : undefined;
   const receipt = probed ? captureAntigravityQuotaReceipt(provider, config, probed.id, antigravityQuotaCredentialGeneration(probed.credential)) : undefined;
   const result = await probeAntigravityUsageQuota(accessToken, credential.projectId);
   if (result.kind === "available") {
     const value = report(provider, result.source, result.quota);
-    if (value && probed) {
-      const generation = antigravityQuotaCredentialGeneration(probed.credential);
-      const revision = set?.selectionRevision;
-      const loginId = probed.loginId;
-      reportObservationIdentity.set(value, new Bun.CryptoHasher("sha256").update(JSON.stringify([probed.id, loginId, probed.addedAt])).digest("hex"));
-      accountReportCurrent.set(value, () => {
-        const current = getAccountSet(provider);
-        const selected = current?.accounts.find(row => row.id === current.activeAccountId);
-        return antigravityLoadedRevision() === loadedRevision && current?.activeAccountId === probed.id && current.selectionRevision === revision
-          && !!selected && selected.loginId === loginId && antigravityQuotaCredentialGeneration(selected.credential) === generation;
-      });
-    }
     // Only the summary endpoint reports real family buckets. The models fallback labels one model's
     // counter Gem/Cla, so it stays display-only: no windows, and retained summary clocks survive.
     const windows = result.source === "google-antigravity:retrieveUserQuotaSummary" ? antigravityDecisionWindows(result.quota) : [];
     if (value && receipt) antigravityEvidence.set(value, { receipt, windows: Object.freeze(windows.map(row => Object.freeze(row))) });
-    return value && accountReportCurrent.get(value)?.() ? value : null;
+    return value;
   }
   if (result.legacy.kind === "throw") throw result.legacy.error;
   return null;

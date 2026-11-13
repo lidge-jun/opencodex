@@ -21,7 +21,7 @@ import type { OcxConfig, OcxProviderConfig } from "../types";
 import { isPassiveRead, runPassiveReadSync } from "../lib/passive-read";
 import type { ProviderQuota, QuotaFailureCode } from "./quota-types";
 import {
-  accountReportCurrent, observedQuotaFor, captureReportOwner, collectOwnedReport, providerQuotaBeforeObservationForTests, reportObservationIdentity, captureObservationAuthority,
+  accountReportCurrent, observedQuotaFor, captureReportOwner, collectOwnedReport, providerQuotaBeforeObservationForTests, captureObservationAuthority,
   AUTHORITATIVE_EMPTY_QUOTA,
   bumpProviderQuotaInvalidationEpoch,
   captureProviderReportEpochs, providerReportEpochChanged,
@@ -183,7 +183,6 @@ let pendingProviderObservation: Promise<void> = Promise.resolve();
  * that binding keep the legacy id byte for byte, so their persisted baselines survive.
  */
 function providerObservationAccountKey(provider: string, config: OcxConfig, report?: ProviderQuotaReport): string {
-  if (report && reportObservationIdentity.has(report)) return `${provider}\u0000owner:${reportObservationIdentity.get(report)}`;
   const oauthAccountId = getAccountSet(provider)?.activeAccountId;
   if (oauthAccountId !== undefined) return `${provider}\u0000${oauthAccountId}`;
   const probed = report && keyReportCredentialIds.get(report);

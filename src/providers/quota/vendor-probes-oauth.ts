@@ -23,7 +23,7 @@ import { aggregateCodexPoolCapacity, CODEX_CAPACITY_MAX_QUOTA_AGE_MS, type Codex
 import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS, toFiniteNumber } from "../quota-wire";
 import { providerCodexAccountMode } from "../registry";
 import {
-  accountReportCurrent, observedQuotaFor, reportObservationIdentity,
+  accountReportCurrent, observedQuotaFor,
   AUTHORITATIVE_EMPTY_QUOTA,
   TERMINAL_QUOTA_FAILURE,
   providerLabel,
@@ -408,39 +408,23 @@ export async function fetchKiroQuota(provider: string): Promise<ProviderQuotaRep
   hydrateKiroAccountState();
   const probedAccountId = getAccountSet("kiro")?.activeAccountId;
   if (!probedAccountId) return null;
-  const selection = captureOAuthAccountSelection("kiro");
   const identity = kiroProbeIdentity(probedAccountId);
-  const epoch = captureProviderAccountQuotaEpoch("kiro");
   const probedAccountKey = accountCacheKey("kiro", probedAccountId);
   const writerGeneration = captureConfigGeneration();
-  let context: Awaited<ReturnType<typeof kiroUsageContextForAccount>>;
+  let snapshot: KiroUsageSnapshot | null;
   try {
-    context = await kiroUsageContextForAccount(probedAccountId);
+    snapshot = await fetchKiroUsageSnapshot(await kiroUsageContextForAccount(probedAccountId));
   } catch {
     return null;
   }
-  const credential = getAccountCredential("kiro", probedAccountId);
-  if (!credential || credential.access !== context.access || !kiroProbeCurrent(probedAccountId, identity)) return null;
-  const generation = new Bun.CryptoHasher("sha256").update(JSON.stringify(credential)).digest("hex");
-  const current = () => {
-    const active = captureOAuthAccountSelection("kiro");
-    const stored = getAccountCredential("kiro", probedAccountId);
-    return active?.accountId === probedAccountId && active.revision === selection?.revision
-      && captureProviderAccountQuotaEpoch("kiro") === epoch && kiroProbeCurrent(probedAccountId, identity) && !!stored
-      && new Bun.CryptoHasher("sha256").update(JSON.stringify(stored)).digest("hex") === generation;
-  };
-  if (!current()) return null;
-  let snapshot: KiroUsageSnapshot | null;
-  try { snapshot = await fetchKiroUsageSnapshot(context); } catch { return null; }
-  if (!snapshot || !current()) return null;
+  if (!snapshot) return null;
+  if (!kiroProbeCurrent(probedAccountId, identity)) return null;
   if (mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) {
     accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota: snapshot.quota, identity });
     commitKiroAccountUsageState(probedAccountKey, snapshot, identity);
     persistKiroAccountState();
   }
-  const value = report(provider, "kiro:usage-limits", snapshot.quota);
-  if (value) { accountReportCurrent.set(value, current); reportObservationIdentity.set(value, identity!); }
-  return value;
+  return report(provider, "kiro:usage-limits", snapshot.quota);
 }
 
 /**

@@ -380,10 +380,6 @@ function loadAuthStoreInternal(): { store: AuthStore; hadLegacy: boolean } {
   return result;
 }
 
-let antigravityLoadedIdentity: string | undefined;
-let antigravityLoadedEpoch = 0;
-/** Revision of the loaded Antigravity roster, including transitions back to a previous value. */
-export function antigravityLoadedRevision(): number { return antigravityLoadedEpoch; }
 export function loadAuthStore(): AuthStore {
   // A passive ownership check (a Remote Link Child, #6959) must see an external replacement
   // without repairing, hardening, or publishing a roster. It cannot establish ownership of an
@@ -391,12 +387,7 @@ export function loadAuthStore(): AuthStore {
   if (isPassiveRead()) {
     try { return peekAuthStore(); } catch { return {}; }
   }
-  const store = loadAuthStoreInternal().store;
-  const set = store["google-antigravity"];
-  const account = set?.accounts.find(row => row.id === set.activeAccountId);
-  const identity = createHash("sha256").update(JSON.stringify([getAuthStorePath(), set?.activeAccountId, set?.selectionRevision, account?.loginId, account?.credential])).digest("hex");
-  if (identity !== antigravityLoadedIdentity) { antigravityLoadedIdentity = identity; antigravityLoadedEpoch++; }
-  return store;
+  return loadAuthStoreInternal().store;
 }
 
 /**
