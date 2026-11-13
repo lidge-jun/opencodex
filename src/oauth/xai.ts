@@ -72,12 +72,17 @@ function validateXaiEndpoint(rawUrl: string): string {
 }
 
 export async function discoverXaiOAuthEndpoints(signal?: AbortSignal): Promise<XaiDiscovery> {
-  const response = await fetch(XAI_OAUTH_DISCOVERY_URL, {
-    headers: { Accept: "application/json" },
-    signal: requestSignal(signal),
-  });
+  let response: Response;
+  try {
+    response = await fetch(XAI_OAUTH_DISCOVERY_URL, {
+      headers: { Accept: "application/json" },
+      signal: requestSignal(signal),
+    });
+  } catch (error) {
+    throw new XaiTokenRequestError(undefined, undefined, "xAI OAuth discovery failed: network error", { cause: error });
+  }
   if (!response.ok) {
-    throw new Error(`xAI OAuth discovery failed: ${response.status} ${await response.text()}`);
+    throw new XaiTokenRequestError(response.status, undefined, `xAI OAuth discovery failed: ${response.status} ${await response.text()}`);
   }
 
   const payload = (await response.json()) as XaiDiscoveryPayload;

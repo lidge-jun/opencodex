@@ -27,6 +27,25 @@ const pending = () => Response.json({ error: "authorization_pending" }, { status
 const granted = () => Response.json({ access_token: "access", refresh_token: "refresh", expires_in: 3600 });
 
 describe("xAI device login", () => {
+  test("discovery 503 is reported as provider unreachable before a code is issued", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      return new Response("unavailable", { status: 503 });
+    }) as typeof fetch;
+    const error = await loginXaiDevice({}).catch(e => e);
+    expect(calls).toEqual([DISCOVERY]);
+    expect(classifyLoginCodeError(error)).toBe("provider_unreachable");
+  });
+
+  test("discovery throttling and network failure report provider unreachable", async () => {
+    for (const result of [new Response("rate limited", { status: 429 }), new TypeError("network failed")]) {
+      globalThis.fetch = (async () => { if (result instanceof Error) throw result; return result; }) as typeof fetch;
+      const error = await loginXaiDevice({}).catch(e => e);
+      expect(classifyLoginCodeError(error)).toBe("provider_unreachable");
+    }
+  });
+
   /**
    * A fake clock whose `sleep` reproduces the runtime's timer arithmetic: a delay above 2^31-1 ms
    * does not wait, it fires on the next tick. Without that, an injected `sleep` that simply adds
