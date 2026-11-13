@@ -991,12 +991,16 @@ to clients. Click a row to reorder, add, remove, or mark channels fallback only 
 **More settings** opens under the channels: the capability policy, a switch that makes fallback
 channels wait until nothing else works (`cooldownWaitPolicy: "before-last-resort"`), and each
 member's context window, input types and effort levels next to the combo's combined values.
-Each value is tagged with where it comes from: the provider's report, a same-name model, a manual
-setting, or unknown. **Edit** on a member changes that provider's per-model settings (the same
+Each value is tagged with where it comes from: manual, probed, the provider's report, inferred from a
+same-name model, or unknown. A missing value with a same-name estimate reads like "inferred 1M (based
+on anthropic built-in table)"; **Adopt** saves it as a manual setting. Estimates never route: the
+combined row counts them only when labelled "includes inferred". **Edit** on a member changes that provider's per-model settings (the same
 `PUT /api/model-settings` write as the Models page), so every combo using that model changes with
 it; context accepts `200000`, `200K` or `1M`. **Use the provider's values** clears what was set by
-hand. **Test it** is reserved for a backend probe that sends one small request, which a pay-per-use
-provider bills. Click the context tag on a row to open it directly.
+hand. **Test it** calls `POST /api/providers/probe-capabilities` to check image input and effort levels
+on that relay and saves conclusive results; for a pay-per-use provider it first asks, naming how many
+small requests it will send. A failed plain request changes nothing. Context is inferred from the
+model name, never probed. Click the context tag on a row to open it directly.
 
 **Advanced** opens the full workspace (`#models/combos/advanced`), which creates, edits, renames, and
 removes combos. Its model selectors include hidden models: catalog visibility only controls external model

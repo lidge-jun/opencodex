@@ -68,10 +68,119 @@ export interface ProviderQuotaLine {
 
 /** What the catalog says one member can take. */
 /**
- * Where a member capability value comes from: the provider's own report, a same-name model
- * elsewhere in the catalog (T4c), the operator's per-model setting, or nowhere.
+ * Where a member capability value comes from, as `/api/models` labels it per axis
+ * (`capabilitySources`): the operator's declaration, a declaration a capability probe wrote, the
+ * provider's own report, a same-name estimate, or nowhere.
  */
-export type CapabilitySource = "reported" | "inferred" | "manual" | "unknown";
+export type CapabilitySource = "manual" | "probed" | "reported" | "inferred" | "unknown";
+const CAPABILITY_SOURCES: ReadonlySet<string> = new Set(["manual", "probed", "reported", "inferred", "unknown"]);
+
+/** A same-name estimate and what it rests on. Display data only: it never routes. */
+export interface InferredValue<T> {
+  value: T;
+  basis: { source: "registry" | "vendor" | "provider" | "aggregator"; provider: string; modelId: string };
+}
+
+export interface MemberInferred {
+  context?: InferredValue<number>;
+  input?: InferredValue<string[]>;
+  efforts?: InferredValue<string[]>;
+}
+
+/** `capabilitySources` from a `/api/models` row; undefined from a backend that does not send it. */
+export function parseCapabilitySources(raw: unknown): MemberSources | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const axes = raw as { contextWindow?: unknown; inputModalities?: unknown; reasoningEfforts?: unknown };
+  const read = (value: unknown): CapabilitySource => typeof value === "string" && CAPABILITY_SOURCES.has(value) ? value as CapabilitySource : "unknown";
+  return { context: read(axes.contextWindow), input: read(axes.inputModalities), efforts: read(axes.reasoningEfforts) };
+}
+
+/** `inferredCapabilities` from a `/api/models` row: only well-formed axes survive. */
+export function parseInferredCapabilities(raw: unknown): MemberInferred | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const basisOf = (value: unknown): InferredValue<unknown>["basis"] | undefined => {
+    if (!value || typeof value !== "object") return undefined;
+    const basis = value as { source?: unknown; provider?: unknown; modelId?: unknown };
+    return ["registry", "vendor", "provider", "aggregator"].includes(String(basis.source))
+      && typeof basis.provider === "string" && typeof basis.modelId === "string"
+      ? { source: basis.source as InferredValue<unknown>["basis"]["source"], provider: basis.provider, modelId: basis.modelId }
+      : undefined;
+  };
+  const axis = <T>(value: unknown, valid: (candidate: unknown) => candidate is T): InferredValue<T> | undefined => {
+    if (!value || typeof value !== "object") return undefined;
+    const entry = value as { value?: unknown; basis?: unknown };
+    const basis = basisOf(entry.basis);
+    return basis && valid(entry.value) ? { value: entry.value, basis } : undefined;
+  };
+  const isTokens = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+  const isList = (value: unknown): value is string[] => Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === "string");
+  const axes = raw as { contextWindow?: unknown; inputModalities?: unknown; reasoningEfforts?: unknown };
+  const out: MemberInferred = {
+    ...(axis(axes.contextWindow, isTokens) ? { context: axis(axes.contextWindow, isTokens)! } : {}),
+    ...(axis(axes.inputModalities, isList) ? { input: axis(axes.inputModalities, isList)! } : {}),
+    ...(axis(axes.reasoningEfforts, isList) ? { efforts: axis(axes.reasoningEfforts, isList)! } : {}),
+  };
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+/**
+ * Members with estimates filled into the gaps, for the combo's combined row only. `used` says
+ * whether any estimate went in, so the combined values can be labelled as including one.
+ */
+export function withInferredGaps(members: readonly MemberFacts[]): { members: MemberFacts[]; used: boolean } {
+  let used = false;
+  const filled = members.map((member) => {
+    const next: MemberFacts = { ...member };
+    if (next.contextWindow === undefined && member.inferred?.context) { next.contextWindow = member.inferred.context.value; used = true; }
+    if (next.inputModalities === undefined && member.inferred?.input) { next.inputModalities = member.inferred.input.value; used = true; }
+    if (next.reasoningEfforts === undefined && member.inferred?.efforts) { next.reasoningEfforts = member.inferred.efforts.value; used = true; }
+    return next;
+  });
+  return { members: filled, used };
+}
+
+/** What `POST /api/providers/probe-capabilities` answered, reduced to what the table shows. */
+export type ProbeOutcome =
+  | { kind: "confirm"; planned: number }
+  | { kind: "inapplicable"; reason: string }
+  | { kind: "busy" }
+  | { kind: "failed" }
+  | {
+    kind: "done";
+    baselineOk: boolean;
+    image?: "accepted" | "rejected" | "inconclusive";
+    accepted: string[];
+    rejected: string[];
+    inconclusive: string[];
+    applied: { inputModalities?: string[]; reasoningEfforts?: string[] };
+  };
+
+export function parseProbeResponse(status: number, body: unknown): ProbeOutcome {
+  if (status === 409) return { kind: "busy" };
+  if (status < 200 || status >= 300 || !body || typeof body !== "object") return { kind: "failed" };
+  const raw = body as Record<string, unknown>;
+  if (raw.applicable === false) return { kind: "inapplicable", reason: typeof raw.reason === "string" ? raw.reason : "unknown" };
+  if (raw.requiresConfirmation === true) {
+    return { kind: "confirm", planned: typeof raw.plannedRequests === "number" && raw.plannedRequests > 0 ? raw.plannedRequests : 1 };
+  }
+  if (raw.sent !== true || !raw.baseline || typeof raw.baseline !== "object") return { kind: "failed" };
+  const list = (value: unknown) => Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+  const reasoning = (raw.reasoning ?? {}) as Record<string, unknown>;
+  const imageStatus = (raw.image as { status?: unknown } | undefined)?.status;
+  const applied = (raw.applied ?? {}) as Record<string, unknown>;
+  return {
+    kind: "done",
+    baselineOk: (raw.baseline as { status?: unknown }).status === "accepted",
+    ...(imageStatus === "accepted" || imageStatus === "rejected" || imageStatus === "inconclusive" ? { image: imageStatus } : {}),
+    accepted: list(reasoning.accepted),
+    rejected: list(reasoning.rejected),
+    inconclusive: list(reasoning.inconclusive),
+    applied: {
+      ...(Array.isArray(applied.inputModalities) ? { inputModalities: list(applied.inputModalities) } : {}),
+      ...(Array.isArray(applied.reasoningEfforts) ? { reasoningEfforts: list(applied.reasoningEfforts) } : {}),
+    },
+  };
+}
 
 export interface MemberSources {
   context: CapabilitySource;
@@ -84,6 +193,7 @@ export interface MemberFacts {
   inputModalities?: readonly string[];
   reasoningEfforts?: readonly string[];
   sources?: MemberSources;
+  inferred?: MemberInferred;
 }
 
 /**
@@ -173,10 +283,11 @@ export function memberSettingsPatch(current: MemberFacts, draft: MemberDraft, or
 
 /** Clears every per-model setting the operator made, so the provider's own values apply again. */
 export function memberRestorePatch(sources: MemberSources | undefined): Record<string, null> {
+  const declared = (source: CapabilitySource | undefined) => source === "manual" || source === "probed";
   return {
-    ...(sources?.context === "manual" ? { contextWindow: null } : {}),
-    ...(sources?.input === "manual" ? { inputModalities: null } : {}),
-    ...(sources?.efforts === "manual" ? { reasoningEfforts: null } : {}),
+    ...(declared(sources?.context) ? { contextWindow: null } : {}),
+    ...(declared(sources?.input) ? { inputModalities: null } : {}),
+    ...(declared(sources?.efforts) ? { reasoningEfforts: null } : {}),
   };
 }
 

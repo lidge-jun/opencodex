@@ -179,3 +179,8 @@
 .rb-member-note { margin: 0; color: var(--ocx-fg-subtle); font-size: 12.5px; }
 .rb-member-error { margin: 0; color: var(--ocx-danger); font-size: 12.5px; }
 .rb-member-buttons { display: flex; align-items: center; gap: 8px; }
+.rb-inferred { color: var(--ocx-warning); font-size: 12.5px; }
+.rb-adopt { margin-left: 4px; }
+.rb-probe { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px; border: 1px dashed var(--ocx-line); border-radius: 8px; }
+.rb-probe-confirm { display: flex; flex-direction: column; gap: 6px; }
+.rb-probe-results { margin: 0; padding-left: 18px; font-size: 12.5px; }

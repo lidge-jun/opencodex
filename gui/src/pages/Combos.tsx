@@ -30,6 +30,11 @@ import {
   channelKey,
   channelTargetsForPut,
   capabilitySource,
+  parseCapabilitySources,
+  parseInferredCapabilities,
+  parseProbeResponse,
+  type MemberInferred,
+  type ProbeOutcome,
   configuredMemberModels,
   parseCapabilitySettings,
   type AccountCount,
@@ -60,6 +65,7 @@ type ModelOption = {
   visionSidecarConsumer?: boolean;
   contextWindow?: number;
   sources?: MemberSources;
+  inferred?: MemberInferred;
 };
 type ProviderDto = {
   adapter: string;
@@ -260,6 +266,7 @@ export default function Combos({
     const models: ModelOption[] = [];
     /** Where each catalog member's capability values come from; only the route board reads it. */
     const sourcesByKey = new Map<string, MemberSources>();
+    const inferredByKey = new Map<string, MemberInferred>();
     const capabilityModels: ModelOption[] = [];
     const catalogued = new Set<string>();
     const comboCatalog: Record<string, ComboCatalogMeta> = {};
@@ -286,9 +293,8 @@ export default function Combos({
         visionSidecarConsumer?: unknown;
         contextWindowDeclared?: unknown;
         reasoningOverridden?: unknown;
-        contextWindowSource?: unknown;
-        inputModalitiesSource?: unknown;
-        reasoningEffortsSource?: unknown;
+        capabilitySources?: unknown;
+        inferredCapabilities?: unknown;
       };
       if (typeof model.provider !== "string" || typeof model.id !== "string") continue;
       const provider = model.provider.trim();
@@ -322,11 +328,15 @@ export default function Combos({
         visionSidecarConsumer: model.visionSidecarConsumer === true,
         ...(typeof model.contextWindow === "number" && model.contextWindow > 0 ? { contextWindow: model.contextWindow } : {}),
       };
-      sourcesByKey.set(channelKey(provider, id), {
-        context: capabilitySource(typeof model.contextWindow === "number", typeof model.contextWindowDeclared === "number", model.contextWindowSource),
-        input: capabilitySource(Boolean(inputModalities?.length), Boolean(inputModalitiesDeclared?.length), model.inputModalitiesSource),
-        efforts: capabilitySource(reasoningEfforts !== undefined, model.reasoningOverridden === true, model.reasoningEffortsSource),
+      // The server labels each axis (`capabilitySources`); an older server does not, so fall back
+      // to the manual flags it does send.
+      sourcesByKey.set(channelKey(provider, id), parseCapabilitySources(model.capabilitySources) ?? {
+        context: capabilitySource(typeof model.contextWindow === "number", typeof model.contextWindowDeclared === "number"),
+        input: capabilitySource(Boolean(inputModalities?.length), Boolean(inputModalitiesDeclared?.length)),
+        efforts: capabilitySource(reasoningEfforts !== undefined, model.reasoningOverridden === true),
       });
+      const inferred = parseInferredCapabilities(model.inferredCapabilities);
+      if (inferred) inferredByKey.set(channelKey(provider, id), inferred);
       capabilityModels.push(option);
       models.push(option); // Catalog visibility does not restrict internal Combo selection.
     }
@@ -343,8 +353,10 @@ export default function Combos({
     const catalogKeys = new Set(models.map((model) => channelKey(model.provider, model.id)));
     const memberModels = [
       ...models.map((model) => {
-        const sources = sourcesByKey.get(channelKey(model.provider, model.id));
-        return sources ? { ...model, sources } : model;
+        const key = channelKey(model.provider, model.id);
+        const sources = sourcesByKey.get(key);
+        const inferred = inferredByKey.get(key);
+        return { ...model, ...(sources ? { sources } : {}), ...(inferred ? { inferred } : {}) };
       }),
       ...configuredMemberModels(allProviders)
         .filter((member) => !catalogKeys.has(channelKey(member.provider, member.id)))
@@ -561,6 +573,25 @@ export default function Combos({
     }
   };
 
+  /**
+   * `POST /api/providers/probe-capabilities` for one member, applying conclusive results. A metered
+   * provider answers `requiresConfirmation` first; the repeat carries the operator's consent.
+   */
+  const probeModel = async (provider: string, modelId: string, confirmed: boolean): Promise<ProbeOutcome> => {
+    try {
+      const res = await fetch(`${apiBase}/api/providers/probe-capabilities`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: provider, model: modelId, apply: true, ...(confirmed ? { confirmMetered: true } : {}) }),
+      });
+      const outcome = parseProbeResponse(res.status, await res.json().catch(() => null));
+      if (outcome.kind === "done" && Object.keys(outcome.applied).length > 0) resource.refresh();
+      return outcome;
+    } catch {
+      return { kind: "failed" };
+    }
+  };
+
   const setComboEnabled = async (id: string, enabled: boolean) => {
     try {
       const res = await putModelVisibility(apiBase, "models", "combo", [{ id }], enabled);
@@ -683,6 +714,7 @@ export default function Combos({
             onOpenAdvanced={openAdvanced}
             lockedId={draftComboId}
             onSaveModel={saveModelSettings}
+            onProbeModel={probeModel}
           />
         )}
         {workspaceMounted && (

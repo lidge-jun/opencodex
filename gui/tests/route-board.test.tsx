@@ -14,6 +14,10 @@ import {
   capabilityPatch,
   capabilitySource,
   combineLists,
+  parseCapabilitySources,
+  parseInferredCapabilities,
+  parseProbeResponse,
+  withInferredGaps,
   configuredMemberModels,
   dragSlot,
   memberRestorePatch,
@@ -215,6 +219,7 @@ let host: HTMLElement;
 
 type Call = { url: string; method: string; body: unknown };
 let calls: Call[];
+let probeReply: "ok" | "baseline" | "busy" | "blocked" = "ok";
 let combosPayload: unknown;
 
 const alpha = combo("alpha", [["openai", "gpt-5"], ["anthropic", "claude"]]);
@@ -241,6 +246,20 @@ function installFetch() {
       const method = init?.method ?? "GET";
       if (method !== "GET") {
         calls.push({ url, method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+        if (url.endsWith("/api/providers/probe-capabilities")) {
+          const sent = JSON.parse(String(init!.body)) as { confirmMetered?: boolean };
+          if (probeReply === "busy") return Response.json({ error: "busy" }, { status: 409 });
+          if (probeReply === "blocked") return Response.json({ applicable: false, reason: "unsupported_adapter", sent: false });
+          if (!sent.confirmMetered) return Response.json({ applicable: true, sent: false, requiresConfirmation: true, metered: true, plannedRequests: 4 });
+          if (probeReply === "baseline") {
+            return Response.json({ applicable: true, sent: true, baseline: { status: "inconclusive" }, reasoning: { accepted: [], rejected: [], inconclusive: ["low"] }, applied: {} });
+          }
+          return Response.json({
+            applicable: true, sent: true, baseline: { status: "accepted" }, image: { status: "accepted" },
+            reasoning: { accepted: ["low", "high"], rejected: ["max"], inconclusive: [] },
+            applied: { inputModalities: ["text", "image"], reasoningEfforts: ["low", "high"] },
+          });
+        }
         if (url.endsWith("/api/model-settings")) {
           const sent = JSON.parse(String(init!.body)) as { provider: string; modelId: string };
           return Response.json({ ok: true, provider: sent.provider, modelId: sent.modelId, changed: true, hasOverrides: true, saved: true, catalogRefresh: { status: "skipped" } });
@@ -260,7 +279,12 @@ function installFetch() {
       if (url.endsWith("/api/models")) {
         return Response.json([
           { provider: "openai", id: "gpt-5", contextWindow: 400000, reasoningEfforts: ["low", "high"], reasoningOverridden: true },
-          { provider: "anthropic", id: "claude" },
+          {
+            provider: "anthropic", id: "claude",
+            capabilitySources: { contextWindow: "unknown", inputModalities: "probed", reasoningEfforts: "unknown" },
+            inputModalities: ["text"],
+            inferredCapabilities: { contextWindow: { value: 1000000, basis: { source: "registry", provider: "anthropic", modelId: "claude" } } },
+          },
           { provider: "dead", id: "m" },
           { provider: "combo", id: "alpha", displayName: "Alpha", displayNameSource: "provider", contextWindow: 200000, disabled: false },
           { provider: "combo", id: "offline", disabled: false },
@@ -287,6 +311,7 @@ beforeEach(() => {
   });
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   root = null;
+  probeReply = "ok";
   installFetch();
 });
 
@@ -443,8 +468,6 @@ describe("Combos overview page", () => {
     await act(async () => { button(gpt, "Edit what OpenAI (Codex login) gpt-5 can take").click(); });
     const form = editor.querySelector<HTMLElement>(".rb-member-edit")!;
     expect(form.textContent).toContain("every combo that uses this model changes too");
-    expect(form.textContent).toContain("pay-per-use provider bills it");
-    expect(button(form, "Test it").disabled).toBe(true);
     const input = form.querySelector<HTMLInputElement>("input")!;
     const setValue = Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!;
     await act(async () => {
@@ -463,6 +486,64 @@ describe("Combos overview page", () => {
     await flush();
     expect(calls).toEqual([{ url: "/api/model-settings", method: "PUT", body: { provider: "openai", modelId: "gpt-5", contextWindow: 1000000, inputModalities: ["image"] } }]);
     expect(editor.querySelector(".rb-member-edit")).toBeNull();
+  });
+
+  test("a gap with a same-name estimate shows it, and Adopt saves it as a manual setting", async () => {
+    await renderPage();
+    await act(async () => { row("alpha").querySelector<HTMLButtonElement>(".rb-tag--button")!.click(); });
+    const editor = row("alpha").querySelector<HTMLElement>(".rb-editor")!;
+    const claude = [...editor.querySelectorAll<HTMLElement>(".rb-members tbody tr")].find(tr => tr.textContent?.includes("claude"))!;
+    expect(claude.textContent).toContain("inferred 1M (based on anthropic built-in table)");
+    expect(claude.textContent).toContain("probed");
+    expect(editor.querySelector(".rb-members tfoot")?.textContent).toContain("includes inferred");
+    await act(async () => { claude.querySelector<HTMLButtonElement>(".rb-adopt")!.click(); });
+    await flush();
+    expect(calls).toEqual([{ url: "/api/model-settings", method: "PUT", body: { provider: "anthropic", modelId: "claude", contextWindow: 1000000 } }]);
+  });
+
+  test("Test it asks before a metered probe, then repeats with consent and lists the results", async () => {
+    await renderPage();
+    await act(async () => { row("alpha").querySelector<HTMLButtonElement>(".rb-tag--button")!.click(); });
+    const editor = row("alpha").querySelector<HTMLElement>(".rb-editor")!;
+    const gpt = () => [...editor.querySelectorAll<HTMLElement>(".rb-members tbody tr")].find(tr => tr.querySelector("th")?.textContent?.includes("gpt-5"))!;
+    await act(async () => { button(gpt(), "Test what OpenAI (Codex login) gpt-5 accepts").click(); });
+    await flush();
+    const dialog = editor.querySelector<HTMLElement>("[role=alertdialog]")!;
+    expect(dialog.textContent).toContain("sends 4 very small requests");
+    expect(editor.textContent).toContain("Context is inferred from the model name, not measured.");
+    await act(async () => { button(dialog, "Run the test").click(); });
+    await flush();
+    expect(calls.map(call => call.body)).toEqual([
+      { name: "openai", model: "gpt-5", apply: true },
+      { name: "openai", model: "gpt-5", apply: true, confirmMetered: true },
+    ]);
+    const results = editor.querySelector(".rb-probe")!.textContent!;
+    expect(results).toContain("Images: accepted");
+    expect(results).toContain("accepted: low · high; refused: max");
+    expect(results).toContain("saved effort levels: low · high");
+  });
+
+  test("Test it: a failed baseline changes nothing, a busy provider says so, an inapplicable one greys the button", async () => {
+    await renderPage();
+    await act(async () => { row("alpha").querySelector<HTMLButtonElement>(".rb-tag--button")!.click(); });
+    const editor = row("alpha").querySelector<HTMLElement>(".rb-editor")!;
+    const gpt = () => [...editor.querySelectorAll<HTMLElement>(".rb-members tbody tr")].find(tr => tr.querySelector("th")?.textContent?.includes("gpt-5"))!;
+    const test = () => button(gpt(), "Test what OpenAI (Codex login) gpt-5 accepts");
+    probeReply = "baseline";
+    await act(async () => { test().click(); });
+    await flush();
+    await act(async () => { button(editor.querySelector("[role=alertdialog]")!, "Run the test").click(); });
+    await flush();
+    expect(editor.querySelector(".rb-probe")!.textContent).toContain("Inconclusive");
+    probeReply = "busy";
+    await act(async () => { test().click(); });
+    await flush();
+    expect(editor.querySelector(".rb-probe")!.textContent).toContain("already being tested");
+    probeReply = "blocked";
+    await act(async () => { test().click(); });
+    await flush();
+    expect(editor.querySelector(".rb-probe")!.textContent).toContain("only OpenAI-compatible endpoints");
+    expect(test().disabled).toBe(true);
   });
 
   test("restoring a member sends null only for the fields set by hand", async () => {
@@ -620,5 +701,39 @@ describe("member capability edits", () => {
     expect(capabilitySource(true, false)).toBe("reported");
     expect(capabilitySource(false, false)).toBe("unknown");
     expect(memberRestorePatch({ context: "manual", input: "reported", efforts: "manual" })).toEqual({ contextWindow: null, reasoningEfforts: null });
+  });
+});
+
+describe("capability sources, estimates and probe replies", () => {
+  test("sources come from the server's per-axis labels; junk reads as unknown", () => {
+    expect(parseCapabilitySources({ contextWindow: "probed", inputModalities: "inferred", reasoningEfforts: "nonsense" }))
+      .toEqual({ context: "probed", input: "inferred", efforts: "unknown" });
+    expect(parseCapabilitySources(undefined)).toBeUndefined();
+  });
+
+  test("estimates keep only well-formed axes, and fill gaps only in the combined row", () => {
+    const inferred = parseInferredCapabilities({
+      contextWindow: { value: 1000000, basis: { source: "registry", provider: "anthropic", modelId: "m" } },
+      inputModalities: { value: [], basis: { source: "vendor", provider: "x", modelId: "m" } },
+      reasoningEfforts: { value: ["low"], basis: { source: "nowhere", provider: "x", modelId: "m" } },
+    });
+    expect(inferred).toEqual({ context: { value: 1000000, basis: { source: "registry", provider: "anthropic", modelId: "m" } } });
+    expect(withInferredGaps([{ contextWindow: 200000, inferred }, { inferred }])).toEqual({
+      members: [{ contextWindow: 200000, inferred }, { contextWindow: 1000000, inferred }],
+      used: true,
+    });
+    expect(withInferredGaps([{ contextWindow: 200000 }]).used).toBe(false);
+  });
+
+  test("probe replies map to confirm, inapplicable, busy, done and failed", () => {
+    expect(parseProbeResponse(200, { requiresConfirmation: true, plannedRequests: 5 })).toEqual({ kind: "confirm", planned: 5 });
+    expect(parseProbeResponse(200, { applicable: false, reason: "oauth_auth" })).toEqual({ kind: "inapplicable", reason: "oauth_auth" });
+    expect(parseProbeResponse(409, { error: "busy" })).toEqual({ kind: "busy" });
+    expect(parseProbeResponse(500, { error: "x" })).toEqual({ kind: "failed" });
+    expect(parseProbeResponse(200, { sent: true, baseline: { status: "inconclusive" } })).toMatchObject({ kind: "done", baselineOk: false });
+  });
+
+  test("restore clears probed declarations too", () => {
+    expect(memberRestorePatch({ context: "reported", input: "probed", efforts: "manual" })).toEqual({ inputModalities: null, reasoningEfforts: null });
   });
 });

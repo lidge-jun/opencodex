@@ -8,6 +8,7 @@ import {
   combineLists,
   comboContextWindow,
   dragSlot,
+  withInferredGaps,
   memberFacts,
   moveChannel,
   type CapabilityPolicy,
@@ -21,6 +22,7 @@ import {
 import { Select, Switch } from "../../ui";
 import { ProviderIcon } from "../provider-workspace/ProviderRail";
 import type { ModelOption, ProviderOption } from "../combo-workspace-types";
+import type { ProbeMemberModel } from "./MemberProbe";
 import { MemberTable, type SaveMemberModel } from "./MemberTable";
 import { QuotaLine } from "./QuotaLine";
 
@@ -86,6 +88,7 @@ export function ChannelEditor({
   saving,
   onSave,
   onSaveModel,
+  onProbeModel,
   onCancel,
 }: {
   comboModel: string;
@@ -107,6 +110,8 @@ export function ChannelEditor({
   onSave: (channels: EditableChannel[], settings: ComboSettingsPatch) => void;
   /** Writes one member model's per-provider settings (shared by every combo using it). */
   onSaveModel?: SaveMemberModel;
+  /** Probes what one member's relay accepts (image input, effort levels). */
+  onProbeModel?: ProbeMemberModel;
   onCancel: () => void;
 }) {
   const t = useT();
@@ -180,9 +185,11 @@ export function ChannelEditor({
 
   const facts = channels.map((channel) => memberFacts(models, channel.provider, channel.model));
   const policy = capability.capabilityPolicy;
-  const context = comboContextWindow(facts, policy, catalogContext);
-  const modalities = combineLists(facts.map((fact) => fact.inputModalities), policy, MODALITY_ORDER);
-  const efforts = combineLists(facts.map((fact) => fact.reasoningEfforts), policy, COMBO_EFFORTS);
+  /** Estimates fill gaps in the combined row only, and the row says so; they never route. */
+  const combined = withInferredGaps(facts);
+  const context = comboContextWindow(combined.members, policy, catalogContext);
+  const modalities = combineLists(combined.members.map((fact) => fact.inputModalities), policy, MODALITY_ORDER);
+  const efforts = combineLists(combined.members.map((fact) => fact.reasoningEfforts), policy, COMBO_EFFORTS);
 
   return (
     <div className="rb-editor" role="group" aria-label={t("routeBoard.edit.aria", { model: comboModel })}>
@@ -316,8 +323,9 @@ export function ChannelEditor({
               channels={channels}
               facts={facts}
               labels={labels}
-              combo={{ context: context.tokens, basis: context.basis, modalities, efforts }}
+              combo={{ context: context.tokens, basis: context.basis, modalities, efforts, includesInferred: combined.used }}
               onSaveModel={onSaveModel}
+              onProbeModel={onProbeModel}
             />
           </div>
         )}

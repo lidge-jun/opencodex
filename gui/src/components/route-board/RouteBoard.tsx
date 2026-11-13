@@ -18,6 +18,7 @@ import {
 import type { ModelOption, ProviderOption } from "../combo-workspace-types";
 import { ChannelEditor, type EditableChannel } from "./ChannelEditor";
 import type { SaveMemberModel } from "./MemberTable";
+import type { ProbeMemberModel } from "./MemberProbe";
 import { ModelRouteRow } from "./ModelRouteRow";
 
 type SaveResult = { ok: boolean; error?: string };
@@ -47,6 +48,7 @@ export interface RouteBoardProps {
   lockedId?: string | null;
   /** Writes one member model's per-provider settings from the editor's member table. */
   onSaveModel?: SaveMemberModel;
+  onProbeModel?: ProbeMemberModel;
 }
 
 /** Combos overview: one row per combo, inline strategy and on/off, click a row to edit its channels. */
@@ -152,6 +154,7 @@ export function RouteBoard(props: RouteBoardProps) {
             saving={busy === row.combo.id || props.lockedId === row.combo.id}
             onSave={(channels, settings) => void saveChannels(row.combo, channels, settings)}
             onSaveModel={props.onSaveModel}
+            onProbeModel={props.onProbeModel}
             onCancel={() => setExpanded(null)}
           />
         </ModelRouteRow>
