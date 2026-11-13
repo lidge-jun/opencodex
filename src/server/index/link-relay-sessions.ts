@@ -189,11 +189,17 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
       if (sessionLink !== null && req.method === "POST" && url.pathname === "/v1/responses") {
         try { decideObservation = options.observeResponsesRequest?.(sessionLink, req) ?? undefined; } catch { /* observation never blocks the request */ }
       }
-      const flow = sessionLink !== null ? options.traffic?.begin(sessionLink) : undefined;
-      if (flow) {
-        const declared = req.headers.get("content-length");
-        if (declared !== null && /^\d+$/.test(declared.trim())) flow.toHome(Number(declared.trim()));
-        else if (req.body !== null) flow.uncounted();
+      let flow: ReturnType<LinkTrafficBook["begin"]> | undefined;
+      try {
+        flow = sessionLink !== null ? options.traffic?.begin(sessionLink) : undefined;
+        if (flow) {
+          const declared = req.headers.get("content-length");
+          if (declared !== null && /^\d+$/.test(declared.trim())) flow.toHome(Number(declared.trim()));
+          else if (req.body !== null) flow.uncounted();
+        }
+      } catch (error) {
+        // Accounting that fails before dispatch still decides a pending body observation and returns the lease.
+        decideObservation?.(false); flow?.end(false); release(); throw error;
       }
       // Socket cancellation before headers is terminal too; an upstream handler that is
       // settling its own cleanup cannot keep a dead transport's listener lease forever.

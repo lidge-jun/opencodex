@@ -19,6 +19,9 @@ import { createInboundBodyBudget } from "../../src/server/inbound-body-budget";
 import { withRaisedInboundBodyAdmission } from "../../src/server/inbound-body-admission";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { LinkWireClient } from "../helpers/link-ws-client";
+import { relayHarness } from "../helpers/link-relay-harness";
+import type { LinkActivity } from "../../src/link/child-activity";
+import type { LinkTrafficBook } from "../../src/link/traffic";
 
 // Lane T5d1: link WebSocket closes that leave durable activity holds, and their release (design T4 5).
 
@@ -384,3 +387,21 @@ describe("release over HTTP through the real listener", () => {
     expect(lifecycle.linkActivity(KEY.linkId, Date.now()).inFlight).toBe(0);
   });
 });
+
+describe("a relayed POST whose traffic accounting throws (#8613 review)", () => {
+  test("decides its body observation (not accepted) and releases its lease", async () => {
+    const decisions: boolean[] = [];
+    let ended = 0;
+    const h = relayHarness({
+      activity: { begin: () => () => { ended += 1; } } as unknown as LinkActivity,
+      traffic: { begin: () => { throw new Error("traffic book failed"); } } as unknown as LinkTrafficBook,
+      observeResponsesRequest: () => accepted => { decisions.push(accepted); },
+    });
+    const nonce = await h.session(KEY.linkId);
+    const req = h.request("/v1/responses", { method: "POST", nonce, headers: { "content-type": "application/json" }, body: "{}" });
+    await expect(h.dispatch(req, async () => new Response("{}"))).rejects.toThrow("traffic book failed");
+    expect(decisions).toEqual([false]);
+    expect(ended).toBe(1);
+  });
+});
+
