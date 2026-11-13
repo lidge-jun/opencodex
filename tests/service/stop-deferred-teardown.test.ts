@@ -62,6 +62,8 @@ function connectClient(transport: "hub" | "link") {
   } }));
 }
 
+const windowsStop = process.platform === "win32" || process.env.OCX_TEST_WIN_STOP === "1";
+
 async function runParentStop(options: {
   receipt: boolean; response: unknown; restore: CodexNativeRestoreResult; status?: number; clientTransport?: "hub" | "link";
   serverTeardown?: boolean; json?: boolean;
@@ -72,11 +74,12 @@ async function runParentStop(options: {
   disconnectDuringProbe?: boolean; connectDuringDiscovery?: boolean; connectDuringPost?: boolean; lifecycleBusy?: boolean;
   connectAfterBoundary?: boolean; pendingAfterBoundary?: boolean; connectDuringRestore?: boolean;
   connectAfterExitInspection?: boolean; pendingAfterExitInspection?: boolean; pendingAfterGrok?: boolean; receiptClearBusy?: boolean;
+  simulatedWindows?: boolean;
 }) {
   if (options.clientTransport) connectClient(options.clientTransport);
   const child = spawnSync(process.execPath, [fixturePath("parent-stop-runner.ts")], {
     cwd: repoPath(),
-    env: { ...process.env, OPENCODEX_HOME: home },
+    env: { ...process.env, OPENCODEX_HOME: home, ...(options.simulatedWindows ? { OCX_TEST_WIN_STOP: "1" } : {}) },
     input: JSON.stringify(options),
     encoding: "utf8",
     timeout: 20_000,
@@ -92,8 +95,20 @@ async function runParentStop(options: {
     urls: string[]; transports: string[]; nonce?: string; receiptExists: boolean; unexpectedIo: string[];
   };
   expect(report.unexpectedIo, child.stderr).toEqual([]);
-  expect(report.urls, child.stderr).toHaveLength(options.clientServer || options.exitCleanup || options.alreadyStopped ? 0 : 1);
+  // src/cli/stop-windows-checked.ts requires a receipt on Windows; claimTeardown in
+  // src/cli/index.ts refuses before POST when it cannot record one (except hub clients).
+  const receiptRefused = (windowsStop || options.simulatedWindows) && !options.receipt && options.clientTransport !== "hub" && !options.exitCleanup;
+  expect(report.urls, child.stderr).toHaveLength(options.clientServer || options.exitCleanup || options.alreadyStopped || receiptRefused ? 0 : 1);
   return { ...report, exitCode: child.status, stderr: child.stderr, stdout: child.stdout };
+}
+
+function expectWindowsReceiptRefusal(outcome: Awaited<ReturnType<typeof runParentStop>>, json: boolean) {
+  expect(outcome.calls, outcome.stderr).toMatchObject({ killed: 0, native: 0, grok: 0, cleared: 0 });
+  expect(outcome.nonce).toBeUndefined();
+  expect(outcome.receiptExists).toBe(false);
+  expect(outcome.stderr).toContain("receipt storage unavailable");
+  if (json) expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: false, runtimeDown: false, proxy: "stop-failed", sharedTeardown: "skipped" });
+  expect(outcome.exitCode).toBe(1);
 }
 
 describe("API stop through process exit cleanup", () => {
@@ -137,6 +152,18 @@ describe("API stop through process exit cleanup", () => {
 });
 
 describe("parent CLI shared teardown completion", () => {
+  for (const receipt of [true, false]) {
+    test(`simulated Windows stop isolates the fake PID (receipt ${receipt})`, async () => {
+      const outcome = await runParentStop({ simulatedWindows: true, receipt, clientTransport: "link", json: true,
+        connectAfterBoundary: true, response: { success: true, sharedTeardown: "not-owned" }, restore: restoreResult(true) });
+      expect(outcome.calls.service).toBe(1);
+      if (!receipt) return expectWindowsReceiptRefusal(outcome, true);
+      expect(outcome.calls).toMatchObject({ killed: 0, native: 0, grok: 0, cleared: 1 });
+      expect(outcome.receiptExists).toBe(false);
+      expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, sharedTeardown: "skipped" });
+      expect(outcome.exitCode).toBe(0);
+    });
+  }
   test("consecutive connected stops preserve configuration and the stopped managed client remains update-eligible", async () => {
     const first = await runParentStop({ receipt: true, clientTransport: "hub", serverTeardown: true, json: true,
       response: null, restore: restoreResult(true) });
@@ -320,6 +347,7 @@ describe("parent CLI shared teardown completion", () => {
     // the parent owns the restoration itself, exactly as for an unconfirmed stop.
     const outcome = await runParentStop({ receipt: false, clientTransport: "link", json: true,
       response: { success: true, sharedTeardown: "not-owned" }, restore: restoreResult(true) });
+    if (windowsStop) return expectWindowsReceiptRefusal(outcome, true);
     expect(outcome.urls).toEqual(["http://127.0.0.1:10100/api/stop"]);
     expect(outcome.nonce).toBeUndefined();
     expect(outcome.calls).toMatchObject({ killed: 0, exited: 1, native: 1, grok: 1, cleared: 0 });
@@ -333,6 +361,7 @@ describe("parent CLI shared teardown completion", () => {
     // now owns those integrations. Refusing it would restore over the brand-new connection.
     const outcome = await runParentStop({ receipt: false, orphan: true, connectDuringDiscovery: true,
       serverTeardown: true, json: true, response: null, restore: restoreResult(true) });
+    if (windowsStop) return expectWindowsReceiptRefusal(outcome, true);
     expect(outcome.calls).toMatchObject({ killed: 0, native: 0, grok: 0 });
     expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, runtimeDown: true, sharedTeardown: "performed-by-proxy" });
     expect(outcome.exitCode, outcome.stderr).toBe(0);
@@ -346,6 +375,7 @@ describe("parent CLI shared teardown completion", () => {
         // now owns routing. Only the ownership read at the restore boundary decides.
         const outcome = await runParentStop({ receipt, clientTransport: "link", serverTeardown: true, json: true,
           response: null, restore: restoreResult(true), ...transition });
+        if (windowsStop && !receipt) return expectWindowsReceiptRefusal(outcome, true);
         expect(outcome.calls, outcome.stderr).toMatchObject({ killed: 0, native: 0, grok: 0, cleared: receipt ? 1 : 0 });
         expect(outcome.receiptExists).toBe(false);
         // Seen before the POST without a nonce, the hub's not-owned answer already confirms the stop.
@@ -362,6 +392,7 @@ describe("parent CLI shared teardown completion", () => {
       test(`R6 ${transition} preserves hub writes (receipt ${receipt})`, async () => {
         const outcome = await runParentStop({ receipt, clientTransport: "link", json: true,
           [transition]: true, response: { success: true, sharedTeardown: "not-owned" }, restore: restoreResult(true) });
+        if (windowsStop && !receipt) return expectWindowsReceiptRefusal(outcome, true);
         expect(outcome.calls, outcome.stderr).toMatchObject({ native: 0, grok: 0, cleared: receipt ? 1 : 0 });
         expect(outcome.receiptExists).toBe(false);
         expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, sharedTeardown: "skipped" });
@@ -480,6 +511,7 @@ describe("parent CLI shared teardown completion", () => {
   test("receipt failure and unconfirmed child teardown cause real parent restoration without a kill", async () => {
     const outcome = await runParentStop({ receipt: false,
       response: { success: false, sharedTeardown: "performed" }, restore: restoreResult(true) });
+    if (windowsStop) return expectWindowsReceiptRefusal(outcome, false);
     expect(outcome.urls).toEqual(["http://127.0.0.1:10100/api/stop"]);
     expect(outcome.calls).toMatchObject({ killed: 0, exited: 1, native: 1, grok: 1, cleared: 0 });
     expect(outcome.exitCode).toBe(0);
@@ -488,6 +520,7 @@ describe("parent CLI shared teardown completion", () => {
   test("a confirmed performed teardown prevents duplicate parent restoration", async () => {
     const outcome = await runParentStop({ receipt: false,
       response: { success: true, sharedTeardown: "performed" }, restore: restoreResult(true) });
+    if (windowsStop) return expectWindowsReceiptRefusal(outcome, false);
     expect(outcome.calls).toMatchObject({ killed: 0, native: 0, grok: 0 });
     expect(outcome.exitCode).toBe(0);
   });

@@ -171,6 +171,13 @@ mock.module("../../src/config/pending-teardown", () => ({
 }));
 
 const state = await import("../../src/config/process-state");
+if (process.env.OCX_TEST_WIN_STOP === "1") {
+  state.setProcessCommandLinePlatformForTests("win32");
+  state.setProcessCommandLineExecForTests(() => unexpected("execFileSync"));
+  const elevation = await import("../../src/lib/windows-elevation");
+  elevation.setTrustedWindowsSystemDirectoryResolverForTests(() => "/fixture/System32");
+  elevation.setTrustedWindowsElevationExecutablesForTests({ powershell: "/fixture/powershell.exe" });
+}
 mock.module("../../src/config/process-state", () => ({
   ...state,
   readPid: () => options.orphan || options.alreadyStopped || (options.deadPidReadsNull && !alive) ? null : fakePid,
@@ -315,6 +322,17 @@ mock.module("../../src/server/direct-local-http", () => ({ ...direct,
 }));
 
 process.argv = [process.execPath, "ocx", "stop", ...(options.json ? ["--json"] : [])];
+if (process.env.OCX_TEST_WIN_STOP === "1") {
+  (await import("../../src/cli/stop-windows-checked")).resetOcxWindowsStopForTests("win32");
+}
+if ((process.platform === "win32" || process.env.OCX_TEST_WIN_STOP === "1") && !options.windowsPartA && !options.windowsPartAReject && !options.windowsPartAUnderOwnWrapper) {
+  // The fake PID must never be inspected by the host's process table or service manager.
+  const { partAResult, partBResult } = await import("../helpers/windows-stop-caller-fixtures");
+  (await import("../../src/service/windows-service-stop")).setWindowsServiceStopHooksForTests({
+    partA: async () => { calls.service++; return partAResult("absent"); },
+    partB: async () => { calls.partB++; return partBResult("freed"); },
+  });
+}
 if (options.windowsPartA || options.windowsPartAReject) {
   // The stop wiring acts for win32 while the host stays untouched: Part A and Part B answer here.
   (await import("../../src/cli/stop-windows-checked")).resetOcxWindowsStopForTests("win32");
