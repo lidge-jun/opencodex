@@ -8,11 +8,11 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 44.
+Declared capabilities: 48.
 
 ### `ocx link probe`
 
-Usage: `ocx link probe <alias> [--json]`
+Usage: `ocx link probe <alias> [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--json]`
 
 Probe an SSH host fingerprint and OpenCodex version without trusting it.
 
@@ -24,13 +24,17 @@ State-changing: yes. JSON mode: `payload`.
 
 | Flag | Value | Meaning |
 |---|---|---|
+| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. |
+| `--ssh-user` | string | SSH user of the explicit route: a letter or _ then up to 31 letters, digits, ., _ or -. |
+| `--ssh-port` | number | SSH port of the explicit route, 1 to 65535. |
+| `--exclusive` | boolean | The link keeps exactly its alias as its one route and refuses route edits. |
 | `--json` | boolean | Emit alias, fingerprint, key type and version as JSON. |
 
 - Requires loopback admin authority on the Home. Stores only a temporary pending offer; does not persist host trust or issue a link key.
 
 ### `ocx link add`
 
-Usage: `ocx link add <alias> [--expect-fingerprint SHA256:…] [--json]`
+Usage: `ocx link add <alias> [--expect-fingerprint SHA256:…] [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--json]`
 
 Connect an SSH Child to this Home after confirming its fingerprint.
 
@@ -45,6 +49,10 @@ State-changing: yes. JSON mode: `payload`.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--expect-fingerprint` | string | Exact SHA256 host fingerprint; required without an interactive TTY. |
+| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. |
+| `--ssh-user` | string | SSH user of the explicit route: a letter or _ then up to 31 letters, digits, ., _ or -. |
+| `--ssh-port` | number | SSH port of the explicit route, 1 to 65535. |
+| `--exclusive` | boolean | The link keeps exactly its alias as its one route and refuses route edits. |
 | `--json` | boolean | Emit the verified link result as JSON. |
 
 - Requires loopback admin authority on the Home. Without a fingerprint, requires a TTY and explicit yes after showing the offered fingerprint. Never prints the link key.
@@ -873,6 +881,87 @@ State-changing: yes. JSON mode: `payload`.
 
 - Without flags it reads the policy; with flags it changes only those knobs. Stored in <configDir>/link/child-policy.json on the Home, never in config.json. An invalid file turns automatic catalog fan-out and updates off; saving merges onto that, so pass --catalog-fanout auto and an --updates mode to turn them back on.
 - --updates stores the update mode only; this release starts no automatic update (notify and auto-when-idle take effect when the automatic update sweep ships). Catalog fan-out syncs Home-initiated Children 60 s after a Home catalog change; it restarts Codex on a Child only with app-server-when-idle, and only while that Child is idle. A Home without links runs none of it.
+
+### `ocx link routes`
+
+Usage: `ocx link routes --link-id <id> [--json]`
+
+List the SSH routes a Home-initiated link may use, in the order the Home tries them.
+
+State-changing: no. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/link/{id}/routes` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--link-id` | string | Home-initiated link id. |
+| `--json` | boolean | Emit {linkId, pin, routes} as JSON. |
+
+- Requires loopback admin authority on the Home, like ocx link reconnect; the local control socket does not serve it. The pin is the link's own alias: its host key is the one every route must present, and it is always in the list. A link with one route lists its alias only. Read ocx link status for the route in use and since when.
+
+### `ocx link routes add`
+
+Usage: `ocx link routes add --link-id <id> --route <alias> [--position <n>] [--json]`
+
+Add an SSH route to a Home-initiated link after proving the link's pinned host key over it.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/link/{id}/routes` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--link-id` | string | Home-initiated link id. |
+| `--route` | string | SSH host alias or destination of the new route. |
+| `--position` | number | Index in the list; by default just before the alias, so direct routes come first and the alias stays last. |
+| `--json` | boolean | Emit {linkId, pin, routes} as JSON. |
+
+- The Home first checks that its link known_hosts file trusts only the link's recorded key for the alias (every entry for it, in any case or hashed by an older release, carries that key), then connects over the new route with strict checking against that one key and stores the route only if the same machine answers. Refusals: route_unproven with a cause (hostkey, auth, forward, transient), pin_mismatch, trust_file_unexpected, link_changed, pin_changed, route_exists, route_limit (8 routes), link_operation_in_progress (removal or a Child job holds the link). Exit 5 on a refusal, 4 for an unknown link, 1 when the routes were stored but the running proxy did not apply them (routes_stored_reload_failed; ocx link routes --link-id <id> reads what was stored).
+- Adding a route does not move a running tunnel; the Home tries the list in order from the next connection on (ocx link reconnect starts one now). Requires loopback admin authority on the Home.
+
+### `ocx link routes remove`
+
+Usage: `ocx link routes remove --link-id <id> --route <alias> [--json]`
+
+Remove an SSH route from a Home-initiated link.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/link/{id}/routes` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--link-id` | string | Home-initiated link id. |
+| `--route` | string | Route to remove. |
+| `--json` | boolean | Emit {linkId, pin, routes} as JSON. |
+
+- The alias is the link's pin and cannot be removed (route_is_pin). Removing the route the tunnel uses restarts the tunnel on the remaining list; removing the last extra route returns the link to one route. Exit 4 for an unknown link or route (link_not_found, route_not_found), 5 on a refusal (route_is_pin, link_operation_in_progress), 1 when the routes were stored but the running proxy did not apply them (routes_stored_reload_failed). Requires loopback admin authority on the Home.
+
+### `ocx link routes order`
+
+Usage: `ocx link routes order --link-id <id> --routes <alias,alias,...> [--json]`
+
+Reorder a Home-initiated link's SSH routes.
+
+State-changing: yes. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| POST | `/api/link/{id}/routes` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--link-id` | string | Home-initiated link id. |
+| `--routes` | string | The current routes, comma separated, in the new order. |
+| `--json` | boolean | Emit {linkId, pin, routes} as JSON. |
+
+- The list must name exactly the current routes (route_order_mismatch otherwise), so no route enters unproven. A reorder does not move a running tunnel. Requires loopback admin authority on the Home.
 
 ### `ocx link activity clear`
 

@@ -6,6 +6,7 @@ import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { hardenSecretDir } from "../lib/windows-secret-acl";
 import { isLinkPort } from "./ports";
 import { assertSshAlias } from "./ssh-argv";
+import { parseExplicitRoute, type ExplicitRoute } from "./explicit-route";
 
 /**
  * Persisted machine links. The file names hosts, ports, host-key fingerprints and data-key ids.
@@ -30,6 +31,22 @@ export interface LinkRecord {
   createdAt: string;
   remotePlatform?: "posix" | "windows";
   childKind?: LinkChildKind;
+  /**
+   * Ordered SSH routes to the same machine, direct routes first and the relay alias last.
+   * Absent means exactly [alias]; a list always contains alias, which stays the pinned host-key
+   * name (HostKeyAlias) and the destination of every exec operation. Hub-initiated links only.
+   */
+  routes?: string[];
+  /**
+   * How ssh reaches alias, passed on the command line for every command and tunnel of this link, so
+   * ssh_config cannot change it (src/link/explicit-route.ts). Fixed at enrollment; requires exclusive.
+   */
+  explicitRoute?: ExplicitRoute;
+  /**
+   * The link has exactly one route, its alias: no route list, and every route edit is refused.
+   * Hub-initiated links only; absent means today's editable route list.
+   */
+  exclusive?: true;
 }
 
 export interface LinkStore {
@@ -54,7 +71,10 @@ export function newLinkId(): string {
   return `lnk_${randomBytes(8).toString("hex")}`;
 }
 
-const RECORD_KEYS = new Set(["id", "alias", "direction", "hostKeyFingerprint", "tunnelPort", "apiKeyId", "createdAt", "remotePlatform", "childKind"]);
+/** Most routes one link may list, the alias included. */
+export const MAX_LINK_ROUTES = 8;
+
+const RECORD_KEYS = new Set(["id", "alias", "direction", "hostKeyFingerprint", "tunnelPort", "apiKeyId", "createdAt", "remotePlatform", "childKind", "routes", "explicitRoute", "exclusive"]);
 const STORE_KEYS = new Set(["version", "listenerPort", "links"]);
 const API_KEY_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,255}$/;
 const FINGERPRINT = /^[A-Z0-9]+:[A-Za-z0-9+/=]{16,128}$/;
@@ -68,6 +88,28 @@ function assertOnlyKeys(raw: Record<string, unknown>, allowed: Set<string>, wher
 
 const isListenerPort = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 65535;
+
+/** The routes the supervisor tries, in order. A one-route link is its alias. */
+export function effectiveLinkRoutes(record: Pick<LinkRecord, "alias" | "routes">): string[] {
+  return record.routes ? [...record.routes] : [record.alias];
+}
+
+/**
+ * A valid route list, normalized: exactly [alias] becomes undefined so a one-route link keeps the
+ * record an older Home reads. Null when the list is invalid.
+ */
+function parseRoutes(value: unknown, alias: string, direction: LinkDirection): string[] | undefined | null {
+  if (value === undefined) return undefined;
+  if (direction !== "hub-initiated" || !Array.isArray(value) || value.length < 1 || value.length > MAX_LINK_ROUTES) return null;
+  const seen = new Set<string>();
+  for (const route of value) {
+    if (typeof route !== "string" || seen.has(route)) return null;
+    try { assertSshAlias(route); } catch { return null; }
+    seen.add(route);
+  }
+  if (!seen.has(alias)) return null;
+  return value.length === 1 ? undefined : [...value as string[]];
+}
 
 function parseRecord(value: unknown, index: number): LinkRecord {
   const fail = (field: string): never => { throw new LinkStoreError(`links[${index}].${field} is invalid`); };
@@ -86,6 +128,14 @@ function parseRecord(value: unknown, index: number): LinkRecord {
   if (!isLinkPort(raw.tunnelPort)) fail("tunnelPort");
   if (typeof raw.apiKeyId !== "string" || !API_KEY_ID.test(raw.apiKeyId)) fail("apiKeyId");
   if (typeof raw.createdAt !== "string" || Number.isNaN(Date.parse(raw.createdAt))) fail("createdAt");
+  const routes = parseRoutes(raw.routes, raw.alias as string, raw.direction as LinkDirection);
+  if (routes === null) fail("routes");
+  // An exclusive link has one route, its alias; an explicit route is how that one route is reached.
+  if (raw.exclusive !== undefined && (raw.exclusive !== true || raw.direction !== "hub-initiated")) fail("exclusive");
+  if (raw.exclusive === true && raw.routes !== undefined) fail("routes");
+  const explicitRoute = raw.explicitRoute === undefined ? undefined : parseExplicitRoute(raw.explicitRoute);
+  if (explicitRoute === null) fail("explicitRoute");
+  if (explicitRoute && raw.exclusive !== true) fail("exclusive");
   return {
     id: raw.id as string,
     alias: raw.alias as string,
@@ -96,6 +146,9 @@ function parseRecord(value: unknown, index: number): LinkRecord {
     createdAt: raw.createdAt as string,
     ...(raw.remotePlatform === undefined ? {} : { remotePlatform: raw.remotePlatform as "posix" | "windows" }),
     ...(raw.childKind === undefined ? {} : { childKind: raw.childKind as LinkChildKind }),
+    ...(routes ? { routes } : {}),
+    ...(explicitRoute ? { explicitRoute } : {}),
+    ...(raw.exclusive === true ? { exclusive: true as const } : {}),
   };
 }
 

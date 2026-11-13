@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { linkKnownHostsPath, linkStorePath } from "../../link/paths";
 import { clearCompensationFailed, compensationPath, markCompensationFailed } from "../../link/compensation";
 import { readLinkStore, writeLinkStore, type LinkStore } from "../../link/store";
+import { withoutAliasLines } from "../../link/route-trust";
 import { boundHint, createSshRunner, type SshRunner } from "../../link/ssh-runner";
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import type { ManagementContext } from "./context";
@@ -19,6 +20,9 @@ export interface PendingLinkHost {
   remotePlatform?: "posix" | "windows";
   runtimeKind?: "full" | "ephemeral" | "missing";
   targetTriple?: import("../../link/child-binary-source").ChildTargetTriple | null;
+  /** The explicit route every SSH command of this enrollment uses; the record keeps it (link-route-request.ts). */
+  explicitRoute?: import("../../link/explicit-route").ExplicitRoute;
+  exclusive?: true;
 }
 
 export interface ConfirmedLinkHost extends PendingLinkHost {
@@ -138,11 +142,29 @@ export function knownHostsFile(ctx: ManagementContext): string {
 
 export function putKnownHost(path: string, alias: string, line: string): string {
   const before = (() => { try { return readFileSync(path, "utf8"); } catch { return ""; } })();
-  const lines = before.split(/\r?\n/).filter(value => value && !value.startsWith(`${alias} `) && !value.startsWith(`${alias},`));
+  // OpenSSH compares known_hosts names without case, so every spelling of the alias is replaced.
+  const lines = withoutAliasLines(before, alias);
   lines.push(line.trim());
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   atomicWriteFile(path, `${lines.join("\n")}\n`);
   return before;
+}
+
+/**
+ * confirm-host's only write. Inside the config mutation lock, immediately before writing, a
+ * Home-initiated link that owns this alias (ignoring case) with another fingerprint refuses it: a
+ * link's routes trust exactly its record's key, and a confirmation must not replace that key.
+ * False when refused; nothing is written then.
+ */
+export function putConfirmedKnownHost(ctx: ManagementContext, alias: string, line: string, fingerprint: string): boolean {
+  return withConfigMutationLockSync(() => {
+    const wanted = alias.toLowerCase();
+    const conflict = readStoreFor(ctx).links.some(link => link.direction === "hub-initiated"
+      && link.alias.toLowerCase() === wanted && link.hostKeyFingerprint !== fingerprint);
+    if (conflict) return false;
+    putKnownHost(knownHostsFile(ctx), alias, line);
+    return true;
+  });
 }
 
 export function issueKey(ctx: ManagementContext, name: string): IssuedApiKey {
@@ -175,19 +197,42 @@ export function compensationFailure(ctx: ManagementContext, state: LinkRouteStat
   return fail("compensation_failed", "The link compensation could not be completed.", 500);
 }
 
-export async function compensateNewLink(ctx: ManagementContext, state: LinkRouteState, record: LinkStore["links"][number]): Promise<Response | null> {
+/** A link that was never stored, or not restored, whose issued key could not be revoked. */
+export function keyCleanupFailed(): Response {
+  return fail("key_cleanup_failed", "The link was not created, but its issued key could not be revoked; revoke the leftover link key under API keys.", 500);
+}
+
+/**
+ * Undo a new link. When its key will not revoke, the record is kept (stored again if absent) so the
+ * leftover key stays attached to a visible link. `stillValid` guards that re-insert: it runs inside
+ * the same lock as the write, and a record that no longer passes it (its alias or pin changed while
+ * this waited) is never stored; the key is reported instead (`key_cleanup_failed`).
+ */
+export async function compensateNewLink(ctx: ManagementContext, state: LinkRouteState, record: LinkStore["links"][number], stillValid?: (current: LinkStore) => boolean): Promise<Response | null> {
   const revoked = revokeKeyIdempotent(ctx, record.apiKeyId);
   if (!revoked) {
     try { await state.supervisor.stopLink(record.id); } catch { /* retain the record and failure marker */ }
+    let rejected = false, uncertain = false;
     try {
       withConfigMutationLockSync(() => {
         const current = readStoreFor(ctx);
         if (!current.links.some(link => link.id === record.id)) {
+          if (stillValid && !stillValid(current)) { rejected = true; return; }
           writeStoreFor(ctx, { ...current, links: [...current.links, record] });
         }
       });
     } catch {
-      // The in-memory marker still makes the residual visible when persistence is unavailable.
+      // Whether the link is stored is now unknown. The in-memory marker shows it if it is; the
+      // response says the key may be left over either way.
+      uncertain = true;
+    }
+    if (rejected) {
+      console.warn("[link] new link no longer valid after a failed store write; its issued key could not be revoked");
+      return keyCleanupFailed();
+    }
+    if (uncertain) {
+      compensationFailure(ctx, state, record, "revoke");
+      return fail("link_cleanup_uncertain", "The link could not be undone: whether it is stored is unknown and its issued key could not be revoked. Check the link status, remove the link if it is listed, and revoke the leftover link key under API keys if it remains.", 500);
     }
     return compensationFailure(ctx, state, record, "revoke");
   }
