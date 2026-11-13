@@ -24,7 +24,7 @@ State-changing: yes. JSON mode: `payload`.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. |
+| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. The link then reads no ssh_config (-F none): the Home offers its SSH agent's keys or a default ~/.ssh/id_* key. |
 | `--ssh-user` | string | SSH user of the explicit route: a letter or _ then up to 31 letters, digits, ., _ or -. |
 | `--ssh-port` | number | SSH port of the explicit route, 1 to 65535. |
 | `--exclusive` | boolean | The link keeps exactly its alias as its one route and refuses route edits. |
@@ -49,7 +49,7 @@ State-changing: yes. JSON mode: `payload`.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--expect-fingerprint` | string | Exact SHA256 host fingerprint; required without an interactive TTY. |
-| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. |
+| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. The link then reads no ssh_config (-F none): the Home offers its SSH agent's keys or a default ~/.ssh/id_* key. |
 | `--ssh-user` | string | SSH user of the explicit route: a letter or _ then up to 31 letters, digits, ., _ or -. |
 | `--ssh-port` | number | SSH port of the explicit route, 1 to 65535. |
 | `--exclusive` | boolean | The link keeps exactly its alias as its one route and refuses route edits. |
