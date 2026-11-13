@@ -283,9 +283,12 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
   // tunnel as it was and nothing has been touched.
   if (!intend(cleanup ? "remote_cleanup" : "key_revoked")) return journalFailed();
   const release = state.supervisor.holdLink?.(id);
+  // Set when this revoke restarts the tunnel itself after a cleanup that never ran; every other way out leaves it down.
+  let restarted = false;
   try {
     await state.supervisor.stopLink(id);
     const restartTunnel = async (): Promise<void> => {
+      restarted = true;
       release?.();
       try {
         await state.supervisor.ensureStarted();
@@ -351,7 +354,12 @@ async function removeReserved(ctx: ManagementContext, state: LinkRouteState, id:
     await state.supervisor.reload();
     if (next.links.length === 0) await state.listener.close();
     return Response.json({ linkId: id });
-  } finally { release?.(); }
+  } finally {
+    // The hold goes before finish writes the outcome. A revoke that leaves the tunnel down drops its live mark first, so a
+    // reload in between already finds its open entry suspended (revokeSuspendsLink); this is synchronous, nothing interleaves.
+    if (!restarted) journal.release();
+    release?.();
+  }
 }
 
 export async function handleLinkRoutes(ctx: ManagementContext, suppliedState?: LinkRouteState): Promise<Response | null> {

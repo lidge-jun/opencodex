@@ -46,6 +46,8 @@ function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (
   let restarts = 0;
   // What the supervisor's spawn check sees when the revoke restarts the tunnel itself.
   const suspendedAtRestart: boolean[] = [];
+  // What a reload landing right after the revoke releases its supervisor hold would see.
+  const suspendedAtHoldRelease: boolean[] = [];
   const config: OcxConfig = { port: 10100, hostname: "127.0.0.1", runtimeRole: "standalone", defaultProvider: "mock", providers: {},
     apiKeys: [{ id: "link-key", name: "link:" + ALIAS, key: "k", createdAt: "2026-11-13T00:00:00Z" }] };
   const journalPath = join(root, "operations.json");
@@ -56,7 +58,8 @@ function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (
     pendingHosts: new Map(), confirmedHosts: new Map(), operations: new Set(),
     listener: { ensureStarted: async () => {}, status: () => ({ state: "listening", port: 18181, reason: null }), close: async () => {}, onAuthenticatedCatalog: () => () => {},
       closeLinkSockets: id => { closedSockets.push(id); return 0; } },
-    supervisor: { start() {}, ensureStarted: async () => { restarts += 1; suspendedAtRestart.push(linkSuspendedByRevoke(journalPathOf(), LINK)); }, reload: async () => {}, stopLink: async id => { stops.push(id); }, reconnect: async () => true, status: () => [], stop: async () => {} },
+    supervisor: { start() {}, ensureStarted: async () => { restarts += 1; suspendedAtRestart.push(linkSuspendedByRevoke(journalPathOf(), LINK)); }, reload: async () => {}, stopLink: async id => { stops.push(id); }, reconnect: async () => true, status: () => [], stop: async () => {},
+      holdLink: () => { let released = false; return () => { if (!released) { released = true; suspendedAtHoldRelease.push(linkSuspendedByRevoke(journalPathOf(), LINK)); } }; } },
   };
   const runner: SshRunner = {
     async run(argv) {
@@ -87,7 +90,7 @@ function harness(options: { purgeReport?: string; lockWaitMs?: number; sleep?: (
     const response = await handleLinkRoutes(context, state);
     return { status: response!.status, body: await response!.json() as Record<string, unknown> };
   }
-  return { revoke, state, ssh, config, journalPath, stops, closedSockets, suspendedAtRestart, setJournalPath: (next: () => string) => { journalPathOf = next; }, get restarts() { return restarts; }, get store() { return store; }, set store(value: LinkStore) { store = value; }, journal: () => readOperationsJournal(journalPath) };
+  return { revoke, state, ssh, config, journalPath, stops, closedSockets, suspendedAtRestart, suspendedAtHoldRelease, setJournalPath: (next: () => string) => { journalPathOf = next; }, get restarts() { return restarts; }, get store() { return store; }, set store(value: LinkStore) { store = value; }, journal: () => readOperationsJournal(journalPath) };
 }
 
 const code = (answer: { body: Record<string, unknown> }) => (answer.body.error as { code?: string } | undefined)?.code;
@@ -113,6 +116,8 @@ test("a purge without the Child's report keeps the link; the Child may have chan
   expect(h.journal().operations[0]!.receipt).toBeUndefined();
   expect(h.restarts).toBe(0);
   expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(true);
+  // The hold goes before the outcome is written: a reload in that window must already find the link suspended.
+  expect(h.suspendedAtHoldRelease).toEqual([true]);
 });
 
 test("a journalled purge refused before it ran (a full install) changed nothing: failed_clean, and the tunnel restarts unsuspended", async () => {
@@ -122,6 +127,7 @@ test("a journalled purge refused before it ran (a full install) changed nothing:
   expect({ status: revoked.status, code: code(revoked), outcome: revoked.body.outcome }).toEqual({ status: 409, code: "purge_unsupported", outcome: "failed_clean" });
   expect(h.suspendedAtRestart).toEqual([false]);
   expect(linkSuspendedByRevoke(h.journalPath, LINK)).toBe(false);
+  expect(h.suspendedAtHoldRelease).toEqual([false]);
 });
 
 test("a plain purge without the Child's report restarts the tunnel as before: no journal, nothing suspended", async () => {
