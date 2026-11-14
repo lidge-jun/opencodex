@@ -51,6 +51,7 @@ export default function PickerPinnedRoster({ apiBase, onSaved }: { apiBase: stri
       {state.showError && <Notice tone="err">{t("sub.loadFail")}</Notice>}
       <Frame
         className="picker-pinned-section"
+        titleAs="h4"
         headClassName="swi-featured-head"
         title={<span className="swi-featured-title">{t("sub.featured")}</span>}
         meta={<>
@@ -95,6 +96,7 @@ export default function PickerPinnedRoster({ apiBase, onSaved }: { apiBase: stri
 
       <Frame
         className="picker-pinned-section"
+        titleAs="h4"
         title={t("sub.workspace.allModels")}
         meta={<CountPill>{availableFiltered.length}</CountPill>}
         lede={full ? t("sub.workspace.featuredFull") : t("subagentsV2.modelsLede", { max: FEATURED_MAX })}
@@ -112,17 +114,18 @@ export default function PickerPinnedRoster({ apiBase, onSaved }: { apiBase: stri
           </label>
         }
       >
-        <FrameBody as="div" role="list" className="max-h-[min(30rem,60vh)] overflow-y-auto">
+        <FrameBody className="max-h-[min(30rem,60vh)] overflow-y-auto">
           {availableFiltered.length === 0 ? (
-            <div role="listitem" className="px-4 py-6 text-center text-[13px] text-fg-muted">{t("sub.noModels")}</div>
+            <p className="m-0 px-4 py-6 text-center text-[13px] text-fg-muted">{t("sub.noModels")}</p>
           ) : (
-            <FamilyGroupList items={availableFiltered} slugOf={m => m} scope="picker-pinned" renderItem={m => {
+            <FamilyGroupList items={availableFiltered} slugOf={m => m} scope="picker-pinned"
+              listClassName="m-0 flex min-w-0 list-none flex-col divide-y divide-line p-0" renderItem={m => {
               const isFeatured = chosenSet.has(m);
               const priority = isFeatured ? chosen.indexOf(m) + 1 : null;
               // A pinned row can always be removed; only adding is blocked when full.
               const blocked = !isFeatured && full;
               return (
-                <div role="listitem" key={m} className="flex min-h-11 min-w-0 items-center gap-3 py-1.5 pr-2 pl-3.5">
+                <li key={m} className="flex min-h-11 min-w-0 items-center gap-3 py-1.5 pr-2 pl-3.5">
                   <IconBot className="size-4 shrink-0 text-fg-subtle" aria-hidden="true" />
                   <span className={cn("min-w-0 flex-1 truncate font-mono text-[13px]", isFeatured ? "text-fg" : "text-fg-muted")}>
                     {modelLabel(m)}
@@ -155,7 +158,7 @@ export default function PickerPinnedRoster({ apiBase, onSaved }: { apiBase: stri
                     {isFeatured ? <IconCheck aria-hidden="true" /> : <IconPlus aria-hidden="true" />}
                     {isFeatured ? t("subagentsV2.added") : t("subagentsV2.add")}
                   </button>
-                </div>
+                </li>
               );
             }} />
           )}

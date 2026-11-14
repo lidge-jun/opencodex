@@ -47,10 +47,12 @@ interface FrameProps {
   className?: string;
   headClassName?: string;
   busy?: boolean;
+  /** Heading level of the title; `h4` when the panel sits under another `h3` section. */
+  titleAs?: "h3" | "h4";
 }
 
 /** Panel with a head; children are the inset body and an optional foot. */
-export function Frame({ id, title, lede, meta, actions, below, children, className, headClassName, busy }: FrameProps) {
+export function Frame({ id, title, lede, meta, actions, below, children, className, headClassName, busy, titleAs: Title = "h3" }: FrameProps) {
   const titleId = useId();
   return (
     <section
@@ -62,7 +64,7 @@ export function Frame({ id, title, lede, meta, actions, below, children, classNa
       <div className={cn("flex min-w-0 flex-wrap items-start gap-x-3 gap-y-2 px-4 pt-3.5 pb-3", headClassName)}>
         <div className="flex min-w-[min(100%,15rem)] flex-1 flex-col gap-0.5">
           <div className="flex min-w-0 items-center gap-2">
-            <h3 id={titleId} className="m-0 truncate text-[14px] leading-5 font-semibold text-fg">{title}</h3>
+            <Title id={titleId} className="m-0 truncate text-[14px] leading-5 font-semibold text-fg">{title}</Title>
             {meta}
           </div>
           {lede && <p className="m-0 text-[13px] leading-5 text-fg-muted">{lede}</p>}
@@ -76,10 +78,9 @@ export function Frame({ id, title, lede, meta, actions, below, children, classNa
 }
 
 /** The inset body: a raised sheet one pixel in from the panel, rows ruled by hairlines. */
-export function FrameBody({ children, className, as: Tag = "div", role }: { children: ReactNode; className?: string; as?: "div" | "ol" | "ul"; role?: "list" }) {
+export function FrameBody({ children, className, as: Tag = "div" }: { children: ReactNode; className?: string; as?: "div" | "ol" | "ul" }) {
   return (
     <Tag
-      role={role}
       className={cn(
         "m-1 mt-0 flex min-w-0 list-none flex-col divide-y divide-line overflow-hidden rounded-[8px] bg-raised p-0 shadow-sm ring-1 ring-line",
         "[&:has(+*)]:mb-0",

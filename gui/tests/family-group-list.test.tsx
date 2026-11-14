@@ -75,3 +75,15 @@ test("a toggle keeps keys a sibling list stored and survives unreadable storage"
   expect([...toggleCollapsedFamily("x", storage)]).toEqual(["y"]);
   expect([...readCollapsedFamilies({ getItem: () => "{not json", setItem: () => {} })]).toEqual([]);
 });
+
+test("with a list class each family's rows form their own list, outside the header", async () => {
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(<LanguageProvider><FamilyGroupList items={["a/gpt-6", "a/gemini-3"]} slugOf={slug => slug} scope="lists"
+      listClassName="rows" renderItem={slug => <li key={slug} className="row-probe">{slug}</li>} /></LanguageProvider>);
+  });
+  const lists = [...host.querySelectorAll("ul.rows")];
+  expect(lists.map(list => list.textContent)).toEqual(["a/gpt-6", "a/gemini-3"]);
+  expect(heads().every(head => head.closest("ul") === null)).toBe(true);
+});
