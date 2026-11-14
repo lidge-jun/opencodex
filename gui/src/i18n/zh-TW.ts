@@ -2,6 +2,7 @@ import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
+import { gatewayClientsCopy } from "./gateway-clients-copy";
 import { modelsV2Copy } from "./v2-pages/models-copy";
 import { accountsV2Copy } from "./v2-pages/accounts-copy";
 import { subagentsV2Copy } from "./v2-pages/subagents-copy";
@@ -134,6 +135,7 @@ export const zhTW: Record<TKey, string> = {
   ...shellV2Copy("zh-TW"),
   ...codexCliUpdateCopy("zh-TW"),
   ...remoteLinkDiagnosticsCopy("zh-TW"),
+  ...gatewayClientsCopy("zh-TW"),
   ...modelsV2Copy("zh-TW"),
   ...accountsV2Copy("zh-TW"),
   ...subagentsV2Copy("zh-TW"),
