@@ -1,0 +1,102 @@
+/* Imported by its component, so it sits in the `legacy` cascade layer itself:
+   unlayered CSS would outrank design/bridge.css and every Tailwind utility. */
+@layer legacy {
+.aqt {
+  display: grid;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.aqt-policy {
+  margin: 0;
+  font-size: var(--text-caption);
+}
+.aqt-scroll {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+}
+.aqt-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-label);
+}
+.aqt-table th,
+.aqt-table td {
+  padding: var(--space-2);
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+.aqt-table thead th {
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.aqt-table tbody tr:last-child > * {
+  border-bottom: 0;
+}
+.aqt-row--active {
+  background: color-mix(in oklab, var(--green) 6%, transparent);
+}
+.aqt-account {
+  font-weight: 500;
+  white-space: nowrap;
+}
+.aqt-account .pwi-auth-dot {
+  display: inline-block;
+  margin-right: var(--space-2);
+  vertical-align: middle;
+}
+.aqt-scarce {
+  margin-left: var(--space-1);
+  padding: 0 4px;
+  border-radius: 4px;
+  font-size: var(--text-caption);
+  color: var(--amber);
+  border: 1px solid color-mix(in oklab, var(--amber) 40%, transparent);
+}
+.aqt-pool {
+  min-width: 8.5rem;
+}
+.aqt-table .badge {
+  white-space: nowrap;
+}
+.aqt-bar {
+  display: grid;
+  grid-template-columns: 2.4rem minmax(2.5rem, 1fr) 2.4rem;
+  align-items: center;
+  column-gap: var(--space-2);
+}
+.aqt-bar + .aqt-bar {
+  margin-top: 2px;
+}
+.aqt-bar-label,
+.aqt-bar-reset {
+  color: var(--muted);
+  font-size: var(--text-caption);
+  white-space: nowrap;
+}
+.aqt-bar-reset {
+  grid-column: 2 / 4;
+}
+.aqt-bar-reset:empty {
+  display: none;
+}
+.aqt-bar-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.aqt-next {
+  margin-top: var(--space-1);
+}
+.aqt-flag {
+  white-space: nowrap;
+}
+.aqt-flag--ok { color: var(--green); }
+.aqt-flag--warn { color: var(--amber); }
+.aqt-flag--muted { color: var(--muted); }
+.aqt-actions .btn {
+  display: block;
+  white-space: nowrap;
+}
+}
