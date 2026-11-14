@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useT } from "../../i18n/shared";
 import { IconRefresh } from "../../icons";
 
@@ -42,6 +42,9 @@ export default function ProviderModelDiscovery({ apiBase, provider }: { apiBase:
   const t = useT();
   const [recent, setRecent] = useState<ArrivalRow[]>([]);
   const [run, setRun] = useState<RunState>({ kind: "idle" });
+  // Set once a refresh starts: from then on its answer owns the list, and a slower initial read
+  // must not replace it with the roster from before the refresh.
+  const refreshStarted = useRef(false);
 
   useEffect(() => {
     // The parent keys this component by server and provider, so state starts fresh per provider.
@@ -49,13 +52,14 @@ export default function ProviderModelDiscovery({ apiBase, provider }: { apiBase:
     fetch(`${apiBase}/api/model-discovery`)
       .then(response => response.ok ? response.json() : null)
       .then((json: { recentArrivals?: Record<string, unknown> } | null) => {
-        if (!cancelled) setRecent(arrivalRows(json?.recentArrivals?.[provider]));
+        if (!cancelled && !refreshStarted.current) setRecent(arrivalRows(json?.recentArrivals?.[provider]));
       })
       .catch(() => { /* The list is informational; the button still works. */ });
     return () => { cancelled = true; };
   }, [apiBase, provider]);
 
   const discover = async () => {
+    refreshStarted.current = true;
     setRun({ kind: "running" });
     try {
       const response = await fetch(`${apiBase}/api/model-discovery/refresh`, {
