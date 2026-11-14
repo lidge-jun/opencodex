@@ -3,6 +3,8 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { antigravityCliUserAgent } from "../../src/adapters/client-fingerprint";
+import { handleModelsRuntimeCommand } from "../../src/cli/models-runtime";
+import { clearModelCache } from "../../src/codex/model-cache";
 import { PROXY_ENV_KEYS } from "../../src/lib/proxy-env";
 import { setAntigravityAccountQuotaTransportForTests } from "../../src/providers/quota/antigravity";
 import {
@@ -136,6 +138,29 @@ describe("probeAntigravityAccounts", () => {
     expect(byId.okacct1!.maskedLabel).not.toBe("okacct1@example.com");
   });
 
+  test("a pause made while earlier probes are in flight suppresses the queued account's request", async () => {
+    const ids = ["acct1", "acct2", "acct3", "acct4", "acct5"];
+    writeStore(ids.map(id => account(id, `tok-${id}`)), "acct1");
+    const held: Array<() => void> = [];
+    const seen: string[] = [];
+    setAntigravityAccountQuotaTransportForTests({
+      resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false }),
+      pinnedPost: async (_url, _pinned, _body, _signal, requestOptions) => {
+        seen.push(new Headers(requestOptions?.headers).get("authorization") ?? "");
+        await new Promise<void>(resolve => held.push(resolve));
+        return new Response(summaryBody, { status: 200 });
+      },
+    });
+    const pending = probeAntigravityAccounts();
+    while (held.length < 4) await new Promise(resolve => setTimeout(resolve, 1));
+    writeStore(ids.map(id => id === "acct5" ? { ...account(id, `tok-${id}`), paused: true } : account(id, `tok-${id}`)), "acct1");
+    for (const release of held.splice(0)) release();
+    const results = await pending;
+    expect(seen).not.toContain("Bearer tok-acct5");
+    expect(seen).toHaveLength(4);
+    expect(results?.find(row => row.accountId === "acct5")).toMatchObject({ status: "paused", paused: true, httpStatus: null });
+  });
+
   test("a single account id probes only that account; an unknown id is null", async () => {
     writeStore([account("okacct1", "tok-ok"), account("other01", "tok-other")]);
     const seen = installUpstream({ "tok-ok": () => new Response(summaryBody, { status: 200 }) });
@@ -153,10 +178,12 @@ describe("management routes", () => {
       defaultProvider: "vendor",
       providers: {
         vendor: { adapter: "openai-chat", baseUrl: "https://vendor.example/v1", liveModels: false, models: ["known"] },
-        live: { adapter: "openai-chat", baseUrl: "https://live.example/v1", models: ["known"] },
+        // A refresh whose convergence gathered nothing fetches the roster itself; never reach the network.
+        live: { adapter: "openai-chat", baseUrl: "https://live.example/v1", models: ["known"], fetch: liveRoster },
       },
-    };
+    } as OcxConfig;
   }
+  const liveRoster = (async () => Response.json({ object: "list", data: [{ id: "known", object: "model" }] })) as unknown as typeof fetch;
 
   async function call(live: OcxConfig, path: string, body: unknown, onConverge?: () => void) {
     const url = new URL(`http://localhost${path}`);
@@ -201,5 +228,58 @@ describe("management routes", () => {
     expect(refreshed.json.ok).toBe(true);
     expect(refreshed.json.newArrivals).toEqual([{ id: "fresh", at: "2026-11-12T00:00:00Z", state: "auto-disabled" }]);
     expect((refreshed.json.recentArrivals as unknown[]).length).toBe(2);
+  });
+
+  test("refresh reports arrival state exactly as GET /api/model-discovery does", async () => {
+    const live = config();
+    live.providers.live!.selectedModels = ["known"];
+    live.modelDiscovery = { recentArrivals: { live: [
+      { id: "picked-out", at: "2026-11-10T00:00:00Z" },
+      { id: "hand-off", at: "2026-11-11T00:00:00Z", disabledByPolicy: false },
+    ] } };
+    live.disabledModels = ["live/hand-off"];
+    const refreshed = await call(live, "/api/model-discovery/refresh", { provider: "live" });
+    const url = new URL("http://localhost/api/model-discovery");
+    const read = await handleManagementAPI(new Request(url), url, live, { saveConfigPreservingClaudeCode: () => {} });
+    const listed = (await read!.json() as { recentArrivals: Record<string, unknown> }).recentArrivals.live;
+    expect(refreshed.json.recentArrivals).toEqual(listed);
+    expect((listed as Array<{ state: string }>).map(row => row.state)).toEqual(["not-selected", "disabled"]);
+  });
+
+  test("refresh still fetches the provider when catalog convergence skips without gathering", async () => {
+    clearModelCache();
+    const live = config();
+    let fetched = 0;
+    (live.providers.live as { fetch?: typeof fetch }).fetch = (async () => {
+      fetched++;
+      return Response.json({ object: "list", data: [{ id: "known", object: "model" }] });
+    }) as unknown as typeof fetch;
+    const refreshed = await call(live, "/api/model-discovery/refresh", { provider: "live" });
+    expect(fetched).toBeGreaterThan(0);
+    expect(refreshed.json.discovery).toMatchObject({ status: "ok" });
+    expect(refreshed.json.liveModelCount).toBe(1);
+  });
+});
+
+describe("ocx models discover", () => {
+  async function discover(response: unknown, json = false) {
+    const log = console.log;
+    console.log = () => {};
+    try {
+      return await handleModelsRuntimeCommand("discover", ["live", ...(json ? ["--json"] : [])], {
+        baseUrl: "http://127.0.0.1:1",
+        fetchImpl: async () => Response.json(response),
+      });
+    } finally {
+      console.log = log;
+    }
+  }
+
+  test("a failed discovery answered with HTTP 200 exits nonzero, in text and JSON modes", async () => {
+    const failed = { ok: true, provider: "live", discovery: { status: "failed", reason: "http_error", httpStatus: 401 }, liveModelCount: null, newArrivals: [], recentArrivals: [] };
+    expect(await discover(failed)).toBe(1);
+    expect(await discover(failed, true)).toBe(1);
+    expect(await discover({ ...failed, discovery: { status: "ok" }, liveModelCount: 3 })).toBe(0);
+    expect(await discover({ ok: false, provider: "live", applicable: false, reason: "static_catalog" })).toBe(0);
   });
 });
