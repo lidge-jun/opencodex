@@ -148,8 +148,8 @@ V2 在客户端目录状态允许时，可以额外接收基于原有优先级�
 
 ## 仪表盘排序预设
 
-在 **Models** 中选择默认、按模型名 A–Z、按提供商、按家族或使用量快照，再应用顺序。保存当前可用的路由 ID 和 `modelPickerOrderMode`（`alphabetical`、`provider`、`family`、`most-used`）。按家族会让每个模型家族（GPT、Gemini、Claude、Grok、DeepSeek，其后是 Qwen、Kimi、GLM、MiniMax、Llama、Mistral，其他排最后）各自连续排列，家族内再按提供商排序；Codex 与 Claude Code 的选择器是平铺的，所以显示的就是这些连续的家族段。Models 页也会把每个提供商的模型放在可折叠的家族标题下。使用量排序仅在应用时读取一次保留的全部历史；重新打开或模型增减不会重新计算。已有自定义、原生完整顺序会保留，直到明确应用替换。即使没有可用模型，默认也能清除两个字段。
+在 **Models** 中选择默认、按模型名 A–Z、按提供商、按家族或使用量快照，再应用顺序。保存当前可用的路由 ID 和 `modelPickerOrderMode`（`alphabetical`、`provider`、`family`、`most-used`）。按家族会让路由行中的每个模型家族（GPT、Gemini、Claude、Grok、DeepSeek，其后是 Qwen、Kimi、GLM、MiniMax、Llama、Mistral，其他排最后）各自连续排列，家族内再按提供商排序。置顶行和原生行保留各自的优先级区间，因此家族只在路由行之间连续，不会跨越这些区间；Codex 与 Claude Code 的选择器是平铺的，所以路由行显示的就是这些连续的家族段。Models 页也会把每个提供商的模型放在可折叠的家族标题下。使用量排序仅在应用时读取一次保留的全部历史；重新打开或模型增减不会重新计算。已有自定义、原生完整顺序会保留，直到明确应用替换。即使没有可用模型，默认也能清除两个字段。
 
-`GET/PUT /api/subagent-models` 的 `chosen`、`available` 保留禁用或缺失的已存 roster；`pickerAvailable` 只包含可选路由 ID。Models 只发送 `pickerOrder`、`pickerOrderMode`，不发送 `models`。只保存 roster 不影响排序，非法输入或保存失败会保留原状态。
+`GET/PUT /api/subagent-models` 的 `chosen`、`available` 保留禁用或缺失的已存 roster；`pickerAvailable` 只包含可选路由 ID。排序控件只发送 `pickerOrder`、`pickerOrderMode`。Models 页的固定 roster 编辑器每次编辑都会自动保存，并发送 `models`。只保存 roster 不影响排序，非法输入或保存失败会保留原状态。
 
 预设保留选择器置顶、原生优先级区间，应用于 Codex 目录与 Claude 发现列表的路由分组。Claude 原生前缀、明确的 Desktop 配置及 alias 归属不变。OpenCodex 指导排序与 fallback 设置不变，但原生 Codex 工具显示的前五候选及推荐默认模型可能改变。保存不会重启客户端；目录刷新可能尚未完成，旧列表可能需要重新打开客户端。
