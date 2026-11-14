@@ -500,6 +500,7 @@ impl CodexHomeGuard {
             return Ok(());
         }
         self.set_phase(OwnershipPhase::CleanupComplete)?;
+        crate::test_hooks::barrier("release-after-cleanup-complete");
         self.verify_homes()?;
         remove_optional_file(&self.paths.codex_owner_path())?;
         self.owner = None;

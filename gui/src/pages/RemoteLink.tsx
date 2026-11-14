@@ -168,6 +168,8 @@ function residualChildStep(residual: LinkResidual): LinkChildStep {
   const olderFull = { key: "remoteLink.residual.olderFull", cmd: "ocx connect status --json", vars } as const;
   const olderLightweight = { key: "remoteLink.residual.olderLightweight" } as const;
   const fallback = { key: "remoteLink.residual.purgeWindowsFallback", cmd: bound(WINDOWS_FALLBACK_PURGE) } as const;
+  // A purge path that is not found means no planted binary is there, which the shell's bare "not found" does not say (#8696).
+  const purgeNotFound = { key: "remoteLink.residual.purgeNotFound" } as const;
   // The lightweight agent by its managed path for the Child's platform (not necessarily on PATH), then a copy placed by hand.
   const posixDetach = bound("~/.cache/opencodex/bin/ocx-child detach");
   const windowsDetach = bound('"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach');
@@ -177,9 +179,9 @@ function residualChildStep(residual: LinkResidual): LinkChildStep {
   const lightweightMore = residual.platform === "windows" ? [windowsFallbackDetach, placed]
     : residual.platform === "posix" ? [placed] : [{ key: "remoteLink.residual.purgeAnyWindows", cmd: windowsDetach } as const, windowsFallbackDetach, placed];
   switch (residual.step) {
-    case "purge": return { key: "remoteLink.residual.purge", cmd: bound(POSIX_PURGE), more: [boundLine] };
-    case "purgeWindows": return { key: "remoteLink.residual.purgeWindows", cmd: bound(WINDOWS_PURGE), more: [fallback, boundLine] };
-    case "purgeAny": return { key: "remoteLink.residual.purgeAny", cmd: bound(POSIX_PURGE), more: [{ key: "remoteLink.residual.purgeAnyWindows", cmd: bound(WINDOWS_PURGE) }, fallback, boundLine] };
+    case "purge": return { key: "remoteLink.residual.purge", cmd: bound(POSIX_PURGE), more: [boundLine, purgeNotFound] };
+    case "purgeWindows": return { key: "remoteLink.residual.purgeWindows", cmd: bound(WINDOWS_PURGE), more: [fallback, boundLine, purgeNotFound] };
+    case "purgeAny": return { key: "remoteLink.residual.purgeAny", cmd: bound(POSIX_PURGE), more: [{ key: "remoteLink.residual.purgeAnyWindows", cmd: bound(WINDOWS_PURGE) }, fallback, boundLine, purgeNotFound] };
     case "ephemeral": return residual.platform === "windows"
       ? { key: "remoteLink.residual.purgeWindows", cmd: windowsDetach, more: [...lightweightMore, boundLine, olderLightweight] }
       : { key: residual.platform === "posix" ? "remoteLink.residual.ephemeral" : "remoteLink.residual.purgeAny", cmd: posixDetach, more: [...lightweightMore, boundLine, olderLightweight] };

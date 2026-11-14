@@ -18,20 +18,32 @@ const OLDER_LIGHTWEIGHT = "An ocx-child older than that flag refuses it before i
 const olderFull = (id: string): string => "An OpenCodex older than that flag refuses it before it acts on the link; then run ocx disconnect and ocx restart only if ocx connect status --json shows " + id
   + ", right after that check (an enrollment that lands between the two commands would be removed), and otherwise leave the Child as it is.";
 
+/**
+ * A purge path that is not found means no planted binary is there: an uncertain journalled plant can stop before it installs
+ * one, and a purge removes one only after every recovery record is gone. Either way no ocx-child of this attempt holds the
+ * Child, which the bare "not found" of the shell does not say.
+ */
+const PLANT_NOT_FOUND = " If the command is not found there, the binary is not installed (the plant stopped before installing it, or it was purged since), so no ocx-child of this attempt holds the Child: nothing is left to undo on it, and you can retry.";
+
 const bound = (id: string): string => "it acts only when the Child's records name this attempt's link (" + id + ") or nothing at all, and leaves a Child that another link, a hub or another Home owns.";
 
 /**
  * The lightweight agent's detach by the paths it can have: the managed copy (not necessarily on PATH) for the Child's platform,
- * both Windows locations in Command Prompt, and a copy placed by hand through the path command -v (where.exe) prints.
+ * both Windows locations in Command Prompt, and a copy placed by hand: first in ~/.local/bin (%USERPROFILE%\.local\bin on
+ * Windows), the place the Home's discovery tries before any other and which need not be on PATH, then through the path
+ * command -v (where.exe) prints.
  */
 function lightweightDetach(id: string, platform: "posix" | "windows" | undefined): { first: string; rest: string; prompt: boolean } {
   const posix = "~/.cache/opencodex/bin/ocx-child detach --expect-link " + id;
   const windows = "\"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe\" detach --expect-link " + id;
   const windowsFallback = "\"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe\" detach --expect-link " + id;
-  const placed = (lookup: string) => "for a copy placed by hand, the same detach --expect-link " + id + " through the path " + lookup + " prints";
-  if (platform === "windows") return { first: windows, rest: " (or " + windowsFallback + " where LOCALAPPDATA is not set; " + placed("where.exe ocx-child") + ")", prompt: true };
-  if (platform === "posix") return { first: posix, rest: " (" + placed("command -v ocx-child") + ")", prompt: false };
-  return { first: posix, rest: " (on Windows, in Command Prompt, " + windows + ", or " + windowsFallback + " where LOCALAPPDATA is not set; " + placed("command -v ocx-child, or where.exe ocx-child on Windows,") + ")", prompt: false };
+  const placed = (where: string, lookup: string) => "for a copy placed by hand, the same detach --expect-link " + id + " through " + where
+    + ", which need not be on PATH, or through the path " + lookup + " prints";
+  const posixPlaced = "~/.local/bin/ocx-child";
+  const windowsPlaced = "%USERPROFILE%\\.local\\bin\\ocx-child.exe";
+  if (platform === "windows") return { first: windows, rest: " (or " + windowsFallback + " where LOCALAPPDATA is not set; " + placed(windowsPlaced, "where.exe ocx-child") + ")", prompt: true };
+  if (platform === "posix") return { first: posix, rest: " (" + placed(posixPlaced, "command -v ocx-child") + ")", prompt: false };
+  return { first: posix, rest: " (on Windows, in Command Prompt, " + windows + ", or " + windowsFallback + " where LOCALAPPDATA is not set; " + placed(posixPlaced + " (" + windowsPlaced + " on Windows)", "command -v ocx-child, or where.exe ocx-child on Windows,") + ")", prompt: false };
 }
 
 export function residualRecovery(kind: ResidualChild, linkId: string | undefined, platform?: "posix" | "windows"): string {
@@ -42,9 +54,9 @@ export function residualRecovery(kind: ResidualChild, linkId: string | undefined
     const posix = "~/.cache/opencodex/bin/ocx-child detach --purge --expect-link " + id;
     const windows = "\"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe\" detach --purge --expect-link " + id;
     const windowsFallback = "\"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe\" detach --purge --expect-link " + id;
-    if (platform === "windows") return "In Command Prompt on the Child, run " + windows + " (or " + windowsFallback + " where LOCALAPPDATA is not set) before retrying: " + bound(id);
-    if (platform === "posix") return "Run " + posix + " on the Child before retrying: " + bound(id);
-    return "Run " + posix + " on the Child before retrying (on Windows, in Command Prompt, " + windows + ", or " + windowsFallback + " where LOCALAPPDATA is not set): " + bound(id);
+    if (platform === "windows") return "In Command Prompt on the Child, run " + windows + " (or " + windowsFallback + " where LOCALAPPDATA is not set) before retrying: " + bound(id) + PLANT_NOT_FOUND;
+    if (platform === "posix") return "Run " + posix + " on the Child before retrying: " + bound(id) + PLANT_NOT_FOUND;
+    return "Run " + posix + " on the Child before retrying (on Windows, in Command Prompt, " + windows + ", or " + windowsFallback + " where LOCALAPPDATA is not set): " + bound(id) + PLANT_NOT_FOUND;
   }
   const light = lightweightDetach(id, platform);
   if (kind === "ephemeral") return (light.prompt ? "In Command Prompt on the Child, run " + light.first + " before retrying" : "Run " + light.first + " on the Child before retrying") + light.rest + ": " + bound(id) + " " + OLDER_LIGHTWEIGHT;
