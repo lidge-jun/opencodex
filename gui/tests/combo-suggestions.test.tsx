@@ -169,6 +169,14 @@ describe("buildComboSuggestions", () => {
     const combos = [combo("claude-x", [["anthropic", "claude-x"]])];
     expect(summary({ combos, models: rows, excludedProviders })).toEqual(["extend claude-x: zayu-claude"]);
   });
+
+  test("an existing combo whose own provider is excluded still offers the one eligible provider left", () => {
+    const combos = [combo("claude-x", [["anthropic", "claude-x"]])];
+    const rows = models([["anthropic", "claude-x"], ["zayu-claude", "claude-x"]]);
+    expect(summary({ combos, models: rows, excludedProviders: new Set(["anthropic"]) })).toEqual(["extend claude-x: zayu-claude"]);
+    expect(summary({ combos, models: rows.slice(0, 1) })).toEqual([]);
+    expect(summary({ models: rows, excludedProviders: new Set(["anthropic"]) })).toEqual([]);
+  });
 });
 
 describe("drafts", () => {

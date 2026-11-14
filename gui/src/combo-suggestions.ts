@@ -199,8 +199,9 @@ export function buildComboSuggestions(input: SuggestionInput): ComboSuggestion[]
   const creates: Array<ComboSuggestion & { kind: "create" }> = [];
   const extends_: Array<ComboSuggestion & { kind: "extend" }> = [];
   for (const [name, served] of byModel) {
-    if (served.size < 2) continue;
     const combo = covering.get(name);
+    // An existing combo takes any eligible provider it is missing, even the only one left once
+    // its own members are excluded; a new combo needs two providers to fail over between.
     if (combo) {
       const routed = new Set(combo.targets.map((target) => target.provider));
       const missing = [...served].filter(([provider]) => !routed.has(provider));
@@ -209,6 +210,7 @@ export function buildComboSuggestions(input: SuggestionInput): ComboSuggestion[]
       extends_.push({ kind: "extend", key, model: name, comboId: combo.id, members: orderMembers(missing.map(([p, m]) => member(p, m))) });
       continue;
     }
+    if (served.size < 2) continue;
     const key = suggestionKey("create", name);
     if (input.dismissed?.has(key)) continue;
     const spellings = [...served.values()].map(spelling);
