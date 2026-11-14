@@ -955,7 +955,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--position` | number | Index in the list; by default just before the alias, so direct routes come first and the alias stays last. |
 | `--json` | boolean | Emit {linkId, pin, routes} as JSON. |
 
-- The Home first checks that its link known_hosts file trusts only the link's recorded key for the alias (every entry for it, in any case or hashed by an older release, carries that key), then connects over the new route with strict checking against that one key and stores the route only if the same machine answers. Refusals: route_unproven with a cause (hostkey, auth, forward, transient), pin_mismatch, trust_file_unexpected, link_changed, pin_changed, route_exists, route_limit (8 routes), link_operation_in_progress (removal or a Child job holds the link). Exit 5 on a refusal, 4 for an unknown link, 1 when the routes were stored but the running proxy did not apply them (routes_stored_reload_failed; ocx link routes --link-id <id> reads what was stored).
+- The Home first checks that its link known_hosts file trusts only the link's recorded key for the alias (every entry for it, in any case or hashed by an older release, carries that key), then connects over the new route with strict checking against that one key and stores the route only if the same machine answers. Refusals: route_unproven with a cause (hostkey, auth, forward, transient), pin_mismatch, trust_file_unexpected, link_changed, pin_changed, route_exists, route_limit (8 routes), link_operation_in_progress (removal or a Child job holds the link), link_retirement_pending (an unfinished removal of the link holds it; finish that revoke first). Exit 5 on a refusal, 4 for an unknown link, 1 when the routes were stored but the running proxy did not apply them (routes_stored_reload_failed; ocx link routes --link-id <id> reads what was stored).
 - Adding a route does not move a running tunnel; the Home tries the list in order from the next connection on (ocx link reconnect starts one now). Requires loopback admin authority on the Home.
 
 ### `ocx link routes remove`
@@ -976,7 +976,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--route` | string | Route to remove. |
 | `--json` | boolean | Emit {linkId, pin, routes} as JSON. |
 
-- The alias is the link's pin and cannot be removed (route_is_pin). Removing the route the tunnel uses restarts the tunnel on the remaining list; removing the last extra route returns the link to one route. Exit 4 for an unknown link or route (link_not_found, route_not_found), 5 on a refusal (route_is_pin, link_operation_in_progress), 1 when the routes were stored but the running proxy did not apply them (routes_stored_reload_failed). Requires loopback admin authority on the Home.
+- The alias is the link's pin and cannot be removed (route_is_pin). Removing the route the tunnel uses restarts the tunnel on the remaining list; removing the last extra route returns the link to one route. Exit 4 for an unknown link or route (link_not_found, route_not_found), 5 on a refusal (route_is_pin, link_operation_in_progress, link_retirement_pending: an unfinished removal of the link holds it), 1 when the routes were stored but the running proxy did not apply them (routes_stored_reload_failed). Requires loopback admin authority on the Home.
 
 ### `ocx link routes order`
 
@@ -996,7 +996,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--routes` | string | The current routes, comma separated, in the new order. |
 | `--json` | boolean | Emit {linkId, pin, routes} as JSON. |
 
-- The list must name exactly the current routes (route_order_mismatch otherwise), so no route enters unproven. A reorder does not move a running tunnel. Requires loopback admin authority on the Home.
+- The list must name exactly the current routes (route_order_mismatch otherwise), so no route enters unproven. While an unfinished removal of the link holds it, the reorder is refused (link_retirement_pending); finish that revoke first. A reorder does not move a running tunnel. Requires loopback admin authority on the Home.
 
 ### `ocx link operations`
 

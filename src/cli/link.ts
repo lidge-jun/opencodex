@@ -698,13 +698,14 @@ const NEXT_STEP: Record<string, string> = {
   // A resumed owner can meet the same live write failure again and keep its receipt, so a repeat proves nothing: the same id after
   // the fix, and a new id only through link_retirement_owned's guidance if one is tried.
   operation_journal_failed: "The journal could not record a step: fix what keeps it from being written (disk space, permissions), then repeat the revoke with the same operation id. If it keeps answering operation_journal_failed, a new operation id can be tried; if that answers link_retirement_owned, this id may still own the removal: follow that answer",
-  // A stale retirement receipt (the record was edited after a removal claimed it, for example by ocx link routes, which does not
-  // check for a receipt: #8678) answers link_changed to every revoke, this id's resume included, until the record matches the
-  // receipt's copy again. A claim that met a changed record (no receipt for this id) is journalled, so this id replays it while a
+  // A stale retirement receipt (the record was edited after a removal claimed it) answers link_changed to every revoke, this id's
+  // resume included, until the record matches the receipt's copy again. A current Home refuses a route edit while a receipt is
+  // outstanding (link_retirement_pending, #8678), so only an older Home's ocx link routes, which did not check, or an edit by
+  // hand leaves one stale. A claim that met a changed record (no receipt for this id) is journalled, so this id replays it while a
   // new id reads the record afresh; a commit that met one leaves this id's receipt, so its repeat resumes the removal and meets
   // the same comparison. In one runtime a revoke and a route edit hold the same Child-job reservation, so the code never proves
   // that the link changed while this revoke ran.
-  link_changed: "The link, or the record of its unfinished removal, no longer matches what this removal started from: read ocx link status, then repeat the revoke with the same operation id. If it answers link_changed again, the link may have been edited after its removal began (for example with ocx link routes). A new operation id can remove it only when no unfinished removal of this link remains; while one remains, no revoke finishes it until the link matches that removal's copy again",
+  link_changed: "The link, or the record of its unfinished removal, no longer matches what this removal started from: read ocx link status, then repeat the revoke with the same operation id. If it answers link_changed again, the link was edited after its removal began, by ocx link routes on an older Home that did not refuse route edits during a removal or by hand. A new operation id can remove it only when no unfinished removal of this link remains; while one remains, no revoke finishes it until the link matches that removal's copy again",
 };
 
 /**
