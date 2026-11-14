@@ -16,6 +16,7 @@ import {
 } from "../../src/adapters/claude-cli/usage-admission";
 import { getAdapterDefinition } from "../../src/adapters/registry";
 import { getConfigDir } from "../../src/config/paths";
+import { probeAnthropicUsageQuota } from "../../src/providers/claude-cli-usage";
 import { handleResponses } from "../../src/server/responses";
 import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -135,6 +136,99 @@ describe("Claude usage admission cache", () => {
     const switching = (fresh?: boolean) => fresh ? { key: "account-b", access: "b" } : { key: "account-a", access: "a" };
     const status = await checkClaudeUsageAdmission("claude-sonnet-5-5", { now: () => now, identity: switching, probe: async () => exhausted, statePath });
     expect(status.state).toBe("unknown");
+    expect(existsSync(statePath)).toBe(false);
+  });
+});
+
+describe("Claude paid usage", () => {
+  async function parsedQuota(extra: unknown, now: number) {
+    const previous = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({
+      seven_day: { utilization: 100, resets_at: new Date(now + 86_400_000).toISOString() },
+      extra_usage: extra,
+    })) as typeof fetch;
+    try { return (await probeAnthropicUsageQuota("synthetic-paid-usage-bearer")).quota; }
+    finally { globalThis.fetch = previous; }
+  }
+
+  test("stale subscription exhaustion is rechecked before its future reset", async () => {
+    const now = Date.now();
+    const statePath = seed({ ...freshQuota, weeklyPercent: 100 }, now - 120_000);
+    let probes = 0;
+    const status = await checkClaudeUsageAdmission("claude-opus-5-5", {
+      now: () => now, identity, statePath,
+      probe: async () => { probes++; return parsedQuota({ is_enabled: true, utilization: 12 }, now); },
+    });
+    expect(probes).toBe(1);
+    // Enabled extra usage is not proof of wallet funds: the official CLI decides.
+    expect(status.state).toBe("unknown");
+    expect(JSON.parse(readFileSync(statePath, "utf8")).quota.claudeExtraUsage).toBe("enabled");
+    const again = await checkClaudeUsageAdmission("claude-opus-5-5", {
+      now: () => now + 1000, identity, statePath,
+      probe: async () => { probes++; return null; },
+    });
+    expect(again.state).toBe("unknown");
+    expect(probes).toBe(1);
+  });
+
+  for (const extra of [undefined, null, { is_enabled: "true" }, { is_enabled: false },
+    { is_enabled: true, utilization: 100 }, { is_enabled: true, monthly_limit: 0 },
+    { is_enabled: true, monthly_limit: 1000, used_credits: 1000 }]) {
+    test(`disabled or exhausted paid usage does not admit an exhausted plan: ${JSON.stringify(extra)}`, async () => {
+      const now = Date.now();
+      const quota = await parsedQuota(extra, now);
+      const status = await checkClaudeUsageAdmission("claude-opus-5-5", { now: () => now, identity,
+        statePath: tempState(), probe: async () => quota });
+      expect(status.state).toBe("exhausted");
+    });
+  }
+
+  test("a null paid-usage cap leaves wallet enforcement to the official CLI", async () => {
+    const now = Date.now();
+    const quota = await parsedQuota({ is_enabled: true, monthly_limit: null, utilization: null }, now);
+    expect((await checkClaudeUsageAdmission("claude-opus-5-5", { now: () => now, identity,
+      statePath: tempState(), probe: async () => quota })).state).toBe("unknown");
+  });
+
+  test("included quota becoming available returns to ordinary admission even while extra usage remains enabled", async () => {
+    const now = Date.now();
+    const paid = await parsedQuota({ is_enabled: true, utilization: 12 }, now);
+    const statePath = seed(paid, now - 120_000);
+    expect((await checkClaudeUsageAdmission("claude-opus-5-5", { now: () => now, identity,
+      statePath, probe: async () => ({ ...paid!, weeklyPercent: 0 }) })).state).toBe("available");
+    expect(JSON.parse(readFileSync(statePath, "utf8")).quota.weeklyPercent).toBe(0);
+  });
+
+  test("an exhausted paid cap does not block remaining included usage", async () => {
+    const now = Date.now();
+    const paid = await parsedQuota({ is_enabled: true, utilization: 100 }, now);
+    expect((await checkClaudeUsageAdmission("claude-opus-5-5", { now: () => now, identity,
+      statePath: tempState(), probe: async () => ({ ...paid!, weeklyPercent: 10 }) })).state).toBe("available");
+  });
+
+  test("paid usage cannot erase a real CLI refusal racing its probe", async () => {
+    const now = Date.UTC(2026, 9, 8, 12, 0);
+    const statePath = tempState();
+    let recorded = false;
+    const racing = async (fresh?: boolean) => {
+      if (fresh && !recorded) {
+        recorded = true;
+        await recordClaudeUsageRefusal("You've hit your limit · resets 3pm (UTC)", { now: () => now, identity, statePath });
+      }
+      return identity();
+    };
+    const quota = await parsedQuota({ is_enabled: true, utilization: 12 }, now);
+    const status = await checkClaudeUsageAdmission("claude-opus-5-5", { now: () => now, identity: racing,
+      statePath, probe: async () => quota });
+    expect(status).toMatchObject({ state: "exhausted", resetAt: Date.UTC(2026, 9, 8, 15, 0) });
+  });
+
+  test("paid usage from an account switched during the probe is discarded", async () => {
+    const now = Date.now(), statePath = tempState();
+    const quota = await parsedQuota({ is_enabled: true, utilization: 12 }, now);
+    const switching = (fresh?: boolean) => fresh ? { key: "account-b", access: "b" } : identity();
+    expect((await checkClaudeUsageAdmission("claude-opus-5-5", { now: () => now, identity: switching,
+      statePath, probe: async () => quota })).state).toBe("unknown");
     expect(existsSync(statePath)).toBe(false);
   });
 });

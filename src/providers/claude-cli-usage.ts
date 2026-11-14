@@ -23,6 +23,19 @@ function familyWindow({ window, row, percentField, weeklyAllowancePercent }: Ant
     ...(weeklyAllowancePercent !== undefined ? { weeklyAllowancePercent } : {}) };
 }
 
+function extraUsage(value: unknown): ProviderQuota["claudeExtraUsage"] {
+  const row = asRecord(value);
+  if (typeof row?.is_enabled !== "boolean") return;
+  if (!row.is_enabled) return "disabled";
+  const percent = normalizePercent(row.utilization);
+  const limit = row.monthly_limit, used = row.used_credits;
+  const capped = typeof limit === "number" && Number.isFinite(limit) && limit >= 0;
+  if ((percent !== undefined && percent >= 100) || (capped && (limit === 0
+    || (typeof used === "number" && Number.isFinite(used) && used >= limit)))) return "exhausted";
+  // A null/unreported cap and a remaining allowance say nothing about prepaid funds.
+  return "enabled";
+}
+
 /** Read the Anthropic OAuth usage endpoint for an access token and return the parsed quota, or null on a non-OK or malformed response. */
 export async function readAnthropicUsageQuota(accessToken: string): Promise<ProviderQuota | null> {
   return (await probeAnthropicUsageQuota(accessToken)).quota;
@@ -69,8 +82,10 @@ export async function probeAnthropicUsageQuota(accessToken: string): Promise<Ant
     }
   }
   const displayWindows = displayBuckets.flatMap(bucket => familyWindow(bucket) ?? []);
+  const paidUsage = extraUsage(body.extra_usage);
   const quota: ProviderQuota = {
     ...shared,
+    ...(paidUsage !== undefined ? { claudeExtraUsage: paidUsage } : {}),
     ...(customWindows.length > 0 ? { customWindows } : {}),
     ...(displayWindows.length > 0 ? { displayWindows } : {}),
     updatedAt: Date.now(),

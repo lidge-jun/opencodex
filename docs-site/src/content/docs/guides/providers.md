@@ -1598,12 +1598,16 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
   only the client's selected tools (the same bridge CodeBuddy uses). The CLI captures the call and
   the turn ends there; approval, sandboxing, execution and the returned result stay with Codex,
   Pi, or another client. Built-in tools and every other MCP server remain disabled.
-- **Subscription limits:** before each launch OpenCodex asks Anthropic's usage endpoint, with the
-  CLI's own sign-in read in memory, whether the plan's 5-hour, weekly or model-specific window is
-  full. An exhausted plan is refused locally with HTTP 429 `claude_subscription_cooldown` and a
-  `Retry-After` for the reset, instead of starting a CLI that would fail. The answer is cached for
-  a minute in `claude-usage-admission.json` under the OpenCodex home (percentages, reset times and
-  a hashed account key only). If the check cannot run, the turn proceeds.
+- **Subscription limits and paid usage:** OpenCodex checks Anthropic's usage endpoint using
+  the CLI's own sign-in. Measured 5-hour, weekly and model-specific exhaustion is cached for at
+  most a minute, so a top-up or subscription reset can be detected before the old reset date.
+  When extra usage is explicitly enabled without an exhausted reported cap, the official CLI
+  decides whether the wallet and spending limit permit the request. OpenCodex does not infer a
+  funded balance or enable paid usage. Explicitly disabled/exhausted extra usage does not open
+  that path. A genuine limit returned by the CLI remains enforced until its recorded reset.
+  Otherwise an exhausted plan returns HTTP 429 `claude_subscription_cooldown` with `Retry-After`.
+  The private cache stores percentages, reset times, the closed extra-usage state and a hashed
+  account key, never credentials or wallet amounts. An unavailable check lets the CLI decide.
 - **Destination:** the canonical row names `https://api.anthropic.com` because that is where the
   subscription's traffic lands. OpenCodex never sends that request itself, and overriding the base
   URL fails closed rather than handing the turn to another environment.

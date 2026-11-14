@@ -115,7 +115,9 @@ export function formatClaudeReset(resetAt: number, timeZone?: string): string {
 function full(w: { percent?: number }): boolean { return finite(w.percent) && w.percent >= 100; }
 function admission(snapshot: ClaudeUsageSnapshot, model: string, now: number): ClaudeAdmission {
   const quota = snapshot.quota;
-  const exhausted = applicableWindows(quota, model).filter(w => full(w) && (!finite(w.resetAt) || w.resetAt > now));
+  const planExhausted = applicableWindows(quota, model).filter(w => full(w) && (!finite(w.resetAt) || w.resetAt > now));
+  const extraEnabled = quota?.claudeExtraUsage === "enabled";
+  const exhausted = extraEnabled ? [] : planExhausted;
   if (finite(snapshot.refusalUntil) && snapshot.refusalUntil > now) exhausted.push({ percent: 100, resetAt: snapshot.refusalUntil });
   if (exhausted.length) {
     const resets = exhausted.map(w => w.resetAt).filter(finite);
@@ -123,7 +125,8 @@ function admission(snapshot: ClaudeUsageSnapshot, model: string, now: number): C
     const resetAt = resets.length === exhausted.length ? Math.max(...resets) : Math.max(snapshot.checkedAt + CACHE_MS, ...resets);
     return { state: "exhausted", checkedAt: snapshot.checkedAt, resetAt, message: `Claude subscription limits are exhausted. Claude launches are paused until ${formatClaudeReset(resetAt)}, then usage will be checked again.` };
   }
-  return { state: quota ? "available" : "unknown", checkedAt: snapshot.checkedAt };
+  // Extra usage can outlive plan windows; the CLI still enforces the wallet and spend limit.
+  return { state: quota && !(extraEnabled && planExhausted.length) ? "available" : "unknown", checkedAt: snapshot.checkedAt };
 }
 
 /**
@@ -148,7 +151,7 @@ async function checkAdmission(model: string, deps: AdmissionDeps, now: number): 
     .sort((a, b) => b.checkedAt - a.checkedAt || (b.refusalUntil ?? 0) - (a.refusalUntil ?? 0))[0];
   if (cached) {
     const status = admission(cached, model, now);
-    if (status.state === "exhausted" && status.resetAt! > now) return status;
+    if (finite(cached.refusalUntil) && cached.refusalUntil > now) return status;
     // Same windows and threshold as admission(): only a full window in scope for this model forces a re-read.
     const expiredReset = [cached.refusalUntil, ...applicableWindows(cached.quota, model).filter(full).map(w => w.resetAt)]
       .some(reset => finite(reset) && reset <= now);
