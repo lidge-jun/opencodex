@@ -1087,6 +1087,7 @@ export async function executeComboResponses(
     try {
     comboTargetsDispatched += 1;
     const childLog: RequestLogContext = {
+      ...(logCtx.requestId ? { requestId: logCtx.requestId } : {}),
       model: pick.target.model,
       provider: pick.target.provider,
       ...(logCtx.conversationId ? { conversationId: logCtx.conversationId, conversationIdIsHermesFallback: logCtx.conversationIdIsHermesFallback } : {}),

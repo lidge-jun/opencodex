@@ -25,6 +25,18 @@ import {
   CODEBUDDY_REASONING_EFFORTS,
 } from "../codebuddy-models";
 import { QODER_CN_MODELS, QODER_GLOBAL_MODELS, QODER_REASONING_EFFORTS } from "../qoder-models";
+import {
+  ANTIGRAVITY_CLI_DEFAULT_MODEL,
+  ANTIGRAVITY_CLI_MAX_OUTPUT_TOKENS,
+  ANTIGRAVITY_CLI_MODELS,
+  ANTIGRAVITY_CLI_MODEL_CONTEXT_WINDOWS,
+  ANTIGRAVITY_CLI_MODEL_DEFAULT_REASONING_EFFORTS,
+  ANTIGRAVITY_CLI_MODEL_INPUT_MODALITIES,
+  ANTIGRAVITY_CLI_MODEL_MAX_OUTPUT_TOKENS,
+  ANTIGRAVITY_CLI_MODEL_REASONING_EFFORTS,
+  ANTIGRAVITY_CLI_PROFILE,
+  ANTIGRAVITY_CLI_REASONING_EFFORTS,
+} from "../../adapters/antigravity-cli/profiles";
 import type { ProviderRegistryEntry } from "./types";
 import {
   ZAI_GLM_53_MODELS,
@@ -1740,5 +1752,27 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     modelReasoningEfforts: { ...ANTHROPIC_MODEL_REASONING_EFFORTS },
     defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
     note: "Runs Claude subscription traffic through Anthropic's own harness: the official Claude Code CLI headlessly (`claude -p`), one turn per request. OpenCodex stores no Claude token and injects none into CLI requests (quota admission only reads it in memory) — the CLI signs in and bills the account itself, which is why this row is keyless and an API key saved here never reaches the harness (use `anthropic-apikey` for key billing). The sign-in is the one of the user this proxy runs as, so every request served through this row — by any client of this proxy — spends that same account; OpenCodex neither pools nor multiplexes Claude sign-ins. Requires the CLI (`npm i -g @anthropic-ai/claude-code`) and a signed-in session (`claude` -> /login). v1 disables CLI tools (--tools \"\", --strict-mcp-config) so the client retains tool ownership; text, reasoning and native image input are supported. Subscription routing authorization flagged for maintainer review.",
+  },
+  {
+    id: "antigravity-cli",
+    label: "Antigravity CLI (subscription)",
+    adapter: "antigravity-cli",
+    baseUrl: ANTIGRAVITY_CLI_PROFILE.canonicalBaseUrl,
+    authKind: "key",
+    keyOptional: true,
+    apiKeyValidation: "unknown",
+    dashboardUrl: ANTIGRAVITY_CLI_PROFILE.documentationUrl,
+    defaultModel: ANTIGRAVITY_CLI_DEFAULT_MODEL,
+    models: [...ANTIGRAVITY_CLI_MODELS],
+    liveModels: false,
+    modelContextWindows: { ...ANTIGRAVITY_CLI_MODEL_CONTEXT_WINDOWS },
+    modelMaxOutputTokens: { ...ANTIGRAVITY_CLI_MODEL_MAX_OUTPUT_TOKENS },
+    modelInputModalities: { ...ANTIGRAVITY_CLI_MODEL_INPUT_MODALITIES },
+    defaultMaxOutputTokens: ANTIGRAVITY_CLI_MAX_OUTPUT_TOKENS,
+    supportsVerbosity: false,
+    reasoningEfforts: [...ANTIGRAVITY_CLI_REASONING_EFFORTS],
+    modelReasoningEfforts: { ...ANTIGRAVITY_CLI_MODEL_REASONING_EFFORTS },
+    modelDefaultReasoningEfforts: { ...ANTIGRAVITY_CLI_MODEL_DEFAULT_REASONING_EFFORTS },
+    note: "Runs Google Antigravity traffic through the official Antigravity CLI (`agy --print= --output-format stream-json --input-format stream-json --agent ocx_bridge`), one stateless turn per request. OpenCodex stores and injects no Google OAuth token here — `agy` reads the operator's signed-in account from the OS keyring. Exposes only Gemini 4 Carbon (`low`/`medium`/`high`), Gemini 4 Argon (`low`/`medium`/`high`), and Gemini 4 Hydrogen (`low`/`medium`/`high`/`xhigh`), with prompt replacement via an isolated custom agent (`inheritMcp: false`), client-owned tool capture over a per-turn MCP catalog, and staged base64 image input.",
   },
 ];
