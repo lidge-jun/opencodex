@@ -142,20 +142,28 @@ describe("combo failover streaming", () => {
 
 describe("combo attempt timing across a key rotation", () => {
   test("each key's attempt is timed on its own and the sum fits inside the request", async () => {
-    const KEY_LATENCY_MS = 150;
+    // The first key is slow and the second fast, so the two ways of timing the live attempt differ
+    // by a whole first segment. The assertions compare against instants this test measures, never
+    // fixed milliseconds, so a loaded machine stretches both sides alike.
+    const FIRST_KEY_MS = 300;
+    const SECOND_KEY_MS = 30;
     globalThis.fetch = (async () => pacedResponsesStream()) as typeof fetch;
     const config = comboConfig({ pool: provider("pool"), good: provider("good") }, ["pool", "good"]);
     const keyed = (entryId: string) => ({
       ...config.providers.pool!,
       _apiKeyAttempt: { entryId, reference: `sk-pool-${entryId}` },
     });
+    let childStartedAt = 0;
+    let childReturnedAt = 0;
     // The pooled target stands in for a child that rotates keys once and is refused on both: the
     // rotation runs through the same request-log seam a real key or account rotation does.
     const rotatingChild: typeof handleResponses = async (_req, _config, childLog) => {
+      childStartedAt = Date.now();
       noteProviderAttemptSend(childLog, "pool", keyed("k1"), undefined);
-      await sleep(KEY_LATENCY_MS);
+      await sleep(FIRST_KEY_MS);
       noteProviderAttemptSend(childLog, "pool", keyed("k2"), undefined, "key-429");
-      await sleep(KEY_LATENCY_MS);
+      await sleep(SECOND_KEY_MS);
+      childReturnedAt = Date.now();
       return rateLimited();
     };
     const dispatchers = {
@@ -175,10 +183,10 @@ describe("combo attempt timing across a key rotation", () => {
     const poolAttempts = attempts.filter(attempt => attempt.provider === "pool");
     expect(poolAttempts).toHaveLength(2);
     expect(poolAttempts[1]!.recoveryKinds).toEqual(["key-429"]);
-    for (const attempt of poolAttempts) {
-      // Timed from its own send: one key's latency, not the target's running total.
-      expect(attempt.durationMs).toBeLessThan(KEY_LATENCY_MS * 2 - 40);
-    }
+    // Timed from the target's start, the second key's attempt would cover the whole child, so it
+    // could never be shorter than the child's own measured run. Timed from its own send it covers
+    // only the fast second segment plus the combo's failure handling.
+    expect(poolAttempts[1]!.durationMs).toBeLessThan(childReturnedAt - childStartedAt);
     const sum = attempts.reduce((total, attempt) => total + (attempt.durationMs ?? 0), 0);
     expect(sum).toBeLessThanOrEqual(elapsed + 5);
   }, 15_000);
