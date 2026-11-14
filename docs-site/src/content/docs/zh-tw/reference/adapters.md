@@ -136,9 +136,10 @@ token。
   能接受更大請求的帳戶，並不能讓過大的目錄變得安全。
 - 移除 Kiro 驗證器拒絕的 JSON Schema 關鍵字（`pattern`、`minLength`、`maximum`、
   `additionalProperties` 等 29 個），但保留探針在對應模型上實測通過的關鍵字。
-  `claude-opus-4.5` 全部保留；`claude-opus-5.5` 與 `claude-sonnet-5.5` 只保留
-  `pattern`、`maximum`，其餘仍然移除，
-  因為沒有探針向這兩個模型傳送過其他關鍵字。包括其餘 Claude id 在內的其他 Kiro 模型全部移除。
+  `claude-opus-4.5` 全部保留；`claude-opus-5.5` 保留 Claude Desktop 與 Claude Code 目錄使用的 12 個
+  （`$schema`、`additionalProperties`、`pattern`、`format`、`minLength`、`maxLength`、`minimum`、`maximum`、`exclusiveMinimum`、`minItems`、`maxItems`、`propertyNames`），已在正式流量中實測；
+  `claude-sonnet-5.5` 只保留 `pattern`、`maximum`。其餘仍然移除，
+  因為沒有請求向這兩個模型傳送過其他關鍵字。包括其餘 Claude id 在內的其他 Kiro 模型全部移除。
   例外按模型和關鍵字劃分，是因為這條 wire 在 reasoning effort 上已經區分 Claude 模型，而 Kiro
   拒絕的關鍵字不只是丟掉提示，還會讓整個請求失敗。
 

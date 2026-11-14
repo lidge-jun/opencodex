@@ -150,8 +150,9 @@ HTTP リトライ ループの対象外です。
 - Kiro のバリデータが拒否する JSON Schema キーワード（`pattern`、`minLength`、`maximum`、
   `additionalProperties` など 29 個）をツールと構造化出力のスキーマから取り除きます。ただし、
   プローブでそのモデルが受け付けたと確認できたキーワードは残します。`claude-opus-4.5` はすべて残ります。
-  `claude-opus-5.5` と `claude-sonnet-5.5` は `pattern`、`maximum` だけが残り、それ以外は取り除かれたままです。この 2 つの
-  モデルに他のキーワードを送ったプローブがないためです。他の Claude id を含むその他の Kiro モデルは
+  `claude-opus-5.5` は Claude Desktop と Claude Code のカタログが使う 12 個（`$schema`、`additionalProperties`、`pattern`、`format`、`minLength`、`maxLength`、`minimum`、`maximum`、`exclusiveMinimum`、`minItems`、`maxItems`、`propertyNames`）が残ります。本番トラフィックで
+  確認済みです。`claude-sonnet-5.5` は `pattern`、`maximum` だけが残ります。それ以外は取り除かれたままです。
+  この 2 つのモデルに他のキーワードを送ったリクエストがないためです。他の Claude id を含むその他の Kiro モデルは
   すべて取り除きます。例外をモデル単位・キーワード単位にしているのは、この wire が reasoning effort で
   すでに Claude モデルを分けているためであり、Kiro が拒否するキーワードはヒントを失うだけで済まず、
   リクエスト全体を失敗させるからです。
