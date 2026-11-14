@@ -319,6 +319,26 @@ A code-display login's paste window is 10 minutes, and each login accepts one co
 fails, start a new login. A successful login becomes the provider's active account, exactly
 like a browser login.
 
+A Claude account that belongs to several organizations can be added once per organization: run
+`ocx login anthropic` again and pick the other organization on Claude's consent screen. Each
+organization has its own subscription and limits, so it becomes its own pool account instead of
+replacing the first. Logging in to an organization that already has an account refreshes that
+account.
+
+All of this depends on organization evidence, which Claude reports at login and on token refresh;
+it is recorded only when that report succeeds. A login gets its own account only when both
+organizations are known and differ. When the login's organization is known, an existing account
+with no recorded organization (for example, one saved before this release) is checked through its
+own token, if that token is still current. An account of the login's organization is preferred.
+Otherwise, if the existing account's organization stays unknown (expired token, failed check, or a
+login whose own organization was not reported), the login may replace it, as earlier releases did.
+Reauthenticating an account is refused when its known organization differs from the login's, or
+when another account already holds the login's organization; add the other organization as a new
+login instead. An unknown organization on either side never counts as a conflict, but the
+second rule still applies: another account holding the login's known organization refuses it. Before adding another
+organization, make sure the existing account is signed in and its token is current, for example
+by sending it one request.
+
 OAuth reauthentication preserves operator settings such as model selections, pricing overrides,
 and account failover preferences. Login-owned transport/authentication fields and registry-owned
 catalog metadata are refreshed. A live-discovery provider keeps its selected default model; a

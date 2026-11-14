@@ -5,7 +5,10 @@ const MAX_USER_ID_BYTES = 4096;
 type Rec = Record<string, unknown>;
 const isRec = (value: unknown): value is Rec => value !== null && typeof value === "object" && !Array.isArray(value);
 
-/** Deterministic per-account 64-hex device_id so pooled accounts never share one client device_id. */
+/**
+ * Deterministic per-account 64-hex device_id so pooled accounts never share one client device_id.
+ * Organization slots of one Claude account share it: they are one person on one device.
+ */
 export function deriveAnthropicAccountDeviceId(accountUuid: string): string {
   return createHash("sha256").update(`ocx-claude-code-device-v1:${accountUuid.trim().toLowerCase()}`, "utf8").digest("hex");
 }

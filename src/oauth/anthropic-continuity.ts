@@ -42,6 +42,13 @@ export async function newerClaudeCredentialForInstance(
   const newIdentity = normalizeAnthropicIdentity(newProof, disk.access);
   if (!oldIdentity || !newIdentity) return { kind: "unresolved", diskGeneration };
   if (oldIdentity.accountUuid !== newIdentity.accountUuid) return { kind: "different", diskGeneration };
+  // The same person signed in to another organization holds a different grant and quota. A stored
+  // proof saved before organizations were recorded asks its own still-usable bearer once.
+  const oldOrganization = oldIdentity.organizationUuid ?? (newIdentity.organizationUuid && stored.expires > now
+    ? normalizeAnthropicIdentity(await resolveIdentity(stored.access, signal), stored.access)?.organizationUuid : undefined);
+  if (oldOrganization && newIdentity.organizationUuid && oldOrganization !== newIdentity.organizationUuid) {
+    return { kind: "different", diskGeneration };
+  }
   return { kind: "adopt", diskGeneration: credentialGeneration(disk), credential: {
     ...stored, ...disk, accountId: newIdentity.accountUuid, anthropicIdentity: newIdentity, plan: newProof?.plan ?? null,
   } };

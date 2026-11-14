@@ -1,5 +1,5 @@
 import { MuseLoginError, museLoginErrorMessage } from "./meta-muse-errors";
-import type { KiroOAuthMetadata, OAuthController, OAuthCredentials } from "./types";
+import type { KiroOAuthMetadata, OAuthController, OAuthCredentials, ProviderAccount } from "./types";
 import { mapFill } from "../providers/resolved-model-policy-merge";
 import { initializeProviderModelSelection } from "../providers/initial-model-selection";
 import type { OcxConfig, OcxProviderConfig, RefreshPolicy } from "../types";
@@ -100,6 +100,7 @@ import { newerClaudeCredentialForInstance, captureAnthropicCredentialOwnerForIns
 import { anthropicSubscriptionLabel } from "../providers/anthropic-subscription";
 import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
 import { mergeAnthropicIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
+import { anthropicReauthSlotRefused } from "./anthropic-login-slot";
 import { AnthropicCrossInstanceDuplicateError, AnthropicLocalCliImportError, assertAnthropicCredentialSource } from "./store-anthropic-instance";
 export interface OAuthAccessSnapshot {
   workbuddy?: import("./types").WorkBuddyOAuthMetadata;
@@ -794,7 +795,7 @@ function authoritative(stored:OAuthCredentials,active:boolean,now:()=>number):OA
 function merged(fresh: OAuthCredentials, previous: OAuthCredentials): OAuthCredentials {
   return {
     ...fresh,
-    ...mergeAnthropicIdentity(fresh, previous),
+    ...mergeAnthropicIdentity(fresh, previous, { sameGrant: true }),
     plan: mergeOAuthPlan(fresh, previous),
     // Shared: a refresh function returns "local-cli" only when the credential it hands back
     // still is the local CLI's (Devin re-reading the CLI file, Meta Muse echoing its durable
@@ -1677,6 +1678,7 @@ export async function runLogin(
           .filter(account => account.id !== opts.reauthAccountId).map(account => account.credential))
         : existing.accountId && cred.accountId
           ? existing.accountId === cred.accountId
+            && !anthropicReauthSlotRefused(getAccountSet(provider)?.accounts ?? [], opts.reauthAccountId, cred)
           : existing.email && cred.email
             ? existing.email.trim().toLowerCase() === cred.email.trim().toLowerCase()
             : false;
@@ -1686,8 +1688,13 @@ export async function runLogin(
       // Proven same account: a reauth whose tier read failed keeps the stored label.
       const reauthPlan = mergeOAuthPlan(cred, existing);
       const reauthCred = reauthPlan === undefined ? cred : { ...cred, plan: reauthPlan };
-      const written = await (deps.saveAccountCredential ?? saveAccountCredential)(provider, opts.reauthAccountId, reauthCred, {
+      const reauthAccountId = opts.reauthAccountId;
+      const written = await (deps.saveAccountCredential ?? saveAccountCredential)(provider, reauthAccountId, reauthCred, {
         assertBeforePersist: deps.assertCurrentOwner,
+        // The check above read a snapshot; the writer repeats it on the rows it loaded under the lock.
+        ...(isAnthropicOAuthInstance(provider) ? { assertAccounts: (accounts: readonly ProviderAccount[]) => {
+          if (anthropicReauthSlotRefused(accounts, reauthAccountId, reauthCred)) throw new OAuthReauthIdentityMismatchError();
+        } } : {}),
         rotateLoginId: true,
         clearAutomaticPause: true,
       });
