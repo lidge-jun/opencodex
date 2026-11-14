@@ -118,10 +118,11 @@ describe("local client inference wires on the loopback listener (#4236)", () => 
     );
   });
 
-  test("the live meter is a GET-only read on the loopback listener", () => {
+  test("the live meter is a read (and its preflight) on the loopback listener", () => {
     // The Codex++ footer reads `http://127.0.0.1:<port>/v1/usage/live`. On a hub whose public
-    // listener binds a tailnet address that is this socket, and the route 404ed here.
-    expect(source).toContain('if (path === "/v1/usage/live") return req.method === "GET";');
+    // listener binds a tailnet address that is this socket, and the route 404ed here. A key
+    // header makes the renderer preflight first, so OPTIONS is admitted for this path too.
+    expect(source).toContain('if (path === "/v1/usage/live") return req.method === "GET" || req.method === "OPTIONS";');
   });
 
   test("no /api route joins the allowlist", () => {
