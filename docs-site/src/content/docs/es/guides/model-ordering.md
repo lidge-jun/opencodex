@@ -11,20 +11,20 @@ El selector de modelos Codex no conserva el orden de las declaraciones del prove
 
 El gestor de modelos de Codex ordena las entradas de catálogo visible por `priority` en orden ascendente. Descarta el orden de la matriz de catálogo, por lo que mover una entrada antes en una matriz JSON generada no la mueve antes en el selector. La implementación registra esta restricción directamente en `src/codex/catalog/sync.ts`.
 
-Por lo tanto, opencodex controla la posición de los modelos destacados asignando prioridades más bajas, no confiando en la posición de la matriz. A menos que se indique lo contrario, las prioridades fijas y el ejemplo trabajado a continuación describen un catálogo sin selectores de cuenta Codex elegibles. Con `N` selectores elegibles, las prioridades presentadas usan `N` como un paso: una elección nativa desnuda en el rango configurado `i` se expande a filas de selectores en las prioridades `i * N + j`, donde `j` es la posición basada en cero del selector; una elección encaminada usa `i * N`; y una elección calificada por selector exacta usa `i * N + j` para su selector. Las filas enrutadas no seleccionadas se mueven fuera de esos grupos selectores. Codex todavía anuncia sólo las primeras cinco filas visibles.
+Por lo tanto, opencodex controla la posición de los modelos fijados asignando prioridades más bajas, no confiando en la posición de la matriz. A menos que se indique lo contrario, las prioridades fijas y el ejemplo trabajado a continuación describen un catálogo sin selectores de cuenta Codex elegibles. Con `N` selectores elegibles, las prioridades presentadas usan `N` como un paso: una elección nativa desnuda en el rango configurado `i` se expande a filas de selectores en las prioridades `i * N + j`, donde `j` es la posición basada en cero del selector; una elección encaminada usa `i * N`; y una elección calificada por selector exacta usa `i * N + j` para su selector. Las filas enrutadas no seleccionadas se mueven fuera de esos grupos selectores. Codex todavía anuncia sólo las primeras cinco filas visibles.
 
 Sin el pedido completo del seleccionador, las prioridades relevantes de no selector son:
 
 | Entrada de catálogo | Prioridad | Fuente |
 | --- | ---: | --- |
-| `subagentModels[i]` | `i` (`0` a través de `4`) | El mapa de rango destacado en `src/codex/catalog/sync.ts` |
+| `subagentModels[i]` | `i` (`0` a través de `4`) | El mapa de rango fijado en `src/codex/catalog/sync.ts` |
 | Otros modelos ruteados | `5` | Creación de la entrada encaminada en `src/codex/catalog/sync.ts` |
-| Modelos ruteados no destacados listados en `modelPickerOrder` | `1000 + i` | Rango de selector de solo visualización en `src/codex/catalog/sync.ts` |
-| Identificadores GPT nativos sin una lista destacada | `sourcePriority` (valor de respaldo `9`) | Resolución compartida de la prioridad nativa de origen |
-| Modelos nativos no seleccionados mientras existe una lista destacada | `featured.length + 100 + sourcePriority` | Resolución compartida de la prioridad nativa de origen |
+| Modelos ruteados no fijados listados en `modelPickerOrder` | `1000 + i` | Rango de selector de solo visualización en `src/codex/catalog/sync.ts` |
+| Identificadores GPT nativos sin una lista fijada | `sourcePriority` (valor de respaldo `9`) | Resolución compartida de la prioridad nativa de origen |
+| Modelos nativos no seleccionados mientras existe una lista fijada | `featured.length + 100 + sourcePriority` | Resolución compartida de la prioridad nativa de origen |
 
-La prioridad nativa de origen se obtiene del descriptor descubierto actual; si no contiene un valor válido, se consulta la copia de seguridad intacta del catálogo, el valor de origen conservado para ese mismo modelo y, por último, la instantánea del proveedor. Cada candidato debe ser un entero entre `0` y `1000`; los valores no válidos se omiten y el valor final de respaldo es `9`. Las prioridades de visualización publicadas nunca se reutilizan como prioridades de origen. Con cuatro modelos destacados, las prioridades nativas de origen `3`, `8` y ausente se convierten en `107`, `112` y `113`, respectivamente.
-Así se conserva el orden de origen de los modelos nativos detrás de las filas destacadas y las enrutadas ordinarias, incluso tras sincronizaciones repetidas o después de destacar un modelo nativo y dejar de destacarlo. La lista de modelos en vivo de Codex, el catálogo publicado y la caché de modelos usan las mismas prioridades para las mismas entradas. Los grupos de selectores de cuenta conservan su política de intervalos independiente; el orden del selector completo sigue teniendo la última palabra.
+La prioridad nativa de origen se obtiene del descriptor descubierto actual; si no contiene un valor válido, se consulta la copia de seguridad intacta del catálogo, el valor de origen conservado para ese mismo modelo y, por último, la instantánea del proveedor. Cada candidato debe ser un entero entre `0` y `1000`; los valores no válidos se omiten y el valor final de respaldo es `9`. Las prioridades de visualización publicadas nunca se reutilizan como prioridades de origen. Con cuatro modelos fijados, las prioridades nativas de origen `3`, `8` y ausente se convierten en `107`, `112` y `113`, respectivamente.
+Así se conserva el orden de origen de los modelos nativos detrás de las filas fijadas y las enrutadas ordinarias, incluso tras sincronizaciones repetidas o después de destacar un modelo nativo y dejar de destacarlo. La lista de modelos en vivo de Codex, el catálogo publicado y la caché de modelos usan las mismas prioridades para las mismas entradas. Los grupos de selectores de cuenta conservan su política de intervalos independiente; el orden del selector completo sigue teniendo la última palabra.
 
 La gestión API limita `subagentModels` a cinco entradas con `slice(0, 5)` en `src/server/management/agent-settings-routes.ts`. Esto coincide con la superficie Codex `spawn_agent`, que anuncia solo los primeros cinco modelos anulados. Los modelos fuera de esos cinco todavía pueden permanecer visibles en el selector principal y llamarse por su id exacto.
 
@@ -39,7 +39,7 @@ Esto significa que ninguno de estos detalles de configuración cambia el orden f
 - el orden de las claves de declaración en el objeto `providers`;
 - el orden de los id en la matriz `models` de un proveedor.
 
-`orderForSubagents()` luego usa una ordenación estable para mover las selecciones destacadas configuradas al frente en el mismo orden que `subagentModels`. Los modelos no destacados mantienen el orden relativo alfabético proveedor/identificador establecido anteriormente (`src/codex/catalog/sync.ts`). El rango destacado también se convierte en prioridades `0` a `4` cuando se construyen las entradas, por lo que el orden de prioridad de Codex conserva esa secuencia principal.
+`orderForSubagents()` luego usa una ordenación estable para mover las selecciones fijadas configuradas al frente en el mismo orden que `subagentModels`. Los modelos no fijados mantienen el orden relativo alfabético proveedor/identificador establecido anteriormente (`src/codex/catalog/sync.ts`). El rango fijado también se convierte en prioridades `0` a `4` cuando se construyen las entradas, por lo que el orden de prioridad de Codex conserva esa secuencia principal.
 
 <a id="visibility-is-separate-from-ordering"></a>
 
@@ -57,7 +57,7 @@ Sin selectores de cuenta elegibles y una lista de características no vacía, el
 
 1. Modelos en el orden exacto configurado `subagentModels`, con prioridades `0` a `4`.
 2. Todos los modelos enrutados restantes, ordenados alfabéticamente por proveedor y luego por ID de modelo, con prioridad `5`.
-3. Modelos nativos no seleccionados, empujados por debajo del bloque destacado durante la fusión del catálogo.
+3. Modelos nativos no seleccionados, empujados por debajo del bloque fijado durante la fusión del catálogo.
 
 Sin `subagentModels`, los modelos enrutados permanecen en la prioridad `5`, las entradas GPT nativas usan su prioridad de origen (valor de respaldo `9`) y el grupo enrutado mantiene el orden alfabético por proveedor e identificador.
 
@@ -100,7 +100,7 @@ Utilice `subagentModels` para elegir y ordenar los modelos líderes que Codex ta
 
 Si ninguna cuenta configurada admite un modelo nativo con apertura de cuenta, la solicitud falla como una opción de modelo no válida. Si las cuentas de soporte existen pero están temporalmente agotadas o no están disponibles, falla como un límite de tasa reintentable. Estos estados nunca se informan como una clave API no válida; elija otro modelo disponible o espere a que se vuelva a abrir la ventana de cuota de la cuenta capaz.
 
-Utilice `modelPickerOrder` para ordenar solo en pantalla las filas enrutadas `<provider>/<model>` más allá del bloque destacado:
+Utilice `modelPickerOrder` para ordenar solo en pantalla las filas enrutadas `<provider>/<model>` más allá del bloque fijado:
 
 ```json
 {
@@ -112,7 +112,7 @@ Utilice `modelPickerOrder` para ordenar solo en pantalla las filas enrutadas `<p
 }
 ```
 
-Las filas enrutadas aparecen en el orden configurado. Una fila enrutada omitida de la matriz mantiene su prioridad normal, por lo que permanece por delante de la banda de visualización `modelPickerOrder`; enumere cada fila enrutada cuya posición relativa desea controlar. Una fila también presente en `subagentModels` mantiene su prioridad destacada. Con una lista solo encaminada, las filas nativas mantienen sus posiciones normales.
+Las filas enrutadas aparecen en el orden configurado. Una fila enrutada omitida de la matriz mantiene su prioridad normal, por lo que permanece por delante de la banda de visualización `modelPickerOrder`; enumere cada fila enrutada cuya posición relativa desea controlar. Una fila también presente en `subagentModels` mantiene su prioridad fijada. Con una lista solo encaminada, las filas nativas mantienen sus posiciones normales.
 
 Para pedir el selector completo, incluya un identificador nativo desnudo:
 
@@ -128,7 +128,7 @@ Las filas listadas aparecen primero en orden de array, seguidas de las filas no 
 
 ### Nota de migración: ID nativos en pedidos existentes
 
-Anteriormente, los identificadores nativos en `modelPickerOrder` fueron ignorados. Una lista existente que contiene un id nativo desnudo ahora activa el pedido de un selector completo, incluidas las filas destacadas. Retire los id nativos desnudos para mantener el comportamiento anterior solo enrutado. Las listas sin configurar, vacías y solo enrutadas conservan su comportamiento; El cálculo de los candidatos a orientación de prioridad natural de OpenCodex no ha cambiado.
+Anteriormente, los identificadores nativos en `modelPickerOrder` fueron ignorados. Una lista existente que contiene un id nativo desnudo ahora activa el pedido de un selector completo, incluidas las filas fijadas. Retire los id nativos desnudos para mantener el comportamiento anterior solo enrutado. Las listas sin configurar, vacías y solo enrutadas conservan su comportamiento; El cálculo de los candidatos a orientación de prioridad natural de OpenCodex no ha cambiado.
 
 `modelPickerOrder` conserva el cálculo de prioridad natural de OpenCodex de hasta cinco candidatos preferidos para la orientación de subagentes. Cada fila movida conserva su prioridad natural por separado de su `priority` nativo; el cambio de orden del selector por sí solo no debe cambiar ese cálculo de OpenCodex. No restringe la elegibilidad para una anulación de modelo de nombre exacto: la lista nativa anunciada no es una lista de permisos, y aún se aplican las restricciones de autenticación, modelo/esfuerzo y backend existentes.
 
@@ -144,15 +144,15 @@ En **Modelos**, elija **Predeterminado**, **A–Z por modelo**, **Grupo por prov
 
 Los controles usan `GET/PUT /api/subagent-models`: `chosen` y `available` retienen las opciones guardadas de la lista, incluidos los modelos desactivados o desaparecidos; `pickerAvailable` contiene solo identificadores de catálogo enrutados elegibles. La página Modelos envía `pickerOrder` y `pickerOrderMode`, nunca `models`. La lista solo guarda la configuración del selector de conservación. Las actualizaciones combinadas no válidas y la persistencia fallida dejan intacto el estado anterior del selector/roster.
 
-Los ajustes preestablecidos de solo ruta mantienen las bandas de prioridad existentes destacadas/nativas. Afectan al catálogo Codex y a los grupos dirigidos del descubrimiento Claude; El prefijo nativo de Claude y la propiedad explícita de perfil/alias de escritorio permanecen sin cambios. Se conservan los rangos de guía OpenCodex y los ajustes de reserva configurados, pero los cinco anuncios de Codex nativos y el valor predeterminado recomendado pueden cambiar con la prioridad de visualización. Guardar no reinicia clientes; puede que una actualización de catálogo permanezca pendiente, y los clientes que tengan un catálogo antiguo pueden necesitar volver a abrir.
+Los ajustes preestablecidos de solo ruta mantienen las bandas de prioridad existentes fijadas/nativas. Afectan al catálogo Codex y a los grupos dirigidos del descubrimiento Claude; El prefijo nativo de Claude y la propiedad explícita de perfil/alias de escritorio permanecen sin cambios. Se conservan los rangos de guía OpenCodex y los ajustes de reserva configurados, pero los cinco anuncios de Codex nativos y el valor predeterminado recomendado pueden cambiar con la prioridad de visualización. Guardar no reinicia clientes; puede que una actualización de catálogo permanezca pendiente, y los clientes que tengan un catálogo antiguo pueden necesitar volver a abrir.
 
 
 <a id="custom-routed-order"></a>
 
 ### Orden enrutada personalizada
 
-Elija **Orden de encargo** en Modelos para cargar una nueva instantánea enrutada. Arrastre una fila móvil antes de otra fila, o utilice sus botones Arriba/Abajo, luego **Guardar borrador**. Las filas enrutadas destacadas permanecen en la parte delantera en su rango configurado y no pueden moverse. No se muestran las filas nativas; esto no es una vista previa del selector nativo completo. Las filas guardadas supervivientes mantienen su orden relativo y los nuevos candidatos siguen la lista de candidatos actual. Cada guardado envía la lista completa, sin cambiar la lista destacada.
+Elija **Orden de encargo** en Modelos para cargar una nueva instantánea enrutada. Arrastre una fila móvil antes de otra fila, o utilice sus botones Arriba/Abajo, luego **Guardar borrador**. Las filas enrutadas fijadas permanecen en la parte delantera en su rango configurado y no pueden moverse. No se muestran las filas nativas; esto no es una vista previa del selector nativo completo. Las filas guardadas supervivientes mantienen su orden relativo y los nuevos candidatos siguen la lista de candidatos actual. Cada guardado envía la lista completa, sin cambiar la lista fijada.
 
-Una orden que contiene ids nativos desnudos permanece protegida hasta que aplique explícitamente un preset o Predeterminado enrutado. Seleccionar una opción diferente por sí sola no la reemplaza. Un estado destacado desconocido bloquea la edición. Antes de guardar, el editor comprueba una nueva instantánea; los cambios preservan el borrador y bloquean el guardado hasta que **Recargar y descartar borrador** cargue la configuración actual. Los fallos de solicitud conservan el borrador. Los archivos guardados aceptados aún pueden tener una actualización de catálogo pendiente; vuelva a cargar antes de volver a editar.
+Una orden que contiene ids nativos desnudos permanece protegida hasta que aplique explícitamente un preset o Predeterminado enrutado. Seleccionar una opción diferente por sí sola no la reemplaza. Un estado fijado desconocido bloquea la edición. Antes de guardar, el editor comprueba una nueva instantánea; los cambios preservan el borrador y bloquean el guardado hasta que **Recargar y descartar borrador** cargue la configuración actual. Los fallos de solicitud conservan el borrador. Los archivos guardados aceptados aún pueden tener una actualización de catálogo pendiente; vuelva a cargar antes de volver a editar.
 
-El editor también requiere una identidad de modelo inequívoca para cada candidato enrutado. Si el catálogo de modelos está incompleto, actualice la página Modelos antes de editar; la recarga de la configuración del selector por sí sola no puede restaurar las identidades de catálogo que faltan. Las opciones destacadas se combinan exactamente sin recortar; las opciones duplicadas usan su última posición configurada, y los id canónicos tienen prioridad sobre los id sin procesar.
+El editor también requiere una identidad de modelo inequívoca para cada candidato enrutado. Si el catálogo de modelos está incompleto, actualice la página Modelos antes de editar; la recarga de la configuración del selector por sí sola no puede restaurar las identidades de catálogo que faltan. Las opciones fijadas se combinan exactamente sin recortar; las opciones duplicadas usan su última posición configurada, y los id canónicos tienen prioridad sobre los id sin procesar.

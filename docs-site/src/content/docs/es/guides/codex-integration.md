@@ -344,7 +344,7 @@ Codex muestra modelos de un catálogo en el disco (`$CODEX_HOME/opencodex-catalo
 2. **Muñecos** catálogos de modelos en vivo de los proveedores elegibles (en caché de 5 min; vuelve a la última buena lista, luego configuró `models[]`). La autenticación directa no tiene un punto final modelo, y Cursor utiliza su RPC `GetUsableModels` en lugar de `/models`.
 3. **Combina** los modelos enrutados como entradas con espacio de nombres (`provider/model`), clonadas de una plantilla de catálogo nativo de Codex para que el estricto analizador sintáctico de Codex las acepte.
 4. **Filtros** `config.disabledModels` y la lista de permisos `selectedModels` no vacía de cada proveedor.
-5. **Re-rangos** así que los modelos destacados ordenan primero (ver más abajo), luego escribe el catálogo fusionado de nuevo.
+5. **Re-rangos** así que los modelos fijados ordenan primero (ver más abajo), luego escribe el catálogo fusionado de nuevo.
 
 Las entradas del catálogo enrutado también obtienen su identidad GPT-5 reescrita al nombre del modelo ascendente real. Los controles de razonamiento provienen de metadatos de proveedor/modelo en la escalera `low | medium | high | xhigh |
 max | ultra` de Codex; los valores no compatibles se asignan o se fijan antes de la solicitud ascendente.
@@ -742,7 +742,7 @@ Sync y `ocx restore back` también rechazan una configuración enrutada existent
 
 ### Subagente de reserva y compatibilidad con V2
 
-En **Subagentes → Configuración de delegación**, edite la cadena de reserva ordenada y su intervalo de sondeo de disponibilidad (5000-600000 ms), luego guárdela por separado de la lista destacada. Un destino configurado que ya no se anuncia permanece en la cadena hasta que lo elimine. La lista y la cadena de reserva son configuraciones separadas; este editor no hace que la lista reemplace la política de reserva.
+En **Subagentes → Configuración de delegación**, edite la cadena de reserva ordenada y su intervalo de sondeo de disponibilidad (5000-600000 ms), luego guárdela por separado de la lista fijada. Un destino configurado que ya no se anuncia permanece en la cadena hasta que lo elimine. La lista y la cadena de reserva son configuraciones separadas; este editor no hace que la lista reemplace la política de reserva.
 
 Cuando un modelo preferido enrutado puede recibir trabajo V2 de un padre nativo ChatGPT, el panel explica la limitación de la tarea cifrada ascendente. Las tareas legibles de los padres enrutados no se ven afectadas. La guía utiliza el modo `/api/v2` y el estado nativo del pin V1; el API actual no expone la activación de recuperación o la elegibilidad específica de la solicitud, por lo que el panel informa que son desconocidos. La delegación V1/plaintext-compatible sigue siendo una alternativa. La recuperación experimental de V2, donde es elegible y explícitamente habilitada, agrega uso de cuota, latencia, dependencia de backend y posible pérdida de fidelidad; no repara el protocolo ascendente. Véanse [superficies de subagentes](/es/guides/sub-agent-surface/) y [La limitación aguas arriba](https://github.com/lidge-jun/opencodex/issues/92).
 

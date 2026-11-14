@@ -440,7 +440,7 @@ Cuando tanto `tierModels.haiku` como `smallFastModel` están ausentes, OpenCodex
 
 ## Agentes de lista (injectAgents)
 
-Proxy inicio / asegurar, `ocx claude`, y el tablero de instrumentos relevante guarda sincronizar su lista de subagentes destacados (pestaña Subagentes, hasta 5 modelos) más `ocx-self` en `~/.claude/agents/ocx-*.md`.
+Proxy inicio / asegurar, `ocx claude`, y el tablero de instrumentos relevante guarda sincronizar su lista de subagentes fijados (Models → Selector de modelos del cliente, hasta 5 modelos) más `ocx-self` en `~/.claude/agents/ocx-*.md`.
 
 - **`ocx-self`** pines su `/model` selector predeterminado (regresando a `claudeCode.model`); omitido cuando ninguno existe. No utiliza la herencia modelo.
 - Cada cuerpo de agente contiene una directiva `<!-- ocx-route: <model> -->`: el proxy usa esto para fijar la ruta real. Por lo tanto, el argumento `model` de la herramienta Agente es inerte; pase `"haiku"` como marcador de posición.

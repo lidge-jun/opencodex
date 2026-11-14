@@ -135,7 +135,7 @@ La compactación de contexto de Codex funciona con modelos enrutados. `server/re
 ## El almacenamiento en caché y el catálogo
 
 - `codex/model-cache.ts` mantiene en memoria una caché por proveedor con TTL de los resultados de `/models`: 5 minutos de forma predeterminada, como la de Codex. Si la consulta falla, puede usar los resultados anteriores aunque hayan caducado.
-- `codex/catalog/sync.ts`, exportado mediante la fachada `codex/catalog.ts`, incorpora los modelos enrutados al catálogo de Codex con sus espacios de nombres. Ordena primero los [modelos de subagentes](/es/guides/codex-integration/#the-subagent-picker) destacados, filtra `disabledModels` y permite restaurar el catálogo original desde una copia de seguridad creada una sola vez.
+- `codex/catalog/sync.ts`, exportado mediante la fachada `codex/catalog.ts`, incorpora los modelos enrutados al catálogo de Codex con sus espacios de nombres. Ordena primero los [modelos de subagentes](/es/guides/codex-integration/#the-subagent-picker) fijados, filtra `disabledModels` y permite restaurar el catálogo original desde una copia de seguridad creada una sola vez.
 
 <a id="reasoning-effort"></a>
 

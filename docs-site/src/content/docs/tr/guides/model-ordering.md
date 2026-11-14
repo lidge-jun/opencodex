@@ -16,9 +16,9 @@ bir JSON dizisinde bir girdiyi daha öne taşımak onu seçicide daha öne taş�
 Uygulama bu kısıtlamayı doğrudan `src/codex/catalog/sync.ts` içine kaydeder.
 
 Bu nedenle opencodex, dizi konumuna güvenmek yerine daha düşük öncelikler
-atayarak öne çıkan yerleşimi denetler. Aksi belirtilmedikçe, aşağıdaki sabit
+atayarak sabitlenmiş yerleşimi denetler. Aksi belirtilmedikçe, aşağıdaki sabit
 öncelikler ve işlenmiş örnek, uygun Codex hesap seçicisi olmayan bir kataloğu
-açıklar. `N` uygun seçici ile öne çıkan öncelikler adım olarak `N` kullanır:
+açıklar. `N` uygun seçici ile sabitlenmiş öncelikler adım olarak `N` kullanır:
 yapılandırılmış `i` derecesindeki yalın bir yerel seçenek, `j` seçicinin sıfır
 tabanlı konumu olmak üzere `i * N + j` önceliklerinde seçici satırlarına
 genişler; yönlendirilmiş bir seçenek `i * N` kullanır; ve tam bir seçici
@@ -32,10 +32,10 @@ Aşağıdaki öncelik tabloları ve örnek, seçicinin tamamını sıralama modu
 
 | Katalog girdisi | Öncelik | Kaynak |
 | --- | ---: | --- |
-| `subagentModels[i]` | `i` (`0` - `4`) | `src/codex/catalog/sync.ts` içindeki öne çıkan sıra haritası |
+| `subagentModels[i]` | `i` (`0` - `4`) | `src/codex/catalog/sync.ts` içindeki sabitlenmiş sıra haritası |
 | Diğer yönlendirilen modeller | `5` | `src/codex/catalog/sync.ts` içindeki yönlendirilen girdi oluşturma |
 | Varsayılan olarak yerel GPT slug'ları | `sourcePriority` | `src/codex/catalog/sync.ts` içindeki yerel girdi oluşturma |
-| Öne çıkan bir liste varken seçilmeyen yerel modeller | En az `featured.length + 100` | `src/codex/catalog/sync.ts` içindeki yerel katalog birleştirme |
+| Sabitlenmiş bir liste varken seçilmeyen yerel modeller | En az `featured.length + 100` | `src/codex/catalog/sync.ts` içindeki yerel katalog birleştirme |
 
 Yönetim API'si `src/server/management/agent-settings-routes.ts` içinde `slice(0,
 5)` ile `subagentModels`'ı beş girdiyle sınırlar. Bu, yalnızca ilk beş model
@@ -57,7 +57,7 @@ anlamına gelir:
 - `providers` nesnesindeki anahtarların bildirim sırası;
 - bir sağlayıcının `models` dizisindeki kimliklerin sırası.
 
-`orderForSubagents()` daha sonra yapılandırılmış öne çıkan seçimleri
+`orderForSubagents()` daha sonra yapılandırılmış sabitlenmiş seçimleri
 `subagentModels` ile aynı sırada öne taşımak için kararlı bir sıralama kullanır.
 Öne çıkmayan modeller daha önce belirlenen sağlayıcı/kimlik alfabetik göreli
 sırasını korur (`src/codex/catalog/sync.ts`). Girdiler oluşturulduğunda öne
@@ -78,14 +78,14 @@ edilmediğini değiştirebilir.
 
 ## Geçerli seçici deseni
 
-Uygun hesap seçicisi olmadığında ve boş olmayan bir öne çıkanlar listesi
+Uygun hesap seçicisi olmadığında ve boş olmayan bir sabitlenmişlar listesi
 olduğunda ortaya çıkan sıra şöyledir:
 
 1. `0` ile `4` arasındaki önceliklerle tam olarak yapılandırılmış
    `subagentModels` sırasındaki modeller.
 2. `5` önceliğinde sağlayıcıya ve ardından model kimliğine göre alfabetik olarak
    sıralanmış kalan tüm yönlendirilen modeller.
-3. Katalog birleştirme sırasında öne çıkan bloğun altına itilen seçilmemiş yerel
+3. Katalog birleştirme sırasında sabitlenmiş bloğun altına itilen seçilmemiş yerel
    modeller.
 
 `subagentModels` olmadan yönlendirilen modeller `5` önceliğinde kalır, yerel GPT
@@ -117,7 +117,7 @@ Seçici aşağıdaki gibi başlar:
 | 5 | `gpt-5.6-terra` | `4` | Beşinci seçim |
 | 6 | `anthropic/claude-fable-5` | `5` | Sağlayıcı/kimlik alfabetik sırasına göre kalan ilk yönlendirilen kimlik |
 | 7 ve sonrası | Kalan yönlendirilen modeller | `5` | Alfabetik olarak sağlayıcı, ardından alfabetik olarak model kimliği |
-| Yönlendirilen modellerden sonra | Kalan yerel modeller | `featured.length + 100` veya üzeri | Seçilmemiş yereller öne çıkan bloğun altına taşınır |
+| Yönlendirilen modellerden sonra | Kalan yerel modeller | `featured.length + 100` veya üzeri | Seçilmemiş yereller sabitlenmiş bloğun altına taşınır |
 
 İlk beş girdi `spawn_agent`'a tanıtılan geçersiz kılmalardır; geri kalanı normal
 seçici sırasında devam eder. Hesap seçicileriyle beş girdi sınırı, yalın yerel
@@ -138,7 +138,7 @@ seçimler ve tanıtılan satırlar birebir olmak zorunda değildir.
 `modelPickerOrder` yalnızca seçicideki görüntüleme sırasını belirler. Liste yalnızca yönlendirilmiş
 `<provider>/<model>` kimlikleri içeriyorsa, listelenen ve öne çıkarılmamış satırlar ayrı bir
 görüntüleme aralığında (`1000 + i`) liste sırasıyla yer alır. Listelenmeyen yönlendirilmiş satırlar
-normal önceliklerini korur ve bu aralıktan önce kalır. `subagentModels` içindeki satırlar öne çıkan
+normal önceliklerini korur ve bu aralıktan önce kalır. `subagentModels` içindeki satırlar sabitlenmiş
 önceliklerini, yerel satırlar da normal konumlarını korur. Göreli sırasını belirlemek istediğiniz
 tüm yönlendirilmiş satırları listeleyin.
 
@@ -160,7 +160,7 @@ için seçiciyi içeren tam kimliği yazın.
 ### Geçiş uyarısı: mevcut listelerdeki yerel kimlikler
 
 Önceden `modelPickerOrder` içindeki yalın yerel kimlikler yok sayılıyordu. Mevcut bir listede böyle
-bir kimlik bulunması artık öne çıkan satırlar dahil tüm seçicinin sıralanmasını etkinleştirir.
+bir kimlik bulunması artık sabitlenmiş satırlar dahil tüm seçicinin sıralanmasını etkinleştirir.
 Eski, yalnızca yönlendirilmiş satırlara uygulanan davranışı korumak için yalın kimlikleri kaldırın.
 Tanımlanmamış, boş, yalnızca boşluk girdileri içeren veya yalnızca yönlendirilmiş kimliklerden oluşan
 listeler önceki davranışlarını korur.
@@ -187,4 +187,4 @@ görünürlüğü denetler. Ayrı bir `modelOrder`, `providerOrder` veya önceli
 
 `GET/PUT /api/subagent-models`, devre dışı veya eksik kayıtlı seçimleri `chosen` ve `available` içinde korur; `pickerAvailable` uygun yönlendirilmiş kimliklerdir. Models yalnızca `pickerOrder` ve `pickerOrderMode` gönderir, `models` göndermez. Yalnız kadroyu kaydetmek sırayı değiştirmez. Geçersiz giriş veya kayıt hatası önceki durumu korur.
 
-Öne çıkan ve yerel öncelik aralıkları korunur. Sıra Codex kataloğu ve Claude keşfinin yönlendirilmiş gruplarına uygulanır; Claude yerel öneki, açık Desktop profilleri ve alias sahipliği korunur. OpenCodex rehberlik sıraları ve fallback ayarları değişmez; yerel Codex aracının sunduğu ilk beş seçenek ve önerilen varsayılan değişebilir. Kayıt istemcileri yeniden başlatmaz; katalog yenilemesi bekleyebilir ve eski kataloğu gösteren istemcinin yeniden açılması gerekebilir.
+Sabitlenmiş ve yerel öncelik aralıkları korunur. Sıra Codex kataloğu ve Claude keşfinin yönlendirilmiş gruplarına uygulanır; Claude yerel öneki, açık Desktop profilleri ve alias sahipliği korunur. OpenCodex rehberlik sıraları ve fallback ayarları değişmez; yerel Codex aracının sunduğu ilk beş seçenek ve önerilen varsayılan değişebilir. Kayıt istemcileri yeniden başlatmaz; katalog yenilemesi bekleyebilir ve eski kataloğu gösteren istemcinin yeniden açılması gerekebilir.

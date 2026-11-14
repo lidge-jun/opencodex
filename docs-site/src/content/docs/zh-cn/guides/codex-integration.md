@@ -198,7 +198,7 @@ Codex 显示的模型来自一个磁盘上的 catalog（默认是 `$CODEX_HOME/o
 3. **合并**路由模型，把它们作为带命名空间的条目（`provider/model`）加入，且从原生 Codex catalog 模板克隆，
    以便 Codex 的严格 parser 能接受它们。
 4. **过滤** `config.disabledModels` 和每个 provider 的非空 `selectedModels` allowlist。
-5. **重新排序**，让 featured models 排在最前（见下文），然后把合并后的 catalog 写回去。
+5. **重新排序**，让选择器置顶模型排在最前（见下文），然后把合并后的 catalog 写回去。
 
 路由目录条目还会把 GPT-5 身份文案改为真实的上游模型名称。reasoning 选项会依据提供商和模型元数据，
 使用 Codex 的 `low | medium | high | xhigh | max | ultra` 档位；上游不支持的值会在发送请求前完成

@@ -14,6 +14,7 @@ const rows = {
   providerTools: ["Provider settings", "프로바이더 설정", "Anbietereinstellungen", "Réglages du fournisseur", "提供商设置", "提供者設定", "Настройки провайдера", "プロバイダー設定", "Sağlayıcı ayarları", "Cài đặt nhà cung cấp", "Configurações do provedor"],
   bulkLabel: ["Turn every model on or off", "모든 모델 켜기·끄기", "Alle Modelle ein- oder ausschalten", "Activer ou désactiver tous les modèles", "全部开启或关闭", "全部開啟或關閉", "Включить или выключить все модели", "すべてのモデルをオン・オフ", "Tüm modelleri aç veya kapat", "Bật hoặc tắt mọi mô hình", "Ativar ou desativar todos os modelos"],
   modelActions: ["Model actions", "모델 작업", "Modellaktionen", "Actions du modèle", "模型操作", "模型操作", "Действия с моделью", "モデルの操作", "Model işlemleri", "Thao tác mô hình", "Ações do modelo"],
+  clientPicker: ["Client model picker", "클라이언트 모델 선택기", "Modellauswahl der Clients", "Sélecteur de modèles des clients", "客户端模型选择器", "用戶端模型選擇器", "Выбор модели в клиентах", "クライアントのモデル選択", "İstemci model seçicisi", "Bộ chọn mô hình của client", "Seletor de modelos do cliente"],
 } satisfies Record<string, Row>;
 
 export const modelsV2Copy = copyTable("modelsV2", rows);

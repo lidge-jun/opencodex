@@ -270,7 +270,7 @@ routed `provider/model` id를 최대 다섯 개 선택하고 저장할 수 있�
 활성화되어 있으면 bare native 선택은 selector-qualified 그룹으로 확장됩니다. 다른 모델도 정확한 id로
 직접 호출할 수 있습니다.
 
-featured-model 목록은 Dashboard의 **Sub-agent delegation** 선택과 별개입니다. Codex가 먼저 보여 줄
+고정 모델 목록은 Dashboard의 **Sub-agent delegation** 선택과 별개입니다. Codex가 먼저 보여 줄
 override를 정할 뿐, 모델을 고르거나 delegation을 시작하지는 않습니다.
 
 ## Desktop 원격 서버
