@@ -447,7 +447,7 @@ incluidas las vacías, no cambian. Esta reparación no requiere detección de mo
 
 ## 3. Catálogo de proveedores con clave API
 
-opencodex incluye 108 preajustes integrados: 87 con clave, 17 OAuth, tres locales y uno predeterminado de reenvío a ChatGPT. El selector **Añadir proveedor** abre el formulario del proveedor con clave, valida la credencial y la guarda; cada proveedor tiene su propia validación. Entre ellos:
+opencodex incluye 109 preajustes integrados: 88 con clave, 17 OAuth, tres locales y uno predeterminado de reenvío a ChatGPT. El selector **Añadir proveedor** abre el formulario del proveedor con clave, valida la credencial cuando el proveedor permite comprobarla y la guarda; cada proveedor tiene su propia validación. Entre ellos:
 
 **ClinePass** utiliza una clave API de Cline con el [catálogo oficial de suscripción](https://docs.cline.bot/getting-started/clinepass) y el [punto final de Chat Completions](https://docs.cline.bot/api/chat-completions), operados por Cline Bot Inc. bajo [los términos de Cline](https://cline.bot/tos). Un id enrutado como `cline-pass/cline-pass/kimi-k3` es intencional: el primer segmento selecciona el proveedor de opencodex, mientras que `cline-pass/kimi-k3` es el identificador de modelo completo que se envía aguas arriba. La cuota de ClinePass se comparte por cuenta entre límites rotativos de 5 horas, semanales y mensuales. Una sonda en vivo del 2026-08-13 verificó que todos los modelos estáticos de ClinePass aceptan `low`, `medium`, `high`, `xhigh` y `max` en el límite de entrada de la pasarela. opencodex conserva los niveles solicitados; cualquier normalización específica del backend sigue siendo responsabilidad de ClinePass.
 
@@ -513,6 +513,7 @@ opencodex incluye 108 preajustes integrados: 87 con clave, 17 OAuth, tres locale
 | Modelflare | `https://modelflare.dev/v1` |
 | AI Stupid Level | `https://aistupidlevel.info/v1` |
 | cheapaimodel | `https://api.cheapaimodel.ai/v1` |
+| AbliteratedLLM | `https://api.abliteratedllm.dev/v1` |
 | OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
@@ -1024,6 +1025,8 @@ Mistral en `https://api.mistral.ai/v1` consulta `/v1/billing/budget` y `/v1/bill
 
 
 **cheapaimodel** es una pasarela de pago por token para modelos abiertos DeepSeek, GLM y Kimi, y Grok, operada por LINKOVA PTE. LTD. Crea una [clave API](https://console.cheapaimodel.ai/keys) con saldo prepago USD y elige el preajuste en init/dashboard u `ocx provider add cheapaimodel`, con clave o `${CHEAPAIMODEL_API_KEY}`. Usa `https://api.cheapaimodel.ai/v1` y [Chat Completions](https://cheapaimodel.ai/docs/api/create-chat-completion) para todos los clientes, no sus rutas Responses/Messages. Descubre por [`GET /v1/models`](https://cheapaimodel.ai/docs/api/list-models), que devuelve 401 sin clave válida. Incluye `deepseek-v4-1-flash`, predeterminado, `glm-5.3`, `glm-5.3-flash`, `kimi-k3` y `grok-4.7`. GLM 5.3 es solo texto; sus imágenes van al sidecar. Kimi K3 usa muestreo propio y no recibe `temperature` ni `top_p`. Se aplican sus [términos](https://cheapaimodel.ai/terms) y [privacidad](https://cheapaimodel.ai/privacy).
+
+**AbliteratedLLM** es una API de pago por token para modelos abiertos abliterados (sin rechazos) y de serie, con saldo prepago en USD por tarjeta o criptomoneda. Crea una [clave API](https://abliteratedllm.dev/dashboard/keys) y elige **AbliteratedLLM** en `ocx init` o **Añadir proveedor**, o ejecuta `ocx provider add abliteratedllm`, con la clave o la referencia `${ABLITERATEDLLM_API_KEY}`. El preajuste usa [Chat Completions](https://abliteratedllm.dev/docs/chat-completions) en `https://api.abliteratedllm.dev/v1` para todos los clientes, no sus rutas Responses (sin estado) ni Anthropic Messages, y descubre modelos con el [`GET /v1/models`](https://abliteratedllm.dev/docs/models) público, que responde sin clave y por eso no puede validarla. `glm-5.3-flash-abliterated` es el predeterminado; los demás modelos incluidos son los pesos originales de cada fabricante. `glm-5.3` y `glm-5.3-fast` son solo texto, así que sus imágenes van al sidecar de visión. `reasoning_effort` se envía como `low`, `medium` o `high`; los niveles superiores se envían como `high`. Se aplican las [condiciones](https://abliteratedllm.dev/terms) y la [política de privacidad](https://abliteratedllm.dev/privacy) de AbliteratedLLM.
 
 El rechazo HTTP 403 de Meta a una clave Muse Code fuera de su cliente es una restricción del plan sobre una credencial válida, no caducidad ni rechazo de clave. Volver a iniciar sesión no lo soluciona; usa `meta-model` con clave de pago por uso. La protección frente a una respuesta vacía de otros gateways conserva un snapshot con `output_text` agregado; ausente, null o vacío aún permite el reintento acotado. No cambia los demás proveedores ni sus políticas.
 

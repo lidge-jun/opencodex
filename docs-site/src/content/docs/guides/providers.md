@@ -412,7 +412,6 @@ with an omitted or `compatible` policy, the repaired request is replayed as befo
 Studio never performs this repair. Native output schemas are outside both policy paths. See the
 [debug command reference](/reference/cli/agents/).
 
-
 After a terminal Nous refresh failure, run `ocx login nous` to reauthenticate.
 
 ### Zed Hosted AI (experimental)
@@ -781,9 +780,9 @@ On upgrade, startup adds Pro to a saved model list only when it exactly matches 
 
 ## 3. API-key catalog
 
-opencodex ships 108 built-in presets: 87 key-based, 17 OAuth, three local, and one default
+opencodex ships 109 built-in presets: 88 key-based, 17 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
-validates the key, and stores it; validation is provider-specific. Notable entries:
+validates the key where the provider can check one, and stores it. Notable entries:
 
 **ClinePass** uses a Cline API key with the [official subscription catalog](https://docs.cline.bot/getting-started/clinepass)
 and [Chat Completions endpoint](https://docs.cline.bot/api/chat-completions), operated by Cline Bot Inc. under
@@ -875,6 +874,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Modelflare | `https://modelflare.dev/v1` |
 | AI Stupid Level | `https://aistupidlevel.info/v1` |
 | cheapaimodel | `https://api.cheapaimodel.ai/v1` |
+| AbliteratedLLM | `https://api.abliteratedllm.dev/v1` |
 | OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
@@ -1008,6 +1008,8 @@ preset sends every request through Chat Completions, the one interface every cat
 it does not use the gateway's Responses or Anthropic Messages endpoints. cheapaimodel's
 [terms](https://cheapaimodel.ai/terms) and [privacy policy](https://cheapaimodel.ai/privacy) apply to
 requests sent to this service.
+
+**AbliteratedLLM** is a pay-per-token API for abliterated (refusal-removed) and stock open-weight models, prepaid in USD by card or crypto. Create an [API key](https://abliteratedllm.dev/dashboard/keys), then select **AbliteratedLLM** in `ocx init` or the dashboard's **Add provider** picker, or run `ocx provider add abliteratedllm`, and give it the key directly or as the reference `${ABLITERATEDLLM_API_KEY}`. The preset sends every client through [Chat Completions](https://abliteratedllm.dev/docs/chat-completions) at `https://api.abliteratedllm.dev/v1`, not the service's stateless Responses or Anthropic Messages endpoints, and discovers models from the public [`GET /v1/models`](https://abliteratedllm.dev/docs/models), which answers without a key and so cannot validate one. `glm-5.3-flash-abliterated` is the default; the other seeded models are the vendors' original weights. `glm-5.3` and `glm-5.3-fast` are text only, so images for them go to the vision sidecar. `reasoning_effort` is sent as `low`, `medium` or `high`; higher levels are sent as `high`. AbliteratedLLM's [terms](https://abliteratedllm.dev/terms) and [privacy policy](https://abliteratedllm.dev/privacy) apply to requests sent to this service.
 
 The provider editor also accepts an optional `inputModalities` fallback: a nonempty array containing
 `text`, `image`, `audio`, or `video`. Exact per-model declarations take precedence. Invalid values

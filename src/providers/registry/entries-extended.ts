@@ -125,6 +125,9 @@ import {
   MORPH_ULTRA_MODEL_INPUT_MODALITIES,
   MORPH_ULTRA_REASONING_EFFORTS,
   MORPH_ULTRA_REASONING_EFFORT_MAPS,
+  ABLITERATEDLLM_MODELS,
+  ABLITERATEDLLM_MODEL_CONTEXT_WINDOWS,
+  ABLITERATEDLLM_MODEL_INPUT_MODALITIES,
   ANTHROPIC_MODELS,
   ANTHROPIC_MODEL_CONTEXT_WINDOWS,
   ANTHROPIC_MODEL_INPUT_MODALITIES,
@@ -1414,6 +1417,32 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     modelReasoningEfforts: { "deepseek-v4-1-flash": deepseekThinkingEffortsFor("deepseek-v4-1-flash") },
     modelReasoningEffortMap: { "deepseek-v4-1-flash": { ...deepseekReasoningMapFor("deepseek-v4-1-flash"), none: "none" } },
     note: "Pay-per-token API gateway for open-weight models (DeepSeek, GLM, Kimi) and Grok, billed from a prepaid USD balance. Create an API key at console.cheapaimodel.ai. Live discovery lists the models your key can call; deepseek-v4-1-flash is the default. Chat Completions only.",
+  },
+  {
+    // AbliteratedLLM. Contract checked 2026-11-14: https://abliteratedllm.dev/docs/chat-completions
+    // and https://abliteratedllm.dev/docs/models. GET /v1/models is public and answers 200 for any
+    // Bearer value, so discovery needs no key but cannot verify one (GET /v1/balance is the
+    // key-gated route). Chat Completions serves every catalog model, so every inbound stays on Chat;
+    // the stateless Responses and the Anthropic Messages endpoints are not used. reasoning_effort is
+    // documented as low, medium or high for every model, so higher Codex levels clamp to high.
+    // glm-5.3-flash-abliterated lists 131,072 output tokens; every other row's output limit equals
+    // its window. The env reference derived from the id is ${ABLITERATEDLLM_API_KEY}.
+    id: "abliteratedllm",
+    label: "AbliteratedLLM",
+    adapter: "openai-chat",
+    baseUrl: "https://api.abliteratedllm.dev/v1",
+    authKind: "key",
+    dashboardUrl: "https://abliteratedllm.dev/dashboard/keys",
+    liveModels: true,
+    apiKeyValidation: "unknown",
+    preserveCustomDestination: true,
+    defaultModel: "glm-5.3-flash-abliterated",
+    models: ABLITERATEDLLM_MODELS,
+    modelContextWindows: ABLITERATEDLLM_MODEL_CONTEXT_WINDOWS,
+    modelMaxOutputTokens: { "glm-5.3-flash-abliterated": 131_072 },
+    modelInputModalities: ABLITERATEDLLM_MODEL_INPUT_MODALITIES,
+    reasoningEfforts: ["low", "medium", "high"],
+    note: "Pay-per-token API for abliterated (refusal-removed) and stock open-weight models, prepaid in USD by card or crypto. Create an API key at abliteratedllm.dev/dashboard/keys. glm-5.3-flash-abliterated is the default; the other models are the vendors' original weights. Live discovery reads the public model list, which cannot validate a key. The preset sends every client through Chat Completions.",
   },
   // Xiaomi retires mimo-v2.5 and mimo-v2.5-pro on 2026-10-21 with no redirect
   // (https://mimo.mi.com/docs/en-US/updates/deprecate), so the first-party presets default to V2.6.
