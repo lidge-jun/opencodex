@@ -1,5 +1,6 @@
 import { expect } from "bun:test";
 import { installEndpointHooks, test, fetch, startServer, serveUpstream, ownCleanup, caseSignal, testDir, isolatedCodexHome, originalFetch } from "../helpers/claude-endpoint-lifetime";
+import { redirectCanonicalCodexTo } from "../helpers/pool-retry-harness";
 import { logsFromApiBody } from "../helpers/logs-api";
 import { rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -644,6 +645,10 @@ test("native openai-responses route carries prompt_cache_key + synthesized sessi
       return new Response(frames.join(""), { headers: { "Content-Type": "text/event-stream" } });
     },
   });
+  // This fixture serves HTTP/SSE only: refuse native WSS instead of reaching chatgpt.com.
+  const originalWebSocket = globalThis.WebSocket;
+  ownCleanup(() => { globalThis.WebSocket = originalWebSocket; });
+  redirectCanonicalCodexTo(upstream.url.toString());
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
     const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const url = new URL(requestUrl);
