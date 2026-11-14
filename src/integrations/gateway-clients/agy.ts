@@ -14,7 +14,8 @@ const ID = "agy";
 const START = "# >>> opencodex agy >>>";
 const END = "# <<< opencodex agy <<<";
 type Kind = "posix" | "powershell";
-interface Entry { path: string; kind: Kind; originalBytes: string | null; createdDirs: string[]; writtenSha256: string }
+/** `pathWiseOnly`: the user edited the profile while connected, so disconnect removes only the block. */
+interface Entry { path: string; kind: Kind; originalBytes: string | null; createdDirs: string[]; writtenSha256: string; pathWiseOnly?: true }
 interface Stash { version: 1; files: Entry[] }
 
 const posixQuote = (v: string) => `'${v.replace(/'/g, "'\\''")}'`;
@@ -41,15 +42,17 @@ export function agyBlock(kind: Kind, target: GatewayTarget): string {
   ].join("\n");
 }
 
-/** Profile files this connector writes, per platform. Existing files first; one is created when none exists. */
+/** Profile files this connector writes, per platform. Existing files first; the $SHELL profile is created when missing. */
 function targets(ctx: GatewayClientContext): { path: string; kind: Kind }[] {
   const win = ctx.platform === "win32";
   const out: { path: string; kind: Kind }[] = [];
   const posix = [join(ctx.home, ".bashrc"), ...(win ? [] : [join(ctx.home, ".zshrc")])];
   for (const path of posix) if (existsSync(path)) out.push({ path, kind: "posix" });
-  if (!win && out.length === 0) {
-    const zsh = basename(ctx.env.SHELL ?? "") === "zsh";
-    out.push({ path: join(ctx.home, zsh ? ".zshrc" : ".bashrc"), kind: "posix" });
+  if (!win) {
+    // The shell the user runs reads only its own profile, so an existing .bashrc does not stand in for a missing .zshrc.
+    const shell = basename(ctx.env.SHELL ?? "");
+    const selected = join(ctx.home, shell === "zsh" ? ".zshrc" : ".bashrc");
+    if ((out.length === 0 || shell === "zsh" || shell === "bash") && !out.some(t => t.path === selected)) out.push({ path: selected, kind: "posix" });
   }
   const ps7 = win ? join(ctx.home, "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1") : join(ctx.home, ".config", "powershell", "Microsoft.PowerShell_profile.ps1");
   const ps5 = join(ctx.home, "Documents", "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1");
@@ -68,6 +71,22 @@ function blockSpan(text: string): { start: number; end: number } | null {
   if (text.startsWith("\r\n", end)) end += 2; else if (text[end] === "\n") end += 1;
   return { start, end };
 }
+
+type Encoding = "utf8" | "utf16le";
+const UTF16LE_BOM = Buffer.from([0xff, 0xfe]);
+const strictUtf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+/** Profile text and how to write it back; null for an encoding we cannot round-trip (UTF-16BE, UTF-32, ANSI). */
+function decode(bytes: Buffer): { text: string; encoding: Encoding } | null {
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) return null;
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+    // Windows PowerShell 5.1 redirection writes UTF-16LE with a BOM; FF FE 00 00 is UTF-32LE.
+    if (bytes.length >= 4 && bytes[2] === 0 && bytes[3] === 0) return null;
+    return bytes.length % 2 === 0 ? { text: bytes.subarray(2).toString("utf16le"), encoding: "utf16le" } : null;
+  }
+  try { return { text: strictUtf8.decode(bytes), encoding: "utf8" }; } catch { return null; }
+}
+const encode = (text: string, encoding: Encoding): Buffer =>
+  encoding === "utf16le" ? Buffer.concat([UTF16LE_BOM, Buffer.from(text, "utf16le")]) : Buffer.from(text);
 
 const eolOf = (text: string) => (text.includes("\r\n") ? "\r\n" : "\n");
 const withBlock = (text: string, block: string): string => {
@@ -94,7 +113,8 @@ function status(ctx: GatewayClientContext, target?: GatewayTarget): GatewayClien
   const rows: GatewayClientStatus["files"] = [];
   for (const [path, kind] of known) {
     const bytes = readBytes(path);
-    const block = bytes ? blockIn(bytes.toString("utf8")) : null;
+    const decoded = bytes ? decode(bytes) : null;
+    const block = decoded ? blockIn(decoded.text) : null;
     if (block !== null) { withBlocks++; if (!target || block === agyBlock(kind, target)) current++; }
     rows.push({ path, role: kind === "posix" ? "shell profile" : "PowerShell profile", exists: bytes !== null });
   }
@@ -118,12 +138,18 @@ function connect(ctx: GatewayClientContext, target: GatewayTarget): GatewayClien
   for (const t of targets(ctx)) {
     const bytes = readBytes(t.path);
     const prev = old?.files.find(e => e.path === t.path);
-    const hasBlock = bytes !== null && blockIn(bytes.toString("utf8")) !== null;
-    const text = bytes ? bytes.toString("utf8") : "";
-    const out = Buffer.from(withBlock(text, agyBlock(t.kind, target)));
+    const decoded = bytes ? decode(bytes) : { text: "", encoding: "utf8" as const };
+    if (!decoded) return { ok: false, code: "unsupported-file", message: `${t.path} is not UTF-8 or UTF-16LE text, so OpenCodex will not edit it. Nothing was changed.`, changed: false, changedFiles: [], notes: [] };
+    const hasBlock = blockIn(decoded.text) !== null;
+    const out = encode(withBlock(decoded.text, agyBlock(t.kind, target)), decoded.encoding);
     const keep = prev !== undefined && hasBlock;
+    // An edit made while connected must survive disconnect, so it rules out byte-for-byte restoration for good.
+    const drifted = keep && (prev.pathWiseOnly === true || sha256(bytes!) !== prev.writtenSha256);
     staged.push({
-      entry: { path: t.path, kind: t.kind, originalBytes: keep ? prev.originalBytes : bytes ? bytes.toString("base64") : null, createdDirs: prev?.createdDirs ?? [], writtenSha256: sha256(out) },
+      entry: {
+        path: t.path, kind: t.kind, originalBytes: keep ? prev.originalBytes : bytes ? bytes.toString("base64") : null, createdDirs: prev?.createdDirs ?? [], writtenSha256: sha256(out),
+        ...(drifted ? { pathWiseOnly: true as const } : {}),
+      },
       out, changed: bytes === null || sha256(bytes) !== sha256(out),
     });
   }
@@ -149,16 +175,16 @@ function disconnect(ctx: GatewayClientContext): GatewayClientResult {
   let pathWise = false;
   for (const [path, entry] of paths) {
     const bytes = readBytes(path);
-    if (bytes && entry && sha256(bytes) === entry.writtenSha256) {
+    if (bytes && entry && !entry.pathWiseOnly && sha256(bytes) === entry.writtenSha256) {
       if (entry.originalBytes === null) { removeFile(path); rmdirsIfEmpty(entry.createdDirs); }
       else writeBytes(path, Buffer.from(entry.originalBytes, "base64"));
       changedFiles.push(path);
       continue;
     }
     if (!bytes) { if (entry) rmdirsIfEmpty(entry.createdDirs); continue; }
-    const text = bytes.toString("utf8");
-    if (blockIn(text) === null) continue;
-    writeBytes(path, Buffer.from(withoutBlock(text)));
+    const decoded = decode(bytes);
+    if (!decoded || blockIn(decoded.text) === null) continue;
+    writeBytes(path, encode(withoutBlock(decoded.text), decoded.encoding));
     changedFiles.push(path);
     pathWise = true;
   }

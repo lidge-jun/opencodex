@@ -11,15 +11,22 @@ import { GATEWAY_NOTE_TEXT, gatewayNote, type GatewayClientConnector, type Gatew
 
 type Json = Record<string, unknown>;
 interface Prior { present: boolean; value?: unknown }
-interface Stash {
+interface Written { written: { gateway: unknown; defaultModelId: string | null }; writtenSha256: string }
+/**
+ * `written`/`writtenSha256` is the last state known to be on disk; `pending` is a write that may or may not
+ * have landed, journaled before it starts so an interrupted or failed write still leaves both recognisable.
+ * `pathWiseOnly`: the user edited the file while connected, so disconnect never restores the old bytes.
+ */
+interface Stash extends Written {
   version: 1;
   path: string;
   originalBytes: string | null;
   createdDirs: string[];
   prior: { gateway: Prior; defaultModelId: Prior; list: Prior; modelsPresent: boolean };
-  written: { gateway: unknown; defaultModelId: string | null };
-  writtenSha256: string;
+  pending?: Written;
+  pathWiseOnly?: true;
 }
+const statesOf = (stash: Stash): Written[] => [stash, ...(stash.pending ? [stash.pending] : [])];
 
 const ID = "antigravity";
 const BOM = String.fromCharCode(0xfeff);
@@ -93,6 +100,7 @@ function connect(ctx: GatewayClientContext, target: GatewayTarget): GatewayClien
   const { doc } = parsed;
   let stash = readStash<Stash>(ctx, ID);
   const keep = stash !== null && ours(doc.gateway, undefined) === "match";
+  const onDisk = keep && bytes ? statesOf(stash!).find(st => st.writtenSha256 === sha256(bytes)) : undefined;
   const models = isObj(doc.models) ? doc.models : undefined;
   const dir = join(ctx.home, ".antigravity");
   let newDirs: string[] = [];
@@ -101,8 +109,14 @@ function connect(ctx: GatewayClientContext, target: GatewayTarget): GatewayClien
     stash = {
       version: 1, path, originalBytes: bytes ? bytes.toString("base64") : null, createdDirs: [...(stash?.createdDirs ?? []), ...newDirs],
       prior: { gateway: prior(doc, "gateway"), defaultModelId: prior(models, "defaultModelId"), list: prior(models, "list"), modelsPresent: models !== undefined },
-      written: { gateway: null, defaultModelId: null }, writtenSha256: "",
+      // Until the new bytes land, the file on disk is the original; exact restoration of it is a no-op.
+      written: { gateway: null, defaultModelId: null }, writtenSha256: bytes ? sha256(bytes) : "",
     };
+  } else {
+    // A file that matches neither the applied nor the pending write was edited by the user.
+    const base = onDisk ?? stash!;
+    stash = { ...stash!, written: base.written, writtenSha256: base.writtenSha256, ...(stash!.pathWiseOnly || !onDisk ? { pathWiseOnly: true as const } : {}) };
+    delete stash.pending;
   }
   const gateway = { enabled: true, url: target.url, apiKey: target.apiKey, wireProtocol: "openai" };
   doc.gateway = gateway;
@@ -113,14 +127,16 @@ function connect(ctx: GatewayClientContext, target: GatewayTarget): GatewayClien
     doc.models = m;
   }
   const out = serialize(parsed);
+  const outSha = sha256(out);
   const next = stash as Stash;
-  next.written = { gateway, defaultModelId: target.defaultModel ?? (keep ? next.written.defaultModelId : null) };
-  next.writtenSha256 = sha256(out);
+  const applied: Written = { written: { gateway, defaultModelId: target.defaultModel ?? (keep ? next.written.defaultModelId : null) }, writtenSha256: outSha };
   try {
-    writeStash(ctx, ID, next);
+    writeStash(ctx, ID, { ...next, pending: applied });
     writeBytes(path, out);
   } catch (error) { return fail("io-error", `Could not write ${path}: ${(error as Error).message}`); }
-  const unchanged = bytes !== null && sha256(bytes) === next.writtenSha256;
+  // The settings are applied; if this promotion fails, the journaled pending state still describes them.
+  try { writeStash(ctx, ID, { ...next, ...applied }); } catch { /* pending stays recognisable */ }
+  const unchanged = bytes !== null && sha256(bytes) === outSha;
   return { ok: true, changed: !unchanged, changedFiles: unchanged ? [] : [path], message: "Antigravity now uses the OpenCodex gateway. Restart Antigravity to apply it.", notes: status(ctx, target).notes };
 }
 
@@ -133,7 +149,8 @@ function disconnect(ctx: GatewayClientContext): GatewayClientResult {
     dropStash(ctx, ID);
     return { ok: true, changed: files.length > 0, changedFiles: files, restore, message, notes: [gatewayNote("restart-app")] };
   };
-  if (bytes && sha256(bytes) === stash.writtenSha256) {
+  const states = statesOf(stash);
+  if (bytes && !stash.pathWiseOnly && states.some(st => st.writtenSha256 === sha256(bytes))) {
     if (stash.originalBytes === null) { removeFile(path); rmdirsIfEmpty(stash.createdDirs); }
     else writeBytes(path, Buffer.from(stash.originalBytes, "base64"));
     return done("exact", "Antigravity settings restored byte for byte.", [path]);
@@ -143,12 +160,13 @@ function disconnect(ctx: GatewayClientContext): GatewayClientResult {
   if (typeof parsed === "string") return { ok: false, code: "unsupported-file", message: `${GATEWAY_NOTE_TEXT[parsed]} The restore record was kept.`, changed: false, changedFiles: [], notes: [] };
   const { doc } = parsed;
   const kept: string[] = [];
-  if (same(doc.gateway, stash.written.gateway)) {
+  if (states.some(st => st.written.gateway !== null && same(doc.gateway, st.written.gateway))) {
     if (stash.prior.gateway.present) doc.gateway = stash.prior.gateway.value; else delete doc.gateway;
   } else kept.push("gateway");
   const models = isObj(doc.models) ? doc.models : undefined;
-  if (models && stash.written.defaultModelId !== null) {
-    if (models.defaultModelId === stash.written.defaultModelId) {
+  const writtenModels = states.map(st => st.written.defaultModelId).filter((id): id is string => id !== null);
+  if (models && writtenModels.length > 0) {
+    if (writtenModels.includes(models.defaultModelId as string)) {
       if (stash.prior.defaultModelId.present) models.defaultModelId = stash.prior.defaultModelId.value; else delete models.defaultModelId;
     } else kept.push("models.defaultModelId");
   }

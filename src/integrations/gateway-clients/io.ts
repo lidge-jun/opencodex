@@ -82,11 +82,13 @@ export function adminSettingsPath(ctx: GatewayClientContext): string | undefined
 export function adminGatewayOverride(ctx: GatewayClientContext): GatewayOverride | null {
   const path = adminSettingsPath(ctx);
   if (!path) return null;
-  const bytes = readBytes(path);
-  if (!bytes) return null;
   let gateway: unknown;
-  try { gateway = (parseJsonc(bytes.toString("utf8")) as { gateway?: unknown } | null)?.gateway; }
-  catch { return { source: "admin_settings", code: "admin-unreadable", detail: "admin_settings.json exists but could not be read, so its gateway settings are unknown" }; }
+  try {
+    // A missing file is no override; EACCES or a parse failure is an unknown one, never a thrown status.
+    const bytes = readBytes(path);
+    if (!bytes) return null;
+    gateway = (parseJsonc(bytes.toString("utf8")) as { gateway?: unknown } | null)?.gateway;
+  } catch { return { source: "admin_settings", code: "admin-unreadable", detail: "admin_settings.json exists but could not be read, so its gateway settings are unknown" }; }
   if (!gateway || typeof gateway !== "object" || Object.keys(gateway).length === 0) return null;
   return { source: "admin_settings", code: "admin-gateway", detail: "organization admin_settings.json sets the gateway and wins over the user settings and AGY_LLM_GATEWAY_* variables" };
 }
