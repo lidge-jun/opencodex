@@ -230,6 +230,7 @@ export function MemberTable({
                       <input
                         className="input input-sm"
                         value={draft.context}
+                        disabled={editing.saving}
                         placeholder={t("routeBoard.members.contextPlaceholder")}
                         onChange={(event) => set({ context: event.target.value })}
                       />
@@ -238,7 +239,7 @@ export function MemberTable({
                       <span>{t("routeBoard.members.input")}</span>
                       <span className="rb-chips">
                         {MODALITIES.map((modality) => (
-                          <button key={modality} type="button" className="rb-chip" aria-pressed={draft.input.includes(modality)}
+                          <button key={modality} type="button" className="rb-chip" disabled={editing.saving} aria-pressed={draft.input.includes(modality)}
                             onClick={() => set({ input: toggle(draft.input, modality) })}>{modalityWord(modality)}</button>
                         ))}
                       </span>
@@ -247,7 +248,7 @@ export function MemberTable({
                       <span>{t("routeBoard.members.efforts")}</span>
                       <span className="rb-chips">
                         {REASONING_EFFORT_LEVELS.map((level) => (
-                          <button key={level} type="button" className="rb-chip" aria-pressed={draft.efforts.includes(level)}
+                          <button key={level} type="button" className="rb-chip" disabled={editing.saving} aria-pressed={draft.efforts.includes(level)}
                             onClick={() => set({ efforts: toggle(draft.efforts, level) })}>{level}</button>
                         ))}
                       </span>

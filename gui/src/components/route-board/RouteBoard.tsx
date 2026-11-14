@@ -57,7 +57,8 @@ export function RouteBoard(props: RouteBoardProps) {
   const [expanded, setExpanded] = useState<string | null>(null);
   /** Row whose editor opened from its context tag, with "More settings" already open. */
   const [moreFor, setMoreFor] = useState<string | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
+  /** Combos with a save in flight; each run clears only its own id. */
+  const [busy, setBusy] = useState<ReadonlySet<string>>(() => new Set());
   const [messages, setMessages] = useState<Record<string, string>>({});
   const rows = buildRouteRows({
     combos: props.combos,
@@ -79,14 +80,18 @@ export function RouteBoard(props: RouteBoardProps) {
   });
 
   const run = async (id: string, work: () => Promise<SaveResult>): Promise<boolean> => {
-    setBusy(id);
+    setBusy((current) => new Set(current).add(id));
     setMessage(id, null);
     try {
       const result = await work();
       if (!result.ok) setMessage(id, result.error ?? t("cws.saveFailed"));
       return result.ok;
     } finally {
-      setBusy(null);
+      setBusy((current) => {
+        const next = new Set(current);
+        next.delete(id);
+        return next;
+      });
     }
   };
 
@@ -127,7 +132,7 @@ export function RouteBoard(props: RouteBoardProps) {
           expanded={expanded === row.combo.id}
           lastResortActive={props.lastResortActive.has(row.combo.id)}
           onOpenContext={() => { setMoreFor(row.combo.id); setExpanded(row.combo.id); }}
-          busy={busy === row.combo.id}
+          busy={busy.has(row.combo.id)}
           locked={props.lockedId === row.combo.id}
           message={messages[row.combo.id] ?? null}
           onToggleExpanded={() => { setMoreFor(null); setExpanded((current) => current === row.combo.id ? null : row.combo.id); }}
@@ -135,7 +140,7 @@ export function RouteBoard(props: RouteBoardProps) {
           onEnabled={(next) => void run(row.combo.id, () => props.onSetEnabled(row.combo.id, next))}
         >
           <ChannelEditor
-            key={`${row.combo.id}:${moreFor === row.combo.id ? "more" : "plain"}`}
+            key={row.combo.id}
             moreOpen={moreFor === row.combo.id}
             catalogContext={props.catalog[row.combo.id]?.contextWindow}
             comboModel={row.publicId}
@@ -151,7 +156,8 @@ export function RouteBoard(props: RouteBoardProps) {
             lastResortActive={props.lastResortActive.has(row.combo.id)}
             labels={distinctProviderLabels(row.channels.map((channel) => channel.provider), (provider) => formatProviderDisplayName(provider, t))}
             capability={props.capability?.[row.combo.id] ?? DEFAULT_CAPABILITY_SETTINGS}
-            saving={busy === row.combo.id || props.lockedId === row.combo.id}
+            saving={busy.has(row.combo.id)}
+            locked={props.lockedId === row.combo.id}
             onSave={(channels, settings) => void saveChannels(row.combo, channels, settings)}
             onSaveModel={props.onSaveModel}
             onProbeModel={props.onProbeModel}

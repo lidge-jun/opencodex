@@ -247,6 +247,29 @@ export function configuredMemberModels(providers: Readonly<Record<string, unknow
   return [...out.values()];
 }
 
+/**
+ * Picker options with the providers' per-model config folded in. A configured model the catalog
+ * has no row for fills in the option standing for it (a provider's default-model placeholder) or,
+ * without one, is appended. Catalog rows keep their own values.
+ */
+export function withConfiguredMembers<T extends { provider: string; id: string }>(
+  options: readonly T[],
+  catalogKeys: ReadonlySet<string>,
+  configured: readonly T[],
+): T[] {
+  const pending = new Map(configured
+    .filter((member) => !catalogKeys.has(channelKey(member.provider, member.id)))
+    .map((member) => [channelKey(member.provider, member.id), member]));
+  const merged = options.map((option) => {
+    const key = channelKey(option.provider, option.id);
+    const member = pending.get(key);
+    if (!member) return option;
+    pending.delete(key);
+    return { ...option, ...member };
+  });
+  return [...merged, ...pending.values()];
+}
+
 /** Context typed by an operator: "200000", "200K", "1M", "1.5m". Undefined when it is not a positive whole token count. */
 export function parseContextInput(text: string): number | undefined {
   const match = /^\s*(\d+(?:\.\d+)?)\s*([km]?)\s*$/i.exec(text.replace(/[,_]/g, ""));

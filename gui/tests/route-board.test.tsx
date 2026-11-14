@@ -19,6 +19,7 @@ import {
   parseProbeResponse,
   withInferredGaps,
   configuredMemberModels,
+  withConfiguredMembers,
   dragSlot,
   memberRestorePatch,
   memberSettingsPatch,
@@ -596,6 +597,19 @@ describe("Combos overview page", () => {
     expect(window.location.hash).toBe("#models/combos");
   });
 
+  test("the context tag keeps an open editor's unsaved order, and the combined context follows the draft", async () => {
+    await renderPage();
+    await act(async () => { row("alpha").querySelector<HTMLButtonElement>(".rb-row-toggle")!.click(); });
+    const editor = row("alpha").querySelector<HTMLElement>(".rb-editor")!;
+    await act(async () => { editor.querySelector<HTMLButtonElement>('button[aria-label$="gpt-5 down"]')!.click(); });
+    await act(async () => { row("alpha").querySelector<HTMLButtonElement>(".rb-tag--button")!.click(); });
+    const open = row("alpha").querySelector<HTMLElement>(".rb-editor")!;
+    expect(open).toBe(editor);
+    expect(open.querySelector(".rb-more-toggle")?.getAttribute("aria-expanded")).toBe("true");
+    expect([...open.querySelectorAll(".rb-channel code")].map(code => code.textContent)).toEqual(["claude", "gpt-5"]);
+    expect(open.querySelector(".rb-members tfoot td")?.textContent).not.toContain("200K");
+  });
+
   test("the fallback-only switch writes cooldownWaitPolicy", async () => {
     await renderPage();
     await act(async () => { row("alpha").querySelector<HTMLButtonElement>(".rb-row-toggle")!.click(); });
@@ -722,6 +736,20 @@ describe("member capability edits", () => {
     })).toEqual([
       { provider: "zed", id: "m", contextWindow: 400000, inputModalities: ["text"], sources: { context: "manual", input: "manual", efforts: "unknown" } },
       { provider: "other", id: "n", reasoningEfforts: ["low"], sources: { context: "unknown", input: "unknown", efforts: "manual" } },
+    ]);
+  });
+
+  test("a default-model placeholder keeps its configured values; a catalog row keeps its own", () => {
+    const options = [{ provider: "zed", id: "listed", contextWindow: 100000 }, { provider: "zed", id: "default" }];
+    const configured = [
+      { provider: "zed", id: "listed", contextWindow: 1 },
+      { provider: "zed", id: "default", contextWindow: 400000, sources: { context: "manual" as const, input: "unknown" as const, efforts: "unknown" as const } },
+      { provider: "zed", id: "other", contextWindow: 8000 },
+    ];
+    expect(withConfiguredMembers(options, new Set([channelKey("zed", "listed")]), configured)).toEqual([
+      { provider: "zed", id: "listed", contextWindow: 100000 },
+      { provider: "zed", id: "default", contextWindow: 400000, sources: { context: "manual", input: "unknown", efforts: "unknown" } },
+      { provider: "zed", id: "other", contextWindow: 8000 },
     ]);
   });
 

@@ -85,6 +85,7 @@ export function ChannelEditor({
   catalogContext,
   moreOpen: moreOpenInitially = false,
   saving,
+  locked = false,
   onSave,
   onSaveModel,
   onProbeModel,
@@ -105,7 +106,10 @@ export function ChannelEditor({
   catalogContext?: number;
   /** Open "More settings" and bring it into view (the row's context tag asks for this). */
   moreOpen?: boolean;
+  /** This editor's save is in flight: its channels and settings hold still until it settles. */
   saving: boolean;
+  /** The combo has an unsaved draft in the advanced editor, so this one cannot save. */
+  locked?: boolean;
   onSave: (channels: EditableChannel[], settings: ComboSettingsPatch) => void;
   /** Writes one member model's per-provider settings (shared by every combo using it). */
   onSaveModel?: SaveMemberModel;
@@ -144,7 +148,9 @@ export function ChannelEditor({
   });
 
   useEffect(() => {
-    if (moreOpenInitially) moreRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+    if (!moreOpenInitially) return;
+    setMoreOpen(true);
+    moreRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
   }, [moreOpenInitially]);
 
   const move = (from: number, to: number) => setChannels((list) => moveChannel(list, from, to));
@@ -155,7 +161,7 @@ export function ChannelEditor({
   const startDrag = (event: ReactPointerEvent<HTMLLIElement>, from: number) => {
     const list = listRef.current;
     const target = event.target as Element;
-    if (!list || target.closest("button, input, a, [role=combobox]")) return;
+    if (!list || saving || target.closest("button, input, a, [role=combobox]")) return;
     // On touch only the grip drags, so the rest of the row still scrolls the page.
     if (event.pointerType === "touch" && !target.closest(".rb-channel-grip")) return;
     const rows = Array.from(list.children) as HTMLElement[];
@@ -173,7 +179,10 @@ export function ChannelEditor({
   const policy = capability.capabilityPolicy;
   /** Estimates fill gaps in the combined row only, and the row says so; they never route. */
   const combined = withInferredGaps(facts);
-  const context = comboContextWindow(combined.members, policy, catalogContext);
+  // The server's number describes the saved combo: once members or policy change, the draft's own members decide.
+  const asSaved = policy === initialCapability.capabilityPolicy && channels.length === initial.length
+    && channels.every((channel, index) => channel.key === initial[index]?.key);
+  const context = comboContextWindow(combined.members, policy, asSaved ? catalogContext : undefined);
   const modalities = combineLists(combined.members.map((fact) => fact.inputModalities), policy, MODALITY_ORDER);
   const efforts = combineLists(combined.members.map((fact) => fact.reasoningEfforts), policy, COMBO_EFFORTS);
 
@@ -208,14 +217,15 @@ export function ChannelEditor({
                   type="button"
                   className={`btn btn-ghost btn-sm rb-last-resort${channel.lastResort ? (fallbackOnly ? " is-on" : " is-inert") : ""}`}
                   aria-pressed={channel.lastResort}
+                  disabled={saving}
                   title={channel.lastResort && !fallbackOnly ? t("routeBoard.edit.lastResortInert") : t("routeBoard.edit.lastResortHint")}
                   onClick={() => setChannels((list) => list.map((c, i) => i === index ? { ...c, lastResort: !c.lastResort } : c))}
                 >{t("routeBoard.lastResort")}</button>
-                <button type="button" className="btn btn-ghost btn-sm" disabled={index === 0}
+                <button type="button" className="btn btn-ghost btn-sm" disabled={saving || index === 0}
                   aria-label={t("routeBoard.edit.moveUp", { name })} onClick={() => move(index, index - 1)}>↑</button>
-                <button type="button" className="btn btn-ghost btn-sm" disabled={index === channels.length - 1}
+                <button type="button" className="btn btn-ghost btn-sm" disabled={saving || index === channels.length - 1}
                   aria-label={t("routeBoard.edit.moveDown", { name })} onClick={() => move(index, index + 1)}>↓</button>
-                <button type="button" className="btn btn-ghost btn-sm rb-remove"
+                <button type="button" className="btn btn-ghost btn-sm rb-remove" disabled={saving}
                   aria-label={t("routeBoard.edit.remove", { name })}
                   onClick={() => setChannels((list) => list.filter((_, i) => i !== index))}>×</button>
               </span>
@@ -243,7 +253,7 @@ export function ChannelEditor({
         />
         <Switch on={latestOnly} onClick={() => setLatestOnly(!latestOnly)} label={t("models.latestPerFamily")}
           title={t("models.latestPerFamilyHint")} showLabel />
-        <button type="button" className="btn btn-ghost btn-sm" disabled={!chosenModel} onClick={add}>
+        <button type="button" className="btn btn-ghost btn-sm" disabled={saving || !chosenModel} onClick={add}>
           {t("routeBoard.edit.add")}
         </button>
       </div>
@@ -264,6 +274,7 @@ export function ChannelEditor({
                 size="sm"
                 className="rb-strategy"
                 value={policy}
+                disabled={saving}
                 label={t("routeBoard.cap.title")}
                 align="right"
                 dropdownStyle={{ width: 360 }}
@@ -284,6 +295,7 @@ export function ChannelEditor({
                   size="sm"
                   className="rb-strategy"
                   value={capability.onUnservable}
+                  disabled={saving}
                   label={t("routeBoard.cap.unservable")}
                   align="right"
                   dropdownStyle={{ width: 360 }}
@@ -300,7 +312,7 @@ export function ChannelEditor({
                 <span className="rb-pref-name">{t("routeBoard.more.fallbackOnly")}</span>
                 <span className="rb-pref-hint">{t("routeBoard.more.fallbackOnlyHint")}</span>
               </div>
-              <Switch on={fallbackOnly} label={t("routeBoard.more.fallbackOnly")} onClick={() => setFallbackOnly((on) => !on)} />
+              <Switch on={fallbackOnly} disabled={saving} label={t("routeBoard.more.fallbackOnly")} onClick={() => setFallbackOnly((on) => !on)} />
             </div>
 
             <MemberTable
@@ -319,7 +331,7 @@ export function ChannelEditor({
         <span className="rb-editor-spacer" />
         {dirty && <span className="rb-unsaved">{t("routeBoard.edit.unsaved")}</span>}
         <button type="button" className="btn btn-ghost btn-sm" onClick={onCancel}>{t("common.cancel")}</button>
-        <button type="button" className="btn btn-primary btn-sm" disabled={!dirty || saving} onClick={() => onSave(channels, settings)}>
+        <button type="button" className="btn btn-primary btn-sm" disabled={!dirty || saving || locked} onClick={() => onSave(channels, settings)}>
           {t("common.save")}
         </button>
       </div>

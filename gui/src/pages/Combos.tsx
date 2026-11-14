@@ -40,6 +40,7 @@ import {
   type MemberInferred,
   type ProbeOutcome,
   configuredMemberModels,
+  withConfiguredMembers,
   parseCapabilitySettings,
   type AccountCount,
   type ComboCapabilitySettings,
@@ -359,16 +360,17 @@ export default function Combos({
       }
     }
 
-    const catalogKeys = new Set(models.map((model) => channelKey(model.provider, model.id)));
-    const memberModels = [
-      ...models.map((model) => {
+    // Only real catalog rows shadow the per-model config; a default-model placeholder takes it.
+    const catalogKeys = new Set(capabilityModels.map((model) => channelKey(model.provider, model.id)));
+    const memberModels = withConfiguredMembers(
+      models.map((model): ModelOption => {
         const key = channelKey(model.provider, model.id);
         const sources = sourcesByKey.get(key);
         const inferred = inferredByKey.get(key);
         return { ...model, ...(sources ? { sources } : {}), ...(inferred ? { inferred } : {}) };
       }),
-      ...configuredMemberModels(allProviders)
-        .filter((member) => !catalogKeys.has(channelKey(member.provider, member.id)))
+      catalogKeys,
+      configuredMemberModels(allProviders)
         .map((member): ModelOption => ({
           provider: member.provider,
           id: member.id,
@@ -378,7 +380,7 @@ export default function Combos({
           ...(member.reasoningEfforts ? { reasoningEfforts: [...member.reasoningEfforts] } : {}),
           ...(member.sources ? { sources: member.sources } : {}),
         })),
-    ];
+    );
     const next = { combos, providers, models, capabilityModels, cataloguedComboIds: [...catalogued], comboCatalog, lastResort, lastResortActive, capability, memberModels, hiddenModels } satisfies CachedCombosPage;
     writeSessionListCacheEntry(cacheKey, next);
     // Retain the coherent payload here — one place, on the success path, never during
