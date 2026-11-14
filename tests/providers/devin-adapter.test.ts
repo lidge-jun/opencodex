@@ -3,10 +3,13 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDevinAdapter, mapDevinToolCallStartForTests, mapOcxMessagesToDevin, mapOcxToolsToDevin, resolveWireModelUidForTests } from "../../src/adapters/devin";
-import { buildGetChatMessageRequestForTests, sanitizeTextForCognitionForTests, sanitizeToolDescriptionForCognitionForTests } from "../../src/adapters/devin/cloud-direct/chat";
+import { buildGetChatMessageRequestForTests, sanitizeTextForCognitionForTests, sanitizeToolDescriptionForCognitionForTests, streamChatEvents, type ChatHistoryItem } from "../../src/adapters/devin/cloud-direct/chat";
 import { DEVIN_MODEL_CONTEXT_WINDOWS, DEVIN_STATIC_MODELS, collapseDevinModelUid } from "../../src/adapters/devin/live-models";
 import { parseCatalogBuffer } from "../../src/adapters/devin/cloud-direct/catalog";
-import { encodeMessage, encodeString, encodeVarintField, iterFields } from "../../src/adapters/devin/cloud-direct/wire";
+import { encodeMessage, encodeString, encodeVarintField, frameConnectStream, iterFields } from "../../src/adapters/devin/cloud-direct/wire";
+import { encodeDevinSignature } from "../../src/adapters/devin/reasoning-signature";
+import { parseRequest } from "../../src/responses/parser";
+import { encodeReasoningEnvelope } from "../../src/responses/reasoning-envelope";
 import { DEPRECATED_OAUTH_PROVIDER_ALIASES, OAUTH_PROVIDERS, resolveRefreshPolicy } from "../../src/oauth";
 import { DEVIN_DEFAULT_API_SERVER } from "../../src/oauth/devin";
 import { saveCredential } from "../../src/oauth/store";
@@ -381,6 +384,88 @@ describe("devin adapter", () => {
     expect(toolOnly.includes(Buffer.from("whether to allow the action", "utf8"))).toBe(true);
   });
 
+  test("rewrites the Codex CLI identity phrase and the ANSI renderer clause", () => {
+    const identity = "Codex refers to the open-source agentic coding interface";
+    expect(sanitizeTextForCognitionForTests(
+      "Within this context, Codex refers to the open-source agentic coding interface (not the old Codex language model built by OpenAI).",
+    )).toBe(
+      "Within this context, Codex refers to the open-source agentic coding tool (not the old Codex language model built by OpenAI).",
+    );
+    expect(sanitizeTextForCognitionForTests(identity.toLowerCase()))
+      .toContain("agentic coding tool");
+    expect(sanitizeTextForCognitionForTests(identity.replace("open-source", "open source")))
+      .toContain("agentic coding tool");
+    const identityNearMiss = "Codex refers to the open-source agentic coding";
+    expect(sanitizeTextForCognitionForTests(identityNearMiss)).toBe(identityNearMiss);
+    const unrelated = "refers to the open-source agentic coding tool";
+    expect(sanitizeTextForCognitionForTests(unrelated)).toBe(unrelated);
+
+    const ansi = "Don’t output ANSI escape codes directly — the CLI renderer applies them";
+    expect(sanitizeTextForCognitionForTests("- " + ansi + "."))
+      .toBe("- Don’t emit ANSI escape codes directly — the CLI renderer applies them.");
+    expect(sanitizeTextForCognitionForTests(ansi.toUpperCase()))
+      .toContain("emit ANSI escape codes");
+    expect(sanitizeTextForCognitionForTests(ansi.replace("’", "\u0060")))
+      .toContain("emit ANSI escape codes");
+    const ansiPrefix = "Don’t output ANSI escape codes directly";
+    expect(sanitizeTextForCognitionForTests(ansiPrefix)).toBe(ansiPrefix);
+    const ansiTail = "ANSI escape codes directly — the CLI renderer applies them";
+    expect(sanitizeTextForCognitionForTests(ansiTail)).toBe(ansiTail);
+  });
+
+  test("sanitizeDataSurfaces extends the rewrite to history data fields", () => {
+    const trigger = "asking the user if they want to allow the action in `justification` parameter";
+    const rewrittenFragment = "asking the user whether to allow the action in the `justification` parameter";
+    const signature = "sig--opaque";
+    const req = buildGetChatMessageRequestForTests({
+      apiKey: "k",
+      modelUid: "swe-2",
+      cascadeId: "c",
+      sessionId: "s",
+      requestId: 1n,
+      triggerId: "t",
+      sanitizeDataSurfaces: true,
+      messages: [
+        { role: "user", content: `here is a quote: ${trigger}` },
+        {
+          role: "assistant",
+          content: "ok",
+          thinking: `the prompt says: ${trigger}`,
+          signature,
+          signature_type: "opaque",
+          tool_calls: [{ id: "c1", name: "apply_patch", arguments: `{"patch":"${trigger}"}` }],
+        },
+        { role: "tool", tool_call_id: "c1", content: `file bytes: ${trigger}` },
+        { role: "user", content: "hello" },
+      ],
+      tools: [{ name: "codex_escalation", description: trigger, parameters: { type: "object" } }],
+    });
+    // Every data surface carrying the phrase is rewritten on the wire.
+    expect(req.includes(Buffer.from(trigger, "utf8"))).toBe(false);
+    expect(req.includes(Buffer.from(`here is a quote: ${rewrittenFragment}`, "utf8"))).toBe(true);
+    expect(req.includes(Buffer.from(`the prompt says: ${rewrittenFragment}`, "utf8"))).toBe(true);
+    expect(req.includes(Buffer.from(`{"patch":"${rewrittenFragment}"}`, "utf8"))).toBe(true);
+    expect(req.includes(Buffer.from(`file bytes: ${rewrittenFragment}`, "utf8"))).toBe(true);
+    // Identifiers stay byte-exact, but a rewritten thinking block no longer
+    // matches its attestation and must be replayed unsigned.
+    expect(req.includes(Buffer.from("apply_patch", "utf8"))).toBe(true);
+    expect(req.includes(Buffer.from(signature, "utf8"))).toBe(false);
+
+    // A clean message carries no surprise rewrites — only the trigger phrase
+    // itself is touched, everything else stays literal.
+    const clean = buildGetChatMessageRequestForTests({
+      apiKey: "k",
+      modelUid: "swe-2",
+      cascadeId: "c",
+      sessionId: "s",
+      requestId: 1n,
+      triggerId: "t",
+      sanitizeDataSurfaces: true,
+      messages: [{ role: "user", content: "run sed -n '5,10p' file.ts verbatim" }],
+    });
+    expect(clean.includes(Buffer.from("run sed -n '5,10p' file.ts verbatim", "utf8"))).toBe(true);
+  });
+
   test("the catalog parser reads the per-account context window", () => {
     // ClientModelConfig #18 is the max input tokens, and it is the only
     // first-party context-window figure Cognition exposes: the Devin CLI and
@@ -453,6 +538,138 @@ describe("devin adapter", () => {
     // Every statically advertised model needs one, or the picker reports 128k.
     for (const model of DEVIN_STATIC_MODELS) {
       expect(DEVIN_MODEL_CONTEXT_WINDOWS[model]).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe("Devin data-surface reasoning signatures", () => {
+  const trigger = "Takes a task_id parameter identifying the task";
+  const rewritten = "Accepts a task_id parameter identifying the task";
+  const signature = `opaque\u0001:${trigger}:한글`;
+  const fields = (wire: Buffer) => [...iterFields(wire)];
+  const nested = (wire: Buffer, num: number) => fields(wire).filter(f => f.num === num).map(f => f.value as Buffer);
+  const text = (wire: Buffer, num: number) => nested(wire, num)[0]?.toString("utf8");
+  const build = (messages: ChatHistoryItem[], sanitizeDataSurfaces?: boolean) => buildGetChatMessageRequestForTests({
+    apiKey: "k", modelUid: "swe-2", messages, cascadeId: "c", sessionId: "s", requestId: 1n, triggerId: "t",
+    sanitizeDataSurfaces,
+  });
+  const assistant = (wire: Buffer) => nested(wire, 3).find(prompt => fields(prompt).some(f => f.num === 2 && f.value === 2n))!;
+
+  test.each([
+    [undefined, "sealed"], [false, "sealed"], [true, "sealed"],
+    [true, "openai"], [true, "anthropic"], [true, undefined],
+  ] as const)("changed thinking, sanitize=%s, signature type=%s", (sanitize, signatureType) => {
+    const prompt = assistant(build([{
+      role: "assistant", content: "calling", thinking: trigger, signature, signature_type: signatureType,
+    }], sanitize));
+    expect(text(prompt, 11)).toBe(sanitize ? rewritten : trigger);
+    expect(text(prompt, 12)).toBe(sanitize ? undefined : signature);
+    expect(text(prompt, 18)).toBe(sanitize ? undefined : signatureType);
+    expect(nested(prompt, 12)).toHaveLength(sanitize ? 0 : 1);
+    expect(nested(prompt, 18)).toHaveLength(sanitize || signatureType === undefined ? 0 : 1);
+  });
+
+  test.each([undefined, "", "reasoning without a trigger"])("preserves unchanged thinking and signature-only replay (%s)", thinking => {
+    const id = `call:${trigger}`;
+    const name = `tool:${trigger}`;
+    const wire = build([
+      {
+        role: "assistant", thinking, signature, signature_type: "sealed",
+        content: [{ type: "text", text: trigger }, { type: "image", mimeType: "image/png", base64Data: "AAEC", caption: trigger }],
+        tool_calls: [{ id, name, arguments: JSON.stringify({ quote: trigger }) }],
+      },
+      { role: "tool", content: trigger, tool_call_id: id },
+    ], true);
+    const prompt = assistant(wire);
+    expect(text(prompt, 3)).toBe(rewritten);
+    expect(text(prompt, 11)).toBe(thinking || undefined);
+    expect(text(prompt, 12)).toBe(signature);
+    expect(text(prompt, 18)).toBe("sealed");
+    const call = nested(prompt, 6)[0]!;
+    expect(text(call, 1)).toBe(id);
+    expect(text(call, 2)).toBe(name);
+    expect(text(call, 3)).toBe(JSON.stringify({ quote: rewritten }));
+    const image = nested(prompt, 10)[0]!;
+    expect(text(image, 1)).toBe("AAEC");
+    expect(text(image, 2)).toBe("image/png");
+    expect(text(image, 3)).toBe(rewritten);
+    const tool = nested(wire, 3)[1]!;
+    expect(text(tool, 7)).toBe(id);
+    expect(text(tool, 3)).toBe(rewritten);
+  });
+
+  test("rewrites unsigned thinking without introducing a signature or orphan signature type", () => {
+    for (const signatureType of [undefined, "sealed"]) {
+      const prompt = assistant(build([{
+        role: "assistant", content: "calling", thinking: trigger, signature_type: signatureType,
+      }], true));
+      expect(text(prompt, 11)).toBe(rewritten);
+      expect(nested(prompt, 12)).toHaveLength(0);
+      expect(nested(prompt, 18)).toHaveLength(0);
+    }
+  });
+
+  test("only env value 1 rewrites replay, preserving authentication, continuity and stored history", async () => {
+    const beforeSanitize = process.env.OPENCODEX_DEVIN_SANITIZE_DATA_SURFACES;
+    const beforeJwt = process.env.OPENCODEX_DEVIN_SEND_USER_JWT;
+    // Exercise the Responses parser and late signature trailer, then encode the
+    // same history with the opt-in both on and off. Nothing stored is rewritten.
+    const messages = mapOcxMessagesToDevin(parseRequest({
+      model: "devin/swe-2",
+      input: [
+        { role: "user", content: trigger },
+        { type: "reasoning", id: "rs_text", summary: [{ type: "summary_text", text: trigger }] },
+        { type: "reasoning", id: "rs_sig", summary: [], encrypted_content: encodeReasoningEnvelope({ sig: encodeDevinSignature(signature, "sealed") }) },
+        { type: "function_call", call_id: "call_1", name: "lookup", arguments: "{}" },
+        { type: "function_call_output", call_id: "call_1", output: "done" },
+      ],
+    }));
+    const original = structuredClone(messages);
+    const apiKey = "devin-session-token$sanitize-regression";
+    try {
+      delete process.env.OPENCODEX_DEVIN_SEND_USER_JWT;
+      for (const setting of [undefined, "", "0", "true", "01", " 1 ", "1", undefined]) {
+        if (setting === undefined) delete process.env.OPENCODEX_DEVIN_SANITIZE_DATA_SURFACES;
+        else process.env.OPENCODEX_DEVIN_SANITIZE_DATA_SURFACES = setting;
+        const requests: Buffer[] = [];
+        const output: string[] = [];
+        for await (const event of streamChatEvents({
+          apiKey, modelUid: "swe-2", messages, cascadeId: "cascade-sanitize", trajectoryId: "trajectory-sanitize", catalog: null,
+          executor: (async (url, init) => {
+            expect(String(url)).toBe("https://server.codeium.com/exa.api_server_pb.ApiServerService/GetChatMessage");
+            expect(new Headers(init?.headers).get("Authorization")).toBe(`Basic ${apiKey}-${apiKey}`);
+            const framed = Buffer.from(await (init!.body as Blob).arrayBuffer());
+            expect(framed[0]).toBe(0);
+            expect(framed.readUInt32BE(1)).toBe(framed.length - 5);
+            requests.push(framed.subarray(5));
+            return new Response(Buffer.concat([
+              frameConnectStream(encodeString(3, "ok"), false), Buffer.from([2, 0, 0, 0, 2, 123, 125]),
+            ]));
+          }) as typeof fetch,
+        })) if (event.kind === "text") output.push(event.text);
+        expect(output).toEqual(["ok"]);
+        expect(requests).toHaveLength(1);
+        const wire = requests[0]!;
+        const metadata = nested(wire, 1)[0]!;
+        expect(text(metadata, 3)).toBe(apiKey);
+        expect(nested(metadata, 21)).toHaveLength(0);
+        expect(text(wire, 16)).toBe("cascade-sanitize");
+        expect(text(nested(wire, 15)[0]!, 1)).toBe("trajectory-sanitize");
+        const prompt = assistant(wire);
+        const enabled = setting === "1";
+        expect(text(nested(wire, 3)[0]!, 3)).toBe(enabled ? rewritten : trigger);
+        expect(text(prompt, 11)).toBe(enabled ? rewritten : trigger);
+        expect(text(prompt, 12)).toBe(enabled ? undefined : signature);
+        expect(text(prompt, 18)).toBe(enabled ? undefined : "sealed");
+        expect(text(nested(prompt, 6)[0]!, 1)).toBe("call_1");
+        expect(text(nested(wire, 3)[2]!, 7)).toBe("call_1");
+        expect(messages).toEqual(original);
+      }
+    } finally {
+      if (beforeSanitize === undefined) delete process.env.OPENCODEX_DEVIN_SANITIZE_DATA_SURFACES;
+      else process.env.OPENCODEX_DEVIN_SANITIZE_DATA_SURFACES = beforeSanitize;
+      if (beforeJwt === undefined) delete process.env.OPENCODEX_DEVIN_SEND_USER_JWT;
+      else process.env.OPENCODEX_DEVIN_SEND_USER_JWT = beforeJwt;
     }
   });
 });
