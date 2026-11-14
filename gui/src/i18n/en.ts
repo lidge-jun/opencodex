@@ -246,7 +246,7 @@ export const en = {
   "models.pickerOrder.default": "Default",
   "models.pickerOrder.alphabetical": "A–Z by model",
   "models.pickerOrder.provider": "Group by provider",
-  "models.pickerOrder.family": "By family",
+  "models.pickerOrder.family": "Group by family",
   "models.family.other": "Other",
   "models.family.toggleLabel": "{family}: {count} models",
   "models.pickerOrder.mostUsed": "Most used snapshot",

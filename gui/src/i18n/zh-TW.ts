@@ -242,7 +242,7 @@ export const zhTW: Record<TKey, string> = {
   "models.pickerOrder.default": "預設",
   "models.pickerOrder.alphabetical": "依模型名稱 A–Z",
   "models.pickerOrder.provider": "依供應商分組",
-  "models.pickerOrder.family": "依家族",
+  "models.pickerOrder.family": "依家族分組",
   "models.family.other": "其他",
   "models.family.toggleLabel": "{family}：{count} 個模型",
   "models.pickerOrder.mostUsed": "使用量快照",

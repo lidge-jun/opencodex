@@ -244,7 +244,7 @@ export const zh: Record<TKey, string> = {
   "models.pickerOrder.default": "默认",
   "models.pickerOrder.alphabetical": "按模型名 A–Z",
   "models.pickerOrder.provider": "按提供商分组",
-  "models.pickerOrder.family": "按家族",
+  "models.pickerOrder.family": "按家族分组",
   "models.family.other": "其他",
   "models.family.toggleLabel": "{family}：{count} 个模型",
   "models.pickerOrder.mostUsed": "使用量快照",

@@ -252,7 +252,7 @@ export const vi: Record<TKey, string> = {
   "models.pickerOrder.default": "Mặc định",
   "models.pickerOrder.alphabetical": "A–Z theo model",
   "models.pickerOrder.provider": "Nhóm theo provider",
-  "models.pickerOrder.family": "Theo họ model",
+  "models.pickerOrder.family": "Nhóm theo họ model",
   "models.family.other": "Khác",
   "models.family.toggleLabel": "{family}: {count} model",
   "models.pickerOrder.mostUsed": "Bản chụp dùng nhiều nhất",
