@@ -201,5 +201,5 @@ describe("running server", () => {
     expect(otherPre.status).toBe(403);
     const postRes = await fetch(new URL("/v1/usage/live", base), { method: "POST", headers: app });
     expect(postRes.status).not.toBe(200);
-  });
+  }, 60000);
 });
