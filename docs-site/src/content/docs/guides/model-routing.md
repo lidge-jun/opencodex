@@ -161,12 +161,14 @@ the list below it, you see:
 - **The route.** The client, then OpenCodex, then every candidate: the account or combo target that
   answered, the ones that failed (with the HTTP status and the reason), and the ones that were
   skipped before any send. A multi-account OAuth pool shows each account's state when the request
-  finished: paused, needing sign-in, cooling down, out of quota, or not listing the model.
+  finished: paused, needing sign-in, cooling down, out of quota, or not listing the model. When
+  the router recorded why it picked this route, that reason is shown under it.
 - **Where the time went.** OpenCodex's own time, earlier failed attempts, the wait for the first
   token, and streaming. Every segment is measured; DNS and TLS are not split out.
 - **The context window.** Estimated tokens for the system prompt, tools, skills, memory files such
-  as `AGENTS.md` and `CLAUDE.md`, files, tool results and each conversation turn, against the free
-  space in the serving model's window, plus the prompt-cache hit rate. Only sizes are recorded,
+  as `AGENTS.md` and `CLAUDE.md`, files, tool results and the conversation, as one bar with each
+  part's share of the prompt, how full the serving model's window is, and the prompt-cache hit
+  rate. Only sizes are recorded,
   never prompt text, and they live in memory with the request log.
 
 The request list groups by request, session or API key and shows the account, model, effort,

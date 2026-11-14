@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildRouteFlow, buildRouteSteps, summarizePool } from "../src/pages/route-live/flow-model";
+import { buildRouteFlow, summarizePool } from "../src/pages/route-live/flow-model";
 import { groupRows } from "../src/pages/route-live/request-groups";
 import { cacheHitPercent, parseRouteRows, readableAccountLabel, requestedOf, type RouteRow } from "../src/pages/route-live/route-rows";
 
@@ -16,8 +16,6 @@ describe("route flow model", () => {
     expect(flow.candidates.map(c => c.status)).toEqual(["failed", "answered"]);
     expect(flow.candidates[0]!.reasonCode).toBe("rate_limit_exceeded");
     expect(flow.candidates[1]!.displayName).toBe("Work");
-    const steps = buildRouteSteps(row({ attempts: [] }), flow);
-    expect(steps.filter(s => s.kind === "try").map(s => s.kind === "try" && s.moveOn)).toEqual([true, false]);
   });
 
   test("combo exclusions become skipped candidates with the first code, eligible ones idle", () => {
@@ -31,8 +29,6 @@ describe("route flow model", () => {
     }));
     expect(flow.candidates.map(c => [c.provider, c.status, c.reasonCode])).toEqual([
       ["p", "answered", undefined], ["q", "skipped", "cooldown"], ["r", "idle", undefined]]);
-    expect(buildRouteSteps(row({ routeDecision: { routeKind: "combo", selected: { reason: "combo-pick" } } }), flow)
-      .slice(0, 2)).toEqual([{ kind: "asked", requested: "m", combo: true }, { kind: "why", reasonCode: "combo-pick" }]);
   });
 
   test("roster states skip paused and cooling accounts, available ones stay idle", () => {
@@ -51,7 +47,6 @@ describe("route flow model", () => {
 
   test("no attempts is local when it succeeded and failed otherwise", () => {
     expect(buildRouteFlow(row({})).outcome.kind).toBe("local");
-    expect(buildRouteSteps(row({}), buildRouteFlow(row({}))).at(-1)).toEqual({ kind: "none" });
     expect(buildRouteFlow(row({ status: 503, errorCode: "server_is_overloaded" })).outcome)
       .toEqual({ kind: "failed", httpStatus: 503, reasonCode: "server_is_overloaded", tries: 0 });
   });

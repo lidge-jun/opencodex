@@ -1,17 +1,18 @@
 /**
  * Models > Live routing. For the newest request, or the one the operator pinned, shows who was
- * asked, who answered, why the rest were skipped, then the list of recent requests.
+ * asked, who answered, why the rest were skipped, then the list of recent requests. The flow
+ * diagram is the one account of the route; the lines around it only add what it cannot show.
  */
 import { useMemo, useState } from "react";
 import { useI18n, LOCALES } from "../../i18n/shared";
 import { EmptyState, Notice } from "../../ui";
+import { DataSurfaceSkeleton } from "../../components/data-surface";
 import { ContextCard } from "./ContextCard";
 import { FlowDiagram } from "./FlowDiagram";
 import { buildRouteFlow, candidateWho, summarizePool, type FlowOutcome, type RouteFlow } from "./flow-model";
 import { FailedDetail, ReasonText } from "./ReasonText";
 import { withSlots } from "./slots";
 import { RequestList } from "./RequestList";
-import { RouteSteps } from "./RouteSteps";
 import { TimeSection } from "./TimeBar";
 import { formatClock, formatDuration } from "./route-format";
 import { rowKey, type RouteRow } from "./route-rows";
@@ -52,16 +53,34 @@ function OutcomeLine({ outcome, row }: { outcome: FlowOutcome; row: RouteRow }) 
   }
 }
 
-function PoolLine({ row }: { row: RouteRow }) {
+/** Why the router picked this route, when it recorded a reason. */
+export function WhyLine({ row }: { row: RouteRow }) {
+  const { t } = useI18n();
+  const reason = row.routeDecision?.selected?.reason;
+  if (!reason) return null;
+  return (
+    <p className="rl-muted rl-hint">
+      {withSlots(t("routeLive.routeWhy", { reason: "{reason}" }), { reason: <ReasonText kind="why" code={reason} /> })}
+    </p>
+  );
+}
+
+export function PoolLine({ row }: { row: RouteRow }) {
   const { t } = useI18n();
   const pool = summarizePool(row.accountRoster);
   if (!pool) return null;
+  const states = [
+    [pool.available, "routeLive.poolAvailable"], [pool.cooldown, "routeLive.poolCooldown"],
+    [pool.paused, "routeLive.poolPaused"], [pool.needsReauth, "routeLive.poolReauth"],
+    [pool.quotaExhausted, "routeLive.poolQuota"], [pool.modelUnlisted, "routeLive.poolUnlisted"],
+  ] as const;
+  const bits = [
+    t("routeLive.poolHead", { provider: pool.provider, total: pool.total }),
+    ...states.flatMap(([n, key]) => (n > 0 ? [t(key, { n })] : [])),
+  ];
   return (
     <p className="rl-muted rl-pool">
-      {t("routeLive.poolSummary", {
-        provider: pool.provider, total: pool.total, available: pool.available,
-        cooldown: pool.cooldown, paused: pool.paused, reauth: pool.needsReauth,
-      })}
+      {bits.join(" · ")}
       {row.accountRoster?.truncated && ` ${t("routeLive.poolTruncated")}`}
       {" "}
       <a href={`#providers?provider=${encodeURIComponent(pool.provider)}&tab=accounts`}>{t("routeLive.linkAccounts")}</a>
@@ -81,8 +100,8 @@ function Selected({ row, flow, pinned, onBack }: { row: RouteRow; flow: RouteFlo
       </div>
       <OutcomeLine outcome={flow.outcome} row={row} />
       <FlowDiagram flow={flow} />
+      <WhyLine row={row} />
       <PoolLine row={row} />
-      <RouteSteps row={row} flow={flow} />
       {flow.outcome.kind !== "local" && <TimeSection row={row} />}
       <ContextCard row={row} />
       {row.routeDecision?.routeKind === "combo" && <p className="rl-muted"><a href="#models/combos">{t("routeLive.linkCombos")}</a></p>}
@@ -105,7 +124,7 @@ export default function RouteLive({ apiBase, active }: { apiBase: string; active
   if (resource.data === undefined) {
     return resource.error
       ? <Notice tone="err">{t("routeLive.loadFailed")}</Notice>
-      : <p className="rl-muted" role="status">{t("routeLive.loading")}</p>;
+      : <DataSurfaceSkeleton label={t("common.loading")} rows={5} />;
   }
   if (rows.length === 0 || !selected || !flow) {
     return <EmptyState title={t("routeLive.empty")} />;

@@ -142,11 +142,11 @@ export function RequestList({ rows, pinnedKey, onPin, mode, onMode, names }: {
       </div>
       <p className="rl-muted rl-hint">{t("routeLive.rowHint")}</p>
       <div className="rl-row rl-row--head" aria-hidden="true">
-        <span>{t("routeLive.colTime")}</span><span>{t("routeLive.colClient")} · {t("routeLive.colModel")}</span>
-        <span>{t("routeLive.colAccount")}</span><span>{t("routeLive.colEffort")}</span><span className="rl-num">{t("routeLive.colDuration")}</span>
-        <span className="rl-num">{t("routeLive.colTtft")}</span><span className="rl-num">{t("routeLive.colTokens")}</span>
-        <span className="rl-num">{t("routeLive.colCache")}</span><span className="rl-num">{t("routeLive.colRate")}</span>
-        <span className="rl-num">~$</span><span className="rl-num">{t("routeLive.colStatus")}</span>
+        <span>{t("logs.col.time")}</span><span>{t("routeLive.colClient")} · {t("logs.col.model")}</span>
+        <span>{t("routeLive.colAccount")}</span><span>{t("logs.col.effort")}</span><span className="rl-num">{t("logs.col.duration")}</span>
+        <span className="rl-num">{t("routeLive.colTtft")}</span><span className="rl-num">{t("logs.col.tokens")}</span>
+        <span className="rl-num">{t("routeLive.colCache")}</span><span className="rl-num">{t("logs.col.tokPerSec")}</span>
+        <span className="rl-num">{t("logs.col.estimatedCost")}</span><span className="rl-num">{t("logs.col.status")}</span>
       </div>
       {groups ? groups.map(group => {
         const open = !collapsed.has(group.id);

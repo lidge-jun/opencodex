@@ -1,19 +1,15 @@
 /**
- * "Context window" card for the selected request: what filled the model's window (system prompt,
- * tools, skills, memory, files, tool results, each conversation turn), as a treemap plus a legend,
- * and a prompt-cache meter. The idea and the layout follow Magpie's context card (MIT,
+ * "Context window" card for the selected request: what filled the prompt (system prompt, tools,
+ * skills, memory, files, tool results, conversation) as one stacked bar plus a legend, how full the
+ * model's window is, and a prompt-cache meter. The categories follow Magpie's context card (MIT,
  * Copyright (c) 2026 yetone); the markup is this page's own.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
 import { useI18n, LOCALES } from "../../i18n/shared";
 import type { RouteLiveCopyKey } from "../../i18n/route-live-copy";
-import {
-  calibrateContext, contextHealth, layoutTiles, type ContextCategory, type ContextHealth, type ContextTile,
-} from "./context-tiles";
+import { CONTEXT_CATEGORIES, calibrateContext, contextHealth, type ContextCategory, type ContextHealth } from "./context-tiles";
 import { formatCount, formatPercent } from "./route-format";
 import { cacheMeterOf, countedInputTokens, type RouteRow } from "./route-rows";
-
-type Kind = ContextCategory | "free";
 
 const KIND_LABEL = {
   system: "routeLive.ctxSystem",
@@ -23,42 +19,13 @@ const KIND_LABEL = {
   files: "routeLive.ctxFiles",
   results: "routeLive.ctxResults",
   chat: "routeLive.ctxChat",
-  free: "routeLive.ctxFree",
-} as const satisfies Record<Kind, RouteLiveCopyKey>;
+} as const satisfies Record<ContextCategory, RouteLiveCopyKey>;
 
 const HEALTH_LABEL = {
   ok: "routeLive.ctxHealthOk",
   filling: "routeLive.ctxHealthFilling",
   near: "routeLive.ctxHealthNear",
 } as const satisfies Record<ContextHealth, RouteLiveCopyKey>;
-
-const LEGEND_ORDER: readonly Kind[] = ["system", "tools", "skills", "memory", "files", "results", "chat", "free"];
-const DEFAULT_WIDTH = 640;
-const TILE_GAP = 2;
-
-/** Magpie's box: 3.1:1 (2:1 when narrow), never shorter than 132px or taller than 232px. */
-function boxHeight(width: number): number {
-  return Math.min(232, Math.max(132, width / (width <= 520 ? 2 : 3.1)));
-}
-
-function useBoxWidth() {
-  const ref = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(DEFAULT_WIDTH);
-  useEffect(() => {
-    const node = ref.current;
-    if (!node) return undefined;
-    const measure = () => {
-      const next = Math.round(node.getBoundingClientRect().width);
-      if (next > 0) setWidth(next);
-    };
-    measure();
-    if (typeof ResizeObserver === "undefined") return undefined;
-    const observer = new ResizeObserver(measure);
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, []);
-  return [ref, width] as const;
-}
 
 function CacheMeter({ row }: { row: RouteRow }) {
   const { t, locale } = useI18n();
@@ -94,29 +61,19 @@ function CacheMeter({ row }: { row: RouteRow }) {
 function ContextCardBody({ row }: { row: RouteRow }) {
   const { t, locale } = useI18n();
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang;
-  const [boxRef, width] = useBoxWidth();
   const breakdown = row.contextBreakdown!;
   const windowTokens = row.contextWindow;
   const shares = useMemo(() => calibrateContext(breakdown, countedInputTokens(row)), [breakdown, row]);
-  const height = boxHeight(width);
-  const tiles = useMemo(() => layoutTiles(shares, windowTokens, width, height), [shares, windowTokens, width, height]);
 
-  const base = Math.max(windowTokens ?? shares.used, shares.used, 1);
+  const used = Math.max(shares.used, 1);
   const fraction = windowTokens ? shares.used / windowTokens : undefined;
+  const tokensText = (tokens: number) => formatCount(Math.round(tokens), localeTag);
+  /** Share of the prompt, not of the window: the header already says how full the window is. */
   const share = (tokens: number) => {
-    const value = tokens / base;
+    const value = tokens / used;
     return value > 0 && value < 0.01 ? `<${formatPercent(1, localeTag)}` : formatPercent(100 * value, localeTag);
   };
-  const tokensText = (tokens: number) => formatCount(Math.round(tokens), localeTag);
-  const nameOf = (tile: Pick<ContextTile, "kind" | "turn" | "earlier">) => {
-    if (tile.turn !== undefined) return t("routeLive.ctxTurn", { n: tile.turn });
-    return tile.earlier ? t("routeLive.ctxEarlier") : t(KIND_LABEL[tile.kind]);
-  };
-  const freeTokens = tiles.find(tile => tile.kind === "free")?.tokens;
-  const legend = LEGEND_ORDER.flatMap(kind => {
-    const tokens = kind === "free" ? freeTokens : shares.parts[kind];
-    return tokens !== undefined && tokens > 0 ? [{ kind, tokens }] : [];
-  });
+  const parts = CONTEXT_CATEGORIES.flatMap(kind => (shares.parts[kind] > 0 ? [{ kind, tokens: shares.parts[kind] }] : []));
 
   return (
     <section className="rl-ctx" aria-label={t("routeLive.ctxMapLabel")}>
@@ -136,37 +93,31 @@ function ContextCardBody({ row }: { row: RouteRow }) {
         {!shares.calibrated && <span className="rl-ctx-badge" title={t("routeLive.ctxEstimatedTitle")}>{t("routeLive.ctxEstimated")}</span>}
       </div>
       {windowTokens === undefined && <p className="rl-muted rl-hint">{t("routeLive.ctxWindowUnknown")}</p>}
-      <CacheMeter row={row} />
-      <div ref={boxRef} className="rl-ctx-map" role="group" aria-label={t("routeLive.ctxMapLabel")} style={{ height }}>
-        {tiles.map(tile => {
-          const name = nameOf(tile);
-          const label = `${name} ${tokensText(tile.tokens)} (${share(tile.tokens)})`;
-          return (
-            <div
-              key={`${tile.kind}:${tile.turn ?? (tile.earlier ? "earlier" : "")}`}
-              role="img" aria-label={label} title={label}
-              className={`rl-ctx-tile rl-ctx-tile--${tile.kind}`}
-              style={{
-                left: tile.x + TILE_GAP / 2, top: tile.y + TILE_GAP / 2,
-                width: Math.max(0, tile.w - TILE_GAP), height: Math.max(0, tile.h - TILE_GAP),
-              }}
-            >
-              {tile.w >= 48 && tile.h >= 18 && <span className="rl-ctx-tile-name">{name}</span>}
-              {tile.w >= 64 && tile.h >= 34 && <span className="rl-ctx-tile-value">{tokensText(tile.tokens)} · {share(tile.tokens)}</span>}
-            </div>
-          );
-        })}
-      </div>
-      <ul className="rl-ctx-legend">
-        {legend.map(item => (
-          <li key={item.kind}>
-            <span className={`rl-ctx-dot rl-ctx-tile--${item.kind}`} aria-hidden="true" />
-            <span>{t(KIND_LABEL[item.kind])}</span>
-            <span className="rl-num rl-muted">{tokensText(item.tokens)} · {share(item.tokens)}</span>
-          </li>
-        ))}
-      </ul>
+      {parts.length > 0 && (
+        <>
+          <div className="rl-time-bar rl-ctx-bar" aria-hidden="true">
+            {parts.map(part => (
+              <span
+                key={part.kind}
+                className={`rl-ctx-seg rl-ctx-kind--${part.kind}`}
+                style={{ flexGrow: part.tokens / used }}
+                title={`${t(KIND_LABEL[part.kind])} ${tokensText(part.tokens)} (${share(part.tokens)})`}
+              />
+            ))}
+          </div>
+          <ul className="rl-ctx-legend">
+            {parts.map(part => (
+              <li key={part.kind}>
+                <span className={`rl-ctx-dot rl-ctx-kind--${part.kind}`} aria-hidden="true" />
+                <span>{t(KIND_LABEL[part.kind])}</span>
+                <span className="rl-num rl-muted">{tokensText(part.tokens)} · {share(part.tokens)}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
       {shares.held && <p className="rl-muted rl-hint">{t("routeLive.ctxHeld")}</p>}
+      <CacheMeter row={row} />
     </section>
   );
 }

@@ -6,7 +6,7 @@ import { I18nContext, DICTS, interpolate, LOCALES, type Locale, type TFn } from 
 import { ContextCard } from "../src/pages/route-live/ContextCard";
 import { FlowDiagram } from "../src/pages/route-live/FlowDiagram";
 import { RequestList } from "../src/pages/route-live/RequestList";
-import { RouteSteps } from "../src/pages/route-live/RouteSteps";
+import { PoolLine, WhyLine } from "../src/pages/route-live/RouteLive";
 import { TimeSection } from "../src/pages/route-live/TimeBar";
 import { buildRouteFlow } from "../src/pages/route-live/flow-model";
 import { ROUTE_REASONS } from "../src/pages/route-live/route-reasons";
@@ -50,11 +50,20 @@ test("flow marks the answered account, the failed try with its reason, and a ski
   expect(skipped?.textContent).toContain("需要重新登录");
 });
 
-test("steps show an unknown reason code raw, in <code>, instead of dropping it", () => {
-  const flow = buildRouteFlow(failover);
-  const doc = render(<RouteSteps row={failover} flow={flow} />);
-  expect(doc.querySelectorAll("li").length).toBeGreaterThanOrEqual(3);
+test("the why line shows an unknown reason code raw, in <code>, instead of dropping it", () => {
+  const doc = render(<WhyLine row={failover} />);
   expect([...doc.querySelectorAll("code")].map(c => c.textContent)).toContain("some-future-reason");
+  expect(render(<WhyLine row={{ ...failover, routeDecision: undefined } as RouteRow} />).body.innerHTML).toBe("");
+});
+
+test("the pool line counts every state that is not zero, quota and plan included, and only those", () => {
+  const roster = { provider: "p", accounts: [
+    { label: "oa", state: "available" }, { label: "ob", state: "quota-exhausted" },
+    { label: "oc", state: "quota-exhausted" }, { label: "od", state: "model-unlisted" }] };
+  const text = render(<PoolLine row={{ ...failover, accountRoster: roster } as unknown as RouteRow} />, "en").body.textContent ?? "";
+  expect(text).toContain("Pool p: 4 accounts · 1 available · 2 out of quota · 1 without this model");
+  expect(text).not.toContain("paused");
+  expect(text).not.toContain("cooling");
 });
 
 test("request list groups by session, shows dashes for unknown metrics, and marks the pinned row", () => {
@@ -99,17 +108,15 @@ const withContext = (extra: Partial<RouteRow> = {}) => ({
   ...extra,
 }) as unknown as RouteRow;
 
-test("context card shows the used/window header, labelled tiles that fill the window, the legend and the cache meter", () => {
+test("context card shows the used/window header, one bar segment per filled part, the legend and the cache meter", () => {
   const doc = render(<ContextCard row={withContext()} />);
   expect(doc.querySelector("h4")?.textContent).toMatch(/^上下文用量 .+ \/ .+$/);
   expect(doc.querySelector(".rl-ctx-health")?.textContent).toContain("还很宽裕");
   expect(doc.querySelector(".rl-ctx-badge")).toBeNull();
-  const labels = [...doc.querySelectorAll(".rl-ctx-tile")].map(tile => tile.getAttribute("aria-label") ?? "");
-  expect(labels.some(label => label.startsWith("系统提示词 "))).toBe(true);
-  expect(labels.some(label => label.startsWith("第 2 轮 "))).toBe(true);
-  expect(labels.some(label => label.startsWith("剩余空间 "))).toBe(true);
+  expect(doc.querySelectorAll(".rl-ctx-seg").length).toBe(5);
   expect([...doc.querySelectorAll(".rl-ctx-legend li > span:nth-child(2)")].map(s => s.textContent)).toEqual(
-    ["系统提示词", "工具", "记忆与 AGENTS.md", "工具结果", "会话内容", "剩余空间"]);
+    ["系统提示词", "工具", "记忆与 AGENTS.md", "工具结果", "会话内容"]);
+  expect(doc.querySelector(".rl-ctx-legend li .rl-num")?.textContent).toContain("10%");
   expect(doc.querySelector(".rl-ctx-cache")?.textContent).toContain("命中 50%");
   expect(doc.querySelector(".rl-ctx-cache")?.textContent).toContain("已缓存");
   expect(doc.querySelector(".rl-ctx-meter")?.getAttribute("aria-valuenow")).toBe("50");
@@ -124,7 +131,7 @@ test("context card says so when the window is unknown, the sizes are estimated, 
   expect(doc.querySelector(".rl-ctx-cache")?.textContent).toContain("上游没有报告缓存");
   expect(doc.querySelector(".rl-ctx-meter")).toBeNull();
   expect(doc.body.textContent).not.toContain("命中 0%");
-  expect([...doc.querySelectorAll(".rl-ctx-tile")].some(tile => tile.getAttribute("aria-label")?.startsWith("剩余空间"))).toBe(false);
+  expect(doc.querySelector(".rl-ctx-health")).toBeNull();
 });
 
 test("context card is hidden for a row without a breakdown", () => {

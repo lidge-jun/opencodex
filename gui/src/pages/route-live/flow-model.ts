@@ -111,26 +111,6 @@ export function buildRouteFlow(row: RouteRow, names: AccountNames = {}): RouteFl
   };
 }
 
-export type RouteStep =
-  | { kind: "asked"; requested: string; combo: boolean }
-  | { kind: "why"; reasonCode: string }
-  | { kind: "skipped"; candidate: FlowCandidate }
-  | { kind: "try"; candidate: FlowCandidate; ok: boolean; moveOn: boolean }
-  | { kind: "none" };
-
-export function buildRouteSteps(row: RouteRow, flow: RouteFlow): RouteStep[] {
-  const steps: RouteStep[] = [{
-    kind: "asked", requested: flow.requested.alias ?? flow.requested.model, combo: row.routeDecision?.routeKind === "combo",
-  }];
-  const reason = row.routeDecision?.selected?.reason;
-  if (reason) steps.push({ kind: "why", reasonCode: reason });
-  for (const c of flow.candidates) if (c.status === "skipped") steps.push({ kind: "skipped", candidate: c });
-  const tried = flow.candidates.filter(c => c.key.startsWith("attempt:") || (c.key.startsWith("roster:") && c.httpStatus !== undefined));
-  tried.forEach((c, i) => steps.push({ kind: "try", candidate: c, ok: c.status === "answered", moveOn: c.status === "failed" && i < tried.length - 1 }));
-  if (tried.length === 0) steps.push({ kind: "none" });
-  return steps;
-}
-
 export interface PoolSummary {
   provider: string;
   total: number;

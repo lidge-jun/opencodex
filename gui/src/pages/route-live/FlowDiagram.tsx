@@ -26,7 +26,7 @@ function CandidateDetail({ candidate, localeTag }: { candidate: FlowCandidate; l
   }
   if (candidate.status !== "skipped" && candidate.status !== "idle") {
     if (candidate.ttftMs !== undefined) parts.push(`${t("routeLive.colTtft")} ${formatDuration(candidate.ttftMs, localeTag)}`);
-    if (candidate.durationMs !== undefined) parts.push(`${t("routeLive.colDuration")} ${formatDuration(candidate.durationMs, localeTag)}`);
+    if (candidate.durationMs !== undefined) parts.push(`${t("logs.col.duration")} ${formatDuration(candidate.durationMs, localeTag)}`);
   }
   if (parts.length === 0) return null;
   return <span className="rl-cand-detail">{parts.flatMap((part, i) => (i === 0 ? [part] : [" · ", part]))}</span>;
