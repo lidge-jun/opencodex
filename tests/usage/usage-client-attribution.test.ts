@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { classifyUsageClient, normalizeRecordedClient } from "../../src/usage/client";
+import { classifyUsageClient, normalizeRecordedClient, usageClientLogContext, usageClientName } from "../../src/usage/client";
+import { MAX_USAGE_APP_NAMES } from "../../src/usage/app-breakdown";
 import { normalizePersistedUsageRow, readUsageEntries, resetUsageReadCacheForTests, usageLogPath } from "../../src/usage/log";
 import { createUsageSummaryAccumulator, projectUsageSummary, summarizeUsage } from "../../src/usage/summary";
 import { parseUsageSource } from "../../src/usage/source-filter";
@@ -30,6 +31,54 @@ describe("usage client attribution", () => {
     clone.add({ ...base, requestId: "grok", client: "grok" });
     expect(clone.summarize("30d", now).apps.find(row => row.client === "grok")?.requests).toBe(1);
     expect(accumulator.summarize("30d", now).apps.some(row => row.client === "grok")).toBe(false);
+  });
+
+  test("an unrecognized client is named by the first product token of its headers", () => {
+    const named = (headers: Record<string, string>) => usageClientName(new Headers(headers));
+    expect(named({ "user-agent": "curl/8.7.1" })).toBe("curl");
+    expect(named({ "user-agent": "multica-agent-sdk/0.4.2 (node 22)" })).toBe("multica-agent-sdk");
+    expect(named({ "user-agent": "claude-cli/2.1.3 (external, sdk-ts, agent-sdk/0.2)" })).toBe("claude-agent-sdk");
+    expect(named({ "user-agent": "claude-cli/2.1.3 (external, mystery-entry)" })).toBe("claude-cli-mystery-entry");
+    expect(named({ originator: "Some_Tool", "user-agent": "curl/8" })).toBe("some_tool");
+    expect(named({ "user-agent": "x".repeat(41) })).toBeUndefined();
+    expect(named({ "user-agent": "" })).toBeUndefined();
+    expect(named({ "user-agent": `curl/${"9".repeat(1100)}` })).toBeUndefined();
+    expect(usageClientLogContext(new Headers({ originator: "codex_cli_rs", "user-agent": "curl/8" }))).toEqual({ client: "codex_cli" });
+    expect(usageClientLogContext(new Headers({ "user-agent": "curl/8" }))).toEqual({ client: "unknown", clientName: "curl" });
+  });
+
+  test("apps rows name unknown clients and split legacy rows by the wire they used", () => {
+    const now = Date.now();
+    const base = { timestamp: now, provider: "openai", model: "gpt-test", status: 200,
+      durationMs: 10, usageStatus: "reported" as const, usage: { inputTokens: 10, outputTokens: 5 } };
+    const accumulator = createUsageSummaryAccumulator({ mode: "row-unique" });
+    accumulator.add({ ...base, requestId: "curl", client: "unknown", clientName: "curl" });
+    accumulator.add({ ...base, requestId: "curl-2", client: "unknown", clientName: "curl" });
+    accumulator.add({ ...base, requestId: "bare", client: "unknown" });
+    accumulator.add({ ...base, requestId: "bad-name", client: "unknown", clientName: "Not A Name" });
+    accumulator.add({ ...base, requestId: "codex", client: "codex_cli", clientName: "ignored" });
+    accumulator.add({ ...base, requestId: "old-responses", inboundProtocol: "responses" });
+    accumulator.add({ ...base, requestId: "old-claude", surface: "claude", inboundProtocol: "messages" });
+    accumulator.add({ ...base, requestId: "old-bare" });
+    const rows = accumulator.summarize("30d", now).apps.map(row => [row.client, row.name ?? row.legacyWire ?? "", row.requests]);
+    expect(rows.sort()).toEqual([
+      ["codex", "", 1], ["unclassified", "", 1], ["unclassified", "claude", 1], ["unclassified", "responses", 1],
+      ["unknown", "", 2], ["unknown", "curl", 2],
+    ]);
+  });
+
+  test("named clients past the report budget fold into the plain unknown row", () => {
+    const now = Date.now();
+    const accumulator = createUsageSummaryAccumulator({ mode: "row-unique" });
+    for (let index = 0; index < MAX_USAGE_APP_NAMES + 5; index++) {
+      accumulator.add({ timestamp: now, provider: "openai", model: "gpt-test", status: 200, durationMs: 10,
+        usageStatus: "reported", usage: { inputTokens: 100 + index, outputTokens: 1 }, requestId: `r${index}`,
+        client: "unknown", clientName: `tool-${index}` });
+    }
+    const apps = accumulator.summarize("30d", now).apps;
+    expect(apps.filter(row => row.name).length).toBe(MAX_USAGE_APP_NAMES);
+    expect(apps.find(row => row.client === "unknown" && !row.name)?.requests).toBe(5);
+    expect(apps.reduce((sum, row) => sum + row.requests, 0)).toBe(MAX_USAGE_APP_NAMES + 5);
   });
 
   test("app totals follow projected combo attempts and inclusive custom bounds", () => {

@@ -361,6 +361,26 @@ describe("GET /api/usage", () => {
     }
   });
 
+  test("the all-apps, all-devices dashboard query reuses the unfiltered aggregate", async () => {
+    writeFixture(Date.now());
+    const filteredSpy = spyOn(usageAggregateCacheModule, "getFilteredUsageAggregate");
+    const server = startServer(0);
+    try {
+      const legacy = await (await fetch(new URL("/api/usage?range=30d", server.url))).json();
+      const dashboard = await (await fetch(new URL("/api/usage?range=30d&surface=all&client=all&device=all", server.url))).json();
+      expect(filteredSpy).not.toHaveBeenCalled();
+      expect(legacy).not.toHaveProperty("sourceFilter");
+      expect(legacy).not.toHaveProperty("legacyUnclassifiedRequests");
+      expect(dashboard.sourceFilter).toEqual({ client: "all", device: { kind: "all" } });
+      expect(dashboard.legacyUnclassifiedRequests).toBe(2);
+      expect(dashboard.summary).toEqual(legacy.summary);
+      expect(dashboard.apps).toEqual(legacy.apps);
+    } finally {
+      filteredSpy.mockRestore();
+      await server.stop(true);
+    }
+  });
+
   test("returns documented shape with summary, days, models, providers, and accounts", async () => {
     writeFixture(Date.now());
     const server = startServer(0);
