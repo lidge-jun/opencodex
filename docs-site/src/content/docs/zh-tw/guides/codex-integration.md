@@ -203,7 +203,7 @@ Codex 從磁碟上的目錄顯示模型，預設為 `$CODEX_HOME/opencodex-catal
 3. **合併**路由模型為帶 namespace 的條目（`provider/model`），從原生 Codex 目錄 template 複製，
    讓 Codex 嚴格的 parser 能接受它們。
 4. **過濾** `config.disabledModels` 與各 provider 非空的 `selectedModels` allowlist。
-5. **重新排序**，讓置頂模型排在前面，然後把合併後的目錄寫回。
+5. **重新排序**，讓置頂模型排在前面；但包含裸原生 id 的完整 `modelPickerOrder` 會重新排列它們。然後把合併後的目錄寫回。
 
 路由目錄條目也會把 GPT-5 identity 改寫成真正的上游模型名稱。reasoning 控制來自 provider／model
 metadata，使用 Codex 的 `low | medium | high | xhigh | max | ultra` 檔位；不支援的值會在送往上游前

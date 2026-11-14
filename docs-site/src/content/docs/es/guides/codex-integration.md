@@ -344,7 +344,7 @@ Codex muestra modelos de un catálogo en el disco (`$CODEX_HOME/opencodex-catalo
 2. **Muñecos** catálogos de modelos en vivo de los proveedores elegibles (en caché de 5 min; vuelve a la última buena lista, luego configuró `models[]`). La autenticación directa no tiene un punto final modelo, y Cursor utiliza su RPC `GetUsableModels` en lugar de `/models`.
 3. **Combina** los modelos enrutados como entradas con espacio de nombres (`provider/model`), clonadas de una plantilla de catálogo nativo de Codex para que el estricto analizador sintáctico de Codex las acepte.
 4. **Filtros** `config.disabledModels` y la lista de permisos `selectedModels` no vacía de cada proveedor.
-5. **Re-rangos** así que los modelos fijados ordenan primero (ver más abajo), luego escribe el catálogo fusionado de nuevo.
+5. **Re-rangos** así que los modelos fijados ordenan primero, salvo que un `modelPickerOrder` completo que contenga un id nativo sin prefijo los reordene (ver más abajo), luego escribe el catálogo fusionado de nuevo.
 
 Las entradas del catálogo enrutado también obtienen su identidad GPT-5 reescrita al nombre del modelo ascendente real. Los controles de razonamiento provienen de metadatos de proveedor/modelo en la escalera `low | medium | high | xhigh |
 max | ultra` de Codex; los valores no compatibles se asignan o se fijan antes de la solicitud ascendente.

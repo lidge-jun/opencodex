@@ -14,7 +14,7 @@ Codex 的 models-manager 按 `priority` 升序排列選擇器中可見的目錄�
 
 因此，opencodex 透過分配更低的 priority 控制置頂位置，而不依賴陣列位置。相關 priority 如下：
 
-以下優先級表與範例適用於未啟用完整選擇器排序的情況。
+以下優先級表與範例適用於沒有有效 Codex 帳戶 selector 且未啟用完整選擇器排序的情況。存在 `N` 個 selector 時，priority 以 `N` 作為步長：置頂的裸原生模型（rank 為 `i`）展開為 priority `i * N + j` 的 selector 列（`j` 為從 0 開始的 selector 位置），置頂的路由模型使用 `i * N`。
 
 | 目錄條目 | Priority | 來源 |
 | --- | ---: | --- |
@@ -56,7 +56,7 @@ priority，因此 Codex 的 priority 排序會保留這個開頭序列。
 
 選擇器置頂列表非空時，最終順序為：
 
-1. 嚴格按照設定的 `subagentModels` 順序排列，priority 為 `0` 至 `4`；
+1. 嚴格按照設定的 `subagentModels` 順序排列，沒有 selector 時 priority 為 `0` 至 `4`；
 2. 所有剩餘路由模型，先按 provider、再按模型 id 的字母順序排列，priority 為 `5`；
 3. 在目錄合併過程中被移到選擇器置頂區塊之後的未選中原生模型。
 

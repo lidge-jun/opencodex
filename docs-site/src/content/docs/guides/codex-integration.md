@@ -733,7 +733,7 @@ start and on `ocx sync`, opencodex:
 3. **Merges** routed models in as namespaced entries (`provider/model`), cloned from a native Codex
    catalog template so Codex's strict parser accepts them.
 4. **Filters** `config.disabledModels` and each provider's non-empty `selectedModels` allowlist.
-5. **Re-ranks** so pinned models sort first (see below), then writes the merged catalog back.
+5. **Re-ranks** so pinned models sort first, unless a complete `modelPickerOrder` containing a bare native id reorders them (see below), then writes the merged catalog back.
 
 Routed catalog entries also get their GPT-5 identity rewritten to the real upstream model name.
 Reasoning controls come from provider/model metadata across Codex's `low | medium | high | xhigh |
