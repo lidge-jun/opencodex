@@ -120,7 +120,7 @@ have expanded into selector-qualified groups.
 ## Changing the order
 
 Use `subagentModels` to choose and order the leading models that Codex also advertises to
-`spawn_agent`. The dashboard's **Sub-agents** page can reorder bare native and routed ids. Use
+`spawn_agent`. The dashboard's **Models → Client model picker** section can reorder bare native and routed ids. Use
 `ocx agent subagents set` or edit the opencodex configuration for exact
 `<selector>/<native-openai-model>` choices; the dashboard retains those ids once saved, including choices currently unavailable. Use at most five configured ids. With account selectors, one bare native
 choice can expand into multiple selector-qualified catalog rows, so configured choices and

@@ -110,7 +110,7 @@ ont été déclinés en groupes qualifiés par sélecteur.
 ## Modification de l'ordre
 
 Utilisez `subagentModels` pour choisir et ordonner les premiers modèles que Codex annonce également à
-`spawn_agent`. La page **Sous-agents** du tableau de bord peut réorganiser les identifiants natifs non
+`spawn_agent`. La page **Modèles → Sélecteur de modèles des clients** du tableau de bord peut réorganiser les identifiants natifs non
 qualifiés et les identifiants routés. Utilisez `ocx agent subagents set` ou modifiez la configuration
 OpenCodex pour définir des choix exacts de la forme `<selector>/<native-openai-model>` ; le tableau de bord
 conserve ces identifiants déjà enregistrés, même indisponibles. Configurez au maximum cinq identifiants. Avec

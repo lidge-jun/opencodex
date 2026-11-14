@@ -49,7 +49,7 @@ que le modèle appartient à l’autre surface de collaboration.
 
 ## Modèles annoncés par `spawn_agent`
 
-Codex liste au plus cinq modèles dans la description de l'outil `spawn_agent`, et il les choisit lui-même : il trie les lignes du catalogue visibles dans le sélecteur par `priority` croissante et garde les cinq premières. La liste de la page **Subagents** (`subagentModels`) n'agit sur cette sélection qu'en donnant à ses modèles les priorités les plus basses, dans l'ordre de la liste (`0` à `4` sans sélecteurs de compte). Elle ne limite pas la sélection à ces modèles.
+Codex liste au plus cinq modèles dans la description de l'outil `spawn_agent`, et il les choisit lui-même : il trie les lignes du catalogue visibles dans le sélecteur par `priority` croissante et garde les cinq premières. La liste de **Modèles → Sélecteur de modèles des clients** (`subagentModels`) n'agit sur cette sélection qu'en donnant à ses modèles les priorités les plus basses, dans l'ordre de la liste (`0` à `4` sans sélecteurs de compte). Elle ne limite pas la sélection à ces modèles.
 
 Si vous mettez en avant un à quatre modèles, Codex complète les emplacements restants avec les lignes suivantes par priorité. Vous n'avez pas choisi ces lignes, et le tableau de bord n'indique pas lesquelles sont retenues. Elles dépendent du catalogue :
 
@@ -206,7 +206,7 @@ canoniques pour les tâches chiffrées.
 - **Modèles** → contrôle segmenté de la rangée supérieure : choisissez le même mode global.
 - **Modèles** → **Garder ChatGPT sur v1** : activez cette option uniquement lorsque le mode global est **v2**. Elle est ignorée en **v1** et **base**.
 - **Tableau de bord** → **Délégation de sous-agent** : définissez les conseils model/effort et l'activation explicite natif par défaut.
-- **Sous-agents** : choisissez et ordonnez la liste, puis configurez la chaîne de repli globale.
+- **Sous-agents** : configurez la chaîne de repli globale. La liste épinglée se choisit dans **Modèles → Sélecteur de modèles des clients**.
 
 Le champ expérimental `plaintextV2AgentMessages` est absent d’une configuration neuve. La valeur explicite `true` ou le mode distinct `v2-plaintext` active le compilateur ; quitter ce mode conserve la préférence indépendante. Le mode fixe V2 au catalogue pour les nouvelles sessions sans priorité globale, mais le compilateur suit le réglage actuel pour les requêtes admissibles ultérieures, y compris dans les sessions V2 existantes. Il ne déchiffre pas les tâches existantes et ne réécrit pas l’historique ; sa désactivation ne supprime pas les copies conservées.
 

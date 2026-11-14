@@ -66,7 +66,7 @@ Para una lista v2, la elegibilidad tiene tres estados: es elegible una entrada m
 
 ## Qué modelos anuncia `spawn_agent`
 
-Codex muestra como máximo cinco modelos en la descripción de `spawn_agent`. Los elige ordenando las filas visibles del catálogo por `priority`, de menor a mayor, y tomando las cinco primeras. La lista de la página **Subagentes** (`subagentModels`) influye en esa selección al asignar a sus modelos las prioridades más bajas, en el orden configurado (`0` a `4` si no hay selectores de cuenta). No limita la selección exclusivamente a esos modelos.
+Codex muestra como máximo cinco modelos en la descripción de `spawn_agent`. Los elige ordenando las filas visibles del catálogo por `priority`, de menor a mayor, y tomando las cinco primeras. La lista de **Modelos → Client model picker** (`subagentModels`) influye en esa selección al asignar a sus modelos las prioridades más bajas, en el orden configurado (`0` a `4` si no hay selectores de cuenta). No limita la selección exclusivamente a esos modelos.
 
 Si destacas entre uno y cuatro modelos, Codex completa los espacios restantes con las siguientes filas por prioridad. Esas filas no las elegiste tú y el dashboard no muestra cuáles son. Dependen del catálogo:
 
@@ -188,7 +188,7 @@ Si la solicitud reconstruida recibe otro SSE `error` desnudo seguido por EOF, am
 - **Tablero** → primera celda de estadística: elija **v1**, **base**, **v2** o **v2-plaintext**.
 - **Modelos** → control segmentado de la fila superior: elija el mismo modo global.
 - **Tablero** → **Delegación de subagentes**: establece el modelo/esfuerzo de guía y la opción de opt-in por defecto nativa.
-- **Subagentes**: elija y ordene la lista y configure la cadena de reserva global.
+- **Subagentes**: configure la cadena de reserva global. La lista fijada se elige en **Modelos → Client model picker**.
 
 ### CLI
 

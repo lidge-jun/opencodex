@@ -37,7 +37,7 @@ opencodex 会把这一点作为最后一步同时应用到实时的 `/v1/models`
 
 ## `spawn_agent` 列出哪些模型
 
-Codex 在 `spawn_agent` 工具描述中最多列出五个模型，并由 Codex 自己挑选：它把选择器中可见的目录行按 `priority` 升序排序，取前五个。**Subagents** 页面上的 roster（`subagentModels`）只能通过按 roster 顺序为其中的模型分配最低的 priority（没有账号选择器时为 `0` 到 `4`）来影响这份列表，不会把列表限制在 roster 之内。
+Codex 在 `spawn_agent` 工具描述中最多列出五个模型，并由 Codex 自己挑选：它把选择器中可见的目录行按 `priority` 升序排序，取前五个。**模型 → 客户端模型选择器** 中的 roster（`subagentModels`）只能通过按 roster 顺序为其中的模型分配最低的 priority（没有账号选择器时为 `0` 到 `4`）来影响这份列表，不会把列表限制在 roster 之内。
 
 如果只设置一到四个模型，Codex 会按 priority 用接下来的行填满剩余位置。这些行不是你选的，仪表板也不会显示是哪些模型。具体是哪些行取决于目录：
 
@@ -135,7 +135,7 @@ opencodex 会安全失败，而不是转发空任务或不可读任务：
 - **Dashboard** → 第一个状态单元：选择 **v1**、**base** 或 **v2**。
 - **Models** → 顶部一行的分段控件：选择相同的全局模式。
 - **Dashboard** → **Sub-agent delegation**：设置指引模型/effort，以及原生默认值启用项。
-- **Subagents**：选择并排序 roster，并配置全局 fallback chain。
+- **Subagents**：配置全局 fallback chain。固定 roster 在 **模型 → 客户端模型选择器** 中选择。
 
 ### CLI
 

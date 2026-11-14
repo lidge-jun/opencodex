@@ -107,7 +107,7 @@ account selector がある場合、5 項目の制限は bare native の選択が
 ## 順序を変える方法
 
 先頭モデルの順序を変更するサポート手段は、`subagentModels` を並べ替えることです。
-ダッシュボードの **Sub-agents** ページでは bare native id と routed id を並べ替えられます。
+ダッシュボードの **モデル → クライアントのモデル選択** では bare native id と routed id を並べ替えられます。
 設定と `ocx agent subagents set` は exact account-qualified
 `<selector>/<native-openai-model>` id も受け付けます。ダッシュボードは保存済みの id を現在利用できなくても保持します。設定する id は最大 5 つにしてください。account selector がある
 場合は 1 つの bare native が複数の selector-qualified 行に展開されるため、設定した選択肢と公開

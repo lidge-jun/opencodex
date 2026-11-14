@@ -95,7 +95,7 @@ subagentModels = [
 ## 更改順序
 
 要調整 `spawn_agent` 候選模型的順序，請重新排列 `subagentModels`。你可以在儀表板的
-**Sub-agents** 頁面或 opencodex 設定中修改它。該列表最多接受五個模型，其陣列順序有實際意義。
+**模型 → 用戶端模型選擇器** 或 opencodex 設定中修改它。該列表最多接受五個模型，其陣列順序有實際意義。
 
 `modelPickerOrder` 只控制選擇器的顯示順序。如果列表只有路由 ID `<provider>/<model>`，
 其中未置頂的列會按列表順序進入獨立的顯示區間（`1000 + i`）。未列出的路由列保留原有優先級，

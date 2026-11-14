@@ -102,7 +102,7 @@ subagentModels = [
 
 ## 更改顺序
 
-自定义开头模型顺序的受支持方式是重新排列 `subagentModels`。仪表盘的 **Sub-agents** 页面可以调整
+自定义开头模型顺序的受支持方式是重新排列 `subagentModels`。仪表盘的 **模型 → 客户端模型选择器** 可以调整
 裸原生和路由 id 的顺序。配置和 `ocx agent subagents set` 也接受精确的账户限定
 `<selector>/<native-openai-model>` id，仪表盘会保留已保存的 id，即使当前不可用。配置的
 id 请勿超过五个。存在账户 selector 时，一个裸原生选项可能展开为多个 selector-qualified 行，因此

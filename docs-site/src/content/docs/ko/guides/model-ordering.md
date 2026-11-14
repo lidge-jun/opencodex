@@ -107,7 +107,7 @@ account selector가 있으면 bare native 선택이 selector-qualified 그룹으
 ## 순서를 바꾸는 방법
 
 선두 모델 순서를 바꾸는 지원 수단은 `subagentModels`를 재정렬하는 것입니다. 대시보드의
-**Sub-agents** 페이지에서는 bare native와 routed id의 순서를 바꿀 수 있습니다. 설정과
+**모델 → 클라이언트 모델 선택기**에서는 bare native와 routed id의 순서를 바꿀 수 있습니다. 설정과
 `ocx agent subagents set`은 exact account-qualified `<selector>/<native-openai-model>` id도
 지원합니다. 대시보드는 이미 저장된 id를 현재 사용할 수 없어도 보존합니다. 설정 id는
 최대 5개만 사용하세요. account selector가 있으면 bare native 하나가 여러 selector-qualified 행으로

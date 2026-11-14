@@ -126,7 +126,7 @@ seçimler seçici nitelikli gruplara genişletildikten sonra geçerlidir.
 ## Sırayı değiştirme
 
 Öndeki model sırasını özelleştirmenin desteklenen yolu `subagentModels`'ı
-yeniden sıralamaktır. Kontrol panelinin **Alt Ajanlar** sayfası yalın yerel ve
+yeniden sıralamaktır. Kontrol panelinin **Modeller → İstemci model seçicisi** bölümü yalın yerel ve
 yönlendirilen kimlikleri yeniden sıralayabilir. Tam
 `<seçici>/<yerel-openai-modeli>` seçimleri için `ocx agent subagents set`
 kullanın veya opencodex yapılandırmasını düzenleyin; kontrol paneli bu seçimleri

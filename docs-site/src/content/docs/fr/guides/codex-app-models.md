@@ -219,7 +219,7 @@ cette autorisation supplémentaire sur le protocole Chat.
 ## Sélection des sous-agents
 
 Codex trie les entrées visibles du sélecteur par `priority` croissante et propose les cinq premières comme
-remplacements de modèle pour `spawn_agent`. La page **Sous-agents** du tableau de bord permet de choisir et
+remplacements de modèle pour `spawn_agent`. La page **Modèles → Sélecteur de modèles des clients** du tableau de bord permet de choisir et
 d'enregistrer jusqu'à cinq identifiants natifs non qualifiés ou identifiants routés `provider/model`.
 `subagentModels`, lorsqu'il est configuré manuellement, accepte aussi les identifiants qualifiés par compte
 `<selector>/<native-openai-model>`. Le tableau de bord conserve ces identifiants exacts lors de l’enregistrement de la liste, même si les modèles ne sont plus disponibles dans le catalogue actuel. opencodex attribue des priorités de
