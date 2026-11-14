@@ -194,7 +194,7 @@
 /* Narrow: each account becomes a stacked block — account, plan and status on one line, then one
    line per pool with its 5-hour and weekly bars side by side, then the controls — so nothing has
    to scroll sideways to reach a button. */
-@container (max-width: 900px) {
+@container (max-width: 1100px) {
   .aqt-table thead {
     position: absolute;
     width: 1px;
