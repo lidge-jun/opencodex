@@ -154,6 +154,18 @@ function ids(): string[] {
   return seen!.accounts.map(account => account.id);
 }
 
+/**
+ * Wait until the fixture has received `count` roster reads. A target switch renders outside act, so the read the
+ * new target's commit starts reaches fetch only after React has committed and run that effect; on a loaded CI
+ * runner one macrotask is not always enough (PR gates on #8715 and #8716 saw 2 of 3). The count is still asserted
+ * exactly by the caller.
+ */
+async function readsReach(server: { reads(): number }, count: number, timeoutMs = 2_000): Promise<void> {
+  for (const end = Date.now() + timeoutMs; server.reads() < count && Date.now() < end;) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+  }
+}
+
 beforeEach(() => {
   previous = Object.fromEntries(globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)])) as typeof previous;
   win = new Window({ url: "http://localhost/" });
@@ -259,6 +271,7 @@ test("an old visit's read must not give back the new visit's in-flight count", a
   // Back to A with its first read still held. The new A read starts and stays in flight, so the
   // surface is refreshing again.
   await switchTarget("hub-a4", () => {});
+  await readsReach(server, 3);
   expect(server.reads()).toBe(3);
   expect(seen!.refreshing).toBe(true);
 
