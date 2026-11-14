@@ -394,6 +394,22 @@ Las solicitudes PUT válidas a `/api/selected-models` y `/api/model-presets` dev
 
 La visibilidad/selección exitosa escribe a `/api/disabled-models`, `/api/model-visibility`, `/api/selected-models` y `/api/model-presets` para informar los resultados de seguimiento en `catalogRefresh` y `clientIntegrations` cuando se ejecuta esa ruta de actualización. HTTP 200 y `ok: true` confirman la selección guardar; no garantizan todos los catálogos de clientes actualizados. Inspeccione `clientIntegrations[]` para `ok: false`, `client`, opcional Aparte `profileId`, y el rechazo `reason`; los detalles de recuperación también pueden incluir `refusalReason`, `snapshotPath` y `residual`. La página Modelos mantiene la selección guardada y muestra una advertencia de actualización del cliente por separado. Inspeccione las integraciones y resuelva el problema notificado antes de volver a intentar `ocx sync`. Los campos de resultado que faltan de un servidor antiguo no establecen una recuperación exitosa.
 
+<a id="live-meter-get-v1usagelive"></a>
+
+### Medidor en vivo (`GET /v1/usage/live`)
+
+Un endpoint de solo lectura del plano de datos informa de la solicitud completada más reciente: velocidad de salida, acierto de caché y ocupación del contexto. Un cliente, como un userscript de Codex de escritorio, puede consultarlo para mostrar esas cifras junto al compositor. Se admite exactamente igual que `/v1/models`: sin credencial en un enlace loopback, con una clave de datos (`x-opencodex-api-key`, `Authorization: Bearer` o `x-api-key`) en otro caso, y nunca con el token de administración. Una clave de datos configurada solo ve las solicitudes enviadas con esa clave; un llamador loopback y el token de entorno ven todas las solicitudes. El origen de la página de Codex de escritorio `app://-` puede leer solo esta ruta (y su preflight); las demás rutas del plano de datos conservan sus reglas de origen.
+
+Consulta: `client=codex|claude|other` limita el resultado a una familia de clientes y `conversation=<id>` a una conversación. El filtro de conversación acepta el id original, el resumen registrado o un enlace `codex://threads/<id>`, y la respuesta nunca lo repite. El cuerpo es `{ "latest": Meter | null, "byClient": { "codex"?: Meter, "claude"?: Meter, "other"?: Meter }, "generatedAt": <ms> }`. Un `Meter` contiene `speed { value, reason }`, `outputTokens`, `generationMs`, `cache { readTokens, inputTokens, percent, reason }`, `context { usedTokens, limitTokens, percent, reason }`, `model`, `provider`, `client` y `timestamp`: solo números, nombres de modelo y proveedor y códigos de motivo. Las revisiones automáticas de aprobación (`codex-auto-review`) nunca se informan.
+
+Un valor es `null` (se muestra como `--`) en lugar de una estimación cuando no se puede medir:
+
+| Valor | `null` cuando |
+| --- | --- |
+| `speed` | La solicitud falló, se canceló o terminó incompleta; el uso falta o es estimado; faltan los tokens de salida; la ventana de generación no se registró, dura menos de 1 s o es incoherente; la solicitud se reintentó en más de un intento (`multiple_attempts`), cuya ventana abarcaría la pausa entre ellos. La velocidad es tokens de salida entre la ventana de generación, nunca el tiempo total. |
+| `cache.percent` | El uso falta o es estimado, falta el recuento de entrada, o la lectura de caché no se observó: solo existe en el cable o su procedencia es desconocida (`cache.reason` es `cache_unobserved`). |
+| `context.percent` | El uso falta o es estimado, o la ventana de contexto del modelo no está en el catálogo persistido de Codex (`context.reason` es `limit_unknown`). |
+
 <a id="oauth-accounts-provider-keys-and-data-plane-keys"></a>
 
 ### Cuentas OAuth, claves de proveedor y claves de plano de datos

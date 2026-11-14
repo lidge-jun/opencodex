@@ -318,6 +318,23 @@ describe("unauthenticated loopback listener", () => {
     }
   });
 
+  test("answers the Codex desktop renderer's live-meter preflight", async () => {
+    const loopbackPort = await freePort();
+    saveConfig(baseConfig(loopbackPort));
+    const server = await startLoopbackTestServer(loopbackPort);
+    try {
+      const pre = await fetch(`http://127.0.0.1:${loopbackPort}/v1/usage/live`, {
+        method: "OPTIONS",
+        headers: { origin: "app://-", "access-control-request-method": "GET", "access-control-request-headers": "x-opencodex-api-key" },
+      });
+      expect(pre.status).toBe(204);
+      expect(pre.headers.get("access-control-allow-origin")).toBe("app://-");
+      expect(pre.headers.get("access-control-allow-methods")).toBe("GET, OPTIONS");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("refuses connections on a non-loopback interface", async () => {
     const address = firstNonLoopbackIPv4();
     if (!address) {

@@ -24,7 +24,7 @@ import {
 
 describe("nested Models hashes", () => {
   test("all tab hashes are registered and belong to the models page", () => {
-    expect([...MODELS_TAB_HASHES]).toEqual(["models/combos", "models/routing", "models/compatibility"]);
+    expect([...MODELS_TAB_HASHES]).toEqual(["models/live", "models/combos", "models/routing", "models/compatibility"]);
     for (const hash of MODELS_TAB_HASHES) {
       expect(hashBelongsToPage(hash, "models")).toBe(true);
       expect(readPageFromHash(hash)).toBe("models");
