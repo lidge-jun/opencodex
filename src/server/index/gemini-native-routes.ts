@@ -39,7 +39,7 @@ export async function dispatchGeminiNativeRoute(req: Request, url: URL, deps: Ol
   const context: RequestLogContext = { ...deps.requestMetricsLogContext, model, provider: "google-antigravity", client: classifyUsageClient(req.headers), ...admissionFields(admission) };
   const sessionReq = withCallerSessionIdentity(req, admission);
   return deps.runAdmittedHttpTurn(sessionReq, deps.policy, async lease => {
-    const response = await handleGeminiNative(sessionReq, deps.config, model, match[2] === "streamGenerateContent", lease);
+    const response = await handleGeminiNative(sessionReq, deps.config, model, match[2] === "streamGenerateContent", lease, undefined, context);
     return reply(logGeminiNativeDelivery(response, sessionReq, requestId, start, context));
   }, { requestId, start, logCtx: context });
 }

@@ -1,5 +1,6 @@
 /** Gemini payloads remain source text: parsing is validation, never serialization. */
 export const GEMINI_NATIVE_MAX_BYTES = 16 * 1024 * 1024;
+export const GEMINI_NATIVE_ERROR_CODE = "gemini_native_upstream_error";
 
 export function validateGeminiObject(raw: string): void {
   const value: unknown = JSON.parse(raw);
@@ -49,16 +50,19 @@ export function wrapGeminiRequest(raw: string, model: string, project: string): 
 }
 
 /** Bounded SSE framing. Only the CCA response envelope is removed. */
-export function geminiSseTransform(maxBytes = GEMINI_NATIVE_MAX_BYTES): TransformStream<Uint8Array, Uint8Array> {
+export function geminiSseTransform(maxBytes = GEMINI_NATIVE_MAX_BYTES, onNativeError?: () => void): TransformStream<Uint8Array, Uint8Array> {
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const encoder = new TextEncoder();
-  let pending = "", line = "", data: string[] = [], eventBytes = 0;
+  let lineParts: string[] = [], data: string[] = [], eventBytes = 0, afterCR = false;
   const candidates = new Map<number, boolean>();
   let nativeError = false, blocked = false;
   const complete = () => nativeError || (candidates.size ? [...candidates.values()].every(Boolean) : blocked);
   function observe(raw: string) {
     const value = JSON.parse(raw) as { candidates?: Array<{ index?: number; finishReason?: string }>; error?: unknown; promptFeedback?: { blockReason?: string } };
-    nativeError ||= !!value.error && typeof value.error === "object";
+    if (!nativeError && value.error && typeof value.error === "object" && !Array.isArray(value.error)) {
+      nativeError = true;
+      try { onNativeError?.(); } catch { /* Observational callbacks never change delivery. */ }
+    }
     blocked ||= !!value.promptFeedback?.blockReason;
     if (value.candidates !== undefined && !Array.isArray(value.candidates)) throw new Error("invalid Gemini candidates");
     for (const [position, candidate] of (value.candidates ?? []).entries()) {
@@ -76,34 +80,48 @@ export function geminiSseTransform(maxBytes = GEMINI_NATIVE_MAX_BYTES): Transfor
       } else {
         const response = unwrapGeminiResponse(payload);
         observe(response);
-        controller.enqueue(encoder.encode(`data: ${response}\n\n`));
+        controller.enqueue(encoder.encode(`data: ${response.replaceAll("\n", "\ndata: ")}\n\n`));
       }
     }
     data = []; eventBytes = 0;
   }
-  function consume(text: string, controller: TransformStreamDefaultController<Uint8Array>, final = false) {
-    pending += text;
-    let offset = 0;
-    for (let i = 0; i < pending.length; i++) {
-      if (pending[i] !== "\n" && pending[i] !== "\r") continue;
-      // Wait for the next chunk to distinguish CRLF from a lone CR.
-      if (pending[i] === "\r" && i + 1 === pending.length && !final) break;
-      line = pending.slice(offset, i);
-      eventBytes += encoder.encode(line).byteLength;
-      if (eventBytes > maxBytes) throw new Error("Gemini SSE event too large");
-      if (!line) emit(controller);
-      else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
-      if (pending[i] === "\r" && pending[i + 1] === "\n") i++;
-      offset = i + 1;
-    }
-    pending = pending.slice(offset);
-    if (eventBytes + encoder.encode(pending).byteLength > maxBytes) throw new Error("Gemini SSE event too large");
-    if (final && (pending.trim() || data.length)) throw new Error("truncated Gemini SSE event");
+  function appendLineBytes(bytes: Uint8Array) {
+    if (!bytes.byteLength) return;
+    eventBytes += bytes.byteLength;
+    if (eventBytes > maxBytes) throw new Error("Gemini SSE event too large");
+    const text = decoder.decode(bytes, { stream: true });
+    if (text) lineParts.push(text);
+  }
+  function endLine(controller: TransformStreamDefaultController<Uint8Array>) {
+    const tail = decoder.decode();
+    if (tail) lineParts.push(tail);
+    const line = lineParts.join("");
+    lineParts = [];
+    if (!line) emit(controller);
+    else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
   }
   return new TransformStream({
-    transform(chunk, controller) { consume(decoder.decode(chunk, { stream: true }), controller); },
-    flush(controller) {
-      consume(decoder.decode(), controller, true);
+    transform(chunk, controller) {
+      let start = 0;
+      // Scan only new bytes; CR/LF cannot occur inside a UTF-8 continuation sequence.
+      for (let i = 0; i < chunk.byteLength; i++) {
+        const byte = chunk[i];
+        if (afterCR) {
+          afterCR = false;
+          if (byte === 10) { start = i + 1; continue; }
+        }
+        if (byte !== 10 && byte !== 13) continue;
+        appendLineBytes(chunk.subarray(start, i));
+        endLine(controller);
+        afterCR = byte === 13;
+        start = i + 1;
+      }
+      appendLineBytes(chunk.subarray(start));
+    },
+    flush() {
+      const tail = decoder.decode();
+      if (tail) lineParts.push(tail);
+      if (lineParts.join("").trim() || data.length) throw new Error("truncated Gemini SSE event");
       if (!complete()) throw new Error("incomplete Gemini generation");
     },
   });
