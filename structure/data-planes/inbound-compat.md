@@ -1,6 +1,6 @@
 # Inbound Compatibility Surfaces
 
-Native Chat/Messages and Claude passthrough use the
+Native Chat/Messages and Claude passthrough use the Native `/v1beta/` follows the [Gemini source-preserving contract](gemini-native.md).
 [local timeout contract](../transports/timeouts.md):
 local JSON inactivity is independent of header arrival and total generation; public JSON defaults
 retain their previous allowance. No disabled header clock detaches client cancellation.

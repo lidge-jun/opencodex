@@ -527,6 +527,19 @@
       "documents": ["src/claude/", "src/server/responses/", "src/types/claude-tool-loading.ts"]
     },
     {
+      "path": "data-planes/gemini-native.md",
+      "tier": 3,
+      "title": "Native Gemini Inbound",
+      "scope": "Source-preserving Gemini requests over the Antigravity OAuth transport.",
+      "documents": [
+        "src/server/gemini-native.ts",
+        "src/server/gemini-native-wire.ts",
+        "src/server/gemini-native-catalog.ts",
+        "src/server/gemini-native-log.ts",
+        "src/server/index/gemini-native-routes.ts"
+      ]
+    },
+    {
       "path": "data-planes/ollama-inbound.md",
       "tier": 3,
       "title": "Ollama-Compatible Inbound",
