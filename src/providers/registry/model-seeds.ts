@@ -1295,3 +1295,54 @@ export const MORPH_ULTRA_REASONING_EFFORT_MAPS: Record<string, Record<string, st
   "morph-kimik31": { none: "none" },
   "morph-dsv41flash-1017": { none: "none", medium: "high" },
 };
+
+/*
+ * AbliteratedLLM catalog as listed by the public GET https://api.abliteratedllm.dev/v1/models on
+ * 2026-11-14 (https://abliteratedllm.dev/docs/models). glm-5.3-flash-abliterated is the service's
+ * abliterated model and the default; every other row is a stock model (the vendor's original
+ * weights). Windows are each row's `context_length`. Modalities are each row's `input_modalities`:
+ * glm-5.3 and glm-5.3-fast are text only, and the gateway answers an image part sent to a model
+ * that does not list images with 400 `unsupported_content`. glm-5.3-flash also lists video, which
+ * the Codex catalog cannot carry, so it is seeded as text and image. Live discovery owns which
+ * models exist.
+ */
+export const ABLITERATEDLLM_MODELS = [
+  "glm-5.3-flash-abliterated",
+  "deepseek-v4.1-flash-1017",
+  "deepseek-v4.1-flash-1017-ultrafast",
+  "deepseek-v4.1-flash-original",
+  "glm-5.3-flash",
+  "glm-5.3",
+  "glm-5.3-fast",
+  "kimi-k3",
+  "kimi-k3.1-pro",
+  "kimi-k3-fast",
+  "ember-1",
+  "muse-spark-open",
+  "qwen3.8-max",
+  "qwen3.8-2.4t-a95b",
+  "minimax-m3",
+];
+export const ABLITERATEDLLM_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+  "glm-5.3-flash-abliterated": 1_048_576,
+  "deepseek-v4.1-flash-1017": 1_048_576,
+  "deepseek-v4.1-flash-1017-ultrafast": 1_048_576,
+  "deepseek-v4.1-flash-original": 1_048_576,
+  "glm-5.3-flash": 1_048_576,
+  "glm-5.3": 1_048_576,
+  "glm-5.3-fast": 1_048_576,
+  "kimi-k3": 1_048_576,
+  "kimi-k3.1-pro": 1_048_576,
+  "kimi-k3-fast": 1_048_576,
+  "ember-1": 1_048_576,
+  "muse-spark-open": 1_048_576,
+  "qwen3.8-max": 262_144,
+  "qwen3.8-2.4t-a95b": 262_144,
+  "minimax-m3": 512_000,
+};
+const ABLITERATEDLLM_TEXT_ONLY_MODELS = ["glm-5.3", "glm-5.3-fast"];
+export const ABLITERATEDLLM_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
+  ABLITERATEDLLM_MODELS.map(id => [
+    id, ABLITERATEDLLM_TEXT_ONLY_MODELS.includes(id) ? ["text"] : ["text", "image"],
+  ]),
+);
