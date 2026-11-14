@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { namespacedToolName, type OcxParsedRequest, type OcxTool } from "../../types";
 import { frameAgentRouterMessages } from "../agentrouter";
+import { isWorkBuddyBaseUrl } from "../../providers/workbuddy";
 
 const MAX_CHAT_TOOL_NAME_LENGTH = 64;
 const ALIAS_HINT_CHARS = 16;
@@ -159,7 +160,7 @@ export function withOpenAIChatToolNames<T>(
   let registry = createOpenAIChatToolNameRegistry(undefined);
   return build({
     messages(parsed, baseUrl, messages): unknown {
-      registry = createOpenAIChatToolNameRegistry(openAIChatToolNameIdentities(parsed), baseUrl === "https://www.workbuddy.ai/v2");
+      registry = createOpenAIChatToolNameRegistry(openAIChatToolNameIdentities(parsed), isWorkBuddyBaseUrl(baseUrl));
       return frameAgentRouterMessages(baseUrl, aliasOpenAIChatMessageToolNames(messages, registry));
     },
     registry: () => registry,

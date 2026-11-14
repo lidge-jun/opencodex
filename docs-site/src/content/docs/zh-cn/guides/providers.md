@@ -209,6 +209,16 @@ Kiro 登录需要 Kiro CLI：Unix 使用 `curl -fsSL https://cli.kiro.dev/instal
 绕过限制。实际可用性取决于账号、地区、模型权限和上游 API。本功能独立于 CodeBuddy CLI
 API Key 提供商，也不负责让 WorkBuddy 桌面客户端使用 OpenCodex 模型。
 
+### CodeBuddy CN 订阅
+
+`codebuddy-cn-ai` 将中国版 CodeBuddy 订阅作为 OpenCodex 的模型来源。在 Providers 中选择 CodeBuddy CN (subscription)
+并登录，或运行 `ocx login codebuddy-cn-ai`，然后在浏览器中于 `www.codebuddy.cn` 完成授权。无需安装 CodeBuddy CLI，
+也不需要 API Key。
+
+推理、模型目录、积分和令牌刷新请求发往 `copilot.tencent.com`。凭据按地区隔离：本预设的令牌不会发到 WorkBuddy AI 的站点，
+WorkBuddy AI 的令牌也不会发到 `copilot.tencent.com`。模型跟随账号的模型目录，积分显示方式与 WorkBuddy AI 相同。
+`codebuddy-cn` 预设则是用 API Key 驱动官方 CodeBuddy CLI。
+
 ### DeepSeek Account (DSH)
 
 `dsh-account` 是一个实验性的、优先导入已有凭据的账户提供商，用于复用已安装并登录的 DeepSeek Harness (DSH) Desktop 应用程序的认证凭据。
@@ -222,7 +232,7 @@ API Key 提供商，也不负责让 WorkBuddy 桌面客户端使用 OpenCodex �
 
 ## 3. API 密钥目录
 
-opencodex 内置 108 个预设：87 个密钥预设、17 个 OAuth 预设、3 个本地预设，以及 1 个默认的
+opencodex 内置 109 个预设：87 个密钥预设、18 个 OAuth 预设、3 个本地预设，以及 1 个默认的
 ChatGPT 转发预设。仪表盘的 **Add provider** 选择器会打开密钥提供商的控制台，验证并保存密钥。
 验证因提供商而异。主要条目包括：
 

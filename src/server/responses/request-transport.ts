@@ -213,7 +213,7 @@ export async function prepareResponsesTransport(
     || route.providerName === "orcarouter-oauth"
     // runTurn transport: the replay runs on the first-event preflight in run-turn-execution.
     || route.providerName === "devin"
-    || route.providerName === "workbuddy-ai"
+    || route.providerName === "workbuddy-ai" || route.providerName === "codebuddy-cn-ai"
     || route.providerName === "dsh-account"
   ) && route.provider.authMode === "oauth";
   let sentOAuthSnapshot: OAuthAccessSnapshot | undefined;
@@ -548,7 +548,7 @@ export async function prepareResponsesTransport(
       parsed._kiroAuthContext = kiroContext;
       if (retryParsed !== parsed) retryParsed._kiroAuthContext = { ...kiroContext };
     }
-    if (route.providerName === "workbuddy-ai") {
+    if (route.providerName === "workbuddy-ai" || route.providerName === "codebuddy-cn-ai") {
       parsed._workbuddyAuthContext = snapshot.workbuddy;
       if (retryParsed !== parsed) retryParsed._workbuddyAuthContext = snapshot.workbuddy;
     }
@@ -1255,7 +1255,7 @@ export async function prepareResponsesTransport(
           // Only genuinely accountless adapter calls leave the context undefined and use local/env fallback.
           parsed._kiroAuthContext = { ...(resolved.kiro ?? {}) };
         }
-        if (route.providerName === "workbuddy-ai") parsed._workbuddyAuthContext = resolved.workbuddy;
+        if (route.providerName === "workbuddy-ai" || route.providerName === "codebuddy-cn-ai") parsed._workbuddyAuthContext = resolved.workbuddy;
         if (route.providerName === "zed") {
           parsed._zedAuthContext = { userId: resolved.providerUserId ?? "" };
         }

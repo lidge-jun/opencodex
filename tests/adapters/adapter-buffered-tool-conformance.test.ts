@@ -178,7 +178,7 @@ describe("registry-derived buffered tool conformance", () => {
         expect(["openai-responses", "azure", "azure-openai"]).toContain(adapterId);
         continue;
       }
-      const response = adapterId === "workbuddy-ai"
+      const response = adapterId === "workbuddy-ai" || adapterId === "codebuddy-cn-ai"
         ? TOOL_WIRE_DRIVERS["openai-chat"].streamingToolCall!("apply_patch", JSON.stringify({ input: PATCH }))
         : bufferedResponse(contract.wire);
       expect(response, `${adapterId}:${contract.wire}`).toBeDefined();

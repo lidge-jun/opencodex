@@ -781,7 +781,7 @@ On upgrade, startup adds Pro to a saved model list only when it exactly matches 
 
 ## 3. API-key catalog
 
-opencodex ships 108 built-in presets: 87 key-based, 17 OAuth, three local, and one default
+opencodex ships 109 built-in presets: 87 key-based, 18 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -1447,6 +1447,11 @@ Upstream client-channel or account restrictions are returned to the caller. Open
 not rewrite agent identity prompts to bypass them. Availability depends on your account,
 region, model entitlement and WorkBuddy's current API. This is separate from the CodeBuddy
 CLI API-key providers and does not connect the WorkBuddy desktop client to OpenCodex.
+
+### CodeBuddy CN subscription
+
+`codebuddy-cn-ai` connects a CodeBuddy China subscription with no CLI and no API key (the `codebuddy-cn` preset drives the official CLI with a key). Choose CodeBuddy CN (subscription) in Providers or run `ocx login codebuddy-cn-ai`, then sign in on `www.codebuddy.cn`.
+Inference, models, credits and token refresh use `copilot.tencent.com`. A token from this preset is never sent to the WorkBuddy AI host, and the reverse holds too. Models follow your account catalog.
 
 ### Official CodeBuddy Code CLI (Global & CN)
 

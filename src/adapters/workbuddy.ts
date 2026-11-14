@@ -4,18 +4,19 @@ import { workBuddyToolParameters } from "./workbuddy-schema";
 import { retainTranslatedEvent, releaseTranslatedEvent } from "../lib/translator-budget";
 import { createOpenAIChatAdapter } from "./openai-chat";
 import type { AdapterEvent, OcxProviderConfig } from "../types";
-import { assertWorkBuddyDestination, WORKBUDDY_BASE_URL, workBuddyHeaders } from "../providers/workbuddy";
+import { assertWorkBuddyDestination, WORKBUDDY_PROFILE, workBuddyBaseUrl, workBuddyHeaders, type WorkBuddyProfile } from "../providers/workbuddy";
 
 const sessionSalt = randomBytes(32);
 const opaqueId = (value: unknown) => createHmac("sha256", sessionSalt).update(JSON.stringify(value)).digest("hex").slice(0, 32);
 
-export function createWorkBuddyAdapter(provider: OcxProviderConfig): ProviderAdapter {
-  const base = createOpenAIChatAdapter({ ...provider, adapter: "openai-chat", baseUrl: WORKBUDDY_BASE_URL, headers: undefined });
+export function createWorkBuddyAdapter(provider: OcxProviderConfig, profile: WorkBuddyProfile = WORKBUDDY_PROFILE): ProviderAdapter {
+  const baseUrl = workBuddyBaseUrl(profile), label = profile.label;
+  const base = createOpenAIChatAdapter({ ...provider, adapter: "openai-chat", baseUrl, headers: undefined });
   return {
-    ...base, name: "workbuddy-ai",
+    ...base, name: profile.id,
     async buildRequest(parsed, incoming) {
-      assertWorkBuddyDestination(provider.baseUrl);
-      if (!provider.apiKey || !parsed._workbuddyAuthContext) throw new Error("WorkBuddy AI account unavailable; run ocx login workbuddy-ai");
+      assertWorkBuddyDestination(provider.baseUrl, profile);
+      if (!provider.apiKey || !parsed._workbuddyAuthContext) throw new Error(`${label} account unavailable; run ocx login ${profile.id}`);
       const req = await base.buildRequest({ ...parsed, stream: true }, incoming);
       const body = JSON.parse(req.body);
       const messages = body.messages as Array<Record<string, unknown>>;
@@ -36,12 +37,12 @@ export function createWorkBuddyAdapter(provider: OcxProviderConfig): ProviderAda
       const requestId = randomUUID().replaceAll("-", "");
       const headers = {
         "Content-Type": "application/json", Accept: "text/event-stream",
-        ...workBuddyHeaders(provider.apiKey, parsed._workbuddyAuthContext),
+        ...workBuddyHeaders(provider.apiKey, parsed._workbuddyAuthContext, profile),
         "X-Request-ID": requestId, "X-Conversation-Message-ID": requestId,
         "X-Conversation-Request-ID": latest ? opaqueId([conversation, latest.index, latest.m.content]) : requestId,
         ...(conversation ? { "X-Conversation-ID": opaqueId(conversation) } : {}),
       };
-      return { ...req, url: `${WORKBUDDY_BASE_URL}/chat/completions`, headers, body: JSON.stringify(body), redirect: "error" as const };
+      return { ...req, url: `${baseUrl}/chat/completions`, headers, body: JSON.stringify(body), redirect: "error" as const };
     },
     async parseResponse(response, budget, tier) {
       const events: AdapterEvent[] = [];
@@ -59,10 +60,10 @@ export function createWorkBuddyAdapter(provider: OcxProviderConfig): ProviderAda
     formatErrorBody(status, _headers, payload) {
       let code: unknown;
       try { code = JSON.parse(payload)?.code; } catch { /* Only structured numeric codes are public. */ }
-      if (Number(code) === 11128) return "WorkBuddy AI rejected this client channel (11128).";
-      if (Number(code) === 11140) return "WorkBuddy AI restricted this account (11140); contact WorkBuddy support.";
-      if (Number(code) === 14018) return "WorkBuddy AI credits exhausted (14018).";
-      return `WorkBuddy AI request failed (HTTP ${status}).`;
+      if (Number(code) === 11128) return `${label} rejected this client channel (11128).`;
+      if (Number(code) === 11140) return `${label} restricted this account (11140); contact ${label} support.`;
+      if (Number(code) === 14018) return `${label} credits exhausted (14018).`;
+      return `${label} request failed (HTTP ${status}).`;
     },
   };
 }

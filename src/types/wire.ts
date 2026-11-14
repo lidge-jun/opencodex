@@ -112,6 +112,7 @@ function normalizedEndpoint(value: unknown): string | undefined {
  */
 const CREDENTIAL_PINNED_ADAPTERS: Readonly<Record<string, Readonly<Record<string, string>>>> = Object.freeze({
   "workbuddy-ai": Object.freeze({ "": "workbuddy-ai" }),
+  "codebuddy-cn-ai": Object.freeze({ "": "codebuddy-cn-ai" }),
   "dsh-account": Object.freeze({ "": "dsh-account" }),
 });
 

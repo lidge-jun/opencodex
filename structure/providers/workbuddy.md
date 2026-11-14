@@ -2,6 +2,8 @@
 
 `workbuddy-ai` uses the international WorkBuddy subscription at `https://www.workbuddy.ai`.
 It is separate from the API-key CodeBuddy CLI providers and does not configure the WorkBuddy client.
+`codebuddy-cn-ai` runs the same code for the CodeBuddy China subscription; see
+[CodeBuddy CN profile](#codebuddy-cn-profile).
 
 ## Authentication and credential ownership
 
@@ -56,6 +58,20 @@ quota windows, so credit exhaustion does not disable free models or influence ac
 GUI. The shared provider quota panel shows the remaining credits, usage, group balances and
 optional expiry; the existing refresh and stale-state controls apply to it.
 
+## CodeBuddy CN profile
+
+`src/providers/workbuddy.ts` describes each product as a `WorkBuddyProfile`: API origin, login
+origin, login platform, default account domain and client identity headers. `workbuddy-ai` keeps
+its international values. `codebuddy-cn-ai` signs in on `https://www.codebuddy.cn`
+(`platform=workbuddy`) and sends inference, catalog, refresh and billing requests to
+`https://copilot.tencent.com`, with CodeBuddy CLI identity headers and `X-Private-Data` derived
+from the account's enterprise id. Every destination check takes the profile, so a token from one
+region is never sent to the other region's origin, and each provider row is pinned to its own
+adapter. The registered OAuth entries wrap login and refresh so that the store's extra positional
+arguments never reach the profile parameter. This preset does not replace `codebuddy-cn`, which
+drives the official CLI with an API key. The `cn-work` WorkBuddy China desktop product is not
+covered.
+
 ## Verification
 
 `tests/oauth/workbuddy-login.test.ts` covers login, identity, cancellation, refresh, response
@@ -66,6 +82,8 @@ buffered and streamed Responses requests, and persisted one-shot 401 renewal wit
 accounts. `tests/providers/workbuddy-quota.test.ts` covers balance parsing, expiry, failures,
 account isolation, refresh and the display-only routing boundary.
 `gui/tests/workbuddy-credits.test.tsx` covers the account/provider panels and malformed payloads.
+`tests/providers/codebuddy-cn-ai.test.ts` covers the CN login hosts, refresh through the registered
+entry, CLI identity headers, cross-region destination refusal, catalog and credit hosts.
 These fixtures do not establish live account entitlement or vendor channel acceptance.
 
 Protocol reference: [Magpie WorkBuddy plugin](https://github.com/magpie-community/plugins/tree/e7f65641df820dfd715c0d2241f99f2092e4efb1/packages/workbuddy).

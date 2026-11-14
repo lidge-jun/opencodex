@@ -11,6 +11,7 @@ import { withTestTranslatorBudget } from "../helpers/translator-budget";
 
 const EXPECTED_ADAPTER_NAMES = {
   "workbuddy-ai": "workbuddy-ai",
+  "codebuddy-cn-ai": "codebuddy-cn-ai",
   codebuddy: "codebuddy",
   "command-code": "command-code",
   "openai-chat": "openai-chat",
