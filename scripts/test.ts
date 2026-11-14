@@ -73,7 +73,10 @@ export function createIsolatedTestEnvironment(
   }
   writeTestTempOwner(root, baseEnv[TEST_RUN_ID_ENV]);
   const inherited = { ...baseEnv };
-  for (const name of LIVE_INSTALL_ENV) delete inherited[name];
+  for (const name of Object.keys(inherited)) {
+    const match = process.platform === "win32" ? name.toUpperCase() : name;
+    if (LIVE_INSTALL_ENV.some(liveName => liveName === match)) delete inherited[name];
+  }
   // A GIT_DIR/GIT_WORK_TREE inherited from a hook or wrapper re-points every git command the suite
   // spawns, and fixture helpers then init, configure and commit into that repository. Starting the
   // children without them also covers Bun.spawn calls that pass no env (scripts/git-repository-env.ts).
