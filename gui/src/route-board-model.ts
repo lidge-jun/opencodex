@@ -443,7 +443,10 @@ function pickWindows(windows: QuotaSummaryWindow[], models: readonly string[]): 
     const family = windowFamily(window);
     return family.length >= 3 && lowered.some((model) => model.startsWith(family));
   });
-  const generic = measured.filter((window) => window.labelKey !== undefined || window.modelId === undefined);
+  // Provider-wide windows stand in when nothing matches; another family's pool ("Gem" for a
+  // Claude channel) never does, so such a channel reads as unknown instead.
+  const generic = measured.filter((window) => window.labelKey !== undefined
+    || (window.modelId === undefined && quotaFamilyWindow(window.label ?? "") === null));
   const pool = relevant.length > 0 ? relevant : generic;
   const rank = (window: QuotaSummaryWindow) => {
     if (window.modelId !== undefined) return -1;

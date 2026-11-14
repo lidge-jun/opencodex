@@ -123,6 +123,22 @@ describe("route board model", () => {
     expect(quota.zed).toEqual({ kind: "unknown" });
   });
 
+  test("a channel whose only window is another family's pool shows unknown quota, not that pool", () => {
+    const [row] = buildRouteRows({
+      combos: [combo("opus", [["google-antigravity", "claude-opus-5-5"]])],
+      catalog: {},
+      lastResort: {},
+      providers: [{ name: "google-antigravity", authMode: "oauth" }],
+      quotaReports: [{
+        provider: "google-antigravity",
+        updatedAt: NOW,
+        quota: { customWindows: [{ label: "Gem", percent: 10, resetAt: NOW + 3_600_000 }], updatedAt: NOW },
+      }],
+      now: NOW,
+    });
+    expect(row!.quotas[0]!.quota).toEqual({ kind: "unknown" });
+  });
+
   test("a combo missing from the catalog falls back to its id and counts as on", () => {
     const [row] = buildRouteRows({ combos: [combo("x", [["a", "m"]])], catalog: {}, lastResort: {}, providers: [], quotaReports: undefined });
     expect([row!.displayName, row!.enabled, row!.contextWindow]).toEqual(["x", true, undefined]);
