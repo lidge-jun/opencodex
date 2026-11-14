@@ -675,8 +675,8 @@ function ProviderSettingsForm({
           <span className="muted text-label" style={{ display: "block", marginTop: 2 }}>{t("pws.liveModelsDesc")}</span>
         </span>
       </label>
-      {apiBase !== undefined && liveModelDiscoverySupported && (
-        <ProviderModelDiscovery key={`${apiBase} ${item.name}`} apiBase={apiBase} provider={item.name} enabled={item.liveModels !== false} />
+      {apiBase !== undefined && liveModelDiscoverySupported && item.liveModels !== false && (
+        <ProviderModelDiscovery key={`${apiBase} ${item.name}`} apiBase={apiBase} provider={item.name} />
       )}
       <section className="pwi-pacing-card" aria-labelledby="pwi-pacing-title">
         <div className="pwi-pacing-head">

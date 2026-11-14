@@ -33,20 +33,17 @@ export function AccountProbeResultLine({ entry }: { entry: AccountProbeEntry | u
     return <div className="pwi-auth-row-secondary pws-status-warn" role="status">{`${t("acctProbe.failed")} · ${time}`}</div>;
   }
   const { result } = entry;
-  const evidence = [
+  // A usable account needs no evidence; its quota is already in the bars below and the table.
+  const evidence = result.status === "ok" ? "" : [
     result.httpStatus !== null ? `HTTP ${result.httpStatus}` : null,
     result.reason,
     result.message,
   ].filter((part): part is string => Boolean(part)).join(" · ");
-  const windows = (result.quota?.customWindows ?? [])
-    .map(window => `${window.label} ${Math.max(0, Math.round(100 - window.percent))}%`)
-    .join(" · ");
   return (
     <div className="pwi-auth-row-secondary" role="status" data-probe-status={result.status}
       style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
       <span className={statusBadgeClass(result.status)}>{t(`acctProbe.status.${result.status}`)}</span>
-      {evidence && <span className={result.status === "ok" ? "faint" : "pws-status-warn"}>{evidence}</span>}
-      {windows && <span className="faint">{windows}</span>}
+      {evidence && <span className="pws-status-warn">{evidence}</span>}
       <span className="faint">{time}</span>
     </div>
   );

@@ -28,7 +28,6 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "remoteLinkDiagnostics.colPort", // "Port" is the same word in French (a network port column).
   "usageV2.remoteLink", // Remote Link is the product name.
   "nav.claude", // Product name.
-  "acctTable.actions", // "Actions" is the same word in French (the table's action column).
   "acctTable.pool.gemini", // Quota pool named after the product.
   "acctTable.pool.claudeGpt", // Quota pool named after the products.
   "acctTable.pool.argon", // Quota pool name used by the Antigravity quota API.

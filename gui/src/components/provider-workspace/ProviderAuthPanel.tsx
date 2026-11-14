@@ -29,6 +29,7 @@ import { AccountProbeButton, AccountProbeResultLine } from "./AccountProbe";
 import { ACCOUNT_PROBE_PROVIDERS, useAccountProbe } from "../../hooks/useAccountProbe";
 import { AccountQuotaTable } from "./AccountQuotaTable";
 import { accountQuotaFromReport } from "../../provider-workspace/report";
+import { planDisplayName } from "../../provider-workspace/account-quota-table";
 import { GrokCouponBadge, GrokResetCouponModal } from "./GrokResetCoupons";
 import { AnthropicGrantBadge, AnthropicResetGrantModal } from "./AnthropicResetGrants";
 import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
@@ -311,8 +312,6 @@ export default function ProviderAuthPanel({
                   fiveHourResetAt: account.quota.fiveHourResetAt ?? account.quota.shortResetAt,
                 },
               }))}
-              onTogglePause={(id, paused) => { void codexController.setAccountPaused(id, paused); }}
-              pauseDisabled={codexController.pauseUpdatingId !== null || codexController.switchingId !== null}
             />
           )}
           <CodexAccountPool
@@ -454,8 +453,9 @@ export default function ProviderAuthPanel({
       */}
       <div className="pwi-auth-head">
         <h3 className="pwi-section-title">{isOauth ? t("pws.availableAccounts") : t("pws.apiKeys")}</h3>
-        {((isOauth && loggedIn) || isKeyAuth) && canRefreshQuota && (
+        {((((isOauth && loggedIn) || isKeyAuth) && canRefreshQuota) || probeEnabled) && (
           <div className="pwi-auth-head-actions">
+            {((isOauth && loggedIn) || isKeyAuth) && canRefreshQuota && <>
             {quotaRefreshResult && (
               <span role="status" className={quotaRefreshResult.ok ? "pws-status-ok" : "pws-status-warn"}>
                 {quotaRefreshResult.text}
@@ -471,15 +471,14 @@ export default function ProviderAuthPanel({
               {" "}
               {refreshingQuota ? t("codexAuth.refreshingQuota") : t("codexAuth.refreshQuota")}
             </button>
-          </div>
-        )}
-        {probeEnabled && (
-          <div className="pwi-auth-head-actions">
-            <button type="button" className="btn btn-ghost btn-sm" title={t("acctProbe.hint")}
-              aria-busy={accountProbe.allPending} disabled={accountProbe.allPending}
-              onClick={() => { void accountProbe.probeAll(accounts.map(account => account.id)); }}>
-              {accountProbe.allPending ? t("acctProbe.testing") : t("acctProbe.testAll")}
-            </button>
+            </>}
+            {probeEnabled && (
+              <button type="button" className="btn btn-ghost btn-sm" title={t("acctProbe.hint")}
+                aria-busy={accountProbe.allPending} disabled={accountProbe.allPending}
+                onClick={() => { void accountProbe.probeAll(accounts.map(account => account.id)); }}>
+                {accountProbe.allPending ? t("acctProbe.testing") : t("acctProbe.testAll")}
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -625,21 +624,13 @@ export default function ProviderAuthPanel({
                     ...(probe && "result" in probe ? { probe: { status: probe.result.status, latencyMs: probe.result.latencyMs } } : {}),
                   };
                 })}
-                onTogglePause={authHandlers.onPauseAccount ? (id, paused) => {
-                  const account = accounts.find(row => row.id === id);
-                  if (account) void authHandlers.onPauseAccount!(item.name, account, paused);
-                } : undefined}
-                pauseDisabled={busy || Boolean(switchingAccountId) || Boolean(pausingAccountId)}
-                renderProbe={probeEnabled ? account => (
-                  <AccountProbeButton controller={accountProbe} accountId={account.id} label={account.label} disabled={accountProbe.allPending} />
-                ) : undefined}
               />
             )}
             {accounts.length > 0 && (
               <ul className="pwi-auth-list">
                 {accounts.map(account => {
                   const label = oauthAccountDisplayLabel(accounts, account, t);
-                  const planLabel = isAnthropicPool ? anthropicSubscriptionLabel(account.plan) : item.name === "google-antigravity" ? account.plan : undefined;
+                  const planLabel = isAnthropicPool ? anthropicSubscriptionLabel(account.plan) : item.name === "google-antigravity" ? planDisplayName(account.plan) ?? undefined : undefined;
                   const switching = switchingAccountId === account.id;
                   const pausing = pausingAccountId === account.id;
                   const healthStatus = account.health?.status;

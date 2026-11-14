@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import { useT, type TKey } from "../../i18n/shared";
 import {
   buildQuotaTable, formatCountdown,
@@ -29,7 +29,7 @@ function PoolBar({ label, cell, now }: { label: string; cell: PoolCell; now: num
     <div className="aqt-bar" title={cell.resetAt === undefined ? undefined : new Date(cell.resetAt).toLocaleString()}>
       <span className="aqt-bar-label">{label}</span>
       <div className="bar"><div className={`bar-fill ${tone}`} style={{ "--bar-scale": remaining / 100 } as CSSProperties} /></div>
-      <span className="aqt-bar-value">{remaining}%</span>
+      <span className="aqt-bar-value">{t("acctTable.left", { percent: remaining })}</span>
       <span className="aqt-bar-reset">{countdown ? t("acctTable.resetsIn", { time: countdown }) : ""}</span>
     </div>
   );
@@ -37,19 +37,14 @@ function PoolBar({ label, cell, now }: { label: string; cell: PoolCell; now: num
 
 export interface AccountQuotaTableProps {
   accounts: readonly QuotaTableAccount[];
-  /** Pause/resume through the provider's existing account API; omitted hides the button. */
-  onTogglePause?: (accountId: string, paused: boolean) => void;
-  pauseDisabled?: boolean;
-  /** Per-account probe button (the existing read-only probe), when the provider supports it. */
-  renderProbe?: (account: QuotaTableAccount) => ReactNode;
 }
 
 /**
  * Every account of one provider side by side: plan, each quota pool's 5-hour and weekly
- * remaining with a reset countdown, and one status flag. Actions reuse the existing account
- * APIs; the table adds no endpoint.
+ * remaining with a reset countdown, and one status flag. Pause and Test stay on the account
+ * cards below, so the table only reads; it adds no endpoint.
  */
-export function AccountQuotaTable({ accounts, onTogglePause, pauseDisabled, renderProbe }: AccountQuotaTableProps) {
+export function AccountQuotaTable({ accounts }: AccountQuotaTableProps) {
   const t = useT();
   const now = useMinuteClock();
   const table = buildQuotaTable(accounts, now);
@@ -62,7 +57,7 @@ export function AccountQuotaTable({ accounts, onTogglePause, pauseDisabled, rend
     <div className="aqt" data-testid="account-quota-table">
       <p className="aqt-policy faint">{t("acctTable.policy")}</p>
       <div className="aqt-scroll">
-        <table className="aqt-table">
+        <table className="aqt-table" aria-label={t("acctTable.title")}>
           <thead>
             <tr>
               <th scope="col">{t("acctTable.account")}</th>
@@ -70,11 +65,10 @@ export function AccountQuotaTable({ accounts, onTogglePause, pauseDisabled, rend
               {table.pools.map(pool => (
                 <th scope="col" key={pool.key}>
                   {poolLabel(pool.key)}
-                  {pool.scarce && <span className="aqt-scarce">{t("acctTable.scarce")}</span>}
+                  {pool.scarce && <span className="badge badge-amber aqt-scarce">{t("acctTable.scarce")}</span>}
                 </th>
               ))}
               <th scope="col">{t("acctTable.status")}</th>
-              {(onTogglePause || renderProbe) && <th scope="col">{t("acctTable.actions")}</th>}
             </tr>
           </thead>
           <tbody>
@@ -89,31 +83,21 @@ export function AccountQuotaTable({ accounts, onTogglePause, pauseDisabled, rend
                     ? <span className="badge badge-green" title={row.account.plan ? t("acctTable.planSource", { tier: row.account.plan }) : undefined}>{row.plan}</span>
                     : <span className="badge badge-muted">{t("acctTable.unknownPlan")}</span>}
                 </td>
-                {table.pools.map(pool => {
-                  const cell = row.cells[pool.key];
-                  return (
-                    <td key={pool.key} className="aqt-pool">
-                      {cell ? <>
-                        {cell.fiveHour && <PoolBar label={t("acctTable.fiveHour")} cell={cell.fiveHour} now={now} />}
-                        {cell.weekly && <PoolBar label={t("acctTable.weekly")} cell={cell.weekly} now={now} />}
-                        {row.next.includes(pool.key) && <span className="badge badge-primary aqt-next" title={t("acctTable.nextHint")}>{t("acctTable.next")}</span>}
-                      </> : <span className="faint">{t("acctTable.noReading")}</span>}
-                    </td>
-                  );
-                })}
+                {Object.keys(row.cells).length === 0
+                  ? <td colSpan={table.pools.length} className="faint">{t("acctTable.noReading")}</td>
+                  : table.pools.map(pool => {
+                    const cell = row.cells[pool.key];
+                    return (
+                      <td key={pool.key} className="aqt-pool">
+                        {cell ? <>
+                          {cell.fiveHour && <PoolBar label={t("acctTable.fiveHour")} cell={cell.fiveHour} now={now} />}
+                          {cell.weekly && <PoolBar label={t("acctTable.weekly")} cell={cell.weekly} now={now} />}
+                          {row.next.includes(pool.key) && <span className="badge badge-primary aqt-next" title={t("acctTable.nextHint")}>{t("acctTable.next")}</span>}
+                        </> : <span className="faint" title={t("acctTable.noReading")}>—</span>}
+                      </td>
+                    );
+                  })}
                 <td><span className={`aqt-flag aqt-flag--${FLAG_TONE[row.flag]}`}>{flagText(row)}</span></td>
-                {(onTogglePause || renderProbe) && (
-                  <td className="aqt-actions">
-                    {onTogglePause && (
-                      <button type="button" className="btn btn-ghost btn-sm" disabled={pauseDisabled}
-                        aria-label={`${t(row.account.paused ? "codexAuth.resume" : "codexAuth.pause")} — ${row.account.label}`}
-                        onClick={() => onTogglePause(row.account.id, !row.account.paused)}>
-                        {t(row.account.paused ? "codexAuth.resume" : "codexAuth.pause")}
-                      </button>
-                    )}
-                    {renderProbe?.(row.account)}
-                  </td>
-                )}
               </tr>
             ))}
           </tbody>
