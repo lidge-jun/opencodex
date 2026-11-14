@@ -2513,6 +2513,8 @@ export const fr: Record<TKey, string> = {
   "integrations.action.disable": "Désactiver",
   "integrations.action.refresh": "Mettre à jour",
   "integrations.action.settings": "Paramètres",
+  "integrations.action.reapply": "Cliquez pour réappliquer et mettre ce client à jour",
+  "integrations.reapply.done": "{client} a été réappliqué.",
   "integrations.action.manageKeys": "Gérer les clés",
   "integrations.action.restore": "Restaurer…",
   "integrations.action.undo": "Annuler",

@@ -2534,6 +2534,8 @@ export const vi: Record<TKey, string> = {
   "integrations.action.disable": "Vô hiệu hóa",
   "integrations.action.refresh": "Cập nhật",
   "integrations.action.settings": "Cài đặt",
+  "integrations.action.reapply": "Nhấp để áp dụng lại và cập nhật ứng dụng này",
+  "integrations.reapply.done": "Đã áp dụng lại {client}.",
   "integrations.action.manageKeys": "Quản lý key",
   "integrations.action.restore": "Khôi phục…",
   "integrations.action.undo": "Hoàn tác",

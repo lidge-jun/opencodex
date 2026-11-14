@@ -135,8 +135,10 @@ function isApplied(status: IntegrationStatus): boolean {
  * lifted above it in the stacking order. That gives one tab stop named after
  * the client, leaves the switch and the settings button clickable on their
  * own, and needs no `stopPropagation` guessing about which control the user
- * meant. The badge is deliberately NOT lifted — it is not interactive, and
- * lifting it would carve a dead zone into the middle of a clickable card.
+ * meant. The badge is NOT lifted while it is a plain label — lifting it would
+ * carve a dead zone into the middle of a clickable card. The one exception is
+ * the "Update needed" pill, which becomes a real button (and lifts itself in CSS)
+ * because re-applying a drifted client is exactly what that pill announces.
  */
 function OverviewCard({
   row,
@@ -146,6 +148,7 @@ function OverviewCard({
   onToggle,
   onOverwrite,
   onChooseProfile,
+  onReapply,
 }: {
   row: OverviewRow;
   pending: boolean;
@@ -156,6 +159,8 @@ function OverviewCard({
   onOverwrite: (() => void) | null;
   /** Aside only: one plan names one profile, so the aggregate card cannot replace. */
   onChooseProfile: (() => void) | null;
+  /** Present only for an applied client whose file drifted: the "Update needed" pill re-applies it. */
+  onReapply: (() => void) | null;
 }) {
   const t = useT();
   const detail = row.detail ?? (row.detailKey ? t(row.detailKey, row.detailVars ?? undefined) : null);
@@ -191,7 +196,13 @@ function OverviewCard({
             {t(row.labelKey)}
           </button>
         </h4>
-        <IntegrationStateBadge state={row.state} installed={row.installed} />
+        <IntegrationStateBadge
+          state={row.state}
+          installed={row.installed}
+          onActivate={onReapply ?? undefined}
+          activateLabel={onReapply ? t("integrations.action.reapply") : undefined}
+          busy={pending}
+        />
       </div>
       {/*
         File clients show a config path in code type, because that is a string
@@ -623,6 +634,8 @@ export default function IntegrationsOverview({
     nativeResource.refresh();
     codexResource.refresh();
     claudeResource.refresh();
+    // Desktop's badge reads its own route; without this a re-apply left "Update needed" on screen.
+    claudeDesktopResource.refresh();
     grokResource.refresh();
   };
 
@@ -635,7 +648,13 @@ export default function IntegrationsOverview({
     });
   };
 
-  const toggleCard = async (row: OverviewRow, next: boolean, plan?: IntegrationMutationPlan) => {
+  const toggleCard = async (
+    row: OverviewRow,
+    next: boolean,
+    plan?: IntegrationMutationPlan,
+    /** Re-applying a drifted client: the card says so on success instead of only flipping its badge. */
+    reapply = false,
+  ) => {
     if (cardPending) return;
     if (!row.toggle) return;
     setCardPending(row.id);
@@ -662,6 +681,8 @@ export default function IntegrationsOverview({
           });
         } else if (result.reason === "non_loopback_superseded") {
           setCardResult(row.id, { tone: "ok", text: t("integrations.native.msg.nonLoopbackSuperseded") });
+        } else if (reapply) {
+          setCardResult(row.id, { tone: "ok", text: t("integrations.reapply.done", { client: t(row.labelKey) }) });
         }
         refreshNativeDetails();
       }
@@ -775,6 +796,22 @@ export default function IntegrationsOverview({
    *
    * Errors propagate so the dialog can show them while the user still has cancel.
    */
+  /*
+   * "Update needed" with the switch ON is a drifted file the user already chose to
+   * keep applied, so the pill can repeat the apply the switch would have made. Not
+   * when the switch is off (stale there means cleanup is pending, and applying would
+   * undo the user's choice), and never for Aside, whose apply is per profile.
+   */
+  const canReapply = (row: OverviewRow) => row.state === "stale"
+    && row.installed
+    && row.toggle !== null
+    && (row.toggleOn ?? row.applied)
+    && row.status?.clientId !== "aside";
+  const reapplyCard = (row: OverviewRow) => {
+    // File clients keep their consequence dialog; native clients re-run the same PUT the switch sends.
+    if (row.status) void requestFilePlan(row, "apply");
+    else void toggleCard(row, true, undefined, true);
+  };
   const presentRows = rows.filter(row => !elsewhere(row));
   const elsewhereRows = rows.filter(elsewhere);
   const renderCard = (row: OverviewRow) => (
@@ -791,6 +828,7 @@ export default function IntegrationsOverview({
       onChooseProfile={row.status?.clientId === "aside" && row.status.state === "conflict" && row.status.reason !== "candidate-conflict" && row.installed
         ? () => navigateHash(row.hash)
         : null}
+      onReapply={canReapply(row) ? () => reapplyCard(row) : null}
     />
   );
 
