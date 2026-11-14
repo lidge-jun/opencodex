@@ -413,6 +413,8 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     if (path === "/v1/audio/transcriptions") return req.method === "POST";
     if (path === "/v1/audio/transcriptions/stream") return req.headers.get("upgrade")?.toLowerCase() === "websocket";
     if (path === "/v1/alpha/search") return req.method === "POST";
+    // Live meter (#8735): GET-only numbers from the local request log; Codex++ reads it here.
+    if (path === "/v1/usage/live") return req.method === "GET";
     if (contextEndpoint(path)) return req.method === "POST";
     if (path === "/v1/images/generations" || path === "/v1/images/edits") {
       return req.method === "POST";
