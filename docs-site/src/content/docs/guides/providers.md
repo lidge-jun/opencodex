@@ -782,7 +782,7 @@ On upgrade, startup adds Pro to a saved model list only when it exactly matches 
 
 opencodex ships 109 built-in presets: 88 key-based, 17 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
-validates the key, and stores it; validation is provider-specific. Notable entries:
+validates the key where the provider can check one, and stores it. Notable entries:
 
 **ClinePass** uses a Cline API key with the [official subscription catalog](https://docs.cline.bot/getting-started/clinepass)
 and [Chat Completions endpoint](https://docs.cline.bot/api/chat-completions), operated by Cline Bot Inc. under
