@@ -136,18 +136,23 @@ function newerInFamily(a: ModelFamily, b: ModelFamily): boolean {
   if (c !== 0) return c > 0;
   if (a.preview !== b.preview) return b.preview;
   if ((a.snapshot === "") !== (b.snapshot === "")) return a.snapshot === "";
-  return a.snapshot > b.snapshot;
+  // 2025-12-01 and 20251101 are both dates: compare the digits, not where the dashes fall
+  return a.snapshot.replace(/-/g, "") > b.snapshot.replace(/-/g, "");
 }
 
-/** `items` with only the newest of each family left, in their order. A family's first listed wins a tie. */
+/**
+ * `items` with only the newest of each family left, in their order. A family's first listed wins a
+ * tie; every item carrying the winning id stays (two providers' rows can share one id).
+ */
 export function latestPerFamilyBy<T>(items: readonly T[], idOf: (item: T) => string): T[] {
-  const families = items.map((item) => familyOf(idOf(item)));
+  const ids = items.map(idOf);
+  const families = ids.map((id) => familyOf(id));
   const best = new Map<string, number>();
   families.forEach((family, i) => {
     const j = best.get(family.name);
     if (j === undefined || newerInFamily(family, families[j]!)) best.set(family.name, i);
   });
-  return items.filter((_, i) => best.get(families[i]!.name) === i);
+  return items.filter((_, i) => ids[best.get(families[i]!.name)!] === ids[i]);
 }
 
 /** `ids` with only the newest model of each family left, in their order. */

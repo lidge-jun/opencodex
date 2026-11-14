@@ -109,4 +109,14 @@ describe("latestPerFamily", () => {
     const rows = [{ id: "claude-sonnet-4-5", n: 1 }, { id: "gpt-5", n: 2 }, { id: "claude-sonnet-4-6", n: 3 }, { id: "gpt-5.1", n: 4 }];
     expect(latestPerFamilyBy(rows, (row) => row.id).map((row) => row.n)).toEqual([3, 4]);
   });
+
+  test("keeps every row that carries the newest id, such as a native and a custom row", () => {
+    const rows = [{ id: "gpt-5", n: 1 }, { id: "gpt-5.1", n: 2 }, { id: "gpt-5.1", n: 3 }];
+    expect(latestPerFamilyBy(rows, (row) => row.id).map((row) => row.n)).toEqual([2, 3]);
+  });
+
+  test("compares dated snapshots by date whatever their separators", () => {
+    expect(latestPerFamily(["claude-sonnet-4-5-20251101", "claude-sonnet-4-5-2025-12-01"])).toEqual(["claude-sonnet-4-5-2025-12-01"]);
+    expect(latestPerFamily(["claude-sonnet-4-5-2025-12-01", "claude-sonnet-4-5-20251101"])).toEqual(["claude-sonnet-4-5-2025-12-01"]);
+  });
 });
