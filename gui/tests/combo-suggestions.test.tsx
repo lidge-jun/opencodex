@@ -15,7 +15,8 @@ import {
   type SuggestionProvider,
 } from "../src/combo-suggestions";
 import type { ComboItem } from "../src/combo-workspace-data";
-import { ComboSuggestions } from "../src/components/route-board/ComboSuggestions";
+import { ComboSuggestions, type ComboSuggestionsProps } from "../src/components/route-board/ComboSuggestions";
+import { useSuggestionExclusions, type SuggestionExclusions } from "../src/components/route-board/use-suggestion-exclusions";
 import { LanguageProvider } from "../src/i18n/provider";
 
 const combo = (id: string, targets: Array<[string, string]>, extra: Partial<ComboItem> = {}): ComboItem => ({
@@ -358,6 +359,100 @@ describe("ComboSuggestions card", () => {
     await act(async () => { root!.render(view(["cursor"])); });
     expect(draftProviders().length).toBe(2);
     expect(draftProviders().some((row) => row.includes("Cursor"))).toBe(false);
+  });
+
+  async function mount(node: React.ReactNode) {
+    const { createRoot } = await import("react-dom/client");
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    await act(async () => { root!.render(node); });
+  }
+  const sonnet = (overrides: Partial<ComboSuggestionsProps>) => (
+    <LanguageProvider>
+      <ComboSuggestions
+        combos={[]}
+        models={models([["cursor", "claude-sonnet-5-5"], ["google-antigravity", "claude-sonnet-5-5"]])}
+        hiddenModels={new Set()}
+        providers={PROVIDERS}
+        remainingPercent={() => undefined}
+        validate={() => null}
+        errorText={() => "bad"}
+        onCreate={async () => ({ ok: true })}
+        onExtend={async () => ({ ok: true })}
+        {...overrides}
+      />
+    </LanguageProvider>
+  );
+
+  test("quota reordering the same members keeps an open draft's edits", async () => {
+    const leading = (first: string) => (provider: string) => (provider === first ? 90 : 10);
+    await mount(sonnet({ remainingPercent: leading("cursor") }));
+    await act(async () => { button(card("claude-sonnet-5-5"), "Generate").click(); });
+    const draft = () => card("claude-sonnet-5-5").querySelector<HTMLElement>(".rb-suggest-draft")!;
+    const idInput = () => draft().querySelector<HTMLInputElement>("input.rb-suggest-id")!;
+    await act(async () => {
+      const setValue = Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!;
+      setValue.call(idInput(), "my-sonnet");
+      idInput().dispatchEvent(new testWindow.Event("input", { bubbles: true }) as unknown as Event);
+    });
+    await act(async () => { button(draft().querySelectorAll("li")[0]!, "Move Cursor claude-sonnet-5-5 down").click(); });
+    await act(async () => { root!.render(sonnet({ remainingPercent: leading("google-antigravity") })); });
+    expect(idInput().value).toBe("my-sonnet");
+    expect([...draft().querySelectorAll("li code")].length).toBe(2);
+    expect(draft().querySelectorAll("li")[0]!.textContent).toContain("Google Antigravity");
+  });
+
+  test("adding to a combo with unsaved Advanced edits is held", async () => {
+    const extended: string[] = [];
+    const existing = [combo("gemini", [["google-antigravity", "gemini-3.8-flash"]])];
+    const view = (locked: string | null) => sonnet({
+      combos: existing,
+      models: models([["google-antigravity", "gemini-3.8-flash"], ["cursor", "gemini-3.8-flash"]]),
+      onExtend: async (item) => { extended.push(item.id); return { ok: true }; },
+      lockedComboId: locked,
+    });
+    await mount(view("gemini"));
+    const add = button(card("gemini"), "Add to combo");
+    expect(add.disabled).toBe(true);
+    await act(async () => { add.click(); });
+    expect(extended).toEqual([]);
+    await act(async () => { root!.render(view(null)); });
+    await act(async () => { button(card("gemini"), "Add to combo").click(); });
+    expect(extended).toEqual(["gemini"]);
+  });
+
+  test("exclusions wait for the stored list, and a read that finishes after a save does not undo it", async () => {
+    const realFetch = globalThis.fetch;
+    const pending: Array<(body: unknown) => void> = [];
+    const puts: unknown[] = [];
+    globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        const body = JSON.parse(String(init.body));
+        puts.push(body);
+        return new Response(JSON.stringify(body));
+      }
+      return new Promise<Response>((resolve) => pending.push((body) => resolve(new Response(JSON.stringify(body)))));
+    }) as typeof fetch;
+    try {
+      let state: SuggestionExclusions | null = null;
+      const Probe = () => { state = useSuggestionExclusions(""); return null; };
+      await mount(<Probe />);
+      // Stored list not read yet: nothing may be saved over it.
+      expect(state!.ready).toBe(false);
+      await act(async () => { pending.shift()!({ excludedProviders: ["anthropic"] }); });
+      expect([state!.ready, state!.excluded]).toEqual([true, ["anthropic"]]);
+
+      // A second read (new apiBase) still in flight when a save lands must not restore the old list.
+      const Probe2 = ({ base }: { base: string }) => { state = useSuggestionExclusions(base); return null; };
+      await act(async () => { root!.render(<Probe2 base="/x" />); });
+      await act(async () => { await state!.save(["cursor"]); });
+      await act(async () => { pending.shift()!({ excludedProviders: [] }); });
+      expect(puts).toEqual([{ excludedProviders: ["cursor"] }]);
+      expect(state!.excluded).toEqual(["cursor"]);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
   });
 
   test("without an exclusion handler there is no exclude control", async () => {

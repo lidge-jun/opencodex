@@ -734,7 +734,8 @@ export default function Combos({
             onCreate={(item) => saveCombo(item, true, undefined, {})}
             onExtend={(item) => saveCombo(item, false, undefined, {})}
             excludedProviders={suggestionExclusions.excluded}
-            onExcludedChange={suggestionExclusions.save}
+            onExcludedChange={suggestionExclusions.ready ? suggestionExclusions.save : undefined}
+            lockedComboId={draftComboId}
           />
         )}
         {view === "overview" && (

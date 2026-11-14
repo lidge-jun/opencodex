@@ -43,6 +43,8 @@ export interface ComboSuggestionsProps {
   /** Providers left out of suggestions (config.json); with `onExcludedChange`, offers to change them. */
   excludedProviders?: readonly string[];
   onExcludedChange?: (next: readonly string[]) => Promise<boolean>;
+  /** A combo with unsaved Advanced edits; adding to it would reset that draft, so it is held. */
+  lockedComboId?: string | null;
 }
 
 /** Suggested combos above the overview: same-name models across providers, one click to a draft. */
@@ -89,6 +91,7 @@ export function ComboSuggestions(props: ComboSuggestionsProps) {
             suggestion={suggestion}
             drafting={draftKey === suggestion.key}
             combos={props.combos}
+            locked={suggestion.kind === "extend" && suggestion.comboId === props.lockedComboId}
             tierOf={tierOf}
             validate={props.validate}
             errorText={props.errorText}
@@ -127,6 +130,7 @@ function SuggestionCard({
   suggestion,
   drafting,
   combos,
+  locked,
   tierOf,
   validate,
   errorText,
@@ -138,6 +142,7 @@ function SuggestionCard({
   suggestion: ComboSuggestion;
   drafting: boolean;
   combos: readonly ComboItem[];
+  locked: boolean;
   tierOf: (provider: string, model: string) => ChannelTier;
   validate: ComboSuggestionsProps["validate"];
   errorText: ComboSuggestionsProps["errorText"];
@@ -194,7 +199,8 @@ function SuggestionCard({
             <button
               type="button"
               className="btn btn-primary btn-sm"
-              disabled={busy || !target}
+              disabled={busy || !target || locked}
+              title={locked ? t("routeBoard.lockedHint") : undefined}
               onClick={() => target && void save(extendedCombo(target, suggestion.members, tierOf), false)}
             >
               {t("comboSuggest.addTo")}
@@ -207,7 +213,8 @@ function SuggestionCard({
       {drafting && suggestion.kind === "create" && (
         <SuggestionDraft
           // A provider excluded while the draft is open changes the members; start the draft over.
-          key={suggestion.members.map((member) => `${member.provider}/${member.model}`).join("|")}
+          // Sorted, so quota reordering the same members keeps the operator's edits.
+          key={suggestion.members.map((member) => `${member.provider}/${member.model}`).sort().join("|")}
           suggestion={suggestion}
           busy={busy}
           onSave={(item) => void save(item, true)}
