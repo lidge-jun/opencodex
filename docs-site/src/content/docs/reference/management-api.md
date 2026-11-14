@@ -858,7 +858,8 @@ When sent, the response is `{ applicable: true, sent: true, metered, provider, m
 
 - `baseline.status` reports the plain prompt. Unless it is `accepted`, no variant is sent and every
   check is `inconclusive`, so an unrelated 400 (an unknown model, say) is never read as "this model
-  rejects images". `plannedRequests` counts the baseline.
+  rejects images". A baseline that completes without text still counts as accepted. `plannedRequests`
+  counts the baseline.
 
 - `image.status` is `accepted` (the request completed), `rejected` (HTTP 400 or 422), or
   `inconclusive` (timeout, network, 401/403/429/5xx, or an incomplete stream); `image.error`
@@ -876,9 +877,14 @@ With `apply: true`, conclusive results are saved and the Codex catalog is refres
 provider PATCH. An accepted image writes `modelCapabilities[model].inputModalities = ["text", "image"]`,
 a rejected one `["text"]`; other capability axes are untouched. The reasoning ladder is written to
 `modelReasoningEfforts[model]` (accepted efforts in ladder order) only when every probed effort was
-conclusive. `applied` reports what was written. Each written axis is labeled in the provider's
+conclusive. A model submitted as a configured alias is written under its native model ID; `model` in
+the response stays as submitted. If the provider's destination, auth mode, or the model's alias
+target changes while the probe runs, nothing is written and the response is 409 with the results.
+`applied` reports what was written. Each written axis is labeled in the provider's
 `modelCapabilityProbes` field; a later manual edit of that axis through `PATCH /api/providers`
-(`modelCapabilities`) or `PUT /api/model-settings` removes the label.
+(`modelCapabilities`) or `PUT /api/model-settings` removes the label, as does a provider save that
+changes the labeled declaration. A provider-form save to the same destination keeps a probe-written
+reasoning ladder and its label.
 
 When Antigravity's quota-summary endpoint has no usable response, quota reports may also include
 per-model Cloud Code Assist usage windows when the model-discovery response provides them. These

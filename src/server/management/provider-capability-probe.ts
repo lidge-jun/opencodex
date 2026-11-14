@@ -21,11 +21,12 @@ import { ConfigWritePublishedError } from "../../config/persist-unlocked";
 import { clearModelCache } from "../../codex/model-cache";
 import { commitProviderPatch } from "./provider-patch-transaction";
 import { effectiveModelReasoningEfforts } from "./model-rows";
+import { providerOverwriteKeepsDestination } from "./provider-overwrite-carry";
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
 import { managementBodyTooLargeResponse, readManagementJsonBody } from "./body";
 import {
-  providerCompletionTestApplicability, runProviderCompletionTest,
+  providerCompletionTestApplicability, providerCompletionTestNativeModel, runProviderCompletionTest,
   type ProviderCompletionTestDependencies, type ProviderCompletionTestResult,
 } from "./provider-completion-test";
 
@@ -38,6 +39,8 @@ const STOP_STATUSES = new Set([401, 403, 429]);
 const STOP_CODES = new Set(["credential_missing", "credential_changed", "destination_refused", "aborted"]);
 
 type Check = "image" | "reasoning";
+/** The plain prompt: like a reasoning variant, a textless completion still shows the request was admitted. */
+type Classification = Check | "baseline";
 type ProbeError = { code: string; status?: number };
 type Outcome = { status: "accepted" | "rejected" | "inconclusive"; error?: ProbeError; stop: boolean };
 export type ProviderCapabilityProbeResult = {
@@ -68,13 +71,14 @@ function defaultEfforts(config: OcxConfig, name: string, model: string): string[
 }
 
 /**
- * Completed means accepted; 400/422 means the upstream refused the variant. For the reasoning
- * check `no_content` is also accepted: with a 32-token cap a reasoning model can spend the whole
- * budget thinking and finish without a text delta, after the request itself was admitted.
+ * Completed means accepted; 400/422 means the upstream refused the variant. For the baseline and
+ * the reasoning check `no_content` is also accepted: with a 32-token cap a reasoning model can
+ * spend the whole budget thinking and finish without a text delta, after the request itself was
+ * admitted.
  */
-function classify(result: ProviderCompletionTestResult, check: Check): Outcome {
+function classify(result: ProviderCompletionTestResult, check: Classification): Outcome {
   if (!result.applicable) return { status: "inconclusive", error: { code: result.reason }, stop: true };
-  if (result.ok || (check === "reasoning" && result.error?.code === "no_content")) return { status: "accepted", stop: false };
+  if (result.ok || (check !== "image" && result.error?.code === "no_content")) return { status: "accepted", stop: false };
   const code = result.error?.code ?? "network";
   const status = result.error?.status;
   const error: ProbeError = { code, ...(status !== undefined ? { status } : {}) };
@@ -140,6 +144,24 @@ function writeBack(
   config.providers[name] = next;
 }
 
+/** Where the probe's requests went: the provider's destination and the native model id. */
+type ProbeAuthority = Pick<OcxProviderConfig, "adapter" | "baseUrl" | "authMode"> & { native: string };
+const SAME_AUTH_MODE = { submitted: new Set<never>(), namesAuthMode: true } as const;
+function probeAuthority(config: OcxConfig, name: string, model: string): ProbeAuthority | null {
+  const row = Object.hasOwn(config.providers, name) ? config.providers[name] : undefined;
+  if (!row) return null;
+  try {
+    return { adapter: row.adapter, baseUrl: row.baseUrl, authMode: row.authMode, native: providerCompletionTestNativeModel(config, name, model) };
+  } catch { return null; }
+}
+/** A retargeted provider (new destination, auth mode, or alias target) must not receive these results. */
+function sameProbeAuthority(config: OcxConfig, name: string, model: string, captured: ProbeAuthority): boolean {
+  const current = probeAuthority(config, name, model);
+  return current !== null && current.native === captured.native
+    && providerOverwriteKeepsDestination(current, captured, SAME_AUTH_MODE);
+}
+class ProbeAuthorityChangedError extends Error {}
+
 const inFlight = new Set<string>();
 export async function handleProviderCapabilityProbeRoute(
   ctx: Pick<ManagementContext, "req" | "config" | "deps" | "convergeCodexCatalog">,
@@ -165,13 +187,23 @@ export async function handleProviderCapabilityProbeRoute(
   if (inFlight.has(name)) return jsonResponse({ error: "capability probe already running for this provider" }, 409);
   inFlight.add(name);
   try {
+    // Declarations are keyed by the native id the requests are sent as, not by a submitted alias.
+    const authority = probeAuthority(config, name, model);
+    if (!authority) return jsonResponse({ error: "unknown provider" }, 404);
+    const target = authority.native;
+    if (apply && (!isValidModelDiscoveryModelId(target) || ["__proto__", "prototype", "constructor"].includes(target))) return invalid();
     let stopped = false;
-    const probe = async (check: Check, variant?: { image?: true; reasoningEffort?: string }) => {
+    let retargeted = false;
+    const probe = async (check: Classification, variant?: { image?: true; reasoningEffort?: string }) => {
+      if (variant && !sameProbeAuthority(config, name, model, authority)) {
+        retargeted = stopped = true;
+        return { status: "inconclusive" as const, error: { code: "provider_changed" }, stop: true };
+      }
       const outcome = classify(await runProviderCompletionTest({ config, name, model, signal: req.signal, ...(variant ? { variant } : {}) }, probeDeps), check);
       stopped = outcome.stop;
       return outcome;
     };
-    const base = await probe("image");
+    const base = await probe("baseline");
     const result: ProviderCapabilityProbeResult = { applicable: true, sent: true, metered, provider: name, model,
       baseline: { status: base.status, ...(base.error ? { error: base.error } : {}) } };
     if (base.status !== "accepted") stopped = true;
@@ -188,6 +220,8 @@ export async function handleProviderCapabilityProbeRoute(
       result.reasoning = reasoning;
     }
     if (!apply) return jsonResponse(result);
+    const notApplied = () => jsonResponse({ ...result, error: "provider configuration changed during the capability probe; results were not applied" }, 409);
+    if (retargeted) return notApplied();
 
     const applied: NonNullable<ProviderCapabilityProbeResult["applied"]> = {};
     if (result.image?.status === "accepted") applied.inputModalities = ["text", "image"];
@@ -201,9 +235,15 @@ export async function handleProviderCapabilityProbeRoute(
     let published = true;
     try {
       const probedAt = new Date().toISOString();
-      commitProviderPatch(config, () => writeBack(config, name, model, applied, probedAt),
-        deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode);
+      commitProviderPatch(config, () => {
+        if (!sameProbeAuthority(config, name, model, authority)) throw new ProbeAuthorityChangedError();
+        writeBack(config, name, target, applied, probedAt);
+      }, deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode);
     } catch (error) {
+      if (error instanceof ProbeAuthorityChangedError) {
+        delete result.applied;
+        return notApplied();
+      }
       if (!(error instanceof ConfigWritePublishedError)) {
         delete result.applied;
         return jsonResponse({ ...result, error: "capability probe results could not be saved" }, 500);

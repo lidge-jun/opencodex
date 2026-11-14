@@ -137,6 +137,13 @@ describe("capability probe: wire variants and classification", () => {
     expect(f.calls).toHaveLength(1);
     expect(f.saves).toHaveLength(0);
   });
+  test("a textless completed baseline admits the request, so the requested variants still run", async () => {
+    const textless = () => new Response(frame({ model: "test-model", choices: [{ delta: {}, finish_reason: "length" }] }) + frame("[DONE]"));
+    const f = probeFixture(ok, {}, textless);
+    const result = await f.probe({ name: "fixture", model: "test-model", checks: ["reasoning"], efforts: ["low", "high"], confirmMetered: true });
+    expect(result.body).toMatchObject({ baseline: { status: "accepted" }, reasoning: { accepted: ["low", "high"], rejected: [], inconclusive: [] } });
+    expect(f.calls).toHaveLength(3);
+  });
   test("default efforts come from the model's configured ladder", async () => {
     const f = probeFixture(ok, { modelReasoningEfforts: { "test-model": ["high", "low"] } });
     const result = await f.probe({ name: "fixture", model: "test-model", checks: ["reasoning"], confirmMetered: true });
@@ -176,6 +183,42 @@ describe("capability probe: apply", () => {
     const row = f.config.providers.fixture!;
     expect(row.modelReasoningEfforts).toEqual({ "test-model": ["medium"] });
     expect(row.modelCapabilityProbes).toEqual({ "test-model": { probedAt: expect.any(String), inputModalities: true } });
+  });
+  test("an aliased model writes declarations and provenance under its native id", async () => {
+    const f = probeFixture(body => isImage(body) ? ok() : effortOf(body) === "high" ? status(400) : ok(),
+      { models: ["house-model"], modelAliases: { "house-model": "short" } });
+    const result = await f.probe({ name: "fixture", model: "short", efforts: ["low", "high"], confirmMetered: true, apply: true });
+    expect(result).toMatchObject({ status: 200, body: { model: "short", applied: { inputModalities: ["text", "image"], reasoningEfforts: ["low"] } } });
+    expect(bodies(f.calls).every(body => body.model === "house-model")).toBe(true);
+    const row = f.config.providers.fixture!;
+    expect(row.modelCapabilities).toEqual({ "house-model": { inputModalities: ["text", "image"] } });
+    expect(row.modelReasoningEfforts).toEqual({ "house-model": ["low"] });
+    expect(Object.keys(row.modelCapabilityProbes!)).toEqual(["house-model"]);
+  });
+  test("a provider retargeted while the final response is pending receives none of the results", async () => {
+    let f!: ReturnType<typeof probeFixture>;
+    f = probeFixture(() => {
+      f.config.providers.fixture = { ...f.config.providers.fixture!, baseUrl: "https://other.example/v1" };
+      return ok();
+    });
+    const result = await f.probe({ name: "fixture", model: "test-model", checks: ["image"], confirmMetered: true, apply: true });
+    expect(result.status).toBe(409);
+    expect(result.body.applied).toBeUndefined();
+    expect(f.saves).toHaveLength(0);
+    expect(f.config.providers.fixture!.modelCapabilities).toBeUndefined();
+    expect(f.config.providers.fixture!.modelCapabilityProbes).toBeUndefined();
+  });
+  test("a retarget between variants stops the rest and applies nothing", async () => {
+    let f!: ReturnType<typeof probeFixture>;
+    f = probeFixture(body => {
+      if (isImage(body)) f.config.providers.fixture = { ...f.config.providers.fixture!, adapter: "openai-responses" };
+      return ok();
+    });
+    const result = await f.probe({ name: "fixture", model: "test-model", efforts: ["low"], confirmMetered: true, apply: true });
+    expect(result.status).toBe(409);
+    expect(result.body.reasoning).toEqual({ accepted: [], rejected: [], inconclusive: ["low"] });
+    expect(f.calls).toHaveLength(2);
+    expect(f.saves).toHaveLength(0);
   });
   test("nothing conclusive: applied is empty and nothing is saved", async () => {
     const f = probeFixture(() => status(401));

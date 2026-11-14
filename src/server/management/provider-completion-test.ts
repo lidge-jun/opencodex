@@ -143,6 +143,14 @@ export function providerCompletionTestApplicability(config: OcxConfig, name: str
   const gate = applicability(config, name, model);
   return gate.blocked ?? null;
 }
+/**
+ * The configured model id a diagnostic for `model` is sent as: a configured alias resolves to its
+ * native id, anything else is returned unchanged. Never dereferences credentials.
+ */
+export function providerCompletionTestNativeModel(config: OcxConfig, name: string, model: string): string {
+  const gate = applicability(config, name, model);
+  return gate.blocked ? model : gate.native;
+}
 type Gate = { blocked: Inapplicable } | { blocked?: undefined; row: OcxProviderConfig; snapshot: OcxProviderConfig;
   native: string; wire: Wire; destinationRefused: boolean };
 function applicability(config: OcxConfig, name: string, model: string): Gate {
