@@ -4,6 +4,7 @@
   "server-combo-stream-send-contract.test.ts": "server",
   "server-combo-quota-code-provenance.test.ts": "server",
   "combo-codex-ws-overload-failover.test.ts": "responses",
+  "combo-stream-attempt-timing.test.ts": "responses",
   "combo-cooldown-persistence.test.ts": "routing",
   "server-combo-cooldown-recording.test.ts": "server"
 }
