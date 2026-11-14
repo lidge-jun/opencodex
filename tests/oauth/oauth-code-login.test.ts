@@ -60,6 +60,8 @@ function installTokenMock(reply: (request: TokenRequest) => TokenReply): {
   const originalFetch = globalThis.fetch;
   const requests: TokenRequest[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    // Token-exchange assertions do not depend on optional live profile enrichment.
+    if (String(input).startsWith("https://api.anthropic.com/api/oauth/profile")) return new Response("{}", { status: 401 });
     if (!String(input).startsWith(TOKEN_URL)) return originalFetch(input, init);
     const request = JSON.parse(String(init?.body ?? "{}")) as TokenRequest;
     requests.push(request);

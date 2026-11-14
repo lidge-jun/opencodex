@@ -1478,8 +1478,9 @@ describe("server local API auth", () => {
       }
       return originalGlobalFetch(input, init);
     }) as typeof fetch;
+    // Keep native WSS inside this HTTP fixture instead of contacting chatgpt.com.
+    redirectCanonicalCodexTo(upstream.url.toString());
     globalThis.fetch = matrixFetch;
-
     const request = (server: ReturnType<typeof startServer>, headers?: HeadersInit, model = "gpt-test") => {
       const requestHeaders = new Headers(headers);
       requestHeaders.set("content-type", "application/json");
@@ -1518,7 +1519,6 @@ describe("server local API auth", () => {
         ws.addEventListener("error", () => reject(new Error("tier websocket failed")), { once: true });
       });
     };
-
     try {
       const directConfig = {
         port: 0,
