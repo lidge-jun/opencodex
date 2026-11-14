@@ -158,9 +158,10 @@ token。
   能接受更大请求的账户，并不能让过大的目录变得安全。
 - 移除 Kiro 校验器拒绝的 JSON Schema 关键字（`pattern`、`minLength`、`maximum`、
   `additionalProperties` 等 29 个），但保留探针在对应模型上实测通过的关键字。
-  `claude-opus-4.5` 全部保留；`claude-opus-5.5` 与 `claude-sonnet-5.5` 只保留
-  `pattern`、`maximum`，其余仍然移除，
-  因为没有探针向这两个模型发送过其他关键字。包括其余 Claude id 在内的其他 Kiro 模型全部移除。
+  `claude-opus-4.5` 全部保留；`claude-opus-5.5` 保留 Claude Desktop 与 Claude Code 目录使用的 12 个
+  （`$schema`、`additionalProperties`、`pattern`、`format`、`minLength`、`maxLength`、`minimum`、`maximum`、`exclusiveMinimum`、`minItems`、`maxItems`、`propertyNames`），已在生产流量中实测；
+  `claude-sonnet-5.5` 只保留 `pattern`、`maximum`。其余仍然移除，
+  因为没有请求向这两个模型发送过其他关键字。包括其余 Claude id 在内的其他 Kiro 模型全部移除。
   例外按模型和关键字划分，是因为这条 wire 在 reasoning effort 上已经区分 Claude 模型，而 Kiro
   拒绝的关键字不只是丢掉提示，还会让整个请求失败。
 ### 完成与原生 stop reason

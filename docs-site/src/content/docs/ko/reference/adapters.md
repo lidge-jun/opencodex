@@ -182,8 +182,9 @@ provider를 추가했다고 자격증명이나 권한의 유효성이 검증되�
 - Kiro 검증기가 거부하는 JSON Schema 키워드(`pattern`, `minLength`, `maximum`,
   `additionalProperties` 등 29개)를 툴과 구조화 출력 스키마에서 제거하되, 프로브가 해당
   모델에서 통과를 확인한 키워드는 남깁니다. `claude-opus-4.5`는 전부 남습니다.
-  `claude-opus-5.5`와 `claude-sonnet-5.5`는 `pattern`, `maximum`만 남고 나머지는 제거된 상태로 남습니다. 그 두 모델에
-  다른 키워드를 보낸 프로브가 없기 때문입니다. 나머지 Claude id를 포함한 다른 Kiro 모델은
+  `claude-opus-5.5`는 Claude Desktop과 Claude Code 카탈로그가 쓰는 12개(`$schema`, `additionalProperties`, `pattern`, `format`, `minLength`, `maxLength`, `minimum`, `maximum`, `exclusiveMinimum`, `minItems`, `maxItems`, `propertyNames`)가 남으며, 프로덕션 트래픽에서
+  확인되었습니다. `claude-sonnet-5.5`는 `pattern`, `maximum`만 남습니다. 나머지는 제거된 상태로 남습니다. 그 두 모델에
+  다른 키워드를 보낸 요청이 없기 때문입니다. 나머지 Claude id를 포함한 다른 Kiro 모델은
   전부 제거합니다. 예외를 모델별·키워드별로 두는 이유는 이 wire가 이미 reasoning effort에서
   Claude 모델을 나누기 때문이며, Kiro가 거부하는 키워드는 힌트를 잃는 데 그치지 않고 요청
   전체를 실패시킵니다.

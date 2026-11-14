@@ -181,7 +181,7 @@ describe("kiro tool schemas by model family", () => {
     },
     required: ["city", "days"],
   };
-  // The same schema after the two 5.5 ids' measured keywords survive and the rest are stripped.
+  // The same schema after sonnet-5.5's measured keywords survive and the rest are stripped.
   const constrainedMeasuredOn55 = {
     type: "object",
     properties: {
@@ -212,11 +212,28 @@ describe("kiro tool schemas by model family", () => {
     expect(await emittedSchema("claude-opus-4.5")).toEqual(constrained);
   });
 
-  test("the two 5.5 ids keep only the keywords their probe covered", async () => {
-    // The PR only names two tested keywords for these ids; other constraints stay stripped.
-    for (const modelId of ["claude-opus-5.5", "claude-sonnet-5.5"]) {
-      expect(await emittedSchema(modelId)).toEqual(constrainedMeasuredOn55);
-    }
+  test("claude-sonnet-5.5 keeps only the keywords its probe covered", async () => {
+    expect(await emittedSchema("claude-sonnet-5.5")).toEqual(constrainedMeasuredOn55);
+  });
+
+  test("claude-opus-5.5 keeps the keywords production traffic carried, and only those", async () => {
+    // uniqueItems is in no measured catalog, so it stays stripped while its neighbours survive.
+    const { uniqueItems: _unmeasured, ...tags } = constrained.properties.tags;
+    expect(await emittedSchema("claude-opus-5.5")).toEqual({ ...constrained, properties: { ...constrained.properties, tags } });
+  });
+
+  test("claude-opus-5.5 still strips a keyword no catalog carried", async () => {
+    const { body } = await createKiroAdapter(provider).buildRequest(
+      parsedWith([{ role: "user", content: "hi" }], [{
+        name: "pick", description: "Pick", parameters: {
+          type: "object",
+          properties: { n: { type: "integer", multipleOf: 2 }, o: { type: "object", maxProperties: 3 } },
+          if: { properties: { n: { const: 2 } } }, then: { required: ["o"] },
+        },
+      }], "claude-opus-5.5"),
+    );
+    const schema = JSON.parse(body).conversationState.currentMessage.userInputMessage.userInputMessageContext.tools[0].toolSpecification.inputSchema.json;
+    expect(schema).toEqual({ type: "object", properties: { n: { type: "integer" }, o: { type: "object" } } });
   });
 
   test("an unmeasured Claude model keeps the strip instead of inheriting the measurement", async () => {
