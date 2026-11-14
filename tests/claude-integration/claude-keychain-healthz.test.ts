@@ -194,15 +194,25 @@ test.skipIf(process.platform !== "darwin")("GET /healthz responds while a real s
     cwd: root, env: { ...env, PATH: `${bin}:${env.PATH ?? ""}` }, stdin: "pipe", stdout: "pipe", stderr: "pipe",
   });
   const errors = new Response(fixture.stderr).text();
+  // Exercise stdout fragmentation without relying on OS pipe buffering or sleeps.
+  const output = fixture.stdout.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      for (const byte of chunk) controller.enqueue(Uint8Array.of(byte));
+    },
+  }));
   let settings: Promise<Response> | undefined;
   try {
     const base = await (async () => {
       const decoder = new TextDecoder();
       let buffered = "";
-      for await (const chunk of fixture.stdout) {
+      for await (const chunk of output) {
         buffered += decoder.decode(chunk, { stream: true });
-        const line = buffered.split("\n").find(entry => entry.startsWith(MARK));
-        if (line) return line.slice(MARK.length).trim();
+        let end: number;
+        while ((end = buffered.indexOf("\n")) >= 0) {
+          const line = buffered.slice(0, end);
+          buffered = buffered.slice(end + 1);
+          if (line.startsWith(MARK)) return line.slice(MARK.length).trim();
+        }
       }
       throw new Error(`Keychain HTTP fixture exited early: ${await errors}`);
     })();
