@@ -1637,8 +1637,10 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     addThroughputTotals(partition.totals, entry);
     addEstimatedCost(partition.totals, entry, costInfo);
     const identity = usageAppIdentity(entry);
-    // Names come from a request header, so a partition folds any past its share into plain unknown.
-    const client = usageAppKey(identity.name && partition.apps.size >= MAX_PARTITION_APP_KEYS ? { client: identity.client } : identity);
+    // Names come from a request header, so a partition folds any new name past its share into plain unknown.
+    const namedKey = usageAppKey(identity);
+    const client = identity.name && !partition.apps.has(namedKey) && partition.apps.size >= MAX_PARTITION_APP_KEYS
+      ? usageAppKey({ client: identity.client }) : namedKey;
     let app = partition.apps.get(client);
     if (!app) {
       app = blankTotals();
