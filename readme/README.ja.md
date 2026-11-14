@@ -78,7 +78,7 @@ Sol がセッションを進め、Kimi K3 のサブエージェントを呼び�
 </table>
 
 <p align="center">
-  <a href="../README.md">English</a> · <a href="README.fr.md">Français</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <b>日本語</b> · <a href="README.tr.md">Türkçe</a> · 📖 <a href="https://opencodex.me/ja/"><b>完全なドキュメント →</b></a>
+  <a href="../README.md">English</a> · <a href="README.fr.md">Français</a> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <b>日本語</b> · <a href="README.tr.md">Türkçe</a> · <a href="README.es.md">Español</a> · 📖 <a href="https://opencodex.me/ja/"><b>完全なドキュメント →</b></a>
 </p>
 
 opencodex は、コーディングツールとモデルプロバイダーをつなぐ軽量なローカルゲートウェイです。Responses、Chat Completions、Anthropic Messages API のリクエストを受け取り、プロバイダーのプロトコルに変換します。クライアント、モデル、プロバイダーが対応する場合は、ストリーミング、ツール呼び出し、推論、画像を中継します。Claude、Gemini、Grok、GLM、DeepSeek、Kimi、Qwen、Ollama などのプロバイダーを、Codex、Claude Code、Claude Desktop、Grok Build や[クライアント対応ページ](https://opencodex.me/ja/reference/client-support/)に記載のツールで使えます。
@@ -104,11 +104,11 @@ ocx start                         # プロキシとダッシュボードが loca
 
 | ツール | 接続方法 |
 |---|---|
-| Codex | ダッシュボードの **Connect** ページで Codex スイッチをオンにし、通常どおり `codex` を実行します。ローカルリスナーでは Codex の組み込みプロバイダーがプロキシを指すようになります。ターミナルからは、ダッシュボードでプロバイダーを追加する前に `ocx init` を実行し、Codex の確認に同意します。 |
+| Codex | ダッシュボードの **ルート** ページで Codex スイッチをオンにし、通常どおり `codex` を実行します。ローカルリスナーでは Codex の組み込みプロバイダーがプロキシを指すようになります。ターミナルからは、ダッシュボードでプロバイダーを追加する前に `ocx init` を実行し、Codex の確認に同意します。 |
 | Claude Code | `claude` CLI をインストールした状態で `ocx claude` を実行します。必要に応じてプロキシを起動し、そこを経由して Claude Code を起動します。 |
 | Claude Desktop | `ocx claude desktop` を実行します。新規インストールではアプリ全体にゲートウェイプロファイルを設定します。既存の first-party 設定は維持され、`ocx claude desktop apply --gateway` で明示的に切り替えられます。[Claude Code ガイド](https://opencodex.me/ja/guides/claude-code/)を参照してください。 切り替えた後は Claude Desktop を完全に終了してから開き直してください。 |
 | Grok Build | ローカルリスナーで Grok 連携が有効かつ `~/.grok` が存在する場合、`ocx start` がモデルを登録します。Grok Build で `ocx-*` モデルを選択してください。リモート設定は [Grok Build ガイド](https://opencodex.me/ja/guides/grok-build/)を参照してください。プロバイダーを追加した後は、プロキシを再起動する（または Codex 自動起動が有効なら `ocx ensure` を実行する）と一覧を更新できます。 |
-| 管理対象の統合があるツール | ダッシュボードの **Connect** ページか `ocx integration client enable --client <id>` を使います。 |
+| 管理対象の統合があるツール | ダッシュボードの **ルート** ページか `ocx integration client enable --client <id>` を使います。 |
 | その他のツール | カスタムの OpenAI 互換ベース URL に `http://localhost:10100/v1` を、または Anthropic ベース URL に `http://localhost:10100` を設定します。 |
 
 各ツールの接続方法と対応プロトコルは[クライアント対応ページ](https://opencodex.me/ja/reference/client-support/)に記載しています。
@@ -251,9 +251,12 @@ ocx start     # または `ocx service`
 ocx init      # 対話式セットアップ: ~/.opencodex/config.json を書き、Codex を接続します
 ```
 
-`ocx init` はプロキシを起動しません。先に起動してください（後でもかまいません。順番は問いませんが、
-`ocx provider add` や `ocx combo set` のようなヘッドレスコマンドは**動作中の**プロキシと通信し、
-届かなければ非ゼロで終了します）。`ocx status` / `ocx doctor` / `ocx health` が動作状態を報告します。
+プロキシは `ocx init` の前でも後でも起動できます。`ocx init` 自体はプロキシを起動しません。
+`ocx provider add` はプロキシが動作していなくてもローカル設定を保存します。`--sync` を指定すると、
+まずプロバイダーを保存し、その後、動作中のプロキシを使ってモデルを Codex に同期します。
+プロキシに接続できない場合もプロバイダーは保存されたままですが、コマンドは非ゼロで終了します。
+プロキシが起動したら `ocx sync` を実行してください。`ocx provider add --live` と
+`ocx combo set` には動作中のプロキシが必要です。`ocx status` / `ocx doctor` / `ocx health` で動作状態を確認できます。
 
 > **opencodex をインストールまたは実行するエージェントへ:**
 > [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md) を読んでください。対話的な `ocx start` は、このリポジトリ
@@ -424,11 +427,12 @@ npm uninstall -g @bitkyc08/opencodex
 
 ## リモートアクセス
 
-opencodex は既定で `127.0.0.1` にバインドし、追加の認証を必要としません。ループバックの外へ
-バインドする場合（`"hostname": "0.0.0.0"`）は bearer トークンが**必須**です。
-`OPENCODEX_API_AUTH_TOKEN` がなければプロキシは起動を拒否し、すべてのクライアントリクエストは
-`x-opencodex-api-key` としてトークンを乗せる必要があります。詳細は
-[設定リファレンス](https://opencodex.me/ja/reference/configuration/)にあります。
+opencodex は既定で `127.0.0.1` にバインドし、データプレーンには追加の認証が不要です。
+ループバックの外にバインドする場合（例：`"hostname": "0.0.0.0"`）は、**設定済みのクライアント API キー
+または共有データトークンが必要**です。共有トークンは `OPENCODEX_API_AUTH_TOKEN`、`OCX_API_TOKEN_FILE`、
+またはインストールされた所有者のみがアクセスできる `service-api-token` から取得されます。
+推論クライアントは受け入れ可能な認証情報を `x-opencodex-api-key` に入れて送信します。
+管理操作には別の管理者用認証情報を使います。詳細は[設定リファレンス](https://opencodex.me/ja/reference/configuration/)を参照してください。
 
 ## 高度な使い方
 

@@ -1,10 +1,10 @@
 /*
  * Shared shape of the v2 page copy tables: one row per key, one column per locale, so a
- * page's new strings land as one reviewable table instead of eleven scattered edits.
+ * page's new strings land as one reviewable table instead of scattered locale edits.
  */
-export type Locale = "en" | "ko" | "de" | "fr" | "zh" | "zh-TW" | "ru" | "ja" | "tr" | "vi" | "pt";
-const locales: readonly Locale[] = ["en", "ko", "de", "fr", "zh", "zh-TW", "ru", "ja", "tr", "vi", "pt"];
-export type Row = readonly [string, string, string, string, string, string, string, string, string, string, string];
+export type Locale = "en" | "ko" | "de" | "fr" | "zh" | "zh-TW" | "ru" | "ja" | "tr" | "vi" | "pt" | "es";
+const locales: readonly Locale[] = ["en", "ko", "de", "fr", "zh", "zh-TW", "ru", "ja", "tr", "vi", "pt", "es"];
+export type Row = readonly [string, string, string, string, string, string, string, string, string, string, string, string];
 
 /** Turns a table into a per-locale dictionary whose keys carry `prefix`. */
 export function copyTable<P extends string, R extends Record<string, Row>>(prefix: P, rows: R) {

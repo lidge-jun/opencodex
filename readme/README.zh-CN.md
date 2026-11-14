@@ -78,7 +78,7 @@ Sol 驱动会话，并调用 Kimi K3 子代理。
 </table>
 
 <p align="center">
-  <a href="../README.md">English</a> · <a href="README.fr.md">Français</a> · <a href="README.ko.md">한국어</a> · <b>简体中文</b> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · <a href="README.tr.md">Türkçe</a> · 📖 <a href="https://opencodex.me/zh-cn/"><b>完整文档 →</b></a>
+  <a href="../README.md">English</a> · <a href="README.fr.md">Français</a> · <a href="README.ko.md">한국어</a> · <b>简体中文</b> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.es.md">Español</a> · 📖 <a href="https://opencodex.me/zh-cn/"><b>完整文档 →</b></a>
 </p>
 
 opencodex 是连接编程工具与模型提供商的轻量级本地网关。它接受 Responses、Chat Completions 和 Anthropic Messages API 请求，并将请求转换为提供商使用的协议；在客户端、模型和提供商支持的情况下，传递流式输出、工具调用、推理和图像。你可以在 Codex、Claude Code、Claude Desktop、Grok Build 及[客户端支持页面](https://opencodex.me/zh-cn/reference/client-support/)列出的工具中使用 Claude、Gemini、Grok、GLM、DeepSeek、Kimi、Qwen、Ollama 等提供商。
@@ -104,11 +104,11 @@ ocx start                         # 代理 + 仪表板：localhost:10100
 
 | 工具 | 连接方式 |
 |---|---|
-| Codex | 打开仪表盘 **Connect** 页面上的 Codex 开关，然后照常运行 `codex`。在本地监听下，这会让 Codex 内置提供商指向代理。使用终端时，请在仪表盘添加提供商之前运行 `ocx init` 并接受其 Codex 提示。 |
+| Codex | 打开仪表盘 **路由** 页面上的 Codex 开关，然后照常运行 `codex`。在本地监听下，这会让 Codex 内置提供商指向代理。使用终端时，请在仪表盘添加提供商之前运行 `ocx init` 并接受其 Codex 提示。 |
 | Claude Code | 安装 `claude` CLI 后运行 `ocx claude`。它会在需要时启动代理，并通过代理启动 Claude Code。 |
 | Claude Desktop | 运行 `ocx claude desktop`。全新安装时会为整个应用设置网关配置；已有的 first-party 设置会保持原样，可运行 `ocx claude desktop apply --gateway` 明确切换。详见 [Claude Code 指南](https://opencodex.me/zh-cn/guides/claude-code/)。 切换后请完全退出并重新打开 Claude Desktop。 |
 | Grok Build | 在本地监听且启用 Grok 集成时，若 `~/.grok` 存在，`ocx start` 会注册模型；在 Grok Build 中选择 `ocx-*` 模型。远程配置请参见 [Grok Build 指南](https://opencodex.me/zh-cn/guides/grok-build/)。添加提供商后，重启代理（或在启用 Codex 自启动时运行 `ocx ensure`）以刷新列表。 |
-| 有托管集成的工具 | 使用仪表盘 **Connect** 页面，或运行 `ocx integration client enable --client <id>`。 |
+| 有托管集成的工具 | 使用仪表盘 **路由** 页面，或运行 `ocx integration client enable --client <id>`。 |
 | 其他工具 | 将自定义 OpenAI 兼容 base URL 设为 `http://localhost:10100/v1`，或将 Anthropic base URL 设为 `http://localhost:10100`。 |
 
 [客户端支持页面](https://opencodex.me/zh-cn/reference/client-support/)列出了各工具的接入方式及所用协议。
@@ -246,9 +246,12 @@ ocx start     # 或 `ocx service`
 ocx init      # 交互式设置：写入 ~/.opencodex/config.json 并接入 Codex
 ```
 
-`ocx init` 从不启动代理；先启动也可以，后启动也可以 —— 两种顺序都可行，但
-`ocx provider add`、`ocx combo set` 这类无头命令会连接**正在运行的**代理，无法访问时
-以非零状态退出。`ocx status` / `ocx doctor` / `ocx health` 报告运行状态。
+可以在运行 `ocx init` 之前或之后启动代理；`ocx init` 本身不会启动代理。
+`ocx provider add` 无需正在运行的代理即可保存本地配置。指定 `--sync` 时，
+命令先保存提供商，再通过正在运行的代理将模型同步到 Codex。如果无法连接代理，
+提供商仍会保留已保存的配置，但命令以非零状态退出。代理启动后请运行 `ocx sync`。
+`ocx provider add --live` 和 `ocx combo set` 都需要正在运行的代理。
+`ocx status` / `ocx doctor` / `ocx health` 报告运行状态。
 
 > **正在安装或运行 opencodex 的代理：** 请阅读
 > [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md)。交互式 `ocx start` 可能会询问一次是否为
@@ -409,10 +412,11 @@ npm uninstall -g @bitkyc08/opencodex
 
 ## 远程访问
 
-默认情况下 opencodex 绑定到 `127.0.0.1`，无需额外认证。绑定超出
-回环（`"hostname": "0.0.0.0"`）**必须**提供 bearer 令牌 —— 没有
-`OPENCODEX_API_AUTH_TOKEN` 时代理会拒绝启动，并且每个客户端请求都必须把它放在
-`x-opencodex-api-key` 中。详情：[配置参考](https://opencodex.me/zh-cn/reference/configuration/)。
+opencodex 默认绑定 `127.0.0.1`，数据平面无需额外认证。绑定到回环以外的地址
+（例如 `"hostname": "0.0.0.0"`）**需要配置客户端 API 密钥或共享数据令牌**。
+共享令牌来自 `OPENCODEX_API_AUTH_TOKEN`、`OCX_API_TOKEN_FILE` 或安装后仅所有者
+可访问的 `service-api-token` 文件。推理客户端在 `x-opencodex-api-key` 中发送
+受支持的凭据。管理操作使用单独的管理员凭据。详情见[配置参考](https://opencodex.me/zh-cn/reference/configuration/)。
 
 ## 高级用法
 

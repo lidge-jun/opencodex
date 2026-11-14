@@ -267,7 +267,7 @@ Ambos son espacios de nombres virtuales con alias y validación de colisión; di
 
 Un combo permanece directamente enrutable incluso cuando no se puede enumerar. `ocx sync`, `/v1/models`, y el selector Codex lo lista solo cuando cada destino expone capacidades que pueden ser intersectadas:
 
-- un `contextWindow` positivo, a partir de metadatos activos, sugerencias de registro, proveedor `modelContextWindows` / `contextWindow`, un `maxInputTokens` positivo conocido en la fila de miembros, o - cuando el proveedor es conocido y habilitado pero cada fuente aún omite una ventana - una reserva conservadora de 128,000 tokens (fijada por `providerContextCaps` cuando se establece); y
+- un `contextWindow` positivo, a partir de metadatos activos, sugerencias de registro, proveedor `modelContextWindows` / `contextWindow`, un `maxInputTokens` positivo conocido en la fila de miembros, o - cuando el proveedor es conocido y habilitado pero cada fuente aún omite una ventana - una reserva conservadora de 128 000 tokens (fijada por `providerContextCaps` cuando se establece); y
 - una intersección `inputModalities` no vacía, tratando un valor de miembro omitido como `["text"]`.
 
 Un destino en un proveedor deshabilitado (incluso con una fila de descubrimiento completa), en un proveedor desconocido sin fila de descubrimiento, o en objetivos con modalidades disjuntas, elimina el combo del catálogo. La sincronización emite una advertencia de resumen y el tablero de instrumentos lo marca como **Necesita atención**. Agrega metadatos de contexto, alinea modalidades o modelos de destino con capacidades compatibles detectables.

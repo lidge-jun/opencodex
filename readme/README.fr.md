@@ -78,7 +78,7 @@ Sol pilote la session et appelle un sous-agent Kimi K3.
 </table>
 
 <p align="center">
-  <a href="../README.md">English</a> · <b>Français</b> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · <a href="README.tr.md">Türkçe</a> · 📖 <a href="https://opencodex.me/fr/"><b>Documentation complète →</b></a>
+  <a href="../README.md">English</a> · <b>Français</b> · <a href="README.ko.md">한국어</a> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.zh-TW.md">繁體中文</a> · <a href="README.ru.md">Русский</a> · <a href="README.ja.md">日本語</a> · <a href="README.tr.md">Türkçe</a> · <a href="README.es.md">Español</a> · 📖 <a href="https://opencodex.me/fr/"><b>Documentation complète →</b></a>
 </p>
 
 opencodex est une passerelle locale légère entre vos outils de programmation et vos fournisseurs de modèles. Elle accepte les API Responses, Chat Completions et Anthropic Messages et traduit chaque requête pour votre fournisseur, en prenant en charge le streaming, les appels d’outils, le raisonnement et les images lorsque le client, le modèle et le fournisseur le permettent. Utilisez Claude, Gemini, Grok, GLM, DeepSeek, Kimi, Qwen, Ollama et d’autres fournisseurs avec Codex, Claude Code, Claude Desktop, Grok Build et les outils de la [page des clients pris en charge](https://opencodex.me/fr/reference/client-support/).
@@ -105,11 +105,11 @@ Connectez l’outil que vous utilisez déjà :
 
 | Outil | Connexion |
 |---|---|
-| Codex | Activez le commutateur Codex sur la page **Connect** du tableau de bord, puis exécutez `codex` comme d’habitude. Sur une écoute locale, cela dirige le fournisseur intégré de Codex vers le proxy. Depuis le terminal, exécutez `ocx init` avant d’ajouter des fournisseurs dans le tableau de bord et acceptez son invite Codex. |
+| Codex | Activez le commutateur Codex sur la page **Routage** du tableau de bord, puis exécutez `codex` comme d’habitude. Sur une écoute locale, cela dirige le fournisseur intégré de Codex vers le proxy. Depuis le terminal, exécutez `ocx init` avant d’ajouter des fournisseurs dans le tableau de bord et acceptez son invite Codex. |
 | Claude Code | Avec le CLI `claude` installé, exécutez `ocx claude`. Il démarre le proxy si nécessaire et lance Claude Code à travers celui-ci. |
 | Claude Desktop | Exécutez `ocx claude desktop`. Lors d’une nouvelle installation, cette commande configure le profil de passerelle pour toute l’application ; une configuration first-party existante est conservée et `ocx claude desktop apply --gateway` permet de changer explicitement. Consultez le [guide Claude Code](https://opencodex.me/fr/guides/claude-code/). Quittez complètement puis rouvrez Claude Desktop après un changement. |
 | Grok Build | Sur une écoute locale avec l’intégration Grok activée, `ocx start` enregistre les modèles lorsque `~/.grok` existe ; choisissez un modèle `ocx-*` dans Grok Build. Pour une configuration distante, consultez le [guide Grok Build](https://opencodex.me/fr/guides/grok-build/). Après avoir ajouté des fournisseurs, redémarrez le proxy (ou lancez `ocx ensure` lorsque le démarrage automatique de Codex est activé) pour actualiser la liste. |
-| Outils avec intégration gérée | Utilisez la page **Connect** du tableau de bord ou `ocx integration client enable --client <id>`. |
+| Outils avec intégration gérée | Utilisez la page **Routage** du tableau de bord ou `ocx integration client enable --client <id>`. |
 | Tout autre outil | Définissez l’URL de base compatible OpenAI `http://localhost:10100/v1` ou l’URL de base Anthropic `http://localhost:10100`. |
 
 La [page des clients pris en charge](https://opencodex.me/fr/reference/client-support/) indique la méthode de connexion et le protocole de chaque outil.
@@ -255,9 +255,12 @@ ocx start     # ou `ocx service`
 ocx init      # configuration interactive : écrit ~/.opencodex/config.json et relie Codex
 ```
 
-`ocx init` ne démarre jamais le proxy ; démarrez-le d'abord (ou après — les deux ordres fonctionnent, mais les commandes
-sans interface comme `ocx provider add` et `ocx combo set` communiquent avec le proxy **actif** et se terminent avec un code différent de zéro
-s'il est inaccessible). `ocx status` / `ocx doctor` / `ocx health` indiquent l'état d'exécution.
+Vous pouvez démarrer le proxy avant ou après avoir exécuté `ocx init` : cette commande ne le démarre jamais.
+`ocx provider add` enregistre la configuration locale sans proxy en cours d’exécution. Avec `--sync`,
+la commande enregistre d’abord le fournisseur, puis utilise le proxy actif pour synchroniser les modèles
+avec Codex. Si le proxy est indisponible, le fournisseur reste enregistré et la commande renvoie un code
+non nul. Exécutez `ocx sync` lorsque le proxy est disponible. `ocx provider add --live` et
+`ocx combo set` nécessitent un proxy actif. `ocx status` / `ocx doctor` / `ocx health` indiquent son état.
 
 > **Agents qui installent ou exécutent opencodex :** lisez
 > [`AGENTS_INSTALL.md`](../AGENTS_INSTALL.md). Une exécution interactive de `ocx start` peut demander une
@@ -426,10 +429,13 @@ npm uninstall -g @bitkyc08/opencodex
 
 ## Accès distant
 
-Par défaut, opencodex se lie à `127.0.0.1` et ne nécessite aucune authentification supplémentaire. Une liaison au-delà
-de l'adresse de bouclage (`"hostname": "0.0.0.0"`) **nécessite** un jeton bearer — le proxy refuse de démarrer
-sans `OPENCODEX_API_AUTH_TOKEN`, et chaque requête cliente doit le fournir dans
-`x-opencodex-api-key`. Détails : [référence de configuration](https://opencodex.me/fr/reference/configuration/).
+Par défaut, opencodex écoute sur `127.0.0.1` et ne nécessite pas d’authentification supplémentaire
+pour les requêtes de données. Une écoute hors bouclage (par exemple `"hostname": "0.0.0.0"`)
+**nécessite une clé API de client configurée ou un jeton de données partagé**. Ce jeton est obtenu
+depuis `OPENCODEX_API_AUTH_TOKEN`, `OCX_API_TOKEN_FILE` ou le fichier installé
+`service-api-token`, accessible uniquement à son propriétaire. Les clients d’inférence envoient
+une information d’authentification acceptée dans `x-opencodex-api-key`. L’administration utilise
+une information d’authentification distincte. Voir la [référence de configuration](https://opencodex.me/fr/reference/configuration/).
 
 ## Utilisation avancée
 

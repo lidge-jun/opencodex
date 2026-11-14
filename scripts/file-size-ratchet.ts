@@ -54,6 +54,7 @@ export const GENERATED_PATHS = [
 export const I18N_CATALOG_PATHS = [
   "gui/src/i18n/de.ts",
   "gui/src/i18n/en.ts",
+  "gui/src/i18n/es.ts",
   "gui/src/i18n/fr.ts",
   "gui/src/i18n/ja.ts",
   "gui/src/i18n/ko.ts",

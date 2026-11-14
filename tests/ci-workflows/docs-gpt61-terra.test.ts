@@ -16,11 +16,16 @@ describe("GPT-6.1 Terra documentation", () => {
       const doc = read(locale, "reference/configuration/providers");
       const section = doc.split("## GPT-6.1 Terra")[1]?.split(/\n## /)[0];
       expect(section).toBeDefined();
+      // Spanish writes grouped counts with a nonbreaking space and amounts with a
+      // decimal comma. Compare the same quantities; keep protocol and model IDs exact.
+      const numericText = locale === "es" ? section
+        ?.replace(/(?<=\d)\u00a0(?=\d{3}\b)/g, ",")
+        .replace(/(\d+),(\d{2})(?=\s*(?:\/|USD))/g, "$$$1.$2") : section;
       for (const value of ["gpt-6.1-terra", "gpt-5.6-terra", "500,000", "872,000",
         "1,050,000", "128,000", "low", "ultra", "max", "none", "medium",
         "$1.00", "$0.05", "$1.25", "$5.00", "272,000", "$2.00", "$0.10",
         "$2.50", "$7.50", "Fast", "2026-06-01", "v1/responses", "v1/chat/completions"]) {
-        expect(section, `${locale}: ${value}`).toContain(value);
+        expect(numericText, `${locale}: ${value}`).toContain(value);
       }
       expect(section).not.toMatch(/Ultrafast|ultrafast/);
     });

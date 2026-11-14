@@ -1,7 +1,7 @@
 import { copyTable, type Row } from "./copy-table";
 
 /*
- * Copy for the v2 Subagents page. Columns: en, ko, de, fr, zh, zh-TW, ru, ja, tr, vi, pt.
+ * Copy for the v2 Subagents page. Columns: en, ko, de, fr, zh, zh-TW, ru, ja, tr, vi, pt, es.
  * Keys render as `subagentsV2.<key>`.
  */
 const rows = {
@@ -17,51 +17,61 @@ const rows = {
     "Codex ve Claude Code'un iş devredeceği modelleri seçin.",
     "Chọn các mô hình mà Codex và Claude Code giao việc cho.",
     "Escolha os modelos para os quais o Codex e o Claude Code delegam trabalho.",
+    "Elige los modelos a los que Codex y Claude Code delegan trabajo.",
   ],
   nowTitle: [
     "In effect now", "지금 적용 중", "Aktuell wirksam", "En vigueur", "当前生效", "目前生效",
     "Сейчас действует", "現在の設定", "Şu an geçerli", "Đang áp dụng", "Em vigor agora",
+    "Configuración vigente",
   ],
   nowOrder: [
     "Codex picker, first choice", "Codex 추천 1순위", "Codex-Auswahl, erste Wahl", "Sélecteur Codex, premier choix",
     "Codex 推荐首选", "Codex 推薦首選", "Codex: первый вариант", "Codex 推奨の 1 位", "Codex seçicisi, ilk tercih",
     "Codex: lựa chọn đầu tiên", "Seletor do Codex, primeira opção",
+    "Primera opción del selector de Codex",
   ],
   nowOrderNone: [
     "Not set, catalog order", "설정 안 함, 카탈로그 순서", "Nicht gesetzt, Katalogreihenfolge", "Non défini, ordre du catalogue",
     "未设置，按目录顺序", "未設定，依目錄順序", "Не задано, порядок каталога", "未設定（カタログ順）", "Ayarlanmadı, katalog sırası",
     "Chưa đặt, theo thứ tự danh mục", "Não definido, ordem do catálogo",
+    "Sin configurar, sigue el orden del catálogo",
   ],
   nowOrderCaption: [
     "{n} of {max} picked", "{max}개 중 {n}개 선택", "{n} von {max} gewählt", "{n} sur {max} choisis",
     "已选 {n}/{max}", "已選 {n}/{max}", "Выбрано {n} из {max}", "{max} 件中 {n} 件を選択", "{max} içinden {n} seçildi",
     "Đã chọn {n}/{max}", "{n} de {max} escolhidos",
+    "{n} de {max} seleccionados",
   ],
   firstNoneCaption: [
     "Codex picks on its own", "Codex가 알아서 고릅니다", "Codex wählt selbst", "Codex choisit seul",
     "由 Codex 自行选择", "由 Codex 自行選擇", "Codex выбирает сам", "Codex が自分で選びます", "Codex kendisi seçer",
     "Codex tự chọn", "O Codex escolhe sozinho",
+    "Codex elige por su cuenta",
   ],
   nowPin: [
     "Claude Code pin", "Claude Code 모델 고정", "Claude-Code-Fixierung", "Modèle fixé Claude Code",
     "Claude Code 固定模型", "Claude Code 固定模型", "Закрепление Claude Code", "Claude Code の固定", "Claude Code sabitleme",
     "Ghim Claude Code", "Fixação do Claude Code",
+    "Modelo fijo de Claude Code",
   ],
   pinOffCaption: [
     "Each agent keeps its own model", "에이전트마다 원래 모델을 씁니다", "Jeder Agent behält sein Modell", "Chaque agent garde son modèle",
     "各代理沿用自己的模型", "各代理沿用自己的模型", "Каждый агент со своей моделью", "各エージェントが自分のモデルを使います",
     "Her ajan kendi modelini kullanır", "Mỗi tác tử giữ mô hình riêng", "Cada agente mantém o próprio modelo",
+    "Cada agente conserva su modelo",
   ],
   pinOnCaption: [
     "Every Claude Code subagent", "Claude Code의 모든 서브에이전트", "Jeder Claude-Code-Subagent", "Tous les sous-agents Claude Code",
     "所有 Claude Code 子代理", "所有 Claude Code 子代理", "Все субагенты Claude Code", "Claude Code のすべてのサブエージェント",
     "Tüm Claude Code alt ajanları", "Mọi tác tử phụ của Claude Code", "Todos os subagentes do Claude Code",
+    "Todos los subagentes de Claude Code",
   ],
-  off: ["Off", "꺼짐", "Aus", "Désactivé", "关闭", "關閉", "Выкл.", "オフ", "Kapalı", "Tắt", "Desligado"],
-  change: ["Change", "변경", "Ändern", "Modifier", "更改", "變更", "Изменить", "変更", "Değiştir", "Thay đổi", "Alterar"],
+  off: ["Off", "꺼짐", "Aus", "Désactivé", "关闭", "關閉", "Выкл.", "オフ", "Kapalı", "Tắt", "Desligado", "Desactivado"],
+  change: ["Change", "변경", "Ändern", "Modifier", "更改", "變更", "Изменить", "変更", "Değiştir", "Thay đổi", "Alterar", "Cambiar"],
   moreAbout: [
     "More about {label}", "{label} 자세히 보기", "Mehr zu {label}", "En savoir plus : {label}", "关于{label}", "關於{label}",
     "Подробнее: {label}", "{label}の詳細", "{label} hakkında", "Thêm về {label}", "Mais sobre {label}",
+    "Más sobre {label}",
   ],
   forceLede: [
     "When on, every Claude Code subagent runs on the one model you pick.",
@@ -75,6 +85,7 @@ const rows = {
     "Açıkken tüm Claude Code alt ajanları seçtiğiniz tek modelle çalışır.",
     "Khi bật, mọi tác tử phụ của Claude Code chạy trên mô hình bạn chọn.",
     "Ligado, todos os subagentes do Claude Code usam o modelo escolhido.",
+    "Al activarlo, todos los subagentes de Claude Code usan el modelo que elijas.",
   ],
   budgetLede: [
     "Per-task caps that stop a runaway task from flooding your providers.",
@@ -88,16 +99,19 @@ const rows = {
     "Kontrolden çıkan bir görevin sağlayıcıları boğmasını önleyen görev başına sınırlar.",
     "Giới hạn cho mỗi tác vụ để một tác vụ mất kiểm soát không làm ngập nhà cung cấp.",
     "Limites por tarefa para que uma tarefa descontrolada não sobrecarregue os provedores.",
+    "Límites por tarea que evitan que una tarea fuera de control sature a tus proveedores.",
   ],
   unsaved: [
     "Unsaved changes", "저장하지 않은 변경 사항", "Ungespeicherte Änderungen", "Modifications non enregistrées",
     "有未保存的更改", "有未儲存的變更", "Есть несохранённые изменения", "未保存の変更があります", "Kaydedilmemiş değişiklikler",
     "Có thay đổi chưa lưu", "Alterações não salvas",
+    "Cambios sin guardar",
   ],
   noChanges: [
     "No unsaved changes", "변경 사항 없음", "Keine ungespeicherten Änderungen", "Aucune modification en attente",
     "没有未保存的更改", "沒有未儲存的變更", "Несохранённых изменений нет", "未保存の変更はありません", "Kaydedilmemiş değişiklik yok",
     "Không có thay đổi chưa lưu", "Nenhuma alteração pendente",
+    "No hay cambios sin guardar",
   ],
   featuredLede: [
     "Codex offers these first, top to bottom. Changes save on their own.",
@@ -111,10 +125,12 @@ const rows = {
     "Codex bunları yukarıdan aşağıya ilk sırada sunar. Değişiklikler kendiliğinden kaydedilir.",
     "Codex đề xuất các mô hình này trước, từ trên xuống. Thay đổi tự lưu.",
     "O Codex oferece estes primeiro, de cima para baixo. As alterações são salvas sozinhas.",
+    "Codex ofrece primero estos modelos, de arriba abajo. Los cambios se guardan automáticamente.",
   ],
   emptySlot: [
     "Empty slot", "빈 자리", "Freier Platz", "Emplacement libre", "空位", "空位", "Свободное место", "空き枠", "Boş yer",
     "Ô trống", "Espaço livre",
+    "Espacio vacío",
   ],
   modelsLede: [
     "Add up to {max} models to the picker order.",
@@ -128,13 +144,15 @@ const rows = {
     "Seçici sırasına en fazla {max} model ekleyin.",
     "Thêm tối đa {max} mô hình vào thứ tự đề xuất.",
     "Adicione até {max} modelos à ordem do seletor.",
+    "Añade hasta {max} modelos al orden del selector.",
   ],
-  rank: ["No. {n}", "{n}순위", "Nr. {n}", "N° {n}", "第 {n} 位", "第 {n} 位", "№ {n}", "{n} 位", "{n}. sıra", "Hạng {n}", "N.º {n}"],
-  add: ["Add", "추가", "Hinzufügen", "Ajouter", "添加", "新增", "Добавить", "追加", "Ekle", "Thêm", "Adicionar"],
-  added: ["Added", "추가됨", "Hinzugefügt", "Ajouté", "已添加", "已新增", "Добавлено", "追加済み", "Eklendi", "Đã thêm", "Adicionado"],
+  rank: ["No. {n}", "{n}순위", "Nr. {n}", "N° {n}", "第 {n} 位", "第 {n} 位", "№ {n}", "{n} 位", "{n}. sıra", "Hạng {n}", "N.º {n}", "N.º {n}"],
+  add: ["Add", "추가", "Hinzufügen", "Ajouter", "添加", "新增", "Добавить", "追加", "Ekle", "Thêm", "Adicionar", "Añadir"],
+  added: ["Added", "추가됨", "Hinzugefügt", "Ajouté", "已添加", "已新增", "Добавлено", "追加済み", "Eklendi", "Đã thêm", "Adicionado", "Añadido"],
   delegationTitle: [
     "Codex delegation", "Codex 위임", "Codex-Delegation", "Délégation Codex", "Codex 委派", "Codex 委派",
     "Делегирование Codex", "Codex の委任", "Codex devretme", "Ủy quyền của Codex", "Delegação do Codex",
+    "Delegación de Codex",
   ],
   delegationShort: [
     "Codex calls this model first when it splits work.",
@@ -148,6 +166,7 @@ const rows = {
     "Codex işi bölerken önce bu modeli çağırır.",
     "Codex gọi mô hình này đầu tiên khi chia việc.",
     "O Codex chama este modelo primeiro ao dividir o trabalho.",
+    "Codex llama primero a este modelo cuando divide el trabajo.",
   ],
   syncShort: [
     "Also write it to Codex's config, so new tasks start with it.",
@@ -161,6 +180,7 @@ const rows = {
     "Codex yapılandırmasına da yaz, yeni görevler bununla başlasın.",
     "Ghi cả vào cấu hình Codex để tác vụ mới cũng bắt đầu với mô hình này.",
     "Gravar também na config do Codex, para novas tarefas começarem com ele.",
+    "Guárdalo también en la configuración de Codex para que las tareas nuevas lo usen desde el inicio.",
   ],
   guidanceShort: [
     "Send Codex a short note on how to split work.",
@@ -174,6 +194,7 @@ const rows = {
     "Codex'e işin nasıl bölüneceğine dair kısa bir not gönder.",
     "Gửi Codex một ghi chú ngắn về cách chia việc.",
     "Enviar ao Codex uma nota curta sobre como dividir o trabalho.",
+    "Envía a Codex una indicación breve sobre cómo dividir el trabajo.",
   ],
   ultraShort: [
     "Have every model delegate proactively.",
@@ -187,6 +208,7 @@ const rows = {
     "Her model işi kendiliğinden devretsin.",
     "Để mọi mô hình chủ động giao việc.",
     "Fazer cada modelo delegar por iniciativa própria.",
+    "Haz que todos los modelos deleguen de forma proactiva.",
   ],
   surfaceShort: [
     "Which multi-agent surface each model uses.",
@@ -200,6 +222,7 @@ const rows = {
     "Her modelin hangi çoklu ajan yüzeyini kullandığı.",
     "Mỗi mô hình dùng bề mặt đa tác tử nào.",
     "Qual superfície multiagente cada modelo usa.",
+    "Interfaz multiagente que usa cada modelo.",
   ],
   advancedHint: [
     "Surface, split-work note, proactive delegation",
@@ -213,6 +236,7 @@ const rows = {
     "Yüzey, bölme notu, proaktif devretme",
     "Bề mặt, ghi chú chia việc, ủy quyền chủ động",
     "Superfície, nota de divisão, delegação proativa",
+    "Interfaz, indicaciones para dividir el trabajo y delegación proactiva",
   ],
 } satisfies Record<string, Row>;
 

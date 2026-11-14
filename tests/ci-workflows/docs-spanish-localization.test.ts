@@ -4,6 +4,7 @@ import { join, relative } from "node:path";
 import { repoPath } from "../helpers/repo-root";
 import { FRONTIER_STRINGS } from "../../docs-site/src/data/frontier-i18n";
 import { codeBlockLocale } from "../../docs-site/src/data/code-block-locale";
+import { LINK_READINESS_REASONS } from "../../src/client/link-readiness";
 
 const root = repoPath("docs-site/src/content/docs");
 const source = (path: string): string => readFileSync(path, "utf8").replace(/\r\n/g, "\n");
@@ -103,6 +104,18 @@ function missingInlineIdentifiers(english: string, spanish: string): string[] {
 }
 
 describe("Spanish documentation localization", () => {
+  test("lists every Remote Link readiness reason next to the Child status instructions", () => {
+    for (const locale of ["", "es"]) {
+      const path = join(root, locale, "guides/remote-link.md");
+      const status = source(path).split('<a id="several-routes-to-one-child"></a>', 1)[0]!;
+      const paragraph = status.split(/\n\s*\n/)
+        .find(part => part.includes("\x60GET /readyz\x60") && part.includes("\x60Retry-After: 1\x60"));
+      expect(paragraph, path).toBeDefined();
+      const listed = inlineCode(paragraph ?? "");
+      expect(LINK_READINESS_REASONS.filter(reason => !listed.has(reason)), path).toEqual([]);
+    }
+  });
+
   test("code spans keep a trailing backslash literal without swallowing later identifiers", () => {
     const english = "Paths `~\\` and `~/` keep `models` unchanged.";
     const spanish = "Las rutas `~\\` y `~/` conservan `models`.";

@@ -16,6 +16,11 @@ const LABELS: Record<Locale, StateLabels> = {
     protection: { off: "Off", active: "Active", drifted: "Needs repair", unsupported: "Unsupported", unknown: "Unknown" },
     mode: { off: "Off", compat: "Compatibility", quiet: "Quiet", collision: "Unknown" },
   },
+  es: {
+    schema: { compatible: "Compatible", missing: "No se encontró la base de datos", unreadable: "Base de datos no disponible", unsupported: "No compatible" },
+    protection: { off: "Desactivado", active: "Activo", drifted: "Necesita reparación", unsupported: "No compatible", unknown: "Desconocido" },
+    mode: { off: "Desactivado", compat: "Compatibilidad", quiet: "Silencio", collision: "Desconocido" },
+  },
   de: {
     schema: { compatible: "Kompatibel", missing: "Datenbank nicht gefunden", unreadable: "Datenbank nicht lesbar", unsupported: "Nicht unterstützt" },
     protection: { off: "Aus", active: "Aktiv", drifted: "Reparatur erforderlich", unsupported: "Nicht unterstützt", unknown: "Unbekannt" },
