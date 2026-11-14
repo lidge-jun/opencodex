@@ -456,12 +456,52 @@ export function rotateAntigravityAccountOnAuthRefusal(
     presence.delete("google-antigravity");
     sweepExpiredOnWrite(now);
   }
+  return nextAntigravitySibling(set, failedAccountId, requestedModelId, family, now);
+}
+
+/** Next live sibling after the failed account, in roster order, honouring cooldowns and model support. */
+function nextAntigravitySibling(
+  set: NonNullable<ReturnType<typeof getAccountSet>>,
+  failedAccountId: string,
+  requestedModelId: string | null | undefined,
+  family: QuotaModelFamily | undefined,
+  now: number,
+): string | null {
   const eligible = new Set(preferKiroModelSupport("google-antigravity",
     eligibleIdsIn(set, "google-antigravity", now, family).filter(id => id !== failedAccountId), requestedModelId));
   const order = set.accounts.map(row => row.id);
   const start = order.indexOf(failedAccountId);
   const ring = start >= 0 ? [...order.slice(start + 1), ...order.slice(0, start)] : order;
   return ring.find(id => id !== failedAccountId && eligible.has(id)) ?? null;
+}
+
+/**
+ * A 502/503/504 that survived the same-account retry ladder says this account's route to Google is
+ * failing right now, not that the credential is bad. Cool it for a short, fixed window (pool-wide
+ * capacity trouble then clears on its own within seconds) and name a live sibling to replay on.
+ * No generation fence and no stored verdict: nothing here outlives the process or the window.
+ */
+const ANTIGRAVITY_FAULT_COOLDOWN_MS = 15_000;
+
+export function rotateAntigravityAccountOnUpstreamFault(
+  poolActivated: boolean,
+  failedAccountId: string,
+  requestedModelId: string | null | undefined,
+  now = Date.now(),
+): string | null {
+  if (!poolActivated) return null;
+  const set = getAccountSet("google-antigravity");
+  if (!set || set.accounts.length < 2) return null;
+  const family = classifyModelFamilyForQuota("google-antigravity", requestedModelId);
+  if (set.accounts.some(row => row.id === failedAccountId)) {
+    health.set(healthKey("google-antigravity", failedAccountId, family), {
+      cooldownUntil: now + ANTIGRAVITY_FAULT_COOLDOWN_MS,
+      cooldownSource: "default",
+    });
+    presence.delete("google-antigravity");
+    sweepExpiredOnWrite(now);
+  }
+  return nextAntigravitySibling(set, failedAccountId, requestedModelId, family, now);
 }
 
 /** Generic pool strategies the kernel can actually run. `quota` IS the pre-kernel path. */

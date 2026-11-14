@@ -14,7 +14,8 @@ import * as requestPacing from "../../src/providers/request-pacing";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX } from "../../src/adapters/google-errors";
 import { readUsageEntries } from "../../src/usage/log";
-import { clearGenericFailoverHealth, eligibleFailoverAccounts, genericFailoverRetryAfterSeconds, rotateAntigravityAccountOnAuthRefusal } from "../../src/oauth/generic-account-failover";
+import { classifyModelFamilyForQuota } from "../../src/oauth/account-quota-rank";
+import { clearGenericFailoverHealth, eligibleFailoverAccounts, genericFailoverRetryAfterSeconds, rotateAntigravityAccountOnAuthRefusal, rotateAntigravityAccountOnUpstreamFault } from "../../src/oauth/generic-account-failover";
 import {
   durableReplayCredentialIdentity,
   durableReplayDestinationIdentity,
@@ -672,6 +673,55 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
       await response.text();
       expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer access-b", "Bearer access-c"]);
       for (const row of getAccountSet("google-antigravity")!.accounts) expect(row.needsReauth).not.toBe(true);
+    } finally { await server.stop(true); }
+  });
+
+  test.each([502, 503, 504])("a %i that outlives the same-account retries replays once on a sibling and cools the failed account briefly", async status => {
+    await seedOAuth();
+    const failedId = getAccountSet("google-antigravity")!.activeAccountId;
+    await seedSibling();
+    saveConfig(antigravityConfig());
+    // Three physical sends on the first account (the transient ladder), then the sibling answers.
+    const observed = installOAuthFetch([status, status, status, 200]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer rejected-access", "Bearer rejected-access", "Bearer access-b"]);
+      expect(observed.chatProjects.at(-1)).toBe("project-b");
+      expect(eligibleFailoverAccounts("google-antigravity")).not.toContain(failedId);
+      for (const row of getAccountSet("google-antigravity")!.accounts) expect(row.needsReauth).not.toBe(true);
+      expect(readUsageEntries().at(-1)?.attempts?.some(attempt => attempt.recoveryKinds.includes("transient-5xx"))).toBe(true);
+    } finally { await server.stop(true); }
+  });
+
+  test("the upstream-fault cooldown is short: the failed account is eligible again after it lapses", async () => {
+    await seedOAuth();
+    const failedId = getAccountSet("google-antigravity")!.activeAccountId;
+    const siblingId = await seedSibling();
+    saveConfig(antigravityConfig());
+    const now = Date.now();
+    expect(rotateAntigravityAccountOnUpstreamFault(true, failedId, "gemini-3.8-flash", now)).toBe(siblingId);
+    const family = classifyModelFamilyForQuota("google-antigravity", "gemini-3.8-flash");
+    expect(eligibleFailoverAccounts("google-antigravity", now + 1_000, family)).not.toContain(failedId);
+    expect(eligibleFailoverAccounts("google-antigravity", now + 16_000, family)).toContain(failedId);
+    expect(rotateAntigravityAccountOnUpstreamFault(false, failedId, "gemini-3.8-flash", now)).toBeNull();
+  });
+
+  test("a 503 on every account stops after one sibling hop and returns the 503", async () => {
+    await seedOAuth();
+    await seedSibling();
+    await seedThirdSibling();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch(Array.from({ length: 12 }, () => 503));
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(503);
+      await response.text();
+      expect(observed.chatAuth).toHaveLength(6);
+      expect(new Set(observed.chatAuth)).toEqual(new Set(["Bearer rejected-access", "Bearer access-b"]));
     } finally { await server.stop(true); }
   });
 
