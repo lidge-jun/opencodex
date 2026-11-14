@@ -537,7 +537,7 @@ interface DiscoverResult {
   recentArrivals?: Array<{ id: string; at: string; state: string }>;
 }
 
-async function discover(argv: string[], deps: RuntimeApiDeps): Promise<void> {
+async function discover(argv: string[], deps: RuntimeApiDeps): Promise<number | void> {
   const args = [...argv]; const wantsJson = takeFlag(args, "--json");
   const provider = args.shift()?.trim();
   if (!provider) throw new CliUsageError("provider is required", USAGE);
@@ -555,6 +555,8 @@ async function discover(argv: string[], deps: RuntimeApiDeps): Promise<void> {
     for (const row of result.newArrivals ?? []) lines.push(`  new  ${provider}/${row.id}  [${row.state}]  ${row.at}`);
   }
   printData(result, wantsJson, lines);
+  // The server answers 200 with a failed discovery; scripts still need a nonzero exit.
+  if (result.applicable !== false && result.discovery?.status === "failed") return 1;
 }
 
 async function context(argv: string[], deps: RuntimeApiDeps): Promise<void> {
