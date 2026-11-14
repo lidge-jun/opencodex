@@ -105,7 +105,7 @@ function status(ctx: GatewayClientContext, target?: GatewayTarget): GatewayClien
   const env = envGatewayOverride(ctx, target?.url);
   if (env) overrides.push({ source: "env", detail: env });
   const notes = ["Open a new terminal to pick up the agy function.", "Gateway support needs agy 1.2.15 or newer."];
-  if (ctx.platform === "win32") notes.push("Google lists agy for macOS and Linux only; on Windows this works only where an agy build runs, so treat it as untested.");
+  if (ctx.platform === "win32") notes.push("Google documents the agy gateway for macOS and Linux. The Windows build also reads the AGY_LLM_GATEWAY_* settings, but this path has not been verified end to end on Windows.");
   if (ctx.env.AGY_LLM_GATEWAY_URL?.trim()) notes.push("AGY_LLM_GATEWAY_URL is exported globally in the environment OpenCodex sees; the agy function overrides it for agy only.");
   return { id: ID, label: "agy CLI", state, files: rows, overrides, notes };
 }
