@@ -287,3 +287,72 @@ describe("JEV session pin (#7525)", () => {
     }
   });
 });
+
+describe("JEV session pin per-turn effort", () => {
+  /** A per-turn pinned Combo whose decision service answers `answers` in order and records each payload. */
+  function perTurnConfig(answers: string[], payloads: Array<Record<string, unknown>>): OcxConfig {
+    const config = makeConfig("unused", [], true);
+    config.combos!.auto!.sessionPin = { ttlMs: 20 * 60_000, effort: "per-turn" };
+    config.providers.jev!.fetch = (async (_input, init) => {
+      payloads.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      const choice = answers.shift();
+      if (choice === undefined) throw new Error("decision service down");
+      return Response.json({ answers: { route: { choice, confidence: 0.7 } } });
+    }) as typeof fetch;
+    return config;
+  }
+  const offered = (payload: Record<string, unknown> | undefined) => {
+    const criteria = (payload?.questions as { route: { criteria: Record<string, { target: string }> } }).route.criteria;
+    return [...new Set(Object.values(criteria).map(option => option.target))];
+  };
+  const effortOf = (body: Record<string, unknown>) => (body.reasoning as { effort?: string } | undefined)?.effort;
+
+  test("keeps the pinned target and asks JEV only for its effort on each pinned turn", async () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    const config = perTurnConfig(["sol/gpt-5.6-sol:high", "sol/gpt-5.6-sol:low"], payloads);
+    const bodies: Record<string, unknown>[] = [];
+    const child: Child = (body, complete) => { bodies.push(body); return served(body, complete); };
+    expect((await turn(config, { child })).status).toBe(200);
+    const log: RequestLogContext = { model: "", provider: "" };
+    expect((await turn(config, { child, log })).status).toBe(200);
+    expect(payloads).toHaveLength(2);
+    expect(offered(payloads[0])).toEqual(["luna/gpt-5.6-luna", "sol/gpt-5.6-sol"]);
+    expect(offered(payloads[1])).toEqual(["sol/gpt-5.6-sol"]);
+    expect(bodies.map(body => [body.model, effortOf(body)])).toEqual([["sol/gpt-5.6-sol", "high"], ["sol/gpt-5.6-sol", "low"]]);
+    expect(log.jevDecision).toMatchObject({
+      selected: { provider: "sol", model: SOL.model, effort: "low" },
+      gate: "apply",
+      pinned: true,
+      pinReason: "session_effort",
+    });
+    expect(log.routeDecision?.selected.reason).toBe(JEV_SESSION_PIN_ROUTE_REASON);
+  });
+
+  test("an unusable effort answer or a failed decision call keeps the pinned effort and the pin", async () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    // Turn 2 answers a target that was not offered; turn 3 finds the service down.
+    const config = perTurnConfig(["sol/gpt-5.6-sol:high", "luna/gpt-5.6-luna:low"], payloads);
+    const bodies: Record<string, unknown>[] = [];
+    const child: Child = (body, complete) => { bodies.push(body); return served(body, complete); };
+    await turn(config, { child });
+    const logs: RequestLogContext[] = [{ model: "", provider: "" }, { model: "", provider: "" }];
+    expect((await turn(config, { child, log: logs[0] })).status).toBe(200);
+    expect((await turn(config, { child, log: logs[1] })).status).toBe(200);
+    expect(payloads).toHaveLength(3);
+    expect(bodies.map(body => [body.model, effortOf(body)])).toEqual([
+      ["sol/gpt-5.6-sol", "high"], ["sol/gpt-5.6-sol", "high"], ["sol/gpt-5.6-sol", "high"],
+    ]);
+    for (const log of logs) expect(log.jevDecision).toMatchObject({ pinned: true, pinReason: "session", gate: "apply" });
+  });
+
+  test("a target with a single effort is reused without a decision call", async () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    const config = perTurnConfig(["sol/gpt-5.6-sol:high"], payloads);
+    config.providers.sol!.modelReasoningEfforts = { [SOL.model]: ["high"] };
+    await turn(config);
+    const log: RequestLogContext = { model: "", provider: "" };
+    await turn(config, { log });
+    expect(payloads).toHaveLength(1);
+    expect(log.jevDecision).toMatchObject({ pinned: true, pinReason: "session" });
+  });
+});

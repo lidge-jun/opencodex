@@ -796,13 +796,11 @@ export async function executeComboResponses(
       choices.map(choice => choice.candidate),
       combo.decisionQuotaSignals === true ? { config, tiers: combo.decisionQuotaTiers } : undefined,
     );
-    let decision: JevDecision;
-    if (pinReuse?.decision) decision = pinReuse.decision;
-    else try {
-      decision = await resolveJevComboDecision({
+    const decide = (candidates: JevCandidate[], fallbackDecision: Pick<JevDecision, "targetKey" | "effort">) =>
+      resolveJevComboDecision({
         body,
-        candidates: choices.map(choice => choice.candidate),
-        fallback,
+        candidates,
+        fallback: fallbackDecision,
         config,
         isDestinationAllowed: (providerName, modelId) => routeAllowedByScope(
           admissionScope, { providerName, modelId },
@@ -823,6 +821,27 @@ export async function executeComboResponses(
         ...(combo.decisionTimeoutMs !== undefined ? { timeoutMs: combo.decisionTimeoutMs } : {}),
         signal: options.abortSignal,
       });
+    let decision: JevDecision;
+    if (pinReuse?.decision) {
+      decision = pinReuse.decision;
+      // `effort: "per-turn"` keeps the pinned target and asks only for its effort, offering the
+      // pinned target alone. Anything but an applied answer for that target keeps the pinned effort.
+      const pinned = decision;
+      const pinnedChoice = combo.sessionPin?.effort === "per-turn"
+        ? choices.find(choice => choice.candidate.key === pinned.targetKey)
+        : undefined;
+      if (pinnedChoice && pinnedChoice.candidate.reasoningEfforts.length > 1) {
+        try {
+          const effortDecision = await decide([pinnedChoice.candidate], { targetKey: pinned.targetKey, effort: pinned.effort });
+          if (effortDecision.gate === "apply" && effortDecision.targetKey === pinned.targetKey) {
+            decision = { ...effortDecision, pinned: true, pinReason: "session_effort" };
+          }
+        } catch {
+          if (options.abortSignal?.aborted) return clientCancelledResponse();
+        }
+      }
+    } else try {
+      decision = await decide(choices.map(choice => choice.candidate), fallback);
     } catch (error) {
       if (options.abortSignal?.aborted) return clientCancelledResponse();
       decision = {

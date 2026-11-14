@@ -498,6 +498,7 @@ export function draftEquals(a: ComboItem, b: ComboItem): boolean {
       || (a.decisionTimeoutMs ?? null) !== (b.decisionTimeoutMs ?? null)
       || (a.sessionPin === undefined) !== (b.sessionPin === undefined)
       || (a.sessionPin?.ttlMs ?? null) !== (b.sessionPin?.ttlMs ?? null)
+      || (a.sessionPin?.effort ?? null) !== (b.sessionPin?.effort ?? null)
     ))
   ) return false;
   if (a.targets.length !== b.targets.length) return false;

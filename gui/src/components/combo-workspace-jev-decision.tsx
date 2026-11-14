@@ -308,12 +308,14 @@ export function ComboJevDecisionSection({
             aria-invalid={pinInvalid || undefined}
             aria-describedby={pinInvalid ? `${idPrefix}-session-pin-hint ${idPrefix}-session-pin-error` : `${idPrefix}-session-pin-hint`}
             onChange={(e) => {
+              // Editing the idle window keeps a per-turn effort mode set through the CLI or API.
+              const kept = sessionPin.effort ? { effort: sessionPin.effort } : {};
               if (e.target.value === "") {
-                onChange({ sessionPin: { ttlMs: 0 } });
+                onChange({ sessionPin: { ttlMs: 0, ...kept } });
                 return;
               }
               const ttlMs = Number(e.target.value);
-              onChange({ sessionPin: { ttlMs: Number.isFinite(ttlMs) ? ttlMs : 0 } });
+              onChange({ sessionPin: { ttlMs: Number.isFinite(ttlMs) ? ttlMs : 0, ...kept } });
             }}
           />
           {pinInvalid && <p id={`${idPrefix}-session-pin-error`} className="notice-err text-label" role="alert">
