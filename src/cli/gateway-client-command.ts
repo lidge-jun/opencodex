@@ -74,6 +74,11 @@ async function runLocally(verb: GatewayClientVerb, id: GatewayClientId, model: s
     printData(mine, wantsJson, statusLines(mine, true));
     return 0;
   }
+  // Port 0 asks the OS for a port at start; writing it into client files would name no listener.
+  if (verb === "connect" && target && new URL(target.url).port === "0") {
+    refuse({ ok: false, code: "no-fixed-port", message: "The configured port is 0, so the proxy has no fixed address to write. Start the proxy (ocx start), then connect again." }, wantsJson);
+    return 5;
+  }
   const outcome = verb === "connect" ? connectGatewayClient(id, ctx, config, config.port, model) : disconnectGatewayClient(id, ctx, target);
   const body = gatewayActionBody(outcome) as Body;
   if (!outcome.ok) { refuse(body, wantsJson); return 5; }

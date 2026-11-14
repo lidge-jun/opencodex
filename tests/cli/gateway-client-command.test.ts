@@ -60,6 +60,20 @@ describe("ocx connect|disconnect antigravity|agy", () => {
     } finally { io.restore(); }
   });
 
+  test("with no running proxy and port 0, connect is refused before any file is written", async () => {
+    const io = capture();
+    try {
+      const deps = { ...offline(), loadConfig: () => ({ port: 0, providers: {} }) as unknown as OcxConfig };
+      expect(await runGatewayClientFromArgs("connect", ["antigravity"], deps)).toBe(5);
+      expect(await runGatewayClientFromArgs("connect", ["agy"], deps)).toBe(5);
+      expect(io.err.join("\n")).toContain("port is 0");
+      expect(existsSync(join(ctx.home, ".antigravity"))).toBe(false);
+      expect(existsSync(join(ctx.home, ".bashrc"))).toBe(false);
+      expect(existsSync(join(ctx.stateDir, "gateway-clients"))).toBe(false);
+      expect(await runGatewayClientFromArgs("disconnect", ["agy"], deps)).toBe(0);
+    } finally { io.restore(); }
+  });
+
   test("a running proxy gets the POST, and a 409 refusal exits 5 with the message", async () => {
     const io = capture();
     const calls: { url: string; method?: string; body?: unknown }[] = [];
