@@ -35,6 +35,7 @@ import type { AdapterRequest } from "../adapters/base";
 import type { RequestSpendSettlement } from "./responses/request-spend";
 import type { AdapterTierMetadata } from "../providers/fastwire";
 import { UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../lib/upstream-retry";
+import type { CommittedTerminalCooldownFacts } from "../combos/failover";
 import { redactSecretString, sanitizeLogMetadataString } from "../lib/redact";
 import type { UpstreamCondition } from "../lib/upstream-condition";
 import { boundedServiceTier, errorDetailFor, projectErrorDetail } from "../usage/error-detail";
@@ -118,6 +119,19 @@ interface CacheDiagnosticHooks {
 }
 function cacheDiagnosticHooks(): CacheDiagnosticHooks | undefined {
   return (globalThis as Record<symbol, CacheDiagnosticHooks | undefined>)[CACHE_DIAGNOSTIC_HOOK];
+}
+
+let committedTerminalCooldownHandler: ((facts: CommittedTerminalCooldownFacts) => void) | undefined;
+
+/**
+ * Composition-root hook: the combos layer registers its committed-terminal
+ * cooldown policy here so request logging can report finalized terminals
+ * without importing routing state (and risking an import cycle).
+ */
+export function registerCommittedTerminalCooldownHandler(
+  handler: ((facts: CommittedTerminalCooldownFacts) => void) | undefined,
+): void {
+  committedTerminalCooldownHandler = handler;
 }
 
 /** Whether the cache diagnostic recorder will record inbound bodies (`OPENCODEX_CACHE_DEBUG=1`). */
@@ -1618,6 +1632,23 @@ function writeFinalRequestLog(
   // Keyed by the live attempt objects, not the detached copies above.
   const protocolTrace = protocolTraceForRequest(logCtx, logCtx.attempts);
   // Projected before any writer (an injected one too): the row keeps only proxy-owned error facts.
+  const servingAttempt = attempts?.at(-1);
+  try {
+    committedTerminalCooldownHandler?.({
+      ...(logCtx.comboId !== undefined ? { comboId: logCtx.comboId } : {}),
+      ...(meta?.terminalStatus !== undefined ? { terminalStatus: meta.terminalStatus } : {}),
+      ...(logCtx.failureDetail?.code !== undefined ? { failureDetailCode: logCtx.failureDetail.code } : {}),
+      ...(servingAttempt ? {
+        servingAttempt: {
+          provider: servingAttempt.provider,
+          model: servingAttempt.model,
+          status: servingAttempt.status,
+          ...(servingAttempt.locallyAnswered === true ? { locallyAnswered: true } : {}),
+        },
+      } : {}),
+      httpStatus: effectiveStatus,
+    });
+  } catch { /* committed-terminal cooldown bookkeeping must never break request logging */ }
   addLog(projectErrorDetail({
     requestId,
     ...(isLogicalRequestId(logicalRequestId) ? { logicalRequestId } : {}),

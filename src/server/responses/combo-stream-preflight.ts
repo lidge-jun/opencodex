@@ -20,7 +20,7 @@ import { carryResponseToolOwnership } from "./response-tool-ownership";
 import { createSseInspector } from "../relay";
 import { sseDataPayload } from "../sse-payload-rewrite";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../sse-frame-buffer";
-import { REQUIRED_TOOL_CONTRACT_CODE } from "../../lib/errors";
+import { COMBO_DEGENERATE_COMPLETION_CODE, REQUIRED_TOOL_CONTRACT_CODE } from "../../lib/errors";
 import { attachComboFailureEvidence, isPausedTurn } from "../../lib/client-error-body";
 import { requiredToolReasoningPrelude } from "./combo-required-tool-stream";
 import { ProtocolPreOutputEof } from "../../lib/upstream-retry";
@@ -194,6 +194,88 @@ const RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS = new Set([
   "missing_terminal_event",
   "upstream_stall_timeout",
 ]);
+
+/** Item-scoped frames that can belong to a commentary-phase message. */
+const MESSAGE_CONTENT_EVENTS = new Set([
+  "response.content_part.added",
+  "response.content_part.done",
+  "response.output_text.delta",
+  "response.output_text.done",
+  "response.output_text.annotation.added",
+  "response.refusal.delta",
+  "response.refusal.done",
+]);
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+/**
+ * Degenerate-completion prelude: reasoning frames and message items explicitly marked
+ * `phase: "commentary"` announce work rather than deliver it, so they stay replayable
+ * inside the buffer window. `commentaryItemIds` correlates item-scoped content frames
+ * (which carry no phase) back to the commentary item that opened them; an unidentified
+ * item always commits, so a final answer can never be held by mistake.
+ */
+function comboStreamDegeneratePrelude(payload: unknown, commentaryItemIds: Set<string>): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const event = payload as Record<string, unknown>;
+  if (requiredToolReasoningPrelude(payload)) return true;
+  if (event.type === "response.output_item.added" || event.type === "response.output_item.done") {
+    const item = recordValue(event.item);
+    if (!item) return false;
+    if (item.type === "reasoning") return true;
+    if (item.type === "message" && item.phase === "commentary") {
+      if (typeof item.id === "string") commentaryItemIds.add(item.id);
+      return true;
+    }
+    return false;
+  }
+  if (typeof event.type === "string" && MESSAGE_CONTENT_EVENTS.has(event.type)) {
+    return typeof event.item_id === "string" && commentaryItemIds.has(event.item_id);
+  }
+  return false;
+}
+
+/**
+ * A terminal whose entire output is reasoning/commentary prelude delivered nothing the
+ * caller can act on: the model announced work and stopped. Verified against the terminal
+ * snapshot itself so a final answer or tool call seen only there still commits.
+ */
+function isDegenerateStreamTerminal(payload: unknown, context?: object): boolean {
+  const event = recordValue(payload);
+  if (!event || (event.type !== "response.completed" && event.type !== "response.incomplete")) return false;
+  const response = recordValue(event.response);
+  // Both carriers count: an item that exists only at event level is still client-visible
+  // output the hop would lose, exactly as retryableZeroOutputTerminal treats it.
+  const carriers = [event.output, response?.output].filter(value => value !== undefined);
+  for (const carrier of carriers) {
+    if (!Array.isArray(carrier)) return false;
+    for (const item of carrier) {
+      const record = recordValue(item);
+      if (!record) return false;
+      if (record.type === "reasoning") continue;
+      if (record.type === "message" && record.phase === "commentary") continue;
+      return false;
+    }
+  }
+  if (event.type !== "response.incomplete") return true;
+  // Incomplete terminals keep every replay-safety guard the zero-output path owns: paused
+  // turns, explicitly unfinished turns, non-retryable limits, and reasons outside the
+  // retryable set (content_filter, max_output_tokens, ...) never hop as degenerate — the
+  // output-limit contract especially keeps its own code and cooldown instead.
+  const details = recordValue(response?.incomplete_details ?? event.incomplete_details);
+  const reason = details?.reason;
+  if (reason !== undefined
+    && (typeof reason !== "string" || !RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS.has(reason))) return false;
+  if (isPausedTurn(context)) return false;
+  const endTurn = response?.end_turn ?? event.end_turn;
+  if (endTurn === false) return false;
+  if (details?.retryable === false) return false;
+  return true;
+}
 
 export function explicitErrorEventStatus(payload: unknown): number | undefined {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
@@ -395,16 +477,17 @@ function retryableZeroOutputTerminal(payload: unknown, context?: object): boolea
     : undefined;
   const reason = details?.reason;
   if (reason === undefined) return true;
+  // An explicit unfinished or non-retryable verdict outranks every defined reason, not
+  // just max_output_tokens: honoring it keeps a paused or refused turn from hopping.
+  const endTurn = target.end_turn ?? event.end_turn;
+  if (endTurn === false) return false;
+  if (details?.retryable === false) return false;
   if (reason === "max_output_tokens") {
     // Same evidence the run-turn classifier requires before it treats an output limit as a
-    // replayable zero-output terminal: an explicitly unfinished turn or an explicitly
-    // non-retryable limit is an answer, not a target failure. A normalized Anthropic
-    // `pause_turn` also reads as max_output_tokens on the wire, so the request-scoped marker
-    // keeps a paused turn the client must continue from hopping to another provider.
+    // replayable zero-output terminal. A normalized Anthropic `pause_turn` also reads as
+    // max_output_tokens on the wire, so the request-scoped marker keeps a paused turn the
+    // client must continue from hopping to another provider.
     if (isPausedTurn(context)) return false;
-    const endTurn = target.end_turn ?? event.end_turn;
-    if (endTurn === false) return false;
-    if (details?.retryable === false) return false;
     return true;
   }
   return typeof reason === "string" && RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS.has(reason);
@@ -627,6 +710,7 @@ export async function preflightComboStreamResponse(
     replayReadErrors?: boolean;
     replayCleanEof?: boolean;
     requiredToolPrelude?: boolean;
+    degeneratePrelude?: boolean;
     signal?: AbortSignal;
     onUpstreamActivity?: () => void;
   },
@@ -652,6 +736,8 @@ export async function preflightComboStreamResponse(
   let responseCreated = false;
   let terminalStatus: ResponsesTerminalStatus | undefined;
   let retryableTerminalPayload: Record<string, unknown> | undefined;
+  let degenerateTerminalPayload: Record<string, unknown> | undefined;
+  const commentaryItemIds = new Set<string>();
   let holdTimer: ReturnType<typeof setTimeout> | undefined;
   let holdDeadline: Promise<"hold-expired"> | undefined;
   const inspector = createSseInspector({
@@ -676,7 +762,11 @@ export async function preflightComboStreamResponse(
       if (heldReasoning) holdDeadline ??= new Promise(resolve => {
         holdTimer = setTimeout(() => resolve("hold-expired"), COMBO_REQUIRED_TOOL_REASONING_HOLD_MS);
       });
-      if (comboStreamPayloadCommitsOutput(payload) && !matchedBareError && !heldReasoning) outputCommitted = true;
+      const degeneratePrelude = options?.degeneratePrelude === true
+        && comboStreamDegeneratePrelude(payload, commentaryItemIds);
+      const degenerateTerminal = options?.degeneratePrelude === true
+        && isDegenerateStreamTerminal(payload, logCtx);
+      if (comboStreamPayloadCommitsOutput(payload) && !matchedBareError && !heldReasoning && !degeneratePrelude) outputCommitted = true;
       if (options?.requiredToolPrelude && payload && typeof payload === "object") {
         const event = payload as { type?: unknown; response?: { output?: unknown; error?: { code?: unknown; retryable?: unknown } } };
         const output = event.response?.output;
@@ -686,10 +776,24 @@ export async function preflightComboStreamResponse(
             && ["message", "reasoning"].includes((item as { type: string }).type));
         // Other lifecycle/terminal snapshots can hide effects too. Only our checked contract
         // failure may discard a terminal-only text snapshot that was held in its entirety.
-        if (output !== undefined && (!Array.isArray(output) || output.length > 0) && !contractFailure) outputCommitted = true;
+        if (output !== undefined && (!Array.isArray(output) || output.length > 0) && !contractFailure && !degenerateTerminal) outputCommitted = true;
       }
       if (!payload || typeof payload !== "object" || Array.isArray(payload)) return;
       if (retryable) retryableTerminalPayload = payload as Record<string, unknown>;
+      if (degenerateTerminal && !degenerateTerminalPayload) {
+        const response = recordValue((payload as Record<string, unknown>).response);
+        degenerateTerminalPayload = {
+          ...(payload as Record<string, unknown>),
+          response: {
+            ...(response ?? {}),
+            error: {
+              type: "upstream_error",
+              code: COMBO_DEGENERATE_COMPLETION_CODE,
+              message: "Combo target ended the turn with only reasoning/commentary prelude — no tool call or final answer",
+            },
+          },
+        };
+      }
     },
     onTerminal: status => { terminalStatus = status; },
   });
@@ -751,12 +855,15 @@ export async function preflightComboStreamResponse(
       }
 
       // A bare error event is not a protocol terminal (terminalStatus stays undefined),
-      // so its retryable classification doubles as the terminal evidence.
+      // so its retryable classification doubles as the terminal evidence. A degenerate
+      // terminal carries the same hop evidence: its buffered prelude never reached the
+      // client, so discarding it cannot duplicate anything the caller already saw.
+      const hopEvidence = retryableTerminalPayload ?? degenerateTerminalPayload;
       if ((terminalStatus === "failed" || terminalStatus === "incomplete"
-        || retryableTerminalPayload?.type === "error")
-        && !outputCommitted && retryableTerminalPayload) {
+        || hopEvidence?.type === "error" || degenerateTerminalPayload !== undefined)
+        && !outputCommitted && hopEvidence !== undefined) {
         await reader.cancel("retrying zero-output combo stream terminal").catch(() => undefined);
-        const failed = failedTerminalResponse(response, retryableTerminalPayload, logCtx);
+        const failed = failedTerminalResponse(response, hopEvidence!, logCtx);
         // The rebuilt envelope keeps only the record. When either the whole frame or that slim
         // envelope reads as a moderation verdict, the combo loop must judge the whole frame: a
         // verdict needs the evidence the envelope dropped (a root code, an innererror), and a veto
@@ -770,7 +877,7 @@ export async function preflightComboStreamResponse(
         }
         return { kind: "failed", response: failed,
           ...(failed.status === 400
-            ? { codexModelRefusal: terminalModelRefusal(failed.status, retryableTerminalPayload) } : {}) };
+            ? { codexModelRefusal: terminalModelRefusal(failed.status, hopEvidence) } : {}) };
       }
       if (next.done || terminalStatus !== undefined || outputCommitted
         || bufferedBytes >= COMBO_STREAM_PREFLIGHT_MAX_BYTES
