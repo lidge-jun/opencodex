@@ -4110,7 +4110,7 @@ export const ko: Record<TKey, string> = {
   "pricing.multiplier.title": "{provider}의 릴레이 배수",
   "pricing.multiplier.label": "배수",
   "pricing.multiplier.placeholder": "적용 안 함",
-  "pricing.multiplier.help": "선택 사항이며 프로바이더별로 설정합니다. 이 프로바이더의 자동 공식 가격에 배수를 곱하며, 정가의 고정 배수를 청구하는 릴레이용입니다. 수동 가격에는 적용되지 않습니다. 비워 두면 적용하지 않습니다.",
+  "pricing.multiplier.help": "선택 사항. 정가의 일정 배수로 과금하는 중계 서비스용으로, 이 공급자의 모든 자동 가격에 곱합니다. 수동 가격에는 곱하지 않습니다.",
   "pricing.multiplier.save": "배수 저장",
   "pricing.multiplier.saving": "저장 중…",
   "pricing.multiplier.invalid": "0보다 크고 1000 이하인 숫자를 입력하거나 비워 두세요.",

@@ -4109,7 +4109,7 @@ export const zh: Record<TKey, string> = {
   "pricing.multiplier.title": "{provider} 的中转倍率",
   "pricing.multiplier.label": "倍率",
   "pricing.multiplier.placeholder": "不应用",
-  "pricing.multiplier.help": "可选，按提供方设置。会把该提供方的自动官方价格乘以此倍率，适用于按官方标价固定倍数收费的中转站。不会应用到手动价格。留空表示不应用。",
+  "pricing.multiplier.help": "可选。按官方标价固定倍数收费的中转站用：该提供方的所有自动价格都乘以此倍率。手动价格不会被乘。",
   "pricing.multiplier.save": "保存倍率",
   "pricing.multiplier.saving": "正在保存…",
   "pricing.multiplier.invalid": "请输入大于 0 且不超过 1000 的数字，或留空。",

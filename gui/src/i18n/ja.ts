@@ -4110,7 +4110,7 @@ export const ja: Record<TKey, string> = {
   "pricing.multiplier.title": "{provider} のリレー倍率",
   "pricing.multiplier.label": "倍率",
   "pricing.multiplier.placeholder": "適用しない",
-  "pricing.multiplier.help": "任意、プロバイダーごとの設定です。このプロバイダーの自動の公式価格に倍率を掛けます。定価の固定倍額を請求するリレー向けです。手動価格には適用されません。空欄の場合は適用しません。",
+  "pricing.multiplier.help": "任意。中継先が定価の一定倍で課金する場合に、このプロバイダーの自動価格すべてに掛けます。手動価格には掛けません。",
   "pricing.multiplier.save": "倍率を保存",
   "pricing.multiplier.saving": "保存中…",
   "pricing.multiplier.invalid": "0 より大きく 1000 以下の数値を入力するか、空欄にしてください。",

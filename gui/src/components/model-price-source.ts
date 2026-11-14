@@ -1,5 +1,5 @@
 // Shared labels and formatting for where a model's price came from.
-import type { TFn, TKey } from "../i18n/shared";
+import { LOCALES, getActiveLocale, type TFn, type TKey } from "../i18n/shared";
 import type { ModelRowPrice } from "../pages/models-shared";
 import { MAX_RATE, RATE_FIELDS, type ModelCost } from "./model-price-cost";
 
@@ -13,8 +13,9 @@ export const PRICE_SOURCE_LABEL: Record<PriceSourceId, TKey> = {
   unknown: "pricing.source.unknown",
 };
 
-const rateFormat = new Intl.NumberFormat(undefined, { maximumFractionDigits: 6 });
-export const formatRate = (value: number): string => rateFormat.format(value);
+// Format in the dashboard's language, not the browser's: the two differ when a user picks one.
+const intlLocale = () => LOCALES.find(entry => entry.code === getActiveLocale())?.htmlLang;
+export const formatRate = (value: number): string => value.toLocaleString(intlLocale(), { maximumFractionDigits: 6 });
 
 export function ratesLine(t: TFn, price: ModelRowPrice): string {
   return t("pricing.source.rates", {
@@ -27,7 +28,7 @@ export function ratesLine(t: TFn, price: ModelRowPrice): string {
 export function describePrice(t: TFn, price: ModelRowPrice): string[] {
   const lines = [t(PRICE_SOURCE_LABEL[price.source]), ratesLine(t, price)];
   const fetched = price.fetchedAt ? new Date(price.fetchedAt) : null;
-  if (fetched && !Number.isNaN(fetched.getTime())) lines.push(t("pricing.source.fetched", { time: fetched.toLocaleString() }));
+  if (fetched && !Number.isNaN(fetched.getTime())) lines.push(t("pricing.source.fetched", { time: fetched.toLocaleString(intlLocale()) }));
   if (price.multiplier !== undefined) lines.push(t("pricing.source.multiplier", { multiplier: formatRate(price.multiplier) }));
   if (price.apiEquivalent) lines.push(t("pricing.source.apiEquivalent"));
   return lines;

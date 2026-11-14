@@ -85,6 +85,7 @@ test("places Apps after Models and Providers, labels unclassified, and renders p
   expect(rows![1]!.textContent).toContain("Codex");
   expect(rows![1]!.textContent).toContain("$0.00");
   expect(rows![1]!.textContent).toContain("1 request excluded");
+  expect(section()!.textContent).not.toContain("older version");
 });
 
 test("names unknown clients, splits pre-tracking rows by wire, and explains exclusions on hover", async () => {
@@ -97,8 +98,8 @@ test("names unknown clients, splits pre-tracking rows by wire, and explains excl
   expect(labels).toEqual(["Before client tracking · Responses API", "Before client tracking · Claude Desktop", "curl", "Unknown"]);
   expect(section()!.textContent).toContain("recorded by an older version that did not store the client");
   const note = section()!.querySelector<HTMLElement>(".usage-cost-note")!;
-  expect(note.getAttribute("title")).toContain("1 carried no token usage to price");
-  expect(note.getAttribute("title")).toContain("0 used a model with no known price");
+  expect(note.getAttribute("title")).toContain("1 reported no token usage");
+  expect(note.getAttribute("title")).not.toContain("no known price");
   expect(isUsageReport({ ...report(), apps: [{ ...app("unknown"), name: "curl" }, { ...app("unknown"), name: "curl" }] })).toBe(false);
   expect(isUsageReport({ ...report(), apps: [{ ...app("unknown"), name: "Not A Name" }] })).toBe(false);
   expect(isUsageReport({ ...report(), apps: [{ ...app("unclassified"), legacyWire: "carrier-pigeon" }] })).toBe(false);

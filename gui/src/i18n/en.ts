@@ -4122,7 +4122,7 @@ export const en = {
   "pricing.multiplier.title": "Relay multiplier for {provider}",
   "pricing.multiplier.label": "Multiplier",
   "pricing.multiplier.placeholder": "Not applied",
-  "pricing.multiplier.help": "Optional, per provider. Multiplies this provider's automatic official prices, for relays that charge a fixed multiple of list price. Never applied to manual prices. Leave empty to not apply.",
+  "pricing.multiplier.help": "Optional. Multiplies every automatic price for this provider, for a relay that charges a fixed multiple of list price. Manual prices are never multiplied.",
   "pricing.multiplier.save": "Save multiplier",
   "pricing.multiplier.saving": "Saving…",
   "pricing.multiplier.invalid": "Enter a number greater than 0 and at most 1000, or leave empty.",

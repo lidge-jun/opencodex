@@ -1729,7 +1729,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
                     )}
                     {aliases.models[provider]?.[m.id]?.source === "builtin" && <span className="models-chip muted text-caption">{t("models.aliasAuto")}</span>}
                     {m.custom && <span className="models-chip muted mono text-caption">{t("models.customBadge")}</span>}
-                    {m.provider !== "combo" && <PriceSourceChip price={m.price} manualPricing={m.manualPricing} />}
+                    {!m.native && m.provider !== "combo" && <PriceSourceChip price={m.price} manualPricing={m.manualPricing} />}
                     {!m.custom && recentIds.has(m.id) && <span className="badge badge-amber">{t("models.newBadge")}</span>}
                     {m.contextCapped && <span className="models-chip muted mono text-caption">{t("models.contextCappedValue", { value: fmtK(m.contextCap ?? contextCapValue) })}</span>}
                     </span>

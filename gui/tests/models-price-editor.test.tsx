@@ -661,7 +661,7 @@ describe("Models manual price editor", () => {
       rows = rows.map(row => row.id === "vendor/custom" ? { ...row, price } : row);
     }
 
-    test("every non-combo row shows its price source chip with rates in the tooltip", async () => {
+    test("non-official routed rows show their price source chip with rates in the tooltip", async () => {
       rows = rows.map(row => row.id === "vendor/custom"
         ? { ...row, price: { ...AUTO, multiplier: 1.5, apiEquivalent: true as const } } : row);
       await mount();

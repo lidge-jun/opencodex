@@ -4111,7 +4111,7 @@ export const tr: Record<TKey, string> = {
   "pricing.multiplier.title": "{provider} için aktarıcı çarpanı",
   "pricing.multiplier.label": "Çarpan",
   "pricing.multiplier.placeholder": "Uygulanmıyor",
-  "pricing.multiplier.help": "İsteğe bağlı, sağlayıcı başına. Bu sağlayıcının otomatik resmi fiyatlarını çarpar; liste fiyatının sabit bir katını alan aktarıcılar içindir. Manuel fiyatlara asla uygulanmaz. Uygulamamak için boş bırakın.",
+  "pricing.multiplier.help": "İsteğe bağlı. Liste fiyatının sabit bir katını alan bir aktarıcı için bu sağlayıcının tüm otomatik fiyatlarını çarpar. Manuel fiyatlar asla çarpılmaz.",
   "pricing.multiplier.save": "Çarpanı kaydet",
   "pricing.multiplier.saving": "Kaydediliyor…",
   "pricing.multiplier.invalid": "0'dan büyük ve en çok 1000 olan bir sayı girin veya boş bırakın.",

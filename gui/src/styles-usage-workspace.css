@@ -335,10 +335,12 @@
   text-overflow: ellipsis;
 }
 
+/* A second line reads as a caption under its figure, like `.usage-cost-note`, not as another figure. */
 .tbl.usage-models-tbl .usage-cell-sub {
   margin-top: 2px;
+  font-family: var(--font-ui);
   font-size: 11px;
-  color: var(--fg-subtle, var(--text-muted));
+  color: var(--ocx-fg-subtle);
 }
 
 /*

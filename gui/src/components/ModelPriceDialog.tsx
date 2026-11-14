@@ -255,7 +255,7 @@ export default function ModelPriceDialog({ model, apiBase, onRefresh, onClose }:
           <code className="mono text-control">{model.namespaced}</code>
         </div>
         <div className="model-price-body">
-        <AutomaticPrice price={model.price} locked={locked} refreshing={aux === "refreshPrices"}
+        <AutomaticPrice id={id} price={model.price} locked={locked} refreshing={aux === "refreshPrices"}
           onAdopt={() => { const adopted = adoptableCost(model.price); if (adopted) void save(adopted); }}
           onRefreshPrices={refreshPrices} />
         <p id={helpId} className="muted small">{t("pricing.override.help")}</p>

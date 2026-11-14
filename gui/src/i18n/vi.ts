@@ -4039,7 +4039,7 @@ export const vi: Record<TKey, string> = {
   "pricing.multiplier.title": "Hệ số relay cho {provider}",
   "pricing.multiplier.label": "Hệ số",
   "pricing.multiplier.placeholder": "Không áp dụng",
-  "pricing.multiplier.help": "Tùy chọn, theo từng provider. Nhân giá chính thức tự động của provider này, dành cho relay tính phí gấp một bội số cố định của giá niêm yết. Không bao giờ áp dụng cho giá thủ công. Để trống nếu không áp dụng.",
+  "pricing.multiplier.help": "Tùy chọn. Nhân mọi giá tự động của nhà cung cấp này, dành cho relay tính phí bằng một bội số cố định của giá niêm yết. Giá thủ công không bao giờ bị nhân.",
   "pricing.multiplier.save": "Lưu hệ số",
   "pricing.multiplier.saving": "Đang lưu…",
   "pricing.multiplier.invalid": "Nhập một số lớn hơn 0 và không quá 1000, hoặc để trống.",

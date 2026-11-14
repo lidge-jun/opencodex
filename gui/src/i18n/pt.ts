@@ -4083,7 +4083,7 @@ export const pt: Record<TKey, string> = {
   "pricing.multiplier.title": "Multiplicador do relay para {provider}",
   "pricing.multiplier.label": "Multiplicador",
   "pricing.multiplier.placeholder": "Não aplicado",
-  "pricing.multiplier.help": "Opcional, por provedor. Multiplica os preços oficiais automáticos deste provedor, para relays que cobram um múltiplo fixo do preço de tabela. Nunca é aplicado a preços manuais. Deixe vazio para não aplicar.",
+  "pricing.multiplier.help": "Opcional. Multiplica todo preço automático deste provedor, para um relay que cobra um múltiplo fixo do preço de tabela. Preços manuais nunca são multiplicados.",
   "pricing.multiplier.save": "Salvar multiplicador",
   "pricing.multiplier.saving": "Salvando…",
   "pricing.multiplier.invalid": "Informe um número maior que 0 e no máximo 1000, ou deixe vazio.",

@@ -4,6 +4,7 @@ import type { ModelRowPrice } from "../pages/models-shared";
 import { PRICE_SOURCE_LABEL, adoptableCost, describePrice } from "./model-price-source";
 
 interface AutomaticPriceProps {
+  id: string;
   price?: ModelRowPrice;
   locked: boolean;
   refreshing: boolean;
@@ -12,12 +13,12 @@ interface AutomaticPriceProps {
 }
 
 /** The row's current automatic price, with adopt-as-manual and a forced catalog refresh. */
-export function AutomaticPrice({ price, locked, refreshing, onAdopt, onRefreshPrices }: AutomaticPriceProps) {
+export function AutomaticPrice({ id, price, locked, refreshing, onAdopt, onRefreshPrices }: AutomaticPriceProps) {
   const t = useT();
   const manual = price?.source === "manual";
   return (
-    <section className="model-price-auto" aria-label={t("pricing.auto.title")}>
-      <h4 className="model-price-band-title">{t("pricing.auto.title")}</h4>
+    <section className="model-price-auto" aria-labelledby={`${id}-auto-title`}>
+      <h4 id={`${id}-auto-title`} className="model-price-band-title">{t("pricing.auto.title")}</h4>
       {manual && <p className="muted small">{t("pricing.auto.manualInEffect")}</p>}
       {!price && <p className="muted small">{t("pricing.auto.none")}</p>}
       {price && !manual && <>

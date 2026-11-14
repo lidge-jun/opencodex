@@ -44,7 +44,11 @@ function UsageListPrice({ row, locale, t }: { row: UsageCostRow; locale: Locale;
   );
   // An excluded request either carried no usage to price or used a model no price tier knows.
   const noUsage = Math.min(excludedRequests, Math.max(0, row.requests - row.measuredRequests));
-  const excludedHelp = t("usageV2.excludedHelp", { noUsage, noPrice: excludedRequests - noUsage });
+  const noPrice = excludedRequests - noUsage;
+  const excludedHelp = [
+    noUsage > 0 ? t("usageV2.excludedNoUsage", { count: noUsage }) : "",
+    noPrice > 0 ? t("usageV2.excludedNoPrice", { count: noPrice }) : "",
+  ].filter(Boolean).join(" ");
   if (row.estimatedCostUsd === undefined) {
     return (
       <>
@@ -250,7 +254,9 @@ export function UsageAppsTable({ apps, locale, t }: { apps?: UsageApp[]; locale:
             ))}</tbody>
           </table>
         </div>
-        <p className="m-0 text-xs text-fg-subtle">{t("usageV2.appBucketsHelp")}</p>
+        {apps.some(app => app.legacyWire || (app.client === "unknown" && !app.name)) && (
+          <p className="m-0 text-xs text-fg-subtle">{t("usageV2.appBucketsHelp")}</p>
+        )}
         <p id={disclaimerId} className="m-0 text-xs text-fg-subtle">{t("usage.cost.disclaimer")}</p>
       </>}
     </UsageWorkspaceSection>
@@ -340,6 +346,7 @@ export function UsageCoveragePanel({ summary, locale, t }: { summary: UsageSumma
             <dt className="flex items-center gap-1.5 text-xs text-fg-subtle" title={coverageHelp[part.key]}>
               <span className={cn("size-2 shrink-0 rounded-[2px]", part.tone)} aria-hidden="true" />
               {part.label}
+              {coverageHelp[part.key] && <span className="sr-only">{coverageHelp[part.key]}</span>}
             </dt>
             <dd className="m-0 text-[17px] font-semibold text-fg tabular-nums">
               {number.format(part.key === "reported" ? summary.reportedRequests : part.count)}
