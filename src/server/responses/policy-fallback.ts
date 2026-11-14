@@ -4,6 +4,7 @@ import { isVerifiedModelNotInPlanResponse } from "../../lib/errors";
 import { isShadowSourceModel } from "../../lib/shadow-call";
 import { isNonReplayableResponse } from "../../lib/upstream-retry";
 import { finishRequestAttempt, type RequestLogContext } from "../request-log";
+import { restoreLocalFailureState, takeLocalFailureState, type LocalFailureState } from "../request-log-failure-detail";
 import { linkRequestSessionLane } from "../request-log-conversation";
 import type { OcxConfig } from "../../types";
 import type { RouteCandidateTrace, RouteDecisionTraceV1 } from "../../routing/trace";
@@ -152,7 +153,7 @@ function isPolicyDecision(trace: RouteDecisionTraceV1 | undefined): trace is Rou
 }
 
 /** Finalize the failed physical attempt so the retry receives a fresh attempt row. */
-function finishFailedPolicyAttempt(logCtx: RequestLogContext, status: number): void {
+function finishFailedPolicyAttempt(logCtx: RequestLogContext, status: number): LocalFailureState {
   const attempt = logCtx.activeAttempt;
   if (attempt) {
     const startedAt = logCtx.activeAttemptStartedAt ?? Date.now();
@@ -175,6 +176,7 @@ function finishFailedPolicyAttempt(logCtx: RequestLogContext, status: number): v
   delete logCtx.affinityModel;
   delete logCtx.cacheAffinityApplicable;
   delete logCtx.terminalSource;
+  return takeLocalFailureState(logCtx);
 }
 
 /**
@@ -302,7 +304,7 @@ export async function handleResponsesWithPolicyFallback(
     // Retain the failed response's log owner until a candidate actually replaces it. This is
     // deliberately shallow: completed attempts and the live spend tracker keep their identity.
     const failureLog = { ...logCtx };
-    finishFailedPolicyAttempt(logCtx, response.status);
+    const failureLocal = finishFailedPolicyAttempt(logCtx, response.status);
     const retryRequest = requestWithCandidate(req, rawBody, next);
     delete policyScope.preparedDestination;
     try {
@@ -327,6 +329,7 @@ export async function handleResponsesWithPolicyFallback(
             if (!Object.hasOwn(failureLog, key)) Reflect.deleteProperty(logCtx, key);
           }
           Object.assign(logCtx, failureLog);
+          restoreLocalFailureState(logCtx, failureLocal);
         } else {
           // Dispatched: only a candidate that was not locally skipped counts as a taken hop.
           try { await response.body?.cancel(); } catch { /* the dispatched candidate replaces the retained failure */ }

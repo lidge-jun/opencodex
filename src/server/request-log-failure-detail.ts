@@ -41,6 +41,30 @@ export function upstreamErrorIsLocal(logCtx: object): boolean {
   return localOnly.has(logCtx);
 }
 
+/** One attempt's local verdict on a reused context: the proxy-text mark and the detail recorded with it. */
+export interface LocalFailureState { local: boolean; detail?: FailureDetail }
+
+/**
+ * End an attempt on a context the next attempt reuses: drop its local verdict so the next attempt's
+ * upstream evidence counts again. Returns the verdict so a rolled-back attempt can restore it.
+ */
+export function takeLocalFailureState(logCtx: { failureDetail?: FailureDetail }): LocalFailureState {
+  if (!localOnly.delete(logCtx)) return { local: false };
+  const detail = logCtx.failureDetail;
+  delete logCtx.failureDetail;
+  return detail ? { local: true, detail } : { local: true };
+}
+
+/** Put back the verdict a rolled-back attempt replaced; a non-local verdict only clears the mark. */
+export function restoreLocalFailureState(logCtx: { failureDetail?: FailureDetail }, state: LocalFailureState): void {
+  if (!state.local) {
+    localOnly.delete(logCtx);
+    return;
+  }
+  localOnly.add(logCtx);
+  if (state.detail) logCtx.failureDetail = state.detail;
+}
+
 const INCOMPLETE_REASONS: Readonly<Record<string, readonly [string, FailureDetailCode]>> = {
   max_output_tokens: ["Output reached the requested token limit (max_output_tokens)", "output_limit"],
   upstream_stall_timeout: ["Upstream stalled: no data for the stall-timeout window (upstream_stall_timeout)", "stall_timeout"],

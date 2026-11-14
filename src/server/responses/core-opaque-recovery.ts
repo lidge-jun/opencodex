@@ -12,6 +12,7 @@ import type { AdapterRequest } from "../../adapters/base";
 import { isNonReplayableResponse } from "../../lib/upstream-retry";
 import type { OcxParsedRequest } from "../../types";
 import type { RequestLogContext } from "../request-log";
+import { takeLocalFailureState } from "../request-log-failure-detail";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { rememberReasoningReplayOpaqueBlobRejection } from "../../responses/reasoning-replay-cache";
 import { resolvedAdapterWire } from "../../responses/continuation-ownership";
@@ -542,6 +543,7 @@ export function prepareOpaqueBlobRecovery(parsed: OcxParsedRequest): void {
 
 
 export function resetStreamedOpaqueBlobLogContext(logCtx: RequestLogContext): void {
+  takeLocalFailureState(logCtx);
   delete logCtx.upstreamError;
   delete logCtx.terminalHttpStatus;
   delete logCtx.terminalErrorCode;

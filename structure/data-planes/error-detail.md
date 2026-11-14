@@ -21,7 +21,13 @@ through the disk reader. A row keeps:
   none, and a stored condition is kept only under the same rules. Text set through
   `recordLocalFailureDetail` is not upstream evidence unless the caller passes `upstreamEvidence: true`
   (the Messages passthrough restating an upstream status and closed type); `upstreamErrorIsLocal` keeps
-  it out of the final row's evidence. The Messages passthrough classifies the condition where it parses the
+  it out of the final row's evidence, including the upstream code/type diagnostics of the failed frame the
+  proxy wrote itself. The web-search loop records its own header and body deadlines this way
+  (`header_timeout`, `generation_timeout`), so a deadline the proxy enforced never reads as a provider
+  failure. A context reused across attempts drops the previous attempt's local verdict at the attempt
+  boundary (`takeLocalFailureState` in policy fallback, compaction recovery and the opaque-blob reset) and
+  puts it back only when that attempt is rolled back without dispatching (`restoreLocalFailureState`).
+  The Messages passthrough classifies the condition where it parses the
   upstream error and stores only the member on the context (`upstreamCondition`), so a native Anthropic
   overflow is recorded as `context_overflow`. `classifyUpstreamCondition` reads status, bounded structured
   tokens and, for 4xx only, fixed lowercase keyword sets: 401 is authoritative, structured tokens come next
