@@ -126,9 +126,11 @@ const SOURCES: readonly SourceDef[] = [
   },
 ];
 
+/** A running fetch; a partial one keeps its parsed feed so a joining partial caller can merge its keys. */
+interface Flight { full: boolean; promise: Promise<CatalogSourceStatus>; parsed?: ReadonlyMap<string, Row> }
 interface State {
   snapshots: Map<CatalogPriceSource, Snapshot>;
-  inFlight: Map<CatalogPriceSource, { full: boolean; promise: Promise<CatalogSourceStatus> }>;
+  inFlight: Map<CatalogPriceSource, Flight>;
   retryAfter: Map<CatalogPriceSource, number>;
   lastMissFetch: Map<CatalogPriceSource, number>;
   cooldown: Map<string, number>;
@@ -230,6 +232,7 @@ async function flushMisses(dir: string, s: State): Promise<void> {
   s.missScheduled = false;
   const now = Date.now();
   let fetched = false;
+  let failed = false;
   for (const def of SOURCES) {
     const snap = s.snapshots.get(def.id);
     const due = !snap || now - snap.fetchedAt >= PRICE_CATALOG_TTL_MS;
@@ -238,11 +241,14 @@ async function flushMisses(dir: string, s: State): Promise<void> {
     if (status.ok) {
       fetched = true;
       if (!due) s.lastMissFetch.set(def.id, Date.now());
-    }
+    } else failed = true;
   }
   if (!fetched) return;
-  const until = Date.now() + PRICE_CATALOG_MISS_COOLDOWN_MS;
-  for (const key of keys) if (!lookupCatalogPrice(key, dir)) s.cooldown.set(key, until);
+  // A source that failed never answered for these keys: leave them to its short failure backoff.
+  if (!failed) {
+    const until = Date.now() + PRICE_CATALOG_MISS_COOLDOWN_MS;
+    for (const key of keys) if (!lookupCatalogPrice(key, dir)) s.cooldown.set(key, until);
+  }
   persist(dir, s);
 }
 
@@ -268,40 +274,52 @@ function statusOf(s: State, def: SourceDef): CatalogSourceStatus {
 
 type Mode = { full: true; force?: boolean } | { full: false; keys: ReadonlySet<string> };
 
+/** Merge only `keys` from a fetched feed into the source's snapshot; true when a row was added. */
+function mergeKeys(s: State, def: SourceDef, parsed: ReadonlyMap<string, Row>, keys: ReadonlySet<string>, at: number): boolean {
+  const before = s.snapshots.get(def.id);
+  const next = new Map(before?.prices ?? []);
+  let added = 0;
+  for (const key of keys) {
+    const row = parsed.get(key);
+    if (row && !next.has(key)) {
+      next.set(key, { ...row, fetchedAt: at });
+      added++;
+    }
+  }
+  if (!added) return false;
+  // No snapshot yet: fetchedAt 0 keeps the source due for its full daily refresh.
+  s.snapshots.set(def.id, { fetchedAt: before?.fetchedAt ?? 0, prices: next });
+  bumpPriceCatalogVersion();
+  return true;
+}
+
 async function refreshSource(dir: string, s: State, def: SourceDef, mode: Mode): Promise<CatalogSourceStatus> {
   const flight = s.inFlight.get(def.id);
   if (flight) {
     const joined = await flight.promise;
-    if (flight.full || !mode.full) return joined;
+    if (flight.full) return joined;
+    if (!mode.full) {
+      // The flight merged only its own keys; merge this caller's from the same feed.
+      if (flight.parsed && mergeKeys(s, def, flight.parsed, mode.keys, Date.now())) persist(dir, s);
+      return flight.parsed ? statusOf(s, def) : joined;
+    }
   }
   const now = Date.now();
   const snap = s.snapshots.get(def.id);
   const forced = mode.full && mode.force === true;
   if (!forced && now < (s.retryAfter.get(def.id) ?? 0)) return { ok: false, error: "backoff" };
   if (mode.full && !forced && snap && now - snap.fetchedAt < PRICE_CATALOG_TTL_MS) return statusOf(s, def);
+  const entry: Flight = { full: mode.full, promise: undefined as unknown as Promise<CatalogSourceStatus> };
   const promise = (async (): Promise<CatalogSourceStatus> => {
     try {
       const parsed = await fetchFeed(def);
       const at = Date.now();
-      const before = s.snapshots.get(def.id);
       if (mode.full) {
         s.snapshots.set(def.id, { fetchedAt: at, prices: parsed });
         bumpPriceCatalogVersion();
       } else {
-        const next = new Map(before?.prices ?? []);
-        let added = 0;
-        for (const key of mode.keys) {
-          const row = parsed.get(key);
-          if (row && !next.has(key)) {
-            next.set(key, { ...row, fetchedAt: at });
-            added++;
-          }
-        }
-        // No snapshot yet: fetchedAt 0 keeps the source due for its full daily refresh.
-        if (added) {
-          s.snapshots.set(def.id, { fetchedAt: before?.fetchedAt ?? 0, prices: next });
-          bumpPriceCatalogVersion();
-        }
+        entry.parsed = parsed;
+        mergeKeys(s, def, parsed, mode.keys, at);
       }
       persist(dir, s);
       return statusOf(s, def);
@@ -312,7 +330,8 @@ async function refreshSource(dir: string, s: State, def: SourceDef, mode: Mode):
       return { ok: false, error: code };
     }
   })();
-  s.inFlight.set(def.id, { full: mode.full, promise });
+  entry.promise = promise;
+  s.inFlight.set(def.id, entry);
   try { return await promise; } finally { if (s.inFlight.get(def.id)?.promise === promise) s.inFlight.delete(def.id); }
 }
 

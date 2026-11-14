@@ -2,6 +2,7 @@ import { afterEach, beforeEach, setSystemTime } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { settleBackgroundWork } from "../../src/lib/background-work";
 import { resetPriceCatalogForTests, setPriceCatalogFetchForTests } from "../../src/usage/price-catalog";
 import { refreshUserCostOverlays } from "../../src/usage/user-cost-overlays";
 import { removeTreeWithRetry } from "./remove-tree";
@@ -106,7 +107,11 @@ export function installCatalogSandbox(): { readonly dir: string; readonly feeds:
     feeds = feedFetch();
     setPriceCatalogFetchForTests(feeds.fetch);
   });
-  afterEach(() => {
+  afterEach(async () => {
+    // A miss queued by the test flushes on a zero-delay timer; let it start and finish while the
+    // test's fetch seam is still installed, so it never reaches the next test's mock or the network.
+    await nextTick();
+    await settleBackgroundWork();
     setSystemTime();
     resetPriceCatalogForTests();
     refreshUserCostOverlays({ port: 0, defaultProvider: "none", providers: {} });

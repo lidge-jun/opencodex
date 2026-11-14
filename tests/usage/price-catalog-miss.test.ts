@@ -146,6 +146,50 @@ describe("price catalog miss path", () => {
     expect(lookupCatalogPrice("zephyr-flash-2")?.source).toBe("models-dev");
   });
 
+  test("a failed source does not cool down a key the other source lacked", async () => {
+    const start = Date.now();
+    sandbox.feeds.failing.add(MODELS_DEV_URL);
+    resolveCatalogPrice("late-model-6");
+    await drainMisses();
+    expect(lookupCatalogPrice("late-model-6")).toBeNull();
+    sandbox.feeds.failing.clear();
+    sandbox.feeds.serve(MODELS_DEV_URL, { deepseek: { models: { "late-model-6": { cost: { input: 2, output: 3 } } } } });
+    setSystemTime(start + 120_000);
+    resolveCatalogPrice("late-model-6");
+    await drainMisses();
+    expect(lookupCatalogPrice("late-model-6")?.source).toBe("models-dev");
+  });
+
+  test("a miss that joins another key's held fetch still merges its own key", async () => {
+    await refreshPriceCatalogs();
+    sandbox.feeds.serve(MODELS_DEV_URL, { deepseek: { models: {
+      "late-model-a": { cost: { input: 2, output: 3 } },
+      "late-model-b": { cost: { input: 4, output: 5 } },
+    } } });
+    const release = sandbox.feeds.hold();
+    resolveCatalogPrice("late-model-a");
+    await nextTick();
+    resolveCatalogPrice("late-model-b");
+    await nextTick();
+    release();
+    await settleBackgroundWork();
+    expect(lookupCatalogPrice("late-model-a")?.cost4).toMatchObject({ input: 2, output: 3 });
+    expect(lookupCatalogPrice("late-model-b")?.cost4).toMatchObject({ input: 4, output: 5 });
+    expect(JSON.parse(readFileSync(join(sandbox.dir, "price-catalog-cache.json"), "utf8")).missCooldown ?? {}).not.toHaveProperty("late-model-b");
+  });
+
+  test("a memoized miss retries through resolveMatchedPrice after the cooldown", async () => {
+    const start = Date.now();
+    await refreshPriceCatalogs();
+    expect(resolveMatchedPrice("acme-relay", "late-model-7")).toBeNull();
+    await drainMisses();
+    sandbox.feeds.serve(MODELS_DEV_URL, { deepseek: { models: { "late-model-7": { cost: { input: 2, output: 3 } } } } });
+    setSystemTime(start + PRICE_CATALOG_MISS_COOLDOWN_MS + 60_000);
+    expect(resolveMatchedPrice("acme-relay", "late-model-7")).toBeNull();
+    await drainMisses();
+    expect(resolveMatchedPrice("acme-relay", "late-model-7")).toMatchObject({ source: "models-dev", cost4: { input: 2, output: 3 } });
+  });
+
   test("without an injected fetch the test environment never reaches the network", async () => {
     setPriceCatalogFetchForTests(null);
     resolveCatalogPrice("zephyr-flash-2");
