@@ -7,11 +7,39 @@
  * serving-thread scan is needed, and operational failures only delay retry.
  */
 
+import { statSync } from "node:fs";
 import { RebuildWorkerJob } from "./rebuild-job";
 
 export const REQUEST_HISTORY_INTEGRITY_INTERVAL_MS = 5 * 60_000;
 export const REQUEST_HISTORY_INTEGRITY_FAILURE_COOLDOWN_MS = 30_000;
 export const REQUEST_HISTORY_INTEGRITY_CHECK_TIMEOUT_MS = 30_000;
+export const REQUEST_HISTORY_INTEGRITY_CHECK_MAX_TIMEOUT_MS = 15 * 60_000;
+/**
+ * quick_check reads every index page, so its cost scales with file size. Assume
+ * a conservative sustained scan rate well below observed throughput; the 30 s
+ * constant stays the floor for the small indexes it was chosen for.
+ */
+const REQUEST_HISTORY_INTEGRITY_CHECK_MIN_SCAN_BYTES_PER_SECOND = 32 * 1024 * 1024;
+
+function indexFileSizeBytes(path: string): number | undefined {
+  try {
+    return statSync(path).size;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Per-generation check bound: the 30 s floor, scaled by index size, capped. */
+export function requestHistoryIntegrityCheckTimeoutMs(indexBytes: number | undefined): number {
+  if (indexBytes === undefined || !Number.isFinite(indexBytes) || indexBytes <= 0) {
+    return REQUEST_HISTORY_INTEGRITY_CHECK_TIMEOUT_MS;
+  }
+  const scaledMs = Math.ceil(indexBytes / REQUEST_HISTORY_INTEGRITY_CHECK_MIN_SCAN_BYTES_PER_SECOND * 1000);
+  return Math.min(
+    REQUEST_HISTORY_INTEGRITY_CHECK_MAX_TIMEOUT_MS,
+    Math.max(REQUEST_HISTORY_INTEGRITY_CHECK_TIMEOUT_MS, scaledMs),
+  );
+}
 
 type IntegrityJob = Pick<RebuildWorkerJob, "check" | "dispose" | "afterExit">;
 
@@ -38,6 +66,7 @@ interface Generation {
   corrupt: boolean;
   nextCheckAt: number;
   failure: { error: unknown } | null;
+  timeoutMs: number;
 }
 
 interface ActiveCheck {
@@ -59,7 +88,7 @@ export class RequestHistoryIntegrityMonitor {
   private readonly now: () => number;
   private readonly intervalMs: number;
   private readonly failureCooldownMs: number;
-  private readonly checkTimeoutMs: number;
+  private readonly checkTimeoutMs: number | undefined;
   private readonly scheduleTimeout: (callback: () => void, ms: number) => () => void;
   private current: Generation | null = null;
   private active: ActiveCheck | null = null;
@@ -70,7 +99,7 @@ export class RequestHistoryIntegrityMonitor {
     this.now = options.now ?? Date.now;
     this.intervalMs = options.intervalMs ?? REQUEST_HISTORY_INTEGRITY_INTERVAL_MS;
     this.failureCooldownMs = options.failureCooldownMs ?? REQUEST_HISTORY_INTEGRITY_FAILURE_COOLDOWN_MS;
-    this.checkTimeoutMs = options.checkTimeoutMs ?? REQUEST_HISTORY_INTEGRITY_CHECK_TIMEOUT_MS;
+    this.checkTimeoutMs = options.checkTimeoutMs;
     this.scheduleTimeout = options.scheduleTimeout ?? ((callback, ms) => {
       const timer = setTimeout(callback, ms);
       return () => clearTimeout(timer);
@@ -80,7 +109,10 @@ export class RequestHistoryIntegrityMonitor {
   inspect(handle: object, path: string): RequestHistoryIntegrityState {
     if (this.current?.handle !== handle || this.current.path !== path) {
       this.quiesce();
-      this.current = { handle, path, verified: false, corrupt: false, nextCheckAt: -Infinity, failure: null };
+      this.current = {
+        handle, path, verified: false, corrupt: false, nextCheckAt: -Infinity, failure: null,
+        timeoutMs: this.generationTimeoutMs(path),
+      };
     }
     const generation = this.current;
     if (generation.corrupt) return { state: "corrupt" };
@@ -115,7 +147,12 @@ export class RequestHistoryIntegrityMonitor {
     this.current = {
       handle, path, verified: true, corrupt: false,
       nextCheckAt: this.now() + this.intervalMs, failure: null,
+      timeoutMs: this.generationTimeoutMs(path),
     };
+  }
+
+  private generationTimeoutMs(path: string): number {
+    return this.checkTimeoutMs ?? requestHistoryIntegrityCheckTimeoutMs(indexFileSizeBytes(path));
   }
 
   /**
@@ -166,7 +203,7 @@ export class RequestHistoryIntegrityMonitor {
   private async run(check: ActiveCheck, job: IntegrityJob, cancelled: Promise<CheckOutcome>, release: () => void): Promise<void> {
     let expire!: (outcome: CheckOutcome) => void;
     const timeout = new Promise<CheckOutcome>(resolve => { expire = resolve; });
-    const clear = this.scheduleTimeout(() => expire({ kind: "timeout", error: new Error("request-history integrity check timed out") }), this.checkTimeoutMs);
+    const clear = this.scheduleTimeout(() => expire({ kind: "timeout", error: new Error("request-history integrity check timed out") }), check.generation.timeoutMs);
     const observed = Promise.resolve().then(async (): Promise<CheckOutcome> => {
       if (check.cancelled) return { kind: "cancelled" };
       try {
