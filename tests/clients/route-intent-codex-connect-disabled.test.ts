@@ -13,6 +13,7 @@ function scenario(setup = "", testRunner = false, after = "") {
   mkdirSync(join(home, ".codex"));
   try {
     const script = `
+      import './tests/helpers/windows-acl-process-stubs';
       import { writeFileSync, readFileSync, existsSync } from 'node:fs';
       import { join } from 'node:path';
       import { getDefaultConfig, saveConfig, loadConfig } from './src/config';
@@ -66,8 +67,8 @@ function scenario(setup = "", testRunner = false, after = "") {
     let args = ["--eval", script];
     if (testRunner) {
       const fixturePath = join(home, "post-publication.test.ts");
-      const resolved = script.replace(/from '(\.\/src\/[^']+)'/g,
-        (_match, relative: string) => `from ${JSON.stringify(join(repoRoot(), relative))}`);
+      const resolved = script.replace(/(from |import )'(\.\/(?:src|tests)\/[^']+)'/g,
+        (_match, keyword: string, relative: string) => `${keyword}${JSON.stringify(join(repoRoot(), relative))}`);
       const start = resolved.indexOf("      const configPath =");
       writeFileSync(fixturePath, `import { test } from "bun:test";\n${resolved.slice(0, start)}\n`
         + `test("isolated enrollment", async () => {\n${resolved.slice(start)}\n}, ${SPAWN_BUDGET_MS - 5_000});\n`);
