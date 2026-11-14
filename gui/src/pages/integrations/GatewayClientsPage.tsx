@@ -203,7 +203,7 @@ export default function GatewayClientsPage({ apiBase, active }: { apiBase: strin
       {resource.state.showError && <Notice tone="err">{t("gatewayClients.unavailable")}</Notice>}
       {!clients && !resource.state.showError && <DataSurfaceSkeleton label={t("gatewayClients.loading")} rows={3} />}
       {clients?.map(client => (
-        <GatewayClientCard key={client.id} apiBase={apiBase} client={client} onSettled={() => resource.refresh()} />
+        <GatewayClientCard key={`${apiBase}:${client.id}`} apiBase={apiBase} client={client} onSettled={() => resource.refresh()} />
       ))}
     </section>
   );
