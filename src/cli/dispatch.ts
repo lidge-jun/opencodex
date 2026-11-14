@@ -420,6 +420,8 @@ const commandRunners: Record<string, CommandRunner> = {
     return await cmdV2(deps.args.slice(1), { runtimeApi: { findLiveProxy: deps.findLiveProxy } }, async () => (await deps.findLiveProxy())?.port);
   },
   connect: async deps => {
+    const { isGatewayClientOperand, runGatewayClientFromArgs } = await import("./gateway-client-command");
+    if (isGatewayClientOperand(deps.args[1])) return await runGatewayClientFromArgs("connect", deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
     const { handleConnectCommand } = await import("./connect");
     return await handleConnectCommand(deps.args.slice(1));
   },
@@ -432,6 +434,8 @@ const commandRunners: Record<string, CommandRunner> = {
     return await runRemoteWorkspaceCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
   },
   disconnect: async deps => {
+    const { isGatewayClientOperand, runGatewayClientFromArgs } = await import("./gateway-client-command");
+    if (isGatewayClientOperand(deps.args[1])) return await runGatewayClientFromArgs("disconnect", deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
     const { handleDisconnectCommand } = await import("./connect");
     const code = await handleDisconnectCommand(deps.args.slice(1));
     // Token recovery refuses any live client runtime and leaves nothing to restart.

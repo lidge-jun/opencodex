@@ -746,6 +746,11 @@ async function handleJournalDelete(ctx: ManagementContext): Promise<Response> {
 }
 
 export async function handleIntegrationRoutes(ctx: ManagementContext): Promise<Response | null> {
+  // The Antigravity app and agy CLI connectors are only read by their dashboard tab and CLI; load on demand.
+  if (ctx.url.pathname === "/api/gateway-clients" || ctx.url.pathname.startsWith("/api/gateway-clients/")) {
+    const { handleGatewayClientRoutes } = await import("./gateway-client-routes");
+    return handleGatewayClientRoutes(ctx);
+  }
   // Aside delegates before the ordinary client handler. Reject unsupported intent before that
   // delegation can enumerate profiles, load catalogs, or write a different preference.
   let asideBody: unknown;

@@ -339,6 +339,10 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   // server/management/cursor-integration-routes
   { method: "GET", path: "/api/native-integrations/cursor", module: "server/management/cursor-integration-routes", mutates: false },
   { method: "GET", path: "/api/native-integrations/cursor/local-installer", module: "server/management/cursor-integration-routes", mutates: false },
+  // server/management/gateway-client-routes
+  { method: "GET", path: "/api/gateway-clients", module: "server/management/gateway-client-routes", mutates: false },
+  { method: "POST", path: "/api/gateway-clients/{id}/connect", module: "server/management/gateway-client-routes", mutates: true, mechanism: "regex" },
+  { method: "POST", path: "/api/gateway-clients/{id}/disconnect", module: "server/management/gateway-client-routes", mutates: true, mechanism: "regex" },
   // server/management/oauth-account-routes
   { method: "DELETE", path: "/api/keys", module: "server/management/oauth-account-routes", mutates: true },
   { method: "DELETE", path: "/api/keys/rotate", module: "server/management/oauth-account-routes", mutates: true },
