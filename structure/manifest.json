@@ -542,6 +542,19 @@
       ]
     },
     {
+      "path": "data-planes/gemini-inbound.md",
+      "tier": 3,
+      "title": "Gemini-Compatible Inbound",
+      "scope": "Gemini-shaped models/generateContent/streamGenerateContent routes translated onto Chat Completions, the x-goog-api-key and ?key= credential move, the native error shape, SSE and JSON-array streaming, and the Chat bridge shared with the Ollama inbound.",
+      "documents": [
+        "src/server/gemini-inbound.ts",
+        "src/server/gemini-native-paths.ts",
+        "src/server/native-chat-bridge.ts",
+        "src/server/index/gemini-routes.ts",
+        "src/protocols/codecs/gemini.ts"
+      ]
+    },
+    {
       "path": "data-planes/error-detail.md",
       "tier": 3,
       "title": "Proxy-Owned Error Detail",

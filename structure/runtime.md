@@ -215,7 +215,7 @@ Enabled startup retains separate fresh ownership decisions. Explicit `sync` and 
 The data-loopback socket serves a fixed data-plane allowlist: Responses and its compact sibling,
 the native search relay, the standalone Images POSTs, keyed file/stream transcription, `GET /v1/models`, the realtime voice shapes,
 and the Anthropic and OpenAI chat wires the host's own local clients speak — `POST /v1/messages`,
-`POST /v1/messages/count_tokens`, and `POST /v1/chat/completions`. It never serves `/api/*`,
+`POST /v1/messages/count_tokens`, and `POST /v1/chat/completions` — plus the Gemini wire, each path with its own method. It never serves `/api/*`,
 `/healthz`, `/readyz`, or GUI routes, so local management discovery has to use an authenticated
 surface with a management credential.
 The hub-management socket is enabled only by `runtimeRole: "hub"` plus
