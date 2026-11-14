@@ -738,7 +738,7 @@ describe("AUTH_MATRIX is true of the running server", () => {
           // from routing and the assertions below would be testing the method guard rather
           // than admission. /v1/catalog joined this set in #809.
           const isGet = row.endpoint === "/v1/models" || row.endpoint === "/v1/catalog"
-            || row.endpoint === "/v1/hub-state" || row.endpoint === "/v1/usage";
+            || row.endpoint === "/v1/hub-state" || row.endpoint === "/v1/usage" || row.endpoint === "/v1/usage/live";
           const live = row.endpoint === "/v1/live" || row.endpoint === "/v1/realtime/calls";
           const audio = row.endpoint === "/v1/audio/transcriptions" || live ? new FormData() : null;
           if (audio) {

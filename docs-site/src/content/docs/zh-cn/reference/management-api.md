@@ -227,6 +227,20 @@ Aside 配置档的变更在这种情况下仍会保存一件事：确认之后�
 
 可靠的初始模型列表尚未确认时，有效的 `PUT /api/selected-models` 和 `PUT /api/model-presets` 请求也会返回 HTTP 409 和代码 `initial_model_selection_pending`。请使用 `GET /api/models` 等方式刷新模型列表，成功后再重试。
 
+### 实时指标（`GET /v1/usage/live`）
+
+只读的数据平面端点，返回最近一次已完成请求的输出速度、缓存命中率和上下文占用，例如供 Codex 桌面端用户脚本在输入框旁显示。准入与 `/v1/models` 完全相同：回环绑定无需凭据，否则需要数据密钥（`x-opencodex-api-key`、`Authorization: Bearer` 或 `x-api-key`），永远不接受管理令牌。Codex 桌面端页面来源 `app://-` 仅可读取这一条路由（及其预检），其他数据平面路由的来源规则不变。
+
+查询参数：`client=codex|claude|other` 限定客户端类别，`conversation=<id>` 限定单个会话；会话过滤接受原始 id、日志中的摘要或 `codex://threads/<id>` 链接，响应不会回显它。响应体为 `{ "latest": Meter | null, "byClient": { "codex"?: Meter, "claude"?: Meter, "other"?: Meter }, "generatedAt": <毫秒> }`。`Meter` 含 `speed { value, reason }`、`outputTokens`、`generationMs`、`cache { readTokens, inputTokens, percent, reason }`、`context { usedTokens, limitTokens, percent, reason }`、`model`、`provider`、`client`、`timestamp`，只有数字、模型与 provider 名称和原因码。自动审批审查（`codex-auto-review`）不会被报告。
+
+无法测量时对应值为 `null`（显示为 `--`），绝不猜测：
+
+| 值 | 为 `null` 的情况 |
+| --- | --- |
+| `speed` | 请求失败、被取消或未完整结束；用量缺失或为估算值；缺少输出 token；生成窗口未记录、短于 1 秒或不一致。速度是输出 token 除以生成窗口，而不是墙钟时间。 |
+| `cache.percent` | 用量缺失或为估算值、缺少输入数，或缓存读取仅存在于线路层。 |
+| `context.percent` | 用量缺失或为估算值，或该模型的上下文窗口不在已持久化的 Codex 目录中（`context.reason` 为 `limit_unknown`）。 |
+
 ### OAuth 账户、provider 密钥和数据平面密钥
 
 | 方法和路径 | 用途 | 典型错误 |

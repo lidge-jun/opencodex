@@ -213,7 +213,7 @@ Enabled startup retains separate fresh ownership decisions. Explicit `sync` and 
 
 `startServer` composes up to four sockets in one synchronous startup transaction: the public data listener, optional unauthenticated data-loopback and hub-management listeners, and the optional `hub-link` listener, which opens only for a recorded link and persists its concrete `127.0.0.1:<listenerPort>`. HTTP Responses/Messages apply the [caller header contract](data-planes/inbound-compat.md#http-caller-conversation-identity) before turn admission and dispatch. Linked-machine data uses the [connection-bound relay contract](remote-link.md#connection-bound-relay-authentication); client-local credentials and routing policy remain unchanged.
 The data-loopback socket serves a fixed data-plane allowlist: Responses and its compact sibling,
-the native search relay, the standalone Images POSTs, keyed file/stream transcription, `GET /v1/models`, the realtime voice shapes,
+the native search relay, the standalone Images POSTs, keyed file/stream transcription, `GET /v1/models`, `GET /v1/usage/live`, the realtime voice shapes,
 and the Anthropic and OpenAI chat wires the host's own local clients speak — `POST /v1/messages`,
 `POST /v1/messages/count_tokens`, and `POST /v1/chat/completions`. It never serves `/api/*`,
 `/healthz`, `/readyz`, or GUI routes, so local management discovery has to use an authenticated
