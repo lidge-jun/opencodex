@@ -24,8 +24,8 @@ const STATUS_KEYS: Record<"accepted" | "rejected" | "inconclusive", TKey> = {
 
 /**
  * What a "Test it" press is doing or found, under the member's row. A metered provider asks first
- * (with the number of requests), an inconclusive baseline changes nothing, and context is never
- * probed: it comes from the model name.
+ * (with the number of requests), an inconclusive baseline changes nothing, and a finished test notes
+ * that context is never probed: it comes from the model name.
  */
 export function ProbeResult({ state, onConfirm, onDismiss }: { state: ProbeState; onConfirm: () => void; onDismiss: () => void }) {
   const t = useT();
@@ -81,11 +81,11 @@ export function ProbeResult({ state, onConfirm, onDismiss }: { state: ProbeState
   return (
     <div className="rb-probe">
       {body}
-      <p className="rb-member-note">{t("routeBoard.probe.contextNote")}</p>
+      {state.phase === "settled" && state.outcome.kind === "done" && <p className="rb-member-note">{t("routeBoard.probe.contextNote")}</p>}
       {!asking && state.phase === "settled" && (
         <div className="rb-member-buttons">
           <span className="rb-editor-spacer" />
-          <button type="button" className="btn btn-ghost btn-sm" onClick={onDismiss}>{t("routeBoard.probe.close")}</button>
+          <button type="button" className="btn btn-ghost btn-sm" onClick={onDismiss}>{t("common.close")}</button>
         </div>
       )}
     </div>

@@ -367,7 +367,7 @@ describe("Combos overview page", () => {
     // The page's combos set no cooldownWaitPolicy, so the mark is shown as not in effect.
     expect(alphaRow.querySelector(".rb-mark")?.classList.contains("rb-mark--inert")).toBe(true);
     expect(alphaRow.querySelector(".rb-quota")?.textContent).toContain("pay per use");
-    expect(alphaRow.textContent).toContain("ctx 200K");
+    expect(alphaRow.textContent).toContain("context 200K");
   });
 
   test("picking a strategy saves the normal PUT body and leaves lastResort to the server", async () => {
@@ -539,7 +539,7 @@ describe("Combos overview page", () => {
     await flush();
     const dialog = editor.querySelector<HTMLElement>("[role=alertdialog]")!;
     expect(dialog.textContent).toContain("sends 4 very small requests");
-    expect(editor.textContent).toContain("Context is inferred from the model name, not measured.");
+    expect(editor.textContent).not.toContain("Context is inferred from the model name, not measured.");
     await act(async () => { button(dialog, "Run the test").click(); });
     await flush();
     expect(calls.map(call => call.body)).toEqual([
@@ -550,6 +550,7 @@ describe("Combos overview page", () => {
     expect(results).toContain("Images: accepted");
     expect(results).toContain("accepted: low · high; refused: max");
     expect(results).toContain("saved effort levels: low · high");
+    expect(results).toContain("Context is inferred from the model name, not measured.");
   });
 
   test("Test it: a failed baseline changes nothing, a busy provider says so, an inapplicable one greys the button", async () => {

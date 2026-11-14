@@ -20,7 +20,7 @@ function windowName(window: QuotaWindowView, t: TFn): string {
 export function QuotaLine({ quotas, labels }: { quotas: readonly ProviderQuotaLine[]; labels?: ReadonlyMap<string, string> }) {
   const t = useT();
   return (
-    <p className="rb-quota">
+    <span className="rb-quota">
       {quotas.map((line) => {
         const name = labels?.get(line.provider) ?? formatProviderDisplayName(line.provider, t);
         const quota = line.quota;
@@ -47,6 +47,6 @@ export function QuotaLine({ quotas, labels }: { quotas: readonly ProviderQuotaLi
           </span>
         );
       })}
-    </p>
+    </span>
   );
 }

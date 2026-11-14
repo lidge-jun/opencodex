@@ -526,7 +526,7 @@ export default function Combos({
           : {}),
       });
       // Only the channel editor sends `lastResort`; every other save omits it and the server keeps it.
-      // Capability fields (T4c) go out only when the operator changed them in the channel editor.
+      // Capability fields go out only when the operator changed them in the channel editor.
       const wire = channels
         ? { ...body, combo: { ...body.combo, targets: channelTargetsForPut(body.combo.targets, channels), ...overview?.capability } }
         : body;

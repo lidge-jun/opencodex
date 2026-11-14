@@ -6,7 +6,7 @@ import { ProviderIcon } from "../provider-workspace/ProviderRail";
 /**
  * "Exclude a provider…" under the suggestions' title, after Magpie's 排除供应商 on its found
  * groups: a text button naming who is left out opens a list of providers, each ticked or not.
- * A ticked provider joins no suggested combo; unticking restores it. Saved to config.json.
+ * A ticked provider joins no suggested combo; unticking brings it back. Saved to config.json.
  */
 export function SuggestionExcludeProviders({
   providers,
@@ -61,11 +61,6 @@ export function SuggestionExcludeProviders({
                     <ProviderIcon name={name} cls="provider-icon provider-icon-sm" />
                     <span>{label(name)}</span>
                   </label>
-                  {on && (
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => void toggle(name, false)}>
-                      {t("comboSuggest.exclude.restore")}
-                    </button>
-                  )}
                 </li>
               );
             })}

@@ -175,25 +175,15 @@ function SuggestionCard({
           ))}
         </span>
         <span className="rb-row-body">
-          {suggestion.kind === "create" ? (
-            <>
-              <span className="rb-row-title">
-                <strong>{suggestion.comboId}</strong>
-                <span className="rb-suggest-note">{t("comboSuggest.servedBy", { count: suggestion.members.length })}</span>
-              </span>
-              <MemberChips members={suggestion.members} />
-            </>
-          ) : (
-            <>
-              <span className="rb-row-title">
-                <strong>{suggestion.comboId}</strong>
-                <span className="rb-suggest-note">
-                  {t("comboSuggest.canAdd", { providers: providers.map((provider) => formatProviderDisplayName(provider, t)).join(", ") })}
-                </span>
-              </span>
-              <MemberChips members={suggestion.members} />
-            </>
-          )}
+          <span className="rb-row-title">
+            <strong>{suggestion.comboId}</strong>
+            <span className="rb-suggest-note">
+              {suggestion.kind === "create"
+                ? t("comboSuggest.servedBy", { count: suggestion.members.length })
+                : t("comboSuggest.canAdd", { providers: providers.map((provider) => formatProviderDisplayName(provider, t)).join(", ") })}
+            </span>
+          </span>
+          <MemberChips members={suggestion.members} />
         </span>
         <span className="rb-suggest-actions">
           {suggestion.kind === "create" ? (
@@ -249,7 +239,9 @@ function SuggestionDraft({
       </label>
       <p className="rb-suggest-hint">{t("comboSuggest.draft.orderHint")}</p>
       <ol className="rb-suggest-members">
-        {members.map((member, index) => (
+        {members.map((member, index) => {
+          const name = `${formatProviderDisplayName(member.provider, t)} ${member.model}`;
+          return (
           <li key={`${member.provider}/${member.model}`}>
             <ProviderIcon name={member.provider} cls="provider-icon provider-icon-sm" />
             <span className="rb-suggest-member-name">{formatProviderDisplayName(member.provider, t)}</span>
@@ -259,19 +251,20 @@ function SuggestionDraft({
               <span className="rb-suggest-note">{t("comboSuggest.draft.left", { percent: Math.round(member.remainingPercent) })}</span>
             )}
             <span className="rb-suggest-move">
-              <button type="button" className="btn btn-ghost btn-sm rb-suggest-icon-btn" disabled={index === 0} aria-label={t("comboSuggest.draft.up")}
+              <button type="button" className="btn btn-ghost btn-sm rb-suggest-icon-btn" disabled={index === 0} aria-label={t("routeBoard.edit.moveUp", { name })}
                 onClick={() => setMembers((list) => moveChannel(list, index, index - 1))}>↑</button>
-              <button type="button" className="btn btn-ghost btn-sm rb-suggest-icon-btn" disabled={index === members.length - 1} aria-label={t("comboSuggest.draft.down")}
+              <button type="button" className="btn btn-ghost btn-sm rb-suggest-icon-btn" disabled={index === members.length - 1} aria-label={t("routeBoard.edit.moveDown", { name })}
                 onClick={() => setMembers((list) => moveChannel(list, index, index + 1))}>↓</button>
-              <button type="button" className="btn btn-ghost btn-sm rb-suggest-icon-btn" disabled={members.length <= 1} aria-label={t("comboSuggest.draft.remove")}
+              <button type="button" className="btn btn-ghost btn-sm rb-suggest-icon-btn" disabled={members.length <= 1} aria-label={t("routeBoard.edit.remove", { name })}
                 onClick={() => setMembers((list) => list.filter((_, at) => at !== index))}>×</button>
             </span>
           </li>
-        ))}
+          );
+        })}
       </ol>
       <div className="rb-suggest-draft-actions">
         <span className="rb-suggest-note">{t("comboSuggest.draft.strategy")}</span>
-        <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={onCancel}>{t("comboSuggest.draft.cancel")}</button>
+        <button type="button" className="btn btn-ghost btn-sm" disabled={busy} onClick={onCancel}>{t("common.cancel")}</button>
         <button type="button" className="btn btn-primary btn-sm" disabled={busy || !idOk}
           onClick={() => onSave(suggestionDraft(comboId.trim(), members))}>
           {busy ? t("comboSuggest.draft.saving") : t("comboSuggest.draft.save")}

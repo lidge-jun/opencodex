@@ -281,7 +281,7 @@ describe("ComboSuggestions card", () => {
     expect(gemini.querySelector(".rb-order")?.textContent).toContain("→");
     await act(async () => { button(gemini, "Generate").click(); });
     const draft = gemini.querySelector<HTMLElement>(".rb-suggest-draft")!;
-    await act(async () => { button(draft.querySelectorAll("li")[0]!, "Move down").click(); });
+    await act(async () => { button(draft.querySelectorAll("li")[0]!, "Move Google Antigravity gemini-3.8-flash down").click(); });
     await act(async () => { button(draft, "Save combo").click(); });
     expect(saved.map(({ kind, item }) => [kind, item.id, item.strategy, item.targets.map((t) => t.provider)])).toEqual([
       ["create", "gemini-3.8-flash", "failover", ["cursor", "google-antigravity"]],
@@ -308,7 +308,7 @@ describe("ComboSuggestions card", () => {
     ]);
   });
 
-  test("excluding a provider is offered under the title and restoring unticks it", async () => {
+  test("excluding a provider is offered under the title and unticking restores it", async () => {
     exclusionWrites.length = 0;
     await render([], ["cursor"]);
     // Every suggestion here needs cursor, so only the exclusion control and the empty note show.
@@ -316,7 +316,8 @@ describe("ComboSuggestions card", () => {
     const toggle = button(host, "Excluded: Cursor");
     await act(async () => { toggle.click(); });
     const panel = host.querySelector<HTMLElement>(".rb-suggest-exclude-panel")!;
-    await act(async () => { button(panel, "Restore").click(); });
+    const cursor = panel.querySelector<HTMLInputElement>("input[type=checkbox]:checked")!;
+    await act(async () => { cursor.click(); });
     expect(exclusionWrites).toEqual([[]]);
   });
 

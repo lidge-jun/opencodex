@@ -191,7 +191,7 @@
 /* A press on the provider icon must start the row drag, not the browser's own image drag. */
 .rb-channel img, .rb-channel svg { pointer-events: none; -webkit-user-drag: none; user-select: none; }
 
-/* Suggested combos: same-name models across providers (T2c). Grey, above the combo list. */
+/* Suggested combos: same-name models across providers. Grey, above the combo list. */
 .rb-suggest {
   margin-bottom: 16px;
   padding: 12px 0 4px;
