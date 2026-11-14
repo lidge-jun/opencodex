@@ -47,8 +47,8 @@ export default function ClientModelPickerSection({
   const t = useT();
   const ref = useRef<HTMLElement>(null);
   const titleId = useId();
-  // The custom order editor reads the pinned rows once; a saved roster change remounts it so
-  // its fixed rows match the server again.
+  // A saved roster change tells the custom order editor to re-read its pinned rows; it stays
+  // mounted so an unsaved custom draft survives.
   const [rosterRevision, setRosterRevision] = useState(0);
   const locked = busy || !settings || loadFailed;
 
@@ -85,7 +85,7 @@ export default function ClientModelPickerSection({
         <InfoHint text={t("models.pickerOrder.hint")} />
       </div>
       {mode === "custom" && (
-        <ModelPickerOrderEditor key={`${apiBase}:${rosterRevision}`} apiBase={apiBase} active={active}
+        <ModelPickerOrderEditor key={apiBase} apiBase={apiBase} active={active} rosterRevision={rosterRevision}
           identities={identities} onBusyChange={onBusyChange} onAccepted={onAccepted} />
       )}
       <FastRowsSetting apiBase={apiBase} onSaved={onFastSaved} />

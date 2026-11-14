@@ -163,6 +163,19 @@ export function customPickerRows(settings: PickerOrderSettings, identities: read
   return { fixed, order: [...new Set([...fixed, ...saved, ...available])] };
 }
 
+/**
+ * Re-seat an unsaved draft on freshly read rows: the pinned rows come from the server, and the
+ * rest keep the draft's relative order. Rows new to the server follow in its order.
+ */
+export function rebasePickerDraft(draft: readonly string[], rows: { order: readonly string[]; fixed: readonly string[] }): string[] {
+  const fixed = new Set(rows.fixed), present = new Set(rows.order), kept = new Set(draft);
+  return [
+    ...rows.fixed,
+    ...draft.filter(id => present.has(id) && !fixed.has(id)),
+    ...rows.order.filter(id => !fixed.has(id) && !kept.has(id)),
+  ];
+}
+
 /** Drop semantics: remove first, re-find the target, then insert before it. */
 export function movePickerBefore(order: readonly string[], source: string, target: string, fixed: readonly string[]): string[] {
   const next = [...order];
