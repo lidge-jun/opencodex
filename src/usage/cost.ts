@@ -23,7 +23,7 @@ import { baseProviderLabel } from "../providers/label";
 import type { PersistedUsageAttempt, UsageStatus } from "./log";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
 import { activeAccountPricingProviders, activeConfiguredProviders, activePriceMultipliers, activeSubscriptionProviders, activeUserCostOverlays, userCostOverlayVersion } from "./user-cost-overlays";
-import { resolveCatalogPrice } from "./price-catalog";
+import { PRICE_CATALOG_MISS_COOLDOWN_MS, resolveCatalogPrice } from "./price-catalog";
 import {
   EXPECTED_PRICE_OVERLAYS,
   findExpectedPriceOverlay,
@@ -244,11 +244,13 @@ export function resolveMatchedPrice(
     // configured name is part of the key because the multiplier and subscription label follow it,
     // not the collapsed namespace. The version covers both sets.
     const cacheKey = `${userCostOverlayVersion()} ${options.allowModelLevelFallback !== false} ${configuredName} ${provider} ${modelId}`;
-    if (!priceMemo.has(cacheKey)) {
-      if (priceMemo.size >= 512) priceMemo.clear();
-      priceMemo.set(cacheKey, decoratePrice(resolveMatchedPriceInner(provider, modelId, overlays, userOverlays, options), configuredName, provider));
-    }
-    return priceMemo.get(cacheKey)!;
+    const cached = priceMemo.get(cacheKey);
+    // A memoized miss expires with the catalog's miss cooldown, so the lookup can queue its retry.
+    if (cached && (cached.price || Date.now() < cached.retryAt)) return cached.price;
+    if (!cached && priceMemo.size >= 512) priceMemo.clear();
+    const price = decoratePrice(resolveMatchedPriceInner(provider, modelId, overlays, userOverlays, options), configuredName, provider);
+    priceMemo.set(cacheKey, { price, retryAt: Date.now() + PRICE_CATALOG_MISS_COOLDOWN_MS });
+    return price;
   }
   return decoratePrice(resolveMatchedPriceInner(provider, modelId, overlays, userOverlays, options), configuredName, provider);
 }
@@ -259,12 +261,14 @@ function scaleCost4(cost4: Cost4, k: number): Cost4 {
 
 /**
  * Relay multiplier and subscription label, applied to non-user prices only. The multiplier is
- * keyed by the literal configured provider name (before account-namespace collapse); the
- * subscription set also holds exact account identities.
+ * keyed by configured provider name: a literal configured name wins, and an account-qualified
+ * label (`anthropic-p2e22d0`) takes its namespace's multiplier, as that provider's model row does.
+ * The subscription set also holds exact account identities.
  */
 function decoratePrice(price: MatchedPrice | null, configuredName: string, namespace: string): MatchedPrice | null {
   if (!price || price.source === "user") return price;
-  const multiplier = activePriceMultipliers().get(configuredName);
+  const multipliers = activePriceMultipliers();
+  const multiplier = multipliers.get(configuredName) ?? multipliers.get(namespace);
   const subscription = activeSubscriptionProviders();
   const apiEquivalent = subscription.has(configuredName) || subscription.has(namespace);
   if (multiplier === undefined && !apiEquivalent) return price;
@@ -275,7 +279,7 @@ function decoratePrice(price: MatchedPrice | null, configuredName: string, names
   };
 }
 
-const priceMemo = new Map<string, MatchedPrice | null>();
+const priceMemo = new Map<string, { price: MatchedPrice | null; retryAt: number }>();
 
 /**
  * Resolution wrapper: exact provider/model lookup first, then the Antigravity

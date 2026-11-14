@@ -103,6 +103,13 @@ describe("relay price multiplier", () => {
     expect(plain.multiplier).toBeUndefined();
   });
 
+  test("a pooled account label takes its provider's multiplier", async () => {
+    configure({ relay: { priceMultiplier: 2 } });
+    await loadCatalog();
+    expect(resolveMatchedPrice("relay-p2e22d0", "zephyr-flash-2")).toMatchObject({ multiplier: 2, cost4: { input: 0.2, output: 0.8 } });
+    expect(resolveMatchedPrice("relay-p2e22d0", "zephyr-flash-2")!.cost4).toEqual(resolveMatchedPrice("relay", "zephyr-flash-2")!.cost4);
+  });
+
   test("an unset multiplier, or one on another provider, changes nothing", async () => {
     configure({ relay: { priceMultiplier: 4 }, plain: {} });
     await loadCatalog();
