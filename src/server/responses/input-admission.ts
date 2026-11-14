@@ -68,6 +68,12 @@ export interface InputAdmissionResult {
   contextWindow?: number | null;
   /** Output space reserved by the combo preflight; absent on the loose direct gate. */
   requiredOutputHeadroom?: number;
+  /**
+   * The margin-adjusted estimate the combo gate actually decided on. Present only when the
+   * strict gate ran, so refusal reporting can name the limit that bound without re-deriving
+   * the margin. `estimatedTokens` stays the raw figure.
+   */
+  admissionEstimateTokens?: number;
 }
 
 function positive(value: unknown): number | null {
@@ -291,6 +297,24 @@ export function resolveOutputCeiling(
  * target is safe and the ladder continues before any upstream bytes are sent. Unknown context
  * stays fail-open, and a caller that declared no output allowance is unaffected.
  */
+/**
+ * Output room a combo child must retain when the caller declares no `max_output_tokens`. The
+ * loose direct-request gate tolerates pathological input because a solo request has nowhere
+ * else to go; a combo child does -- input admitted at 99.9% of the window leaves a few hundred
+ * tokens, so the target answers `incomplete`/`max_output_tokens` AFTER selection, when no
+ * sibling remains to retry. Bounded so a small window keeps a usable fraction and a large one
+ * cannot reserve a whole answer's worth.
+ */
+const COMBO_DEFAULT_OUTPUT_RESERVE = { fraction: 0.1, min: 1_024, max: 32_768 } as const;
+
+/**
+ * Heuristic input estimates undercount code- and tool-dense turns by several percent; near
+ * the window boundary that error alone decides whether the target can answer at all. Only the
+ * strict combo gate prices the estimate with this margin -- the loose direct gate keeps the
+ * raw figure because it guards pathological input, not fitness.
+ */
+const COMBO_ESTIMATE_MARGIN = 1.1;
+
 export function checkComboTargetInputAdmission(
   parsed: OcxParsedRequest,
   provider: OcxProviderConfig,
@@ -299,18 +323,24 @@ export function checkComboTargetInputAdmission(
   nativeContextCap?: NativeContextLimitsInput,
 ): InputAdmissionResult {
   const { window, ceiling } = resolveContextLimits(provider, providerName, modelId, nativeContextCap);
-  const requestedOutput = positive(parsed.options.maxOutputTokens);
-  if (window === null || ceiling === null || requestedOutput === null) {
+  if (window === null || ceiling === null) {
     return checkInputAdmission(parsed, provider, providerName, modelId, nativeContextCap);
   }
+  const requestedOutput = positive(parsed.options.maxOutputTokens);
   const targetOutput = resolveOutputCeiling(provider, providerName, modelId);
-  const requiredOutputHeadroom = targetOutput === null
-    ? requestedOutput
-    : Math.min(requestedOutput, targetOutput);
+  const defaultReserve = Math.min(
+    COMBO_DEFAULT_OUTPUT_RESERVE.max,
+    Math.max(COMBO_DEFAULT_OUTPUT_RESERVE.min, Math.floor(window * COMBO_DEFAULT_OUTPUT_RESERVE.fraction)),
+  );
+  const requiredOutputHeadroom = requestedOutput === null
+    ? (targetOutput === null ? defaultReserve : Math.min(defaultReserve, targetOutput))
+    : (targetOutput === null ? requestedOutput : Math.min(requestedOutput, targetOutput));
   const estimatedTokens = estimateInputTokens(parsed, modelId, provider);
+  const admissionEstimate = Math.ceil(estimatedTokens * COMBO_ESTIMATE_MARGIN);
   return {
-    admitted: estimatedTokens <= ceiling && estimatedTokens + requiredOutputHeadroom <= window,
+    admitted: admissionEstimate <= ceiling && admissionEstimate + requiredOutputHeadroom <= window,
     estimatedTokens,
+    admissionEstimateTokens: admissionEstimate,
     ceiling,
     requiredOutputHeadroom,
     ...(window !== ceiling ? { contextWindow: window } : {}),
@@ -339,9 +369,10 @@ export function checkInputAdmission(
 export function inputAdmissionRefusalMessage(input: InputAdmissionResult, model: ClientFacingModelLabel): string {
   const count = (value: number | null) => value !== null && Number.isFinite(value) && value >= 0 ? Math.trunc(value) : 0;
   const label = clientFacingModelText(model);
-  const estimate = count(input.estimatedTokens);
+  const decisionEstimate = input.admissionEstimateTokens ?? input.estimatedTokens;
+  const estimate = count(decisionEstimate);
   const ceiling = count(input.ceiling);
-  if (input.contextWindow !== undefined && input.estimatedTokens > ceiling) {
+  if (input.contextWindow !== undefined && decisionEstimate > ceiling) {
     const window = input.contextWindow === null ? "" : `; context window: ${count(input.contextWindow)} tokens`;
     return `Estimated input (~${estimate} tokens) exceeds the input limit of ${label} (${ceiling} tokens${window}). `
       + "Start a new session or choose a model with a larger input limit.";
