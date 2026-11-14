@@ -209,7 +209,7 @@ ocx claude
 | `ANTHROPIC_BASE_URL` | `http://127.0.0.1:<port>` |
 | `ANTHROPIC_AUTH_TOKEN` | Only when the proxy requires an API key — otherwise it is NOT set, so your claude.ai login (subscription + connectors) stays active |
 | `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` | `1` (native `/model` picker discovery) |
-| `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Auto-context compaction threshold (default `829800`); only injected when auto-context is enabled |
+| `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Auto-context compaction threshold (default `829800`); when smaller catalog windows need per-model limits, routed `ocx claude` uses session-only `--settings` instead |
 | `ANTHROPIC_MODEL` | `claudeCode.model` (optional) |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (optional; legacy `ANTHROPIC_SMALL_FAST_MODEL` too) |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`; on a subscription launch an unset slot gets the native `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`, so `--model opus`, `sonnet` and `fable` keep their 1M context |
@@ -814,8 +814,20 @@ default) fixes that:
    **and** at least the configured auto-compact threshold. Discovery and Desktop picker rows do not follow
    that threshold: they use the fixed 829,800-token floor (a genuine 1M for Claude models on an
    Anthropic route).
-2. `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (default `829800`, range `100000`–`1000000`) is injected so
-   the conversation auto-summarizes at that point.
+2. The default compact window is `829800` (range `100000`–`1000000`). When the live catalog
+   includes smaller windows, `ocx claude` passes session-only `--settings`: the default stays
+   unchanged and each smaller model selector gets 95% of its known window, provided that value
+   is within the client's supported range. Switching with `/model` selects the corresponding
+   compact window. No Claude Code settings file is written. With no eligible smaller window,
+   the launcher retains the existing `CLAUDE_CODE_AUTO_COMPACT_WINDOW` injection.
+
+An explicitly exported `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `--autocompact`, or `--settings`
+keeps precedence and disables generated per-model settings. Existing `--settings` JSON/file
+arguments, including repeated options and invalid inputs, are forwarded unchanged for Claude
+Code to interpret; the launcher neither reads nor rewrites those files. This applies only to routed
+`ocx claude` launches, not native fallback, Desktop, or plain `claude` launches. The
+`modelUsage.contextWindow` accounting field can still differ from the working compact window
+shown by `/context`.
 
 Three config states:
 

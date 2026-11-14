@@ -9,6 +9,7 @@
  */
 import { resolveSubagentForceModel } from "../claude/subagent-model";
 import { spawn } from "node:child_process";
+import { withClaudeContextSettings } from "./claude-context-settings";
 import { loadConfig } from "../config";
 import { injectClaudeAgentDefs } from "../claude/agents-inject";
 import { CLAUDE_ALIAS_PREFIX_CURRENT, CLAUDE_ALIAS_PREFIX_CURRENT_V2, CLAUDE_ALIAS_PREFIX_V1, CLAUDE_ALIAS_PREFIX_V2 } from "../claude/alias";
@@ -915,7 +916,8 @@ export async function cmdClaude(args: string[]): Promise<number> {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`⚠ Claude agent definitions could not be synced: ${message}`);
   }
-  return spawnClaude(args, env);
+  const launch = withClaudeContextSettings(args, env, config, contextWindows, process.env);
+  return spawnClaude(launch.args, launch.env);
 }
 
 async function launchNativeClaude(config: OcxConfig, args: string[], notice: string): Promise<number> {
