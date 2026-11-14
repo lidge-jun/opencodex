@@ -37,6 +37,8 @@ function PoolBar({ label, cell, now }: { label: string; cell: PoolCell; now: num
 
 export interface AccountQuotaTableProps {
   accounts: readonly QuotaTableAccount[];
+  /** The pool's effective strategy; the `next` marker shows only under reset-first. */
+  strategy?: string;
 }
 
 /**
@@ -44,10 +46,10 @@ export interface AccountQuotaTableProps {
  * remaining with a reset countdown, and one status flag. Pause and Test stay on the account
  * cards below, so the table only reads; it adds no endpoint.
  */
-export function AccountQuotaTable({ accounts }: AccountQuotaTableProps) {
+export function AccountQuotaTable({ accounts, strategy }: AccountQuotaTableProps) {
   const t = useT();
   const now = useMinuteClock();
-  const table = buildQuotaTable(accounts, now);
+  const table = buildQuotaTable(accounts, now, strategy);
   if (table.rows.length === 0 || table.pools.length === 0) return null;
   const flagText = (row: QuotaTableRow) => row.flag === "probeFailed"
     ? t(`acctProbe.status.${row.probeStatus}` as TKey)
