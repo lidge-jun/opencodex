@@ -353,6 +353,8 @@ export async function listManagementModelRows(
           autoCompactTokenLimit: undefined,
         })))
     : [];
+  // Price lookups match exact model ids, so an account-qualified native row prices as its model.
+  const accountNativePriceIds = new Map(accountNativeRows.map(row => [row.slug, row.metadataSlug]));
   const native: ManagementModelRow[] = [...nativeRows, ...accountNativeRows].map(row => {
     const reasoningEfforts = nativeReasoningEfforts(row.metadataSlug).filter(isVisionReasoningEffort);
     const defaultReasoningEffort = nativeDefaultReasoningEffort(row.metadataSlug);
@@ -544,7 +546,8 @@ export async function listManagementModelRows(
     const supportsReasoning = row.exportMetadata?.supportsReasoning
       ?? row.supportsReasoning
       ?? knownReasoningSupport(row);
-    const price = row.provider !== "combo" ? modelRowPrice(row.provider, row.id) : undefined;
+    const priceId = row.native ? accountNativePriceIds.get(row.id) ?? row.id : row.id;
+    const price = row.provider !== "combo" ? modelRowPrice(row.provider, priceId) : undefined;
     return {
       ...row,
       // One shared definition with the request path: the GUI must not re-derive consumer
