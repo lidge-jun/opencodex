@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDefaultConfig, loadConfig, saveConfig } from "../../src/config";
 import { captureAccountAutoPauseAttempt, wasAccountAutoPaused } from "../../src/oauth/account-auto-pause";
-import { AccountRefusalStreaks, autoPauseThreshold, classifyPermanentAccountRefusal, permanentAccountRefusal } from "../../src/oauth/account-auto-pause-policy";
+import { AccountRefusalStreaks, autoPauseThreshold, classifyPermanentAccountRefusal, permanentAccountRefusal, permanentAccountRefusalEvidence } from "../../src/oauth/account-auto-pause-policy";
 import { getValidAccessSnapshotForAccount, OAuthAccountPausedError } from "../../src/oauth";
 import { getAccountSet, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
 import { routedProviderConfig } from "../../src/router";
@@ -78,6 +78,13 @@ describe("permanent account refusal classification", () => {
     expect(await permanentAccountRefusal(new Response("not json", { status: 403 }))).toBeUndefined();
     expect(await permanentAccountRefusal(new Response("x".repeat(20_000), { status: 403 }))).toBeUndefined();
   });
+  test("evidence carries status and a redacted, bounded sentence; non-bans and oversized bodies carry none", async () => {
+    expect(await permanentAccountRefusalEvidence(refusal())).toEqual({ reason: "oauth_organization_disabled", statusCode: 403, message: orgMessage });
+    expect(await permanentAccountRefusalEvidence(refusal(401))).toMatchObject({ statusCode: 401 });
+    expect(await permanentAccountRefusalEvidence(Response.json(payload("Your quota resets tomorrow"), { status: 403 }))).toBeUndefined();
+    expect(await permanentAccountRefusalEvidence(Response.json(payload("Your quota resets tomorrow"), { status: 429 }))).toBeUndefined();
+    expect(await permanentAccountRefusalEvidence(new Response("x".repeat(20_000), { status: 403 }))).toBeUndefined();
+  });
   test("default off, default threshold two, strict schema", () => {
     expect(autoPauseThreshold(undefined)).toBeUndefined();
     expect(autoPauseThreshold({ enabled: false })).toBeUndefined();
@@ -116,6 +123,8 @@ test("OAuth threshold, transient neutrality, stored reason, skip and manual resu
   const set = getAccountSet("command-code")!;
   expect(set.accounts[0]!.pauseDetails?.reason).toBe("oauth_organization_disabled");
   expect(set.accounts[0]!.pauseDetails?.pausedAt).toBeGreaterThan(0);
+  // The record keeps what convicted the account so the dashboard can show why, not only that.
+  expect(set.accounts[0]!.pauseDetails).toMatchObject({ statusCode: 403, message: orgMessage });
   expect(set.activeAccountId).toBe(f.ids[1]!);
   await expect(getValidAccessSnapshotForAccount("command-code", f.ids[0]!)).rejects.toBeInstanceOf(OAuthAccountPausedError);
   await setAccountPaused("command-code", f.ids[0]!, false);

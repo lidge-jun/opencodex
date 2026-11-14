@@ -12,7 +12,7 @@ import { apiKeyPoolEntryId } from "../providers/api-keys";
 import { resolveProviderApiKey } from "../providers/api-key-resolve";
 import { createHash } from "node:crypto";
 import { setProviderApiKeyPaused } from "../providers/api-key-pause";
-import { AccountRefusalStreaks, autoPauseThreshold, permanentAccountRefusal } from "./account-auto-pause-policy";
+import { AccountRefusalStreaks, autoPauseThreshold, permanentAccountRefusalEvidence, type PermanentAccountRefusalEvidence } from "./account-auto-pause-policy";
 import { clearThreadAccountMapForAccount, reconcileCodexActiveAfterExclusion } from "../codex/routing";
 import { isNonReplayableResponse } from "../lib/upstream-retry";
 import { hasUpstreamRewriters, upstreamRewriterEpoch } from "../plugins/upstream-hooks";
@@ -52,6 +52,8 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
   const policyCurrent = () => accountAutoPauseFenceIsLocal(name, fence) && !config.providers[name]?.disabled
     && autoPauseThreshold(config.providers[name]?.accountAutoPause) === threshold
     && JSON.stringify([config.providers[name]?.baseUrl, config.providers[name]?.adapter, config.providers[name]?.authMode]) === route;
+  // Evidence of the refusal being counted; the OAuth pause below records it next to the reason.
+  let evidence: PermanentAccountRefusalEvidence | undefined;
   let key: string, incarnation: string, current: () => boolean, owns: (wire: Headers) => boolean;
   let pause: (reason: AccountPauseReason) => Promise<boolean>;
   if (provider.authMode === "oauth") {
@@ -68,7 +70,8 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
     };
     pause = async reason => (await setAccountPaused(name, oauth.accountId, true, {
       generation: oauth.generation, pauseRevision: revision, isCurrent: policyCurrent,
-      assertPolicyBeforePersist: () => { if (!accountAutoPauseFenceMatchesDisk(name, fence)) throw new Error("Account auto-pause policy changed before persistence"); }, details: { reason, pausedAt: Date.now() },
+      assertPolicyBeforePersist: () => { if (!accountAutoPauseFenceMatchesDisk(name, fence)) throw new Error("Account auto-pause policy changed before persistence"); }, details: { reason, pausedAt: Date.now(),
+        ...(evidence?.reason === reason ? { statusCode: evidence.statusCode, ...(evidence.message ? { message: evidence.message } : {}) } : {}) },
     })).status === "updated";
   } else if (provider.authMode === "forward") {
     if (!codex || codex.kind !== "pool" && codex.kind !== "main-pool") return;
@@ -149,9 +152,9 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
     if (counted.has(key)) return response;
     countedResponses.set(response, counted.add(key));
     try {
-      const verdict = permanentAccountRefusal(response).then(reason => {
-        if (reason) markPermanentAccountRefusal(response);
-        return reason;
+      const verdict = permanentAccountRefusalEvidence(response).then(found => {
+        if (found) { markPermanentAccountRefusal(response); evidence = found; }
+        return found?.reason;
       });
       const paused = await tracker.observe(key, incarnation, threshold, verdict, response.ok,
         () => policyCurrent() && current(), pause);

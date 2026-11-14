@@ -8,6 +8,8 @@ export const accountAutoPausePolicySchema = z.object({
 export const accountPauseDetailsSchema = z.object({
   reason: z.enum(ACCOUNT_PAUSE_REASONS),
   pausedAt: z.number().int().nonnegative(),
+  message: z.string().max(300).optional(),
+  statusCode: z.number().int().min(100).max(599).optional(),
 }).strict();
 export const accountPauseStateSchema = z.record(z.string(), z.object({
   revision: z.string(), details: accountPauseDetailsSchema.optional(),
