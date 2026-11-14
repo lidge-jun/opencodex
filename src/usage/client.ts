@@ -1,7 +1,7 @@
 /** A bounded, observational client label. Header values themselves are never returned. */
 export const USAGE_CLIENTS = [
   "codex_cli", "codex_desktop", "codex_ide", "claude_code", "claude_desktop",
-  "grok", "opencode", "aside", "other", "unknown",
+  "grok", "opencode", "aside", "antigravity", "agy", "other", "unknown",
 ] as const;
 
 export type UsageClient = (typeof USAGE_CLIENTS)[number];
@@ -37,6 +37,9 @@ export function classifyUsageClient(headers: Headers): UsageClient {
   else if (/^claude-code\/[A-Za-z0-9][A-Za-z0-9._+-]*(?:\s|$)/i.test(userAgent)) agentClient = "claude_code";
   else if (/^opencode\/[A-Za-z0-9][A-Za-z0-9._+-]*(?:\s|$)/i.test(userAgent)) agentClient = "opencode";
   else if (/^codex_cli_rs\/[A-Za-z0-9][A-Za-z0-9._+-]*(?:\s|$)/i.test(userAgent)) agentClient = "codex_cli";
+  // Antigravity desktop sends `antigravity/hub/<ver> (...)`; the agy CLI talks through Google's GenAI SDK.
+  else if (/^antigravity\/(?:hub\/)?[A-Za-z0-9][A-Za-z0-9._+-]*(?:\s|$)/i.test(userAgent)) agentClient = "antigravity";
+  else if (/^google-genai-sdk\/[A-Za-z0-9][A-Za-z0-9._+-]*(?:\s|$)/i.test(userAgent)) agentClient = "agy";
   if (originClient && agentClient && originClient !== agentClient
     && !(originClient.startsWith("codex_") && agentClient.startsWith("codex_"))) return "unknown";
   return originClient ?? agentClient ?? "unknown";

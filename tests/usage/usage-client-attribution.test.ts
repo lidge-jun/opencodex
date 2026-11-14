@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { classifyUsageClient, normalizeRecordedClient, usageClientLogContext, usageClientName } from "../../src/usage/client";
-import { MAX_USAGE_APP_NAMES } from "../../src/usage/app-breakdown";
+import { MAX_USAGE_APP_NAMES, usageAppIdentity } from "../../src/usage/app-breakdown";
 import { normalizePersistedUsageRow, readUsageEntries, resetUsageReadCacheForTests, usageLogPath } from "../../src/usage/log";
 import { createUsageSummaryAccumulator, projectUsageSummary, summarizeUsage } from "../../src/usage/summary";
 import { parseUsageSource } from "../../src/usage/source-filter";
@@ -199,6 +199,29 @@ describe("usage client attribution", () => {
     expect(classifyUsageClient(new Headers({ "user-agent": "claude-cli/2.1.282 (external, claude-desktop)" }))).toBe("claude_desktop");
     expect(classifyUsageClient(new Headers({ originator: "opencode" }))).toBe("opencode");
     expect(classifyUsageClient(new Headers({ "user-agent": "opencode/1.2.3 runtime/bun" }))).toBe("opencode");
+    expect(classifyUsageClient(new Headers({ "user-agent": "antigravity/hub/2.15.3 (aidev_client; os_type=windows)" }))).toBe("antigravity");
+    expect(classifyUsageClient(new Headers({ "user-agent": "google-genai-sdk/1.30.0 gl-node/v22.11.0" }))).toBe("agy");
+  });
+
+  test("Antigravity clients are named rows in the apps report, not unknown", () => {
+    const now = Date.now();
+    const base = { timestamp: now, provider: "google-antigravity", model: "gemini-test", status: 200,
+      durationMs: 10, usageStatus: "reported" as const, usage: { inputTokens: 10, outputTokens: 5 } };
+    const accumulator = createUsageSummaryAccumulator({ mode: "row-unique" });
+    for (const [ua, client] of [["antigravity/hub/2.15.3 (aidev_client; os_type=windows)", "antigravity"], ["google-genai-sdk/1.30.0 gl-node/v22.11.0", "agy"]] as const) {
+      const context = usageClientLogContext(new Headers({ "user-agent": ua }));
+      expect(context).toEqual({ client });
+      expect(usageAppIdentity(context)).toEqual({ client });
+      accumulator.add({ ...base, requestId: client, ...context });
+    }
+    expect(accumulator.summarize("30d", now).apps.map(row => [row.client, row.name ?? "", row.requests]).sort())
+      .toEqual([["agy", "", 1], ["antigravity", "", 1]]);
+    const facets = new URLSearchParams({ client: "agy", device: "all" });
+    expect(parseUsageSource(facets)).toEqual({ kind: "filtered", filter: { client: "agy", device: { kind: "all" } } });
+    // The product-name capture still names a near miss instead of misclassifying it.
+    expect(usageClientLogContext(new Headers({ "user-agent": "antigravity-tools/4.1" }))).toEqual({ client: "unknown", clientName: "antigravity-tools" });
+    expect(classifyUsageClient(new Headers({ "user-agent": "antigravity/hub/" }))).toBe("unknown");
+    expect(classifyUsageClient(new Headers({ originator: "codex_cli_rs", "user-agent": "google-genai-sdk/1.30.0" }))).toBe("unknown");
   });
 
   test("does not infer an app from unknown, malformed, conflicting or oversized headers", () => {

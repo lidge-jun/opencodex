@@ -1,7 +1,7 @@
 import { normalizeRecordedClient, normalizeUsageClientName } from "./client";
 
 /** Closed report categories; an absent historical client is kept distinct. */
-export const USAGE_APPS = ["codex", "claude_code", "claude_desktop", "grok", "opencode", "aside", "other", "unknown", "unclassified"] as const;
+export const USAGE_APPS = ["codex", "claude_code", "claude_desktop", "grok", "opencode", "aside", "antigravity", "agy", "other", "unknown", "unclassified"] as const;
 export type UsageApp = typeof USAGE_APPS[number];
 
 /** The wire a row predating client attribution arrived on; the only identity such a row has. */
