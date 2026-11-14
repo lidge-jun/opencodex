@@ -17,6 +17,7 @@ import {
   autoReviewModelOverridesConfigError,
   autoReviewModelTargetConfigError,
   modelCapabilitiesConfigError,
+  modelCapabilityProbesConfigError,
   providerInputModalitiesConfigError,
   sanitizeModelCapabilitiesForLoad,
   modelDisplayNamesConfigError,
@@ -372,6 +373,11 @@ export function sanitizeCapabilityDeclarationsForLoad(parsed: unknown, warn: (me
     if (providerInputModalitiesConfigError(provider.inputModalities) !== null) {
       warn(`config.json provider ${JSON.stringify(redactSecretString(name))} has malformed inputModalities; restricting input modalities to text`);
       provider.inputModalities = ["text"];
+    }
+    // Probe provenance is a label, not a declaration: a malformed hand edit loses the label only.
+    if (modelCapabilityProbesConfigError(provider.modelCapabilityProbes) !== null) {
+      warn(`config.json provider ${JSON.stringify(redactSecretString(name))} has malformed modelCapabilityProbes; dropping probe provenance`);
+      delete provider.modelCapabilityProbes;
     }
     if (provider.modelCapabilities === undefined) continue;
     if (modelCapabilitiesConfigError(provider.modelCapabilities) !== null) {

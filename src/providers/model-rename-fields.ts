@@ -72,6 +72,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   modelInputModalities: "record",
   inputModalities: "none",
   modelCapabilities: "record",
+  modelCapabilityProbes: "record",
   modelMaxInputTokens: "record",
   modelAutoCompactTokenLimits: "record",
   defaultMaxOutputTokens: "none",

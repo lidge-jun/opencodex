@@ -1246,6 +1246,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   modelInputModalities: "editor",
   inputModalities: "editor",
   modelCapabilities: "editor",
+  modelCapabilityProbes: "editor",
   modelMaxInputTokens: "runtime",
   modelAutoCompactTokenLimits: "editor",
   defaultMaxOutputTokens: "editor",

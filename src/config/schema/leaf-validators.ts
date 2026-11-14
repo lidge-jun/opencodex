@@ -14,6 +14,7 @@ import {
   normalizeNonBlankStringArray,
   normalizeAutoReviewModelOverrides,
   modelCapabilitiesConfigError,
+  modelCapabilityProbesConfigError,
   providerInputModalitiesConfigError,
   contextTierRecordConfigError,
   mergeModelCapabilities,
@@ -330,6 +331,10 @@ export const providerConfigSchema = z.object({
   // Raw diagnostics/writes reject malformed provenance; tolerant loads preserve the custom row.
   anthropicOAuthInstance: z.literal("anthropic2").optional().catch(undefined),
   modelCapabilities: modelCapabilitiesSchema.optional(),
+  modelCapabilityProbes: z.unknown().superRefine((value, ctx) => {
+    const error = modelCapabilityProbesConfigError(value);
+    if (error) ctx.addIssue({ code: "custom", message: error });
+  }).optional().transform(value => value as OcxProviderConfig["modelCapabilityProbes"]),
   inputModalities: z.unknown().superRefine((value, ctx) => {
     const error = providerInputModalitiesConfigError(value);
     if (error) ctx.addIssue({ code: "custom", message: error });

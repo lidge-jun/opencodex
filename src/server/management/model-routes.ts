@@ -121,6 +121,7 @@ import { effectiveModelAliases, MODEL_ALIAS_PATTERN, templateAliasPlan } from ".
 import { aliasTemplateError } from "../../providers/alias-template";
 import { isValidModelDiscoveryModelId } from "../../providers/model-discovery-limits";
 import { commitProviderPatch } from "./provider-patch-transaction";
+import { pruneModelCapabilityProbes } from "../../config/provider-validation";
 import { ConfigWritePublishedError } from "../../config/persist-unlocked";
 import type { CatalogDisposition } from "../../codex/convergence-types";
 import { comboPublicModelId } from "../../combos/types";
@@ -1016,6 +1017,12 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       }
     }
 
+    // Writing a probed axis here makes it a manual declaration: its probe provenance is dropped
+    // even when the value is unchanged, and a flag whose declaration was cleared goes with it.
+    if (pruneModelCapabilityProbes(providerConfig, [
+      ...(modalities !== undefined ? [[modelId, "inputModalities"] as const] : []),
+      ...(ladder !== undefined ? [[modelId, "reasoningEfforts"] as const] : []),
+    ])) changed = true;
     const hasOverrides = [providerConfig.modelContextWindows, providerConfig.modelReasoningEfforts,
       providerConfig.modelDefaultReasoningEfforts, providerConfig.modelInputModalities]
       .some(map => map !== undefined && Object.hasOwn(map, modelId))
