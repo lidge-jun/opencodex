@@ -1564,9 +1564,9 @@ test.each(ENROLLMENT_CLEANUP_ERRORS.filter(([code]) => code !== "link_pin_confli
   expect(host.textContent).not.toContain("Remote link request could not be completed.");
 });
 
-const RESIDUAL_STEPS = ["purge", "purgeWindows", "purgeWindowsFallback", "purgeAny", "purgeAnyWindows", "ephemeral", "full", "unknown", "unknownLightweight", "lightweightPlaced", "lightweightPlacedWindows", "bound", "olderFull", "olderLightweight", "noLink"] as const;
+const RESIDUAL_STEPS = ["purge", "purgeWindows", "purgeWindowsFallback", "purgeNotFound", "purgeAny", "purgeAnyWindows", "ephemeral", "full", "unknown", "unknownLightweight", "lightweightPlaced", "lightweightPlacedWindows", "bound", "olderFull", "olderLightweight", "noLink"] as const;
 // Lines that carry no command chip; bound and olderFull name the attempt's link id.
-const RESIDUAL_PROSE: readonly string[] = ["bound", "olderLightweight", "noLink"];
+const RESIDUAL_PROSE: readonly string[] = ["bound", "olderLightweight", "noLink", "purgeNotFound"];
 
 test("every locale translates the enrollment refusals and the Child steps instead of reusing English", async () => {
   const { DICTS } = await import("../src/i18n/catalogs");
