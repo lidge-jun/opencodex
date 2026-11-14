@@ -1,5 +1,35 @@
 export const DEFAULT_STALL_TIMEOUT_SEC = 300;
 
+/** The provider fields that may narrow or widen the global upstream budgets. */
+export interface ProviderTimeoutOverrides {
+  connectTimeoutMs?: number;
+  stallTimeoutSec?: number;
+}
+
+function providerBudget(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * The configured header budget for a routed provider: the provider's own `connectTimeoutMs` when
+ * set (including `0`, which disables it for that provider), otherwise the global value. Pass the
+ * result to {@link resolveConnectTimeoutMs}, which still owns the local/public default.
+ */
+export function providerConnectTimeoutMs(
+  config: { connectTimeoutMs?: number },
+  provider: ProviderTimeoutOverrides | undefined,
+): number | undefined {
+  return providerBudget(provider?.connectTimeoutMs) ?? config.connectTimeoutMs;
+}
+
+/** The configured stall budget for a routed provider; see {@link providerConnectTimeoutMs}. */
+export function providerStallTimeoutSec(
+  config: { stallTimeoutSec?: number },
+  provider: ProviderTimeoutOverrides | undefined,
+): number | undefined {
+  return providerBudget(provider?.stallTimeoutSec) ?? config.stallTimeoutSec;
+}
+
 /**
  * How the configured stall budget should be resolved for a request.
  *

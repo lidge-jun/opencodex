@@ -9,7 +9,7 @@ import type { ResolvedOpenAiForwardSidecar } from "../providers/openai-sidecar";
 import { resolveSidecarAuth, resolveAnthropicHelperInstance, withAnthropicHelperRefusal } from "../sidecar/auth";
 import { validateXaiSearchOptions, type XaiSearchOptions } from "./xai-executor";
 import type { OcxWebSearchSidecarConfig } from "../types";
-import { DEFAULT_STALL_TIMEOUT_SEC } from "../stall-timeout";
+import { DEFAULT_STALL_TIMEOUT_SEC, providerConnectTimeoutMs, providerStallTimeoutSec } from "../stall-timeout";
 import { buildWebSearchTool, extractHostedWebSearch, WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
 import {
   findAnthropicSidecarProvider,
@@ -165,7 +165,7 @@ export function planWebSearch(
   const timeoutMs = cfg.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const routedModelStallTimeoutMs = resolveRoutedModelStallTimeoutMs(cfg.routedModelStallTimeoutMs);
   // Same `?? 200_000` default the server applies when threading connectTimeoutMs into the loop.
-  const connectTimeoutMs = config.connectTimeoutMs ?? 200_000;
+  const connectTimeoutMs = providerConnectTimeoutMs(config, provider) ?? 200_000;
   // Shared auth state (#2188): presence only — backend PREFERENCE stays with
   // resolveSidecarBackend's explicit-or-openai contract.
   const backend = resolveSidecarBackend(cfg.backend);
@@ -179,7 +179,7 @@ export function planWebSearch(
     : undefined;
   const maxSearches = cfg.maxSearchesPerTurn ?? DEFAULT_MAX_SEARCHES;
   const stallTimeoutSec = webSearchStallTimeoutSec(
-    config.stallTimeoutSec,
+    providerStallTimeoutSec(config, provider),
     connectTimeoutMs,
     routedModelStallTimeoutMs,
     timeoutMs,

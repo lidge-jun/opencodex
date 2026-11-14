@@ -18,6 +18,22 @@ reset silence ticks when it changes, including terminal continuations and signat
 `src/server/responses/fetch-helpers.ts` awaits admission only when the executor has a pacing seam,
 so wrapping an unpaced physical send adds no yield between final credential validation and dispatch.
 
+## Provider-scoped budgets
+
+`providers.<name>.connectTimeoutMs` and `providers.<name>.stallTimeoutSec` (declared in
+`src/types/provider.ts`) override the global values for one provider. `src/stall-timeout.ts`
+`providerConnectTimeoutMs` / `providerStallTimeoutSec` return the provider value when it is set,
+including `0` (disabled for that provider only), else the global value; the result still goes
+through `resolveConnectTimeoutMs` / `resolveStallTimeoutMs`, so the local/public default applies
+only when both are unset. The override is read on routed adapter sends (`adapter-dispatch.ts`,
+`adapter-delivery.ts`, `adapter-continuation.ts`, `request-transport.ts`), `runTurn` delivery,
+the image and web-search sidecars in `sidecar-execution.ts`, and `planWebSearch`, whose bridge
+stall covers the provider's budgets. Responses passthrough, native Chat/Messages and compact keep
+the global budgets. Load degrades a malformed value to "inherit" (`leaf-validators.ts`); management
+writes reject it through `providerTimeoutOverrideConfigError`.
+`tests/responses/provider-upstream-deadlines.test.ts` covers override, inherit and per-provider
+disable for the header clock, the stall watchdog, the web-search plan and write validation.
+
 `src/lib/local-upstream.ts` classifies HTTP(S) destinations without DNS: exact case-insensitive
 `localhost` (optional trailing dot), unspecified IPv4 `0.0.0.0`, IPv4 loopback/private/link-local,
 IPv6 loopback/link-local/unique-local and IPv4-mapped equivalents, plus `.local`/`.lan` names.
