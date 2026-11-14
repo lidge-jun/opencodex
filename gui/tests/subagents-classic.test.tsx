@@ -38,6 +38,8 @@ beforeEach(() => {
     configurable: true,
     value: async (url: string, init?: RequestInit) => {
       requests.push({ url: String(url), init });
+      // The server keeps a saved roster; a later read returns it.
+      if (init?.method === "PUT") chosen = (JSON.parse(String(init.body)) as { models: string[] }).models;
       const body = JSON.stringify({ available, chosen });
       return {
         ok: true,

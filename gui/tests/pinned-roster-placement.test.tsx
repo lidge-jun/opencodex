@@ -23,6 +23,7 @@ let host: HTMLElement;
 let root: Root | null;
 let chosen: string[];
 let available: string[];
+let heldPut: ((models: string[]) => void) | null;
 let scrolled: Element[];
 
 function install(hash: string) {
@@ -44,11 +45,17 @@ beforeEach(() => {
   previous = new Map(globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   chosen = ["p/a"];
   available = ["p/a", "p/b"];
+  heldPut = null;
   root = null;
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
-    value: (input: RequestInfo | URL) => {
+    value: (input: RequestInfo | URL, init?: RequestInit) => {
       const path = new URL(String(input), "http://localhost/").pathname;
+      if (path === "/api/subagent-models" && init?.method === "PUT") {
+        return new Promise<Response>(resolve => {
+          heldPut = saved => { chosen = saved; resolve(Response.json({ applied: saved })); };
+        });
+      }
       const payload = path === "/api/subagent-models"
         ? { available, chosen, pickerAvailable: ["p/a", "p/b"], pickerOrder: [], pickerOrderMode: null }
         : path === "/api/subagent-model-fallback" ? { models: [], pollMs: 60_000, available: ["p/a", "p/b"] }
@@ -117,6 +124,25 @@ test("a catalog reload on Models also reloads the roster's model list", async ()
   await act(async () => { host.querySelector<HTMLButtonElement>('button[aria-label="p/b"]')!.click(); });
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
   expect(roster()).toContain(modelLabel("p/c"));
+});
+
+test("a roster save that lands after Subagents mounted still reaches its pinned list", async () => {
+  install("models");
+  await mount("models");
+  const pin = host.querySelector<HTMLButtonElement>('button[aria-label="Pin p/b to the top of the model picker"]')!;
+  await act(async () => { pin.click(); });
+  expect(heldPut).not.toBeNull();
+
+  // The operator leaves for Subagents while the write is in flight; its first read is the old roster.
+  await act(async () => { root!.unmount(); });
+  root = null;
+  host.replaceChildren();
+  await mount("subagents");
+  expect(pinnedModels()).toEqual([modelLabel("p/a")]);
+
+  await act(async () => { heldPut!(["p/a", "p/b"]); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
+  expect(pinnedModels()).toEqual([modelLabel("p/a"), modelLabel("p/b")]);
 });
 
 test("Subagents shows the pinned models as a pointer, with no roster editor", async () => {

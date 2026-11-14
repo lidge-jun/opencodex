@@ -3,6 +3,7 @@ import { readJsonOrThrow } from "../fetch-json";
 import { useT } from "../i18n/shared";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
 import { useDataSurface } from "../data-surface";
+import { invalidateClientResource } from "../client-resource";
 
 /** Config `subagentModels`: the models pinned to the top of the client model pickers. */
 export type SubagentRoster = { available: string[]; chosen: string[] };
@@ -105,6 +106,8 @@ export function useSubagentRoster(apiBase: string, onSaved?: () => void) {
       return;
     }
     setRoster(applied);
+    // Another reader (Subagents, mounted mid-write) may hold the pre-save roster; reload them all.
+    invalidateClientResource(cacheKey);
     onSaved?.();
     setOk(true);
     setStatus(t("sub.saved", { n: applied.length, cmd: "ocx sync" }));

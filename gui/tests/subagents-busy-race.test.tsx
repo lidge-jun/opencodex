@@ -61,6 +61,7 @@ beforeEach(() => {
           } as unknown as Response;
         }
         const applied = appliedOverride ?? models;
+        chosen = applied; // the server keeps what it applied; a later read returns it
         return {
           ok: true,
           status: 200,
