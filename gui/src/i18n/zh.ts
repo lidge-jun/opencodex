@@ -4527,7 +4527,6 @@ export const zh: Record<TKey, string> = {
   "remoteLink.error.policy_write_failed": "无法保存子设备策略。",
   "remoteLink.error.runtime_role_client": "此计算机是子设备；只有 Home 才能操作子设备。",
   "remoteLink.error.link_not_home_initiated": "此子设备是自行连接的，请在其自己的计算机上操作。",
-  "routeBoard.lede": "每个组合背后挂了哪些通道、按什么顺序用，都在这一页。策略和开关在行里直接改；点一行编辑通道。",
   "routeBoard.advanced": "高级",
   "routeBoard.advancedHint": "完整的组合编辑器：别名、JEV 判定服务、推理强度、图片输入、原生别名。",
   "routeBoard.backToOverview": "返回总览",

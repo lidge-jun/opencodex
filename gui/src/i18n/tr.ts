@@ -4529,7 +4529,6 @@ export const tr: Record<TKey, string> = {
   "remoteLink.error.policy_write_failed": "Child ilkesi kaydedilemedi.",
   "remoteLink.error.runtime_role_client": "Bu bilgisayar bir Child; Child’ları yalnızca bir Home yönetebilir.",
   "remoteLink.error.link_not_home_initiated": "Bu Child kendini bağladı, bu yüzden onu kendi bilgisayarından yönetin.",
-  "routeBoard.lede": "Her kombo, arkasındaki kanallar ve kullanım sırası. Stratejiyi değiştirin veya komboyu satırdan kapatın; kanalları düzenlemek için satıra tıklayın.",
   "routeBoard.advanced": "Gelişmiş",
   "routeBoard.advancedHint": "Tam kombo düzenleyicisi: takma adlar, JEV karar hizmeti, akıl yürütme düzeyi, görsel girişi, yerel takma adlar.",
   "routeBoard.backToOverview": "Genel bakışa dön",

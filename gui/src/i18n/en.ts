@@ -4540,7 +4540,6 @@ export const en = {
   "remoteLink.error.policy_write_failed": "The Child policy could not be saved.",
   "remoteLink.error.runtime_role_client": "This computer is a Child; only a Home can operate Children.",
   "remoteLink.error.link_not_home_initiated": "This Child linked itself, so operate it from its own computer.",
-  "routeBoard.lede": "Every combo, the channels behind it and the order they are used in. Change the strategy or switch a combo off right in its row; click a row to edit its channels.",
   "routeBoard.advanced": "Advanced",
   "routeBoard.advancedHint": "Full combo editor: aliases, JEV decision service, effort, image input, native aliases.",
   "routeBoard.backToOverview": "Back to overview",

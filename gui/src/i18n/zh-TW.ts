@@ -4492,7 +4492,6 @@ export const zhTW: Record<TKey, string> = {
   "remoteLink.error.policy_write_failed": "無法儲存子裝置原則。",
   "remoteLink.error.runtime_role_client": "此電腦是子裝置；只有 Home 能操作子裝置。",
   "remoteLink.error.link_not_home_initiated": "此子裝置是自行連線的，請在其自己的電腦上操作。",
-  "routeBoard.lede": "每個組合背後掛了哪些通道、按什麼順序使用，都在這一頁。策略和開關在列中直接改；點一列編輯通道。",
   "routeBoard.advanced": "進階",
   "routeBoard.advancedHint": "完整的組合編輯器：別名、JEV 判定服務、推理強度、圖片輸入、原生別名。",
   "routeBoard.backToOverview": "返回總覽",

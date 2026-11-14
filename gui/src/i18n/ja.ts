@@ -4528,7 +4528,6 @@ export const ja: Record<TKey, string> = {
   "remoteLink.error.policy_write_failed": "Child ポリシーを保存できませんでした。",
   "remoteLink.error.runtime_role_client": "このコンピュータは Child です。Child を操作できるのは Home だけです。",
   "remoteLink.error.link_not_home_initiated": "この Child は自身で接続したため、そのコンピュータから操作してください。",
-  "routeBoard.lede": "各コンボの背後にあるチャネルと、その使用順をこのページで確認できます。戦略とオン/オフは行内で変更し、行をクリックするとチャネルを編集できます。",
   "routeBoard.advanced": "詳細",
   "routeBoard.advancedHint": "コンボの完全なエディター：エイリアス、JEV 判定サービス、推論強度、画像入力、ネイティブエイリアス。",
   "routeBoard.backToOverview": "概要に戻る",

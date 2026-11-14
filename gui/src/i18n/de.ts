@@ -4506,7 +4506,6 @@ export const de: Record<TKey, string> = {
   "remoteLink.error.policy_write_failed": "Die Child-Richtlinie konnte nicht gespeichert werden.",
   "remoteLink.error.runtime_role_client": "Dieser Computer ist ein Child; nur ein Home kann Children bedienen.",
   "remoteLink.error.link_not_home_initiated": "Dieser Child hat sich selbst verbunden; bedienen Sie ihn von seinem eigenen Computer aus.",
-  "routeBoard.lede": "Jede Combo, die Kanäle dahinter und die Reihenfolge, in der sie genutzt werden. Strategie und Ein/Aus direkt in der Zeile ändern; Zeile anklicken, um die Kanäle zu bearbeiten.",
   "routeBoard.advanced": "Erweitert",
   "routeBoard.advancedHint": "Vollständiger Combo-Editor: Aliasse, JEV-Entscheidungsdienst, Reasoning-Stufe, Bildeingabe, native Aliasse.",
   "routeBoard.backToOverview": "Zurück zur Übersicht",

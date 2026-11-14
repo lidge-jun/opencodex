@@ -4529,7 +4529,6 @@ export const ru: Record<TKey, string> = {
   "remoteLink.error.policy_write_failed": "Не удалось сохранить политику Child.",
   "remoteLink.error.runtime_role_client": "Этот компьютер — Child; управлять Children может только Home.",
   "remoteLink.error.link_not_home_initiated": "Этот Child подключился сам, поэтому управляйте им с его собственного компьютера.",
-  "routeBoard.lede": "Каждое комбо, каналы за ним и порядок их использования. Стратегию и включение меняйте прямо в строке; нажмите на строку, чтобы изменить каналы.",
   "routeBoard.advanced": "Расширенно",
   "routeBoard.advancedHint": "Полный редактор комбо: псевдонимы, сервис решений JEV, уровень рассуждений, ввод изображений, нативные псевдонимы.",
   "routeBoard.backToOverview": "Назад к обзору",

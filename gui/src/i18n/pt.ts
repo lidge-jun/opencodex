@@ -4501,7 +4501,6 @@ export const pt: Record<TKey, string> = {
   "remoteLink.error.policy_write_failed": "Não foi possível salvar a política do Child.",
   "remoteLink.error.runtime_role_client": "Este computador é um Child; apenas um Home pode operar Children.",
   "remoteLink.error.link_not_home_initiated": "Este Child se conectou sozinho, então opere-o a partir do próprio computador dele.",
-  "routeBoard.lede": "Cada combo, os canais por trás dela e a ordem em que são usados. Mude a estratégia ou desligue uma combo na própria linha; clique numa linha para editar os canais.",
   "routeBoard.advanced": "Avançado",
   "routeBoard.advancedHint": "Editor completo de combos: aliases, serviço de decisão JEV, nível de raciocínio, entrada de imagens, aliases nativos.",
   "routeBoard.backToOverview": "Voltar à visão geral",

@@ -27,7 +27,7 @@ export function QuotaLine({ quotas, labels }: { quotas: readonly ProviderQuotaLi
         return (
           <span key={line.provider} className="rb-quota-item">
             <span className="rb-quota-provider">
-              {line.accounts !== undefined && line.accounts.active > 0
+              {line.accounts !== undefined && line.accounts.active > 1
                 ? t("routeBoard.quota.accounts", { provider: name, count: line.accounts.active })
                 : name}
               {line.accounts !== undefined && line.accounts.paused > 0 && (

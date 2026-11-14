@@ -4528,7 +4528,6 @@ export const ko: Record<TKey, string> = {
   "remoteLink.error.policy_write_failed": "Child 정책을 저장하지 못했습니다.",
   "remoteLink.error.runtime_role_client": "이 컴퓨터는 Child이므로 Home만 Child를 조작할 수 있습니다.",
   "remoteLink.error.link_not_home_initiated": "이 Child가 직접 연결했으므로 해당 Child 컴퓨터에서 조작하세요.",
-  "routeBoard.lede": "각 콤보 뒤에 어떤 채널이 있고 어떤 순서로 쓰이는지 이 페이지에서 볼 수 있습니다. 전략과 켜기/끄기는 행에서 바로 바꾸고, 행을 클릭하면 채널을 편집합니다.",
   "routeBoard.advanced": "고급",
   "routeBoard.advancedHint": "전체 콤보 편집기: 별칭, JEV 판정 서비스, 추론 강도, 이미지 입력, 네이티브 별칭.",
   "routeBoard.backToOverview": "개요로 돌아가기",

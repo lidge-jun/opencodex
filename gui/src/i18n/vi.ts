@@ -4498,7 +4498,6 @@ export const vi: Record<TKey, string> = {
   "remoteLink.error.policy_write_failed": "Không lưu được chính sách máy con.",
   "remoteLink.error.runtime_role_client": "Máy này là máy con; chỉ Home mới điều khiển được máy con.",
   "remoteLink.error.link_not_home_initiated": "Máy con này tự kết nối nên hãy điều khiển nó từ chính máy đó.",
-  "routeBoard.lede": "Mỗi combo, các kênh phía sau và thứ tự sử dụng. Đổi chiến lược hoặc tắt combo ngay trên hàng; bấm vào hàng để sửa kênh.",
   "routeBoard.advanced": "Nâng cao",
   "routeBoard.advancedHint": "Trình sửa combo đầy đủ: bí danh, dịch vụ quyết định JEV, mức suy luận, đầu vào hình ảnh, bí danh gốc.",
   "routeBoard.backToOverview": "Quay lại tổng quan",

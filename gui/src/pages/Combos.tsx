@@ -708,7 +708,6 @@ export default function Combos({
       <div className="rb-viewbar">
         {view === "overview" ? (
           <>
-            <p className="rb-lede">{t("routeBoard.lede")}</p>
             <button type="button" className="btn btn-ghost btn-sm" title={t("routeBoard.advancedHint")} onClick={() => openAdvanced()}>
               {t("routeBoard.advanced")}
             </button>

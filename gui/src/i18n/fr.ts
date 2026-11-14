@@ -4495,7 +4495,6 @@ export const fr: Record<TKey, string> = {
   "remoteLink.error.policy_write_failed": "La politique de l’Enfant n’a pas pu être enregistrée.",
   "remoteLink.error.runtime_role_client": "Cet ordinateur est un Enfant ; seul un Home peut piloter des Enfants.",
   "remoteLink.error.link_not_home_initiated": "Cet Enfant s’est connecté lui-même ; pilotez-le depuis son propre ordinateur.",
-  "routeBoard.lede": "Chaque combo, les canaux qui la servent et l’ordre dans lequel ils sont utilisés. Changez la stratégie ou désactivez une combo directement dans sa ligne ; cliquez sur une ligne pour modifier ses canaux.",
   "routeBoard.advanced": "Avancé",
   "routeBoard.advancedHint": "Éditeur complet des combos : alias, service de décision JEV, niveau de raisonnement, entrée d’images, alias natifs.",
   "routeBoard.backToOverview": "Retour à la vue d’ensemble",

@@ -1,8 +1,7 @@
 /* Combos overview (route board): one row per combo. Layout idea from Magpie's routing page
    (MIT, Copyright (c) 2026 yetone); styles are OpenCodex's own tokens. */
 
-.rb-viewbar { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-.rb-lede { flex: 1 1 auto; margin: 0; color: var(--ocx-fg-subtle); font-size: 13px; }
+.rb-viewbar { display: flex; align-items: center; justify-content: flex-end; gap: 12px; margin-bottom: 12px; }
 .combos-workspace-shell .rb-viewbar { flex-shrink: 0; padding-inline: 36px; }
 .combos-workspace-shell--overview { padding: 0 36px 28px; overflow-y: auto; }
 .combos-workspace-shell--overview .rb-viewbar { padding-inline: 0; }
