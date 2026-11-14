@@ -76,6 +76,19 @@ test("a toggle keeps keys a sibling list stored and survives unreadable storage"
   expect([...readCollapsedFamilies({ getItem: () => "{not json", setItem: () => {} })]).toEqual([]);
 });
 
+test("a header still expands again when storage reads nothing and every write throws", async () => {
+  const failing = { getItem: () => null, setItem: () => { throw new Error("quota"); } };
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: failing });
+  await render(["a/gpt-6", "a/gemini-3"]);
+  await act(async () => { heads()[0]!.click(); });
+  expect(rows()).toEqual(["a/gemini-3"]);
+  await act(async () => { heads()[1]!.click(); });
+  expect(rows()).toEqual([]);
+  await act(async () => { heads()[0]!.click(); });
+  expect(heads()[0]!.getAttribute("aria-expanded")).toBe("true");
+  expect(rows()).toEqual(["a/gpt-6"]);
+});
+
 test("with a list class each family's rows form their own list, outside the header", async () => {
   const { createRoot } = await import("react-dom/client");
   await act(async () => {
