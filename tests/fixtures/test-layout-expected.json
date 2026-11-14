@@ -1568,6 +1568,7 @@
   "workflow-budget.test.ts": "lib",
   "ws-ambiguous-resend.test.ts": "responses", "ws-pre-output-refusal.test.ts": "responses", "responses-pool-overload-failover.test.ts": "responses", "compact-transient-alternate.test.ts": "responses",
   "combo-codex-ws-overload-failover.test.ts": "responses",
+  "combo-stream-attempt-timing.test.ts": "responses",
   "ws-capacity-reclamation.test.ts": "responses",
   "ws-capacity-tool-ownership.test.ts": "responses",
   "ws-endpoint.test.ts": "responses",
