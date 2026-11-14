@@ -44,15 +44,20 @@ describe("account quota table", () => {
     });
   });
 
-  test("the scarce pool's next account resets soonest among usable accounts with headroom; Gemini gets no marker", () => {
-    const table = buildQuotaTable([
+  test("under reset-first the scarce pool's next account resets soonest among usable accounts with headroom; Gemini gets no marker", () => {
+    const accounts = [
       antigravity("late", {}, [["Gem", 0, 1], ["Cla (Weekly)", 10, 90]]),
       antigravity("soon", {}, [["Gem", 0, 1], ["Cla (Weekly)", 10, 20]]),
       antigravity("empty", {}, [["Cla (Weekly)", 100, 5]]),
       antigravity("paused", { paused: true }, [["Cla (Weekly)", 0, 2]]),
       antigravity("limited", { health: { status: "cooldown", reason: "rate_limit" } }, [["Cla (Weekly)", 0, 3]]),
-    ], NOW);
-    expect(table.rows.filter(row => row.next.length > 0).map(row => [row.account.id, row.next])).toEqual([["soon", ["claudeGpt"]]]);
+    ];
+    const marked = (strategy?: string) => buildQuotaTable(accounts, NOW, strategy).rows
+      .filter(row => row.next.length > 0).map(row => [row.account.id, row.next]);
+    expect(marked("reset-first")).toEqual([["soon", ["claudeGpt"]]]);
+    // Any other or unknown strategy picks differently, so the table names no account.
+    expect(marked("quota")).toEqual([]);
+    expect(marked()).toEqual([]);
   });
 
   test("flags: paused, sign-in, cooldown, failed probe, slow probe, unread quota, healthy", () => {

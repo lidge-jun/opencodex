@@ -303,6 +303,7 @@ export default function ProviderAuthPanel({
         <div className="pwi-auth-body">
           {codexController && codexController.accounts.length > 1 && (
             <AccountQuotaTable
+              strategy={(codexController.readLastActive() as { accountPoolStrategy?: string } | undefined)?.accountPoolStrategy}
               accounts={codexController.accounts.map(account => ({
                 id: account.id, label: account.alias ?? (account.email || t("codexAuth.mainAccount")), plan: account.plan ?? null,
                 active: account.id === codexController.activeId, paused: account.paused, needsReauth: account.needsReauth, health: account.health,

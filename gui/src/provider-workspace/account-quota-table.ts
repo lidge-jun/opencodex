@@ -138,7 +138,11 @@ function accountFlag(account: QuotaTableAccount): { flag: AccountFlag; probeStat
 
 const USABLE: ReadonlySet<AccountFlag> = new Set(["ok", "slow", "stale", "warning"]);
 
-export function buildQuotaTable(accounts: readonly QuotaTableAccount[], now = Date.now()): QuotaTable {
+/**
+ * `strategy` is the pool's effective selection strategy. The `next` marker projects reset-first
+ * ordering only, so any other (or unknown) strategy gets no marker rather than a wrong guess.
+ */
+export function buildQuotaTable(accounts: readonly QuotaTableAccount[], now = Date.now(), strategy?: string): QuotaTable {
   const rows: QuotaTableRow[] = accounts.map(account => {
     const cells: QuotaTableRow["cells"] = {};
     if (account.quota) {
@@ -160,7 +164,7 @@ export function buildQuotaTable(accounts: readonly QuotaTableAccount[], now = Da
   const pools = QUOTA_POOLS.filter(pool => rows.some(row => row.cells[pool.key]));
   // Mirror of reset-first: among accounts that can serve and still have headroom, the one whose
   // allowance expires first is used first, so nothing lapses unspent.
-  for (const pool of pools.filter(spec => spec.scarce)) {
+  for (const pool of strategy === "reset-first" ? pools.filter(spec => spec.scarce) : []) {
     let best: { row: QuotaTableRow; resetAt: number } | undefined;
     for (const row of rows) {
       const cell = row.cells[pool.key];
