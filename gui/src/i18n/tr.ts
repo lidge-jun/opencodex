@@ -1192,7 +1192,7 @@ export const tr: Record<TKey, string> = {
   "sub.workspace.mainAria": "Alt ajan model detayları",
   "sub.workspace.notFeatured": "Sabitlenmedi",
   "sub.workspace.priority": "Öncelik",
-  "sub.workspace.removeFromFeatured": "{m} modelini model seçiciden kaldır",
+  "sub.workspace.removeFromFeatured": "{m} modelinin model seçicideki sabitlemesini kaldır",
   "sub.workspace.selectModel": "Bir model seçin",
   "sub.workspace.selectModelDesc": "Detayları görmek için listeden bir model seçin.",
   "sub.workspace.selector": "Genel seçici",
