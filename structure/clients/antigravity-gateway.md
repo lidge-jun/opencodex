@@ -52,7 +52,12 @@ connected client under an override is therefore reported with a warning rather t
 ## Surfaces
 
 `src/server/management/gateway-client-routes.ts` serves `GET /api/gateway-clients` and
-`POST /api/gateway-clients/{id}/connect|disconnect`. A refusal is HTTP 409 with `{ok, code, message}`, an
+`POST /api/gateway-clients/{id}/connect|disconnect`; `handleIntegrationRoutes` in
+`src/server/management/integration-routes.ts` loads it on demand for that prefix, so
+`src/server/management-api.ts` does not name it. Every note and override in a status carries a stable
+`code` beside its English `text` or `detail` (`GATEWAY_NOTE_TEXT` in `types.ts` is the one English
+source); the CLI prints the English, the dashboard tab translates the code, and an action's outcome is
+rendered from `code`, `changed` and `restore` rather than from `message`. A refusal is HTTP 409 with `{ok, code, message}`, an
 unknown id is 404. The routes sit behind the ordinary management auth and origin checks, and a sibling
 instance refuses the mutations. `ocx connect|disconnect antigravity|agy` and
 `ocx connect antigravity|agy status` in `src/cli/gateway-client-command.ts` call those routes through the

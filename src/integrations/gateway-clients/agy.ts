@@ -8,7 +8,7 @@ import {
   adminGatewayOverride, dropStash, envGatewayOverride, mkdirTracked, readBytes, readStash, removeFile, rmdirsIfEmpty,
   sha256, writeBytes, writeStash,
 } from "./io";
-import type { GatewayClientConnector, GatewayClientContext, GatewayClientResult, GatewayClientStatus, GatewayTarget } from "./types";
+import { gatewayNote, type GatewayClientConnector, type GatewayClientContext, type GatewayClientResult, type GatewayClientStatus, type GatewayTarget } from "./types";
 
 const ID = "agy";
 const START = "# >>> opencodex agy >>>";
@@ -101,12 +101,12 @@ function status(ctx: GatewayClientContext, target?: GatewayTarget): GatewayClien
   const state = withBlocks > 0 && current === known.size ? "connected" : withBlocks > 0 || stash ? "drifted" : "disconnected";
   const overrides: GatewayClientStatus["overrides"] = [];
   const admin = adminGatewayOverride(ctx);
-  if (admin) overrides.push({ source: "admin_settings", detail: admin });
+  if (admin) overrides.push(admin);
   const env = envGatewayOverride(ctx, target?.url);
-  if (env) overrides.push({ source: "env", detail: env });
-  const notes = ["Open a new terminal to pick up the agy function.", "Gateway support needs agy 1.2.15 or newer."];
-  if (ctx.platform === "win32") notes.push("Google documents the agy gateway for macOS and Linux. The Windows build also reads the AGY_LLM_GATEWAY_* settings, but this path has not been verified end to end on Windows.");
-  if (ctx.env.AGY_LLM_GATEWAY_URL?.trim()) notes.push("AGY_LLM_GATEWAY_URL is exported globally in the environment OpenCodex sees; the agy function overrides it for agy only.");
+  if (env) overrides.push(env);
+  const notes = [gatewayNote("new-terminal"), gatewayNote("agy-version")];
+  if (ctx.platform === "win32") notes.push(gatewayNote("windows-unverified"));
+  if (ctx.env.AGY_LLM_GATEWAY_URL?.trim()) notes.push(gatewayNote("agy-env-exported"));
   return { id: ID, label: "agy CLI", state, files: rows, overrides, notes };
 }
 
@@ -167,7 +167,7 @@ function disconnect(ctx: GatewayClientContext): GatewayClientResult {
   return {
     ok: true, changed: changedFiles.length > 0, changedFiles, restore: changedFiles.length === 0 ? "none" : pathWise ? "path-wise" : "exact",
     message: pathWise ? "Removed the OpenCodex agy block; the rest of each edited profile was kept as it is." : "Shell profiles restored byte for byte.",
-    notes: ["Open a new terminal to apply it."],
+    notes: [gatewayNote("new-terminal")],
   };
 }
 

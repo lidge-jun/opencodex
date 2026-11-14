@@ -8,7 +8,7 @@
 import { loadConfig } from "../config";
 import {
   connectGatewayClient, disconnectGatewayClient, gatewayActionBody, gatewayClientsStatus, isGatewayClientId,
-  productionGatewayClientContext, resolveGatewayTarget, type GatewayClientContext, type GatewayClientId, type GatewayClientStatus,
+  productionGatewayClientContext, resolveGatewayTarget, type GatewayClientContext, type GatewayClientId, type GatewayClientStatus, type GatewayNote,
 } from "../integrations/gateway-clients";
 import { CliUsageError, RuntimeApiError, printData, rejectArgs, runCliAction, runtimeRequest, takeJsonFlag, takeOption, terminalSafeText, type RuntimeApiDeps } from "./runtime-api";
 
@@ -29,14 +29,14 @@ const USAGE: Record<GatewayClientVerb, string> = {
 /** True when the first operand after `connect` or `disconnect` names a gateway client. */
 export const isGatewayClientOperand = (operand: string | undefined): operand is GatewayClientId => isGatewayClientId(operand);
 
-type Body = Record<string, unknown> & { ok: boolean; message?: string; notes?: string[]; changedFiles?: string[]; restore?: string; status?: GatewayClientStatus };
+type Body = Record<string, unknown> & { ok: boolean; message?: string; notes?: GatewayNote[]; changedFiles?: string[]; restore?: string; status?: GatewayClientStatus };
 
 function actionLines(body: Body, offlinePort: number | null): string[] {
   const out = [body.message ?? (body.ok ? "Done." : "Failed.")];
   for (const file of body.changedFiles ?? []) out.push(`  changed: ${file}`);
   if (body.restore) out.push(`  restore: ${body.restore}`);
   for (const override of body.status?.overrides ?? []) out.push(`  warning (${override.source}): ${override.detail}`);
-  for (const note of body.notes ?? []) out.push(`  ${note}`);
+  for (const note of body.notes ?? []) out.push(`  ${note.text}`);
   if (offlinePort !== null && body.ok) out.push(`  The proxy is not running. Start it so the client has something to talk to: ocx start (port ${offlinePort}).`);
   return out;
 }
@@ -45,7 +45,7 @@ function statusLines(status: GatewayClientStatus, offline: boolean): string[] {
   const out = [`${status.label}: ${status.state}`];
   for (const file of status.files) out.push(`  ${file.exists ? "found  " : "missing"} ${file.role}: ${file.path}`);
   for (const override of status.overrides) out.push(`  warning (${override.source}): ${override.detail}`);
-  for (const note of status.notes) out.push(`  ${note}`);
+  for (const note of status.notes) out.push(`  ${note.text}`);
   if (offline) out.push("  The proxy is not running.");
   return out;
 }

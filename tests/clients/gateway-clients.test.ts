@@ -31,6 +31,7 @@ describe("antigravity connector", () => {
     const doc = JSON.parse(read(settings()));
     expect(doc.gateway).toEqual({ enabled: true, url: target.url, apiKey: "opencodex-local", wireProtocol: "openai" });
     expect(doc.models).toEqual({ defaultModelId: "gemini-3" });
+    expect(GATEWAY_CLIENTS.antigravity.status(ctx, target).defaultModel).toBe("gemini-3");
     expect(doc.theme).toBe("dark");
     expect(read(settings())).toContain('\n    "theme"');
     const once = read(settings());
@@ -85,6 +86,8 @@ describe("antigravity connector", () => {
     ctx.env.AGY_LLM_GATEWAY_URL = "https://other.example/path?token=SECRET";
     const status = GATEWAY_CLIENTS.antigravity.status(ctx, target);
     expect(status.overrides.map(o => o.source).sort()).toEqual(["admin_settings", "env"]);
+    expect(status.overrides.map(o => o.code).sort()).toEqual(["admin-gateway", "env-gateway"]);
+    expect(status.notes.map(n => n.code)).toEqual(["restart-app", "no-google-sign-in", "agy-follows-app"]);
     expect(JSON.stringify(status)).not.toContain("SECRET");
   });
 });

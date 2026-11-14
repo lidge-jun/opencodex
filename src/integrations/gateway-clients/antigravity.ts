@@ -7,7 +7,7 @@ import {
   GATEWAY_PLACEHOLDER_KEY, adminGatewayOverride, dropStash, envGatewayOverride, mkdirTracked, normalizeUrl,
   readBytes, readStash, removeFile, rmdirsIfEmpty, sha256, writeBytes, writeStash,
 } from "./io";
-import type { GatewayClientConnector, GatewayClientContext, GatewayClientResult, GatewayClientStatus, GatewayTarget } from "./types";
+import { GATEWAY_NOTE_TEXT, gatewayNote, type GatewayClientConnector, type GatewayClientContext, type GatewayClientResult, type GatewayClientStatus, type GatewayNoteCode, type GatewayTarget } from "./types";
 
 type Json = Record<string, unknown>;
 interface Prior { present: boolean; value?: unknown }
@@ -29,7 +29,8 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
 const prior = (o: Json | undefined, k: string): Prior => o && k in o ? { present: true, value: o[k] } : { present: false };
 
 interface Parsed { doc: Json; indent: string | number | undefined; eol: string; trailing: boolean; bom: boolean }
-function parseSettings(bytes: Buffer | null): Parsed | string {
+/** A note code instead of a parse when the file cannot be round-tripped. */
+function parseSettings(bytes: Buffer | null): Parsed | GatewayNoteCode {
   if (!bytes) return { doc: {}, indent: 2, eol: "\n", trailing: true, bom: false };
   let text = bytes.toString("utf8");
   const bom = text.startsWith(BOM);
@@ -38,10 +39,10 @@ function parseSettings(bytes: Buffer | null): Parsed | string {
   let doc: unknown = {};
   if (text.trim() !== "") {
     try { doc = JSON.parse(text); } catch {
-      return "settings.json is not strict JSON (comments, trailing commas or a syntax error). OpenCodex will not rewrite a file it cannot round-trip; fix or simplify it, then connect again.";
+      return "settings-not-json";
     }
   }
-  if (!isObj(doc)) return "settings.json does not hold a JSON object, so OpenCodex left it untouched.";
+  if (!isObj(doc)) return "settings-not-object";
   const m = /\n([ \t]+)\S/.exec(text);
   const indent = m ? m[1] : text.trim().includes("\n") || text.trim().length <= 2 ? 2 : undefined;
   return { doc, indent, eol, trailing: text === "" || /\n\s*$/.test(text), bom };
@@ -70,13 +71,15 @@ function status(ctx: GatewayClientContext, target?: GatewayTarget): GatewayClien
   const state = match ? "connected" : stash ? "drifted" : "disconnected";
   const overrides: GatewayClientStatus["overrides"] = [];
   const admin = adminGatewayOverride(ctx);
-  if (admin) overrides.push({ source: "admin_settings", detail: admin });
+  if (admin) overrides.push(admin);
   const env = envGatewayOverride(ctx, target?.url);
-  if (env) overrides.push({ source: "env", detail: env });
-  const notes = ["Restart Antigravity to apply a change.", "In gateway mode the app does not use the Google sign-in.", "agy follows this file unless it is connected on its own."];
-  if (typeof parsed === "string") notes.push(parsed);
-  if (match && !stash) notes.push("No restore record exists (connected outside OpenCodex), so disconnect cannot restore your previous settings.");
-  return { id: ID, label: "Antigravity", state, files: [{ path, role: "user settings", exists: bytes !== null }], overrides, notes };
+  if (env) overrides.push(env);
+  const notes = (["restart-app", "no-google-sign-in", "agy-follows-app"] as GatewayNoteCode[]).map(gatewayNote);
+  if (typeof parsed === "string") notes.push(gatewayNote(parsed));
+  if (match && !stash) notes.push(gatewayNote("no-restore-record"));
+  const models = typeof parsed === "string" || !isObj(parsed.doc.models) ? undefined : parsed.doc.models;
+  const defaultModel = typeof models?.defaultModelId === "string" ? models.defaultModelId : undefined;
+  return { id: ID, label: "Antigravity", state, files: [{ path, role: "user settings", exists: bytes !== null }], overrides, notes, ...(defaultModel ? { defaultModel } : {}) };
 }
 
 const fail = (code: GatewayClientResult["code"], message: string): GatewayClientResult =>
@@ -86,7 +89,7 @@ function connect(ctx: GatewayClientContext, target: GatewayTarget): GatewayClien
   const path = settingsPath(ctx);
   const bytes = readBytes(path);
   const parsed = parseSettings(bytes);
-  if (typeof parsed === "string") return fail("unsupported-file", parsed);
+  if (typeof parsed === "string") return fail("unsupported-file", GATEWAY_NOTE_TEXT[parsed]);
   const { doc } = parsed;
   let stash = readStash<Stash>(ctx, ID);
   const keep = stash !== null && ours(doc.gateway, undefined) === "match";
@@ -128,7 +131,7 @@ function disconnect(ctx: GatewayClientContext): GatewayClientResult {
   const bytes = readBytes(path);
   const done = (restore: "exact" | "path-wise" | "none", message: string, files: string[]): GatewayClientResult => {
     dropStash(ctx, ID);
-    return { ok: true, changed: files.length > 0, changedFiles: files, restore, message, notes: ["Restart Antigravity to apply it."] };
+    return { ok: true, changed: files.length > 0, changedFiles: files, restore, message, notes: [gatewayNote("restart-app")] };
   };
   if (bytes && sha256(bytes) === stash.writtenSha256) {
     if (stash.originalBytes === null) { removeFile(path); rmdirsIfEmpty(stash.createdDirs); }
@@ -137,7 +140,7 @@ function disconnect(ctx: GatewayClientContext): GatewayClientResult {
   }
   if (!bytes) return done("none", "The settings file is already gone; the restore record was cleared.", []);
   const parsed = parseSettings(bytes);
-  if (typeof parsed === "string") return { ok: false, code: "unsupported-file", message: `${parsed} The restore record was kept.`, changed: false, changedFiles: [], notes: [] };
+  if (typeof parsed === "string") return { ok: false, code: "unsupported-file", message: `${GATEWAY_NOTE_TEXT[parsed]} The restore record was kept.`, changed: false, changedFiles: [], notes: [] };
   const { doc } = parsed;
   const kept: string[] = [];
   if (same(doc.gateway, stash.written.gateway)) {

@@ -3,7 +3,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, rm
 import { dirname, join } from "node:path";
 import { atomicWriteFileStreamed } from "../../config/atomic-write";
 import { parseJsonc } from "../../lib/jsonc";
-import type { GatewayClientContext } from "./types";
+import type { GatewayClientContext, GatewayOverride } from "./types";
 
 export const GATEWAY_PLACEHOLDER_KEY = "opencodex-local";
 
@@ -78,25 +78,25 @@ export function adminSettingsPath(ctx: GatewayClientContext): string | undefined
     : "/etc/antigravity/admin_settings.json";
 }
 
-/** A one-line description of what admin_settings.json sets under `gateway`, or null when nothing. */
-export function adminGatewayOverride(ctx: GatewayClientContext): string | null {
+/** What admin_settings.json sets under `gateway`, or null when nothing. */
+export function adminGatewayOverride(ctx: GatewayClientContext): GatewayOverride | null {
   const path = adminSettingsPath(ctx);
   if (!path) return null;
   const bytes = readBytes(path);
   if (!bytes) return null;
   let gateway: unknown;
   try { gateway = (parseJsonc(bytes.toString("utf8")) as { gateway?: unknown } | null)?.gateway; }
-  catch { return "admin_settings.json exists but could not be read, so its gateway settings are unknown"; }
+  catch { return { source: "admin_settings", code: "admin-unreadable", detail: "admin_settings.json exists but could not be read, so its gateway settings are unknown" }; }
   if (!gateway || typeof gateway !== "object" || Object.keys(gateway).length === 0) return null;
-  return "organization admin_settings.json sets the gateway and wins over the user settings and AGY_LLM_GATEWAY_* variables";
+  return { source: "admin_settings", code: "admin-gateway", detail: "organization admin_settings.json sets the gateway and wins over the user settings and AGY_LLM_GATEWAY_* variables" };
 }
 
-/** The env override note, or null. Only the environment of the process OpenCodex runs in is visible. */
-export function envGatewayOverride(ctx: GatewayClientContext, targetUrl?: string): string | null {
+/** The env override, or null. Only the environment of the process OpenCodex runs in is visible. */
+export function envGatewayOverride(ctx: GatewayClientContext, targetUrl?: string): GatewayOverride | null {
   const raw = ctx.env.AGY_LLM_GATEWAY_URL?.trim();
   if (!raw) return null;
   if (targetUrl && normalizeUrl(raw) === normalizeUrl(targetUrl)) return null;
   let shown = "an unparseable value";
   try { shown = new URL(raw).origin; } catch { /* keep generic */ }
-  return `AGY_LLM_GATEWAY_URL is set to ${shown} in the environment OpenCodex sees (other shells are not checked) and wins over ~/.antigravity/settings.json`;
+  return { source: "env", code: "env-gateway", detail: `AGY_LLM_GATEWAY_URL is set to ${shown} in the environment OpenCodex sees (other shells are not checked) and wins over ~/.antigravity/settings.json` };
 }
