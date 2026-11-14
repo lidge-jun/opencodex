@@ -117,6 +117,13 @@ describe("OpenAI Responses (Codex-style)", () => {
     expect(b.turns[0]).toBe(1 + 10 + 30);
   });
 
+  test("an image-only developer message is measured as a file", () => {
+    const b = measureContextBreakdown({ input: [{ role: "developer", content: [{ type: "input_image", image_url: "data:image/png;base64,AAAA" }] }] }, "responses")!;
+    expect(b).toBeDefined();
+    expect(b.parts.files).toBe(1600);
+    expect(b.parts.system).toBe(0);
+  });
+
   test("the Codex app's IDE context ahead of '## My request' still counts as the user speaking", () => {
     const b = measureContextBreakdown({
       input: [{ role: "user", content: [{ type: "input_text", text: "# Context from my IDE setup:\nopen tabs\n\n## My request for Codex:\nFix it" }] }],
@@ -209,6 +216,16 @@ describe("Anthropic Messages (Claude Code-style)", () => {
     expect(b.parts.chat).toBe(tok("see attachments") + 10 + 10);
   });
 
+  test("text after a reminder in the same block is the user speaking, and begins a turn", () => {
+    const b = measureContextBreakdown({
+      messages: [{ role: "user", content: [{ type: "text", text: `<system-reminder>${fill(40, "r")}</system-reminder>
+${fill(80, "u")}` }] }],
+    }, "messages")!;
+    expect(b.parts.memory).toBe(10);
+    expect(b.turns).toEqual([20]);
+    expect(b.parts.chat).toBe(20);
+  });
+
   test("system as a plain string and system-role messages are system", () => {
     const b = measureContextBreakdown({ system: fill(40), messages: [{ role: "system", content: fill(80) }, { role: "user", content: "hi" }] }, "messages")!;
     expect(b.parts.system).toBe(10 + 20);
@@ -236,6 +253,23 @@ describe("OpenAI Chat Completions", () => {
     expect(b.toolCount).toBe(1);
     expect(b.turns).toHaveLength(2);
     expect(b.parts.chat).toBe(sum(b.turns));
+  });
+
+  test("legacy functions and function_call count as tools and the call, the result as a result", () => {
+    const fn = { name: "lookup", description: "Looks things up", parameters: { type: "object", properties: { q: { type: "string" } } } };
+    const args = JSON.stringify({ q: fill(40) });
+    const b = measureContextBreakdown({
+      functions: [fn],
+      messages: [
+        { role: "user", content: "look it up" },
+        { role: "assistant", content: null, function_call: { name: "lookup", arguments: args } },
+        { role: "function", name: "lookup", content: fill(80, "f") },
+      ],
+    }, "chat")!;
+    expect(b.toolCount).toBe(1);
+    expect(b.parts.tools).toBeGreaterThan(0);
+    expect(b.parts.results).toBe(20);
+    expect(b.turns).toEqual([tok("look it up") + tok("lookup") + tok(args)]);
   });
 });
 

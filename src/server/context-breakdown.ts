@@ -241,7 +241,10 @@ function responsesItem(acc: BreakdownAccumulator, raw: unknown): void {
 
 function responsesMessage(acc: BreakdownAccumulator, role: string, parts: ContentPart[]): void {
   if (role === "system" || role === "developer") {
-    for (const p of parts) if (p.text !== "") acc.systemText(p.text);
+    for (const p of parts) {
+      if (p.image) acc.file(IMAGE_TOKENS);
+      else if (p.text !== "") acc.systemText(p.text);
+    }
     return;
   }
   if (role === "user") {
@@ -273,6 +276,8 @@ function outputTokens(acc: BreakdownAccumulator, output: unknown): number {
 
 function readChat(acc: BreakdownAccumulator, body: Rec): void {
   if (Array.isArray(body.tools)) for (const t of body.tools) responsesTool(acc, t);
+  // legacy Chat function calling: bare definitions, and one `function_call` per assistant message
+  if (Array.isArray(body.functions)) for (const f of body.functions) responsesTool(acc, f);
   if (!Array.isArray(body.messages)) return;
   for (const m of body.messages) {
     if (!isRec(m)) continue;
@@ -296,6 +301,11 @@ function readChat(acc: BreakdownAccumulator, body: Rec): void {
     let said = 0;
     for (const p of parts) said += tokensOfText(p.text);
     acc.chat(said);
+    if (isRec(m.function_call)) {
+      const name = str(m.function_call.name);
+      acc.noteCall("", name, m.function_call.arguments);
+      acc.chat(tokensOfText(name) + argumentTokens(m.function_call.arguments));
+    }
     if (!Array.isArray(m.tool_calls)) continue;
     for (const c of m.tool_calls) {
       if (!isRec(c) || !isRec(c.function)) continue;

@@ -321,15 +321,16 @@ export class BreakdownAccumulator {
 
   /** A user's text: an instruction file or reminder the agent put in as the user, or what the user said. */
   userText(text: string): void {
-    const t = text.trim();
-    if (t.startsWith(REMINDER_OPEN)) {
-      let rest = this.splitSkills(this.splitMemory(t)).trim();
-      if (rest.startsWith(REMINDER_OPEN)) rest = rest.slice(REMINDER_OPEN.length);
-      if (rest.endsWith(REMINDER_CLOSE)) rest = rest.slice(0, rest.length - REMINDER_CLOSE.length);
-      rest = rest.trim();
-      if (rest !== "") this.memory += tokensOfText(rest);
-      return;
+    let t = text.trim();
+    const leading = t.startsWith(REMINDER_OPEN);
+    // each leading reminder is memory; whatever the user wrote after them is still the user's
+    while (t.startsWith(REMINDER_OPEN)) {
+      const close = t.indexOf(REMINDER_CLOSE);
+      const end = close < 0 ? t.length : close + REMINDER_CLOSE.length;
+      this.reminder(t.slice(0, end));
+      t = t.slice(end).trim();
     }
+    if (t === "") return;
     if (AGENTS_FOR.test(t)) {
       this.memory += tokensOfText(t);
       return;
@@ -340,7 +341,15 @@ export class BreakdownAccumulator {
         return;
       }
     }
-    this.chat(tokensOfText(text));
+    this.chat(tokensOfText(leading ? t : text));
+  }
+
+  private reminder(span: string): void {
+    let rest = this.splitSkills(this.splitMemory(span)).trim();
+    if (rest.startsWith(REMINDER_OPEN)) rest = rest.slice(REMINDER_OPEN.length);
+    if (rest.endsWith(REMINDER_CLOSE)) rest = rest.slice(0, rest.length - REMINDER_CLOSE.length);
+    rest = rest.trim();
+    if (rest !== "") this.memory += tokensOfText(rest);
   }
 
   private splitMemory(text: string): string {
