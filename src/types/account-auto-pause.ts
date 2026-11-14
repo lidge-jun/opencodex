@@ -6,6 +6,10 @@ export type AccountPauseReason = typeof ACCOUNT_PAUSE_REASONS[number];
 export interface AccountPauseDetails {
   reason: AccountPauseReason;
   pausedAt: number;
+  /** Display-safe upstream message that convicted the account (redacted, at most 300 characters). */
+  message?: string;
+  /** HTTP status of the refusal that convicted the account. */
+  statusCode?: number;
 }
 export interface AccountAutoPausePolicy {
   /** Explicit opt-in. Omitted and false both leave account eligibility unchanged. */
