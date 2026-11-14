@@ -67,6 +67,10 @@ function GroupHead({ label, stats, open, onToggle, localeTag }: {
   );
 }
 
+function Field({ label }: { label: string }) {
+  return <span className="sr-only">{label}: </span>;
+}
+
 function RequestRow({ row, pinned, names, localeTag, onPin }: {
   row: RouteRow; pinned: boolean; names: AccountNames; localeTag?: string; onPin: (key: string) => void;
 }) {
@@ -90,14 +94,15 @@ function RequestRow({ row, pinned, names, localeTag, onPin }: {
           <code className="rl-ellipsis rl-muted">{servedModelOf(row)}</code>
           {tries > 1 && <span className="rl-muted">{t("routeLive.rowTries", { count: tries })}</span>}
         </span>
-        <span className="rl-cell">{effortText(row)}</span>
-        <span className="rl-cell rl-num">{formatDuration(row.durationMs, localeTag)}</span>
-        <span className="rl-cell rl-num">{row.firstOutputMs === undefined ? DASH : formatDuration(row.firstOutputMs, localeTag)}</span>
-        <span className="rl-cell rl-num">{tokens === undefined ? DASH : formatCount(tokens, localeTag)}</span>
-        <span className="rl-cell rl-num">{cache === undefined ? DASH : formatPercent(cache, localeTag)}</span>
-        <span className="rl-cell rl-num">{rate ? formatRate(rate.value, rate.estimated, localeTag) : DASH}</span>
-        <span className="rl-cell rl-num">{cost === undefined ? DASH : formatEstimatedUsdValue(cost, t, localeTag)}</span>
-        <span className={`rl-cell rl-num${failed ? " rl-bad" : ""}`}>{row.status}</span>
+        {/* The column headings are aria-hidden, so each value carries its own name for screen readers. */}
+        <span className="rl-cell"><Field label={t("logs.col.effort")} />{effortText(row)}</span>
+        <span className="rl-cell rl-num"><Field label={t("logs.col.duration")} />{formatDuration(row.durationMs, localeTag)}</span>
+        <span className="rl-cell rl-num"><Field label={t("routeLive.colTtft")} />{row.firstOutputMs === undefined ? DASH : formatDuration(row.firstOutputMs, localeTag)}</span>
+        <span className="rl-cell rl-num"><Field label={t("logs.col.tokens")} />{tokens === undefined ? DASH : formatCount(tokens, localeTag)}</span>
+        <span className="rl-cell rl-num"><Field label={t("routeLive.colCache")} />{cache === undefined ? DASH : formatPercent(cache, localeTag)}</span>
+        <span className="rl-cell rl-num"><Field label={t("logs.col.tokPerSec")} />{rate ? formatRate(rate.value, rate.estimated, localeTag) : DASH}</span>
+        <span className="rl-cell rl-num"><Field label={t("logs.col.estimatedCost")} />{cost === undefined ? DASH : formatEstimatedUsdValue(cost, t, localeTag)}</span>
+        <span className={`rl-cell rl-num${failed ? " rl-bad" : ""}`}><Field label={t("logs.col.status")} />{row.status}</span>
       </button>
     </li>
   );

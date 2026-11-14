@@ -9,7 +9,7 @@ import { useI18n, LOCALES } from "../../i18n/shared";
 import type { RouteLiveCopyKey } from "../../i18n/route-live-copy";
 import { CONTEXT_CATEGORIES, calibrateContext, contextHealth, type ContextCategory, type ContextHealth } from "./context-tiles";
 import { formatCount, formatPercent } from "./route-format";
-import { cacheMeterOf, countedInputTokens, type RouteRow } from "./route-rows";
+import { cacheMeterOf, contextInputTokens, type RouteRow } from "./route-rows";
 
 const KIND_LABEL = {
   system: "routeLive.ctxSystem",
@@ -63,7 +63,7 @@ function ContextCardBody({ row }: { row: RouteRow }) {
   const localeTag = LOCALES.find(l => l.code === locale)?.htmlLang;
   const breakdown = row.contextBreakdown!;
   const windowTokens = row.contextWindow;
-  const shares = useMemo(() => calibrateContext(breakdown, countedInputTokens(row)), [breakdown, row]);
+  const shares = useMemo(() => calibrateContext(breakdown, contextInputTokens(row)), [breakdown, row]);
 
   const used = Math.max(shares.used, 1);
   const fraction = windowTokens ? shares.used / windowTokens : undefined;

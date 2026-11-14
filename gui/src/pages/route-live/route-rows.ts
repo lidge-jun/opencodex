@@ -33,6 +33,8 @@ export interface RouteAttempt {
   accountLogLabel?: string;
   accountTag?: string;
   errorCode?: string;
+  /** This attempt's own usage; the row's `usage` sums every attempt of a retried request. */
+  usage?: { inputTokens?: number };
 }
 
 export interface RouteRoster {
@@ -199,6 +201,16 @@ export function tokenTotal(row: RouteRow): number | undefined {
 /** Input tokens the provider counted, cached ones included. Undefined when the row has no usable usage. */
 export function countedInputTokens(row: Pick<RouteRow, "usage">): number | undefined {
   const input = row.usage?.inputTokens;
+  return finite(input) && input > 0 ? input : undefined;
+}
+
+/**
+ * Input the serving model held, for sizing its context. A retried row's `usage` sums every
+ * attempt, so it reads the final attempt's own; without that, undefined (the estimate stands).
+ */
+export function contextInputTokens(row: Pick<RouteRow, "usage" | "attempts">): number | undefined {
+  if ((row.attempts?.length ?? 0) <= 1) return countedInputTokens(row);
+  const input = row.attempts!.at(-1)?.usage?.inputTokens;
   return finite(input) && input > 0 ? input : undefined;
 }
 

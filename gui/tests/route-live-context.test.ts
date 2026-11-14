@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   calibrateContext, contextHealth, type ContextBreakdown,
 } from "../src/pages/route-live/context-tiles";
-import { cacheHitPercent, cacheMeterOf, parseRouteRows, type RouteRow } from "../src/pages/route-live/route-rows";
+import { cacheHitPercent, cacheMeterOf, contextInputTokens, parseRouteRows, type RouteRow } from "../src/pages/route-live/route-rows";
 
 const breakdown = (over: Partial<ContextBreakdown> = {}): ContextBreakdown => ({
   v: 1,
@@ -53,6 +53,15 @@ describe("cache meter and parsing", () => {
     expect(cacheMeterOf(row({ inputTokens: 1000, outputTokens: 10, cacheReadInputTokens: 0 }))).toEqual({ read: 0, total: 1000 });
     expect(cacheMeterOf(row({ inputTokens: 1000, outputTokens: 10, cacheReadInputTokens: 250 }))).toEqual({ read: 250, total: 1000 });
     expect(cacheHitPercent(row({ inputTokens: 1000, outputTokens: 10, cacheReadInputTokens: 250 }))).toBe(25);
+  });
+
+  test("a retried row sizes its context from the serving attempt, not the summed usage", () => {
+    const attempt = (inputTokens?: number) => ({ provider: "p", model: "m", status: 200, ...(inputTokens === undefined ? {} : { usage: { inputTokens } }) });
+    const summed = { ...row({ inputTokens: 80_000, outputTokens: 10 }) };
+    expect(contextInputTokens({ ...summed, attempts: [attempt(40_000), attempt(40_000)] })).toBe(40_000);
+    expect(contextInputTokens({ ...summed, attempts: [attempt(40_000), attempt()] })).toBeUndefined();
+    expect(contextInputTokens({ ...summed, attempts: [attempt(80_000)] })).toBe(80_000);
+    expect(contextInputTokens(summed)).toBe(80_000);
   });
 
   test("the parser keeps a valid breakdown and window and drops malformed ones", () => {

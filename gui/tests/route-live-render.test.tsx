@@ -75,7 +75,10 @@ test("request list groups by session, shows dashes for unknown metrics, and mark
   expect(flat.querySelectorAll("button.rl-row").length).toBe(2);
   expect(flat.querySelector(".rl-row--pinned")?.getAttribute("aria-pressed")).toBe("true");
   expect(flat.querySelectorAll("button.rl-row")[0]!.textContent).toContain("—");
-  expect(flat.querySelector(".rl-bad")?.textContent).toBe("500");
+  // headings are aria-hidden, so each value names itself for screen readers
+  expect(flat.querySelector(".rl-bad")?.textContent).toBe(`${translator("zh")("logs.col.status")}: 500`);
+  expect(flat.querySelector(".rl-bad .sr-only")?.textContent).toBe(`${translator("zh")("logs.col.status")}: `);
+  expect([...flat.querySelectorAll("button.rl-row")[0]!.querySelectorAll(".sr-only")].map(s => s.textContent)).toContain(`${translator("zh")("routeLive.colTtft")}: `);
   const grouped = list("session");
   expect(grouped.querySelectorAll(".rl-group-head").length).toBe(2);
   expect(grouped.querySelector(".rl-group-head")?.getAttribute("aria-expanded")).toBe("true");
@@ -100,6 +103,8 @@ test("time bar lists each measured stage in order with its label, or a note when
 const withContext = (extra: Partial<RouteRow> = {}) => ({
   ...failover,
   usage: { inputTokens: 1000, outputTokens: 200, cacheReadInputTokens: 500 },
+  // a retried row sizes its context from the serving attempt's own usage
+  attempts: [failover.attempts![0], { ...failover.attempts![1], usage: { inputTokens: 1000 } }],
   contextWindow: 200_000,
   contextBreakdown: {
     v: 1, toolCount: 3, turns: [100, 250],
