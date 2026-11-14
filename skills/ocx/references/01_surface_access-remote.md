@@ -12,7 +12,7 @@ Declared capabilities: 51.
 
 ### `ocx link probe`
 
-Usage: `ocx link probe <alias> [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--json]`
+Usage: `ocx link probe <alias> [--proxy-command <cmd> --ssh-user <user> --ssh-port <port> [--ssh-identity-file <path>]] [--exclusive] [--json]`
 
 Probe an SSH host fingerprint and OpenCodex version without trusting it.
 
@@ -24,9 +24,10 @@ State-changing: yes. JSON mode: `payload`.
 
 | Flag | Value | Meaning |
 |---|---|---|
-| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. The link then reads no ssh_config (-F none): the Home offers its SSH agent's keys or a default ~/.ssh/id_* key. |
+| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. The link then reads no ssh_config (-F none): the Home offers its SSH agent's keys or a default ~/.ssh/id_* key, or only the --ssh-identity-file key when one is given. |
 | `--ssh-user` | string | SSH user of the explicit route: a letter or _ then up to 31 letters, digits, ., _ or -. |
 | `--ssh-port` | number | SSH port of the explicit route, 1 to 65535. |
+| `--ssh-identity-file` | string | The private key the link authenticates with (link.route/2): an absolute path of letters, digits and . _ + - /. Needs the explicit route. ssh then offers that key alone (IdentitiesOnly=yes, IdentityAgent=none) for every command and tunnel of the link. The Home refuses a missing, symlinked, unreadable or group- or other-accessible file, and a Windows Home refuses the flag; it never reads the key. The key's directory and every directory above it must be owned by this user or root and not writable by group or others (a sticky directory above the key, such as /tmp, excepted), and every symlink on the path must be owned by this user or root; a folder created under umask 002 is group-writable and is refused. Use a path that passes, or run chmod go-w on a private folder of this user's or of the tool that chose the path; never change a shared or system directory such as /tmp or another user's symlink, even as root (hints identity_file_directory, identity_file_ancestor). |
 | `--exclusive` | boolean | The link keeps exactly its alias as its one route and refuses route edits. |
 | `--json` | boolean | Emit alias, fingerprint, key type and version as JSON. |
 
@@ -34,7 +35,7 @@ State-changing: yes. JSON mode: `payload`.
 
 ### `ocx link add`
 
-Usage: `ocx link add <alias> [--expect-fingerprint SHA256:…] [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--operation-id <id>] [--require-ephemeral] [--json]`
+Usage: `ocx link add <alias> [--expect-fingerprint SHA256:…] [--proxy-command <cmd> --ssh-user <user> --ssh-port <port> [--ssh-identity-file <path>]] [--exclusive] [--operation-id <id>] [--require-ephemeral] [--json]`
 
 Connect an SSH Child to this Home after confirming its fingerprint.
 
@@ -49,9 +50,10 @@ State-changing: yes. JSON mode: `payload`.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--expect-fingerprint` | string | Exact SHA256 host fingerprint; required without an interactive TTY. |
-| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. The link then reads no ssh_config (-F none): the Home offers its SSH agent's keys or a default ~/.ssh/id_* key. |
+| `--proxy-command` | string | Explicit ProxyCommand for the alias, passed to ssh on the command line: an absolute path, then words of letters, digits and . _ / : @ + , = - separated by single spaces. Needs --ssh-user, --ssh-port and --exclusive. The link then reads no ssh_config (-F none): the Home offers its SSH agent's keys or a default ~/.ssh/id_* key, or only the --ssh-identity-file key when one is given. |
 | `--ssh-user` | string | SSH user of the explicit route: a letter or _ then up to 31 letters, digits, ., _ or -. |
 | `--ssh-port` | number | SSH port of the explicit route, 1 to 65535. |
+| `--ssh-identity-file` | string | The private key the link authenticates with (link.route/2): an absolute path of letters, digits and . _ + - /. Needs the explicit route. ssh then offers that key alone (IdentitiesOnly=yes, IdentityAgent=none) for every command and tunnel of the link. The Home refuses a missing, symlinked, unreadable or group- or other-accessible file, and a Windows Home refuses the flag; it never reads the key. The key's directory and every directory above it must be owned by this user or root and not writable by group or others (a sticky directory above the key, such as /tmp, excepted), and every symlink on the path must be owned by this user or root; a folder created under umask 002 is group-writable and is refused. Use a path that passes, or run chmod go-w on a private folder of this user's or of the tool that chose the path; never change a shared or system directory such as /tmp or another user's symlink, even as root (hints identity_file_directory, identity_file_ancestor). |
 | `--exclusive` | boolean | The link keeps exactly its alias as its one route and refuses route edits. |
 | `--operation-id` | string | Journal the enrollment under this id (1-128 letters, digits, . _ : -): reserved ids, a mark per Home effect and the outcome; a repeat with the same id and parameters replays it. Needs --expect-fingerprint. |
 | `--require-ephemeral` | boolean | Refuse (409 full_install_present) a Child where any runnable full ocx exists, before any plant, key or Child change. |
