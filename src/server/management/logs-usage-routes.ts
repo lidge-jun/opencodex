@@ -72,6 +72,7 @@ import { getRequestLogEntries, queryRequestLogs, type RequestLogEntry } from "..
 import { decodeRequestLogCursor, selectRequestLogPoll } from "../request-log-cursor";
 import { estimateComboCost, estimateRequestCost, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import { userCostOverlayVersion } from "../../usage/user-cost-overlays";
+import { triggerPriceCatalogRefresh } from "../../usage/price-catalog";
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
 import { applySystemEnvToggle } from "../system-env";
@@ -245,6 +246,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
   }
 
   if (url.pathname === "/api/usage" && req.method === "GET") {
+    triggerPriceCatalogRefresh();
     const source = parseUsageSource(url.searchParams);
     if (source.kind === "invalid") return jsonResponse({ error: "invalid usage source filter" }, 400);
     const unconfigured = source.kind === "filtered" && source.filter.device.kind === "unconfigured";

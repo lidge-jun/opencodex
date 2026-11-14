@@ -2,6 +2,7 @@ import { CodexStaleBanner } from "../components/codex-stale-banner";
 import ModelCatalogSettingsPanels from "../components/ModelCatalogSettingsPanels";
 import ModelDisplayNameDialog from "../components/ModelDisplayNameDialog";
 import ModelPriceDialog from "../components/ModelPriceDialog";
+import PriceSourceChip from "../components/PriceSourceChip";
 import ModelSettingsDialog from "../components/ModelSettingsDialog";
 import { fetchCodexAppServerState, type AppServerStateOutcome } from "../codex-app-server-state";
 import { ModelsReloadFocusBoundary } from "./models-reload-focus-boundary";
@@ -1728,7 +1729,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
                     )}
                     {aliases.models[provider]?.[m.id]?.source === "builtin" && <span className="models-chip muted text-caption">{t("models.aliasAuto")}</span>}
                     {m.custom && <span className="models-chip muted mono text-caption">{t("models.customBadge")}</span>}
-                    {!m.native && m.provider !== "combo" && m.manualPricing === true && <span className="models-chip muted text-caption">{t("pricing.override.badge")}</span>}
+                    {m.provider !== "combo" && <PriceSourceChip price={m.price} manualPricing={m.manualPricing} />}
                     {!m.custom && recentIds.has(m.id) && <span className="badge badge-amber">{t("models.newBadge")}</span>}
                     {m.contextCapped && <span className="models-chip muted mono text-caption">{t("models.contextCappedValue", { value: fmtK(m.contextCap ?? contextCapValue) })}</span>}
                     </span>
@@ -2715,7 +2716,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
       {priceModel && (
         <ModelPriceDialog
           key={`${apiBase}/${priceModel.namespaced}`}
-          model={priceModel}
+          model={models.find(row => row.namespaced === priceModel.namespaced) ?? priceModel}
           apiBase={apiBase}
           onRefresh={signal => load(true, signal)}
           onClose={() => {

@@ -41,7 +41,7 @@ import {
 import { fastWireDeclarationError } from "../../providers/fastwire";
 import { getProviderRegistryEntry, providerMatchesRegistryTransport, providerModelWireDefault } from "../../providers/registry";
 import { resolveOpenAiVirtualModel } from "../../providers/openai-virtual-models";
-import { COST4_RATE_KEYS, isValidCost4Rate, isValidPromptLengthPricing, copyPromptLengthPricing } from "../../usage/user-cost-overlays";
+import { COST4_RATE_KEYS, isValidCost4Rate, isValidPriceMultiplier, isValidPromptLengthPricing, copyPromptLengthPricing } from "../../usage/user-cost-overlays";
 import { MAX_COST4_RATE } from "../../usage/expected-prices";
 import {
   DECLARABLE_HOSTED_TOOL_TYPES,
@@ -520,6 +520,12 @@ export function providerModelCostsConfigError(value: unknown, field = "modelCost
     }
   }
   return null;
+}
+
+/** Validate `providers.<name>.priceMultiplier`: absent, or a finite number in (0, 1000]. */
+export function priceMultiplierConfigError(value: unknown, field = "priceMultiplier"): string | null {
+  if (value === undefined) return null;
+  return isValidPriceMultiplier(value) ? null : `${field} must be a finite number greater than 0 and at most 1000`;
 }
 
 /**

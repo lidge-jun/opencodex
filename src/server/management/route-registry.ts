@@ -497,6 +497,8 @@ export const MANAGEMENT_ROUTES: readonly ManagementRoute[] = [
   { method: "PUT", path: "/api/providers/{provider}/alias-template", module: "server/management/model-routes", mutates: true, mechanism: "regex" },
   { method: "GET", path: "/api/providers/{provider}/model-costs", module: "server/management/model-routes", mutates: false, mechanism: "regex" },
   { method: "PUT", path: "/api/providers/{provider}/model-costs", module: "server/management/model-routes", mutates: true, mechanism: "regex" },
+  { method: "PUT", path: "/api/providers/{provider}/price-multiplier", module: "server/management/model-routes", mutates: true, mechanism: "regex", exempt: { reason: "deferred-verb", why: "The relay price multiplier is dashboard-edited; a CLI verb is not built yet.", owner: "price-catalog", ownerDoc: "structure/pricing.md" } },
+  { method: "POST", path: "/api/pricing/refresh", module: "server/management/model-routes", mutates: true, exempt: { reason: "deferred-verb", why: "Forcing a public price-list refresh is a dashboard button; a CLI verb is not built yet.", owner: "price-catalog", ownerDoc: "structure/pricing.md" } },
   { method: "PUT", path: "/api/providers/{provider}/model-display-names", module: "server/management/model-routes", mutates: true, mechanism: "regex" },
   { method: "PUT", path: "/api/custom-models/{id}", module: "server/management/model-routes", mutates: true, mechanism: "regex" },
   { method: "DELETE", path: "/api/custom-models/{id}", module: "server/management/model-routes", mutates: true, mechanism: "regex" },

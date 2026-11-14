@@ -44,6 +44,7 @@ import {
   managementIngressSchema,
   codexPoolSchema,
   codexAccountAutoSwitchThresholdsSchema,
+  priceMultiplierConfigError,
   providerModelCostsConfigError,
   credentialGroupsSchema,
   hubConfigSchema,
@@ -409,6 +410,11 @@ export function sanitizeModelCostsForLoad(parsed: unknown, warn: (message: strin
     const safeProviderName = JSON.stringify(redactSecretString(name));
     if (!provider || typeof provider !== "object" || Array.isArray(provider)) continue;
     const p = provider as Record<string, unknown>;
+    // A malformed relay multiplier is dropped with a warning rather than failing the config parse.
+    if (priceMultiplierConfigError(p.priceMultiplier) !== null) {
+      delete p.priceMultiplier;
+      warn(`⚠️  config.json providers.${safeProviderName}.priceMultiplier is invalid — ignoring the multiplier`);
+    }
     const costs = p.modelCosts;
     if (costs === undefined) continue;
     if (!costs || typeof costs !== "object" || Array.isArray(costs)) {

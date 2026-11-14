@@ -5,6 +5,9 @@ import { readJsonOrThrow } from "../fetch-json";
 import { useT, type TKey } from "../i18n/shared";
 import type { ModelRow } from "../pages/models-shared";
 import { Select } from "../ui";
+import { AutomaticPrice, RelayMultiplier } from "./ModelPriceExtras";
+import { parseMultiplierDraft, postPricingRefresh, putPriceMultiplier } from "./model-price-requests";
+import { adoptableCost } from "./model-price-source";
 import {
   CUSTOM_FIELD, EMPTY_CUSTOM, EMPTY_RATES, INVALID, RATE_FIELDS, buildDraftCost, isRecord, loadDraft, parseModelCost, receiptMatches,
   type CustomDraft, type InvalidField, type ModelCost, type PricingMode, type RateDraft, type RateField,
@@ -17,6 +20,7 @@ const RATE_LABELS: Record<RateField, TKey> = {
   cacheWrite: "pricing.override.cacheWrite",
 };
 const REQUEST_TIMEOUT_MS = 60_000;
+type AuxKind = "refreshPrices" | "multiplier";
 type Phase = "loading" | "loadFailed" | "ready" | "saving" | "unknown" | "refreshing" | "refreshFailed";
 
 interface ModelPriceDialogProps {
@@ -35,6 +39,7 @@ export default function ModelPriceDialog({ model, apiBase, onRefresh, onClose }:
   const inputRef = useRef<HTMLInputElement>(null);
   const customFieldRefs = useRef<Partial<Record<InvalidField, HTMLInputElement>>>({});
   const submitRef = useRef<HTMLButtonElement>(null);
+  const multiplierRef = useRef<HTMLInputElement>(null);
   const requestRef = useRef<BoundedFetch | null>(null);
   const mutationPendingRef = useRef(false);
   const [phase, setPhase] = useState<Phase>("loading");
@@ -45,6 +50,9 @@ export default function ModelPriceDialog({ model, apiBase, onRefresh, onClose }:
   const [errorKey, setErrorKey] = useState<TKey | null>(null);
   const [invalidField, setInvalidField] = useState<InvalidField | null>(null);
   const [recovered, setRecovered] = useState(false);
+  const [multiplier, setMultiplier] = useState<number | null>(null);
+  const [multiplierDraft, setMultiplierDraft] = useState("");
+  const [aux, setAux] = useState<AuxKind | null>(null);
   const endpoint = `${apiBase}/api/providers/${encodeURIComponent(model.provider)}/model-costs`;
   const mutating = phase === "saving" || phase === "refreshing";
   const locked = phase !== "ready";
@@ -68,6 +76,10 @@ export default function ModelPriceDialog({ model, apiBase, onRefresh, onClose }:
       setPricingMode(loaded.mode);
       setCustomDraft(loaded.custom);
       setHasOverride(cost !== undefined);
+      const rawMultiplier = result.priceMultiplier;
+      const loadedMultiplier = typeof rawMultiplier === "number" && Number.isFinite(rawMultiplier) && rawMultiplier > 0 ? rawMultiplier : null;
+      setMultiplier(loadedMultiplier);
+      setMultiplierDraft(loadedMultiplier === null ? "" : String(loadedMultiplier));
       setErrorKey(null);
       setInvalidField(null);
       // This read recovers an editable snapshot, not ordering against an earlier
@@ -82,7 +94,7 @@ export default function ModelPriceDialog({ model, apiBase, onRefresh, onClose }:
       bounded.clear();
       if (requestRef.current === bounded) requestRef.current = null;
     });
-  }, [endpoint, model.id, model.provider, setCustomDraft, setErrorKey, setInvalidField, setPricingMode]);
+  }, [endpoint, model.id, model.provider, setCustomDraft, setErrorKey, setInvalidField, setMultiplier, setMultiplierDraft, setPricingMode]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -144,6 +156,56 @@ export default function ModelPriceDialog({ model, apiBase, onRefresh, onClose }:
     }
   };
 
+  // A server-confirmed change that is not a model-cost write: refresh the list, then stay open.
+  const runAux = async (kind: AuxKind, failKey: TKey, op: (signal: AbortSignal) => Promise<void>) => {
+    if (requestRef.current || phase !== "ready") return;
+    const bounded = createBoundedFetch(REQUEST_TIMEOUT_MS);
+    requestRef.current = bounded;
+    setPhase("saving");
+    setAux(kind);
+    mutationPendingRef.current = true;
+    setErrorKey(null);
+    setInvalidField(null);
+    let confirmed = false;
+    try {
+      await op(bounded.signal);
+      bounded.signal.throwIfAborted();
+      if (requestRef.current !== bounded) return;
+      confirmed = true;
+      setPhase("refreshing");
+      if (!await onRefresh(bounded.signal)) throw new Error("catalog refresh failed");
+      bounded.signal.throwIfAborted();
+      if (requestRef.current === bounded) setPhase("ready");
+    } catch {
+      if (requestRef.current !== bounded) return;
+      setPhase(confirmed ? "refreshFailed" : "ready");
+      setErrorKey(confirmed ? "pricing.override.refreshFailed" : failKey);
+    } finally {
+      bounded.clear();
+      if (requestRef.current === bounded) {
+        requestRef.current = null;
+        mutationPendingRef.current = false;
+        setAux(null);
+      }
+    }
+  };
+
+  const refreshPrices = () => void runAux("refreshPrices", "pricing.auto.refreshFailed", signal => postPricingRefresh(apiBase, signal));
+
+  const saveMultiplier = () => {
+    const value = parseMultiplierDraft(multiplierDraft);
+    if (value === "invalid" || multiplierRef.current?.validity.badInput) {
+      setErrorKey("pricing.multiplier.invalid");
+      multiplierRef.current?.focus();
+      return;
+    }
+    void runAux("multiplier", "pricing.multiplier.failed", async signal => {
+      await putPriceMultiplier(apiBase, model.provider, value, signal);
+      setMultiplier(value);
+    });
+  };
+  const multiplierDirty = multiplierDraft.trim() !== (multiplier === null ? "" : String(multiplier));
+
   const requestClose = () => {
     if (!mutationPendingRef.current) onClose();
   };
@@ -193,6 +255,9 @@ export default function ModelPriceDialog({ model, apiBase, onRefresh, onClose }:
           <code className="mono text-control">{model.namespaced}</code>
         </div>
         <div className="model-price-body">
+        <AutomaticPrice price={model.price} locked={locked} refreshing={aux === "refreshPrices"}
+          onAdopt={() => { const adopted = adoptableCost(model.price); if (adopted) void save(adopted); }}
+          onRefreshPrices={refreshPrices} />
         <p id={helpId} className="muted small">{t("pricing.override.help")}</p>
         <p className="muted small">{t("pricing.override.promptHelp")}</p>
         {phase === "loading" && <p role="status" className="muted small">{t("pricing.override.loading")}</p>}
@@ -266,6 +331,9 @@ export default function ModelPriceDialog({ model, apiBase, onRefresh, onClose }:
             ))}
           </div>
         </section>}
+        <RelayMultiplier id={id} provider={model.provider} draft={multiplierDraft} dirty={multiplierDirty}
+          invalid={errorKey === "pricing.multiplier.invalid"} locked={locked} saving={aux === "multiplier"}
+          inputRef={multiplierRef} onDraft={value => { setMultiplierDraft(value); setErrorKey(null); }} onSave={saveMultiplier} />
         </div>
         {recovered && <p role="status" className="muted small">{t("pricing.override.recovered")}</p>}
         {errorKey && <p id={errorId} className="model-display-name-error" role="alert">{t(errorKey)}</p>}

@@ -1224,6 +1224,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // erase hand-edited per-model prices from Logs/Usage estimates.
     const existingCosts = config.providers[name]?.modelCosts;
     if (existingCosts && !prov.modelCosts) prov.modelCosts = existingCosts;
+    if (prov.priceMultiplier === undefined && config.providers[name]?.priceMultiplier !== undefined) prov.priceMultiplier = config.providers[name]!.priceMultiplier;
     // The add/edit form also omits auto-review selectors. Preserve hand-configured
     // provider-wide and per-model targets across an unrelated overwrite; clearing is
     // explicit through PATCH with null.

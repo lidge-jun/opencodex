@@ -50,6 +50,11 @@
 .model-price-band-title { font-weight: var(--weight-medium); margin-bottom: 2px; }
 .model-price-custom-controls { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-2); }
 .model-price-custom-controls .field-label { min-height: 2.5em; }
+.model-price-auto { margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--border); }
+.model-price-auto > p { margin: 2px 0; }
+.model-price-auto-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 8px 0 4px; }
+.model-price-multiplier-row { display: flex; align-items: flex-end; gap: var(--space-2); }
+.model-price-multiplier-row .model-price-rate-field { flex: 1 1 auto; }
 .model-price-dialog .model-display-name-error { margin-top: 8px; }
 @media (max-width: 760px) {
   .model-price-mode-option { min-height: 44px; }
