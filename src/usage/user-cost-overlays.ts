@@ -25,6 +25,8 @@ export { COST4_RATE_KEYS, isValidCost4Rate, validCost4, isValidPromptLengthPrici
 import { redactSecretString } from "../lib/redact";
 import { isSelectableCodexPoolAccount, MAIN_CODEX_ACCOUNT_ID } from "../codex/account-id";
 import { codexAccountLogLabel } from "../codex/account-label";
+import { getProviderRegistryEntry } from "../providers/registry";
+import { priceCatalogVersion } from "./price-catalog-version";
 
 const EMPTY: readonly ExpectedPriceOverlay[] = [];
 
@@ -32,6 +34,8 @@ let active: readonly ExpectedPriceOverlay[] = EMPTY;
 let activeSignature = "";
 let activeConfigured = new Set<string>();
 let activeAccountProviders = codexAccountProviders([]);
+let activeMultipliers: ReadonlyMap<string, number> = new Map();
+let activeSubscriptions: ReadonlySet<string> = new Set();
 let version = 0;
 let preservedDiskOnlyProviders: Record<string, OcxProviderConfig> | null = null;
 
@@ -76,6 +80,25 @@ function codexAccountProviders(accounts: OcxConfig["codexAccounts"]): Map<string
     }
   }
   return mapping;
+}
+
+/** Valid opt-in relay multiplier: finite, > 0, <= 1000. */
+export function isValidPriceMultiplier(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= 1000;
+}
+
+/**
+ * Providers whose requests are covered by a subscription, so a catalog price is only the
+ * API-equivalent: effective auth `oauth` (config `authMode`, else the registry) or `forward`
+ * (ChatGPT login), plus every exact Codex account identity.
+ */
+function subscriptionProviders(config: OcxConfig, accountProviders: ReadonlyMap<string, string>): Set<string> {
+  const out = new Set<string>(accountProviders.keys());
+  for (const [name, provider] of Object.entries(config.providers ?? {})) {
+    const auth = provider?.authMode ?? getProviderRegistryEntry(name)?.authKind;
+    if (auth === "oauth" || auth === "forward") out.add(name);
+  }
+  return out;
 }
 
 /** Register one active live-config owner. Multiple server leases may share one config object. */
@@ -311,12 +334,23 @@ export function refreshUserCostOverlays(config: OcxConfig): void {
   const configuredNames = Object.keys(providers ?? {}).sort();
   const accountProviders = codexAccountProviders(config.codexAccounts);
   const accountEntries = [...accountProviders].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
-  const signature = `${JSON.stringify(configuredNames)}\u0000${JSON.stringify(rows)}\u0000${JSON.stringify(accountEntries)}`;
+  // Relay multipliers and the subscription set are part of the identity as well: both change a
+  // matched price after the memoized lookup, so a change must bump the version.
+  const multipliers = new Map<string, number>();
+  for (const [providerName, provider] of Object.entries(providers ?? {})) {
+    if (isValidPriceMultiplier(provider?.priceMultiplier)) multipliers.set(providerName, provider.priceMultiplier);
+  }
+  const subscriptions = subscriptionProviders(config, accountProviders);
+  const multiplierEntries = [...multipliers].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0);
+  const subscriptionNames = [...subscriptions].sort();
+  const signature = `${JSON.stringify(configuredNames)}\u0000${JSON.stringify(rows)}\u0000${JSON.stringify(accountEntries)}\u0000${JSON.stringify(multiplierEntries)}\u0000${JSON.stringify(subscriptionNames)}`;
   if (signature === activeSignature) return;
   activeSignature = signature;
   active = rows;
   activeConfigured = new Set(configuredNames);
   activeAccountProviders = accountProviders;
+  activeMultipliers = multipliers;
+  activeSubscriptions = subscriptions;
   version++;
 }
 
@@ -325,9 +359,23 @@ export function activeUserCostOverlays(): readonly ExpectedPriceOverlay[] {
   return active;
 }
 
-/** Monotonic version bumped on pricing-identity changes; used by the estimator memo key. */
+/**
+ * Monotonic version bumped on pricing-identity changes (overlay rows, provider set, multipliers,
+ * subscription set, and the online price catalog); used by the estimator memo key and the
+ * usage caches. Both counters only grow, so their sum changes whenever either does.
+ */
 export function userCostOverlayVersion(): number {
-  return version;
+  return version + priceCatalogVersion();
+}
+
+/** Per-provider `priceMultiplier` from the last refresh, keyed by configured provider name. */
+export function activePriceMultipliers(): ReadonlyMap<string, number> {
+  return activeMultipliers;
+}
+
+/** Subscription-billed provider names and account identities from the last refresh. */
+export function activeSubscriptionProviders(): ReadonlySet<string> {
+  return activeSubscriptions;
 }
 
 /** Configured provider names from the last refresh (pricing-namespace identity). */

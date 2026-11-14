@@ -1,4 +1,4 @@
-import { nonBlankStringArrayConfigError, normalizeNonBlankStringArray } from "../../config/provider-validation";
+import { modelCapabilityProbesConfigError, nonBlankStringArrayConfigError, normalizeNonBlankStringArray } from "../../config/provider-validation";
 import {
   retryOn429PolicyConfigError,
   retryOnResetPolicyConfigError,
@@ -197,6 +197,8 @@ export function providerCompatFieldConfigError(provider: Record<string, unknown>
   const promoteAdditionalTools = provider.promoteAdditionalTools;
   if (promoteAdditionalTools !== undefined && typeof promoteAdditionalTools !== "boolean") return "promoteAdditionalTools must be a boolean";
   if (provider.forwardAdvisorTool !== undefined && typeof provider.forwardAdvisorTool !== "boolean") return "forwardAdvisorTool must be a boolean";
+  const probesError = modelCapabilityProbesConfigError(provider.modelCapabilityProbes);
+  if (probesError) return probesError;
   const wire = provider.reasoningWireFormat;
   if (wire !== undefined && !PROVIDER_REASONING_WIRE_FORMATS.includes(wire as never)) {
     return `reasoningWireFormat must be one of: ${PROVIDER_REASONING_WIRE_FORMATS.join(", ")}`;

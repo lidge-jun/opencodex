@@ -6,7 +6,9 @@
  * - matching is exact native provider/model ID via the jawcode alias table
  *   (no fuzzy, no case-fold, no resolvedModel/requestedModel fallback);
  * - user-configured provider overlay wins, then jawcode nonzero price, then the expected-price overlay
- *   (verified / verified-derived only), otherwise null => UI shows em dash;
+ *   (verified / verified-derived only), then the online catalogs (models.dev, OpenRouter; always
+ *   estimates), otherwise null => UI shows em dash;
+ * - a provider's opt-in `priceMultiplier` scales every non-user price, never a user price;
  * - combo sums per-attempt costs and fails closed when any attempt is unpriced.
  */
 import {
@@ -20,7 +22,8 @@ import { canonicalFastTierMarker } from "../providers/fastwire";
 import { baseProviderLabel } from "../providers/label";
 import type { PersistedUsageAttempt, UsageStatus } from "./log";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
-import { activeAccountPricingProviders, activeConfiguredProviders, activeUserCostOverlays, userCostOverlayVersion } from "./user-cost-overlays";
+import { activeAccountPricingProviders, activeConfiguredProviders, activePriceMultipliers, activeSubscriptionProviders, activeUserCostOverlays, userCostOverlayVersion } from "./user-cost-overlays";
+import { PRICE_CATALOG_MISS_COOLDOWN_MS, resolveCatalogPrice } from "./price-catalog";
 import {
   EXPECTED_PRICE_OVERLAYS,
   findExpectedPriceOverlay,
@@ -83,10 +86,14 @@ export interface MatchedPrice {
   jawcodeProvider?: string;
   cost4: Cost4;
   promptLengthPricing?: PromptLengthPricing;
-  source: "jawcode" | "expected" | "user";
+  source: "jawcode" | "expected" | "user" | "models-dev" | "openrouter";
   sourceRef?: string;
   verifiedAt?: string;
   status: "verified" | "verified-derived";
+  /** Provider `priceMultiplier` already folded into `cost4` (relay markup/discount). */
+  multiplier?: number;
+  /** Subscription-billed provider: the price is the API-equivalent, not what the plan charges. */
+  apiEquivalent?: true;
 }
 
 export interface AttemptCostEstimate {
@@ -212,6 +219,7 @@ export function resolveMatchedPrice(
   userOverlays: readonly ExpectedPriceOverlay[] = activeUserCostOverlays(),
   options: PriceResolutionOptions = {},
 ): MatchedPrice | null {
+  const configuredName = provider;
   // Literal configured providers win over account identities. Only then use
   // config-owned Codex identities, followed by the existing historical suffix
   // grammar. Never infer an account by stripping an arbitrary suffix.
@@ -231,17 +239,47 @@ export function resolveMatchedPrice(
   // user overlays get a NEW array identity + version bump on every config refresh,
   // so memoized rows never go stale.
   if (overlays === EXPECTED_PRICE_OVERLAYS && userOverlays === activeUserCostOverlays()) {
-    const cacheKey = `${userCostOverlayVersion()} ${options.allowModelLevelFallback !== false} ${provider} ${modelId}`;
-    if (!priceMemo.has(cacheKey)) {
-      if (priceMemo.size >= 512) priceMemo.clear();
-      priceMemo.set(cacheKey, resolveMatchedPriceInner(provider, modelId, overlays, userOverlays, options));
-    }
-    return priceMemo.get(cacheKey)!;
+    // userCostOverlayVersion() also folds in the online catalog version.
+    // The decorated price is memoized (stable identity for callers that compare it); the
+    // configured name is part of the key because the multiplier and subscription label follow it,
+    // not the collapsed namespace. The version covers both sets.
+    const cacheKey = `${userCostOverlayVersion()} ${options.allowModelLevelFallback !== false} ${configuredName} ${provider} ${modelId}`;
+    const cached = priceMemo.get(cacheKey);
+    // A memoized miss expires with the catalog's miss cooldown, so the lookup can queue its retry.
+    if (cached && (cached.price || Date.now() < cached.retryAt)) return cached.price;
+    if (!cached && priceMemo.size >= 512) priceMemo.clear();
+    const price = decoratePrice(resolveMatchedPriceInner(provider, modelId, overlays, userOverlays, options), configuredName, provider);
+    priceMemo.set(cacheKey, { price, retryAt: Date.now() + PRICE_CATALOG_MISS_COOLDOWN_MS });
+    return price;
   }
-  return resolveMatchedPriceInner(provider, modelId, overlays, userOverlays, options);
+  return decoratePrice(resolveMatchedPriceInner(provider, modelId, overlays, userOverlays, options), configuredName, provider);
 }
 
-const priceMemo = new Map<string, MatchedPrice | null>();
+function scaleCost4(cost4: Cost4, k: number): Cost4 {
+  return { input: cost4.input * k, output: cost4.output * k, cacheRead: cost4.cacheRead * k, cacheWrite: cost4.cacheWrite * k };
+}
+
+/**
+ * Relay multiplier and subscription label, applied to non-user prices only. The multiplier is
+ * keyed by configured provider name: a literal configured name wins, and an account-qualified
+ * label (`anthropic-p2e22d0`) takes its namespace's multiplier, as that provider's model row does.
+ * The subscription set also holds exact account identities.
+ */
+function decoratePrice(price: MatchedPrice | null, configuredName: string, namespace: string): MatchedPrice | null {
+  if (!price || price.source === "user") return price;
+  const multipliers = activePriceMultipliers();
+  const multiplier = multipliers.get(configuredName) ?? multipliers.get(namespace);
+  const subscription = activeSubscriptionProviders();
+  const apiEquivalent = subscription.has(configuredName) || subscription.has(namespace);
+  if (multiplier === undefined && !apiEquivalent) return price;
+  return {
+    ...price,
+    ...(multiplier !== undefined ? { cost4: scaleCost4(price.cost4, multiplier), multiplier } : {}),
+    ...(apiEquivalent ? { apiEquivalent: true as const } : {}),
+  };
+}
+
+const priceMemo = new Map<string, { price: MatchedPrice | null; retryAt: number }>();
 
 /**
  * Resolution wrapper: exact provider/model lookup first, then the Antigravity
@@ -317,9 +355,8 @@ function resolveMatchedPriceExact(
   if (!overlay || !validCost4(overlay.cost4) || !hasNonZeroCost(overlay.cost4)) {
     if (options.allowModelLevelFallback === false) return null;
     const fallback = resolveModelLevelPrice(provider, modelId);
-    return fallback
-      ? { ...fallback, cost4: multiplyCursorFastCost(fallback.cost4, provider, modelId), ...cursorFastPriceProvenance(provider, modelId) }
-      : null;
+    if (fallback) return { ...fallback, cost4: multiplyCursorFastCost(fallback.cost4, provider, modelId), ...cursorFastPriceProvenance(provider, modelId) };
+    return resolveOnlineCatalogPrice(provider, modelId);
   }
   if (overlay.status === "unverified") return null;
   return {
@@ -349,6 +386,21 @@ function multiplyCursorFastCost(cost4: Cost4, provider: string, modelId: string)
 function cursorFastPriceProvenance(provider: string, modelId: string): Pick<MatchedPrice, "sourceRef" | "status"> | Record<never, never> {
   const sourceRef = cursorFastPriceSource(provider, modelId);
   return sourceRef ? { sourceRef, status: "verified" } : {};
+}
+
+/** Lowest tiers: models.dev then OpenRouter. A miss queues a background fetch and returns null now. */
+function resolveOnlineCatalogPrice(provider: string, modelId: string): MatchedPrice | null {
+  const hit = resolveCatalogPrice(modelId);
+  if (!hit) return null;
+  return {
+    provider,
+    modelId,
+    cost4: multiplyCursorFastCost(hit.cost4, provider, modelId),
+    source: hit.source,
+    sourceRef: hit.url,
+    verifiedAt: new Date(hit.fetchedAt).toISOString(),
+    status: "verified-derived",
+  };
 }
 
 /** User-configured overlay match; explicit zero rates are authoritative too. */

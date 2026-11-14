@@ -598,3 +598,133 @@ export function sanitizeModelCapabilitiesForLoad(value: unknown): Record<string,
   }
   return Object.keys(rows).length ? rows : undefined;
 }
+
+const PROBE_AXES = ["inputModalities", "reasoningEfforts"] as const;
+export type ModelCapabilityProbeAxis = typeof PROBE_AXES[number];
+const PROBED_AT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/;
+
+/**
+ * Strict check for `modelCapabilityProbes`, the provenance a capability probe records. Each row
+ * names the model's probed axes with `true` and carries an ISO 8601 UTC `probedAt`; a row that
+ * names no axis is meaningless and rejected, because the field is stored sparsely.
+ */
+export function modelCapabilityProbesConfigError(value: unknown): string | null {
+  if (value === undefined) return null;
+  if (!capabilityRecord(value)) return "modelCapabilityProbes must be a plain object";
+  if (Object.keys(value).length > MODEL_DISCOVERY_MAX_MODELS) return "modelCapabilityProbes has too many models";
+  for (const [id, row] of Object.entries(value)) {
+    if (!isValidModelDiscoveryModelId(id) || ["__proto__", "prototype", "constructor"].includes(id)) {
+      return "modelCapabilityProbes keys must be exact non-reserved model ids";
+    }
+    if (!capabilityRecord(row)) return "modelCapabilityProbes rows must be plain objects";
+    if (Object.keys(row).some(key => key !== "probedAt" && !(PROBE_AXES as readonly string[]).includes(key))) {
+      return "modelCapabilityProbes contains an unknown field";
+    }
+    if (typeof row.probedAt !== "string" || !PROBED_AT_PATTERN.test(row.probedAt) || Number.isNaN(Date.parse(row.probedAt))) {
+      return "modelCapabilityProbes probedAt must be an ISO 8601 UTC timestamp";
+    }
+    for (const axis of PROBE_AXES) {
+      if (Object.hasOwn(row, axis) && row[axis] !== true) return `modelCapabilityProbes ${axis} must be true`;
+    }
+    if (!PROBE_AXES.some(axis => row[axis] === true)) return "modelCapabilityProbes rows must name at least one probed axis";
+  }
+  return null;
+}
+
+/** The declaration a probe flag labels: the model's input modalities or its reasoning ladder. */
+function probedDeclaration(provider: OcxProviderConfig, id: string, axis: ModelCapabilityProbeAxis): unknown {
+  return axis === "inputModalities"
+    ? provider.modelCapabilities && Object.hasOwn(provider.modelCapabilities, id) ? provider.modelCapabilities[id]?.inputModalities : undefined
+    : provider.modelReasoningEfforts && Object.hasOwn(provider.modelReasoningEfforts, id) ? provider.modelReasoningEfforts[id] : undefined;
+}
+
+/**
+ * The `[model, axis]` flags whose declaration differs between two rows, for the models `probes`
+ * labels. A flag carried onto a changed declaration would label a manual value as probed.
+ */
+export function changedModelCapabilityProbeAxes(
+  probes: NonNullable<OcxProviderConfig["modelCapabilityProbes"]>,
+  before: OcxProviderConfig,
+  after: OcxProviderConfig,
+): Array<readonly [string, ModelCapabilityProbeAxis]> {
+  const changed: Array<readonly [string, ModelCapabilityProbeAxis]> = [];
+  for (const [id, row] of Object.entries(probes)) {
+    for (const axis of PROBE_AXES) {
+      if (row?.[axis] === true && JSON.stringify(probedDeclaration(before, id, axis)) !== JSON.stringify(probedDeclaration(after, id, axis))) {
+        changed.push([id, axis]);
+      }
+    }
+  }
+  return changed;
+}
+
+/**
+ * Rebuild `modelCapabilityProbes` so a flag never outlives the declaration it labels, optionally
+ * dropping named `[model, axis]` flags first (a manual edit wins). Always writes a fresh record and
+ * never mutates the stored one, because PATCH works on a shallow copy of the live row. The field is
+ * removed when nothing is left. Returns whether any flag was dropped.
+ */
+export function pruneModelCapabilityProbes(
+  provider: OcxProviderConfig,
+  dropped: Iterable<readonly [string, ModelCapabilityProbeAxis]> = [],
+): boolean {
+  const probes = provider.modelCapabilityProbes;
+  if (probes === undefined) return false;
+  const drop = new Set([...dropped].map(([id, axis]) => `${axis}\u0000${id}`));
+  const declared = (id: string, axis: ModelCapabilityProbeAxis) => Array.isArray(probedDeclaration(provider, id, axis));
+  const next: NonNullable<OcxProviderConfig["modelCapabilityProbes"]> = {};
+  let changed = false;
+  for (const [id, row] of Object.entries(probes)) {
+    if (["__proto__", "prototype", "constructor"].includes(id)) { changed = true; continue; }
+    const kept: NonNullable<OcxProviderConfig["modelCapabilityProbes"]>[string] = { probedAt: row.probedAt };
+    for (const axis of PROBE_AXES) {
+      if (row[axis] !== true) continue;
+      if (!drop.has(`${axis}\u0000${id}`) && declared(id, axis)) kept[axis] = true;
+      else changed = true;
+    }
+    if (kept.inputModalities || kept.reasoningEfforts) next[id] = kept;
+  }
+  if (Object.keys(next).length > 0) provider.modelCapabilityProbes = next;
+  else delete provider.modelCapabilityProbes;
+  return changed;
+}
+
+/** A PATCH of `modelCapabilities` that touches a model's input modalities makes that axis manual. */
+export function dropPatchedModelCapabilityProbes(provider: OcxProviderConfig, patch: unknown): void {
+  const probes = provider.modelCapabilityProbes;
+  if (probes === undefined) return;
+  const ids = patch === null ? Object.keys(probes) : capabilityRecord(patch)
+    ? Object.entries(patch).filter(([, row]) => row === null || (capabilityRecord(row) && Object.hasOwn(row, "inputModalities"))).map(([id]) => id)
+    : [];
+  pruneModelCapabilityProbes(provider, ids.map(id => [id, "inputModalities"] as const));
+}
+
+/**
+ * Same-name `POST /api/providers` overwrite: the provider form never sends the provenance, so an
+ * omitted field carries the live row's flags. The form never sends reasoning ladders either, so on
+ * a same-destination save that omits `modelReasoningEfforts` a probe-written ladder is carried with
+ * its flag. Then a carried flag whose declaration the overwrite changed, and every flag whose
+ * declaration did not survive, is dropped. A submitted value is validated by
+ * `providerCompatFieldConfigError`.
+ */
+export function carryModelCapabilityProbes(
+  candidate: OcxProviderConfig,
+  submitted: Record<string, unknown>,
+  live: OcxProviderConfig | undefined,
+  keepsDestination = false,
+): void {
+  const probes = live?.modelCapabilityProbes;
+  if (Object.hasOwn(submitted, "modelCapabilityProbes") || !live || !probes) {
+    pruneModelCapabilityProbes(candidate);
+    return;
+  }
+  if (keepsDestination && !Object.hasOwn(submitted, "modelReasoningEfforts")) {
+    for (const [id, row] of Object.entries(probes)) {
+      const ladder = probedDeclaration(live, id, "reasoningEfforts");
+      if (row?.reasoningEfforts !== true || !Array.isArray(ladder) || ["__proto__", "prototype", "constructor"].includes(id)) continue;
+      candidate.modelReasoningEfforts = { ...(candidate.modelReasoningEfforts ?? {}), [id]: [...ladder] };
+    }
+  }
+  candidate.modelCapabilityProbes = structuredClone(probes);
+  pruneModelCapabilityProbes(candidate, changedModelCapabilityProbeAxes(probes, live, candidate));
+}

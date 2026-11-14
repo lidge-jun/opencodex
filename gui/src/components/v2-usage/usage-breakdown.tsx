@@ -17,7 +17,7 @@ import {
  * here; the identity and the three comparison figures lead, the per-request detail follows.
  */
 
-type UsageCostRow = Pick<UsageModel, "estimatedCostUsd" | "pricedRequests" | "unpricedRequests">;
+type UsageCostRow = Pick<UsageModel, "estimatedCostUsd" | "pricedRequests" | "unpricedRequests" | "requests" | "measuredRequests">;
 
 /**
  * Renders a row's API list-price estimate with explicit pricing coverage.
@@ -42,12 +42,19 @@ function UsageListPrice({ row, locale, t }: { row: UsageCostRow; locale: Locale;
     excludedRequests === 1 ? "usage.cost.excludedOne" : "usage.cost.excluded",
     { count: excludedRequests },
   );
+  // An excluded request either carried no usage to price or used a model no price tier knows.
+  const noUsage = Math.min(excludedRequests, Math.max(0, row.requests - row.measuredRequests));
+  const noPrice = excludedRequests - noUsage;
+  const excludedHelp = [
+    noUsage > 0 ? t("usageV2.excludedNoUsage", { count: noUsage }) : "",
+    noPrice > 0 ? t("usageV2.excludedNoPrice", { count: noPrice }) : "",
+  ].filter(Boolean).join(" ");
   if (row.estimatedCostUsd === undefined) {
     return (
       <>
         <span className="muted">—</span>
         {excludedRequests > 0 && (
-          <span className="muted text-caption usage-cost-note"> {excludedCaption}</span>
+          <span className="muted text-caption usage-cost-note cursor-help" title={excludedHelp}> {excludedCaption}<span className="sr-only">{excludedHelp}</span></span>
         )}
       </>
     );
@@ -56,7 +63,7 @@ function UsageListPrice({ row, locale, t }: { row: UsageCostRow; locale: Locale;
     <>
       <span className="mono">{formatUsdEstimate(row.estimatedCostUsd ?? 0, locale)}</span>
       {excludedRequests > 0 && (
-        <span className="muted text-caption usage-cost-note"> {excludedCaption}</span>
+        <span className="muted text-caption usage-cost-note cursor-help" title={excludedHelp}> {excludedCaption}<span className="sr-only">{excludedHelp}</span></span>
       )}
     </>
   );
@@ -141,25 +148,19 @@ export function UsageModelsTable({
     >
       <div className="tbl-wrap usage-v2-tbl">
         {/*
-          Identity, then the three figures a reader compares models on, then the detail behind
-          them. The pair in front is also the pair the stylesheet pins while the rest scrolls
-          sideways, so their position here is load-bearing rather than cosmetic.
+          Seven columns so the table fits a 1500px window: each secondary figure rides as a second
+          line under the figure it qualifies. The identity column is the one the stylesheet pins
+          when a narrower window still has to scroll.
         */}
         <table className="tbl usage-models-tbl">
           <thead>
             <tr>
               <th>{t("logs.col.model")}</th>
-              <th>{t("logs.col.provider")}</th>
-              <th>{t("usage.col.share")}</th>
               <th className="num">{t("usage.col.tokens")}</th>
               <th className="num" aria-describedby={listPriceDisclaimerId}>{t("usage.col.apiListPrice")}</th>
               <th className="num">{t("usage.col.requests")}</th>
-              <th className="num">{t("usage.col.measured")}</th>
-              <th className="num">{t("usage.col.inputTokens")}</th>
-              <th className="num">{t("usage.col.outputTokens")}</th>
+              <th className="num">{t("usageV2.colInputOutput")}</th>
               <th className="num">{t("usage.col.tokPerSec")}</th>
-              <th className="num">{t("usage.col.cacheHits")}</th>
-              <th className="num">{t("usage.col.cacheWrites")}</th>
               <th className="num">{t("usage.col.cacheHitRate")}</th>
             </tr>
           </thead>
@@ -170,24 +171,27 @@ export function UsageModelsTable({
               const throughputNote = throughputTitle(model, t);
               return (
                 <tr key={`${model.provider}/${model.model}`}>
-                  {/* Both pinned columns are width-capped, so carry the full value in a tooltip. */}
-                  <td className="mono font-medium text-fg" title={model.model}>{modelLabel(model.model)}</td>
-                  <td className="muted" title={providerName}>{providerName}</td>
-                  <td><ShareBar ratio={model.shareRatio} /></td>
-                  <td className="num mono">{formatTokens(model.totalTokens, locale)}</td>
+                  {/* The pinned column is width-capped, so carry the full value in a tooltip. */}
+                  <td title={`${model.model} · ${providerName}`}>
+                    <span className="usage-cell-main mono font-medium text-fg">{modelLabel(model.model)}</span>
+                    <span className="usage-cell-sub">{providerName}</span>
+                  </td>
+                  <td className="num">
+                    <span className="usage-cell-main mono">{formatTokens(model.totalTokens, locale)}</span>
+                    <ShareBar ratio={model.shareRatio} />
+                  </td>
                   <td className="num"><UsageListPrice row={model} locale={locale} t={t} /></td>
-                  <td className="num">{model.requests}</td>
-                  <td className="num">{model.measuredRequests}</td>
-                  <td className="num mono">{formatTokens(model.inputTokens, locale)}</td>
-                  <td className="num mono">{formatTokens(model.outputTokens, locale)}</td>
+                  <td className="num">
+                    <span className="usage-cell-main">{model.requests}</span>
+                    <span className="usage-cell-sub">{t("usageV2.measuredCount", { count: model.measuredRequests })}</span>
+                  </td>
+                  <td className="num mono">{formatTokens(model.inputTokens, locale)} / {formatTokens(model.outputTokens, locale)}</td>
                   <td className="num mono" title={throughputNote}>
                     <span className="usage-hit-rate">
                       {hasThroughput(model.throughputTokensPerSec) ? `${model.throughputTokensPerSec.toFixed(1)} tok/s` : unavailable}
                     </span>
                     {hasThroughput(model.throughputTokensPerSec) && <span className="sr-only">{throughputNote}</span>}
                   </td>
-                  <td className="num mono">{formatOptionalTokens(model.cacheReadInputTokens ?? model.cachedInputTokens, locale, unavailable)}</td>
-                  <td className="num mono">{formatOptionalTokens(model.cacheCreationInputTokens, locale, unavailable)}</td>
                   {/*
                     The summary already averages only the input tokens whose cache detail was
                     reported, so whatever number it returns has a basis. Suppressing it unless that
@@ -196,7 +200,11 @@ export function UsageModelsTable({
                     note on the cell now, not a gate.
                   */}
                   <td className="num mono" title={cacheCoverage}>
-                    <span className="usage-hit-rate">{formatOptionalPct(model.cacheHitRate, unavailable)}</span>
+                    <span className="usage-cell-main usage-hit-rate">{formatOptionalPct(model.cacheHitRate, unavailable)}</span>
+                    <span className="usage-cell-sub">{t("usageV2.cacheDetail", {
+                      read: formatOptionalTokens(model.cacheReadInputTokens ?? model.cachedInputTokens, locale, unavailable),
+                      write: formatOptionalTokens(model.cacheCreationInputTokens, locale, unavailable),
+                    })}</span>
                     {/* A `title` reaches a pointer and nothing else, so the sentence is also read. */}
                     {cacheCoverage !== undefined && <span className="sr-only">{cacheCoverage}</span>}
                   </td>
@@ -214,9 +222,15 @@ export function UsageModelsTable({
 export function UsageAppsTable({ apps, locale, t }: { apps?: UsageApp[]; locale: Locale; t: TFn }) {
   const names: Record<UsageApp["client"], string> = {
     codex: "Codex", claude_code: "Claude Code", claude_desktop: "Claude Desktop", grok: "Grok", opencode: "OpenCode", aside: "Aside",
+    antigravity: "Antigravity", agy: "Antigravity CLI (agy)",
     other: t("usageV2.other"), unknown: t("usageV2.unknown"), unclassified: t("usageV2.unclassified"),
   };
   const disclaimerId = "usage-apps-list-price-disclaimer";
+  const wires: Record<NonNullable<UsageApp["legacyWire"]>, string> = {
+    responses: "Responses API", chat: "Chat Completions", messages: "Anthropic Messages",
+    claude: "Claude", "claude-desktop": "Claude Desktop", grok: "Grok",
+  };
+  const label = (app: UsageApp) => app.name ?? (app.legacyWire ? t("usageV2.legacyWire", { wire: wires[app.legacyWire] }) : names[app.client]);
   return (
     <UsageWorkspaceSection title={t("usageV2.apps")} titleId="usage-apps-title" meta={apps ? String(apps.length) : undefined}>
       {!apps || apps.length === 0 ? (
@@ -231,8 +245,8 @@ export function UsageAppsTable({ apps, locale, t }: { apps?: UsageApp[]; locale:
               <th className="num">{t("usage.col.requests")}</th><th className="num">{t("usage.col.measured")}</th>
             </tr></thead>
             <tbody>{apps.toSorted((a, b) => b.totalTokens - a.totalTokens).map(app => (
-              <tr key={app.client}>
-                <td className="font-medium text-fg">{names[app.client]}</td>
+              <tr key={`${app.client}:${app.name ?? app.legacyWire ?? ""}`}>
+                <td className="font-medium text-fg" title={app.name ? t("usageV2.namedClientHelp") : undefined}>{label(app)}</td>
                 <td><ShareBar ratio={app.shareRatio} /></td>
                 <td className="num mono">{formatTokens(app.totalTokens, locale)}</td>
                 <td className="num"><UsageListPrice row={app} locale={locale} t={t} /></td>
@@ -241,6 +255,9 @@ export function UsageAppsTable({ apps, locale, t }: { apps?: UsageApp[]; locale:
             ))}</tbody>
           </table>
         </div>
+        {apps.some(app => app.legacyWire || (app.client === "unknown" && !app.name)) && (
+          <p className="m-0 text-xs text-fg-subtle">{t("usageV2.appBucketsHelp")}</p>
+        )}
         <p id={disclaimerId} className="m-0 text-xs text-fg-subtle">{t("usage.cost.disclaimer")}</p>
       </>}
     </UsageWorkspaceSection>
@@ -305,6 +322,9 @@ export function UsageCoveragePanel({ summary, locale, t }: { summary: UsageSumma
     { key: "unreported", label: t("logs.tokens.unreported"), count: summary.unreportedRequests, tone: "bg-warning" },
     { key: "unsupported", label: t("logs.tokens.unsupported"), count: summary.unsupportedRequests, tone: "bg-line-strong" },
   ];
+  const coverageHelp: Record<string, string | undefined> = {
+    unreported: t("usageV2.unreportedHelp"), unsupported: t("usageV2.unsupportedHelp"),
+  };
   return (
     <UsageWorkspaceSection
       title={t("usage.section.coverage")}
@@ -324,9 +344,10 @@ export function UsageCoveragePanel({ summary, locale, t }: { summary: UsageSumma
         </div>
         {parts.map(part => (
           <div key={part.key} className="flex flex-col gap-0.5">
-            <dt className="flex items-center gap-1.5 text-xs text-fg-subtle">
+            <dt className="flex items-center gap-1.5 text-xs text-fg-subtle" title={coverageHelp[part.key]}>
               <span className={cn("size-2 shrink-0 rounded-[2px]", part.tone)} aria-hidden="true" />
               {part.label}
+              {coverageHelp[part.key] && <span className="sr-only">{coverageHelp[part.key]}</span>}
             </dt>
             <dd className="m-0 text-[17px] font-semibold text-fg tabular-nums">
               {number.format(part.key === "reported" ? summary.reportedRequests : part.count)}
@@ -334,7 +355,7 @@ export function UsageCoveragePanel({ summary, locale, t }: { summary: UsageSumma
           </div>
         ))}
       </dl>
-      <p className="m-0 text-xs leading-5 text-fg-subtle">{t("usage.coverage.note")}</p>
+      <p className="m-0 text-xs leading-5 text-fg-subtle">{t("usage.coverage.note")} {t("usageV2.coverageHelp")}</p>
     </UsageWorkspaceSection>
   );
 }

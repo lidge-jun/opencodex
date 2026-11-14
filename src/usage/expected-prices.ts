@@ -179,6 +179,7 @@ const CURSOR_OPUS_48_FAST_PRICING = "https://cursor.com/docs/models/claude-opus-
 const CURSOR_OPUS_5_FAST_PRICING = "https://cursor.com/docs/models/claude-opus-5";
 const CURSOR_OPUS_55_FAST_PRICING = "https://cursor.com/docs/models/claude-opus-5-5";
 
+const CURSOR_COMPOSER_25_PRICING = "https://cursor.com/docs/models (Composer 2.5 0.5 / 0.2 cache read / 2.5; Composer 2.5 (Fast) 3 / 0.5 / 15; no cache-write column)";
 const CURSOR_FAST_PRICE_MODELS = new Set(["claude-opus-4-8", "claude-opus-5", "claude-opus-5-5"]);
 const CURSOR_FAST_LEVELS = new Set(["low", "medium", "high", "xhigh", "max"]);
 const CURSOR_FAST_PRICE_SOURCES: Readonly<Record<string, string>> = {
@@ -528,6 +529,14 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   // Morph Ultra — subscription-billed, so the vendor list price is an estimate only.
   { provider: "morph", modelId: "morph-kimik31", cost4: MORPH_KIMI_K31, source: MORPH_ULTRA_PRICING, verifiedAt: "2026-11-13", status: "verified-derived" },
   { provider: "morph", modelId: "morph-dsv41flash-1017", cost4: MORPH_DSV41_FLASH, source: MORPH_ULTRA_PRICING, verifiedAt: "2026-11-13", status: "verified-derived" },
+  // Cursor Composer 2.5: Fast is its own wire id with its own published row, not a multiplier.
+  // No cache-write price is listed, so cache writes bill as fresh input.
+  { provider: "cursor", modelId: "composer-2.5", cost4: { input: 0.5, output: 2.5, cacheRead: 0.2, cacheWrite: 0.5 }, source: CURSOR_COMPOSER_25_PRICING, verifiedAt: "2026-11-13", status: "verified" },
+  { provider: "cursor", modelId: "composer-2.5-fast", cost4: { input: 3, output: 15, cacheRead: 0.5, cacheWrite: 3 }, source: CURSOR_COMPOSER_25_PRICING, verifiedAt: "2026-11-13", status: "verified" },
+  // Workbuddy China channel: `kimi-k3-1` is Kimi K3.1, which Moonshot sells only as K3.1 Pro
+  // (plus a separately named highspeed variant). Moonshot list price, no relay multiplier.
+  // codex-auto-review stays unpriced: OpenAI publishes no rate and no billed-as model for it.
+  { provider: "workbuddy", modelId: "cn:kimi-k3-1", cost4: KIMI_K31_PRO, source: `Moonshot list price applied to the Workbuddy China channel; ${KIMI_K31_PRICING} (re-read 2026-11-13)`, verifiedAt: "2026-11-13", status: "verified-derived" },
   // Cursor Auto router — Cursor's published fixed token price (verified).
   { provider: "cursor", modelId: "auto", cost4: { input: 1.25, output: 6, cacheRead: 0.25, cacheWrite: 1.25 }, source: "https://docs.cursor.com/account/pricing + https://cursor.com/blog/aug-2025-pricing", verifiedAt: "2026-07-20", status: "verified" },
   // Z.AI GLM family — the zai bundle's rows are all-zero upstream, and the four

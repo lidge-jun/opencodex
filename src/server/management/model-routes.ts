@@ -111,7 +111,7 @@ import {
 import { removeCredential } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { redactSecretString } from "../../lib/redact";
-import { withModelCostRowReplacement } from "../../config/live-reconcile";
+import { withModelCostRowReplacement, withPriceMultiplierReplacement } from "../../config/live-reconcile";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
@@ -121,7 +121,10 @@ import { effectiveModelAliases, MODEL_ALIAS_PATTERN, templateAliasPlan } from ".
 import { aliasTemplateError } from "../../providers/alias-template";
 import { isValidModelDiscoveryModelId } from "../../providers/model-discovery-limits";
 import { commitProviderPatch } from "./provider-patch-transaction";
+import { pruneModelCapabilityProbes } from "../../config/provider-validation";
 import { ConfigWritePublishedError } from "../../config/persist-unlocked";
+import { priceMultiplierConfigError } from "../../config/schema/leaf-validators";
+import { refreshPriceCatalogs, triggerPriceCatalogRefresh } from "../../usage/price-catalog";
 import type { CatalogDisposition } from "../../codex/convergence-types";
 import { comboPublicModelId } from "../../combos/types";
 import { COMBO_NAMESPACE, comboDisabledModelSelectors, comboModelId, preservesPhysicalComboProvider } from "../../combos";
@@ -444,6 +447,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
   }
 
   if (url.pathname === "/api/models" && req.method === "GET") {
+    triggerPriceCatalogRefresh();
     return jsonResponse(await listManagementModelRows(config));
   }
 
@@ -456,7 +460,11 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     }
     if (req.method === "GET") {
       const provider = config.providers[name]!;
-      return jsonResponse({ provider: name, modelCosts: sanitizeModelCostsForDisplay(provider.modelCosts) ?? {} }, 200, req, config);
+      return jsonResponse({
+        provider: name,
+        modelCosts: sanitizeModelCostsForDisplay(provider.modelCosts) ?? {},
+        ...(provider.priceMultiplier !== undefined ? { priceMultiplier: provider.priceMultiplier } : {}),
+      }, 200, req, config);
     }
     let body: unknown;
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
@@ -510,6 +518,44 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       throw error;
     }
     return jsonResponse({ ok: true, provider: name, modelId, cost }, 200, req, config);
+  }
+
+  const priceMultiplierMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/price-multiplier$/);
+  if (priceMultiplierMatch && req.method === "PUT") {
+    let name: string;
+    try { name = decodeURIComponent(priceMultiplierMatch[1]!); } catch { return jsonResponse({ error: "invalid provider encoding" }, 400); }
+    if (!hasOwnProvider(config.providers, name)) return jsonResponse({ error: "provider not found" }, 404, req, config);
+    let body: unknown;
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    if (!isPlainRecord(body) || !Object.hasOwn(body, "multiplier") || Object.keys(body).some(key => key !== "multiplier")) {
+      return jsonResponse({ error: "only multiplier (number or null) is allowed" }, 400, req, config);
+    }
+    const multiplier = body.multiplier;
+    const validationError = multiplier === null ? null : priceMultiplierConfigError(multiplier ?? "invalid", "multiplier");
+    if (validationError) return jsonResponse({ error: validationError }, 400, req, config);
+    const provider = config.providers[name]!;
+    const hadMultiplier = Object.hasOwn(provider, "priceMultiplier");
+    const previous = provider.priceMultiplier;
+    // Sparse: null deletes the key, so an unset multiplier never appears in config.json.
+    if (multiplier === null) delete provider.priceMultiplier;
+    else provider.priceMultiplier = multiplier as number;
+    try {
+      // Applied again after reconciliation, so a disk edit of the same field cannot override it.
+      withPriceMultiplierReplacement(config, name, multiplier as number | null, () => persistConfig(config));
+    } catch (error) {
+      if (!(error instanceof ConfigWritePublishedError)) {
+        if (hadMultiplier) provider.priceMultiplier = previous;
+        else delete provider.priceMultiplier;
+      }
+      throw error;
+    }
+    return jsonResponse({ ok: true, provider: name, multiplier: multiplier as number | null }, 200, req, config);
+  }
+
+  if (url.pathname === "/api/pricing/refresh" && req.method === "POST") {
+    // Forced full refresh of both public price lists; clears miss cooldowns. Per-source status
+    // carries a short error code and never a response body.
+    return jsonResponse({ ok: true, sources: await refreshPriceCatalogs({ force: true }) }, 200, req, config);
   }
 
   const displayNameMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/model-display-names$/);
@@ -1016,6 +1062,12 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       }
     }
 
+    // Writing a probed axis here makes it a manual declaration: its probe provenance is dropped
+    // even when the value is unchanged, and a flag whose declaration was cleared goes with it.
+    if (pruneModelCapabilityProbes(providerConfig, [
+      ...(modalities !== undefined ? [[modelId, "inputModalities"] as const] : []),
+      ...(ladder !== undefined ? [[modelId, "reasoningEfforts"] as const] : []),
+    ])) changed = true;
     const hasOverrides = [providerConfig.modelContextWindows, providerConfig.modelReasoningEfforts,
       providerConfig.modelDefaultReasoningEfforts, providerConfig.modelInputModalities]
       .some(map => map !== undefined && Object.hasOwn(map, modelId))

@@ -40,22 +40,25 @@ test("Usage report section strip excludes companion settings", async () => {
   expect(page).toContain('<UsageCompanionView apiBase={apiBase} providers={data?.providers ?? []} />');
 });
 
-test("the usage models table scrolls sideways with model and provider pinned", async () => {
+test("the usage models table fits seven columns with the model column pinned", async () => {
   const page = await Bun.file(new URL("../src/components/v2-usage/usage-breakdown.tsx", import.meta.url)).text();
   const css = await Bun.file(new URL("../src/styles-usage-workspace.css", import.meta.url)).text();
 
   // The table opts into the rules below by class. Without it `.tbl`'s `width: 100%` divides the
   // shell across every column until an eight-digit token total folds onto a second line.
   expect(page).toContain('className="tbl usage-models-tbl"');
+  // Seven header cells, so the table fits a 1500px window: secondary figures are second lines.
+  const header = page.slice(page.indexOf('<table className="tbl usage-models-tbl">'), page.indexOf("</thead>"));
+  expect(header.match(/<th[ >]/g)).toHaveLength(7);
+  expect(page).toContain('t("usageV2.measuredCount"');
+  expect(page).toContain('t("usageV2.cacheDetail"');
   // Doubled selector on purpose: this file is `@import`ed from the top of `styles.css`, so a
   // single class ties `.tbl { width: 100% }` and loses to it on source order.
   expect(css).toMatch(/\.tbl\.usage-models-tbl \{[^}]*width: max-content/);
-  // Model and provider stay readable while the numbers scroll under them. The offsets are one
-  // scrollport padding step negative so a stuck cell repaints the strip it slides over.
-  expect(css).toMatch(/\.tbl\.usage-models-tbl td:nth-child\(2\) \{\s*position: sticky/);
+  // The identity column stays readable when a narrow window scrolls the numbers under it.
+  expect(css).toMatch(/\.tbl\.usage-models-tbl td:nth-child\(1\) \{\s*position: sticky/);
   expect(css).not.toMatch(/^\.usage-models-tbl/m);
   expect(css).toContain("left: calc(-1 * var(--space-3));");
-  expect(css).toContain("left: calc(var(--usage-models-model-col) - var(--space-3));");
   // `--hover` is a 3% overlay, so a pinned cell that takes it as its whole background turns
   // nearly transparent and the scrolled columns read through it.
   expect(css).toContain("background: linear-gradient(var(--hover), var(--hover)), var(--surface);");

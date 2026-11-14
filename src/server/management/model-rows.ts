@@ -8,6 +8,7 @@
  *
  * Bodies are unchanged from their previous home; only `export` was added.
  */
+import { modelCapabilitySourceResolver, type ModelCapabilitySourceFields } from "./model-capability-sources";
 import type { CatalogModel } from "../../codex/catalog";
 import { antigravityFamilyDisabled } from "../../providers/antigravity-effort-families";
 import { observeModelCacheRevision } from "../../codex/model-cache";
@@ -56,6 +57,7 @@ import { initialModelSelectionPending, pendingModelSelectionProviders } from "..
 import { catalogFastRowEligible, fastRowId } from "../fast-row";
 import { knownEffortRowIds } from "../effort-row";
 import { visionSidecarConsumerClassifier } from "../../vision/eligibility";
+import { modelRowPrice, type ModelRowPrice } from "./model-row-price";
 
 /**
  * One row of the `/api/models` list. Routed rows spread a `CatalogModel`, so the shape is
@@ -72,6 +74,8 @@ export type ManagementModelRow = Partial<CatalogModel> & {
   custom?: boolean;
   customId?: string;
   manualPricing?: boolean;
+  /** Effective price and its source; absent when no tier can price the model. Never set on combos. */
+  price?: ModelRowPrice;
   fastRowAvailable?: boolean;
   displayNameOverride?: string;
   displayNameSource?: "operator" | "provider" | "fallback";
@@ -99,6 +103,9 @@ export type ManagementModelRow = Partial<CatalogModel> & {
    * config — so this compares values against what the model would inherit anyway.
    */
   reasoningOverridden?: boolean;
+  /** Per-axis provenance and same-name estimates (`model-capability-sources.ts`); routed rows only. */
+  capabilitySources?: ModelCapabilitySourceFields["capabilitySources"];
+  inferredCapabilities?: ModelCapabilitySourceFields["inferredCapabilities"];
   /**
    * Tool support a canonical source positively asserts (native identity, a catalog row's
    * `"tools"` capability, or the parallel-call opt-in — the same evidence
@@ -346,6 +353,8 @@ export async function listManagementModelRows(
           autoCompactTokenLimit: undefined,
         })))
     : [];
+  // Price lookups match exact model ids, so an account-qualified native row prices as its model.
+  const accountNativePriceIds = new Map(accountNativeRows.map(row => [row.slug, row.metadataSlug]));
   const native: ManagementModelRow[] = [...nativeRows, ...accountNativeRows].map(row => {
     const reasoningEfforts = nativeReasoningEfforts(row.metadataSlug).filter(isVisionReasoningEffort);
     const defaultReasoningEffort = nativeDefaultReasoningEffort(row.metadataSlug);
@@ -457,6 +466,7 @@ export async function listManagementModelRows(
       ),
     };
   });
+  const capabilitySources = modelCapabilitySourceResolver(config);
   const dedupedRouted = publicModels.map((m): ManagementModelRow | null => {
     // Codex-facing slug (one "/", slug-codec); disabledModels compares tolerate both forms.
     const namespaced = catalogModelSlug(m);
@@ -476,6 +486,7 @@ export async function listManagementModelRows(
       : undefined;
     const inputModalitiesDeclared = routed ? declaredModelInputModalities(config, m.provider, m.id) : undefined;
     const contextWindowDeclared = routed ? config.providers[m.provider]?.modelContextWindows?.[m.id] : undefined;
+    const reasoningOverridden = routed ? reasoningOverrideFor(config, m.provider, m.id, catalogLadders) : undefined;
     return {
       ...m,
       ...displayName,
@@ -489,7 +500,8 @@ export async function listManagementModelRows(
       // here, where the config and the registry are both in hand.
       ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
       ...(defaultReasoningEffort !== undefined ? { defaultReasoningEffort } : {}),
-      ...(routed ? { reasoningOverridden: reasoningOverrideFor(config, m.provider, m.id, catalogLadders) } : {}),
+      ...(routed ? { reasoningOverridden } : {}),
+      ...(routed ? capabilitySources(m, { contextWindowDeclared, inputModalitiesDeclared, reasoningOverridden, reasoningEfforts }) : {}),
       ...(inputModalitiesDeclared !== undefined ? { inputModalitiesDeclared } : {}),
       ...(contextWindowDeclared !== undefined ? { contextWindowDeclared } : {}),
       // The authoritative export default is the GATHERED row's own declared default — never
@@ -534,6 +546,8 @@ export async function listManagementModelRows(
     const supportsReasoning = row.exportMetadata?.supportsReasoning
       ?? row.supportsReasoning
       ?? knownReasoningSupport(row);
+    const priceId = row.native ? accountNativePriceIds.get(row.id) ?? row.id : row.id;
+    const price = row.provider !== "combo" ? modelRowPrice(row.provider, priceId) : undefined;
     return {
       ...row,
       // One shared definition with the request path: the GUI must not re-derive consumer
@@ -541,6 +555,7 @@ export async function listManagementModelRows(
       visionSidecarConsumer: isVisionSidecarConsumer(row.provider, row.id),
       ...(!row.native && modelCosts !== undefined && Object.hasOwn(modelCosts, row.id)
         ? { manualPricing: true } : {}),
+      ...(row.provider !== "combo" && price ? { price } : {}),
       ...(pending ? { disabled: true, initialSelectionPending: true } : {}),
       fastRowAvailable: !row.disabled && !pending
         && !knownIds.has(fastRowId(row.namespaced)) && catalogFastRowEligible(config, row),

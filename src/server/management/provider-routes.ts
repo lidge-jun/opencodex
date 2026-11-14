@@ -1,4 +1,4 @@
-import { contextTierRecordConfigError, modelCapabilitiesConfigError, mergeModelCapabilities } from "../../config/provider-validation";
+import { carryModelCapabilityProbes, contextTierRecordConfigError, dropPatchedModelCapabilityProbes, modelCapabilitiesConfigError, mergeModelCapabilities } from "../../config/provider-validation";
 import { DECLARABLE_HOSTED_TOOL_TYPES } from "../../responses/hosted-tool-policy";
 import { randomUUID } from "node:crypto";
 import { cleanupRemovedGcpCredentials, providerGcpCredentialMarkers, snapshotProviderGcpCredentialMarkers } from "../../providers/gcp-credential-cleanup";
@@ -530,6 +530,7 @@ function applyProviderPatchFields(
     const capabilities = mergeModelCapabilities(next.modelCapabilities, rawBody.modelCapabilities);
     if (capabilities === undefined) delete next.modelCapabilities;
     else next.modelCapabilities = capabilities;
+    dropPatchedModelCapabilityProbes(next, rawBody.modelCapabilities);
     touched = true;
   }
   if (Object.hasOwn(rawBody, "modelContextTiers")) {
@@ -908,7 +909,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       inferContextWindow: p.inferContextWindow,
       modelContextWindows: p.modelContextWindows,
       modelContextTiers: p.modelContextTiers,
-      modelCapabilities: p.modelCapabilities,
+      modelCapabilities: p.modelCapabilities, modelCapabilityProbes: p.modelCapabilityProbes,
       pinnedReasoningEffort: p.pinnedReasoningEffort,
       modelPinnedReasoningEfforts: p.modelPinnedReasoningEfforts,
       modelAutoCompactTokenLimits: p.modelAutoCompactTokenLimits,
@@ -1223,6 +1224,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // erase hand-edited per-model prices from Logs/Usage estimates.
     const existingCosts = config.providers[name]?.modelCosts;
     if (existingCosts && !prov.modelCosts) prov.modelCosts = existingCosts;
+    if (prov.priceMultiplier === undefined && config.providers[name]?.priceMultiplier !== undefined) prov.priceMultiplier = config.providers[name]!.priceMultiplier;
     // The add/edit form also omits auto-review selectors. Preserve hand-configured
     // provider-wide and per-model targets across an unrelated overwrite; clearing is
     // explicit through PATCH with null.
@@ -1315,6 +1317,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       : mergeModelCapabilities(config.providers[name]?.modelCapabilities, undefined);
     if (capabilities === undefined) delete prov.modelCapabilities;
     else prov.modelCapabilities = capabilities;
+    carryModelCapabilityProbes(prov, rawProvider, config.providers[name], providerOverwriteKeepsDestination(prov, config.providers[name], overwriteSample));
     // The add/edit form omits wire choices. Read after DNS so a concurrent switch
     // remains authoritative, including the marker that protects it on the next boot.
     if (name === "xai") {
@@ -1620,6 +1623,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
   }
 
   if (url.pathname === "/api/providers/test-completion" && req.method === "POST") return (await import("./provider-completion-test")).handleProviderCompletionTestRoute(ctx);
+  if (url.pathname === "/api/providers/probe-capabilities" && req.method === "POST") return (await import("./provider-capability-probe")).handleProviderCapabilityProbeRoute(ctx);
 
   // Lightweight connectivity probe: perform the provider's live /models fetch DIRECTLY and
   // report only real upstream evidence. The catalog aggregate (fetchAllModels) deliberately

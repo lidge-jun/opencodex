@@ -58,7 +58,16 @@ export type ProviderCompletionTestResult = {
   termination: "completed" | "failed" | "timeout" | "aborted" | "too_large";
   error: null | { code: Code; status?: number; message: string };
 };
-export interface ProviderCompletionTestInput { config: OcxConfig; name: string; model: string; signal?: AbortSignal }
+/**
+ * Optional request variant for the capability probe. It changes only the request body: an image
+ * part beside the prompt, or a reasoning-effort field. Sender, credentials and limits are shared.
+ */
+export interface ProviderCompletionTestVariant { image?: true; reasoningEffort?: string }
+export interface ProviderCompletionTestInput {
+  config: OcxConfig; name: string; model: string; signal?: AbortSignal; variant?: ProviderCompletionTestVariant;
+}
+/** 1x1 transparent PNG; the smallest image every vision wire decodes. */
+export const COMPLETION_TEST_IMAGE_DATA_URL = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 export interface ProviderCompletionTestDependencies {
   now?: () => number;
   timeoutMs?: number;
@@ -115,20 +124,44 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
   });
 }
 class DiagnosticFailure extends Error { constructor(readonly code: Code) { super(MESSAGES[code]); } }
-
-/** Direct diagnostic; callers supply an existing provider name and an already validated model. */
-export async function runProviderCompletionTest(
-  { config, name, model, signal: requestSignal }: ProviderCompletionTestInput,
-  deps: ProviderCompletionTestDependencies = {},
-): Promise<ProviderCompletionTestResult> {
+function requestBody(wire: Wire, model: string, providerRouting: unknown, variant: ProviderCompletionTestVariant = {}): string {
+  const effort = variant.reasoningEffort;
+  if (wire === "openai-chat") {
+    const content = variant.image ? [{ type: "text", text: COMPLETION_TEST_PROMPT },
+      { type: "image_url", image_url: { url: COMPLETION_TEST_IMAGE_DATA_URL } }] : COMPLETION_TEST_PROMPT;
+    return JSON.stringify({ model, messages: [{ role: "user", content }], stream: true, max_tokens: 32,
+      ...(effort !== undefined ? { reasoning_effort: effort } : {}), ...(providerRouting ? { provider: providerRouting } : {}) });
+  }
+  const input = variant.image ? [{ role: "user", content: [{ type: "input_text", text: COMPLETION_TEST_PROMPT },
+    { type: "input_image", image_url: COMPLETION_TEST_IMAGE_DATA_URL }] }] : COMPLETION_TEST_PROMPT;
+  return JSON.stringify({ model, input, stream: true, max_output_tokens: 32, store: false,
+    ...(effort !== undefined ? { reasoning: { effort } } : {}) });
+}
+type Inapplicable = Extract<ProviderCompletionTestResult, { applicable: false }>;
+/** The no-send applicability gate, shared with the capability probe. Never dereferences credentials. */
+export function providerCompletionTestApplicability(config: OcxConfig, name: string, model: string): Inapplicable | null {
+  const gate = applicability(config, name, model);
+  return gate.blocked ?? null;
+}
+/**
+ * The configured model id a diagnostic for `model` is sent as: a configured alias resolves to its
+ * native id, anything else is returned unchanged. Never dereferences credentials.
+ */
+export function providerCompletionTestNativeModel(config: OcxConfig, name: string, model: string): string {
+  const gate = applicability(config, name, model);
+  return gate.blocked ? model : gate.native;
+}
+type Gate = { blocked: Inapplicable } | { blocked?: undefined; row: OcxProviderConfig; snapshot: OcxProviderConfig;
+  native: string; wire: Wire; destinationRefused: boolean };
+function applicability(config: OcxConfig, name: string, model: string): Gate {
   const row = config.providers[name];
   if (!Object.hasOwn(config.providers, name) || !row) throw new Error("unknown provider");
-  if (row.disabled) return { applicable: false, reason: "disabled" };
+  if (row.disabled) return { blocked: { applicable: false, reason: "disabled" } };
   const authKind = PROVIDER_REGISTRY.find(entry => entry.id === name)?.authKind;
-  if (row.authMode === "forward" || authKind === "forward") return { applicable: false, reason: "forward_auth" };
-  if (row.authMode === "oauth" || authKind === "oauth") return { applicable: false, reason: "oauth_auth" };
+  if (row.authMode === "forward" || authKind === "forward") return { blocked: { applicable: false, reason: "forward_auth" } };
+  if (row.authMode === "oauth" || authKind === "oauth") return { blocked: { applicable: false, reason: "oauth_auth" } };
   const detail = transportExclusion(row);
-  if (detail) return { applicable: false, reason: "unsupported_transport", detail };
+  if (detail) return { blocked: { applicable: false, reason: "unsupported_transport", detail } };
   // Metadata resolution must never dereference keychain/env/pool credentials.
   const { apiKey: _key, apiKeyPool: _pool, _apiKeyAttempt: _attempt, ...metadata } = row;
   let snapshot: OcxProviderConfig = metadata;
@@ -136,7 +169,20 @@ export async function runProviderCompletionTest(
   try { snapshot = routedProviderConfig(name, metadata); } catch { destinationRefused = true; }
   const native = nativeModel(config, name, snapshot, model);
   const wire = resolveWireProtocolOverride(name, native, snapshot).adapter;
-  if (wire !== "openai-chat" && wire !== "openai-responses") return { applicable: false, reason: "unsupported_adapter", adapter: wire };
+  if (wire !== "openai-chat" && wire !== "openai-responses") {
+    return { blocked: { applicable: false, reason: "unsupported_adapter", adapter: wire } };
+  }
+  return { row, snapshot, native, wire: wire as Wire, destinationRefused };
+}
+
+/** Direct diagnostic; callers supply an existing provider name and an already validated model. */
+export async function runProviderCompletionTest(
+  { config, name, model, signal: requestSignal, variant }: ProviderCompletionTestInput,
+  deps: ProviderCompletionTestDependencies = {},
+): Promise<ProviderCompletionTestResult> {
+  const gate = applicability(config, name, model);
+  if (gate.blocked) return gate.blocked;
+  const { row, snapshot, native, wire, destinationRefused } = gate;
   const now = deps.now ?? (() => performance.now());
   const result: Extract<ProviderCompletionTestResult, { applicable: true }> = {
     applicable: true, ok: false, provider: name, requestedModel: model,
@@ -176,10 +222,7 @@ export async function runProviderCompletionTest(
   };
   try {
     signal.throwIfAborted();
-    const body = JSON.stringify(authority.wire === "openai-chat"
-      ? { model: authority.wireModel, messages: [{ role: "user", content: COMPLETION_TEST_PROMPT }], stream: true, max_tokens: 32,
-        ...(authority.providerRouting ? { provider: authority.providerRouting } : {}) }
-      : { model: authority.wireModel, input: COMPLETION_TEST_PROMPT, stream: true, max_output_tokens: 32, store: false });
+    const body = requestBody(authority.wire, authority.wireModel, authority.providerRouting, variant);
     const pending = providerOutboundPost(name, { ...authority.routed, allowPrivateNetwork: authority.allowLocalCleartextPost }, authority.url, { headers: authority.headers, body, signal }, {
       ...deps.outboundDependencies,
       allowLocalCleartextPost: authority.allowLocalCleartextPost,
