@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isGitRepositoryEnvName } from "../../scripts/git-repository-env";
 import { createGitConfigGuard, resolveCommonGitConfigPath } from "../helpers/git-config-guard";
-import { FIXTURE_GIT_IDENTITY, fixtureGitEnv, repositoryGitEnv } from "../helpers/git-fixture";
+import { EMPTY_GLOBAL_GIT_CONFIG, FIXTURE_GIT_IDENTITY, fixtureGitEnv, repositoryGitEnv } from "../helpers/git-fixture";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { helperPath, repoRoot } from "../helpers/repo-root";
 
@@ -37,7 +37,7 @@ function oracleEnv(): Record<string, string> {
   return {
     ...withoutGit(),
     GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+    GIT_CONFIG_GLOBAL: EMPTY_GLOBAL_GIT_CONFIG,
     GIT_AUTHOR_NAME: "Outer", GIT_AUTHOR_EMAIL: OUTER_EMAIL,
     GIT_COMMITTER_NAME: "Outer", GIT_COMMITTER_EMAIL: OUTER_EMAIL,
   };
@@ -144,11 +144,20 @@ describe("repository variable scrub", () => {
     const fixture = fixtureGitEnv({}, base);
     expect(fixture.GIT_DIR).toBeUndefined();
     expect(fixture.GIT_INDEX_FILE).toBeUndefined();
-    expect(fixture.GIT_CONFIG_GLOBAL).toBe(process.platform === "win32" ? "NUL" : "/dev/null");
+    expect(fixture.GIT_CONFIG_GLOBAL).toBe(EMPTY_GLOBAL_GIT_CONFIG);
     expect(fixture.GIT_CONFIG_NOSYSTEM).toBe("1");
     expect(fixture.GIT_AUTHOR_NAME).toBe(FIXTURE_GIT_IDENTITY.name);
     expect(fixture.GIT_COMMITTER_EMAIL).toBe(FIXTURE_GIT_IDENTITY.email);
     expect(repositoryGitEnv(base)).toEqual({ PATH: "/bin", GIT_CONFIG_GLOBAL: "/home/.gitconfig" });
+  });
+
+  test("the installed git accepts the fixture env's empty global config", () => {
+    // Git for Windows 2.56 refuses GIT_CONFIG_GLOBAL=NUL outright, so this runs git rather than
+    // comparing the literal.
+    const run = Bun.spawnSync(["git", "config", "--global", "--list"], { cwd: tmpdir(), env: fixtureGitEnv(), stdout: "pipe", stderr: "pipe" });
+    expect(run.stderr.toString()).toBe("");
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout.toString()).toBe("");
   });
 });
 
