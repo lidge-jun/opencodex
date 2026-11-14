@@ -11,13 +11,14 @@
  * reason vocabulary is the same.
  */
 import type { RequestLogEntry } from "../server/request-log";
+import { cacheObservationFromUsage } from "./summary";
 
 export type MeterSpeedReason =
   | "no_matching_request" | "request_aborted" | "request_incomplete" | "request_failed"
   | "usage_missing" | "tokens_estimated" | "output_missing" | "generation_timing_missing"
-  | "generation_window_too_short" | "invalid_generation_window";
+  | "generation_window_too_short" | "invalid_generation_window" | "multiple_attempts";
 
-export type MeterPercentReason = "usage_missing" | "tokens_estimated" | "input_missing" | "limit_unknown";
+export type MeterPercentReason = "usage_missing" | "tokens_estimated" | "input_missing" | "limit_unknown" | "cache_unobserved";
 
 export interface LiveMeter {
   speed: { value: number | null; reason: MeterSpeedReason | null };
@@ -49,6 +50,9 @@ function speed(entry: RequestLogEntry): LiveMeter["speed"] {
   if (entry.usageStatus === "estimated" || entry.usage.estimated === true) return none("tokens_estimated");
   const tokens = entry.usage.outputTokens;
   if (!(Number.isFinite(tokens) && tokens > 0)) return none("output_missing");
+  // A retried row sums output over every attempt, but its generation window is one span from the
+  // first attempt's first event to the last attempt's last delta, gaps between attempts included.
+  if ((entry.attempts?.length ?? 0) > 1) return none("multiple_attempts");
   const start = entry.genStartMs;
   const end = entry.lastOutputMs;
   if (!(typeof start === "number" && Number.isFinite(start) && start >= 0 && typeof end === "number" && Number.isFinite(end))) {
@@ -74,9 +78,11 @@ export function liveMeterFromEntry(entry: RequestLogEntry, contextLimitTokens: n
   const inputTokens = count(usage?.inputTokens);
   const outputTokens = count(usage?.outputTokens);
   const readTokens = count(usage?.cacheReadInputTokens ?? usage?.cachedInputTokens);
-  // `cacheReadInputTokens` is the read subset of `inputTokens`; a synthesized provenance is wire-only.
+  // `cacheReadInputTokens` is the read subset of `inputTokens`. Only an observed reading is a hit
+  // rate: a synthesized zero is wire-only and an unknown one was never measured (summary.ts).
+  const cacheObserved = !!usage && cacheObservationFromUsage(usage, entry.cacheProvenance).provenance === "observed";
   const cacheKnown = readTokens !== null && inputTokens !== null && inputTokens > 0
-    && entry.cacheProvenance !== "synthesized" && readTokens <= inputTokens;
+    && cacheObserved && readTokens <= inputTokens;
   const used = count(usage?.contextTotalTokens)
     ?? (inputTokens !== null && outputTokens !== null ? inputTokens + outputTokens : null);
   const limit = contextLimitTokens !== null && Number.isFinite(contextLimitTokens) && contextLimitTokens > 0
@@ -88,7 +94,8 @@ export function liveMeterFromEntry(entry: RequestLogEntry, contextLimitTokens: n
     cache: {
       readTokens, inputTokens,
       percent: cacheKnown ? (100 * readTokens) / inputTokens : null,
-      reason: cacheKnown ? null : usageReason ?? "input_missing",
+      reason: cacheKnown ? null : usageReason
+        ?? (readTokens !== null && inputTokens !== null && inputTokens > 0 && !cacheObserved ? "cache_unobserved" : "input_missing"),
     },
     context: {
       usedTokens: used, limitTokens: limit,

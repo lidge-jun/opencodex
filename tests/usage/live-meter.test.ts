@@ -47,6 +47,12 @@ describe("live meter speed", () => {
       expect(m.speed.reason).toBe(reason as never);
     }
   });
+  test("a retried row reports no speed: its window spans the gap between attempts", () => {
+    const attempt = { ordinal: 1, provider: "p", model: "fixture", adapter: "a", status: 200, durationMs: 1, sendCount: 1, recoveryKinds: [], usageStatus: "reported" };
+    expect(liveMeterFromEntry(row({ attempts: [attempt, { ...attempt, ordinal: 2 }] } as Partial<RequestLogEntry>), null).speed)
+      .toEqual({ value: null, reason: "multiple_attempts" });
+    expect(liveMeterFromEntry(row({ attempts: [attempt] } as Partial<RequestLogEntry>), null).speed).toEqual({ value: 100, reason: null });
+  });
 });
 
 describe("live meter cache and context", () => {
@@ -61,6 +67,11 @@ describe("live meter cache and context", () => {
     expect(liveMeterFromEntry(row({ usageStatus: "estimated", usage: { inputTokens: 10, outputTokens: 1, cacheReadInputTokens: 5 } }), null).cache)
       .toMatchObject({ percent: null, reason: "tokens_estimated" });
     expect(liveMeterFromEntry(row({ cacheProvenance: "synthesized", usage: { inputTokens: 10, outputTokens: 1, cacheReadInputTokens: 5 } }), null).cache.percent).toBeNull();
+  });
+  test("unknown cache provenance is never a measured hit rate, zero counters included", () => {
+    const m = liveMeterFromEntry(row({ cacheProvenance: "unknown", usage: { inputTokens: 1000, outputTokens: 5, cacheReadInputTokens: 0 } }), null);
+    expect(m.cache).toEqual({ readTokens: 0, inputTokens: 1000, percent: null, reason: "cache_unobserved" });
+    expect(liveMeterFromEntry(row({ cacheProvenance: "observed", usage: { inputTokens: 1000, outputTokens: 5, cacheReadInputTokens: 0 } }), null).cache.percent).toBe(0);
   });
   test("context used is input plus output, or the absolute context total when the provider gives one", () => {
     const m = liveMeterFromEntry(row({ usage: { inputTokens: 380_000, outputTokens: 900 } }), 1_000_000);
