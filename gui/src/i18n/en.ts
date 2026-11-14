@@ -1182,7 +1182,7 @@ export const en = {
   "sub.settings": "Settings",
   "sub.sections": "Subagent sections",
   "sub.delegation.model": "Model to call first",
-  "sub.delegation.modelHint": "The model Codex reaches for first when it hands off work. The models pinned to the top of the model picker are the ones it may call; this is the one it calls first.",
+  "sub.delegation.modelHint": "The model Codex reaches for first when it hands off work. The models pinned in the model picker are its preferred candidates, not a limit on what it may call; this is the one it calls first.",
   "sub.suggest.button": "Suggest",
   "sub.suggest.label": "Delegated work",
   "sub.suggest.placeholder": "What does Codex usually hand off? e.g. read-only searches across the repo, or multi-module refactors",

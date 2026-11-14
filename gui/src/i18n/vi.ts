@@ -1165,7 +1165,7 @@ export const vi: Record<TKey, string> = {
   "sub.settings": "Cài đặt",
   "sub.sections": "Các phần agent con (Subagent sections)",
   "sub.delegation.model": "Model sẽ gọi đầu tiên",
-  "sub.delegation.modelHint": "Model mà Codex gọi đầu tiên khi bàn giao (hands off) công việc. Nổi bật bên trên là danh sách model nó có thể gọi; đây là model nó gọi đầu tiên.",
+  "sub.delegation.modelHint": "Model mà Codex gọi đầu tiên khi bàn giao (hands off) công việc. Các model được ghim trong bộ chọn mô hình là ứng viên ưu tiên, không giới hạn những model nó có thể gọi; đây là model nó gọi đầu tiên.",
   "sub.suggest.button": "Gợi ý",
   "sub.suggest.label": "Công việc được giao",
   "sub.suggest.placeholder": "Codex thường giao việc gì? ví dụ: tìm kiếm chỉ đọc trên toàn repo, hoặc refactor trải qua nhiều module",

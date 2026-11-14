@@ -1163,7 +1163,7 @@ export const ko: Record<TKey, string> = {
   "sub.settings": "설정",
   "sub.sections": "서브에이전트 구역",
   "sub.delegation.model": "먼저 부를 모델",
-  "sub.delegation.modelHint": "Codex가 일을 나눠 맡길 때 가장 먼저 부를 모델입니다. 위 추천 목록이 부를 수 있는 후보라면, 여기서 고른 모델이 그중 1순위가 됩니다.",
+  "sub.delegation.modelHint": "Codex가 일을 나눠 맡길 때 가장 먼저 부를 모델입니다. 모델 선택기에 고정한 모델은 우선 후보일 뿐 부를 수 있는 모델을 제한하지 않으며, 여기서 고른 모델을 가장 먼저 부릅니다.",
   "sub.suggest.button": "추천",
   "sub.suggest.label": "맡길 일",
   "sub.suggest.placeholder": "Codex가 주로 어떤 일을 넘기나요? 예: 저장소 전체 읽기 전용 검색, 여러 모듈에 걸친 리팩터링",

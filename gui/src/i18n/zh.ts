@@ -3827,7 +3827,7 @@ export const zh: Record<TKey, string> = {
   "sub.settings": "设置",
   "sub.sections": "子代理分区",
   "sub.delegation.model": "优先调用的模型",
-  "sub.delegation.modelHint": "Codex 分派工作时最先调用的模型。上面的推荐是可调用的名单，这里选的是其中第一顺位。",
+  "sub.delegation.modelHint": "Codex 分派工作时最先调用的模型。模型选择器中置顶的模型是优先候选，并不限制它能调用哪些模型；这里选的是最先调用的那个。",
   "sub.suggest.button": "建议",
   "sub.suggest.label": "委派的工作",
   "sub.suggest.placeholder": "Codex 通常交出什么工作？例如：整个仓库的只读搜索，或跨多个模块的重构",

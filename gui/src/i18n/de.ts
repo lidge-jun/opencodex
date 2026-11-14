@@ -3806,7 +3806,7 @@ export const de: Record<TKey, string> = {
   "sub.settings": "Einstellungen",
   "sub.sections": "Subagent-Abschnitte",
   "sub.delegation.model": "Zuerst aufgerufenes Modell",
-  "sub.delegation.modelHint": "Das Modell, zu dem Codex zuerst greift, wenn es Arbeit übergibt. Oben steht, wen es überhaupt aufrufen darf; hier wählst du den Ersten davon.",
+  "sub.delegation.modelHint": "Das Modell, zu dem Codex zuerst greift, wenn es Arbeit übergibt. Die in der Modellauswahl angehefteten Modelle sind bevorzugte Kandidaten, keine Grenze dafür, was es aufrufen darf; hier wählst du, welches es zuerst aufruft.",
   "sub.suggest.button": "Vorschlagen",
   "sub.suggest.label": "Delegierte Arbeit",
   "sub.suggest.placeholder": "Was gibt Codex meist ab? z. B. Nur-Lese-Suchen im Repo oder modulübergreifende Refactorings",

@@ -1165,7 +1165,7 @@ export const fr: Record<TKey, string> = {
   "sub.settings": "Paramètres",
   "sub.sections": "Sections des sous-agents",
   "sub.delegation.model": "Modèle à appeler en premier",
-  "sub.delegation.modelHint": "Le modèle que Codex sollicite en premier lorsqu’il délègue une tâche. La liste À la une ci-dessus contient les modèles qu’il peut appeler ; celui-ci est appelé en premier.",
+  "sub.delegation.modelHint": "Le modèle que Codex sollicite en premier lorsqu’il délègue une tâche. Les modèles épinglés dans le sélecteur de modèle sont ses candidats préférés, pas une limite à ce qu’il peut appeler ; celui-ci est appelé en premier.",
   "sub.suggest.button": "Suggérer",
   "sub.suggest.label": "Travail délégué",
   "sub.suggest.placeholder": "Que confie Codex d’habitude ? p. ex. des recherches en lecture seule dans le dépôt, ou des refactorisations sur plusieurs modules",

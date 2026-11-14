@@ -3828,7 +3828,7 @@ export const ja: Record<TKey, string> = {
   "sub.settings": "設定",
   "sub.sections": "サブエージェントのセクション",
   "sub.delegation.model": "最初に呼ぶモデル",
-  "sub.delegation.modelHint": "Codex が作業を任せるとき、最初に呼ぶモデルです。上のおすすめが呼べる候補で、ここで選んだものがその中の第一候補になります。",
+  "sub.delegation.modelHint": "Codex が作業を任せるとき、最初に呼ぶモデルです。モデルピッカーに固定したモデルは優先候補で、呼べるモデルを限定するものではありません。ここで選んだものが最初に呼ばれます。",
   "sub.suggest.button": "提案",
   "sub.suggest.label": "委任する作業",
   "sub.suggest.placeholder": "Codex が主に任せる作業は? 例: リポジトリ全体の読み取り専用検索、複数モジュールにまたがるリファクタリング",

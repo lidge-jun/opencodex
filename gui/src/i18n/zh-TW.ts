@@ -3010,7 +3010,7 @@ export const zhTW: Record<TKey, string> = {
   "sub.settings": "設定",
   "sub.sections": "子代理分區",
   "sub.delegation.model": "優先調用的模型",
-  "sub.delegation.modelHint": "Codex 分派工作時最先調用的模型。上面的推薦是可調用的名單，這裡選的是其中第一順位。",
+  "sub.delegation.modelHint": "Codex 分派工作時最先調用的模型。模型選擇器中置頂的模型是優先候選，並不限制它能調用哪些模型；這裡選的是最先調用的那個。",
   "sub.suggest.button": "建議",
   "sub.suggest.label": "委派的工作",
   "sub.suggest.placeholder": "Codex 通常交出什麼工作？例如：整個儲存庫的唯讀搜尋，或跨多個模組的重構",
