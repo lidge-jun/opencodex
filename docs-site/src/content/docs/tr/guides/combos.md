@@ -311,7 +311,7 @@ Arayüzü](/tr/guides/sub-agent-surface/) sayfasına bakın.
 
 ### Kontrol Paneli
 
-**Modeller → Kombolar** önce her kombo için bir satır içeren bir genel bakış açar: kanal sırası, sağlayıcı başına kalan kota, bağlam penceresi, strateji menüsü ve açma/kapama anahtarı. **Gelişmiş**, aşağıda anlatılan tam çalışma alanını açar.
+**Modeller → Kombolar** önce her kombo için bir satır içeren bir genel bakış açar: kanal sırası, sağlayıcı başına kalan kota, bağlam penceresi, strateji menüsü ve açma/kapama anahtarı. **Gelişmiş**, aşağıda anlatılan tam çalışma alanını açar. Bir satırın kanallarını düzenlerken **Aile başına en yeni**, eklenebilecek modelleri her ailenin en yenisiyle sınırlar. Satırların üstündeki **Önerilen kombolar**, iki veya daha fazla sağlayıcının aynı adla sunduğu modelleri listeler: **Oluştur**, yük devretme taslağını açar (önce üreticinin aboneliği, sonra diğer abonelikler, Vertex kredisi, en son kullandıkça öde anahtarları ve aktarıcılar) ve gözden geçirdikten sonra kaydedilir; mevcut bir komboda bir sağlayıcı eksikse kart **Komboya ekle** sunar; **Kapat** yalnızca bu tarayıcıda hatırlanır. **Sağlayıcı hariç tut…** ile işaretlenen sağlayıcılar hiçbir önerilen komboya girmez (önceden oluşturulan kombolar onları korur); bu liste yapılandırmada (`comboSuggestionExcludedProviders`) saklanır.
 
 Yerel kontrol panelini açın ve **Modeller → Kombolar** seçeneğini belirleyin.
 Çalışma alanı komboları oluşturur, düzenler, yeniden adlandırır ve kaldırır;

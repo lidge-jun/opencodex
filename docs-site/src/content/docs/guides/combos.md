@@ -987,7 +987,8 @@ combo: its channels in routing order (last-resort members marked), how much quot
 provider has left (API-key providers read as pay per use), the context window, a strategy menu, and an
 on/off switch. Picking a strategy saves it at once, except JEV, which opens the full editor so the
 decision service is chosen explicitly. Switching a combo off keeps its settings and only stops listing it
-to clients. Click a row to reorder, add, remove, or mark channels fallback only (`lastResort`).
+to clients. Click a row to reorder, add, remove, or mark channels fallback only (`lastResort`);
+**Latest per family** limits the models offered for adding to the newest of each family.
 **More settings** opens under the channels: the capability policy, a switch that makes fallback
 channels wait until nothing else works (`cooldownWaitPolicy: "before-last-resort"`), and each
 member's context window, input types and effort levels next to the combo's combined values.
@@ -997,9 +998,10 @@ on anthropic built-in table)"; **Adopt** saves it as a manual setting. Estimates
 combined row counts them only when labelled "includes inferred". **Edit** on a member changes that provider's per-model settings (the same
 `PUT /api/model-settings` write as the Models page), so every combo using that model changes with
 it; context accepts `200000`, `200K` or `1M`. **Use the provider's values** clears what was set by
-hand. **Test it** calls `POST /api/providers/probe-capabilities` to check image input and effort levels
-on that relay and saves conclusive results; for a pay-per-use provider it first asks, naming how many
-small requests it will send. A failed plain request changes nothing. Context is inferred from the
+hand. **Test it** asks the proxy (`POST /api/providers/probe-capabilities`) to check image input and
+effort levels on that relay and saves conclusive results; for a pay-per-use provider it first asks,
+naming how many small requests it will send. A proxy without that endpoint reports the test as failed,
+and a failed test or plain request changes nothing. Context is inferred from the
 model name, never probed. Click the context tag on a row to open it directly.
 
 **Suggested combos** sits above the rows when two or more of your providers serve a model under the
@@ -1008,7 +1010,10 @@ one; snapshot dates do not). **Generate** opens a failover draft with subscripti
 maker first, then other subscriptions, Vertex credit, and pay-per-use keys and relays last; rename,
 reorder, or drop members, then **Save combo**. When an existing combo for that model is missing a
 provider that serves it, the card offers **Add to combo** instead. **Dismiss** hides a suggestion in this
-browser only; nothing is written to the config.
+browser only; nothing is written to the config. **Exclude a provider…** under the title lists your
+providers: a ticked one joins no suggested combo, new or existing, while combos you already made keep
+it. That list is saved in the config (`comboSuggestionExcludedProviders`, `GET`/`PUT
+/api/combo-suggestions`), so it follows you across browsers.
 
 **Advanced** opens the full workspace (`#models/combos/advanced`), which creates, edits, renames, and
 removes combos. Its model selectors include hidden models: catalog visibility only controls external model
