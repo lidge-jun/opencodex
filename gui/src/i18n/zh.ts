@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -133,6 +134,7 @@ export const zh: Record<TKey, string> = {
   "workflowBudget.saveFailed": "无法保存工作流限制。",
   "workflowBudget.saved": "工作流限制已保存。",
   ...desktopCompatibilityCopy("zh"),
+  ...accountProbeCopy("zh"),
   ...shellV2Copy("zh"),
   ...codexCliUpdateCopy("zh"),
   ...remoteLinkDiagnosticsCopy("zh"),

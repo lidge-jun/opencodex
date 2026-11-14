@@ -985,6 +985,24 @@ token re-login or a plain account-list re-read. `--json` returns
 failures exit 1; an upstream quota probe that fails or times out degrades to a null or stale report
 instead (exit 0), matching the dashboard's quota bars.
 
+### `ocx account probe google-antigravity [id|alias] [--json]`
+
+Read-only per-account check for Google Antigravity. Each account gets one
+`retrieveUserQuotaSummary` request with its own stored access token, under the CLI fingerprint, and
+the result is classified as `ok`, `rate_limited`, `verification_required`, `suspended`,
+`permission_denied` or `error` (with the HTTP status and Google's reason). Two outcomes are decided
+locally and send nothing: `paused` (the account is paused; resume it to test it) and `token_expired`
+(the stored token has expired). The probe never refreshes a token, never writes the auth store and
+never changes pause, active, cooldown or health state. The dashboard's **Test** and **Test all**
+buttons on Antigravity account rows call the same endpoint, `POST /api/oauth/accounts/probe`.
+
+### `ocx models discover <provider> [--json]`
+
+Runs the provider's live model discovery now instead of waiting for the next scheduled refresh, and
+prints how many live models it saw and which ones are new. It is the same action as **Discover now**
+under the provider's settings (`POST /api/model-discovery/refresh`). Providers without live
+discovery report that discovery is off.
+
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
 Controls the `openai` Codex pool threshold, or stores a threshold for a generic OAuth pool. `on` stores 80%, `off` stores 0%, and `threshold <n>` accepts 0–100. A generic pool threshold steers selection only while `pool.kernel` is on with `strategy: "fill-first"`; with the flag off, saving one does not enable threshold-based switching. It never changes the provider enablement override or disables reactive 429 rotation. `status` and mutation output for generic pools use the confirmed server response. For generic pools, `poolEnabled` is the stored provider override (`null` means unspecified), not inherited effective state; `inert: true` means the threshold is stored but not applied, `inert: false` means the pool is applying it, and an absent `inert` is an unknown capability, which never reports `enabled: true`. API-key providers and invalid values are rejected.

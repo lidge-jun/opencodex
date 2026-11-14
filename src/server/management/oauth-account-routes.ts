@@ -1051,6 +1051,23 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     return jsonResponse({ ok: true, cleared });
   }
 
+  // Read-only per-account probe: each stored account's own access token, one upstream request,
+  // no refresh and no store write. Omitting accountId probes the whole roster.
+  if (url.pathname === "/api/oauth/accounts/probe" && req.method === "POST") {
+    const body = await readManagementJsonBodyOr(req, {});
+    if (!isPlainRecord(body)) return jsonResponse({ error: "body must be an object" }, 400);
+    const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
+    const { ACCOUNT_PROBE_PROVIDERS, probeAntigravityAccounts } = await import("../../providers/quota/antigravity-account-probe");
+    if (!ACCOUNT_PROBE_PROVIDERS.has(provider)) return jsonResponse({ error: "account probe is not supported for this provider" }, 400);
+    if (body.accountId !== undefined && (typeof body.accountId !== "string" || !body.accountId.trim())) {
+      return jsonResponse({ error: "accountId must be a non-empty string" }, 400);
+    }
+    const accountId = typeof body.accountId === "string" ? body.accountId.trim() : undefined;
+    const results = await probeAntigravityAccounts({ ...(accountId ? { accountId } : {}), signal: req.signal });
+    if (!results) return jsonResponse({ error: "account not found" }, 404);
+    return jsonResponse({ provider, probedAt: new Date().toISOString(), results });
+  }
+
   if (url.pathname === "/api/oauth/accounts/import" && req.method === "POST") {
     const controller = new AbortController();
     const abortRequest = () => controller.abort();
