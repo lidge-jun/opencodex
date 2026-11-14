@@ -43,6 +43,8 @@ export interface StaleContextWindowProjection {
  * the degraded-mode figures, and live discovery supersedes them when it runs.
  */
 export const STALE_CONTEXT_WINDOWS: readonly StaleContextWindow[] = [
+  // swe-2 shipped 262_000 (a stale vendor figure) before the measured 850_000 window.
+  { provider: "devin", model: "swe-2", from: 262_000, to: 850_000 },
   { provider: "devin", model: "swe-1-7", from: 256_000, to: 262_000 },
   { provider: "devin", model: "swe-1-7-lightning", from: 256_000, to: 202_752 },
   { provider: "devin", model: "gpt-5-6-sol", from: 1_050_000, to: 1_000_000 },
