@@ -158,7 +158,11 @@ export async function probeAntigravityAccounts(options: {
   const worker = async () => {
     while (next < targets.length) {
       const index = next++;
-      results[index] = await probeOneAntigravityAccount(targets[index]!, set?.activeAccountId, now, options.signal);
+      const target = targets[index]!;
+      // Re-read the roster as each probe starts: a pause made after the snapshot must suppress the request.
+      const latest = getAccountSet("google-antigravity");
+      const current = latest?.accounts.find(account => account.id === target.id) ?? target;
+      results[index] = await probeOneAntigravityAccount(current, latest?.activeAccountId ?? set?.activeAccountId, now, options.signal);
     }
   };
   await Promise.all(Array.from({ length: Math.min(PROBE_CONCURRENCY, targets.length) }, worker));
