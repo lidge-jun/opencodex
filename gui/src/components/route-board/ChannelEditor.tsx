@@ -147,10 +147,15 @@ export function ChannelEditor({
     label: <span className="rb-strategy-option"><span className="rb-strategy-name">{name}</span><span className="rb-strategy-hint">{hint}</span></span>,
   });
 
+  // The context tag asks for More settings on an editor that may already be open: follow the
+  // prop while rendering (no remount, so unsaved channels stay), then scroll it into view.
+  const [askedMore, setAskedMore] = useState(moreOpenInitially);
+  if (askedMore !== moreOpenInitially) {
+    setAskedMore(moreOpenInitially);
+    if (moreOpenInitially) setMoreOpen(true);
+  }
   useEffect(() => {
-    if (!moreOpenInitially) return;
-    setMoreOpen(true);
-    moreRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+    if (moreOpenInitially) moreRef.current?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
   }, [moreOpenInitially]);
 
   const move = (from: number, to: number) => setChannels((list) => moveChannel(list, from, to));
