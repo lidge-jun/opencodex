@@ -127,7 +127,7 @@ const rows = {
   ctxMemory: ["Memory and AGENTS.md","메모리 및 AGENTS.md","Speicher und AGENTS.md","Mémoire et AGENTS.md","记忆与 AGENTS.md","記憶與 AGENTS.md","Память и AGENTS.md","メモリと AGENTS.md","Bellek ve AGENTS.md","Bộ nhớ và AGENTS.md","Memória e AGENTS.md"],
   ctxFiles: ["Files","파일","Dateien","Fichiers","文件","檔案","Файлы","ファイル","Dosyalar","Tệp","Arquivos"],
   ctxResults: ["Tool results","도구 결과","Tool-Ergebnisse","Résultats d’outils","工具结果","工具結果","Результаты инструментов","ツール結果","Araç sonuçları","Kết quả công cụ","Resultados de ferramentas"],
-  ctxChat: ["Conversation","대화 내용","Unterhaltung","Conversation","会话内容","對話內容","Диалог","会話","Konuşma","Hội thoại","Conversa"],
+  ctxChat: ["Conversation","대화 내용","Unterhaltung","Échanges","会话内容","對話內容","Диалог","会話","Konuşma","Hội thoại","Conversa"],
   ctxTurn: ["Turn {n}","{n}번째 턴","Runde {n}","Tour {n}","第 {n} 轮","第 {n} 輪","Ход {n}","第 {n} ターン","{n}. tur","Lượt {n}","Turno {n}"],
   ctxEarlier: ["Earlier turns","이전 턴","Frühere Runden","Tours précédents","更早的轮次","更早的輪次","Более ранние ходы","それ以前のターン","Önceki turlar","Các lượt trước","Turnos anteriores"],
   ctxFree: ["Free space","남은 공간","Freier Platz","Espace libre","剩余空间","剩餘空間","Свободное место","空き容量","Boş alan","Dung lượng trống","Espaço livre"],
