@@ -90,6 +90,7 @@ export function buildChildEnv(_profile: ClaudeCliProfile, _apiKey: string): Reco
   const env: Record<string, string> = {
     ...baseScopedEnv(),
     ...CLAUDE_CLI_QUIET_ENV,
+    CLAUDE_CODE_ENTRYPOINT: "opencodex",
   };
   const user = process.env.USER;
   if (user) env.USER = user;
