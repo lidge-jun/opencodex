@@ -136,6 +136,7 @@ export const INTEGRATION_TAB_HASHES = [
   "integrations/claude/desktop",
   "integrations/grok",
   "integrations/cursor",
+  "integrations/antigravity",
   "integrations/opencode",
   "integrations/pi",
   "integrations/gentle-shell",

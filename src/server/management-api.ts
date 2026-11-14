@@ -238,6 +238,12 @@ async function handleRemoteWorkspaceRoutesOnDemand(ctx: ManagementContext): Prom
   return handleRemoteWorkspaceRoutes(ctx);
 }
 
+async function handleGatewayClientRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/gateway-clients")) return null;
+  const { handleGatewayClientRoutes } = await import("./management/gateway-client-routes");
+  return handleGatewayClientRoutes(ctx);
+}
+
 async function handleLinkRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
   if (!pathInManagementNamespace(ctx.url.pathname, "/api/link")) return null;
   const { handleLinkRoutes } = await import("./management/link-routes");
@@ -396,6 +402,7 @@ export async function handleManagementAPI(
     ??     (await handleIntegrationRoutes(ctx))
     ??     (await handleNativeIntegrationRoutes(ctx))
     ??     (await handleCursorIntegrationRoutes(ctx))
+    ??     (await handleGatewayClientRoutesOnDemand(ctx))
     ??     (await handleClaudeDesktopPickerRoutes(ctx))
     ??     (await handleDesktopCompatibilityRoutes(ctx))
     ??     (await handleDesktopCompatibilityRuntimeRoutes(ctx))

@@ -20,6 +20,7 @@ export type IntegrationTab =
   | "claudeDesktop"
   | "grok"
   | "cursor"
+  | "antigravity"
   | FileIntegrationClientId;
 
 export interface TabDefinition {
@@ -38,6 +39,7 @@ export const TABS: readonly TabDefinition[] = [
   { id: "claudeDesktop", hash: "claude/desktop", labelKey: "claudeDesktop.title" },
   { id: "grok", hash: "integrations/grok", labelKey: "integrations.tab.grok" },
   { id: "cursor", hash: "integrations/cursor", labelKey: "integrations.tab.cursor" },
+  { id: "antigravity", hash: "integrations/antigravity", labelKey: "gatewayClients.tab" },
   { id: "opencode", hash: "integrations/opencode", labelKey: "integrations.tab.opencode" },
   { id: "pi", hash: "integrations/pi", labelKey: "integrations.tab.pi" },
   { id: "gentle-shell", hash: "integrations/gentle-shell", labelKey: "integrations.tab.gentleShell" },

@@ -9,6 +9,7 @@ import Claude from "./Claude";
 import ClaudeDesktop from "./ClaudeDesktop";
 import Grok from "./Grok";
 import CursorIntegrationPage from "./integrations/CursorIntegrationPage";
+import GatewayClientsPage from "./integrations/GatewayClientsPage";
 import IntegrationsOverview from "./integrations/IntegrationsOverview";
 import AsideProfilesPage from "./integrations/AsideProfilesPage";
 import HermesProfilesPage from "./integrations/HermesProfilesPage";
@@ -214,6 +215,7 @@ export default function Integrations({ apiBase, machineApiBase = apiBase, connec
               </div>
             )}
             {definition.id === "cursor" && <CursorIntegrationPage apiBase={apiBase} active={active} />}
+            {definition.id === "antigravity" && <GatewayClientsPage apiBase={apiBase} active={active} />}
             {FILE_CLIENTS.has(definition.id as FileIntegrationClientId) && (
               definition.id === "aside" ? <AsideProfilesPage apiBase={apiBase} active={active} />
               : definition.id === "hermes" ? <HermesProfilesPage apiBase={apiBase} active={active} /> : <FileIntegrationPage
