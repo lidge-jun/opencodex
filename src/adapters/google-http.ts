@@ -85,6 +85,7 @@ export async function fetchGoogleWithRetry(
   let retryDelayMs = 0;
   let sendClass: SendClass = "transient";
   let recovery: AttemptRecoveryKind | undefined;
+  try {
   for (let attempt = 0; attempt < TRANSIENT_RETRY_MAX_ATTEMPTS; attempt++) {
     if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
     // A credential rebuild mutates the original request while a repaired replay owns its body.
@@ -92,10 +93,13 @@ export async function fetchGoogleWithRetry(
     if (activeRequest !== request) activeRequest = { ...activeRequest, url: request.url, method: request.method, headers: request.headers };
     try {
       const res = await send({ url: activeRequest.url, sendClass, recovery,
-        beforeDispatch: async () => {
-          if (retryDelayMs > 0) await sleepWithAbort(retryDelayMs, ctx.abortSignal);
-          if (pendingResponse) cancelResponseBodyBestEffort(pendingResponse);
+        beforePacing: async () => {
+          // Admission already reserved the retry budget. Drop our old response lease
+          // before waiting for capacity; never hold the next slot during backoff.
+          const previous = pendingResponse;
           pendingResponse = undefined;
+          if (previous) cancelResponseBodyBestEffort(previous);
+          if (retryDelayMs > 0) await sleepWithAbort(retryDelayMs, ctx.abortSignal);
         },
         dispatch: executor => fetchWithAttemptDeadline(activeRequest.url, {
           method: activeRequest.method, headers: activeRequest.headers, body: activeRequest.body,
@@ -179,7 +183,9 @@ export async function fetchGoogleWithRetry(
           // upstream answer — but it used to leave the log indistinguishable from a request
           // where no retry was ever eligible (#5044).
           ctx.onRecoveryWithheld?.({ reason: "retry-send-budget" });
-          return ctx.returnRawErrors ? pendingResponse : normalizeFinalGoogleError(label, pendingResponse, activeRequest, ctx.abortSignal);
+          const retained = pendingResponse;
+          pendingResponse = undefined; // Transfer ownership to the caller/normalizer.
+          return ctx.returnRawErrors ? retained : normalizeFinalGoogleError(label, retained, activeRequest, ctx.abortSignal);
         }
         throw err;
       }
@@ -194,6 +200,10 @@ export async function fetchGoogleWithRetry(
     }
   }
   throw lastError ?? new Error(`${label} fetch failed`);
+  } finally {
+    // A cancellation before the next retry's preparation must not strand its lease.
+    if (pendingResponse) cancelResponseBodyBestEffort(pendingResponse);
+  }
 }
 
 /**
