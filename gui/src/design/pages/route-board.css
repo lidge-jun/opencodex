@@ -146,7 +146,7 @@
 }
 .rb-more-toggle:hover { color: var(--ocx-fg); }
 .rb-more-toggle:focus-visible { outline: 2px solid var(--ocx-highlight); outline-offset: 2px; border-radius: 4px; }
-.rb-more-body { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+.rb-more-body { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; overflow-x: auto; }
 .rb-pref { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 4px; border-bottom: 1px solid var(--ocx-line); }
 .rb-pref-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .rb-pref-name { color: var(--ocx-fg); font-size: 13px; font-weight: 500; }

@@ -4554,7 +4554,7 @@ export const ru: Record<TKey, string> = {
   "routeBoard.jevInAdvanced": "Для JEV нужен сервис решений. Переключите здесь стратегию на JEV, проверьте, какой сервис принимает решение, и сохраните.",
   "routeBoard.edit.aria": "Каналы для {model}",
   "routeBoard.edit.drag": "Перетащите, чтобы изменить порядок",
-  "routeBoard.edit.lastResortHint": "Только резерв: используется, лишь когда ни один другой канал недоступен.",
+  "routeBoard.edit.lastResortHint": "Только резерв: используется, только когда все остальные каналы недоступны.",
   "routeBoard.edit.lastResortInert": "Не действует: включите «Резервные каналы — в последнюю очередь» в разделе «Другие настройки». До тех пор канал используется по порядку, как остальные.",
   "routeBoard.edit.moveUp": "Переместить {name} выше",
   "routeBoard.edit.moveDown": "Переместить {name} ниже",
