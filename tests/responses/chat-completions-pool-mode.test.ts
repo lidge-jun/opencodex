@@ -8,6 +8,7 @@ import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { redirectCanonicalCodexTo } from "../helpers/pool-retry-harness";
 import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspection";
 
 const inspectNativeCodexOwnership = ownedServiceHomeInspection("chat completions pool-mode test");
@@ -17,6 +18,7 @@ describe("chat-completions pool vs direct credential injection", () => {
   let previousHome: string | undefined;
   let isolatedCodexHome: IsolatedCodexHome | null = null;
   const originalFetch = globalThis.fetch;
+  const originalWebSocket = globalThis.WebSocket;
 
   beforeEach(() => {
     previousHome = process.env.OPENCODEX_HOME;
@@ -29,6 +31,7 @@ describe("chat-completions pool vs direct credential injection", () => {
   afterEach(async () => {
     process.env.OPENCODEX_HOME = previousHome;
     globalThis.fetch = originalFetch;
+    globalThis.WebSocket = originalWebSocket;
     if (isolatedCodexHome) {
       isolatedCodexHome.restore();
       isolatedCodexHome = null;
@@ -64,13 +67,16 @@ describe("chat-completions pool vs direct credential injection", () => {
       },
     });
 
+    // This upstream fixture serves HTTP only; native WSS must fall back locally too.
+    redirectCanonicalCodexTo(upstream.url.toString());
+    const redirectedFetch = globalThis.fetch;
     globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-      const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-      const url = new URL(requestUrl);
-      if (url.hostname === "chatgpt.com" && url.pathname.startsWith("/backend-api/codex")) {
-        return originalFetch(new URL(`${url.pathname.slice("/backend-api/codex".length)}${url.search}`, upstream.url), init);
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      // Optional quota priming is unrelated to credential injection and must stay offline.
+      if (url.origin === "https://chatgpt.com" && url.pathname === "/backend-api/wham/usage") {
+        return Promise.resolve(Response.json({ rate_limit: { primary_window: { used_percent: 10 } } }));
       }
-      return originalFetch(input, init);
+      return redirectedFetch(input, init);
     }) as typeof fetch;
 
     let server: ReturnType<typeof startServer> | undefined;

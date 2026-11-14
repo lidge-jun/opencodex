@@ -1884,6 +1884,10 @@ describe("provider management validation", () => {
   // opencode-go the seed is exactly {"kimi-k3": 262144}, which is what the reporter found in
   // place of their deepseek-v4-flash override.
   describe("provider POST overwrite preserves hand-edited context windows (#1409)", () => {
+    // These save/merge assertions do not depend on live DNS destination discovery.
+    let resolvedDestination: ReturnType<typeof spyOn<typeof destinationPolicy, "providerDestinationResolvedError">>;
+    beforeEach(() => { resolvedDestination = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null); });
+    afterEach(() => resolvedDestination.mockRestore());
     async function seedProvider(url: URL, extra: Record<string, unknown>): Promise<Response> {
       return fetch(new URL("/api/providers", url), {
         method: "POST",
@@ -2316,6 +2320,7 @@ describe("provider management validation", () => {
     saveConfig(config("127.0.0.1"));
 
     const server = startServer(0);
+    const resolvedDestination = spyOn(destinationPolicy, "providerDestinationResolvedError").mockResolvedValue(null);
     try {
       const response = await fetch(new URL("/api/providers", server.url), {
         method: "POST",
@@ -2336,6 +2341,7 @@ describe("provider management validation", () => {
       expect(saved.providers["meta-muse"]?.headers).toBeUndefined();
       expect(saved.providers["meta-muse"]?.keyOptional).toBeUndefined();
     } finally {
+      resolvedDestination.mockRestore();
       await server.stop(true);
     }
   });

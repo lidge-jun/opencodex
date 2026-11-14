@@ -1069,3 +1069,33 @@ Routed requests tolerate malformed serialized function arguments as an empty obj
 Two bounded history repairs preserve usable arguments: a missing JSON object prefix,
 and MiMo's trailing `</function></tool_call>` envelope with a missing closing quote or brace.
 A repair must decode to a JSON object. Valid JSON values containing those tags are preserved.
+
+## Native Gemini with Antigravity
+
+Gemini clients can use the normal authenticated OC listener with `/v1beta` as the base URL:
+
+- `GET /v1beta/models` and `GET /v1beta/models/{model}`
+- `POST /v1beta/models/{model}:generateContent`
+- `POST /v1beta/models/{model}:streamGenerateContent?alt=sse`
+
+Enable the `google-antigravity` provider and sign in with `ocx login google-antigravity`.
+Use an OC admission key in `Authorization: Bearer <OC_KEY>` or `x-opencodex-api-key`.
+The upstream token and project come from OC's active Antigravity account. A separate proxy
+process is not required.
+
+This route adds and removes only the Cloud Code Assist envelope. Original JSON fields,
+large integers, function arguments and thought signatures retain their source representation.
+Streaming uses Gemini SSE; framing can change. Other OC providers, aliases, combos and effort
+selectors do not participate. Supply a concrete `gemini-*` wire model. The catalog lists OC's
+known AGY models filtered by the key's destination scope; listing does not prove account access.
+
+Bodies and SSE events are capped at 16 MiB; a lower `maxInboundBodyBytes` also applies to requests.
+Send identity-encoded JSON. Compressed requests are rejected. Uploads have an independent idle
+limit (default 300 seconds), even when upstream stall detection is disabled. OC's connection and stall timeouts,
+key scopes, active-turn admission and provider pacing apply. One upstream 401 can refresh the
+same account and retry once before any response is delivered; stream failures never replay output.
+Request history records status, latency and admission identity, with token usage unreported.
+Workflow send ceilings include the initial send and 401 recovery. Requests with an applicable
+root, identity or pool token-spend ceiling receive 503 (`gemini_native_spend_limits_unsupported`);
+use a translated OC route when token-spend accounting is required.
+Interactions and `countTokens` are unsupported on this native path.
