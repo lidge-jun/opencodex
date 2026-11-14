@@ -105,4 +105,14 @@ describe("account quota table", () => {
     expect(uncoveredWindows(windows).map(window => window.label)).toEqual(["gemini-3-pro · free", "Opus (Weekly)"]);
     expect(uncoveredWindows(undefined)).toEqual([]);
   });
+
+  test("an account refused upstream reads as banned before paused, and verification before reauth", () => {
+    const table = buildQuotaTable([
+      antigravity("banned", { paused: true, banned: { message: "ToS", pausedAt: NOW, statusCode: 403 } }, [["Cla", 10, 1]]),
+      antigravity("paused", { paused: true }),
+      antigravity("verify", { needsReauth: true, verifyRequired: true }),
+      antigravity("reauth", { needsReauth: true }),
+    ], NOW);
+    expect(table.rows.map(row => row.flag)).toEqual(["banned", "paused", "verify", "reauth"]);
+  });
 });

@@ -622,6 +622,10 @@ export default function ProviderAuthPanel({
                     id: account.id, label: oauthAccountDisplayLabel(accounts, account, t), plan: account.plan,
                     planLabel: isAnthropicPool ? anthropicSubscriptionLabel(account.plan) : undefined,
                     active: account.active, paused: account.paused === true, needsReauth: accountShowsReauth(account),
+                    verifyRequired: account.needsReauthReason === "verify_account",
+                    ...(account.paused && account.pauseDetails?.reason === "account_permission_denied" ? { banned: {
+                      message: account.pauseDetails.message, pausedAt: account.pauseDetails.pausedAt, statusCode: account.pauseDetails.statusCode,
+                    } } : {}),
                     health: account.health, quota: accountQuotaFromReport({ quota: account.quota }), quotaUnavailable: account.quotaUnavailable,
                     ...(probe && "result" in probe ? { probe: { status: probe.result.status, latencyMs: probe.result.latencyMs } } : {}),
                   };
@@ -710,7 +714,7 @@ export default function ProviderAuthPanel({
                   const parts = [
                     healthSummary && <p key="health">{healthSummary}</p>,
                     inCooldown && <p key="cooldown">{t("pws.healthCooldownHint")}</p>,
-                    account.paused && <p key="paused">{t("pws.accountPausedHint")}</p>,
+                    account.paused && row.flag !== "banned" && <p key="paused">{t("pws.accountPausedHint")}</p>,
                     probeEntry && <AccountProbeResultLine key="probe" entry={probeEntry} />,
                     threshold && (
                       <AccountAutoSwitchControl key="threshold"
