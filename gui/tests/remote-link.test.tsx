@@ -1665,3 +1665,16 @@ test("readLinkJson keeps whether the Child may still be connected, as a fixed va
   expect((await read({ error: { code: "x" }, residual: true, residualKind: "plant", linkId: "lnk_0; rm -rf ~" })).residual).toEqual({ step: "noLink", linkId: null });
   expect((await read({ error: { code: "x" }, residual: "yes" })).residual).toBeNull();
 });
+
+// The Home's discovery tries ~/.local/bin first, which need not be on PATH, and a purge path that is not found means no
+// planted binary is there (#8696).
+test.each([
+  ["a lightweight Child", { residualKind: "enrollment", residualInstall: "ephemeral", remotePlatform: "posix" }, ["~/.local/bin/ocx-child", "need not be on PATH"]],
+  ["a lightweight Windows Child", { residualKind: "enrollment", residualInstall: "ephemeral", remotePlatform: "windows" }, ["%USERPROFILE%\\.local\\bin\\ocx-child.exe", "need not be on PATH"]],
+  ["a posix plant", { residualKind: "plant", remotePlatform: "posix" }, ["If the command is not found there, the binary is not installed"]],
+  ["a windows plant", { residualKind: "plant", remotePlatform: "windows" }, ["If the command is not found there, the binary is not installed"]],
+] as const)("a residual on %s names the hand-placed location or what a missing binary means", async (_name, fields, parts) => {
+  const host = await applyRefusal({ error: { code: "key_cleanup_failed", message: "fixture" }, residual: true, linkId: RESIDUAL_ID, recovery: "whatever the server wrote", ...fields });
+  const text = host.querySelector(".remote-link-child-step")?.textContent ?? "";
+  for (const part of parts) expect(text).toContain(part);
+});
