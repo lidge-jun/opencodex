@@ -119,7 +119,7 @@ import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import { chargeWorkflowSends } from "../../lib/workflow-budget";
 import { hasWorkflowSendObserver } from "../../lib/request-execution-budget";
-import { isAntigravityValidationRefusal } from "./antigravity-validation-refusal";
+import { isAntigravityAccessDeniedRefusal, isAntigravityValidationRefusal } from "./antigravity-validation-refusal";
 import { createAntigravityModelDenialRecovery, recoverAntigravityAccount } from "./antigravity-model-denial-recovery";
 import { adapterSendBudgetRefusal } from "../workflow-refusal";
 import { AdmissionModelDeniedError, admissionModelDeniedResponse, projectAdmissionModelDeniedLog } from "../admission-model-scope";
@@ -1076,10 +1076,13 @@ export async function prepareAdapterExchange(
 
       if (route.providerName === "google-antigravity" && upstreamResponse.status === 403
         && transportState.activeAdapter.name === "google"
-        && antigravityPoolActivated && !antigravityAuthRotationAttempted
+        && antigravityPoolActivated
         && !isNonReplayableResponse(upstreamResponse)
         && transportState.genericFailovers < transportState.genericFailoverLimit
-        && await isAntigravityValidationRefusal(upstreamResponse, options.abortSignal)) {
+        && (!antigravityAuthRotationAttempted && await isAntigravityValidationRefusal(upstreamResponse, options.abortSignal)
+          // A plain access-denied 403 keeps rotating while siblings remain: each refused account is
+          // cooled before the hop, so the ring advances and `genericFailoverLimit` bounds the sends.
+          || await isAntigravityAccessDeniedRefusal(upstreamResponse, options.abortSignal))) {
         antigravityAuthRotationAttempted = true;
         const rotated = await rotateAntigravityAuth(upstreamResponse, "oauth-account-403");
         if (rotated) { upstreamResponse = rotated; continue recovery; }

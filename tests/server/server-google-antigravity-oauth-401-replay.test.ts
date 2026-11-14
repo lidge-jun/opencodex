@@ -624,20 +624,69 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
 
   test.each([403, { status: 403, reason: "VALIDATION_REQUIRED", oversized: true },
     { status: 403, message: ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX }])(
-    "unclassified 403 %p retains the refusal without a sibling send", async refusal => {
+    "access-denied 403 %p cools the refused account and replays on the sibling without a stored verdict", async refusal => {
       await seedOAuth();
+      const failedId = getAccountSet("google-antigravity")!.activeAccountId;
       await seedSibling();
       saveConfig(antigravityConfig());
       const observed = installOAuthFetch([refusal, 200]);
       const server = startServer(0);
       try {
         const response = await postResponses(server);
-        const body = await response.text();
-        expect(response.status).toBe(403);
-        expect(body).toContain("Antigravity");
-        expect(observed.chatAuth).toEqual(["Bearer rejected-access"]);
+        expect(response.status).toBe(200);
+        await response.text();
+        expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer access-b"]);
+        expect(observed.chatProjects).toEqual(["initial-project-id", "project-b"]);
+        expect(observed.counts.refresh).toBe(0);
+        expect(eligibleFailoverAccounts("google-antigravity")).not.toContain(failedId);
+        for (const row of getAccountSet("google-antigravity")!.accounts) expect(row.needsReauth).not.toBe(true);
+        expect(readUsageEntries().at(-1)?.attempts?.some(attempt => attempt.recoveryKinds.includes("oauth-account-403"))).toBe(true);
       } finally { await server.stop(true); }
     });
+
+  test("access-denied 403 keeps walking the pool until an account answers", async () => {
+    await seedOAuth();
+    await seedSibling();
+    await seedThirdSibling();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([403, 403, 200]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer access-b", "Bearer access-c"]);
+    } finally { await server.stop(true); }
+  });
+
+  test("access-denied 403 on every account ends in the refusal after one send per account", async () => {
+    await seedOAuth();
+    await seedSibling();
+    await seedThirdSibling();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([403, 403, 403, 200]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(403);
+      await response.text();
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer access-b", "Bearer access-c"]);
+      for (const row of getAccountSet("google-antigravity")!.accounts) expect(row.needsReauth).not.toBe(true);
+    } finally { await server.stop(true); }
+  });
+
+  test("access-denied 403 on a lone account retains the refusal", async () => {
+    await seedOAuth();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([403, 200]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(403);
+      expect(await response.text()).toContain("Antigravity");
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access"]);
+    } finally { await server.stop(true); }
+  });
 
   test.each([false, true])("paused sibling %p keeps the validated 403", async pausedSibling => {
       await seedOAuth();
