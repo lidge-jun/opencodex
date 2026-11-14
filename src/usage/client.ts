@@ -41,3 +41,38 @@ export function classifyUsageClient(headers: Headers): UsageClient {
     && !(originClient.startsWith("codex_") && agentClient.startsWith("codex_"))) return "unknown";
   return originClient ?? agentClient ?? "unknown";
 }
+
+const CLIENT_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,39}$/;
+
+/**
+ * A bounded product name for a client the closed roster does not recognize, so the usage report
+ * can say "curl" or "multica-agent-sdk" instead of "unknown". Only the first product token of the
+ * originator or User-Agent is kept, lowercased and without its version; anything that does not
+ * fit the pattern is dropped rather than truncated.
+ */
+export function usageClientName(headers: Headers): string | undefined {
+  const originator = (headers.get("originator") ?? "").trim();
+  const userAgent = (headers.get("user-agent") ?? "").trim();
+  if (originator.length > MAX_HEADER_LENGTH || userAgent.length > MAX_HEADER_LENGTH) return undefined;
+  const claudeEntrypoint = /^claude-cli\/\S+ \(external, ([A-Za-z0-9._-]+)/i.exec(userAgent)?.[1]?.toLowerCase();
+  const token = claudeEntrypoint === "sdk-ts" || claudeEntrypoint === "sdk-py" ? "claude-agent-sdk"
+    : claudeEntrypoint ? `claude-cli-${claudeEntrypoint}`
+    : (originator || userAgent).split(/[\s/;(]/, 1)[0]!.toLowerCase();
+  return CLIENT_NAME_RE.test(token) ? token : undefined;
+}
+
+export function normalizeUsageClientName(value: unknown): string | undefined {
+  return typeof value === "string" && CLIENT_NAME_RE.test(value) ? value : undefined;
+}
+
+/** Request-log fields for the caller: the closed label, plus a name only when the label is unknown. */
+export function usageClientLogContext(headers: Headers): { client: UsageClient; clientName?: string } {
+  const client = classifyUsageClient(headers);
+  const clientName = client === "unknown" ? usageClientName(headers) : undefined;
+  return clientName ? { client, clientName } : { client };
+}
+
+export function clientNameField(value: unknown): { clientName?: string } {
+  const clientName = normalizeUsageClientName(value);
+  return clientName ? { clientName } : {};
+}

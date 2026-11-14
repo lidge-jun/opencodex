@@ -9,7 +9,7 @@
 import type { Server } from "bun";
 import type { OcxConfig } from "../../types";
 import type { WsData } from "../ws-bridge";
-import { classifyUsageClient } from "../../usage/client";
+import { usageClientLogContext } from "../../usage/client";
 import { admissionFields, isAllowedRequestOrigin, resolveApiAuth, resolveResponsesApiAuth, withCors, type RequestPolicyView } from "../auth-cors";
 import { withCallerSessionIdentity } from "../caller-session-identity";
 import { captureAdmissionPolicy } from "../capture-admission-policy";
@@ -69,7 +69,7 @@ export async function dispatchOllamaRoute(req: Request, url: URL, deps: OllamaRo
     model: "unknown",
     provider: "unknown",
     ...deps.requestMetricsLogContext,
-    client: classifyUsageClient(req.headers),
+    ...usageClientLogContext(req.headers),
     ...admissionFields(admission),
   };
   const sessionReq = withCallerSessionIdentity(req, admission);

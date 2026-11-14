@@ -1,6 +1,6 @@
 import type { CSSProperties } from "react";
 import type { SourceFilter } from "./usage-source";
-import type { UsageApp as UsageAppClient } from "../../../../src/usage/app-breakdown";
+import type { UsageApp as UsageAppClient, UsageLegacyWire } from "../../../../src/usage/app-breakdown";
 import type { Locale, TFn } from "../../i18n/shared";
 import { formatTokens } from "../../format-tokens";
 import type { UsageReadMetadata } from "../../usage-summary-resource";
@@ -102,6 +102,10 @@ export interface UsageProvider {
 
 export interface UsageApp {
   client: UsageAppClient;
+  /** Product name of an unrecognized client, from its User-Agent or originator. */
+  name?: string;
+  /** For rows written before client tracking: the wire they arrived on. */
+  legacyWire?: UsageLegacyWire;
   requests: number;
   measuredRequests: number;
   totalTokens: number;
