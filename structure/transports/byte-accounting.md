@@ -145,6 +145,14 @@ envelopes, and real HTTP streams; `tests/server/inbound-body-budget.test.ts` cov
 
 ## Stream-buffer accounting
 
+Responses terminal repair in `src/server/responses-terminal-repair.ts` uses the shared incremental
+SSE block buffer. Fragmented input measures only new decoded text, and draining coalesced events
+subtracts consumed bytes without re-encoding the remaining suffix. Delimiter searches resume at
+the scan cursor, and consumed prefixes are compacted before yielding. Replacement overlap admission,
+Unicode decoding, delayed LF handling, terminal decisions and teardown retain their contracts.
+`tests/responses/responses-terminal-repair.test.ts` bounds byte-measurement work by input size
+for fragmented and coalesced frames and checks exact overlap admission with another retained owner.
+
 `src/lib/tool-envelope-echo-filter.ts` retains at most 65,536 UTF-16 code units of
 unresolved marker-line content, independently of its existing bounded fenced-code hold.
 LF and CRLF settle the line without counting toward the limit. A CR at the limit is
