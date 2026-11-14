@@ -170,6 +170,12 @@ function parseVisionSidecarTargets(
 export async function handleComboRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 
+  // Only the Combos page reads the suggested combos' excluded-provider list; load it on demand.
+  if (url.pathname === "/api/combo-suggestions") {
+    const { handleComboSuggestionRoutes } = await import("./combo-suggestion-routes");
+    return handleComboSuggestionRoutes(ctx);
+  }
+
   if (url.pathname === "/api/combos" && req.method === "GET") {
     const { comboPublicModelId, getCombo, listComboIds } = await import("../../combos");
     return jsonResponse({ combos: listComboIds(config).map(id => {

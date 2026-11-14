@@ -1,6 +1,7 @@
 /** Pure hash → page resolution used by App route state. */
 
 import { normalizeHashPath, splitHashQuery } from "./hash-routing";
+import { COMBOS_ADVANCED_HASH } from "./pages/combos-advanced-hash";
 
 export type Page =
   | "home"
@@ -184,6 +185,7 @@ export function hashBelongsToPage(rawHash: string, page: Page): boolean {
     || (page === "models" && (
       (MODELS_TAB_HASHES as readonly string[]).includes(rawHash)
       || rawHash === JEV_AUTO_CREATE_HASH
+      || rawHash === COMBOS_ADVANCED_HASH
     ))
     || (page === "dashboard"
       && (rawHash === DASHBOARD_UPDATE_HASH || (DASHBOARD_TAB_HASHES as readonly string[]).includes(rawHash)))

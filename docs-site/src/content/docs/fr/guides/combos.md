@@ -285,6 +285,8 @@ flux de travail des tâches.
 
 ### Tableau de bord
 
+**Modèles → Combos** ouvre d’abord une vue d’ensemble avec une ligne par combo : canaux dans l’ordre, quota restant par fournisseur, fenêtre de contexte, menu de stratégie et interrupteur. **Avancé** ouvre l’espace de travail complet décrit ci-dessous. En modifiant les canaux d’une ligne, **Dernier par famille** limite les modèles ajoutables au plus récent de chaque famille. Au-dessus des lignes, **Combinaisons suggérées** liste les modèles que deux fournisseurs ou plus servent sous le même nom : **Générer** ouvre un brouillon de basculement (abonnements du fabricant d’abord, puis autres abonnements, crédit Vertex, et enfin clés à l’usage et relais) à enregistrer après vérification ; si un combo existant n’a pas un fournisseur, la carte propose **Ajouter à la combinaison** ; **Ignorer** n’est mémorisé que dans ce navigateur. **Exclure un fournisseur…** coche les fournisseurs qui n’entrent dans aucun combo suggéré (les combos déjà créés les gardent) ; cette liste est enregistrée dans la configuration (`comboSuggestionExcludedProviders`).
+
 Ouvrez le tableau de bord local et choisissez **Modèles → Combos**. L'espace de travail crée, modifie, renomme et supprime
 les combos. Les sélecteurs de modèles incluent les modèles masqués : la visibilité ne concerne que les listes externes, pas la sélection interne des combos. Sélectionner un modèle masqué ne le rend pas visible. Le sélecteur de cible exclut toujours les fournisseurs désactivés, les combos imbriqués et les fournisseurs JEV réservés au service de décision.
 
