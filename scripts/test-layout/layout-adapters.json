@@ -25,6 +25,8 @@
   "eventstream-fragmentation.test.ts": "responses",
   "responses-sidecar-usage.test.ts": "responses",
   "google-429-retry-evidence.test.ts": "adapters/google",
+  "google-retry-before-pacing.test.ts": "adapters/google",
+  "google-retry-held-lease.test.ts": "adapters/google",
   "google-vertex-key-project.test.ts": "adapters/google",
   "google-stream-fragmentation.test.ts": "adapters/google",
   "provider-quota-abliteration.test.ts": "providers",

@@ -22,7 +22,9 @@ export function createAdapterPhysicalSend(ctx: AdapterFetchContext = {}, fallbac
     url: string;
     sendClass?: SendClass;
     recovery?: AttemptRecoveryKind;
-    /** Runs only after admission, e.g. backoff and cancellation of a superseded response. */
+    /** Runs after budget reservation, before acquiring a pacing slot. */
+    beforePacing?: () => void | Promise<void>;
+    /** Runs only after pacing admission. */
     beforeDispatch?: () => void | Promise<void>;
     dispatch: (executor: typeof globalThis.fetch) => Promise<Response>;
   }): Promise<Response> => {
@@ -47,6 +49,8 @@ export function createAdapterPhysicalSend(ctx: AdapterFetchContext = {}, fallbac
     }) as typeof globalThis.fetch;
     let slot: ProviderRequestSlot | undefined;
     try {
+      await options.beforePacing?.();
+      if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
       slot = (await executor.waitForPacing?.(ctx.abortSignal)) || undefined;
       if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);
       await options.beforeDispatch?.();
