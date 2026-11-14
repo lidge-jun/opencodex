@@ -11,7 +11,7 @@ import { readCatalog, readCodexCatalogPath } from "../codex/catalog";
 import { liveMeterFromEntry, selectLiveMeterEntries, type LiveMeter, type MeterClientFamily } from "../usage/live-meter";
 import {
   corsHeaders, isAllowedRequestOrigin, isApiAuthRequired, isLoopbackRequestHost, resolveApiAuth, withCors,
-  type RequestPolicyView,
+  type DataPlaneAdmission, type RequestPolicyView,
 } from "./auth-cors";
 import { formatErrorResponse } from "../bridge/errors";
 import { matchesLogConversationId } from "./request-log-conversation";
@@ -58,7 +58,18 @@ export function resetLiveMeterCatalogCacheForTests(): void { catalogCache = null
 
 export type LiveMeterResult = { status: 200; body: LiveMeterBody } | { status: 400; code: string; message: string };
 
-export function buildLiveMeter(params: URLSearchParams, deps: LiveMeterDeps = {}): LiveMeterResult {
+/**
+ * Rows the caller may see. A configured data key sees only the requests it sent, like `/v1/usage`
+ * (hub-usage.ts), so rows of other keys and keyless rows stay hidden from it. Loopback and the
+ * environment token are the operator and see every row.
+ */
+export function liveMeterRowVisible(admission: DataPlaneAdmission | undefined): (entry: RequestLogEntry) => boolean {
+  if (admission?.kind !== "configured") return () => true;
+  const keyId = admission.keyId;
+  return entry => entry.apiKeyId === keyId;
+}
+
+export function buildLiveMeter(params: URLSearchParams, deps: LiveMeterDeps = {}, admission?: DataPlaneAdmission): LiveMeterResult {
   const bad = (message: string): LiveMeterResult => ({ status: 400, code: "live_meter_query_invalid", message });
   for (const key of params.keys()) {
     if ((key !== "client" && key !== "conversation") || params.getAll(key).length !== 1) return bad("Unknown or repeated option");
@@ -68,9 +79,10 @@ export function buildLiveMeter(params: URLSearchParams, deps: LiveMeterDeps = {}
   const conversation = params.get("conversation");
   if (conversation !== null && !conversation.trim()) return bad("conversation must not be empty");
   const limitOf = deps.contextLimit ?? ((model: string) => catalogContextLimit(model));
+  const visible = liveMeterRowVisible(admission);
   const selection = selectLiveMeterEntries(
     (deps.entries ?? getRequestLogEntries)(),
-    conversation === null ? undefined : entry => matchesLogConversationId(entry.conversationId, conversation),
+    conversation === null ? visible : entry => visible(entry) && matchesLogConversationId(entry.conversationId, conversation),
   );
   const project = (entry: RequestLogEntry): LiveMeter => liveMeterFromEntry(entry, entry.model ? limitOf(entry.model) : null);
   const byClient: LiveMeterBody["byClient"] = {};
@@ -86,8 +98,8 @@ export function buildLiveMeter(params: URLSearchParams, deps: LiveMeterDeps = {}
   } };
 }
 
-export function liveMeterResponse(params: URLSearchParams, deps?: LiveMeterDeps): Response {
-  const result = buildLiveMeter(params, deps);
+export function liveMeterResponse(params: URLSearchParams, deps?: LiveMeterDeps, admission?: DataPlaneAdmission): Response {
+  const result = buildLiveMeter(params, deps, admission);
   const headers = { "cache-control": "no-store" };
   return result.status === 200
     ? Response.json(result.body, { headers })
@@ -102,13 +114,14 @@ export async function handleLiveMeterData(req: Request, config: RequestPolicyVie
     if (admittedOrigin) out.headers.set("Access-Control-Allow-Origin", LIVE_METER_APP_ORIGIN);
     return out;
   };
-  if (!resolveApiAuth(req, config)) return reply(formatErrorResponse(401, "authentication_error", "opencodex API key required"));
+  const admission = resolveApiAuth(req, config);
+  if (!admission) return reply(formatErrorResponse(401, "authentication_error", "opencodex API key required"));
   // The renderer is not loopback-by-origin; the loopback Host gate still binds it when no key is required.
   const originOk = appRenderer
     ? isApiAuthRequired(config) || isLoopbackRequestHost(req.headers.get("Host"))
     : isAllowedRequestOrigin(req, config);
   if (!originOk) return reply(formatErrorResponse(403, "origin_rejected", "cross-origin data-plane request blocked"));
-  return reply(liveMeterResponse(new URL(req.url).searchParams, deps), appRenderer);
+  return reply(liveMeterResponse(new URL(req.url).searchParams, deps, admission), appRenderer);
 }
 
 /**

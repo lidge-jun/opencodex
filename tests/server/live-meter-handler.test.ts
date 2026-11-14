@@ -137,6 +137,22 @@ describe("data-plane admission and CORS", () => {
     }
   });
 
+  test("a configured key sees only its own rows; the operator sees every row", async () => {
+    const other = { ...key, id: "k2", key: "ocx_data_livemeterother" };
+    const config = { ...remote, apiKeys: [key, other] };
+    const own = [row({ timestamp: 100, apiKeyId: "k" }), row({ timestamp: 200, apiKeyId: "k2", client: "claude_code" }), row({ timestamp: 300 })];
+    const scoped = { ...deps, entries: () => own };
+    const read = async (secret: string, query = "") => (await handleLiveMeterData(
+      get(`http://10.0.0.2:1/v1/usage/live${query}`, { "x-opencodex-api-key": secret }), config, scoped)).json();
+    const mine = await read(key.key);
+    expect(mine.latest.timestamp).toBe(100);
+    expect(Object.keys(mine.byClient)).toEqual(["codex"]);
+    expect((await read(other.key)).latest.timestamp).toBe(200);
+    expect((await read(key.key, "?client=claude")).latest).toBeNull();
+    const operator = buildLiveMeter(new URLSearchParams(), scoped, { kind: "loopback", source: "loopback" });
+    expect(operator.status === 200 && operator.body.latest?.timestamp).toBe(300);
+  });
+
   test("the app origin is not admitted anywhere else: the data-plane origin policy is unchanged", () => {
     expect(isAllowedRequestOrigin(get("http://127.0.0.1:1/v1/models", { origin: "app://-", host: "127.0.0.1:1" }), loopback)).toBe(false);
   });
