@@ -517,7 +517,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const quotaMode = providerOAuthAccountQuotaMode(provider);
     const quotaProvider = config.providers[provider];
     const { getAccountSet } = await import("../../oauth/store");
-    const { isGenericFailoverProvider, kiroAutoSelection } = await import("../../oauth/generic-account-failover");
+    const { genericAccountLogLabel, isGenericFailoverProvider, kiroAutoSelection } = await import("../../oauth/generic-account-failover");
     const effectiveProvider = genericOAuthProviderConfig(provider, config);
     const supportsPause = effectiveProvider !== undefined
       && (isAnthropicOAuthInstance(provider) && effectiveProvider.authMode === "oauth"
@@ -546,6 +546,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
           const accountLabel = accountDisplayLabel(full?.credential.email, maskEmails);
           return { ...summary, ...(maskedLabel ? { maskedLabel } : {}), ...(accountLabel ? { accountLabel } : {}),
             ...oauthAccountHealthFields(provider, summary.id, health), quotaMode,
+            ...(effectiveProvider && isGenericFailoverProvider(provider, effectiveProvider) ? { logLabel: genericAccountLogLabel(provider, summary.id) } : {}),
             ...(supportsPause ? { paused: full?.paused === true, ...(full?.pauseDetails ? { pauseDetails: full.pauseDetails } : {}) } : {}),
             ...(isAnthropicOAuthInstance(provider) && supportsPause ? { autoSwitchThresholdOverride: full?.autoSwitchThresholdOverride ?? null,
               effectiveAutoSwitchThreshold: effectiveAnthropicAccountThresholdForInstance(provider as AnthropicInstanceId, config, full),

@@ -152,6 +152,23 @@ Routing and catalog visibility are separate controls:
 }
 ```
 
+## Watching routing live
+
+The dashboard's **Models › Live routing** tab (`#models/live`) shows how each request was routed,
+refreshing every few seconds while the tab is open. For the latest request, or one you select in
+the list below it, you see:
+
+- **The route.** The client, then OpenCodex, then every candidate: the account or combo target that
+  answered, the ones that failed (with the HTTP status and the reason), and the ones that were
+  skipped before any send. A multi-account OAuth pool shows each account's state when the request
+  finished: paused, needing sign-in, cooling down, out of quota, or not listing the model.
+- **Where the time went.** OpenCodex's own time, earlier failed attempts, the wait for the first
+  token, and streaming. Every segment is measured; DNS and TLS are not split out.
+
+The request list groups by request, session or API key and shows the account, model, effort,
+duration, time to first token, tokens, cache-hit rate, tokens per second and estimated cost.
+Combos and accounts keep their own pages; the tab links to them.
+
 ## Tips
 
 - **Target a Codex account explicitly** with `<selector>/<native-openai-model>` (rule 1). That route

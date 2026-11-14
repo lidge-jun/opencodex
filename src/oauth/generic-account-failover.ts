@@ -48,6 +48,9 @@ import { ACCOUNT_QUOTA_TTL_MS } from "../providers/quota-wire";
 import { sweepExpiredOnWrite } from "../lib/state-store-sweeper";
 import { subscribeOAuthAccountPauseChanges } from "../lib/account-selection-events";
 import type { OcxConfig, OcxProviderConfig } from "../types";
+import { oauthAccountLogLabel } from "../codex/account-label";
+import { baseProviderLabel } from "../providers/label";
+import { registerAccountRosterProbe, type AccountRosterState, type AccountRosterV1 } from "../server/request-log-route-live";
 
 /** Cap same-request rotations so a short Retry-After cannot spin. Mirrors the Anthropic bound. */
 export const GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST = 3;
@@ -409,6 +412,56 @@ function eligibleIdsIn(
         : account.needsReauth !== true && !isCooled(providerName, account.id, now, family)))
     .map(account => account.id);
 }
+
+const ROSTER_CAP = 16;
+const LABEL_MEMO_CAP = 256;
+const labelMemo = new Map<string, string>();
+
+/** The `o<hex6>` label `accountLogLabel` uses for this account; hashed once per provider and account. */
+export function genericAccountLogLabel(providerName: string, accountId: string): string {
+  const base = baseProviderLabel(providerName);
+  const key = `${base} ${accountId}`;
+  let label = labelMemo.get(key);
+  if (label === undefined) {
+    if (labelMemo.size >= LABEL_MEMO_CAP) labelMemo.clear();
+    label = oauthAccountLogLabel(accountId, base);
+    labelMemo.set(key, label);
+  }
+  return label;
+}
+
+/** Same checks the selector applies, in the order that decides which reason a skipped account shows. */
+function rosterState(
+  providerName: string, account: ProviderAccount, model: string, now: number, family: QuotaModelFamily | undefined,
+): AccountRosterState {
+  if (account.paused === true) return "paused";
+  if (account.needsReauth === true) return "needs-reauth";
+  if (isAccountQuotaExhausted(providerName, account.id, model, account)) return "quota-exhausted";
+  if (isCooled(providerName, account.id, now, providerName === "kiro" ? undefined : family)) return "cooldown";
+  if (providerName === "google-antigravity" && accountListsModel(providerName, account.id, model) === false) {
+    return "model-unlisted";
+  }
+  return "available";
+}
+
+/** Per-account state for a multi-account generic OAuth pool, or undefined when there is no pool to show. */
+export function genericAccountRoster(providerName: string, model: string, now = Date.now()): AccountRosterV1 | undefined {
+  const base = baseProviderLabel(providerName);
+  if (EXCLUDED_PROVIDERS.has(providerName) || base === "openai" || base === "anthropic" || base === "anthropic2") return undefined;
+  const set = getAccountSet(providerName);
+  if (!set || set.accounts.length < 2) return undefined;
+  const family = classifyModelFamilyForQuota(providerName, model);
+  return {
+    provider: base,
+    accounts: set.accounts.slice(0, ROSTER_CAP).map(account => ({
+      label: genericAccountLogLabel(providerName, account.id),
+      state: rosterState(providerName, account, model, now, family),
+    })),
+    ...(set.accounts.length > ROSTER_CAP ? { truncated: true as const } : {}),
+  };
+}
+
+registerAccountRosterProbe(genericAccountRoster);
 
 /**
  * Whether reactive rotation has an alternate account it could select right now.

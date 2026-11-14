@@ -18,6 +18,7 @@ import {
 
 const TAB_LABEL: Record<ModelsTab, TKey> = {
   catalog: "models.tab.catalog",
+  live: "routeLive.tab",
   combos: "models.tab.combos",
   routing: "models.tab.routing",
   compatibility: "models.tab.compatibility",

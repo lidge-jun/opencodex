@@ -4,6 +4,7 @@ import { normalizeRecordedClient, type UsageClient } from "../usage/client";
 import { anthropicAccountTagField, stampApiKeyAccountLabel, usesApiKeyAccount } from "../providers/label";
 import { finalizeProviderCacheAffinity } from "./request-log-cache-affinity";
 import { aggregateAttemptUsage } from "./request-log-attempt-usage";
+import { accountRosterField, routeLiveTimingField, type AccountRosterEntryField, type RouteLiveTimingContext, type RouteLiveTimingEntryField } from "./request-log-route-live";
 export { aggregateAttemptUsage } from "./request-log-attempt-usage";
 
 import { KEY_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
@@ -125,7 +126,7 @@ export function cacheDiagnosticsObserving(): boolean {
   return cacheDiagnosticHooks()?.enabled() === true;
 }
 
-export interface RequestLogContext extends UpstreamErrorDiagnostics, LinkRequestLogCarrier, RequestBodyLogContext {
+export interface RequestLogContext extends UpstreamErrorDiagnostics, LinkRequestLogCarrier, RequestBodyLogContext, RouteLiveTimingContext {
   model: string;
   provider: string;
   client?: UsageClient;
@@ -329,7 +330,7 @@ export function rebindCacheDiagnosticBody(
   cacheDiagnosticHooks()?.rebind(body, draft);
 }
 
-export interface RequestLogEntry extends UpstreamErrorDiagnostics, LinkRequestLogCarrier, RequestBodyEntryField {
+export interface RequestLogEntry extends UpstreamErrorDiagnostics, LinkRequestLogCarrier, RequestBodyEntryField, AccountRosterEntryField, RouteLiveTimingEntryField {
   requestId: string;
   client?: UsageClient;
   /** The logical request this row belongs to (#4546); absent on rows written without a budget. */
@@ -1684,6 +1685,8 @@ function writeFinalRequestLog(
     ...(logCtx.transportPhase ? { transportPhase: logCtx.transportPhase } : {}),
     ...(logCtx.terminalSource ? { terminalSource: logCtx.terminalSource } : {}),
     ...(logCtx.routeDecision ? { routeDecision: logCtx.routeDecision } : {}),
+    ...accountRosterField(isCombo ? attempts?.at(-1) : logCtx),
+    ...(isCombo ? {} : routeLiveTimingField(logCtx, start)),
     ...(jevDecision ? { jevDecision } : {}),
     ...(claudeCompatibility ? { claudeCompatibility } : {}),
     ...(protocolTrace ? { protocolTrace } : {}),
