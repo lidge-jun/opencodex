@@ -206,6 +206,8 @@ function SuggestionCard({
       {message && <p className="rb-row-message" role="alert">{message}</p>}
       {drafting && suggestion.kind === "create" && (
         <SuggestionDraft
+          // A provider excluded while the draft is open changes the members; start the draft over.
+          key={suggestion.members.map((member) => `${member.provider}/${member.model}`).join("|")}
           suggestion={suggestion}
           busy={busy}
           onSave={(item) => void save(item, true)}

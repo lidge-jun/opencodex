@@ -321,6 +321,37 @@ describe("ComboSuggestions card", () => {
     expect(exclusionWrites).toEqual([[]]);
   });
 
+  test("excluding a provider while its draft is open drops it from the draft", async () => {
+    const { createRoot } = await import("react-dom/client");
+    host = document.createElement("div");
+    document.body.append(host);
+    root = createRoot(host);
+    const view = (excluded: string[]) => (
+      <LanguageProvider>
+        <ComboSuggestions
+          combos={[]}
+          models={models([["google-antigravity", "gemini-3.8-flash"], ["cursor", "gemini-3.8-flash"], ["google-vertex", "gemini-3.8-flash"]])}
+          hiddenModels={new Set()}
+          providers={PROVIDERS}
+          remainingPercent={() => undefined}
+          validate={() => null}
+          errorText={() => "bad"}
+          onCreate={async () => ({ ok: true })}
+          onExtend={async () => ({ ok: true })}
+          excludedProviders={excluded}
+          onExcludedChange={async () => true}
+        />
+      </LanguageProvider>
+    );
+    await act(async () => { root!.render(view([])); });
+    await act(async () => { button(card("gemini-3.8-flash"), "Generate").click(); });
+    const draftProviders = () => [...card("gemini-3.8-flash").querySelectorAll(".rb-suggest-draft li")].map((row) => row.textContent ?? "");
+    expect(draftProviders().some((row) => row.includes("Cursor"))).toBe(true);
+    await act(async () => { root!.render(view(["cursor"])); });
+    expect(draftProviders().length).toBe(2);
+    expect(draftProviders().some((row) => row.includes("Cursor"))).toBe(false);
+  });
+
   test("without an exclusion handler there is no exclude control", async () => {
     await render();
     expect(host.querySelector(".rb-suggest-exclude")).toBeNull();
