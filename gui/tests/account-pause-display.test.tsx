@@ -45,7 +45,9 @@ test.each(["fr", "ko"] as const)("provider OAuth and key tooltips use the app lo
       accounts={[{ id: "account-fixture", alias: "Reserve account", active: false, paused: true, pauseDetails: details }]}
       keys={[{ id: "key-fixture", label: "Reserve key", masked: "****", active: false, disabled: true, pauseDetails: details }]} />, locale);
     try {
-      expect(win.document.querySelector(".badge-muted[title]")?.getAttribute("title")).toBe(expected);
+      // OAuth accounts render in the quota table (pause tooltip on the account button); key rows keep the badge.
+      const tooltipHost = authMode === "oauth" ? ".aqt-account-main[title]" : ".badge-muted[title]";
+      expect(win.document.querySelector(tooltipHost)?.getAttribute("title")).toBe(expected);
       if (authMode === "key") {
         expect(win.document.querySelector(".pwi-auth-row-main")?.getAttribute("aria-label"))
           .toBe(`${t("pws.resumeAndActivateKey")} — Reserve key`);

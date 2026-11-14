@@ -10,8 +10,8 @@ export const POOL_KEY_ANTHROPIC = "anthropic";
  * with the two dedicated kinds, and so `reconcilePoolRotationState` can recognise
  * the entry as sweepable rather than skipping it as unknown.
  */
-export function genericPoolKey(providerName: string): string {
-  return `generic:${providerName}`;
+export function genericPoolKey(providerName: string, family?: string): string {
+  return family ? `generic:${providerName}:${family}` : `generic:${providerName}`;
 }
 
 interface SelectionState {
@@ -274,6 +274,10 @@ export function clearPoolRotationState(poolKey?: string): void {
     return;
   }
   selectionState.delete(poolKey);
+  const prefix = `${poolKey}:`;
+  for (const key of [...selectionState.keys()]) {
+    if (key.startsWith(prefix)) selectionState.delete(key);
+  }
 }
 
 export function reconcilePoolRotationState(context: GenerationContext): number {
@@ -309,7 +313,7 @@ export function reconcilePoolRotationState(context: GenerationContext): number {
       : poolKey === POOL_KEY_CODEX || poolKey.startsWith(`${POOL_KEY_CODEX}:`)
         ? context.codexAccountIds
         : poolKey.startsWith("generic:")
-          ? genericIds.get(poolKey.slice("generic:".length)) ?? new Set<string>()
+          ? genericIds.get(poolKey.slice("generic:".length).split(":")[0]!) ?? new Set<string>()
           : null;
     if (!valid) continue;
     if (valid.size === 0) {

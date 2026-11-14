@@ -619,14 +619,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       if (!latest) return jsonResponse({ error: "account not found" }, 404);
       return jsonResponse({ error: latest.paused ? "account is paused" : "account selection changed" }, 409);
     }
-    const { forgetGenericFailoverRoster } = await import("../../oauth/generic-account-failover");
+    const { forgetGenericFailoverRoster, seedGenericPoolSelection } = await import("../../oauth/generic-account-failover");
     forgetGenericFailoverRoster(provider);
     // Seed the rotation cursor on the operator's pick, or a sticky round-robin ring hands the
     // very next dispatch back to whatever the pool had chosen. forgetGenericFailoverRoster
     // only drops the presence count; it has never touched the cursor. Same defect the Codex
     // side carries resetCodexRoutingForManualSelection for.
-    const { genericPoolKey, seedPoolRotationAccount } = await import("../../oauth/pool-kernel");
-    seedPoolRotationAccount(genericPoolKey(provider), body.accountId);
+    seedGenericPoolSelection(provider, body.accountId);
     const anthropicRouting = isAnthropicOAuthInstance(provider)
       ? (await import("../../oauth/anthropic-routing")).anthropicRoutingFor(provider) : undefined;
     anthropicRouting?.resetAnthropicRoutingForManualSelection(body.accountId);
@@ -710,8 +709,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     }
     if (result.activeAccountChanged) {
       if (!anthropicRouting) {
-        const { genericPoolKey, seedPoolRotationAccount } = await import("../../oauth/pool-kernel");
-        seedPoolRotationAccount(genericPoolKey(provider), result.activeAccountId);
+        const { seedGenericPoolSelection } = await import("../../oauth/generic-account-failover");
+        seedGenericPoolSelection(provider, result.activeAccountId);
       }
       const { clearModelCache } = await import("../../codex/model-cache");
       const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
@@ -1049,6 +1048,23 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { anthropicRoutingFor } = await import("../../oauth/anthropic-routing");
     const cleared = anthropicRoutingFor(provider).clearAnthropicAccountCooldown(accountId);
     return jsonResponse({ ok: true, cleared });
+  }
+
+  // Read-only per-account probe: each stored account's own access token, one upstream request,
+  // no refresh and no store write. Omitting accountId probes the whole roster.
+  if (url.pathname === "/api/oauth/accounts/probe" && req.method === "POST") {
+    const body = await readManagementJsonBodyOr(req, {});
+    if (!isPlainRecord(body)) return jsonResponse({ error: "body must be an object" }, 400);
+    const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
+    const { ACCOUNT_PROBE_PROVIDERS, probeAntigravityAccounts } = await import("../../providers/quota/antigravity-account-probe");
+    if (!ACCOUNT_PROBE_PROVIDERS.has(provider)) return jsonResponse({ error: "account probe is not supported for this provider" }, 400);
+    if (body.accountId !== undefined && (typeof body.accountId !== "string" || !body.accountId.trim())) {
+      return jsonResponse({ error: "accountId must be a non-empty string" }, 400);
+    }
+    const accountId = typeof body.accountId === "string" ? body.accountId.trim() : undefined;
+    const results = await probeAntigravityAccounts({ ...(accountId ? { accountId } : {}), signal: req.signal });
+    if (!results) return jsonResponse({ error: "account not found" }, 404);
+    return jsonResponse({ provider, probedAt: new Date().toISOString(), results });
   }
 
   if (url.pathname === "/api/oauth/accounts/import" && req.method === "POST") {

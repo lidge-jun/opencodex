@@ -476,8 +476,10 @@ that environment key takes precedence. ADC also needs a project and location, su
 form or by `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` on the proxy
 host. Adding the provider does not verify that credentials or permissions are usable. A key
 without an explicit project uses Vertex express mode.
-The dashboard preset uses a static catalog seeded by the configured default model; its connection
-test does not verify Vertex credentials or permissions.
+The dashboard preset uses a static catalog seeded by the configured default model. With ADC its
+connection test mints an access token, which proves the credential but not Vertex permissions; the
+provider shows as verified once the proxy has minted a token from the current ADC source. An API
+key on a static catalog is not tested.
 Existing Vertex rows without `liveModels` retain live discovery through the generic discovery endpoint.
 Use `liveModels: false` for a static catalog; Settings can switch between the two modes.
 

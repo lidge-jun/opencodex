@@ -49,6 +49,8 @@ export function buildConnectionProbeKey(
     item.allowPrivateNetwork === true,
     item.keyOptional === true,
     item.activeNeedsReauth === true,
+    // A server-side verification change (an ADC source swap) must discard a retained probe result.
+    item.vertexCredentialVerified === true,
     connectionIdentity ?? null,
     mutationRevision,
   ]);

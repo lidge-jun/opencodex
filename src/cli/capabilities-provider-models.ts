@@ -183,6 +183,12 @@ export const PROVIDER_MODEL_CAPABILITIES: readonly Capability[] = [
     flags: [{ name: "--json", value: "boolean", summary: "Emit recentArrivals grouped by provider." }],
   },
   {
+    command: ["models", "discover"], summary: "Re-fetch one provider's live model list now and report new arrivals.",
+    usage: "ocx models discover <provider> [--json]", routes: [{ method: "POST", path: "/api/model-discovery/refresh" }], mutates: true, json: "payload",
+    flags: [{ name: "--json", value: "boolean", summary: "Emit discovery status, newArrivals and recentArrivals." }],
+    details: ["Clears the provider's model cache and runs catalog convergence; new models follow the configured new-model policy. Providers with liveModels off report applicable:false."],
+  },
+  {
     command: ["models", "context", "status"], summary: "Read routed-provider context caps.",
     usage: "ocx models context status [--json]", routes: [{ method: "GET", path: "/api/provider-context-caps" }], mutates: false, json: "payload",
     flags: [{ name: "--json", value: "boolean", summary: "Emit context settings." }],

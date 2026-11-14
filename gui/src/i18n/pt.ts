@@ -1,4 +1,5 @@
 import { desktopCompatibilityCopy } from "./desktop-compatibility-copy";
+import { accountProbeCopy } from "./account-probe-copy";
 import { shellV2Copy } from "./shell-v2-copy";
 import { codexCliUpdateCopy } from "./codex-cli-update-copy";
 import { remoteLinkDiagnosticsCopy } from "./remote-link-diagnostics-copy";
@@ -135,6 +136,7 @@ export const pt: Record<TKey, string> = {
   "workflowBudget.saveFailed": "Não foi possível salvar os limites de fluxo de trabalho.",
   "workflowBudget.saved": "Limites de fluxo de trabalho salvos.",
   ...desktopCompatibilityCopy("pt"),
+  ...accountProbeCopy("pt"),
   ...shellV2Copy("pt"),
   ...codexCliUpdateCopy("pt"),
   ...remoteLinkDiagnosticsCopy("pt"),

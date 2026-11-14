@@ -26,6 +26,7 @@ export const MODELS_RUNTIME_SUBCOMMANDS = [
   "preset",
   "new-policy",
   "new-arrivals",
+  "discover",
   "context",
   "shadow",
   "auto-review",

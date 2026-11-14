@@ -28,6 +28,9 @@ const INTENTIONAL_ENGLISH = new Set<TKey>([
   "remoteLinkDiagnostics.colPort", // "Port" is the same word in French (a network port column).
   "usageV2.remoteLink", // Remote Link is the product name.
   "nav.claude", // Product name.
+  "acctTable.pool.gemini", // Quota pool named after the product.
+  "acctTable.pool.claudeGpt", // Quota pool named after the products.
+  "acctTable.pool.argon", // Quota pool name used by the Antigravity quota API.
   "nav.codexSet", // Product name: the sidebar row reads "Codex" in every locale.
   "codexCliUpdate.tab", // Product name: the Codex CLI tab reads "Codex CLI" in every locale.
   "codexCliUpdate.provNpmGlobal", // "npm (global)": the tool name plus a word French spells the same.

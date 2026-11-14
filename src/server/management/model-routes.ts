@@ -302,6 +302,43 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     return jsonResponse({ ok: true, provider, acknowledged: [...acknowledged], catalogRefresh });
   }
 
+  // Operator-triggered discovery for one provider: drop its model cache, then run the normal
+  // catalog convergence, which re-fetches the live roster and records arrivals through the
+  // existing new-model policy. Reports only the arrivals this call recorded as `newArrivals`,
+  // in the same `state` projection GET /api/model-discovery uses.
+  if (url.pathname === "/api/model-discovery/refresh" && req.method === "POST") {
+    let body: { provider?: unknown };
+    try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
+    const provider = typeof body?.provider === "string" ? body.provider.trim() : "";
+    if (!provider || !hasOwnProvider(config.providers, provider)) return jsonResponse({ error: "unknown provider" }, 404);
+    if (config.providers[provider]!.liveModels === false) {
+      return jsonResponse({ ok: false, provider, applicable: false, reason: "static_catalog" });
+    }
+    const arrivalKey = (row: { id: string; at: string }) => `${row.id}\0${row.at}`;
+    const before = new Set((config.modelDiscovery?.recentArrivals?.[provider] ?? []).map(arrivalKey));
+    const { clearModelCache, getProviderDiscoveryStatus, getProviderLiveModelCount } = await import("../../codex/model-cache");
+    clearModelCache(provider);
+    const catalogRefresh = await convergeCodexCatalog();
+    // Convergence can return before it fetches anything (no Codex catalog to publish, a sibling
+    // proxy owns it, a stale snapshot). Discovery must not depend on catalog publication, so a
+    // provider still without a status runs the discovery read side, which records arrivals itself.
+    if (getProviderDiscoveryStatus(provider) === undefined) {
+      try { await loadExportModels(config); } catch { /* The status below reports what is known. */ }
+    }
+    const cached = getStaleCached(provider) ?? [];
+    const recentArrivals = (config.modelDiscovery?.recentArrivals?.[provider] ?? []).map(row => ({
+      ...row, state: arrivalState(config, provider, row, cached),
+    }));
+    return jsonResponse({
+      ok: true, provider,
+      discovery: getProviderDiscoveryStatus(provider) ?? null,
+      liveModelCount: getProviderLiveModelCount(provider) ?? null,
+      newArrivals: recentArrivals.filter(row => !before.has(arrivalKey(row))),
+      recentArrivals,
+      catalogRefresh,
+    });
+  }
+
   if (url.pathname === "/api/aliases" && req.method === "GET") {
     const providers: Record<string, string> = {};
     const models: Record<string, Record<string, { alias: string; source: "user" | "builtin" | "template"; stale?: boolean }>> = {};
