@@ -20,7 +20,7 @@ import {
   readResponseStreamWithInactivity,
   ResponseBodyInactivityError,
 } from "../../lib/response-body-inactivity";
-import { resolveStallTimeoutMs } from "../../stall-timeout";
+import { providerStallTimeoutSec, resolveStallTimeoutMs } from "../../stall-timeout";
 import { clientEncoderForDelivery, deliverClientEncodedResponse } from "../inference/client-encoder-delivery";
 import { noteKiroServedSuccess } from "../../providers/kiro-usage";
 import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
@@ -83,7 +83,7 @@ export async function deliverAdapterResponse(
     notifyResponseComplete,
   } = responseEffects;
   const { routedCompaction } = sidecarState;
-  const bodyInactivityMs = resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream });
+  const bodyInactivityMs = resolveStallTimeoutMs(providerStallTimeoutSec(config, route.provider), { localUpstream });
   const upstreamRequestsStream = parsed.stream || isCanonicalOpenAiForwardProvider(route.provider);
   const recoverThinkingSignature = (events: AsyncIterable<AdapterEvent>): AsyncIterable<AdapterEvent> =>
     thinkingSignatureRecovery.wrap(events, async function* () {
@@ -105,7 +105,7 @@ export async function deliverAdapterResponse(
         return;
       }
       try {
-        const bodyInactivityMs = resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream: adapterExchange.localUpstream });
+        const bodyInactivityMs = resolveStallTimeoutMs(providerStallTimeoutSec(config, route.provider), { localUpstream: adapterExchange.localUpstream });
         const retryEvents = upstreamRequestsStream
           ? readResponseStreamWithInactivity(response, upstream.signal, bodyInactivityMs,
             guarded => transportState.activeAdapter.parseStream(guarded, translatorBudget, logCtx.activeTierMetadata))
@@ -243,7 +243,7 @@ export async function deliverAdapterResponse(
           hideRawReasoning: parsed.options.hideRawReasoning,
           toolNsMap, declaredToolNames, toolParameterSchemas, freeformToolNames, bareCustomToolNames, toolSearchToolNames,
         },
-        stallTimeoutSec: config.stallTimeoutSec,
+        stallTimeoutSec: providerStallTimeoutSec(config, route.provider),
         get localUpstream() { return adapterExchange.localUpstream; },
         turnAdmissionLease: options.turnAdmissionLease,
         ...(options.onFirstOutput ? { onFirstOutput: options.onFirstOutput } : {}),
@@ -261,7 +261,7 @@ export async function deliverAdapterResponse(
         replayCacheScope: parsed._reasoningReplayScope,
         ...(outputItemIds ? { outputItemIds } : {}),
         ...(options.forceEmptyResponseId ? { responseId: "" } : {}),
-        stallTimeoutSec: config.stallTimeoutSec,
+        stallTimeoutSec: providerStallTimeoutSec(config, route.provider),
         get localUpstream() { return adapterExchange.localUpstream; },
         hideThinkingSummary: parsed.options.hideThinkingSummary,
         chatRawReasoningVisible: options.chatRawReasoningVisible,

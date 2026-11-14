@@ -10,6 +10,7 @@ import {
   providerModelCostsConfigError,
   providerWebSearchBridgeConfigError,
   requestPacingConfigError,
+  providerTimeoutOverrideConfigError,
   retryOn429PolicyConfigError,
   retryOnResetPolicyConfigError,
   sanitizeModelCostsForDisplay,
@@ -1002,6 +1003,10 @@ export function providerManagementConfigError(
   if (requestPacingError) {
     return `provider ${JSON.stringify(redactSecretString(name))} ${requestPacingError}`;
   }
+  const timeoutOverrideError = providerTimeoutOverrideConfigError(raw);
+  if (timeoutOverrideError) {
+    return `provider ${JSON.stringify(redactSecretString(name))} ${timeoutOverrideError}`;
+  }
   const webSearchBridgeError = providerWebSearchBridgeConfigError(raw.webSearchBridge, name, typed);
   if (webSearchBridgeError) {
     return `provider ${JSON.stringify(redactSecretString(name))} ${webSearchBridgeError}`;
@@ -1180,6 +1185,8 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   codexToolMode: "editor",
   projectContext: "editor",
   requestPacing: "editor",
+  connectTimeoutMs: "editor",
+  stallTimeoutSec: "editor",
   mcpMaxTools: "editor",
   mcpMaxSchemaBytes: "editor",
   mcpMaxResultBytes: "editor",

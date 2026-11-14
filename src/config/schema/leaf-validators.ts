@@ -156,6 +156,29 @@ const requestPacingSchema = z.object({
   message: "enabled request pacing needs a provider, model, or key rule, or round-robin selection",
 });
 
+/** Upper bounds for provider-scoped upstream budgets: the largest setTimeout delay, in ms. */
+export const PROVIDER_CONNECT_TIMEOUT_MAX_MS = 2_147_483_647;
+export const PROVIDER_STALL_TIMEOUT_MAX_SEC = 2_147_483;
+
+/**
+ * Validate provider-scoped `connectTimeoutMs` / `stallTimeoutSec` on a strict write. Absent is
+ * valid (inherit the global value); otherwise each must be an integer from 0 (disabled for this
+ * provider) to its maximum. Returns null when valid, else a human-readable error.
+ */
+export function providerTimeoutOverrideConfigError(provider: Record<string, unknown>): string | null {
+  for (const [field, max] of [
+    ["connectTimeoutMs", PROVIDER_CONNECT_TIMEOUT_MAX_MS],
+    ["stallTimeoutSec", PROVIDER_STALL_TIMEOUT_MAX_SEC],
+  ] as const) {
+    const value = provider[field];
+    if (value === undefined) continue;
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 0 || value > max) {
+      return `${field} must be an integer from 0 to ${max}`;
+    }
+  }
+  return null;
+}
+
 export function requestPacingConfigError(value: unknown): string | null {
   if (value === undefined) return null;
   const parsed = requestPacingSchema.safeParse(value);
@@ -364,6 +387,9 @@ export const providerConfigSchema = z.object({
     modelCount: z.number().int().nonnegative().optional(),
   }).optional().catch(undefined),
   requestPacing: requestPacingSchema.optional().catch(undefined),
+  // Provider-scoped header/body budgets; a malformed hand edit degrades to "inherit the global".
+  connectTimeoutMs: z.number().int().min(0).max(PROVIDER_CONNECT_TIMEOUT_MAX_MS).optional().catch(undefined),
+  stallTimeoutSec: z.number().int().min(0).max(PROVIDER_STALL_TIMEOUT_MAX_SEC).optional().catch(undefined),
   mcpMaxTools: z.number().int().positive().optional(),
   mcpMaxSchemaBytes: z.number().int().positive().optional(),
   mcpMaxResultBytes: z.number().int().positive().optional(),

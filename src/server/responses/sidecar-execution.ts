@@ -62,6 +62,7 @@ import { trackStreamLifetime } from "../lifecycle";
 import { isAntigravityRawValidationRefusal } from "./antigravity-validation-refusal";
 import { createSidecarSendBudget } from "./sidecar-send-budget";
 import { stripReplayedSearchPairs } from "../../web-search/sidecar-search-replay";
+import { providerConnectTimeoutMs, providerStallTimeoutSec } from "../../stall-timeout";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function executeResponsesSidecars(
@@ -589,8 +590,8 @@ export async function executeResponsesSidecars(
         : imgPlan
           ? clampImageMaxRounds(config.images?.maxRounds)
           : clampImageMaxRounds(config.images?.videoMaxRounds ?? 2),
-      connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
-      stallTimeoutSec: config.stallTimeoutSec, proxyErrorContext: logCtx,
+      connectTimeoutMs: providerConnectTimeoutMs(config, route.provider) ?? 200_000,
+      stallTimeoutSec: providerStallTimeoutSec(config, route.provider), proxyErrorContext: logCtx,
       waitForRequestSlot: imageProviderFetch.waitForPacing,
       fetchImpl: imageProviderFetch.unpacedFetch ?? imageProviderFetch,
       fetchForRequest: (request, iterParsed, adapter, recovery) => {
@@ -750,7 +751,7 @@ export async function executeResponsesSidecars(
       },
       recordSidecarOutcome: wsPlan.forwardSidecar?.recordOutcome,
       beforeSidecarDispatch: wsPlan.forwardSidecar?.beforeDispatch,
-      connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
+      connectTimeoutMs: providerConnectTimeoutMs(config, route.provider) ?? 200_000,
       routedModelStallTimeoutMs: wsPlan.routedModelStallTimeoutMs,
       stallTimeoutSec: wsPlan.stallTimeoutSec, proxyErrorContext: logCtx,
       streamRoutedModelOutput: wsPlan.streamRoutedModelOutput,

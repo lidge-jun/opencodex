@@ -67,7 +67,7 @@ import {
   readResponseStreamWithInactivity,
   ResponseBodyInactivityError,
 } from "../../lib/response-body-inactivity";
-import { resolveStallTimeoutMs } from "../../stall-timeout";
+import { providerStallTimeoutSec, resolveStallTimeoutMs } from "../../stall-timeout";
 import { guardTerminalEventStream } from "./terminal-guard";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
@@ -736,7 +736,7 @@ export function createAdapterContinuations(
       // The shared signal is not aborted on timeout: this generator must still emit
       // the error that the already-live Responses bridge turns into a terminal.
       const parse = async function* (current: Response): AsyncGenerator<AdapterEvent> {
-        const bodyInactivityMs = resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream: isLocalUpstream(transportState.sameTargetRequest?.url ?? route.provider.baseUrl) });
+        const bodyInactivityMs = resolveStallTimeoutMs(providerStallTimeoutSec(config, route.provider), { localUpstream: isLocalUpstream(transportState.sameTargetRequest?.url ?? route.provider.baseUrl) });
         if (!current.ok) {
           yield await adapterExchange.thinkingSignatureRecovery.projectHttpFailure(current, upstream.signal);
         } else if (nextParsed.stream) {

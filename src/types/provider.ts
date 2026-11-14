@@ -353,6 +353,19 @@ export interface OcxProviderConfig {
   codexToolMode?: "code_mode_only" | "shell";
   /** Optional outbound request-start pacing shared by this provider and its model overrides. */
   requestPacing?: ProviderRequestPacingConfig;
+  /**
+   * Per-provider override of the global `connectTimeoutMs` (response-header arrival deadline) for
+   * this provider's routed adapter, runTurn and image/web-search sidecar sends. Same semantics as
+   * the global value: a positive value applies verbatim, `0` disables the header deadline for this
+   * provider only, and unset inherits the global value and its local/public default.
+   */
+  connectTimeoutMs?: number;
+  /**
+   * Per-provider override of the global `stallTimeoutSec` (body inactivity budget) for the same
+   * paths as {@link connectTimeoutMs}. A positive value applies verbatim, `0` disables the
+   * watchdog for this provider only, and unset inherits the global value.
+   */
+  stallTimeoutSec?: number;
   /** Cursor MCP compatibility bounds; positive integers when configured. */
   mcpMaxTools?: number;
   mcpMaxSchemaBytes?: number;

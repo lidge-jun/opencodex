@@ -90,7 +90,7 @@ import {
 import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../../providers/api-key-pause";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
 import { codexWsExecutorBinding, fetchWithHeaderTimeout, physicalSendGuardInit, physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
-import { resolveConnectTimeoutMs } from "../../stall-timeout";
+import { providerConnectTimeoutMs, resolveConnectTimeoutMs } from "../../stall-timeout";
 import { isLocalUpstream } from "../../lib/local-upstream";
 import { deepSeekImageFileBody, needsDeepSeekImageFiles } from "./deepseek-image-files";
 import type { ProviderFetchOptions } from "./fetch-helpers";
@@ -992,7 +992,7 @@ export async function prepareResponsesTransport(
               { providerName: route.providerName, provider: route.provider },
             )) as typeof globalThis.fetch;
             response = await fetchWithHeaderTimeout(target, dispatchInit, dispatchInit.signal ?? options.abortSignal ?? req.signal,
-              resolveConnectTimeoutMs(config.connectTimeoutMs, { localUpstream: isLocalUpstream(target) }), requestParsed.stream, physicalFetch);
+              resolveConnectTimeoutMs(providerConnectTimeoutMs(config, route.provider), { localUpstream: isLocalUpstream(target) }), requestParsed.stream, physicalFetch);
           } finally { releaseFamily(); }
           // Observe each physical response before retries replace it. The binding belongs to
           // this dispatch, so a manual switch cannot file A's headers against B. Header
