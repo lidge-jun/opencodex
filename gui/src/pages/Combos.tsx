@@ -23,6 +23,7 @@ import { COMBOS_ADVANCED_HASH } from "./combos-advanced-hash";
 import type { ComboAddIntent } from "../components/combo-workspace-types";
 import { RouteBoard } from "../components/route-board/RouteBoard";
 import { ComboSuggestions } from "../components/route-board/ComboSuggestions";
+import { useSuggestionExclusions } from "../components/route-board/use-suggestion-exclusions";
 import type { EditableChannel } from "../components/route-board/ChannelEditor";
 import { comboDraftErrorText } from "../components/combo-workspace-utils";
 import { putModelVisibility } from "../model-visibility";
@@ -134,6 +135,7 @@ export default function Combos({
   const t = useT();
   const cacheKey = `ocx.combos.workspace.v2:${apiBase}`;
   const cached = useMemo(() => seedCombos(cacheKey), [cacheKey]);
+  const suggestionExclusions = useSuggestionExclusions(apiBase);
 
   /*
    * The last coherent payload, kept so a hidden panel can keep rendering.
@@ -730,6 +732,8 @@ export default function Combos({
             errorText={(code, item) => comboDraftErrorText(t, code, item, providerRows)}
             onCreate={(item) => saveCombo(item, true, undefined, {})}
             onExtend={(item) => saveCombo(item, false, undefined, {})}
+            excludedProviders={suggestionExclusions.excluded}
+            onExcludedChange={suggestionExclusions.save}
           />
         )}
         {view === "overview" && (

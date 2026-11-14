@@ -161,6 +161,14 @@ describe("buildComboSuggestions", () => {
     expect(all.map((s) => s.key)).toEqual(["create:gpt-5-5", "create:gpt-5-6-sol"]);
     expect(suggest({ models: rows, dismissed: new Set(["create:gpt-5-5"]) }).map((s) => s.comboId)).toEqual(["gpt-5.6-sol"]);
   });
+
+  test("an excluded provider joins no suggested combo, new or existing", () => {
+    const rows = models([["openai", "gpt-5.5"], ["cursor", "gpt-5.5"], ["anthropic", "claude-x"], ["cursor", "claude-x"], ["zayu-claude", "claude-x"]]);
+    const excludedProviders = new Set(["cursor"]);
+    expect(summary({ models: rows, excludedProviders })).toEqual(["create claude-x: anthropic > zayu-claude"]);
+    const combos = [combo("claude-x", [["anthropic", "claude-x"]])];
+    expect(summary({ combos, models: rows, excludedProviders })).toEqual(["extend claude-x: zayu-claude"]);
+  });
 });
 
 describe("drafts", () => {
@@ -225,7 +233,8 @@ describe("ComboSuggestions card", () => {
   });
 
   const saved: Array<{ kind: string; item: ComboItem }> = [];
-  async function render(combos: ComboItem[] = []) {
+  const exclusionWrites: string[][] = [];
+  async function render(combos: ComboItem[] = [], excluded?: string[]) {
     saved.length = 0;
     const { createRoot } = await import("react-dom/client");
     host = document.createElement("div");
@@ -244,6 +253,10 @@ describe("ComboSuggestions card", () => {
             errorText={() => "bad"}
             onCreate={async (item) => { saved.push({ kind: "create", item }); return { ok: true }; }}
             onExtend={async (item) => { saved.push({ kind: "extend", item }); return { ok: true }; }}
+            {...(excluded ? {
+              excludedProviders: excluded,
+              onExcludedChange: async (next: readonly string[]) => { exclusionWrites.push([...next]); return true; },
+            } : {})}
           />
         </LanguageProvider>,
       );
@@ -293,5 +306,22 @@ describe("ComboSuggestions card", () => {
     expect(saved.map(({ kind, item }) => [kind, item.id, item.targets.map((t) => t.provider)])).toEqual([
       ["extend", "gemini", ["google-antigravity", "cursor"]],
     ]);
+  });
+
+  test("excluding a provider is offered under the title and restoring unticks it", async () => {
+    exclusionWrites.length = 0;
+    await render([], ["cursor"]);
+    // Every suggestion here needs cursor, so only the exclusion control and the empty note show.
+    expect(host.querySelectorAll(".rb-suggest-card")).toHaveLength(0);
+    const toggle = button(host, "Excluded: Cursor");
+    await act(async () => { toggle.click(); });
+    const panel = host.querySelector<HTMLElement>(".rb-suggest-exclude-panel")!;
+    await act(async () => { button(panel, "Restore").click(); });
+    expect(exclusionWrites).toEqual([[]]);
+  });
+
+  test("without an exclusion handler there is no exclude control", async () => {
+    await render();
+    expect(host.querySelector(".rb-suggest-exclude")).toBeNull();
   });
 });

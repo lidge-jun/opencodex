@@ -16,6 +16,7 @@ import { makeCollapseStore } from "../../pages/collapse-store";
 import { formatProviderDisplayName } from "../../provider-icons";
 import { moveChannel } from "../../route-board-model";
 import { ProviderIcon } from "../provider-workspace/ProviderRail";
+import { SuggestionExcludeProviders } from "./SuggestionExcludeProviders";
 
 type SaveResult = { ok: boolean; error?: string };
 
@@ -39,6 +40,9 @@ export interface ComboSuggestionsProps {
   errorText: (code: ComboDraftError, item: ComboItem) => string;
   onCreate: (item: ComboItem) => Promise<SaveResult>;
   onExtend: (item: ComboItem) => Promise<SaveResult>;
+  /** Providers left out of suggestions (config.json); with `onExcludedChange`, offers to change them. */
+  excludedProviders?: readonly string[];
+  onExcludedChange?: (next: readonly string[]) => Promise<boolean>;
 }
 
 /** Suggested combos above the overview: same-name models across providers, one click to a draft. */
@@ -47,8 +51,9 @@ export function ComboSuggestions(props: ComboSuggestionsProps) {
   const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => dismissedStore.read() ?? new Set());
   const [showAll, setShowAll] = useState(false);
   const [draftKey, setDraftKey] = useState<string | null>(null);
-  const suggestions = buildComboSuggestions({ ...props, dismissed });
-  if (suggestions.length === 0) return null;
+  const excluded = props.excludedProviders ?? [];
+  const suggestions = buildComboSuggestions({ ...props, dismissed, excludedProviders: new Set(excluded) });
+  if (suggestions.length === 0 && excluded.length === 0) return null;
 
   const dismiss = (key: string) => {
     const next = new Set(dismissed).add(key);
@@ -68,7 +73,15 @@ export function ComboSuggestions(props: ComboSuggestionsProps) {
       <header className="rb-suggest-head">
         <strong>{t("comboSuggest.title")}</strong>
         <span>{t("comboSuggest.lede")}</span>
+        {props.onExcludedChange && (
+          <SuggestionExcludeProviders
+            providers={props.providers.filter((provider) => !provider.disabled && !provider.hiddenFromPicker).map((provider) => provider.name)}
+            excluded={excluded}
+            onChange={props.onExcludedChange}
+          />
+        )}
       </header>
+      {suggestions.length === 0 && <p className="rb-suggest-hint rb-suggest-empty">{t("comboSuggest.exclude.none")}</p>}
       <ul className="rb-suggest-list">
         {shown.map((suggestion) => (
           <SuggestionCard

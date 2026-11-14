@@ -389,7 +389,7 @@
   "anthropic-tool-declaration-constraints.test.ts": "adapters/anthropic",
   "anthropic-tool-schema.test.ts": "adapters/anthropic", "antigravity-baseurl-override.test.ts": "adapters/google",
   "antigravity-refusal.test.ts": "adapters/google", "antigravity-static-catalog.test.ts": "adapters/google",
-  "api-access-endpoints.test.ts": "server", "api-catalog-route.test.ts": "server",
+  "api-access-endpoints.test.ts": "server", "api-catalog-route.test.ts": "server", "combo-suggestion-routes.test.ts": "server",
   "api-codex-log-guard-compact.test.ts": "server", "api-codex-log-guard-protection.test.ts": "server",
   "api-codex-log-guard.test.ts": "server", "api-debug.test.ts": "server",
   "api-key-attribution.test.ts": "server", "api-key-catalog-authority.test.ts": "providers",

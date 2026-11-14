@@ -20,6 +20,8 @@ import {
   type UnservablePolicy,
 } from "../../route-board-model";
 import { Select, Switch } from "../../ui";
+import { latestPerFamilyBy } from "../../lib/model-family";
+import { useLatestPerFamilyPref } from "../../lib/latest-per-family-pref";
 import { ProviderIcon } from "../provider-workspace/ProviderRail";
 import type { ModelOption, ProviderOption } from "../combo-workspace-types";
 import type { ProbeMemberModel } from "./MemberProbe";
@@ -120,7 +122,10 @@ export function ChannelEditor({
   const pickable = providers.filter((provider) => !provider.hiddenFromPicker);
   const [addProvider, setAddProvider] = useState(() => pickable[0]?.name ?? "");
   const used = new Set(channels.map((channel) => channel.key));
-  const addModels = models.filter((model) => model.provider === addProvider && !used.has(channelKey(model.provider, model.id)));
+  const [latestOnly, setLatestOnly] = useLatestPerFamilyPref();
+  const providerModels = models.filter((model) => model.provider === addProvider);
+  const addModels = (latestOnly ? latestPerFamilyBy(providerModels, (model) => model.id) : providerModels)
+    .filter((model) => !used.has(channelKey(model.provider, model.id)));
   const [addModel, setAddModel] = useState("");
   const chosenModel = addModels.some((model) => model.id === addModel) ? addModel : addModels[0]?.id ?? "";
   const [capability, setCapability] = useState<ComboCapabilitySettings>(initialCapability);
@@ -236,6 +241,8 @@ export function ChannelEditor({
             : [{ value: "", label: t("routeBoard.edit.noModels"), disabled: true }]}
           onChange={setAddModel}
         />
+        <Switch on={latestOnly} onClick={() => setLatestOnly(!latestOnly)} label={t("models.latestPerFamily")}
+          title={t("models.latestPerFamilyHint")} showLabel />
         <button type="button" className="btn btn-ghost btn-sm" disabled={!chosenModel} onClick={add}>
           {t("routeBoard.edit.add")}
         </button>

@@ -176,6 +176,13 @@ async function handleFallbackRoutesOnDemand(ctx: ManagementContext): Promise<Res
   return handleFallbackRoutes(ctx);
 }
 
+/** Lazy: the suggested combos' excluded-provider list is only read by the Combos page. */
+async function handleComboSuggestionRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
+  if (!pathInManagementNamespace(ctx.url.pathname, "/api/combo-suggestions", false)) return null;
+  const { handleComboSuggestionRoutes } = await import("./management/combo-suggestion-routes");
+  return handleComboSuggestionRoutes(ctx);
+}
+
 async function handleRouteToRoutesOnDemand(ctx: ManagementContext): Promise<Response | null> {
   if (!pathInManagementNamespace(ctx.url.pathname, "/api/route-to")) return null;
   const { handleRouteToRoutes } = await import("./management/route-to-routes");
@@ -382,6 +389,7 @@ export async function handleManagementAPI(
     ??     (await handleLowQuotaRoutesOnDemand(ctx))
     ??     (await handleQuotaPoolRoutesOnDemand(ctx))
     ??     (await handleFallbackRoutesOnDemand(ctx))
+    ??     (await handleComboSuggestionRoutesOnDemand(ctx))
     ??     (await handleRouteToRoutesOnDemand(ctx))
     ??     (await handleWorkflowBudgetRoutesOnDemand(ctx))
     ??     (await handleCodexAgentRoleRoutesOnDemand(ctx))

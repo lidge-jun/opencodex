@@ -790,6 +790,11 @@ export interface OcxConfig extends OcxLinkHomeConfig {
    */
   grokExcludedModels?: string[];
   /**
+   * Provider names the dashboard's suggested combos leave out (Combos page). View-only:
+   * existing combos that name one keep routing to it.
+   */
+  comboSuggestionExcludedProviders?: string[];
+  /**
    * When true, OpenAI-routed requests include `service_tier: "priority"` (fast inference).
    * When false, service_tier is stripped so requests use default speed.
    * Undefined = passthrough (don't modify what the client sends).
