@@ -57,6 +57,31 @@ describe("Gemini codec request mapping", () => {
     expect(() => geminiToChat("m", { contents: "hi" }, false)).toThrow(GeminiCodecError);
   });
 
+  test("VALIDATED never forces a call; ANY still does", () => {
+    const base = { contents: [{ role: "user", parts: [{ text: "hi" }] }], tools: [{ functionDeclarations: [declaration, { ...declaration, name: "open" }] }] };
+    const choice = (functionCallingConfig: unknown) => geminiToChat("m", { ...base, toolConfig: { functionCallingConfig } }, false).tool_choice;
+    expect(choice({ mode: "VALIDATED" })).toBeUndefined();
+    expect(choice({ mode: "VALIDATED", allowedFunctionNames: ["find"] })).toEqual({ type: "allowed_tools", allowed_tools: { mode: "auto", tools: [{ type: "function", function: { name: "find" } }] } });
+    expect(choice({ mode: "VALIDATED", allowedFunctionNames: ["find", "open"] })).toEqual({ type: "allowed_tools", allowed_tools: { mode: "auto", tools: [{ type: "function", function: { name: "find" } }, { type: "function", function: { name: "open" } }] } });
+    expect(choice({ mode: "ANY" })).toBe("required");
+    expect(choice({ mode: "ANY", allowedFunctionNames: ["find"] })).toEqual({ type: "function", function: { name: "find" } });
+  });
+
+  test("an image inside functionResponse.parts reaches the next turn after the tool batch; other nested parts are refused", () => {
+    const contents = (parts: unknown[]) => [
+      { role: "user", parts: [{ text: "shoot" }] },
+      { role: "model", parts: [{ functionCall: { id: "c1", name: "screenshot", args: {} } }] },
+      { role: "user", parts: [{ functionResponse: { id: "c1", name: "screenshot", response: { ok: true }, parts } }] },
+    ];
+    const result = geminiToChat("m", { contents: contents([{ inlineData: { mimeType: "image/png", data: png } }]) }, false);
+    expect((result.messages as unknown[]).slice(2)).toEqual([
+      { role: "tool", tool_call_id: "c1", content: '{"ok":true}' },
+      { role: "user", content: [{ type: "text", text: "Image output of screenshot (call c1):" }, { type: "image_url", image_url: { url: `data:image/png;base64,${png}` } }] },
+    ]);
+    expect(() => geminiToChat("m", { contents: contents([{ fileData: { mimeType: "image/png", fileUri: "gs://x" } }]) }, false)).toThrow("Unsupported functionResponse part");
+    expect(() => geminiToChat("m", { contents: contents([{ inlineData: { mimeType: "audio/wav", data: png } }]) }, false)).toThrow(GeminiCodecError);
+  });
+
   test("bounds function calls in one request", () => {
     const parts = Array.from({ length: MAX_GEMINI_TOOL_CALLS + 1 }, (_, i) => ({ functionCall: { id: `c${i}`, name: "f", args: {} } }));
     expect(() => geminiToChat("m", { contents: [{ role: "model", parts }] }, false)).toThrow("Too many function calls");

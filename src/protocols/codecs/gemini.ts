@@ -90,8 +90,9 @@ function toolChoice(toolConfig: unknown): unknown {
   const names = namesRaw === undefined ? [] : array(namesRaw, "allowedFunctionNames").map(name => text(name, "allowed function name", true));
   const entries = names.map(name => ({ type: "function", function: { name } }));
   if (mode === "NONE") return "none";
-  if (mode === "AUTO" || mode === "MODE_UNSPECIFIED") return entries.length ? { type: "allowed_tools", allowed_tools: { mode: "auto", tools: entries } } : undefined;
-  if (mode === "ANY" || mode === "VALIDATED") {
+  // VALIDATED lets the model answer in text or call an allowed function, so it never forces a call.
+  if (mode === "AUTO" || mode === "MODE_UNSPECIFIED" || mode === "VALIDATED") return entries.length ? { type: "allowed_tools", allowed_tools: { mode: "auto", tools: entries } } : undefined;
+  if (mode === "ANY") {
     if (entries.length === 1) return entries[0];
     return entries.length ? { type: "allowed_tools", allowed_tools: { mode: "required", tools: entries } } : "required";
   }
@@ -239,6 +240,15 @@ function chatMessages(contents: unknown, system: unknown): Obj[] {
         if (!target) fail("Unmatched function response");
         target.matched = true;
         tools.push({ role: "tool", tool_call_id: target.id, content: JSON.stringify(response.response ?? {}) });
+        // Chat tool messages carry text only, so a tool's images follow the tool batch in the user turn, labelled with their call.
+        const nested = field(response, "parts");
+        for (const [ni, rawNested] of (nested === undefined ? [] : array(nested, "functionResponse parts")).entries()) {
+          const media = field(object(rawNested, "functionResponse part"), "inlineData");
+          if (media === undefined) fail("Unsupported functionResponse part");
+          if (ni === 0) user.push({ type: "text", text: `Image output of ${name} (call ${target.id}):` });
+          user.push(inlineImage(media));
+          hasImage = true;
+        }
       } else if (typeof part.text === "string") {
         if (part.thought !== true) user.push({ type: "text", text: part.text });
       } else if (field(part, "inlineData") !== undefined) {
