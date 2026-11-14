@@ -11,12 +11,16 @@ import {
   antigravitySelectedAccountUnlistedMessage,
   clearGenericFailoverHealth,
   hasEligibleGenericOAuthFailoverTarget,
+  noteGenericPoolSelection,
   preferKiroModelSupport,
   preferredInitialAccount,
   rotateAntigravityAccountOnAuthRefusal,
   rotateGenericOAuthAccountOn429,
   routeAntigravityModel,
+  seedGenericPoolSelection,
 } from "../../../src/oauth/generic-account-failover";
+import { clearPoolRotationState } from "../../../src/oauth/pool-kernel";
+import { bindGenericSessionAccount, clearGenericSessionAffinity, genericSessionAccount } from "../../../src/oauth/generic-session-affinity";
 import {
   ANTIGRAVITY_ACCOUNT_ROSTER_TTL_MS,
   antigravityAccountRosterModelIds,
@@ -30,6 +34,7 @@ import {
   parseAntigravityAvailableModels,
   resolveAntigravityEffortWireModel,
 } from "../../../src/providers/antigravity-models";
+import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../../../src/providers/quota";
 import type { OcxConfig, OcxProviderConfig } from "../../../src/types";
 import { withStubbedProviderFetch } from "../../helpers/catalog-provider-fetch";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
@@ -72,6 +77,8 @@ afterEach(() => {
   clearModelCache();
   clearAntigravityAccountRosters();
   clearGenericFailoverHealth();
+  clearGenericSessionAffinity();
+  clearAccountQuotaCache(PROVIDER);
   if (originalHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = originalHome;
   for (const home of homes.splice(0)) removeTreeWithRetry(home);
@@ -270,5 +277,91 @@ describe("model routing fails closed on a proven roster omission (#7500)", () =>
     clearAntigravityAccountRosters(PROVIDER, "acct-55");
     record("acct-55", ROSTER_46);
     expect(rotateAntigravityAccountOnAuthRefusal(true, "acct-a", "stale-generation", "claude-opus-5-5")).toBeNull();
+  });
+
+  test("round-robin rotates across model-supporting accounts per family without resetting weights", () => {
+    clearPoolRotationState();
+    homeWithAccounts(["acct-46a", "acct-55a", "acct-46b", "acct-55b"], "acct-55a");
+    record("acct-46a", ROSTER_46);
+    record("acct-55a", ROSTER_55);
+    record("acct-46b", ROSTER_46);
+    record("acct-55b", ROSTER_55);
+    const rrConfig = {
+      pool: { kernel: true },
+      providers: {
+        [PROVIDER]: provider({ oauthAccountFailover: { enabled: true, strategy: "round-robin", stickyLimit: 1 } }),
+      },
+    } as unknown as OcxConfig;
+    const served: string[] = [];
+    for (let turn = 0; turn < 3; turn++) {
+      const picked = preferredInitialAccount(rrConfig, PROVIDER, Date.now(), "claude-opus-5-5") ?? "acct-55a";
+      noteGenericPoolSelection(rrConfig, PROVIDER, picked, "claude-opus-5-5");
+      served.push(picked);
+    }
+    expect(served).toEqual(["acct-55a", "acct-55b", "acct-55a"]);
+  });
+
+  test("conversation affinity keeps one account per quota family when a session alternates families", () => {
+    homeWithAccounts(["acct-55a", "acct-55b"], "acct-55a");
+    record("acct-55a", ROSTER_55);
+    record("acct-55b", ROSTER_55);
+    const affinityConfig = {
+      providers: {
+        [PROVIDER]: provider({ oauthAccountFailover: { enabled: true, sessionAffinity: "conversation" } }),
+      },
+    } as unknown as OcxConfig;
+    bindGenericSessionAccount(affinityConfig, PROVIDER, "session", "acct-55a", "claude-opus-5-5");
+    bindGenericSessionAccount(affinityConfig, PROVIDER, "session", "acct-55b", "gemini-3.8-flash-high");
+    expect(genericSessionAccount(affinityConfig, PROVIDER, "session", "claude-opus-5-5")).toBe("acct-55a");
+    expect(genericSessionAccount(affinityConfig, PROVIDER, "session", "gemini-3.8-flash-high")).toBe("acct-55b");
+  });
+  test("model filtering drops an account whose quota family is exhausted unless every listing account is", () => {
+    homeWithAccounts(["acct-55a", "acct-55b"], "acct-55a");
+    record("acct-55a", ROSTER_55);
+    record("acct-55b", ROSTER_55);
+    const spent = { updatedAt: Date.now(), customWindows: [{ label: "Cla", percent: 100 }, { label: "Gem", percent: 10 }] };
+    setCachedProviderAccountQuotaForTests(PROVIDER, "acct-55a", spent);
+    expect(preferKiroModelSupport(PROVIDER, ["acct-55a", "acct-55b"], "claude-opus-5-5")).toEqual(["acct-55b"]);
+    expect(preferKiroModelSupport(PROVIDER, ["acct-55a", "acct-55b"], "gemini-3.8-flash-high")).toEqual(["acct-55a", "acct-55b"]);
+    setCachedProviderAccountQuotaForTests(PROVIDER, "acct-55b", spent);
+    expect(preferKiroModelSupport(PROVIDER, ["acct-55a", "acct-55b"], "claude-opus-5-5")).toEqual(["acct-55a", "acct-55b"]);
+  });
+  test("model-listing reroutes follow the family round-robin ring", () => {
+    clearPoolRotationState();
+    homeWithAccounts(["acct-46a", "acct-55a", "acct-55b"], "acct-46a");
+    record("acct-46a", ROSTER_46);
+    record("acct-55a", ROSTER_55);
+    record("acct-55b", ROSTER_55);
+    const rrConfig = {
+      pool: { kernel: true },
+      providers: {
+        [PROVIDER]: provider({ oauthAccountFailover: { enabled: true, strategy: "round-robin", stickyLimit: 1 } }),
+      },
+    } as unknown as OcxConfig;
+    const served: (string | null)[] = [];
+    for (let turn = 0; turn < 3; turn++) {
+      const picked = preferredInitialAccount(rrConfig, PROVIDER, Date.now(), "claude-opus-5-5");
+      served.push(picked);
+      if (picked) noteGenericPoolSelection(rrConfig, PROVIDER, picked, "claude-opus-5-5");
+    }
+    expect(served).toEqual(["acct-55a", "acct-55b", "acct-55a"]);
+  });
+
+  test("a manual selection overrides a sticky family ring", () => {
+    clearPoolRotationState();
+    homeWithAccounts(["acct-55a", "acct-55b"], "acct-55a");
+    record("acct-55a", ROSTER_55);
+    record("acct-55b", ROSTER_55);
+    const rrConfig = {
+      pool: { kernel: true },
+      providers: {
+        [PROVIDER]: provider({ oauthAccountFailover: { enabled: true, strategy: "round-robin", stickyLimit: 5 } }),
+      },
+    } as unknown as OcxConfig;
+    noteGenericPoolSelection(rrConfig, PROVIDER, "acct-55a", "claude-opus-5-5");
+    expect(preferredInitialAccount(rrConfig, PROVIDER, Date.now(), "claude-opus-5-5", "acct-46x")).toBe("acct-55a");
+    seedGenericPoolSelection(PROVIDER, "acct-55b");
+    expect(preferredInitialAccount(rrConfig, PROVIDER, Date.now(), "claude-opus-5-5", "acct-46x")).toBe("acct-55b");
+    expect(preferredInitialAccount(rrConfig, PROVIDER, Date.now(), "gemini-3.8-flash-high", "acct-46x")).toBe("acct-55b");
   });
 });
