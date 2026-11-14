@@ -5,6 +5,7 @@
 import { useMemo, useState } from "react";
 import { useI18n, LOCALES } from "../../i18n/shared";
 import { EmptyState, Notice } from "../../ui";
+import { ContextCard } from "./ContextCard";
 import { FlowDiagram } from "./FlowDiagram";
 import { buildRouteFlow, candidateWho, summarizePool, type FlowOutcome, type RouteFlow } from "./flow-model";
 import { FailedDetail, ReasonText } from "./ReasonText";
@@ -83,6 +84,7 @@ function Selected({ row, flow, pinned, onBack }: { row: RouteRow; flow: RouteFlo
       <PoolLine row={row} />
       <RouteSteps row={row} flow={flow} />
       {flow.outcome.kind !== "local" && <TimeSection row={row} />}
+      <ContextCard row={row} />
       {row.routeDecision?.routeKind === "combo" && <p className="rl-muted"><a href="#models/combos">{t("routeLive.linkCombos")}</a></p>}
     </section>
   );

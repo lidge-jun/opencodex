@@ -90,6 +90,7 @@ import { anthropicSessionKeyFromParts } from "../../oauth/anthropic-routing";
 import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { bindTurnTerminationScope, rememberDeliveredFinalAnswer } from "../../responses/turn-termination";
+import { observeContextBreakdown } from "../context-breakdown";
 import { noteCodexSelectionAffinity, observeCacheDiagnosticInbound, rebindCacheDiagnosticBody, requestLogSpeedLabel, readConfiguredCodexServiceTier } from "../request-log";
 import type { RouteResult } from "../../router";
 import {
@@ -277,6 +278,7 @@ export async function prepareResponsesRequest(
       : options.promptCacheKeyIsSharedCohort === false ? "metadata-derived" : "caller",
     contextPrincipalIdOf(options.admission),
   );
+  observeContextBreakdown(logCtx, body, "responses");
   if (!concreteSelection && !options.compactionRoutingOverride && inboundWire === "responses") {
     options.compactionRoutingOverride = applyCompactionRoutingOverride(body, req.headers, config, {
       endpoint: "responses",

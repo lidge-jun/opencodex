@@ -164,6 +164,10 @@ the list below it, you see:
   finished: paused, needing sign-in, cooling down, out of quota, or not listing the model.
 - **Where the time went.** OpenCodex's own time, earlier failed attempts, the wait for the first
   token, and streaming. Every segment is measured; DNS and TLS are not split out.
+- **The context window.** Estimated tokens for the system prompt, tools, skills, memory files such
+  as `AGENTS.md` and `CLAUDE.md`, files, tool results and each conversation turn, against the free
+  space in the serving model's window, plus the prompt-cache hit rate. Only sizes are recorded,
+  never prompt text, and they live in memory with the request log.
 
 The request list groups by request, session or API key and shows the account, model, effort,
 duration, time to first token, tokens, cache-hit rate, tokens per second and estimated cost.

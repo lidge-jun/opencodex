@@ -61,6 +61,7 @@ import {
   linkRequestSessionLane,
 } from "./request-log-conversation";
 import type { OcxConfig } from "../types";
+import { observeContextBreakdown } from "./context-breakdown";
 import { DecompressedBodyTooLargeError, UnsupportedContentEncodingError, readJsonRequestBody, resolveInboundBodyLimitBytes } from "./request-decompress";
 import {
   addFinalRequestLog,
@@ -206,6 +207,7 @@ async function handleChatCompletionsWithBudget(
   try {
     const rawBody = await readChatBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
     assertChatCompletionsRoutingBody(rawBody);
+    observeContextBreakdown(logCtx, rawBody, "chat");
     // Normalize foreign image shapes BEFORE routing. isNativeChatRouteEligible below
     // decides the pipeline from the image parts it can see, and the native path then
     // forwards this body as-is, so both must observe the same parts. A body with no
