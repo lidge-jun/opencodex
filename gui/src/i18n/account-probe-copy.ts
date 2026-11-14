@@ -27,6 +27,7 @@ const rows = {
   "modelDiscover.autoDisabled": ["hidden by new-model policy", "새 모델 정책으로 숨김", "durch Neu-Modell-Richtlinie ausgeblendet", "masqué par la règle des nouveaux modèles", "按新模型策略已隐藏", "依新模型政策已隱藏", "скрыта политикой новых моделей", "新モデルポリシーで非表示", "yeni model politikasıyla gizlendi", "bị ẩn theo chính sách mô hình mới", "oculto pela política de novos modelos"],
   "modelDiscover.new": ["NEW", "NEW", "NEU", "NOUVEAU", "新", "新", "НОВАЯ", "NEW", "YENİ", "MỚI", "NOVO"],
   "acctTable.title": ["Account quotas", "계정 할당량", "Kontingente je Konto", "Quotas par compte", "账号额度", "帳號額度", "Квоты аккаунтов", "アカウント別クォータ", "Hesap kotaları", "Hạn mức theo tài khoản", "Cotas por conta"],
+  "acctTable.actions": ["Actions", "작업", "Aktionen", "Commandes", "操作", "操作", "Действия", "操作", "İşlemler", "Thao tác", "Ações"],
   "acctTable.account": ["Account", "계정", "Konto", "Compte", "账号", "帳號", "Аккаунт", "アカウント", "Hesap", "Tài khoản", "Conta"],
   "acctTable.plan": ["Plan", "플랜", "Tarif", "Forfait", "套餐", "方案", "План", "プラン", "Plan", "Gói", "Plano"],
   "acctTable.status": ["Status", "상태", "Status", "État", "状态", "狀態", "Статус", "状態", "Durum", "Trạng thái", "Status"],

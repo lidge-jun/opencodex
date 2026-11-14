@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
-  buildQuotaTable, formatCountdown, planDisplayName, SLOW_PROBE_MS, type QuotaTableAccount,
+  buildQuotaTable, formatCountdown, planDisplayName, SLOW_PROBE_MS, uncoveredWindows, type QuotaTableAccount,
 } from "../../gui/src/provider-workspace/account-quota-table";
 
 const NOW = Date.parse("2026-11-13T12:00:00Z");
@@ -95,5 +95,14 @@ describe("account quota table", () => {
     expect(formatCountdown(NOW + 45 * 60_000, NOW)).toBe("45m");
     expect(formatCountdown(NOW + 3 * HOUR + 12 * 60_000, NOW)).toBe("3h 12m");
     expect(formatCountdown(NOW + 53 * HOUR, NOW)).toBe("2d 5h");
+  });
+
+  test("windows a pool column shows stay out of the detail line; the rest keep their order", () => {
+    const windows = [
+      { label: "Gem", percent: 10 }, { label: "gemini-3-pro · free", percent: 40 },
+      { label: "Cla (Weekly)", percent: 20 }, { label: "Opus (Weekly)", percent: 30 },
+    ];
+    expect(uncoveredWindows(windows).map(window => window.label)).toEqual(["gemini-3-pro · free", "Opus (Weekly)"]);
+    expect(uncoveredWindows(undefined)).toEqual([]);
   });
 });

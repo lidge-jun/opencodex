@@ -45,7 +45,9 @@ test.each(["fr", "ko"] as const)("provider OAuth and key tooltips use the app lo
       accounts={[{ id: "account-fixture", alias: "Reserve account", active: false, paused: true, pauseDetails: details }]}
       keys={[{ id: "key-fixture", label: "Reserve key", masked: "****", active: false, disabled: true, pauseDetails: details }]} />, locale);
     try {
-      expect(win.document.querySelector(".badge-muted[title]")?.getAttribute("title")).toBe(expected);
+      // OAuth accounts render in the quota table (pause tooltip on the account button); key rows keep the badge.
+      const tooltipHost = authMode === "oauth" ? ".aqt-account-main[title]" : ".badge-muted[title]";
+      expect(win.document.querySelector(tooltipHost)?.getAttribute("title")).toBe(expected);
       if (authMode === "key") {
         expect(win.document.querySelector(".pwi-auth-row-main")?.getAttribute("aria-label"))
           .toBe(`${t("pws.resumeAndActivateKey")} — Reserve key`);
@@ -65,7 +67,7 @@ function renderAppeal(locale: Locale, appealText?: string, paused = true, appeal
 test.each(LOCALES)("paused OAuth details show the translated appeal action in $code", ({ code }) => {
   const win = renderAppeal(code, "<b>Invalid vendor label</b>");
   try {
-    const link = win.document.querySelector(`.pwi-auth-acct a[href="${appealHref}"]`);
+    const link = win.document.querySelector(`.aqt-detail a[href="${appealHref}"]`);
     expect(link?.textContent).toBe(DICTS[code]["accountPause.submitAppeal"]);
     expect(link?.textContent?.trim()).toBeTruthy();
     expect(link?.getAttribute("target")).toBe("_blank");
@@ -82,7 +84,7 @@ test("paused OAuth details use a plain vendor label and omit links on resumed ro
   ] as const) {
     const win = renderAppeal("en", "Request a review", paused, url);
     try {
-      expect(win.document.querySelector(".pwi-auth-acct a")?.textContent).toBe(expected);
+      expect(win.document.querySelector(".aqt-detail a")?.textContent).toBe(expected);
     } finally { void win.happyDOM.close(); }
   }
 });

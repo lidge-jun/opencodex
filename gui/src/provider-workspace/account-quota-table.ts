@@ -27,14 +27,21 @@ interface PoolSpec {
   read(quota: QuotaLike): Partial<Record<PoolWindow, Reading>>;
 }
 
-const byLabel = (fiveHour: string, weekly: string) => (quota: QuotaLike) => {
-  const find = (label: string) => quota.customWindows?.find(window => window.label === label);
-  const out: Partial<Record<PoolWindow, Reading>> = {};
-  const short = find(fiveHour);
-  const long = find(weekly);
-  if (short) out.fiveHour = short;
-  if (long) out.weekly = long;
-  return out;
+/** Window labels a pool column already shows; every other custom window stays in the row's detail line. */
+const POOL_LABELS = new Set<string>();
+
+const byLabel = (fiveHour: string, weekly: string) => {
+  POOL_LABELS.add(fiveHour);
+  POOL_LABELS.add(weekly);
+  return (quota: QuotaLike) => {
+    const find = (label: string) => quota.customWindows?.find(window => window.label === label);
+    const out: Partial<Record<PoolWindow, Reading>> = {};
+    const short = find(fiveHour);
+    const long = find(weekly);
+    if (short) out.fiveHour = short;
+    if (long) out.weekly = long;
+    return out;
+  };
 };
 
 export const QUOTA_POOLS: readonly PoolSpec[] = [
@@ -50,6 +57,11 @@ export const QUOTA_POOLS: readonly PoolSpec[] = [
     }),
   },
 ];
+
+/** Custom windows no pool column shows (per-model rows, unknown labels), in their original order. */
+export function uncoveredWindows<W extends { label: string }>(windows: readonly W[] | undefined): W[] {
+  return (windows ?? []).filter(window => !POOL_LABELS.has(window.label));
+}
 
 /** Upstream tier ids seen in the wild, mapped to their product names. Anything else shows raw. */
 const PLAN_NAMES: Readonly<Record<string, string>> = {

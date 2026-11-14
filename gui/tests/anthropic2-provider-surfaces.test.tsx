@@ -244,7 +244,7 @@ test("UX-05: every Pool 2 account, pool-settings and reset-grant mutation names 
   expect(poolToggle()?.getAttribute("aria-pressed")).toBe("true");
   await click(host.querySelectorAll('button[aria-label^="' + en["codexAuth.pause"] + ' — "]')[1]);
   await click(host.querySelectorAll("button.codex-account-auto-switch-toggle")[1]);
-  await click(host.querySelectorAll(".pwi-auth-row-main")[1]);
+  await click(host.querySelectorAll(".aqt-account-main")[1]);
   await click(buttonsByText(en["prov.editAlias"])[1]);
   await click(host.querySelectorAll(".pwi-auth-row-remove")[1]);
   await click(host.querySelector("[data-anthropic-grant-badge]"));
@@ -469,7 +469,7 @@ test.each(["switch", "pause"] as const)("logout explains a pending %s and succee
       authHandlers={{ ...recordingHandlers([]), onSwitchAccount: pools.switchAccount, onPauseAccount: pools.pauseAccount, onLogout: oauth.logoutOAuth }} />;
   }
   await render(<Harness />);
-  if (action === "switch") await click(host.querySelectorAll(".pwi-auth-row-main")[1]);
+  if (action === "switch") await click(host.querySelectorAll(".aqt-account-main")[1]);
   else await click(host.querySelectorAll('button[aria-label^="' + en["codexAuth.pause"] + ' — "]')[1]);
   await started;
   await click(buttonsByText(en["prov.logout"])[0]);
