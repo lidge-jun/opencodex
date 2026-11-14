@@ -92,6 +92,7 @@ import {
   quarantineKiroSuspendedAccount,
   failoverAccountSnapshot,
   rotateAntigravityAccountOnAuthRefusal,
+  rotateAntigravityAccountOnUpstreamFault,
 } from "../../oauth/generic-account-failover";
 import {
   attemptOpaqueBlobRecovery,
@@ -119,7 +120,7 @@ import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import { chargeWorkflowSends } from "../../lib/workflow-budget";
 import { hasWorkflowSendObserver } from "../../lib/request-execution-budget";
-import { isAntigravityValidationRefusal } from "./antigravity-validation-refusal";
+import { isAntigravityAccessDeniedRefusal, isAntigravityValidationRefusal } from "./antigravity-validation-refusal";
 import { createAntigravityModelDenialRecovery, recoverAntigravityAccount } from "./antigravity-model-denial-recovery";
 import { adapterSendBudgetRefusal } from "../workflow-refusal";
 import { AdmissionModelDeniedError, admissionModelDeniedResponse, projectAdmissionModelDeniedLog } from "../admission-model-scope";
@@ -611,6 +612,7 @@ export async function prepareAdapterExchange(
     const consoleGoUploadRetryGuard: { attempted: boolean } = { attempted: false };
     let oauth401ReplayAttempted = transportState.oauth401ReplayAttempted;
     let antigravityAuthRotationAttempted = false;
+    let antigravityFaultRotationAttempted = false;
     // Direct requests get one reasoning-effort downgrade. Combo candidates may walk down the
     // published ladder one refused rung at a time; the request send budget bounds those retries.
     const reasoningEffortDowngradeGuard: { attempted: boolean } = { attempted: false };
@@ -1076,12 +1078,31 @@ export async function prepareAdapterExchange(
 
       if (route.providerName === "google-antigravity" && upstreamResponse.status === 403
         && transportState.activeAdapter.name === "google"
-        && antigravityPoolActivated && !antigravityAuthRotationAttempted
+        && antigravityPoolActivated
         && !isNonReplayableResponse(upstreamResponse)
         && transportState.genericFailovers < transportState.genericFailoverLimit
-        && await isAntigravityValidationRefusal(upstreamResponse, options.abortSignal)) {
+        && (!antigravityAuthRotationAttempted && await isAntigravityValidationRefusal(upstreamResponse, options.abortSignal)
+          // A plain access-denied 403 keeps rotating while siblings remain: each refused account is
+          // cooled before the hop, so the ring advances and `genericFailoverLimit` bounds the sends.
+          || await isAntigravityAccessDeniedRefusal(upstreamResponse, options.abortSignal))) {
         antigravityAuthRotationAttempted = true;
         const rotated = await rotateAntigravityAuth(upstreamResponse, "oauth-account-403");
+        if (rotated) { upstreamResponse = rotated; continue recovery; }
+      }
+
+      // A 502/503/504 that outlived the same-account ladder is replayed once on a live sibling: the
+      // failing account is cooled briefly (not marked), and one extra ladder bounds the load a
+      // pool-wide outage can add to a request.
+      if (route.providerName === "google-antigravity" && [502, 503, 504].includes(upstreamResponse.status)
+        && transportState.activeAdapter.name === "google"
+        && antigravityPoolActivated && !antigravityFaultRotationAttempted
+        && !isNonReplayableResponse(upstreamResponse)
+        && transportState.genericFailovers < transportState.genericFailoverLimit) {
+        antigravityFaultRotationAttempted = true;
+        const sent = transportState.replayOAuthCredentialSnapshot ?? transportState.sentOAuthSnapshot;
+        const nextId = sent
+          ? rotateAntigravityAccountOnUpstreamFault(antigravityPoolActivated, sent.accountId, route.modelId) : null;
+        const rotated = nextId ? await rotateAntigravityAuth(upstreamResponse, "transient-5xx", nextId) : null;
         if (rotated) { upstreamResponse = rotated; continue recovery; }
       }
 
