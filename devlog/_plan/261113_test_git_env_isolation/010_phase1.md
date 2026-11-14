@@ -63,7 +63,7 @@ defaultGit and the git grep spawn pass env: withoutGitRepositoryEnv(process.env)
 
 ### NEW tests/helpers/git-fixture.ts
 - fixtureGitEnv(extra = {}, base = process.env): withoutGitRepositoryEnv(base) + GIT_CONFIG_NOSYSTEM=1,
-  GIT_CONFIG_GLOBAL=<"NUL" on win32, "/dev/null" otherwise>, GIT_AUTHOR_NAME/EMAIL and GIT_COMMITTER_NAME/EMAIL
+  GIT_CONFIG_GLOBAL="/dev/null" on every platform (Git for Windows 2.56 rejects "NUL"), GIT_AUTHOR_NAME/EMAIL and GIT_COMMITTER_NAME/EMAIL
   (email from fragments for privacy-scan), then extra.
 - repositoryGitEnv(base = process.env): withoutGitRepositoryEnv(base); keeps GIT_CONFIG_GLOBAL so reads of the
   checkout keep the developer's safe.directory (scripts/test.ts explains why).
