@@ -2851,7 +2851,7 @@ export const ko: Record<TKey, string> = {
   "claude.autoCompactWindowDesc": "대화가 이 지점에 다다르면 오래된 내용을 자동 요약합니다. 모델마다 자기 한도를 넘지 않는 선에서만 적용되니 200k 모델은 영향받지 않아요.",
   "claude.autoCompactWindowWarn": "값을 직접 바꾸면 GPT 모델들이 제대로 동작하지 않을 수 있어요 — 모델의 실제 한도보다 크게 잡으면 요약이 되기 전에 대화가 오류로 멈춥니다.",
   "claude.injectAgents": "서브에이전트 자동 등록",
-  "claude.injectAgentsDesc": "위 '서브에이전트' 탭에서 고른 모델들(+현재 기본 모델)을 Claude Code의 파견 가능한 에이전트(ocx-*)로 자동 등록합니다. 새 세션부터 적용돼요.",
+  "claude.injectAgentsDesc": "모델 페이지의 클라이언트 모델 선택기에 고정한 모델들(+현재 기본 모델)을 Claude Code의 파견 가능한 에이전트(ocx-*)로 자동 등록합니다. 새 세션부터 적용돼요.",
   "claude.webSearchSidecar": "웹 검색 사이드카 덮어쓰기",
   "claude.webSearchSidecarHint": "Claude Code 요청에만 메인 웹 검색 사이드카 대신 이 설정을 씁니다.",
   "claude.visionSidecar": "비전 사이드카 덮어쓰기",

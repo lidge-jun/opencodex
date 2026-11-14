@@ -3467,7 +3467,7 @@ export const en = {
   "claude.autoCompactWindowDesc": "Older messages are summarized when the chat reaches this point. It never exceeds each model's own limit, so 200k models are unaffected.",
   "claude.autoCompactWindowWarn": "Changing this can break GPT models — set higher than a model's real limit, chats will error before the summary kicks in.",
   "claude.injectAgents": "Auto-register subagents",
-  "claude.injectAgentsDesc": "Registers the models picked on the Subagents tab (plus the current default model) as dispatchable Claude Code agents (ocx-*). Applies from the next session.",
+  "claude.injectAgentsDesc": "Registers the models pinned in the Client model picker on the Models page (plus the current default model) as dispatchable Claude Code agents (ocx-*). Applies from the next session.",
   "claude.webSearchSidecar": "Web search sidecar override",
   "claude.webSearchSidecarHint": "Override the main web search sidecar for Claude Code requests.",
   "claude.visionSidecar": "Vision sidecar override",

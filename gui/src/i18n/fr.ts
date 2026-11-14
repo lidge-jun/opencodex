@@ -3382,7 +3382,7 @@ export const fr: Record<TKey, string> = {
   "claude.autoCompactWindowDesc": "Les anciens messages sont résumés lorsque la conversation atteint ce seuil. Celui-ci ne dépasse jamais la limite propre à chaque modèle; les modèles 200k ne sont donc pas affectés.",
   "claude.autoCompactWindowWarn": "La modification de ce paramètre peut perturber les modèles GPT — s’il dépasse la limite réelle d’un modèle, les conversations échoueront avant le déclenchement du résumé.",
   "claude.injectAgents": "Enregistrer automatiquement les sous-agents",
-  "claude.injectAgentsDesc": "Enregistre les modèles choisis dans l’onglet Sous-agents (ainsi que le modèle par défaut actuel) comme agents Claude Code délégables (ocx-*). S’applique à partir de la prochaine session.",
+  "claude.injectAgentsDesc": "Enregistre les modèles épinglés dans le sélecteur de modèles des clients de la page Modèles (ainsi que le modèle par défaut actuel) comme agents Claude Code délégables (ocx-*). S’applique à partir de la prochaine session.",
   "claude.webSearchSidecar": "Remplacement du service auxiliaire de recherche Web",
   "claude.webSearchSidecarHint": "Remplace le service auxiliaire principal de recherche Web pour les requêtes Claude Code.",
   "claude.visionSidecar": "Remplacement du service auxiliaire de vision",

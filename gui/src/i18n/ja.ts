@@ -3283,7 +3283,7 @@ export const ja: Record<TKey, string> = {
   "claude.autoCompactWindowDesc": "チャットがこのポイントに達すると古いメッセージが要約されます。各モデル自身の上限を超えることはないので、200k モデルは影響を受けません。",
   "claude.autoCompactWindowWarn": "これを変更すると GPT モデルが壊れる可能性があります — モデルの実際の上限より高く設定すると、要約が働く前にチャットがエラーになります。",
   "claude.injectAgents": "サブエージェントを自動登録",
-  "claude.injectAgentsDesc": "サブエージェントタブで選んだモデル(と現在のデフォルトモデル)をディスパッチ可能な Claude Code エージェント(ocx-*)として登録します。次回セッションから適用されます。",
+  "claude.injectAgentsDesc": "モデルページのクライアントのモデル選択で固定したモデル(と現在のデフォルトモデル)をディスパッチ可能な Claude Code エージェント(ocx-*)として登録します。次回セッションから適用されます。",
   "claude.webSearchSidecar": "ウェブ検索サイドカーの上書き",
   "claude.webSearchSidecarHint": "Claude Code リクエストのメインウェブ検索サイドカーを上書きします。",
   "claude.visionSidecar": "ビジョンサイドカーの上書き",

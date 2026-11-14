@@ -2804,7 +2804,7 @@ export const de: Record<TKey, string> = {
   "claude.autoCompactWindowDesc": "Ältere Nachrichten werden an diesem Punkt zusammengefasst. Das eigene Limit jedes Modells wird nie überschritten — 200k-Modelle bleiben unberührt.",
   "claude.autoCompactWindowWarn": "Eine Änderung kann GPT-Modelle stören — liegt der Wert über dem echten Modelllimit, kommt es vor der Zusammenfassung zu Fehlern.",
   "claude.injectAgents": "Subagenten automatisch registrieren",
-  "claude.injectAgentsDesc": "Registriert die im Subagenten-Tab gewählten Modelle (plus das aktuelle Standardmodell) als aufrufbare Claude-Code-Agenten (ocx-*). Gilt ab der nächsten Sitzung.",
+  "claude.injectAgentsDesc": "Registriert die in der Modellauswahl der Clients auf der Seite „Modelle“ angehefteten Modelle (plus das aktuelle Standardmodell) als aufrufbare Claude-Code-Agenten (ocx-*). Gilt ab der nächsten Sitzung.",
   "claude.webSearchSidecar": "Websuche-Sidecar überschreiben",
   "claude.webSearchSidecarHint": "Überschreibt den allgemeinen Websuche-Sidecar für Claude-Code-Anfragen.",
   "claude.visionSidecar": "Vision-Sidecar überschreiben",

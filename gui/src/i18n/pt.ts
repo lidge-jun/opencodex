@@ -3425,7 +3425,7 @@ export const pt: Record<TKey, string> = {
   "claude.autoCompactWindowDesc": "As mensagens mais antigas são resumidas quando a conversa chega a este ponto. Ele nunca excede o limite de cada modelo, então modelos de 200k não são afetados.",
   "claude.autoCompactWindowWarn": "Alterar isto pode quebrar modelos GPT — se for definido acima do limite real do modelo, as conversas darão erro antes de o resumo entrar em ação.",
   "claude.injectAgents": "Registrar subagentes automaticamente",
-  "claude.injectAgentsDesc": "Registra os modelos escolhidos na aba Subagentes (mais o modelo padrão atual) como agentes despacháveis do Claude Code (ocx-*). Vale a partir da próxima sessão.",
+  "claude.injectAgentsDesc": "Registra os modelos fixados no seletor de modelos do cliente, na página Modelos (mais o modelo padrão atual), como agentes despacháveis do Claude Code (ocx-*). Vale a partir da próxima sessão.",
   "claude.webSearchSidecar": "Substituição do sidecar de busca na web",
   "claude.webSearchSidecarHint": "Substitui o sidecar principal de busca na web nas requisições do Claude Code.",
   "claude.visionSidecar": "Substituição do sidecar de visão",

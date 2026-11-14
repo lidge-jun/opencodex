@@ -3403,7 +3403,7 @@ export const tr: Record<TKey, string> = {
   "claude.autoCompactWindowDesc": "Sohbet bu noktaya ulaştığında eski mesajlar özetlenir. Her modelin kendi sınırını asla aşmaz, bu nedenle 200k modeller etkilenmez.",
   "claude.autoCompactWindowWarn": "Bunu değiştirmek GPT modellerini bozabilir — bir modelin gerçek sınırından daha yüksek ayarlanırsa, sohbetler özet devreye girmeden önce hata verecektir.",
   "claude.injectAgents": "Alt ajanları otomatik kaydet",
-  "claude.injectAgentsDesc": "Alt Ajanlar sekmesinde seçilen modelleri (ve mevcut varsayılan modeli) çağrılabilir Claude Code ajanları (ocx-*) olarak kaydeder. Sonraki oturumdan itibaren uygulanır.",
+  "claude.injectAgentsDesc": "Modeller sayfasındaki İstemci model seçicisinde sabitlenen modelleri (ve mevcut varsayılan modeli) çağrılabilir Claude Code ajanları (ocx-*) olarak kaydeder. Sonraki oturumdan itibaren uygulanır.",
   "claude.webSearchSidecar": "Web arama yan araç geçersiz kılması",
   "claude.webSearchSidecarHint": "Claude Code istekleri için ana web arama sidecar'ını geçersiz kılın.",
   "claude.visionSidecar": "Görsel yan araç geçersiz kılması",

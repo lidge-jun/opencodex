@@ -2824,7 +2824,7 @@ export const zh: Record<TKey, string> = {
   "claude.autoCompactWindowDesc": "对话达到该点时自动摘要旧内容。不会超过各模型自身上限，因此 200k 模型不受影响。",
   "claude.autoCompactWindowWarn": "修改该值可能导致 GPT 模型异常——若超过模型真实上限，会在摘要触发前报错。",
   "claude.injectAgents": "自动注册子代理",
-  "claude.injectAgentsDesc": "将“子代理”页选中的模型（以及当前默认模型）注册为 Claude Code 可派遣的代理（ocx-*）。从下一个会话开始生效。",
+  "claude.injectAgentsDesc": "将“模型”页客户端模型选择器中置顶的模型（以及当前默认模型）注册为 Claude Code 可派遣的代理（ocx-*）。从下一个会话开始生效。",
   "claude.webSearchSidecar": "网页搜索附属服务覆盖",
   "claude.webSearchSidecarHint": "仅对 Claude Code 请求覆盖主网页搜索附属服务设置。",
   "claude.visionSidecar": "视觉附属服务覆盖",

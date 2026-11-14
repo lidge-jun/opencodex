@@ -2556,7 +2556,7 @@ export const zhTW: Record<TKey, string> = {
   "claude.autoCompactWindowDesc": "對話達到該點時自動摘要舊內容。不會超過各模型自身上限，因此 200k 模型不受影響。",
   "claude.autoCompactWindowWarn": "修改該值可能導致 GPT 模型異常——若超過模型真實上限，會在摘要觸發前報錯。",
   "claude.injectAgents": "自動註冊子代理",
-  "claude.injectAgentsDesc": "將“子代理”頁選中的模型（以及當前預設模型）註冊為 Claude Code 可派遣的代理（ocx-*）。從下一個會話開始生效。",
+  "claude.injectAgentsDesc": "將「模型」頁用戶端模型選擇器中置頂的模型（以及當前預設模型）註冊為 Claude Code 可派遣的代理（ocx-*）。從下一個會話開始生效。",
   "claude.webSearchSidecar": "網頁搜尋附屬服務覆蓋",
   "claude.webSearchSidecarHint": "僅對 Claude Code 請求覆蓋主網頁搜尋附屬服務設定。",
   "claude.visionSidecar": "視覺附屬服務覆蓋",
