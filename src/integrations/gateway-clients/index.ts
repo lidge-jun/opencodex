@@ -32,8 +32,8 @@ export function resolveGatewayTarget(config: Pick<OcxConfig, "hostname" | "unaut
     return { ok: false, code: "requires-admission-token", message: `${destination.origin} requires an opencodex data-plane credential, and OpenCodex will not write a real secret into client files. Enable \`unauthenticatedLoopbackListener\` or bind the proxy to loopback.` };
   }
   const defaultModel = model?.trim();
-  // eslint-disable-next-line no-control-regex
-  if (defaultModel !== undefined && (defaultModel.length === 0 || defaultModel.length > 200 || /[\x00-\x1f\x7f]/.test(defaultModel))) {
+  const hasControlChar = defaultModel !== undefined && [...defaultModel].some((ch) => ch.charCodeAt(0) < 0x20 || ch.charCodeAt(0) === 0x7f);
+  if (defaultModel !== undefined && (defaultModel.length === 0 || defaultModel.length > 200 || hasControlChar)) {
     return { ok: false, code: "invalid-model", message: "The model selector must be a non-empty single-line string of at most 200 characters." };
   }
   return { ok: true, target: { url: destination.origin, apiKey: GATEWAY_PLACEHOLDER_KEY, ...(defaultModel ? { defaultModel } : {}) } };
