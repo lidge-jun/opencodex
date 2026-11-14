@@ -6,7 +6,7 @@ import { anthropicModelPercents, anthropicModelRankPercent, anthropicModelWeekly
 import { resolveAnthropicAccountIdentity } from "../../src/oauth/anthropic-identity";
 import { providerQuotaWindows } from "../../src/quota-pool/assemble";
 import { pooledWindows } from "../../src/quota-pool/pooled";
-import { anthropicResetGrantBlocker, parseAnthropicResetGrantStatus } from "../../src/providers/anthropic-reset-grants";
+import { anthropicResetGrantBlocker, claimAnthropicResetGrant, fetchAnthropicResetGrantStatus, parseAnthropicResetGrantStatus } from "../../src/providers/anthropic-reset-grants";
 import { normalizeAnthropicQuota } from "../../src/providers/quota/account-cache";
 import { earliestQuotaResetAt } from "../../src/combos/reset-window";
 import type { ProviderQuota } from "../../src/providers/quota-types";
@@ -312,4 +312,19 @@ test("cached quota windows drop a weekly share outside (0, 100] and keep the row
   const valid = { label: "Fable", scope: "model" as const, percent: 4, resetAt: future, weeklyAllowancePercent: 50 };
   expect(normalizeAnthropicQuota({ weeklyPercent: 40, weeklyResetAt: future, updatedAt: now, displayWindows: [valid] }, now)?.displayWindows)
     .toEqual([valid]);
+});
+
+test("every Anthropic bearer request refuses redirects, like the profile probe", async () => {
+  const seen: Array<RequestRedirect | undefined> = [];
+  const fetchFn = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+    seen.push(init?.redirect);
+    return Response.json({}, { status: 500 });
+  }) as typeof fetch;
+  globalThis.fetch = fetchFn;
+  await probeAnthropicUsageQuota("synthetic-usage-bearer");
+  const options = { accessToken: "synthetic-usage-bearer", fetchFn };
+  await fetchAnthropicResetGrantStatus(options).catch(() => {});
+  await claimAnthropicResetGrant({ ...options, organizationUuid: "00000000-0000-4000-8000-000000000000",
+    grantId: "synthetic-grant", requestId: "synthetic-request" }).catch(() => {});
+  expect(seen).toEqual(["error", "error", "error"]);
 });

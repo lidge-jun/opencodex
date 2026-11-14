@@ -234,6 +234,8 @@ async function getAccountJson(path: string, options: AnthropicAccountRequestOpti
   try {
     response = await fetchImpl(`${options.origin ?? ANTHROPIC_API_ORIGIN}${path}`, {
       method: "GET",
+      // A redirect must never carry the bearer to another host.
+      redirect: "error",
       headers: accountHeaders(options.accessToken, false),
       signal: readSignal(options.signal, READ_TIMEOUT_MS),
     });
@@ -296,6 +298,8 @@ export async function claimAnthropicResetGrant(options: AnthropicResetClaimOptio
   try {
     response = await fetchImpl(url, {
       method: "POST",
+      // A refused 307/308 lands in the unknown-outcome catch below instead of re-posting the claim.
+      redirect: "error",
       headers: accountHeaders(options.accessToken, true),
       body: JSON.stringify({
         program: ANTHROPIC_RESET_GRANT_PROGRAM,
