@@ -189,7 +189,7 @@ describe("ocx stop under an update handover", () => {
     expect(child.error, child.stderr).toBeUndefined();
     const report = JSON.parse(readFileSync(join(home, "parent-stop-result.json"), "utf8")) as {
       calls: { native: number; grok: number; cleared: number; service: number };
-      nonce?: string; receiptExists: boolean; unexpectedIo: string[];
+      nonce?: string; receiptExists: boolean; unexpectedIo: string[]; urls: string[];
     };
     expect(report.unexpectedIo, child.stderr).toEqual([]);
     return { ...report, exitCode: child.status, stdout: child.stdout, stderr: child.stderr };
@@ -218,6 +218,8 @@ describe("ocx stop under an update handover", () => {
   test("hands over when the service manager stops the proxy itself", () => {
     const run = runStop(true, { managerCascades: true, deadPidReadsNull: true });
     expect(run.exitCode, run.stderr).toBe(STOP_TEARDOWN_HANDED_OVER_EXIT_CODE);
+    // The manager stopped the proxy: no stop request was needed (on Windows, Part A did it).
+    expect(run.urls).toEqual([]);
     expect(run.calls).toMatchObject({ native: 0, grok: 0, cleared: 0, service: 1 });
     expect(isUpdateHandoverReceipt(run.nonce ?? null)).toBe(true);
   });
@@ -225,6 +227,7 @@ describe("ocx stop under an update handover", () => {
   test("a manager-stopped ordinary stop still restores", () => {
     const run = runStop(false, { managerCascades: true, deadPidReadsNull: true });
     expect(run.exitCode, run.stderr).toBe(0);
+    expect(run.urls).toEqual([]);
     expect(run.calls).toMatchObject({ native: 1, grok: 1 });
     expect(receiptNames()).toEqual([]);
   });
@@ -239,6 +242,7 @@ describe("ocx stop under an update handover", () => {
     } }));
     const run = runStop(true, { managerCascades: true, deadPidReadsNull: true });
     expect(run.exitCode, run.stderr).toBe(0);
+    expect(run.urls).toEqual([]);
     expect(run.calls).toMatchObject({ native: 1, grok: 1, service: 1 });
     expect(run.receiptExists).toBe(false);
     expect(receiptNames()).toEqual([]);

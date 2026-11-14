@@ -329,7 +329,13 @@ if ((process.platform === "win32" || process.env.OCX_TEST_WIN_STOP === "1") && !
   // The fake PID must never be inspected by the host's process table or service manager.
   const { partAResult, partBResult } = await import("../helpers/windows-stop-caller-fixtures");
   (await import("../../src/service/windows-service-stop")).setWindowsServiceStopHooksForTests({
-    partA: async () => { calls.service++; return partAResult("absent"); },
+    // A manager that stops the proxy itself is the Windows Part A that ends the child; otherwise
+    // nothing is registered, as the POSIX service mock above answers "absent".
+    partA: async () => {
+      calls.service++;
+      if (options.managerCascades) { alive = false; return partAResult("stopped"); }
+      return partAResult("absent");
+    },
     partB: async () => { calls.partB++; return partBResult("freed"); },
   });
 }
