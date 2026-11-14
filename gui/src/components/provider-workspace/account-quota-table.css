@@ -148,9 +148,48 @@
 .aqt-next {
   margin-top: var(--space-1);
 }
+.aqt-status {
+  white-space: nowrap;
+}
 .aqt-flag--ok { color: var(--green); }
 .aqt-flag--warn { color: var(--amber); }
 .aqt-flag--muted { color: var(--muted); }
+.aqt-flag--danger {
+  color: var(--red);
+  font-weight: 500;
+}
+.aqt-banned {
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid color-mix(in oklab, var(--red) 45%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--red-soft);
+}
+.aqt-banned summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-1) var(--space-3);
+  cursor: pointer;
+  list-style: none;
+}
+.aqt-banned summary::-webkit-details-marker {
+  display: none;
+}
+.aqt-banned-text {
+  color: var(--red);
+}
+.aqt-banned-more {
+  color: var(--primary, var(--blue));
+  text-decoration: underline;
+}
+.aqt-banned[open] .aqt-banned-more {
+  display: none;
+}
+.aqt-banned p {
+  margin: var(--space-1) 0 0;
+  font-size: var(--text-caption);
+  overflow-wrap: anywhere;
+}
 
 /* Narrow: each account becomes a stacked block — account, plan and status on one line, then one
    line per pool with its 5-hour and weekly bars side by side, then the controls — so nothing has
@@ -203,7 +242,8 @@
     column-gap: var(--space-3);
     min-width: 0;
   }
-  .aqt-row > .aqt-pool--empty {
+  .aqt-row > .aqt-pool--empty,
+  .aqt-row > .aqt-pool--banned {
     display: block;
   }
   .aqt-pool > .aqt-bar + .aqt-bar {

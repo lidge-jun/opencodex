@@ -84,7 +84,7 @@ export function planDisplayName(plan: string | null | undefined, planLabel?: str
   return PLAN_NAMES[plan.trim().toLowerCase()] ?? plan.trim();
 }
 
-export type AccountFlag = "ok" | "paused" | "reauth" | "rateLimited" | "quotaLimited" | "warning" | "probeFailed" | "slow" | "stale";
+export type AccountFlag = "ok" | "banned" | "paused" | "verify" | "reauth" | "rateLimited" | "quotaLimited" | "warning" | "probeFailed" | "slow" | "stale";
 
 /** A probe slower than this is flagged; real Antigravity quota reads answer in about a second. */
 export const SLOW_PROBE_MS = 8_000;
@@ -97,6 +97,13 @@ export interface QuotaTableAccount {
   active: boolean;
   paused: boolean;
   needsReauth?: boolean;
+  /** Upstream asked for account verification (a 403), as opposed to a refused refresh token. */
+  verifyRequired?: boolean;
+  /**
+   * Auto-paused because upstream refused the account itself (`account_permission_denied`).
+   * The row replaces its quota cells with one notice; resuming is the manual way back.
+   */
+  banned?: { message?: string; pausedAt?: number; statusCode?: number };
   health?: { status: string; reason?: string };
   quota?: QuotaLike | null;
   quotaUnavailable?: boolean;
@@ -137,7 +144,9 @@ function clampRemaining(usedPercent: number): number {
 }
 
 function accountFlag(account: QuotaTableAccount): { flag: AccountFlag; probeStatus?: string } {
+  if (account.banned) return { flag: "banned" };
   if (account.paused) return { flag: "paused" };
+  if (account.verifyRequired) return { flag: "verify" };
   if (account.needsReauth || account.health?.status === "reauth_required") return { flag: "reauth" };
   if (account.health?.status === "cooldown") return { flag: account.health.reason === "rate_limit" ? "rateLimited" : "quotaLimited" };
   const probe = account.probe;

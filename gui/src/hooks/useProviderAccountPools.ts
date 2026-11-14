@@ -35,10 +35,13 @@ export interface OAuthAccount extends AccountQuotaReading {
   maskedLabel?: string;
   active: boolean;
   needsReauth?: boolean;
+  /** `verify_account`: upstream asked to verify the account rather than refusing the refresh token. */
+  needsReauthReason?: string;
   autoSelectable?: boolean;
   skipReason?: "needs_reauth" | "paused" | "suspended" | "cooldown" | "quota_exhausted";
   paused?: boolean;
-  pauseDetails?: { reason: string; pausedAt: number };
+  /** `message` (redacted upstream text) and `statusCode` are set only by auto-pause on an account refusal. */
+  pauseDetails?: { reason: string; pausedAt: number; message?: string; statusCode?: number };
   pauseEvidence?: AccountPauseEvidence;
   autoSwitchThresholdOverride?: number | null;
   autoSwitchThreshold?: number;

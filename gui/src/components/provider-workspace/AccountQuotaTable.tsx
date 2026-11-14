@@ -6,8 +6,8 @@ import {
 } from "../../provider-workspace/account-quota-table";
 import "./account-quota-table.css";
 
-const FLAG_TONE: Record<AccountFlag, "ok" | "warn" | "muted"> = {
-  ok: "ok", slow: "warn", stale: "muted", warning: "warn", probeFailed: "warn",
+const FLAG_TONE: Record<AccountFlag, "ok" | "warn" | "muted" | "danger"> = {
+  banned: "danger", verify: "warn", ok: "ok", slow: "warn", stale: "muted", warning: "warn", probeFailed: "warn",
   rateLimited: "warn", quotaLimited: "warn", reauth: "warn", paused: "muted",
 };
 
@@ -32,6 +32,24 @@ function PoolBar({ label, cell, now }: { label: string; cell: PoolCell; now: num
       <span className="aqt-bar-value">{t("acctTable.left", { percent: remaining })}</span>
       <span className="aqt-bar-reset">{countdown ? t("acctTable.resetsIn", { time: countdown }) : ""}</span>
     </div>
+  );
+}
+
+/** One line in place of the quota cells: the account is refused upstream, so its numbers are moot. */
+function BannedNotice({ banned }: { banned: NonNullable<QuotaTableAccount["banned"]> }) {
+  const t = useT();
+  const when = typeof banned.pausedAt === "number" && Number.isFinite(banned.pausedAt) ? new Date(banned.pausedAt).toLocaleString() : null;
+  return (
+    <details className="aqt-banned">
+      <summary>
+        <span className="aqt-banned-text">{t("acctTable.bannedRow")}</span>
+        <span className="aqt-banned-more">{t("acctTable.bannedReason")}</span>
+      </summary>
+      <p>{banned.message?.trim() || t("accountPause.reason.permissionDenied")}</p>
+      {(when || banned.statusCode) && (
+        <p className="faint">{[when, banned.statusCode ? `HTTP ${banned.statusCode}` : null].filter(Boolean).join(" · ")}</p>
+      )}
+    </details>
   );
 }
 
@@ -107,7 +125,9 @@ export function AccountQuotaTable({ accounts, strategy, renderAccount, renderAct
                       ? <span className="badge badge-green" title={row.account.plan ? t("acctTable.planSource", { tier: row.account.plan }) : undefined}>{row.plan}</span>
                       : <span className="badge badge-muted">{t("acctTable.unknownPlan")}</span>}
                   </td>
-                  {table.pools.length > 0 && (Object.keys(row.cells).length === 0
+                  {table.pools.length > 0 && (row.account.banned
+                    ? <td colSpan={table.pools.length} className="aqt-pool aqt-pool--banned"><BannedNotice banned={row.account.banned} /></td>
+                    : Object.keys(row.cells).length === 0
                     ? <td colSpan={table.pools.length} className="aqt-pool aqt-pool--empty faint">{t("acctTable.noReading")}</td>
                     : table.pools.map(pool => {
                       const cell = row.cells[pool.key];
