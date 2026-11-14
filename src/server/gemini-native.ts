@@ -1,6 +1,6 @@
 import type { OcxConfig } from "../types";
 import { getValidAccessSnapshotForAccount, forceRefreshOAuthAccessSnapshot, OAuthLoginRequiredError, OAuthAccountPausedError, OAuthTokenRefreshBusyError, OAuthTokenRefreshStaleError, type OAuthAccessSnapshot } from "../oauth";
-import { getAccountSet } from "../oauth/store";
+import { getAccountSet, getAccountCredentialWithStatus } from "../oauth/store";
 import { getProviderRegistryEntry } from "../providers/registry";
 import { sendTrackingRequestSlot, waitForProviderRequestSlot, RequestPacingQueueOverloadError, RequestPacingProviderRemovedError } from "../providers/request-pacing";
 import { antigravityUserAgentForWireModel } from "../adapters/google-antigravity-wire";
@@ -86,6 +86,9 @@ export async function handleGeminiNative(
     const stallMs = resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream: isLocalUpstream(baseUrl) });
     if (stallMs > 0) timer = setTimeout(() => ac.abort(new Error("Gemini upstream stalled")), stallMs);
   };
+  const noteNativeError = () => {
+    if (logCtx) { logCtx.errorCode = GEMINI_NATIVE_ERROR_CODE; logCtx.terminalSource = "upstream"; }
+  };
   let upstream: Response | undefined;
   try {
     const maxBytes = Math.min(GEMINI_NATIVE_MAX_BYTES, config.maxInboundBodyBytes ?? GEMINI_NATIVE_MAX_BYTES);
@@ -122,6 +125,11 @@ export async function handleGeminiNative(
       const slot = await waitForProviderRequestSlot(PROVIDER, provider, model, ac.signal);
       upstream = await sendTrackingRequestSlot(slot, () => {
         ac.signal.throwIfAborted();
+        // A pacing wait must not outlive an operator pause, reauth mark or account removal.
+        const account = getAccountCredentialWithStatus(PROVIDER, access.accountId);
+        if (!account) throw new OAuthLoginRequiredError(PROVIDER);
+        if (account.paused) throw new OAuthAccountPausedError();
+        if (account.needsReauth) throw new OAuthLoginRequiredError(PROVIDER);
         if (spendUnsupported()) throw new NativeSpendLimitsUnsupported();
         if (!reserveWorkflowSend(rootId, currentWorkflowBudgetPolicy())) throw new NativeWorkflowSendDenied();
         return fetchWithAttemptDeadline(`${baseUrl.replace(/\/$/, "")}/v1internal:${method}`, {
@@ -161,13 +169,14 @@ export async function handleGeminiNative(
       cancel(reason) { ac.abort(reason); finish(); return reader.cancel(reason); },
     });
     if (upstream.ok && streaming) {
-      return new Response(body.pipeThrough(geminiSseTransform(GEMINI_NATIVE_MAX_BYTES, () => {
-        if (logCtx) { logCtx.errorCode = GEMINI_NATIVE_ERROR_CODE; logCtx.terminalSource = "upstream"; }
-      })), { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });
+      return new Response(body.pipeThrough(geminiSseTransform(GEMINI_NATIVE_MAX_BYTES, noteNativeError)), { headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" } });
     }
     const text = await readGeminiText(body, GEMINI_NATIVE_MAX_BYTES, ac.signal);
     if (text === null) return geminiNativeError(502, "Gemini upstream response exceeds the body limit");
-    return new Response(unwrapGeminiResponse(text), { headers: { "Content-Type": "application/json" } });
+    const response = unwrapGeminiResponse(text);
+    const error: unknown = (JSON.parse(response) as { error?: unknown }).error;
+    if (error && typeof error === "object" && !Array.isArray(error)) noteNativeError();
+    return new Response(response, { headers: { "Content-Type": "application/json" } });
   } catch (error) {
     ac.abort(); finish();
     void upstream?.body?.cancel().catch(() => {});

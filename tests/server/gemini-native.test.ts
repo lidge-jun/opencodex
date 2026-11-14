@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import * as oauthStore from "../../src/oauth/store";
 import type { OcxConfig } from "../../src/types";
 import { handleGeminiNative, type GeminiNativeDeps } from "../../src/server/gemini-native";
 import { getActiveTurnCount, tryAdmitTurn } from "../../src/server/lifecycle";
@@ -8,6 +9,12 @@ import type { OAuthAccessSnapshot } from "../../src/oauth";
 const config = { providers: { "google-antigravity": { adapter: "google", baseUrl: "https://daily-cloudcode-pa.googleapis.com", authMode: "oauth" } } } as OcxConfig;
 const old: OAuthAccessSnapshot = { provider: "google-antigravity", accountId: "fixture-account", generation: "old", accessToken: "fixture-old-token", projectId: "fixture-project" };
 const fresh = { ...old, generation: "new", accessToken: "fixture-new-token" };
+const fixtureAccount = () => ({ credential: { access: old.accessToken, refresh: "fixture-refresh", expires: Date.now() + 3600_000, projectId: old.projectId }, paused: false, needsReauth: false });
+let accountStatus: ReturnType<typeof oauthStore.getAccountCredentialWithStatus>;
+let accountStatusSpy: ReturnType<typeof spyOn<typeof oauthStore, "getAccountCredentialWithStatus">>;
+beforeEach(() => { accountStatus = fixtureAccount(); accountStatusSpy = spyOn(oauthStore, "getAccountCredentialWithStatus").mockImplementation(() => accountStatus); });
+afterEach(() => accountStatusSpy.mockRestore());
+
 function request(body = '{"contents":[],"future":9007199254740993123}', signal?: AbortSignal) {
   return new Request("http://localhost/v1beta/models/gemini-test:generateContent", { method: "POST", body, signal, headers: { Authorization: "Bearer fixture-client-key" } });
 }
@@ -330,4 +337,54 @@ test("known setup errors retain actionable auth, pacing and configuration respon
   expect(response.status).toBe(503);
   const message = await response.text();
   expect(message).toContain("baseUrl"); expect(message).not.toContain("169.254.169.254");
+});
+
+test("queued native sends recheck paused, reauth and removed accounts before initial and 401 dispatch", async () => {
+  const { waitForProviderRequestSlot, providerRequestPacingStatus } = await import("../../src/providers/request-pacing");
+  const provider = { ...config.providers["google-antigravity"], requestPacing: { enabled: true, maxConcurrentRequests: 1 } };
+  const cfg = { ...config, providers: { "google-antigravity": provider } };
+  const baseline = getActiveTurnCount();
+  for (const retry of [false, true]) for (const state of ["paused", "needsReauth", "removed"] as const) {
+    accountStatus = fixtureAccount();
+    let sends = 0;
+    let blocker: Awaited<ReturnType<typeof waitForProviderRequestSlot>> | undefined;
+    if (!retry) blocker = await waitForProviderRequestSlot("google-antigravity", provider, "gemini-test");
+    const ac = new AbortController();
+    const pending = run(request(undefined, ac.signal), {
+      access: async () => old,
+      refresh: async () => { blocker = await waitForProviderRequestSlot("google-antigravity", provider, "gemini-test"); return fresh; },
+      fetch: transport(() => { sends++; return new Response('{"response":{}}', { status: retry ? 401 : 200 }); }),
+    }, false, cfg);
+    try {
+      const deadline = Date.now() + 1000;
+      while (providerRequestPacingStatus("google-antigravity", provider).queued !== 1 && Date.now() < deadline) await Bun.sleep(0);
+      expect(providerRequestPacingStatus("google-antigravity", provider).queued).toBe(1);
+      accountStatus = state === "removed" ? null : { ...fixtureAccount(), [state]: true };
+      blocker!.release();
+      expect((await pending).status).toBe(503);
+      expect(sends).toBe(retry ? 1 : 0);
+      expect(accountStatusSpy).toHaveBeenLastCalledWith("google-antigravity", old.accountId);
+    } finally { blocker?.release(); ac.abort(); await pending; }
+  }
+  expect(getActiveTurnCount()).toBe(baseline);
+});
+
+test("buffered native errors preserve original JSON and log failure without retaining diagnostics", async () => {
+  const { logGeminiNativeDelivery } = await import("../../src/server/gemini-native-log");
+  const { getRequestLogEntries } = await import("../../src/server/request-log");
+  const req = request(), lease = tryAdmitTurn(undefined, req.signal)!;
+  const context = { model: "gemini-test", provider: "google-antigravity" };
+  const id = `gemini-buffered-error-fixture-${crypto.randomUUID()}`;
+  const payload = '{"error":{"code":500,"message":"private buffered diagnostic","future":9007199254740993123}}';
+  try {
+    const response = await handleGeminiNative(req, config, "gemini-test", false, lease, {
+      access: async () => old, refresh: async () => fresh,
+      fetch: transport(() => new Response(`{"response":${payload}}`)),
+    }, context);
+    const delivery = logGeminiNativeDelivery(response, req, id, Date.now(), context);
+    expect(delivery.status).toBe(200); expect(await delivery.text()).toBe(payload);
+    const row = getRequestLogEntries().find(entry => entry.requestId === id);
+    expect(row).toMatchObject({ status: 502, terminalStatus: "failed", errorCode: "upstream_server_error", terminalSource: "upstream" });
+    expect(JSON.stringify(row)).not.toContain("private buffered diagnostic");
+  } finally { lease.release(); }
 });

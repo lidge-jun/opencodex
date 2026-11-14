@@ -10,6 +10,8 @@ caller-session identity, active-turn/workflow admission and the HTTP idle-timeou
 active, usable OAuth account. Snapshot token and project stay together, including after one
 401-triggered refresh of the rejected generation. OC's provider pacing applies to each physical
 send, including workflow physical-send reservation for the initial dispatch and 401 recovery.
+After pacing, each physical send rechecks the captured account for pause, reauthentication or
+removal, including on 401 recovery; a queued request cannot outlive those account controls.
 Applicable root, identity or pool token-spend ceilings are refused before dispatch with 503 and
 `gemini_native_spend_limits_unsupported`, because native token spend is unreported.
 Redirects are manual; destination policy checks the configured base URL. Ingress credentials
@@ -43,7 +45,7 @@ from OC's known AGY registry/cache/config catalog, filtered by destination scope
 check. Unsupported methods and Interactions return explicit errors.
 
 `src/server/gemini-native-log.ts` records delivery status, latency, client and admission identity
-without inspecting payloads or retaining prompts/signatures. Token usage and pricing are unreported. Native SSE error objects are forwarded unchanged but
+without inspecting payloads or retaining prompts/signatures. Token usage and pricing are unreported. Native SSE and buffered error objects are forwarded unchanged but
 settle the delivery log as failed without copying the upstream error message.
 Upstream HTTP errors use a fixed native JSON error and retain only a numeric Retry-After.
 
