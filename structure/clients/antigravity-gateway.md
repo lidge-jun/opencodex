@@ -34,12 +34,17 @@ wrote. Disconnect then restores in one of three ways.
 - **exact.** The file still equals what OpenCodex wrote, so the original bytes are written back, or the file
   and the directories OpenCodex created are removed when it did not exist.
 - **path-wise.** The user edited the file since. Only OpenCodex's own entries are reverted: `gateway`,
-  `models.defaultModelId` and `models.list` in the app settings, the marked block in a profile. Every other
-  edit is kept, and an entry the user changed after connecting is left as the user set it.
+  `models.defaultModelId` and `models.list` in the app settings, the marked block in a profile. Every edit
+  outside those is kept, and a settings entry the user changed after connecting is left as the user set it.
+  A profile block is removed whole, so an edit made inside its markers is not kept.
 - **none.** There is no record, or the file is already gone; nothing is changed.
 
 Connecting again while connected keeps the first record, so disconnect still returns to the user's own
-state. A settings file with comments, trailing commas or a non-object root is refused with
+state; when the file was edited in between, the record is marked so disconnect restores path-wise and keeps
+that edit. The app settings write is journaled: the record names the new write as pending before the file
+changes and promotes it afterwards, so disconnect recognises the file whether or not that write landed. A
+profile is read as UTF-8 or BOM-prefixed UTF-16LE (what Windows PowerShell 5.1 redirection writes) and
+written back in the same encoding; any other encoding is refused with `unsupported-file`. A settings file with comments, trailing commas or a non-object root is refused with
 `unsupported-file` and left untouched, because it cannot be round-tripped.
 
 ## Which setting wins

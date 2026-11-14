@@ -1242,7 +1242,8 @@ ocx disconnect antigravity             # or: ocx disconnect agy
 ```
 
 Connect records what it replaced. Disconnect puts the original bytes back when the file is unchanged, and
-otherwise reverts only OpenCodex's own entries and keeps your edits. Restart Antigravity, or open a new
+otherwise reverts only OpenCodex's own entries and keeps your other edits. The marked `agy` block in a
+shell profile is removed whole, including any edit made inside it. Restart Antigravity, or open a new
 terminal for `agy`, to apply a change.
 
 OpenCodex writes a placeholder key, never a real credential, so it refuses to connect when the proxy bind
