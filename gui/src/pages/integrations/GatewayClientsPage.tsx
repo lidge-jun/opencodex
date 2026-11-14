@@ -1,29 +1,85 @@
 import { useCallback, useId, useState } from "react";
 import { useDataSurface } from "../../data-surface";
 import { DataSurfaceSkeleton } from "../../components/data-surface";
-import { useT } from "../../i18n/shared";
+import { useT, type TKey } from "../../i18n/shared";
 import { Notice } from "../../ui";
-import IntegrationStateBadge from "./IntegrationStateBadge";
 import {
   loadGatewayClients,
   runGatewayClientAction,
   type GatewayClientAction,
   type GatewayClientActionOutcome,
+  type GatewayClientId,
   type GatewayClientState,
   type GatewayClientStatus,
+  type GatewayNoteCode,
+  type GatewayOverrideCode,
 } from "./gateway-clients-api";
 
 /**
  * Antigravity and agy read their gateway from files the proxy can write, so unlike the Cursor
  * tab this one is a switch. The server owns the backup and the restore; the page only shows what
- * the status route reports and relays what an action answered.
+ * the status route reports and says what an action did. Both arrive as codes, translated here.
  */
 
-const BADGE_STATE = {
-  connected: "current",
-  disconnected: "absent",
-  drifted: "stale",
-} as const satisfies Record<GatewayClientState, "current" | "absent" | "stale">;
+/** Badge per state, in the words of the buttons next to it rather than the file tabs' "Applied". */
+const BADGE: Record<GatewayClientState, { key: TKey; className: string }> = {
+  connected: { key: "gatewayClients.connected", className: "badge badge-green" },
+  disconnected: { key: "gatewayClients.notConnected", className: "badge badge-muted" },
+  drifted: { key: "integrations.state.stale", className: "badge badge-amber" },
+};
+
+const OVERRIDE_KEYS: Record<GatewayOverrideCode, TKey> = {
+  "admin-gateway": "gatewayClients.overrideAdminGateway",
+  "admin-unreadable": "gatewayClients.overrideAdminUnreadable",
+  "env-gateway": "gatewayClients.overrideEnv",
+};
+
+/** `null`: the restart hint is said once, in the message after an action, not as a standing note. */
+const NOTE_KEYS: Record<GatewayNoteCode, TKey | null> = {
+  "restart-app": null,
+  "new-terminal": null,
+  "no-google-sign-in": "gatewayClients.noteNoGoogleSignIn",
+  "agy-follows-app": "gatewayClients.noteAgyFollowsApp",
+  "settings-not-json": "gatewayClients.noteSettingsNotJson",
+  "settings-not-object": "gatewayClients.noteSettingsNotObject",
+  "no-restore-record": "gatewayClients.noteNoRestoreRecord",
+  "agy-version": "gatewayClients.noteAgyVersion",
+  "windows-unverified": "gatewayClients.noteWindowsUnverified",
+  "agy-env-exported": "gatewayClients.noteAgyEnvExported",
+};
+
+const REFUSAL_KEYS: Record<string, TKey> = {
+  "requires-admission-token": "gatewayClients.refusedCredential",
+  "invalid-model": "gatewayClients.refusedModel",
+  "unsupported-file": "gatewayClients.refusedFile",
+};
+
+const APPLY_HINT: Record<GatewayClientId, TKey> = {
+  antigravity: "gatewayClients.hintAntigravity",
+  agy: "gatewayClients.hintAgy",
+};
+
+interface OutcomeView { tone: "ok" | "err"; keys: TKey[]; detail: string | null }
+
+function describeOutcome(id: GatewayClientId, action: GatewayClientAction, outcome: GatewayClientActionOutcome): OutcomeView {
+  if (!outcome.reached) return { tone: "err", keys: ["gatewayClients.actionFailed"], detail: null };
+  if (!outcome.ok) {
+    const known = outcome.code ? REFUSAL_KEYS[outcome.code] : undefined;
+    if (known) return { tone: "err", keys: [known], detail: null };
+    // The text of an I/O error is the operating system's; any other unexpected refusal is shown as sent.
+    return { tone: "err", keys: [outcome.code === "io-error" ? "gatewayClients.refusedIo" : "gatewayClients.refused"], detail: outcome.message };
+  }
+  if (action === "connect") {
+    return outcome.changed
+      ? { tone: "ok", keys: ["gatewayClients.doneConnected", APPLY_HINT[id]], detail: null }
+      : { tone: "ok", keys: ["gatewayClients.doneUnchanged"], detail: null };
+  }
+  if (outcome.restore === "exact" || outcome.restore === "path-wise") {
+    const done: TKey = outcome.restore === "exact" ? "gatewayClients.doneRestored" : "gatewayClients.doneRestoredPartly";
+    return { tone: "ok", keys: [done, APPLY_HINT[id]], detail: null };
+  }
+  return { tone: "ok", keys: ["gatewayClients.doneNothing"], detail: null };
+}
 
 function GatewayClientCard({
   apiBase,
@@ -35,16 +91,25 @@ function GatewayClientCard({
   onSettled: () => void;
 }) {
   const t = useT();
-  const [model, setModel] = useState("");
+  // `null` until the user types: the field then shows what settings.json holds right now.
+  const [modelDraft, setModelDraft] = useState<string | null>(null);
   const [pending, setPending] = useState<GatewayClientAction | null>(null);
-  const [outcome, setOutcome] = useState<GatewayClientActionOutcome | null>(null);
+  const [result, setResult] = useState<OutcomeView | null>(null);
   const modelId = useId();
+  const hintId = useId();
+  const badge = BADGE[client.state];
+  const notes = client.notes.flatMap(note => {
+    const key = NOTE_KEYS[note.code];
+    return key ? [{ code: note.code, key }] : [];
+  });
 
   const run = async (action: GatewayClientAction) => {
     setPending(action);
-    setOutcome(null);
-    const result = await runGatewayClientAction(apiBase, client.id, action, action === "connect" ? model.trim() || undefined : undefined);
-    setOutcome(result);
+    setResult(null);
+    const model = action === "connect" && modelDraft !== null ? modelDraft.trim() || undefined : undefined;
+    const outcome = await runGatewayClientAction(apiBase, client.id, action, model);
+    setResult(describeOutcome(client.id, action, outcome));
+    if (outcome.ok) setModelDraft(null);
     setPending(null);
     onSettled();
   };
@@ -53,28 +118,25 @@ function GatewayClientCard({
     <div className="cursor-card" data-gateway-client={client.id}>
       <h4>
         {client.label}{" "}
-        <IntegrationStateBadge state={BADGE_STATE[client.state]} installed />
+        <span className={badge.className} data-gateway-state={client.state}>{t(badge.key)}</span>
       </h4>
 
       {client.overrides.map(override => (
-        <Notice key={`${override.source}:${override.detail}`} tone="warn">
-          {t(override.source === "admin_settings" ? "gatewayClients.overrideAdmin" : "gatewayClients.overrideEnv")}{" "}
-          <code>{override.detail}</code>
-        </Notice>
+        <Notice key={override.code} tone="warn">{t(OVERRIDE_KEYS[override.code])}</Notice>
       ))}
 
-      <strong>{t("gatewayClients.files")}</strong>
-      <ul>
+      <div>
+        <span className="field-label">{t("gatewayClients.files")}</span>
         {client.files.map(file => (
-          <li key={file.path}>
-            <code>{file.path}</code> <span className="muted">{file.role}{file.exists ? "" : ` · ${t("gatewayClients.fileMissing")}`}</span>
-          </li>
+          <p key={file.path} className="integration-path">
+            {file.path}{file.exists ? "" : ` · ${t("gatewayClients.fileMissing")}`}
+          </p>
         ))}
-      </ul>
+      </div>
 
-      {client.notes.length > 0 && (
+      {notes.length > 0 && (
         <ul className="muted">
-          {client.notes.map(note => <li key={note}>{note}</li>)}
+          {notes.map(note => <li key={note.code}>{t(note.key)}</li>)}
         </ul>
       )}
 
@@ -83,14 +145,15 @@ function GatewayClientCard({
           <label className="field-label" htmlFor={modelId}>{t("gatewayClients.model")}</label>
           <input
             id={modelId}
-            className="input"
-            value={model}
-            onChange={event => setModel(event.target.value)}
+            className="input gateway-client-model"
+            value={modelDraft ?? client.defaultModel ?? ""}
+            onChange={event => setModelDraft(event.target.value)}
             disabled={pending !== null}
             spellCheck={false}
             autoComplete="off"
+            aria-describedby={hintId}
           />
-          <span className="muted">{t("gatewayClients.modelHint")}</span>
+          <span id={hintId} className="muted">{t("gatewayClients.modelHint")}</span>
         </div>
       )}
 
@@ -108,10 +171,10 @@ function GatewayClientCard({
         </button>
       </div>
 
-      {outcome && (
-        <Notice tone={outcome.ok ? "ok" : "err"}>
-          {outcome.message ?? t("gatewayClients.actionFailed")}
-          {outcome.notes.map(note => <span key={note}><br />{note}</span>)}
+      {result && (
+        <Notice tone={result.tone}>
+          {result.keys.map(key => t(key)).join(" ")}
+          {result.detail && <> <code>{result.detail}</code></>}
         </Notice>
       )}
     </div>

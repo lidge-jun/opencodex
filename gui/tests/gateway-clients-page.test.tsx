@@ -50,18 +50,20 @@ beforeEach(() => {
     client({
       id: "antigravity",
       label: "Antigravity",
-      files: [{ path: "/home/u/.antigravity/settings.json", role: "gateway settings", exists: true }],
-      overrides: [{ source: "admin_settings", detail: "/etc/antigravity/admin_settings.json" }],
+      files: [{ path: "/home/u/.antigravity/settings.json", role: "user settings", exists: true }],
+      overrides: [{ source: "admin_settings", code: "admin-gateway", detail: "organization admin_settings.json sets the gateway" }],
+      notes: [{ code: "restart-app", text: "Restart Antigravity to apply a change." }, { code: "no-google-sign-in", text: "In gateway mode the app does not use the Google sign-in." }],
+      defaultModel: "gemini-3-pro",
     }),
     client({
       id: "agy",
       label: "agy CLI",
       state: "connected",
-      files: [{ path: "/home/u/.gemini/agy.json", role: "CLI config", exists: false }],
-      notes: ["Restart agy to pick up the change."],
+      files: [{ path: "/home/u/.bashrc", role: "shell profile", exists: false }],
+      notes: [{ code: "agy-version", text: "Gateway support needs agy 1.2.15 or newer." }],
     }),
   ];
-  actionResponse = () => json({ ok: true, id: "antigravity", action: "connect", changed: true, changedFiles: [], message: "Antigravity now uses OpenCodex.", notes: [], status: clients[0] });
+  actionResponse = () => json({ ok: true, id: "antigravity", action: "connect", changed: true, changedFiles: [], message: "Antigravity now uses OpenCodex.", notes: [{ code: "restart-app", text: "Restart Antigravity to apply a change." }], status: clients[0] });
   const mockFetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     const method = init?.method ?? "GET";
@@ -118,23 +120,27 @@ function button(scope: HTMLElement, label: string): HTMLButtonElement {
   return found as HTMLButtonElement;
 }
 
-test("lists both clients with state, files, notes and the admin_settings warning", async () => {
+test("lists both clients with state, files, translated notes and the admin_settings warning", async () => {
   await mount();
   const antigravity = card("antigravity");
-  expect(antigravity.querySelector("[data-integration-state='absent']")).not.toBeNull();
+  expect(antigravity.querySelector("[data-gateway-state='disconnected']")?.textContent).toBe("Not connected");
   expect(antigravity.textContent).toContain("/home/u/.antigravity/settings.json");
-  expect(antigravity.querySelector(".notice-warn")?.textContent).toContain("admin_settings.json sets a gateway");
-  expect(antigravity.querySelector("input")).not.toBeNull();
+  expect(antigravity.querySelector(".notice-warn")?.textContent).toBe("Your organization's admin_settings.json sets a gateway, so this connection has no effect.");
+  expect(antigravity.textContent).toContain("While connected, the app does not use your Google sign-in.");
+  // The server's English never reaches the page, and the restart hint waits for an action.
+  expect(antigravity.textContent).not.toContain("In gateway mode");
+  expect(antigravity.textContent).not.toContain("Restart Antigravity");
+  expect((antigravity.querySelector("input") as HTMLInputElement).value).toBe("gemini-3-pro");
 
   const agy = card("agy");
-  expect(agy.querySelector("[data-integration-state='current']")).not.toBeNull();
+  expect(agy.querySelector("[data-gateway-state='connected']")?.textContent).toBe("Connected");
   expect(agy.textContent).toContain("not created yet");
-  expect(agy.textContent).toContain("Restart agy to pick up the change.");
+  expect(agy.textContent).toContain("Needs agy 1.2.15 or newer.");
   expect(agy.querySelector("input")).toBeNull();
   expect(button(antigravity, "Disconnect").disabled).toBe(true);
 });
 
-test("connect sends the typed model, shows the server message and rereads status", async () => {
+test("connect sends the typed model, says once to restart and rereads status", async () => {
   await mount();
   const antigravity = card("antigravity");
   const input = antigravity.querySelector("input") as HTMLInputElement;
@@ -150,15 +156,27 @@ test("connect sends the typed model, shows the server message and rereads status
   const post = requests.find(request => request.method === "POST");
   expect(post?.url).toBe(`${apiBase}/api/gateway-clients/antigravity/connect`);
   expect(JSON.parse(post?.body ?? "{}")).toEqual({ model: "gemini-3.8-flash" });
-  expect(card("antigravity").querySelector(".notice-ok")?.textContent).toContain("Antigravity now uses OpenCodex.");
+  expect(card("antigravity").querySelector(".notice-ok")?.textContent).toBe("Connected. Restart Antigravity to apply it.");
   expect(requests.filter(request => request.method === "GET").length).toBeGreaterThan(readsBefore);
 });
 
-test("a refusal shows the server's own message", async () => {
+test("an untouched model field sends no model, so the current one is kept", async () => {
+  await mount();
+  await act(async () => { button(card("antigravity"), "Connect").click(); });
+  await settle();
+  expect(JSON.parse(requests.find(request => request.method === "POST")?.body ?? "null")).toEqual({});
+});
+
+test("a refusal is translated from its code, and an I/O error keeps the system text", async () => {
   actionResponse = () => json({ ok: false, code: "unsupported-file", message: "settings.json is not a JSON object; left untouched." }, 409);
   await mount();
   await act(async () => { button(card("agy"), "Disconnect").click(); });
   await settle();
   expect(requests.find(request => request.method === "POST")?.url).toBe(`${apiBase}/api/gateway-clients/agy/disconnect`);
-  expect(card("agy").querySelector(".notice-err")?.textContent).toContain("settings.json is not a JSON object; left untouched.");
+  expect(card("agy").querySelector(".notice-err")?.textContent).toBe("settings.json could not be read as a JSON object, so OpenCodex left it untouched. Fix the file, then try again.");
+
+  actionResponse = () => json({ ok: false, code: "io-error", message: "EACCES: permission denied" }, 409);
+  await act(async () => { button(card("agy"), "Disconnect").click(); });
+  await settle();
+  expect(card("agy").querySelector(".notice-err code")?.textContent).toBe("EACCES: permission denied");
 });
