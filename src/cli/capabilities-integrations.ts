@@ -285,7 +285,7 @@ export const INTEGRATION_CAPABILITIES: readonly Capability[] = [
     flags: [{"name":"--model","value":"string","summary":"Default model selector written to the Antigravity settings."},{"name":"--json","value":"boolean","summary":"Emit the result as JSON."}],
     mutates: true,
     json: "payload",
-    details: ["agy is an alias of antigravity. Works on this machine only; the files are the Antigravity user settings (antigravity) or shell profiles (agy).", "With no running proxy the same change is made locally. Refused when the proxy bind needs a data-plane credential: no real secret is written into client files."],
+    details: ["agy is an alias of antigravity. Works on this machine only; the files are the Antigravity user settings (antigravity) or shell profiles (agy).", "With no running proxy the same change is made locally, except when the configured port is 0 (no fixed address to write). Refused when the proxy bind needs a data-plane credential: no real secret is written into client files."],
   },
   {
     command: ["connect","antigravity","status"],
@@ -295,7 +295,7 @@ export const INTEGRATION_CAPABILITIES: readonly Capability[] = [
     flags: [{"name":"--json","value":"boolean","summary":"Emit the client status as JSON."}],
     mutates: false,
     json: "payload",
-    details: ["agy is an alias of antigravity. Works on this machine only; the files are the Antigravity user settings (antigravity) or shell profiles (agy).", "With no running proxy the same change is made locally. Refused when the proxy bind needs a data-plane credential: no real secret is written into client files."],
+    details: ["agy is an alias of antigravity. Works on this machine only; the files are the Antigravity user settings (antigravity) or shell profiles (agy).", "With no running proxy the files are inspected locally; nothing is changed. Works whatever the proxy bind requires."],
   },
   {
     command: ["disconnect","antigravity"],
@@ -305,6 +305,6 @@ export const INTEGRATION_CAPABILITIES: readonly Capability[] = [
     flags: [{"name":"--json","value":"boolean","summary":"Emit the result as JSON."}],
     mutates: true,
     json: "payload",
-    details: ["agy is an alias of antigravity. Works on this machine only; the files are the Antigravity user settings (antigravity) or shell profiles (agy).", "With no running proxy the same change is made locally. Refused when the proxy bind needs a data-plane credential: no real secret is written into client files."],
+    details: ["agy is an alias of antigravity. Works on this machine only; the files are the Antigravity user settings (antigravity) or shell profiles (agy).", "With no running proxy the files are restored locally. Works even when the proxy bind needs a data-plane credential, so a connection can always be undone."],
   },
 ];

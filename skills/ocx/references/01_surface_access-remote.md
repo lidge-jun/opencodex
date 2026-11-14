@@ -405,7 +405,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--json` | boolean | Emit the result as JSON. |
 
 - agy is an alias of antigravity. Works on this machine only; the files are the Antigravity user settings (antigravity) or shell profiles (agy).
-- With no running proxy the same change is made locally. Refused when the proxy bind needs a data-plane credential: no real secret is written into client files.
+- With no running proxy the same change is made locally, except when the configured port is 0 (no fixed address to write). Refused when the proxy bind needs a data-plane credential: no real secret is written into client files.
 
 ### `ocx connect antigravity status`
 
@@ -424,7 +424,7 @@ State-changing: no. JSON mode: `payload`.
 | `--json` | boolean | Emit the client status as JSON. |
 
 - agy is an alias of antigravity. Works on this machine only; the files are the Antigravity user settings (antigravity) or shell profiles (agy).
-- With no running proxy the same change is made locally. Refused when the proxy bind needs a data-plane credential: no real secret is written into client files.
+- With no running proxy the files are inspected locally; nothing is changed. Works whatever the proxy bind requires.
 
 ### `ocx disconnect antigravity`
 
@@ -443,7 +443,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--json` | boolean | Emit the result as JSON. |
 
 - agy is an alias of antigravity. Works on this machine only; the files are the Antigravity user settings (antigravity) or shell profiles (agy).
-- With no running proxy the same change is made locally. Refused when the proxy bind needs a data-plane credential: no real secret is written into client files.
+- With no running proxy the files are restored locally. Works even when the proxy bind needs a data-plane credential, so a connection can always be undone.
 
 ### `ocx disconnect`
 
