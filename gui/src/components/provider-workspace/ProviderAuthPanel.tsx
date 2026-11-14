@@ -29,6 +29,8 @@ import ClaudeNativePassthroughSetting from "./ClaudeNativePassthroughSetting";
 import { LoginHint as LoginHintView } from "../login-url-block";
 import { OpenBrowserPrefToggle } from "../open-browser-pref-toggle";
 import ProviderAccountQuota from "./ProviderAccountQuota";
+import { AccountProbeButton, AccountProbeResultLine } from "./AccountProbe";
+import { ACCOUNT_PROBE_PROVIDERS, useAccountProbe } from "../../hooks/useAccountProbe";
 import { GrokCouponBadge, GrokResetCouponModal } from "./GrokResetCoupons";
 import { AnthropicGrantBadge, AnthropicResetGrantModal } from "./AnthropicResetGrants";
 import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
@@ -285,6 +287,9 @@ export default function ProviderAuthPanel({
   const setGrantAccount = (account: OAuthAccountRow | null) => {
     setGrantSelection(account ? { scope: grantScope, account } : null);
   };
+  // Read-only per-account probe (stored token, no refresh); only providers the server implements.
+  const accountProbe = useAccountProbe(apiBase, item.name);
+  const probeEnabled = isOauth && ACCOUNT_PROBE_PROVIDERS.has(item.name) && accounts.length > 0;
   const refreshQuota = async () => {
     if (!onRefreshQuota || refreshingQuota) return;
     const generation = ++quotaRefreshGeneration.current;
@@ -466,6 +471,15 @@ export default function ProviderAuthPanel({
               <IconRefresh width={14} height={14} aria-hidden="true" />
               {" "}
               {refreshingQuota ? t("codexAuth.refreshingQuota") : t("codexAuth.refreshQuota")}
+            </button>
+          </div>
+        )}
+        {probeEnabled && (
+          <div className="pwi-auth-head-actions">
+            <button type="button" className="btn btn-ghost btn-sm" title={t("acctProbe.hint")}
+              aria-busy={accountProbe.allPending} disabled={accountProbe.allPending}
+              onClick={() => { void accountProbe.probeAll(accounts.map(account => account.id)); }}>
+              {accountProbe.allPending ? t("acctProbe.testing") : t("acctProbe.testAll")}
             </button>
           </div>
         )}
@@ -711,6 +725,10 @@ export default function ProviderAuthPanel({
                     {claudeGrantsEnabled && !showReauth && (
                       <AnthropicGrantBadge entry={claudeGrants.entries[account.id]} t={t} onClick={() => setGrantAccount(account)} />
                     )}
+                    {probeEnabled && (
+                      <AccountProbeButton controller={accountProbe} accountId={account.id} label={label}
+                        disabled={accountProbe.allPending} />
+                    )}
                     <button type="button" className="btn btn-ghost btn-sm"
                       onClick={() => void authHandlers.onEditAlias(item.name, "oauth", account.id, account.alias)}>
                       {t("prov.editAlias")}
@@ -729,6 +747,7 @@ export default function ProviderAuthPanel({
                           {normalizeCloudCodeAppealText(account.pauseEvidence?.appealText) ?? t("accountPause.submitAppeal")}
                         </a>
                       )}
+                      {probeEnabled && <AccountProbeResultLine entry={accountProbe.entries[account.id]} />}
                       {isAnthropicPool && account.autoSwitchThresholdOverride !== undefined
                         && account.autoSwitchThreshold !== undefined && authHandlers.onAccountThreshold && (
                         <AccountAutoSwitchControl

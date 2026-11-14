@@ -354,6 +354,41 @@ export async function probeAntigravityUsageQuota(accessToken: string, projectId:
   }
 }
 
+/** Raw outcome of one summary request: the HTTP evidence, not a quota-poller verdict. */
+export type AntigravitySummaryOnceResult =
+  | { kind: "response"; status: number; bodyText: string; quota: ProviderQuota | null }
+  | { kind: "redirect" }
+  | { kind: "transport"; failure: QuotaFailureCode };
+
+const SUMMARY_ERROR_BODY_MAX_CHARS = 8192;
+
+/**
+ * Exactly one read-only `retrieveUserQuotaSummary` request under the CLI fingerprint, for the
+ * per-account probe. Unlike {@link probeAntigravityUsageQuota} there is no 403 retry under the IDE
+ * UA and no models fallback: the operator asked what Google answers this account, and the first
+ * answer is that evidence. The caller owns the token; nothing here refreshes or stores it.
+ */
+export async function fetchAntigravityQuotaSummaryOnce(accessToken: string, projectId: string, signal?: AbortSignal): Promise<AntigravitySummaryOnceResult> {
+  try {
+    const response = await providerOutboundPost("google-antigravity", { baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE }, ANTIGRAVITY_QUOTA_SUMMARY_URL, {
+      headers: {
+        Accept: "application/json", "Content-Type": "application/json",
+        "User-Agent": antigravityCliUserAgent(), Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ project: projectId }),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]) : AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    }, antigravityOutboundDependencies);
+    if (await providerRedirectError(response, ANTIGRAVITY_QUOTA_SUMMARY_URL)) return { kind: "redirect" };
+    if (response.ok) {
+      return { kind: "response", status: response.status, bodyText: "", quota: parseAntigravityQuotaSummary(asRecord(await readQuotaJson(response))) };
+    }
+    const bodyText = await response.text().catch(() => "");
+    return { kind: "response", status: response.status, bodyText: bodyText.slice(0, SUMMARY_ERROR_BODY_MAX_CHARS), quota: null };
+  } catch (error) {
+    return { kind: "transport", failure: quotaTransportFailure(error) };
+  }
+}
+
 export async function fetchAntigravityUsageQuota(accessToken: string, projectId: string): Promise<ProviderQuota | null> {
   const result = await probeAntigravityUsageQuota(accessToken, projectId);
   if (result.kind === "available") return result.quota;
