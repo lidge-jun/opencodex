@@ -469,7 +469,13 @@ export async function getVertexAccessTokenWithAuthority(options?: { signal?: Abo
       verifiedSources.set(adcScope(markerAccount), { source, generation: expected.generation });
       return { token: token.access_token, source, generation: expected.generation, markerAccount };
     } catch (error) {
-      if (!controller.signal.aborted) verifiedSources.delete(adcScope(markerAccount));
+      // Drop only this exchange's own proof: a newer exchange for a changed source may already
+      // have recorded its success under the same scope, and that proof still holds.
+      const scope = adcScope(markerAccount);
+      const verified = verifiedSources.get(scope);
+      if (!controller.signal.aborted && verified?.source === expectedSource && verified.generation === expected.generation) {
+        verifiedSources.delete(scope);
+      }
       throw error;
     } finally {
       owned.settled = true;

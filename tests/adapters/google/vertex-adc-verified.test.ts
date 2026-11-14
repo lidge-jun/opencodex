@@ -89,6 +89,28 @@ describe("Vertex ADC verification", () => {
     expect(dashboardVertex().vertexCredentialVerified).toBe(false);
   });
 
+  test("an older exchange failing after the source changed keeps the newer exchange's proof", async () => {
+    writeUserAdc("fixture-first-login");
+    let releaseFirst!: () => void;
+    const firstHeld = new Promise<void>(resolve => { releaseFirst = resolve; });
+    let firstSent!: () => void;
+    const firstStarted = new Promise<void>(resolve => { firstSent = resolve; });
+    const heldFetch = (async () => {
+      firstSent();
+      await firstHeld;
+      return new Response(JSON.stringify({ access_token: "vertex-tok", expires_in: 3600 }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof fetch;
+    const first = getVertexAccessToken({ fetch: heldFetch });
+    await firstStarted;
+    // The credential file changes mid-exchange; a second exchange for the new source succeeds first.
+    writeUserAdc("fixture-second-login-replaced");
+    await getVertexAccessToken();
+    expect(dashboardVertex().vertexCredentialVerified).toBe(true);
+    releaseFirst();
+    await expect(first).rejects.toThrow("source changed");
+    expect(dashboardVertex().vertexCredentialVerified).toBe(true);
+  });
+
   test("connection test on a static-catalog Vertex row verifies ADC instead of skipping it", async () => {
     writeUserAdc("fixture-refresh");
     const result = await staticCatalogConnectionTest("google-vertex", VERTEX);
