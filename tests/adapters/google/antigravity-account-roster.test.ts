@@ -326,6 +326,24 @@ describe("model routing fails closed on a proven roster omission (#7500)", () =>
     setCachedProviderAccountQuotaForTests(PROVIDER, "acct-55b", spent);
     expect(preferKiroModelSupport(PROVIDER, ["acct-55a", "acct-55b"], "claude-opus-5-5")).toEqual(["acct-55a", "acct-55b"]);
   });
+  test("a model-listing reroute skips a listing sibling whose quota family is exhausted", () => {
+    homeWithAccounts(["acct-46", "acct-55a", "acct-55b"], "acct-46");
+    record("acct-46", ROSTER_46);
+    record("acct-55a", ROSTER_55);
+    record("acct-55b", ROSTER_55);
+    setCachedProviderAccountQuotaForTests(PROVIDER, "acct-55a",
+      { updatedAt: Date.now(), customWindows: [{ label: "Cla", percent: 100 }, { label: "Gem", percent: 10 }] });
+    for (const strategy of ["round-robin", "fill-first"] as const) {
+      clearPoolRotationState();
+      const strategyConfig = {
+        pool: { kernel: true },
+        providers: { [PROVIDER]: provider({ oauthAccountFailover: { enabled: true, strategy, stickyLimit: 1 } }) },
+      } as unknown as OcxConfig;
+      expect(routeAntigravityModel(strategyConfig, PROVIDER, "acct-46", "claude-opus-5-5"))
+        .toEqual({ kind: "reroute", accountId: "acct-55b" });
+    }
+  });
+
   test("model-listing reroutes follow the family round-robin ring", () => {
     clearPoolRotationState();
     homeWithAccounts(["acct-46a", "acct-55a", "acct-55b"], "acct-46a");

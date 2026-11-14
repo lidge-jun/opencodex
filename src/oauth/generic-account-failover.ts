@@ -342,7 +342,10 @@ export function routeAntigravityModel(
   const ready = new Set(eligibleFailoverAccounts(providerName, now, classifyModelFamilyForQuota(providerName, model)));
   const rank = (id: string) => (ready.has(id) ? 0 : 2) + (accountListsModel(providerName, id, model) === true ? 0 : 1);
   const tier = Math.min(...serving.map(rank));
-  const best = rankAntigravityModelAccounts(config, serving.filter(id => rank(id) === tier), model, now)[0]!;
+  // Same exhaustion preference as the initial pick: a listing account whose quota family is
+  // spent loses to one with headroom, unless every candidate in the tier is spent.
+  const candidates = preferKiroModelSupport(providerName, serving.filter(id => rank(id) === tier), model, config);
+  const best = rankAntigravityModelAccounts(config, candidates, model, now)[0]!;
   return { kind: "reroute", accountId: best };
 }
 
