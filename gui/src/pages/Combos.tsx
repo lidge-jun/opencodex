@@ -22,12 +22,15 @@ import { jevAutoCreateDecisionProvider } from "../app-routing";
 import { COMBOS_ADVANCED_HASH } from "./combos-advanced-hash";
 import type { ComboAddIntent } from "../components/combo-workspace-types";
 import { RouteBoard } from "../components/route-board/RouteBoard";
+import { ComboSuggestions } from "../components/route-board/ComboSuggestions";
 import type { EditableChannel } from "../components/route-board/ChannelEditor";
 import { comboDraftErrorText } from "../components/combo-workspace-utils";
 import { putModelVisibility } from "../model-visibility";
 import {
   accountCountFromList,
   channelKey,
+  channelQuota,
+  quotaWindowsByProvider,
   channelTargetsForPut,
   capabilitySource,
   parseCapabilitySources,
@@ -89,6 +92,8 @@ type CachedCombosPage = {
   capability?: Record<string, ComboCapabilitySettings>;
   /** Catalog models plus configured-only members, for the route board's member table. */
   memberModels?: ModelOption[];
+  /** `provider/model` rows hidden from the catalog; suggestions rank combos with a listed member first. */
+  hiddenModels?: string[];
 };
 type ProviderQuotasDto = { reports?: unknown };
 
@@ -270,6 +275,7 @@ export default function Combos({
     const capabilityModels: ModelOption[] = [];
     const catalogued = new Set<string>();
     const comboCatalog: Record<string, ComboCatalogMeta> = {};
+    const hiddenModels: string[] = [];
     const parseModalities = (raw: unknown): string[] | undefined =>
       Array.isArray(raw)
         ? raw.flatMap((modality) => {
@@ -335,6 +341,7 @@ export default function Combos({
         input: capabilitySource(Boolean(inputModalities?.length), Boolean(inputModalitiesDeclared?.length)),
         efforts: capabilitySource(reasoningEfforts !== undefined, model.reasoningOverridden === true),
       });
+      if (model.disabled === true) hiddenModels.push(`${provider}/${id}`);
       const inferred = parseInferredCapabilities(model.inferredCapabilities);
       if (inferred) inferredByKey.set(channelKey(provider, id), inferred);
       capabilityModels.push(option);
@@ -370,7 +377,7 @@ export default function Combos({
           ...(member.sources ? { sources: member.sources } : {}),
         })),
     ];
-    const next = { combos, providers, models, capabilityModels, cataloguedComboIds: [...catalogued], comboCatalog, lastResort, lastResortActive, capability, memberModels } satisfies CachedCombosPage;
+    const next = { combos, providers, models, capabilityModels, cataloguedComboIds: [...catalogued], comboCatalog, lastResort, lastResortActive, capability, memberModels, hiddenModels } satisfies CachedCombosPage;
     writeSessionListCacheEntry(cacheKey, next);
     // Retain the coherent payload here — one place, on the success path, never during
     // render. See the `retainedData` note below.
@@ -622,6 +629,22 @@ export default function Combos({
     providers: providerRows,
   });
 
+  const validateSuggested = (item: ComboItem, isCreate: boolean) => isCreate
+    ? validateComboDraft(item, {
+      existingIds: combos.map((combo) => combo.id),
+      existingAliases: combos.flatMap((combo) => combo.alias ? [combo.alias] : []),
+      combos,
+      isCreate: true,
+      providers: providerRows,
+    })
+    : validateOverviewEdit(item);
+  const quotaByProvider = quotaWindowsByProvider(quotaReports);
+  const providerByName = new Map(providers.map((provider) => [provider.name, provider]));
+  const remainingPercent = (provider: string, model: string) => {
+    const quota = channelQuota(providerByName.get(provider), quotaByProvider.get(provider), [model]);
+    return quota.kind === "windows" ? Math.min(...quota.windows.map((window) => window.remainingPercent)) : undefined;
+  };
+
   const removeCombo = async (id: string) => {
     try {
       const res = await fetch(`${apiBase}/api/combos?id=${encodeURIComponent(id)}`, { method: "DELETE" });
@@ -696,6 +719,19 @@ export default function Combos({
         <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
           {state.refreshing ? t("common.loading") : ""}
         </span>
+        {view === "overview" && (
+          <ComboSuggestions
+            combos={combos}
+            models={capabilityModels}
+            hiddenModels={new Set(data?.hiddenModels ?? [])}
+            providers={providers}
+            remainingPercent={remainingPercent}
+            validate={validateSuggested}
+            errorText={(code, item) => comboDraftErrorText(t, code, item, providerRows)}
+            onCreate={(item) => saveCombo(item, true, undefined, {})}
+            onExtend={(item) => saveCombo(item, false, undefined, {})}
+          />
+        )}
         {view === "overview" && (
           <RouteBoard
             combos={combos}
