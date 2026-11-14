@@ -21,6 +21,8 @@ import {
   providerInputModalitiesConfigError,
   sanitizeModelCapabilitiesForLoad,
   modelDisplayNamesConfigError,
+  changedModelCapabilityProbeAxes,
+  pruneModelCapabilityProbes,
 } from "./provider-validation";
 import { UPSTREAM_HOST_CIRCUIT_MAX_THRESHOLD } from "../codex/upstream-host-health";
 import { hardenSecretPath } from "../lib/windows-secret-acl";
@@ -34,7 +36,7 @@ import { getProviderRegistryEntry, providerMatchesRegistryTransport, registryMod
 import { providerFastSwitchOff } from "../providers/fast-opt-in";
 import { isCodexReasoningEffort } from "../reasoning-effort";
 import { refreshConfigDerivedRegistries } from "./derived-registries";
-import { type OcxClaudeCodeConfig, type OcxConfig } from "../types";
+import { type OcxClaudeCodeConfig, type OcxConfig, type OcxProviderConfig } from "../types";
 import {
   agentTaskRecoverySchema,
   asideProfileSyncSchema,
@@ -383,9 +385,17 @@ export function sanitizeCapabilityDeclarationsForLoad(parsed: unknown, warn: (me
     if (provider.modelCapabilities === undefined) continue;
     if (modelCapabilitiesConfigError(provider.modelCapabilities) !== null) {
       warn(`config.json provider ${JSON.stringify(redactSecretString(name))} has malformed modelCapabilities; retaining valid axes and restricting malformed input modalities to text`);
+      const before = { modelCapabilities: provider.modelCapabilities } as OcxProviderConfig;
       const repaired = sanitizeModelCapabilitiesForLoad(provider.modelCapabilities);
       if (repaired) provider.modelCapabilities = repaired;
       else delete provider.modelCapabilities;
+      // A repaired input-modalities declaration came from the repair, not from a probe.
+      const probes = provider.modelCapabilityProbes as OcxProviderConfig["modelCapabilityProbes"];
+      if (probes) {
+        const after = { modelCapabilities: provider.modelCapabilities } as OcxProviderConfig;
+        const changed = changedModelCapabilityProbeAxes(probes, before, after).filter(([, axis]) => axis === "inputModalities");
+        if (changed.length > 0) pruneModelCapabilityProbes(provider as unknown as OcxProviderConfig, changed);
+      }
     }
   }
 }

@@ -1317,7 +1317,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       : mergeModelCapabilities(config.providers[name]?.modelCapabilities, undefined);
     if (capabilities === undefined) delete prov.modelCapabilities;
     else prov.modelCapabilities = capabilities;
-    carryModelCapabilityProbes(prov, rawProvider, config.providers[name]);
+    carryModelCapabilityProbes(prov, rawProvider, config.providers[name],
+      providerOverwriteKeepsDestination(prov, config.providers[name], overwriteSample));
     // The add/edit form omits wire choices. Read after DNS so a concurrent switch
     // remains authoritative, including the marker that protects it on the next boot.
     if (name === "xai") {

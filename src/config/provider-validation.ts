@@ -631,6 +631,33 @@ export function modelCapabilityProbesConfigError(value: unknown): string | null 
   return null;
 }
 
+/** The declaration a probe flag labels: the model's input modalities or its reasoning ladder. */
+function probedDeclaration(provider: OcxProviderConfig, id: string, axis: ModelCapabilityProbeAxis): unknown {
+  return axis === "inputModalities"
+    ? provider.modelCapabilities && Object.hasOwn(provider.modelCapabilities, id) ? provider.modelCapabilities[id]?.inputModalities : undefined
+    : provider.modelReasoningEfforts && Object.hasOwn(provider.modelReasoningEfforts, id) ? provider.modelReasoningEfforts[id] : undefined;
+}
+
+/**
+ * The `[model, axis]` flags whose declaration differs between two rows, for the models `probes`
+ * labels. A flag carried onto a changed declaration would label a manual value as probed.
+ */
+export function changedModelCapabilityProbeAxes(
+  probes: NonNullable<OcxProviderConfig["modelCapabilityProbes"]>,
+  before: OcxProviderConfig,
+  after: OcxProviderConfig,
+): Array<readonly [string, ModelCapabilityProbeAxis]> {
+  const changed: Array<readonly [string, ModelCapabilityProbeAxis]> = [];
+  for (const [id, row] of Object.entries(probes)) {
+    for (const axis of PROBE_AXES) {
+      if (row?.[axis] === true && JSON.stringify(probedDeclaration(before, id, axis)) !== JSON.stringify(probedDeclaration(after, id, axis))) {
+        changed.push([id, axis]);
+      }
+    }
+  }
+  return changed;
+}
+
 /**
  * Rebuild `modelCapabilityProbes` so a flag never outlives the declaration it labels, optionally
  * dropping named `[model, axis]` flags first (a manual edit wins). Always writes a fresh record and
@@ -644,9 +671,7 @@ export function pruneModelCapabilityProbes(
   const probes = provider.modelCapabilityProbes;
   if (probes === undefined) return false;
   const drop = new Set([...dropped].map(([id, axis]) => `${axis}\u0000${id}`));
-  const declared = (id: string, axis: ModelCapabilityProbeAxis) => axis === "inputModalities"
-    ? Array.isArray(provider.modelCapabilities && Object.hasOwn(provider.modelCapabilities, id) ? provider.modelCapabilities[id]?.inputModalities : undefined)
-    : Array.isArray(provider.modelReasoningEfforts && Object.hasOwn(provider.modelReasoningEfforts, id) ? provider.modelReasoningEfforts[id] : undefined);
+  const declared = (id: string, axis: ModelCapabilityProbeAxis) => Array.isArray(probedDeclaration(provider, id, axis));
   const next: NonNullable<OcxProviderConfig["modelCapabilityProbes"]> = {};
   let changed = false;
   for (const [id, row] of Object.entries(probes)) {
@@ -676,16 +701,30 @@ export function dropPatchedModelCapabilityProbes(provider: OcxProviderConfig, pa
 
 /**
  * Same-name `POST /api/providers` overwrite: the provider form never sends the provenance, so an
- * omitted field carries the live row's flags; then every flag whose declaration did not survive the
- * overwrite is dropped. A submitted value is validated by `providerCompatFieldConfigError`.
+ * omitted field carries the live row's flags. The form never sends reasoning ladders either, so on
+ * a same-destination save that omits `modelReasoningEfforts` a probe-written ladder is carried with
+ * its flag. Then a carried flag whose declaration the overwrite changed, and every flag whose
+ * declaration did not survive, is dropped. A submitted value is validated by
+ * `providerCompatFieldConfigError`.
  */
 export function carryModelCapabilityProbes(
   candidate: OcxProviderConfig,
   submitted: Record<string, unknown>,
   live: OcxProviderConfig | undefined,
+  keepsDestination = false,
 ): void {
-  if (!Object.hasOwn(submitted, "modelCapabilityProbes") && live?.modelCapabilityProbes) {
-    candidate.modelCapabilityProbes = structuredClone(live.modelCapabilityProbes);
+  const probes = live?.modelCapabilityProbes;
+  if (Object.hasOwn(submitted, "modelCapabilityProbes") || !live || !probes) {
+    pruneModelCapabilityProbes(candidate);
+    return;
   }
-  pruneModelCapabilityProbes(candidate);
+  if (keepsDestination && !Object.hasOwn(submitted, "modelReasoningEfforts")) {
+    for (const [id, row] of Object.entries(probes)) {
+      const ladder = probedDeclaration(live, id, "reasoningEfforts");
+      if (row?.reasoningEfforts !== true || !Array.isArray(ladder) || ["__proto__", "prototype", "constructor"].includes(id)) continue;
+      candidate.modelReasoningEfforts = { ...(candidate.modelReasoningEfforts ?? {}), [id]: [...ladder] };
+    }
+  }
+  candidate.modelCapabilityProbes = structuredClone(probes);
+  pruneModelCapabilityProbes(candidate, changedModelCapabilityProbeAxes(probes, live, candidate));
 }

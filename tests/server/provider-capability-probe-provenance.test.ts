@@ -30,6 +30,15 @@ describe("modelCapabilityProbes validation", () => {
     expect(parsed.providers.p).toEqual({ adapter: "openai-chat" } as any);
     expect(warnings).toHaveLength(1);
   });
+  test("load repair of malformed input modalities drops only the repaired model's modality flag", () => {
+    const parsed = { providers: { p: { adapter: "openai-chat",
+      modelCapabilities: { m: { inputModalities: ["text", "hologram"] }, n: { inputModalities: ["text", "image"] } },
+      modelReasoningEfforts: { m: ["low"] },
+      modelCapabilityProbes: { m: { probedAt: AT, inputModalities: true, reasoningEfforts: true }, n: { probedAt: AT, inputModalities: true } } } } };
+    sanitizeCapabilityDeclarationsForLoad(parsed, () => {});
+    expect(parsed.providers.p.modelCapabilities).toEqual({ m: { inputModalities: ["text"] }, n: { inputModalities: ["text", "image"] } } as any);
+    expect(parsed.providers.p.modelCapabilityProbes).toEqual({ m: { probedAt: AT, reasoningEfforts: true }, n: { probedAt: AT, inputModalities: true } } as any);
+  });
   test("prune keeps only flags whose declaration exists and removes the empty field", () => {
     const row = { adapter: "openai-chat", baseUrl: "https://example.test/v1",
       modelCapabilities: { a: { inputModalities: ["text"] } }, modelReasoningEfforts: { a: ["low"] },
@@ -94,7 +103,26 @@ describe("modelCapabilityProbes management round trip", () => {
     const form = { adapter: "openai-chat", baseUrl: "https://example.test/v1", liveModels: false, models: ["m", "n"] };
     expect((await request(live, "POST", "/api/providers", { name: "caps", provider: { ...form, modelCapabilityProbes: { m: { probedAt: "x" } } } })).status).toBe(400);
     expect((await request(live, "POST", "/api/providers", { name: "caps", provider: form })).status).toBe(200);
-    // modelCapabilities is carried; modelReasoningEfforts is not, so its flag goes with it.
+    // An unrelated same-destination save keeps the probe-written ladder and both flags.
+    expect(loadConfig().providers.caps!.modelReasoningEfforts).toEqual({ m: ["low", "high"] });
+    expect(loadConfig().providers.caps!.modelCapabilityProbes).toEqual(fixture().providers.caps!.modelCapabilityProbes);
+  });
+
+  test("same-name POST that changes a probed declaration drops only that flag", async () => {
+    const live = fixture();
+    saveConfig(live);
+    const form = { adapter: "openai-chat", baseUrl: "https://example.test/v1", liveModels: false, models: ["m", "n"],
+      modelCapabilities: { m: { inputModalities: ["text"] }, n: { inputModalities: ["text"] } }, modelReasoningEfforts: { m: ["low"] } };
+    expect((await request(live, "POST", "/api/providers", { name: "caps", provider: form })).status).toBe(200);
+    expect(loadConfig().providers.caps!.modelCapabilityProbes).toEqual({ n: { probedAt: AT, inputModalities: true } });
+  });
+
+  test("same-name POST to another destination does not carry the probe-written ladder", async () => {
+    const live = fixture();
+    saveConfig(live);
+    const form = { adapter: "openai-chat", baseUrl: "https://other.example.test/v1", liveModels: false, models: ["m", "n"] };
+    expect((await request(live, "POST", "/api/providers", { name: "caps", provider: form })).status).toBe(200);
+    expect(loadConfig().providers.caps!.modelReasoningEfforts).toBeUndefined();
     expect(loadConfig().providers.caps!.modelCapabilityProbes).toEqual({ m: { probedAt: AT, inputModalities: true }, n: { probedAt: AT, inputModalities: true } });
   });
 
