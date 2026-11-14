@@ -724,7 +724,7 @@ export interface OcxConfig extends OcxLinkHomeConfig {
    */
   modelPickerOrder?: string[];
   /** Saved preset provenance; snapshots are not recomputed during catalog discovery. */
-  modelPickerOrderMode?: "alphabetical" | "provider" | "most-used";
+  modelPickerOrderMode?: "alphabetical" | "provider" | "family" | "most-used";
   /**
    * Priority-ordered fallback models for spawned sub-agents. When the requested
    * model is quota-exhausted or recently failed, opencodex rewrites the child

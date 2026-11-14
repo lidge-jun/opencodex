@@ -17,6 +17,7 @@ const ORDER_MODES: readonly { value: ModelPickerOrderMode; label: TKey }[] = [
   { value: "default", label: "models.pickerOrder.default" },
   { value: "alphabetical", label: "models.pickerOrder.alphabetical" },
   { value: "provider", label: "models.pickerOrder.provider" },
+  { value: "family", label: "models.pickerOrder.family" },
   { value: "most-used", label: "models.pickerOrder.mostUsed" },
   { value: "custom", label: "models.pickerOrder.custom" },
 ];

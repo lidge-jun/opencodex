@@ -14,7 +14,7 @@ import {
   takeFlag, takeOptionWithSyntax, type RuntimeApiDeps,
 } from "./runtime-api";
 
-const ORDER_USAGE = "Usage: ocx models order status|reset|set (--models CSV | --mode default|alphabetical|provider|most-used) [--json]";
+const ORDER_USAGE = "Usage: ocx models order status|reset|set (--models CSV | --mode default|alphabetical|provider|family|most-used) [--json]";
 const DISPLAY_USAGE = "Usage: ocx models display-name PROVIDER/MODEL (--set TEXT | --clear) [--json]";
 const SETTINGS = "/api/subagent-models";
 function record(value: unknown): value is Record<string, unknown> {
@@ -93,7 +93,7 @@ export async function handleModelsOrderCommand(argv: string[], deps: RuntimeApiD
     if (args.length || !["status", "reset", "set"].includes(sub ?? "")
       || (sub !== "set" && (csv !== undefined || mode !== undefined))
       || (sub === "set" && ((csv === undefined) === (mode === undefined)))
-      || (mode !== undefined && !["default", "alphabetical", "provider", "most-used"].includes(mode))) {
+      || (mode !== undefined && !["default", "alphabetical", "provider", "family", "most-used"].includes(mode))) {
       throw new CliUsageError("Invalid picker order arguments", ORDER_USAGE);
     }
     // Refuse lexical manual-input failures before discovering a target.
@@ -131,7 +131,7 @@ export async function handleModelsOrderCommand(argv: string[], deps: RuntimeApiD
           throw new RuntimeApiError("Picker state changed", 409, null);
         }
       } else {
-        const preset = mode as "alphabetical" | "provider" | "most-used";
+        const preset = mode as "alphabetical" | "provider" | "family" | "most-used";
         order = modelPickerOrder(preset, settings.pickerAvailable, preset === "most-used" ? await readUsage(pinned) : [], identities);
         savedMode = preset;
       }

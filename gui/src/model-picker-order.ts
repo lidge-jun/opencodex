@@ -1,4 +1,5 @@
-export type ModelPickerOrderMode = "default" | "alphabetical" | "provider" | "most-used" | "custom";
+import { modelFamilyRank } from "../../src/lib/model-families";
+export type ModelPickerOrderMode = "default" | "alphabetical" | "provider" | "family" | "most-used" | "custom";
 export type SavedModelPickerOrderMode = Exclude<ModelPickerOrderMode, "default" | "custom">;
 export interface ModelPickerUsage {
   provider: string;
@@ -17,7 +18,7 @@ function stringList(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(id => typeof id === "string" && id.trim().length > 0);
 }
 function savedMode(value: unknown): value is SavedModelPickerOrderMode | null {
-  return value === null || value === "alphabetical" || value === "provider" || value === "most-used";
+  return value === null || value === "alphabetical" || value === "provider" || value === "family" || value === "most-used";
 }
 export function isPickerOrderSaved(value: unknown): value is PickerOrderSaved {
   if (value === null || typeof value !== "object") return false;
@@ -47,6 +48,8 @@ function byProvider(a: string, b: string): number {
   const [ap, am] = parts(a), [bp, bm] = parts(b);
   return compare(ap, bp) || compare(am, bm);
 }
+// Families are one contiguous run each, in registry order; within a family the provider order.
+const byFamily = (a: string, b: string) => modelFamilyRank(a) - modelFamilyRank(b) || byProvider(a, b);
 
 export function modelPickerOrder(
   mode: Exclude<ModelPickerOrderMode, "custom">,
@@ -58,6 +61,7 @@ export function modelPickerOrder(
   const unique = [...new Set(models)];
   if (mode === "alphabetical") return unique.sort((a, b) => compare(parts(a)[1], parts(b)[1]) || byProvider(a, b));
   if (mode === "provider") return unique.sort(byProvider);
+  if (mode === "family") return unique.sort(byFamily);
   const candidates = new Set(unique);
   const raw = new Map<string, Set<string>>();
   const owners = new Map<string, Set<string>>();
@@ -97,7 +101,7 @@ export function modelPickerOrderMode(
   if (saved.length === 0) return "default";
   // Existing complete/native orders are never silently replaced by a routed preset.
   if (saved.some(id => !id.includes("/"))) return "custom";
-  if (mode === "alphabetical" || mode === "provider" || mode === "most-used") return mode;
+  if (mode === "alphabetical" || mode === "provider" || mode === "family" || mode === "most-used") return mode;
   const candidates = new Set(models);
   if (new Set(saved).size !== saved.length || saved.length !== candidates.size
     || saved.some(id => !candidates.has(id))) return "custom";
