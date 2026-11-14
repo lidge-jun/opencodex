@@ -37,9 +37,10 @@ export function classifyUsageClient(headers: Headers): UsageClient {
   else if (/^claude-code\/[A-Za-z0-9][A-Za-z0-9._+-]*(?:\s|$)/i.test(userAgent)) agentClient = "claude_code";
   else if (/^opencode\/[A-Za-z0-9][A-Za-z0-9._+-]*(?:\s|$)/i.test(userAgent)) agentClient = "opencode";
   else if (/^codex_cli_rs\/[A-Za-z0-9][A-Za-z0-9._+-]*(?:\s|$)/i.test(userAgent)) agentClient = "codex_cli";
-  // Antigravity desktop sends `antigravity/hub/<ver> (...)`; the agy CLI talks through Google's GenAI SDK.
+  // Antigravity desktop sends `antigravity/hub/<ver> (...)`; the agy CLI talks through Google's GenAI SDK
+  // with no originator. The SDK prefix alone is generic, so a caller with its own originator keeps its name.
   else if (/^antigravity\/(?:hub\/)?[A-Za-z0-9][A-Za-z0-9._+-]*(?:\s|$)/i.test(userAgent)) agentClient = "antigravity";
-  else if (/^google-genai-sdk\/[A-Za-z0-9][A-Za-z0-9._+-]*(?:\s|$)/i.test(userAgent)) agentClient = "agy";
+  else if ((!originator || originClient) && /^google-genai-sdk\/[A-Za-z0-9][A-Za-z0-9._+-]*(?:\s|$)/i.test(userAgent)) agentClient = "agy";
   if (originClient && agentClient && originClient !== agentClient
     && !(originClient.startsWith("codex_") && agentClient.startsWith("codex_"))) return "unknown";
   return originClient ?? agentClient ?? "unknown";
