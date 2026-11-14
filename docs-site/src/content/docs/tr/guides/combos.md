@@ -311,6 +311,8 @@ Arayüzü](/tr/guides/sub-agent-surface/) sayfasına bakın.
 
 ### Kontrol Paneli
 
+**Modeller → Kombolar** önce her kombo için bir satır içeren bir genel bakış açar: kanal sırası, sağlayıcı başına kalan kota, bağlam penceresi, strateji menüsü ve açma/kapama anahtarı. **Gelişmiş**, aşağıda anlatılan tam çalışma alanını açar.
+
 Yerel kontrol panelini açın ve **Modeller → Kombolar** seçeneğini belirleyin.
 Çalışma alanı komboları oluşturur, düzenler, yeniden adlandırır ve kaldırır;
 model seçicileri gizli modelleri de içerir. Görünürlük yalnızca dış model listelerini etkiler,
