@@ -6,6 +6,7 @@ import { __resetVertexTokenCache, getVertexAccessToken } from "../../../src/lib/
 import { safeConfigDTO } from "../../../src/server/auth-cors";
 import { staticCatalogConnectionTest } from "../../../src/server/management/static-catalog-probe";
 import { binProviderStatus, usesUnverifiedVertexCredentials } from "../../../gui/src/provider-workspace/catalog";
+import { authModeLabel } from "../../../gui/src/components/provider-workspace/ProviderRail";
 import type { OcxConfig, OcxProviderConfig } from "../../../src/types";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 
@@ -106,5 +107,13 @@ describe("Vertex ADC verification", () => {
     const antigravity = { adapter: "google", baseUrl: "https://cloudcode-pa.googleapis.com", googleMode: "cloud-code-assist", liveModels: false } as OcxProviderConfig;
     expect(await staticCatalogConnectionTest("google-antigravity", antigravity)).toEqual({ applicable: false, reason: "static_catalog", latencyMs: 0 });
     expect(await staticCatalogConnectionTest("google-vertex", { ...VERTEX, apiKey: "fixture-key" })).toEqual({ applicable: false, reason: "static_catalog", latencyMs: 0 });
+  });
+
+  test("a verified ADC row still reads as host credentials, not an API key", async () => {
+    writeUserAdc("fixture-refresh");
+    await getVertexAccessToken();
+    const item = { name: "google-vertex", ...dashboardVertex() } as Parameters<typeof authModeLabel>[0];
+    expect(item.vertexCredentialVerified).toBe(true);
+    expect(authModeLabel(item, (key => key) as Parameters<typeof authModeLabel>[1])).toBe("pws.vertexHostAuth");
   });
 });
