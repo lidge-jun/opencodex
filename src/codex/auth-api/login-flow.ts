@@ -183,9 +183,6 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
     openBrowser?: unknown;
     device?: unknown;
   };
-  // Device mode: no local browser, no loopback listener. The only way to add
-  // an account to a headless hub (#3366).
-  const useDeviceFlow = body.device === true;
   const requestedAccountId = body.id?.trim();
   const reauth = body.reauth === true;
   if (requestedAccountId && !isValidCodexAccountId(requestedAccountId)) {
@@ -193,6 +190,12 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
   }
   const accountId = requestedAccountId || `chatgpt-${Date.now()}`;
   const runtimeConfig = getRuntimeConfig(config);
+  // Device mode: no local browser, no loopback listener. The only way to add
+  // an account to a headless hub (#3366). `codexAuthMethod: "device-only"`
+  // enforces it for every caller, so a dashboard or CLI that did not ask for
+  // it still never starts a localhost callback login (#8082).
+  const deviceOnly = runtimeConfig.codexAuthMethod === "device-only";
+  const useDeviceFlow = body.device === true || deviceOnly;
   const preflightConflict = !reauth
     ? codexAccountPersistenceConflict(runtimeConfig, accountId, "create")
     : undefined;
@@ -509,6 +512,8 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
       // Dropped before #3366: every device-code surface renders this field,
       // so withholding it left the GUI and CLI with no code to show.
       ...(result.deviceCode ? { deviceCode: result.deviceCode } : {}),
+      // Tells the caller the device grant was imposed by configuration, not chosen by it.
+      ...(deviceOnly ? { authMethod: "device-only" as const } : {}),
     });
   } catch (e) {
     if (codexAuthLoginState.get(flowId) === loginOwner) codexAuthLoginState.delete(flowId);

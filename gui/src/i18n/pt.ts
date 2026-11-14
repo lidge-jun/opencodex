@@ -3016,6 +3016,7 @@ export const pt: Record<TKey, string> = {
   "codexAuth.back": "Voltar",
   "codexAuth.oauthAlreadyInProgress": "Já há um login em andamento. Conclua-o no navegador.",
   "codexAuth.oauthWaiting": "Aguardando a conclusão do login do ChatGPT no navegador...",
+  "codexAuth.deviceOnlyEnforced": "Este proxy só permite login por código de dispositivo para contas Codex do pool (codexAuthMethod: device-only).",
   "codexAuth.oauthSubmittingCode": "Enviando código…",
   "codexAuth.oauthCodeSubmitted": "Código enviado — aguardando a conclusão do login…",
   "codexAuth.oauthStatusRetrying": "Erro de rede ou de proxy ao verificar o status do login — tentando novamente…",

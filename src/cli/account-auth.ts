@@ -80,6 +80,8 @@ interface LoginStart {
   deviceCode?: string;
   /** Whether the host actually opened a browser. Absent from older proxies. */
   browserLaunch?: "started" | "failed" | "skipped";
+  /** Set when the proxy's `codexAuthMethod: "device-only"` imposed the device grant (#8082). */
+  authMethod?: "device-only";
   method?: "builder-id" | "google" | "github";
   userCode?: string;
   verificationUri?: string;
@@ -105,6 +107,7 @@ function publicLoginStart(value: unknown, kiro = false): LoginStart {
     if (typeof data[key] === "string") out[key] = data[key];
   }
   if (typeof data.browserLaunch === "string" && ["started", "failed", "skipped"].includes(data.browserLaunch)) out.browserLaunch = data.browserLaunch as LoginStart["browserLaunch"];
+  if (data.authMethod === "device-only") out.authMethod = "device-only";
   if (typeof data.method === "string" && ["builder-id", "google", "github"].includes(data.method)) out.method = data.method as LoginStart["method"];
   if (typeof data.state === "string" && ["pending", "done", "failed", "expired", "cancelled"].includes(data.state)) out.state = data.state as string;
   if (typeof data.warning === "string" && ["duplicate_profile_arn", "manual_review_required"].includes(data.warning)) out.warning = data.warning as string;
@@ -295,6 +298,7 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
       writeLoginInstructions([
         start.url ? `Open this URL to sign in:\n${terminalSafeText(start.url)}` : "",
         start.deviceCode ? `Device code: ${terminalSafeText(start.deviceCode)}` : "",
+        start.authMethod === "device-only" ? "Device code login is required by this proxy (codexAuthMethod: device-only)." : "",
         start.instructions ?? "",
         start.browserLaunch === "failed" ? BROWSER_LAUNCH_FAILED_HINT : "",
         start.flowId ? `Flow: ${terminalSafeText(start.flowId)}` : "",
@@ -317,7 +321,9 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
     // enter the code elsewhere. Match the 15-minute grant instead of giving up
     // at minute five while it is still valid, plus settlement margin for the
     // token exchange and credential write after the final poll.
-    const maxAttempts = device ? 480 : 150;
+    // The proxy may impose the device grant on a request that did not ask for it
+    // (`codexAuthMethod: "device-only"`, #8082), so the returned code counts too.
+    const maxAttempts = device || start.deviceCode ? 480 : 150;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       await Bun.sleep(2_000);
       const state = publicLoginStatus(await runtimeRequest<unknown>(

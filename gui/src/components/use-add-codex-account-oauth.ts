@@ -200,6 +200,7 @@ export function useAddCodexAccountOAuth({
         deviceCode?: string;
         instructions?: string;
         browserLaunch?: unknown;
+        authMethod?: string;
       };
       let resp = await requestLogin();
       if (!isCurrent()) return;
@@ -232,6 +233,7 @@ export function useAddCodexAccountOAuth({
           deviceCode: data.deviceCode,
           instructions: data.instructions,
           browserLaunch: parseBrowserLaunch(data.browserLaunch),
+          deviceOnly: data.authMethod === "device-only",
         });
         dispatch({ type: "set-step", step: "oauth-waiting" });
         stopPolling();
@@ -308,6 +310,9 @@ export function useAddCodexAccountOAuth({
             pollInFlightRef.current = false;
           }
         }, 2000);
+        // `codexAuthMethod: "device-only"` can turn a request that did not ask for the
+        // device grant into one (#8082), so the response decides the budget, not the request.
+        const deviceFlowStarted = wantsDeviceFlow || Boolean(data.deviceCode);
         timeoutRef.current = setTimeout(() => {
           if (pollRef.current) {
             clearManualCode();
@@ -320,7 +325,7 @@ export function useAddCodexAccountOAuth({
           // A device login is deliberately slow: the operator leaves this
           // machine to enter the code elsewhere. Cancelling at five minutes
           // would abort a grant that is still valid for ten more.
-        }, wantsDeviceFlow ? LOGIN_TIMEOUT_DEVICE_MS : LOGIN_TIMEOUT_BROWSER_MS);
+        }, deviceFlowStarted ? LOGIN_TIMEOUT_DEVICE_MS : LOGIN_TIMEOUT_BROWSER_MS);
       }
       if (data.error && !data.url) dispatch({ type: "set-error", error: data.error });
     } catch (e) {

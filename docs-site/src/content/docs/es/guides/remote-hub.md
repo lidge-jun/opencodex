@@ -389,6 +389,14 @@ ocx config set oauthOpenBrowser false
 3. Si la devolución de llamada no puede llegar al concentrador, pegue la URL o el código de redirección final en el panel de control/ CLI. Envía `POST /api/oauth/login/code` con `{provider,input}`.
 4. Sondear el punto final de estado existente hasta que se complete y, a continuación, realizar una solicitud de modelo enrutado.
 
+Para las cuentas del grupo de ChatGPT/Codex, un concentrador puede exigir en su lugar el flujo con código de dispositivo, de modo que nunca se inicie un inicio de sesión con devolución de llamada a localhost:
+
+```bash
+ocx config set codexAuthMethod device-only
+```
+
+Un concentrador en ejecución mantiene el método de inicio de sesión con el que arrancó, así que reinícielo (`ocx restart`, o reinicie el pod) para aplicar el cambio; `ocx config set` lo indica. Al añadir o volver a autenticar una cuenta del grupo desde el panel de control, o con `ocx account login openai [--id <account-id> --reauth]`, se muestran una URL de verificación y un código corto para introducir en cualquier otro dispositivo. Quite el ajuste con `ocx config unset codexAuthMethod` y vuelva a reiniciar.
+
 Nunca ponga el código OAuth en argv de shell, registros, texto de emisión, capturas de pantalla o evidencia de implementación. La ruta de código manual mantiene sus comprobaciones de entrada existentes de proveedor desconocido, flujo no activo, código no válido y 4096 bytes.
 
 ## Docker Compose

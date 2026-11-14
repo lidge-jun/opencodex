@@ -76,6 +76,7 @@ export default function AddCodexAccountModal({
             deviceCode={ui.deviceCode}
             instructions={ui.instructions}
             browserLaunch={ui.browserLaunch}
+            deviceOnly={ui.deviceOnly}
             manualCode={ui.manualCode}
             manualCodeBusy={manualCodeBusy}
             manualCodeWaiting={manualCodeWaiting}

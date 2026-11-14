@@ -59,3 +59,24 @@ export interface CodexAccountCredentialRecord {
    */
   lastCodexValidationTerminal?: boolean;
 }
+
+/** `codexAuthMethod`: "auto" keeps the caller's choice; "device-only" forces the device grant. */
+export type CodexAuthMethod = "auto" | "device-only";
+
+/**
+ * Codex pool login settings of `OcxConfig`, kept here because `config.ts` sits at its
+ * file-size cap.
+ */
+export interface CodexAccountLoginConfig {
+  /**
+   * How Codex (ChatGPT) pool account logins authorize.
+   *
+   * Absent and `"auto"` keep the historical behavior: a browser login with a
+   * localhost callback unless the caller explicitly asks for the device grant.
+   * `"device-only"` makes every pool add and reauthentication use the device
+   * grant, whatever the dashboard or CLI requested, so a headless hub never
+   * starts a localhost callback listener. Same-account checks for
+   * reauthentication are unchanged, and other providers are not affected.
+   */
+  codexAuthMethod?: CodexAuthMethod;
+}
