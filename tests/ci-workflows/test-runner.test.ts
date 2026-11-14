@@ -20,7 +20,7 @@ import {
   changedSelectionFailure,
   captureTestOutput,
   createIsolatedTestEnvironment,
-  LIVE_INSTALL_CREDENTIAL_ENV,
+  LIVE_INSTALL_ENV,
   ensureGuiDependencies,
   inspectChangedRun,
   OCX_CHILD_CONFORMANCE_BUILD_MS,
@@ -337,22 +337,62 @@ describe("test runner isolation", () => {
     expect(existsSync(isolated.root)).toBe(false);
   });
 
-  test("drops the developer's live install credentials and keeps the rest of the environment", () => {
+  test("drops the developer's live credentials and service identity while keeping fixture environment", () => {
     const isolated = createIsolatedTestEnvironment({
       PATH: "/test/bin",
       FIXTURE: "unchanged",
       OPENCODEX_API_AUTH_TOKEN: "live-data-token",
       OPENCODEX_ADMIN_AUTH_TOKEN: "live-admin-token",
       OCX_API_TOKEN_FILE: "/real/home/.opencodex/service-api-token",
+      OCX_SERVICE: "1",
+      OCX_SERVICE_MANAGED: "1",
     });
     try {
-      for (const name of LIVE_INSTALL_CREDENTIAL_ENV) expect(name in isolated.env).toBe(false);
+      for (const name of LIVE_INSTALL_ENV) expect(name in isolated.env).toBe(false);
+      expect(isolated.env.OCX_SERVICE).toBeUndefined();
+      expect(isolated.env.OCX_SERVICE_MANAGED).toBeUndefined();
       expect(isolated.env.FIXTURE).toBe("unchanged");
       expect(isolated.env.PATH).toBe("/test/bin");
     } finally {
       isolated.cleanup();
     }
   });
+
+  for (const platform of ["win32", "linux", "darwin"] as const) {
+    test(`matches live environment names with ${platform} case semantics`, () => {
+      const descriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+      const baseEnv = {
+        opencodex_api_auth_token: "fixture-data",
+        OpenCodex_Admin_Auth_Token: "fixture-admin",
+        ocx_api_token_file: "fixture-token-file",
+        ocx_service: "1",
+        Ocx_Service_Managed: "1",
+        OCX_SERVICE: "1",
+        OPENCODEX_API_AUTH_TOKEN: "fixture-uppercase",
+        OCX_SERVICE_EXTRA: "keep",
+        FIXTURE: "unchanged",
+      };
+      let isolated: ReturnType<typeof createIsolatedTestEnvironment> | undefined;
+      try {
+        Object.defineProperty(process, "platform", { ...descriptor, value: platform });
+        isolated = createIsolatedTestEnvironment(baseEnv);
+        for (const key of [
+          "opencodex_api_auth_token", "OpenCodex_Admin_Auth_Token", "ocx_api_token_file",
+          "ocx_service", "Ocx_Service_Managed",
+        ] as const) {
+          expect(isolated.env[key]).toBe(platform === "win32" ? undefined : baseEnv[key]);
+        }
+        expect(isolated.env.OCX_SERVICE).toBeUndefined();
+        expect(isolated.env.OPENCODEX_API_AUTH_TOKEN).toBeUndefined();
+        expect(isolated.env.OCX_SERVICE_EXTRA).toBe("keep");
+        expect(isolated.env.FIXTURE).toBe("unchanged");
+        expect(baseEnv.ocx_service).toBe("1");
+      } finally {
+        Object.defineProperty(process, "platform", descriptor);
+        isolated?.cleanup();
+      }
+    });
+  }
 
   test.if(process.platform === "win32")("gives the Windows sandbox a real profile shape", () => {
     const isolated = createIsolatedTestEnvironment({ PATH: "C:\\test\\bin" });

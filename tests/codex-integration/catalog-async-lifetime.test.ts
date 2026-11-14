@@ -260,37 +260,43 @@ for (const mode of ["abort", "deadline"] as const) {
     const exited = hold<void>();
     const controller = new AbortController();
     let child: childProcess.ChildProcess | undefined;
+    const script = "if (process.platform !== 'win32') process.on('SIGTERM', () => {}); console.log('READY'); setInterval(() => {}, 20);";
     const actualExec = childProcess.execFile;
     const spawn = spyOn(childProcess, "execFile").mockImplementation(((...args: Parameters<typeof actualExec>) => {
-      child = actualExec(...args);
+      const spawned = actualExec(...args);
+      if (args[0] !== process.execPath || !Array.isArray(args[1]) || args[1].length !== 2 || args[1][0] !== "-e" || args[1][1] !== script) return spawned;
+      child = spawned;
       let output = "";
       child.stdout?.on("data", chunk => { output += String(chunk); if (output.includes("READY")) ready.resolve(); });
       child.once("exit", () => exited.resolve());
       return child;
     }) as typeof actualExec);
     const set = globalThis.setTimeout;
+    let started: number | undefined;
+    let rejectedAt: number | undefined;
     // Arm the deadline only after the child has installed its signal handler.
     const timer = spyOn(globalThis, "setTimeout").mockImplementation(((fn, delay, ...args) => {
       if (mode === "deadline" && delay === 1234) {
-        const scheduled = set(() => { void ready.promise.then(() => fn(...args)); }, 0);
+        const scheduled = set(() => { void ready.promise.then(() => { started = performance.now(); fn(...args); }); }, 0);
         return scheduled;
       }
       return set(fn, delay, ...args);
     }) as typeof setTimeout);
-    const script = "if (process.platform !== 'win32') process.on('SIGTERM', () => {}); console.log('READY'); setInterval(() => {}, 20);";
     const pending = runtime.execCodexFileAsync(process.execPath, ["-e", script], {
       encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: mode === "deadline" ? 1234 : 10_000,
       windowsHide: true, signal: controller.signal,
     });
     // Observe rejection before a fast Windows kill can settle it.
-    const rejected = pending.then(() => { throw new Error("held child unexpectedly completed"); }, error => error);
+    const rejected = pending.then(() => { throw new Error("held child unexpectedly completed"); }, error => { rejectedAt = performance.now(); return error; });
     try {
       await Promise.race([ready.promise, Bun.sleep(3000).then(() => { throw new Error("child never became READY"); })]);
-      const started = Date.now();
-      if (mode === "abort") controller.abort();
+      await new Promise<void>((resolve, reject) => childProcess.execFile(process.execPath, ["-e", "process.exit(0)"], error => error ? reject(error) : resolve()));
+      if (mode === "abort") { started = performance.now(); controller.abort(); }
       const error = await rejected;
       expect(String(error)).toMatch(mode === "abort" ? /abort/i : /deadline|timed out|kill/i);
-      expect(Date.now() - started).toBeLessThan(1000);
+      expect(started).toBeDefined();
+      expect(rejectedAt! - started!).toBeGreaterThanOrEqual(0);
+      expect(rejectedAt! - started!).toBeLessThan(1000);
       const didExit = await Promise.race([
         exited.promise.then(() => true), Bun.sleep(SUBPROCESS_KILL_GRACE_MS + 1000).then(() => false),
       ]);

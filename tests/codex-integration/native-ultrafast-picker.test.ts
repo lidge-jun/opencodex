@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { repoRoot } from "../helpers/repo-root";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 import type { RawEntry } from "../../src/codex/catalog/parsing";
 import { mergeCatalogEntriesFromObservedState, type ObservedCatalogMergeInput } from "../../src/codex/catalog/build-entries";
 import { applyNativeUltraFastTier, NATIVE_ULTRAFAST_SERVICE_TIER } from "../../src/codex/catalog/native-ultrafast";
@@ -204,7 +205,7 @@ for (const writer of ["retained-sync", "convergence"] as const) {
         }
       }
     } finally { rmSync(root, { recursive: true, force: true }); }
-  });
+  }, SPAWN_BUDGET_MS);
 }
 
 /**

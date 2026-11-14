@@ -26,15 +26,17 @@ export interface IsolatedTestEnvironment {
 }
 
 /**
- * Credentials of the developer's own OpenCodex install that the sandbox must not inherit. A
+ * Live credentials and service identity that the sandbox must not inherit. A
  * Windows install stores its data-plane token as a user environment variable, so every shell on
  * that machine carries it; a test that then builds a service definition or starts a proxy reads
  * the live token instead of its fixture and fails only on a developer machine.
  */
-export const LIVE_INSTALL_CREDENTIAL_ENV = [
+export const LIVE_INSTALL_ENV = [
   "OPENCODEX_API_AUTH_TOKEN",
   "OPENCODEX_ADMIN_AUTH_TOKEN",
   "OCX_API_TOKEN_FILE",
+  "OCX_SERVICE",
+  "OCX_SERVICE_MANAGED",
 ] as const;
 
 export function createIsolatedTestEnvironment(
@@ -71,7 +73,10 @@ export function createIsolatedTestEnvironment(
   }
   writeTestTempOwner(root, baseEnv[TEST_RUN_ID_ENV]);
   const inherited = { ...baseEnv };
-  for (const name of LIVE_INSTALL_CREDENTIAL_ENV) delete inherited[name];
+  for (const name of Object.keys(inherited)) {
+    const match = process.platform === "win32" ? name.toUpperCase() : name;
+    if (LIVE_INSTALL_ENV.some(liveName => liveName === match)) delete inherited[name];
+  }
   // A GIT_DIR/GIT_WORK_TREE inherited from a hook or wrapper re-points every git command the suite
   // spawns, and fixture helpers then init, configure and commit into that repository. Starting the
   // children without them also covers Bun.spawn calls that pass no env (scripts/git-repository-env.ts).

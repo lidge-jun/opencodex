@@ -29,7 +29,7 @@
  */
 import { afterAll, afterEach } from "bun:test";
 import { isTestHomeGuardArmed, protectedHomeForTests } from "../src/lib/test-home-guard";
-import { createIsolatedTestEnvironment, LIVE_INSTALL_CREDENTIAL_ENV } from "../scripts/test";
+import { createIsolatedTestEnvironment, LIVE_INSTALL_ENV } from "../scripts/test";
 import { gitRepositoryEnvNames } from "../scripts/git-repository-env";
 import { createGitConfigGuard } from "./helpers/git-config-guard";
 import { repoRoot } from "./helpers/repo-root";
@@ -52,7 +52,7 @@ for (const [key, value] of Object.entries(isolated.env)) {
   if (value !== undefined) process.env[key] = value;
 }
 // The sandbox drops these from its env, but this process started with them, so remove them here.
-for (const name of LIVE_INSTALL_CREDENTIAL_ENV) delete process.env[name];
+for (const name of LIVE_INSTALL_ENV) delete process.env[name];
 // Same for an inherited GIT_DIR/GIT_WORK_TREE (scripts/git-repository-env.ts). Deleting them reaches
 // node:child_process and spread envs only: Bun.spawn without an `env` option keeps the environment
 // this process started with, which is why tests/helpers/git-fixture.ts always passes one.
