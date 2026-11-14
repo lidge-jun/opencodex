@@ -14,9 +14,9 @@ discards the catalog array order, so moving an entry earlier in a generated JSON
 it earlier in the picker. The implementation records this constraint directly in
 `src/codex/catalog/sync.ts`.
 
-opencodex therefore controls featured placement by assigning lower priorities, not by relying on
+opencodex therefore controls pinned placement by assigning lower priorities, not by relying on
 array position. Unless noted otherwise, the fixed priorities and worked example below describe a
-catalog with no eligible Codex account selectors. With `N` eligible selectors, featured priorities
+catalog with no eligible Codex account selectors. With `N` eligible selectors, pinned priorities
 use `N` as a stride: a bare native choice at configured rank `i` expands to selector rows at
 priorities `i * N + j`, where `j` is the selector's zero-based position; a routed choice uses
 `i * N`; and an exact selector-qualified choice uses `i * N + j` for its selector. Unselected routed
@@ -27,18 +27,18 @@ Without complete-picker ordering, the relevant no-selector priorities are:
 
 | Catalog entry | Priority | Source |
 | --- | ---: | --- |
-| `subagentModels[i]` | `i` (`0` through `4`) | The featured rank map in `src/codex/catalog/sync.ts` |
+| `subagentModels[i]` | `i` (`0` through `4`) | The pinned rank map in `src/codex/catalog/sync.ts` |
 | Other routed models | `5` | Routed entry creation in `src/codex/catalog/sync.ts` |
-| Non-featured routed models listed in `modelPickerOrder` | `1000 + i` | Display-only picker rank in `src/codex/catalog/sync.ts` |
-| Native GPT slugs without a featured list | `sourcePriority` (fallback `9`) | Shared native source-priority resolver |
-| Unselected native models while a featured list exists | `featured.length + 100 + sourcePriority` | Shared native source-priority resolver |
+| Non-pinned routed models listed in `modelPickerOrder` | `1000 + i` | Display-only picker rank in `src/codex/catalog/sync.ts` |
+| Native GPT slugs without a pinned list | `sourcePriority` (fallback `9`) | Shared native source-priority resolver |
+| Unselected native models while a pinned list exists | `featured.length + 100 + sourcePriority` | Shared native source-priority resolver |
 
 Native source priority comes from the current discovered descriptor, then the pristine catalog
 backup, then the same model's retained source value, then the upstream snapshot. Each candidate
 must be an integer from `0` through `1000`; invalid values are skipped and the final fallback is
-`9`. Published display priorities are never reused as source priorities. With four featured
+`9`. Published display priorities are never reused as source priorities. With four pinned
 models, native source priorities `3`, `8` and missing become `107`, `112` and `113` respectively.
-This preserves native source order behind featured and ordinary routed rows, including after
+This preserves native source order behind pinned and ordinary routed rows, including after
 repeated sync or featuring and later unfeaturing a native. The live Codex model list, published
 catalog and models cache use the same priorities for the same inputs. Account-selector groups
 retain their separate stride policy; complete-picker ordering remains the final override.
@@ -59,9 +59,9 @@ This means neither of these configuration details changes the final order:
 - the declaration order of keys in the `providers` object;
 - the order of ids in a provider's `models` array.
 
-`orderForSubagents()` then uses a stable sort to move configured featured picks to the front in the
-same order as `subagentModels`. Non-featured models keep the provider/id alphabetical relative order
-established earlier (`src/codex/catalog/sync.ts`). The featured rank is also converted to
+`orderForSubagents()` then uses a stable sort to move configured pinned picks to the front in the
+same order as `subagentModels`. Non-pinned models keep the provider/id alphabetical relative order
+established earlier (`src/codex/catalog/sync.ts`). The pinned rank is also converted to
 priorities `0` through `4` when entries are built, so Codex's priority sort preserves that leading
 sequence.
 
@@ -76,11 +76,11 @@ only change whether a model is included.
 
 ## Effective picker pattern
 
-With no eligible account selectors and a non-empty featured list, the resulting order is:
+With no eligible account selectors and a non-empty pinned list, the resulting order is:
 
 1. Models in the exact configured `subagentModels` order, with priorities `0` through `4`.
 2. All remaining routed models, ordered alphabetically by provider and then model id, at priority `5`.
-3. Unselected native models, pushed below the featured block during catalog merge.
+3. Unselected native models, pushed below the pinned block during catalog merge.
 
 Without `subagentModels`, routed models remain at priority `5`, native GPT entries use their normal
 source priority (fallback `9`), and the routed group remains provider/id
@@ -120,7 +120,7 @@ have expanded into selector-qualified groups.
 ## Changing the order
 
 Use `subagentModels` to choose and order the leading models that Codex also advertises to
-`spawn_agent`. The dashboard's **Sub-agents** page can reorder bare native and routed ids. Use
+`spawn_agent`. The dashboard's **Models → Client model picker** section can reorder bare native and routed ids. Use
 `ocx agent subagents set` or edit the opencodex configuration for exact
 `<selector>/<native-openai-model>` choices; the dashboard retains those ids once saved, including choices currently unavailable. Use at most five configured ids. With account selectors, one bare native
 choice can expand into multiple selector-qualified catalog rows, so configured choices and
@@ -132,7 +132,7 @@ as a retryable rate limit. These states are never reported as an invalid API key
 available model or wait for the capable account's quota window to reopen.
 
 Use `modelPickerOrder` for display-only ordering of routed `<provider>/<model>` rows beyond that
-featured block:
+pinned block:
 
 ```json
 {
@@ -147,7 +147,7 @@ featured block:
 Listed routed rows appear in the configured order. A routed row omitted from the array keeps its
 normal priority, so it remains ahead of the `modelPickerOrder` display band; list every routed row
 whose relative position you want to control. A row also present in `subagentModels` keeps its
-featured priority. With a routed-only list, native rows keep their normal positions.
+pinned priority. With a routed-only list, native rows keep their normal positions.
 
 To order the complete picker, include a bare native id:
 
@@ -166,7 +166,7 @@ their selector-qualified id in the list.
 ### Migration note: native ids in existing orders
 
 Previously, native ids in `modelPickerOrder` were ignored. An existing list containing
-a bare native id now activates complete-picker ordering, including featured rows.
+a bare native id now activates complete-picker ordering, including pinned rows.
 Remove bare native ids to keep the previous routed-only behavior. Unset, empty and
 routed-only lists retain their behavior; OpenCodex's natural-priority guidance candidate calculation is unchanged.
 
@@ -188,29 +188,29 @@ not ordering controls. There is no separate `modelOrder`, `providerOrder`, or pr
 
 ## Dashboard picker presets
 
-On **Models**, choose **Default**, **A–Z by model**, **Group by provider**, or **Most used snapshot**, then **Apply order**. This saves the currently visible routed ids and `modelPickerOrderMode` (`alphabetical`, `provider`, or `most-used`). Most used reads all retained usage once when applied; reloads restore the snapshot without fetching usage again. New or removed models do not automatically recompute it. A manually saved order, including a complete/native order, remains untouched until you explicitly apply a replacement. Default clears both picker fields, even when no routed models are available.
+On **Models**, choose **Default**, **A–Z by model**, **Group by provider**, **Group by family**, or **Most used snapshot**, then **Apply order**. This saves the currently visible routed ids and `modelPickerOrderMode` (`alphabetical`, `provider`, `family`, or `most-used`). **Group by family** puts the routed rows of each model family (GPT, Gemini, Claude, Grok, DeepSeek, then Qwen, Kimi, GLM, MiniMax, Llama, Mistral, and Other last) in one contiguous run, sorted by provider inside a family. Pinned and native rows keep their own priority bands, so a family is contiguous only among the routed rows, not across those bands. Codex and Claude Code show a flat picker, so the family runs are what it displays for the routed rows; the Models page also lists each provider's models under collapsible family headers. Most used reads all retained usage once when applied; reloads restore the snapshot without fetching usage again. New or removed models do not automatically recompute it. A manually saved order, including a complete/native order, remains untouched until you explicitly apply a replacement. Default clears both picker fields, even when no routed models are available.
 
-The controls use `GET/PUT /api/subagent-models`: `chosen` and `available` retain saved roster choices, including disabled or missing models; `pickerAvailable` contains only eligible routed catalog ids. The Models page sends `pickerOrder` and `pickerOrderMode`, never `models`. Roster-only saves preserve picker settings. Invalid combined updates and failed persistence leave the previous picker/roster state intact.
+The controls use `GET/PUT /api/subagent-models`: `chosen` and `available` retain saved roster choices, including disabled or missing models; `pickerAvailable` contains only eligible routed catalog ids. Pinned-roster edits on the Models page send `models`. Picker-order saves send `pickerOrder` and `pickerOrderMode`. Roster-only saves preserve picker settings. Invalid combined updates and failed persistence leave the previous picker/roster state intact.
 
-Routed-only presets keep the existing featured/native priority bands. They affect the Codex catalog and Claude discovery's routed groups; Claude's native prefix and explicit Desktop profile/alias ownership remain unchanged. OpenCodex guidance ranks and configured fallback settings are preserved, but native Codex's advertised five and recommended default can change with display priority. Saving does not restart clients; a catalog refresh may remain pending, and clients holding an old catalog may need reopening.
+Routed-only presets keep the existing pinned/native priority bands. They affect the Codex catalog and Claude discovery's routed groups; Claude's native prefix and explicit Desktop profile/alias ownership remain unchanged. OpenCodex guidance ranks and configured fallback settings are preserved, but native Codex's advertised five and recommended default can change with display priority. Saving does not restart clients; a catalog refresh may remain pending, and clients holding an old catalog may need reopening.
 
 
 ### Custom routed order
 
 Choose **Custom order** on Models to load a fresh routed snapshot. Drag a movable row before
-another row, or use its Up/Down buttons, then **Save draft**. Featured routed rows stay at the
+another row, or use its Up/Down buttons, then **Save draft**. Pinned routed rows stay at the
 front in their configured rank and cannot move. Native rows are not shown; this is not a preview
 of the complete native picker. Surviving saved rows keep their relative order and new candidates
 follow the current candidate list. Every save sends the complete routed list, without changing
-the featured roster.
+the pinned roster.
 
 An order containing bare native ids remains protected until you explicitly apply a routed preset
-or Default. Selecting a different option alone does not replace it. Unknown featured state blocks
+or Default. Selecting a different option alone does not replace it. Unknown pinned state blocks
 editing. Before saving, the editor checks a fresh snapshot; changes preserve your draft and block
 saving until **Reload and discard draft** loads current settings. Request failures retain the
 draft. Accepted saves can still have a pending catalog refresh; reload before editing again.
 
 The editor also requires an unambiguous model identity for every routed candidate. If the model
 catalog is incomplete, refresh the Models page before editing; reloading picker settings alone
-cannot restore missing catalog identities. Featured choices are matched exactly without trimming;
+cannot restore missing catalog identities. Pinned choices are matched exactly without trimming;
 duplicate choices use their last configured position, and canonical ids take precedence over raw ids.

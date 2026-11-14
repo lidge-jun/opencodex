@@ -680,9 +680,9 @@ Descubra la sintaxis de comandos con `ocx models --help` antes del trabajo en vi
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | Edite un modelo personalizado. `-` despeja un campo; `0` borra la ventana de contexto. |
 | `remove <custom-id\|provider/modelId>` | `--yes`, `--live`, `--json` | Elimine un modelo personalizado localmente o en el destino en vivo. La eliminación en vivo y la eliminación local de JSON requieren `--yes`; el modo de texto local retiene la confirmación interactiva. |
 | `display-name <provider/raw-model-id>` | `--set <text>` o `--clear`, `--json` | Establezca o borre la anulación de visualización del modelo descubierto; conserve el ID de flujo ascendente sin procesar. |
-| `order status` | `--json` | Lea el orden/modo guardado, los candidatos enrutados y el estado destacado conocido. |
-| `order set` | `--models <CSV>` o `--mode <default\|alphabetical\|provider\|most-used>`, `--json` | Establezca una permutación enrutada completa u obtenga un orden preestablecido. |
-| `order reset` | `--json` | Borrar el orden y el modo guardados, conservando la selección destacada. |
+| `order status` | `--json` | Lea el orden/modo guardado, los candidatos enrutados y el estado fijado conocido. |
+| `order set` | `--models <CSV>` o `--mode <default\|alphabetical\|provider\|family\|most-used>`, `--json` | Establezca una permutación enrutada completa u obtenga un orden preestablecido. |
+| `order reset` | `--json` | Borrar el orden y el modo guardados, conservando la selección fijada. |
 | `list-custom` | `--json` | Mostrar todos los modelos personalizados con el `custom-id` los otros subcomandos toman. |
 | `enable <provider/model\|native-model>` | `--native`, `--json` | Haga que un modelo sea visible hasta Codex. |
 | `disable <provider/model\|native-model>` | `--native`, `--json` | Ocultar un modelo de Codex. |
@@ -746,11 +746,11 @@ ocx models order set --models '<complete-public-id-permutation>' --json
 ocx models order status --json
 ```
 
-El pedido manual utiliza los identificadores públicos en `pickerAvailable`, cada candidato enrutado exactamente una vez, con los modelos destacados actuales en su orden inicial requerida exacta. Las entradas en blanco, duplicadas, faltantes, desconocidas y ambiguas se niegan. El CLI vuelve a leer los ajustes y las identidades del modelo inmediatamente antes del PUT manual; el estado modificado devuelve el conflicto. Este es un chequeo observacional, no CAS, así que léalo después. Nunca silenciosamente deja caer identidades natales o modifica la selección ofrecida.
+El pedido manual utiliza los identificadores públicos en `pickerAvailable`, cada candidato enrutado exactamente una vez, con los modelos fijados actuales en su orden inicial requerida exacta. Las entradas en blanco, duplicadas, faltantes, desconocidas y ambiguas se niegan. El CLI vuelve a leer los ajustes y las identidades del modelo inmediatamente antes del PUT manual; el estado modificado devuelve el conflicto. Este es un chequeo observacional, no CAS, así que léalo después. Nunca silenciosamente deja caer identidades natales o modifica la selección ofrecida.
 
-Alternativamente, seleccione `--mode alphabetical`, `--mode provider` o `--mode most-used`. Estos ajustes preestablecidos no preceden al prefijo de la función manual. La mayoría de las lecturas utilizadas son de todos los tiempos, el uso de toda la superficie, retiene a los candidatos no clasificados y rechaza la historia incompleta. Tanto los modos manuales como los modos no predeterminados rechazan los pedidos guardados que contienen ID nativas desnudas. Si se pretende borrar esa orden guardada, use primero `ocx models order reset --json` o `ocx models order set --mode default --json`. No reajuste automáticamente el rechazo.
+Alternativamente, seleccione `--mode alphabetical`, `--mode provider`, `--mode family` o `--mode most-used`. Estos ajustes preestablecidos no anteponen el prefijo manual de modelos fijados. El modo `most-used` lee el uso de todo el tiempo y de todas las superficies, conserva los candidatos sin clasificar y rechaza un historial incompleto. Tanto los modos manuales como los modos no predeterminados rechazan los pedidos guardados que contienen ID nativas desnudas. Si se pretende borrar esa orden guardada, use primero `ocx models order reset --json` o `ocx models order set --mode default --json`. No reajuste automáticamente el rechazo.
 
-Las escrituras personalizadas y de orden en vivo incluyen `catalogRefresh`. Solo una actualización confirmada y no degradada sale con 0; una actualización omitida, fallida o degradada devuelve el recibo guardado con código de salida 1. El recibo de un pedido `applied` es la lista destacada, no la convergencia del cliente. Los resultados desconocidos requieren inspección, no una suposición de reversión.
+Las escrituras personalizadas y de orden en vivo incluyen `catalogRefresh`. Solo una actualización confirmada y no degradada sale con 0; una actualización omitida, fallida o degradada devuelve el recibo guardado con código de salida 1. El recibo de un pedido `applied` es la lista fijada, no la convergencia del cliente. Los resultados desconocidos requieren inspección, no una suposición de reversión.
 
 <a id="apply-a-preset-and-verify-selection"></a>
 

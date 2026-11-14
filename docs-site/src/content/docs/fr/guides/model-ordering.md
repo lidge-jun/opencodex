@@ -29,7 +29,7 @@ Sans ordre global du sélecteur, les priorités sans sélecteur pertinentes sont
 | --- | --- : | --- |
 | `subagentModels[i]` | `i` (`0` à `4`) | La carte de classement présentée dans `src/codex/catalog/sync.ts` |
 | Autres modèles acheminés | `5` | Création d'une entrée routé dans `src/codex/catalog/sync.ts` |
-| Modèles routés non mis en avant et présents dans `modelPickerOrder` | `1000 + i` | Rang d’affichage du sélecteur dans `src/codex/catalog/sync.ts` |
+| Modèles routés non épinglé et présents dans `modelPickerOrder` | `1000 + i` | Rang d’affichage du sélecteur dans `src/codex/catalog/sync.ts` |
 | Slugs GPT natifs par défaut | `sourcePriority` | Création d'entrées natives dans `src/codex/catalog/sync.ts` |
 | Modèles natifs non sélectionnés alors qu'une liste sélectionnée existe | Au moins `featured.length + 100` | Fusion du catalogue natif dans `src/codex/catalog/sync.ts` |
 
@@ -49,8 +49,8 @@ Cela signifie qu'aucun de ces détails de configuration ne modifie l'ordre final
 - l'ordre de déclaration des clés dans l'objet `providers` ;
 - l'ordre des identifiants dans le tableau `models` d'un fournisseur.
 
-`orderForSubagents()` utilise ensuite un tri stable pour placer les choix mis en avant au début de la liste, dans le
-même ordre que `subagentModels`. Les modèles non mis en avant conservent l’ordre relatif alphabétique fournisseur/identifiant
+`orderForSubagents()` utilise ensuite un tri stable pour placer les choix épinglé au début de la liste, dans le
+même ordre que `subagentModels`. Les modèles non épinglé conservent l’ordre relatif alphabétique fournisseur/identifiant
 établi précédemment (`src/codex/catalog/sync.ts`). Le classement présenté est également converti en
 priorités `0` à `4` lorsque les entrées sont construites, donc le tri prioritaire de Codex préserve ce premier
 séquence.
@@ -101,7 +101,7 @@ Le sélecteur commence ainsi :
 | 5 | `gpt-5.6-terra` | `4` | Cinquième sélection |
 | 6 | `anthropic/claude-fable-5` | `5` | Premier identifiant routé restant dans l’ordre alphabétique fournisseur/identifiant |
 | 7 en avant | Modèles acheminés restants | `5` | Fournisseur par ordre alphabétique, puis identifiant du modèle par ordre alphabétique |
-| Après les modèles routés | Modèles natifs restants | `featured.length + 100` ou supérieur | Les modèles natifs non sélectionnés sont déplacés sous le bloc mis en avant |
+| Après les modèles routés | Modèles natifs restants | `featured.length + 100` ou supérieur | Les modèles natifs non sélectionnés sont déplacés sous le bloc épinglé |
 
 Les cinq premières entrées sont les substitutions annoncées à `spawn_agent` ; les autres suivent l’ordre
 normal du sélecteur. Avec des sélecteurs de compte, la limite de cinq entrées s’applique après que les choix natifs non qualifiés
@@ -110,7 +110,7 @@ ont été déclinés en groupes qualifiés par sélecteur.
 ## Modification de l'ordre
 
 Utilisez `subagentModels` pour choisir et ordonner les premiers modèles que Codex annonce également à
-`spawn_agent`. La page **Sous-agents** du tableau de bord peut réorganiser les identifiants natifs non
+`spawn_agent`. La page **Modèles → Sélecteur de modèles des clients** du tableau de bord peut réorganiser les identifiants natifs non
 qualifiés et les identifiants routés. Utilisez `ocx agent subagents set` ou modifiez la configuration
 OpenCodex pour définir des choix exacts de la forme `<selector>/<native-openai-model>` ; le tableau de bord
 conserve ces identifiants déjà enregistrés, même indisponibles. Configurez au maximum cinq identifiants. Avec
@@ -119,7 +119,7 @@ qualifiées par sélecteur ; les choix configurés et les lignes annoncées ne c
 nécessairement un à un.
 
 Utilisez `modelPickerOrder` pour ordonner uniquement l’affichage des lignes routées `<provider>/<model>`
-au-delà de ce bloc mis en avant :
+au-delà de ce bloc épinglé :
 
 ```json
 {
@@ -181,8 +181,8 @@ restent des champs de visibilité, pas des contrôles d’ordre. Il n’existe a
 
 ## Préréglages du sélecteur
 
-Dans **Models**, choisissez Par défaut, A–Z par modèle, Par fournisseur ou Instantané des usages, puis appliquez l’ordre. Les identifiants routés actuellement disponibles et `modelPickerOrderMode` (`alphabetical`, `provider`, `most-used`) sont enregistrés. Les usages conservés sont lus une seule fois lors de l’application ; un rechargement ou un changement de modèles ne recalcule rien. Un ordre personnalisé ou natif complet reste intact jusqu’à une application explicite. Par défaut efface les deux champs même sans modèle disponible.
+Dans **Models**, choisissez Par défaut, A–Z par modèle, Par fournisseur, Par famille ou Instantané des usages, puis appliquez l’ordre. Les identifiants routés actuellement disponibles et `modelPickerOrderMode` (`alphabetical`, `provider`, `family`, `most-used`) sont enregistrés. Les usages conservés sont lus une seule fois lors de l’application ; un rechargement ou un changement de modèles ne recalcule rien. Un ordre personnalisé ou natif complet reste intact jusqu’à une application explicite. Par défaut efface les deux champs même sans modèle disponible.
 
-`GET/PUT /api/subagent-models` conserve les choix enregistrés désactivés ou absents dans `chosen` et `available` ; `pickerAvailable` contient les identifiants routés admissibles. Models envoie `pickerOrder` et `pickerOrderMode`, jamais `models`. Une sauvegarde du roster seul conserve l’ordre. Entrée invalide ou échec de sauvegarde préserve l’état précédent.
+`GET/PUT /api/subagent-models` conserve les choix enregistrés désactivés ou absents dans `chosen` et `available` ; `pickerAvailable` contient les identifiants routés admissibles. Les modifications du roster épinglé sur la page Models envoient `models`. Les sauvegardes de l’ordre du sélecteur envoient `pickerOrder` et `pickerOrderMode`. Une sauvegarde du roster seul conserve l’ordre. Entrée invalide ou échec de sauvegarde préserve l’état précédent.
 
 Les plages prioritaires et natives restent en place. Les préréglages affectent le catalogue Codex et les groupes routés de la découverte Claude, sans modifier le préfixe natif Claude ni les profils Desktop explicites ou la propriété des alias. Les rangs de guidage OpenCodex et les réglages de repli sont conservés ; les cinq choix annoncés nativement par Codex et le défaut recommandé peuvent changer. Aucun client n’est redémarré ; une actualisation peut rester en attente et nécessiter de rouvrir le client.

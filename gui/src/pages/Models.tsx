@@ -1,5 +1,5 @@
 import { CodexStaleBanner } from "../components/codex-stale-banner";
-import ModelCatalogSettingsPanels from "../components/ModelCatalogSettingsPanels";
+import ClientModelPickerSection from "../components/ClientModelPickerSection";
 import ModelDisplayNameDialog from "../components/ModelDisplayNameDialog";
 import ModelPriceDialog from "../components/ModelPriceDialog";
 import ModelSettingsDialog from "../components/ModelSettingsDialog";
@@ -19,12 +19,13 @@ import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import { ownRecordValue } from "../own-record-value";
 import { describeIntegrationRefusalParts } from "./integrations/refusal-copy";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
-import { setClientResourceData } from "../client-resource";
+import { invalidateClientResource, setClientResourceData } from "../client-resource";
 import { createBoundedFetch, type BoundedFetch } from "../bounded-fetch";
 import {
   isModelPickerUsage, isPickerOrderSaved, isPickerOrderSettings, modelPickerOrder, modelPickerOrderMode,
   type ModelPickerOrderMode, type PickerOrderSettings, type PickerOrderSaved, type ModelPickerUsage,
 } from "../model-picker-order";
+import { FamilyGroupList } from "../components/FamilyGroupList";
 import { startVisibilityPoll } from "../visibility-poll";
 import { useModelVisibility } from "../use-model-visibility";
 import { useDataSurface } from "../data-surface";
@@ -97,6 +98,7 @@ import { CustomModelsSummary, InfoHint, ModelsSettingsPanel, SettingsRow } from 
 import { modelsSettingsSummary } from "./models-settings-summary";
 import { useAutoReviewSettings } from "./use-auto-review-settings";
 import { useShadowCallSettings } from "./use-shadow-call-settings";
+import { subagentRosterCacheKey } from "./use-subagent-roster";
 import { Button } from "@/components/ui-v2/button";
 import { ModelsAbout } from "../components/v2-models/models-about";
 import { ModelsProviderRail } from "../components/v2-models/models-provider-rail";
@@ -586,6 +588,8 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
       // the result through the same shared store used by the initial catalog subscription.
       setClientResourceData(cacheKey, next);
       pickerResource.refresh();
+      // The roster's "all models" list follows catalog visibility, so it reloads too.
+      invalidateClientResource(subagentRosterCacheKey(apiBase));
       return true;
     } catch {
       return false;
@@ -594,7 +598,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
         loadPendingRef.current = false;
       }
     }
-  }, [applyCatalog, cacheKey, fetchCatalog, pickerResource.refresh]);
+  }, [apiBase, applyCatalog, cacheKey, fetchCatalog, pickerResource.refresh]);
 
   const finishDisplayNameEdit = useCallback(() => {
     const trigger = displayNameTriggerRef.current;
@@ -1693,7 +1697,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
             {freeOnlyActive && scoped.length === 0 && rows.length > 0 && (
               <p className="muted text-label" role="status">{t("models.noFreeMatch")}</p>
             )}
-             {visible.map(m => {
+             <FamilyGroupList items={visible} slugOf={m => m.namespaced} scope={provider} renderItem={m => {
                // The row reflects the same final-visibility answer as the count and the picker.
                const off = !isVisible(m);
                return (
@@ -1858,7 +1862,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
                    })()}
                  </div>
                );
-             })}
+             }} />
              {remaining > 0 && (
                <button
                  type="button"
@@ -2107,36 +2111,10 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
         <InfoHint text={t("models.setAllHint", { value: fmtK(contextCapValue) })} />
       </div>
 
-      <div className="row models-cap-row" aria-busy={pickerBusy || pickerResource.state.refreshing}>
-        <span className="muted text-control">{t("models.pickerOrder.label")}</span>
-        <Select
-          value={pickerMode}
-          options={[
-            { value: "default", label: t("models.pickerOrder.default") },
-            { value: "alphabetical", label: t("models.pickerOrder.alphabetical") },
-            { value: "provider", label: t("models.pickerOrder.provider") },
-            { value: "most-used", label: t("models.pickerOrder.mostUsed") },
-            { value: "custom", label: t("models.pickerOrder.custom") },
-          ]}
-          onChange={value => setPickerDraft(value as ModelPickerOrderMode)}
-          disabled={pickerBusy || !pickerSettings || pickerResource.state.showError}
-          label={t("models.pickerOrder.label")}
-        />
-        <button type="button" className="btn btn-ghost btn-sm" onClick={() => void savePickerOrder()}
-          disabled={pickerBusy || !pickerSettings || pickerResource.state.showError || pickerMode === "custom"
-            || (pickerMode !== "default" && pickerSettings.pickerAvailable.length === 0)}>
-          {t(pickerBusy ? "models.pickerOrder.applying" : "models.pickerOrder.apply")}
-        </button>
-        {pickerResource.state.showError && <>
-          <span role="alert">{t("models.pickerOrder.loadFailed")}</span>
-          <button type="button" className="btn btn-ghost btn-sm" onClick={() => pickerResource.refresh()}>
-            {t("models.pickerOrder.retry")}
-          </button>
-        </>}
-        <InfoHint text={t("models.pickerOrder.hint")} />
-      </div>
-      <ModelCatalogSettingsPanels showOrderEditor={pickerMode === "custom"} apiBase={apiBase} active={catalogActive}
-        identities={models} onBusyChange={setPickerBusy} onAccepted={data => acceptPickerOrder(data, true)} onSaved={() => catalogResource.refresh()} />
+      <ClientModelPickerSection apiBase={apiBase} active={catalogActive} identities={models} settings={pickerSettings}
+        loadFailed={pickerResource.state.showError} refreshing={pickerResource.state.refreshing} mode={pickerMode} busy={pickerBusy}
+        onModeChange={setPickerDraft} onApply={() => void savePickerOrder()} onRetry={() => pickerResource.refresh()}
+        onBusyChange={setPickerBusy} onAccepted={data => acceptPickerOrder(data, true)} onFastSaved={() => catalogResource.refresh()} />
       {showAliases && (
         <div className="card models-aliases-card" aria-label={t("models.aliasesTable")}>
           <div className="row group-head"><strong>{t("models.aliases")}</strong></div>

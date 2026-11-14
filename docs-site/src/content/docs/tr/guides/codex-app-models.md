@@ -251,7 +251,7 @@ seçenek yerine getirilemediği yerlerde asla tanıtılmaz ve özel ağ geçitle
 
 Codex, seçicide görünen katalog girdilerini artan `priority` değerine göre
 sıralar ve ilk beşini `spawn_agent` model geçersiz kılmaları olarak bildirir.
-Kontrol paneli Alt Ajanlar sayfası en fazla beş yalın yerel kimliği veya
+Kontrol panelinin **Modeller → İstemci model seçicisi** bölümü en fazla beş yalın yerel kimliği veya
 yönlendirilen `provider/model` kimliğini seçip kaydedebilir. Manuel olarak
 yapılandırılan `subagentModels` ayrıca hesap nitelikli
 `<selector>/<native-openai-model>` kimliklerini de kabul eder. Kontrol paneli, geçerli katalogda bulunmayan modeller dahil, kaydedilmiş bu tam kimlikleri listeyi kaydederken korur. opencodex seçilen sırada düşük katalog
@@ -259,7 +259,7 @@ yapılandırılan `subagentModels` ayrıca hesap nitelikli
 yerel seçimler seçici nitelikli gruplara genişler. Diğer modeller tam kimlikle
 çağrılabilir durumda kalır.
 
-Öne çıkan model listesi, Kontrol Panelinin **Alt ajan yetkilendirmesi**
+Sabitlenmiş model listesi, Kontrol Panelinin **Alt ajan yetkilendirmesi**
 seçiminden ayrıdır. Codex'in önce hangi geçersiz kılmaları sunacağını denetler;
 tek başına bir model seçmez veya yetkilendirmeyi tetiklemez.
 

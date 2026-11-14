@@ -24,10 +24,10 @@ priority 为 `i * N + j` 的 selector 行，其中 `j` 是从 0 开始的 select
 
 | 目录条目 | Priority | 来源 |
 | --- | ---: | --- |
-| `subagentModels[i]` | `i`（`0` 至 `4`） | `src/codex/catalog/sync.ts` 中的 featured rank map |
+| `subagentModels[i]` | `i`（`0` 至 `4`） | `src/codex/catalog/sync.ts` 中的选择器置顶 rank map |
 | 其他路由模型 | `5` | `src/codex/catalog/sync.ts` 中创建路由条目的逻辑 |
 | 默认原生 GPT slug | `sourcePriority` | `src/codex/catalog/sync.ts` 中创建原生条目的逻辑 |
-| 存在 featured 列表时未选中的原生模型 | 至少为 `featured.length + 100` | `src/codex/catalog/sync.ts` 中合并原生目录的逻辑 |
+| 存在选择器置顶列表时未选中的原生模型 | 至少为 `featured.length + 100` | `src/codex/catalog/sync.ts` 中合并原生目录的逻辑 |
 
 管理 API 在 `src/server/management/agent-settings-routes.ts` 中使用 `slice(0, 5)`，把
 `subagentModels` 限制为最多五项。这与 Codex `spawn_agent` 界面只公布前五个模型 override 的行为
@@ -44,9 +44,9 @@ priority 为 `i * N + j` 的 selector 行，其中 `j` 是从 0 开始的 select
 - `providers` 对象中各 key 的声明顺序；
 - 每个 provider 的 `models` 数组中各 id 的排列顺序。
 
-随后，`orderForSubagents()` 使用稳定排序，把 featured 模型按 `subagentModels` 中的顺序移到最前。
-非 featured 模型会保持之前确定的 provider/id 字母相对顺序
-（`src/codex/catalog/sync.ts`）。创建条目时，featured rank 还会转换为 `0` 至 `4` 的
+随后，`orderForSubagents()` 使用稳定排序，把选择器置顶模型按 `subagentModels` 中的顺序移到最前。
+非选择器置顶模型会保持之前确定的 provider/id 字母相对顺序
+（`src/codex/catalog/sync.ts`）。创建条目时，选择器置顶 rank 还会转换为 `0` 至 `4` 的
 priority，因此 Codex 的 priority 排序会保留这个开头序列。
 
 ## 可见性与排序彼此独立
@@ -60,11 +60,11 @@ priority，因此 Codex 的 priority 排序会保留这个开头序列。
 
 ## 最终选择器顺序
 
-没有有效账户 selector 且 featured 列表非空时，最终顺序为：
+没有有效账户 selector 且选择器置顶列表非空时，最终顺序为：
 
 1. 严格按照配置的 `subagentModels` 顺序排列，priority 为 `0` 至 `4`；
 2. 所有剩余路由模型，先按 provider、再按模型 id 的字母顺序排列，priority 为 `5`；
-3. 在目录合并过程中被移到 featured 区块之后的未选中原生模型。
+3. 在目录合并过程中被移到选择器置顶区块之后的未选中原生模型。
 
 如果没有 `subagentModels`，路由模型保持 priority `5`，原生 GPT 条目使用正常 priority
 （sourcePriority，缺少来源时回退到 `9`），路由组内部仍按 provider/id 字母排序。
@@ -94,7 +94,7 @@ subagentModels = [
 | 5 | `gpt-5.6-terra` | `4` | 第五个选择 |
 | 6 | `anthropic/claude-fable-5` | `5` | 剩余路由模型中按 provider/id 字母排序的第一项 |
 | 第 7 项起 | 其余路由模型 | `5` | 先按 provider 字母排序，再按模型 id 字母排序 |
-| 路由模型之后 | 其余原生模型 | `featured.length + 100` 或更高 | 未选中的原生模型移到 featured 区块之后 |
+| 路由模型之后 | 其余原生模型 | `featured.length + 100` 或更高 | 未选中的原生模型移到选择器置顶区块之后 |
 
 前五个条目是向 `spawn_agent` 公布的 override，其余模型继续按普通选择器顺序排列。
 
@@ -102,7 +102,7 @@ subagentModels = [
 
 ## 更改顺序
 
-自定义开头模型顺序的受支持方式是重新排列 `subagentModels`。仪表盘的 **Sub-agents** 页面可以调整
+自定义开头模型顺序的受支持方式是重新排列 `subagentModels`。仪表盘的 **模型 → 客户端模型选择器** 可以调整
 裸原生和路由 id 的顺序。配置和 `ocx agent subagents set` 也接受精确的账户限定
 `<selector>/<native-openai-model>` id，仪表盘会保留已保存的 id，即使当前不可用。配置的
 id 请勿超过五个。存在账户 selector 时，一个裸原生选项可能展开为多个 selector-qualified 行，因此
@@ -148,8 +148,8 @@ V2 在客户端目录状态允许时，可以额外接收基于原有优先级�
 
 ## 仪表盘排序预设
 
-在 **Models** 中选择默认、按模型名 A–Z、按提供商或使用量快照，再应用顺序。保存当前可用的路由 ID 和 `modelPickerOrderMode`（`alphabetical`、`provider`、`most-used`）。使用量排序仅在应用时读取一次保留的全部历史；重新打开或模型增减不会重新计算。已有自定义、原生完整顺序会保留，直到明确应用替换。即使没有可用模型，默认也能清除两个字段。
+在 **Models** 中选择默认、按模型名 A–Z、按提供商、按家族或使用量快照，再应用顺序。保存当前可用的路由 ID 和 `modelPickerOrderMode`（`alphabetical`、`provider`、`family`、`most-used`）。按家族会让路由行中的每个模型家族（GPT、Gemini、Claude、Grok、DeepSeek，其后是 Qwen、Kimi、GLM、MiniMax、Llama、Mistral，其他排最后）各自连续排列，家族内再按提供商排序。置顶行和原生行保留各自的优先级区间，因此家族只在路由行之间连续，不会跨越这些区间；Codex 与 Claude Code 的选择器是平铺的，所以路由行显示的就是这些连续的家族段。Models 页也会把每个提供商的模型放在可折叠的家族标题下。使用量排序仅在应用时读取一次保留的全部历史；重新打开或模型增减不会重新计算。已有自定义、原生完整顺序会保留，直到明确应用替换。即使没有可用模型，默认也能清除两个字段。
 
-`GET/PUT /api/subagent-models` 的 `chosen`、`available` 保留禁用或缺失的已存 roster；`pickerAvailable` 只包含可选路由 ID。Models 只发送 `pickerOrder`、`pickerOrderMode`，不发送 `models`。只保存 roster 不影响排序，非法输入或保存失败会保留原状态。
+`GET/PUT /api/subagent-models` 的 `chosen`、`available` 保留禁用或缺失的已存 roster；`pickerAvailable` 只包含可选路由 ID。排序控件只发送 `pickerOrder`、`pickerOrderMode`。Models 页的固定 roster 编辑器每次编辑都会自动保存，并发送 `models`。只保存 roster 不影响排序，非法输入或保存失败会保留原状态。
 
-预设保留精选、原生优先级区间，应用于 Codex 目录与 Claude 发现列表的路由分组。Claude 原生前缀、明确的 Desktop 配置及 alias 归属不变。OpenCodex 指导排序与 fallback 设置不变，但原生 Codex 工具显示的前五候选及推荐默认模型可能改变。保存不会重启客户端；目录刷新可能尚未完成，旧列表可能需要重新打开客户端。
+预设保留选择器置顶、原生优先级区间，应用于 Codex 目录与 Claude 发现列表的路由分组。Claude 原生前缀、明确的 Desktop 配置及 alias 归属不变。OpenCodex 指导排序与 fallback 设置不变，但原生 Codex 工具显示的前五候选及推荐默认模型可能改变。保存不会重启客户端；目录刷新可能尚未完成，旧列表可能需要重新打开客户端。

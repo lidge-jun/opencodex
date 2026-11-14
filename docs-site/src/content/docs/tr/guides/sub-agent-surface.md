@@ -50,7 +50,7 @@ yüzeyine ait olduğunu belirtir.
 
 ## `spawn_agent` hangi modelleri sunar?
 
-Codex, `spawn_agent` araç açıklamasında en fazla beş model listeler ve bunları kendisi seçer: seçicide görünen katalog satırlarını `priority` değerine göre küçükten büyüğe sıralar ve ilk beşini alır. **Subagents** sayfasındaki kadro (`subagentModels`) bu listeyi yalnızca kendi modellerine kadro sırasıyla en düşük öncelikleri vererek etkiler (hesap seçicisi yoksa `0` ile `4` arası). Listeyi kadroyla sınırlamaz.
+Codex, `spawn_agent` araç açıklamasında en fazla beş model listeler ve bunları kendisi seçer: seçicide görünen katalog satırlarını `priority` değerine göre küçükten büyüğe sıralar ve ilk beşini alır. **Modeller → İstemci model seçicisi** bölümündeki kadro (`subagentModels`) bu listeyi yalnızca kendi modellerine kadro sırasıyla en düşük öncelikleri vererek etkiler (hesap seçicisi yoksa `0` ile `4` arası). Listeyi kadroyla sınırlamaz.
 
 Bir ile dört arasında model öne çıkarırsanız Codex kalan yuvaları önceliğe göre sonraki satırlarla doldurur. Bu satırları siz seçmediniz ve pano hangilerinin girdiğini göstermez. Hangi satırların gireceği kataloğa bağlıdır:
 
@@ -229,8 +229,8 @@ için yalnızca kurallı yerel ChatGPT hedeflerini değerlendirmeye devam eder.
 - **Modeller** → üst satır bölümlenmiş kontrol: aynı küresel modu seçin.
 - **Kontrol Paneli** → **Alt ajan yetkilendirmesi**: rehberlik modelini/çabasını
   ve yerel varsayılan katılımını ayarlayın.
-- **Alt Ajanlar**: kadroyu seçip sıralayın ve küresel geri dönüş zincirini
-  yapılandırın.
+- **Alt Ajanlar**: küresel geri dönüş zincirini yapılandırın. Sabitlenmiş kadro
+  **Modeller → İstemci model seçicisi** bölümünde seçilir.
 
 ### CLI
 

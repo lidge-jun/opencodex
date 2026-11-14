@@ -14,14 +14,14 @@ Codex 的 models-manager 按 `priority` 升序排列選擇器中可見的目錄�
 
 因此，opencodex 透過分配更低的 priority 控制置頂位置，而不依賴陣列位置。相關 priority 如下：
 
-以下優先級表與範例適用於未啟用完整選擇器排序的情況。
+以下優先級表與範例適用於沒有有效 Codex 帳戶 selector 且未啟用完整選擇器排序的情況。存在 `N` 個 selector 時，priority 以 `N` 作為步長：置頂的裸原生模型（rank 為 `i`）展開為 priority `i * N + j` 的 selector 列（`j` 為從 0 開始的 selector 位置），置頂的路由模型使用 `i * N`。
 
 | 目錄條目 | Priority | 來源 |
 | --- | ---: | --- |
-| `subagentModels[i]` | `i`（`0` 至 `4`） | `src/codex/catalog/sync.ts` 中的 featured rank map |
+| `subagentModels[i]` | `i`（`0` 至 `4`） | `src/codex/catalog/sync.ts` 中的選擇器置頂 rank map |
 | 其他路由模型 | `5` | `src/codex/catalog/sync.ts` 中建立路由條目的邏輯 |
 | 預設原生 GPT slug | `sourcePriority` | `src/codex/catalog/sync.ts` 中建立原生條目的邏輯 |
-| 存在 featured 列表時未選中的原生模型 | 至少為 `featured.length + 100` | `src/codex/catalog/sync.ts` 中合併原生目錄的邏輯 |
+| 存在選擇器置頂列表時未選中的原生模型 | 至少為 `featured.length + 100` | `src/codex/catalog/sync.ts` 中合併原生目錄的邏輯 |
 
 管理 API 在 `src/server/management/agent-settings-routes.ts` 中使用 `slice(0, 5)`，把
 `subagentModels` 限制為最多五項。這與 Codex `spawn_agent` 介面只公佈前五個模型 override 的行為
@@ -38,9 +38,9 @@ Codex 的 models-manager 按 `priority` 升序排列選擇器中可見的目錄�
 - `providers` 物件中各 key 的宣告順序；
 - 每個 provider 的 `models` 陣列中各 id 的排列順序。
 
-隨後，`orderForSubagents()` 使用穩定排序，把 featured 模型按 `subagentModels` 中的順序移到最前。
-非 featured 模型會保持之前確定的 provider/id 字母相對順序
-（`src/codex/catalog/sync.ts`）。建立條目時，featured rank 還會轉換為 `0` 至 `4` 的
+隨後，`orderForSubagents()` 使用穩定排序，把選擇器置頂模型按 `subagentModels` 中的順序移到最前。
+非選擇器置頂模型會保持之前確定的 provider/id 字母相對順序
+（`src/codex/catalog/sync.ts`）。建立條目時，選擇器置頂 rank 還會轉換為 `0` 至 `4` 的
 priority，因此 Codex 的 priority 排序會保留這個開頭序列。
 
 ## 可見性與排序彼此獨立
@@ -54,11 +54,11 @@ priority，因此 Codex 的 priority 排序會保留這個開頭序列。
 
 ## 最終選擇器順序
 
-featured 列表非空時，最終順序為：
+選擇器置頂列表非空時，最終順序為：
 
-1. 嚴格按照設定的 `subagentModels` 順序排列，priority 為 `0` 至 `4`；
+1. 嚴格按照設定的 `subagentModels` 順序排列，沒有 selector 時 priority 為 `0` 至 `4`；
 2. 所有剩餘路由模型，先按 provider、再按模型 id 的字母順序排列，priority 為 `5`；
-3. 在目錄合併過程中被移到 featured 區塊之後的未選中原生模型。
+3. 在目錄合併過程中被移到選擇器置頂區塊之後的未選中原生模型。
 
 如果沒有 `subagentModels`，路由模型保持 priority `5`，原生 GPT 條目使用正常 priority
 （sourcePriority，缺少來源時回退至 `9`），路由組內部仍按 provider/id 字母排序。
@@ -88,14 +88,14 @@ subagentModels = [
 | 5 | `gpt-5.6-terra` | `4` | 第五個選擇 |
 | 6 | `anthropic/claude-fable-5` | `5` | 剩餘路由模型中按 provider/id 字母排序的第一項 |
 | 第 7 項起 | 其餘路由模型 | `5` | 先按 provider 字母排序，再按模型 id 字母排序 |
-| 路由模型之後 | 其餘原生模型 | `featured.length + 100` 或更高 | 未選中的原生模型移到 featured 區塊之後 |
+| 路由模型之後 | 其餘原生模型 | `featured.length + 100` 或更高 | 未選中的原生模型移到選擇器置頂區塊之後 |
 
 前五個條目是向 `spawn_agent` 公佈的 override，其餘模型繼續按普通選擇器順序排列。
 
 ## 更改順序
 
 要調整 `spawn_agent` 候選模型的順序，請重新排列 `subagentModels`。你可以在儀表板的
-**Sub-agents** 頁面或 opencodex 設定中修改它。該列表最多接受五個模型，其陣列順序有實際意義。
+**模型 → 用戶端模型選擇器** 或 opencodex 設定中修改它。該列表最多接受五個模型，其陣列順序有實際意義。
 
 `modelPickerOrder` 只控制選擇器的顯示順序。如果列表只有路由 ID `<provider>/<model>`，
 其中未置頂的列會按列表順序進入獨立的顯示區間（`1000 + i`）。未列出的路由列保留原有優先級，
@@ -137,8 +137,8 @@ V2 在用戶端目錄狀態允許時，可以額外接收基於原有優先級�
 
 ## 儀表板排序預設
 
-在 **Models** 選擇預設、依模型名稱 A–Z、依供應商或使用量快照，再套用順序。儲存目前可用的路由 ID 和 `modelPickerOrderMode`（`alphabetical`、`provider`、`most-used`）。使用量排序僅在套用時讀取一次保留的全部歷史；重新開啟或模型增減不會重新計算。現有自訂與原生完整順序會保留，直到明確套用替換。即使沒有可用模型，預設也能清除兩個欄位。
+在 **Models** 選擇預設、依模型名稱 A–Z、依供應商、依家族或使用量快照，再套用順序。儲存目前可用的路由 ID 和 `modelPickerOrderMode`（`alphabetical`、`provider`、`family`、`most-used`）。依家族會讓路由列中的每個模型家族（GPT、Gemini、Claude、Grok、DeepSeek，其後是 Qwen、Kimi、GLM、MiniMax、Llama、Mistral，其他排最後）各自連續排列，家族內再依供應商排序。置頂列與原生列保留各自的優先級區間，因此家族只在路由列之間連續，不會跨越這些區間；Codex 與 Claude Code 的選擇器是平鋪的，所以路由列顯示的就是這些連續的家族段。Models 頁也會把每個供應商的模型放在可摺疊的家族標題下。使用量排序僅在套用時讀取一次保留的全部歷史；重新開啟或模型增減不會重新計算。現有自訂與原生完整順序會保留，直到明確套用替換。即使沒有可用模型，預設也能清除兩個欄位。
 
-`GET/PUT /api/subagent-models` 的 `chosen`、`available` 保留停用或缺少的已存 roster；`pickerAvailable` 僅包含可選路由 ID。Models 只傳送 `pickerOrder`、`pickerOrderMode`，不傳送 `models`。只儲存 roster 不影響排序；無效輸入或儲存失敗會保留原狀態。
+`GET/PUT /api/subagent-models` 的 `chosen`、`available` 保留停用或缺少的已存 roster；`pickerAvailable` 僅包含可選路由 ID。排序控制項只傳送 `pickerOrder`、`pickerOrderMode`。Models 頁的固定 roster 編輯器每次編輯都會自動儲存，並傳送 `models`。只儲存 roster 不影響排序；無效輸入或儲存失敗會保留原狀態。
 
-預設保留精選與原生優先級區間，套用於 Codex 目錄和 Claude 探索清單的路由群組。Claude 原生前綴、明確的 Desktop 設定及 alias 歸屬不變。OpenCodex 指引排序和 fallback 設定不變，但原生 Codex 工具顯示的前五個候選與建議預設模型可能改變。儲存不會重新啟動用戶端；目錄更新可能尚未完成，舊清單可能需要重新開啟用戶端。
+預設保留選擇器置頂與原生優先級區間，套用於 Codex 目錄和 Claude 探索清單的路由群組。Claude 原生前綴、明確的 Desktop 設定及 alias 歸屬不變。OpenCodex 指引排序和 fallback 設定不變，但原生 Codex 工具顯示的前五個候選與建議預設模型可能改變。儲存不會重新啟動用戶端；目錄更新可能尚未完成，舊清單可能需要重新開啟用戶端。

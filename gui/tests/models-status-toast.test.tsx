@@ -569,6 +569,8 @@ test("a late picker GET cannot overwrite a saved order or its session cache", as
         return Response.json({ ok: true, ...saved,
           catalogRefresh: { status: "committed", changed: true, degraded: false, notices: [] } });
       }
+      // The pinned roster hook reads the same endpoint on its own; only the picker reads race here.
+      if (new Error().stack?.includes("use-subagent-roster")) return Response.json({ available, chosen: [] });
       return new Promise<Response>(resolve => { gets.push({ resolve, signal: init?.signal }); });
     }
     return baseFetch(input, init);

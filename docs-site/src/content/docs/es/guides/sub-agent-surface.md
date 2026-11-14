@@ -66,14 +66,14 @@ Para una lista v2, la elegibilidad tiene tres estados: es elegible una entrada m
 
 ## Qué modelos anuncia `spawn_agent`
 
-Codex muestra como máximo cinco modelos en la descripción de `spawn_agent`. Los elige ordenando las filas visibles del catálogo por `priority`, de menor a mayor, y tomando las cinco primeras. La lista de la página **Subagentes** (`subagentModels`) influye en esa selección al asignar a sus modelos las prioridades más bajas, en el orden configurado (`0` a `4` si no hay selectores de cuenta). No limita la selección exclusivamente a esos modelos.
+Codex muestra como máximo cinco modelos en la descripción de `spawn_agent`. Los elige ordenando las filas visibles del catálogo por `priority`, de menor a mayor, y tomando las cinco primeras. La lista de **Modelos → Client model picker** (`subagentModels`) influye en esa selección al asignar a sus modelos las prioridades más bajas, en el orden configurado (`0` a `4` si no hay selectores de cuenta). No limita la selección exclusivamente a esos modelos.
 
 Si destacas entre uno y cuatro modelos, Codex completa los espacios restantes con las siguientes filas por prioridad. Esas filas no las elegiste tú y el dashboard no muestra cuáles son. Dependen del catálogo:
 
 | Catálogo | Filas que completan los espacios restantes |
 | --- | --- |
-| Sin selectores de cuenta de Codex | Las demás filas enrutadas `provider/model`. Todas tienen prioridad `5`, por lo que se ordenan alfabéticamente por proveedor y después por identificador de modelo. Las filas GPT nativas no destacadas usan `featured.length + 100 + sourcePriority`, conservando su orden de origen detrás de esas filas enrutadas. |
-| Con selectores de cuenta de Codex | Las filas nativas calificadas por cuenta (`<selector>/<native-model>`), inmediatamente después de las destacadas. Las filas enrutadas no destacadas pasan a la prioridad `1005` y quedan detrás. |
+| Sin selectores de cuenta de Codex | Las demás filas enrutadas `provider/model`. Todas tienen prioridad `5`, por lo que se ordenan alfabéticamente por proveedor y después por identificador de modelo. Las filas GPT nativas no fijadas usan `featured.length + 100 + sourcePriority`, conservando su orden de origen detrás de esas filas enrutadas. |
+| Con selectores de cuenta de Codex | Las filas nativas calificadas por cuenta (`<selector>/<native-model>`), inmediatamente después de las fijadas. Las filas enrutadas no fijadas pasan a la prioridad `1005` y quedan detrás. |
 
 Por ejemplo, sin selectores de cuenta y con esta lista:
 
@@ -98,7 +98,7 @@ Los modelos que completan la lista se anuncian normalmente, así que el agente p
 
 - Destaca cinco modelos. Una lista completa no deja espacios por rellenar.
 - Desactiva un modelo que no quieras que se ofrezca, o exclúyelo de `selectedModels` de su proveedor. Sale del selector y no puede completar un espacio.
-- `modelPickerOrder` cambia las prioridades usadas para ordenar. Una lista formada solo por modelos enrutados mueve sus filas no destacadas a `1000` o más, de modo que las filas enrutadas que no figuren en ella completan primero los espacios. Si contiene un identificador nativo sin calificar, ordena todo el selector, incluidas las filas destacadas: las filas de la lista ocupan los espacios antes que cualquier fila que no figure en ella. Véase [Orden de modelos](/es/guides/model-ordering/).
+- `modelPickerOrder` cambia las prioridades usadas para ordenar. Una lista formada solo por modelos enrutados mueve sus filas no fijadas a `1000` o más, de modo que las filas enrutadas que no figuren en ella completan primero los espacios. Si contiene un identificador nativo sin calificar, ordena todo el selector, incluidas las filas fijadas: las filas de la lista ocupan los espacios antes que cualquier fila que no figure en ella. Véase [Orden de modelos](/es/guides/model-ordering/).
 
 En v2, Codex excluye las filas con valor fijo `"disabled"` antes de elegir las cinco; el resto funciona igual. La guía v2 de opencodex (`{{roster}}`) solo nombra los modelos configurados que estén entre esas cinco filas. Por eso los modelos de relleno aparecen en la descripción de la herramienta de Codex, pero no en la guía de opencodex. Codex lee el catálogo al iniciar una sesión, así que los cambios de la lista se aplican a sesiones nuevas.
 
@@ -188,7 +188,7 @@ Si la solicitud reconstruida recibe otro SSE `error` desnudo seguido por EOF, am
 - **Tablero** → primera celda de estadística: elija **v1**, **base**, **v2** o **v2-plaintext**.
 - **Modelos** → control segmentado de la fila superior: elija el mismo modo global.
 - **Tablero** → **Delegación de subagentes**: establece el modelo/esfuerzo de guía y la opción de opt-in por defecto nativa.
-- **Subagentes**: elija y ordene la lista y configure la cadena de reserva global.
+- **Subagentes**: configure la cadena de reserva global. La lista fijada se elige en **Modelos → Client model picker**.
 
 ### CLI
 

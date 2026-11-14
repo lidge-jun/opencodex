@@ -733,7 +733,7 @@ start and on `ocx sync`, opencodex:
 3. **Merges** routed models in as namespaced entries (`provider/model`), cloned from a native Codex
    catalog template so Codex's strict parser accepts them.
 4. **Filters** `config.disabledModels` and each provider's non-empty `selectedModels` allowlist.
-5. **Re-ranks** so featured models sort first (see below), then writes the merged catalog back.
+5. **Re-ranks** so pinned models sort first, unless a complete `modelPickerOrder` containing a bare native id reorders them (see below), then writes the merged catalog back.
 
 Routed catalog entries also get their GPT-5 identity rewritten to the real upstream model name.
 Reasoning controls come from provider/model metadata across Codex's `low | medium | high | xhigh |
@@ -1481,7 +1481,7 @@ injection. Explicit external-provider opt-out behavior is unchanged.
 
 ### Sub-agent fallback and V2 compatibility
 
-In **Subagents → Delegation settings**, edit the ordered fallback chain and its availability polling interval (5000–600000 ms), then save it separately from the featured roster. A configured target that is no longer advertised remains in the chain until you remove it. The roster and fallback chain are separate settings; this editor does not make the roster replace the fallback policy.
+In **Subagents → Delegation settings**, edit the ordered fallback chain and its availability polling interval (5000–600000 ms), then save it separately from the pinned roster. A configured target that is no longer advertised remains in the chain until you remove it. The roster and fallback chain are separate settings; this editor does not make the roster replace the fallback policy.
 
 When a routed preferred model may receive V2 work from a native ChatGPT parent, the panel explains the upstream encrypted-task limitation. Readable tasks from routed parents are unaffected. The guidance uses `/api/v2` mode and native V1 pin state; the current API does not expose recovery activation or request-specific eligibility, so the panel reports those as unknown. V1/plaintext-compatible delegation remains an alternative. Experimental V2 recovery, where eligible and explicitly enabled, adds quota usage, latency, backend dependence and possible fidelity loss; it does not repair the upstream protocol. See [sub-agent surfaces](/guides/sub-agent-surface/) and [the upstream limitation](https://github.com/lidge-jun/opencodex/issues/92).
 

@@ -603,7 +603,7 @@ changed state yields conflict. This check is **not CAS**, so a later concurrent
 write can still race. Re-read on refusal and after success; never auto-reset to
 make an invalid order pass.
 
-As alternatives, `models order set --mode alphabetical|provider|most-used --json`
+As alternatives, `models order set --mode alphabetical|provider|family|most-used --json`
 derives a complete routed order. Preset modes do not prepend the manual featured
 prefix. Most-used reads all-time/all-surface usage and refuses incomplete history;
 unranked candidates remain present. A saved order containing bare native IDs

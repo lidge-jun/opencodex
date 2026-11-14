@@ -91,7 +91,7 @@ describe("pure picker projections", () => {
     for (const rows of variants) {
       const available = rows.map(row => row.namespaced);
       const usage = rows.map((row, index) => ({ provider: row.provider, model: row.id, requests: index + 1 }));
-      for (const mode of ["default", "alphabetical", "provider", "most-used"] as const) {
+      for (const mode of ["default", "alphabetical", "provider", "family", "most-used"] as const) {
         expect(cli.modelPickerOrder(mode, available, usage, rows)).toEqual(gui.modelPickerOrder(mode, available, usage, rows));
       }
       const tokens = [...available, "native", ...rows.map(row => `${row.provider}/${row.id}`)];
@@ -167,7 +167,7 @@ describe("models order commands", () => {
     ]);
     expect(f.writes()[0]?.body).toEqual({ pickerOrder: ["beta/z", "alpha/a", "alpha/b"], pickerOrderMode: null });
   });
-  for (const mode of ["alphabetical", "provider", "most-used"]) test(`preset ${mode} does not prepend featured`, async () => {
+  for (const mode of ["alphabetical", "provider", "family", "most-used"]) test(`preset ${mode} does not prepend featured`, async () => {
     const f = fixture({ settings: { ...initial, chosen: ["beta/z"] } });
     expect(await handleModelsOrderCommand(["set", `--mode=${mode}`, "--json"], f.deps)).toBe(0);
     expect(f.writes()[0]?.body).toEqual({ pickerOrder: ["alpha/a", "alpha/b", "beta/z"], pickerOrderMode: mode });

@@ -14,8 +14,8 @@ Codex の models-manager はピッカーに表示されるカタログ項目を 
 
 そのため opencodex は配列位置ではなくより低い priority を付与してフィーチャー位置を制御します。
 この表の固定値と以下の例は、有効な account selector がない構成を説明します。`N` 個の selector が
-ある場合、設定 rank `i` の featured bare native は priority `i * N + j` の selector 行へ展開され、
-`j` は 0 から始まる selector の位置です。featured routed 行には `i * N`、exact
+ある場合、設定 rank `i` の固定 bare native は priority `i * N + j` の selector 行へ展開され、
+`j` は 0 から始まる selector の位置です。固定 routed 行には `i * N`、exact
 account-qualified native id にはその selector の `i * N + j` が使用されます。Codex が公開するのは
 引き続きピッカーに表示される最初の 5 行だけです。選択されていない routed 行は、これらの selector
 グループの外へ移動されます。
@@ -26,10 +26,10 @@ selector がない場合の priority は次のとおりです。
 
 | カタログ項目 | Priority | 根拠 |
  --- | ---: | --- |
-| `subagentModels[i]` | `i`(`0` から `4`) | `src/codex/catalog/sync.ts` の featured rank map |
+| `subagentModels[i]` | `i`(`0` から `4`) | `src/codex/catalog/sync.ts` の固定 rank map |
 | その他のルーティングモデル | `5` | `src/codex/catalog/sync.ts` のルーティング項目生成 |
 | デフォルトネイティブ GPT スラッグ | `sourcePriority` | `src/codex/catalog/sync.ts` のネイティブ項目生成 |
-| featured リストがあるとき選択されていないネイティブモデル | 最小 `featured.length + 100` | `src/codex/catalog/sync.ts` のネイティブカタログマージ |
+| 固定リストがあるとき選択されていないネイティブモデル | 最小 `featured.length + 100` | `src/codex/catalog/sync.ts` のネイティブカタログマージ |
 
 管理 API は `src/server/management/agent-settings-routes.ts` の `slice(0, 5)` で `subagentModels` を最大
 5 つに制限します。これは最初の 5 モデルオーバーライドだけを広告する Codex `spawn_agent` サーフェスと合致します。
@@ -48,7 +48,7 @@ selector がない場合の priority は次のとおりです。
 
 その後 `orderForSubagents()` が stable sort を使い、フィーチャー済みモデルを `subagentModels` に書いた順に
 前に動かします。フィーチャー以外のモデルは前に決定されたプロバイダー/ID アルファベット相対順序を保ちます
-(`src/codex/catalog/sync.ts`)。項目生成時の featured rank も priority `0` から `4` に変換されるため
+(`src/codex/catalog/sync.ts`)。項目生成時の固定 rank も priority `0` から `4` に変換されるため
 Codex の priority ソートでもこの先頭順序は保存されます。
 
 ## 公開可否と順序は別物
@@ -62,11 +62,11 @@ Codex の priority ソートでもこの先頭順序は保存されます。
 
 ## 最終ピッカーパターン
 
-有効な account selector がなく、featured リストが空でない場合の最終順序は次のとおりです。
+有効な account selector がなく、固定リストが空でない場合の最終順序は次のとおりです。
 
 1. 設定された `subagentModels` 順どおりに、priority `0` から `4` を受けたモデル
 2. 残りのすべてのルーティングモデル、プロバイダー順とモデル ID 順アルファベットソート、priority `5`
-3. カタログマージ過程で featured ブロックの下に押し下げられた選択されていないネイティブモデル
+3. カタログマージ過程で固定ブロックの下に押し下げられた選択されていないネイティブモデル
 
 `subagentModels` がない場合、ルーティングモデルは priority `5` を維持し、ネイティブ GPT 項目は通常 priority
 (sourcePriority、情報がなければ `9`)を使います。ルーティンググループ内部は引き続きプロバイダー/ID
@@ -97,7 +97,7 @@ subagentModels = [
 | 5 | `gpt-5.6-terra` | `4` | 5 番目の選択 |
 | 6 | `anthropic/claude-fable-5` | `5` | 残りのルーティングモデルのうちプロバイダー/ID アルファベット順の最初 |
 | 7 以降 | 残りのルーティングモデル | `5` | プロバイダー アルファベット順、同じプロバイダー内ではモデル ID アルファベット順 |
-| ルーティングモデルの後 | 残りのネイティブモデル | `featured.length + 100` 以上 | 選択されていないネイティブモデルは featured ブロックの下に移動 |
+| ルーティングモデルの後 | 残りのネイティブモデル | `featured.length + 100` 以上 | 選択されていないネイティブモデルは固定ブロックの下に移動 |
 
 最初の 5 項目は `spawn_agent` に広告されるオーバーライドで、残りは通常のピッカー順序に続きます。
 
@@ -107,16 +107,16 @@ account selector がある場合、5 項目の制限は bare native の選択が
 ## 順序を変える方法
 
 先頭モデルの順序を変更するサポート手段は、`subagentModels` を並べ替えることです。
-ダッシュボードの **Sub-agents** ページでは bare native id と routed id を並べ替えられます。
+ダッシュボードの **モデル → クライアントのモデル選択** では bare native id と routed id を並べ替えられます。
 設定と `ocx agent subagents set` は exact account-qualified
 `<selector>/<native-openai-model>` id も受け付けます。ダッシュボードは保存済みの id を現在利用できなくても保持します。設定する id は最大 5 つにしてください。account selector がある
 場合は 1 つの bare native が複数の selector-qualified 行に展開されるため、設定した選択肢と公開
 される行は必ずしも一対一ではありません。
 
 `modelPickerOrder` はピッカーの表示順だけを指定します。ルーティング ID
-`<provider>/<model>` だけを指定した場合、一覧にある非 featured 行は指定順の表示帯
+`<provider>/<model>` だけを指定した場合、一覧にある非固定行は指定順の表示帯
 （`1000 + i`）に並びます。一覧にないルーティング行は通常の優先順位を保ち、この表示帯より前に
-残ります。`subagentModels` にも含まれる行は featured の優先順位を保ち、ネイティブ行の位置も変わりません。
+残ります。`subagentModels` にも含まれる行は固定の優先順位を保ち、ネイティブ行の位置も変わりません。
 相対的な順序を指定したいルーティング行はすべて一覧に含めてください。
 
 ピッカー全体を並び替えるには、`/` を含まない、空でも空白だけでもないカタログ ID
@@ -136,7 +136,7 @@ account selector がある場合、5 項目の制限は bare native の選択が
 ### 移行時の注意：既存の一覧に含まれるネイティブ ID
 
 以前は `modelPickerOrder` 内の bare native ID が無視されていました。既存の一覧にこのような ID が
-あると、今後は featured 行を含むピッカー全体の並び替えが有効になります。従来のルーティング行だけの
+あると、今後は固定行を含むピッカー全体の並び替えが有効になります。従来のルーティング行だけの
 動作を保つには、bare ID を取り除いてください。未設定、空、空白だけ、ルーティング ID だけの一覧は
 従来どおり動作します。
 
@@ -157,8 +157,8 @@ V1 には OpenCodex の推奨候補リストを注入しません。V2 にはク
 
 ## ダッシュボードの並び順プリセット
 
-**Models**でデフォルト、モデル名A–Z、プロバイダー別、使用量スナップショットを選び、順序を適用します。現在選択可能なルーティングIDと `modelPickerOrderMode`（`alphabetical`、`provider`、`most-used`）を保存します。使用量は適用時に保持された全履歴を一度だけ読み、再読込やモデルの増減では再計算しません。既存のカスタム・ネイティブ全体順は明示的な適用まで保持されます。デフォルトは候補が空でも両フィールドを削除できます。
+**Models**でデフォルト、モデル名A–Z、プロバイダー別、ファミリー別、使用量スナップショットを選び、順序を適用します。現在選択可能なルーティングIDと `modelPickerOrderMode`（`alphabetical`、`provider`、`family`、`most-used`）を保存します。使用量は適用時に保持された全履歴を一度だけ読み、再読込やモデルの増減では再計算しません。既存のカスタム・ネイティブ全体順は明示的な適用まで保持されます。デフォルトは候補が空でも両フィールドを削除できます。
 
-`GET/PUT /api/subagent-models` の `chosen` と `available` は無効・欠落した保存済みrosterも保持します。`pickerAvailable` は選択可能なルーティングIDのみです。Modelsは `pickerOrder` と `pickerOrderMode` を送り、`models` は送りません。Rosterだけの保存は順序設定を維持し、不正入力・保存失敗は以前の状態を保ちます。
+`GET/PUT /api/subagent-models` の `chosen` と `available` は無効・欠落した保存済みrosterも保持します。`pickerAvailable` は選択可能なルーティングIDのみです。Modelsページで固定rosterを編集すると `models` が送られます。ピッカー順序の保存は `pickerOrder` と `pickerOrderMode` を送ります。Rosterだけの保存は順序設定を維持し、不正入力・保存失敗は以前の状態を保ちます。
 
-featured・ネイティブの優先順位帯を保ち、CodexカタログとClaude検出のルーティンググループに適用します。Claudeのネイティブ先頭グループと明示的なDesktopプロファイル・alias所有権は維持されます。OpenCodexのガイド順位とfallback設定は変わりませんが、ネイティブCodexの上位5候補や推奨デフォルトは変わる場合があります。保存による再起動は行いません。更新が保留中、または古いカタログを保持するクライアントでは開き直しが必要な場合があります。
+固定・ネイティブの優先順位帯を保ち、CodexカタログとClaude検出のルーティンググループに適用します。Claudeのネイティブ先頭グループと明示的なDesktopプロファイル・alias所有権は維持されます。OpenCodexのガイド順位とfallback設定は変わりませんが、ネイティブCodexの上位5候補や推奨デフォルトは変わる場合があります。保存による再起動は行いません。更新が保留中、または古いカタログを保持するクライアントでは開き直しが必要な場合があります。
