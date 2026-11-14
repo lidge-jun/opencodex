@@ -92,6 +92,31 @@ function applyModelCostRowReplacement(config: OcxConfig): void {
   provider.modelCosts = costs;
 }
 
+type PriceMultiplierReplacement = { provider: string; multiplier: number | null };
+const priceMultiplierReplacements = new WeakMap<OcxConfig, PriceMultiplierReplacement>();
+
+/** Explicit multiplier PUT owns the field, even when it equals the baseline or is already absent. */
+export function withPriceMultiplierReplacement(
+  config: OcxConfig, provider: string, multiplier: number | null, save: () => void,
+): void {
+  const previous = priceMultiplierReplacements.get(config);
+  priceMultiplierReplacements.set(config, { provider, multiplier });
+  try { save(); }
+  finally {
+    if (previous) priceMultiplierReplacements.set(config, previous);
+    else priceMultiplierReplacements.delete(config);
+  }
+}
+
+function applyPriceMultiplierReplacement(config: OcxConfig): void {
+  const replacement = priceMultiplierReplacements.get(config);
+  if (!replacement) return;
+  if (!Object.hasOwn(config.providers, replacement.provider)) throw new Error("pricing provider was removed before persistence");
+  const provider = config.providers[replacement.provider]!;
+  if (replacement.multiplier === null) delete provider.priceMultiplier;
+  else provider.priceMultiplier = replacement.multiplier;
+}
+
 /**
  * Adopt a committed discovery decision and its merge baseline as one synchronous step.
  * Visibility writers assign and save synchronously; any future writer yielding between
@@ -620,6 +645,7 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
     // Recursive three-way merging preserves sibling rows; explicit PUT/reset
     // replaces only its model after merging, including absent policy fields.
     applyModelCostRowReplacement(config);
+    applyPriceMultiplierReplacement(config);
     if (claudeCodeBaseline.has(config)) {
       if (onDisk !== undefined) {
         const baseline = claudeCodeBaseline.get(config);

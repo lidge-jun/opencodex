@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { clearModelCache } from "../../src/codex/model-cache";
 import { resetCodexModelEntitlementCacheForTests } from "../../src/codex/model-entitlements";
-import { saveConfig } from "../../src/config";
+import { armClaudeCodeBaseline, loadConfig, saveConfig } from "../../src/config";
 import { sanitizeModelCostsForLoad } from "../../src/config/load-degrade";
 import { handleModelRoutes } from "../../src/server/management/model-routes";
 import { listManagementModelRows } from "../../src/server/management/model-rows";
@@ -127,6 +127,31 @@ describe("PUT /api/providers/:name/price-multiplier", () => {
     const unset = harness(fixture(), true);
     await expect(unset.call("PUT", multiplierPath, { multiplier: 5 })).rejects.toThrow("disk full");
     expect(Object.hasOwn(unset.config.providers[PROVIDER]!, "priceMultiplier")).toBe(false);
+  });
+
+  test("an explicit write wins over a concurrent disk edit of the same field", async () => {
+    saveConfig(fixture({ priceMultiplier: 2 }));
+    const config = loadConfig();
+    armClaudeCodeBaseline(config);
+    const put = async (multiplier: number | null) => {
+      const url = new URL(`http://127.0.0.1:10100${multiplierPath}`);
+      return (await handleModelRoutes({ version: "test", url, config,
+        req: new Request(url, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ multiplier }) }),
+        deps: {}, convergeCodexCatalog: async () => {}, syncClaudeAgentDefsBestEffort: async () => {} }))!;
+    };
+    const diskEdit = (multiplier: number | undefined) => {
+      const disk = loadConfig();
+      if (multiplier === undefined) delete disk.providers[PROVIDER]!.priceMultiplier;
+      else disk.providers[PROVIDER]!.priceMultiplier = multiplier;
+      saveConfig(disk);
+    };
+    diskEdit(3);
+    expect((await put(2)).status).toBe(200);
+    expect(loadConfig().providers[PROVIDER]!.priceMultiplier).toBe(2);
+    expect((await put(null)).status).toBe(200);
+    diskEdit(4);
+    expect((await put(null)).status).toBe(200);
+    expect(Object.hasOwn(loadConfig().providers[PROVIDER]!, "priceMultiplier")).toBe(false);
   });
 
   test("a saved multiplier changes the price the estimator uses", async () => {

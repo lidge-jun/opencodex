@@ -111,7 +111,7 @@ import {
 import { removeCredential } from "../../oauth/store";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { redactSecretString } from "../../lib/redact";
-import { withModelCostRowReplacement } from "../../config/live-reconcile";
+import { withModelCostRowReplacement, withPriceMultiplierReplacement } from "../../config/live-reconcile";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import { deriveProviderPresets } from "../../providers/derive";
 import { providerCodexAccountMode } from "../../providers/registry";
@@ -540,7 +540,8 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     if (multiplier === null) delete provider.priceMultiplier;
     else provider.priceMultiplier = multiplier as number;
     try {
-      persistConfig(config);
+      // Applied again after reconciliation, so a disk edit of the same field cannot override it.
+      withPriceMultiplierReplacement(config, name, multiplier as number | null, () => persistConfig(config));
     } catch (error) {
       if (!(error instanceof ConfigWritePublishedError)) {
         if (hadMultiplier) provider.priceMultiplier = previous;
