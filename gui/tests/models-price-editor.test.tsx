@@ -42,6 +42,7 @@ describe("Models manual price editor", () => {
   let catalogGate: ReturnType<typeof deferred> | null;
   let storedMultiplier: number | null;
   let multiplierPuts: Array<{ multiplier: number | null }>;
+  let multiplierReceiptLost: boolean;
   let pricingRefreshes: number;
   let pricingRefreshResponse: (() => Response) | null;
   let getResponse: (() => Response) | null;
@@ -84,6 +85,7 @@ describe("Models manual price editor", () => {
     putResponse = null;
     storedMultiplier = null;
     multiplierPuts = [];
+    multiplierReceiptLost = false;
     pricingRefreshes = 0;
     pricingRefreshResponse = null;
     testWindow.localStorage.setItem("ocx-lang", "en");
@@ -115,6 +117,7 @@ describe("Models manual price editor", () => {
         const body = JSON.parse(String(init!.body)) as { multiplier: number | null };
         multiplierPuts.push(body);
         storedMultiplier = body.multiplier;
+        if (multiplierReceiptLost) throw new TypeError("connection dropped after persisting");
         return Response.json({ ok: true, provider: "xai-demo", multiplier: body.multiplier });
       }
       if (url.endsWith("/api/pricing/refresh")) {
@@ -716,6 +719,47 @@ describe("Models manual price editor", () => {
       await click("Refresh prices");
       expect(container.querySelector('dialog [role="alert"]')!.textContent).toContain("Could not refresh the online price catalogs");
       expect(button("Save").disabled).toBe(false);
+    });
+
+    test("a refresh-list retry after a failed Refresh prices keeps the dialog open with the unsaved rate draft", async () => {
+      await mount();
+      await open();
+      await fill(["4", "5"]);
+      catalogFailure = true;
+      await click("Refresh prices");
+      expect(container.querySelector('dialog [role="alert"]')).not.toBeNull();
+      catalogFailure = false;
+      await click("Refresh list");
+      expect(container.querySelector("dialog")).not.toBeNull();
+      expect(inputs().slice(0, 2).map(input => input.value)).toEqual(["4", "5"]);
+      expect(inputs()[0]!.disabled).toBe(false);
+      expect(mutations).toHaveLength(0);
+      await click("Save");
+      expect(mutations).toHaveLength(1);
+      expect(container.querySelector("dialog")).toBeNull();
+    });
+
+    test("a multiplier write with a lost receipt recovers the persisted value before editing", async () => {
+      await mount();
+      await open();
+      const field = () => container.querySelector<HTMLInputElement>('dialog input[id$="-multiplier"]')!;
+      const setField = async (value: string) => act(async () => {
+        Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!.set!.call(field(), value);
+        field().dispatchEvent(new testWindow.Event("input", { bubbles: true }));
+      });
+      await setField("0.5");
+      multiplierReceiptLost = true;
+      await click("Save multiplier");
+      expect(container.querySelector('dialog [role="alert"]')!.textContent).toContain("may have changed");
+      expect(inputs()[0]!.disabled).toBe(true);
+      multiplierReceiptLost = false;
+      await click("Reload price");
+      expect(field().value).toBe("0.5");
+      await setField("");
+      expect(button("Save multiplier").disabled).toBe(false);
+      await click("Save multiplier");
+      expect(multiplierPuts.at(-1)).toEqual({ multiplier: null });
+      expect(storedMultiplier).toBeNull();
     });
 
     test("relay multiplier loads from the GET, saves a number, clears with null, and rejects invalid text", async () => {

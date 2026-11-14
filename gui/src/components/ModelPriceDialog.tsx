@@ -53,6 +53,9 @@ export default function ModelPriceDialog({ model, apiBase, onRefresh, onClose }:
   const [multiplier, setMultiplier] = useState<number | null>(null);
   const [multiplierDraft, setMultiplierDraft] = useState("");
   const [aux, setAux] = useState<AuxKind | null>(null);
+  // A failed list refresh after a confirmed auxiliary change retries without closing,
+  // so an unsaved rate draft survives; after a model-cost save the retry closes.
+  const [retryKeepsOpen, setRetryKeepsOpen] = useState(false);
   const endpoint = `${apiBase}/api/providers/${encodeURIComponent(model.provider)}/model-costs`;
   const mutating = phase === "saving" || phase === "refreshing";
   const locked = phase !== "ready";
@@ -118,6 +121,8 @@ export default function ModelPriceDialog({ model, apiBase, onRefresh, onClose }:
     if (requestRef.current || (cost === undefined ? phase !== "refreshFailed" : phase !== "ready")) return;
     const bounded = createBoundedFetch(REQUEST_TIMEOUT_MS);
     requestRef.current = bounded;
+    const keepOpen = cost === undefined && retryKeepsOpen;
+    if (cost !== undefined) setRetryKeepsOpen(false);
     setPhase(cost === undefined ? "refreshing" : "saving");
     mutationPendingRef.current = true;
     setErrorKey(null);
@@ -142,7 +147,11 @@ export default function ModelPriceDialog({ model, apiBase, onRefresh, onClose }:
       }
       if (!await onRefresh(bounded.signal)) throw new Error("catalog refresh failed");
       bounded.signal.throwIfAborted();
-      if (requestRef.current === bounded) onClose();
+      if (requestRef.current !== bounded) return;
+      if (keepOpen) {
+        setRetryKeepsOpen(false);
+        setPhase("ready");
+      } else onClose();
     } catch {
       if (requestRef.current !== bounded) return;
       setPhase(confirmed ? "refreshFailed" : "unknown");
@@ -178,8 +187,12 @@ export default function ModelPriceDialog({ model, apiBase, onRefresh, onClose }:
       if (requestRef.current === bounded) setPhase("ready");
     } catch {
       if (requestRef.current !== bounded) return;
-      setPhase(confirmed ? "refreshFailed" : "ready");
-      setErrorKey(confirmed ? "pricing.override.refreshFailed" : failKey);
+      // A multiplier PUT whose receipt never arrived may still have been persisted:
+      // recover through a fresh read instead of editing against a stale value.
+      const unknown = !confirmed && kind === "multiplier";
+      if (confirmed) setRetryKeepsOpen(true);
+      setPhase(confirmed ? "refreshFailed" : unknown ? "unknown" : "ready");
+      setErrorKey(confirmed ? "pricing.override.refreshFailed" : unknown ? "pricing.override.outcomeUnknown" : failKey);
     } finally {
       bounded.clear();
       if (requestRef.current === bounded) {
