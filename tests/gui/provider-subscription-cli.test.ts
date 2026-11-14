@@ -25,29 +25,44 @@ const CLAUDE_CLI: CatalogPreset = {
   keyOptional: true,
 };
 
+const ANTIGRAVITY_CLI: CatalogPreset = {
+  id: "antigravity-cli",
+  label: "Antigravity CLI (subscription)",
+  adapter: "antigravity-cli",
+  baseUrl: "https://antigravity.google",
+  auth: "key",
+  keyOptional: true,
+};
+
 const englishT: TFn = (key, vars) => interpolate(en[key], vars);
 
 describe("subscription CLI grouping", () => {
   test("the adapter, not the provider id, identifies a subscription CLI row", () => {
     expect(isSubscriptionCliProvider({ adapter: "claude-cli" })).toBe(true);
     expect(isSubscriptionCliProvider({ adapter: " claude-cli " })).toBe(true);
+    expect(isSubscriptionCliProvider({ adapter: "antigravity-cli" })).toBe(true);
     expect(isSubscriptionCliProvider({ adapter: "anthropic" })).toBe(false);
+    expect(isSubscriptionCliProvider({ adapter: "google" })).toBe(false);
     expect(isSubscriptionCliProvider({ adapter: "openai-chat" })).toBe(false);
     expect(isSubscriptionCliProvider({})).toBe(false);
   });
 
-  test("claude-cli is paid while an ordinary keyless row stays free", () => {
+  test("claude-cli and antigravity-cli are paid while an ordinary keyless row stays free", () => {
     const row = { adapter: "claude-cli", baseUrl: CLAUDE_CLI.baseUrl, authMode: "key", keyOptional: true };
     expect(isFreeProvider(row)).toBe(false);
     expect(providerTier("claude-cli", row)).toBe("paid");
+    const agyRow = { adapter: "antigravity-cli", baseUrl: ANTIGRAVITY_CLI.baseUrl, authMode: "key", keyOptional: true };
+    expect(isFreeProvider(agyRow)).toBe(false);
+    expect(providerTier("antigravity-cli", agyRow)).toBe("paid");
     expect(isFreeProvider({ adapter: "openai-chat", baseUrl: "https://api.example.com/v1", keyOptional: true })).toBe(true);
   });
 
-  test("the add-provider catalog lists claude-cli under Paid and nowhere else", () => {
+  test("the add-provider catalog lists subscription CLIs under Paid and nowhere else", () => {
     const keylessFree: CatalogPreset = { id: "keyless", label: "Keyless", adapter: "openai-chat", baseUrl: "https://api.example.com/v1", auth: "key", keyOptional: true };
-    const buckets = bucketPresets([CLAUDE_CLI, keylessFree]);
+    const buckets = bucketPresets([CLAUDE_CLI, ANTIGRAVITY_CLI, keylessFree]);
     expect(presetTier(CLAUDE_CLI)).toBe("paid");
-    expect(buckets.paid.map(p => p.id)).toEqual(["claude-cli"]);
+    expect(presetTier(ANTIGRAVITY_CLI)).toBe("paid");
+    expect(buckets.paid.map(p => p.id)).toEqual(["claude-cli", "antigravity-cli"]);
     expect(buckets.free.map(p => p.id)).toEqual(["keyless"]);
     expect(buckets.accounts).toEqual([]);
     expect(buckets.local).toEqual([]);
@@ -110,5 +125,21 @@ describe("subscription CLI warning copy", () => {
       expect(warning, locale).toContain("{apiProvider}");
       expect(warning, locale).toContain("Claude Code");
     }
+  });
+});
+
+describe("antigravity-cli combo image capability", () => {
+  test("antigravity-cli rows support combo image input natively without vision sidecar enrollment", async () => {
+    const { comboImagesSupported, comboVisionSidecarTargets } = await import("../../gui/src/combo-capabilities");
+    const targets = [{ provider: "antigravity-cli", model: "gemini-4-carbon" }];
+    const models = [{
+      provider: "antigravity-cli",
+      id: "gemini-4-carbon",
+      inputModalities: ["text", "image"],
+      inputModalitiesDeclared: ["text", "image"],
+      visionSidecarConsumer: false,
+    }];
+    expect(comboImagesSupported(targets, models)).toBe(true);
+    expect(comboVisionSidecarTargets(targets, models)).toEqual([]);
   });
 });

@@ -27,6 +27,7 @@ const EXPECTED_ADAPTER_NAMES = {
   "mimo-free": "mimo-free",
   qoder: "qoder",
   "claude-cli": "claude-cli",
+  "antigravity-cli": "antigravity-cli",
   "dsh-account": "dsh-account",
 } as const;
 
@@ -41,6 +42,8 @@ function provider(adapter: string): OcxProviderConfig {
         ? "https://www.codebuddy.ai"
         : adapter === "qoder"
           ? "https://qoder.com"
+          : adapter === "antigravity-cli"
+            ? "https://antigravity.google"
         // ollama-native refuses a bare /v1 path on a host it does not recognise, rather than
         // guessing that an arbitrary destination speaks Ollama's compatibility surface.
         : adapter === "ollama-native"

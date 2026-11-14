@@ -8,6 +8,8 @@ import type { ProviderRequestSlot } from "../providers/request-pacing";
 /** Metadata about the caller's incoming request, for auth-forwarding adapters. */
 export interface IncomingMeta {
   headers: Headers;
+  /** OpenCodex request correlation id for diagnostics and adapter warning logs. */
+  requestId?: string;
   /** Canonical routed provider identity for provider-specific wire fields. */
   providerName?: string;
   /** Trusted caller has durable structural replay ownership for earlier completed tools. */

@@ -737,7 +737,12 @@ export function imagePart(imageUrl: string): WireContentPart | undefined {
 }
 
 /** Render replay prose; only Qoder opts into unsupported-reference history markers. */
-export function formatMessageForHistory(message: OcxMessage, vendorNameByWire?: ReadonlyMap<string, string>, markUnsupportedImages = false): string {
+export function formatMessageForHistory(
+  message: OcxMessage,
+  vendorNameByWire?: ReadonlyMap<string, string>,
+  markUnsupportedImages = false,
+  options?: { omitThinking?: boolean },
+): string {
   if (message.role === "user") {
     const text = typeof message.content === "string"
       ? message.content
@@ -754,7 +759,9 @@ export function formatMessageForHistory(message: OcxMessage, vendorNameByWire?: 
       if (part.type === "text" && part.text.trim()) {
         parts.push(part.text.trim());
       } else if (part.type === "thinking" && part.thinking.trim()) {
-        parts.push(`[Thinking: ${part.thinking.trim()}]`);
+        if (!options?.omitThinking) {
+          parts.push(`[Thinking: ${part.thinking.trim()}]`);
+        }
       } else if (part.type === "toolCall") {
         // Without a vendor map the history keeps the bare request name, byte-for-byte as before.
         const wireName = vendorNameByWire ? namespacedToolName(part.namespace, part.name) : part.name;

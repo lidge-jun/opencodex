@@ -34,6 +34,26 @@ export const CODEBUDDY_TOOL_LIMITS = Object.freeze({
   maxPatternBytes: 8 * 1024,
 });
 
+export type CodeBuddyToolLimits = {
+  readonly maxTools: number;
+  readonly maxTurnToolCalls: number;
+  readonly maxNameBytes: number;
+  readonly maxDescriptionBytes: number;
+  readonly maxSchemaBytes: number;
+  readonly maxToolBytes: number;
+  readonly maxCatalogBytes: number;
+  readonly maxSchemaDepth: number;
+  readonly maxSchemaNodes: number;
+  readonly maxPatternBytes: number;
+};
+
+/** Raised catalog ceiling for Antigravity CLI so Claude Code + multi-MCP desktop catalogs fit cleanly. */
+export const ANTIGRAVITY_TOOL_LIMITS: CodeBuddyToolLimits = Object.freeze({
+  ...CODEBUDDY_TOOL_LIMITS,
+  maxTools: 512,
+  maxCatalogBytes: 4 * 1024 * 1024,
+});
+
 // CodeBuddy renders MCP tools as `mcp__<server>__<tool>`. Keep the complete
 // rendered name comfortably below the common 64-character function-name limit.
 const MAX_CODEBUDDY_TOOL_ALIAS_CHARS = 40;
@@ -166,10 +186,15 @@ function invalidJson(reason: string): never {
  * the depth check happens before descent, and the resulting maximum call depth
  * is fixed rather than attacker-controlled.
  */
-function cloneBoundedJson(value: unknown, depth: number, state: JsonCloneState): unknown {
-  if (depth > CODEBUDDY_TOOL_LIMITS.maxSchemaDepth) invalidJson("nesting is too deep");
+function cloneBoundedJson(
+  value: unknown,
+  depth: number,
+  state: JsonCloneState,
+  limits: CodeBuddyToolLimits = CODEBUDDY_TOOL_LIMITS,
+): unknown {
+  if (depth > limits.maxSchemaDepth) invalidJson("nesting is too deep");
   state.nodes += 1;
-  if (state.nodes > CODEBUDDY_TOOL_LIMITS.maxSchemaNodes) invalidJson("node count is too large");
+  if (state.nodes > limits.maxSchemaNodes) invalidJson("node count is too large");
 
   if (value === null || typeof value === "boolean" || typeof value === "string") {
     if (typeof value === "string" && hasUnpairedSurrogate(value)) invalidJson("text contains an unpaired surrogate");
@@ -187,7 +212,7 @@ function cloneBoundedJson(value: unknown, depth: number, state: JsonCloneState):
   try {
     if (Array.isArray(value)) {
       if (Object.getPrototypeOf(value) !== Array.prototype) invalidJson("arrays must use the built-in prototype");
-      if (value.length > CODEBUDDY_TOOL_LIMITS.maxSchemaNodes) invalidJson("array length is too large");
+      if (value.length > limits.maxSchemaNodes) invalidJson("array length is too large");
 
       const keys = Reflect.ownKeys(value);
       for (const key of keys) {
@@ -206,7 +231,7 @@ function cloneBoundedJson(value: unknown, depth: number, state: JsonCloneState):
       }
       if (keys.length - 1 !== value.length) invalidJson("sparse arrays are not allowed");
 
-      return value.map(entry => cloneBoundedJson(entry, depth + 1, state));
+      return value.map(entry => cloneBoundedJson(entry, depth + 1, state, limits));
     }
 
     const prototype = Object.getPrototypeOf(value);
@@ -219,7 +244,7 @@ function cloneBoundedJson(value: unknown, depth: number, state: JsonCloneState):
       if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
         invalidJson("object fields must be enumerable data properties");
       }
-      defineDataProperty(out, key, cloneBoundedJson(descriptor.value, depth + 1, state));
+      defineDataProperty(out, key, cloneBoundedJson(descriptor.value, depth + 1, state, limits));
     }
     return out;
   } finally {
@@ -245,22 +270,35 @@ function assertStringArray(value: unknown, keyword: string, allowEmpty = true): 
   return value as string[];
 }
 
-function assertSchema(value: unknown, keyword: string): void {
+function assertSchema(
+  value: unknown,
+  keyword: string,
+  limits: CodeBuddyToolLimits = CODEBUDDY_TOOL_LIMITS,
+): void {
   if (typeof value === "boolean") return;
   if (!isRecord(value)) invalidSchema(`${keyword} must contain a JSON Schema`);
-  validateSchema(value);
+  validateSchema(value, limits);
 }
 
-function validateSchemaMap(value: unknown, keyword: string, validatePatterns = false): void {
+function validateSchemaMap(
+  value: unknown,
+  keyword: string,
+  validatePatterns = false,
+  limits: CodeBuddyToolLimits = CODEBUDDY_TOOL_LIMITS,
+): void {
   if (!isRecord(value)) invalidSchema(`${keyword} must be an object of JSON Schemas`);
   for (const [name, schema] of Object.entries(value)) {
-    if (validatePatterns) validatePattern(name, `${keyword} key`);
-    assertSchema(schema, `${keyword}.${name}`);
+    if (validatePatterns) validatePattern(name, `${keyword} key`, limits);
+    assertSchema(schema, `${keyword}.${name}`, limits);
   }
 }
 
-function validatePattern(value: unknown, keyword = "pattern"): void {
-  if (typeof value !== "string" || utf8Bytes(value) > CODEBUDDY_TOOL_LIMITS.maxPatternBytes) {
+function validatePattern(
+  value: unknown,
+  keyword = "pattern",
+  limits: CodeBuddyToolLimits = CODEBUDDY_TOOL_LIMITS,
+): void {
+  if (typeof value !== "string" || utf8Bytes(value) > limits.maxPatternBytes) {
     invalidSchema(`${keyword} must be a bounded regular-expression string`);
   }
   try {
@@ -270,7 +308,10 @@ function validatePattern(value: unknown, keyword = "pattern"): void {
   }
 }
 
-function validateSchema(schema: Record<string, unknown>): void {
+function validateSchema(
+  schema: Record<string, unknown>,
+  limits: CodeBuddyToolLimits = CODEBUDDY_TOOL_LIMITS,
+): void {
   if (Object.hasOwn(schema, "type")) {
     const type = schema.type;
     if (typeof type === "string") {
@@ -285,11 +326,11 @@ function validateSchema(schema: Record<string, unknown>): void {
 
   for (const keyword of SCHEMA_MAP_KEYWORDS) {
     if (Object.hasOwn(schema, keyword)) {
-      validateSchemaMap(schema[keyword], keyword, keyword === "patternProperties");
+      validateSchemaMap(schema[keyword], keyword, keyword === "patternProperties", limits);
     }
   }
   for (const keyword of SCHEMA_VALUE_KEYWORDS) {
-    if (Object.hasOwn(schema, keyword)) assertSchema(schema[keyword], keyword);
+    if (Object.hasOwn(schema, keyword)) assertSchema(schema[keyword], keyword, limits);
   }
   for (const keyword of SCHEMA_ARRAY_KEYWORDS) {
     if (!Object.hasOwn(schema, keyword)) continue;
@@ -297,15 +338,15 @@ function validateSchema(schema: Record<string, unknown>): void {
     if (!Array.isArray(value) || (keyword !== "prefixItems" && value.length === 0)) {
       invalidSchema(`${keyword} must be an array of JSON Schemas${keyword === "prefixItems" ? "" : " with at least one entry"}`);
     }
-    for (const entry of value) assertSchema(entry, keyword);
+    for (const entry of value) assertSchema(entry, keyword, limits);
   }
 
   if (Object.hasOwn(schema, "items")) {
     const items = schema.items;
     if (Array.isArray(items)) {
-      for (const entry of items) assertSchema(entry, "items");
+      for (const entry of items) assertSchema(entry, "items", limits);
     } else {
-      assertSchema(items, "items");
+      assertSchema(items, "items", limits);
     }
   }
   if (Object.hasOwn(schema, "required")) assertStringArray(schema.required, "required");
@@ -345,7 +386,7 @@ function validateSchema(schema: Record<string, unknown>): void {
       invalidSchema(`${keyword} must be a boolean`);
     }
   }
-  if (Object.hasOwn(schema, "pattern")) validatePattern(schema.pattern);
+  if (Object.hasOwn(schema, "pattern")) validatePattern(schema.pattern, "pattern", limits);
 
   for (const keyword of ["$ref", "$dynamicRef"] as const) {
     if (!Object.hasOwn(schema, keyword)) continue;
@@ -374,7 +415,7 @@ function validateSchema(schema: Record<string, unknown>): void {
     if (!isRecord(schema.dependencies)) invalidSchema("dependencies must be an object");
     for (const [name, dependency] of Object.entries(schema.dependencies)) {
       if (Array.isArray(dependency)) assertStringArray(dependency, `dependencies.${name}`);
-      else assertSchema(dependency, `dependencies.${name}`);
+      else assertSchema(dependency, `dependencies.${name}`, limits);
     }
   }
 
@@ -401,14 +442,17 @@ function validateSchema(schema: Record<string, unknown>): void {
   }
 }
 
-function normalizeInputSchema(parameters: unknown): Record<string, unknown> {
+function normalizeInputSchema(
+  parameters: unknown,
+  limits: CodeBuddyToolLimits = CODEBUDDY_TOOL_LIMITS,
+): Record<string, unknown> {
   if (!isRecord(parameters)) invalidSchema("the root must be an object schema");
-  const cloned = cloneBoundedJson(parameters, 0, { active: new WeakSet(), nodes: 0 });
+  const cloned = cloneBoundedJson(parameters, 0, { active: new WeakSet(), nodes: 0 }, limits);
   if (!isRecord(cloned)) invalidSchema("the root must be an object schema");
-  if (serializedBytes(cloned) > CODEBUDDY_TOOL_LIMITS.maxSchemaBytes) {
-    throw new Error(`schema exceeds ${CODEBUDDY_TOOL_LIMITS.maxSchemaBytes} bytes`);
+  if (serializedBytes(cloned) > limits.maxSchemaBytes) {
+    throw new Error(`schema exceeds ${limits.maxSchemaBytes} bytes`);
   }
-  validateSchema(cloned);
+  validateSchema(cloned, limits);
   if (Object.hasOwn(cloned, "type") && cloned.type !== "object") {
     invalidSchema('the root type must be "object"');
   }
@@ -416,8 +460,8 @@ function normalizeInputSchema(parameters: unknown): Record<string, unknown> {
   const stripped = stripResponsesOnlyEncryptedMarker(cloned);
   if (!isRecord(stripped)) invalidSchema("the root must remain an object schema");
   if (!Object.hasOwn(stripped, "type")) stripped.type = "object";
-  if (serializedBytes(stripped) > CODEBUDDY_TOOL_LIMITS.maxSchemaBytes) {
-    throw new Error(`schema exceeds ${CODEBUDDY_TOOL_LIMITS.maxSchemaBytes} bytes`);
+  if (serializedBytes(stripped) > limits.maxSchemaBytes) {
+    throw new Error(`schema exceeds ${limits.maxSchemaBytes} bytes`);
   }
   return stripped;
 }
@@ -440,7 +484,11 @@ function directCodeBuddyAlias(wireName: string): string | undefined {
  * Produce a deterministic MCP-safe alias while retaining a readable prefix.
  * `used` closes both normalization and truncated-hash collision domains.
  */
-export function codeBuddyToolAlias(wireName: string, used = new Set<string>()): string {
+export function codeBuddyToolAlias(
+  wireName: string,
+  used = new Set<string>(),
+  limits: CodeBuddyToolLimits = CODEBUDDY_TOOL_LIMITS,
+): string {
   const direct = directCodeBuddyAlias(wireName);
   if (direct && !used.has(direct)) {
     used.add(direct);
@@ -450,7 +498,7 @@ export function codeBuddyToolAlias(wireName: string, used = new Set<string>()): 
   const cleaned = wireName.replace(/[^A-Za-z0-9_-]/g, "_");
   const maxBaseChars = MAX_CODEBUDDY_TOOL_ALIAS_CHARS - CODEBUDDY_TOOL_ALIAS_HASH_CHARS - 1;
   const base = (cleaned || "tool").slice(0, maxBaseChars);
-  for (let salt = 0; salt <= CODEBUDDY_TOOL_LIMITS.maxTools; salt++) {
+  for (let salt = 0; salt <= limits.maxTools; salt++) {
     const candidate = `${base}_${shortHash(wireName, salt)}`;
     if (!used.has(candidate)) {
       used.add(candidate);
@@ -461,7 +509,10 @@ export function codeBuddyToolAlias(wireName: string, used = new Set<string>()): 
 }
 
 /** Reserve direct names before hashing and sort the rest so request ordering cannot change aliases. */
-function codeBuddyToolAliases(wireNames: readonly string[]): Map<string, string> {
+function codeBuddyToolAliases(
+  wireNames: readonly string[],
+  limits: CodeBuddyToolLimits = CODEBUDDY_TOOL_LIMITS,
+): Map<string, string> {
   const aliases = new Map<string, string>();
   const used = new Set<string>();
   for (const wireName of wireNames) {
@@ -472,7 +523,7 @@ function codeBuddyToolAliases(wireNames: readonly string[]): Map<string, string>
     }
   }
   const hashedNames = wireNames.filter(wireName => !aliases.has(wireName)).sort();
-  for (const wireName of hashedNames) aliases.set(wireName, codeBuddyToolAlias(wireName, used));
+  for (const wireName of hashedNames) aliases.set(wireName, codeBuddyToolAlias(wireName, used, limits));
   return aliases;
 }
 
@@ -483,7 +534,12 @@ function validateToolNamePart(value: unknown): value is string {
     && !INVALID_TOOL_NAME_PATTERN.test(value);
 }
 
-function prepareTool(tool: OcxTool, index: number, seenWireNames: Set<string>): PreparedTool {
+function prepareTool(
+  tool: OcxTool,
+  index: number,
+  seenWireNames: Set<string>,
+  limits: CodeBuddyToolLimits = CODEBUDDY_TOOL_LIMITS,
+): PreparedTool {
   if (!tool || typeof tool !== "object") throw new Error(`CodeBuddy tool ${index + 1} is not an object.`);
   if (!validateToolNamePart(tool.name) || (
     tool.namespace !== undefined && !validateToolNamePart(tool.namespace)
@@ -491,8 +547,8 @@ function prepareTool(tool: OcxTool, index: number, seenWireNames: Set<string>): 
     throw new Error(`CodeBuddy tool ${index + 1} has an invalid name or namespace.`);
   }
   const wireName = namespacedToolName(tool.namespace, tool.name);
-  if (utf8Bytes(wireName) > CODEBUDDY_TOOL_LIMITS.maxNameBytes) {
-    throw new Error(`CodeBuddy tool ${index + 1} name exceeds ${CODEBUDDY_TOOL_LIMITS.maxNameBytes} bytes.`);
+  if (utf8Bytes(wireName) > limits.maxNameBytes) {
+    throw new Error(`CodeBuddy tool ${index + 1} name exceeds ${limits.maxNameBytes} bytes.`);
   }
   if (seenWireNames.has(wireName)) {
     throw new Error(`CodeBuddy tool catalog contains a duplicate wire name: ${wireName}.`);
@@ -504,13 +560,13 @@ function prepareTool(tool: OcxTool, index: number, seenWireNames: Set<string>): 
     throw new Error(`CodeBuddy tool ${index + 1} has an invalid description.`);
   }
   const description = tool.description || `Tool: ${wireName}`;
-  if (utf8Bytes(description) > CODEBUDDY_TOOL_LIMITS.maxDescriptionBytes) {
-    throw new Error(`CodeBuddy tool ${index + 1} description exceeds ${CODEBUDDY_TOOL_LIMITS.maxDescriptionBytes} bytes.`);
+  if (utf8Bytes(description) > limits.maxDescriptionBytes) {
+    throw new Error(`CodeBuddy tool ${index + 1} description exceeds ${limits.maxDescriptionBytes} bytes.`);
   }
 
   let inputSchema: Record<string, unknown>;
   try {
-    inputSchema = normalizeInputSchema(tool.parameters ?? {});
+    inputSchema = normalizeInputSchema(tool.parameters ?? {}, limits);
   } catch (error) {
     const detail = error instanceof Error ? error.message : "unknown schema error";
     throw new Error(`CodeBuddy tool ${index + 1} has an invalid input schema: ${detail}.`);
@@ -518,7 +574,10 @@ function prepareTool(tool: OcxTool, index: number, seenWireNames: Set<string>): 
   return { source: tool, wireName, description, inputSchema };
 }
 
-function buildToolBridge(parsed: OcxParsedRequest): CodeBuddyToolBridge {
+function buildToolBridge(
+  parsed: OcxParsedRequest,
+  limits: CodeBuddyToolLimits = CODEBUDDY_TOOL_LIMITS,
+): CodeBuddyToolBridge {
   const allTools = parsed.context.tools ?? [];
   if (!Array.isArray(allTools)) throw new Error("CodeBuddy tool catalog must be an array.");
 
@@ -550,26 +609,26 @@ function buildToolBridge(parsed: OcxParsedRequest): CodeBuddyToolBridge {
   if (requireToolCall && selected.length === 0) {
     throw new Error("CodeBuddy tool_choice requires a tool, but no matching tool is available.");
   }
-  if (selected.length > CODEBUDDY_TOOL_LIMITS.maxTools) {
-    throw new Error(`CodeBuddy tool catalog exceeds the ${CODEBUDDY_TOOL_LIMITS.maxTools}-tool limit.`);
+  if (selected.length > limits.maxTools) {
+    throw new Error(`CodeBuddy tool catalog exceeds the ${limits.maxTools}-tool limit.`);
   }
 
   const seenWireNames = new Set<string>();
-  const prepared = selected.map(({ index, tool }) => prepareTool(tool, index, seenWireNames));
-  const aliases = codeBuddyToolAliases(prepared.map(tool => tool.wireName));
+  const prepared = selected.map(({ index, tool }) => prepareTool(tool, index, seenWireNames, limits));
+  const aliases = codeBuddyToolAliases(prepared.map(tool => tool.wireName), limits);
   const definitions = prepared.map((tool, index): CodeBuddyMcpToolDefinition => {
     const definition = {
       name: aliases.get(tool.wireName)!,
       description: tool.description,
       inputSchema: tool.inputSchema,
     };
-    if (serializedBytes(definition) > CODEBUDDY_TOOL_LIMITS.maxToolBytes) {
-      throw new Error(`CodeBuddy tool ${index + 1} definition exceeds ${CODEBUDDY_TOOL_LIMITS.maxToolBytes} bytes.`);
+    if (serializedBytes(definition) > limits.maxToolBytes) {
+      throw new Error(`CodeBuddy tool ${index + 1} definition exceeds ${limits.maxToolBytes} bytes.`);
     }
     return definition;
   });
-  if (serializedBytes(definitions) > CODEBUDDY_TOOL_LIMITS.maxCatalogBytes) {
-    throw new Error(`CodeBuddy tool catalog exceeds ${CODEBUDDY_TOOL_LIMITS.maxCatalogBytes} bytes.`);
+  if (serializedBytes(definitions) > limits.maxCatalogBytes) {
+    throw new Error(`CodeBuddy tool catalog exceeds ${limits.maxCatalogBytes} bytes.`);
   }
 
   const emittedNameMap = new Map<string, string>();
@@ -586,6 +645,9 @@ function buildToolBridge(parsed: OcxParsedRequest): CodeBuddyToolBridge {
   return { tools, emittedNameMap, requireToolCall };
 }
 
-export function buildCodeBuddyToolBridge(parsed: OcxParsedRequest): CodeBuddyToolBridge {
-  return buildToolBridge(parsed);
+export function buildCodeBuddyToolBridge(
+  parsed: OcxParsedRequest,
+  limits: CodeBuddyToolLimits = CODEBUDDY_TOOL_LIMITS,
+): CodeBuddyToolBridge {
+  return buildToolBridge(parsed, limits);
 }

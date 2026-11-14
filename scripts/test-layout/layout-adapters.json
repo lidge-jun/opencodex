@@ -30,5 +30,11 @@
   "claude-chat-tool-dispatch.test.ts": "claude-integration",
   "claude-chat-tool-dispatch-routes.test.ts": "claude-integration",
   "anthropic-affinity-restart.test.ts": "adapters/anthropic",
-  "anthropic-affinity-store.test.ts": "adapters/anthropic"
+  "anthropic-affinity-store.test.ts": "adapters/anthropic",
+  "antigravity-cli-claude-bridge.test.ts": "adapters/google",
+  "antigravity-cli-p1-bridge.test.ts": "adapters/google",
+  "antigravity-cli-p2-replay.test.ts": "adapters/google",
+  "antigravity-cli-pretool-guard.test.ts": "adapters/google",
+  "antigravity-cli-session-pool.test.ts": "adapters/google",
+  "antigravity-terminal-errors.test.ts": "adapters/google"
 }

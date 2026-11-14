@@ -25,7 +25,10 @@ export function createAdmittedHttpTurn(
   ): Promise<Response> {
     const map = (response: Response) => options?.mapRefusal ? options.mapRefusal(response) : response;
     // The row carries the size and encoding of the body this turn's handler reads from `req` (#3023).
-    if (refusalLog) refusalLog.logCtx.requestBodyHolder ??= requestBodyFactsHolder(req);
+    if (refusalLog) {
+      refusalLog.logCtx.requestId ??= refusalLog.requestId;
+      refusalLog.logCtx.requestBodyHolder ??= requestBodyFactsHolder(req);
+    }
     const lease = tryAdmitTurn(sessionLaneIdFromRequest(req.headers), req.signal);
     if (!lease) {
       const response = serverBusyResponse(req, "active turns", policy);

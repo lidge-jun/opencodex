@@ -113,8 +113,22 @@ export type CodingAgentFailure = {
   error: Extract<AdapterEvent, { type: "error" }>;
 } & (
   | { source: "result"; frame: Record<string, unknown> }
-  | { source: "process-exit"; exitCode: number; stderr: string }
+  | { source: "process-exit"; exitCode: number; stderr: string; stderrTail?: string }
 );
+
+export interface CodingAgentCustomStreamContext {
+  stdout: NodeJS.ReadableStream;
+  emitOnce: (event: AdapterEvent, cliOutputError?: string) => void;
+  isTerminalEmitted: () => boolean;
+  isProcessSettled: () => boolean;
+  kill: () => void;
+  stopStream: () => void;
+}
+
+export interface CodingAgentCustomStreamOutcome {
+  sawTerminalResult: boolean;
+  classifyMissingResultStderr?: (stderr: string) => Extract<AdapterEvent, { type: "error" }> | undefined;
+}
 
 /** Inputs for one headless CLI turn: region profiles, request context, and family-specific arg/env builders. */
 export interface CodingAgentTurnInput {
@@ -140,6 +154,10 @@ export interface CodingAgentTurnInput {
   classifyFailure?: (failure: CodingAgentFailure) => Extract<AdapterEvent, { type: "error" }>;
   /** Family-specific replay projection; other coding-agent providers keep their existing layout. */
   conversationInput?: typeof buildConversationInput;
+  /** Optional working directory for the spawned CLI process (for example an isolated per-turn sandbox). */
+  cwd?: string;
+  /** Optional custom stdout consumer for CLIs whose JSONL protocol differs from Anthropic stream-json. */
+  consumeStream?: (context: CodingAgentCustomStreamContext) => Promise<CodingAgentCustomStreamOutcome>;
   deps: CodingAgentDeps;
 }
 
@@ -175,8 +193,16 @@ export interface CodingAgentToolBridgeInput {
   requireToolCall?: boolean;
 }
 
-export function codeBuddyMcpInvocation(serverModulePath: string, catalogPath: string, standalone = isStandaloneBinary()): string[] {
-  return standalone ? ["__codebuddy-mcp", catalogPath] : [serverModulePath, catalogPath];
+export function codeBuddyMcpInvocation(
+  serverModulePath: string,
+  catalogPath: string,
+  standalone = isStandaloneBinary(),
+  capturePath?: string,
+  resultsPath?: string,
+): string[] {
+  const base = standalone ? ["__codebuddy-mcp", catalogPath] : [serverModulePath, catalogPath];
+  if (resultsPath) return [...base, capturePath ?? "", resultsPath];
+  return capturePath ? [...base, capturePath] : base;
 }
 
 /**
@@ -361,6 +387,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
   try {
     child = spawnFn(invocation.file, invocation.args, {
       ...invocation.options,
+      ...(input.cwd ? { cwd: input.cwd } : {}),
       env,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
@@ -414,6 +441,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
   };
 
   const stderrChunks: string[] = [];
+  let stderrTail = "";
   let killed = false;
   let killTimer: ReturnType<typeof setTimeout> | undefined;
   const kill = (): void => {
@@ -451,6 +479,17 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
   child.stderr?.setEncoding("utf8");
   child.stderr?.on("data", (chunk: string) => {
     if (stderrChunks.join("").length < MAX_STDERR_BYTES) stderrChunks.push(chunk);
+    if (chunk) {
+      const combined = stderrTail + chunk;
+      if (combined.length <= MAX_STDERR_BYTES) {
+        stderrTail = combined;
+      } else {
+        let tail = combined.slice(-MAX_STDERR_BYTES);
+        const firstCode = tail.charCodeAt(0);
+        if (firstCode >= 0xdc00 && firstCode <= 0xdfff) tail = tail.slice(1);
+        stderrTail = tail;
+      }
+    }
   });
 
   const cleanup = (): void => {
@@ -463,8 +502,10 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
 
   let streamProtocolError: string | undefined;
   let streamProtocolCode: string | undefined;
+  let streamProtocolTerminalRefusal = false;
   let turnError: string | undefined;
   let failClosed = false;
+  let customStreamOutcome: CodingAgentCustomStreamOutcome | undefined;
   // A successful result frame that arrived after every captured tool call completed but
   // before an authoritative tool-turn stop. The bridge contract still ends the leg with
   // synthesized done(tool_use) at that stop, so result-derived done(stop) is deferred and its
@@ -512,7 +553,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
     }
     const stdout = child.stdout;
     if (!stdout) throw new CodingAgentProtocolError(`${profile.label} CLI produced no stdout stream`);
-    try {
+    const consumeDefaultStream = async (): Promise<void> => {
       let initValidated = false;
       for await (const message of readJsonLines(stdout)) {
         if (incoming.abortSignal?.aborted) break;
@@ -738,10 +779,28 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
         }
         if (terminalEmitted) break;
       }
+    };
+    try {
+      if (input.consumeStream) {
+        customStreamOutcome = await input.consumeStream({
+          stdout,
+          emitOnce,
+          isTerminalEmitted: () => terminalEmitted,
+          isProcessSettled: () => child.exitCode !== null || childProcessError !== undefined,
+          kill,
+          stopStream,
+        });
+        state.sawTerminalResult = customStreamOutcome.sawTerminalResult;
+      } else {
+        await consumeDefaultStream();
+      }
     } catch (err) {
       kill();
       streamProtocolError = err instanceof Error ? err.message : String(err);
       if (isTranslatorBudgetExceededError(err)) streamProtocolCode = err.code;
+      if ((err as { terminalRefusal?: unknown })?.terminalRefusal === true) {
+        streamProtocolTerminalRefusal = true;
+      }
     }
   } catch (err) {
     kill();
@@ -793,6 +852,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
         errorType: "upstream_error",
         code: streamProtocolCode ?? "protocol_error",
         retryable: false,
+        ...(streamProtocolTerminalRefusal ? { terminalRefusal: true as const } : {}),
       });
     } else if (child.exitCode !== null && child.exitCode !== 0) {
       const exitMsg = stderr
@@ -802,8 +862,18 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
         type: "error", message: exitMsg, status: 502, errorType: "upstream_error",
         code: "process_exit_error", retryable: false,
       };
+      const redactedStderrTail = stderrTail.trim()
+        ? redactSecrets(stderrTail.trim(), profile.tokenEnv, apiKey)
+        : undefined;
       emitOnce(input.classifyFailure
-        ? input.classifyFailure({ source: "process-exit", exitCode: child.exitCode, stderr, error, profile })
+        ? input.classifyFailure({
+          source: "process-exit",
+          exitCode: child.exitCode,
+          stderr,
+          ...(redactedStderrTail ? { stderrTail: redactedStderrTail } : {}),
+          error,
+          profile,
+        })
         : error, stderr || undefined);
     } else if (toolBridge && deferredResultDone !== undefined && !sawSelectedToolTurnStop()) {
       emitOnce({
@@ -815,17 +885,22 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
         retryable: false,
       });
     } else if (!state.sawTerminalResult) {
-      const msg = stderr
-        ? `${profile.label} CLI ended without a terminal result frame: ${stderr}`
-        : `${profile.label} CLI ended without a terminal result frame`;
-      emitOnce({
-        type: "error",
-        message: msg,
-        status: 502,
-        errorType: "upstream_error",
-        code: "protocol_error",
-        retryable: false,
-      }, stderr || undefined);
+      const customMissing = stderr ? customStreamOutcome?.classifyMissingResultStderr?.(stderr) : undefined;
+      if (customMissing) {
+        emitOnce(customMissing, stderr);
+      } else {
+        const msg = stderr
+          ? `${profile.label} CLI ended without a terminal result frame: ${stderr}`
+          : `${profile.label} CLI ended without a terminal result frame`;
+        emitOnce({
+          type: "error",
+          message: msg,
+          status: 502,
+          errorType: "upstream_error",
+          code: "protocol_error",
+          retryable: false,
+        }, stderr || undefined);
+      }
     }
   }
   } finally {
