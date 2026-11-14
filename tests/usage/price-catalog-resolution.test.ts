@@ -181,4 +181,17 @@ describe("cost result reasons", () => {
     expect(reasons).toContain("provider_cost_overlay");
     for (const reason of ["online_price_catalog", "relay_price_multiplier", "subscription_api_equivalent"]) expect(reasons).not.toContain(reason);
   });
+
+  test("Composer 2.5, its Fast mode and Workbuddy's Kimi K3.1 carry official prices", () => {
+    configure({ cursor: {}, workbuddy: {}, openai: {} });
+    expect(resolveMatchedPrice("cursor", "composer-2.5")).toMatchObject({ source: "expected", status: "verified",
+      cost4: { input: 0.5, output: 2.5, cacheRead: 0.2, cacheWrite: 0.5 } });
+    expect(resolveMatchedPrice("cursor", "composer-2.5-fast")).toMatchObject({ source: "expected", status: "verified",
+      cost4: { input: 3, output: 15, cacheRead: 0.5, cacheWrite: 3 } });
+    expect(resolveMatchedPrice("workbuddy", "cn:kimi-k3-1")).toMatchObject({ source: "expected", status: "verified-derived",
+      cost4: { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2 } });
+    expect(resolveMatchedPrice("workbuddy", "cn:kimi-k3-1")!.multiplier).toBeUndefined();
+    configure({ workbuddy: { priceMultiplier: 0.5 } });
+    expect(resolveMatchedPrice("workbuddy", "cn:kimi-k3-1")).toMatchObject({ multiplier: 0.5, cost4: { input: 1, output: 5 } });
+  });
 });
