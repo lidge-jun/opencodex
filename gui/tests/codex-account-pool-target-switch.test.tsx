@@ -143,7 +143,12 @@ async function switchTarget(targetKey: string, releasePrevious: () => void) {
   configureApiTargets(relay("/same", targetKey));
   actEnvironment(false);
   try {
-    root!.render(<Probe targetKey={targetKey} onSwitch={releasePrevious} />);
+    // A timer scheduled before React commits can win the race on a loaded runner.
+    // Observe the layout commit itself; release the old read in that same phase so
+    // the regression still exercises the interval before passive effects run.
+    await new Promise<void>(resolve => {
+      root!.render(<Probe targetKey={targetKey} onSwitch={() => { releasePrevious(); resolve(); }} />);
+    });
     await new Promise(resolve => setTimeout(resolve, 0));
   } finally {
     actEnvironment(true);
