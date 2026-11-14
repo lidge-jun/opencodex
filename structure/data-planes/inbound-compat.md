@@ -1,9 +1,9 @@
 # Inbound Compatibility Surfaces
 
-Native Chat/Messages and Claude passthrough use the Native `/v1beta/` follows the [Gemini source-preserving contract](gemini-native.md).
+Native Chat/Messages and Claude passthrough use the
 [local timeout contract](../transports/timeouts.md):
 local JSON inactivity is independent of header arrival and total generation; public JSON defaults
-retain their previous allowance. No disabled header clock detaches client cancellation.
+retain their previous allowance. No disabled header clock detaches client cancellation. Native Gemini requests on `/v1beta/` follow the [Gemini source-preserving contract](gemini-native.md).
 
 Thinking enablement is separate from strength: `src/responses/schema.ts` accepts the OCX `reasoning.enabled` boolean and `src/responses/parser.ts` retains it as `options.thinkingEnabled`, independently of `options.reasoning`. Chat `thinking.type` and Anthropic `thinking.type` preserve this choice through their inbound translators; the existing Anthropic disabled-effort sentinel remains for legacy destinations. `src/clients/reasoning-controls.ts` decodes effort-only client aliases for declared toggle-only models before strength caps run. Route fallback restores the original choice alongside effort in `src/server/effort-policy.ts`; a cleared strength list does not clear a thinking switch. Regression coverage lives in `tests/responses/responses-parser.test.ts`, `tests/responses/chat-inbound-reasoning-none.test.ts`, `tests/claude-integration/claude-inbound.test.ts`, and `tests/codex-integration/effort-policy.test.ts`.
 

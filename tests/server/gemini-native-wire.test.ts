@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { geminiSseTransform, rawJsonMember, unwrapGeminiResponse, wrapGeminiRequest } from "../../src/server/gemini-native-wire";
 
 const response = '{"candidates":[{"finishReason":"STOP","content":{"parts":[{"thoughtSignature":"a+/=","functionCall":{"args":{"n":9007199254740993123}}}]}}],"future":1.000e+40,"promptFeedback":{"blockReason":"SAFETY"}}';
@@ -45,4 +45,35 @@ test("SSE requires every observed candidate to finish; DONE alone is insufficien
   await expect(transform(first + one)).rejects.toThrow("incomplete");
   await expect(transform(first + "data: [DONE]\n\n")).rejects.toThrow();
   expect(await transform(first + one + two + "data: [DONE]\n\n")).toBe([first, one, two].map(text => `data: ${unwrapGeminiResponse(text.slice(6).trim())}\n\n`).join(''));
+});
+
+test("SSE prefixes each preserved JSON line inside an extracted multiline response", async () => {
+  const raw = '{\n  "candidates": [{"finishReason":"STOP"}],\n  "future":9007199254740993123,\n  "signature":"a+/="\n}';
+  const frame = `data: {"response":${raw.replaceAll("\n", "\ndata: ")}}\n\n`;
+  const result = await transform(frame, 3);
+  expect(result).toBe(`data: ${raw.replaceAll("\n", "\ndata: ")}\n\n`);
+  // A standard SSE consumer must recover the complete original JSON, including its newlines.
+  const data = result.trimEnd().split("\n").map(line => {
+    expect(line.startsWith("data: ")).toBe(true);
+    return line.slice(6);
+  }).join("\n");
+  expect(data).toBe(raw);
+});
+
+test("fragmented 1 MiB SSE lines perform only linear UTF-8 encoding work", async () => {
+  const raw = `{"candidates":[{"finishReason":"STOP"}],"padding":"${"x".repeat(1024 * 1024)}"}`;
+  const frame = `data: {"response":${raw}}\n\n`;
+  const originalEncode = TextEncoder.prototype.encode;
+  let encodedBytes = 0;
+  const encoder = spyOn(TextEncoder.prototype, "encode").mockImplementation(function(this: TextEncoder, text?: string) {
+    const bytes = originalEncode.call(this, text);
+    encodedBytes += bytes.byteLength;
+    return bytes;
+  });
+  let result: string;
+  try { result = await transform(frame, 1024); }
+  finally { encoder.mockRestore(); }
+  expect(result!).toBe(`data: ${raw}\n\n`);
+  // Input plus output are about 2 MiB; re-encoding retained prefixes would exceed 500 MiB.
+  expect(encodedBytes).toBeLessThan(frame.length * 3);
 });

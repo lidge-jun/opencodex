@@ -9,7 +9,10 @@ caller-session identity, active-turn/workflow admission and the HTTP idle-timeou
 `src/server/gemini-native.ts` uses the enabled canonical `google-antigravity` provider and its
 active, usable OAuth account. Snapshot token and project stay together, including after one
 401-triggered refresh of the rejected generation. OC's provider pacing applies to each physical
-send. Redirects are manual; destination policy checks the configured base URL. Ingress credentials
+send, including workflow physical-send reservation for the initial dispatch and 401 recovery.
+Applicable root, identity or pool token-spend ceilings are refused before dispatch with 503 and
+`gemini_native_spend_limits_unsupported`, because native token spend is unreported.
+Redirects are manual; destination policy checks the configured base URL. Ingress credentials
 and arbitrary request headers never go upstream. There is no transient inference replay.
 
 `src/server/gemini-native-wire.ts` validates JSON objects but embeds the original request source
@@ -27,7 +30,10 @@ with no resend after output. A blocked prompt or native error is also terminal; 
 
 Request and buffered response bodies and each SSE event have a 16 MiB ceiling; a lower configured
 `maxInboundBodyBytes` also narrows request admission. Compressed requests are rejected with 415.
-Header waits use `connectTimeoutMs`; upstream body inactivity uses `stallTimeoutSec`.
+Header waits use `connectTimeoutMs`; upstream body inactivity uses `stallTimeoutSec`, with
+non-positive values disabling that upstream timer. Client upload inactivity has a separate timer
+that resets per chunk and clears before OAuth/pacing; a disabled upstream timer leaves the default
+300-second upload protection in place. Upload inactivity returns 408.
 Request abort, shutdown, stream cancellation, failure and EOF release their turn and transport
 owners. Native parsing does not borrow the translator budget or retain replay state.
 
@@ -37,7 +43,8 @@ from OC's known AGY registry/cache/config catalog, filtered by destination scope
 check. Unsupported methods and Interactions return explicit errors.
 
 `src/server/gemini-native-log.ts` records delivery status, latency, client and admission identity
-without inspecting payloads or retaining prompts/signatures. Token usage and pricing are unreported.
+without inspecting payloads or retaining prompts/signatures. Token usage and pricing are unreported. Native SSE error objects are forwarded unchanged but
+settle the delivery log as failed without copying the upstream error message.
 Upstream HTTP errors use a fixed native JSON error and retain only a numeric Retry-After.
 
 Coverage: `tests/server/gemini-native-wire.test.ts`, `tests/server/gemini-native.test.ts` and

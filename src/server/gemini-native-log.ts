@@ -1,4 +1,5 @@
 import { addFinalRequestLog, type RequestLogContext } from "./request-log";
+import { GEMINI_NATIVE_ERROR_CODE } from "./gemini-native-wire";
 
 /** Observe delivery lifetime without parsing, retaining or rewriting Gemini payloads. */
 export function logGeminiNativeDelivery(response: Response, req: Request, requestId: string, start: number, context: RequestLogContext): Response {
@@ -6,6 +7,7 @@ export function logGeminiNativeDelivery(response: Response, req: Request, reques
   const finish = (status: number) => {
     if (settled) return;
     settled = true;
+    if (status < 400 && context.errorCode === GEMINI_NATIVE_ERROR_CODE) status = 502;
     req.signal.removeEventListener("abort", onAbort);
     addFinalRequestLog(requestId, start, context, status, {
       terminalStatus: status < 400 ? "completed" : "failed",

@@ -1090,8 +1090,12 @@ selectors do not participate. Supply a concrete `gemini-*` wire model. The catal
 known AGY models filtered by the key's destination scope; listing does not prove account access.
 
 Bodies and SSE events are capped at 16 MiB; a lower `maxInboundBodyBytes` also applies to requests.
-Send identity-encoded JSON. Compressed requests are rejected. OC's connection and stall timeouts,
+Send identity-encoded JSON. Compressed requests are rejected. Uploads have an independent idle
+limit (default 300 seconds), even when upstream stall detection is disabled. OC's connection and stall timeouts,
 key scopes, active-turn admission and provider pacing apply. One upstream 401 can refresh the
 same account and retry once before any response is delivered; stream failures never replay output.
 Request history records status, latency and admission identity, with token usage unreported.
+Workflow send ceilings include the initial send and 401 recovery. Requests with an applicable
+root, identity or pool token-spend ceiling receive 503 (`gemini_native_spend_limits_unsupported`);
+use a translated OC route when token-spend accounting is required.
 Interactions and `countTokens` are unsupported on this native path.
