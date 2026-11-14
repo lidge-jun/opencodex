@@ -342,3 +342,16 @@ upstream `invalid_argument`.
 `src/adapters/unique-tool-call-ids.ts` forwards optional per-exchange stream context while
 retaining tool-call ID reminting; [completed tool blocks](../providers/completed-tool-blocks.md)
 require that context independently of request construction.
+
+## Google retry lease ordering
+
+`createAdapterPhysicalSend` reserves dispatch budget before its optional
+`beforePacing` callback, acquires a provider slot afterwards, and preserves the
+existing post-admission `beforeDispatch` callback. Google retries cancel the
+previous response body before abort-aware backoff in `beforePacing`; neither
+the previous response lease nor the next lease is held during backoff. Budget
+refusal preserves the previous response for the caller, including Retry-After.
+Cancellation releases internally owned pending responses; a returned response
+is no longer owned by the retry loop. No account, model, deadline, retry budget
+or concurrency limit changes. The saturated five-response regression is in
+`tests/adapters/google/google-retry-held-lease.test.ts`.
