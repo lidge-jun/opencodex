@@ -469,34 +469,40 @@ describe("usage ledger cooperative scanner", () => {
     const rewritten = line("new-checkpoint");
     expect(Buffer.byteLength(rewritten)).toBe(Buffer.byteLength(original));
     writeFileSync(usageLogPath(), original);
-    let abortChecks = 0;
-    const rewriteAfterVerification = {
-      get aborted() {
-        abortChecks += 1;
-        if (abortChecks === 4) writeFileSync(usageLogPath(), rewritten);
-        return false;
-      },
-    } as AbortSignal;
+    // This fixture rewrites after verification; elapsed-time yields have separate coverage.
+    const clock = spyOn(performance, "now").mockReturnValue(0);
+    try {
+      let abortChecks = 0;
+      const rewriteAfterVerification = {
+        get aborted() {
+          abortChecks += 1;
+          if (abortChecks === 4) writeFileSync(usageLogPath(), rewritten);
+          return false;
+        },
+      } as AbortSignal;
 
-    const ids: string[] = [];
-    const result = await scanUsageLedgerCooperatively({
-      signal: rewriteAfterVerification,
-      onEntry: value => ids.push(value.requestId),
-    });
-    const originalDigest = createHash("sha256").update(original).digest("hex");
-    expect(abortChecks).toBeGreaterThanOrEqual(4);
-    expect(ids).toEqual(["old-checkpoint"]);
-    expect(result.processedThroughDigest).toBe(originalDigest);
+      const ids: string[] = [];
+      const result = await scanUsageLedgerCooperatively({
+        signal: rewriteAfterVerification,
+        onEntry: value => ids.push(value.requestId),
+      });
+      const originalDigest = createHash("sha256").update(original).digest("hex");
+      expect(abortChecks).toBeGreaterThanOrEqual(4);
+      expect(ids).toEqual(["old-checkpoint"]);
+      expect(result.processedThroughDigest).toBe(originalDigest);
 
-    await expect(scanUsageLedgerCooperatively({
-      startAtBytes: result.processedThroughBytes,
-      expectedIdentityKey: usageLogIdentityKey(result.revision),
-      expectedProcessedThroughDigest: result.processedThroughDigest,
-      onEntry: () => {},
-    })).rejects.toMatchObject({
-      code: "usage_ledger_rebuild_required",
-      reason: "content_changed",
-    });
+      await expect(scanUsageLedgerCooperatively({
+        startAtBytes: result.processedThroughBytes,
+        expectedIdentityKey: usageLogIdentityKey(result.revision),
+        expectedProcessedThroughDigest: result.processedThroughDigest,
+        onEntry: () => {},
+      })).rejects.toMatchObject({
+        code: "usage_ledger_rebuild_required",
+        reason: "content_changed",
+      });
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   test("rejects a shrink while the scanner is yielded", async () => {
