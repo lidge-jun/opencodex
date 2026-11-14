@@ -4,7 +4,7 @@
 .aqt {
   display: grid;
   gap: var(--space-2);
-  margin-bottom: var(--space-3);
+  container-type: inline-size;
 }
 .aqt-policy {
   margin: 0;
@@ -25,6 +25,9 @@
   padding: var(--space-2);
   text-align: left;
   vertical-align: top;
+}
+.aqt-table thead th,
+.aqt-group:not(:last-child) > tr:last-child > * {
   border-bottom: 1px solid var(--border);
 }
 .aqt-table thead th {
@@ -32,15 +35,75 @@
   color: var(--muted);
   white-space: nowrap;
 }
-.aqt-table tbody tr:last-child > * {
-  border-bottom: 0;
-}
-.aqt-row--active {
+.aqt-group--active {
   background: color-mix(in oklab, var(--green) 6%, transparent);
 }
 .aqt-account {
   font-weight: 500;
   white-space: nowrap;
+}
+.aqt-account-main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.aqt-account-main:disabled {
+  cursor: default;
+}
+.aqt-account-main .pwi-auth-dot {
+  margin-right: 0;
+}
+.aqt-account-copy {
+  display: grid;
+  min-width: 0;
+}
+.aqt-account-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.aqt-account-id {
+  font-weight: 400;
+  font-size: var(--text-caption);
+}
+.aqt-group--details > .aqt-row > * {
+  padding-bottom: var(--space-1);
+}
+.aqt-detail {
+  padding-top: 0;
+  font-weight: 400;
+  font-size: var(--text-caption);
+  color: var(--muted);
+}
+.aqt-detail > * + * {
+  margin-top: var(--space-1);
+}
+.aqt-detail p {
+  margin: 0;
+}
+/* Controls stay pinned to the right edge while the pool columns scroll under them. */
+.aqt-actions-cell {
+  position: sticky;
+  right: 0;
+  width: 1%;
+  background: var(--bg);
+}
+.aqt-group--active .aqt-actions-cell {
+  background: color-mix(in oklab, var(--green) 6%, var(--bg));
+}
+.aqt-actions {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
 }
 .aqt-account .pwi-auth-dot {
   display: inline-block;
@@ -88,4 +151,97 @@
 .aqt-flag--ok { color: var(--green); }
 .aqt-flag--warn { color: var(--amber); }
 .aqt-flag--muted { color: var(--muted); }
+
+/* Narrow: each account becomes a stacked block — account, plan and status on one line, then one
+   line per pool with its 5-hour and weekly bars side by side, then the controls — so nothing has
+   to scroll sideways to reach a button. */
+@container (max-width: 900px) {
+  .aqt-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .aqt-table,
+  .aqt-group,
+  .aqt-detail-row {
+    display: block;
+  }
+  .aqt-group:not(:last-child) > tr:last-child > * {
+    border-bottom: 0;
+  }
+  .aqt-group:not(:last-child) {
+    border-bottom: 1px solid var(--border);
+  }
+  .aqt-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto auto;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2);
+  }
+  .aqt-row > th,
+  .aqt-row > td {
+    display: block;
+    padding: 0;
+  }
+  .aqt-row > .aqt-account {
+    grid-area: 1 / 1;
+    white-space: normal;
+  }
+  .aqt-row > .aqt-plan { grid-area: 1 / 2; }
+  .aqt-row > .aqt-status { grid-area: 1 / 3; }
+  .aqt-row > .aqt-pool {
+    grid-column: 1 / -1;
+  }
+  .aqt-row > .aqt-actions-cell { grid-area: 1 / 4; }
+  .aqt-row > .aqt-pool {
+    display: grid;
+    grid-template-columns: 6.5rem repeat(2, minmax(0, 1fr));
+    align-items: start;
+    column-gap: var(--space-3);
+    min-width: 0;
+  }
+  .aqt-row > .aqt-pool--empty {
+    display: block;
+  }
+  .aqt-pool > .aqt-bar + .aqt-bar {
+    margin-top: 0;
+  }
+  .aqt-pool[data-label]::before {
+    content: attr(data-label);
+    grid-row: 1;
+    grid-column: 1;
+    color: var(--muted);
+    font-size: var(--text-caption);
+  }
+  .aqt-pool > .aqt-next {
+    grid-column: 1;
+    grid-row: 2;
+    justify-self: start;
+  }
+  .aqt-actions-cell {
+    position: static;
+    width: auto;
+    background: none;
+  }
+  .aqt-group--active .aqt-actions-cell {
+    background: none;
+  }
+  .aqt-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+  .aqt-detail-row > .aqt-detail {
+    display: block;
+    padding: 0 var(--space-2) var(--space-2);
+  }
+}
+@container (max-width: 560px) {
+  .aqt-row > .aqt-actions-cell { grid-area: auto; grid-column: 1 / -1; }
+  .aqt-row > .aqt-pool { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .aqt-pool[data-label]::before { grid-row: auto; grid-column: 1 / -1; margin-bottom: var(--space-1); }
+  .aqt-pool > .aqt-next { grid-row: auto; grid-column: 1 / -1; }
+}
 }

@@ -24,11 +24,15 @@ for (const provider of ["anthropic", "anthropic2"]) {
       expect(markup).toContain(`>${label}</span>`);
       expect(markup).not.toContain("private@example.test");
       expect(markup).not.toContain("synthetic-private-account");
-      expect(markup).toContain("37% used");
+      // The quota table shows remaining capacity: 37% used weekly -> 63% left, 18% used 5-hour -> 82% left.
+      expect(markup).toContain("63% left");
       if (plan === "pro" || plan === "max_5x") {
-        expect(markup).toContain("5-hour limit");
-        expect(markup).toContain("18% used");
-      } else expect(markup).not.toContain("5-hour limit");
+        expect(markup).toContain(`class="aqt-bar-label">${en["acctTable.fiveHour"]}</span>`);
+        expect(markup).toContain("82% left");
+      } else {
+        expect(markup).not.toContain(`class="aqt-bar-label">${en["acctTable.fiveHour"]}</span>`);
+        expect(markup).not.toContain("82% left");
+      }
     });
   }
 }

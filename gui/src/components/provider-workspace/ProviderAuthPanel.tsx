@@ -14,9 +14,7 @@ import { oauthAccountDisplayLabel, providerAuthSurface } from "../../provider-wo
 import { displayAccountId } from "../../lib/privacy";
 import AccountAutoSwitchControl from "../AccountAutoSwitchControl";
 import {
-  formatOAuthHealthLabel,
   formatOAuthHealthSummary,
-  oauthHealthBadgeClass,
   oauthHealthIsCooldown,
   oauthHealthShowsReauth,
 } from "../../oauth-health-display";
@@ -29,7 +27,7 @@ import { AccountProbeButton, AccountProbeResultLine } from "./AccountProbe";
 import { ACCOUNT_PROBE_PROVIDERS, useAccountProbe } from "../../hooks/useAccountProbe";
 import { AccountQuotaTable } from "./AccountQuotaTable";
 import { accountQuotaFromReport } from "../../provider-workspace/report";
-import { planDisplayName } from "../../provider-workspace/account-quota-table";
+import { uncoveredWindows } from "../../provider-workspace/account-quota-table";
 import { GrokCouponBadge, GrokResetCouponModal } from "./GrokResetCoupons";
 import { AnthropicGrantBadge, AnthropicResetGrantModal } from "./AnthropicResetGrants";
 import type { CodexAccountPoolController } from "../../hooks/useCodexAccountPool";
@@ -613,7 +611,10 @@ export default function ProviderAuthPanel({
                 )}
               </div>
             )}
-            {accounts.length > 1 && (
+            {accounts.length > 0 && (() => {
+              const byId = new Map(accounts.map(account => [account.id, account]));
+              const controlsLocked = Boolean(switchingAccountId) || Boolean(pausingAccountId);
+              return (
               <AccountQuotaTable
                 accounts={accounts.map(account => {
                   const probe = accountProbe.entries[account.id];
@@ -625,122 +626,113 @@ export default function ProviderAuthPanel({
                     ...(probe && "result" in probe ? { probe: { status: probe.result.status, latencyMs: probe.result.latencyMs } } : {}),
                   };
                 })}
-              />
-            )}
-            {accounts.length > 0 && (
-              <ul className="pwi-auth-list">
-                {accounts.map(account => {
-                  const label = oauthAccountDisplayLabel(accounts, account, t);
-                  const planLabel = isAnthropicPool ? anthropicSubscriptionLabel(account.plan) : item.name === "google-antigravity" ? planDisplayName(account.plan) ?? undefined : undefined;
-                  const switching = switchingAccountId === account.id;
-                  const pausing = pausingAccountId === account.id;
-                  const healthStatus = account.health?.status;
+                renderAccount={row => {
+                  const account = byId.get(row.account.id)!;
                   const showReauth = accountShowsReauth(account);
-                  const inCooldown = oauthHealthIsCooldown(healthStatus);
-                  const maskedId = displayAccountId(account.id);
-                  const healthLabel = formatOAuthHealthLabel(t, account.health);
-                  const healthSummary = isAnthropicPool ? null : formatOAuthHealthSummary(t, item.name, account.id, account.health);
+                  const inCooldown = oauthHealthIsCooldown(account.health?.status);
+                  const kiroReason = kiroSkipReasonKey(account, item.name);
                   return (
-                  <li key={account.id} className={`pwi-auth-acct${account.active ? " pwi-auth-acct--active" : ""}`}>
-                    <div className={`pwi-auth-row${account.active ? " pwi-auth-row--active" : ""}`}>
-                    <button type="button" className="pwi-auth-row-main"
-                      onClick={() => { if (!account.active && !account.paused && !showReauth && !inCooldown && !switchingAccountId && !pausingAccountId) void authHandlers.onSwitchAccount(item.name, account); }}
+                    <button type="button" className="aqt-account-main"
+                      onClick={() => { if (!account.active && !account.paused && !showReauth && !inCooldown && !controlsLocked) void authHandlers.onSwitchAccount(item.name, account); }}
                       aria-current={account.active ? "true" : undefined}
-                      aria-label={`${label}${planLabel ? ` — ${planLabel}` : ""}${account.active ? ` — ${t("pws.accountCurrent")}` : ""}`}
-                      disabled={Boolean(account.paused || showReauth || inCooldown || switchingAccountId || pausingAccountId)}>
+                      aria-label={`${row.account.label}${row.plan ? ` — ${row.plan}` : ""}${account.active ? ` — ${t("pws.accountCurrent")}` : ""}`}
+                      title={account.paused && account.pauseDetails ? formatAccountPauseTooltip(t, locale, account.pauseDetails) : undefined}
+                      disabled={Boolean(account.paused || showReauth || inCooldown || controlsLocked)}>
                       <span className={`pwi-auth-dot ${showReauth ? "pwi-auth-dot--warn" : account.active && !account.paused ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
-                      <span className="pwi-auth-row-copy">
-                        <span className="pwi-auth-row-heading"><span className="pwi-auth-row-label">{label}</span>{planLabel && <span className="badge badge-green">{planLabel}</span>}</span>
-                        {!isAnthropicPool && <span className="pwi-auth-row-secondary">{`${t("prov.accountId")}: ${maskedId}`}</span>}
-                        {healthSummary && (
-                          <span className="pwi-auth-row-secondary faint">{healthSummary}</span>
-                        )}
-                        {inCooldown && (
-                          <span className="pwi-auth-row-secondary faint">{t("pws.healthCooldownHint")}</span>
-                        )}
-                        {account.paused && (
-                          <span className="pwi-auth-row-secondary faint">{t("pws.accountPausedHint")}</span>
-                        )}
+                      <span className="aqt-account-copy">
+                        <span className="aqt-account-label">{row.account.label}</span>
+                        {!isAnthropicPool && <span className="aqt-account-id faint">{displayAccountId(account.id)}</span>}
                       </span>
-                      {healthLabel && (
-                        <span className={oauthHealthBadgeClass(healthStatus)}>{healthLabel}</span>
-                      )}
-                      {showReauth && !healthLabel && <span className="badge badge-amber">{t("pws.reauth")}</span>}
-                      {kiroSkipReasonKey(account, item.name) && <span className="badge badge-amber">{t(kiroSkipReasonKey(account, item.name)!)}</span>}
-                      {account.paused && <span className="badge badge-muted" title={account.pauseDetails ? formatAccountPauseTooltip(t, locale, account.pauseDetails) : undefined}>{t("codexAuth.paused")}</span>}
                       {account.active && !account.paused && <span className="badge badge-primary">{t("prov.accountActive")}</span>}
-                      {switching && <span className="badge badge-muted">{t("pws.accountSwitching")}</span>}
+                      {kiroReason && <span className="badge badge-amber">{t(kiroReason)}</span>}
+                      {switchingAccountId === account.id && <span className="badge badge-muted">{t("pws.accountSwitching")}</span>}
                     </button>
-                    {typeof account.paused === "boolean" && authHandlers.onPauseAccount && (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        aria-label={`${t(account.paused ? "codexAuth.resume" : "codexAuth.pause")} — ${label}`}
-                        title={account.paused ? t("pws.accountPausedHint") : undefined}
-                        aria-busy={pausing}
-                        disabled={busy || Boolean(switchingAccountId) || Boolean(pausingAccountId)}
-                        onClick={() => void authHandlers.onPauseAccount(item.name, account, !account.paused)}
-                      >
-                        {t(account.paused ? "codexAuth.resume" : "codexAuth.pause")}
-                      </button>
-                    )}
-                    {showReauth && (
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-sm"
-                        disabled={busy || Boolean(switchingAccountId) || Boolean(pausingAccountId)}
-                        onClick={() => void authHandlers.onReauth(item.name, account.id)}
-                      >
-                        {t("pws.reauthenticate")}
-                      </button>
-                    )}
-                    {grokCouponsEnabled && !showReauth && (
-                      <GrokCouponBadge
-                        entry={grokCoupons.entries[account.id]}
-                        t={t}
-                        onClick={() => setCouponAccount(account)}
-                      />
-                    )}
+                  );
+                }}
+                renderActions={row => {
+                  const account = byId.get(row.account.id)!;
+                  const showReauth = accountShowsReauth(account);
+                  return <>
                     {claudeGrantsEnabled && !showReauth && (
                       <AnthropicGrantBadge entry={claudeGrants.entries[account.id]} t={t} onClick={() => setGrantAccount(account)} />
                     )}
+                    {grokCouponsEnabled && !showReauth && (
+                      <GrokCouponBadge entry={grokCoupons.entries[account.id]} t={t} onClick={() => setCouponAccount(account)} />
+                    )}
+                    {showReauth && (
+                      <button type="button" className="btn btn-ghost btn-sm" disabled={busy || controlsLocked}
+                        onClick={() => void authHandlers.onReauth(item.name, account.id)}>
+                        {t("pws.reauthenticate")}
+                      </button>
+                    )}
+                    {typeof account.paused === "boolean" && authHandlers.onPauseAccount && (
+                      <button type="button" className="btn btn-ghost btn-sm"
+                        aria-label={`${t(account.paused ? "codexAuth.resume" : "codexAuth.pause")} — ${row.account.label}`}
+                        aria-busy={pausingAccountId === account.id}
+                        disabled={busy || controlsLocked}
+                        onClick={() => void authHandlers.onPauseAccount(item.name, account, !account.paused)}>
+                        {t(account.paused ? "codexAuth.resume" : "codexAuth.pause")}
+                      </button>
+                    )}
                     {probeEnabled && (
-                      <AccountProbeButton controller={accountProbe} accountId={account.id} label={label}
+                      <AccountProbeButton controller={accountProbe} accountId={account.id} label={row.account.label}
                         disabled={accountProbe.allPending} />
                     )}
                     <button type="button" className="btn btn-ghost btn-sm"
+                      aria-label={`${t("prov.editAlias")} — ${row.account.label}`}
                       onClick={() => void authHandlers.onEditAlias(item.name, "oauth", account.id, account.alias)}>
                       {t("prov.editAlias")}
                     </button>
                     <button type="button" className="btn btn-ghost btn-sm pwi-auth-row-remove"
-                      aria-label={`${t("common.remove")} — ${label}`}
-                      title={`${t("common.remove")} — ${label}`}
-                      disabled={Boolean(switchingAccountId) || Boolean(pausingAccountId)}
+                      aria-label={`${t("common.remove")} — ${row.account.label}`}
+                      title={`${t("common.remove")} — ${row.account.label}`}
+                      disabled={controlsLocked}
                       onClick={() => void authHandlers.onRemoveAccount(item.name, account)}>
                       <IconTrash style={{ width: 13, height: 13 }} aria-hidden="true" />
                     </button>
-                    </div>
-                    <div className="pwi-auth-acct-quota">
-                      {probeEnabled && <AccountProbeResultLine entry={accountProbe.entries[account.id]} />}
-                      {isAnthropicPool && account.autoSwitchThresholdOverride !== undefined
-                        && account.autoSwitchThreshold !== undefined && authHandlers.onAccountThreshold && (
-                        <AccountAutoSwitchControl
-                          accountLabel={label} inputId={`anthropic-threshold-${account.id}`}
-                          globalThreshold={account.autoSwitchThreshold} override={account.autoSwitchThresholdOverride}
-                          hintText={t("pws.anthropicAccountThresholdHint")}
-                          disabled={busy || Boolean(switchingAccountId) || Boolean(pausingAccountId)}
-                          onChange={threshold => authHandlers.onAccountThreshold!(item.name, account, threshold)}
-                        />
-                      )}
-                      <ProviderAccountQuota quotaMode={account.quotaMode} quota={account.quota}
+                  </>;
+                }}
+                renderDetails={row => {
+                  const account = byId.get(row.account.id)!;
+                  const healthSummary = isAnthropicPool ? null : formatOAuthHealthSummary(t, item.name, account.id, account.health);
+                  const inCooldown = oauthHealthIsCooldown(account.health?.status);
+                  const covered = Object.keys(row.cells).length > 0;
+                  // Windows the pool columns already show are not repeated; anything else (per-model
+                  // rows, monthly, credits) still renders here so the list drops no reading.
+                  const rest = covered && row.account.quota ? accountQuotaFromReport({ quota: {
+                    ...row.account.quota,
+                    customWindows: uncoveredWindows(row.account.quota.customWindows),
+                    ...(row.cells.subscription ? { fiveHourPercent: undefined, fiveHourResetAt: undefined, weeklyPercent: undefined, weeklyResetAt: undefined } : {}),
+                  } }) : null;
+                  const probeEntry = probeEnabled ? accountProbe.entries[account.id] : undefined;
+                  const threshold = isAnthropicPool && account.autoSwitchThresholdOverride !== undefined
+                    && account.autoSwitchThreshold !== undefined && authHandlers.onAccountThreshold;
+                  const parts = [
+                    healthSummary && <p key="health">{healthSummary}</p>,
+                    inCooldown && <p key="cooldown">{t("pws.healthCooldownHint")}</p>,
+                    account.paused && <p key="paused">{t("pws.accountPausedHint")}</p>,
+                    probeEntry && <AccountProbeResultLine key="probe" entry={probeEntry} />,
+                    threshold && (
+                      <AccountAutoSwitchControl key="threshold"
+                        accountLabel={row.account.label} inputId={`anthropic-threshold-${account.id}`}
+                        globalThreshold={account.autoSwitchThreshold!} override={account.autoSwitchThresholdOverride!}
+                        hintText={t("pws.anthropicAccountThresholdHint")}
+                        disabled={busy || controlsLocked}
+                        onChange={value => authHandlers.onAccountThreshold!(item.name, account, value)}
+                      />
+                    ),
+                    !covered && (
+                      <ProviderAccountQuota key="quota" quotaMode={account.quotaMode} quota={account.quota}
                         quotaUnavailable={account.quotaUnavailable} quotaPending={account.quotaPending} quotaFailure={account.quotaFailure}
                         quotaReadAt={account.quotaReadAt} />
-                    </div>
-                  </li>
-                  );
-                })}
-              </ul>
-            )}
+                    ),
+                    rest && <ProviderAccountQuota key="rest" quotaMode={account.quotaMode} quota={rest} />,
+                  ].filter(Boolean);
+                  return parts.length > 0 ? parts : null;
+                }}
+              />
+              );
+            })()}
             {couponAccount && (
               <GrokResetCouponModal
                 accountId={couponAccount.id}
