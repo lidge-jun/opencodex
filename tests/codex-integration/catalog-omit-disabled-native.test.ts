@@ -10,6 +10,7 @@ import { getConfigPath, loadConfig, saveConfig } from "../../src/config";
 import type { OcxConfig } from "../../src/types";
 import { CODEX_FORWARD_BASE_URL } from "../../src/providers/openai-tiers";
 import { startServer } from "../../src/server";
+import { ownedServiceHomeInspection } from "../helpers/owned-service-home-inspection";
 import { buildCodexModelList } from "../../src/server/codex-model-list";
 import { desktopAllowlistSuppressedNativeSlugs } from "../../src/codex/catalog/metadata";
 import { NATIVE_OPENAI_MODELS } from "../../src/codex/catalog/native-models";
@@ -195,7 +196,7 @@ test("retained sync and serve-options omit the same rows without changing routed
   const next = config(true);
   saveConfig(next);
   expect((await syncCatalogModels(next, { allowWhenDesiredDisabled: true })).refreshOutcome).toBe("committed");
-  const server = startServer(0);
+  const server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated HTTP fixture") });
   try {
     const response = await fetch(new URL("/v1/models?client_version=0.160.0", server.url));
     expect(response.status).toBe(200);
@@ -255,7 +256,7 @@ async function upgradedOutputs(flag: boolean, model: string, method: "convergenc
   }
   const cache = JSON.parse(readFileSync(join(home.codexHome, "models_cache.json"), "utf8")) as RawCatalog;
   const live = liveList(next);
-  const server = startServer(0);
+  const server = startServer(0, { inspectNativeCodexOwnership: ownedServiceHomeInspection("isolated HTTP fixture") });
   let http: RawCatalog;
   try {
     const response = await fetch(new URL("/v1/models?client_version=0.160.0", server.url));
