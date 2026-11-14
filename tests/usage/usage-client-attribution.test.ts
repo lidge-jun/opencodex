@@ -11,6 +11,7 @@ import { createSourceFacetAccumulator } from "../../src/usage/source-facets";
 import { addFinalRequestLog, addRequestLog, aggregateAttemptUsage, clearRequestLogsForTests, getRequestLogEntries, requestLogEntryFromPersistedUsage, type RequestLogEntry } from "../../src/server/request-log";
 import { log } from "../helpers/request-log-entry";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { repoPath, repoRoot } from "../helpers/repo-root";
 
 describe("usage client attribution", () => {
   test("report groups accepted usage by bounded app and preserves legacy absence", () => {
@@ -201,6 +202,14 @@ describe("usage client attribution", () => {
     expect(classifyUsageClient(new Headers({ "user-agent": "opencode/1.2.3 runtime/bun" }))).toBe("opencode");
     expect(classifyUsageClient(new Headers({ "user-agent": "antigravity/hub/2.15.3 (aidev_client; os_type=windows)" }))).toBe("antigravity");
     expect(classifyUsageClient(new Headers({ "user-agent": "google-genai-sdk/1.30.0 gl-node/v22.11.0" }))).toBe("agy");
+  });
+
+  test("every request-log context records the unknown client's product name", () => {
+    // `client: classifyUsageClient(...)` drops the name an unknown client sent; an inbound route
+    // that lands on another branch (Gemini, Ollama, ...) has to spread usageClientLogContext instead.
+    const offenders = [...new Bun.Glob("src/**/*.ts").scanSync({ cwd: repoRoot() })]
+      .filter((file) => /\bclient:\s*classifyUsageClient\(/.test(readFileSync(repoPath(file), "utf8")));
+    expect(offenders).toEqual([]);
   });
 
   test("Antigravity clients are named rows in the apps report, not unknown", () => {
