@@ -16,6 +16,7 @@ import { buildCompactV1Output, decodeCompactionSummary, encodeCompactionSummary,
 import { decodeRetainedCompaction, encodeRetainedCompaction } from "../../responses/retained-compaction";
 import { collectReasoningTexts } from "../../responses/reasoning-retention";
 import { finishRequestAttempt, usageFromResponsesPayload, type RequestLogContext } from "../request-log";
+import { restoreLocalFailureState, takeLocalFailureState } from "../request-log-failure-detail";
 import { linkRequestSessionLane } from "../request-log-conversation";
 import { isNativePassthroughSseResponse, markNativePassthroughSseResponse, isEagerRelaySseResponse, markEagerRelaySseResponse } from "../relay";
 import type { HandleResponsesOptions } from "./core-options";
@@ -230,15 +231,21 @@ export async function runWithCompactionRecovery(
     const sourceLog: Partial<Record<keyof RequestLogContext, unknown>> = {};
     const logFields = logCtx as unknown as Record<string, unknown>;
     for (const field of SOURCE_LOG_FIELDS) sourceLog[field] = logCtx[field];
+    // The source's local verdict leaves with it; a non-local detail stays as the source's own record.
+    const sourceLocal = takeLocalFailureState(logCtx);
+    const sourceDetail = logCtx.failureDetail;
     restoreSourceLog = (attemptStatus?: number) => {
       if (logCtx.activeAttempt) finishRequestAttempt(logCtx.activeAttempt, attemptStatus ?? sourceFailure!.status,
         Math.max(0, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now())), logCtx.activeAttempt.usage ?? logCtx.usage);
       delete logCtx.activeAttempt;
       delete logCtx.activeAttemptStartedAt;
+      // The fallback's own local verdict (mark and detail) must not describe the restored source.
+      if (takeLocalFailureState(logCtx).local && sourceDetail) logCtx.failureDetail = sourceDetail;
       for (const field of SOURCE_LOG_FIELDS) {
         if (sourceLog[field] === undefined) delete logFields[field];
         else logFields[field] = sourceLog[field];
       }
+      restoreLocalFailureState(logCtx, sourceLocal);
     };
     delete logCtx.activeAttempt;
     delete logCtx.activeAttemptStartedAt;
