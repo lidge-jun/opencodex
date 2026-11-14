@@ -674,7 +674,7 @@ outcome fields from an older server do not establish successful recovery.
 
 ### Live meter (`GET /v1/usage/live`)
 
-A read-only data-plane endpoint reports the newest completed request: output speed, cache hit and context fill. A client such as a Codex desktop userscript can poll it to show those numbers next to the composer. It is admitted exactly like `/v1/models`: no credential on a loopback bind, a data key (`x-opencodex-api-key`, `Authorization: Bearer` or `x-api-key`) otherwise, and never the admin token. The Codex desktop page origin `app://-` may read this one route (and its preflight); every other data-plane route keeps its existing origin rules.
+A read-only data-plane endpoint reports the newest completed request: output speed, cache hit and context fill. A client such as a Codex desktop userscript can poll it to show those numbers next to the composer. It is admitted exactly like `/v1/models`: no credential on a loopback bind, a data key (`x-opencodex-api-key`, `Authorization: Bearer` or `x-api-key`) otherwise, and never the admin token. A configured data key sees only the requests sent with that key; a loopback caller and the environment token see every request. The Codex desktop page origin `app://-` may read this one route (and its preflight); every other data-plane route keeps its existing origin rules.
 
 Query: `client=codex|claude|other` narrows the result to one client family, and `conversation=<id>` to one conversation. The conversation filter accepts the raw id, the logged digest or a `codex://threads/<id>` link, and the response never echoes it. The body is `{ "latest": Meter | null, "byClient": { "codex"?: Meter, "claude"?: Meter, "other"?: Meter }, "generatedAt": <ms> }`. A `Meter` carries `speed { value, reason }`, `outputTokens`, `generationMs`, `cache { readTokens, inputTokens, percent, reason }`, `context { usedTokens, limitTokens, percent, reason }`, `model`, `provider`, `client` and `timestamp`: numbers, model and provider names and reason codes only. Automatic approval reviews (`codex-auto-review`) are never reported.
 
@@ -682,8 +682,8 @@ A value is `null` (shown as `--`) instead of a guess when it cannot be measured:
 
 | Value | `null` when |
 | --- | --- |
-| `speed` | The request failed, was cancelled or ended incomplete; usage is missing or estimated; output tokens are missing; the generation window is not recorded, shorter than 1 s or inconsistent. Speed is output tokens over the generation window, never wall time. |
-| `cache.percent` | Usage is missing or estimated, the input count is missing or the cache read is wire-only. |
+| `speed` | The request failed, was cancelled or ended incomplete; usage is missing or estimated; output tokens are missing; the generation window is not recorded, shorter than 1 s or inconsistent; the request was retried across more than one attempt (`multiple_attempts`), whose window would span the gap between them. Speed is output tokens over the generation window, never wall time. |
+| `cache.percent` | Usage is missing or estimated, the input count is missing, or the cache read was not observed: wire-only or of unknown provenance (`cache.reason` is `cache_unobserved`). |
 | `context.percent` | Usage is missing or estimated, or the model's context window is not in the persisted Codex catalog (`context.reason` is `limit_unknown`). |
 
 ### OAuth accounts, provider keys, and data-plane keys

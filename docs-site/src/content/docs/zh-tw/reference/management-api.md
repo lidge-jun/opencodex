@@ -232,7 +232,7 @@ Aside 設定檔的變更在這種情況下仍會儲存一件事：確認之後�
 
 ### 即時指標（`GET /v1/usage/live`）
 
-唯讀的資料平面端點，回傳最近一次已完成請求的輸出速度、快取命中率與上下文占用，例如供 Codex 桌面端使用者腳本在輸入框旁顯示。存取許可與 `/v1/models` 完全相同：回送綁定不需憑證，否則需要資料金鑰（`x-opencodex-api-key`、`Authorization: Bearer` 或 `x-api-key`），永遠不接受管理權杖。Codex 桌面端頁面來源 `app://-` 僅可讀取這一條路由（及其預檢），其他資料平面路由的來源規則不變。
+唯讀的資料平面端點，回傳最近一次已完成請求的輸出速度、快取命中率與上下文占用，例如供 Codex 桌面端使用者腳本在輸入框旁顯示。存取許可與 `/v1/models` 完全相同：回送綁定不需憑證，否則需要資料金鑰（`x-opencodex-api-key`、`Authorization: Bearer` 或 `x-api-key`），永遠不接受管理權杖。已設定的資料金鑰只能看到用該金鑰送出的請求；回送呼叫方與環境權杖可以看到所有請求。Codex 桌面端頁面來源 `app://-` 僅可讀取這一條路由（及其預檢），其他資料平面路由的來源規則不變。
 
 查詢參數：`client=codex|claude|other` 限定用戶端類別，`conversation=<id>` 限定單一對話；對話過濾接受原始 id、日誌中的摘要或 `codex://threads/<id>` 連結，回應不會回顯它。回應本體為 `{ "latest": Meter | null, "byClient": { "codex"?: Meter, "claude"?: Meter, "other"?: Meter }, "generatedAt": <毫秒> }`。`Meter` 含 `speed { value, reason }`、`outputTokens`、`generationMs`、`cache { readTokens, inputTokens, percent, reason }`、`context { usedTokens, limitTokens, percent, reason }`、`model`、`provider`、`client`、`timestamp`，只有數字、模型與供應商名稱和原因碼。自動核准審查（`codex-auto-review`）不會被回報。
 
@@ -240,8 +240,8 @@ Aside 設定檔的變更在這種情況下仍會儲存一件事：確認之後�
 
 | 值 | 為 `null` 的情況 |
 | --- | --- |
-| `speed` | 請求失敗、被取消或未完整結束；用量缺失或為估算值；缺少輸出 token；生成視窗未記錄、短於 1 秒或不一致。速度是輸出 token 除以生成視窗，而不是牆鐘時間。 |
-| `cache.percent` | 用量缺失或為估算值、缺少輸入數，或快取讀取僅存在於線路層。 |
+| `speed` | 請求失敗、被取消或未完整結束；用量缺失或為估算值；缺少輸出 token；生成視窗未記錄、短於 1 秒或不一致；請求經過多次嘗試（`multiple_attempts`），其視窗會包含嘗試之間的間隔。速度是輸出 token 除以生成視窗，而不是牆鐘時間。 |
+| `cache.percent` | 用量缺失或為估算值、缺少輸入數，或快取讀取並非實測：僅存在於線路層或來源未知（`cache.reason` 為 `cache_unobserved`）。 |
 | `context.percent` | 用量缺失或為估算值，或該模型的上下文視窗不在已持久化的 Codex 目錄中（`context.reason` 為 `limit_unknown`）。 |
 
 ### OAuth 帳號、供應商金鑰與 data-plane 金鑰

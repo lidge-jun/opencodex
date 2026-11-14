@@ -229,7 +229,7 @@ Aside 配置档的变更在这种情况下仍会保存一件事：确认之后�
 
 ### 实时指标（`GET /v1/usage/live`）
 
-只读的数据平面端点，返回最近一次已完成请求的输出速度、缓存命中率和上下文占用，例如供 Codex 桌面端用户脚本在输入框旁显示。准入与 `/v1/models` 完全相同：回环绑定无需凭据，否则需要数据密钥（`x-opencodex-api-key`、`Authorization: Bearer` 或 `x-api-key`），永远不接受管理令牌。Codex 桌面端页面来源 `app://-` 仅可读取这一条路由（及其预检），其他数据平面路由的来源规则不变。
+只读的数据平面端点，返回最近一次已完成请求的输出速度、缓存命中率和上下文占用，例如供 Codex 桌面端用户脚本在输入框旁显示。准入与 `/v1/models` 完全相同：回环绑定无需凭据，否则需要数据密钥（`x-opencodex-api-key`、`Authorization: Bearer` 或 `x-api-key`），永远不接受管理令牌。已配置的数据密钥只能看到用该密钥发出的请求；回环调用方和环境令牌可以看到所有请求。Codex 桌面端页面来源 `app://-` 仅可读取这一条路由（及其预检），其他数据平面路由的来源规则不变。
 
 查询参数：`client=codex|claude|other` 限定客户端类别，`conversation=<id>` 限定单个会话；会话过滤接受原始 id、日志中的摘要或 `codex://threads/<id>` 链接，响应不会回显它。响应体为 `{ "latest": Meter | null, "byClient": { "codex"?: Meter, "claude"?: Meter, "other"?: Meter }, "generatedAt": <毫秒> }`。`Meter` 含 `speed { value, reason }`、`outputTokens`、`generationMs`、`cache { readTokens, inputTokens, percent, reason }`、`context { usedTokens, limitTokens, percent, reason }`、`model`、`provider`、`client`、`timestamp`，只有数字、模型与 provider 名称和原因码。自动审批审查（`codex-auto-review`）不会被报告。
 
@@ -237,8 +237,8 @@ Aside 配置档的变更在这种情况下仍会保存一件事：确认之后�
 
 | 值 | 为 `null` 的情况 |
 | --- | --- |
-| `speed` | 请求失败、被取消或未完整结束；用量缺失或为估算值；缺少输出 token；生成窗口未记录、短于 1 秒或不一致。速度是输出 token 除以生成窗口，而不是墙钟时间。 |
-| `cache.percent` | 用量缺失或为估算值、缺少输入数，或缓存读取仅存在于线路层。 |
+| `speed` | 请求失败、被取消或未完整结束；用量缺失或为估算值；缺少输出 token；生成窗口未记录、短于 1 秒或不一致；请求经过多次尝试（`multiple_attempts`），其窗口会包含尝试之间的间隔。速度是输出 token 除以生成窗口，而不是墙钟时间。 |
+| `cache.percent` | 用量缺失或为估算值、缺少输入数，或缓存读取并非实测：仅存在于线路层或来源未知（`cache.reason` 为 `cache_unobserved`）。 |
 | `context.percent` | 用量缺失或为估算值，或该模型的上下文窗口不在已持久化的 Codex 目录中（`context.reason` 为 `limit_unknown`）。 |
 
 ### OAuth 账户、provider 密钥和数据平面密钥
