@@ -23,6 +23,8 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   guarded?: boolean;
   /** #7771: the guarded path on a simulated win32, with a bound scheduler manager (separate child stop). */
   windowsGuarded?: boolean;
+  /** Run the stop through the Windows checked-stop wiring on any host (it is always on, on a Windows host). */
+  windowsStopWiring?: boolean;
   orphan?: boolean;
   exitCleanup?: boolean;
   nativeSignal?: boolean;
@@ -150,6 +152,7 @@ mock.module("node:child_process", () => ({
 }));
 
 const receipts = await import("../../src/config/pending-teardown");
+if (options.windowsStopWiring) (await import("../../src/cli/stop-windows-checked")).resetOcxWindowsStopForTests("win32");
 process.on("exit", () => {
   receiptBlocker?.close();
   writeFileSync(join(home, "parent-stop-result.json"), JSON.stringify({
@@ -346,6 +349,23 @@ if (options.windowsPartAUnderOwnWrapper) {
   });
 }
 if (options.handover) process.env.OCX_UPDATE_TEARDOWN_HANDOVER = "1";
+// The Windows stop wiring (on a Windows host, or windowsStopWiring) stops the manager through the checked
+// stop's Part A, not the Detailed form faked above; its real Part A probes Task Scheduler and WinSW and reads the
+// proxy's command line through PowerShell or WMIC, which dev run 43508374033 (windows 5/14) caught as unexpected
+// execFileSync calls. A case without a Part A scenario of its own gets the same answer the Detailed fake gives:
+// no registered manager, or one that took the proxy down with it.
+const windowsWiring = process.platform === "win32" || options.windowsStopWiring === true;
+if (windowsWiring && !options.windowsPartA && !options.windowsPartAReject && !options.windowsPartAUnderOwnWrapper) {
+  const { partAResult, partBResult } = await import("../helpers/windows-stop-caller-fixtures");
+  (await import("../../src/service/windows-service-stop")).setWindowsServiceStopHooksForTests({
+    partA: async () => {
+      calls.service++;
+      if (options.managerCascades) { alive = false; return partAResult("stopped", { bound: [], terminated: [] }); }
+      return partAResult("absent");
+    },
+    partB: async () => { calls.partB++; return partBResult("freed"); },
+  });
+}
 if (options.exitCleanup) {
   delete process.env.OCX_SERVICE;
   // Execute the actual startup exit closure, with only host/config effects replaced.

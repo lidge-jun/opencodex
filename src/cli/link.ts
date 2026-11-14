@@ -45,8 +45,8 @@ import {
 } from "./runtime-api";
 
 export const LINK_USAGE = `Usage:
-  ocx link probe <alias> [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--json]
-  ocx link add <alias> [--plant] [--expect-fingerprint SHA256:…] [--proxy-command <cmd> --ssh-user <user> --ssh-port <port>] [--exclusive] [--operation-id <id>] [--require-ephemeral] [--json]
+  ocx link probe <alias> [--proxy-command <cmd> --ssh-user <user> --ssh-port <port> [--ssh-identity-file <path>]] [--exclusive] [--json]
+  ocx link add <alias> [--plant] [--expect-fingerprint SHA256:…] [--proxy-command <cmd> --ssh-user <user> --ssh-port <port> [--ssh-identity-file <path>]] [--exclusive] [--operation-id <id>] [--require-ephemeral] [--json]
   ocx link port [--json]
   ocx link issue --alias <alias> --tunnel-port <port> [--clients <id,...>] [--json]
   ocx link status [--json]
@@ -62,7 +62,7 @@ ${LINK_CHILD_OPS_USAGE.join("\n")}
 ${LINK_CAPTURE_USAGE.join("\n")}
 
 Forced revoke skips remote cleanup. On a full install run ocx disconnect --expect-link <id> there, which acts only while the machine is connected to this link; for a lightweight Child run ocx link recover --link-id <id> on this Home.
-An explicit route (--proxy-command, --ssh-user and --ssh-port, with --exclusive) reaches ssh on the command line for every command and tunnel of the link, so ssh_config cannot change it; an exclusive link refuses route edits.
+An explicit route (--proxy-command, --ssh-user and --ssh-port, with --exclusive) reaches ssh on the command line for every command and tunnel of the link, so ssh_config cannot change it; an exclusive link refuses route edits. --ssh-identity-file <path> makes ssh offer that private key alone (no agent, no default key) for every command and tunnel of the link.
 Recover cleans an ephemeral Child a forced revoke or an interrupted enrollment left behind, over the link's pinned SSH trust.
 Cleanup reports each Child's platform with disconnect guidance; it changes nothing.
 Diagnostics reads this computer's bounded link diagnostics file directly; it contacts no proxy and writes nothing.

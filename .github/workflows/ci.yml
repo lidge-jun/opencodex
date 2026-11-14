@@ -880,19 +880,17 @@ jobs:
     # Never on pull requests: macOS legs run through manual dispatch.
     if: github.event_name != 'pull_request'
     runs-on: macos-latest
-    # Four shards. Three replaced two after run 38214884055 hit this cap with
-    # 68 files left and no failing tests (#6978). The suite outgrew three too:
-    # run 40727740334 took 13.1-16.4m, 40743681086 12.7-13.7m, and
-    # 40756291846 15.0-17.1m. In dev lane=all run 40766068492 (b16bc0978b),
-    # macos 1/3 (123090588998) reached batch 73/88 and macos 2/3
-    # (123090589363) batch 93/93 before this cap cancelled them, with no failing
-    # tests. The cap stays 20: the suite needs another shard, not a longer wait,
-    # and a wedged shard (#4956) is still cut off as early as before. Four suite
-    # shards + widget/bundle request five macOS jobs for five runner slots; each
-    # run pays one extra shard's setup overhead. The full-membership control runs
-    # the same bounded batches without sharding, only on a lane=macos-control
-    # dispatch.
-    timeout-minutes: 20
+    # Four shards. Three replaced two after run 38214884055 hit the cap with 68
+    # files left and no failing tests (#6978); four replaced three after dev run
+    # 40766068492 cancelled two of three at the cap. Four suite shards +
+    # widget/bundle already take all five macOS runner slots, so a fifth shard is
+    # not available. On 2026-11-14 dev run 43508374033 cancelled all four shards
+    # at the 20-minute cap with no failing tests (about 1m of setup and 19m of
+    # tests each; batches 67-78 of 75-83 reached), and the owner raised the cap
+    # to 30. A wedged shard (#4956) is now cut off ten minutes later. The
+    # full-membership control runs the same bounded batches without sharding,
+    # only on a lane=macos-control dispatch.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
