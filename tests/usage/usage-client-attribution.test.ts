@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { classifyUsageClient, normalizeRecordedClient, usageClientLogContext, usageClientName } from "../../src/usage/client";
-import { MAX_USAGE_APP_NAMES, usageAppIdentity } from "../../src/usage/app-breakdown";
+import { MAX_PARTITION_APP_KEYS, MAX_USAGE_APP_NAMES, usageAppIdentity } from "../../src/usage/app-breakdown";
 import { normalizePersistedUsageRow, readUsageEntries, resetUsageReadCacheForTests, usageLogPath } from "../../src/usage/log";
 import { createUsageSummaryAccumulator, projectUsageSummary, summarizeUsage } from "../../src/usage/summary";
 import { parseUsageSource } from "../../src/usage/source-filter";
@@ -80,6 +80,18 @@ describe("usage client attribution", () => {
     expect(apps.filter(row => row.name).length).toBe(MAX_USAGE_APP_NAMES);
     expect(apps.find(row => row.client === "unknown" && !row.name)?.requests).toBe(5);
     expect(apps.reduce((sum, row) => sum + row.requests, 0)).toBe(MAX_USAGE_APP_NAMES + 5);
+  });
+
+  test("a name the partition already holds keeps its row after the partition fills", () => {
+    const now = Date.now();
+    const accumulator = createUsageSummaryAccumulator({ mode: "row-unique" });
+    const add = (index: number, requestId: string, inputTokens: number) => accumulator.add({ timestamp: now,
+      provider: "openai", model: "gpt-test", status: 200, durationMs: 10, usageStatus: "reported",
+      usage: { inputTokens, outputTokens: 1 }, requestId, client: "unknown", clientName: `tool-${index}` });
+    for (let index = 0; index < MAX_PARTITION_APP_KEYS; index++) add(index, `fill-${index}`, 1);
+    for (let index = 0; index < 50; index++) add(0, `again-${index}`, 1000);
+    const row = accumulator.summarize("30d", now).apps.find(app => app.name === "tool-0");
+    expect(row).toMatchObject({ requests: 51, totalTokens: 2 + 50 * 1001 });
   });
 
   test("app totals follow projected combo attempts and inclusive custom bounds", () => {
@@ -231,6 +243,9 @@ describe("usage client attribution", () => {
     expect(usageClientLogContext(new Headers({ "user-agent": "antigravity-tools/4.1" }))).toEqual({ client: "unknown", clientName: "antigravity-tools" });
     expect(classifyUsageClient(new Headers({ "user-agent": "antigravity/hub/" }))).toBe("unknown");
     expect(classifyUsageClient(new Headers({ originator: "codex_cli_rs", "user-agent": "google-genai-sdk/1.30.0" }))).toBe("unknown");
+    // The GenAI SDK prefix alone does not make a self-named caller agy.
+    expect(usageClientLogContext(new Headers({ originator: "my-agent", "user-agent": "google-genai-sdk/1.30.0 gl-node/v22.11.0" })))
+      .toEqual({ client: "unknown", clientName: "my-agent" });
   });
 
   test("does not infer an app from unknown, malformed, conflicting or oversized headers", () => {
@@ -265,7 +280,7 @@ describe("usage client attribution", () => {
     process.env.OPENCODEX_HOME = testDir;
     clearRequestLogsForTests();
     try {
-      const raw = Object.assign(log({ requestId: "invalid-client" }), { client: "private-header-marker" });
+      const raw = Object.assign(log({ requestId: "invalid-client" }), { client: "private-header-marker", clientName: "invalid\nname" });
       addRequestLog(raw as unknown as RequestLogEntry);
       const finalized: RequestLogEntry[] = [];
       addFinalRequestLog("valid-client", 1, { model: "gpt-test", provider: "openai", client: "codex_cli" },
@@ -275,6 +290,9 @@ describe("usage client attribution", () => {
       expect(requestLogEntryFromPersistedUsage(readUsageEntries()[0]!)?.client).toBe("unknown");
       expect(finalized[0]?.client).toBe("codex_cli");
       expect(readFileSync(usageLogPath(), "utf8")).not.toContain("private-header-marker");
+      // The exported ingress drops an invalid name from the retained row as the disk row does.
+      expect(getRequestLogEntries().find(row => row.requestId === "invalid-client")).not.toHaveProperty("clientName");
+      expect(readUsageEntries().find(row => row.requestId === "invalid-client")).not.toHaveProperty("clientName");
     } finally {
       clearRequestLogsForTests();
       resetUsageReadCacheForTests();

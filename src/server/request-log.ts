@@ -684,6 +684,12 @@ export function addRequestLog(entry: RequestLogEntry) {
     entry = { ...entry, ...errorDetailFor(entry), client, ...(attemptNormalizationDropped ? { attemptNormalizationDropped: true } : {}) };
   }
   entry = projectErrorDetail(entry);
+  // Same rule as the disk projection below, so /api/logs cannot keep a name usage.jsonl drops.
+  const clientName = clientNameField(entry.clientName).clientName;
+  if (entry.clientName !== clientName) {
+    const { clientName: _dropped, ...rest } = entry;
+    entry = clientName ? { ...rest, clientName } : rest;
+  }
   if (attemptNormalizationDropped && entry.attemptNormalizationDropped !== true) entry = { ...entry, attemptNormalizationDropped: true };
   // Sanitize ONCE, at the ingress, and use that one value for both destinations.
   //
