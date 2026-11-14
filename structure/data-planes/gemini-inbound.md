@@ -13,9 +13,11 @@ may be URL-encoded, and may carry a doubled `models/` prefix. `/v1/` counts only
 `:method`, so OpenCodex's own `GET /v1/models` and every other `/v1/*` route are untouched. A wrong
 HTTP method on a recognised path is a native 405 with `Allow`. `src/server/index/gemini-routes.ts`
 matches in `serve-options.ts` next to the Ollama arm. The routes are data plane only:
-`managementIngressRouteAllowed` in `src/server/index.ts` denies them and all of `/v1beta/`, the
-unauthenticated listener allowlists do not list them, and the package-tree fence answers them in
-the Gemini error shape. OPTIONS takes data-plane origin policy.
+`managementIngressRouteAllowed` in `src/server/index.ts` denies them and all of `/v1beta/`, and the
+package-tree fence answers them in the Gemini error shape. The unauthenticated data-loopback
+allowlist admits each path with its own HTTP method only (a wrong method is a 404 there, not the
+405), because `ocx connect agy` points the CLI at that socket; admission still comes from the
+receiving listener's policy, as for the chat wire. OPTIONS takes data-plane origin policy.
 
 Gemini clients authenticate with `x-goog-api-key` or a `?key=` query parameter. The dispatcher
 clones the request, moves that credential onto `x-opencodex-api-key` (an existing dedicated header
