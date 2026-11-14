@@ -22,6 +22,7 @@ let win: Window;
 let host: HTMLElement;
 let root: Root | null;
 let chosen: string[];
+let available: string[];
 let scrolled: Element[];
 
 function install(hash: string) {
@@ -42,18 +43,20 @@ beforeEach(() => {
   clearClientResourceStoresForTests();
   previous = new Map(globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   chosen = ["p/a"];
+  available = ["p/a", "p/b"];
   root = null;
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: (input: RequestInfo | URL) => {
       const path = new URL(String(input), "http://localhost/").pathname;
       const payload = path === "/api/subagent-models"
-        ? { available: ["p/a", "p/b"], chosen, pickerAvailable: ["p/a", "p/b"], pickerOrder: [], pickerOrderMode: null }
+        ? { available, chosen, pickerAvailable: ["p/a", "p/b"], pickerOrder: [], pickerOrderMode: null }
         : path === "/api/subagent-model-fallback" ? { models: [], pollMs: 60_000, available: ["p/a", "p/b"] }
         : path === "/api/injection-model" ? { model: null, effort: null, available: [], efforts: [] }
         : path === "/api/v2" ? { enabled: false, multiAgentMode: "default" }
+        : path === "/api/model-visibility" ? { ok: true, clientIntegrations: [] }
         : path === "/api/models" ? modelRows
-        : path === "/api/providers" ? [{ name: "p" }]
+        : path === "/api/providers" ? [{ name: "p", liveModels: false, models: ["a", "b"] }]
         : path === "/api/provider-context-caps" ? { caps: {} }
         : path === "/api/selected-models" ? { selected: {} }
         : path === "/api/aliases" ? { providers: {}, models: {}, defaults: { global: false, providers: {} } }
@@ -100,6 +103,20 @@ test("Models renders the pinned roster once, inside the client model picker sect
   // The order and Fast rows controls belong to the same section.
   expect(section!.textContent).toContain("Pinned in picker");
   expect(section!.querySelector(".models-cap-row")).toBeTruthy();
+});
+
+test("a catalog reload on Models also reloads the roster's model list", async () => {
+  install("models");
+  win.localStorage.setItem("ocx-models-collapsed:v2", "[]");
+  await mount("models");
+  const roster = () => host.querySelector(".picker-pinned-roster")!.textContent ?? "";
+  expect(roster()).not.toContain(modelLabel("p/c"));
+
+  // A visibility write reloads the catalog; the server now offers one more roster choice.
+  available = ["p/a", "p/b", "p/c"];
+  await act(async () => { host.querySelector<HTMLButtonElement>('button[aria-label="p/b"]')!.click(); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 50)); });
+  expect(roster()).toContain(modelLabel("p/c"));
 });
 
 test("Subagents shows the pinned models as a pointer, with no roster editor", async () => {

@@ -19,7 +19,7 @@ import { readJsonIfOk, readJsonOrThrow } from "../fetch-json";
 import { ownRecordValue } from "../own-record-value";
 import { describeIntegrationRefusalParts } from "./integrations/refusal-copy";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
-import { setClientResourceData } from "../client-resource";
+import { invalidateClientResource, setClientResourceData } from "../client-resource";
 import { createBoundedFetch, type BoundedFetch } from "../bounded-fetch";
 import {
   isModelPickerUsage, isPickerOrderSaved, isPickerOrderSettings, modelPickerOrder, modelPickerOrderMode,
@@ -98,6 +98,7 @@ import { CustomModelsSummary, InfoHint, ModelsSettingsPanel, SettingsRow } from 
 import { modelsSettingsSummary } from "./models-settings-summary";
 import { useAutoReviewSettings } from "./use-auto-review-settings";
 import { useShadowCallSettings } from "./use-shadow-call-settings";
+import { subagentRosterCacheKey } from "./use-subagent-roster";
 import { Button } from "@/components/ui-v2/button";
 import { ModelsAbout } from "../components/v2-models/models-about";
 import { ModelsProviderRail } from "../components/v2-models/models-provider-rail";
@@ -587,6 +588,8 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
       // the result through the same shared store used by the initial catalog subscription.
       setClientResourceData(cacheKey, next);
       pickerResource.refresh();
+      // The roster's "all models" list follows catalog visibility, so it reloads too.
+      invalidateClientResource(subagentRosterCacheKey(apiBase));
       return true;
     } catch {
       return false;
@@ -595,7 +598,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
         loadPendingRef.current = false;
       }
     }
-  }, [applyCatalog, cacheKey, fetchCatalog, pickerResource.refresh]);
+  }, [apiBase, applyCatalog, cacheKey, fetchCatalog, pickerResource.refresh]);
 
   const finishDisplayNameEdit = useCallback(() => {
     const trigger = displayNameTriggerRef.current;
