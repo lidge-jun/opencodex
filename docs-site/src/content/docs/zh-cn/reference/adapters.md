@@ -124,7 +124,9 @@ interface ProviderAdapter {
 表单中填写，或由代理主机上的 `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` 和
 `GOOGLE_CLOUD_LOCATION` 提供。添加 provider 不代表凭据或权限已验证。API key 未指定
 项目时使用 Vertex express 模式。
-仪表盘预设使用以配置的默认模型为起点的静态目录；连接测试不会验证 Vertex 凭据或权限。
+仪表盘预设使用以配置的默认模型为起点的静态目录。使用 ADC 时，连接测试会换取一次访问令牌，
+能证明凭据可用，但不证明 Vertex 权限；代理用当前 ADC 来源换到过令牌后，provider 显示为已验证。
+静态目录下的 API key 不做测试。
 已有 Vertex 配置省略 `liveModels` 时会保留通过通用发现端点进行实时发现的原有行为。
 设置 `liveModels: false` 使用静态目录，也可在设置页面切换这两种模式。
 

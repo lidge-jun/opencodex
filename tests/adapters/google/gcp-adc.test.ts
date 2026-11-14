@@ -429,6 +429,7 @@ describe("gcp-adc resolver", () => {
   });
 
   test("management saves and reloads a renamed keyless Vertex provider", async () => {
+    setEnv("GOOGLE_APPLICATION_CREDENTIALS", saPath);
     const config = { port: 0, defaultProvider: "fixture", providers: {
       fixture: { adapter: "openai-chat", baseUrl: "https://fixture.example/v1" },
     } } as OcxConfig;
@@ -448,7 +449,8 @@ describe("gcp-adc resolver", () => {
       expect(dto.providers["my-vertex"]).not.toHaveProperty("apiKey");
       const probe = new ManagementRequest("http://127.0.0.1/api/providers/test?name=my-vertex", { method: "POST" });
       const probeResponse = await handleManagementAPI(probe, new URL(probe.url), config, { createManagementConvergeCodex: catalogConvergenceFactory() });
-      expect(await probeResponse!.json()).toMatchObject({ applicable: false, reason: "static_catalog" });
+      // Keyless Vertex is ADC: the static-catalog connection test verifies it by minting a token.
+      expect(await probeResponse!.json()).toMatchObject({ ok: true });
       const patch = new ManagementRequest("http://127.0.0.1/api/providers?name=my-vertex", { method: "PATCH", headers: { "content-type": "application/json" },
         body: JSON.stringify({ project: "new-project", location: "" }) });
       const patchResponse = await handleManagementAPI(patch, new URL(patch.url), config, { createManagementConvergeCodex: catalogConvergenceFactory() });

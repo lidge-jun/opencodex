@@ -80,9 +80,19 @@ export default function ProviderOverview({
   const t = useT();
   const { locale } = useI18n();
   const status = binProviderStatus(item);
-  const vertexUnverified = usesUnverifiedVertexCredentials(item);
   const needsAttention = Boolean(item.activeNeedsReauth) || oauth?.needsReauth === true;
   const needsOAuthLogin = item.authMode === "oauth" && oauth?.loggedIn === false;
+  const requests = usageTotals?.requests;
+  const tokens = usageTotals?.totalTokens;
+  const fallbackProbeController = useProviderProbeState(item, apiBase, connectionIdentity, availableModels);
+  const activeProbe = probeController ?? fallbackProbeController;
+  const { connectionProbeKey, completionModels, selectedModel: probeSelectedModel, completionProbe, reverifyModel } = activeProbe;
+  const [connectionTest, setConnectionTest] = useState<ConnectionTestState | null>(null);
+  const connectionAbortRef = useRef<{ key: string; controller: AbortController } | null>(null);
+  const testingConnection = connectionTest?.key === connectionProbeKey && connectionTest.testing;
+  const connectionResult = connectionTest?.key === connectionProbeKey ? connectionTest.result : null;
+  // A passing connection test is the same proof the server reports; do not wait for a config re-read.
+  const vertexUnverified = usesUnverifiedVertexCredentials(item) && connectionResult?.ok !== true;
   const effectiveStatus = item.disabled === true
     ? "disabled"
     : vertexUnverified && !needsAttention ? "unverified"
@@ -95,15 +105,6 @@ export default function ProviderOverview({
     : effectiveStatus === "needs-setup"
       ? (needsAttention ? t("pws.status.needsAttention") : vertexUnverified ? t("pws.vertexUnverified") : t("pws.status.needsSetup"))
       : t("prov.disabledBadge");
-  const requests = usageTotals?.requests;
-  const tokens = usageTotals?.totalTokens;
-  const fallbackProbeController = useProviderProbeState(item, apiBase, connectionIdentity, availableModels);
-  const activeProbe = probeController ?? fallbackProbeController;
-  const { connectionProbeKey, completionModels, selectedModel: probeSelectedModel, completionProbe, reverifyModel } = activeProbe;
-  const [connectionTest, setConnectionTest] = useState<ConnectionTestState | null>(null);
-  const connectionAbortRef = useRef<{ key: string; controller: AbortController } | null>(null);
-  const testingConnection = connectionTest?.key === connectionProbeKey && connectionTest.testing;
-  const connectionResult = connectionTest?.key === connectionProbeKey ? connectionTest.result : null;
   const configuredModels = [
     ...new Set([
       ...(item.models ?? []),

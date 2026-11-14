@@ -1651,10 +1651,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       return jsonResponse(await probeJevDecisionProvider(config, name, { signal: req.signal }));
     }
     if (prov.liveModels === false) {
-      // A static catalog has no live discovery endpoint to test. This is neither
-      // positive connectivity evidence nor an outage, and it must stay before
-      // credential resolution/network access for providers such as Antigravity.
-      return jsonResponse({ applicable: false, reason: "static_catalog", latencyMs: 0 });
+      // No live discovery endpoint. Only Vertex ADC still has a credential to verify; every other
+      // static catalog must stay before credential resolution/network access (e.g. Antigravity).
+      const { staticCatalogConnectionTest } = await import("./static-catalog-probe");
+      return jsonResponse(await staticCatalogConnectionTest(name, prov, req.signal));
     }
     const { buildModelsRequest, getModelsOAuthAccessSnapshot, resolveModelsAuthToken } = await import("../../oauth");
     const antigravity = effectiveGoogleMode(name, prov) === "cloud-code-assist";
