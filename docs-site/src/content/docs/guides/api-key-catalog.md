@@ -7,7 +7,7 @@ This page holds section 3 of the [Providers](/guides/providers/) guide: the buil
 and the provider-specific notes that go with them. Auth modes, account logins, and local providers
 stay on that page.
 
-opencodex ships 110 built-in presets: 88 key-based, 18 OAuth, three local, and one default
+opencodex ships 111 built-in presets: 89 key-based, 18 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -101,6 +101,7 @@ region-pinned EU routes, is at [opper.ai/models](https://opper.ai/models). Opper
 | Modelflare | `https://modelflare.dev/v1` |
 | AI Stupid Level | `https://aistupidlevel.info/v1` |
 | cheapaimodel | `https://api.cheapaimodel.ai/v1` |
+| AbliteratedLLM | `https://api.abliteratedllm.dev/v1` |
 | OpenGateway | `https://apis.opengateway.ai/v1` |
 | GitLab Duo | `https://cloud.gitlab.com/ai/v1/proxy/openai/v1` |
 | Cloudflare AI Gateway | `https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic` |
@@ -234,6 +235,23 @@ preset sends every request through Chat Completions, the one interface every cat
 it does not use the gateway's Responses or Anthropic Messages endpoints. cheapaimodel's
 [terms](https://cheapaimodel.ai/terms) and [privacy policy](https://cheapaimodel.ai/privacy) apply to
 requests sent to this service.
+
+**AbliteratedLLM** is a pay-per-token API for abliterated (refusal-removed) and stock open-weight
+models, prepaid in USD by card or crypto. Create an [API key](https://abliteratedllm.dev/dashboard/keys),
+then select **AbliteratedLLM** in `ocx init` or the dashboard's **Add provider** picker, or run
+`ocx provider add abliteratedllm`, and give it the key directly or as the reference
+`${ABLITERATEDLLM_API_KEY}`. The preset sends every client through [Chat Completions](https://abliteratedllm.dev/docs/chat-completions)
+at `https://api.abliteratedllm.dev/v1`, not the service's stateless Responses or Anthropic Messages
+endpoints, and discovers models from the public [`GET /v1/models`](https://abliteratedllm.dev/docs/models),
+which answers without a key and so cannot validate one. `glm-5.3-flash-abliterated` is the default.
+On 2026-11-15 `GET /v1/models` listed 15 models: `glm-5.3-flash-abliterated`, the only abliterated
+model (marked `variant: "abliterated"`), and 14 with `provider_label: "Stock model"`, the vendors'
+original weights. None was labelled "Official DeepSeek API", the privacy policy's label for requests
+forwarded to DeepSeek's own API; the listed models, the DeepSeek ones included, run on Fireworks AI
+with zero data retention. `glm-5.3` and `glm-5.3-fast` are text only, so images for them go to the
+vision sidecar. `reasoning_effort` is sent as `low`, `medium` or `high`; higher levels are sent as
+`high`. AbliteratedLLM's [terms](https://abliteratedllm.dev/terms) and
+[privacy policy](https://abliteratedllm.dev/privacy) apply to requests sent to this service.
 
 The provider editor also accepts an optional `inputModalities` fallback: a nonempty array containing
 `text`, `image`, `audio`, or `video`. Exact per-model declarations take precedence. Invalid values
