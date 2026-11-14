@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -931,17 +931,52 @@ describe("Zed inference send accounting", () => {
 });
 
 describe("Zed stream framing", () => {
-  async function translate(chunks: string[], provider: ZedProvider = "anthropic"): Promise<Array<Record<string, unknown>>> {
+  async function translate(chunks: Array<string | Uint8Array>, provider: ZedProvider = "anthropic"): Promise<Array<Record<string, unknown>>> {
     const encoder = new TextEncoder();
     const body = new ReadableStream<Uint8Array>({
       start(controller) {
-        for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+        for (const chunk of chunks) controller.enqueue(typeof chunk === "string" ? encoder.encode(chunk) : chunk);
         controller.close();
       },
     });
     const text = await new Response(zedEventStream(body, provider)).text();
     return text.split("\n\n").filter(Boolean).map(frame => JSON.parse(frame.replace(/^data: /, "")) as Record<string, unknown>);
   }
+
+  test("bounds newline search work for a large fragmented frame", async () => {
+    const event = { type: "content_block_delta", delta: { text: "a".repeat(256 * 256) } };
+    const wire = `${JSON.stringify({ event })}\n${JSON.stringify({ status: "stream_ended" })}\n`;
+    const chunks = Array.from({ length: Math.ceil(wire.length / 256) }, (_, i) => wire.slice(i * 256, (i + 1) * 256));
+    const indexOf = String.prototype.indexOf;
+    const includes = String.prototype.includes;
+    let scannedChars = 0;
+    const recordScan = (text: string, search: string, start: number, found: number) => {
+      if (search === "\n") scannedChars += Math.max(0, (found < 0 ? text.length : found + 1) - start);
+    };
+    const indexing = spyOn(String.prototype, "indexOf").mockImplementation(function (search, start = 0) {
+      const found = Reflect.apply(indexOf, this, [search, start]);
+      recordScan(String(this), search, start, found);
+      return found;
+    });
+    const checking = spyOn(String.prototype, "includes").mockImplementation(function (search, start = 0) {
+      recordScan(String(this), search, start, Reflect.apply(indexOf, this, [search, start]));
+      return Reflect.apply(includes, this, [search, start]);
+    });
+    let frames: Array<Record<string, unknown>>;
+    try { frames = await translate(chunks); } finally { indexing.mockRestore(); checking.mockRestore(); }
+    expect(frames).toEqual([event, { type: "message_stop" }]);
+    expect(scannedChars).toBeLessThanOrEqual(4 * wire.length);
+  });
+
+  test("preserves split UTF-8, CRLF, coalesced lines and terminal suppression", async () => {
+    const event = { type: "content_block_delta", delta: { text: "é한😀" } };
+    const wire = `: keepalive\r\ndata: ${JSON.stringify({ event })}\r\n${JSON.stringify({ event: { type: "ping" } })}\n${JSON.stringify({ status: "stream_ended" })}\n{malformed after terminal\n`;
+    const bytes = new TextEncoder().encode(wire);
+    for (const size of [1, 7, bytes.length]) {
+      const chunks = Array.from({ length: Math.ceil(bytes.length / size) }, (_, i) => bytes.subarray(i * size, (i + 1) * size));
+      expect(await translate(chunks)).toEqual([event, { type: "ping" }, { type: "message_stop" }]);
+    }
+  });
 
   test("forwards events and stops at the explicit stream-ended status", async () => {
     const frames = await translate([

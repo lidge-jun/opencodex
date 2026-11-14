@@ -168,9 +168,11 @@ export function zedEventStream(
   const output = new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
       if (finished) return;
-      buffer += decoder.decode(chunk, { stream: true });
+      const decoded = decoder.decode(chunk, { stream: true });
+      buffer += decoded;
       let start = 0;
-      let newline = buffer.indexOf("\n", start);
+      // A drained suffix has no newline; only new text can complete a frame.
+      let newline = decoded.includes("\n") ? buffer.indexOf("\n", start) : -1;
       while (newline >= 0 && !finished) {
         processLine(buffer.slice(start, newline), controller);
         start = newline + 1;
