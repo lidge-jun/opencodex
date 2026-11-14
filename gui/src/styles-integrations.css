@@ -45,6 +45,11 @@
 .integration-card-link:focus-visible { outline: none; }
 .integration-card-link:focus-visible::after { outline: 2px solid var(--accent-ring); outline-offset: -2px; }
 .integration-card:hover { border-color: var(--accent-ring); }
+/* The "Update needed" pill as a button: it must sit above the stretched link's overlay or the card swallows the click. */
+.integration-badge-action { appearance: none; font: inherit; cursor: pointer; position: relative; z-index: 1; }
+.integration-badge-action:hover:not(:disabled) { filter: brightness(1.2); text-decoration: underline; }
+.integration-badge-action:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+.integration-badge-action:disabled { cursor: progress; opacity: 0.7; }
 /* The row that carried the overflow outward: a long action label used to push the
    whole row past the card edge instead of moving to a second line. */
 .integration-card-actions { position: relative; z-index: 1; display: flex; flex-wrap: wrap; min-width: 0; align-items: center; gap: 10px; margin-top: auto; }

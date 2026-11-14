@@ -59,6 +59,9 @@ let journalRows: JournalRow[];
 let putResponse: (request: RecordedRequest) => Response;
 let codexRoutingResponse: () => Response;
 let codexDesiredEnabled = true;
+/** Claude Desktop reports an applied gateway whose file drifted ("Update needed"); the PUT below clears it. */
+let desktopStale = false;
+let desktopApplied = false;
 let deleteResponse: () => Response;
 let previewResponse: (body: Record<string, unknown>, signal?: AbortSignal | null) => Response | Promise<Response>;
 /**
@@ -133,6 +136,8 @@ beforeEach(() => {
   putResponse = () => json({ ok: true, clientId: "hermes", changed: true, state: "absent", message: "disabled" });
   codexRoutingResponse = () => json({ routingInjected: false, status: "native", recommendedCommand: null });
   codexDesiredEnabled = true;
+  desktopStale = false;
+  desktopApplied = false;
   deleteResponse = () => json({ ok: true, clientId: "hermes", opId: "op-old", snapshotRemoved: true });
   previewResponse = body => {
     const clientId = body.clientId ?? "hermes";
@@ -171,7 +176,12 @@ beforeEach(() => {
     if (url.includes("/api/claude-desktop/status")) {
       return failExtraSources
         ? json({ error: "nope" }, 500)
-        : json({ desiredEnabled: true, installed: true, observedKind: "standard", applied: false, stale: false, activeProfile: null, appliedAt: null });
+        : json({ desiredEnabled: true, installed: true, observedKind: "standard", applied: desktopApplied, stale: desktopStale, activeProfile: null, appliedAt: null });
+    }
+    if (method === "PUT" && url.endsWith("/api/native-integrations/claude-desktop")) {
+      desktopStale = false;
+      desktopApplied = true;
+      return json({ ok: true, clientId: "claude-desktop", changed: true, state: "current", message: "enabled", desiredEnabled: true });
     }
     if (method === "PUT" && url.endsWith("/api/native-integrations/codex")) {
       const body = init?.body ? JSON.parse(String(init.body)) as { enabled?: unknown } : {};
@@ -1589,6 +1599,29 @@ test("Codex disable uses Codex consequences and refreshes observed routing", asy
   expect(switchFor("codex")?.getAttribute("aria-checked")).toBe("false");
   expect(container.querySelector(".integration-card[data-client='codex'] .badge")
     ?.getAttribute("data-integration-state")).toBe("absent");
+});
+
+test("the Update needed pill re-applies a drifted Claude Desktop in one click and says so", async () => {
+  desktopStale = true;
+  desktopApplied = true;
+  await mountOverview();
+  const pill = () => container.querySelector<HTMLButtonElement>(
+    ".integration-card[data-client='claudeDesktop'] button.integration-badge-action",
+  );
+  expect(pill()?.textContent?.trim()).toBe("Update needed");
+  // A plain, current card keeps its badge a label, not a control.
+  expect(container.querySelector(".integration-card[data-client='codex'] button.integration-badge-action")).toBeNull();
+
+  await act(async () => { pill()!.click(); });
+  await act(async () => { await new Promise<void>(resolve => testWindow.setTimeout(resolve, 50)); });
+
+  const put = requests.find(request => request.method === "PUT");
+  expect(put?.url).toContain("/api/native-integrations/claude-desktop");
+  expect(put?.body).toEqual({ enabled: true });
+  const card = container.querySelector(".integration-card[data-client='claudeDesktop']")!;
+  expect(card.textContent).toContain("was re-applied.");
+  expect(card.querySelector(".badge")?.getAttribute("data-integration-state")).toBe("current");
+  expect(pill()).toBeNull();
 });
 
 test("a source that cannot be read is unknown, never 'not applied'", async () => {

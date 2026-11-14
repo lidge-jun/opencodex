@@ -2499,6 +2499,8 @@ export const ru: Record<TKey, string> = {
   "integrations.action.disable": "Отключить",
   "integrations.action.refresh": "Обновить",
   "integrations.action.settings": "Настройки",
+  "integrations.action.reapply": "Нажмите, чтобы применить заново и обновить этот клиент",
+  "integrations.reapply.done": "{client}: применено заново.",
   "integrations.action.manageKeys": "Управлять ключами",
   "integrations.action.restore": "Восстановить…",
   "integrations.action.undo": "Отменить",

@@ -1980,6 +1980,8 @@ export const ko: Record<TKey, string> = {
   "integrations.action.disable": "해제",
   "integrations.action.refresh": "업데이트",
   "integrations.action.settings": "설정",
+  "integrations.action.reapply": "클릭하여 다시 적용하고 이 클라이언트를 최신 상태로 만듭니다",
+  "integrations.reapply.done": "{client}을(를) 다시 적용했습니다.",
   "integrations.action.manageKeys": "키 관리",
   "integrations.action.restore": "복원…",
   "integrations.action.undo": "되돌리기",

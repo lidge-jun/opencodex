@@ -2407,6 +2407,8 @@ export const ja: Record<TKey, string> = {
   "integrations.action.disable": "無効にする",
   "integrations.action.refresh": "更新",
   "integrations.action.settings": "設定",
+  "integrations.action.reapply": "クリックして再適用し、このクライアントを最新にします",
+  "integrations.reapply.done": "{client} を再適用しました。",
   "integrations.action.manageKeys": "キーを管理",
   "integrations.action.restore": "復元…",
   "integrations.action.undo": "元に戻す",

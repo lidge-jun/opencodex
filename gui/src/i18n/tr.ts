@@ -2526,6 +2526,8 @@ export const tr: Record<TKey, string> = {
   "integrations.action.disable": "Devre Dışı Bırak",
   "integrations.action.refresh": "Güncelle",
   "integrations.action.settings": "Ayarlar",
+  "integrations.action.reapply": "Yeniden uygulamak ve bu istemciyi güncellemek için tıklayın",
+  "integrations.reapply.done": "{client} yeniden uygulandı.",
   "integrations.action.manageKeys": "Anahtarları yönet",
   "integrations.action.restore": "Geri Yükle…",
   "integrations.action.undo": "Geri Al",
