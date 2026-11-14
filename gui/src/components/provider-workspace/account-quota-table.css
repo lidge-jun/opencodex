@@ -13,7 +13,7 @@
 .aqt-scroll {
   overflow-x: auto;
   border: 1px solid var(--border);
-  border-radius: var(--radius-sm, 6px);
+  border-radius: var(--radius-sm);
 }
 .aqt-table {
   width: 100%;
@@ -49,26 +49,21 @@
 }
 .aqt-scarce {
   margin-left: var(--space-1);
-  padding: 0 4px;
-  border-radius: 4px;
-  font-size: var(--text-caption);
-  color: var(--amber);
-  border: 1px solid color-mix(in oklab, var(--amber) 40%, transparent);
 }
 .aqt-pool {
-  min-width: 8.5rem;
+  min-width: 9rem;
 }
 .aqt-table .badge {
   white-space: nowrap;
 }
 .aqt-bar {
   display: grid;
-  grid-template-columns: 2.4rem minmax(2.5rem, 1fr) 2.4rem;
+  grid-template-columns: 2.4rem minmax(2.5rem, 1fr) auto;
   align-items: center;
   column-gap: var(--space-2);
 }
 .aqt-bar + .aqt-bar {
-  margin-top: 2px;
+  margin-top: var(--space-1);
 }
 .aqt-bar-label,
 .aqt-bar-reset {
@@ -84,19 +79,13 @@
 }
 .aqt-bar-value {
   text-align: right;
+  white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
 .aqt-next {
   margin-top: var(--space-1);
 }
-.aqt-flag {
-  white-space: nowrap;
-}
 .aqt-flag--ok { color: var(--green); }
 .aqt-flag--warn { color: var(--amber); }
 .aqt-flag--muted { color: var(--muted); }
-.aqt-actions .btn {
-  display: block;
-  white-space: nowrap;
-}
 }

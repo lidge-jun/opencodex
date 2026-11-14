@@ -36,11 +36,9 @@ function formatArrivalTime(at: string): string {
 
 /**
  * Manual "discover now" for one provider plus its recent arrivals. Sits under the
- * "Discover models from provider" setting so the action is next to the switch that governs it.
+ * "Discover models from provider" setting, and only while that setting is on.
  */
-export default function ProviderModelDiscovery({ apiBase, provider, enabled }: {
-  apiBase: string; provider: string; enabled: boolean;
-}) {
+export default function ProviderModelDiscovery({ apiBase, provider }: { apiBase: string; provider: string }) {
   const t = useT();
   const [recent, setRecent] = useState<ArrivalRow[]>([]);
   const [run, setRun] = useState<RunState>({ kind: "idle" });
@@ -93,8 +91,7 @@ export default function ProviderModelDiscovery({ apiBase, provider, enabled }: {
             {run.kind === "failed" && `${t("modelDiscover.failed")}${run.detail ? ` · ${run.detail}` : ""}`}
           </p>
         </div>
-        <button type="button" className="btn btn-ghost btn-sm" disabled={!enabled || run.kind === "running"}
-          title={enabled ? undefined : t("modelDiscover.static")}
+        <button type="button" className="btn btn-ghost btn-sm" disabled={run.kind === "running"}
           aria-busy={run.kind === "running"} onClick={() => { void discover(); }}>
           <IconRefresh width={14} height={14} aria-hidden="true" />
           {" "}
