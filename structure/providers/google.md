@@ -443,3 +443,24 @@ that leading prefix (`classifyAntigravityRefusal`) and quarantines the account t
 [the transport inventory](../transports/inventory.md). Coverage: `tests/adapters/google/google-error-details.test.ts`,
 `google-errors.test.ts`, `google-retry-structured.test.ts`, `antigravity-refusal.test.ts`, and the TOS cases in
 `tests/server/server-google-antigravity-oauth-401-replay.test.ts`.
+
+## Google usage composition and finish outcomes
+
+`usageFromGemini` in `src/adapters/google.ts` reports output as `candidatesTokenCount + thoughtsTokenCount` and
+input as `promptTokenCount + toolUsePromptTokenCount`, so output includes reasoning as it does for every other
+adapter (telemetry, cost, the Claude and Chat encoders and the Gemini inbound codec subtract or clamp reasoning from
+that output). Tool-use prompt tokens count toward prompt-length pricing thresholds and Codex's context meter.
+
+`src/adapters/google-truncation.ts` owns the finish rules for every Google mode, stream and buffered alike.
+`isGoogleTruncatedTurn` fails a turn closed for `MALFORMED_FUNCTION_CALL`, for `MAX_TOKENS` after a started call, and
+for `UNEXPECTED_TOOL_CALL` or `MALFORMED_RESPONSE` when no visible output (non-thought text, an inline image or a
+function call) arrived anywhere in the turn. The error carries an explicit `status: 502` and `upstream_error`, so its
+HTTP outcome never depends on the message wording that `src/lib/errors.ts` otherwise matches; a zero-call failure is
+`replaySafeBeforeOutput` and the request log keeps the finish reason (`FAILURE_DETAIL_FINISH_REASONS` in
+`src/lib/failure-detail.ts`). `googleStopReason` maps `MAX_TOKENS` to `max_tokens` and the safety, recitation,
+image-safety and `MALFORMED_RESPONSE` finishes to `content_filter`. A response whose candidates are absent or empty
+and whose `promptFeedback.blockReason` is set becomes `googlePromptBlockedEvent`: HTTP 400
+`invalid_request_error` / `invalid_prompt`, which `src/bridge/terminal-refusal.ts` treats as a terminal refusal so
+Codex does not retry and a combo does not fail over. It names only the reason enum (anything outside `[A-Z_]` becomes
+`OTHER`) and never echoes `blockReasonMessage`. Coverage: `tests/adapters/google/google-finish-fidelity.test.ts`,
+`google-vertex-stream.test.ts` and `tests/adapters/adapter-usage.test.ts`.

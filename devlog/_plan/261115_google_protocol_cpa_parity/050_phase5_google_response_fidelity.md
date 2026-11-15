@@ -104,3 +104,25 @@ started call → error; `IMAGE_SAFETY` →
 `structure/providers-and-adapters.md` Google section: usage composition, fail-closed reasons, prompt
 blocks.
 
+
+## Stale check (cycle 6, at c07d7cc259)
+
+- The adapter error event already carries `retryable?: boolean` (`src/types/request.ts` ~:548); a prompt block uses
+  `retryable: false` (no new field). `providerFailureDetailOf` (`src/lib/failure-detail.ts:119`) reads the closed
+  request-log facts for tests.
+- Fail-closed gates are at `src/adapters/google.ts:1607` (stream) and `:1822` (buffered); stop-reason tables at
+  `:1617` and `:1838`; buffered "no candidates" at `:1749`.
+- Usage expectations to update (output gains thoughts): `tests/adapters/adapter-usage.test.ts:296-312`,
+  `tests/adapters/google/google-vertex-stream.test.ts:66-79` and any other `thoughtsTokenCount` assertion found by the
+  focused run; #8742's inbound codec subtracts reasoning from Chat completion tokens, so its counts become exact.
+- Tests: NEW `tests/adapters/google/google-finish-fidelity.test.ts` (drafted at `.tmp/draft/`).
+
+## Build outcome (cycle 6)
+
+Implemented as audited (`.tmp/research/audit-050.md` blockers resolved): fail-closed events carry `status: 502` /
+`upstream_error` on every mode (Vertex `MALFORMED_FUNCTION_CALL` moves from a message-derived 400 to 502); a prompt
+block is 400 `invalid_prompt`; visible output is tracked for the whole turn and excludes thought text. Docs:
+`structure/providers/google.md` "Google usage composition and finish outcomes" and the `google` section of
+`docs-site/.../reference/adapters.md` (en, es). Release note: AI Studio turns that ended with
+`MALFORMED_FUNCTION_CALL`, `UNEXPECTED_TOOL_CALL` or `MALFORMED_RESPONSE` and no visible output used to complete
+empty and now fail with 502; reported Google output tokens now include thinking tokens.

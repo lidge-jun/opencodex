@@ -956,7 +956,7 @@
   "google-antigravity-wire.test.ts": "adapters/google", "google-buffered-stop-reason.test.ts": "adapters/google",
   "google-claude-prefill-guard.test.ts": "adapters/google", "google-empty-content.test.ts": "adapters/google",
   "google-errors.test.ts": "adapters/google", "google-hardening.test.ts": "adapters/google",
-  "google-error-details.test.ts": "adapters/google", "google-retry-structured.test.ts": "adapters/google",
+  "google-error-details.test.ts": "adapters/google", "google-retry-structured.test.ts": "adapters/google", "google-finish-fidelity.test.ts": "adapters/google",
   "google-stream-fragmentation.test.ts": "adapters/google",
   "google-429-retry-evidence.test.ts": "adapters/google",
   "google-retry-before-pacing.test.ts": "adapters/google",

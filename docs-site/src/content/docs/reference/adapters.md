@@ -547,6 +547,16 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
   frame, and a buffered response that carries no candidate at all returns
   `google response contained no candidates`. A root `data: null` keepalive frame is still skipped as
   padding.
+- **Usage and finish outcomes are the same on every Google mode.** Reported output tokens include
+  Gemini's thinking tokens (`candidatesTokenCount` plus `thoughtsTokenCount`), and input tokens include
+  `toolUsePromptTokenCount`, which Google reports for search grounding and URL context. A turn that ends
+  with `MALFORMED_FUNCTION_CALL`, or with `MAX_TOKENS` after a tool call started, fails with HTTP 502
+  `upstream_error`. So does a turn ending with `UNEXPECTED_TOOL_CALL` or `MALFORMED_RESPONSE` when no
+  text, image or tool call reached the client; thought text does not count. When visible output did
+  arrive, `MALFORMED_RESPONSE` ends as a content filter, as `SAFETY`, `IMAGE_SAFETY` and the other block
+  reasons do, and `UNEXPECTED_TOOL_CALL` ends as a normal stop. A prompt Google refuses before generating
+  (`promptFeedback.blockReason`) returns HTTP 400 `invalid_prompt` naming only the reason, never Google's
+  message; Codex does not retry it and a combo does not fail over on it.
 - Tool-call batches are closed by one immediately adjacent user turn containing one ordered
   `functionResponse` per representable call. Interrupted histories receive an explicit missing-result marker;
   duplicate or standalone results are preserved as marked text (and image siblings) rather than
