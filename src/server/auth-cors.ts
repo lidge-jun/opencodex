@@ -35,6 +35,7 @@ import {
   credentialPinnedProviderConfigError,
 } from "../config/provider-validation";
 import { providerDestinationConfigError } from "../lib/destination-policy";
+import { gcpCredentialMarkerAccount, vertexAdcCredentialVerified } from "../lib/gcp-adc";
 import { providerEgressConfigError } from "../lib/provider-egress";
 import { providerTlsProfileConfigError } from "../lib/provider-tls-profile";
 import { redactSecretString } from "../lib/redact";
@@ -1479,6 +1480,10 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       dto.vertexCredentialKind = key?.startsWith("gcp-sa:") ? "marker"
         : !key?.trim() || key === "N/A" || key.startsWith("<") ? "ambient"
           : key.startsWith("keychain:") || /^\$\{?\w+\}?$/.test(key) ? "reference" : "api-key";
+      if (dto.vertexCredentialKind === "ambient" || dto.vertexCredentialKind === "marker") {
+        try { dto.vertexCredentialVerified = vertexAdcCredentialVerified(gcpCredentialMarkerAccount(key)); }
+        catch { dto.vertexCredentialVerified = false; }
+      }
     }
     if (name === "xai") {
       dto.xaiResponsesOptInState = xaiResponsesOptInState(provider);
