@@ -92,6 +92,7 @@ import {
   quarantineKiroSuspendedAccount,
   failoverAccountSnapshot,
   rotateAntigravityAccountOnAuthRefusal,
+  rotateAntigravityAccountOnUpstreamFault,
 } from "../../oauth/generic-account-failover";
 import {
   attemptOpaqueBlobRecovery,
@@ -611,6 +612,7 @@ export async function prepareAdapterExchange(
     const consoleGoUploadRetryGuard: { attempted: boolean } = { attempted: false };
     let oauth401ReplayAttempted = transportState.oauth401ReplayAttempted;
     let antigravityAuthRotationAttempted = false;
+    let antigravityFaultRotationAttempted = false;
     // Direct requests get one reasoning-effort downgrade. Combo candidates may walk down the
     // published ladder one refused rung at a time; the request send budget bounds those retries.
     const reasoningEffortDowngradeGuard: { attempted: boolean } = { attempted: false };
@@ -877,14 +879,14 @@ export async function prepareAdapterExchange(
     const rotateAntigravityAuth = async (
       failedResponse: Response,
       recovery: AttemptRecoveryKind,
-      modelAccountId?: string,
+      // An account id (model-404 recovery already chose it) or a selector; the 403 refusal default.
+      pick: string | ((sent: { accountId: string; generation: string }) => string | null) = sent =>
+        rotateAntigravityAccountOnAuthRefusal(antigravityPoolActivated, sent.accountId, sent.generation, route.modelId),
     ): Promise<Response | null> => {
       const sent = transportState.replayOAuthCredentialSnapshot ?? transportState.sentOAuthSnapshot;
       if (!antigravityPoolActivated || !sent
         || transportState.genericFailovers >= transportState.genericFailoverLimit) return null;
-      const nextId = modelAccountId ?? rotateAntigravityAccountOnAuthRefusal(
-        antigravityPoolActivated, sent.accountId, sent.generation, route.modelId,
-      );
+      const nextId = typeof pick === "string" ? pick : pick(sent);
       if (!nextId) return null;
       const adapterOwnsDispatch = transportState.activeAdapter.fetchResponse !== undefined;
       return recoverAntigravityAccount({ nextId, failedResponse, adapterOwnsDispatch,
@@ -1085,6 +1087,20 @@ export async function prepareAdapterExchange(
           || await isAntigravityAccessDeniedRefusal(upstreamResponse, options.abortSignal))) {
         antigravityAuthRotationAttempted = true;
         const rotated = await rotateAntigravityAuth(upstreamResponse, "oauth-account-403");
+        if (rotated) { upstreamResponse = rotated; continue recovery; }
+      }
+
+      // A 502/503/504 that outlived the same-account ladder is replayed once on a live sibling: the
+      // failing account is cooled briefly (not marked), and one extra ladder bounds the load a
+      // pool-wide outage can add to a request.
+      if (route.providerName === "google-antigravity" && [502, 503, 504].includes(upstreamResponse.status)
+        && transportState.activeAdapter.name === "google"
+        && antigravityPoolActivated && !antigravityFaultRotationAttempted
+        && !isNonReplayableResponse(upstreamResponse)
+        && transportState.genericFailovers < transportState.genericFailoverLimit) {
+        antigravityFaultRotationAttempted = true;
+        const rotated = await rotateAntigravityAuth(upstreamResponse, "transient-5xx", sent =>
+          rotateAntigravityAccountOnUpstreamFault(antigravityPoolActivated, sent.accountId, sent.generation, route.modelId));
         if (rotated) { upstreamResponse = rotated; continue recovery; }
       }
 

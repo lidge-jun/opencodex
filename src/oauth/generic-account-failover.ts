@@ -451,22 +451,75 @@ export function rotateAntigravityAccountOnAuthRefusal(
   const set = getAccountSet("google-antigravity");
   if (!set || set.accounts.length < 2) return null;
   const family = classifyModelFamilyForQuota("google-antigravity", requestedModelId);
+  coolAntigravityAccount(set, failedAccountId, sentGeneration, family, now, {
+    cooldownUntil: now + DEFAULT_COOLDOWN_MS, cooldownSource: "auth", identity: sentGeneration,
+  });
+  return nextAntigravitySibling(set, failedAccountId, requestedModelId, family, now);
+}
+
+/**
+ * The one cooldown write both Antigravity sibling rotations (403 refusal, 5xx fault) share. It is
+ * fenced on the sent credential generation, so a re-login that landed mid-request is never cooled,
+ * and it never shortens a cooldown already running for the same account and family: a 15-second
+ * fault window must not cut short a 60-second refusal or a quota cooldown.
+ */
+function coolAntigravityAccount(
+  set: NonNullable<ReturnType<typeof getAccountSet>>,
+  failedAccountId: string,
+  sentGeneration: string,
+  family: QuotaModelFamily | undefined,
+  now: number,
+  entry: AccountHealth,
+): void {
   const failed = set.accounts.find(row => row.id === failedAccountId);
-  if (failed && credentialGeneration(failed.credential) === sentGeneration) {
-    health.set(healthKey("google-antigravity", failedAccountId, family), {
-      cooldownUntil: now + DEFAULT_COOLDOWN_MS,
-      cooldownSource: "auth",
-      identity: sentGeneration,
-    });
-    presence.delete("google-antigravity");
-    sweepExpiredOnWrite(now);
-  }
+  if (!failed || credentialGeneration(failed.credential) !== sentGeneration) return;
+  const key = healthKey("google-antigravity", failedAccountId, family);
+  if (isCooled("google-antigravity", failedAccountId, now, family)
+    && (health.get(key)?.cooldownUntil ?? 0) >= entry.cooldownUntil) return;
+  health.set(key, entry);
+  presence.delete("google-antigravity");
+  sweepExpiredOnWrite(now);
+}
+
+/** Next live sibling after the failed account, in roster order, honouring cooldowns and model support. */
+function nextAntigravitySibling(
+  set: NonNullable<ReturnType<typeof getAccountSet>>,
+  failedAccountId: string,
+  requestedModelId: string | null | undefined,
+  family: QuotaModelFamily | undefined,
+  now: number,
+): string | null {
   const eligible = new Set(preferKiroModelSupport("google-antigravity",
     eligibleIdsIn(set, "google-antigravity", now, family).filter(id => id !== failedAccountId), requestedModelId));
   const order = set.accounts.map(row => row.id);
   const start = order.indexOf(failedAccountId);
   const ring = start >= 0 ? [...order.slice(start + 1), ...order.slice(0, start)] : order;
   return ring.find(id => id !== failedAccountId && eligible.has(id)) ?? null;
+}
+
+/**
+ * A 502/503/504 that survived the same-account retry ladder says this account's route to Google is
+ * failing right now, not that the credential is bad. Cool it for a short, fixed window (pool-wide
+ * capacity trouble then clears on its own within seconds) and name a live sibling to replay on.
+ * No stored verdict: nothing here outlives the process or the window.
+ */
+const ANTIGRAVITY_FAULT_COOLDOWN_MS = 15_000;
+
+export function rotateAntigravityAccountOnUpstreamFault(
+  poolActivated: boolean,
+  failedAccountId: string,
+  sentGeneration: string,
+  requestedModelId: string | null | undefined,
+  now = Date.now(),
+): string | null {
+  if (!poolActivated) return null;
+  const set = getAccountSet("google-antigravity");
+  if (!set || set.accounts.length < 2) return null;
+  const family = classifyModelFamilyForQuota("google-antigravity", requestedModelId);
+  coolAntigravityAccount(set, failedAccountId, sentGeneration, family, now, {
+    cooldownUntil: now + ANTIGRAVITY_FAULT_COOLDOWN_MS, cooldownSource: "default",
+  });
+  return nextAntigravitySibling(set, failedAccountId, requestedModelId, family, now);
 }
 
 /** Generic pool strategies the kernel can actually run. `quota` IS the pre-kernel path. */

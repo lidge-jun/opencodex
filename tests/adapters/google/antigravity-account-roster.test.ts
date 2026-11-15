@@ -15,6 +15,7 @@ import {
   preferKiroModelSupport,
   preferredInitialAccount,
   rotateAntigravityAccountOnAuthRefusal,
+  rotateAntigravityAccountOnUpstreamFault,
   rotateGenericOAuthAccountOn429,
   routeAntigravityModel,
   seedGenericPoolSelection,
@@ -342,6 +343,19 @@ describe("model routing fails closed on a proven roster omission (#7500)", () =>
       expect(routeAntigravityModel(strategyConfig, PROVIDER, "acct-46", "claude-opus-5-5"))
         .toEqual({ kind: "reroute", accountId: "acct-55b" });
     }
+  });
+
+  test("403 and 5xx sibling rotations skip a sibling whose quota family is exhausted", () => {
+    homeWithAccounts(["acct-46", "acct-55a", "acct-55b"], "acct-46");
+    record("acct-55a", ROSTER_55);
+    record("acct-55b", ROSTER_55);
+    setCachedProviderAccountQuotaForTests(PROVIDER, "acct-55a",
+      { updatedAt: Date.now(), customWindows: [{ label: "Cla", percent: 100 }, { label: "Gem", percent: 10 }] });
+    // Roster order alone would hand the hop to acct-55a, whose Claude quota is spent.
+    expect(rotateAntigravityAccountOnAuthRefusal(true, "acct-46", "unsent-generation", "claude-opus-5-5")).toBe("acct-55b");
+    expect(rotateAntigravityAccountOnUpstreamFault(true, "acct-46", "unsent-generation", "claude-opus-5-5")).toBe("acct-55b");
+    // The Gemini family still has headroom on acct-55a, so it keeps its roster turn there.
+    expect(rotateAntigravityAccountOnUpstreamFault(true, "acct-46", "unsent-generation", "gemini-3.8-flash")).toBe("acct-55a");
   });
 
   test("model-listing reroutes follow the family round-robin ring", () => {
