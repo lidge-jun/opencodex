@@ -1,10 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createCertificateAuthority } from "../../src/claude/intercept/local-ca";
 import { PICKER_CA_COMMON_NAME, PICKER_HOST, pickerCaFingerprints } from "../../src/claude/intercept/picker-ca";
 import {
+  createLinuxCertutilRunner,
   inspectPickerTrustLinux,
   LINUX_TRUST_TRUNCATED,
   linuxNssDbDir,
@@ -197,4 +198,35 @@ test("a truncated listing is a failed read: untrust fails and trust stays unknow
   const truncated: LinuxTrustRunner = async () => ({ code: null, stdout: "", stderr: LINUX_TRUST_TRUNCATED });
   expect(await untrustPickerCaLinux(root.sha1, truncated, home())).toEqual({ ok: false });
   expect(await inspectPickerTrustLinux(root.sha1, truncated, home())).toBe("unknown");
+});
+
+/** A certutil stand-in: the listing names `nickname` first, then `padding` bytes; `-n` prints the PEM. */
+function fakeCertutil(dir: string, nickname: string, pem: string, padding: number): string {
+  const pemPath = join(dir, "root.pem");
+  writeFileSync(pemPath, pem);
+  const exe = join(dir, "certutil");
+  writeFileSync(exe, [
+    "#!/bin/sh",
+    `case " $* " in *" -n "*) cat '${pemPath}'; exit 0 ;; esac`,
+    "printf '\\nCertificate Nickname    Trust Attributes\\n\\n'",
+    `printf '%s    C,,\\n' '${nickname}'`,
+    `head -c ${padding} /dev/zero | tr '\\0' 'x'`,
+    "",
+  ].join("\n"));
+  chmodSync(exe, 0o755);
+  return exe;
+}
+
+test("the production runner rejects a listing past its output limit instead of reporting absence", async () => {
+  const predecessor = pickerRoot();
+  const h = home();
+  const nickname = linuxPickerNickname(predecessor.sha1);
+  // Control: the same listing under the limit shows the predecessor through the real runner.
+  const small = createLinuxCertutilRunner(fakeCertutil(mkdtempSync(join(h, "small-")), nickname, predecessor.pem, 1024));
+  expect(await inspectPickerTrustLinux(predecessor.sha1, small, h)).toBe("trusted");
+  // Past 4 MiB the predecessor, listed first, must not be read as absent.
+  const large = createLinuxCertutilRunner(fakeCertutil(mkdtempSync(join(h, "large-")), nickname, predecessor.pem, 5 * 1024 * 1024));
+  expect(await large(["-L", "-d", `sql:${linuxNssDbDir(h)}`])).toEqual({ code: null, stdout: "", stderr: LINUX_TRUST_TRUNCATED });
+  expect(await untrustPickerCaLinux(predecessor.sha1, large, h)).toEqual({ ok: false });
+  expect(await inspectPickerTrustLinux(predecessor.sha1, large, h)).toBe("unknown");
 });

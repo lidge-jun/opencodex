@@ -33,9 +33,15 @@ function nssDb(home?: string): string {
   return `sql:${linuxNssDbDir(home)}`;
 }
 
-/** Production runner: certutil from PATH (libnss3-tools / nss-tools), bounded runtime, code null when absent. */
-export const defaultLinuxCertutilRunner: LinuxTrustRunner = async args => {
-  const exe = Bun.which("certutil");
+/** certutil runner with a bounded runtime and output, code null when the executable is absent. */
+export function createLinuxCertutilRunner(exe: string | null = Bun.which("certutil")): LinuxTrustRunner {
+  return args => runCertutil(exe, args);
+}
+
+/** Production runner: certutil from PATH (libnss3-tools / nss-tools). */
+export const defaultLinuxCertutilRunner: LinuxTrustRunner = args => runCertutil(Bun.which("certutil"), args);
+
+async function runCertutil(exe: string | null, args: readonly string[]): Promise<SecurityResult> {
   if (!exe) return { code: null, stdout: "", stderr: MISSING };
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -54,7 +60,7 @@ export const defaultLinuxCertutilRunner: LinuxTrustRunner = async args => {
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
-};
+}
 
 function normalizeSha1(value: string): string | null {
   const normalized = value.replace(/[:\s]/g, "").toUpperCase();
