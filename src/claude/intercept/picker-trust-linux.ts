@@ -12,7 +12,9 @@ import type { PickerTrustState, SecurityResult } from "./picker-trust";
 export type LinuxTrustRunner = (args: readonly string[]) => Promise<SecurityResult>;
 
 export const LINUX_TRUST_TIMEOUT_MS = 15_000;
-const OUTPUT_LIMIT = 256 * 1024;
+const OUTPUT_LIMIT = 4 * 1024 * 1024;
+/** Set on a result whose stdout went past OUTPUT_LIMIT; a cut listing proves nothing about absence. */
+export const LINUX_TRUST_TRUNCATED = "certutil_output_truncated";
 const MISSING = "certutil_missing";
 
 export function linuxNssDbDir(home = homedir()): string {
@@ -45,7 +47,8 @@ export const defaultLinuxCertutilRunner: LinuxTrustRunner = async args => {
     });
     if (settled === null) return { code: null, stdout: "", stderr: "certutil timed out" };
     const [stdout, stderr, code] = settled;
-    return { code, stdout: stdout.slice(-OUTPUT_LIMIT), stderr: stderr.slice(-OUTPUT_LIMIT) };
+    if (stdout.length > OUTPUT_LIMIT) return { code: null, stdout: "", stderr: LINUX_TRUST_TRUNCATED };
+    return { code, stdout, stderr: stderr.slice(-OUTPUT_LIMIT) };
   } catch (error) {
     return { code: null, stdout: "", stderr: error instanceof Error ? error.message : String(error) };
   } finally {

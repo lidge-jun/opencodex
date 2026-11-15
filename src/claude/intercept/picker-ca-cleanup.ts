@@ -14,6 +14,7 @@ export async function drainPendingPickerCaUntrust(
   configDir: string,
   security?: SecurityRunner,
   platform?: NodeJS.Platform,
+  linuxHome?: string,
 ): Promise<boolean> {
   const pending = readPendingPickerCaUntrust(configDir);
   if (!pending) return true;
@@ -23,7 +24,7 @@ export async function drainPendingPickerCaUntrust(
   try {
     const publicCopy = join(privateDir, "ca.pem");
     writeFileSync(publicCopy, pending.certPem, { mode: 0o600 });
-    const result = await untrustPickerCa(publicCopy, pending.sha1, security, platform);
+    const result = await untrustPickerCa(publicCopy, pending.sha1, security, platform, linuxHome);
     if (!result.ok) return false;
     // OS untrust yielded: a new parent flight may have started since the owner inspection.
     return await withConfigDirHardeningSettled(configDir, () => acknowledgePendingPickerCaUntrust(configDir, pending, result));

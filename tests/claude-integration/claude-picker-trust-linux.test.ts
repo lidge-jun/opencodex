@@ -6,6 +6,7 @@ import { createCertificateAuthority } from "../../src/claude/intercept/local-ca"
 import { PICKER_CA_COMMON_NAME, PICKER_HOST, pickerCaFingerprints } from "../../src/claude/intercept/picker-ca";
 import {
   inspectPickerTrustLinux,
+  LINUX_TRUST_TRUNCATED,
   linuxNssDbDir,
   linuxPickerNickname,
   trustPickerCaLinux,
@@ -169,4 +170,31 @@ test("a root under the legacy shared nickname is still recognised and removed by
   expect(db.certs).toHaveLength(1);
   expect(await untrustPickerCaLinux(legacy.sha1, db.run, h)).toEqual({ ok: true });
   expect(db.certs).toHaveLength(0);
+});
+
+test("a root installed between the predecessor lookup and its deletion stays trusted", async () => {
+  const predecessor = pickerRoot();
+  const current = pickerRoot();
+  const h = home();
+  const db = nss([entry(predecessor)]);
+  let installed = false;
+  // Install the current root exactly when untrust is about to delete, after it read the predecessor.
+  const run: LinuxTrustRunner = async args => {
+    if (args[0] === "-D" && !installed) {
+      installed = true;
+      expect(await trustPickerCaLinux("/ca.pem", db.run, { pem: current.pem }, h)).toEqual({ ok: true });
+    }
+    return db.run(args);
+  };
+  expect(await untrustPickerCaLinux(predecessor.sha1, run, h)).toEqual({ ok: true });
+  expect(installed).toBe(true);
+  expect(db.certs.map(c => c.nickname)).toEqual([linuxPickerNickname(current.sha1)]);
+  expect(await inspectPickerTrustLinux(current.sha1, db.run, h)).toBe("trusted");
+});
+
+test("a truncated listing is a failed read: untrust fails and trust stays unknown", async () => {
+  const root = pickerRoot();
+  const truncated: LinuxTrustRunner = async () => ({ code: null, stdout: "", stderr: LINUX_TRUST_TRUNCATED });
+  expect(await untrustPickerCaLinux(root.sha1, truncated, home())).toEqual({ ok: false });
+  expect(await inspectPickerTrustLinux(root.sha1, truncated, home())).toBe("unknown");
 });
