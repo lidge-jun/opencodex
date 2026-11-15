@@ -54,7 +54,8 @@ function Harness({ targetKey }: { targetKey?: string }) {
   const t = useT();
   const aliveRef = useRef(true);
   useEffect(() => () => { aliveRef.current = false; }, []);
-  api = useAddProviderOAuth({ apiBase: "", targetKey, t, aliveRef, onAdded: () => {} });
+  const hook = useAddProviderOAuth({ apiBase: "", targetKey, t, aliveRef, onAdded: () => {} });
+  useEffect(() => { api = hook; }, [hook]);
   return null;
 }
 
@@ -155,6 +156,40 @@ test("a browser login whose poll budget ran out reports an ended login and posts
   expect(ui).toEqual({ manualCodeMsg: en["prov.loginExpired"], manualCodeOk: false });
   expect(codePosts).toEqual([]);
 });
+
+test("a code typed for one Accounts login is cleared before another login or target can take it", async () => {
+  const owner = captureApiTarget("shared", "");
+  const captures = { active: () => owner, ended: () => undefined };
+  const { createRoot } = await import("react-dom/client");
+  configureApiTargets(standaloneApiTargets(""));
+  const renderAt = async (targetKey: string, url: string) => {
+    await act(async () => {
+      root ??= createRoot(win.document.body as unknown as HTMLElement);
+      root.render(
+        <LanguageProvider>
+          <AddProviderModal apiBase="" targetKey={targetKey} existingNames={[]} initialTier="accounts" onClose={() => {}} onAdded={() => {}}
+            accountRows={[{ id: "devin", label: "Devin", kind: "oauth" }]} accountStatus={{}} accountBusy="devin"
+            accountLoginHint={{ provider: "devin", url }} accountLoginCaptures={captures} />
+        </LanguageProvider>,
+      );
+    });
+    await settle();
+  };
+  const field = () => win.document.querySelector(".login-hint-paste-input") as unknown as HTMLInputElement;
+  await renderAt("hub-a", AUTH_URL);
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(field(), "code-for-hub-a");
+    field().dispatchEvent(new win.Event("input", { bubbles: true }) as unknown as Event);
+  });
+  // A re-render of the same login (a status poll) keeps what the user typed.
+  await renderAt("hub-a", AUTH_URL);
+  expect(field().value).toBe("code-for-hub-a");
+  // The same provider's login on another target starts with an empty field.
+  await renderAt("hub-b", AUTH_URL + "&state=two");
+  expect(field().value).toBe("");
+  expect(codePosts).toEqual([]);
+});
+
 
 async function renderCatalog(owner: { active: (provider: string) => ApiTargetCapture | undefined; ended: (provider: string) => ApiTargetCapture | undefined }) {
   configureApiTargets(standaloneApiTargets(""));

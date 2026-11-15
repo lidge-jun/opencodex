@@ -271,6 +271,16 @@ export default function AddProviderModal({
     void loginOAuth(providerId, oauthSetters);
   };
 
+  // A code typed for one Accounts login belongs to that login on this target. A new login (its
+  // hint changes) or a target change clears it, so it can never be submitted to the next one.
+  const accountLoginIdentity = accountLoginHint
+    ? [accountLoginHint.provider, accountLoginHint.url ?? "", accountLoginHint.deviceCode ?? ""].join("\u0000")
+    : "";
+  useEffect(() => {
+    dispatch({ type: "set-manual-code", code: "" });
+    dispatch({ type: "set-manual-code-msg", msg: "", ok: true });
+  }, [accountLoginIdentity, apiBase, suppliedTargetKey]);
+
   const submitManualCode = (providerId: string, owner?: OAuthLoginCaptureOwner) => {
     void submitManualCodeApi(providerId, manualCode, manualCodeBusy, {
       setManualCodeBusy: busy => dispatch({ type: "set-manual-code-busy", busy }),
