@@ -57,7 +57,7 @@ without launching the Muse CLI. Add-account and reauthentication skip import.
 A failed, uncancelled device login can fall back to a manual key when the caller
 offers an input surface. Pasted keys use the same format and Model API validation
 as imported ones. Management login requires a dashboard session before either
-credential-acquisition path; see the [provider guide](/guides/providers/).
+credential-acquisition path; see the [provider guide](/guides/api-key-catalog/).
 
 The macOS Keychain prompt appears on the machine running the proxy, which may be
 separate from your dashboard browser. OpenCodex allows up to 120 seconds to approve
