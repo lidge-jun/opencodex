@@ -1,6 +1,7 @@
 import { parseUpstreamJsonPayload, safeUpstreamErrorString, sanitizeUpstreamErrorText } from "./upstream-http-error";
 import { isLocationUnsupportedMessage } from "../lib/errors";
 import { retryAfterDelayMs } from "../lib/upstream-retry";
+import { googleErrorDetails, isAntigravityTosViolationBody } from "./google-error-details";
 
 export const ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX = "Antigravity account validation required (VALIDATION_REQUIRED)";
 /** Leading words of every normalized Antigravity 403 that is not a validation demand (see `classifyGoogle`). */
@@ -14,6 +15,9 @@ export const ANTIGRAVITY_AUTH_FAILED_PREFIX = "Antigravity authentication failed
  * enum-less envelope that merely says "expired".
  */
 export const GOOGLE_PERMISSION_DENIED_SUFFIX = " (PERMISSION_DENIED)";
+/** Emitted only for a body `isAntigravityTosViolationBody` accepts; dispatch trusts nothing else. */
+export const ANTIGRAVITY_TOS_VIOLATION_PREFIX = "Antigravity account suspended (TOS_VIOLATION)";
+const ANTIGRAVITY_TOS_VIOLATION_MESSAGE = "Google disabled this account for a Terms of Service violation; appeal with Google, then sign in again";
 
 function hasAntigravityValidationReason(payloadText: string): boolean {
   const payload = parseUpstreamJsonPayload(payloadText);
@@ -244,7 +248,11 @@ export function hasGoogle429RetryEvidence(headers: Headers, payloadText: string)
 }
 
 
-function classifyGoogle(label: string, status: number | undefined, enumStatus: string | undefined, text: string): string {
+function classifyGoogle(label: string, status: number | undefined, enumStatus: string | undefined, text: string, reason?: string): string {
+  // Structured reasons outrank prose. Quota exhaustion is the same contract on every Google
+  // surface; RATE_LIMIT_EXCEEDED overrides quota-like prose only on Antigravity, as CPA reads it.
+  if (reason === "QUOTA_EXHAUSTED" || reason === "INSUFFICIENT_G1_CREDITS_BALANCE") return `${label} quota exhausted`;
+  if (reason === "RATE_LIMIT_EXCEEDED" && label === "Antigravity") return `${label} rate limit exceeded`;
   const lower = `${enumStatus ?? ""} ${text}`.toLowerCase();
   const quotaExhausted = isGoogleQuotaExhaustedText(lower);
   if ((!enumStatus || enumStatus === "RESOURCE_EXHAUSTED") && quotaExhausted) return `${label} quota exhausted`;
@@ -286,10 +294,14 @@ function classifyGoogle(label: string, status: number | undefined, enumStatus: s
  * "Antigravity").
  */
 export function safeGoogleHttpErrorMessage(label: string, status: number, payloadText: string): string {
+  // A suspension carries a fixed message: Google's text names an appeal path and the account.
+  if (label === "Antigravity" && status === 403 && isAntigravityTosViolationBody(payloadText)) {
+    return `${ANTIGRAVITY_TOS_VIOLATION_PREFIX}: ${ANTIGRAVITY_TOS_VIOLATION_MESSAGE}`;
+  }
   const { message, status: enumStatus } = googleErrorDetail(payloadText);
   const prefix = label === "Antigravity" && status === 403 && hasAntigravityValidationReason(payloadText)
     ? ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX
-    : classifyGoogle(label, status, enumStatus, [message, enumStatus].filter(Boolean).join(" "));
+    : classifyGoogle(label, status, enumStatus, [message, enumStatus].filter(Boolean).join(" "), googleErrorDetails(payloadText).reason);
   const detail = message ? sanitizeUpstreamErrorText(message).slice(0, 500) : `HTTP ${status}`;
   return `${prefix}: ${detail}`;
 }
@@ -315,41 +327,20 @@ export function retryableGoogleStatus(status: number): boolean {
  * unlike a plain rate limit. The HTTP status alone can't distinguish the two, so the retry layer
  * inspects the body with this.
  */
-export function isQuotaExhaustedBody(payloadText: string): boolean {
+export function isQuotaExhaustedBody(payloadText: string, label?: string): boolean {
+  const { reason } = googleErrorDetails(payloadText);
+  if (reason === "QUOTA_EXHAUSTED" || reason === "INSUFFICIENT_G1_CREDITS_BALANCE") return true;
+  if (reason === "RATE_LIMIT_EXCEEDED" && label === "Antigravity") return false;
   const { message, status } = googleErrorDetail(payloadText);
   if (status && status !== "RESOURCE_EXHAUSTED") return false;
   return isGoogleQuotaExhaustedText(message ?? payloadText);
 }
 
 /**
- * Extract a server-stated retry delay (seconds) from a Google 429 JSON error body's
- * RetryInfo.retryDelay or ErrorInfo.metadata.quotaResetDelay (e.g. "42.5s" -> "43").
+ * A server-stated retry delay in whole seconds, from RetryInfo.retryDelay, ErrorInfo.metadata.
+ * quotaResetDelay or a "retry after <duration>" message, in protobuf or Go duration syntax.
  */
 export function extractGoogleRetryAfterSeconds(payloadText: string): string | undefined {
-  let parsed: unknown;
-  try { parsed = JSON.parse(payloadText); } catch { return undefined; }
-  const root = parsed && typeof parsed === "object" && !Array.isArray(parsed)
-    ? (Array.isArray((parsed as { error?: unknown }).error)
-        ? (parsed as { error: unknown[] }).error[0]
-        : ((parsed as { error?: unknown }).error ?? parsed))
-    : undefined;
-  if (!root || typeof root !== "object" || Array.isArray(root)) return undefined;
-  const details = (root as { details?: unknown }).details;
-  if (!Array.isArray(details)) return undefined;
-  for (const item of details) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-    const rec = item as Record<string, unknown>;
-    const raw = typeof rec.retryDelay === "string"
-      ? rec.retryDelay
-      : (rec.metadata && typeof rec.metadata === "object" && !Array.isArray(rec.metadata)
-          && typeof (rec.metadata as { quotaResetDelay?: unknown }).quotaResetDelay === "string"
-          ? (rec.metadata as { quotaResetDelay: string }).quotaResetDelay
-          : undefined);
-    if (!raw) continue;
-    const match = /^\s*(\d+(?:\.\d+)?)\s*s\s*$/i.exec(raw);
-    if (!match) continue;
-    const seconds = Math.ceil(Number(match[1]));
-    if (Number.isFinite(seconds) && seconds > 0) return String(seconds);
-  }
-  return undefined;
+  const ms = googleErrorDetails(payloadText).retryDelayMs;
+  return ms !== undefined && ms > 0 ? String(Math.ceil(ms / 1000)) : undefined;
 }

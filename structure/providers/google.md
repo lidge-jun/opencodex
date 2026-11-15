@@ -422,3 +422,24 @@ fetchable reference the proxy cannot vouch for is the SSRF-shaped half of this f
 
 `file_data` carries `file_uri` only. An earlier revision guessed a `mime_type` for it; the Files
 API already knows the type of what it stores, and a wrong guess is worse than no guess.
+
+## Google error classification
+
+`src/adapters/google-error-details.ts` reads the typed `google.rpc` details of a Google error body
+(bounded, never throwing): `ErrorInfo.reason`, `domain`, and a retry delay from `RetryInfo.retryDelay`, then
+`ErrorInfo.metadata.quotaResetDelay`, then an "after <duration>" phrase in the message, in protobuf or Go duration
+syntax (`30s`, `0.5s`, `1h2m3s`, at most 30 days; a zero delay does not block the fallbacks). An untyped detail's
+reason is kept apart and never used for account decisions.
+
+`src/adapters/google-errors.ts` lets structured reasons outrank prose: `QUOTA_EXHAUSTED` and
+`INSUFFICIENT_G1_CREDITS_BALANCE` are quota exhaustion on every Google label (not retried), and `RATE_LIMIT_EXCEEDED`
+is a transient rate limit on Antigravity even when the prose sounds like quota, as CPA reads it; on AI Studio and
+Vertex the daily-quota prose still decides. In `fetchGoogleWithRetry` a delay stated only in the body is the floor
+for the next send, like a `Retry-After` header (an explicit header still wins), and a delay past the retry ceiling
+ends with the 429 carrying it as `Retry-After`. A 403 whose body is an object with code 403, `PERMISSION_DENIED`
+and a typed `ErrorInfo` `TOS_VIOLATION` entry becomes the fixed message
+`Antigravity account suspended (TOS_VIOLATION): ...`, which never echoes Google's appeal text; dispatch trusts only
+that leading prefix (`classifyAntigravityRefusal`) and quarantines the account through the fenced path described in
+[the transport inventory](../transports/inventory.md). Coverage: `tests/adapters/google/google-error-details.test.ts`,
+`google-errors.test.ts`, `google-retry-structured.test.ts`, `antigravity-refusal.test.ts`, and the TOS cases in
+`tests/server/server-google-antigravity-oauth-401-replay.test.ts`.

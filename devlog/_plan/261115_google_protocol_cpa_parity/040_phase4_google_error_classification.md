@@ -147,3 +147,34 @@ delay without sleeping (an injected sleep or the `beforeDispatch` hook); the new
 (quarantine across refresh now covers `tos_violation`), `structure/providers/generic-account-pool.md`, and
 the docs-site pages listed in 070.
 
+
+
+## Stale check (cycle 5, at 7464b83dd7)
+
+- Dispatch sees the normalized body: `fetchGoogleWithRetry` replaces a final error body with
+  `safeGoogleHttpErrorMessage` text unless `returnRawErrors`, and `adapter-dispatch.ts:1666` classifies that
+  text. The structured `ErrorInfo` is gone by then, so the trusted signal is the prefix
+  `ANTIGRAVITY_TOS_VIOLATION_PREFIX`, emitted only when the original body carries a typed
+  `google.rpc.ErrorInfo` with `reason: TOS_VIOLATION` on a 403 `PERMISSION_DENIED` (the same trust boundary
+  `ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX` uses, `google-errors.ts:113-116`). `classifyAntigravityRefusal` returns
+  `tos_violation` when the normalized text starts with `<prefix>: `; the sidecar raw path normalizes first, as
+  `isAntigravityRawValidationRefusal` does.
+- Retry-delay test seam: `spyOn(retry, "sleepWithAbort")` (`tests/adapters/google/google-vertex-http.test.ts:258`).
+- `isQuotaExhaustedBody(payloadText, label?)`: the only caller is `google-http.ts:144`, which passes its label.
+- Files near the 2,000-line threshold edited here stay net zero: `src/oauth/index.ts` (1,980) and
+  `src/server/responses/adapter-dispatch.ts` (1,970).
+- Existing coverage to extend: `tests/adapters/google/google-errors.test.ts`, `google-vertex-http.test.ts`,
+  `antigravity-refusal.test.ts`, `tests/oauth/oauth-health.test.ts`, `tests/cli/cli-account-verify-status.test.ts`; the
+  dispatch marking test is a NEW sibling `tests/server/server-google-antigravity-tos-refusal.test.ts`
+  (harness of `server-google-antigravity-oauth-401-replay.test.ts`).
+- NEW `src/adapters/google-error-details.ts` drafted at `.tmp/draft/google-error-details.ts`.
+
+
+## As built (cycle 5)
+
+After the focused audit (`.tmp/research/audit-040.md`, NEAR-PASS), the suspension is stored downgrade-safe: the hold
+stays `needsReauthReason: "verify_account"` and the cause rides in `needsReauthCause: "tos_violation"`
+(`applyReauthReason` in `src/oauth/store.ts`); `markAccountNeedsReauth*` accept `"tos_violation"` and translate it.
+The prefix gate is `isAntigravityTosViolationBody` (object root, code 403, `PERMISSION_DENIED`, any typed `ErrorInfo`
+entry); the message is fixed. Health adds reason `tos_violation` / label "Account suspended" with an appeal action.
+Residuals: the sidecar path and in-stream errors keep today's behavior for a TOS 403; docs pages land in 070.

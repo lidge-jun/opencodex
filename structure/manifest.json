@@ -917,8 +917,10 @@
       "path": "providers/google.md",
       "tier": 4,
       "title": "Google Provider",
-      "scope": "Gemini thought-text, response parts, thought-signature replay, and adjacency repair.",
-      "documents": []
+      "scope": "Gemini thought-text, response parts, thought-signature replay, adjacency repair, and Google error classification.",
+      "documents": [
+        "src/adapters/google-error-details.ts"
+      ]
     },
     {
       "path": "providers/kiro.md",

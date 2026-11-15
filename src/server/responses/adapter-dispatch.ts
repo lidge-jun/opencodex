@@ -1692,7 +1692,7 @@ export async function prepareAdapterExchange(
         // snapshot there is no owner for this write, so skip marking.
         if (!sent || sent.accountId !== failedAccountId) break;
         try {
-          await markAccountNeedsReauthIfGeneration(route.providerName, failedAccountId, sent.generation, undefined, "verify_account");
+          await markAccountNeedsReauthIfGeneration(route.providerName, failedAccountId, sent.generation, undefined, refusal.kind);
         } catch {
           // A failed quarantine write must preserve the refusal, not authorize another send.
           break recovery;

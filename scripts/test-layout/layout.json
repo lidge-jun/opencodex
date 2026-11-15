@@ -1000,6 +1000,8 @@
     "google-claude-prefill-guard.test.ts": "adapters/google",
     "google-empty-content.test.ts": "adapters/google",
     "google-errors.test.ts": "adapters/google",
+    "google-error-details.test.ts": "adapters/google",
+    "google-retry-structured.test.ts": "adapters/google",
     "google-hardening.test.ts": "adapters/google",
     "google-models-listing.test.ts": "adapters/google",
     "google-output-clamp.test.ts": "adapters/google",

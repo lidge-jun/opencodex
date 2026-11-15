@@ -20,6 +20,13 @@ describe("ocx account CLI verify status", () => {
     expect(deadLine).toMatch(/needs-reauth$/);
     expect(deadLine).not.toContain("(verify)");
   });
+
+  test("a tos_violation suspension renders its own STATUS", () => {
+    const table = formatAccountTable([
+      { provider: "google-antigravity", type: "oauth", id: "tos", label: "tos", active: false, needsReauth: true, needsReauthReason: "verify_account", needsReauthCause: "tos_violation" },
+    ]);
+    expect(table.split("\n")[1]).toMatch(/needs-reauth\(tos\)$/);
+  });
 });
 
 function listingHarness(accounts: Record<string, unknown>[] = []) {

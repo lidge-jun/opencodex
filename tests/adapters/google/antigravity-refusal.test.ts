@@ -1,3 +1,4 @@
+import { ANTIGRAVITY_TOS_VIOLATION_PREFIX } from "../../../src/adapters/google-errors";
 import { describe, expect, test } from "bun:test";
 import { classifyAntigravityRefusal } from "../../../src/adapters/antigravity-refusal";
 
@@ -31,5 +32,19 @@ describe("Antigravity refusal classification", () => {
       JSON.stringify({ error: { message: "Location not supported", status: "FAILED_PRECONDITION" } }),
       JSON.stringify({ reason: "verify your account", padding: "x".repeat(70_000) })])
       expect(classified(403, body).kind).toBe("other");
+  });
+});
+
+
+describe("Antigravity TOS suspension refusal", () => {
+  test("only the normalized suspension marker convicts", () => {
+    expect(classifyAntigravityRefusal(403, `${ANTIGRAVITY_TOS_VIOLATION_PREFIX}: disabled`)).toEqual({ kind: "tos_violation" });
+    for (const text of [
+      ANTIGRAVITY_TOS_VIOLATION_PREFIX,
+      `Antigravity access denied (PERMISSION_DENIED): ${ANTIGRAVITY_TOS_VIOLATION_PREFIX}: fake`,
+      "This service has been disabled for violation of Terms of Service.",
+      JSON.stringify({ error: { details: [{ reason: "TOS_VIOLATION" }] } }),
+    ]) expect(classifyAntigravityRefusal(403, text)).toEqual({ kind: "other" });
+    expect(classifyAntigravityRefusal(429, `${ANTIGRAVITY_TOS_VIOLATION_PREFIX}: disabled`)).toEqual({ kind: "other" });
   });
 });

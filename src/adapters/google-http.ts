@@ -143,10 +143,12 @@ export async function fetchGoogleWithRetry(
       // A 429 may be a transient rate limit (retry), hard quota exhaustion (do NOT retry — it
       // won't recover for hours and burns retries), or a refusal no replay can change. The
       // status alone cannot tell them apart, so peek the body once and decide from evidence.
+      let delayHeaders: Headers = res.headers;
+      let bodyRetryAfter: string | undefined;
       if (res.status === 429) {
         const peekTarget = res.clone();
         const peek = await readDisplaySafeErrorPayloadText(peekTarget, ctx.abortSignal);
-        if (isQuotaExhaustedBody(peek)) {
+        if (isQuotaExhaustedBody(peek, label)) {
           if (ctx.returnRawErrors) return res;
           const normalized = await normalizeUpstreamHttpErrorResponse(res, {
             signal: ctx.abortSignal,
@@ -158,12 +160,18 @@ export async function fetchGoogleWithRetry(
           }
           return normalized;
         }
+        // A wait stated only in the body (RetryInfo, quotaResetDelay) is the same instruction as
+        // a Retry-After header, so it floors the backoff too; an explicit header still wins.
+        if (!res.headers.has("retry-after")) {
+          bodyRetryAfter = extractGoogleRetryAfterSeconds(peek);
+          if (bodyRetryAfter) { delayHeaders = new Headers(res.headers); delayHeaders.set("retry-after", bodyRetryAfter); }
+        }
         // The ladder below replays the same bytes. Without a Retry-After, a reset delay, a
         // transient-rate-limit phrase, or a structured rate-limit reason, that replay is a
         // guess: Cloud Code Assist answers request-shape rejections with a bare
         // RESOURCE_EXHAUSTED, and the proxy turned each one into three identical sends per
         // turn before surfacing the same refusal.
-        if (!hasGoogle429RetryEvidence(res.headers, peek)) {
+        if (!bodyRetryAfter && !hasGoogle429RetryEvidence(res.headers, peek)) {
           return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, activeRequest, ctx.abortSignal);
         }
       }
@@ -174,11 +182,14 @@ export async function fetchGoogleWithRetry(
       const delayMs = retryBackoffDelayMs(attempt, {
         baseDelayMs: GOOGLE_RETRY_BASE_MS,
         maxDelayMs: GOOGLE_RETRY_MAX_MS,
-        headers: res.headers,
+        headers: delayHeaders,
         retryAfterIsLowerBound: true,
       });
       if (delayMs > RETRY_AFTER_CEILING_MS) {
-        return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, activeRequest, ctx.abortSignal);
+        if (ctx.returnRawErrors) return res;
+        const final = await normalizeFinalGoogleError(label, res, activeRequest, ctx.abortSignal);
+        if (bodyRetryAfter && !final.headers.has("retry-after")) final.headers.set("retry-after", bodyRetryAfter);
+        return final;
       }
       pendingResponse = res;
       recovery = res.status === 429 ? "rate-limit-429" : "transient-5xx";

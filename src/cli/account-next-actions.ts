@@ -3,7 +3,7 @@ import type { OAuthHealthLabel } from "../oauth/health";
 
 const HEALTH_LABELS: readonly OAuthHealthLabel[] = [
   "Healthy", "Rate limited", "Quota limited", "Reauthentication required",
-  "Verification required", "Refresh failed", "Metadata mismatch", "Credential conflict", "Validation pending",
+  "Verification required", "Account suspended", "Refresh failed", "Metadata mismatch", "Credential conflict", "Validation pending",
 ];
 
 // Commands are hints, never executed. Admit only bounded, shell-safe selectors;

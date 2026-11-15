@@ -183,7 +183,7 @@ async function postChat(server: ReturnType<typeof startServer>): Promise<Respons
 }
 
 function installOAuthFetch(
-  apiStatuses: Array<number | { status: number; reason?: string; oversized?: boolean; message?: string; rawBody?: string }>,
+  apiStatuses: Array<number | { status: number; reason?: string; typedReason?: string; oversized?: boolean; message?: string; rawBody?: string }>,
   options: {
     tokenErrorDescription?: string;
     tokenHttpStatus?: number;
@@ -320,6 +320,8 @@ function installOAuthFetch(
             ...(typeof status !== "number" ? {
               ...(status.oversized ? { filler: "x".repeat(4200) } : {}),
               ...(status.reason ? { details: [{ reason: status.reason }] } : {}),
+              ...(status.typedReason ? { details: [{ "@type": "type.googleapis.com/google.rpc.ErrorInfo", reason: status.typedReason,
+                metadata: { appeal_url: "https://support.google.com/appeal-canary" } }] } : {}),
             } : {}),
           },
         }), {
@@ -478,6 +480,37 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
       expect(eligibleFailoverAccounts("google-antigravity")).toEqual([]);
     } finally { await server.stop(true); }
   });
+  test("a typed TOS_VIOLATION 403 quarantines the account as tos_violation and rotates to its sibling", async () => {
+    await seedOAuth();
+    await seedSibling();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([{ status: 403, typedReason: "TOS_VIOLATION", message: "This service has been disabled for violation of Terms of Service." }, 200]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      const body = await response.text();
+      expect(response.status).toBe(200);
+      expect(body).not.toContain("appeal-canary");
+      expect(observed.chatAuth).toHaveLength(2);
+      const rows = getAccountSet("google-antigravity")!.accounts;
+      expect(rows.filter(row => row.needsReauth)).toHaveLength(1);
+      expect(rows.find(row => row.needsReauth)).toMatchObject({ needsReauthReason: "verify_account", needsReauthCause: "tos_violation" });
+    } finally { await server.stop(true); }
+  });
+
+  test("an untyped TOS_VIOLATION reason quarantines nothing", async () => {
+    await seedOAuth();
+    saveConfig(antigravityConfig());
+    installOAuthFetch([{ status: 403, reason: "TOS_VIOLATION", message: "disabled" }]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(403);
+      await response.text();
+      expect(getAccountSet("google-antigravity")!.accounts.every(row => !row.needsReauth)).toBe(true);
+    } finally { await server.stop(true); }
+  });
+
   test("structured validation 403 rotates once with the sibling's own project and recovery kind", async () => {
     await seedOAuth();
     await seedSibling();

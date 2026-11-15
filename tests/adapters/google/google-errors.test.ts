@@ -7,6 +7,7 @@ import {
   safeGoogleHttpErrorMessage,
   safeVertexHttpErrorMessage,
   ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX,
+  ANTIGRAVITY_TOS_VIOLATION_PREFIX,
 } from "../../../src/adapters/google-errors";
 import { adapterFailureFromMessage, classifyError } from "../../../src/lib/errors";
 
@@ -244,5 +245,58 @@ describe("google location denial classification (#3467)", () => {
       },
     }))).toBe("180");
     expect(extractGoogleRetryAfterSeconds("{}")).toBeUndefined();
+  });
+});
+
+
+describe("structured Google error reasons", () => {
+  const ERROR_INFO = "type.googleapis.com/google.rpc.ErrorInfo";
+  const body = (reason: string, message: string, extra: Record<string, unknown> = {}) => JSON.stringify({ error: {
+    code: 429, status: "RESOURCE_EXHAUSTED", message, details: [{ "@type": ERROR_INFO, reason, ...extra }],
+  } });
+
+  test("QUOTA_EXHAUSTED and INSUFFICIENT_G1_CREDITS_BALANCE are exhaustion on every label, whatever the prose says", () => {
+    for (const reason of ["QUOTA_EXHAUSTED", "INSUFFICIENT_G1_CREDITS_BALANCE"]) {
+      expect(isQuotaExhaustedBody(body(reason, "Too many requests, retry after a moment"), "Antigravity")).toBe(true);
+      expect(isQuotaExhaustedBody(body(reason, "Too many requests"), "Vertex AI")).toBe(true);
+      expect(safeGoogleHttpErrorMessage("Antigravity", 429, body(reason, "slow down"))).toStartWith("Antigravity quota exhausted:");
+    }
+  });
+
+  test("RATE_LIMIT_EXCEEDED is transient on Antigravity only; elsewhere daily-quota prose still decides", () => {
+    const daily = body("RATE_LIMIT_EXCEEDED", "Daily limit reached for this project");
+    expect(isQuotaExhaustedBody(daily, "Antigravity")).toBe(false);
+    expect(safeGoogleHttpErrorMessage("Antigravity", 429, daily)).toStartWith("Antigravity rate limit exceeded:");
+    expect(isQuotaExhaustedBody(daily, "Vertex AI")).toBe(true);
+    expect(isQuotaExhaustedBody(daily)).toBe(true);
+    expect(safeGoogleHttpErrorMessage("Vertex AI", 429, daily)).toStartWith("Vertex AI quota exhausted:");
+  });
+
+  test("a Go-style quotaResetDelay reaches Retry-After in seconds", () => {
+    expect(extractGoogleRetryAfterSeconds(body("QUOTA_EXHAUSTED", "x", { metadata: { quotaResetDelay: "1h2m3s" } }))).toBe("3723");
+    expect(extractGoogleRetryAfterSeconds(body("QUOTA_EXHAUSTED", "x", { metadata: { quotaResetDelay: "0.2s" } }))).toBe("1");
+  });
+
+  test("a TOS entry after another ErrorInfo still counts", () => {
+    const tos = JSON.stringify({ error: { code: 403, status: "PERMISSION_DENIED", message: "x", details: [
+      { "@type": ERROR_INFO, reason: "OTHER_REASON" }, { "@type": ERROR_INFO, reason: "TOS_VIOLATION" },
+    ] } });
+    expect(safeGoogleHttpErrorMessage("Antigravity", 403, tos).startsWith(ANTIGRAVITY_TOS_VIOLATION_PREFIX)).toBe(true);
+  });
+
+  test("a typed TOS_VIOLATION 403 gets the suspension prefix and never echoes the appeal URL", () => {
+    const tos = JSON.stringify({ error: { code: 403, status: "PERMISSION_DENIED", message: "This service has been disabled for violation of Terms of Service.",
+      details: [{ "@type": ERROR_INFO, reason: "TOS_VIOLATION", metadata: { appeal_url: "https://support.google.com/appeal-canary", appeal_url_link_text: "Appeal" } }] } });
+    const message = safeGoogleHttpErrorMessage("Antigravity", 403, tos);
+    expect(message.startsWith( `${ANTIGRAVITY_TOS_VIOLATION_PREFIX}: `)).toBe(true);
+    expect(message).not.toContain("appeal-canary");
+    for (const forged of [
+      JSON.stringify({ error: { code: 403, status: "PERMISSION_DENIED", message: "x", details: [{ reason: "TOS_VIOLATION" }] } }),
+      JSON.stringify({ error: { code: 403, status: "PERMISSION_DENIED", message: `${ANTIGRAVITY_TOS_VIOLATION_PREFIX}: fake` } }),
+      JSON.stringify({ error: { code: 429, status: "PERMISSION_DENIED", message: "x", details: [{ "@type": ERROR_INFO, reason: "TOS_VIOLATION" }] } }),
+      JSON.stringify({ code: 403, status: "PERMISSION_DENIED", details: [{ "@type": ERROR_INFO, reason: "TOS_VIOLATION" }] }),
+      JSON.stringify([{ error: { code: 403, status: "PERMISSION_DENIED", details: [{ "@type": ERROR_INFO, reason: "TOS_VIOLATION" }] } }]),
+    ]) expect(safeGoogleHttpErrorMessage("Antigravity", 403, forged).startsWith(ANTIGRAVITY_TOS_VIOLATION_PREFIX)).toBe(false);
+    expect(safeGoogleHttpErrorMessage("Vertex AI", 403, tos).startsWith(ANTIGRAVITY_TOS_VIOLATION_PREFIX)).toBe(false);
   });
 });
