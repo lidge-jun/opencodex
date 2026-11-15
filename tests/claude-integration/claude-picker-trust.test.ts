@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -150,10 +150,15 @@ test("trust installs a private copy of the verified certificate, not the shared 
   }
 });
 
-test("linux routes an injected runner to the NSS adapter", async () => {
-  const calls: string[][] = [];
-  const run: SecurityRunner = async args => { calls.push([...args]); return { code: 255, stdout: "", stderr: "" }; };
-  await inspectPickerTrust("/leaf.pem", sha1, run, "linux");
-  // With no user NSS database the adapter answers without running certutil; with one it lists the nickname.
-  expect(calls.every(call => call[0] === "-L" && call.includes(PICKER_CA_COMMON_NAME))).toBe(true);
+test("linux routes an injected runner to the NSS adapter of the given home", async () => {
+  const home = mkdtempSync(join(tmpdir(), "ocx-nss-dispatch-"));
+  try {
+    mkdirSync(join(home, ".pki", "nssdb"), { recursive: true });
+    const calls: string[][] = [];
+    const run: SecurityRunner = async args => { calls.push([...args]); return { code: 0, stdout: "", stderr: "" }; };
+    expect(await inspectPickerTrust("/leaf.pem", sha1, run, "linux", home)).toBe("untrusted");
+    expect(calls).toEqual([["-L", "-d", `sql:${join(home, ".pki", "nssdb")}`]]);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });

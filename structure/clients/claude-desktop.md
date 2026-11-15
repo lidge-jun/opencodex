@@ -208,7 +208,7 @@ any local process already reaches (the `api.anthropic.com` intercept is on the C
 too; the `claude.ai` relay verifies upstream and adds no credential) and breaks only its own TLS,
 because each terminator presents a certificate only its intended client trusts. `claude.ai:443` is
 intercepted only while the runtime's cached
-decision is armed: macOS or Windows, persisted resolved Desktop mode first-party, Desktop intent on,
+decision is armed: macOS, Windows or Linux, persisted resolved Desktop mode first-party, Desktop intent on,
 `claudeCode.intercept.picker !== false`, no disarm latch, listener up, and the current picker CA
 trusted in the OS store (`picker-trust.ts`): the login keychain on macOS, the current-user Root store on Windows by exact fingerprint with a verified leaf, the user NSS database `~/.pki/nssdb` on Linux. A loopback TCP front in `picker-listener.ts`
 reads ClientHello ALPN through `src/claude/intercept/client-hello.ts`, reassembling across TCP
@@ -260,7 +260,7 @@ name constraints permitting only `claude.ai` and excluding every IPv4 and IPv6 a
 signing identity is protected by the OS credential store and scoped to the canonical config directory;
 normal restarts reuse the same validated certificate and key. No plaintext picker signing key is
 stored in that directory; public certificates and non-secret identity metadata remain under
-`<OPENCODEX_HOME>/claude-picker/`. Every unbound intercept startup attempt makes a best-effort cleanup of legacy `ca.key` before eligibility checks, including client role, disabled routing/interception, and ephemeral public ports; cleanup failures do not block startup. See the [runtime lifecycle contract](../runtime.md#claude-intercept-pair). Linux skips picker CA, credential-store and proxy construction entirely; the main intercept pair remains available.
+`<OPENCODEX_HOME>/claude-picker/`. Every unbound intercept startup attempt makes a best-effort cleanup of legacy `ca.key` before eligibility checks, including client role, disabled routing/interception, and ephemeral public ports; cleanup failures do not block startup. See the [runtime lifecycle contract](../runtime.md#claude-intercept-pair). Linux, like Windows, constructs the picker CA, credential store and proxy only with picker intent or an applied profile requiring recovery; otherwise the main intercept pair alone starts. Each Linux picker root has its own NSS nickname (`opencodex Claude Desktop Picker CA <SHA-1>`), so removing a rotated-out root never deletes the current one, and absence is concluded only from a successful read of the whole database: `certutil` also exits 255 when it cannot open it.
 On restart the lifecycle keeps the applied profile and restores through the controller with
 `allowTrustPrompt: false`. An unchanged approved identity with an available credential store needs
 no macOS Certificate Trust Settings add/remove operation. Missing, revoked or unknown trust leaves the picker pending; restart and status never install trust. Explicit `on`, `trust`, or first-party apply completes the trust step, including the Windows current-user Root confirmation when needed.

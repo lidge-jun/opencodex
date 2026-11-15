@@ -66,6 +66,7 @@ export async function inspectPickerTrust(
   caSha1: string,
   run: SecurityRunner = defaultSecurityRunner,
   platform: NodeJS.Platform = process.platform,
+  linuxHome?: string,
 ): Promise<PickerTrustState> {
   if (platform === "win32") {
     // The macOS default runner is never passed down: only an explicitly injected
@@ -73,7 +74,7 @@ export async function inspectPickerTrust(
     return inspectPickerTrustWindows(leafPath, caSha1, run === defaultSecurityRunner ? undefined : run);
   }
   if (platform === "linux") {
-    return inspectPickerTrustLinux(caSha1, run === defaultSecurityRunner ? undefined : run);
+    return inspectPickerTrustLinux(caSha1, run === defaultSecurityRunner ? undefined : run, linuxHome);
   }
   if (platform !== "darwin") return "unsupported";
   const keychain = loginKeychainPath();
@@ -99,12 +100,13 @@ export async function trustPickerCa(
   run: SecurityRunner = defaultSecurityRunner,
   platform: NodeJS.Platform = process.platform,
   cert?: { pem?: string },
+  linuxHome?: string,
 ): Promise<{ ok: boolean; reason?: "unsupported" | "declined_or_failed" }> {
   if (platform === "win32") {
     return trustPickerCaWindows(caPath, run === defaultSecurityRunner ? undefined : run, cert);
   }
   if (platform === "linux") {
-    return trustPickerCaLinux(caPath, run === defaultSecurityRunner ? undefined : run, cert);
+    return trustPickerCaLinux(caPath, run === defaultSecurityRunner ? undefined : run, cert, linuxHome);
   }
   if (platform !== "darwin") return { ok: false, reason: "unsupported" };
   // `cert.pem` is the caller-verified certificate bytes: the shared on-disk ca.pem is writable by
@@ -136,6 +138,7 @@ export async function untrustPickerCa(
   fingerprintSha1: string,
   run: SecurityRunner = defaultSecurityRunner,
   platform: NodeJS.Platform = process.platform,
+  linuxHome?: string,
 ): Promise<{ ok: boolean }> {
   if (platform === "win32") {
     try {
@@ -144,7 +147,7 @@ export async function untrustPickerCa(
     } catch { return { ok: false }; }
   }
   if (platform === "linux") {
-    return untrustPickerCaLinux(fingerprintSha1, run === defaultSecurityRunner ? undefined : run);
+    return untrustPickerCaLinux(fingerprintSha1, run === defaultSecurityRunner ? undefined : run, linuxHome);
   }
   if (platform !== "darwin") return { ok: false };
   const keychain = loginKeychainPath();

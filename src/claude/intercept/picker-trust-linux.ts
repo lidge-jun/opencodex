@@ -12,13 +12,19 @@ import type { PickerTrustState, SecurityResult } from "./picker-trust";
 export type LinuxTrustRunner = (args: readonly string[]) => Promise<SecurityResult>;
 
 export const LINUX_TRUST_TIMEOUT_MS = 15_000;
-/** certutil's own exit code when the nickname is absent from the database. */
-const NOT_FOUND = 255;
 const OUTPUT_LIMIT = 256 * 1024;
-const MAX_DELETIONS = 8;
+const MISSING = "certutil_missing";
 
 export function linuxNssDbDir(home = homedir()): string {
   return join(home, ".pki", "nssdb");
+}
+
+/**
+ * One nickname per root: certutil deletes by nickname, so a shared nickname would let the removal
+ * of a rotated-out root delete the current one if it was installed in between.
+ */
+export function linuxPickerNickname(sha1: string): string {
+  return `${PICKER_CA_COMMON_NAME} ${sha1}`;
 }
 
 function nssDb(home?: string): string {
@@ -28,7 +34,7 @@ function nssDb(home?: string): string {
 /** Production runner: certutil from PATH (libnss3-tools / nss-tools), bounded runtime, code null when absent. */
 export const defaultLinuxCertutilRunner: LinuxTrustRunner = async args => {
   const exe = Bun.which("certutil");
-  if (!exe) return { code: null, stdout: "", stderr: "certutil_missing" };
+  if (!exe) return { code: null, stdout: "", stderr: MISSING };
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const proc = Bun.spawn([exe, ...args], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
@@ -52,37 +58,57 @@ function normalizeSha1(value: string): string | null {
   return /^[0-9A-F]{40}$/.test(normalized) ? normalized : null;
 }
 
-/** SHA-1 of every PEM block certutil printed for the picker nickname. */
-function listedSha1s(pemOutput: string): string[] {
-  const blocks = pemOutput.match(/-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g) ?? [];
-  const out: string[] = [];
-  for (const block of blocks) {
-    try { out.push(createHash("sha1").update(new X509Certificate(block).raw).digest("hex").toUpperCase()); }
-    catch { /* an unparsable block proves nothing */ }
-  }
-  return out;
+function missingTool(result: SecurityResult): boolean {
+  return result.code === null && result.stderr === MISSING;
 }
 
-/** The SSL trust flags of the picker nickname: the first comma field of `certutil -L`. */
-function sslTrustFlags(listing: string): string[] {
-  const flags: string[] = [];
+/** SSL trust flags of `nickname` in a full `certutil -L` listing, or null when it is not listed. */
+function sslTrustFlags(listing: string, nickname: string): string | null {
   for (const line of listing.split(/\r?\n/)) {
     const match = /^(.*\S)\s+([A-Za-z]*),([A-Za-z]*),([A-Za-z]*)\s*$/.exec(line);
-    if (match && match[1] === PICKER_CA_COMMON_NAME) flags.push(match[2]!);
+    if (match && match[1] === nickname) return match[2]!;
   }
-  return flags;
+  return null;
 }
 
-async function listed(run: LinuxTrustRunner, sha1: string, home?: string): Promise<boolean> {
-  const found = await run(["-L", "-d", nssDb(home), "-n", PICKER_CA_COMMON_NAME, "-a"]);
-  if (found.code === NOT_FOUND) return false;
-  if (found.code !== 0) throw new Error("certutil_list_failed");
-  return listedSha1s(found.stdout).includes(sha1);
+function pemSha1(pem: string): string | null {
+  const block = /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/.exec(pem)?.[0];
+  if (!block) return null;
+  try { return createHash("sha1").update(new X509Certificate(block).raw).digest("hex").toUpperCase(); }
+  catch { return null; }
+}
+
+type Lookup =
+  | { kind: "absent" }
+  | { kind: "present"; nickname: string; flags: string }
+  | { kind: "foreign" }
+  | { kind: "missing_tool" }
+  | { kind: "failed" };
+
+/**
+ * Absence is concluded only from a successful read of the whole database: certutil also exits
+ * 255 when the database cannot be opened, so a failed nickname lookup proves nothing.
+ */
+async function lookup(run: LinuxTrustRunner, sha1: string, home?: string): Promise<Lookup> {
+  const all = await run(["-L", "-d", nssDb(home)]);
+  if (missingTool(all)) return { kind: "missing_tool" };
+  if (all.code !== 0) return { kind: "failed" };
+  let foreign = false;
+  // The bare common name is the nickname an earlier build used; it still counts when it holds this root.
+  for (const nickname of [linuxPickerNickname(sha1), PICKER_CA_COMMON_NAME]) {
+    const flags = sslTrustFlags(all.stdout, nickname);
+    if (flags === null) continue;
+    const cert = await run(["-L", "-d", nssDb(home), "-n", nickname, "-a"]);
+    if (cert.code !== 0) return { kind: "failed" };
+    if (pemSha1(cert.stdout) === sha1) return { kind: "present", nickname, flags };
+    foreign ||= nickname !== PICKER_CA_COMMON_NAME;
+  }
+  return foreign ? { kind: "foreign" } : { kind: "absent" };
 }
 
 /**
- * Trusted means the current root is in the NSS database under the picker nickname with the
- * SSL `C` flag. The CA's critical name constraints keep that trust limited to claude.ai.
+ * Trusted means the current root is in the NSS database under its own nickname with the SSL `C`
+ * flag. The CA's critical name constraints keep that trust limited to claude.ai.
  */
 export async function inspectPickerTrustLinux(
   caSha1: string,
@@ -93,16 +119,13 @@ export async function inspectPickerTrustLinux(
   if (!sha1) return "untrusted";
   if (!existsSync(linuxNssDbDir(home))) return "untrusted";
   try {
-    const found = await run(["-L", "-d", nssDb(home), "-n", PICKER_CA_COMMON_NAME, "-a"]);
-    if (found.code === null && found.stderr === "certutil_missing") return "unsupported";
-    if (found.code === NOT_FOUND) return "untrusted";
-    if (found.code !== 0) return "unknown";
-    if (!listedSha1s(found.stdout).includes(sha1)) return "untrusted";
-    const all = await run(["-L", "-d", nssDb(home)]);
-    if (all.code !== 0) return "unknown";
-    // Several picker roots may share the nickname; every one must carry C, or the current one may not.
-    const flags = sslTrustFlags(all.stdout);
-    return flags.length > 0 && flags.every(value => value.includes("C")) ? "trusted" : "untrusted";
+    const found = await lookup(run, sha1, home);
+    switch (found.kind) {
+      case "missing_tool": return "unsupported";
+      case "failed": return "unknown";
+      case "present": return found.flags.includes("C") ? "trusted" : "untrusted";
+      default: return "untrusted";
+    }
   } catch { // no-excuse-ok: catch -- certutil unavailable or denied; never claim trust.
     return "unknown";
   }
@@ -118,20 +141,21 @@ export async function trustPickerCaLinux(
   let installPath = caPath;
   let privateDir: string | undefined;
   try {
-    if (cert?.pem !== undefined) {
-      privateDir = mkdtempSync(join(tmpdir(), "ocx-picker-ca-"));
-      installPath = join(privateDir, "ca.pem");
-      writeFileSync(installPath, cert.pem, { mode: 0o600 });
-    }
+    const pem = cert?.pem;
+    const sha1 = pemSha1(pem ?? "");
+    if (pem === undefined || sha1 === null) return { ok: false, reason: "declined_or_failed" };
+    privateDir = mkdtempSync(join(tmpdir(), "ocx-picker-ca-"));
+    installPath = join(privateDir, "ca.pem");
+    writeFileSync(installPath, pem, { mode: 0o600 });
     const dir = linuxNssDbDir(home);
     if (!existsSync(join(dir, "cert9.db"))) {
       mkdirSync(dir, { recursive: true, mode: 0o700 });
       const created = await run(["-N", "-d", nssDb(home), "--empty-password"]);
-      if (created.code === null && created.stderr === "certutil_missing") return { ok: false, reason: "unsupported" };
+      if (missingTool(created)) return { ok: false, reason: "unsupported" };
       if (created.code !== 0) return { ok: false, reason: "declined_or_failed" };
     }
-    const added = await run(["-A", "-d", nssDb(home), "-n", PICKER_CA_COMMON_NAME, "-t", "C,,", "-a", "-i", installPath]);
-    if (added.code === null && added.stderr === "certutil_missing") return { ok: false, reason: "unsupported" };
+    const added = await run(["-A", "-d", nssDb(home), "-n", linuxPickerNickname(sha1), "-t", "C,,", "-a", "-i", installPath]);
+    if (missingTool(added)) return { ok: false, reason: "unsupported" };
     return added.code === 0 ? { ok: true } : { ok: false, reason: "declined_or_failed" };
   } catch { // no-excuse-ok: catch -- command failure is reported, never trust.
     return { ok: false, reason: "declined_or_failed" };
@@ -149,13 +173,13 @@ export async function untrustPickerCaLinux(
   if (!sha1) return { ok: false };
   if (!existsSync(linuxNssDbDir(home))) return { ok: true };
   try {
-    // certutil -D removes one certificate per nickname, so repeat until the current root is gone.
-    for (let i = 0; i < MAX_DELETIONS; i += 1) {
-      if (!(await listed(run, sha1, home))) return { ok: true };
-      const deleted = await run(["-D", "-d", nssDb(home), "-n", PICKER_CA_COMMON_NAME]);
-      if (deleted.code !== 0) return { ok: false };
-    }
-    return { ok: !(await listed(run, sha1, home)) };
+    const before = await lookup(run, sha1, home);
+    if (before.kind === "absent") return { ok: true };
+    // A foreign certificate under this nickname is not ours to delete; failed reads prove nothing.
+    if (before.kind !== "present") return { ok: false };
+    const deleted = await run(["-D", "-d", nssDb(home), "-n", before.nickname]);
+    if (deleted.code !== 0) return { ok: false };
+    return { ok: (await lookup(run, sha1, home)).kind === "absent" };
   } catch { // no-excuse-ok: catch -- failed removal must be visible to the caller.
     return { ok: false };
   }
