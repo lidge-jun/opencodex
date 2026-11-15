@@ -588,6 +588,44 @@ distinct one. Kiro accounts use the profile ARN together with the signed-in user
 pool accounts have a separate ledger.
 Tokens stay in `~/.opencodex/auth.json`; `/api/oauth/accounts` returns masked metadata only.
 
+### Google Antigravity through the official ACP server
+
+`google-antigravity-acp` runs Google Antigravity through `agy acp`, the Agent Client Protocol
+server that Antigravity CLI ships for editors such as Zed and JetBrains IDEs
+([Google's ACP guide](https://antigravity.google/docs/ide/extensions/acp)). OpenCodex launches
+the unmodified CLI for each turn and acts as its ACP client. The CLI signs in with the Google
+login you cached in an interactive `agy` session and makes every Google request itself, so
+OpenCodex never reads, stores or forwards that credential. This differs from
+`google-antigravity`, which signs in with OpenCodex's own OAuth client and calls Cloud Code
+directly.
+
+Setup:
+
+1. Install Antigravity CLI and confirm `agy --version` works. OpenCodex looks for `agy` on
+   `PATH` and then in `~/.local/bin`, where the installer puts it.
+2. Run `agy` once and sign in with Google (or run `agy acp --login`).
+3. Add the provider. It has no key and no `ocx login` step:
+
+```bash
+ocx provider add google-antigravity-acp
+```
+
+Codex keeps tool ownership. The request's tools are offered to the agent through an isolated
+MCP server that never executes them; when the agent calls one, OpenCodex returns the call to
+Codex, which runs it under its own approval and sandbox. Antigravity's own tools (shell, file
+edits, browser, subagents) are refused at the permission prompt, and the agent runs in an empty
+temporary directory. One tool call is returned per request.
+
+The model list is what Google offers to external ACP clients on your account. The built-in
+default is `gemini-3.8-flash`; Codex reasoning levels map to Antigravity's thinking levels
+(`xhigh` is Extra) and are clamped down to the levels your account offers. A model the server
+does not offer fails with the list it does offer, so add other ids to the provider's `models`
+as Google makes them available.
+
+Google allows this path for personal, interactive development with the unmodified CLI and its
+own sign-in. Do not use it for unattended background jobs or share one sign-in across people.
+
+
 ### Cockpit Tools Antigravity import
 
 For v1, OpenCodex imports only a **Cockpit Tools Antigravity** JSON export for the `google-antigravity` provider. In the Providers dashboard, choose the local JSON file from that provider's Accounts tab. The dashboard does not show the file contents or credential values; it reports only imported, updated, failed, and unsupported counts. Other Cockpit providers are rejected in v1.

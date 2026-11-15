@@ -27,6 +27,7 @@ const EXPECTED_ADAPTER_NAMES = {
   "mimo-free": "mimo-free",
   qoder: "qoder",
   "claude-cli": "claude-cli",
+  "antigravity-acp": "antigravity-acp",
   "dsh-account": "dsh-account",
 } as const;
 

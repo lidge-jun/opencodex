@@ -50,6 +50,27 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   machine for `api.anthropic.com`, and `local` (Ollama, vLLM, LM Studio) is the classification for
   traffic that never does. `keyOptional` is the existing exemption from key enforcement, and key
   rows are what `deriveProviderPresets` lists, so the entry needs no `dashboardPreset` flag either.
+- `antigravity-acp` inherits the `codebuddy` contract as well: a run-turn CLI adapter whose client
+  tools are captured through the isolated MCP catalog and executed by Codex. Its wire to the CLI is
+  Agent Client Protocol (`agy acp`, Google's documented integration for third-party editors)
+  rather than stream-json, so `src/adapters/antigravity-acp/` owns its own turn runner instead of
+  `coding-agent/turn.ts`, and reuses the shared catalog builder (`buildCodeBuddyToolBridge`), the
+  capture-only MCP server, the scoped child environment and the conversation projection. The
+  unmodified CLI signs in with its cached `oauth-personal` credential; the adapter never reads,
+  stores or forwards it, which is what separates the `google-antigravity-acp` row from the
+  OAuth-direct `google-antigravity` row. Invariants, pinned by
+  `tests/adapters/google/antigravity-acp-adapter.test.ts`: `initialize` advertises no filesystem
+  or terminal capability; the session runs in a private empty temp directory removed with the
+  turn; caller instructions travel through the server's `_meta.antigravity.systemPrompt.append`
+  extension; every permission request for an agent-owned tool is refused (`reject_once`); the first
+  `mcp_opencodex_<tool>` call (seen on `tool_call`, `tool_call_update` or a permission request) is
+  returned as one client tool call with Antigravity's `toolSummary` argument removed, followed by
+  `done(tool_use)` and termination of the CLI. One call per leg is complete because Antigravity
+  issues a second call only after the first permission request is answered. Model selection uses
+  the session's own offer: a base id through `session/set_config_option` (with `thought_level`
+  clamped down to what the account offers), an effort-suffixed id through `session/set_model`, and
+  any other id fails with the server's list. Its row is `authKind: "key"` with `keyOptional: true`
+  for the same reason as `claude-cli`.
 The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMeta.beforePhysicalSend` fence after awaited tool-bridge setup and before spending its dispatch permit or spawning. Cancellation and stale selections produce no child process; cleanup still returns permits and removes temporary tool files.
 
 - `cursor` stays direct because its `runTurn` transport and gated native-file fallback are distinct.

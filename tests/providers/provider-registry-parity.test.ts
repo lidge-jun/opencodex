@@ -1211,7 +1211,9 @@ describe("provider registry parity", () => {
     expect(providerConfigSeed(litellm!).keyOptional).toBe(true);
     // claude-cli joins them as the first CLI-backed member: its row is `key` because the turn
     // leaves this machine, and keyless because the Claude Code CLI reads the operator's sign-in.
-    expect(optionalKeyProviders).toEqual(["litellm", "mimo-free", "claude-cli"]);
+    // google-antigravity-acp is keyless for the same reason: `agy acp` reads the operator's own
+    // Antigravity sign-in.
+    expect(optionalKeyProviders).toEqual(["litellm", "mimo-free", "claude-cli", "google-antigravity-acp"]);
   });
 
   test("NVIDIA NIM is free-tier priced but still requires an API key", () => {

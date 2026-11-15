@@ -331,6 +331,44 @@ OAuth proveedores cuyas credenciales incluyen un ID de cuenta estable o correo e
 
 <a id="cockpit-tools-antigravity-import"></a>
 
+### Google Antigravity mediante el servidor ACP oficial
+
+`google-antigravity-acp` ejecuta Google Antigravity a través de `agy acp`, el servidor de Agent Client
+Protocol que Antigravity CLI incluye para editores como Zed y los IDE de JetBrains
+([guía ACP de Google](https://antigravity.google/docs/ide/extensions/acp)). OpenCodex inicia la CLI sin
+modificar en cada turno y actúa como su cliente ACP. La CLI inicia sesión con la cuenta de Google que
+guardaste en una sesión interactiva de `agy` y hace ella misma cada solicitud a Google, por lo que
+OpenCodex nunca lee, guarda ni reenvía esa credencial. Esto difiere de `google-antigravity`, que inicia
+sesión con el cliente OAuth propio de OpenCodex y llama directamente a Cloud Code.
+
+Configuración:
+
+1. Instala Antigravity CLI y comprueba que `agy --version` funciona. OpenCodex busca `agy` en
+   `PATH` y después en `~/.local/bin`, donde lo deja el instalador.
+2. Ejecuta `agy` una vez e inicia sesión con Google (o ejecuta `agy acp --login`).
+3. Añade el proveedor. No tiene clave ni paso de `ocx login`:
+
+```bash
+ocx provider add google-antigravity-acp
+```
+
+Codex conserva la propiedad de las herramientas. Las herramientas de la solicitud se ofrecen al agente
+mediante un servidor MCP aislado que nunca las ejecuta; cuando el agente llama a una, OpenCodex devuelve
+la llamada a Codex, que la ejecuta con su propia aprobación y sandbox. Las herramientas propias de
+Antigravity (shell, edición de archivos, navegador, subagentes) se rechazan en la solicitud de permiso, y
+el agente se ejecuta en un directorio temporal vacío. Se devuelve una llamada a herramienta por solicitud.
+
+La lista de modelos es la que Google ofrece a clientes ACP externos en tu cuenta. El valor predeterminado
+integrado es `gemini-3.8-flash`; los niveles de razonamiento de Codex se asignan a los niveles de
+pensamiento de Antigravity (`xhigh` es Extra) y se reducen a los que ofrece tu cuenta. Un modelo que el
+servidor no ofrece falla con la lista que sí ofrece, así que añade otros ids a `models` del proveedor
+cuando Google los publique.
+
+Google permite esta vía para desarrollo personal e interactivo con la CLI sin modificar y su propio
+inicio de sesión. No la uses para trabajos desatendidos en segundo plano ni compartas un inicio de sesión
+entre varias personas.
+
+
 ### Importación de Antigravity desde Cockpit Tools
 
 En v1, OpenCodex solo importa archivos JSON de **Antigravity exportados desde Cockpit Tools**, para el proveedor `google-antigravity`. En el dashboard, selecciona el archivo local desde la pestaña Cuentas de ese proveedor. El dashboard no muestra el contenido del archivo ni las credenciales; solo informa cuántas cuentas se importaron, se actualizaron, fallaron o no son compatibles. En v1 se rechazan las exportaciones de otros proveedores de Cockpit Tools.

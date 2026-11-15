@@ -4,6 +4,7 @@ import { createDshAccountAdapter } from "./dsh-account";
 import { createAzureAdapter } from "./azure";
 import type { ProviderAdapter } from "./base";
 import { createClaudeCliAdapter } from "./claude-cli/adapter";
+import { createAntigravityAcpAdapter } from "./antigravity-acp/adapter";
 import { withClinePassDeepSeekV4ToolReplayCompatibility } from "./cline-pass-deepseek-v4-tool-replay";
 import { withUniqueToolCallIds } from "./unique-tool-call-ids";
 import { createCodeBuddyAdapter } from "./codebuddy/adapter";
@@ -159,6 +160,13 @@ export const ADAPTER_REGISTRY = {
     // and the CLI owns the credential: the adapter stores and injects none.
     contractParent: "codebuddy",
     create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createClaudeCliAdapter(provider),
+  },
+  "antigravity-acp": {
+    // A run-turn CLI adapter with the same Codex-owned tool contract as CodeBuddy and Claude Code:
+    // client tools are captured through the isolated MCP catalog and executed by Codex. The wire
+    // to the CLI is ACP rather than stream-json, but nothing in the contract depends on that.
+    contractParent: "codebuddy",
+    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createAntigravityAcpAdapter(provider),
   },
   "dsh-account": {
     contractParent: "anthropic",

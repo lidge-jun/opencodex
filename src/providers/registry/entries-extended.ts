@@ -1741,4 +1741,33 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     defaultMaxOutputTokens: ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS,
     note: "Runs Claude subscription traffic through Anthropic's own harness: the official Claude Code CLI headlessly (`claude -p`), one turn per request. OpenCodex stores no Claude token and injects none into CLI requests (quota admission only reads it in memory) — the CLI signs in and bills the account itself, which is why this row is keyless and an API key saved here never reaches the harness (use `anthropic-apikey` for key billing). The sign-in is the one of the user this proxy runs as, so every request served through this row — by any client of this proxy — spends that same account; OpenCodex neither pools nor multiplexes Claude sign-ins. Requires the CLI (`npm i -g @anthropic-ai/claude-code`) and a signed-in session (`claude` -> /login). v1 disables CLI tools (--tools \"\", --strict-mcp-config) so the client retains tool ownership; text, reasoning and native image input are supported. Subscription routing authorization flagged for maintainer review.",
   },
+  {
+    // Google Antigravity through Google's own ACP server (`agy acp`), the integration Google
+    // documents for editors other than its own (https://antigravity.google/docs/ide/extensions/acp).
+    // The unmodified CLI signs in with its cached `oauth-personal` credential and performs every
+    // Google request itself; this row stores no token, and OpenCodex reads, refreshes and forwards
+    // none. That is the difference from `google-antigravity`, which signs in with OpenCodex's own
+    // OAuth client and calls Cloud Code directly. `baseUrl` names the product, not a destination
+    // OpenCodex connects to.
+    id: "google-antigravity-acp",
+    label: "Google Antigravity (official ACP)",
+    adapter: "antigravity-acp",
+    baseUrl: "https://antigravity.google",
+    // Keyless for the same reason as `claude-cli`: the CLI owns the sign-in.
+    authKind: "key",
+    keyOptional: true,
+    dashboardUrl: "https://antigravity.google/docs/ide/extensions/acp",
+    defaultModel: "gemini-3.8-flash",
+    // Static roster: ACP has no catalog call outside a session, and the server decides which
+    // models this client may use. A configured id the server does not offer fails with the
+    // server's own list. Add ids here or in the provider row as Google offers them.
+    models: ["gemini-3.8-flash"],
+    liveModels: false,
+    modelContextWindows: { "gemini-3.8-flash": 1_048_576 },
+    modelInputModalities: { "gemini-3.8-flash": ["text", "image"] },
+    // Antigravity's thinking levels are Low, Medium, High, Extra and Max; the adapter clamps a
+    // request down to the highest level the account offers.
+    reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+    note: "Runs Google Antigravity through Google's official ACP server (`agy acp`), the same way Zed or JetBrains IDEs do. The unmodified Antigravity CLI signs in with its own cached Google login (`oauth-personal`) and makes every Google request itself; OpenCodex never reads, stores or forwards that credential, which is why this row is keyless. Requires Antigravity CLI and one interactive sign-in (`agy`). Codex keeps tool ownership: the request's tools are offered to the agent through an isolated capture-only MCP server and run in Codex, and the agent's own tools are refused. Google permits this path for personal, interactive development only; do not use it for unattended background jobs, and do not share one sign-in across people. Models are limited to what Google offers external ACP clients (Gemini models on a Google AI subscription).",
+  },
 ];
