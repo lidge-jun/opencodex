@@ -17,6 +17,7 @@ import {
   initialAddCodexAccountUiState,
 } from "../../gui/src/components/add-codex-account-reducer";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { repoPath } from "../helpers/repo-root";
 
 const VALID_PROVIDERS = { openai: { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1" } };
 let testDir = "";
@@ -164,7 +165,7 @@ describe("Codex account modal state", () => {
   test("every shipped dashboard locale explains the imposed device login", async () => {
     const locales = ["en", "de", "fr", "ja", "ko", "pt", "ru", "tr", "vi", "zh", "zh-TW"];
     for (const locale of locales) {
-      const source = await Bun.file(`gui/src/i18n/${locale}.ts`).text();
+      const source = await Bun.file(repoPath("gui", "src", "i18n", `${locale}.ts`)).text();
       expect(source).toContain('"codexAuth.deviceOnlyEnforced"');
     }
   });
