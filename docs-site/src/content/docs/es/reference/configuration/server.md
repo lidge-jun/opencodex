@@ -149,6 +149,27 @@ Si una compilación de desarrollo anterior cambió los metadatos del historial d
 
 Native Chat también utiliza `stallTimeoutSec` mientras espera la salida de flujo ascendente, con el mismo valor predeterminado local vs público: un presupuesto no establecido está deshabilitado para un flujo ascendente local y 300 s para uno público, y `0` lo deshabilita en todas partes. El texto no vacío, el razonamiento, el rechazo, las actualizaciones de herramientas y los marcos de finalización renuevan la asignación; los comentarios de mantenimiento, los marcos de solo rol y el uso por sí solos no lo hacen. Esperar a que un cliente lento lea pausa la asignación. Una pérdida produce `upstream_stall_timeout`: una trama de error para clientes de transmisión en tiempo real, o HTTP 502 para clientes que no son de transmisión en tiempo real. La cancelación antes de un resultado de terminal devuelve un error de cancelación en lugar de una respuesta parcial exitosa. Los resultados de los búferes aceptan tanto el encuadre LF como CRLF SSE, incluidos los datos multilínea.
 
+<a id="combo-selection-keepalive"></a>
+
+### Keepalive durante la selección del combo
+
+Una solicitud `POST /v1/responses` en streaming hacia un combo puede esperar mientras el combo elige un
+objetivo: inspecciona cada flujo hijo antes de cualquier salida, salta los fallos sin salida y puede
+esperar un enfriamiento breve. Si esa selección tarda más de 15 segundos, OpenCodex confirma una cabecera
+HTTP 200 `text/event-stream` y envía un comentario `: keepalive`, y después otro cada 15 segundos hasta
+elegir un objetivo, para que un proxy o balanceador con límite de inactividad no corte la conexión. El
+umbral y el intervalo son fijos; no hay ajuste para ellos.
+
+Confirmar la cabecera confirma el estado. Después, el flujo del objetivo elegido sigue en la misma
+respuesta, y un fallo de todos los objetivos llega como un único evento `response.failed` cuyo
+`error.code` (y `type` y mensaje) es el que habría llevado el error HTTP, por ejemplo
+`combo_unavailable`. Las cabeceras del objetivo elegido, como `Retry-After` u `openai-model`, ya no se
+envían una vez confirmada la cabecera; el registro de solicitudes sigue guardando el estado HTTP original
+del fallo. Una selección que termina en menos de 15 segundos no cambia: el cliente recibe el estado y las
+cabeceras del objetivo elegido, y un fallo de todos los objetivos conserva su estado HTTP real. Las
+solicitudes sin streaming, las de WebSocket y los endpoints de Chat Completions y Anthropic Messages
+conservan el estado HTTP en todos los casos.
+
 <a id="codex-quota-network-diagnostics"></a>
 
 ## Diagnósticos de red de cuota Codex

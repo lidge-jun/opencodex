@@ -525,6 +525,8 @@ Para las solicitudes de transmisión, el estado ascendente HTTP no es la decisi�
 
 <a id="request-local-target-compatibility"></a>
 
+Una solicitud de Responses en streaming cuya selección de objetivo tarda más de 15 segundos recibe una cabecera HTTP 200 de event-stream y comentarios `: keepalive` cada 15 segundos mientras el combo sigue eligiendo, para que un proxy con límite de inactividad no la cierre. A partir de ese momento, un fallo de todos los objetivos llega como un `response.failed` dentro del flujo con el mismo `error.code` (por ejemplo `combo_unavailable`) en lugar de un estado de error HTTP. Las selecciones más rápidas conservan el estado HTTP real. Consulta [Combo selection keepalive](/es/reference/configuration/server/#combo-selection-keepalive).
+
 ## Compatibilidad con objetivos locales de solicitud
 
 Al enrutar Claude Code al backend canónico ChatGPT Codex, OpenCodex elimina el campo de metadatos de nivel superior no compatible `user` sin cambiar la clave de sesión/caché, los mensajes de entrada, los esquemas de herramientas o los identificadores de seguridad. Las pasarelas públicas Responses API y las pasarelas directas no canónicas mantienen ese campo.
