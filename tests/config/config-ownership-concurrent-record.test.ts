@@ -11,6 +11,7 @@ import {
   recordOwnedConfigPath,
   removeOwnedConfigState,
   setUninstallStepHookForTests,
+  type ConfigRemovalResult,
 } from "../../src/lib/config-ownership";
 import { repoPath } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -157,6 +158,46 @@ function uninstallElsewhere(dir: string): string {
   return Bun.spawnSync([process.execPath, "-e", script]).stdout.toString().trim();
 }
 
+/**
+ * What uninstall racing gated registrations must leave. A run that got the lock tombstoned the
+ * manifest first, so each child either recorded before the snapshot (its file was removed) or was
+ * refused and reported. A run refused because the children kept the lock busy wrote nothing: every
+ * child records, every file stays listed, and a rerun removes the whole home (#8379).
+ */
+function expectRaceOutcome(dir: string, names: string[], codes: number[], result: ConfigRemovalResult) {
+  if (result.status === "refused") {
+    expect(result.residualPaths).toEqual([dir]);
+    expect(manifest(dir).uninstallStartedAt).toBeUndefined();
+    expect(codes).toEqual(names.map(() => 0));
+    expect(manifest(dir).paths).toEqual(expect.arrayContaining(names));
+    for (const name of names) expect(existsSync(join(dir, name))).toBe(true);
+    expect(removeOwnedConfigState(dir)).toEqual({ status: "removed", residualPaths: [] });
+    expect(existsSync(dir)).toBe(false);
+    return;
+  }
+  expect(codes.every(code => code === 0 || code === 2 || code === 3)).toBe(true);
+  names.forEach((name, i) => {
+    const path = join(dir, name);
+    if (codes[i] === 0) expect(existsSync(path)).toBe(false);
+    else expect(result.residualPaths).toContain(path);
+  });
+  expect(existsSync(join(dir, CONFIG_OWNERSHIP_LOCK))).toBe(false);
+}
+
+/** Six gated children that have created their files and wait for `go` before recording them. */
+async function spawnGatedChildren(dir: string) {
+  expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
+  const names = Array.from({ length: 6 }, (_, i) => "racing-" + i);
+  const signals = dirname(dir);
+  const gates = names.map(name => ({ ready: join(signals, name + ".ready"), go: join(signals, "go") }));
+  const children = names.map((name, i) => spawnChild(dir, name, gates[i]));
+  // Barrier: every child has created its file before uninstall starts.
+  const deadline = Date.now() + BARRIER_MS;
+  while (Date.now() < deadline && !gates.every(gate => existsSync(gate.ready))) await Bun.sleep(10);
+  expect(gates.every(gate => existsSync(gate.ready))).toBe(true);
+  return { names, children, go: gates[0]!.go };
+}
+
 function withHome(fn: (dir: string) => void | Promise<void>) {
   return async () => {
     const parent = mkdtempSync(join(tmpdir(), "ocx-ownership-record-"));
@@ -186,30 +227,29 @@ describe("serialized ownership manifest (#8093)", () => {
   }));
 
   test("a registration racing uninstall is either removed or refused, never left unreported", withHome(async dir => {
-    expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
-    const names = Array.from({ length: 6 }, (_, i) => "racing-" + i);
-    const signals = dirname(dir);
-    const gates = names.map(name => ({ ready: join(signals, name + ".ready"), go: join(signals, "go") }));
-    const children = names.map((name, i) => spawnChild(dir, name, gates[i]));
-    // Barrier: every child has created its file before uninstall starts.
-    const deadline = Date.now() + BARRIER_MS;
-    while (Date.now() < deadline && !gates.every(gate => existsSync(gate.ready))) await Bun.sleep(10);
-    expect(gates.every(gate => existsSync(gate.ready))).toBe(true);
+    const { names, children, go } = await spawnGatedChildren(dir);
     // Open the gate while holding the lock, so the children contend with uninstall for it.
     const release = holdLock(dir);
     try {
-      writeFileSync(gates[0]!.go, "");
+      writeFileSync(go, "");
       await Bun.sleep(50);
     } finally { release(); }
+    // The children may still hold the lock here, so uninstall may be refused as busy (#8379).
     const result = removeOwnedConfigState(dir);
-    const codes = await Promise.all(children.map(child => child.exited));
-    expect(codes.every(code => code === 0 || code === 2 || code === 3)).toBe(true);
-    names.forEach((name, i) => {
-      const path = join(dir, name);
-      if (codes[i] === 0) expect(existsSync(path)).toBe(false);
-      else expect(result.residualPaths).toContain(path);
-    });
-    expect(existsSync(join(dir, CONFIG_OWNERSHIP_LOCK))).toBe(false);
+    expectRaceOutcome(dir, names, await Promise.all(children.map(child => child.exited)), result);
+  }), 60_000);
+
+  test("an uninstall refused for a busy lock leaves racing registrations recorded for a rerun", withHome(async dir => {
+    const { names, children, go } = await spawnGatedChildren(dir);
+    // The timing CI hit by chance in #8379, made certain: uninstall runs while the lock is busy.
+    const release = holdLock(dir);
+    let result: ConfigRemovalResult;
+    try {
+      writeFileSync(go, "");
+      result = removeOwnedConfigState(dir);
+    } finally { release(); }
+    expect(result.status).toBe("refused");
+    expectRaceOutcome(dir, names, await Promise.all(children.map(child => child.exited)), result);
   }), 60_000);
 
   test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an interrupted uninstall refuses registrations, cached paths included, and a rerun finishes it",
