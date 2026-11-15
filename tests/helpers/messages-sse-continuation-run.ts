@@ -1,4 +1,5 @@
 import type { OcxConfig } from "../../src/types";
+import { CONTINUATION_READY } from "./continuation-fixture-run";
 import { continuationLanes, continuationTails, continuationCase } from "./messages-sse-continuation-cases";
 import { sseStart } from "./messages-sse-cases";
 const mode = process.argv[2]!;
@@ -17,6 +18,8 @@ const source = () => new ReadableStream<Uint8Array>({ pull(controller) {
 let response: Response;
 let cleanup = () => {};
 const originalFetch = globalThis.fetch;
+// Tells the parent the fixture is loaded; its stream deadline starts here.
+const ready = () => Bun.write(Bun.stdout, `${CONTINUATION_READY}\n`);
 try {
   if (direct) {
     const { createTranslatorBudget } = await import("../../src/lib/translator-budget");
@@ -25,6 +28,7 @@ try {
     const { tapAnthropicSseForLog } = await import("../../src/server/messages-shared");
     const budget = createTranslatorBudget(); cleanup = () => budget.dispose();
     const filter = createMessagesSseErrorFilter();
+    await ready();
     const stream = mode === "direct-rewrite" ? relaySseWithPayloadRewrite(source(), value => value, budget, undefined, filter)
       : mode === "direct-tap" ? tapAnthropicSseForLog(source(), {}, () => {}, { stallMs: 0, maxBytes: 0 }, undefined, filter)
       : filterMessagesSseErrors(source());
@@ -42,6 +46,7 @@ try {
     saveConfig(config);
     if (!native) globalThis.fetch = fakeFetch;
     const req = new Request(`http://localhost/v1/messages${mode === "count-tokens" ? "/count_tokens" : ""}`, { method: "POST", headers: native ? {} : { "x-api-key": "sk-ant-fixture" }, body: JSON.stringify({ model: native ? `${provider}/wire-model` : "claude-fixture", max_tokens: 16, messages: [{ role: "user", content: "synthetic" }], stream: true }) });
+    await ready();
     response = mode === "count-tokens" ? await handleClaudeCountTokens(req, config) : await handleClaudeMessages(req, config, { model: "", provider: "" });
   }
   // Native response consumption exercises its demand schedule; a manual read loop masks the stall.
