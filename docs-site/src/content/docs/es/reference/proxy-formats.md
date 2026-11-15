@@ -148,6 +148,8 @@ Por separado, en cada cable de entrada, una llamada con espacio de nombres `defa
 | Dictado de streaming | `WS /v1/audio/transcriptions/stream` | No se requiere | Dictado de escritorio JSON eventos |
 | Voz y tiempo real | `POST /v1/live`, `POST /v1/realtime/calls` | Respuesta retransmitida de creación de llamadas | Una banda lateral separada WebSocket retransmite tramas en ambas direcciones |
 | Responses compactación | `POST /v1/responses/compact` | Historial de reemplazo JSON | No se requiere |
+| API de Gemini | `POST /v1beta/models/{model}:generateContent` | JSON de respuesta Gemini | SSE de `:streamGenerateContent` con `alt=sse`, si no un único array JSON |
+| Interacciones de Gemini | `POST /v1beta/interactions` | JSON `interaction` | Eventos SSE de Interactions |
 
 <a id="file-transcription"></a>
 
@@ -456,6 +458,16 @@ La combinación de este formato con `ids=cli` o cualquier `client_version` devue
 La instantánea sigue siendo un contrato de lista de modelos de solo lectura; no es una rotación de claves ni una carga de perfil API. La migración, recuperación y desconexión de claves de escritorio conectadas funcionan a través del ciclo de vida del cliente existente. La rotación conserva las entradas y selecciones del modelo; CLI `rotation` distingue `committed` de `rolled_back`. Desconectar restaura la configuración propia o informa de una reserva estándar heredada conocida, preservando los campos de usuario y selecciones válidas posteriores. Los conflictos o la recuperación incompleta impiden una reclamación de finalización. Reinicie el escritorio para cargar los cambios de disco; la desconexión no revoca automáticamente la clave de concentrador. Véase [Claude Desktop ciclo de vida](/es/guides/claude-code/). La repetición de pensamiento y el trabajo de caché rápida permanecen separados en [#3719](https://github.com/lidge-jun/opencodex/issues/3719).
 
 <a id="post-v1live-and-realtime-sideband"></a>
+
+## API de Gemini: `/v1beta/models` y `/v1beta/interactions`
+
+Los clientes de Gemini, como el SDK google-genai con una URL base personalizada, la CLI `agy` o un cliente que lee `GOOGLE_GEMINI_BASE_URL`, pueden usar las rutas de proveedor configuradas con la forma REST de Google. El proxy traduce cada solicitud a su ruta de Chat Completions, así que detrás puede haber cualquier proveedor. Autentíquese con una clave API del proxy en `x-goog-api-key` o en el parámetro de consulta `?key=`; la clave se quita de la URL y de las cabeceras antes de registrar o reenviar la solicitud. Los errores usan la forma de Google `{ "error": { "code", "message", "status" } }`.
+
+- `GET /v1beta/models` lista `models/<provider>/<model>` para las rutas que la clave puede usar, y `GET /v1beta/models/{model}` devuelve una. Un modelo incluye `inputTokenLimit` y `outputTokenLimit` cuando se conocen.
+- `:generateContent` y `:streamGenerateContent`, bajo `/v1beta/models/` o `/v1/models/`, traducen `contents`, `systemInstruction`, imágenes en línea, declaraciones y llamadas de funciones, y `generationConfig`. Las firmas de pensamiento de las partes `functionCall` viajan en ambos sentidos. Con `alt=sse` el flujo es SSE; sin él la respuesta es un único array JSON, como lo envía la API REST de Google. Las herramientas alojadas de Gemini se ignoran. Un `candidateCount` distinto de 1, datos en línea que no son imágenes y partes de archivo se rechazan con 400.
+- `:countTokens` devuelve `{ "totalTokens": n }` a partir de una estimación local y no envía nada al proveedor. `:embedContent` y `:batchEmbedContents` responden 501.
+- `POST /v1beta/interactions`, o `POST /v1/interactions`, crea una interacción a partir de `input` (texto, imágenes base64 o pasos que incluyen `function_call` y `function_result`), `system_instruction`, herramientas `function`, `generation_config` y un `response_format` de texto. Un flujo usa los eventos de Interactions `interaction.created`, `step.start`, `step.delta`, `step.stop` e `interaction.completed`. Un turno que termina en llamadas de funciones tiene el estado `requires_action`. Los campos que el proxy no puede respetar se rechazan con 400: `agent`, `background: true`, `webhook_config`, `environment`, `agent_config`, herramientas alojadas y contenido o salida que no sea texto.
+- `previous_interaction_id` continúa una interacción guardada. El proxy guarda las interacciones solo en memoria, durante 24 horas desde la última escritura y como máximo 200 por clave API, y solo la clave que creó una puede leerla, continuarla o borrarla; los llamantes de loopback sin clave comparten un único propietario. Un reinicio las olvida todas, y un id que falta o caducó responde 404, así que el cliente debe reenviar su historial. Una solicitud con `store: false` no se guarda. `GET /v1beta/interactions/{id}` devuelve una interacción guardada, `DELETE` la elimina y `POST /v1beta/interactions/{id}/cancel` responde 400 porque nada se ejecuta en segundo plano.
 
 ## `POST /v1/live` y banda lateral en tiempo real
 

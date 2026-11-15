@@ -205,6 +205,8 @@ to the bare tool name the request declared (`default.Read` → `Read`).
 | Streaming dictation | `WS /v1/audio/transcriptions/stream` | Not applicable | Desktop dictation JSON events |
 | Voice and Realtime | `POST /v1/live`, `POST /v1/realtime/calls` | Relayed call-creation response | A separate sideband WebSocket relays frames in both directions |
 | Responses compaction | `POST /v1/responses/compact` | Replacement-history JSON | Not applicable |
+| Gemini API | `POST /v1beta/models/{model}:generateContent` | Gemini response JSON | `:streamGenerateContent` SSE with `alt=sse`, otherwise one JSON array |
+| Gemini Interactions | `POST /v1beta/interactions` | `interaction` JSON | Interactions SSE events |
 
 ## File transcription
 
@@ -821,6 +823,41 @@ standard fallback, preserving user fields and later valid selections. Conflicts 
 recovery prevent a completion claim. Restart Desktop to load disk changes; disconnect does not
 automatically revoke the hub key. See [Claude Desktop lifecycle](/guides/claude-code/).
 Thinking replay and prompt-cache work remain separate in [#3719](https://github.com/lidge-jun/opencodex/issues/3719).
+
+## Gemini API: `/v1beta/models` and `/v1beta/interactions`
+
+Gemini clients, such as the google-genai SDK with a custom base URL, the `agy` CLI or a client reading
+`GOOGLE_GEMINI_BASE_URL`, can reach the configured provider routes in Google's REST shape. The proxy
+translates each request onto its Chat Completions path, so the route behind it can be any provider.
+Authenticate with a proxy API key in `x-goog-api-key` or a `?key=` query parameter; the key is removed
+from the URL and headers before the request is logged or forwarded. Errors use Google's
+`{ "error": { "code", "message", "status" } }` shape.
+
+- `GET /v1beta/models` lists `models/<provider>/<model>` for the routes the key may use, and
+  `GET /v1beta/models/{model}` returns one. A model includes `inputTokenLimit` and `outputTokenLimit`
+  when they are known.
+- `:generateContent` and `:streamGenerateContent`, under `/v1beta/models/` or `/v1/models/`, translate
+  `contents`, `systemInstruction`, inline images, function declarations and calls, and
+  `generationConfig`. Thought signatures on `functionCall` parts are carried in both directions. With
+  `alt=sse` the stream is SSE; without it the answer is one JSON array, as Google's REST API sends it.
+  Hosted Gemini tools are ignored. A `candidateCount` other than 1, non-image inline data and file parts
+  are refused with 400.
+- `:countTokens` returns `{ "totalTokens": n }` from a local estimate and sends nothing upstream.
+  `:embedContent` and `:batchEmbedContents` answer 501.
+- `POST /v1beta/interactions`, or `POST /v1/interactions`, creates an interaction from `input` (text,
+  base64 images, or steps including `function_call` and `function_result`), `system_instruction`,
+  `function` tools, `generation_config` and a text `response_format`. A stream uses the Interactions
+  events `interaction.created`, `step.start`, `step.delta`, `step.stop` and `interaction.completed`. A
+  turn that ends in function calls has status `requires_action`. Fields the proxy cannot honor are
+  refused with 400: `agent`, `background: true`, `webhook_config`, `environment`, `agent_config`, hosted
+  tools, and non-text content or output.
+- `previous_interaction_id` continues a stored interaction. The proxy keeps interactions in memory only,
+  for 24 hours after the last write and at most 200 per API key, and only the key that created one can
+  read, continue or delete it; a keyless loopback caller shares one owner. A restart forgets them all, and
+  a missing or expired id answers 404, so the client must resend its history. A request with
+  `store: false` is not kept. `GET /v1beta/interactions/{id}` returns a stored interaction, `DELETE`
+  removes it, and `POST /v1beta/interactions/{id}/cancel` answers 400 because nothing runs in the
+  background.
 
 ## `POST /v1/live` and Realtime sideband
 

@@ -73,3 +73,14 @@ DONE: every selected row shipped with a test that failed before, all gates green
 independent review folded, the PR open and reported. NEEDS_HUMAN: a deferred row turns out to need a
 public-contract decision. BLOCKED: #8742 conflicts that cannot be resolved without the owner.
 
+## Status (branch `feat/google-protocol-cpa-parity`)
+
+- 000 roadmap and matrix: b662d4d788.
+- 010 Interactions inbound: 9c48809348. 020 Interactions state: baa5dfbadb.
+- 030 Gemini inbound fidelity on #8742: 3374a52e28 (plus 7464b83dd7, the Spanish mirror of #8742's connector docs,
+  and b2738d88fe, #8742's GUI headless-parity gap).
+- 040 Google error classification and TOS quarantine: c07d7cc259.
+- 050 Google response fidelity: 3dccfa700f. 060 Google request fidelity: 430882ffa3 (6a, AG-M1, deferred).
+- 070 user docs (`reference/proxy-formats.md` Gemini section, `reference/adapters.md`, `reference/cli/providers-accounts.md`,
+  English and Spanish), review and delivery: in progress. The unit moves to `devlog/_fin/` after the PR merges.
+
