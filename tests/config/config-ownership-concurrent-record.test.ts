@@ -166,6 +166,7 @@ function uninstallElsewhere(dir: string): string {
  */
 function expectRaceOutcome(dir: string, names: string[], codes: number[], result: ConfigRemovalResult) {
   if (result.status === "refused") {
+    expect(result.reason).toContain("busy");
     expect(result.residualPaths).toEqual([dir]);
     expect(manifest(dir).uninstallStartedAt).toBeUndefined();
     expect(codes).toEqual(names.map(() => 0));
