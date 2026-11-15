@@ -1227,6 +1227,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       chatRawReasoningVisible: deps.chatRawReasoningVisible,
       hideRawReasoning: parsed.options.hideRawReasoning,
+      rawReasoningAsSummary: parsed.options.rawReasoningAsSummary,
       stallTimeoutSec: deps.stallTimeoutSec,
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
       ...(deps.onUsage ? {
