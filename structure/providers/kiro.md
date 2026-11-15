@@ -174,7 +174,8 @@ constrained tool probe on `claude-opus-5.5` and `claude-sonnet-5.5` naming `patt
 
 `claude-opus-5.5` also keeps the twelve keys the Claude Desktop (116 tools) and Claude Code
 (25 tools) catalogs carry: `$schema`, `additionalProperties`, `pattern`, `format`, `minLength`, `maxLength`, `minimum`, `maximum`, `exclusiveMinimum`, `minItems`, `maxItems`, `propertyNames`.
-Five days of production traffic sent those catalogs to this id with every key intact: 10,565
+Five days of production traffic with `OCX_KIRO_TOOL_BUDGET=off` sent those catalogs in full to
+this id with every key intact: 10,565
 HTTP 200 and no `ValidationException`. The other seventeen keys appear in neither catalog and
 stay stripped.
 
