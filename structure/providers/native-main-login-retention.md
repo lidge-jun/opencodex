@@ -15,8 +15,8 @@ one, even on filesystems that reuse numbers (ext4, XFS), and a retained file who
 zero is never served. Windows holds no descriptor, because an open handle could block Codex's
 delete; NTFS file IDs carry a sequence number.
 
-There is no time window. Each of these ends retention at once, and the dropped copy is never
-revived; only a later complete read retains again:
+There is no time window for an observed event. Each of these ends retention at once, and the dropped
+copy is never revived; only a later complete read retains again:
 
 - a missing observation (a missing file is unavailable unless the Codex RPC confirms a login; see [native-main refresh ownership](openai-accounts.md#native-main-refresh-ownership)),
   a no-login observation, or an unreadable file;
@@ -29,7 +29,13 @@ revived; only a later complete read retains again:
   different configured value ends retention before it is served. A different resolved owner
   reported by `resolveNativeMainRefreshMode` also ends it;
 - ownership loss: another home or path, the `src/codex/native-main-owner.ts` lock leaving `held`, or
-  native-main traffic blocked by startup or recovery.
+  native-main traffic blocked by startup or recovery;
+- upstream rejecting the retained bearer in a forced refresh.
+
+Retention cannot see what no read observes. If Codex rewrites the same file in place to another
+login (for example `codex login` over an existing login) and no read lands between the old login
+and the rewrite window, an incomplete read during that window can still return the old login, once,
+until the next complete read. A logout that deletes the file always gets a new identity.
 
 Every invalidation bumps a generation. A refresh captures its ticket before the token exchange,
 and retains the published login only if no invalidation happened meanwhile, so a completion after

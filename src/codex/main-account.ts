@@ -560,9 +560,14 @@ async function resolveMainAccountToken(
   const codexHome = resolveCodexHomeDir();
   let initial = readMainAuthJsonCredential({ serveRetained: true });
   // Retention covers a rewrite, not a refresh: an expired or rejected retained bearer goes to the
-  // selected refresh owner exactly as an unavailable file would (#7345).
-  if (initial?.retained && (initial.accessToken === rejectedAccessToken
-    || !mainAccessTokenFresh(initial.accessToken, Date.now(), MAIN_TOKEN_REFRESH_SKEW_MS))) initial = null;
+  // selected refresh owner exactly as an unavailable file would (#7345). Upstream rejecting the
+  // retained bearer is revocation evidence, so that copy is dropped for good.
+  if (initial?.retained && initial.accessToken === rejectedAccessToken) {
+    invalidateRetainedNativeMainLogin("revocation");
+    initial = null;
+  } else if (initial?.retained && !mainAccessTokenFresh(initial.accessToken, Date.now(), MAIN_TOKEN_REFRESH_SKEW_MS)) {
+    initial = null;
+  }
   // Every skip below ends a forced refresh WITHOUT asking the token endpoint anything, which from
   // the outside is indistinguishable from a refusal: same failed request, no write, no verdict.
   // A forced refresh is the only caller that passes `rejectedAccessToken`, so only it reports.

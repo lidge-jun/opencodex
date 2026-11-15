@@ -1,5 +1,5 @@
-import { closeSync, constants as fsConstants, fstatSync, openSync, statSync } from "node:fs";
-import { readNativeMainAuthBytes } from "./native-main-auth-file";
+import { closeSync, constants as fsConstants, fstatSync, openSync } from "node:fs";
+import { readNativeMainAuthBytesWithIdentity } from "./native-main-auth-file";
 import { codexCredentialMutationEpoch } from "./credential-mutation-epoch";
 import { sameFileIdentity, type FileIdentity } from "../lib/file-identity";
 
@@ -130,24 +130,18 @@ function missingOrUnreadable(error: unknown): NativeMainAuthObservation {
 }
 
 /**
- * One physical observation through the #7918 reader. The file identity is stat'ed before and
- * after the read and kept only when both agree, so bytes are never paired with another file's
- * identity.
+ * One physical observation through the #7918 reader. The bytes and the identity come from one
+ * descriptor, and the identity is kept only while the path still names that file, so bytes are
+ * never paired with another file's identity.
  */
 export function observeNativeMainAuthFile(path: string): NativeMainAuthObservation {
-  let before: FileIdentity;
-  let raw: string;
-  let after: FileIdentity;
+  let read: ReturnType<typeof readNativeMainAuthBytesWithIdentity>;
   try {
-    const stat = statSync(path, { bigint: true });
-    before = { dev: stat.dev, ino: stat.ino };
-    raw = readNativeMainAuthBytes(path, "plain").toString("utf8");
-    const next = statSync(path, { bigint: true });
-    after = { dev: next.dev, ino: next.ino };
+    read = readNativeMainAuthBytesWithIdentity(path);
   } catch (error) {
     return missingOrUnreadable(error);
   }
-  return classifyNativeMainAuthText(raw, sameFileIdentity(before, after) ? after : null);
+  return classifyNativeMainAuthText(read.bytes.toString("utf8"), read.identity);
 }
 
 export function beginNativeMainObservation(): NativeMainObservationTicket {

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   beginNativeMainReauth,
+  forceRefreshMainAccountToken,
   getMainAccountCredentialStatus,
   getValidMainAccountToken,
   MAIN_CODEX_ACCOUNT_ID,
@@ -244,6 +245,17 @@ describe("native-main login retention (#7345)", () => {
     expect(result?.accessToken).toBe(b);
     writeInPlace("");
     expect(await served()).toBe(b);
+  });
+
+  test("upstream rejecting the retained bearer ends retention", async () => {
+    const a = login("acct-a");
+    writeInPlace(a.raw);
+    expect(await served()).toBe(a.access);
+    writeInPlace("");
+    expect(await forceRefreshMainAccountToken(a.access)).toBeNull();
+    expect(lastNativeMainRetentionInvalidationForTests()).toBe("revocation");
+    expect(await served()).toBeNull();
+    expect(getMainAccountCredentialStatus().usable).toBe(false);
   });
 
   test("a stale observation ticket cannot retain after ownership loss", () => {
