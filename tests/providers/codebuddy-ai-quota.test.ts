@@ -98,6 +98,20 @@ test("enterprise meter fills the balance without treating it as personal credit"
   expect(await fetchCodeBuddyAiQuota("codebuddy-ai", cred)).toMatchObject({ quota: { workbuddyCredits: { total: 1000, used: 12.5, remaining: 987.5 } } });
 });
 
+test("enterprise decimals keep exact metadata instead of float subtraction", async () => {
+  const balance = async (credit: unknown) => {
+    globalThis.fetch = (async input => Response.json({ code: 0, data: String(input).endsWith("summary")
+      ? { Packages: [] } : { limitNum: "1", credit } })) as typeof fetch;
+    const cred = credentials(); cred.codeBuddyAi!.enterpriseId = "fixture-team";
+    const report = await fetchCodeBuddyAiQuota("codebuddy-ai", cred);
+    return JSON.parse(JSON.stringify(report)).quota.workbuddyCredits;
+  };
+  // 1 - 0.285 is 0.7150000000000000318 in floating point; the exact form keeps the reported value.
+  expect(await balance("0.285")).toMatchObject({ remaining: 0.715, exact: { total: "1", remaining: "0.715" } });
+  expect(await balance("0.00499999999999995")).toMatchObject({ exact: { total: "1", remaining: "0.99500000000000005" } });
+  expect(await balance("2")).toMatchObject({ remaining: 0, exact: { total: "1", remaining: "0" } });
+});
+
 test("the registered quota path is account-isolated, cached, refreshable, and display-only at zero", async () => {
   await saveCredential("codebuddy-ai", credentials()); await saveCredential("codebuddy-ai", credentials("b"));
   let reads = 0;
