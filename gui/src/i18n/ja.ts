@@ -2869,6 +2869,7 @@ export const ja: Record<TKey, string> = {
   "codexAuth.back": "戻る",
   "codexAuth.oauthAlreadyInProgress": "ログインは既に進行中です。ブラウザで完了してください。",
   "codexAuth.oauthWaiting": "ブラウザで ChatGPT ログインが完了するのを待機中...",
+  "codexAuth.deviceOnlyEnforced": "このプロキシでは Codex アカウントにデバイスコードログインのみが許可されています（codexAuthMethod: device-only）。",
   "codexAuth.oauthSubmittingCode": "コードを送信中…",
   "codexAuth.oauthCodeSubmitted": "コードを送信しました — ログイン完了を待っています…",
   "codexAuth.oauthStatusRetrying": "ログイン状態の確認中にネットワークまたはプロキシ エラーが発生しました — 再試行中…",

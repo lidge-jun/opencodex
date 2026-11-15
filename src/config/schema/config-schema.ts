@@ -283,6 +283,9 @@ export const configSchema = z.object({
   // A malformed hand edit must not silently stop opening the browser: fall back
   // to undefined, which resolves to the historical auto-open behavior.
   oauthOpenBrowser: z.boolean().optional().catch(undefined),
+  // A malformed hand edit falls back to the historical behavior rather than
+  // discarding the config; diagnostics still report it as invalid.
+  codexAuthMethod: z.enum(["auto", "device-only"]).optional().catch(undefined),
   showCodexCredits: z.boolean().optional().catch(false),
   openaiProviderTierVersion: z.union([z.literal(1), z.literal(2)]).optional(),
   // Invalid hand edits must not discard an otherwise usable config.

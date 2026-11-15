@@ -1,5 +1,5 @@
 import type { OcxProviderConfig } from "./provider";
-import type { CodexAccount } from "./accounts";
+import type { CodexAccount, CodexAccountLoginConfig } from "./accounts";
 import type { AnthropicAccountPoolConfig, OcxAccountPoolRotationStrategy } from "./anthropic-account-pool";
 import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
 import type { OcxFallbackConfig } from "./fallback";
@@ -524,7 +524,7 @@ export interface OcxClientConnectionConfig {
   };
 }
 
-export interface OcxConfig extends OcxLinkHomeConfig {
+export interface OcxConfig extends OcxLinkHomeConfig, CodexAccountLoginConfig {
   /** Experimental macOS app-server stdout shim; absent or false disables it. */
   chatgptDesktop?: { appServerShim?: boolean };
   port: number;

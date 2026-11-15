@@ -508,7 +508,7 @@ describe("account login --device", () => {
     // A budget regression to 150 attempts is invisible to an output assertion,
     // so read the loop bound from the source itself.
     const source = await Bun.file(new URL("../../src/cli/account-auth.ts", import.meta.url)).text();
-    const budget = /const maxAttempts = device \? (\d+) : (\d+);/.exec(source);
+    const budget = /const maxAttempts = device \|\| start\.deviceCode \? (\d+) : (\d+);/.exec(source);
     expect(budget).toBeTruthy();
     // 2s per attempt. 900s is the grant itself; the budget must also leave
     // settlement margin for the token exchange after the final poll, so 450

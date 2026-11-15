@@ -553,6 +553,14 @@ function oauthOpenBrowserError(value: unknown): string | null {
   return "schema_invalid: oauthOpenBrowser: must be a boolean or omitted";
 }
 
+function codexAuthMethodError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "codexAuthMethod")) return null;
+  const method = raw.codexAuthMethod;
+  if (method === undefined || method === "auto" || method === "device-only") return null;
+  return "schema_invalid: codexAuthMethod: must be \"auto\", \"device-only\", or omitted";
+}
+
 /** Validate an in-memory config candidate without touching disk. Used by headless CLI import/set. */
 /**
  * Reject a loopback-listener port that collides with the proxy port (#1102), and a port-less
@@ -802,6 +810,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? emptyCompletionRetryError(value)
     ?? dropCodexSafetyBufferingError(value)
     ?? oauthOpenBrowserError(value)
+    ?? codexAuthMethodError(value)
     ?? showCodexCreditsError(value)
     ?? creditCodexAccountIdsError(value)
     ?? remainingQuotaAccountIdsError(value)

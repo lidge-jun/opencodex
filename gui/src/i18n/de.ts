@@ -2396,6 +2396,7 @@ export const de: Record<TKey, string> = {
   "codexAuth.back": "Zurück",
   "codexAuth.oauthAlreadyInProgress": "Login läuft bereits. Schließe es in deinem Browser ab.",
   "codexAuth.oauthWaiting": "Warte auf Abschluss des ChatGPT-Logins in deinem Browser…",
+  "codexAuth.deviceOnlyEnforced": "Dieser Proxy erlaubt für Codex-Konten nur die Anmeldung per Gerätecode (codexAuthMethod: device-only).",
   "codexAuth.oauthSubmittingCode": "Code wird gesendet…",
   "codexAuth.oauthCodeSubmitted": "Code gesendet — warte auf Abschluss der Anmeldung…",
   "codexAuth.oauthStatusRetrying": "Beim Prüfen des Login-Status ist ein Netzwerk- oder Proxyfehler aufgetreten — erneuter Versuch…",
