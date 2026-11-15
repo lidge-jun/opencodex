@@ -1,3 +1,4 @@
+import { closeSync, constants as fsConstants, fstatSync, openSync, statSync } from "node:fs";
 import { readNativeMainAuthBytes } from "./native-main-auth-file";
 import { codexCredentialMutationEpoch } from "./credential-mutation-epoch";
 import { sameFileIdentity, type FileIdentity } from "../lib/file-identity";
@@ -17,9 +18,13 @@ import { sameFileIdentity, type FileIdentity } from "../lib/file-identity";
  * - account replacement (another OpenCodex credential publication, a different file identity,
  *   or a complete file naming a different login),
  * - pause or revocation of the main account,
- * - a change of the selected refresh owner,
+ * - a change of the selected or configured refresh owner,
  * - ownership loss (another home or path, the cross-process owner lock released, or native-main
  *   traffic blocked by recovery).
+ *
+ * File identity is only meaningful while its inode number cannot be reused: on POSIX the retained
+ * entry keeps a descriptor open on the file it was read from, so a deleted and recreated file
+ * always gets a new number, and a retained file that is no longer linked is never served.
  *
  * Retention never serves a write guard: callers that compare the file before publishing read the
  * physical observation. It also never vouches for an expired access token; that goes to the
@@ -27,9 +32,16 @@ import { sameFileIdentity, type FileIdentity } from "../lib/file-identity";
  */
 
 export type NativeMainAuthObservation =
-  | { kind: "complete"; raw: string; root: Record<string, unknown>; tokens: Record<string, unknown> }
+  | {
+    kind: "complete";
+    raw: string;
+    root: Record<string, unknown>;
+    tokens: Record<string, unknown>;
+    /** dev/ino of the file the bytes came from, or null when it changed during the read. */
+    identity: FileIdentity | null;
+  }
   /** Empty or not yet parseable: the in-place rewrite window. */
-  | { kind: "incomplete" }
+  | { kind: "incomplete"; identity: FileIdentity | null }
   /** Well-formed but carries no ChatGPT access or refresh token. */
   | { kind: "no-login" }
   | { kind: "missing" }
@@ -55,11 +67,21 @@ export interface NativeMainObservationTicket {
   readonly generation: number;
 }
 
+export interface RetainNativeMainLoginOptions {
+  /** Content fingerprint; an unchanged login keeps its entry, descriptor and configured mode. */
+  fingerprint: string;
+  /** The configured refresh owner, read only when a new login is retained. */
+  configuredRefreshMode: () => string;
+}
+
 interface RetainedLogin {
   readonly owner: NativeMainLoginOwner;
   readonly identity: FileIdentity;
-  readonly mutationEpoch: number;
-  readonly credential: unknown;
+  readonly fingerprint: string;
+  readonly configuredRefreshMode: string;
+  readonly fd: number | undefined;
+  mutationEpoch: number;
+  credential: unknown;
 }
 
 let retained: RetainedLogin | undefined;
@@ -75,32 +97,57 @@ function nonEmptyString(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+function closeQuietly(fd: number | undefined): void {
+  if (fd === undefined) return;
+  try { closeSync(fd); } catch { /* already closed */ }
+}
+
+function drop(): void {
+  const entry = retained;
+  retained = undefined;
+  closeQuietly(entry?.fd);
+}
+
 /** Classify login file text. A truncated JSON object never parses, so a partial write is "incomplete". */
-export function classifyNativeMainAuthText(raw: string): NativeMainAuthObservation {
-  if (!raw.trim()) return { kind: "incomplete" };
+export function classifyNativeMainAuthText(raw: string, identity: FileIdentity | null = null): NativeMainAuthObservation {
+  if (!raw.trim()) return { kind: "incomplete", identity };
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return { kind: "incomplete" };
+    return { kind: "incomplete", identity };
   }
   if (!isRecord(parsed) || !isRecord(parsed.tokens)) return { kind: "no-login" };
   if (!nonEmptyString(parsed.tokens.access_token) && !nonEmptyString(parsed.tokens.refresh_token)) {
     return { kind: "no-login" };
   }
-  return { kind: "complete", raw, root: parsed, tokens: parsed.tokens };
+  return { kind: "complete", raw, root: parsed, tokens: parsed.tokens, identity };
 }
 
-/** One physical observation through the #7918 reader. */
+function missingOrUnreadable(error: unknown): NativeMainAuthObservation {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return { kind: code === "ENOENT" || code === "ENOTDIR" ? "missing" : "unreadable" };
+}
+
+/**
+ * One physical observation through the #7918 reader. The file identity is stat'ed before and
+ * after the read and kept only when both agree, so bytes are never paired with another file's
+ * identity.
+ */
 export function observeNativeMainAuthFile(path: string): NativeMainAuthObservation {
+  let before: FileIdentity;
   let raw: string;
+  let after: FileIdentity;
   try {
+    const stat = statSync(path, { bigint: true });
+    before = { dev: stat.dev, ino: stat.ino };
     raw = readNativeMainAuthBytes(path, "plain").toString("utf8");
+    const next = statSync(path, { bigint: true });
+    after = { dev: next.dev, ino: next.ino };
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException | null)?.code;
-    return { kind: code === "ENOENT" || code === "ENOTDIR" ? "missing" : "unreadable" };
+    return missingOrUnreadable(error);
   }
-  return classifyNativeMainAuthText(raw);
+  return classifyNativeMainAuthText(raw, sameFileIdentity(before, after) ? after : null);
 }
 
 export function beginNativeMainObservation(): NativeMainObservationTicket {
@@ -110,47 +157,93 @@ export function beginNativeMainObservation(): NativeMainObservationTicket {
 /** End retention now. Pending observations captured before this call can no longer retain. */
 export function invalidateRetainedNativeMainLogin(reason: NativeMainRetentionInvalidation): void {
   generation += 1;
-  retained = undefined;
+  drop();
   lastInvalidation = reason;
+}
+
+/** Hold the file's inode on POSIX so its number cannot be reused while retained. */
+function holdFile(path: string, identity: FileIdentity): number | undefined | null {
+  if (process.platform === "win32") return undefined;
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW | fsConstants.O_NONBLOCK);
+    const held = fstatSync(fd, { bigint: true });
+    if (held.isFile() && sameFileIdentity({ dev: held.dev, ino: held.ino }, identity)) return fd;
+  } catch { /* the file moved; nothing to hold */ }
+  closeQuietly(fd);
+  return null;
 }
 
 /**
  * Record a complete login. Refused for a stale ticket (an invalidation happened while the
- * observation or refresh was in flight) or an unknown file identity, which cannot be vouched for.
+ * observation or refresh was in flight) or an unknown or moved file identity.
  */
 export function retainNativeMainLogin(
   ticket: NativeMainObservationTicket,
   owner: NativeMainLoginOwner,
   identity: FileIdentity | null,
   credential: unknown,
+  options: RetainNativeMainLoginOptions,
 ): boolean {
   if (ticket.generation !== generation) return false;
   if (!identity) {
-    retained = undefined;
+    drop();
     return false;
   }
+  const current = retained;
+  if (current && current.owner.codexHome === owner.codexHome && current.owner.path === owner.path
+    && sameFileIdentity(current.identity, identity) && current.fingerprint === options.fingerprint) {
+    current.mutationEpoch = codexCredentialMutationEpoch();
+    current.credential = credential;
+    return true;
+  }
+  drop();
+  const fd = holdFile(owner.path, identity);
+  if (fd === null) return false;
   retained = {
     owner: { codexHome: owner.codexHome, path: owner.path },
     identity,
+    fingerprint: options.fingerprint,
+    configuredRefreshMode: options.configuredRefreshMode(),
+    fd,
     mutationEpoch: codexCredentialMutationEpoch(),
     credential,
   };
   return true;
 }
 
+function heldFileStillLinked(fd: number | undefined): boolean {
+  if (fd === undefined) return true;
+  try {
+    return fstatSync(fd, { bigint: true }).nlink > 0n;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * The retained login for an incomplete observation of the same owner's same file, or undefined.
- * Any mismatch is itself authoritative and ends retention.
+ * Any mismatch is itself authoritative and ends retention. `configuredRefreshMode` is read only
+ * when a retained login exists.
  */
-export function retainedNativeMainLogin<T>(owner: NativeMainLoginOwner, identity: FileIdentity | null): T | undefined {
+export function retainedNativeMainLogin<T>(
+  owner: NativeMainLoginOwner,
+  identity: FileIdentity | null,
+  configuredRefreshMode: () => string,
+): T | undefined {
   const entry = retained;
   if (!entry) return undefined;
   if (entry.owner.codexHome !== owner.codexHome || entry.owner.path !== owner.path) {
     invalidateRetainedNativeMainLogin("ownership-loss");
     return undefined;
   }
-  if (entry.mutationEpoch !== codexCredentialMutationEpoch() || !identity || !sameFileIdentity(identity, entry.identity)) {
+  if (entry.mutationEpoch !== codexCredentialMutationEpoch() || !identity
+    || !sameFileIdentity(identity, entry.identity) || !heldFileStillLinked(entry.fd)) {
     invalidateRetainedNativeMainLogin("account-replacement");
+    return undefined;
+  }
+  if (configuredRefreshMode() !== entry.configuredRefreshMode) {
+    invalidateRetainedNativeMainLogin("refresh-mode-change");
     return undefined;
   }
   return entry.credential as T;
@@ -176,7 +269,7 @@ export function lastNativeMainRetentionInvalidationForTests(): NativeMainRetenti
 }
 
 export function resetNativeMainRetentionForTests(): void {
-  retained = undefined;
+  drop();
   generation += 1;
   lastRefreshMode = undefined;
   lastInvalidation = undefined;

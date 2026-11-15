@@ -67,10 +67,12 @@ export function setNativeMainRefreshResolutionForTests(value: NativeMainRefreshR
   resolutionForTests = value;
 }
 
-function configuredMode(config: Pick<OcxConfig, "nativeMainRefresh"> | null | undefined): NativeMainRefreshMode | "auto" {
+/** The operator's configured refresh owner, before runtime resolution. */
+export function configuredNativeMainRefreshMode(config: Pick<OcxConfig, "nativeMainRefresh"> | null | undefined): NativeMainRefreshMode | "auto" {
   const value = config?.nativeMainRefresh;
   return value === "codex" || value === "opencodex" ? value : "auto";
 }
+const configuredMode = configuredNativeMainRefreshMode;
 
 export async function resolveNativeMainRefreshMode(
   config: Pick<OcxConfig, "nativeMainRefresh"> | null | undefined,

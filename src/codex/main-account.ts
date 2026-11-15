@@ -48,6 +48,7 @@ import { isNativeMainTrafficBlocked } from "./native-profile-startup";
 import { loadConfig } from "../config";
 import {
   requestCodexAuthStatus,
+  configuredNativeMainRefreshMode,
   resolveNativeMainRefreshMode,
   type CodexAuthStatus,
 } from "./native-main-refresh-mode";
@@ -252,14 +253,20 @@ function readMainAuthJsonCredential(options: MainAuthJsonReadOptions = {}): Main
     const credential: MainAuthJsonCredential = {
       path,
       rawSha256: sha256(raw),
-      identity: statIdentity(path),
+      // The identity the bytes were read from; null (fail closed) when it changed mid-read.
+      identity: observation.identity,
       root,
       tokens,
       ...(accessToken ? { accessToken } : {}),
       ...(refreshToken ? { refreshToken } : {}),
       chatgptAccountId: extractAccountId(idToken, accessToken) ?? nonEmptyString(tokens.account_id) ?? "",
     };
-    if (ticket) retainNativeMainLogin(ticket, owner, credential.identity, credential);
+    if (ticket) {
+      retainNativeMainLogin(ticket, owner, credential.identity, credential, {
+        fingerprint: credential.rawSha256,
+        configuredRefreshMode: configuredRefreshOwner,
+      });
+    }
     return credential;
   }
   const invalidation = invalidationForObservation(observation);
@@ -267,18 +274,23 @@ function readMainAuthJsonCredential(options: MainAuthJsonReadOptions = {}): Main
     invalidateRetainedNativeMainLogin(invalidation);
     return null;
   }
-  if (!options.serveRetained) return null;
+  if (observation.kind !== "incomplete" || !options.serveRetained) return null;
   if (isNativeMainTrafficBlocked()) {
     invalidateRetainedNativeMainLogin("ownership-loss");
     return null;
   }
-  const retained = retainedNativeMainLogin<MainAuthJsonCredential>(owner, statIdentity(path));
+  const retained = retainedNativeMainLogin<MainAuthJsonCredential>(owner, observation.identity, configuredRefreshOwner);
   if (!retained) return null;
   if (credentialRefreshGrantRejected(retained)) {
     invalidateRetainedNativeMainLogin("revocation");
     return null;
   }
   return { ...retained, retained: true };
+}
+
+/** Read only when a new login is retained or a retained one is about to be served. */
+function configuredRefreshOwner(): string {
+  return configuredNativeMainRefreshMode(loadConfig());
 }
 
 function mainAccessTokenFresh(accessToken: string | undefined, now: number, skewMs: number): boolean {
@@ -307,7 +319,10 @@ export interface MainAccountCredentialStatus {
 
 /** One owned physical observation; no credential material escapes this view. */
 export function getMainAccountCredentialStatus(now = Date.now()): MainAccountCredentialStatus {
-  const current = readMainAuthJsonCredential({ serveRetained: true });
+  let current = readMainAuthJsonCredential({ serveRetained: true });
+  // A retained login is usable only while its bearer is fresh: an expired one goes to the refresh
+  // owner, which cannot refresh a file mid-rewrite, so it must not be selected (#7345).
+  if (current?.retained && !mainAccessTokenFresh(current.accessToken, now, MAIN_TOKEN_REFRESH_SKEW_MS)) current = null;
   const owned = !current && codexOwnedMainCredential?.home === resolveCodexHomeDir() ? codexOwnedMainCredential : null;
   const refreshGrantRejected = credentialRefreshGrantRejected(current);
   const hasRefreshGrant = !!current?.refreshToken && !refreshGrantRejected;

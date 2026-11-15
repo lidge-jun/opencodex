@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -24,7 +24,10 @@ import {
   type NativeMainRefreshResolution,
 } from "../../src/codex/native-main-refresh-mode";
 import { setCodexAccountPaused } from "../../src/codex/account-pause";
-import { clearAccountNeedsReauth, markAccountNeedsReauth } from "../../src/codex/account-runtime-state";
+import { clearAccountNeedsReauth, markAccountNeedsReauth, markMainRefreshGrantRejected } from "../../src/codex/account-runtime-state";
+import { retainNativeMainOwner } from "../../src/codex/native-main-owner";
+import { resolveNativeProfileContext } from "../../src/codex/native-profile-store";
+import { loadConfig, saveConfig } from "../../src/config";
 import { advanceCodexCredentialMutationEpoch } from "../../src/codex/credential-mutation-epoch";
 import { fakeChatGptJwt } from "../helpers/agent-task-recovery";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -80,6 +83,11 @@ function login(account: string, options: { expired?: boolean; refresh?: string }
 /** In-place rewrite, the way Codex writes: same inode, new bytes. */
 function writeInPlace(text: string): void {
   writeFileSync(authPath, text, { flag: "w" });
+}
+
+function fileIdentity(path: string) {
+  const stat = statSync(path, { bigint: true });
+  return { dev: stat.dev, ino: stat.ino };
 }
 
 async function served(): Promise<string | null> {
@@ -239,15 +247,84 @@ describe("native-main login retention (#7345)", () => {
   });
 
   test("a stale observation ticket cannot retain after ownership loss", () => {
+    writeInPlace(login("acct-a").raw);
     const owner = { codexHome: home, path: authPath };
+    const identity = fileIdentity(authPath);
+    const options = { fingerprint: "a", configuredRefreshMode: () => "auto" };
     const ticket = beginNativeMainObservation();
     invalidateRetainedNativeMainLogin("ownership-loss");
-    expect(retainNativeMainLogin(ticket, owner, { dev: 1n, ino: 2n }, { token: "a" })).toBe(false);
-    expect(retainedNativeMainLogin(owner, { dev: 1n, ino: 2n })).toBeUndefined();
-    expect(retainNativeMainLogin(beginNativeMainObservation(), owner, { dev: 1n, ino: 2n }, { token: "a" })).toBe(true);
-    expect(retainedNativeMainLogin(owner, { dev: 1n, ino: 2n })).toEqual({ token: "a" });
-    expect(retainedNativeMainLogin({ codexHome: join(root, "other"), path: authPath }, { dev: 1n, ino: 2n })).toBeUndefined();
+    expect(retainNativeMainLogin(ticket, owner, identity, { token: "a" }, options)).toBe(false);
+    expect(retainedNativeMainLogin(owner, identity, () => "auto")).toBeUndefined();
+    expect(retainNativeMainLogin(beginNativeMainObservation(), owner, identity, { token: "a" }, options)).toBe(true);
+    expect(retainedNativeMainLogin(owner, identity, () => "auto")).toEqual({ token: "a" });
+    expect(retainedNativeMainLogin({ codexHome: join(root, "other"), path: authPath }, identity, () => "auto")).toBeUndefined();
     expect(lastNativeMainRetentionInvalidationForTests()).toBe("ownership-loss");
+  });
+
+  test.skipIf(process.platform === "win32")("a reused inode number cannot revive a deleted login", () => {
+    // Simulates ext4/XFS reuse: the path later reports the retained dev/ino, but the retained
+    // file itself is gone. The held descriptor proves it is no longer linked.
+    writeInPlace(login("acct-a").raw);
+    const owner = { codexHome: home, path: authPath };
+    const identity = fileIdentity(authPath);
+    expect(retainNativeMainLogin(beginNativeMainObservation(), owner, identity, { token: "a" },
+      { fingerprint: "a", configuredRefreshMode: () => "auto" })).toBe(true);
+    rmSync(authPath);
+    writeInPlace("");
+    expect(fileIdentity(authPath)).not.toEqual(identity);
+    expect(retainedNativeMainLogin(owner, identity, () => "auto")).toBeUndefined();
+    expect(lastNativeMainRetentionInvalidationForTests()).toBe("account-replacement");
+  });
+
+  test("changing the configured refresh owner ends retention without a resolution", async () => {
+    const a = login("acct-a");
+    writeInPlace(a.raw);
+    expect(await served()).toBe(a.access);
+    writeInPlace("");
+    expect(await served()).toBe(a.access);
+    const config = loadConfig();
+    saveConfig({ ...config, nativeMainRefresh: config.nativeMainRefresh === "codex" ? "opencodex" : "codex" });
+    expect(getMainAccountCredentialStatus().usable).toBe(false);
+    expect(lastNativeMainRetentionInvalidationForTests()).toBe("refresh-mode-change");
+  });
+
+  test("a rejected refresh grant ends retention", async () => {
+    const a = login("acct-a");
+    writeInPlace(a.raw);
+    expect(await served()).toBe(a.access);
+    writeInPlace("");
+    markMainRefreshGrantRejected("unrelated-grant-key");
+    expect(await served()).toBeNull();
+    expect(lastNativeMainRetentionInvalidationForTests()).toBe("revocation");
+  });
+
+  test("releasing the held native-main owner lock ends retention", async () => {
+    const owner = retainNativeMainOwner(resolveNativeProfileContext({ codexHome: home }), { retryMs: 10 });
+    let released = false;
+    try {
+      for (let attempt = 0; attempt < 200 && owner.snapshot().status !== "held"; attempt += 1) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      expect(owner.snapshot().status).toBe("held");
+      const a = login("acct-a");
+      writeInPlace(a.raw);
+      expect(await served()).toBe(a.access);
+      writeInPlace("");
+      expect(await served()).toBe(a.access);
+      await owner.release();
+      released = true;
+      expect(lastNativeMainRetentionInvalidationForTests()).toBe("ownership-loss");
+      expect(await served()).toBeNull();
+    } finally {
+      if (!released) await owner.release();
+    }
+  });
+
+  test("an expired retained login is not reported usable during a rewrite", () => {
+    writeInPlace(login("acct-a", { expired: true, refresh: "grant-a" }).raw);
+    expect(getMainAccountCredentialStatus().usable).toBe(true);
+    writeInPlace("");
+    expect(getMainAccountCredentialStatus().usable).toBe(false);
   });
 
   test("an expired retained token follows the selected refresh owner", async () => {
