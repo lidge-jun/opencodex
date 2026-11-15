@@ -306,6 +306,22 @@ test.skipIf(process.platform !== "win32")("the Windows census is found where its
 }, SPAWN_BUDGET_MS * 2);
 
 
+test.skipIf(process.platform !== "win32")("a Child state beside the census keeps ocx-child ahead of the served install (#8359)", async () => {
+  const f = windowsServedHome();
+  recordServingRuntime({ command: [process.execPath, f.entry], version: "2.99.0", servedAt: "2026-11-15T00:00:00.000Z" }, f.ocxHome);
+  mkdirSync(join(f.ocxHome, "child"), { recursive: true });
+  writeFileSync(join(f.ocxHome, "child", "state.json"), "{}");
+  const ocxChild = join(f.home, ".local", "bin", "ocx-child.exe");
+  mkdirSync(dirname(ocxChild), { recursive: true });
+  copyFileSync(process.execPath, ocxChild);
+  const elsewhere = join(f.home, "git-bash-home");
+  mkdirSync(elsewhere, { recursive: true });
+  // HOME points elsewhere, so only the census directory (the profile's .opencodex) holds the Child state.
+  const result = await f.run(windowsOcxArgv(["-e", 'console.log("child")']), { USERPROFILE: f.home, HOME: elsewhere, OPENCODEX_HOME: undefined });
+  expect({ code: result.code, stderr: result.stderr, stdout: result.stdout.trim() }).toEqual({ code: 0, stderr: "", stdout: "child" });
+}, SPAWN_BUDGET_MS);
+
+
 test.skipIf(process.platform !== "win32")("a Windows census the reader cannot trust falls through to the Desktop copy (#8359)", async () => {
   const f = windowsServedHome();
   const desktopRun = ["-e", 'console.log("desktop")'];

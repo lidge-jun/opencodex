@@ -169,11 +169,12 @@ $r=if($env:HOME){$env:HOME}elseif($u){$u}else{"."};$h=if($env:OPENCODEX_HOME){$e
  * while its entry exists. A census over 64 KiB, a first record without a command, a relative or
  * quoted path, a third element or any read error leaves the fixed order. The census sits where its
  * writer's `getConfigDir()` puts it: a trimmed `OPENCODEX_HOME` (a leading ~ is the profile), else
- * `%USERPROFILE%\.opencodex`, which is what `homedir()` answers on Windows. Discovery and runtime
+ * `%USERPROFILE%\.opencodex`, which is what `homedir()` answers on Windows; a Child state in that
+ * directory or the legacy `$h` one keeps ocx-child first. Discovery and runtime
  * inspection read it; the gated update and pinned-sync scripts sit at the command-line budget and
  * keep the fixed order.
  */
-const SERVED_CANDIDATE = String.raw`$s=$null;$a=@();try{$o=([string]$env:OPENCODEX_HOME).Trim();if($o -match '^~([\\/]|$)'){$o=$u+$o.Substring(1)};$j=$(if($o){$o}else{"$u\.opencodex"})+'\serving-runtimes.json';if((Get-Item -LiteralPath $j -Force -EA 1).Length -le 65536){$e=@(@(([IO.File]::ReadAllText($j)|ConvertFrom-Json).runtimes)[0].command);if($e.Count -in 1,2 -and !($e|?{$_ -isnot [string] -or $_ -match '["\x00-\x1f]' -or ![IO.Path]::IsPathRooted($_)})-and($e.Count -eq 1 -or [IO.File]::Exists($e[1]))){$s=$e[0];$a=@($e|select -Skip 1);$c=if([IO.File]::Exists("$h\child\state.json")){$k+$s+$f}else{@($s)+$f+$k}}}}catch{$null=$_}
+const SERVED_CANDIDATE = String.raw`$s=$null;$a=@();try{$o=([string]$env:OPENCODEX_HOME).Trim();if($o -match '^~([\\/]|$)'){$o=$u+$o.Substring(1)};$g=$(if($o){$o}else{"$u\.opencodex"});$j="$g\serving-runtimes.json";if((Get-Item -LiteralPath $j -Force -EA 1).Length -le 65536){$e=@(@(([IO.File]::ReadAllText($j)|ConvertFrom-Json).runtimes)[0].command);if($e.Count -in 1,2 -and !($e|?{$_ -isnot [string] -or $_ -match '["\x00-\x1f]' -or ![IO.Path]::IsPathRooted($_)})-and($e.Count -eq 1 -or [IO.File]::Exists($e[1]))){$s=$e[0];$a=@($e|select -Skip 1);$c=if([IO.File]::Exists("$g\child\state.json")-or[IO.File]::Exists("$h\child\state.json")){$k+$s+$f}else{@($s)+$f+$k}}}}catch{$null=$_}
 function A($x){if($x -eq $s){$a}}
 function P($x){(@(A $x)|%{(Quote-Native $_)+' '}) -join ''}
 `;
