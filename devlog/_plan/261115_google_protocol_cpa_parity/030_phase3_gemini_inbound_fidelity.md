@@ -107,3 +107,63 @@ model with `contextWindow`/`maxOutputTokens`.
 Update `structure/data-planes/gemini-inbound.md` (signatures, countTokens, token limits, `$alt`) and
 `structure/data-planes/inbound-compat.md` (Chat `extra_content` carrier).
 
+
+
+## Stale check (cycle 4, at baa5dfbadb), revised after audit `.tmp/research/audit-030.md` (FAIL)
+
+3a replaces the earlier 3a diff. Carrier rule everywhere: a client value is normalized with
+`providerMetadataFromResponsesFunctionCall` and re-serialized with `responsesExtraContentFromProviderMetadata`,
+so a malformed or oversized `extra_content` becomes absent and never fails the request (`responses/schema.ts:111`
+is strict and `parser.ts:232` throws on a miss).
+
+- Inbound, bridge lane (all Chat→AI Studio/Vertex traffic and all Gemini-inbound traffic):
+  `src/chat/inbound.ts:224` `toolCallsToItems` spreads the normalized `extra_content` onto each pushed
+  `function_call` item; `parser.ts:532` already turns it into `providerMetadata`.
+- Inbound, Antigravity direct lane: `chat-ir.ts` `pushToolCall` gets the same normalized metadata (keeps the
+  chat-ir/bridge parity contract); one `extra_content` fixture joins `tests/responses/protocol-chat-ir-parity.test.ts`.
+- Outbound, `src/chat/outbound.ts` (primary: `directEncoders` defaults off, `src/protocols/settings.ts:104`):
+  stream `emitToolCall` gains an `extra` argument fed from `output_item.done` `item.extra_content` (normalized);
+  buffered `function_call` branch (~:970) copies it; `collectChatCompletion` (~:1220-1294) keeps it per tool index
+  so SSE-folded bodies (also the direct lane's non-stream `collectChatCompletionResponse`) carry it.
+- Outbound, direct lane: `adapter-events.ts` passes `providerMetadata` from `tool_call_start` on `toolDone`;
+  `encoders/chat.ts` `emitToolCall` writes it. Emission is self-gating: only `google.ts` sets provider metadata.
+- The direct lane does remember signatures server-side (`client-encoder-delivery.ts:167` folds through
+  `buildResponseJSON`, `response-json.ts:376`), so the combined two-turn test calls
+  `resetThoughtSignatureReplayForTests()` between turns; the echo-only test uses a fresh call id.
+- Native Chat isolation: `src/server/chat-native-eligibility.ts:45-49` forwards message objects verbatim; a body
+  whose assistant `tool_calls[]` carry `extra_content` declines native Chat with the existing
+  `opaque-state-stripped` reason, so Google opaque state never reaches another vendor (the bridge drops it,
+  no non-Google adapter serializes provider metadata).
+
+3b details: capture `pendingThoughtSignature` before the thought-text and signature-only early returns, scoped
+per content (reset each turn); `StreamTool` gains `signature` from `delta.tool_calls[].extra_content`; buffered
+reads `call.extra_content`; parallel calls sign only the call that carried it.
+
+3c details: read with `readJsonRequestBody` + `createTranslatorBudget` under the inbound limit; resolve the route with
+`findOllamaRoute` + `routeAllowedByScope` (404 unknown or out of scope); parse with the bridge Chat path
+`chatConversationToIr` (cheaper than `chatToResponsesBody` → `parseRequest`), then
+`estimateInputTokens({ ...parsed, modelId })` with the route's provider; 400 for codec/Chat errors, 413 for size;
+wired only for `countTokens` (embed stays 501); `supportedGenerationMethods` gains `countTokens`.
+
+3d precedence (never guessed): `inputTokenLimit` = configured max input / context window
+(`src/codex/catalog/model-hints.ts`) ?? `customModels[].contextWindow` ?? `getModelMetadata(provider, model)?.contextWindow`;
+`outputTokenLimit` = `customModels[].maxOutputTokens` ?? `getModelMetadata(...)?.maxTokens`; absent when unknown.
+
+3e: also `405: "UNIMPLEMENTED"`.
+
+Tests (first, failing on baa5dfbadb): `tests/responses/chat-google-thought-signature.test.ts` covers both lanes ×
+stream/buffered surfacing, echo-only signing, store reset between turns, malformed and oversized echoes answering
+200 without a signature, and no `extra_content` on non-Google routes; a native-Chat decline test; the Gemini inbound
+two-turn signature test, countTokens and token-limit tests in a sibling of `server-gemini-inbound.test.ts`.
+
+
+## As built (cycle 4)
+
+Implemented as the revised stale-check section describes, after two audit rounds (FAIL, then NEAR-PASS).
+`normalizedClientExtraContent` (in `src/responses/provider-opaque-metadata.ts`) is the one normalizer every site
+uses. The structure doc for the Chat carrier is `structure/data-planes/chat-reasoning-details.md` (moved there
+because `inbound-compat.md` is at its 600-line budget), which now also owns `src/server/chat-native-eligibility.ts`.
+Red evidence: `.tmp/t030-red-all.log` (13 of 26 new or extended cases fail with the source changes set aside).
+Residual: a client that does not echo `extra_content` still relies on the server-side store, which the bridge and the
+direct lane both write; the Antigravity chat-ir inbound path is covered by the parity fixture.
+

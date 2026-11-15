@@ -8,6 +8,8 @@
  * GenerateContentResponse objects. A streamed tool call is accumulated and emitted as one
  * complete functionCall part, because Gemini clients expect whole calls.
  */
+import { normalizedClientExtraContent } from "../../responses/provider-opaque-metadata";
+
 type Obj = Record<string, unknown>;
 
 export const MAX_GEMINI_TOOL_CALLS = 1_024;
@@ -200,15 +202,22 @@ function chatMessages(contents: unknown, system: unknown): Obj[] {
     if (role === "model") {
       const texts: string[] = [];
       const calls: Obj[] = [];
+      // A thought signature on a thought part or a signature-only part belongs to the next call of
+      // this turn (Gemini 3 signs the first call); it never crosses into another turn.
+      let pendingSignature: string | undefined;
       parts.forEach((part, pi) => {
+        const rawSignature = field(part, "thoughtSignature");
+        const partSignature = typeof rawSignature === "string" && rawSignature ? rawSignature : undefined;
         if (typeof part.text === "string") {
           // Replayed thought summaries are not conversation content.
           if (part.thought !== true) texts.push(part.text);
+          else if (partSignature) pendingSignature = partSignature;
           return;
         }
         const rawCall = field(part, "functionCall");
         if (rawCall === undefined) {
           if (field(part, "inlineData") !== undefined || field(part, "functionResponse") !== undefined) fail("Unsupported model part");
+          if (partSignature) pendingSignature = partSignature;
           return;
         }
         if (++callCount > MAX_GEMINI_TOOL_CALLS) fail("Too many function calls");
@@ -220,7 +229,11 @@ function chatMessages(contents: unknown, system: unknown): Obj[] {
         const pending: PendingCall = { id, name, matched: false };
         byId.set(id, pending);
         byName.set(name, [...(byName.get(name) ?? []), pending]);
-        calls.push({ id, type: "function", function: { name, arguments: JSON.stringify(args) } });
+        const signature = partSignature ?? pendingSignature;
+        pendingSignature = undefined;
+        // The Chat carrier for Gemini's opaque state; normalized so a malformed value is dropped.
+        const extra = normalizedClientExtraContent(signature === undefined ? undefined : { google: { thought_signature: signature } });
+        calls.push({ id, type: "function", function: { name, arguments: JSON.stringify(args) }, ...(extra ?? {}) });
       });
       const body = texts.join("");
       if (body || calls.length) messages.push({ role: "assistant", content: body || null, ...(calls.length ? { tool_calls: calls } : {}) });
@@ -318,13 +331,21 @@ function candidate(parts: Obj[], reason?: string): Obj {
   return { content: { role: "model", parts }, ...(reason ? { finishReason: reason } : {}), index: 0 };
 }
 
-function functionCallPart(id: unknown, name: string, argumentsJson: unknown, index: number): Obj {
+/** The thought signature a Chat tool call carries, if any (normalized). */
+function chatCallSignature(extra: unknown): string | undefined {
+  return normalizedClientExtraContent(extra)?.extra_content.google.thought_signature;
+}
+
+function functionCallPart(id: unknown, name: string, argumentsJson: unknown, index: number, signature?: string): Obj {
   let args: unknown = {};
   if (typeof argumentsJson === "string") {
     if (argumentsJson.trim()) { try { args = JSON.parse(argumentsJson); } catch { throw new Error("Invalid Chat tool arguments"); } }
   } else if (argumentsJson !== undefined && argumentsJson !== null) args = argumentsJson;
   if (!isObj(args)) throw new Error("Invalid Chat tool arguments");
-  return { functionCall: { id: typeof id === "string" && id ? id : `call_gemini_response_${index}`, name, args } };
+  return {
+    functionCall: { id: typeof id === "string" && id ? id : `call_gemini_response_${index}`, name, args },
+    ...(signature ? { thoughtSignature: signature } : {}),
+  };
 }
 
 /** A complete Chat completion as a GenerateContentResponse. Throws when the completion did not finish cleanly. */
@@ -347,7 +368,7 @@ export function chatToGeminiResponse(model: string, input: unknown): Obj {
     message.tool_calls.forEach((raw, i) => {
       const call = object(raw, "Chat tool call");
       const fn = object(call.function, "Chat tool function");
-      parts.push(functionCallPart(call.id, text(fn.name, "tool name", true), fn.arguments, i));
+      parts.push(functionCallPart(call.id, text(fn.name, "tool name", true), fn.arguments, i, chatCallSignature(call.extra_content)));
     });
   }
   if (!parts.length) parts.push({ text: "" });
@@ -355,7 +376,7 @@ export function chatToGeminiResponse(model: string, input: unknown): Obj {
   return { candidates: [candidate(parts, reason)], ...(usage ? { usageMetadata: usage } : {}), modelVersion: model };
 }
 
-type StreamTool = { id?: string; name: string; arguments: string };
+type StreamTool = { id?: string; name: string; arguments: string; signature?: string };
 export interface GeminiStreamState {
   model: string;
   finishReason?: unknown;
@@ -404,6 +425,8 @@ export function consumeGeminiChatChunk(state: GeminiStreamState, input: unknown)
         if (current.id && current.id !== id) throw new Error("Conflicting tool id");
         current.id = id;
       }
+      const signature = chatCallSignature(call.extra_content);
+      if (signature) current.signature = signature;
       if (call.function !== undefined) {
         const fn = object(call.function, "tool function");
         if (fn.name !== undefined) current.name += text(fn.name, "tool name");
@@ -416,7 +439,7 @@ export function consumeGeminiChatChunk(state: GeminiStreamState, input: unknown)
     state.finishReason = choice.finish_reason;
     if (state.tools.size) {
       const parts = [...state.tools.entries()].sort((a, b) => a[0] - b[0])
-        .map(([index, tool]) => functionCallPart(tool.id, text(tool.name, "tool name", true), tool.arguments, index));
+        .map(([index, tool]) => functionCallPart(tool.id, text(tool.name, "tool name", true), tool.arguments, index, tool.signature));
       records.push(streamChunk(state, parts));
       state.toolsEmitted = true;
     }

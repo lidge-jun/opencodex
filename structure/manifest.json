@@ -622,10 +622,11 @@
     {
       "path": "data-planes/chat-reasoning-details.md",
       "tier": 3,
-      "title": "Anthropic Thinking Signatures on the Chat Wire",
-      "scope": "The reasoning_details carrier that lets Chat Completions clients round-trip signed Anthropic thinking across tool steps (#7429).",
+      "title": "Provider Signatures on the Chat Wire",
+      "scope": "The reasoning_details carrier that lets Chat Completions clients round-trip signed Anthropic thinking across tool steps (#7429), and the extra_content carrier for Gemini thought signatures on tool calls, including the native Chat decline for non-Google destinations.",
       "documents": [
-        "src/chat/reasoning-details.ts"
+        "src/chat/reasoning-details.ts",
+        "src/server/chat-native-eligibility.ts"
       ]
     },
     {

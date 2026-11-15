@@ -12,7 +12,7 @@ import { withCallerSessionIdentity } from "../caller-session-identity";
 import { captureAdmissionPolicy } from "../capture-admission-policy";
 import { isDraining } from "../lifecycle";
 import { geminiRouteAllowHeader, geminiRouteAllows, parseGeminiNativePath } from "../gemini-native-paths";
-import { geminiError, handleGeminiGeneration, handleGeminiModel, handleGeminiModels, toGeminiRefusal } from "../gemini-inbound";
+import { geminiError, handleGeminiCountTokens, handleGeminiGeneration, handleGeminiModel, handleGeminiModels, toGeminiRefusal } from "../gemini-inbound";
 import { handleGeminiInteraction, handleGeminiInteractionResource } from "../gemini-interactions-inbound";
 import { nextRequestLogId, type RequestLogContext } from "../request-log";
 import { disableResponsesRequestTimeout } from "../responses";
@@ -63,8 +63,9 @@ export async function dispatchGeminiRoute(original: Request, url: URL, deps: Gem
     if (!isAllowedRequestOrigin(req, policy)) return withCors(geminiError(403, "cross-origin data-plane request blocked"), original, policy);
     const response = route.kind === "models" ? handleGeminiModels(config, req, admission)
       : route.kind === "model" ? handleGeminiModel(config, req, admission, route.model)
-        : route.kind === "method" ? geminiError(501, `${route.method} is not supported`)
-          : geminiError(405, "method not allowed");
+        : route.kind === "method" && route.method === "countTokens" ? await handleGeminiCountTokens(config, req, admission, route.model)
+          : route.kind === "method" ? geminiError(501, `${route.method} is not supported`)
+            : geminiError(405, "method not allowed");
     return withCors(response, original, policy);
   }
   if (isDraining()) return withCors(toGeminiRefusal(deps.drainingResponse(req, policy)), original, policy);
@@ -81,7 +82,8 @@ export async function dispatchGeminiRoute(original: Request, url: URL, deps: Gem
     ...admissionFields(admission),
   };
   const sessionReq = withCallerSessionIdentity(req, admission);
-  const sse = url.searchParams.get("alt") === "sse";
+  // Discovery-style clients spell the parameter `$alt`.
+  const sse = (url.searchParams.get("alt") ?? url.searchParams.get("$alt")) === "sse";
   // Expose an id only when the handler or a logged refusal owns the history row.
   let ownsRequestLog = false;
   const advisorAdmissionPolicy = captureAdmissionPolicy(config, admission);

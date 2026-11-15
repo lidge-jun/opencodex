@@ -97,7 +97,7 @@ describe("Gemini-compatible inbound routes", () => {
     await withServer(async base => {
       const list = await fetch(new URL("/v1beta/models", base), { headers: googKey });
       expect(list.status).toBe(200);
-      expect(await list.json()).toEqual({ models: [{ name: "models/fx/m1", displayName: "fx/m1", supportedGenerationMethods: ["generateContent", "streamGenerateContent"] }] });
+      expect(await list.json()).toEqual({ models: [{ name: "models/fx/m1", displayName: "fx/m1", supportedGenerationMethods: ["generateContent", "streamGenerateContent", "countTokens"] }] });
       for (const path of ["/v1beta/models/fx/m1", "/v1beta/models/models/fx/m1", "/v1beta/models/fx%2Fm1"]) {
         const one = await fetch(new URL(path, base), { headers: googKey });
         expect(one.status).toBe(200);
@@ -279,7 +279,8 @@ describe("Gemini-compatible inbound routes", () => {
 
   test("unsupported methods answer 501 and wrong HTTP methods 405", async () => {
     await withServer(async base => {
-      for (const method of ["countTokens", "embedContent", "batchEmbedContents"]) {
+      // countTokens is served (tests/server/server-gemini-inbound-fidelity.test.ts); the embed methods are not.
+      for (const method of ["embedContent", "batchEmbedContents"]) {
         const res = await post(base, `/v1beta/models/fx/m1:${method}`, {});
         expect(res.status).toBe(501);
         expect(await res.json()).toMatchObject({ error: { code: 501, status: "UNIMPLEMENTED" } });

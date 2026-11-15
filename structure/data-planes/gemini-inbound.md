@@ -25,8 +25,8 @@ wins), and drops it from the URL and headers, so admission sees the usual proxy 
 never logged or forwarded. The idle-timeout override receives the original request. Generation takes
 the Chat admission (drain, key, origin, caller session, active turn, workflow, raised body via
 `isGeminiGenerationPath` in `inbound-body-admission.ts`); the list and lookup routes take the
-model-discovery admission `/v1/models` uses. `countTokens`, `embedContent` and
-`batchEmbedContents` answer 501 `UNIMPLEMENTED` after admission.
+model-discovery admission `/v1/models` uses. `embedContent` and `batchEmbedContents` answer 501
+`UNIMPLEMENTED` after admission; `countTokens` is described below.
 
 The catalog is the same eligible route set as Ollama's `/api/tags` (`src/server/ollama-route-policy.ts`
 and the key's model scope): `models/<provider>/<model>` with `generateContent` and
@@ -57,6 +57,22 @@ The shared bridge checks the source HTTP headers and parsed body for ACP unatten
 It passes the result through Chat to Responses preflight as an internal boolean. The native
 projection and request header allowlist keep those labels out of outbound requests. An ACP policy
 refusal returns the native 403 before any `agy` version probe or ACP process start.
+
+## Signatures, token counts and model limits
+
+`src/protocols/codecs/gemini.ts` carries Gemini 3 thought signatures both ways: a `thoughtSignature` on a
+`functionCall` part, or on a thought or signature-only part before it in the same turn, becomes the call's
+Chat `extra_content.google.thought_signature` (see [Chat signatures](chat-reasoning-details.md#gemini-thought-signatures-on-the-chat-wire)),
+and a Chat tool call's `extra_content` comes back as the part's `thoughtSignature`, buffered and streamed. A
+non-string value is dropped. `:countTokens` is served with model-discovery admission and the key's model scope
+(unknown or out-of-scope model 404): the body (`contents`/`systemInstruction`/`tools`, or
+`generateContentRequest`) is read under the inbound limit, projected with the same codec onto Chat, decoded with
+`chatConversationToIr` and estimated with `estimateInputTokens`; the answer is `{ totalTokens }` and nothing goes
+upstream. A body the Chat projection refuses (for example `fileData`, or no messages) is a 400. Model resources
+add `inputTokenLimit` (configured max input or context window, then generated model metadata) and
+`outputTokenLimit` (generated metadata) only when known, and list `countTokens` among
+`supportedGenerationMethods`. `$alt=sse` is accepted as `alt=sse`; `STATUS_NAMES` follows the google.rpc
+HTTP mapping, including 405 as `UNIMPLEMENTED`. Coverage: `tests/server/server-gemini-inbound-fidelity.test.ts`.
 
 ## Interactions API
 
