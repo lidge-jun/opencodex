@@ -1279,6 +1279,7 @@
     "native-main-claim-cache.test.ts": "codex-integration",
     "native-main-claim.test.ts": "codex-integration",
     "native-main-owner-lifetime.test.ts": "codex-integration",
+    "native-main-credentials-retention.test.ts": "codex-integration",
     "native-model-toggle.test.ts": "codex-integration",
     "new-model-policy.test.ts": "providers",
     "new-model-policy-runtime.test.ts": "providers",
