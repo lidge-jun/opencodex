@@ -7,8 +7,9 @@ import { useT } from "../src/i18n/shared";
 import { en } from "../src/i18n/en";
 import { OAUTH_LOGIN_POLL_INTERVAL_MS, useAddProviderOAuth } from "../src/components/use-add-provider-oauth";
 import { BROWSER_LOGIN_POLL_ATTEMPTS } from "../src/oauth-login-budget";
-import { configureApiTargets } from "../src/api";
+import { captureApiTarget, configureApiTargets, type ApiTargetCapture } from "../src/api";
 import { standaloneApiTargets } from "../src/api-targets";
+import AddProviderModal from "../src/components/AddProviderModal";
 
 /**
  * #8618: a pasted code whose login already ended (poll budget spent, cancelled) must say the
@@ -154,6 +155,55 @@ test("a browser login whose poll budget ran out reports an ended login and posts
   expect(ui).toEqual({ manualCodeMsg: en["prov.loginExpired"], manualCodeOk: false });
   expect(codePosts).toEqual([]);
 });
+
+async function renderCatalog(owner: { active: (provider: string) => ApiTargetCapture | undefined; ended: (provider: string) => ApiTargetCapture | undefined }) {
+  configureApiTargets(standaloneApiTargets(""));
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root ??= createRoot(win.document.body as unknown as HTMLElement);
+    root.render(
+      <LanguageProvider>
+        <AddProviderModal apiBase="" existingNames={[]} initialTier="accounts" onClose={() => {}} onAdded={() => {}}
+          accountRows={[{ id: "devin", label: "Devin", kind: "oauth" }]} accountStatus={{}} accountBusy="devin"
+          accountLoginHint={{ provider: "devin", url: AUTH_URL }} accountLoginCaptures={owner} />
+      </LanguageProvider>,
+    );
+  });
+  await settle();
+}
+
+async function pasteInCatalog(code: string) {
+  const input = win.document.querySelector(".login-hint-paste-input") as unknown as HTMLInputElement | null;
+  expect(input).toBeTruthy();
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!;
+    setter.call(input, code);
+    input!.dispatchEvent(new win.Event("input", { bubbles: true }) as unknown as Event);
+  });
+  const submit = Array.from(win.document.querySelectorAll(".login-hint-paste-row button"))
+    .find(button => button.textContent === en["prov.pasteSubmit"]) as unknown as HTMLButtonElement | undefined;
+  expect(submit).toBeTruthy();
+  await act(async () => { submit!.dispatchEvent(new win.MouseEvent("click", { bubbles: true }) as unknown as Event); });
+  await settle();
+}
+
+// The Accounts rows start logins through the providers page, so the page owns their capture.
+test("an Accounts-row login takes its pasted code through the page login that owns it", async () => {
+  const owner = captureApiTarget("shared", "");
+  await renderCatalog({ active: () => owner, ended: () => undefined });
+  await pasteInCatalog("pasted-code");
+  expect(codePosts).toEqual([{ provider: "devin", input: "pasted-code" }]);
+  expect(win.document.body.textContent).toContain(en["prov.pasteOk"]);
+});
+
+test("an Accounts-row login that ended reports an ended login and posts nothing", async () => {
+  const owner = captureApiTarget("shared", "");
+  await renderCatalog({ active: () => undefined, ended: () => owner });
+  await pasteInCatalog("pasted-code");
+  expect(codePosts).toEqual([]);
+  expect(win.document.body.textContent).toContain(en["prov.loginExpired"]);
+});
+
 
 test("a cancelled login reports an ended login and posts nothing", async () => {
   holdStatus = true;

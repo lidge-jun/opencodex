@@ -11,6 +11,17 @@ import { useRenderTargetCapture } from "../use-render-target-capture";
 
 export const OAUTH_LOGIN_POLL_INTERVAL_MS = 2_000;
 
+/**
+ * Who owns a login's target capture, for a pasted code. The add-provider form owns the logins it
+ * starts; an Accounts row in the same modal is started by the providers page, which owns that one.
+ */
+export type OAuthLoginCaptureOwner = {
+  /** The capture of the provider's login in flight, if one is running. */
+  active: (providerId: string) => ApiTargetCapture | undefined;
+  /** The capture of the provider's last login that ended on its own (budget, cancel, failure, done). */
+  ended: (providerId: string) => ApiTargetCapture | undefined;
+};
+
 type OAuthLoginSetters = {
   setOauthBusy: (v: boolean) => void;
   setOauthMsg: (v: string) => void;
@@ -242,6 +253,7 @@ export function useAddProviderOAuth({
       setManualCodeOk: (v: boolean) => void;
       setManualCodeMsg: (v: string) => void;
     },
+    owner?: OAuthLoginCaptureOwner,
   ) => {
     const input = manualCode.trim();
     if (!input || manualCodeBusy) return;
@@ -252,9 +264,9 @@ export function useAddProviderOAuth({
     // flow is gone, so refuse instead of posting to the live target — a stale code must never
     // reach another server. A login that ended on the still-current target says so (#8618);
     // anything else is a target change.
-    const capture = activeCapturesRef.current.get(providerId);
+    const capture = owner ? owner.active(providerId) : activeCapturesRef.current.get(providerId);
     if (!capture) {
-      const ended = endedCapturesRef.current.get(providerId);
+      const ended = owner ? owner.ended(providerId) : endedCapturesRef.current.get(providerId);
       setManualCodeBusy(false);
       setManualCodeOk(false);
       setManualCodeMsg(ended && isApiTargetCaptureCurrent(ended) ? t("prov.loginExpired") : t("prov.targetChanged"));

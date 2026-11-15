@@ -66,6 +66,9 @@ export function useProvidersOAuth({
   useLayoutEffect(() => { targetKeyRef.current = targetKey ?? apiBase; }, [apiBase, targetKey]);
   const activeLoginGenerationsRef = useRef(new Map<string, number>());
   const activeLoginCapturesRef = useRef(new Map<string, ApiTargetCapture>());
+  // The capture of each provider's last login that ended on this target, so a code pasted into
+  // the add-provider modal's Accounts row can say the login ended (#8618).
+  const endedLoginCapturesRef = useRef(new Map<string, ApiTargetCapture>());
   useEffect(() => {
     // The old target's busy state and device URL must not survive under the new label.
     // Cancel each active login on the target it actually started against; the map is the
@@ -73,6 +76,7 @@ export function useProvidersOAuth({
     const active = [...activeLoginCapturesRef.current];
     activeLoginGenerationsRef.current.clear();
     activeLoginCapturesRef.current.clear();
+    endedLoginCapturesRef.current.clear();
     setBusy(null);
     setLoginInfo(null);
     setStatus("");
@@ -125,6 +129,7 @@ export function useProvidersOAuth({
       for (const [provider, generation] of active) {
         const capture = activeLoginCapturesRef.current.get(provider);
         activeLoginCapturesRef.current.delete(provider);
+        if (capture) endedLoginCapturesRef.current.set(provider, capture);
         if (oauthLoginGenerationRef.current!.get(provider) === generation) bumpLoginGeneration(provider);
         if (clearUi) {
           setBusy(current => current === provider ? null : current);
@@ -148,6 +153,7 @@ export function useProvidersOAuth({
     const capture = activeLoginCapturesRef.current.get(provider);
     activeLoginGenerationsRef.current.delete(provider);
     activeLoginCapturesRef.current.delete(provider);
+    if (capture) endedLoginCapturesRef.current.set(provider, capture);
     // Clear the local UI at the click, even if the captured target has already changed.
     setBusy(current => current === provider ? null : current);
     setLoginInfo(current => current?.provider === provider ? null : current);
@@ -161,6 +167,7 @@ export function useProvidersOAuth({
   const loginOAuth = async (provider: string, addAccount = false, accountId?: string) => {
     const capture = renderCapture;
     activeLoginCapturesRef.current.set(provider, capture);
+    endedLoginCapturesRef.current.delete(provider);
     const generation = bumpLoginGeneration(provider);
     const targetId = targetKey ?? apiBase;
     // The key alone cannot tell A from A again after A-B-A; the capture generation does.
@@ -308,6 +315,7 @@ export function useProvidersOAuth({
       if (activeLoginGenerationsRef.current.get(provider) === generation) {
         activeLoginGenerationsRef.current.delete(provider);
         activeLoginCapturesRef.current.delete(provider);
+        endedLoginCapturesRef.current.set(provider, capture);
       }
       if (targetCurrent() && oauthLoginGenerationRef.current!.get(provider) === generation) setBusy(current => current === provider ? null : current);
     }
@@ -373,5 +381,6 @@ export function useProvidersOAuth({
   return {
     cancelLoginOAuth, loginOAuth, logoutOAuth, onNativeLoginSettled,
     loginCapture: (provider: string) => activeLoginCapturesRef.current.get(provider),
+    loginEndedCapture: (provider: string) => endedLoginCapturesRef.current.get(provider),
   };
 }

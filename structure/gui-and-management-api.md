@@ -347,13 +347,7 @@ later status hints for the same login, and `LoginHint` shows a warning only for 
 code gets a single "Copy code & open" action that copies before calling `window.open`, so both run
 inside the click's user activation; only http(s) URLs get it. Once a device code appears, the
 provider pollers stretch their budget to `gui/src/oauth-login-budget.ts` (longer than the longest
-provider grant) instead of cancelling a still-valid grant at the browser-flow budget.
-Browser flows on the providers page and in the add-provider form share `BROWSER_LOGIN_POLL_ATTEMPTS`
-from the same file (five minutes at the 2-second interval). In the add-provider form, a code pasted
-after its login ended on the still-current target (budget spent, cancelled, failed or finished) is
-refused locally with `prov.loginExpired`; `prov.targetChanged` stays for a target that moved and for
-a server `409 target_changed`. Neither path posts the code anywhere (#8618). Coverage:
-`gui/tests/add-provider-oauth-ended-login.test.tsx`.
+provider grant) instead of cancelling a still-valid grant at the browser-flow budget. Browser flows on the providers page and in the add-provider form share `BROWSER_LOGIN_POLL_ATTEMPTS` from the same file (five minutes at the 2-second interval). In the add-provider form, a code pasted after its login ended on the still-current target (budget spent, cancelled, failed or finished) is refused locally with `prov.loginExpired`; `prov.targetChanged` stays for a target that moved and for a server `409 target_changed`. Neither path posts the code anywhere (#8618). Coverage: `gui/tests/add-provider-oauth-ended-login.test.tsx`. An Accounts row in the same modal starts its login through the providers page (`gui/src/pages/use-providers-oauth.ts`), so a code pasted there goes through that page's capture (`accountLoginCaptures`, its active and ended captures) instead of the form's own, which never held one: before, every such paste answered `prov.targetChanged`.
 
 > Decision record: [OAuth login continuations](decisions/ADR-5877-oauth-login-continuations.md); headless `mode: "code"` logins: [OAuth code-display login](providers/oauth-code-display-login.md).
 
