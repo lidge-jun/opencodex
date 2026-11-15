@@ -15,6 +15,10 @@ through to one another.
 
 ## Precedence
 
+Before these model rules, an explicit `policy/<id>` or configured routing-profile alias
+evaluates the policy and routes its selected concrete candidate. An unknown reserved
+policy selector fails instead of falling through to provider or default routing.
+
 1. **Exact Codex account selector** — if the id is
    `<selector>/<native-openai-model>` and the selector is configured in `codexAccountNamespaces`,
    the request uses only the mapped stored account and sends the bare native model upstream.
@@ -57,8 +61,8 @@ through to one another.
    | `claude-`, `claude-sonnet-`, `claude-opus-`, `claude-haiku-` | `anthropic` |
    | `llama-`, `mixtral-`, `gemma-` | `groq` |
 
-   This matcher is name-based and, unlike the `defaultModel` / `models[]` scans, currently does not
-   filter a matching provider whose `disabled` flag is true.
+   This matcher is name-based; like the `defaultModel` / `models[]` scans, it skips a matching
+   provider whose `disabled` flag is true.
 
 7. **A provider's `models[]`** — if no prefix rule won and an active provider lists the id in its
    `models[]`, that provider is used. Rule 4 already sends a bare `gpt-*` id to the canonical enabled

@@ -21,15 +21,13 @@ CLI installation inspection reason codes, including Windows deferral, follow the
 
 ## Plaintext V2 agent messages
 
-`src/responses/plaintext-v2-agent-messages.ts` owns the experimental, configuration-only
-`plaintextV2AgentMessages` request compiler and response restoration. The default is unset;
-only explicit true on Responses ingress to the final canonical ChatGPT forward route activates it.
+`src/responses/plaintext-v2-agent-messages.ts` owns the experimental request compiler and response restoration. `src/types/multi-agent.ts` owns the shared surface-mode type used by configuration and re-exported by catalog parsing. The legacy `plaintextV2AgentMessages` field defaults to unset; explicit true or the explicitly selected `v2-plaintext` mode enables it through `isPlaintextV2AgentMessagesEnabled` in `src/config/multi-agent-surface.ts`. Selecting or leaving that mode preserves the independent legacy field. Only Responses ingress to the final canonical ChatGPT forward route activates rewriting. Catalog pins affect new sessions, but the compiler predicate is evaluated for every eligible request, including later requests from existing V2 sessions. Disabling this setting does not delete retained history, provider, response-cache or diagnostic copies.
 A default collaboration catalog is required: top-level `tools`, or, when that field is absent,
 the first input item's developer `additional_tools` catalog used by Responses Lite. Explicit
 top-level catalogs take precedence; user-role and later historical catalogs do not opt in.
 The compiler preserves caller objects,
 aliases the namespace and three message functions, and removes only their true encryption marker.
-Declaration/reference collisions refuse the whole rewrite without changing the request.
+Declaration/reference collisions refuse the whole rewrite without changing the request. The request-level mode decision is captured once for combo children and internal retries; a disabled setting at normalization prevents compilation while keeping the captured replay scope strict.
 
 `src/adapters/openai-responses.ts` returns request-local alias capabilities. The Responses core
 refreshes them after every request rebuild and restores JSON, SSE and WebSocket identities after
@@ -50,6 +48,7 @@ response/debug state. This is application-level plaintext over HTTPS, depends on
 upstream behavior, and does not decrypt existing tasks or replace authenticated recovery.
 
 Restored calls and selectors carry an explicit collaboration namespace and unqualified child name.
+Restoration treats a null namespace as absent, rejects non-string namespace types, and restores the native namespace/name pair before HTTP/WS delivery and continuation publication.
 Codex treats qualified names literally and defaults absent namespaces to functions. Only child
 declarations inherit their restored namespace container; the compiler never invents an empty
 encryption marker when the upstream omitted it or returned a nonempty marker.
@@ -60,9 +59,9 @@ Pool credentials used by subagent routes can be
 [linked to Orca-managed homes](codex-home.md#orca-source-owned-account-import). The account-store
 resolver enforces source identity and expiry before those credentials reach routing.
 
-## Multi-agent surface mode (3-state)
+## Multi-agent surface mode
 
-See [surface selection and capacity](subagent-capacity.md#multi-agent-surface-mode-3-state) for the mode, global flag and hybrid configuration contract.
+See [surface selection and capacity](subagent-capacity.md#multi-agent-surface-selection) for the mode, global flag and hybrid configuration contract.
 
 ### Concurrent child limit
 

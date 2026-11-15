@@ -96,7 +96,7 @@ export { OAUTH_REFRESH_LOCK_WAIT_MS, peekAuthStore, peekOAuthRefreshIntent } fro
 import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
 
 import { REFRESH_SKEW_MS } from "./refresh-policy";
-import { newerClaudeCredentialForInstance, captureAnthropicCredentialOwnerForInstance } from "./anthropic-continuity";
+import { newerClaudeCredentialForInstance, captureAnthropicCredentialOwnerForInstance, claudeCredentialGenerationCurrent } from "./anthropic-continuity";
 import { anthropicSubscriptionLabel } from "../providers/anthropic-subscription";
 import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
 import { mergeAnthropicIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
@@ -201,8 +201,8 @@ export interface LoginOpts {
   /** When set, persist into this account slot and require matching identity. */
   reauthAccountId?: string;
   /**
-   * ChatGPT only: `device` selects the deviceauth grant instead of the
-   * localhost:1455 callback flow, for hosts with no browser or no loopback
+   * ChatGPT and xAI: `device` selects the device grant instead of the
+   * localhost callback flow, for hosts with no browser or no loopback
    * listener (#3366). Ignored by every other provider.
    */
   flow?: ChatGPTLoginFlow;
@@ -238,6 +238,8 @@ export interface OAuthProviderDef {
   defaultRefreshPolicy?: RefreshPolicy;
   /** Provider-hosted page that DISPLAYS the code; its presence enables `codeMode`. */
   codeRedirectUri?: string;
+  /** Has an RFC 8628 device grant besides its browser login; `flow: "device"` selects it. */
+  deviceLogin?: true;
 }
 
 function oauthConfig(id: string): OcxProviderConfig {
@@ -294,7 +296,8 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
   },
   xai: {
     // forceLogin skips the local grok-cli import so a SECOND account can be chosen in the browser.
-    login: (ctrl, opts) => loginXai(ctrl, { importLocal: opts?.forceLogin ? "off" : "fallback" }),
+    login: (ctrl, opts) => loginXai(ctrl, { importLocal: opts?.forceLogin ? "off" : "fallback", device: opts?.flow === "device" }),
+    deviceLogin: true,
     refresh: refreshXaiToken,
     providerConfig: oauthConfig("xai"),
     defaultModel: oauthDefaultModel("xai"),
@@ -414,6 +417,11 @@ export function isPublicOAuthProvider(name: string): boolean {
 /** Providers that can log in from a displayed code, with no inbound port and no browser here. */
 export function supportsCodeLoginMode(name: string): boolean {
   return OAUTH_PROVIDERS[name]?.codeRedirectUri !== undefined;
+}
+
+/** Providers that can log in with a device grant: a URL and a short code, approved in any browser. */
+export function supportsDeviceLoginMode(name: string): boolean {
+  return OAUTH_PROVIDERS[name]?.deviceLogin === true;
 }
 
 function isRefreshPolicy(value: unknown): value is RefreshPolicy {
@@ -865,18 +873,28 @@ export async function refreshAnthropicAccountWithLock(
     const generation = credentialGeneration(stored);
     let pendingIntent = readOAuthRefreshIntent(provider, accountId);
     const observed = await newerClaudeCredentialForInstance(provider, stored, now(), deps.signal, deps.resolveIdentity);
+    // A write that depends on the CLI credential re-reads it: the non-adopting checks below run
+    // now, and adoption re-reads again inside the serialized writer (afterPrePersistRead), so a CLI
+    // rotation while the writer was queued is still caught. The read is async and never kills the
+    // Keychain child (#8161); the writer's predicate only consumes its result.
+    let diskVerified = observed.kind === "absent" || observed.kind === "adopt"
+      ? undefined : await claudeCredentialGenerationCurrent(observed.diskGeneration, now);
     const assertOwner = (store: AuthStore, checkDisk = true) => {
       if (observed.kind !== "absent" && deps.signal?.aborted) throw new OAuthTokenRefreshStaleError();
-      if (!owns(store, checkDisk && observed.kind !== "absent" ? observed.diskGeneration : undefined)) {
+      if (!owns(store, checkDisk ? diskVerified : undefined)) {
         if (store[provider]?.accounts.find(a => a.id === accountId)?.paused) throw new OAuthAccountPausedError();
         throw new OAuthTokenRefreshStaleError();
       }
     };
     assertOwner({ [provider]: getAccountSet(provider)! }, observed.kind !== "adopt");
     if (observed.kind === "adopt") {
+      const diskGeneration = observed.diskGeneration;
       const outcome = await mergeAccountCredential(provider, accountId, observed.credential, {
         expectedGeneration: generation,
-        afterPrePersistRead: deps.afterPrePersistRead,
+        afterPrePersistRead: async () => {
+          await deps.afterPrePersistRead?.();
+          diskVerified = await claudeCredentialGenerationCurrent(diskGeneration, now);
+        },
         assertOwnership: assertOwner,
       });
       // A superseding write did not adopt our candidate. Its pending intent remains owned by it.

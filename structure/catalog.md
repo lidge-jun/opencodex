@@ -463,18 +463,18 @@ real turn depends on it (`src/codex/warmup.ts`).
 
 ## Routed tool discovery and hosted search
 
-All routed catalog rows advertise `supports_search_tool: true` together with
-`tool_mode: "code_mode_only"` — the pair is load-bearing. The field selects Codex's deferred
-tool-discovery surface; it does not describe the hosted web-search sidecar. Under code mode,
-deferred MCP tools remain callable through exec's `tools` global / `ALL_TOOLS` without a
-`tool_search` round-trip (upstream codex-rs code_mode suite; live canary 2026-08-13: routed
-kimi/k3 executed `tools.mcp__node_repl__js`, devlog `260813_tool_catalog_deferral/010+020`).
-Stamping `false` instead forces every MCP declaration into `exec.description` — a measured 2.7x
-turn-1 payload regression (96,699 → 258,929 chars). For Cursor this can also make the unified
-`exec` exceed the 120,000-byte serialized `McpTools` ceiling; the budget then drops `exec` and
-its companion `wait` (#1830). Hosted search remains independent: non-Cursor routes keep
-`web_search_tool_type: "text_and_image"`, while Cursor omits it because runTurn bypasses the
-search sidecar.
+All routed rows pair `supports_search_tool: true` with `tool_mode: "code_mode_only"`; together they enable Codex deferred tool discovery, independently of hosted web search. In code mode, deferred MCP tools are callable through exec's
+`tools` global / `ALL_TOOLS` without `tool_search` (upstream codex-rs suite; live canary 2026-08-13: routed kimi/k3
+executed `tools.mcp__node_repl__js`, devlog `260813_tool_catalog_deferral/010+020`). Stamping `false` forces MCP
+declarations into `exec.description`, a measured 2.7x turn-1 payload increase (96,699 → 258,929 chars); for Cursor
+this can exceed the 120,000-byte `McpTools` ceiling and drop `exec` and `wait` (#1830). Hosted search is separate:
+non-Cursor routes keep `web_search_tool_type: "text_and_image"`; Cursor omits it because runTurn bypasses the sidecar.
+
+Canonical Codex identities or turn metadata activate a diagnostic, never a refusal: at `EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD` (64) eager MCP definitions
+in top-level `tools`, client-sent Responses Lite `additional_tools`, or rendered Code Mode `exec` sections, `src/server/responses/codex-tool-catalog.ts` logs
+only the count and threshold and forwards the request unchanged. Codex resends a window's catalog at the head of each request, so position cannot mark
+history; the count runs after `expandPreviousResponseInput` and excludes only the proxy-restored prefix. Deferred definitions and compaction `input` are
+excluded. Dedup is one session, or one request without a session identity, in a bounded LRU. Test: `tests/responses/codex-eager-tool-catalog.test.ts`.
 
 > Decision record: [ADR-0022](decisions/ADR-0022-routed-tool-discovery-and-hosted-search.md)
 

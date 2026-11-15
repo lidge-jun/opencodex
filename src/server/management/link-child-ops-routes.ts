@@ -4,7 +4,7 @@ import { createCatalogRevisionMonitor, type CatalogRevisionMonitor } from "../..
 import { observeChild } from "../../link/child-observe";
 import { patchChildObservation, readChildObservations, updateChildObservations } from "../../link/child-observations";
 import { sharedChildOpsEngine, type ChildOpsEngine, type SubmitRefusal, type SubmitResult } from "../../link/child-ops-engine";
-import { CHILD_OPS, type ChildOp, type ChildOpsEnv, type ChildRestart } from "../../link/child-ops-types";
+import { CHILD_OPS, CHILD_OPS_MAX_LINK_IDS, type ChildOp, type ChildOpsEnv, type ChildRestart } from "../../link/child-ops-types";
 import { requireRemotePlatform } from "../../link/remote-platform";
 import { inspectRemoteChildRuntime } from "../../link/remote-plant";
 import { attachLinkChildOps, projectLinkStatus, type LinkStatusDto } from "../../link/status-projection";
@@ -17,7 +17,7 @@ import { auth, fail, isRecord, knownHostsFile, readStoreFor, runnerFor, type Lin
 
 const LINK_ID = /^lnk_[0-9a-f]{16}$/;
 const JOB_ID = /^ljob_[0-9a-f]{16}$/;
-const MAX_LINK_IDS = 64;
+const MAX_LINK_IDS = CHILD_OPS_MAX_LINK_IDS;
 const JOB_PATH = /^\/api\/link\/children\/jobs\/([^/]+)$/;
 const NO_STORE = { "cache-control": "no-store" };
 
@@ -73,7 +73,7 @@ export function childOpsEnvFor(ctx: ManagementContext, state: LinkRouteState, id
     // wp2's observe deps, unchanged: the peer and activity listeners are optional on LinkRouteListener.
     observe: record => observeChild(record, { runner, knownHostsFile: hosts, homeVersion,
       peer: linkId => state.listener.peerObservation?.(linkId) ?? { observed: null, refused: null },
-      platformOf: link => requireRemotePlatform(runner, link.alias, hosts),
+      platformOf: link => requireRemotePlatform(runner, link.alias, link.explicitRoute ?? null, hosts),
       inspect: inspectRemoteChildRuntime, now: () => new Date(now()) }),
     readObservation: linkId => readChildObservations().children[linkId] ?? null,
     // Never throws into a runner: a cache write failure is logged by error name (ChildOpsEnv contract).
@@ -88,17 +88,19 @@ export function childOpsEnvFor(ctx: ManagementContext, state: LinkRouteState, id
   };
 }
 
-export interface ParsedOperation { op: ChildOp; linkIds: string[] | "all"; restart: ChildRestart }
+export interface ParsedOperation { op: ChildOp; linkIds: string[] | "all"; restart: ChildRestart; ignoreActivity?: true }
 
 /**
  * Exactly {op, linkIds, restart?}. A2 / M8: any request that carries a restart (sync with restart, or restart-codex,
  * whose restart defaults to app-server) must name its links; "all" is accepted only when restart is "none".
  * Scope (audit r2 R6): this rule binds this API route and the ocx link verbs only; ocx sync --restart-children (040)
  * and the automatic restart policy (050) select links themselves and apply the same run-time activity check.
- * No body can set trigger: the route always submits manual operations.
+ * No body can set trigger: the route always submits manual operations. ignoreActivity (D8, the operator's explicit
+ * restart past activity) is accepted only as true, on a sync or restart-codex request with a restart and exactly one
+ * link id; an update's own restart keeps the activity gate, so the flag is refused there.
  */
 export function parseOperation(body: unknown): ParsedOperation | null {
-  if (!isRecord(body) || Object.keys(body).some(key => key !== "op" && key !== "linkIds" && key !== "restart")) return null;
+  if (!isRecord(body) || Object.keys(body).some(key => key !== "op" && key !== "linkIds" && key !== "restart" && key !== "ignoreActivity")) return null;
   if (!(CHILD_OPS as readonly unknown[]).includes(body.op)) return null;
   const op = body.op as ChildOp;
   if (body.restart !== undefined && body.restart !== "app-server" && body.restart !== "codex") return null;
@@ -111,7 +113,9 @@ export function parseOperation(body: unknown): ParsedOperation | null {
   else if (Array.isArray(ids) && ids.length >= 1 && ids.length <= MAX_LINK_IDS
     && ids.every(id => typeof id === "string" && LINK_ID.test(id)) && new Set(ids).size === ids.length) linkIds = [...ids as string[]];
   else return null;
-  return { op, linkIds, restart };
+  if (body.ignoreActivity !== undefined && (body.ignoreActivity !== true || (op !== "sync" && op !== "restart-codex") || restart === "none"
+    || linkIds === "all" || linkIds.length !== 1)) return null;
+  return { op, linkIds, restart, ...(body.ignoreActivity === true ? { ignoreActivity: true as const } : {}) };
 }
 
 function refusal(code: SubmitRefusal): Response {
@@ -141,7 +145,35 @@ export function attachLinkChildOpsForState(dto: LinkStatusDto, state: LinkRouteS
     catalogPull: linkId => state.listener.catalogPull?.(linkId) ?? null,
     // The shared engine: a job the wp5 scheduler started shows on a status read that never submitted one.
     activeJob: linkId => childOpsEngineFor(state).activeJob(linkId),
+    // D8: present only on a row whose link WebSocket activity holds keep it in flight.
+    holds: linkId => state.listener.linkHolds?.(linkId) ?? null,
   });
+}
+
+/**
+ * D8: the operator's clear of one link's WebSocket activity holds, including an unknown state left by a crash. Never
+ * automatic. Exactly {linkId}; the link must exist in links.json. The holds file is written before anything is forgotten.
+ */
+async function clearActivityHolds(ctx: ManagementContext, state: LinkRouteState): Promise<Response> {
+  if (ctx.config.runtimeRole === "client") return fail("runtime_role_client", "A Child runtime does not operate other Children.", 409);
+  const body = await readManagementJsonBodyOr(ctx.req, null);
+  if (!isRecord(body) || Object.keys(body).some(key => key !== "linkId") || typeof body.linkId !== "string" || !LINK_ID.test(body.linkId)) {
+    return fail("invalid_body", "The body must be exactly {linkId}.", 400);
+  }
+  const linkId = body.linkId;
+  let store: LinkStore;
+  try { store = readStoreFor(ctx); } catch { return fail("link_unavailable", "The link store could not be read.", 503); }
+  if (!store.links.some(link => link.id === linkId)) return fail("link_not_found", "The link was not found.", 404);
+  // A listener without the hook cannot clear anything; answering "nothing held" would hide a wiring gap.
+  if (!state.listener.clearLinkHolds) return fail("activity_holds_unavailable", "This Home cannot clear link activity holds.", 503);
+  const result = state.listener.clearLinkHolds(linkId);
+  if (!result.ok) {
+    return result.reason === "links-unreadable"
+      ? fail("link_unavailable", "The links could not be listed, so every link stays held; try again once links.json is readable.", 503)
+      : fail("activity_holds_write_failed", "The activity holds could not be saved; nothing was cleared.", 503);
+  }
+  if (result.cleared) console.log(`[link] activity holds cleared by the operator linkId=${linkId} holds=${result.cleared.holds.length} unknown=${result.cleared.unknown ?? "none"}`);
+  return Response.json({ linkId, cleared: result.cleared }, { headers: NO_STORE });
 }
 
 export async function handleLinkChildOpsRoutes(ctx: ManagementContext, state: LinkRouteState): Promise<Response | null> {
@@ -168,6 +200,10 @@ export async function handleLinkChildOpsRoutes(ctx: ManagementContext, state: Li
     if (!patch) return fail("invalid_body", "Send one or more of catalogFanout, childCodexRestart, updates, idleAfterMs with valid values.", 400);
     try { return Response.json({ policy: updateChildPolicy(patch), warning: null }, { headers: NO_STORE }); }
     catch { return fail("policy_write_failed", "The Child policy could not be saved.", 503); }
+  }
+  // D8: the operator clears one link's WebSocket activity holds.
+  if (url.pathname === "/api/link/children/activity/clear" && req.method === "POST") {
+    return clearActivityHolds(ctx, state);
   }
   const jobPath = req.method === "GET" ? JOB_PATH.exec(path) : null;
   if (jobPath) {

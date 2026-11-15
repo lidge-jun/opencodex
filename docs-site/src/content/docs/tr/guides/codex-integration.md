@@ -217,6 +217,8 @@ olduğunda `supports_websockets = true` bildirir; geri döngüde Codex'in yerle�
 sağlayıcısı önce WebSocket'i deneyebilir ve devre dışı bırakılmış bir proxy
 `426` döndürür, böylece Codex HTTP/SSE'ye geri döner.
 
+`v2-plaintext` modu veya `plaintextV2AgentMessages` bayrağı etkin olduğunda yerel yeniden oynatma, aynı kabul edilmiş OpenCodex çağıranını ve isteğin kendi boş olmayan `thread-id` değerini gerektirir. Üst iş parçacığı, geri döngü adresi, yukarı akış kimlik bilgisi veya yer tutucu anahtar bu kimlik değildir. Kabul edilmiş çağıran kimliği olmayan istemcilerin ve kendi iş parçacığı olmayan isteklerin `previous_response_id` olmadan tüm konuşmayı yeniden göndermesi gerekir. Varsayılan geri döngü Codex ve DSH yapılandırmaları bu çağıran kimliğini oluşturmaz. Ayarlardan biri etkinken saklanan durum, ayar devre dışı bırakıldıktan sonra da bağlı kalır. Varsayılan `v1` modunda bağlı olmayan durum, varsayılan geri döngü çağıranları dahil mevcut üst iş parçacığı kapsamındaki devam davranışını korur. Bu, doğrudan yukarı akış hizmetinin sahip olduğu Responses kimliklerinden ayrıdır.
+
 ## İş parçacığı kimliği ve geçmişi
 
 Varsayılan geri döngü formu yeni iş parçacıklarının Codex'in yerel `openai`

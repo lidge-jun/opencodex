@@ -1,4 +1,5 @@
 import { compareStrictSemver, parseStrictSemver } from "../lib/strict-semver";
+import { ROUTE_OVERWRITE_MIN_CHILD_VERSION } from "./remote-windows";
 
 /**
  * Home-side classification of a pinned Child sync (moved from src/cli/sync-fanout.ts so the Link engine can use it
@@ -20,6 +21,8 @@ const SELECTED_KIND = "ocx-fanout:selected-kind:";
 /** Operator guidance for a skipped pinned sync (moved from src/cli/sync-fanout.ts so the Link job runners can use it). */
 export function childSkipHint(reason: string | null, alias: string): string {
   if (reason === "child-ocx-lacks-expect-link") return `Update OpenCodex on ${alias} to >= 2.93.0 using the installer that owns its selected ocx. For Desktop on headless Windows, use Check for Updates in the signed-in Desktop tray.`;
+  if (reason === "child-ocx-lacks-overwrite") return `Update OpenCodex on ${alias} to >= ${ROUTE_OVERWRITE_MIN_CHILD_VERSION} to sync with --overwrite-conflict, or sync without it.`;
+  if (reason === "child-ephemeral-no-overwrite") return `${alias} runs the ephemeral ocx-child, which has no route intent to overwrite; sync without --overwrite-conflict.`;
   if (reason === "child-updating") return "Wait for the Child update to finish, then retry sync.";
   if (reason === "child-link-mismatch:pending_operation" || reason === "child-link-mismatch:disconnect_pending") return "Wait for the Child's link operation to finish, then check its link and retry sync.";
   if (reason === "child-link-mismatch:disconnected" || reason === "child-link-mismatch:other_link") return "Please re-link this Child to this Home, then retry sync.";
@@ -69,6 +72,7 @@ export function classifySyncResult(result: { code: number; stdout: string; stder
   const lines = stderr.split(/\r?\n/);
   const last = stderr.trimEnd().split(/\r?\n/).at(-1);
   if (code === 121) {
+    if (last === "ocx-fanout:child-ocx-lacks-overwrite" || last === "ocx-fanout:child-ephemeral-no-overwrite") return skipped(last.slice("ocx-fanout:".length));
     if (last === "ocx-fanout:child-ocx-lacks-expect-link") return skipped("child-ocx-lacks-expect-link");
     if (last === "ocx-fanout:child-ocx-version-unknown") return skipped("child-ocx-version-unknown");
     return failure("child-sync-failed");

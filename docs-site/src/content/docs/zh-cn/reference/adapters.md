@@ -148,6 +148,21 @@ token。
   JSON。上游不返回 token 数量，因此 usage 采用估算值。
 - 经 `fetchResponse` 负责有界重试和分类/脱敏后的错误；非流式 parser 会排空同一 event stream，
   供 web-search loop 使用。
+- 每次请求最多发送 48 个客户端工具、96 KB 的转换后工具 JSON，并把每个工具说明截断到 1,024 个字符
+  （`gpt-5.6-sol` 为 9,216 个）。通过 tool search 加载的工具和 Codex code-mode 执行工具
+  优先入选，被省略的工具会告知模型。在代理环境中设置 `OCX_KIRO_TOOL_BUDGET=off` 可发送完整的
+  客户端目录，设置 `OCX_KIRO_TOOL_DESCRIPTION_LIMIT=off` 可发送完整说明。两者都在请求转换时读取，
+  对所有 Kiro 模型生效，其他限制保持不变。关闭预算后限制本身消失，不再有需要排序或省略的对象：
+  声明的全部工具按声明顺序上线，省略提示也随之消失，声明数量超过 Kiro 上限的客户端会收到上游
+  `ValidationException`，而不是被裁剪的目录。请求大小也会随客户端目录增长。这些开关面向已实测
+  能接受更大请求的账户，并不能让过大的目录变得安全。
+- 移除 Kiro 校验器拒绝的 JSON Schema 关键字（`pattern`、`minLength`、`maximum`、
+  `additionalProperties` 等 29 个），但保留探针在对应模型上实测通过的关键字。
+  `claude-opus-4.5` 全部保留；`claude-opus-5.5` 与 `claude-sonnet-5.5` 只保留
+  `pattern`、`maximum`，其余仍然移除，
+  因为没有探针向这两个模型发送过其他关键字。包括其余 Claude id 在内的其他 Kiro 模型全部移除。
+  例外按模型和关键字划分，是因为这条 wire 在 reasoning effort 上已经区分 Claude 模型，而 Kiro
+  拒绝的关键字不只是丢掉提示，还会让整个请求失败。
 ### 完成与原生 stop reason
 
 Kiro 的 assistant 文本本身没有可靠的回合结束标记，但终止的 `metadataEvent` 可能带有原生 `stopReason`。
@@ -166,12 +181,36 @@ Kiro 的 assistant 文本本身没有可靠的回合结束标记，但终止的 
 
 ### Reasoning effort
 
-GPT-5.6 系列使用 `additionalModelRequestFields.reasoning.effort`，`claude-opus-5` 使用
+GPT-5.6 系列和 GPT-6 系列（`gpt-6-sol`、`gpt-6-luna`、`gpt-6.1-sol`、`gpt-6.1-terra`）使用
+`additionalModelRequestFields.reasoning.effort`，下列 Claude 模型使用
 `additionalModelRequestFields.output_config.effort`。`gpt-5.6-luna` 和 `gpt-5.6-terra`
 仅通过原生字段发送已验证的 `low`、`medium`、`high` 和 `max`。
 这两个模型的原生 `xhigh` 尚未验证，因此仍使用原有的有界 thinking 指令模拟。
-`gpt-5.6-sol` 和 `claude-opus-5` 保留现有原生档位（`low`、`medium`、`high`、`xhigh`、`max`）。
-其他 Kiro 模型使用模拟推理；提供 effort 选项并不代表原生支持。
+`gpt-5.6-sol` 和 GPT-6 系列通过同一个 `reasoning.effort` 字段保留原生
+`low`、`medium`、`high`、`xhigh`、`max`。
+
+Kiro 对 `claude-opus-5`、`claude-opus-5.5`、`claude-opus-4.8`、`claude-opus-4.7`、
+`claude-opus-4.6`、`claude-sonnet-5.5`、`claude-sonnet-5`、`claude-sonnet-4.6` 和
+`claude-haiku-5.5` 在 `low`、`medium`、`high`、`xhigh` 和 `max` 上接受
+`output_config.effort`。有一个例外：`claude-opus-4.6` 和 `claude-sonnet-4.6` 拒绝原生
+`xhigh`，因此该档位保留模拟 thinking 块。
+
+Kiro 没有 `minimal` 档位。除 `claude-opus-5` 和 `claude-opus-5.5` 外的上述九个模型在
+`minimal` 时保留模拟块，而不是让启用原生 effort 之前可用的请求失败。这两个 Opus 5 模型以及使用
+原生 effort 的 GPT 模型会在发送任何内容之前以 400 `invalid_request_error` 拒绝 `minimal`。
+
+各接口表达这次拒绝的方式不同。Responses 请求把标明模型和被拒绝 effort 的句子放进
+`error.message`。Messages 与 Chat Completions 路径在该位置放代理自己的固定文案
+`The provider rejected the request.`，因为这两条路径不会转述适配器的细节，而是用自有文案替换。
+只有 Responses 会标明模型和 effort。流式与非流式在所有接口上返回相同内容：拒绝发生在构建上游
+请求体时，因此没有打开流，也没有发出上游调用。
+
+调用方的 `ultra` 在解析时转换为 `max`。`pinnedReasoningEffort`、`modelPinnedReasoningEfforts`
+和 `modelPinnedEfforts` 固定值在解析后应用；对于使用原生 Kiro effort 的模型，适配器也会将固定的
+`ultra` 转为 `max`。对于模拟推理模型，该固定值会被丢弃，请求不带推理信号发送。
+
+`claude-haiku-4.5`、`claude-opus-4.5`、`claude-sonnet-4.5` 以及上面未列出的 Kiro
+模型在每个 effort 上都使用模拟推理；提供 effort 选项并不代表原生支持。
 
 ## `cursor`
 

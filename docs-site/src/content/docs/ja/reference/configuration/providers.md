@@ -106,6 +106,7 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | --- | --- | --- |
 | `adapter` | `string` | `openai-chat`、`openai-responses`、`anthropic`、`google`、`kiro`、`cursor`、`ollama-native`、`azure-openai` (または別名 `azure`) のいずれか。 |
 | `baseUrl` | `string` |アップストリーム API のベース URL。ほとんどの組み込み固定エンドポイントは不一致を無視します。衝突安全キー プリセットは、古い同じ名前のカスタム宛先を保持します。 |
+| `cacheAffinity?` | `"auto" \| "session" \| "turn" \| "off"` | 直前の成功ターンを処理したキーを優先します。キーが2件以上あるプールが対象で、OAuth/forwardは対象外です。既定値は `auto`。ローカル拒否では関連付けを保持し、上流の拒否では処理したプロバイダーとエントリーが一致する関連付けのみ解除します。[英語の完全な仕様](/reference/configuration/providers/#provider-entries-ocxproviderconfig)を参照してください。 |
 | `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, maxConcurrentRequests?, models?, keySelection?, keys? }` | 上流の使用量、請求、レート制限表示とは別の、クライアント側の送信開始間隔調整です。`maxConcurrentRequests` は実行中リクエスト数を制限する正の整数で、プロバイダー規則またはモデル規則だけに設定できます。プロバイダー制限は全モデルに適用され、`models` は上流の正確なモデル ID に一致し、遅延を増やすか同時実行数を減らします。キュー待機は応答ヘッダーのタイムアウトを消費しません。HTTP と明示的なアダプターの `fetchResponse`/`runTurn` 送信を対象にします。同時実行数の上限がある場合、標準の Responses WebSocket ターンは応答本文の完了・エラー・キャンセル時に枠を解放できるよう HTTP/SSE を使います。 Cursor を含む `runTurn` アダプターでは、上限は物理送信数ではなく進行中のターン数を数えます。同じターンの RunSSE と BidiAppend は重なり得ますが、別のターンは待機します。後続送信にも開始間隔は適用されます。 |
 | `requestPacing.keySelection?` | `"active"`, `"round-robin"` | 通常リクエストのキー選択です。既定の `active` は保存済みキーと既存の障害時切替を維持します。`round-robin` は保存済み選択を変えず、利用可能なプールのキーを順に割り当てます。トークンや料金ではなく割当回数を分散します。 |
 | `requestPacing.keys?` | `{ requestsPerMinute?, minIntervalMs?, maxConcurrentRequests? }` | キー参照ごとの共通 RPM・開始間隔・同時実行上限です。全モデルで共有し、プロバイダーとモデルの上限も同時に適用します。同一参照は枠を共有しますが、同じ上流プロジェクトの別参照は独立クォータを意味しません。TPM と日次上限は管理しません。 |
@@ -184,6 +185,8 @@ account を削除しても mapping は保持され、同じ id を再追加す�
 | `desktopExecutor?` | `DesktopExecutorConfig` |カーソルのみ: 外部コンピュータ使用および画面録画コマンド。 |
 | `unsafeAllowNativeLocalExec?` | `boolean` |カーソルのレガシー ブール値。新しいフィールドが設定されていない場合のみ、`nativeLocalExec: "on"` と同等です。 |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` |カーソルのローカル実行ポリシー。 `off` がデフォルトです。 `codex-sandbox` は現在、`off` と同様にフェールクローズされます。 |
+
+ネイティブ Responses では、ライフサイクルイベントだけを受信して正常 EOF で終了した場合にも同じオプトインが適用されます。自己完結したリクエストと置換回数の制限は変わりません。これらの制限外のリクエストは検査されず、ストリームが保留されることはありません。直接ストリームは、上流がまだ無応答でも 200 ミリ秒以内に元の応答ヘッダーを受け取ります。置換応答が独自のステータスとヘッダーで返るのは、そのヘッダーを返す前に置換応答が選択された場合だけです。直接ストリームではリセットまたは EOF がその 200 ミリ秒以内に起きる必要があり、置換応答のヘッダーは元の応答から 15 秒以内（ストールタイムアウトの方が短い場合はその時間内）に届く必要があります。JSON に収集する非ストリーミングリクエストとコンボのターゲットには 200 ミリ秒の枠がなく、応答の収集または選択までクライアントにヘッダーが返らないため、ヘッダーの選択を同じ時間まで待つことがあります。ヘッダーを返した後の置換可否は、ストリームがどう終了したかで決まります。読み取りエラーではリセット経路の既存動作をそのまま維持し、置換本文を元のヘッダーの後ろに公開します。ライフサイクルイベントだけを受信して正常 EOF で終了した場合は同じターンへの別の試行なので、より厳格です。置換応答はコミット済みのヘッダーとステータス、ステータステキスト、content-type メディアタイプ、`openai-model`、`x-codex-turn-state` で一致しなければなりません。変動するヘッダーとホップバイホップヘッダー(`date`、リクエスト id、`cf-ray`、`server-timing`、`x-ratelimit-*`、`openai-processing-ms`、`content-length`、`transfer-encoding`、`connection`、`keep-alive`)は一致不要です。クライアントはすでに元のヘッダーの値を持っており、実際の上流は試行ごとにこれらを変えるためです。不一致の場合は元のストリームとそのエラーを保持します。その後も検査中の直接ストリームにはヘッダーとともに SSE keepalive コメントが送られ、その後は 15 秒ごとに送られます。コンボのプリフライトは応答を選択するまでこれらのコメントを保留します。
 
 LM Studio instruction compatibility: `singleLeadingSystemMessage: true` overrides chronological Chat instruction placement by merging text-only system/developer messages into one leading system message. The LM Studio preset enables it by default; set it to `false` to disable merging.
 

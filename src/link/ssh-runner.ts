@@ -86,6 +86,13 @@ export interface SshRunner {
     stdin?: string | Uint8Array;
     timeoutMs?: number;
     maxOutputBytes?: number;
+    /**
+     * Opt-in confirmed termination. With a signal, a timeout and an abort share one cleanup:
+     * SIGTERM, SIGKILL after RUN_KILL_GRACE_MS, and the call settles once the exit is observed or
+     * RUN_KILL_GRACE_MS after the SIGKILL, with SshRunnerError.exitConfirmed saying which.
+     * An already aborted signal spawns nothing. Without a signal, behaviour is unchanged.
+     */
+    signal?: AbortSignal;
   }): Promise<SshRunResult>;
   spawnTunnel(argv: readonly string[], options?: SshTunnelOptions): SshChild;
 }
@@ -100,11 +107,27 @@ export interface SshTunnelOptions {
 }
 
 export class SshRunnerError extends Error {
-  constructor(readonly code: "spawn" | "timeout" | "output_limit" | "decode", message: string, options?: ErrorOptions) {
+  /** Set on a confirmed-termination run (see SshRunner.run's signal): was the process seen to exit? */
+  exitConfirmed?: boolean;
+
+  constructor(readonly code: "spawn" | "timeout" | "output_limit" | "decode" | "aborted", message: string, options?: ErrorOptions) {
     super(message, options);
     this.name = "SshRunnerError";
   }
 }
+
+/** SIGTERM to SIGKILL, and SIGKILL to giving up on observing the exit, for confirmed-termination runs. */
+export const RUN_KILL_GRACE_MS = 2_000;
+
+export interface SshRunnerClock {
+  setTimeout: (callback: () => void, ms: number) => unknown;
+  clearTimeout: (timer: unknown) => void;
+}
+
+const REAL_CLOCK: SshRunnerClock = {
+  setTimeout: (callback, ms) => setTimeout(callback, ms),
+  clearTimeout: timer => clearTimeout(timer as ReturnType<typeof setTimeout>),
+};
 
 /** Splits decoded stderr into lines for a tap and keeps the lines it accepts. */
 function createLineTap(tap: (line: string) => boolean) {
@@ -212,9 +235,10 @@ function defaultKill(process: Bun.Subprocess, signal?: NodeJS.Signals): void {
   process.kill(signal);
 }
 
-export function createSshRunner(deps: { spawn?: typeof Bun.spawn; timeoutMs?: number; env?: () => SpawnEnv | undefined } = {}): SshRunner {
+export function createSshRunner(deps: { spawn?: typeof Bun.spawn; timeoutMs?: number; env?: () => SpawnEnv | undefined; clock?: SshRunnerClock } = {}): SshRunner {
   const spawn = deps.spawn ?? ((argv, options) => Bun.spawn(argv, options));
   const defaultTimeoutMs = deps.timeoutMs ?? 30_000;
+  const clock = deps.clock ?? REAL_CLOCK;
   // Read per spawn so a PATH change reaches the next command; Windows passes no env key at all.
   const spawnEnv = (): { env?: SpawnEnv } => {
     const env = (deps.env ?? (() => linkSshSpawnEnv()))();
@@ -252,6 +276,7 @@ export function createSshRunner(deps: { spawn?: typeof Bun.spawn; timeoutMs?: nu
       if (!Number.isInteger(maxOutputBytes) || maxOutputBytes < 0 || maxOutputBytes > MAX_OUTPUT_BYTES) {
         throw new SshRunnerError("output_limit", `maxOutputBytes must be an integer between 0 and ${MAX_OUTPUT_BYTES}`);
       }
+      if (options.signal?.aborted) throw new SshRunnerError("aborted", "ssh command was aborted before it started");
       let child: Bun.Subprocess;
       try {
         child = spawn([...argv], {
@@ -267,11 +292,46 @@ export function createSshRunner(deps: { spawn?: typeof Bun.spawn; timeoutMs?: nu
       const cancellation = new AbortController();
       let stdout: Promise<string> | undefined;
       let stderr: Promise<string> | undefined;
-      let timer: ReturnType<typeof setTimeout> | undefined;
+      let timer: unknown;
+      // Confirmed termination (opt-in through options.signal): one cleanup for timeout and abort.
+      const confirmed = options.signal !== undefined;
+      let terminating: Promise<never> | undefined;
+      const terminationTimers: unknown[] = [];
+      let onAbort: (() => void) | undefined;
+      const terminate = (code: "timeout" | "aborted"): Promise<never> => {
+        if (terminating) return terminating;
+        cancellation.abort();
+        try { defaultKill(child, "SIGTERM"); } catch { /* already gone */ }
+        terminating = new Promise<never>((_, reject) => {
+          let settled = false;
+          const settle = (exitConfirmed: boolean): void => {
+            if (settled) return;
+            settled = true;
+            for (const pending of terminationTimers.splice(0)) clock.clearTimeout(pending);
+            const error = new SshRunnerError(code, code === "timeout" ? `ssh command exceeded ${timeoutMs}ms` : "ssh command was aborted");
+            error.exitConfirmed = exitConfirmed;
+            reject(error);
+          };
+          child.exited.then(() => settle(true), () => settle(true));
+          terminationTimers.push(clock.setTimeout(() => {
+            if (settled) return;
+            try { defaultKill(child, "SIGKILL"); } catch { /* already gone */ }
+            terminationTimers.push(clock.setTimeout(() => settle(false), RUN_KILL_GRACE_MS));
+          }, RUN_KILL_GRACE_MS));
+        });
+        terminating.catch(() => {});
+        return terminating;
+      };
       const timeout = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => {
+        timer = clock.setTimeout(() => {
+          if (confirmed) { terminate("timeout").catch(reject); return; }
           reject(new SshRunnerError("timeout", `ssh command exceeded ${timeoutMs}ms`));
         }, timeoutMs);
+      });
+      const aborted = new Promise<never>((_, reject) => {
+        if (!options.signal) return;
+        onAbort = () => { terminate("aborted").catch(reject); };
+        options.signal.addEventListener("abort", onAbort, { once: true });
       });
       try {
         const outStream = outputStream(child.stdout), errStream = outputStream(child.stderr);
@@ -293,17 +353,22 @@ export function createSshRunner(deps: { spawn?: typeof Bun.spawn; timeoutMs?: nu
         // Observe all rejections immediately, including errors arriving after timeout. One
         // deadline covers stdin, exit and EOF: an inherited output pipe is still unfinished work.
         const [, code, out, err] = await Promise.race([
-          Promise.all([stdin(), child.exited, stdout, stderr]), timeout,
+          Promise.all([stdin(), child.exited, stdout, stderr]), timeout, aborted,
         ]);
+        // An exit that lands after a timeout or abort began never turns into a result.
+        if (terminating) await terminating;
         return { code, stdout: out, stderr: err };
       } catch (error) {
+        // Once a timeout or abort began, its own error is the result, after its exit is settled.
+        if (terminating) await terminating;
         cancellation.abort();
         // Only terminate this local SSH child. A kill failure must not hide the original error.
         try { defaultKill(child, "SIGTERM"); } catch { /* Preserve the command failure when an already-gone child cannot be signalled. */ }
         if (error instanceof SshRunnerError) throw error;
         throw new SshRunnerError("spawn", "ssh command failed", { cause: error });
       } finally {
-        if (timer !== undefined) clearTimeout(timer);
+        if (timer !== undefined) clock.clearTimeout(timer);
+        if (onAbort) options.signal?.removeEventListener("abort", onAbort);
         void child.exited.catch(() => {});
         // reader.cancel closes pending reads even if the source's cancel promise never settles.
         // Do not await stdin or process exit: neither is guaranteed to settle after SIGTERM.

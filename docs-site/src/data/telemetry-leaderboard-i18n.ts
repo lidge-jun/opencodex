@@ -1,9 +1,9 @@
 /**
  * Copy for the opencodex.me leaderboard section (TelemetryLeaderboard.astro): connected public
- * profiles only. Same 8 locales as the anonymous dashboard copy, kept in a separate table because
+ * profiles only. Same locales as the anonymous dashboard copy, kept in a separate table because
  * profiles are something a person connects, while the anonymous telemetry is on by default.
  */
-export const TELEMETRY_LEADERBOARD_LOCALES = ["en", "fr", "ko", "zh-cn", "zh-tw", "ru", "ja", "tr"] as const;
+export const TELEMETRY_LEADERBOARD_LOCALES = ["en", "es", "fr", "ko", "zh-cn", "zh-tw", "ru", "ja", "tr"] as const;
 export type TelemetryLeaderboardLocale = (typeof TELEMETRY_LEADERBOARD_LOCALES)[number];
 
 export interface TelemetryLeaderboardCopy {
@@ -64,6 +64,34 @@ export const TELEMETRY_LEADERBOARD_STRINGS: Record<TelemetryLeaderboardLocale, T
     profileClose: "Close",
     howToJoin: "Connect a profile from the Home screen of your opencodex dashboard, or run ocx telemetry profile connect. Disconnecting deletes it.",
   },
+  "es": {
+    "title": "Clasificación",
+    "subtitle": "Perfiles que sus propietarios conectaron desde su dashboard de opencodex. Los totales diarios son datos comunicados por cada instalación.",
+    "periodAria": "Periodo de la clasificación",
+    "periodDay": "Día",
+    "periodWeek": "Semana",
+    "periodMonth": "Mes",
+    "metricAria": "Ordenar por",
+    "metricTokens": "Tokens",
+    "metricRequests": "Solicitudes",
+    "colRank": "Posición",
+    "colProfile": "Perfil",
+    "colTokens": "Tokens",
+    "colRequests": "Solicitudes",
+    "loading": "Cargando la clasificación…",
+    "empty": "Aún no hay perfiles públicos.",
+    "error": "No se pudo cargar la clasificación.",
+    "retry": "Reintentar",
+    "findLabel": "Buscar un perfil por su nombre público",
+    "findButton": "Buscar",
+    "findInvalid": "El nombre debe tener entre 3 y 24 letras minúsculas, dígitos o guiones.",
+    "profileNotFound": "No hay ningún perfil público con ese nombre.",
+    "profileRankOf": "N.º {rank} de {of}",
+    "profileNotRanked": "Sin clasificar",
+    "profileFamilies": "Familias de modelos principales de este mes",
+    "profileClose": "Cerrar",
+    "howToJoin": "Conecta un perfil desde Inicio en tu dashboard de opencodex, o ejecuta ocx telemetry profile connect. Desconectarlo lo elimina."
+},
   "fr": {
     title: "Classement",
     subtitle: "Profils connectés par leurs propriétaires depuis leur tableau de bord opencodex. Les totaux quotidiens sont autodéclarés.",
@@ -272,4 +300,3 @@ export function resolveTelemetryLeaderboardLocale(locale: string | null | undefi
 export function getTelemetryLeaderboardCopy(locale: string | null | undefined): TelemetryLeaderboardCopy {
   return TELEMETRY_LEADERBOARD_STRINGS[resolveTelemetryLeaderboardLocale(locale)];
 }
-

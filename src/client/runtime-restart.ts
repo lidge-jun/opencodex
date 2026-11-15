@@ -66,6 +66,11 @@ export interface ClientRestartIo {
    * Receives the same supervisor verdict as the refusal path (a service only when it is viable).
    */
   recycle?: (supervisor: ClientRestartSupervisor | null) => Promise<void>;
+  /**
+   * Fence syncs before anything stops: resolves false when they could not be fenced, and the
+   * restart is then abandoned with this runtime still serving.
+   */
+  fence?: () => Promise<boolean>;
   /** Stop the tunnel supervisor and the listener, giving in-flight requests up to `drainMs`. */
   stop(drainMs: number): Promise<void>;
   /** Start the replacement; resolves once it answers, rejects when none survives. */
@@ -101,6 +106,15 @@ export function createClientRestartController(io: ClientRestartIo): ClientRestar
   const run = async (acceptedAt: number): Promise<void> => {
     // Let the 202 reach the CLI before the listener starts closing.
     await sleep(200);
+    // A sync already past admission must stand down before the teardown. Without that fence it
+    // could commit while the listener closes, so the restart does not start; the CLI sees this
+    // process still serving and reports the restart as failed.
+    let fenced = false;
+    try { fenced = io.fence ? await io.fence() : true; } catch (error) { warn(`[client] restart: syncs could not be fenced (${failureCode(error)})`); }
+    if (!fenced) {
+      warn("[client] restart: in-flight syncs could not be fenced; this runtime keeps serving");
+      return;
+    }
     try {
       await io.stop(CLIENT_RESTART_DRAIN_MS);
     } catch (error) {

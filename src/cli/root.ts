@@ -141,7 +141,7 @@ export async function runCli(argv: string[]): Promise<CliHead> {
         process.exit(1);
       }
       if (head.command === "stop" && !parseStopApproval(head.args.slice(1)).ok) {
-        console.error("Usage: ocx stop [--json [--expect-pid <pid> --expect-port <port> --expect-hostname <host> --expect-config-home <home> --expect-cli-version <version> --expect-compatibility-token <hex>]]");
+        console.error("Usage: ocx stop [--deadline-ms <ms>] [--json [--expect-pid <pid> --expect-port <port> --expect-hostname <host> --expect-config-home <home> --expect-cli-version <version> --expect-compatibility-token <hex>]]");
         process.exit(64);
       }
       const uninstallError = uninstallArgsError(head.command, head.args);

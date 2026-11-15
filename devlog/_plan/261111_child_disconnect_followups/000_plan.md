@@ -11,4 +11,6 @@ Stacked on #8529 (`fix/child-restart-desktop-owned`). Field reports: six Remote 
 
 Order: O8 and O9 share `disconnectClient` and land together (O9 makes the O8 retry succeed); O7 next; O10 is a written proposal in the PR body.
 
+Carry onto `dev` (2026-11-15): O9's code was dropped. `dev` gained the same outcome first through #8416 (`f23910ab2d`): `restoreConnectedCodex` calls `restoreJournalState({ preserveConfigEdits: true })`, a three-way field restore that keeps Codex's and the person's later lines and removes the leftover OpenCodex ones, and `ocx disconnect --recover-config --yes` covers an edited owned value. O8 and O7 are kept on top of it; see 010 and 020.
+
 Verification floor: each new test fails on the base branch first; `bun run typecheck`, `bun run structure:check`, `bun run privacy:scan`, the layout guards, and the files that import the changed modules.

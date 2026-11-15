@@ -291,3 +291,26 @@ trafik onun denetiminde değildir.
 
 Mesh, pano/önbellek denetimleri, yalıtım, Claude mesajlaşması, yönetilen beceriler
 ve boşta bildirimleri bu katkının kapsamı dışındadır.
+
+
+## Mevcut sunucuda açık devam ettirme
+
+**Atomik koşullu devam ettirme desteği gelene kadar yürütme engellidir.**
+Kontrol edilen Codex 0.166.0 API'si, ön kontrolden sonra başka bir istemcinin
+yüklediği boşta oturumu farklı izinlerle değiştirebilir. İstemci tarafında ikinci
+bir okuma bu yarışı engellemez. Araç thread/resume göndermez ve kuyruktaki işi çalıştırmaz.
+
+```sh
+ocx message mcp --codex /absolute/path/to/codex --codex-home /absolute/path/to/.codex --allow-resume --resume-socket /absolute/path/to/existing.sock --resume-permissions :read-only
+```
+
+Üç seçenek birlikte yalnızca ön kontrol aracını açar. Aynı gerçek Codex home'u
+bildiren mevcut güvenilir yerel Unix sunucusu gerekir. Yüklü idle/active hedefler
+already_loaded döndürür. Yönetilen politika, desteklenmeyen API veya doğrulanamayan
+profil reddedilir. Profil ana makine ayarıdır; araç girdisi izin veremez. İzin
+kataloğunun en fazla 50 kayıtlık tek sayfası incelenir. Kontroller geçse bile
+yüklenmemiş hedef not_resumed / resume_atomicity_unsupported döndürür.
+
+executionVerified daima false'tur. Yeni sunucu, oturum, mesaj veya turn oluşturulmaz;
+izin değiştirilmez ve onay talepleri yanıtlanmaz. Bağlantı kapanınca yalnızca bu
+istemci bağlantısı kapanır. SSH/ağ uçları ve Windows bu aracın kapsamında değildir.

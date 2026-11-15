@@ -22,6 +22,11 @@ OpenCodex and connect the reversible file integration:
 
 ```bash
 ocx start
+```
+
+Keep the proxy running in this terminal. In a second terminal, enable the integration and launch MiniMax Code:
+
+```bash
 ocx integration client enable --client mcode
 ocx mcode
 ```

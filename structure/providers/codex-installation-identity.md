@@ -47,6 +47,7 @@ metadata-free frames; main and main-pool remain outside this validation.
 `src/adapters/openai-responses/transport.ts` and `src/adapters/openai-responses/passthrough.ts`
 apply the same identity to HTTP headers and a cloned client-metadata map. The serialized body feeds
 `src/server/responses/codex-ws-request.ts`; WebSocket preparation preserves these existence gates.
+The inbound `buildResponsesWsData` contract in `src/server/ws-bridge.ts` keeps the observational usage client separate from the admitted replay principal. `src/server/index/serve-options.ts` passes both; client classification never grants replay authority.
 `src/server/responses/codex-ws-pool.ts` includes immutable outgoing headers and account in its reuse
 identity. `src/server/ws-bridge.ts` isolates explicit Pool header overrides as well.
 Its inbound handshake snapshot also retains caller-supplied `user-agent` and

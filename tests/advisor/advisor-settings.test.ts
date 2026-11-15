@@ -185,6 +185,36 @@ describe("ocx advisor consent", () => {
       { model: "expert/m" },
     ]);
   });
+
+  // The human line is the operator's only confirmation. An unconditional "stops transfer" claim
+  // would promise cancellation the runtime cannot perform: consent is re-read before dispatch, so
+  // a revocation reaches pending consultations and nothing already sent.
+  test("the human revoke line names the undispatched-only boundary", async () => {
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (line?: unknown) => { lines.push(String(line)); };
+    try {
+      expect(await handleAdvisorCommand(["consent", "--revoke"], depsWith([]))).toBe(0);
+    } finally {
+      console.log = original;
+    }
+    const output = lines.join("\n");
+    expect(output).toContain("not yet dispatched");
+    expect(output).toContain("cannot be cancelled");
+    expect(output).toContain("cannot be retracted");
+  });
+
+  test("revoke JSON remains the settings payload without the human line", async () => {
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (line?: unknown) => { lines.push(String(line)); };
+    try {
+      expect(await handleAdvisorCommand(["consent", "--revoke", "--json"], depsWith([]))).toBe(0);
+    } finally {
+      console.log = original;
+    }
+    expect(JSON.parse(lines.join("\n"))).toEqual({ settings: { contextSharingConsent: null }, runnable: false });
+  });
 });
 
 describe("ocx advisor set — clearing the model", () => {

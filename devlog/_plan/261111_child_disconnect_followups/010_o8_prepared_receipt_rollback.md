@@ -10,6 +10,8 @@
 
 What a partial Codex journal restore leaves behind: the journal (recovery evidence), config.toml as it was, possibly the generated profile already reverted. The connection stays `connected`; the client runtime's next sync re-injects routing and regenerates the profile.
 
+On `dev` a link Child drains its route intent (`cleanupConnectedRouteIntent`) before the Codex restore, so a rollback after that step leaves the routed file integrations off. The rollback does not undo the drain; the connection stays and the runtime's next route-intent apply turns them back on, and the rolled-back message says so. A failure inside the drain itself keeps `dev`'s behaviour (receipt retained). Not covered by a test here: no link-transport rollback scenario.
+
 The startup refusal names its fix: run `ocx disconnect` again (same `--keep-catalog` choice) to finish or roll back.
 
 ## Tests (fail on base first)

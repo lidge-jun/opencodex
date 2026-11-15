@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import * as management from "../../src/server/management-api";
+import * as managementBody from "../../src/server/management/body";
 import * as paths from "../../src/config/paths";
 import { applyDesktop, applyProfile } from "../../src/cli/claude-desktop";
 import * as firstParty from "../../src/claude/desktop-first-party";
@@ -243,6 +244,7 @@ test.each([["CLI release", false, false], ["CLI timeout", true, false], ["native
   try {
     await parent.reached; await turn();
     expect(parent.descendants).toEqual([]);
+    if (native) expect(existsSync(join(root, "link", "apply-lock.sqlite"))).toBe(false);
     expect(readFileSync(file, "utf8")).toBe(original);
     expect(settled).toBe(false);
     if (timeout) {
@@ -263,6 +265,36 @@ test.each([["CLI release", false, false], ["CLI timeout", true, false], ["native
     if (native) expect(saved.clientIntegrations["claude-desktop"]).toBe(false);
     else expect(saved.claudeCode.cliFirstParty).not.toBe(true);
   }
+});
+
+test.each([false, true])("native decision rechecks ACL work started during body parsing (timeout=%s)", async timeout => {
+  const config = fixture(), file = join(root, "config.json"), original = JSON.stringify(config);
+  writeFileSync(file, original);
+  const time = clock(), parsed = deferred();
+  let parent: ReturnType<typeof holdParent> | undefined;
+  const read = managementBody.readManagementJsonBody;
+  const hook = spyOn(managementBody, "readManagementJsonBody").mockImplementation(async req => {
+    const body = await read(req);
+    resetHardenedStateForTests(); parent = holdParent(); await parent.entered;
+    parsed.resolve(); return body;
+  });
+  restores.push(() => hook.mockRestore());
+  let settled = false;
+  const work = putIntent(config, true).then(response => { settled = true; return response; });
+  try {
+    await parsed.promise; await parent!.reached; await turn();
+    expect(settled).toBe(false);
+    expect(parent!.descendants).toEqual([]);
+    expect(readFileSync(file, "utf8")).toBe(original);
+    expect(existsSync(join(root, "route-intent.json"))).toBe(false);
+    if (timeout) {
+      time.advance(1000); await turn();
+      expect((await work)?.status).toBe(500);
+      expect(readFileSync(file, "utf8")).toBe(original);
+      expect(existsSync(join(root, "route-intent.json"))).toBe(false);
+    }
+  } finally { parent?.release(); await work; }
+  if (!timeout) expect((await work)?.status).toBe(200);
 });
 
 test.each([["release", false], ["timeout", true]] as const)("offline gateway re-enters after discovery: %s", async (_name, timeout) => {

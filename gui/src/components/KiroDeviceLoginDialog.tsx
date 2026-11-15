@@ -30,8 +30,9 @@ export default function KiroDeviceLoginDialog({ apiBase, targetKey, triggerRef, 
   const { state } = login;
   const view = state.view;
   const destination = view?.verificationUriComplete ?? view?.verificationUri;
-  const safeLink = kiroVerificationLink(destination);
+  const safeLink = kiroVerificationLink(destination, view?.method);
   const cancel = () => { void login.close(); onClose(); };
+  const finished = state.phase === "done" || state.phase === "failed" || state.phase === "expired" || state.phase === "ended";
   return (
     <dialog ref={dialogRef} className="kiro-device-dialog" aria-modal="true" aria-labelledby={titleId}
       onCancel={event => { event.preventDefault(); cancel(); }}>
@@ -81,7 +82,7 @@ export default function KiroDeviceLoginDialog({ apiBase, targetKey, triggerRef, 
         {(state.phase === "failed" || state.phase === "expired" || state.phase === "ended") && (
           <button type="button" className="btn btn-ghost btn-sm" onClick={login.reset}>{t("kiroLogin.tryAgain")}</button>
         )}
-        <button type="button" className="btn btn-ghost btn-sm" onClick={cancel}>{t("common.cancel")}</button>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={cancel}>{t(finished ? "common.close" : "common.cancel")}</button>
       </div>
     </dialog>
   );

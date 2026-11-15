@@ -1,6 +1,6 @@
 # 000 — Windows service stop that frees the port (#7771 Option B): design
 
-Status: approved (030, bounded ARM64 fallback). Implementation is split into three pull requests (060); the primitives and the two operations land first, unwired.
+Status: approved (030). Implementation is split into three pull requests (060): PR1 (primitives and the two operations, #8564) and PR3 (Desktop, #8560) have landed; PR2 wires every caller. ARM64 ships the strict variant until the 040 ARM64 device case runs (050, 060).
 
 ## Problem
 

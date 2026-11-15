@@ -913,6 +913,14 @@ export async function fetchWithTransientRetry(
 
 export type ProtocolSafeRefetch = (signal?: AbortSignal) => Promise<Response>;
 
+/** A Responses SSE stream ended after only uncommitted protocol control frames. */
+export class ProtocolPreOutputEof extends Error {
+  constructor() {
+    super("upstream Responses stream ended before output or a terminal event");
+    this.name = "ProtocolPreOutputEof";
+  }
+}
+
 export interface ProtocolSafeRefetchOptions extends ResetRetryOptions {
   /** The replacement must match the response contract already selected for the client. */
   acceptResponse?: (response: Response) => boolean;
@@ -927,7 +935,7 @@ export interface ProtocolSafeRefetchOptions extends ResetRetryOptions {
 }
 
 /**
- * Attempt ONE caller-authorized replacement of a stream that died after the response head.
+ * Attempt ONE caller-authorized replacement of a reset or pre-output EOF after the response head.
  *
  * The caller owns the proof that nothing was observed -- it comes from protocol inspection,
  * not from this module -- and owns the physical-send budget. What lives here is the part that
@@ -940,12 +948,14 @@ export async function refetchAfterProtocolSafeReset(
   err: unknown,
   opts: ProtocolSafeRefetchOptions = {},
 ): Promise<Response | null> {
-  if (!isConnectionResetError(err) || opts.abortSignal?.aborted || opts.attempts === 0) return null;
+  if ((!isConnectionResetError(err) && !(err instanceof ProtocolPreOutputEof))
+    || opts.abortSignal?.aborted || opts.attempts === 0) return null;
   const label = opts.label
     ? " (" + redactSecretString(opts.label).replace(/[\r\n\u0000-\u001f\u007f]/g, "").slice(0, 128) + ")"
     : "";
+  const failure = err instanceof ProtocolPreOutputEof ? "pre-output stream EOF" : "pre-output stream reset";
   if (opts.authorize && !opts.authorize()) {
-    console.warn("[upstream-retry] post-header reset replacement refused" + label + "; preserving original stream error");
+    console.warn("[upstream-retry] " + failure + " replacement refused" + label + "; preserving original stream");
     return null;
   }
   let replacement: Response;
@@ -965,7 +975,7 @@ export async function refetchAfterProtocolSafeReset(
     console.warn("[upstream-retry] protocol-safe refetch rejected" + label + "; preserving original stream error");
     return null;
   }
-  console.warn("[upstream-retry] pre-output stream reset" + label + "; using one replacement stream");
+  console.warn("[upstream-retry] " + failure + label + "; using one replacement stream");
   return replacement;
 }
 

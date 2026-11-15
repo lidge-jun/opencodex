@@ -29,8 +29,9 @@ Only the validated real address is connected; no helper or reconnect is used.
 `src/messaging/rpc.ts` initializes one connection with experimental API capability
 and sends initialized before metadata requests. Its explicit request whitelist
 contains initialize, loaded-session pagination, metadata-only thread reads and
-one text-only `thread/queue/add`. It cannot create/resume a session, start/steer a
-turn or grant permission. A thread read returns only ID, name and status,
+one text-only `thread/queue/add`. Default local/send and remote-peer connections
+cannot resume a session, start/steer a turn or grant permission. A separate explicit
+MCP factory grants resume preflight only as described below; it cannot send thread/resume. A thread read returns only ID, name and status,
 excluding history, preview and working directory.
 
 Responses must match the requested ID and bounded shape. RPC errors are sanitized.
@@ -282,3 +283,56 @@ UTF-8 truncation and cursor revalidation retain the read owner's contract.
 absent final text, stored terminal summaries, pagination, ambiguity, invalid input,
 read failures and inherited deadlines/cancellation. The CLI test checks exposure
 and invocation; imports remain inert. These fixtures do not prove client wake-up.
+
+## Explicit existing-server resume
+
+This pending capability is execution-blocked. `src/messaging/mcp-resume-tools.ts`
+exposes codex_resume_thread only with --allow-resume, --resume-socket and
+--resume-permissions together. It performs bounded preflight, never native resume.
+Default hosts and queue/read tools gain no lifecycle access. Initialization/import
+creates no connection or server.
+
+`src/messaging/rpc.ts` uses connectForResume only on an existing trusted local Unix
+socket reporting the configured canonical Codex home. Default connect/attach and
+remote-peer connections have no resume-preflight grant. An exact normalized UUID
+is read with includeTurns false. An observed idle/active target returns already_loaded;
+systemError refuses. Private paths/history/native errors are not returned.
+
+`src/messaging/resume-permissions.ts` retains preflight validation: the configured
+profile is a bounded opaque host value, not a tool argument; configRequirements/read
+must report requirements null, and one permissionProfile/list page in the private
+target cwd must contain the allowed ID. The page is bounded to 50 entries and checks
+IDs, duplicates, allowed flags and cursors. Unverified/managed/unsupported contexts
+and unavailable profiles refuse before execution.
+
+Even after successful permission verification, an unloaded target returns
+not_resumed with resume_atomicity_unsupported. No thread/resume RPC exists in the
+client method allowlist. A repeated metadata read or this MCP host's per-UUID lock
+cannot enforce an atomic not-loaded condition against another native client.
+Codex rust-v0.166.0 thread_resume_inner / resume_running_thread checks pending unload
+and serializes resume, but collect_resume_override_mismatches treats a supplied
+permissions field as a mismatch. For a directly addressable, unsubscribed, idle,
+non-running cache entry it can shut down the loaded thread and cold-resume under
+that explicit profile. The later branch ignores overrides only when the cached
+thread was not replaced. Therefore this version does not guarantee that a thread
+loaded after preflight is left alone; native conditional resume is required before
+execution can be re-enabled. This dependency was checked in the tagged native
+source and reproduced with disposable native 0.166.0 / offline model fixtures.
+It is not safe to infer the guarantee from a version label or a post-write
+activePermissionProfile acknowledgement. No capability or request field for an
+unimplemented future native API is invented here.
+
+The tool's current observations do not prove processing/completion;
+executionVerified remains false. No new session, message, turn/start, steer, model,
+approval or permission-change request is sent. The host refuses same-thread overlap before charging shared four-operation admission;
+duplicate refusals consume no slot. Closing checks still apply, and every reserved
+thread key is released when its call settles, including admission refusal. A 20-second budget covers connection
+and preflight, with ten-second RPC / 1 MiB frame limits. Cancellation closes only
+the owned connection, never the shared server or target turn. Approval requests
+are not answered. The tool stays read-only while execution is blocked.
+
+`tests/codex-integration/messaging-mcp-resume.test.ts` covers the fail-closed path,
+peer-load window, host/home/state/UUID and permission preflight checks, default
+refusal and cancellation before execution. The local fixture rejects thread/resume
+even in preflight mode. `tests/cli/cli-message-mcp-resume.test.ts` covers sequential
+option parsing, inert registration, explicit refusal, overlap/admission and cleanup.

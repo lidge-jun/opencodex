@@ -1345,19 +1345,26 @@ describe("filtered usage index availability", () => {
     appendRows([{ ...syntheticRow(99), requestId: "late", provider: "kimi" }]);
     const lock = new Database(usageFilterIndexPath(testDir));
     lock.exec("BEGIN IMMEDIATE");
+    // The busy back-off is bounded and short: a held lock degrades to the streaming read instead of
+    // holding the request for seconds. Record the scheduled delays rather than timing the run.
+    const busyDelays: number[] = [];
+    setUsageFilterIndexTestHooksForTests({
+      beforeRetryDelay: ({ delayMs }) => { busyDelays.push(delayMs); },
+    });
     try {
       const result = await getFilteredUsageAggregate({ provider: "openai" });
       expect(summary(result).summary.requests)
         .toBe(rows.filter(row => row.provider === "openai").length);
       // Contention is an index problem, not a ledger failure: the request still answers.
       expect(result.filterIndex).toBeUndefined();
+      expect(busyDelays.length).toBeGreaterThan(0);
+      expect(busyDelays.reduce((sum, delay) => sum + delay, 0)).toBeLessThanOrEqual(250);
     } finally {
+      setUsageFilterIndexTestHooksForTests(null);
       lock.exec("ROLLBACK");
       lock.close();
     }
-    // Sustained contention exhausts the extended busy-retry window before degrading to the
-    // streaming read, which takes several seconds by design; the default 5s timeout is too tight.
-  }, 20_000);
+  });
 
   test("an unchanged filtered read releases its index reader", async () => {
     const rows = Array.from({ length: 5 }, (_, index) => syntheticRow(index));

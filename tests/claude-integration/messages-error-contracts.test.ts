@@ -196,12 +196,55 @@ test("W1/W3 envelope writers are covered by explicit dispositions", async () => 
   expect(actual).toEqual(Object.fromEntries(envelopeWriterRows.map(([path, count]) => [path, count])));
   const bypassRows = [
     ["src/claude/message-threads.ts", 2], ["src/server/inbound-body-admission.ts", 4],
-    ["src/server/index.ts", 4], ["src/server/admission-model-scope.ts", 0], ["src/server/workflow-refusal.ts", 1],
+    ["src/server/index.ts", 4], ["src/server/admission-model-scope.ts", 0],
   ] as const;
   for (const [path, count] of bypassRows) {
     const actual = readFileSync(repoPath(path), "utf8").split("\n").filter(line => /type: "error"|error_code|server_busy|server_restarting|package_tree_changed|formatErrorResponse\(/.test(line)).length;
     expect(actual).toBe(count);
   }
+  const workflowWriters = [
+    ["const refusal = formatErrorResponse(", "workflowRefusalResponse", "local workflow denial with workflow header, provenance and log disposition"],
+    ["?? markProxyError(formatErrorResponse(429, SEND_BUDGET_EXHAUSTED_CODE, message));", "adapterSendBudgetRefusal", "independent adapter send-budget denial with synthetic attribution and local provenance"],
+  ] as const;
+  const workflowSource = readFileSync(repoPath("src/server/workflow-refusal.ts"), "utf8");
+  const actualWorkflowWriters = workflowSource.split("\n").filter(line => /type: "error"|error_code|server_busy|server_restarting|package_tree_changed|formatErrorResponse\(/.test(line)).map(line => line.trim());
+  expect(actualWorkflowWriters).toEqual(workflowWriters.map(([call]) => call));
+  for (const [call, producer, disposition] of workflowWriters) {
+    expect(disposition.length).toBeGreaterThan(0);
+    const body = workflowSource.split(`export function ${producer}(`)[1]?.split("\n}")[0];
+    expect(body).toContain(call);
+  }
+});
+
+test("workflow and adapter budget writers keep distinct local refusal dispositions", async () => {
+  const { workflowRefusalResponse, adapterSendBudgetRefusal, carryWorkflowRefusal } = await import("../../src/server/workflow-refusal");
+  const { isNonReplayableResponse } = await import("../../src/lib/upstream-retry");
+  const header = "x-opencodex-local-refusal";
+  const workflowLog = { model: "fixture", provider: "fixture" };
+  const workflow = workflowRefusalResponse("workflow-sends-exhausted", workflowLog);
+  expect(workflow.status).toBe(429);
+  expect(isProxyError(workflow)).toBe(true);
+  expect(isNonReplayableResponse(workflow)).toBe(true);
+  expect(workflow.headers.get(header)).toBe("workflow_sends_exhausted");
+  expect(workflow.headers.get("access-control-expose-headers")).toBe(header);
+  expect(workflowLog).toMatchObject({ terminalSource: "synthetic", errorCode: "workflow_sends_exhausted" });
+  expect((await workflow.json()).error.code).toBe("rate_limit_exceeded");
+  const projected = carryWorkflowRefusal(workflow, new Response());
+  expect(isProxyError(projected)).toBe(true);
+  expect(projected.headers.get(header)).toBe("workflow_sends_exhausted");
+
+  const adapterLog = { model: "fixture", provider: "fixture" };
+  const adapter = adapterSendBudgetRefusal(adapterLog, undefined, "Local send budget exhausted");
+  expect(adapter.status).toBe(429);
+  expect(isProxyError(adapter)).toBe(true);
+  expect(isNonReplayableResponse(adapter)).toBe(false);
+  expect(adapter.headers.get(header)).toBeNull();
+  expect(adapterLog).toMatchObject({ terminalSource: "synthetic" });
+  expect((await adapter.json()).error).toMatchObject({ type: "rate_limit_error", code: "request_send_budget_exhausted", message: "Local send budget exhausted" });
+  const forged = new Response(null, { headers: { [header]: "workflow_sends_exhausted" } });
+  const rejected = carryWorkflowRefusal(forged, new Response());
+  expect(rejected.headers.get(header)).toBeNull();
+  expect(isProxyError(rejected)).toBe(false);
 });
 
 const nativeFailRows = [

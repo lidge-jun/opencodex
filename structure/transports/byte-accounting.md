@@ -84,6 +84,8 @@ hard byte cap. Per-body limits, parsing, compression, and reader error envelopes
 normalization, UTF-8 counting without encoded copies, release after malformed or optional empty input,
 and serialized-length parity with `JSON.stringify` including nesting it cannot walk.
 
+An encoded request body's decoded size is bounded by its ratio as well as by the inbound limit (#3023): `decodeRequestBody` passes zlib a `maxOutputLength` of max(8 MiB, 200 x its wire bytes), never above the inbound limit (`compressedBodyDecodeLimit`), so inflation stops there and memory and time are bounded by it. A 2,067-byte zstd frame inflates to 64 MiB, so before this bound one tiny request could allocate up to the whole inbound limit. A body past the ratio bound fails with `CompressionRatioExceededError`, a `DecompressedBodyTooLargeError` (413 on every route that maps one) whose message names the compression-bomb guard and does not advise raising `maxInboundBodyBytes`. A body that decodes to 8 MiB or less is never refused for its ratio. The bound applies to every encoded body, a local Codex's own zstd included. Decoding is synchronous, so one decode runs at a time, but decoded bodies stay alive while their requests run; so an encoded body on a JSON data route joins the shared inbound budget (`withRaisedInboundBodyAdmission` in `src/server/inbound-body-admission.ts`) at every inbound limit, not only a raised one. It reserves what it may decode to (`compressedBodyDecodeLimit` of its declared wire bytes, or the whole limit without a declaration) before a byte is read, the reader shrinks that to the measured size, and the reservation ends when the response settles; a body that does not fit waits in the budget's queue or is refused with 503 `server_busy`, unread. Identity bodies at the default limit stay ungated, as before. `tests/server/inbound-encoded-body-budget.test.ts` covers the reservation, the shrink, the release and a refusal while identity bodies pass. Three frame shapes are pinned to what the runtime's zstd does: a truncated frame decodes to its complete blocks only (no error; the data plane then answers 400 because the JSON does not parse), concatenated frames decode in full with the ratio bound counting their total, and a frame header asking for a window above 128 MiB (zstd's default `windowLogMax` of 27) is refused before any output (400), while one at 128 MiB is accepted; since decoding is synchronous, at most one such window buffer exists at a time. `tests/usage/request-decompress-ratio.test.ts` covers zstd and gzip bombs, the floor, an ordinary body above it, the unchanged absolute limit, the data-plane 413, and the three frame shapes.
+
 The final native ChatGPT Responses HTTP send in `src/server/responses/fetch-helpers.ts` encodes JSON
 strings of at least 1 MiB as a UTF-8 buffer for Bun upload compatibility. This is a transport copy,
 not a counting allocation or retained continuation. Existing body admission limits still apply;
@@ -318,6 +320,13 @@ truncates diagnostic text at UTF-8 code-point boundaries without allocating arra
 byte sizing retains TextEncoder's coercion behavior for legacy non-string runtime callers.
 These optimizations do not add request queues, retry policies, or RSS-based admission gates.
 
+Zed framing in `src/adapters/zed.ts` searches retained text for newlines only when newly decoded
+text contains one. An incomplete line is not rescanned for every transport fragment. The existing
+character ceiling is checked on every read, including reads without a newline; framing, Unicode
+decoding, terminal suppression and EOF failure behavior stay unchanged.
+`tests/providers/zed-hosted-provider.test.ts` bounds newline-search work and checks fragmented
+UTF-8, split CRLF and coalesced frames.
+
 The buffered collector in `src/adapters/zed.ts` charges each delegated event before retaining it
 and releases owned events when collection fails. Its translated stream is cancelled on early exit
 for every provider family. `src/adapters/openai-responses/passthrough.ts` releases partial text and
@@ -372,6 +381,33 @@ The allowance can be exceeded by one source chunk plus native tee prefetch; it i
 not an RSS limit or a producer-side bound for push transports. Existing eager-path
 selection, WebSocket bounds and SSE frame/output-item limits are unchanged.
 Client departure releases pacing to the existing 15-second/32-MiB bounded drain.
+A stream marked paced (`src/lib/paced-stream.ts`) changes that for its own request: the
+inspection branch leads its client by one chunk instead of the allowance, the eager relay
+queues one chunk instead of 8 MiB, and each stage that reads a paced source (the block
+rewrite, the failed-tail relay, the translator-budget and account-lease wrappers, a combo
+preflight's replay) queues
+nothing ahead and marks its own output, so the chain reads as the client asks. Only a Remote
+Link turn while the link WebSocket feature is on is paced (#8601, `remote-link.md`); its
+upstream chunks are also cut into 256 KiB views (`sliceChunks`), so each stage holds a slice
+rather than a whole source chunk. Unmarked streams keep every queue described above.
+The slicer sits where delivery picks its relay (`passthrough-delivery.ts`), so the stages
+before it are not paced: terminal repair and the web-search bridge, which wrap the upstream
+body first, and the encrypted-output preflight in `passthrough-dispatch.ts` (through
+`combo-stream-preflight.ts`, bounded to 4 MiB before it commits) each keep their default
+queue of one upstream chunk on a paced turn. They are opt-in per provider or bounded, and
+marking them would need the paced decision before the exchange is built.
+A passthrough turn also keeps no parsed copy of its outbound body while it streams
+(`src/server/responses/passthrough-dispatch.ts`): the undeclared-tool guard parses it once when
+the request is built, and only its tool scope (`outboundToolScope` in
+`src/server/responses/outbound-request-body.ts`: the tool catalog, the selection, the parallel
+flag and the input items that declare tools) stays for the later readers, snapshot repair and
+the Grok tool scope, so a large request's input is not held twice (#8601). A streaming combo
+child's required-tool check (`src/server/responses/combo-required-tool-fulfillments.ts`) also
+parses the outbound body once when it is built and keeps whether it denies every tool and its
+tool declarations (shallow copies, which can share nested schema objects with the parse), never the
+parsed body. A combo preflight's replay lets go of each buffered chunk as it hands it to the
+client, and of all of them on cancel, so a committed child's prefix is not held for the rest of
+its turn.
 One tee branch's cancellation is never awaited by the wrapper, because that
 promise may depend on its sibling. A hard owner abort discards pending candidates
 rather than flushing them as successful terminals; genuine EOF/read-error tail
@@ -480,3 +516,18 @@ events and opaque usage are charged until emitted or replaced; cancellation, rea
 identity/argument refusal release every relay-owned buffer. Failed terminals close outstanding calls
 incomplete and replay queued semantics before the error; diagnostic usage keeps only numeric counters,
 releasing any previously retained opaque usage. Ciphertext alone transfers with its done lease.
+
+## Link traffic counters
+
+`src/link/traffic.ts` counts what a Remote Link carried, per link, in one book per process
+(the Child's and the Home's); the counters are plain additions with no lock, timer or disk, and
+`structure/remote-link.md` owns their definition. Relayed HTTP counts body bytes. A link
+WebSocket is one request in the same book on both sides, in the same units: message payload bytes
+each way, without WebSocket framing, handshake or control frames. The Home counts it complete when
+any close frame ended it; the Child also counts its own overload, binary and protocol closes as
+incomplete. On the Home the
+gate in `src/server/index/link-websocket.ts` opens the flow when it opens an admitted socket,
+counts each message that reached it, and ends the flow on close; `sendTextFrame` in
+`src/server/ws-bridge.ts` counts each message Bun took for a link socket (a dropped send is not
+counted). A local socket has no flow, and link sockets exist only while the link WebSocket's
+switch and release gate are on.

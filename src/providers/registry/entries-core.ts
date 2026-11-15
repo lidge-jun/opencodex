@@ -120,6 +120,28 @@ const ANTHROPIC_FAST_MODELS: Readonly<Record<string, boolean>> = Object.freeze({
   "claude-opus-5": true,
   "claude-opus-4-8": true,
 });
+/**
+ * Gemini thinking ladders shared by the Gemini API (`google`) and Vertex AI (`google-vertex`)
+ * presets, so the two routes cannot advertise different rungs for one model.
+ * 3.7 and 3.8 omit `minimal`: Google documents it as a validation error on both model pages, so
+ * advertising it hands the user a rung the API rejects. 3.5/3.6 keep theirs — their pages still
+ * list it, and this unit has no evidence to change them. Gemini 4 Argon (GA 2026-10-13):
+ * low/medium(default)/high; `minimal` and thinking_budget return HTTP 400 per
+ * ai.google.dev/gemini-api/docs/models/gemini-4-argon. Gemini 4 Hydrogen: low/medium/high/xhigh,
+ * default high, verified live on Vertex AI by the author of #8583 (2026-11-13).
+ */
+const GEMINI_MODEL_REASONING_EFFORTS: Readonly<Record<string, string[]>> = {
+  "gemini-4-hydrogen": ["low", "medium", "high", "xhigh"],
+  "gemini-4-carbon": ["low", "medium", "high"],
+  "gemini-4-argon": ["low", "medium", "high"],
+  "gemini-3.8-flash": ["low", "medium", "high"],
+  "gemini-3.7-flash": ["low", "medium", "high"],
+  "gemini-3.6-flash": ["minimal", "low", "medium", "high"],
+  "gemini-3.5-flash": ["minimal", "low", "medium", "high"],
+  "gemini-3.1-pro-preview": ["low", "medium", "high"],
+};
+const GEMINI_MODEL_DEFAULT_REASONING_EFFORTS: Readonly<Record<string, string>> = { "gemini-4-hydrogen": "high" };
+
 const ANTHROPIC_FAST_TIER_DESCRIPTION =
   "Claude fast mode: faster output at 2x price; needs usage credits (subscription) or fast-mode access (API)";
 
@@ -1214,26 +1236,22 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
   {
     id: "google", label: "Google Gemini", adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", authKind: "key", featured: true,
     dashboardUrl: "https://aistudio.google.com/apikey", defaultModel: "gemini-3.5-flash", models: ["gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.7-flash"],
-    modelContextWindows: { "gemini-4-argon": 1_048_576, "gemini-3.8-flash": 1_048_576, "gemini-3.6-flash": 1_048_576, "gemini-3.5-flash": 1_000_000, "gemini-3.5-flash-lite": 1_048_576, "gemini-3.7-flash": 1_048_576 },
-    modelInputModalities: { "gemini-4-argon": ["text", "image"], "gemini-3.8-flash": ["text", "image"], "gemini-3.6-flash": ["text", "image"], "gemini-3.5-flash-lite": ["text", "image"], "gemini-3.7-flash": ["text", "image"] },
-    modelReasoningEfforts: {
-      // 3.7 and 3.8 omit `minimal`: Google documents it as a validation error on both model
-      // pages, so advertising it hands the user a rung the API rejects. 3.5/3.6 keep theirs —
-      // their pages still list it, and this unit has no evidence to change them.
-      // Gemini 4 Argon (GA 2026-10-13): low/medium(default)/high; `minimal` and thinking_budget
-      // return HTTP 400 per ai.google.dev/gemini-api/docs/models/gemini-4-argon.
-      "gemini-4-argon": ["low", "medium", "high"],
-      "gemini-3.8-flash": ["low", "medium", "high"],
-      "gemini-3.7-flash": ["low", "medium", "high"],
-      "gemini-3.6-flash": ["minimal", "low", "medium", "high"],
-      "gemini-3.5-flash": ["minimal", "low", "medium", "high"],
-      "gemini-3.1-pro-preview": ["low", "medium", "high"],
-    },
+    modelContextWindows: { "gemini-4-hydrogen": 1_048_576, "gemini-4-carbon": 1_048_576, "gemini-4-argon": 1_048_576, "gemini-3.8-flash": 1_048_576, "gemini-3.6-flash": 1_048_576, "gemini-3.5-flash": 1_000_000, "gemini-3.5-flash-lite": 1_048_576, "gemini-3.7-flash": 1_048_576 },
+    modelInputModalities: { "gemini-4-hydrogen": ["text", "image"], "gemini-4-carbon": ["text", "image"], "gemini-4-argon": ["text", "image"], "gemini-3.8-flash": ["text", "image"], "gemini-3.6-flash": ["text", "image"], "gemini-3.5-flash-lite": ["text", "image"], "gemini-3.7-flash": ["text", "image"] },
+    modelReasoningEfforts: { ...GEMINI_MODEL_REASONING_EFFORTS },
+    modelDefaultReasoningEfforts: { ...GEMINI_MODEL_DEFAULT_REASONING_EFFORTS },
     jawcodeBundle: "google", extraMetadataAliases: ["gemini"],
   },
   // 2026-07-10: defaultModel is frozen pending Vertex-specific Tier-2 evidence; Gemini API
   // evidence from ai.google.dev does not establish Vertex publisher availability.
-  { id: "google-vertex", label: "Google Vertex AI", adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authKind: "key", dashboardUrl: "https://console.cloud.google.com/vertex-ai", defaultModel: "gemini-3-pro", googleMode: "vertex", jawcodeBundle: "google", extraMetadataAliases: ["gemini-vertex"] },
+  {
+    id: "google-vertex", label: "Google Vertex AI", adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authKind: "key", dashboardUrl: "https://console.cloud.google.com/vertex-ai", defaultModel: "gemini-3-pro", googleMode: "vertex", jawcodeBundle: "google", extraMetadataAliases: ["gemini-vertex"],
+    modelDiscovery: { path: "/v1beta1/publishers/google/models", query: { pageSize: "300" } },
+    modelContextWindows: { "gemini-4-hydrogen": 1_048_576, "gemini-4-carbon": 1_048_576, "gemini-4-argon": 1_048_576, "gemini-3.8-flash": 1_048_576, "gemini-3.6-flash": 1_048_576, "gemini-3.5-flash": 1_048_576, "gemini-3.5-flash-lite": 1_048_576 },
+    modelInputModalities: { "gemini-4-hydrogen": ["text", "image"], "gemini-4-carbon": ["text", "image"], "gemini-4-argon": ["text", "image"], "gemini-3.8-flash": ["text", "image"], "gemini-3.6-flash": ["text", "image"], "gemini-3.5-flash": ["text", "image"], "gemini-3.5-flash-lite": ["text", "image"] },
+    modelReasoningEfforts: { ...GEMINI_MODEL_REASONING_EFFORTS },
+    modelDefaultReasoningEfforts: { ...GEMINI_MODEL_DEFAULT_REASONING_EFFORTS },
+  },
   // Antigravity discovers models with a POST to the CCA `:fetchAvailableModels` RPC, which
   // `buildModelsRequest` already built by hand. Declaring it here changes no request URL — the
   // relative path resolves to the same destination — but it lets `isRegistryModelDiscoveryUrl`

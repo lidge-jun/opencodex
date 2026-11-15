@@ -10,8 +10,9 @@ description: Multi-agent surface, guidance при делегировании, pr
 
 | Поле | Тип | По умолчанию | Значение |
 | --- | --- | --- | --- |
-| `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` штампует все модели как v1; `v2` штампует все модели как v2. `default` восстанавливает upstream pin'ы (Sol/Terra — v2, Luna — v1) и для остальных следует native flag `multi_agent_v2`. Применяется к новым сессиям. |
-| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna` | До пяти bare native-id, account-qualified id `<selector>/<native-openai-model>` или routed-id `provider/model`, которые показываются первыми в picker'е подагентов. Страница Subagents предлагает только bare native- и routed-id и при сохранении исключает точные account-qualified варианты; для точного выбора используйте `ocx agent subagents set` или отредактируйте конфигурацию. После [однократного обновления Astra](/reference/configuration/agents/#astra-roster-upgrade) явный пустой список сохраняется. |
+| `multiAgentMode?` | `"v1" \| "default" \| "v2" \| "v2-plaintext"` | `"default"` | `v1` штампует все модели как v1; `v2` штампует все модели как v2. `default` восстанавливает upstream pin'ы (Sol/Terra — v2, Luna — v1) и для остальных следует native flag `multi_agent_v2`. Закрепления каталога применяются к новым сессиям. `v2-plaintext` выбирает V2 для новых сессий и передаёт подходящие задачи открытым текстом без глобального принуждения. Для включения нужен `--acknowledge-plaintext-agent-messages`. |
+| `plaintextV2AgentMessages?` | `boolean` | — (не задано) | Экспериментальная опция: явное `true` или `multiAgentMode: "v2-plaintext"` включает передачу аргументов сообщений `spawn_agent`, `send_message` и `followup_task` открытым текстом для подходящих запросов. |
+| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna` | До пяти bare native-id, account-qualified id `<selector>/<native-openai-model>` или routed-id `provider/model`, которые показываются первыми в списке подагентов. Для нового выбора панель предлагает bare native- и routed-id. При сохранении она сохраняет уже настроенные точные account-qualified id, включая отсутствующие в текущем каталоге. Для добавления нового точного account-qualified id используйте `ocx agent subagents set` или измените конфигурацию. После [однократного обновления Astra](/reference/configuration/agents/#astra-roster-upgrade) явно пустой список сохраняется. |
 | `injectionModel?` | `string` | — | Предпочитаемая native- или routed-модель подагента, которую proxy использует в собственном guidance v2. |
 | `injectionEffort?` | `string` | — | Предпочитаемый effort (`low`–`ultra`), имеющий смысл только вместе с `injectionModel`. |
 | `injectionPrompt?` | `string` | — | Заменяет встроенное тело guidance для v2. Поддерживает `{{model}}`, `{{effort}}`, `{{roster}}` и `{{fallback}}`. Настроенного `injectionModel` достаточно, чтобы отобразить пользовательский prompt. |
@@ -23,19 +24,19 @@ description: Multi-agent surface, guidance при делегировании, pr
 | `effortCap?` | `string` | — | Жёсткий потолок effort для qualifying v2 main-turn'ов и помеченных spawned-child turn'ов. Принимает `low`–`ultra`. |
 | `subagentEffortCap?` | `string` | — | Дополнительный потолок только для spawned-child turn'ов. Если применимы оба cap'а, выигрывает более низкий. |
 
-Управляйте surface через дашборд или `ocx v2 status|on|off|mode <v1|default|v2>|threads <n>`.
-Смена режима применяется к новым сессиям. `maxConcurrentThreadsPerSession` — это поле
+Управляйте surface через дашборд или `ocx v2 status|on|off|mode <v1|default|v2|v2-plaintext>|threads <n>`.
+Изменения закреплений каталога применяются к новым сессиям; компилятор открытого текста следует текущей настройке для подходящих запросов, включая последующие запросы существующих V2-сессий. `maxConcurrentThreadsPerSession` — это поле
 `PUT /api/v2`, а не ключ `config.json`; `ocx v2 threads <n>` записывает
 `max_concurrent_threads_per_session` в `[features.multi_agent_v2]` файла
 `$CODEX_HOME/config.toml` после включения v2.
 
 Management API предоставляет `GET`/`PUT /api/v2`, `/api/injection-model`, `/api/effort-caps`,
 `/api/subagent-models` и `/api/subagent-model-fallback`. Обновления injection-model частичные;
-custom prompt на этом API передаётся полем `prompt`.
+custom prompt на этом API передаётся полем `prompt`. При переходе в `v2-plaintext` запрос `PUT /api/v2` требует `plaintextAgentMessagesAcknowledged: true`; дашборд запрашивает согласие. CLI: `ocx v2 mode v2-plaintext --acknowledge-plaintext-agent-messages`. Общие `config set` и `config import` отказывают при новом переходе: перед восстановлением экспорта с `multiAgentMode: "v2-plaintext"` сначала выполните подтверждённый переход, затем импортируйте файл. Уже активный режим можно восстановить, другие настройки — изменить, а из режима — выйти.
 
 ## Всегда проактивное делегирование
 
-**Всегда проактивное делегирование** в Subagents → Дополнительно (прежнее название — **Ultra mode**) меняет только условие запуска делегирования, не меняя reasoning effort. Рекомендуемый preset сохраняет инструкции пользователя, границы полномочий, область задачи и правила работы с инструментами.
+**Всегда проактивное делегирование** в Subagents → Дополнительно (прежнее название — **Ultra mode**) меняет только условие запуска делегирования, не меняя reasoning effort. Рекомендуемый preset сохраняет инструкции пользователя, границы полномочий, область задачи и правила работы с инструментами. Переключатель дашборда доступен при явно выбранном `v2` с включённой нативной функцией или при `v2-plaintext`, где V2 закреплён в каталоге; одного `ocx v2 on` недостаточно.
 
 `GET` и `PUT /api/v2` дополнительно возвращают `multiAgentModeHintRecommendation: { text, revision }`. При включении или восстановлении preset дашборд использует текст сервера без встроенного запасного варианта. Если старый сервер не возвращает рекомендацию или возвращает некорректное значение, применение и восстановление preset недоступны; существующий custom hint по-прежнему можно редактировать или удалять. Восстановление preset меняет только локальный черновик; действие сохранения записывает его.
 
@@ -110,13 +111,13 @@ native ChatGPT-target'ами и прямыми key-auth Responses-маршрут
 ```json
 {
   "multiAgentMode": "v2",
-  "subagentModels": ["gpt-5.5", "anthropic/claude-sonnet-5"],
-  "injectionModel": "gpt-5.5",
+  "subagentModels": ["gpt-6.1-sol", "anthropic/claude-sonnet-5"],
+  "injectionModel": "gpt-6.1-sol",
   "injectionEffort": "high",
   "syncCodexSubagentDefaults": true,
-  "subagentModelFallback": ["gpt-5.6-luna"],
+  "subagentModelFallback": ["gpt-6-luna"],
   "subagentModelFallbackByModel": {
-    "gpt-5.5": ["gpt-5.6-luna"]
+    "gpt-6.1-sol": ["gpt-6-luna"]
   },
   "subagentModelFallbackPollMs": 60000,
   "subagentEffortCap": "high"
@@ -140,3 +141,9 @@ Cap'ы умеют только понижать effort. Они опускают 
 
 Если нужен объясняющий вариант для начинающих о поведении v1, default и v2, см.
 [Поверхность подагентов](/guides/sub-agent-surface/).
+
+## Plaintext v2 agent messages
+
+`plaintextV2AgentMessages` по умолчанию не задан. Явное `true` или отдельно выбранный `multiAgentMode: "v2-plaintext"` включает экспериментальный компилятор. Режим закрепляет V2 в каталоге для новых сессий при выключенном глобальном принуждении и не меняет независимый флаг; после выхода из режима действует прежнее значение флага. Компилятор следует текущей настройке и для последующих подходящих запросов существующих V2-сессий. Существующий шифротекст не расшифровывается, история не переписывается, а отключение не удаляет копии из истории, запросов провайдеру или локального состояния ответов и отладки.
+
+Вызывающая сторона должна использовать Responses, а конечный маршрут — `adapter: "openai-responses"`, `authMode: "forward"` и точный URL `https://chatgpt.com/backend-api/codex`. Провайдеры с API-ключом OpenAI, совместимые шлюзы, маршруты к другим провайдерам и клиенты без Responses исключены. Для подходящих запросов компилятор обрабатывает аргументы `spawn_agent`, `send_message` и `followup_task`, не выполняя дополнительный запрос восстановления. HTTPS и аутентификация сохраняются; текст может оставаться в истории Codex, запросах провайдеру, `responses-state.json` и его spill-файлах и в `usage-debug.jsonl` при включённой отладке. Поведение зависит от недокументированных деталей ChatGPT и Codex и может перестать работать после обновления. Независимый флаг можно установить командой `ocx config set plaintextV2AgentMessages true`; после изменения перезапустите прокси.

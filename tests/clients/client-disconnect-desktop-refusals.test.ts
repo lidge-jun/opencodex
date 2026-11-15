@@ -107,11 +107,11 @@ function run(kind: Case, retry = false): Outcome {
         }
         if (kind === "desktop-restore-started") {
           // An earlier run restored Claude Desktop and stopped before recording desktop_restored;
-          // this run's Codex restore is refused (an OpenCodex line Codex kept without its marker).
+          // this run's Codex restore is refused (someone pointed the OpenCodex-owned base URL elsewhere).
           const original = 'model_provider = "openai"\\n';
           const url = "http://127.0.0.1:10100/v1";
           const injected = original + '# Auto-injected by opencodex (undo: ocx restore)\\nopenai_base_url = "' + url + '"\\n';
-          fs.writeFileSync(path.join(process.env.CODEX_HOME, "config.toml"), original + 'openai_base_url = "' + url + '"\\n[notice]\\nhide = true\\n');
+          fs.writeFileSync(path.join(process.env.CODEX_HOME, "config.toml"), original + 'openai_base_url = "https://user.example/v1"\\n[notice]\\nhide = true\\n');
           fs.writeFileSync(path.join(process.env.CODEX_HOME, "opencodex-journal.json"), JSON.stringify({
             version: 1, originalConfig: Buffer.from(original).toString("base64"), originalProfile: null,
             injectedConfigHash: hash(injected), injectedProfileHash: null, injectedOpenaiBaseUrl: url,

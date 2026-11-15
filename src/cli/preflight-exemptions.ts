@@ -12,6 +12,8 @@ export function skipsCodexShimAutoRestore(command: string | undefined, args: str
   if (command === "status" || command === "doctor") return true;
   // Explicit orphan-token recovery must not mutate Codex before its guards run.
   if (command === "disconnect" && args.includes("--orphaned-token")) return true;
+  // A Home's link-bound disconnect (--expect-link) must refuse a mismatch with nothing changed, repairs included.
+  if (command === "disconnect" && args.some(arg => arg === "--expect-link" || arg.startsWith("--expect-link="))) return true;
   // The launcher owns shim handoff after classifying routing, including native fast paths.
   if (command === "codex") return true;
   // Exec admission only observes the selected target; it must never repair a shim first.

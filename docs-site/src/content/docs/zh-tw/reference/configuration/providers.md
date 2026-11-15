@@ -85,6 +85,7 @@ ocx models provider openrouter on
 | 欄位 | 型別 | 意義 |
 | --- | --- | --- |
 | `adapter` | `string` | `openai-chat`、`openai-responses`、`anthropic`、`google`、`kiro`、`cursor`、`ollama-native`、`azure-openai`（或別名 `azure`）之一。 |
+| `cacheAffinity?` | `"auto" \| "session" \| "turn" \| "off"` | 優先使用處理上一次成功回合的金鑰，適用於至少有兩個項目的金鑰池，不包括 OAuth/forward。預設值為 `auto`。本機拒絕保留綁定；上游拒絕只釋放與實際提供服務的供應商和項目相符的綁定。請參閱[完整英文契約](/reference/configuration/providers/#provider-entries-ocxproviderconfig)。 |
 | `baseUrl` | `string` | 上游 API base URL。多數內建固定端點忽略不符；碰撞安全的金鑰預設保留較舊的同名自訂目的地。 |
 | `requestPacing?` | `{ enabled, requestsPerMinute?, minIntervalMs?, maxConcurrentRequests?, models?, keySelection?, keys? }` | 選用的用戶端出站請求啟動節流，與上游用量、計費及限流指標彼此獨立。`maxConcurrentRequests` 是限制進行中請求數的正整數，供應商或模型規則都可單獨設定此項。供應商限制適用於所有模型，`models` 依上游模型精確 ID 比對，並可增加延遲或收緊並發限制。排隊等待不計入回應標頭逾時。涵蓋 HTTP 及明確的適配器 `fetchResponse`/`runTurn` 呼叫。設定並行上限時，標準 Responses WebSocket 請求改用 HTTP/SSE，以便在回應本文完成、出錯或取消時釋放並行名額。 對包含 Cursor 的 `runTurn` 適配器，並行上限計算進行中的回合數，而非實體傳送數：同一回合內的 RunSSE 與 BidiAppend 可重疊，其他回合仍須等待。後續傳送仍遵守啟動間隔。 |
 | `requestPacing.keySelection?` | `"active"`, `"round-robin"` | 正常請求的金鑰選擇：預設 `active` 保留已儲存金鑰及既有錯誤切換；`round-robin` 依序分配可用池金鑰，不修改已儲存選擇。均衡的是分配次數，而非權杖或費用。 |
@@ -157,6 +158,8 @@ ocx models provider openrouter on
 | `desktopExecutor?` | `DesktopExecutorConfig` | 僅 Cursor：外部 computer-use 與 record-screen 指令。 |
 | `unsafeAllowNativeLocalExec?` | `boolean` | Cursor 舊版布林值，僅在較新欄位未設定時等同於 `nativeLocalExec: "on"`。 |
 | `nativeLocalExec?` | `"off" \| "codex-sandbox" \| "on"` | Cursor 本機執行政策。`off` 為預設；`codex-sandbox` 目前像 `off` 般 fail closed。 |
+
+對原生 Responses 而言，相同開關也涵蓋只收到生命週期事件後正常結束的 EOF。自包含請求與替換次數限制仍然適用。超出這些限制的請求不會被檢查，其串流也不會被暫扣。直接串流即使上游仍無回應，也會在 200 毫秒內收到原始回應標頭。只有在回傳該回應標頭之前選定替換回應時，替換回應才會帶有其自身的狀態和回應標頭：直接串流的重設或 EOF 必須發生在這 200 毫秒內，且替換回應標頭必須在原始回應到達後 15 秒內（若停滯逾時更短則以其為準）到達。彙整為 JSON 的非串流請求與組合目標沒有 200 毫秒視窗，在回應彙整或選定之前不會向用戶端回傳標頭，因此選擇標頭前可能等待同樣的時間。回傳回應標頭之後，是否替換取決於串流如何結束：讀取錯誤保留重設通道的既有行為，替換內文照舊發佈在原始回應標頭之後；只有生命週期事件後正常結束的 EOF 更嚴格，因為它是以另一次嘗試回答同一輪請求，替換回應必須與已提交的標頭在狀態、狀態文字、content-type 媒體類型、`openai-model` 和 `x-codex-turn-state` 上一致。易變與逐跳標頭（`date`、請求 id、`cf-ray`、`server-timing`、`x-ratelimit-*`、`openai-processing-ms`、`content-length`、`transfer-encoding`、`connection`、`keep-alive`）無需一致，因為用戶端已持有原始標頭的值，而真實上游每次嘗試都會變動這些標頭。不一致時保留原始串流及其錯誤。此後仍在檢查的直接串流會隨回應標頭收到一則 SSE keepalive 註解，此後每 15 秒再收到一則；組合預檢會在選定回應前暫扣這些註解。
 
 LM Studio instruction compatibility: `singleLeadingSystemMessage: true` overrides chronological Chat instruction placement by merging text-only system/developer messages into one leading system message. The LM Studio preset enables it by default; set it to `false` to disable merging.
 

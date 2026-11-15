@@ -183,7 +183,7 @@ describe("ocx link status child block", () => {
   test("status sends children=1 and accepts the block's absence", async () => {
     const result = await status({ role: "home", listener: { state: "listening", port: 19100 }, links: [statusRow], child: null });
     expect(result.code).toBe(0);
-    expect(result.calls[0]?.url).toBe("http://127.0.0.1:19101/api/link/status?compatibility=1&diagnostics=1&children=1");
+    expect(result.calls[0]?.url).toBe("http://127.0.0.1:19101/api/link/status?compatibility=1&diagnostics=1&children=1&transport=1&traffic=1&routes=1");
     expect(JSON.parse(result.stdout[0]!).links[0]).not.toHaveProperty("child");
   });
 

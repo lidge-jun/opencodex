@@ -161,6 +161,8 @@ function quotaText(row: AccountRow): string {
   // Kiro bills a monthly allowance and reports no shorter window, so without this arm a
   // perfectly healthy Kiro account prints "-" and reads as broken.
   if (typeof quota.monthlyPercent === "number") parts.push(`mo ${Math.round(quota.monthlyPercent)}%`);
+  // #8574: the stored weekly reading follows whichever of two live windows came last; say so.
+  if (row.weeklyQuotaConflicts?.length) parts.push("(weekly windows conflict)");
   return parts.length > 0 ? parts.join(" ") : "-";
 }
 

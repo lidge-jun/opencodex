@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
+import { withoutGitRepositoryEnv } from "../git-repository-env";
 import { LAYOUT_PATH, loadLayout, rewriteMetaDirEscapes, rewriteSource, scanEscapes, seedsPathFor, type Layout } from "./schema";
 import { parseDomainArgs, planMoves, repoRootFromHere, type Move } from "./plan";
 import { filesNamingAny, runVerify } from "./verify";
@@ -41,7 +42,9 @@ export interface MoveReport {
 
 function defaultGit(root: string) {
   return (args: string[]) => {
-    const proc = Bun.spawnSync(["git", ...args], { cwd: root, stdout: "pipe", stderr: "pipe" });
+    const proc = Bun.spawnSync(["git", ...args], {
+      cwd: root, env: withoutGitRepositoryEnv(process.env), stdout: "pipe", stderr: "pipe",
+    });
     return { status: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
   };
 }

@@ -7,7 +7,7 @@ independent projection. The ordinary HTTP/WS adapter in
 `src/adapters/openai-responses/passthrough.ts` applies citation repair only after destination
 classification.
 
-The direct native `/responses/compact` path in `src/server/responses/compact.ts` applies the same
+The direct native `/responses/compact` path in `src/server/responses/compact.ts` also captures display-only key rate-limit headers at the physical boundary and applies the same
 gate in its final body builder for every physical send, including a provider destination refreshed
 after key admission. It keeps the shared history free of citation repair so an OpenAI-to-gateway
 refresh preserves the gateway's original annotations and the reverse refresh still repairs OpenAI

@@ -2,10 +2,10 @@ import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import type { ProviderAdapter } from "../../src/adapters/base";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { resetProviderRequestPacingForTest } from "../../src/providers/request-pacing";
-import { clearResponseStateForTests, expandPreviousResponseInput, flushResponseState } from "../../src/responses/state";
+import { clearResponseStateForTests, flushResponseState } from "../../src/responses/state";
 import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import * as adapterResolver from "../../src/server/adapter-resolve";
-import { handleResponses } from "../../src/server/responses";
+import { expandOwnedResponseInput, handleOwnedResponses } from "../helpers/response-replay-owner";
 import { namespacedToolName, type AdapterEvent, type OcxConfig, type OcxParsedRequest } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { createTempHome } from "../helpers/temp-home";
@@ -96,7 +96,7 @@ function setup(lane: Lane): OcxConfig {
 }
 
 async function post(config: OcxConfig, stream: boolean, body: Rec): Promise<Reply> {
-  const response = await handleResponses(new Request("http://127.0.0.1/v1/responses", {
+  const response = await handleOwnedResponses(new Request("http://127.0.0.1/v1/responses", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "fixture/model", stream, ...body }),
   }), config, { model: "", provider: "" });
@@ -125,7 +125,7 @@ function assertCurrentIdentity(reply: Reply, namespace: string | undefined, allo
     expect(streamedCalls).toHaveLength(0);
     expect((reply.response.error as Rec).message).toContain("undeclared client tool");
     const continuation = { previous_response_id: reply.response.id, input: [userInput] };
-    expect(expandPreviousResponseInput(continuation)).toBe(continuation);
+    expect(expandOwnedResponseInput(continuation)).toBe(continuation);
     return;
   }
   expect(reply.response.status).toBe("completed");

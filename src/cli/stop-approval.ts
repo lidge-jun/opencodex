@@ -4,7 +4,9 @@ import { waitForPortAvailable } from "../server/ports";
 import { probeEndpointLiveness, probeHostname } from "../server/proxy-liveness";
 import type { GuardedManagerTarget } from "../service/guarded-manager-target";
 import type { ResolveJson } from "./resolve";
-import { STOP_SUMMARY_SCHEMA, type StopOutcome, type StopRunRecord, type StopServiceOutcome } from "./stop-report";
+import { STOP_SUMMARY_SCHEMA, stopReasonFields, type StopOutcome, type StopRunRecord, type StopServiceOutcome, type StopServiceReason } from "./stop-report";
+
+type MaybePromise<T> = T | Promise<T>;
 
 export interface StopApproval {
   pid: number;
@@ -36,15 +38,43 @@ function sameGuardedManager(
   current: GuardedManagerTarget,
 ): boolean {
   if (expected.kind === "absent") return current.kind === "absent";
+  if (expected.kind === "bound-stray") {
+    // The bound wrapper set is the identity (#7771): same PIDs with the same creation times.
+    if (current.kind !== "bound-stray" || current.pid !== expected.pid) return false;
+    const key = (set: { pid: number; startTime: number }[]) =>
+      set.map(wrapper => `${wrapper.pid}@${wrapper.startTime}`).sort().join(",");
+    return key(current.wrappers) === key(expected.wrappers);
+  }
   return current.kind === "bound" && current.pid === expected.pid
     && current.managerPid === expected.managerPid && current.backend === expected.backend;
 }
 
-export type StopApprovalParse = { ok: true; json: boolean; approval: StopApproval | null } | { ok: false };
+export type StopApprovalParse =
+  | { ok: true; json: boolean; approval: StopApproval | null; deadlineMs: number | null }
+  | { ok: false };
 
-export function parseStopApproval(argv: string[]): StopApprovalParse {
-  if (argv.length === 0) return { ok: true, json: false, approval: null };
-  if (argv.every(arg => arg === "--json")) return { ok: true, json: true, approval: null };
+/**
+ * --deadline-ms <n> (#7771): a positive decimal number of milliseconds, measured from this
+ * process's start; at most once, anywhere in the argument list. Removed here so the
+ * approval grammar below stays exactly what it was.
+ */
+function takeStopDeadline(argv: string[]): { argv: string[]; deadlineMs: number | null } | null {
+  const at = argv.indexOf("--deadline-ms");
+  if (at < 0) return { argv, deadlineMs: null };
+  if (argv.indexOf("--deadline-ms", at + 1) >= 0) return null;
+  const raw = argv[at + 1];
+  if (raw === undefined || !/^\d+$/.test(raw)) return null;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value <= 0) return null;
+  return { argv: [...argv.slice(0, at), ...argv.slice(at + 2)], deadlineMs: value };
+}
+
+export function parseStopApproval(input: string[]): StopApprovalParse {
+  const taken = takeStopDeadline(input);
+  if (!taken) return { ok: false };
+  const { argv, deadlineMs } = taken;
+  if (argv.length === 0) return { ok: true, json: false, approval: null, deadlineMs };
+  if (argv.every(arg => arg === "--json")) return { ok: true, json: true, approval: null, deadlineMs };
   const names = ["--expect-pid", "--expect-port", "--expect-hostname",
     "--expect-config-home", "--expect-cli-version", "--expect-compatibility-token"];
   if (argv.filter(arg => arg === "--json").length !== 1) return { ok: false };
@@ -68,7 +98,7 @@ export function parseStopApproval(argv: string[]): StopApprovalParse {
   const cliVersion = values.get("--expect-cli-version") ?? "";
   if (pid === null || port === null || !/^[a-f0-9]{64}$/.test(compatibilityToken)
     || !configHome || !cliVersion) return { ok: false };
-  return { ok: true, json: true, approval: {
+  return { ok: true, json: true, deadlineMs, approval: {
     pid, port, hostname: values.get("--expect-hostname") ?? "",
     configHome, cliVersion, compatibilityToken,
   } };
@@ -104,23 +134,25 @@ export function stopApprovalMismatch(expected: StopApproval, now: ResolveJson): 
   return null;
 }
 
-export function approvalChanged(detail?: string): StopOutcome {
+export function approvalChanged(detail?: string, serviceStopReason?: StopServiceReason): StopOutcome {
   return { ok: false, summary: {
     schema: STOP_SUMMARY_SCHEMA, ok: false, outcome: "approval-changed", exitCode: 1,
     runtimeDown: false, service: "absent", proxy: "unknown", sharedTeardown: "skipped",
     ...(detail ? { detail } : {}),
+    ...stopReasonFields({ serviceStopReason }),
     message: `The approved runtime or managing CLI changed${detail ? `: ${detail}` : ""}; no stop was attempted.`,
   } };
 }
 
 export function managerStillActive(
   service: StopServiceOutcome,
-  record?: Pick<StopRunRecord, "proxy" | "sharedTeardown">,
+  record?: Pick<StopRunRecord, "proxy" | "sharedTeardown" | "serviceStopReason" | "portHeldByForeign">,
 ): StopOutcome {
   return { ok: false, summary: {
     schema: STOP_SUMMARY_SCHEMA, ok: false, outcome: "manager-still-active", exitCode: 1,
     runtimeDown: false, service,
     proxy: record?.proxy ?? "unknown", sharedTeardown: record?.sharedTeardown ?? "skipped",
+    ...stopReasonFields(record ?? {}),
     message: "The approved runtime and service manager could not both be confirmed stopped.",
   } };
 }
@@ -129,14 +161,14 @@ export async function runApprovedStop(
   expected: StopApproval,
   read: () => Promise<ResolveJson | null>,
   tracked: () => TrackedRuntimeCheck,
-  managerTarget: () => GuardedManagerTarget,
+  managerTarget: () => MaybePromise<GuardedManagerTarget>,
   stop: (snapshot: GuardedStopSnapshot) => Promise<StopOutcome>,
 ): Promise<StopOutcome> {
   let snapshot: GuardedStopSnapshot | null = null;
   try {
     const now = await read();
     const target = tracked();
-    const manager = managerTarget();
+    const manager = await managerTarget();
     if (now === null) return approvalChanged("the runtime could not be re-resolved");
     const mismatch = stopApprovalMismatch(expected, now);
     if (mismatch !== null) return approvalChanged(mismatch);
@@ -149,9 +181,9 @@ export async function runApprovedStop(
       return approvalChanged("the tracked runtime record changed");
     }
     if (manager.kind === "unknown") {
-      return approvalChanged(`the service manager could not be re-verified (${manager.reason})`);
+      return approvalChanged(`the service manager could not be re-verified (${manager.reason})`, manager.stopReason);
     }
-    if (manager.kind === "bound" && manager.pid !== expected.pid) {
+    if ((manager.kind === "bound" || manager.kind === "bound-stray") && manager.pid !== expected.pid) {
       return approvalChanged("a different manager owns the approved runtime");
     }
     snapshot = { approval: expected, manager };
@@ -188,30 +220,40 @@ export async function settleApprovedTarget(
 export async function runGuardedManagerStep(
   snapshot: GuardedStopSnapshot,
   io: {
-    revalidateManager: () => GuardedManagerTarget;
-    stopManager: () => StopServiceOutcome;
+    revalidateManager: () => MaybePromise<GuardedManagerTarget>;
+    /** Async on every platform; on Windows it is Part A of the checked stop (#7771). */
+    stopManager: () => MaybePromise<StopServiceOutcome>;
     signalApproved: () => Promise<boolean>;
     settle: () => Promise<boolean>;
+    /**
+     * Windows Part B after settle (#7771): the approved endpoint stays free for the hold
+     * and no wrapper of this home came back. Runs only where stopManager ran.
+     */
+    confirmFreed?: () => Promise<boolean>;
     managerState: () => Promise<"inactive" | "active" | "unknown">;
   },
 ): Promise<{ service: StopServiceOutcome; effect: "stopped" | "approval-changed" | "manager-still-active" | "failed";
-  proxy: "stopped" | "unknown"; handledByProxy: boolean; detail?: string }> {
+  proxy: "stopped" | "unknown"; handledByProxy: boolean; detail?: string; stopReason?: StopServiceReason }> {
   try {
-    const current = io.revalidateManager();
+    const current = await io.revalidateManager();
     if (!sameGuardedManager(snapshot.manager, current)) {
       // An unprovable manager is not a proven change: name the observation failure,
       // not a swap, or the stop log loses why the revalidation could not answer.
       const detail = current.kind === "unknown"
         ? `the service manager could not be re-verified (${current.reason})`
         : "the service manager changed between approval and stop";
-      return { service: "absent", effect: "approval-changed", proxy: "unknown", handledByProxy: false, detail };
+      return { service: "absent", effect: "approval-changed", proxy: "unknown", handledByProxy: false, detail,
+        ...(current.kind === "unknown" && current.stopReason ? { stopReason: current.stopReason } : {}) };
     }
   } catch {
     return { service: "absent", effect: "approval-changed", proxy: "unknown", handledByProxy: false,
       detail: "the service manager could not be re-validated" };
   }
-  const service = snapshot.manager.kind === "absent" ? "absent" : io.stopManager();
-  if (snapshot.manager.kind === "bound"
+  // The order is the #7771 contract: the manager and its wrappers end first (nothing can
+  // relaunch the child), then the approved PID gets its graceful signal and receipt.
+  const managed = snapshot.manager.kind !== "absent";
+  const service = managed ? await io.stopManager() : "absent";
+  if (managed
     && service !== "stopped" && service !== "stopped-respawnable") {
     return { service, effect: "manager-still-active", proxy: "unknown", handledByProxy: false };
   }
@@ -230,6 +272,11 @@ export async function runGuardedManagerStep(
   }
   if (!await io.settle()) {
     return { service, effect: "manager-still-active", proxy: "unknown", handledByProxy };
+  }
+  if (managed && io.confirmFreed) {
+    try {
+      if (!await io.confirmFreed()) return { service, effect: "manager-still-active", proxy: "unknown", handledByProxy };
+    } catch { return { service, effect: "manager-still-active", proxy: "unknown", handledByProxy }; }
   }
   try {
     if (await io.managerState() !== "inactive") {

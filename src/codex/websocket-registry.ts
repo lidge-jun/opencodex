@@ -7,11 +7,11 @@ export const MAX_TRACKED_CODEX_WEBSOCKETS = 128;
 const websocketGate = createAdmissionGate("codex_websockets", MAX_TRACKED_CODEX_WEBSOCKETS);
 const admittedSockets = new Set<ServerWebSocket<WsData>>();
 
-function reclaimOldestIdleSocket(): void {
+function reclaimOldestIdleSocket(eligible: (ws: ServerWebSocket<WsData>) => boolean = () => true): void {
   let oldest: ServerWebSocket<WsData> | undefined;
   for (const ws of admittedSockets) {
     const activity = ws.data.responsesActivity;
-    if (!activity?.idle || ws.data.nativeControl || ws.readyState !== 1 || ws.getBufferedAmount() !== 0) continue;
+    if (!activity?.idle || ws.data.nativeControl || ws.readyState !== 1 || ws.getBufferedAmount() !== 0 || !eligible(ws)) continue;
     if (!oldest || activity.lastUsed < oldest.data.responsesActivity!.lastUsed) oldest = ws;
   }
   if (!oldest) return;
@@ -25,8 +25,15 @@ function reclaimOldestIdleSocket(): void {
   }
 }
 
-export function tryReserveCodexWebSocket(): AdmissionReservation<ServerWebSocket<WsData>> | null {
-  if (websocketGate.metrics().active >= MAX_TRACKED_CODEX_WEBSOCKETS) reclaimOldestIdleSocket();
+/**
+ * A slot in the shared socket gate. A local upgrade may reclaim the least recently used idle
+ * socket when the gate is full. A Remote Link upgrade passes reclaim: "link" and may reclaim only
+ * an idle Remote Link socket, never a local client's; reclaim: false never reclaims.
+ */
+export function tryReserveCodexWebSocket(options: { reclaim?: boolean | "link" } = {}): AdmissionReservation<ServerWebSocket<WsData>> | null {
+  if (options.reclaim !== false && websocketGate.metrics().active >= MAX_TRACKED_CODEX_WEBSOCKETS) {
+    reclaimOldestIdleSocket(options.reclaim === "link" ? ws => ws.data.link !== undefined : undefined);
+  }
   const gateLease = websocketGate.tryAcquire();
   if (!gateLease) return null;
   let socket: ServerWebSocket<WsData> | undefined;

@@ -4,6 +4,8 @@ export interface OrchestratedExpect {
   servingRoot: string | null;
   runtimePid: number | null;
   planToken: string;
+  /** Store fields are present only for a global virtual-store owner. */
+  pnpmOwner?: { commandPath: string; packagePath: string; globalDir: string; globalRoot: string; globalBinDir: string; store?: string; storePath?: string; virtualStoreDirs?: string[] };
 }
 export declare function encodeOrchestratedExpect(value: OrchestratedExpect): string;
 export declare function decodeOrchestratedExpect(encoded: string): OrchestratedExpect;

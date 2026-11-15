@@ -7,6 +7,14 @@ const now = Date.UTC(2026, 8, 23, 3);
 const name = (provider: string) => provider;
 
 describe("quota summary", () => {
+  test("unknown Mistral budgets are listed without a fabricated percentage", () => {
+    const reports = freshQuotaReportsFromResponse([{ provider: "mistral", updatedAt: now, quota: {
+      updatedAt: now, unknownBudgetWindows: [{ label: "API budget (EDU)" }, { label: "Vibe budget (EDU)" }],
+    } }], now);
+    const row = buildQuotaSummary(reports, name)[0];
+    expect(row?.headline.percent).toBeUndefined();
+    expect(row?.windows.map(window => window.label)).toEqual(["API budget (EDU)", "Vibe budget (EDU)"]);
+  });
   test("severity thresholds are 70% warn and 90% critical", () => {
     expect(quotaSeverity(undefined)).toBe("normal");
     expect(quotaSeverity(69.9)).toBe("normal");

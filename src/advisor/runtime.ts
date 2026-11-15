@@ -36,6 +36,7 @@ import {
 } from "./state";
 import { formatAdvisorAdvice, advisorPreflightMessages, formatAdvisorUnavailable } from "./context";
 import { advisorActivityStore, type AdvisorActivityStore, type AdvisorTrigger } from "./activity";
+import { advisorPlanRootConfig } from "../server/responses/advisor-plan-slot";
 import { createAdvisorTaskBudget, type AdvisorTaskBudget } from "./budget";
 import { collectAdvisorRepairEvidence, type AdvisorRepairEvidence } from "./evidence";
 import type { AdmissionModelScope } from "../server/admission-model-scope";
@@ -95,7 +96,10 @@ export function createAdvisorRuntimePlan(deps: AdvisorRuntimeDeps): AdvisorRunti
   const ledger = deps.ledger ?? sharedPreflightLedger;
   const now = deps.now ?? (() => Date.now());
   const budget = deps.budget ?? createAdvisorTaskBudget();
-  const activities = deps.activities ?? advisorActivityStore(deps.config);
+  // Identity-scoped state must key on the LIVE config: `GET /api/advisor/activity` reads the store
+  // of the management context's own config, so a request-scoped view (the Claude replay config)
+  // would record consultations the dashboard and CLI never see.
+  const activities = deps.activities ?? advisorActivityStore(advisorPlanRootConfig(deps.config));
   // Management PUT mutates this same config object (`config.advisor = ...`). Re-resolving
   // at dispatch is what makes a mid-request consent revocation stop outbound transfer.
   const liveSettings = () => resolveAdvisorSettings(deps.config);

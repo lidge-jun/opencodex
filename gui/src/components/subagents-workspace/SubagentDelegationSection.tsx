@@ -11,6 +11,7 @@ import { Select } from "../../ui";
 import { IconArrowDown, IconArrowUp, IconChevron, IconX } from "../../icons";
 import { useT, type TKey } from "../../i18n/shared";
 import { formatNamespacedModelId } from "../../provider-icons";
+import { subagentSurfaceModes } from "../../subagent-surface";
 import { clampNumberDraft } from "../../clamp-draft";
 import { cn } from "@/lib/utils";
 import { Button } from "../ui-v2/button";
@@ -311,11 +312,14 @@ export default function SubagentDelegationSection({
               <a className="text-highlight hover:underline" href="https://opencodex.me/guides/sub-agent-surface/" target="_blank" rel="noreferrer">
                 {t("models.v2DocsLink")}
               </a>
+              {ultraMode.plaintextAgentMessagesEnabled === true && (
+                <span className="block">{t("models.v2PlaintextOn")}</span>
+              )}
             </>}
             help={<HelpTip label={t("models.v2Label")}><span className="whitespace-pre-line">{t("models.v2Help")}</span></HelpTip>}
             control={
               <div className="segmented models-segmented" role="radiogroup" aria-label={t("models.v2Label")}>
-                {(["v1", "default", "v2"] as const).map(mode => (
+                {subagentSurfaceModes(ultraMode.supportsPlaintextV2Mode === true).map(mode => (
                   <button
                     key={mode}
                     type="button"

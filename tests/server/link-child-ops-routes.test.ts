@@ -86,7 +86,9 @@ function harness(options: { links?: LinkRecord[]; runtimeRole?: OcxConfig["runti
       flushCatalogPulls: () => { options.onFlush?.(); },
     } : {}),
   };
-  const config = { port: 10100, hostname: "127.0.0.1", runtimeRole: options.runtimeRole ?? "hub", defaultProvider: "mock", providers: {}, apiKeys: [] } as OcxConfig;
+  // Every stored link's issued key is listed, as in a real Home; revoking removes it.
+  const config = { port: 10100, hostname: "127.0.0.1", runtimeRole: options.runtimeRole ?? "hub", defaultProvider: "mock", providers: {},
+    apiKeys: current.links.map(record => ({ id: record.apiKeyId })) } as unknown as OcxConfig;
   const deps: ManagementApiDeps = {
     readLinkStore: () => current,
     writeLinkStore: next => { current = next; events.push("store"); },
@@ -94,7 +96,7 @@ function harness(options: { links?: LinkRecord[]; runtimeRole?: OcxConfig["runti
     linkListener: () => listener,
     linkKnownHostsPath: () => join(temp, "known_hosts"),
     sshRunner: runner,
-    revokeApiKey: () => { events.push("revoke"); return true; },
+    revokeApiKey: (_config, id) => { events.push("revoke"); config.apiKeys = (config.apiKeys ?? []).filter(key => key.id !== id); return true; },
     now: () => 1_762_819_200_000,
   };
   const call = async (path: string, method = "GET", body?: unknown, principal: "admin-token" | "gui-session" | null = "admin-token",

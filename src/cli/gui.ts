@@ -1,4 +1,5 @@
 import type { OcxConfig } from "../types";
+import { desktopGuiOrigin } from "../lib/desktop-gui-origin";
 import { canonicalGuiBrowserOrigin, standaloneGuiPairingOrigin } from "../lib/gui-pair-capability";
 import { findLiveProxy, type LiveProxy } from "../server/proxy-liveness";
 import {
@@ -8,7 +9,7 @@ import {
 } from "./gui-pair-client";
 import type { RuntimeApiDeps } from "./runtime-api";
 
-const GUI_USAGE = "ocx gui [pair --origin <browser-origin> [--json]]";
+const GUI_USAGE = "ocx gui [pair [--desktop] --origin <browser-origin> [--json]]";
 const PAIRING_WARNING = "Pairing grants are secret, single-use, and expire quickly. Do not save them.";
 
 export interface GuiCommandDeps extends RuntimeApiDeps {
@@ -28,11 +29,13 @@ function allowedPairingOrigin(origin: string, config: OcxConfig): boolean {
   return (config.corsAllowOrigins ?? []).some(value => canonicalGuiBrowserOrigin(value) === origin);
 }
 
-function parsePairArgs(args: string[]): { origin: string; json: boolean } | null {
+function parsePairArgs(args: string[]): { origin: string; json: boolean; desktop: boolean } | null {
   let origin: string | undefined;
   let json = false;
+  let desktop = false;
   for (let index = 0; index < args.length; index++) {
     const arg = args[index]!;
+    if (arg === "--desktop" && !desktop) { desktop = true; continue; }
     if (arg === "--json" && !json) {
       json = true;
       continue;
@@ -45,7 +48,7 @@ function parsePairArgs(args: string[]): { origin: string; json: boolean } | null
     }
     return null;
   }
-  return origin ? { origin, json } : null;
+  return origin ? { origin, json, desktop } : null;
 }
 
 export async function runGuiCommand(args: string[], deps: GuiCommandDeps): Promise<number> {
@@ -61,8 +64,9 @@ export async function runGuiCommand(args: string[], deps: GuiCommandDeps): Promi
     return 1;
   }
   const config = deps.loadConfig();
-  if (!allowedPairingOrigin(canonicalOrigin, config)) {
-    console.error("Pairing requires the standalone configured literal loopback origin, or an allowed hub origin.");
+  if (!(parsed.desktop ? desktopGuiOrigin(config, canonicalOrigin) === canonicalOrigin : allowedPairingOrigin(canonicalOrigin, config))) {
+    console.error(parsed.desktop ? "Desktop authorization requires the standalone local dashboard origin and its exact listening port."
+      : "Pairing requires the standalone configured literal loopback origin, or an allowed hub origin.");
     return 1;
   }
   const target = await (deps.findLiveProxy ?? findLiveProxy)();
@@ -78,6 +82,7 @@ export async function runGuiCommand(args: string[], deps: GuiCommandDeps): Promi
   const result = await (deps.requestPairingGrant ?? requestBoundGuiPairingGrant)(target, canonicalOrigin, {
     ...(deps.fetchImpl ? { fetchImpl: deps.fetchImpl } : {}),
     requireLocalIntent: config.runtimeRole !== "hub",
+    desktopPurpose: parsed.desktop,
   });
   if (result.kind !== "created") {
     console.error(result.reason === "local-intent"

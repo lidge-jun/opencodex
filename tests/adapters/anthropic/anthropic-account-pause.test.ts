@@ -128,7 +128,7 @@ for (const source of [undefined, "invalid-source"] as const) {
       const usageBearers: Array<string | null> = [];
       const modelBearers: Array<string | null> = [];
       const refreshTokens: string[] = [];
-      const detect = spyOn(localTokens, "detectClaudeCodeToken").mockImplementation(() => {
+      const detect = spyOn(localTokens, "detectClaudeCodeTokenAsync").mockImplementation(() => {
         throw new Error("legacy accounts must not read external Claude credentials");
       });
       const refreshed = { access: "synthetic-legacy-refreshed", refresh: "synthetic-legacy-rotated", expires: Date.now() + 3_600_000 };
@@ -190,7 +190,7 @@ test("a promoted local-CLI account cannot adopt another account after entering t
   await saveAccountCredential("anthropic", b, background);
   expect(await setAccountPaused("anthropic", a, true)).toMatchObject({ activeAccountId: b, activeAccountChanged: true });
   const pausedCredential = getAccountCredential("anthropic", a)!;
-  const detect = spyOn(localTokens, "detectClaudeCodeToken").mockReturnValue({ ...pausedCredential, source: "local-cli" });
+  const detect = spyOn(localTokens, "detectClaudeCodeTokenAsync").mockResolvedValue({ ...pausedCredential, source: "local-cli" });
   const refreshed = { access: "synthetic-b-refreshed", refresh: "synthetic-b-refresh", expires: now + 3_600_000 };
   const sent: string[] = [];
   try {

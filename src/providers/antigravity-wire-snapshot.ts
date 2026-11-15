@@ -6,7 +6,7 @@ import { getConfigDir } from "../config/paths";
 import { isValidProviderName } from "../config/provider-name";
 import { isValidModelDiscoveryModelId, MODEL_DISCOVERY_MAX_MODELS, MODEL_DISCOVERY_MAX_RESPONSE_BYTES } from "./model-discovery-limits";
 
-export type AntigravitySuffixMap = Record<"low" | "medium" | "high", string>;
+export type AntigravitySuffixMap = Record<"low" | "medium" | "high", string> & Partial<Record<"xhigh", string>>;
 export interface AntigravityWireSnapshot {
   version: 1;
   provider: string;
@@ -31,7 +31,8 @@ function validatedSnapshot(value: unknown): AntigravityWireSnapshot | undefined 
     if (!isValidModelDiscoveryModelId(base) || !candidate || typeof candidate !== "object" || Array.isArray(candidate)) return undefined;
     const map = candidate as Record<string, unknown>;
     if (!EFFORTS.every(effort => map[effort] === `${base}-${effort}` && isValidModelDiscoveryModelId(map[effort]))) return undefined;
-    families[base] = { low: `${base}-low`, medium: `${base}-medium`, high: `${base}-high` };
+    if (map.xhigh !== undefined && (map.xhigh !== `${base}-xhigh` || !isValidModelDiscoveryModelId(map.xhigh))) return undefined;
+    families[base] = { low: `${base}-low`, medium: `${base}-medium`, high: `${base}-high`, ...(map.xhigh ? { xhigh: `${base}-xhigh` } : {}) };
   }
   return { version: 1, provider: row.provider, families };
 }

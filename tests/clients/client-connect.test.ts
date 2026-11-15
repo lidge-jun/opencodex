@@ -517,10 +517,10 @@ function runTransactionScenario(
         connected = await connectClient({
           serverUrl: "https://hub.example.test",
           credential: { kind: "admin", value: credential },
-          selectedClients: ["claude"],
+          selectedClients: stage === "preflight" ? ["codex"] : ["claude"],
           managementTransport: "direct",
           noSync: true,
-        }, { fetchImpl, now: () => {
+        }, { fetchImpl, catalogCompatibility: { supportedEfforts: () => new Set() }, now: () => {
           if (stage === "commit") setPersistedConfigMutationBeforeCommitForTests(() => {
             commitFaultTriggered = true;
             throw new Error("fixture_final_client_commit_failed");
@@ -1211,13 +1211,11 @@ function runDesktopLifecycleScenario(mode: string) {
               owner: { kind: "client", apiKeyId: owner.apiKeyId },
             }));
             const actualRestore = journal.restoreJournalState;
-            // Forward the arguments: disconnect passes its held config write lock, and dropping it
-            // makes the real restore see its own lock as another writer.
-            journalSpy = spyOn(journal, "restoreJournalState").mockImplementation((...args) => {
+            journalSpy = spyOn(journal, "restoreJournalState").mockImplementation(() => {
               const r = store.readDesktopDisconnectReceipt();
               codexSawPrepared = r.kind === "valid" && r.value.phase === "prepared";
               codexOutsideL = locks.withClientLifecycleSync(() => true, lockDeps);
-              return actualRestore(...args);
+              return actualRestore();
             });
           }
           if (mode === "disconnect-foreign") {

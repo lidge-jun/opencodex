@@ -7,16 +7,24 @@ export interface AntigravityEffortFamilyRow {
   provider: string;
   custom?: boolean;
   catalogKind?: string;
-  antigravityEffortWireModelIds?: Partial<Record<"low" | "medium" | "high", string>>;
+  antigravityEffortWireModelIds?: Partial<Record<"low" | "medium" | "high" | "xhigh", string>>;
 }
 
 const FAMILY_EFFORTS = ["low", "medium", "high"] as const;
 
+/**
+ * The exact wire ids of a complete discovered family: low/medium/high, plus the optional xhigh
+ * tier when discovery mapped it (Gemini 4 Hydrogen). Selection projection, public collapse and
+ * disabled-tier inheritance all read this list, so an xhigh-only selection or disable carries
+ * over to the collapsed base exactly as a low/medium/high one does.
+ */
 export function antigravityEffortFamilyIds(row: AntigravityEffortFamilyRow): string[] | undefined {
   if (row.custom || row.catalogKind === "custom-model-v1" || !row.antigravityEffortWireModelIds) return undefined;
+  const map = row.antigravityEffortWireModelIds;
   const ids = FAMILY_EFFORTS.map(effort => `${row.id}-${effort}`);
-  return FAMILY_EFFORTS.every((effort, index) => row.antigravityEffortWireModelIds![effort] === ids[index])
-    ? ids : undefined;
+  if (!FAMILY_EFFORTS.every((effort, index) => map[effort] === ids[index])) return undefined;
+  if (map.xhigh === undefined) return ids;
+  return map.xhigh === `${row.id}-xhigh` ? [...ids, map.xhigh] : undefined;
 }
 
 /** Retained wire targets stay routable internally; only the public list collapses. */

@@ -12,7 +12,9 @@ import type { OcxConfig } from "../../types";
 import { handleManagementAPI, type ManagementApiDeps } from "../management-api";
 import type { ManagementSessionControl } from "../management-auth";
 import { runPassiveRead } from "../../lib/passive-read";
-import { LINK_CODEX_SETTINGS_PATH, linkManagementRouteAllowed, linkManagementTarget } from "../../link/management-routes";
+import { LINK_CODEX_SETTINGS_PATH, LINK_ROUTE_INTENT_PATH, LINK_ROUTE_CATALOG_PATH, linkManagementRouteAllowed, linkManagementTarget } from "../../link/management-routes";
+import { projectRouteCatalogFacts } from "../../integrations/route-intent-catalog";
+import { readLinkRouteIntent } from "./route-intent-watch";
 import { projectHomeCodexSettings } from "../../link/codex-settings";
 import { homeLinkChildParity, LINK_CHILD_PARITY_MAX_BYTES, LINK_CHILD_PARITY_PATH, parseLinkChildParityReport } from "../../link/child-parity";
 import { linkStorePath } from "../../link/paths";
@@ -76,9 +78,21 @@ export async function handleLinkManagementRequest(
   deps: ManagementApiDeps,
   sessionControl?: ManagementSessionControl,
   admittedKeyId?: string,
+  /** Repeats link-key admission for a request that waited; see readLinkRouteIntent. */
+  readmit?: () => string | undefined,
 ): Promise<Response> {
   if (url.pathname === LINK_CHILD_PARITY_PATH) return handleChildParityReport(req, url, admittedKeyId);
   if (!linkManagementRouteAllowed(url, req)) return notFound();
+  if (url.pathname === LINK_ROUTE_CATALOG_PATH) {
+    if (!admittedKeyId) return refused(403, "link_key_required");
+    try {
+      if (readLinkStore(linkStorePath()).links.filter(link => link.apiKeyId === admittedKeyId).length !== 1) return refused(403, "link_mismatch");
+      return Response.json(projectRouteCatalogFacts(config), { headers: { "cache-control": "no-store" } });
+    } catch { return refused(503, "route_catalog_unavailable"); }
+  }
+  if (url.pathname === LINK_ROUTE_INTENT_PATH) {
+    return readLinkRouteIntent(req, config, VERSION, admittedKeyId, readmit);
+  }
   if (url.pathname === LINK_CODEX_SETTINGS_PATH) {
     return Response.json(projectHomeCodexSettings(config, VERSION), { headers: { "cache-control": "no-store" } });
   }

@@ -3,6 +3,10 @@ export const STATE_SWEEP_INTERVAL_MS = 60_000;
 export interface GenerationContext {
   generation: number;
   providerNames: ReadonlySet<string>;
+  /** Providers disabled in the live configuration; stores keyed by provider may drop their rows. */
+  disabledProviderNames?: ReadonlySet<string>;
+  /** Live key-pool entry ids per provider, for stores that bind to one entry. */
+  providerKeyEntryIds?: ReadonlyMap<string, ReadonlySet<string>>;
   comboIds: ReadonlySet<string>;
   comboTargets: ReadonlySet<string>;
   codexAccountIds: ReadonlySet<string>;

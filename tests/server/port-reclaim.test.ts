@@ -467,6 +467,20 @@ describe("parseTcpQuadsForLocalPort / IPv6", () => {
     ]);
   });
 
+  test("an owner filter keeps only the rows the named processes own", () => {
+    const output = [
+      "  TCP    127.0.0.1:10100        0.0.0.0:0              LISTENING       18268",
+      "  TCP    127.0.0.1:10100        127.0.0.1:60001        ESTABLISHED     18268",
+      "  TCP    127.0.0.1:10100        127.0.0.1:60002        ESTABLISHED     20001",
+    ].join("\n");
+    // The exited proxy's rows are cleared; the program that took the port keeps its own.
+    expect(parseTcpQuadsForLocalPort(output, 10100, [18268]).map(row => row.remotePort)).toEqual([0, 60001]);
+    expect(parseTcpQuadsForLocalPort(output, 10100, [20001]).map(row => row.remotePort)).toEqual([60002]);
+    expect(parseTcpQuadsForLocalPort(output, 10100, [])).toEqual([]);
+    // No filter keeps every row, which is what the hard-kill path wants.
+    expect(parseTcpQuadsForLocalPort(output, 10100)).toHaveLength(3);
+  });
+
   test("keeps IPv6 local rows parseable without coercing them into IPv4 wildcards", () => {
     const output = [
       "  TCP    [::1]:10100            [::]:0                 LISTENING       18268",

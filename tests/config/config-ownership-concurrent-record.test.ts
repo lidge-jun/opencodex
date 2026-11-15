@@ -487,7 +487,7 @@ describe("rerunning ocx uninstall through its cleanup flow (#8093)", () => {
     expect(() => recordOwnedConfigPath(dir, join(dir, "config-mutation.sqlite"))).toThrow(ConfigUninstallInProgressError);
     const lockPath = join(dirname(dir), "runtime", "lifecycle.sqlite");
     const result = await removeOwnedConfigAfterDesktopCleanup(
-      { serviceStop: "stopped", serviceRemoval: "removed", proxyProvenDown: true, respawnWindowVerified: false },
+      { serviceStop: "stopped", serviceRemoval: "removed", proxyProvenDown: true, respawnWindowVerified: true },
       {
         readConnection: () => ({ kind: "disconnected" }),
         inspectDesktop: () => ({ kind: "absent" }),
@@ -568,7 +568,7 @@ describe("rerun after the owner marker was already deleted (#8093)", () => {
     expect(() => recordOwnedConfigPath(dir, join(dir, "late"))).toThrow(ConfigUninstallInProgressError);
     const lockPath = join(dirname(dir), "runtime", "lifecycle.sqlite");
     const result = await removeOwnedConfigAfterDesktopCleanup(
-      { serviceStop: "stopped", serviceRemoval: "removed", proxyProvenDown: true, respawnWindowVerified: false },
+      { serviceStop: "stopped", serviceRemoval: "removed", proxyProvenDown: true, respawnWindowVerified: true },
       {
         readConnection: () => ({ kind: "disconnected" }),
         inspectDesktop: () => ({ kind: "absent" }),

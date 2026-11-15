@@ -75,9 +75,11 @@ loopback 示例：
 
 非 loopback 示例：
 
+这是远程客户端的手动配置示例。请先配置 TLS 前端，再使用其 HTTPS URL；OpenCodex 本身不终止 TLS，`ocx opencode` 也不会自动发现该 URL。即使在局域网中，明文 HTTP 也会在传输时暴露准入凭据。另一种方式是让代理绑定回环地址，并使用本地 SSH 隧道。参见[数据监听器的 TLS](/zh-cn/guides/remote-hub/#giving-the-data-listener-tls)。
+
 ```json
 "options": {
-  "baseURL": "http://192.168.1.10:10100/v1",
+  "baseURL": "https://proxy.example.com/v1",
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }

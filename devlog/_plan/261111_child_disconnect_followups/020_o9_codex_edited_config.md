@@ -1,5 +1,7 @@
 # O9 — disconnect after Codex edited config.toml
 
+Status: superseded on `dev` by #8416 (`f23910ab2d`, `src/codex/journal-config-restore.ts`), so this branch's `src/codex/inject/disconnect-restore.ts` and its tests were dropped in the carry. `dev` restores each owned field instead of refusing while one remains (the "Not done here" item below), and its tests are `tests/clients/client-disconnect-edited-codex.test.ts` and `tests/clients/client-disconnect-config-recovery.test.ts`. The notes below record the design this branch had.
+
 ## Cause
 
 `compareJournalState` (src/codex/journal.ts) accepts config.toml only when it equals the original snapshot or the first injected bytes (hash). Codex appends `[projects."…"] trust_level` blocks and notice flags; the restore is then partial forever.
