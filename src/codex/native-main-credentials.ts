@@ -130,9 +130,9 @@ function missingOrUnreadable(error: unknown): NativeMainAuthObservation {
 }
 
 /**
- * One physical observation through the #7918 reader. The bytes and the identity come from one
- * descriptor, and the identity is kept only while the path still names that file, so bytes are
- * never paired with another file's identity.
+ * One physical observation through the #7918 reader. The bytes come from its plain read and the
+ * identity from a stat before and after it; a replacement during the read leaves the identity null,
+ * so nothing is retained or served for those bytes.
  */
 export function observeNativeMainAuthFile(path: string): NativeMainAuthObservation {
   let read: ReturnType<typeof readNativeMainAuthBytesWithIdentity>;
