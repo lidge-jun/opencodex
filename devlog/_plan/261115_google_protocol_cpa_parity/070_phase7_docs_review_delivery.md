@@ -38,3 +38,16 @@ Push `feat/google-protocol-cpa-parity`; open one PR to `dev` using
 which commits are #8742's; link it with `goat_pull_request_link`; report exact-head PR CI. No merge, no
 force-push, no `ci.yml lane=all`.
 
+## Review round 1 (b5d57cd870, verdict FAIL: 2 MAJOR, 1 MINOR)
+
+Report `.tmp/research/review-r1.md` (security detail kept in `.tmp/` only).
+
+- S1 (MAJOR) accepted: `:countTokens` now holds the shared inbound-body allowance through `runAdmittedBodyWork`
+  (`isGeminiBodyPath`). NEW `tests/server/gemini-count-tokens-admission.test.ts` queues behind a saturated allowance
+  (failed before the fix: the request completed without queuing).
+- R1 (MAJOR) accepted: AI Studio's raw 429 keeps a body-only wait as `Retry-After` on the over-ceiling and quota
+  returns (`withBodyRetryAfter` in `src/adapters/google-http.ts`); two cases in
+  `tests/adapters/google/google-retry-structured.test.ts` failed before the fix.
+- R2 (MINOR) rebutted and deferred as matrix row INT-20: no inbound wire carries a tool-error flag, so the fix is a
+  new Chat-wire contract in both lanes; the error stays readable as result text.
+

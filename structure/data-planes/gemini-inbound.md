@@ -24,7 +24,7 @@ clones the request, moves that credential onto `x-opencodex-api-key` (an existin
 wins), and drops it from the URL and headers, so admission sees the usual proxy key and the key is
 never logged or forwarded. The idle-timeout override receives the original request. Generation takes
 the Chat admission (drain, key, origin, caller session, active turn, workflow, raised body via
-`isGeminiGenerationPath` in `inbound-body-admission.ts`); the list and lookup routes take the
+`isGeminiBodyPath` in `inbound-body-admission.ts`); the list and lookup routes take the
 model-discovery admission `/v1/models` uses. `embedContent` and `batchEmbedContents` answer 501
 `UNIMPLEMENTED` after admission; `countTokens` is described below.
 
@@ -65,7 +65,9 @@ refusal returns the native 403 before any `agy` version probe or ACP process sta
 Chat `extra_content.google.thought_signature` (see [Chat signatures](chat-reasoning-details.md#gemini-thought-signatures-on-the-chat-wire)),
 and a Chat tool call's `extra_content` comes back as the part's `thoughtSignature`, buffered and streamed. A
 non-string value is dropped. `:countTokens` is served with model-discovery admission and the key's model scope
-(unknown or out-of-scope model 404): the body (`contents`/`systemInstruction`/`tools`, or
+(unknown or out-of-scope model 404), and because it reads and decodes a body it also holds the shared inbound-body
+allowance (`runAdmittedBodyWork`, `isGeminiBodyPath`) until its answer settles, without a turn slot; a saturated
+allowance answers the Google-shaped 503 (`tests/server/gemini-count-tokens-admission.test.ts`): the body (`contents`/`systemInstruction`/`tools`, or
 `generateContentRequest`) is read under the inbound limit, projected with the same codec onto Chat, decoded with
 `chatConversationToIr` and estimated with `estimateInputTokens`; the answer is `{ totalTokens }` and nothing goes
 upstream. A body the Chat projection refuses (for example `fileData`, or no messages) is a 400. Model resources

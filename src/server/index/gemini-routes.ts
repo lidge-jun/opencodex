@@ -15,6 +15,7 @@ import { geminiRouteAllowHeader, geminiRouteAllows, parseGeminiNativePath } from
 import { geminiError, handleGeminiCountTokens, handleGeminiGeneration, handleGeminiModel, handleGeminiModels, toGeminiRefusal } from "../gemini-inbound";
 import { handleGeminiInteraction, handleGeminiInteractionResource } from "../gemini-interactions-inbound";
 import { nextRequestLogId, type RequestLogContext } from "../request-log";
+import { runAdmittedBodyWork } from "../inbound-body-admission";
 import { disableResponsesRequestTimeout } from "../responses";
 import { withRequestLogId } from "./startup-warnings";
 import type { OllamaRouteDeps } from "./ollama-routes";
@@ -63,7 +64,12 @@ export async function dispatchGeminiRoute(original: Request, url: URL, deps: Gem
     if (!isAllowedRequestOrigin(req, policy)) return withCors(geminiError(403, "cross-origin data-plane request blocked"), original, policy);
     const response = route.kind === "models" ? handleGeminiModels(config, req, admission)
       : route.kind === "model" ? handleGeminiModel(config, req, admission, route.model)
-        : route.kind === "method" && route.method === "countTokens" ? await handleGeminiCountTokens(config, req, admission, route.model)
+        // countTokens reads and decodes a body, so it holds the shared body allowance until its
+        // answer settles; it sends nothing upstream and takes no turn slot.
+        : route.kind === "method" && route.method === "countTokens"
+          ? await runAdmittedBodyWork(req, policy, config.maxInboundBodyBytes,
+            () => handleGeminiCountTokens(config, req, admission, route.model), undefined, toGeminiRefusal,
+            () => geminiError(499, "request cancelled"))
           : route.kind === "method" ? geminiError(501, `${route.method} is not supported`)
             : geminiError(405, "method not allowed");
     return withCors(response, original, policy);

@@ -1004,6 +1004,7 @@
   "server-gemini-inbound-fidelity.test.ts": "server",
   "server-gemini-interactions-inbound.test.ts": "server",
   "gemini-native-paths.test.ts": "server",
+  "gemini-count-tokens-admission.test.ts": "server",
   "gemini-interactions-store.test.ts": "server",
   "responses-gemini-interactions-codec.test.ts": "responses",
   "chat-google-thought-signature.test.ts": "responses",

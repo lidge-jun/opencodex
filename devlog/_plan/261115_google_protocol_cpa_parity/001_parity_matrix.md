@@ -120,6 +120,7 @@ later unit, with the reason).
 | OUT-V40 | `IMAGE_SAFETY` → `content_filter` | C-V-40 V-41 | have (3dccfa700f); also `IMAGE_PROHIBITED_CONTENT` and `MALFORMED_RESPONSE` with output | P2 | 050 |
 | OUT-V43 | `promptFeedback.blockReason` becomes a typed, non-retryable block error (stream and buffered) | C-V-43 | have (3dccfa700f); 400 `invalid_prompt`, a terminal refusal | P2 | 050 |
 | OUT-V27 | Tool error results (`isError`) → `functionResponse.response.error` | C-V-27 | have (430882ffa3) | P3 | 060 |
+| INT-20 | Interactions `function_result.is_error` reaches Google as `functionResponse.response.error` | review r1 (R2); Google Interactions reference `is_error` | defer: the Chat and Responses wires that every inbound lane crosses have no tool-error flag, so carrying it is a new private Chat-wire contract in both lanes; today the error reaches every provider as `{"error": …}` result text | P3 | — |
 | OUT-V29 | Audio input parts sent as `inline_data` | C-V-29 | have (430882ffa3); Claude on CCA keeps the marker | P2 | 060 |
 | OUT-V31 | `thinkingBudget` for the 2.5 family | C-V-31 | defer: effort ladders are catalog-owned (`structure/catalog.md`); the existing 400 repair keeps 2.5 requests working | P2 | — |
 | OUT-V23 | Native `googleSearch` grounding on user keys | C-V-23 | defer: overlaps the hosted search relay (`structure/data-planes/search.md`) | P2 | — |

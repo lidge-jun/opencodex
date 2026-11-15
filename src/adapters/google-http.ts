@@ -149,7 +149,7 @@ export async function fetchGoogleWithRetry(
         const peekTarget = res.clone();
         const peek = await readDisplaySafeErrorPayloadText(peekTarget, ctx.abortSignal);
         if (isQuotaExhaustedBody(peek, label)) {
-          if (ctx.returnRawErrors) return res;
+          if (ctx.returnRawErrors) return withBodyRetryAfter(res, extractGoogleRetryAfterSeconds(peek));
           const normalized = await normalizeUpstreamHttpErrorResponse(res, {
             signal: ctx.abortSignal,
             formatMessage: payloadText => safeGoogleHttpErrorMessage(label, res.status, payloadText || peek),
@@ -186,7 +186,7 @@ export async function fetchGoogleWithRetry(
         retryAfterIsLowerBound: true,
       });
       if (delayMs > RETRY_AFTER_CEILING_MS) {
-        if (ctx.returnRawErrors) return res;
+        if (ctx.returnRawErrors) return withBodyRetryAfter(res, bodyRetryAfter);
         const final = await normalizeFinalGoogleError(label, res, activeRequest, ctx.abortSignal);
         if (bodyRetryAfter && !final.headers.has("retry-after")) final.headers.set("retry-after", bodyRetryAfter);
         return final;
@@ -224,6 +224,18 @@ export async function fetchGoogleWithRetry(
     // A cancellation before the next retry's preparation must not strand its lease.
     if (pendingResponse) cancelResponseBodyBestEffort(pendingResponse);
   }
+}
+
+/**
+ * A raw upstream answer that also states its body-only retry wait as Retry-After, so callers that
+ * read only the header (cooldowns, client retries) honor it. The body and status stay Google's; an
+ * explicit upstream Retry-After wins. The body is unread here: only a clone was peeked.
+ */
+function withBodyRetryAfter(res: Response, seconds: string | undefined): Response {
+  if (!seconds || res.headers.has("retry-after")) return res;
+  const headers = new Headers(res.headers);
+  headers.set("retry-after", seconds);
+  return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
 }
 
 /**

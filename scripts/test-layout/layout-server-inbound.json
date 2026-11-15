@@ -20,6 +20,7 @@
   "server-gemini-inbound-fidelity.test.ts": "server",
   "server-gemini-interactions-inbound.test.ts": "server",
   "gemini-native-paths.test.ts": "server",
+  "gemini-count-tokens-admission.test.ts": "server",
   "gemini-interactions-store.test.ts": "server",
   "protocol-trace-suppression.test.ts": "server",
   "responses-ollama-codec.test.ts": "responses",

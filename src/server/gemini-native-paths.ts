@@ -71,7 +71,16 @@ export function geminiRouteAllowHeader(route: GeminiNativeRoute): string {
   return "allow" in route ? route.allow.join(", ") : route.httpMethod;
 }
 
-/** Generation routes read a JSON body under maxInboundBodyBytes and take the raised-body admission. */
+/**
+ * Every route that reads a JSON body under maxInboundBodyBytes: generation, Interactions create and
+ * countTokens. They take the shared raised or encoded body admission (#3023).
+ */
+export function isGeminiBodyPath(pathname: string): boolean {
+  const route = parseGeminiNativePath(pathname);
+  return isGeminiGenerationPath(pathname) || (route?.kind === "method" && route.method === "countTokens");
+}
+
+/** Generation routes: a body plus a model turn (turn slot, request-timeout override). */
 export function isGeminiGenerationPath(pathname: string): boolean {
   const route = parseGeminiNativePath(pathname);
   return route?.kind === "interactions"

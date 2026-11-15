@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { geminiRouteAllows, isGeminiGenerationPath, isGeminiNativePath, parseGeminiNativePath } from "../../src/server/gemini-native-paths";
+import { geminiRouteAllows, isGeminiBodyPath, isGeminiGenerationPath, isGeminiNativePath, parseGeminiNativePath } from "../../src/server/gemini-native-paths";
 
 describe("Gemini native path classifier: Interactions", () => {
   test("create is POST on /v1beta/interactions and the stable /v1/interactions", () => {
@@ -40,6 +40,19 @@ describe("Gemini native path classifier: Interactions", () => {
     expect(parseGeminiNativePath("/v1/models/fx%2Fm1:generateContent")).toEqual({ kind: "method", httpMethod: "POST", model: "fx/m1", method: "generateContent" });
     expect(geminiRouteAllows(parseGeminiNativePath("/v1beta/models")!, "GET")).toBe(true);
     expect(geminiRouteAllows(parseGeminiNativePath("/v1beta/models")!, "POST")).toBe(false);
+  });
+});
+
+describe("Gemini native path classifier: body admission", () => {
+  test("generation, Interactions create and countTokens read a body under the shared allowance", () => {
+    for (const path of ["/v1beta/models/p/m:generateContent", "/v1/models/p/m:streamGenerateContent", "/v1beta/interactions", "/v1beta/models/p/m:countTokens"]) {
+      expect(isGeminiBodyPath(path)).toBe(true);
+    }
+    // countTokens reads a body but is not generation: it takes no turn slot and no request timeout override.
+    expect(isGeminiGenerationPath("/v1beta/models/p/m:countTokens")).toBe(false);
+    for (const path of ["/v1beta/models", "/v1beta/models/p/m", "/v1beta/models/p/m:embedContent", "/v1beta/interactions/ocx-int-0a1b"]) {
+      expect(isGeminiBodyPath(path)).toBe(false);
+    }
   });
 });
 
