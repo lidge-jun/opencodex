@@ -4,6 +4,7 @@ import { codeBuddyAiToolParameters } from "./codebuddy-ai-schema";
 import { retainTranslatedEvent, releaseTranslatedEvent } from "../lib/translator-budget";
 import { createOpenAIChatAdapter } from "./openai-chat";
 import { neutralizeClaudeCodeIdentity } from "./claude-code-identity";
+import { tencentBusinessCode } from "./tencent-error-code";
 import type { AdapterEvent, OcxProviderConfig } from "../types";
 import { assertCodeBuddyAiDestination, CODEBUDDY_AI_BASE_URL, codeBuddyAiHeaders } from "../providers/codebuddy-ai";
 
@@ -60,8 +61,7 @@ export function createCodeBuddyAiAdapter(provider: OcxProviderConfig): ProviderA
       }
     },
     formatErrorBody(status, _headers, payload) {
-      let code: unknown;
-      try { code = JSON.parse(payload)?.code; } catch { /* Only structured numeric codes are public. */ }
+      const code = tencentBusinessCode(payload);
       if (Number(code) === 11128) return "CodeBuddy AI rejected this client channel (11128).";
       if (Number(code) === 11140) return "CodeBuddy AI restricted this account (11140); contact CodeBuddy support.";
       if (Number(code) === 14018) return "CodeBuddy AI credits exhausted (14018).";

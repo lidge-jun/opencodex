@@ -87,6 +87,13 @@ test("refusals expose fixed diagnostics and preserve upstream channel restrictio
   expect(adapter.formatErrorBody!(401, new Headers(), 'fixture-access')).not.toContain("fixture-access");
 });
 
+test("reads the business code from the nested billing envelope", () => {
+  const adapter = createCodeBuddyAiAdapter(provider);
+  // Captured live from www.codebuddy.ai on 2026-11-15 for a depleted account.
+  const payload = '{"error":{"data":{"code":14018,"msg":"Credits exhausted.","requestId":"fixture"}}}';
+  expect(adapter.formatErrorBody!(429, new Headers(), payload)).toBe("CodeBuddy AI credits exhausted (14018).");
+});
+
 test("rewrites the Claude Code identity line that the upstream gateway rejects with 11128", async () => {
   const identity = "You are Claude Code, Anthropic's official CLI for Claude.";
   const req = await createCodeBuddyAiAdapter(provider).buildRequest(
