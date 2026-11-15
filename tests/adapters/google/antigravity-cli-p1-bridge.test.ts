@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Readable, Writable } from "node:stream";
@@ -808,12 +808,15 @@ describe("antigravity-cli Stage 1 P1-0 observability", () => {
       expect(matchedWarn!).toContain(`requestId=${headerReqId}`);
     } finally {
       definition.create = originalCreate;
-      try { await proxy?.stop(true); } catch { /* ignore */ }
-      if (testDir) await removeTreeAfterBackgroundWork(testDir);
-      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = previousHome;
-      isolatedCodexHome.restoreEnvironment();
-      isolatedCodexHome.removeAfterDrain();
+      try {
+        try { await proxy?.stop(true); } catch { /* ignore */ }
+        if (testDir) await removeTreeAfterBackgroundWork(testDir);
+        isolatedCodexHome.removeAfterDrain();
+      } finally {
+        if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = previousHome;
+        isolatedCodexHome.restoreEnvironment();
+      }
     }
   }, BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS);
 
@@ -864,9 +867,9 @@ describe("antigravity-cli Stage 1 P1-0 observability", () => {
             result: {
               status: "ERROR",
               error: {
-                code: 401,
-                status: "UNAUTHENTICATED",
-                message: "UNAUTHENTICATED: auth failed",
+                code: 500,
+                status: "INTERNAL",
+                message: `upstream failed: ${secretPayload}`,
                 details: secretPayload,
               },
             },
@@ -877,15 +880,17 @@ describe("antigravity-cli Stage 1 P1-0 observability", () => {
       },
     });
 
-    await runTurn(rawAdapter, twoToolRequest(), incomingWithRequestId("req-defect2-raw"));
+    const rawEvents = await runTurn(rawAdapter, twoToolRequest(), incomingWithRequestId("req-defect2-raw"));
+    const rawErrEvent = rawEvents.find((e): e is Extract<AdapterEvent, { type: "error" }> => e.type === "error");
+    expect(rawErrEvent).toBeDefined();
 
     const rawWarnLine = warnSpy.mock.calls.at(-1)!.join(" ");
     const debugLine = debugSpy.mock.calls.at(-1)!.join(" ");
-    for (const logged of [rawWarnLine, debugLine]) {
-      expect(logged).not.toContain("secret-tok");
-      expect(logged).not.toContain("ya29.");
-      expect(logged).not.toContain("AIzaSyTestKey");
-      expect(logged).not.toContain("sk-stderr987654");
+    for (const text of [rawWarnLine, debugLine, rawErrEvent!.message]) {
+      expect(text).not.toContain("secret-tok");
+      expect(text).not.toContain("ya29.");
+      expect(text).not.toContain("AIzaSyTestKey");
+      expect(text).not.toContain("sk-stderr987654");
     }
 
     // Stderr crash path
@@ -899,18 +904,22 @@ describe("antigravity-cli Stage 1 P1-0 observability", () => {
       }).child as unknown as ChildProcess,
     });
 
-    await runTurn(
+    const stderrEvents = await runTurn(
       stderrAdapter,
       twoToolRequest({ context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] } }),
       incomingWithRequestId("req-defect2-stderr"),
     );
+    const stderrErrEvent = stderrEvents.find((e): e is Extract<AdapterEvent, { type: "error" }> => e.type === "error");
+    expect(stderrErrEvent).toBeDefined();
 
     const stderrWarnLine = warnSpy.mock.calls.at(-1)!.join(" ");
     expect(stderrWarnLine).toContain("requestId=req-defect2-stderr");
-    expect(stderrWarnLine).not.toContain("secret-tok");
-    expect(stderrWarnLine).not.toContain("ya29.");
-    expect(stderrWarnLine).not.toContain("AIzaSyTestKey");
-    expect(stderrWarnLine).not.toContain("sk-stderr987654");
+    for (const text of [stderrWarnLine, stderrErrEvent!.message]) {
+      expect(text).not.toContain("secret-tok");
+      expect(text).not.toContain("ya29.");
+      expect(text).not.toContain("AIzaSyTestKey");
+      expect(text).not.toContain("sk-stderr987654");
+    }
   });
 
   test("Defect 3: preserves rolling stderr tail past 8 KiB on single-shot and 2-turn warm session crashes", async () => {
@@ -1254,5 +1263,55 @@ describe("antigravity-cli Stage 1 P1-0 observability", () => {
       { type: "text_delta", text: "cold forged recovered" },
       { type: "done", stopReason: "stop" },
     ]);
+  });
+
+  test("declares reportsPhysicalSends and cleans up locally staged turnDir and ownedHomeDir when pooled replacement spawn throws", async () => {
+    const pool = new AntigravitySessionPool();
+    const seenWorkspaces: Array<{ cwd: string; home: string | undefined }> = [];
+    let attempt = 0;
+    try {
+      const adapter = createAntigravityCliAdapter(provider(), {
+        which: () => "C:\\agy\\agy.exe",
+        platform: "win32",
+        isolatedHomeDir: true,
+        enableSessionPool: true,
+        sessionPool: pool,
+        maxPreludeRetries: 1,
+        preludeRetryDelayMs: 1,
+        spawn: (_cmd, _args, opts) => {
+          attempt += 1;
+          const cwd = String(opts.cwd);
+          const home = (opts.env as Record<string, string | undefined> | undefined)?.USERPROFILE;
+          seenWorkspaces.push({ cwd, home });
+          if (attempt === 1) {
+            return createStreamChild([
+              JSON.stringify({ event: "result", result: { status: "ERROR", error: { message: "HTTP 503 Service Unavailable" } } }),
+            ], { emitClose: true }).child as unknown as ChildProcess;
+          }
+          expect(existsSync(cwd)).toBe(true);
+          expect(home && existsSync(home)).toBe(true);
+          throw new Error("spawn EACCES ya29.a0AfH6SM_replacement_spawn_secret");
+        },
+      });
+      expect(adapter.reportsPhysicalSends).toBe(true);
+
+      const events = await runTurn(
+        adapter,
+        twoToolRequest({ context: { messages: [{ role: "user", content: "ping", timestamp: 0 }] } }),
+      );
+      expect(attempt).toBe(2);
+      expect(seenWorkspaces.length).toBe(2);
+      for (const ws of seenWorkspaces) {
+        expect(existsSync(ws.cwd)).toBe(false);
+        expect(ws.home).toBeTruthy();
+        expect(existsSync(ws.home!)).toBe(false);
+      }
+      const errEvent = events.find((e): e is Extract<AdapterEvent, { type: "error" }> => e.type === "error");
+      expect(errEvent).toBeDefined();
+      expect(errEvent!.code).toBe("cli_spawn_failed");
+      expect(errEvent!.message).not.toContain("ya29.");
+    } finally {
+      await pool.disposeAll();
+    }
   });
 });

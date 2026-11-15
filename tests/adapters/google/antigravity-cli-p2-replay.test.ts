@@ -1,8 +1,13 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough, Writable } from "node:stream";
 import { describe, expect, test } from "bun:test";
-import { readCapturedMcpCalls } from "../../../src/adapters/antigravity-cli/adapter";
+import { createAntigravityCliAdapter, readCapturedMcpCalls } from "../../../src/adapters/antigravity-cli/adapter";
+import { ANTIGRAVITY_CLI_PROFILE } from "../../../src/adapters/antigravity-cli/profiles";
+import { AntigravitySessionPool } from "../../../src/adapters/antigravity-cli/session-pool";
 import {
   ANTIGRAVITY_COLD_HISTORY_CHAR_LIMIT,
   ANTIGRAVITY_MCP_TOOL_PREFIX,
@@ -21,8 +26,9 @@ import {
 } from "../../../src/adapters/antigravity-cli/protocol";
 import { formatMessageForHistory } from "../../../src/adapters/coding-agent/protocol";
 import { disjointTelemetryTokens } from "../../../src/telemetry/aggregate";
-import type { OcxMessage, OcxParsedRequest } from "../../../src/types";
+import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import { normalizeCostTokens } from "../../../src/usage/cost";
+import { createTestTranslatorBudget } from "../../helpers/translator-budget";
 
 const ONE_BY_ONE_PNG_DATA_URL =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
@@ -938,5 +944,371 @@ describe("antigravity-cli Stage 3 schema pre-sanitization & Stage 4 F13/F19 usag
       cause: "upstream-declined",
       recovery: "transient-5xx",
     });
+  });
+
+  test("excludes captures from errored bridged tool steps so later steps for the same alias receive their own capture", () => {
+    const req = makeParsedRequest({
+      context: {
+        messages: [{ role: "user", content: "Read files", timestamp: 0 }],
+        tools: [{
+          name: "read_file",
+          description: "Read file",
+          parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+        }],
+      },
+    });
+    const bridge = buildAntigravityCliToolBridge(req)!;
+    const toolName = `${ANTIGRAVITY_MCP_TOOL_PREFIX}read_file`;
+
+    // 1. In-memory order: capture 1 -> errored step 1 -> active step 2 + capture 2 -> flush returns capture 2
+    const state = createAntigravityStreamState(undefined, { deferToolCallEmission: true });
+    mapAntigravityStreamFrame({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } }, state, bridge);
+    mapAntigravityStreamFrame(
+      { event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "bad" } } } },
+      state,
+      bridge,
+    );
+    mapAntigravityStreamFrame(
+      { event: "step_update", step_update: { step_index: 1, state: "ERROR", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, error: { message: "boom" } } } },
+      state,
+      bridge,
+    );
+    mapAntigravityStreamFrame(
+      { event: "step_update", step_update: { step_index: 2, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "good" } } } },
+      state,
+      bridge,
+    );
+    const flushed = flushAntigravityBridgedToolCalls(state, [
+      { seq: 1, name: "read_file", arguments: { path: "from-capture-1.md" } },
+      { seq: 2, name: "read_file", arguments: { path: "from-capture-2.md" } },
+    ]);
+    expect(flushed.filter(e => e.type === "tool_call_delta")).toEqual([
+      { type: "tool_call_delta", arguments: JSON.stringify({ path: "from-capture-2.md" }) },
+    ]);
+    expect(state.flushedToolCalls.map(c => c.seq)).toEqual([2]);
+    expect(state.consumedCaptureSeqs.has(1)).toBe(true);
+    expect(state.consumedCaptureSeqs.has(2)).toBe(true);
+
+    // 2. Sibling preservation + disk readiness gate: capture 1 confirmed on disk before ERROR prevents premature ready on step 2
+    const dir = mkdtempSync(join(tmpdir(), "ocx-err-cap-"));
+    try {
+      const capFile = join(dir, "captured-calls.jsonl");
+      const diskState = createAntigravityStreamState(undefined, { deferToolCallEmission: true, turnDir: dir, minCaptureSeq: 1 });
+      mapAntigravityStreamFrame({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } }, diskState, bridge);
+      mapAntigravityStreamFrame(
+        { event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "sib-1" } } } },
+        diskState,
+        bridge,
+      );
+      mapAntigravityStreamFrame(
+        { event: "step_update", step_update: { step_index: 2, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "err-2" } } } },
+        diskState,
+        bridge,
+      );
+      writeFileSync(
+        capFile,
+        `${JSON.stringify({ seq: 1, name: "read_file", arguments: { path: "sib-1-full.md" } })}\n${JSON.stringify({ seq: 2, name: "read_file", arguments: { path: "err-2-full.md" } })}\n`,
+      );
+      mapAntigravityStreamFrame(
+        { event: "step_update", step_update: { step_index: 2, state: "ERROR", step_type: "tool", tool_name: toolName, error: "failed after capture" } },
+        diskState,
+        bridge,
+      );
+      mapAntigravityStreamFrame(
+        { event: "step_update", step_update: { step_index: 3, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "sib-3" } } } },
+        diskState,
+        bridge,
+      );
+
+      // Only 2 captures on disk (1 valid + 1 confirmed errored), while 2 active steps (1 & 3) are pending -> not ready yet!
+      const notReady = readCapturedMcpCalls(
+        capFile,
+        diskState.pendingBridgedToolCalls,
+        1,
+        diskState.consumedCaptureSeqs,
+        diskState.consumedUnsequencedByAlias,
+        diskState.erroredBridgedToolCalls,
+      );
+      expect(notReady.ready).toBe(false);
+
+      writeFileSync(
+        capFile,
+        [
+          JSON.stringify({ seq: 1, name: "read_file", arguments: { path: "sib-1-full.md" } }),
+          JSON.stringify({ seq: 2, name: "read_file", arguments: { path: "err-2-full.md" } }),
+          JSON.stringify({ seq: 3, name: "read_file", arguments: { path: "sib-3-full.md" } }),
+        ].join("\n") + "\n",
+      );
+      const ready = readCapturedMcpCalls(
+        capFile,
+        diskState.pendingBridgedToolCalls,
+        1,
+        diskState.consumedCaptureSeqs,
+        diskState.consumedUnsequencedByAlias,
+        diskState.erroredBridgedToolCalls,
+      );
+      expect(ready.ready).toBe(true);
+      const diskFlushed = flushAntigravityBridgedToolCalls(diskState, ready.calls);
+      expect(diskFlushed.filter(e => e.type === "tool_call_delta")).toEqual([
+        { type: "tool_call_delta", arguments: JSON.stringify({ path: "sib-1-full.md" }) },
+        { type: "tool_call_delta", arguments: JSON.stringify({ path: "sib-3-full.md" }) },
+      ]);
+      expect(diskState.flushedToolCalls.map(c => c.seq)).toEqual([1, 3]);
+
+      // 3. Parallel batch: ACTIVE 1 + ACTIVE 2 emitted together, seq:1 lands on disk, ERROR 1 fires BEFORE seq:2 lands
+      writeFileSync(capFile, `${JSON.stringify({ seq: 1, name: "read_file", arguments: { path: "parallel-err-1.md" } })}\n`);
+      const parallelState = createAntigravityStreamState(undefined, { deferToolCallEmission: true, turnDir: dir, minCaptureSeq: 1 });
+      mapAntigravityStreamFrame({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } }, parallelState, bridge);
+      mapAntigravityStreamFrame(
+        { event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "p1" } } } },
+        parallelState,
+        bridge,
+      );
+      mapAntigravityStreamFrame(
+        { event: "step_update", step_update: { step_index: 2, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "p2" } } } },
+        parallelState,
+        bridge,
+      );
+      mapAntigravityStreamFrame(
+        { event: "step_update", step_update: { step_index: 1, state: "ERROR", step_type: "tool", tool_name: toolName, error: "mcp call failed after capture" } },
+        parallelState,
+        bridge,
+      );
+      expect(parallelState.erroredBridgedToolCalls[0]?.confirmedCapture).toBe(true);
+      const parallelBeforeSecond = readCapturedMcpCalls(
+        capFile,
+        parallelState.pendingBridgedToolCalls,
+        1,
+        parallelState.consumedCaptureSeqs,
+        parallelState.consumedUnsequencedByAlias,
+        parallelState.erroredBridgedToolCalls,
+      );
+      expect(parallelBeforeSecond.ready).toBe(false);
+
+      writeFileSync(
+        capFile,
+        `${JSON.stringify({ seq: 1, name: "read_file", arguments: { path: "parallel-err-1.md" } })}\n${JSON.stringify({ seq: 2, name: "read_file", arguments: { path: "parallel-ok-2.md" } })}\n`,
+      );
+      const parallelAfterSecond = readCapturedMcpCalls(
+        capFile,
+        parallelState.pendingBridgedToolCalls,
+        1,
+        parallelState.consumedCaptureSeqs,
+        parallelState.consumedUnsequencedByAlias,
+        parallelState.erroredBridgedToolCalls,
+      );
+      expect(parallelAfterSecond.ready).toBe(true);
+      const parallelFlushed = flushAntigravityBridgedToolCalls(parallelState, parallelAfterSecond.calls);
+      expect(parallelFlushed.filter(e => e.type === "tool_call_delta")).toEqual([
+        { type: "tool_call_delta", arguments: JSON.stringify({ path: "parallel-ok-2.md" }) },
+      ]);
+      expect(parallelState.flushedToolCalls.map(c => c.seq)).toEqual([2]);
+
+      // 4. PreToolUse denial forces confirmedCapture=false even if a sibling capture is on disk, and minCaptureSeq filters stale seqs
+      writeFileSync(capFile, `${JSON.stringify({ seq: 2, name: "read_file", arguments: { path: "allowed-sibling.md" } })}\n`);
+      const preToolState = createAntigravityStreamState(undefined, { deferToolCallEmission: true, turnDir: dir, minCaptureSeq: 2 });
+      mapAntigravityStreamFrame({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } }, preToolState, bridge);
+      mapAntigravityStreamFrame(
+        { event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "denied" } } } },
+        preToolState,
+        bridge,
+      );
+      mapAntigravityStreamFrame(
+        { event: "step_update", step_update: { step_index: 2, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "allowed" } } } },
+        preToolState,
+        bridge,
+      );
+      mapAntigravityStreamFrame(
+        { event: "step_update", step_update: { step_index: 1, state: "ERROR", step_type: "tool", tool_name: toolName, error: "tool call denied by pre-tool hook: blocked" } },
+        preToolState,
+        bridge,
+      );
+      expect(preToolState.erroredBridgedToolCalls[0]?.confirmedCapture).toBe(false);
+      const minSeqFiltered = flushAntigravityBridgedToolCalls(preToolState, [
+        { seq: 1, name: "read_file", arguments: { path: "stale-turn1.md" } },
+        { seq: 2, name: "read_file", arguments: { path: "allowed-sibling.md" } },
+      ]);
+      expect(minSeqFiltered.filter(e => e.type === "tool_call_delta")).toEqual([
+        { type: "tool_call_delta", arguments: JSON.stringify({ path: "allowed-sibling.md" }) },
+      ]);
+      expect(preToolState.flushedToolCalls.map(c => c.seq)).toEqual([2]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("advances warm-session nextCaptureSeq past errored captures in both awaiting_tool_results and idle_after_stop", async () => {
+    const toolDef = {
+      name: "read_file",
+      description: "Read file",
+      parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+    };
+    const bridgedName = `${ANTIGRAVITY_MCP_TOOL_PREFIX}read_file`;
+    const providerCfg: OcxProviderConfig = {
+      adapter: "antigravity-cli",
+      baseUrl: ANTIGRAVITY_CLI_PROFILE.canonicalBaseUrl,
+    } as OcxProviderConfig;
+    const execTurn = async (adapter: ReturnType<typeof createAntigravityCliAdapter>, req: OcxParsedRequest) => {
+      const events: AdapterEvent[] = [];
+      await adapter.runTurn!(req, { headers: new Headers(), translatorBudget: createTestTranslatorBudget() }, e => events.push(e));
+      return events;
+    };
+    const waitFor = async (pred: () => boolean) => {
+      const deadline = Date.now() + 2_000;
+      while (!pred()) {
+        if (Date.now() > deadline) throw new Error("timed out waiting for tool-results.jsonl");
+        await new Promise(r => setTimeout(r, 5));
+      }
+    };
+    const makeWarmChild = (cwd: string, onLine: (line: string, emit: (f: Record<string, unknown>) => void) => void) => {
+      const proc = new EventEmitter() as EventEmitter & {
+        pid: number; stdout: PassThrough; stderr: PassThrough; stdin: Writable;
+        killed: boolean; exitCode: number | null; kill: () => boolean; cwd: string;
+      };
+      proc.pid = 71001;
+      proc.stdout = new PassThrough();
+      proc.stderr = new PassThrough();
+      proc.killed = false;
+      proc.exitCode = null;
+      proc.cwd = cwd;
+      let buf = "";
+      const emit = (f: Record<string, unknown>) => {
+        if (!proc.stdout.writableEnded) proc.stdout.write(`${JSON.stringify(f)}\n`);
+      };
+      proc.stdin = new Writable({
+        write(chunk, _enc, cb) {
+          buf += String(chunk);
+          let idx = buf.indexOf("\n");
+          while (idx >= 0) {
+            const line = buf.slice(0, idx);
+            buf = buf.slice(idx + 1);
+            if (line) onLine(line, emit);
+            idx = buf.indexOf("\n");
+          }
+          cb();
+        },
+      });
+      proc.kill = () => {
+        proc.killed = true;
+        proc.stdout.end();
+        proc.stderr.end();
+        if (proc.exitCode === null) {
+          proc.exitCode = 143;
+          queueMicrotask(() => proc.emit("close", 143));
+        }
+        return true;
+      };
+      return { proc, emit };
+    };
+
+    // Case A: canParkToolUse (parked seq:1 + errored seq:2 -> Turn 2 receives seq:3)
+    const poolTool = new AntigravitySessionPool();
+    try {
+      let childRef: ReturnType<typeof makeWarmChild> | undefined;
+      const adapter = createAntigravityCliAdapter(providerCfg, {
+        which: () => "/usr/bin/agy",
+        platform: "linux",
+        enableSessionPool: true,
+        sessionPool: poolTool,
+        coalesceMs: 5,
+        spawn: (_cmd, _args, opts) => {
+          const cwd = String(opts.cwd);
+          childRef = makeWarmChild(cwd, (_line, emit) => {
+            writeFileSync(
+              join(cwd, "captured-calls.jsonl"),
+              `${JSON.stringify({ seq: 1, name: "read_file", arguments: { path: "ok-t1.md" } })}\n${JSON.stringify({ seq: 2, name: "read_file", arguments: { path: "stale-err-t1.md" } })}\n`,
+            );
+            emit({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } });
+            emit({ event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: bridgedName, tool_info: { name: bridgedName, parameters: { path: "x" } } } });
+            emit({ event: "step_update", step_update: { step_index: 2, state: "ACTIVE", step_type: "tool", tool_name: bridgedName, tool_info: { name: bridgedName, parameters: { path: "y" } } } });
+            emit({ event: "step_update", step_update: { step_index: 2, state: "ERROR", step_type: "tool", tool_name: bridgedName, error: "failed after capture" } });
+          });
+          return childRef.proc as unknown as ChildProcess;
+        },
+      });
+
+      const t1 = await execTurn(adapter, makeParsedRequest({ context: { messages: [{ role: "user", content: "go", timestamp: 0 }], tools: [toolDef] } }));
+      const c1 = t1.find(e => e.type === "tool_call_start") as Extract<AdapterEvent, { type: "tool_call_start" }>;
+      expect(t1.filter(e => e.type === "tool_call_delta")).toEqual([{ type: "tool_call_delta", arguments: JSON.stringify({ path: "ok-t1.md" }) }]);
+
+      const cwd = childRef!.proc.cwd;
+      const t2Promise = execTurn(adapter, makeParsedRequest({
+        context: {
+          messages: [
+            { role: "user", content: "go", timestamp: 0 },
+            { role: "assistant", content: [{ type: "toolCall", id: c1.id, name: "read_file", arguments: { path: "ok-t1.md" } }], timestamp: 1 },
+            { role: "toolResult", toolCallId: c1.id, toolName: "read_file", content: [{ type: "text", text: "done" }], isError: false, timestamp: 2 },
+          ],
+          tools: [toolDef],
+        },
+      }));
+      await waitFor(() => existsSync(join(cwd, "tool-results.jsonl")) && readFileSync(join(cwd, "tool-results.jsonl"), "utf8").includes('"seq":1'));
+      writeFileSync(
+        join(cwd, "captured-calls.jsonl"),
+        [
+          JSON.stringify({ seq: 1, name: "read_file", arguments: { path: "ok-t1.md" } }),
+          JSON.stringify({ seq: 2, name: "read_file", arguments: { path: "stale-err-t1.md" } }),
+          JSON.stringify({ seq: 3, name: "read_file", arguments: { path: "fresh-t2.md" } }),
+        ].join("\n") + "\n",
+      );
+      childRef!.emit({ event: "step_update", step_update: { step_index: 3, state: "ACTIVE", step_type: "tool", tool_name: bridgedName, tool_info: { name: bridgedName, parameters: { path: "z" } } } });
+      const t2 = await t2Promise;
+      expect(t2.filter(e => e.type === "tool_call_delta")).toEqual([{ type: "tool_call_delta", arguments: JSON.stringify({ path: "fresh-t2.md" }) }]);
+    } finally {
+      await poolTool.disposeAll();
+    }
+
+    // Case B: canParkIdleStop (errored seq:1 + text stop -> Turn 2 receives seq:2)
+    const poolIdle = new AntigravitySessionPool();
+    try {
+      let lineCount = 0;
+      const adapter = createAntigravityCliAdapter(providerCfg, {
+        which: () => "/usr/bin/agy",
+        platform: "linux",
+        enableSessionPool: true,
+        sessionPool: poolIdle,
+        coalesceMs: 5,
+        spawn: (_cmd, _args, opts) => {
+          const cwd = String(opts.cwd);
+          return makeWarmChild(cwd, (_line, emit) => {
+            lineCount += 1;
+            if (lineCount === 1) {
+              writeFileSync(join(cwd, "captured-calls.jsonl"), `${JSON.stringify({ seq: 1, name: "read_file", arguments: { path: "stale-idle-t1.md" } })}\n`);
+              emit({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } });
+              emit({ event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: bridgedName, tool_info: { name: bridgedName, parameters: { path: "bad" } } } });
+              emit({ event: "step_update", step_update: { step_index: 1, state: "ERROR", step_type: "tool", tool_name: bridgedName, error: "failed after capture" } });
+              emit({ event: "step_update", step_update: { step_index: 2, state: "DONE", step_type: "agent_response", text_delta: "fallback" } });
+              emit({ event: "result", result: { status: "SUCCESS", response: "fallback" } });
+              return;
+            }
+            writeFileSync(
+              join(cwd, "captured-calls.jsonl"),
+              `${JSON.stringify({ seq: 1, name: "read_file", arguments: { path: "stale-idle-t1.md" } })}\n${JSON.stringify({ seq: 2, name: "read_file", arguments: { path: "fresh-idle-t2.md" } })}\n`,
+            );
+            emit({ event: "step_update", step_update: { step_index: 3, state: "ACTIVE", step_type: "tool", tool_name: bridgedName, tool_info: { name: bridgedName, parameters: { path: "next" } } } });
+          }).proc as unknown as ChildProcess;
+        },
+      });
+
+      const idleT1 = await execTurn(adapter, makeParsedRequest({ context: { messages: [{ role: "user", content: "hi", timestamp: 0 }], tools: [toolDef] } }));
+      expect(idleT1).toEqual([{ type: "text_delta", text: "fallback" }, { type: "done", stopReason: "stop" }]);
+
+      const idleT2 = await execTurn(adapter, makeParsedRequest({
+        context: {
+          messages: [
+            { role: "user", content: "hi", timestamp: 0 },
+            { role: "assistant", content: [{ type: "text", text: "fallback" }], timestamp: 1 },
+            { role: "user", content: "try again", timestamp: 2 },
+          ],
+          tools: [toolDef],
+        },
+      }));
+      expect(lineCount).toBe(2);
+      expect(idleT2.filter(e => e.type === "tool_call_delta")).toEqual([
+        { type: "tool_call_delta", arguments: JSON.stringify({ path: "fresh-idle-t2.md" }) },
+      ]);
+    } finally {
+      await poolIdle.disposeAll();
+    }
   });
 });

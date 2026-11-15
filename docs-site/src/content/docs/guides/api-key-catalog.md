@@ -8,8 +8,8 @@ and the provider-specific notes that go with them. Auth modes, account logins, a
 stay on that page.
 
 opencodex ships 109 built-in presets: 88 key-based (`authKind: "key"` in the registry, including keyless subscription CLI presets such as `claude-cli` and `antigravity-cli` that reuse a locally signed-in CLI account), 17 OAuth, three local, and one default
-ChatGPT-forward preset. For regular key-based providers, the dashboard's **Add provider** picker opens the provider's dashboard,
-validates the key, and stores it; validation is provider-specific. Notable entries:
+ChatGPT-forward preset. For regular key-based providers, the dashboard's **Add provider** picker opens the provider's form,
+validates the configuration (name, base URL, and destination), and stores the key without checking it with the provider first. Notable entries:
 
 **ClinePass** uses a Cline API key with the [official subscription catalog](https://docs.cline.bot/getting-started/clinepass)
 and [Chat Completions endpoint](https://docs.cline.bot/api/chat-completions), operated by Cline Bot Inc. under

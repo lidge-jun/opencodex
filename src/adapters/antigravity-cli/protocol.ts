@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxRequestOptions, OcxUsage } from "../../types";
 import type { RequestFailureCause } from "../../lib/request-failure-model";
 import type { AttemptRecoveryKind } from "../../usage/telemetry-contract";
@@ -887,6 +889,7 @@ export interface FlushedAntigravityBridgedToolCall {
 }
 
 export interface PendingAntigravityBridgedToolCall {
+  issueOrder?: number;
   stepIndex?: number;
   callId: string;
   mcpAlias: string;
@@ -895,6 +898,12 @@ export interface PendingAntigravityBridgedToolCall {
   chargedArgsLeaseId?: string;
   chargedArgsBytes: number;
   chargedLeaseIds?: string[];
+}
+
+export interface ErroredAntigravityBridgedToolCall {
+  issueOrder: number;
+  mcpAlias: string;
+  confirmedCapture: boolean;
 }
 
 export interface AntigravityStreamFrameSummary {
@@ -941,10 +950,13 @@ export interface AntigravityStreamState {
   deferToolCallEmission: boolean;
   sawTerminalResult: boolean;
   capturedToolCalls: number;
+  nextBridgedCallOrder: number;
   pendingBridgedToolCalls: PendingAntigravityBridgedToolCall[];
+  erroredBridgedToolCalls: ErroredAntigravityBridgedToolCall[];
   flushedToolCalls: FlushedAntigravityBridgedToolCall[];
   consumedCaptureSeqs: Set<number>;
   consumedUnsequencedByAlias: Map<string, number>;
+  minCaptureSeq: number;
   seenToolStepIndices: Set<number>;
   seenStagedImageStepIndices: Set<number>;
   pendingUndeclaredTools: Map<number, string>;
@@ -981,6 +993,7 @@ export function createAntigravityStreamState(
     conversationId?: string;
     requestId?: string;
     usageBaseline?: RawAntigravityUsage;
+    minCaptureSeq?: number;
   } = {},
 ): AntigravityStreamState {
   return {
@@ -998,10 +1011,13 @@ export function createAntigravityStreamState(
     deferToolCallEmission: options.deferToolCallEmission === true,
     sawTerminalResult: false,
     capturedToolCalls: 0,
+    nextBridgedCallOrder: 0,
     pendingBridgedToolCalls: [],
+    erroredBridgedToolCalls: [],
     flushedToolCalls: [],
     consumedCaptureSeqs: new Set<number>(),
     consumedUnsequencedByAlias: new Map<string, number>(),
+    minCaptureSeq: options.minCaptureSeq ?? 1,
     seenToolStepIndices: new Set<number>(options.seenToolStepIndices),
     seenStagedImageStepIndices: new Set<number>(),
     pendingUndeclaredTools: new Map<number, string>(),
@@ -1019,51 +1035,144 @@ export function createAntigravityStreamState(
   };
 }
 
+function countUnconsumedCapturesOnDiskForAlias(state: AntigravityStreamState, mcpAlias: string): number {
+  if (!state.turnDir) return 0;
+  let raw = "";
+  try {
+    raw = readFileSync(join(state.turnDir, "captured-calls.jsonl"), "utf8");
+  } catch {
+    return 0;
+  }
+  const complete = raw.endsWith("\n") ? raw : raw.slice(0, raw.lastIndexOf("\n") + 1);
+  const seenUnsequenced = new Map<string, number>();
+  let count = 0;
+  for (const line of complete.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+      const rec = parsed as Record<string, unknown>;
+      if (typeof rec.name !== "string") continue;
+      const seq = typeof rec.seq === "number" && Number.isInteger(rec.seq) && rec.seq > 0 ? rec.seq : undefined;
+      if (seq !== undefined) {
+        if (seq < state.minCaptureSeq || state.consumedCaptureSeqs.has(seq)) continue;
+      } else {
+        const nextSeen = (seenUnsequenced.get(rec.name) ?? 0) + 1;
+        seenUnsequenced.set(rec.name, nextSeen);
+        if (nextSeen <= (state.consumedUnsequencedByAlias.get(rec.name) ?? 0)) continue;
+      }
+      if (rec.name === mcpAlias) count += 1;
+    } catch {
+      return count;
+    }
+  }
+  return count;
+}
+
+function recordErroredBridgedCall(
+  state: AntigravityStreamState,
+  removed: PendingAntigravityBridgedToolCall,
+  errMsg?: string,
+): void {
+  const isPreMcpDenial = Boolean(
+    errMsg && (ANTIGRAVITY_PRETOOL_DENIAL_RE.test(errMsg) || /PreToolUse payload exceeded the byte ceiling/i.test(errMsg)),
+  );
+  const removedOrder = removed.issueOrder ?? 0;
+  const earlierPending = state.pendingBridgedToolCalls.filter(
+    p => p.mcpAlias === removed.mcpAlias && (p.issueOrder ?? 0) < removedOrder,
+  ).length;
+  const priorConfirmed = state.erroredBridgedToolCalls.filter(
+    e => e.mcpAlias === removed.mcpAlias && e.confirmedCapture,
+  ).length;
+  const onDiskCount = isPreMcpDenial ? 0 : countUnconsumedCapturesOnDiskForAlias(state, removed.mcpAlias);
+  state.erroredBridgedToolCalls.push({
+    issueOrder: removedOrder,
+    mcpAlias: removed.mcpAlias,
+    confirmedCapture: !isPreMcpDenial && onDiskCount > earlierPending + priorConfirmed,
+  });
+}
+
 export function flushAntigravityBridgedToolCalls(
   state: AntigravityStreamState,
   capturedMcpCalls?: ReadonlyArray<{ seq?: number; name: string; arguments: Record<string, unknown> }>,
 ): AdapterEvent[] {
   const pendingList = state.pendingBridgedToolCalls.splice(0);
   if (pendingList.length === 0) return [];
-  const eligibleIndices = new Set<number>();
+  const erroredList = state.erroredBridgedToolCalls.splice(0);
+  const matchedPending = new Map<PendingAntigravityBridgedToolCall, { seq?: number; argumentsJson: string }>();
   if (capturedMcpCalls) {
+    const eligibleIndices: number[] = [];
     const seenUnsequenced = new Map<string, number>();
     for (let i = 0; i < capturedMcpCalls.length; i++) {
       const item = capturedMcpCalls[i]!;
       if (typeof item.seq === "number") {
-        if (state.consumedCaptureSeqs.has(item.seq)) continue;
+        if (item.seq < state.minCaptureSeq || state.consumedCaptureSeqs.has(item.seq)) continue;
       } else {
         const nextSeen = (seenUnsequenced.get(item.name) ?? 0) + 1;
         seenUnsequenced.set(item.name, nextSeen);
         if (nextSeen <= (state.consumedUnsequencedByAlias.get(item.name) ?? 0)) continue;
       }
-      eligibleIndices.add(i);
+      eligibleIndices.push(i);
     }
-  }
-  const used = new Set<number>();
-  const events: AdapterEvent[] = [];
-  for (const pending of pendingList) {
-    let argumentsJson = pending.fallbackArgumentsJson;
-    let seq: number | undefined;
-    if (capturedMcpCalls) {
-      const idx = capturedMcpCalls.findIndex(
-        (item, i) => eligibleIndices.has(i) && !used.has(i) && item.name === pending.mcpAlias,
+    const eligibleSet = new Set<number>(eligibleIndices);
+    const activeErrored: ErroredAntigravityBridgedToolCall[] = [];
+    const erroredAliases = new Set(erroredList.map(e => e.mcpAlias));
+    for (const alias of erroredAliases) {
+      const aliasErrored = erroredList
+        .filter(e => e.mcpAlias === alias)
+        .sort((a, b) => a.issueOrder - b.issueOrder);
+      const eligibleCount = eligibleIndices.filter(i => capturedMcpCalls[i]!.name === alias).length;
+      const pendingCount = pendingList.filter(p => p.mcpAlias === alias).length;
+      const confirmed = aliasErrored.filter(e => e.confirmedCapture);
+      const targetCount = Math.min(
+        aliasErrored.length,
+        Math.max(confirmed.length, Math.max(0, eligibleCount - pendingCount)),
       );
-      if (idx >= 0) {
-        used.add(idx);
-        const matched = capturedMcpCalls[idx]!;
-        seq = matched.seq;
-        if (typeof seq === "number") {
-          state.consumedCaptureSeqs.add(seq);
-        } else {
-          state.consumedUnsequencedByAlias.set(
-            matched.name,
-            (state.consumedUnsequencedByAlias.get(matched.name) ?? 0) + 1,
-          );
-        }
-        argumentsJson = JSON.stringify(matched.arguments);
+      const selected = new Set<ErroredAntigravityBridgedToolCall>(confirmed.slice(0, targetCount));
+      for (const candidate of aliasErrored) {
+        if (selected.size >= targetCount) break;
+        selected.add(candidate);
+      }
+      activeErrored.push(...selected);
+    }
+    type OrderedClaim =
+      | { kind: "pending"; order: number; item: PendingAntigravityBridgedToolCall }
+      | { kind: "errored"; order: number; item: ErroredAntigravityBridgedToolCall };
+    const claims: OrderedClaim[] = [
+      ...pendingList.map((item, idx) => ({ kind: "pending" as const, order: item.issueOrder ?? (idx + 1), item })),
+      ...activeErrored.map(item => ({ kind: "errored" as const, order: item.issueOrder, item })),
+    ].sort((a, b) => a.order - b.order);
+
+    const used = new Set<number>();
+    for (const claim of claims) {
+      const alias = claim.item.mcpAlias;
+      const idx = capturedMcpCalls.findIndex(
+        (item, i) => eligibleSet.has(i) && !used.has(i) && item.name === alias,
+      );
+      if (idx < 0) continue;
+      used.add(idx);
+      const matched = capturedMcpCalls[idx]!;
+      if (typeof matched.seq === "number") {
+        state.consumedCaptureSeqs.add(matched.seq);
+      } else {
+        state.consumedUnsequencedByAlias.set(
+          matched.name,
+          (state.consumedUnsequencedByAlias.get(matched.name) ?? 0) + 1,
+        );
+      }
+      if (claim.kind === "pending") {
+        matchedPending.set(claim.item, {
+          seq: matched.seq,
+          argumentsJson: JSON.stringify(matched.arguments),
+        });
       }
     }
+  }
+  const events: AdapterEvent[] = [];
+  for (const pending of pendingList) {
+    const resolved = matchedPending.get(pending);
+    const argumentsJson = resolved ? resolved.argumentsJson : pending.fallbackArgumentsJson;
+    const seq = resolved?.seq;
     if (state.translatorBudget && pending.chargedArgsLeaseId) {
       const extraBytes = Buffer.byteLength(argumentsJson) - pending.chargedArgsBytes;
       if (extraBytes > 0) {
@@ -1602,6 +1711,7 @@ export function mapAntigravityStreamFrame(
             if (pendingIdx >= 0) {
               const [removed] = state.pendingBridgedToolCalls.splice(pendingIdx, 1);
               state.capturedToolCalls = Math.max(0, state.capturedToolCalls - 1);
+              if (removed) recordErroredBridgedCall(state, removed, errMsg);
               if (state.translatorBudget && removed?.chargedLeaseIds?.length) {
                 const released = new Set(removed.chargedLeaseIds);
                 for (const leaseId of released) {
@@ -1621,6 +1731,11 @@ export function mapAntigravityStreamFrame(
           if (pendingIdx >= 0) {
             const [removed] = state.pendingBridgedToolCalls.splice(pendingIdx, 1);
             state.capturedToolCalls = Math.max(0, state.capturedToolCalls - 1);
+            const errInfo = asRecord(toolInfo?.error);
+            const errMsg = asString(errInfo?.message)
+              ?? asString(step.error)
+              ?? "isolated MCP tool step errored";
+            if (removed) recordErroredBridgedCall(state, removed, errMsg);
             if (state.translatorBudget && removed?.chargedLeaseIds?.length) {
               const released = new Set(removed.chargedLeaseIds);
               for (const leaseId of released) {
@@ -1630,10 +1745,6 @@ export function mapAntigravityStreamFrame(
             }
             state.sawLatestStepPartialText = false;
             if (state.sawPartialText) state.awaitingPostToolTextSeparator = true;
-            const errInfo = asRecord(toolInfo?.error);
-            const errMsg = asString(errInfo?.message)
-              ?? asString(step.error)
-              ?? "isolated MCP tool step errored";
             const safeTool = redactAntigravityLogText(rawToolName || removed?.mcpAlias || "<unknown>");
             const safeErr = capUtf8Bytes(redactAntigravityLogText(errMsg), 512);
             const reqTag = state.requestId ? ` requestId=${state.requestId}` : "";
@@ -1733,6 +1844,7 @@ export function mapAntigravityStreamFrame(
           ? rawToolName.slice(ANTIGRAVITY_MCP_TOOL_PREFIX.length)
           : rawToolName;
         state.pendingBridgedToolCalls.push({
+          issueOrder: ++state.nextBridgedCallOrder,
           stepIndex,
           callId,
           mcpAlias,

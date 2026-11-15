@@ -26,7 +26,6 @@ import {
 import {
   baseScopedEnv,
   codeBuddyMcpInvocation,
-  redactSecrets,
   runCodingAgentTurn,
   type CodingAgentDeps,
 } from "../coding-agent/turn";
@@ -116,8 +115,8 @@ export type AntigravityCliAdapterDeps = CodingAgentDeps & {
   enableSessionPool?: boolean;
   /** Custom warm session pool instance for hermetic tests. */
   sessionPool?: AntigravitySessionPool;
-  /** Optional isolated HOME/USERPROFILE directory on Windows (pass `false` to disable automatic isolation). */
-  isolatedHomeDir?: string | false;
+  /** Optional isolated HOME/USERPROFILE directory on Windows (pass `true` to force owned temp dir or `false` to disable). */
+  isolatedHomeDir?: string | boolean;
 };
 
 export interface AntigravityHookEnvPaths {
@@ -371,6 +370,7 @@ export function readCapturedMcpCalls(
   minSeq = 1,
   consumedSeqs?: ReadonlySet<number>,
   consumedUnsequencedByAlias?: ReadonlyMap<string, number>,
+  errored?: ReadonlyArray<{ mcpAlias: string; confirmedCapture: boolean }>,
 ): { ready: boolean; calls: CapturedMcpCallRecord[] } {
   let raw = "";
   try {
@@ -413,6 +413,13 @@ export function readCapturedMcpCalls(
     }
   }
   const used = new Set<number>();
+  if (errored) {
+    for (const item of errored) {
+      if (!item.confirmedCapture) continue;
+      const idx = calls.findIndex((c, i) => availableIndices.has(i) && !used.has(i) && c.name === item.mcpAlias);
+      if (idx >= 0) used.add(idx);
+    }
+  }
   for (const item of pending) {
     const idx = calls.findIndex((c, i) => availableIndices.has(i) && !used.has(i) && c.name === item.mcpAlias);
     if (idx < 0) return { ready: false, calls };
@@ -470,7 +477,7 @@ async function stageAntigravityWorkspace(options: {
   platform: NodeJS.Platform;
   writeStagingFile: typeof writeFile;
   enableResultsChannel: boolean;
-  isolatedHomeSetting: string | false | undefined;
+  isolatedHomeSetting: string | boolean | undefined;
   hasMockSpawn: boolean;
 }): Promise<StagedAntigravityWorkspace> {
   const {
@@ -492,10 +499,13 @@ async function stageAntigravityWorkspace(options: {
     if (typeof isolatedHomeSetting === "string") {
       await mkdir(isolatedHomeSetting, { recursive: true, mode: 0o700 });
     } else if (
-      isolatedHomeSetting !== false
-      && platform === "win32"
-      && !hasMockSpawn
-      && !existsSync(join(homedir(), ".gemini", "jetski-standalone-oauth-token"))
+      isolatedHomeSetting === true
+      || (
+        isolatedHomeSetting !== false
+        && platform === "win32"
+        && !hasMockSpawn
+        && !existsSync(join(homedir(), ".gemini", "jetski-standalone-oauth-token"))
+      )
     ) {
       ownedHomeDir = await mkdtemp(join(tmpdir(), "ocx-antigravity-home-"));
     }
@@ -688,7 +698,7 @@ async function consumeAntigravityTurnFrames(options: {
     clearUndeclaredTimer();
     emitTracked({
       type: "error",
-      message: `Antigravity CLI attempted a tool call outside the isolated catalog (${redactSecrets(toolName, undefined)}).`,
+      message: `Antigravity CLI attempted a tool call outside the isolated catalog (${redactAntigravityLogText(toolName)}).`,
       status: 502,
       errorType: "upstream_error",
       code: "undeclared_tool_call",
@@ -737,6 +747,7 @@ async function consumeAntigravityTurnFrames(options: {
           minCaptureSeq,
           state.consumedCaptureSeqs,
           state.consumedUnsequencedByAlias,
+          state.erroredBridgedToolCalls,
         );
         if (!captured.ready) {
           if (Date.now() - lastBridgedStepAt < bridgedCaptureTimeoutMs) {
@@ -769,7 +780,7 @@ async function consumeAntigravityTurnFrames(options: {
         failClosed = true;
         emitTracked({
           type: "error",
-          message: redactSecrets(err instanceof Error ? err.message : String(err), undefined),
+          message: redactAntigravityLogText(err instanceof Error ? err.message : String(err)),
           status: 502,
           errorType: "upstream_error",
           code: isTranslatorBudgetExceededError(err) ? err.code : "protocol_error",
@@ -912,7 +923,7 @@ async function consumeAntigravityTurnFrames(options: {
           failClosed = true;
           clearCoalesce();
           clearUndeclaredTimer();
-          emitTracked({ ...event, message: redactSecrets(event.message, undefined) });
+          emitTracked({ ...event, message: redactAntigravityLogText(event.message) });
           abortTurnAndKill();
           break;
         }
@@ -973,6 +984,7 @@ export function createAntigravityCliAdapter(
 ): ProviderAdapter {
   return {
     name: "antigravity-cli",
+    reportsPhysicalSends: true,
 
     buildRequest(): AdapterRequest {
       return { url: provider.baseUrl, method: "POST", headers: {}, body: "" };
@@ -1081,7 +1093,11 @@ export function createAntigravityCliAdapter(
       };
 
       const observedEmit = (event: AdapterEvent): void => {
-        if (event.type === "error") logErrorWarn(event);
+        if (event.type === "error") {
+          logErrorWarn(event);
+          emit({ ...event, message: redactAntigravityLogText(event.message) });
+          return;
+        }
         emit(event);
       };
 
@@ -1529,30 +1545,39 @@ export function createAntigravityCliAdapter(
             isolatedHomeSetting: deps.isolatedHomeDir,
             hasMockSpawn: deps.spawn !== undefined,
           });
-          const session = new WarmAntigravitySession({
-            signature,
-            binary,
-            args: buildArgs(resolvedModelSlug, staged.settingsPath),
-            env: buildChildEnv({
-              execPath: process.execPath,
-              guardPath: PRE_TOOL_GUARD_PATH,
-              allowedToolsPath: staged.allowedToolsPath,
-            }, staged.effectiveHomeDir, outboundProxyEnv),
-            cwd: staged.turnDir,
-            turnDir: staged.turnDir,
-            ownedHomeDir: staged.ownedHomeDir,
-            effectiveHomeDir: staged.effectiveHomeDir,
-            capturePath: staged.capturePath,
-            resultsPath: staged.resultsPath,
-            platform,
-            brainDirOverride: deps.brainDir,
-            spawnFn: deps.spawn,
-            killWindowsProcessTree: deps.killWindowsProcessTree,
-            killGraceMs: deps.killGraceMs,
-            reapTimeoutMs: deps.reapTimeoutMs,
-            setTimeoutFn,
-            clearTimeoutFn,
-          });
+          let session: WarmAntigravitySession;
+          try {
+            session = new WarmAntigravitySession({
+              signature,
+              binary,
+              args: buildArgs(resolvedModelSlug, staged.settingsPath),
+              env: buildChildEnv({
+                execPath: process.execPath,
+                guardPath: PRE_TOOL_GUARD_PATH,
+                allowedToolsPath: staged.allowedToolsPath,
+              }, staged.effectiveHomeDir, outboundProxyEnv),
+              cwd: staged.turnDir,
+              turnDir: staged.turnDir,
+              ownedHomeDir: staged.ownedHomeDir,
+              effectiveHomeDir: staged.effectiveHomeDir,
+              capturePath: staged.capturePath,
+              resultsPath: staged.resultsPath,
+              platform,
+              brainDirOverride: deps.brainDir,
+              spawnFn: deps.spawn,
+              killWindowsProcessTree: deps.killWindowsProcessTree,
+              killGraceMs: deps.killGraceMs,
+              reapTimeoutMs: deps.reapTimeoutMs,
+              setTimeoutFn,
+              clearTimeoutFn,
+            });
+          } catch (err) {
+            if (!ws) {
+              await removeAntigravityPathBestEffort(staged.turnDir);
+              if (staged.ownedHomeDir) await removeAntigravityPathBestEffort(staged.ownedHomeDir);
+            }
+            throw err;
+          }
           pool.registerLive(session);
           return session;
         };
@@ -1614,6 +1639,7 @@ export function createAntigravityCliAdapter(
             conversationId: session.conversationId,
             requestId,
             usageBaseline: session.usageBaseline,
+            minCaptureSeq: session.nextCaptureSeq,
           });
           activeState = state;
 
@@ -1717,6 +1743,18 @@ export function createAntigravityCliAdapter(
             && !session.isProcessSettled(),
           );
 
+          if (canParkToolUse || canParkIdleStop) {
+            const diskSeqs = readCapturedMcpCalls(session.capturePath, [], session.nextCaptureSeq).calls
+              .flatMap(c => (typeof c.seq === "number" ? [c.seq] : []));
+            const maxSeq = Math.max(
+              0,
+              ...state.flushedToolCalls.flatMap(c => (typeof c.seq === "number" ? [c.seq] : [])),
+              ...state.consumedCaptureSeqs,
+              ...diskSeqs,
+            );
+            if (maxSeq > 0) session.nextCaptureSeq = Math.max(session.nextCaptureSeq, maxSeq + 1);
+          }
+
           if (canParkToolUse) {
             const parkedCalls: WarmParkedToolCall[] = state.flushedToolCalls.map(call => ({
               seq: call.seq!,
@@ -1725,8 +1763,6 @@ export function createAntigravityCliAdapter(
               wireName: call.wireName,
               argumentsJson: call.argumentsJson,
             }));
-            const maxSeq = Math.max(...parkedCalls.map(c => c.seq));
-            session.nextCaptureSeq = Math.max(session.nextCaptureSeq, maxSeq + 1);
             for (const stepIdx of state.seenToolStepIndices) session.seenToolStepIndices.add(stepIdx);
             session.usageBaseline = addRawAntigravityUsage(session.usageBaseline, sumTurnStepUsages(state));
             session.transcriptBlocks = targetTranscriptBlocks;
@@ -1757,7 +1793,7 @@ export function createAntigravityCliAdapter(
 
           if (!terminalEmitted) {
             const rawStderr = session.readTurnStderr();
-            const stderr = redactSecrets(rawStderr, undefined);
+            const stderr = redactAntigravityLogText(rawStderr);
             const launchErr = session.getLaunchError();
             const exitCode = session.getExitCode();
             if (incoming.abortSignal?.aborted || aborted) {
@@ -1765,7 +1801,7 @@ export function createAntigravityCliAdapter(
             } else if (launchErr) {
               emitOnce({
                 type: "error",
-                message: `${profile.label} CLI failed to start: ${redactSecrets(launchErr.message, undefined)}`,
+                message: `${profile.label} CLI failed to start: ${redactAntigravityLogText(launchErr.message)}`,
                 status: 500,
                 errorType: "upstream_error",
                 code: "cli_spawn_failed",
@@ -1777,7 +1813,7 @@ export function createAntigravityCliAdapter(
               const isForgedToolHallucination = /emitted forged text tool call/i.test(msg);
               emitOnce({
                 type: "error",
-                message: redactSecrets(msg, undefined),
+                message: redactAntigravityLogText(msg),
                 status: 502,
                 errorType: "upstream_error",
                 code: isTranslatorBudgetExceededError(streamErr)
@@ -1897,7 +1933,7 @@ export function createAntigravityCliAdapter(
             }
             observedEmit({
               type: "error",
-              message: redactSecrets(err instanceof Error ? err.message : String(err), undefined),
+              message: redactAntigravityLogText(err instanceof Error ? err.message : String(err)),
               status: 500,
               errorType: "upstream_error",
               code: "cli_spawn_failed",
