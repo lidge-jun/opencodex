@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 71.
+Declared capabilities: 73.
 
 ### `ocx agent subagents force`
 
@@ -142,6 +142,31 @@ State-changing: no. JSON mode: `payload`.
 | `--json` | boolean | Emit the discovery payload. |
 
 - Read-only: nothing is probed and no provider row is created.
+
+### ocx antigravity
+
+Human-only handoff: the operator opens and drives this session in their own local terminal.
+
+Open a human-operated, local Antigravity ACP session in plan mode.
+
+State-changing: yes. JSON mode: `none`.
+
+Drives no management route.
+
+- Human terminal only; do not run on a user's behalf from a coding agent or automation.
+- Requires the official agy CLI with personal Google sign-in. Only Gemini models are offered; no proxy or account import.
+
+### ocx antigravity native
+
+Human-only handoff: the operator opens and drives this session in their own local terminal.
+
+Open the official Antigravity CLI directly for all models offered by your plan.
+
+State-changing: yes. JSON mode: `none`.
+
+Drives no management route.
+
+- Hands the local human terminal to agy without forwarding prompts or using ACP. Do not launch this on the user's behalf.
 
 ### `ocx message sessions`
 

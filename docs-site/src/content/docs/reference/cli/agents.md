@@ -5,6 +5,23 @@ description: Multi-agent, combo, observability, access, protocol path, integrati
 
 These commands control agent policy and routing, inspect the live proxy, and connect supported clients to opencodex.
 
+## Interactive Antigravity
+
+Run `ocx antigravity` locally in your terminal. It opens an interactive session
+using the official [Antigravity ACP server](https://antigravity.google/docs/cli/acp/).
+Install the official `agy` on your PATH and sign in with your personal Google
+account in `agy` first. Enter a model number from the Gemini list, then type prompts
+one line at a time. ACP runs in plan mode with sandboxing and declines tool permission
+requests. Enter `/exit` or press Ctrl+C to leave.
+
+For Claude, GPT-OSS, and any other [models in your plan](https://antigravity.google/docs/models/),
+run `ocx antigravity native` to open the official Antigravity terminal directly and
+select the model there. This command also supports the official CLI's own slash commands.
+
+Both commands are for direct, human-operated sessions. Neither adds a proxy model,
+imports OAuth credentials, or can be used to delegate from Codex or Claude Code.
+See [Google's guidance for personal ACP clients](https://discuss.ai.google.dev/t/personal-app-using-the-official-agy-acp-binary-with-google-ai-pro-permitted/198889/2).
+
 ## Agent policy
 
 ### `ocx agent <status|injection|effort|subagents|fallback|roles|sidecar|memory-models|compaction-routing> ...`

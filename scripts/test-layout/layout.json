@@ -481,6 +481,7 @@
     "cli-account.test.ts": "cli",
     "cli-capabilities-arguments.test.ts": "cli",
     "cli-capabilities.test.ts": "cli",
+    "cli-antigravity-acp.test.ts": "cli",
     "cli-api-protocols.test.ts": "cli",
     "cli-catalog-prewarm.test.ts": "cli",
     "cli-ensure-readiness.test.ts": "cli",

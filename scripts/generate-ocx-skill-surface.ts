@@ -19,7 +19,7 @@ const DOMAINS = [
   { name: "lifecycle", roots: ["codex-provider", "chatgpt", "status", "resolve", "capabilities", "sync", "start", "stop", "restart", "service", "gui"] },
   { name: "providers-models", roots: ["provider", "models", "alias"] },
   { name: "accounts", roots: ["account", "auth", "login", "logout"] },
-  { name: "agents-routing", roots: ["agent", "combo", "route", "fallback", "v2", "effort", "memory", "message", "advisor"] },
+  { name: "agents-routing", roots: ["agent", "combo", "route", "fallback", "v2", "effort", "memory", "message", "advisor", "antigravity"] },
   { name: "integrations", roots: ["claude", "integration", "commandcode", "grok", "codex-shim"] },
   { name: "observe-system", roots: ["companion", "usage", "logs", "storage", "inspect", "system", "observe", "debug", "export", "import", "cost", "update", "config", "tray", "telemetry"] },
   { name: "access-remote", roots: ["link", "remote-workspace", "hub", "connect", "disconnect", "api", "access"] },
@@ -60,8 +60,10 @@ function assignChapters(): Map<Capability, string> {
 // These existing discoverable names return plaintext credentials. Preserve their anchors
 // as prose handoffs, never turn them into executable-looking recipes.
 const SECRET_HANDOFFS = new Set(["ocx link issue", "ocx hub invite", "ocx config export"]);
+const INTERACTIVE_HANDOFFS = new Set(["ocx antigravity", "ocx antigravity native"]);
 function capabilityHeading(invocation: string): string {
-  return SECRET_HANDOFFS.has(invocation) ? `### ${invocation}` : `### \`${invocation}\``;
+  return SECRET_HANDOFFS.has(invocation) || INTERACTIVE_HANDOFFS.has(invocation)
+    ? `### ${invocation}` : `### \`${invocation}\``;
 }
 
 function renderIndex(assignments: Map<Capability, string>): string {
@@ -109,9 +111,11 @@ function tableCell(value: string | undefined): string {
 function renderCapability(cap: Capability): string[] {
   const invocation = capabilityInvocation(cap);
   const handoff = SECRET_HANDOFFS.has(invocation);
+  const interactive = INTERACTIVE_HANDOFFS.has(invocation);
   const lines = [capabilityHeading(invocation), ""];
   if (handoff) lines.push("Human-only handoff: ask the operator to perform this in their own terminal or dashboard; do not capture the secret-bearing result.", "");
-  if (!handoff && cap.usage !== undefined) lines.push(`Usage: \`${cap.usage}\``, "");
+  if (interactive) lines.push("Human-only handoff: the operator opens and drives this session in their own local terminal.", "");
+  if (!handoff && !interactive && cap.usage !== undefined) lines.push(`Usage: \`${cap.usage}\``, "");
   lines.push(cap.summary, "", `State-changing: ${cap.mutates ? "yes" : "no"}. JSON mode: \`${cap.json}\`.`, "");
   if (cap.routes.length > 0) {
     lines.push("| Method | Route |", "|---|---|");
