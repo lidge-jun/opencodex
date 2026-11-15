@@ -37,16 +37,16 @@ export function nativeAuthStatStamp(value: BigIntStats): string {
 /**
  * Plain read through one descriptor, with the dev/ino of the file the bytes came from. The
  * identity is null when the path names a different file after the read (#7345 retention).
- * Throws the error of the underlying open or read unchanged.
+ * Throws the error of the underlying open, read or post-read stat unchanged: a file removed right
+ * after the read is missing, not a login.
  */
 export function readNativeMainAuthBytesWithIdentity(path: string): { bytes: Buffer; identity: { dev: bigint; ino: bigint } | null } {
   const fd = openSync(path, fsConstants.O_RDONLY);
   try {
     const opened = fstatSync(fd, { bigint: true });
     const bytes = readFileSync(fd);
-    let after: BigIntStats | undefined;
-    try { after = statSync(path, { bigint: true }); } catch { after = undefined; }
-    const same = after !== undefined && after.dev === opened.dev && after.ino === opened.ino;
+    const after = statSync(path, { bigint: true });
+    const same = after.dev === opened.dev && after.ino === opened.ino;
     return { bytes, identity: same ? { dev: opened.dev, ino: opened.ino } : null };
   } finally {
     closeSync(fd);
