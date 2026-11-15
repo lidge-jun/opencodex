@@ -17,6 +17,9 @@ import {
   type RequestLogContext,
 } from "../../src/server/request-log";
 import { rememberPausedTurn } from "../../src/lib/client-error-body";
+import { executeComboResponses } from "../../src/server/responses/core-combo";
+import type { ResponsesTerminalStatus } from "../../src/server/responses/core-options";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import type { OcxConfig } from "../../src/types";
 
 function comboConfig(): OcxConfig {
@@ -193,7 +196,6 @@ describe("committed-terminal combo cooldown", () => {
   test("alias target receives cooldown and is skipped on the next pick", () => {
     const aliasTarget = { provider: "a", model: "m-alias" };
     const physicalAttempt = { provider: "a", model: "m-physical", status: 200 };
-    let notifiedTarget: Pick<{ provider: string; model: string }, "provider" | "model"> | undefined;
 
     coolComboTargetForCommittedTerminal({
       comboId: "aliasCombo",
@@ -204,10 +206,8 @@ describe("committed-terminal combo cooldown", () => {
       httpStatus: 200,
       outputTokens: 8192,
       outputCeiling: 8192,
-      onCooldownRecorded: target => { notifiedTarget = target; },
     });
 
-    expect(notifiedTarget).toEqual(aliasTarget);
     expect(isComboTargetInCooldown("aliasCombo", aliasTarget)).toBe(true);
     expect(isComboTargetInCooldown("aliasCombo", physicalAttempt)).toBe(false);
 
@@ -217,41 +217,122 @@ describe("committed-terminal combo cooldown", () => {
     expect(targetKey(pick.target)).toBe(targetKey({ provider: "b", model: "m2" }));
   });
 
-  test("addFinalRequestLog passes comboTarget, outputCeiling and respects paused turn", () => {
+  test("addFinalRequestLog passes comboTarget, outputCeiling and respects paused turn from child context", async () => {
     registerCommittedTerminalCooldownHandler(coolComboTargetForCommittedTerminal);
     try {
-      const attempt = beginRequestAttempt(1, "a", "m-physical", "openai-responses");
-      attempt.status = 200;
-      const aliasTarget = { provider: "a", model: "m-alias" };
-
-      // Case 1: paused turn does not cool
-      const pausedLogCtx: RequestLogContext = {
-        model: "m-alias", provider: "a", providerAdapter: "openai-responses",
-        comboId: "aliasCombo",
-        comboTarget: aliasTarget,
-        comboTargetOutputCeiling: 4096,
-        failureDetail: { code: "output_limit" },
-        usage: { inputTokens: 100, outputTokens: 4096 },
-        attempts: [attempt],
-        activeAttempt: attempt,
+      const cfg: OcxConfig = {
+        port: 10100,
+        defaultProvider: "a",
+        providers: {
+          a: {
+            adapter: "openai-chat", baseUrl: "https://a.example/v1", apiKey: "ka",
+            models: ["m-alias"],
+            modelMaxOutputTokens: { "m-alias": 4096 },
+          },
+        },
+        combos: {
+          aliasCombo: {
+            strategy: "failover",
+            targets: [{ provider: "a", model: "m-alias" }],
+          },
+        },
       };
-      rememberPausedTurn(pausedLogCtx);
-      addFinalRequestLog("ocx-test-paused", Date.now(), pausedLogCtx, 200, { terminalStatus: "incomplete" }, () => {});
-      expect(isComboTargetInCooldown("aliasCombo", aliasTarget)).toBe(false);
 
-      // Case 2: unpaused turn reaching ceiling cools the alias target
-      const unpausedLogCtx: RequestLogContext = {
-        model: "m-alias", provider: "a", providerAdapter: "openai-responses",
+      // Case 1: child receives pause_turn after commit -> carried child -> parent -> no cooldown
+      let childLogCaptured: RequestLogContext | undefined;
+      let terminalRecorder: ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined;
+      const pausedParentLog: RequestLogContext = {
+        model: "m-alias",
+        provider: "combo",
         comboId: "aliasCombo",
-        comboTarget: aliasTarget,
-        comboTargetOutputCeiling: 4096,
-        failureDetail: { code: "output_limit" },
-        usage: { inputTokens: 100, outputTokens: 4096 },
-        attempts: [attempt],
-        activeAttempt: attempt,
       };
-      addFinalRequestLog("ocx-test-unpaused", Date.now(), unpausedLogCtx, 200, { terminalStatus: "incomplete" }, () => {});
-      expect(isComboTargetInCooldown("aliasCombo", aliasTarget)).toBe(true);
+      const req1 = new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "combo/aliasCombo", stream: true }),
+      });
+      const budget1 = createTranslatorBudget();
+      try {
+        await executeComboResponses(
+          req1,
+          { model: "combo/aliasCombo", stream: true },
+          "aliasCombo",
+          cfg,
+          pausedParentLog,
+          {
+            translatorBudget: budget1,
+            setTerminalOutcomeRecorder: recorder => { terminalRecorder = recorder; },
+          },
+          {
+            handleComboResponses: async () => { throw new Error("not expected"); },
+            handleResponses: async (_req, _cfg, childLog, opts) => {
+              childLogCaptured = childLog;
+              childLog.usage = { inputTokens: 100, outputTokens: 4096 };
+              if (childLog.activeAttempt) childLog.activeAttempt.usage = childLog.usage;
+              opts.onFirstOutput?.();
+              return new Response("ok", { status: 200 });
+            },
+          },
+        );
+      } finally {
+        budget1.dispose();
+      }
+
+      // Mark the child context as paused after commit (simulating Anthropic pause_turn)
+      expect(childLogCaptured).toBeDefined();
+      rememberPausedTurn(childLogCaptured!);
+      // Terminal arrives: trigger terminal recorder and simulate final log write
+      pausedParentLog.failureDetail = { code: "output_limit" };
+      terminalRecorder?.("incomplete");
+      addFinalRequestLog("ocx-test-paused", Date.now(), pausedParentLog, 200, { terminalStatus: "incomplete" }, () => {});
+      expect(isComboTargetInCooldown("aliasCombo", { provider: "a", model: "m-alias" })).toBe(false);
+
+      // Case 2: unpaused child reaching ceiling cools the alias target
+      let unpausedChildLog: RequestLogContext | undefined;
+      let unpausedTerminalRecorder: ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined;
+      const unpausedParentLog: RequestLogContext = {
+        model: "m-alias",
+        provider: "combo",
+        comboId: "aliasCombo",
+      };
+      const req2 = new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "combo/aliasCombo", stream: true }),
+      });
+      const budget2 = createTranslatorBudget();
+      try {
+        await executeComboResponses(
+          req2,
+          { model: "combo/aliasCombo", stream: true },
+          "aliasCombo",
+          cfg,
+          unpausedParentLog,
+          {
+            translatorBudget: budget2,
+            setTerminalOutcomeRecorder: recorder => { unpausedTerminalRecorder = recorder; },
+          },
+          {
+            handleComboResponses: async () => { throw new Error("not expected"); },
+            handleResponses: async (_req, _cfg, childLog, opts) => {
+              unpausedChildLog = childLog;
+              childLog.usage = { inputTokens: 100, outputTokens: 4096 };
+              if (childLog.activeAttempt) childLog.activeAttempt.usage = childLog.usage;
+              opts.onFirstOutput?.();
+              return new Response("ok", { status: 200 });
+            },
+          },
+        );
+      } finally {
+        budget2.dispose();
+      }
+
+      expect(unpausedChildLog).toBeDefined();
+      // Unpaused: child is NOT marked with rememberPausedTurn
+      unpausedParentLog.failureDetail = { code: "output_limit" };
+      unpausedTerminalRecorder?.("incomplete");
+      addFinalRequestLog("ocx-test-unpaused", Date.now(), unpausedParentLog, 200, { terminalStatus: "incomplete" }, () => {});
+      expect(isComboTargetInCooldown("aliasCombo", { provider: "a", model: "m-alias" })).toBe(true);
     } finally {
       registerCommittedTerminalCooldownHandler(undefined);
     }

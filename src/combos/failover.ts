@@ -363,7 +363,6 @@ export interface CommittedTerminalCooldownFacts {
   outputTokens?: number;
   outputCeiling?: number | null;
   isPaused?: boolean;
-  onCooldownRecorded?: (target: Pick<OcxComboTarget, "provider" | "model">) => void;
 }
 
 /**
@@ -397,12 +396,11 @@ export function coolComboTargetForCommittedTerminal(facts: CommittedTerminalCool
   // server Retry-After or reset already recorded for this target stays authoritative.
   const existing = targetCooldowns.get(cooldownMapKey(facts.comboId, target));
   if (existing && existing.cooldownUntil > Date.now() + cooldownMs) return;
-  const recorded = coolComboTarget(facts.comboId, target, {
+  coolComboTarget(facts.comboId, target, {
     cooldownMs,
     status: facts.httpStatus,
     writerGeneration: facts.writerGeneration,
   });
-  if (recorded) facts.onCooldownRecorded?.(target);
 }
 
 export function earliestComboCooldown(

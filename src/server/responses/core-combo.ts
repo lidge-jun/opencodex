@@ -3,7 +3,7 @@ import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surf
 import { comboLogLabel, comboTargetLogLabel } from "../../combos/resolve";
 import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
 import { carryLocalFailureState, projectLocalModelRefusalLog, upstreamErrorIsLocal } from "../request-log-failure-detail";
-import { carryProxyErrorContext, hasProxyErrorMessage, markProxyError } from "../../lib/client-error-body";
+import { carryProxyErrorContext, hasProxyErrorMessage, isPausedTurn, markProxyError, rememberPausedTurn } from "../../lib/client-error-body";
 import { isXaiPrivacyModeRefusal } from "../../providers/xai-privacy-mode";
 import { classifyUpstreamCondition } from "../../lib/upstream-condition";
 import { effectiveAzureOutputBudget } from "../../adapters/azure";
@@ -1270,6 +1270,7 @@ export async function executeComboResponses(
       if (!childCommitted || !childUsageBound) return;
       logCtx.usageFromBridge = true;
       if (childLog.usage) logCtx.usage = childLog.usage;
+      if (isPausedTurn(childLog)) rememberPausedTurn(logCtx);
     };
     const completedTarget = { provider: pick.target.provider, model: pick.target.model };
     const writerGeneration = pick.writerGeneration;
@@ -1284,6 +1285,7 @@ export async function executeComboResponses(
     const callbackGate = createChildPassthroughCallbackGate({
       ...options,
       onResponseComplete: model => {
+        if (isPausedTurn(childLog)) rememberPausedTurn(logCtx);
         if (hostedWebSearchStream) settleSuccess();
         // The live config can change while the child is streaming. Never retain credentials.
         const currentCombo = getCombo(config, comboId);
@@ -1315,6 +1317,7 @@ export async function executeComboResponses(
           logCtx.usage = childLog.usage;
           logCtx.usageWireParsed = childLog.usageWireParsed;
         }
+        if (isPausedTurn(childLog)) rememberPausedTurn(logCtx);
         // A committed stream that ends failed is a target failure too; incomplete is an answer.
         if (status === "failed") jevPin?.forget();
         options.onNativePassthroughTerminal?.(status);
@@ -1479,7 +1482,10 @@ export async function executeComboResponses(
       });
       carryLocalFailureState(childLog, logCtx);
       options.onCodexAuthContextResolved?.(resolvedAuth);
-      options.setTerminalOutcomeRecorder?.(terminalRecorder);
+      options.setTerminalOutcomeRecorder?.((status, httpStatusOverride) => {
+        if (isPausedTurn(childLog)) rememberPausedTurn(logCtx);
+        terminalRecorder?.(status, httpStatusOverride);
+      });
       callbackGate.commit();
       childCommitted = true;
       forwardChildUsage();

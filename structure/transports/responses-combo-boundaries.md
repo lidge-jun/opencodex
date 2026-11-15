@@ -352,3 +352,29 @@ ordinary failover by supplying the same header. The wire body remains `rate_limi
 The message says no additional provider request was sent when the current request already has
 physical sends; an admission refusal before its first send retains the no-provider wording.
 Coverage: `tests/responses/chat-native-spend.test.ts` and `tests/responses/responses-spend-contract-c.test.ts`.
+
+## Committed terminal cooldown and degenerate completion failover
+
+When a streaming combo child commits output to the client and then terminates `incomplete`,
+`coolComboTargetForCommittedTerminal` in `src/combos/failover.ts` records a bounded cooldown for
+that target under its configured alias selector (`pick.target`) and writer generation, so future
+picks route around the exhausted target without corrupting the active response. Trigger codes
+are strictly bounded:
+- `output_limit` applies a 10-minute cooldown, but only when the turn is unpaused (`!isPausedTurn`)
+  and the child's delivered output tokens actually reach the target's configured or native output ceiling
+  (`resolveOutputCeiling`). A turn ending within the caller's own smaller allowance or an Anthropic
+  `pause_turn` is preserved without cooling the healthy target.
+- `stall_timeout` applies a 60-second cooldown, recording the timeout even if finalization overwrote the
+  serving attempt status with a client-facing 5xx code.
+Existing live cooldowns with a later expiration (e.g. upstream Retry-After) are never shortened by a
+committed terminal write.
+
+In `src/server/responses/combo-stream-preflight.ts`, a stream consisting solely of reasoning frames
+or commentary-phase items is held up to `COMBO_REQUIRED_TOOL_REASONING_HOLD_MS` (1,000 ms) before commitment
+to protect time-to-first-token. If the child terminates within that 1-second hold with a commentary-only
+or reasoning prelude and no final answer or tool calls (`degenerate_completion`), preflight discards the
+incomplete output and hops to the next combo target instead of committing a truncated answer to the client.
+Once the 1-second hold expires or semantic output arrives, the stream commits and degenerate failover is
+disallowed.
+Coverage: `tests/routing/combo-committed-terminal-cooldown.test.ts` and `tests/routing/combo-stream-preflight.test.ts`.
+

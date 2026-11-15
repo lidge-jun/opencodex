@@ -254,16 +254,21 @@ function isDegenerateStreamTerminal(payload: unknown, context?: object): boolean
   // Both carriers count: an item that exists only at event level is still client-visible
   // output the hop would lose, exactly as retryableZeroOutputTerminal treats it.
   const carriers = [event.output, response?.output].filter(value => value !== undefined);
+  if (carriers.length === 0) return false;
+  let preludeItems = 0;
   for (const carrier of carriers) {
     if (!Array.isArray(carrier)) return false;
     for (const item of carrier) {
       const record = recordValue(item);
       if (!record) return false;
-      if (record.type === "reasoning") continue;
-      if (record.type === "message" && record.phase === "commentary") continue;
+      if (record.type === "reasoning" || (record.type === "message" && record.phase === "commentary")) {
+        preludeItems++;
+        continue;
+      }
       return false;
     }
   }
+  if (preludeItems === 0) return false;
   if (event.type !== "response.incomplete") return true;
   // Incomplete terminals keep every replay-safety guard the zero-output path owns: paused
   // turns, explicitly unfinished turns, non-retryable limits, and reasons outside the
