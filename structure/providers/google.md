@@ -464,3 +464,17 @@ and whose `promptFeedback.blockReason` is set becomes `googlePromptBlockedEvent`
 Codex does not retry and a combo does not fail over. It names only the reason enum (anything outside `[A-Z_]` becomes
 `OTHER`) and never echoes `blockReasonMessage`. Coverage: `tests/adapters/google/google-finish-fidelity.test.ts`,
 `google-vertex-stream.test.ts` and `tests/adapters/adapter-usage.test.ts`.
+
+## Google request media, tool errors and Vertex hosts
+
+`messagesToGeminiFormat` in `src/adapters/google.ts` sends WAV and MP3 audio parts as `inline_data` (`audio/wav`,
+`audio/mp3`) on every Google mode except Claude models on Cloud Code Assist, which Antigravity translates into an
+Anthropic message with no audio block; those keep the part's text marker. `geminiToolResultParts` writes an
+`isError` tool result as `functionResponse.response.error` (Google's documented key for a failed call, and CPA's
+form on both its Gemini and Antigravity translators) and every other result as `response.result`; image placement is
+unchanged. Antigravity tool-result images keep the sibling layout above: CPA nests them in
+`functionResponse.parts`, but ADR-7279 extends nesting only with live upstream evidence for the route, which this
+unit did not have. `vertexHostForLocation` in `src/adapters/google-vertex-endpoint.ts` maps an already validated
+location to its inference authority: `global` → `aiplatform.googleapis.com`, `us`/`eu` →
+`aiplatform.<location>.rep.googleapis.com`, any region → `<location>-aiplatform.googleapis.com`; discovery and the
+express key-project probe stay on the global host. Coverage: `tests/adapters/google/google-request-fidelity.test.ts`.

@@ -342,7 +342,8 @@ function geminiToolResultParts(
 ): unknown[] {
   const functionResponse: Record<string, unknown> = {
     name: wireName,
-    response: { result: geminiToolResultText(msg.content) },
+    // Google documents an "error" key for a call that failed to execute; CPA writes it on every route.
+    response: msg.isError ? { error: geminiToolResultText(msg.content) } : { result: geminiToolResultText(msg.content) },
     id: wireCallId,
   };
   const images = toolResultImageParts(msg.content);
@@ -403,6 +404,8 @@ function messagesToGeminiFormat(
 
   const contents: unknown[] = [];
   const replayedCallIds: string[] = [];
+  // On Cloud Code Assist the identity model is the routed wire model.
+  const claudeOnCloudCodeAssist = isCloudCodeAssist && /^claude-/i.test(identityModelId);
 
   const callIds = createToolCallIdAllocator();
   for (const msg of parsed.context.messages) {
@@ -467,6 +470,12 @@ function messagesToGeminiFormat(
               // video. The marker on the part is the fallback for wires without one, not this
               // wire's best effort (#5212).
               parts.push({ inline_data: { mime_type: p.mediaType, data: p.data } });
+              continue;
+            }
+            // Gemini accepts WAV and MP3 bytes as inline_data. Antigravity hands Claude models an
+            // Anthropic message, which has no audio block, so they keep the text marker.
+            if (p.type === "audio" && !claudeOnCloudCodeAssist) {
+              parts.push({ inline_data: { mime_type: p.format === "mp3" ? "audio/mp3" : "audio/wav", data: p.data } });
               continue;
             }
             // Drop empty/malformed text instead of emitting `{ text: "" }` or a bare `{}` part.

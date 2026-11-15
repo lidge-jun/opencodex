@@ -45,5 +45,6 @@
   "agy-acp-routing-policy.test.ts": "routing",
   "google-error-details.test.ts": "adapters/google",
   "google-retry-structured.test.ts": "adapters/google",
-  "google-finish-fidelity.test.ts": "adapters/google"
+  "google-finish-fidelity.test.ts": "adapters/google",
+  "google-request-fidelity.test.ts": "adapters/google"
 }

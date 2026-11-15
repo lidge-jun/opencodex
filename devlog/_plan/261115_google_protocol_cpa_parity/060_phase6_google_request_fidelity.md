@@ -91,3 +91,17 @@ Stale check: replay/test fixtures that assert `response.result` for an `isError`
 `structure/providers-and-adapters.md` Google request shaping (tool-result images, audio, error
 results, Vertex hosts) and `docs-site` Vertex location note if the page lists hosts.
 
+## Build outcome (cycle 7)
+
+- 6a (AG-M1) **deferred**. ADR-7279 (`structure/decisions/ADR-7279-vertex-argon-tool-images.md`) keeps other routes on
+  their layout "because this incompatibility was reproduced only on Vertex Argon" and says to revisit "when another
+  route has equivalent upstream evidence"; its #8583 amendment required live runs. CPA's source is not that evidence,
+  `tests/adapters/google/google-tool-result-adjacency.test.ts` pins the CCA layouts deliberately (the Claude
+  responses-before-images order was a live fix), and no Antigravity account was available to run one. Matrix row set
+  to defer.
+- 6b, 6c, 6d shipped as planned: `vertexHostForLocation`, inline audio (Claude on CCA keeps the marker, keyed on the
+  routed identity model), `response.error` for `isError` results on every mode (Google's function-response reference:
+  "if the function call failed to execute, the response can have an 'error' key"; CPA `antigravity_claude_request.go:659-661`,
+  `gemini_claude_request.go:205-207`).
+- Tests: NEW `tests/adapters/google/google-request-fidelity.test.ts` (7 of 14 cases failed before 6c/6d; the import
+  failed before 6b).

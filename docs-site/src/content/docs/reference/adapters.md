@@ -522,7 +522,13 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
   upstream 400; message-only terminal paths infer 403 (permission class). The restriction itself
   is Google's — the proxy does not route around it.
 - System prompt → `systemInstruction`; messages → `contents[]` (assistant → `model`); tools →
-  `functionDeclarations`. Data-URL images → `inline_data`.
+  `functionDeclarations`. Data-URL images → `inline_data`. WAV and MP3 audio → `inline_data`
+  (`audio/wav`, `audio/mp3`), except for Claude models on Antigravity, which keep the text marker. A
+  tool result flagged as an error is sent as `functionResponse.response.error`, Google's documented key
+  for a failed call; other results use `response.result`.
+- Vertex project endpoints use `aiplatform.googleapis.com` for `global`,
+  `aiplatform.us.rep.googleapis.com` and `aiplatform.eu.rep.googleapis.com` for the `us` and `eu`
+  multi-regions, and `<location>-aiplatform.googleapis.com` for a region such as `us-central1`.
 - Vertex AI and Antigravity retry a `429` only when the response carries retry evidence, such as a
   valid `Retry-After` header, and surface hard quota exhaustion immediately.
 - The shared tool-catalog guidance uses wording verified with Antigravity Gemini 3.8 Flash to

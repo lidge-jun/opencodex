@@ -96,7 +96,7 @@ later unit, with the reason).
 | AG-X3 | 403 `PERMISSION_DENIED` + `ErrorInfo.reason=TOS_VIOLATION` is a credential-scoped terminal refusal, HTTP and in-stream | B-X3 R2 | gap | P1 | 040 |
 | AG-R4 | A stream with only a signature and usage (no text, no call) is a failure, not an empty success | B-R4 | diff: opencodex's empty-completion guard (`src/server/responses/empty-completion-guard.ts`) owns zero-output turns (one retry when enabled, a notice otherwise); a signature-only stream is that shape | — | — |
 | AG-R7 | Input tokens include `toolUsePromptTokenCount` | B-R7 | gap | P2 | 050 |
-| AG-M1 | Tool-result images nested in `functionResponse.parts` | B-M1, C-V-28 | gap for CCA (native client shape); AI Studio/Vertex keep siblings except the Argon family | P2 | 060 |
+| AG-M1 | Tool-result images nested in `functionResponse.parts` | B-M1, C-V-28 | defer: CPA nests on CCA, but ADR-7279 extends nesting only with live upstream evidence per route, and the pinned CCA Claude "responses before images" layout was a live fix; needs an Antigravity live run | P2 | 060 |
 | AG-TOSPOOL | Opt-in pool-wide pause after a TOS suspension (CPA `antigravity_executor_credits.go:884-905`, off by default since e96d4c4) | B-X3 | defer: opencodex quarantines the one account (040); a pool-wide stop is a separate operator policy | P3 | — |
 | AG-S7 | Claude-on-CCA signature format validation | B-S7 | defer: needs a corpus of real Claude/Gemini carrier signatures to avoid dropping valid ones | P2 | — |
 | AG-TL3 | Required `reason` placeholder for argument-less tools under Claude `VALIDATED` | B-TL3 | defer: needs a live check; opencodex already repairs schema 400s once | P2 | — |
