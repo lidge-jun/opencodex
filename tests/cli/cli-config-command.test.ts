@@ -135,6 +135,12 @@ describe("ocx config display redaction", () => {
       const ingress = runCli(["config", "set", "hub.managementIngress", '{"enabled":false}'], { OPENCODEX_HOME: dir });
       expect(ingress.status).toBe(0);
       expect(ingress.stdout).toContain("restart");
+      // #8082: the Codex login route reads the running config, so the login policy needs a restart too.
+      for (const args of [["set", "codexAuthMethod", '"device-only"'], ["unset", "codexAuthMethod"]]) {
+        const login = runCli(["config", ...args], { OPENCODEX_HOME: dir });
+        expect(login.status).toBe(0);
+        expect(login.stdout).toContain("restart");
+      }
 
       // The JSON payload keeps its shape; the note is for people reading the terminal.
       const json = runCli(["config", "set", "corsAllowOrigins", '["http://localhost:9999"]', "--json"], { OPENCODEX_HOME: dir });

@@ -149,7 +149,9 @@ function pathSegments(path: string): string[] {
  * management listener (`hub.managementIngress`)
  * (`LIVE_TOPOLOGY_KEYS`); `corsAllowOrigins` reaches the running config only when some later live
  * save adopts the file. Saying only "Set <path>." left an operator retrying a refused
- * `ocx hub invite` against the old list. Limited to these keys, so the note never claims a restart
+ * `ocx hub invite` against the old list. `codexAuthMethod` (#8082) is read from the running config by the
+ * Codex login route, so a device-only policy set here would not stop a browser login until a restart.
+ * Limited to these keys, so the note never claims a restart
  * that is not needed.
  */
 export function startupOnlyConfigNotes(path: string): string[] {
@@ -159,6 +161,9 @@ export function startupOnlyConfigNotes(path: string): string[] {
   }
   if (segments[0] === "hub" && (segments.length === 1 || segments[1] === "managementPublicOrigin" || segments[1] === "managementIngress")) {
     return [`A running OpenCodex applies ${segments.join(".")} only when it starts; restart it to use the new value.`];
+  }
+  if (segments[0] === "codexAuthMethod") {
+    return ["A running OpenCodex keeps its previous codexAuthMethod for Codex account logins until it restarts; restart it to apply the new value now."];
   }
   return [];
 }
