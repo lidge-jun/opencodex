@@ -320,6 +320,13 @@ truncates diagnostic text at UTF-8 code-point boundaries without allocating arra
 byte sizing retains TextEncoder's coercion behavior for legacy non-string runtime callers.
 These optimizations do not add request queues, retry policies, or RSS-based admission gates.
 
+Zed framing in `src/adapters/zed.ts` searches retained text for newlines only when newly decoded
+text contains one. An incomplete line is not rescanned for every transport fragment. The existing
+character ceiling is checked on every read, including reads without a newline; framing, Unicode
+decoding, terminal suppression and EOF failure behavior stay unchanged.
+`tests/providers/zed-hosted-provider.test.ts` bounds newline-search work and checks fragmented
+UTF-8, split CRLF and coalesced frames.
+
 The buffered collector in `src/adapters/zed.ts` charges each delegated event before retaining it
 and releases owned events when collection fails. Its translated stream is cancelled on early exit
 for every provider family. `src/adapters/openai-responses/passthrough.ts` releases partial text and

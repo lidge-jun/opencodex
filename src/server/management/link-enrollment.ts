@@ -17,7 +17,7 @@ import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
 import { fail, exactBody, port, isRecord, runnerFor, readStoreFor, writeStoreFor, knownHostsFile, putConfirmedKnownHost, issueKey, compensateNewLink, keyCleanupFailed, revokeKeyIdempotent, type LinkRouteState } from "./link-route-state";
-import { routeFields, routeMismatch, routeOf, sameRouteRequest, splitRouteRequest } from "./link-route-request";
+import { identityFileRefusal, routeFields, routeMismatch, routeOf, sameRouteRequest, splitRouteRequest } from "./link-route-request";
 import { enrollOperationDigest, journalInUse, journalOpenFailure, NO_ENROLL_JOURNAL, openEnrollJournal, openEnrollmentConflict, replayOperation, underAliasLock, type EnrollJournal } from "./link-operation";
 import { tombstoneNamesAlias } from "../../link/tombstones";
 import { isOperationId } from "../../link/operations-journal";
@@ -73,6 +73,8 @@ function isOutdatedVersion(parts: readonly number[]): boolean {
 export async function probe(ctx: ManagementContext, state: LinkRouteState): Promise<Response> {
   const split = splitRouteRequest(await readManagementJsonBodyOr(ctx.req, null));
   if ("error" in split) return split.error;
+  const keyRefusal = identityFileRefusal(split.route.explicitRoute);
+  if (keyRefusal) return keyRefusal;
   const value = split.body, wanted = split.route, route = wanted.explicitRoute, bound = routeFields(wanted);
   const body = exactBody(value, ["alias"]) ?? exactBody(value, ["alias", "includeVersion"]) ?? exactBody(value, ["alias", "includeVersion", "allowMissing"]);
   if (!body || typeof body.alias !== "string"
@@ -151,6 +153,8 @@ export async function probe(ctx: ManagementContext, state: LinkRouteState): Prom
 export async function confirmHost(ctx: ManagementContext, state: LinkRouteState): Promise<Response> {
   const split = splitRouteRequest(await readManagementJsonBodyOr(ctx.req, null));
   if ("error" in split) return split.error;
+  const keyRefusal = identityFileRefusal(split.route.explicitRoute);
+  if (keyRefusal) return keyRefusal;
   const value = split.body, wanted = split.route;
   const body = exactBody(value, ["alias", "fingerprint"]) ?? exactBody(value, ["alias", "fingerprint", "allowMissing"]);
   if (!body || typeof body.alias !== "string" || typeof body.fingerprint !== "string" || (body.allowMissing !== undefined && typeof body.allowMissing !== "boolean")) {
@@ -281,6 +285,9 @@ export async function apply(ctx: ManagementContext, state: LinkRouteState): Prom
     if (body.fingerprint !== undefined && body.fingerprint !== confirmed.fingerprint) return fail("host_fingerprint_mismatch", "The apply fingerprint does not match the confirmed host.", 409);
     if (!sameRouteRequest(routeOf(confirmed), wanted)) return routeMismatch();
     const route = confirmed.explicitRoute ?? null;
+    // After the replay above, before the journal entry and any SSH: a new operation needs a key ssh can use.
+    const keyRefusal = identityFileRefusal(route);
+    if (keyRefusal) return keyRefusal;
     if (readStoreFor(ctx).links.some(link => link.alias === alias && link.direction === "hub-initiated")) return fail("link_exists", "A link for this alias already exists.", 409);
     if (confirmed.runtimeKind === "missing" && body.plant !== true) {
       return fail("remote_ocx_missing", "ocx was not found on the remote host; confirm planting ocx-child before applying.", 409);

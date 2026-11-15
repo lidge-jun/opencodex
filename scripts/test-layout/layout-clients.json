@@ -240,6 +240,7 @@
   "link-explicit-route-paths.test.ts": "clients",
   "link-explicit-route-no-ssh-config.test.ts": "clients",
   "link-route-edit-exclusive.test.ts": "server",
+  "link-route-edit-retirement.test.ts": "server",
   "link-enrollment-explicit-route.test.ts": "server",
   "cli-link-explicit-route.test.ts": "cli",
   "link-alias-lock.test.ts": "clients",

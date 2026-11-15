@@ -72,6 +72,7 @@ const OAUTH_LABELS: Record<string, string> = {
   devin: "Devin",
   "dsh-account": "DeepSeek Account (DSH)",
   "workbuddy-ai": "WorkBuddy AI",
+  "codebuddy-cn-ai": "CodeBuddy CN (subscription)",
 };
 
 export const oauthLabel = (id: string) => OAUTH_LABELS[id] ?? id;

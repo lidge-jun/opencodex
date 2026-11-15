@@ -2,7 +2,10 @@ import { expect, test } from "bun:test";
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
-import { providerIconSrc } from "../src/provider-icons";
+import { en } from "../src/i18n/en";
+import type { TFn } from "../src/i18n/shared";
+import { oauthLabel } from "../src/pages/providers-shared";
+import { formatProviderDisplayName, providerIconSrc } from "../src/provider-icons";
 
 const PUBLIC_DIR = join(import.meta.dir, "..", "public", "provider-icons");
 
@@ -51,6 +54,10 @@ test("a provider whose brand asset is already committed is actually wired to it"
  */
 test("every wired provider icon names a file that exists", () => {
   expect(providerIconSrc("workbuddy-ai")).toBe("/provider-icons/workbuddy-color.svg");
+  expect(providerIconSrc("codebuddy-cn-ai")).toBe("/provider-icons/workbuddy-color.svg");
+  const t = ((key: keyof typeof en) => en[key]) as TFn;
+  expect(formatProviderDisplayName("codebuddy-cn-ai", t)).toBe("CodeBuddy CN (subscription)");
+  expect(oauthLabel("codebuddy-cn-ai")).toBe("CodeBuddy CN (subscription)");
   const broken = PROVIDER_REGISTRY
     .map(entry => [entry.id, providerIconSrc(entry.id)] as const)
     .filter((pair): pair is readonly [string, string] => pair[1] !== undefined)

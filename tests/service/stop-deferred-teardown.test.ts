@@ -72,6 +72,7 @@ async function runParentStop(options: {
   disconnectDuringProbe?: boolean; connectDuringDiscovery?: boolean; connectDuringPost?: boolean; lifecycleBusy?: boolean;
   connectAfterBoundary?: boolean; pendingAfterBoundary?: boolean; connectDuringRestore?: boolean;
   connectAfterExitInspection?: boolean; pendingAfterExitInspection?: boolean; pendingAfterGrok?: boolean; receiptClearBusy?: boolean;
+  windowsStopWiring?: boolean;
 }) {
   if (options.clientTransport) connectClient(options.clientTransport);
   const child = spawnSync(process.execPath, [fixturePath("parent-stop-runner.ts")], {
@@ -92,9 +93,19 @@ async function runParentStop(options: {
     urls: string[]; transports: string[]; nonce?: string; receiptExists: boolean; unexpectedIo: string[];
   };
   expect(report.unexpectedIo, child.stderr).toEqual([]);
-  expect(report.urls, child.stderr).toHaveLength(options.clientServer || options.exitCleanup || options.alreadyStopped ? 0 : 1);
+  // The Windows checked stop needs its receipt before it sends anything.
+  const refusedWithoutReceipt = options.windowsStopWiring === true && !options.receipt;
+  expect(report.urls, child.stderr).toHaveLength(options.clientServer || options.exitCleanup || options.alreadyStopped || refusedWithoutReceipt ? 0 : 1);
   return { ...report, exitCode: child.status, stderr: child.stderr, stdout: child.stdout };
 }
+
+/**
+ * Off Windows a stop whose teardown receipt cannot be claimed still runs, and the cases using this assert that
+ * contract. On Windows the checked stop (#8573) needs the receipt first (windowsStopRequiresReceipt in
+ * src/cli/index.ts) and refuses before any POST, so those cases run off Windows; "the Windows checked stop
+ * refuses ..." below asserts that refusal for the same scenarios on every host.
+ */
+const posixReceiptTest = test.skipIf(process.platform === "win32");
 
 describe("API stop through process exit cleanup", () => {
   for (const query of ["valid", "foreign", "missing", "none"] as const) {
@@ -313,7 +324,7 @@ describe("parent CLI shared teardown completion", () => {
     expect(outcome.exitCode, outcome.stderr).toBe(0);
   });
 
-  test("a Link Child not-owned answer without a receipt still gets the parent's restoration", async () => {
+  posixReceiptTest("a Link Child not-owned answer without a receipt still gets the parent's restoration", async () => {
     // An old build answers not-owned for ANY connected client before it ever checks the
     // deferral query, and this stop has no receipt to send. That answer preserves the
     // link route instead of tearing it down, so it cannot confirm the parent's teardown:
@@ -327,7 +338,7 @@ describe("parent CLI shared teardown completion", () => {
     expect(outcome.exitCode, outcome.stderr).toBe(0);
   });
 
-  test("a connection committed during orphan discovery keeps its hub-owned not-owned answer", async () => {
+  posixReceiptTest("a connection committed during orphan discovery keeps its hub-owned not-owned answer", async () => {
     // Disconnected at entry, hub-connected by the time the POST lands: the stopped runtime
     // re-reads the fresh config and truthfully answers not-owned for the connection that
     // now owns those integrations. Refusing it would restore over the brand-new connection.
@@ -341,7 +352,7 @@ describe("parent CLI shared teardown completion", () => {
   for (const [label, transition] of [["during orphan discovery", { orphan: true, connectDuringDiscovery: true }],
     ["while the POST is in flight", { connectDuringPost: true }]] as const) {
     for (const receipt of [true, false]) {
-      test(`a Link stop never restores over a hub connected ${label} (receipt ${receipt ? "claimed" : "unavailable"})`, async () => {
+      (receipt ? test : posixReceiptTest)(`a Link stop never restores over a hub connected ${label} (receipt ${receipt ? "claimed" : "unavailable"})`, async () => {
         // #7736 r5: the late not-owned refusal must not let the parent restore over the hub that
         // now owns routing. Only the ownership read at the restore boundary decides.
         const outcome = await runParentStop({ receipt, clientTransport: "link", serverTeardown: true, json: true,
@@ -359,7 +370,7 @@ describe("parent CLI shared teardown completion", () => {
   }
   for (const transition of ["connectAfterBoundary", "connectDuringRestore"] as const) {
     for (const receipt of [true, false]) {
-      test(`R6 ${transition} preserves hub writes (receipt ${receipt})`, async () => {
+      (receipt ? test : posixReceiptTest)(`R6 ${transition} preserves hub writes (receipt ${receipt})`, async () => {
         const outcome = await runParentStop({ receipt, clientTransport: "link", json: true,
           [transition]: true, response: { success: true, sharedTeardown: "not-owned" }, restore: restoreResult(true) });
         expect(outcome.calls, outcome.stderr).toMatchObject({ native: 0, grok: 0, cleared: receipt ? 1 : 0 });
@@ -477,7 +488,7 @@ describe("parent CLI shared teardown completion", () => {
     expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: false, sharedTeardown: "refused" });
     expect(outcome.exitCode).toBe(1);
   });
-  test("receipt failure and unconfirmed child teardown cause real parent restoration without a kill", async () => {
+  posixReceiptTest("receipt failure and unconfirmed child teardown cause real parent restoration without a kill", async () => {
     const outcome = await runParentStop({ receipt: false,
       response: { success: false, sharedTeardown: "performed" }, restore: restoreResult(true) });
     expect(outcome.urls).toEqual(["http://127.0.0.1:10100/api/stop"]);
@@ -485,12 +496,34 @@ describe("parent CLI shared teardown completion", () => {
     expect(outcome.exitCode).toBe(0);
   });
 
-  test("a confirmed performed teardown prevents duplicate parent restoration", async () => {
+  posixReceiptTest("a confirmed performed teardown prevents duplicate parent restoration", async () => {
     const outcome = await runParentStop({ receipt: false,
       response: { success: true, sharedTeardown: "performed" }, restore: restoreResult(true) });
     expect(outcome.calls).toMatchObject({ killed: 0, native: 0, grok: 0 });
     expect(outcome.exitCode).toBe(0);
   });
+
+  // The scenarios the posixReceiptTest cases run without a receipt. Through the Windows checked stop each one is
+  // refused before the POST: nothing is signalled, restored or cleared, and the stop fails.
+  const notOwned = { success: true, sharedTeardown: "not-owned" } as const;
+  for (const [name, scenario] of [
+    ["a Link Child not-owned answer", { clientTransport: "link", json: true, response: notOwned }],
+    ["a connection committed during orphan discovery", { orphan: true, connectDuringDiscovery: true, serverTeardown: true, json: true, response: null }],
+    ["a Link stop with a hub connected during orphan discovery", { clientTransport: "link", serverTeardown: true, json: true, response: null, orphan: true, connectDuringDiscovery: true }],
+    ["a Link stop with a hub connected while the POST is in flight", { clientTransport: "link", serverTeardown: true, json: true, response: null, connectDuringPost: true }],
+    ["R6 connectAfterBoundary", { clientTransport: "link", json: true, connectAfterBoundary: true, response: notOwned }],
+    ["R6 connectDuringRestore", { clientTransport: "link", json: true, connectDuringRestore: true, response: notOwned }],
+    ["an unconfirmed child teardown", { response: { success: false, sharedTeardown: "performed" } }],
+    ["a confirmed performed teardown", { response: { success: true, sharedTeardown: "performed" } }],
+  ] as const) {
+    test(`the Windows checked stop refuses ${name} when no receipt can be claimed`, async () => {
+      const outcome = await runParentStop({ ...scenario, receipt: false, windowsStopWiring: true, restore: restoreResult(true) });
+      expect(outcome.calls, outcome.stderr).toMatchObject({ killed: 0, native: 0, grok: 0, cleared: 0 });
+      expect(outcome.nonce).toBeUndefined();
+      expect(outcome.stderr).toContain("receipt storage unavailable");
+      expect(outcome.exitCode, outcome.stderr).toBe(1);
+    });
+  }
 
   test("a failed parent restoration leaves its actual receipt outstanding", async () => {
     const outcome = await runParentStop({ receipt: true,

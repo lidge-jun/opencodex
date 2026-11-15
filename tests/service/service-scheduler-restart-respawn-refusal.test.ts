@@ -33,6 +33,23 @@ const healthy = buildWindowsTaskXml("fixture.cmd", launcher, undefined, sid);
 let home: TempHome | null = null;
 const originalToken = process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
 
+/**
+ * These cases model the Windows host on a POSIX process model, and only there. The Windows parts are
+ * fixtures (repairService({ platform: "win32" }), and the proxy child pins process.platform to win32 for
+ * its own branch selection); the process lifecycle under them is POSIX on purpose: the proxy is
+ * launched through /bin/sh so init reaps it (a zombie child would still answer kill(0) while stopProxy
+ * blocks the loop in Atomics.wait), and a symlink named "ocx" gives the command line that
+ * verifyPidIdentity reads through ps. On a real Windows host none of that applies: there is no
+ * /bin/sh (dev run 43496185962, windows 4/14: uv_spawn '/bin/sh' ENOENT), the stop path is the real
+ * Windows one (CIM command-line identity, taskkill), and that would be a different test.
+ *
+ * What Windows itself runs for the same decisions: tests/service/service-scheduler-restart-cleanup.test.ts
+ * (repairService on a respawnable_service refusal and the restart receipt, hermetic, every platform)
+ * and tests/windows/windows-stop-callers.test.ts (the Windows /api/stop route and the checked service
+ * stop); both passed on the Windows shards of that run (27 and 32 cases).
+ */
+const posixHostTest = test.skipIf(process.platform === "win32");
+
 afterEach(() => {
   home?.remove();
   home = null;
@@ -107,7 +124,7 @@ async function startProxy(root: TempHome, entryName = "ocx", extraEnv: Record<st
   return { pid, port, stop, output: () => output };
 }
 
-test("a scheduler restart stops the surviving tracked proxy instead of aborting on its own respawn refusal", async () => {
+posixHostTest("a scheduler restart stops the surviving tracked proxy instead of aborting on its own respawn refusal", async () => {
   home = createTempHome("ocx-scheduler-restart-8416-");
   const proxy = await startProxy(home);
   const effects: string[] = [];
@@ -172,7 +189,7 @@ test("a scheduler restart stops the surviving tracked proxy instead of aborting 
   expect(existsSync(home.path("ocx.pid"))).toBe(false);
 }, RESTART_TIMEOUT_MS);
 
-test("a refused stop keeps the proxy serving and never reports a completed restart", async () => {
+posixHostTest("a refused stop keeps the proxy serving and never reports a completed restart", async () => {
   home = createTempHome("ocx-scheduler-restart-8416-denied-");
   const proxy = await startProxy(home);
   const effects: string[] = [];
@@ -227,7 +244,7 @@ test("a refused stop keeps the proxy serving and never reports a completed resta
   expect(existsSync(home.path("opencodex-service.cmd"))).toBe(false);
 }, RESTART_TIMEOUT_MS);
 
-test("a survivor this home cannot verify is refused before the wrappers that supervise it are removed", async () => {
+posixHostTest("a survivor this home cannot verify is refused before the wrappers that supervise it are removed", async () => {
   home = createTempHome("ocx-scheduler-restart-8416-unverified-");
   // Not named ocx: verifyPidIdentity cannot tie this process to the home, as for a reused pid.
   const proxy = await startProxy(home, "unverified-proxy");
@@ -269,7 +286,7 @@ test("a survivor this home cannot verify is refused before the wrappers that sup
   }
 }, RESTART_TIMEOUT_MS);
 
-test.each(["no replacement answers", "wrapper cleanup fails"] as const)("the restart keeps its teardown receipt when %s after the proxy accepted its stop", async mode => {
+posixHostTest.each(["no replacement answers", "wrapper cleanup fails"] as const)("the restart keeps its teardown receipt when %s after the proxy accepted its stop", async mode => {
   home = createTempHome("ocx-scheduler-restart-8416-receipt-");
   const proxy = await startProxy(home);
   const effects: string[] = [];
@@ -322,7 +339,7 @@ test.each(["no replacement answers", "wrapper cleanup fails"] as const)("the res
     : ["stop-scheduler", "kill-wrappers", "write-assets", "start-scheduler", "write-state"]);
 }, RESTART_TIMEOUT_MS);
 
-test("a receipt for the port this listener is bound to is honoured without its runtime record, whatever port is configured", async () => {
+posixHostTest("a receipt for the port this listener is bound to is honoured without its runtime record, whatever port is configured", async () => {
   home = createTempHome("ocx-scheduler-restart-8416-bound-port-");
   const proxy = await startProxy(home, "ocx", { OCX_FIXTURE_CONFIG_PORT_SKEW: "1" });
   try {
@@ -344,7 +361,7 @@ test("a receipt for the port this listener is bound to is honoured without its r
   }
 });
 
-test("a listener that cannot prove this home's attestation secret is sent no token and keeps its wrappers", async () => {
+posixHostTest("a listener that cannot prove this home's attestation secret is sent no token and keeps its wrappers", async () => {
   home = createTempHome("ocx-scheduler-restart-8416-unattested-");
   const proxy = await startProxy(home, "ocx", { OCX_FIXTURE_NO_ATTESTATION: "1" });
   const effects: string[] = [];
@@ -387,7 +404,7 @@ test("a listener that cannot prove this home's attestation secret is sent no tok
   }
 }, RESTART_TIMEOUT_MS);
 
-test("a receipt for another endpoint does not defer this proxy's stop", async () => {
+posixHostTest("a receipt for another endpoint does not defer this proxy's stop", async () => {
   home = createTempHome("ocx-scheduler-restart-8416-foreign-receipt-");
   const proxy = await startProxy(home);
   try {
@@ -410,7 +427,7 @@ test("a receipt for another endpoint does not defer this proxy's stop", async ()
   }
 });
 
-test.each([true, false])("a failed asset rewrite after the accepted stop settles the receipt by the recovered proxy (serving %p)", async serving => {
+posixHostTest.each([true, false])("a failed asset rewrite after the accepted stop settles the receipt by the recovered proxy (serving %p)", async serving => {
   home = createTempHome("ocx-scheduler-restart-8416-recovery-");
   const proxy = await startProxy(home);
   const effects: string[] = [];
@@ -456,7 +473,7 @@ test.each([true, false])("a failed asset rewrite after the accepted stop settles
   expect((failure as Error).message.includes("kept its teardown receipt")).toBe(!serving);
 }, RESTART_TIMEOUT_MS);
 
-test("a direct stop still reaches the proxy while a service mutation owns the lock", async () => {
+posixHostTest("a direct stop still reaches the proxy while a service mutation owns the lock", async () => {
   home = createTempHome("ocx-scheduler-restart-lock-8416-");
   const proxy = await startProxy(home);
   try {

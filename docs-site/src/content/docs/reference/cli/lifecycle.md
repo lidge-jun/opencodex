@@ -886,8 +886,9 @@ If launchd refuses the changed definition and its state can be checked, repair r
 and attempts to restore the previous definition; a job still serving the expected command is left
 running with the previous plist back on disk. A matching command alone cannot confirm the new policy.
 If the initial launchd probe cannot check state, repair refuses before writing a new plist or backup.
-If state becomes uncheckable after bootstrap, repair keeps the new plist and any backup without another eviction:
+If the probe immediately after bootstrap cannot check state, repair keeps the new plist and any backup without another eviction:
 a refused bootstrap throws, while an accepted bootstrap reports an unverified reload with a warning.
+For an unchanged definition, a successful recovery kickstart followed by an uncheckable probe can still trigger another eviction.
 Inspect the job with `launchctl print gui/$(id -u)/com.opencodex.proxy` before retrying repair.
 An unconfirmed definition remains pending across repairs, including after a token change. Registration
 is retried only when the initial launchd probe is checkable; a GUI login session may be required.

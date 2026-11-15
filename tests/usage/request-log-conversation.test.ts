@@ -266,6 +266,8 @@ describe("conversationIdFromClaudeMetadata", () => {
     const huge = JSON.stringify({ session_id: "s", tk: "t", pad: "x".repeat(5000) });
     expect(conversationIdFromClaudeMetadata({ user_id: huge })).toBeUndefined();
     expect(JSON.parse(claudeSessionUserId(huge))).not.toHaveProperty("tk");
+    // An oversized tk alone does not cost the session its identity (it also gates routing).
+    expect(conversationIdFromClaudeMetadata({ user_id: turn("t".repeat(5000)) })).toBe(digest32(session));
   });
 });
 

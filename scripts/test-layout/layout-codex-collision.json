@@ -34,6 +34,7 @@
   "codex-cli-update-process-fixture.test.ts": "codex-integration",
   "codex-cli-update-paths.test.ts": "codex-integration",
   "codex-cli-update-admission.test.ts": "codex-integration",
+  "codex-cli-update-job-read-race.test.ts": "codex-integration",
   "codex-cli-update-recovery.test.ts": "codex-integration",
   "codex-cli-update-windows-pending.test.ts": "codex-integration",
   "codex-cli-update-worker.test.ts": "codex-integration",

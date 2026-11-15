@@ -13,6 +13,7 @@ function scenario(body: string, options: { noSync?: boolean; olderHome?: boolean
   const home = join(root, "home"); mkdirSync(home);
   try {
     const result = spawnSync(process.execPath, ["--eval", `
+      import './tests/helpers/windows-acl-process-stubs';
       import { mkdirSync, writeFileSync, readFileSync, existsSync, unlinkSync } from 'node:fs';
       import { join, dirname } from 'node:path';
       import { getDefaultConfig, saveConfig, loadConfig } from './src/config';

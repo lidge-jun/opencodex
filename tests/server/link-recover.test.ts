@@ -487,6 +487,17 @@ describe("recover over an exclusive explicit route (O6)", () => {
     expect(tombstones()).toEqual([]);
   });
 
+  test("a keyed route's tombstone keeps its identity file, and recover offers that key alone (O7)", async () => {
+    const keyed = { ...route, identityFile: "/home/builder/.ssh/hub_ed25519" };
+    const h = harness([link({ explicitRoute: keyed, exclusive: true })]);
+    await forceRevoke(h);
+    expect(tombstones()[0]).toMatchObject({ explicitRoute: keyed, exclusive: true });
+    const res = await h.request("POST", "/api/link/recover", { linkId: ID });
+    expect(res.status).toBe(200);
+    expect(h.commands).toHaveLength(1);
+    for (const option of ["IdentitiesOnly=yes", "IdentityAgent=none", "IdentityFile=" + keyed.identityFile]) expect(h.commands[0]).toContain(option);
+  });
+
   test("an explicit route in a tombstone needs exclusive, as on a link record", async () => {
     await Bun.write(tombstonesPath(), JSON.stringify({ version: 1, tombstones: [{ linkId: ID, alias: "devbox", hostKeyFingerprint: FINGERPRINT, explicitRoute: route, revokedAt: "2026-11-13T00:00:00.000Z" }] }));
     const h = harness([]);

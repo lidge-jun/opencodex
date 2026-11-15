@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline/promises";
 import { plantUnavailableGuidance } from "../link/child-binary-source";
 import { assertSshAlias } from "../link/ssh-argv";
-import { checkExplicitRoute, type ExplicitRoute } from "../link/explicit-route";
+import { checkExplicitRoute, IDENTITY_FILE_GUIDANCE, type ExplicitRoute } from "../link/explicit-route";
 import { OPERATION_JOURNAL_MAX_RECENT_SETTLED, OPERATION_JOURNAL_MAX_UNSETTLED } from "../link/operations-journal";
 import { residualRecovery, type ResidualChild } from "../link/residual-recovery";
 import { CliUsageError, RuntimeApiError, runtimeBaseUrl, rejectArgs, takeFlag, takeJsonFlag, takeOption, printData } from "./runtime-api";
@@ -163,28 +163,34 @@ function validateConfirmed(value: unknown, alias: string, fingerprint: string, a
 
 /**
  * --proxy-command, --ssh-user and --ssh-port name one explicit route and go together; they need
- * --exclusive (structure/remote-link.md, "Explicit route"). The values are checked here and again on
- * the Home, which refuses any form explicit-route.ts does not accept.
+ * --exclusive (structure/remote-link.md, "Explicit route"). --ssh-identity-file adds the route's key and needs the
+ * other three. The values are checked here and again on the Home, which refuses any form explicit-route.ts does not
+ * accept and, for the key, a file that is not a usable private key file.
  */
 const ROUTE_FORM = {
   proxy_command_form: "--proxy-command must be an absolute path followed by words of letters, digits and . _ / : @ + , = - separated by single spaces (no %, quotes or other shell characters)",
   user_form: "--ssh-user must be a letter or _ followed by up to 31 letters, digits, ., _ or -",
   port_form: "--ssh-port must be an integer from 1 to 65535",
+  identity_file_form: "--ssh-identity-file must be an absolute path of letters, digits and . _ + - / (no ~, %, $, spaces, quotes, empty, . or .. segments), at most 1024 characters",
 } as const;
 
 function takeRouteFlags(args: string[], usage: string): { explicitRoute?: ExplicitRoute; exclusive?: true } {
   const proxyCommand = takeOption(args, "--proxy-command");
   const user = takeOption(args, "--ssh-user");
   const portText = takeOption(args, "--ssh-port");
+  // link.route/2: the route's key; it belongs to an explicit route and travels inside it.
+  const identityFile = takeOption(args, "--ssh-identity-file");
   const exclusive = takeFlag(args, "--exclusive");
   const given = [proxyCommand, user, portText].filter(value => value !== undefined).length;
+  if (identityFile !== undefined && given === 0) throw new CliUsageError("--ssh-identity-file needs an explicit route (--proxy-command, --ssh-user and --ssh-port)", usage);
   if (given === 0) return exclusive ? { exclusive: true } : {};
   if (given !== 3) throw new CliUsageError("--proxy-command, --ssh-user and --ssh-port go together", usage);
   if (!exclusive) throw new CliUsageError("An explicit route requires --exclusive", usage);
   const port = /^[0-9]{1,5}$/.test(portText!) ? Number(portText) : Number.NaN;
-  const checked = checkExplicitRoute({ proxyCommand, user, port });
+  const checked = checkExplicitRoute({ proxyCommand, user, port, ...(identityFile !== undefined ? { identityFile } : {}) });
   if (!checked.ok) {
-    throw new CliUsageError(ROUTE_FORM[checked.reason === "user_form" || checked.reason === "port_form" ? checked.reason : "proxy_command_form"], usage);
+    const reason = checked.reason === "user_form" || checked.reason === "port_form" || checked.reason === "identity_file_form" ? checked.reason : "proxy_command_form";
+    throw new CliUsageError(ROUTE_FORM[reason], usage);
   }
   return { explicitRoute: checked.route, exclusive: true };
 }
@@ -325,6 +331,11 @@ export async function runLinkEnrollment(command: "probe" | "add", args: string[]
       if (code === "child_port_busy" && error.body.residual !== true) throw new Error("The target port on the Child is already in use by another process; no Child files were modified.");
       if (code === "child_preflight_output_limit") throw new Error("The Child's ocx config show --json output exceeded the Remote Link preflight limit; trim the Child's saved configuration and retry.");
       if (code === "child_external_provider_conflict" && error.body.residual !== true) throw new Error("The Child's ~/.codex/config.toml is already managed by another model provider or custom base URL; no Child files were modified.");
+      // A refused --ssh-identity-file: what to fix, from the closed hint (the same text the Home answers), never the path.
+      const keyHint = record(error.body.error) ? error.body.error.hint : undefined;
+      if (code === "invalid_identity_file" && typeof keyHint === "string" && Object.hasOwn(IDENTITY_FILE_GUIDANCE, keyHint)) {
+        throw new Error(IDENTITY_FILE_GUIDANCE[keyHint as keyof typeof IDENTITY_FILE_GUIDANCE] + " (code invalid_identity_file, hint " + keyHint + ")");
+      }
       // Home-side cleanup that left a link key behind: fixed, locally written guidance (the server's
       // prose is never echoed), plus the Child's own recovery step when it may still be connected.
       const homeCleanup = typeof code === "string" && Object.hasOwn(HOME_CLEANUP, code) ? HOME_CLEANUP[code] : undefined;

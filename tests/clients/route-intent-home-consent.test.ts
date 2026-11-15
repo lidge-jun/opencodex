@@ -13,6 +13,7 @@ function scenario(body: string) {
   for (const dir of [".codex", ".claude", "desktop"]) mkdirSync(join(home, dir));
   try {
     const child = spawnSync(process.execPath, ["--eval", `
+      import './tests/helpers/windows-acl-process-stubs';
       import { expect } from 'bun:test';
       import { mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs';
       import { join } from 'node:path';
