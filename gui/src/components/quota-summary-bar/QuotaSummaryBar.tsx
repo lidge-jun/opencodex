@@ -15,16 +15,18 @@ import { useDataSurface } from "../../data-surface";
 import { formatMuseResetCountdown, museObservationResetAt, withMuseLimitObservation, withoutExpiredMuseObservation } from "../../muse-limit-observation";
 import { useI18n, type Locale, type TFn } from "../../i18n/shared";
 import { formatProviderDisplayName } from "../../provider-icons";
+import { parsePassiveQuotaRows, passiveDimensionKeys, type PassiveQuotaRow, type PassiveQuotaWindow } from "../../passive-quota-summary";
 import { freshQuotaReportsFromResponse, type ProviderQuotaReportView } from "../../provider-workspace/report";
 import { openProviderAccounts, providerAccountsHash } from "../../protocol-deep-links";
 import { buildQuotaSummary, formatQuotaPercent, type QuotaSummaryRow, type QuotaSummarySeverity, type QuotaSummaryWindow } from "../../quota-summary";
-import { formatResetFuture } from "../QuotaBars";
+import { formatObservedAge, formatResetFuture } from "../QuotaBars";
 import { publishStickyTop } from "./sticky-top";
 import "./quota-summary-bar.css";
 
 interface QuotaSummaryData {
   fetchedAt: number;
   reports: Record<string, ProviderQuotaReportView>;
+  passive: PassiveQuotaRow[];
 }
 
 const POLL_MS = 60_000;
@@ -51,6 +53,20 @@ function severityText(severity: QuotaSummarySeverity, t: TFn): string {
   if (severity === "critical") return t("quotaSummary.critical");
   if (severity === "warn") return t("quotaSummary.warn");
   return "";
+}
+
+function passiveLabel(window: PassiveQuotaWindow, t: TFn): string {
+  const dimension = t(passiveDimensionKeys[window.dimension]);
+  return window.window ? `${dimension} · ${t(window.window === "minute" ? "quotaSummary.perMinute" : window.window === "day" ? "quotaSummary.perDay" : "quotaSummary.perMonth")}` : dimension;
+}
+
+function passiveCounts(window: PassiveQuotaWindow, t: TFn, locale: Locale): string {
+  const number = (value: number | undefined) => value === undefined ? t("pws.completion.unknown") : new Intl.NumberFormat(locale).format(value);
+  return `${number(window.remaining)} / ${number(window.limit)}`;
+}
+
+function isPassiveStale(window: PassiveQuotaWindow, now: number): boolean {
+  return window.stale || (window.resetAt !== undefined && window.resetAt <= now);
 }
 
 /** Keyboard focus shows the detail; a mouse click that happens to focus the link does not. */
@@ -104,11 +120,15 @@ function usePopoverPlacement(open: boolean, anchorRef: RefObject<HTMLElement | n
 
 function QuotaSummaryItem({ row, t, locale }: { row: QuotaSummaryRow; t: TFn; locale: Locale }) {
   const [clock, setClock] = useState(Date.now);
+  const currentTime = Math.max(clock, row.passive ? row.updatedAt ?? 0 : 0);
   useEffect(() => {
-    if (row.provider !== "meta-muse" || row.headline.resetAt === undefined) return;
-    const timer = window.setInterval(() => setClock(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, [row.provider, row.headline.resetAt]);
+    const resets = row.passive?.windows.flatMap(item => item.resetAt !== undefined && item.resetAt > Date.now() ? [item.resetAt] : []) ?? [];
+    if (!row.passive && (row.provider !== "meta-muse" || row.headline.resetAt === undefined)) return;
+    const interval = window.setInterval(() => setClock(Date.now()), row.passive ? 60_000 : 1000);
+    const next = resets.length ? Math.min(...resets) : undefined;
+    const timeout = next === undefined ? undefined : window.setTimeout(() => setClock(Date.now()), Math.min(2_147_483_647, Math.max(0, next - Date.now())));
+    return () => { window.clearInterval(interval); if (timeout !== undefined) window.clearTimeout(timeout); };
+  }, [row.provider, row.headline.resetAt, row.passive, clock]);
   const [hovered, setHovered] = useState(false);
   const [focused, setFocused] = useState(false);
   /** Touch has no hover: the first tap opens the detail here, the second one navigates. */
@@ -213,9 +233,17 @@ function QuotaSummaryItem({ row, t, locale }: { row: QuotaSummaryRow; t: TFn; lo
         {headline.labelKey === "quotaSummary.creditsUnavailable" && (
           <span className="quota-summary-name">{t("quotaSummary.creditsUnavailable")}</span>
         )}
-        <span className="quota-summary-pct">
-          {headline.unknownBudget === true ? t("cws.quota.unknown") : formatQuotaPercent(headline.percent)}
-        </span>
+        {row.passive ? row.passive.windows.map(window => (
+          <span key={`${window.dimension}:${window.window ?? ""}`} className="quota-summary-pct" title={t("quotaSummary.remainingLimit")}>{passiveLabel(window, t)}: {passiveCounts(window, t, locale)}{isPassiveStale(window, currentTime) ? ` · ${t("startup.stale")}` : ""}<span className="sr-only">{t("quotaSummary.remainingLimit")}</span></span>
+        )) : row.showAllWindows ? row.windows.map(window => (
+          <span key={window.id} className={`quota-summary-pct quota-summary-pct--${window.severity}`} title={windowLabel(window, t)}>
+            {windowLabel(window, t).split(" (")[0]}: {formatQuotaPercent(window.percent)}
+          </span>
+        )) : (
+          <span className="quota-summary-pct">
+            {headline.unknownBudget === true ? t("cws.quota.unknown") : formatQuotaPercent(headline.percent)}
+          </span>
+        )}
         {row.provider === "meta-muse" && headline.resetAt !== undefined && (
           <span className="quota-summary-name" title={formatResetFuture(headline.resetAt, t, locale)}>
             {formatMuseResetCountdown(headline.resetAt, clock)}
@@ -231,9 +259,19 @@ function QuotaSummaryItem({ row, t, locale }: { row: QuotaSummaryRow; t: TFn; lo
             <strong>{row.label}</strong>
             {warning && <span className={`quota-summary-badge quota-summary-badge--${row.severity}`}>{warning}</span>}
           </div>
-          <table id={`${popoverId}-table`} className="quota-summary-table">
+          <table id={`${popoverId}-table`} className={`quota-summary-table${row.passive ? " quota-summary-table--passive" : ""}`}>
             <tbody>
-              {row.windows.map(window => (
+              {row.passive ? row.passive.windows.map(window => (
+                <tr key={`${window.dimension}:${window.window ?? ""}`}>
+                  <th scope="row">{passiveLabel(window, t)}</th>
+                  <td className="quota-summary-row-pct">{passiveCounts(window, t, locale)}</td>
+                  <td className="quota-summary-row-reset">
+                    {window.resetAt !== undefined ? t("quota.resetsAt", { when: new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(window.resetAt) }) : t("pws.completion.unknown")}
+                    {isPassiveStale(window, currentTime) ? ` · ${t("startup.stale")}` : ""}
+                    <br />{formatObservedAge(window.observedAt, t, currentTime) ? t("quota.observedAgo", { age: formatObservedAge(window.observedAt, t, currentTime)! }) : t("quotaSummary.observedAt", { time: formatClock(window.observedAt, locale) })}
+                  </td>
+                </tr>
+              )) : row.windows.map(window => (
                 <tr key={window.id} className={`quota-summary-row--${window.severity}`}>
                   <th scope="row">{windowLabel(window, t)}</th>
                   <td className="quota-summary-row-pct">
@@ -247,7 +285,7 @@ function QuotaSummaryItem({ row, t, locale }: { row: QuotaSummaryRow; t: TFn; lo
             </tbody>
           </table>
           <div className="quota-summary-popover-foot">
-            {row.updatedAt !== undefined && (
+            {!row.passive && row.updatedAt !== undefined && (
               <span>{t(row.observed ? "quotaSummary.observedAt" : "quotaSummary.dataAt", { time: formatClock(row.updatedAt, locale) })}</span>
             )}
             <a
@@ -342,7 +380,7 @@ export function QuotaSummaryChips({ rows, t, locale }: { rows: QuotaSummaryRow[]
         </button>
       )}
       <ul ref={listRef} className="quota-summary-list" onScroll={measure}>
-        {rows.map(row => <QuotaSummaryItem key={row.provider} row={row} t={t} locale={locale} />)}
+        {rows.map(row => <QuotaSummaryItem key={row.passive ? JSON.stringify([row.provider, row.passive.keyId, row.passive.model]) : row.provider} row={row} t={t} locale={locale} />)}
       </ul>
       {edges.overflow && (
         <button
@@ -365,15 +403,15 @@ export default function QuotaSummaryBar({ apiBase }: { apiBase: string }) {
   const load = useCallback(async (signal: AbortSignal): Promise<QuotaSummaryData> => {
     const response = await fetch(`${apiBase}/api/provider-quotas`, { signal });
     if (!response.ok) throw new Error("quota summary load failed");
-    const body = await response.json() as { reports?: unknown } | null;
+    const body = await response.json() as { reports?: unknown; passiveKeyLimits?: unknown } | null;
     const reports = await withMuseLimitObservation(freshQuotaReportsFromResponse(body?.reports), apiBase, signal);
-    return { fetchedAt: Date.now(), reports };
+    return { fetchedAt: Date.now(), reports, passive: parsePassiveQuotaRows(body?.passiveKeyLimits) };
   }, [apiBase]);
   const resource = useDataSurface<QuotaSummaryData>(
     `ocx.quota-summary.provider-quotas.v1:${apiBase}`,
     [apiBase],
     load,
-    { isEmpty: data => Object.keys(data.reports).length === 0, pollMs: POLL_MS, pauseWhenHidden: true },
+    { isEmpty: data => Object.keys(data.reports).length === 0 && (data.passive?.length ?? 0) === 0, pollMs: POLL_MS, pauseWhenHidden: true },
   );
 
   const data = resource.data;
@@ -388,6 +426,10 @@ export default function QuotaSummaryBar({ apiBase }: { apiBase: string }) {
   if (!data) return null;
   const reports = withoutExpiredMuseObservation(data.reports, clock);
   const rows = buildQuotaSummary(reports, provider => formatProviderDisplayName(provider, t));
+  for (const passive of data.passive ?? []) {
+    rows.push({ provider: passive.provider, label: `${formatProviderDisplayName(passive.provider, t)} · ${t("quotaSummary.account", { n: passive.account })} · ${passive.model}`,
+      headline: { id: "passive", severity: "normal" }, windows: [], updatedAt: data.fetchedAt, observed: true, severity: "normal", passive });
+  }
   if (rows.length === 0) return null;
   const stale = !resource.lastAttemptOk;
 

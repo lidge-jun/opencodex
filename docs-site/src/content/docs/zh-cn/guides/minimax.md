@@ -18,6 +18,11 @@ Combo 的“图片 / 多模态”开关才可用。该开关控制图片附件�
 
 ```bash
 ocx start
+```
+
+让代理在此终端中继续运行。在另一个终端中启用集成并启动 MiniMax Code：
+
+```bash
 ocx integration client enable --client mcode
 ocx mcode
 ```

@@ -1,4 +1,5 @@
 import { carryProxyError, proxyErrorPresentation, isProxyError, rememberProxyErrorMessage } from "../../lib/client-error-body";
+import { providerAffinityGenerationIsCurrent } from "../../providers/api-key-selection";
 import { bindAnthropicRejectionResponse } from "../../adapters/anthropic-rejection-memo";
 import { deferPhysicalSendReporter } from "./deferred-send-reporter";
 import { responsesSpendTarget } from "./request-spend-target";
@@ -363,7 +364,7 @@ export function createAdapterContinuations(
         // A synthesized replay refusal is not a rate limit; replaying the continuation on
         // it would re-send a turn whose first send may already have been processed.
         && !isNonReplayableResponse(response) && !isSameTargetRetryHold(response)
-       && rateLimitPolicy !== null
+       && rateLimitPolicy !== null && providerAffinityGenerationIsCurrent(config, route.providerName, route.provider)
         && adapterExchange.rateLimitRetries < rateLimitPolicy.attempts
         // The main recovery loop and the passthrough ladder both consult the shared remainder
         // here; this loop did not, so a request whose budget was already spent could still

@@ -182,8 +182,9 @@ import { projectCapturedCustomToolPolicy, resolveAdapter, resolveWireProtocolOve
 import { hasKeyPoolFailover, rotateProviderTransportOn429, selectProactiveApiKeyTransport, transientRetryPolicyFor } from "../../providers/key-failover";
 import { transientSendCapFor } from "./request-send-budget";
 import { distributedKeyPhysicalFetch, recordDistributedResponseFailure } from "../../providers/api-key-response-ownership";
+import { passiveKeyPhysicalFetch } from "../../providers/passive-key-observation";
 import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../../providers/api-key-pause";
-import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../../providers/api-key-selection";
+import { providerAffinityGenerationIsCurrent, providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../../providers/api-key-selection";
 import { stampApiKeyAccountLabel } from "../../providers/label";
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import { resolveProviderTransport } from "../../providers/xai-transport";
@@ -237,7 +238,7 @@ import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel, 
 import { requestPacingOverloadResponse } from "./pacing-overload";
 import { shouldRetryCodexPoolAccountQuota, shouldRetryCodexPoolAccountTransient } from "./core-codex-account";
 import { mapCodexAuthContextErrorToResponse, nativeMainRefreshFailureResponse } from "./codex-auth-error";
-import { linkRequestSessionLane, sessionLaneIdFromRequest, reasoningReplayConversationIdFromResponsesRequest, sessionIdHeaderFromRequest } from "../request-log-conversation";
+import { affinityLaneFromRequest, linkRequestSessionLane, reasoningReplayConversationIdFromResponsesRequest, sessionIdHeaderFromRequest, sessionLaneIdFromRequest } from "../request-log-conversation";
 import { recallComboForLane } from "./combo-session-recall";
 import { redactHostedImageDisplayPaths } from "../responses-hosted-image-display";
 import { warnEagerCodexToolCatalog } from "./codex-tool-catalog";
@@ -969,11 +970,14 @@ export async function handleResponsesCompact(
       // Transport variant, for the same reason as the Responses core: the persisted row has no
       // registry backfills, and compactProvider is read for its transport fields below.
       let warmKeyProvider;
-      try { warmKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, compactProvider); }
+      const affinityLane = affinityLaneFromRequest(req, logCtx, config, admission);
+      if (affinityLane) logCtx.affinityLane = affinityLane;
+      try { warmKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, compactProvider, undefined, Date.now(), { lane: affinityLane, model: route.modelId, log: logCtx }); }
       catch (error) {
         const refusal = requestPacingOverloadResponse(error);
-        if (refusal) return refusal;
+        if (refusal) { logCtx.terminalSource = "synthetic"; return refusal; }
         if (error instanceof ProviderApiKeyPausedError) {
+          logCtx.terminalSource = "synthetic";
           return formatErrorResponse(403, "permission_error", error.message);
         }
         throw error;
@@ -1268,6 +1272,7 @@ export async function handleResponsesCompact(
           dispatchOverride: sendProvider.authMode !== "forward" && sendProvider.apiKey
             ? async (_input, init, execute, reacquirePacing) => {
               for (let attempt = 0; !providerApiKeySelectionIsCurrent(config, route.providerName, sendProvider); attempt++) {
+                if (!providerAffinityGenerationIsCurrent(config, route.providerName, sendProvider)) throw new Error("Provider affinity selection is no longer available");
                 if (attempt >= 3) throw new Error("Provider key selection changed repeatedly before compact dispatch");
                 let current = resolveCurrentProviderApiKeyTransport(config, route.providerName, sendProvider);
                 if (!current && sendProvider.requestPacing?.enabled
@@ -1304,7 +1309,7 @@ export async function handleResponsesCompact(
                 identityId: logCtx.accountLogLabel })) throw new SendBudgetExhaustedError(errorDestinationLabel(compactUrl));
               noteProviderAttemptSend(logCtx, route.providerName, sendProvider, logCtx.usageLogInputTokens, upstreamRecovery);
               const physicalFetch = ((input, physicalInit) => sendWithConnectionPolicy(
-                distributedKeyPhysicalFetch((sendProvider as { fetch?: typeof fetch }).fetch ?? execute, route.providerName, sendProvider, compactUrl), String(input),
+                passiveKeyPhysicalFetch(distributedKeyPhysicalFetch((sendProvider as { fetch?: typeof fetch }).fetch ?? execute, route.providerName, sendProvider, compactUrl), config, route.providerName, sendProvider), String(input),
                 physicalInit, { providerName: route.providerName, provider: sendProvider })) as typeof fetch;
               return fetchWithHeaderTimeout(compactUrl,
                 { ...init, headers: sendHeaders, body: JSON.stringify({ ...buildCompactSendBody() as typeof compactBody, model: route.modelId }) },
@@ -1352,6 +1357,7 @@ export async function handleResponsesCompact(
           now: Date.now(), accountSelector: route.codexAccountNamespace,
         }));
       if (response) {
+        logCtx.terminalSource = "synthetic";
         releaseUpstreamHostAdmission(compactHostAdmissionLease);
         compactHostAdmissionLease = null;
         releaseCodexAuthContextProbeLease(outcomeCtx);

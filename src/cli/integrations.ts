@@ -15,6 +15,7 @@ import {
 import { clientIntegrationPath, validateAsideProfile } from "./integration-input";
 import { asideProfileRecoveryLines } from "./aside-profile-recovery";
 import type { IntegrationClientId } from "../integrations/registry";
+import type { RouteToDeps } from "./route-to";
 
 const CLAUDE_USAGE = `Usage:
   ocx claude config [status] [--json]
@@ -240,10 +241,31 @@ export async function handleClientIntegrationCommand(
     const { handleIntegrationAsideSync } = await import("./integration-aside-sync");
     return handleIntegrationAsideSync(argv.slice(1), deps);
   }
+  // Enable and disable are the Home's own decision, like the dashboard toggle: the server records
+  // it so ocx sync keeps it, and linked Children keep their defaults (ocx route to <client> on|off
+  // changes those). On a Child the Home decides, so a plain toggle goes to route-to, which refuses
+  // and prints the Home command.
+  const toggle = ["enable", "disable"].includes(argv[0] ?? "");
+  if (toggle && !argv.some(arg => ["--profile", "--preview", "--plan-fingerprint", "--reasoning-default", "--clear-reasoning-defaults"]
+    .some(flag => arg === flag || arg.startsWith(`${flag}=`)))) {
+    const { readLinkChildContext } = await import("./link-child");
+    if (((deps as RouteToDeps).readChildContext ?? readLinkChildContext)()) {
+      return runCliAction(async () => {
+        const { integrationOption } = await import("./integration-input");
+        const { routeToAction } = await import("./route-to");
+        const args = argv.slice(1);
+        const client = integrationOption(args, "--client");
+        if (!client) throw new CliUsageError("--client <id> is required", CLIENT_USAGE);
+        await routeToAction([client, argv[0] === "enable" ? "on" : "off", ...args], deps);
+      });
+    }
+  }
   if (argv[0] === "preview" || argv.some(arg => ["--preview", "--plan-fingerprint", "--reasoning-default", "--clear-reasoning-defaults", "--model-names"]
     .some(flag => arg === flag || arg.startsWith(`${flag}=`)))) {
     const { handleIntegrationPreviewCommand } = await import("./integration-preview");
-    return handleIntegrationPreviewCommand(argv, deps, expectedClientId);
+    const code = await handleIntegrationPreviewCommand(argv, deps, expectedClientId);
+    if (code === 0 && toggle) console.error(HOME_ONLY_NOTE);
+    return code;
   }
   return runCliAction(async () => {
     const args = [...argv];
@@ -357,8 +379,11 @@ export async function handleClientIntegrationCommand(
       ? batch.results.map(row => `aside:${String(row.profileId)}  ${String(row.message ?? (row.ok ? "updated" : "refused"))}${row.residual === true ? " Recovery did not finish." : ""}${typeof row.snapshotPath === "string" ? ` Backup: ${row.snapshotPath}` : ""}`)
       : [String(batch.message ?? `${client} ${action}d.`)]);
     if (batch.ok === false) throw new RuntimeApiError(batch.message ?? "Some Aside profiles could not be updated", 207, result);
+    console.error(HOME_ONLY_NOTE);
   });
 }
+
+const HOME_ONLY_NOTE = "This changed this machine only; linked Children keep their route defaults (ocx route to <client> on|off changes those).";
 
 export const INTEGRATION_USAGE = { claude: CLAUDE_USAGE, grok: GROK_USAGE, client: CLIENT_USAGE };
 

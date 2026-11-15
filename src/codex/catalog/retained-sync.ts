@@ -4,6 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { initializeConfigOwnership } from "../../lib/config-ownership";
 import { getConfigDir, loadConfig, ultraFastTierEnabled, websocketsEnabled, withConfigMutationLockSync } from "../../config";
+import { resolveMultiAgentMode } from "../../config/multi-agent-surface";
 import { shouldSyncCodexOnStart } from "../desired-state";
 import { legacyCustomModelCatalogSlugs } from "../custom-model-catalog-migration";
 import { getCodexHome } from "../paths";
@@ -334,7 +335,7 @@ function writeRetainedCatalogSync({
     catalogModelsForMerge,
   );
   const modelPickerOrder = config.modelPickerOrder ?? [];
-  const multiAgentMode: MultiAgentMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2" ? config.multiAgentMode : "default";
+  const multiAgentMode: MultiAgentMode = resolveMultiAgentMode(config);
   const exactComboSlugs = exactComboCatalogSlugs(config);
   const bareEligibleAccountIds = providerCodexAccountMode(
     OPENAI_CODEX_PROVIDER_ID,

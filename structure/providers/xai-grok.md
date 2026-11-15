@@ -124,6 +124,49 @@ The shared Responses path follows the [bounded multipart recovery contract](../s
   Provider token-body budgets are separate from this shared callback lifetime. The
   [OrcaRouter bounded key-exchange contract](../transports/inventory.md#bounded-response-ingestion-and-orcarouter-login)
   is owned by its login consumer and does not impose that budget on Grok token grants.
+- **Device login:** `loginXaiDevice` (`src/oauth/xai.ts`) runs the RFC 8628 device grant against
+  the discovered `device_authorization_endpoint`, for hosts whose browser cannot reach the
+  127.0.0.1:56121 callback. It shows the `accounts.x.ai` verification URL and user code, polls
+  the token endpoint once per provider interval, keeps polling
+  through `authorization_pending`, timeouts, network failures, 429 and 5xx, and ends on denial,
+  expiry or cancellation. A retryable response's `Retry-After` (delta-seconds or HTTP-date, parsed
+  by the same helper the refresh path uses) raises that one wait above the interval, floored at the
+  interval (including `slow_down` on HTTP 400 or 429) and bounded by the grant deadline. Numeric
+  delays beyond the representable range saturate before that bound, so the client honours the throttle without
+  polling past expiry or handing an oversized delay to a timer. It never imports the local Grok CLI
+  token. `ocx login xai --headless`,
+  `ocx account login xai --device` and `POST /api/oauth/login` with `device: true` select it
+  (`supportsDeviceLoginMode` in `src/oauth/index.ts`).
+  Both poll bounds come from the authorization response, so both are clamped before they reach a
+  timer: `interval` into `[1s, lifetime]` and `expires_in` into `(0, 30m]`. RFC 8628 §3.2 makes
+  `expires_in` required and sets no ceiling, so the 30-minute bound is this client's policy: an
+  issuer grant longer than that ends at the ceiling. Pending approval at the deadline reports `expired_token`; the last transport or server failure instead reports `provider_unreachable`. A delay above 2^31-1 ms
+  overflows `setTimeout` into a next-tick fire, which is a hot loop against the auth endpoint, and
+  a `0`, negative or fractional `interval` is the same loop from below; an uncapped `expires_in`
+  would make the deadline meaningless. `slow_down` still adds 5s, now under the same ceiling, and
+  every poll is cut off at the (bounded) deadline. Both the authorization request and each token
+  poll use `redirect: "error"`: a 307/308 preserves the method and body, so the client id and the
+  bearer-equivalent `device_code` must not follow a hop to a host `validateXaiEndpoint` never
+  approved. Discovery already refuses a non-x.ai endpoint, so a redirect here can only be a
+  downgrade. That refusal is deterministic and terminal: `fetch` throws instead of returning, and
+  both runtime shapes are recognized — Bun's `TypeError` with `code: "UnexpectedRedirect"` and
+  Node/undici's `TypeError("fetch failed")` whose cause is `Error("unexpected redirect")` — so the
+  poll fails after one request as `XaiRedirectRefusedError` rather than being retried as a network
+  failure until the grant reports `expired_token`. The refusal carries a fixed message and no cause,
+  because Bun's text embeds the URL and the poll body carries the `device_code`. The CLI reports it
+  as `oauth_authentication_failed`, not `network_error`, on both CLI surfaces: the callback
+  reporter (`src/oauth/login-cli-errors.ts`) and the headless device branch of
+  `src/oauth/login-cli.ts`. The machine-readable reason is owned by
+  `classifyLoginCodeError` in `src/oauth/login-flow-state.ts`, which the headless CLI, the
+  code-mode paste response and `GET /api/oauth/status` all read, so the refusal reaches API
+  callers as `oauth_authentication_failed` rather than the `invalid_or_expired_code` fallthrough
+  that would tell them their device code was bad. A plain `TypeError` and a real connection
+  failure carry neither marker and stay retriable. Device starts return a flow ID; the account CLI
+  polls that ID and requires its own successful completion. Cancellation with an xAI flow ID targets only that attempt; malformed IDs are rejected and unknown or successfully completed IDs do not affect a later flow. Discovery HTTP 429/5xx and network failures classify as `provider_unreachable`. An older proxy without an ID cannot
+  safely support the waiting CLI path. The inherited browser-callback, code-exchange
+  and refresh requests keep the runtime's default redirect policy. Regression coverage:
+  `tests/providers/xai/xai-device-login.test.ts`, `tests/oauth/oauth-login-cli-errors.test.ts`,
+  `tests/oauth/oauth-code-login.test.ts`.
 - **Two-lock refresh transaction:** per-provider+account intent lock held across the IdP
   exchange plus a short global store-write lock + async mutation funnel around every
   `auth.json` load-merge-persist (`src/oauth/store.ts`); generation-guarded persist
@@ -297,3 +340,5 @@ Dashboard Fast-row persistence and client refresh follow the [Fast selector rows
 Routed Grok compaction uses the existing adapter and summary contract after a same-provider
 [compaction routing model override](../transports/responses-failover.md#compaction-routing-overrides); a
 cross-provider override runs the portable summarizer on the selected provider instead.
+
+For device poll expiry, HTTP 400 `slow_down` remains an expired grant; HTTP 429 or server failure retains the provider failure classification even when it carries `slow_down`.

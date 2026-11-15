@@ -1,5 +1,6 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { findAvailablePort } from "../../src/server/ports";
@@ -34,6 +35,31 @@ async function bootstrap(response: Response, origin: string) {
   return { token: token!, csrf: csrf! };
 }
 
+/**
+ * A real socket request whose `Host` the caller chooses. `fetch` derives `Host` from the URL, so
+ * the only way to ask a 127.0.0.1 listener for `localhost:port` — the browser spelling that #8427
+ * is about — is to write the request line and headers ourselves. Every path is the loopback
+ * socket; nothing leaves the machine.
+ */
+function rawHttp(port: number, path: string, init: {
+  method?: string; host?: string; origin?: string; headers?: Record<string, string>; body?: string;
+}, signal: AbortSignal): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ host: "127.0.0.1", port, path, method: init.method ?? "GET", signal, headers: {
+      Host: init.host ?? `localhost:${port}`, ...(init.origin ? { Origin: init.origin } : {}),
+      ...(init.body === undefined ? {} : { "content-type": "application/json", "content-length": String(Buffer.byteLength(init.body)) }),
+      ...init.headers,
+    } }, response => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk: Buffer) => chunks.push(chunk));
+      response.on("end", () => resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }));
+      response.on("error", reject);
+    });
+    req.on("error", reject);
+    req.end(init.body);
+  });
+}
+
 const MINT_STDERR_TAIL_BYTES = 4096;
 
 const GUI_PAIR_FAILURE_CLASSES = [
@@ -57,7 +83,8 @@ function classifyGuiPairFailure(observed: GuiPairStderrObservation): GuiPairFail
   if (observed.state !== "eof") return "unknown";
   const stderr = observed.tail;
   if (stderr.includes("Usage: ocx gui")) return "usage";
-  if (stderr.includes("standalone configured literal loopback origin")) return "origin-scope";
+  if (stderr.includes("standalone configured literal loopback origin")
+    || stderr.includes("Desktop authorization requires the standalone local dashboard origin")) return "origin-scope";
   if (stderr.includes("No running attested OpenCodex proxy")) return "runtime-discovery";
   if (stderr.includes("configured loopback address and port")) return "standalone-target";
   if (stderr.includes("write access to the private OpenCodex home")) return "local-intent";
@@ -322,6 +349,165 @@ describe("standalone CLI pairing", () => {
       removeTreeWithRetry(root);
     }
   }, DEADLINE + 10_000);
+});
+
+/**
+ * #8427 in real HTTP. A configured `localhost` BIND is canonicalized to 127.0.0.1 before listening
+ * (`src/server/bind-host.ts`), so that configuration must report `supported: false` and the CLI must
+ * refuse before discovery — otherwise the dashboard prints a command that cannot succeed. A literal
+ * bind keeps `localhost` as the browser's page alias, and a cross-host request must not spend the
+ * grant it presents.
+ */
+describe("Desktop pairing origin policy", () => {
+  beforeAll(async () => {
+    await warmModuleGraph({ graph: "cli-index/gui-pair-http", entry: repoPath("src/cli/index.ts") });
+  }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
+
+  test("a localhost bind offers no Desktop command, while a literal bind accepts its localhost alias", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-gui-pair-origin-"));
+    const home = join(root, "home"), ocxHome = join(root, "ocx");
+    const env: Record<string, string> = {
+      HOME: home, USERPROFILE: home, OPENCODEX_HOME: ocxHome, CODEX_HOME: join(root, "codex"),
+      XDG_CONFIG_HOME: join(root, "xdg-config"), XDG_CACHE_HOME: join(root, "xdg-cache"),
+      XDG_DATA_HOME: join(root, "xdg-data"), XDG_STATE_HOME: join(root, "xdg-state"),
+      XDG_RUNTIME_DIR: join(root, "xdg-runtime"), APPDATA: join(home, "AppData", "Roaming"),
+      LOCALAPPDATA: join(home, "AppData", "Local"), TMPDIR: join(root, "tmp"),
+      TMP: join(root, "tmp"), TEMP: join(root, "tmp"), PATH: join(root, "empty-bin"),
+      OCX_OWNER_REGISTRY_DIR: join(root, "owner-registry"), NO_PROXY: "127.0.0.1,localhost",
+      OCX_TEST_HOME_GUARD: "1", OCX_DISABLE_UPDATE_CHECK: "1", OPENCODEX_KIRO_MODEL_DISCOVERY: "0",
+      CODEX_CI: "1",
+    };
+    if (process.env.OCX_REAL_HOME) env.OCX_REAL_HOME = process.env.OCX_REAL_HOME;
+    if (process.platform === "win32" && process.env.SystemRoot) env.SystemRoot = process.env.SystemRoot;
+    if (process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH) env.BUN_RUNTIME_TRANSPILER_CACHE_PATH = process.env.BUN_RUNTIME_TRANSPILER_CACHE_PATH;
+    const children = new Set<Bun.Subprocess>();
+    const controller = new AbortController();
+    const deadline = setTimeout(() => {
+      controller.abort();
+      for (const child of children) if (child.exitCode === null) child.kill("SIGKILL");
+    }, DEADLINE);
+    const start = async (port: number, hostname: string) => {
+      writeFileSync(join(ocxHome, "config.json"), JSON.stringify({
+        port, hostname, runtimeRole: "standalone", providers: {}, defaultProvider: "openai",
+        codexAutoStart: false, syncResumeHistory: false,
+        clientIntegrations: { codex: false, grok: false, "claude-desktop": false },
+        claudeCode: { enabled: false, systemEnv: false },
+      }));
+      const server = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "start", "--port", String(port)], {
+        cwd: root, env, stdin: "ignore", stdout: "ignore", stderr: "ignore",
+      });
+      children.add(server);
+      const stop = async () => {
+        if (server.exitCode === null) server.kill();
+        await server.exited;
+        children.delete(server);
+      };
+      let ready = false;
+      while (!controller.signal.aborted && server.exitCode === null) {
+        try {
+          const health = await fetch(`http://127.0.0.1:${port}/healthz`, { proxy: null, signal: controller.signal });
+          const identity = parseObject(await health.text());
+          ready = health.status === 200 && identity.service === "opencodex" && identity.pid === server.pid && identity.port === port
+            && existsSync(join(ocxHome, "runtime-port.json"));
+          if (ready) break;
+        } catch { /* Connection refusal is expected only during bounded startup. */ }
+        await Bun.sleep(25);
+      }
+      expect(ready, `owned ${hostname} CLI readiness (exit ${server.exitCode ?? "running"})`).toBe(true);
+      return { stop };
+    };
+    const cli = async (args: string[]) => {
+      const child = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), ...args], {
+        cwd: root, env, stdin: "ignore", stdout: "pipe", stderr: "pipe",
+      });
+      children.add(child);
+      const drain = drainGuiPairStderr(child.stderr);
+      let exit = -1, output = "";
+      let observed: GuiPairStderrObservation;
+      try { [exit, output] = await Promise.all([child.exited, new Response(child.stdout).text()]); }
+      finally { observed = await drain.finish(); }
+      return { exit, output, failure: exit === 0 ? "n/a" : classifyGuiPairFailure(observed) };
+    };
+    const session = async (origin: string) => bootstrap(await fetch(`${origin}/opencodex-session`, {
+      headers: { Origin: origin }, redirect: "error", proxy: null, signal: controller.signal,
+    }), origin);
+    const authorize = (port: number, account: Awaited<ReturnType<typeof session>>, origin: string, init: {
+      method?: "GET" | "POST"; body?: string;
+    } = {}) => rawHttp(port, "/api/codex/desktop-compatibility/authorization", { ...init, host: new URL(origin).host, origin,
+      headers: { "x-opencodex-api-key": account.token, "x-opencodex-gui-origin": origin, "x-opencodex-csrf-token": account.csrf },
+    }, controller.signal);
+    try {
+      for (const name of ["HOME", "OPENCODEX_HOME", "CODEX_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
+        "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "APPDATA", "LOCALAPPDATA", "TMPDIR",
+        "PATH", "OCX_OWNER_REGISTRY_DIR"]) mkdirSync(env[name]!, { recursive: true, mode: 0o700 });
+
+      // 1. The configuration this issue is about: `hostname: "localhost"`.
+      const localhostPort = await findAvailablePort(0, "127.0.0.1");
+      const localhostServer = await start(localhostPort, "localhost");
+      try {
+        const localhostOrigin = `http://localhost:${localhostPort}`;
+        const account = await session(localhostOrigin);
+        const exact = await authorize(localhostPort, account, localhostOrigin);
+        const literalOriginOnLocalhostBind = `http://127.0.0.1:${localhostPort}`;
+        const served = await authorize(localhostPort, account, literalOriginOnLocalhostBind);
+        expect(exact.status, "loopback page read stays available").toBe(200);
+        expect(parseObject(exact.body), "a configured localhost bind is not a supported Desktop origin")
+          .toEqual({ ok: true, supported: false, authorized: false, rememberedSession: false });
+        // The other spelling of the same socket is a different origin: it is never admitted, and the
+        // alias's session is not usable there either.
+        expect(served.status, "one alias's session is not usable under the other origin").toBe(401);
+        const desktop = await cli(["gui", "pair", "--desktop", "--origin", localhostOrigin, "--json"]);
+        expect(desktop.exit, `Desktop CLI refuses before discovery (class=${desktop.failure}; output withheld)`).toBe(1);
+        expect(desktop.failure, "refusal is an origin-scope failure, not a server error").toBe("origin-scope");
+        expect(desktop.output).toBe("");
+        expect(existsSync(join(ocxHome, "gui-pair-intents")), "no CLI write intent was created").toBe(false);
+      } finally { await localhostServer.stop(); }
+
+      // 2. A supported literal bind keeps the localhost page alias and refuses a cross-host exchange.
+      const litPort = await findAvailablePort(0, "127.0.0.1");
+      const literal = await start(litPort, "127.0.0.1");
+      try {
+        const aliasOrigin = `http://localhost:${litPort}`, literalOrigin = `http://127.0.0.1:${litPort}`;
+        const aliasSession = await session(aliasOrigin), literalSession = await session(literalOrigin);
+        const page = await authorize(litPort, aliasSession, aliasOrigin);
+        expect(parseObject(page.body), "localhost is the page alias of a literal loopback listener")
+          .toEqual({ ok: true, supported: true, authorized: false, rememberedSession: false });
+        expect(parseObject((await authorize(litPort, literalSession, literalOrigin)).body).supported,
+          "the exact literal origin is supported on its own session").toBe(true);
+
+        const desktop = await cli(["gui", "pair", "--desktop", "--origin", aliasOrigin, "--json"]);
+        expect(desktop.exit, `desktop mint over the alias succeeds (class=${desktop.failure}; output withheld)`).toBe(0);
+        const minted = parseObject(desktop.output);
+        expect(minted.kind === "created" && minted.browserOrigin === aliasOrigin && minted.serverOrigin === aliasOrigin,
+          "the grant keeps the exact page origin; nothing is normalized").toBe(true);
+        const grant = String(minted.grant);
+        expect(/^ocx_pair_[A-Za-z0-9_-]{43}$/.test(grant)).toBe(true);
+
+        const exchange = (account: typeof aliasSession, origin: string, code: string) => authorize(litPort, account, origin,
+          { method: "POST", body: JSON.stringify({ grant: code }) });
+        const crossHost = await exchange(literalSession, literalOrigin, grant);
+        expect([401, 403], "a cross-host exchange is refused").toContain(crossHost.status);
+        const wrongCode = await exchange(aliasSession, aliasOrigin, "ocx_pair_" + "B".repeat(43));
+        expect([401, 403], "a wrong code is refused").toContain(wrongCode.status);
+        const accepted = await exchange(aliasSession, aliasOrigin, grant);
+        expect(accepted.status, "after both refusals the grant is still unspent and accepted exactly once").toBe(200);
+        expect(parseObject(accepted.body).authorized, "Desktop scope issued").toBe(true);
+        const replay = await exchange(aliasSession, aliasOrigin, grant);
+        expect(replay.status, "the spent code is refused on replay").toBe(403);
+      } finally { await literal.stop(); }
+    } finally {
+      controller.abort();
+      clearTimeout(deadline);
+      const force = setTimeout(() => {
+        for (const child of children) if (child.exitCode === null) child.kill("SIGKILL");
+      }, 2_000);
+      try {
+        for (const child of children) if (child.exitCode === null) child.kill();
+        await Promise.all([...children].map(child => child.exited));
+      } finally { clearTimeout(force); }
+      removeTreeWithRetry(root);
+    }
+  }, DEADLINE + 20_000);
 });
 
 // Semantic checks for the drain/classification helpers above: no child, server or credential.

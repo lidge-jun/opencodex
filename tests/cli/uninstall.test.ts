@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
   setUninstallServiceHooksForTests,
+  uninstallServiceDetailed,
   uninstallServiceIfInstalled,
 } from "../../src/service";
 import { pathToFileURL } from "node:url";
@@ -11,13 +12,14 @@ import { dirname, join } from "node:path";
 import { removeOwnedConfigAfterDesktopCleanup, type UninstallClientStateDeps } from "../../src/cli/uninstall-client-state";
 import { cleanupOwnedIntegrationsBeforeUninstall } from "../../src/cli/uninstall-integrations";
 import { assertClientLifecycleHeld, withClientLifecycle, withClientLifecycleSync, type ClientLifecycleHeld } from "../../src/client/lifecycle-lock";
-import type { UninstallObservation } from "../../src/cli/uninstall-plan";
+import { captureUninstallEndpointProof, type UninstallObservation } from "../../src/cli/uninstall-plan";
 import type { DesktopDisconnectReceipt } from "../../src/claude/desktop-remote-store";
 import type { ExportModel } from "../../src/clients/config-export";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
 import { createIntegrationStateStore } from "../../src/integrations/store";
 import { applyIntegration, disableIntegrationCoordinated } from "../../src/integrations/writer";
 import type { OcxConfig } from "../../src/types";
+import { stopUninstallProxy } from "../../src/cli/uninstall-stop";
 
 const root = pathToFileURL(repoRoot() + "/");
 
@@ -51,7 +53,7 @@ describe("full uninstall command", () => {
     expect(exit).toBeGreaterThan(refusal);
     // Nothing before the check: every step that stops, removes or rewrites anything comes after the exit.
     expect(body.slice(0, refusal).split("\n").filter(line => line.trim() && !line.trim().startsWith("//"))).toEqual(["async function handleUninstall() {"]);
-    for (const step of ["await runStep(", "stopServiceIfInstalledDetailed", "uninstallServiceDetailed", "restoreNativeCodexAsync", "revertSystemEnv", "uninstallCodexShimAsync", "removeOwnedConfigAfterDesktopCleanup"]) {
+    for (const step of ["await runStep(", "stopServiceForUninstall", "uninstallServiceDetailed", "restoreNativeCodexAsync", "revertSystemEnv", "uninstallCodexShimAsync", "removeOwnedConfigAfterDesktopCleanup"]) {
       expect(body.indexOf(step)).toBeGreaterThan(exit);
     }
   });
@@ -89,6 +91,7 @@ describe("full uninstall command", () => {
       probeWindowsTask: () => ({ status: "present" }),
       uninstallWindowsTask: () => { calls.push("scheduler"); },
       nativeStatus: () => "started",
+      nativeOwnership: () => "owned",
       uninstallNative: () => {
         calls.push("native");
         throw new Error("native removal failed");
@@ -99,6 +102,91 @@ describe("full uninstall command", () => {
     expect(() => uninstallServiceIfInstalled()).toThrow("native removal failed");
     expect(calls).toEqual(["scheduler", "native"]);
     expect(stateRemovals).toBe(0);
+  });
+
+  test("a foreign WinSW registration is left alone and an unreadable one refuses removal", () => {
+    const calls: string[] = [];
+    let stateRemovals = 0;
+    const hooks = (ownership: "owned" | "foreign" | "unknown") => ({
+      platform: "win32" as const,
+      assertEnvironment: () => {},
+      probeWindowsTask: () => ({ status: "absent" }) as never,
+      uninstallWindowsTask: () => { calls.push("scheduler"); },
+      nativeStatus: () => "started" as const,
+      nativeOwnership: () => ownership,
+      uninstallNative: () => { calls.push("native"); },
+      removeInstallState: () => { stateRemovals++; },
+    });
+
+    // `sc stop/delete opencodex-proxy-native` names a fixed ID, so a registration under it
+    // is not proof it is this home's. Another installation's WinSW service must survive.
+    setUninstallServiceHooksForTests(hooks("foreign"));
+    expect(uninstallServiceDetailed()).toBe("absent");
+    expect(calls).toEqual([]);
+    expect(stateRemovals).toBe(0);
+
+    // Unreadable ownership is not absence: refuse and keep install state for a retry.
+    setUninstallServiceHooksForTests(hooks("unknown"));
+    expect(() => uninstallServiceDetailed()).toThrow("could not be verified");
+    expect(calls).toEqual([]);
+    expect(stateRemovals).toBe(0);
+
+    setUninstallServiceHooksForTests(hooks("owned"));
+    expect(uninstallServiceDetailed()).toBe("removed");
+    expect(calls).toEqual(["native"]);
+    expect(stateRemovals).toBe(1);
+  });
+
+  test("an unreadable WinSW ownership removes nothing, scheduler task included", () => {
+    // #7771 round 9: the scheduler task was deleted before the ownership probe ran, so an
+    // `sc qc` that could not be read left a half-removed install: task gone, native
+    // registration still there, no retry that can put the task back. Every probe now runs
+    // before the first destructive step.
+    const calls: string[] = [];
+    let stateRemovals = 0;
+    setUninstallServiceHooksForTests({
+      platform: "win32",
+      assertEnvironment: () => {},
+      probeWindowsTask: () => ({ status: "present" }),
+      uninstallWindowsTask: () => { calls.push("uninstall:task"); },
+      nativeStatus: () => "stopped",
+      nativeOwnership: () => "unknown",
+      uninstallNative: () => { calls.push("uninstall:native"); },
+      removeInstallState: () => { stateRemovals++; },
+    });
+    expect(() => uninstallServiceDetailed()).toThrow("could not be verified");
+    expect(calls).toEqual([]);
+    expect(stateRemovals).toBe(0);
+
+    // An unreadable native status is the same refusal, and it also precedes the task delete.
+    calls.length = 0;
+    setUninstallServiceHooksForTests({
+      platform: "win32",
+      assertEnvironment: () => {},
+      probeWindowsTask: () => ({ status: "present" }),
+      uninstallWindowsTask: () => { calls.push("uninstall:task"); },
+      nativeStatus: () => "unknown",
+      nativeOwnership: () => "owned",
+      uninstallNative: () => { calls.push("uninstall:native"); },
+      removeInstallState: () => {},
+    });
+    expect(() => uninstallServiceDetailed()).toThrow("could not be verified");
+    expect(calls).toEqual([]);
+
+    // Both probes answer: the task and the owned service are removed.
+    calls.length = 0;
+    setUninstallServiceHooksForTests({
+      platform: "win32",
+      assertEnvironment: () => {},
+      probeWindowsTask: () => ({ status: "present" }),
+      uninstallWindowsTask: () => { calls.push("uninstall:task"); },
+      nativeStatus: () => "started",
+      nativeOwnership: () => "owned",
+      uninstallNative: () => { calls.push("uninstall:native"); },
+      removeInstallState: () => { calls.push("state"); },
+    });
+    expect(uninstallServiceDetailed()).toBe("removed");
+    expect(calls).toEqual(["uninstall:task", "uninstall:native", "state"]);
   });
 
   test("scheduler removal failure propagates without deleting install state", () => {
@@ -124,11 +212,36 @@ describe("full uninstall command", () => {
     expect(uninstallBody).toContain('runStep("service stopped"');
     expect(uninstallBody).toContain('runStep("proxy stopped"');
     expect(uninstallBody).toContain('runStep("service removed"');
-    expect(uninstallBody).toContain("await stopProxy(pid);");
-    expect(uninstallBody).toContain("uninstallServiceDetailed()");
+    // #7771 round 7: the stop itself lives in `uninstall-stop`, which the step calls.
+    expect(uninstallBody).toContain("await stopUninstallProxy({");
+    // The removal runs through the gate that keeps a Part A failure from deleting the
+    // registration; the gate's rule is exercised in the removal test below.
+    expect(uninstallBody).toContain("uninstallServiceRemoval(observed, uninstallServiceDetailed)");
     expect(uninstallBody.indexOf('runStep("service stopped"')).toBeLessThan(uninstallBody.indexOf('runStep("proxy stopped"'));
     expect(uninstallBody.indexOf('runStep("proxy stopped"')).toBeLessThan(uninstallBody.indexOf('runStep("service removed"'));
-    expect(uninstallBody.indexOf("await stopProxy(pid);")).toBeLessThan(uninstallBody.indexOf("uninstallServiceDetailed()"));
+    expect(uninstallBody.indexOf("await stopUninstallProxy({")).toBeLessThan(uninstallBody.indexOf("uninstallServiceRemoval(observed, uninstallServiceDetailed)"));
+  });
+
+  test("Windows uninstall leaves the port wait to Part B instead of stopProxy's legacy 15 s", async () => {
+    const cli = await readText("src/cli/index.ts");
+    const uninstallBody = cli.slice(cli.indexOf("async function handleUninstall()"), cli.indexOf("type HealthCheck"));
+    // #7771: after a stopped Part A on Windows the respawn-window step IS Part B, which
+    // owns the port wait; running stopProxy's 15 s waitForStoppedPort on top of it spends
+    // the stop budget twice. Both tracked and orphan stops pass the port-wait predicate
+    // itself (not `windowsPartBDue`, which additionally gates the legacy re-poll): the
+    // uninstall step must keep asking the question it means, so a later change to the
+    // snapshotless rule cannot silently bring the 15 s wait back.
+    expect(uninstallBody).toContain("portWaitOwned: windowsPartBOwnsPortWait,");
+    const stopHelper = await readText("src/cli/uninstall-stop.ts");
+    // The helper asks the port-wait question itself rather than re-deciding it.
+    expect(stopHelper).toContain("skipPortWait: io.portWaitOwned(),");
+    expect(stopHelper).not.toContain("windowsPartBDue");
+    const checked = await readText("src/cli/stop-windows-checked.ts");
+    // The predicate is about the port wait only; the legacy re-poll key stays snapshotless.
+    const portWait = checked.slice(checked.indexOf("export function windowsPartBOwnsPortWait"));
+    expect(portWait).toContain('return windows() && state.result?.outcome === "stopped";');
+    const partBDue = checked.slice(checked.indexOf("export function windowsPartBDue"), checked.indexOf("export function windowsPartBOwnsPortWait"));
+    expect(partBDue).toContain("state.snapshotless");
   });
 
   test("restore forwards the explicit provider-table removal flag and warns before mutation", async () => {
@@ -150,24 +263,44 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
       serviceRemoval: "removed" as const,
       respawnWindowVerified: false,
     };
-    expect(sharedTeardownAuthorized(base)).toBe(true);
-    expect(sharedTeardownAuthorized({ ...base, serviceStop: "absent" })).toBe(true);
-    expect(sharedTeardownAuthorized({ ...base, serviceRemoval: "absent" })).toBe(true);
-    // Removing the registration does not prove an already-running wrapper died; killing it
-    // is best-effort (#764), so the restart window has to be polled first.
-    expect(sharedTeardownAuthorized({ ...base, serviceStop: "stopped-respawnable" })).toBe(false);
-    expect(sharedTeardownAuthorized({ ...base, serviceStop: "stopped-respawnable", respawnWindowVerified: true })).toBe(true);
-    // A manager that refused to stop, or one we could not read, may still be running.
-    expect(sharedTeardownAuthorized({ ...base, serviceStop: "failed" })).toBe(false);
-    expect(sharedTeardownAuthorized({ ...base, serviceStop: "state-unknown" })).toBe(false);
-    // The step itself threw: we know nothing.
-    expect(sharedTeardownAuthorized({ ...base, serviceStop: null })).toBe(false);
-    // A proxy that could not be PROVEN down — a live orphan with no pid, or an endpoint
-    // that would not answer — blocks it. A findLiveProxy miss is not proof.
-    expect(sharedTeardownAuthorized({ ...base, proxyProvenDown: false })).toBe(false);
-    // A removal that failed used to look like absence on darwin and linux.
-    expect(sharedTeardownAuthorized({ ...base, serviceRemoval: "failed" })).toBe(false);
-    expect(sharedTeardownAuthorized({ ...base, serviceRemoval: null })).toBe(false);
+    // The platform is explicit in every expectation below. It is an input to the rule, not
+    // an ambient fact: a clean Windows stop is Part B of the checked stop (#7771) and owes a
+    // verified restart window, while a clean stop elsewhere owes nothing more. Asserting on
+    // the default platform made this test's verdict depend on the machine it ran on.
+    for (const platform of ["linux", "darwin"] as const) {
+      expect(sharedTeardownAuthorized(base, platform)).toBe(true);
+      expect(sharedTeardownAuthorized({ ...base, serviceStop: "absent" }, platform)).toBe(true);
+      expect(sharedTeardownAuthorized({ ...base, serviceRemoval: "absent" }, platform)).toBe(true);
+      // Removing the registration does not prove an already-running wrapper died; killing it
+      // is best-effort (#764), so the restart window has to be polled first.
+      expect(sharedTeardownAuthorized({ ...base, serviceStop: "stopped-respawnable" }, platform)).toBe(false);
+      expect(sharedTeardownAuthorized({ ...base, serviceStop: "stopped-respawnable", respawnWindowVerified: true }, platform)).toBe(true);
+      // A manager that refused to stop, or one we could not read, may still be running.
+      expect(sharedTeardownAuthorized({ ...base, serviceStop: "failed" }, platform)).toBe(false);
+      expect(sharedTeardownAuthorized({ ...base, serviceStop: "state-unknown" }, platform)).toBe(false);
+      // The step itself threw: we know nothing.
+      expect(sharedTeardownAuthorized({ ...base, serviceStop: null }, platform)).toBe(false);
+      // A proxy that could not be PROVEN down — a live orphan with no pid, or an endpoint
+      // that would not answer — blocks it. A findLiveProxy miss is not proof.
+      expect(sharedTeardownAuthorized({ ...base, proxyProvenDown: false }, platform)).toBe(false);
+      // A removal that failed used to look like absence on darwin and linux.
+      expect(sharedTeardownAuthorized({ ...base, serviceRemoval: "failed" }, platform)).toBe(false);
+      expect(sharedTeardownAuthorized({ ...base, serviceRemoval: null }, platform)).toBe(false);
+    }
+    // On Windows a clean stop is only half the proof: Part B has to have shown the port free
+    // and no wrapper back. Without that window the same input is refused.
+    expect(sharedTeardownAuthorized(base, "win32")).toBe(false);
+    expect(sharedTeardownAuthorized({ ...base, respawnWindowVerified: true }, "win32")).toBe(true);
+    expect(sharedTeardownAuthorized({ ...base, serviceStop: "absent" }, "win32")).toBe(true);
+    expect(sharedTeardownAuthorized({ ...base, serviceStop: "absent", respawnWindowVerified: true }, "win32")).toBe(true);
+    expect(sharedTeardownAuthorized({ ...base, serviceStop: "stopped-respawnable" }, "win32")).toBe(false);
+    expect(sharedTeardownAuthorized({ ...base, serviceStop: "stopped-respawnable", respawnWindowVerified: true }, "win32")).toBe(true);
+    expect(sharedTeardownAuthorized({ ...base, serviceStop: "failed" }, "win32")).toBe(false);
+    expect(sharedTeardownAuthorized({ ...base, serviceStop: "state-unknown" }, "win32")).toBe(false);
+    expect(sharedTeardownAuthorized({ ...base, serviceStop: null }, "win32")).toBe(false);
+    expect(sharedTeardownAuthorized({ ...base, proxyProvenDown: false, respawnWindowVerified: true }, "win32")).toBe(false);
+    expect(sharedTeardownAuthorized({ ...base, serviceRemoval: "failed", respawnWindowVerified: true }, "win32")).toBe(false);
+    expect(sharedTeardownAuthorized({ ...base, serviceRemoval: null, respawnWindowVerified: true }, "win32")).toBe(false);
   });
 
   test("a removal failure is distinguishable from nothing being installed", async () => {
@@ -191,17 +324,16 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
   });
 
   test("a live orphan with no pid file blocks the teardown", async () => {
-    const cli = await readText("src/cli/index.ts");
-    const at = cli.indexOf("async function handleUninstall(");
-    const fn = cli.slice(at, at + 9000);
+    const helper = await readText("src/cli/uninstall-stop.ts");
+    const fn = helper.slice(helper.indexOf("export async function stopUninstallProxy("));
     // A missing pid file is not proof that nothing is serving — the same discovery
     // `ocx stop` performs. Without it, uninstall restored shared config under a live proxy.
-    expect(fn).toContain("const live = await findLiveProxy();");
-    expect(fn).toContain("observed.proxyProvenDown = await proxyEndpointProvenDown();");
+    expect(fn).toContain("const live = await io.findLiveProxy();");
+    expect(fn).toContain("const provenDown = await io.endpointProvenDown();");
     expect(fn).toContain("no process id could be resolved for it");
     // The orphan-with-no-pid branch THROWS, so `proxyProvenDown` stays false and the
     // authorization rule refuses the shared teardown.
-    const orphanBranch = fn.slice(fn.indexOf("const live = await findLiveProxy();"), fn.indexOf("const live = await findLiveProxy();") + 600);
+    const orphanBranch = fn.slice(fn.indexOf("const live = await io.findLiveProxy();"), fn.indexOf("const live = await io.findLiveProxy();") + 600);
     expect(orphanBranch).toContain("throw new Error(");
     // A findLiveProxy miss is not proof either: it goes through the tri-state probe first.
     expect(orphanBranch).toContain("could not be confirmed down either");
@@ -214,12 +346,45 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
     return cli.slice(at, at + 9000);
   }
 
+  test("Windows removal is gated on a Part A that ended stopped or absent", async () => {
+    const { serviceRemovalAllowed } = await import("../../src/cli/uninstall-plan");
+    for (const outcome of ["stopped", "absent"] as const) {
+      expect(serviceRemovalAllowed({ serviceStop: outcome }, "win32")).toBe(true);
+    }
+    // A Part A that failed, could not read the state, or left a respawnable wrapper still
+    // has a manager that can relaunch the proxy; `ocx service uninstall` refuses there, and
+    // deleting the registration would remove the evidence without stopping the wrapper.
+    for (const outcome of ["failed", "state-unknown", "stopped-respawnable", null] as const) {
+      expect(serviceRemovalAllowed({ serviceStop: outcome }, "win32")).toBe(false);
+    }
+    // Non-Windows removal is unchanged.
+    for (const platform of ["linux", "darwin"] as const) {
+      for (const outcome of ["stopped", "absent", "stopped-respawnable", "failed", "state-unknown", null] as const) {
+        expect(serviceRemovalAllowed({ serviceStop: outcome }, platform)).toBe(true);
+      }
+    }
+    const fn = await uninstallFn();
+    const step = fn.slice(fn.indexOf('runStep("service removed"'), fn.indexOf('runStep("service removed"') + 800);
+    // The command body calls the gate; the rule itself is exercised above.
+    expect(step).toContain("uninstallServiceRemoval(observed, uninstallServiceDetailed)");
+    // A refused gate throws before the removal runs, and the step records the failure.
+    const { uninstallServiceRemoval } = await import("../../src/cli/uninstall-plan");
+    let removed = 0;
+    expect(() => uninstallServiceRemoval({ serviceStop: "failed" }, () => { removed++; return "removed"; }, "win32"))
+      .toThrow("could not be proven stopped");
+    expect(removed).toBe(0);
+    expect(uninstallServiceRemoval({ serviceStop: "stopped" }, () => { removed++; return "removed"; }, "win32")).toBe("removed");
+    expect(removed).toBe(1);
+  });
+
   test("the detailed outcome is consumed, not the boolean collapse", async () => {
     const fn = await uninstallFn();
     // stopServiceIfInstalled returns false for "not installed", "refused to stop" and
     // "state could not be read" alike, so this step reported "not installed" for a manager
     // that might still be running (#3008).
-    expect(fn).toContain("stopServiceIfInstalledDetailed()");
+    // #7771: through the stop wiring, which is stopServiceIfInstalledDetailed off Windows and
+    // Part A of the checked stop on Windows; both return the detailed outcome.
+    expect(fn).toContain("const outcome = await stopServiceForUninstall();");
     expect(fn).not.toContain("stopServiceIfInstalled()");
     expect(fn).toContain('if (outcome === "absent") return false;');
     expect(fn).toContain('if (outcome === "failed")');
@@ -238,7 +403,9 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
     expect(fn).toContain("respawnWindowVerified: false,");
     expect(fn).toContain("observed.serviceStop = outcome;");
     expect(fn).toContain("observed.serviceRemoval = outcome;");
-    expect(fn).toContain('if (observed.serviceStop === "stopped-respawnable")');
+    // A legacy respawnable stop and, on Windows, every stopped one (Part B, #7771).
+    expect(fn).toContain("if (respawnWindowRequired(observed)) {");
+    expect(fn).toContain("await verifyUninstallStopWindow();");
     expect(fn).toContain("observed.respawnWindowVerified = true;");
     const gateAt = fn.indexOf("if (sharedTeardownAuthorized(observed)) {");
     expect(gateAt).toBeLessThan(fn.indexOf("native Codex restored", gateAt));
@@ -303,13 +470,17 @@ describe("uninstall gates shared teardown on a proven service stop", () => {
     expect(windowStep).toContain("could not be confirmed down either");
     expect(windowStep.indexOf("if (!await proxyEndpointProvenDown())"))
       .toBeLessThan(windowStep.indexOf("observed.respawnWindowVerified = true;"));
-    // And the proof itself asks every candidate.
-    expect(fn).toContain("endpointsToProve(readRuntimePort(), loadConfig())");
-    expect(fn).toContain("everyEndpointProvenDownAsync(endpoints, probeEndpointLiveness)");
+    // And the proof itself asks every candidate, captured before the proxy stop removes the
+    // runtime record; the helper requires every captured candidate to answer dead.
+    expect(fn).toContain("captureUninstallEndpointProof(() => endpointsToProve(readRuntimePort(), loadConfig()), probeEndpointLiveness)");
+    expect(fn.indexOf("captureUninstallEndpointProof(")).toBeLessThan(fn.indexOf('runStep("proxy stopped"'));
+    const plan = await readText("src/cli/uninstall-plan.ts");
+    const helper = plan.slice(plan.indexOf("export function captureUninstallEndpointProof("));
+    expect(helper).toContain("everyEndpointProvenDownAsync(candidates, probe)");
   });
 
 const safeTeardown: UninstallObservation = {
-  serviceStop: "stopped", serviceRemoval: "removed", proxyProvenDown: true, respawnWindowVerified: false,
+  serviceStop: "stopped", serviceRemoval: "removed", proxyProvenDown: true, respawnWindowVerified: true,
 };
 const cleanupOwner = {
   serverUrl: "https://hub.example", apiKeyId: "fixture-client", connectedAt: "2026-09-06T00:00:00.000Z",
@@ -796,5 +967,274 @@ describe("uninstall restores recorded third-party integrations before deleting r
       expect(f.store.readRecordsStrict().pi).toBeDefined();
       expect(profiles[1]!.store.readRecordsStrict().aside).toBeDefined();
     } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
+});
+
+describe("uninstall proxy stop defers the shared teardown through a receipt (#7771)", () => {
+  // Round 7 (A/B): the uninstall POST used to carry no deferral, so the proxy performed the
+  // shared client teardown itself BEFORE the Windows respawn window ran. If that window then
+  // failed, client config had already been restored under a wrapper that could relaunch the
+  // proxy. And when the service stop itself failed, the step could still fall through to
+  // taskkill /T /F. Both are decided here so they can be exercised without a machine.
+  const NONCE = "c".repeat(32);
+  const io = (over: Partial<Parameters<typeof stopUninstallProxy>[0]> = {}): Parameters<typeof stopUninstallProxy>[0] => ({
+    platform: "win32",
+    serviceStop: "stopped",
+    readPid: () => 4242,
+    runtimeEndpointFor: pid => (pid === 4242 ? { hostname: "127.0.0.1", port: 10100 } : null),
+    findLiveProxy: async () => null,
+    endpointProvenDown: async () => true,
+    claim: () => ({ nonce: NONCE }),
+    stop: async () => true,
+    removeTracked: () => {},
+    portWaitOwned: () => true,
+    ...over,
+  });
+
+  test("Windows: the receipt is claimed before the child stop and its nonce travels on the POST", async () => {
+    const steps: string[] = [];
+    const seen: unknown[] = [];
+    const result = await stopUninstallProxy(io({
+      claim: () => { steps.push("claim"); return { nonce: NONCE }; },
+      stop: async (pid, stopIo) => { steps.push("stop:" + pid); seen.push(stopIo); return true; },
+      removeTracked: pid => { steps.push("remove:" + pid); },
+    }));
+    expect(steps).toEqual(["claim", "stop:4242", "remove:4242"]);
+    expect(seen).toEqual([{ skipPortWait: true, deferSharedTeardownNonce: NONCE, runtimeEndpoint: { hostname: "127.0.0.1", port: 10100 } }]);
+    expect(result).toEqual({ changed: true, provenDown: true, nonce: NONCE });
+  });
+
+  test("an orphan stop carries the same nonce and leaves the tracked records alone", async () => {
+    const seen: unknown[] = [];
+    const removed: number[] = [];
+    const result = await stopUninstallProxy(io({
+      readPid: () => null,
+      findLiveProxy: async () => ({ pid: 777, port: 12000 }),
+      stop: async (pid, stopIo) => { seen.push([pid, stopIo]); return true; },
+      removeTracked: pid => { removed.push(pid); },
+    }));
+    expect(seen).toEqual([[777, { skipPortWait: true, deferSharedTeardownNonce: NONCE, runtimeEndpoint: { hostname: "127.0.0.1", port: 12000 } }]]);
+    expect(removed).toEqual([]);
+    expect(result.nonce).toBe(NONCE);
+  });
+
+  test("Part A not stopped: the graceful POST still goes out, but the forced fallback is forbidden", async () => {
+    for (const serviceStop of ["failed", "state-unknown", null] as const) {
+      const seen: unknown[] = [];
+      await stopUninstallProxy(io({ serviceStop, stop: async (_pid, stopIo) => { seen.push(stopIo); return false; } }));
+      expect(seen).toEqual([{ skipPortWait: true, deferSharedTeardownNonce: NONCE, allowForcedFallback: false, runtimeEndpoint: { hostname: "127.0.0.1", port: 10100 } }]);
+    }
+    // A Part A that ended stopped (or found nothing) keeps today's fallback available.
+    const allowed: unknown[] = [];
+    for (const serviceStop of ["stopped", "absent"] as const) {
+      await stopUninstallProxy(io({ serviceStop, stop: async (_pid, stopIo) => { allowed.push(stopIo); return false; } }));
+    }
+    expect(allowed).toEqual([
+      { skipPortWait: true, deferSharedTeardownNonce: NONCE, runtimeEndpoint: { hostname: "127.0.0.1", port: 10100 } },
+      { skipPortWait: true, deferSharedTeardownNonce: NONCE, runtimeEndpoint: { hostname: "127.0.0.1", port: 10100 } },
+    ]);
+  });
+
+  test("a forbidden fallback that does not confirm withholds the proof of a stopped proxy", async () => {
+    // The graceful POST may stop the proxy, but when it does not and the ladder was
+    // forbidden there is no proof left: the caller's recorded Part A failure is what keeps
+    // shared config up. Off Windows an unconfirmed stop keeps today's proof (the respawn
+    // window follows).
+    const windows = await stopUninstallProxy(io({ serviceStop: "failed", stop: async () => false }));
+    expect(windows.provenDown).toBe(false);
+    const stopped = await stopUninstallProxy(io({ serviceStop: "failed", stop: async () => true }));
+    expect(stopped.provenDown).toBe(true);
+    const elsewhere = await stopUninstallProxy(io({ platform: "linux", serviceStop: "failed", stop: async () => false }));
+    expect(elsewhere.provenDown).toBe(true);
+  });
+
+  test("an unconfirmed tracked stop asks the endpoint before claiming the proxy is down", async () => {
+    // #7771 round 9: `stopProxy` returns false without contacting anything when the tracked
+    // pid is already dead. `confirmed(false)` then reported provenDown:true on the strength of
+    // Part A alone, so a DIFFERENT proxy on the configured port was never probed and shared
+    // config could be restored under it. The tri-state probe is what the discovery path
+    // already requires; the tracked path has to ask the same question.
+    let probed = 0;
+    const dead = await stopUninstallProxy(io({
+      serviceStop: "absent",
+      stop: async () => false,
+      endpointProvenDown: async () => { probed++; return true; },
+    }));
+    expect(probed).toBe(1);
+    expect(dead.provenDown).toBe(true);
+
+    // A live or unreadable endpoint is not proof, and the record stays for the next run.
+    for (const answer of [false]) {
+      const removed: number[] = [];
+      const result = await stopUninstallProxy(io({
+        serviceStop: "stopped",
+        stop: async () => false,
+        endpointProvenDown: async () => answer,
+        removeTracked: pid => { removed.push(pid); },
+      }));
+      expect(result.provenDown).toBe(false);
+      expect(result.changed).toBe(false);
+      expect(removed).toEqual([]);
+    }
+
+    // A confirmed stop needs no second opinion.
+    let asked = 0;
+    const stopped = await stopUninstallProxy(io({
+      stop: async () => true,
+      endpointProvenDown: async () => { asked++; return false; },
+    }));
+    expect(stopped.provenDown).toBe(true);
+    expect(asked).toBe(0);
+  });
+
+  test("a receipt that cannot be recorded refuses the stop instead of sending an undeferred POST", async () => {
+    let stopped = 0;
+    await expect(stopUninstallProxy(io({
+      claim: () => { throw new Error("disk full"); },
+      stop: async () => { stopped++; return true; },
+    }))).rejects.toThrow(/deferred-teardown receipt could not be recorded[\s\S]*disk full/);
+    expect(stopped).toBe(0);
+  });
+
+  test("off Windows nothing changes: no receipt, no fallback narrowing, today's port wait", async () => {
+    const seen: unknown[] = [];
+    let claimed = 0;
+    const result = await stopUninstallProxy(io({
+      platform: "linux", serviceStop: "failed",
+      claim: () => { claimed++; return { nonce: NONCE }; },
+      portWaitOwned: () => false,
+      stop: async (_pid, stopIo) => { seen.push(stopIo); return true; },
+    }));
+    expect(claimed).toBe(0);
+    expect(seen).toEqual([{ skipPortWait: false, runtimeEndpoint: { hostname: "127.0.0.1", port: 10100 } }]);
+    expect(result).toEqual({ changed: true, provenDown: true });
+  });
+
+  test("the receipt names the endpoint the stop actually contacts (tracked pid)", async () => {
+    // #7771 round 8: the receipt used to be claimed from `readRuntimePort()` with no
+    // expectation, so a stale record could name an endpoint the stop never contacted, and
+    // `stopProxy` re-read the record on its own. The receipt and the POST now carry the one
+    // endpoint resolved for the target.
+    const claimed: unknown[] = [];
+    const seen: unknown[] = [];
+    await stopUninstallProxy(io({
+      runtimeEndpointFor: pid => (pid === 4242 ? { hostname: "127.0.0.1", port: 12000 } : null),
+      claim: (endpoint, source) => { claimed.push([endpoint, source]); return { nonce: NONCE }; },
+      stop: async (_pid, stopIo) => { seen.push(stopIo); return true; },
+    }));
+    expect(claimed).toEqual([[{ hostname: "127.0.0.1", port: 12000 }, "exact"]]);
+    expect(seen).toEqual([{ skipPortWait: true, deferSharedTeardownNonce: NONCE, runtimeEndpoint: { hostname: "127.0.0.1", port: 12000 } }]);
+  });
+
+  test("a stale runtime record does not become the receipt for a proxy found on another port", async () => {
+    // The pid file is gone but a stale runtime record survives; discovery finds the live
+    // proxy elsewhere. Claiming the stale record marked it "exact" while the stop went to
+    // the discovered endpoint, so the obligation named an address nobody contacted.
+    const claimed: unknown[] = [];
+    const seen: unknown[] = [];
+    await stopUninstallProxy(io({
+      readPid: () => null,
+      runtimeEndpointFor: () => ({ hostname: "127.0.0.1", port: 10999 }),
+      findLiveProxy: async () => ({ pid: 777, port: 12000, hostname: "127.0.0.1" }),
+      claim: (endpoint, source) => { claimed.push([endpoint, source]); return { nonce: NONCE }; },
+      stop: async (_pid, stopIo) => { seen.push(stopIo); return true; },
+    }));
+    expect(claimed).toEqual([[{ hostname: "127.0.0.1", port: 12000 }, "exact"]]);
+    expect(seen).toEqual([{ skipPortWait: true, deferSharedTeardownNonce: NONCE, runtimeEndpoint: { hostname: "127.0.0.1", port: 12000 } }]);
+  });
+
+  test("no target means no receipt: a guessed obligation recovery cannot resolve is not claimed", async () => {
+    // A missing pid file, no live proxy, and a definitively dead endpoint: nothing will be
+    // stopped, so nothing may be deferred. The old order claimed a "guessed" receipt first
+    // and left it outstanding, which recovery then refused to finish.
+    let claimed = 0;
+    const result = await stopUninstallProxy(io({
+      readPid: () => null,
+      findLiveProxy: async () => null,
+      endpointProvenDown: async () => true,
+      claim: () => { claimed++; return { nonce: NONCE }; },
+    }));
+    expect(claimed).toBe(0);
+    expect(result).toEqual({ changed: false, provenDown: true });
+  });
+
+  test("a tracked target with no runtime record claims nothing rather than a guessed endpoint", async () => {
+    let claimed = 0;
+    const seen: unknown[] = [];
+    await stopUninstallProxy(io({
+      runtimeEndpointFor: () => null,
+      claim: () => { claimed++; return { nonce: NONCE }; },
+      stop: async (_pid, stopIo) => { seen.push(stopIo); return true; },
+    }));
+    // With no endpoint there is no graceful POST to defer, so no receipt may name one.
+    expect(claimed).toBe(0);
+    expect(seen).toEqual([{ skipPortWait: true }]);
+  });
+
+  test("the tracked record is removed only for a stop that was proven", async () => {
+    // Keeping a record the stop did not clear leaves a live pid for the next command to
+    // chase; removing it on a failed POST claims a state change that did not happen.
+    const removed: number[] = [];
+    // Part A failed and the forced ladder was forbidden: nothing proves the proxy exited, so
+    // the record it names must stay for the next command to chase, and the step reports no
+    // change (the caller records the failure and keeps the shared teardown up).
+    const failed = await stopUninstallProxy(io({
+      serviceStop: "failed",
+      stop: async () => false,
+      removeTracked: pid => { removed.push(pid); },
+    }));
+    expect(removed).toEqual([]);
+    expect(failed.changed).toBe(false);
+    expect(failed.provenDown).toBe(false);
+
+    const stopped = await stopUninstallProxy(io({
+      stop: async () => true,
+      removeTracked: pid => { removed.push(pid); },
+    }));
+    expect(removed).toEqual([4242]);
+    expect(stopped.changed).toBe(true);
+    expect(stopped.provenDown).toBe(true);
+  });
+
+  test("the receipt is finished only after the shared restore ran", async () => {
+    const { completeWindowsServiceStopReceipt } = await import("../../src/service/cli-windows-stop");
+    const cleared: string[] = [];
+    completeWindowsServiceStopReceipt(NONCE, nonce => { cleared.push(nonce); return true; });
+    expect(cleared).toEqual([NONCE]);
+  });
+
+  test("after an absent Part A a confirmed tracked stop still proves every candidate endpoint dead", async () => {
+    // A confirmed stop proves the tracked proxy down, not that nothing else serves on this
+    // home's ports; with no manager registered no Part B follows, so a second proxy on the
+    // configured endpoint would otherwise go unseen and shared config be restored under it.
+    let probes = 0;
+    const live = await stopUninstallProxy(io({
+      serviceStop: "absent",
+      stop: async () => true,
+      endpointProvenDown: async () => { probes++; return false; },
+    }));
+    expect(probes).toBe(1);
+    expect(live.provenDown).toBe(false);
+    const dead = await stopUninstallProxy(io({ serviceStop: "absent", stop: async () => true, endpointProvenDown: async () => true }));
+    expect(dead.provenDown).toBe(true);
+    // After a stopped Part A, Part B confirms the port, so the stop's own proof stands.
+    probes = 0;
+    const stopped = await stopUninstallProxy(io({ serviceStop: "stopped", stop: async () => true, endpointProvenDown: async () => { probes++; return false; } }));
+    expect(probes).toBe(0);
+    expect(stopped.provenDown).toBe(true);
+  });
+
+  test("the uninstall endpoint proof reads its candidates once, before the stop removes the runtime record", async () => {
+    let reads = 0;
+    const probed: number[] = [];
+    let runtime: { port: number } | null = { port: 12000 };
+    const proof = captureUninstallEndpointProof(() => { reads++; return runtime ? [{ hostname: "127.0.0.1", port: runtime.port }, { hostname: "127.0.0.1", port: 10100 }] : [{ hostname: "127.0.0.1", port: 10100 }]; },
+      endpoint => { probed.push(endpoint.port); return endpoint.port === 12000 ? "dead" : "dead"; });
+    runtime = null; // the tracked stop removed the runtime record
+    expect(await proof()).toBe(true);
+    expect(reads).toBe(1);
+    expect(probed).toEqual([12000, 10100]);
+    const unreadable = captureUninstallEndpointProof(() => { throw new Error("config unreadable"); }, () => "dead");
+    expect(await unreadable()).toBe(false);
   });
 });

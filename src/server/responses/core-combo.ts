@@ -1,3 +1,5 @@
+import { responseReplayOwnerKey } from "../../responses/state/replay-owner";
+import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import { comboLogLabel, comboTargetLogLabel } from "../../combos/resolve";
 import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
@@ -21,6 +23,7 @@ import {
 } from "../../reasoning-effort";
 import { admissionMayUseMeteredComboTargets, resolveAdmissionModelScope, routeAllowedByScope } from "../admission-model-scope";
 import { recordAttemptRequestedEffort } from "../request-log";
+import { failLinkTurnExpansion, markLinkTurnMissing, observeLinkTurnExpansion } from "../link-turn";
 import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
   deriveRequestExecutionBudget,
@@ -445,13 +448,17 @@ export async function executeComboResponses(
   // continuation that only references prior images still fails closed when
   // imageInput is disabled (and so targets see the full replayed input).
   const inboundClientThreadId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
-  const body = expandPreviousResponseInput(rawBody, inboundClientThreadId);
+  const inboundOwnThreadId = req.headers.get("thread-id")?.trim() || undefined;
+  const strictReplay = options.plaintextV2Decision ?? isPlaintextV2AgentMessagesEnabled(config);
+  const replayOwnerKey = strictReplay ? responseReplayOwnerKey(replayPrincipal.clientPrincipalId, inboundOwnThreadId) : undefined;
+  const body = expandPreviousResponseInput(rawBody, strictReplay ? inboundOwnThreadId : inboundClientThreadId, replayOwnerKey);
   const replayFailure = previousResponseReplayFailure(body);
   if (replayFailure?.reason === "scope_mismatch") {
     console.warn("[opencodex] refusing continuation because the client task scope does not match replay state");
   }
   // Local replay failures require full client replay.
   if (replayFailure) {
+    failLinkTurnExpansion(options.linkTurn, req, logCtx, body, replayFailure.reason);
     return formatErrorResponse(
       400,
       "previous_response_not_found",
@@ -464,10 +471,15 @@ export async function executeComboResponses(
   // object (still carrying previous_response_id) and must not be treated as
   // unresolved — text-only stored continuations remain allowed.
   const requestedPreviousId = typeof (rawBody as { previous_response_id?: unknown } | null)?.previous_response_id === "string"
-    ? (rawBody as { previous_response_id: string }).previous_response_id.trim()
+    ? (rawBody as { previous_response_id: string }).previous_response_id
     : "";
-  const unresolvedPrevious = requestedPreviousId.length > 0 && body === rawBody;
+  const unresolvedPrevious = requestedPreviousId.trim().length > 0 && body === rawBody;
+  // Remote Link (design T4 5 and 9.1): the combo's own expansion is the request's one capture point; its
+  // children replay a snapshot and skip theirs.
+  observeLinkTurnExpansion(options.linkTurn, req, logCtx, body,
+    requestedPreviousId.trim().length > 0 ? (unresolvedPrevious ? "unexpanded" : "chained") : "none");
   if (combo.imageInput === "disabled" && unresolvedPrevious) {
+    markLinkTurnMissing(logCtx);
     return formatErrorResponse(
       400,
       "previous_response_not_found",
@@ -1077,7 +1089,8 @@ export async function executeComboResponses(
     const childLog: RequestLogContext = {
       model: pick.target.model,
       provider: pick.target.provider,
-      ...(logCtx.conversationId ? { conversationId: logCtx.conversationId } : {}),
+      ...(logCtx.conversationId ? { conversationId: logCtx.conversationId, conversationIdIsHermesFallback: logCtx.conversationIdIsHermesFallback } : {}),
+      ...(logCtx.affinityLane ? { affinityLane: logCtx.affinityLane } : {}),
       ...(logCtx.surface ? { surface: logCtx.surface } : {}),
     };
     const targetReasoningEfforts = supportedLadderFor({
@@ -1239,6 +1252,7 @@ export async function executeComboResponses(
         },
       }) : await requestDispatchers.handleResponses(childRequest, config, childLog, {
         ...options,
+        plaintextV2Decision: strictReplay,
         replayPrincipal,
         // A bridge child is a concrete route; the native source belongs to this loop only.
         ...(options.protocolSource ? { protocolSource: undefined } : {}),
@@ -1449,6 +1463,7 @@ export async function executeComboResponses(
         verifiedPlanRefusal: failure.verifiedPlanRefusal,
         malformedResponseFormat: failure.malformedResponseFormat,
         openRouterOpaque400: failure.openRouterOpaque400,
+        providerModerationRefusal: failure.providerModerationRefusal,
         // The adapter the failed leg actually resolved: a configured `kiro` provider can route a
         // model through another wire via `modelAdapters`, and an unresolved leg grants no hop.
         failedAdapter: childLog.providerAdapter,
@@ -1527,6 +1542,7 @@ export async function executeComboResponses(
       code: failure.upstreamCode,
       malformedResponseFormat: failure.malformedResponseFormat,
       openRouterOpaque400: failure.openRouterOpaque400,
+      providerModerationRefusal: failure.providerModerationRefusal,
     });
     const failedTargetKey = targetKey(pick.target);
     let failedTargetCooldownRecorded = false;

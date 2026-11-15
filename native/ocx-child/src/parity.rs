@@ -69,7 +69,11 @@ fn json_safe_nonneg_int(val: &serde_json::Value) -> Option<u64> {
     None
 }
 
-/// Strict exact-key parser matching `parseLinkChildParityReport` in `src/link/child-parity.ts`.
+/// Strict exact-key parser for the five-key base report `ocx-child` sends, capped at
+/// `LINK_CHILD_PARITY_MAX_BYTES` (1 KiB). It is narrower than the Home's TypeScript parser
+/// (`parseLinkChildParityReport` in `src/link/child-parity.ts`), which also accepts the extended
+/// report carrying `appliedRouteIntentDigest` and `routeClientOutcomes` and caps the body at 8 KiB.
+/// `ocx-child` never reads route intent, so it never sends those fields.
 pub fn parse_link_child_parity_report(raw_json: &str) -> Option<LinkChildParityReport> {
     if raw_json.len() > LINK_CHILD_PARITY_MAX_BYTES {
         return None;

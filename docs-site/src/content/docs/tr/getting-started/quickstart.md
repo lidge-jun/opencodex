@@ -41,10 +41,19 @@ penceresi bildirir; Cursor kendi adaptör meta verilerini korur.
 
 ## 2. Proxy'yi başlatın
 
+Aşağıdaki seçeneklerden yalnızca birini çalıştırın; proxy ön planda kalır:
+
 ```bash
 ocx start            # varsayılan port 10100
+```
+
+Farklı bir bağlantı noktası için alternatif:
+
+```bash
 ocx start --port 8080
 ```
+
+Bu terminali açık bırakın. Sonraki durum ve kontrol paneli komutlarını aynı `OPENCODEX_HOME` ile ikinci bir terminalde çalıştırın.
 
 Başlatıldığında opencodex:
 
@@ -54,10 +63,7 @@ Başlatıldığında opencodex:
   yönlendirilen girdileri Codex'in model kataloğuna senkronize eder**,
 - `http://localhost:<port>/v1` üzerinde dinler.
 
-İstenen port meşgulse `ocx start` durur ve portu neyin tuttuğunu bildirir: orada bir
-opencodex yanıt veriyorsa önce `ocx stop` çalıştırın veya `ocx start --port <port>` ile
-boş bir portta başlatın. Kendiliğinden başka bir porta geçmez; önceki davranış, iki
-proxy'nin yan yana çalışmasına ve Codex'in daha yeni olana yönlendirilmesine neden oluyordu.
+Aynı `OPENCODEX_HOME` ile çalışan opencodex, boş bir port olsa bile ikinci kez başlatılamaz. Önce sahip örneği `ocx stop` ile durdurun veya farklı bir `OPENCODEX_HOME` seçin. Kardeş örnek kendi portunda doğrudan istekleri işler; Codex, Grok ve Claude ortak yönlendirmesini değiştirmez. Portu ilgisiz bir süreç tutuyorsa `ocx start` bunu bildirir; `ocx start --port <port>` ile boş bir port seçin. Port kendiliğinden değişmez.
 
 Kontrol edin:
 

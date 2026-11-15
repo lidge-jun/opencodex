@@ -136,6 +136,25 @@ HTTP リトライ ループの対象外です。
   block を送ります。
 - `application/vnd.amazon.eventstream` をデコードして text/thinking/tool イベントを復元し、途切れたツール JSON を検出します。上流がトークン数を返さないため使用量は推定します。
 - `fetchResponse` で限られた回数だけリトライし、エラーを分類/マスクします。非ストリーミングパーサーはウェブ検索ループのために同じイベントストリームを最後まで消費します。
+- リクエストごとにクライアントツールを最大 48 個、変換後のツール JSON を 96 KB まで送り、ツールの説明は
+  1,024 文字（`gpt-5.6-sol` は 9,216 文字）で切り詰めます。tool search で読み込んだツールと Codex
+  code-mode の実行ツールを先に採用し、省略したツールはモデルに伝えます。プロキシの環境に
+  `OCX_KIRO_TOOL_BUDGET=off` を設定するとクライアントのカタログ全体を、
+  `OCX_KIRO_TOOL_DESCRIPTION_LIMIT=off` を設定すると説明の全文を送ります。どちらもリクエスト変換時に
+  読み取られ、すべての Kiro モデルに適用され、他の上限は変わりません。予算を切ると上限自体がなくなり、
+  優先順位も省略も対象がなくなります。宣言したツールがすべて宣言順に送られ、省略の通知も消え、
+  Kiro が受け付ける数より多く宣言したクライアントは、切り詰めたカタログではなく上流の
+  `ValidationException` を受け取ります。リクエストサイズもクライアントのカタログに比例して大きくなります。
+  このスイッチは、より大きなリクエストを受け付けると測定されたアカウント向けのオプトアウトであり、
+  過大なカタログを安全にする手段ではありません。
+- Kiro のバリデータが拒否する JSON Schema キーワード（`pattern`、`minLength`、`maximum`、
+  `additionalProperties` など 29 個）をツールと構造化出力のスキーマから取り除きます。ただし、
+  プローブでそのモデルが受け付けたと確認できたキーワードは残します。`claude-opus-4.5` はすべて残ります。
+  `claude-opus-5.5` と `claude-sonnet-5.5` は `pattern`、`maximum` だけが残り、それ以外は取り除かれたままです。この 2 つの
+  モデルに他のキーワードを送ったプローブがないためです。他の Claude id を含むその他の Kiro モデルは
+  すべて取り除きます。例外をモデル単位・キーワード単位にしているのは、この wire が reasoning effort で
+  すでに Claude モデルを分けているためであり、Kiro が拒否するキーワードはヒントを失うだけで済まず、
+  リクエスト全体を失敗させるからです。
 ### 完了とネイティブ stop reason
 
 Kiro のアシスタントテキストには、それ自体で end-turn を示す信頼できる区別がありません。ただし終端の
@@ -155,12 +174,39 @@ filtered incomplete になります。実際のツール呼び出しを伴わな
 
 ### Reasoning effort
 
-GPT-5.6 系は `additionalModelRequestFields.reasoning.effort`、`claude-opus-5` は
-`additionalModelRequestFields.output_config.effort` を使用します。`gpt-5.6-luna` と
-`gpt-5.6-terra` では、検証済みの `low`、`medium`、`high`、`max` だけをネイティブフィールドで送信します。
+GPT-5.6 系と GPT-6 系（`gpt-6-sol`、`gpt-6-luna`、`gpt-6.1-sol`、`gpt-6.1-terra`）は
+`additionalModelRequestFields.reasoning.effort`、以下に挙げる Claude のモデルは
+`additionalModelRequestFields.output_config.effort` を使用します。
+`gpt-5.6-luna` と `gpt-5.6-terra` では、検証済みの `low`、`medium`、`high`、`max` だけをネイティブフィールドで送信します。
 両モデルの `xhigh` は未検証のため、従来の上限付き thinking 指示によるエミュレーションを維持します。
-`gpt-5.6-sol` と `claude-opus-5` の既存のネイティブ段階（`low`、`medium`、`high`、`xhigh`、`max`）は変更しません。
-その他の Kiro モデルはエミュレーションを使用し、effort の選択肢だけではネイティブ対応を意味しません。
+`gpt-5.6-sol` と GPT-6 系は、同じ `reasoning.effort` フィールドでネイティブの `low`、`medium`、
+`high`、`xhigh`、`max` を維持します。
+
+Kiro は `claude-opus-5`、`claude-opus-5.5`、`claude-opus-4.8`、`claude-opus-4.7`、
+`claude-opus-4.6`、`claude-sonnet-5.5`、`claude-sonnet-5`、`claude-sonnet-4.6`、
+`claude-haiku-5.5` で `low`、`medium`、`high`、`xhigh`、`max` を `output_config.effort` として
+受け付けます。例外が 1 つあります。`claude-opus-4.6` と `claude-sonnet-4.6` はネイティブの `xhigh` を
+拒否するため、その段階だけエミュレーションの thinking ブロックを使います。
+
+Kiro には `minimal` の段階がありません。`claude-opus-5` と `claude-opus-5.5` を除く上記の 9 モデルは、
+ネイティブ effort を有効にする前から動作していたリクエストを失敗させないよう、`minimal` でエミュレーションの
+ブロックを維持します。この 2 つの Opus 5 モデルとネイティブ effort を持つ GPT 系は、何も送信する前に
+`minimal` を 400 `invalid_request_error` で拒否します。
+
+拒否の伝え方はサーフェスごとに異なります。Responses リクエストはモデルと拒否された effort を示す文を
+`error.message` に入れます。Messages と Chat Completions の経路はその位置にプロキシの固定文言
+`The provider rejected the request.` を入れます。どちらもアダプターの詳細文をそのまま中継せず、自前の
+文言に置き換えるためです。モデルと effort を示すのは Responses だけです。ストリーミングと非ストリーミングは
+どのサーフェスでも同じ応答になります。拒否は上流へ送る本文を組み立てる途中で起きるため、ストリームは
+開かれず上流呼び出しも発生しません。
+
+呼び出し元の `ultra` は解析時に `max` へ変換されます。`pinnedReasoningEffort`、
+`modelPinnedReasoningEfforts`、`modelPinnedEfforts` はその後に適用されます。ネイティブ Kiro
+effort を持つモデルでは、アダプターも pin の `ultra` を `max` に変換します。エミュレーション
+モデルでは pin は破棄され、推論シグナルなしでリクエストが送られます。
+
+`claude-haiku-4.5`、`claude-opus-4.5`、`claude-sonnet-4.5` と、上記にない Kiro モデルは
+すべての effort でエミュレーションを使います。effort の選択肢だけではネイティブ対応を意味しません。
 
 ## `cursor`
 

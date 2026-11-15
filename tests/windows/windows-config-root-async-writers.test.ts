@@ -21,9 +21,11 @@ import { resetHardenedStateForTests, setAsyncIcaclsBeltSchedulerForTests, setAsy
   setIcaclsRunnerForTests, setNowForTests, setPlatformForTests, windowsSecretAclReapPendingForPath,
   type IcaclsResult } from "../../src/lib/windows-secret-acl";
 import { setSyntheticWindowsPrincipalForTests } from "../../src/lib/windows-user-principal";
+import { setWindowsOwnerAclRunnerForTests, setWindowsOwnerAclAsyncRunnerForTests } from "../../src/lib/windows-owner-acl";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const success: IcaclsResult = { success: true, exitCode: 0, timedOut: false, stdout: "" };
+const principalSid = "S-1-5-21-1-2-3-1001";
 const turn = () => new Promise<void>(done => setImmediate(done));
 function deferred() {
   let resolve!: () => void;
@@ -44,6 +46,7 @@ beforeEach(() => {
   previous = keys.map(key => process.env[key]);
   process.env.OPENCODEX_HOME = root; process.env.OPENCODEX_ACL_TIMEOUT_MS = "1000";
   delete process.env.OPENCODEX_ACL_VERIFY_EXISTING;
+  // Keep file icacls hooks observable even when owner-verification fixtures are private.
   original = JSON.stringify(fixture());
   writeFileSync(join(root, "config.json"), original);
   writeFileSync(join(root, "input.json"), JSON.stringify({ ...fixture(), effortCap: "high" }));
@@ -53,13 +56,24 @@ beforeEach(() => {
     const hook = spyOn(console, method).mockImplementation(() => {}); restores.push(() => hook.mockRestore());
   }
   resetHardenedStateForTests(); setPlatformForTests("win32");
-  setSyntheticWindowsPrincipalForTests("*S-1-5-21-1-2-3-1001"); setIcaclsRunnerForTests(() => success);
+  setSyntheticWindowsPrincipalForTests(`*${principalSid}`); setIcaclsRunnerForTests(() => success);
+  // Admission ordering is simulated: neither ACL backend may launch PowerShell.
+  // A strict async directory probe must request hardening so holdParent owns the flight.
+  setWindowsOwnerAclAsyncRunnerForTests(async () => ({ success: false, timedOut: false, stdout: "" }));
+  setWindowsOwnerAclRunnerForTests(entries => ({ ...success, stdout: [
+    `U|${principalSid}|${principalSid}|False`,
+    ...entries.flatMap((entry, index) => [
+      `E|${index}|${principalSid}|4100|1`,
+      `A|${index}|0|${entry.directory ? 3 : 0}|2032127|${principalSid}|False`,
+    ]), "END", "",
+  ].join("\n") }));
 });
 afterEach(async () => {
   await paths.flushConfigDirHardeningAndReaps(root);
   for (const restore of restores.reverse()) restore();
   setAsyncIcaclsRunnerForTests(null); setAsyncIcaclsBeltSchedulerForTests(null);
   setNowForTests(null); setIcaclsRunnerForTests(null); setPlatformForTests(null);
+  setWindowsOwnerAclRunnerForTests(null); setWindowsOwnerAclAsyncRunnerForTests(null);
   setSyntheticWindowsPrincipalForTests(null); resetHardenedStateForTests();
   keys.forEach((key, index) => {
     if (previous[index] === undefined) delete process.env[key]; else process.env[key] = previous[index];

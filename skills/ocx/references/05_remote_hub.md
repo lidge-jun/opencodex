@@ -370,6 +370,12 @@ Child (`restart-skipped:link-active`, exit 6); try again when the Child is idle.
 is seen as busy only once its response starts for a non-streaming request, so a restart sent while such
 a request is still running can end it.
 
+A link Responses WebSocket that closed while Codex was busy, or a Home that stopped uncleanly, can leave the Child
+held: `ocx link status` shows `child.holds` with each hold's reasons, and restarts are withheld the same way.
+`--ignore-activity` on a one-link `ocx link sync ... --restart-*` or `ocx link restart-codex` restarts past
+that check and ends the running work; `ocx link activity clear --link-id <id>` forgets one link's holds. Both are
+the operator's decision: never pass them on your own initiative, and nothing applies them automatically.
+
 Windows Children take `sync` only: restarts are `unsupported` (`windows-restart`) and orchestrated updates
 `unsupported` (`windows-apply`). `ocx-child` Children report restart and update `unsupported`. The CLI
 verbs need a Home bound to loopback; on any other Home they exit 1, these operations are not available

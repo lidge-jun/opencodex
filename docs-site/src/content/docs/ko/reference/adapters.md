@@ -169,6 +169,24 @@ provider를 추가했다고 자격증명이나 권한의 유효성이 검증되�
   멈춰도 읽기를 중단한 소비자가 디코더 종료를 계속 기다리지 않습니다.
 - `fetchResponse`에서 제한된 횟수만 재시도하고 오류를 분류/마스킹합니다. 비스트리밍 파서는 웹 검색
   루프를 위해 같은 이벤트 스트림을 끝까지 소비합니다.
+- 요청마다 클라이언트 툴을 최대 48개, 변환된 툴 JSON을 96 KB까지 보내고, 툴 설명은 1,024자
+  (`gpt-5.6-sol`은 9,216자)로 자릅니다. tool search로 불러온 툴과 Codex code-mode 실행 툴을
+  먼저 넣고, 생략된 툴은 모델에 알립니다. 프록시 환경에 `OCX_KIRO_TOOL_BUDGET=off`를 두면
+  클라이언트 카탈로그 전체를, `OCX_KIRO_TOOL_DESCRIPTION_LIMIT=off`를 두면 설명 전체를
+  보냅니다. 둘 다 요청 변환 시점에 읽고 모든 Kiro 모델에 적용되며 다른 한도는 그대로 둡니다.
+  예산을 끄면 한도 자체가 없어져 우선순위를 매기거나 생략할 대상이 없습니다. 선언한 툴이 모두
+  선언 순서대로 전송되고 생략 안내도 사라지며, Kiro가 받아들이는 수보다 많이 선언한
+  클라이언트는 잘린 카탈로그 대신 업스트림 `ValidationException`을 받습니다. 요청 크기도
+  클라이언트 카탈로그를 따라 커집니다. 이 스위치는 더 큰 요청을 받아들이는 계정을 위한
+  선택 해제이며, 과대한 카탈로그를 안전하게 만드는 수단이 아닙니다.
+- Kiro 검증기가 거부하는 JSON Schema 키워드(`pattern`, `minLength`, `maximum`,
+  `additionalProperties` 등 29개)를 툴과 구조화 출력 스키마에서 제거하되, 프로브가 해당
+  모델에서 통과를 확인한 키워드는 남깁니다. `claude-opus-4.5`는 전부 남습니다.
+  `claude-opus-5.5`와 `claude-sonnet-5.5`는 `pattern`, `maximum`만 남고 나머지는 제거된 상태로 남습니다. 그 두 모델에
+  다른 키워드를 보낸 프로브가 없기 때문입니다. 나머지 Claude id를 포함한 다른 Kiro 모델은
+  전부 제거합니다. 예외를 모델별·키워드별로 두는 이유는 이 wire가 이미 reasoning effort에서
+  Claude 모델을 나누기 때문이며, Kiro가 거부하는 키워드는 힌트를 잃는 데 그치지 않고 요청
+  전체를 실패시킵니다.
 ### 완료와 네이티브 stop reason
 
 Kiro의 어시스턴트 텍스트에는 그 자체로 턴 종료를 알리는 신뢰할 만한 구분이 없습니다. 다만 종단
@@ -188,12 +206,39 @@ commentary로 유지하고 비공개 완료 툴을 한 번 검증합니다.
 
 ### Reasoning effort
 
-GPT-5.6 계열은 `additionalModelRequestFields.reasoning.effort`를, `claude-opus-5`는
-`additionalModelRequestFields.output_config.effort`를 사용합니다. `gpt-5.6-luna`와
-`gpt-5.6-terra`는 검증된 `low`, `medium`, `high`, `max`만 네이티브 필드로 전송합니다.
+GPT-5.6 계열과 GPT-6 계열(`gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`, `gpt-6.1-terra`)은
+`additionalModelRequestFields.reasoning.effort`를, 아래에 나열한 Claude 모델은
+`additionalModelRequestFields.output_config.effort`를 사용합니다.
+`gpt-5.6-luna`와 `gpt-5.6-terra`는 검증된 `low`, `medium`, `high`, `max`만 네이티브 필드로 전송합니다.
 두 모델의 `xhigh`는 네이티브 동작이 검증되지 않아 기존의 제한된 thinking 지시문 방식을 유지합니다.
-`gpt-5.6-sol`과 `claude-opus-5`의 기존 네이티브 단계(`low`, `medium`, `high`, `xhigh`, `max`)는
-바뀌지 않습니다. 다른 Kiro 모델의 effort는 에뮬레이션이며, 조절 항목이 있다고 네이티브 지원을 뜻하지는 않습니다.
+`gpt-5.6-sol`과 GPT-6 계열은 같은 `reasoning.effort` 필드로 네이티브 `low`, `medium`, `high`,
+`xhigh`, `max`를 그대로 사용합니다.
+
+Kiro는 `claude-opus-5`, `claude-opus-5.5`, `claude-opus-4.8`, `claude-opus-4.7`,
+`claude-opus-4.6`, `claude-sonnet-5.5`, `claude-sonnet-5`, `claude-sonnet-4.6`,
+`claude-haiku-5.5`에 `low`, `medium`, `high`, `xhigh`, `max`를 `output_config.effort`로
+받아들입니다. 예외가 하나 있습니다. `claude-opus-4.6`과 `claude-sonnet-4.6`은 네이티브 `xhigh`를
+거부하므로 그 단계만 에뮬레이션 thinking 블록을 씁니다.
+
+Kiro에는 `minimal` 단계가 없습니다. `claude-opus-5`와 `claude-opus-5.5`를 뺀 위의 아홉 모델은
+네이티브 effort를 쓰기 전에도 동작하던 요청을 실패시키지 않으려고 `minimal`에서 에뮬레이션 블록을
+유지합니다. 이 두 Opus 5 모델과 네이티브 effort를 쓰는 GPT 모델은 `minimal`을 아무것도 보내기 전에
+400 `invalid_request_error`로 거부합니다.
+
+거부를 알리는 방식은 표면마다 다릅니다. Responses 요청은 모델과 거부된 effort를 밝히는 문장을
+`error.message`에 담습니다. Messages와 Chat Completions 경로는 그 자리에 프록시의 고정 문구인
+`The provider rejected the request.`를 넣습니다. 두 경로 모두 어댑터의 세부 문장을 그대로 전달하지
+않고 자기 문구로 바꾸기 때문입니다. 모델과 effort를 밝히는 쪽은 Responses뿐입니다. 스트리밍과
+비스트리밍은 모든 표면에서 같은 응답을 냅니다. 거부는 업스트림 요청 본문을 만드는 도중에 일어나므로
+스트림이 열리지 않고 업스트림 호출도 없습니다.
+
+호출자가 보낸 `ultra`는 파싱할 때 `max`로 바뀝니다. `pinnedReasoningEffort`,
+`modelPinnedReasoningEfforts`, `modelPinnedEfforts` pin은 그 뒤에 적용됩니다. 네이티브 Kiro
+effort를 쓰는 모델에서는 어댑터가 pin의 `ultra`도 `max`로 바꿉니다. 에뮬레이션 모델에서는
+해당 pin을 버리고 추론 신호 없이 요청을 보냅니다.
+
+`claude-haiku-4.5`, `claude-opus-4.5`, `claude-sonnet-4.5`와 위에 없는 Kiro 모델은 모든
+effort에서 에뮬레이션을 씁니다. 조절 항목이 있다고 네이티브 지원을 뜻하지는 않습니다.
 
 ## `cursor`
 

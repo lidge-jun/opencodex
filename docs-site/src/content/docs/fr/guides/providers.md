@@ -310,7 +310,8 @@ existante n'est pas concernée.
 
 ## 3. Catalogue des clés API
 
-opencodex fournit 108 préréglages intégrés : 86 à clé, 18 OAuth, trois locaux et un préréglage par défaut detransfert ChatGPT. Dans le tableau de bord, le sélecteur **Ajouter un fournisseur** ouvre le tableau de bord du
+opencodex fournit 109 préréglages intégrés : 87 à clé, 18 OAuth, trois locaux et un préréglage par défaut de
+transfert ChatGPT. Dans le tableau de bord, le sélecteur **Ajouter un fournisseur** ouvre le tableau de bord du
 fournisseur à clé, valide la clé et l'enregistre ; la validation dépend du fournisseur. Parmi les entrées notables :
 
 **ClinePass** utilise une clé API Cline avec le [catalogue d'abonnement officiel](https://docs.cline.bot/getting-started/clinepass)
@@ -364,7 +365,7 @@ promotionnels de Cline ne sont accessibles que dans l'IDE ou la CLI Cline, pas p
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
 | Zhipu AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
-| [BigModel Coding Plan — Responses (liste statique)](/guides/providers/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
+| [BigModel Coding Plan — Responses (liste statique)](/guides/api-key-catalog/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
 | Qwen Cloud | Forfait à jetons (par défaut) : `https://token-plan.maas.qwencloudapi.com/compatible-mode/v1` · Facturation à l'usage : `https://dashscope.aliyuncs.com/compatible-mode/v1` · ou personnalisé |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |

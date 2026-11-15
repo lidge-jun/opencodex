@@ -37,7 +37,7 @@ const VALIDATE_TIMEOUT_MS = 10_000;
 /**
  * Shown BEFORE any credential is read.
  *
- * `login-cli.ts` passes `onProgress` straight to `console.log` and never reads the
+ * `login-cli.ts` turns `onProgress` into a prefixed `console.log` line and never reads the
  * registry note, so this is the CLI's only warning surface. The GUI ignores it because
  * `OAuthTosWarningModal` has already been acknowledged by then.
  */

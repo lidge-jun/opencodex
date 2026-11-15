@@ -272,8 +272,8 @@ describe("checked Windows stop, part A", () => {
     });
     const result = await stopWindowsServiceChecked(h.deps);
     expect(result.outcome).toBe("survived");
-    expect(mutations(h.calls)).toEqual(["winsw-stop"]);
-    expect(h.calls).not.toContain("enumerate");
+    expect(mutations(h.calls)).toEqual(["winsw-stop", "terminate:30", "terminate:20"]);
+    expect(h.calls).toContain("enumerate");
   });
 
   test("WinSW: an SCM state that never reports stopped is unknown after <stoptimeout> + 2 s", async () => {
@@ -383,7 +383,8 @@ describe("checked Windows stop, part A", () => {
     let checks = 0;
     const error = await guardedStopWindowsServiceChecked(() => {
       checks += 1;
-      if (checks === 3) throw new Error("respawned runtime");
+      // Entry, before /end, before terminate:30, before terminate:20.
+      if (checks === 4) throw new Error("respawned runtime");
     }, h.deps).catch(caught => caught);
     expect(error).toBeInstanceOf(WindowsCheckedStopRefusedError);
     expect((error as WindowsCheckedStopRefusedError).partial.terminated).toEqual([30]);
@@ -391,9 +392,35 @@ describe("checked Windows stop, part A", () => {
   });
 });
 
+describe("the updater's authorizer guards each manager stop", () => {
+  test("a refusal right before /end sends no /end and changes nothing", async () => {
+    const h = harness();
+    let checks = 0;
+    const error = await guardedStopWindowsServiceChecked(() => {
+      checks += 1;
+      if (checks === 2) throw new Error("service home changed");
+    }, h.deps).catch(caught => caught);
+    expect(error).toBeInstanceOf(WindowsCheckedStopRefusedError);
+    expect((error as WindowsCheckedStopRefusedError).partial.changed).toBe(false);
+    expect(mutations(h.calls)).toEqual([]);
+  });
+
+  test("a refusal right before the WinSW stop sends no stop and changes nothing", async () => {
+    const h = harness({ probeScheduler: () => ({ status: "absent" }), probeWinsw: () => "started" as WinswStatus });
+    let checks = 0;
+    const error = await guardedStopWindowsServiceChecked(() => {
+      checks += 1;
+      if (checks === 2) throw new Error("service home changed");
+    }, h.deps).catch(caught => caught);
+    expect(error).toBeInstanceOf(WindowsCheckedStopRefusedError);
+    expect((error as WindowsCheckedStopRefusedError).partial.changed).toBe(false);
+    expect(mutations(h.calls)).toEqual([]);
+  });
+});
+
 describe("checked Windows stop budget", () => {
   test("admission minimums with default settings", () => {
-    // 030's 48 / 56 / 42 s plus the 0.5 s closing sample part B can take past its window.
+    // The closing sample and WinSW's wrapper enumeration and termination are included.
     expect(windowsStopWorstCase({
       managers: { scheduler: true, winsw: false, stray: false }, enumerationReused: true, orphanDiscovery: false,
     }).totalMs).toBe(48_500);
@@ -402,7 +429,7 @@ describe("checked Windows stop budget", () => {
     }).totalMs).toBe(56_500);
     expect(windowsStopWorstCase({
       managers: { scheduler: false, winsw: true, stray: false }, enumerationReused: false, orphanDiscovery: true,
-    }).totalMs).toBe(42_500);
+    }).totalMs).toBe(50_500);
   });
 
   test("receipts, a longer shutdown and a longer WinSW stop timeout grow the worst case", () => {
@@ -412,7 +439,7 @@ describe("checked Windows stop budget", () => {
     expect(windowsStopWorstCase({
       managers: { scheduler: false, winsw: true, stray: false }, enumerationReused: false, orphanDiscovery: false,
       winswStopTimeoutMs: 30_000,
-    }).rows.find(row => row.step === "part-a")!.ms).toBe(35_000);
+    }).rows.find(row => row.step === "part-a")!.ms).toBe(43_000);
     expect(windowsStopWorstCase({ ...base, partB: false }).rows.map(row => row.step)).not.toContain("part-b");
   });
 

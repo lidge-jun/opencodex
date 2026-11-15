@@ -222,7 +222,8 @@ Inline JSON и лишние позиционные аргументы откло
 
 ## 3. Каталог API-ключей
 
-opencodex поставляется с 108 встроенными пресетами: 86 на основе ключей, 18 OAuth, три локальных иодин пресет ChatGPT-форварда по умолчанию. Селектор **Add provider** в дашборде открывает страницу
+opencodex поставляется с 109 встроенными пресетами: 87 на основе ключей, 18 OAuth, три локальных и
+один пресет ChatGPT-форварда по умолчанию. Селектор **Add provider** в дашборде открывает страницу
 выдачи ключей провайдера, проверяет ключ и сохраняет его; проверка зависит от провайдера.
 Наиболее заметные записи:
 
@@ -276,7 +277,7 @@ opencodex поставляется с 108 встроенными пресета�
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
 | Zhipu AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
-| [BigModel Coding Plan — Responses (статический список)](/guides/providers/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
+| [BigModel Coding Plan — Responses (статический список)](/guides/api-key-catalog/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
 | Qwen Cloud | Token plan (по умолчанию): `https://token-plan.maas.qwencloudapi.com/compatible-mode/v1` · Pay as you go: `https://dashscope.aliyuncs.com/compatible-mode/v1` · или Custom |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |

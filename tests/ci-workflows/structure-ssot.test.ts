@@ -3,6 +3,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { loadManifest, renderIndex, runStructureChecks, writeGeneratedIndex, type Manifest } from "../../scripts/structure-ssot";
+import { fixtureGitEnv } from "../helpers/git-fixture";
 import { repoRoot } from "../helpers/repo-root";
 
 /**
@@ -117,13 +118,13 @@ const fires = (root: string, needle: string): void => {
  */
 function gitScaffold(): string {
   const root = scaffold();
-  expect(Bun.spawnSync(["git", "init", "-q"], { cwd: root }).exitCode).toBe(0);
+  expect(Bun.spawnSync(["git", "init", "-q"], { cwd: root, env: fixtureGitEnv() }).exitCode).toBe(0);
   stage(root);
   return root;
 }
 
 function stage(root: string): void {
-  expect(Bun.spawnSync(["git", "add", "-A"], { cwd: root }).exitCode).toBe(0);
+  expect(Bun.spawnSync(["git", "add", "-A"], { cwd: root, env: fixtureGitEnv() }).exitCode).toBe(0);
 }
 
 describe("structure/ SSOT", () => {
@@ -533,7 +534,7 @@ describe("structure/ SSOT", () => {
     write(root, "src/alpha/scratch.ts", "export const scratch = 1;\n");
     write(root, "structure/overview.md", body + "\nAlso " + BT + "src/alpha/scratch.ts" + BT + ".\n");
     // overview.md is staged so the reference is read; scratch.ts deliberately is not.
-    expect(Bun.spawnSync(["git", "add", "structure/overview.md"], { cwd: root }).exitCode).toBe(0);
+    expect(Bun.spawnSync(["git", "add", "structure/overview.md"], { cwd: root, env: fixtureGitEnv() }).exitCode).toBe(0);
     fires(root, "names src/alpha/scratch.ts, which this tree does not have");
   });
 
@@ -593,10 +594,12 @@ describe("structure/ SSOT", () => {
 
   // The seam-level tests above prove the helper; these two drive the real CLI tail, which is
   // where the original bug lived (parse + cast + render before validation). The script is
-  // copied into the scaffold so its import.meta.dir resolves to the synthetic root.
+  // copied into the scaffold, with the one module it imports, so its import.meta.dir resolves to
+  // the synthetic root.
   function scaffoldCli(root: string): void {
     mkdirSync(join(root, "scripts"), { recursive: true });
     copyFileSync(join(repoRoot(), "scripts/structure-ssot.ts"), join(root, "scripts/structure-ssot.ts"));
+    copyFileSync(join(repoRoot(), "scripts/git-repository-env.ts"), join(root, "scripts/git-repository-env.ts"));
   }
 
   test("CLI --fix fails malformed contracts with a named diagnostic and an unchanged index", () => {

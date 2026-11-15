@@ -646,7 +646,8 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
       ingressForServer,
       loopbackRouteAllowed,
       managementIngressRouteAllowed,
-      linkRouteAllowed: optionalListeners.linkRouteAllowed, linkPolicy, onAuthenticatedCatalog: optionalListeners.notifyAuthenticatedCatalog,
+      linkRouteAllowed: optionalListeners.linkRouteAllowed, linkPolicy,
+      onAuthenticatedCatalog: (apiKeyId, routeProofId) => { optionalListeners.notifyAuthenticatedCatalog(apiKeyId, routeProofId); deps.observeAuthenticatedCatalog?.(apiKeyId, routeProofId); },
       packageTreeChangedResponse,
       serverBusyResponse,
       runAdmittedHttpTurn,
@@ -713,7 +714,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     }
     configureInboundBodyBudget(config.maxConcurrentInboundBodyBytes);
     optionalListeners.start({ config, publicPort: server.port ?? listenPort, requestedPort: listenPort, startProxy: deps.startClaudeInterceptProxy,
-      maxRequestBodySize: inboundBodyLimitBytes, dispatch: (req, requestServer) => serveOptions.fetch(req, requestServer) });
+      maxRequestBodySize: inboundBodyLimitBytes, dispatch: (req, requestServer) => serveOptions.fetch(req, requestServer), websocket: serveOptions.websocket, linkPolicy });
   } catch (error) {
     unregisterQuotaAutoRefresh?.();
     unregisterAnthropicCooldownRecovery?.();
@@ -835,6 +836,10 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
       .then(({ primeCodexPoolQuotas }) => primeCodexPoolQuotas(config, "startup"))
       .catch(() => {}));
   }
+
+  // Remote Link (lane O2): after an upgrade of a packaged install, cache the ocx-child builds its package's digests
+  // vouch for. Background work that never delays listen; until a release ships digests it fetches nothing and only creates ocx-child-builds/ with its baseline marker.
+  if ((config.runtimeRole ?? "standalone") !== "client") void trackBackgroundWork("ocx-child-cache-fill", import("../link/child-binary-cache-start").then(fill => fill.startChildBinaryCacheFill(config.runtimeRole)).catch(() => {}));
 
   // Opt-in storage policy (default OFF). Never blocks listen; cancellable on shutdown.
   backgroundLifecycle.scheduleStartupRun();

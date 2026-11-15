@@ -143,6 +143,7 @@ test("desktop compatibility deep link mounts only its read-only status surface",
   testWindow.location.hash = "#codex-set/desktop";
   const calls = stubRoutes(call => json(call.url.endsWith("/settings") ? { ok: true, settings: { startOnProxyStart: false, revision: "a".repeat(64) } } : call.url.endsWith("/certificate")
     ? { ok: true, certificate: { supported: true, state: "missing", busy: null } }
+    : call.url.endsWith("/authorization") ? { ok: true, supported: false, authorized: false }
     : { ok: true, runtime: { supported: true, phase: "off", running: false } }));
   const { container, root } = await mountShell("/shared", "/machine");
   expect(hashBelongsToPage("codex-set/desktop", "codex-set")).toBe(true);
@@ -151,7 +152,7 @@ test("desktop compatibility deep link mounts only its read-only status surface",
   expect(panel(container, "multiauth")).toBeNull(); expect(panel(container, "prompt")).toBeNull();
   expect(new Set(calls.map(call => call.url))).toEqual(new Set([
     "/machine/api/codex/desktop-compatibility/settings", "/machine/api/codex/desktop-compatibility/certificate",
-    "/machine/api/codex/desktop-compatibility/runtime",
+    "/machine/api/codex/desktop-compatibility/authorization", "/machine/api/codex/desktop-compatibility/runtime",
   ]));
   expect(calls.every(call => call.method === "GET" && call.url.startsWith("/machine/api/codex/desktop-compatibility/"))).toBe(true);
   await act(async () => { root.unmount(); });

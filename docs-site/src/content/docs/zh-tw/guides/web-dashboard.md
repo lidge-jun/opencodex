@@ -17,6 +17,11 @@ ocx gui
 
 ```bash
 ocx start
+```
+
+讓代理在該終端中持續執行。在第二個終端中啟動 GUI 開發伺服器：
+
+```bash
 bun run dev:gui
 ```
 

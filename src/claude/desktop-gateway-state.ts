@@ -25,10 +25,12 @@ export function persistCommittedDesktopGateway(
   snapshot: OcxConfig,
   profile: DesktopProfile | undefined,
   fingerprint: string | undefined,
+  admit?: (current: OcxConfig) => boolean,
 ): { ok: true } | { ok: false; reason: "missing" | "invalid" | "conflict" | "unavailable" } {
   const appliedAt = new Date().toISOString();
   try {
     const outcome = mutatePersistedConfig(current => {
+      if (admit && !admit(current)) return { changed: false, value: null };
       if (JSON.stringify(current.claudeCode?.desktopProfile) !== JSON.stringify(profile)) {
         return { changed: false, value: null };
       }

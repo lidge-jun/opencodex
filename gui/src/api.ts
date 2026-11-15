@@ -526,6 +526,14 @@ export function hasRememberedDashboardDevice(plane: ApiPlane): boolean {
   catch { return false; }
 }
 
+/** Sensitive Desktop operations never enter renewal, admin fallback or POST replay. */
+export function fetchDesktopSession(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
+  if (!installed) return globalThis.fetch(input, init);
+  const state = runtime("machine"), url = new URL(input instanceof Request ? input.url : String(input), window.location.href);
+  if (!targetMatchesUrl(state.target, url)) return Promise.reject(new Error("desktop_target_changed"));
+  return fetchApiSessionValidation("machine", input, init);
+}
+
 function targetAbsoluteBase(target: ApiTarget): URL {
   return new URL(target.baseUrl || "/", window.location.href);
 }

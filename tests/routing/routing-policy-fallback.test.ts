@@ -1,4 +1,8 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 import { formatErrorResponse } from "../../src/bridge";
 import { isProxyError } from "../../src/lib/client-error-body";
@@ -13,6 +17,12 @@ import type { RouteDecisionTraceV1 } from "../../src/routing/trace";
 import { clearFallbackEventsForTests, recentFallbackEvents } from "../../src/routing/fallback-policy";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { parseSyntheticRowId } from "../../src/server/fast-row";
+import { boundEntryIdForLane, clearProviderCacheAffinityForTests, recordProviderCacheAffinity } from "../../src/providers/cache-affinity";
+import { finalizeProviderCacheAffinity } from "../../src/server/request-log-cache-affinity";
+import { currentCacheAffinityIdentity } from "../../src/providers/cache-affinity-identity";
+import { routedProviderConfig } from "../../src/providers/routed-config";
+import { stampApiKeyAccountLabel } from "../../src/providers/label";
+import { saveConfig } from "../../src/config";
 import {
   handleResponsesWithPolicyFallback,
   rankPolicyFallbackCandidates,
@@ -65,6 +75,51 @@ function seedAttempt(logCtx: RequestLogContext, provider: string, model: string)
 }
 
 describe("policy candidate fallback", () => {
+  let home: string;
+  let previousHome: string | undefined;
+  beforeEach(() => { previousHome = process.env.OPENCODEX_HOME; home = mkdtempSync(join(tmpdir(), "ocx-policy-fallback-")); process.env.OPENCODEX_HOME = home; });
+  afterEach(() => { if (previousHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previousHome; removeTreeWithRetry(home); });
+  test.each([401, 402, 429, "local"] as const)("synthetic failure attribution across candidates (%s)", async outcome => {
+    clearProviderCacheAffinityForTests();
+    const lane = "policy-terminal-source";
+    const providerName = outcome === "local" ? "provider-a" : "provider-b";
+    const config = fixtureConfig();
+    config.providers[providerName]!.apiKeyPool = [{ id: "a", key: "fixture-key" }, { id: "b", key: "other-key" }];
+    saveConfig(config);
+    recordProviderCacheAffinity({ lane, providerName, entryId: "a", identity: currentCacheAffinityIdentity(providerName, config.providers[providerName], "a"), model: outcome === "local" ? "model-a" : "model-b", cacheWrite: 4000 });
+    const log: RequestLogContext = { model: "model-a", provider: "provider-a", affinityLane: lane };
+    const trace = policyTrace();
+    trace.candidates[2]!.eligible = false;
+    let calls = 0;
+    const response = await handleResponsesWithPolicyFallback(request(), config, log, {}, {
+      runCore: async (req, _config, context, options) => {
+        options.onRequestBodyParsed?.(await req.json());
+        context.routeDecision = trace;
+        if (++calls === 1) {
+          context.terminalSource = "synthetic";
+          context.affinityProviderName = "provider-a";
+          context.affinityKeyEntryId = "a";
+          context.cacheAffinityApplicable = true;
+          if (outcome === "local") stampApiKeyAccountLabel(context, "provider-a", routedProviderConfig("provider-a", config.providers["provider-a"]!));
+          return Response.json({ error: { message: "local failure" } }, { status: outcome === "local" ? 429 : 503 });
+        }
+        if (outcome === "local") return policyCandidateRefusalResponse(new PolicyCandidateUnavailableError())!;
+        seedAttempt(context, "provider-b", "model-b");
+        noteAttemptSend(context.activeAttempt, undefined);
+        context.affinityProviderName = "provider-b";
+        context.affinityKeyEntryId = "a";
+        context.cacheAffinityApplicable = true;
+        stampApiKeyAccountLabel(context, "provider-b", routedProviderConfig("provider-b", config.providers["provider-b"]!));
+        return Response.json({ error: { message: "upstream refusal" } }, { status: outcome });
+      },
+    });
+    expect(calls).toBe(2);
+    expect(response.status).toBe(outcome === "local" ? 429 : outcome);
+    expect(log.terminalSource).toBe(outcome === "local" ? "synthetic" : undefined);
+    finalizeProviderCacheAffinity(log, response.status, undefined);
+    expect(boundEntryIdForLane(lane)).toBe(outcome === "local" ? "a" : undefined);
+    clearProviderCacheAffinityForTests();
+  });
   test.each([false, true])("upstream failure body settles when the next policy hop is refused=%s", async denied => {
     const config = fixtureConfig();
     if (denied) config.fallback = { routes: { "policy/daily": { provider: false } } };
@@ -272,7 +327,13 @@ describe("policy candidate fallback", () => {
     },
   );
 
-  for (const hardCode of ["upstream_no_response", "origin_rejected", "origin-rejected", " ORIGIN-REJECTED ", "cyber_policy"]) {
+  for (const hardCode of [
+    "upstream_no_response",
+    "origin_rejected",
+    "origin-rejected",
+    " ORIGIN-REJECTED ",
+    "cyber_policy",
+  ]) {
     test.each(["root", "nested"])(`policy preserves ${hardCode} at %s beside a competing code`, async location => {
       let calls = 0;
       const refusal = "The 'gpt-6-astra' model is not supported when using Codex with a ChatGPT account.";
@@ -386,6 +447,39 @@ describe("policy candidate fallback", () => {
       { authorization, chatgptAccountId: "sidecar-account" },
     ]);
     expect(snapshots[1]).toBe(snapshots[0]);
+  });
+  test("a policy hop does not persist the previous candidate's cache-affinity outcome", async () => {
+    const log: RequestLogContext = { model: "", provider: "" };
+    let calls = 0;
+    const response = await handleResponsesWithPolicyFallback(
+      request(),
+      fixtureConfig(),
+      log,
+      {},
+      {
+        runCore: async (req, _config, context, options) => {
+          options.onRequestBodyParsed?.(await req.json());
+          context.routeDecision = policyTrace();
+          if (++calls === 1) {
+            context.cacheAffinity = "kept";
+            context.cacheAffinityReason = "cache";
+            context.affinityKeptEntryId = "old-key";
+            context.cacheAffinityApplicable = true;
+            context.affinityKeyEntryId = "old-key";
+            return Response.json({ error: { message: "retry next candidate" } }, { status: 503 });
+          }
+          context.provider = "provider-b";
+          context.cacheAffinityApplicable = false;
+          return Response.json({ status: "completed" });
+        },
+      },
+    );
+    expect(response.status).toBe(200);
+    expect(calls).toBe(2);
+    expect(log.cacheAffinity).toBeUndefined();
+    expect(log.cacheAffinityReason).toBeUndefined();
+    expect(log.affinityKeptEntryId).toBeUndefined();
+    expect(log.affinityKeyEntryId).toBeUndefined();
   });
 
   test("ranks only eligible untried candidates by score and stable original order", () => {

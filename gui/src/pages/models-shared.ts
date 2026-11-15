@@ -2,6 +2,7 @@ import type { TFn, TKey } from "../i18n/shared";
 import type { ProviderDiscoverySummary } from "../models-groups";
 import { modelVisible, type ProviderModelMap } from "../model-visibility";
 import { formatNamespacedModelId } from "../provider-icons";
+import type { SubagentSurfaceMode } from "../subagent-surface";
 import type { ShadowCallSourceOption } from "./shadow-call-source";
 
 export type StorageLike = Pick<Storage, "getItem" | "setItem">;
@@ -156,10 +157,38 @@ export interface V2Status {
   enabled: boolean;
   agentsMaxThreadsConflict: boolean;
   maxConcurrentThreadsPerSession?: number | null;
-  multiAgentMode?: "v1" | "default" | "v2";
+  multiAgentMode?: SubagentSurfaceMode;
   keepNativeChatGptOnV1?: boolean;
   /** Response-only; absent on a runtime older than the v1-default advisory. */
   multiAgentSurfaceAdvisory?: unknown;
+  /** Response-only; absent on a runtime older than the 'v2-plaintext' mode. */
+  supportsPlaintextV2Mode?: boolean;
+  /**
+   * Response-only: the plaintext-delivery SETTING is on (the mode, or the legacy
+   * experimental flag). It does not prove any particular message left in plaintext —
+   * a request the compiler cannot safely rewrite is still sent unchanged.
+   */
+  plaintextAgentMessagesEnabled?: boolean;
+}
+
+/**
+ * Narrow a /api/v2 response into renderable state. Absent or unrecognised fields fall
+ * back to the pre-'v2-plaintext' shape, so an older runtime cannot produce a phantom
+ * option and a malformed mode cannot stick.
+ */
+export function normalizeV2Status(data: V2Status): V2Status {
+  return {
+    enabled: data.enabled,
+    agentsMaxThreadsConflict: data.agentsMaxThreadsConflict === true,
+    maxConcurrentThreadsPerSession: typeof data.maxConcurrentThreadsPerSession === "number" ? data.maxConcurrentThreadsPerSession : null,
+    multiAgentMode: data.multiAgentMode === "v1" || data.multiAgentMode === "v2" || data.multiAgentMode === "v2-plaintext"
+      ? data.multiAgentMode
+      : "default",
+    keepNativeChatGptOnV1: data.keepNativeChatGptOnV1 === true,
+    multiAgentSurfaceAdvisory: data.multiAgentSurfaceAdvisory,
+    supportsPlaintextV2Mode: data.supportsPlaintextV2Mode === true,
+    plaintextAgentMessagesEnabled: data.plaintextAgentMessagesEnabled === true,
+  };
 }
 
 export interface ShadowCallData {

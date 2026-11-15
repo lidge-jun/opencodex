@@ -9,8 +9,8 @@ description: マルチエージェント サーフェス、委任ガイダンス
 
 |フィールド |タイプ |デフォルト |意味 |
 | --- | --- | --- | --- |
-| `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` はすべてのカタログ モデルを v1 としてスタンプします。 `v2` はすべてのモデルを v2 としてスタンプします。 `default` はアップストリーム ピン (Sol/Terra v2、Luna v1) を復元し、それ以外の場合はネイティブの `multi_agent_v2` フラグに従います。新しいセッションに適用されます。 |
-| `subagentModels?` | `string[]` | `gpt-6-astra`、`gpt-6.1-sol`、`gpt-6-luna` |最大 5 つの bare native id、account-qualified `<selector>/<native-openai-model>` id、または routed `provider/model` id をサブエージェント ピッカーで優先表示します。Subagents ページで選べるのは bare native id と routed id だけで、保存時には exact account-qualified の選択が除外されます。exact の選択には `ocx agent subagents set` を使用するか、設定を直接編集してください。[Astra への一度限りの移行](/reference/configuration/agents/#astra-roster-upgrade)後は、明示的な空リストも保持されます。 |
+| `multiAgentMode?` | `"v1" \| "default" \| "v2" \| "v2-plaintext"` | `"default"` | `v1` はすべてのカタログ モデルを v1 としてスタンプします。 `v2` はすべてのモデルを v2 としてスタンプします。 `default` はアップストリーム ピン (Sol/Terra v2、Luna v1) を復元し、それ以外の場合はネイティブの `multi_agent_v2` フラグに従います。`v2-plaintext` は新しいセッションのカタログを V2 に固定し、グローバル強制を無効にして対象タスクを平文にコンパイルします。有効なコンパイルは既存 V2 セッションの後続の対象リクエストにも適用されます。開始には `--acknowledge-plaintext-agent-messages` が必要です。 |
+| `subagentModels?` | `string[]` | `gpt-6-astra`、`gpt-6.1-sol`、`gpt-6-luna` | 最大 5 つの bare native id、account-qualified `<selector>/<native-openai-model>` id、または routed `provider/model` id をサブエージェントの選択欄に優先表示します。新しく選べるのは bare native id と routed id です。保存時には、現在のカタログにないものも含め、設定済みの正確な account-qualified id を保持します。新しい正確な account-qualified id を追加するには `ocx agent subagents set` を使うか設定を編集してください。[Astra への一度限りの移行](/reference/configuration/agents/#astra-roster-upgrade)後は明示的な空リストも保持されます。 |
 | `injectionModel?` | `string` | — |プロキシ作成の v2 委任ガイダンスで使用される、優先されるネイティブまたはルーティングされたサブエージェント モデル。 |
 | `injectionEffort?` | `string` | — |優先努力 (`low` ～ `ultra`)。`injectionModel` でのみ意味があります。 |
 | `injectionPrompt?` | `string` | — | 組み込みの v2 ガイダンス本文を置き換えます。`{{model}}`、`{{effort}}`、`{{roster}}`、`{{fallback}}`をサポートします。`injectionModel` が設定されていればカスタムプロンプトが生成されます。 |
@@ -21,14 +21,15 @@ description: マルチエージェント サーフェス、委任ガイダンス
 | `subagentModelFallbackPollMs?` | `number` | `60000` |可用性プローブのキャッシュ間隔。 1000 ミリ秒未満の値はデフォルトに戻ります。 |
 | `effortCap?` | `string` | — | v2 のメイン ターンとマークされた子ターンの条件を満たすためのハード シーリング。 `low` ～ `ultra` を受け入れます。 |
 | `subagentEffortCap?` | `string` | — |スポーンされた子のターンのみの追加の上限。両方の上限が適用される場合は、低い方が優先されます。 |
+| `plaintextV2AgentMessages?` | `boolean` | — (未設定) | 実験的なオプトイン。明示的な `true` または `multiAgentMode: "v2-plaintext"` で、対象の ChatGPT ネイティブ V2 親に `spawn_agent`、`send_message`、`followup_task` のメッセージ引数を平文で出力させます。[詳細](#plaintext-v2-agent-messages)を参照してください。 |
 
-ダッシュボードまたは `ocx v2 status|on|off|mode <v1|default|v2>|threads <n>` でサーフェスを管理します。モードの変更は新しいセッションに適用されます。 `maxConcurrentThreadsPerSession` は `PUT /api/v2` フィールドであり、`config.json` キーではありません。 `ocx v2 threads <n>` は、v2 が有効になった後、Codex の `$CODEX_HOME/config.toml` の `[features.multi_agent_v2]` の下に `max_concurrent_threads_per_session` を書き込みます。
+ダッシュボードまたは `ocx v2 status|on|off|mode <v1|default|v2|v2-plaintext>|threads <n>` でサーフェスを管理します。カタログのピンの変更は新しいセッションに適用されます。 `maxConcurrentThreadsPerSession` は `PUT /api/v2` フィールドであり、`config.json` キーではありません。 `ocx v2 threads <n>` は、v2 が有効になった後、Codex の `$CODEX_HOME/config.toml` の `[features.multi_agent_v2]` の下に `max_concurrent_threads_per_session` を書き込みます。
 
-管理 API は、`GET`/`PUT /api/v2`、`/api/injection-model`、`/api/effort-caps`、`/api/subagent-models`、および `/api/subagent-model-fallback` を公開します。インジェクションモデルの更新は部分的です。カスタム プロンプトは、その API の `prompt` フィールドです。
+管理 API は、`GET`/`PUT /api/v2`、`/api/injection-model`、`/api/effort-caps`、`/api/subagent-models`、および `/api/subagent-model-fallback` を公開します。`PUT /api/v2` で新たに `v2-plaintext` に入るには `plaintextAgentMessagesAcknowledged: true` が必要です。インジェクションモデルの更新は部分的です。カスタム プロンプトは、その API の `prompt` フィールドです。
 
 ## 常時プロアクティブ委任
 
-Subagents → 詳細設定の **常時プロアクティブ委任**（旧 **Ultra mode**）は、推論のエフォートを変更せず、委任を開始する条件だけを変更します。推奨プリセットでも、ユーザーの指示、権限の境界、タスクの範囲、ツールの規則は維持されます。
+Subagents → 詳細設定の **常時プロアクティブ委任**（旧 **Ultra mode**）は、推論のエフォートを変更せず、委任を開始する条件だけを変更します。有効化にはグローバル V2 が有効な `v2` モードまたは `v2-plaintext` モードとサーバーの推奨値が必要です。既存ヒントの解除は V2 が無効でも可能です。推奨プリセットでも、ユーザーの指示、権限の境界、タスクの範囲、ツールの規則は維持されます。
 
 `GET` と `PUT /api/v2` は、追加で `multiAgentModeHintRecommendation: { text, revision }` を返します。ダッシュボードはプリセットの有効化と復元にサーバー提供のテキストを使い、固定文へのフォールバックは行いません。旧サーバーが推奨値を返さない場合や値の形式が不正な場合、プリセットの適用と復元は利用できませんが、既存のカスタムヒントの編集と削除は引き続き利用できます。プリセットの復元はローカルの下書きだけを変更し、保存操作で確定します。
 
@@ -68,18 +69,24 @@ opencodex は、無効、ルーティング不能、異常、冷却期間、ま�
 ```json
 {
   "multiAgentMode": "v2",
-  "subagentModels": ["gpt-5.5", "anthropic/claude-sonnet-5"],
-  "injectionModel": "gpt-5.5",
+  "subagentModels": ["gpt-6.1-sol", "anthropic/claude-sonnet-5"],
+  "injectionModel": "gpt-6.1-sol",
   "injectionEffort": "high",
   "syncCodexSubagentDefaults": true,
-  "subagentModelFallback": ["gpt-5.6-luna"],
+  "subagentModelFallback": ["gpt-6-luna"],
   "subagentModelFallbackByModel": {
-    "gpt-5.5": ["gpt-5.6-luna"]
+    "gpt-6.1-sol": ["gpt-6-luna"]
   },
   "subagentModelFallbackPollMs": 60000,
   "subagentEffortCap": "high"
 }
 ```
+
+## Plaintext v2 agent messages
+
+`plaintextV2AgentMessages` は新規設定では未設定です。明示的な `true` または独立した `multiAgentMode: "v2-plaintext"` で実験的な平文コンパイラーを有効にできます。後者はグローバル V2 強制を無効にしてカタログを V2 に固定します。ダッシュボードの確認、または `ocx v2 mode v2-plaintext --live --acknowledge-plaintext-agent-messages` で入ります。モードは独立した真偽値を上書きせず、退出後はその元の設定に従います。
+
+コンパイラーは既存 V2 セッションの後続リクエストを含む、条件を満たす正規 ChatGPT リクエストに現在の設定を適用します。呼び出し元は Responses を使い、最終送信先は `adapter: "openai-responses"`、`authMode: "forward"`、正確なベース URL `https://chatgpt.com/backend-api/codex` を使う必要があります。OpenAI API キーのプロバイダー、独自ゲートウェイ、他のプロバイダーへのルート、非 Responses 呼び出しは対象外です。既存の暗号文は復号せず、保存済み履歴も書き換えません。無効化しても履歴、プロバイダーへのリクエスト、ローカル応答・デバッグ状態に保持されたコピーは削除されません。HTTPS は維持されます。[英語版の詳細](/reference/configuration/agents/#plaintext-v2-agent-messages)を参照してください。
 
 ## 推論負荷上限
 

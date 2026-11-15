@@ -114,7 +114,7 @@ mock.module("../../src/server/adapter-resolve", () => ({
   },
 }));
 
-const { handleResponses } = await import("../../src/server/responses");
+const { handleOwnedResponses: handleResponses } = await import("../helpers/response-replay-owner");
 
 describe("terminal continuation provider-owner rotation", () => {
   let originalFetch: typeof fetch;
@@ -188,7 +188,7 @@ describe("terminal continuation provider-owner rotation", () => {
     const post = (body: Record<string, unknown>) => handleResponses(
       new Request("http://localhost/v1/responses", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", "thread-id": "terminal-key-rotation" },
         body: JSON.stringify(body),
       }),
       config,
@@ -256,7 +256,7 @@ describe("terminal continuation provider-owner rotation", () => {
       { key: keyA },
       { key: keyA, continuation: "private-a" },
       { key: keyA, continuation: "private-a" },
-      { key: keyB },
+      { key: keyB, stripReasoning: true },
       { key: keyB, continuation: "private-b" },
     ]);
     expect(phases).toEqual([]);

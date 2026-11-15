@@ -8,6 +8,7 @@ import {
   codexAccountModelRefusalHardStopCode,
   isMalformedResponseFormatRequest,
   isOpenRouterOpaque400Envelope,
+  isProviderModerationRefusal,
   upstreamEnvelopeRootCode,
   type CodexAccountModelRefusal,
 } from "../../combos/failover";
@@ -66,6 +67,7 @@ export async function consumeComboFailure(
   let codexModelRefusal: CodexAccountModelRefusal | undefined;
   let malformedResponseFormat: boolean | undefined;
   let openRouterOpaque400: boolean | undefined;
+  let providerModerationRefusal: boolean | undefined;
   let usage: OcxUsage | undefined;
   let upstreamCode: string | undefined;
   let upstreamRootCode: string | undefined;
@@ -106,6 +108,11 @@ export async function consumeComboFailure(
         codexModelRefusal = codexAccountModelRefusal(response.status, body.text);
         malformedResponseFormat = isMalformedResponseFormatRequest(response.status, body.text);
         openRouterOpaque400 = isOpenRouterOpaque400Envelope(body.text);
+      }
+      // Judged on the whole body: the classification text below is cut at 500 characters, and a
+      // hard refusal after the cut must still veto a moderation hop.
+      if (response.status === 400 || response.status === 422) {
+        providerModerationRefusal = isProviderModerationRefusal(response.status, body.text, undefined, true);
       }
       // Status-independent: the nested record is what normalization selects, so a root verdict
       // beside it has to be captured here or the conflict rule never sees it.
@@ -189,6 +196,7 @@ export async function consumeComboFailure(
     ...(codexModelRefusal !== undefined ? { codexModelRefusal } : {}),
     ...(malformedResponseFormat !== undefined ? { malformedResponseFormat } : {}),
     ...(openRouterOpaque400 !== undefined ? { openRouterOpaque400 } : {}),
+    ...(providerModerationRefusal !== undefined ? { providerModerationRefusal } : {}),
     ...(normalizedUpstreamCode !== undefined ? { upstreamCode: normalizedUpstreamCode } : {}),
     // A rewritten identity (policy, replay refusal) is the whole verdict; the root's own code
     // would only re-open a decision that rewrite already settled.
