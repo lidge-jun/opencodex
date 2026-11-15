@@ -332,9 +332,10 @@ describe("claude-cli child environment carries no credential and no proxy destin
       const env = buildChildEnv(CLAUDE_CLI_PROFILE, "");
       expect(env.USER).toBe("ocx-probe-user");
       // Derived from the two owners rather than restated, so a new quiet flag cannot silently
-      // become the third thing this environment carries.
+      // become the third thing this environment carries. CLAUDE_CODE_ENTRYPOINT is the one
+      // deliberate addition: it labels the turn as opencodex (anthropics/claude-code#97074).
       expect(Object.keys(env).sort()).toEqual(
-        [...new Set([...Object.keys(baseScopedEnv()), ...Object.keys(CLAUDE_CLI_QUIET_ENV), "USER"])].sort(),
+        [...new Set([...Object.keys(baseScopedEnv()), ...Object.keys(CLAUDE_CLI_QUIET_ENV), "CLAUDE_CODE_ENTRYPOINT", "USER"])].sort(),
       );
     } finally {
       if (previous === undefined) delete process.env.USER;
