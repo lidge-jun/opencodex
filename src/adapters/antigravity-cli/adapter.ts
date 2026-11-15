@@ -415,25 +415,32 @@ export function readCapturedMcpCalls(
   }
   const used = new Set<number>();
   const matchedPending = new Set<number>();
+  const matchedErrored = new Set<number>();
   const activeErrored = (errored ?? []).filter(e => !e.alreadyConsumed && e.canClaimCapture);
   const ordered = [
-    ...pending.map((item, idx) => ({ kind: "pending" as const, pendingIdx: idx, order: item.issueOrder ?? (idx + 1), item })),
-    ...activeErrored.map(item => ({ kind: "errored" as const, pendingIdx: -1, order: item.issueOrder, item })),
+    ...pending.map((item, idx) => ({ kind: "pending" as const, idx, order: item.issueOrder ?? (idx + 1), item })),
+    ...activeErrored.map((item, idx) => ({ kind: "errored" as const, idx, order: item.issueOrder, item })),
   ].sort((a, b) => a.order - b.order);
-  for (const entry of ordered) {
-    const argsJson = entry.item.fallbackArgumentsJson;
-    if (!argsJson) continue;
-    const matching = calls.flatMap((c, i) => (
-      availableIndices.has(i) && !used.has(i) && c.name === entry.item.mcpAlias && stepCallMatchesCapture(argsJson, c.arguments) ? [i] : []
-    ));
-    if (matching.length === 0) continue;
-    if (entry.kind === "errored") {
-      const rem = pending.filter((p, idx) => !matchedPending.has(idx) && p.mcpAlias === entry.item.mcpAlias && p.fallbackArgumentsJson === argsJson).length;
-      if (matching.length <= rem) continue;
-    } else {
-      matchedPending.add(entry.pendingIdx);
+  for (const allowPrefix of [false, true]) {
+    for (const entry of ordered) {
+      if (entry.kind === "pending" ? matchedPending.has(entry.idx) : matchedErrored.has(entry.idx)) continue;
+      const argsJson = entry.item.fallbackArgumentsJson;
+      if (!argsJson) continue;
+      const matching = calls.flatMap((c, i) => (
+        availableIndices.has(i) && !used.has(i) && c.name === entry.item.mcpAlias && stepCallMatchesCapture(argsJson, c.arguments, allowPrefix) ? [i] : []
+      ));
+      if (matching.length === 0) continue;
+      if (entry.kind === "errored") {
+        const rem = pending.filter(
+          (p, pIdx) => !matchedPending.has(pIdx) && p.mcpAlias === entry.item.mcpAlias && Boolean(p.fallbackArgumentsJson) && matching.some(i => stepCallMatchesCapture(p.fallbackArgumentsJson!, calls[i]!.arguments, allowPrefix)),
+        ).length;
+        if (matching.length <= rem) continue;
+        matchedErrored.add(entry.idx);
+      } else {
+        matchedPending.add(entry.idx);
+      }
+      used.add(matching[0]!);
     }
-    used.add(matching[0]!);
   }
   for (let pIdx = 0; pIdx < pending.length; pIdx++) {
     if (matchedPending.has(pIdx)) continue;
@@ -1596,6 +1603,7 @@ export function createAntigravityCliAdapter(
           targetTranscriptBlocks: string[],
           allowPreludeRetry: boolean,
           recoveryForSend?: AttemptRecoveryKind,
+          preserveQueuedFrames = false,
         ): Promise<{
           retryOnFreshSession: boolean;
           transientPreludeError?: Extract<AdapterEvent, { type: "error" }>;
@@ -1680,7 +1688,7 @@ export function createAntigravityCliAdapter(
           let preDispatchErr: unknown;
           let streamErr: unknown;
           let outcome: ConsumeAntigravityFramesResult | undefined;
-          session.markTurnStart();
+          session.markTurnStart(preserveQueuedFrames);
           try {
             try {
               admitAndFencePhysicalSend(
@@ -1890,6 +1898,8 @@ export function createAntigravityCliAdapter(
             },
             match.nextTranscriptBlocks,
             preludeRetriesUsed < maxPreludeRetries,
+            undefined,
+            match.dispatchKind === "tool_results",
           );
           if (!res.retryOnFreshSession) return;
           nextReplacementRecovery = res.recoveryKind ?? "connection-reset";

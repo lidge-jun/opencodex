@@ -1219,6 +1219,36 @@ describe("antigravity-cli Stage 3 schema pre-sanitization & Stage 4 F13/F19 usag
       expect(lateFlushErrState.flushedToolCalls.map(c => c.seq)).toEqual([2]);
       expect(lateFlushErrState.consumedCaptureSeqs.has(1)).toBe(true);
       expect(lateFlushErrState.consumedCaptureSeqs.has(2)).toBe(true);
+
+      // 7. Exact match wins before `…`-truncated prefix match even when truncated call was issued earlier and captures landed out of order
+      const sharedPrefix = "a".repeat(512);
+      writeFileSync(capFile, `${JSON.stringify({ seq: 1, name: "read_file", arguments: { path: sharedPrefix } })}\n`);
+      const prefixRaceState = createAntigravityStreamState(undefined, { deferToolCallEmission: true, turnDir: dir, minCaptureSeq: 1 });
+      mapAntigravityStreamFrame({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } }, prefixRaceState, bridge);
+      mapAntigravityStreamFrame(
+        { event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: `${sharedPrefix}…` } } } },
+        prefixRaceState,
+        bridge,
+      );
+      mapAntigravityStreamFrame(
+        { event: "step_update", step_update: { step_index: 2, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: sharedPrefix } } } },
+        prefixRaceState,
+        bridge,
+      );
+      // Only Step 2's exact capture (seq: 1) is on disk so far -> Step 1 must NOT steal seq: 1 via prefix match (`ready: false`)
+      expect(readCapturedMcpCalls(capFile, prefixRaceState.pendingBridgedToolCalls, 1).ready).toBe(false);
+      writeFileSync(
+        capFile,
+        `${JSON.stringify({ seq: 1, name: "read_file", arguments: { path: sharedPrefix } })}\n${JSON.stringify({ seq: 2, name: "read_file", arguments: { path: `${sharedPrefix}-tail` } })}\n`,
+      );
+      const prefixRaceReady = readCapturedMcpCalls(capFile, prefixRaceState.pendingBridgedToolCalls, 1);
+      expect(prefixRaceReady.ready).toBe(true);
+      const prefixRaceFlushed = flushAntigravityBridgedToolCalls(prefixRaceState, prefixRaceReady.calls);
+      expect(prefixRaceFlushed.filter(e => e.type === "tool_call_delta")).toEqual([
+        { type: "tool_call_delta", arguments: JSON.stringify({ path: `${sharedPrefix}-tail` }) },
+        { type: "tool_call_delta", arguments: JSON.stringify({ path: sharedPrefix }) },
+      ]);
+      expect(prefixRaceState.flushedToolCalls.map(c => c.seq)).toEqual([2, 1]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -1427,8 +1457,9 @@ describe("antigravity-cli Stage 3 schema pre-sanitization & Stage 4 F13/F19 usag
       const parked1 = lateT1.find(e => e.type === "tool_call_start") as Extract<AdapterEvent, { type: "tool_call_start" }>;
       expect(lateT1.filter(e => e.type === "tool_call_delta")).toEqual([{ type: "tool_call_delta", arguments: JSON.stringify({ path: "call1.md" }) }]);
 
-      const cwd = childRef!.proc.cwd;
-      const lateT2Promise = execTurn(adapter, makeParsedRequest({
+      // Emit Call 2's ACTIVE frame while parked in `awaiting_tool_results` BEFORE starting the continuation
+      childRef!.emit({ event: "step_update", step_update: { step_index: 2, state: "ACTIVE", step_type: "tool", tool_name: bridgedName, tool_info: { name: bridgedName, parameters: { path: "call2-early-disk.md" } } } });
+      const lateT2 = await execTurn(adapter, makeParsedRequest({
         context: {
           messages: [
             { role: "user", content: "both", timestamp: 0 },
@@ -1438,9 +1469,6 @@ describe("antigravity-cli Stage 3 schema pre-sanitization & Stage 4 F13/F19 usag
           tools: [toolDef],
         },
       }));
-      await waitFor(() => existsSync(join(cwd, "tool-results.jsonl")) && readFileSync(join(cwd, "tool-results.jsonl"), "utf8").includes('"seq":1'));
-      childRef!.emit({ event: "step_update", step_update: { step_index: 2, state: "ACTIVE", step_type: "tool", tool_name: bridgedName, tool_info: { name: bridgedName, parameters: { path: "call2-early-disk.md" } } } });
-      const lateT2 = await lateT2Promise;
       expect(lateT2.filter(e => e.type === "tool_call_delta")).toEqual([
         { type: "tool_call_delta", arguments: JSON.stringify({ path: "call2-early-disk.md" }) },
       ]);

@@ -358,8 +358,8 @@ export class WarmAntigravitySession {
     this.wakeConsumer();
   }
 
-  markTurnStart(): void {
-    this.frameQueue.length = 0;
+  markTurnStart(preserveQueuedFrames = false): void {
+    if (!preserveQueuedFrames) this.frameQueue.length = 0;
     this.stderrTurnOffset = this.stderrBuffer.length;
     this.turnStderrTail = "";
     this.lastUsedAt = Date.now();

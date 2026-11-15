@@ -1039,25 +1039,25 @@ export function createAntigravityStreamState(
   };
 }
 
-export function antigravityStepParamsMatchCapture(stepVal: unknown, captureVal: unknown): boolean {
+export function antigravityStepParamsMatchCapture(stepVal: unknown, captureVal: unknown, allowPrefix = true): boolean {
   if (typeof stepVal === "string" && typeof captureVal === "string") {
-    return stepVal === captureVal || (stepVal.endsWith("…") && stepVal.length > 1 && captureVal.startsWith(stepVal.slice(0, -1)));
+    return stepVal === captureVal || (allowPrefix && stepVal.endsWith("…") && stepVal.length > 1 && captureVal.startsWith(stepVal.slice(0, -1)));
   }
   if (Array.isArray(stepVal) && Array.isArray(captureVal)) {
-    return stepVal.length === captureVal.length && stepVal.every((item, idx) => antigravityStepParamsMatchCapture(item, captureVal[idx]));
+    return stepVal.length === captureVal.length && stepVal.every((item, idx) => antigravityStepParamsMatchCapture(item, captureVal[idx], allowPrefix));
   }
   if (stepVal && captureVal && typeof stepVal === "object" && typeof captureVal === "object" && !Array.isArray(stepVal) && !Array.isArray(captureVal)) {
     const sObj = stepVal as Record<string, unknown>;
     const cObj = captureVal as Record<string, unknown>;
     const sKeys = Object.keys(sObj);
     return sKeys.length === Object.keys(cObj).length
-      && sKeys.every(k => Object.prototype.hasOwnProperty.call(cObj, k) && antigravityStepParamsMatchCapture(sObj[k], cObj[k]));
+      && sKeys.every(k => Object.prototype.hasOwnProperty.call(cObj, k) && antigravityStepParamsMatchCapture(sObj[k], cObj[k], allowPrefix));
   }
   return Object.is(stepVal, captureVal);
 }
 
-export function stepCallMatchesCapture(fallbackArgumentsJson: string, captureArgs: Record<string, unknown>): boolean {
-  try { return antigravityStepParamsMatchCapture(JSON.parse(fallbackArgumentsJson), captureArgs); } catch { return false; }
+export function stepCallMatchesCapture(fallbackArgumentsJson: string, captureArgs: Record<string, unknown>, allowPrefix = true): boolean {
+  try { return antigravityStepParamsMatchCapture(JSON.parse(fallbackArgumentsJson), captureArgs, allowPrefix); } catch { return false; }
 }
 
 function claimErroredCaptureOnDisk(state: AntigravityStreamState, removed: PendingAntigravityBridgedToolCall, earlierMatchingPending: number): boolean {
@@ -1084,7 +1084,7 @@ function claimErroredCaptureOnDisk(state: AntigravityStreamState, removed: Pendi
       }
       if (rec.name !== removed.mcpAlias) continue;
       const args = rec.arguments && typeof rec.arguments === "object" && !Array.isArray(rec.arguments) ? (rec.arguments as Record<string, unknown>) : {};
-      if (!stepCallMatchesCapture(removed.fallbackArgumentsJson, args)) continue;
+      if (!stepCallMatchesCapture(removed.fallbackArgumentsJson, args, false)) continue;
       if (skippedEarlier < earlierMatchingPending) { skippedEarlier += 1; continue; }
       if (seq !== undefined) state.consumedCaptureSeqs.add(seq);
       else state.consumedUnsequencedByAlias.set(removed.mcpAlias, (state.consumedUnsequencedByAlias.get(removed.mcpAlias) ?? 0) + 1);
@@ -1152,18 +1152,25 @@ export function flushAntigravityBridgedToolCalls(
       else state.consumedUnsequencedByAlias.set(matched.name, (state.consumedUnsequencedByAlias.get(matched.name) ?? 0) + 1);
       return matched;
     };
-    // Pass 1: parameter-matched claims in chronological issueOrder (errored only claims when excess matching captures exist)
-    for (const claim of claims) {
-      const alias = claim.item.mcpAlias;
-      const argsJson = claim.item.fallbackArgumentsJson;
-      const matchingIdxs = eligibleIndices.filter(i => !used.has(i) && capturedMcpCalls[i]!.name === alias && stepCallMatchesCapture(argsJson, capturedMcpCalls[i]!.arguments));
-      if (matchingIdxs.length === 0) continue;
-      if (claim.kind === "errored") {
-        const remainingPending = pendingList.filter(p => !matchedPending.has(p) && p.mcpAlias === alias && p.fallbackArgumentsJson === argsJson).length;
-        if (matchingIdxs.length <= remainingPending) continue;
+    // Pass 1a (exact) then Pass 1b (truncated `…` prefix): exact matches reserve captures before prefix matches
+    const matchedErrored = new Set<ErroredAntigravityBridgedToolCall>();
+    for (const allowPrefix of [false, true]) {
+      for (const claim of claims) {
+        if (claim.kind === "pending" ? matchedPending.has(claim.item) : matchedErrored.has(claim.item)) continue;
+        const alias = claim.item.mcpAlias;
+        const argsJson = claim.item.fallbackArgumentsJson;
+        const matchingIdxs = eligibleIndices.filter(i => !used.has(i) && capturedMcpCalls[i]!.name === alias && stepCallMatchesCapture(argsJson, capturedMcpCalls[i]!.arguments, allowPrefix));
+        if (matchingIdxs.length === 0) continue;
+        if (claim.kind === "errored") {
+          const remainingPending = pendingList.filter(
+            p => !matchedPending.has(p) && p.mcpAlias === alias && matchingIdxs.some(i => stepCallMatchesCapture(p.fallbackArgumentsJson, capturedMcpCalls[i]!.arguments, allowPrefix)),
+          ).length;
+          if (matchingIdxs.length <= remainingPending) continue;
+          matchedErrored.add(claim.item);
+        }
+        const matched = consumeIdx(matchingIdxs[0]!);
+        if (claim.kind === "pending") matchedPending.set(claim.item, { seq: matched.seq, argumentsJson: JSON.stringify(matched.arguments) });
       }
-      const matched = consumeIdx(matchingIdxs[0]!);
-      if (claim.kind === "pending") matchedPending.set(claim.item, { seq: matched.seq, argumentsJson: JSON.stringify(matched.arguments) });
     }
     // Pass 2: alias-only positional fallback for remaining unmatched pending calls (synthetic tests with stub parameters)
     for (const pending of pendingList) {
@@ -1844,7 +1851,7 @@ export function mapAntigravityStreamFrame(
       if (stepIndex !== undefined) state.seenToolStepIndices.add(stepIndex);
       state.capturedToolCalls += 1;
       if (state.deferToolCallEmission) {
-        // `agy 1.5.8` truncates string fields >512 chars with `…` in `step_update.tool_info.parameters`.
+        // `agy 1.5.8+` truncates string fields >512 chars with `…` in `step_update.tool_info.parameters`.
         // Defer emission until coalesce flush so live runs substitute untruncated MCP JSON-RPC arguments.
         const mcpAlias = rawToolName.startsWith(ANTIGRAVITY_MCP_TOOL_PREFIX)
           ? rawToolName.slice(ANTIGRAVITY_MCP_TOOL_PREFIX.length)
