@@ -1898,11 +1898,11 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         return withCors(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"), req, policy);
       }
 
-      // Data-plane guard: unknown /v1/* paths must fail with JSON 404, never fall through to the
+      // Data-plane guard: unknown /v1/* and /v1beta/* paths must fail with JSON 404, never fall through to the
       // GUI static handler (extensionless paths would get index.html with HTTP 200 and codex-rs
       // endpoint clients — memories/*, realtime/* — would surface confusing
       // serde decode errors instead of a clean not-found).
-      if (url.pathname.startsWith("/v1/")) {
+      if (url.pathname.startsWith("/v1/") || url.pathname.startsWith("/v1beta/")) {
         return withCors(formatErrorResponse(404, "not_found", messagesUnknownEndpointMessage(req)), req, policy);
       }
 

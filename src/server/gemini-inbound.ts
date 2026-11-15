@@ -13,6 +13,7 @@ import { createTranslatorBudget, isTranslatorBudgetExceededError } from "../lib/
 import type { OcxConfig, OcxParsedRequest } from "../types";
 import type { RouteResult } from "../router";
 import { configuredContextWindow, configuredMaxInputTokens } from "../codex/catalog/model-hints";
+import { modelRecordValue } from "../reasoning-effort";
 import { getModelMetadata, resolveMetadataProvider } from "../generated/model-metadata";
 import { chatConversationToIr } from "../protocols/codecs/chat-ir";
 import { ChatCompletionsRequestError } from "../chat/inbound";
@@ -75,7 +76,7 @@ function tokenLimits(route: RouteResult): { inputTokenLimit?: number; outputToke
   const metadataProvider = resolveMetadataProvider(route.providerName) ?? route.providerName;
   const metadata = getModelMetadata(metadataProvider, route.modelId);
   const input = configuredMaxInputTokens(route.provider, route.modelId) ?? configuredContextWindow(route.provider, route.modelId) ?? metadata?.contextWindow;
-  const output = metadata?.maxTokens;
+  const output = modelRecordValue(route.provider.modelMaxOutputTokens, route.modelId) ?? route.provider.defaultMaxOutputTokens ?? metadata?.maxTokens;
   return {
     ...(typeof input === "number" && input > 0 ? { inputTokenLimit: input } : {}),
     ...(typeof output === "number" && output > 0 ? { outputTokenLimit: output } : {}),

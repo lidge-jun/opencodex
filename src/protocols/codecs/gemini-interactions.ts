@@ -4,7 +4,8 @@
  * Request side: an Interactions create body becomes one Chat Completions body. Unknown fields are
  * ignored (the API grows them often); a field this proxy cannot honor and that would change the
  * answer (an agent, background execution, a hosted tool, non-text output) is a typed 400 instead of
- * a silent drop. Response side: a buffered Chat completion becomes an Interaction resource, and a
+ * a silent drop. `safety_settings` and `service_tier` are ignored on purpose, as on the
+ * generateContent surface: the routed provider, which may not be Google, applies its own policy. Response side: a buffered Chat completion becomes an Interaction resource, and a
  * Chat SSE chunk sequence becomes the Interactions SSE vocabulary (interaction.created, step.start,
  * step.delta, step.stop, interaction.completed). Field names follow
  * https://ai.google.dev/api/interactions-api; usage uses its total_* names.
@@ -159,7 +160,9 @@ function applyStep(state: InputState, raw: unknown): void {
       state.steps.push({ type: "model_output", content: [{ type: "text", text }] });
       return;
     }
-    if (role === "system" || role === "developer") { flushAssistant(state); state.system.push({ role: "system", content: contentText(content, "turn content") }); return; }
+    // A conversation-level instruction applies from its position on, so it stays in the sequence;
+    // only the request-level system_instruction leads the conversation.
+    if (role === "system" || role === "developer") { flushAssistant(state); state.messages.push({ role: "system", content: contentText(content, "turn content") }); return; }
     return fail(`unsupported role: ${role}`);
   }
   if (!STEP_TYPES.has(type)) fail(`unsupported step type: ${type}`);
@@ -289,7 +292,8 @@ function generationConfig(raw: unknown, chat: Obj): unknown {
   if (config.thinking_summaries !== undefined) {
     const summaries = text(config.thinking_summaries, "thinking_summaries");
     if (summaries !== "auto" && summaries !== "none") fail("Invalid thinking_summaries");
-    if (summaries === "auto") chat.include_reasoning = true;
+    // An explicit "none" must reach the Chat conversion, whose default is to summarize.
+    chat.include_reasoning = summaries === "auto";
   }
   return config.tool_choice;
 }

@@ -69,3 +69,27 @@ Report `.tmp/research/review-r2.md`. S1 closed; the R2 deferral (INT-20) accepte
   and reads a body only for 2xx and the route's 4xx refusals; NEW `gui/tests/gateway-clients-api.test.ts` (the 5xx
   case failed before the change).
 
+## CodeRabbit round (39a66d5968, 22 inline findings; Codex review: no findings)
+
+Fixed, each with a regression test that failed before the fix:
+- Retry delay selection: a zero delay no longer hides a later one, and a typed `RetryInfo` outranks
+  `quotaResetDelay` and untyped details whatever their order (`google-error-details.ts`).
+- Interactions store: a write evicts only its own owner's entries, also at the global limits; a full store
+  declines a newcomer's interaction instead of evicting another key's.
+- Interactions codec: a conversation-level `system`/`developer` turn keeps its position, and
+  `thinking_summaries: "none"` reaches Chat as `include_reasoning: false`.
+- Gemini codec (#8742 code this branch extends): schema literals (`enum`, `const`, `default`, `example(s)`)
+  are not lower-cased, and `includeThoughts: false` is carried.
+- Model discovery reports a configured `modelMaxOutputTokens`/`defaultMaxOutputTokens` as `outputTokenLimit`.
+- `ocx account` gives "Account suspended" an appeal action.
+- Unknown `/v1beta/*` paths are a JSON 404 instead of the dashboard page.
+
+Docs: Interactions retention is a maximum with the byte and entry limits, the rejected input types are named,
+`safety_settings` is documented as ignored (the routed provider applies its own policy, as on generateContent),
+a streamed 502 that follows output arrives as the stream's error event, and the inventory table row is one line.
+
+Not changed, with replies on the PR: the dashboard badge for a suspended account stays the generic re-auth
+badge (a localized GUI label is a follow-up; the CLI and API carry "Account suspended"); hosted Gemini tools
+on generateContent stay ignored (matrix IN-10, deferred); the gateway-client connector findings
+(`agy.ts`, `antigravity.ts`, `gui/tests/locale-parity.test.ts`) are #8742's own code for its review.
+

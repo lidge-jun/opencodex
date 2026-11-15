@@ -564,7 +564,9 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
   `toolUsePromptTokenCount`, which Google reports for search grounding and URL context. A turn that ends
   with `MALFORMED_FUNCTION_CALL`, or with `MAX_TOKENS` after a tool call started, fails with HTTP 502
   `upstream_error`. So does a turn ending with `UNEXPECTED_TOOL_CALL` or `MALFORMED_RESPONSE` when no
-  text, image or tool call reached the client; thought text does not count. When visible output did
+  text, image or tool call reached the client; thought text does not count. A stream that has already
+  sent output answered with HTTP 200, so there the same `upstream_error` arrives as the stream's error
+  event. When visible output did
   arrive, `MALFORMED_RESPONSE` ends as a content filter, as `SAFETY`, `IMAGE_SAFETY` and the other block
   reasons do, and `UNEXPECTED_TOOL_CALL` ends as a normal stop. A prompt Google refuses before generating
   (`promptFeedback.blockReason`) returns HTTP 400 `invalid_prompt` naming only the reason, never Google's

@@ -227,3 +227,19 @@ test("interaction ids carry 128 random bits", () => {
   expect(newInteractionId()).not.toBe(id);
 });
 
+describe("Interactions request fidelity (CodeRabbit round)", () => {
+  test("a conversation-level developer turn keeps its position; system_instruction still leads", () => {
+    const plan = interactionsToChat({ model: "fx/m1", system_instruction: "rules", input: [
+      { role: "user", content: "U1" }, { role: "model", content: "A1" }, { role: "developer", content: "D2" }, { role: "user", content: "U2" },
+    ] });
+    expect(plan.systemMessages).toEqual([{ role: "system", content: "rules" }]);
+    expect(plan.inputMessages.map(m => [m.role, m.content])).toEqual([
+      ["user", "U1"], ["assistant", "A1"], ["system", "D2"], ["user", "U2"],
+    ]);
+  });
+
+  test("thinking_summaries none is an explicit opt-out", () => {
+    expect(interactionsToChat({ model: "fx/m1", input: "hi", generation_config: { thinking_level: "high", thinking_summaries: "none" } }).chat)
+      .toMatchObject({ reasoning_effort: "high", include_reasoning: false });
+  });
+});

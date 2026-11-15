@@ -850,11 +850,15 @@ from the URL and headers before the request is logged or forwarded. Errors use G
   events `interaction.created`, `step.start`, `step.delta`, `step.stop` and `interaction.completed`. A
   turn that ends in function calls has status `requires_action`. Fields the proxy cannot honor are
   refused with 400: `agent`, `background: true`, `webhook_config`, `environment`, `agent_config`, hosted
-  tools, and non-text content or output.
+  tools, input content other than text and images, and non-text output. `safety_settings` is ignored,
+  because the routed provider applies its own safety policy.
 - `previous_interaction_id` continues a stored interaction. The proxy keeps interactions in memory only,
-  for 24 hours after the last write and at most 200 per API key, and only the key that created one can
-  read, continue or delete it; a keyless loopback caller shares one owner. A restart forgets them all, and
-  a missing or expired id answers 404, so the client must resend its history. A request with
+  for at most 24 hours after the last write, and only the key that created one can read, continue or
+  delete it; a keyless loopback caller shares one owner. Retention is best effort: each key keeps at most
+  200 interactions and 16 MiB, the proxy keeps at most 1,000 and 64 MiB in total, and the proxy's memory
+  budget can remove interactions earlier. When the store is full, a key with nothing of its own to make
+  room with gets its answer without the interaction being kept. A restart forgets them all, and a missing
+  or expired id answers 404, so a client should keep its history to resend it. A request with
   `store: false` is not kept. `GET /v1beta/interactions/{id}` returns a stored interaction, `DELETE`
   removes it, and `POST /v1beta/interactions/{id}/cancel` answers 400 because nothing runs in the
   background.

@@ -178,3 +178,18 @@ describe("Gemini thought signatures through the Chat projection", () => {
     expect(records[0]!.candidates[0].content.parts).toEqual([{ functionCall: { id: "c1", name: "f", args: {} }, thoughtSignature: SIG }]);
   });
 });
+
+describe("Gemini codec request fidelity (CodeRabbit round)", () => {
+  test("schema literals keep their values; only schema types are lower-cased", () => {
+    const tool = { name: "pick", parameters: { type: "OBJECT", properties: { mode: { type: "STRING", enum: ["UPPER", { type: "UPPER" }], default: "UPPER" } } } };
+    const chat = geminiToChat("m", { contents: [{ role: "user", parts: [{ text: "hi" }] }], tools: [{ functionDeclarations: [tool] }] }, false);
+    const params = (chat.tools as Array<{ function: { parameters: Record<string, any> } }>)[0]!.function.parameters;
+    expect(params.type).toBe("object");
+    expect(params.properties.mode).toEqual({ type: "string", enum: ["UPPER", { type: "UPPER" }], default: "UPPER" });
+  });
+
+  test("includeThoughts false is an explicit opt-out", () => {
+    const chat = geminiToChat("m", { contents: [{ role: "user", parts: [{ text: "hi" }] }], generationConfig: { thinkingConfig: { thinkingLevel: "HIGH", includeThoughts: false } } }, false);
+    expect(chat).toMatchObject({ reasoning_effort: "high", include_reasoning: false });
+  });
+});

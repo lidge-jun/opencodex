@@ -94,6 +94,7 @@ describe("ocx account listing health and next actions", () => {
   test.each([
     ["openai", "__main__", "Reauthentication required", "ocx account main reauth --device"],
     ["anthropic", "acct_1", "Verification required", "Verify the account with the provider in a browser"],
+    ["google-antigravity", "acct_1", "Account suspended", "appeal with the provider before running: ocx account reauth google-antigravity --id acct_1"],
     ["anthropic", "acct_1", "Credential conflict", "only one proxy process"],
     ["openai", "acct_1", "Validation pending", "click Refresh quotas in the dashboard Codex account pool"],
   ])("%s %s %s keeps recovery states distinct", async (provider, id, healthLabel, action) => {

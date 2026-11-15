@@ -50,7 +50,7 @@ function config(remote = false): OcxConfig {
     // A public bind is what makes the data-plane key mandatory.
     ...(remote ? { hostname: "0.0.0.0" } : {}),
     defaultProvider: "fx",
-    providers: { fx: { adapter: "openai-chat", baseUrl: upstream.url.origin + "/v1", authMode: "key", apiKey: PROVIDER_KEY, allowPrivateNetwork: true, models: ["m1"], modelContextWindows: { m1: 64000 } }, google: { adapter: "google", baseUrl: GEMINI_ORIGIN, authMode: "key", apiKey: "google-fixture-key", models: ["gemini-3-flash-preview"] }, off: { adapter: "openai-chat", baseUrl: "https://off.example/v1", authMode: "key", apiKey: "fixture", models: ["m1"], disabled: true } },
+    providers: { fx: { adapter: "openai-chat", baseUrl: upstream.url.origin + "/v1", authMode: "key", apiKey: PROVIDER_KEY, allowPrivateNetwork: true, models: ["m1"], modelContextWindows: { m1: 64000 }, modelMaxOutputTokens: { m1: 1024 } }, google: { adapter: "google", baseUrl: GEMINI_ORIGIN, authMode: "key", apiKey: "google-fixture-key", models: ["gemini-3-flash-preview"] }, off: { adapter: "openai-chat", baseUrl: "https://off.example/v1", authMode: "key", apiKey: "fixture", models: ["m1"], disabled: true } },
   } as OcxConfig;
 }
 
@@ -156,7 +156,18 @@ describe("Gemini inbound fidelity", () => {
     await withServer(async base => {
       const one = await (await fetch(new URL("/v1beta/models/fx/m1", base), { headers: googKey })).json() as Record<string, any>;
       expect(one).toMatchObject({ name: "models/fx/m1", inputTokenLimit: 64000, supportedGenerationMethods: ["generateContent", "streamGenerateContent", "countTokens"] });
-      expect(one.outputTokenLimit).toBeUndefined();
+      // A configured output limit wins over generated metadata, and is reported when metadata has none.
+      expect(one.outputTokenLimit).toBe(1024);
+    });
+  });
+
+  test("an unknown /v1beta path is a JSON 404, never the dashboard page", async () => {
+    await withServer(async base => {
+      for (const path of ["/v1beta/unknown", "/v1beta/files/abc"]) {
+        const res = await fetch(new URL(path, base), { headers: googKey });
+        expect(res.status).toBe(404);
+        expect(res.headers.get("content-type")).toContain("application/json");
+      }
     });
   });
 

@@ -8,8 +8,9 @@
  * loopback caller); a lookup by any other owner is indistinguishable from a missing id. Expiry is lazy:
  * an expired entry is dropped on the next write or lookup, and the app-owned memory budget can evict it
  * before that. Bounds: 24 hours from the last
- * write, 1,000 entries and 64 MiB in total, 200 entries and 16 MiB per owner (so one key cannot evict
- * another's conversations), 8 MiB per entry.
+ * write, 1,000 entries and 64 MiB in total, 200 entries and 16 MiB per owner, 8 MiB per entry. A write
+ * evicts only its own owner's entries; when the store is full and the writer owns nothing to evict, the
+ * interaction is not kept. Only the app-owned memory budget evicts across owners.
  */
 import type { RetainedStoreSnapshot } from "../lib/app-owned-memory";
 
@@ -76,9 +77,11 @@ export function rememberInteraction(
     if (oldest === undefined) break;
     drop(oldest);
   }
+  // At the global limits a writer evicts only its own oldest entries; with none left, this one is
+  // not kept (the answer is unaffected), so one key's traffic never removes another's history.
   while (entries.size + 1 > MAX_STORED_INTERACTIONS || totalBytes + bytes > MAX_INTERACTION_STORE_BYTES) {
-    const oldest = entries.keys().next().value;
-    if (oldest === undefined) break;
+    const oldest = oldestOf(entry.owner);
+    if (oldest === undefined) return false;
     drop(oldest);
   }
   entries.set(entry.id, { ...entry, bytes, writtenAt: now });

@@ -97,7 +97,9 @@ forcing it, as the generateContent codec does); a text `response_format`. A thou
 rides to the next function call as `extra_content.google.thought_signature`. A `function_result` whose
 call is not in the input is reported to the handler, which refuses it until stored history exists.
 Refused with 400 rather than silently changed: `agent`, `background: true`, `webhook_config`, `environment`, `agent_config`, hosted tools, non-text
-content or output. `service_tier` and `safety_settings` are ignored, as unknown fields are.
+content or output. `service_tier` and `safety_settings` are ignored, as on the generateContent surface: the routed
+provider, which need not be Google, applies its own policy. A conversation-level `system`/`developer` turn stays at
+its position in the conversation; only `system_instruction` leads it.
 
 Answers carry `object: "interaction"`, `ocx-int-` ids with 128 random bits, and `status`
 `requires_action` when the turn ends in function calls, `incomplete` for `length` and
@@ -118,9 +120,11 @@ key the caller presented, resolved with `resolveContextPrincipal` so a key prese
 still names its own owner, or one shared `loopback` owner for a keyless loopback caller; rotating a key
 mints a new principal, so its earlier chains answer 404. A lookup, delete or cancel by any other owner is
 indistinguishable from a missing id. Bounds: 24 hours from the last write (expiry is lazy, on the next
-write or lookup), 1,000 entries and 64 MiB in total, 200 entries and 16 MiB per owner (an owner evicts its
-own oldest first), and per entry the smaller of 8 MiB and the inbound body limit, since a larger history
-could never be chained. The store is `gemini_interactions` on the app-owned memory roster (category
+write or lookup), 1,000 entries and 64 MiB in total, 200 entries and 16 MiB per owner, and per entry the smaller of 8 MiB and the inbound body limit, since a larger history
+could never be chained. A write evicts only its own owner's oldest entries, at the owner and the global limits;
+when the store is full and the writer owns nothing to evict, the interaction is not kept (the answer is unaffected
+and `x-opencodex-interaction-stored` says `false`), so one key's traffic never removes another's history. Only the
+app-owned memory budget evicts across owners. The store is `gemini_interactions` on the app-owned memory roster (category
 `continuation`, passively evictable).
 
 A chained turn sends `system` from this request, then the stored history (prior input and answers,

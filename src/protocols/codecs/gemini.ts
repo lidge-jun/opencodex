@@ -45,6 +45,9 @@ function field(source: Obj, key: string): unknown {
   return source[key] !== undefined ? source[key] : source[snake(key)];
 }
 
+/** Schema keywords whose values are data, not schemas: they are copied, never normalized. */
+const SCHEMA_LITERAL_KEYS = new Set(["enum", "const", "default", "example", "examples"]);
+
 /** Gemini declares schema types in upper case ("OBJECT"); Chat tools want JSON Schema's lower case. */
 export function normalizeSchema(value: unknown, depth = 0): unknown {
   if (depth > MAX_GEMINI_SCHEMA_DEPTH) fail("Schema nesting too deep");
@@ -52,7 +55,9 @@ export function normalizeSchema(value: unknown, depth = 0): unknown {
   if (!isObj(value)) return value;
   const out: Obj = {};
   for (const [key, item] of Object.entries(value)) {
-    out[key] = key === "type" && typeof item === "string" ? item.toLowerCase() : normalizeSchema(item, depth + 1);
+    out[key] = key === "type" && typeof item === "string" ? item.toLowerCase()
+      : SCHEMA_LITERAL_KEYS.has(key) ? item
+        : normalizeSchema(item, depth + 1);
   }
   return out;
 }
@@ -127,7 +132,9 @@ function reasoning(config: unknown): Obj {
     if (tokens === 0) out.reasoning_effort = "none";
     else if (tokens > 0) out.reasoning_effort = tokens <= 2_048 ? "low" : tokens <= 12_288 ? "medium" : "high";
   }
-  if (field(thinking, "includeThoughts") === true) out.include_reasoning = true;
+  // An explicit false must reach the Chat conversion, whose default is to summarize.
+  const includeThoughts = field(thinking, "includeThoughts");
+  if (typeof includeThoughts === "boolean") out.include_reasoning = includeThoughts;
   return out;
 }
 

@@ -78,3 +78,19 @@ describe("stored Gemini interactions", () => {
   });
 });
 
+describe("stored Gemini interactions at the global limit", () => {
+  test("a full store never evicts another owner's entry; the writer evicts its own oldest or keeps nothing", () => {
+    for (let owner = 0; owner < 5; owner++) {
+      for (let n = 0; n < MAX_OWNER_INTERACTIONS; n++) expect(rememberInteraction(entry(`o${owner}-${n}`, `owner-${owner}`), 1_000 + n)).toBe(true);
+    }
+    expect(interactionsRetainedStoreSnapshot().count).toBe(1_000);
+    // A newcomer owns nothing to evict, so its interaction is not kept and nobody loses history.
+    expect(rememberInteraction(entry("new", "owner-new"), 5_000)).toBe(false);
+    expect(recallInteraction("o0-0", "owner-0", 5_001)).toBeDefined();
+    // An owner already in the store makes room from its own entries.
+    expect(rememberInteraction(entry("o1-next", "owner-1"), 5_002)).toBe(true);
+    expect(recallInteraction("o1-0", "owner-1", 5_003)).toBeUndefined();
+    expect(recallInteraction("o0-0", "owner-0", 5_003)).toBeDefined();
+    expect(interactionsRetainedStoreSnapshot().count).toBe(1_000);
+  });
+});

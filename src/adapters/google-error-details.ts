@@ -50,7 +50,12 @@ export function googleErrorDetails(payloadText: string): GoogleErrorDetails {
   const error = isRecord(root) ? (isRecord(root.error) ? root.error : root) : undefined;
   if (!error) return {};
   const out: GoogleErrorDetails = {};
+  // Only a positive delay says when to retry; a typed RetryInfo outranks ErrorInfo's quotaResetDelay,
+  // which outranks an untyped detail, whatever order Google lists them in.
+  const positive = (ms: number | undefined) => (ms !== undefined && ms > 0 ? ms : undefined);
+  let typedRetryDelay: number | undefined;
   let quotaResetDelay: number | undefined;
+  let untypedRetryDelay: number | undefined;
   for (const detail of Array.isArray(error.details) ? error.details.slice(0, 32) : []) {
     if (!isRecord(detail)) continue;
     const type = detail["@type"];
@@ -58,18 +63,18 @@ export function googleErrorDetails(payloadText: string): GoogleErrorDetails {
       if (typeof detail.reason === "string" && out.reason === undefined) out.reason = detail.reason;
       if (typeof detail.domain === "string" && out.domain === undefined) out.domain = detail.domain;
       const metadata = detail.metadata;
-      if (isRecord(metadata) && typeof metadata.quotaResetDelay === "string") quotaResetDelay ??= parseGoogleDurationMs(metadata.quotaResetDelay);
+      if (isRecord(metadata) && typeof metadata.quotaResetDelay === "string") quotaResetDelay ??= positive(parseGoogleDurationMs(metadata.quotaResetDelay));
     } else if (type === RETRY_INFO_TYPE) {
-      if (typeof detail.retryDelay === "string") out.retryDelayMs ??= parseGoogleDurationMs(detail.retryDelay);
+      if (typeof detail.retryDelay === "string") typedRetryDelay ??= positive(parseGoogleDurationMs(detail.retryDelay));
     } else if (type === undefined) {
       if (typeof detail.reason === "string" && out.reasonUntyped === undefined) out.reasonUntyped = detail.reason;
-      if (typeof detail.retryDelay === "string") out.retryDelayMs ??= parseGoogleDurationMs(detail.retryDelay);
+      if (typeof detail.retryDelay === "string") untypedRetryDelay ??= positive(parseGoogleDurationMs(detail.retryDelay));
       const metadata = detail.metadata;
-      if (isRecord(metadata) && typeof metadata.quotaResetDelay === "string") quotaResetDelay ??= parseGoogleDurationMs(metadata.quotaResetDelay);
+      if (isRecord(metadata) && typeof metadata.quotaResetDelay === "string") untypedRetryDelay ??= positive(parseGoogleDurationMs(metadata.quotaResetDelay));
     }
   }
-  // A zero delay says nothing about when to retry, so it does not block the fallbacks.
-  if (!out.retryDelayMs) out.retryDelayMs = quotaResetDelay || undefined;
+  const stated = typedRetryDelay ?? quotaResetDelay ?? untypedRetryDelay;
+  if (stated !== undefined) out.retryDelayMs = stated;
   if (!out.retryDelayMs && typeof error.message === "string") {
     const match = /\bafter\s+(\d[\w.µ]*?)[.,;]?(?:\s|$)/i.exec(error.message.slice(0, 2_000));
     if (match) out.retryDelayMs = parseGoogleDurationMs(match[1]!);

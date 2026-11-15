@@ -43,3 +43,13 @@ describe("Google error details", () => {
     for (const body of ["", "not json", "[]", "{}", JSON.stringify({ error: { details: "x" } })]) expect(googleErrorDetails(body)).toEqual({});
   });
 });
+
+describe("retry delay selection across details", () => {
+  const RETRY = "type.googleapis.com/google.rpc.RetryInfo";
+  test("a zero RetryInfo does not hide a later positive one", () => {
+    expect(googleErrorDetails(JSON.stringify({ error: { details: [{ "@type": RETRY, retryDelay: "0s" }, { "@type": RETRY, retryDelay: "60s" }] } })).retryDelayMs).toBe(60_000);
+  });
+  test("a typed RetryInfo outranks an untyped delay listed before it", () => {
+    expect(googleErrorDetails(JSON.stringify({ error: { details: [{ retryDelay: "1s" }, { "@type": RETRY, retryDelay: "60s" }] } })).retryDelayMs).toBe(60_000);
+  });
+});

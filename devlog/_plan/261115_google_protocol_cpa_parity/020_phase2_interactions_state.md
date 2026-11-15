@@ -22,7 +22,10 @@ rules:
 - **Bounded.** TTL 24 hours from the last write (same span as `RESPONSE_TTL_MS` in
   `src/responses/state.ts:71`), at most 1,000 entries and 64 MiB in total, and per owner at most 200
   entries and 16 MiB, so one key's traffic cannot evict another owner's conversations; 8 MiB per entry
-  (serialized history). Eviction removes the owner's own oldest entry first, then the globally oldest.
+  (serialized history). Eviction removes only the writing owner's own oldest entries; when the store is full and
+  the writer owns nothing to evict, the new interaction is not kept (CodeRabbit round on #8771; the original
+  "then the globally oldest" fallback broke the isolation guarantee). Only the app-owned memory budget evicts
+  across owners.
   An entry that cannot be stored (over the per-entry cap) still returns its answer, with the response
   header `x-opencodex-interaction-stored: false` so a client can tell a later chain will 404.
 - **Memory budget.** The store registers with `registerRetainedStore` (`src/lib/app-owned-memory.ts:100`)
