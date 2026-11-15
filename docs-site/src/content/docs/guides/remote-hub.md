@@ -614,7 +614,9 @@ ocx config set codexAuthMethod device-only
 A running hub keeps the login method it started with, so restart it (`ocx restart`, or restart the
 pod) to apply the change; `ocx config set` says so. Adding or re-authenticating a pool account from the dashboard, or with
 `ocx account login openai [--id <account-id> --reauth]`, then shows a verification URL and a short
-code to enter on any other device. Remove the setting with `ocx config unset codexAuthMethod`, then restart again.
+code to enter on any other device. With `--json`, add `--no-wait`: the login returns the `url` and `deviceCode`
+at once, and a JSON wait is refused (and its flow cancelled) because it would print neither until the end; `--code` is
+refused the same way. Remove the setting with `ocx config unset codexAuthMethod`, then restart again.
 
 Never put the OAuth code in shell argv, logs, issue text, screenshots, or deployment evidence. The
 manual-code route keeps its existing unknown-provider, no-active-flow, invalid-code, and 4096-byte

@@ -6,9 +6,12 @@
  */
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
+import { Readable } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleCodexAuthAPI } from "../../src/codex/auth-api/routes";
+import { cmdAccount, type AccountDeps } from "../../src/cli/account";
+import type { AccountStdin } from "../../src/cli/account-api";
 import { validateConfigCandidate } from "../../src/config/diagnostics";
 import { loadConfig } from "../../src/config";
 import type { OcxConfig } from "../../src/types";
@@ -169,4 +172,104 @@ describe("Codex account modal state", () => {
       expect(source).toContain('"codexAuth.deviceOnlyEnforced"');
     }
   });
+});
+
+/**
+ * The CLI learns about the policy only from the start response. A JSON wait prints nothing until it
+ * ends and a pasted code has no flow to complete, so either would strand the person without the URL
+ * and code for the full device budget: the CLI cancels the flow it started and says what works.
+ */
+describe("ocx account login against a device-only proxy", () => {
+  let requests: Array<{ method: string; path: string; body?: unknown }> = [];
+  let deviceOnly = true;
+  let cancelStatus = 200;
+  let server: ReturnType<typeof Bun.serve>;
+  let errors: string[] = [];
+  let logs: string[] = [];
+  let restore: Array<() => void> = [];
+
+  beforeEach(() => {
+    requests = [];
+    deviceOnly = true;
+    cancelStatus = 200;
+    errors = [];
+    logs = [];
+    server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url);
+        const body = req.method === "POST" ? await req.json().catch(() => undefined) : undefined;
+        requests.push({ method: req.method, path: url.pathname, body });
+        if (url.pathname === "/api/codex-auth/login") {
+          return Response.json(deviceOnly
+            ? { url: "https://auth.openai.com/codex/device", deviceCode: "ABCD-EFGH", flowId: "flow-device", authMethod: "device-only" }
+            : { url: "https://auth.openai.com/oauth/authorize", flowId: "flow-browser" });
+        }
+        if (url.pathname === "/api/codex-auth/login/cancel") return Response.json({ ok: cancelStatus === 200 }, { status: cancelStatus });
+        if (url.pathname === "/api/codex-auth/login/code") return Response.json({ ok: true, accepted: true });
+        if (url.pathname === "/api/codex-auth/login-status") return Response.json({ status: "done", email: "operator@example.test" });
+        return Response.json({ error: "unhandled" }, { status: 404 });
+      },
+    });
+    const log = spyOn(console, "log").mockImplementation((...args: unknown[]) => { logs.push(args.map(String).join(" ")); });
+    const error = spyOn(console, "error").mockImplementation((...args: unknown[]) => { errors.push(args.map(String).join(" ")); });
+    restore = [() => log.mockRestore(), () => error.mockRestore()];
+  });
+
+  afterEach(() => {
+    for (const undo of restore) undo();
+    server.stop(true);
+  });
+
+  function deps(stdin?: string): AccountDeps {
+    const stdinImpl = stdin === undefined ? undefined : Object.assign(Readable.from([stdin]), { isTTY: false }) as AccountStdin;
+    return {
+      baseUrl: `http://127.0.0.1:${server.port}`,
+      loadConfigImpl: () => ({ providers: {} }) as OcxConfig,
+      ...(stdinImpl ? { stdinImpl } : {}),
+    };
+  }
+
+  const paths = () => requests.map(entry => entry.path);
+
+  for (const args of [["--json"], ["--reauth", "--id", "team-hub", "--json"], ["--device", "--json"]]) {
+    test(`a JSON wait (${args.join(" ")}) is refused at once and the started flow is cancelled`, async () => {
+      const code = await cmdAccount(["login", "openai", ...args], deps());
+      expect(code).toBe(2);
+      expect(errors.join("\n")).toContain("with --json, add --no-wait");
+      expect(paths()).toEqual(["/api/codex-auth/login", "/api/codex-auth/login/cancel"]);
+      expect(requests[1]!.body).toEqual({ flowId: "flow-device" });
+      expect(logs).toEqual([]);
+    });
+  }
+
+  test("a pasted code is refused before it is submitted, and the flow is cancelled", async () => {
+    const code = await cmdAccount(["login", "openai", "--code", "-"], deps("http://localhost:1455/auth/callback?code=x\n"));
+    expect(code).toBe(2);
+    expect(errors.join("\n")).toContain("--code cannot be used");
+    expect(paths()).toEqual(["/api/codex-auth/login", "/api/codex-auth/login/cancel"]);
+  });
+
+  test("a failed cancel is reported instead of hidden", async () => {
+    cancelStatus = 500;
+    const code = await cmdAccount(["login", "openai", "--json"], deps());
+    expect(code).toBe(2);
+    expect(errors.join("\n")).toContain("Could not cancel the started login flow.");
+  });
+
+  test("--no-wait --json still returns the URL, the device code and the policy", async () => {
+    const code = await cmdAccount(["login", "openai", "--no-wait", "--json"], deps());
+    expect(code ?? 0).toBe(0);
+    expect(JSON.parse(logs.join("\n"))).toMatchObject({ url: "https://auth.openai.com/codex/device", deviceCode: "ABCD-EFGH", authMethod: "device-only" });
+    expect(paths()).toEqual(["/api/codex-auth/login"]);
+  });
+
+  test("without the policy a JSON wait still polls to completion", async () => {
+    deviceOnly = false;
+    const code = await cmdAccount(["login", "openai", "--json"], deps());
+    expect(code).toBe(0);
+    expect(paths()).toEqual(["/api/codex-auth/login", "/api/codex-auth/login-status"]);
+    expect(JSON.parse(logs.join("\n"))).toMatchObject({ status: "done" });
+  }, 15_000);
 });

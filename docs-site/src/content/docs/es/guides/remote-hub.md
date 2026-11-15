@@ -395,7 +395,7 @@ Para las cuentas del grupo de ChatGPT/Codex, un concentrador puede exigir en su 
 ocx config set codexAuthMethod device-only
 ```
 
-Un concentrador en ejecución mantiene el método de inicio de sesión con el que arrancó, así que reinícielo (`ocx restart`, o reinicie el pod) para aplicar el cambio; `ocx config set` lo indica. Al añadir o volver a autenticar una cuenta del grupo desde el panel de control, o con `ocx account login openai [--id <account-id> --reauth]`, se muestran una URL de verificación y un código corto para introducir en cualquier otro dispositivo. Quite el ajuste con `ocx config unset codexAuthMethod` y vuelva a reiniciar.
+Un concentrador en ejecución mantiene el método de inicio de sesión con el que arrancó, así que reinícielo (`ocx restart`, o reinicie el pod) para aplicar el cambio; `ocx config set` lo indica. Al añadir o volver a autenticar una cuenta del grupo desde el panel de control, o con `ocx account login openai [--id <account-id> --reauth]`, se muestran una URL de verificación y un código corto para introducir en cualquier otro dispositivo. Con `--json`, añada `--no-wait`: el inicio de sesión devuelve al momento `url` y `deviceCode`, y una espera en JSON se rechaza (y su flujo se cancela) porque no mostraría ninguno de los dos hasta el final; `--code` se rechaza del mismo modo. Quite el ajuste con `ocx config unset codexAuthMethod` y vuelva a reiniciar.
 
 Nunca ponga el código OAuth en argv de shell, registros, texto de emisión, capturas de pantalla o evidencia de implementación. La ruta de código manual mantiene sus comprobaciones de entrada existentes de proveedor desconocido, flujo no activo, código no válido y 4096 bytes.
 

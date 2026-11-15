@@ -292,6 +292,22 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
         ...(openBrowser === undefined ? {} : { openBrowser }),
       }),
     }, pinned));
+    // `codexAuthMethod: "device-only"` (#8082) imposes the device grant after the request is sent.
+    // A JSON wait prints nothing until the end and a pasted code has no flow to complete, so either
+    // would leave the person without the URL and code: cancel the flow and say what works instead.
+    if (start.authMethod === "device-only" && (code || (wantsJson && !noWait))) {
+      let cleanupFailed = false;
+      try {
+        if (!start.flowId) throw new Error("no flow id");
+        await runtimeRequest("/api/codex-auth/login/cancel", {
+          method: "POST", redirect: "error", body: JSON.stringify({ flowId: start.flowId }),
+        }, pinned);
+      } catch { cleanupFailed = true; }
+      const advice = code
+        ? "--code cannot be used; run the login without --code and enter the device code at the returned URL"
+        : "with --json, add --no-wait and complete the login with the returned url and deviceCode";
+      throw new CliUsageError(`This proxy requires device code login (codexAuthMethod: device-only), so ${advice}.${cleanupFailed ? " Could not cancel the started login flow." : ""}`, USAGE);
+    }
     if (!wantsJson) {
       // One atomic pre-poll block, flushed synchronously so a piped parent
       // reads the URL before the polling window starts (#1007).
