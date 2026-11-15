@@ -12,7 +12,7 @@ import {
 type JsonObject = Record<string, unknown>;
 
 const GOOGLE_TOOL_NAME = /^[A-Za-z_][A-Za-z0-9_-]{0,63}$/;
-const GOOGLE_THINKING_LEVELS = new Set(["minimal", "low", "medium", "high"]);
+const GOOGLE_THINKING_LEVELS = new Set(["minimal", "low", "medium", "high", "xhigh"]);
 
 export class GoogleToolSchemaPolicyError extends Error {
   readonly phase = "initial" as const;
@@ -169,7 +169,7 @@ function compileGenerationConfig(value: unknown): JsonObject | undefined {
       const raw = value.thinkingConfig.thinkingLevel.toLowerCase();
       const thinkingLevel = GOOGLE_THINKING_LEVELS.has(raw)
         ? raw
-        : (["xhigh", "max", "ultra"].includes(raw) ? "high" : undefined);
+        : (["max", "ultra"].includes(raw) ? "high" : undefined);
       if (thinkingLevel) thinking.thinkingLevel = thinkingLevel;
     }
     const rawBudget = finiteNumber(value.thinkingConfig.thinkingBudget ?? value.thinkingConfig.thinking_budget);

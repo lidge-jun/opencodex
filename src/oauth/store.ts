@@ -21,6 +21,7 @@ import { publishCredentialSync } from "../local-credentials/generation";
  *   both append distinct identified accounts under multiauth.
  */
 import { notifyAuthStoreLoaded } from "../lib/decision-quota-sink";
+import { isPassiveRead } from "../lib/passive-read";
 import { accountPauseDetailsSchema } from "../config/schema/account-auto-pause";
 import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
 import { normalizeAnthropicIdentity, matchesAnthropicImport, mergeAnthropicIdentity } from "./anthropic-identity";
@@ -380,6 +381,12 @@ function loadAuthStoreInternal(): { store: AuthStore; hadLegacy: boolean } {
 }
 
 export function loadAuthStore(): AuthStore {
+  // A passive ownership check (a Remote Link Child, #6959) must see an external replacement
+  // without repairing, hardening, or publishing a roster. It cannot establish ownership of an
+  // unreadable store, so a corrupt file reads as empty rather than being backed up here.
+  if (isPassiveRead()) {
+    try { return peekAuthStore(); } catch { return {}; }
+  }
   return loadAuthStoreInternal().store;
 }
 

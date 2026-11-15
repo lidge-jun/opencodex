@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fixtureGitEnv } from "../helpers/git-fixture";
 import { repoPath } from "../helpers/repo-root";
 import { spawnTestChild } from "../helpers/spawn-test-child";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
@@ -493,7 +494,7 @@ describe("Windows and nightly CI contracts", () => {
       try {
         const git = (...args: string[]) => {
           const result = spawnSync("git", args, { cwd: directory, encoding: "utf8", timeout: 5_000,
-            env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null" } });
+            env: fixtureGitEnv() });
           expect(result.error).toBeUndefined();
           expect(result.status, result.stderr).toBe(0);
         };

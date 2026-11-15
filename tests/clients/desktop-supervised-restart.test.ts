@@ -260,7 +260,7 @@ describe("the dashboard's Stop under the desktop app", () => {
     const refusal = handler.indexOf("desktopSupervisedStopRefusal(principal)");
     expect(refusal).toBeGreaterThan(-1);
     expect(handler.slice(refusal, refusal + 200)).toContain("return jsonResponse(desktopRefusal, 409, req, config)");
-    for (const later of ["installedServiceRespawnRisk()", "stopServiceIfInstalledDetailed()", "noteExplicitShutdownRequested()", "performStopTeardown(url"]) {
+    for (const later of ["installedServiceRespawnRisk()", "routeServiceStop(url, holdsReceipt)", "noteExplicitShutdownRequested()", "performStopTeardown(url"]) {
       expect(handler.indexOf(later)).toBeGreaterThan(refusal);
     }
   });

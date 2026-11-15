@@ -19,8 +19,9 @@ Spend-ledger storage could not be opened safely (journal: extra-hard-link).
 
 opencodex keeps a spend ledger in its state directory (`~/.opencodex` by default, or
 `OPENCODEX_HOME`): a journal file, `spend-ledger.jsonl`, and a salt file, `spend-ledger.salt`.
-Before every write it checks that each file is a regular file owned by you, is not a symbolic
-link, and has exactly one directory entry. A second hard link would mean another name elsewhere
+Before every write it checks that each file is regular, is not a symbolic link,
+and has exactly one directory entry. Outside Windows it also checks that you own the file;
+the owner comparison is not performed on Windows. A second hard link would mean another name elsewhere
 on the volume can see or change the same bytes, so opencodex refuses instead of writing through
 it. This check stays strict on purpose.
 
@@ -29,7 +30,7 @@ it. This check stays strict on purpose.
 | `extra-hard-link` | Another directory entry points at the same file. |
 | `symbolic-link` | The ledger file is a symbolic link. |
 | `not-regular-file` | Something other than a regular file sits at the ledger path. |
-| `foreign-owner` | The file belongs to a different user. |
+| `foreign-owner` | The file belongs to a different user (checked outside Windows). |
 | `invalid-salt` | The salt file exists but its content is not a valid salt. |
 
 The role in the message is `journal`, `journal-compaction` (the temporary file written while

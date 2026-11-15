@@ -22,9 +22,9 @@ Codex 集成会把 `web_search = "disabled"` 写入 `~/.codex/config.toml`，这
 命令会报告由此触发的 Codex 侧写入（`--json` 中的 `codexWebSearch`，否则为末尾的
 `Codex config:` 行），并在无法写入时提示 `ocx sync`。该标志对 `vision` 同样有效。
 
-### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>>`
+### `ocx v2 <status|on|off|mode <v1|default|v2|v2-plaintext>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>>`
 
-管理 Codex 的 `multi_agent_v2` 功能标志和三态多代理 surface 模式。
+管理 Codex 的 `multi_agent_v2` 功能标志和四态多代理 surface 模式。
 
 | 子命令 | 动作 |
 | --- | --- |
@@ -33,8 +33,12 @@ Codex 集成会把 `web_search = "disabled"` 写入 `~/.codex/config.toml`，这
 | `off` | 禁用 `multi_agent_v2` 功能并重新同步目录。 |
 | `mode v1` | 强制所有模型使用 v1，禁用原生 v2，并保留当前线程上限。 |
 | `mode default` | 遵循上游模型的 surface 固定配置。 |
-| `mode v2` | 强制所有模型使用 v2，启用原生 v2，并保留当前线程上限。 |
+| `mode v2` | 强制模型使用 v2 并保留线程上限。关闭 `keep-native-v1` 时启用全局原生 v2；开启时关闭全局强制并使用目录固定值。 |
+| `mode v2-plaintext --acknowledge-plaintext-agent-messages` | 为新会话选择 V2，关闭全局强制，并以明文传递符合条件的任务。进入需要 `--acknowledge-plaintext-agent-messages`。 |
+| `keep-native-v1 on\|off` | 在 `mode v2` 下让 ChatGPT 原生模型保持 v1、路由模型使用 v2；开启时先关闭全局 V2 强制，再同步目录。 |
 | `threads <n>` | 将当前 v1/v2 线程上限设为一个至少为 1 的整数。 |
+| `mode-hint <text>` | 为所有模型和 effort 设置主动委派提示（Ultra mode）。 |
+| `mode-hint --clear` | 移除提示，恢复由 effort 决定的策略（ultra 为主动委派）。 |
 
 ```bash
 ocx v2 status
@@ -44,7 +48,7 @@ ocx v2 on
 ocx v2 threads 16
 ```
 
-`mode` 子命令会将 `multiAgentMode` 写入 opencodex 配置，并重新同步 Codex 目录。模式和标志的切换会在有效的 v1/v2 Codex 键之间迁移当前的数值线程上限；如果切换失败，会恢复原始的 `config.toml`。更改只会应用于新的 Codex 会话，正在运行的会话会保持其已固定的 surface。
+`mode` 子命令会将 `multiAgentMode` 写入 opencodex 配置，并重新同步 Codex 目录。模式和标志的切换会在有效的 v1/v2 Codex 键之间迁移当前的数值线程上限；如果切换失败，会恢复原始的 `config.toml`。目录固定值应用于新会话，已有会话保留其 surface；明文编译器的当前设置也影响已有 V2 会话后续符合条件的请求。仪表板的 Ultra mode 开关可在原生功能启用且模式为 `v2` 时使用，也可在 `v2-plaintext` 模式下使用；仅运行 `ocx v2 on` 不满足条件。
 
 ## Combo routing
 

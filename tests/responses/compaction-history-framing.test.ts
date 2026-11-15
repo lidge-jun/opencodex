@@ -8,7 +8,7 @@ import { CHECKPOINT_CONTINUATION_NOTE, COMPACT_PROMPT, SUMMARY_PREFIX, encodeCom
 import { frameCompactionHistory, HISTORICAL_REQUEST_START, HISTORICAL_REQUEST_END } from "../../src/responses/compaction-history-framing";
 import { parseRequest } from "../../src/responses/parser";
 import { clearResponseStateForTests, expandPreviousResponseInput, previousResponseReplayPrefixLength, rememberResponseState } from "../../src/responses/state";
-import { handleResponses } from "../../src/server/responses";
+import { handleOwnedResponses as handleResponses } from "../helpers/response-replay-owner";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";

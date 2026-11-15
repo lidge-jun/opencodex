@@ -8,12 +8,10 @@ import {
   isCyberPolicyMessage,
   isTerminalRefusalCode,
   recognizedUpstreamError,
-  safetyRefusalCodeFromMessage,
-  terminalRefusalFallbackMessage,
-  upstreamErrorMessageFromPayload,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
+import { carryPacedStream, pacedQueuingStrategy } from "../lib/paced-stream";
 import { carryReplayRefusal, isReplayRefusalResponse } from "../lib/upstream-retry";
 import { isUsageDebugEnabled } from "../usage/debug";
 import {
@@ -41,6 +39,7 @@ import { knownModelIdentity } from "../lib/model-identity";
 import { recordClientWireRequestLog } from "./inference/client-wire-log";
 import { nativeResponseFingerprint } from "./responses/native-response-json";
 import { nativeResponseOutput } from "./responses/native-response-output";
+import { bareUpstreamError, guardBareCopy, isUntypedBareUpstreamError, MAX_BARE_ERROR_MESSAGE_CHARS, reduceBareUpstreamEvidence, type BareUpstreamError, type BareUpstreamEvidence } from "./bare-upstream-error";
 
 const nativePassthroughSseResponses = new WeakSet<Response>();
 const eagerRelaySseResponses = new WeakSet<Response>();
@@ -49,7 +48,7 @@ const preinspectedJsonResponses = new WeakSet<Response>();
 export const MAX_INSPECTION_SSE_FRAME_BYTES = MAX_CLIENT_SSE_FRAME_BYTES;
 export const MAX_COMPLETED_OUTPUT_ITEMS = 256;
 export const MAX_COMPLETED_OUTPUT_ITEM_SOURCE_BYTES = 8 * 1024 * 1024;
-export const MAX_TAIL_ERROR_MESSAGE_CHARS = 512;
+export const MAX_TAIL_ERROR_MESSAGE_CHARS = MAX_BARE_ERROR_MESSAGE_CHARS;
 const ADAPTER_EOF_INCOMPLETE_PAYLOAD = JSON.stringify({
   type: "response.incomplete",
   response: {
@@ -134,10 +133,11 @@ export function relayWithAbort(
 
 export function buildFailedTailPayload(err: unknown, maskCredential?: (text: string) => string): string {
   const translatorOverflow = isTranslatorBudgetExceededError(err);
-  const diagnostic = redactSecretString((translatorOverflow
+  const raw = translatorOverflow
     ? "upstream translation buffer exceeded the safe limit"
-    : `Upstream stream terminated unexpectedly: ${err instanceof Error ? err.message : String(err)}`));
-  const message = (maskCredential?.(diagnostic) ?? diagnostic).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS);
+    : `Upstream stream terminated unexpectedly: ${err instanceof Error ? err.message : String(err)}`;
+  // Exact mask before pattern redaction, which could split a credential and hide it from the mask.
+  const message = redactSecretString(maskCredential?.(raw) ?? raw).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS);
   const failure = {
     type: "upstream_error",
     code: translatorOverflow ? "translation_buffer_limit" : "upstream_reset",
@@ -181,19 +181,53 @@ export function upstreamErrorTailFrame(
   maskCredential?: (text: string) => string,
   errorType?: string,
   errorCode?: string,
+  verdict?: BareUpstreamError,
+  onPayload?: (payload: string, verdict?: BareUpstreamError) => void,
 ): Uint8Array {
-  return encoder.encode(
-    `event: response.failed\ndata: ${upstreamErrorFailedPayload(message, refusalCode, maskCredential, errorType, errorCode)}\n\n`,
-  );
+  const payload = upstreamErrorFailedPayload(message, tailIdentity({ refusalCode, errorType, errorCode }, verdict), maskCredential);
+  onPayload?.(payload, verdict);
+  return encoder.encode(`event: response.failed\ndata: ${payload}\n\n`);
 }
 
-function upstreamErrorFailedPayload(message: string, refusalCode?: string, maskCredential?: (text: string) => string, errorType?: string, errorCode?: string): string {
-  const diagnostic = redactSecretString(message);
-  const recognized = recognizedUpstreamError({ type: errorType, code: errorCode });
+/**
+ * The wire identity for a bare verdict. A frame the relay parsed uses the identity derived once in
+ * `bareUpstreamError`, so the client tail, the request row and the account inspector cannot
+ * disagree. A caller that states the fields directly (the exported frame builder) derives them by
+ * the same rule.
+ */
+function tailIdentity(
+  verdict: Pick<BareUpstreamError, "refusalCode" | "errorType" | "errorCode">,
+  derived?: BareUpstreamError,
+): { type: string; code: string; retryable: boolean } {
+  if (derived !== undefined) {
+    return { type: derived.terminalType, code: derived.terminalCode, retryable: verdict.refusalCode === undefined };
+  }
+  // A caller that states the fields directly gets the exported frame builder's original mapping:
+  // recognized client/rate-limit/overload classes keep their identity, and anything else stays
+  // the generic retryable upstream failure.
+  const recognized = recognizedUpstreamError({ type: verdict.errorType, code: verdict.errorCode });
+  return {
+    type: verdict.refusalCode === undefined ? recognized?.type ?? "upstream_error" : "invalid_request_error",
+    code: verdict.refusalCode ?? recognized?.code ?? "upstream_server_error",
+    retryable: verdict.refusalCode === undefined,
+  };
+}
+
+function upstreamErrorFailedPayload(
+  message: string,
+  identity: { type: string; code: string; retryable: boolean },
+  maskCredential?: (text: string) => string,
+): string {
+  // The identity is protocol vocabulary (a recognized class, a refusal code or the generic upstream
+  // failure): masking it hides nothing and would blur the class a client acts on. Anything else is
+  // still masked.
+  const vocabulary = (value: string): boolean => value === "upstream_error" || value === "upstream_server_error"
+    || value === "invalid_request_error" || isTerminalRefusalCode(value) || isCyberPolicyCode(value)
+    || recognizedUpstreamError({ type: value }) !== undefined || recognizedUpstreamError({ code: value }) !== undefined;
   const error = {
-    type: refusalCode === undefined ? (recognized?.type ?? "upstream_error") : "invalid_request_error",
-    code: refusalCode === undefined ? (recognized?.code ?? "upstream_server_error") : (maskCredential?.(refusalCode) ?? refusalCode),
-    message: (maskCredential?.(diagnostic) ?? diagnostic).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS),
+    type: vocabulary(identity.type) ? identity.type : maskCredential?.(identity.type) ?? identity.type,
+    code: vocabulary(identity.code) ? identity.code : maskCredential?.(identity.code) ?? identity.code,
+    message: redactSecretString(maskCredential?.(message) ?? message).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS),
   };
   return JSON.stringify({
     type: "response.failed",
@@ -201,7 +235,7 @@ function upstreamErrorFailedPayload(message: string, refusalCode?: string, maskC
       status: "failed",
       error,
       last_error: error,
-      ...(refusalCode === undefined ? {} : { retryable: false }),
+      ...(identity.retryable ? {} : { retryable: false }),
     },
   });
 }
@@ -218,75 +252,18 @@ function upstreamErrorFailedPayload(message: string, refusalCode?: string, maskC
 export function refusalFailedTailFrame(
   encoder: TextEncoder,
   message: string,
-  refusalCode: string,
+  refusalCode: string | undefined,
   maskCredential?: (text: string) => string,
+  errorType?: string,
+  errorCode?: string,
+  verdict?: BareUpstreamError,
+  onPayload?: (payload: string, verdict?: BareUpstreamError) => void,
 ): Uint8Array {
-  const payload = upstreamErrorFailedPayload(message, refusalCode, maskCredential);
+  const payload = upstreamErrorFailedPayload(message, tailIdentity({ refusalCode, errorType, errorCode }, verdict), maskCredential);
+  onPayload?.(payload, verdict);
   return encoder.encode(
     `\n\nevent: response.failed\ndata: ${payload}\n\n${DONE_SSE_FRAME_TEXT}`,
   );
-}
-
-function boundedBareUpstreamErrorMessage(payload: unknown): string | undefined {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)
-    || (payload as { type?: unknown }).type !== "error") return undefined;
-  const message = upstreamErrorMessageFromPayload(payload);
-  return message ? redactSecretString(message).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS) : undefined;
-}
-
-/**
- * A bare upstream `error` event reduced to what the synthesized terminal needs.
- *
- * The structured code is authoritative whenever the upstream sent one: a code
- * that is not a refusal means the upstream did not refuse, whatever its
- * diagnostic text happens to quote. Recognized refusal copy is read only when
- * no code was carried anywhere on the event, which is the shape #5176 reports.
- * A refusal code with no message still yields a terminal, because Codex accepts
- * that shape and supplies its own copy for it.
- *
- * The candidate topology mirrors {@link upstreamErrorMessageFromPayload}: code
- * and message must be read from the same places, or an event whose message is
- * nested under `response.error` would contribute text while its verdict went
- * unseen.
- */
-function boundedBareUpstreamError(payload: unknown): {
-  message: string;
-  refusalCode: string | undefined;
-  errorType: string | undefined;
-  errorCode: string | undefined;
-} | undefined {
-  const root = asJsonRecord(payload);
-  if (!root || root.type !== "error") return undefined;
-  const message = boundedBareUpstreamErrorMessage(payload);
-  const response = asJsonRecord(root.response);
-  // Precedence is {@link upstreamErrorMessageFromPayload}'s, so the envelope
-  // that supplied the message also supplies the verdict. Taking the FIRST code
-  // rather than searching for a refusal is what stops a refusal nested below a
-  // transient one from overruling it.
-  const candidates = [
-    asJsonRecord(root.error),
-    asJsonRecord(root.last_error),
-    asJsonRecord(response?.error),
-    asJsonRecord(response?.incomplete_details),
-    root,
-  ];
-  const code = candidates.map(candidate => stringField(candidate, "code"))
-    .find(candidate => candidate !== undefined)?.slice(0, 128);
-  // Root `type` is the SSE event discriminator (`"error"`), not an error class. Only nested
-  // error records can authoritatively name classes such as rate_limit_error or server_error.
-  const errorType = candidates.slice(0, -1).map(candidate => stringField(candidate, "type"))
-    .find(candidate => candidate !== undefined)?.slice(0, 128);
-  const refusalCode = code !== undefined
-    ? (isTerminalRefusalCode(code) ? code : undefined)
-    : message === undefined ? undefined : safetyRefusalCodeFromMessage(message);
-  if (message !== undefined) return { message, refusalCode, errorType, errorCode: code };
-  if (refusalCode === undefined) return undefined;
-  return {
-    message: terminalRefusalFallbackMessage(refusalCode),
-    refusalCode,
-    errorType,
-    errorCode: code,
-  };
 }
 
 export type SseTerminalOutputBoundary = {
@@ -298,6 +275,14 @@ export type SseTerminalOutputBoundary = {
   upstreamRefusalCode(): string | undefined;
   upstreamErrorType(): string | undefined;
   upstreamErrorCode(): string | undefined;
+  /** The winning bare verdict, already reduced; every synthetic tail is framed from it. */
+  upstreamVerdict(): BareUpstreamError | undefined;
+  /**
+   * The winning bare verdict carries a provider status (recognized class, explicit refusal, or a
+   * stated wrapper status), so a synthetic tail carries it instead of the read failure that
+   * followed. A verdict without one keeps the transport failure.
+   */
+  recognizedBareError(): boolean;
   dispose(): void;
 };
 
@@ -318,6 +303,13 @@ export type SseTerminalOutputBoundaryOptions = CodexSafetyBufferingFilterOptions
   maxOutputBytes?: number;
   /** Optional aggregate frame count through the first terminal. */
   maxFrames?: number;
+  /** Per-request outbound mask, applied to upstream copy before the boundary bounds it. */
+  maskCredential?: (text: string) => string;
+  /**
+   * Redaction for a typed bare `error` frame this boundary forwards, applied after the frame's
+   * verdict is reduced from the original so every relay classifies the provider's own words.
+   */
+  redactForwardedEvidence?: (block: string) => string;
 };
 
 /**
@@ -349,11 +341,14 @@ export function createSseTerminalOutputBoundary(
   let terminal = false;
   let done = false;
   let pendingDone: { block: Uint8Array; delimiter: Uint8Array } | null = null;
+  // One sentinel per turn: a [DONE] repeated after the terminal is dropped.
+  let doneEmitted = false;
   let disposed = false;
   let upstreamError: string | undefined;
   let upstreamRefusalCode: string | undefined;
   let upstreamErrorType: string | undefined;
   let upstreamErrorCode: string | undefined;
+  let bareEvidence: BareUpstreamEvidence | undefined;
   let inputBytes = 0;
   let outputBytes = 0;
   let framesSeen = 0;
@@ -384,23 +379,37 @@ export function createSseTerminalOutputBoundary(
       const parsed = payload === null ? undefined : parseSsePayload(payload);
       // Observe on the client reader itself: a tee inspection branch may lag
       // behind EOF, so its log context cannot determine the outgoing terminal.
-      const bare = boundedBareUpstreamError(parsed);
-      if (bare !== undefined) {
-        upstreamError = bare.message;
-        upstreamRefusalCode = bare.refusalCode;
-        upstreamErrorType = bare.errorType;
-        upstreamErrorCode = bare.errorCode;
+      const evidence = reduceBareUpstreamEvidence(bareEvidence, parsed, options?.maskCredential);
+      if (evidence !== undefined && evidence !== bareEvidence) {
+        bareEvidence = evidence;
+        upstreamError = evidence.verdict.message;
+        upstreamRefusalCode = evidence.verdict.refusalCode;
+        upstreamErrorType = evidence.verdict.errorType;
+        upstreamErrorCode = evidence.verdict.errorCode;
       }
       const safetyBuffering = dropSafetyBuffering && parsed !== undefined
         ? codexSafetyBufferingBlockAction(parsed) : "keep";
       if (safetyBuffering === "drop") continue;
-      const policyError = parsed !== undefined && isPolicyRewriteType(parsed)
+      // An untyped policy envelope that loses to earlier typed evidence is not the turn's verdict.
+      const typedBareSeen = bareEvidence?.typed === true;
+      const policyError = parsed !== undefined && isPolicyRewriteType(parsed, typedBareSeen)
         ? cyberPolicyTerminalError(parsed)
         : undefined;
-      const policyPayload = policyError ? policyFailurePayload(policyError, parsed) : undefined;
+      const policyPayload = policyError ? policyFailurePayload(policyError, parsed, options?.maskCredential) : undefined;
+      // An untyped envelope is evidence, not a Responses event: the client receives the terminal it
+      // decides (as the WebSocket bridge already does), never the provider's raw diagnostic frame.
+      // Its verdict was reduced above; an explicit policy envelope continues as the policy terminal.
+      if (policyPayload === undefined && parsed !== undefined && isUntypedBareUpstreamError(parsed)) continue;
       let outboundBlock = policyPayload !== undefined
-        ? encoder.encode(rewritePolicyTerminalBlock(decoder.decode(frame.block), policyPayload))
-        : frame.block;
+        // An untyped envelope's block is upstream text throughout (comments, extension and event
+        // lines), so its policy terminal is a fresh block; a typed terminal keeps its own lines.
+        ? encoder.encode(parsed !== undefined && isUntypedBareUpstreamError(parsed)
+          ? `event: response.failed\ndata: ${policyPayload}`
+          // A typed source keeps its own lines, so they pass the same redaction as a forwarded frame.
+          : (options?.redactForwardedEvidence ?? ((block: string) => block))(rewritePolicyTerminalBlock(decoder.decode(frame.block), policyPayload)))
+        : options?.redactForwardedEvidence !== undefined && asJsonRecord(parsed)?.type === "error"
+          ? encoder.encode(options.redactForwardedEvidence(decoder.decode(frame.block)))
+          : frame.block;
       if (safetyBuffering === "strip") {
         outboundBlock = encoder.encode(stripCodexSafetyBufferingField(
           decoder.decode(outboundBlock),
@@ -409,8 +418,12 @@ export function createSseTerminalOutputBoundary(
       }
       if (isDone) {
         done = true;
+        // The sentinel is protocol: a [DONE] block carrying extra upstream lines (comments, fields)
+        // is emitted as the bare sentinel, so nothing provider-written rides along with it.
+        if (!/^data:[ \t]*\[DONE\][ \t]*$/.test(decoder.decode(outboundBlock).trim())) outboundBlock = encoder.encode("data: [DONE]");
         if (responsesTerminal) {
-          appendOutput(outboundBlock, frame.delimiter);
+          if (!doneEmitted) appendOutput(outboundBlock, frame.delimiter);
+          doneEmitted = true;
         } else if (!pendingDone) {
           // Do not expose a sentinel before a Responses terminal. If EOF
           // follows, the synthetic incomplete path owns the one sentinel;
@@ -422,11 +435,13 @@ export function createSseTerminalOutputBoundary(
       // Preserve every frame through the first Responses terminal. Every
       // later non-DONE frame is dropped.
       if (!responsesTerminal) appendOutput(outboundBlock, frame.delimiter);
-      if (!responsesTerminal && payload && terminalStatusFromParsed(parsed)) {
+      // The policy payload this boundary emitted is itself the turn's terminal.
+      if (!responsesTerminal && payload && (policyPayload !== undefined || terminalStatusFromParsed(parsed, typedBareSeen))) {
         responsesTerminal = true;
         if (pendingDone) {
           appendOutput(pendingDone.block, pendingDone.delimiter);
           pendingDone = null;
+          doneEmitted = true;
         }
       }
     }
@@ -479,6 +494,8 @@ export function createSseTerminalOutputBoundary(
     upstreamRefusalCode: () => upstreamRefusalCode,
     upstreamErrorType: () => upstreamErrorType,
     upstreamErrorCode: () => upstreamErrorCode,
+    upstreamVerdict: () => bareEvidence?.verdict,
+    recognizedBareError: () => bareEvidence?.verdict.httpStatus !== undefined,
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -500,11 +517,15 @@ export function relaySseWithFailedTail(
   body: ReadableStream<Uint8Array>,
   upstream: AbortController,
   onClientGone?: (reason?: unknown) => void,
-  opts?: { upstreamError?: string; terminalBoundary?: CodexSafetyBufferingFilterOptions; maskCredential?: (text: string) => string },
+  opts?: { upstreamError?: string; terminalBoundary?: CodexSafetyBufferingFilterOptions; maskCredential?: (text: string) => string;
+    /** See {@link SseTerminalOutputBoundaryOptions.redactForwardedEvidence}. */
+    redactForwardedEvidence?: (block: string) => string;
+    /** Receives the exact payload of every synthesized bare-verdict tail, so a client-stream log can tell it from upstream. */
+    onSyntheticTail?: (payload: string, verdict?: BareUpstreamError) => void },
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const encoder = new TextEncoder();
-  const terminalBoundary = createSseTerminalOutputBoundary(opts?.terminalBoundary);
+  const terminalBoundary = createSseTerminalOutputBoundary({ ...opts?.terminalBoundary, maskCredential: opts?.maskCredential, redactForwardedEvidence: opts?.redactForwardedEvidence });
   let closed = false;
   const relayChunk = (
     controller: ReadableStreamDefaultController<Uint8Array>,
@@ -533,7 +554,7 @@ export function relaySseWithFailedTail(
     terminalBoundary.dispose();
     return "terminal";
   };
-  return new ReadableStream<Uint8Array>({
+  return carryPacedStream(body, new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
         for (;;) {
@@ -557,6 +578,8 @@ export function relaySseWithFailedTail(
                   opts?.maskCredential,
                   terminalBoundary.upstreamErrorType(),
                   terminalBoundary.upstreamErrorCode(),
+                  terminalBoundary.upstreamVerdict(),
+                  opts?.onSyntheticTail,
                 ));
               controller.enqueue(doneFrame(encoder));
             }
@@ -588,8 +611,8 @@ export function relaySseWithFailedTail(
             // Leading blank line terminates a partial SSE block so the failed frame parses cleanly.
             const refusalCode = terminalBoundary.upstreamRefusalCode();
             const refusalMessage = terminalBoundary.upstreamError();
-            controller.enqueue(refusalCode !== undefined && refusalMessage !== undefined
-              ? refusalFailedTailFrame(encoder, refusalMessage, refusalCode, opts?.maskCredential)
+            controller.enqueue((refusalCode !== undefined || terminalBoundary.recognizedBareError()) && refusalMessage !== undefined
+              ? refusalFailedTailFrame(encoder, refusalMessage, refusalCode, opts?.maskCredential, terminalBoundary.upstreamErrorType(), terminalBoundary.upstreamErrorCode(), terminalBoundary.upstreamVerdict(), opts?.onSyntheticTail)
               : failedTailFrame(encoder, err, opts?.maskCredential));
           }
           controller.close();
@@ -603,7 +626,7 @@ export function relaySseWithFailedTail(
       else upstream.abort(reason);
       reader.cancel(reason).catch(() => {});
     },
-  });
+  }, pacedQueuingStrategy(body)));
 }
 
 export { nextSseBlock, sseDataPayload } from "./sse-payload-rewrite";
@@ -669,9 +692,10 @@ function parseSsePayload(payload: string): unknown | undefined {
   }
 }
 
-function isPolicyRewriteType(parsed: unknown): boolean {
+function isPolicyRewriteType(parsed: unknown, typedBareSeen = false): boolean {
   const type = asJsonRecord(parsed)?.type;
-  return type === "response.failed" || type === "response.incomplete" || type === "error";
+  return type === "response.failed" || type === "response.incomplete" || type === "error"
+    || (!typedBareSeen && isUntypedBareUpstreamError(parsed) && isCyberPolicyCode(bareUpstreamError(parsed)?.errorCode));
 }
 
 /**
@@ -712,14 +736,18 @@ function rewritePolicyTerminalBlock(block: string, payload: string): string {
   return withEvent.join(newline);
 }
 
-function policyFailurePayload(policyError: { message: string; type?: string }, parsed: unknown): string {
+function policyFailurePayload(policyError: { message: string; type?: string }, parsed: unknown, mask?: (text: string) => string): string {
+  // An untyped envelope has no protocol fields of its own: everything in it is upstream copy, so its
+  // policy terminal keeps only the guarded message, the default policy type and the event sequence.
+  const untyped = isUntypedBareUpstreamError(parsed);
   const error = {
-    type: cyberPolicyErrorType(policyError.type),
+    type: untyped ? cyberPolicyErrorType(undefined) : cyberPolicyErrorType(policyError.type),
     code: CYBER_POLICY_ERROR_CODE,
-    message: redactSecretString(policyError.message).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS),
+    // Mask before bounding: a slice first can keep a credential prefix the later rewrite misses.
+    message: redactSecretString(guardBareCopy(policyError.message, mask)).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS),
   };
   const root = asJsonRecord(parsed);
-  const originalResponse = asJsonRecord(root?.response);
+  const originalResponse = untyped ? undefined : asJsonRecord(root?.response);
   const preservedResponse = Object.fromEntries(
     Object.entries(originalResponse ?? {}).filter(([key]) => key !== "incomplete_details"),
   );
@@ -733,7 +761,12 @@ function policyFailurePayload(policyError: { message: string; type?: string }, p
   // Responses event metadata such as sequence_number is normally top-level.
   // Keep it (and any other non-error, non-response fields) while replacing only
   // the protocol type and error envelope.
-  const preservedRoot = root
+  const preservedRoot = untyped
+    // A sequence number that repeats a sent value is upstream copy like any other; it is omitted.
+    ? (typeof root?.sequence_number === "number"
+      && (mask === undefined || mask(String(root.sequence_number)) === String(root.sequence_number))
+      ? { sequence_number: root.sequence_number } : {})
+    : root
     ? Object.fromEntries(Object.entries(root).filter(([key]) => (
       key !== "type"
       && key !== "response"
@@ -801,8 +834,14 @@ function createFirstOutputReporter(onFirstOutput?: () => void): {
   };
 }
 
-export function terminalStatusFromParsed(parsed: unknown): ResponsesTerminalStatus | null {
+/**
+ * `typedBareSeen`: an earlier typed bare `error` frame already owns the turn's verdict
+ * (`reduceBareUpstreamEvidence`), so a later untyped policy envelope loses and is no terminal.
+ * A stream reader uses {@link createTerminalStatusTracker} rather than passing this itself.
+ */
+export function terminalStatusFromParsed(parsed: unknown, typedBareSeen = false): ResponsesTerminalStatus | null {
   const type = asJsonRecord(parsed)?.type;
+  if (!typedBareSeen && isUntypedBareUpstreamError(parsed) && isCyberPolicyCode(bareUpstreamError(parsed)?.errorCode)) return "failed";
   switch (type) {
     case "response.completed":
       return "completed";
@@ -815,6 +854,19 @@ export function terminalStatusFromParsed(parsed: unknown): ResponsesTerminalStat
     default:
       return null;
   }
+}
+
+/**
+ * One stream's terminal classifier. It reduces bare evidence in order, so an untyped policy
+ * envelope ends the turn only when it is the winning verdict, exactly as the client boundary,
+ * the request row and the account inspector decide it.
+ */
+export function createTerminalStatusTracker(): (parsed: unknown) => ResponsesTerminalStatus | null {
+  let evidence: BareUpstreamEvidence | undefined;
+  return parsed => {
+    evidence = reduceBareUpstreamEvidence(evidence, parsed);
+    return terminalStatusFromParsed(parsed, evidence?.typed === true);
+  };
 }
 
 /** Extract the response object from a `response.completed` SSE payload, or null. */
@@ -1183,6 +1235,10 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
   let decoder: TextDecoder | null = new TextDecoder();
   let reported = false;
   let sawTerminal = false;
+  // A policy terminal ends the client stream, so a later completion in the same stream is not a
+  // turn the client received and must not become continuation state.
+  let policyTerminalSeen = false;
+  const classifyTerminal = createTerminalStatusTracker();
   let disposed = false;
   let delimiterTail: Uint8Array = EMPTY_BYTES;
   let pendingLineFeed = false;
@@ -1345,7 +1401,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
       try { handlers.onOpaquePayload(payload); } catch { /* inspection must never throw into the pump */ }
     }
     reportFirstOutput.parsed(parsed);
-    const status = terminalStatusFromParsed(parsed);
+    const status = classifyTerminal(parsed);
     type ParsedSseEvent = { type?: unknown; output_index?: unknown; item?: unknown; response?: unknown };
     const parsedEvent = parsed && typeof parsed === "object" && !Array.isArray(parsed)
       ? parsed as ParsedSseEvent
@@ -1439,6 +1495,8 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
     const policyTerminal = status === "failed"
       && isPolicyRewriteType(parsed)
       && cyberPolicyTerminalError(parsed) !== undefined;
+    // Only a policy frame that ends the stream first; after an earlier terminal it ended nothing.
+    if (policyTerminal && !sawTerminal) policyTerminalSeen = true;
     if (status) sawTerminal = true;
     try {
       if (!reported && handlers.onTerminal && status) {
@@ -1449,7 +1507,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
         }
         handlers.onTerminal(status, policyTerminal ? 400 : undefined);
       }
-      if (status === "completed" && reconstructedTerminalResponse && handlers.onCompletedResponse) {
+      if (status === "completed" && !policyTerminalSeen && reconstructedTerminalResponse && handlers.onCompletedResponse) {
         handlers.onCompletedResponse(reconstructedTerminalResponse);
       }
       if (status && reconstructedTerminalResponse && handlers.onTerminalResponse) {
@@ -1717,14 +1775,13 @@ export function consumeForInspection(
   options?: InspectionConsumerOptions,
 ): void {
   const reader = body.getReader();
-  let bareUpstreamError: string | undefined;
+  let bareEvidence: BareUpstreamEvidence | undefined;
   const inspector = (options?.inspectorFactory ?? createSseInspector)({
     onTerminal,
     logCtx,
     onCompletedResponse,
     onParsedPayload: payload => {
-      const message = boundedBareUpstreamErrorMessage(payload);
-      if (message !== undefined) bareUpstreamError = message;
+      bareEvidence = reduceBareUpstreamEvidence(bareEvidence, payload);
       options?.onParsedPayload?.(payload);
     },
     onFirstOutput,
@@ -1740,8 +1797,9 @@ export function consumeForInspection(
     onCleanEof: () => {
       if (!inspector.reported()) {
         if (logCtx) logCtx.terminalSource = "synthetic";
-        if (bareUpstreamError !== undefined) {
-          onTerminal("failed", httpStatusForRequestLogTerminal("failed", logCtx));
+        if (bareEvidence !== undefined) {
+          // Without a request row, the verdict still carries the status every other reader uses.
+          onTerminal("failed", logCtx ? httpStatusForRequestLogTerminal("failed", logCtx) : bareEvidence.verdict.terminalStatus);
         } else {
           onTerminal("incomplete");
         }
@@ -1758,9 +1816,14 @@ export function consumeForInspection(
           // A truncated 200 body must not meter as a success the client never
           // received; the router's equivalent turn carries 502 + streamAborted
           // (codex-router #139).
-          if (logCtx.activeAttempt) logCtx.activeAttempt.streamAborted = true;
+          const verdict = bareEvidence?.verdict;
+          if (logCtx.activeAttempt && !verdict?.refusalCode && verdict?.httpStatus === undefined) logCtx.activeAttempt.streamAborted = true;
         }
-        onTerminal("failed", 502);
+        const verdict = bareEvidence?.verdict;
+        // The request log already reduced the same evidence into terminalHttpStatus. Falling back
+        // to the verdict keeps the two readers aligned when one has not observed the frame yet.
+        onTerminal("failed", verdict?.httpStatus !== undefined
+          ? (logCtx?.terminalHttpStatus ?? verdict.httpStatus) : 502);
       }
     },
   });

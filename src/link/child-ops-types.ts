@@ -49,6 +49,8 @@ export interface ChildJob {
   op: ChildOp;
   trigger: ChildTrigger;
   restart: ChildRestart;
+  /** D8: present only on a manual restart the operator sent past activity (--ignore-activity); never on an automatic job. */
+  ignoreActivity?: true;
   state: "queued" | "running" | "done";
   createdAt: string;
   finishedAt: string | null;
@@ -83,5 +85,5 @@ export interface ChildOpsEnv {
   autoSyncAllowed?(linkId: string): boolean;
 }
 
-export type ItemRunner = (record: LinkRecord, job: Readonly<Pick<ChildJob, "op" | "trigger" | "restart">>,
+export type ItemRunner = (record: LinkRecord, job: Readonly<Pick<ChildJob, "op" | "trigger" | "restart" | "ignoreActivity">>,
   env: ChildOpsEnv) => Promise<ItemOutcome>;

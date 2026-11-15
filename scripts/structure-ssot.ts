@@ -25,6 +25,7 @@
  */
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
+import { withoutGitRepositoryEnv } from "./git-repository-env";
 
 const BT = "\u0060";
 
@@ -162,10 +163,12 @@ function listMarkdown(dir: string, root: string, out: string[] = []): string[] {
 }
 
 /** Tracked files plus every directory on their way up, read once from the git index. */
-function trackedPaths(repoRoot: string): Set<string> | null {
+export function trackedPaths(repoRoot: string): Set<string> | null {
   let stdout: string;
   try {
-    const run = Bun.spawnSync(["git", "ls-files", "-z"], { cwd: repoRoot, stdout: "pipe", stderr: "pipe" });
+    const run = Bun.spawnSync(["git", "ls-files", "-z"], {
+      cwd: repoRoot, env: withoutGitRepositoryEnv(process.env), stdout: "pipe", stderr: "pipe",
+    });
     if (run.exitCode !== 0) return null;
     stdout = new TextDecoder().decode(run.stdout);
   } catch {

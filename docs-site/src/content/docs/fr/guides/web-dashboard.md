@@ -22,6 +22,11 @@ l'interface contre un proxy déjà actif :
 
 ```bash
 ocx start
+```
+
+Laissez le proxy actif dans ce terminal. Dans un second terminal, lancez le serveur de développement du dashboard :
+
+```bash
 bun run dev:gui
 ```
 

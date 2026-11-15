@@ -1,7 +1,8 @@
 import { remoteChildHttpArgv, REMOTE_CURL_PREFLIGHT } from "../../src/link/remote-probe";
+import { createHmac } from "node:crypto";
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { appendFileSync, existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../../src/server/management-api";
@@ -15,7 +16,9 @@ import {
 import type { ManagementApiDeps } from "../../src/server/management/context";
 import type { OcxConfig } from "../../src/types";
 import type { LinkStore } from "../../src/link/store";
+import { readLinkRetirement } from "../../src/link/retirement";
 import { createLinkSupervisor, type LinkSupervisor } from "../../src/link/supervisor";
+import { createLinkListenerLifecycle } from "../../src/server/index/link-listener";
 import type { SshRunner, SshChild, SshRunResult } from "../../src/link/ssh-runner";
 import { quoteRemote, remoteOcxArgv } from "../../src/link/ssh-argv";
 import { trustedLoopbackForIngress, type ServerIngress } from "../../src/server/index/serve-options";
@@ -34,6 +37,12 @@ const BARE_OCX: SshRunResult = { code: 127, stdout: "", stderr: "bare ocx call: 
 
 function isBareOcx(argv: readonly string[]): boolean {
   return /^'ocx'( |$)/.test(argv.at(-1) ?? "");
+}
+
+/** The line OpenSSH records for a probe: under the HostKeyAlias it ran with, as the real client does. */
+function hostKeyLine(argv: readonly string[]): string {
+  const alias = argv.find(value => value.startsWith("HostKeyAlias="))?.slice("HostKeyAlias=".length) ?? "client";
+  return alias + " ssh-ed25519 AAAA\n";
 }
 
 function config(): OcxConfig {
@@ -111,7 +120,7 @@ function applyRunner(h: ReturnType<typeof harness>, connectCode = 0): SshRunner 
       const text = argv.join(" ");
       if (text.includes("ssh-keygen")) return { code: 0, stdout: "256 SHA256:abcdefghijklmnop host (ED25519)", stderr: "" };
       const knownHostOption = argv.find(value => value.startsWith("UserKnownHostsFile="));
-      if (knownHostOption) writeFileSync(knownHostOption.slice("UserKnownHostsFile=".length), "client ssh-ed25519 AAAA\n");
+      if (knownHostOption) writeFileSync(knownHostOption.slice("UserKnownHostsFile=".length), hostKeyLine(argv));
       if (isBareOcx(argv)) return BARE_OCX;
       const remote = argv.at(-1) ?? "";
       const child = childProbe(remote, h); if (child) return child;
@@ -159,7 +168,7 @@ function versionRunner(remote: { probeCode: number; probeStderr: string; code: n
       if (argv.at(-1)?.includes("ocx-platform")) return { code: 0, stdout: "Linux\n", stderr: "" };
       if (argv.at(-1) === remoteOcx(["--version"])) return { code: remote.code, stdout: remote.stdout, stderr: remote.stderr };
       const knownHostOption = argv.find(value => value.startsWith("UserKnownHostsFile="));
-      if (knownHostOption) writeFileSync(knownHostOption.slice("UserKnownHostsFile=".length), "client ssh-ed25519 AAAA\n");
+      if (knownHostOption) writeFileSync(knownHostOption.slice("UserKnownHostsFile=".length), hostKeyLine(argv));
       return argv.at(-1) === "echo ocx-link-probe" ? { code: remote.probeCode, stdout: remote.probeCode === 0 ? "ocx-link-probe\n" : "", stderr: remote.probeStderr } : { code: 0, stdout: "", stderr: "" };
     },
     spawnTunnel: () => ({ pid: 1, argv: [], exited: Promise.resolve(0), kill() {} }),
@@ -172,6 +181,257 @@ afterEach(() => {
 });
 
 describe("link management routes", () => {
+  test("DELETE rejects malformed JSON before touching a link", async () => {
+    const h = harness();
+    const id = "lnk_0123456789abcdef";
+    const record = { id, alias: "child", direction: "client-initiated" as const, hostKeyFingerprint: null, tunnelPort: 2200, apiKeyId: "key-old", createdAt: "2026-09-25T00:00:00.000Z" };
+    h.deps.writeLinkStore!({ ...h.store, links: [record] });
+    h.events.length = 0;
+    const url = new URL(`http://127.0.0.1/api/link/${id}`);
+    const req = new Request(url, { method: "DELETE", headers: { host: "127.0.0.1", "content-type": "application/json" }, body: "{" });
+    const response = await handleManagementAPI(req, url, h.config, h.deps, "admin-token", { isPaired: () => true, isCurrent: () => true, revokeCurrent: () => true }, { trustedLoopback: true, guiSessionIssuance: null });
+    expect(response?.status).toBe(400);
+    expect(h.store.links).toEqual([record]);
+    expect(h.events).toEqual([]);
+  });
+  test("DELETE refuses a link replaced while SSH disconnect is in flight", async () => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-link-replaced-"));
+    const h = harness();
+    const id = "lnk_0123456789abcdef";
+    const original = { id, alias: "child", direction: "hub-initiated" as const, remotePlatform: "posix" as const, hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2200, apiKeyId: "key-old", createdAt: "2026-09-25T00:00:00.000Z" };
+    const replacement = { ...original, apiKeyId: "key-new" };
+    h.deps.writeLinkStore!({ ...h.store, links: [original] });
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    let release!: (result: SshRunResult) => void;
+    const pending = new Promise<SshRunResult>(resolve => { release = resolve; });
+    const runner: SshRunner = { async run() { entered(); return pending; }, spawnTunnel() { throw new Error("unexpected tunnel"); } };
+    const removal = call(`/api/link/${id}`, "DELETE", {}, { ...h.deps, sshRunner: runner }, "admin-token", true, null, true, h.config);
+    await started;
+    h.deps.writeLinkStore!({ ...h.store, links: [replacement] });
+    release({ code: 0, stdout: "", stderr: "" });
+    const response = await removal;
+    expect(response?.status).toBe(409);
+    expect(h.events).not.toContain("revoke");
+    expect(h.store.links).toEqual([replacement]);
+    expect(h.events).toContain("reload");
+  });
+  test("retirement retains the claim across a store write failure and does not revoke twice", async () => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-retirement-write-"));
+    const previous = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = temp;
+    try {
+      const h = harness();
+      const initial = await call("/api/link/issue", "POST", { alias: "old", tunnelPort: 2200 }, h.deps, "admin-token", true, null, true, h.config);
+      const { linkId } = await initial!.json() as { linkId: string };
+      const write = h.deps.writeLinkStore!;
+      h.deps.writeLinkStore = () => { throw new Error("write failed"); };
+      expect((await call(`/api/link/${linkId}`, "DELETE", { force: true }, h.deps, "admin-token", true, null, true, h.config))?.status).toBe(503);
+      expect(readLinkRetirement(linkId)).not.toBeNull();
+      expect(h.store.links).toHaveLength(1);
+      h.deps.writeLinkStore = write;
+      expect((await call(`/api/link/${linkId}`, "DELETE", { force: true }, h.deps, "admin-token", true, null, true, h.config))?.status).toBe(200);
+      expect(h.events.filter(event => event === "revoke")).toHaveLength(1);
+      expect(readLinkRetirement(linkId)).toBeNull();
+    } finally { if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous; }
+  });
+  test("lifecycle failure keeps the journal and refuses a same-id replacement", async () => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-retirement-lifecycle-"));
+    const previous = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = temp;
+    try {
+      const h = harness();
+      const sup = supervisor(h.events);
+      let failing = true;
+      sup.reload = async () => { if (failing) throw new Error("reload failed"); };
+      h.deps.linkSupervisor = () => sup;
+      const initial = await call("/api/link/issue", "POST", { alias: "old", tunnelPort: 2200 }, h.deps, "admin-token", true, null, true, h.config);
+      const { linkId } = await initial!.json() as { linkId: string };
+      const original = h.store.links[0]!;
+      expect((await call(`/api/link/${linkId}`, "DELETE", { force: true }, h.deps, "admin-token", true, null, true, h.config))?.status).toBe(503);
+      expect(readLinkRetirement(linkId)?.link).toEqual(original);
+      const replacement = { ...original, apiKeyId: "new-key" };
+      h.deps.writeLinkStore!({ ...h.store, links: [replacement] });
+      failing = false;
+      expect((await call(`/api/link/${linkId}`, "DELETE", { force: true }, h.deps, "admin-token", true, null, true, h.config))?.status).toBe(409);
+      expect(h.store.links).toEqual([replacement]);
+      expect(readLinkRetirement(linkId)?.link).toEqual(original);
+    } finally { if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous; }
+  });
+  test("malformed retirement journal fails closed for an unknown link", async () => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-retirement-corrupt-"));
+    const previous = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = temp;
+    try {
+      const h = harness();
+      const id = "lnk_0123456789abcdef";
+      mkdirSync(join(temp, "link"), { recursive: true });
+      writeFileSync(join(temp, "link", `retirement-${id}.json`), "{");
+      expect((await call(`/api/link/${id}`, "DELETE", { force: true }, h.deps, "admin-token", true, null, true, h.config))?.status).toBe(503);
+      expect(h.events).toEqual([]);
+      expect((await call("/api/link/lnk_aaaaaaaaaaaaaaaa", "DELETE", { force: true }, h.deps, "admin-token", true, null, true, h.config))?.status).toBe(404);
+    } finally { if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous; }
+  });
+  test("creation during listener close leaves the new link listening", async () => {
+    const h = harness();
+    let listening = true;
+    let entered!: () => void;
+    const closing = new Promise<void>(resolve => { entered = resolve; });
+    let finish!: () => void;
+    const allowClose = new Promise<void>(resolve => { finish = resolve; });
+    h.listener.ensureStarted = async () => { listening = true; };
+    h.listener.status = () => ({ state: listening ? "listening" : "off", port: listening ? h.store.listenerPort : null, reason: null });
+    h.listener.close = async () => { entered(); await allowClose; listening = false; };
+    const initial = await call("/api/link/issue", "POST", { alias: "old", tunnelPort: 2200 }, h.deps, "admin-token", true, null, true, h.config);
+    expect(initial?.status).toBe(200);
+    const { linkId } = await initial!.json() as { linkId: string };
+    const removal = call(`/api/link/${linkId}`, "DELETE", { force: true }, h.deps, "admin-token", true, null, true, h.config);
+    await closing;
+    const creation = await call("/api/link/issue", "POST", { alias: "new", tunnelPort: 2201 }, h.deps, "admin-token", true, null, true, h.config);
+    expect(creation?.status).toBe(200);
+    finish();
+    expect((await removal)?.status).toBe(200);
+    expect(h.store.links.map(link => link.alias)).toEqual(["new"]);
+    expect(h.listener.status().state).toBe("listening");
+  });
+  test("failed listener restart retains retirement until a successful retry", async () => {
+    const h = harness();
+    let listening = true;
+    let release!: () => void, entered!: () => void;
+    const closing = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    let failRestart = false;
+    h.listener.status = () => ({ state: listening ? "listening" : "off", port: listening ? h.store.listenerPort : null, reason: null });
+    h.listener.ensureStarted = async () => { if (!failRestart) listening = true; };
+    h.listener.close = async () => { entered(); await gate; listening = false; };
+    const initial = await call("/api/link/issue", "POST", { alias: "old", tunnelPort: 2200 }, h.deps, "admin-token", true, null, true, h.config);
+    const { linkId } = await initial!.json() as { linkId: string };
+    const removal = call(`/api/link/${linkId}`, "DELETE", { force: true }, h.deps, "admin-token", true, null, true, h.config);
+    await closing;
+    expect((await call("/api/link/issue", "POST", { alias: "new", tunnelPort: 2201 }, h.deps, "admin-token", true, null, true, h.config))?.status).toBe(200);
+    failRestart = true; release();
+    expect((await removal)?.status).toBe(503);
+    expect(readLinkRetirement(linkId)).not.toBeNull();
+    failRestart = false;
+    expect((await call(`/api/link/${linkId}`, "DELETE", { force: true }, h.deps, "admin-token", true, null, true, h.config))?.status).toBe(200);
+    expect(h.listener.status().state).toBe("listening");
+    expect(readLinkRetirement(linkId)).toBeNull();
+  });
+  test("real listener waits for close before a concurrent creation binds", async () => {
+    const h = harness();
+    h.deps.writeLinkStore!({ ...h.store, listenerPort: null });
+    let created!: () => void;
+    const newLinkStored = new Promise<void>(resolve => { created = resolve; });
+    const write = h.deps.writeLinkStore!;
+    h.deps.writeLinkStore = next => { write(next); if (next.links.some(link => link.alias === "new")) created(); };
+    let entered!: () => void, release!: () => void;
+    const closing = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const real = createLinkListenerLifecycle({
+      readStore: () => h.store, writeStore: (_path, next) => h.deps.writeLinkStore!(next), captureRouteDefaults: () => {},
+      serve: options => {
+        const server = Bun.serve(options);
+        return new Proxy(server, { get(target, key) {
+          if (key === "stop") return async (force: boolean) => { entered(); await gate; await target.stop(force); };
+          const value = Reflect.get(target, key, target); return typeof value === "function" ? value.bind(target) : value;
+        } });
+      },
+    });
+    real.start({ dispatch: async () => new Response("ok"), maxRequestBodySize: 1024 });
+    h.deps.linkListener = () => real;
+    try {
+      const initial = await call("/api/link/issue", "POST", { alias: "old", tunnelPort: 2200 }, h.deps, "admin-token", true, null, true, h.config);
+      const { linkId } = await initial!.json() as { linkId: string };
+      const removal = call(`/api/link/${linkId}`, "DELETE", { force: true }, h.deps, "admin-token", true, null, true, h.config);
+      await closing;
+      const creation = call("/api/link/issue", "POST", { alias: "new", tunnelPort: 2201 }, h.deps, "admin-token", true, null, true, h.config);
+      await newLinkStored;
+      release();
+      expect((await creation)?.status).toBe(200);
+      expect((await removal)?.status).toBe(200);
+      expect(real.status().state).toBe("listening");
+      expect((await fetch(`http://127.0.0.1:${real.status().port}/healthz`)).status).toBeDefined();
+    } finally { release(); await real.stop(); }
+  });
+  test("close failure retains the journal and a concurrent retry is refused until the first finishes", async () => {
+    const h = harness();
+    let attempts = 0, entered!: () => void, release!: () => void;
+    const closing = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    h.listener.close = async () => {
+      attempts++;
+      if (attempts === 1) throw new Error("close failed");
+      if (attempts === 2) { entered(); await gate; }
+    };
+    const initial = await call("/api/link/issue", "POST", { alias: "old", tunnelPort: 2200 }, h.deps, "admin-token", true, null, true, h.config);
+    const { linkId } = await initial!.json() as { linkId: string };
+    const remove = () => call(`/api/link/${linkId}`, "DELETE", { force: true }, h.deps, "admin-token", true, null, true, h.config);
+    expect((await remove())?.status).toBe(503);
+    expect(readLinkRetirement(linkId)).not.toBeNull();
+    const first = remove();
+    await closing;
+    // The resumed removal holds the link's job admission until it ends, so a second removal of the
+    // same link is refused before it can stop, revoke or close anything.
+    const second = await remove();
+    expect(second?.status).toBe(409);
+    expect(((await second!.json()) as { error: { code: string } }).error.code).toBe("link_operation_in_progress");
+    expect(readLinkRetirement(linkId)).not.toBeNull();
+    release();
+    expect((await first)?.status).toBe(200);
+    expect(attempts).toBe(2);
+    expect(readLinkRetirement(linkId)).toBeNull();
+  });
+  test("recreation with the retired id during close retains the journal", async () => {
+    const h = harness();
+    let entered!: () => void, release!: () => void;
+    const closing = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    h.listener.close = async () => { entered(); await gate; };
+    const initial = await call("/api/link/issue", "POST", { alias: "old", tunnelPort: 2200 }, h.deps, "admin-token", true, null, true, h.config);
+    const { linkId } = await initial!.json() as { linkId: string };
+    const replacement = { ...h.store.links[0]!, apiKeyId: "replacement" };
+    const removal = call(`/api/link/${linkId}`, "DELETE", { force: true }, h.deps, "admin-token", true, null, true, h.config);
+    await closing;
+    h.deps.writeLinkStore!({ ...h.store, links: [replacement] });
+    release();
+    expect((await removal)?.status).toBe(503);
+    expect(h.store.links).toEqual([replacement]);
+    expect(readLinkRetirement(linkId)?.link.apiKeyId).not.toBe("replacement");
+    expect((await call(`/api/link/${linkId}`, "DELETE", { force: true }, h.deps, "admin-token", true, null, true, h.config))?.status).toBe(409);
+  });
+  test("retries retirement after route intent is repaired", async () => {
+    temp = mkdtempSync(join(tmpdir(), "ocx-link-retirement-retry-"));
+    const previous = process.env.OPENCODEX_HOME;
+    process.env.OPENCODEX_HOME = temp;
+    const h = harness();
+    const id = "lnk_0123456789abcdef";
+    const survivor = "lnk_abcdef0123456789";
+    const issued = h.deps.issueApiKey!(h.config, "link:child");
+    const record = { id, alias: "child", direction: "client-initiated" as const, hostKeyFingerprint: null, tunnelPort: 2200, apiKeyId: issued.id, createdAt: "2026-09-25T00:00:00.000Z" };
+    h.deps.writeLinkStore!({ ...h.store, links: [record, { ...record, id: survivor, apiKeyId: "key-2" }] });
+    const path = join(temp, "route-intent.json");
+    const intent = { version: 1, defaults: {}, devices: { home: { codex: { enabled: true } }, [id]: { codex: { enabled: true } }, [survivor]: { codex: { enabled: false } } }, revisions: { [id]: { codex: 1 }, [survivor]: { codex: 2 } } };
+    const closedSockets: string[] = [];
+    h.listener.closeLinkSockets = linkId => { closedSockets.push(linkId); };
+    try {
+      writeFileSync(path, "invalid");
+      const first = await call(`/api/link/${id}`, "DELETE", { force: true }, h.deps, "admin-token", true, null, true, h.config);
+      expect(first?.status).toBe(503);
+      expect(h.config.apiKeys).toEqual([]);
+      expect(h.store.links.map(link => link.id)).toEqual([survivor]);
+      // The record is gone although reconciliation failed: its sockets close in this request.
+      expect(closedSockets).toEqual([id]);
+      writeFileSync(path, JSON.stringify(intent));
+      const retry = await call(`/api/link/${id}`, "DELETE", { force: true }, h.deps, "admin-token", true, null, true, h.config);
+      expect(retry?.status).toBe(200);
+      expect(h.store.links.map(link => link.id)).toEqual([survivor]);
+      const remaining = JSON.parse(await Bun.file(path).text());
+      expect(remaining.devices).toEqual({ home: intent.devices.home, [survivor]: intent.devices[survivor] });
+      expect(remaining.revisions).toEqual({ [survivor]: intent.revisions[survivor] });
+    } finally {
+      if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous;
+    }
+  });
   test.each([["facets", true], ["facets", false], ["report", true], ["report", false]] as const)("a %s scan failure rechecks the session (revoked=%s)", async (kind, revoked) => {
     temp = mkdtempSync(join(tmpdir(), "ocx-revoked-failed-scan-"));
     const previousHome = process.env.OPENCODEX_HOME;
@@ -683,7 +943,7 @@ describe("link management routes", () => {
     h.deps.writeLinkStore!({ ...h.store, links: [existing] });
     const runner: SshRunner = {
       async run(argv) {
-        if (argv.at(-1) !== remoteOcx(["disconnect"])) return BARE_OCX;
+        if (argv.at(-1) !== remoteOcx(["disconnect", "--expect-link", "lnk_0123456789abcdef"])) return BARE_OCX;
         h.deps.writeLinkStore!({ ...h.store, links: [existing, other] });
         return { code: 0, stdout: "", stderr: "" };
       },
@@ -1004,7 +1264,7 @@ describe("link management routes", () => {
         const text = argv.join(" ");
         if (text.includes("ssh-keygen")) return { code: 0, stdout: "256 SHA256:abcdefghijklmnop host (ED25519)", stderr: "" };
         const knownHostOption = argv.find(value => value.startsWith("UserKnownHostsFile="));
-        if (knownHostOption) writeFileSync(knownHostOption.slice("UserKnownHostsFile=".length), "client ssh-ed25519 AAAA\n");
+        if (knownHostOption) writeFileSync(knownHostOption.slice("UserKnownHostsFile=".length), hostKeyLine(argv));
         if (isBareOcx(argv)) return BARE_OCX;
         const child = childProbe(argv.at(-1) ?? "", h); if (child) return child;
         if (argv.at(-1) === remoteOcx(["--version"])) return { code: 0, stdout: "opencodex 2.66.0\n", stderr: "" };
@@ -1032,7 +1292,7 @@ describe("link management routes", () => {
         const text = argv.join(" ");
         if (text.includes("ssh-keygen")) return { code: 0, stdout: "256 SHA256:abcdefghijklmnop host (ED25519)", stderr: "" };
         const knownHostOption = argv.find(value => value.startsWith("UserKnownHostsFile="));
-        if (knownHostOption) writeFileSync(knownHostOption.slice("UserKnownHostsFile=".length), "client ssh-ed25519 AAAA\n");
+        if (knownHostOption) writeFileSync(knownHostOption.slice("UserKnownHostsFile=".length), hostKeyLine(argv));
         if (isBareOcx(argv)) return BARE_OCX;
         const remote = argv.at(-1) ?? "";
       const child = childProbe(remote, h); if (child) return child;
@@ -1125,7 +1385,7 @@ for (const remotePlatform of [undefined, "windows", "posix"] as const) {
       async run(argv) {
         expect(argv).toContain("StrictHostKeyChecking=yes");
         if (argv.at(-1) === "cmd /c echo %OS%") return { code: 0, stdout: "Windows_NT\r\n", stderr: "" };
-        expect(argv.at(-1)).toBe(quoteRemote(remoteOcxArgv(["disconnect"], selected)));
+        expect(argv.at(-1)).toBe(quoteRemote(remoteOcxArgv(["disconnect", "--expect-link", id], selected)));
         return { code: 0, stdout: "", stderr: "" };
       },
       spawnTunnel() { throw new Error("ordinary remove must not spawn a tunnel"); },
@@ -1135,3 +1395,175 @@ for (const remotePlatform of [undefined, "windows", "posix"] as const) {
     expect(h.store.links).toEqual([]);
   });
 }
+
+test("apply refuses when the confirmed key is no longer the one trusted for its alias", async () => {
+  temp = mkdtempSync(join(tmpdir(), "ocx-link-apply-pin-"));
+  const knownHosts = join(temp, "known_hosts");
+  const scenario = async (mutate?: (h: ReturnType<typeof harness>) => void, overrides: Partial<ManagementApiDeps> = {}) => {
+    const h = harness();
+    const base = applyRunner(h);
+    const deps = {
+      ...h.deps,
+      ...overrides,
+      sshRunner: {
+        ...base,
+        async run(argv: readonly string[], options?: { stdin?: string | Uint8Array }) {
+          if ((argv.at(-1) ?? "") === "echo ocx-link-probe") {
+            const destination = argv[argv.indexOf("--") + 1]!;
+            const file = argv.find(value => value.startsWith("UserKnownHostsFile="))!.slice("UserKnownHostsFile=".length);
+            // Each spelling answers with its own key, as two machines would.
+            writeFileSync(file, destination + " ssh-ed25519 KEY" + destination + "\n");
+            return { code: 0, stdout: "ocx-link-probe\n", stderr: "" };
+          }
+          if ((argv.at(-1) ?? "") === remoteOcx(["link", "port"])) mutate?.(h);
+          return base.run(argv, options);
+        },
+      },
+    };
+    const confirm = async (alias: string) => {
+      expect((await call("/api/link/probe", "POST", { alias }, deps, "gui-session", true, "pairing", true, h.config))?.status).toBe(200);
+      expect((await call("/api/link/confirm-host", "POST", { alias, fingerprint: "SHA256:abcdefghijklmnop" }, deps, "gui-session", true, "pairing", true, h.config))?.status).toBe(200);
+    };
+    return { h, confirm, apply: (alias: string) => call("/api/link/apply", "POST", { alias }, deps, "gui-session", true, "pairing", true, h.config) };
+  };
+  // Two confirmations under case variants with different keys, before either is applied.
+  const variants = await scenario();
+  await variants.confirm("Home");
+  await variants.confirm("home");
+  const refused = await variants.apply("Home");
+  expect(refused?.status).toBe(409);
+  expect((await refused!.json() as { error: { code: string } }).error.code).toBe("host_key_changed");
+  expect(variants.h.store.links).toEqual([]);
+  expect(variants.h.events).toContain("revoke");
+  // The trusted line changes while apply runs its SSH work.
+  const during = await scenario(() => writeFileSync(knownHosts, "HOME ssh-ed25519 KEYother\n"));
+  await during.confirm("home");
+  const changed = await during.apply("home");
+  expect(changed?.status).toBe(409);
+  expect((await changed!.json() as { error: { code: string } }).error.code).toBe("host_key_changed");
+  expect(during.h.store.links).toEqual([]);
+  // Another line OpenSSH could match for the alias (a wildcard, a host list, a hashed entry) beside the
+  // confirmed one, or such a line naming an unrelated host: OpenCodex never writes these shapes and the
+  // check cannot rule them out, so apply refuses with its own actionable code.
+  for (const extra of ["* ssh-ed25519 KEYother", "home,elsewhere ssh-ed25519 KEYother", "|1|c2FsdA==|aGFzaA== ssh-ed25519 KEYother", "beta,gamma ssh-ed25519 KEYother"]) {
+    const shaped = await scenario(() => writeFileSync(knownHosts, readFileSync(knownHosts, "utf8") + extra + "\n"));
+    await shaped.confirm("home");
+    const response = await shaped.apply("home");
+    expect(response?.status).toBe(409);
+    const body = await response!.json() as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("trust_file_unexpected");
+    expect(body.error.message).toContain("remove that line");
+    expect(shaped.h.store.links).toEqual([]);
+    expect(shaped.h.config.apiKeys).toEqual([]);
+  }
+  // Another link's line recorded hashed by an older release is another host's line: apply passes.
+  const salt = Buffer.alloc(20, 5);
+  const otherHashed = "|1|" + salt.toString("base64") + "|" + createHmac("sha1", salt).update("beta").digest("base64") + " ssh-ed25519 KEYbeta";
+  const older = await scenario(() => writeFileSync(knownHosts, "home ssh-ed25519 KEYhome\n" + otherHashed + "\n"));
+  await older.confirm("home");
+  expect((await older.apply("home"))?.status).toBe(202);
+  expect(older.h.store.links.map(link => link.alias)).toEqual(["home"]);
+  // The same key confirmed again under another spelling still trusts exactly that key.
+  const respelled = await scenario(() => writeFileSync(knownHosts, "HOME ssh-ed25519 KEYhome\n"));
+  await respelled.confirm("home");
+  expect((await respelled.apply("home"))?.status).toBe(202);
+  expect(respelled.h.store.links.map(link => link.alias)).toEqual(["home"]);
+});
+
+test("a refused apply whose key will not revoke stores no link and starts nothing", async () => {
+  temp = mkdtempSync(join(tmpdir(), "ocx-link-apply-refused-revoke-"));
+  const knownHosts = join(temp, "known_hosts");
+  let throwOnRead = false;
+  const cases: Array<[string, (h: ReturnType<typeof harness>) => void]> = [
+    ["host_key_changed", () => writeFileSync(knownHosts, "home ssh-ed25519 KEYother\n")],
+    // A Home-initiated link for another spelling of the alias appears while apply runs.
+    ["link_exists", h => h.deps.writeLinkStore!({ ...h.store, links: [{ id: "lnk_00000000000000aa", alias: "HOME", direction: "hub-initiated", hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2200, apiKeyId: "key-other", createdAt: "2026-09-25T00:00:00.000Z" }] })],
+    // The locked section throws before validating (its store read fails once; cleanup can read again).
+    ["exception", () => { throwOnRead = true; }],
+  ];
+  for (const [refusal, mutate] of cases) {
+    const h = harness();
+    const base = applyRunner(h);
+    const deps = {
+      ...h.deps,
+      revokeApiKey: () => false,
+      readLinkStore: () => {
+        if (throwOnRead) { throwOnRead = false; throw new Error("store read failed"); }
+        return h.deps.readLinkStore!();
+      },
+      sshRunner: {
+        ...base,
+        async run(argv: readonly string[], options?: { stdin?: string | Uint8Array }) {
+          if ((argv.at(-1) ?? "") === "echo ocx-link-probe") {
+            const file = argv.find(value => value.startsWith("UserKnownHostsFile="))!.slice("UserKnownHostsFile=".length);
+            writeFileSync(file, "home ssh-ed25519 KEYhome\n");
+            return { code: 0, stdout: "ocx-link-probe\n", stderr: "" };
+          }
+          if ((argv.at(-1) ?? "") === remoteOcx(["link", "port"])) mutate(h);
+          return base.run(argv, options);
+        },
+      },
+    };
+    expect((await call("/api/link/probe", "POST", { alias: "home" }, deps, "gui-session", true, "pairing", true, h.config))?.status).toBe(200);
+    expect((await call("/api/link/confirm-host", "POST", { alias: "home", fingerprint: "SHA256:abcdefghijklmnop" }, deps, "gui-session", true, "pairing", true, h.config))?.status).toBe(200);
+    const response = await call("/api/link/apply", "POST", { alias: "home" }, deps, "gui-session", true, "pairing", true, h.config);
+    expect(response?.status).toBe(500);
+    expect((await response!.json() as { error: { code: string } }).error.code).toBe("key_cleanup_failed");
+    // The refused record is never written, by apply or by its cleanup.
+    expect(h.store.links.map(link => link.id)).toEqual(refusal === "link_exists" ? ["lnk_00000000000000aa"] : []);
+    expect(h.events).not.toContain("reload");
+    expect(h.events).not.toContain("supervisor");
+    expect(h.config.apiKeys?.map(key => key.name)).toEqual(["link:home"]);
+  }
+});
+
+test("a link whose first store write failed is stored again by cleanup only if it still passes the locked checks", async () => {
+  temp = mkdtempSync(join(tmpdir(), "ocx-link-apply-write-failed-"));
+  const knownHosts = join(temp, "known_hosts");
+  const conflict = { id: "lnk_00000000000000bb", alias: "HOME", direction: "hub-initiated" as const, hostKeyFingerprint: "SHA256:abcdefghijklmnop", tunnelPort: 2201, apiKeyId: "key-other", createdAt: "2026-09-25T00:00:00.000Z" };
+  const cases: Array<[string, (h: ReturnType<typeof harness>, breakStore: () => void) => void, string, string[]]> = [
+    // Nothing changed while cleanup waited: the validated record is kept so its key stays visible.
+    ["unchanged", () => {}, "compensation_failed", ["home"]],
+    ["pin changed", () => writeFileSync(knownHosts, "home ssh-ed25519 KEYother\n"), "key_cleanup_failed", []],
+    ["alias taken", h => h.deps.writeLinkStore!({ ...h.store, links: [conflict] }), "key_cleanup_failed", ["HOME"]],
+    // The cleanup transaction fails too: nobody knows whether the link is stored, so the answer says so.
+    ["store unavailable", (_h, breakStore) => breakStore(), "link_cleanup_uncertain", []],
+  ];
+  for (const [label, duringStop, code, aliases] of cases) {
+    const h = harness();
+    const base = applyRunner(h);
+    let failWrite = false, failRead = false;
+    const deps = {
+      ...h.deps,
+      revokeApiKey: () => false,
+      readLinkStore: () => {
+        if (failRead) { failRead = false; throw new Error("store read failed"); }
+        return h.deps.readLinkStore!();
+      },
+      // The write throws before it stores anything, so its outcome is unknown to apply.
+      writeLinkStore: (next: LinkStore) => {
+        if (failWrite) { failWrite = false; throw new Error("store write failed"); }
+        h.deps.writeLinkStore!(next);
+      },
+      linkSupervisor: () => ({ ...h.deps.linkSupervisor!(), stopLink: async () => { duringStop(h, () => { failRead = true; }); } }),
+      sshRunner: {
+        ...base,
+        async run(argv: readonly string[], options?: { stdin?: string | Uint8Array }) {
+          if ((argv.at(-1) ?? "") === "echo ocx-link-probe") {
+            const file = argv.find(value => value.startsWith("UserKnownHostsFile="))!.slice("UserKnownHostsFile=".length);
+            writeFileSync(file, "home ssh-ed25519 KEYhome\n");
+            return { code: 0, stdout: "ocx-link-probe\n", stderr: "" };
+          }
+          if ((argv.at(-1) ?? "") === remoteOcx(["link", "port"])) failWrite = true;
+          return base.run(argv, options);
+        },
+      },
+    };
+    expect((await call("/api/link/probe", "POST", { alias: "home" }, deps, "gui-session", true, "pairing", true, h.config))?.status).toBe(200);
+    expect((await call("/api/link/confirm-host", "POST", { alias: "home", fingerprint: "SHA256:abcdefghijklmnop" }, deps, "gui-session", true, "pairing", true, h.config))?.status).toBe(200);
+    const response = await call("/api/link/apply", "POST", { alias: "home" }, deps, "gui-session", true, "pairing", true, h.config);
+    expect({ label, status: response?.status, code: (await response!.json() as { error: { code: string } }).error.code }).toEqual({ label, status: 500, code });
+    expect({ label, aliases: h.store.links.map(link => link.alias) }).toEqual({ label, aliases });
+    expect(h.events).not.toContain("reload");
+  }
+});

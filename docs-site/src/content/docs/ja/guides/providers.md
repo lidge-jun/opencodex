@@ -210,7 +210,7 @@ Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL ht
 
 ## 3. API キーカタログ
 
-opencodex には組み込みプリセットが 107 個含まれています。キー方式 86、OAuth 17、ローカル 3、
+opencodex には組み込みプリセットが 108 個含まれています。キー方式 87、OAuth 17、ローカル 3、
 デフォルト ChatGPT 転送プリセット 1 です。ダッシュボードの **Add provider** ピッカーはキー発行ページを開き、
 入力したキーを検証した後保存します(検証はプロバイダー固有です)。主な項目は以下のとおりです:
 
@@ -263,7 +263,7 @@ Cline IDE/CLI のみで API からは使えません。`minimax/minimax-m2.5` �
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
 | Zhipu AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
-| [BigModel Coding Plan — Responses (静的モデル一覧)](/guides/providers/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
+| [BigModel Coding Plan — Responses (静的モデル一覧)](/guides/api-key-catalog/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
 | Qwen Cloud | トークンプラン(デフォルト): `https://token-plan.maas.qwencloudapi.com/compatible-mode/v1` · 従量課金: `https://dashscope.aliyuncs.com/compatible-mode/v1` · またはカスタム |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |

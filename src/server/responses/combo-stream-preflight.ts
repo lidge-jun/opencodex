@@ -24,6 +24,7 @@ import { REQUIRED_TOOL_CONTRACT_CODE } from "../../lib/errors";
 import { attachComboFailureEvidence, isPausedTurn } from "../../lib/client-error-body";
 import { requiredToolReasoningPrelude } from "./combo-required-tool-stream";
 import { ProtocolPreOutputEof } from "../../lib/upstream-retry";
+import { carryPacedStream, pacedQueuingStrategy } from "../../lib/paced-stream";
 
 const COMBO_STREAM_PREFLIGHT_MAX_BYTES = MAX_CLIENT_SSE_FRAME_BYTES;
 // Required-tool reasoning may delay delivery, but never for an unbounded/trickling prelude.
@@ -484,17 +485,24 @@ function observedResponsesStage(state: {
   return "headers-only";
 }
 
-function replayBufferedResponse(
+/** A released replay slot. */
+const EMPTY_CHUNK = new Uint8Array(0);
+
+/** Exported for its regression tests (#8601). */
+export function replayBufferedResponse(
   response: Response,
   reader: ReadableStreamDefaultReader<Uint8Array>,
   buffered: Uint8Array[],
   pendingRead?: ReturnType<typeof reader.read>,
 ): Response {
   let index = 0;
-  const body = new ReadableStream<Uint8Array>({
+  const body = carryPacedStream(response.body, new ReadableStream<Uint8Array>({
     async pull(controller) {
       if (index < buffered.length) {
-        controller.enqueue(buffered[index++]!);
+        // Hand each replayed chunk over once: the replay keeps no reference to a prefix the client already took (#8601).
+        const chunk = buffered[index]!;
+        buffered[index++] = EMPTY_CHUNK;
+        controller.enqueue(chunk);
         return;
       }
       try {
@@ -507,9 +515,10 @@ function replayBufferedResponse(
       }
     },
     cancel(reason) {
+      buffered.fill(EMPTY_CHUNK);
       reader.cancel(reason).catch(() => undefined);
     },
-  });
+  }, pacedQueuingStrategy(response.body)));
   return carryResponseToolOwnership(response, new Response(body, {
     status: response.status,
     statusText: response.statusText,

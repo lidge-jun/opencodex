@@ -1,4 +1,5 @@
 import {
+  compressedBodyDecodeLimit,
   MAX_DECOMPRESSED_BODY_BYTES,
   resolveInboundBodyLimitBytes,
 } from "./request-decompress";
@@ -133,9 +134,19 @@ function retainUntilResponseSettles(response: Response, signal: AbortSignal, rel
   return wrapped;
 }
 
+/** A body that will be decoded: any Content-Encoding other than identity. */
+function encodedBody(req: Request): boolean {
+  const encoding = req.headers.get("content-encoding")?.trim().toLowerCase();
+  return encoding !== undefined && encoding !== "" && encoding !== "identity";
+}
+
 /**
- * Own one raised-limit HTTP request from before body reading through response
- * EOF/error or settled cancellation. Call only at the admitted HTTP boundary,
+ * Own one raised-limit or encoded HTTP request from before body reading through response
+ * EOF/error or settled cancellation. An encoded body joins the shared budget at every limit
+ * (#3023): it reserves what it may decode to (`compressedBodyDecodeLimit` of its declared wire
+ * bytes, or the whole limit without a declaration) before a byte is read, and the reader shrinks
+ * that to the measured size, so the decoded bodies held at once stay within the budget however
+ * small their wire bytes are. An identity body at the default limit is not gated, as before. Call only at the admitted HTTP boundary,
  * after auth/origin checks, not from readers or internal combo/translation hops.
  * pathname is the same canonical pathname used by the server's dispatcher.
  * The optional budget/wait override isolates lifecycle tests from the process-wide owner.
@@ -151,8 +162,9 @@ export async function withRaisedInboundBodyAdmission(
   const maxBytes = resolveInboundBodyLimitBytes(configuredLimit);
   // Native Ollama generation routes are served only on the authenticated listener, so they sit in
   // their own set: the loopback oracle checks CONFIGURABLE_JSON_BODY_ROUTES against that allowlist.
+  const raised = maxBytes > MAX_DECOMPRESSED_BODY_BYTES;
   if (req.method !== "POST" || !(CONFIGURABLE_JSON_BODY_ROUTES.has(pathname) || OLLAMA_JSON_BODY_ROUTES.has(pathname))
-    || maxBytes <= MAX_DECOMPRESSED_BODY_BYTES || req.signal.aborted) {
+    || !(raised || encodedBody(req)) || req.signal.aborted) {
     return work();
   }
   const declared = req.headers.get("content-length");
@@ -162,9 +174,10 @@ export async function withRaisedInboundBodyAdmission(
     // protocol-specific 413 win over temporary capacity refusal, unchanged.
     return work();
   }
+  const reservation = raised || !Number.isFinite(declaredBytes) ? maxBytes : compressedBodyDecodeLimit(declaredBytes, maxBytes);
   let lease;
   try {
-    lease = await (options?.budget ?? inboundBodyBudget).acquire(maxBytes, req.signal, options?.maxWaitMs);
+    lease = await (options?.budget ?? inboundBodyBudget).acquire(reservation, req.signal, options?.maxWaitMs);
   } catch (error) {
     cancelUnreadBody(req, error);
     if (options?.onAdmissionError) return options.onAdmissionError(error);

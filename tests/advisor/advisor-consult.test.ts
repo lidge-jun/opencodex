@@ -116,6 +116,18 @@ describe("consultAdvisor", () => {
     expect(result.error).toContain("connect_error");
   });
 
+  test("timeout and caller cancellation retain distinct safe outcomes", async () => {
+    globalThis.fetch = (async () => { throw new DOMException("private timeout text", "TimeoutError"); }) as typeof fetch;
+    const timeout = await consultAdvisor(baseInput, {}, "max", 5_000, undefined, "http://advisor.test");
+    expect(timeout.ok).toBe(false);
+    expect(timeout.error).toBe("advisor timeout");
+    const controller = new AbortController();
+    globalThis.fetch = (async () => { controller.abort(); throw new Error("private cancellation text"); }) as typeof fetch;
+    const cancelled = await consultAdvisor(baseInput, {}, "max", 5_000, controller.signal, "http://advisor.test");
+    expect(cancelled.cancelled).toBe(true);
+    expect(cancelled.error).toBe("advisor cancelled by the caller");
+  });
+
   test("non-JSON and empty responses fail open without throwing", async () => {
     globalThis.fetch = (async () => new Response("not json", { status: 200 })) as typeof fetch;
     const nonJson = await consultAdvisor(baseInput, {}, "max", 5_000, undefined, "http://advisor.test");

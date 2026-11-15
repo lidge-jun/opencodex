@@ -108,11 +108,13 @@ const OTHER_FRAMED_CREDENTIALS: Array<[RegExp, string]> = [
   // attacker-controlled text, so a body line starting `--not-the-boundary`
   // ended the mask and exposed everything after it. Consuming the remainder
   // costs trailing context in one framing and closes the bypass.
+  //
+  // Only the part-header name is a regex; the rest of the grammar
+  // (`[^\r\n]*\r?\n(?:\r?\n)?` then a non-empty body) is applied by
+  // maskMultipartOnce in one pass. As a single regex every candidate on a line
+  // without a terminator rescanned that line, quadratic in the input.
   [
-    new RegExp(
-      `(name=["']?(?:${CREDENTIAL_HEADER_LABEL})["']?[^\\r\\n]*\\r?\\n(?:\\r?\\n)?)([\\s\\S]+)`,
-      "gi",
-    ),
+    new RegExp(`name=["']?(?:${CREDENTIAL_HEADER_LABEL})["']?`, "gi"),
     "multipart",
   ],
 ];
@@ -188,6 +190,10 @@ function maskXmlIdentifyingAttribute(value: string, decodeEscapes: boolean): str
 function maskOtherFramingsOnce(value: string, decodeEscapes: boolean): string {
   let current = value;
   for (const [pattern, kind] of OTHER_FRAMED_CREDENTIALS) {
+    if (kind === "multipart") {
+      current = maskMultipartOnce(current, decodeEscapes, pattern);
+      continue;
+    }
     const { folded, map } = foldForMatching(current, decodeEscapes);
     pattern.lastIndex = 0;
     let out = "";
@@ -214,6 +220,40 @@ function maskOtherFramingsOnce(value: string, decodeEscapes: boolean): string {
       if (pattern.lastIndex === match.index) pattern.lastIndex += 1;
     }
     current = out + current.slice(cursor);
+  }
+  return current;
+}
+
+/**
+ * The multipart rule: a credential-named part header, the rest of its line, its line break, an
+ * optional blank line, then a non-empty body masked to the end of the input. Equivalent to the
+ * regex `(name=["']?(?:LABEL)["']?[^\r\n]*\r?\n(?:\r?\n)?)([\s\S]+)`, but linear: when one
+ * candidate's line has no usable terminator, every later candidate on that line fails the same way,
+ * so the search resumes past the line instead of rescanning it from each candidate.
+ */
+function maskMultipartOnce(current: string, decodeEscapes: boolean, partHeader: RegExp): string {
+  const { folded, map } = foldForMatching(current, decodeEscapes);
+  partHeader.lastIndex = 0;
+  let lineEnd = -1;
+  for (let match = partHeader.exec(folded); match !== null; match = partHeader.exec(folded)) {
+    const nameEnd = match.index + match[0].length;
+    if (nameEnd > lineEnd) {
+      lineEnd = nameEnd;
+      while (lineEnd < folded.length && folded[lineEnd] !== "\r" && folded[lineEnd] !== "\n") lineEnd++;
+    }
+    let headEnd = folded[lineEnd] === "\n" ? lineEnd + 1
+      : folded[lineEnd] === "\r" && folded[lineEnd + 1] === "\n" ? lineEnd + 2 : -1;
+    if (headEnd < 0 || headEnd >= folded.length) {
+      partHeader.lastIndex = lineEnd + 1;
+      continue;
+    }
+    const blank = folded[headEnd] === "\n" ? 1 : folded[headEnd] === "\r" && folded[headEnd + 1] === "\n" ? 2 : 0;
+    if (headEnd + blank < folded.length) headEnd += blank;
+    const start = map[match.index] ?? current.length;
+    const end = map[folded.length] ?? current.length;
+    const head = current.slice(start, map[headEnd] ?? end);
+    if (!current.slice(start + head.length, end).trim()) return current;
+    return current.slice(0, start) + head + REDACTED_SECRET;
   }
   return current;
 }
@@ -282,7 +322,7 @@ function maskCredentialHeadersOnce(value: string, decodeEscapes: boolean): strin
   return out + value.slice(cursor);
 }
 
-const SECRET_VALUE_PATTERNS: Array<[RegExp, string]> = [
+const SECRET_VALUE_PATTERNS: Array<[RegExp, string] | ((value: string) => string)> = [
   // A Bearer token outside a labelled header (prose, JSON fragments, logs).
   // Horizontal whitespace only: `\s+` crossed line boundaries and masked the
   // first word of the NEXT line when a header was quoted with a trailing break.
@@ -304,9 +344,45 @@ const SECRET_VALUE_PATTERNS: Array<[RegExp, string]> = [
   // a quoted proto field does not have. `eyJ` is the base64url of `{"`, so the
   // JWT rule needs a real three-segment shape and does not match ordinary prose.
   [/\bdevin-session-token\$[A-Za-z0-9._~+/=-]{8,}/g, REDACTED_SECRET],
-  [/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*/g, REDACTED_SECRET],
+  maskJwts,
   [/\b(arn:aws:[A-Za-z0-9_-]+:[A-Za-z0-9-]*:\d{12}:[A-Za-z0-9_/:+=,.@-]+)\b/g, REDACTED_SECRET],
 ];
+
+/**
+ * The JWT rule `\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]*` applied in one pass. Each
+ * segment class excludes the dot, so a segment always runs to the end of its run of token
+ * characters and the dot must follow that run. As a regex, every `eyJ` inside one long run without a
+ * dot after it rescanned the rest of the run: quadratic. Here a candidate that fails skips past the
+ * run, because every later candidate in it ends the same run and fails the same way.
+ */
+function maskJwts(value: string): string {
+  if (!value.includes("eyJ")) return value;
+  const start = /\beyJ/g;
+  const runEnd = (from: number): number => {
+    let at = from;
+    while (at < value.length && JWT_SEGMENT_CHAR.test(value[at]!)) at++;
+    return at;
+  };
+  let out = "";
+  let cursor = 0;
+  for (let match = start.exec(value); match !== null; match = start.exec(value)) {
+    const first = match.index + 3;
+    const firstEnd = runEnd(first);
+    const second = firstEnd + 1;
+    const secondEnd = value[firstEnd] === "." && firstEnd - first >= 8 ? runEnd(second) : -1;
+    if (secondEnd < 0 || secondEnd - second < 8 || value[secondEnd] !== ".") {
+      start.lastIndex = Math.max(firstEnd, secondEnd);
+      continue;
+    }
+    const end = runEnd(secondEnd + 1);
+    out += value.slice(cursor, match.index) + REDACTED_SECRET;
+    cursor = end;
+    start.lastIndex = end;
+  }
+  return cursor === 0 ? value : out + value.slice(cursor);
+}
+
+const JWT_SEGMENT_CHAR = /[A-Za-z0-9_-]/;
 
 type HeaderRecord = Record<string, string | string[] | undefined>;
 
@@ -322,8 +398,8 @@ function isSensitiveKey(key: string): boolean {
 
 export function redactSecretString(value: string): string {
   let redacted = maskOtherFramings(maskCredentialHeaders(value));
-  for (const [pattern, replacement] of SECRET_VALUE_PATTERNS) {
-    redacted = redacted.replace(pattern, replacement);
+  for (const rule of SECRET_VALUE_PATTERNS) {
+    redacted = typeof rule === "function" ? rule(redacted) : redacted.replace(rule[0], rule[1]);
   }
   return redacted;
 }

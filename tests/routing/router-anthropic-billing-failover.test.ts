@@ -28,3 +28,22 @@ test("billing prose without an accepted code, malformed JSON and unrelated refus
   expect(comboFailureDecision(499, envelope(), { code: "invalid_request_error" })).toBe("stop");
   expect(comboFailureDecision(400, envelope(), { code: "origin_rejected" })).toBe("stop");
 });
+
+test("Anthropic's exact extra-usage refusal hops a combo; quoted or coded variants stay terminal", () => {
+  const refusals = [
+    "You're out of extra usage. Add more at claude.ai/settings/usage and keep going.",
+    "You’re out of extra usage.",
+    "Third-party apps now draw from your extra usage, not your plan limits. Add more at claude.ai/settings/usage and keep going.",
+  ];
+  for (const text of refusals) {
+    for (const carrier of [envelope("invalid_request_error", text), `Provider error 400: ${envelope("invalid_request_error", text)}`]) {
+      expect(comboFailureDecision(400, carrier)).toBe("hop");
+      expect(comboFailureCooldownScope(400, carrier, { code: "invalid_request_error" })).toBe("target");
+    }
+    expect(comboFailureDecision(400, text, { code: "invalid_request_error" })).toBe("hop");
+    expect(comboFailureDecision(400, text)).toBe("stop");
+    expect(comboFailureDecision(400, envelope("api_error", text))).toBe("stop");
+    expect(comboFailureDecision(400, envelope("invalid_request_error", text, "context_length_exceeded"))).toBe("stop");
+  }
+  expect(comboFailureDecision(400, envelope("invalid_request_error", `Diagnostic: ${refusals[0]}`))).toBe("stop");
+});

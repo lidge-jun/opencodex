@@ -310,10 +310,13 @@ ocx login anthropic --headless # no browser, no local port
 `--headless` runs the **code-display** login for hosts whose browser cannot reach the proxy's loopback
 callback (containers, remote servers). The command prints an authorization URL; approve it in any
 browser, and the provider shows a `code#state` string to paste back at the prompt. No callback port
-is bound and no browser is launched. Only `anthropic` and `anthropic2` support it today; any other provider exits
+is bound and no browser is launched. `anthropic` and `anthropic2` support it. `xai` has no code page, so
+`--headless` runs its device login instead: the command prints a URL and a short code, you confirm the
+code in any browser, and it finishes on its own with nothing to paste. Any other provider exits
 with the list of providers that do. For Codex accounts use the device-code login instead,
 `ocx account login codex --device` — `ocx login codex --headless` is refused rather than passed on.
-The paste window is 10 minutes, and each login accepts one code: if the exchange fails, start a new login. A successful login becomes the provider's active account, exactly
+A code-display login's paste window is 10 minutes, and each login accepts one code: if the exchange
+fails, start a new login. A successful login becomes the provider's active account, exactly
 like a browser login.
 
 OAuth reauthentication preserves operator settings such as model selections, pricing overrides,
@@ -1081,7 +1084,7 @@ The new login options are flow-specific:
 | Fresh ordinary provider OAuth | Supported for browser-capable providers | Supported; omitted defaults to adding an account |
 | Ordinary provider reauth | Browser-capable flows only | Rejected; omission retains reauth behavior |
 | Codex browser login | Supported | Rejected |
-| Codex device, or native device-only kimi/nous/github-copilot | Rejected | Rejected for Codex; ordinary OAuth rules for other providers |
+| Codex device, xAI device authorization, or native device-only kimi/nous/github-copilot | Rejected | Rejected for Codex; ordinary OAuth rules for other providers |
 | Native Kiro `--method` | Rejected | Rejected; this flow is add-only |
 
 Explicit add-account off permits the existing import preference; it does not
@@ -1102,16 +1105,34 @@ ocx account login openai --device --no-wait --json
 ```
 
 Open that URL on any other machine, enter the short code, and the login completes. Without
-`--no-wait` the command polls until you finish; the device grant lives 15 minutes, and the
-command waits that long rather than the 5 minutes a browser login allows, because the point
-is that you walk away to another device. `kimi`, `nous`, and `github-copilot` accept the flag
-as a no-op because their only login is already a device flow; a provider with no device grant
-rejects it.
+`--no-wait` the command polls until you finish; for the Codex pool that window is the 15-minute
+device grant rather than the 5 minutes a browser login allows, because the point is that you
+walk away to another device.
 
-In the dashboard, the same login is selected by the **"Don't open a browser on the proxy
-machine"** checkbox on the add-account modal. That setting already means the operator is not
-sitting at the proxy host, which is exactly when a callback URL is useless — so ticking it
-switches the Codex login to the device flow and shows a copyable code instead.
+`ocx account login xai --device` starts xAI's device authorization instead of its
+`127.0.0.1:56121` callback. It prints the verification URL and a short code to confirm in any
+browser, polls once per provider interval, and finishes on its own with nothing to paste. The
+deadline comes from xAI's `expires_in` on that authorization response, so treat the window as
+provider-issued rather than fixed, bounded to 30 minutes and to a poll no faster than once a
+second; an expired grant is reported, not retried. If xAI answers a poll with `429` or a `5xx`,
+its `Retry-After` sets that one wait instead of the interval, still inside the grant deadline. A
+redirect on either device request is refused rather than followed, and fails the login at once
+as an authentication failure instead of being retried as a network or code problem. `kimi`,
+`nous`, and `github-copilot` accept the flag as a no-op because their only login is already a
+device flow; a provider with no device grant rejects it. A device login has nothing to paste, so
+`--device` with `--code` is refused. For xAI device login, `--json` requires `--no-wait`:
+`ocx account login xai --device --no-wait --json` returns one JSON handoff with the
+verification URL, short code and flow ID. Complete authorization in a browser; the proxy
+continues the login in the background. Cancel that specific attempt with
+`ocx account cancel xai --flow <flow-id>`; omitting `--flow` cancels the latest attempt.
+
+The dashboard does not expose a provider's device grant this way. On the add-account modal the
+**"Don't open a browser on the proxy machine"** checkbox only stops the proxy from launching a
+browser: it keeps the flow's own protocol, still in `callback` mode, and you complete the
+returned authorization URL yourself. Choosing a device flow is a separate, explicit control where
+one exists — the Codex account modal has a **Device code login** entry, and native Kiro device
+login is started from its own panel — never from that checkbox. There is no dashboard control that
+starts xAI device authorization, so use `ocx account login xai --device` for it.
 
 ### `ocx account remove <provider> <id|alias|main> --yes [--json]`
 

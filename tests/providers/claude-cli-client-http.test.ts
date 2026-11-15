@@ -5,9 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createClaudeCliAdapter } from "../../src/adapters/claude-cli/adapter";
 import { getAdapterDefinition } from "../../src/adapters/registry";
-import { handleResponses } from "../../src/server/responses";
-import { handleChatCompletions } from "../../src/server/chat-completions";
+import { handleOwnedResponses as handleResponses } from "../helpers/response-replay-owner";
 import { rememberResponseState } from "../../src/responses/state";
+import { handleChatCompletions } from "../../src/server/chat-completions";
 import { buildDshClientConfig } from "../../src/clients/config-export/dsh";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import type { OcxConfig } from "../../src/types";
@@ -79,7 +79,7 @@ test("Codex/DSH Responses and Pi Chat retain host-owned tools, inclusive usage a
   const schema = { type: "object", properties: { path: { type: "string" } }, required: ["path"] };
   const responseTools = [{ type: "function", name: "read_text", description: "Read the test fixture", parameters: schema }];
   const post = async (path: string, body: unknown) => {
-    const res = await fetch(`${base}/${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const res = await fetch(`${base}/${path}`, { method: "POST", headers: { "content-type": "application/json", "thread-id": "claude-cli-client-http" }, body: JSON.stringify(body) });
     const value = await res.json() as any;
     if (res.status !== 200) throw new Error(`HTTP ${res.status}: ${JSON.stringify(value)}`);
     return value;
@@ -110,7 +110,7 @@ test("Codex/DSH Responses and Pi Chat retain host-owned tools, inclusive usage a
     expect(chatSecond.usage.prompt_tokens).toBe(112);
     const controller = new AbortController();
     const previousChildren = children.length;
-    const waiting = fetch(`${base}/responses`, { method: "POST", signal: controller.signal, headers: { "content-type": "application/json" }, body: JSON.stringify({ model, stream: true, input: "WAIT_FOR_ABORT", tools: responseTools }) }).then(res => res.text()).catch(() => "aborted");
+    const waiting = fetch(`${base}/responses`, { method: "POST", signal: controller.signal, headers: { "content-type": "application/json", "thread-id": "claude-cli-client-http" }, body: JSON.stringify({ model, stream: true, input: "WAIT_FOR_ABORT", tools: responseTools }) }).then(res => res.text()).catch(() => "aborted");
     const deadline = Date.now() + 2500;
     while (children.length === previousChildren && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
     expect(children.length).toBe(previousChildren + 1);

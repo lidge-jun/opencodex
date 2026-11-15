@@ -269,10 +269,12 @@ describe("ocx integration native", () => {
     expect(out).toContain("disable blocked: in use");
   });
 
-  test("a toggle PUTs the per-client route with a boolean", async () => {
+  test("a toggle PUTs the per-client native route, which records only the Home override", async () => {
     const { calls, deps } = harness(() => ({ json: { ok: true } }));
     const cap = capture();
-    try { await handleIntegrationCommand(["native", "claude-desktop", "off"], deps); } finally { cap.restore(); }
+    let code: number;
+    try { code = await handleIntegrationCommand(["native", "claude-desktop", "off"], deps); } finally { cap.restore(); }
+    expect(code!).toBe(0);
     expect(calls[0]).toMatchObject({
       method: "PUT",
       path: "/api/native-integrations/claude-desktop",

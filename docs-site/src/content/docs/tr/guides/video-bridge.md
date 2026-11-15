@@ -27,12 +27,12 @@ indirir.
 > ```json
 > {
 >   "providers": {
->     "xai": { "adapter": "openai-chat", "apiKey": "xai-…", "authMode": "key" }
+>     "xai": { "adapter": "openai-chat", "apiKey": "${XAI_API_KEY}", "authMode": "key" }
 >   }
 > }
 > ```
 >
-> `ocx login xai` (OAuth) ile katıldıysanız sağlayıcı `authMode: "oauth"` modunda kalır ve köprü sessizce devreye girmez. Ortamda `XAI_API_KEY` ayarlayın **veya** anahtarı yukarıda gösterildiği gibi sabit kodlayın.
+> `XAI_API_KEY` değerini proxy başlangıç ortamında ayarlayın; `${XAI_API_KEY}` ve `authMode: "key"` korunsun. Başka terminalde export, çalışan proxy’yi değiştirmez; sahibi Desktop, hizmet veya ön plan terminalinden yeniden başlatın. Anahtarları commit ve günlüklere koymayın.
 
 ## Yapılandırma
 

@@ -18,6 +18,10 @@ unchanged.
   `chatgpt`) refuse `--headless` and point at `ocx account login codex --device`
   (`src/cli/dispatch.ts`). The flag is not called `--code` because that name carries a secret value
   elsewhere in the CLI and `src/cli/secret-args.ts` scrubs the word after it from stderr.
+- **Device login.** `device: true` (callback mode only) starts a provider's device grant instead,
+  for providers flagged `deviceLogin` (`supportsDeviceLoginMode`; today `xai`). The start returns
+  the verification `url` and `deviceCode` and opens no browser; status settles by polling. Any
+  other provider, a non-`true` value, or `mode: "code"` with it answers `400`.
 - **Flow identity and ownership.** A code-mode start returns `{ mode: "code", flowId, expiresAt }`.
   Flows are keyed by `flowId` in `src/oauth/login-flow-state.ts`, so several code logins for one
   provider can be in flight at once; a callback-mode flow still serialises per provider. Every
@@ -36,7 +40,8 @@ unchanged.
 - **Paste contract.** `POST /api/oauth/login/code` with a `flowId` (or while the provider's newest
   flow is code-mode) answers with the **outcome of the token exchange**, not merely acceptance:
   `{ ok: true, account }` or `{ ok: false, error }` where `error` is one of `state_mismatch`,
-  `invalid_or_expired_code`, `no_pending_login` (409), `provider_unreachable`, `malformed_input`.
+  `invalid_or_expired_code`, `no_pending_login` (409), `provider_unreachable`, `malformed_input`,
+  `oauth_authentication_failed`.
   `account` is the row this flow wrote (recorded when it settles), which need not be the active
   account; a flow cleared or dropped while its exchange runs answers `no_pending_login`. A
   `flowId` that is not a code flow of the named provider answers `no_pending_login` without
@@ -45,11 +50,15 @@ unchanged.
   as does one that races the start before the flow's state is registered.
   A code flow is single-use after that: once a paste is handed to the token exchange, further
   pastes answer `no_pending_login`, and a failed exchange settles the flow. `provider_unreachable` is reserved
-  for a network failure (`TimeoutError`/`AbortError`, or a fetch `TypeError` carrying a `code`);
-  any other error falls to `invalid_or_expired_code`, with the original message kept on the flow.
+  for network failures and xAI server errors; `oauth_authentication_failed` covers an xAI
+  denial or definitive refusal such as a redirect the device poll refused to follow. Expired
+  and rejected xAI codes use `invalid_or_expired_code`. Public messages never include provider bodies. `classifyLoginCodeError`
+  in `src/oauth/login-flow-state.ts` is the single source of these reasons: the paste response,
+  `GET /api/oauth/status` (`errorCode`) and the headless CLI all read it.
   Without a `flowId` and with no code-mode flow, the legacy accept-only contract is unchanged.
 - **Status.** `GET /api/oauth/status` reports the provider's newest flow, including `mode` for a
-  code flow. An explicit flow id is honoured only for its own provider. A caller running several flows tracks each one through its own paste response.
+  code flow. An xAI status request can select its own flow by `flowId`; a missing or foreign id
+  cannot select another flow. A caller running code flows tracks each through its paste response.
 - **Account store semantics: single operator.** A successful code login writes the same credential
   store as any other login, and the store has one active account per provider. Two concurrent code
   logins that both succeed leave the **later** one active. This is a single-operator convenience

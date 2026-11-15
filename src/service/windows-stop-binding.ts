@@ -26,7 +26,7 @@
  */
 import { createHash } from "node:crypto";
 
-import { commandLineHasPathToken } from "./windows-guarded-manager";
+import { commandLineHasPathToken } from "./windows-command-line-token";
 import type { WindowsStopProcessEntry } from "./windows-process-evidence";
 
 const WRAPPER_IMAGES = new Set(["wscript.exe", "cscript.exe", "cmd.exe"]);

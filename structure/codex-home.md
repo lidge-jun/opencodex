@@ -72,7 +72,7 @@ Restore filters retired bare and trusted account-qualified native rows from its 
 without a backup. The original backup, historical user-selected settings and session records remain intact.
 
 Journal restoration compares config and profile independently against their saved originals and
-recorded injected hashes. If either changed artifact lacks its injected hash, the config/profile
+recorded injected hashes. Disconnect additionally restores matching owned fields through `src/codex/journal-config-restore.ts`, preserving later model, hooks, trusted-project and Computer Use path edits. New journals capture owned-field spans; older hash-backed journals use their recorded URLs/catalog/default values and refuse ambiguous blocks or changed routing values. Owned provider/profile paths reserialized as inline or dotted TOML are detected and refused when field-level removal cannot be proved, preserving both config and recovery journal. Retry an interrupted `rotation: recovery-required` disconnect with `ocx disconnect` (retain `--keep-catalog` if initially used); credential or ownership conflicts remain refusals. If either changed artifact lacks its injected hash, the config/profile
 pair and journal remain untouched and the result is explicitly unverified; callers must not
 convert that refusal into successful fallback cleanup. Already-original bytes need no rewrite,
 and absence is distinct from an empty file. The injector checks a retained hashless journal against
@@ -418,7 +418,7 @@ this ceiling for up to `RESPONSE_SPILL_ORPHAN_GRACE_MS` past each crash. Without
 directory was limited only per file (256 MiB) and per entry (1000) — a 250 GiB product — which
 left `RESPONSE_TTL_MS` as the only effective limit and made disk use a function of client
 request rate rather than of anything the process controls. The durable snapshot that
-re-establishes these references after a restart is budgeted too, and its bounded stub and
+re-establishes file references after a restart (not caller replay authority; see the [Responses retention contract](transports/responses.md)) is budgeted too, and its bounded stub and
 tombstone rows are selected before resident payloads under that budget, so a full resident
 cohort cannot crowd a spill reference out of `responses-state.json` and strand a file the
 store still owns.

@@ -57,8 +57,8 @@ model ID は変更しません。`openai-apikey/<model>` は API key transport �
    | `claude-`、`claude-sonnet-`、`claude-opus-`、`claude-haiku-` | `anthropic` |
    | `llama-`、`mixtral-`、`gemma-` | `groq` |
 
-   この検査は名前のみを見ます。`defaultModel` / `models[]` 検査と異なり、現在は名前が一致したプロバイダーの
-   `disabled` 値が true でもスキップしません。
+   この検査は名前のみを見ます。`defaultModel` / `models[]` 検査と同じく、名前が一致したプロバイダーの
+   `disabled` 値が true ならスキップします。
 
 7. **プロバイダーの `models[]`** — プレフィックスルールに一致せず、有効なプロバイダーの `models[]` に ID が
    あればそのプロバイダーを使います。ルール 4 により、bare `gpt-*` ID は別の provider の

@@ -7,6 +7,8 @@ Management API 是 opencodex 的控制平面。`http://localhost:10100` 上的�
 
 请使用 [Web 仪表板](/guides/web-dashboard/) 作为交互式客户端，或者在构建自动化时参考本文档。持久化值最终遵循 [配置](/reference/configuration/)。
 
+<a id="authentication-model"></a>
+
 ## 身份验证模型
 
 Management API 有自己独立的管理员凭证，与数据平面 API 密钥无关。启动时，opencodex 会按以下顺序解析它：

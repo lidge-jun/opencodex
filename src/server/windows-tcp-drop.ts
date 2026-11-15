@@ -13,8 +13,14 @@ export type TcpQuad = {
   state: string;
 };
 
-/** Parse netstat -ano rows whose local address uses `port`. Exported for tests. */
-export function parseTcpQuadsForLocalPort(output: string, port: number): TcpQuad[] {
+/**
+ * Parse netstat -ano rows whose local address uses `port`. Exported for tests.
+ *
+ * `ownerPids` restricts the rows to those the listed processes own. A row left by a process
+ * that has exited is that process's to clear; a program that took the port between scans owns
+ * its own rows, and resetting them would break a connection this stop does not own.
+ */
+export function parseTcpQuadsForLocalPort(output: string, port: number, ownerPids?: readonly number[]): TcpQuad[] {
   const rows: TcpQuad[] = [];
   const portSuffix = `:${port}`;
   for (const rawLine of output.split(/\r?\n/)) {
@@ -26,6 +32,10 @@ export function parseTcpQuadsForLocalPort(output: string, port: number): TcpQuad
     const remote = parts[2]!;
     const state = parts[3]!;
     if (!local.endsWith(portSuffix) && !local.endsWith(`]:${port}`)) continue;
+    if (ownerPids !== undefined) {
+      const rowPid = Number(parts[4]);
+      if (!Number.isSafeInteger(rowPid) || !ownerPids.includes(rowPid)) continue;
+    }
     const localAddr = stripPort(local, port);
     const remoteParsed = splitHostPort(remote);
     if (!localAddr || !remoteParsed) continue;
@@ -134,10 +144,17 @@ function readNetstatAno(): string {
 /**
  * Force-delete IPv4 TCP rows bound to `localPort` via SetTcpEntry(DELETE_TCB).
  * Does not kill foreign processes — only resets sockets so the listen port can bind again.
+ * `ownerPids` restricts the deletion to rows those processes own (see
+ * parseTcpQuadsForLocalPort); omitted, every row on the port is cleared, which is what the
+ * hard-kill path wants and what a stale-port sweep must not do.
  * Bare IPv6 rows (`::1`, `::`, etc.) are skipped (not coerced into IPv4 wildcards);
  * IPv6 TCB reclamation is unsupported on this path.
  */
-export function dropWindowsTcpRowsForLocalPort(port: number, mayMutate?: () => boolean): WindowsTcpDropResult {
+export function dropWindowsTcpRowsForLocalPort(
+  port: number,
+  mayMutate?: () => boolean,
+  ownerPids?: readonly number[],
+): WindowsTcpDropResult {
   if (process.platform !== "win32" || !Number.isFinite(port) || port <= 0) {
     return { dropped: 0, skippedIpv6: 0, accessDenied: 0 };
   }
@@ -151,7 +168,7 @@ export function dropWindowsTcpRowsForLocalPort(port: number, mayMutate?: () => b
     return { dropped: 0, skippedIpv6: 0, accessDenied: 0 };
   }
 
-  const rows = parseTcpQuadsForLocalPort(output, Math.trunc(port));
+  const rows = parseTcpQuadsForLocalPort(output, Math.trunc(port), ownerPids);
   let dropped = 0;
   let skippedIpv6 = 0;
   let accessDenied = 0;

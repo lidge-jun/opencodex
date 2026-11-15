@@ -188,6 +188,41 @@ Then run `ocx update` again. If `ENOTDIR` persists after the check passes, open 
 full terminal output of `ocx update` and the output of `npm config get prefix` and
 `npm config get cache`.
 
+## If a pnpm update says the path looks like a pnpm global store
+
+pnpm 11 and 12 install global packages as a link into the pnpm store (for example
+`~/Library/pnpm/store/v11/links/...` on macOS or `~/.local/share/pnpm/store/v11/links/...`
+on Linux). The updater accepts such an install only when pnpm itself names the store it uses: it runs
+`pnpm store path` for your pnpm home and checks that the installed package lies inside that store.
+A store-like path, marker files or `.modules.yaml` are never enough on their own.
+
+If that check cannot be made when the updater first identifies your install, the update stops before
+it installs or removes anything (pnpm's store query itself may create an empty store folder). The
+message includes `this install's path looks like a pnpm global store`
+and then the command to run instead. The updater repeats the store check after `pnpm add`; if pnpm's
+store answer no longer passes at that point, the update stops without a rollback, because the updater
+can no longer confirm which store a rollback would write to. Check `ocx --version`, then use the
+pnpm command below.
+
+Common causes:
+
+- pnpm is older or newer than the versions whose store behavior was checked (11 and 12). Run
+  `pnpm --version`.
+- `PNPM_HOME`, or a folder above it, is a symbolic link, or pnpm prints a store path that is
+  not a single absolute `v<N>` folder.
+- On Windows, the pnpm home, the global folders or the store path contain one of `"%!^&|<>`, which
+  cmd.exe cannot pass to pnpm safely.
+- The global group sits under a folder whose name merely looks like a store (a `v<N>/links`
+  folder, or pnpm's `files` and `index` markers) without being the store pnpm reports.
+
+In each case, update with pnpm itself and then restart the proxy:
+
+```bash
+pnpm add -g @bitkyc08/opencodex@latest
+```
+
+A default pnpm 11 or 12 setup passes this check and updates normally with `ocx update`.
+
 ## Desktop app update stalls or fails on "Installing update…"
 
 In the OpenCodex desktop app, **Install update** downloads the installer from GitHub

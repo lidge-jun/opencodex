@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { requireJson } from "./dashboard-shared";
 import { normalizeInjectionSelection } from "./dashboard-core-poll";
+import type { SubagentSurfaceMode } from "../subagent-surface";
 
 export type DelegationModelOption = { provider: string; model: string; namespaced: string };
 
@@ -32,16 +33,29 @@ export type UltraModeState = {
   hintText: string | null;
   recommendation: UltraModeHintRecommendation | null;
   multiAgentV2Enabled: boolean;
-  /** The raw multi-agent mode; Subagents renders the v1/base/v2 switch from it. */
-  multiAgentMode: "v1" | "default" | "v2";
+  /** The raw multi-agent mode; Subagents renders the surface switch from it. */
+  multiAgentMode: SubagentSurfaceMode;
+  /** True only on runtimes new enough to accept 'v2-plaintext'. */
+  supportsPlaintextV2Mode?: boolean;
+  /**
+   * The plaintext-delivery SETTING is on (the mode, or the legacy experimental flag).
+   * Not a claim that any particular message left in plaintext — an unrewritable
+   * request still goes out with its original encryption.
+   */
+  plaintextAgentMessagesEnabled?: boolean;
 };
 
 export type UltraModePatch = {
   multiAgentModeHintText?: string | null;
-  /** The v1/base/v2 switch. Models owns the catalog-side copy; this is the delegation-side one. */
-  multiAgentMode?: "v1" | "default" | "v2";
+  /** The surface switch. Models owns the catalog-side copy; this is the delegation-side one. */
+  multiAgentMode?: SubagentSurfaceMode;
   /** Answers the one-time surface advisory in the same request as a mode change. */
   multiAgentSurfaceAdvisoryAcknowledged?: true;
+  /**
+   * Required by the server when entering 'v2-plaintext'; nothing is persisted for it —
+   * the stored mode is itself the operator's opt-in record.
+   */
+  plaintextAgentMessagesAcknowledged?: true;
 };
 
 type DelegationResponse = {

@@ -16,6 +16,7 @@ import {
   trailingLandingPr,
   type ReleaseCommit,
 } from "../../scripts/build-release-changelog";
+import { fixtureGitEnv } from "../helpers/git-fixture";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const sha = (char: string): string => char.repeat(40);
@@ -245,6 +246,7 @@ describe("release metadata parsers", () => {
     const repo = mkdtempSync(join(tmpdir(), "ocx-release-log-"));
     const gitText = (args: string[]): string => {
       const result = Bun.spawnSync(["git", "-C", repo, ...args], {
+        env: fixtureGitEnv(),
         stdout: "pipe",
         stderr: "pipe",
       });

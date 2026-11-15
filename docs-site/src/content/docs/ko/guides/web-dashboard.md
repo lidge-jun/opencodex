@@ -18,6 +18,11 @@ ocx gui
 
 ```bash
 ocx start
+```
+
+해당 터미널에서 프록시를 계속 실행한 상태로 두고, 두 번째 터미널에서 GUI 개발 서버를 시작하세요:
+
+```bash
 bun run dev:gui
 ```
 
