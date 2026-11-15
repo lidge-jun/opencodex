@@ -773,6 +773,7 @@
   "combo-last-resort.test.ts": "codex-integration", "combo-management-api.test.ts": "routing",
     "combo-vision-enrollment.test.ts": "routing",
   "combo-stream-preflight.test.ts": "routing", "combo-workspace-data.test.ts": "gui",
+  "combo-selection-keepalive.test.ts": "routing", "server-combo-selection-keepalive.test.ts": "server",
   "combo-workspace-jev-decision.test.ts": "gui", "combos.test.ts": "codex-integration", "combos-kiro-profile-hop.test.ts": "codex-integration",
   "command-code-error-finish.test.ts": "providers", "command-code-buffer-budget.test.ts": "providers", "command-code-credit-failover.test.ts": "providers", "command-code-credit-rotation.test.ts": "providers", "command-code-plan-denial.test.ts": "providers",
   "command-code-efforts.test.ts": "providers",

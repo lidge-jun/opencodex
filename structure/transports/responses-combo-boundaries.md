@@ -241,6 +241,36 @@ after the ladder returns, until completion or cancellation. Buffered/exhausted e
 ladder binding in `finally`. `tests/server/server-combo-zero-output-failover.test.ts` covers failover,
 accepted stream lifetime, cancellation, and exactly-once attached-lease release.
 Plain admission leases without controller binding do not register or unregister a ladder controller.
+
+## Combo selection keepalive
+
+A streaming combo selection can outlast an intermediary's idle limit while preflight holds every
+child head (#8326). `handleComboResponses` in `src/server/responses/core.ts` therefore runs the ladder
+through `selectComboWithKeepalive` (`src/server/responses/combo-selection-keepalive.ts`) when
+`comboSelectionKeepaliveApplies` holds: `stream: true`, the `comboSelectionKeepalive` option that only
+the HTTP `/v1/responses` route in `src/server/index/serve-options.ts` sets, no WebSocket transport, a
+Responses inbound wire and no internal decision call. Chat and Messages ingresses, WebSocket frames
+and non-streaming turns keep the selected response and its status unconditionally.
+
+If selection settles within `COMBO_SELECTION_KEEPALIVE_THRESHOLD_MS` (15 s), the ladder's own
+response object is returned unchanged, including a rejection, so zero-output failover and the real
+HTTP status of an all-targets failure stay exactly as above. Otherwise a 200 `text/event-stream`
+head is returned whose first read yields `: keepalive`, and another comment is owed every
+`COMBO_SELECTION_KEEPALIVE_INTERVAL_MS` (15 s) until selection settles. Behind that head an accepted
+SSE child is relayed byte for byte; any other outcome becomes one `response.failed` event whose
+`error` and `last_error` carry the failure envelope's `code`, `type` and display-safe message, with
+the original status written to `logCtx.terminalHttpStatus` for the request log. A ladder that throws
+after the head becomes `server_error` with proxy-owned copy and status 502. The chosen child's headers
+and identity markers cannot reach a head that is already committed. The combo ladder lease is
+still released when selection settles, because the keepalive wraps the whole ladder.
+
+The committed head is an unmarked SSE response, so the ingress request-log tap records its terminal;
+`comboSelectionKeepaliveLadderOptions` drops the ingress native-passthrough log callbacks once the
+head is committed so the request is logged once. Cancelling the committed stream aborts the signal
+the ladder runs on, stops the timer and cancels a child body that arrives later. An already aborted
+request never commits a head. The clock is an injected seam; tests advance it manually
+(`tests/routing/combo-selection-keepalive.test.ts`,
+`tests/server/server-combo-selection-keepalive.test.ts`).
 Reasonless incomplete snapshots containing output items stay committed; an explicit `reason: null`
 also stays terminal. `tests/routing/combo-stream-preflight.test.ts` pins these conservative boundaries.
 Hop warnings in `src/server/responses/core-combo.ts` name the status and the closed condition from
