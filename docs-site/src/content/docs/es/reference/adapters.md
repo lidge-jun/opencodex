@@ -352,7 +352,7 @@ Para el endpoint oficial de Chat Completions de DeepSeek, OpenCodex flexibiliza 
 - En SSE/JSON convierte arrays tipados de texto en `content` string y pensamiento en `reasoning_content`, sin mostrar `[object Object]`.
 - Los 4xx de esquema conservan solo nombres de campo y tipos de error reconocidos y acotados en registros, sin valores, mensajes libres ni ubicaciones desconocidas.
 
-Una clave Muse Code rechazada fuera de su cliente exige `meta-model` con pago por uso, no otro login; consulta [las reglas Meta](/es/guides/providers/). `thinkingDisplay` o su mapa por modelo pueden seleccionar `summarized` (`display: "summarized"`), `updates` u `omitted`; un resumen explícito sigue prevaleciendo, como explica [la configuración](/es/reference/configuration/providers/).
+Una clave Muse Code rechazada fuera de su cliente exige `meta-model` con pago por uso, no otro login; consulta [las reglas Meta](/es/guides/api-key-catalog/). `thinkingDisplay` o su mapa por modelo pueden seleccionar `summarized` (`display: "summarized"`), `updates` u `omitted`; un resumen explícito sigue prevaleciendo, como explica [la configuración](/es/reference/configuration/providers/).
 
 En Vertex AI, Project ID y Location son opcionales. Sin clave se usa ADC del host del proxy, salvo `GOOGLE_CLOUD_API_KEY`, que prevalece. ADC también necesita proyecto y ubicación del formulario o `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` y `GOOGLE_CLOUD_LOCATION`. Añadir el proveedor o probar su catálogo estático no verifica credenciales ni permisos. Una clave sin proyecto usa express. Filas existentes sin `liveModels` mantienen descubrimiento genérico; `liveModels: false` usa catálogo estático.
 
