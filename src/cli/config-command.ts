@@ -163,7 +163,7 @@ export function startupOnlyConfigNotes(path: string): string[] {
     return [`A running OpenCodex applies ${segments.join(".")} only when it starts; restart it to use the new value.`];
   }
   if (segments[0] === "codexAuthMethod") {
-    return ["A running OpenCodex keeps its previous codexAuthMethod for Codex account logins until it restarts; restart it to apply the new value now."];
+    return ["A running OpenCodex keeps its previous codexAuthMethod for Codex pool account logins until it restarts; restart it to apply the new value now."];
   }
   return [];
 }

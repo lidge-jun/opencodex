@@ -2971,7 +2971,7 @@ export const fr: Record<TKey, string> = {
   "codexAuth.back": "Retour",
   "codexAuth.oauthAlreadyInProgress": "Une connexion est déjà en cours. Terminez-la dans votre navigateur.",
   "codexAuth.oauthWaiting": "En attente de la fin de la connexion à ChatGPT dans votre navigateur...",
-  "codexAuth.deviceOnlyEnforced": "Ce proxy n’autorise que la connexion par code d’appareil pour les comptes Codex (codexAuthMethod: device-only).",
+  "codexAuth.deviceOnlyEnforced": "Ce proxy n’autorise que la connexion par code d’appareil pour les comptes Codex du groupe (codexAuthMethod: device-only).",
   "codexAuth.oauthSubmittingCode": "Envoi du code…",
   "codexAuth.oauthCodeSubmitted": "Code envoyé — en attente de la fin de la connexion…",
   "codexAuth.oauthStatusRetrying": "Erreur réseau ou de proxy lors de la vérification de l’état de la connexion — nouvelle tentative…",

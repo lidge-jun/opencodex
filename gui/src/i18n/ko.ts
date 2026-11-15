@@ -2440,7 +2440,7 @@ export const ko: Record<TKey, string> = {
   "codexAuth.back": "뒤로",
   "codexAuth.oauthAlreadyInProgress": "로그인이 이미 진행 중입니다. 브라우저에서 완료하세요.",
   "codexAuth.oauthWaiting": "브라우저에서 ChatGPT 로그인 완료를 기다리는 중...",
-  "codexAuth.deviceOnlyEnforced": "이 프록시는 Codex 계정에 기기 코드 로그인만 허용합니다(codexAuthMethod: device-only).",
+  "codexAuth.deviceOnlyEnforced": "이 프록시는 Codex 풀 계정에 기기 코드 로그인만 허용합니다(codexAuthMethod: device-only).",
   "codexAuth.oauthSubmittingCode": "코드를 제출 중…",
   "codexAuth.oauthCodeSubmitted": "코드를 제출했습니다 — 로그인 완료를 기다리는 중입니다…",
   "codexAuth.oauthStatusRetrying": "로그인 상태를 확인하는 중 네트워크 또는 프록시 오류가 발생했습니다 — 재시도 중…",

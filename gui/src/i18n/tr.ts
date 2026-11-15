@@ -2989,7 +2989,7 @@ export const tr: Record<TKey, string> = {
   "codexAuth.back": "Geri",
   "codexAuth.oauthAlreadyInProgress": "Giriş zaten devam ediyor.",
   "codexAuth.oauthWaiting": "Tarayıcıda girişin tamamlanması bekleniyor...",
-  "codexAuth.deviceOnlyEnforced": "Bu proxy, Codex hesapları için yalnızca cihaz koduyla girişe izin verir (codexAuthMethod: device-only).",
+  "codexAuth.deviceOnlyEnforced": "Bu proxy, Codex havuz hesapları için yalnızca cihaz koduyla girişe izin verir (codexAuthMethod: device-only).",
   "codexAuth.oauthSubmittingCode": "Kod gönderiliyor…",
   "codexAuth.oauthCodeSubmitted": "Kod gönderildi — giriş bitmesi bekleniyor…",
   "codexAuth.oauthStatusRetrying": "Durum kontrol edilirken hata — tekrar deneniyor…",

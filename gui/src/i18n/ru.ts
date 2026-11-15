@@ -2961,7 +2961,7 @@ export const ru: Record<TKey, string> = {
   "codexAuth.back": "Назад",
   "codexAuth.oauthAlreadyInProgress": "Вход уже выполняется. Завершите его в браузере.",
   "codexAuth.oauthWaiting": "Ожидание завершения входа ChatGPT в браузере...",
-  "codexAuth.deviceOnlyEnforced": "Этот прокси разрешает для аккаунтов Codex только вход по коду устройства (codexAuthMethod: device-only).",
+  "codexAuth.deviceOnlyEnforced": "Этот прокси разрешает для аккаунтов Codex в пуле только вход по коду устройства (codexAuthMethod: device-only).",
   "codexAuth.oauthSubmittingCode": "Отправка кода…",
   "codexAuth.oauthCodeSubmitted": "Код отправлен — ждём завершения входа…",
   "codexAuth.oauthStatusRetrying": "При проверке статуса входа возникла сетевая ошибка или ошибка прокси — повторяем…",
