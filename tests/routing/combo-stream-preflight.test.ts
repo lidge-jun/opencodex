@@ -1914,4 +1914,45 @@ describe("degenerate completion prelude", () => {
     ), logCtx);
     expect(result.kind).toBe("accepted");
   });
+
+  test("degenerate prelude bounds reasoning hold to preserve time-to-first-byte", async () => {
+    jest.useFakeTimers();
+    const abort = new AbortController();
+    let source!: ReadableStreamDefaultController<Uint8Array>;
+    const reasoningChunk = new TextEncoder().encode(`data: ${JSON.stringify({ type: "response.reasoning_text.delta", delta: "pondering" })}\n\n`);
+    const response = new Response(new ReadableStream<Uint8Array>({
+      start(controller) { source = controller; controller.enqueue(reasoningChunk); },
+    }), { headers: { "content-type": "text/event-stream" } });
+
+    const pending = preflightComboStreamResponse(response, logCtx, undefined, {
+      degeneratePrelude: true,
+      signal: abort.signal,
+    });
+    let result: Awaited<typeof pending> | undefined;
+    void pending.then(value => { result = value; }, () => {});
+
+    try {
+      const flush = async () => { for (let i = 0; i < 20; i++) await Promise.resolve(); };
+      await flush();
+      expect(result).toBeUndefined();
+
+      // Advancing to 999ms should still be waiting
+      jest.advanceTimersByTime(999);
+      await flush();
+      expect(result).toBeUndefined();
+
+      // At 1000ms (COMBO_REQUIRED_TOOL_REASONING_HOLD_MS), deadline expires and stream is accepted
+      jest.advanceTimersByTime(1);
+      await flush();
+      expect(result?.kind).toBe("accepted");
+
+      const reader = result!.response.body!.getReader();
+      expect((await reader.read()).value).toEqual(reasoningChunk);
+      source.close();
+    } finally {
+      abort.abort();
+      await pending.catch(() => {});
+      jest.useRealTimers();
+    }
+  });
 });

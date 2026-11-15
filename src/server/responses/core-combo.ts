@@ -7,6 +7,7 @@ import { carryProxyErrorContext, hasProxyErrorMessage, markProxyError } from "..
 import { isXaiPrivacyModeRefusal } from "../../providers/xai-privacy-mode";
 import { classifyUpstreamCondition } from "../../lib/upstream-condition";
 import { effectiveAzureOutputBudget } from "../../adapters/azure";
+import { resolveOutputCeiling } from "./input-admission";
 import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
 import { isMetaAiResponsesDestination } from "../../responses/muse-tool-name-alias";
 import { chatCanPreserveMandatoryToolChoice, hasMandatoryToolChoice } from "./combo-required-tool-contract";
@@ -1155,9 +1156,17 @@ export async function executeComboResponses(
     const initialSend = hopDecision?.allowed ? { permit: hopDecision.permit, producerOwned: false } : undefined;
     try {
     comboTargetsDispatched += 1;
+    const targetOutputCeiling = resolveOutputCeiling(
+      config.providers[pick.target.provider]!,
+      pick.target.provider,
+      targetRoute.modelId,
+    );
     const childLog: RequestLogContext = {
       model: pick.target.model,
       provider: pick.target.provider,
+      comboTarget: pick.target,
+      comboWriterGeneration: pick.writerGeneration,
+      comboTargetOutputCeiling: targetOutputCeiling,
       ...(logCtx.conversationId ? { conversationId: logCtx.conversationId, conversationIdIsHermesFallback: logCtx.conversationIdIsHermesFallback } : {}),
       ...(logCtx.affinityLane ? { affinityLane: logCtx.affinityLane } : {}),
       ...(logCtx.surface ? { surface: logCtx.surface } : {}),
@@ -1459,6 +1468,9 @@ export async function executeComboResponses(
         model: responseModel,
         provider: "combo",
         comboId,
+        comboTarget: pick.target,
+        comboWriterGeneration: pick.writerGeneration,
+        comboTargetOutputCeiling: targetOutputCeiling,
         routeDecision: logCtx.routeDecision,
         attempts: logCtx.attempts,
         activeAttempt: attempt,

@@ -358,6 +358,12 @@ export interface CommittedTerminalCooldownFacts {
   failureDetailCode?: string;
   servingAttempt?: CommittedTerminalServingAttempt;
   httpStatus?: number;
+  target?: Pick<OcxComboTarget, "provider" | "model">;
+  writerGeneration?: number;
+  outputTokens?: number;
+  outputCeiling?: number | null;
+  isPaused?: boolean;
+  onCooldownRecorded?: (target: Pick<OcxComboTarget, "provider" | "model">) => void;
 }
 
 /**
@@ -372,19 +378,31 @@ export function coolComboTargetForCommittedTerminal(facts: CommittedTerminalCool
     ? undefined
     : COMMITTED_TERMINAL_COOLDOWN_MS[facts.failureDetailCode];
   if (cooldownMs === undefined) return;
+  if (facts.failureDetailCode === "output_limit") {
+    // Reaching the caller's own allowance (routine for Claude Code) or an Anthropic pause_turn
+    // must not cool a healthy target. Cool only when the turn was unpaused, the target's own
+    // ceiling is known, and the output actually reached that ceiling.
+    if (facts.isPaused === true) return;
+    if (facts.outputCeiling == null || (facts.outputTokens ?? 0) < facts.outputCeiling) return;
+  }
   const attempt = facts.servingAttempt;
   // The incomplete terminal is itself proof the target ran: a late stall surfaces to
   // the client as a 5xx attempt status, so gating on status < 400 would silence exactly
   // the case this cooldown exists for.
   if (!attempt || attempt.locallyAnswered === true) return;
+  // Combo selection evaluates cooldowns against pick.target (which preserves any alias selector
+  // the combo named); fall back to the routed physical attempt only when facts omits the target.
+  const target = facts.target ?? { provider: attempt.provider, model: attempt.model };
   // A shorter committed-terminal cooldown must not shorten a longer live one — a
   // server Retry-After or reset already recorded for this target stays authoritative.
-  const existing = targetCooldowns.get(cooldownMapKey(facts.comboId, attempt));
+  const existing = targetCooldowns.get(cooldownMapKey(facts.comboId, target));
   if (existing && existing.cooldownUntil > Date.now() + cooldownMs) return;
-  coolComboTarget(facts.comboId, { provider: attempt.provider, model: attempt.model }, {
+  const recorded = coolComboTarget(facts.comboId, target, {
     cooldownMs,
     status: facts.httpStatus,
+    writerGeneration: facts.writerGeneration,
   });
+  if (recorded) facts.onCooldownRecorded?.(target);
 }
 
 export function earliestComboCooldown(

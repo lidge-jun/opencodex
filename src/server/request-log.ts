@@ -34,8 +34,9 @@ import type { AdapterRequest } from "../adapters/base";
 import type { RequestSpendSettlement } from "./responses/request-spend";
 import type { AdapterTierMetadata } from "../providers/fastwire";
 import { UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../lib/upstream-retry";
-import type { CommittedTerminalCooldownFacts } from "../combos/failover";
 import { redactSecretString, sanitizeLogMetadataString } from "../lib/redact";
+export { registerCommittedTerminalCooldownHandler } from "./request-log-committed-terminal";
+import { reportCommittedTerminalCooldown } from "./request-log-committed-terminal";
 import type { UpstreamCondition } from "../lib/upstream-condition";
 import { boundedServiceTier, errorDetailFor, projectErrorDetail } from "../usage/error-detail";
 import { incompleteReasonDetail, upstreamErrorIsLocal, type FailureDetail } from "./request-log-failure-detail";
@@ -120,19 +121,6 @@ function cacheDiagnosticHooks(): CacheDiagnosticHooks | undefined {
   return (globalThis as Record<symbol, CacheDiagnosticHooks | undefined>)[CACHE_DIAGNOSTIC_HOOK];
 }
 
-let committedTerminalCooldownHandler: ((facts: CommittedTerminalCooldownFacts) => void) | undefined;
-
-/**
- * Composition-root hook: the combos layer registers its committed-terminal
- * cooldown policy here so request logging can report finalized terminals
- * without importing routing state (and risking an import cycle).
- */
-export function registerCommittedTerminalCooldownHandler(
-  handler: ((facts: CommittedTerminalCooldownFacts) => void) | undefined,
-): void {
-  committedTerminalCooldownHandler = handler;
-}
-
 /** Whether the cache diagnostic recorder will record inbound bodies (`OPENCODEX_CACHE_DEBUG=1`). */
 export function cacheDiagnosticsObserving(): boolean {
   return cacheDiagnosticHooks()?.enabled() === true;
@@ -207,6 +195,12 @@ export interface RequestLogContext extends UpstreamErrorDiagnostics, LinkRequest
   shadowCallRewrittenFrom?: string;
   /** Internal structural combo identity; omitted from RequestLogEntry/JSONL. */
   comboId?: string;
+  /** Target configuration from combo selection (e.g. alias selector); omitted from JSONL. */
+  comboTarget?: { provider: string; model: string };
+  /** Writer generation from combo selection; omitted from JSONL. */
+  comboWriterGeneration?: number;
+  /** Resolved output token ceiling of the selected combo target; omitted from JSONL. */
+  comboTargetOutputCeiling?: number | null;
   requestedEffort?: string;
   effectiveEffort?: string;
   reasoningWireField?: string;
@@ -1641,23 +1635,7 @@ function writeFinalRequestLog(
   // Keyed by the live attempt objects, not the detached copies above.
   const protocolTrace = protocolTraceForRequest(logCtx, logCtx.attempts);
   // Projected before any writer (an injected one too): the row keeps only proxy-owned error facts.
-  const servingAttempt = attempts?.at(-1);
-  try {
-    committedTerminalCooldownHandler?.({
-      ...(logCtx.comboId !== undefined ? { comboId: logCtx.comboId } : {}),
-      ...(meta?.terminalStatus !== undefined ? { terminalStatus: meta.terminalStatus } : {}),
-      ...(logCtx.failureDetail?.code !== undefined ? { failureDetailCode: logCtx.failureDetail.code } : {}),
-      ...(servingAttempt ? {
-        servingAttempt: {
-          provider: servingAttempt.provider,
-          model: servingAttempt.model,
-          status: servingAttempt.status,
-          ...(servingAttempt.locallyAnswered === true ? { locallyAnswered: true } : {}),
-        },
-      } : {}),
-      httpStatus: effectiveStatus,
-    });
-  } catch { /* committed-terminal cooldown bookkeeping must never break request logging */ }
+  reportCommittedTerminalCooldown(logCtx, meta, attempts, effectiveStatus, loggedUsage?.outputTokens);
   addLog(projectErrorDetail({
     requestId,
     ...(isLogicalRequestId(logicalRequestId) ? { logicalRequestId } : {}),

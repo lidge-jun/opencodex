@@ -771,15 +771,14 @@ export async function preflightComboStreamResponse(
           && !Array.isArray(payload) && (payload as { type?: unknown }).type === "error";
         // A zero-output bare error is terminal evidence. Explicit client errors stay
         // committed; unknown and retryable upstream failures may advance the combo.
-        const heldReasoning = options?.requiredToolPrelude && requiredToolReasoningPrelude(payload);
+        const heldReasoning = (options?.requiredToolPrelude && requiredToolReasoningPrelude(payload))
+          || (options?.degeneratePrelude === true && comboStreamDegeneratePrelude(payload, commentaryItemIds));
         if (heldReasoning) holdDeadline ??= new Promise(resolve => {
           holdTimer = setTimeout(() => resolve("hold-expired"), COMBO_REQUIRED_TOOL_REASONING_HOLD_MS);
         });
-        const degeneratePrelude = options?.degeneratePrelude === true
-          && comboStreamDegeneratePrelude(payload, commentaryItemIds);
         const degenerateTerminal = options?.degeneratePrelude === true
           && isDegenerateStreamTerminal(payload, logCtx);
-        if (comboStreamPayloadCommitsOutput(payload) && !matchedBareError && !heldReasoning && !degeneratePrelude) outputCommitted = true;
+        if (comboStreamPayloadCommitsOutput(payload) && !matchedBareError && !heldReasoning) outputCommitted = true;
         if (options?.requiredToolPrelude && payload && typeof payload === "object") {
           const event = payload as { type?: unknown; response?: { output?: unknown; error?: { code?: unknown; retryable?: unknown } } };
           const output = event.response?.output;
