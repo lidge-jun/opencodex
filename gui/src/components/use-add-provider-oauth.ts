@@ -5,7 +5,7 @@ import { openBrowserRequestField } from "../oauth-open-browser-pref";
 import { afterOAuthCancellation, cancelOAuthLogin } from "../oauth-cancellation-barrier";
 import type { LoginHintData } from "./login-url-block";
 import { parseBrowserLaunch, type BrowserLaunch } from "../oauth-browser-launch";
-import { loginPollAttempts } from "../oauth-login-budget";
+import { BROWSER_LOGIN_POLL_ATTEMPTS, loginPollAttempts } from "../oauth-login-budget";
 import { isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../api";
 import { useRenderTargetCapture } from "../use-render-target-capture";
 
@@ -39,6 +39,9 @@ export function useAddProviderOAuth({
   const renderCapture = useRenderTargetCapture(apiBase, targetKey);
   const activeProvidersRef = useRef(new Map<string, OAuthLoginSetters>());
   const activeCapturesRef = useRef(new Map<string, ApiTargetCapture>());
+  // The capture of each provider's last login that ended on this target (timed out, cancelled,
+  // failed or done), so a late pasted code can say the login ended instead of blaming the target.
+  const endedCapturesRef = useRef(new Map<string, ApiTargetCapture>());
   const targetKeyRef = useRef(targetKey);
   useLayoutEffect(() => { targetKeyRef.current = targetKey; }, [targetKey]);
   useEffect(() => {
@@ -46,6 +49,7 @@ export function useAddProviderOAuth({
     const captures = [...activeCapturesRef.current];
     activeProvidersRef.current.clear();
     activeCapturesRef.current.clear();
+    endedCapturesRef.current.clear();
     loginGenerationRef.current.clear();
     // The old target's busy spinner and device URL must not survive under the new label.
     // A login started on the new target registers after this reset.
@@ -77,6 +81,7 @@ export function useAddProviderOAuth({
       const captures = new Map(activeCapturesRef.current);
       activeProvidersRef.current.clear();
       activeCapturesRef.current.clear();
+      for (const [providerId, capture] of captures) endedCapturesRef.current.set(providerId, capture);
       for (const [providerId, setters] of providers) {
         bumpLoginGeneration(providerId);
         if (clearUi) {
@@ -105,6 +110,7 @@ export function useAddProviderOAuth({
     const capture = activeCapturesRef.current.get(providerId);
     activeProvidersRef.current.delete(providerId);
     activeCapturesRef.current.delete(providerId);
+    if (capture) endedCapturesRef.current.set(providerId, capture);
     if (capture) await cancelServerLogin(capture, providerId);
     if (!aliveRef.current || loginGenerationRef.current.get(providerId) !== generation) return;
     setters.setOauthBusy(false);
@@ -121,6 +127,7 @@ export function useAddProviderOAuth({
     // older login's cleanup from its replacement.
     const capture = { ...renderCapture };
     activeCapturesRef.current.set(providerId, capture);
+    endedCapturesRef.current.delete(providerId);
     const { setOauthBusy, setOauthMsg, setOauthMsgTone, setOauthUrl, setManualCode, setManualCodeMsg, setManualCodeOk } = setters;
     const generation = bumpLoginGeneration(providerId);
     const isCurrent = () => loginGenerationRef.current.get(providerId) === generation
@@ -171,7 +178,7 @@ export function useAddProviderOAuth({
       else setOauthMsg(data.instructions || t("modal.loggingIn"));
       // A device grant outlives the browser budget; see oauth-login-budget.ts.
       let deviceFlow = Boolean(data.deviceCode);
-      for (let i = 0; i < loginPollAttempts(deviceFlow, OAUTH_LOGIN_POLL_INTERVAL_MS, 100); i++) {
+      for (let i = 0; i < loginPollAttempts(deviceFlow, OAUTH_LOGIN_POLL_INTERVAL_MS, BROWSER_LOGIN_POLL_ATTEMPTS); i++) {
         await new Promise(r => setTimeout(r, OAUTH_LOGIN_POLL_INTERVAL_MS));
         if (!aliveRef.current || !isCurrent()) return;
         const sRes = await targetFetch(capture, `${apiBase}/api/oauth/status?provider=${providerId}`).catch(() => null);
@@ -213,7 +220,11 @@ export function useAddProviderOAuth({
         setOauthMsg(t("modal.networkError"));
       }
     } finally {
-      if (activeCapturesRef.current.get(providerId) === capture) activeCapturesRef.current.delete(providerId);
+      // A replacement login owns the map entry; only this login's own capture ends here.
+      if (activeCapturesRef.current.get(providerId) === capture) {
+        activeCapturesRef.current.delete(providerId);
+        endedCapturesRef.current.set(providerId, capture);
+      }
       if (aliveRef.current && isCurrent()) {
         setOauthBusy(false);
         setOauthUrl("", providerId);
@@ -238,13 +249,15 @@ export function useAddProviderOAuth({
     setManualCodeBusy(true);
     setManualCodeMsg("");
     // The code belongs to the login that produced the device URL. Without its capture the
-    // flow is gone (target changed or it ended), so refuse instead of posting to the live
-    // target — a stale code must never reach another server.
+    // flow is gone, so refuse instead of posting to the live target — a stale code must never
+    // reach another server. A login that ended on the still-current target says so (#8618);
+    // anything else is a target change.
     const capture = activeCapturesRef.current.get(providerId);
     if (!capture) {
+      const ended = endedCapturesRef.current.get(providerId);
       setManualCodeBusy(false);
       setManualCodeOk(false);
-      setManualCodeMsg(t("prov.targetChanged"));
+      setManualCodeMsg(ended && isApiTargetCaptureCurrent(ended) ? t("prov.loginExpired") : t("prov.targetChanged"));
       return;
     }
     try {

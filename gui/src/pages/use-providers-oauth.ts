@@ -4,7 +4,7 @@ import { readJsonIfOk } from "../fetch-json";
 import { openBrowserRequestField } from "../oauth-open-browser-pref";
 import { afterOAuthCancellation, cancelOAuthLogin } from "../oauth-cancellation-barrier";
 import { parseBrowserLaunch, type BrowserLaunch } from "../oauth-browser-launch";
-import { loginPollAttempts } from "../oauth-login-budget";
+import { BROWSER_LOGIN_POLL_ATTEMPTS, loginPollAttempts } from "../oauth-login-budget";
 import type { OAuthAccount, OAuthStatus } from "./providers-shared";
 import { oauthLabel } from "./providers-shared";
 import { isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../api";
@@ -210,7 +210,7 @@ export function useProvidersOAuth({
       // A device code can arrive with the POST or with a later status hint; either one stretches
       // the budget to the grant's lifetime (see oauth-login-budget.ts).
       let deviceFlow = Boolean(data.deviceCode);
-      for (let i = 0; i < loginPollAttempts(deviceFlow, 2000, 150) && targetCurrent() && oauthLoginGenerationRef.current!.get(provider) === generation; i++) {
+      for (let i = 0; i < loginPollAttempts(deviceFlow, 2000, BROWSER_LOGIN_POLL_ATTEMPTS) && targetCurrent() && oauthLoginGenerationRef.current!.get(provider) === generation; i++) {
         await new Promise(r => setTimeout(r, 2000));
         if (oauthLoginGenerationRef.current!.get(provider) !== generation || !targetCurrent()) return;
         const isCurrentStatusRead = captureOauthStatusRead?.(provider);
