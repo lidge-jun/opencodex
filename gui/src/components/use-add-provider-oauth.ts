@@ -46,6 +46,9 @@ export function useAddProviderOAuth({
   onAdded: (name: string) => void;
 }) {
   const loginGenerationRef = useRef(new Map<string, number>());
+  // Generations come from one counter that a target change never resets, so a login on the new
+  // target can never share a number with an old login that is still finishing.
+  const loginSequenceRef = useRef(0);
   // The hook's render owns the target for a login started from this surface.
   const renderCapture = useRenderTargetCapture(apiBase, targetKey);
   const activeProvidersRef = useRef(new Map<string, OAuthLoginSetters>());
@@ -74,7 +77,7 @@ export function useAddProviderOAuth({
   }, [targetKey]);
 
   const bumpLoginGeneration = useCallback((providerId: string) => {
-    const generation = (loginGenerationRef.current.get(providerId) ?? 0) + 1;
+    const generation = ++loginSequenceRef.current;
     loginGenerationRef.current.set(providerId, generation);
     return generation;
   }, []);
@@ -239,7 +242,8 @@ export function useAddProviderOAuth({
       if (aliveRef.current && isCurrent()) {
         setOauthBusy(false);
         setOauthUrl("", providerId);
-      } else if (aliveRef.current && loginGenerationRef.current.get(providerId) === generation) {
+      } else if (aliveRef.current && loginGenerationRef.current.get(providerId) === generation
+        && (targetKey === undefined || targetKeyRef.current === targetKey)) {
         // Still this surface's login, but its target moved under the same key (a relay
         // re-pair): reset the form instead of leaving a paste box with no flow behind it.
         // A key change already reset the form, and a newer login owns it otherwise.

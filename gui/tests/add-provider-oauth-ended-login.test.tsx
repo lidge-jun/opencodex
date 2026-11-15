@@ -159,6 +159,21 @@ test("a browser login whose poll budget ran out reports an ended login and posts
   expect(codePosts).toEqual([]);
 });
 
+test("an old target's late completion leaves the replacement login on the new target alone", async () => {
+  holdStatus = true;
+  await render("hub-a");
+  void api.loginOAuth("devin", setters);
+  await settle();
+  await render("hub-b");
+  void api.loginOAuth("devin", setters);
+  await settle();
+  expect(surface).toMatchObject({ busy: true, url: AUTH_URL });
+  // Releasing the polls ends the hub-a login; the hub-b login keeps polling.
+  await act(async () => { for (const release of heldStatus.splice(0)) release(); await new Promise((r) => setTimeout(r, 20)); });
+  expect(surface).toEqual({ busy: true, url: AUTH_URL, msg: en["modal.waitingLogin"] });
+});
+
+
 test("a login whose target moved under the same key resets the surface instead of leaving a dead paste box", async () => {
   holdStatus = true;
   await render("hub-a");
