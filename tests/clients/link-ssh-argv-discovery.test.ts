@@ -256,9 +256,11 @@ function windowsServedHome() {
   const ocxHome = join(home, ".opencodex");
   mkdirSync(ocxHome, { recursive: true });
   const census = (body: unknown) => writeFileSync(join(ocxHome, "serving-runtimes.json"), JSON.stringify(body, null, 2) + "\n");
-  const run = async (argv: string[]) => {
+  const run = async (argv: string[], env: Record<string, string | undefined> = { USERPROFILE: home, HOME: home, OPENCODEX_HOME: ocxHome }) => {
+    const childEnv: Record<string, string | undefined> = { ...process.env, ...env };
+    for (const key of Object.keys(childEnv)) if (childEnv[key] === undefined) delete childEnv[key];
     const child = Bun.spawn(argv, {
-      env: { ...process.env, USERPROFILE: home, HOME: home, OPENCODEX_HOME: ocxHome },
+      env: childEnv,
       stdin: new Blob(["fixture-key-stdin"]), stdout: "pipe", stderr: "pipe",
     });
     const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
@@ -285,6 +287,24 @@ test.skipIf(process.platform !== "win32")("Windows runtime inspection reports th
   expect(lines).toContain("ocx-inspect:kind:full");
   expect(lines).toContain("ocx-inspect:version:opencodex 2.99.0");
 }, SPAWN_BUDGET_MS);
+
+test.skipIf(process.platform !== "win32")("the Windows census is found where its writer's getConfigDir puts it (#8359)", async () => {
+  const f = windowsServedHome();
+  recordServingRuntime({ command: [process.execPath, f.entry], version: "2.99.0", servedAt: "2026-11-15T00:00:00.000Z" }, f.ocxHome);
+  const elsewhere = join(f.home, "git-bash-home");
+  mkdirSync(elsewhere, { recursive: true });
+  const args = ["link", "port"];
+  // A padded OPENCODEX_HOME is trimmed, and without one the profile home wins over HOME, as homedir() does.
+  for (const env of [
+    { USERPROFILE: f.home, HOME: elsewhere, OPENCODEX_HOME: "  " + f.ocxHome + "  " },
+    { USERPROFILE: f.home, HOME: elsewhere, OPENCODEX_HOME: undefined },
+  ]) {
+    const result = await f.run(windowsOcxArgv(args), env);
+    expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
+    expect(JSON.parse(result.stdout)).toEqual({ served: true, args, input: "fixture-key-stdin" });
+  }
+}, SPAWN_BUDGET_MS * 2);
+
 
 test.skipIf(process.platform !== "win32")("a Windows census the reader cannot trust falls through to the Desktop copy (#8359)", async () => {
   const f = windowsServedHome();
