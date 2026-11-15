@@ -342,9 +342,9 @@ olmayan bir makineden oturum açmak bundan etkilenmez.
 
 ## 3. API anahtarı kataloğu
 
-opencodex 109 yerleşik önayar ile birlikte gelir: 88 anahtar tabanlı, 17
-OAuth, üç yerel ve bir varsayılan ChatGPT iletme önayarı. Kontrol panelinin
-**Sağlayıcı ekle** seçicisi bir anahtar sağlayıcısının kontrol panelini açar,
+opencodex 109 yerleşik önayar ile birlikte gelir: 88 anahtar tabanlı (kayıt defterindeki `authKind: "key"` kategorisi; `claude-cli` ve `antigravity-cli` gibi yerel olarak oturum açılmış CLI hesabını doğrudan kullanan anahtarsız abonelik CLI önayarları dahil), 17
+OAuth, üç yerel ve bir varsayılan ChatGPT iletme önayarı. Standart anahtar tabanlı sağlayıcılar için kontrol panelinin
+**Sağlayıcı ekle** seçicisi sağlayıcının kontrol panelini açar,
 anahtarı doğrular ve saklar; doğrulama sağlayıcıya özgüdür. Dikkate değer
 girdiler:
 

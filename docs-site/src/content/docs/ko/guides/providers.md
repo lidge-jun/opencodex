@@ -212,8 +212,8 @@ Kiro 로그인에는 Kiro CLI가 필요합니다. Unix에서는 `curl -fsSL http
 
 ## 3. API 키 카탈로그
 
-opencodex에는 빌트인 프리셋이 109개 들어 있습니다. 키 방식 88개, OAuth 17개, 로컬 3개,
-기본 ChatGPT 포워드 프리셋 1개입니다. 대시보드의 **Add provider** 선택기는 키 발급 페이지를 열고,
+opencodex에는 빌트인 프리셋이 109개 들어 있습니다. 키 방식 88개(레지스트리의 `authKind: "key"` 분류로, `claude-cli` 및 `antigravity-cli`처럼 로컬에 로그인된 CLI 계정을 그대로 재사용하는 무키 구독 CLI 프리셋 포함), OAuth 17개, 로컬 3개,
+기본 ChatGPT 포워드 프리셋 1개입니다. 일반 키 방식 프로바이더의 경우 대시보드의 **Add provider** 선택기가 키 발급 페이지를 열고,
 입력한 키를 검증한 뒤 저장합니다(검증은 프로바이더별로 다릅니다). 주요 항목은 다음과 같습니다:
 
 **ClinePass**는 Cline API 키로 [공식 구독 카탈로그](https://docs.cline.bot/getting-started/clinepass)와

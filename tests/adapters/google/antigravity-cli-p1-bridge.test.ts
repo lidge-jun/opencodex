@@ -1109,4 +1109,150 @@ describe("antigravity-cli Stage 1 P1-0 observability", () => {
       await pool.disposeAll();
     }
   });
+
+  test("cold single-shot path gates ambiguous pre-output EOF through authorizeResend and retries forged text tool calls", async () => {
+    // 1. Ambiguous pre-output inference EOF refused by default on cold single-shot path
+    let defaultEofSpawns = 0;
+    const defaultEofAdapter = createAntigravityCliAdapter(provider(), {
+      which: () => "/bin/agy",
+      platform: "linux",
+      enableSessionPool: false,
+      maxPreludeRetries: 1,
+      preludeRetryDelayMs: 1,
+      spawn: () => {
+        defaultEofSpawns += 1;
+        return createStreamChild([
+          JSON.stringify({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } }),
+          JSON.stringify({
+            event: "result",
+            result: { status: "ERROR", error: { message: "streamGenerateContent: unexpected EOF" } },
+          }),
+        ], { emitClose: true }).child as unknown as ChildProcess;
+      },
+    });
+    const defaultEofEvents = await runTurn(defaultEofAdapter, twoToolRequest());
+    expect(defaultEofSpawns).toBe(1);
+    expect(defaultEofEvents.find(e => e.type === "error")).toMatchObject({
+      type: "error",
+      status: 502,
+      retryable: true,
+    });
+
+    // 2. Ambiguous pre-output inference EOF replayed once when retryOnReset is enabled and request is self-contained
+    let allowedEofSpawns = 0;
+    const allowedEofAdapter = createAntigravityCliAdapter(
+      { ...provider(), retryOnReset: true },
+      {
+        which: () => "/bin/agy",
+        platform: "linux",
+        enableSessionPool: false,
+        maxPreludeRetries: 1,
+        preludeRetryDelayMs: 1,
+        spawn: () => {
+          allowedEofSpawns += 1;
+          if (allowedEofSpawns === 1) {
+            return createStreamChild([
+              JSON.stringify({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } }),
+              JSON.stringify({
+                event: "result",
+                result: { status: "ERROR", error: { message: "streamGenerateContent: unexpected EOF" } },
+              }),
+            ], { emitClose: true }).child as unknown as ChildProcess;
+          }
+          return createStreamChild([
+            JSON.stringify({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } }),
+            JSON.stringify({
+              event: "step_update",
+              step_update: { step_index: 1, state: "DONE", step_type: "agent_response", text_delta: "eof replayed ok" },
+            }),
+            JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "eof replayed ok" } }),
+          ], { emitClose: true }).child as unknown as ChildProcess;
+        },
+      },
+    );
+    const allowedEofEvents = await runTurn(allowedEofAdapter, twoToolRequest());
+    expect(allowedEofSpawns).toBe(2);
+    expect(allowedEofEvents).toEqual([
+      { type: "text_delta", text: "eof replayed ok" },
+      { type: "done", stopReason: "stop" },
+    ]);
+
+    // 3. Non-self-contained request (`store: true`) refuses ambiguous EOF even with retryOnReset
+    let statefulEofSpawns = 0;
+    const statefulEofAdapter = createAntigravityCliAdapter(
+      { ...provider(), retryOnReset: true },
+      {
+        which: () => "/bin/agy",
+        platform: "linux",
+        enableSessionPool: false,
+        maxPreludeRetries: 1,
+        preludeRetryDelayMs: 1,
+        spawn: () => {
+          statefulEofSpawns += 1;
+          return createStreamChild([
+            JSON.stringify({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } }),
+            JSON.stringify({
+              event: "result",
+              result: { status: "ERROR", error: { message: "streamGenerateContent: unexpected EOF" } },
+            }),
+          ], { emitClose: true }).child as unknown as ChildProcess;
+        },
+      },
+    );
+    const statefulEvents = await runTurn(
+      statefulEofAdapter,
+      twoToolRequest({ _rawBody: { store: true, input: [{ type: "message", role: "user", content: "hi" }] } }),
+    );
+    expect(statefulEofSpawns).toBe(1);
+    expect(statefulEvents.some(e => e.type === "error")).toBe(true);
+
+    // 4. Cold single-shot path retries pre-output forged text tool call (`[Tool call: ...]`) matching warm path
+    let coldForgedSpawns = 0;
+    const physicalSends: Array<{ ordinal: number; recovery?: string }> = [];
+    const coldForgedAdapter = createAntigravityCliAdapter(provider(), {
+      which: () => "/bin/agy",
+      platform: "linux",
+      enableSessionPool: false,
+      maxPreludeRetries: 1,
+      preludeRetryDelayMs: 1,
+      spawn: () => {
+        coldForgedSpawns += 1;
+        if (coldForgedSpawns === 1) {
+          return createStreamChild([
+            JSON.stringify({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } }),
+            JSON.stringify({
+              event: "step_update",
+              step_update: {
+                step_index: 1,
+                state: "DONE",
+                step_type: "agent_response",
+                text_delta: `[Tool call: ${BRIDGED_READ_TOOL} (call_id: fake_1) with args: {}]`,
+              },
+            }),
+          ], { emitClose: true }).child as unknown as ChildProcess;
+        }
+        return createStreamChild([
+          JSON.stringify({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } }),
+          JSON.stringify({
+            event: "step_update",
+            step_update: { step_index: 1, state: "DONE", step_type: "agent_response", text_delta: "cold forged recovered" },
+          }),
+          JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "cold forged recovered" } }),
+        ], { emitClose: true }).child as unknown as ChildProcess;
+      },
+    });
+    const coldForgedEvents = await runTurn(coldForgedAdapter, twoToolRequest(), {
+      ...incomingWithRequestId("req-cold-forged"),
+      onPhysicalSend: send => physicalSends.push(send),
+    });
+    expect(coldForgedSpawns).toBe(2);
+    expect(physicalSends).toEqual([
+      { ordinal: 1 },
+      { ordinal: 2, recovery: "empty-completion" },
+    ]);
+    expect(coldForgedEvents).toEqual([
+      { type: "text_delta", text: "cold forged recovered" },
+      { type: "done", stopReason: "stop" },
+    ]);
+  });
 });

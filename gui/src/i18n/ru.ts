@@ -1810,6 +1810,7 @@ export const ru: Record<TKey, string> = {
   "modal.freeTierTitle": "Бесплатный тариф",
   "modal.subscriptionCliTitle": "CLI по подписке, а не API-ключ",
   "modal.subscriptionCliWarning": "Этот провайдер не использует API-ключ. Он запускает официальный Claude Code CLI, в котором выполнен вход на этом компьютере ({cmd}), и списывает оплату с этой подписки Claude. OpenCodex не хранит для него ключ, а введённый здесь ключ никогда не используется. Для оплаты по API-ключу добавьте вместо него {apiProvider}.",
+  "modal.antigravitySubscriptionCliWarning": "Этот провайдер не использует API-ключ. Он в фоновом режиме запускает официальный Antigravity CLI, в котором выполнен вход на этом компьютере ({cmd}); OpenCodex не хранит для него ключ, а введённый здесь ключ никогда не читается. Для оплаты по API-ключу добавьте вместо него {apiProvider}.",
   "modal.freeTierDefault": "API-ключ не нужен. Работает из коробки.",
   "modal.tab.accounts": "Аккаунты",
   "modal.tab.free": "Бесплатные",

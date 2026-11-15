@@ -264,8 +264,8 @@ database 並移除目前的 WAL、SHM 與 journal sidecar，再發布先前的 s
 
 ## 3. API 金鑰目錄
 
-opencodex 內建 109 個 preset：88 個 key-based、17 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
-preset。儀表板的 **Add provider** picker 會開啟 key provider 的 dashboard、驗證金鑰並儲存；驗證方式
+opencodex 內建 109 個 preset：88 個 key-based（屬於註冊表 `authKind: "key"` 分類，其中包含 `claude-cli` 與 `antigravity-cli` 等免金鑰、直接複用本機已登入 CLI 帳號的訂閱 CLI 預設）、17 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
+preset。對於一般金鑰類 provider，儀表板的 **Add provider** picker 會開啟該 provider 的 dashboard、驗證金鑰並儲存；驗證方式
 依 provider 而異。主要條目如下。
 
 **ClinePass** 使用 Cline API key，搭配[官方訂閱 catalog](https://docs.cline.bot/getting-started/clinepass)

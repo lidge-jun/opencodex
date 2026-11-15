@@ -17,6 +17,9 @@ import {
   removeAntigravityPathSyncBestEffort,
   WarmAntigravitySession,
 } from "../../../src/adapters/antigravity-cli/session-pool";
+import type { IncomingMeta } from "../../../src/adapters/base";
+import { createRequestExecutionBudget } from "../../../src/lib/request-execution-budget";
+import { SendBudgetExhaustedError } from "../../../src/lib/upstream-retry";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import { createTestTranslatorBudget } from "../../helpers/translator-budget";
 
@@ -1584,6 +1587,391 @@ describe("antigravity-cli Stage 4 session pool hardening, F11 streaming, and U3 
       expect(coldPayloads[0]).toContain("Continue on Hydrogen");
       expect(events).toEqual([
         { type: "text_delta", text: "Switched to Hydrogen cleanly." },
+        { type: "done", stopReason: "stop" },
+      ]);
+    } finally {
+      await pool.disposeAll();
+    }
+  });
+
+  test("13) pooled warm continuation gates pre-output EOF through authorizeResend, evicts dead idle stdout, and fails closed on warm streamErr/401", async () => {
+    const turn1Req = parsed({ context: { messages: [{ role: "user", content: "turn-1", timestamp: 0 }] } });
+    const turn2Messages: OcxParsedRequest["context"]["messages"] = [
+      { role: "user", content: "turn-1", timestamp: 0 },
+      { role: "assistant", content: [{ type: "text", text: "warm-ready" }], timestamp: 1 },
+      { role: "user", content: "turn-2", timestamp: 2 },
+    ];
+    const runWarmCase = async (
+      mode: "result-eof" | "silent-stdout-eof" | "idle-stdout-closed" | "warm-bad-json" | "warm-401",
+      providerOverrides: Partial<OcxProviderConfig> = {},
+      turn2Overrides: Partial<OcxParsedRequest> = {},
+    ): Promise<{ spawns: number; warmLines: number; events: AdapterEvent[] }> => {
+      const pool = new AntigravitySessionPool();
+      const children: InteractiveChild[] = [];
+      try {
+        const adapter = createAntigravityCliAdapter(provider(providerOverrides), {
+          which: () => "/bin/agy", platform: "linux", isolatedHomeDir: false,
+          enableSessionPool: true, sessionPool: pool, maxPreludeRetries: 1, preludeRetryDelayMs: 1,
+          spawn: (_cmd, _args, opts) => {
+            const idx = children.length;
+            const child = createInteractiveChild({
+              pid: 9990 + idx, cwd: String(opts.cwd),
+              onStdinLine: (_line, c) => {
+                if (idx === 0 && c.writtenLines.length === 1) {
+                  c.emitStdoutFrame({ event: "init", init: { tools: [], permission_mode: "request-review" } });
+                  c.emitStdoutFrame({ event: "step_update", step_update: { step_index: 1, state: "DONE", step_type: "agent_response", text_delta: "warm-ready" } });
+                  c.emitStdoutFrame({ event: "result", result: { status: "SUCCESS", response: "warm-ready" } });
+                  return;
+                }
+                if (idx === 0 && c.writtenLines.length === 2) {
+                  if (mode === "result-eof") {
+                    c.emitStdoutFrame({ event: "result", result: { status: "ERROR", error: { message: "streamGenerateContent: unexpected EOF" } } });
+                  } else if (mode === "silent-stdout-eof") {
+                    c.stdout.end();
+                  } else if (mode === "warm-bad-json") {
+                    c.stdout.write("{malformed-json\n");
+                  } else if (mode === "warm-401") {
+                    c.stderr.write("Error: not signed in to Antigravity\n");
+                    c.crash(1);
+                  }
+                  return;
+                }
+                c.emitStdoutFrame({ event: "init", init: { tools: [], permission_mode: "request-review" } });
+                c.emitStdoutFrame({ event: "step_update", step_update: { step_index: 1, state: "DONE", step_type: "agent_response", text_delta: "warm-recovered" } });
+                c.emitStdoutFrame({ event: "result", result: { status: "SUCCESS", response: "warm-recovered" } });
+              },
+            });
+            children.push(child);
+            return child as unknown as ChildProcess;
+          },
+        });
+        await runTurn(adapter, turn1Req);
+        expect(pool.idleCount).toBe(1);
+        if (mode === "idle-stdout-closed") {
+          children[0]!.stdout.end();
+          await new Promise(r => setTimeout(r, 10));
+        }
+        const events = await runTurn(adapter, parsed({ context: { messages: turn2Messages }, ...turn2Overrides }));
+        return { spawns: children.length, warmLines: children[0]!.writtenLines.length, events };
+      } finally {
+        await pool.disposeAll();
+      }
+    };
+
+    // Real 2-turn warm continuation: result.ERROR EOF & silent mid-turn stdout EOF refused by default, allowed with retryOnReset, refused with store:true
+    for (const eofMode of ["result-eof", "silent-stdout-eof"] as const) {
+      const def = await runWarmCase(eofMode);
+      expect(def.spawns).toBe(1);
+      expect(def.warmLines).toBe(2);
+      expect(def.events.some(e => e.type === "error")).toBe(true);
+
+      const ok = await runWarmCase(eofMode, { retryOnReset: { enabled: true } });
+      expect(ok.spawns).toBe(2);
+      expect(ok.events).toEqual([{ type: "text_delta", text: "warm-recovered" }, { type: "done", stopReason: "stop" }]);
+
+      const stateful = await runWarmCase(eofMode, { retryOnReset: { enabled: true } }, { _rawBody: { store: true, input: [] } });
+      expect(stateful.spawns).toBe(1);
+      expect(stateful.events.some(e => e.type === "error")).toBe(true);
+    }
+
+    // Idle session whose stdout closed between turns is evicted before writing Turn 2 stdin
+    const idleClosed = await runWarmCase("idle-stdout-closed");
+    expect(idleClosed.spawns).toBe(2);
+    expect(idleClosed.warmLines).toBe(1);
+    expect(idleClosed.events).toEqual([{ type: "text_delta", text: "warm-recovered" }, { type: "done", stopReason: "stop" }]);
+
+    // Warm streamErr (malformed JSON) and warm 401 stderr exit fail closed even when retryOnReset is enabled
+    const badJson = await runWarmCase("warm-bad-json", { retryOnReset: { enabled: true } });
+    expect(badJson.spawns).toBe(1);
+    expect(badJson.events.find(e => e.type === "error")).toMatchObject({ status: 502, code: "protocol_error", retryable: false });
+
+    const auth401 = await runWarmCase("warm-401", { retryOnReset: { enabled: true } });
+    expect(auth401.spawns).toBe(1);
+    expect(auth401.events.find(e => e.type === "error")).toMatchObject({ status: 401, retryable: false });
+  });
+
+  test("14) pooled replacement sends reserve separate budget permits, report onPhysicalSend, and enforce beforePhysicalSend per attempt", async () => {
+    const runWithIncoming = async (
+      adapter: ReturnType<typeof createAntigravityCliAdapter>,
+      req: OcxParsedRequest,
+      extra: Partial<IncomingMeta>,
+    ): Promise<AdapterEvent[]> => {
+      const events: AdapterEvent[] = [];
+      await adapter.runTurn!(req, { headers: new Headers(), translatorBudget: createTestTranslatorBudget(), ...extra }, e => events.push(e));
+      return events;
+    };
+    const fixedBudget = (n: number) => createRequestExecutionBudget({
+      maxTotalModelSends: n, baseSendAllowance: n, finalRecoveryAllowance: 0, maxAlternateTargetSends: 0, maxTargetTransitions: 0,
+    });
+
+    // (a) Two-send budget succeeds on replacement attempt 2 and records both physical sends
+    const poolA = new AntigravitySessionPool();
+    const recordedSends: Array<{ ordinal: number; recovery?: string }> = [];
+    try {
+      const budget2 = fixedBudget(2);
+      let spawns = 0;
+      const adapterA = createAntigravityCliAdapter(provider(), {
+        which: () => "/bin/agy", platform: "linux", isolatedHomeDir: false,
+        enableSessionPool: true, sessionPool: poolA, maxPreludeRetries: 1, preludeRetryDelayMs: 1,
+        spawn: (_cmd, _args, opts) => {
+          const attempt = ++spawns;
+          return createInteractiveChild({
+            pid: 9700 + attempt, cwd: String(opts.cwd),
+            onStdinLine: (_line, c) => {
+              c.emitStdoutFrame({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } });
+              if (attempt === 1) {
+                c.emitStdoutFrame({ event: "result", result: { status: "ERROR", error: { message: "HTTP 503 Service Unavailable" } } });
+                return;
+              }
+              c.emitStdoutFrame({ event: "step_update", step_update: { step_index: 1, state: "DONE", step_type: "agent_response", text_delta: "replacement ok" } });
+              c.emitStdoutFrame({ event: "result", result: { status: "SUCCESS", response: "replacement ok" } });
+            },
+          }) as unknown as ChildProcess;
+        },
+      });
+      const eventsA = await runWithIncoming(adapterA, toolRequest(), { sendBudget: budget2, onPhysicalSend: send => recordedSends.push(send) });
+      expect(recordedSends).toEqual([{ ordinal: 1 }, { ordinal: 2, recovery: "transient-5xx" }]);
+      expect(budget2.used).toBe(2);
+      expect(eventsA).toEqual([{ type: "text_delta", text: "replacement ok" }, { type: "done", stopReason: "stop" }]);
+    } finally {
+      await poolA.disposeAll();
+    }
+
+    // (b) One-send budget denies replacement attempt 2 without writing a 2nd payload
+    const poolB = new AntigravitySessionPool();
+    const childrenB: InteractiveChild[] = [];
+    const withheldReasons: string[] = [];
+    try {
+      const adapterB = createAntigravityCliAdapter(provider(), {
+        which: () => "/bin/agy", platform: "linux", isolatedHomeDir: false,
+        enableSessionPool: true, sessionPool: poolB, maxPreludeRetries: 1, preludeRetryDelayMs: 1,
+        spawn: (_cmd, _args, opts) => {
+          const child = createInteractiveChild({
+            pid: 9720 + childrenB.length, cwd: String(opts.cwd),
+            onStdinLine: (_line, c) => {
+              c.emitStdoutFrame({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } });
+              c.emitStdoutFrame({ event: "result", result: { status: "ERROR", error: { message: "HTTP 503 Service Unavailable" } } });
+            },
+          });
+          childrenB.push(child);
+          return child as unknown as ChildProcess;
+        },
+      });
+      await expect(
+        runWithIncoming(adapterB, toolRequest(), { sendBudget: fixedBudget(1), onRecoveryWithheld: event => withheldReasons.push(event.reason) }),
+      ).rejects.toBeInstanceOf(SendBudgetExhaustedError);
+      expect(withheldReasons).toEqual(["retry-send-budget"]);
+      expect(childrenB[1]?.writtenLines ?? []).toEqual([]);
+      expect(poolB.liveCount).toBe(0);
+    } finally {
+      await poolB.disposeAll();
+    }
+
+    // (c) Selection fence (beforePhysicalSend) rejects replacement attempt 2 before writing stdin
+    const poolC = new AntigravitySessionPool();
+    const childrenC: InteractiveChild[] = [];
+    let fenceChecks = 0;
+    try {
+      const adapterC = createAntigravityCliAdapter(provider(), {
+        which: () => "/bin/agy", platform: "linux", isolatedHomeDir: false,
+        enableSessionPool: true, sessionPool: poolC, maxPreludeRetries: 1, preludeRetryDelayMs: 1,
+        spawn: (_cmd, _args, opts) => {
+          const child = createInteractiveChild({
+            pid: 9740 + childrenC.length, cwd: String(opts.cwd),
+            onStdinLine: (_line, c) => {
+              c.emitStdoutFrame({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } });
+              c.emitStdoutFrame({ event: "result", result: { status: "ERROR", error: { message: "HTTP 503 Service Unavailable" } } });
+            },
+          });
+          childrenC.push(child);
+          return child as unknown as ChildProcess;
+        },
+      });
+      await expect(
+        runWithIncoming(adapterC, toolRequest(), {
+          beforePhysicalSend: () => { if (++fenceChecks >= 2) throw new Error("selection fence expired"); },
+        }),
+      ).rejects.toThrow("selection fence expired");
+      expect(fenceChecks).toBe(2);
+      expect(childrenC[0]?.writtenLines).toHaveLength(1);
+      expect(childrenC[1]?.writtenLines ?? []).toEqual([]);
+      expect(poolC.liveCount).toBe(0);
+    } finally {
+      await poolC.disposeAll();
+    }
+  });
+
+  test("15) disposes acquired warm continuation when budget admission or selection fence fails, and rejects mutated tool arguments", async () => {
+    // (a) Warm session disposal on budget denial and fence failure
+    for (const mode of ["budget", "fence"] as const) {
+      const pool = new AntigravitySessionPool();
+      const spawnedChildren: InteractiveChild[] = [];
+      try {
+        const adapter = createAntigravityCliAdapter(provider(), {
+          which: () => "/bin/agy",
+          platform: "linux",
+          isolatedHomeDir: false,
+          enableSessionPool: true,
+          sessionPool: pool,
+          spawn: (_cmd, _args, opts) => {
+            const child = createInteractiveChild({
+              pid: 9760 + spawnedChildren.length,
+              cwd: String(opts.cwd),
+              onStdinLine: (_line, c) => {
+                if (c.writtenLines.length === 1) {
+                  c.emitStdoutFrame({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } });
+                }
+                c.emitStdoutFrame({
+                  event: "step_update",
+                  step_update: { step_index: 1, state: "DONE", step_type: "agent_response", text_delta: "turn-1 ok" },
+                });
+                c.emitStdoutFrame({ event: "result", result: { status: "SUCCESS", response: "turn-1 ok" } });
+              },
+            });
+            spawnedChildren.push(child);
+            return child as unknown as ChildProcess;
+          },
+        });
+
+        await runTurn(adapter, parsed({ context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] } }));
+        expect(pool.idleCount).toBe(1);
+        expect(pool.liveCount).toBe(1);
+        const warmChild = spawnedChildren[0]!;
+        expect(warmChild.killed).toBe(false);
+
+        const followUp = parsed({
+          context: {
+            messages: [
+              { role: "user", content: "hi", timestamp: 0 },
+              { role: "assistant", content: [{ type: "text", text: "turn-1 ok" }], timestamp: 1 },
+              { role: "user", content: "second turn", timestamp: 2 },
+            ],
+          },
+        });
+
+        if (mode === "budget") {
+          const zeroBudget = createRequestExecutionBudget({
+            maxTotalModelSends: 0,
+            baseSendAllowance: 0,
+            finalRecoveryAllowance: 0,
+            maxAlternateTargetSends: 0,
+            maxTargetTransitions: 0,
+          });
+          await expect(
+            adapter.runTurn!(
+              followUp,
+              { headers: new Headers(), translatorBudget: createTestTranslatorBudget(), sendBudget: zeroBudget },
+              () => undefined,
+            ),
+          ).rejects.toBeInstanceOf(SendBudgetExhaustedError);
+        } else {
+          await expect(
+            adapter.runTurn!(
+              followUp,
+              {
+                headers: new Headers(),
+                translatorBudget: createTestTranslatorBudget(),
+                beforePhysicalSend: () => {
+                  throw new Error("warm fence rejected");
+                },
+              },
+              () => undefined,
+            ),
+          ).rejects.toThrow("warm fence rejected");
+        }
+
+        expect(pool.idleCount).toBe(0);
+        expect(pool.liveCount).toBe(0);
+        expect(warmChild.killed).toBe(true);
+        expect(warmChild.writtenLines).toHaveLength(1);
+      } finally {
+        await pool.disposeAll();
+      }
+    }
+
+    // (b) Declines warm awaiting_tool_results reuse when replayed toolCall mutates arguments
+    const pool = new AntigravitySessionPool();
+    const spawnedChildren: InteractiveChild[] = [];
+    try {
+      const adapter = createAntigravityCliAdapter(provider(), {
+        which: () => "/bin/agy",
+        platform: "linux",
+        isolatedHomeDir: false,
+        enableSessionPool: true,
+        sessionPool: pool,
+        toolBatchCoalesceMs: 15,
+        spawn: (_cmd, _args, opts) => {
+          const idx = spawnedChildren.length;
+          const cwd = String(opts.cwd);
+          const child = createInteractiveChild({
+            pid: 9780 + idx,
+            cwd,
+            onStdinLine: (_line, c) => {
+              c.emitStdoutFrame({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } });
+              if (idx === 0) {
+                writeFileSync(
+                  join(cwd, "captured-calls.jsonl"),
+                  `${JSON.stringify({ seq: 1, name: "read_file", arguments: { path: "README.md" } })}\n`,
+                );
+                c.emitStdoutFrame({
+                  event: "step_update",
+                  step_update: {
+                    step_index: 1,
+                    state: "ACTIVE",
+                    step_type: "tool",
+                    tool_name: BRIDGED_READ_TOOL,
+                    tool_info: { name: BRIDGED_READ_TOOL, parameters: { path: "README.md" } },
+                  },
+                });
+                return;
+              }
+              c.emitStdoutFrame({
+                event: "step_update",
+                step_update: { step_index: 1, state: "DONE", step_type: "agent_response", text_delta: "cold fallback ok" },
+              });
+              c.emitStdoutFrame({ event: "result", result: { status: "SUCCESS", response: "cold fallback ok" } });
+            },
+          });
+          spawnedChildren.push(child);
+          return child as unknown as ChildProcess;
+        },
+      });
+
+      const turn1Events = await runTurn(adapter, toolRequest());
+      const callStart = turn1Events.find(e => e.type === "tool_call_start") as Extract<AdapterEvent, { type: "tool_call_start" }>;
+      expect(callStart).toBeDefined();
+      expect(pool.idleCount).toBe(1);
+
+      // Replay same callId and tool name, but change arguments from README.md -> package.json
+      const turn2Events = await runTurn(
+        adapter,
+        toolRequest({
+          context: {
+            messages: [
+              { role: "user", content: "Read README.md", timestamp: 0 },
+              {
+                role: "assistant",
+                content: [{ type: "toolCall", id: callStart.id, name: "read_file", arguments: { path: "package.json" } }],
+                timestamp: 1,
+              },
+              {
+                role: "toolResult",
+                toolCallId: callStart.id,
+                toolName: "read_file",
+                content: [{ type: "text", text: "{\"name\":\"pkg\"}" }],
+                isError: false,
+                timestamp: 2,
+              },
+            ],
+            tools: toolRequest().context.tools,
+          },
+        }),
+      );
+
+      expect(spawnedChildren).toHaveLength(2);
+      expect(existsSync(join(spawnedChildren[0]!.cwd, "tool-results.jsonl"))).toBe(false);
+      expect(turn2Events).toEqual([
+        { type: "text_delta", text: "cold fallback ok" },
         { type: "done", stopReason: "stop" },
       ]);
     } finally {

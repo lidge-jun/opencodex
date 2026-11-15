@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AdapterEvent, OcxMessage, OcxParsedRequest, OcxRequestOptions, OcxUsage } from "../../types";
+import type { RequestFailureCause } from "../../lib/request-failure-model";
+import type { AttemptRecoveryKind } from "../../usage/telemetry-contract";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import {
   ANTIGRAVITY_TOOL_LIMITS,
@@ -766,7 +768,10 @@ export function usageFromAntigravityRecord(usage: Record<string, unknown> | unde
     typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
   const rawInput = count(usage.input_tokens);
   const rawOutput = count(usage.output_tokens);
-  const cacheRead = count(usage.cache_read_tokens);
+  const cacheRead =
+    count(usage.cache_read_tokens)
+    || count(usage.cache_read_input_tokens)
+    || count(usage.cached_tokens);
   const thinking = count(usage.thinking_tokens);
   const rawTotal = count(usage.total_tokens);
   const baseInput = rawInput + cacheRead;
@@ -938,6 +943,8 @@ export interface AntigravityStreamState {
   capturedToolCalls: number;
   pendingBridgedToolCalls: PendingAntigravityBridgedToolCall[];
   flushedToolCalls: FlushedAntigravityBridgedToolCall[];
+  consumedCaptureSeqs: Set<number>;
+  consumedUnsequencedByAlias: Map<string, number>;
   seenToolStepIndices: Set<number>;
   seenStagedImageStepIndices: Set<number>;
   pendingUndeclaredTools: Map<number, string>;
@@ -993,6 +1000,8 @@ export function createAntigravityStreamState(
     capturedToolCalls: 0,
     pendingBridgedToolCalls: [],
     flushedToolCalls: [],
+    consumedCaptureSeqs: new Set<number>(),
+    consumedUnsequencedByAlias: new Map<string, number>(),
     seenToolStepIndices: new Set<number>(options.seenToolStepIndices),
     seenStagedImageStepIndices: new Set<number>(),
     pendingUndeclaredTools: new Map<number, string>(),
@@ -1016,17 +1025,43 @@ export function flushAntigravityBridgedToolCalls(
 ): AdapterEvent[] {
   const pendingList = state.pendingBridgedToolCalls.splice(0);
   if (pendingList.length === 0) return [];
+  const eligibleIndices = new Set<number>();
+  if (capturedMcpCalls) {
+    const seenUnsequenced = new Map<string, number>();
+    for (let i = 0; i < capturedMcpCalls.length; i++) {
+      const item = capturedMcpCalls[i]!;
+      if (typeof item.seq === "number") {
+        if (state.consumedCaptureSeqs.has(item.seq)) continue;
+      } else {
+        const nextSeen = (seenUnsequenced.get(item.name) ?? 0) + 1;
+        seenUnsequenced.set(item.name, nextSeen);
+        if (nextSeen <= (state.consumedUnsequencedByAlias.get(item.name) ?? 0)) continue;
+      }
+      eligibleIndices.add(i);
+    }
+  }
   const used = new Set<number>();
   const events: AdapterEvent[] = [];
   for (const pending of pendingList) {
     let argumentsJson = pending.fallbackArgumentsJson;
     let seq: number | undefined;
     if (capturedMcpCalls) {
-      const idx = capturedMcpCalls.findIndex((item, i) => !used.has(i) && item.name === pending.mcpAlias);
+      const idx = capturedMcpCalls.findIndex(
+        (item, i) => eligibleIndices.has(i) && !used.has(i) && item.name === pending.mcpAlias,
+      );
       if (idx >= 0) {
         used.add(idx);
-        seq = capturedMcpCalls[idx]!.seq;
-        argumentsJson = JSON.stringify(capturedMcpCalls[idx]!.arguments);
+        const matched = capturedMcpCalls[idx]!;
+        seq = matched.seq;
+        if (typeof seq === "number") {
+          state.consumedCaptureSeqs.add(seq);
+        } else {
+          state.consumedUnsequencedByAlias.set(
+            matched.name,
+            (state.consumedUnsequencedByAlias.get(matched.name) ?? 0) + 1,
+          );
+        }
+        argumentsJson = JSON.stringify(matched.arguments);
       }
     }
     if (state.translatorBudget && pending.chargedArgsLeaseId) {
@@ -1060,6 +1095,87 @@ export function releaseAntigravityToolBudgets(state: AntigravityStreamState): vo
   for (const leaseId of state.budgetCallIds.splice(0)) {
     budget.closeCall(leaseId);
   }
+}
+
+const SELF_CONTAINED_RESPONSES_ITEMS: ReadonlySet<string> = new Set([
+  "message", "reasoning", "compaction", "function_call", "function_call_output",
+  "custom_tool_call", "custom_tool_call_output", "tool_search_call",
+]);
+const SELF_CONTAINED_ROLES: ReadonlySet<string> = new Set(["user", "assistant", "system", "developer"]);
+
+function isClientExecutedRawToolList(tools: unknown, remaining = { count: 4096 }, depth = 0): boolean {
+  if (!Array.isArray(tools) || depth > 4) return false;
+  return tools.every(tool => {
+    remaining.count -= 1;
+    if (remaining.count < 0 || tool === null || typeof tool !== "object" || Array.isArray(tool)) return false;
+    const rec = tool as Record<string, unknown>;
+    if (rec.type === "function" || rec.type === "custom") return true;
+    if (rec.type === "tool_search") return rec.execution === "client";
+    if (rec.type === "namespace" && typeof rec.name === "string") {
+      return isClientExecutedRawToolList(rec.tools, remaining, depth + 1);
+    }
+    return rec.type === undefined && typeof rec.name === "string";
+  });
+}
+
+export function isAntigravityRequestSelfContained(parsed: OcxParsedRequest): boolean {
+  const raw = parsed._rawBody;
+  if (raw === undefined) return true;
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return false;
+  const body = raw as Record<string, unknown>;
+  if (body.background === true || body.conversation != null || Object.hasOwn(body, "stream_id")) return false;
+  if (body.web_search_options !== undefined) return false;
+  if (body.previous_response_id != null && parsed._previousResponseInputExpanded !== true) return false;
+  if (body.input !== undefined) {
+    if (body.store !== false || (typeof body.input !== "string" && !Array.isArray(body.input))) return false;
+  } else if (body.store === true) {
+    return false;
+  }
+  const budget = { count: 4096 };
+  if (body.tools !== undefined && !isClientExecutedRawToolList(body.tools, budget)) return false;
+  if (!Array.isArray(body.input)) return true;
+  return body.input.every(item => {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) return false;
+    const rec = item as Record<string, unknown>;
+    if (rec.type === "additional_tools" || rec.type === "tool_search_output") {
+      return isClientExecutedRawToolList(rec.tools, budget);
+    }
+    return rec.type === undefined
+      ? typeof rec.role === "string" && SELF_CONTAINED_ROLES.has(rec.role)
+      : typeof rec.type === "string" && SELF_CONTAINED_RESPONSES_ITEMS.has(rec.type);
+  });
+}
+
+export function classifyPreOutputResendCause(
+  detail: string,
+): { cause: RequestFailureCause; recovery: AttemptRecoveryKind } {
+  if (/emitted forged text tool call/i.test(detail)) {
+    return { cause: "empty-output", recovery: "empty-completion" };
+  }
+  if (
+    /eligibility check failed|oauth2\.googleapis\.com\/token|googleapis\.com\/oauth2\/v2\/userinfo|\beconnrefused\b|\benotfound\b|\beai_again\b|\benetunreach\b|\behostunreach\b/i.test(
+      detail,
+    )
+  ) {
+    return { cause: "transport-unsent", recovery: "connection-reset" };
+  }
+  const hasAmbiguousTransportToken =
+    /\b(?:eof|econnreset|epipe|etimedout)\b|connection reset|broken pipe|socket hang up|timed out|deadline exceeded/i.test(
+      detail,
+    );
+  if (
+    !hasAmbiguousTransportToken
+    && /\b503\b|\bservice unavailable\b|\btemporarily unavailable\b|\boverloaded\b|\bcapacity\b/i.test(detail)
+  ) {
+    return { cause: "upstream-declined", recovery: "transient-5xx" };
+  }
+  if (
+    !hasAmbiguousTransportToken
+    && /\b(?:500|502|504)\b|\binternal server error\b|\bbad gateway\b|\bgateway timeout\b/i.test(detail)
+  ) {
+    return { cause: "upstream-fault", recovery: "transient-5xx" };
+  }
+  return { cause: "transport-ambiguous", recovery: "connection-reset" };
 }
 
 export function classifyAntigravityCliError(
@@ -1652,7 +1768,9 @@ export function mapAntigravityStreamFrame(
       const deltaUsage = usageFromAntigravityRecord(deltaRaw as unknown as Record<string, unknown>);
       if (deltaUsage) state.partialUsage = mergeAntigravityUsage(state.partialUsage, deltaUsage);
     } else {
-      const resultUsage = usageFromAntigravityRecord(asRecord(result.usage));
+      const resultUsage = usageFromAntigravityRecord(
+        (rawResult as unknown as Record<string, unknown> | undefined) ?? asRecord(result.usage),
+      );
       if (resultUsage) state.partialUsage = mergeAntigravityUsage(state.partialUsage, resultUsage);
     }
     const usage = state.partialUsage;

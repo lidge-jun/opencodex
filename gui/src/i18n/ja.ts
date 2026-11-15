@@ -1734,6 +1734,7 @@ export const ja: Record<TKey, string> = {
   "modal.freeTierTitle": "無料枠",
   "modal.subscriptionCliTitle": "サブスクリプション CLI（API キーではありません）",
   "modal.subscriptionCliWarning": "このプロバイダーは API キーを使用しません。このマシンでサインイン済みの公式 Claude Code CLI（{cmd}）を実行し、その Claude サブスクリプションアカウントに課金されます。OpenCodex はキーを保存せず、ここに入力したキーが使われることもありません。API キーで課金する場合は、代わりに {apiProvider} を追加してください。",
+  "modal.antigravitySubscriptionCliWarning": "このプロバイダーは API キーを使用しません。このマシンでサインイン済みの公式 Antigravity CLI（{cmd}）をヘッドレスで実行するため、OpenCodex はキーを保存せず、ここに入力したキーが読み取られることもありません。API キーで課金する場合は、代わりに {apiProvider} を追加してください。",
   "modal.freeTierDefault": "API キー不要です。そのまま利用できます。",
   "modal.tab.accounts": "アカウント",
   "modal.tab.free": "無料",

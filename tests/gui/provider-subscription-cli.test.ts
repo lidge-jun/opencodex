@@ -107,7 +107,12 @@ describe("subscription CLI grouping", () => {
 });
 
 describe("subscription CLI warning copy", () => {
-  const keys = ["modal.badge.subscriptionCli", "modal.subscriptionCliTitle", "modal.subscriptionCliWarning"] as const;
+  const keys = [
+    "modal.badge.subscriptionCli",
+    "modal.subscriptionCliTitle",
+    "modal.subscriptionCliWarning",
+    "modal.antigravitySubscriptionCliWarning",
+  ] as const;
 
   test("every locale translates the badge, title and warning", () => {
     for (const [locale, dict] of Object.entries(DICTS)) {
@@ -124,6 +129,11 @@ describe("subscription CLI warning copy", () => {
       expect(warning.split("{cmd}").length, locale).toBe(2);
       expect(warning, locale).toContain("{apiProvider}");
       expect(warning, locale).toContain("Claude Code");
+
+      const agyWarning = dict["modal.antigravitySubscriptionCliWarning"];
+      expect(agyWarning.split("{cmd}").length, locale).toBe(2);
+      expect(agyWarning, locale).toContain("{apiProvider}");
+      expect(agyWarning, locale).toContain("Antigravity");
     }
   });
 });

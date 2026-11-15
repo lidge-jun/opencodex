@@ -9,6 +9,7 @@ import type { OcxMessage, OcxParsedRequest } from "../../types";
 import { commandInvocation } from "../../lib/win-exec";
 import type { SpawnFn, KillWindowsProcessTreeFn } from "../coding-agent/turn";
 import { CodingAgentProtocolError, type StreamMessage } from "../coding-agent/protocol";
+import { canonicalClaudeJson } from "../claude-cli/stable-replay";
 import {
   capUtf8Bytes,
   partitionAntigravityMessages,
@@ -374,12 +375,13 @@ export class WarmAntigravitySession {
   }
 
   getExitCode(): number | null {
-    return this.child.exitCode;
+    return this.killed ? null : this.child.exitCode;
   }
 
   isProcessSettled(): boolean {
     return (
       this.mode === "disposed"
+      || this.stdoutEnded
       || this.child.exitCode !== null
       || this.childProcessError !== undefined
       || this.streamProtocolError !== undefined
@@ -410,7 +412,7 @@ export class WarmAntigravitySession {
   }
 
   killImmediate(): void {
-    if (this.killed || this.child.killed) return;
+    if (this.killed || this.child.killed || this.child.exitCode !== null) return;
     this.killed = true;
     if (this.platform === "win32" && this.child.pid !== undefined) {
       try {
@@ -446,6 +448,9 @@ export class WarmAntigravitySession {
     this.wakeConsumer();
 
     this.disposePromise = (async () => {
+      if (this.stdoutEnded && this.child.exitCode === null && !this.killed && !this.streamProtocolError) {
+        await new Promise<void>(resolve => setImmediate(resolve));
+      }
       try { this.child.stdin?.destroy(); } catch { /* ignore */ }
       this.killImmediate();
       let sigkillTimer: ReturnType<typeof setTimeout> | undefined;
@@ -497,6 +502,22 @@ export interface WarmContinuationMatch {
   dispatchKind: "tool_results" | "user_followup";
   payload: string;
   nextTranscriptBlocks: string[];
+}
+
+function canonicalToolArgumentsJson(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    try {
+      return JSON.stringify(canonicalClaudeJson(JSON.parse(value)));
+    } catch {
+      return undefined;
+    }
+  }
+  if (value === undefined) return "{}";
+  try {
+    return JSON.stringify(canonicalClaudeJson(value));
+  } catch {
+    return undefined;
+  }
 }
 
 export class AntigravitySessionPool {
@@ -613,9 +634,20 @@ export class AntigravitySessionPool {
         const assistantCalls = assistantMsg.content.filter(part => part.type === "toolCall");
         if (assistantCalls.length !== expectedTools.length) continue;
 
-        const callsMatch = expectedTools.every(expected =>
-          assistantCalls.some(call => call.id === expected.callId && call.name === expected.wireName),
-        );
+        const usedCalls = new Set<number>();
+        const callsMatch = expectedTools.every(expected => {
+          const expectedCanonical = canonicalToolArgumentsJson(expected.argumentsJson);
+          if (expectedCanonical === undefined) return false;
+          const idx = assistantCalls.findIndex((call, callIdx) =>
+            !usedCalls.has(callIdx)
+            && call.id === expected.callId
+            && call.name === expected.wireName
+            && canonicalToolArgumentsJson(call.arguments) === expectedCanonical,
+          );
+          if (idx < 0) return false;
+          usedCalls.add(idx);
+          return true;
+        });
         if (!callsMatch) continue;
 
         const resultsByCallId = new Map<string, Extract<OcxMessage, { role: "toolResult" }>>();

@@ -152,6 +152,11 @@ export interface CodingAgentTurnInput {
   toolBridge?: CodingAgentToolBridgeInput;
   /** Vendor semantics and recovery permission stay with the adapter. */
   classifyFailure?: (failure: CodingAgentFailure) => Extract<AdapterEvent, { type: "error" }>;
+  /** Optional classifier for errors thrown out of `consumeStream` before fallback protocol-error emission. */
+  classifyProtocolError?: (
+    thrownError: unknown,
+    error: Extract<AdapterEvent, { type: "error" }>,
+  ) => Extract<AdapterEvent, { type: "error" }>;
   /** Family-specific replay projection; other coding-agent providers keep their existing layout. */
   conversationInput?: typeof buildConversationInput;
   /** Optional working directory for the spawned CLI process (for example an isolated per-turn sandbox). */
@@ -501,6 +506,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
   };
 
   let streamProtocolError: string | undefined;
+  let streamProtocolThrownError: unknown;
   let streamProtocolCode: string | undefined;
   let streamProtocolTerminalRefusal = false;
   let turnError: string | undefined;
@@ -796,6 +802,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
       }
     } catch (err) {
       kill();
+      streamProtocolThrownError = err;
       streamProtocolError = err instanceof Error ? err.message : String(err);
       if (isTranslatorBudgetExceededError(err)) streamProtocolCode = err.code;
       if ((err as { terminalRefusal?: unknown })?.terminalRefusal === true) {
@@ -845,7 +852,7 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
         errorType: "upstream_error",
       });
     } else if (streamProtocolError) {
-      emitOnce({
+      const error: Extract<AdapterEvent, { type: "error" }> = {
         type: "error",
         message: redactSecrets(streamProtocolError, profile.tokenEnv, apiKey),
         status: 502,
@@ -853,7 +860,12 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
         code: streamProtocolCode ?? "protocol_error",
         retryable: false,
         ...(streamProtocolTerminalRefusal ? { terminalRefusal: true as const } : {}),
-      });
+      };
+      emitOnce(
+        input.classifyProtocolError
+          ? input.classifyProtocolError(streamProtocolThrownError, error)
+          : error,
+      );
     } else if (child.exitCode !== null && child.exitCode !== 0) {
       const exitMsg = stderr
         ? `${profile.label} CLI exited with code ${child.exitCode}: ${stderr}`

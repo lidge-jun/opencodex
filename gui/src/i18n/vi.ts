@@ -1823,6 +1823,7 @@ export const vi: Record<TKey, string> = {
   "modal.freeTierTitle": "Gói miễn phí",
   "modal.subscriptionCliTitle": "CLI theo gói đăng ký, không phải API key",
   "modal.subscriptionCliWarning": "Nhà cung cấp này không dùng API key. Nó chạy Claude Code CLI chính thức đã đăng nhập trên máy này ({cmd}) và tính phí vào tài khoản gói đăng ký Claude đó. OpenCodex không lưu key nào cho nó, và key nhập ở đây sẽ không bao giờ được dùng. Để tính phí theo API key, hãy thêm {apiProvider} thay thế.",
+  "modal.antigravitySubscriptionCliWarning": "Nhà cung cấp này không dùng API key. Nó chạy ở chế độ headless Antigravity CLI chính thức đã đăng nhập trên máy này ({cmd}); OpenCodex không lưu key nào cho nó, và key nhập ở đây sẽ không bao giờ được đọc. Để tính phí theo API key, hãy thêm {apiProvider} thay thế.",
   "modal.freeTierDefault": "Không cần API key. Có thể sử dụng ngay.",
   "modal.tab.accounts": "Tài khoản",
   "modal.tab.free": "Miễn phí",

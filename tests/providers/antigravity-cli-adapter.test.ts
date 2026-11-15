@@ -1,10 +1,26 @@
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { beforeEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readFileSync,
+  readSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough, Readable, Writable } from "node:stream";
 import type { ChildProcess } from "node:child_process";
+import { createIncrementalResultsReader } from "../../src/adapters/coding-agent/mcp-server";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 import {
   buildAntigravityHooksConfig,
   buildAntigravitySettings,
@@ -1539,5 +1555,182 @@ describe("antigravity-cli runTurn execution, tool capture, and fail-closed guard
       { type: "text_delta", text: '{"a":1,' },
       { type: "text_delta", text: '"b":2}' },
     ]);
+  });
+
+  test("createIncrementalResultsReader reads only newly appended bytes, preserves split UTF-8 across chunks, and resets on truncation or Windows-safe replacement", () => {
+    const dir = mkdtempSync(join(tmpdir(), "opencodex-mcp-inc-unit-"));
+    try {
+      const resultsPath = join(dir, "tool-results.jsonl");
+      const lines: string[] = [];
+      const readCalls: Array<{ position: number | null; bytesRead: number }> = [];
+      let openCount = 0;
+
+      const reader = createIncrementalResultsReader(
+        resultsPath,
+        line => lines.push(line),
+        {
+          statSync,
+          openSync: (path, flags) => {
+            openCount++;
+            return openSync(path, flags);
+          },
+          readSync: (fd, buffer, offset, length, position) => {
+            const bytesRead = readSync(fd, buffer, offset, length, position);
+            readCalls.push({ position, bytesRead });
+            return bytesRead;
+          },
+          closeSync,
+        },
+      );
+
+      // Missing file is a no-op.
+      reader();
+      expect(openCount).toBe(0);
+
+      // 1. Large line (>64KB internal read buffer) with multi-byte UTF-8 across the 64KB chunk boundary.
+      const largePrefix = "A".repeat(65_534);
+      const largeText = `${largePrefix}中文字段`;
+      const largeLine = `${JSON.stringify({ seq: 1, text: largeText })}\n`;
+      writeFileSync(resultsPath, largeLine, "utf8");
+      reader();
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0]!).text).toBe(largeText);
+      const largeByteLength = Buffer.byteLength(largeLine, "utf8");
+
+      // Idle polls after reading must not open or re-read the file.
+      const openCountAfterLarge = openCount;
+      const readCountAfterLarge = readCalls.length;
+      reader();
+      reader();
+      expect(openCount).toBe(openCountAfterLarge);
+      expect(readCalls.length).toBe(readCountAfterLarge);
+
+      // 2. Subsequent small append reads ONLY from the trailing byteOffset.
+      const secondLine = `${JSON.stringify({ seq: 2, text: "incremental-ok" })}\n`;
+      appendFileSync(resultsPath, secondLine, "utf8");
+      reader();
+      expect(lines).toHaveLength(2);
+      expect(JSON.parse(lines[1]!).text).toBe("incremental-ok");
+      const incrementalReads = readCalls.slice(readCountAfterLarge);
+      expect(incrementalReads).toEqual([
+        { position: largeByteLength, bytesRead: Buffer.byteLength(secondLine, "utf8") },
+      ]);
+
+      // 3. Windows ino=0 must not falsely reset on normal appends, and must still reset on birthtimeMs change or truncation.
+      let syntheticIno = 0;
+      let syntheticBirthtimeMs = 1_000;
+      const winLines: string[] = [];
+      const winPositions: Array<number | null> = [];
+      const winPath = join(dir, "win-results.jsonl");
+      writeFileSync(winPath, '{"seq":1,"text":"first"}\n', "utf8");
+      const winReader = createIncrementalResultsReader(
+        winPath,
+        line => winLines.push(line),
+        {
+          statSync: path => {
+            const real = statSync(path);
+            return { size: real.size, ino: syntheticIno, birthtimeMs: syntheticBirthtimeMs };
+          },
+          openSync,
+          readSync: (fd, buffer, offset, length, position) => {
+            winPositions.push(position);
+            return readSync(fd, buffer, offset, length, position);
+          },
+          closeSync,
+        },
+      );
+      winReader();
+      appendFileSync(winPath, '{"seq":2,"text":"second"}\n', "utf8");
+      winReader();
+      expect(winLines).toEqual(['{"seq":1,"text":"first"}', '{"seq":2,"text":"second"}']);
+      expect(winPositions).toEqual([0, Buffer.byteLength('{"seq":1,"text":"first"}\n', "utf8")]);
+
+      // Replacing with a file of equal/larger size where ino stays 0 is caught via birthtimeMs change.
+      writeFileSync(winPath, '{"seq":3,"text":"replaced-with-larger-content-same-ino-zero"}\n', "utf8");
+      syntheticBirthtimeMs = 2_000;
+      winReader();
+      expect(winLines.at(-1)).toBe('{"seq":3,"text":"replaced-with-larger-content-same-ino-zero"}');
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
+  test("coding-agent mcp-server incrementally delivers split UTF-8 results, large+follow-up results, and truncated rewrites", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "opencodex-coding-agent-mcp-"));
+    const catalogPath = join(dir, "catalog.json");
+    const capturePath = join(dir, "captured-calls.jsonl");
+    const resultsPath = join(dir, "tool-results.jsonl");
+    const serverPath = join(import.meta.dir, "../../src/adapters/coding-agent/mcp-server.ts");
+    writeFileSync(catalogPath, JSON.stringify([{
+      name: "echo_tool",
+      description: "Echo input",
+      inputSchema: { type: "object", properties: { id: { type: "number" } }, required: ["id"] },
+    }]), { mode: 0o600 });
+
+    const transport = new StdioClientTransport({
+      command: process.execPath,
+      args: [serverPath, catalogPath, capturePath, resultsPath],
+      stderr: "pipe",
+    });
+    const client = new Client({ name: "coding-agent-mcp-incremental-test", version: "1.0.0" });
+
+    try {
+      await client.connect(transport);
+
+      // 1. Chunked write splitting a 3-byte Chinese UTF-8 character and withholding trailing `\n`.
+      let settled1 = false;
+      const call1 = client.callTool({ name: "echo_tool", arguments: { id: 1 } });
+      void call1.finally(() => { settled1 = true; });
+      const expectedUtf8Text = "增量读取：你好世界🚀";
+      const line1Bytes = Buffer.from(`${JSON.stringify({ seq: 1, text: expectedUtf8Text })}\n`, "utf8");
+      const splitCharOffset = line1Bytes.indexOf(Buffer.from("好", "utf8"));
+      expect(splitCharOffset).toBeGreaterThan(0);
+
+      writeFileSync(resultsPath, line1Bytes.subarray(0, splitCharOffset + 1), { mode: 0o600 });
+      await Bun.sleep(50);
+      expect(settled1).toBe(false);
+
+      appendFileSync(resultsPath, line1Bytes.subarray(splitCharOffset + 1, line1Bytes.length - 1));
+      await Bun.sleep(50);
+      expect(settled1).toBe(false);
+
+      appendFileSync(resultsPath, line1Bytes.subarray(line1Bytes.length - 1));
+      expect(await call1).toEqual({
+        content: [{ type: "text", text: expectedUtf8Text }],
+      });
+
+      // 2. Large result followed by a subsequent tool result delivered incrementally.
+      const largePayload = "L".repeat(256 * 1024);
+      const call2 = client.callTool({ name: "echo_tool", arguments: { id: 2 } });
+      appendFileSync(resultsPath, `${JSON.stringify({ seq: 2, text: largePayload })}\n`);
+      expect(await call2).toEqual({
+        content: [{ type: "text", text: largePayload }],
+      });
+
+      const call3 = client.callTool({ name: "echo_tool", arguments: { id: 3 } });
+      appendFileSync(resultsPath, `not-valid-json\n${JSON.stringify({ seq: 3, text: "after-large-incremental" })}\n`);
+      expect(await call3).toEqual({
+        content: [{ type: "text", text: "after-large-incremental" }],
+      });
+
+      // 3. Truncating and rewriting resultsPath resets the cursor and delivers the new entry.
+      let settled4 = false;
+      const call4 = client.callTool({ name: "echo_tool", arguments: { id: 4 } });
+      void call4.finally(() => { settled4 = true; });
+      await Bun.sleep(40);
+      expect(settled4).toBe(false);
+      writeFileSync(
+        resultsPath,
+        `${JSON.stringify({ seq: 4, text: "recovered-after-truncate", isError: true })}\n`,
+        { mode: 0o600 },
+      );
+      expect(await call4).toEqual({
+        content: [{ type: "text", text: "recovered-after-truncate" }],
+        isError: true,
+      });
+    } finally {
+      await client.close();
+      removeTreeWithRetry(dir);
+    }
   });
 });

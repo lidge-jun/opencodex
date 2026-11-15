@@ -53,7 +53,7 @@
       ],
       "children": {
         "google": [
-          "^(?:antigravity-(?!cli-(?:adapter|client-http)\\.test\\.ts$)|gcp|google|vertex)-"
+          "^(?:antigravity(?!-cli-(?:adapter|client-http)\\.test\\.ts$)|gcp|google|vertex)-"
         ],
         "anthropic": [
           "^(?:anthropic)-"

@@ -1,4 +1,8 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
+import { readCapturedMcpCalls } from "../../../src/adapters/antigravity-cli/adapter";
 import {
   ANTIGRAVITY_COLD_HISTORY_CHAR_LIMIT,
   ANTIGRAVITY_MCP_TOOL_PREFIX,
@@ -8,7 +12,9 @@ import {
   buildAntigravityCliConversationInput,
   buildAntigravityCliRulesMarkdown,
   buildAntigravityCliToolBridge,
+  classifyPreOutputResendCause,
   createAntigravityStreamState,
+  flushAntigravityBridgedToolCalls,
   mapAntigravityStreamFrame,
   stableAntigravityMessageText,
   usageFromAntigravityRecord,
@@ -678,5 +684,259 @@ describe("antigravity-cli Stage 3 schema pre-sanitization & Stage 4 F13/F19 usag
     expect(toolJoined).not.toContain("HIST_0_");
     expect(toolJoined).toContain("call_tail_1");
     expect(toolJoined).toContain(tailToolText);
+  });
+
+  test("result-only frame without usageBaseline normalizes cache_read_input_tokens and cached_tokens", () => {
+    const state1 = createAntigravityStreamState();
+    const events1 = mapAntigravityStreamFrame(
+      {
+        event: "result",
+        result: {
+          status: "SUCCESS",
+          response: "cached answer",
+          usage: {
+            input_tokens: 10,
+            output_tokens: 2,
+            cache_read_input_tokens: 100,
+            total_tokens: 112,
+          },
+        },
+      },
+      state1,
+    );
+    const done1 = events1.find(e => e.type === "done");
+    expect(done1).toEqual({
+      type: "done",
+      stopReason: "stop",
+      usage: {
+        inputTokens: 110,
+        outputTokens: 2,
+        totalTokens: 112,
+        cachedInputTokens: 100,
+        cacheReadInputTokens: 100,
+      },
+    });
+
+    const state2 = createAntigravityStreamState();
+    const events2 = mapAntigravityStreamFrame(
+      {
+        event: "result",
+        result: {
+          status: "SUCCESS",
+          response: "cached alias answer",
+          usage: {
+            input_tokens: 15,
+            output_tokens: 5,
+            cached_tokens: 80,
+            total_tokens: 100,
+          },
+        },
+      },
+      state2,
+    );
+    expect(events2.find(e => e.type === "done")).toEqual({
+      type: "done",
+      stopReason: "stop",
+      usage: {
+        inputTokens: 95,
+        outputTokens: 5,
+        totalTokens: 100,
+        cachedInputTokens: 80,
+        cacheReadInputTokens: 80,
+      },
+    });
+  });
+
+  test("sequential flushAntigravityBridgedToolCalls never re-matches consumed captures for the same mcpAlias", () => {
+    const req = makeParsedRequest({
+      context: {
+        messages: [{ role: "user", content: "Read two files", timestamp: 0 }],
+        tools: [{
+          name: "read_file",
+          description: "Read file",
+          parameters: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+        }],
+      },
+    });
+    const bridge = buildAntigravityCliToolBridge(req)!;
+    const state = createAntigravityStreamState(undefined, { deferToolCallEmission: true });
+    mapAntigravityStreamFrame({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } }, state, bridge);
+
+    // Sequenced captures across two flushes in the same turn
+    mapAntigravityStreamFrame(
+      {
+        event: "step_update",
+        step_update: {
+          step_index: 1,
+          state: "ACTIVE",
+          step_type: "tool",
+          tool_name: `${ANTIGRAVITY_MCP_TOOL_PREFIX}read_file`,
+          tool_info: { name: `${ANTIGRAVITY_MCP_TOOL_PREFIX}read_file`, parameters: { path: "truncated_1" } },
+        },
+      },
+      state,
+      bridge,
+    );
+    const flush1 = flushAntigravityBridgedToolCalls(state, [
+      { seq: 1, name: "read_file", arguments: { path: "first-full.md" } },
+    ]);
+    expect(flush1.find(e => e.type === "tool_call_delta")).toEqual({
+      type: "tool_call_delta",
+      arguments: JSON.stringify({ path: "first-full.md" }),
+    });
+
+    mapAntigravityStreamFrame(
+      {
+        event: "step_update",
+        step_update: {
+          step_index: 2,
+          state: "ACTIVE",
+          step_type: "tool",
+          tool_name: `${ANTIGRAVITY_MCP_TOOL_PREFIX}read_file`,
+          tool_info: { name: `${ANTIGRAVITY_MCP_TOOL_PREFIX}read_file`, parameters: { path: "truncated_2" } },
+        },
+      },
+      state,
+      bridge,
+    );
+    const flush2 = flushAntigravityBridgedToolCalls(state, [
+      { seq: 1, name: "read_file", arguments: { path: "first-full.md" } },
+      { seq: 2, name: "read_file", arguments: { path: "second-full.md" } },
+    ]);
+    expect(flush2.find(e => e.type === "tool_call_delta")).toEqual({
+      type: "tool_call_delta",
+      arguments: JSON.stringify({ path: "second-full.md" }),
+    });
+
+    // Unsequenced captures across two flushes in the same turn
+    const unseqState = createAntigravityStreamState(undefined, { deferToolCallEmission: true });
+    mapAntigravityStreamFrame({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } }, unseqState, bridge);
+    mapAntigravityStreamFrame(
+      {
+        event: "step_update",
+        step_update: {
+          step_index: 1,
+          state: "ACTIVE",
+          step_type: "tool",
+          tool_name: `${ANTIGRAVITY_MCP_TOOL_PREFIX}read_file`,
+          tool_info: { name: `${ANTIGRAVITY_MCP_TOOL_PREFIX}read_file`, parameters: { path: "u_trunc_1" } },
+        },
+      },
+      unseqState,
+      bridge,
+    );
+    flushAntigravityBridgedToolCalls(unseqState, [{ name: "read_file", arguments: { path: "u1.md" } }]);
+    mapAntigravityStreamFrame(
+      {
+        event: "step_update",
+        step_update: {
+          step_index: 2,
+          state: "ACTIVE",
+          step_type: "tool",
+          tool_name: `${ANTIGRAVITY_MCP_TOOL_PREFIX}read_file`,
+          tool_info: { name: `${ANTIGRAVITY_MCP_TOOL_PREFIX}read_file`, parameters: { path: "u_trunc_2" } },
+        },
+      },
+      unseqState,
+      bridge,
+    );
+    const unseqFlush2 = flushAntigravityBridgedToolCalls(unseqState, [
+      { name: "read_file", arguments: { path: "u1.md" } },
+      { name: "read_file", arguments: { path: "u2.md" } },
+    ]);
+    expect(unseqFlush2.find(e => e.type === "tool_call_delta")).toEqual({
+      type: "tool_call_delta",
+      arguments: JSON.stringify({ path: "u2.md" }),
+    });
+
+    // End-to-end readCapturedMcpCalls -> flushAntigravityBridgedToolCalls pipeline across sequential unsequenced flushes
+    const dir = mkdtempSync(join(tmpdir(), "ocx-unseq-cap-"));
+    try {
+      const capFile = join(dir, "captured-calls.jsonl");
+      const pipeState = createAntigravityStreamState(undefined, { deferToolCallEmission: true });
+      mapAntigravityStreamFrame({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } }, pipeState, bridge);
+
+      writeFileSync(capFile, `${JSON.stringify({ name: "read_file", arguments: { path: "pipe-1.md" } })}\n`);
+      mapAntigravityStreamFrame(
+        {
+          event: "step_update",
+          step_update: {
+            step_index: 1,
+            state: "ACTIVE",
+            step_type: "tool",
+            tool_name: `${ANTIGRAVITY_MCP_TOOL_PREFIX}read_file`,
+            tool_info: { name: `${ANTIGRAVITY_MCP_TOOL_PREFIX}read_file`, parameters: { path: "trunc_1" } },
+          },
+        },
+        pipeState,
+        bridge,
+      );
+      const read1 = readCapturedMcpCalls(capFile, pipeState.pendingBridgedToolCalls, 1, pipeState.consumedCaptureSeqs, pipeState.consumedUnsequencedByAlias);
+      expect(read1.ready).toBe(true);
+      const pipeFlush1 = flushAntigravityBridgedToolCalls(pipeState, read1.calls);
+      expect(pipeFlush1.find(e => e.type === "tool_call_delta")).toEqual({
+        type: "tool_call_delta",
+        arguments: JSON.stringify({ path: "pipe-1.md" }),
+      });
+
+      mapAntigravityStreamFrame(
+        {
+          event: "step_update",
+          step_update: {
+            step_index: 2,
+            state: "ACTIVE",
+            step_type: "tool",
+            tool_name: `${ANTIGRAVITY_MCP_TOOL_PREFIX}read_file`,
+            tool_info: { name: `${ANTIGRAVITY_MCP_TOOL_PREFIX}read_file`, parameters: { path: "trunc_2" } },
+          },
+        },
+        pipeState,
+        bridge,
+      );
+      // Before 2nd capture lands, readCapturedMcpCalls must report ready: false despite u1 being in file
+      const premature = readCapturedMcpCalls(capFile, pipeState.pendingBridgedToolCalls, 1, pipeState.consumedCaptureSeqs, pipeState.consumedUnsequencedByAlias);
+      expect(premature.ready).toBe(false);
+
+      writeFileSync(
+        capFile,
+        `${JSON.stringify({ name: "read_file", arguments: { path: "pipe-1.md" } })}\n${JSON.stringify({ name: "read_file", arguments: { path: "pipe-2.md" } })}\n`,
+      );
+      const read2 = readCapturedMcpCalls(capFile, pipeState.pendingBridgedToolCalls, 1, pipeState.consumedCaptureSeqs, pipeState.consumedUnsequencedByAlias);
+      expect(read2.ready).toBe(true);
+      const pipeFlush2 = flushAntigravityBridgedToolCalls(pipeState, read2.calls);
+      expect(pipeFlush2.find(e => e.type === "tool_call_delta")).toEqual({
+        type: "tool_call_delta",
+        arguments: JSON.stringify({ path: "pipe-2.md" }),
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("classifyPreOutputResendCause distinguishes gRPC Unavailable resets and 500/502/504 upstream faults from 503 declines", () => {
+    expect(classifyPreOutputResendCause("rpc error: code = Unavailable desc = error reading from server: EOF")).toEqual({
+      cause: "transport-ambiguous",
+      recovery: "connection-reset",
+    });
+    expect(classifyPreOutputResendCause("rpc error: code = Unavailable desc = connection reset by peer")).toEqual({
+      cause: "transport-ambiguous",
+      recovery: "connection-reset",
+    });
+    expect(classifyPreOutputResendCause("HTTP 502 Bad Gateway")).toEqual({
+      cause: "upstream-fault",
+      recovery: "transient-5xx",
+    });
+    expect(classifyPreOutputResendCause("HTTP 504 Gateway Timeout")).toEqual({
+      cause: "upstream-fault",
+      recovery: "transient-5xx",
+    });
+    expect(classifyPreOutputResendCause("HTTP 500 Internal Server Error")).toEqual({
+      cause: "upstream-fault",
+      recovery: "transient-5xx",
+    });
+    expect(classifyPreOutputResendCause("HTTP 503 Service Unavailable: model overloaded")).toEqual({
+      cause: "upstream-declined",
+      recovery: "transient-5xx",
+    });
   });
 });

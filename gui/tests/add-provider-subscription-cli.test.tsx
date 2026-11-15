@@ -15,6 +15,7 @@ import { selectValue } from "./helpers/custom-select";
 
 const PRESETS = [
   { id: "claude-cli", label: "Claude Code CLI (subscription)", adapter: "claude-cli", baseUrl: "https://api.anthropic.com", auth: "key", keyOptional: true, defaultModel: "claude-sonnet-5", note: "Runs Claude subscription traffic through the official CLI." },
+  { id: "antigravity-cli", label: "Antigravity CLI (subscription)", adapter: "antigravity-cli", baseUrl: "https://antigravity.google", auth: "key", keyOptional: true, defaultModel: "gemini-4-carbon", note: "Runs signed-in Antigravity CLI (`agy --print=`); no API key is read." },
   { id: "keyless", label: "Keyless Free", adapter: "openai-chat", baseUrl: "https://api.example.com/v1", auth: "key", keyOptional: true },
   { id: "google-vertex", label: "Google Vertex AI", adapter: "google", baseUrl: "https://aiplatform.googleapis.com", auth: "key", defaultModel: "gemini-3-pro" },
 ];
@@ -142,6 +143,22 @@ test("selecting claude-cli shows the subscription warning above Add, and Add sti
   expect((posted[0]?.provider as { adapter?: string } | undefined)?.adapter).toBe("claude-cli");
   expect(posted[0]?.name).toBe("claude-cli");
   expect(added).toEqual(["claude-cli"]);
+});
+
+test("selecting antigravity-cli renders the localized Antigravity subscription warning instead of English preset.note", async () => {
+  win.localStorage.setItem("ocx-lang", "zh");
+  await mount("paid");
+  const row = [...win.document.querySelectorAll(".provider-catalog-row-wrap > button")]
+    .find(el => (el.textContent ?? "").includes("Antigravity CLI")) as unknown as HTMLButtonElement;
+  await act(async () => { row.click(); });
+
+  const note = warning();
+  expect(note).not.toBeNull();
+  expect(note?.textContent).toContain("订阅 CLI，而非 API 密钥");
+  expect(note?.textContent).toContain("Antigravity CLI");
+  expect(note?.textContent).toContain("agy");
+  expect(note?.textContent).toContain("google");
+  expect(note?.textContent).not.toContain("Runs signed-in Antigravity CLI");
 });
 
 test("a keyless free row keeps the free-tier box and no subscription warning", async () => {

@@ -210,8 +210,8 @@ Kiro のログインには Kiro CLI が必要です。Unix では `curl -fsSL ht
 
 ## 3. API キーカタログ
 
-opencodex には組み込みプリセットが 109 個含まれています。キー方式 88、OAuth 17、ローカル 3、
-デフォルト ChatGPT 転送プリセット 1 です。ダッシュボードの **Add provider** ピッカーはキー発行ページを開き、
+opencodex には組み込みプリセットが 109 個含まれています。キー方式 88（レジストリの `authKind: "key"` 分類で、`claude-cli` や `antigravity-cli` のようにローカルでサインイン済みの CLI アカウントを再利用するキー不要のサブスクリプション CLI プリセットを含む）、OAuth 17、ローカル 3、
+デフォルト ChatGPT 転送プリセット 1 です。通常のキー方式プロバイダーでは、ダッシュボードの **Add provider** ピッカーがキー発行ページを開き、
 入力したキーを検証した後保存します(検証はプロバイダー固有です)。主な項目は以下のとおりです:
 
 **ClinePass** は Cline API キーで[公式サブスクリプションカタログ](https://docs.cline.bot/getting-started/clinepass)と

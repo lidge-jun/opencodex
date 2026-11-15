@@ -7,11 +7,14 @@ import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../ty
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../base";
 import { loadConfig } from "../../config";
 import { InvalidProviderEgressError, resolveProviderEgress } from "../../lib/provider-egress";
-import type { SingleUseDispatchPermit } from "../../lib/request-execution-budget";
+import type { SendClass, SingleUseDispatchPermit } from "../../lib/request-execution-budget";
+import { authorizeResend, type AmbiguousResendAllowance, type ResendDecision } from "../../lib/request-resend-gate";
 import { isStandaloneBinary } from "../../lib/standalone";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
-import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { abortError, SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { resetReplayPolicyFor } from "../../providers/key-failover";
 import { modelRecordValue } from "../../reasoning-effort";
+import type { AttemptRecoveryKind } from "../../usage/telemetry-contract";
 import { inspectBatchDispatcher } from "../coding-agent/batch-dispatcher";
 import { isBatchDispatcher, resolveCodingAgentBinary, resolveProfileByBaseUrl } from "../coding-agent/profile";
 import {
@@ -44,9 +47,11 @@ import {
   buildAntigravityCliToolBridge,
   capUtf8Bytes,
   classifyAntigravityCliError,
+  classifyPreOutputResendCause,
   createAntigravityStreamState,
   extractAntigravityStagedImages,
   flushAntigravityBridgedToolCalls,
+  isAntigravityRequestSelfContained,
   mapAntigravityStreamFrame,
   partitionAntigravityMessages,
   redactAntigravityLogText,
@@ -360,10 +365,12 @@ interface CapturedMcpCallRecord {
   arguments: Record<string, unknown>;
 }
 
-function readCapturedMcpCalls(
+export function readCapturedMcpCalls(
   capturePath: string,
   pending: ReadonlyArray<{ mcpAlias: string }>,
   minSeq = 1,
+  consumedSeqs?: ReadonlySet<number>,
+  consumedUnsequencedByAlias?: ReadonlyMap<string, number>,
 ): { ready: boolean; calls: CapturedMcpCallRecord[] } {
   let raw = "";
   try {
@@ -373,6 +380,8 @@ function readCapturedMcpCalls(
   }
   const complete = raw.endsWith("\n") ? raw : raw.slice(0, raw.lastIndexOf("\n") + 1);
   const calls: CapturedMcpCallRecord[] = [];
+  const availableIndices = new Set<number>();
+  const seenUnsequenced = new Map<string, number>();
   for (const line of complete.split("\n")) {
     if (!line.trim()) continue;
     try {
@@ -383,11 +392,20 @@ function readCapturedMcpCalls(
           const seq = typeof rec.seq === "number" && Number.isInteger(rec.seq) && rec.seq > 0
             ? rec.seq
             : undefined;
-          if (seq !== undefined && seq < minSeq) continue;
+          let isAvailable = true;
+          if (seq !== undefined) {
+            if (seq < minSeq) continue;
+            if (consumedSeqs?.has(seq)) isAvailable = false;
+          } else {
+            const nextSeen = (seenUnsequenced.get(rec.name) ?? 0) + 1;
+            seenUnsequenced.set(rec.name, nextSeen);
+            if (nextSeen <= (consumedUnsequencedByAlias?.get(rec.name) ?? 0)) isAvailable = false;
+          }
           const args = rec.arguments && typeof rec.arguments === "object" && !Array.isArray(rec.arguments)
             ? (rec.arguments as Record<string, unknown>)
             : {};
-          calls.push({ seq, name: rec.name, arguments: args });
+          const callIndex = calls.push({ seq, name: rec.name, arguments: args }) - 1;
+          if (isAvailable) availableIndices.add(callIndex);
         }
       }
     } catch {
@@ -396,7 +414,7 @@ function readCapturedMcpCalls(
   }
   const used = new Set<number>();
   for (const item of pending) {
-    const idx = calls.findIndex((c, i) => !used.has(i) && c.name === item.mcpAlias);
+    const idx = calls.findIndex((c, i) => availableIndices.has(i) && !used.has(i) && c.name === item.mcpAlias);
     if (idx < 0) return { ready: false, calls };
     used.add(idx);
   }
@@ -713,7 +731,13 @@ async function consumeAntigravityTurnFrames(options: {
         && (requireCaptureFileForPark || existsSync(capturePath)),
       );
       if (shouldReadCapture) {
-        const captured = readCapturedMcpCalls(capturePath, state.pendingBridgedToolCalls, minCaptureSeq);
+        const captured = readCapturedMcpCalls(
+          capturePath,
+          state.pendingBridgedToolCalls,
+          minCaptureSeq,
+          state.consumedCaptureSeqs,
+          state.consumedUnsequencedByAlias,
+        );
         if (!captured.ready) {
           if (Date.now() - lastBridgedStepAt < bridgedCaptureTimeoutMs) {
             armToolBatchCoalesce(Math.min(25, coalesceMs));
@@ -978,6 +1002,38 @@ export function createAntigravityCliAdapter(
       const requestId = extractRequestId(incoming);
       let activeState: AntigravityStreamState | undefined;
       let lastNonZeroExit: { exitCode: number; stderr: string } | undefined;
+      let localAmbiguousClaims = 0;
+      let localForgedToolClaims = 0;
+      let cachedSelfContained: boolean | undefined;
+      const isSelfContained = (): boolean =>
+        (cachedSelfContained ??= isAntigravityRequestSelfContained(parsed));
+      const buildAmbiguousAllowance = (cause: ReturnType<typeof classifyPreOutputResendCause>["cause"]): AmbiguousResendAllowance | undefined => {
+        if (cause === "empty-output") {
+          if (maxPreludeRetries <= 0) return undefined;
+          return {
+            get selfContained(): boolean {
+              return isSelfContained();
+            },
+            claim: (): boolean => localForgedToolClaims++ < maxPreludeRetries,
+          };
+        }
+        if (cause !== "transport-ambiguous") return undefined;
+        const policy = resetReplayPolicyFor(provider);
+        if (policy === null) return undefined;
+        return {
+          get selfContained(): boolean {
+            return isSelfContained();
+          },
+          claim: (): boolean =>
+            incoming.sendBudget
+              ? incoming.sendBudget.claimAmbiguousResend?.(policy.replacements) === true
+              : localAmbiguousClaims++ < policy.replacements,
+        };
+      };
+      const decidePreludeResend = (detail: string): ResendDecision => {
+        const { cause, recovery } = classifyPreOutputResendCause(detail);
+        return authorizeResend("protocol-prelude", cause, buildAmbiguousAllowance(cause), recovery);
+      };
 
       const waitAbortable = (delayMs: number): Promise<boolean> => {
         if (delayMs <= 0) return Promise.resolve(!incoming.abortSignal?.aborted);
@@ -1159,6 +1215,8 @@ export function createAntigravityCliAdapter(
 
       // Single-shot path (staged images, structured JSON output, or hermetic unit tests with mock spawn).
       if (!poolEnabled) {
+        let singleShotOrdinal = 0;
+        let nextSingleShotRecovery: AttemptRecoveryKind | undefined;
         for (let preludeAttempt = 0; ; preludeAttempt++) {
           let workspace: StagedAntigravityWorkspace;
           try {
@@ -1197,13 +1255,40 @@ export function createAntigravityCliAdapter(
           activeState = state;
           let singleEmittedNonTerminal = false;
           let deferredTransientError: Extract<AdapterEvent, { type: "error" }> | undefined;
+          let deferredRecoveryKind: AttemptRecoveryKind | undefined;
+          const attemptSendBudget = preludeAttempt > 0 && incoming.sendBudget
+            ? {
+                ...incoming.sendBudget,
+                reserveDispatch: (intent: Parameters<NonNullable<IncomingMeta["sendBudget"]>["reserveDispatch"]>[0]) => {
+                  const decision = incoming.sendBudget!.reserveDispatch({ ...intent, sendClass: "transient" });
+                  if (!decision.allowed) incoming.onRecoveryWithheld?.({ reason: "retry-send-budget" });
+                  return decision;
+                },
+              }
+            : incoming.sendBudget;
+          const attemptIncoming: IncomingMeta = {
+            ...incoming,
+            ...(attemptSendBudget ? { sendBudget: attemptSendBudget } : {}),
+            ...(incoming.onPhysicalSend
+              ? {
+                  onPhysicalSend: send => {
+                    singleShotOrdinal += 1;
+                    const recovery = singleShotOrdinal > 1 ? nextSingleShotRecovery ?? send.recovery : send.recovery;
+                    incoming.onPhysicalSend!({
+                      ordinal: singleShotOrdinal,
+                      ...(recovery ? { recovery } : {}),
+                    });
+                  },
+                }
+              : {}),
+          };
 
           try {
             await runCodingAgentTurn({
               profiles: ANTIGRAVITY_CLI_PROFILES,
               provider,
               parsed,
-              incoming,
+              incoming: attemptIncoming,
               emit: event => {
                 if (
                   event.type === "error"
@@ -1214,8 +1299,12 @@ export function createAntigravityCliAdapter(
                   && !event.terminalRefusal
                   && !incoming.abortSignal?.aborted
                 ) {
-                  deferredTransientError = event;
-                  return;
+                  const resend = decidePreludeResend(state.rawUpstreamError ?? event.message);
+                  if (resend.allowed) {
+                    deferredTransientError = event;
+                    deferredRecoveryKind = resend.recoveryKind;
+                    return;
+                  }
                 }
                 if (event.type !== "done" && event.type !== "error" && event.type !== "incomplete") {
                   singleEmittedNonTerminal = true;
@@ -1238,13 +1327,16 @@ export function createAntigravityCliAdapter(
                 if (failure.source === "process-exit") {
                   lastNonZeroExit = { exitCode: failure.exitCode, stderr: failure.stderrTail ?? failure.stderr };
                 }
-                if (/emitted forged text tool call/i.test(failure.error.message)) {
-                  const { terminalRefusal: _drop, ...rest } = failure.error;
-                  return { ...rest, retryable: true };
-                }
                 if (failure.source !== "process-exit" || !failure.stderr) return failure.error;
                 const classified = classifyAntigravityCliError(failure.stderr, state.partialUsage);
                 return classified.status !== 502 || classified.retryable ? classified : failure.error;
+              },
+              classifyProtocolError: (_thrownError, error) => {
+                if (/emitted forged text tool call/i.test(error.message)) {
+                  const { terminalRefusal: _drop, ...rest } = error;
+                  return { ...rest, retryable: true };
+                }
+                return error;
               },
               consumeStream: async ctx => {
                 const iterator = readJsonLines(ctx.stdout as AsyncIterable<Uint8Array>)[Symbol.asyncIterator]();
@@ -1300,6 +1392,7 @@ export function createAntigravityCliAdapter(
           }
 
           if (!deferredTransientError) return;
+          nextSingleShotRecovery = deferredRecoveryKind;
           const safeReason = capUtf8Bytes(
             redactAntigravityLogText(activeState?.rawUpstreamError ?? deferredTransientError.message),
             MAX_LOG_ERROR_BYTES,
@@ -1390,33 +1483,40 @@ export function createAntigravityCliAdapter(
       }
 
       let producer: { close(): void } | undefined;
-      let permit: SingleUseDispatchPermit | undefined;
+      let activePermit: SingleUseDispatchPermit | undefined;
+      let physicalSendOrdinal = 0;
+      const budgetTargetKey = `${provider.adapter}|${profile.canonicalBaseUrl}|${parsed.modelId}`;
+      const admitAndFencePhysicalSend = (sendClass: SendClass, recovery?: AttemptRecoveryKind): void => {
+        if (incoming.abortSignal?.aborted) throw abortError(incoming.abortSignal);
+        const decision = incoming.sendBudget?.reserveDispatch({
+          sendClass,
+          targetKey: budgetTargetKey,
+        });
+        if (decision && !decision.allowed) {
+          if (physicalSendOrdinal > 0) incoming.onRecoveryWithheld?.({ reason: "retry-send-budget" });
+          throw new SendBudgetExhaustedError();
+        }
+        const attemptPermit = decision?.allowed ? decision.permit : undefined;
+        activePermit = attemptPermit;
+        incoming.beforePhysicalSend?.();
+        if (attemptPermit && !attemptPermit.use()) {
+          if (physicalSendOrdinal > 0) incoming.onRecoveryWithheld?.({ reason: "retry-send-budget" });
+          throw new SendBudgetExhaustedError();
+        }
+        activePermit = undefined;
+        physicalSendOrdinal += 1;
+        incoming.onPhysicalSend?.({
+          ordinal: physicalSendOrdinal,
+          ...(recovery ? { recovery } : {}),
+        });
+      };
       try {
         if (incoming.abortSignal?.aborted) {
-          if (warmMatch) {
-            pool.unregisterLive(warmMatch.session);
-            await warmMatch.session.dispose();
-          }
-          if (freshWorkspace) {
-            await removeAntigravityPathBestEffort(freshWorkspace.turnDir);
-            if (freshWorkspace.ownedHomeDir) {
-              await removeAntigravityPathBestEffort(freshWorkspace.ownedHomeDir);
-            }
-          }
           observedEmit({ type: "error", message: "Antigravity CLI turn was aborted before start.", retryable: false });
           return;
         }
 
         producer = incoming.sendBudget?.beginSpendProducer?.();
-        const decision = incoming.sendBudget?.reserveDispatch({
-          sendClass: "initial",
-          targetKey: `${provider.adapter}|${profile.canonicalBaseUrl}|${parsed.modelId}`,
-        });
-        if (decision && !decision.allowed) throw new SendBudgetExhaustedError();
-        permit = decision?.allowed ? decision.permit : undefined;
-        incoming.beforePhysicalSend?.();
-        if (permit && !permit.use()) throw new SendBudgetExhaustedError();
-        incoming.onPhysicalSend?.({ ordinal: 1 });
 
         const spawnFreshSession = async (ws?: StagedAntigravityWorkspace): Promise<WarmAntigravitySession> => {
           const staged = ws ?? await stageAntigravityWorkspace({
@@ -1463,11 +1563,17 @@ export function createAntigravityCliAdapter(
           dispatchPayload: () => void,
           targetTranscriptBlocks: string[],
           allowPreludeRetry: boolean,
-        ): Promise<{ retryOnFreshSession: boolean; transientPreludeError?: Extract<AdapterEvent, { type: "error" }> }> => {
+          recoveryForSend?: AttemptRecoveryKind,
+        ): Promise<{
+          retryOnFreshSession: boolean;
+          transientPreludeError?: Extract<AdapterEvent, { type: "error" }>;
+          recoveryKind?: AttemptRecoveryKind;
+        }> => {
           let terminalEmitted = false;
           let emittedNonTerminal = false;
           let aborted = false;
           let deferredTransientError: Extract<AdapterEvent, { type: "error" }> | undefined;
+          let deferredRecoveryKind: AttemptRecoveryKind | undefined;
           lastNonZeroExit = undefined;
 
           const emitOnce = (event: AdapterEvent): void => {
@@ -1483,9 +1589,13 @@ export function createAntigravityCliAdapter(
                 && !aborted
                 && !incoming.abortSignal?.aborted
               ) {
-                terminalEmitted = true;
-                deferredTransientError = event;
-                return;
+                const resend = decidePreludeResend(activeState?.rawUpstreamError ?? event.message);
+                if (resend.allowed) {
+                  terminalEmitted = true;
+                  deferredTransientError = event;
+                  deferredRecoveryKind = resend.recoveryKind;
+                  return;
+                }
               }
               terminalEmitted = true;
             } else {
@@ -1532,10 +1642,21 @@ export function createAntigravityCliAdapter(
             });
           }, timeoutMs);
 
+          let preDispatchErr: unknown;
           let streamErr: unknown;
           let outcome: ConsumeAntigravityFramesResult | undefined;
           session.markTurnStart();
           try {
+            try {
+              admitAndFencePhysicalSend(
+                physicalSendOrdinal === 0 ? "initial" : "transient",
+                physicalSendOrdinal === 0 ? undefined : recoveryForSend,
+              );
+            } catch (err) {
+              preDispatchErr = err;
+              killAndDispose();
+              throw err;
+            }
             dispatchPayload();
             outcome = await consumeAntigravityTurnFrames({
               nextFrame: () => session.nextFrame(stopHandle),
@@ -1558,31 +1679,27 @@ export function createAntigravityCliAdapter(
               parkTurnOnToolUse: () => stopHandle.stop(),
             });
           } catch (err) {
-            streamErr = err;
-            killAndDispose();
+            if (preDispatchErr === undefined) {
+              streamErr = err;
+              killAndDispose();
+            }
           } finally {
             clearTimeoutFn(timeoutTimer);
             incoming.abortSignal?.removeEventListener("abort", onAbort);
           }
 
-          if (state.conversationId) session.conversationId ??= state.conversationId;
-
-          // If an idle warm session died before emitting anything, transparently fall back to a fresh spawn.
-          if (
-            isWarmContinuation
-            && !terminalEmitted
-            && !emittedNonTerminal
-            && !aborted
-            && !incoming.abortSignal?.aborted
-          ) {
+          if (preDispatchErr !== undefined) {
             pool.unregisterLive(session);
             await session.dispose();
-            return { retryOnFreshSession: true };
+            throw preDispatchErr;
           }
+
+          if (state.conversationId) session.conversationId ??= state.conversationId;
 
           const canParkToolUse = Boolean(
             outcome?.parkedOnToolUse
             && !outcome.failClosed
+            && !deferredTransientError
             && !streamErr
             && !aborted
             && !incoming.abortSignal?.aborted
@@ -1593,6 +1710,7 @@ export function createAntigravityCliAdapter(
           const canParkIdleStop = Boolean(
             state.sawTerminalResult
             && !outcome?.failClosed
+            && !deferredTransientError
             && !streamErr
             && !aborted
             && !incoming.abortSignal?.aborted
@@ -1691,6 +1809,15 @@ export function createAntigravityCliAdapter(
               const classified = stderr ? classifyAntigravityCliError(stderr, state.partialUsage) : undefined;
               if (classified && (classified.status !== 502 || classified.retryable)) {
                 emitOnce(classified);
+              } else if (isWarmContinuation && !stderr) {
+                emitOnce({
+                  type: "error",
+                  message: `${profile.label} warm session closed stdout before completion (EOF).`,
+                  status: 502,
+                  errorType: "upstream_error",
+                  code: "upstream_error",
+                  retryable: true,
+                });
               } else {
                 emitOnce({
                   type: "error",
@@ -1707,12 +1834,17 @@ export function createAntigravityCliAdapter(
           }
 
           if (deferredTransientError) {
-            return { retryOnFreshSession: true, transientPreludeError: deferredTransientError };
+            return {
+              retryOnFreshSession: true,
+              transientPreludeError: deferredTransientError,
+              recoveryKind: deferredRecoveryKind,
+            };
           }
           return { retryOnFreshSession: false };
         };
 
         let preludeRetriesUsed = 0;
+        let nextReplacementRecovery: AttemptRecoveryKind | undefined;
 
         if (warmMatch) {
           const match = warmMatch;
@@ -1731,6 +1863,7 @@ export function createAntigravityCliAdapter(
             preludeRetriesUsed < maxPreludeRetries,
           );
           if (!res.retryOnFreshSession) return;
+          nextReplacementRecovery = res.recoveryKind ?? "connection-reset";
           if (res.transientPreludeError) {
             preludeRetriesUsed += 1;
             const safeReason = capUtf8Bytes(
@@ -1783,8 +1916,10 @@ export function createAntigravityCliAdapter(
             },
             incomingBlocks,
             preludeRetriesUsed < maxPreludeRetries,
+            nextReplacementRecovery,
           );
           if (!res.retryOnFreshSession || !res.transientPreludeError) return;
+          nextReplacementRecovery = res.recoveryKind ?? "connection-reset";
           preludeRetriesUsed += 1;
           const safeReason = capUtf8Bytes(
             redactAntigravityLogText(activeState?.rawUpstreamError ?? res.transientPreludeError.message),
@@ -1801,13 +1936,18 @@ export function createAntigravityCliAdapter(
           }
         }
       } finally {
+        if (warmMatch) {
+          pool.unregisterLive(warmMatch.session);
+          await warmMatch.session.dispose();
+          warmMatch = undefined;
+        }
         if (freshWorkspace) {
           await removeAntigravityPathBestEffort(freshWorkspace.turnDir);
           if (freshWorkspace.ownedHomeDir) {
             await removeAntigravityPathBestEffort(freshWorkspace.ownedHomeDir);
           }
         }
-        try { permit?.release(); }
+        try { activePermit?.release(); }
         finally { producer?.close(); }
       }
     },

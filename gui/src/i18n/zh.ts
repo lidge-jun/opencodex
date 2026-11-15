@@ -3031,6 +3031,7 @@ export const zh: Record<TKey, string> = {
   "modal.freeTierTitle": "免费层级",
   "modal.subscriptionCliTitle": "订阅 CLI，而非 API 密钥",
   "modal.subscriptionCliWarning": "此提供商不使用 API 密钥。它调用本机已登录的官方 Claude Code CLI（{cmd}），并向该 Claude 订阅账户计费。OpenCodex 不为其存储任何密钥，在此输入的密钥也永远不会被使用。如需按 API 密钥计费，请改为添加 {apiProvider}。",
+  "modal.antigravitySubscriptionCliWarning": "此提供商不使用 API 密钥。它无头运行本机已登录的官方 Antigravity CLI（{cmd}）；OpenCodex 不为其存储任何密钥，也不会读取在此输入的密钥。如需按 API 密钥计费，请改为添加 {apiProvider}。",
   "modal.freeTierDefault": "无需 API 密钥，开箱即用。",
   "modal.tab.accounts": "账户",
   "modal.tab.free": "免费",

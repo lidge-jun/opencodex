@@ -3011,6 +3011,7 @@ export const de: Record<TKey, string> = {
   "modal.freeTierTitle": "Kostenloser Tarif",
   "modal.subscriptionCliTitle": "Abo-CLI, kein API-Schlüssel",
   "modal.subscriptionCliWarning": "Dieser Anbieter verwendet keinen API-Schlüssel. Er steuert die offizielle, auf diesem Rechner angemeldete Claude Code CLI ({cmd}) und rechnet über dieses Claude-Abonnement ab. OpenCodex speichert dafür keinen Schlüssel, und ein hier eingegebener Schlüssel wird nie verwendet. Für die Abrechnung per API-Schlüssel füge stattdessen {apiProvider} hinzu.",
+  "modal.antigravitySubscriptionCliWarning": "Dieser Anbieter verwendet keinen API-Schlüssel. Er führt die offizielle, auf diesem Rechner angemeldete Antigravity CLI ({cmd}) im Headless-Modus aus; OpenCodex speichert dafür keinen Schlüssel, und ein hier eingegebener Schlüssel wird nie gelesen. Für die Abrechnung per API-Schlüssel füge stattdessen {apiProvider} hinzu.",
   "modal.freeTierDefault": "Kein API-Schlüssel nötig. Funktioniert sofort.",
   "modal.tab.accounts": "Konten",
   "modal.tab.free": "Kostenlos",

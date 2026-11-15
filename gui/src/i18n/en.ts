@@ -1851,6 +1851,7 @@ export const en = {
   "modal.freeTierTitle": "Free tier",
   "modal.subscriptionCliTitle": "Subscription CLI, not an API key",
   "modal.subscriptionCliWarning": "This provider does not use an API key. It drives the official Claude Code CLI signed in on this machine ({cmd}) and bills that Claude subscription account. OpenCodex stores no key for it, and a key entered here is never used. For API-key billing, add {apiProvider} instead.",
+  "modal.antigravitySubscriptionCliWarning": "This provider does not use an API key. It runs the official Antigravity CLI signed in on this machine headlessly ({cmd}); OpenCodex stores no key for it, and a key entered here is never read. For API-key billing, add {apiProvider} instead.",
   "modal.freeTierDefault": "No API key required. Works out of the box.",
   "modal.tab.accounts": "Accounts",
   "modal.tab.free": "Free",

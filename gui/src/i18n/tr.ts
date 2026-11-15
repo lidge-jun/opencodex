@@ -1837,6 +1837,7 @@ export const tr: Record<TKey, string> = {
   "modal.freeTierTitle": "Ücretsiz katman",
   "modal.subscriptionCliTitle": "Abonelik CLI'si, API anahtarı değil",
   "modal.subscriptionCliWarning": "Bu sağlayıcı API anahtarı kullanmaz. Bu makinede oturum açılmış resmi Claude Code CLI'sini ({cmd}) çalıştırır ve ücreti o Claude abonelik hesabına yansıtır. OpenCodex bunun için anahtar saklamaz ve buraya girilen bir anahtar asla kullanılmaz. API anahtarıyla faturalandırma için bunun yerine {apiProvider} ekleyin.",
+  "modal.antigravitySubscriptionCliWarning": "Bu sağlayıcı API anahtarı kullanmaz. Bu makinede oturum açılmış resmi Antigravity CLI'sini ({cmd}) başlıksız (headless) olarak çalıştırır; OpenCodex bunun için anahtar saklamaz ve buraya girilen bir anahtar asla okunmaz. API anahtarıyla faturalandırma için bunun yerine {apiProvider} ekleyin.",
   "modal.freeTierDefault": "API anahtarı gerekmez. Doğrudan çalışır.",
   "modal.tab.accounts": "Hesaplar",
   "modal.tab.free": "Ücretsiz",

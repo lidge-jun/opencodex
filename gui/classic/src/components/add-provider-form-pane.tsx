@@ -153,7 +153,9 @@ export function AddProviderFormPane({
           <div style={{ marginTop: 4 }}>
             {form.adapter.trim() === "claude-cli"
               ? <Trans k="modal.subscriptionCliWarning" cmd="claude -p" vars={{ apiProvider: SUBSCRIPTION_CLI_API_KEY_ALTERNATIVE }} />
-              : (preset.note ?? "Runs signed-in Antigravity CLI (`agy --print=`); no API key is read. For API-key billing, add `google` instead.")}
+              : form.adapter.trim() === "antigravity-cli"
+                ? <Trans k="modal.antigravitySubscriptionCliWarning" cmd="agy" vars={{ apiProvider: "google" }} />
+                : t("modal.localHint")}
           </div>
         </div>
       ) : preset.keyOptional ? (

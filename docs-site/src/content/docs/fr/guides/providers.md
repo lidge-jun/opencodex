@@ -310,9 +310,9 @@ existante n'est pas concernée.
 
 ## 3. Catalogue des clés API
 
-opencodex fournit 109 préréglages intégrés : 88 à clé, 17 OAuth, trois locaux et un préréglage par défaut de
-transfert ChatGPT. Dans le tableau de bord, le sélecteur **Ajouter un fournisseur** ouvre le tableau de bord du
-fournisseur à clé, valide la clé et l'enregistre ; la validation dépend du fournisseur. Parmi les entrées notables :
+opencodex fournit 109 préréglages intégrés : 88 à clé (catégorie `authKind: "key"` du registre, incluant les préréglages CLI d'abonnement sans clé tels que `claude-cli` et `antigravity-cli` qui réutilisent un compte CLI connecté localement), 17 OAuth, trois locaux et un préréglage par défaut de
+transfert ChatGPT. Pour les fournisseurs à clé classiques, le sélecteur **Ajouter un fournisseur** du tableau de bord ouvre le tableau de bord du
+fournisseur, valide la clé et l'enregistre ; la validation dépend du fournisseur. Parmi les entrées notables :
 
 **ClinePass** utilise une clé API Cline avec le [catalogue d'abonnement officiel](https://docs.cline.bot/getting-started/clinepass)
 et le [point de terminaison Chat Completions](https://docs.cline.bot/api/chat-completions), exploités par Cline Bot Inc. selon
