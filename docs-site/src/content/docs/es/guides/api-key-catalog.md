@@ -362,8 +362,8 @@ OpenCodex puede gastar una suscripción de Claude a través del propio arnés de
   Anthropic con la sesión de la propia CLI. Guarda durante un minuto como máximo el agotamiento
   detectado de la cuota de 5 horas, semanal o específica del modelo, para detectar una recarga o
   un restablecimiento de cuota antes de la fecha anterior. Si el uso adicional está habilitado
-  explícitamente y no se ha alcanzado ningún límite indicado, la CLI oficial decide si el saldo
-  y el límite de gasto permiten la solicitud. OpenCodex no presume que haya saldo ni activa el
+  explícitamente y no se indica que se haya alcanzado el límite de uso adicional, la CLI oficial
+  decide si el saldo y el límite de gasto permiten la solicitud. OpenCodex no presume que haya saldo ni activa el
   uso de pago. Si el uso adicional está deshabilitado o agotado, no se ofrece esa vía. Si la
   propia CLI indica que se alcanzó un límite, este se respeta hasta la fecha de restablecimiento
   registrada. En los demás casos, un plan agotado devuelve HTTP 429
