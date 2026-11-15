@@ -498,11 +498,11 @@ error naming a limit the model never approached — and by then output has commi
 target may be tried. When every failed target of an exhausted combo was refused this way with a send count of 0, `src/server/responses/core-combo.ts` keeps the `context_length_exceeded` overflow envelope that clients compact on, but replaces the provider wording from `context-overflow.ts` with a proxy-owned message saying the turn was refused locally, carrying each tried target's estimate and window (a target skipped for cooldown is not claimed to be too small). Those attempts, and the final row, keep the code `input_admission_refused` instead of `http_413`. One target that reached a provider keeps the provider wording for the whole combo.
 
 Scope is deliberately narrow. Direct and single-target requests keep the loose 2.5x
-pathological-input gate, because they have nowhere to hop. Compaction turns stay exempt. Unknown
-context and a caller that declared no output allowance both remain fail-open, so this invents no
-limits for custom providers. Canonical native slugs that the narrower pinned table does not carry
-resolve their window from the generated in-tree bundle, which is what made the gate inert on the
-route where this was first observed; explicit provider and operator caps may only narrow it.
+pathological-input gate, because they have nowhere to hop. Compaction turns stay exempt. For combo
+children with a known window, the strict gate prices input with a 1.1x estimate margin; an undeclared
+output allowance defaults to 10% of the window clamped to 1,024–32,768 and capped by the target's output
+ceiling. Unknown windows fall back to the direct check. Canonical native slugs absent from the pinned
+table resolve from generated in-tree metadata; explicit provider/operator caps may only narrow it.
 
 Regression coverage: `tests/server/input-admission.test.ts`,
 `tests/helpers/combo-context-headroom-cases.ts` and `tests/responses/responses-context-overflow.test.ts`.
