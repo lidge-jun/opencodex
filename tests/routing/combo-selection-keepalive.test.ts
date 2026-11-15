@@ -99,7 +99,7 @@ describe("combo selection keepalive", () => {
     const run = start(clock);
     const error = new Error("child dispatch failed");
     run.selection.reject(error);
-    expect(run.response).rejects.toBe(error);
+    await expect(run.response).rejects.toBe(error);
     await flush();
     expect(clock.pending()).toBe(0);
   });

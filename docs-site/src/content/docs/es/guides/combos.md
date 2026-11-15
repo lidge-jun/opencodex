@@ -525,7 +525,7 @@ Para las solicitudes de transmisión, el estado ascendente HTTP no es la decisi�
 
 <a id="request-local-target-compatibility"></a>
 
-Una solicitud de Responses en streaming cuya selección de objetivo tarda más de 15 segundos recibe una cabecera HTTP 200 de event-stream y comentarios `: keepalive` cada 15 segundos mientras el combo sigue eligiendo, para que un proxy con límite de inactividad no la cierre. A partir de ese momento, un fallo de todos los objetivos llega como un `response.failed` dentro del flujo con el mismo `error.code` (por ejemplo `combo_unavailable`) en lugar de un estado de error HTTP. Las selecciones más rápidas conservan el estado HTTP real. Consulta [Combo selection keepalive](/es/reference/configuration/server/#combo-selection-keepalive).
+Una solicitud HTTP `POST /v1/responses` en streaming (sin WebSocket) cuya selección de objetivo tarda más de 15 segundos recibe una cabecera HTTP 200 de event-stream y comentarios `: keepalive` cada 15 segundos mientras el combo sigue eligiendo, para que un proxy con límite de inactividad no la cierre. A partir de ese momento, un fallo de todos los objetivos llega como un `response.failed` dentro del flujo con el mismo `error.code` (por ejemplo `combo_unavailable`) en lugar de un estado de error HTTP. Las selecciones más rápidas conservan el estado HTTP real. Consulta [Combo selection keepalive](/es/reference/configuration/server/#combo-selection-keepalive).
 
 ## Compatibilidad con objetivos locales de solicitud
 

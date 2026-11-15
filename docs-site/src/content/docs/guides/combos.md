@@ -847,7 +847,7 @@ returned to the client and is never replayed on another provider, which prevents
 execution. If the pre-output buffer reaches its safety cap without a terminal or output boundary,
 OpenCodex also commits the current target instead of growing memory without a bound.
 
-A streaming Responses request whose target selection takes longer than 15 seconds gets an HTTP 200
+A streaming HTTP `POST /v1/responses` request (WebSocket excluded) whose target selection takes longer than 15 seconds gets an HTTP 200
 event-stream head and `: keepalive` comments every 15 seconds while the combo keeps choosing, so an
 idle-limited proxy does not close it. From that point a failure of every target arrives as an
 in-stream `response.failed` with the same `error.code` (for example `combo_unavailable`) instead of
