@@ -558,10 +558,16 @@ warning; the desktop uses `proxy-newer` to keep a takeover from downgrading the 
 Liveness has three answers: `live`, `absent-proven` (every recorded and configured endpoint
 definitively refused or answered non-opencodex), and unknown — a timed-out probe or a listener
 that withholds `/healthz` exits 1 rather than reading as absent, so only `absent-proven` may
-authorise starting a new runtime. The port is the live listener's port when a proxy answers,
+authorise starting a new runtime. One timeout is settled instead: when `hostname` is one of this
+machine's own non-loopback addresses (a Tailscale or LAN IP) and the connect itself times out,
+which Windows does for an unbound local address, resolve tries an exclusive bind on that address
+and port. Only a bind that succeeds counts as absent; a port already in use stays unknown. The port is the live listener's port when a proxy answers,
 otherwise the configured port (default 10100). Exit 0 carries a trustworthy verdict; exit 1 means
 the CLI could not resolve — including an invalid `config.json`, which is never repaired to
-defaults here — and the caller must refuse to guess; any unknown argument exits 64. Discovery uses
+defaults here — and the caller must refuse to guess. With `--json`, exit 1 still prints one
+document, `{"schema":"ocx-resolve/1","ok":false,"reason":…,"error":…}`, where `reason` is
+`config_unreadable`, `config_invalid`, `discovery_failed`, or `liveness_unknown` and `error`
+repeats the stderr message; it has no liveness or port field. Any unknown argument exits 64. Discovery uses
 the same ownership-safe probe budget as `ocx start`, because a false "nothing listening" answer
 is how duplicate proxies happen. The verb is read-only and skips the shim auto-restore preflight.
 
