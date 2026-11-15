@@ -242,6 +242,24 @@ describe("windows guarded manager target", () => {
     expect(target.kind).toBe("unknown");
   });
 
+  test("a not-running task only promotes its survivors to bound-stray when the registration is provably ours", () => {
+    // #7771: the not-running state alone does not make the registration this
+    // installation's. The definition has to be read and recognised before its
+    // surviving wrappers may be bound — otherwise any foreign task of the same
+    // name would turn this home's stray wrappers into terminable ones.
+    const inertTask = { winTaskState: () => "not-running" as const, winProcs: () => SUPERVISED };
+    expect(inspectGuardedManagerTarget(42, 10100, schedulerDeps({
+      win: { ...inertTask, winRegistrationOurs: () => false },
+    }))).toMatchObject({ kind: "unknown" });
+    expect(inspectGuardedManagerTarget(42, 10100, schedulerDeps({
+      win: { ...inertTask, winTaskXml: () => { throw new Error("denied"); } },
+    }))).toMatchObject({ kind: "unknown", stopReason: "evidence-unreadable" });
+    // Provably ours: the binding rule decides as before. These fixtures carry no creation
+    // times, so it stops at the unreadable-evidence refusal rather than the definition one.
+    expect(inspectGuardedManagerTarget(42, 10100, schedulerDeps({ win: inertTask })))
+      .toMatchObject({ kind: "unknown", stopReason: "evidence-unreadable" });
+  });
+
   test("two registered managers stay unknown", () => {
     const target = inspectGuardedManagerTarget(42, 10100,
       schedulerDeps({ winsw: winswStarted }));

@@ -23,7 +23,7 @@
  * `com.opencodex.proxy.plist`.
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -37,7 +37,11 @@ import {
   restartLaunchdJob,
   reusePreviousPlistPathVariable,
   runLaunchctl,
+  setUninstallServiceHooksForTests,
+  uninstallServiceDetailed,
 } from "../../src/service";
+import { uninstallLaunchd } from "../../src/service/launchd";
+import { readServiceInstallState } from "../../src/service/state";
 import type {
   LaunchdLoadProbe,
   LaunchdLoadState,
@@ -66,6 +70,7 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = join(home, ".opencodex");
 });
 afterEach(() => {
+  setUninstallServiceHooksForTests(null);
   if (previousOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousOpenCodexHome;
 });
@@ -171,6 +176,302 @@ describe("installLaunchd: repair must not be an outage (#4236 defect 1)", () => 
     expect(argv).toEqual([]);
     // And nothing was backed up, because nothing was overwritten.
     expect(existsSync(`${plistPath}.prev`)).toBe(false);
+  });
+
+  test("repair upgrades the launchd resource policy once and preserves it on later repairs", () => {
+    const current = renderedPlist();
+    const policy = /\s*<key>ProcessType<\/key><string>Interactive<\/string>/;
+    expect(current).toMatch(policy);
+    const legacy = current.replace(policy, "");
+    const plistPath = fixturePlist();
+    writeFileSync(plistPath, legacy);
+    const first = recordingLaunchctl({ bootstrap: [ok()] });
+    expect(installLaunchd({ launchctl: first.launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {} }).reloaded).toBe(true);
+    expect(verbs(first.argv)).toContain("bootout");
+    expect(verbs(first.argv)).toContain("bootstrap");
+    expect(readFileSync(plistPath, "utf8")).toBe(current);
+    const again = recordingLaunchctl({});
+    installLaunchd({ launchctl: again.launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {} });
+    expect(again.argv).toEqual([]);
+    expect(readFileSync(plistPath, "utf8")).toBe(current);
+  });
+
+  for (const transientPrefix of ["", "/tmp/fnm_multishells/1/bin:"]) {
+    test(`policy migration preserves the normalized installed PATH from a narrower repair environment (${transientPrefix || "stable"})`, () => {
+      const originalPath = process.env.PATH;
+      try {
+        const installedPath = "/opt/ocx-login-shell-only/bin:/usr/bin:/bin";
+        process.env.PATH = installedPath;
+        const expected = renderedPlist();
+        process.env.PATH = transientPrefix + installedPath;
+        const legacy = renderedPlist().replace(/\s*<key>ProcessType<\/key><string>Interactive<\/string>/, "");
+        process.env.PATH = "/usr/bin:/bin";
+        const plistPath = fixturePlist();
+        writeFileSync(plistPath, legacy);
+        const first = recordingLaunchctl({ bootstrap: [ok()] });
+
+        expect(installLaunchd({ launchctl: first.launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {} }).reloaded).toBe(true);
+        expect(verbs(first.argv)).toContain("bootstrap");
+        expect(readFileSync(plistPath, "utf8")).toBe(expected);
+        const again = recordingLaunchctl({});
+        expect(installLaunchd({ launchctl: again.launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {} }).reloaded).toBe(false);
+        expect(again.argv).toEqual([]);
+      } finally {
+        if (originalPath === undefined) delete process.env.PATH;
+        else process.env.PATH = originalPath;
+      }
+    });
+  }
+
+  for (const status of [1, 5]) {
+    test(`policy repair refuses a failed bootstrap despite the old command matching (${status})`, () => {
+      const plistPath = fixturePlist();
+      const legacy = renderedPlist().replace(/\s*<key>ProcessType<\/key><string>Interactive<\/string>/, "");
+      writeFileSync(plistPath, legacy);
+      const { argv, launchctl } = recordingLaunchctl({
+        bootout: fail(1, "Boot-out failed: 1: Operation not permitted"),
+        bootstrap: Array.from({ length: 110 }, () => fail(status, `Bootstrap failed: ${status}: refused`)),
+        print: ok("old job still loaded"),
+      });
+
+      // A policy-only change preserves the command, so the old job keeps matching.
+      // A second repair must retry the migration rather than silently becoming a no-op.
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        let failure: unknown;
+        try { installLaunchd({ launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {} }); }
+        catch (error) { failure = error; }
+        expect(failure).toBeInstanceOf(Error);
+        const message = String(failure);
+        expect(message).toContain(`Bootstrap failed: ${status}: refused`);
+        expect(message).toContain("NOT confirmed loaded");
+        expect(message).not.toContain("IS NOT RUNNING");
+        expect(readFileSync(plistPath, "utf8")).toBe(legacy);
+        expect(readFileSync(`${plistPath}.prev`, "utf8")).toBe(legacy);
+      }
+      expect(verbs(argv)).not.toContain("kickstart");
+    });
+  }
+
+  test("a refused policy repair leaves a job still serving the expected command in place", () => {
+    const plistPath = fixturePlist();
+    const legacy = renderedPlist().replace(/\s*<key>ProcessType<\/key><string>Interactive<\/string>/, "");
+    writeFileSync(plistPath, legacy);
+    const { argv, launchctl } = recordingLaunchctl({
+      bootstrap: Array.from({ length: 110 }, () => fail(5, "Bootstrap failed: 5: refused")),
+    });
+    let failure: unknown;
+    try { installLaunchd({ launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {} }); }
+    catch (error) { failure = error; }
+    // The rollback restores the previous bytes on disk without another eviction: evicting a job
+    // that is still serving, to bootstrap an old definition that may also be refused, could leave
+    // nothing listening.
+    const verbList = verbs(argv);
+    expect(verbList.lastIndexOf("bootout")).toBeLessThan(verbList.lastIndexOf("bootstrap"));
+    expect(argv.at(-1)).not.toContain("print");
+    expect(String(failure)).toContain("left in place");
+    expect(readFileSync(plistPath, "utf8")).toBe(legacy);
+    expect(existsSync(`${plistPath}.pending`)).toBe(true);
+  });
+
+  // A read-only file only fails the write for a non-root POSIX user.
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("a backup that cannot be written removes an older run's backup", () => {
+    const plistPath = fixturePlist();
+    const legacy = renderedPlist().replace(/\s*<key>ProcessType<\/key><string>Interactive<\/string>/, "");
+    writeFileSync(plistPath, legacy);
+    // An older failed run left this backup; a read-only file makes this run's backup write fail.
+    writeFileSync(`${plistPath}.prev`, "stale backup from an older run");
+    chmodSync(`${plistPath}.prev`, 0o400);
+    const { launchctl } = recordingLaunchctl({
+      bootstrap: Array.from({ length: 110 }, () => fail(5, "Bootstrap failed: 5: refused")),
+    });
+    expect(() => installLaunchd({ launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {} }))
+      .toThrow(/NOT confirmed loaded/);
+    // The run stays pending, and the next repair rolls back to whatever .prev holds; an older
+    // run's bytes must not be what it finds.
+    expect(existsSync(`${plistPath}.pending`)).toBe(true);
+    expect(existsSync(`${plistPath}.prev`)).toBe(false);
+  });
+
+  test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an unreadable installed plist does not keep an older run's backup", () => {
+    const plistPath = fixturePlist();
+    writeFileSync(plistPath, renderedPlist());
+    writeFileSync(`${plistPath}.prev`, "stale backup from an older run");
+    // Installed but unreadable: there is no previous definition to back up this run.
+    chmodSync(plistPath, 0o000);
+    const { launchctl } = recordingLaunchctl({ bootstrap: [ok()] });
+    try {
+      try { installLaunchd({ launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {} }); }
+      catch { /* the unreadable plist may also refuse the rewrite; the backup is what matters */ }
+      expect(existsSync(`${plistPath}.prev`)).toBe(false);
+    } finally {
+      chmodSync(plistPath, 0o600);
+    }
+  });
+
+  test("policy repair retries a refused bootstrap even when the old command matches", () => {
+    const plistPath = fixturePlist();
+    const current = renderedPlist();
+    writeFileSync(plistPath, current.replace(/\s*<key>ProcessType<\/key><string>Interactive<\/string>/, ""));
+    const { argv, launchctl } = recordingLaunchctl({
+      bootstrap: [fail(5, "Bootstrap failed: 5: Input/output error"), ok()],
+    });
+    expect(installLaunchd({ launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {} }).reloaded).toBe(true);
+    expect(verbs(argv).filter(verb => verb === "bootstrap")).toHaveLength(2);
+    expect(verbs(argv)).not.toContain("kickstart");
+    expect(readFileSync(plistPath, "utf8")).toBe(current);
+    expect(existsSync(`${plistPath}.prev`)).toBe(false);
+  });
+
+  for (const accepted of [false, true]) {
+    for (const rotateToken of [false, true]) {
+      test(`an unverified policy remains pending across repairs (accepted=${accepted}, token rotation=${rotateToken})`, () => {
+        const plistPath = fixturePlist();
+        const current = renderedPlist();
+        const legacy = current.replace(/\s*<key>ProcessType<\/key><string>Interactive<\/string>/, "");
+        writeFileSync(plistPath, legacy);
+        const previousToken = process.env.OPENCODEX_API_AUTH_TOKEN;
+        try {
+          process.env.OPENCODEX_API_AUTH_TOKEN = "test-launchd-pending-first";
+          const first = recordingLaunchctl({ bootstrap: [accepted ? ok() : fail(1, "bootstrap refused")] });
+          const repair = () => installLaunchd({
+            launchctl: first.launchctl, plistPath, sleepSync: () => {},
+            probe: scriptedProbe("loaded-current", "unknown").probe,
+          });
+          if (accepted) expect(repair().reloaded).toBe(true);
+          else expect(repair).toThrow(/could not be verified/);
+          expect(readFileSync(plistPath, "utf8")).toBe(current);
+          expect(readFileSync(`${plistPath}.prev`, "utf8")).toBe(legacy);
+
+          if (rotateToken) process.env.OPENCODEX_API_AUTH_TOKEN = "test-launchd-pending-second";
+          const second = recordingLaunchctl({
+            bootout: fail(1, "bootout refused"), print: ok("old job still loaded"),
+            bootstrap: [fail(1, "bootstrap refused again"), ok()],
+          });
+          // Identical disk bytes and command are not proof the previous load took effect.
+          expect(() => installLaunchd({
+            launchctl: second.launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {},
+          })).toThrow(/NOT confirmed loaded/);
+          expect(verbs(second.argv)).not.toContain("kickstart");
+          expect(readFileSync(`${plistPath}.prev`, "utf8")).toBe(legacy);
+          expect(readFileSync(plistPath, "utf8")).toBe(legacy);
+          expect(existsSync(`${plistPath}.pending`)).toBe(true);
+          if (process.platform !== "win32") expect(statSync(`${plistPath}.pending`).mode & 0o777).toBe(0o600);
+
+          const verified = recordingLaunchctl({ bootstrap: [ok()] });
+          expect(installLaunchd({
+            launchctl: verified.launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {},
+          }).reloaded).toBe(true);
+          expect(readFileSync(plistPath, "utf8")).toBe(current);
+          expect(existsSync(`${plistPath}.pending`)).toBe(false);
+          expect(existsSync(`${plistPath}.prev`)).toBe(false);
+          const again = recordingLaunchctl({});
+          expect(installLaunchd({
+            launchctl: again.launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {},
+          }).reloaded).toBe(false);
+          expect(again.argv).toEqual([]);
+        } finally {
+          if (previousToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
+          else process.env.OPENCODEX_API_AUTH_TOKEN = previousToken;
+        }
+      });
+    }
+  }
+
+  test("a pending definition left by another process cannot become a command-only no-op", () => {
+    const plistPath = fixturePlist();
+    writeFileSync(plistPath, renderedPlist());
+    writeFileSync(`${plistPath}.pending`, "unconfirmed\n", { mode: 0o600 });
+    const { argv, launchctl } = recordingLaunchctl({ bootstrap: [fail(5, "Bootstrap failed: 5"), ok()] });
+    expect(installLaunchd({ launchctl, plistPath, probe: loadedCurrent().probe, sleepSync: () => {} }).reloaded).toBe(true);
+    expect(verbs(argv).filter(verb => verb === "bootstrap")).toHaveLength(2);
+    expect(verbs(argv)).not.toContain("kickstart");
+    expect(existsSync(`${plistPath}.pending`)).toBe(false);
+  });
+
+  test("a fresh install ignores orphaned launchd recovery from a removed plist", () => {
+    const plistPath = fixturePlist();
+    const stale = "<plist>old command and port from a removed installation</plist>\n";
+    writeFileSync(`${plistPath}.prev`, stale);
+    writeFileSync(`${plistPath}.pending`, "unconfirmed\n");
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const { launchctl } = recordingLaunchctl({ bootstrap: [fail(1, "bootstrap refused")] });
+      expect(() => installLaunchd({
+        launchctl, plistPath, probe: scriptedProbe("not-loaded").probe, sleepSync: () => {},
+      })).toThrow(/bootstrap refused/);
+      expect(readFileSync(plistPath, "utf8")).toBe(renderedPlist());
+      expect(existsSync(`${plistPath}.prev`)).toBe(false);
+    }
+  });
+
+  for (const alreadyRemoved of [true, false]) {
+    test(`pending cleanup tolerates a concurrent removal but preserves other errors (${alreadyRemoved})`, () => {
+      const plistPath = fixturePlist();
+      const { launchctl } = recordingLaunchctl({ bootstrap: [ok()] });
+      let calls = 0;
+      const probe = (() => {
+        if (calls++ === 0) return { state: "not-loaded" };
+        // Model another repair completing while this one verifies the same loaded job.
+        unlinkSync(`${plistPath}.pending`);
+        if (!alreadyRemoved) mkdirSync(`${plistPath}.pending`);
+        return { state: "loaded-current", domain: "gui/501" };
+      }) as typeof probeLaunchdLoadState;
+      const repair = () => installLaunchd({ launchctl, plistPath, probe, sleepSync: () => {} });
+      if (alreadyRemoved) {
+        expect(repair().reloaded).toBe(true);
+        expect(readServiceInstallState()).not.toBeNull();
+      } else {
+        let failure: unknown;
+        try { repair(); } catch (error) { failure = error; }
+        expect(failure).toBeInstanceOf(Error);
+        expect((failure as { code?: string }).code).not.toBe("ENOENT");
+        expect(readServiceInstallState()).toBeNull();
+      }
+    });
+  }
+
+  for (const withPlist of [true, false]) {
+    test(`full uninstall removes launchd recovery files with or without the plist (${withPlist})`, () => {
+      const plistPath = fixturePlist();
+      if (withPlist) writeFileSync(plistPath, "old installed plist\n");
+      writeFileSync(`${plistPath}.prev`, "stale rollback definition\n");
+      writeFileSync(`${plistPath}.pending`, "unconfirmed\n");
+      const { launchctl } = recordingLaunchctl({});
+      let stateRemovals = 0;
+      setUninstallServiceHooksForTests({
+        platform: "darwin", assertEnvironment: () => {},
+        probeWindowsTask: () => { throw new Error("unexpected Windows task probe"); },
+        uninstallWindowsTask: () => {}, nativeStatus: () => "nonexistent", uninstallNative: () => {},
+        removeInstallState: () => { stateRemovals += 1; }, launchdPlistPath: () => plistPath,
+        uninstallLaunchd: () => uninstallLaunchd({ launchctl, plistPath }),
+      });
+      expect(uninstallServiceDetailed()).toBe("removed");
+      for (const suffix of ["", ".prev", ".pending"]) expect(existsSync(`${plistPath}${suffix}`)).toBe(false);
+      expect(stateRemovals).toBe(1);
+      expect(uninstallServiceDetailed()).toBe("absent");
+      const fresh = recordingLaunchctl({ bootstrap: [fail(1, "fresh install refused")] });
+      expect(() => installLaunchd({
+        launchctl: fresh.launchctl, plistPath, probe: scriptedProbe("not-loaded").probe, sleepSync: () => {},
+      })).toThrow(/fresh install refused/);
+      expect(readFileSync(plistPath, "utf8")).toBe(renderedPlist());
+      expect(existsSync(`${plistPath}.prev`)).toBe(false);
+    });
+  }
+
+  test("full uninstall retains install state when a launchd recovery file cannot be removed", () => {
+    const plistPath = fixturePlist();
+    writeFileSync(plistPath, renderedPlist());
+    mkdirSync(`${plistPath}.pending`);
+    let stateRemovals = 0;
+    const { launchctl } = recordingLaunchctl({});
+    setUninstallServiceHooksForTests({
+      platform: "darwin", assertEnvironment: () => {},
+      probeWindowsTask: () => { throw new Error("unexpected Windows task probe"); },
+      uninstallWindowsTask: () => {}, nativeStatus: () => "nonexistent", uninstallNative: () => {},
+      removeInstallState: () => { stateRemovals += 1; }, launchdPlistPath: () => plistPath,
+      uninstallLaunchd: () => uninstallLaunchd({ launchctl, plistPath }),
+    });
+    expect(uninstallServiceDetailed()).toBe("failed");
+    expect(stateRemovals).toBe(0);
   });
 
   /**
@@ -916,6 +1217,28 @@ describe("reusePreviousPlistPathVariable: PATH is the one difference repair may 
   test("a definition with no PATH entry refuses rather than guessing", () => {
     expect(reusePreviousPlistPathVariable("<dict/>\n", plist("/usr/bin"))).toBe(null);
   });
+
+  test("adding the Interactive policy retains the installed PATH and the exact policy value", () => {
+    const previous = plist("/installed/bin:/usr/bin");
+    const rendered = plist("/usr/bin").replace("<dict>\n", "<dict>\n  <key>ProcessType</key><string>Interactive</string>\n");
+    const adopted = reusePreviousPlistPathVariable(previous, rendered);
+    expect(adopted).toBe(rendered.replace("<key>PATH</key><string>/usr/bin", "<key>PATH</key><string>/installed/bin:/usr/bin"));
+    expect(adopted).toContain("<key>ProcessType</key><string>Interactive</string>");
+  });
+
+  test("a Background policy cannot be ignored while adopting the installed PATH", () => {
+    const previous = plist("/installed/bin").replace("<dict>\n", "<dict>\n  <key>ProcessType</key><string>Background</string>\n");
+    const rendered = plist("/usr/bin").replace("<dict>\n", "<dict>\n  <key>ProcessType</key><string>Interactive</string>\n");
+    expect(reusePreviousPlistPathVariable(previous, rendered)).toBeNull();
+  });
+
+  test("the Interactive policy does not hide a port change while adopting PATH", () => {
+    const policy = "<dict>\n  <key>ProcessType</key><string>Interactive</string>\n";
+    expect(reusePreviousPlistPathVariable(
+      plist("/installed/bin", 10100).replace("<dict>\n", policy),
+      plist("/usr/bin", 10101).replace("<dict>\n", policy),
+    )).toBeNull();
+  });
 });
 
 describe("launchdEvictionTargets: an eviction covers every domain the probe reports", () => {
@@ -1087,7 +1410,7 @@ describe("the surfaces around the repair (#4236 defects 1f, 1h, 2)", () => {
     expect(branch).toContain("try {");
     expect(branch).toContain("await repairService({ verb, supervisionLatch });");
     expect(branch).toContain("} catch (error) {");
-    expect(branch).toContain('await reportServiceServing(verb === "restart" ? "restarted" : "repaired", {}, repairError);');
+    expect(branch).toContain('await reportServiceServing(verb === "restart" ? "restarted" : "repaired", { replacing }, repairError);');
     // ONE outcome (#4914). The failure text has to reach the report, because printing it in
     // the catch and then letting the report print its success line stated both outcomes for
     // the same run — and the checkmark was the false half.
@@ -1119,19 +1442,18 @@ describe("the surfaces around the repair (#4236 defects 1f, 1h, 2)", () => {
    * "loaded / not loaded" answer turned one unreadable `launchctl print` into an eviction.
    */
   test("installLaunchd asks the tri-state probe, never launchdJobMatchesPlist", () => {
-    const fn = slice(launchd, "export function installLaunchd(", " * Deps are named for the layer they replace");
+    const fn = slice(launchd, "export function installLaunchd(", "export function restartLaunchdJob(");
     expect(fn).toContain("probe?: typeof probeLaunchdLoadState;");
     expect(fn).not.toContain("launchdJobMatchesPlist");
-    // Refuse before any write, and again before any retry or rollback.
+    // The scripted launchctl tests above cover retry and unknown-outcome behavior.
     expect(fn).toContain('if (verdict.state === "unknown") {');
     expect(fn).toContain("refusing to ${wasInstalled ? \"repair\" : \"install\"}");
-    expect(fn).toContain('verdict.state === "not-loaded" || verdict.state === "loaded-stale"');
     // `startLaunchd` keeps the two-state helper deliberately: it does not evict anything.
     expect(slice(launchd, "export function startLaunchd(", "function stopLaunchd(")).toContain("launchdJobMatchesPlist");
   });
 
   test("the no-op pre-check treats a PATH-only difference as identical (finding 2)", () => {
-    const fn = slice(launchd, "export function installLaunchd(", " * Deps are named for the layer they replace");
+    const fn = slice(launchd, "export function installLaunchd(", "export function restartLaunchdJob(");
     expect(fn).toContain("reusePreviousPlistPathVariable(previousPlist, rendered)");
     // Only against a job proven to run the exec line this install baked.
     expect(fn).toContain('verdict.state === "loaded-current"');

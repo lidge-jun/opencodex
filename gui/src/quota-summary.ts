@@ -7,6 +7,7 @@
  */
 import type { AccountQuota } from "./codex-quota-utils";
 import type { TKey } from "./i18n/en";
+import type { PassiveQuotaRow } from "./passive-quota-summary";
 import { quotaWindows, resetTimestamp } from "./pages/tray-data";
 import { accountQuotaFromReport, type ProviderQuotaReportView } from "./provider-workspace/report";
 
@@ -22,12 +23,18 @@ export interface QuotaSummaryWindow {
   labelKey?: TKey;
   /** Provider-named window label, shown verbatim. */
   label?: string;
+  /** Presentation text only (for example a measured amount and plan); identity stays in `label`. */
+  displayLabel?: string;
   percent?: number;
+  /** Entitlement was not reported; no percentage may be inferred. */
+  unknownBudget?: true;
   resetAt?: number;
   severity: QuotaSummarySeverity;
 }
 
 export interface QuotaSummaryRow {
+  /** A passively observed key rate limit, rendered instead of probe windows. */
+  passive?: PassiveQuotaRow;
   provider: string;
   label: string;
   headline: QuotaSummaryWindow;
@@ -35,6 +42,8 @@ export interface QuotaSummaryRow {
   updatedAt?: number;
   observed: boolean;
   severity: QuotaSummarySeverity;
+  /** A budget probe that must show every window rather than only the headline. */
+  showAllWindows?: boolean;
 }
 
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -82,7 +91,11 @@ function summaryWindows(quota: AccountQuota): QuotaSummaryWindow[] {
       ...(modelId !== undefined ? { modelId } : {}),
       ...("key" in window && window.key ? { labelKey: window.key } : {}),
       ...("label" in window && typeof window.label === "string" ? { label: window.label } : {}),
+      ...("displayLabel" in window && typeof window.displayLabel === "string" && window.displayLabel.trim()
+        ? { displayLabel: window.displayLabel }
+        : {}),
       ...(percent !== undefined ? { percent } : {}),
+      ...("unknownBudget" in window && window.unknownBudget === true ? { unknownBudget: true as const } : {}),
       ...(resetMs !== null ? { resetAt: resetMs } : {}),
       severity: modelId === undefined ? quotaSeverity(percent) : "normal",
     };
@@ -139,7 +152,7 @@ function pickHeadline(windows: QuotaSummaryWindow[]): QuotaSummaryWindow | undef
   if (!regular) regular = measured.find(window => window.labelKey !== "quotaSummary.credits");
   const credits = byLabel.get("quotaSummary.credits");
   if (credits && credits.severity === "critical" && regular?.severity !== "critical") return credits;
-  return regular ?? measured[0];
+  return regular ?? measured[0] ?? windows.find(window => window.unknownBudget);
 }
 
 /**
@@ -158,6 +171,11 @@ export function buildQuotaSummary(
     const windows = summaryWindows(quota);
     const headline = pickHeadline(windows);
     if (!headline) continue;
+    // A budget probe reports more than one meaningful window; its headline alone would hide
+    // the window that actually ran out, so the row carries every window and the worst severity.
+    const showAllWindows = report.source === "mistral:budget";
+    const severity = showAllWindows && windows.some(window => window.severity === "critical") ? "critical"
+      : showAllWindows && windows.some(window => window.severity === "warn") ? "warn" : headline.severity;
     rows.push({
       provider,
       label: report.label?.trim() || displayName(provider),
@@ -165,7 +183,8 @@ export function buildQuotaSummary(
       windows,
       ...(finite(report.updatedAt) ? { updatedAt: report.updatedAt } : {}),
       observed: report.observed === true,
-      severity: headline.severity,
+      severity,
+      ...(showAllWindows ? { showAllWindows: true } : {}),
     });
   }
   return rows;

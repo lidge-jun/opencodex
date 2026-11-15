@@ -1,31 +1,32 @@
 name: PR hygiene
 
+# Called by pr-gates.yml (#7654), which owns the pull_request_target trigger and
+# starts this job only for opened, reopened, synchronize, edited, labeled and
+# unlabeled. `edited` is there for the carry-attribution check alone. Every other
+# hygiene failure is about the diff, so only a push can clear it -- but the
+# remedy this one asks for is a `Co-authored-by` trailer, which an author can
+# add to the description without touching the branch. Without `edited` the fix
+# would be invisible until an unrelated push, and the author would reasonably
+# conclude the gate was broken. The `github` context here is the caller's event.
 on:
-  pull_request_target:
-    # `edited` is here for the carry-attribution check alone. Every other
-    # hygiene failure is about the diff, so only a push can clear it -- but the
-    # remedy this one asks for is a `Co-authored-by` trailer, which an author
-    # can add to the description without touching the branch. Without `edited`
-    # the fix would be invisible until an unrelated push, and the author would
-    # reasonably conclude the gate was broken.
-    types: [opened, reopened, synchronize, edited, labeled, unlabeled]
+  workflow_call:
 
-# Trusted scripts from the PR base revision only. Patches are read through the
-# GitHub API; PR-head code is never checked out or executed.
+# Trusted scripts are checked out from the fixed `dev` ref, independent of the
+# PR base and head. Patches are read through the GitHub API.
 # Least privilege: no default permissions; the hygiene job grants only what it needs.
 permissions: {}
-
-concurrency:
-  # Shared with the enforce-target gate: both workflows read-modify-write the
-  # same consolidated gate comment, so one stable PR-number group serializes
-  # old-head and new-head runs as well as hygiene and gate writes.
-  # A newer run queues behind the in-flight one instead of cancelling it.
-  group: pr-gate-comment-${{ github.event.pull_request.number }}
-  cancel-in-progress: false
 
 jobs:
   hygiene:
     runs-on: ubuntu-latest
+    concurrency:
+      # Shared with the enforce-target job: both read-modify-write the same
+      # consolidated gate comment, so one stable PR-number group serializes
+      # old-head and new-head runs as well as hygiene and gate writes.
+      # A newer run queues behind the in-flight one instead of cancelling it.
+      # On this job rather than the caller, so it exists only when hygiene runs.
+      group: pr-gate-comment-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
     # contents: read for the trusted script checkout; issues/pull-requests write
     # maintain the blocked label and one bot comment.
     permissions:

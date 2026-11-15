@@ -46,6 +46,7 @@ import { nativeMessagesDeclineReason, type NativeMessagesSelector } from "../mes
 import type { NativeMessagesFinishLog } from "../messages-native";
 import { credentialDomainFor } from "../../protocols/opaque-state";
 import { chatCompletionsErrorResponse } from "../../chat/outbound";
+import { OUTPUT_CONFIG_EFFORTS } from "../../chat/inbound";
 import { anthropicErrorResponse } from "../../claude/outbound";
 import { hasAnthropicOnlyServerTool, hasNativeOnlyTool } from "../../claude/inbound-content-options";
 import { nativeMessagesInlineToolNames } from "../messages-native-tool-guard";
@@ -130,12 +131,17 @@ export interface ComboProtocolLanes {
   pickable(target: ComboTarget): boolean;
   /** The ingress refusal when every enabled candidate was skipped; otherwise undefined. */
   refusal(): Response | undefined;
-  /** The native plan for the candidate about to dispatch, or undefined to keep the bridge. */
+  /**
+   * The native plan for the candidate about to dispatch, or undefined to keep the bridge.
+   * `decisionOwnsEffort` is the caller's pre-decision reading of `jevEffortMode`: re-reading a
+   * combo the management API can replace mid-decision would split this lane from its log label.
+   */
   nativeChild(
     target: ComboTarget,
     targetRoute: RouteResult,
     targetSendBudget: TransientSendBudget | undefined,
-    initialDecision?: Pick<JevDecision, "effort">,
+    initialDecision: Pick<JevDecision, "effort"> | undefined,
+    decisionOwnsEffort: boolean,
   ): NativeComboChildPlan | undefined;
 }
 
@@ -191,8 +197,10 @@ export function createComboProtocolLanes(input: {
     if (inbound === "messages") {
       const combo = getCombo(config, comboId);
       // ponytail: exact replay supports no combo effort rewrite; the existing bridge owns those policies.
+      const domain = credentialDomainFor(route.provider);
       if (!combo || combo.strategy !== "failover" || comboDefaultEffort(config, comboId)
-        || combo.reasoningEffortMode !== "strict" || !credentialDomainFor(route.provider)?.firstPartyAnthropic
+        || combo.reasoningEffortMode !== "strict" || !domain
+        || (route.provider.authMode === "oauth" && !domain.firstPartyAnthropic)
         || supportedLadderFor({ provider: route.provider, modelId: route.modelId })?.length === 0) return false;
     }
     // The concrete selector, as the bridge child's body carries it; the wire model comes from
@@ -279,7 +287,7 @@ export function createComboProtocolLanes(input: {
         400, unrepresentableMessage(features), "invalid_request_error", "unsupported_feature",
       ), inbound);
     },
-    nativeChild: (target, targetRoute, targetSendBudget, initialDecision) => {
+    nativeChild: (target, targetRoute, targetSendBudget, initialDecision, decisionOwnsEffort) => {
       // Without the request's execution budget a native child could not share its sends, so it
       // keeps the bridge rather than opening a tracker of its own.
       if (!isRequestExecutionBudget(targetSendBudget)) return undefined;
@@ -292,7 +300,9 @@ export function createComboProtocolLanes(input: {
         provider: targetRoute.provider,
         modelId: targetRoute.modelId,
       });
-      if (initialDecision) {
+      // `client` keeps the decision's target but not its tier, so the ordinary combo effort
+      // policy applies instead of the decision's effort.
+      if (initialDecision && decisionOwnsEffort) {
         // A validated JEV choice owns only this first dispatch, including explicit no-effort.
         // Do not run ordinary force defaults for null: they require a non-null default.
         delete body.service_tier;
@@ -329,9 +339,20 @@ function applyComboEffort(
 ): void {
   const combo = getCombo(config, comboId);
   if (!combo) return;
+  // Same precedence as the Chat inbound parser (`resolveReasoningEffort`): a string
+  // `reasoning_effort` first, a string nested `reasoning.effort` second. A non-string top-level
+  // value (an explicit null) is no caller effort, so the nested one still decides.
+  const nested = body.reasoning && typeof body.reasoning === "object" && !Array.isArray(body.reasoning)
+    ? (body.reasoning as Rec).effort
+    : undefined;
   const hadEffort = Object.hasOwn(body, "reasoning_effort");
+  // With no string anywhere, a present top-level value (an explicit null) is passed on as before.
+  const callerEffort = typeof body.reasoning_effort === "string" ? body.reasoning_effort
+    // The parser reads a nested effort only when it is a level it knows; anything else is no effort.
+    : typeof nested === "string" && OUTPUT_CONFIG_EFFORTS.has(nested) ? nested
+    : hadEffort ? body.reasoning_effort : undefined;
   const shaped = concreteComboRequestBody(
-    hadEffort ? { reasoning: { effort: body.reasoning_effort } } : {},
+    callerEffort !== undefined || hadEffort ? { reasoning: { effort: callerEffort } } : {},
     target,
     comboDefaultEffort(config, comboId),
     supportedLadderFor({ provider: targetRoute.provider, modelId: targetRoute.modelId }),

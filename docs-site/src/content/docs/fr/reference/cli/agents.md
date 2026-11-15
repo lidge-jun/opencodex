@@ -27,9 +27,9 @@ qu'elle a déclenchée (`codexWebSearch` avec `--json`, une ligne `Codex config:
 sinon) et renvoie vers `ocx sync` quand elle n'a pas pu avoir lieu. L'option fonctionne aussi
 pour `vision`.
 
-### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>|mode-hint <text|--clear>>`
+### `ocx v2 <status|on|off|mode <v1|default|v2|v2-plaintext>|threads <n>|mode-hint <text|--clear>>`
 
-Gérez l'indicateur de fonctionnalité Codex `multi_agent_v2` et le mode surface multi-agents à trois états.
+Gérez l'indicateur de fonctionnalité Codex `multi_agent_v2` et le mode surface multi-agents.
 
 | Sous-commande | Actions |
 | --- | --- |
@@ -39,6 +39,7 @@ Gérez l'indicateur de fonctionnalité Codex `multi_agent_v2` et le mode surface
 | `mode v1` | Forcez tous les modèles à v1, désactivez la v2 native et préservez la limite de threads actifs. |
 | `mode default` | Respecter les axes de surface du modèle en amont. |
 | `mode v2` | Forcez tous les modèles à v2, activez la v2 native et préservez la limite de threads actifs. |
+| `mode v2-plaintext --acknowledge-plaintext-agent-messages` | Sélectionnez V2 pour les nouvelles sessions et activez les tâches en clair admissibles sans priorité V2 globale. |
 | `threads <n>` | Définissez la limite de thread v1/v2 active sur un nombre entier d'au moins 1. |
 | `mode-hint <text>` | Définissez l’indice de délégation proactive (mode Ultra) pour chaque modèle et effort. |
 | `mode-hint --clear` | Supprimez l'indice pour que la politique dérivée de l'effort (ultra = proactive) reprenne. |
@@ -56,7 +57,7 @@ ocx v2 mode-hint --clear
 La sous-commande `mode` écrit `multiAgentMode` dans la configuration opencodex et resynchronise le catalogue Codex.
 Les changements de mode et d’indicateur déplacent la limite numérique actuelle de fils entre les clés v1/v2 Codex valides ;
 une transition ratée restaure le `config.toml` original. Les modifications s'appliquent aux nouvelles sessions Codex, tandis que
-les sessions de course conservent leur surface épinglée.
+les sessions en cours conservent leur surface épinglée. Le compilateur en clair suit toutefois le réglage actuel pour les requêtes admissibles ultérieures, y compris dans les sessions V2 existantes.
 
 `mode-hint` écrit `features.multi_agent_v2.multi_agent_mode_hint_text` en Codex
 `$CODEX_HOME/config.toml` même si `multi_agent_v2` est actuellement désactivé. Le
@@ -66,8 +67,7 @@ la politique multi-agents dérivée de l'effort du codex-rs, donc tout modèle e
 reçoit l’invite de délégation proactive. Cela ne change **pas** l'effort de raisonnement
 lui-même. Un argument manquant ou une valeur contenant uniquement des espaces est rejeté ; seulement `--clear`
 supprime l'indice. La bascule **on** du mode Ultra du tableau de bord Sous-agents a une
-gate : il nécessite que la fonctionnalité native soit activée avec une surface v2 explicite
-(`ocx v2 mode v2`); `ocx v2 on` à lui seul ne satisfait pas à cette porte du tableau de bord.
+gate : il nécessite soit la fonctionnalité native activée avec `ocx v2 mode v2`, soit le mode `v2-plaintext`, fondé sur les choix du catalogue sans priorité globale. `ocx v2 on` à lui seul ne satisfait pas à cette porte du tableau de bord.
 
 ## Routage combiné
 

@@ -4,6 +4,7 @@ import { MAIN_CODEX_ACCOUNT_ID } from "../../codex/main-account";
 import { getValidAccessToken } from "../../oauth";
 import { loadConfig } from "../../config";
 import { configuredAnthropicInstance, type AnthropicInstanceId } from "../anthropic-instance";
+import { isAnthropicPoolEnabledFor } from "../../oauth/anthropic-pool-config";
 import { captureOAuthAccountSelection, credentialGeneration, getAccountCredential, getAccountSet } from "../../oauth/store";
 import { hydrateKiroAccountState, persistKiroAccountState } from "../kiro-account-state-disk";
 import { kiroProbeCurrent, kiroProbeIdentity } from "./kiro-account-probe";
@@ -22,7 +23,7 @@ import { aggregateCodexPoolCapacity, CODEX_CAPACITY_MAX_QUOTA_AGE_MS, type Codex
 import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS, toFiniteNumber } from "../quota-wire";
 import { providerCodexAccountMode } from "../registry";
 import {
-  accountReportCurrent,
+  accountReportCurrent, observedQuotaFor,
   AUTHORITATIVE_EMPTY_QUOTA,
   TERMINAL_QUOTA_FAILURE,
   providerLabel,
@@ -38,6 +39,7 @@ import {
   accountCacheKey,
   captureProviderAccountQuotaEpoch,
   accountQuotaCache,
+  getCachedProviderAccountQuota,
   hydrateAccountQuotaCache,
   mayCommitAccountQuotaKey,
   persistAccountQuotaCache,
@@ -282,6 +284,51 @@ export async function fetchAnthropicUsageProbeForInstance(
   return probe;
 }
 
+/** Pool switch plus each seat's routability, in store order; a change retires a cached pooled report. */
+function anthropicPoolState(config: OcxConfig, instance: AnthropicInstanceId): string {
+  const accounts = getAccountSet(instance)?.accounts ?? [];
+  return JSON.stringify([isAnthropicPoolEnabledFor(config, instance),
+    accounts.map(row => [row.id, row.paused === true, row.needsReauth === true])]);
+}
+
+/**
+ * Pooled Anthropic report: the same display-only configured-weight estimate the Codex pool row
+ * carries, so the Providers overview shows pool-wide 5-hour/weekly bars, the next recovery and the
+ * effective account instead of the active seat alone.
+ *
+ * Only when the account pool is enabled and holds more than one account: with the pool off,
+ * requests are served by the active account, so its own reading is the provider's quota. Each
+ * account reads its last-good per-account row (the active one was just refreshed above); Anthropic
+ * reports no seat tier, so every routable account weighs 1. Paused, reauth and stale accounts are
+ * excluded and surface as incomplete coverage, exactly as for Codex.
+ */
+function anthropicPoolReport(
+  provider: string,
+  instance: AnthropicInstanceId,
+  config: OcxConfig,
+  activeAccountId: string,
+  activeQuota: ProviderQuota,
+): ProviderQuotaReport | null {
+  if (!isAnthropicPoolEnabledFor(config, instance)) return null;
+  const accounts = getAccountSet(instance)?.accounts ?? [];
+  if (accounts.length < 2) return null;
+  const capacity = aggregateCodexPoolCapacity(accounts.map(row => ({
+    isMain: false,
+    active: row.id === activeAccountId,
+    weight: 1,
+    paused: row.paused === true,
+    needsReauth: row.needsReauth === true,
+    quota: (row.id === activeAccountId ? activeQuota : getCachedProviderAccountQuota(instance, row.id)) as CodexCapacityQuota | null,
+  })));
+  if (!capacity.aggregation || !capacity.quota) return null;
+  return report(
+    provider,
+    "anthropic:oauth-usage",
+    capacity.quota as ProviderQuota,
+    publicCapacityAggregation(capacity.aggregation, "aggregate"),
+  );
+}
+
 /** `config` is the caller's live object; currency re-reads it instead of reloading the file. */
 export async function fetchAnthropicQuota(provider: string, config: OcxConfig = loadConfig()): Promise<ProviderQuotaReport | null> {
   const instance = configuredAnthropicInstance(config, provider);
@@ -336,9 +383,16 @@ export async function fetchAnthropicQuota(provider: string, config: OcxConfig = 
       accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota, isCurrent: anthropicCurrent }); anthropicPublish?.();
     }
   }
-  const quotaReport = report(provider, "anthropic:oauth-usage", quota);
+  const pooledReport = anthropicPoolReport(provider, instance, config, probedAccountId, quota);
+  const quotaReport = pooledReport ?? report(provider, "anthropic:oauth-usage", quota);
+  // The estimate carries no reset times, so reset detection keeps observing the active seat's reading.
+  if (pooledReport) observedQuotaFor.set(pooledReport, quota);
+  // Current only while the pool switch and membership are unchanged: pausing, resuming or reauthorizing
+  // an inactive seat changes the aggregate, and turning the pool on or adding a seat changes the report.
+  const poolState = anthropicPoolState(config, instance);
   if (quotaReport && anthropicCurrent) {
-    accountReportCurrent.set(quotaReport, () => anthropicCurrent() && getAccountSet(instance)?.activeAccountId === probedAccountId);
+    accountReportCurrent.set(quotaReport, () => anthropicCurrent() && anthropicPoolState(config, instance) === poolState
+      && getAccountSet(instance)?.activeAccountId === probedAccountId);
   }
   return quotaReport;
 }

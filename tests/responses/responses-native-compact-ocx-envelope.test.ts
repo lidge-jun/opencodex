@@ -15,6 +15,10 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 // envelopes verbatim, and the upstream refused them as invalid_encrypted_content. Only the custom
 // gateway send lowered them; ordinary turns always do.
 const fetchBefore = globalThis.fetch; const homeBefore = process.env.OPENCODEX_HOME;
+const proxyKeys = ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy"] as const;
+let proxyBefore: Array<string | undefined> = [];
+beforeEach(() => { proxyBefore = proxyKeys.map(key => process.env[key]); for (const key of proxyKeys) delete process.env[key]; });
+afterEach(() => { for (const [index, key] of proxyKeys.entries()) { if (proxyBefore[index] === undefined) delete process.env[key]; else process.env[key] = proxyBefore[index]; } });
 let home: string; let release: (() => void) | undefined;
 beforeEach(() => { home = mkdtempSync(join(tmpdir(), "ocx-native-compact-ocx-envelope-")); process.env.OPENCODEX_HOME = home; release = acquireOwnedSpendHome(); clearCompactHandoffRoutesForTests(); });
 afterEach(() => { globalThis.fetch = fetchBefore; release?.(); clearCompactHandoffRoutesForTests(); if (homeBefore === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = homeBefore; removeTreeWithRetry(home); });
@@ -65,4 +69,23 @@ test.each([
     { type: "message", role: "user", content: [{ type: "input_text", text: "retained reasoning context" }] },
     nativeItem(),
   ]);
+});
+
+test("malformed ocx2 compact input is rejected locally as a caller error", async () => {
+  const settings = getDefaultConfig(); delete settings.compactionRouting; settings.defaultProvider = "openai"; settings.providers = {
+    openai: { adapter: "openai-responses", authMode: "forward", codexAccountMode: "direct", baseUrl: "https://chatgpt.com/backend-api/codex" },
+  };
+  let fetchCalls = 0;
+  globalThis.fetch = (async () => { fetchCalls++; return Response.json({}); }) as typeof fetch;
+  const req = new Request("http://localhost/v1/responses/compact", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${fakeChatGptJwt({ chatgpt_account_id: "fixture-account" })}` },
+    body: JSON.stringify({ model: "gpt-6-luna", input: [{ type: "compaction", encrypted_content: "ocx2:invalid" }] }),
+  });
+
+  const response = await handleResponsesCompact(req, settings, { model: "", provider: "" });
+
+  expect(response.status).toBe(400);
+  expect(await response.json()).toMatchObject({ error: { type: "invalid_request_error" } });
+  expect(fetchCalls).toBe(0);
 });

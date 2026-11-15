@@ -420,12 +420,21 @@ export function capturePoolQuotaWriter(accountId: string, dispatched: Dispatched
 export function poolQuotaHistoryIdentity(accountId: string): string | undefined {
   if (!isValidCodexAccountId(accountId)) return undefined;
   try {
-    const record = readCodexAccountRecord(accountId);
-    return record?.credential && record.deletedAt == null && validQuotaHistoryIdentity(record.quotaHistoryIdentity)
-      ? record.quotaHistoryIdentity : undefined;
+    return poolQuotaHistoryIdentityOf(readCodexAccountRecord(accountId));
   } catch {
     return undefined;
   }
+}
+
+/** {@link poolQuotaHistoryIdentity} for a record the caller already loaded, e.g. from one snapshot. */
+export function poolQuotaHistoryIdentityOf(record: CodexAccountCredentialRecord | null | undefined): string | undefined {
+  return record?.credential && record.deletedAt == null && validQuotaHistoryIdentity(record.quotaHistoryIdentity)
+    ? record.quotaHistoryIdentity : undefined;
+}
+
+/** One id out of {@link loadCodexAccountRecordSnapshot}; an invalid id or an inherited key is no record. */
+export function codexAccountRecordFromSnapshot(records: Readonly<Record<string, CodexAccountCredentialRecord>>, accountId: string): CodexAccountCredentialRecord | null {
+  return isValidCodexAccountId(accountId) && Object.hasOwn(records, accountId) ? records[accountId]! : null;
 }
 
 /** Recheck append admission after upstream I/O; refresh may retire a writer without erasing history. */

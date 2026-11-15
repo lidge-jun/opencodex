@@ -756,7 +756,9 @@ describe("ocx models richer metadata", () => {
         anthropic: {
           adapter: "anthropic",
           baseUrl: "https://api.anthropic.com",
-          models: ["claude-fable-5-2", "Claude-fable-5-3", "claude-fable-5-1", "unknown-model"],
+          // claude-fable-5-4 and Claude-fable-5-3 are unseeded siblings that inherit the
+          // configured claude-fable-5 family window; Fable 5.2 is now a seeded id.
+          models: ["claude-fable-5-4", "Claude-fable-5-3", "claude-fable-5-1", "unknown-model"],
           contextWindow: 128000,
           modelContextWindows: { "claude-fable-5": 1000000, "claude-fable-5-1": 800000 },
         },
@@ -781,7 +783,7 @@ describe("ocx models richer metadata", () => {
         .filter((m: { provider: string }) => m.provider === "anthropic")
         .map((m: { model: string; contextWindow: number }) => [m.model, m.contextWindow]));
       expect(anthropicWindows).toMatchObject({
-        "claude-fable-5-2": 1000000,
+        "claude-fable-5-4": 1000000,
         "Claude-fable-5-3": 1000000,
         "claude-fable-5-1": 800000,
         "unknown-model": 128000,

@@ -17,6 +17,7 @@ import {
   GUI_PAIR_METHOD,
   GUI_PAIR_NONCE_HEADER,
   GUI_PAIR_PATH,
+  DESKTOP_GUI_PAIR_PATH,
   canonicalGuiBrowserOrigin,
   canonicalHttpOrigin,
   createGuiPairCapability,
@@ -31,9 +32,10 @@ import {
 
 export type GuiPairRequestResult =
   | { kind: "created"; grant: string; browserOrigin: string; serverOrigin: string; expiresAt: number }
-  | { kind: "unavailable"; reason: "unattested-target" | "runtime-mismatch" | "attestation" | "capability" | "transport" | "rejected" | "local-intent" };
+  | { kind: "unavailable"; reason: "unattested-target" | "runtime-mismatch" | "attestation" | "capability" | "transport" | "rejected" | "local-intent" | "origin-refused" | "rate-limited" };
 
 export interface GuiPairClientDeps {
+  desktopPurpose?: boolean;
   fetchImpl?: typeof fetch;
   readRuntime?: (pid: number) => RuntimePortState | null;
   createChallenge?: () => string;
@@ -55,6 +57,27 @@ function sameRuntime(left: RuntimePortState, right: RuntimePortState | null): bo
     && right.hostname === left.hostname
     && leftSecret.length === rightSecret.length
     && timingSafeEqual(leftSecret, rightSecret);
+}
+
+/**
+ * Which refusal the grant route sent, as one fixed word; the body itself never surfaces.
+ *
+ * Only the route's plain 403 "GUI pairing grant refused" (no `code`) means its loaded config did not
+ * admit this origin, the one case an allow-list edit or a restart can cure (#8319). Its 429 is the
+ * per-minute grant limit. A coded refusal, a capability refusal and anything else stay `rejected`,
+ * so the caller does not send an operator to edit a correct allow-list (#8495 review).
+ *
+ * This is a heuristic: the route answers the same uncoded 403 for any unexpected failure inside
+ * grant creation, not only for a refused origin. Those are rare and the advice (check the two origin
+ * settings, restart) is harmless there; an explicit server code would make it exact.
+ */
+async function refusalReason(response: Response): Promise<"origin-refused" | "rate-limited" | "rejected"> {
+  if (response.status === 429) return "rate-limited";
+  if (response.status !== 403) return "rejected";
+  const body: unknown = await response.json().catch(() => null);
+  if (!body || typeof body !== "object" || Array.isArray(body)) return "rejected";
+  const record = body as Record<string, unknown>;
+  return record.error === "GUI pairing grant refused" && record.code === undefined ? "origin-refused" : "rejected";
 }
 
 function parseCreatedResult(value: unknown, browserOrigin: string): GuiPairRequestResult | null {
@@ -129,11 +152,12 @@ export async function requestBoundGuiPairingGrant(
     return { kind: "unavailable", reason: "runtime-mismatch" };
   }
   const expiresAt = (deps.now ?? Date.now)() + GUI_PAIR_CAPABILITY_TTL_MS;
+  const path = deps.desktopPurpose ? DESKTOP_GUI_PAIR_PATH : GUI_PAIR_PATH;
   const capability = createGuiPairCapability(
     runtime.attestationSecret,
     challenge,
     GUI_PAIR_METHOD,
-    GUI_PAIR_PATH,
+    path,
     browserOrigin,
     target.pid,
     target.port,
@@ -142,10 +166,10 @@ export async function requestBoundGuiPairingGrant(
   if (!capability) return { kind: "unavailable", reason: "capability" };
   let intent: GuiPairIntent | undefined;
   try {
-    if (deps.requireLocalIntent !== false) intent = (deps.createIntent ?? createGuiPairIntent)(capability);
+    if (deps.desktopPurpose || deps.requireLocalIntent !== false) intent = (deps.createIntent ?? createGuiPairIntent)(capability);
   } catch { return { kind: "unavailable", reason: "local-intent" }; }
   try {
-    const response = await fetchImpl(`${baseUrl}${GUI_PAIR_PATH}`, {
+    const response = await fetchImpl(`${baseUrl}${path}`, {
       method: GUI_PAIR_METHOD,
       headers: {
         "Content-Length": "0",
@@ -158,7 +182,7 @@ export async function requestBoundGuiPairingGrant(
       },
       signal: AbortSignal.timeout(timeoutMs),
     });
-    if (!response.ok) return { kind: "unavailable", reason: "rejected" };
+    if (!response.ok) return { kind: "unavailable", reason: await refusalReason(response) };
     const result = parseCreatedResult(await response.json().catch(() => null), browserOrigin);
     return result ?? { kind: "unavailable", reason: "rejected" };
   } catch {

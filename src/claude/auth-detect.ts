@@ -13,8 +13,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { spawnSync } from "node:child_process";
-import { CLAUDE_KEYCHAIN_SERVICE, claudeKeychainReader, isSyncTimeout, type ClaudeKeychainReader } from "../oauth/claude-keychain-read";
+import { claudeKeychainReader } from "../oauth/claude-keychain-read";
 
 export type AuthPresence = "present" | "absent" | "unknown";
 
@@ -35,31 +34,23 @@ export type AuthSourceId =
  */
 export const PROXY_MARKER = "opencodex-proxy";
 
-const KEYCHAIN_SERVICE = CLAUDE_KEYCHAIN_SERVICE;
-/** `security` exit code for "the item does not exist" — a real absent, not a failure. */
-const KEYCHAIN_ITEM_NOT_FOUND = 44;
-const KEYCHAIN_TIMEOUT_MS = 1_500;
-
 /**
- * The metadata probe under the Keychain reader's admission (#8161). Its synchronous timeout still
- * signals the child, so it does not spawn while a read is blocked or the backoff is active, and its
- * own timeout starts that backoff: a locked keychain sees at most one such kill per window.
+ * The macOS Keychain source, resolved once at an asynchronous boundary and handed to
+ * {@link defaultAuthDetectDeps}. Detection itself stays synchronous, but the lookup behind it must
+ * not: a synchronous `security` child can only be bounded by killing it, and killing one that is
+ * waiting on an unlock prompt crashes `securityd` and re-locks the keychain (#8161). The shared
+ * reader runs it without ever signalling the child, under the same single slot and backoff as the
+ * credential read, and answers `absent` on a non-darwin host.
+ *
+ * A manual `claudeCode.authMode` ("proxy" or "subscription") never consults detection, so the
+ * probe is skipped there: a pinned user pays no wait and sees no unlock prompt for a discarded
+ * answer. The keychain source then reads `unknown`, which is never `absent`.
  */
-export function probeClaudeKeychain(
-  platform: string,
-  reader: Pick<ClaudeKeychainReader, "syncReadBlocked" | "noteSyncTimeout">,
-  run: () => { status: number | null; signal: string | null; error?: Error },
-): AuthPresence {
-  if (platform !== "darwin") return "absent";
-  if (reader.syncReadBlocked()) return "unknown";
-  const result = run();
-  if (result.error || result.signal !== null) {
-    if (isSyncTimeout(result.error ?? { signal: result.signal })) reader.noteSyncTimeout();
-    return "unknown";
+export function resolveClaudeKeychainPresence(authMode?: string): Promise<AuthPresence> {
+  if (authMode === "proxy" || authMode === "subscription") {
+    return Promise.resolve(process.platform === "darwin" ? "unknown" : "absent");
   }
-  if (result.status === 0) return "present";
-  if (result.status === KEYCHAIN_ITEM_NOT_FOUND) return "absent";
-  return "unknown";
+  return claudeKeychainReader.probe();
 }
 
 export interface AuthSourceResult {
@@ -74,7 +65,7 @@ export interface AuthDetectDeps {
   readClaudeJson(): Record<string, unknown> | undefined;
   /** Whether <config-dir>/.credentials.json exists; throws on read error. */
   credentialsFileExists(): boolean;
-  /** present/absent/unknown for the macOS keychain probe; absent on non-Darwin. */
+  /** present/absent/unknown for the macOS keychain, already resolved; absent on non-Darwin. */
   keychainProbe(): AuthPresence;
   /**
    * The environment to inspect for S5. Callers pass the SAME base env the launch will
@@ -205,12 +196,14 @@ export function detectClaudeAuth(deps: AuthDetectDeps): AuthDetectResult {
 }
 
 /**
- * Real IO. The keychain probe is METADATA ONLY: no `-g` and no `-w`, because those
- * flags print the password itself. We only need the exit code.
+ * Real IO. The Keychain source is the caller's pre-resolved {@link resolveClaudeKeychainPresence}
+ * result. A caller that did not resolve one gets `unknown` on macOS, which the resolver maps to
+ * subscription; it is never read as `absent`.
  */
 export function defaultAuthDetectDeps(
   env: NodeJS.ProcessEnv = process.env,
   ownTokens: readonly string[] = [],
+  keychainPresence: AuthPresence = process.platform === "darwin" ? "unknown" : "absent",
 ): AuthDetectDeps {
   const configDir = claudeConfigDir(env);
   return {
@@ -226,12 +219,7 @@ export function defaultAuthDetectDeps(
     credentialsFileExists() {
       return existsSync(join(configDir, ".credentials.json"));
     },
-    keychainProbe() {
-      return probeClaudeKeychain(process.platform, claudeKeychainReader, () => spawnSync("security", ["find-generic-password", "-s", KEYCHAIN_SERVICE], {
-        timeout: KEYCHAIN_TIMEOUT_MS,
-        stdio: ["ignore", "ignore", "ignore"],
-      }));
-    },
+    keychainProbe: () => keychainPresence,
     env: () => env,
     ownTokens,
   };

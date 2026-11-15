@@ -20,6 +20,28 @@ import {
   stripPrEnforcementPrefix,
 } from "./release-notes";
 
+// The reviewed one-time main -> dev transition (2.99.0 was tagged on the retired main line). The
+// publication-history collector owns and verifies this mapping; the changelog only reads it.
+const releaseHistory = require("../.github/scripts/release-history.cjs") as {
+  LEGACY_MAPPINGS: ReadonlyArray<{ version: string; legacySha: string }>;
+  LEGACY_BASELINE: string;
+};
+
+/**
+ * The dev commit a legacy release tag stands for, or null. A tag qualifies only when it is one of
+ * the reviewed legacy mappings, it still points at that mapping's exact source, and the shared dev
+ * baseline is an ancestor of the target. Every other non-ancestral tag stays refused.
+ */
+export function legacyChangelogRangeStart(
+  tag: string,
+  tagCommit: string | undefined,
+  baselineIsAncestor: boolean,
+): string | null {
+  const mapping = releaseHistory.LEGACY_MAPPINGS.find(entry => `v${entry.version}` === tag);
+  if (!mapping || tagCommit !== mapping.legacySha || !baselineIsAncestor) return null;
+  return releaseHistory.LEGACY_BASELINE;
+}
+
 export type AssociatedPullRequest = {
   number: number;
   title: string;
@@ -264,10 +286,21 @@ export function buildReleaseNotes(input: {
   generatedNotes: string;
   commits: ReleaseCommit[];
   repository: string;
+  /** Overrides the compare link start, e.g. the reviewed dev baseline of a legacy tag. */
+  compareFrom?: string;
+  /**
+   * When set, GitHub-generated PR entries outside this set are dropped. The legacy path needs it:
+   * GitHub computes generated notes from the tag's merge-base, which can reach before the reviewed
+   * range start and would otherwise list PRs the release does not contain.
+   */
+  rangePulls?: ReadonlySet<number>;
 }): ReleaseNotesBuildResult {
   const baseline = selectReleaseBaseline(input.version, input.tags);
   const releaseTag = input.version.startsWith("v") ? input.version : `v${input.version}`;
   const generated = generatedPullChanges(input.generatedNotes);
+  if (input.rangePulls) {
+    for (const number of [...generated.keys()]) if (!input.rangePulls.has(number)) generated.delete(number);
+  }
   const fallbackPrs = new Map<number, PullChange>();
   const directCommits: CommitChange[] = [];
   const coverage = new Map<string, Coverage>();
@@ -337,7 +370,7 @@ export function buildReleaseNotes(input: {
   const body = renderReleaseNotes({
     npmMetadata: input.npmMetadata,
     entries,
-    compareFrom: baseline,
+    compareFrom: input.compareFrom ?? baseline,
     compareTo: releaseTag,
     repository: input.repository,
   });
@@ -575,7 +608,19 @@ async function main(argv: string[]): Promise<void> {
     const probe = await runCommand(["git", "merge-base", "--is-ancestor", tag, target]);
     ancestryCache.set(tag, probe.exitCode === 0);
   }
-  const baseline = selectReleaseBaseline(version, tags, tag => ancestryCache.get(tag) === true);
+  // 2.99.0 lives on the retired main line, so it is never an ancestor of a dev target. Without
+  // the reviewed mapping, selection fell back to the newest REACHABLE stable (v2.42.0): a
+  // 4,960-commit range that exhausted the GitHub API and exceeded the 125,000-character release body.
+  const legacyRangeStarts = new Map<string, string>();
+  const baselineIsAncestor = (await runCommand(["git", "merge-base", "--is-ancestor", releaseHistory.LEGACY_BASELINE, target])).exitCode === 0;
+  for (const tag of tags) {
+    if (ancestryCache.get(tag) === true) continue;
+    const resolved = await runCommand(["git", "rev-parse", "--verify", "--quiet", `${tag}^{commit}`]);
+    const start = legacyChangelogRangeStart(tag, resolved.exitCode === 0 ? resolved.stdout.trim() : undefined, baselineIsAncestor);
+    if (start) legacyRangeStarts.set(tag, start);
+  }
+  const baseline = selectReleaseBaseline(version, tags, tag => ancestryCache.get(tag) === true || legacyRangeStarts.has(tag));
+  const rangeStart = baseline ? legacyRangeStarts.get(baseline) ?? baseline : null;
   const releaseTag = version.startsWith("v") ? version : `v${version}`;
 
   // Selection above already filters to reachable tags, so this is now a
@@ -583,8 +628,8 @@ async function main(argv: string[]): Promise<void> {
   // non-ancestral baseline cannot describe a range at all, and a future caller
   // that skips the filter must still fail closed rather than emit notes drawn
   // from an unrelated lineage.
-  if (baseline) {
-    const ancestry = await runCommand(["git", "merge-base", "--is-ancestor", baseline, target]);
+  if (rangeStart) {
+    const ancestry = await runCommand(["git", "merge-base", "--is-ancestor", rangeStart, target]);
     if (ancestry.exitCode !== 0) {
       const channel = isPrereleaseVersion(version) ? "previous release" : "previous stable";
       throw new Error(
@@ -637,7 +682,7 @@ async function main(argv: string[]): Promise<void> {
     for (const pr of section.prs) generatedNumbers.add(pr.number);
   }
 
-  const rawCommits = await releaseCommits(baseline, target);
+  const rawCommits = await releaseCommits(rangeStart, target);
   const commits: ReleaseCommit[] = [];
   for (const commit of rawCommits) {
     if (isReleaseMetadataCommit(commit.subject)) {
@@ -656,6 +701,17 @@ async function main(argv: string[]): Promise<void> {
   const packageName = await readPackageName();
   const npmMetadata =
     `Published to npm as \`${packageName}@${version}\` with dist-tag \`${distTag}\`.`;
+  // A legacy baseline makes the reviewed dev commit the range start, so the compare link and the
+  // generated entries must follow it rather than the main-line tag.
+  const legacyStart = baseline && rangeStart !== baseline ? rangeStart : null;
+  const rangePulls = legacyStart ? new Set<number>() : undefined;
+  if (rangePulls) {
+    for (const commit of commits) {
+      const landing = trailingLandingPr(commit.subject);
+      if (landing !== null) rangePulls.add(landing);
+      for (const pr of commit.pulls) rangePulls.add(pr.number);
+    }
+  }
   const built = buildReleaseNotes({
     version,
     tags,
@@ -663,6 +719,7 @@ async function main(argv: string[]): Promise<void> {
     generatedNotes,
     commits,
     repository,
+    ...(legacyStart ? { compareFrom: legacyStart, rangePulls } : {}),
   });
 
   if (built.errors.length > 0) {

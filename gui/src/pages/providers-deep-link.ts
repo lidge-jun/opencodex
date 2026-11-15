@@ -3,6 +3,8 @@
  * (protocol-deep-links.ts) so "which wire does this candidate receive" lands on the panel that
  * answers it. `#providers?provider=<name>&tab=accounts` (the header quota strip's chips) opens
  * the provider's Accounts tab instead, through the caller's `onAccounts`.
+ * `&focus=account-mode` also names the Settings field to focus (#8501); an accounts link wins
+ * over it, so the field is never focused behind the Accounts tab.
  *
  * The hash is the source of truth: it is read on mount and on every hashchange/popstate, so
  * Back/Forward re-apply it. A name that is not configured (yet) waits for the provider list and
@@ -13,8 +15,10 @@ import { useEffect, useRef, useState } from "react";
 import { replaceHash } from "../hash-routing";
 import {
   PROVIDERS_HASH,
+  readProviderDeepLinkFocus,
   readProviderDeepLinkTab,
   readProviderSettingsTarget,
+  type ProviderDeepLinkFocus,
   type ProviderDeepLinkTab,
 } from "../protocol-deep-links";
 
@@ -22,6 +26,8 @@ export interface ProviderSettingsFocus {
   /** Increases each time a deep link asks for `provider`'s settings. */
   token: number;
   provider: string | null;
+  /** The Settings field the link asks to focus, if any. */
+  field: ProviderDeepLinkFocus | null;
 }
 
 /**
@@ -44,15 +50,19 @@ export function useProviderSettingsDeepLink(
   const [request, setRequest] = useState(() => ({
     name: readProviderSettingsTarget(),
     tab: readProviderDeepLinkTab(),
+    field: readProviderDeepLinkFocus(),
     seq: 0,
   }));
-  const [applied, setApplied] = useState<{ seq: number; provider: string; tab: ProviderDeepLinkTab } | null>(null);
+  const [applied, setApplied] = useState<{
+    seq: number; provider: string; tab: ProviderDeepLinkTab; field: ProviderDeepLinkFocus | null;
+  } | null>(null);
   const previousSelectedRef = useRef<string | null>(selected);
 
   useEffect(() => {
     const sync = () => setRequest(current => ({
       name: readProviderSettingsTarget(),
       tab: readProviderDeepLinkTab(),
+      field: readProviderDeepLinkFocus(),
       seq: current.seq + 1,
     }));
     window.addEventListener("hashchange", sync);
@@ -66,7 +76,12 @@ export function useProviderSettingsDeepLink(
   // A name that is not configured (yet) waits here until the provider list contains it.
   if (request.name && applied?.seq !== request.seq && providerNames?.includes(request.name)) {
     const openAccounts = request.tab === "accounts" ? onAccounts : undefined;
-    setApplied({ seq: request.seq, provider: request.name, tab: openAccounts ? "accounts" : "settings" });
+    setApplied({
+      seq: request.seq,
+      provider: request.name,
+      tab: openAccounts ? "accounts" : "settings",
+      field: openAccounts ? null : request.field,
+    });
     if (openAccounts) openAccounts(request.name);
     else select(request.name);
   }
@@ -82,5 +97,7 @@ export function useProviderSettingsDeepLink(
     if (movedAway) replaceHash(PROVIDERS_HASH);
   }, [applied, request, selected]);
 
-  return applied?.tab === "settings" ? { token: applied.seq + 1, provider: applied.provider } : { token: 0, provider: null };
+  return applied?.tab === "settings"
+    ? { token: applied.seq + 1, provider: applied.provider, field: applied.field }
+    : { token: 0, provider: null, field: null };
 }

@@ -42,8 +42,15 @@ function finalReplies(rows: Entry[]) {
 }
 
 /** Read one bounded history page; matching proves shared turn membership, never exclusive reply ownership. */
-export async function queueMcpReadReply(options: QueueMcpOptions, raw: ReplyInput, signal?: AbortSignal) {
-  const unavailable = (code: string) => ({ available: false as const, error: { code } });
+export async function queueMcpReadReply(options: QueueMcpOptions, raw: ReplyInput, signal?: AbortSignal,
+  hooks?: { onObservedFailure: () => void; outcomeIsTimely: () => boolean; onObservedSuccess?: (timely: boolean) => void }) {
+  let outcomeBeforeDeadline = false, allOutcomesTimely = true;
+  const unavailable = (code: string) => {
+    if (outcomeBeforeDeadline) hooks?.onObservedFailure();
+    return { available: false as const, error: { code } };
+  };
+  // Report whether every RPC behind this completed snapshot arrived before the caller's deadline.
+  const observed = <T>(value: T): T => { hooks?.onObservedSuccess?.(allOutcomesTimely); return value; };
   if (!options.allowReplyRead) return unavailable("reply_read_disabled");
   const parsed = z.object(replyInput).strict().safeParse(raw);
   if (!parsed.success) return unavailable("reply_invalid_input");
@@ -52,9 +59,17 @@ export async function queueMcpReadReply(options: QueueMcpOptions, raw: ReplyInpu
   try { position = decodeReplyCursor(input); } catch { return unavailable("reply_invalid_cursor"); }
   const budget = new MessageBudget(20_000, signal);
   const read = async (method: "thread/items/list" | "thread/items/read" | "thread/turns/list", params: Record<string, unknown>) => {
+    outcomeBeforeDeadline = false;
     budget.throwIfEnded();
-    const result = await queueMcpRpc(options, method, { threadId: input.threadId, ...params }, budget.signal);
-    if (result.status !== "response") throw new Error("read unavailable");
+    // The helper may close after the deadline even when its response arrived in time.
+    const result = await queueMcpRpc(options, method, { threadId: input.threadId, ...params }, budget.signal,
+      () => { if (hooks?.outcomeIsTimely() ?? !signal?.aborted) outcomeBeforeDeadline = true; });
+    if (result.status !== "response") {
+      if (hooks?.outcomeIsTimely() ?? !signal?.aborted) outcomeBeforeDeadline = true;
+      throw new Error("read unavailable");
+    }
+    // A snapshot is complete only if every frame in it arrived in time, not just the final one.
+    allOutcomesTimely = allOutcomesTimely && outcomeBeforeDeadline;
     return result.result;
   };
   try {
@@ -71,9 +86,9 @@ export async function queueMcpReadReply(options: QueueMcpOptions, raw: ReplyInpu
       const page = await read("thread/items/list", { cursor, limit: 50, sortDirection: "desc" });
       const rows = entries(page.data, 50), next = nextCursor(page, cursor);
       const matches = rows.filter(row => row.item.type === "userMessage" && row.item.clientId === input.clientMessageId);
-      if (matches.length > 1) return { available: true as const, status: "ambiguous" as const, replies: [] };
-      if (!matches.length) return { available: true as const, status: "not_observed" as const, reachedHistoryEnd: next === null,
-        nextCursor: next ? encodeReplyCursor(input, { stage: "search", nativeCursor: next }) : null, replies: [] };
+      if (matches.length > 1) return observed({ available: true as const, status: "ambiguous" as const, replies: [] });
+      if (!matches.length) return observed({ available: true as const, status: "not_observed" as const, reachedHistoryEnd: next === null,
+        nextCursor: next ? encodeReplyCursor(input, { stage: "search", nativeCursor: next }) : null, replies: [] });
       ({ turnId } = matches[0]!); userItemId = matches[0]!.item.id;
     }
     const page = await read("thread/items/list", { turnId, cursor: replyCursor, limit: 50, sortDirection: "asc" });
@@ -84,10 +99,10 @@ export async function queueMcpReadReply(options: QueueMcpOptions, raw: ReplyInpu
     const summaries = turns.data as Record<string, unknown>[];
     if (new Set(summaries.map(t => t.id)).size !== summaries.length) return unavailable("reply_invalid_turns");
     const turn = summaries.find(t => t.id === turnId);
-    return { available: true as const, status: "observed" as const, association: "same_turn_not_exclusive" as const,
+    return observed({ available: true as const, status: "observed" as const, association: "same_turn_not_exclusive" as const,
       threadId: input.threadId, clientMessageId: input.clientMessageId, turnId, userItemId, turnStatus: turn?.status ?? "unverified",
       replies: finalReplies(rows), nextCursor: next ? encodeReplyCursor(input, { stage: "replies", turnId, userItemId, nativeCursor: next }) : null,
-      refreshCursor: encodeReplyCursor(input, { stage: "replies", turnId, userItemId, nativeCursor: null }) };
+      refreshCursor: encodeReplyCursor(input, { stage: "replies", turnId, userItemId, nativeCursor: null }) });
   } catch { return unavailable("reply_read_unavailable"); }
   finally { budget.dispose(); }
 }

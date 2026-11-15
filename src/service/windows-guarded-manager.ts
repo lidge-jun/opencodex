@@ -29,9 +29,15 @@ import { cachedCurrentWindowsIdentity, resolveCurrentWindowsPrincipal, WINDOWS_P
 import { statusWinswRaw, winswExePath, WINSW_SERVICE_ID, type WinswStatus } from "../lib/winsw";
 import type { GuardedManagerStopped, GuardedManagerTarget } from "./guarded-manager-target";
 import { TASK, windowsLauncherVbsPath, windowsServiceScriptPath } from "./state";
+import { bindWindowsStopWrappers } from "./windows-stop-binding";
 import { probeWindowsSchedulerTask, querySchtasks, type WindowsSchedulerTaskProbe } from "./windows-scheduler";
 import { windowsWscript } from "./windows-wscript";
 import { windowsTaskRegistrationHealthy, windowsTaskRegistrationRefreshableLegacy } from "./windows-taskxml";
+import { commandLineHasPathToken } from "./windows-command-line-token";
+
+// Re-exported for existing importers; the function lives in a leaf module to keep the binding rule
+// (windows-stop-binding.ts) free of an import cycle with this inspection.
+export { commandLineHasPathToken };
 
 /** Runtime table of one Win32 process; a null parent means the chain is unreadable. */
 export interface WindowsProcessEntry {
@@ -57,7 +63,14 @@ export interface WindowsWinswServiceInfo {
  * default implementation exits early off win32, mirroring probeWindowsSchedulerTask.
  */
 export interface WindowsGuardedManagerDeps {
+  /**
+   * The table may carry creation times (windowsProcessSnapshot, #7771): only then can a
+   * surviving wrapper of a not-running task be bound (bound-stray). A table without them
+   * leaves every such wrapper unreadable, which stays unknown.
+   */
   winProcs?: () => WindowsProcessEntry[] | null;
+  /** The Task Scheduler service host PID from the SCM, for the binding rule's lineage. */
+  winSchedulePid?: () => number | null;
   winTaskXml?: () => string;
   winTaskState?: () => WindowsTaskState;
   /**
@@ -216,26 +229,6 @@ export function currentWindowsTaskUserIds(): readonly string[] | null {
   }
 }
 
-/**
- * True when path appears in commandLine as a COMPLETE token — the same boundary
- * rule the windows-service-wrappers kill list uses, ported so the read-only proof
- * cannot accept a substring hit. A quoted path inside an argument string counts;
- * a suffix or prefix glued to it does not.
- */
-export function commandLineHasPathToken(commandLine: string | null | undefined, path: string): boolean {
-  if (!commandLine || !path) return false;
-  const haystack = commandLine.toLowerCase();
-  const needle = path.toLowerCase();
-  const boundary = (ch: string | undefined): boolean => ch === undefined || /[\s"']/.test(ch);
-  let index = 0;
-  for (;;) {
-    index = haystack.indexOf(needle, index);
-    if (index < 0) return false;
-    const end = index + needle.length;
-    if (boundary(haystack[index - 1]) && boundary(haystack[end])) return true;
-    index = end;
-  }
-}
 
 function resolveWindowsDeps(deps: WindowsGuardedManagerDeps, live: boolean): ResolvedWindowsDeps {
   // "live" is false whenever the caller simulated platform win32 (tests or a future
@@ -257,6 +250,7 @@ function resolveWindowsDeps(deps: WindowsGuardedManagerDeps, live: boolean): Res
     winScriptPath: deps.winScriptPath ?? windowsServiceScriptPath,
     winLauncherPath: deps.winLauncherPath ?? windowsLauncherVbsPath,
     winWinswExePath: deps.winWinswExePath ?? winswExePath,
+    winSchedulePid: deps.winSchedulePid ?? (() => null),
   };
 }
 
@@ -380,8 +374,42 @@ export function unreadableWrappersOfManager(managerPid: number, processes: reado
   }).map(entry => entry.pid);
 }
 
-function unknown(reason: string): GuardedManagerTarget {
-  return { kind: "unknown", reason };
+function unknown(reason: string, stopReason?: "unbound-wrapper" | "evidence-unreadable"): GuardedManagerTarget {
+  return stopReason ? { kind: "unknown", reason, stopReason } : { kind: "unknown", reason };
+}
+
+/**
+ * A registered task that is not running, with wrappers of this home still alive (#7771,
+ * 030 "Guarded (consent) path"). The checked stop's binding rule decides: when every
+ * surviving wrapper is bound (wrapper image, this home's path token, lineage, a creation
+ * time) the state is bound-stray and reaches Part A; anything it cannot bind stays
+ * unknown, naming unbound-wrapper or evidence-unreadable.
+ */
+function bindStrayWrappers(
+  approvedPid: number,
+  processes: readonly WindowsProcessEntry[],
+  strays: readonly number[],
+  io: ResolvedWindowsDeps,
+): GuardedManagerTarget {
+  const binding = bindWindowsStopWrappers({
+    processes: processes.map(entry => ({ ...entry, startTime: (entry as { startTime?: number | null }).startTime ?? null })),
+    canonicalPaths: wrapperPaths(io),
+    childPid: approvedPid,
+    taskRegistered: true,
+    managerRegistered: true,
+    scheduleServicePid: io.winSchedulePid(),
+  });
+  if (binding.unreadable.length > 0) {
+    return unknown("a surviving scheduler wrapper has unreadable evidence", "evidence-unreadable");
+  }
+  const bound = new Set(binding.bound.map(wrapper => wrapper.pid));
+  if (binding.unbound.length > 0 || strays.some(pid => !bound.has(pid))) {
+    return unknown("a surviving scheduler wrapper could not be tied to the registered task", "unbound-wrapper");
+  }
+  return {
+    kind: "bound-stray", pid: approvedPid, backend: "scheduler", childNeedsSeparateStop: true,
+    wrappers: binding.bound.map(wrapper => ({ pid: wrapper.pid, startTime: wrapper.startTime })),
+  };
 }
 
 function inspectWindowsSchedulerManager(
@@ -394,16 +422,14 @@ function inspectWindowsSchedulerManager(
   const ancestors = ancestorWrapperPids(approvedPid, processes, paths);
   const strays = wrapperProcessesAlive(processes, paths);
   if (unreadableAncestorWrapperPids(approvedPid, processes).length > 0) {
-    return unknown("a possible scheduler wrapper has an unreadable command line");
+    return unknown("a possible scheduler wrapper has an unreadable command line", "evidence-unreadable");
   }
-  // A registration that cannot run anything owes only the stray-wrapper check.
-  // That covers BOTH a not-running task and a task proven deleted between the
-  // caller's presence probe and this inspection: in either case nothing
-  // registered can respawn the proxy, while a surviving wrapper still can —
-  // schtasks /end would report success on the inert task and leave it alive.
+  // A registration that cannot run anything owes only the stray-wrapper check: nothing
+  // registered can respawn the proxy, while a surviving wrapper still can — schtasks /end
+  // would report success on the inert task and leave it alive.
   const inertVerdict = (): GuardedManagerTarget => strays.length === 0
     ? { kind: "absent" }
-    : unknown("a surviving scheduler wrapper could not be tied to the registered task");
+    : unknown("a surviving scheduler wrapper could not be tied to the registered task", "unbound-wrapper");
   const state = io.winTaskState();
   if (state === "unknown") {
     // Missing vs unreadable: the state query also fails for a task deleted
@@ -413,7 +439,24 @@ function inspectWindowsSchedulerManager(
       ? inertVerdict()
       : unknown("the registered task's running state could not be proven");
   }
-  if (state === "not-running") return inertVerdict();
+  if (state === "not-running") {
+    // Only a registration that is provably this installation's definition may promote its
+    // survivors to bound-stray (#7771). The state word alone says the task is inert; it does
+    // not say the task is ours — a same-named foreign task would otherwise make this home's
+    // hand-started wrappers terminable. Reading the definition costs nothing when nothing
+    // survived, so a clean inert task keeps the absent verdict without a read.
+    if (strays.length === 0) return { kind: "absent" };
+    let xml: string;
+    try {
+      xml = io.winTaskXml();
+    } catch {
+      return unknown("the Task Scheduler registration of the surviving wrappers could not be read", "evidence-unreadable");
+    }
+    if (!io.winRegistrationOurs(xml, io.winTaskUserIds())) {
+      return unknown("the registered task is not a recognized OpenCodex definition");
+    }
+    return bindStrayWrappers(approvedPid, processes, strays, io);
+  }
   // Only the running path needs the registered definition: an unreadable
   // registration cannot prove the task is ours, but it must not hold an
   // otherwise-provable inert verdict unknown.
@@ -502,21 +545,21 @@ export function inspectWindowsGuardedManager(
     const processes = io.winProcs();
     if (processes === null) return unknown("the Windows process list could not be read");
     if (unreadableAncestorWrapperPids(approvedPid, processes).length > 0) {
-      return unknown("a possible scheduler wrapper has an unreadable command line");
+      return unknown("a possible scheduler wrapper has an unreadable command line", "evidence-unreadable");
     }
     return wrapperProcessesAlive(processes, wrapperPaths(io)).length === 0
       ? { kind: "absent" }
-      : unknown("a surviving scheduler wrapper could not be tied to an installed manager");
+      : unknown("a surviving scheduler wrapper could not be tied to an installed manager", "unbound-wrapper");
   }
   // scheduler absent + winsw nonexistent — still have to rule out a detached wrapper.
   const processes = io.winProcs();
   if (processes === null) return unknown("the Windows process list could not be read");
   if (unreadableAncestorWrapperPids(approvedPid, processes).length > 0) {
-    return unknown("a possible scheduler wrapper has an unreadable command line");
+    return unknown("a possible scheduler wrapper has an unreadable command line", "evidence-unreadable");
   }
   return wrapperProcessesAlive(processes, wrapperPaths(io)).length === 0
     ? { kind: "absent" }
-    : unknown("a surviving scheduler wrapper could not be tied to an installed manager");
+    : unknown("a surviving scheduler wrapper could not be tied to an installed manager", "unbound-wrapper");
 }
 
 export interface WindowsGuardedStopDeps {

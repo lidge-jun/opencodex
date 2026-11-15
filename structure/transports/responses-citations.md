@@ -7,7 +7,7 @@ independent projection. The ordinary HTTP/WS adapter in
 `src/adapters/openai-responses/passthrough.ts` applies citation repair only after destination
 classification.
 
-The direct native `/responses/compact` path in `src/server/responses/compact.ts` applies the same
+The direct native `/responses/compact` path in `src/server/responses/compact.ts` also captures display-only key rate-limit headers at the physical boundary and applies the same
 gate in its final body builder for every physical send, including a provider destination refreshed
 after key admission. It keeps the shared history free of citation repair so an OpenAI-to-gateway
 refresh preserves the gateway's original annotations and the reverse refresh still repairs OpenAI
@@ -17,5 +17,11 @@ gateway preservation and both refresh directions;
 `tests/responses/responses-native-item-extensions-compact.test.ts` covers official API and ChatGPT
 compact repair, while `tests/responses/responses-url-citation-title-repair.test.ts` covers ordinary
 HTTP/WS projection, helper independence and input immutability.
+
+The same final compact body builder applies the captured exact-model custom-tool policy after
+destination-specific citation projection, and only for an explicit `false`: with no declaration
+the compact body keeps every custom tool and its history unchanged. A custom-tool history compatibility refusal returns
+HTTP 400 before network dispatch and releases host admission without recording a transport failure.
+`tests/responses/model-custom-tool-capability.test.ts` covers lowering and collision refusal.
 
 The separate [Responses include normalization](responses-wire-shapes.md) is gated to xAI and Meta; it does not change this projection or its destination boundary.

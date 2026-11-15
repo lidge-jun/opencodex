@@ -50,7 +50,7 @@ service. It does not continue extracting into a deleted stage after recovery sta
 
 If installer exit cannot be confirmed, the update fails and keeps the staging folder and
 its ownership marker. Confirm that no installer or OpenCodex process runs from that folder
-before removing it. A retained folder does not prevent another update attempt.
+before removing it. A retained folder does not prevent another update attempt; a leftover update marker can, see [If every update and sync says update-in-flight](#if-every-update-and-sync-says-update-in-flight).
 
 Check your registry connection if the install repeatedly exceeds the budget, then retry
 `ocx update`. Increasing the budget is not needed to clean up a timed-out install safely.
@@ -97,6 +97,43 @@ ownership marker. Delete a leftover only after confirming that no OpenCodex proc
 
 If a folder will not delete, a process is still running from it. Signing out or restarting Windows
 releases the lock.
+
+## If every update and sync says update-in-flight
+
+If every `ocx update` and `ocx sync` fails with `update-in-flight`, even after waiting, restarting
+the service or rebooting, an interrupted update may have left its marker behind
+([#8524](https://github.com/lidge-jun/opencodex/issues/8524)). The marker is
+`update-orchestrated.json` in the OpenCodex home (`%USERPROFILE%\.opencodex` on Windows,
+`~/.opencodex` elsewhere).
+
+Current releases record the Windows installer's supervisor in the marker. The marker then clears
+by itself once the 15-minute fence has passed and that supervisor and the launcher are gone.
+Releases up to 2.100.x did not record the supervisor. A marker they left after an interrupted
+update (a closed console, Ctrl+C, Task Manager, sleep or power loss) cannot be checked, so it never
+clears by itself. When that is the cause, `ocx update` and `ocx sync` in a terminal print the
+marker's path and the rename command after `update-in-flight`. The dashboard, Desktop and Remote
+Link only report `update-in-flight`, so run `ocx update` in a terminal to see the guidance.
+
+Before you rename the marker, make sure no update is running:
+
+1. No `ocx update` or dashboard update is in progress in another window.
+2. No `npm`, `pnpm` or `bun` global install is running. On Windows, check Task Manager for
+   `node.exe` running npm and for a `powershell.exe` whose command line contains `npm-install-job.ps1`.
+3. Then rename the marker (renaming keeps a copy) and run `ocx update` again:
+
+   ```bat
+   ren "%USERPROFILE%\.opencodex\update-orchestrated.json" update-orchestrated.json.stale
+   ```
+
+   ```bash
+   mv -n ~/.opencodex/update-orchestrated.json ~/.opencodex/update-orchestrated.json.stale
+   ```
+
+Use the exact path the error prints if `OPENCODEX_HOME` points somewhere else. If that path contains
+characters a shell could expand or interpret, or on Windows anything other than plain ASCII, the error names the file
+without a command; rename it by hand. A marker that is
+still inside its fence, or whose recorded process is still running, does not print this guidance.
+In that case, wait or let the running update finish.
 
 ## If the update reports an UNSUPERVISED proxy
 
@@ -150,6 +187,41 @@ stops with `cache_root_dangling_link` or `cache_root_not_directory` and leaves t
 Then run `ocx update` again. If `ENOTDIR` persists after the check passes, open an issue with the
 full terminal output of `ocx update` and the output of `npm config get prefix` and
 `npm config get cache`.
+
+## If a pnpm update says the path looks like a pnpm global store
+
+pnpm 11 and 12 install global packages as a link into the pnpm store (for example
+`~/Library/pnpm/store/v11/links/...` on macOS or `~/.local/share/pnpm/store/v11/links/...`
+on Linux). The updater accepts such an install only when pnpm itself names the store it uses: it runs
+`pnpm store path` for your pnpm home and checks that the installed package lies inside that store.
+A store-like path, marker files or `.modules.yaml` are never enough on their own.
+
+If that check cannot be made when the updater first identifies your install, the update stops before
+it installs or removes anything (pnpm's store query itself may create an empty store folder). The
+message includes `this install's path looks like a pnpm global store`
+and then the command to run instead. The updater repeats the store check after `pnpm add`; if pnpm's
+store answer no longer passes at that point, the update stops without a rollback, because the updater
+can no longer confirm which store a rollback would write to. Check `ocx --version`, then use the
+pnpm command below.
+
+Common causes:
+
+- pnpm is older or newer than the versions whose store behavior was checked (11 and 12). Run
+  `pnpm --version`.
+- `PNPM_HOME`, or a folder above it, is a symbolic link, or pnpm prints a store path that is
+  not a single absolute `v<N>` folder.
+- On Windows, the pnpm home, the global folders or the store path contain one of `"%!^&|<>`, which
+  cmd.exe cannot pass to pnpm safely.
+- The global group sits under a folder whose name merely looks like a store (a `v<N>/links`
+  folder, or pnpm's `files` and `index` markers) without being the store pnpm reports.
+
+In each case, update with pnpm itself and then restart the proxy:
+
+```bash
+pnpm add -g @bitkyc08/opencodex@latest
+```
+
+A default pnpm 11 or 12 setup passes this check and updates normally with `ocx update`.
 
 ## Desktop app update stalls or fails on "Installing update…"
 

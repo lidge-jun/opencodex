@@ -1,4 +1,4 @@
-import type { ProxyRestartStartOutcome } from "./tray-proxy";
+import type { ProxyRestartIo, ProxyRestartStartOutcome } from "./tray-proxy";
 import type { RestartSupervisor } from "./restart-failure";
 /**
  * Registry-driven command dispatch (Phase 3 of the CLI deepening).
@@ -21,11 +21,11 @@ import { printUnknownCommand } from "./help-recovery";
 import {
   HUB_GATED_SKIP_MESSAGE,
   localClientSkipMessage,
-  setIntegrationEnabled,
   shouldSyncCodexOnStart,
   type LocalClientSkipReason,
 } from "../codex/desired-state";
 import { siblingSkipMessage } from "../codex/sibling-start";
+import { setHomeIntegrationEnabled, type HomeIntegrationResult } from "../routing/home-route-capture";
 import { syncModelsToCodex } from "../codex/sync";
 import { collectOrcaCodexHomeDiagnostic } from "../codex/home";
 import { restoreNativeCodexAsync, type CodexNativeRestoreResult } from "../codex/inject";
@@ -35,6 +35,7 @@ import { normalizeUpdateChannel, runGuiUpdateWorker } from "../update/job";
 import { isJsonOption, takeFlag } from "./runtime-api";
 import { printStopSummary, type StopOutcome } from "./stop-report";
 import { parseStopApproval, type StopApproval } from "./stop-approval";
+import { resolveStopDeadlineMs, setStopDeadlineMs } from "../service/windows-stop-deadline";
 import type { ResolveArgs } from "./resolve";
 import type { ClientConnectionState } from "../client/state";
 import { OCX_NATIVE_REPLAY_RECOVERY_NOTE } from "../responses/compaction";
@@ -60,7 +61,8 @@ export interface CliDispatchDeps {
   handleTrayProxyStart: (existingIsSuccess?: boolean) => Promise<boolean>;
   handleTrayProxyRestart: () => Promise<void>;
   handleRestartStartWhenStopped: (recoveringLiveRestart?: boolean) => Promise<ProxyRestartStartOutcome>;
-  handleProxyRestart: (startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>, onSupervised?: (supervisor: RestartSupervisor) => void) => Promise<boolean>;
+  /** `bindIo` lets a caller bind the restart to one target (ocx disconnect: src/cli/disconnect-runtime.ts). */
+  handleProxyRestart: (startWhenStopped: (recoveringLiveRestart: boolean) => Promise<ProxyRestartStartOutcome>, onSupervised?: (supervisor: RestartSupervisor) => void, bindIo?: (io: ProxyRestartIo, deadlineAt: number) => ProxyRestartIo) => Promise<boolean>;
   handleUninstall: () => Promise<void>;
   handleStatus: () => Promise<void>;
   handleRecoverHistory: () => Promise<void>;
@@ -89,6 +91,12 @@ export function selectDefaultGuiUrl(
   return `http://${guiHost}:${live?.port ?? config.port ?? 10100}`;
 }
 
+/** An unavailable route-intent file names the file to repair; the other refusals keep their reason. */
+function desiredStateRefusal(desired: Extract<HomeIntegrationResult, { ok: false }>): string {
+  return desired.reason === "unavailable" ? `Codex desired state was not saved (unavailable): ${desired.message}`
+    : `Codex desired state was not saved (${desired.reason}).`;
+}
+
 const commandRunners: Record<string, CommandRunner> = {
   init: async () => {
     const { runInit } = await import("./init");
@@ -110,9 +118,11 @@ const commandRunners: Record<string, CommandRunner> = {
   stop: async deps => {
     const parsed = parseStopApproval(deps.args.slice(1));
     if (!parsed.ok) {
-      console.error("Usage: ocx stop [--json [--expect-pid <pid> --expect-port <port> --expect-hostname <host> --expect-config-home <home> --expect-cli-version <version> --expect-compatibility-token <hex>]]");
+      console.error("Usage: ocx stop [--deadline-ms <ms>] [--json [--expect-pid <pid> --expect-port <port> --expect-hostname <host> --expect-config-home <home> --expect-cli-version <version> --expect-compatibility-token <hex>]]");
       return 64;
     }
+    // #7771: the Windows checked stop's deadline, from this process's start (flag, then env, then 60 s).
+    setStopDeadlineMs(resolveStopDeadlineMs(parsed.deadlineMs));
     // Downtime warning lives HERE, not in handleStop: `restart`/tray-restart callers
     // re-start the proxy immediately, so warning there would contradict the next line.
     const warning = "⚠️  Codex/Claude requests through the proxy will fail until it is restarted ('ocx start' or 'ocx service start').";
@@ -173,13 +183,13 @@ const commandRunners: Record<string, CommandRunner> = {
       if (!live) {
         return emitBack(false, "No running proxy found. Run 'ocx start' — it injects opencodex automatically.", 1);
       }
-      const desired = setIntegrationEnabled("codex", true);
+      const desired = setHomeIntegrationEnabled("codex", true);
       if (!desired.ok) {
-        return emitBack(false, `Codex desired state was not saved (${desired.reason}).`, desired.reason === "conflict" ? 2 : 1);
+        return emitBack(false, desiredStateRefusal(desired), desired.reason === "conflict" ? 2 : 1);
       }
       const synced = await syncModelsToCodex(live.port);
       if (synced.status === "skipped") {
-        // `setIntegrationEnabled` above just committed ON, so a skip here is NOT the toggle and
+        // `setHomeIntegrationEnabled` above just committed ON, so a skip here is NOT the toggle and
         // is not a competing writer either — on a hub it is the role gate. Telling the operator
         // to "retry after the competing integration change finishes" sent them waiting for a
         // writer that does not exist (#4236).
@@ -200,15 +210,15 @@ const commandRunners: Record<string, CommandRunner> = {
     if (removeProviderTable && !restoreJson) {
       console.log("⚠️  Removing [model_providers.opencodex] means conversations already tagged opencodex will stop opening.");
     }
-    const desired = setIntegrationEnabled("codex", false);
+    const desired = setHomeIntegrationEnabled("codex", false);
     if (!desired.ok) {
       if (restoreJson) {
         // Machine-readable contract: every restore --json outcome emits one
         // schema-complete envelope on stdout, including pre-machinery failures.
         const { skippedRestoreEnvelope } = await import("../codex/inject");
-        console.log(JSON.stringify(skippedRestoreEnvelope(false, `Codex desired state was not saved (${desired.reason}).`)));
+        console.log(JSON.stringify(skippedRestoreEnvelope(false, desiredStateRefusal(desired))));
       } else {
-        console.error(`Codex desired state was not saved (${desired.reason}).`);
+        console.error(desiredStateRefusal(desired));
       }
       return desired.reason === "conflict" ? 2 : 1;
     }
@@ -423,7 +433,35 @@ const commandRunners: Record<string, CommandRunner> = {
   },
   disconnect: async deps => {
     const { handleDisconnectCommand } = await import("./connect");
-    return await handleDisconnectCommand(deps.args.slice(1));
+    const code = await handleDisconnectCommand(deps.args.slice(1));
+    // Token recovery refuses any live client runtime and leaves nothing to restart.
+    if (code !== 0 || deps.args.includes("--orphaned-token")) return code;
+    const { bindRestartToRuntime, restartRuntimeAfterDisconnect } = await import("./disconnect-runtime");
+    const { observeProxyLiveness } = await import("../server/proxy-liveness");
+    const { readClientConnectionStateWithEvidence } = await import("../client/state");
+    const { readRuntimePort } = await import("../config/process-state");
+    const { requestBoundSystemRestart } = await import("./system-restart-client");
+    return await restartRuntimeAfterDisconnect({
+      observe: () => observeProxyLiveness({ attempts: 2 }),
+      capture: live => {
+        if (live.pid === null) return null;
+        const record = readRuntimePort(live.pid);
+        return record?.attestationSecret && record.pid === live.pid && record.port === live.port
+          ? { ...record, attestationSecret: record.attestationSecret } : null;
+      },
+      connectionState: () => {
+        const state = readClientConnectionStateWithEvidence();
+        return state.kind === "invalid" || state.kind === "mismatched" ? { kind: state.kind, reason: state.reason } : { kind: state.kind };
+      },
+      restart: async target => {
+        let refusedBy: "service-unproven" | undefined;
+        const ok = await deps.handleProxyRestart(deps.handleRestartStartWhenStopped, supervisor => { if (supervisor === "service-unproven") refusedBy = supervisor; }, (io, deadlineAt) =>
+          bindRestartToRuntime(io, target, (previous, readRuntime) =>
+            requestBoundSystemRestart(previous as Parameters<typeof requestBoundSystemRestart>[0], deadlineAt, { readRuntime: readRuntime as typeof readRuntimePort })));
+        return { ok, ...(refusedBy ? { refusedBy } : {}) };
+      },
+      json: deps.args.includes("--json"),
+    });
   },
   catalog: async deps => {
     const { handleCatalogCommand } = await import("./catalog");
@@ -752,8 +790,12 @@ const commandRunners: Record<string, CommandRunner> = {
     return await handleCompanionCommand(deps.args.slice(1), { findLiveProxy: deps.findLiveProxy });
   },
   route: async deps => {
+    if (deps.args[1] === "to") {
+      const { handleRouteToCommand } = await import("./route-to");
+      return await handleRouteToCommand(deps.args.slice(2), { findLiveProxy: deps.findLiveProxy });
+    }
     if (deps.args[1] !== "combo" && deps.args[1] !== "policy") {
-      console.error("Usage: ocx route <combo|policy> <subcommand>");
+      console.error("Usage: ocx route <to|combo|policy> <subcommand>");
       return 2;
     }
     if (deps.args[1] === "combo") {

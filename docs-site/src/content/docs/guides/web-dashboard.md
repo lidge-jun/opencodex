@@ -21,6 +21,11 @@ you can run the GUI dev server separately against a running proxy:
 
 ```bash
 ocx start
+```
+
+Keep the proxy running in that terminal. In a second terminal, start the GUI dev server:
+
+```bash
 bun run dev:gui
 ```
 
@@ -37,13 +42,48 @@ password manager can offer to save and autofill it. The dashboard itself still k
 in memory and does not write it to `localStorage` or `sessionStorage`; whether it is saved is entirely
 the browser or password manager's decision.
 
-**Remember this device** is off by default. On a direct HTTPS dashboard (or local loopback), it exchanges the admin token for a server-issued HttpOnly, SameSite=Strict device cookie plus a separate device proof stored in this site's localStorage. HTTPS cookies are Secure and host-only. Neither the cookie nor the proof is the admin token, and neither works alone. Cookies are shared across ports of the same hostname; the origin-scoped proof binds the remembered device to this dashboard origin. Still prefer a dedicated hostname. The admin token is never written to localStorage or sessionStorage. If browser storage is unavailable or cannot save the proof, Remember reports unavailable. On a standalone dashboard behind a TLS-terminating reverse proxy, OpenCodex sees a plain HTTP request, so it refuses Remember for that address; the sign-in dialog says so and turns the option off, and signing in without Remember still works. A trusted Hub management listener is the exception and can still remember devices.
+**Remember this device** is off by default. On a direct HTTPS dashboard (or local loopback), it exchanges the admin token for a server-issued HttpOnly, SameSite=Strict device cookie plus a separate device proof stored in this site's localStorage. HTTPS cookies are Secure and host-only. Neither the cookie nor the proof is the admin token, and neither works alone. Cookies are shared across ports of the same hostname; the origin-scoped proof binds the remembered device to this dashboard origin. Still prefer a dedicated hostname. The admin token is never written to localStorage or sessionStorage. If browser storage is unavailable or cannot save the proof, Remember reports unavailable. On a standalone dashboard behind a TLS-terminating reverse proxy, OpenCodex sees a plain HTTP request, so by default it refuses Remember for that address; the sign-in dialog says so and turns the option off, and signing in without Remember still works. To allow it, name that one proxy with `dashboardTrustedProxy` (see [Remember behind a reverse proxy](#remember-behind-a-reverse-proxy)). A trusted Hub management listener can also remember devices.
 
 The private dashboard-sessions.json stores hashes of the cookie, proof, admin credential and browser identity, the server origin and a fixed 30-day expiry. Relaunching the Safari home-screen app resumes a short-lived GUI session while that device record is valid. Remembered sessions cannot approve consent actions: GitHub stars, reset-credit consumption, prompt-layer edits, Meta Muse sign-in, desktop compatibility changes or quota validation. Use a fresh local or paired session for those actions. Cross-origin/relayed dashboards and remote plaintext HTTP do not support Remember. Expiry, a browser identity change, or rotating the admin token and restarting the server requires sign-in again.
 
 Successful **Forget this device** in the sidebar or mobile action bar (and session logout) immediately revokes the record and all sessions resumed from it, and removes the browser proof. Failed logout keeps the proof so you can retry. The server syncs the record contents before publishing the change; directory-entry durability after a crash is best effort. Older remembered bearer-token keys are removed without being read or migrated. Use only on a device you trust. This does not make Safari offer password AutoFill.
 
 An already-issued session that is otherwise valid can still **Forget this device** after a browser User-Agent change; ordinary access and resumption continue to require the original browser identity.
+
+### Remember behind a reverse proxy
+
+This is opt-in and applies to a standalone instance only. Tell OpenCodex the exact origin the browser
+uses and the addresses the proxy connects from:
+
+```json
+"dashboardTrustedProxy": {
+  "origin": "https://ocx.example.com",
+  "proxyAddresses": ["192.168.1.20"],
+  "trustHeaders": ["x-forwarded-proto"]
+}
+```
+
+- `origin` must be one exact `https://` origin. An `http://` origin, a wildcard, a path or
+  credentials are refused.
+- `proxyAddresses` are the proxy's own IP addresses as this machine sees them (`127.0.0.1` when the
+  proxy runs on the same host). Ranges, wildcards and host names are refused. A request from any
+  other address is never treated as proxied, whatever headers it carries.
+- By default the browser's host is read from `Host`, so the proxy must pass the original `Host`
+  through (Caddy does by default). List `x-forwarded-host` in `trustHeaders` to read it from
+  `X-Forwarded-Host` instead, and `x-forwarded-proto` to also require `X-Forwarded-Proto: https`.
+- An `X-Forwarded-Host` or `X-Forwarded-Proto` value that contradicts the configured origin, or that
+  lists more than one hop, refuses the request even when that header is not trusted.
+- If the origin carries a non-default port and you trust `x-forwarded-host`, the proxy must forward
+  the port as well (in nginx, `$http_host` rather than `$host`); otherwise the request is refused.
+- If the same proxy also answers plain HTTP for this host, trust `x-forwarded-proto` so a plaintext
+  request is refused instead of being treated as the HTTPS origin.
+- The setting is honored only on a non-loopback bind, where the admin token is required. A Hub
+  ignores it and uses its management listener instead.
+
+Remember still needs the admin token; a client certificate checked by the proxy grants nothing on its
+own. The Origin checks, the 30-day expiry, Forget and the consent restrictions above are unchanged.
+`ocx config set` refuses a malformed value with the reason, and a malformed hand edit disables the
+setting. Restart OpenCodex after changing it.
 
 ### Finding the admin token
 
@@ -131,7 +171,19 @@ is visible) and never forces an upstream refresh.
   popover and returns focus to the chip when focus was inside the popover.
 - The bar always stays on one line. When the chips do not fit, scroll it sideways or use the « and
   » buttons at either end.
-- Providers that report no quota window are left out. The bar is hidden when no provider reports one.
+- After an eligible proxied API-key response from OpenAI, xAI, Groq, Anthropic, or Mistral, separate
+  key and model chips show the expected request and token dimensions. Missing header fields appear
+  as **Unknown**, including when the response has no rate-limit headers. Prior measured values
+  retain their original observation time and become stale at their reset; the server retains each
+  observation for at most 24 hours. A failed dashboard poll can still show the previous snapshot.
+  These display-only readings do not trigger probes or affect routing. For a keychain-backed key,
+  the reading is tied to the credential already cached by routing and is withheld when that identity
+  cannot be verified. An external keychain replacement is not visible until routing's cache is
+  invalidated; until then routing and the reading still use the cached credential. When that cache
+  is cleared, readings are withheld until routing rereads each key. A matching reread can restore
+  retained readings; responses received while the key is unverified are discarded.
+- Providers with neither a quota report nor a retained passive key observation are left out. The bar
+  is hidden when neither is available.
 - The right edge shows when the dashboard last read the reports. It turns amber when the latest
   read failed and the previous reading is still shown.
 
@@ -148,10 +200,10 @@ is visible) and never forces an upstream refresh.
 | **Windows tray** | Install a per-user login tray for one-click proxy start, stop, restart, dashboard access, and status. The tray is a controller, not a proxy restart service. |
 | **Codex autostart** | Allow an already-installed Codex launcher shim to run `ocx ensure`. This toggle does not install a shim or background service. |
 | **Telemetry** | Toggle **Share anonymous usage statistics** and inspect **Preview the JSON** under **Proxy details** (`#proxy-telemetry`). On first run or after an update while undecided, the consent popup saves a choice only when **Continue** is clicked (`PUT /api/telemetry`); dismissing it records nothing. See [Telemetry and Privacy](/guides/telemetry/). |
-| **Providers** | Add, edit, set the default (enabled providers only), enable/disable, and remove providers; manage OAuth account pools and API-key pools where supported. Removing the current default switches to the first remaining enabled provider when one exists; otherwise deletion is refused and the current default is kept. Provider Settings can disable live model discovery for endpoints with missing, slow, or oversized `/models` catalogs. For Claude (Anthropic) OAuth pools, each logged-in account shows its own 5-hour and weekly rate-limit bars (usage is per credential); a failed probe keeps the last-known bars and marks them unavailable until the next successful refresh. Refreshing quota skips paused OAuth accounts and disabled API keys; skipped rows without a cached reading remain unavailable but do not affect the refresh result. Refreshing reports failure when an unpaused OAuth account or enabled API key that supports quota reads has an unavailable reading. The Provider Overview shown when no provider is selected carries a **Refresh all quotas** control that forces one server-side re-read of every configured provider; a provider whose upstream probe fails keeps its last-good row, so the status line reports that the check completed rather than claiming every value is fresh, and each row's own age stays the per-provider freshness signal. |
+| **Providers** | Add, edit, set the default (enabled providers only), enable/disable, and remove providers; manage OAuth account pools and API-key pools where supported. Removing the current default switches to the first remaining enabled provider when one exists; otherwise deletion is refused and the current default is kept. Provider Settings can disable live model discovery for endpoints with missing, slow, or oversized `/models` catalogs. For Claude (Anthropic) OAuth pools, each logged-in account shows its own 5-hour and weekly rate-limit bars (usage is per credential); a failed probe keeps the last-known bars and marks them unavailable until the next successful refresh. Refreshing quota skips paused OAuth accounts and disabled API keys; skipped rows without a cached reading remain unavailable but do not affect the refresh result. Refreshing reports failure when an unpaused OAuth account or enabled API key that supports quota reads has an unavailable reading. The Provider Overview shown when no provider is selected carries a **Refresh all quotas** control that forces one server-side re-read of every configured provider; a provider whose upstream probe fails keeps its last-good row, so the status line reports that the check completed rather than claiming every value is fresh, and each row's own age stays the per-provider freshness signal. Unsaved Settings and JSON edits are kept in memory per logical dashboard server: switching servers parks the draft, saving writes only to the server where editing began, and a changed saved configuration asks you to keep your draft or use the saved values. Keeping a JSON draft merges only your changes into the latest config and names any field changed on both sides; Settings saves only the fields you changed. On a relay that predates target-bound saves, the dashboard checks the target immediately before sending but cannot verify it atomically, and says so once; update the proxy for the stronger guarantee. Closing or reloading the dashboard discards these drafts. |
 | **Add provider** | One search above the tabs reaches all four at once — Accounts, Free, Local, Paid. While a query is live the results are grouped by tab with a count each, and the selected tab stays put rather than jumping. Press ArrowDown in the search box to focus the first available result action, skipping disabled buttons; if no action is available, focus stays in the search box. Local runtimes (Ollama, vLLM, LM Studio, LiteLLM) have their own tab, and a long provider note clamps to two lines with the full text one click away. Claude Code CLI (subscription) sits under Paid with a Subscription CLI badge, and selecting it warns that it bills the signed-in Claude subscription through `claude -p` and never uses an API key (use `anthropic-apikey` for key billing). |
 | **Codex Auth** | Add ChatGPT/Codex pool accounts, select the next-session account, refresh 5h / weekly / 30d quotas, enable or disable quota auto-switch, set its 1–100% threshold, and configure transient-failure failover. |
-| **Subagents** | Feature up to five bare native or namespaced routed models in the `spawn_agent` override list. The **Workflow limits for subagents** panel sets how many turns one task may run in parallel and how many model requests and distinct subagents it may use per 10-minute window. See [workflow limits](/reference/configuration/server/#workflow-limits). |
+| **Subagents** | Set the first five `spawn_agent` priorities through `subagentModels`, using bare native or namespaced routed models. This is not an allowlist: unused positions may be filled from visible catalog rows. The **Workflow limits for subagents** panel sets how many turns one task may run in parallel and how many model requests and distinct subagents it may use per 10-minute window. See [workflow limits](/reference/configuration/server/#workflow-limits). |
 | **Models** | Toggle native GPT and routed models, set provider allowlists and context caps, choose v1/base/v2, and configure the v2 thread limit. The page distinguishes a catalog saved on the hub, a catalog fetched by this client, and activation in a running client. A fetch timestamp does not prove it includes the latest hub save, and runtime activation is shown as unverified. Configured providers stay visible as zero-model groups when discovery is off or returns no rows. |
 | **Logs** | Auto-refresh recent requests with tokens, requested effort and (when available) effective outbound effort, resolved model, provider, status, request id, duration, and error details. The detail view includes the exact reasoning wire field when the adapter emits one. Filter by opaque conversation/session id (when the client sends one) to total tokens and estimated list-price cost for the currently loaded Logs ring. |
 | **Usage / Debug** | Inspect token-usage coverage and trends. The Usage page's Models table also breaks each model down into input tokens, output tokens, cache hits, cache writes, and cache hit rate; a dash means cache telemetry for that metric is unavailable. Or enable opt-in provider transport and usage-extraction diagnostics. |
@@ -192,7 +244,7 @@ usage in the report.
 
 ### Filtering request logs
 
-Request details prefer a recognized upstream failure cause over generic proxy-error copy. Physical sends are always shown when valid; missing or invalid accounting shows **Unavailable**, not zero. **Retries** counts sends after the first only when one fully settled, consistent attempt is recorded. Multi-attempt, unresolved, inconsistent, or lossy-normalized records omit retries instead of inventing them. Unknown persisted causes use the status-based headline without raw attribution. **Upstream reason** shows a classified provider condition (for example rate limited, quota or credits exhausted, context window exceeded, location not supported, account verification required, or model unavailable), and **Failure detail** shows text written by the proxy, such as a stall timeout or byte-cap limit; new rows do not store the provider's own error text. Older `usage.jsonl` files may still contain it, but the dashboard drops it when reading them.
+Request details prefer a recognized upstream failure cause over generic proxy-error copy. Physical sends are always shown when valid; missing or invalid accounting shows **Unavailable**, not zero. **Retries** counts sends after the first only when one fully settled, consistent attempt is recorded. Multi-attempt, unresolved, inconsistent, or lossy-normalized records omit retries instead of inventing them. Unknown persisted causes use the status-based headline without raw attribution. **Upstream reason** shows a classified provider condition (for example rate limited, quota or credits exhausted, context window exceeded, location not supported, account verification required, or model unavailable), and **Failure detail** shows text written by the proxy, such as a stall timeout or byte-cap limit. When the provider names a published error class or finish reason (for example Gemini or Vertex `INVALID_ARGUMENT`, or `MALFORMED_FUNCTION_CALL`), Failure detail also shows that token; new rows do not store the provider's own error text. Older `usage.jsonl` files may still contain it, but the dashboard drops it when reading them.
 
 A proxy replay refusal keeps HTTP 429 and error code `upstream_reset_replay_refused`, but
 its request and attempt failure cause is `transport-ambiguous`, with resend permission
@@ -216,6 +268,8 @@ The conversation field also accepts a pasted `codex://threads/<id>` deep link, t
 Codex "copy session link" puts on the clipboard — the wrapper and any link metadata such
 as `?hostId=…` are ignored and the bare thread id is matched, the same value an
 `ocx logs filter --conversation` search unwraps.
+It also accepts a remote Claude Code turn's `metadata.user_id`: the per-turn `tk` token
+is ignored, so any turn of a session finds the whole session.
 
 Time windows cover the last 15 minutes, hour, or day and refresh every 30 seconds while the
 Logs tab is active, even with auto-refresh off. Windows use the proxy timestamp from
@@ -260,20 +314,23 @@ upgrade and restart that proxy before retrying. Resetting a manual model price a
 model, preserving other rates saved independently.
 The **Usage** summary and Models/Providers tables show end-to-end output throughput from usage history for the selected range and filters: summed output tokens divided by summed wall-clock seconds, not an average of individual rates. The sample count is measured attempts (or requests for legacy rows without attempts); samples lacking positive finite output tokens or duration are excluded. An em dash means no sample qualified or the server returned an unusable rate. This includes pre-decode waiting and is not estimated decode speed.
 
-The **Usage** Models and Providers tables show the estimated priced portion for each row. Requests
-without a matching price or usable usage are counted as excluded beside that amount when the proxy
-reports pricing coverage fields. Usage that was only partly measured (`unreported` or `unsupported`)
-is not priced, and one excluded part excludes the whole request from that row's priced count. A
-leg that reached no upstream, or that upstream refused with an HTTP error before any output, spent
-nothing and does not; a client cancellation (499), or a leg whose response began or ended without
-a status but reported no usage, may have been billed, so it does. A refusal followed by a measured
-successful send contributes that send's cost to the summary even when the aggregate usage status
-is `unreported`. A row with only excluded requests shows an em dash with that count
-instead of a zero-dollar estimate, and a displayed zero-dollar value is a confirmed priced estimate.
-An older proxy that reports no coverage fields keeps a bare em dash with no count, so missing
-coverage stays distinct from an all-excluded row and from a confirmed zero estimate.
-These are not billing receipts or evidence of an actual charge; subscription usage or provider credits
-may apply instead.
+The **Usage** Models and Providers tables show the estimated priced portion for each row.
+Requests without a matching price or usable usage count as excluded beside that amount when
+the proxy reports pricing coverage fields. Partly measured usage (`unreported` or `unsupported`)
+is not priced; one potentially billable, unpriceable part excludes the whole request from that
+row's priced count. A usage-less leg that never reached an upstream, or was refused with an
+HTTP error before any output and without an aborted stream, is a known zero: it adds no cost
+and does not exclude another measured part of the same request. A client cancellation (499),
+or a leg whose response began or ended without a status and reported no usage, may have been
+billed; its unknown cost does exclude the request from the priced count. A refusal followed
+by a measured successful send contributes that send's cost to the summary even when the
+aggregate usage status is `unreported`. In the overall summary, requests containing only known-zero
+refusals remain unmetered, rather than becoming confirmed zero-dollar estimates. A row with only excluded
+requests shows an em dash with that count instead of a zero-dollar estimate. A displayed
+zero-dollar value is a confirmed priced estimate. An older proxy that reports no coverage
+fields keeps a bare em dash with no count, distinguishing missing coverage, an all-excluded
+row, and a confirmed zero estimate. These are price-list estimates, not billing receipts or
+evidence of an actual charge; subscription usage or provider credits may apply instead.
 
 Provider model rows may include **unresolved requested model usage**: the saved route sent the
 requested name unchanged to the default provider. These tokens belong to that serving provider,
@@ -321,11 +378,7 @@ badges and discovery information remain separate from that count.
 
 ## Delegation picker vs spawn routing
 
-The Dashboard's **Sub-agent delegation** picker stores `injectionModel` and, optionally,
-`injectionEffort`. **OpenCodex multi-agent guidance** independently controls the delegation
-instructions that use those values. On eligible v2 turns, that guidance tells the parent
-agent which exact model and reasoning effort to pass to `spawn_agent`; clearing the model also clears
-the stored effort.
+The Dashboard's **Sub-agent delegation** picker stores advisory `injectionModel` and optional `injectionEffort` preferences. **OpenCodex multi-agent guidance** independently controls whether they appear in delegation guidance on eligible v2 turns. The built-in text names preferences without ordering model overrides; it does not guarantee what Codex passes to `spawn_agent`. Clearing the model also clears the effort.
 
 The default-off **Use as native Codex subagent defaults** switch applies the same selection to Codex's
 native `[agents]` defaults on the next sync/restart when OpenCodex manages the active Codex routing.
@@ -344,9 +397,11 @@ they have been synchronized. See
 
 In **Connect → API Keys**, every row of the key table has its own delete button, which asks for confirmation in place. Clicking a key can show its full value with a **Copy** button only from an independently authorized session.
 
-### Applying a Codex CLI update over HTTP
+### Applying a Codex CLI update from the dashboard
 
-The CLI-update HTTP API has no dashboard job UI. Its apply route requires a current explicitly paired browser session on trusted loopback ingress, matching Origin and CSRF headers, and `confirmed: true`. Automatic local sign-in, a remembered admin session, an admin token or Tailscale sign-in alone cannot authorize this action.
+**Codex → Codex CLI** checks and updates the Codex CLI installation OpenCodex uses, separately from OpenCodex's own updates; it never touches the Codex desktop app. **Check for update** is read-only: it shows who installed the CLI, whether OpenCodex manages it, the installed and available versions, running Codex sessions, and why an update is refused (for example a version-manager install, an active session, or already current). An update is offered only for an applicable plan, and **Update Codex CLI** stays disabled until you tick the confirmation that only this installation changes. The dashboard applies exactly the plan on screen, then follows the job to its result (updated, not updated, refused, or unclear). An unclear result is never retried or rolled back; check the installation yourself. Running **Check for update** again discards the previous plan and confirmation. A dashboard connected to a Remote Hub shows a notice instead, because the update must run on the computer that owns the installation.
+
+The apply route requires a current explicitly paired browser session on trusted loopback ingress, matching Origin and CSRF headers, and `confirmed: true`. Automatic local sign-in, a remembered admin session, an admin token or Tailscale sign-in alone cannot authorize this action; when apply is refused for that reason the tab shows the local pairing form and the equivalent `ocx system codex-cli-update apply` command.
 
 For standalone local pairing, open the dashboard at its configured literal `http://127.0.0.1:<port>` or `http://[::1]:<port>` origin. Use the existing local pairing form in **Connect → API Keys** or Remote Link setup: run the displayed `ocx gui pair --origin "<browser-origin>"` command locally, then redeem its one-time code in that form. Pairing does not apply an update; a subsequent confirmed API request is still required. A server configured with hostname `localhost`, a wildcard bind, or a connected-client role cannot issue this local pairing authority. Remote pairing does not remove the apply route's trusted-loopback requirement.
 
@@ -380,10 +435,7 @@ original server revalidates its key list. Pending rotations remain available for
 
 The dashboard's management plane is separate from direct client→hub model traffic. **Connect → API Keys** shows pending rotations, displays a replacement secret only once, and requires explicit commit or abort. Browser logout invalidates only the current remote session. Connected usage is the hub store filtered by the client's `apiKeyId`; disconnected usage is local, with no mirroring.
 
-The spawn override guarantee applies to the **built-in** v2 guidance text. A custom
-`injectionPrompt` replaces that text entirely and must include `{{model}}` and `{{effort}}`
-placeholders (and optionally `{{roster}}`) or those values will not appear in the injected
-guidance.
+The **built-in** v2 guidance presents advisory preferences, not a guaranteed spawn override. A custom `injectionPrompt` replaces that text entirely and must include `{{model}}` and `{{effort}}` placeholders, and optionally `{{roster}}`, for those values to appear.
 
 The picker offers enabled native and routed models plus the global Codex effort ladder. The API
 validates the selected effort globally; Codex still validates a spawn effort against the target
@@ -475,7 +527,9 @@ allowed to answer for you:
   similar). The one-time marker stays unwritten, so the real prompt still shows up on your
   next hand-typed run. The agent is told to ask you instead — and to ask as a plain Yes/No
   choice you have to answer, not as a soft aside it can slip past you. If you never get
-  around to answering, the agent is told to re-ask rather than treat your silence as a no.
+  around to answering, silence remains deferred: the agent must not repeat the question in
+  later replies or sessions. A later version may re-arm the CLI deferral under the timing
+  policy in `AGENTS_INSTALL.md`.
 - `POST /api/github/star` answers `403` with `code: "agent_consent_required"` when the proxy
   runs under an agent session and the request has no dashboard browser session. Possessing
   the admin token is not consent: an agent on your machine can read that file.

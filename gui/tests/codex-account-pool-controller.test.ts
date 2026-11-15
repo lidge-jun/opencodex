@@ -97,7 +97,7 @@ test("both cards expose the selection-order control, and pin writes cannot overl
   expect(priorityStart).toBeGreaterThanOrEqual(0);
   expect(priorityEnd).toBeGreaterThan(priorityStart);
   const priorityMutation = hook.slice(priorityStart, priorityEnd);
-  expect(priorityMutation).toMatch(/if \(priorityMutationRef\.current \|\| switchingRef\.current\) return/);
+  expect(priorityMutation).toMatch(/if \(leaseHeld\(priorityMutationRef\.current, epoch\) \|\| leaseHeld\(switchingRef\.current, epoch\)\)/);
   expect(priorityMutation).not.toContain("pauseMutationRef");
 
   const switchStart = hook.indexOf("const switchAccount");
@@ -105,7 +105,7 @@ test("both cards expose the selection-order control, and pin writes cannot overl
   expect(switchStart).toBeGreaterThanOrEqual(0);
   expect(switchEnd).toBeGreaterThan(switchStart);
   const switchMutation = hook.slice(switchStart, switchEnd);
-  expect(switchMutation).toMatch(/if \(switchingRef\.current \|\| priorityMutationRef\.current\) return/);
+  expect(switchMutation).toMatch(/if \(leaseHeld\(switchingRef\.current, epoch\) \|\| leaseHeld\(priorityMutationRef\.current, epoch\)\)/);
 
   // A refused mutation returns "busy", which both call sites drop without a toast, so
   // each control must be unavailable while the other is in flight rather than silently
@@ -127,7 +127,9 @@ test("selecting the pin again releases it through the null selection write", asy
   // state and sends the null selection the server reads as an unpin.
   for (const card of [mainCard, addedCards]) expect(card).toContain("onUnpin");
   expect(pool.match(/onUnpin=\{setUnpinFor\}/g)?.length).toBe(2);
-  expect(pool).toContain("controller.switchAccount(null, { expectedPinnedAccountId: unpinFor.id })");
+  // The confirmation is only actionable while its row is still on the current target;
+  // activeUnpinFor is that present-checked row, so the unpin names the same account.
+  expect(pool).toContain("controller.switchAccount(null, { expectedPinnedAccountId: activeUnpinFor.id })");
   expect(pool).toContain('t("codexAuth.unpinned")');
   expect(modal).toContain("unpin");
 
@@ -184,7 +186,7 @@ test("a nested pool cannot start a second poll loop", async () => {
   const hook = await read("../src/hooks/useCodexAccountPool.ts");
 
   // React forbids conditional hooks, so the fallback instance is created but inert.
-  expect(pool).toContain("useCodexAccountPool(apiBase, !injectedController)");
+  expect(pool).toContain("useCodexAccountPool(apiBase, !injectedController, targetKey)");
   expect(hook).toContain("if (!enabled) return;");
 
   // The component no longer owns loading, polling, or the account list.

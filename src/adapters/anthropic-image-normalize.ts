@@ -37,7 +37,7 @@ const IMAGE_DECODE_PROCESS_CONCURRENCY = IMAGE_NORMALIZE_CONCURRENCY;
 let activeImageDecodes = 0;
 const imageDecodeWaiters: Array<() => void> = [];
 
-async function enterImageDecode(signal?: AbortSignal): Promise<() => void> {
+export async function enterImageDecode(signal?: AbortSignal): Promise<() => void> {
   if (signal?.aborted) throw signal.reason ?? new DOMException("Aborted", "AbortError");
   let transferred = false;
   if (activeImageDecodes >= IMAGE_DECODE_PROCESS_CONCURRENCY) {

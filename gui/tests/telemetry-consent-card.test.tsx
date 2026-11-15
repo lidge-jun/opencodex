@@ -28,7 +28,7 @@ let calls: Array<{ method: string; path: string; body?: unknown }>;
 let failMethods: Set<string>;
 let statusEvents: TelemetryStatusSnapshot[];
 /** When set, PUT /api/telemetry answers with this instead of saving. */
-let putReply: (() => Response) | null;
+let putReply: (() => Response | Promise<Response>) | null;
 
 function makeStatus(overrides: Partial<TelemetryStatusSnapshot> = {}): TelemetryStatusSnapshot {
   return {
@@ -585,3 +585,27 @@ test("a Continue whose request drops reads the status back and closes if the cho
   expect(host.querySelector(".telemetry-consent-card")).toBeTruthy();
   expect(host.querySelector(".telemetry-consent-card .notice-err")?.textContent).toContain("Could not save telemetry preference");
 });
+
+test("Continue shows a spinner while the decision is being saved", async () => {
+  setup();
+  let release!: () => void;
+  putReply = () => new Promise<Response>(resolve => {
+    release = () => resolve(Response.json({ ok: true, ...statusResponse, decision: "accepted" }));
+  });
+  await mountCard();
+  const continueBtn = host.querySelector<HTMLButtonElement>(".telemetry-consent-card .btn-primary")!;
+  expect(continueBtn.querySelector("svg")).toBeNull();
+  await act(async () => {
+    click(continueBtn);
+    await new Promise(r => setTimeout(r, 20));
+  });
+  expect(continueBtn.getAttribute("aria-busy")).toBe("true");
+  expect(continueBtn.disabled).toBe(true);
+  expect(continueBtn.querySelector("svg.animate-spin")).not.toBeNull();
+  await act(async () => {
+    release();
+    await new Promise(r => setTimeout(r, 20));
+  });
+  expect(host.querySelector(".telemetry-consent-card")).toBeNull();
+});
+

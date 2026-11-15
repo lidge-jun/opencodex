@@ -9,8 +9,8 @@ description: 多代理界面、委派引导、首选模型、回退链、原生�
 
 | 字段 | 类型 | 默认值 | 含义 |
 | --- | --- | --- | --- |
-| `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1` 会把目录中的每个模型都标记为 v1；`v2` 会把每个模型都标记为 v2。`default` 会恢复上游固定值（Sol/Terra 为 v2，Luna 为 v1），否则遵循原生 `multi_agent_v2` 标志。适用于新会话。 |
-| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna` | 最多五个裸原生 id、账户限定的 `<selector>/<native-openai-model>` id 或路由 `provider/model` id 会优先显示在子代理选择器中。Subagents 页面只提供裸原生和路由 id，保存时会省略精确的账户限定选项；如需精确选择，请使用 `ocx agent subagents set` 或直接编辑配置。[Astra 一次性升级](/reference/configuration/agents/#astra-roster-upgrade)后，显式空列表会被保留。 |
+| `multiAgentMode?` | `"v1" \| "default" \| "v2" \| "v2-plaintext"` | `"default"` | `v1` 会把目录中的每个模型都标记为 v1；`v2` 会把每个模型都标记为 v2。`default` 会恢复上游固定值（Sol/Terra 为 v2，Luna 为 v1），否则遵循原生 `multi_agent_v2` 标志。`v2-plaintext` 启用实验性明文任务传递并关闭全局强制。目录固定值适用于新会话；启用的编译器也影响已有 V2 会话后续符合条件的请求。 |
+| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna` | 最多五个原生 id、账户限定的 `<selector>/<native-openai-model>` id 或路由 `provider/model` id，优先显示在子代理选择器中。新增选项只提供原生和路由 id；保存时会保留已配置的精确账户限定 id，包括当前目录中不可用的 id。如需添加新的精确账户限定 id，请使用 `ocx agent subagents set` 或编辑配置。[Astra 一次性升级](/reference/configuration/agents/#astra-roster-upgrade)后，显式空列表会被保留。 |
 | `injectionModel?` | `string` | — | 在代理生成的 v2 委派引导中使用的首选原生或路由后的子代理模型。 |
 | `injectionEffort?` | `string` | — | 首选 effort（`low` 到 `ultra`），只有在 `injectionModel` 存在时才有意义。 |
 | `injectionPrompt?` | `string` | — | 替换内置 v2 指引正文。支持 `{{model}}`、`{{effort}}`、`{{roster}}` 和 `{{fallback}}`。只要配置了 `injectionModel`，自定义提示词就会触发。 |
@@ -21,15 +21,17 @@ description: 多代理界面、委派引导、首选模型、回退链、原生�
 | `subagentModelFallbackPollMs?` | `number` | `60000` | 可用性探测缓存间隔。低于 1000 ms 的值会回退到默认值。 |
 | `effortCap?` | `string` | — | 对符合条件的 v2 主轮次和标记的派生子轮次设置硬上限。接受 `low` 到 `ultra`。 |
 | `subagentEffortCap?` | `string` | — | 仅针对派生子轮次的额外上限。两个上限同时适用时，较低者生效。 |
-| `plaintextV2AgentMessages?` | `boolean` | —（未设置） | 实验性选项。只有显式设置为 `true` 才会启用。符合条件的新 `spawn_agent`、`send_message` 和 `followup_task` 调用会使用明文消息参数。详见[明文 v2 代理消息](#明文-v2-代理消息)。 |
+| `plaintextV2AgentMessages?` | `boolean` | —（未设置） | 实验性选项。显式设置为 `true` 或选择 `multiAgentMode: "v2-plaintext"` 均会启用。符合条件的新 `spawn_agent`、`send_message` 和 `followup_task` 调用会使用明文消息参数。详见[明文 v2 代理消息](#明文-v2-代理消息)。 |
 
-通过仪表板或 `ocx v2 status|on|off|mode <v1|default|v2>|threads <n>` 管理该界面。模式变更会应用于新会话。`maxConcurrentThreadsPerSession` 是 `PUT /api/v2` 字段，不是 `config.json` 键；`ocx v2 threads <n>` 会在启用 v2 后，将 `max_concurrent_threads_per_session` 写入 Codex 的 `$CODEX_HOME/config.toml` 中的 `[features.multi_agent_v2]` 下。
+通过仪表板或 `ocx v2 status|on|off|mode <v1|default|v2|v2-plaintext>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>` 管理该界面。通过 CLI 进入 `v2-plaintext` 需要 `--acknowledge-plaintext-agent-messages`；仪表板要求确认，通过 `PUT /api/v2` 新进入时必须提交 `plaintextAgentMessagesAcknowledged: true`。目录模式变更应用于新会话，编译器的当前设置也影响已有 V2 会话后续符合条件的请求。`maxConcurrentThreadsPerSession` 是 `PUT /api/v2` 字段，不是 `config.json` 键；`ocx v2 threads <n>` 会在启用 v2 后，将 `max_concurrent_threads_per_session` 写入 Codex 的 `$CODEX_HOME/config.toml` 中的 `[features.multi_agent_v2]` 下。
 
 管理 API 公开 `GET`/`PUT /api/v2`、`/api/injection-model`、`/api/effort-caps`、`/api/subagent-models` 和 `/api/subagent-model-fallback`。injection-model 更新是部分更新；自定义 prompt 是该 API 上的 `prompt` 字段。
 
 ## 始终主动委派
 
 Subagents → 高级中的 **始终主动委派**（原名 **Ultra mode**）只改变触发委派的条件，不改变推理 effort。推荐预设仍遵循用户指令、权限边界、任务范围和工具规则。
+
+仪表板的开关要求原生功能已启用且显式选择 `v2`，或者选择 `v2-plaintext`；仅运行 `ocx v2 on` 不满足条件。
 
 `GET` 和 `PUT /api/v2` 还会返回 `multiAgentModeHintRecommendation: { text, revision }`。仪表板在启用或恢复预设时使用服务器提供的文本，不会回退到硬编码文案。如果旧服务器没有提供推荐值，或返回的值格式无效，则无法应用或恢复预设；仍可编辑或清除现有的自定义提示。恢复预设只修改本地草稿，保存操作才会将其写入配置。
 
@@ -68,13 +70,13 @@ opencodex 会跳过已禁用、不可路由、不健康、处于冷却中，或�
 ```json
 {
   "multiAgentMode": "v2",
-  "subagentModels": ["gpt-5.5", "anthropic/claude-sonnet-5"],
-  "injectionModel": "gpt-5.5",
+  "subagentModels": ["gpt-6.1-sol", "anthropic/claude-sonnet-5"],
+  "injectionModel": "gpt-6.1-sol",
   "injectionEffort": "high",
   "syncCodexSubagentDefaults": true,
-  "subagentModelFallback": ["gpt-5.6-luna"],
+  "subagentModelFallback": ["gpt-6-luna"],
   "subagentModelFallbackByModel": {
-    "gpt-5.5": ["gpt-5.6-luna"]
+    "gpt-6.1-sol": ["gpt-6-luna"]
   },
   "subagentModelFallbackPollMs": 60000,
   "subagentEffortCap": "high"
@@ -83,7 +85,9 @@ opencodex 会跳过已禁用、不可路由、不健康、处于冷却中，或�
 
 ## 明文 v2 代理消息
 
-新配置不会写入 `plaintextV2AgentMessages`。只有显式设置为 `true` 才会启用。调用方必须使用 Responses
+新配置不会写入 `plaintextV2AgentMessages`。显式设置为 `true` 或选择 `multiAgentMode: "v2-plaintext"` 均会启用此路径。该模式关闭全局强制并为新会话固定 V2；独立布尔值不会被覆盖。编译器遵循当前设置，也影响已有 V2 会话的后续符合条件的请求。已有密文不会被解密，历史不会被改写，禁用也不会删除历史、提供商请求或本地响应与调试状态中已保留的副本。通过仪表板确认或 `ocx v2 mode v2-plaintext --live --acknowledge-plaintext-agent-messages` 进入该模式。
+
+调用方必须使用 Responses
 格式，最终目标必须采用规范的 ChatGPT Codex 转发配置，即 `adapter: "openai-responses"`、
 `authMode: "forward"` 和准确的基础地址 `https://chatgpt.com/backend-api/codex`。OpenAI API key
 provider、自定义 OpenAI 兼容网关、最终发往其他 provider 的请求，以及非 Responses 调用都不会被改写。

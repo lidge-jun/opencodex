@@ -1,4 +1,5 @@
 import { carryReplayRefusal, isNonReplayableResponse, markResponseNonReplayable } from "./upstream-retry";
+import { appendClientRetryIn } from "./client-retry-after";
 import {
   ANTHROPIC_ERROR_CODES, ANTHROPIC_ERROR_TYPES, CLAUDE_CONTEXT_OVERFLOW_MESSAGE,
   CLIENT_ERROR_CONTRACTS, clientErrorCodeMessage, actionableRefusalMessage, isProxyError, attachComboFailureEvidence, carryProxyError, proxyErrorPresentation, comboFailureEvidence, markProxyError, type ProxyErrorPresentation, type ClientErrorContract,
@@ -152,7 +153,9 @@ export async function normalizeMessagesProxyRefusal(req: Request, response: Resp
   if (message === undefined) throw new Error("Unknown local Messages presentation");
   const original = await response.clone().json() as Rec;
   const error = original.error as Rec;
-  const next = { ...error, message: messagesOverflowPresentation(error.message) ? CLAUDE_CONTEXT_OVERFLOW_MESSAGE : message };
+  // A combo refusal keeps the earliest recovery the Responses body names; the header is already clamped seconds.
+  const presented = kind === "combo" ? appendClientRetryIn(message, response.headers.get("retry-after")) : message;
+  const next = { ...error, message: messagesOverflowPresentation(error.message) ? CLAUDE_CONTEXT_OVERFLOW_MESSAGE : presented };
   if (kind === "scope") delete (next as Rec).model;
   const headers = new Headers(response.headers); headers.delete("content-length");
   const out = carryProxyError(response, carryReplayRefusal(response, new Response(JSON.stringify({ ...original, error: next }), { status: response.status, headers })));

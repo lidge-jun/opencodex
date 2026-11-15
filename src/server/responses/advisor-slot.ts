@@ -32,6 +32,7 @@ import type {
 import { jsonStringPartsUtf8Bytes, jsonUtf8Bytes } from "../../lib/json-byte-size";
 import { isTranslatorBudgetExceededError, TRANSLATOR_MAX_CALL_ARGUMENT_BYTES, TranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
 import { AdvisorRetention } from "./advisor-retention";
+import { clipAdvisorQuestion } from "./advisor-question";
 
 export const ADVISOR_TOOL_NAME = "advisor";
 
@@ -61,6 +62,8 @@ export interface AdvisorConsultOutcome {
 
 /** The structural plan the optional advisor subsystem registers per request. */
 export interface AdvisorPlan {
+  /** Synchronous admission: invalid question-only calls do not reserve a consultation. */
+  shouldCountManualConsultation?(question: string | undefined): boolean;
   /**
    * Run one consultation for the current conversation state. Implementations own dedup,
    * logging, and usage accounting; the guard only consumes the outcome.
@@ -112,14 +115,17 @@ export function createAdvisorSidecarStep(plan: AdvisorPlan) {
     },
     async consultCall(parsed: OcxParsedRequest, call: AdvisorSidecarCall, abortSignal?: AbortSignal) {
       let outcome: AdvisorConsultOutcome;
-      if (consultations >= MAX_ADVISOR_CONSULTATIONS_PER_REQUEST) {
+      // An invalid question-only call is refused by the plan without a consultation, so it
+      // neither reserves nor exhausts the allowance; the continuation bound still applies.
+      const counts = plan.shouldCountManualConsultation?.(call.question) !== false;
+      if (counts && consultations >= MAX_ADVISOR_CONSULTATIONS_PER_REQUEST) {
         outcome = {
           ok: false,
           isError: true,
           content: plan.formatUnavailable("limit", "consultation limit reached for this request"),
         };
       } else {
-        consultations += 1;
+        if (counts) consultations += 1;
         try {
           outcome = await plan.consult(parsed, "manual", call.question, abortSignal);
         } catch (error) {
@@ -162,7 +168,8 @@ export function parseAdvisorQuestionArgs(argsBuf: string): { question?: string }
     const parsed: unknown = JSON.parse(argsBuf);
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       const question = (parsed as { question?: unknown }).question;
-      if (typeof question === "string" && question.trim() !== "") return { question: question.slice(0, 2_000) };
+      const text = typeof question === "string" ? clipAdvisorQuestion(question) : "";
+      if (text) return { question: text };
     }
   } catch { /* malformed args → no focus question */ }
   return {};

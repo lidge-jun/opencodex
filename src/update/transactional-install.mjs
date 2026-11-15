@@ -24,8 +24,9 @@ import { guardedRenameSync, ownedArtifactRm } from "./mutation-guard.mjs";
  */
 import { probeSpawnSync } from "./mutation-guard.mjs";
 import { randomBytes } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { basename, delimiter, dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
+import { isInMarkedPnpmCustomStore } from "./pnpm-store-layout.mjs";
 
 /**
  * Dependency lookup confined to the candidate's OWN tree. This is the npm contract and it
@@ -69,13 +70,178 @@ function isPnpmManagedRoot(nodeModulesDir) {
 }
 
 /**
+ * Containment is checked on canonical paths, with a separator boundary rather than a
+ * string prefix so a sibling with a similar name cannot count as part of the store.
+ */
+function inside(path, root) {
+  const rel = relative(root, path);
+  return rel === "" || (rel !== ".." && !rel.startsWith(".." + sep) && !isAbsolute(rel));
+}
+
+/**
+ * Follow one link's own text component by component, as the operating system does. Collapsing ".."
+ * first would hide a relay such as `../outside/relay/../../store/...`. A step down must land inside
+ * an allowed root or on an ancestor of one (pnpm's relative links climb through those ancestors); a
+ * step through another link before the last component is refused, because ".." after it would be
+ * resolved from that link's target rather than from the spelling checked here.
+ */
+function followLinkText(linkPath, text, spellings) {
+  const raw = String(text);
+  const root = isAbsolute(raw) ? parse(raw).root : "";
+  const parts = raw.slice(root.length).split(sep === "\\" ? /[\\/]+/ : /\/+/).filter(part => part && part !== ".");
+  let current = root ? resolve(root) : dirname(linkPath);
+  for (let index = 0; index < parts.length; index += 1) {
+    if (parts[index] === "..") { current = dirname(current); continue; }
+    current = join(current, parts[index]);
+    if (!spellings.some(root => inside(current, root) || inside(root, current))) throw new Error("link is outside the selected store");
+    if (index < parts.length - 1) {
+      let stat;
+      try { stat = lstatSync(current); } catch { throw new Error("link is outside the selected store"); }
+      if (stat.isSymbolicLink()) throw new Error("link is outside the selected store");
+    }
+  }
+  return current;
+}
+
+/** Resolve every link after entering a store; an external hop cannot vouch for a later return. */
+function resolveStoreLinkChain(path, store, alias, alternateRoot, alternateAlias) {
+  const roots = alternateRoot ? [store, alternateRoot] : [store];
+  const spellings = [store, alias, alternateRoot, alternateAlias].filter(Boolean);
+  const normalize = value => {
+    const target = resolve(value);
+    if (alias && inside(target, alias)) return resolve(store, relative(alias, target));
+    if (alternateAlias && inside(target, alternateAlias)) return resolve(alternateRoot, relative(alternateAlias, target));
+    return target;
+  };
+  let pending = normalize(path), hops = 0;
+  for (;;) {
+    const root = roots.find(candidate => inside(pending, candidate));
+    if (!root) throw new Error("link is outside the selected store");
+    const parts = relative(root, pending).split(sep).filter(Boolean);
+    let prefix = root, changed = false;
+    for (let index = 0; index < parts.length; index += 1) {
+      prefix = join(prefix, parts[index]);
+      if (!lstatSync(prefix).isSymbolicLink()) continue;
+      if (++hops > 64) throw new Error("too many store link hops");
+      const target = normalize(followLinkText(prefix, readlinkSync(prefix), spellings));
+      if (!roots.some(candidate => inside(target, candidate))) throw new Error("link is outside the selected store");
+      pending = resolve(target, ...parts.slice(index + 1));
+      changed = true;
+      break;
+    }
+    if (!changed) return prefix;
+  }
+}
+
+/** "none" without a v<N>/links component, "isolated" when a .pnpm store sits below the last one, else "links". */
+function linksComponentState(path) {
+  const parts = String(path).split(/[\\/]+/);
+  let links = -1;
+  for (let i = 1; i < parts.length; i += 1) {
+    if (/^links$/i.test(parts[i]) && /^v\d+$/i.test(parts[i - 1])) links = i;
+  }
+  if (links < 0) return "none";
+  for (let i = links + 1; i < parts.length - 1; i += 1) {
+    if (/^node_modules$/i.test(parts[i]) && /^\.pnpm$/i.test(parts[i + 1])) return "isolated";
+  }
+  return "links";
+}
+
+/** The spelling up to and including its last v<N>/links component, or null without one. */
+function linksRoot(path) {
+  const parts = String(path).split(/[\\/]+/);
+  let links = -1;
+  for (let i = 1; i < parts.length; i += 1) {
+    if (/^links$/i.test(parts[i]) && /^v\d+$/i.test(parts[i - 1])) links = i;
+  }
+  return links < 0 ? null : parts.slice(0, links + 1).join(sep) || sep;
+}
+
+/** Retain intermediate spellings: realpath alone hides a links directory behind another symlink. */
+function packagePathUsesGlobalLinks(packageDir, store, storeAlias = store) {
+  let path = resolve(packageDir);
+  let found = false;
+  // Spellings with a v<N>/links component. Each classifies unless the package finally lands in an isolated
+  // install (a node_modules/.pnpm store) inside that same links directory: an isolated group's top-level link
+  // into its own .pnpm store is not a global-store link, while a link that leaves for anywhere else is.
+  const linkRoots = [];
+  for (let hop = 0; hop < 64; hop += 1) {
+    if (store && (inside(path, store) || (storeAlias && inside(path, storeAlias)))) {
+      resolveStoreLinkChain(path, store, storeAlias);
+    }
+    // Every effective spelling, the listed one first, is judged. The isolated-install exception covers the
+    // default store/v<N>/links spelling too: a global-store link instance never contains node_modules/.pnpm
+    // below its links directory.
+    const state = linksComponentState(path);
+    if (state === "links") linkRoots.push(linksRoot(path));
+    found ||= state === "none" && Boolean(store && inside(path, join(store, "links")));
+    // Store markers classify on every effective spelling, not only the final realpath, so a listed path below a
+    // marked store whose package link points elsewhere still demands the store proof.
+    found ||= isInMarkedPnpmCustomStore(path.replaceAll("\\", "/"), existsSync);
+    const root = parse(path).root;
+    const parts = path.slice(root.length).split(sep).filter(Boolean);
+    let prefix = root, changed = false;
+    for (let i = 0; i < parts.length; i += 1) {
+      prefix = join(prefix, parts[i]);
+      if (lstatSync(prefix).isSymbolicLink()) {
+        const target = resolve(dirname(prefix), readlinkSync(prefix));
+        const remaining = parts.slice(i + 1);
+        // Judge the effective spelling (target plus the rest of the path), so a package reached through a
+        // group link classifies exactly as the same location reached directly.
+        path = resolve(target, ...remaining);
+        changed = true;
+        break;
+      }
+    }
+    // The joined spelling after a hop is judged at the top of the next iteration; the final location was
+    // judged in this one (owner decision B: a package listed directly inside v<N>/links needs the proof).
+    if (!changed) {
+      const isolated = linksComponentState(path) === "isolated";
+      return found || linkRoots.some(root => !(isolated && inside(path, root)));
+    }
+  }
+  throw new Error("pnpm package symlink chain is too long");
+}
+
+/**
+ * True unless this root spelling is canonical: no "." or ".." segment (path.resolve would delete them
+ * without visiting the links they cross), no link or junction component, and realpath returns the same
+ * path (case folded; a case-only symlink is caught by the component walk).
+ */
+function spellingHasLinkComponent(path) {
+  const raw = String(path);
+  const { root } = parse(raw);
+  const parts = raw.slice(root.length).split(/[\\/]+/).filter(Boolean);
+  if (!root || parts.some(part => part === "." || part === "..")) return true;
+  let current = root;
+  for (const part of parts) {
+    current = join(current, part);
+    if (lstatSync(current).isSymbolicLink()) return true;
+  }
+  const fold = value => resolve(value).replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
+  return fold(realpathSync.native(raw)) !== fold(raw);
+}
+
+/**
+ * Whether any spelling of this package passes through pnpm store links. This only classifies which
+ * proof the updater must obtain; it never accepts a package. An unreadable chain throws.
+ */
+export function pnpmPackageUsesGlobalStoreLinks(packageDir) {
+  if (packagePathUsesGlobalLinks(packageDir, undefined)) return true;
+  // A configured virtual-store directory inside a custom store has no \`links\` component; pnpm's
+  // store markers route it to the same store proof.
+  return isInMarkedPnpmCustomStore(realpathSync(packageDir).replaceAll("\\", "/"), existsSync);
+}
+
+/**
  * Dependency roots this package INSTANCE owns. pnpm exposes dependencies in several shapes —
  * symlinks inside the package's own node_modules, a package root that is itself a symlink into
  * the virtual store, or a hoisted group root — so the npm rule alone rejects healthy trees.
  * Ownership is still bounded: an enclosing node_modules counts only when pnpm's own metadata
- * says pnpm manages it, which keeps an unrelated ancestor installation out.
+ * says pnpm manages it, or when the package's realpath group sits in pnpm's global virtual
+ * store, which keeps an unrelated ancestor installation out.
  */
-function ownedDependencyRoots(packageDir) {
+function ownedDependencyRoots(packageDir, store) {
   const roots = [];
   const add = dir => { if (dir && !roots.includes(dir)) roots.push(dir); };
   const lexicalGroup = enclosingNodeModules(packageDir);
@@ -85,7 +251,7 @@ function ownedDependencyRoots(packageDir) {
   if (real && real !== packageDir) add(join(real, "node_modules"));
   if (isPnpmManagedRoot(lexicalGroup)) add(lexicalGroup);
   const realGroup = real ? enclosingNodeModules(real) : undefined;
-  if (isPnpmManagedRoot(realGroup)) add(realGroup);
+  if (isPnpmManagedRoot(realGroup) || (store && realGroup && inside(realGroup, store))) add(realGroup);
   return roots;
 }
 
@@ -96,16 +262,328 @@ function ownedDependencyRoots(packageDir) {
  * as a virtual-store path that no lexical ownership test can recognise. existsSync follows
  * the symlink, which is exactly the pnpm graph edge that proves ownership.
  */
-function pnpmOwnedDependencyDir(packageDir, name) {
-  for (const root of ownedDependencyRoots(packageDir)) {
+function pnpmOwnedDependencyDir(packageDir, name, store, globalLinks, escaped, roots = ownedDependencyRoots(packageDir, store), storeAlias = store) {
+  let matched;
+  for (const root of roots) {
     const dir = join(root, ...name.split("/"));
-    if (existsSync(join(dir, "package.json"))) return dir;
+    if (globalLinks) {
+      if (name.startsWith("@") && name.includes("/")) {
+        const scope = join(root, name.split("/")[0]);
+        let scopeStat;
+        try { scopeStat = lstatSync(scope); } catch (error) {
+          if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") escaped.add("pnpm dependency link could not be resolved: " + name);
+          continue;
+        }
+        if (scopeStat.isSymbolicLink()) {
+          try { if (!inside(realpathSync(scope), store)) { escaped.add("pnpm dependency link escapes the selected store: " + name); continue; } }
+          catch { escaped.add("pnpm dependency link could not be resolved: " + name); continue; }
+        }
+      }
+      try { lstatSync(dir); } catch (error) {
+        if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") escaped.add("pnpm dependency link could not be resolved: " + name);
+        continue;
+      }
+      try {
+        const realRoot = realpathSync(root);
+        if (!inside(realRoot, store)) { escaped.add("pnpm dependency root is outside the selected store: " + name); continue; }
+        if (!inside(realpathSync(dir), store)) { escaped.add("pnpm dependency link escapes the selected store: " + name); continue; }
+        if (!inside(resolveStoreLinkChain(join(realRoot, ...name.split("/")), store, storeAlias), store)) { escaped.add("pnpm dependency link escapes the selected store: " + name); continue; }
+      } catch (error) {
+        escaped.add(error?.message === "link is outside the selected store"
+          ? "pnpm dependency link escapes the selected store: " + name : "pnpm dependency link could not be resolved: " + name);
+        continue;
+      }
+    }
+    if (globalLinks) {
+      try {
+        if (statSync(dir).isDirectory() && !existsSync(join(dir, "package.json"))) {
+          escaped.add("pnpm dependency manifest could not be read: " + name); continue;
+        }
+      } catch { escaped.add("pnpm dependency link could not be resolved: " + name); continue; }
+    }
+    if (!matched && existsSync(join(dir, "package.json"))) matched = dir;
   }
-  return undefined;
+  return matched;
+}
+
+/** A missing owned entry may still resolve through Node's ancestor lookup. */
+function inspectAncestorDependency(packageDir, name, store, escaped) {
+  for (let parent = dirname(packageDir); ; parent = dirname(parent)) {
+    const candidate = join(parent, "node_modules", ...name.split("/"));
+    for (const path of [candidate, candidate + ".js", candidate + ".json", candidate + ".node"]) {
+      try { lstatSync(path); } catch (error) {
+        if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") escaped.add("pnpm dependency fallback could not be inspected: " + name);
+        continue;
+      }
+      try {
+        const resolved = realpathSync(path);
+        escaped.add(inside(resolved, store) ? "pnpm dependency resolves outside its package group: " + name
+          : "pnpm dependency can resolve outside the selected store: " + name);
+      } catch { escaped.add("pnpm dependency fallback could not be resolved: " + name); }
+      return;
+    }
+    if (parent === dirname(parent)) return;
+  }
+}
+
+/**
+ * Ancestor node_modules inside the store must keep their links in the store. Above the store the walk
+ * stops: a user's ~/node_modules is not part of the package. A declared dependency that is missing in
+ * the store and resolves from outside is refused separately (inspectAncestorDependency). With
+ * preserved symlinks Node walks the lexical ancestors, so that walk keeps every root.
+ */
+function inspectAncestorRoots(packageDir, store, escaped, preserved = false, storeAlias = store, metadataSeen) {
+  for (let parent = dirname(packageDir); ; parent = dirname(parent)) {
+    if (!preserved && !inside(parent, store)) return;
+    if (basename(parent) !== "node_modules") {
+      const root = join(parent, "node_modules");
+      let exists = true;
+      try { lstatSync(root); } catch (error) {
+        exists = false;
+        if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") escaped.add("pnpm ancestor dependency root could not be resolved");
+      }
+      if (exists) {
+        try {
+          if (!inside(realpathSync(root), store)) escaped.add(preserved
+            ? "pnpm preserved-symlink lookup root is outside the selected store" : "pnpm ancestor dependency root is outside the selected store");
+          else {
+            resolveStoreLinkChain(root, store, storeAlias);
+            inspectPnpmMetadata(root, store, escaped, "ancestor dependency lookup", storeAlias, metadataSeen);
+          }
+        }
+        catch { escaped.add("pnpm ancestor dependency root could not be resolved"); }
+      }
+    }
+    if (parent === dirname(parent)) return;
+  }
+}
+
+/** Resolve existing ancestors too, so a missing entry cannot hide an escaping symlink. */
+function canonicalProspectivePath(path) {
+  const missing = [];
+  for (let current = path; ; current = dirname(current)) {
+    try { return resolve(realpathSync(current), ...missing.reverse()); }
+    catch (error) {
+      if ((error?.code !== "ENOENT" && error?.code !== "ENOTDIR") || current === dirname(current)) throw error;
+      missing.push(basename(current));
+    }
+  }
+}
+
+function inspectPackageEntries(packageDir, manifest, store, escaped, alternateRoot) {
+  const values = [manifest.main, manifest.module, manifest.bin, manifest.exports];
+  const pending = [...values];
+  while (pending.length) {
+    const entry = pending.pop();
+    if (entry && typeof entry === "object") { pending.push(...Object.values(entry)); continue; }
+    if (typeof entry !== "string" || !entry) continue;
+    try {
+      const target = canonicalProspectivePath(resolve(packageDir, entry));
+      if (!inside(target, store) && (!alternateRoot || !inside(target, alternateRoot))) {
+        escaped.add("pnpm package entry point is outside the selected store");
+      }
+    } catch { escaped.add("pnpm package entry point could not be resolved"); }
+  }
+}
+
+/** pnpm's metadata and executable directories are not packages, but their links still must stay inside the store. */
+function inspectPnpmMetadata(path, store, escaped, kind, storeAlias = store, seen = new Set()) {
+  const pending = [path];
+  while (pending.length) {
+    const current = pending.pop();
+    let real;
+    try {
+      if (inside(current, store) && (current === path || lstatSync(current).isSymbolicLink())) {
+        resolveStoreLinkChain(current, store, storeAlias);
+      }
+      real = realpathSync(current);
+    }
+    catch (error) {
+      escaped.add("pnpm " + kind + (error?.message === "link is outside the selected store"
+        ? " link escapes the selected store: " : " link could not be resolved: ") + basename(current));
+      continue;
+    }
+    if (!inside(real, store)) { escaped.add("pnpm " + kind + " link escapes the selected store: " + basename(current)); continue; }
+    if (seen.has(real)) continue;
+    if (seen.size >= 10000) { escaped.add("pnpm metadata graph exceeds verification limit"); return; }
+    seen.add(real);
+    try {
+      if (statSync(real).isDirectory()) for (const entry of readdirSync(real, { withFileTypes: true })) {
+        if (!entry.isFile()) pending.push(join(real, entry.name));
+      }
+    }
+    catch { escaped.add("pnpm " + kind + " link could not be resolved: " + basename(current)); }
+  }
+}
+
+/**
+ * Node's built-in global lookup paths, computed the way Node's module loader builds Module.globalPaths
+ * (before NODE_PATH): $HOME/.node_modules and $HOME/.node_libraries (USERPROFILE on Windows), then
+ * <prefix>/lib/node, where prefix is the executable's directory on Windows and its parent elsewhere.
+ */
+function nodeGlobalLookupPaths() {
+  const home = process.platform === "win32" ? process.env.USERPROFILE : process.env.HOME;
+  const prefix = process.platform === "win32" ? resolve(process.execPath, "..") : resolve(process.execPath, "..", "..");
+  return [...(home ? [resolve(home, ".node_modules"), resolve(home, ".node_libraries")] : []), resolve(prefix, "lib", "node")];
+}
+
+/**
+ * Node's global search paths (Module.globalPaths, NODE_PATH) that lie inside the store must keep their
+ * links there. Paths outside the store are the user's environment, not the package: they are not
+ * evidence that the package left its store, and a missing declared dependency they could supply is
+ * refused by inspectAncestorDependency's missing-dependency rule.
+ */
+function inspectGlobalLookupRoots(store, escaped, storeAlias = store) {
+  const lookupRoots = new Set([...nodeGlobalLookupPaths(), ...String(process.env.NODE_PATH ?? "").split(delimiter).filter(Boolean)]);
+  for (const raw of lookupRoots) {
+    const root = resolve(raw);
+    try { lstatSync(root); } catch (error) {
+      if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") escaped.add("pnpm global dependency lookup root could not be resolved");
+      continue;
+    }
+    try {
+      let real;
+      // A dangling entry supplies nothing, like a missing one.
+      try { real = realpathSync(root); } catch (error) { if (error?.code === "ENOENT" || error?.code === "ENOTDIR") continue; throw error; }
+      // Only a root whose own spelling lies in the store is part of it; an outside link into the store is
+      // the user's environment, like any other outside entry. An in-store spelling must stay in the store.
+      if (!(inside(root, store) || (storeAlias && inside(root, resolve(storeAlias))))) continue;
+      if (!inside(real, store)) { escaped.add("pnpm global dependency lookup root is outside the selected store"); continue; }
+      resolveStoreLinkChain(root, store, storeAlias);
+    } catch { escaped.add("pnpm global dependency lookup root could not be resolved"); continue; }
+    inspectPnpmMetadata(root, store, escaped, "global dependency lookup", storeAlias);
+  }
+}
+
+/** Find nested module roots and validate package links without following them outside the store. */
+function nestedPnpmRoots(packageDir, store, escaped, budget, storeAlias = store) {
+  const pending = [packageDir], seen = new Set(), roots = [];
+  while (pending.length) {
+    const current = pending.pop();
+    let real;
+    try { real = realpathSync(current); } catch { escaped.add("pnpm package path could not be resolved"); continue; }
+    if (!inside(real, store)) { escaped.add("pnpm package link escapes the selected store"); continue; }
+    const manifestPath = join(current, "package.json");
+    try {
+      lstatSync(manifestPath);
+      try {
+        const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+        inspectPackageEntries(current, manifest, store, escaped);
+        if (current !== real) inspectPackageEntries(real, manifest, store, escaped);
+      } catch { escaped.add("pnpm nested package manifest could not be read"); }
+    } catch (error) {
+      if (error?.code !== "ENOENT") escaped.add("pnpm nested package manifest could not be read");
+    }
+    if (seen.has(real)) continue;
+    if (budget.remaining-- <= 0) { escaped.add("pnpm package traversal exceeds verification limit"); return roots; }
+    seen.add(real);
+    try {
+      for (const entry of readdirSync(real, { withFileTypes: true })) {
+        const child = join(current, entry.name);
+        if (entry.name === "node_modules") {
+          try { roots.push(resolveStoreLinkChain(child, store, storeAlias)); }
+          catch { escaped.add("pnpm dependency root could not be resolved"); }
+          continue;
+        }
+        // On Windows readdir reports junctions and directory symlinks as directories; lstat decides there.
+        let isLink = entry.isSymbolicLink();
+        if (!isLink && entry.isDirectory() && process.platform === "win32") {
+          try { isLink = lstatSync(join(real, entry.name)).isSymbolicLink(); }
+          catch { escaped.add("pnpm package link could not be resolved"); continue; }
+        }
+        if (!isLink && entry.isDirectory()) pending.push(child);
+        else if (isLink) {
+          try {
+            const target = resolveStoreLinkChain(child, store, storeAlias);
+            if (!inside(target, store)) escaped.add("pnpm package link escapes the selected store");
+            else if (statSync(target).isDirectory()) pending.push(target);
+          } catch (error) { escaped.add(error?.message === "link is outside the selected store"
+            ? "pnpm package link escapes the selected store" : "pnpm package link could not be resolved"); }
+        }
+      }
+    } catch { escaped.add("pnpm package directory could not be inspected"); }
+  }
+  return roots;
+}
+
+/** Check reachable global-store package roots and declared dependency links, including cycles. */
+function inspectGlobalPnpmGraph(packageDir, store, escaped, storeAlias = store) {
+  const pending = [packageDir], seen = new Set(), enumeratedRoots = new Set();
+  const ancestorMetadataSeen = new Set(), metadataSeen = new Map(), budget = { remaining: 100000 };
+  inspectGlobalLookupRoots(store, escaped, storeAlias);
+  while (pending.length) {
+    const spelling = pending.pop();
+    let path;
+    try { path = realpathSync(spelling); } catch { escaped.add("pnpm dependency package could not be resolved"); continue; }
+    let manifest;
+    try { manifest = JSON.parse(readFileSync(join(spelling, "package.json"), "utf8")); }
+    catch { escaped.add("pnpm dependency manifest could not be read"); continue; }
+    inspectPackageEntries(spelling, manifest, store, escaped);
+    if (path !== spelling) inspectPackageEntries(path, manifest, store, escaped);
+    if (seen.has(path)) continue;
+    if (seen.size >= 10000) { escaped.add("pnpm dependency graph exceeds verification limit"); return; }
+    seen.add(path);
+    inspectAncestorRoots(path, store, escaped, false, storeAlias, ancestorMetadataSeen);
+    const names = new Set();
+    const nestedRoots = nestedPnpmRoots(spelling, store, escaped, budget, storeAlias);
+    const ownRoot = join(path, "node_modules"), groupRoot = enclosingNodeModules(path);
+    const enqueueRootEntry = (root, name) => {
+      const dependency = pnpmOwnedDependencyDir(path, name, store, true, escaped, [root], storeAlias);
+      if (dependency) pending.push(dependency);
+    };
+    for (const root of [...new Set([ownRoot, groupRoot, ...nestedRoots])]) {
+      if (!root) continue;
+      try { lstatSync(root); } catch (error) {
+        if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") escaped.add("pnpm dependency root could not be resolved");
+        continue;
+      }
+      try {
+        const realRoot = realpathSync(root);
+        if (!inside(realRoot, store)) { escaped.add("pnpm dependency root is outside the selected store"); continue; }
+        if (inside(root, store) || (storeAlias && inside(root, storeAlias))) resolveStoreLinkChain(root, store, storeAlias);
+        // Link hops for each spelling were checked above; expand the physical group once.
+        if (enumeratedRoots.has(realRoot)) continue;
+        enumeratedRoots.add(realRoot);
+        for (const name of readdirSync(root)) {
+          if ([".bin", ".pnpm", ".modules.yaml"].includes(name)) {
+            const kind = name === ".bin" ? "binary" : "metadata";
+            if (!metadataSeen.has(kind)) metadataSeen.set(kind, new Set());
+            inspectPnpmMetadata(join(root, name), store, escaped, kind, storeAlias, metadataSeen.get(kind));
+            continue;
+          }
+          if (!name.startsWith("@")) { enqueueRootEntry(root, name); continue; }
+          const scope = join(root, name);
+          try {
+            if (!inside(realpathSync(scope), store)) { escaped.add("pnpm dependency scope is outside the selected store: " + name); continue; }
+            if (statSync(scope).isDirectory()) for (const child of readdirSync(scope)) enqueueRootEntry(root, name + "/" + child);
+          } catch { escaped.add("pnpm dependency scope could not be resolved: " + name); }
+        }
+      } catch { escaped.add("pnpm dependency root could not be resolved"); }
+    }
+    for (const name of [...Object.keys(manifest.dependencies ?? {}), ...Object.keys(manifest.optionalDependencies ?? {}), ...Object.keys(manifest.peerDependencies ?? {})]) names.add(name);
+    for (const name of names) {
+      const dependency = pnpmOwnedDependencyDir(path, name, store, true, escaped, undefined, storeAlias);
+      if (dependency) pending.push(dependency);
+      for (const root of nestedRoots) {
+        if (root === ownRoot || root === groupRoot) continue;
+        const nested = pnpmOwnedDependencyDir(path, name, store, true, escaped, [root], storeAlias);
+        if (nested) pending.push(nested);
+      }
+      if (!dependency) {
+        // pnpm can leave even non-optional peers absent when peer auto-install and strict checking are disabled.
+        const required = Object.hasOwn(manifest.dependencies ?? {}, name) && !Object.hasOwn(manifest.optionalDependencies ?? {}, name);
+        if (required) {
+          escaped.add("pnpm required dependency is missing from the selected store: " + name);
+        }
+        if (Object.hasOwn(manifest.dependencies ?? {}, name) || Object.hasOwn(manifest.optionalDependencies ?? {}, name)
+          || Object.hasOwn(manifest.peerDependencies ?? {}, name)) inspectAncestorDependency(path, name, store, escaped);
+      }
+    }
+  }
 }
 
 /** Verification manifest for a staged (or live) package tree. */
-function verifyTreeWithDependencyLookup(packageDir, expectedVersion, dependencyDir) {
+function verifyTreeWithDependencyLookup(packageDir, expectedVersion, dependencyDir, inspectAllLinks = false) {
   const failures = [];
   let pkg;
   try {
@@ -136,6 +614,7 @@ function verifyTreeWithDependencyLookup(packageDir, expectedVersion, dependencyD
   // Sentinel direct deps: each must have an intact package.json. The bundled Bun dep is
   // the load-bearing one — without it the launcher cannot start the proxy at all.
   const deps = Object.keys(pkg.dependencies ?? {});
+  if (inspectAllLinks) for (const name of new Set([...deps, ...Object.keys(pkg.optionalDependencies ?? {})])) dependencyDir(packageDir, name);
   const sentinels = deps.filter(name => name === "bun" || name === "zod").length > 0
     ? deps.filter(name => name === "bun" || name === "zod")
     : deps.slice(0, 2);
@@ -159,8 +638,62 @@ export function verifyInstallTree(packageDir, expectedVersion) {
  * hoisted linker, so the dependency may sit outside the package directory — but it must
  * still be reachable through a root this package instance owns.
  */
-export function verifyPnpmInstallTree(packageDir, expectedVersion) {
-  return verifyTreeWithDependencyLookup(packageDir, expectedVersion, pnpmOwnedDependencyDir);
+export function verifyPnpmInstallTree(packageDir, expectedVersion, store, globalRoot, lexicalStore = store) {
+  let real, canonicalGlobalRoot;
+  try { real = realpathSync(packageDir); } catch { return { ok: false, failures: ["pnpm package path could not be resolved"] }; }
+  try { if (store) store = realpathSync(store); } catch { return { ok: false, failures: ["pnpm configured store could not be resolved"] }; }
+  if (globalRoot && (!store || !inside(real, store))) {
+    try {
+      canonicalGlobalRoot = realpathSync(globalRoot);
+      if (!inside(real, canonicalGlobalRoot)) return { ok: false, failures: ["pnpm package is outside the selected store and global group"] };
+    } catch { return { ok: false, failures: ["pnpm global group could not be resolved"] }; }
+  }
+  let globalLinks;
+  try {
+    globalLinks = packagePathUsesGlobalLinks(packageDir, store, lexicalStore) || (store && inside(real, store));
+  } catch (error) { return { ok: false, failures: [error?.message === "link is outside the selected store"
+    ? "pnpm global links are outside the selected store" : "pnpm package symlink chain could not be resolved"] }; }
+  if (globalLinks && (!store || !inside(real, store))) {
+    return { ok: false, failures: ["pnpm global links are outside the selected store"] };
+  }
+  if (globalLinks) {
+    // The reported package spelling is walked as written below; resolve() would delete "." and ".."
+    // segments without visiting the links they cross, so such a spelling is refused first.
+    if (String(packageDir).split(/[\\/]+/).some(part => part === "." || part === "..")) {
+      return { ok: false, failures: ["pnpm package path is not canonical"] };
+    }
+    // Hop roots are only as narrow as their spelling: a link component in the lexical store or global
+    // group would make its target, and any relay below it, count as inside.
+    for (const root of [lexicalStore, globalRoot]) {
+      // A missing group authorizes nothing (see below), so only an existing spelling is inspected.
+      if (!root || !existsSync(root)) continue;
+      try { if (spellingHasLinkComponent(root)) return { ok: false, failures: ["pnpm store or global group path is not canonical"] }; }
+      catch { return { ok: false, failures: ["pnpm store or global group path could not be resolved"] }; }
+    }
+    // Every hop from the reported spelling to the package must stay inside the selected global group
+    // or the selected store; a relay elsewhere cannot vouch for a link that later returns to the store.
+    // A group that cannot be resolved authorizes nothing: the path must then start inside the store.
+    let canonicalGroup;
+    try { if (globalRoot) canonicalGroup = realpathSync(globalRoot); } catch { canonicalGroup = undefined; }
+    try {
+      const end = canonicalGroup
+        ? resolveStoreLinkChain(resolve(packageDir), store, lexicalStore, canonicalGroup, resolve(globalRoot))
+        : resolveStoreLinkChain(resolve(packageDir), store, lexicalStore);
+      if (!inside(end, store)) throw new Error("link is outside the selected store");
+    } catch (error) {
+      return { ok: false, failures: [error?.message === "link is outside the selected store"
+        ? "pnpm global links are outside the selected store" : "pnpm package symlink chain could not be resolved"] };
+    }
+  }
+  const escaped = new Set();
+  if (globalLinks && /(?:^|[\s"'])--preserve-symlinks(?:-main)?(?=$|[\s"'])/.test([...process.execArgv, process.env.NODE_OPTIONS ?? ""].join(" "))) {
+    inspectAncestorRoots(resolve(packageDir), store, escaped, true, lexicalStore);
+  }
+  const result = verifyTreeWithDependencyLookup(packageDir, expectedVersion,
+    (path, name) => pnpmOwnedDependencyDir(path, name, store, globalLinks, escaped, undefined, lexicalStore), globalLinks);
+  if (globalLinks) inspectGlobalPnpmGraph(real, store, escaped, lexicalStore);
+  if (escaped.size) return { ok: false, failures: [...escaped].concat(result.failures) };
+  return result;
 }
 
 function stampedName(prefix) {

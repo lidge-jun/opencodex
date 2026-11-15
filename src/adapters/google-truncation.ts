@@ -1,4 +1,5 @@
 import { redactSecretString } from "../lib/redact";
+import { withProviderFailureFacts } from "../lib/failure-detail";
 import type { AdapterEvent, OcxUsage } from "../types";
 
 /** Gemini/Vertex finishReason values that mean the turn was cut off, not cleanly stopped. */
@@ -37,10 +38,11 @@ export function vertexTruncationErrorEvent(
   toolCallsStarted: number,
   usage?: OcxUsage,
 ): Extract<AdapterEvent, { type: "error" }> {
-  return {
+  // The request log keeps the closed finish reason that ended the turn (#8446); the wire event is unchanged.
+  return withProviderFailureFacts({
     type: "error",
     message: vertexTruncationErrorMessage(finishReason),
     ...(usage ? { usage } : {}),
     ...(finishReason === "MALFORMED_FUNCTION_CALL" && toolCallsStarted === 0 ? { replaySafeBeforeOutput: true } : {}),
-  };
+  } as const, { finishReason });
 }

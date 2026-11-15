@@ -1,13 +1,15 @@
 import { publicOAuthErrorPresentation } from "../../oauth";
-import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
+import { observeProviderFailureEvent, projectLocalModelRefusalLog } from "../request-log-failure-detail";
 import { markProxyError } from "../../lib/client-error-body";
 import { formatClientRetryAfter } from "../../lib/client-retry-after";
 import { SendBudgetExhaustedError, errorDestinationText, providerErrorDestinationLabel } from "../../lib/upstream-retry";
-import { appendLoadedToolDefinitions, appendOnlyToolLoadingMatches } from "../../claude/inbound-tool-loading";
+import { appendLoadedToolDefinitions, toolLoadingModelMatches } from "../../claude/inbound-tool-loading";
+import { applyChatToolDispatch } from "../../claude/chat-tool-dispatch";
 import { isRec } from "../../claude/inbound-records";
 import { isOpenCodeGoResponsesUrl } from "../../adapters/opencode-go-additional-tools";
 import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
 import { anthropicBillingPhysicalFetch } from "../../providers/anthropic-billing-ownership";
+import { passiveKeyPhysicalFetch } from "../../providers/passive-key-observation";
 import { rebindPhysicalSend } from "../../lib/request-execution-budget";
 import { anthropicModelQuotaFor } from "../../oauth/anthropic-model-quota";
 import { anthropicRatePolicyFor } from "../../oauth/anthropic-rate-limit-policy";
@@ -81,9 +83,11 @@ import {
 import { renameRoutedIdentityInContext } from "../../adapters/identity";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import {
+  providerAffinityGenerationIsCurrent,
   providerApiKeySelectionIsCurrent,
   resolveCurrentProviderApiKeyTransport,
 } from "../../providers/api-key-selection";
+import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../../providers/api-key-pause";
 import { resolveAdapter, resolveWireProtocolOverride } from "../adapter-resolve";
 import { codexWsExecutorBinding, fetchWithHeaderTimeout, physicalSendGuardInit, physicalSendObserverInit, providerFetch, sendWithConnectionPolicy } from "./fetch-helpers";
 import { resolveConnectTimeoutMs } from "../../stall-timeout";
@@ -95,7 +99,7 @@ import { recordAnthropicAccountQuotaFromHeadersForInstance, hasPassiveAccountQuo
 import { checkOutboundBodySize, describeOutboundBodyRefusal } from "./outbound-body-guard";
 import { formatErrorResponse } from "../../bridge";
 import { bindRouteReasoningReplayScope } from "./core-replay";
-import { assignNativeLogConversationId, sessionIdHeaderFromRequest, normalizeLogConversationId } from "../request-log-conversation";
+import { affinityLaneFromRequest, assignNativeLogConversationId, normalizeLogConversationId, sessionIdHeaderFromRequest } from "../request-log-conversation";
 import { redactSecretString } from "../../lib/redact";
 import { captureAccountAutoPauseAttempt } from "../../oauth/account-auto-pause";
 import { selectProactiveApiKeyTransport } from "../../providers/key-failover";
@@ -596,6 +600,7 @@ export async function prepareResponsesTransport(
   const bindKeyUsageFromBridge = (usage: OcxUsage | undefined): void => {
     logCtx.usageFromBridge = true;
     if (usesApiKeyAccount(route.provider)) {
+      if (!logCtx.activeAttempt?.usage && usage) recordKeyAttemptUsage(logCtx, usage);
       logCtx.usage = logCtx.activeAttempt?.usage;
     } else if (usage) {
       logCtx.usage = usage;
@@ -629,11 +634,19 @@ export async function prepareResponsesTransport(
     // Capture this physical adapter's destination. A retry/rebind gets a fresh decision, and
     // each build projects a copy so unselected fallbacks retain the original tool catalog.
     const discovery = options.anthropicToolLoadingSource;
-    const appendOnly = inboundWire === "anthropic" && discovery && provider.adapter === "openai-responses"
+    // Shared by both direct-route opt-ins: combo attempts and policy-owned requests keep the
+    // original catalog.
+    const directToolLoadingRoute = inboundWire === "anthropic"
       && !options.comboAttempt && !route.combo && route.routeKind !== "combo" && route.routeKind !== "policy"
-      && !options.policyFallbackCandidate && !options.policyRequestScope?.eligibility
-      && appendOnlyToolLoadingMatches(config.claudeCode?.appendOnlyToolLoadingModels,
-        `${route.providerName}/${parsed._wireModelOverride ?? route.modelId}`);
+      && !options.policyFallbackCandidate && !options.policyRequestScope?.eligibility;
+    const wireModel = `${route.providerName}/${parsed._wireModelOverride ?? route.modelId}`;
+    const appendOnly = discovery && directToolLoadingRoute && provider.adapter === "openai-responses"
+      && toolLoadingModelMatches(config.claudeCode?.appendOnlyToolLoadingModels, wireModel);
+    // The Chat wire has no additional_tools; its own opt-in keeps the catalog stable through a
+    // dispatcher instead, projected and un-projected at this one physical adapter (#7452).
+    const chatDispatch = discovery && directToolLoadingRoute && provider.adapter === "openai-chat"
+      && toolLoadingModelMatches(config.claudeCode?.chatToolDispatchModels, wireModel);
+    if (chatDispatch) applyChatToolDispatch(resolved, discovery);
     if (appendOnly) {
       const buildWithOriginalCatalog = resolved.buildRequest.bind(resolved);
       resolved.buildRequest = (requestParsed, incoming) => {
@@ -674,6 +687,7 @@ export async function prepareResponsesTransport(
     const observeEvent = (event: AdapterEvent, response: object): void => {
       delivery.noteAdapterEvent();
       observeUsage(event, response);
+      observeProviderFailureEvent(logCtx, event);
     };
     const parseStream = resolved.parseStream.bind(resolved);
     resolved.parseStream = async function* (...args) {
@@ -787,13 +801,19 @@ export async function prepareResponsesTransport(
         throw new Error("OAuth account selection changed before dispatch");
       }
     } else {
+      if (!providerAffinityGenerationIsCurrent(config, route.providerName, route.provider)) throw new Error("Provider affinity selection is no longer available");
       let current = resolveCurrentProviderApiKeyTransport(config, route.providerName, route.provider);
       if (!current && (route.provider._apiKeyAttempt?.distributed || (route.provider.requestPacing?.enabled
         && (route.provider.requestPacing.keys || route.provider.requestPacing.keySelection === "round-robin")))) {
         const fresh = resolveCurrentProviderApiKeyTransport(config, route.providerName, { ...route.provider, _apiKeyAttempt: undefined });
         if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh;
       }
-      if (!current) throw new Error("API key selection is unavailable before dispatch");
+      if (!current) {
+        // Rethrown through oauthDispatch so adapter-dispatch / passthrough-dispatch map it
+        // as a local 403 admission refusal without charging an upstream send.
+        if (isProviderApiKeyPaused(config.providers[route.providerName])) throw new ProviderApiKeyPausedError();
+        throw new Error("API key selection is unavailable before dispatch");
+      }
       if (route.provider.googleMode === "vertex" || current.googleMode === "vertex") {
         const freshPolicy = captureRouteStaticPolicy(route.providerName, route.modelId, current, route.staticPolicy.effectiveAlias, inboundWire);
         if (freshPolicy.model.adapter !== route.staticPolicy.model.adapter) throw new Error("Vertex model wire changed before dispatch");
@@ -810,7 +830,7 @@ export async function prepareResponsesTransport(
     if (route.provider.authMode === "forward") return false;
     const available = route.provider.authMode === "oauth"
       ? getAccountSet(route.providerName)?.accounts.some(row => !row.paused && !row.needsReauth)
-      : !!config.providers[route.providerName]?.apiKey;
+      : !isProviderApiKeyPaused(config.providers[route.providerName]) && !!config.providers[route.providerName]?.apiKey;
     if (!available) return false;
     await refreshDispatchAdapter(requestParsed);
     // Bind before the recovery caller rebuilds. A terminal retry can be a clone;
@@ -868,7 +888,7 @@ export async function prepareResponsesTransport(
         const beforePhysicalSend = (): void => {
           incoming.abortSignal?.throwIfAborted();
           if (sent) {
-            if (binding?.kind === "api-key" && binding.provider._apiKeyAttempt?.distributed
+            if (binding?.kind === "api-key" && (binding.provider._apiKeyAttempt?.distributed || binding.provider._apiKeyAttempt?.cacheAffinity)
               && !selectionIsCurrent(binding)) throw new Error("API key became unavailable during the turn");
             return;
           }
@@ -962,7 +982,7 @@ export async function prepareResponsesTransport(
             // WS eligibility (egress, pacing, URL) was checked for the provider it was built for; a
             // provider reselected above was not, so it takes the HTTP fallback under its own route.
             const physicalFetch = ((input, physicalInit) => ws?.provider === route.provider ? execute(input, physicalInit) : sendWithConnectionPolicy(
-              distributedKeyPhysicalFetch(anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider), route.providerName, route.provider, target),
+              passiveKeyPhysicalFetch(distributedKeyPhysicalFetch(anthropicBillingPhysicalFetch(fetchImpl, route.providerName, route.provider), route.providerName, route.provider, target), config, route.providerName, route.provider),
               input,
               { ...physicalInit, redirect: "manual",
                 ...physicalSendObserverInit(observeAutoPause, destination instanceof Request ? destination.url : String(destination), deferredCopilotNote ? commitKeyAttemptSend : undefined),
@@ -1278,13 +1298,29 @@ export async function prepareResponsesTransport(
   // The Transport variant, not the bare picker: the picker answers with the PERSISTED row, and
   // a built-in provider stored in its valid minimal form would lose the adapter id, base URL
   // and static headers registry backfill supplies, throwing `Unknown adapter: undefined`.
-  const proactiveKeyProvider = selectProactiveApiKeyTransport(
-    config,
-    route.providerName,
-    route.provider,
-    parsed.options.promptCacheKey,
-  );
+  const affinityLane = affinityLaneFromRequest(req, logCtx, config, options.admission, options.replayPrincipal);
+  if (affinityLane) logCtx.affinityLane = affinityLane;
+  let proactiveKeyProvider: OcxProviderConfig | null;
+  try {
+    proactiveKeyProvider = selectProactiveApiKeyTransport(
+      config,
+      route.providerName,
+      route.provider,
+      parsed.options.promptCacheKey,
+      Date.now(),
+      { lane: affinityLane, model: route.modelId, log: logCtx, continuation: parsed.context.messages.at(-1)?.role === "toolResult" },
+    );
+  } catch (err) {
+    if (err instanceof OAuthAccountPausedError) {
+      return markProxyError(formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(err)), publicOAuthErrorPresentation(err));
+    }
+    throw err;
+  }
   if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
+  if (isProviderApiKeyPaused(route.provider)) {
+    const err = new ProviderApiKeyPausedError();
+    return markProxyError(formatErrorResponse(403, "permission_error", publicOAuthAuthenticationErrorMessage(err)), publicOAuthErrorPresentation(err));
+  }
   route.provider = resolveProviderTransport(
     route.providerName,
     route.provider,

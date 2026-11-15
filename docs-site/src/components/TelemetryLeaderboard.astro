@@ -1,0 +1,188 @@
+---
+import {
+  TELEMETRY_LEADERBOARD_STRINGS,
+  resolveTelemetryLeaderboardLocale,
+  type TelemetryLeaderboardLocale,
+} from "../data/telemetry-leaderboard-i18n";
+import {
+  TELEMETRY_LEADERBOARD_ENDPOINT,
+  TELEMETRY_PROFILE_BY_HANDLE_ENDPOINT,
+} from "./telemetry-dashboard/leaderboard";
+
+interface Props {
+  locale?: TelemetryLeaderboardLocale;
+}
+
+const routeLocale = Astro.locals?.starlightRoute?.locale;
+const locale = resolveTelemetryLeaderboardLocale(Astro.props.locale ?? routeLocale);
+const copy = TELEMETRY_LEADERBOARD_STRINGS[locale];
+const periods = [
+  { id: "day", label: copy.periodDay },
+  { id: "week", label: copy.periodWeek },
+  { id: "month", label: copy.periodMonth },
+] as const;
+const metrics = [
+  { id: "tokens", label: copy.metricTokens },
+  { id: "requests", label: copy.metricRequests },
+] as const;
+---
+
+<section
+  id="leaderboard"
+  class="tl-root"
+  aria-labelledby="tl-title"
+  data-telemetry-leaderboard
+  data-locale={locale}
+  data-leaderboard-endpoint={TELEMETRY_LEADERBOARD_ENDPOINT}
+  data-profile-endpoint={TELEMETRY_PROFILE_BY_HANDLE_ENDPOINT}
+  data-copy={JSON.stringify(copy)}
+>
+  <div class="tl-panel">
+    <header class="tl-header">
+      <div class="tl-titles">
+        <h2 id="tl-title" class="tl-title">{copy.title}</h2>
+        <p class="tl-subtitle">{copy.subtitle}</p>
+      </div>
+      <div class="tl-controls">
+        <div class="tl-segment" role="group" aria-label={copy.periodAria}>
+          {periods.map(p => <button type="button" data-tl-period={p.id} aria-pressed={p.id === "week" ? "true" : "false"}>{p.label}</button>)}
+        </div>
+        <div class="tl-segment" role="group" aria-label={copy.metricAria}>
+          {metrics.map(m => <button type="button" data-tl-metric={m.id} aria-pressed={m.id === "tokens" ? "true" : "false"}>{m.label}</button>)}
+        </div>
+      </div>
+    </header>
+
+    <div class="tl-profile" data-tl-profile hidden></div>
+
+    <div class="tl-table-wrap">
+      <table class="tl-table">
+        <thead>
+          <tr>
+            <th scope="col">{copy.colRank}</th>
+            <th scope="col">{copy.colProfile}</th>
+            <th scope="col" class="tl-num">{copy.colTokens}</th>
+            <th scope="col" class="tl-num">{copy.colRequests}</th>
+          </tr>
+        </thead>
+        <tbody data-tl-rows></tbody>
+      </table>
+      <p class="tl-status" data-tl-status role="status">{copy.loading}</p>
+      <button type="button" class="tl-retry" data-tl-retry hidden>{copy.retry}</button>
+    </div>
+
+    <footer class="tl-footer">
+      <form class="tl-find" data-tl-find>
+        <label for="tl-find-input">{copy.findLabel}</label>
+        <div class="tl-find-row">
+          <input id="tl-find-input" data-tl-find-input type="text" autocomplete="off" spellcheck="false" maxlength="24" placeholder="handle" />
+          <button type="submit">{copy.findButton}</button>
+        </div>
+        <p class="tl-find-error" data-tl-find-error role="alert" hidden></p>
+      </form>
+      <p class="tl-join">{copy.howToJoin}</p>
+    </footer>
+  </div>
+</section>
+
+<style>
+  .tl-root {
+    max-width: 74rem;
+    margin-inline: auto;
+    padding-inline: clamp(0.5rem, 2vw, 1.5rem);
+    padding-block: 0 clamp(2.5rem, 5vh, 4rem);
+    color: var(--sl-color-gray-1);
+  }
+  .tl-root :where(div, section, header, footer, table, thead, tbody, tr, th, td, p, h2, h3, button, span, form, label, input) {
+    margin-top: 0;
+  }
+  .tl-panel {
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: var(--ocx-radius, 12px);
+    background-color: var(--ocx-surface, #262626);
+    overflow: hidden;
+  }
+  .tl-header {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 0.75rem 1.5rem;
+    padding: 1.25rem 1.375rem 1rem;
+  }
+  .tl-titles { min-width: 0; flex: 1 1 20rem; }
+  .tl-title { margin: 0; font-size: 1.125rem; font-weight: 650; }
+  .tl-subtitle { margin: 0.25rem 0 0; font-size: 0.875rem; color: var(--sl-color-gray-3); }
+  .tl-controls { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: flex-start; }
+  .tl-segment { display: inline-flex; border: 1px solid var(--sl-color-gray-5); border-radius: 999px; overflow: hidden; }
+  .tl-segment button {
+    border: 0;
+    background: transparent;
+    color: var(--sl-color-gray-2);
+    font: inherit;
+    font-size: 0.8125rem;
+    padding: 0.3rem 0.8rem;
+    cursor: pointer;
+  }
+  .tl-segment button[aria-pressed="true"] { background: var(--sl-color-gray-5); color: var(--sl-color-white); }
+  .tl-table-wrap { padding: 0 1.375rem 1rem; overflow-x: auto; }
+  .tl-table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+  .tl-table th { text-align: left; font-weight: 600; color: var(--sl-color-gray-3); padding: 0.5rem 0.5rem; border-bottom: 1px solid var(--sl-color-gray-5); }
+  .tl-table :global(td) { padding: 0.5rem; border-bottom: 1px solid var(--sl-color-gray-6, var(--sl-color-gray-5)); }
+  .tl-table :global(.tl-num), .tl-table th.tl-num { text-align: right; font-variant-numeric: tabular-nums; }
+  .tl-table :global(.tl-rank) { width: 3.5rem; font-variant-numeric: tabular-nums; color: var(--sl-color-gray-3); }
+  .tl-root :global(.tl-who) { display: inline-flex; align-items: center; gap: 0.5rem; color: inherit; text-decoration: none; }
+  .tl-root :global(.tl-who:hover .tl-name) { text-decoration: underline; }
+  .tl-root :global(.tl-avatar) {
+    display: inline-grid;
+    place-items: center;
+    width: 1.5rem;
+    height: 1.5rem;
+    border-radius: 999px;
+    color: #fff;
+    font-size: 0.75rem;
+    font-weight: 650;
+    flex-shrink: 0;
+  }
+  .tl-root :global(.tl-avatar-lg) { width: 2.25rem; height: 2.25rem; font-size: 0.95rem; }
+  .tl-root :global(.tl-name) { font-weight: 600; }
+  .tl-root :global(.tl-handle) { font-family: var(--sl-font-mono, monospace); font-size: 0.75rem; color: var(--sl-color-gray-3); }
+  .tl-status { margin: 0.75rem 0 0; color: var(--sl-color-gray-3); font-size: 0.875rem; }
+  .tl-status[hidden], .tl-retry[hidden], .tl-find-error[hidden], .tl-profile[hidden] { display: none; }
+  .tl-retry, .tl-find button, .tl-root :global(.tl-close) {
+    border: 1px solid var(--sl-color-gray-5);
+    background: transparent;
+    color: inherit;
+    border-radius: 8px;
+    font: inherit;
+    font-size: 0.8125rem;
+    padding: 0.3rem 0.75rem;
+    cursor: pointer;
+  }
+  .tl-profile { margin: 0 1.375rem 1rem; padding: 1rem; border: 1px solid var(--sl-color-gray-5); border-radius: 10px; }
+  .tl-root :global(.tl-profile-header) { display: flex; align-items: center; gap: 0.75rem; }
+  .tl-root :global(.tl-profile-header > div) { flex: 1; min-width: 0; }
+  .tl-root :global(.tl-profile-name) { margin: 0; font-size: 1rem; }
+  .tl-root :global(.tl-profile-periods) { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.5rem; margin-top: 0.75rem; }
+  .tl-root :global(.tl-profile-period) { display: flex; flex-direction: column; gap: 0.15rem; padding: 0.5rem 0.75rem; border-radius: 8px; background: var(--sl-color-gray-6, rgba(127,127,127,0.1)); }
+  .tl-root :global(.tl-label) { font-size: 0.75rem; color: var(--sl-color-gray-3); }
+  .tl-footer { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem; padding: 1rem 1.375rem 1.25rem; border-top: 1px solid var(--sl-color-gray-5); }
+  .tl-find { display: flex; flex-direction: column; gap: 0.35rem; font-size: 0.8125rem; }
+  .tl-find-row { display: flex; gap: 0.5rem; }
+  .tl-find input {
+    font: inherit;
+    font-family: var(--sl-font-mono, monospace);
+    padding: 0.3rem 0.6rem;
+    border-radius: 8px;
+    border: 1px solid var(--sl-color-gray-5);
+    background: transparent;
+    color: inherit;
+  }
+  .tl-find-error { margin: 0; color: var(--sl-color-red, #ef4444); }
+  .tl-join { margin: 0; max-width: 32rem; font-size: 0.8125rem; color: var(--sl-color-gray-3); }
+</style>
+
+<script>
+  import { mountTelemetryLeaderboard } from "./telemetry-dashboard/leaderboard";
+  mountTelemetryLeaderboard();
+</script>
+

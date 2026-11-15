@@ -12,6 +12,8 @@ const NAMES = [
   "X-Stainless-Retry-Count", "X-Stainless-Timeout",
 ] as const;
 const REQUIRED = ["User-Agent", "X-App", "X-Claude-Code-Session-Id", "X-Stainless-Lang", "X-Stainless-Runtime"] as const;
+/** Claude Code sends `cli` from a foreground session and `cli-bg` from a background (`claude --bg`) one. */
+const CLAUDE_CODE_APPS: ReadonlySet<string> = new Set(["cli", "cli-bg"]);
 declare const identityBrand: unique symbol;
 /** Opaque in-memory handle: serializing it cannot publish caller headers. */
 export interface AnthropicClientIdentity { readonly [identityBrand]: true }
@@ -24,7 +26,7 @@ function valid(name: typeof NAMES[number], value: string): boolean {
     return entrypoint === "cli" || entrypoint === "sdk-cli" || entrypoint === "sdk" || entrypoint === "sdk-ts"
       || (DESKTOP_ENTRYPOINTS as readonly string[]).includes(entrypoint ?? "");
   }
-  if (name === "X-App") return value === "cli";
+  if (name === "X-App") return CLAUDE_CODE_APPS.has(value);
   if (name === "X-Claude-Code-Session-Id" || name === "x-client-request-id") return UUID.test(value);
   if (name === "X-Stainless-Lang") return value === "js";
   if (name === "X-Stainless-Runtime") return value === "node";

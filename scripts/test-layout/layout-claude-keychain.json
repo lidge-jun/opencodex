@@ -1,0 +1,4 @@
+{
+  "claude-keychain-healthz.test.ts": "claude-integration",
+  "claude-keychain-read.test.ts": "oauth"
+}

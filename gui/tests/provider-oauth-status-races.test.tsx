@@ -1,10 +1,12 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act, useRef, useState, type ReactNode } from "react";
+import { act, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { Root } from "react-dom/client";
 import { useProvidersFetch } from "../src/pages/use-providers-fetch";
 import { useProvidersOAuth } from "../src/pages/use-providers-oauth";
 import type { OAuthStatus } from "../src/pages/providers-shared";
+import { configureApiTargets } from "../src/api";
+import { standaloneApiTargets } from "../src/api-targets";
 
 const keys = ["window", "document", "navigator", "localStorage", "sessionStorage", "fetch", "IS_REACT_ACT_ENVIRONMENT"] as const;
 let saved: Record<string, unknown>;
@@ -51,15 +53,17 @@ test.each(["failed refresh", "late read", "read during logout"] as const)("logou
   } });
   function Harness() {
     const [state, setOauthStatus] = useState<Record<string, OAuthStatus>>({});
-    statuses = state;
     const aliveRef = useRef(true);
-    loader = useProvidersFetch({ apiBase: "", t: key => key, setConfig: () => {}, setOauthProviders: () => {}, setOauthStatus,
+    const loaderController = useProvidersFetch({ apiBase: "", t: key => key, setConfig: () => {}, setOauthProviders: () => {}, setOauthStatus,
       notify: () => {}, invalidateProviderQuotas: () => {} });
-    actions = useProvidersOAuth({ apiBase: "", t: key => key, aliveRef, accountSets: {}, setAccountSets: () => {},
+    const actionsController = useProvidersOAuth({ apiBase: "", t: key => key, aliveRef, accountSets: {}, setAccountSets: () => {},
       setBusy: () => {}, setStatus: () => {}, setLoginInfo: () => {}, setOauthStatus,
-      invalidateOauthStatusReads: loader.invalidateOauthStatusReads, beginAccountLogout: () => () => {}, notify: () => {},
-      fetchConfig: async () => {}, fetchOauth: loader.fetchOauth, fetchAccountSets: async () => {},
+      invalidateOauthStatusReads: loaderController.invalidateOauthStatusReads, beginAccountLogout: () => () => {}, notify: () => {},
+      fetchConfig: async () => {}, fetchOauth: loaderController.fetchOauth, fetchAccountSets: async () => {},
       fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => {} });
+    // Publish after commit: a render-phase write of a hook result into a module binding is
+    // what the compiler rejects, and the test body only reads it after act().
+    useLayoutEffect(() => { statuses = state; loader = loaderController; actions = actionsController; });
     return null;
   }
   await render(<Harness />);
@@ -121,13 +125,13 @@ test.each(["success", "partial", "failure", "network"] as const)("account deleti
   } });
   function Harness() {
     const [state, setOauthStatus] = useState<Record<string, OAuthStatus>>({});
-    statuses = state;
     const aliveRef = useRef(true);
-    loader = useProvidersFetch({ apiBase: "", t: key => key, setConfig: () => {}, setOauthProviders: () => {}, setOauthStatus,
+    const loaderController = useProvidersFetch({ apiBase: "", t: key => key, setConfig: () => {}, setOauthProviders: () => {}, setOauthStatus,
       notify: () => {}, invalidateProviderQuotas: () => {} });
-    pools = useProviderAccountPools({ apiBase: "", config: null, aliveRef, t: key => key, oauthStatus: state, notify: () => {},
-      fetchConfig: async () => {}, fetchOauth: loader.fetchOauth, fetchProviderQuotas: async () => {}, codexActiveNeedsReauth: false,
-      invalidateOauthStatusReads: loader.invalidateOauthStatusReads, setOauthStatus });
+    const poolsController = useProviderAccountPools({ apiBase: "", config: null, aliveRef, t: key => key, oauthStatus: state, notify: () => {},
+      fetchConfig: async () => {}, fetchOauth: loaderController.fetchOauth, fetchProviderQuotas: async () => {}, codexActiveNeedsReauth: false,
+      invalidateOauthStatusReads: loaderController.invalidateOauthStatusReads, setOauthStatus });
+    useLayoutEffect(() => { statuses = state; loader = loaderController; pools = poolsController; });
     return null;
   }
   try {
@@ -184,13 +188,13 @@ test("a deletion settling after a target change cannot clear or refresh the new 
   } });
   function Harness({ base }: { base: string }) {
     const [state, setOauthStatus] = useState<Record<string, OAuthStatus>>({});
-    statuses = state;
     const aliveRef = useRef(true);
-    loader = useProvidersFetch({ apiBase: base, t: key => key, setConfig: () => {}, setOauthProviders: () => {}, setOauthStatus,
+    const loaderController = useProvidersFetch({ apiBase: base, t: key => key, setConfig: () => {}, setOauthProviders: () => {}, setOauthStatus,
       notify: () => {}, invalidateProviderQuotas: () => {} });
-    pools = useProviderAccountPools({ apiBase: base, config: null, aliveRef, t: key => key, oauthStatus: state, notify: () => {},
-      fetchConfig: async () => {}, fetchOauth: loader.fetchOauth, fetchProviderQuotas: async () => {}, codexActiveNeedsReauth: false,
-      invalidateOauthStatusReads: loader.invalidateOauthStatusReads, setOauthStatus });
+    const poolsController = useProviderAccountPools({ apiBase: base, config: null, aliveRef, t: key => key, oauthStatus: state, notify: () => {},
+      fetchConfig: async () => {}, fetchOauth: loaderController.fetchOauth, fetchProviderQuotas: async () => {}, codexActiveNeedsReauth: false,
+      invalidateOauthStatusReads: loaderController.invalidateOauthStatusReads, setOauthStatus });
+    useLayoutEffect(() => { statuses = state; loader = loaderController; pools = poolsController; });
     return null;
   }
   try {
@@ -236,19 +240,19 @@ test("a login status read predating account deletion cannot restore the deleted 
   } });
   function Harness() {
     const [state, setOauthStatus] = useState<Record<string, OAuthStatus>>({});
-    statuses = state;
     const aliveRef = useRef(true);
     const [, setBusy] = useState<string | null>(null);
     const [, setLoginInfo] = useState<Parameters<typeof useProvidersOAuth>[0]["setLoginInfo"] extends React.Dispatch<React.SetStateAction<infer S>> ? S : never>(null);
     const loader = useProvidersFetch({ apiBase: "", t: key => key, setConfig: () => {}, setOauthProviders: () => {}, setOauthStatus,
       notify: () => {}, invalidateProviderQuotas: () => {} });
-    pools = useProviderAccountPools({ apiBase: "", config: null, aliveRef, t: key => key, oauthStatus: state, notify: () => {},
+    const poolsController = useProviderAccountPools({ apiBase: "", config: null, aliveRef, t: key => key, oauthStatus: state, notify: () => {},
       fetchConfig: async () => {}, fetchOauth: async () => {}, fetchProviderQuotas: async () => {}, codexActiveNeedsReauth: false,
       invalidateOauthStatusReads: loader.invalidateOauthStatusReads, setOauthStatus });
-    actions = useProvidersOAuth({ apiBase: "", t: key => key, aliveRef, accountSets: pools.accountSets, setAccountSets: pools.setAccountSets,
+    const actionsController = useProvidersOAuth({ apiBase: "", t: key => key, aliveRef, accountSets: poolsController.accountSets, setAccountSets: poolsController.setAccountSets,
       setBusy, setStatus: () => {}, setLoginInfo, setOauthStatus, invalidateOauthStatusReads: loader.invalidateOauthStatusReads, captureOauthStatusRead: loader.captureOauthStatusRead,
-      notify: () => {}, fetchConfig: async () => {}, fetchOauth: async () => {}, fetchAccountSets: pools.fetchAccountSets,
+      notify: () => {}, fetchConfig: async () => {}, fetchOauth: async () => {}, fetchAccountSets: poolsController.fetchAccountSets,
       fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => {} });
+    useLayoutEffect(() => { statuses = state; pools = poolsController; actions = actionsController; });
     return null;
   }
   try {
@@ -264,4 +268,153 @@ test("a login status read predating account deletion cannot restore the deleted 
     await act(async () => { freshStatus.resolve(Response.json({ loggedIn: true, done: true, email: "new@example.test", accounts: [{ id: "new", active: true }] })); await login; });
     expect(statuses.anthropic?.email).toBe("new@example.test");
   } finally { consent.mockRestore(); oldStatus.resolve(Response.json({})); freshStatus.resolve(Response.json({})); }
+});
+
+test("an old target's login failure cannot cancel the new target's login", async () => {
+  const relay = (origin: string) => {
+    const base = standaloneApiTargets("");
+    return {
+      ...base,
+      connected: true,
+      shared: { ...base.shared, baseUrl: "/api/machine/hub-relay", serverOrigin: origin, transport: "relay" as const },
+      apiKeyId: "fixture-key",
+      relayTargetCheck: "expected-target-v1" as const,
+    };
+  };
+  configureApiTargets(relay("https://hub-a.example"));
+  let actions!: ReturnType<typeof useProvidersOAuth>;
+  const cancels: Array<{ expected: string | null }> = [];
+  const notices: string[] = [];
+  let rejectOld!: (error: Error) => void;
+  // Stable identities: the hook's pagehide effect depends on these setters, and a fresh
+  // arrow per render would make React re-run its cleanup (and bump the login generation).
+  const stableSetters = { setBusy: () => {}, setStatus: () => {}, setLoginInfo: () => {} };
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input), "http://localhost");
+    const headers = new Headers(init?.headers);
+    if (url.pathname.endsWith("/api/oauth/login/cancel")) {
+      cancels.push({ expected: headers.get("x-opencodex-expected-target") });
+      return Response.json({ ok: true });
+    }
+    if (url.pathname.endsWith("/api/oauth/login")) {
+      return new Promise<Response>((_, reject) => { rejectOld = reject; });
+    }
+    return Response.json({ ok: true });
+  } });
+  function Harness({ targetKey }: { targetKey: string }) {
+    const aliveRef = useRef(true);
+    const controller = useProvidersOAuth({ apiBase: "/api/machine/hub-relay", targetKey, t: key => key, aliveRef, accountSets: {},
+      setAccountSets: () => {}, ...stableSetters, setOauthStatus: () => {},
+      notify: message => { notices.push(message); }, fetchConfig: async () => {}, fetchOauth: async () => {},
+      fetchAccountSets: async () => {}, fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => {} });
+    useLayoutEffect(() => { actions = controller; });
+    return null;
+  }
+  try {
+    await render(<Harness targetKey="hub-a" />);
+    let login!: Promise<void>;
+    await act(async () => { login = actions.loginOAuth("anthropic"); await Promise.resolve(); });
+    configureApiTargets(relay("https://hub-b.example"));
+    await render(<Harness targetKey="hub-b" />);
+    await act(async () => { rejectOld(new Error("old request failed")); await login; });
+    // The captured A target is stale, so neither its cleanup nor its failure may reach B.
+    expect(cancels).toEqual([]);
+    expect(notices).toEqual([]);
+  } finally {
+    configureApiTargets(standaloneApiTargets(""));
+  }
+});
+
+test("a logout failure settling after a target change does not notify the new target", async () => {
+  let actions!: ReturnType<typeof useProvidersOAuth>;
+  const notices: string[] = [];
+  let releaseLogout!: (response: Response) => void;
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL) => {
+    const url = new URL(String(input), "http://localhost");
+    if (url.pathname === "/old/api/oauth/logout") {
+      return new Promise<Response>(resolve => { releaseLogout = resolve; });
+    }
+    return Response.json({ ok: true });
+  } });
+  function Harness({ base }: { base: string }) {
+    const aliveRef = useRef(true);
+    const controller = useProvidersOAuth({ apiBase: base, t: key => key, aliveRef, accountSets: {}, setAccountSets: () => {},
+      setBusy: () => {}, setStatus: () => {}, setLoginInfo: () => {}, setOauthStatus: () => {},
+      notify: message => { notices.push(message); }, fetchConfig: async () => {}, fetchOauth: async () => {},
+      fetchAccountSets: async () => {}, fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => {} });
+    useLayoutEffect(() => { actions = controller; });
+    return null;
+  }
+  await render(<Harness base="/old" />);
+  let logout!: Promise<void>;
+  await act(async () => { logout = actions.logoutOAuth("anthropic"); await Promise.resolve(); });
+  await render(<Harness base="/new" />);
+  await act(async () => { releaseLogout(new Response(null, { status: 503 })); await logout; });
+  expect(notices).toEqual([]);
+});
+
+test("key remove, add and alias completions after a target change do not toast or reload on the new target", async () => {
+  const { spyOn } = await import("bun:test");
+  const dialogs = await import("../src/action-dialogs");
+  const { useProviderAccountPools } = await import("../src/hooks/useProviderAccountPools");
+  const consent = spyOn(dialogs, "confirmAction").mockResolvedValue(true);
+  const typed = spyOn(dialogs, "requestTextValue").mockResolvedValue("alias");
+  let pools!: ReturnType<typeof useProviderAccountPools>;
+  const notices: string[] = [];
+  const reloads: string[] = [];
+  let deferred!: Promise<Response>;
+  let release!: (response: Response) => void;
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "DELETE" || init?.method === "POST" || init?.method === "PUT") return deferred;
+    return Response.json({});
+  } });
+  function Harness({ base }: { base: string }) {
+    const aliveRef = useRef(true);
+    const controller = useProviderAccountPools({ apiBase: base, config: null, aliveRef, t: key => key, oauthStatus: {},
+      notify: (message: string) => { notices.push(message); }, fetchConfig: async () => { reloads.push("config"); },
+      fetchOauth: async () => { reloads.push("oauth"); }, fetchProviderQuotas: async () => { reloads.push("quotas"); },
+      codexActiveNeedsReauth: false });
+    useLayoutEffect(() => { pools = controller; });
+    return null;
+  }
+  const run = async (start: () => Promise<unknown>, base: string, next: string) => {
+    deferred = new Promise<Response>(resolve => { release = resolve; });
+    let pending!: Promise<unknown>;
+    await act(async () => { pending = start(); await Promise.resolve(); });
+    await render(<Harness base={base} />);
+    await render(<Harness base={next} />);
+    await act(async () => { release(Response.json({ success: true })); await pending; });
+  };
+  try {
+    await render(<Harness base="/a" />);
+    await run(() => pools.removeApiKey("p", { id: "k1", masked: "sk-…1", active: false }), "/a", "/b");
+    await run(() => pools.addApiKeyValue("p", "sk-new"), "/b", "/a");
+    await run(() => pools.editCredentialAlias("p", "api-key", "k1"), "/a", "/b");
+    expect(notices).toEqual([]);
+    expect(reloads).toEqual([]);
+  } finally {
+    consent.mockRestore();
+    typed.mockRestore();
+  }
+});
+
+test("an add-key form typed on one target does not survive the target change", async () => {
+  const { useProviderAccountPools } = await import("../src/hooks/useProviderAccountPools");
+  let pools!: ReturnType<typeof useProviderAccountPools>;
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async () => Response.json({}) });
+  function Harness({ base }: { base: string }) {
+    const aliveRef = useRef(true);
+    const controller = useProviderAccountPools({ apiBase: base, config: null, aliveRef, t: key => key, oauthStatus: {},
+      notify: () => {}, fetchConfig: async () => {}, fetchOauth: async () => {}, fetchProviderQuotas: async () => {},
+      codexActiveNeedsReauth: false });
+    useLayoutEffect(() => { pools = controller; });
+    return null;
+  }
+  await render(<Harness base="/a" />);
+  await act(async () => { pools.setAddingKeyFor("p"); pools.setNewKeyValue("sk-typed-on-a"); });
+  expect(pools.newKeyValue).toBe("sk-typed-on-a");
+  await render(<Harness base="/b" />);
+  // The credential typed on A is not submittable on B.
+  expect(pools.addingKeyFor).toBeNull();
+  expect(pools.newKeyValue).toBe("");
 });

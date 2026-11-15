@@ -13,7 +13,7 @@ import { probeSpawn, probeSpawnSync } from "../src/update/mutation-guard.mjs";
 import { createSupervisionLatch, inspectDesktopSupervision } from "../src/service/desktop-supervision.mjs";
 import { planDesktopCliHandoff, runDesktopCliHandoff } from "../src/lib/desktop-cli-handoff.mjs";
 import { forwardLauncherSignals } from "../src/lib/launcher-signal-forwarding.mjs";
-import { acquireSyncGuard } from "../src/update/sync-update-mutex.mjs";
+import { acquireSyncGuard, staleUpdateMarkerHint } from "../src/update/sync-update-mutex.mjs";
 import { desktopCliRecordPath } from "../src/lib/desktop-cli-record.mjs";
 import { STOP_HISTORY_INCOMPLETE_EXIT_CODE } from "../src/update/stop-contract.mjs";
 import { probeProxyLiveness } from "../src/update/proxy-liveness-probe.mjs";
@@ -51,6 +51,7 @@ import { pnpmInvocationForPath, resolvePnpmCommands } from "../src/update/pnpm-i
 import { detectInstallOwnershipFromPath } from "../src/update/install-detection.mjs";
 import { isOrchestratedUpdateArgv, parseOrchestratedUpdateArgs, parseOrchestratedChildArgs } from "../src/update/orchestrated-arguments.mjs";
 import { createLegacyUpdateSession, createOrchestratedChildSession, decodeOrchestratedExpect } from "../src/update/orchestrated-session.mjs";
+import { matchesOrchestratedPnpmOwner } from "../src/update/orchestrated-pnpm.mjs";
 import { createUpdatePlanToken } from "../src/update/orchestrated-token.mjs";
 import { applyNodeOrchestratedUpdate } from "../src/update/orchestrated-node-driver.mjs";
 import {
@@ -240,13 +241,18 @@ function runningPnpmShimPath() {
 }
 
 async function runPackageManagerSelfUpdate(manager, child) {
-  let session, enteredMutation = false;
+  let session, enteredMutation = false, owner, resolveOwner;
   let childOutcome = { phase: "failed", rollbackPerformed: false };
   if (child) {
     try {
       const expected = decodeOrchestratedExpect(child.expect);
       session = createOrchestratedChildSession({ home: configDir(), resultPath: child.resultPath, resultCapability: child.resultCapability, expect: expected,
         notAfter: child.notAfter, verifyIdentity: () => {
+          if (manager === "pnpm") {
+            if (!matchesOrchestratedPnpmOwner(expected.pnpmOwner, owner)) return false;
+            const currentOwner = resolveOwner([owner.commandPath]);
+            if (!currentOwner.ok || !matchesOrchestratedPnpmOwner(expected.pnpmOwner, currentOwner.owner)) return false;
+          } else if (expected.pnpmOwner !== undefined) return false;
           const bun = resolveBun({ allowInstall: false, allowMissing: true });
           if (!bun) return false;
           const probe = probeSpawnSync(bun.path, ["--no-env-file", join(here, "../src/update/orchestrated-identity-probe-entry.ts"), "__update-orchestrated-identity"], {
@@ -275,7 +281,11 @@ async function runPackageManagerSelfUpdate(manager, child) {
   } else {
     session = createLegacyUpdateSession({ home: configDir() });
     const started = session.start();
-    if (!started.ok) { console.error(`opencodex: ${started.error}`); process.exit(1); }
+    if (!started.ok) {
+      console.error(`opencodex: ${started.error}`);
+      if (started.staleMarker) for (const line of staleUpdateMarkerHint(configDir())) console.error(line);
+      process.exit(1);
+    }
     process.once("exit", () => {
       try { if (enteredMutation) session.finish(childOutcome); else session.finishPreflight(); }
       catch (error) { console.error(`Update outcome write failed: ${error?.message ?? error}`); process.exitCode = 1; }
@@ -283,27 +293,27 @@ async function runPackageManagerSelfUpdate(manager, child) {
   }
   const current = currentPackageVersion();
   const tag = updateTag(current);
-  let owner;
   if (manager === "pnpm") {
-    const ownerResult = resolvePnpmGlobalOwner({
+    resolveOwner = commandPaths => resolvePnpmGlobalOwner({
       packageName: PKG,
       packagePath: resolve(here, ".."),
-      commandPaths: resolvePnpmCommands(),
+      commandPaths,
       runningShimPath: runningPnpmShimPath(),
-      runPnpm: (commandPath, args, capture = false) => {
-        const invocation = pnpmInvocationForPath(commandPath, args);
+      runPnpm: (commandPath, args, capture = false, owner) => {
+        const invocation = owner ? pnpmOwnerInvocation(owner, args) : pnpmInvocationForPath(commandPath, args);
         if (!invocation) return { status: 1 };
-        return probeSpawnSync(invocation.file, invocation.args, {
+        return withPnpmCommandCwd(args, cwd => probeSpawnSync(invocation.file, invocation.args, {
           stdio: capture ? "pipe" : "ignore",
           encoding: "utf8",
           timeout: 20_000,
           windowsHide: true,
-          cwd: PNPM_READ_CWD,
-          env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(process.env)),
+          cwd,
+          env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(invocation.env ?? process.env)),
           ...invocation.options,
-        });
+        }));
       },
     });
+    const ownerResult = resolveOwner(resolvePnpmCommands());
     if (!ownerResult.ok) {
       console.error(`opencodex: ${ownerResult.reason}; aborting before stopping the proxy.`);
       process.exit(1);
@@ -572,6 +582,8 @@ async function runPackageManagerSelfUpdate(manager, child) {
     }
     const env = mutationChildEnvironment();
     delete env.OCX_SERVICE;
+    // Not launched by a supervisor: none of its markers (src/lib/supervisor-markers.ts) may ride along.
+    for (const name of ["OCX_DESKTOP_SUPERVISED", "OCX_SERVICE_MANAGED", "OCX_WINDOWS_WRAPPER_PROTOCOL"]) delete env[name];
     // The restarted proxy is an ordinary owner; only a sibling's own replacement carries this.
     delete env.OCX_SIBLING_OF_PORT;
     delete env.OCX_SIBLING_HANDOFF_NONCE;
@@ -1017,6 +1029,7 @@ async function runPackageManagerSelfUpdate(manager, child) {
               if (session) session.noteUntrackedInstaller();
               return runNpmInstall(invocation, {
                 authorizeMutation: homePolicy.authorizeMutation,
+                ...(session ? { markerPath: join(configDir(), "update-orchestrated.json") } : {}),
                 env: unprivilegedOwnershipMutationEnvironment(invocation?.options?.env ?? process.env),
               }).then(result => {
                 if (session && result.processTreeExited === true && Number.isInteger(result.status)) session.confirmInstallerExit();
@@ -1079,7 +1092,8 @@ async function runPackageManagerSelfUpdate(manager, child) {
               const env = pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(invocation.env ?? process.env));
               if (process.platform === "win32") {
                 session.noteUntrackedInstaller();
-                const result = runWindowsInstallerSync(invocation, { cwd, env, authorizeMutation: homePolicy.authorizeMutation });
+                const result = runWindowsInstallerSync(invocation, { cwd, env, authorizeMutation: homePolicy.authorizeMutation,
+                  markerPath: join(configDir(), "update-orchestrated.json") });
                 if (result.processTreeExited === true && Number.isInteger(result.status)) session.confirmInstallerExit();
                 else { session.retainInstallerFence(); return { ...result, processTreeExited: false }; }
                 return result;
@@ -1377,12 +1391,12 @@ if (orchestratedArgs?.ok && orchestratedArgs.mode === "apply" && process.env.OCX
       return JSON.parse(probe.stdout);
     },
     pnpmCommands: resolvePnpmCommands(), runningShimPath: runningPnpmShimPath(),
-    runPnpm: (commandPath, args, capture = false) => {
-      const invocation = pnpmInvocationForPath(commandPath, args);
+    runPnpm: (commandPath, args, capture = false, owner) => {
+      const invocation = owner ? pnpmOwnerInvocation(owner, args) : pnpmInvocationForPath(commandPath, args);
       if (!invocation) return { status: 1 };
-      return probeSpawnSync(invocation.file, invocation.args, { stdio: capture ? "pipe" : "ignore", encoding: "utf8",
-        timeout: 20000, windowsHide: true, cwd: PNPM_READ_CWD,
-        env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(process.env)), ...invocation.options });
+      return withPnpmCommandCwd(args, cwd => probeSpawnSync(invocation.file, invocation.args, { stdio: capture ? "pipe" : "ignore", encoding: "utf8",
+        timeout: 20000, windowsHide: true, cwd,
+        env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(invocation.env ?? process.env)), ...invocation.options }));
     },
     spawn: probeSpawn,
   });

@@ -213,6 +213,8 @@ describe("Responses fetch-helper import boundary", () => {
     expect(expectRuntimeImportBoundary(readFileSync(helperPath, "utf8"))).toEqual([
       // Import-free sent-header registry read by the request log (#6911).
       "../../lib/outbound-credential-registry",
+      // Import-free proof that the executor preserves destination and credentials.
+      "../../lib/passive-key-fetch-proof",
       "../../lib/provider-admission-wait",
       "../../lib/provider-egress",
       "../../lib/provider-tls-profile",
@@ -228,6 +230,10 @@ describe("Responses fetch-helper import boundary", () => {
       "./request-compression",
       "./ws-upstream",
     ]);
+  });
+
+  test("the passive key transport proof is an import-free runtime leaf", () => {
+    expect(expectRuntimeImportBoundary(readFileSync(resolve(repoRoot, "src/lib/passive-key-fetch-proof.ts"), "utf8"))).toEqual([]);
   });
 
   test("the guard recognizes runtime edges and ignores type-only imports", () => {

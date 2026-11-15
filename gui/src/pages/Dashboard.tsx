@@ -18,10 +18,10 @@ function selectDashboardTab(next: DashboardSection) {
   navigateHash(dashboardHashForSection(next));
 }
 
-export default function Dashboard({ apiBase, readOnly = false, connected = false, authenticationPending = false, refreshEpoch = 0 }: {
-  apiBase: string; readOnly?: boolean; connected?: boolean; authenticationPending?: boolean; refreshEpoch?: number;
+export default function Dashboard({ apiBase, targetKey, readOnly = false, connected = false, authenticationPending = false, refreshEpoch = 0 }: {
+  apiBase: string; targetKey?: string; readOnly?: boolean; connected?: boolean; authenticationPending?: boolean; refreshEpoch?: number;
 }) {
-  const d = useDashboardData(apiBase, refreshEpoch);
+  const d = useDashboardData(apiBase, refreshEpoch, targetKey);
   const {
     t, error, selectedSection,
     providers, models, modelsLoading, modelQuery, setModelQuery,

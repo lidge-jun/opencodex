@@ -1,7 +1,10 @@
 name = "opencodex-telemetry-collector"
 main = "src/index.ts"
 compatibility_date = "2026-01-01"
-route = "telemetry.opencodex.me/*"
+# A Custom Domain, not a zone route: telemetry.opencodex.me has no DNS record of its own, and a
+# route only attaches to an existing proxied record. Deploying creates the record and certificate.
+# The Worker must deploy from the Cloudflare account that owns the opencodex.me zone.
+routes = [{ pattern = "telemetry.opencodex.me", custom_domain = true }]
 
 # Real D1 database_id is configured by a maintainer at deploy time.
 [[d1_databases]]

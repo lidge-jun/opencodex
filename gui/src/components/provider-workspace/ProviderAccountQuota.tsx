@@ -6,7 +6,7 @@ import { ProviderCapacityQuota } from "./ProviderCapacityQuota";
 import type { AccountQuotaReading } from "./types";
 
 /** The same reading states and credit/window renderer for current and all-account views. */
-export default function ProviderAccountQuota({ quota: rawQuota, quotaMode, quotaUnavailable, quotaPending, quotaFailure }: AccountQuotaReading) {
+export default function ProviderAccountQuota({ quota: rawQuota, quotaMode, quotaUnavailable, quotaPending, quotaFailure, quotaReadAt }: AccountQuotaReading) {
   const t = useT();
   const quota = accountQuotaFromReport({ quota: rawQuota });
   if (quotaMode === "unsupported") {
@@ -27,6 +27,10 @@ export default function ProviderAccountQuota({ quota: rawQuota, quotaMode, quota
     )}
     {quotaUnavailable && quota && <p className="muted">
       {t("pws.stats.quotaUpdated")}: {formatRelativeTime(quota.updatedAt, relativeTimeLabelsFromT(t))}
+    </p>}
+    {/* #8397: an unknown balance says when it was last read. */}
+    {(quotaUnavailable || !quota) && !pending && typeof quotaReadAt === "number" && <p className="muted">
+      {t("pws.quotaLastRead")}: {formatRelativeTime(quotaReadAt, relativeTimeLabelsFromT(t))}
     </p>}
   </div>;
 }

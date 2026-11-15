@@ -105,7 +105,9 @@ describe("telemetry collector worker + D1", () => {
     );
     expect(wranglerToml).toContain('database_id = "00000000-0000-0000-0000-000000000000"');
     expect(wranglerToml).toContain('binding = "DB"');
-    expect(wranglerToml).toContain("telemetry.opencodex.me/*");
+    // A Custom Domain: the hostname has no DNS record of its own, which a zone route would need.
+    expect(wranglerToml).toContain('routes = [{ pattern = "telemetry.opencodex.me", custom_domain = true }]');
+    expect(wranglerToml).not.toContain("telemetry.opencodex.me/*");
     expect(wranglerToml).toContain("[triggers]");
     expect(wranglerToml).toContain("crons =");
   });

@@ -7,6 +7,16 @@ Danışman, worker'ın görevini inceleyen ve tavsiye döndüren bağımsız bir
 
 Bu, alt ajan yüzeyinden farklıdır (bkz. [Ajan yapılandırması](/tr/reference/configuration/agents/)): alt ajanlar, Codex'in işbirliği araçları üzerinden worker tarafından başlatılan delegasyondur. Danışman, istemcinin hiç görmediği proxy tarafı bir sidecar'dır — hiçbir şey spawn etmeyen bir worker bile tavsiye alabilir.
 
+## Yalnızca soru
+
+Tekrarlanan girdiyi azaltmak için Advisor sayfasındaki yalnızca soru seçeneğini açın veya çalıştırın:
+
+```sh
+ocx advisor set --context-mode question-only
+```
+
+Bu mod yalnızca sabit bir talimat ve çalışanın sorusunu gönderir (en fazla 2.000 karakter ve kesilme bildirimi). Görev, geçmiş, araç sonuçları, katalog, çalışan kimliği veya onarım kanıtı eklenmez. Çalışan gerekli bilgileri soruya eklemelidir. Boş sorular sağlayıcı çağrısı yapılmadan reddedilir. Otomatik preflight ve adaptive danışmalar duraklatılır; onay ve mevcut çağrı sınırları geçerlidir. Varsayılan `context` modu aşağıdaki davranışı korur. `--context-mode context` ile geri dönülebilir.
+
 ## Yapılandırma
 
 Kontrol panelindeki **Advisor** sayfasında katalogdan model seçin. Yerel, sağlayıcı, hesap, özel model ve combo tanımlayıcıları aynen kaydedilir. Devre dışı veya ilk seçimi bekleyen modeller yeni seçenek olarak sunulmaz. Listede bulunmayan kayıtlı tanımlayıcı, değiştirilene veya temizlenene kadar uyarıyla korunur. Yükleme hatası seçimi korur ve yeniden deneme sunar. Metin önerisi verebilen bir model seçin; katalog danışma uyumluluğunu garanti etmez. CLI ve API, yönlendiricinin desteklediği model dizelerini kabul etmeye devam eder.
@@ -29,13 +39,14 @@ Kontrol panelindeki **Advisor** sayfasında katalogdan model seçin. Yerel, sağ
 | `model?` | `string` | — | Uzman model. Yönlendiricinin kabul ettiği herhangi bir model dizisi: çıplak yerel model (`gpt-6-astra`), açık `provider/model` (`anthropic/claude-sonnet-4-6`, `xai/grok-...`) veya hesap nitelemeli yerel model. Sağlayıcılar arası tam desteklenir. |
 | `effort?` | `string` | `"max"` | Danışman çağrısının muhakeme düzeyi (`low`–`ultra`). |
 | `policy?` | `"manual" \| "preflight" \| "adaptive"` | `"manual"` | Ne zaman danışılır. |
+| `contextMode?` | `"context" \| "question-only"` | `"context"` | Bağlam paylaşımı. `question-only` çalışanın açık sorusunu gerektirir ve otomatik danışmaları duraklatır. |
 | `maxConsultationsPerTask?` | `integer` | `3` | Uyarlanabilir görev bütçesi: manuel çağrılar dahil 1–3 deneme. |
 | `timeoutMs?` | `number` | `120000` | Loopback danışma zaman aşımı. |
 | `contextSharingConsent?` | `"v1"` | yok | Yapılandırılmış danışman sağlayıcısına görev bağlamını gönderme onayı. Güncel değer yalnızca `"v1"`. Yok, eskimiş veya başka bir değer görev içeriğinin gönderilmemesi demektir. `enabled: true` bu onay değildir. |
 
 Panodaki **Advisor** sayfası veya `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>` ile yönetin.
 
-Güncel onay yokken `ocx advisor on` sağlayıcılar arası gönderimi açmaz: açıklamayı basar ve durur. `ocx advisor on --ack-context-sharing` ile `ocx advisor consent` `v1` kaydeder. `ocx advisor consent --revoke` onayı kaldırır ve gönderimi hemen durdurur. `ocx advisor set` onay vermez. Panodaki onay kutusu önceden işaretli değildir.
+Güncel onay yokken `ocx advisor on` sağlayıcılar arası gönderimi açmaz: açıklamayı basar ve durur. `ocx advisor on --ack-context-sharing` ile `ocx advisor consent` `v1` kaydeder. `ocx advisor consent --revoke` onayı kaldırır. Henüz gönderilmemiş danışmalar engellenir, ancak gönderilmiş bir danışma iptal edilemez ve proxy'den ayrılmış bağlam geri alınamaz. `ocx advisor set` onay vermez. Panodaki onay kutusu önceden işaretli değildir.
 
 ## Politikalar
 
@@ -87,6 +98,7 @@ Danışman fail-open davranır: gönderilmiş bir danışma başarısız olursa 
 ## PR1 sınırlamaları
 
 - Yerel OpenAI passthrough turları (ChatGPT havuzu worker'ları) sentetik aracı almaz; danışman desteği yönlendirilen (çevrilen) sağlayıcıları kapsar. Preflight danışması run-turn bağdaştırıcılarına uygulanır; araç uygulanmaz.
+- Çevrilen `/v1/messages` istekleri (örneğin çevrilen bir sağlayıcıya yönlendirilen Claude Code), `/v1/responses` ve `/v1/chat/completions` gibi sentetik aracı ve preflight danışmasını alır. Aynı `policy` ve bağlam paylaşımı onayı kuralları geçerlidir ve ayarlar güncel yapılandırmadan okunur; bu yüzden onayın geri alınması, devam eden isteklerin henüz gönderilmemiş bir danışma başlatmasını engeller. Gönderilmiş bir danışmayı iptal etmez ve proxy'den ayrılmış bağlamı geri almaz.
 - Anlamsal takılma algılama, tamamlanma incelemesi, yükseltme katmanları, çoklu danışman veya oylama yoktur.
 - Preflight tekilleştirme defteri süreç içindedir; proxy yeniden başlatıldıktan sonra devam eden bir görev bir preflight danışması daha alabilir.
 

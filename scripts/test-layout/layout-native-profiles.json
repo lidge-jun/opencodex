@@ -1,0 +1,14 @@
+{
+  "native-profile-api.test.ts": "codex-integration",
+  "native-profile-crash-boundaries.test.ts": "codex-integration",
+  "native-profile-drain-server.test.ts": "codex-integration",
+  "native-profile-healthz.test.ts": "codex-integration",
+  "native-profile-manager.test.ts": "codex-integration",
+  "native-profile-processes.test.ts": "codex-integration",
+  "native-profile-recovery.test.ts": "codex-integration",
+  "native-profile-route-security.test.ts": "codex-integration",
+  "native-profile-stage-lifecycle.test.ts": "codex-integration",
+  "native-profile-startup-release.test.ts": "codex-integration",
+  "native-profile-startup.test.ts": "codex-integration",
+  "native-profile-store.test.ts": "codex-integration"
+}

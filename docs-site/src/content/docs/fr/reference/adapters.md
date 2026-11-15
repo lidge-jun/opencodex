@@ -124,6 +124,8 @@ Les comptes inactifs n’ont pas encore nécessairement de liste observée.
 - Construit le `conversationState` de Kiro, mappe les outils Codex et leurs résultats, puis envoie les blocs d’image pris en charge par le protocole Kiro.
 - Décode `application/vnd.amazon.eventstream`, reconstruit les événements de texte, de raisonnement et d’outil, détecte les données JSON d’outil tronquées et estime l’utilisation, car le service en amont ne renvoie aucun nombre de jetons.
   Les jetons restent estimés, mais les crédits de `meteringEvent` sont mesurés dans `providerCredits` : la dernière valeur d'une réponse est retenue, puis les envois physiques facturés séparément sont additionnés. Aucun crédit n'est déduit des jetons.
+- Envoie au plus 48 outils client et 96 Ko de JSON d’outil converti par requête, et coupe chaque description d’outil à 1 024 caractères (9 216 pour `gpt-5.6-sol`). Les outils chargés par tool search et l’outil d’exécution du code mode Codex passent en premier ; le modèle est informé des outils omis. Réglez `OCX_KIRO_TOOL_BUDGET=off` dans l’environnement du proxy pour envoyer tout le catalogue client, et `OCX_KIRO_TOOL_DESCRIPTION_LIMIT=off` pour envoyer les descriptions complètes. Les deux sont lus à la conversion de la requête, s’appliquent à tous les modèles Kiro et laissent les autres limites intactes. Désactiver le budget supprime la limite elle-même : il n’y a plus rien à prioriser ni à omettre. Tous les outils déclarés partent dans l’ordre de déclaration, l’avis d’omission disparaît, et un client qui en déclare plus que Kiro n’en accepte reçoit le `ValidationException` amont au lieu d’un catalogue réduit. La taille des requêtes suit alors le catalogue du client. Ces interrupteurs sont une option de retrait pour un compte mesuré comme acceptant la requête plus grande, pas un moyen de rendre un catalogue surdimensionné sûr.
+- Retire les mots-clés JSON Schema que le validateur de Kiro rejette (`pattern`, `minLength`, `maximum`, `additionalProperties` et 25 autres) des schémas d’outil et de sortie structurée, sauf ceux qu’une sonde a mesurés sur le modèle concerné. `claude-opus-4.5` les conserve tous. `claude-opus-5.5` et `claude-sonnet-5.5` conservent `pattern` et `maximum` ; leurs autres mots-clés restent retirés, faute de sonde qui les leur ait envoyés. Tout autre modèle Kiro, y compris les autres identifiants Claude, garde le retrait complet. L’exception est par modèle et par mot-clé parce que ce protocole sépare déjà les modèles Claude sur l’effort de raisonnement, et un mot-clé rejeté par Kiro fait échouer la requête entière au lieu de seulement priver le modèle d’une indication.
 - Utilise à l’identique le `baseUrl` configuré lorsqu’il est personnalisé. Une URL canonique `runtime.{region}.kiro.dev` suit la région d’API de l’identifiant importé ; seule cette forme canonique peut faire l’objet d’un unique repli borné vers `q.{region}.amazonaws.com` après un échec de point de terminaison, de signature, de DNS ou de connexion, ou une réponse HTTP 502/503/504 reçue avant toute sortie.
 - Gère la récupération après réinitialisation de connexion lorsqu’un rejeu est sûr, cet unique repli de point de terminaison admissible, une actualisation OAuth suivie d’un rejeu après une réponse HTTP 401, ainsi qu’une récupération bornée pour les réponses Kiro 429 transitoires. Un délai de récupération partagé et une seule sonde après ce délai empêchent les requêtes concurrentes d’épuiser des budgets de nouvelle tentative indépendants ; un quota épuisé n’est pas réessayé sur le même compte, et les autres erreurs de service ne sont pas rejouées. Tous les envois Kiro utilisent la sortie réseau configurée ; un délai d’en-tête dépassé renvoie 504, l’annulation du client arrête la requête et les erreurs HTTP 5xx finales affichent un texte public fixe.
 - Avec deux comptes enregistrés, un refus de débit refroidit brièvement le compte concerné. Un refus mensuel confirmé (HTTP 400 ou 429) l’exclut jusqu’à la réinitialisation observée ou l’expiration des données ; une suspension confirmée (HTTP 403) le met temporairement en quarantaine, mais un 403 ordinaire ne déclenche pas de rotation. La rotation après refus reste active lorsque la préférence proactive est désactivée. Le choix d’un autre compte avant le premier envoi exige une préférence proactive, où le réglage du fournisseur prime sur le réglage global. Un tour terminé par le même compte efface un ancien verdict d’épuisement.
@@ -141,12 +143,43 @@ Si Kiro s’arrête sans appeler l’outil d’achèvement, l’adaptateur effec
 
 ### Effort de raisonnement
 
-Les modèles GPT-5.6 utilisent `additionalModelRequestFields.reasoning.effort`, et `claude-opus-5`
-utilise `additionalModelRequestFields.output_config.effort`. Pour `gpt-5.6-luna` et `gpt-5.6-terra`,
-seuls `low`, `medium`, `high` et `max` empruntent le chemin natif vérifié. Leur niveau `xhigh`
-conserve les instructions de réflexion bornées existantes, car ce niveau natif n’a pas été vérifié.
-`gpt-5.6-sol` et `claude-opus-5` conservent leurs niveaux natifs existants : `low`, `medium`, `high`,
-`xhigh` et `max`. Les autres modèles Kiro utilisent une émulation ; un réglage d’effort ne prouve pas une prise en charge native.
+Les modèles GPT-5.6 et GPT-6 (`gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`, `gpt-6.1-terra`)
+utilisent `additionalModelRequestFields.reasoning.effort`, et les modèles Claude listés ci-dessous
+utilisent `additionalModelRequestFields.output_config.effort`.
+Pour `gpt-5.6-luna` et `gpt-5.6-terra`, seuls `low`, `medium`, `high` et `max` empruntent le
+chemin natif vérifié. Leur niveau `xhigh` conserve les instructions de réflexion bornées
+existantes, car ce niveau natif n’a pas été vérifié.
+`gpt-5.6-sol` et les modèles GPT-6 conservent leurs niveaux natifs `low`, `medium`, `high`,
+`xhigh` et `max` par ce même champ `reasoning.effort`.
+
+Kiro accepte `output_config.effort` pour `claude-opus-5`, `claude-opus-5.5`, `claude-opus-4.8`,
+`claude-opus-4.7`, `claude-opus-4.6`, `claude-sonnet-5.5`, `claude-sonnet-5`, `claude-sonnet-4.6`
+et `claude-haiku-5.5` aux niveaux `low`, `medium`, `high`, `xhigh` et `max`, avec une
+exception : `claude-opus-4.6` et `claude-sonnet-4.6` rejettent le `xhigh` natif, donc ce niveau
+garde le bloc de réflexion émulé.
+
+Kiro n’a pas de niveau `minimal`. Sur les neuf modèles ci-dessus sauf `claude-opus-5` et
+`claude-opus-5.5`, `minimal` conserve le bloc émulé au lieu de faire échouer une requête qui
+fonctionnait avant l’activation de l’effort natif. Ces deux modèles Opus 5, ainsi que les modèles GPT
+qui portent un effort natif, rejettent `minimal` par une erreur 400 `invalid_request_error` avant
+que quoi que ce soit ne soit envoyé.
+
+Les surfaces rapportent ce refus différemment. Une requête Responses place dans `error.message` une
+phrase qui nomme le modèle et le niveau refusé. Les chemins Messages et Chat Completions y placent le
+texte fixe du proxy, `The provider rejected the request.`, parce qu’ils remplacent le détail de
+l’adaptateur par leur propre libellé au lieu de le relayer. Seul Responses nomme le modèle et le
+niveau. Les requêtes en flux et hors flux se lisent à l’identique sur toutes les surfaces : le refus
+survient pendant la construction du corps envoyé en amont, donc aucun flux ne s’ouvre et aucun appel
+amont n’a lieu.
+
+Le `ultra` envoyé par l’appelant est réduit à `max` à l’analyse. Les pins `pinnedReasoningEffort`,
+`modelPinnedReasoningEfforts` et `modelPinnedEfforts` sont appliqués ensuite : pour les modèles à
+effort natif Kiro, l’adaptateur réduit aussi `ultra` à `max`. Pour les modèles en émulation, ce pin
+est ignoré et la requête part sans signal de raisonnement.
+
+`claude-haiku-4.5`, `claude-opus-4.5`, `claude-sonnet-4.5`, ainsi que tout modèle Kiro non
+listé ci-dessus, utilisent une émulation à chaque niveau ; un réglage d’effort ne prouve pas une
+prise en charge native.
 
 ## `cursor`
 

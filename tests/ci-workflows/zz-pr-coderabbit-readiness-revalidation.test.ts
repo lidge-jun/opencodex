@@ -98,7 +98,13 @@ describe("workflow comment-spam hardening", () => {
     const text = await Bun.file(
       new URL("../../.github/workflows/enforce-pr-target.yml", import.meta.url),
     ).text();
-    const workflow = Bun.YAML.parse(text) as Workflow;
+    const gate = Bun.YAML.parse(text) as Workflow;
+    // The gate runs as a local reusable workflow of pr-gates.yml (#7654), which owns
+    // the triggers; both load from the default branch.
+    expect(Object.keys(gate.on ?? {})).toEqual(["workflow_call"]);
+    const workflow = Bun.YAML.parse(await Bun.file(
+      new URL("../../.github/workflows/pr-gates.yml", import.meta.url),
+    ).text()) as Workflow;
 
     expect(workflow.on?.issue_comment).toBeUndefined();
     expect(workflow.on?.pull_request_review).toBeUndefined();
@@ -112,7 +118,7 @@ describe("workflow comment-spam hardening", () => {
       "unlabeled",
     ]));
 
-    const resolver = workflow.jobs?.["resolve-pr"];
+    const resolver = gate.jobs?.["resolve-pr"];
     const resolverIf = (resolver?.if ?? "").replace(/\s+/g, " ").trim();
     for (const guard of [
       "github.event_name == 'status'",
@@ -127,7 +133,7 @@ describe("workflow comment-spam hardening", () => {
       expect(resolverIf).toContain(guard);
     }
 
-    const job = workflow.jobs?.["enforce-target"];
+    const job = gate.jobs?.["enforce-target"];
     expect(job?.if).toBe("needs.resolve-pr.outputs.pull-number != ''");
 
     const checkoutStep = job?.steps?.find(

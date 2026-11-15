@@ -52,14 +52,35 @@ describe.skipIf(process.platform === "win32")("message MCP CLI", () => {
       args: [repoPath("src/cli/index.ts"), "message", "mcp", "--codex", f.options.codex, "--codex-home", f.options.codexHome, "--allow-reply-read"], stderr: "pipe" });
     try {
       await client.connect(transport);
-      expect((await client.listTools()).tools.map(t=>t.name).sort()).toEqual(["codex_queue_message","codex_read_reply","codex_threads"]);
+      expect((await client.listTools()).tools.map(t=>t.name).sort()).toEqual(["codex_queue_message","codex_read_reply","codex_threads","codex_wait_reply"]);
       expect(f.calls()).toHaveLength(0);
       const read = await client.callTool({name:"codex_read_reply",arguments:{threadId:QUEUE_MCP_TARGET,clientMessageId:REPLY_MCP_CLIENT}});
       const result = JSON.parse((read.content as {text:string}[])[0]!.text);
       expect(result).toMatchObject({available:true,status:"observed",association:"same_turn_not_exclusive",replies:[{text:"fixture answer"}]});
       expect(JSON.stringify(read)).not.toContain("PRIVATE_");
+      const waited=await client.callTool({name:"codex_wait_reply",arguments:{threadId:QUEUE_MCP_TARGET,clientMessageId:REPLY_MCP_CLIENT}});
+      expect(JSON.parse((waited.content as {text:string}[])[0]!.text)).toMatchObject({available:true,waitOutcome:"reply_observed",attempts:1});
     } finally {await client.close();await f.close();}
   }, 15000);
+
+  test("wait requests share the four-operation bound and disconnect cancels paused waits",async()=>{
+    const f=queueMcpFixture("reply-wait-empty");
+    const client=new Client({name:"fixture",version:"1"});
+    const transport=new StdioClientTransport({command:process.execPath,
+      args:[repoPath("src/cli/index.ts"),"message","mcp","--codex",f.options.codex,"--codex-home",f.options.codexHome,"--allow-reply-read"],stderr:"pipe"});
+    const pending:Promise<unknown>[]=[];
+    try {
+      await client.connect(transport);
+      for(let i=0;i<4;i++) pending.push(client.callTool({name:"codex_wait_reply",arguments:{threadId:QUEUE_MCP_TARGET,clientMessageId:REPLY_MCP_CLIENT}}).catch(e=>e));
+      const until=performance.now()+5_000;
+      while(f.calls().filter(c=>c.frame.method === "thread/turns/list").length<4 && performance.now()<until) await Bun.sleep(10);
+      expect(f.calls().filter(c=>c.frame.method === "thread/turns/list")).toHaveLength(4);
+      expect((await client.callTool({name:"codex_wait_reply",arguments:{threadId:QUEUE_MCP_TARGET,clientMessageId:REPLY_MCP_CLIENT}})).isError).toBe(true);
+      await client.close();await Promise.allSettled(pending);
+      const count=f.calls().length;await Bun.sleep(100);expect(f.calls()).toHaveLength(count);
+      for(const pid of new Set(f.calls().map(c=>c.pid))) expect(()=>process.kill(pid,0)).toThrow();
+    } finally {await client.close();await Promise.allSettled(pending);await f.close();}
+  },15_000);
 
   test("four-helper bound and MCP disconnect cancel and reap pending work", async () => {
     const f = queueMcpFixture("hang");

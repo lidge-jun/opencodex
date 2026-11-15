@@ -165,6 +165,52 @@ describe("usage ledger cooperative scanner", () => {
     expect(totalTokens).toBe(4_200);
   });
 
+  test("yields between expensive rows even when the ledger fits in one read", async () => {
+    const rows = Array.from({ length: 40 }, (_, index) => line(`slow-${index}`));
+    writeFileSync(usageLogPath(), rows.join(""));
+    let elapsed = 0;
+    let visited = 0;
+    let visitedAtTimer = -1;
+    const clock = spyOn(performance, "now").mockImplementation(() => elapsed);
+    const timer = setTimeout(() => { visitedAtTimer = visited; }, 0);
+    try {
+      const result = await scanUsageLedgerCooperatively({
+        onEntry() { visited += 1; elapsed += 10; },
+      });
+      expect(visitedAtTimer).toBeGreaterThan(0);
+      expect(visitedAtTimer).toBeLessThan(rows.length);
+      expect(result.parsedRows).toBe(rows.length);
+      expect(result.processedThroughBytes).toBe(Buffer.byteLength(rows.join("")));
+      // Pausing between rows must not change the checkpoint a scan publishes.
+      clock.mockRestore();
+      const unpaused = await scanUsageLedgerCooperatively({ onEntry() {} });
+      expect(result.processedThroughDigest).toBe(unpaused.processedThroughDigest);
+    } finally {
+      clearTimeout(timer);
+      clock.mockRestore();
+    }
+  });
+
+  test("honors cancellation delivered between expensive rows in one read", async () => {
+    writeFileSync(usageLogPath(), Array.from({ length: 40 }, (_, index) => line(`abort-${index}`)).join(""));
+    let elapsed = 0;
+    let visited = 0;
+    const clock = spyOn(performance, "now").mockImplementation(() => elapsed);
+    const abort = new AbortController();
+    const reason = new Error("cancel slow scan");
+    const timer = setTimeout(() => abort.abort(reason), 0);
+    try {
+      await expect(scanUsageLedgerCooperatively({
+        signal: abort.signal,
+        onEntry() { visited += 1; elapsed += 10; },
+      })).rejects.toBe(reason);
+      expect(visited).toBeLessThan(40);
+    } finally {
+      clearTimeout(timer);
+      clock.mockRestore();
+    }
+  });
+
   test("skips malformed, invalid UTF-8, oversized, and torn final rows with bounded recovery", async () => {
     const exactlyAtLimit = Buffer.concat([
       Buffer.alloc(USAGE_LEDGER_MAX_LINE_BYTES, 0x20),
@@ -423,34 +469,40 @@ describe("usage ledger cooperative scanner", () => {
     const rewritten = line("new-checkpoint");
     expect(Buffer.byteLength(rewritten)).toBe(Buffer.byteLength(original));
     writeFileSync(usageLogPath(), original);
-    let abortChecks = 0;
-    const rewriteAfterVerification = {
-      get aborted() {
-        abortChecks += 1;
-        if (abortChecks === 4) writeFileSync(usageLogPath(), rewritten);
-        return false;
-      },
-    } as AbortSignal;
+    // This fixture rewrites after verification; elapsed-time yields have separate coverage.
+    const clock = spyOn(performance, "now").mockReturnValue(0);
+    try {
+      let abortChecks = 0;
+      const rewriteAfterVerification = {
+        get aborted() {
+          abortChecks += 1;
+          if (abortChecks === 4) writeFileSync(usageLogPath(), rewritten);
+          return false;
+        },
+      } as AbortSignal;
 
-    const ids: string[] = [];
-    const result = await scanUsageLedgerCooperatively({
-      signal: rewriteAfterVerification,
-      onEntry: value => ids.push(value.requestId),
-    });
-    const originalDigest = createHash("sha256").update(original).digest("hex");
-    expect(abortChecks).toBeGreaterThanOrEqual(4);
-    expect(ids).toEqual(["old-checkpoint"]);
-    expect(result.processedThroughDigest).toBe(originalDigest);
+      const ids: string[] = [];
+      const result = await scanUsageLedgerCooperatively({
+        signal: rewriteAfterVerification,
+        onEntry: value => ids.push(value.requestId),
+      });
+      const originalDigest = createHash("sha256").update(original).digest("hex");
+      expect(abortChecks).toBeGreaterThanOrEqual(4);
+      expect(ids).toEqual(["old-checkpoint"]);
+      expect(result.processedThroughDigest).toBe(originalDigest);
 
-    await expect(scanUsageLedgerCooperatively({
-      startAtBytes: result.processedThroughBytes,
-      expectedIdentityKey: usageLogIdentityKey(result.revision),
-      expectedProcessedThroughDigest: result.processedThroughDigest,
-      onEntry: () => {},
-    })).rejects.toMatchObject({
-      code: "usage_ledger_rebuild_required",
-      reason: "content_changed",
-    });
+      await expect(scanUsageLedgerCooperatively({
+        startAtBytes: result.processedThroughBytes,
+        expectedIdentityKey: usageLogIdentityKey(result.revision),
+        expectedProcessedThroughDigest: result.processedThroughDigest,
+        onEntry: () => {},
+      })).rejects.toMatchObject({
+        code: "usage_ledger_rebuild_required",
+        reason: "content_changed",
+      });
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   test("rejects a shrink while the scanner is yielded", async () => {

@@ -9,6 +9,14 @@ export function cursorUsesPlainToolWording(modelId?: string): boolean {
 }
 
 export const CURSOR_TOOL_CALL_CONTINUATION = "Continue the task with that tool call.";
+
+/**
+ * Cursor can defer the Codex client tools behind its own GetDynamicTools/CallDynamicTool pair, so a
+ * code-mode turn may list `exec` without the model seeing it at the top level (#8132). Name the
+ * deferred call path instead of asserting top-level reach.
+ */
+export const CURSOR_DEFERRED_TOOL_FALLBACK = "If a tool this turn lists, including `exec`, is missing from your top-level tool list, Cursor has deferred it: "
+  + `call \`CallDynamicTool\` with namespace \`${OCX_RESPONSES_TOOL_PROVIDER}\`, \`toolName\` set to that tool's name, and the tool's own arguments under \`arguments\`.`;
 const CURSOR_NO_CLIENT_TOOLS = "Cursor-native filesystem, shell, and fetch tools are not available through this execution channel. No client tools are available in this request. Answer without tools using the information already provided, or report that the requested operation cannot be completed without tools.";
 
 /** Factual catalog wording; legacy model wording is owned by native-exec.ts unchanged. */
@@ -29,7 +37,8 @@ export function cursorPlainNativeExecRedirectHint(
     + "Cursor-native Read/Glob/Grep/LS/Shell/Write/Fetch are not available in this request. ";
   if (!cursorRequestHasShellAlias(clientTools) && cursorRequestUsesCodeMode(clientTools)) {
     return catalog + "`exec` takes a JavaScript body evaluated in a V8 isolate, not a shell command. Shell, file, search, and fetch are nested helpers called inside it as `await tools.<name>(...)`, for example `text(await tools.exec_command({cmd: \"ls\"}))`. "
-      + "`shell_command` and `exec_command` are nested helpers, not top-level tools here. Every other listed tool remains callable at the top level. "
+      + "`shell_command` and `exec_command` are nested helpers, not top-level tools here. Every other listed tool is called directly, outside `exec`. "
+      + CURSOR_DEFERRED_TOOL_FALLBACK + " "
       + CODE_MODE_RESULT_ECHO_SENTENCE + " " + CURSOR_TOOL_CALL_CONTINUATION;
   }
   const operation = cursorRequestHasExecutionPath(clientTools)

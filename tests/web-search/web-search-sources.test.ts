@@ -73,6 +73,36 @@ describe("sidecar final citation metadata", () => {
     expect(result.sources).toEqual([{ url, title: "First final title" }]);
   });
 
+  for (const [label, title] of [["missing", undefined], ["empty", ""],
+    ["blank", "   "], ["invalid", "bad\u0001title"]] as const) {
+    test(`a later valid final title replaces an earlier ${label} final title for the same URL (#8351)`, async () => {
+      const url = "https://example.test/result";
+      const result = await parseSidecarSSE(sourceResponse([
+        { type: "response.output_text.annotation.added", annotation: {
+          type: "url_citation", url, title: "Streaming title",
+        } },
+        completedSources([
+          { type: "url_citation", url, title },
+          { type: "url_citation", url, title: "Later final title" },
+        ]),
+      ]));
+      expect(result.sources).toEqual([{ url, title: "Later final title" }]);
+    });
+  }
+
+  test("a later title upgrade keeps the source position and the first valid title", async () => {
+    const result = await parseSidecarSSE(sourceResponse([completedSources([
+      { type: "url_citation", url: "https://example.test/a" },
+      { type: "url_citation", url: "https://example.test/b", title: "B" },
+      { type: "url_citation", url: "https://example.test/a", title: "A" },
+      { type: "url_citation", url: "https://example.test/a", title: "A again" },
+    ])]));
+    expect(result.sources).toEqual([
+      { url: "https://example.test/a", title: "A" },
+      { url: "https://example.test/b", title: "B" },
+    ]);
+  });
+
   test("final citations retain their order without exceeding the source cap", async () => {
     const final = Array.from({ length: MAX_WEB_SEARCH_SOURCES }, (_, index) => ({
       type: "url_citation", url: `https://example.test/${index}`, title: `Final ${index}`,

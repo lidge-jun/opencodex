@@ -4,8 +4,7 @@ import { atomicWriteFile } from "../config/atomic-write";
 import { removePid, removeRuntimePort } from "../config/process-state";
 import { dropWindowsTcpRowsForLocalPort } from "../server/windows-tcp-drop";
 import { stopWinswService } from "../lib/winsw";
-import { stopWindows } from "../service";
-import { killWindowsSchedulerWrappers } from "../lib/windows-service-wrappers";
+import { runWindowsServiceStopPartA } from "../service/windows-service-stop";
 import { guardedRun, guardedKill, guardedExecFileSync, materializeMutationData, UpdateMutationRefusedError, type UpdateMutationAuthorizer } from "./mutation-guard.mjs";
 
 export type KillProxy = typeof killProxy;
@@ -50,9 +49,8 @@ export function guardedDropWindowsTcp(authorize: (kind: "runtime") => boolean, p
 export function guardedStopWinsw(authorize: UpdateMutationAuthorizer) {
   return stopWinswService(mutationGate(authorize, "service"));
 }
-export function guardedStopWindows(authorize: UpdateMutationAuthorizer) {
-  return stopWindows(mutationGate(authorize, "service"));
-}
-export function guardedKillWindowsWrappers(authorize: UpdateMutationAuthorizer, paths: Parameters<typeof killWindowsSchedulerWrappers>[0]) {
-  return killWindowsSchedulerWrappers(materializeMutationData(paths), mutationGate(authorize, "service"));
+/** Part A of the checked Windows stop (#7771), the service gate at entry and before each terminate. */
+export async function guardedStopWindowsChecked(authorize: UpdateMutationAuthorizer) {
+  // The update worker descends from the service-run proxy, so its own wrapper is fair game.
+  return (await runWindowsServiceStopPartA({ authorize: mutationGate(authorize, "service"), allowUnderOwnWrapper: true })).outcome;
 }

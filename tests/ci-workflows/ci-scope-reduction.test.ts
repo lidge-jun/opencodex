@@ -490,7 +490,7 @@ describe("the packaged desktop selection", () => {
 describe("the smoke matrices", () => {
   test.skipIf(cannotRunEmitters)("release evidence names match the full-dispatch workflow graph", () => {
     const { CI_JOBS } = require(repoPath(".github", "scripts", "release-evidence.cjs")) as { CI_JOBS: string[] };
-    const scalar = ["changes", "select-windows-runner", "storage-policy", "api-usage", "gates", "macos-control", "docker-smoke", "docs-site-build", "structure-gate", "widget", "desktop-shell", "ci"];
+    const scalar = ["changes", "select-windows-runner", "storage-policy", "api-usage", "gates", "docker-smoke", "docs-site-build", "structure-gate", "widget", "desktop-shell", "ci"];
     const expected = scalar.map(id => {
       const name = jobs[id]?.name;
       if (!name) throw new Error(`missing job name: ${id}`);

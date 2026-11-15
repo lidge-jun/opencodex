@@ -1,6 +1,7 @@
 import { applyChatDestinationPolicy } from "./openai-chat/destination-policy";
 import { withRequiredChatToolResult } from "./openai-chat/required-tool-result";
-import { hasShrinkableOpenAIChatImages, normalizeOpenAIChatImages } from "./openai-chat-images";
+import { prepareOpenAIChatImages } from "./openai-chat-images";
+import { registryEntryForProviderDestination } from "../providers/registry";
 import { protectGlmSummaryBudget, resolveMaxTokens } from "./openai-chat/summary-budget";
 import { chatParallelToolCallsWireValue } from "./openai-chat/parallel-tool-calls";
 import { applyExplicitChatReasoningWirePolicy, declaresIndependentChatReasoningEffort } from "./openai-chat/reasoning-wire";
@@ -93,6 +94,7 @@ function canSerializeOpenAIChatServiceTier(
 export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAdapter {
   let lastRequestedModelId: string | undefined;
   let freeformTools = new Map<string, FreeformToolIdentity>();
+  const minImageEdge = registryEntryForProviderDestination(provider)?.minImageEdge;
   return withRequiredChatToolResult(withOpenAIChatToolNames(toolNames => ({
     name: "openai-chat",
 
@@ -266,14 +268,9 @@ export function createOpenAIChatAdapter(provider: OcxProviderConfig): ProviderAd
           ...(tierLog ? { tierLog } : {}),
         };
       };
-      if (hasShrinkableOpenAIChatImages(messages)) {
-        const imageOptions = { tierBias: incoming?.imageTierBias, abortSignal: incoming?.abortSignal };
-        return normalizeOpenAIChatImages(messages, imageOptions).then(finish, error => {
-          if (incoming?.abortSignal?.aborted) throw error;
-          return finish();
-        });
-      }
-      return finish();
+      const imageOptions = { tierBias: incoming?.imageTierBias, abortSignal: incoming?.abortSignal };
+      const prepared = prepareOpenAIChatImages(messages, minImageEdge, imageOptions);
+      return prepared ? prepared.then(finish) : finish();
     },
 
     async *parseStream(

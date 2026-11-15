@@ -3,6 +3,7 @@ import {
   HUB_RELAY_REQUEST_BODY_MAX_BYTES,
   HUB_RELAY_RESPONSE_BODY_MAX_BYTES,
   HUB_RELAY_DEFAULT_TIMEOUT_MS,
+  HUB_RELAY_EXPECTED_TARGET_HEADER,
   relayHubManagementRequest,
   validateHubRelayRequestHeaders,
 } from "../../src/client/hub-relay";
@@ -29,6 +30,78 @@ function relayRequest(path: string, init: RequestInit = {}): Request {
 }
 
 describe("fixed-target hub management relay", () => {
+  test("a matching expected target reaches the hub and the internal header is stripped", async () => {
+    let captured: { url: string; headers: Headers } | null = null;
+    const response = await relayHubManagementRequest(
+      relayRequest("/api/config", { headers: { [HUB_RELAY_EXPECTED_TARGET_HEADER]: "https://hub.example.test" } }),
+      "/api/config",
+      target,
+      { fetchImpl: (async (input, init) => {
+        captured = { url: String(input), headers: new Headers(init?.headers) };
+        return Response.json({ ok: true });
+      }) as typeof fetch },
+    );
+    expect(response.status).toBe(200);
+    expect(captured!.url).toBe("https://hub.example.test/api/config");
+    expect(captured!.headers.get(HUB_RELAY_EXPECTED_TARGET_HEADER)).toBeNull();
+  });
+
+  test("a mismatched expected target is refused before the body is read or forwarded", async () => {
+    let forwarded = 0;
+    const request = new Request("http://127.0.0.1:10100/api/machine/hub-relay/api/config", {
+      method: "POST",
+      headers: {
+        Origin: target.browserOrigin,
+        "Content-Type": "application/json",
+        [HUB_RELAY_EXPECTED_TARGET_HEADER]: "https://other.example.test",
+      },
+      body: JSON.stringify({ next: true }),
+    });
+    const response = await relayHubManagementRequest(request, "/api/config", target, {
+      fetchImpl: (async () => { forwarded += 1; return Response.json({ ok: true }); }) as typeof fetch,
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "target_changed" });
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(forwarded).toBe(0);
+    expect(request.bodyUsed).toBe(false);
+  });
+
+  test("duplicate, combined, malformed and oversized expected targets are refused", async () => {
+    for (const value of [
+      "https://hub.example.test, https://other.example.test",
+      "https://hub.example.test/path",
+      "https://user:pass@hub.example.test",
+      `https://${"a".repeat(600)}.example.test`,
+      "not-a-url",
+    ]) {
+      const response = await relayHubManagementRequest(
+        relayRequest("/api/config", { headers: { [HUB_RELAY_EXPECTED_TARGET_HEADER]: value } }),
+        "/api/config",
+        target,
+        { fetchImpl: (async () => Response.json({ ok: true })) as typeof fetch },
+      );
+      expect(response.status).toBe(400);
+    }
+  });
+
+  test("forwarding uses the target snapshot captured at call time", async () => {
+    const mutable = { ...target };
+    let capturedUrl = "";
+    const response = await relayHubManagementRequest(
+      relayRequest("/api/config", { headers: { [HUB_RELAY_EXPECTED_TARGET_HEADER]: "https://hub.example.test" } }),
+      "/api/config",
+      mutable,
+      { fetchImpl: (async (input) => {
+        mutable.managementUrl = "https://other.example.test";
+        capturedUrl = String(input);
+        return Response.json({ ok: true });
+      }) as typeof fetch },
+    );
+    expect(response.status).toBe(200);
+    expect(capturedUrl).toBe("https://hub.example.test/api/config");
+  });
+
   test("raw header validation rejects CL/TE ambiguity, duplicate lengths, upgrade, and CRLF", () => {
     for (const headers of [
       [["Content-Length", "1"], ["Transfer-Encoding", "chunked"]],

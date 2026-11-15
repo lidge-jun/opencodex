@@ -12,20 +12,29 @@ import { antigravityCliUserAgent, antigravityUserAgent } from "./client-fingerpr
 export const ANTIGRAVITY_REQUEST_UA = antigravityUserAgent();
 
 /**
- * Antigravity CLI User-Agent. CCA serves Gemini 4 Argon only to the CLI client family, and it
- * 404s other agent models (`gemini-3.7-flash-tiered`, `gemini-3.1-pro-low`) under it, so the
- * choice is per wire model: see `antigravityUserAgentForWireModel`.
+ * Antigravity CLI User-Agent. CCA serves the Gemini 4 codename models (Argon, Carbon) only to the
+ * CLI client family, and it 404s other agent models (`gemini-3.7-flash-tiered`,
+ * `gemini-3.1-pro-low`) under it, so the choice is per wire model: see
+ * `antigravityUserAgentForWireModel`.
  */
 export const ANTIGRAVITY_CLI_REQUEST_UA = antigravityCliUserAgent();
 
 /**
- * Model discovery (`:fetchAvailableModels`) uses the CLI UA so Argon's wire ids are listed;
+ * Model discovery (`:fetchAvailableModels`) uses the CLI UA so the Gemini 4 wire ids are listed;
  * under the IDE UA they are absent.
  */
 export const ANTIGRAVITY_DISCOVERY_UA = ANTIGRAVITY_CLI_REQUEST_UA;
 
-/** Wire ids CCA serves only to the CLI client family (verified 2026-10-14). */
-const ANTIGRAVITY_CLI_ONLY_WIRE_MODEL = /^gemini-4-argon(?:-(?:low|medium|high))?$/;
+/**
+ * Wire ids sent with the CLI User-Agent: every Gemini 4 codename, bare or with a low, medium, high
+ * or xhigh tier suffix. Observed on CCA: Argon was verified 2026-10-14, and on 2026-11-11 the CLI
+ * discovery list was exactly the IDE list plus the Argon and Carbon tiers, with
+ * `gemini-4-carbon-medium` answering 404 under the IDE UA and 200 under the CLI UA. Hydrogen
+ * (low/medium/high/xhigh, verified on Vertex AI by #8583's author on 2026-11-13) was listed by CCA
+ * discovery on 2026-11-12, and `gemini-4-hydrogen-xhigh` answered 200 under the CLI UA. Matching the generation keeps a newly discovered codename
+ * callable instead of listing it in the picker and 404ing every request.
+ */
+const ANTIGRAVITY_CLI_ONLY_WIRE_MODEL = /^gemini-4-[a-z][a-z0-9]*(?:-(?:low|medium|high|xhigh))?$/;
 
 /** The User-Agent an Antigravity inference request for `wireModelId` must carry. */
 export function antigravityUserAgentForWireModel(wireModelId: string): string {

@@ -217,10 +217,14 @@ without sending; the completed decision keeps its reported usage and zero model 
 applicable choice is marked invalid; existing failure gates remain. The selected pick retains the reservation through ordinary failover and
 conditional success settlement under the [Combo cooldown contract](../runtime.md#scoped-provider-quota-for-combo-selection).
 `tests/server/server-combo-cooldown-fallback.test.ts` covers an all-cooled JEV choice, its fallback and concurrent reservation invalidation.
-The validated effort shapes the first Responses child or the separate opt-in native Chat body in
+With `jevEffortMode: "decide"` (the default) the validated effort shapes the first Responses child or the separate opt-in native Chat body in
 `src/server/responses/core-combo-native.ts`; both remove caller `service_tier` and conflicting effort controls.
 Explicit null strips effort using a non-force path, even when the Combo has a forced default; the ordinary
-force-default invariant is unchanged. Provider pins, caps and wire normalization still run afterward.
+force-default invariant is unchanged. With the opt-in `"client"` the decision still owns target selection, but neither lane applies its effort: the
+ordinary Combo policy resolves effort (including a nested-only caller `reasoning.effort`), the caller `service_tier` is kept, and the requested-effort label records no JEV transition.
+Provider pins, caps and wire normalization still run afterward in both modes. `tests/responses/jev-initial-effort-wire.test.ts` pins both modes on both lanes
+and `tests/routing/jev-quota-config.test.ts` pins that an update omitting `jevEffortMode` preserves it.
+> Decision record: [ADR-8041](../decisions/ADR-8041-jev-effort-mode.md)
 A retryable failure rebuilds later targets from the untouched request under ordinary Combo policy, without
 another JEV call. Request and attempt `requestedEffort` labels retain a differing applied JEV effort as
 `caller->forced`, followed by child transitions on either lane; null or unchanged effort keeps the existing label.

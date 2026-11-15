@@ -3,6 +3,8 @@ import { Window } from "happy-dom";
 import { act, useEffect } from "react";
 import type { Root } from "react-dom/client";
 import { useJsonConfigEditor, type Config } from "../src/hooks/useJsonConfigEditor";
+import { configureApiTargets } from "../src/api";
+import { standaloneApiTargets } from "../src/api-targets";
 
 const originalFetch = globalThis.fetch;
 const originalDocument = globalThis.document;
@@ -80,6 +82,7 @@ beforeEach(() => {
     navigator: { configurable: true, value: testWindow.navigator },
     IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
   });
+  configureApiTargets(standaloneApiTargets("/editor"));
   host = testWindow.document.createElement("div") as unknown as HTMLElement;
   testWindow.document.body.appendChild(host as never);
   root = null;
@@ -179,6 +182,9 @@ test("parse failures stay distinct from server failures and failed saves do not 
   expect(notifications.at(-1)).toEqual({ message: "prov.invalidJson", ok: false });
 
   await act(async () => { editor!.restoreJsonEditor(); });
+  const changed = JSON.parse(editor!.draft);
+  changed.providers.alpha.note = "changed before the stale-baseline save";
+  await act(async () => { editor!.setDraft(JSON.stringify(changed)); });
   responseFactory = async () => Response.json({ error: "stale baseline" }, { status: 409 });
   await act(async () => { expect(await editor!.saveConfig()).toBe(false); });
 

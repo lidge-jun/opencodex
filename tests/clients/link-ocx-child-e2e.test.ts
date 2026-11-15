@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer as createNetServer } from "node:net";
-import { tmpdir, userInfo } from "node:os";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { repoPath } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { rustToolchainEnv } from "../helpers/rust-toolchain-env";
 import { classifySyncResult, runHomeFanout } from "../../src/cli/sync-fanout";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import { homeLinkChildParity } from "../../src/link/child-parity";
@@ -29,24 +30,19 @@ function findOrBuildOcxChildBinary(): string {
   const targetDir = cargoTargetDir ? resolve(cargoTargetDir) : repoPath("native", "ocx-child", "target");
   const releaseBin = join(targetDir, "release", `ocx-child${exeSuffix}`);
   const debugBin = join(targetDir, "debug", `ocx-child${exeSuffix}`);
-  const realHome = process.env.OCX_REAL_HOME?.trim() || userInfo().homedir;
-  const cargo = Bun.which("cargo") ?? join(realHome, ".cargo", "bin", `cargo${exeSuffix}`);
-  if (existsSync(cargo)) {
+  const cargo = rustToolchainEnv("cargo");
+  if (cargo.bin) {
     const build = Bun.spawnSync(
-      [cargo, "build", "--locked", "--manifest-path", repoPath("native", "ocx-child", "Cargo.toml")],
+      [cargo.bin, "build", "--locked", "--manifest-path", repoPath("native", "ocx-child", "Cargo.toml")],
       {
-        env: {
-          ...process.env,
-          RUSTUP_HOME: process.env.RUSTUP_HOME || join(realHome, ".rustup"),
-          CARGO_HOME: process.env.CARGO_HOME || join(realHome, ".cargo"),
-        },
+        env: cargo.env,
         stdout: "pipe",
         stderr: "pipe",
         timeout: 90_000,
       },
     );
     if (build.exitCode !== 0) {
-      throw new Error(`cargo build failed: ${build.stderr.toString()}`);
+      throw new Error(`cargo build failed: ${build.stderr.toString()}\ntoolchain: ${cargo.describe()}`);
     }
     return debugBin;
   }

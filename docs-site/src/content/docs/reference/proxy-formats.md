@@ -912,6 +912,12 @@ and of `decodesNativeCompactionBlobs` for replay. None grants canonical OpenAI i
 caller credential forwarding. Cross-provider overrides remain portable; v2 success alone
 does not establish support for `/responses/compact`. See [provider configuration](/reference/configuration/providers/).
 
+Malformed OpenCodex-owned retained-compaction input (`ocx2:`) on a compact
+request returns HTTP 400 with `error.type: "invalid_request_error"` before
+routing, account selection, credential refresh, or upstream dispatch. This
+caller validation error does not trigger upstream retries or record a failure
+against a pooled Codex account.
+
 If the native compact endpoint returns HTTP 404, OpenCodex retries compaction through a regular
 Responses turn with the same model selector and session headers. Canonical ChatGPT fallback
 turns use upstream SSE; the compact caller still receives JSON. A completed native opaque

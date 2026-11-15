@@ -67,7 +67,7 @@ beforeEach(() => {
     if (new URL(request.url).hostname === "127.0.0.1") return physicalFetch(request);
     const body = await request.json() as Rec;
     seen.push({ url: request.url, body, headers: request.headers });
-    const native = new URL(request.url).hostname === "api.anthropic.com";
+    const native = ["api.anthropic.com", "compatible.fixture.invalid"].includes(new URL(request.url).hostname);
     if (native) return answer(body, true);
     return Response.json({ id: "resp_backup", object: "response", status: "completed", model: "fallback",
       output: [{ id: "msg_backup", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "fallback reply", annotations: [] }] }],
@@ -90,10 +90,10 @@ function config(on = true): OcxConfig {
   }, combos: { waterfall: { strategy: "failover", targets: [{ provider: "anth", model: "claude-sonnet-4-6" }, { provider: "backup", model: "fallback" }] } },
   protocols: { rollout: { managedMessagesNative: on } } };
 }
-async function send(options: { stream?: boolean; config?: OcxConfig; messages?: unknown; tools?: unknown; admission?: DataPlaneAdmission; extra?: Rec } = {}) {
+async function send(options: { stream?: boolean; config?: OcxConfig; messages?: unknown; tools?: unknown; admission?: DataPlaneAdmission; extra?: Rec; headers?: Record<string, string> } = {}) {
   const requestId = `native-combo-${crypto.randomUUID()}`;
   const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
-    method: "POST", headers: { "content-type": "application/json", authorization: "Bearer fixture-admission", "x-api-key": "fixture-caller" },
+    method: "POST", headers: { "content-type": "application/json", authorization: "Bearer fixture-admission", "x-api-key": "fixture-caller", ...options.headers },
     body: JSON.stringify({ ...source, stream: options.stream ?? true, ...(options.messages ? { messages: options.messages } : {}), ...(options.tools ? { tools: options.tools } : {}), ...options.extra }),
   }), options.config ?? config(), { model: "", provider: "" }, { requestId, start: Date.now(), admission: options.admission });
   const text = await response.text();
@@ -479,6 +479,132 @@ describe("native Messages candidates in a combo", () => {
       expect(seen).toHaveLength(1);
       expect(seen[0]!.body).toEqual({ ...source, model: "claude-sonnet-4-6", stream: true });
     } finally { await server.stop(true); }
+  });
+  test("real HTTP ingress preserves Messages fields for a compatible key-auth combo child", async () => {
+    const settings = config();
+    settings.providers.anth!.baseUrl = "https://compatible.fixture.invalid/v1";
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: request => handleClaudeMessages(
+      request, settings, { model: "", provider: "" }, { requestId: `http-${crypto.randomUUID()}`, start: Date.now() },
+    ) });
+    try {
+      const response = await fetch(new URL("/v1/messages", server.url), { method: "POST",
+        headers: { "content-type": "application/json" }, body: JSON.stringify({ ...source, stream: true }) });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("native reply");
+      expect(seen).toHaveLength(1);
+      expect(seen[0]!.body).toEqual({ ...source, model: "claude-sonnet-4-6", stream: true });
+      expect(seen[0]!.headers.get("x-api-key")).toBe("fixture-managed-key");
+    } finally { await server.stop(true); }
+  });
+  for (const transport of ["bearer", "x-api-key"] as const) test(`compatible combo uses its own ${transport} credential`, async () => {
+    const settings = config();
+    settings.providers.anth!.baseUrl = "https://compatible.fixture.invalid/v1";
+    settings.providers.anth!.apiKeyTransport = transport;
+    const { response, rows } = await send({ config: settings });
+    expect(response.status).toBe(200);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.headers.get("authorization")).toBe(transport === "bearer" ? "Bearer fixture-managed-key" : null);
+    expect(seen[0]!.headers.get("x-api-key")).toBe(transport === "x-api-key" ? "fixture-managed-key" : null);
+    expect(rows[0]!.spend).toMatchObject({ sends: 1 });
+  });
+  test("compatible pre-output failure replays the original body to the first-party sibling", async () => {
+    const settings = config();
+    settings.providers.compat = { ...settings.providers.anth!, baseUrl: "https://compatible.fixture.invalid/v1", apiKey: "fixture-compatible-key" };
+    settings.combos!.waterfall!.targets = [{ provider: "compat", model: "claude-sonnet-4-6" }, { provider: "anth", model: "claude-sonnet-4-6" }];
+    answer = () => seen.length === 1 ? stream(prelude + refusal) : stream(prelude + textStart + textDelta + terminal);
+    const { response, text, rows } = await send({ config: settings });
+    expect(response.status).toBe(200);
+    expect(text).toContain("native reply");
+    expect(seen.map(entry => new URL(entry.url).hostname)).toEqual(["compatible.fixture.invalid", "api.anthropic.com"]);
+    expect(seen.map(entry => entry.headers.get("x-api-key"))).toEqual(["fixture-compatible-key", "fixture-managed-key"]);
+    expect(seen.map(entry => entry.body)).toEqual([{ ...source, model: "claude-sonnet-4-6", stream: true }, { ...source, model: "claude-sonnet-4-6", stream: true }]);
+    expect(rows[0]!.spend).toMatchObject({ sends: 2 });
+  });
+  test("compatible child refuses opaque-state loss before sending under reject", async () => {
+    const settings = config();
+    settings.providers.anth!.baseUrl = "https://compatible.fixture.invalid/v1";
+    settings.combos!.waterfall!.targets = [{ provider: "anth", model: "claude-sonnet-4-6" }];
+    settings.protocols!.unrepresentable = "reject";
+    const messages = [...source.messages, { role: "assistant", content: [{ type: "redacted_thinking", data: "fixture-opaque" }] }];
+    const { response } = await send({ config: settings, messages });
+    expect(response.status).toBe(400);
+    expect(seen).toHaveLength(0);
+  });
+  test("a compatible failure replays original opaque state to a first-party sibling", async () => {
+    const settings = config();
+    settings.providers.compat = { ...settings.providers.anth!, baseUrl: "https://compatible.fixture.invalid/v1" };
+    settings.combos!.waterfall!.targets = [{ provider: "compat", model: "claude-sonnet-4-6" }, { provider: "anth", model: "claude-sonnet-4-6" }];
+    const messages = [...source.messages, { role: "assistant", content: [{ type: "redacted_thinking", data: "fixture-opaque" }, { type: "text", text: "fixture" }] }];
+    answer = () => seen.length === 1 ? stream(prelude + refusal) : stream(prelude + textStart + textDelta + terminal);
+    const { response } = await send({ config: settings, messages });
+    expect(response.status).toBe(200);
+    expect(seen).toHaveLength(2);
+    expect(JSON.stringify(seen[0]!.body.messages)).not.toContain("fixture-opaque");
+    expect(seen[1]!.body.messages).toEqual(messages);
+  });
+  test("compatible child drops caller betas outside its allowlist", async () => {
+    const settings = config();
+    settings.providers.anth!.baseUrl = "https://compatible.fixture.invalid/v1";
+    await send({ config: settings, headers: { "anthropic-beta": "interleaved-thinking-2025-05-14,fixture-unlisted-beta-2099-02-02" } });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.headers.get("anthropic-beta")).toBeNull();
+  });
+  test("compatible child enforces caller scope before a send", async () => {
+    const settings = config();
+    settings.providers.anth!.baseUrl = "https://compatible.fixture.invalid/v1";
+    settings.apiKeys = [{ id: "caller", name: "fixture", key: "ocx_data_" + "c".repeat(40), createdAt: "2026-01-01T00:00:00.000Z", allowedProviders: ["backup"] }];
+    settings.combos!.waterfall!.targets = [{ provider: "anth", model: "claude-sonnet-4-6" }];
+    const { response } = await send({ config: settings, admission: { kind: "configured", keyId: "caller", source: "dedicated" } });
+    expect(response.status).toBe(403);
+    expect(seen).toHaveLength(0);
+  });
+  test("OAuth builder refuses a compatible destination independently", async () => {
+    const { buildAnthropicMessagesPassthroughRequest } = await import("../../src/adapters/anthropic/passthrough");
+    const provider = { ...config().providers.anth!, authMode: "oauth" as const, baseUrl: "https://compatible.fixture.invalid/v1", apiKey: "synthetic-oauth-token" };
+    expect(() => buildAnthropicMessagesPassthroughRequest(provider, "claude-sonnet-4-6", source)).toThrow("only to api.anthropic.com");
+    expect(seen).toHaveLength(0);
+  });
+  test("compatible combo rotates its key after authentication failure", async () => {
+    const { saveConfig } = await import("../../src/config");
+    const settings = config();
+    settings.providers.anth!.baseUrl = "https://compatible.fixture.invalid/v1";
+    settings.providers.anth!.apiKeyPool = [{ id: "k1", key: "fixture-managed-key", addedAt: 1 }, { id: "k2", key: "fixture-second-key", addedAt: 2 }];
+    settings.combos!.waterfall!.targets = [{ provider: "anth", model: "claude-sonnet-4-6" }];
+    saveConfig(settings);
+    answer = () => seen.length === 1
+      ? Response.json({ type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } }, { status: 401 })
+      : stream(prelude + textStart + textDelta + terminal);
+    const { response } = await send({ config: settings });
+    expect(response.status).toBe(200);
+    expect(seen.map(entry => entry.headers.get("x-api-key"))).toEqual(["fixture-managed-key", "fixture-second-key"]);
+    expect(seen[1]!.body).toEqual(seen[0]!.body);
+  });
+  test("compatible candidate rejects OAuth, pinned effort and combo rewrites before native dispatch", async () => {
+    const { createComboProtocolLanes } = await import("../../src/server/responses/core-combo-native");
+    const { routeConcreteModel } = await import("../../src/router");
+    const { createRequestExecutionBudget } = await import("../../src/lib/request-execution-budget");
+    const settings = config();
+    settings.providers.anth!.baseUrl = "https://compatible.fixture.invalid/v1";
+    settings.protocols!.unrepresentable = "reject";
+    const target = { provider: "anth", model: "claude-sonnet-4-6" };
+    const makeLanes = () => createComboProtocolLanes({ source: { inbound: "messages", envelope: createProtocolEnvelope({ inbound: "messages", body: source, translatorBudget: createTranslatorBudget() }), dispatchNativeChild: async () => new Response() },
+      req: new Request("http://localhost/v1/messages"), config: settings, logCtx: { model: "", provider: "" }, admissionScope: undefined, comboId: "waterfall", targets: [target] })!;
+    const plan = () => makeLanes().nativeChild(target, routeConcreteModel(settings, "anth/claude-sonnet-4-6"), createRequestExecutionBudget());
+    expect(plan()).toBeDefined();
+    settings.providers.anth!.authMode = "oauth";
+    expect(plan()).toBeUndefined();
+    settings.providers.anth!.authMode = "key";
+    settings.modelPinnedEfforts = { "anth/claude-sonnet-4-6": "low" };
+    expect(plan()).toBeUndefined();
+    expect(makeLanes().pickable(target)).toBe(false);
+    settings.modelPinnedEfforts = {};
+    settings.combos!.waterfall!.defaultEffort = "low";
+    expect(plan()).toBeUndefined();
+    expect(makeLanes().pickable(target)).toBe(false);
+    settings.combos!.waterfall!.defaultEffort = null;
+    settings.combos!.waterfall!.strategy = "jev";
+    expect(plan()).toBeUndefined();
+    expect(makeLanes().pickable(target)).toBe(false);
   });
   for (const streaming of [true, false]) test(`first output waits for a content frame (${streaming ? "stream" : "fold"})`, async () => {
     const empty = frame("message_delta", { delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 0 } }) + frame("message_stop");

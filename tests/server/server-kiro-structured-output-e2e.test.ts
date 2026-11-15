@@ -253,3 +253,44 @@ describe("Kiro holds a Messages schema to full conformance", () => {
     });
   });
 });
+
+describe("Kiro tool-catalog nudge by inbound surface", () => {
+  const completionFrames = (answer: string): Uint8Array[] => [
+    eventFrame("toolUseEvent", { name: KIRO_COMPLETION_TOOL_NAME, toolUseId: "done-1" }),
+    eventFrame("toolUseEvent", { name: KIRO_COMPLETION_TOOL_NAME, toolUseId: "done-1", input: JSON.stringify({ answer }) }),
+    eventFrame("toolUseEvent", { name: KIRO_COMPLETION_TOOL_NAME, toolUseId: "done-1", stop: true }),
+  ];
+  const sentContent = (request: Record<string, any>): string =>
+    request.conversationState.currentMessage.userInputMessage.content as string;
+  const lookupTool = { name: "lookup", description: "Look something up", input_schema: { type: "object", properties: { q: { type: "string" } } } };
+
+  test("/v1/messages reaches Kiro without the nudge but with the completion contract", async () => {
+    await withProxy([completionFrames("Ready.")], async (url, requests) => {
+      const response = await post(url, "/v1/messages", {
+        model: "kiro-test/claude-opus-5.5",
+        max_tokens: 1024,
+        tools: [lookupTool],
+        messages: [{ role: "user", content: "Say ready." }],
+      });
+      expect(response.status, await response.text()).toBe(200);
+      expect(requests).toHaveLength(1);
+      expect(advertisedTools(requests[0]!)).toEqual(["lookup", KIRO_COMPLETION_TOOL_NAME]);
+      expect(sentContent(requests[0]!)).not.toContain("Tool contract:");
+      expect(sentContent(requests[0]!)).toContain(`call ${KIRO_COMPLETION_TOOL_NAME} exactly once`);
+    });
+  });
+
+  test("/v1/responses keeps the nudge for Codex", async () => {
+    await withProxy([completionFrames("Ready.")], async (url, requests) => {
+      const response = await post(url, "/v1/responses", {
+        model: "kiro-test/claude-opus-5.5",
+        stream: false,
+        tools: [{ type: "function", name: "lookup", description: "Look something up", parameters: { type: "object", properties: { q: { type: "string" } } } }],
+        input: [{ role: "user", content: "Say ready." }],
+      });
+      expect(response.status, await response.text()).toBe(200);
+      expect(requests).toHaveLength(1);
+      expect(sentContent(requests[0]!)).toContain("Tool contract: use the current tool catalog as ground truth.");
+    });
+  });
+});

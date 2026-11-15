@@ -52,7 +52,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`（以订阅方式启动且未设置时为原生 `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`） |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | OpenCodex 将层级槽位设为路由别名时对应的 `/model` 标签（例如 `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`）。launchd 系统环境和 shell 钩子中也成对写入。模型 ID 仍为别名。您自己设置的槽位或标签不会被修改 |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | 启用 `alwaysEnableEffort` 时设为 `1`（条件注入） |
-| `ENABLE_TOOL_SEARCH` | 设置了 `claudeCode.toolSearch` 时注入（条件注入，默认关闭） |
+| `ENABLE_TOOL_SEARCH` | 设置了 `claudeCode.toolSearch` 时注入（条件注入；默认不注入，沿用 Claude Code 自身的默认值） |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | 设置 `maxContextTokens` 时使用的旧版上下文覆盖项（条件注入） |
 你自行导出的变量始终优先。额外参数会直接透传：`ocx claude -p "hello"`。
 

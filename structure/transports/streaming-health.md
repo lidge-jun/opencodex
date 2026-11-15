@@ -256,8 +256,8 @@ egress. HTTP/SSE fallback retains Bun fetch's own proxy rules, which do not cons
 The endpoint handles `response.create`, ignores `response.processed`, supports warmup
 `generate: false`, and feeds the same request pipeline as HTTP/SSE.
 
-Incoming Responses connections share a 128-socket admission limit. Only when a new upgrade
-finds that limit full, the handler reclaims the least recently used eligible idle connection.
+Incoming Responses connections share a 128-socket admission limit. Only when a new local upgrade
+finds that limit full, the handler reclaims the least recently used eligible idle connection; a [Remote Link upgrade](../remote-link.md#responses-websocket-over-the-link) may reclaim only an idle Remote Link socket.
 Message handling and turn completion refresh a monotonic use order; connection age alone
 does not choose the victim. Eligibility requires an open socket, no active turn, no pending
 client tool or approval result, no retained native steering/injection owner, and no buffered
@@ -358,13 +358,13 @@ Pool quota producers and account commands follow the [bounded raw-observation co
 
 Account quota surfaces use [safe probe diagnostics](inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; an initial JEV null choice separately strips caller effort.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; in the default `decide` mode an initial JEV null choice separately strips caller effort.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 
 ## Translated Chat inline-image budget
 
-`src/adapters/openai-chat-images.ts` reuses the shared image normalization ladder for translated Chat bodies above a 3.5 MiB base64-image budget. This is best effort, not a whole-request ceiling. Remote URLs are not fetched; unprocessable and terminal images remain attached, and retained bytes continue to count during demotion. Under-budget construction stays synchronous; delegating MiMo awaits conditional asynchronous construction. Native decoding is admitted through a process-wide four-operation gate, guarded by a 16-million-pixel ceiling confirmed from codec metadata, and request cancellation stops queued and subsequent normalization work. Native Chat passthrough and Anthropic-only 413 retry policy retain their existing behavior.
+`src/adapters/openai-chat-images.ts` reuses the shared image normalization ladder for translated Chat bodies above a 3.5 MiB base64-image budget. This is best effort, not a whole-request ceiling. Remote URLs are not fetched; unprocessable and terminal images remain attached, and retained bytes continue to count during demotion. Under-budget construction stays synchronous; delegating MiMo awaits conditional asynchronous construction. Native decoding is admitted through a process-wide four-operation gate, guarded by a 16-million-pixel ceiling confirmed from codec metadata, and request cancellation stops queued and subsequent normalization work. Native Chat passthrough and Anthropic-only 413 retry policy retain their existing behavior. A provider whose registry row declares `minImageEdge` (Venice: 64) then has every decodable inline image whose short edge is below it upscaled to that edge, keeping the aspect ratio unless the long edge would pass 4096, where it is capped (extreme strips are then stretched); this runs after budget normalization because the 320px terminal tier can floor a wide screenshot under the minimum, and an image that fails to decode keeps its original URL.
 
 The [explicit model-capability contract](../config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 

@@ -71,3 +71,47 @@ CREATE TABLE IF NOT EXISTS rate_limits (
   hits INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (bucket_hour, ip_hash)
 );
+-- Opt-in public profiles (leaderboard). Unrelated to every table above: no install hash, no
+-- version or platform, and rate limiting uses its own domain-separated hashes.
+CREATE TABLE IF NOT EXISTS profiles (
+  id TEXT PRIMARY KEY,
+  handle TEXT NOT NULL UNIQUE,
+  display_name TEXT NOT NULL,
+  avatar TEXT NOT NULL,
+  secret_hash TEXT NOT NULL UNIQUE,
+  created_day TEXT NOT NULL,
+  last_submit_day TEXT,
+  hidden INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS profile_days (
+  profile_id TEXT NOT NULL,
+  day TEXT NOT NULL,
+  requests INTEGER NOT NULL,
+  input INTEGER NOT NULL,
+  cache_read INTEGER NOT NULL,
+  cache_write INTEGER NOT NULL,
+  output INTEGER NOT NULL,
+  reasoning INTEGER NOT NULL,
+  tokens INTEGER NOT NULL,
+  PRIMARY KEY (profile_id, day)
+);
+
+CREATE INDEX IF NOT EXISTS profile_days_day ON profile_days (day);
+
+CREATE TABLE IF NOT EXISTS profile_day_families (
+  profile_id TEXT NOT NULL,
+  day TEXT NOT NULL,
+  family TEXT NOT NULL,
+  requests INTEGER NOT NULL,
+  tokens INTEGER NOT NULL,
+  PRIMARY KEY (profile_id, day, family)
+);
+
+CREATE TABLE IF NOT EXISTS profile_rate_limits (
+  bucket_hour TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  key_hash TEXT NOT NULL,
+  hits INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (bucket_hour, scope, key_hash)
+);

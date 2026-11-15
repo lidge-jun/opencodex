@@ -310,10 +310,13 @@ ocx login anthropic --headless # no browser, no local port
 `--headless` runs the **code-display** login for hosts whose browser cannot reach the proxy's loopback
 callback (containers, remote servers). The command prints an authorization URL; approve it in any
 browser, and the provider shows a `code#state` string to paste back at the prompt. No callback port
-is bound and no browser is launched. Only `anthropic` and `anthropic2` support it today; any other provider exits
+is bound and no browser is launched. `anthropic` and `anthropic2` support it. `xai` has no code page, so
+`--headless` runs its device login instead: the command prints a URL and a short code, you confirm the
+code in any browser, and it finishes on its own with nothing to paste. Any other provider exits
 with the list of providers that do. For Codex accounts use the device-code login instead,
 `ocx account login codex --device` — `ocx login codex --headless` is refused rather than passed on.
-The paste window is 10 minutes, and each login accepts one code: if the exchange fails, start a new login. A successful login becomes the provider's active account, exactly
+A code-display login's paste window is 10 minutes, and each login accepts one code: if the exchange
+fails, start a new login. A successful login becomes the provider's active account, exactly
 like a browser login.
 
 OAuth reauthentication preserves operator settings such as model selections, pricing overrides,
@@ -768,6 +771,22 @@ zero is retained. Malformed consumed fields or a returned key row without
 quota-mode evidence fail rather than fabricate support. An empty pool remains
 valid. Keys remain masked.
 
+When a balance is unknown, the row says why in `quotaUnknownReason`:
+`no_balance_source` (OpenCodex has no balance reader for this destination),
+`passive_not_observed` (a passive provider has not observed usage yet),
+`read_failed` (a reader exists and its last read failed), `not_read` (a
+reader exists but no read was made, for example on a paused key), or
+`not_reported` (the read succeeded and the provider reported no balance to meter). Probe rows
+also carry `quotaReadAt`, the time of the last read in epoch milliseconds,
+whether it succeeded or failed. Only destinations with a balance reader
+(`quotaMode: "probe"`, such as OpenRouter, DeepSeek, Ollama Cloud, Moonshot,
+Venice and Abliteration) ever show a value. Human output reads, for example,
+`unsupported: balance UNKNOWN (no balance source)` or `probe: mo 12%; read 3
+min ago`, and never prints zero for an unknown balance. Older CLIs ignore both
+fields, and a reason this CLI does not recognize is dropped. Passive OAuth
+accounts with no observation yet carry `passive_not_observed` too, shown as
+`UNKNOWN (not observed yet)`.
+
 Google Antigravity rows carry the same `Gem` / `Cla` windows as the provider-level quota, computed
 from that account's own credential and Cloud Code Assist project id. The per-account probe always
 talks to Google's Cloud Code Assist host through the pinned outbound transport, regardless of a
@@ -913,7 +932,24 @@ refresh remain available even when its original credential source was not record
 ```bash
 ocx account pause google-antigravity <account-id-or-alias>
 ocx account resume google-antigravity <account-id-or-alias>
+ocx account resume anthropic <account-id-or-alias> --if-healthy
 ```
+
+#### Resume if healthy
+
+An unattended supervisor can run `ocx account resume <provider> <account-id-or-alias> --if-healthy`.
+It resumes the account only after a fresh read of that account's own usage succeeds: the WHAM quota
+read for a Codex pool account, or the usage read with the stored token for an Anthropic OAuth
+account. A pause that [auto-pause](/reference/configuration/providers/#auto-pause-permanently-refused-accounts)
+recorded as `oauth_organization_disabled` or `account_permission_denied` is never resumed this way.
+An Anthropic token that has expired is not refreshed for the check: the command reports
+`credential_expired`, and a new login is the way back. Other OAuth providers and the main Codex
+account report `health_check_unsupported`; API-key pools reject the flag. A refused resume exits with
+code 3 and prints the reason, or `{ "ok": false, "resumed": false, "reason": ... }` with `--json`.
+
+An explicit login or reauthentication of a paused OAuth or Codex pool account clears a pause that
+auto-pause recorded, because that evidence described the credential the login replaced. A pause set by
+hand stays until `ocx account resume`.
 
 ### `ocx account clear-cooldown <openai|anthropic> <id|alias|main> [--json]`
 
@@ -928,6 +964,13 @@ ocx account clear-cooldown anthropic <id-or-alias>
 The command reports success even when no cooldown is active, with `cleared: false` in JSON. Clearing
 an Anthropic cooldown also advances the account generation so an older in-flight quota probe cannot
 restore the cleared state or publish stale quota-derived eligibility afterward.
+
+An Anthropic 429 quota cooldown that names its rejected usage windows also lifts on its own. For
+enabled OAuth instances, the proxy re-reads the account's usage on its background sweep (about once a
+minute, backing off to every ten minutes while the window stays spent) and returns the account to
+selection as soon as every rejected window shows headroom, for example after a reset spent in the
+Claude app or a plan upgrade. A 429 that carries only `Retry-After`, with no window to re-read, keeps
+its cooldown until that deadline. `clear-cooldown` remains the manual override for both.
 
 ### `ocx account refresh <provider> [--json]`
 
@@ -1041,7 +1084,7 @@ The new login options are flow-specific:
 | Fresh ordinary provider OAuth | Supported for browser-capable providers | Supported; omitted defaults to adding an account |
 | Ordinary provider reauth | Browser-capable flows only | Rejected; omission retains reauth behavior |
 | Codex browser login | Supported | Rejected |
-| Codex device, or native device-only kimi/nous/github-copilot | Rejected | Rejected for Codex; ordinary OAuth rules for other providers |
+| Codex device, xAI device authorization, or native device-only kimi/nous/github-copilot | Rejected | Rejected for Codex; ordinary OAuth rules for other providers |
 | Native Kiro `--method` | Rejected | Rejected; this flow is add-only |
 
 Explicit add-account off permits the existing import preference; it does not
@@ -1062,16 +1105,34 @@ ocx account login openai --device --no-wait --json
 ```
 
 Open that URL on any other machine, enter the short code, and the login completes. Without
-`--no-wait` the command polls until you finish; the device grant lives 15 minutes, and the
-command waits that long rather than the 5 minutes a browser login allows, because the point
-is that you walk away to another device. `kimi`, `nous`, and `github-copilot` accept the flag
-as a no-op because their only login is already a device flow; a provider with no device grant
-rejects it.
+`--no-wait` the command polls until you finish; for the Codex pool that window is the 15-minute
+device grant rather than the 5 minutes a browser login allows, because the point is that you
+walk away to another device.
 
-In the dashboard, the same login is selected by the **"Don't open a browser on the proxy
-machine"** checkbox on the add-account modal. That setting already means the operator is not
-sitting at the proxy host, which is exactly when a callback URL is useless — so ticking it
-switches the Codex login to the device flow and shows a copyable code instead.
+`ocx account login xai --device` starts xAI's device authorization instead of its
+`127.0.0.1:56121` callback. It prints the verification URL and a short code to confirm in any
+browser, polls once per provider interval, and finishes on its own with nothing to paste. The
+deadline comes from xAI's `expires_in` on that authorization response, so treat the window as
+provider-issued rather than fixed, bounded to 30 minutes and to a poll no faster than once a
+second; an expired grant is reported, not retried. If xAI answers a poll with `429` or a `5xx`,
+its `Retry-After` sets that one wait instead of the interval, still inside the grant deadline. A
+redirect on either device request is refused rather than followed, and fails the login at once
+as an authentication failure instead of being retried as a network or code problem. `kimi`,
+`nous`, and `github-copilot` accept the flag as a no-op because their only login is already a
+device flow; a provider with no device grant rejects it. A device login has nothing to paste, so
+`--device` with `--code` is refused. For xAI device login, `--json` requires `--no-wait`:
+`ocx account login xai --device --no-wait --json` returns one JSON handoff with the
+verification URL, short code and flow ID. Complete authorization in a browser; the proxy
+continues the login in the background. Cancel that specific attempt with
+`ocx account cancel xai --flow <flow-id>`; omitting `--flow` cancels the latest attempt.
+
+The dashboard does not expose a provider's device grant this way. On the add-account modal the
+**"Don't open a browser on the proxy machine"** checkbox only stops the proxy from launching a
+browser: it keeps the flow's own protocol, still in `callback` mode, and you complete the
+returned authorization URL yourself. Choosing a device flow is a separate, explicit control where
+one exists — the Codex account modal has a **Device code login** entry, and native Kiro device
+login is started from its own panel — never from that checkbox. There is no dashboard control that
+starts xAI device authorization, so use `ocx account login xai --device` for it.
 
 ### `ocx account remove <provider> <id|alias|main> --yes [--json]`
 
@@ -1261,7 +1322,7 @@ from custom-model `edit`.
 | `selected <provider>` | `--set <id,id...>`, `--clear`, `--json` | Read or replace the provider model allowlist. `--clear` removes the allowlist so every model is offered. |
 | `preset show` | `--provider <name>`, `--json` | Read shipped preset versions and the applied mode, optionally for one provider. |
 | `preset apply <provider>` | `--all`, `--json` | Apply the curated preset; `--all` clears the allowlist. A zero-match preset leaves selection unchanged and reports `fallback: "preset-empty"`. |
-| `new-policy [on\|off]` | `--provider <name>`, `--json` | Read or change exposure policy for newly discovered models; omission of provider selects global policy. A provider read can report `inherit`. |
+| `new-policy [on\|off\|admit]` | `--provider <name>`, `--json` | Read or change exposure policy for newly discovered models; omission of provider selects global policy. `admit` appends arrivals to a custom `selectedModels`. A provider read can report `inherit`. |
 | `new-arrivals` | `--json` | Read recorded recent discoveries by provider; does not force a new upstream discovery. |
 | `context <status\|value <tokens> [--set-all]\|provider <name> on [--value <tokens>]\|provider <name> off\|all <on\|off>>` | `--json` | Read or set the context-window cap, globally or per provider. `value <tokens> --set-all` also re-points every routed provider (like the dashboard toggle); without it the value only becomes the default. `provider ... on --value <tokens>` sets an explicit cap for that provider only (`--value` is valid with `on` only). |
 | `shadow <status\|set> [model\|-]` | `--enabled <on\|off>`, `--json` | Read or set the replacement model for Codex's background helper calls. `-` clears the model. `status` also reports `sourceModels`, the helper slugs the proxy intercepts (default: `gpt-6-luna`, `gpt-5.6-luna`; clients through 0.144.x used `gpt-5.4-mini`, which an explicit `sourceModels` override can restore). |
@@ -1384,6 +1445,14 @@ headroom, and a credits-only response cannot clear a request cooldown. The defau
 hard lock remains a separate local policy and is not lifted by the credits switch.
 
 `ocx account history openai <pool-account-id> [--limit 1-200] [--json]` reads stored observations without contacting the provider. The output separates actual observation time, WHAM or response-header source, window family and usage percentage. At most 200 observations per account are retained for 30 days, with global storage bounds.
+
+When the same pool account keeps reporting two different seven-day windows (for example 100% used
+with a reset in a few hours, then 24% used with a reset next week), the account row carries
+`weeklyQuotaConflicts` with each window's usage, reset, source and last observation time. The
+QUOTA column of `ocx account list openai --quota` adds `(weekly windows conflict)`, and the
+dashboard card explains that the reset it shows may not restore the full allowance. OpenCodex does
+not pick either window and does not change account selection, hard locks or credit use because of
+it. The warning clears once the earlier reset time has passed.
 
 Ordinary token refresh preserves history. Reauthentication, removal or account replacement retires the old publication. Native main and probes performed before a login is published are not included. Missing history means insufficient observations, not zero usage. This command does not spend quota. Effective estimates, when supported by observations, carry the limitations below.
 

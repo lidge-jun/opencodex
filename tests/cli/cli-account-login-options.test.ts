@@ -139,12 +139,76 @@ describe("login flow-specific options", () => {
     expect(await handleAccountAuthCommand("login", [...args, "--code", "-"], f.deps)).toBe(2);
     expect(f.calls).toHaveLength(0); expect(f.probes()).toBe(0); expect(f.reads()).toBe(0);
   });
+  test("xAI waiting JSON is refused before target discovery", async () => {
+    const f = fixture();
+    expect(await handleAccountAuthCommand("login", ["xai", "--device", "--json"], f.deps)).toBe(2);
+    expect(f.probes()).toBe(0); expect(f.calls).toEqual([]); expect(f.reads()).toBe(0);
+    expect(JSON.stringify(error.mock.calls)).toContain("--no-wait");
+  });
+  for (const flags of [["--no-wait"], ["--no-wait", "--json"], []]) test(`xAI rejects an old proxy handoff ${flags.join(" ")}`, async () => {
+    const f = fixture([{ url: "https://example.test/callback", instructions: "callback" }, { ok: true }]);
+    expect(await handleAccountAuthCommand("login", ["xai", "--device", ...flags], f.deps)).not.toBe(0);
+    expect(log).not.toHaveBeenCalled();
+    expect(JSON.stringify(error.mock.calls)).toMatch(/restart|upgrade/i);
+    expect(f.calls[1]?.body).toEqual({ provider: "xai" });
+  });
+  test("xAI cancels an incomplete identified handoff by flow", async () => {
+    const f = fixture([{ flowId: "flow-1", url: "https://example.test/callback" }, { ok: true }]);
+    expect(await handleAccountAuthCommand("login", ["xai", "--device", "--no-wait", "--json"], f.deps)).not.toBe(0);
+    expect(f.calls[1]?.body).toEqual({ provider: "xai", flowId: "flow-1" });
+  });
+  test("xAI --device asks the proxy for its device grant; a provider without one is refused", async () => {
+    const f = fixture([{ url: "https://accounts.x.ai/oauth2/device?user_code=ABCD", deviceCode: "ABCD", flowId: "flow-1", browserLaunch: "skipped" }]);
+    expect(await handleAccountAuthCommand("login", ["xai", "--device", "--no-wait", "--json"], f.deps)).toBe(0);
+    expect(f.calls[0]?.body).toEqual({ provider: "xai", addAccount: true, device: true });
+    expect(output().deviceCode).toBe("ABCD");
+    // An already signed-in xAI provider reports loggedIn while the new device approval is pending.
+    const waiting = fixture([{ url: "https://accounts.x.ai/oauth2/device", deviceCode: "ABCD", flowId: "flow-1" },
+      { flowId: "flow-1", loggedIn: true, done: false, status: "pending" }, { flowId: "flow-1", loggedIn: true, done: true, status: "complete" }]);
+    expect(await handleAccountAuthCommand("login", ["xai", "--device"], waiting.deps)).toBe(0);
+    expect(waiting.calls).toHaveLength(3);
+    const refused = fixture();
+    expect(await handleAccountAuthCommand("login", ["anthropic", "--device", "--no-wait"], refused.deps)).toBe(2);
+    expect(refused.calls).toHaveLength(0);
+  });
+  test("xAI device reauth succeeds for an inactive account while the active account needs reauth", async () => {
+    const f = fixture([{ flowId: "flow-1", url: "https://accounts.x.ai/oauth2/device", deviceCode: "ABCD" },
+      { flowId: "flow-1", loggedIn: false, done: true, status: "complete" }]);
+    expect(await handleAccountAuthCommand("login", ["xai", "--device", "--reauth", "--id", "inactive"], f.deps)).toBe(0);
+    expect(f.calls[0]?.body).toEqual({ provider: "xai", addAccount: false, device: true, accountId: "inactive", reauth: true });
+    expect(f.calls[1]?.url).toContain("flowId=flow-1");
+  });
+  test("xAI device requires and polls its own flow id, refusing a replacement success", async () => {
+    const missing = fixture([{ url: "https://accounts.x.ai/oauth2/device", deviceCode: "ABCD" }, { ok: true }]);
+    expect(await handleAccountAuthCommand("login", ["xai", "--device"], missing.deps)).not.toBe(0);
+    expect(missing.calls).toHaveLength(2);
+    const replacement = fixture([{ flowId: "first", url: "https://accounts.x.ai/oauth2/device", deviceCode: "ABCD" },
+      { flowId: "second", loggedIn: true, done: true, status: "complete" }]);
+    expect(await handleAccountAuthCommand("login", ["xai", "--device"], replacement.deps)).not.toBe(0);
+    expect(replacement.calls[1]?.url).toContain("provider=xai&flowId=first");
+  });
   test("Codex device omission preserves its device payload and public grant", async () => {
     const f = fixture([{ flowId: "flow-1", deviceCode: "USER-CODE", url: "https://example.test/verify", accessToken: SECRET }]);
     expect(await handleAccountAuthCommand("login", ["openai", "--device", "--no-wait", "--json"], f.deps)).toBe(0);
     expect(f.calls[0]?.body).toEqual({ device: true });
     expect(output().deviceCode).toBe("USER-CODE");
     expect(output().accessToken).toBeUndefined();
+  });
+  for (const provider of ["xai", "openai", "kimi"]) test(`${provider} --device --code is refused before stdin, target or a grant`, async () => {
+    // A device grant has no paste step, and the proxy's code route is the code flow's. Accepting
+    // both would spend the caller's stdin and stash the paste into a flow it cannot settle.
+    const f = fixture();
+    expect(await handleAccountAuthCommand("login", [provider, "--device", "--code", "-"], f.deps)).toBe(2);
+    expect(await handleAccountAuthCommand("login", [provider, "--device", `--code=${SECRET}`], f.deps)).toBe(2);
+    expect(f.calls).toHaveLength(0); expect(f.probes()).toBe(0); expect(f.reads()).toBe(0);
+    expect(JSON.stringify(error.mock.calls)).toContain("--code cannot be combined with --device");
+  });
+  test("--code without --device still reads the code", async () => {
+    // The guard must not eat the ordinary code login it sits next to.
+    const f = fixture([{ flowId: "flow-1", url: "https://example.test/auth" }, { ok: true, input: SECRET }, { status: "done", loggedIn: true, done: true }]);
+    expect(await handleAccountAuthCommand("login", ["xai", "--code", "-", "--json"], f.deps)).toBe(0);
+    expect(f.reads()).toBe(1);
+    expect(f.calls).toHaveLength(3);
   });
   test("Kiro native projection excludes its private device grant and credentials", async () => {
     const f = fixture([{ flowId: "flow-k", method: "google", state: "pending", userCode: "USER", verificationUri: "https://example.test/verify", expiresAt: 123, deviceCode: SECRET, clientSecret: SECRET, refreshToken: SECRET, error: SECRET }]);
@@ -220,6 +284,36 @@ describe("login terminal and code boundaries", () => {
     expect(await handleAccountAuthCommand("login", ["anthropic", `--unknown=${SECRET}`, "--code", "-"], f.deps)).toBe(2);
     expect(f.calls).toHaveLength(0); expect(f.reads()).toBe(0);
   });
+  test("xAI actual device handoff escapes injected lines while JSON remains exact", async () => {
+    const account = pathToFileURL(repoPath("src", "cli", "account-auth.ts")).href;
+    const xai = pathToFileURL(repoPath("src", "oauth", "xai.ts")).href;
+    const script = `import {handleAccountAuthCommand} from ${JSON.stringify(account)};
+      import {loginXaiDevice} from ${JSON.stringify(xai)};
+      const code = "한글\\nINJECTED\\u001b[31mفارسی\\u200c";
+      globalThis.fetch = async (url) => String(url).includes('well-known')
+        ? Response.json({authorization_endpoint:'https://auth.x.ai/a',token_endpoint:'https://auth.x.ai/t',device_authorization_endpoint:'https://auth.x.ai/d'})
+        : String(url).endsWith('/d') ? Response.json({device_code:'private-grant',user_code:code,verification_uri:'https://accounts.x.ai/verify'})
+        : Response.json({access_token:'private-token',refresh_token:'private-refresh',expires_in:3600});
+      let handoff; await loginXaiDevice({onAuth: x => handoff = x}, {sleep: async () => {}});
+      await handleAccountAuthCommand('login', ['xai','--device','--no-wait', ...(process.argv.includes('json-mode') ? ['--json'] : [])], {
+        baseUrl:'http://127.0.0.1:32100', fetchImpl: async () => Response.json({...handoff, flowId: "flow-1"})
+      });`;
+    for (const json of [false, true]) {
+      const child = Bun.spawn([process.execPath, "--eval", script, ...(json ? ["json-mode"] : [])], { cwd: home.root, env: { ...process.env, HOME: home.root, OPENCODEX_HOME: home.codexHome }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+      const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+      expect(stderr).toBe(""); expect(exit).toBe(0);
+      expect(stdout).not.toContain("private-grant"); expect(stdout).not.toContain("private-token");
+      if (json) {
+        const raw = JSON.parse(stdout);
+        expect(raw.deviceCode).toBe("한글\nINJECTED\u001b[31mفارسی\u200c");
+        expect(raw.instructions).toContain(raw.deviceCode);
+      } else {
+        expect(stdout).not.toContain("\nINJECTED"); expect(stdout).not.toContain("\u001b");
+        expect(stdout).toContain("한글\\x0aINJECTED\\x1b[31mفارسی\u200c");
+      }
+    }
+  });
+
   test("human instructions preserve intended lines but escape terminal controls", async () => {
     mkdirSync(home.codexHome, { recursive: true });
     // A file URL imports on every platform; a URL pathname is "/D:/..." on Windows.
@@ -261,4 +355,42 @@ test("console diagnostics scrub argv credential operands case-insensitively", ()
     expect(scrubCredentialOperands("Unknown provider subcommand: --key=--api-key=synthetic-value-3")).toBe("Unknown provider subcommand: --key=<redacted>");
   } finally { noteCredentialArgv([]); }
   expect(scrubCredentialOperands("Synthetic-Value-2")).toBe("Synthetic-Value-2");
+});
+
+describe("xAI device CLI subprocess contract", () => {
+  for (const scenario of ["reject", "no-wait", "complete", "expired", "replacement"] as const) {
+    test(scenario, async () => {
+      const calls: string[] = [];
+      const handoff = { flowId: "flow-1", url: "https://example.test/verify", deviceCode: "AB\nCD", instructions: "Enter\u001b[31m code", accessToken: SECRET };
+      const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
+        const url = new URL(req.url);
+        calls.push(`${req.method} ${url.pathname}${url.search}`);
+        if (url.pathname === "/api/oauth/login") return Response.json(handoff);
+        if (url.pathname === "/api/oauth/status") return Response.json(scenario === "replacement"
+          ? { flowId: "other", status: "complete", done: true, loggedIn: true, refreshToken: SECRET }
+          : scenario === "expired" ? { flowId: "flow-1", status: "expired", done: true, loggedIn: false, error: SECRET }
+          : { flowId: "flow-1", status: "complete", done: true, loggedIn: true, refreshToken: SECRET });
+        return new Response(null, { status: 404 });
+      }});
+      try {
+        const account = pathToFileURL(repoPath("src", "cli", "account.ts")).href;
+        const args = ["login", "xai", "--device", ...(scenario === "reject" ? ["--json"] : scenario === "no-wait" ? ["--no-wait", "--json"] : [])];
+        const script = `import {cmdAccount} from ${JSON.stringify(account)}; Bun.sleep = async () => {}; process.exitCode = await cmdAccount(${JSON.stringify(args)}, {baseUrl: ${JSON.stringify(`http://127.0.0.1:${server.port}`)}});`;
+        const child = Bun.spawn([process.execPath, "--eval", script], { cwd: home.root, env: { ...process.env, HOME: home.root, OPENCODEX_HOME: home.codexHome }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+        const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+        expect(stdout + stderr).not.toContain(SECRET);
+        if (scenario === "reject") {
+          expect(code).toBe(2); expect(stdout).toBe(""); expect(stderr).toContain("--no-wait"); expect(calls).toEqual([]);
+        } else if (scenario === "no-wait") {
+          expect(code).toBe(0); expect(JSON.parse(stdout)).toMatchObject({ flowId: handoff.flowId, url: handoff.url, deviceCode: handoff.deviceCode, instructions: handoff.instructions });
+          expect(calls).toEqual(["POST /api/oauth/login"]);
+        } else {
+          expect(calls).toEqual(["POST /api/oauth/login", "GET /api/oauth/status?provider=xai&flowId=flow-1"]);
+          expect(stdout).toContain("https://example.test/verify"); expect(stdout).toContain("AB\\x0aCD"); expect(stdout).not.toContain("\u001b");
+          expect(code).toBe(scenario === "complete" ? 0 : 1);
+          if (scenario !== "complete") expect(stdout).not.toContain("Logged in to xai.");
+        }
+      } finally { server.stop(true); }
+    });
+  }
 });

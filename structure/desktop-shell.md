@@ -169,8 +169,10 @@ no proxy of this home is left running. A service that failed while the proxy hap
 satisfies the second and not the first, and it is exactly the case that may respawn the runtime a
 moment later. Nothing kills the child.
 
-A drain that does not complete within `DRAIN_DEADLINE` is **not** recorded as a drain. It becomes
-`DrainFailed`, and an unidentifiable runtime becomes `OwnershipUnknown`. A user's quit still
+A drain that does not complete within `runtime_stop::DEADLINE` (30 seconds; 75 on Windows, where the
+CLI's checked service stop needs longer, see [desktop supervision](ops/desktop-supervision.md)) is
+**not** recorded as a drain. It becomes `DrainFailed`, and an unidentifiable runtime becomes
+`OwnershipUnknown`. A user's quit still
 proceeds from either — refusing to close when the user asked is the worse answer, and a standing
 runtime is recoverable with `ocx stop`. A coordinated restart does not: coming back onto a runtime
 that was never stopped puts the user on the old version while they believe they upgraded. A runtime

@@ -8,7 +8,7 @@ import type { RoleModelChange } from "../../src/codex/role-model-history";
 import { handleManagementAPI } from "../../src/server/management-api";
 import type { OcxConfig } from "../../src/types";
 import { ManagementRequest } from "../helpers/management-auth";
-import { STORE_BUDGET_MS } from "../helpers/test-budget";
+import { BULK_DURABLE_IO_BUDGET_MS, STORE_BUDGET_MS } from "../helpers/test-budget";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const saved = { CODEX_HOME: process.env.CODEX_HOME, OPENCODEX_HOME: process.env.OPENCODEX_HOME,
@@ -134,6 +134,8 @@ async function restoreBatch(changes: RoleModelChange[]): Promise<string> {
 }
 
 describe("CLI role suggestions preserve bounded whole-batch history", () => {
+  // Fifty applies and fifty restores each durably rewrite role config and history.
+  // That I/O is the assertion, so use the existing bounded bulk-write budget.
   test("50 real writes share one listed batch and every role restores after the source leaves the listing", async () => {
     const proposals = seed(50);
     const mirrorBefore = JSON.parse(readFileSync(mirrorPath, "utf8"));
@@ -157,7 +159,7 @@ describe("CLI role suggestions preserve bounded whole-batch history", () => {
     const latest = await listedHistory();
     expect(latest).toHaveLength(50);
     expect(new Set(latest.map(c => c.batch))).toEqual(new Set([restored]));
-  }, { timeout: STORE_BUDGET_MS });
+  }, { timeout: BULK_DURABLE_IO_BUDGET_MS });
 
   test.each([false, true])("51 changed roles are refused before any PUT or file change (json=%s)", async json => {
     const proposals = seed(51);

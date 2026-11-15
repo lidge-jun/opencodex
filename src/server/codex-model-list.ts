@@ -6,6 +6,7 @@ import { loadCatalogTemplate } from "../codex/catalog/bundled";
 import { applyNativeVisibility, nativeContextLimits } from "../codex/catalog/metadata";
 import { readCatalog, readCodexCatalogPath, type CatalogModel } from "../codex/catalog/parsing";
 import { readNativeBaseline, retainedNativeSourcePriorities } from "../codex/catalog/native-priority";
+import { resolveMultiAgentMode } from "../config/multi-agent-surface";
 
 interface CodexModelListInput {
   config: OcxConfig;
@@ -31,7 +32,7 @@ export function buildCodexModelList({
     baseline: readNativeBaseline(catalogPath),
     retainedBySlug: retainedNativeSourcePriorities(readCatalog(catalogPath)?.models ?? []),
   };
-  const maMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2" ? config.multiAgentMode : "default";
+  const maMode = resolveMultiAgentMode(config);
   // Account rows include hidden supported ids so newly re-enabled natives reappear before sync.
   const catalogNativeSlugs = accountSelectors.length > 0
     ? [...new Set([...availableAccountNativeSlugs, ...accountNativeSlugs])]

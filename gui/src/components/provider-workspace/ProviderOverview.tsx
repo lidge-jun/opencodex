@@ -14,7 +14,7 @@ import { discoveryFailureLabel, type ModelRow } from "../../pages/models-shared"
 import type { ProviderQuotaReportView } from "../../provider-workspace/report";
 import type { AccountQuotaReading, ProviderUsageTotals } from "./types";
 import { authModeLabel } from "./ProviderRail";
-import type { ProviderUpdatePatch, ProviderUpdateResult } from "./types";
+import type { ProviderUpdateCallback } from "./types";
 import ProviderCurrentQuota from "./ProviderCurrentQuota";
 import type { CatalogPreset } from "../provider-catalog/provider-presets";
 import ProviderSponsor from "./ProviderSponsor";
@@ -72,7 +72,7 @@ export default function ProviderOverview({
   onEditSettings?: () => void;
   onViewUsage?: () => void;
   onCreateJevAuto?: () => void;
-  onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<ProviderUpdateResult>;
+  onUpdateProvider?: ProviderUpdateCallback;
   onReauthenticate?: () => void;
   onCancelLogin?: () => void;
   reauthBusy?: boolean;
@@ -505,7 +505,7 @@ export default function ProviderOverview({
 
 function NotesSection({ item, onUpdateProvider }: {
   item: WorkspaceItem;
-  onUpdateProvider?: (name: string, patch: ProviderUpdatePatch) => Promise<ProviderUpdateResult>;
+  onUpdateProvider?: ProviderUpdateCallback;
 }) {
   const t = useT();
   const [editing, setEditing] = useState(false);

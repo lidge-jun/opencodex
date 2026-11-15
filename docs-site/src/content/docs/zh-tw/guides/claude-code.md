@@ -57,7 +57,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`（以訂閱方式啟動且未設定時為原生 `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`） |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | OpenCodex 將層級槽位設為路由別名時對應的 `/model` 標籤（例如 `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`）。launchd 系統環境與 shell 掛鉤中也成對寫入。模型 ID 仍為別名。您自行設定的槽位或標籤不會被修改 |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | 啟用 `alwaysEnableEffort` 時設為 `1`（條件注入） |
-| `ENABLE_TOOL_SEARCH` | 設定 `claudeCode.toolSearch` 時注入（條件注入，預設關閉） |
+| `ENABLE_TOOL_SEARCH` | 設定 `claudeCode.toolSearch` 時注入（條件注入；預設不注入，沿用 Claude Code 自身的預設值） |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | 設定 `maxContextTokens` 時使用的舊版上下文覆蓋項（條件注入） |
 你自行匯出的變數始終優先。額外引數會直接透傳：`ocx claude -p "hello"`。
 
@@ -97,6 +97,8 @@ Claude Code 需要在 `ANTHROPIC_AUTH_TOKEN` 中有 token 才能與閘道器通�
 | 有 Claude 登入（`~/.claude.json` 的 OAuth 帳號、`.credentials.json`、macOS keychain，或已匯出的 `ANTHROPIC_API_KEY`） | 不設定 token，讓你的訂閱與聯結器繼續運作 |
 | 完全沒有 Claude 認證 | 注入佔位 token，讓 Claude Code 不再要求登入，並經由代理路由 |
 | 無法判斷（keychain 無法讀取、檔案損毀） | 假設為訂閱並印出警告——讀取失敗時絕不會把付費訂閱者改成走代理 |
+
+鎖住的 macOS keychain 視為「無法判斷」。opencodex 最多等待 keychain 回應 1.5 秒，絕不取消解鎖提示；執行中的代理在一次查詢逾時後 60 秒內不再詢問 keychain，因此重新整理儀表板不會疊加提示。每個新的 `ocx claude` 程序會各自詢問一次。若手動將 `authMode` 設為 proxy 或 subscription，則完全不查詢 keychain。
 
 此判斷會在每次啟動時重新計算，不會被記住，因此登入或登出會在下一次 `ocx claude` 時自動生效，
 無需重新設定。

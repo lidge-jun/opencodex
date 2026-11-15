@@ -8,7 +8,7 @@
 Use these declarations to choose a task, then check its flags and authority before execution.
 Non-mutating probes may still contact providers, consume quota or refresh caches.
 
-Declared capabilities: 102.
+Declared capabilities: 105.
 
 ### `ocx update`
 
@@ -1924,3 +1924,62 @@ Drives no management route.
 
 - Writes telemetry.decision = declined in local config.json and removes telemetry-id.json.
 - Always permitted, including in agent-driven sessions.
+
+### `ocx telemetry profile status`
+
+Usage: `ocx telemetry profile status [--json]`
+
+Inspect the opt-in public leaderboard profile, its next submission preview and its ranks.
+
+State-changing: no. JSON mode: `payload`.
+
+| Method | Route |
+|---|---|
+| GET | `/api/telemetry/profile` |
+| GET | `/api/telemetry/profile/rank` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the profile status, preview and ranks as JSON. |
+
+- Reads live status from the running proxy and falls back to the local profile file when the proxy is stopped.
+- Never prints the profile secret.
+
+### `ocx telemetry profile connect`
+
+Usage: `ocx telemetry profile connect --handle <handle> [--name <display name>] [--avatar <colour>] [--json]`
+
+Create an opt-in public leaderboard profile.
+
+State-changing: yes. JSON mode: `envelope`.
+
+Drives no management route.
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--handle` | string | Public handle: 3 to 24 lowercase letters, digits or hyphens. |
+| `--name` | string | Public display name; defaults to the handle. |
+| `--avatar` | string | Avatar colour from the fixed palette; default blue. |
+| `--json` | boolean | Emit the connected profile as JSON. |
+
+- Requires an interactive human terminal and anonymous telemetry turned on, prints the public-profile disclosure, and asks for confirmation (default no).
+- Refuses with agent_consent_required when agent-driven and with tty_required when non-interactive or running under OCX_SERVICE.
+
+### `ocx telemetry profile disconnect`
+
+Usage: `ocx telemetry profile disconnect [--json]`
+
+Delete the public leaderboard profile and all its data on the server.
+
+State-changing: yes. JSON mode: `envelope`.
+
+| Method | Route |
+|---|---|
+| DELETE | `/api/telemetry/profile` |
+
+| Flag | Value | Meaning |
+|---|---|---|
+| `--json` | boolean | Emit the disconnect outcome as JSON. |
+
+- Always permitted, including in agent-driven sessions and while anonymous telemetry is off.
+- Uses the running proxy when available and otherwise deletes directly; an unreachable telemetry service leaves the deletion pending for the proxy to retry.

@@ -203,6 +203,15 @@ test("exact model choices distinguish prefix siblings and compose with a provide
 const digest32 = (raw: string) => createHash("sha256").update(raw).digest("hex").slice(0, 32);
 const CODEX_THREAD_ID = "019f6482-67d5-77c2-a643-02daddaa7115";
 
+test("a pasted Claude Code user_id finds its session despite the per-turn tk", async () => {
+  const session = JSON.stringify({ device_id: "d", session_id: "s" });
+  const turn = JSON.stringify({ device_id: "d", session_id: "s", tk: "turn-3" });
+  const rows = [{ id: "session", conversationId: digest32(session) }, { id: "old", conversationId: digest32(turn) }];
+  const queryHash = await hashLogConversationQuery(turn);
+  expect(filterLogs(rows, { ...DEFAULT_LOG_FILTER_STATE, conversationId: turn, conversationQueryHash: queryHash }, NOW)
+    .map(row => row.id)).toEqual(["session", "old"]);
+});
+
 describe("codex://threads paste in the conversation filter", () => {
   test("unwraps the deep link to the bare thread id and hashes the unwrapped value", async () => {
     expect(unwrapLogConversationQuery(`codex://threads/${CODEX_THREAD_ID}`)).toBe(CODEX_THREAD_ID);

@@ -22,7 +22,8 @@ const UNSUPPORTED_HOSTED_TOOLS: ReadonlyArray<{
 ];
 
 /**
- * Hosted-tool declaration names an operator may list in `unsupportedHostedTools`.
+ * Hosted-tool declaration names an operator may list in `unsupportedHostedTools` or
+ * `unsupportedHostedToolsWithClientTools`.
  *
  * A gateway must be able to deny anything a client can send it, so this is the set of
  * nameless hosted/private declaration types the proxy recognizes on a Responses request.
@@ -66,17 +67,8 @@ const HOSTED_TOOL_ALIAS_GROUPS: ReadonlyArray<ReadonlySet<string>> = [
 
 const NO_DECLARED_HOSTED_TOOLS: ReadonlySet<string> = new Set();
 
-/**
- * Expand a provider's declared denials through the alias groups once per request, so the
- * per-tool predicate stays a set lookup. Returns a shared empty set when the provider
- * declares nothing, keeping the common path allocation-free.
- */
-export function declaredUnsupportedHostedTools(
-  provider?: { unsupportedHostedTools?: readonly string[] },
-): ReadonlySet<string> {
-  const declared = provider?.unsupportedHostedTools;
-  if (!Array.isArray(declared) || declared.length === 0) return NO_DECLARED_HOSTED_TOOLS;
-  const out = new Set<string>();
+function addDeclaredHostedTools(out: Set<string>, declared: readonly string[] | undefined): void {
+  if (!Array.isArray(declared)) return;
   for (const raw of declared) {
     if (typeof raw !== "string") continue;
     const tool = raw.trim();
@@ -87,7 +79,59 @@ export function declaredUnsupportedHostedTools(
       for (const alias of group) out.add(alias);
     }
   }
+}
+
+/**
+ * Expand a provider's declared denials through the alias groups once per request, so the
+ * per-tool predicate stays a set lookup. Returns a shared empty set when the provider
+ * declares nothing, keeping the common path allocation-free.
+ *
+ * `withClientTools` says whether the request being shaped also declares client tools. Only
+ * then does `unsupportedHostedToolsWithClientTools` join the unconditional list (#8204);
+ * config-time callers leave it false and see the unconditional denials alone.
+ */
+export function declaredUnsupportedHostedTools(
+  provider?: {
+    unsupportedHostedTools?: readonly string[];
+    unsupportedHostedToolsWithClientTools?: readonly string[];
+  },
+  withClientTools = false,
+): ReadonlySet<string> {
+  const declared = provider?.unsupportedHostedTools;
+  const conditional = withClientTools ? provider?.unsupportedHostedToolsWithClientTools : undefined;
+  const hasDeclared = Array.isArray(declared) && declared.length > 0;
+  const hasConditional = Array.isArray(conditional) && conditional.length > 0;
+  if (!hasDeclared && !hasConditional) return NO_DECLARED_HOSTED_TOOLS;
+  const out = new Set<string>();
+  addDeclaredHostedTools(out, declared);
+  addDeclaredHostedTools(out, conditional);
   return out.size > 0 ? out : NO_DECLARED_HOSTED_TOOLS;
+}
+
+/** A declaration the client executes and answers: a function, a custom tool, or a namespace of them. */
+function isClientToolDeclaration(tool: unknown): boolean {
+  if (tool === null || typeof tool !== "object" || Array.isArray(tool)) return false;
+  const entry = tool as { type?: unknown; tools?: unknown };
+  if (entry.type === "function" || entry.type === "custom") return true;
+  return entry.type === "namespace" && Array.isArray(entry.tools) && entry.tools.some(isClientToolDeclaration);
+}
+
+/**
+ * Whether a Responses body declares any client tool the upstream will see: in `tools`, in a
+ * client-loaded `additional_tools` catalog, or in the definitions a client-executed
+ * `tool_search_output` returned. Hosted declarations never count, so stripping them cannot
+ * change the answer.
+ */
+export function responsesBodyDeclaresClientTools(body: Record<string, unknown>): boolean {
+  if (Array.isArray(body.tools) && body.tools.some(isClientToolDeclaration)) return true;
+  if (!Array.isArray(body.input)) return false;
+  return body.input.some(item => {
+    if (item === null || typeof item !== "object" || Array.isArray(item)) return false;
+    const entry = item as { type?: unknown; tools?: unknown };
+    return (entry.type === "additional_tools" || entry.type === "tool_search_output")
+      && Array.isArray(entry.tools)
+      && entry.tools.some(isClientToolDeclaration);
+  });
 }
 
 /**

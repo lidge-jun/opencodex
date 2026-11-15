@@ -391,4 +391,4 @@ async function main(args) {
   process.stdout.write('signature valid; publication evidence has not been checked\n');
 }
 if (require.main === module) main(process.argv.slice(2)).catch(error => { process.stderr.write(`release history: ${error.message}\n`); process.exitCode = 1; });
-module.exports = {compareVersions, reconcileHistory, verifyExactResume, verifyEd25519Receipt, createReceiptVerifier, collectPublicationHistory, verifyLegacyTreeEvidence};
+module.exports = {compareVersions, reconcileHistory, verifyExactResume, verifyEd25519Receipt, createReceiptVerifier, collectPublicationHistory, verifyLegacyTreeEvidence, LEGACY_MAPPINGS, LEGACY_BASELINE};

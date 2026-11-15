@@ -566,11 +566,18 @@ export function initializeConfigOwnership(configDir: string): boolean {
     // stalls every request to that home. Either file changing re-arms a single wait.
     const observed = creationWaitIdentity(configDir);
     if (observed !== null && expiredCreationWait.get(cacheKey) === observed) {
-      ownership = null;
+      // A spent wait suppresses only the wait itself, never the reload: the identity it keeps
+      // may already name a completed pair. One plain load stays cheap for an unchanged invalid
+      // pair and lets a valid one register instead of sticking unowned.
+      ownership = loadOwnership(configDir);
+      if (ownership !== null) expiredCreationWait.delete(cacheKey);
     } else {
       ownership = loadOrCreateOwnership(configDir);
       const current = creationWaitIdentity(configDir);
-      if (ownership === null && current !== null) expiredCreationWait.set(cacheKey, current);
+      // Record only the identity the wait actually ran out on: unchanged across it, so its last
+      // failed read describes the same state. A pair that changed during the wait, including one
+      // that completed just after that read, spends its own wait on the next registration.
+      if (ownership === null && current !== null && current === observed) expiredCreationWait.set(cacheKey, current);
       else expiredCreationWait.delete(cacheKey);
     }
     ownershipCache.set(cacheKey, ownership);
@@ -642,6 +649,19 @@ export type OwnedPathRegistration = "recorded" | "unowned" | "full";
 
 export function recordOwnedConfigPath(configDir: string, candidatePath: string): boolean {
   return registerOwnedConfigPath(configDir, candidatePath) === "recorded";
+}
+
+/**
+ * Read-only: whether the manifest lists `candidatePath` or one of its ancestors ("listed"), lists
+ * neither ("unlisted"), or the home has no ownership metadata ("unowned"). Writes nothing; throws
+ * {@link ConfigUninstallInProgressError} under an uninstall tombstone, as a registration would.
+ */
+export function configPathOwnership(configDir: string, candidatePath: string): "listed" | "unlisted" | "unowned" {
+  const current = loadOwnership(configDir) ?? tombstonedManifestWithoutOwner(configDir);
+  if (!current) return "unowned";
+  if (current.manifest.uninstallStartedAt !== undefined && teardownDepth === 0) throw new ConfigUninstallInProgressError();
+  const parts = manifestRelativePath(configDir, candidatePath)?.split("/") ?? [];
+  return parts.some((_, index) => current.manifest.paths.includes(parts.slice(0, index + 1).join("/"))) ? "listed" : "unlisted";
 }
 
 function entryExists(path: string): boolean {

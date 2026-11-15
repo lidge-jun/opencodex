@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { getConfigDir } from "../config/paths";
 import { packageVersion } from "../lib/package-version";
 
 export const CHILD_TARGET_TRIPLES = [
@@ -216,12 +217,18 @@ export function resolveChildBinarySource(
     }
   }
 
-  // An empty OPENCODEX_HOME counts as unset, as in ocx-child; joining "" would search the cwd.
-  const ocxHome = options.opencodexHome || env.OPENCODEX_HOME?.trim() || join(env.HOME || homedir(), ".opencodex");
+  // With no Home and no environment passed, the Home is the one the rest of OpenCodex uses (getConfigDir:
+  // trimmed, ~ expanded, resolved), which is where the startup fill writes ocx-child-builds/. An injected
+  // environment keeps its literal reading. An empty OPENCODEX_HOME counts as unset, as in ocx-child.
+  const ocxHome = options.opencodexHome
+    || (options.env ? env.OPENCODEX_HOME?.trim() || join(env.HOME || homedir(), ".opencodex") : getConfigDir());
   const version = options.version ?? packageVersion("0.0.0");
-  const cachedCandidate = join(ocxHome, "cache", "ocx-child", version, artifactFile);
-  const cacheRes = verifyManifestCandidate(cachedCandidate, targetTriple, "cache", hostPlatform);
-  if (cacheRes) return cacheRes;
+  // A build an operator placed in cache/ocx-child/ first, then the one the Home filled after an update
+  // (ocx-child-builds/, src/link/child-binary-cache-fill.mjs); both need a SHA256SUMS that lists them.
+  for (const dir of [join(ocxHome, "cache", "ocx-child"), join(ocxHome, "ocx-child-builds")]) {
+    const cacheRes = verifyManifestCandidate(join(dir, version, artifactFile), targetTriple, "cache", hostPlatform);
+    if (cacheRes) return cacheRes;
+  }
 
   return { ok: false, reason: "artifact_not_found" };
 }

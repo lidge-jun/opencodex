@@ -435,12 +435,14 @@ describe("rate-limit reset credits", () => {
 
     it("preserves usage on credits-only WHAM refreshes", () => {
       clearAccountQuota();
-      updateAccountQuota("credits-only", 10, 111, 20, 222, 1);
+      // A live weekly window: a reset in the past would (correctly) retire the carried reading.
+      const weeklyResetAt = Math.floor(Date.now() / 1000) + 86_400;
+      updateAccountQuota("credits-only", 10, weeklyResetAt, 20, 222, 1);
       const quota = parseUsageQuota({ rate_limit_reset_credits: { available_count: 2 } });
       setAccountQuotaFromParsed("credits-only", quota!);
       expect(getAccountQuota("credits-only")).toEqual({
         weeklyPercent: 10,
-        weeklyResetAt: 111,
+        weeklyResetAt,
         monthlyPercent: 20,
         monthlyResetAt: 222,
         resetCredits: 2,

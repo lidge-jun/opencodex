@@ -18,6 +18,7 @@ import { resolveCurrentWindowsPrincipal, setWindowsPrincipalRunnerForTests } fro
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { ALL_PART_A_FAILURES, partAResult, partBResult } from "../helpers/windows-stop-caller-fixtures";
 import { repoRoot } from "../helpers/repo-root";
 
 const TEST_WINDOWS_TASK_SID = "S-1-5-21-111-222-333-1001";
@@ -2269,24 +2270,16 @@ describe("service lifecycle cleanup ordering", () => {
     ]);
   });
 
-  test("service install stops the recorded backend, requested backend, and standalone before loading assets", async () => {
+  test("Windows service install runs the checked stop, the standalone stop and Part B before loading assets", async () => {
     const calls: string[] = [];
-    const managerOps = (backend: "scheduler" | "native") => ({
-      status: () => { calls.push(`status:${backend}`); return "present"; },
-      stop: () => { calls.push(`stop:${backend}`); },
-    });
     await installServiceSafely("native", () => { calls.push("install:native"); }, {
       platform: "win32",
-      diagnose: () => ({ supported: true, installed: true, enabled: true, running: true, viable: true, startable: true, stale: false, conflict: false, backend: "scheduler", summary: "test" }),
-      managerOps,
-      killServiceWrappers: () => { calls.push("kill:wrappers"); },
+      // #7771: Part A stops every registered manager (both on a conflicting install) and ends the bound wrappers.
+      windowsPartA: async () => { calls.push("partA"); return partAResult("stopped"); },
+      windowsPartB: async () => { calls.push("partB"); return partBResult("freed"); },
       stopTrackedProxy: async () => { calls.push("stop:standalone"); },
     });
-    expect(calls).toEqual([
-      "status:scheduler", "stop:scheduler",
-      "status:native", "stop:native",
-      "kill:wrappers", "stop:standalone", "install:native",
-    ]);
+    expect(calls).toEqual(["partA", "stop:standalone", "partB", "install:native"]);
   });
 
   test("legacy systemd reports an absent unit without stopping cleanup or blocking install", async () => {
@@ -2379,21 +2372,12 @@ describe("service lifecycle cleanup ordering", () => {
   });
 
   test("service install fails closed before install on manager or standalone cleanup errors", async () => {
-    for (const failure of ["status", "stop", "standalone"] as const) {
+    for (const failure of ["partA", "partB", "standalone"] as const) {
       let installed = false;
       const run = installServiceSafely("scheduler", () => { installed = true; }, {
         platform: "win32",
-        diagnose: () => ({ supported: true, installed: true, enabled: true, running: true, viable: true, startable: true, stale: false, conflict: false, backend: "scheduler", summary: "test" }),
-        managerOps: () => ({
-          status: () => {
-            if (failure === "status") throw new Error("status failed");
-            return "present";
-          },
-          stop: () => {
-            if (failure === "stop") throw new Error("stop failed");
-          },
-        }),
-        killServiceWrappers: () => {},
+        windowsPartA: async () => { if (failure === "partA") throw new Error("partA failed"); return partAResult("stopped"); },
+        windowsPartB: async () => { if (failure === "partB") throw new Error("partB failed"); return partBResult("freed"); },
         stopTrackedProxy: async () => {
           if (failure === "standalone") throw new Error("standalone failed");
         },
@@ -2403,16 +2387,14 @@ describe("service lifecycle cleanup ordering", () => {
     }
   });
 
-  test("conflicting Windows install preparation stops both managers", async () => {
-    const stopped: string[] = [];
-    await prepareServiceInstall("scheduler", {
-      platform: "win32",
-      diagnose: () => ({ supported: true, installed: true, enabled: true, running: true, viable: false, startable: false, stale: false, conflict: true, backend: "scheduler", summary: "test" }),
-      managerOps: backend => ({ status: () => "present", stop: () => { stopped.push(backend); } }),
-      killServiceWrappers: () => { stopped.push("wrappers"); },
-      stopTrackedProxy: async () => {},
-    });
-    expect(stopped).toEqual(["scheduler", "native", "wrappers"]);
+  test("Windows install preparation refuses before replacing anything unless Part A stopped or found nothing", async () => {
+    for (const outcome of ALL_PART_A_FAILURES) {
+      const stopped: string[] = [];
+      await expect(prepareServiceInstall("scheduler", { platform: "win32", windowsPartA: async () => partAResult(outcome),
+        windowsPartB: async () => { stopped.push("partB"); return partBResult("freed"); },
+        stopTrackedProxy: async () => { stopped.push("standalone"); } })).rejects.toThrow(`could not be proven stopped (${outcome})`);
+      expect(stopped).toEqual([]);
+    }
   });
 
   test("direct service stop kills the tracked proxy before restoring native Codex", async () => {
@@ -2474,7 +2456,7 @@ describe("service lifecycle cleanup ordering", () => {
 
   test("Windows service uninstall verifies task deletion before removing assets", async () => {
     const service = await readText("src/service/windows-ops.ts");
-    const uninstallWindows = service.slice(service.indexOf("function uninstallWindows()"), service.indexOf("function classifyWindowsServiceStop("));
+    const uninstallWindows = service.slice(service.indexOf("function uninstallWindows()"));
 
     expect(uninstallWindows).toContain("probeWindowsSchedulerTask(TASK)");
     expect(uninstallWindows).toContain("windowsServiceScriptPath()");
@@ -2489,16 +2471,16 @@ describe("service lifecycle cleanup ordering", () => {
     expect(service).toContain('verifyPidIdentity');
     expect(service).toContain("removeRuntimePort(pid);");
     expect(service).toContain('import { isProcessAlive, stopProxy } from "../lib/process-control";');
-    expect(service).toContain('import { findLiveProxy, SERVICE_STOP_LIVENESS } from "../server/proxy-liveness";');
+    expect(service).toContain('import { findLiveProxy, proveLiveProxyOwnedByHome, proxyIdentityAt, SERVICE_STOP_LIVENESS } from "../server/proxy-liveness";');
     expect(service).toContain('type TrackedProxyCleanupResult = "none" | "stale" | "stopped";');
     const health = await readText("src/service/health.ts");
     expect(health).toContain('import { proxyIdentityAt } from "../server/proxy-liveness";');
-    expect(service).toContain("async function stopTrackedProxyIfRunning(): Promise<TrackedProxyCleanupResult>");
+    expect(service).toContain("async function stopTrackedProxyIfRunning(io: TrackedProxyStopIo = {}): Promise<TrackedProxyCleanupResult>");
     expect(service).toContain("...SERVICE_STOP_LIVENESS");
     expect(service).toContain("deadlineAt:");
     expect(service).toContain("SERVICE_STOP_LIVENESS");
-    expect(service).toContain("await stopProxy(trackedKillPid);");
-    expect(service).toContain("await stopProxy(liveKillPid);");
+    expect(service).toContain("await stopProxy(trackedKillPid, io);");
+    expect(service).toContain("await stopProxy(liveKillPid, io);");
     expect(service).toContain("removePid(pid);");
     expect(service).toContain('return "stopped";');
   });
@@ -2540,7 +2522,7 @@ describe("service lifecycle cleanup ordering", () => {
   test("service command cleanup logs kill failures without skipping restore/delete", async () => {
     const service = await readText("src/service/orchestration.ts");
 
-    expect(service).toContain("async function stopTrackedProxyForServiceCommand(): Promise<TrackedProxyCleanupResult>");
+    expect(service).toContain("async function stopTrackedProxyForServiceCommand(io: TrackedProxyStopIo = {}): Promise<TrackedProxyCleanupResult>");
     expect(service).toContain("catch (err)");
     expect(service).toContain("Failed to stop proxy");
     expect(service).toContain('return "none";');

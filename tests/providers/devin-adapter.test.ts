@@ -233,6 +233,8 @@ describe("devin adapter", () => {
     expect(collapseDevinModelUid("glm-5-2-max-1m")).toBe("glm-5-2");
     expect(collapseDevinModelUid("claude-opus-4-8-high-fast")).toBe("claude-opus-4-8");
     expect(collapseDevinModelUid("claude-fable-5-1-high")).toBe("claude-fable-5-1");
+    expect(collapseDevinModelUid("claude-fable-5-2-high")).toBe("claude-fable-5-2");
+    expect(collapseDevinModelUid("claude-fable-5-2-high-fast")).toBe("claude-fable-5-2");
     expect(collapseDevinModelUid("grok-4-5-medium")).toBe("grok-4-5");
   });
 

@@ -3,8 +3,7 @@ title: Adapters
 description: The provider adapters — what each targets, how it builds requests, and its quirks.
 ---
 
-An **adapter** translates between opencodex's internal request/response model and one provider wire
-format. Every adapter implements the `ProviderAdapter` interface (`src/adapters/base.ts`):
+An **adapter** translates between opencodex's internal request/response model and one provider wire format. Every adapter implements `ProviderAdapter`. The following excerpt is abbreviated; the complete, authoritative interface is in `src/adapters/base.ts`:
 
 ```ts
 interface ProviderAdapter {
@@ -91,7 +90,9 @@ transport; it does not infer subscription attribution from the inbound protocol.
   keep their existing behavior. This does not add Mistral signature replay.
 - Canonical key-auth Mistral Chat (`https://api.mistral.ai/v1`) maps `max_completion_tokens` to
   `max_tokens` while keeping an explicit non-null `max_tokens`, and drops `user`, `store`, `thinking`,
-  `include_reasoning`, `reasoning` and `top_k`. Its preset folds developer messages to system by
+  `include_reasoning`, `reasoning` and `top_k`. It also drops `reasoning_content` from every message in the
+  history, which reasoning-capable Chat clients replay and Mistral rejects with HTTP 422, and no
+  reasoning replay restores it on that destination. Its preset folds developer messages to system by
   default; an explicit `foldDeveloperRoleToSystem: false` overrides this. Native Chat also follows
   the configured model effort ladder: an unsupported `medium` becomes `low` for the bundled
   DeepSeek/GLM ladders. Mistral Large 4 keeps its supported `medium` rung.
@@ -200,7 +201,37 @@ An explicitly configured provider `User-Agent` remains authoritative regardless 
 if the caller sends none, OpenCodex does not invent one. Additional caller metadata can be selected
 with `forwardClientHeaders`; provider `headers` win for this option, and credential or transport-owned
 names are refused. Canonical ChatGPT forward auth retains its separate fixed header allowlist.
-Only `originator`, `x-client-request-id`, `x-codex-app-version`, and `user-agent` are supported by `forwardClientHeaders`; arbitrary names are rejected on load/write and ignored at runtime.
+Only `originator`, `x-client-request-id`, `x-codex-app-version`, `user-agent`,
+`x-codex-window-id`, and `x-codex-installation-id` are supported by `forwardClientHeaders`;
+arbitrary names and wildcard prefixes are rejected on load/write and ignored at runtime.
+
+For a custom gateway that requires original Codex client metadata (for example, a sub2api
+account with `codex_cli_only` enabled), select only the fields its operator requires.
+If it requires the caller's window identifier, opt in on that provider:
+
+```json
+{
+  "forwardClientHeaders": [
+    "originator", "user-agent", "x-codex-app-version", "x-client-request-id",
+    "x-codex-window-id"
+  ]
+}
+```
+
+This preserves only values the client actually sends, including across native compact fallback.
+WebSocket clients retain their original `User-Agent` and app-version metadata through the
+handshake, with the same provider forwarding policy as HTTP clients.
+Responses authentication preparation preserves that permitted metadata before the final
+provider transport applies its header policy, for both HTTP and WebSocket turns.
+Both identifier headers are off by default on custom providers and require separate selection.
+Add `x-codex-installation-id` only when the trusted destination also requires it: an installation
+identifier can correlate requests across sessions. Selecting a window identifier does not enable
+the installation identifier. Removing a name stops this option copying it on subsequent requests;
+it does not erase identifiers already received by the destination. Provider `headers` remain
+authoritative, and this option does not filter identifiers already present in the request body.
+Missing identifiers are never generated, and connection tests or model discovery do not acquire
+a Codex identity through this option. These headers preserve caller metadata; they do not prove
+that the caller is an official client or grant permission under a gateway's access policy.
 
 ### Native compaction on custom gateways
 
@@ -545,6 +576,25 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
 - Accepts Responses `text` controls that are not structured output — `text.verbosity` and
   `text.format: {"type":"text"}` — without forwarding them. Kiro has no wire field for either, so
   they are ignored rather than rejected.
+- Sends at most 48 client tools and 96 KB of converted tool JSON per request, and cuts each tool
+  description to 1,024 characters (9,216 for `gpt-5.6-sol`). Tools loaded through tool search and the Codex code-mode
+  execution tool are admitted first; the model is told which tools were omitted. Set
+  `OCX_KIRO_TOOL_BUDGET=off` in the proxy's environment to send the whole client catalog, and
+  `OCX_KIRO_TOOL_DESCRIPTION_LIMIT=off` to send full descriptions. Both are read when a request is
+  converted, apply to every Kiro model, and leave other limits unchanged. Disabling the budget
+  removes the limit itself, so there is nothing to prioritize or omit: every declared tool goes
+  on the wire in declaration order, the omission notice disappears, and a client that declares
+  more than Kiro accepts gets the upstream `ValidationException` instead of a trimmed catalog.
+  Request sizes then grow with the client's own catalog. These switches are an opt-out for an
+  account measured to accept the larger request, not a way to make an oversized catalog safe.
+- Strips the JSON Schema keywords Kiro's validator rejects (`pattern`, `minLength`, `maximum`,
+  `additionalProperties` and 25 others) from tool and structured-output schemas, except the
+  keywords a probe measured a model taking. `claude-opus-4.5` keeps all of them. `claude-opus-5.5`
+  and `claude-sonnet-5.5` keep `pattern` and `maximum`; their other keywords stay stripped, because no
+  probe sent them to those models. Every other Kiro
+  model, including the other Claude ids, keeps the full strip. The exception is per model and per
+  keyword because this wire already separates Claude models on reasoning effort, and a keyword
+  Kiro rejects fails the whole request rather than just costing the model a hint.
 - Emulates structured output (Responses `text.format` of type `json_schema` or `json_object`, and
   Messages `output_config.format`). The Kiro wire cannot constrain the response shape, so the
   adapter advertises a private output tool whose input schema is the requested schema and returns
@@ -682,13 +732,42 @@ The continuation's instruction tells the model that its ordinary text has not re
 
 ### Reasoning effort
 
-The GPT-5.6 family uses `additionalModelRequestFields.reasoning.effort`; `claude-opus-5`
-uses `additionalModelRequestFields.output_config.effort`. For `gpt-5.6-luna` and
-`gpt-5.6-terra`, only `low`, `medium`, `high`, and `max` use the verified native path.
-Their `xhigh` selection retains the previous bounded thinking instructions in user content
-because that native rung has not been verified. `gpt-5.6-sol` and `claude-opus-5` keep
-their existing native `low`, `medium`, `high`, `xhigh`, and `max` behavior. Other Kiro
-models use emulated reasoning; an advertised effort control is not proof of native support.
+The GPT-5.6 family and the GPT-6 models (`gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`,
+`gpt-6.1-terra`) use `additionalModelRequestFields.reasoning.effort`; the Claude ids listed
+below use `additionalModelRequestFields.output_config.effort`.
+For `gpt-5.6-luna` and `gpt-5.6-terra`, only `low`, `medium`, `high`, and `max` use the
+verified native path. Their `xhigh` selection retains the previous bounded thinking
+instructions in user content because that native rung has not been verified. `gpt-5.6-sol`
+and the GPT-6 models keep their native `low`, `medium`, `high`, `xhigh`, and `max`
+behavior through that same `reasoning.effort` field.
+
+Kiro accepts `output_config.effort` for `claude-opus-5`, `claude-opus-5.5`,
+`claude-opus-4.8`, `claude-opus-4.7`, `claude-opus-4.6`, `claude-sonnet-5.5`,
+`claude-sonnet-5`, `claude-sonnet-4.6`, and `claude-haiku-5.5` at `low`, `medium`,
+`high`, `xhigh` and `max`, with one exception: `claude-opus-4.6` and `claude-sonnet-4.6`
+reject native `xhigh`, so that rung keeps the emulated thinking block.
+
+Kiro has no `minimal` rung. On all nine models except `claude-opus-5` and `claude-opus-5.5`,
+`minimal` keeps the emulated block instead of failing a request that worked before native effort
+was enabled. Those two Opus 5 models, and the GPT models that carry native effort, reject
+`minimal` with a 400 `invalid_request_error` before anything is sent.
+
+The surfaces report that refusal differently. A Responses request puts a sentence naming the model
+and the rejected effort in `error.message`. The Messages and Chat Completions paths put their fixed
+condition copy there instead — `The provider rejected the request.` — because those paths replace an
+adapter detail with their own sentence rather than relaying it. Only Responses names the model and
+the effort. Stream and non-stream requests read identically on every surface: the refusal is raised
+while the wire payload is built, so no stream has opened and no request has gone upstream.
+
+A caller's `ultra` is reduced to `max` during parsing. The configured pins
+`pinnedReasoningEffort`, `modelPinnedReasoningEfforts` and `modelPinnedEfforts` are applied later;
+for models with native Kiro effort, the adapter also folds a pinned `ultra` to native `max`.
+For models using emulated reasoning, a pinned `ultra` is dropped and the request is sent without
+a reasoning signal.
+
+`claude-haiku-4.5`, `claude-opus-4.5` and `claude-sonnet-4.5`, along with any Kiro
+model not listed above, use emulated reasoning at every effort; an advertised effort control is
+not proof of native support.
 
 ## `cursor`
 
@@ -753,7 +832,11 @@ compatibility pair: `agent.v1.AgentService/RunSSE` for server output and
   guard. Tool availability, execution policy, and approval/sandbox behavior are unchanged.
   In code mode — a freeform unified `exec` and no bare shell bridge — the redirect points inside `exec`, where
   shell, file, search, and fetch are nested `tools.<name>(...)` helpers of the JavaScript cell,
-  and never recommends the top-level shell bridge code mode does not expose. A flat catalog that
+  and never recommends the top-level shell bridge code mode does not expose. Cursor can defer the
+  Codex tools, `exec` included, behind its own `GetDynamicTools`/`CallDynamicTool` pair, so
+  code-mode guidance tells the model to call `CallDynamicTool` with namespace
+  `opencodex-responses` and the listed tool name when a listed tool is missing from its top-level
+  list. A model can still try a Cursor-native tool first; that attempt is denied as before. A flat catalog that
   carries `shell_command`/`exec_command` or a non-freeform unified `exec` keeps the bridge wording;
   a catalog that carries neither — an orchestrator client exposing only its own Responses tools,
   for example — is redirected to the request's actual wire names, so the model is pointed at a

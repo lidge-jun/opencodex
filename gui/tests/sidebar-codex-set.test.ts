@@ -37,7 +37,9 @@ test("Codex Set is always present in the sidebar, never filtered by view mode", 
   const groups = await Bun.file(new URL("../src/nav-groups.ts", import.meta.url)).text();
   // Codex Set is the "Accounts & limits" row; Providers has its own row under Route.
   expect(groups).toContain('{ id: "accounts", tier: "daily", tkey: "shellV2.navAccounts", Icon: IconCodex, pages: ["codex-set"] }');
-  expect(src).toContain('{page === "codex-set" && <CodexSet apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}');
+  // Codex Set now receives the logical target so its account pool is scoped like
+  // Providers; the route itself is unchanged.
+  expect(src).toContain('{page === "codex-set" && <CodexSet apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} targetKey={sharedTarget.key} />}');
 });
 
 test("the shipped #codex-auth bookmark still resolves", async () => {

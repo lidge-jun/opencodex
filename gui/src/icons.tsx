@@ -23,6 +23,8 @@ export const IconX = (p: P) => (<svg {...S(p)}><path d="M18 6 6 18M6 6l12 12"/><
 export const IconPlus = (p: P) => (<svg {...S(p)}><path d="M12 5v14M5 12h14"/></svg>);
 export const IconMinus = (p: P) => (<svg {...S(p)}><path d="M5 12h14"/></svg>);
 export const IconRefresh = (p: P) => (<svg {...S(p)}><path d="M21 12a9 9 0 0 1-9 9 9.8 9.8 0 0 1-6.7-2.7L3 16M3 21v-5h5M3 12a9 9 0 0 1 9-9 9.8 9.8 0 0 1 6.7 2.7L21 8M21 3v5h-5"/></svg>);
+/** Busy indicator for a pending action; render it with `animate-spin` (motion-reduce users get a still ring). */
+export const IconSpinner = (p: P) => (<svg {...S(p)}><path d="M21 12a9 9 0 1 1-6.22-8.56"/></svg>);
 export const IconHistory = (p: P) => (<svg {...S(p)}><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5M12 7v5l4 2"/></svg>);
 export const IconPause = (p: P) => (<svg {...S(p)}><path d="M8 5v14M16 5v14"/></svg>);
 export const IconPlay = (p: P) => (<svg {...S(p)}><path d="m7 4 13 8-13 8Z"/></svg>);

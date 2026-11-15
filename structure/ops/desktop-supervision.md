@@ -45,6 +45,22 @@ terminal before its own silence wait or claim. Only parsed `stopped` or validate
 (`desktop/src-tauri/src/claim.rs`), which rechecks the approved subject and compatibility.
 Declining attaches as a guest; a failed claim does not pretend a stopped runtime was restored.
 
+Both `ocx stop` children Desktop runs — this guarded takeover and the exit/restart drain — receive
+their deadline as `OCX_STOP_DEADLINE_MS` (decimal milliseconds from the child's start), computed in
+`desktop/src-tauri/src/runtime_stop.rs` immediately before the spawn: the takeover passes the
+remaining startup deadline minus five seconds, kept for the silence probe and the claim that still
+run under it, and the drain passes its own deadline minus three seconds for spawning and parsing.
+A value that would not be positive is not set. It is an environment variable and not the CLI's
+`--deadline-ms` flag because an older bundled CLI rejects an unknown flag and ignores an unknown
+variable, so mixed versions keep today's behavior. The drain's `runtime_stop::DEADLINE` is 75
+seconds on Windows, where a registered service's checked stop does not fit in the 30 seconds other
+platforms keep. The summary's additive `serviceStopReason` (`access-denied`,
+`evidence-unreadable`, `unbound-wrapper`, `unverified-budget`; an unknown string is kept and
+shown as it is) and `portHeldByForeign` are optional in `StopSummary`, change no verdict, and only
+append an actionable sentence to the stop's description — an elevated terminal, a retry from a
+terminal, a wrapper started outside the service, unreadable process state, or another program on
+the port. No `Outcome` or `Proxy` value was added, and an older CLI's document reads as before.
+
 Live supervision is a third independent fact, alongside liveness and durable ownership.
 On macOS and Linux, the read-only probe verifies that the runtime's direct parent is
 `opencodex-desktop` and the child executable is that app's sibling `ocx`; two complete

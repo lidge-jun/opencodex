@@ -47,6 +47,13 @@ account-qualified model when a request must remain on one account. Pausing the o
 main blocks fallback for its matching caller credential; it does not identify or pause unrelated
 caller-owned logins.
 
+To keep automatic Pool routing off the native main login entirely, set `"codexPool": {"poolOnly": true}`.
+Pool then serves only registered, eligible added accounts: it never orders or keeps main as the
+selection, never uses the caller-main fallback above, and treats a manual pin on main as no pin.
+When every allowed account is cooling down or unavailable, the request is refused instead of
+spending main. Account-qualified models, including a `__main__`-qualified one, and Direct mode are
+explicit choices and still reach main. The setting is off by default.
+
 Adding or reauthenticating a pool account rejects a duplicate of the native main login with
 `Account is already configured as the native Codex main account.` The check compares ChatGPT
 account ID, personal/workspace subscription bucket, and email; a missing email does not prove
@@ -508,8 +515,13 @@ Retrying only the same ID cannot recover missing state.
 The same refusal applies when the referenced state belongs to a different client task scope,
 including when the new request appears to carry complete input. The proxy cannot prove that input
 is complete, so it does not silently remove `previous_response_id` or reveal whether matching state
-exists. Retry with the complete conversation and omit `previous_response_id`; matching scopes and
-legacy continuations where both scopes are absent or blank continue to replay normally.
+exists. When `v2-plaintext` mode or the `plaintextV2AgentMessages` flag is enabled, local replay requires the same admitted OpenCodex caller and the request's own nonblank
+`thread-id`; a parent thread, loopback address, upstream credential, or placeholder key is not
+that identity. Clients without an admitted caller principal and requests without their own thread must resend the complete
+conversation without `previous_response_id`. The default loopback Codex and DSH configurations
+do not establish that caller identity. State retained while either setting is enabled remains bound after disabling it.
+Default `v1` keeps the existing parent-thread-scoped continuation behavior for unbound state,
+including default loopback callers. This is separate from native upstream-owned Responses IDs.
 
 The same recovery signal applies to every routed destination, because only the native Responses
 passthrough can answer a turn whose history this proxy lost — it forwards `previous_response_id`
@@ -1131,6 +1143,26 @@ script wrappers; uninstall restores the saved launcher. See the
 trial while retaining the native Codex login. This is an experimental relay, not a guarantee
 that every Codex build or exhausted-account state can recover its composer.
 
+On a standalone local dashboard, first run the command shown in the panel, for example
+`ocx gui pair --desktop --origin http://127.0.0.1:10100`, on the proxy computer and paste
+its secret one-use code. Install the CLI first if `ocx` is unavailable. A private-home
+permission refusal must be resolved before a code can be issued. An ordinary pairing code or
+an already paired dashboard alone does not authorize Desktop actions. The panel exchanges the
+Desktop code for scope on the existing session, then reads `/authorization` to verify it;
+it does not create or replace the browser session. This authorizes Desktop actions for at most
+five minutes in that session; it does not change Remote Link or key-disclosure permissions.
+See [Desktop authorization](/reference/management-api/#desktop-authorization) for the API contract.
+Hub and connected-client Desktop writes are unsupported.
+If authorization is unavailable, use the standalone dashboard directly over HTTP on the proxy
+computer at the configured loopback address and port. If the configured `hostname` is
+`localhost` or a non-loopback address such as `0.0.0.0`, set it to `127.0.0.1` or `::1` in [config.json](/reference/configuration/), restart the proxy, and reopen the corresponding
+address and port. Other conditions, including forwarding and mismatched ports or sessions, can
+also make authorization unavailable; changing the hostname alone does not resolve those cases.
+A remembered dashboard session cannot redeem a Desktop grant. On the proxy computer, open the same local address and port in a private browser window, return to this panel, and request a new code there. After expiry or logout, reload the local dashboard and authorize again. The panel refreshes
+status, fingerprint and settings revision; select the desired action and consent again.
+It never replays an earlier POST. Certificate expiry or unknown trust does not prevent this
+local HTTP authorization; cleanup, renewal, stopping and turning off startup still require it.
+
 1. Inspect status, prepare the encrypted certificate and review its fingerprint before
    registering trust. Windows may ask for confirmation. Trust applies to the current Windows
    user and allows the local relay to handle `chatgpt.com` traffic.
@@ -1462,6 +1494,8 @@ When returning to the root-override form, OpenCodex retains an existing `[model_
 `ocx restore`, `ocx stop` and `ocx uninstall` no longer refuse on `history_paginated_requires_native_writer`. They take every OpenCodex root routing key out and keep the `[model_providers.opencodex]` definition on disk, so conversations whose rows still name that provider keep resolving while plain `codex` stops pointing at the proxy. The result is reported as a partial restore that names the retained lines, and `ocx restore --remove-codex-provider-table` removes them too, after which those conversations stop opening.
 
 Enabling the integration in its provider-table form on a home whose `openai`-tagged conversations Codex has already paginated used to be refused outright with `history_paginated_openai_requires_native_writer`: nothing was written and the integration stayed disabled. OpenCodex now completes that transition by keeping the managed root `openai_base_url` override beside the `[model_providers.opencodex]` table. Codex merges the override onto its built-in `openai` provider, so those conversations keep reaching the proxy without being relabeled and no rollout byte or thread row is touched. Only a routing form that requires the `x-opencodex-api-key` admission header still refuses, because Codex's built-in provider cannot carry that header; its message names the two settings that resolve it — route Codex through the loopback listener so the override can be retained, or set `syncResumeHistory` to `false` to accept that those conversations resume against Codex's own OpenAI endpoint.
+
+Codex 0.166 and later resume or list a conversation only under the provider it was created with (`This chat uses openai, but your current provider is opencodex`), so the retained override no longer keeps those conversations reachable once the default provider changes. When OpenCodex knows the selected Codex is 0.166 or later (from its runtime check or the saved selection) and finds such conversations, it refuses the provider-table transition with `history_paginated_openai_provider_locked` and writes nothing. The message names the ways out: leave `codexDesktopAuthless` and `codexClientCompaction` off to keep those conversations resumable, or set `syncResumeHistory` to `false` to switch anyway and accept that they stay with the `openai` provider. OpenCodex does not relabel them. When the Codex version is unknown, the transition keeps the retained override as before.
 
 ### Remote thread-list provider filters
 

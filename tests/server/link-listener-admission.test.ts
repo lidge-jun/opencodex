@@ -252,4 +252,68 @@ describe("hub-link admission", () => {
     expect((await fetch(`${base}/readyz`, { method: "HEAD", headers: headers(LINKED_KEY) })).status).toBe(404);
     expect((await fetch(`${base}/v1/catalog`, { method: "HEAD", headers: headers(LINKED_KEY) })).status).toBe(200);
   });
+
+  test.each(["standalone", undefined] as const)(
+    "serves /v1/hub-state on hub-link when runtimeRole is %s while keeping the public listener 404",
+    async role => {
+      await server!.stop(true);
+      server = null;
+      const { saveConfig } = await import("../../src/config");
+      const { startServer } = await import("../../src/server");
+      const { parseHubStateBody } = await import("../../src/remote/hub-state");
+      const baseConfig = config();
+      saveConfig({
+        ...baseConfig,
+        runtimeRole: role,
+        providers: {
+          ...baseConfig.providers,
+          mock: {
+            adapter: "openai-chat",
+            baseUrl: "http://127.0.0.1:9/v1",
+            allowPrivateNetwork: true,
+            apiKey: "provider-credential-link-state-test",
+            models: ["test-model"],
+          },
+          disabledMock: {
+            adapter: "openai-chat",
+            baseUrl: "http://127.0.0.1:9/v1",
+            allowPrivateNetwork: true,
+            disabled: true,
+            models: ["hidden-model"],
+          },
+        },
+      } as OcxConfig);
+      server = startServer(0);
+
+      // Public listener on standalone still has no hub-state surface (401 before admission, 404 after).
+      const publicAnon = await fetch(new URL("/v1/hub-state", server.url));
+      expect(publicAnon.status).toBe(401);
+      expect(await publicAnon.text()).not.toContain("hub_state_not_a_hub");
+      const publicAuthed = await fetch(new URL("/v1/hub-state", server.url), { headers: headers(LINKED_KEY) });
+      expect(publicAuthed.status).toBe(404);
+      expect(await publicAuthed.json()).toMatchObject({ error: { code: "hub_state_not_a_hub" } });
+
+      // hub-link listener rejects unauthenticated and non-link keys, and serves hub-state to the linked Child key.
+      const linkPort = JSON.parse(await Bun.file(linkStorePath()).text()).listenerPort as number;
+      const linkBase = `http://127.0.0.1:${linkPort}`;
+      expect((await fetch(`${linkBase}/v1/hub-state`)).status).toBe(401);
+      expect((await fetch(`${linkBase}/v1/hub-state`, { headers: headers(OTHER_KEY) })).status).toBe(401);
+
+      const linkGet = await fetch(`${linkBase}/v1/hub-state`, { headers: headers(LINKED_KEY) });
+      expect(linkGet.status).toBe(200);
+      expect(linkGet.headers.get("cache-control")).toBe("no-store");
+      const raw = await linkGet.text();
+      expect(raw).not.toContain("provider-credential-link-state-test");
+      expect(raw).not.toContain("disabledMock");
+      const parsed = parseHubStateBody(JSON.parse(raw));
+      expect(parsed).not.toBeNull();
+      expect(parsed!.providers.map(p => p.name)).toEqual(["mock"]);
+      expect(parsed!.providers[0]?.hasCredential).toBe(true);
+
+      const linkHead = await fetch(`${linkBase}/v1/hub-state`, { method: "HEAD", headers: headers(LINKED_KEY) });
+      expect(linkHead.status).toBe(200);
+      expect(linkHead.headers.get("content-length")).toBe(String(Buffer.byteLength(raw)));
+      expect(await linkHead.text()).toBe("");
+    },
+  );
 });

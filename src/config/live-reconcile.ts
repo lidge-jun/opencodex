@@ -99,7 +99,8 @@ function applyModelCostRowReplacement(config: OcxConfig): void {
  */
 export function adoptPersistedModelDiscovery(
   config: OcxConfig,
-  persisted: Pick<OcxConfig, "modelDiscovery" | "disabledModels">,
+  persisted: Pick<OcxConfig, "modelDiscovery" | "disabledModels">
+    & { selectedModels?: Record<string, string[] | undefined> },
 ): void {
   config.modelDiscovery = structuredClone(persisted.modelDiscovery);
   config.disabledModels = structuredClone(persisted.disabledModels);
@@ -107,6 +108,14 @@ export function adoptPersistedModelDiscovery(
   if (baseline) {
     baseline.modelDiscovery = structuredClone(persisted.modelDiscovery);
     baseline.disabledModels = structuredClone(persisted.disabledModels);
+  }
+  // `admit` (#8236) widens a provider's committed selection. Move live and baseline together so
+  // the running catalog shows the arrival and a later save does not read the old list as an edit.
+  for (const [name, selected] of Object.entries(persisted.selectedModels ?? {})) {
+    const live = config.providers[name];
+    if (live) live.selectedModels = structuredClone(selected);
+    const base = baseline?.providers[name];
+    if (base) base.selectedModels = structuredClone(selected);
   }
 }
 

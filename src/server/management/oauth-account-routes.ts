@@ -34,6 +34,7 @@ import {
   submitLoginCode,
   submitManualLoginCode,
   supportsCodeLoginMode,
+  supportsDeviceLoginMode,
   waitForLoginSettled,
 } from "../../oauth";
 import { OAuthMutationBusyError, removeCredential } from "../../oauth/store";
@@ -180,11 +181,15 @@ function validateKeyName(
 export type IssuedApiKey = Pick<OcxApiKeyEntry, "id" | "name" | "key" | "createdAt">;
 
 /** Shared one-time data-key issuance used by the dashboard and link transactions. */
-export function issueApiKeyInProcess(config: OcxConfig, name: string): IssuedApiKey {
+export function issueApiKeyInProcess(config: OcxConfig, name: string, reservedId?: string): IssuedApiKey {
   const checked = validateKeyName(name, { required: true });
   if ("error" in checked) throw new Error(checked.error);
+  // An operation journal reserves the id before it issues the key, so a crash can be matched to it later.
+  if (reservedId !== undefined && (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(reservedId) || (config.apiKeys ?? []).some(key => key.id === reservedId))) {
+    throw new Error("The reserved key id is invalid or already in use.");
+  }
   const entry: IssuedApiKey = {
-    id: randomUUID(),
+    id: reservedId ?? randomUUID(),
     name: checked.value,
     key: `ocx_data_${randomBytes(20).toString("hex")}`,
     createdAt: new Date().toISOString(),
@@ -260,7 +265,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // the provider's loopback callback server (inside this process) captures the redirect in the
   // background, then the credential is persisted. The GUI opens the URL and polls /api/oauth/status.
   if (url.pathname === "/api/oauth/login" && req.method === "POST") {
-    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown; method?: unknown; mode?: unknown; startUrl?: unknown; region?: unknown; flowId?: unknown; profileArn?: unknown };
+    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown; method?: unknown; mode?: unknown; device?: unknown; startUrl?: unknown; region?: unknown; flowId?: unknown; profileArn?: unknown };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     // Omitted mode is the localhost-callback flow this route has always run.
@@ -270,6 +275,12 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const codeMode = body.mode === "code";
     if (codeMode && !supportsCodeLoginMode(provider)) {
       return jsonResponse({ error: "code_mode_unsupported" }, 400);
+    }
+    // `device: true` picks the provider's device grant over its browser callback (xAI).
+    if (body.device !== undefined && body.device !== true) return jsonResponse({ error: "device must be true" }, 400);
+    const device = body.device === true;
+    if (device && (codeMode || !supportsDeviceLoginMode(provider))) {
+      return jsonResponse({ error: "device_login_unsupported" }, 400);
     }
     // Muse may import a local Keychain credential or start a device grant; add-account
     // and reauth skip the import. All management login paths require the dashboard
@@ -322,13 +333,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       // request may already have mutated live config and yielded before its save.
       const persistedBaseline = readConfigDiagnostics().config;
       // addAccount / reauth forces a fresh browser identity (skips local-CLI token import).
-      // Only code mode gets a flow id: it is what a later paste is pinned to. The callback
-      // flow's lifecycle argument stays exactly as it was.
-      const flowId = codeMode ? randomUUID() : undefined;
+      // The xAI device caller also needs its own flow identity for polling.
+      const flowId = codeMode || (provider === "xai" && device) ? randomUUID() : undefined;
       const { url: authUrl, instructions, deviceCode, expiresAt } = await startLoginFlow(provider, {
         forceLogin: body.addAccount === true || reauth,
         ...(accountId ? { reauthAccountId: accountId } : {}),
         ...(codeMode ? { codeMode: true } : {}),
+        ...(device ? { flow: "device" as const } : {}),
       }, {
         ...(flowId ? { flowId } : {}),
         // startLoginFlow returns the authorization URL before background persistence completes.
@@ -362,7 +373,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         instructions,
         deviceCode,
         browserLaunch,
-        ...(codeMode ? { mode: "code", flowId, expiresAt } : {}),
+        ...(codeMode ? { mode: "code", flowId, expiresAt } : flowId ? { flowId } : {}),
       });
     } catch (err) {
       if (err instanceof OAuthMutationBusyError) throw err;
@@ -387,6 +398,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const result = cancelKiroDeviceLogin(body.flowId, principal ?? "admin-token");
       return result ? jsonResponse(result) : jsonResponse({ error: "unknown login flow" }, 404);
     }
+    if (provider === "xai" && body.flowId !== undefined && (typeof body.flowId !== "string" || body.flowId.length > 128)) return jsonResponse({ error: "unknown login flow" }, 404);
     const { cancelLoginFlow } = await import("../../oauth");
     // Without a flow id this cancels the provider's newest in-flight login, which is what the
     // single-user GUI has always meant by "Cancel". A host running concurrent code logins for
@@ -471,7 +483,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // Resolved here, at the request boundary that already holds the config, and passed down.
     // getLoginStatus stays free of config I/O. This route does not re-mask afterwards: it
     // consumes the already-projected status rather than redacting a second time.
-    const status = getLoginStatus(provider, emailMaskingEnabled(config));
+    const status = getLoginStatus(provider, emailMaskingEnabled(config), provider === "xai" ? url.searchParams.get("flowId") ?? undefined : undefined);
     return jsonResponse(status);
   }
 
@@ -564,7 +576,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       ...(provider === "anthropic2" ? { provider } : {}), activeAccountId: projected.activeAccountId,
       accounts: projected.accounts.map(account => {
         const row = byId.get(account.id);
-        if (!row) return account;
+        // #8397: a passive provider with no observation for this account yet says so.
+        if (!row) return passiveQuota ? { ...account, quotaUnknownReason: "passive_not_observed" } : account;
         if (config.providers[provider] !== quotaProvider || row.isCurrent?.() === false) {
           return { ...account, quota: null, quotaUnavailable: true };
         }
@@ -644,6 +657,12 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (body.retryAffinityReset !== undefined && typeof body.retryAffinityReset !== "boolean") {
       return jsonResponse({ error: "retryAffinityReset must be a boolean" }, 400);
     }
+    if (body.ifHealthy !== undefined && typeof body.ifHealthy !== "boolean") {
+      return jsonResponse({ error: "ifHealthy must be a boolean" }, 400);
+    }
+    if (body.ifHealthy === true && body.paused !== false) {
+      return jsonResponse({ error: "ifHealthy applies only to a resume (paused: false)" }, 400);
+    }
 
     const { isGenericFailoverProvider } = await import("../../oauth/generic-account-failover");
     const effectiveProvider = genericOAuthProviderConfig(provider, config);
@@ -653,8 +672,31 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     }
 
     const { setAccountPaused } = await import("../../oauth/store");
-    const result = await setAccountPaused(provider, body.accountId, body.paused);
+    let resumeGuard: { generation: string; pauseRevision: string | undefined } | undefined;
+    if (body.ifHealthy === true) {
+      // Explicit resume gated on an account-bound health read (#8398); an unpaused account needs none.
+      const { checkOAuthResumeHealth } = await import("../../oauth/account-resume-health");
+      const verdict = await checkOAuthResumeHealth(provider, body.accountId);
+      if (verdict && !verdict.ok) {
+        return jsonResponse({ error: `account was not resumed: ${verdict.reason}`, code: "resume_refused", reason: verdict.reason,
+          provider, accountId: body.accountId }, 409);
+      }
+      if (!verdict) {
+        // Not paused when checked: write nothing, so a pause that lands meanwhile is never cleared unchecked.
+        const { getAccountSet } = await import("../../oauth/store");
+        const set = getAccountSet(provider);
+        if (!set?.accounts.some(account => account.id === body.accountId)) return jsonResponse({ error: "account not found" }, 404);
+        return jsonResponse({ ok: true, provider, accountId: body.accountId, paused: false, unchanged: true,
+          activeAccountId: set.activeAccountId, activeAccountChanged: false });
+      }
+      resumeGuard = { generation: verdict.generation, pauseRevision: verdict.pauseRevision };
+    }
+    const result = await setAccountPaused(provider, body.accountId, body.paused, undefined, resumeGuard);
     if (result.status === "not-found") return jsonResponse({ error: "account not found" }, 404);
+    if (result.status === "changed") {
+      return jsonResponse({ error: "account was not resumed: account_changed", code: "resume_refused", reason: "account_changed",
+        provider, accountId: body.accountId }, 409);
+    }
 
     const anthropicRouting = isAnthropicOAuthInstance(provider)
       ? (await import("../../oauth/anthropic-routing")).anthropicRoutingFor(provider) : undefined;
@@ -1123,7 +1165,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const listed = listProviderApiKeys(config, name);
       const provider = config.providers[name];
       const quotaMode = provider ? providerApiKeyQuotaMode(name, provider) : "unsupported";
-      return { ...listed, keys: listed.keys.map(key => ({ ...key, quotaMode })) };
+      // #8397: say why a balance is unknown; a destination without a reader has no balance source.
+      return { ...listed, keys: listed.keys.map(key => ({ ...key, quotaMode,
+        ...(quotaMode === "unsupported" ? { quotaUnknownReason: "no_balance_source" as const } : {}) })) };
     };
     const initial = projectKeys();
     if (url.searchParams.get("quota") !== "1" || !initial.keys.some(key => key.quotaMode === "probe")) {
@@ -1136,10 +1180,17 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       activeId: current.activeId,
       keys: current.keys.map(key => {
         const row = byId.get(key.id);
-        if (!row || key.quotaMode !== "probe") return key;
-        if (!row.isCurrent()) return { ...key, quota: null, quotaUnavailable: true };
+        if (key.quotaMode !== "probe") return key;
+        // A key added while the read was in flight was never read.
+        if (!row) return { ...key, quotaUnknownReason: "not_read" };
+        if (!row.isCurrent()) return { ...key, quota: null, quotaUnavailable: true, quotaUnknownReason: "not_read" };
+        const readAt = row.readAt === undefined ? {} : { quotaReadAt: row.readAt };
+        // A successful read with no meterable balance (authoritative empty) still names why it is unknown.
+        const reason = row.unavailable ? (row.readAt === undefined ? "not_read" : "read_failed")
+          : row.quota === null && row.readAt !== undefined ? "not_reported" : undefined;
         // Internal identity/epoch checks never enter the JSON DTO.
-        return { ...key, quota: row.quota, quotaUnavailable: row.unavailable === true };
+        return { ...key, quota: row.quota, quotaUnavailable: row.unavailable === true, ...readAt,
+          ...(reason ? { quotaUnknownReason: reason } : {}) };
       }),
     });
   }
@@ -1187,6 +1238,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       ? storeProviderKeyInKeychain(config, name)
       : restoreProviderKeyFromKeychain(config, name);
     if (!result.ok) return jsonResponse({ error: result.error }, result.status);
+    (await import("../../providers/passive-key-observation")).clearPassiveKeyLimits(name);
     const { clearProviderQuotaCache } = await import("../../providers/quota");
     clearProviderQuotaCache();
     return jsonResponse({ ...result, name, store: providerKeyStoreKind(config.providers[name]) });
@@ -1196,9 +1248,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     if (!isPlainRecord(body)) return jsonResponse({ error: "body must be an object" }, 400);
     if (typeof body.name !== "string" || typeof body.id !== "string" || typeof body.paused !== "boolean") return jsonResponse({ error: "name, id and paused required" }, 400);
     if (!isValidProviderName(body.name) || !hasOwnProvider(config.providers, body.name)) return jsonResponse({ error: "unknown provider" }, 404);
-    const { setProviderApiKeyPaused } = await import("../../providers/api-key-pause");
-    return setProviderApiKeyPaused(config, body.name, body.id, body.paused)
-      ? jsonResponse({ ok: true }) : jsonResponse({ error: "key not found" }, 404);
+    const { setProviderApiKeyPausedWithResult } = await import("../../providers/api-key-pause");
+    const result = setProviderApiKeyPausedWithResult(config, body.name, body.id, body.paused);
+    return result.ok ? jsonResponse(result) : jsonResponse({ error: "key not found" }, 404);
   }
   if (url.pathname === "/api/providers/keys/active" && req.method === "PUT") {
     const body = await readManagementJsonBodyOr(req, {}) as { name?: string; id?: string };

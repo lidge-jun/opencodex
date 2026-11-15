@@ -300,7 +300,7 @@ OpenCodex는 프로세스가 붙잡고 있는 상태를 아래 항목에서 추�
   eviction합니다. 단, native control replay 저장소는 고정되어 eviction되지 않습니다.
 - **관측 버퍼 4개**(translator accumulator, image/OAuth/Grok tail)는 진행 중 바이트 압력을 감시만
   하고 eviction하지 않습니다.
-- **state-store 등록 31개**는 만료 sweep(60초 간격)과 config-generation reconciliation을 돌려,
+- **state-store 등록 32개**는 만료 sweep(60초 간격)과 config-generation reconciliation을 돌려,
   낡은 프로바이더/계정 키를 지웁니다.
 - **경로·fingerprint 메모**(워크스페이스 메타데이터, hardened identity, 설치 salt, mode-hint
   capability)는 삽입 순서 LRU cap(8–128개)을 씁니다.
@@ -479,7 +479,7 @@ Free code signing provided by [SignPath.io](https://about.signpath.io/), certifi
 
 - Committers and reviewers: [lidge-jun](https://github.com/lidge-jun)
 - Approvers: [lidge-jun](https://github.com/lidge-jun)
-- Privacy: opencodex sends one anonymous daily usage summary (a per-day install hash that changes daily, version, release channel, platform, install channel, provider kind, coarse model family, active minutes and request, token and error counts; never prompts, model outputs, keys, accounts, hostnames or paths) to telemetry.opencodex.me, and only after the person installing or operating it has seen the notice in the dashboard or an interactive CLI prompt and has not declined. It can be turned off in that notice, in the Windows installer ("Send anonymous usage statistics", checked by default), in Proxy details, or with ocx telemetry disable, OCX_TELEMETRY=0 or DO_NOT_TRACK=1. Project-wide aggregates are public. Everything else goes only to the providers and services you configure. See the [telemetry guide](https://opencodex.me/ko/guides/telemetry/).
+- Privacy: opencodex sends one anonymous daily usage summary (a per-day install hash that changes daily, version, release channel, platform, install channel, provider kind, coarse model family, active minutes and request, token and error counts; never prompts, model outputs, keys, accounts, hostnames or paths) to telemetry.opencodex.me, and only after the person installing or operating it has seen the notice in the dashboard or an interactive CLI prompt and has not declined. It can be turned off in that notice, in the Windows installer ("Send anonymous usage statistics", checked by default), in Proxy details, or with ocx telemetry disable, OCX_TELEMETRY=0 or DO_NOT_TRACK=1. Only project-wide aggregates of this anonymous data are public. A separate public leaderboard profile is off unless you connect one yourself (dashboard Home or ocx telemetry profile connect); it shares only a chosen handle, display name and colour and your daily request, token and model-family totals, never your anonymous telemetry ID, and disconnecting deletes it. Everything else goes only to the providers and services you configure. See the [telemetry guide](https://opencodex.me/ko/guides/telemetry/).
 
 ## 면책 조항
 

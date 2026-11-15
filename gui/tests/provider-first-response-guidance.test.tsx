@@ -380,10 +380,13 @@ describe("ProviderDetails raw ID disambiguation and Providers page integration",
     await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 40)); });
     expect(host.textContent).toContain("Current accountWork");
   });
-  test("changing API targets does not unmount an unsaved Settings draft", async () => {
+  test("changing API targets parks an unsaved Settings draft on its own target", async () => {
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const path = new URL(String(input), "http://localhost").pathname;
-      if (path.startsWith("/new/")) return new Promise<Response>(() => {});
+      if (path === "/new/api/config") return Response.json({ port: 0, defaultProvider: "new-provider", providers: {
+        "new-provider": { adapter: "openai-chat", baseUrl: "https://new.example.test/v1", hasApiKey: true },
+      } });
+      if (path.startsWith("/new/")) return Response.json({ providers: [] });
       if (path === "/old/api/config") return Response.json({ port: 0, defaultProvider: "my-provider", providers: {
         "my-provider": { adapter: "openai-chat", baseUrl: "https://example.test/v1", hasApiKey: true },
       } });
@@ -407,6 +410,13 @@ describe("ProviderDetails raw ID disambiguation and Providers page integration",
     });
     expect(host.textContent).toContain("unsaved changes");
     await render(<Providers apiBase="/new" />);
+    await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 40)); });
+    // The new target's own values are painted; the previous server's form and draft are not.
+    expect(host.textContent).toContain("New Provider");
+    expect(host.textContent).not.toContain("unsaved changes");
+    expect([...host.querySelectorAll<HTMLInputElement>("input")].some(element => element.value === "https://draft.example.test/v1")).toBe(false);
+    await render(<Providers apiBase="/old" />);
+    await act(async () => { host.querySelector<HTMLButtonElement>("#pws-tab-settings")!.click(); });
     expect([...host.querySelectorAll<HTMLInputElement>("input")].some(element => element.value === "https://draft.example.test/v1")).toBe(true);
     expect(host.textContent).toContain("unsaved changes");
   });

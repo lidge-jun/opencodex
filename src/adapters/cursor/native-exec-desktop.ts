@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { withoutSupervisorMarkers } from "../../lib/supervisor-markers";
 import { shellInvocation } from "../../lib/win-exec";
 import { create } from "@bufbuild/protobuf";
 import {
@@ -120,7 +121,7 @@ function runExternalJson(command: string, payload: unknown, config: DesktopExecu
     const inv = shellInvocation(command);
     const child = spawn(inv.file, inv.args, {
       cwd: config.cwd,
-      env: config.env ? { ...process.env, ...config.env } : process.env,
+      env: withoutSupervisorMarkers(config.env ? { ...process.env, ...config.env } : process.env),
       stdio: ["pipe", "pipe", "pipe"],
       ...inv.options,
     });

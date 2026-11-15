@@ -154,6 +154,42 @@ jobs:
             appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
           '
 
+      # The same evidence gate verify-npm and publish repeat, answered before any runner packages.
+      # Run 42951296881 resolved its CI evidence here, packaged for minutes and only then failed in
+      # verify-npm because no service-lifecycle run existed for the source. Packaging cannot create
+      # that evidence, so a release that lacks it now fails in seconds with the dispatch command.
+      - name: Require source CI and service evidence before packaging
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          node .github/scripts/release-evidence.cjs check "$SOURCE_SHA"
+          baseline_tag="$(git tag --merged "$SOURCE_SHA" --list 'v[0-9]*' | bun -e '
+            import { parseVersion, compareVersions } from "./scripts/version-line.ts";
+            const tags = (await Bun.stdin.text()).trim().split("\n").filter(Boolean);
+            const versions = tags.map(tag => ({ tag, version: tag.slice(1) }));
+            if (versions.some(item => !parseVersion(item.version))) throw new Error("invalid release tag");
+            const eligible = versions.filter(item => compareVersions(item.version, process.env.RELEASE_VERSION) < 0);
+            eligible.sort((a, b) => compareVersions(a.version, b.version));
+            console.log(eligible.at(-1)?.tag ?? "");
+          ')"
+          baseline=--initial
+          if [ -n "$baseline_tag" ]; then
+            draft="$(gh release view "$baseline_tag" --json isDraft --jq .isDraft)"
+            test "$draft" = false || { echo '::error::Service baseline is not a published release.'; exit 1; }
+            baseline="$(git rev-parse "refs/tags/${baseline_tag}^{commit}")"
+          fi
+          range="$(node .github/scripts/release-evidence.cjs service-range "$SOURCE_SHA" "$baseline")"
+          required="$(RANGE="$range" node -e 'const x = JSON.parse(process.env.RANGE); if (typeof x.required !== "boolean") throw Error("invalid service range"); process.stdout.write(String(x.required));')"
+          if [ "$required" = true ]; then
+            node .github/scripts/release-evidence.cjs service "$SOURCE_SHA" || {
+              echo "::error::Dispatch service-lifecycle.yml from dev for source ${SOURCE_SHA} and wait for all platforms: gh workflow run service-lifecycle.yml --ref dev -f source_sha=${SOURCE_SHA}"; exit 1;
+            }
+          fi
+
+
   # Every publication precondition the dispatch can already decide, checked before any runner
   # starts packaging: channel and dist-tag, every version source, the tag, the GitHub release,
   # npm and the global tag ordering (scripts/ci/release-preflight.sh).
@@ -1069,7 +1105,7 @@ jobs:
           required="$(RANGE="$range" node -e 'const x = JSON.parse(process.env.RANGE); if (typeof x.required !== "boolean") throw Error("invalid service range"); process.stdout.write(String(x.required));')"
           if [ "$required" = true ]; then
             node .github/scripts/release-evidence.cjs service "$SOURCE_SHA" || {
-              echo "::error::Dispatch service-lifecycle.yml from dev for source ${SOURCE_SHA} and wait for all platforms."; exit 1;
+              echo "::error::Dispatch service-lifecycle.yml from dev for source ${SOURCE_SHA} and wait for all platforms: gh workflow run service-lifecycle.yml --ref dev -f source_sha=${SOURCE_SHA}"; exit 1;
             }
           fi
 
@@ -1428,7 +1464,8 @@ jobs:
     needs: [validate-dispatch, verify-release, verify-npm]
     if: ${{ inputs.dry-run != true }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The two registry waits below can each take about 20 minutes (about 55 minutes worst case with read timeouts).
+    timeout-minutes: 75
     outputs:
       npm_version: ${{ steps.registry-smoke.outputs.npm_version }}
       npm_dist_tag: ${{ steps.registry-smoke.outputs.npm_dist_tag }}
@@ -1441,7 +1478,9 @@ jobs:
       SOURCE_SHA: ${{ needs.validate-dispatch.outputs.source_sha }}
       WORKFLOW_SHA: ${{ needs.validate-dispatch.outputs.workflow_sha }}
       RELEASE_VERSION: ${{ needs.validate-dispatch.outputs.version }}
-      NPM_TARBALL: npm-artifact/package.tgz
+      # The ./ prefix is load-bearing: npm reads a bare "owner/repo..." spec as a GitHub shorthand
+      # and runs git ls-remote instead of publishing the file (run 42763073267).
+      NPM_TARBALL: ./npm-artifact/package.tgz
       EXPECTED_DIGEST: ${{ needs.verify-npm.outputs.sha256 }}
     steps:
       - name: Checkout trusted workflow revision
@@ -1567,7 +1606,7 @@ jobs:
           required="$(RANGE="$range" node -e 'const x = JSON.parse(process.env.RANGE); if (typeof x.required !== "boolean") throw Error("invalid service range"); process.stdout.write(String(x.required));')"
           if [ "$required" = true ]; then
             node .github/scripts/release-evidence.cjs service "$SOURCE_SHA" || {
-              echo "::error::Dispatch service-lifecycle.yml from dev for source ${SOURCE_SHA} and wait for all platforms."; exit 1;
+              echo "::error::Dispatch service-lifecycle.yml from dev for source ${SOURCE_SHA} and wait for all platforms: gh workflow run service-lifecycle.yml --ref dev -f source_sha=${SOURCE_SHA}"; exit 1;
             }
           fi
 
@@ -1713,7 +1752,10 @@ jobs:
             exit 1
           }
           pkg_name="$(node -p "require('./package.json').name")"
-          for attempt in $(seq 1 6); do
+          # npm can take 15+ minutes to serve a new version (2.100.1: ~15 min after publish), so the
+          # bounded wait is attempts x interval, about 20 minutes. Publication is never retried.
+          attempts="${REGISTRY_WAIT_ATTEMPTS:-40}"; interval="${REGISTRY_WAIT_SECONDS:-30}"
+          for attempt in $(seq 1 "$attempts"); do
             if VERSION=$(timeout --kill-after=2s 10s npm view "${pkg_name}@${RELEASE_VERSION}" version --fetch-retries=0 --fetch-timeout=8000 2>/dev/null); then
               if [ "$VERSION" != "$RELEASE_VERSION" ]; then
                 echo "::error::Registry returned an unexpected version; refusing to create a release"
@@ -1744,8 +1786,8 @@ jobs:
               echo "npm dist-tag ${NPM_DIST_TAG}: ${dist_tag_state}." >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
-            echo "::notice::Registry lookup not confirmed (attempt $attempt/6)"
-            if [ "$attempt" -lt 6 ]; then sleep 5; fi
+            echo "::notice::Registry lookup not confirmed (attempt $attempt/$attempts)"
+            if [ "$attempt" -lt "$attempts" ]; then sleep "$interval"; fi
           done
           # Keep each outcome explicit for the recovery report.
           # shellcheck disable=SC2129
@@ -1760,7 +1802,8 @@ jobs:
         run: |
           set -euo pipefail
           pkg_name="$(node -p "require('./package.json').name")"
-          for attempt in $(seq 1 6); do
+          attempts="${REGISTRY_WAIT_ATTEMPTS:-40}"; interval="${REGISTRY_WAIT_SECONDS:-30}"
+          for attempt in $(seq 1 "$attempts"); do
             if head="$(timeout --kill-after=2s 10s npm view "${pkg_name}@${RELEASE_VERSION}" gitHead --json --registry=https://registry.npmjs.org --fetch-retries=0 --fetch-timeout=8000 2>/dev/null)"; then
               if [ -n "$head" ] && [ "$head" != null ]; then
                 REGISTRY_HEAD="$head" node - <<'NODE'
@@ -1772,7 +1815,7 @@ jobs:
                 exit 0
               fi
             fi
-            if [ "$attempt" -lt 6 ]; then sleep 5; fi
+            if [ "$attempt" -lt "$attempts" ]; then sleep "$interval"; fi
           done
           echo '::error::Published npm gitHead could not be verified; do not republish and reconcile manually.'
           exit 1

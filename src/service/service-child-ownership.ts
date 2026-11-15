@@ -31,8 +31,12 @@ export type ServiceChildOwnershipDeps = {
   serviceHostPaths?: () => readonly string[];
 };
 
-/** The env markers a real supervisor writes that an `ocx claude`/`ocx opencode` child does not. */
-function isMarkedSupervisedServiceChild(env: NodeJS.ProcessEnv): boolean {
+/**
+ * The env markers a current supervisor writes that an `ocx claude`/`ocx opencode` child does not.
+ * Exported for the client restart (src/client/runtime-restart.ts), which takes only these markers as
+ * manager evidence; the parent-command-line inference below stays with the start-time ownership check.
+ */
+export function isMarkedSupervisedServiceChild(env: NodeJS.ProcessEnv): boolean {
   return env[SERVICE_MANAGED_ENV] === "1" || env[WINDOWS_WRAPPER_PROTOCOL_ENV] === "1";
 }
 

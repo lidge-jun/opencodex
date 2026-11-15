@@ -11,7 +11,7 @@ import { chooseOption, selectTrigger } from "./helpers/custom-select";
 async function renderSettings(
   item: WorkspaceItem,
   onUpdateProvider: (name: string, patch: ProviderUpdatePatch) => Promise<{ ok: boolean }>,
-): Promise<HTMLDivElement & { unmount: () => void }> {
+): Promise<HTMLDivElement & { unmount: () => void; rerender: (next: WorkspaceItem) => Promise<void> }> {
   const container = document.createElement("div");
   document.body.append(container);
   const { createRoot } = await import("react-dom/client");
@@ -24,7 +24,18 @@ async function renderSettings(
       onUpdateProvider={onUpdateProvider}
     /></LanguageProvider>);
   });
-  return Object.assign(container, { unmount: () => root.unmount() });
+  return Object.assign(container, {
+    unmount: () => root.unmount(),
+    rerender: async (next: WorkspaceItem) => {
+      await act(async () => {
+        root.render(<LanguageProvider><ProviderSettings
+          item={next}
+          availableModels={["deepseek-ai/deepseek-v4-flash-0731"]}
+          onUpdateProvider={onUpdateProvider}
+        /></LanguageProvider>);
+      });
+    },
+  });
 }
 
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
@@ -191,6 +202,33 @@ test("invalid key limits block save and discard restores the stored distribution
   await act(async () => { container.unmount(); });
 });
 
+test("per-key pacing bounds match the runtime validator", async () => {
+  const patches: ProviderUpdatePatch[] = [];
+  const container = await renderSettings({ name: "fixture", adapter: "openai-chat", baseUrl: "https://example.test", authMode: "key" },
+    async (_name, patch) => { patches.push(patch); return { ok: true }; });
+  await act(async () => { container.querySelector<HTMLInputElement>(".pwi-pacing-toggle input")!.click(); });
+  const keyNumbers = container.querySelectorAll<HTMLInputElement>(".pwi-key-limits input");
+  const save = () => container.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-primary")!;
+
+  // RPM above the runtime's 60_000 cap is refused, never clamped or saved.
+  await setInput(keyNumbers[0]!, "60001");
+  await act(async () => { save().click(); });
+  expect(patches).toEqual([]);
+  expect(container.textContent).toContain("Per-key limits must be positive");
+
+  // Interval above the runtime's 3_600_000 ms cap is refused too.
+  await setInput(keyNumbers[0]!, "15");
+  await setInput(keyNumbers[1]!, "3600001");
+  await act(async () => { save().click(); });
+  expect(patches).toEqual([]);
+
+  // The exact upper bounds from the runtime validator are accepted.
+  await setInput(keyNumbers[1]!, "3600000");
+  await act(async () => { save().click(); });
+  expect(patches[0]?.requestPacing).toMatchObject({ keys: { requestsPerMinute: 15, minIntervalMs: 3_600_000 } });
+  await act(async () => { container.unmount(); });
+});
+
 test("pacing grids keep every field and the add button on one row", async () => {
   const css = await Bun.file(new URL("../src/styles/provider-workspace-settings.css", import.meta.url)).text();
   // The provider grid owns three inputs (rpm, interval, concurrency) and the model
@@ -253,4 +291,47 @@ test("an invalid nonempty cap blocks replacing a model rule instead of dropping 
   expect(container.querySelector(".pwi-pacing-overrides")!.textContent).toContain("5 ×");
   expect(modelNumbers[2]!.value).toBe("0");
   await act(async () => { container.unmount(); });
+});
+
+test("nonempty invalid RPM, delay and model values are rejected instead of silently dropped", async () => {
+  const patches: ProviderUpdatePatch[] = [];
+  const item: WorkspaceItem = { name: "fixture", adapter: "openai-chat", baseUrl: "https://example.test", authMode: "key" };
+  const container = await renderSettings(item, async (_name, patch) => { patches.push(patch); return { ok: true }; });
+  await act(async () => { container.querySelector<HTMLInputElement>(".pwi-pacing-toggle input")!.click(); });
+  const providerNumbers = container.querySelectorAll<HTMLInputElement>('.pwi-pacing-grid:not(.pwi-pacing-grid--model) input[type="number"]');
+  await setInput(providerNumbers[0]!, "70000");
+  await act(async () => { container.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-primary")!.click(); });
+  expect(patches).toHaveLength(0);
+  expect(container.textContent).toContain("Enter a valid pacing value");
+
+  await setInput(providerNumbers[0]!, "30");
+  await setInput(providerNumbers[1]!, "3600001");
+  await act(async () => { container.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-primary")!.click(); });
+  expect(patches).toHaveLength(0);
+
+  await setInput(providerNumbers[1]!, "");
+  const modelInput = container.querySelector<HTMLInputElement>('.pwi-pacing-grid--model input[list]')!;
+  const modelNumbers = container.querySelectorAll<HTMLInputElement>('.pwi-pacing-grid--model input[type="number"]');
+  await setInput(modelInput, "model-a");
+  await setInput(modelNumbers[0]!, "0");
+  await act(async () => { container.querySelector<HTMLButtonElement>(".pwi-pacing-grid--model button")!.click(); });
+  expect(container.textContent).toContain("Enter a valid pacing value");
+  expect(container.querySelector(".pwi-pacing-overrides")).toBeNull();
+});
+
+test("a same-field pacing conflict lists its path and Keep resolves it", async () => {
+  const patches: ProviderUpdatePatch[] = [];
+  const item: WorkspaceItem = { name: "fixture", adapter: "openai-chat", baseUrl: "https://example.test", authMode: "key",
+    requestPacing: { enabled: true, requestsPerMinute: 30 } };
+  const container = await renderSettings(item, async (_name, patch) => { patches.push(patch); return { ok: true }; });
+  const numbers = container.querySelectorAll<HTMLInputElement>('.pwi-pacing-grid:not(.pwi-pacing-grid--model) input[type="number"]');
+  await setInput(numbers[0]!, "31");
+  await container.rerender({ ...item, requestPacing: { enabled: true, requestsPerMinute: 32 } });
+  expect(container.textContent).toContain("pacing.requestsPerMinute");
+  const keep = [...container.querySelectorAll<HTMLButtonElement>("button")].find(candidate => candidate.textContent === "Keep my draft")!;
+  await act(async () => { keep.click(); });
+  expect(container.textContent).not.toContain("pacing.requestsPerMinute");
+  const save = container.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-primary")!;
+  await act(async () => { save.click(); await Promise.resolve(); });
+  expect(patches[0]?.requestPacing?.requestsPerMinute).toBe(31);
 });

@@ -29,6 +29,8 @@ import { shouldInjectApiAuthHeader, standaloneCodexRoutingTarget } from "../code
 import { FORMAT_MEDIA_TYPE, serializeDocument, type ConfigFormat } from "../integrations/serialize";
 import { fileIO } from "../integrations/config-io";
 import { canonicalizeReasoningEfforts } from "../reasoning-effort";
+import { selectNestedSelectors } from "./config-export/nested-selectors";
+import { providerCodexAccountMode } from "../providers/registry";
 import { expandFastExportModels } from "./config-export/fast-models";
 import { namedExportContext } from "./config-export/alias-selectors";
 import { probeHostname } from "../server/proxy-liveness";
@@ -531,6 +533,19 @@ export function commandCodeConfigPath(env: OpencodeLaunchEnv = process.env, home
 }
 
 /**
+ * Command Code's credential store, next to the provider file.
+ *
+ * Only the DESKTOP app reads this before it will show a workspace; the published
+ * CLI is content with `apiKey: false` in `providers.json`. It is the vendor's file,
+ * shared with real logins and other providers' tokens, so this integration NEVER
+ * writes it: the desktop user signs in themselves. Exported so callers and tests
+ * can name the path they must leave alone.
+ */
+export function commandCodeAuthPath(env: OpencodeLaunchEnv = process.env, home: string = homedir(), platform: NodeJS.Platform = process.platform): string {
+  return join(commandCodeHomeDir(env, home, platform), "auth.json");
+}
+
+/**
  * The provider store a current ZCode reads, which is NOT the file above.
  *
  * ZCode 3.14 moved custom providers to `v2/provider_config.json` and left
@@ -897,6 +912,18 @@ export interface PiProviderCompat {
 interface PiExportOptions {
   sendSessionAffinityHeaders?: boolean;
   /**
+   * Drop native OpenAI rows when the serving proxy runs Codex Direct (`codexAccountMode: direct`).
+   * Direct mode forwards the caller's own bearer, and Pi sends the loopback placeholder key, so a
+   * native row would only ever answer 401. The CLI-built Pi export omitted them before the export
+   * moved onto the serving proxy's roster (#8172); this keeps that behaviour.
+   */
+  omitNativeInCodexDirect?: boolean;
+  /**
+   * Use the raw nested upstream selector the serving proxy proved for a row (#8172). A row
+   * without that proof keeps its canonical key.
+   */
+  rawNestedModelIds?: boolean;
+  /**
    * Tell Pi to send its system prompt as `system` rather than `developer` (#5664).
    *
    * Pi sends `developer` for reasoning models by default. On `/v1/chat/completions` the proxy
@@ -1067,7 +1094,11 @@ export interface GajaeGeneratedConfig {
  */
 function buildPiClientConfig(ctx: ExportContext, options: PiExportOptions = {}): PiGeneratedConfig {
   const models: PiModelEntry[] = [];
-  for (const model of normalizeExportModels(ctx.models)) {
+  const roster = options.rawNestedModelIds ? selectNestedSelectors(ctx.models) : ctx.models;
+  const omitNative = options.omitNativeInCodexDirect === true
+    && providerCodexAccountMode("openai", ctx.config?.providers?.openai) === "direct";
+  for (const model of normalizeExportModels(roster)) {
+    if (omitNative && model.native === true) continue;
     // Text is the one modality every routed model supports; anything richer must come
     // from the catalog rather than an assumption — and must still be inside the enum
     // Pi accepts, because one rejected value empties the whole config.
@@ -1125,6 +1156,7 @@ function buildPiClientConfig(ctx: ExportContext, options: PiExportOptions = {}):
  * its models.json `compat` block (docs/models.md, docs/custom-provider.md).
  */
 const PI_EXPORT_OPTIONS: PiExportOptions = { sendSessionAffinityHeaders: true, foldDeveloperRole: true };
+const PI_NATIVE_SELECTOR_OPTIONS: PiExportOptions = { ...PI_EXPORT_OPTIONS, rawNestedModelIds: true, omitNativeInCodexDirect: true };
 
 /** Do not let provider-controlled catalog text become an environment lookup. */
 function containsEnvInterpolation(value: string): boolean {
@@ -1332,7 +1364,7 @@ function buildOpencodeContribution(ctx: ExportContext): ManagedContribution {
 }
 
 function buildPiContribution(ctx: ExportContext): ManagedContribution {
-  const doc = buildPiClientConfig(ctx, PI_EXPORT_OPTIONS);
+  const doc = buildPiClientConfig(ctx, PI_NATIVE_SELECTOR_OPTIONS);
   return singleFragment("pi", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
 }
 
@@ -1498,7 +1530,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     destination: env => piConfigPath(env),
     apiKeyEnv: "",
     exportHint: "Pi reads a non-secret placeholder from models.json; loopback needs no key.",
-    build: ctx => buildPiClientConfig(ctx, PI_EXPORT_OPTIONS),
+    build: ctx => buildPiClientConfig(ctx, PI_NATIVE_SELECTOR_OPTIONS),
     format: "json",
     summarize: summarizePi,
     buildContribution: buildPiContribution,
@@ -1623,7 +1655,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     // No env var exists behind this integration: buildCommandCodeClientConfig
     // writes `apiKey: false`, the documented keyless form for a loopback endpoint.
     apiKeyEnv: "",
-    exportHint: "The provider is written with `apiKey: false` — Command Code treats a keyless loopback endpoint as already authenticated. No key is stored or referenced.",
+    exportHint: "The provider is written with `apiKey: false`, the keyless form the CLI accepts. The desktop app needs its own Command Code sign-in; opencodex never writes `~/.commandcode/auth.json`.",
     build: buildCommandCodeClientConfig,
     format: "json",
     summarize: summarizeCommandCode,

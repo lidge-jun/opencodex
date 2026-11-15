@@ -61,7 +61,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` (при запуске по подписке, если не задано: нативные `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]`) |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | Подпись `/model` для слота уровня, которому OpenCodex назначил маршрутизируемый псевдоним (например, `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`). Та же пара записывается в системное окружение launchd и в shell-хук. Идентификатор модели остаётся псевдонимом. Слоты и подписи, заданные вами, не изменяются |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `1`, когда включён `alwaysEnableEffort` (условно) |
-| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch`, когда задан (условно; по умолчанию выключено) |
+| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch`, когда задан (условно; по умолчанию не задаётся, действует значение Claude Code по умолчанию) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | Устаревшее переопределение контекста, когда задан `maxContextTokens` (условно) |
 Переменные, которые вы экспортируете сами, всегда имеют приоритет. Дополнительные аргументы передаются как есть: `ocx claude -p "hello"`.
 

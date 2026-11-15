@@ -300,7 +300,7 @@ OpenCodex 在下列类别中跟踪进程保留状态。每一类都有文档化�
   不会被逐出。
 - **4 个观测缓冲区**（翻译累加器、图片/OAuth/Grok 尾部）会监测飞行中的字节压力，
   但不做逐出。
-- **31 个状态存储注册** 负责过期扫描（60 秒间隔）和配置世代对账，从而移除过期的
+- **32 个状态存储注册** 负责过期扫描（60 秒间隔）和配置世代对账，从而移除过期的
   提供商/账户键。
 - **路径与指纹备忘**（工作区元数据、加固身份、安装盐、模式提示能力）使用按插入顺序的
   LRU 上限（8–128 条）。
@@ -477,7 +477,7 @@ Free code signing provided by [SignPath.io](https://about.signpath.io/), certifi
 
 - Committers and reviewers: [lidge-jun](https://github.com/lidge-jun)
 - Approvers: [lidge-jun](https://github.com/lidge-jun)
-- Privacy: opencodex sends one anonymous daily usage summary (a per-day install hash that changes daily, version, release channel, platform, install channel, provider kind, coarse model family, active minutes and request, token and error counts; never prompts, model outputs, keys, accounts, hostnames or paths) to telemetry.opencodex.me, and only after the person installing or operating it has seen the notice in the dashboard or an interactive CLI prompt and has not declined. It can be turned off in that notice, in the Windows installer ("Send anonymous usage statistics", checked by default), in Proxy details, or with ocx telemetry disable, OCX_TELEMETRY=0 or DO_NOT_TRACK=1. Project-wide aggregates are public. Everything else goes only to the providers and services you configure. See the [telemetry guide](https://opencodex.me/zh-cn/guides/telemetry/).
+- Privacy: opencodex sends one anonymous daily usage summary (a per-day install hash that changes daily, version, release channel, platform, install channel, provider kind, coarse model family, active minutes and request, token and error counts; never prompts, model outputs, keys, accounts, hostnames or paths) to telemetry.opencodex.me, and only after the person installing or operating it has seen the notice in the dashboard or an interactive CLI prompt and has not declined. It can be turned off in that notice, in the Windows installer ("Send anonymous usage statistics", checked by default), in Proxy details, or with ocx telemetry disable, OCX_TELEMETRY=0 or DO_NOT_TRACK=1. Only project-wide aggregates of this anonymous data are public. A separate public leaderboard profile is off unless you connect one yourself (dashboard Home or ocx telemetry profile connect); it shares only a chosen handle, display name and colour and your daily request, token and model-family totals, never your anonymous telemetry ID, and disconnecting deletes it. Everything else goes only to the providers and services you configure. See the [telemetry guide](https://opencodex.me/zh-cn/guides/telemetry/).
 
 ## 免责声明
 

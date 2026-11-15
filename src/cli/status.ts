@@ -753,9 +753,11 @@ export function unusedProxyWarningLines(input: {
     ];
   }
   if (!input.proxyUp) return [];
+  // `ocx start` refuses beside a live proxy (and under the desktop app); `ocx sync` writes the
+  // routing to the running one under every owner.
   return [
     "⚠️  Codex routing is native — the running proxy is unused.",
-    "   Codex requests go to OpenAI, not this proxy. Re-point with: ocx start",
+    "   Codex requests go to OpenAI, not this proxy. Re-point with: ocx sync",
   ];
 }
 

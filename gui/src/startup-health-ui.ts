@@ -8,8 +8,8 @@ export interface StartupRiskDetail {
   shimCoverage: "full" | "cli-only" | "none";
 }
 
-export function desktopManagesStartup(health: Pick<StartupRiskDetail, "desktop">): boolean {
-  return health.desktop !== undefined && (health.desktop.owned || health.desktop.supervisor !== undefined);
+export function desktopManagesStartup(health: { desktop?: { owned?: boolean; supervisor?: unknown } }): boolean {
+  return health.desktop !== undefined && (health.desktop.owned === true || health.desktop.supervisor !== undefined);
 }
 
 type DesktopPresentation = { owned?: boolean; supervisor?: unknown; loginState?: unknown; running?: boolean; viable?: boolean; supervisionUnknown?: boolean };
@@ -49,6 +49,42 @@ export function startupChecklistDone(data: {
 }): boolean | undefined {
   if (data.status && startupPresentation({ ...data, status: data.status }) === "unverified") return undefined;
   return (data.protection !== undefined && data.protection !== "none") || Boolean(data.serviceInstalled || data.shimInstalled);
+}
+
+export type StartupChecklistBody = Parameters<typeof startupChecklistDone>[0] & { platform?: string };
+
+export interface StartupChecklistStep {
+  /** The reading names an OpenCodex Desktop app that runs this proxy. */
+  desktop: boolean;
+  /** undefined while unknown: neither done nor to do. */
+  done: boolean | undefined;
+  titleKey: TKey;
+  hintKey: TKey;
+  /** Startup sub-view the step opens. */
+  subPath?: "desktop";
+}
+
+/**
+ * The Getting started "keep it running" step, shared by Home and the Set up hub.
+ *
+ * Under Desktop the restart protection is the app's Start at Login, so a service or shim never
+ * completes the step. Only fresh evidence decides it: viable supervision is done; a login item
+ * verified off is to do; so is a supervisor confirmed missing on macOS, whatever the Codex
+ * routing. Unreadable evidence carries `supervisionUnknown`, and Windows and Linux never verify
+ * an absent login item, so those readings stay unknown rather than "to do" (do not simplify the
+ * macOS arm to `!viable`). A browser reading keeps `startupChecklistDone`.
+ */
+export function startupChecklistStep(data: StartupChecklistBody | null | undefined): StartupChecklistStep {
+  if (!data || !desktopManagesStartup(data)) {
+    return { desktop: false, done: data ? startupChecklistDone(data) : undefined, titleKey: "shellV2.stepAutostart", hintKey: "shellV2.stepAutostartHint" };
+  }
+  const desktop = data.desktop!;
+  const done = data.diagnosticStale === true ? undefined
+    : desktop.viable === true ? true
+    : desktop.loginState === "disabled" ? false
+    : data.platform === "darwin" && desktop.running === false && desktop.viable === false && desktop.supervisionUnknown !== true ? false
+    : undefined;
+  return { desktop: true, done, titleKey: "shellV2.stepAutostartDesktop", hintKey: "shellV2.stepAutostartDesktopHint", subPath: "desktop" };
 }
 
 /**

@@ -791,7 +791,7 @@ async function gatherRoutedModelsUncached(
   // ponytail: catalog-scale scan; index ids by provider if catalog growth makes this measurable.
   const aliasDisplayNames = new Map(activeProviders.flatMap(({ name, provider }) => {
     const providerModels = models.filter(model => model.provider === name);
-    const aliases = [...effectiveModelAliases(config, provider, providerModels.map(model => model.id))];
+    const aliases = [...effectiveModelAliases(config, provider, providerModels.map(model => model.id), name)];
     return aliases.flatMap(([id, { alias }]) => {
       const exact = providerModels.filter(model => model.id === id);
       const matches = exact.length > 0

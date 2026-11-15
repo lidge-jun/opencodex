@@ -13,6 +13,26 @@ function selectWire(provider: OcxProviderConfig, adapter: string): OcxProviderCo
 }
 
 /**
+ * Project only the captured exact-model custom-tool contract onto a call-local provider copy.
+ * The captured route policy already folds the provider value under any model declaration, so a
+ * refreshed transport cannot add or keep a capability the captured route did not resolve. Native
+ * compact uses this alone: it keeps the provider's own wire and credential.
+ */
+export function projectCapturedCustomToolPolicy(
+  provider: OcxProviderConfig,
+  staticPolicy: ResolvedModelPolicy | undefined,
+): OcxProviderConfig {
+  if (!staticPolicy) return provider;
+  const supportsResponsesCustomTools = staticPolicy.model.supportsResponsesCustomTools;
+  if (supportsResponsesCustomTools === provider.supportsResponsesCustomTools) return provider;
+  if (supportsResponsesCustomTools === undefined) {
+    const { supportsResponsesCustomTools: _discardedLiveCapability, ...captured } = provider;
+    return captured;
+  }
+  return { ...provider, supportsResponsesCustomTools };
+}
+
+/**
  * Resolve the wire a single model should use: a hard pin first, then a configured
  * per-model override, then a registry default for a mixed-wire provider, then the provider's
  * own adapter.
@@ -35,7 +55,7 @@ export function resolveWireProtocolOverride(
   // RouteResult policy is recaptured for the original inbound protocol whenever routing selects
   // or replaces a destination, so every downstream rebuild consumes the same adapter authority.
   if (staticPolicy) {
-    return selectWire(providerConfig, staticPolicy.model.adapter);
+    return projectCapturedCustomToolPolicy(selectWire(providerConfig, staticPolicy.model.adapter), staticPolicy);
   }
   const pinned = pinnedWireAdapter(providerName, modelId, providerConfig);
   if (pinned && providerConfig.adapter !== pinned) {
