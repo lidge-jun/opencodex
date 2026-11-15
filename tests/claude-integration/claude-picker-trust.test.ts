@@ -116,11 +116,11 @@ test("untrust is a no-op success when the current CA is not in the login keychai
   expect(await untrustPickerCa("/ca.pem", sha1, fake(listed, ok, ok, listed).run, "darwin")).toEqual({ ok: false });
 });
 
-test("non-darwin never invokes the runner", async () => {
+test("an unsupported platform never invokes the runner", async () => {
   const run: SecurityRunner = async () => { throw new Error("runner must stay idle"); };
-  expect(await inspectPickerTrust("/leaf.pem", sha1, run, "linux")).toBe("unsupported");
-  expect(await trustPickerCa("/ca.pem", run, "linux")).toEqual({ ok: false, reason: "unsupported" });
-  expect(await untrustPickerCa("/ca.pem", sha1, run, "linux")).toEqual({ ok: false });
+  expect(await inspectPickerTrust("/leaf.pem", sha1, run, "freebsd")).toBe("unsupported");
+  expect(await trustPickerCa("/ca.pem", run, "freebsd")).toEqual({ ok: false, reason: "unsupported" });
+  expect(await untrustPickerCa("/ca.pem", sha1, run, "freebsd")).toEqual({ ok: false });
 });
 
 test("trust installs a private copy of the verified certificate, not the shared ca.pem", async () => {
@@ -148,4 +148,12 @@ test("trust installs a private copy of the verified certificate, not the shared 
   } finally {
     rmSync(dirname(shared), { recursive: true, force: true });
   }
+});
+
+test("linux routes an injected runner to the NSS adapter", async () => {
+  const calls: string[][] = [];
+  const run: SecurityRunner = async args => { calls.push([...args]); return { code: 255, stdout: "", stderr: "" }; };
+  await inspectPickerTrust("/leaf.pem", sha1, run, "linux");
+  // With no user NSS database the adapter answers without running certutil; with one it lists the nickname.
+  expect(calls.every(call => call[0] === "-L" && call.includes(PICKER_CA_COMMON_NAME))).toBe(true);
 });

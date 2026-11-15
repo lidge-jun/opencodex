@@ -7,6 +7,7 @@ import {
   trustPickerCaWindows,
   untrustPickerCaWindows,
 } from "./picker-trust-windows";
+import { inspectPickerTrustLinux, trustPickerCaLinux, untrustPickerCaLinux } from "./picker-trust-linux";
 
 /** Trust is scoped to the current root fingerprint and a verified persisted leaf. */
 export type PickerTrustState = "trusted" | "untrusted" | "unsupported" | "unknown";
@@ -71,6 +72,9 @@ export async function inspectPickerTrust(
     // runner crosses over, otherwise the Windows default powershell.exe runner runs.
     return inspectPickerTrustWindows(leafPath, caSha1, run === defaultSecurityRunner ? undefined : run);
   }
+  if (platform === "linux") {
+    return inspectPickerTrustLinux(caSha1, run === defaultSecurityRunner ? undefined : run);
+  }
   if (platform !== "darwin") return "unsupported";
   const keychain = loginKeychainPath();
   try {
@@ -98,6 +102,9 @@ export async function trustPickerCa(
 ): Promise<{ ok: boolean; reason?: "unsupported" | "declined_or_failed" }> {
   if (platform === "win32") {
     return trustPickerCaWindows(caPath, run === defaultSecurityRunner ? undefined : run, cert);
+  }
+  if (platform === "linux") {
+    return trustPickerCaLinux(caPath, run === defaultSecurityRunner ? undefined : run, cert);
   }
   if (platform !== "darwin") return { ok: false, reason: "unsupported" };
   // `cert.pem` is the caller-verified certificate bytes: the shared on-disk ca.pem is writable by
@@ -135,6 +142,9 @@ export async function untrustPickerCa(
       return await untrustPickerCaWindows(fingerprintSha1, run === defaultSecurityRunner ? undefined : run,
         { pem: readFileSync(caPath, "utf8") });
     } catch { return { ok: false }; }
+  }
+  if (platform === "linux") {
+    return untrustPickerCaLinux(fingerprintSha1, run === defaultSecurityRunner ? undefined : run);
   }
   if (platform !== "darwin") return { ok: false };
   const keychain = loginKeychainPath();

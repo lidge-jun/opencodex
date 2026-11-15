@@ -188,16 +188,16 @@ Windows local-CA publication in `src/claude/intercept/local-ca-files.ts` hardens
 Native toggle, management/CLI apply, desired reconciliation, startup and picker writers follow the [config-directory hardening barrier](../config.md#opencodex-home-and-live-process-state). Cleanup gates each SQLite lease separately across OS untrust; profile and snapshot writes re-enter after trust/discovery. Admission expires within one ACL deadline without mutation or loss of retained-child ownership. `withFirstPartySecretsSettled` maps timeout to `ca_unavailable` with allowlisted `ca`/`ETIMEDOUT` diagnostics; CA startup never retries this as lease contention, and picker refusal releases its transition lock. Reconciliation and token-producing rollback leaves receive the barrier from their async caller; a CA refusal never wrote settings and needs no settings rollback. `tests/claude-integration/claude-intercept-acl-barrier.test.ts` gates parent flights and drives deadlines without sleeps. Diagnostics exclude raw exceptions, ACL output, PEMs and tokens.
 The authority primitive accepts `validityDays` from 1 through 3650 for short-lived callers; omitted values preserve the existing 3650-day CA lifetime. This parameter does not install trust or rotate an existing authority.
 
-Gateway remains the default Desktop mode. On macOS and Windows, picker intent defaults on only within the chosen first-party mode: either an explicit Desktop integration `false` or `claudeCode.intercept.picker: false` disables it. Default intent does not install certificate trust; startup and status only inspect trust, and explicit activation owns installation.
+Gateway remains the default Desktop mode. On macOS, Windows and Linux, picker intent defaults on only within the chosen first-party mode: either an explicit Desktop integration `false` or `claudeCode.intercept.picker: false` disables it. Default intent does not install certificate trust; startup and status only inspect trust, and explicit activation owns installation.
 
-When the lifecycle passes `loadPickerRoutes` (the server always does), `startClaudeIntercept` on macOS, or on Windows with picker intent or an applied profile requiring recovery,
+When the lifecycle passes `loadPickerRoutes` (the server always does), `startClaudeIntercept` on macOS, or on Windows and Linux with picker intent or an applied profile requiring recovery,
 wires Claude Desktop picker mode: a second loopback CONNECT proxy on the dedicated picker proxy
 port (`getClaudeInterceptState()?.pickerProxyPort`), used as Desktop's pinned egress proxy. Desktop
 also hands that proxy to the Claude Code processes it spawns, and the two trust different CAs, so
 the tunnel is chosen per client from the CONNECT head: a tunnel without a browser User-Agent (Claude
 Code, trusting only the intercept CA) gets the `api.anthropic.com` intercept and every other target
 blind, never the picker; a tunnel with Chromium's `Mozilla/` User-Agent (the app, trusting only the
-login keychain on macOS or the current-user Root store on Windows) is asked of the picker runtime (`src/claude/intercept/picker-runtime.ts`), which
+login keychain on macOS, the current-user Root store on Windows, the user NSS database on Linux) is asked of the picker runtime (`src/claude/intercept/picker-runtime.ts`), which
 blind-tunnels every target except `claude.ai:443`.
 Production always uses the configured adjacent ports. Lifecycle tests inject only the CONNECT
 factory and bind the real handlers on kernel-assigned ports; this preserves request handling while
@@ -210,7 +210,7 @@ because each terminator presents a certificate only its intended client trusts. 
 intercepted only while the runtime's cached
 decision is armed: macOS or Windows, persisted resolved Desktop mode first-party, Desktop intent on,
 `claudeCode.intercept.picker !== false`, no disarm latch, listener up, and the current picker CA
-trusted in the OS store (`picker-trust.ts`): the login keychain on macOS, the current-user Root store on Windows by exact fingerprint with a verified leaf. A loopback TCP front in `picker-listener.ts`
+trusted in the OS store (`picker-trust.ts`): the login keychain on macOS, the current-user Root store on Windows by exact fingerprint with a verified leaf, the user NSS database `~/.pki/nssdb` on Linux. A loopback TCP front in `picker-listener.ts`
 reads ClientHello ALPN through `src/claude/intercept/client-hello.ts`, reassembling across TCP
 splits and up to 16 TLS records within 64 KiB of wire bytes and a 10-second deadline. It splices
 the untouched connection to an HTTP/2 server when the client offers `h2`, or to the native
@@ -276,11 +276,11 @@ it removes the journal last. Recovery requires matching journal/store identity; 
 credentials, unavailable storage or inconsistent metadata fail closed without publishing a replacement.
 Gateway/off startup does not read or initialize an OS picker credential unless an applied picker
 profile needs recovery. Both macOS and Windows retain a dormant runtime/controller for explicit activation;
-Windows without picker intent or an applied profile defers relay binding and refresh. Activation uses the same persistent authority path.
+Windows and Linux without picker intent or an applied profile defer relay binding and refresh. Activation uses the same persistent authority path.
 On macOS trust is added without a policy string: Chromium
 skips host-scoped trust settings, so `inspectPickerTrust` treats a current CA whose exported user
 trust settings carry `kSecTrustSettingsPolicyString` as untrusted and an explicit trust step replaces it; an
-export it cannot read makes trust `unknown`, which never arms. On Windows trust is the current-user Root store entry matching the exact fingerprint with a verified leaf. The PowerShell runner terminates its child on timeout or output-read failure and preserves the failure category. A rotated-out picker certificate is removed from the login keychain on macOS or the current-user Root store on Windows as its replacement is published, and a failed removal stops the picker arming. Publication of `ca.pem` and `ca-owner.json` happens only inside the
+export it cannot read makes trust `unknown`, which never arms. On Windows trust is the current-user Root store entry matching the exact fingerprint with a verified leaf. The PowerShell runner terminates its child on timeout or output-read failure and preserves the failure category. On Linux trust is the picker nickname in the user NSS database (`picker-trust-linux.ts`, `certutil -d sql:$HOME/.pki/nssdb`), which Chromium reads instead of the system bundle: it is trusted only when the current root fingerprint is listed and every root under the nickname carries the SSL `C` flag; no root access is needed, the database is created when absent, and a missing `certutil` (libnss3-tools or nss-tools) reports `unsupported`. A rotated-out picker certificate is removed from the login keychain on macOS, the current-user Root store on Windows or the user NSS database on Linux as its replacement is published, and a failed removal stops the picker arming. Publication of `ca.pem` and `ca-owner.json` happens only inside the
 `ca.lock.sqlite` lock (`picker-ca.ts`): lock acquisition is reported separately from the
 callback, so a busy lock publishes nothing, and a missing or mismatched owner record for our own
 certificate is rewritten under the lock so a second process cannot rotate out a live owner's
