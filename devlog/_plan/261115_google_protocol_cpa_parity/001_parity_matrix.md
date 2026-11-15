@@ -133,7 +133,8 @@ later unit, with the reason).
 
 ## Totals
 
-Computed from the tables above (73 rows): 35 rows taken by phases 010-060: 34 gaps (P1: 21, P2: 9, P3: 4) plus
-INT-15, an intentional difference implemented in 020; 17 deferred, each with its reason;
+Computed from the tables above (74 rows): 34 rows taken by phases 010-060 and shipped: 33 gaps (P1: 21, P2: 8,
+P3: 4) plus INT-15, an intentional difference implemented in 020; 19 deferred, each with its reason (AG-M1 moved
+from 060 to deferred during the build, and INT-20 was added from review round 1);
 11 intentionally different; 9 at parity; 1 outside both projects. Grouped rows (AG-MISC, OUT-P3,
 OUT-HAVE, AG-OCX) stand for several lane rows each; the appendices keep the per-row evidence.

@@ -138,7 +138,7 @@ export async function fetchGoogleWithRetry(
         }
       }
       if (!retryableGoogleStatus(res.status) || attempt === TRANSIENT_RETRY_MAX_ATTEMPTS - 1) {
-        return ctx.returnRawErrors ? res : normalizeFinalGoogleError(label, res, activeRequest, ctx.abortSignal);
+        return finalGoogleAnswer(label, res, activeRequest, ctx);
       }
       // A 429 may be a transient rate limit (retry), hard quota exhaustion (do NOT retry — it
       // won't recover for hours and burns retries), or a refusal no replay can change. The
@@ -205,7 +205,7 @@ export async function fetchGoogleWithRetry(
           ctx.onRecoveryWithheld?.({ reason: "retry-send-budget" });
           const retained = pendingResponse;
           pendingResponse = undefined; // Transfer ownership to the caller/normalizer.
-          return ctx.returnRawErrors ? retained : normalizeFinalGoogleError(label, retained, activeRequest, ctx.abortSignal);
+          return finalGoogleAnswer(label, retained, activeRequest, ctx);
         }
         throw err;
       }
@@ -224,6 +224,21 @@ export async function fetchGoogleWithRetry(
     // A cancellation before the next retry's preparation must not strand its lease.
     if (pendingResponse) cancelResponseBodyBestEffort(pendingResponse);
   }
+}
+
+/**
+ * The upstream answer that ends the retry ladder. Running out of attempts stops another send; it
+ * must not drop a 429's body-stated wait, so that wait rides as Retry-After on the raw or the
+ * normalized answer alike (an explicit upstream header wins).
+ */
+async function finalGoogleAnswer(label: string, res: Response, request: AdapterRequest, ctx: AdapterFetchContext & { returnRawErrors?: boolean }): Promise<Response> {
+  const bodyRetryAfter = res.status === 429 && !res.headers.has("retry-after")
+    ? extractGoogleRetryAfterSeconds(await readDisplaySafeErrorPayloadText(res.clone(), ctx.abortSignal))
+    : undefined;
+  if (ctx.returnRawErrors) return withBodyRetryAfter(res, bodyRetryAfter);
+  const final = await normalizeFinalGoogleError(label, res, request, ctx.abortSignal);
+  if (bodyRetryAfter && !final.headers.has("retry-after")) final.headers.set("retry-after", bodyRetryAfter);
+  return final;
 }
 
 /**

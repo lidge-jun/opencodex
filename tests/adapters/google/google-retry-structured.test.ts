@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import * as retry from "../../../src/lib/upstream-retry";
 import type { AdapterRequest } from "../../../src/adapters/base";
-import { fetchAntigravityWithRetry, fetchDirectGeminiWithRetry } from "../../../src/adapters/google-http";
+import { fetchAntigravityWithRetry, fetchDirectGeminiWithRetry, fetchVertexWithRetry } from "../../../src/adapters/google-http";
 
 const request: AdapterRequest = { url: "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse", method: "POST", headers: { "content-type": "application/json" }, body: "{}" };
 const ERROR_INFO = "type.googleapis.com/google.rpc.ErrorInfo";
@@ -89,6 +89,32 @@ describe("AI Studio keeps a body-stated retry wait on the raw 429 it returns", (
     const body = await rateLimited("90s", "QUOTA_EXHAUSTED").text();
     const headed = send(() => new Response(body, { status: 429, headers: { "Retry-After": "7" } }));
     expect((await fetchDirectGeminiWithRetry(direct, { executor: headed.executor })).headers.get("retry-after")).toBe("7");
+  });
+});
+
+describe("a 429 on the last allowed attempt keeps its body-stated wait", () => {
+  const sequence = () => {
+    const answers = [new Response("busy", { status: 503 }), new Response("busy", { status: 503 }), rateLimited("1h2m3s", "RATE_LIMIT_EXCEEDED", "Too many requests")];
+    let sends = 0;
+    return { executor: (async () => { sends++; return answers.shift()!; }) as typeof fetch, sends: () => sends };
+  };
+
+  test("AI Studio returns the raw 429 with Retry-After", async () => {
+    waits = spyOn(retry, "sleepWithAbort").mockImplementation(async () => {});
+    const upstream = sequence();
+    const res = await fetchDirectGeminiWithRetry({ url: "https://generativelanguage.googleapis.com/v1beta/models/m:generateContent", method: "POST", headers: {}, body: "{}" }, { executor: upstream.executor });
+    expect(upstream.sends()).toBe(3);
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBe("3723");
+  });
+
+  test("Vertex returns the normalized 429 with Retry-After", async () => {
+    waits = spyOn(retry, "sleepWithAbort").mockImplementation(async () => {});
+    const upstream = sequence();
+    const res = await fetchVertexWithRetry({ url: "https://aiplatform.googleapis.com/v1/publishers/google/models/m:generateContent", method: "POST", headers: {}, body: "{}" }, { executor: upstream.executor });
+    expect(upstream.sends()).toBe(3);
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBe("3723");
   });
 });
 

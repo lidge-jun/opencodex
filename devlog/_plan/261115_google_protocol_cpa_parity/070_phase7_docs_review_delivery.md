@@ -51,3 +51,21 @@ Report `.tmp/research/review-r1.md` (security detail kept in `.tmp/` only).
 - R2 (MINOR) rebutted and deferred as matrix row INT-20: no inbound wire carries a tool-error flag, so the fix is a
   new Chat-wire contract in both lanes; the error stays readable as result text.
 
+## Review round 2 (35a5932033, same reviewer, verdict FAIL: 1 MAJOR, 1 NIT)
+
+Report `.tmp/research/review-r2.md`. S1 closed; the R2 deferral (INT-20) accepted.
+
+- R1b (MAJOR) accepted: a 429 on the last allowed attempt (and on a send-budget stop) returned before its body was
+  read. Every final answer now goes through `finalGoogleAnswer` in `src/adapters/google-http.ts`; the 503, 503, 429
+  cases for AI Studio (raw) and Vertex (normalized) in `google-retry-structured.test.ts` failed before the fix.
+- N1 (NIT) accepted: matrix totals now count 74 rows and 19 deferred.
+
+## CI on the PR (35a5932033)
+
+- `test 2/5`: README translation parity. 020 changed the English README's retained-store count and the seven
+  locale READMEs in the same commit, but not `readme/i18n-manifest.json`; the hashes now name the current README.
+- `react-doctor`: `gui/src/pages/integrations/gateway-clients-api.ts` (#8742's code; #8742's own run fails the
+  same check) read an action body before checking the status. The action client now branches on the status first
+  and reads a body only for 2xx and the route's 4xx refusals; NEW `gui/tests/gateway-clients-api.test.ts` (the 5xx
+  case failed before the change).
+
