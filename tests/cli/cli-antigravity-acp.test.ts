@@ -34,11 +34,17 @@ createInterface({ input: process.stdin }).on("line", line => {
     write({ id: "permission", method: "session/request_permission", params: { sessionId, options: [
       { kind: "allow_once", optionId: "yes" }, { kind: "reject_once", optionId: "no" },
     ] } });
-  } else if (id === "permission") {
+} else if (id === "permission") {
     if (result.outcome.optionId !== "no") return bad(promptId);
     const update = text => ({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
     write({ method: "session/update", params: { sessionId: "other", update: update("wrong session") } });
     write({ method: "session/update", params: { sessionId, update: update("\u001b[31mhello back\u001b[0m") } });
+    if (process.argv.includes("model-drift")) {
+      write({ method: "session/update", params: { sessionId, update: {
+        sessionUpdate: "config_option_update",
+        configOptions: [{ id: "model", type: "select", currentValue: "claude-opus-example" }],
+      } } });
+    }
     reply(promptId, { stopReason: "end_turn" });
   } else bad(id);
 });
@@ -75,5 +81,20 @@ describe("Antigravity ACP command", () => {
     expect(output.join("")).toContain("ocx antigravity native");
     expect(output.join("")).not.toMatch(/claude-opus-example|gpt-oss-example|wrong session|\u001b/);
     expect(answers).toEqual([]);
+  });
+
+  test("stops if the selected model changes even when the update omits category", async () => {
+    const child = spawn(process.execPath, ["-e", fakeAgy, "--", "model-drift"], { windowsHide: true });
+    const stop = new AbortController();
+    const timer = setTimeout(() => stop.abort(new Error("Mock ACP timed out")), 4_000);
+    const answers = ["", "hello", "/exit"];
+    try {
+      await expect(runAntigravitySession(child, process.cwd(),
+        async () => answers.shift() ?? "/exit", () => {}, stop,
+      )).rejects.toThrow("Antigravity changed the session model or mode.");
+      expect(answers).toEqual(["/exit"]);
+    } finally {
+      clearTimeout(timer);
+    }
   });
 });

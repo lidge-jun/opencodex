@@ -57,7 +57,7 @@ export async function runAntigravitySession(
   let nextId = 0;
   let sessionId: string | undefined;
   let prompting = false;
-  let selectedModel: string | undefined;
+  let expectedConfig: ReadonlyMap<string, string> | undefined;
   let pending: { id: number; finish: (error?: Error, result?: unknown) => void } | undefined;
   const lines = createInterface({ input: child.stdout });
   const childClosed = new Promise<void>(resolve => child.once("close", resolve));
@@ -99,11 +99,11 @@ export async function runAntigravitySession(
       }
     } else if (message.method === "session/update" && sessionId && message.params?.sessionId === sessionId) {
       const update = message.params?.update;
-      if (selectedModel && update?.sessionUpdate === "config_option_update" && update.configOptions?.some(
-        option => (option.category === "model" && option.currentValue !== selectedModel) ||
-          (option.id === "mode" && option.currentValue !== "plan"),
+      if (update?.sessionUpdate === "config_option_update" && update.configOptions?.some(
+        option => expectedConfig?.has(option.id) && option.currentValue !== expectedConfig.get(option.id),
       )) {
         fail(new Error("Antigravity changed the session model or mode. Open a new session."));
+        return;
       }
       if (prompting && update?.sessionUpdate === "agent_message_chunk" && update.content?.type === "text" && typeof update.content.text === "string") {
         write(terminalText(update.content.text));
@@ -164,7 +164,7 @@ export async function runAntigravitySession(
     if (!config.some(option => option.id === mode.id && option.currentValue === "plan")) {
       throw new Error("The Antigravity CLI did not retain plan mode after model selection.");
     }
-    selectedModel = selected;
+    expectedConfig = new Map([[model.id, selected], [mode.id, "plan"]]);
 
     write("Antigravity ACP: " + selected + " · plan mode. Type /exit to quit.\n");
     for (;;) {
