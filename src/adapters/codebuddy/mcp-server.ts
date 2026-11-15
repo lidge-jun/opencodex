@@ -9,7 +9,7 @@
 
 import { open } from "node:fs/promises";
 import { serveCodingAgentMcpTools } from "../coding-agent/mcp-server";
-import { CODEBUDDY_TOOL_LIMITS } from "./tool-bridge";
+import { ANTIGRAVITY_TOOL_LIMITS, CODEBUDDY_TOOL_LIMITS, type CodeBuddyToolLimits } from "./tool-bridge";
 
 interface ToolDefinition {
   name: string;
@@ -43,26 +43,29 @@ function hasUnpairedSurrogate(value: string): boolean {
   return false;
 }
 
-async function readCatalogBounded(path: string): Promise<Buffer> {
+async function readCatalogBounded(
+  path: string,
+  limits: CodeBuddyToolLimits = CODEBUDDY_TOOL_LIMITS,
+): Promise<Buffer> {
   const handle = await open(path, "r");
   try {
     const before = await handle.stat();
     if (!before.isFile()) throw new Error("tool catalog must be a regular file");
-    if (before.size > CODEBUDDY_TOOL_LIMITS.maxCatalogBytes) {
+    if (before.size > limits.maxCatalogBytes) {
       throw new Error("tool catalog is too large");
     }
 
     // Read at most limit + 1 from the already-open descriptor. The extra byte
     // distinguishes an exact-limit file from a file that grew after fstat,
     // without ever allocating or retaining an attacker-sized input.
-    const bytes = Buffer.allocUnsafe(CODEBUDDY_TOOL_LIMITS.maxCatalogBytes + 1);
+    const bytes = Buffer.allocUnsafe(limits.maxCatalogBytes + 1);
     let offset = 0;
     while (offset < bytes.length) {
       const result = await handle.read(bytes, offset, bytes.length - offset, offset);
       if (result.bytesRead === 0) break;
       offset += result.bytesRead;
     }
-    if (offset > CODEBUDDY_TOOL_LIMITS.maxCatalogBytes) {
+    if (offset > limits.maxCatalogBytes) {
       throw new Error("tool catalog is too large");
     }
 
@@ -83,9 +86,12 @@ async function readCatalogBounded(path: string): Promise<Buffer> {
   }
 }
 
-function assertBoundedSchema(schema: Record<string, unknown>): void {
+function assertBoundedSchema(
+  schema: Record<string, unknown>,
+  limits: CodeBuddyToolLimits = CODEBUDDY_TOOL_LIMITS,
+): void {
   if (schema.type !== "object") throw new Error("tool input schema must have object type");
-  if (utf8Bytes(JSON.stringify(schema)) > CODEBUDDY_TOOL_LIMITS.maxSchemaBytes) {
+  if (utf8Bytes(JSON.stringify(schema)) > limits.maxSchemaBytes) {
     throw new Error("tool input schema is too large");
   }
 
@@ -94,10 +100,10 @@ function assertBoundedSchema(schema: Record<string, unknown>): void {
   while (pending.length > 0) {
     const current = pending.pop()!;
     nodes += 1;
-    if (nodes > CODEBUDDY_TOOL_LIMITS.maxSchemaNodes) {
+    if (nodes > limits.maxSchemaNodes) {
       throw new Error("tool input schema has too many nodes");
     }
-    if (current.depth > CODEBUDDY_TOOL_LIMITS.maxSchemaDepth) {
+    if (current.depth > limits.maxSchemaDepth) {
       throw new Error("tool input schema is too deeply nested");
     }
     if (Array.isArray(current.value)) {
@@ -110,11 +116,14 @@ function assertBoundedSchema(schema: Record<string, unknown>): void {
   }
 }
 
-async function loadTools(path: string): Promise<ToolDefinition[]> {
-  const bytes = await readCatalogBounded(path);
+async function loadTools(
+  path: string,
+  limits: CodeBuddyToolLimits = CODEBUDDY_TOOL_LIMITS,
+): Promise<ToolDefinition[]> {
+  const bytes = await readCatalogBounded(path, limits);
   const parsed: unknown = JSON.parse(bytes.toString("utf8"));
   if (!Array.isArray(parsed)) throw new Error("tool catalog must be an array");
-  if (parsed.length > CODEBUDDY_TOOL_LIMITS.maxTools) {
+  if (parsed.length > limits.maxTools) {
     throw new Error("tool catalog contains too many definitions");
   }
 
@@ -124,34 +133,46 @@ async function loadTools(path: string): Promise<ToolDefinition[]> {
       !isRecord(value)
       || typeof value.name !== "string"
       || !MCP_TOOL_NAME_PATTERN.test(value.name)
-      || utf8Bytes(value.name) > CODEBUDDY_TOOL_LIMITS.maxNameBytes
+      || utf8Bytes(value.name) > limits.maxNameBytes
       || typeof value.description !== "string"
       || value.description.length < 1
       || hasUnpairedSurrogate(value.description)
       || INVALID_DESCRIPTION_CONTROL_PATTERN.test(value.description)
-      || utf8Bytes(value.description) > CODEBUDDY_TOOL_LIMITS.maxDescriptionBytes
+      || utf8Bytes(value.description) > limits.maxDescriptionBytes
       || !isRecord(value.inputSchema)
     ) {
       throw new Error("tool catalog contains an invalid definition");
     }
     if (names.has(value.name)) throw new Error("tool catalog contains duplicate names");
     names.add(value.name);
-    assertBoundedSchema(value.inputSchema);
+    assertBoundedSchema(value.inputSchema, limits);
     const definition = {
       name: value.name,
       description: value.description,
       inputSchema: value.inputSchema,
     };
-    if (utf8Bytes(JSON.stringify(definition)) > CODEBUDDY_TOOL_LIMITS.maxToolBytes) {
+    if (utf8Bytes(JSON.stringify(definition)) > limits.maxToolBytes) {
       throw new Error("tool catalog contains an oversized definition");
     }
     return definition;
   });
 }
 
-export async function runCodeBuddyMcpServer(catalogPath: string): Promise<void> {
+export async function runCodeBuddyMcpServer(
+  catalogPath: string,
+  capturePath?: string,
+  resultsPath?: string,
+): Promise<void> {
   if (!catalogPath) throw new Error("missing tool catalog");
-  await serveCodingAgentMcpTools(await loadTools(catalogPath), "opencodex-codebuddy-capture");
+  const effectiveCapturePath = capturePath || undefined;
+  const effectiveResultsPath = resultsPath || undefined;
+  const limits = effectiveCapturePath ? ANTIGRAVITY_TOOL_LIMITS : CODEBUDDY_TOOL_LIMITS;
+  await serveCodingAgentMcpTools(
+    await loadTools(catalogPath, limits),
+    "opencodex-codebuddy-capture",
+    effectiveCapturePath,
+    effectiveResultsPath,
+  );
 }
 
-if (import.meta.main) await runCodeBuddyMcpServer(process.argv[2] ?? "");
+if (import.meta.main) await runCodeBuddyMcpServer(process.argv[2] ?? "", process.argv[3], process.argv[4]);

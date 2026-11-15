@@ -327,6 +327,7 @@ export function createWebsocketHandler(
           // fabricated attribution.
           const wsAdmission = ws.data.admission;
           const logCtx: RequestLogContext = {
+            requestId,
             model: "unknown",
             provider: "unknown",
             ...(requestMetricsRecorder ? { requestMetricsRecorder } : {}),

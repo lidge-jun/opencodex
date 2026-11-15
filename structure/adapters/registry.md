@@ -51,6 +51,7 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
   traffic that never does. `keyOptional` is the existing exemption from key enforcement, and key
   rows are what `deriveProviderPresets` lists, so the entry needs no `dashboardPreset` flag either.
 The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMeta.beforePhysicalSend` fence after awaited tool-bridge setup and before spending its dispatch permit or spawning. Cancellation and stale selections produce no child process; cleanup still returns permits and removes temporary tool files.
+- `antigravity-cli` inherits the `codebuddy` contract for client-owned tool semantics while running Google's official `agy` binary in headless `stream-json` mode (`src/adapters/antigravity-cli/`); see [Antigravity CLI Subscription](../providers/antigravity-cli.md).
 
 - `cursor` stays direct because its `runTurn` transport and gated native-file fallback are distinct.
 - `devin` is direct for a related reason. It streams Cognition's

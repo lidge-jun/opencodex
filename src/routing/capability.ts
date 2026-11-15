@@ -125,6 +125,7 @@ const TOOL_CAPABLE_ADAPTERS = new Set([
   "kiro",
   "mimo-free",
   "command-code",
+  "antigravity-cli",
 ]);
 
 function localRemoteEvidence(baseUrl: string | undefined): Pick<RouteCapabilityEvidence, "localOnly" | "remoteAllowed"> {

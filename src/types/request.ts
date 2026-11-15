@@ -551,6 +551,11 @@ export type AdapterEvent =
        * tool call, so the opt-in empty-completion guard may replay the identical request once.
        */
       replaySafeBeforeOutput?: boolean;
+      /**
+       * Proxy-internal, never serialized: this deterministic failure cannot succeed on retry, so
+       * Codex `/v1/responses` streams emit a terminal-refusal `error.code`.
+       */
+      terminalRefusal?: true;
     };
 
 /**

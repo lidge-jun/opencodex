@@ -1,4 +1,5 @@
 import { createAnthropicAdapter } from "./anthropic";
+import { createAntigravityCliAdapter } from "./antigravity-cli/adapter";
 import { createWorkBuddyAdapter } from "./workbuddy";
 import { createDshAccountAdapter } from "./dsh-account";
 import { createAzureAdapter } from "./azure";
@@ -159,6 +160,10 @@ export const ADAPTER_REGISTRY = {
     // and the CLI owns the credential: the adapter stores and injects none.
     contractParent: "codebuddy",
     create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createClaudeCliAdapter(provider),
+  },
+  "antigravity-cli": {
+    contractParent: "codebuddy",
+    create: (provider: OcxProviderConfig, _context: AdapterFactoryContext) => createAntigravityCliAdapter(provider),
   },
   "dsh-account": {
     contractParent: "anthropic",

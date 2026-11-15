@@ -60,6 +60,8 @@ import { orderDevinMessagesOutput } from "../../claude/devin-output-order";
 import { unboundPoolSpendRefusalMessage } from "../workflow-refusal";
 import { claudeUsagePreflight } from "../../adapters/claude-cli/usage-admission";
 import { responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
+import { findUnsupportedAntigravityInputModality } from "../../adapters/antigravity-cli/protocol";
+import { resolveAntigravityCliModelSlug } from "../../adapters/antigravity-cli/profiles";
 
 // LOCAL PATCH (runturn-websearch): top-level fields route binding or the
 // adapter itself may write during a turn. Iteration-local `turnParsed` objects
@@ -181,6 +183,31 @@ export async function executeResponsesRunTurn(
   };
   // Publish the known subscription pause before headers or a CLI turn, preserving its reset
   // across both Responses and translated Chat instead of presenting a retryable generic 502.
+  if (transportState.runTurnAdapter.name === "antigravity-cli") {
+    if (!resolveAntigravityCliModelSlug(parsed.modelId, route.provider)) {
+      cancelResponseCompletion();
+      releaseSearchProbeLease();
+      const message = `Antigravity CLI provider supports only gemini-4-carbon, gemini-4-argon, and gemini-4-hydrogen (received: ${parsed.modelId}).`;
+      return new Response(JSON.stringify({ error: {
+        type: "invalid_request_error", code: "model_not_found", param: "model", message,
+      } }), { status: 400, headers: { "Content-Type": "application/json" } });
+    }
+    const instructionImage = options.chatInstructionImage || options.responsesInstructionImage || responsesHasInstructionImage(parsed._rawBody)
+      || parsed.context.messages.some(message => message.role === "developer"
+        && Array.isArray(message.content) && message.content.some(part => part.type === "image"));
+    const antigravityModalityError = findUnsupportedAntigravityInputModality(parsed);
+    if (instructionImage || options.responsesFileImage || antigravityModalityError) {
+      cancelResponseCompletion();
+      releaseSearchProbeLease();
+      const message = instructionImage ? "Antigravity CLI does not support images in developer instructions."
+        : options.responsesFileImage ? "Antigravity CLI does not support file-backed image references."
+        : antigravityModalityError!;
+      return new Response(JSON.stringify({ error: {
+        type: "invalid_request_error", code: "unsupported_input_modality", param: null,
+        message,
+      } }), { status: 400, headers: { "Content-Type": "application/json" } });
+    }
+  }
   if (transportState.runTurnAdapter.name === "claude-cli") {
     if (options.chatInstructionImage || options.responsesInstructionImage || responsesHasInstructionImage(parsed._rawBody)
       || parsed.context.messages.some(message => message.role === "developer"
@@ -194,6 +221,8 @@ export async function executeResponsesRunTurn(
       markResponseNonReplayable(refusal);
       return refusal;
     }
+  }
+  if (transportState.runTurnAdapter.name === "claude-cli") {
     let usage: Awaited<ReturnType<typeof claudeUsagePreflight>>;
     try {
       usage = await claudeUsagePreflight(parsed.modelId);
@@ -358,6 +387,7 @@ export async function executeResponsesRunTurn(
           turnParsed,
           {
             headers: requestState.selectedForwardHeaders,
+            ...(logCtx.requestId ? { requestId: logCtx.requestId } : {}),
             abortSignal: producerAbort.signal,
             comboAttempt: options.comboAttempt === true,
             translatorBudget,

@@ -57,3 +57,24 @@ export function terminalRefusalFailure(
   };
   return { error, last_error: error, retryable: false };
 }
+
+/**
+ * `response.failed` fields when an adapter `error` carries the internal `terminalRefusal: true`
+ * verdict (deterministic failures that cannot succeed on retry), or `undefined` otherwise.
+ * Preserves the original error copy (redacted) while replacing `type`/`code` with the Codex
+ * terminal-refusal code (`invalid_prompt`) so `codex-rs` does not replay the same turn.
+ */
+export function terminalRefusalErrorFailure(
+  event: Extract<AdapterEvent, { type: "error" }>,
+): TerminalRefusalFailure | undefined {
+  if (event.terminalRefusal !== true) return undefined;
+  const trimmed = event.message?.trim();
+  const error: OcxErrorPayload = {
+    type: "invalid_request_error",
+    code: TERMINAL_REFUSAL_FAILED_CODE,
+    message: trimmed
+      ? redactSecretString(trimmed)
+      : "Request failed with a non-retryable terminal error.",
+  };
+  return { error, last_error: error, retryable: false };
+}

@@ -46,6 +46,7 @@ const PRESET_TO_PROVIDER_KIND: Readonly<Record<string, TelemetryProviderKind>> =
   anthropic2: "claude-subscription",
   google: "google",
   "google-antigravity": "google",
+  "antigravity-cli": "google",
   vertex: "vertex",
   "google-vertex": "vertex",
   xai: "xai",

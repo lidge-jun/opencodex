@@ -126,6 +126,7 @@ export function cacheDiagnosticsObserving(): boolean {
 }
 
 export interface RequestLogContext extends UpstreamErrorDiagnostics, LinkRequestLogCarrier, RequestBodyLogContext {
+  requestId?: string;
   model: string;
   provider: string;
   client?: UsageClient;

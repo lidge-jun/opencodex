@@ -1742,5 +1742,13 @@
   "link-ocx-child-ws-gate.test.ts": "clients",
   "link-ocx-child-ws-feature.test.ts": "clients",
   "link-relay-wait-observer.test.ts": "clients",
-  "link-ws-autobahn.test.ts": "clients"
+  "link-ws-autobahn.test.ts": "clients",
+  "antigravity-cli-adapter.test.ts": "providers",
+  "antigravity-cli-client-http.test.ts": "providers",
+  "antigravity-cli-claude-bridge.test.ts": "adapters/google",
+  "antigravity-cli-p1-bridge.test.ts": "adapters/google",
+  "antigravity-cli-p2-replay.test.ts": "adapters/google",
+  "antigravity-cli-pretool-guard.test.ts": "adapters/google",
+  "antigravity-cli-session-pool.test.ts": "adapters/google",
+  "antigravity-terminal-errors.test.ts": "adapters/google"
 }

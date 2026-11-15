@@ -57,7 +57,7 @@ import {
 } from "../lib/translator-budget";
 import { adapterFailureFromEvent, emptyChunks, joinChunks, ownedBudgetAbandonedMs, responsesUsage, toolCallArgumentsCouldBeJson, toolCallArgumentsUsable, uuid, webSearchAction, webSearchCellItemId } from "./internal";
 import type { OutputItem, StringChunks } from "./internal";
-import { terminalRefusalFailure } from "./terminal-refusal";
+import { terminalRefusalErrorFailure, terminalRefusalFailure } from "./terminal-refusal";
 import { createMaxOutputCompletion, type MaxOutputCompletionOptions } from "./max-output-completion";
 
 function sseEvent(name: string, data: Record<string, unknown>): string {
@@ -1519,7 +1519,12 @@ export function bridgeToResponsesSSE(
               if (currentWebSearch) closeCurrentWebSearch("failed", []);
               releasePendingWebSources();
               flushHiddenReasoningEnvelope();
-              const failure = adapterFailureFromEvent(event);
+              const terminalRefusal = options?.terminalRefusalAsFailed
+                ? terminalRefusalErrorFailure(event)
+                : undefined;
+              const failure = terminalRefusal
+                ? { error: terminalRefusal.error }
+                : adapterFailureFromEvent(event);
               if (event.usage) options?.onUsage?.(event.usage);
               await awaitThoughtSignatureDurability();
               emit("response.failed", {

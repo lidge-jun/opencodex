@@ -9,6 +9,7 @@
   "domains": {
     "providers": {
       "match": [
+        "^antigravity-cli-(?:adapter|client-http)\\.test\\.ts$",
         "^passive-key-limits\\.test\\.ts$",
         "^passive-key-observation\\.test\\.ts$",
         "^(?:aside(?!-profile)|auto|azure|baseten|chutes|cline(?!-(?:client|writer))|command(?!-code-client)|commandcode|context(?!-compat|-history)|crusoe|cyber|deepinfra|deepseek|digitalocean|dsh-account(?!-adapter)|exa|featherless|forward|hyperbolic|kimi|meta|mimo|minimax|moonshot|muse|new|nous|novita|nscale|nvidia|opencode(?!-kilo)|openrouter|qwen38|sambanova|umans|vercel|zcode|zhipu)-"
@@ -52,7 +53,7 @@
       ],
       "children": {
         "google": [
-          "^(?:antigravity|gcp|google|vertex)-"
+          "^(?:antigravity-(?!cli-(?:adapter|client-http)\\.test\\.ts$)|gcp|google|vertex)-"
         ],
         "anthropic": [
           "^(?:anthropic)-"

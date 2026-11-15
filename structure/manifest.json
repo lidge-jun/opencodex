@@ -644,6 +644,16 @@
       "documents": ["src/adapters/"]
     },
     {
+      "path": "providers/antigravity-cli.md",
+      "tier": 4,
+      "title": "Antigravity CLI Subscription",
+      "scope": "Headless official agy CLI adapter, Gemini 4 Carbon/Argon/Hydrogen tier mapping, workspace settings/hook isolation, and capture-only MCP tool bridge.",
+      "documents": [
+        "src/adapters/antigravity-cli/",
+        "src/providers/registry/entries-extended.ts"
+      ]
+    },
+    {
       "path": "providers-and-adapters.md",
       "tier": 4,
       "title": "Providers And Adapters",

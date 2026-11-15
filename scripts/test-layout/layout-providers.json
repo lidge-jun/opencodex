@@ -18,5 +18,7 @@
   "meta-muse-plan-refusal.test.ts": "providers",
   "model-discovery-skip-invalid-rows.test.ts": "providers",
   "management-provider-model-discovery.test.ts": "server",
-  "claude-cli-fixture-stdout-flush.test.ts": "providers"
+  "claude-cli-fixture-stdout-flush.test.ts": "providers",
+  "antigravity-cli-adapter.test.ts": "providers",
+  "antigravity-cli-client-http.test.ts": "providers"
 }

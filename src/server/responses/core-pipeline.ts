@@ -26,6 +26,8 @@ import { releaseCodexAuthContextProbeLease } from "../../codex/auth-context";
 import { formatErrorResponse } from "../../bridge";
 import { InvalidRetainedCompactionSummary, prepareCompactionRetention } from "./compaction-retention";
 import { responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
+import { findUnsupportedAntigravityInputModality } from "../../adapters/antigravity-cli/protocol";
+import { resolveAntigravityCliModelSlug } from "../../adapters/antigravity-cli/profiles";
 import { markResponseNonReplayable } from "../../lib/upstream-retry";
 
 /** Compose request phases while retaining the original admission-finally ownership. */
@@ -48,21 +50,39 @@ export async function handleResponsesInner(
     if (requestState instanceof Response) return requestState;
     const transportState = await prepareResponsesTransport(requestContext, admissionState, requestState);
     if (transportState instanceof Response) return markProxyError(transportState);
-    if (transportState.runTurnAdapter.name === "claude-cli") {
+    if (transportState.runTurnAdapter.name === "claude-cli" || transportState.runTurnAdapter.name === "antigravity-cli") {
+      if (
+        transportState.runTurnAdapter.name === "antigravity-cli"
+        && !resolveAntigravityCliModelSlug(requestState.parsed.modelId, requestState.route.provider)
+      ) {
+        const message = `Antigravity CLI provider supports only gemini-4-carbon, gemini-4-argon, and gemini-4-hydrogen (received: ${requestState.parsed.modelId}).`;
+        const response = new Response(JSON.stringify({ error: {
+          type: "invalid_request_error", code: "model_not_found", param: "model", message,
+        } }), { status: 400, headers: { "Content-Type": "application/json" } });
+        rememberProxyErrorMessage(logCtx, message, { status: 400, type: "invalid_request_error", code: "model_not_found" });
+        markProxyError(response);
+        return response;
+      }
       const instructionImage = options.chatInstructionImage || options.responsesInstructionImage
         || responsesHasInstructionImage(requestState.parsed._rawBody)
         || requestState.parsed.context.messages.some(message => message.role === "developer"
           && Array.isArray(message.content) && message.content.some(part => part.type === "image"));
-      if (instructionImage || options.responsesFileImage) {
-        const message = instructionImage ? "Claude Code CLI does not support images in developer instructions."
-          : "Claude Code CLI does not support file-backed image references.";
+      const antigravityModalityError = transportState.runTurnAdapter.name === "antigravity-cli"
+        ? findUnsupportedAntigravityInputModality(requestState.parsed)
+        : undefined;
+      if (instructionImage || options.responsesFileImage || antigravityModalityError) {
+        const cliLabel = transportState.runTurnAdapter.name === "antigravity-cli" ? "Antigravity CLI" : "Claude Code CLI";
+        const message = instructionImage ? `${cliLabel} does not support images in developer instructions.`
+          : options.responsesFileImage ? `${cliLabel} does not support file-backed image references.`
+          : antigravityModalityError!;
         const response = new Response(JSON.stringify({ error: {
           type: "invalid_request_error", code: "unsupported_input_modality", param: null,
           message,
         } }), { status: 400, headers: { "Content-Type": "application/json" } });
         rememberProxyErrorMessage(logCtx, message, { status: 400, type: "invalid_request_error", code: "unsupported_input_modality" });
         markProxyError(response);
-        markResponseNonReplayable(response);
+        // Zero send or side effect ran for antigravity-cli; keep replayable so Combos/Policy hop on unsupported_input_modality.
+        if (transportState.runTurnAdapter.name !== "antigravity-cli") markResponseNonReplayable(response);
         return response;
       }
     }

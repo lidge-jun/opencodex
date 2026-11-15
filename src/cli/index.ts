@@ -220,6 +220,14 @@ initializeNodeLauncherContext();
 // The compiled executable is also the capture-only MCP server's launcher.
 // Handle this private entrypoint before CLI preflight or command dispatch.
 if (process.argv[2] === "__keyring-load-check") { console.log(JSON.stringify((await import("../lib/keyring-native")).inspectKeyringBinding())); process.exit(0); }
+if (process.argv[2] === "__antigravity-hook") {
+  try {
+    process.exit(await (await import("../adapters/antigravity-cli/pretool-guard")).runAntigravityPreToolGuard(process.argv[3] ?? ""));
+  } catch {
+    process.stdout.write('{"decision":"deny","reason":"PreToolUse guard internal error."}\n');
+    process.exit(0);
+  }
+}
 if (process.argv[2] === HEALTH_SENTINEL_STANDALONE_ARG) process.exit(await (await import("../service/health-sentinel-main")).runHealthSentinelProcess());
 
 // The compiled executable also launches the isolated MCP servers.
@@ -227,10 +235,10 @@ if (process.argv[2] === HEALTH_SENTINEL_STANDALONE_ARG) process.exit(await (awai
 if (process.argv[2] === "__codebuddy-mcp" || process.argv[2] === "__qoder-mcp") {
   if (process.argv[2] === "__codebuddy-mcp") {
     const { runCodeBuddyMcpServer } = await import("../adapters/codebuddy/mcp-server");
-    await runCodeBuddyMcpServer(process.argv[3] ?? "");
+    await runCodeBuddyMcpServer(process.argv[3] ?? "", process.argv[4], process.argv[5]);
   } else {
     const { runCodingAgentMcpServer } = await import("../adapters/coding-agent/mcp-server");
-    await runCodingAgentMcpServer(process.argv[3] ?? "");
+    await runCodingAgentMcpServer(process.argv[3] ?? "", process.argv[4], process.argv[5]);
   }
   await new Promise<never>(() => {});
 }

@@ -1209,9 +1209,9 @@ describe("provider registry parity", () => {
 
     expect(litellm?.authKind).toBe("key");
     expect(providerConfigSeed(litellm!).keyOptional).toBe(true);
-    // claude-cli joins them as the first CLI-backed member: its row is `key` because the turn
-    // leaves this machine, and keyless because the Claude Code CLI reads the operator's sign-in.
-    expect(optionalKeyProviders).toEqual(["litellm", "mimo-free", "claude-cli"]);
+    // claude-cli and antigravity-cli join them as CLI-backed rows: `key` because turns leave
+    // this machine, and keyless because the official CLI reads the operator's own sign-in.
+    expect(optionalKeyProviders).toEqual(["litellm", "mimo-free", "claude-cli", "antigravity-cli"]);
   });
 
   test("NVIDIA NIM is free-tier priced but still requires an API key", () => {
