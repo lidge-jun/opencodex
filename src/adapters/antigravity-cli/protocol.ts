@@ -903,7 +903,9 @@ export interface PendingAntigravityBridgedToolCall {
 export interface ErroredAntigravityBridgedToolCall {
   issueOrder: number;
   mcpAlias: string;
-  confirmedCapture: boolean;
+  fallbackArgumentsJson: string;
+  alreadyConsumed: boolean;
+  canClaimCapture: boolean;
 }
 
 export interface AntigravityStreamFrameSummary {
@@ -994,6 +996,8 @@ export function createAntigravityStreamState(
     requestId?: string;
     usageBaseline?: RawAntigravityUsage;
     minCaptureSeq?: number;
+    consumedCaptureSeqs?: Set<number>;
+    consumedUnsequencedByAlias?: Map<string, number>;
   } = {},
 ): AntigravityStreamState {
   return {
@@ -1015,8 +1019,8 @@ export function createAntigravityStreamState(
     pendingBridgedToolCalls: [],
     erroredBridgedToolCalls: [],
     flushedToolCalls: [],
-    consumedCaptureSeqs: new Set<number>(),
-    consumedUnsequencedByAlias: new Map<string, number>(),
+    consumedCaptureSeqs: options.consumedCaptureSeqs ?? new Set<number>(),
+    consumedUnsequencedByAlias: options.consumedUnsequencedByAlias ?? new Map<string, number>(),
     minCaptureSeq: options.minCaptureSeq ?? 1,
     seenToolStepIndices: new Set<number>(options.seenToolStepIndices),
     seenStagedImageStepIndices: new Set<number>(),
@@ -1035,17 +1039,34 @@ export function createAntigravityStreamState(
   };
 }
 
-function countUnconsumedCapturesOnDiskForAlias(state: AntigravityStreamState, mcpAlias: string): number {
-  if (!state.turnDir) return 0;
-  let raw = "";
-  try {
-    raw = readFileSync(join(state.turnDir, "captured-calls.jsonl"), "utf8");
-  } catch {
-    return 0;
+export function antigravityStepParamsMatchCapture(stepVal: unknown, captureVal: unknown): boolean {
+  if (typeof stepVal === "string" && typeof captureVal === "string") {
+    return stepVal === captureVal || (stepVal.endsWith("…") && stepVal.length > 1 && captureVal.startsWith(stepVal.slice(0, -1)));
   }
+  if (Array.isArray(stepVal) && Array.isArray(captureVal)) {
+    return stepVal.length === captureVal.length && stepVal.every((item, idx) => antigravityStepParamsMatchCapture(item, captureVal[idx]));
+  }
+  if (stepVal && captureVal && typeof stepVal === "object" && typeof captureVal === "object" && !Array.isArray(stepVal) && !Array.isArray(captureVal)) {
+    const sObj = stepVal as Record<string, unknown>;
+    const cObj = captureVal as Record<string, unknown>;
+    const sKeys = Object.keys(sObj);
+    return sKeys.length === Object.keys(cObj).length
+      && sKeys.every(k => Object.prototype.hasOwnProperty.call(cObj, k) && antigravityStepParamsMatchCapture(sObj[k], cObj[k]));
+  }
+  return Object.is(stepVal, captureVal);
+}
+
+export function stepCallMatchesCapture(fallbackArgumentsJson: string, captureArgs: Record<string, unknown>): boolean {
+  try { return antigravityStepParamsMatchCapture(JSON.parse(fallbackArgumentsJson), captureArgs); } catch { return false; }
+}
+
+function claimErroredCaptureOnDisk(state: AntigravityStreamState, removed: PendingAntigravityBridgedToolCall, earlierMatchingPending: number): boolean {
+  if (!state.turnDir) return false;
+  let raw = "";
+  try { raw = readFileSync(join(state.turnDir, "captured-calls.jsonl"), "utf8"); } catch { return false; }
   const complete = raw.endsWith("\n") ? raw : raw.slice(0, raw.lastIndexOf("\n") + 1);
   const seenUnsequenced = new Map<string, number>();
-  let count = 0;
+  let skippedEarlier = 0;
   for (const line of complete.split("\n")) {
     if (!line.trim()) continue;
     try {
@@ -1061,34 +1082,33 @@ function countUnconsumedCapturesOnDiskForAlias(state: AntigravityStreamState, mc
         seenUnsequenced.set(rec.name, nextSeen);
         if (nextSeen <= (state.consumedUnsequencedByAlias.get(rec.name) ?? 0)) continue;
       }
-      if (rec.name === mcpAlias) count += 1;
-    } catch {
-      return count;
-    }
+      if (rec.name !== removed.mcpAlias) continue;
+      const args = rec.arguments && typeof rec.arguments === "object" && !Array.isArray(rec.arguments) ? (rec.arguments as Record<string, unknown>) : {};
+      if (!stepCallMatchesCapture(removed.fallbackArgumentsJson, args)) continue;
+      if (skippedEarlier < earlierMatchingPending) { skippedEarlier += 1; continue; }
+      if (seq !== undefined) state.consumedCaptureSeqs.add(seq);
+      else state.consumedUnsequencedByAlias.set(removed.mcpAlias, (state.consumedUnsequencedByAlias.get(removed.mcpAlias) ?? 0) + 1);
+      return true;
+    } catch { return false; }
   }
-  return count;
+  return false;
 }
 
-function recordErroredBridgedCall(
-  state: AntigravityStreamState,
-  removed: PendingAntigravityBridgedToolCall,
-  errMsg?: string,
-): void {
-  const isPreMcpDenial = Boolean(
-    errMsg && (ANTIGRAVITY_PRETOOL_DENIAL_RE.test(errMsg) || /PreToolUse payload exceeded the byte ceiling/i.test(errMsg)),
-  );
+function recordErroredBridgedCall(state: AntigravityStreamState, removed: PendingAntigravityBridgedToolCall, errMsg?: string): void {
+  const isPreMcpDenial = Boolean(errMsg && (ANTIGRAVITY_PRETOOL_DENIAL_RE.test(errMsg) || /PreToolUse payload exceeded the byte ceiling/i.test(errMsg)));
   const removedOrder = removed.issueOrder ?? 0;
-  const earlierPending = state.pendingBridgedToolCalls.filter(
-    p => p.mcpAlias === removed.mcpAlias && (p.issueOrder ?? 0) < removedOrder,
-  ).length;
-  const priorConfirmed = state.erroredBridgedToolCalls.filter(
-    e => e.mcpAlias === removed.mcpAlias && e.confirmedCapture,
-  ).length;
-  const onDiskCount = isPreMcpDenial ? 0 : countUnconsumedCapturesOnDiskForAlias(state, removed.mcpAlias);
+  const earlierMatchingPending = isPreMcpDenial
+    ? 0
+    : state.pendingBridgedToolCalls.filter(
+      p => p.mcpAlias === removed.mcpAlias && (p.issueOrder ?? 0) < removedOrder && p.fallbackArgumentsJson === removed.fallbackArgumentsJson,
+    ).length;
+  const alreadyConsumed = !isPreMcpDenial && claimErroredCaptureOnDisk(state, removed, earlierMatchingPending);
   state.erroredBridgedToolCalls.push({
     issueOrder: removedOrder,
     mcpAlias: removed.mcpAlias,
-    confirmedCapture: !isPreMcpDenial && onDiskCount > earlierPending + priorConfirmed,
+    fallbackArgumentsJson: removed.fallbackArgumentsJson,
+    alreadyConsumed,
+    canClaimCapture: !isPreMcpDenial,
   });
 }
 
@@ -1115,26 +1135,7 @@ export function flushAntigravityBridgedToolCalls(
       eligibleIndices.push(i);
     }
     const eligibleSet = new Set<number>(eligibleIndices);
-    const activeErrored: ErroredAntigravityBridgedToolCall[] = [];
-    const erroredAliases = new Set(erroredList.map(e => e.mcpAlias));
-    for (const alias of erroredAliases) {
-      const aliasErrored = erroredList
-        .filter(e => e.mcpAlias === alias)
-        .sort((a, b) => a.issueOrder - b.issueOrder);
-      const eligibleCount = eligibleIndices.filter(i => capturedMcpCalls[i]!.name === alias).length;
-      const pendingCount = pendingList.filter(p => p.mcpAlias === alias).length;
-      const confirmed = aliasErrored.filter(e => e.confirmedCapture);
-      const targetCount = Math.min(
-        aliasErrored.length,
-        Math.max(confirmed.length, Math.max(0, eligibleCount - pendingCount)),
-      );
-      const selected = new Set<ErroredAntigravityBridgedToolCall>(confirmed.slice(0, targetCount));
-      for (const candidate of aliasErrored) {
-        if (selected.size >= targetCount) break;
-        selected.add(candidate);
-      }
-      activeErrored.push(...selected);
-    }
+    const activeErrored = erroredList.filter(e => !e.alreadyConsumed && e.canClaimCapture);
     type OrderedClaim =
       | { kind: "pending"; order: number; item: PendingAntigravityBridgedToolCall }
       | { kind: "errored"; order: number; item: ErroredAntigravityBridgedToolCall };
@@ -1144,28 +1145,33 @@ export function flushAntigravityBridgedToolCalls(
     ].sort((a, b) => a.order - b.order);
 
     const used = new Set<number>();
-    for (const claim of claims) {
-      const alias = claim.item.mcpAlias;
-      const idx = capturedMcpCalls.findIndex(
-        (item, i) => eligibleSet.has(i) && !used.has(i) && item.name === alias,
-      );
-      if (idx < 0) continue;
+    const consumeIdx = (idx: number): typeof capturedMcpCalls[number] => {
       used.add(idx);
       const matched = capturedMcpCalls[idx]!;
-      if (typeof matched.seq === "number") {
-        state.consumedCaptureSeqs.add(matched.seq);
-      } else {
-        state.consumedUnsequencedByAlias.set(
-          matched.name,
-          (state.consumedUnsequencedByAlias.get(matched.name) ?? 0) + 1,
-        );
+      if (typeof matched.seq === "number") state.consumedCaptureSeqs.add(matched.seq);
+      else state.consumedUnsequencedByAlias.set(matched.name, (state.consumedUnsequencedByAlias.get(matched.name) ?? 0) + 1);
+      return matched;
+    };
+    // Pass 1: parameter-matched claims in chronological issueOrder (errored only claims when excess matching captures exist)
+    for (const claim of claims) {
+      const alias = claim.item.mcpAlias;
+      const argsJson = claim.item.fallbackArgumentsJson;
+      const matchingIdxs = eligibleIndices.filter(i => !used.has(i) && capturedMcpCalls[i]!.name === alias && stepCallMatchesCapture(argsJson, capturedMcpCalls[i]!.arguments));
+      if (matchingIdxs.length === 0) continue;
+      if (claim.kind === "errored") {
+        const remainingPending = pendingList.filter(p => !matchedPending.has(p) && p.mcpAlias === alias && p.fallbackArgumentsJson === argsJson).length;
+        if (matchingIdxs.length <= remainingPending) continue;
       }
-      if (claim.kind === "pending") {
-        matchedPending.set(claim.item, {
-          seq: matched.seq,
-          argumentsJson: JSON.stringify(matched.arguments),
-        });
-      }
+      const matched = consumeIdx(matchingIdxs[0]!);
+      if (claim.kind === "pending") matchedPending.set(claim.item, { seq: matched.seq, argumentsJson: JSON.stringify(matched.arguments) });
+    }
+    // Pass 2: alias-only positional fallback for remaining unmatched pending calls (synthetic tests with stub parameters)
+    for (const pending of pendingList) {
+      if (matchedPending.has(pending)) continue;
+      const idx = capturedMcpCalls.findIndex((item, i) => eligibleSet.has(i) && !used.has(i) && item.name === pending.mcpAlias);
+      if (idx < 0) continue;
+      const matched = consumeIdx(idx);
+      matchedPending.set(pending, { seq: matched.seq, argumentsJson: JSON.stringify(matched.arguments) });
     }
   }
   const events: AdapterEvent[] = [];

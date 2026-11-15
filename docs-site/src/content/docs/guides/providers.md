@@ -268,6 +268,8 @@ The Antigravity Accounts tab shows an observed membership tier as a badge beside
 label, using the upstream tier ID (for example `free-tier` or `gemini-pro`). No badge appears
 when the plan is unknown; it does not affect routing or quota.
 
+The `antigravity-cli` preset delegates turns to an installed local `agy` binary instead of calling Cloud Code Assist directly, so OpenCodex stores no Google token or API key. Install `agy` (`curl -fsSL https://antigravity.google/cli/install.sh | sh` on macOS/Linux, or `irm https://antigravity.google/cli/install.ps1 | iex` in Windows PowerShell), run `agy` once to sign in with your Google account, and add the `antigravity-cli` provider with the API-key field left blank.
+
 Gemini 4 Argon (`gemini-4-argon`) is listed on the `google` preset with low, medium (the
 default), and high thinking levels. Google offers it on the paid Gemini API tier only, not the free
 tier. On `google-antigravity`, Argon is listed with the same three levels, which map to the

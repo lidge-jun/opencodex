@@ -166,6 +166,8 @@ export class WarmAntigravitySession {
 
   conversationId?: string;
   readonly seenToolStepIndices = new Set<number>();
+  readonly consumedCaptureSeqs = new Set<number>();
+  readonly consumedUnsequencedByAlias = new Map<string, number>();
   usageBaseline?: RawAntigravityUsage;
   nextCaptureSeq = 1;
   transcriptBlocks: string[] = [];

@@ -964,7 +964,7 @@ describe("antigravity-cli Stage 3 schema pre-sanitization & Stage 4 F13/F19 usag
     const state = createAntigravityStreamState(undefined, { deferToolCallEmission: true });
     mapAntigravityStreamFrame({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } }, state, bridge);
     mapAntigravityStreamFrame(
-      { event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "bad" } } } },
+      { event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "from-capture-1…" } } } },
       state,
       bridge,
     );
@@ -974,7 +974,7 @@ describe("antigravity-cli Stage 3 schema pre-sanitization & Stage 4 F13/F19 usag
       bridge,
     );
     mapAntigravityStreamFrame(
-      { event: "step_update", step_update: { step_index: 2, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "good" } } } },
+      { event: "step_update", step_update: { step_index: 2, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "from-capture-2…" } } } },
       state,
       bridge,
     );
@@ -989,19 +989,19 @@ describe("antigravity-cli Stage 3 schema pre-sanitization & Stage 4 F13/F19 usag
     expect(state.consumedCaptureSeqs.has(1)).toBe(true);
     expect(state.consumedCaptureSeqs.has(2)).toBe(true);
 
-    // 2. Sibling preservation + disk readiness gate: capture 1 confirmed on disk before ERROR prevents premature ready on step 2
+    // 2. Sibling preservation + disk readiness gate: capture 2 confirmed on disk before ERROR prevents premature ready on step 3
     const dir = mkdtempSync(join(tmpdir(), "ocx-err-cap-"));
     try {
       const capFile = join(dir, "captured-calls.jsonl");
       const diskState = createAntigravityStreamState(undefined, { deferToolCallEmission: true, turnDir: dir, minCaptureSeq: 1 });
       mapAntigravityStreamFrame({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } }, diskState, bridge);
       mapAntigravityStreamFrame(
-        { event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "sib-1" } } } },
+        { event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "sib-1…" } } } },
         diskState,
         bridge,
       );
       mapAntigravityStreamFrame(
-        { event: "step_update", step_update: { step_index: 2, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "err-2" } } } },
+        { event: "step_update", step_update: { step_index: 2, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "err-2…" } } } },
         diskState,
         bridge,
       );
@@ -1015,12 +1015,12 @@ describe("antigravity-cli Stage 3 schema pre-sanitization & Stage 4 F13/F19 usag
         bridge,
       );
       mapAntigravityStreamFrame(
-        { event: "step_update", step_update: { step_index: 3, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "sib-3" } } } },
+        { event: "step_update", step_update: { step_index: 3, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "sib-3…" } } } },
         diskState,
         bridge,
       );
 
-      // Only 2 captures on disk (1 valid + 1 confirmed errored), while 2 active steps (1 & 3) are pending -> not ready yet!
+      // Only 2 captures on disk (1 valid + 1 consumed errored), while 2 active steps (1 & 3) are pending -> not ready yet!
       const notReady = readCapturedMcpCalls(
         capFile,
         diskState.pendingBridgedToolCalls,
@@ -1060,12 +1060,12 @@ describe("antigravity-cli Stage 3 schema pre-sanitization & Stage 4 F13/F19 usag
       const parallelState = createAntigravityStreamState(undefined, { deferToolCallEmission: true, turnDir: dir, minCaptureSeq: 1 });
       mapAntigravityStreamFrame({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } }, parallelState, bridge);
       mapAntigravityStreamFrame(
-        { event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "p1" } } } },
+        { event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "parallel-err-1.md" } } } },
         parallelState,
         bridge,
       );
       mapAntigravityStreamFrame(
-        { event: "step_update", step_update: { step_index: 2, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "p2" } } } },
+        { event: "step_update", step_update: { step_index: 2, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "parallel-ok-2.md" } } } },
         parallelState,
         bridge,
       );
@@ -1074,7 +1074,7 @@ describe("antigravity-cli Stage 3 schema pre-sanitization & Stage 4 F13/F19 usag
         parallelState,
         bridge,
       );
-      expect(parallelState.erroredBridgedToolCalls[0]?.confirmedCapture).toBe(true);
+      expect(parallelState.erroredBridgedToolCalls[0]?.alreadyConsumed).toBe(true);
       const parallelBeforeSecond = readCapturedMcpCalls(
         capFile,
         parallelState.pendingBridgedToolCalls,
@@ -1104,17 +1104,17 @@ describe("antigravity-cli Stage 3 schema pre-sanitization & Stage 4 F13/F19 usag
       ]);
       expect(parallelState.flushedToolCalls.map(c => c.seq)).toEqual([2]);
 
-      // 4. PreToolUse denial forces confirmedCapture=false even if a sibling capture is on disk, and minCaptureSeq filters stale seqs
+      // 4. PreToolUse denial forces alreadyConsumed=false even if a sibling capture is on disk, and minCaptureSeq filters stale seqs
       writeFileSync(capFile, `${JSON.stringify({ seq: 2, name: "read_file", arguments: { path: "allowed-sibling.md" } })}\n`);
       const preToolState = createAntigravityStreamState(undefined, { deferToolCallEmission: true, turnDir: dir, minCaptureSeq: 2 });
       mapAntigravityStreamFrame({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } }, preToolState, bridge);
       mapAntigravityStreamFrame(
-        { event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "denied" } } } },
+        { event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "allowed-sibling.md" } } } },
         preToolState,
         bridge,
       );
       mapAntigravityStreamFrame(
-        { event: "step_update", step_update: { step_index: 2, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "allowed" } } } },
+        { event: "step_update", step_update: { step_index: 2, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "allowed-sibling.md" } } } },
         preToolState,
         bridge,
       );
@@ -1123,7 +1123,7 @@ describe("antigravity-cli Stage 3 schema pre-sanitization & Stage 4 F13/F19 usag
         preToolState,
         bridge,
       );
-      expect(preToolState.erroredBridgedToolCalls[0]?.confirmedCapture).toBe(false);
+      expect(preToolState.erroredBridgedToolCalls[0]?.alreadyConsumed).toBe(false);
       const minSeqFiltered = flushAntigravityBridgedToolCalls(preToolState, [
         { seq: 1, name: "read_file", arguments: { path: "stale-turn1.md" } },
         { seq: 2, name: "read_file", arguments: { path: "allowed-sibling.md" } },
@@ -1132,12 +1132,99 @@ describe("antigravity-cli Stage 3 schema pre-sanitization & Stage 4 F13/F19 usag
         { type: "tool_call_delta", arguments: JSON.stringify({ path: "allowed-sibling.md" }) },
       ]);
       expect(preToolState.flushedToolCalls.map(c => c.seq)).toEqual([2]);
+
+      // 5. Non-denial ERROR with no capture of its own must NOT steal a later same-alias sibling's capture already on disk
+      writeFileSync(capFile, `${JSON.stringify({ seq: 1, name: "read_file", arguments: { path: "sibling-on-disk.md" } })}\n`);
+      const noCaptureErrState = createAntigravityStreamState(undefined, { deferToolCallEmission: true, turnDir: dir, minCaptureSeq: 1 });
+      mapAntigravityStreamFrame({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } }, noCaptureErrState, bridge);
+      mapAntigravityStreamFrame(
+        { event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "missing-no-capture.md" } } } },
+        noCaptureErrState,
+        bridge,
+      );
+      mapAntigravityStreamFrame(
+        { event: "step_update", step_update: { step_index: 1, state: "ERROR", step_type: "tool", tool_name: toolName, error: "MCP transport disconnected before capture" } },
+        noCaptureErrState,
+        bridge,
+      );
+      expect(noCaptureErrState.erroredBridgedToolCalls[0]?.alreadyConsumed).toBe(false);
+      expect(noCaptureErrState.consumedCaptureSeqs.size).toBe(0);
+      mapAntigravityStreamFrame(
+        { event: "step_update", step_update: { step_index: 2, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "sibling-on-disk…" } } } },
+        noCaptureErrState,
+        bridge,
+      );
+      const siblingRead = readCapturedMcpCalls(
+        capFile,
+        noCaptureErrState.pendingBridgedToolCalls,
+        1,
+        noCaptureErrState.consumedCaptureSeqs,
+        noCaptureErrState.consumedUnsequencedByAlias,
+        noCaptureErrState.erroredBridgedToolCalls,
+      );
+      expect(siblingRead.ready).toBe(true);
+      const siblingFlushed = flushAntigravityBridgedToolCalls(noCaptureErrState, siblingRead.calls);
+      expect(siblingFlushed.filter(e => e.type === "tool_call_delta")).toEqual([
+        { type: "tool_call_delta", arguments: JSON.stringify({ path: "sibling-on-disk.md" }) },
+      ]);
+      expect(noCaptureErrState.flushedToolCalls.map(c => c.seq)).toEqual([1]);
+
+      // 6. Late-flushed errored capture: ERROR 1 arrives BEFORE seq:1 flushes to disk while Step 2 (distinct args) awaits seq:2
+      writeFileSync(capFile, "");
+      const lateFlushErrState = createAntigravityStreamState(undefined, { deferToolCallEmission: true, turnDir: dir, minCaptureSeq: 1 });
+      mapAntigravityStreamFrame({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } }, lateFlushErrState, bridge);
+      mapAntigravityStreamFrame(
+        { event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "late-err-1.md" } } } },
+        lateFlushErrState,
+        bridge,
+      );
+      mapAntigravityStreamFrame(
+        { event: "step_update", step_update: { step_index: 1, state: "ERROR", step_type: "tool", tool_name: toolName, error: "mcp failed before disk flush settled" } },
+        lateFlushErrState,
+        bridge,
+      );
+      expect(lateFlushErrState.erroredBridgedToolCalls[0]?.alreadyConsumed).toBe(false);
+      mapAntigravityStreamFrame(
+        { event: "step_update", step_update: { step_index: 2, state: "ACTIVE", step_type: "tool", tool_name: toolName, tool_info: { name: toolName, parameters: { path: "late-ok-2.md" } } } },
+        lateFlushErrState,
+        bridge,
+      );
+      writeFileSync(capFile, `${JSON.stringify({ seq: 1, name: "read_file", arguments: { path: "late-err-1.md" } })}\n`);
+      const lateBeforeSeq2 = readCapturedMcpCalls(
+        capFile,
+        lateFlushErrState.pendingBridgedToolCalls,
+        1,
+        lateFlushErrState.consumedCaptureSeqs,
+        lateFlushErrState.consumedUnsequencedByAlias,
+        lateFlushErrState.erroredBridgedToolCalls,
+      );
+      expect(lateBeforeSeq2.ready).toBe(false);
+      writeFileSync(
+        capFile,
+        `${JSON.stringify({ seq: 1, name: "read_file", arguments: { path: "late-err-1.md" } })}\n${JSON.stringify({ seq: 2, name: "read_file", arguments: { path: "late-ok-2.md" } })}\n`,
+      );
+      const lateAfterSeq2 = readCapturedMcpCalls(
+        capFile,
+        lateFlushErrState.pendingBridgedToolCalls,
+        1,
+        lateFlushErrState.consumedCaptureSeqs,
+        lateFlushErrState.consumedUnsequencedByAlias,
+        lateFlushErrState.erroredBridgedToolCalls,
+      );
+      expect(lateAfterSeq2.ready).toBe(true);
+      const lateFlushed = flushAntigravityBridgedToolCalls(lateFlushErrState, lateAfterSeq2.calls);
+      expect(lateFlushed.filter(e => e.type === "tool_call_delta")).toEqual([
+        { type: "tool_call_delta", arguments: JSON.stringify({ path: "late-ok-2.md" }) },
+      ]);
+      expect(lateFlushErrState.flushedToolCalls.map(c => c.seq)).toEqual([2]);
+      expect(lateFlushErrState.consumedCaptureSeqs.has(1)).toBe(true);
+      expect(lateFlushErrState.consumedCaptureSeqs.has(2)).toBe(true);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("advances warm-session nextCaptureSeq past errored captures in both awaiting_tool_results and idle_after_stop", async () => {
+  test("excludes resolved errored captures across warm turns while preserving unconsumed sibling captures when coalesce parks early", async () => {
     const toolDef = {
       name: "read_file",
       description: "Read file",
@@ -1210,7 +1297,7 @@ describe("antigravity-cli Stage 3 schema pre-sanitization & Stage 4 F13/F19 usag
         platform: "linux",
         enableSessionPool: true,
         sessionPool: poolTool,
-        coalesceMs: 5,
+        toolBatchCoalesceMs: 5,
         spawn: (_cmd, _args, opts) => {
           const cwd = String(opts.cwd);
           childRef = makeWarmChild(cwd, (_line, emit) => {
@@ -1219,8 +1306,8 @@ describe("antigravity-cli Stage 3 schema pre-sanitization & Stage 4 F13/F19 usag
               `${JSON.stringify({ seq: 1, name: "read_file", arguments: { path: "ok-t1.md" } })}\n${JSON.stringify({ seq: 2, name: "read_file", arguments: { path: "stale-err-t1.md" } })}\n`,
             );
             emit({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } });
-            emit({ event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: bridgedName, tool_info: { name: bridgedName, parameters: { path: "x" } } } });
-            emit({ event: "step_update", step_update: { step_index: 2, state: "ACTIVE", step_type: "tool", tool_name: bridgedName, tool_info: { name: bridgedName, parameters: { path: "y" } } } });
+            emit({ event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: bridgedName, tool_info: { name: bridgedName, parameters: { path: "ok-t1.md" } } } });
+            emit({ event: "step_update", step_update: { step_index: 2, state: "ACTIVE", step_type: "tool", tool_name: bridgedName, tool_info: { name: bridgedName, parameters: { path: "stale-err-t1.md" } } } });
             emit({ event: "step_update", step_update: { step_index: 2, state: "ERROR", step_type: "tool", tool_name: bridgedName, error: "failed after capture" } });
           });
           return childRef.proc as unknown as ChildProcess;
@@ -1251,7 +1338,7 @@ describe("antigravity-cli Stage 3 schema pre-sanitization & Stage 4 F13/F19 usag
           JSON.stringify({ seq: 3, name: "read_file", arguments: { path: "fresh-t2.md" } }),
         ].join("\n") + "\n",
       );
-      childRef!.emit({ event: "step_update", step_update: { step_index: 3, state: "ACTIVE", step_type: "tool", tool_name: bridgedName, tool_info: { name: bridgedName, parameters: { path: "z" } } } });
+      childRef!.emit({ event: "step_update", step_update: { step_index: 3, state: "ACTIVE", step_type: "tool", tool_name: bridgedName, tool_info: { name: bridgedName, parameters: { path: "fresh-t2.md" } } } });
       const t2 = await t2Promise;
       expect(t2.filter(e => e.type === "tool_call_delta")).toEqual([{ type: "tool_call_delta", arguments: JSON.stringify({ path: "fresh-t2.md" }) }]);
     } finally {
@@ -1267,7 +1354,7 @@ describe("antigravity-cli Stage 3 schema pre-sanitization & Stage 4 F13/F19 usag
         platform: "linux",
         enableSessionPool: true,
         sessionPool: poolIdle,
-        coalesceMs: 5,
+        toolBatchCoalesceMs: 5,
         spawn: (_cmd, _args, opts) => {
           const cwd = String(opts.cwd);
           return makeWarmChild(cwd, (_line, emit) => {
@@ -1275,7 +1362,7 @@ describe("antigravity-cli Stage 3 schema pre-sanitization & Stage 4 F13/F19 usag
             if (lineCount === 1) {
               writeFileSync(join(cwd, "captured-calls.jsonl"), `${JSON.stringify({ seq: 1, name: "read_file", arguments: { path: "stale-idle-t1.md" } })}\n`);
               emit({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } });
-              emit({ event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: bridgedName, tool_info: { name: bridgedName, parameters: { path: "bad" } } } });
+              emit({ event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: bridgedName, tool_info: { name: bridgedName, parameters: { path: "stale-idle-t1.md" } } } });
               emit({ event: "step_update", step_update: { step_index: 1, state: "ERROR", step_type: "tool", tool_name: bridgedName, error: "failed after capture" } });
               emit({ event: "step_update", step_update: { step_index: 2, state: "DONE", step_type: "agent_response", text_delta: "fallback" } });
               emit({ event: "result", result: { status: "SUCCESS", response: "fallback" } });
@@ -1285,7 +1372,7 @@ describe("antigravity-cli Stage 3 schema pre-sanitization & Stage 4 F13/F19 usag
               join(cwd, "captured-calls.jsonl"),
               `${JSON.stringify({ seq: 1, name: "read_file", arguments: { path: "stale-idle-t1.md" } })}\n${JSON.stringify({ seq: 2, name: "read_file", arguments: { path: "fresh-idle-t2.md" } })}\n`,
             );
-            emit({ event: "step_update", step_update: { step_index: 3, state: "ACTIVE", step_type: "tool", tool_name: bridgedName, tool_info: { name: bridgedName, parameters: { path: "next" } } } });
+            emit({ event: "step_update", step_update: { step_index: 3, state: "ACTIVE", step_type: "tool", tool_name: bridgedName, tool_info: { name: bridgedName, parameters: { path: "fresh-idle-t2.md" } } } });
           }).proc as unknown as ChildProcess;
         },
       });
@@ -1309,6 +1396,56 @@ describe("antigravity-cli Stage 3 schema pre-sanitization & Stage 4 F13/F19 usag
       ]);
     } finally {
       await poolIdle.disposeAll();
+    }
+
+    // Case C: second call's capture (seq:2) lands on disk BEFORE its ACTIVE frame is consumed while coalesce parks Call 1 (seq:1)
+    const poolLateActive = new AntigravitySessionPool();
+    try {
+      let childRef: ReturnType<typeof makeWarmChild> | undefined;
+      const adapter = createAntigravityCliAdapter(providerCfg, {
+        which: () => "/usr/bin/agy",
+        platform: "linux",
+        enableSessionPool: true,
+        sessionPool: poolLateActive,
+        toolBatchCoalesceMs: 5,
+        bridgedCaptureTimeoutMs: 50,
+        spawn: (_cmd, _args, opts) => {
+          const cwd = String(opts.cwd);
+          childRef = makeWarmChild(cwd, (_line, emit) => {
+            writeFileSync(
+              join(cwd, "captured-calls.jsonl"),
+              `${JSON.stringify({ seq: 1, name: "read_file", arguments: { path: "call1.md" } })}\n${JSON.stringify({ seq: 2, name: "read_file", arguments: { path: "call2-early-disk.md" } })}\n`,
+            );
+            emit({ event: "init", init: { tools: ["call_mcp_tool"], permission_mode: "request-review" } });
+            emit({ event: "step_update", step_update: { step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: bridgedName, tool_info: { name: bridgedName, parameters: { path: "call1.md" } } } });
+          });
+          return childRef.proc as unknown as ChildProcess;
+        },
+      });
+
+      const lateT1 = await execTurn(adapter, makeParsedRequest({ context: { messages: [{ role: "user", content: "both", timestamp: 0 }], tools: [toolDef] } }));
+      const parked1 = lateT1.find(e => e.type === "tool_call_start") as Extract<AdapterEvent, { type: "tool_call_start" }>;
+      expect(lateT1.filter(e => e.type === "tool_call_delta")).toEqual([{ type: "tool_call_delta", arguments: JSON.stringify({ path: "call1.md" }) }]);
+
+      const cwd = childRef!.proc.cwd;
+      const lateT2Promise = execTurn(adapter, makeParsedRequest({
+        context: {
+          messages: [
+            { role: "user", content: "both", timestamp: 0 },
+            { role: "assistant", content: [{ type: "toolCall", id: parked1.id, name: "read_file", arguments: { path: "call1.md" } }], timestamp: 1 },
+            { role: "toolResult", toolCallId: parked1.id, toolName: "read_file", content: [{ type: "text", text: "c1-ok" }], isError: false, timestamp: 2 },
+          ],
+          tools: [toolDef],
+        },
+      }));
+      await waitFor(() => existsSync(join(cwd, "tool-results.jsonl")) && readFileSync(join(cwd, "tool-results.jsonl"), "utf8").includes('"seq":1'));
+      childRef!.emit({ event: "step_update", step_update: { step_index: 2, state: "ACTIVE", step_type: "tool", tool_name: bridgedName, tool_info: { name: bridgedName, parameters: { path: "call2-early-disk.md" } } } });
+      const lateT2 = await lateT2Promise;
+      expect(lateT2.filter(e => e.type === "tool_call_delta")).toEqual([
+        { type: "tool_call_delta", arguments: JSON.stringify({ path: "call2-early-disk.md" }) },
+      ]);
+    } finally {
+      await poolLateActive.disposeAll();
     }
   });
 });

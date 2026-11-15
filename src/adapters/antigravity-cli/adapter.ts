@@ -56,6 +56,7 @@ import {
   redactAntigravityLogText,
   releaseAntigravityToolBudgets,
   stableAntigravityMessageText,
+  stepCallMatchesCapture,
   type AntigravityCliToolBridge,
   type AntigravityStreamState,
   type RawAntigravityUsage,
@@ -366,11 +367,11 @@ interface CapturedMcpCallRecord {
 
 export function readCapturedMcpCalls(
   capturePath: string,
-  pending: ReadonlyArray<{ mcpAlias: string }>,
+  pending: ReadonlyArray<{ issueOrder?: number; mcpAlias: string; fallbackArgumentsJson?: string }>,
   minSeq = 1,
   consumedSeqs?: ReadonlySet<number>,
   consumedUnsequencedByAlias?: ReadonlyMap<string, number>,
-  errored?: ReadonlyArray<{ mcpAlias: string; confirmedCapture: boolean }>,
+  errored?: ReadonlyArray<{ issueOrder: number; mcpAlias: string; fallbackArgumentsJson: string; alreadyConsumed: boolean; canClaimCapture: boolean }>,
 ): { ready: boolean; calls: CapturedMcpCallRecord[] } {
   let raw = "";
   try {
@@ -413,14 +414,30 @@ export function readCapturedMcpCalls(
     }
   }
   const used = new Set<number>();
-  if (errored) {
-    for (const item of errored) {
-      if (!item.confirmedCapture) continue;
-      const idx = calls.findIndex((c, i) => availableIndices.has(i) && !used.has(i) && c.name === item.mcpAlias);
-      if (idx >= 0) used.add(idx);
+  const matchedPending = new Set<number>();
+  const activeErrored = (errored ?? []).filter(e => !e.alreadyConsumed && e.canClaimCapture);
+  const ordered = [
+    ...pending.map((item, idx) => ({ kind: "pending" as const, pendingIdx: idx, order: item.issueOrder ?? (idx + 1), item })),
+    ...activeErrored.map(item => ({ kind: "errored" as const, pendingIdx: -1, order: item.issueOrder, item })),
+  ].sort((a, b) => a.order - b.order);
+  for (const entry of ordered) {
+    const argsJson = entry.item.fallbackArgumentsJson;
+    if (!argsJson) continue;
+    const matching = calls.flatMap((c, i) => (
+      availableIndices.has(i) && !used.has(i) && c.name === entry.item.mcpAlias && stepCallMatchesCapture(argsJson, c.arguments) ? [i] : []
+    ));
+    if (matching.length === 0) continue;
+    if (entry.kind === "errored") {
+      const rem = pending.filter((p, idx) => !matchedPending.has(idx) && p.mcpAlias === entry.item.mcpAlias && p.fallbackArgumentsJson === argsJson).length;
+      if (matching.length <= rem) continue;
+    } else {
+      matchedPending.add(entry.pendingIdx);
     }
+    used.add(matching[0]!);
   }
-  for (const item of pending) {
+  for (let pIdx = 0; pIdx < pending.length; pIdx++) {
+    if (matchedPending.has(pIdx)) continue;
+    const item = pending[pIdx]!;
     const idx = calls.findIndex((c, i) => availableIndices.has(i) && !used.has(i) && c.name === item.mcpAlias);
     if (idx < 0) return { ready: false, calls };
     used.add(idx);
@@ -443,17 +460,7 @@ export function buildAntigravityHooksConfig(
       : '"$OCX_AGY_EXEC" "$OCX_AGY_GUARD" "$OCX_AGY_ALLOWED"');
   return {
     "ocx-pretool-guard": {
-      PreToolUse: [
-        {
-          matcher: "*",
-          hooks: [
-            {
-              type: "command",
-              command,
-            },
-          ],
-        },
-      ],
+      PreToolUse: [{ matcher: "*", hooks: [{ type: "command", command }] }],
     },
   };
 }
@@ -1640,6 +1647,8 @@ export function createAntigravityCliAdapter(
             requestId,
             usageBaseline: session.usageBaseline,
             minCaptureSeq: session.nextCaptureSeq,
+            consumedCaptureSeqs: session.consumedCaptureSeqs,
+            consumedUnsequencedByAlias: session.consumedUnsequencedByAlias,
           });
           activeState = state;
 
@@ -1722,37 +1731,21 @@ export function createAntigravityCliAdapter(
 
           if (state.conversationId) session.conversationId ??= state.conversationId;
 
+          const canParkBase = !outcome?.failClosed && !deferredTransientError && !streamErr
+            && !aborted && !incoming.abortSignal?.aborted && !session.isProcessSettled();
           const canParkToolUse = Boolean(
-            outcome?.parkedOnToolUse
-            && !outcome.failClosed
-            && !deferredTransientError
-            && !streamErr
-            && !aborted
-            && !incoming.abortSignal?.aborted
-            && !session.isProcessSettled()
-            && state.flushedToolCalls.length > 0
+            outcome?.parkedOnToolUse && canParkBase && state.flushedToolCalls.length > 0
             && state.flushedToolCalls.every(c => typeof c.seq === "number" && c.seq > 0),
           );
-          const canParkIdleStop = Boolean(
-            state.sawTerminalResult
-            && !outcome?.failClosed
-            && !deferredTransientError
-            && !streamErr
-            && !aborted
-            && !incoming.abortSignal?.aborted
-            && !session.isProcessSettled(),
-          );
+          const canParkIdleStop = Boolean(state.sawTerminalResult && canParkBase);
 
+          if (canParkIdleStop && !canParkToolUse) {
+            for (const c of readCapturedMcpCalls(session.capturePath, [], session.nextCaptureSeq).calls) {
+              if (typeof c.seq === "number") session.consumedCaptureSeqs.add(c.seq);
+            }
+          }
           if (canParkToolUse || canParkIdleStop) {
-            const diskSeqs = readCapturedMcpCalls(session.capturePath, [], session.nextCaptureSeq).calls
-              .flatMap(c => (typeof c.seq === "number" ? [c.seq] : []));
-            const maxSeq = Math.max(
-              0,
-              ...state.flushedToolCalls.flatMap(c => (typeof c.seq === "number" ? [c.seq] : [])),
-              ...state.consumedCaptureSeqs,
-              ...diskSeqs,
-            );
-            if (maxSeq > 0) session.nextCaptureSeq = Math.max(session.nextCaptureSeq, maxSeq + 1);
+            while (session.consumedCaptureSeqs.has(session.nextCaptureSeq)) session.nextCaptureSeq += 1;
           }
 
           if (canParkToolUse) {
