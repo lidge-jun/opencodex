@@ -239,6 +239,15 @@ export function useAddProviderOAuth({
       if (aliveRef.current && isCurrent()) {
         setOauthBusy(false);
         setOauthUrl("", providerId);
+      } else if (aliveRef.current && loginGenerationRef.current.get(providerId) === generation) {
+        // Still this surface's login, but its target moved under the same key (a relay
+        // re-pair): reset the form instead of leaving a paste box with no flow behind it.
+        // A key change already reset the form, and a newer login owns it otherwise.
+        releaseSetters();
+        setOauthBusy(false);
+        setOauthUrl("", providerId);
+        setOauthMsgTone("warn");
+        setOauthMsg(t("prov.targetChanged"));
       }
     }
   }, [aliveRef, apiBase, bumpLoginGeneration, cancelServerLogin, onAdded, renderCapture, t, targetKey]);

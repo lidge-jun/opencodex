@@ -33,12 +33,13 @@ let cancelled: string[] = [];
 let codePosts: Array<{ provider?: string; input?: string }> = [];
 let api: ReturnType<typeof useAddProviderOAuth>;
 const ui = { manualCodeMsg: "", manualCodeOk: true };
+const surface = { busy: false, url: "", msg: "" };
 
 const setters = {
-  setOauthBusy: () => {},
-  setOauthMsg: () => {},
+  setOauthBusy: (busy: boolean) => { surface.busy = busy; },
+  setOauthMsg: (msg: string) => { surface.msg = msg; },
   setOauthMsgTone: () => {},
-  setOauthUrl: () => {},
+  setOauthUrl: (url: string) => { surface.url = url; },
   setManualCode: () => {},
   setManualCodeMsg: (msg: string) => { ui.manualCodeMsg = msg; },
   setManualCodeOk: (ok: boolean) => { ui.manualCodeOk = ok; },
@@ -80,6 +81,7 @@ beforeEach(() => {
   codePosts = [];
   ui.manualCodeMsg = "";
   ui.manualCodeOk = true;
+  Object.assign(surface, { busy: false, url: "", msg: "" });
   // The poll interval elapses at once, so a spent budget is reached without waiting minutes.
   const realSetTimeout = globalThis.setTimeout;
   timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
@@ -156,6 +158,23 @@ test("a browser login whose poll budget ran out reports an ended login and posts
   expect(ui).toEqual({ manualCodeMsg: en["prov.loginExpired"], manualCodeOk: false });
   expect(codePosts).toEqual([]);
 });
+
+test("a login whose target moved under the same key resets the surface instead of leaving a dead paste box", async () => {
+  holdStatus = true;
+  await render("hub-a");
+  void api.loginOAuth("devin", setters);
+  await settle();
+  expect(surface).toMatchObject({ busy: true, url: AUTH_URL });
+  // A relay re-pair moves the target while the logical key stays "hub-a".
+  configureApiTargets(standaloneApiTargets("/relay-b"));
+  holdStatus = false;
+  await act(async () => { for (const release of heldStatus.splice(0)) release(); await new Promise((r) => setTimeout(r, 20)); });
+  expect(surface).toEqual({ busy: false, url: "", msg: en["prov.targetChanged"] });
+  await submit();
+  expect(ui).toEqual({ manualCodeMsg: en["prov.targetChanged"], manualCodeOk: false });
+  expect(codePosts).toEqual([]);
+});
+
 
 test("a code typed for one Accounts login is cleared before another login or target can take it", async () => {
   const owner = captureApiTarget("shared", "");
