@@ -68,7 +68,7 @@ generation admission, request-log ownership and fixed-text Google errors describ
 also claims `/v1beta|v1/interactions/{id}` (GET, DELETE) and `…/{id}/cancel` (POST) so those paths get
 Google-shaped answers and the same listener rules: an id is one segment of `[A-Za-z0-9_-]`, at most 128
 characters, and `geminiRouteAllows` gives the by-id route two methods for the 405 `Allow` header and the
-loopback allowlist. This proxy stores no interaction yet, so get and delete answer 404 and cancel 501.
+loopback allowlist.
 
 Mapping: `input` as a string, content item(s) (text, base64 `image`) or steps (`user_input`,
 `model_output`, `thought`, `function_call`, `function_result`), plus CPA-compatible `{role, content}`
@@ -78,8 +78,7 @@ turns and `{text}`/`{parts}` system instructions; `system_instruction`; `functio
 forcing it, as the generateContent codec does); a text `response_format`. A thought step's signature
 rides to the next function call as `extra_content.google.thought_signature`. A `function_result` whose
 call is not in the input is reported to the handler, which refuses it until stored history exists.
-Refused with 400 rather than silently changed: `agent`, `background: true`, `previous_interaction_id`
-(no stored interactions yet), `webhook_config`, `environment`, `agent_config`, hosted tools, non-text
+Refused with 400 rather than silently changed: `agent`, `background: true`, `webhook_config`, `environment`, `agent_config`, hosted tools, non-text
 content or output. `service_tier` and `safety_settings` are ignored, as unknown fields are.
 
 Answers carry `object: "interaction"`, `ocx-int-` ids with 128 random bits, and `status`
@@ -92,13 +91,40 @@ text (`text`) and whole function calls (`arguments_delta`, with a preceding `tho
 one exists), then `interaction.completed` after settlement, or `error` with a lower-case code.
 `interaction.status_update` is not emitted: nothing runs in the background.
 
+## Interactions state
+
+`src/server/gemini-interactions-store.ts` keeps what `previous_interaction_id` and `GET` need, in process
+memory only: nothing reaches disk or the request log, and a restart forgets every interaction (a chain
+then answers 404 and the client resends history). The owner is the salted principal of the data-plane
+key the caller presented, resolved with `resolveContextPrincipal` so a key presented on a loopback bind
+still names its own owner, or one shared `loopback` owner for a keyless loopback caller; rotating a key
+mints a new principal, so its earlier chains answer 404. A lookup, delete or cancel by any other owner is
+indistinguishable from a missing id. Bounds: 24 hours from the last write (expiry is lazy, on the next
+write or lookup), 1,000 entries and 64 MiB in total, 200 entries and 16 MiB per owner (an owner evicts its
+own oldest first), and per entry the smaller of 8 MiB and the inbound body limit, since a larger history
+could never be chained. The store is `gemini_interactions` on the app-owned memory roster (category
+`continuation`, passively evictable).
+
+A chained turn sends `system` from this request, then the stored history (prior input and answers,
+including signed tool calls), then the new input; `tools`, `system_instruction` and `generation_config`
+are interaction-scoped and never inherited. A `function_result` whose call is not in the input must answer
+a pending call of the stored turn's last answer and lead the input, otherwise 400; a leading resend of
+those pending calls is dropped so nothing is duplicated upstream. A turn is stored only after it settles:
+buffered after the inner path settled, streamed inside the terminal `frames()` that the bridge calls only
+on success, so failed, cancelled and unsettled turns are not kept, and a storing error never fails the
+answer. `store: false` turns are served and not kept. Buffered answers report
+`x-opencodex-interaction-stored: true|false` (exposed to browsers) whenever a store was requested. `GET`
+returns the stored resource with its input steps and `previous_interaction_id`; `DELETE` answers `{}`;
+cancel answers 400 for an owned interaction (nothing runs in the background) and 404 otherwise.
+
 ## Coverage
 
 `tests/server/server-gemini-inbound.test.ts` (list and lookup, SSE and JSON-array streams, buffered
 answers on `/v1beta` and `/v1`, `x-goog-api-key` and `?key=` admission, tool calls, errors, 501 and
 405, `/v1/models` unchanged), `tests/server/server-gemini-interactions-inbound.test.ts` and
 `tests/responses/responses-gemini-interactions-codec.test.ts` (Interactions create, stream vocabulary,
-refusals, by-id answers), `tests/server/gemini-native-paths.test.ts` (classifier, methods, near misses),
+refusals, by-id answers, chaining and ownership), `tests/server/gemini-interactions-store.test.ts` (owner
+isolation, TTL, caps, eviction, roster), `tests/server/gemini-native-paths.test.ts` (classifier, methods, near misses),
 `tests/responses/responses-gemini-codec.test.ts` (request and
 response mapping, streaming translation), plus the Ollama tests that pin the shared bridge.
 

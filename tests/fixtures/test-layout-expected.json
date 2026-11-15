@@ -1001,6 +1001,7 @@
   "server-gemini-inbound.test.ts": "server",
   "server-gemini-interactions-inbound.test.ts": "server",
   "gemini-native-paths.test.ts": "server",
+  "gemini-interactions-store.test.ts": "server",
   "responses-gemini-interactions-codec.test.ts": "responses",
   "protocol-trace-suppression.test.ts": "server", "responses-ollama-codec.test.ts": "responses", "responses-gemini-codec.test.ts": "responses",
   "config-concurrent-inbound-body.test.ts": "config",

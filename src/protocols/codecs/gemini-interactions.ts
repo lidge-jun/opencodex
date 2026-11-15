@@ -57,6 +57,8 @@ export interface InteractionsRequestPlan {
   systemMessages: Obj[];
   /** The conversation messages this request adds (no system role). */
   inputMessages: Obj[];
+  /** The input as Interactions steps, kept for a stored interaction's GET resource. */
+  inputSteps: Obj[];
   /** The Chat body without messages; the handler sets messages. */
   chat: Obj;
 }
@@ -111,6 +113,7 @@ const CONTENT_TYPES = new Set(["text", "image", "audio", "video", "document"]);
 interface InputState {
   system: Obj[];
   messages: Obj[];
+  steps: Obj[];
   assistant?: { content: string; calls: Obj[] };
   pendingSignature?: string;
   calls: Set<string>;
@@ -144,12 +147,23 @@ function applyStep(state: InputState, raw: unknown): void {
   const type = step.type === undefined && role !== undefined ? "turn" : text(step.type, "step type");
   if (type === "turn") {
     const content = step.content ?? step.parts;
-    if (role === "user") { flushAssistant(state); state.messages.push({ role: "user", content: userContent(contentList(content, "turn content")) }); return; }
-    if (role === "model" || role === "assistant") { assistantOf(state).content += contentText(content, "turn content"); return; }
+    if (role === "user") {
+      flushAssistant(state);
+      state.messages.push({ role: "user", content: userContent(contentList(content, "turn content")) });
+      state.steps.push({ type: "user_input", content: contentList(content, "turn content").map(part => part.type === "text" ? part : { type: "image" }) });
+      return;
+    }
+    if (role === "model" || role === "assistant") {
+      const text = contentText(content, "turn content");
+      assistantOf(state).content += text;
+      state.steps.push({ type: "model_output", content: [{ type: "text", text }] });
+      return;
+    }
     if (role === "system" || role === "developer") { flushAssistant(state); state.system.push({ role: "system", content: contentText(content, "turn content") }); return; }
     return fail(`unsupported role: ${role}`);
   }
   if (!STEP_TYPES.has(type)) fail(`unsupported step type: ${type}`);
+  state.steps.push({ ...step });
   if (type === "user_input") {
     flushAssistant(state);
     state.messages.push({ role: "user", content: userContent(contentList(step.content ?? [], "user_input content")) });
@@ -191,11 +205,23 @@ function isContentItem(value: unknown): boolean {
 }
 
 function inputMessages(input: unknown, state: InputState): void {
-  if (typeof input === "string") { state.messages.push({ role: "user", content: input }); return; }
-  if (isContentItem(input)) { state.messages.push({ role: "user", content: userContent([contentPart(input)]) }); return; }
+  if (typeof input === "string") {
+    state.messages.push({ role: "user", content: input });
+    state.steps.push({ type: "user_input", content: [{ type: "text", text: input }] });
+    return;
+  }
+  if (isContentItem(input)) {
+    state.messages.push({ role: "user", content: userContent([contentPart(input)]) });
+    state.steps.push({ type: "user_input", content: [{ ...(input as Obj) }] });
+    return;
+  }
   if (isObj(input)) { applyStep(state, input); flushAssistant(state); return; }
   const items = array(input, "input");
-  if (items.length && items.every(isContentItem)) { state.messages.push({ role: "user", content: userContent(items.map(contentPart)) }); return; }
+  if (items.length && items.every(isContentItem)) {
+    state.messages.push({ role: "user", content: userContent(items.map(contentPart)) });
+    state.steps.push({ type: "user_input", content: items.map(item => ({ ...(item as Obj) })) });
+    return;
+  }
   for (const item of items) {
     if (isContentItem(item)) fail("input mixes content items with steps");
     applyStep(state, item);
@@ -305,7 +331,7 @@ export function interactionsToChat(input: unknown): InteractionsRequestPlan {
     if (modalities.some(value => value !== "text")) fail("only text output is supported");
   }
   if (body.input === undefined) fail("Invalid input");
-  const state: InputState = { system: [], messages: [], calls: new Set(), unmatched: [], callCount: 0 };
+  const state: InputState = { system: [], messages: [], steps: [], calls: new Set(), unmatched: [], callCount: 0 };
   if (body.system_instruction !== undefined) {
     const instruction = systemInstructionText(body.system_instruction);
     if (instruction) state.system.push({ role: "system", content: instruction });
@@ -333,11 +359,12 @@ export function interactionsToChat(input: unknown): InteractionsRequestPlan {
     unmatchedResultIds: state.unmatched,
     systemMessages: state.system,
     inputMessages: state.messages,
+    inputSteps: state.steps,
     chat,
   };
 }
 
-export interface InteractionMeta { id: string; model: string; created: string }
+export interface InteractionMeta { id: string; model: string; created: string; previousInteractionId?: string }
 
 /** ocx-int- plus 128 random bits as lower-case hex. */
 export function newInteractionId(): string {
@@ -428,6 +455,7 @@ export function interactionAssistantMessage(answer: InteractionAnswer): Obj | un
 export function interactionResource(meta: InteractionMeta, answer: InteractionAnswer, updated = meta.created): Obj {
   return {
     id: meta.id, object: "interaction", status: answer.status, created: meta.created, updated, model: meta.model,
+    ...(meta.previousInteractionId ? { previous_interaction_id: meta.previousInteractionId } : {}),
     steps: outputSteps(answer.reasoning, answer.content, answer.calls),
     ...(answer.usage ? { usage: answer.usage } : {}),
   };
@@ -613,3 +641,37 @@ export function encodeInteractionsEvents(events: InteractionsSseEvent[]): Uint8A
   return events.map(event => encoder.encode(`event: ${event.event}\ndata: ${JSON.stringify(event.data)}\n\n`));
 }
 
+
+function toolCallIds(message: Obj | undefined): string[] {
+  if (!message || message.role !== "assistant" || !Array.isArray(message.tool_calls)) return [];
+  return message.tool_calls.flatMap(call => (isObj(call) && typeof call.id === "string" ? [call.id] : []));
+}
+
+/** Call ids of the history's last assistant turn that no later tool message answered. */
+export function pendingCallIds(history: Obj[]): Set<string> {
+  let last = -1;
+  for (let i = history.length - 1; i >= 0; i--) if (history[i]!.role === "assistant") { last = i; break; }
+  const pending = new Set(toolCallIds(history[last]));
+  for (const message of history.slice(last + 1)) if (message.role === "tool" && typeof message.tool_call_id === "string") pending.delete(message.tool_call_id);
+  return pending;
+}
+
+/**
+ * Continue a stored history with a chained input. A leading assistant message that only resends the
+ * pending calls is dropped (they are already in history). Returns undefined when a function_result the
+ * input does not define is not one of the pending calls answered at the very start of the input.
+ */
+export function chainInput(history: Obj[], plan: Pick<InteractionsRequestPlan, "inputMessages" | "unmatchedResultIds">): Obj[] | undefined {
+  const pending = pendingCallIds(history);
+  let input = plan.inputMessages;
+  const first = input[0];
+  const resent = toolCallIds(first);
+  if (first && resent.length && !first.content && resent.every(id => pending.has(id))) input = input.slice(1);
+  if (!plan.unmatchedResultIds.length) return input;
+  const leading = new Set<string>();
+  for (const message of input) {
+    if (message.role !== "tool") break;
+    if (typeof message.tool_call_id === "string") leading.add(message.tool_call_id);
+  }
+  return plan.unmatchedResultIds.every(id => pending.has(id) && leading.has(id)) ? input : undefined;
+}

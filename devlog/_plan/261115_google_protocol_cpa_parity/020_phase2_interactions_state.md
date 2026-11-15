@@ -1,5 +1,7 @@
 # 020 — Phase 2: Interactions state (`previous_interaction_id`, get, delete)
 
+Status: implemented in cycle 3 (see "As built" at the end).
+
 Rows: INT-13, INT-14, INT-15. Class C4: new caller state with an ownership rule. Depends on 010.
 
 ## Design (decision D2)
@@ -131,4 +133,20 @@ origin check), never forward anything upstream, and write no request-log row.
 
 `structure/data-planes/gemini-inbound.md` "Interactions state" subsection with every rule above, and
 the manifest entry for the store file.
+
+
+
+## As built (cycle 3, after the focused audit `.tmp/research/audit-020.md`, NEAR-PASS)
+
+- Owner: `interactionOwner(req, config, admission)` in `src/server/gemini-interactions-inbound.ts` =
+  `resolveContextPrincipal(...) ?? "loopback"` (keyless loopback only); the store takes a plain owner string.
+- Chaining: `chainInput` in the codec resolves results only against the pending calls of the stored turn's
+  last answer, only as leading input, and drops a leading resend of those calls.
+- The store (`writtenAt`, lazy expiry with `continue` instead of `break`, per-entry cap = min(8 MiB, inbound
+  limit)) is `gemini_interactions` on `APP_OWNED_RETAINED_STORE_REGISTRATIONS`; README retained-store count
+  14 → 15 in all eight pages, memory-watchdog id list updated.
+- Storing happens inside `frames()` with a try/catch; `x-opencodex-interaction-stored` is `true|false` when a
+  store was requested and is listed in `Access-Control-Expose-Headers`.
+- The codec records `plan.inputSteps`; GET returns them before the output steps, with
+  `previous_interaction_id` when chained. By-id routes use `resolveResponsesApiAuth`.
 

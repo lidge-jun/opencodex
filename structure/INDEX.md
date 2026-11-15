@@ -488,6 +488,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/context-history.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/server/gemini-inbound.ts` | [`data-planes/gemini-inbound.md`](data-planes/gemini-inbound.md) |
 | `src/server/gemini-interactions-inbound.ts` | [`data-planes/gemini-inbound.md`](data-planes/gemini-inbound.md) |
+| `src/server/gemini-interactions-store.ts` | [`data-planes/gemini-inbound.md`](data-planes/gemini-inbound.md) |
 | `src/server/gemini-native-paths.ts` | [`data-planes/gemini-inbound.md`](data-planes/gemini-inbound.md) |
 | `src/server/gui-pair-delivery.ts` | [`remote-link.md`](remote-link.md) |
 | `src/server/hub-relay-auth.ts` | [`remote-link.md`](remote-link.md) |

@@ -13,7 +13,7 @@ import { captureAdmissionPolicy } from "../capture-admission-policy";
 import { isDraining } from "../lifecycle";
 import { geminiRouteAllowHeader, geminiRouteAllows, parseGeminiNativePath } from "../gemini-native-paths";
 import { geminiError, handleGeminiGeneration, handleGeminiModel, handleGeminiModels, toGeminiRefusal } from "../gemini-inbound";
-import { handleGeminiInteraction } from "../gemini-interactions-inbound";
+import { handleGeminiInteraction, handleGeminiInteractionResource } from "../gemini-interactions-inbound";
 import { nextRequestLogId, type RequestLogContext } from "../request-log";
 import { disableResponsesRequestTimeout } from "../responses";
 import { withRequestLogId } from "./startup-warnings";
@@ -48,18 +48,23 @@ export async function dispatchGeminiRoute(original: Request, url: URL, deps: Gem
     || (route.kind === "method" && (route.method === "generateContent" || route.method === "streamGenerateContent"));
   if (generation) disableResponsesRequestTimeout(original, deps.requestServer);
   const req = withProxyCredential(original, url);
+  if (route.kind === "interaction" || route.kind === "interaction-cancel") {
+    // Stored interactions take the same admission as creating them, so the keys that can read or
+    // delete one are exactly the keys that can create one.
+    const admission = resolveResponsesApiAuth(req, policy);
+    if (!admission) return withCors(geminiError(401, "opencodex API key required"), original, policy);
+    if (!isAllowedRequestOrigin(req, policy)) return withCors(geminiError(403, "cross-origin data-plane request blocked"), original, policy);
+    return withCors(handleGeminiInteractionResource(route, req, config, admission), original, policy);
+  }
   if (!generation) {
     // Model discovery never forwards Authorization upstream, so the broader admission set is safe.
     const admission = resolveApiAuth(req, policy);
     if (!admission) return withCors(geminiError(401, "opencodex API key required"), original, policy);
     if (!isAllowedRequestOrigin(req, policy)) return withCors(geminiError(403, "cross-origin data-plane request blocked"), original, policy);
-    // Stored interactions arrive with phase 2; until then no id this proxy issued can be found.
     const response = route.kind === "models" ? handleGeminiModels(config, req, admission)
       : route.kind === "model" ? handleGeminiModel(config, req, admission, route.model)
-        : route.kind === "interaction" ? geminiError(404, "interaction not found")
-          : route.kind === "interaction-cancel" ? geminiError(501, "only background interactions can be cancelled")
-            : route.kind === "method" ? geminiError(501, `${route.method} is not supported`)
-              : geminiError(405, "method not allowed");
+        : route.kind === "method" ? geminiError(501, `${route.method} is not supported`)
+          : geminiError(405, "method not allowed");
     return withCors(response, original, policy);
   }
   if (isDraining()) return withCors(toGeminiRefusal(deps.drainingResponse(req, policy)), original, policy);

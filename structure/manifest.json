@@ -572,6 +572,7 @@
         "src/server/gemini-inbound.ts",
         "src/server/gemini-interactions-inbound.ts",
         "src/protocols/codecs/gemini-interactions.ts",
+        "src/server/gemini-interactions-store.ts",
         "src/server/gemini-native-paths.ts",
         "src/server/native-chat-bridge.ts",
         "src/server/index/gemini-routes.ts",

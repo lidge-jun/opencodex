@@ -7,6 +7,7 @@ import { startServer } from "../../src/server";
 import { clearRequestLogsForTests, getRequestLogEntries } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { interactionsRetainedStoreSnapshot } from "../../src/server/gemini-interactions-store";
 
 const DATA_TOKEN = "ocx_data_interactionsfixture";
 const ADMIN_TOKEN = "admin-secret-for-interactions";
@@ -170,7 +171,6 @@ describe("Gemini Interactions inbound", () => {
   test("requests opencodex cannot honor are 400s before any send", async () => {
     await withServer(async base => {
       for (const body of [
-        { model: "fx/m1", input: "hi", previous_interaction_id: "ocx-int-0" },
         { agent: "deep-research-preview-04-2026", input: "hi" },
         { model: "fx/m1", input: "hi", background: true },
         { model: "fx/m1", input: [{ type: "function_result", call_id: "c9", result: "ok" }] },
@@ -183,19 +183,20 @@ describe("Gemini Interactions inbound", () => {
       const unknown = await post(base, "/v1beta/interactions", { model: "off/m1", input: "hi" });
       expect(unknown.status).toBe(404);
       expect(seen).toHaveLength(0);
-      expect(newRows()).toHaveLength(6);
+      expect(newRows()).toHaveLength(5);
     });
   });
 
-  test("a chained tool result is refused for previous_interaction_id first", async () => {
+  test("an unknown previous_interaction_id is a Google 404 before any send", async () => {
     await withServer(async base => {
       const res = await post(base, "/v1beta/interactions", { model: "fx/m1", previous_interaction_id: "ocx-int-0", input: [{ type: "function_result", call_id: "c9", result: "ok" }] });
-      expect(res.status).toBe(400);
-      expect(await res.json()).toEqual({ error: { code: 400, message: "previous_interaction_id is not supported", status: "INVALID_ARGUMENT" } });
+      expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({ error: { code: 404, message: "interaction not found", status: "NOT_FOUND" } });
+      expect(seen).toHaveLength(0);
     });
   });
 
-  test("stored-interaction routes are owned: Google 404 for get and delete, 501 for cancel, 405 otherwise", async () => {
+  test("stored-interaction routes are owned: Google 404 for unknown ids, 405 otherwise", async () => {
     await withServer(async base => {
       for (const prefix of ["/v1beta", "/v1"]) {
         for (const method of ["GET", "DELETE"]) {
@@ -204,8 +205,8 @@ describe("Gemini Interactions inbound", () => {
           expect(await res.json()).toEqual({ error: { code: 404, message: "interaction not found", status: "NOT_FOUND" } });
         }
         const cancel = await post(base, prefix + "/interactions/ocx-int-0123/cancel", {});
-        expect(cancel.status).toBe(501);
-        expect(await cancel.json()).toMatchObject({ error: { code: 501, status: "UNIMPLEMENTED" } });
+        expect(cancel.status).toBe(404);
+        expect(await cancel.json()).toMatchObject({ error: { code: 404, status: "NOT_FOUND" } });
         const wrong = await post(base, prefix + "/interactions/ocx-int-0123", {});
         expect(wrong.status).toBe(405);
         expect(wrong.headers.get("allow")).toBe("GET, DELETE");
@@ -232,6 +233,187 @@ describe("Gemini Interactions inbound", () => {
       const res = await post(base, "/v1beta/interactions", { model: "fx/m1", input: "hi" });
       expect(res.status).toBe(400);
       expect(await res.json()).toEqual({ error: { code: 400, message: "request rejected", status: "INVALID_ARGUMENT" } });
+    });
+  });
+});
+
+
+describe("Gemini Interactions state", () => {
+  const OTHER_KEY = "ocx_data_interactions_other";
+  const withOtherKey = () => saveConfig({ ...config(true), apiKeys: [{ id: "other", name: "other", key: OTHER_KEY, createdAt: "2026-11-15T00:00:00Z" }] } as OcxConfig);
+
+  test("previous_interaction_id continues the stored history with this turn's system_instruction only", async () => {
+    await withServer(async base => {
+      const first = await (await post(base, "/v1beta/interactions", { model: "fx/m1", input: "my name is Phil", system_instruction: "first rules" })).json() as Record<string, any>;
+      const second = await post(base, "/v1beta/interactions", { model: "fx/m1", input: "what is my name?", previous_interaction_id: first.id, system_instruction: "second rules" });
+      expect(second.status).toBe(200);
+      expect(second.headers.get("x-opencodex-interaction-stored")).toBe("true");
+      expect(seen[1]!.body.messages).toEqual([
+        { role: "system", content: "second rules" },
+        { role: "user", content: "my name is Phil" },
+        { role: "assistant", content: "Hello" },
+        { role: "user", content: "what is my name?" },
+      ]);
+    });
+  });
+
+  test("a chained tool result needs no repeated function_call", async () => {
+    mode = "tools";
+    await withServer(async base => {
+      const tools = [{ type: "function", name: "lookup", parameters: { type: "object", properties: { q: { type: "string" } } } }];
+      const first = await (await post(base, "/v1beta/interactions", { model: "fx/m1", input: "find x", tools })).json() as Record<string, any>;
+      expect(first.status).toBe("requires_action");
+      mode = "text";
+      const second = await post(base, "/v1beta/interactions", { model: "fx/m1", tools, previous_interaction_id: first.id, input: [{ type: "function_result", call_id: "call_fixture", name: "lookup", result: "found" }] });
+      expect(second.status).toBe(200);
+      expect(seen[1]!.body.messages).toEqual([
+        { role: "user", content: "find x" },
+        { role: "assistant", content: null, tool_calls: [{ id: "call_fixture", type: "function", function: { name: "lookup", arguments: "{\"q\":\"x\"}" } }] },
+        { role: "tool", tool_call_id: "call_fixture", content: "found" },
+      ]);
+      const unknown = await post(base, "/v1beta/interactions", { model: "fx/m1", previous_interaction_id: first.id, input: [{ type: "function_result", call_id: "call_other", result: "x" }] });
+      expect(unknown.status).toBe(400);
+      expect(await unknown.json()).toMatchObject({ error: { message: "unmatched function_result" } });
+    });
+  });
+
+  test("GET returns the stored interaction with its input; DELETE removes it", async () => {
+    await withServer(async base => {
+      const created = await (await post(base, "/v1beta/interactions", { model: "fx/m1", input: "hi" })).json() as Record<string, any>;
+      const got = await fetch(new URL("/v1/interactions/" + created.id, base), { headers: googKey });
+      expect(got.status).toBe(200);
+      expect(await got.json()).toMatchObject({
+        id: created.id, object: "interaction", status: "completed",
+        steps: [{ type: "user_input", content: [{ type: "text", text: "hi" }] }, { type: "model_output", content: [{ type: "text", text: "Hello" }] }],
+      });
+      const cancel = await post(base, "/v1beta/interactions/" + created.id + "/cancel", {});
+      expect(cancel.status).toBe(400);
+      const deleted = await fetch(new URL("/v1beta/interactions/" + created.id, base), { method: "DELETE", headers: googKey });
+      expect(deleted.status).toBe(200);
+      expect(await deleted.json()).toEqual({});
+      expect((await fetch(new URL("/v1beta/interactions/" + created.id, base), { headers: googKey })).status).toBe(404);
+      const chained = await post(base, "/v1beta/interactions", { model: "fx/m1", input: "again", previous_interaction_id: created.id });
+      expect(chained.status).toBe(404);
+      expect(seen).toHaveLength(1);
+    });
+  });
+
+  test("a streamed turn is stored after it settles", async () => {
+    await withServer(async base => {
+      const records = await events(await post(base, "/v1beta/interactions", { model: "fx/m1", input: "hi", stream: true }));
+      const id = records[0]!.interaction.id as string;
+      const got = await fetch(new URL("/v1beta/interactions/" + id, base), { headers: googKey });
+      expect(got.status).toBe(200);
+      expect(await got.json()).toMatchObject({ id, status: "completed", steps: [{ type: "user_input" }, { type: "model_output", content: [{ type: "text", text: "Hello" }] }] });
+    });
+  });
+
+  test("store:false is served but not kept", async () => {
+    await withServer(async base => {
+      const created = await (await post(base, "/v1beta/interactions", { model: "fx/m1", input: "hi", store: false })).json() as Record<string, any>;
+      expect((await fetch(new URL("/v1beta/interactions/" + created.id, base), { headers: googKey })).status).toBe(404);
+      expect((await post(base, "/v1beta/interactions", { model: "fx/m1", input: "again", previous_interaction_id: created.id })).status).toBe(404);
+    });
+  });
+
+  test("another data key cannot read, continue or delete an interaction", async () => {
+    withOtherKey();
+    await withServer(async base => {
+      const created = await (await post(base, "/v1beta/interactions", { model: "fx/m1", input: "secret" })).json() as Record<string, any>;
+      const other = { "x-goog-api-key": OTHER_KEY };
+      expect((await fetch(new URL("/v1beta/interactions/" + created.id, base), { headers: other })).status).toBe(404);
+      expect((await fetch(new URL("/v1beta/interactions/" + created.id, base), { method: "DELETE", headers: other })).status).toBe(404);
+      expect((await post(base, "/v1beta/interactions", { model: "fx/m1", input: "x", previous_interaction_id: created.id }, other)).status).toBe(404);
+      expect((await fetch(new URL("/v1beta/interactions/" + created.id, base), { headers: googKey })).status).toBe(200);
+    });
+  });
+});
+
+
+describe("Gemini Interactions state: ownership and chaining rules", () => {
+  const KEY_A = "ocx_data_interactions_key_a";
+  const KEY_B = "ocx_data_interactions_key_b";
+  const keys = (cfg: OcxConfig) => ({ ...cfg, apiKeys: [
+    { id: "a", name: "a", key: KEY_A, createdAt: "2026-11-15T00:00:00Z" },
+    { id: "b", name: "b", key: KEY_B, createdAt: "2026-11-15T00:00:00Z" },
+  ] }) as OcxConfig;
+
+  test("on a loopback bind each presented key owns its interactions; a keyless caller sees none of them", async () => {
+    saveConfig(keys(config()));
+    await withServer(async base => {
+      const created = await (await post(base, "/v1beta/interactions", { model: "fx/m1", input: "mine" }, { "x-goog-api-key": KEY_A })).json() as Record<string, any>;
+      const url = new URL("/v1beta/interactions/" + created.id, base);
+      expect((await fetch(url, { headers: { "x-goog-api-key": KEY_A } })).status).toBe(200);
+      expect((await fetch(url, { headers: { "x-goog-api-key": KEY_B } })).status).toBe(404);
+      expect((await fetch(url)).status).toBe(404);
+      expect((await post(base, "/v1beta/interactions/" + created.id + "/cancel", {}, { "x-goog-api-key": KEY_B })).status).toBe(404);
+      const keyless = await (await post(base, "/v1beta/interactions", { model: "fx/m1", input: "anyone" }, {})).json() as Record<string, any>;
+      expect((await fetch(new URL("/v1beta/interactions/" + keyless.id, base))).status).toBe(200);
+      expect((await fetch(new URL("/v1beta/interactions/" + keyless.id, base), { headers: { "x-goog-api-key": KEY_A } })).status).toBe(404);
+    });
+  });
+
+  test("a stored answer reports x-opencodex-interaction-stored and exposes it to browsers", async () => {
+    await withServer(async base => {
+      const res = await post(base, "/v1beta/interactions", { model: "fx/m1", input: "hi" });
+      expect(res.headers.get("x-opencodex-interaction-stored")).toBe("true");
+      expect(res.headers.get("access-control-expose-headers")?.toLowerCase()).toContain("x-opencodex-interaction-stored");
+      const unstored = await post(base, "/v1beta/interactions", { model: "fx/m1", input: "hi", store: false });
+      expect(unstored.headers.get("x-opencodex-interaction-stored")).toBeNull();
+      expect((await res.json() as Record<string, any>).previous_interaction_id).toBeUndefined();
+    });
+  });
+
+  test("a chained turn inherits no tools or generation_config and names its predecessor", async () => {
+    await withServer(async base => {
+      const first = await (await post(base, "/v1beta/interactions", { model: "fx/m1", input: "a", tools: [{ type: "function", name: "f" }], generation_config: { temperature: 0.1 } })).json() as Record<string, any>;
+      const second = await (await post(base, "/v1beta/interactions", { model: "fx/m1", input: "b", previous_interaction_id: first.id })).json() as Record<string, any>;
+      expect(seen[1]!.body.tools).toBeUndefined();
+      expect(seen[1]!.body.temperature).toBeUndefined();
+      expect(second.previous_interaction_id).toBe(first.id);
+    });
+  });
+
+  test("results resolve only against the pending calls of the last turn, and only as the leading input", async () => {
+    mode = "tools";
+    await withServer(async base => {
+      const tools = [{ type: "function", name: "lookup" }];
+      const first = await (await post(base, "/v1beta/interactions", { model: "fx/m1", input: "find", tools })).json() as Record<string, any>;
+      const afterUser = await post(base, "/v1beta/interactions", { model: "fx/m1", previous_interaction_id: first.id, input: [
+        { type: "user_input", content: [{ type: "text", text: "wait" }] },
+        { type: "function_result", call_id: "call_fixture", result: "x" },
+      ] });
+      expect(afterUser.status).toBe(400);
+      mode = "text";
+      const answered = await (await post(base, "/v1beta/interactions", { model: "fx/m1", previous_interaction_id: first.id, input: [{ type: "function_result", call_id: "call_fixture", result: "x" }] })).json() as Record<string, any>;
+      const stale = await post(base, "/v1beta/interactions", { model: "fx/m1", previous_interaction_id: answered.id, input: [{ type: "function_result", call_id: "call_fixture", result: "again" }] });
+      expect(stale.status).toBe(400);
+      expect(await stale.json()).toMatchObject({ error: { message: "unmatched function_result" } });
+    });
+  });
+
+  test("a chain that resends the function_call does not duplicate it upstream", async () => {
+    mode = "tools";
+    await withServer(async base => {
+      const first = await (await post(base, "/v1beta/interactions", { model: "fx/m1", input: "find", tools: [{ type: "function", name: "lookup" }] })).json() as Record<string, any>;
+      mode = "text";
+      const res = await post(base, "/v1beta/interactions", { model: "fx/m1", previous_interaction_id: first.id, input: [
+        { type: "function_call", id: "call_fixture", name: "lookup", arguments: { q: "x" } },
+        { type: "function_result", call_id: "call_fixture", result: "found" },
+      ] });
+      expect(res.status).toBe(200);
+      const assistants = (seen[1]!.body.messages as Record<string, any>[]).filter(message => message.role === "assistant");
+      expect(assistants).toHaveLength(1);
+    });
+  });
+
+  test("a failed turn stores nothing", async () => {
+    mode = "error400";
+    await withServer(async base => {
+      const before = interactionsRetainedStoreSnapshot().count;
+      expect((await post(base, "/v1beta/interactions", { model: "fx/m1", input: "hi" })).status).toBe(400);
+      expect((await post(base, "/v1beta/interactions", { model: "fx/m1", input: "hi", stream: true })).status).toBe(400);
+      expect(interactionsRetainedStoreSnapshot().count).toBe(before);
     });
   });
 });

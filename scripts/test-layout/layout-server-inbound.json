@@ -19,6 +19,7 @@
   "gateway-client-routes.test.ts": "server",
   "server-gemini-interactions-inbound.test.ts": "server",
   "gemini-native-paths.test.ts": "server",
+  "gemini-interactions-store.test.ts": "server",
   "protocol-trace-suppression.test.ts": "server",
   "responses-ollama-codec.test.ts": "responses",
   "responses-gemini-codec.test.ts": "responses",
