@@ -805,6 +805,8 @@ For a service rollback, stop the branch service and repair the prior release aga
 
 The read-only data-plane endpoint is `GET /v1/usage`, using `x-opencodex-api-key` with a configured client key. Environment-wide and admin keys are refused. It accepts `range`, `surface`, `provider`, `model`, `since`, and `until`; unknown/repeated options and caller-selected key IDs are rejected. Oversized skipped rows retain the explicit incomplete-history warning.
 
+A hub additionally serves `GET /v1/usage/windows`, the windows-only view of the hub's own upstream subscription quotas (5-hour/weekly/monthly bars, vendor-level custom windows, and the ChatGPT pool rows). It admits a configured client key or the hub's environment token in `x-opencodex-api-key` or `Authorization: Bearer`; `x-api-key` presentation and admin tokens are refused. A configured key scoped with allowed providers sees only its own providers' windows, ChatGPT pool rows included. The route exists only on a host running as a hub; standalone and client installs answer `404 usage_windows_not_a_hub`. Like `/v1/usage`, this route is **not** exposed over Remote Link — the link data plane serves `/v1/usage` and `/v1/models` reads, not the windows projection.
+
 Client usage credentials are sent only over HTTPS or loopback HTTP. Both the request and response disable caching.
 
 ### Pairing this browser with a hub
