@@ -161,6 +161,15 @@ describe("Gemini inbound fidelity", () => {
     });
   });
 
+  test("a configured output limit wins over generated metadata", async () => {
+    const lookup = async (base: URL) => (await (await fetch(new URL("/v1beta/models/google/gemini-3-flash-preview", base), { headers: googKey })).json() as Record<string, any>).outputTokenLimit;
+    await withServer(async base => { expect(await lookup(base)).toBe(65536); });
+    const configured = config();
+    (configured.providers.google as { modelMaxOutputTokens?: Record<string, number> }).modelMaxOutputTokens = { "gemini-3-flash-preview": 2048 };
+    saveConfig(configured);
+    await withServer(async base => { expect(await lookup(base)).toBe(2048); });
+  });
+
   test("an unknown /v1beta path is a JSON 404, never the dashboard page", async () => {
     await withServer(async base => {
       for (const path of ["/v1beta/unknown", "/v1beta/files/abc"]) {

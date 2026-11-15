@@ -47,6 +47,8 @@ function field(source: Obj, key: string): unknown {
 
 /** Schema keywords whose values are data, not schemas: they are copied, never normalized. */
 const SCHEMA_LITERAL_KEYS = new Set(["enum", "const", "default", "example", "examples"]);
+/** Schema keywords whose values map names to schemas: the names are data, every value is a schema. */
+const SCHEMA_MAP_KEYS = new Set(["properties", "patternProperties", "$defs", "definitions"]);
 
 /** Gemini declares schema types in upper case ("OBJECT"); Chat tools want JSON Schema's lower case. */
 export function normalizeSchema(value: unknown, depth = 0): unknown {
@@ -57,7 +59,9 @@ export function normalizeSchema(value: unknown, depth = 0): unknown {
   for (const [key, item] of Object.entries(value)) {
     out[key] = key === "type" && typeof item === "string" ? item.toLowerCase()
       : SCHEMA_LITERAL_KEYS.has(key) ? item
-        : normalizeSchema(item, depth + 1);
+        : SCHEMA_MAP_KEYS.has(key) && isObj(item)
+          ? Object.fromEntries(Object.entries(item).map(([name, schema]) => [name, normalizeSchema(schema, depth + 1)]))
+          : normalizeSchema(item, depth + 1);
   }
   return out;
 }

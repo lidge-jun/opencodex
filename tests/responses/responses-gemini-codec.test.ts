@@ -188,6 +188,18 @@ describe("Gemini codec request fidelity (CodeRabbit round)", () => {
     expect(params.properties.mode).toEqual({ type: "string", enum: ["UPPER", { type: "UPPER" }], default: "UPPER" });
   });
 
+  test("properties named like literal keywords are still schemas", () => {
+    const tool = { name: "pick", parameters: { type: "OBJECT", properties: {
+      enum: { type: "STRING" }, default: { type: "INTEGER", default: "KEEP" }, examples: { type: "ARRAY", items: { type: "STRING" } },
+    }, $defs: { const: { type: "BOOLEAN" } } } };
+    const chat = geminiToChat("m", { contents: [{ role: "user", parts: [{ text: "hi" }] }], tools: [{ functionDeclarations: [tool] }] }, false);
+    const params = (chat.tools as Array<{ function: { parameters: Record<string, any> } }>)[0]!.function.parameters;
+    expect(params.properties).toEqual({
+      enum: { type: "string" }, default: { type: "integer", default: "KEEP" }, examples: { type: "array", items: { type: "string" } },
+    });
+    expect(params.$defs).toEqual({ const: { type: "boolean" } });
+  });
+
   test("includeThoughts false is an explicit opt-out", () => {
     const chat = geminiToChat("m", { contents: [{ role: "user", parts: [{ text: "hi" }] }], generationConfig: { thinkingConfig: { thinkingLevel: "HIGH", includeThoughts: false } } }, false);
     expect(chat).toMatchObject({ reasoning_effort: "high", include_reasoning: false });
