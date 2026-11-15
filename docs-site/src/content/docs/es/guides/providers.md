@@ -451,6 +451,7 @@ Los preajustes integrados con clave API, sus URL base y las notas específicas d
 están en la página [Catálogo de proveedores con clave API](/es/guides/api-key-catalog/). Sus secciones:
 
 - [Suscripción WorkBuddy AI](/es/guides/api-key-catalog/#workbuddy-ai-subscription)
+- [Suscripción CodeBuddy AI](/es/guides/api-key-catalog/#codebuddy-ai-subscription)
 - [CodeBuddy Code CLI oficial (Global y CN)](/es/guides/api-key-catalog/#official-codebuddy-code-cli-global--cn)
 - [Oficial Qoder CLI (Global y CN)](/es/guides/api-key-catalog/#official-qoder-cli-global--cn)
 - [Claude Code CLI (suscripción)](/es/guides/api-key-catalog/#claude-code-cli-subscription)

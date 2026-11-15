@@ -785,6 +785,7 @@ The built-in API-key presets, their base URLs, and the provider-specific notes t
 are on the [API-key catalog](/guides/api-key-catalog/) page. Its sections:
 
 - [WorkBuddy AI subscription](/guides/api-key-catalog/#workbuddy-ai-subscription)
+- [CodeBuddy AI subscription](/guides/api-key-catalog/#codebuddy-ai-subscription)
 - [Official CodeBuddy Code CLI (Global & CN)](/guides/api-key-catalog/#official-codebuddy-code-cli-global--cn)
 - [Official Qoder CLI (Global & CN)](/guides/api-key-catalog/#official-qoder-cli-global--cn)
 - [Claude Code CLI (subscription)](/guides/api-key-catalog/#claude-code-cli-subscription)

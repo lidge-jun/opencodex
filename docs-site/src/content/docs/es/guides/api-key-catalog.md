@@ -255,6 +255,22 @@ Los modelos y capacidades proceden del catálogo de productos de tu cuenta. Desp
 
 Se utiliza un protocolo de suscripción no oficial basado en el [plugin WorkBuddy de Magpie](https://github.com/magpie-community/plugins/tree/e7f65641df820dfd715c0d2241f99f2092e4efb1/packages/workbuddy). Las restricciones del canal del cliente o de la cuenta se devuelven al solicitante. OpenCodex no reescribe instrucciones de identidad del agente para evitarlas. La disponibilidad depende de tu cuenta, región, permisos de modelo y la API vigente de WorkBuddy. Es independiente de los proveedores CodeBuddy CLI con clave API y no conecta el cliente WorkBuddy Desktop a OpenCodex.
 
+<a id="codebuddy-ai-subscription"></a>
+
+## Suscripción CodeBuddy AI
+
+`codebuddy-ai` conecta tu suscripción internacional de CodeBuddy AI como proveedor de modelos. Elige **CodeBuddy AI** en Proveedores e inicia sesión, o ejecuta:
+
+```bash
+ocx login codebuddy-ai
+```
+
+Completa el inicio de sesión en el navegador. OpenCodex consulta la autorización durante un máximo de cinco minutos, guarda los tokens y los renueva cuando hace falta. Puedes añadir cuentas mediante la lista OAuth existente; la identidad del equipo permanece asociada a su propio token. No necesitas instalar CodeBuddy Desktop ni importar archivos de credenciales.
+
+Los modelos y capacidades proceden del catálogo de productos de tu cuenta. Después de iniciar sesión, elige un modelo `codebuddy-ai/<model-id>`; si el descubrimiento no está disponible, se ofrece `codebuddy-ai/default-model` como selector de respaldo. El streaming, las herramientas y las respuestas almacenadas usan el endpoint Chat de CodeBuddy. Las pestañas Resumen y Cuentas muestran créditos restantes, usados y totales, saldos base y de regalo y los próximos créditos no diarios que caducan, cuando esa información está disponible. Actualizar consulta el resumen de facturación de la cuenta; una lectura fallida no significa saldo cero. Los créditos son informativos: agotarlos no desactiva los modelos gratuitos.
+
+Se utiliza un protocolo de suscripción no oficial basado en el [plugin WorkBuddy de Magpie](https://github.com/magpie-community/plugins/tree/e7f65641df820dfd715c0d2241f99f2092e4efb1/packages/workbuddy), con el origen de CodeBuddy y la identidad de cliente de la CLI. Las restricciones del canal del cliente o de la cuenta se devuelven al solicitante. OpenCodex no reescribe instrucciones de identidad del agente para evitarlas. La disponibilidad depende de tu cuenta, región, permisos de modelo y la API vigente de CodeBuddy. Es independiente de los proveedores CodeBuddy CLI con clave API y no conecta el cliente CodeBuddy Desktop a OpenCodex.
+
 ## CodeBuddy Code CLI oficial (Global y CN)
 
 OpenCodex proporciona soporte oficial para adaptadores para el código CodeBuddy Code CLI de Tencent Cloud a través de los presets `codebuddy` (Global) y `codebuddy-cn` (China).

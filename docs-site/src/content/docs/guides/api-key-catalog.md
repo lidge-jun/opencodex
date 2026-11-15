@@ -674,6 +674,40 @@ not rewrite agent identity prompts to bypass them. Availability depends on your 
 region, model entitlement and WorkBuddy's current API. This is separate from the CodeBuddy
 CLI API-key providers and does not connect the WorkBuddy desktop client to OpenCodex.
 
+## CodeBuddy AI subscription
+
+`codebuddy-ai` connects your international CodeBuddy AI subscription as a model provider.
+Choose **CodeBuddy AI** in Providers and log in, or run:
+
+```bash
+ocx login codebuddy-ai
+```
+
+Complete the browser sign-in; OpenCodex polls for authorization for up to five minutes.
+Tokens are stored in OpenCodex and refreshed on demand. Adding accounts uses the existing
+OAuth account list; team identity stays attached to its own token. No CodeBuddy desktop
+installation or credential-file import is required.
+
+Models and capabilities come from your account's live product catalog. Select a
+`codebuddy-ai/<model-id>` model after login; `codebuddy-ai/default-model` is the fallback
+selector when discovery is unavailable. Streaming, tool calls and buffered responses use
+CodeBuddy's Chat endpoint. The Overview and Accounts tabs show remaining credits, used/total credits, base and gift
+balances, and the next expiring non-daily credits when available. Refresh reads the signed-in
+account's billing summary; an unavailable read is not a zero balance. These credits are
+informational and do not disable free models when paid credits run out.
+When the reported total is positive, the header quota summary shows the unavailable percentage,
+including frozen credits, rounded to the nearest whole percent. It gives no exhaustion warning:
+free models may still work. An individual
+credit expiry is not shown as a reset of the entire balance.
+
+This uses an unofficial subscription protocol based on
+[Magpie's WorkBuddy plugin](https://github.com/magpie-community/plugins/tree/e7f65641df820dfd715c0d2241f99f2092e4efb1/packages/workbuddy),
+with the CodeBuddy origin and CLI client identity. Upstream client-channel or account
+restrictions are returned to the caller. OpenCodex does not rewrite agent identity prompts to
+bypass them. Availability depends on your account, region, model entitlement and CodeBuddy's
+current API. This is separate from the CodeBuddy CLI API-key providers and does not connect
+the CodeBuddy desktop client to OpenCodex.
+
 ## Official CodeBuddy Code CLI (Global & CN)
 
 OpenCodex provides official adapter support for Tencent Cloud's CodeBuddy Code CLI via the `codebuddy` (Global) and `codebuddy-cn` (China) presets.
