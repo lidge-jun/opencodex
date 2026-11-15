@@ -58,11 +58,48 @@ It passes the result through Chat to Responses preflight as an internal boolean.
 projection and request header allowlist keep those labels out of outbound requests. An ACP policy
 refusal returns the native 403 before any `agy` version probe or ACP process start.
 
+## Interactions API
+
+`POST /v1beta/interactions` and the stable `POST /v1/interactions` (the only `/v1/` paths outside
+`/v1/models/{model}:{method}` this surface claims; OpenCodex serves nothing else there) create an
+interaction the same way: `src/protocols/codecs/gemini-interactions.ts` maps the create body onto one
+Chat body and `src/server/gemini-interactions-inbound.ts` runs it through the Chat path with the
+generation admission, request-log ownership and fixed-text Google errors described above. The classifier
+also claims `/v1beta|v1/interactions/{id}` (GET, DELETE) and `…/{id}/cancel` (POST) so those paths get
+Google-shaped answers and the same listener rules: an id is one segment of `[A-Za-z0-9_-]`, at most 128
+characters, and `geminiRouteAllows` gives the by-id route two methods for the 405 `Allow` header and the
+loopback allowlist. This proxy stores no interaction yet, so get and delete answer 404 and cancel 501.
+
+Mapping: `input` as a string, content item(s) (text, base64 `image`) or steps (`user_input`,
+`model_output`, `thought`, `function_call`, `function_result`), plus CPA-compatible `{role, content}`
+turns and `{text}`/`{parts}` system instructions; `system_instruction`; `function` tools;
+`generation_config` (`temperature` and `top_p` from Google's guide, `seed`, `stop_sequences`,
+`max_output_tokens`, `thinking_level`, `thinking_summaries`, `tool_choice` with `any` on one function
+forcing it, as the generateContent codec does); a text `response_format`. A thought step's signature
+rides to the next function call as `extra_content.google.thought_signature`. A `function_result` whose
+call is not in the input is reported to the handler, which refuses it until stored history exists.
+Refused with 400 rather than silently changed: `agent`, `background: true`, `previous_interaction_id`
+(no stored interactions yet), `webhook_config`, `environment`, `agent_config`, hosted tools, non-text
+content or output. `service_tier` and `safety_settings` are ignored, as unknown fields are.
+
+Answers carry `object: "interaction"`, `ocx-int-` ids with 128 random bits, and `status`
+`requires_action` when the turn ends in function calls, `incomplete` for `length` and
+`content_filter` (Google defines it as completed with incomplete results), `completed` otherwise; usage
+uses Google's `total_*` names with output excluding thoughts. Streams are `event: <type>` plus a `data`
+object carrying the same `event_type`: `interaction.created` first (emitted with the first Chat chunk or
+the failure frame), `step.start`/`step.delta`/`step.stop` for thought summaries (`thought_summary`),
+text (`text`) and whole function calls (`arguments_delta`, with a preceding `thought_signature` step when
+one exists), then `interaction.completed` after settlement, or `error` with a lower-case code.
+`interaction.status_update` is not emitted: nothing runs in the background.
+
 ## Coverage
 
 `tests/server/server-gemini-inbound.test.ts` (list and lookup, SSE and JSON-array streams, buffered
 answers on `/v1beta` and `/v1`, `x-goog-api-key` and `?key=` admission, tool calls, errors, 501 and
-405, `/v1/models` unchanged), `tests/responses/responses-gemini-codec.test.ts` (request and
+405, `/v1/models` unchanged), `tests/server/server-gemini-interactions-inbound.test.ts` and
+`tests/responses/responses-gemini-interactions-codec.test.ts` (Interactions create, stream vocabulary,
+refusals, by-id answers), `tests/server/gemini-native-paths.test.ts` (classifier, methods, near misses),
+`tests/responses/responses-gemini-codec.test.ts` (request and
 response mapping, streaming translation), plus the Ollama tests that pin the shared bridge.
 
 `tests/server/server-agy-acp.test.ts` exercises labeled and interactive turns on both generation

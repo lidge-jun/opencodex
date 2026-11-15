@@ -22,9 +22,12 @@ Sources: <https://ai.google.dev/gemini-api/docs/interactions>, <https://ai.googl
   `previous_interaction_id`, `agent_config`; output `usage`, `errors`, `continuation_token`.
 - `status` values: `in_progress`, `requires_action`, `completed`, `failed`, `cancelled`, `incomplete`
   (completed but truncated, e.g. max tokens), `requires_continuation`.
-- `generation_config`: `temperature`, `top_p`, `seed`, `stop_sequences`, `max_output_tokens`,
+- `generation_config`: `seed`, `stop_sequences`, `max_output_tokens`,
   `thinking_level` (`minimal|low|medium|high|xhigh`), `thinking_summaries` (`auto|none`),
   `tool_choice` (string `auto|any|none|validated` or `{allowed_tools:{mode,tools[]}}`), plus media configs.
+  `temperature` and `top_p` appear in the guide's samples, not in the reference's GenerationConfig list.
+- The stable `v1` reference (`?api-version=v1`, captured the same way, 156,304 chars) lists the same four
+  methods under `/v1/interactions` and the same create fields this unit reads.
 - `usage` fields: `total_input_tokens`, `input_tokens_by_modality[]`, `total_cached_tokens`,
   `total_output_tokens`, `total_tool_use_tokens`, `total_thought_tokens`, `total_tokens`,
   `grounding_tool_count[]`. (CPA uses `input_tokens`/`output_tokens` in non-stream bodies; the reference

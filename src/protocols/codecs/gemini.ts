@@ -44,7 +44,7 @@ function field(source: Obj, key: string): unknown {
 }
 
 /** Gemini declares schema types in upper case ("OBJECT"); Chat tools want JSON Schema's lower case. */
-function normalizeSchema(value: unknown, depth = 0): unknown {
+export function normalizeSchema(value: unknown, depth = 0): unknown {
   if (depth > MAX_GEMINI_SCHEMA_DEPTH) fail("Schema nesting too deep");
   if (Array.isArray(value)) return value.map(item => normalizeSchema(item, depth + 1));
   if (!isObj(value)) return value;

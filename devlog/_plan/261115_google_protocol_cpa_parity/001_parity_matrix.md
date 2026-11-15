@@ -64,7 +64,7 @@ later unit, with the reason).
 | INT-07 | `generation_config`: temperature, top_p, seed, stop_sequences, max_output_tokens, thinking_level, thinking_summaries, tool_choice; `response_format` | A-I07 A-R27; 002 | gap | P1 | 010 |
 | INT-08 | `tools`: `function` entries; hosted tools | A-I08 | gap; function tools mapped, hosted tools 400 (new surface, so no silent drop) | P1 | 010 |
 | INT-09 | Non-stream body: `id`, `status`, `created`, `updated`, `model`, `steps`, `usage` with Google's `total_*` names | A-I09 A-I11; 002 usage | gap; diff from CPA's `input_tokens` naming | P1 | 010 |
-| INT-10 | SSE vocabulary: `interaction.created`, `interaction.status_update`, `step.start`, `step.delta`, `step.stop`, `interaction.completed`, `error` | A-I10; 002 events | gap | P1 | 010 |
+| INT-10 | SSE vocabulary: `interaction.created`, `step.start`, `step.delta`, `step.stop`, `interaction.completed`, `error` (`interaction.status_update` is not emitted: nothing runs in the background) | A-I10; 002 events | gap | P1 | 010 |
 | INT-11 | Terminal event only after usage and settlement; exactly once | A-I12 | gap (bridge already guarantees it) | P1 | 010 |
 | INT-12 | `status`: `requires_action` when the turn ends in function calls, `incomplete` on length, `completed` otherwise | A-I13; 002 status | gap; diff: CPA reports `completed` for tool turns | P1 | 010 |
 | INT-13 | `previous_interaction_id` resolves earlier history | A-I14 A-I15; 002 State | gap; diff: CPA has no local store and silently drops it for translated targets; opencodex keeps a bounded, owner-scoped local store | P1 | 020 |
@@ -73,7 +73,7 @@ later unit, with the reason).
 | INT-16 | Native Interactions upstream (`/v1beta/interactions` with `Api-Revision`) as a provider | A-I17, C-V-14 | defer: new provider adapter and catalog surface; separate unit | P3 | — |
 | INT-17 | Other inbound protocols → Interactions upstream | A-I20 | defer: depends on INT-16 | P3 | — |
 | INT-18 | Error envelope in Google shape, fixed text, `event: error` after commit | A-I18 | gap | P1 | 010 |
-| INT-19 | Stable `/v1/interactions` alias | 002 Methods | gap (opencodex-only addition; `/v1/interactions` is unused in opencodex) | P3 | 010 |
+| INT-19 | Stable `/v1/interactions` alias | 002 Methods (v1 capture) | gap (opencodex-only addition; `/v1/interactions` is unused in opencodex; the v1 reference has the same methods and fields) | P3 | 010 |
 | L-01 | Live API WebSocket | 002 Live | n-a: neither CPA nor opencodex; audio realtime is outside this unit | — | — |
 
 ## Chat wire carrier used by the Google paths

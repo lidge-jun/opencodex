@@ -1,5 +1,7 @@
 # 010 — Phase 1: Gemini Interactions API inbound (stateless)
 
+Status: implemented in cycle 2 (see "As built" at the end).
+
 Rows: INT-01..12, INT-18, INT-19 ([001](001_parity_matrix.md)). Class C4: a new public wire surface.
 Depends on the #8742 merge (it reuses `gemini-native-paths.ts`, `gemini-inbound.ts`'s error body,
 `native-chat-bridge.ts` and `native-final-log`). `previous_interaction_id` answers 400 in this phase;
@@ -210,3 +212,19 @@ The `route.method` cast moves inside the non-interaction branch.
 `bun test tests/responses/responses-gemini-interactions-codec.test.ts tests/server/server-gemini-interactions-inbound.test.ts tests/server/server-gemini-inbound.test.ts tests/responses/responses-gemini-codec.test.ts`,
 then the per-phase floor in [000](000_plan.md).
 
+
+
+## As built (cycle 2, after the focused audit `.tmp/research/audit-010.md`, NEAR-PASS)
+
+- The classifier owns `/v1beta|v1/interactions/{id}` (GET, DELETE → Google 404 `interaction not found`)
+  and `…/{id}/cancel` (POST → 501) in this phase, so the commit stands alone; `geminiRouteAllows` and
+  `geminiRouteAllowHeader` moved here from 020. The loopback allowlist line in `src/server/index.ts`
+  calls `geminiRouteAllows` (net zero lines, 882/893).
+- `normalizeSchema` is exported from `src/protocols/codecs/gemini.ts` and wrapped so its error is this
+  codec's 400. `stream_options.include_usage` is not added: the Chat path puts usage on the finish frame.
+- `any` with one allowed function forces that function, as in the generateContent codec; `text/plain` and
+  a bare `{type:"text"}` format are omitted; `webhook_config`, `environment` and `agent_config` are 400;
+  `service_tier` and `safety_settings` are ignored. Bodies and stream interactions carry
+  `object: "interaction"`. Check order: codec 400s, then `previous_interaction_id`, then unmatched results.
+- Listener-level coverage is at the classifier (`tests/server/gemini-native-paths.test.ts`) plus the
+  source oracle in `tests/server/loopback-listener-admission.test.ts`, the way #8742 pins its routes.
