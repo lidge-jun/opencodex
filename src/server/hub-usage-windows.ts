@@ -6,17 +6,26 @@
  * subscription windows the instance routes through (an Anthropic 5-hour bar, a
  * Cursor monthly bar) - with the small windows-only body an upstream usage poller
  * decodes. The windows belong to the upstream accounts, not to the caller's key,
- * so there is no per-key scoping to get wrong: admission only proves the caller
- * holds a real secret (a configured data key, or the instance's own environment
- * token, exactly the two kinds the chat routes admit), and the body carries
- * percentages and reset times only - no account id, no label, no upstream text.
+ * so admission is deliberately loose in one direction and tight in another: any
+ * real secret (a configured data key, or the instance's own environment token,
+ * exactly the two kinds the chat routes admit) opens the route, while a
+ * configured key scoped by `allowedProviders` sees only its own providers'
+ * windows (#5049). The body carries percentages, reset times and short window
+ * labels - no account id, no credential - and the only upstream text it can
+ * carry (a custom window's display label) is sanitized before it is served.
+ * The readings come through the same reader the pool routes through, so stale,
+ * replaced-credential and identity-mismatched rows are filtered here exactly
+ * where they are there.
  */
 import type { OcxConfig } from "../types";
 import { cachedProviderQuotaIsExhausted } from "../combos/resolve";
 import { authorizationCredential } from "../lib/authorization-scheme";
-import { accountQuotaCache, hydrateAccountQuotaCache } from "../providers/quota/account-cache";
+import { getCachedProviderAccountQuota, hydrateAccountQuotaCache } from "../providers/quota/account-cache";
+import { getAccountSet } from "../oauth/store";
+import { OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers-destination";
 import { isCodexQuotaExhausted, listAccountQuotas } from "../codex/quota";
 import { resetAtToMs } from "../codex/quota-types";
+import { resolveAdmissionModelScope, type AdmissionModelScope } from "./admission-model-scope";
 import { isAllowedRequestOrigin, resolveDataPlaneAdmissionSecret, withCors, type DataPlaneAdmissionOptions, type RequestPolicyView } from "./auth-cors";
 
 /** One window of the public body. `resetsAt` is epoch millis, as the poller contract names it. */
@@ -31,6 +40,20 @@ interface UsageWindow {
 
 /** Slot names order the public list; the display label is separate (custom windows name themselves). */
 const SLOT_ORDER: Record<string, number> = { "5-hour": 0, weekly: 1, monthly: 2, custom: 3 };
+
+/** Upstream label text never reaches a terminal or a log with control characters intact. */
+const LABEL_CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
+const MAX_LABEL_CHARS = 120;
+
+/** The provider names a scope admits; an absent or empty scope admits every provider. */
+function providerVisible(scope: AdmissionModelScope | undefined, provider: string): boolean {
+  return !scope || scope.providers.length === 0 || scope.providers.includes(provider.trim().toLowerCase());
+}
+
+/** Sanitize an upstream-authored window label: strip control characters, trim, cap. */
+function sanitizeCustomLabel(label: string): string {
+  return label.replace(LABEL_CONTROL_CHARS, "").trim().slice(0, MAX_LABEL_CHARS);
+}
 
 function displayName(provider: string): string {
   return provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : provider;
@@ -90,43 +113,65 @@ export async function handleHubUsageWindows(req: Request, config: OcxConfig, pol
   const error = (code: string, message: string, status: number) => reply({ error: { code, message } }, status);
   const token = req.headers.get("x-opencodex-api-key")?.trim() || authorizationCredential(req.headers)?.trim() || "";
   const options: DataPlaneAdmissionOptions = { linkIngress: policy.linkIngress?.allowedKeyIds };
-  // Unlike `/v1/usage` there is no caller-scoped fact to protect, so the stricter
-  // configured-only rule there is not repeated here: either admitted secret works.
+  // Unlike `/v1/usage` the environment token is admitted here too; what it does not get is
+  // the aggregate view a scoped configured key is refused below, which is where the owner's
+  // "data-plane keys must not see cross-account windows" decision lands.
   const admission = resolveDataPlaneAdmissionSecret(token, config, "dedicated", options);
   if (!admission) return error("usage_windows_unauthorized", "A client data key is required", 401);
   if (!isAllowedRequestOrigin(req, policy)) return error("origin_rejected", "Cross-origin request blocked", 403);
+  // Role gate AFTER admission, in the /v1/hub-state (#4236) tradition: answering an
+  // unauthenticated caller would turn this into a free "is that machine a hub?" probe.
+  if (config.runtimeRole !== "hub") return error("usage_windows_not_a_hub", "usage windows are served only by a host whose runtimeRole is hub", 404);
+  // #5049: aggregate windows are cross-account by construction, so a configured key scoped
+  // by allowedProviders sees only the providers it may spend. Only a configured key carries
+  // a scope; the environment token stays unrestricted, exactly as on the chat routes.
+  const scope = resolveAdmissionModelScope(config, admission);
   hydrateAccountQuotaCache();
   const now = Date.now();
   const windows = new Map<string, UsageWindow>();
-  for (const [key, entry] of accountQuotaCache) {
-    const separator = key.indexOf("\u0000");
-    if (separator < 0) continue;
-    const provider = key.slice(0, separator);
-    const quota = entry.quota;
-    if (!quota) continue;
-    const exhausted = cachedProviderQuotaIsExhausted(quota, now);
-    collectWindow(windows, provider, "5-hour", "5-hour", finitePercent(quota.fiveHourPercent), quota.fiveHourResetAt, exhausted);
-    collectWindow(windows, provider, "weekly", "Weekly", finitePercent(quota.weeklyPercent), quota.weeklyResetAt, exhausted);
-    collectWindow(windows, provider, "monthly", "Monthly", finitePercent(quota.monthlyPercent), quota.monthlyResetAt, exhausted);
-    // Per-model rows duplicate a family bar the dialog already shows; vendor-level
-    // custom windows (Cursor's "First-party models") are the subscription truth.
-    for (const custom of quota.customWindows ?? []) {
-      if (custom.modelId !== undefined) continue;
-      if (custom.rejected === true && custom.resetAt === undefined) continue;
-      collectWindow(windows, provider, "custom", custom.label, finitePercent(custom.percent), custom.resetAt, exhausted || (custom.rejected === true));
+  // Enumerate the hub's own enabled providers and their registered accounts rather than
+  // walking the raw cache: that is how /v1/hub-state decides what a data key may learn (a
+  // disabled provider is absent everywhere on the data plane), and reading each row through
+  // getCachedProviderAccountQuota applies its staleness, replaced-credential and Kiro
+  // identity filters instead of silently skipping them.
+  for (const [provider, providerConfig] of Object.entries(config.providers ?? {})) {
+    if (providerConfig.disabled === true || !providerVisible(scope, provider)) continue;
+    for (const account of getAccountSet(provider)?.accounts ?? []) {
+      const quota = getCachedProviderAccountQuota(provider, account.id);
+      if (!quota) continue;
+      const exhausted = cachedProviderQuotaIsExhausted(quota, now);
+      collectWindow(windows, provider, "5-hour", "5-hour", finitePercent(quota.fiveHourPercent), quota.fiveHourResetAt, exhausted);
+      collectWindow(windows, provider, "weekly", "Weekly", finitePercent(quota.weeklyPercent), quota.weeklyResetAt, exhausted);
+      collectWindow(windows, provider, "monthly", "Monthly", finitePercent(quota.monthlyPercent), quota.monthlyResetAt, exhausted);
+      // Per-model rows duplicate a family bar the dialog already shows. `scope: "model"` is
+      // the structural attribution evidence; `modelId` is the older spelling of the same fact.
+      // Vendor-level custom windows (Cursor's "First-party models") are the subscription truth.
+      for (const custom of quota.customWindows ?? []) {
+        if (custom.scope === "model" || custom.modelId !== undefined) continue;
+        if (custom.rejected === true && custom.resetAt === undefined) continue;
+        // The label is upstream text (Antigravity names groups by `group.displayName`), so it
+        // is served only after control characters are stripped; a name that sanitizes away
+        // entirely names nothing and is dropped.
+        const label = sanitizeCustomLabel(custom.label);
+        if (!label) continue;
+        collectWindow(windows, provider, "custom", label, finitePercent(custom.percent), custom.resetAt, exhausted || (custom.rejected === true));
+      }
     }
   }
   // ChatGPT subscriptions live in the codex pool store, not the generic account-quota cache:
   // the burst (5-hour), weekly and monthly bars the /usage backend reports. Stored resets may
   // be in Unix seconds, so normalize them through the pool's own reader before the futures
   // filter applies. Credits are deliberately absent: a balance has no percentage, and a
-  // percent-less row would freeze the ring's lower half at empty.
-  for (const [, quota] of listAccountQuotas()) {
-    const exhausted = isCodexQuotaExhausted(quota, undefined, true);
-    const ms = (resetAt: number | undefined) => (resetAt === undefined ? undefined : resetAtToMs(resetAt));
-    collectWindow(windows, "ChatGPT", "5-hour", "5-hour", finitePercent(quota.shortPercent), ms(quota.shortResetAt), exhausted);
-    collectWindow(windows, "ChatGPT", "weekly", "Weekly", finitePercent(quota.weeklyPercent), ms(quota.weeklyResetAt), exhausted);
-    collectWindow(windows, "ChatGPT", "monthly", "Monthly", finitePercent(quota.monthlyPercent), ms(quota.monthlyResetAt), exhausted);
+  // percent-less row would freeze the ring's lower half at empty. The scope check admits the
+  // pool under its display name and under the provider id the pool actually routes as.
+  if (providerVisible(scope, "ChatGPT") || providerVisible(scope, OPENAI_CODEX_PROVIDER_ID)) {
+    for (const [, quota] of listAccountQuotas()) {
+      const exhausted = isCodexQuotaExhausted(quota, undefined, true);
+      const ms = (resetAt: number | undefined) => (resetAt === undefined ? undefined : resetAtToMs(resetAt));
+      collectWindow(windows, "ChatGPT", "5-hour", "5-hour", finitePercent(quota.shortPercent), ms(quota.shortResetAt), exhausted);
+      collectWindow(windows, "ChatGPT", "weekly", "Weekly", finitePercent(quota.weeklyPercent), ms(quota.weeklyResetAt), exhausted);
+      collectWindow(windows, "ChatGPT", "monthly", "Monthly", finitePercent(quota.monthlyPercent), ms(quota.monthlyResetAt), exhausted);
+    }
   }
   const body = {
     windows: [...windows.entries()].sort((a, b) => {

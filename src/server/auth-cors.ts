@@ -600,6 +600,11 @@ export const AUTH_MATRIX: readonly ApiAuthMatrixRow[] = [
   { endpoint: "/v1/hub-state", bearer: "accepted", dedicated: "accepted", xApiKey: "accepted" },
   // Usage additionally requires a configured key identity; unscoped environment keys are refused.
   { endpoint: "/v1/usage", bearer: "rejected", dedicated: "accepted", xApiKey: "rejected" },
+  // The quota-window companion read. Both admitted headers carry the same data-key secret the
+  // chat routes admit; `x-api-key` is deliberately NOT accepted here (unlike the hub-state row
+  // above) — the route reads only the dedicated header and the bearer, matching this matrix.
+  // It 404s with `usage_windows_not_a_hub` on any host whose runtimeRole is not "hub".
+  { endpoint: "/v1/usage/windows", bearer: "accepted", dedicated: "accepted", xApiKey: "rejected" },
 ];
 
 /** Whether `token` is the environment-provided management secret. */

@@ -643,7 +643,7 @@ describe("AUTH_MATRIX is true of the running server", () => {
           // from routing and the assertions below would be testing the method guard rather
           // than admission. /v1/catalog joined this set in #809.
           const isGet = row.endpoint === "/v1/models" || row.endpoint === "/v1/catalog"
-            || row.endpoint === "/v1/hub-state" || row.endpoint === "/v1/usage";
+            || row.endpoint === "/v1/hub-state" || row.endpoint === "/v1/usage" || row.endpoint === "/v1/usage/windows";
           const live = row.endpoint === "/v1/live" || row.endpoint === "/v1/realtime/calls";
           const audio = row.endpoint === "/v1/audio/transcriptions" || live ? new FormData() : null;
           if (audio) {
@@ -685,6 +685,9 @@ describe("AUTH_MATRIX is true of the running server", () => {
             // admission proof. Pin its distinguishing code too.
             if (row.endpoint === "/v1/hub-state") expect(body.error?.code).toBe("hub_state_not_a_hub");
             if (row.endpoint === "/v1/usage") expect(body.error?.code).toBe("hub_usage_not_a_hub");
+            // /v1/usage/windows 404s for the same reason: the role gate runs after admission,
+            // and its distinguishing code is what proves the route exists on this build.
+            if (row.endpoint === "/v1/usage/windows") expect(body.error?.code).toBe("usage_windows_not_a_hub");
           }
           const admitted = res.status !== 401;
           expect({ endpoint: row.endpoint, headers: Object.keys(headers)[0], admitted })
