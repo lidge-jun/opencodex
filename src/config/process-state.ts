@@ -158,6 +158,8 @@ export type RuntimePortState = {
   attestationSecret?: string;
   /** A Link runtime is draining; new and in-flight sync commits must stand down. */
   clientStopping?: true;
+  /** Explicit parent stop survives this same runtime's failed-restart rollback. */
+  clientStopRequested?: true;
   /**
    * Fresh for every publication of a client runtime, including the rollback of a failed restart.
    * A sync compares the whole record before each commit, so one captured before a restart cannot
@@ -201,6 +203,7 @@ export function isValidRuntimePortState(value: unknown): value is RuntimePortSta
     && hostnameOk
     && attestationOk
     && (state.clientStopping === undefined || state.clientStopping === true)
+    && (state.clientStopRequested === undefined || (state.clientStopRequested === true && state.clientStopping === true))
     && (state.servingGeneration === undefined || (typeof state.servingGeneration === "string" && state.servingGeneration.length <= 64))
     && (state.restartOwner === undefined || (typeof state.restartOwner === "string" && state.restartOwner.length <= 64))
     && siblingOk;

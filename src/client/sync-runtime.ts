@@ -43,14 +43,18 @@ export function assertRouteIntentPort(port: number): void {
 }
 
 /** The same C transaction excludes every sync commit; never mark a replacement runtime. */
-export function markClientRuntimeStopping(expected: Required<Pick<RuntimePortState, "pid" | "port" | "attestationSecret">>): void {
+export function markClientRuntimeStopping(
+  expected: Required<Pick<RuntimePortState, "pid" | "port" | "attestationSecret">>, options: { explicitStop?: boolean } = {},
+): void {
   withConfigMutationLockSync(() => {
     const current = readSyncRuntime();
     if (!current || current.pid !== expected.pid || current.port !== expected.port
       || current.attestationSecret !== expected.attestationSecret) {
       throw new ClientSyncRuntimeError("client_runtime_changed");
     }
-    if (!current.clientStopping) writeRuntimePort({ ...current, clientStopping: true });
+    if (!current.clientStopping || (options.explicitStop && !current.clientStopRequested)) {
+      writeRuntimePort({ ...current, clientStopping: true, ...(options.explicitStop ? { clientStopRequested: true } : {}) });
+    }
   });
 }
 

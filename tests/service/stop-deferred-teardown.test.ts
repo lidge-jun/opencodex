@@ -12,6 +12,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { fixturePath, repoPath } from "../helpers/repo-root";
 import { createLocalAttestationProof, LOCAL_ATTESTATION_CHALLENGE_HEADER, LOCAL_ATTESTATION_PROOF_HEADER } from "../../src/lib/local-management-attestation";
 import { LOCAL_MANAGEMENT_NONCE_HEADER } from "../../src/lib/local-management-capability";
+import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 
 /**
  * Behavioural cover for the deferred shared teardown (#3008).
@@ -53,12 +54,14 @@ function restoreResult(success: boolean): CodexNativeRestoreResult {
 }
 
 function connectClient(transport: "hub" | "link") {
+  const token = `ocx_data_${"c".repeat(40)}`;
+  writeFileSync(join(home, "service-api-token"), token);
   const serverUrl = transport === "link" ? "http://127.0.0.1:10200" : "https://hub.example.test";
   writeFileSync(join(home, "config.json"), JSON.stringify({ runtimeRole: "client", providers: {}, defaultProvider: "openai", client: {
     serverUrl, managementUrl: serverUrl, managementTransport: "direct", transport,
     ...(transport === "link" ? { link: { tunnelPort: 10200, linkId: "lnk_0123456789abcdef" } } : {}),
     selectedClients: ["codex"], tokenEnv: "OPENCODEX_API_AUTH_TOKEN", apiKeyId: "fixture-client",
-    tokenFingerprint: "a".repeat(64), protocolVersion: 1, connectedAt: "2026-10-01T00:00:00.000Z",
+    tokenFingerprint: serviceApiTokenFingerprint(token), protocolVersion: 1, connectedAt: "2026-10-01T00:00:00.000Z",
   } }));
 }
 
@@ -95,7 +98,8 @@ async function runParentStop(options: {
   expect(report.unexpectedIo, child.stderr).toEqual([]);
   // The Windows checked stop needs its receipt before it sends anything.
   const refusedWithoutReceipt = options.windowsStopWiring === true && !options.receipt;
-  expect(report.urls, child.stderr).toHaveLength(options.clientServer || options.exitCleanup || options.alreadyStopped || refusedWithoutReceipt ? 0 : 1);
+  const changedBeforeLinkFence = options.clientTransport === "link" && options.connectDuringDiscovery;
+  expect(report.urls, child.stderr).toHaveLength(options.clientServer || options.exitCleanup || options.alreadyStopped || refusedWithoutReceipt || changedBeforeLinkFence ? 0 : 1);
   return { ...report, exitCode: child.status, stderr: child.stderr, stdout: child.stdout };
 }
 
@@ -357,6 +361,14 @@ describe("parent CLI shared teardown completion", () => {
         // now owns routing. Only the ownership read at the restore boundary decides.
         const outcome = await runParentStop({ receipt, clientTransport: "link", serverTeardown: true, json: true,
           response: null, restore: restoreResult(true), ...transition });
+        if ("connectDuringDiscovery" in transition) {
+          // Discovery now precedes the Link sync fence and every process/service stop.
+          expect(outcome.calls).toMatchObject({ service: 0, killed: 0, native: 0, grok: 0, cleared: 0 });
+          expect(outcome.nonce).toBeUndefined();
+          expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: false, runtimeDown: false, sharedTeardown: "skipped" });
+          expect(outcome.exitCode).toBe(1);
+          return;
+        }
         expect(outcome.calls, outcome.stderr).toMatchObject({ killed: 0, native: 0, grok: 0, cleared: receipt ? 1 : 0 });
         expect(outcome.receiptExists).toBe(false);
         // Seen before the POST without a nonce, the hub's not-owned answer already confirms the stop.
@@ -520,7 +532,8 @@ describe("parent CLI shared teardown completion", () => {
       const outcome = await runParentStop({ ...scenario, receipt: false, windowsStopWiring: true, restore: restoreResult(true) });
       expect(outcome.calls, outcome.stderr).toMatchObject({ killed: 0, native: 0, grok: 0, cleared: 0 });
       expect(outcome.nonce).toBeUndefined();
-      expect(outcome.stderr).toContain("receipt storage unavailable");
+      expect(outcome.stderr).toContain("clientTransport" in scenario && scenario.clientTransport === "link"
+        && "connectDuringDiscovery" in scenario ? "runtime sync fence could not be verified" : "receipt storage unavailable");
       expect(outcome.exitCode, outcome.stderr).toBe(1);
     });
   }

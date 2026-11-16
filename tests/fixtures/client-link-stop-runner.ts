@@ -1,7 +1,7 @@
 /** Isolated disk and native-runtime coverage for a connected Link Child's stop. */
 import { mock } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { CODEX_CONFIG_PATH, CODEX_HOME, CODEX_PROFILE_PATH, DEFAULT_CATALOG_PATH } from "../../src/codex/paths";
 import { JOURNAL_PATH, markJournalInjectedState, writeJournal } from "../../src/codex/journal";
@@ -11,16 +11,26 @@ import { takeDesktopSupervisedMarker } from "../../src/lib/system-restart-contra
 import { claimPendingTeardown } from "../../src/config/pending-teardown";
 
 const options = JSON.parse(readFileSync(0, "utf8")) as {
-  mode: "runtime" | "helper" | "api" | "parent" | "guard" | "retry";
+  mode: "runtime" | "helper" | "api" | "parent" | "guard" | "retry" | "file-preflight" | "file-stop" | "file-cycle" | "file-restart-overlap" | "file-restart-control";
   transport?: "link" | "hub";
   signal?: NodeJS.Signals;
   osSignal?: boolean;
   syncBeforeStop?: boolean;
   externalSignal?: boolean;
   holdShutdown?: boolean;
-  runtimeRecord?: "absent" | "invalid" | "foreign";
+  runtimeRecord?: "absent" | "invalid" | "foreign" | "explicit-stop-unfenced";
   retryError?: "busy" | "locked" | "exhausted" | "permission" | "unwrapped" | "identity";
   repeat?: boolean;
+  fileClients?: Array<"pi" | "opencode">;
+  fileStandalone?: boolean;
+  fileConflict?: boolean;
+  fileOwnerChange?: boolean;
+  fileOnly?: boolean;
+  lateFileSync?: boolean;
+  deferFileApply?: boolean;
+  oldStopCapability?: boolean;
+  repairFileRefusal?: boolean;
+  observeFileRefusal?: boolean;
   preserve?: "service" | "desktop" | "receipt" | "sibling" | "restart" | "restart-rollback" | "recycle-pending" | "restart-rollback-recycle";
   mutation?: "connection" | "journal" | "process-journal" | "config" | "profile" | "unverified" | "selection" | "oversized" | "nonregular" | "rotation" | "hub" | "catalog" | "prior-catalog" | "api-key" | "token" | "management" | "link-id";
 };
@@ -29,8 +39,10 @@ mkdirSync(CODEX_HOME, { recursive: true });
 mkdirSync(home, { recursive: true });
 const lifecycle = await import("../../src/client/lifecycle-lock");
 const lock = lifecycle.withClientLifecycleSync;
+const asyncLock = lifecycle.withClientLifecycle;
 mock.module("../../src/client/lifecycle-lock", () => ({ ...lifecycle,
   withClientLifecycleSync: (work: Parameters<typeof lock>[0]) => lock(work, { lockPath: join(home, "lifecycle.sqlite") }),
+  withClientLifecycle: (work: Parameters<typeof asyncLock>[0]) => asyncLock(work, { lockPath: join(home, "lifecycle.sqlite") }),
 }));
 const token = `ocx_data_${"c".repeat(40)}`;
 const config = getDefaultConfig();
@@ -43,7 +55,7 @@ config.client = {
   managementUrl: options.transport === "hub" ? "https://hub.example.test" : "http://127.0.0.1:34567",
   managementTransport: "direct", transport: options.transport ?? "link",
   ...(options.transport === "hub" ? {} : { link: { tunnelPort: 34567, linkId: "lnk_0123456789abcdef" } }),
-  selectedClients: ["codex"], tokenEnv: "OPENCODEX_API_AUTH_TOKEN", apiKeyId: "fixture-client",
+  selectedClients: ["codex", ...(options.deferFileApply ? [] : options.fileClients ?? [])], tokenEnv: "OPENCODEX_API_AUTH_TOKEN", apiKeyId: "fixture-client",
   tokenFingerprint: serviceApiTokenFingerprint(token), protocolVersion: 1, connectedAt: "2026-10-01T00:00:00.000Z",
 };
 saveConfig(config);
@@ -62,6 +74,53 @@ writeFileSync(DEFAULT_CATALOG_PATH, JSON.stringify(nativeCatalog));
 ensureCatalogBackup(DEFAULT_CATALOG_PATH, nativeCatalog);
 writeFileSync(DEFAULT_CATALOG_PATH, '{"models":[{"slug":"fixture/home-model"}]}');
 writeFileSync(join(home, "service-api-token"), token);
+const filePaths: Record<string, string> = {};
+const fileOwnedBytes: Record<string, string> = {};
+let preparedFileIntent: import("../../src/integrations/route-intent-connected").PreparedConnectedRouteIntent | undefined;
+if (options.fileClients?.length) {
+  process.env.XDG_CONFIG_HOME = join(process.env.HOME!, ".config");
+  process.env.PI_CODING_AGENT_DIR = join(process.env.HOME!, ".pi", "agent");
+  const { INTEGRATION_CLIENTS } = await import("../../src/integrations/registry");
+  const writers = await import("../../src/integrations/writer");
+  const { createIntegrationStateStore } = await import("../../src/integrations/store");
+  const { ROUTE_CLIENT_IDS } = await import("../../src/link/route-intent");
+  const { applyConnectedRouteIntent } = await import("../../src/integrations/route-intent-connected");
+  for (const client of options.fileClients) {
+    const spec = INTEGRATION_CLIENTS[client];
+    const path = filePaths[client] = spec.configPath(process.env, process.env.HOME!);
+    mkdirSync(spec.detectDir(process.env, process.env.HOME!), { recursive: true });
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, '{"fixtureUserSetting":"keep"}\n');
+    if (options.fileStandalone) {
+      const applied = writers.applyIntegration({ clientId: client, config, port: config.port,
+        models: [{ namespaced: "fixture/native", provider: "fixture", id: "native" }], store: createIntegrationStateStore() });
+      if (!applied.ok) throw new Error(applied.message);
+    }
+  }
+  const document = { version: 1 as const, home: { name: "fixture", version: "1" },
+    clients: Object.fromEntries(ROUTE_CLIENT_IDS.map(id => [id, { enabled: options.fileClients!.includes(id as "pi" | "opencode") }])),
+    sources: Object.fromEntries(ROUTE_CLIENT_IDS.map(id => [id, "default"])) } as import("../../src/link/route-intent").HomeRouteIntentDocument;
+  preparedFileIntent = { document, stale: false, fetchedAt: "2026-11-16T00:00:00.000Z" };
+  const applied = options.deferFileApply ? undefined : await applyConnectedRouteIntent(expected, token, preparedFileIntent, {
+    onlyClients: options.fileClients, lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+  }, { fetchImpl: (async () => Response.json({ data: [{ id: "fixture/home-model" }] })) as typeof fetch });
+  for (const client of options.fileClients) {
+    if (!options.deferFileApply && applied?.outcomes.find(row => row.client === client)?.outcome !== "current") throw new Error("fixture route apply failed");
+    fileOwnedBytes[client] = readFileSync(filePaths[client]!, "utf8");
+  }
+  if (options.fileConflict) {
+    const path = filePaths.pi!;
+    const changed = JSON.parse(fileOwnedBytes.pi!); changed.providers.opencodex.apiKey = "operator-edited-placeholder";
+    writeFileSync(path, JSON.stringify(changed));
+  }
+  if (options.fileOwnerChange) {
+    const disable = writers.disableIntegrationCoordinated;
+    mock.module("../../src/integrations/writer", () => ({ ...writers, disableIntegrationCoordinated: async (...args: Parameters<typeof disable>) => {
+      config.client!.connectedAt = "2026-11-16T01:00:00.000Z"; saveConfig(config);
+      return disable(...args);
+    } }));
+  }
+}
 const grokHome = join(home, "grok");
 process.env.GROK_HOME = grokHome;
 mkdirSync(grokHome, { recursive: true });
@@ -109,6 +168,10 @@ const configContents = () => statSync(CODEX_CONFIG_PATH).isFile() ? readFileSync
 const before = configContents();
 const profileBefore = readFileSync(CODEX_PROFILE_PATH, "utf8");
 let syncEvidence: { changedFields: string[]; fullCasRefused: boolean; catalogWritten: boolean; injected: boolean; journalHomeBound: boolean } | undefined;
+let fileRefusal: { bound: boolean; stopping: boolean; before: Record<string, string> } | undefined;
+let fileLateResult: string | undefined;
+let fileSyncFlight: Promise<void> | undefined;
+let releaseFileModels: (() => void) | undefined;
 const snapshot = (result: unknown) => ({
   result, before, profileBefore, syncEvidence, after: configContents(),
   profileAfter: existsSync(CODEX_PROFILE_PATH) ? readFileSync(CODEX_PROFILE_PATH, "utf8") : null,
@@ -117,6 +180,7 @@ const snapshot = (result: unknown) => ({
   protectedUnchanged: protectedPaths.every((path, index) => readFileSync(path, "utf8") === protectedBefore[index]),
   catalogBefore, catalogAfter: JSON.parse(readFileSync(DEFAULT_CATALOG_PATH, "utf8")),
   grokBefore, grokAfter: readFileSync(grokPath, "utf8"),
+  fileOwnedBytes, fileAfter: Object.fromEntries(Object.entries(filePaths).map(([id, path]) => [id, readFileSync(path, "utf8")])), fileRefusal, fileLateResult,
 });
 const report = (result: unknown) => writeFileSync(join(home, "result.json"), JSON.stringify(snapshot(result)));
 process.on("exit", () => writeFileSync(join(home, "exit.json"), JSON.stringify(snapshot(null))));
@@ -153,12 +217,23 @@ if (options.mode === "retry") {
   try { guard.run(() => writes.push("after-change")); } catch { refused = true; }
   protectedBefore = protectedPaths.map(path => readFileSync(path, "utf8"));
   report({ writes, refused, boundary: guard.boundary() });
-} else if (options.mode === "runtime") {
-  if (options.holdShutdown) {
+} else if (["runtime", "file-preflight", "file-stop", "file-restart-overlap", "file-restart-control"].includes(options.mode)) {
+  if (options.fileOnly) {
+    // File-route tests isolate the existing native restore owner. Its own real-disk tests
+    // above remain independent; this stub performs no Codex/catalog/history writes.
+    const native = await import("../../src/codex/inject");
+    mock.module("../../src/codex/inject", () => ({ ...native, restoreNativeCodex: () => ({ success: true, message: "native restore outside this fixture",
+      artifacts: { config: { state: "skipped", changed: false }, catalog: { state: "skipped", changed: false }, history: { state: "skipped", changed: false } },
+    }) }));
+  }
+  if (options.holdShutdown || options.lateFileSync) {
     const diagnostics = await import("../../src/link/diagnostics");
     mock.module("../../src/link/diagnostics", () => ({ ...diagnostics, flushLinkDiagnostics: async () => {
-      writeFileSync(join(home, "shutdown-drained"), "ready");
-      while (!existsSync(join(home, "shutdown-release"))) await Bun.sleep(10);
+      if (options.holdShutdown) {
+        writeFileSync(join(home, "shutdown-drained"), "ready");
+        while (!existsSync(join(home, "shutdown-release"))) await Bun.sleep(10);
+      }
+      await fileSyncFlight;
     } }));
   }
   if (options.preserve?.startsWith("restart-rollback")) {
@@ -170,13 +245,131 @@ if (options.mode === "retry") {
   const { scheduleStandaloneRecycle, startClientRuntime } = await import("../../src/client/runtime");
   const { startMachineListener } = await import("../../src/client/machine-listener");
   let requestRestart: (() => Promise<unknown>) | undefined;
+  let restartStopEntered!: () => void, releaseRestartStop!: () => void;
+  const restartStopping = new Promise<void>(resolve => { restartStopEntered = resolve; });
+  const restartRelease = new Promise<void>(resolve => { releaseRestartStop = resolve; });
   await startClientRuntime({ block: false }, { restartSupervisor: () => options.preserve?.startsWith("restart-rollback") ? Promise.resolve(null) : new Promise(() => {}), startListener: (port, deps) => {
     requestRestart = deps?.restart?.request;
-    const server = startMachineListener(port, deps);
+    const server = startMachineListener(port, options.oldStopCapability && deps?.restart
+      ? { ...deps, restart: { ...deps.restart, linkStopFence: undefined } } : deps);
     const stop = server.stop.bind(server);
-    server.stop = ((close: boolean) => { report({ atListenerStop: true }); return stop(close); }) as typeof server.stop;
+    server.stop = ((close: boolean) => {
+      if (options.mode === "file-restart-overlap" && !close) {
+        restartStopEntered(); return restartRelease.then(() => stop(close));
+      }
+      report({ atListenerStop: true }); releaseFileModels?.(); return stop(close);
+    }) as typeof server.stop;
     return server;
   } });
+  if (options.mode === "file-restart-overlap" || options.mode === "file-restart-control") {
+    const { readRuntimePort } = await import("../../src/config/process-state");
+    const { clientSyncRuntimeGuard } = await import("../../src/client/sync-runtime");
+    const before = readRuntimePort(process.pid)!;
+    if (!requestRestart) throw new Error("fixture missing restart admission");
+    await requestRestart();
+    let preflight: unknown;
+    if (options.mode === "file-restart-overlap") {
+      await restartStopping;
+      preflight = await (await import("../../src/cli/stop-restore")).preflightConnectedClientStop({ pid: process.pid, port: config.port, hostname: "127.0.0.1" });
+      releaseRestartStop();
+    }
+    let after = readRuntimePort(process.pid)!;
+    for (let attempt = 0; attempt < 400 && after.servingGeneration === before.servingGeneration; attempt++) {
+      await Bun.sleep(10); after = readRuntimePort(process.pid)!;
+    }
+    let sync = "accepted";
+    try { clientSyncRuntimeGuard()(); } catch (error) { sync = (error as { code: string }).code; }
+    const admission = options.mode === "file-restart-overlap" ? await requestRestart() : undefined;
+    const health = await fetch(`http://127.0.0.1:${config.port}/healthz`);
+    report({ preflight, rolledBack: after.servingGeneration !== before.servingGeneration, bound: health.ok,
+      stopping: after.clientStopping === true, explicitStop: after.clientStopRequested === true, sync, admission });
+    process.exit(0);
+  }
+  if (options.lateFileSync) {
+    const { clientSyncRuntimeGuard } = await import("../../src/client/sync-runtime");
+    const { withConfigMutationLockSync } = await import("../../src/config");
+    const { applyConnectedRouteIntent } = await import("../../src/integrations/route-intent-connected");
+    const guard = clientSyncRuntimeGuard();
+    let modelsReady!: () => void;
+    const ready = new Promise<void>(resolve => { modelsReady = resolve; });
+    const release = new Promise<void>(resolve => { releaseFileModels = resolve; });
+    // The real materializer has already committed its write-ahead receipt, then awaits
+    // this Home catalog response. Deliver it only after the stopping listener releases.
+    fileSyncFlight = applyConnectedRouteIntent(expected, token, preparedFileIntent, {
+      onlyClients: options.fileClients, lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+      beforeWrite: () => withConfigMutationLockSync(guard),
+    }, { fetchImpl: (async () => {
+      modelsReady(); await release; return Response.json({ data: [{ id: "fixture/late-home-model" }] });
+    }) as typeof fetch }).then(() => { fileLateResult = "unexpected completion"; }, error => { fileLateResult = error.message; });
+    await ready;
+  }
+  if (options.mode === "file-stop") {
+    const calls = { service: 0, killed: 0 };
+    const kill = process.kill;
+    process.kill = ((pid: number, signal?: number | NodeJS.Signals) => {
+      if (signal === 0) return kill(pid, signal);
+      calls.killed++; throw new Error("unexpected stop signal after file refusal");
+    }) as typeof process.kill;
+    const control = await import("../../src/lib/process-control");
+    mock.module("../../src/lib/process-control", () => ({ ...control, stopProxy: async () => {
+      calls.killed++; throw new Error("unexpected process stop after file refusal");
+    } }));
+    const service = await import("../../src/service");
+    mock.module("../../src/service", () => ({ ...service, stopServiceIfInstalledDetailed: () => {
+      calls.service++; throw new Error("unexpected service stop after file refusal");
+    } }));
+    const dispatch = await import("../../src/cli/dispatch");
+    const command = dispatch.dispatchCommand;
+    mock.module("../../src/cli/dispatch", () => ({ ...dispatch, dispatchCommand: async (...args: Parameters<typeof command>) => {
+      const exitCode = await command(...args);
+      const health = await fetch(`http://127.0.0.1:${config.port}/healthz`);
+      report({ exitCode, calls, bound: health.ok, stopping: JSON.parse(readFileSync(join(home, "runtime-port.json"), "utf8")).clientStopping === true });
+      return exitCode;
+    } }));
+    mock.module("../../src/cli/codex-shim-autorestore", () => ({ async maybeAutoRestoreCodexShimAsync() {} }));
+    process.argv = [process.execPath, "ocx", "stop", "--json"];
+    await import("../../src/cli/index");
+  }
+  if (options.mode === "file-preflight") {
+    const { clientSyncRuntimeGuard } = await import("../../src/client/sync-runtime");
+    const { withConfigMutationLockSync } = await import("../../src/config");
+    const admitted = options.deferFileApply ? clientSyncRuntimeGuard() : undefined;
+    const { preflightConnectedClientStop } = await import("../../src/cli/stop-restore");
+    const outcome = await preflightConnectedClientStop({ pid: process.pid, port: config.port, hostname: "127.0.0.1" });
+    if (admitted) {
+      try {
+        await (await import("../../src/integrations/route-intent-connected")).applyConnectedRouteIntent(expected, token, preparedFileIntent, {
+          onlyClients: options.fileClients, lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+          beforeWrite: () => withConfigMutationLockSync(admitted),
+        }, { fetchImpl: (async () => Response.json({ data: [{ id: "fixture/home-model" }] })) as typeof fetch });
+        fileLateResult = "unexpected completion";
+      } catch (error) { fileLateResult = (error as { code: string }).code; }
+    }
+    const health = await fetch(`http://127.0.0.1:${config.port}/healthz`);
+    report({ outcome, bound: health.ok, stopping: JSON.parse(readFileSync(join(home, "runtime-port.json"), "utf8")).clientStopping === true });
+    // The test owns this synthetic runtime and disposes it after observing the preflight.
+    process.exit(0);
+  }
+  if (options.repairFileRefusal || options.observeFileRefusal) {
+    const printError = console.error;
+    console.error = (...args: unknown[]) => {
+      printError(...args);
+      if (!args.some(value => String(value).includes("The listener remains bound"))) return;
+      void (async () => {
+        const health = await fetch(`http://127.0.0.1:${config.port}/healthz`);
+        const { readRuntimePort } = await import("../../src/config/process-state");
+        fileRefusal = { bound: health.ok, stopping: readRuntimePort(process.pid)?.clientStopping === true,
+          before: Object.fromEntries(Object.entries(filePaths).map(([id, path]) => [id, readFileSync(path, "utf8")])) };
+        if (options.observeFileRefusal) {
+          report({ refused: true, bound: fileRefusal.bound, stopping: fileRefusal.stopping });
+          // Dispose only this synthetic process after observing that production kept it bound.
+          process.exit(0);
+        }
+        for (const [id, path] of Object.entries(filePaths)) writeFileSync(path, fileOwnedBytes[id]!);
+        process.emit("SIGTERM", "SIGTERM");
+      })();
+    };
+  }
   if (options.syncBeforeStop) {
     const { syncConnectedClient } = await import("../../src/client/connect");
     const { assertClientConnectionUnchanged } = await import("../../src/client/state");
@@ -197,6 +390,10 @@ if (options.mode === "retry") {
     const path = join(home, "runtime-port.json");
     if (options.runtimeRecord === "absent") unlinkSync(path);
     else if (options.runtimeRecord === "invalid") writeFileSync(path, "{");
+    else if (options.runtimeRecord === "explicit-stop-unfenced") {
+      const record = JSON.parse(readFileSync(path, "utf8")); record.clientStopRequested = true; delete record.clientStopping;
+      writeFileSync(path, JSON.stringify(record));
+    }
     else { const record = JSON.parse(readFileSync(path, "utf8")); record.pid += 100_000; writeFileSync(path, JSON.stringify(record)); }
   }
   mutate();
@@ -217,6 +414,16 @@ if (options.mode === "retry") {
     process.emit(options.signal ?? "SIGTERM", options.signal ?? "SIGTERM");
   } else if (options.osSignal) writeFileSync(join(home, "ready"), "ready");
   else process.emit(options.signal ?? "SIGTERM", options.signal ?? "SIGTERM");
+} else if (options.mode === "file-cycle") {
+  const { restoreLinkFileRouting } = await import("../../src/client/stop-file-routing");
+  const first = await restoreLinkFileRouting(expected);
+  const second = await restoreLinkFileRouting(expected);
+  const stopped = Object.fromEntries(Object.entries(filePaths).map(([id, path]) => [id, readFileSync(path, "utf8")]));
+  const { applyConnectedRouteIntent } = await import("../../src/integrations/route-intent-connected");
+  const reapplied = await applyConnectedRouteIntent(expected, token, preparedFileIntent, {
+    onlyClients: options.fileClients, lifecycleLockDeps: { lockPath: join(home, "lifecycle.sqlite") },
+  }, { fetchImpl: (async () => Response.json({ data: [{ id: "fixture/home-model" }] })) as typeof fetch });
+  report({ first, second, stopped, reapplied: reapplied?.outcomes.filter(row => options.fileClients?.includes(row.client as "pi" | "opencode")) });
 } else {
   const result = options.mode === "api"
     ? await (await import("../../src/server/stop-teardown")).performStopTeardown(new URL("http://127.0.0.1:10100/api/stop?deferSharedTeardown=1&teardownNonce=fixture"), { ownsReceipt: () => true })

@@ -1096,9 +1096,10 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
   // the record; a record left behind by a hard-killed sibling still says so.
   const siblingOfPort = readRuntimePort()?.siblingOfPort;
   const stoppingSibling = siblingOfPort !== undefined;
-  const connectedClientSkip = stoppingSibling ? null : connectedClientStopSkipLine(readClientConnectionState());
+  const connectedClientState = readClientConnectionState();
+  const connectedClientSkip = stoppingSibling ? null : connectedClientStopSkipLine(connectedClientState);
   let connectedClientAlreadyStopped = false;
-  if (connectedClientSkip) {
+  if (!stoppingSibling && connectedClientState.kind === "connected") {
     const preflight = await preflightConnectedClientStop(snapshot?.approval);
     if (preflight === "already-stopped") connectedClientAlreadyStopped = true;
     else if (preflight) return preflight;

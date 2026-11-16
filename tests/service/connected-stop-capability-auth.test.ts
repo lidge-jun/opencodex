@@ -67,6 +67,7 @@ afterEach(async () => {
 type FixtureOptions = {
   health?: "proxy" | "client" | "foreign";
   healthProof?: boolean;
+  linkStopFence?: boolean;
   readProof?: boolean;
   missingRecord?: boolean;
   record?: Record<string, unknown>;
@@ -96,7 +97,7 @@ function listener(options: FixtureOptions = {}) {
       return options.health === "foreign"
         ? Response.json({ service: "other" }, { status: 404 })
         : Response.json({ service: "opencodex", pid: process.pid,
-          ...(options.health === "client" ? { role: "client" } : {}) }, { headers });
+          ...(options.health === "client" ? { role: "client" } : {}), ...(options.linkStopFence ? { linkStopFence: true } : {}) }, { headers });
     }
     const error = requireManagementAuth(req, auth, undefined, record());
     if (error) return error;
@@ -126,6 +127,21 @@ describe("connected stop preflight runtime authority", () => {
     await assertConnectedClientStopSupported(fixture.target);
     expect(fixture.requests.map(req => req.path)).toEqual(["/healthz"]);
     expect(fixture.requests[0]!.headers.has(LOCAL_ATTESTATION_CHALLENGE_HEADER)).toBe(true);
+    expect(fixture.requests[0]!.headers.has("x-opencodex-api-key")).toBe(false);
+  });
+
+  test("Link preflight refuses an attested older native runtime without the explicit-stop fence capability", async () => {
+    const fixture = listener({ health: "client", healthProof: true });
+    const before = readFileSync(join(home, "runtime-port.json"), "utf8");
+    await expect(assertConnectedClientStopSupported(fixture.target, { requireLinkStopFence: true })).rejects.toThrow("Connected-client stop refused");
+    expect(fixture.requests.map(req => req.path)).toEqual(["/healthz"]);
+    expect(readFileSync(join(home, "runtime-port.json"), "utf8")).toBe(before);
+  });
+
+  test("Link preflight accepts the explicit-stop fence capability only on the attested runtime", async () => {
+    const fixture = listener({ health: "client", healthProof: true, linkStopFence: true });
+    await assertConnectedClientStopSupported(fixture.target, { requireLinkStopFence: true });
+    expect(fixture.requests.map(req => req.path)).toEqual(["/healthz"]);
     expect(fixture.requests[0]!.headers.has("x-opencodex-api-key")).toBe(false);
   });
 

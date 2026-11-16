@@ -101,11 +101,13 @@ function writeHubConnection(): void {
 const lifecycle = await import("../../src/client/lifecycle-lock");
 mock.module("../../src/client/lifecycle-lock", () => ({ ...lifecycle,
   withClientLifecycleSync: (work: Parameters<typeof lifecycle.withClientLifecycleSync>[0]) => {
-    if (options.lifecycleBusy) throw new Error("client_lifecycle_busy");
+    // These scenarios target the restore boundary after termination, not the new
+    // connected-Link file preflight while its listener is still alive.
+    if (options.lifecycleBusy && !alive) throw new Error("client_lifecycle_busy");
     calls.lifecycle += 1;
     const value = work(Object.freeze({}) as Parameters<typeof work>[0]);
-    if (options.connectAfterBoundary) queueMicrotask(writeHubConnection);
-    if (options.pendingAfterBoundary) queueMicrotask(publishPending);
+    if (options.connectAfterBoundary && !alive) queueMicrotask(writeHubConnection);
+    if (options.pendingAfterBoundary && !alive) queueMicrotask(publishPending);
     return value;
   },
 }));
@@ -174,10 +176,14 @@ mock.module("../../src/config/pending-teardown", () => ({
 }));
 
 const state = await import("../../src/config/process-state");
+const readRuntime = state.readRuntimePort;
+if (!options.alreadyStopped && !options.noRuntimeRecord) {
+  writeFileSync(join(home, "runtime-port.json"), JSON.stringify({ ...endpoint, pid: fakePid, attestationSecret: ATTESTATION_SECRET }));
+}
 mock.module("../../src/config/process-state", () => ({
   ...state,
   readPid: () => options.orphan || options.alreadyStopped || (options.deadPidReadsNull && !alive) ? null : fakePid,
-  readRuntimePort: () => options.alreadyStopped || options.noRuntimeRecord ? null : { ...endpoint, pid: fakePid, attestationSecret: ATTESTATION_SECRET },
+  readRuntimePort: (pid?: number) => options.alreadyStopped || options.noRuntimeRecord ? null : readRuntime(pid),
   removePid() {},
   removeRuntimePort() {},
 }));
@@ -268,6 +274,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
     const headers = proof ? { [LOCAL_ATTESTATION_PROOF_HEADER]: proof } : undefined;
     if (url.endsWith("/healthz")) {
       return Response.json({ service: "opencodex", version: "2.93.0", pid: fakePid,
+        ...(options.clientTransport === "link" ? { linkStopFence: true } : {}),
         ...(!options.serverTeardown && !options.clientServer ? { role: "client" } : {}) }, { headers });
     }
     if (!url.endsWith("/api/stop")) return unexpected(`GET ${url}`);

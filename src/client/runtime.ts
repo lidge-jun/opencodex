@@ -4,8 +4,8 @@ import { existsSync } from "node:fs";
 import type { Server } from "bun";
 import { siblingRuntimeField, withSiblingMarker } from "../codex/sibling-start";
 import { issueSiblingHandoff } from "../codex/sibling-handoff";
-import { loadConfig } from "../config";
-import { removePid, removeRuntimePort, writePid, writeRuntimePort, type RuntimePortState } from "../config/process-state";
+import { loadConfig, withConfigMutationLockSync } from "../config";
+import { readRuntimePort, removePid, removeRuntimePort, writePid, writeRuntimePort, type RuntimePortState } from "../config/process-state";
 import { currentServingCommand } from "../config/serving-runtimes";
 import { installCrashGuards } from "../lib/crash-guard";
 import { observeLocalCredentials } from "../local-credentials/runtime-observation";
@@ -33,7 +33,7 @@ import { isLinkConnection, readClientConnectionState, readClientConnectionStateW
 import { withClientLifecycleSync } from "./lifecycle-lock";
 import { clientConnectionEnded, clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, restartOwnerEvidence, type ClientRestartController, type RestartOwner } from "./runtime-restart";
 import { createLinkParityReporter, type LinkParityReporter } from "./link-parity-reporter";
-import { restoreLinkClientRouting } from "./stop-routing";
+import { restoreLinkClientRoutingBeforeExit } from "./stop-routing";
 import { SUPERVISOR_MARKER_ENVS } from "../lib/supervisor-markers";
 import { markClientRuntimeStopping, markClientRuntimeStoppingWithRetry } from "./sync-runtime";
 import { startRouteIntentTick, type RouteIntentTick } from "../integrations/route-intent-tick";
@@ -52,6 +52,7 @@ let recycleScheduled = false;
 let recycleTimer: ReturnType<typeof setTimeout> | undefined;
 let recycleFlight: Promise<void> | null = null;
 let clientStopping = false;
+let explicitClientStopRequested = false;
 
 /**
  * When this runtime's process started (OCX-6, P5): what `/healthz` reports as `startedAt` and the
@@ -114,7 +115,7 @@ export function clientRuntimeRecord(
 ): RuntimePortState {
   let command: string[] | undefined;
   try { command = currentServingCommand(); } catch { /* no reliable relaunch identity; update admission fails closed */ }
-  return { pid, port, hostname: "127.0.0.1", attestationSecret, ...(command ? { command } : {}), ...siblingRuntimeField(), ...(clientStopping ? { clientStopping: true as const } : {}), ...(owner ? { restartOwner: owner } : {}) };
+  return { pid, port, hostname: "127.0.0.1", attestationSecret, ...(command ? { command } : {}), ...siblingRuntimeField(), ...(clientStopping ? { clientStopping: true as const } : {}), ...(explicitClientStopRequested ? { clientStopRequested: true as const } : {}), ...(owner ? { restartOwner: owner } : {}) };
 }
 
 /** Evaluated once: the launch environment and parent of this process do not change. */
@@ -358,6 +359,14 @@ export async function startClientRuntime(
   // restart rolls back (OCX-6); the stopped supervisor cannot be started twice, so each call builds one.
   // The port this process actually serves on; a rollback binds exactly this one again.
   let servedPort = preferred;
+  const observeExplicitStop = (): boolean => {
+    const current = readRuntimePort(process.pid);
+    if (current?.port === servedPort && current.attestationSecret === attestationSecret && current.clientStopRequested) {
+      explicitClientStopRequested = true;
+      clientStopping = true;
+    }
+    return explicitClientStopRequested;
+  };
   // Returns false only for a rollback whose connection changed while it was binding: the new
   // listener is then closed unpublished and the caller recycles.
   const serve = async (rollback?: { port: number; portWaitMs: number }): Promise<boolean> => {
@@ -383,7 +392,7 @@ export async function startClientRuntime(
       preferred: rollback?.port ?? preferred,
       explicitPort: rollback !== undefined || options.port !== undefined,
       configuredPort: config.port,
-      restart: { attestationSecret, startedAt: CLIENT_RUNTIME_STARTED_AT, request: () => restartController.request() },
+      restart: { attestationSecret, startedAt: CLIENT_RUNTIME_STARTED_AT, ...(linkMode ? { linkStopFence: true as const } : {}), request: () => restartController.request() },
       ...(linkMode ? { linkStatus: () => activeSupervisor?.status() ?? { kind: "stopped" as const }, linkKeySource: linkKey } : {}),
       ...(supervisor ? { linkTunnel: supervisor } : homeInitiated ? { linkTunnel: HOME_INITIATED_LINK_TUNNEL } : {}),
       ...(linkReadiness ? { linkReadiness } : {}),
@@ -397,10 +406,17 @@ export async function startClientRuntime(
       activeSupervisor = supervisor;
       supervisor?.start();
       activeCredentialObservation ??= observeLocalCredentials();
-      writePid(process.pid);
-      // A new generation per publication: syncs admitted before a failed restart refuse to commit
-      // into the runtime that serves again, while syncs admitted from here on proceed.
-      writeRuntimePort({ ...clientRuntimeRecord(process.pid, boundPort, attestationSecret), servingGeneration: randomUUID() });
+      const publishRecord = () => {
+        // A parent stop can arrive after restart admission. Never clear its fence on rollback;
+        // a fresh process has another attestation identity and cannot inherit this request.
+        if (rollback) observeExplicitStop();
+        writePid(process.pid);
+        // A new generation per publication: syncs admitted before a failed restart refuse to commit
+        // into the runtime that serves again, while syncs admitted from here on proceed.
+        writeRuntimePort({ ...clientRuntimeRecord(process.pid, boundPort, attestationSecret), servingGeneration: randomUUID() });
+      };
+      if (rollback) withConfigMutationLockSync(publishRecord);
+      else publishRecord();
       if (linkMode && state.value.link && linkKey) {
         activeReporter = createLinkParityReporter({ connection: state.value, linkKey, runtimeStartedAt: CLIENT_RUNTIME_STARTED_AT });
         activeReporter.start();
@@ -463,7 +479,7 @@ export async function startClientRuntime(
 
   let shuttingDown = false;
   const restartController: ClientRestartController = createClientRestartController({
-    stopping: () => shuttingDown,
+    stopping: () => shuttingDown || observeExplicitStop(),
     supervisor: io.restartSupervisor ?? clientRestartSupervisor,
     connectionChanged: () => clientConnectionEnded(state.value, readClientConnectionStateWithEvidence()),
     ownerProven,
@@ -476,7 +492,12 @@ export async function startClientRuntime(
     // later commit stand down under C; the replacement's record, or the fresh generation a rollback
     // publishes, keeps those syncs refused and admits new ones. A mark that cannot be written
     // abandons the restart before anything stops.
-    fence: async () => !linkMode || await markClientRuntimeStoppingWithRetry({ pid: process.pid, port: servedPort, attestationSecret }),
+    fence: async () => !linkMode || await markClientRuntimeStoppingWithRetry({ pid: process.pid, port: servedPort, attestationSecret }, {
+      mark: () => withConfigMutationLockSync(() => {
+        if (observeExplicitStop()) throw new Error("client_stop_requested");
+        markClientRuntimeStopping({ pid: process.pid, port: servedPort, attestationSecret });
+      }),
+    }),
     stop: stopServing,
     spawnReplacement: async deadlineAt => {
       const { replacementStartEnvironment } = await import("../server/management/system-restart");
@@ -539,8 +560,14 @@ export async function startClientRuntime(
         console.warn(`[client] link supervisor stop failed: ${error instanceof Error ? error.message : String(error)}`);
       }
       activeSupervisor = null;
-      const restored = linkMode ? restoreLinkClientRouting(state.value, { syncFenced }) : null;
+      const restored = linkMode ? await restoreLinkClientRoutingBeforeExit(state.value, { syncFenced }) : null;
       if (restored && !restored.success) console.error(`[client] ${restored.message}`);
+      if (restored?.retainListener) {
+        // Keep the stopping record and socket. Another signal can retry after the operator
+        // repairs the retained file/ownership evidence; no background sync can reapply it.
+        shuttingDown = false;
+        return;
+      }
       try {
         activeServer?.stop(true);
       } catch (error) {

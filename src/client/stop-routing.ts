@@ -13,7 +13,7 @@ import { serviceEnvironmentOwnedHere } from "../service/guards";
 import { stopRestoreWriteGuard } from "./restore-ownership";
 import { isLinkConnection } from "./state";
 
-export type LinkRoutingRestoreResult = { success: boolean; restored: boolean; message: string };
+export type LinkRoutingRestoreResult = { success: boolean; restored: boolean; message: string; retainListener?: true };
 
 const resumeGuidance = "After starting the Child again, run `ocx sync --restart-codex` to restore its Home routing.";
 const refusal = (reason: string): LinkRoutingRestoreResult => ({
@@ -21,14 +21,38 @@ const refusal = (reason: string): LinkRoutingRestoreResult => ({
   message: `Link Child Codex routing restore refused: ${reason}. No further writes; inspect remaining recovery evidence.`,
 });
 
+function preserveRouting(): boolean {
+  return process.env.OCX_SERVICE === "1" || isDesktopSupervised() || pendingTeardownOutstanding();
+}
+
+/** Await file writers before releasing the socket, retaining it when safe cleanup is refused. */
+export async function restoreLinkClientRoutingBeforeExit(
+  expected: OcxClientConnectionConfig, options: { syncFenced: boolean },
+): Promise<LinkRoutingRestoreResult> {
+  expected = structuredClone(expected);
+  if (siblingOfLivePort() !== null || !isLinkConnection(expected) || preserveRouting()) {
+    return restoreLinkClientRouting(expected, options);
+  }
+  try {
+    const { restoreLinkFileRouting } = await import("./stop-file-routing");
+    if (!options.syncFenced) throw new Error("the runtime sync fence could not be verified");
+    await restoreLinkFileRouting(expected, { beforeWrite: () => {
+      if (preserveRouting() || siblingOfLivePort() !== null) throw new Error("restart or teardown ownership changed");
+    } });
+  } catch (error) {
+    return { success: false, restored: false, retainListener: true,
+      message: `Link Child file routing restore refused: ${error instanceof Error ? error.message : "restoration failed"}. The listener remains bound; repair the client configuration or ownership evidence, then retry ocx stop.` };
+  }
+  return restoreLinkClientRouting(expected, options);
+}
+
 /** Unsupervised signal cleanup; explicit parent stop and restart retain their own restoration. */
 export function restoreLinkClientRouting(expected: OcxClientConnectionConfig, options: { syncFenced: boolean }): LinkRoutingRestoreResult {
   if (siblingOfLivePort() !== null) return { success: true, restored: false, message: siblingSkipMessage() };
   if (!isLinkConnection(expected)) {
     return { success: true, restored: false, message: "Hub connection-owned integrations preserved." };
   }
-  const preserve = () => process.env.OCX_SERVICE === "1" || isDesktopSupervised()
-    || pendingTeardownOutstanding();
+  const preserve = preserveRouting;
   if (preserve()) return { success: true, restored: false, message: "Supervised restart or pending teardown owns the client integrations." };
   if (options?.syncFenced !== true) return refusal("the runtime sync fence could not be verified");
   const guard = stopRestoreWriteGuard(expected);
