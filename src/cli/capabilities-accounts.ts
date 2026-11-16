@@ -86,10 +86,10 @@ export const ACCOUNT_CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["account", "import"], summary: "Import Google Antigravity accounts from a bounded Cockpit Tools document.",
-    usage: "ocx account import google-antigravity --format cockpit-tools (--file <path>|--stdin) [--json]",
+    usage: "ocx account import google-antigravity --format cockpit-tools (--file <path>|--stdin) [--accept-antigravity-risk] [--json]",
     routes: [{ method: "POST", path: "/api/oauth/accounts/import" }],
-    flags: [{ name: "--format", value: "string", required: true, summary: "Only cockpit-tools is supported." }, { name: "--file", value: "string", summary: "Bounded source document; exclusive with --stdin." }, { name: "--stdin", value: "boolean", summary: "Read the document from non-TTY stdin." }, { name: "--json", value: "boolean", summary: "Emit sanitized per-record import outcomes." }], mutates: true, json: "envelope",
-    details: ["Human-controlled credential handoff: choose exactly one source. Unsupported providers/formats are refused before source I/O. Partial failures or unsupported records return nonzero; do not echo the document."],
+    flags: [{ name: "--format", value: "string", required: true, summary: "Only cockpit-tools is supported." }, { name: "--file", value: "string", summary: "Bounded source document; exclusive with --stdin." }, { name: "--stdin", value: "boolean", summary: "Read the document from non-TTY stdin." }, { name: "--accept-antigravity-risk", value: "boolean", summary: "Accept the Google account-ban risk without the y/N prompt; required with --stdin." }, { name: "--json", value: "boolean", summary: "Emit sanitized per-record import outcomes." }], mutates: true, json: "envelope",
+    details: ["Human-controlled credential handoff: choose exactly one source. Unsupported providers/formats are refused before source I/O. Partial failures or unsupported records return nonzero; do not echo the document.", "Prints the Antigravity account-ban warning before reading the source; --file on a terminal asks y/N, otherwise --accept-antigravity-risk is required."],
   },
   {
     command: ["account","reauth"],

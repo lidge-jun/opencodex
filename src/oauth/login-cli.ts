@@ -18,6 +18,12 @@ import { codexAccountNamespaceProviderCollisionError } from "../codex/account-na
 import { assertAnthropicInstanceLoginConfig } from "./store-anthropic-instance";
 import { reportOAuthLoginError } from "./login-cli-errors";
 import { terminalSafeText } from "../lib/terminal-safe-text";
+import {
+  ANTIGRAVITY_RISK_CLI_FLAG,
+  antigravityRiskDecisionMessage,
+  requiresAntigravityRiskAcknowledgement,
+  resolveAntigravityRiskAcknowledgement,
+} from "./antigravity-risk";
 
 /**
  * Seams a test drives in place of a browser, a terminal and a real provider. Production passes
@@ -34,6 +40,8 @@ export interface LoginCliDeps {
   warn?: (message: string) => void;
   /** Ask one question, read one line. Defaults to a readline prompt that owns its own lifetime. */
   ask?: (question: string) => Promise<string>;
+  /** Whether a person can answer a prompt. Defaults to stdin being a terminal. */
+  isInteractive?: () => boolean;
 }
 
 /**
@@ -116,10 +124,12 @@ export function warnIfLiveReloadSkipped(result: LocalProviderReloadResult | null
  * that used to be their only pointer to it.
  */
 export function loginUsageMessage(): string {
-  return `Usage: ocx login <provider> [--headless]\n`
+  return `Usage: ocx login <provider> [--headless] [${ANTIGRAVITY_RISK_CLI_FLAG}]\n`
     + `  --headless:    no browser and no local port — approve in any browser, then paste the code\n`
     + `                 it shows or confirm the device code printed here\n`
     + `                 (${listCodeLoginProviders().join(", ")})\n`
+    + `  ${ANTIGRAVITY_RISK_CLI_FLAG}: google-antigravity only; accept the account-ban risk without\n`
+    + `                 the interactive prompt (the warning is still printed)\n`
     + `  Codex / ChatGPT: ocx login codex   (account pool, needs a running proxy; 'chatgpt' and\n`
     + `                   'openai' are the same route. An OpenAI platform key is 'openai-apikey'.)\n`
     + `  OAuth login:   ${listOAuthProviders().join(", ")}\n`
@@ -129,10 +139,16 @@ export function loginUsageMessage(): string {
 export interface LoginCliOptions {
   /** `--headless`: no callback server, no browser launch — print the URL and read back the code. */
   codeMode?: boolean;
+  /** `--accept-antigravity-risk`: accept the Antigravity warning without a prompt. */
+  acceptAntigravityRisk?: boolean;
 }
 
 export async function handleLogin(provider?: string, deps: LoginCliDeps = {}, opts: LoginCliOptions = {}): Promise<void> {
   const name = (provider ?? "").trim().toLowerCase();
+  if (opts.acceptAntigravityRisk && !requiresAntigravityRiskAcknowledgement(DEPRECATED_OAUTH_PROVIDER_ALIASES[name] ?? name)) {
+    console.error(`${ANTIGRAVITY_RISK_CLI_FLAG} only applies to google-antigravity`);
+    process.exit(1);
+  }
   try {
     // Check raw ownership before tolerant loading can print diagnostics or fall back to defaults.
     if (name === "anthropic2") assertAnthropicInstanceLoginConfig({ providers: {} }, name);
@@ -210,6 +226,19 @@ async function handleCodeLogin(name: string, deps: LoginCliDeps): Promise<void> 
 
 export async function handleOAuthLogin(name: string, deps: LoginCliDeps = {}, opts: LoginCliOptions = {}): Promise<void> {
   if (name === "anthropic2") assertAnthropicInstanceLoginConfig(loadConfig(), name);
+  // Runs in-process, so there is no management API check behind it: this prompt is the gate.
+  if (requiresAntigravityRiskAcknowledgement(name)) {
+    const decision = await resolveAntigravityRiskAcknowledgement({
+      flag: opts.acceptAntigravityRisk === true,
+      interactive: (deps.isInteractive ?? (() => process.stdin.isTTY === true))(),
+      warn: text => console.error(text),
+      ask: question => withPrompt(deps.ask, ask => ask(question)),
+    });
+    if (decision !== "accepted") {
+      console.error(antigravityRiskDecisionMessage(decision));
+      process.exit(1);
+    }
+  }
   if (opts.codeMode) return handleCodeLogin(name, deps);
   const login = deps.runLogin ?? runLogin;
   const launch = deps.openUrl ?? openUrl;

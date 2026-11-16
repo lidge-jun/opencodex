@@ -394,3 +394,56 @@ describe("xAI device CLI subprocess contract", () => {
     });
   }
 });
+
+describe("Google Antigravity login acknowledgement", () => {
+  const START = { url: "https://accounts.google.test/auth", browserLaunch: "skipped" };
+  const tty = (answer: string) => Object.assign(new Readable({ read() { this.push(answer); this.push(null); } }), { isTTY: true });
+  const stderrWrite = () => spyOn(process.stderr, "write").mockImplementation(() => true);
+
+  test("a non-interactive run without the flag is refused before stdin, the proxy or a login", async () => {
+    const f = fixture([START]);
+    expect(await handleAccountAuthCommand("login", ["google-antigravity", "--no-wait", "--json"], f.deps)).toBe(2);
+    expect(f.calls).toHaveLength(0); expect(f.probes()).toBe(0); expect(f.reads()).toBe(0);
+    const printed = JSON.stringify(error.mock.calls);
+    expect(printed).toContain("This service has been disabled in this account for violation of Terms of Service.");
+    expect(printed).toContain("antigravity_risk_not_acknowledged");
+    expect(printed).toContain("--accept-antigravity-risk");
+  });
+
+  test("the explicit flag still prints the warning and sends the acknowledgement for login and reauth", async () => {
+    const f = fixture([START]);
+    expect(await handleAccountAuthCommand("login", ["google-antigravity", "--accept-antigravity-risk", "--no-wait", "--json"], f.deps)).toBe(0);
+    expect(f.calls[0]?.body).toEqual({ provider: "google-antigravity", addAccount: true, acknowledgeAntigravityRisk: true });
+    expect(JSON.stringify(error.mock.calls)).toContain("permanently disabled");
+
+    const reauth = fixture([START]);
+    expect(await handleAccountAuthCommand("login", ["google-antigravity", "--reauth", "--id", "acct-1", "--accept-antigravity-risk", "--no-wait", "--json"], reauth.deps)).toBe(0);
+    expect(reauth.calls[0]?.body).toEqual({ provider: "google-antigravity", addAccount: false, accountId: "acct-1", reauth: true, acknowledgeAntigravityRisk: true });
+  });
+
+  test("a terminal must answer y; anything else cancels with nothing sent", async () => {
+    const write = stderrWrite();
+    try {
+      const yes = fixture([START]);
+      expect(await handleAccountAuthCommand("login", ["google-antigravity", "--no-wait", "--json"], { ...yes.deps, stdinImpl: tty("y\n") })).toBe(0);
+      expect(yes.calls[0]?.body).toMatchObject({ provider: "google-antigravity", acknowledgeAntigravityRisk: true });
+      expect(JSON.stringify(write.mock.calls)).toContain("[y/N]");
+      for (const answer of ["\n", "n\n", "no\n", ""]) {
+        const no = fixture([START]);
+        expect(await handleAccountAuthCommand("login", ["google-antigravity", "--no-wait", "--json"], { ...no.deps, stdinImpl: tty(answer) })).toBe(2);
+        expect(no.calls).toHaveLength(0);
+      }
+    } finally { write.mockRestore(); }
+  });
+
+  test("the flag is refused for other providers, and other providers never prompt", async () => {
+    const refused = fixture([START]);
+    expect(await handleAccountAuthCommand("login", ["xai", "--accept-antigravity-risk", "--no-wait"], refused.deps)).toBe(2);
+    expect(refused.calls).toHaveLength(0);
+    const other = fixture([START]);
+    expect(await handleAccountAuthCommand("login", ["xai", "--no-wait", "--json"], other.deps)).toBe(0);
+    expect(other.calls[0]?.body).toEqual({ provider: "xai", addAccount: true });
+    expect(JSON.stringify(error.mock.calls)).not.toContain("Antigravity");
+  });
+});
+

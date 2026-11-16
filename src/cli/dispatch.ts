@@ -387,6 +387,7 @@ const commandRunners: Record<string, CommandRunner> = {
     // It is deliberately not `--code`: that name carries a secret value everywhere else in the
     // CLI (`ocx account login <provider> --code <value>`) and its operand is scrubbed from stderr.
     const codeMode = loginArgs.includes("--headless");
+    const acceptAntigravityRisk = loginArgs.includes("--accept-antigravity-risk");
     const positional = loginArgs.filter(arg => !arg.startsWith("--"));
     // 'ocx login codex' is the command people type first, and until now it answered with
     // the full provider wall because the Codex pool lives behind 'ocx account login'.
@@ -407,7 +408,7 @@ const commandRunners: Record<string, CommandRunner> = {
       return code ?? 1;
     }
     const { handleLogin } = await import("../oauth/login-cli");
-    await handleLogin(positional[0], {}, { codeMode });
+    await handleLogin(positional[0], {}, { codeMode, acceptAntigravityRisk });
     return 0;
   },
   logout: async deps => {
