@@ -247,10 +247,15 @@ export const CAPABILITIES: readonly Capability[] = [
       { name: "--version", value: "string", summary: "Select an exact version for a plan or apply." },
       { name: "--expect-plan", value: "string", summary: "Require the apply plan to match this planToken." },
       { name: "--not-after", value: "string", summary: "Refuse mutation after this Unix millisecond deadline." },
+      { name: "--desktop", value: "boolean", summary: "Update a Windows Desktop installation headlessly (signature-verified MSI)." },
+      { name: "--check", value: "boolean", summary: "With --desktop, report the published and serving versions without installing." },
     ],
     mutates: true,
     json: "envelope",
-    details: ["Orchestrated exit codes: 0 verified or up-to-date; 10 refused; 11 previous version verified; 12 uncertain; 64 usage."],
+    details: [
+      "Orchestrated exit codes: 0 verified or up-to-date; 10 refused; 11 previous version verified; 12 uncertain; 64 usage.",
+      "--desktop exit codes: 0 done or up to date; 1 nothing installed; 2 old runtime still serving or reboot pending; 3 installer uncertain; 64 usage.",
+    ],
   },
   {
     command: ["capabilities"],

@@ -2,6 +2,10 @@ import { parseUpstreamJsonPayload, safeUpstreamErrorString, sanitizeUpstreamErro
 import { isLocationUnsupportedMessage } from "../lib/errors";
 
 export const ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX = "Antigravity account validation required (VALIDATION_REQUIRED)";
+/** Leading words of every normalized Antigravity 403 that is not a validation demand (see `classifyGoogle`). */
+export const ANTIGRAVITY_ACCESS_DENIED_PREFIX = "Antigravity access denied";
+/** Leading words of a normalized Antigravity refusal whose text names the credential itself. */
+export const ANTIGRAVITY_AUTH_FAILED_PREFIX = "Antigravity authentication failed";
 
 function hasAntigravityValidationReason(payloadText: string): boolean {
   const payload = parseUpstreamJsonPayload(payloadText);

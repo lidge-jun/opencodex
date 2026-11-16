@@ -196,6 +196,7 @@ Codex использует маленькие helper-model'и для задач 
 | --- | --- | --- | --- |
 | `provider?` | `string` | automatic OpenAI selection | Явный custom API-key провайдер `openai-responses` для `/v1/images/generations` и `/v1/images/edits`. Registry-managed id отклоняются. |
 | `timeoutMs?` | `number` | `300000` | Полный таймаут одного standalone Images-запроса. |
+| `videoProvider?` | `string` | xAI | Провайдер с API-ключом, который обслуживает мост `video_gen` внутри хода через свой `baseUrl` и ключ. `xai` закреплён за `https://api.x.ai/v1`, другие идентификаторы реестра отклоняются. Непригодное значение возвращает ошибку на каждый вызов `video_gen` и ничего не отправляет. См. [Видеомост](/ru/guides/video-bridge/#выбор-видеопровайдера). |
 
 Явный выбор закрывается с ошибкой, если провайдер отсутствует, отключён, несовместим или не имеет
 рабочего ключа; fallback на другой платный upstream здесь невозможен. Endpoint должен

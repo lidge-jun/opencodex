@@ -1,8 +1,8 @@
 /**
  * The seam between the Responses pipeline and Remote Link activity holds (design T4 section 5).
  *
- * A link turn may carry an observer: a link WebSocket passes one in handleResponses options, and a
- * relayed HTTP request carries a short-lived random token header the link relay registered. The
+ * A link turn carries an observer: a link WebSocket passes one in handleResponses options, and every relayed HTTP
+ * Responses request carries a short-lived random token header the link relay registered. The
  * pipeline reports the expanded input right after continuation expansion and before any upstream
  * I/O, and the final request log reports the terminal status and whether the terminal came from the
  * upstream. No content leaves this module: observers hash what they need. Nothing here runs for a
@@ -30,8 +30,9 @@ export interface LinkTurnObserver {
   /** Request-log fields; present only while the link WebSocket feature is on. */
   logFields?(body: unknown): LinkTurnLogFields | null;
   /**
-   * Set only while the link WebSocket feature is on (#8601): the turn's upstream body is read only as its client drains,
-   * so a stalled link reader holds about one upstream chunk instead of the pipeline's inspection read-ahead.
+   * Set by every relayed link turn, HTTP or WebSocket, whether or not the link WebSocket feature is on (#8601): the
+   * turn's upstream body is read only as its client drains, so a stalled link reader holds about one upstream chunk
+   * instead of the pipeline's inspection read-ahead. Only logFields depends on the feature switch.
    */
   pacedReads?: boolean;
 }

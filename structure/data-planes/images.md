@@ -37,6 +37,29 @@ Fetch-based Anthropic model iterations use the [thinking-signature recovery cont
 
 Fetch-based Anthropic image bridge account recovery follows [the revoked-token contract](../providers/anthropic-account-pool.md#revoked-oauth-access-token-recovery), including output commitment and send-budget gates.
 
+## Video bridge destination
+
+`planVideoBridge` in `src/images/plan.ts` decides where `video_gen` submit and poll requests go and
+which key they carry. With `images.videoProvider` unset it keeps the historical xAI discovery and
+pins the destination to the registry `xai` base URL, so an `xai` row's `baseUrl` override never
+receives the key. `selectVideoProvider` resolves an explicit value: `xai` stays pinned, other
+registry ids are refused, and a custom row contributes only its own `baseUrl` and API key after the
+shared `providerDestinationConfigError` check (`allowPrivateNetwork` governs loopback and private
+hosts). The base URL may not carry userinfo, a query or a fragment, because the client appends
+endpoint paths as strings, and a paused active key fails closed through `isProviderApiKeyPaused`.
+A keychain reference the selected row does not own (`keychainReferenceBelongsToProvider`) is refused
+for every destination, xAI included, before any secret is read. A recognizably xAI credential (an
+`xai-` key, a key held by any row named `xai` in any case or pointing at an xAI host, or an
+environment reference named for xAI or Grok) is refused unless the origin is HTTPS on an xAI host
+and the default port. The limit is recognition: an arbitrary literal with none of those marks cannot
+be attributed to xAI, which the guide tells operators.
+
+An explicit value that cannot be used produces an unavailable plan: the `video_gen` tool is still
+claimed, and `src/images/loop.ts` answers each call with the configuration error before any paid-call
+accounting or network request. It never falls back to xAI. The submit and poll clients keep
+`redirect: "manual"`, and the finished-video download keeps its public-HTTPS or `data:` policy.
+`tests/videos/video-provider.test.ts` covers both halves.
+
 ## Hosted Responses image display
 
 For loopback-admitted Codex Responses clients,
