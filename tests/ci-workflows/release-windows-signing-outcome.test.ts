@@ -141,6 +141,22 @@ describe("the release body's code signing footer", () => {
     } finally { removeTreeWithRetry(dir); }
   });
 
+  test("records whose digests are swapped between the zip and the MSI read as not recorded for both files", () => {
+    // Distinct published digests per kind: a reader that matched a record against any published digest, or against the
+    // other kind's, would call both files signed here.
+    const published = { standalone: DIGEST_A, desktop: DIGEST_B };
+    const paired = outcomes({ "standalone.json": record("standalone", true, DIGEST_A), "desktop.json": record("desktop", true, DIGEST_B) });
+    const swapped = outcomes({ "standalone.json": record("standalone", true, DIGEST_B), "desktop.json": record("desktop", true, DIGEST_A) });
+    try {
+      // Control: the same digests on their own kinds are signed, so the swap alone causes the result below.
+      expect(readWindowsSigningOutcomes(paired, published).status).toBe("signed");
+      expect(readWindowsSigningOutcomes(swapped, published)).toEqual({ status: "unknown", files: { standalone: "unknown", desktop: "unknown" } });
+      const body = notes(swapped, published).body;
+      expect(body).not.toContain("are Authenticode-signed");
+      expect(body).toContain("The release run recorded no signing outcome for them.");
+    } finally { removeTreeWithRetry(paired); removeTreeWithRetry(swapped); }
+  });
+
   test("the published digests come from the verified release receipt under this version's Windows asset names", () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-signing-receipt-"));
     try {
