@@ -106,7 +106,7 @@ function powershellArgs(script: string): string[] {
  * binds that owner to the original creation time; a reused PID cannot prove a foreign owner.
  */
 export const WINDOWS_PROCESS_SNAPSHOT_SCRIPT = [
-  "$currentSid = $null; try { $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch {};",
+  "$currentSid = $null; try { $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch { $currentSid = $null };",
   "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine,",
   "@{Name='CreationDate';Expression={ if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') } else { $null } }},",
   "@{Name='CurrentUserSid';Expression={ $currentSid }},",

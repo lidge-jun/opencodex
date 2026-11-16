@@ -1,8 +1,10 @@
 // Process evidence for the checked Windows stop (#7771): creation times, the Schedule
 // service PID, the checked terminate and the exit watch. Hermetic everywhere except the
-// cases gated on real Windows x64, which exercise the FFI primitive on a child of this test.
+// cases gated on real Windows, which exercise the owner snapshot and x64 FFI on our own child.
 import { afterEach, describe, expect, test } from "bun:test";
+import { join } from "node:path";
 
+import { resolveTrustedWindowsSystemDirectory } from "../../src/lib/windows-elevation";
 import {
   decodeServiceStatusProcess,
   fileTimeToEpochMs,
@@ -228,6 +230,31 @@ describe("Windows process evidence: facades", () => {
 });
 
 const liveX64 = process.platform !== "win32" || process.arch !== "x64";
+
+test.skipIf(process.platform !== "win32")("the live capped snapshot reads and refreshes a wrapper child's owner", async () => {
+  // /d disables AutoRun. `rem` does no work; /k and an open stdin keep this owned child
+  // alive for the real CIM owner query, refresh, parser, and optional native overlay.
+  const marker = "opencodex-service-owner-snapshot-test";
+  const child = Bun.spawn([join(resolveTrustedWindowsSystemDirectory(), "cmd.exe"), "/d", "/q", "/k", "rem", marker], {
+    stdio: ["pipe", "ignore", "ignore"], windowsHide: true,
+  });
+  try {
+    const snapshot = await windowsProcessSnapshot({ timeoutMs: 5_000 });
+    expect(snapshot).not.toBeNull();
+    const wrapper = snapshot!.find(row => row.pid === child.pid);
+    expect(wrapper).toBeDefined();
+    expect(wrapper!.name?.toLowerCase()).toBe("cmd.exe");
+    expect(wrapper!.parentPid).toBe(process.pid);
+    expect(wrapper!.commandLine).toContain(marker);
+    expect(typeof wrapper!.startTime).toBe("number");
+    // false requires successful, matching owner/creation evidence; unknown is not enough.
+    expect(wrapper!.foreignOwner).toBe(false);
+    expect(child.exitCode).toBeNull();
+  } finally {
+    child.kill();
+    await child.exited;
+  }
+}, 10_000);
 
 describe("Windows process evidence: live x64 primitive", () => {
   test.skipIf(liveX64)("reads a child's creation time, refuses a mismatched identity and ends the bound one", async () => {
