@@ -111,8 +111,8 @@ reader without awaiting a potentially broken cancellation promise.
 
 `src/server/responses/passthrough-execution.ts` applies the guard after native
 response classification, outside the direct relay and lifetime wrappers. Native
-SSE, including the missing-Content-Type fallback, retains its original Response
-identity and existing watchdog/terminal ownership. Bounded JSON and error readers
+SSE, including the missing-Content-Type fallback, retains its Response identity and
+is guarded only by an explicit budget ([native SSE stall](timeouts.md#native-responses-sse-stall)). Bounded JSON and error readers
 are not wrapped again. Direct bodies and returned redirect bodies are guarded;
 bytes, response headers and status are preserved.
 

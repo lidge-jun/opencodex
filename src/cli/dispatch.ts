@@ -650,6 +650,11 @@ const commandRunners: Record<string, CommandRunner> = {
     return 0;
   },
   update: async deps => {
+    // #8246: the headless Windows Desktop updater has its own grammar (including --json) and never
+    // reaches the package or orchestrated updater.
+    if (deps.args.slice(1).includes("--desktop") && !hasHelpFlag(deps.args.slice(1))) {
+      return (await import("../desktop-update/cli")).runHeadlessDesktopUpdateCommand(deps.args.slice(1));
+    }
     const { isOrchestratedUpdateArgv, parseOrchestratedChildArgs } = await import("../update/orchestrated-arguments.mjs");
     if (process.env.OCX_UPDATE_ORCHESTRATED_CHILD === "1" && deps.args.slice(1).some(arg => /^--orchestrated-(expect|result)(?:=|$)/.test(arg))) {
       const child = parseOrchestratedChildArgs(deps.args.slice(1), process.env);
