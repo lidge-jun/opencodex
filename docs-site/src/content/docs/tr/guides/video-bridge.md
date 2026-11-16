@@ -9,7 +9,7 @@ Video Köprüsü, opencodex tarafından yönlendirilen herhangi bir OpenAI haric
 model aracılığıyla xAI'ın Grok Imagine Video üretimini kullanmanızı sağlar.
 Etkinleştirildiğinde sohbete sentetik bir `video_gen` aracı enjekte edilir.
 Model bunu herhangi bir fonksiyon aracı gibi çağırır; opencodex çağrıyı yakalar,
-xAI'a bir video üretim görevi gönderir, tamamlanana kadar yoklar ve sonucu
+xAI'a bir video üretim görevi gönderir (veya images.videoProvider ile belirtilen sağlayıcıya), tamamlanana kadar yoklar ve sonucu
 indirir.
 
 ## Ön Koşullar
@@ -63,7 +63,7 @@ indirir.
    bir modeli algılar
 2. Sohbete sentetik bir `video_gen` fonksiyon aracı enjekte edilir
 3. Model `video_gen`'i çağırdığında opencodex xAI'ın `/videos/generations` uç
-   noktasına bir görev gönderir
+   noktasına bir görev gönderir (veya images.videoProvider ile belirtilen sağlayıcıya)
 4. Köprü akışı canlı tutmak için kalp atışı mesajları göndererek her 5-15
    saniyede bir görev durumunu yoklar
 5. Video hazır olduğunda yapılar (artifacts) dizinine indirilir
@@ -82,8 +82,8 @@ indirir.
 
 ## Sınırlamalar
 
-- **Yalnızca xAI**: Video üretimi yalnızca xAI'ın Grok Imagine Video API'si
-  aracılığıyla kullanılabilir
+- **Yalnızca xAI**: Video üretimi varsayılan olarak xAI'ın Grok Imagine Video API'si
+  aracılığıyla kullanılır; images.videoProvider ile özel bir sağlayıcı belirtilebilir
 - **Zaman uyumsuz (Asynchronous)**: Video üretimi 30-120 saniye sürer
 - **Maliyet**: Video üretimi ücretli bir xAI özelliğidir (~$0.05/sn @480p,
   ~$0.07/sn @720p)

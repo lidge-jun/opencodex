@@ -5,7 +5,7 @@ description: 通过非 OpenAI 模型生成 Grok Imagine Video 视频。
 
 ## 概述
 
-Video Bridge 允许你通过 opencodex 路由的任意非 OpenAI 模型使用 xAI 的 Grok Imagine Video 生成功能。启用后，系统会在对话中注入一个合成的 `video_gen` 工具。模型会像调用普通函数工具一样调用它；opencodex 拦截该调用，向 xAI 提交视频生成任务，轮询直到完成，然后下载结果。
+Video Bridge 允许你通过 opencodex 路由的任意非 OpenAI 模型使用 xAI 的 Grok Imagine Video 生成功能。启用后，系统会在对话中注入一个合成的 `video_gen` 工具。模型会像调用普通函数工具一样调用它；opencodex 拦截该调用，向 xAI 提交视频生成任务（可通过 images.videoProvider 指定其他提供者），轮询直到完成，然后下载结果。
 
 ## 前提条件
 
@@ -52,7 +52,7 @@ Video Bridge 允许你通过 opencodex 路由的任意非 OpenAI 模型使用 xA
 
 1. opencodex 检测到一个已路由的非 OpenAI 模型，并且 `videoBridgeEnabled: true`
 2. 系统会在对话中注入一个合成的 `video_gen` 函数工具
-3. 当模型调用 `video_gen` 时，opencodex 会向 xAI 的 `/videos/generations` 提交任务
+3. 当模型调用 `video_gen` 时，opencodex 会向 xAI 的 `/videos/generations` 提交任务（可通过 images.videoProvider 指定其他提供者）
 4. 桥接每隔 5-15 秒轮询一次任务状态，并发送心跳消息以保持流持续存活
 5. 视频准备就绪后，会下载到 artifacts 目录
 6. 本地文件路径会作为工具结果返回给模型
@@ -70,7 +70,7 @@ Video Bridge 允许你通过 opencodex 路由的任意非 OpenAI 模型使用 xA
 
 ## 限制
 
-- **仅限 xAI**：视频生成只可通过 xAI 的 Grok Imagine Video API 使用
+- **仅限 xAI**：视频生成默认通过 xAI 的 Grok Imagine Video API 使用；可通过 images.videoProvider 指定自定义提供者
 - **异步**：视频生成需要 30-120 秒
 - **费用**：视频生成是 xAI 的付费功能（约 `480p` 每秒 `$0.05`，`720p` 每秒 `$0.07`）
 - **每次调用只生成一个视频**：每次 `video_gen` 调用只会生成一个视频

@@ -99,7 +99,7 @@ provider `baseUrl`.
 destination, but the finished video is downloaded into the artifacts directory only when
 `video.url` is a public HTTPS URL or an inline `data:` URL. A bridge whose `video.url` points at
 `http://127.0.0.1/...` (or any non-public address) will generate the video and then fail at the
-download step — return a hosted URL or a `data:` payload from the poll response instead.
+download step — return a hosted URL or a base64-encoded `data:` payload (`data:video/mp4;base64,…`)
 
 ## How It Works
 

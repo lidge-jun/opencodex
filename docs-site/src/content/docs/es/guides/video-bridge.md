@@ -7,7 +7,7 @@ description: "Genera videos con Grok Imagine Video desde un modelo distinto de O
 
 ## Descripción general
 
-El puente de video permite generar videos con Grok Imagine Video de xAI desde cualquier modelo ajeno a OpenAI enrutado mediante opencodex. Al activarlo, se añade la herramienta sintética `video_gen` a la conversación. El modelo la llama como una función; opencodex intercepta la llamada, envía el trabajo a xAI, consulta su estado hasta que termina y descarga el resultado.
+El puente de video permite generar videos con Grok Imagine Video de xAI desde cualquier modelo ajeno a OpenAI enrutado mediante opencodex. Al activarlo, se añade la herramienta sintética `video_gen` a la conversación. El modelo la llama como una función; opencodex intercepta la llamada, envía el trabajo a xAI (o al proveedor indicado por images.videoProvider), consulta su estado hasta que termina y descarga el resultado.
 
 <a id="prerequisites"></a>
 
@@ -60,7 +60,7 @@ Agregue `videoBridgeEnabled: true` a su configuración `images`:
 
 1. opencodex detecta un modelo enrutado no OpenAI con `videoBridgeEnabled: true`
 2. Una herramienta de función sintética `video_gen` se inyecta en la conversación
-3. Cuando el modelo llama al `video_gen`, opencodex envía un trabajo al endpoint `/videos/generations` de xAI
+3. Cuando el modelo llama al `video_gen`, opencodex envía un trabajo al endpoint `/videos/generations` de xAI (o al proveedor indicado por images.videoProvider)
 4. El puente sondea el estado del trabajo cada 5-15 segundos, enviando mensajes de latido para mantener viva la transmisión
 5. Cuando el video está listo, se descarga en el directorio de artefactos
 6. La ruta local del archivo se devuelve al modelo como resultado de la herramienta
@@ -82,7 +82,7 @@ La herramienta `video_gen` acepta:
 
 ## Limitaciones
 
-- **xAI solamente**: La generación de video solo está disponible mediante la API Grok Imagine Video de xAI
+- **xAI solamente**: La generación de video está disponible por defecto mediante la API Grok Imagine Video de xAI; un proveedor personalizado puede indicarse mediante images.videoProvider
 - **Asíncrono**: La generación de video toma 30-120 segundos
 - **Coste**: la generación de video es una función de pago de xAI. Consulta las [tarifas oficiales](https://docs.x.ai/developers/pricing) antes de usarla.
 - **Un video por llamada**: Cada llamada `video_gen` produce un vídeo

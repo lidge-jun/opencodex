@@ -5,7 +5,7 @@ description: Grok Imagine Video を使用して非 OpenAI モデルを通じて�
 
 ## 概要
 
-Video Bridge を使用すると、opencodex によってルーティングされる非 OpenAI モデルを通じて xAI の Grok Imagine Video 生成を使用できます。有効にすると、合成 `video_gen` ツールが会話に挿入されます。モデルはこれを他の関数ツールと同様に呼び出します。 opencodex は通話をインターセプトし、ビデオ生成ジョブを xAI に送信し、完了するまでポーリングして、結果をダウンロードします。
+Video Bridge を使用すると、opencodex によってルーティングされる非 OpenAI モデルを通じて xAI の Grok Imagine Video 生成を使用できます。有効にすると、合成 `video_gen` ツールが会話に挿入されます。モデルはこれを他の関数ツールと同様に呼び出します。 opencodex は通話をインターセプトし、ビデオ生成ジョブを xAI に送信し（images.videoProvider で指定したプロバイダーに変更可能）、完了するまでポーリングして、結果をダウンロードします。
 
 ## 前提条件
 
@@ -53,7 +53,7 @@ Video Bridge を使用すると、opencodex によってルーティングされ
 
 1. opencodex は、`videoBridgeEnabled: true` を使用して非 OpenAI ルーティング モデルを検出します
 2. 合成 `video_gen` 関数ツールが会話に挿入されます
-3. モデルが `video_gen` を呼び出すと、opencodex が xAI の `/videos/generations` にジョブを送信します。
+3. モデルが `video_gen` を呼び出すと、opencodex が xAI の `/videos/generations` にジョブを送信します（images.videoProvider で指定したプロバイダーに変更可能）。
 4. ブリッジは 5 ～ 15 秒ごとにジョブ ステータスをポーリングし、ストリームを維持するためにハートビート メッセージを送信します。
 5. ビデオの準備ができたら、アーティファクト ディレクトリにダウンロードされます
 6. ローカル ファイル パスがツールの結果としてモデルに返されます。
@@ -71,7 +71,7 @@ Video Bridge を使用すると、opencodex によってルーティングされ
 
 ## 制限事項
 
-- **xAI のみ**: ビデオ生成は、xAI の Grok Imagine Video API を通じてのみ利用できます。
+- **xAI のみ**: ビデオ生成は既定で xAI の Grok Imagine Video API に送信されます。`images.videoProvider` を設定するとカスタムの宛先を使用できます。
 - **非同期**: ビデオの生成には 30 ～ 120 秒かかります
 - **コスト**: ビデオ生成は有料の xAI 機能です (480p で ~$0.05/秒、720p で ~$0.07/秒)
 - **呼び出しごとに 1 つのビデオ**: `video_gen` 呼び出しごとに 1 つのビデオが生成されます
