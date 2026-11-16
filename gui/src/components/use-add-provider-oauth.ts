@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import type { TFn } from "../i18n/shared";
 import { readJsonIfOk } from "../fetch-json";
 import { openBrowserRequestField } from "../oauth-open-browser-pref";
+import { oauthRiskAcknowledgementBody } from "../oauth-tos-risk";
 import { afterOAuthCancellation, cancelOAuthLogin } from "../oauth-cancellation-barrier";
 import type { LoginHintData } from "./login-url-block";
 import { parseBrowserLaunch, type BrowserLaunch } from "../oauth-browser-launch";
@@ -136,6 +137,8 @@ export function useAddProviderOAuth({
   const loginOAuth = useCallback(async (
     providerId: string,
     setters: OAuthLoginSetters,
+    // Only the warning dialog's Continue passes true (see oauthRiskAcknowledgementBody).
+    riskAcknowledged = false,
   ) => {
     // A per-login clone keeps the render target while letting the capture map tell an
     // older login's cleanup from its replacement.
@@ -166,7 +169,7 @@ export function useAddProviderOAuth({
         return targetFetch(capture, `${apiBase}/api/oauth/login`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ provider: providerId, ...openBrowserRequestField() }),
+          body: JSON.stringify({ provider: providerId, ...openBrowserRequestField(), ...oauthRiskAcknowledgementBody(providerId, riskAcknowledged) }),
         });
       });
       if (!res || !aliveRef.current || !isCurrent()) return;

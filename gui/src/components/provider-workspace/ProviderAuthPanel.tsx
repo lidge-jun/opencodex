@@ -35,6 +35,8 @@ import { kiroSkipReasonKey } from "../../kiro-device-login-helpers";
 import { isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../../api";
 import { useRenderTargetCapture } from "../../use-render-target-capture";
 import KiroDeviceLoginDialog from "../KiroDeviceLoginDialog";
+import OAuthTosWarningModal from "../OAuthTosWarningModal";
+import { oauthRiskAcknowledgementBody } from "../../oauth-tos-risk";
 import type {
   AccountLoadState,
   OAuthAccountRow,
@@ -224,6 +226,19 @@ export default function ProviderAuthPanel({
   const [importStatus, setImportStatus] = useState<"idle" | "invalid" | "failed" | "complete">("idle");
   const [importResult, setImportResult] = useState<CockpitImportResult | null>(null);
   const importFileRef = useRef<HTMLInputElement>(null);
+  // An imported Antigravity credential carries the same Google account-ban risk as a login, so
+  // the import goes through the same warning dialog. A file picked without it (a keyboard user can
+  // reach the hidden input directly) is held until the dialog is accepted, never imported silently.
+  const [importWarning, setImportWarning] = useState<{ file?: File } | null>(null);
+  const importAcknowledgedRef = useRef(false);
+  useEffect(() => {
+    // Dismissing the native picker must not leave the acknowledgement armed for a later pick.
+    const input = importFileRef.current;
+    if (!input) return;
+    const disarm = () => { importAcknowledgedRef.current = false; };
+    input.addEventListener("cancel", disarm);
+    return () => input.removeEventListener("cancel", disarm);
+  }, [item.name]);
   const [manualCode, setManualCode] = useState("");
   const [manualCodeBusy, setManualCodeBusy] = useState(false);
   const [manualCodeMsg, setManualCodeMsg] = useState("");
@@ -370,8 +385,12 @@ export default function ProviderAuthPanel({
     }
   };
 
-  const importCockpitFile = async (file: File | undefined) => {
+  const importCockpitFile = async (file: File | undefined, acknowledged: boolean) => {
     if (!file || importBusy) return;
+    if (!acknowledged) {
+      setImportWarning({ file });
+      return;
+    }
     setImportBusy(true);
     setImportStatus("idle");
     setImportResult(null);
@@ -391,7 +410,7 @@ export default function ProviderAuthPanel({
       const response = await targetFetch(capture, `${apiBase}/api/oauth/accounts/import`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: "google-antigravity", format: "cockpit-tools", document }),
+        body: JSON.stringify({ provider: "google-antigravity", format: "cockpit-tools", document, ...oauthRiskAcknowledgementBody("google-antigravity", acknowledged) }),
       });
       if (!response.ok) {
         setImportStatus("failed");
@@ -486,13 +505,38 @@ export default function ProviderAuthPanel({
                     className="sr-only"
                     aria-describedby="cockpit-import-description cockpit-import-status"
                     disabled={importBusy}
-                    onChange={event => { void importCockpitFile(event.currentTarget.files?.[0]); }}
+                    onChange={event => {
+                      const acknowledged = importAcknowledgedRef.current;
+                      importAcknowledgedRef.current = false;
+                      void importCockpitFile(event.currentTarget.files?.[0], acknowledged);
+                    }}
                   />
                 </div>
                 <button type="button" className="btn btn-ghost btn-sm" disabled={importBusy}
-                  onClick={() => importFileRef.current?.click()}>
+                  onClick={() => { importAcknowledgedRef.current = false; setImportWarning({}); }}>
                   {importBusy ? t("pws.cockpitImporting") : t("pws.cockpitImportChooseFile")}
                 </button>
+                {importWarning && (
+                  <OAuthTosWarningModal
+                    providerId="google-antigravity"
+                    providerLabel="Google Antigravity"
+                    onCancel={() => {
+                      setImportWarning(null);
+                      if (importFileRef.current) importFileRef.current.value = "";
+                    }}
+                    onContinue={() => {
+                      const pending = importWarning;
+                      setImportWarning(null);
+                      if (pending.file) {
+                        void importCockpitFile(pending.file, true);
+                        return;
+                      }
+                      // Still inside the Continue click, so the browser allows opening the picker.
+                      importAcknowledgedRef.current = true;
+                      importFileRef.current?.click();
+                    }}
+                  />
+                )}
                 <div id="cockpit-import-status" role="status" aria-live="polite">
                   {importStatus === "invalid" && t("pws.cockpitImportInvalid")}
                   {importStatus === "failed" && t("pws.cockpitImportFailed")}

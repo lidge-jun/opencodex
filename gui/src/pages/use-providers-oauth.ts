@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import type { TFn } from "../i18n/shared";
 import { readJsonIfOk } from "../fetch-json";
 import { openBrowserRequestField } from "../oauth-open-browser-pref";
+import { oauthRiskAcknowledgementBody } from "../oauth-tos-risk";
 import { afterOAuthCancellation, cancelOAuthLogin } from "../oauth-cancellation-barrier";
 import { parseBrowserLaunch, type BrowserLaunch } from "../oauth-browser-launch";
 import { BROWSER_LOGIN_POLL_ATTEMPTS, loginPollAttempts } from "../oauth-login-budget";
@@ -164,7 +165,8 @@ export function useProvidersOAuth({
     notify(t("prov.loginCancelled", { provider: oauthLabel(provider) }), false);
   }, [aliveRef, apiBase, bumpLoginGeneration, cancelServerLogin, notify, setBusy, setLoginInfo, t, targetKey]);
 
-  const loginOAuth = async (provider: string, addAccount = false, accountId?: string) => {
+  /** `riskAcknowledged` comes only from the warning dialog's Continue (see oauthRiskAcknowledgementBody). */
+  const loginOAuth = async (provider: string, addAccount = false, accountId?: string, riskAcknowledged = false) => {
     const capture = renderCapture;
     activeLoginCapturesRef.current.set(provider, capture);
     endedLoginCapturesRef.current.delete(provider);
@@ -192,6 +194,7 @@ export function useProvidersOAuth({
             ...openBrowserRequestField(),
             ...(addAccount || reauthTargetId ? { addAccount: true } : {}),
             ...(reauthTargetId ? { accountId: reauthTargetId, reauth: true } : {}),
+            ...oauthRiskAcknowledgementBody(provider, riskAcknowledged),
           }),
         });
       });
