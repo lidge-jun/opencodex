@@ -1330,6 +1330,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   escapeBuiltinToolNames: "editor",
   anthropicEofTolerance: "editor",
   forwardAdvisorTool: "editor",
+  perMessageEffort: "editor",
   noVisionModels: "editor",
   googleMode: "editor",
   project: "editor",

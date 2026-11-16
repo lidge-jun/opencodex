@@ -125,6 +125,7 @@ import { isAntigravityAccessDeniedRefusal, isAntigravityValidationRefusal } from
 import { createAntigravityModelDenialRecovery, recoverAntigravityAccount } from "./antigravity-model-denial-recovery";
 import { adapterSendBudgetRefusal } from "../workflow-refusal";
 import { AdmissionModelDeniedError, admissionModelDeniedResponse, projectAdmissionModelDeniedLog } from "../admission-model-scope";
+import { rejectAnthropicPerMessageEffort } from "../../adapters/anthropic/per-message-effort";
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function prepareAdapterExchange(
   requestContext: Pick<ResponsesRequestContext, "options" | "config" | "logCtx" | "req">,
@@ -935,6 +936,7 @@ export async function prepareAdapterExchange(
 
       // Preserve the terminal verdict through adapter and combo error formatting.
       // This also covers a reset reached by a 401/429/413 recovery refetch.
+      await rejectAnthropicPerMessageEffort(parsed, upstreamResponse, upstream.signal);
       if (isNonReplayableResponse(upstreamResponse)) {
         try {
           return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal);
