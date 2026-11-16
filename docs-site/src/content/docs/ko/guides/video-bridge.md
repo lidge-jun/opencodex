@@ -9,11 +9,11 @@ Video Bridge는 opencodex가 라우팅한 OpenAI가 아닌 모델로 xAI의 Grok
 
 ## 사전 조건
 
-- API 키가 있는 `xai` provider entry (`ocx login xai`만으로는 충분하지 않습니다. 비디오 브리지는 OAuth가 아니라 키 인증이 필요합니다)
+- API 키가 있는 `xai` provider entry (`ocx login xai`만으로는 충분하지 않습니다. 비디오 브리지는 OAuth가 아니라 키 인증이 필요합니다. 단, `images.videoProvider`가 다른 키 인증 공급자를 지정하면 그 공급자가 대상과 자격 증명을 모두 제공합니다)
 - 라우팅 대상 provider로 비OpenAI 모델 사용 예시: Anthropic Claude, Google Gemini
 - 비OpenAI provider를 거치도록 opencodex 설정
 
-> **⚠ Provider key required:** 비디오 브리지는 `xai` provider가
+> **⚠ Provider key required:** `videoProvider`가 없으면 비디오 브리지는 `xai` provider가
 > API key auth를 사용할 때만 활성화됩니다. 설정에 다음을 추가하십시오:
 >
 > ```json
@@ -55,7 +55,7 @@ Video Bridge는 opencodex가 라우팅한 OpenAI가 아닌 모델로 xAI의 Grok
 2. 합성 `video_gen` 함수 도구가 대화에 주입됩니다.
 3. 모델이 `video_gen`을 호출하면, opencodex는 xAI의 `/videos/generations`로 작업을 제출합니다 (images.videoProvider로 지정한 공급자로 변경 가능).
 4. 브리지는 5-15초마다 작업 상태를 폴링하고, 스트림을 살리기 위해 heartbeat 메시지를 보냅니다.
-5. 비디오가 준비되면 artifacts 디렉터리로 내려받습니다.
+5. 비디오가 준비되면 artifacts 디렉터리로 내려받습니다(video.url이 공개 HTTPS URL 또는 base64 data: URL일 때만).
 6. 로컬 파일 경로가 도구 결과로 모델에 반환됩니다.
 
 ## 지원 파라미터

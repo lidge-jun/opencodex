@@ -13,11 +13,11 @@ El puente de video permite generar videos con Grok Imagine Video de xAI desde cu
 
 ## Requisitos previos
 
-- Un proveedor `xai` con una **clave API**: `ocx login xai` por sí solo no basta; el puente requiere autenticación con clave.
+- Un proveedor `xai` con una **clave API**: `ocx login xai` por sí solo no basta; el puente requiere autenticación con clave, salvo que `images.videoProvider` indique otro proveedor con autenticación por clave, que proporciona tanto el destino como la credencial.
 - Un modelo de otro proveedor, como Anthropic Claude o Google Gemini.
 - opencodex configurado para enrutar mediante ese proveedor.
 
-> **⚠ Se requiere una clave del proveedor:** El puente solo se activa cuando `xai` utiliza autenticación con clave API. Añada esta referencia a su configuración:
+> **⚠ Se requiere una clave del proveedor:** Sin definir `videoProvider`, el puente solo se activa cuando `xai` utiliza autenticación con clave API. Añada esta referencia a su configuración:
 >
 > ```json
 > {
@@ -62,7 +62,7 @@ Agregue `videoBridgeEnabled: true` a su configuración `images`:
 2. Una herramienta de función sintética `video_gen` se inyecta en la conversación
 3. Cuando el modelo llama al `video_gen`, opencodex envía un trabajo al endpoint `/videos/generations` de xAI (o al proveedor indicado por images.videoProvider)
 4. El puente sondea el estado del trabajo cada 5-15 segundos, enviando mensajes de latido para mantener viva la transmisión
-5. Cuando el video está listo, se descarga en el directorio de artefactos
+5. Cuando el video está listo, se descarga en el directorio de artefactos (la descarga requiere que video.url sea una URL HTTPS pública o un data: URL en base64)
 6. La ruta local del archivo se devuelve al modelo como resultado de la herramienta
 
 <a id="supported-parameters"></a>

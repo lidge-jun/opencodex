@@ -9,11 +9,11 @@ Video Bridge 讓你透過 opencodex 路由的任何非 OpenAI 模型，使用 xA
 
 ## 前置條件
 
-- 一個帶有 **API key** 的 `xai` 供應商項目（單靠 `ocx login xai` 不足夠 — video bridge 需要 key 認證，而非 OAuth）
+- 一個帶有 **API key** 的 `xai` 供應商項目（單靠 `ocx login xai` 不足夠 — video bridge 需要 key 認證，而非 OAuth；除非 images.videoProvider 指定了另一個採用 key 認證的供應商，由其同時提供目標和憑證）
 - 一個非 OpenAI 模型作為你的路由供應商（例如 Anthropic Claude、Google Gemini）
 - opencodex 設定為透過該非 OpenAI 供應商路由
 
-> **⚠ 需要供應商 key：** Video Bridge 僅在 `xai` 供應商使用
+> **⚠ 需要供應商 key：** 未設定 videoProvider 時，Video Bridge 僅在 `xai` 供應商使用
 > API key 認證時啟用。將以下加入你的設定：
 >
 > ```json
@@ -55,7 +55,7 @@ Video Bridge 讓你透過 opencodex 路由的任何非 OpenAI 模型，使用 xA
 2. 對話中注入一個合成的 `video_gen` 函式工具
 3. 當模型呼叫 `video_gen` 時，opencodex 向 xAI 的 `/videos/generations` 提交工作（可透過 images.videoProvider 指定其他提供者）
 4. Bridge 每 5-15 秒輪詢工作狀態，並發送 heartbeat 訊息以保持串流活躍
-5. 影片就緒後，下載到 artifacts 目錄
+5. 影片就緒後，下載到 artifacts 目錄（影片 URL 需為公開 HTTPS 或 base64 data: 格式才會下載）
 6. 本機檔案路徑作為工具結果回傳給模型
 
 ## 支援的參數

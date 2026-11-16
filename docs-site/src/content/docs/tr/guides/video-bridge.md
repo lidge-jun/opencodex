@@ -16,13 +16,13 @@ indirir.
 
 - Bir **API anahtarına** sahip bir `xai` sağlayıcı kaydı (`ocx login xai` tek
   başına yeterli değildir — video köprüsü OAuth değil, anahtar kimlik
-  doğrulaması gerektirir)
+  doğrulaması gerektirir; `images.videoProvider` anahtar kimlik doğrulaması kullanan başka bir sağlayıcı belirtiyorsa bunun yerine o sağlayıcı hem hedefi hem de kimlik bilgisini sağlar)
 - Yönlendirilen sağlayıcınız olarak OpenAI harici bir model (örn. Anthropic
   Claude, Google Gemini)
 - opencodex'in OpenAI harici sağlayıcı üzerinden yönlendirilecek şekilde
   yapılandırılmış olması
 
-> **⚠ Sağlayıcı anahtarı gereklidir:** Video köprüsü yalnızca `xai` sağlayıcısı API anahtarı kimlik doğrulaması kullandığında devreye girer. Yapılandırmanıza şunu ekleyin:
+> **⚠ Sağlayıcı anahtarı gereklidir:** `videoProvider` ayarlanmadığında Video köprüsü yalnızca `xai` sağlayıcısı API anahtarı kimlik doğrulaması kullandığında devreye girer. Yapılandırmanıza şunu ekleyin:
 >
 > ```json
 > {
@@ -66,7 +66,7 @@ indirir.
    noktasına bir görev gönderir (veya images.videoProvider ile belirtilen sağlayıcıya)
 4. Köprü akışı canlı tutmak için kalp atışı mesajları göndererek her 5-15
    saniyede bir görev durumunu yoklar
-5. Video hazır olduğunda yapılar (artifacts) dizinine indirilir
+5. Video hazır olduğunda yapılar (artifacts) dizinine indirilir (indirme, video.url genel bir HTTPS URL veya base64 data: URL olduğunda yapılır)
 6. Yerel dosya yolu modele bir araç sonucu olarak döndürülür
 
 ## Desteklenen Parametreler

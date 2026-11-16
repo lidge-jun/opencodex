@@ -13,11 +13,11 @@ achèvement, puis télécharge le résultat.
 
 ## Prérequis
 
-- Une entrée de fournisseur `xai` avec une **clé API** (`ocx login xai` seul ne suffit pas : le pont vidéo exige une authentification par clé, et non OAuth)
+- Une entrée de fournisseur `xai` avec une **clé API** (`ocx login xai` seul ne suffit pas : le pont vidéo exige une authentification par clé, et non OAuth — sauf si `images.videoProvider` désigne un autre fournisseur avec authentification par clé, qui fournit alors à la fois la destination et les identifiants)
 - Un modèle autre qu'OpenAI comme fournisseur routé (par exemple Anthropic Claude ou Google Gemini)
 - opencodex configuré pour acheminer les requêtes vers ce fournisseur autre qu'OpenAI
 
-> **⚠ Clé de fournisseur obligatoire :** le pont vidéo ne s'active que si le fournisseur `xai` utilise
+> **⚠ Clé de fournisseur obligatoire :** sans `videoProvider` défini, le pont vidéo ne s'active que si le fournisseur `xai` utilise
 > l'authentification par clé API. Ajoutez ceci à votre configuration :
 >
 > ```json
@@ -59,7 +59,7 @@ Ajoutez `videoBridgeEnabled: true` à votre configuration `images` :
 2. Un outil de fonction synthétique `video_gen` est injecté dans la conversation.
 3. Lorsque le modèle appelle `video_gen`, opencodex soumet une tâche à `/videos/generations` chez xAI (ou vers le fournisseur désigné par images.videoProvider).
 4. Le pont interroge l'état de la tâche toutes les 5 à 15 secondes et envoie des messages de maintien afin de garder le flux actif.
-5. Une fois la vidéo prête, elle est téléchargée dans le répertoire des artefacts.
+5. Une fois la vidéo prête, elle est téléchargée dans le répertoire des artefacts (le téléchargement exige que video.url soit une URL HTTPS publique ou une URL data: en base64).
 6. Le chemin du fichier local est renvoyé au modèle comme résultat de l'outil.
 
 ## Paramètres pris en charge
