@@ -51,5 +51,6 @@
   "codex-pool-only-policy.test.ts": "codex-integration",
   "codex-windows-current-sid.test.ts": "codex-integration",
   "codex-profile-preservation.test.ts": "codex-integration",
-  "codex-quota-weekly-rollover.test.ts": "codex-integration"
+  "codex-quota-weekly-rollover.test.ts": "codex-integration",
+  "catalog-routed-defaults.test.ts": "codex-integration"
 }

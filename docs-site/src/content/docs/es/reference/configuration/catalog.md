@@ -1,6 +1,6 @@
 ---
 title: Opciones del catálogo
-description: Omisión opcional de modelos nativos en el catálogo generado de Codex.
+description: Recarga del catálogo, omisión opcional de modelos nativos y valores predeterminados de las filas enrutadas en el catálogo generado de Codex.
 ---
 
 <a id="reloading-model-metadata"></a>
@@ -78,3 +78,57 @@ conserva su comportamiento de no escribir y de mantener la fecha de modificació
 Consulta [Modelos de Codex App](/es/guides/codex-app-models/#what-this-means-for-a-disabled-native-model)
 para la visibilidad en Desktop y [Configuración del proveedor](/es/reference/configuration/providers/)
 para `disabledModels`.
+
+<a id="routed-row-defaults"></a>
+
+## Valores predeterminados de las filas enrutadas
+
+Las filas enrutadas (`provider/model` y las filas de combos) se regeneran en cada `ocx sync`,
+así que una edición manual de `opencodex-catalog.json` dura solo hasta la siguiente
+sincronización. En su lugar, `routedCatalogDefaults` en `config.json` fija un grupo cerrado de
+campos en cada fila enrutada generada:
+
+```json
+{
+  "routedCatalogDefaults": {
+    "includeSkillsUsageInstructions": true,
+    "includeAppsUsageInstructions": true,
+    "includePluginUsageInstructions": true,
+    "supportVerbosity": true,
+    "defaultVerbosity": "medium"
+  }
+}
+```
+
+| Ajuste | Campo de la fila del catálogo | Valores |
+| --- | --- | --- |
+| `includeSkillsUsageInstructions` | `include_skills_usage_instructions` | `true` o `false` |
+| `includeAppsUsageInstructions` | `include_apps_usage_instructions` | `true` o `false` |
+| `includePluginUsageInstructions` | `include_plugin_usage_instructions` | `true` o `false` |
+| `supportVerbosity` | `support_verbosity` | `true` o `false` |
+| `defaultVerbosity` | `default_verbosity` | `"low"`, `"medium"` o `"high"` |
+
+Todos los ajustes son opcionales. Un ajuste omitido conserva el valor que la fila recibe sin este
+bloque, heredado de la plantilla nativa o del valor predeterminado del catálogo, y un `false`
+explícito sigue siendo `false`. Ejecuta `ocx sync` después de editar, o
+`ocx sync --restart-codex` para recargar los clientes en ejecución. Quitar un ajuste o el bloque
+completo y volver a sincronizar restaura los valores originales.
+
+Los tres indicadores de instrucciones le dicen a Codex si debe añadir al prompt de ese modelo sus
+instrucciones de uso de skills, apps y plugins. Activar uno hace más grande cada prompt de ese
+modelo. Los indicadores solo añaden texto de orientación; no conceden acceso a ninguna herramienta.
+
+Los límites del proveedor siempre ganan. Un valor que el proveedor o el modelo declara por sí mismo,
+como `supportsVerbosity: false`, sustituye al valor predeterminado en esa fila. Una fila sin
+soporte de verbosidad nunca lleva `default_verbosity`, así que `defaultVerbosity` no tiene
+efecto en ella.
+
+El bloque se aplica a las filas enrutadas que escriben la sincronización y la convergencia, y al
+descubrimiento `/v1/models` con forma de Codex. Las filas nativas de OpenAI, las filas nativas
+calificadas por cuenta y los modelos personalizados del proveedor de reenvío integrado `openai`
+que reutilizan los metadatos de un modelo nativo conservan sus valores nativos. Una fila enrutada
+conservada del catálogo anterior porque no se pudo contactar con su proveedor mantiene sus valores
+antiguos hasta que el proveedor responda y la fila se regenere. Ningún otro campo de la fila, como
+el modo de herramientas, la búsqueda o el truncado, se puede fijar aquí. Un bloque no válido se
+ignora con una advertencia al cargar la configuración, y las escrituras de configuración lo
+rechazan. El Dashboard todavía no tiene un control para este bloque.

@@ -280,6 +280,13 @@
       "documents": ["src/codex/catalog/ownership.ts"]
     },
     {
+      "path": "catalog-routed-defaults.md",
+      "tier": 2,
+      "title": "Routed catalog row defaults",
+      "scope": "Config-first routed-row instruction and verbosity defaults, their validation, capture and precedence.",
+      "documents": ["src/codex/catalog/routed-defaults.ts", "src/config/schema/routed-catalog-defaults.ts", "src/types/routed-catalog-defaults.ts"]
+    },
+    {
       "path": "subagents.md",
       "tier": 2,
       "title": "Subagents And Multi-Agent Surface",
