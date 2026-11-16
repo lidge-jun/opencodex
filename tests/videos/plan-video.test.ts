@@ -103,3 +103,126 @@ describe("planVideoBridge", () => {
     expect(plan!.model).toBe("custom-video-model");
   });
 });
+
+describe("planVideoBridge videoProvider", () => {
+  function makeCustomConfig(images: Record<string, unknown>): OcxConfig {
+    const xai: OcxProviderConfig = {
+      name: "xai",
+      baseUrl: "https://api.x.ai/v1",
+      authMode: "key",
+      apiKey: "xai-test-key",
+    };
+    const bridge: OcxProviderConfig = {
+      name: "my-video-bridge",
+      baseUrl: "http://127.0.0.1:8790/v1/",
+      authMode: "key",
+      apiKey: "bridge-test-key",
+    };
+    return {
+      providers: { xai, "my-video-bridge": bridge },
+      images: { videoBridgeEnabled: true, ...images },
+    } as unknown as OcxConfig;
+  }
+
+  test("named provider owns the destination: its baseUrl and key, trailing slash trimmed", async () => {
+    const config = makeCustomConfig({ videoProvider: "my-video-bridge", videoBridgeModel: "bridge-model" });
+    const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
+    expect(plan).toBeDefined();
+    expect(plan!.auth.baseUrl).toBe("http://127.0.0.1:8790/v1");
+    expect(plan!.auth.token).toBe("bridge-test-key");
+    expect(plan!.provider).toBe((config.providers as Record<string, OcxProviderConfig>)["my-video-bridge"]);
+    expect(plan!.model).toBe("bridge-model");
+    expect(plan!.toolNames.has(VIDEO_GEN_TOOL_NAME)).toBe(true);
+  });
+
+  test("named provider is honored even when no xai provider exists", async () => {
+    const bridge: OcxProviderConfig = {
+      name: "solo-bridge",
+      baseUrl: "https://video.example.com/v1",
+      authMode: "key",
+      apiKey: "solo-key",
+    };
+    const config: OcxConfig = {
+      providers: { "solo-bridge": bridge },
+      images: { videoBridgeEnabled: true, videoProvider: "solo-bridge" },
+    } as unknown as OcxConfig;
+    const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
+    expect(plan).toBeDefined();
+    expect(plan!.auth.baseUrl).toBe("https://video.example.com/v1");
+    expect(plan!.auth.token).toBe("solo-key");
+  });
+
+  test("names a missing provider → fails closed, no xAI fallback", async () => {
+    const config = makeCustomConfig({ videoProvider: "no-such-provider" });
+    const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
+    expect(plan).toBeUndefined();
+  });
+
+  test("names a disabled provider → fails closed, no xAI fallback", async () => {
+    const config = makeCustomConfig({ videoProvider: "my-video-bridge" });
+    (config.providers as Record<string, OcxProviderConfig>)["my-video-bridge"].disabled = true;
+    const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
+    expect(plan).toBeUndefined();
+  });
+
+  test("names a provider without a key → fails closed, no xAI fallback", async () => {
+    const config = makeCustomConfig({ videoProvider: "my-video-bridge" });
+    (config.providers as Record<string, OcxProviderConfig>)["my-video-bridge"].apiKey = undefined;
+    const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
+    expect(plan).toBeUndefined();
+  });
+
+  test("names an oauth provider → fails closed (bearer-key transport only)", async () => {
+    const config = makeCustomConfig({ videoProvider: "my-video-bridge" });
+    (config.providers as Record<string, OcxProviderConfig>)["my-video-bridge"].authMode = "oauth";
+    const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
+    expect(plan).toBeUndefined();
+  });
+
+  test("blank videoProvider → xAI default, unchanged", async () => {
+    const config = makeCustomConfig({ videoProvider: "   " });
+    const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
+    expect(plan).toBeDefined();
+    expect(plan!.auth.baseUrl).toBe("https://api.x.ai/v1");
+    expect(plan!.auth.token).toBe("xai-test-key");
+  });
+
+  test("invalid baseUrl on the named provider → fails closed", async () => {
+    const config = makeCustomConfig({ videoProvider: "my-video-bridge" });
+    (config.providers as Record<string, OcxProviderConfig>)["my-video-bridge"].baseUrl = "not a url";
+    const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
+    expect(plan).toBeUndefined();
+  });
+
+  test("regression: no videoProvider, xai provider with overridden baseUrl → still pinned to the registry URL", async () => {
+    const xai: OcxProviderConfig = {
+      name: "xai",
+      baseUrl: "https://evil.example.com/v1",
+      authMode: "key",
+      apiKey: "xai-test-key",
+    };
+    const config: OcxConfig = {
+      providers: { xai },
+      images: { videoBridgeEnabled: true },
+    } as unknown as OcxConfig;
+    const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
+    expect(plan).toBeDefined();
+    expect(plan!.auth.baseUrl).toBe("https://api.x.ai/v1");
+    expect(plan!.auth.token).toBe("xai-test-key");
+  });
+
+  test("named provider env reference resolves through resolveProviderApiKey", async () => {
+    const original = process.env.OCX_TEST_BRIDGE_KEY;
+    process.env.OCX_TEST_BRIDGE_KEY = "env-resolved-key";
+    try {
+      const config = makeCustomConfig({ videoProvider: "my-video-bridge" });
+      (config.providers as Record<string, OcxProviderConfig>)["my-video-bridge"].apiKey = "${OCX_TEST_BRIDGE_KEY}";
+      const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
+      expect(plan).toBeDefined();
+      expect(plan!.auth.token).toBe("env-resolved-key");
+    } finally {
+      if (original === undefined) delete process.env.OCX_TEST_BRIDGE_KEY;
+      else process.env.OCX_TEST_BRIDGE_KEY = original;
+    }
+  });
+});

@@ -102,6 +102,36 @@ export async function planImageBridge(
 const DEFAULT_VIDEO_MODEL = "grok-imagine-video";
 
 /**
+ * Resolve `images.videoProvider` to a concrete destination, mirroring `images.provider`'s
+ * relay-side semantics (src/providers/openai-sidecar.ts selectImagesProvider): the named
+ * provider must exist, not be disabled, hold a usable API key, and carry an absolute baseUrl.
+ * Every failure returns undefined — the bridge fails closed and never falls back to xAI,
+ * and an xAI credential is never sent to another host (a named `videoProvider` uses only
+ * that provider's own key and URL).
+ */
+function resolveVideoProviderDestination(config: OcxConfig): { baseUrl: string; token: string; provider: OcxProviderConfig } | undefined {
+  const raw = config.images?.videoProvider;
+  if (raw === undefined) return undefined;
+  if (typeof raw !== "string" || !raw.trim()) return undefined; // blank fails closed, same rule as images.provider
+  const providerName = raw.trim();
+  const provider = Object.prototype.hasOwnProperty.call(config.providers, providerName)
+    ? config.providers[providerName]
+    : undefined;
+  if (!provider || provider.disabled === true) return undefined;
+  if (provider.authMode === "oauth" || provider.authMode === "forward") return undefined; // the video client is bearer-key only
+  const token = resolveProviderApiKey(provider.apiKey)?.trim();
+  if (!token) return undefined;
+  let parsed: URL;
+  try {
+    parsed = new URL(provider.baseUrl.trim());
+  } catch {
+    return undefined; // invalid baseUrl fails closed; config validation reports it
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
+  return { baseUrl: provider.baseUrl.trim().replace(/\/+$/, ""), token, provider };
+}
+
+/**
  * Decide whether the video bridge should activate for this request. Unlike images, video
  * generation has no hosted OpenAI tool type — the synthetic `video_gen` tool is unconditionally
  * injected when `videoBridgeEnabled` is true. The bridge activates only when:
@@ -136,6 +166,28 @@ export async function planVideoBridge(
   // Don't intercept for OpenAI native passthrough
   const host = (() => { try { return new URL(routedProvider.baseUrl).hostname; } catch { return ""; } })();
   if (host === "api.openai.com") return undefined;
+  const custom = resolveVideoProviderDestination(config);
+  if (custom) {
+    // `images.videoProvider` owns the destination: only the named provider's baseUrl and key
+    // are used (#8175). The registry pin below stays the default (and the guard) for the xAI
+    // path, so an xAI key never follows a baseUrl override without this explicit opt-in.
+    const timeoutMsCustom = clampImageTimeoutMs(config.images?.videoTimeoutMs);
+    const keepRawCustom = config.images?.artifactsKeepCount;
+    const artifactsKeepCountCustom =
+      typeof keepRawCustom === "number" && Number.isFinite(keepRawCustom) ? Math.floor(keepRawCustom) : undefined;
+    return {
+      provider: custom.provider,
+      auth: { baseUrl: custom.baseUrl, token: custom.token },
+      model: config.images?.videoBridgeModel ?? DEFAULT_VIDEO_MODEL,
+      toolNames,
+      ...(timeoutMsCustom !== undefined ? { timeoutMs: timeoutMsCustom } : {}),
+      ...(artifactsKeepCountCustom !== undefined ? { artifactsKeepCount: artifactsKeepCountCustom } : {}),
+    };
+  }
+  if (typeof config.images?.videoProvider === "string" && config.images.videoProvider.trim()) {
+    // A set-but-unusable videoProvider must NOT silently arm xAI (owner decision, #8175).
+    return undefined;
+  }
   const found = findXaiProvider(config);
   if (!found) return undefined;
   const token = resolveXaiImageApiKey(found.provider);

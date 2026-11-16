@@ -1702,6 +1702,8 @@ export interface OcxImagesConfig {
   artifactsKeepCount?: number;
   /** Master switch for the video bridge. Default false — must be explicitly opted in. */
   videoBridgeEnabled?: boolean;
+  /** Optional custom provider for the video bridge destination (#8175). Names a configured provider; only its own baseUrl and API key are used, and a missing/disabled/keyless named provider fails closed instead of falling back to xAI. Default: the pinned xAI endpoint. */
+  videoProvider?: string;
   /** Model for xAI video generation. Default "grok-imagine-video". */
   videoBridgeModel?: string;
   /** Max video-gen rounds before forced-final. Default 2 (video is slower than image). */

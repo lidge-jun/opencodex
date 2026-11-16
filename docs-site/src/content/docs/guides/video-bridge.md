@@ -51,6 +51,39 @@ Add `videoBridgeEnabled: true` to your `images` config:
 | `videoBridgeModel` | `"grok-imagine-video"` | xAI video model id. |
 | `videoMaxRounds` | `2` | Max video-gen rounds before forced final answer. |
 | `videoTimeoutMs` | `300000` (5 min) | Per-video timeout including polling. |
+| `videoProvider` | *(unset)* | Custom video bridge destination (#8175). Names a configured provider; only its own `baseUrl` and API key are used. |
+
+### Custom video provider
+
+By default the video bridge talks to xAI's pinned endpoint. Set `images.videoProvider` to the
+name of a configured provider to route the `video_gen` submit and poll calls elsewhere —
+for example a self-hosted bridge or any vendor exposing an xAI-compatible async video API
+(same contract: `POST {baseUrl}/videos/generations`, poll `GET {baseUrl}/videos/{id}`):
+
+```json
+{
+  "providers": {
+    "my-video-bridge": {
+      "adapter": "openai-chat",
+      "baseUrl": "http://127.0.0.1:8790/v1",
+      "apiKey": "${VIDEO_BRIDGE_KEY}",
+      "authMode": "key",
+      "allowPrivateNetwork": true
+    }
+  },
+  "images": {
+    "videoBridgeEnabled": true,
+    "videoProvider": "my-video-bridge",
+    "videoBridgeModel": "grok-imagine-video"
+  }
+}
+```
+
+The named provider's own `baseUrl` and API key are the only destination and credential used:
+fail closed, never falling back to xAI, and an xAI key is never sent to another host. A named
+provider that is missing, disabled, or has no usable API key (OAuth is not supported — the
+video client is bearer-key only) leaves the bridge unarmed. `allowPrivateNetwork: true` is
+required for loopback/private destinations, exactly as for any provider `baseUrl`.
 
 ## How It Works
 
@@ -74,7 +107,7 @@ The `video_gen` tool accepts:
 
 ## Limitations
 
-- **xAI only**: Video generation is only available through xAI's Grok Imagine Video API
+- **xAI only**: Video generation targets xAI's Grok Imagine Video API by default; set `images.videoProvider` to a configured provider to use a custom destination (#8175)
 - **Asynchronous**: Video generation takes 30-120 seconds
 - **Cost**: video generation is a paid xAI feature. Check the [official pricing](https://docs.x.ai/developers/pricing) before using it.
 - **One video per call**: Each `video_gen` call produces one video
