@@ -140,3 +140,18 @@ gets no opt-out, so main alone counts as no Codex login under the policy. Paused
 unchanged, and the policy never makes an ineligible stored account usable. Coverage:
 `tests/codex-integration/codex-pool-only-policy.test.ts`; `tests/codex-integration/codex-pool-caller-fallback-policy.test.ts`
 keeps the default-mode fallbacks.
+## Hard-lock refusal read
+
+`resolveCodexAuthContext` (`src/codex/auth-context.ts`) catches a `CodexMainAccountHardLockError` and asks
+`refreshMainHardLockBeforeRefusal` (`src/codex/auth-api/main-hard-lock-refusal-read.ts`) for one fresh
+usage read before refusing (#8113). The read runs only when the policy reading behind the block is older
+than 60 s; concurrent refusals share one in-flight read, and one main identity gets at most one read per
+minute. Usage-query backoff, a paused or reauthentication-required main and native-main maintenance skip
+it, and the read is passive: it never sets or clears the reauthentication quarantine. If the fresh reading
+no longer blocks, the request is resolved once more; otherwise the original refusal stands.
+A refusal on the proxy-owned main credential reads through the recovery probe under the native-main claim.
+A caller-owned main request (caller-owned Direct, or a request-scoped main bearer in Pool) never reads the
+physical credential: it reads with its own bearer and publishes only while that bearer still HMAC-matches the
+observed main credential, the writer is live and the credential generation is unchanged. Coverage:
+`tests/codex-integration/main-account-hard-lock-refusal-read.test.ts` and the startup restore cases in
+`tests/codex-integration/main-account-hard-lock-auth.test.ts`.
