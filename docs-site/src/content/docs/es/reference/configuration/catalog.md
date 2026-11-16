@@ -41,6 +41,9 @@ de Codex; una subcadena `codex` incidental en el nombre de otro cliente no la ac
 herramientas diferidas explícitamente, el texto de la conversación y otros clientes de API no
 se cuentan.
 
+El diagnóstico tiene un límite fijo de trabajo. Si un catálogo o la entrada que lo rodea
+supera ese límite, OpenCodex omite la advertencia y procesa la solicitud sin cambios.
+
 Los modelos enrutados anuncian el descubrimiento diferido. En Code Mode, descubre las
 herramientas disponibles mediante `ALL_TOOLS` y llámalas mediante `tools`; no se requiere una
 función `tool_search` separada. Los modelos que usan la interfaz de herramientas directa
