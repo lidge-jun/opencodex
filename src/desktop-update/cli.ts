@@ -3,9 +3,10 @@
  * `./headless.ts`; this file only binds them to the network, the filesystem, Windows Installer,
  * the runtime record and the terminal.
  */
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
+import { dlopen, ptr } from "bun:ffi";
 import { getConfigDir } from "../config";
 import { packageVersion } from "../lib/package-version";
 import { findLiveProxy } from "../server/proxy-liveness";
@@ -16,6 +17,7 @@ import { acquireBounded, fetchAcquireTransport, realAcquireTimers } from "./acqu
 import { DRAIN_DEADLINE_MS, DRAIN_STOP_DEADLINE_ENV, parseDrainResult } from "./drain";
 import { HEADLESS_EXIT, runHeadlessDesktopUpdate, type HeadlessResult } from "./headless";
 import { windowsDesktopInstall, type WindowsDesktopInstall } from "./install";
+import { MOVED_IMAGE_PATTERN, movedImageName, sameWindowsPath } from "./runtime";
 
 export const HEADLESS_USAGE = "Usage: ocx update --desktop [--check] [--json]";
 const RESTART_REQUEST_BUDGET_MS = 20_000;
@@ -69,6 +71,44 @@ function desktopSupervisor(pid: number): string | null {
   return evidence.kind === "desktop" && evidence.runtimePid === pid ? evidence.app : null;
 }
 
+const MOVEFILE_DELAY_UNTIL_REBOOT = 4;
+
+/** Ask Windows to delete a still-mapped file at the next restart; best effort. */
+function deleteAtReboot(path: string): void {
+  try {
+    const kernel32 = dlopen("kernel32.dll", { MoveFileExW: { args: ["ptr", "ptr", "u32"], returns: "i32" } });
+    try {
+      const wide = Buffer.from(`${path}\0`, "utf16le");
+      kernel32.symbols.MoveFileExW(ptr(wide), null, MOVEFILE_DELAY_UNTIL_REBOOT);
+    } finally { kernel32.close(); }
+  } catch { /* the next run removes it instead */ }
+}
+
+function imageMover(install: WindowsDesktopInstall) {
+  return {
+    moveAsideOwnImage: () => {
+      if (!sameWindowsPath(process.execPath, install.ocxExe)) return null;
+      const moved = win32.join(install.dir, movedImageName(process.pid, Date.now()));
+      renameSync(install.ocxExe, moved);
+      return moved;
+    },
+    restoreOwnImage: (moved: string) => {
+      if (existsSync(install.ocxExe)) return false;
+      try { renameSync(moved, install.ocxExe); return true; } catch { return false; }
+    },
+    retireMovedImages: (current: string | null) => {
+      let names: string[] = [];
+      try { names = readdirSync(install.dir); } catch { return; }
+      for (const name of names) {
+        const path = win32.join(install.dir, name);
+        if (!MOVED_IMAGE_PATTERN.test(name) || path === current) continue;
+        try { rmSync(path); } catch { /* still mapped by a process; a later run or a restart removes it */ }
+      }
+      if (current) deleteAtReboot(current);
+    },
+  };
+}
+
 function print(result: HeadlessResult, json: boolean): void {
   if (json) {
     console.log(JSON.stringify(result));
@@ -118,6 +158,7 @@ export async function runHeadlessDesktopUpdateCommand(args: readonly string[]): 
           }
         },
       },
+      ...imageMover(install),
       msiexecPath: () => win32.join(trustedWindowsSystemDirectory(), "msiexec.exe"),
       spawnInstaller: (file, installerArgs) => {
         const child = Bun.spawn([file, ...installerArgs], { stdin: "ignore", stdout: "ignore", stderr: "ignore", windowsHide: true });

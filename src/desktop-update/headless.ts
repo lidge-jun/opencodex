@@ -64,6 +64,18 @@ export interface HeadlessDeps {
   currentVersion: string;
   fetch(url: string, maxBytes: number): Promise<Uint8Array>;
   staging: StagingArea;
+  /**
+   * Rename the running `ocx.exe` image aside inside the installation (Windows allows renaming a
+   * running executable) and return its new path, or null when this process is not running the
+   * installed image. Without this, Windows Installer's Restart Manager closes this very process,
+   * and everything sharing its console, to replace the file, and the install rolls back. Throws
+   * when the image cannot be moved.
+   */
+  moveAsideOwnImage(): string | null;
+  /** Put a moved image back when the install did not complete; false when something is already there. */
+  restoreOwnImage(moved: string): boolean;
+  /** Best effort: delete images earlier runs moved aside, and schedule `current` for deletion. */
+  retireMovedImages(current: string | null): void;
   msiexecPath(): string;
   spawnInstaller: InstallerSpawn;
   timers: AcquireTimers;
@@ -167,30 +179,42 @@ export async function runHeadlessDesktopUpdate(options: { check: boolean }, deps
   // 4. Stage privately, verify the staged bytes again, install.
   let dir: string | null = null;
   let logPath: string | null = null;
+  let moved: string | null = null;
   let installer: MsiOutcome;
   try {
+    deps.retireMovedImages(null);
     dir = deps.staging.create();
     const msiPath = deps.staging.join(dir, `OpenCodex-${candidate.version}-windows-x64.msi`);
     logPath = deps.staging.join(dir, "msiexec.log");
     deps.staging.write(msiPath, bytes);
     verifyDesktopInstaller(deps.staging.read(msiPath), candidate, deps.fixturePublicKey);
+    try { moved = deps.moveAsideOwnImage(); }
+    catch (error) {
+      throw new Error(`the running ${deps.install.ocxExe} could not be moved aside for the installer (${error instanceof Error ? error.message : String(error)}); run this from an elevated terminal`);
+    }
     deps.log("Installing (Windows Installer, no UI)…");
     installer = await runMsiInstall({ msiexec: deps.msiexecPath(), msiPath, logPath, timeoutMs: deps.installerTimeoutMs ?? INSTALLER_TIMEOUT_MS },
       { spawn: deps.spawnInstaller, timers: deps.timers });
   } catch (error) {
+    if (moved) deps.restoreOwnImage(moved);
     if (dir) deps.staging.discard(dir, []);
     return failure(error, candidate.version);
   }
   const installerView = { exitCode: installer.code, log: logPath, rebootRequired: installer.kind === "installed-reboot-required" };
   const keepLog = (keep: boolean) => { if (dir) deps.staging.discard(dir, keep && logPath ? [logPath] : []); };
   if (!isInstalled(installer)) {
+    // A finished, rolled-back install leaves no ocx.exe in place of the one moved aside; an
+    // installer that may still be running is left alone and the moved path is reported.
+    const restored = moved && installer.kind !== "uncertain" ? deps.restoreOwnImage(moved) : false;
+    const stranded = moved && !restored ? ` The previous ocx.exe is at ${moved}.` : "";
     keepLog(true);
     return finish({ outcome: installer.kind === "uncertain" ? "installer-uncertain" : "installer-failed",
       exitCode: installer.kind === "uncertain" ? HEADLESS_EXIT.uncertain : HEADLESS_EXIT.unchanged,
       targetVersion: candidate.version, runtime: runtimeView(before), installer: installerView, reason: installer.kind,
-      message: `${describeMsiOutcome(installer)} Log: ${logPath}` });
+      message: `${describeMsiOutcome(installer)} Log: ${logPath}${stranded}` });
   }
   deps.log(describeMsiOutcome(installer));
+  deps.retireMovedImages(moved);
 
   // 5. Read the installed binary back.
   const readBack = await deps.readInstalledVersion(deps.install.ocxExe);

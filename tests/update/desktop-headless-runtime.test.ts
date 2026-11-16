@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { classifyMsiExit, msiexecArguments, runMsiInstall } from "../../src/desktop-update/msi";
-import { sameWindowsPath, settleRuntime, type RuntimeReplaceDeps } from "../../src/desktop-update/runtime";
+import { isInstalledImage, MOVED_IMAGE_PATTERN, movedImageName, sameWindowsPath, settleRuntime, type RuntimeReplaceDeps } from "../../src/desktop-update/runtime";
 import { parseDrainResult } from "../../src/desktop-update/drain";
 import type { AcquireTimers } from "../../src/desktop-update/acquire";
 import type { LiveProxy } from "../../src/server/proxy-liveness";
@@ -192,4 +192,11 @@ describe("Desktop-owned client runtime", () => {
       ["not json", 0],
     ] as const) expect(parseDrainResult(stdout, code).ok).toBe(false);
   });
+});
+
+test("a previous image moved aside in the installation still counts as this installation", () => {
+  expect(isInstalledImage("C:\\Program Files\\OpenCodex\\ocx.exe.4242-1794790000000.update-old", EXE)).toBe(true);
+  expect(isInstalledImage("C:\\Program Files\\OpenCodex\\ocx.exe.bak", EXE)).toBe(false);
+  expect(isInstalledImage("C:\\Other\\ocx.exe.4242-1.update-old", EXE)).toBe(false);
+  expect(movedImageName(42, 7)).toMatch(MOVED_IMAGE_PATTERN);
 });

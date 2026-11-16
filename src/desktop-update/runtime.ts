@@ -60,6 +60,23 @@ export function sameWindowsPath(left: string, right: string): boolean {
   return normalize(left) === normalize(right);
 }
 
+/** Name the updater gives the running `ocx.exe` it moves aside before Windows Installer runs. */
+export const MOVED_IMAGE_PATTERN = /^ocx\.exe\.\d+-\d+\.update-old$/i;
+
+export function movedImageName(pid: number, at: number): string {
+  return `ocx.exe.${pid}-${at}.update-old`;
+}
+
+/**
+ * The installed executable, or a previous image of it that this updater moved aside in the same
+ * directory: Windows may report a running process under the name its image file has now.
+ */
+export function isInstalledImage(image: string, installedExe: string): boolean {
+  if (sameWindowsPath(image, installedExe)) return true;
+  const normalized = image.replaceAll("/", "\\");
+  return sameWindowsPath(win32.dirname(normalized), win32.dirname(installedExe)) && MOVED_IMAGE_PATTERN.test(win32.basename(normalized));
+}
+
 /**
  * Make the serving runtime the installed version.
  *
@@ -81,7 +98,7 @@ export async function settleRuntime(
   const pid = live.pid;
   let image: string | null;
   try { image = deps.runtimeImage(pid); } catch { image = null; }
-  if (!image || !sameWindowsPath(image, input.installedExe)) {
+  if (!image || !isInstalledImage(image, input.installedExe)) {
     return { kind: "stale", live, reason: "foreign-image", ...(image ? { detail: image } : {}) };
   }
   const request = await deps.requestRestart({ ...live, pid }, input.targetVersion);

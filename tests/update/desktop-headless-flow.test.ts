@@ -8,6 +8,7 @@ import { computeVersionSkew } from "../../src/cli/version-skew";
 import type { LiveProxy } from "../../src/server/proxy-liveness";
 
 const INSTALL = { dir: "C:\\Program Files\\OpenCodex", ocxExe: "C:\\Program Files\\OpenCodex\\ocx.exe", desktopExe: "C:\\Program Files\\OpenCodex\\opencodex-desktop.exe" };
+const MOVED = "C:\\Program Files\\OpenCodex\\ocx.exe.42-1.update-old";
 const MSI = Buffer.concat([Buffer.from("d0cf11e0a1b11ae1", "hex"), Buffer.from("fixture installer")]);
 
 function signer() {
@@ -39,6 +40,8 @@ interface Scenario {
   readBack?: string | null;
   runtime?: Array<LiveProxy | null>;
   image?: string;
+  moveFails?: boolean;
+  restoreBlocked?: boolean;
 }
 
 function harness(s: Scenario = {}) {
@@ -69,6 +72,13 @@ function harness(s: Scenario = {}) {
       join: (dir, name) => `${dir}\\${name}`,
       discard: (dir, keep) => { events.push(`discard ${dir} keep=${keep.join(",")}`); },
     },
+    moveAsideOwnImage: () => {
+      if (s.moveFails) throw new Error("EPERM");
+      events.push("move-aside");
+      return MOVED;
+    },
+    restoreOwnImage: moved => { events.push(`restore ${moved}`); return !s.restoreBlocked; },
+    retireMovedImages: current => { events.push(`retire ${current ?? "-"}`); },
     msiexecPath: () => "C:\\Windows\\System32\\msiexec.exe",
     spawnInstaller: (file, args) => {
       events.push(`msiexec ${[file, ...args].join(" ")}`);
@@ -100,9 +110,12 @@ describe("ocx update --desktop", () => {
     expect(h.events).toEqual([
       `fetch ${DESKTOP_UPDATE_FEED_URL} 262144`,
       `fetch ${desktopInstallerUrl("2.100.3")} 1073741824`,
+      "retire -",
       "stage",
       "write C:\\Temp\\ocx-desktop-update-1\\OpenCodex-2.100.3-windows-x64.msi",
+      "move-aside",
       "msiexec C:\\Windows\\System32\\msiexec.exe /i C:\\Temp\\ocx-desktop-update-1\\OpenCodex-2.100.3-windows-x64.msi /qn /norestart /l*v C:\\Temp\\ocx-desktop-update-1\\msiexec.log",
+      `retire ${MOVED}`,
       `version ${INSTALL.ocxExe}`,
       "discard C:\\Temp\\ocx-desktop-update-1 keep=",
       "restart 7 2.100.3",
@@ -232,4 +245,36 @@ test("a runtime newer than the installation is not called stale", async () => {
   const h = harness({ installed: "2.100.3", runtime: [live(7, "2.101.0")] });
   expect(await runHeadlessDesktopUpdate({ check: false }, h.deps)).toMatchObject({ outcome: "up-to-date", exitCode: 0, runtime: { version: "2.101.0" } });
   expect(h.events.some(event => event.startsWith("restart") || event === "drain")).toBe(false);
+});
+
+describe("the updater's own image and Windows Installer", () => {
+  test("the running ocx.exe is moved aside before msiexec and restored when the install rolls back", async () => {
+    const h = harness({ installerExit: 1603 });
+    const result = await runHeadlessDesktopUpdate({ check: false }, h.deps);
+    expect(result.outcome).toBe("installer-failed");
+    const order = h.events.filter(event => /^(move-aside|msiexec|restore|retire)/.test(event)).map(event => event.split(" ")[0]);
+    expect(order).toEqual(["retire", "move-aside", "msiexec", "restore"]);
+    expect(result.message).not.toContain("previous ocx.exe");
+    const blocked = harness({ installerExit: 1603, restoreBlocked: true });
+    expect((await runHeadlessDesktopUpdate({ check: false }, blocked.deps)).message).toContain(`The previous ocx.exe is at ${MOVED}.`);
+  });
+
+  test("an image that cannot be moved aside refuses before msiexec", async () => {
+    const h = harness({ moveFails: true });
+    const result = await runHeadlessDesktopUpdate({ check: false }, h.deps);
+    expect(result).toMatchObject({ outcome: "failed", exitCode: HEADLESS_EXIT.unchanged });
+    expect(result.message).toContain("elevated");
+    expect(h.events.some(event => event.startsWith("msiexec") || event.startsWith("restore"))).toBe(false);
+  });
+
+  test("an installer that may still be running keeps the moved image where it is", async () => {
+    const h = harness({ installerExit: "hang" });
+    const work = runHeadlessDesktopUpdate({ check: false }, h.deps);
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    h.fireInstallerDeadline();
+    const result = await work;
+    expect(result.outcome).toBe("installer-uncertain");
+    expect(result.message).toContain(MOVED);
+    expect(h.events.some(event => event.startsWith("restore"))).toBe(false);
+  });
 });

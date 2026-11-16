@@ -1360,8 +1360,12 @@ a newer version is published:
 2. verifies it with the app updater's embedded public key, refusing a bad or missing signature,
    a signature for another version or platform, or a file that is not an MSI, and verifies the
    saved copy again just before installing;
-3. runs `msiexec /i <msi> /qn /norestart /l*v <log>` and waits for its exit code (0 and 3010
-   are success; 3010 means Windows must restart to replace files that were in use);
+3. moves its own running `ocx.exe` aside within the installation folder, so the installer does
+   not have to close the command that started it, runs
+   `msiexec /i <msi> /qn /norestart /l*v <log>` and waits for its exit code (0 and 3010 are
+   success; 3010 means Windows must restart to replace files that were in use). A failed install
+   puts the moved file back; after a successful one it is deleted at the next restart or by the
+   next run;
 4. checks that the installed `ocx.exe` reports the new version;
 5. restarts the proxy that still serves the old version through its own in-place restart, so
    Desktop, the service, or the detached proxy starts the installed executable, and waits until
