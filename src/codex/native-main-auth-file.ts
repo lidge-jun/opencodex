@@ -34,6 +34,20 @@ export function nativeAuthStatStamp(value: BigIntStats): string {
   return `${value.dev}:${value.ino}:${value.size}:${value.mtimeNs}:${value.ctimeNs}`;
 }
 
+/**
+ * Plain read bracketed by a stat before and after (#7345 retention). The identity is the file's
+ * dev/ino when both stats name the same file, and null when it was replaced during the read. The
+ * bytes still come from the plain path read, so read-count oracles observe it. Throws the error of
+ * either stat or the read unchanged: a file removed right after the read is missing, not a login.
+ */
+export function readNativeMainAuthBytesWithIdentity(path: string): { bytes: Buffer; identity: { dev: bigint; ino: bigint } | null } {
+  const before = statSync(path, { bigint: true });
+  const bytes = readNativeMainAuthBytes(path, "plain");
+  const after = statSync(path, { bigint: true });
+  const same = after.dev === before.dev && after.ino === before.ino;
+  return { bytes, identity: same ? { dev: after.dev, ino: after.ino } : null };
+}
+
 /** Reads with a stat before and after, as the desktop identity reader did. */
 export function readNativeMainAuthBytesStable(path: string, maxBytes: bigint): { bytes: Buffer; stat: BigIntStats } {
   const before = statSync(path, { bigint: true });

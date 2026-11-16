@@ -1106,6 +1106,7 @@
   "native-codex-toggle.test.ts": "codex-integration", "native-grok-toggle.test.ts": "codex-integration",
   "native-main-auth-temp.test.ts": "codex-integration", "native-main-claim-cache.test.ts": "codex-integration",
   "native-main-claim.test.ts": "codex-integration", "native-main-owner-lifetime.test.ts": "codex-integration",
+  "native-main-credentials-retention.test.ts": "codex-integration",
   "native-model-toggle.test.ts": "codex-integration", "native-profile-api.test.ts": "codex-integration",
   "native-profile-crash-boundaries.test.ts": "codex-integration",
   "native-profile-drain-server.test.ts": "codex-integration", "native-profile-manager.test.ts": "codex-integration",
