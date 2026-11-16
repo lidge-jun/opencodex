@@ -63,7 +63,7 @@ function outputText(output: unknown): string {
  * quota accounting never does, because they read the provider's original body.
  */
 export function withEstimatedUsage(
-  response: unknown, inputTokens: number, modelId: string,
+  response: unknown, inputTokens: number, modelId: string, streamedOutputTokens?: number,
 ): Record<string, unknown> | undefined {
   // Only a finished Responses object with output; error bodies, failed turns and partial events
   // are left alone even when they arrive with HTTP 200.
@@ -71,21 +71,35 @@ export function withEstimatedUsage(
   if (typeof response.status !== "string" || !TERMINAL_STATUSES.has(response.status)) return undefined;
   if (response.error !== undefined && response.error !== null) return undefined;
   const input = Math.max(0, Math.round(inputTokens));
-  const output = estimateTokens(outputText(response.output), modelId);
+  // A terminal that closes with an empty list counts the items streamed before it instead.
+  const output = response.output.length === 0 && streamedOutputTokens !== undefined
+    ? streamedOutputTokens
+    : estimateTokens(outputText(response.output), modelId);
   return { ...response, usage: { input_tokens: input, output_tokens: output, total_tokens: input + output } };
 }
 
-/** SSE payload rewrite for opted-in native routes; `onApplied` fires once per estimated terminal. */
+/**
+ * SSE payload rewrite for opted-in native routes; `onApplied` fires once per estimated terminal.
+ * Each `response.output_item.done` adds its estimate to one running count, so a terminal whose
+ * `output` is empty is still estimated without the stream retaining any item.
+ */
 export function createEstimatedUsagePayloadRewrite(
   inputTokens: () => number, modelId: string, onApplied?: () => void,
 ): SsePayloadRewrite {
+  let streamedOutputTokens = 0;
   return payload => {
-    // Cheap gate: only a terminal event is parsed, never every delta.
-    if (!payload.includes("response.completed") && !payload.includes("response.incomplete")) return payload;
+    // Cheap gate: only finished items and terminal events are parsed, never every delta.
+    const itemDone = payload.includes("response.output_item.done");
+    if (!itemDone && !payload.includes("response.completed") && !payload.includes("response.incomplete")) return payload;
     let parsed: unknown;
     try { parsed = JSON.parse(payload); } catch { return payload; }
-    if (!isRecord(parsed) || typeof parsed.type !== "string" || !TERMINAL_TYPES.has(parsed.type)) return payload;
-    const response = withEstimatedUsage(parsed.response, inputTokens(), modelId);
+    if (!isRecord(parsed) || typeof parsed.type !== "string") return payload;
+    if (parsed.type === "response.output_item.done") {
+      streamedOutputTokens += estimateTokens(outputText([parsed.item]), modelId);
+      return payload;
+    }
+    if (!TERMINAL_TYPES.has(parsed.type)) return payload;
+    const response = withEstimatedUsage(parsed.response, inputTokens(), modelId, streamedOutputTokens);
     if (!response) return payload;
     onApplied?.();
     return JSON.stringify({ ...parsed, response });

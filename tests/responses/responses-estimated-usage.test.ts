@@ -153,6 +153,25 @@ test("a delta that merely mentions a terminal type is forwarded byte for byte", 
   expect(text).toContain('"delta":"response.completed"');
 });
 
+// Some providers stream each item in response.output_item.done and close with an empty output list.
+test("streaming: a terminal with an empty output is estimated from the items streamed before it", async () => {
+  const full = completed();
+  const item = full.output[0]!;
+  const events = [
+    { type: "response.created", response: { ...full, status: "in_progress", output: [] } },
+    { type: "response.output_item.done", output_index: 0, item },
+    { type: "response.completed", response: { ...full, output: [] } },
+  ];
+  const upstream = new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""),
+    { headers: { "content-type": "text/event-stream" } });
+  const sparse = await send(config(true), true, upstream);
+  const whole = await send(config(true), true, sse(completed()));
+  expect(sparse.terminal.output).toEqual([]);
+  expect(sparse.terminal.usage.output_tokens).toBe(whole.terminal.usage.output_tokens);
+  expect(sparse.terminal.usage.output_tokens).toBeGreaterThan(0);
+  expect(sparse.log.usage).toBeUndefined();
+});
+
 for (const [name, platform, streamMode, eager] of [
   ["tee", "linux", "legacy-tee", false],
   ["eager relay", "darwin", "eager-relay", true],
