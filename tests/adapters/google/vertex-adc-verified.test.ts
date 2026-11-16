@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,7 @@ import { authModeLabel } from "../../../gui/src/components/provider-workspace/Pr
 import { buildConnectionProbeKey } from "../../../gui/src/components/provider-workspace/use-provider-probe-state";
 import type { OcxConfig, OcxProviderConfig } from "../../../src/types";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
+import * as apiKeyResolve from "../../../src/providers/api-key-resolve";
 
 const OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const ENV_KEYS = ["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_API_KEY", "CLOUDSDK_CONFIG"];
@@ -18,6 +19,7 @@ const VERTEX = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com"
 let gcloudDir: string;
 let realFetch: typeof fetch;
 let tokenStatus = 200;
+let tokenBody: unknown = { access_token: "vertex-tok", expires_in: 3600 };
 let saved: Record<string, string | undefined> = {};
 
 function writeUserAdc(refreshToken: string): void {
@@ -36,7 +38,7 @@ beforeAll(() => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
     if (url !== OAUTH_TOKEN_URL) return new Response("nope", { status: 404 });
     return tokenStatus === 200
-      ? new Response(JSON.stringify({ access_token: "vertex-tok", expires_in: 3600 }), { status: 200, headers: { "content-type": "application/json" } })
+      ? new Response(JSON.stringify(tokenBody), { status: 200, headers: { "content-type": "application/json" } })
       : new Response(JSON.stringify({ error: "invalid_grant" }), { status: tokenStatus, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
 });
@@ -49,6 +51,7 @@ beforeEach(() => {
   for (const key of ENV_KEYS) delete process.env[key];
   process.env.CLOUDSDK_CONFIG = gcloudDir;
   tokenStatus = 200;
+  tokenBody = { access_token: "vertex-tok", expires_in: 3600 };
 });
 
 afterEach(() => {
@@ -125,6 +128,26 @@ describe("Vertex ADC verification", () => {
     tokenStatus = 400;
     expect(await staticCatalogConnectionTest("google-vertex", VERTEX)).toMatchObject({ ok: false });
   });
+
+  test.each([{}, { access_token: "", expires_in: 3600 }, { access_token: 7, expires_in: 3600 }])(
+    "a 200 token response without a usable access_token %p is not verified and the probe fails", async body => {
+      writeUserAdc("fixture-refresh");
+      tokenBody = body;
+      await expect(getVertexAccessToken()).rejects.toThrow("no access_token");
+      expect(dashboardVertex().vertexCredentialVerified).toBe(false);
+      expect(await staticCatalogConnectionTest("google-vertex", VERTEX)).toMatchObject({ ok: false });
+      expect(dashboardVertex().vertexCredentialVerified).toBe(false);
+    });
+
+  test.each(["keychain:vertex-fixture", "${VERTEX_FIXTURE_KEY}"])(
+    "a reference row %p answers static_catalog without reading the credential store", async reference => {
+      const resolve = spyOn(apiKeyResolve, "resolveProviderApiKey").mockReturnValue(undefined);
+      try {
+        expect(await staticCatalogConnectionTest("google-vertex", { ...VERTEX, apiKey: reference }))
+          .toEqual({ applicable: false, reason: "static_catalog", latencyMs: 0 });
+        expect(resolve).not.toHaveBeenCalled();
+      } finally { resolve.mockRestore(); }
+    });
 
   test("other static catalogs still skip credential resolution", async () => {
     const antigravity = { adapter: "google", baseUrl: "https://cloudcode-pa.googleapis.com", googleMode: "cloud-code-assist", liveModels: false } as OcxProviderConfig;

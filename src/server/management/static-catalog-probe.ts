@@ -1,4 +1,5 @@
 import type { OcxProviderConfig } from "../../types";
+import { vertexConfiguredCredentialKind } from "../../lib/gcp-adc";
 import { resolveVertexDiscoveryAuth, selectVertexDiscoveryCredential, vertexDiscoveryDeadline } from "../../providers/google-vertex-model-discovery";
 import { effectiveGoogleMode } from "../../providers/registry";
 
@@ -13,7 +14,13 @@ export type StaticCatalogProbeResult =
  * model list, and is the same exchange the first real request performs.
  */
 export async function staticCatalogConnectionTest(name: string, provider: OcxProviderConfig, signal?: AbortSignal): Promise<StaticCatalogProbeResult> {
-  if (effectiveGoogleMode(name, provider) !== "vertex" || selectVertexDiscoveryCredential(provider).kind === "api-key") {
+  if (effectiveGoogleMode(name, provider) !== "vertex") {
+    return { applicable: false, reason: "static_catalog", latencyMs: 0 };
+  }
+  // A literal key or a keychain:/${ENV} reference is an API key: answer before anything is resolved,
+  // so this probe never reads the credential store for a row it cannot test.
+  const configured = vertexConfiguredCredentialKind(provider.apiKey);
+  if (configured === "api-key" || configured === "reference" || selectVertexDiscoveryCredential(provider).kind === "api-key") {
     return { applicable: false, reason: "static_catalog", latencyMs: 0 };
   }
   const started = Date.now();
