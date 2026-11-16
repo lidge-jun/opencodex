@@ -169,7 +169,8 @@ function findXmlTagClose(text: string, from: number): number {
 
 /** Scan each tag once; a suffix-searching lookahead here makes unterminated tags quadratic. */
 function maskXmlIdentifyingAttribute(value: string, decodeEscapes: boolean): string {
-  const { folded, map } = foldForMatching(value, decodeEscapes);
+  const view = foldForMatching(value, decodeEscapes);
+  const { folded } = view;
   let searchFrom = 0;
   while (searchFrom < folded.length) {
     const relativeStart = folded.indexOf("<", searchFrom);
@@ -185,8 +186,8 @@ function maskXmlIdentifyingAttribute(value: string, decodeEscapes: boolean): str
     const tagEnd = close === -1 ? folded.length : close + 1;
     const attributes = folded.slice(tagStart + tagName[0].length, tagEnd);
     if (XML_CREDENTIAL_ATTRIBUTE.test(attributes)) {
-      const start = map[tagStart] ?? value.length;
-      const headEnd = map[tagStart + tagName[0].length] ?? value.length;
+      const start = view.map[tagStart] ?? value.length;
+      const headEnd = view.map[tagStart + tagName[0].length] ?? value.length;
       return value.slice(0, start) + value.slice(start, headEnd) + REDACTED_SECRET;
     }
     if (close === -1) return value;
@@ -202,23 +203,24 @@ function maskOtherFramingsOnce(value: string, decodeEscapes: boolean): string {
       current = maskMultipartOnce(current, decodeEscapes, pattern);
       continue;
     }
-    const { folded, map } = foldForMatching(current, decodeEscapes);
+    const view = foldForMatching(current, decodeEscapes);
+    const { folded } = view;
     pattern.lastIndex = 0;
     let out = "";
     let cursor = 0;
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(folded)) !== null) {
-      const start = map[match.index] ?? current.length;
-      const end = map[match.index + match[0].length] ?? current.length;
+      const start = view.map[match.index] ?? current.length;
+      const end = view.map[match.index + match[0].length] ?? current.length;
       if (start < cursor) continue;
       const head = (() => {
         if (kind === "=") {
           const eq = match[0].indexOf("=");
-          const headEnd = map[match.index + eq + 1] ?? end;
+          const headEnd = view.map[match.index + eq + 1] ?? end;
           return current.slice(start, headEnd);
         }
         const captured = match[1] ?? "";
-        const headEnd = map[match.index + captured.length] ?? end;
+        const headEnd = view.map[match.index + captured.length] ?? end;
         return current.slice(start, headEnd);
       })();
       const body = current.slice(start + head.length, end);
@@ -240,7 +242,8 @@ function maskOtherFramingsOnce(value: string, decodeEscapes: boolean): string {
  * so the search resumes past the line instead of rescanning it from each candidate.
  */
 function maskMultipartOnce(current: string, decodeEscapes: boolean, partHeader: RegExp): string {
-  const { folded, map } = foldForMatching(current, decodeEscapes);
+  const view = foldForMatching(current, decodeEscapes);
+  const { folded } = view;
   partHeader.lastIndex = 0;
   let lineEnd = -1;
   for (let match = partHeader.exec(folded); match !== null; match = partHeader.exec(folded)) {
@@ -257,9 +260,9 @@ function maskMultipartOnce(current: string, decodeEscapes: boolean, partHeader: 
     }
     const blank = folded[headEnd] === "\n" ? 1 : folded[headEnd] === "\r" && folded[headEnd + 1] === "\n" ? 2 : 0;
     if (headEnd + blank < folded.length) headEnd += blank;
-    const start = map[match.index] ?? current.length;
-    const end = map[folded.length] ?? current.length;
-    const head = current.slice(start, map[headEnd] ?? end);
+    const start = view.map[match.index] ?? current.length;
+    const end = view.map[folded.length] ?? current.length;
+    const head = current.slice(start, view.map[headEnd] ?? end);
     if (!current.slice(start + head.length, end).trim()) return current;
     return current.slice(0, start) + head + REDACTED_SECRET;
   }
@@ -282,14 +285,15 @@ function maskCredentialHeaders(value: string): string {
 }
 
 function maskCredentialHeadersOnce(value: string, decodeEscapes: boolean): string {
-  const { folded, map } = foldForMatching(value, decodeEscapes);
+  const view = foldForMatching(value, decodeEscapes);
+  const { folded } = view;
   COLON_LABELLED_CREDENTIAL.lastIndex = 0;
   let out = "";
   let cursor = 0;
   let match: RegExpExecArray | null;
   while ((match = COLON_LABELLED_CREDENTIAL.exec(folded)) !== null) {
-    const start = map[match.index] ?? value.length;
-    const afterLabel = map[match.index + match[0].length] ?? value.length;
+    const start = view.map[match.index] ?? value.length;
+    const afterLabel = view.map[match.index + match[0].length] ?? value.length;
     if (start < cursor) continue;
     const lineEnd = (() => {
       const nl = value.slice(afterLabel).search(/[\r\n]/);

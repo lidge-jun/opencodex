@@ -1,6 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { foldForMatching } from "../../src/lib/redact-folding";
+import * as folding from "../../src/lib/redact-folding";
 import { repoPath } from "../helpers/repo-root";
 import {
   REDACTED_SECRET,
@@ -11,6 +12,32 @@ import {
 } from "../../src/lib/redact";
 
 describe("redactSecretString", () => {
+  test("does not request offset arrays before an ASCII credential label matches", () => {
+    const original = folding.foldForMatching;
+    let mappedChars = 0;
+    const fold = spyOn(folding, "foldForMatching").mockImplementation((value, decodeEscapes) => {
+      const view = original(value, decodeEscapes);
+      let requested = false;
+      return { folded: view.folded, get map() {
+        if (!requested) mappedChars += value.length + 1;
+        requested = true;
+        return view.map;
+      } };
+    });
+    try {
+      const text = "z".repeat(100_000);
+      expect(redactSecretString(text)).toBe(text);
+      expect(mappedChars).toBe(0);
+      expect(redactSecretString(`${text} authorization: fixture-value`)).toBe(`${text} authorization: ${REDACTED_SECRET}`);
+      expect(mappedChars).toBeGreaterThan(0);
+    } finally {
+      fold.mockRestore();
+    }
+    const view = foldForMatching("ASCII offsets");
+    expect(view.map).toBe(view.map);
+    expect(view.map).toEqual(Array.from({ length: 14 }, (_, i) => i));
+  });
+
   test("ASCII folding preserves every byte and original offset, including literal escape syntax (#7846)", () => {
     const ascii = Array.from({ length: 128 }, (_, code) => String.fromCharCode(code)).join("");
     for (const decode of [true, false]) {
