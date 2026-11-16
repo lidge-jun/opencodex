@@ -228,8 +228,8 @@ they differ. `release.ts` takes the feed's `windows-x86_64` entry (a differing
 `github.com/lidge-jun/opencodex/releases/download/v<version>/OpenCodex-<version>-windows-x64.msi`
 asset, and verifies through the strict prehashed path of `src/update/minisign.mjs`: both
 signatures over the exact trusted-comment bytes, a signed `version:` equal to the announced one
-when present (the pinned plugin's check), and a signed `file:` naming this version's x64 MSI (a
-prerelease may use its numeric core). The bytes must open with the OLE compound-file signature.
+when present (the pinned plugin's check), and a signed `file:` naming this version's x64 MSI with the full
+version, prerelease included. The bytes must open with the OLE compound-file signature.
 Only a version strictly newer than the running CLI's own is installed.
 
 `acquire.ts` admits a first hop only on `github.com` under `/lidge-jun/opencodex/releases/` and

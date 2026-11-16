@@ -12,6 +12,7 @@
  */
 import { constants, copyFileSync, existsSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { win32 } from "node:path";
+import { trustedWindowsSystemDirectory } from "../service/desktop-supervision.mjs";
 import { dlopen, ptr } from "bun:ffi";
 import { movedImageName, sameWindowsPath } from "./runtime";
 import type { WindowsDesktopInstall } from "./install";
@@ -23,7 +24,7 @@ const LEFTOVER_IMAGE_PATTERN = /^ocx\.exe\.\d+-\d+\.update-(?:old|new)$/i;
 /** Ask Windows to delete a still-mapped file at the next restart; best effort. */
 function deleteAtReboot(path: string): void {
   try {
-    const kernel32 = dlopen("kernel32.dll", { MoveFileExW: { args: ["ptr", "ptr", "u32"], returns: "i32" } });
+    const kernel32 = dlopen(win32.join(trustedWindowsSystemDirectory(), "kernel32.dll"), { MoveFileExW: { args: ["ptr", "ptr", "u32"], returns: "i32" } });
     try {
       const wide = Buffer.from(`${path}\0`, "utf16le");
       kernel32.symbols.MoveFileExW(ptr(wide), null, MOVEFILE_DELAY_UNTIL_REBOOT);
