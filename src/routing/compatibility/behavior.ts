@@ -25,6 +25,8 @@ export function upstreamProtocolForAdapter(adapter: string): string {
       return "anthropic-messages";
     case "google":
       return "google-generate";
+    case "agy-acp":
+      return "agent-client-protocol";
     default:
       return "openai-responses";
   }
@@ -33,7 +35,7 @@ export function upstreamProtocolForAdapter(adapter: string): string {
 export function surfaceForProtocols(inboundProtocol: string, upstreamProtocol: string): string {
   if (inboundProtocol === "anthropic-messages") return "anthropic-messages-http";
   if (upstreamProtocol === "anthropic-messages") return "responses-http";
-  if (upstreamProtocol === "openai-chat") return "responses-sse";
+  if (upstreamProtocol === "openai-chat" || upstreamProtocol === "agent-client-protocol") return "responses-sse";
   return "responses-http";
 }
 

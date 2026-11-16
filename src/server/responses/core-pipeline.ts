@@ -27,6 +27,7 @@ import { formatErrorResponse } from "../../bridge";
 import { InvalidRetainedCompactionSummary, prepareCompactionRetention } from "./compaction-retention";
 import { responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
 import { markResponseNonReplayable } from "../../lib/upstream-retry";
+import { agyAcpPreflightResponse } from "./agy-acp-preflight";
 
 /** Compose request phases while retaining the original admission-finally ownership. */
 export async function handleResponsesInner(
@@ -48,6 +49,12 @@ export async function handleResponsesInner(
     if (requestState instanceof Response) return requestState;
     const transportState = await prepareResponsesTransport(requestContext, admissionState, requestState);
     if (transportState instanceof Response) return markProxyError(transportState);
+    const agyAcpRefusal = agyAcpPreflightResponse({
+      adapterName: transportState.runTurnAdapter.name, requestHeaders: req.headers,
+      forwardHeaders: requestState.selectedForwardHeaders, comboAttempt: options.comboAttempt === true,
+      subagentFallback: requestState.subagentFallbackSelected, logCtx,
+    });
+    if (agyAcpRefusal) return agyAcpRefusal;
     if (transportState.runTurnAdapter.name === "claude-cli") {
       const instructionImage = options.chatInstructionImage || options.responsesInstructionImage
         || responsesHasInstructionImage(requestState.parsed._rawBody)

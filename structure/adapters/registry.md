@@ -53,6 +53,20 @@ Some adapters share another adapter's routed-tool semantics while retaining inde
 The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMeta.beforePhysicalSend` fence after awaited tool-bridge setup and before spending its dispatch permit or spawning. Cancellation and stale selections produce no child process; cleanup still returns permits and removes temporary tool files.
 
 - `cursor` stays direct because its `runTurn` transport and gated native-file fallback are distinct.
+- `agy-acp` is direct and `runTurn`-only: it starts the official Antigravity CLI (`agy acp --sandbox`) as a local
+  child per turn and drives one Agent Client Protocol session (`src/adapters/agy-acp/`; #8480, plan 080 of the
+  Google protocol parity unit in lidge-jun/opencodex#8771). The CLI owns its Google sign-in,
+  so the `antigravity-acp` row is keyless (`authKind: "key"`, `keyOptional`, like `claude-cli`) and config validation
+  (`src/config/schema/agy-acp-references.ts`, structural, no imports) refuses keys, pools, account settings,
+  non-Gemini models and any use as a combo target or subagent fallback. The use policy
+  (`src/adapters/agy-acp/policy.ts`) refuses subagent turns (`x-codex-parent-thread-id`), combo members, routes chosen by
+  subagent fallback (`IncomingMeta.subagentFallback`, set only where request-prepare selects a fallback) and requests
+  that are not local (`src/lib/request-peer-scope.ts`, recorded per HTTP request and per WebSocket at the listener);
+  `src/server/responses/agy-acp-preflight.ts` answers those with a 403 before sidecars run, and `runTurn` repeats the
+  check before any probe or spawn. Model selection is phase-aware and fails closed when the Gemini model is not
+  confirmed; permission requests are answered `cancelled`; errors carry fixed text only. Coverage:
+  `tests/adapters/agy-acp-{adapter,protocol,policy}.test.ts`, `tests/config/agy-acp-config.test.ts`,
+  `tests/server/server-agy-acp.test.ts`.
 - `devin` is direct for a related reason. It streams Cognition's
   `ApiServerService/GetChatMessage` over Connect-RPC from `runTurn` with hand-written protobuf
   framing, so like Cursor it never travels the `buildRequest`/`parseStream` path. Login is

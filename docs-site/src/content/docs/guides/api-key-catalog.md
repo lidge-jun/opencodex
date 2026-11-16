@@ -7,7 +7,7 @@ This page holds section 3 of the [Providers](/guides/providers/) guide: the buil
 and the provider-specific notes that go with them. Auth modes, account logins, and local providers
 stay on that page.
 
-opencodex ships 108 built-in presets: 87 key-based, 17 OAuth, three local, and one default
+opencodex ships 109 built-in presets: 88 key-based, 17 OAuth, three local, and one default
 ChatGPT-forward preset. The dashboard's **Add provider** picker opens a key provider's dashboard,
 validates the key, and stores it; validation is provider-specific. Notable entries:
 
@@ -838,6 +838,50 @@ CLI headlessly (`claude -p`, `stream-json`) once per turn:
 > driving that harness headlessly from a proxy fits your plan's terms is a question between you and
 > Anthropic. OpenCodex does not convert the login into an API key and does not reproduce the CLI's
 > HTTP identity.
+
+## Antigravity CLI (ACP, local)
+
+OpenCodex can use a Google Antigravity subscription through Google's own CLI instead of replaying an
+Antigravity credential. The `antigravity-acp` preset starts the official Antigravity CLI as `agy acp --sandbox`
+once per turn and talks to it over the Agent Client Protocol on stdin and stdout:
+
+```json
+{
+  "providers": {
+    "antigravity-acp": {
+      "adapter": "agy-acp",
+      "baseUrl": "https://antigravity.google/docs/cli/acp"
+    }
+  }
+}
+```
+
+- **Prerequisites:** Antigravity CLI 1.5.0 or newer on `PATH` (or `OPENCODEX_AGY_BIN` set to its absolute path),
+  signed in once with `agy acp --login` or an interactive `agy` session. A CLI that is not signed in fails the turn
+  with HTTP 401 `agy_login_required`.
+- **No credential stored:** the CLI owns its Google sign-in. OpenCodex never reads, stores or forwards it, and the row
+  refuses an API key, a key pool, account failover or an OAuth setting. There is one account, the CLI's, and no rotation.
+- **Interactive use only:** Google's staff answers on the developer forum permit a personal app to launch the official
+  `agy acp` binary for the user's own account when use is interactive and user-directed, not an unattended worker pool
+  or automated agent loop, and point programmatic workloads to a Gemini API key or Vertex AI ([forum answer](https://discuss.ai.google.dev/t/tos-clarification-is-t3-code-official-antigravity-acp-agent-permitted-under-the-antigravity-terms-of-service/192027/2),
+  [forum answer](https://discuss.ai.google.dev/t/policy-question-omp-hosting-unmodified-antigravity-acp-for-one-user/199753)). OpenCodex enforces what it can know for certain: it refuses a Codex subagent turn
+  (`x-codex-parent-thread-id`), a combo member and a route chosen by subagent fallback with HTTP 403
+  `agy_acp_interactive_only`, and configuration refuses this provider as a combo target or a subagent fallback.
+- **This machine only:** a request that does not come from a loopback client on this machine (a LAN client, a hub link
+  or the hub's management listener) is refused with HTTP 403 `agy_acp_local_only`. The provider is never shared.
+  OpenCodex judges this from the connection it receives, so a reverse proxy or `tailscale serve` that you point at the
+  proxy's own port forwards remote clients over loopback and makes them look local; do not put one in front of a
+  proxy that serves this provider.
+- **Gemini models only:** the static roster is `gemini-3.8-flash`, `gemini-4-argon` and `gemini-3.7-flash`. At each
+  turn the model must also be a Gemini model the CLI offers, confirmed before the prompt is sent; anything else is
+  refused. Codex reasoning effort selects the CLI's thinking level (`xhigh` selects Extra).
+- **Workspace and permissions:** each turn runs in a new empty private directory outside the OpenCodex home. The CLI's
+  permission engine asks before every command and before file access outside that directory, and OpenCodex refuses
+  every such request. `--sandbox` asks the CLI to run its terminal commands in its OS sandbox; Google documents that it
+  has no effect where that sandbox is unavailable (for example Windows 10 or some Linux containers), so it is extra
+  hardening, not a guarantee. Allow rules you set in your own agy settings still apply without asking.
+- **Text only:** ACP prompts carry text, so client function tools and images are not offered to the model, and the
+  CLI's own tool use stays inside the CLI.
 
 ## A6API credit quota
 

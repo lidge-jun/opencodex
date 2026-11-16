@@ -7,7 +7,7 @@ Esta página contiene la sección 3 de la guía de [Proveedores](/es/guides/prov
 con clave API incluidos y las notas específicas de cada proveedor. Los modos de autenticación, los inicios de sesión
 de cuentas y los proveedores locales siguen en esa página.
 
-opencodex incluye 108 preajustes integrados: 87 con clave, 17 OAuth, tres locales y uno predeterminado de reenvío a ChatGPT. El selector **Añadir proveedor** abre el formulario del proveedor con clave, valida la credencial y la guarda; cada proveedor tiene su propia validación. Entre ellos:
+opencodex incluye 109 preajustes integrados: 88 con clave, 17 OAuth, tres locales y uno predeterminado de reenvío a ChatGPT. El selector **Añadir proveedor** abre el formulario del proveedor con clave, valida la credencial y la guarda; cada proveedor tiene su propia validación. Entre ellos:
 
 **ClinePass** utiliza una clave API de Cline con el [catálogo oficial de suscripción](https://docs.cline.bot/getting-started/clinepass) y el [punto final de Chat Completions](https://docs.cline.bot/api/chat-completions), operados por Cline Bot Inc. bajo [los términos de Cline](https://cline.bot/tos). Un id enrutado como `cline-pass/cline-pass/kimi-k3` es intencional: el primer segmento selecciona el proveedor de opencodex, mientras que `cline-pass/kimi-k3` es el identificador de modelo completo que se envía aguas arriba. La cuota de ClinePass se comparte por cuenta entre límites rotativos de 5 horas, semanales y mensuales. Una sonda en vivo del 2026-08-13 verificó que todos los modelos estáticos de ClinePass aceptan `low`, `medium`, `high`, `xhigh` y `max` en el límite de entrada de la pasarela. opencodex conserva los niveles solicitados; cualquier normalización específica del backend sigue siendo responsabilidad de ClinePass.
 
@@ -364,6 +364,29 @@ OpenCodex puede gastar una suscripción de Claude a través del propio arnés de
 > **Términos:** este preajuste gasta su suscripción Claude a través del propio CLI de Anthropic. Si conducir ese arnés sin cabeza desde un proxy se ajusta a los términos de su plan es una pregunta entre usted y Anthropic. OpenCodex no convierte el inicio de sesión en una clave API y no reproduce la identidad CLI de HTTP.
 
 <a id="a6api-credit-quota"></a>
+
+## Antigravity CLI (ACP, local)
+
+OpenCodex puede usar una suscripción de Google Antigravity a través de la propia CLI de Google en lugar de reproducir una credencial de Antigravity. El preajuste `antigravity-acp` inicia la Antigravity CLI oficial como `agy acp --sandbox` una vez por turno y se comunica con ella mediante el Agent Client Protocol por stdin y stdout:
+
+```json
+{
+  "providers": {
+    "antigravity-acp": {
+      "adapter": "agy-acp",
+      "baseUrl": "https://antigravity.google/docs/cli/acp"
+    }
+  }
+}
+```
+
+- **Requisitos:** Antigravity CLI 1.5.0 o posterior en `PATH` (o `OPENCODEX_AGY_BIN` con su ruta absoluta), con la sesión iniciada una vez mediante `agy acp --login` o una sesión interactiva de `agy`. Si la CLI no tiene la sesión iniciada, el turno falla con HTTP 401 `agy_login_required`.
+- **Sin credenciales guardadas:** la CLI es dueña de su inicio de sesión de Google. OpenCodex nunca lo lee, lo guarda ni lo reenvía, y la fila rechaza una clave API, un grupo de claves, la conmutación de cuentas o un ajuste OAuth. Hay una sola cuenta, la de la CLI, y no hay rotación.
+- **Solo uso interactivo:** las respuestas del personal de Google en el foro de desarrolladores permiten que una aplicación personal inicie el binario oficial `agy acp` para la propia cuenta del usuario cuando el uso es interactivo y dirigido por el usuario, no un grupo de trabajadores desatendido ni un bucle de agente automatizado, y remiten las cargas programáticas a una clave API de Gemini o a Vertex AI ([respuesta del foro](https://discuss.ai.google.dev/t/tos-clarification-is-t3-code-official-antigravity-acp-agent-permitted-under-the-antigravity-terms-of-service/192027/2), [respuesta del foro](https://discuss.ai.google.dev/t/policy-question-omp-hosting-unmodified-antigravity-acp-for-one-user/199753)). OpenCodex aplica lo que puede saber con certeza: rechaza con HTTP 403 `agy_acp_interactive_only` un turno de subagente de Codex (`x-codex-parent-thread-id`), un miembro de combo y una ruta elegida por la reserva de subagentes, y la configuración rechaza este proveedor como destino de combo o como reserva de subagentes.
+- **Solo esta máquina:** una solicitud que no llega de un cliente de loopback en esta máquina (un cliente de la LAN, un enlace del hub o el listener de gestión del hub) se rechaza con HTTP 403 `agy_acp_local_only`. El proveedor nunca se comparte. OpenCodex lo decide por la conexión que recibe, así que un proxy inverso o `tailscale serve` que apuntes al puerto del propio proxy reenvía clientes remotos por loopback y los hace parecer locales; no pongas uno delante de un proxy que sirve este proveedor.
+- **Solo modelos Gemini:** la lista estática es `gemini-3.8-flash`, `gemini-4-argon` y `gemini-3.7-flash`. En cada turno el modelo también debe ser un modelo Gemini que ofrezca la CLI, confirmado antes de enviar el prompt; cualquier otro se rechaza. El esfuerzo de razonamiento de Codex selecciona el nivel de pensamiento de la CLI (`xhigh` selecciona Extra).
+- **Espacio de trabajo y permisos:** cada turno se ejecuta en un directorio privado nuevo y vacío fuera del directorio de OpenCodex. El motor de permisos de la CLI pregunta antes de cada comando y antes de acceder a archivos fuera de ese directorio, y OpenCodex rechaza todas esas solicitudes. `--sandbox` pide a la CLI que ejecute sus comandos de terminal en su sandbox del sistema; Google documenta que no tiene efecto donde ese sandbox no está disponible (por ejemplo Windows 10 o algunos contenedores Linux), así que es un refuerzo adicional, no una garantía. Las reglas de permiso que configures en tus propios ajustes de agy siguen aplicándose sin preguntar.
+- **Solo texto:** los prompts de ACP llevan texto, así que las herramientas de función del cliente y las imágenes no se ofrecen al modelo, y el uso de herramientas propio de la CLI queda dentro de la CLI.
 
 ## Cuota de crédito A6API
 

@@ -78,6 +78,7 @@ import { MIN_USAGE_LEDGER_MAX_BYTES } from "../../usage/retention-contract";
 // parser here would cycle back through config loading and run Cursor detection during validation.
 import { COMBO_NAMESPACE, comboConfigIssues, lexicalDecisionModelBase } from "../../combos/types";
 import { routingProfileIssues } from "../../routing/profile";
+import { agyAcpConfigIssues } from "./agy-acp-references";
 import { POLICY_NAMESPACE } from "../../routing/profile-namespace";
 import { providerDestinationConfigError } from "../../lib/destination-policy";
 import { providerTlsProfileConfigError } from "../../lib/provider-tls-profile";
@@ -932,6 +933,11 @@ export const configSchema = z.object({
         }
       }
     }
+  }
+  for (const issue of agyAcpConfigIssues(config as Parameters<typeof agyAcpConfigIssues>[0])) {
+    // Provider names in paths are redacted like every other provider issue in this schema.
+    const path = issue.path[0] === "providers" ? ["providers", redactSecretString(String(issue.path[1])), ...issue.path.slice(2)] : issue.path;
+    ctx.addIssue({ code: "custom", path, message: issue.message });
   }
   const routingProfiles = (config as { routingProfiles?: unknown }).routingProfiles;
   if (routingProfiles !== undefined) {

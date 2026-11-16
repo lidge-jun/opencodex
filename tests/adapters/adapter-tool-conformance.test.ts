@@ -439,7 +439,9 @@ describe("registry-derived routed tool conformance", () => {
   // buildRequest returns a placeholder and tools never travel the wire path.
   // Both Devin provider rows share it and differ only in where the credential
   // came from.
-  const RUN_TURN_ONLY_WIRES = new Set(["devin"]);
+  // The Antigravity ACP adapter is runTurn-only too, and ACP prompts carry text only: client tools are
+  // never offered to the CLI (plan 080). tests/adapters/agy-acp/ covers what it does send.
+  const RUN_TURN_ONLY_WIRES = new Set(["devin", "agy-acp"]);
 
   test("every registered adapter keeps the nested apply_patch helper in its final request", async () => {
     for (const [adapterId] of adapterDefinitions()) {

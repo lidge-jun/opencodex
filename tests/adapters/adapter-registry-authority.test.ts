@@ -26,6 +26,7 @@ const EXPECTED_ADAPTER_NAMES = {
   zed: "zed",
   "mimo-free": "mimo-free",
   qoder: "qoder",
+  "agy-acp": "agy-acp",
   "claude-cli": "claude-cli",
   "dsh-account": "dsh-account",
 } as const;

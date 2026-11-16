@@ -1,0 +1,337 @@
+/**
+ * Antigravity ACP adapter driven against a scripted fake ACP child (plan 080). No real agy runs.
+ */
+import { afterEach, describe, expect, test } from "bun:test";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import { createAgyAcpAdapter, AGY_ACP_ARGS, type AgyAcpDeps } from "../../src/adapters/agy-acp/adapter";
+import type { AgyAcpChild } from "../../src/adapters/agy-acp/process";
+import { runWithRequestPeer } from "../../src/lib/request-peer-scope";
+import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
+
+type Frame = Record<string, any>;
+interface AgentApi {
+  reply(id: unknown, result: unknown): void;
+  error(id: unknown, code: number, message: string): void;
+  notify(update: Record<string, unknown>): void;
+  request(id: unknown, method: string, params?: unknown): void;
+  stderr(text: string): void;
+  exit(code: number): void;
+}
+
+class FakeChild extends EventEmitter {
+  stdin = new PassThrough();
+  stdout = new PassThrough();
+  stderr = new PassThrough();
+  pid = 4242;
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
+  kill(): boolean { return true; }
+}
+
+const SENTINEL = "SENTINEL-prompt-body-7f3a";
+const provider = { adapter: "agy-acp", baseUrl: "https://antigravity.google/docs/cli/acp" } as OcxProviderConfig;
+
+function modelOption(current: string, values: string[], extra: Record<string, unknown> = { category: "model" }): Frame {
+  return { id: "model", name: "Model", type: "select", currentValue: current, options: values.map(value => ({ value, name: value })), ...extra };
+}
+function thoughtOption(current: string, values = ["low", "medium", "high", "extra", "max"]): Frame {
+  return { id: "thought_level", name: "Thinking", category: "thought_level", type: "select", currentValue: current, options: values.map(value => ({ value, name: value[0]!.toUpperCase() + value.slice(1) })) };
+}
+const OFFERED = ["gemini-3.8-flash", "gemini-4-argon", "claude-opus-5-5"];
+
+function parsed(overrides: Partial<OcxParsedRequest> = {}, reasoning?: string): OcxParsedRequest {
+  return {
+    modelId: "gemini-3.8-flash", stream: true,
+    options: reasoning ? { reasoning } : {},
+    context: { systemPrompt: ["be brief"], messages: [{ role: "user", content: "hi there" }] },
+    ...overrides,
+  } as unknown as OcxParsedRequest;
+}
+
+interface Harness { events: AdapterEvent[]; sent: Frame[]; spawned: number; probed: number; args: string[]; env: Record<string, string>; cwd: string; removed: boolean }
+
+/** The default agent: answers every phase; `onFrame` may intercept a frame first. */
+function script(onFrame?: (frame: Frame, api: AgentApi, state: { config: Frame[] }) => boolean | void, options: { initial?: Frame[]; systemPrompt?: boolean; stopReason?: string } = {}) {
+  return (child: FakeChild, sent: Frame[]) => {
+    const state = { config: options.initial ?? [modelOption("gemini-3.8-flash", OFFERED), thoughtOption("high")] };
+    const write = (frame: Frame) => child.stdout.write(`${JSON.stringify(frame)}\n`);
+    const api: AgentApi = {
+      reply: (id, result) => write({ jsonrpc: "2.0", id, result }),
+      error: (id, code, message) => write({ jsonrpc: "2.0", id, error: { code, message } }),
+      notify: update => write({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "s1", update } }),
+      request: (id, method, params) => write({ jsonrpc: "2.0", id, method, params }),
+      stderr: text => child.stderr.write(text),
+      exit: code => { child.exitCode = code; child.stdout.end(); child.emit("close", code); },
+    };
+    let buffer = "";
+    child.stdin.on("data", (chunk: Buffer) => {
+      buffer += chunk.toString("utf8");
+      let index: number;
+      while ((index = buffer.indexOf("\n")) >= 0) {
+        const frame = JSON.parse(buffer.slice(0, index)) as Frame;
+        buffer = buffer.slice(index + 1);
+        sent.push(frame);
+        if (onFrame?.(frame, api, state)) continue;
+        if (frame.method === "initialize") api.reply(frame.id, { protocolVersion: 1, agentCapabilities: options.systemPrompt ? { sessionCapabilities: { systemPrompt: {} } } : {} });
+        else if (frame.method === "session/new") api.reply(frame.id, { sessionId: "s1", configOptions: state.config });
+        else if (frame.method === "session/set_config_option") {
+          state.config = state.config.map(option => option.id === frame.params.configId ? { ...option, currentValue: frame.params.value } : option);
+          api.reply(frame.id, { configOptions: state.config });
+        } else if (frame.method === "session/prompt") {
+          api.notify({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "thinking" } });
+          api.notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hello" } });
+          api.reply(frame.id, { stopReason: options.stopReason ?? "end_turn" });
+        }
+      }
+    });
+  };
+}
+
+async function run(agent: ReturnType<typeof script>, opts: {
+  parsed?: OcxParsedRequest; headers?: Headers; comboAttempt?: boolean; subagentFallback?: boolean; local?: boolean;
+  deps?: Partial<AgyAcpDeps>; abort?: AbortController; beforeRun?: (child: FakeChild) => void;
+} = {}): Promise<Harness> {
+  const h: Harness = { events: [], sent: [], spawned: 0, probed: 0, args: [], env: {}, cwd: "", removed: false };
+  const adapter = createAgyAcpAdapter(provider, {
+    resolveBinary: () => "/fake/agy",
+    probeVersion: async () => { h.probed++; return { ok: true, version: "1.5.2" }; },
+    createWorkspace: async () => ({ dir: "/tmp/ocx-agy-acp-test", tmp: "/tmp/ocx-agy-acp-test/.tmp", remove: async () => { h.removed = true; } }),
+    reap: async () => {},
+    spawn: (_binary, args, options) => {
+      h.spawned++; h.args = args; h.env = options.env; h.cwd = options.cwd;
+      const child = new FakeChild();
+      agent(child, h.sent);
+      opts.beforeRun?.(child);
+      return child as unknown as AgyAcpChild;
+    },
+    ...opts.deps,
+  });
+  const go = () => adapter.runTurn!(opts.parsed ?? parsed(), {
+    headers: opts.headers ?? new Headers(),
+    translatorBudget: undefined as never,
+    ...(opts.comboAttempt ? { comboAttempt: true } : {}),
+    ...(opts.subagentFallback ? { subagentFallback: true } : {}),
+    ...(opts.abort ? { abortSignal: opts.abort.signal } : {}),
+  }, event => h.events.push(event));
+  await runWithRequestPeer(opts.local === false ? undefined : { local: true }, go);
+  return h;
+}
+
+const terminal = (h: Harness) => h.events.filter(e => e.type === "done" || e.type === "error");
+const methods = (h: Harness) => h.sent.filter(f => typeof f.method === "string").map(f => f.method as string);
+const errorCode = (h: Harness) => (terminal(h)[0] as { code?: string } | undefined)?.code;
+
+afterEach(() => { delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN; });
+
+describe("agy acp turn", () => {
+  test("a local interactive turn: initialize, session/new in the private workspace, prompt, one done", async () => {
+    process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "admin-secret-should-not-leak";
+    const h = await run(script());
+    expect(methods(h)).toEqual(["initialize", "session/new", "session/prompt"]);
+    expect(h.sent[0]!.params).toMatchObject({ protocolVersion: 1, clientCapabilities: {} });
+    expect(h.sent[1]!.params).toEqual({ cwd: "/tmp/ocx-agy-acp-test", mcpServers: [] });
+    expect(h.events).toEqual([
+      { type: "thinking_delta", thinking: "thinking" },
+      { type: "text_delta", text: "hello" },
+      { type: "done" },
+    ]);
+    expect(h.args).toEqual([...AGY_ACP_ARGS]);
+    expect(h.args).toContain("--sandbox");
+    expect(h.args.join(" ")).not.toMatch(/dangerously|add-dir|--agent|--login/);
+    expect(h.cwd).toBe("/tmp/ocx-agy-acp-test");
+    expect(h.env.TMPDIR).toBe("/tmp/ocx-agy-acp-test/.tmp");
+    expect(Object.values(h.env).join("\n")).not.toContain("admin-secret-should-not-leak");
+    expect(h.removed).toBe(true);
+  });
+
+  test("system text travels on session/new only when the CLI advertises it, never twice", async () => {
+    const withCap = await run(script(undefined, { systemPrompt: true }));
+    expect(withCap.sent[1]!.params.systemPrompt).toEqual({ mode: "append", content: [{ type: "text", text: "be brief" }] });
+    expect(withCap.sent.find(f => f.method === "session/prompt")!.params.prompt[0].text).not.toContain("[System]");
+    const without = await run(script());
+    expect(without.sent[1]!.params.systemPrompt).toBeUndefined();
+    expect(without.sent.find(f => f.method === "session/prompt")!.params.prompt[0].text).toContain("[System]\nbe brief");
+  });
+
+  test("a different requested Gemini model is set first, acknowledged, then exactly one prompt", async () => {
+    const h = await run(script(), { parsed: parsed({ modelId: "antigravity-acp/gemini-4-argon" }) });
+    expect(methods(h)).toEqual(["initialize", "session/new", "session/set_config_option", "session/prompt"]);
+    expect(h.sent[2]!.params).toEqual({ sessionId: "s1", configId: "model", value: "gemini-4-argon" });
+    expect(terminal(h)).toEqual([{ type: "done" }]);
+  });
+
+  test("a wrong-model acknowledgement fails closed before any prompt", async () => {
+    const h = await run(script((frame, api, state) => {
+      if (frame.method !== "session/set_config_option") return;
+      api.reply(frame.id, { configOptions: state.config });
+      return true;
+    }), { parsed: parsed({ modelId: "gemini-4-argon" }) });
+    expect(methods(h)).not.toContain("session/prompt");
+    expect(errorCode(h)).toBe("agy_acp_model_unproven");
+  });
+
+  test("grouped values and a category-less model selector are matched by value", async () => {
+    const grouped = { id: "model", name: "Model", type: "select", currentValue: "g-flash", options: [
+      { group: "fast", name: "Fast", options: [{ value: "g-flash", name: "Gemini 3.8 Flash" }] },
+      { group: "deep", name: "Deep", options: [{ value: "g-argon", name: "Gemini 4 Argon" }] },
+    ] };
+    const h = await run(script(undefined, { initial: [grouped] }), { parsed: parsed({ modelId: "gemini-4-argon" }) });
+    expect(h.sent[2]!.params).toEqual({ sessionId: "s1", configId: "model", value: "g-argon" });
+    expect(terminal(h)).toEqual([{ type: "done" }]);
+  });
+
+  test("Gemini only: a non-Gemini request never spawns; an unoffered model names only Gemini values", async () => {
+    const claude = await run(script(), { parsed: parsed({ modelId: "claude-opus-5-5" }) });
+    expect(claude.spawned).toBe(0);
+    expect(errorCode(claude)).toBe("agy_acp_model_not_gemini");
+    const missing = await run(script(), { parsed: parsed({ modelId: "gemini-9-ultra" }) });
+    const error = terminal(missing)[0] as { status: number; code: string; message: string };
+    expect(error).toMatchObject({ status: 400, code: "agy_acp_model_not_offered" });
+    expect(error.message).toContain("gemini-3.8-flash, gemini-4-argon");
+    expect(error.message).not.toContain("claude");
+    expect(methods(missing)).not.toContain("session/prompt");
+  });
+
+  test("the CLI's non-Gemini default is never used", async () => {
+    const h = await run(script(undefined, { initial: [modelOption("claude-opus-5-5", OFFERED)] }));
+    // The requested Gemini model is selected instead, then proved.
+    expect(h.sent[2]!.params.value).toBe("gemini-3.8-flash");
+    expect(terminal(h)).toEqual([{ type: "done" }]);
+  });
+
+  test("thinking level: xhigh selects extra after the model; an unoffered level is a 400", async () => {
+    const h = await run(script(), { parsed: parsed({ modelId: "gemini-4-argon" }, "xhigh") });
+    expect(methods(h)).toEqual(["initialize", "session/new", "session/set_config_option", "session/set_config_option", "session/prompt"]);
+    expect(h.sent[2]!.params.configId).toBe("model");
+    expect(h.sent[3]!.params).toMatchObject({ configId: "thought_level", value: "extra" });
+    const narrow = await run(script(undefined, { initial: [modelOption("gemini-3.8-flash", OFFERED), thoughtOption("low", ["low", "high"])] }), { parsed: parsed({}, "max") });
+    expect(errorCode(narrow)).toBe("agy_acp_effort_not_offered");
+    expect(methods(narrow)).not.toContain("session/prompt");
+  });
+
+  test("model proof: unknown current value and a missing selector fail closed before prompting", async () => {
+    const unknown = await run(script(undefined, { initial: [modelOption("mystery", OFFERED)] }));
+    expect(errorCode(unknown)).toBe("agy_acp_model_unproven");
+    const none = await run(script(undefined, { initial: [thoughtOption("high")] }));
+    expect(errorCode(none)).toBe("agy_acp_unsupported_selection");
+    for (const h of [unknown, none]) expect(methods(h)).not.toContain("session/prompt");
+  });
+
+  test("a mid-turn switch to a non-Gemini model, or a removed selector, cancels the turn", async () => {
+    for (const replacement of [[modelOption("claude-opus-5-5", OFFERED)], [thoughtOption("high")]]) {
+      const h = await run(script((frame, api) => {
+        if (frame.method !== "session/prompt") return;
+        api.notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "part" } });
+        api.notify({ sessionUpdate: "config_option_update", configOptions: replacement });
+        return true;
+      }));
+      expect(errorCode(h)).toBe("agy_acp_model_switched");
+      expect(methods(h)).toContain("session/cancel");
+    }
+  });
+
+  test("terminal table", async () => {
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ["end_turn", { type: "done" }],
+      ["max_tokens", { type: "done", stopReason: "max_tokens" }],
+      ["refusal", { type: "done", stopReason: "content_filter" }],
+      ["max_turn_requests", { type: "error", code: "agy_acp_turn_limit", status: 502 }],
+      ["cancelled", { type: "error", code: "agy_acp_cancelled", status: 502 }],
+      ["something_new", { type: "error", code: "agy_acp_protocol", status: 502 }],
+    ];
+    for (const [stopReason, expected] of cases) {
+      const h = await run(script(undefined, { stopReason }));
+      expect(terminal(h)).toHaveLength(1);
+      expect(terminal(h)[0]).toMatchObject(expected);
+    }
+  });
+
+  test("Authentication required at any phase is a 401 with the login hint", async () => {
+    for (const method of ["initialize", "session/new", "session/set_config_option", "session/prompt"]) {
+      const h = await run(script((frame, api) => {
+        if (frame.method !== method) return;
+        api.error(frame.id, -32000, `Authentication required ${SENTINEL}`);
+        return true;
+      }), { parsed: parsed({ modelId: "gemini-4-argon" }) });
+      const error = terminal(h)[0] as { status: number; code: string; message: string };
+      expect(error).toMatchObject({ status: 401, errorType: "authentication_error", code: "agy_login_required" });
+      expect(error.message).toContain("agy acp --login");
+      expect(error.message).not.toContain(SENTINEL);
+    }
+  });
+
+  test("permission requests are refused with the exact cancelled outcome; other client requests are not executed", async () => {
+    const h = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      api.request(7, "session/request_permission", { sessionId: "s1", toolCall: { title: SENTINEL }, options: [{ optionId: "allow", kind: "allow_once", name: "Allow" }] });
+      api.request("perm-2", "session/request_permission", { sessionId: "s1", options: [] });
+      api.request(9, "fs/read_text_file", { path: "/etc/passwd" });
+      api.reply(frame.id, { stopReason: "end_turn" });
+      return true;
+    }));
+    const answers = h.sent.filter(f => f.method === undefined);
+    expect(answers).toEqual([
+      { jsonrpc: "2.0", id: 7, result: { outcome: { outcome: "cancelled" } } },
+      { jsonrpc: "2.0", id: "perm-2", result: { outcome: { outcome: "cancelled" } } },
+      { jsonrpc: "2.0", id: 9, error: { code: -32601, message: "Method not found" } },
+    ]);
+    expect(JSON.stringify(h.events)).not.toContain(SENTINEL);
+  });
+
+  test("child-authored text never reaches an error: stderr, error messages and early exit", async () => {
+    const crashed = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      api.stderr(`stack trace with ${SENTINEL}`);
+      api.exit(3);
+      return true;
+    }));
+    const error = terminal(crashed)[0] as { code: string; message: string };
+    expect(error.code).toBe("agy_acp_protocol");
+    expect(error.message).toContain("exit code 3");
+    const failed = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      api.error(frame.id, -32603, `internal: ${SENTINEL}`);
+      return true;
+    }));
+    for (const h of [crashed, failed]) expect(JSON.stringify(h.events)).not.toContain(SENTINEL);
+  });
+
+  test("a caller abort during the prompt sends session/cancel and emits no terminal", async () => {
+    const abort = new AbortController();
+    const h = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      api.notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: "partial" } });
+      queueMicrotask(() => abort.abort());
+      return true;
+    }), { abort });
+    expect(methods(h)).toContain("session/cancel");
+    expect(terminal(h)).toEqual([]);
+  });
+});
+
+describe("agy acp use policy at runTurn", () => {
+  test("subagent, combo, subagent-fallback and non-local turns are refused before any probe or spawn", async () => {
+    const cases: Array<[Parameters<typeof run>[1], string]> = [
+      [{ headers: new Headers({ "x-codex-parent-thread-id": "" }) }, "agy_acp_interactive_only"],
+      [{ comboAttempt: true }, "agy_acp_interactive_only"],
+      [{ subagentFallback: true }, "agy_acp_interactive_only"],
+      [{ local: false }, "agy_acp_local_only"],
+    ];
+    for (const [opts, code] of cases) {
+      const h = await run(script(), opts);
+      expect(h.spawned).toBe(0);
+      expect(h.probed).toBe(0);
+      expect(terminal(h)).toEqual([expect.objectContaining({ type: "error", status: 403, errorType: "permission_error", code })]);
+      expect((terminal(h)[0] as { message: string }).message).toMatch(/Gemini API key or Vertex AI/);
+    }
+  });
+
+  test("a missing or old CLI fails closed with the install hint", async () => {
+    const missing = await run(script(), { deps: { resolveBinary: () => undefined } });
+    expect(terminal(missing)[0]).toMatchObject({ status: 503, code: "agy_acp_unavailable" });
+    const old = await run(script(), { deps: { probeVersion: async () => ({ ok: false, reason: "too_old", version: "1.3.3" }) } });
+    expect((terminal(old)[0] as { message: string }).message).toContain("found 1.3.3");
+    expect(old.spawned).toBe(0);
+  });
+});

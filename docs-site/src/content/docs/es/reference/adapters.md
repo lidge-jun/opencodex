@@ -316,6 +316,17 @@ El identificador de modelo que elige es una familia de modelos, y el esfuerzo de
 - Obtiene una lista de modelos en vivo acotada y limitada a la cuenta para la visualización y la inferencia de familia de proveedor; la lista no es una lista de modelos permitidos, por lo que un id de modelo proporcionado por quien llama se sigue reenviando.
 - Experimental, no oficial y no respaldado por Zed. Usarlo puede romper los términos de servicio de Zed y puede limitar o suspender la cuenta de Zed; ese riesgo es el del usuario.
 
+## `agy-acp`
+
+**Destinos:** la Antigravity CLI oficial (`agy acp`, 1.5.0 o posterior) como proceso hijo local mediante el Agent Client Protocol v1 (JSON-RPC delimitado por saltos de línea en stdio).
+**Autenticación:** ninguna en OpenCodex; la CLI es dueña de su inicio de sesión de Google.
+
+- Solo `runTurn`: una sesión ACP por turno (`initialize`, `session/new`, `session/set_config_option`, `session/prompt`). El modelo y el nivel de pensamiento se seleccionan mediante las opciones que anuncia la CLI; el modelo Gemini seleccionado debe confirmarse antes del prompt y seguir seleccionado durante él, o el turno falla de forma cerrada.
+- La conversación se aplana en un único prompt de texto; el texto de sistema viaja en `session/new` cuando la CLI anuncia soporte de prompt de sistema.
+- Las solicitudes de permiso se responden con `cancelled`, las solicitudes de sistema de archivos y de terminal de la CLI no se ejecutan, y los errores llevan texto fijo: nunca se devuelven el stderr de la CLI ni sus mensajes de error.
+- `end_turn` completa; `max_tokens` y `refusal` completan como truncado y filtrado de contenido; `max_turn_requests`, un `cancelled` no solicitado y un motivo de parada desconocido hacen fallar el turno.
+- Rechaza turnos de subagente, miembros de combo, rutas de reserva de subagentes y solicitudes de otras máquinas; consulta el [catálogo de claves API](/es/guides/api-key-catalog/#antigravity-cli-acp-local).
+
 ## `azure-openai` (alias: `azure`)
 
 **Objetivos:** **Azure OpenAI**. Envuelve `openai-responses` (así también `passthrough: true`). **Auth:** `key` a través del encabezado `api-key` (no portador).

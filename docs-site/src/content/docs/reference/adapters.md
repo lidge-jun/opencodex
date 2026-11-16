@@ -991,6 +991,24 @@ appended to the id instead.
 - Experimental, unofficial, and not endorsed by Zed. Using it may break Zed's terms of service
   and can get the Zed account limited or suspended; that risk is the user's to accept.
 
+## `agy-acp`
+
+**Targets:** the official Antigravity CLI (`agy acp`, 1.5.0 or newer) as a local child process over the Agent Client
+Protocol v1 (newline-delimited JSON-RPC on stdio).
+**Auth:** none in OpenCodex; the CLI owns its Google sign-in.
+
+- `runTurn` only: one ACP session per turn (`initialize`, `session/new`, `session/set_config_option`, `session/prompt`).
+  The model and thinking level are selected through the options the CLI advertises; the selected Gemini model must be
+  confirmed before the prompt and stay selected during it, or the turn fails closed.
+- The conversation is flattened into one text prompt; system text travels on `session/new` when the CLI advertises
+  system prompt support.
+- Permission requests are answered `cancelled`, file system and terminal requests from the CLI are not executed, and
+  errors carry fixed text: the CLI's stderr and its error messages are never returned.
+- `end_turn` completes; `max_tokens` and `refusal` complete as truncated and content-filtered; `max_turn_requests`, an
+  unrequested `cancelled` and an unknown stop reason fail the turn.
+- Refuses subagent turns, combo members, subagent-fallback routing and requests from other machines; see the
+  [API-key catalog](/guides/api-key-catalog/#antigravity-cli-acp-local).
+
 ## `azure-openai` (alias: `azure`)
 
 **Targets:** **Azure OpenAI**. Wraps `openai-responses` (so also `passthrough: true`).
