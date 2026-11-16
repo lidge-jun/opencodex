@@ -387,7 +387,8 @@ queues one chunk instead of 8 MiB, and each stage that reads a paced source (the
 rewrite, the failed-tail relay, the translator-budget and account-lease wrappers, a combo
 preflight's replay) queues
 nothing ahead and marks its own output, so the chain reads as the client asks. Every relayed
-Remote Link turn is paced, with the link WebSocket feature on or off (#8601, `remote-link.md`); its
+Remote Link turn is paced, each target a combo dispatches for one included, with the link
+WebSocket feature on or off (#8601, `remote-link.md`); its
 upstream chunks are also cut into 256 KiB views (`sliceChunks`), so each stage holds a slice
 rather than a whole source chunk. Unmarked streams keep every queue described above.
 The slicer sits where delivery picks its relay (`passthrough-delivery.ts`), so the stages
