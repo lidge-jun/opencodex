@@ -6,6 +6,7 @@ import { handleClaudeMessages } from "../../src/server/claude-messages";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { stubbedProviderFetch } from "../helpers/catalog-provider-fetch";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { anthropicToResponsesTranslation } from "../../src/claude/inbound";
 import {
@@ -16,7 +17,7 @@ import { resolveAdapter } from "../../src/server/adapter-resolve";
 import type { AdapterEvent } from "../../src/types";
 
 const model = "chatgw/deepseek-test";
-const provider = { adapter: "openai-chat" as const, baseUrl: "https://chat.example.com/v1", apiKey: "synthetic-fixture" };
+const provider = { adapter: "openai-chat" as const, baseUrl: "https://chat.example.com/v1", apiKey: "synthetic-fixture", fetch: stubbedProviderFetch };
 const tool = (name: string, deferred = false) => ({
   name, description: `${name} tool`, input_schema: { type: "object", properties: { q: { type: "string" } } },
   ...(deferred ? { defer_loading: true } : {}),
