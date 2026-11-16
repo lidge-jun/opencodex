@@ -1304,6 +1304,35 @@ describe("combo stream preflight", () => {
     }
   }
 
+  for (const field of ["tool_choice", "text.format"] as const) {
+    for (const separateChunks of [false, true]) {
+      test(`coercible non-string ${field} commits empty output before failure (separate chunks: ${separateChunks})`, async () => {
+        const selector = { type: [field === "tool_choice" ? "function" : "text"] };
+        const payload = {
+          type: "response.created",
+          response: {
+            id: "empty", status: "in_progress", output: [],
+            ...(field === "tool_choice" ? { tool_choice: selector } : { text: { format: selector } }),
+          },
+        };
+        expect(comboStreamPayloadCommitsOutput(payload)).toBe(true);
+        const frames = [payload, {
+          type: "response.failed",
+          response: { status: "failed", output: [], error: { code: "server_error", message: "busy" } },
+        }].map(value => `data: ${JSON.stringify(value)}\n\n`);
+        const expected = new TextEncoder().encode(frames.join(""));
+        const original = new Response(new ReadableStream<Uint8Array>({ start(controller) {
+          for (const frame of separateChunks ? frames : [frames.join("")]) controller.enqueue(new TextEncoder().encode(frame));
+          controller.close();
+        } }), { headers: { "content-type": "text/event-stream" } });
+        const result = await preflightComboStreamResponse(original, { model: "m1", provider: "a" });
+        expect(result.kind).toBe("accepted");
+        expect(result.response.status).toBe(200);
+        expect(new Uint8Array(await result.response.arrayBuffer())).toEqual(expected);
+      });
+    }
+  }
+
   test("a replay classifier exception commits the original stream", async () => {
     const payloads = [
       { type: "response.created", response: { id: "original", status: "in_progress", output: [] } },
