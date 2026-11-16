@@ -1104,8 +1104,8 @@ export interface OcxConfig extends OcxLinkHomeConfig {
    */
   codexDesktopAuthless?: boolean;
   /**
-   * Luna Reserve compatibility (#4961), independent of `codexDesktopAuthless`. Seeded once from that
-   * flag by the `codexReserveMigration` step; afterwards absent means off. Enabling it grants no
+   * Luna Reserve compatibility (#4961), independent of `codexDesktopAuthless`. Follows that flag until a
+   * one-time seed records `codexReserveMigration`; afterwards absent means off. Enabling it grants no
    * entitlement: upstream Reserve permission, a non-client role and loopback admission still apply.
    */
   codexReserveEnabled?: boolean;
