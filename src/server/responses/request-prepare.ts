@@ -528,8 +528,6 @@ export async function prepareResponsesRequest(
     // client body. Inside this try so a decode error answers exactly like a parse error.
     if (options.directRequest) parsed = options.directRequest.decode(parsed);
     parsed._nativeReasoningRetention = resolveNativeReasoningRetention(config);
-    // Codex's own "New" turn metadata, for the experimental Anthropic perMessageEffort option (#6895).
-    parsed._codexNewHistory = codexTurnStartsNewHistory(body, req.headers, options.inboundTransport);
     // Capture before route rewrites or hosted sidecars can add tools; replayed catalogs are history.
     // Direct decoders already own current function names (including legacy Chat functions).
     // Project only those names; bridging the conversation would retain its reasoning twice.
@@ -556,6 +554,8 @@ export async function prepareResponsesRequest(
       parsed._anthropicInbound = true;
       if (parsed.options.textFormat?.type === "json_schema") parsed._structuredOutputConformance = true;
     }
+    // Codex's own "new" turn metadata, for the experimental Anthropic perMessageEffort option (#6895).
+    parsed._codexNewHistory = codexTurnStartsNewHistory(body, req.headers, options.inboundTransport);
     parsed._promptCacheKeyIsSharedCohort = options.promptCacheKeyIsSharedCohort;
     // The body may have been rebuilt since the inbound observation (previous-response
     // expansion); alias the parsed raw body to the same draft so the outbound
