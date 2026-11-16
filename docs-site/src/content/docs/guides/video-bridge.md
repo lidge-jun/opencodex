@@ -97,7 +97,10 @@ bridge:
   cannot pin the peer the proxy picks: route a provider through a proxy only if you trust that proxy's
   DNS and network path to keep private destinations unreachable. If local DNS cannot resolve the
   hostname while a proxy applies, the request still goes through that proxy with no local answer to
-  check, and OpenCodex logs a warning.
+  check, and OpenCodex logs a warning. A local video provider must therefore be reached without a
+  proxy: when one applies, a plain `http` request and a hostname that resolves to a private address are
+  both refused even with `allowPrivateNetwork`. Exclude the host with the provider's `noProxy` (for a
+  provider `proxy`) or with `NO_PROXY` (for a global proxy).
 - A key OpenCodex can recognize as xAI's (an `xai-` key, a key held by any `xai` row, or an
   environment reference named for xAI or Grok) is sent only to `https://api.x.ai` or
   `https://cli-chat-proxy.grok.com`; any other origin is refused. A key with none of those marks cannot
