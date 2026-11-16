@@ -204,7 +204,8 @@ describe("advisor responses wiring (end-to-end)", () => {
             const called = workerBodies.length === 1;
             return Response.json({ choices: [{ message: called
               ? { role: "assistant", content: null, tool_calls: [{ id: "call_adv_1", type: "function", function: { name: "advisor", arguments: '{"question":"Where do I start?"}' } }] }
-              : { role: "assistant", content: "continued" }, finish_reason: called ? "tool_calls" : "stop" }] });
+              : { role: "assistant", content: "continued" }, finish_reason: called ? "tool_calls" : "stop" }],
+              usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } });
           }) as typeof fetch;
         const config = advisorConfig({ enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1", policy: "manual" },
           workerFetch);
@@ -218,6 +219,7 @@ describe("advisor responses wiring (end-to-end)", () => {
         expect(body).toContain("undeclared_tool_call");
         expect(body).not.toContain("call_adv_1");
         expect(body).not.toContain(ADVISOR_ADVICE);
+        if (!stream) expect(JSON.parse(body).usage).toMatchObject({ input_tokens: 100, output_tokens: 20, total_tokens: 120 });
       });
     }
   }

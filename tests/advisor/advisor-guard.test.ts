@@ -122,6 +122,56 @@ describe("createAdvisorGuard — manual advisor() interception", () => {
     expect(events.at(-1)).toMatchObject({ type: "error", status: 502, code: "undeclared_tool_call" });
   });
 
+  test("buffered forbidden Advisor usage includes the rejected leg once after an earlier consultation", async () => {
+    const recorder = { consults: [] as { reason: string; question: string | undefined }[] };
+    const parsed = baseParsed();
+    parsed.stream = false;
+    let continuations = 0;
+    const events = await collect(createAdvisorGuard(planFrom(recorder))({ parsed,
+      firstEvents: (async function* () {
+        yield* advisorCallEvents("allowed-call");
+        yield { type: "done", usage: { inputTokens: 11, outputTokens: 3, totalTokens: 14 } };
+      })(),
+      continuation: next => {
+        continuations++;
+        next.options.toolChoice = "none";
+        return (async function* () {
+          yield* advisorCallEvents("forbidden-call");
+          yield { type: "text_delta", text: "private rejected suffix" };
+          yield { type: "done", usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120 } };
+        })();
+      },
+    }));
+    expect(recorder.consults).toHaveLength(1);
+    expect(continuations).toBe(1);
+    expect(events.some(event => event.type.startsWith("tool_call") || event.type === "text_delta")).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "undeclared_tool_call",
+      usage: { inputTokens: 111, outputTokens: 23, totalTokens: 134 } });
+  });
+
+  test("a forbidden streaming Advisor call does not drain the upstream for usage", async () => {
+    const recorder = { consults: [] as { reason: string; question: string | undefined }[] };
+    const parsed = baseParsed();
+    parsed.options.toolChoice = "none";
+    let suffixRead = false, closed = false;
+    const { requests, continuation } = makeContinuation();
+    const events = await collect(createAdvisorGuard(planFrom(recorder))({ parsed, continuation,
+      firstEvents: (async function* (): AsyncGenerator<AdapterEvent> {
+        try {
+          yield { type: "tool_call_start", id: "private-call", name: "advisor" };
+          suffixRead = true;
+          yield { type: "done", usage: { inputTokens: 100, outputTokens: 20 } };
+        } finally { closed = true; }
+      })(),
+    }));
+    expect(suffixRead).toBe(false);
+    expect(closed).toBe(true);
+    expect(recorder.consults).toEqual([]);
+    expect(requests).toEqual([]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "error", code: "undeclared_tool_call" });
+  });
+
   test("holds the synthetic call, consults, reinjects advice, and re-dispatches the worker", async () => {
     const recorder = { consults: [] as { reason: string; question: string | undefined }[] };
     const { requests, continuation, queues } = makeContinuation();

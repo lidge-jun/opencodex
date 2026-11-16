@@ -66,6 +66,8 @@ multi-call pairing, overlap and lifecycle release.
   rechecks that choice on each worker leg and refuses a forbidden call before consultation,
   continuation, or disclosure of its ID and arguments. This also applies to linked Messages replay
   configurations; automatic policy preflight retains its separate operator-configured behavior.
+  A buffered refusal preserves the already-parsed rejected worker leg's terminal usage, merged
+  with earlier intercepted legs once; streaming refusal closes its iterator immediately.
 - Run-turn adapters: preflight support only — the automatic pre-dispatch consultation attempt
   applies, but the synthetic tool is never injected because the run-turn loop cannot intercept it.
 - Native OpenAI passthrough: no advisor support in PR1. The request path is byte-identical to a

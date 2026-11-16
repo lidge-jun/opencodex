@@ -265,15 +265,30 @@ export function createAdvisorGuard(plan: AdvisorPlan): NonNullable<OcxParsedRequ
       let hasIncompleteToolCall = false;
       let terminalConsumed = false;
       let terminalEvent: Extract<AdapterEvent, { type: "done" }> | undefined;
+      let bufferedRefusal: Extract<AdapterEvent, { type: "error" }> | undefined;
 
       for await (const event of source) {
+        if (bufferedRefusal) {
+          // Non-streaming delivery has already parsed the response. Discard its suffix while
+          // preserving the reported worker usage; never drain a live stream after a refusal.
+          const terminal = event.type === "done" || event.type === "incomplete" || event.type === "error";
+          if (terminal) accumulatedUsage = retention.usage(accumulatedUsage, event.usage);
+          if (options.translatorBudget) releaseTranslatedEvent(event, options.translatorBudget);
+          if (terminal) {
+            yield accumulatedUsage ? { ...bufferedRefusal, usage: accumulatedUsage } : bufferedRefusal;
+            return;
+          }
+          continue;
+        }
         if (event.type === "tool_call_start") {
           if (event.name === ADVISOR_TOOL_NAME && !advisorAllowed && !callerOwnsAdvisorAlias) {
             if (options.translatorBudget) releaseTranslatedEvent(event, options.translatorBudget);
-            yield { type: "error", status: 502, errorType: "upstream_error", code: UNDECLARED_TOOL_CALL_ERROR_CODE,
+            const refusal: Extract<AdapterEvent, { type: "error" }> = { type: "error", status: 502, errorType: "upstream_error", code: UNDECLARED_TOOL_CALL_ERROR_CODE,
               message: "routed provider emitted an Advisor call outside the current request's tool choice",
               ...(accumulatedUsage ? { usage: accumulatedUsage } : {}) };
-            return;
+            if (parsed.stream) { yield refusal; return; }
+            bufferedRefusal = refusal;
+            continue;
           }
           if (pending) { held.push(pending); pending = null; }
           holdingCurrent = event.name === ADVISOR_TOOL_NAME && !callerOwnsAdvisorAlias;
@@ -342,6 +357,7 @@ export function createAdvisorGuard(plan: AdvisorPlan): NonNullable<OcxParsedRequ
         }
         yield event;
       }
+      if (bufferedRefusal) { yield bufferedRefusal; return; }
 
       const advisorCalls = held.filter(call => call.name === ADVISOR_TOOL_NAME && call.closed);
       const shouldIntercept = terminalConsumed
