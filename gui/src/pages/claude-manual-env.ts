@@ -61,7 +61,7 @@ const ONE_M_MARKER = /\[1m\]$/i;
 const NATIVE_TIER_FILL: Partial<Record<(typeof MODEL_ENV_NAMES)[number], string>> = {
   ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5-5",
   ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5",
-  ANTHROPIC_DEFAULT_FABLE_MODEL: "claude-fable-5-2",
+  ANTHROPIC_DEFAULT_FABLE_MODEL: "claude-fable-5-1",
 };
 
 function stripOneMillionMarker(value: string): string {
