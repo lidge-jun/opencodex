@@ -20,6 +20,8 @@ export const RESPONSES_CORE_MODULES = [
   "native-injection-replay.ts",
   // Reached from passthrough dispatch: the physical replay guard for a native reset/EOF replacement (#8292).
   "native-replay-guard.ts",
+  // Reached from passthrough delivery: opt-in estimated usage for providers that omit it (#7427).
+  "estimated-usage.ts",
   "native-steering.ts",
   "native-steering-settings.ts",
   "native-steering-policy.ts",
