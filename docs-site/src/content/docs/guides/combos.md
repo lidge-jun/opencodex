@@ -1106,7 +1106,7 @@ message names the same wait, for example `(retry in ~2m)`, so a client that hide
 shows it. The Claude Messages listener adds the same wait to its fixed combo sentence.
 On `/v1/responses`, the `combo_unavailable` error also carries a machine-readable `combo` object, for
 example `"combo": { "cause": "mixed", "targets": 3, "attempted": 0, "causes": { "quota": 2, "permission": 1 } }`.
-`cause` is one class shared by every skipped target (targets already dispatched are not classified), `mixed` when they differ, or `unknown` when none was
+`cause` is one class shared by every skipped target (a target already dispatched is classified only as `unsupported` after refusing a mandatory `tool_choice`), `mixed` when they differ, or `unknown` when none was
 classified. The classes are `quota` (cached quota spent, or a cooldown set by a 429 or 402), `permission` (a
 cooldown set by a 401 or 403), `transient` (any other cooldown), `unsupported` (the target cannot serve this
 request, including a mandatory `tool_choice` no target preserves) and `unavailable` (provider missing or
