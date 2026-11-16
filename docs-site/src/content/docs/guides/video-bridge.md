@@ -95,7 +95,9 @@ bridge:
   `noProxy` settings. When a provider or global proxy carries the request, the proxy resolves
   the hostname and connects itself, so the address check above covers only the local DNS answer and
   cannot pin the peer the proxy picks: route a provider through a proxy only if you trust that proxy's
-  DNS and network path to keep private destinations unreachable.
+  DNS and network path to keep private destinations unreachable. If local DNS cannot resolve the
+  hostname while a proxy applies, the request still goes through that proxy with no local answer to
+  check, and OpenCodex logs a warning.
 - A key OpenCodex can recognize as xAI's (an `xai-` key, a key held by any `xai` row, or an
   environment reference named for xAI or Grok) is sent only to `https://api.x.ai` or
   `https://cli-chat-proxy.grok.com`; any other origin is refused. A key with none of those marks cannot
