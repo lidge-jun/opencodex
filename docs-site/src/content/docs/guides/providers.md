@@ -35,8 +35,8 @@ rows are re-enabled without replacing saved mode or model settings, and noncanon
 rows are not offered that recovery path.
 
 Luna Reserve compatibility is a ChatGPT account capability on the canonical OpenAI forward path,
-not an OpenAI API-key entitlement. Its manual stored-main selector requires effective local authless
-Desktop mode and current credential-bound upstream permission; a catalog entry alone does not
+not an OpenAI API-key entitlement. Its manual stored-main selector requires the `codexReserveEnabled`
+setting on a loopback, non-client proxy and current credential-bound upstream permission; a catalog entry alone does not
 authorize a request. See [Luna Reserve alongside routed models](/reference/cli/providers-accounts/#luna-reserve-alongside-routed-models)
 for setup, restart order, authorization requirements, and unsupported helpers.
 

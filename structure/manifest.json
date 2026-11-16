@@ -138,6 +138,13 @@
       ]
     },
     {
+      "path": "codex-reserve-capability.md",
+      "tier": 4,
+      "title": "Luna Reserve Capability",
+      "scope": "codexReserveEnabled, its one-time seed from codexDesktopAuthless, and the shared writer projection.",
+      "documents": ["src/config/reserve-capability.ts", "src/config/persisted-projections.ts", "src/server/reserve-capability-startup.ts"]
+    },
+    {
       "path": "config-ownership.md",
       "tier": 4,
       "title": "Config Ownership Manifest",
