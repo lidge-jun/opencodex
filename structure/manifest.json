@@ -138,6 +138,13 @@
       ]
     },
     {
+      "path": "codex-reserve-capability.md",
+      "tier": 4,
+      "title": "Luna Reserve Capability",
+      "scope": "codexReserveEnabled, its one-time seed from codexDesktopAuthless, and the shared writer projection.",
+      "documents": ["src/config/reserve-capability.ts", "src/config/persisted-projections.ts", "src/server/reserve-capability-startup.ts"]
+    },
+    {
       "path": "config-ownership.md",
       "tier": 4,
       "title": "Config Ownership Manifest",
@@ -278,6 +285,13 @@
       "title": "Routed-row authorship",
       "scope": "Generated routed-row ownership signals and combo catalog description overrides.",
       "documents": ["src/codex/catalog/ownership.ts"]
+    },
+    {
+      "path": "catalog-routed-defaults.md",
+      "tier": 2,
+      "title": "Routed catalog row defaults",
+      "scope": "Config-first routed-row instruction and verbosity defaults, their validation, capture and precedence.",
+      "documents": ["src/codex/catalog/routed-defaults.ts", "src/config/schema/routed-catalog-defaults.ts", "src/types/routed-catalog-defaults.ts"]
     },
     {
       "path": "subagents.md",

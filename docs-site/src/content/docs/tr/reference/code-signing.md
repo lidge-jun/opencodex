@@ -60,7 +60,10 @@ Masaüstü güncelleyici imzası (`.msi.sig`) ve `latest.json`, imzalı yükleyi
 Her yayın sayfası **Code signing** başlığı altında o yayının Windows dosyalarının
 gerçekten imzalanıp imzalanmadığını belirtir. Bu bilgi, yayın çalıştırmasının her dosya
 için kaydettiği sonuçtan gelir: bir dosya yalnızca çalıştırma `release-signing` ilkesini
-kullandıysa ve doğrulanmış imzalı dosya imzasız dosyanın yerine geçtiyse imzalı sayılır.
+kullandıysa, doğrulanmış imzalı dosya imzasız dosyanın yerine geçtiyse ve kaydedilen
+SHA-256 değeri yayında yayımlanan dosyanınkiyle eşleşiyorsa imzalı sayılır. Böyle bir
+kaydı olmayan dosya, örneğin kaydı yayın işine ulaşmayan bir yeniden çalıştırmada yeniden
+derlenmiş bir dosya, kaydedilmemiş olarak listelenir ve kod imzalı değil sayılır.
 Çalıştırma hiçbir sonuç kaydetmediyse yayın, Windows dosyalarının kod imzalı olmadığını
 belirtir. SignPath atfı ve ilke bağlantısı her yayında yer alır.
 

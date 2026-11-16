@@ -1299,7 +1299,7 @@
     "oauth-health.test.ts": "oauth",
     "oauth-log.test.ts": "oauth",
     "oauth-login-cli-browser-launch.test.ts": "oauth",
-    "oauth-login-cli-errors.test.ts": "oauth",
+    "oauth-login-cli-errors.test.ts": "oauth", "oauth-antigravity-risk.test.ts": "oauth",
     "oauth-login-cli-live-update.test.ts": "oauth",
     "oauth-login-open-browser.test.ts": "oauth",
     "oauth-login-summary.test.ts": "oauth",

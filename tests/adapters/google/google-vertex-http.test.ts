@@ -4,7 +4,7 @@ import { createRequestExecutionBudget } from "../../../src/lib/request-execution
 import { budgetOwner } from "../../helpers/send-budget-owner";
 import type { AdapterRequest } from "../../../src/adapters/base";
 import { fetchAntigravityWithRetry, fetchDirectGeminiWithRetry, fetchVertexWithRetry } from "../../../src/adapters/google-http";
-import { ANTIGRAVITY_ACCESS_DENIED_PREFIX, ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX, safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage, retryableGoogleStatus } from "../../../src/adapters/google-errors";
+import { ANTIGRAVITY_ACCESS_DENIED_PREFIX, ANTIGRAVITY_AUTH_FAILED_PREFIX, ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX, safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage, retryableGoogleStatus } from "../../../src/adapters/google-errors";
 import { isAntigravityAccessDeniedRefusal, isAntigravityRawValidationRefusal, isAntigravityValidationRefusal } from "../../../src/server/responses/antigravity-validation-refusal";
 
 describe("Antigravity 403 body boundary", () => {
@@ -46,6 +46,13 @@ describe("Antigravity 403 body boundary", () => {
     // A 403 PERMISSION_DENIED worded as invalid credentials normalizes to "authentication failed"; it
     // refuses this account just the same.
     expect(await isAntigravityAccessDeniedRefusal(new Response(denied("Request had invalid authentication credentials."), { status: 403 }))).toBe(true);
+    // The same wording without Google's enum (a proxy page, an enum-less envelope) names no account.
+    for (const raw of ["<html>Session expired</html>", JSON.stringify({ error: { code: 403, message: "Token expired" } })]) {
+      const normalized = safeAntigravityHttpErrorMessage(403, raw);
+      expect(normalized.startsWith(ANTIGRAVITY_AUTH_FAILED_PREFIX)).toBe(true);
+      expect(await isAntigravityAccessDeniedRefusal(new Response(normalized, { status: 403 }))).toBe(false);
+      expect(await isAntigravityRawValidationRefusal(new Response(raw, { status: 403 }))).toBe(false);
+    }
     const aborted = new AbortController();
     aborted.abort();
     expect(await isAntigravityAccessDeniedRefusal(new Response(denied("nope"), { status: 403 }), aborted.signal)).toBe(false);

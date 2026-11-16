@@ -33,6 +33,7 @@ Persisted config, the Codex home it writes into, and the model catalog it publis
 | [`catalog-vendor-context.md`](catalog-vendor-context.md) | Bundled model-ID window fallback, ambiguity handling, and inferred-capacity provenance. |
 | [`catalog-effort-clamp.md`](catalog-effort-clamp.md) | Persisted effort-clamp observation identity and idempotent sync notices. |
 | [`catalog-routed-ownership.md`](catalog-routed-ownership.md) | Generated routed-row ownership signals and combo catalog description overrides. |
+| [`catalog-routed-defaults.md`](catalog-routed-defaults.md) | Config-first routed-row instruction and verbosity defaults, their validation, capture and precedence. |
 | [`subagents.md`](subagents.md) | Multi-agent surface mode and subagent roster ordering. |
 | [`subagent-capacity.md`](subagent-capacity.md) | Surface mode, hybrid global flag, concurrent child limits and canonical Codex setting ownership. |
 | [`advisor.md`](advisor.md) | The optional expert consultation sidecar: manual/preflight/adaptive policies, evidence, durable task allowance, metadata activity, and loopback routing. |
@@ -86,6 +87,7 @@ Per-vendor contracts and the adapter authority that constructs them.
 | --- | --- |
 | [`quota-snapshots.md`](quota-snapshots.md) | Bounded write deferral and cancellation for Codex and provider account quota snapshots. |
 | [`providers/generic-account-pool.md`](providers/generic-account-pool.md) | Opt-in conversation ownership, request-local selection receipts and bounded release for generic OAuth pools. |
+| [`codex-reserve-capability.md`](codex-reserve-capability.md) | codexReserveEnabled, its one-time seed from codexDesktopAuthless, and the shared writer projection. |
 | [`config-ownership.md`](config-ownership.md) | Owner marker, uninstall manifest, its cross-process lock, and the uninstall tombstone. |
 | [`providers/anthropic-progress.md`](providers/anthropic-progress.md) | Opus 5.5 progress display, visible commentary, and exact signed-block replay. |
 | [`providers/anthropic-per-message-effort.md`](providers/anthropic-per-message-effort.md) | Experimental default-off effort history that keeps the Anthropic prompt cache across mid-conversation effort changes. |
@@ -298,6 +300,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/codex/catalog/model-hints.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md) |
 | `src/codex/catalog/ownership.ts` | [`catalog-routed-ownership.md`](catalog-routed-ownership.md) |
 | `src/codex/catalog/parsing.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md) |
+| `src/codex/catalog/routed-defaults.ts` | [`catalog-routed-defaults.md`](catalog-routed-defaults.md) |
 | `src/codex/catalog/routed-gather.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md)<br>[`providers/opengateway.md`](providers/opengateway.md) |
 | `src/codex/catalog/vendor-context.ts` | [`catalog-vendor-context.md`](catalog-vendor-context.md) |
 | `src/codex/cli-update-apply.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
@@ -350,9 +353,12 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/config/account-auto-pause-revisions.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/config/live-reconcile.ts` | [`pricing.md`](pricing.md) |
 | `src/config/persisted-mutation.ts` | [`runtime.md`](runtime.md) |
+| `src/config/persisted-projections.ts` | [`codex-reserve-capability.md`](codex-reserve-capability.md) |
+| `src/config/reserve-capability.ts` | [`codex-reserve-capability.md`](codex-reserve-capability.md) |
 | `src/config/schema/account-auto-pause.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/config/schema/config-schema.ts` | [`transports/max-output-completion.md`](transports/max-output-completion.md)<br>[`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) |
 | `src/config/schema/leaf-validators.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`providers/hosted-tool-denials.md`](providers/hosted-tool-denials.md)<br>[`pricing.md`](pricing.md)<br>[`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) |
+| `src/config/schema/routed-catalog-defaults.ts` | [`catalog-routed-defaults.md`](catalog-routed-defaults.md) |
 | `src/config/telemetry-carry.ts` | [`telemetry.md`](telemetry.md) |
 | `src/desktop-update/` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/generated/` | [`runtime.md`](runtime.md) |
@@ -500,6 +506,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/server/ollama-route-policy.ts` | [`data-planes/ollama-inbound.md`](data-planes/ollama-inbound.md) |
 | `src/server/request-log-failure-detail.ts` | [`data-planes/error-detail.md`](data-planes/error-detail.md) |
 | `src/server/request-log.ts` | [`usage-client-attribution.md`](usage-client-attribution.md) |
+| `src/server/reserve-capability-startup.ts` | [`codex-reserve-capability.md`](codex-reserve-capability.md) |
 | `src/server/responses/` | [`data-planes/claude-tool-loading.md`](data-planes/claude-tool-loading.md) |
 | `src/server/responses/account-auto-pause-recovery.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `src/server/responses/adapter-delivery.ts` | [`transports/response-turn-membership.md`](transports/response-turn-membership.md)<br>[`transports/max-output-completion.md`](transports/max-output-completion.md) |
@@ -568,6 +575,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/types/claude-tool-loading.ts` | [`data-planes/claude-tool-loading.md`](data-planes/claude-tool-loading.md) |
 | `src/types/config.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`config.md`](config.md)<br>[`transports/max-output-completion.md`](transports/max-output-completion.md)<br>[`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) |
 | `src/types/provider.ts` | [`pricing.md`](pricing.md) |
+| `src/types/routed-catalog-defaults.ts` | [`catalog-routed-defaults.md`](catalog-routed-defaults.md) |
 | `src/types/telemetry.ts` | [`telemetry.md`](telemetry.md) |
 | `src/update/` | [`runtime.md`](runtime.md)<br>[`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
 | `src/update/guarded-port-reclaim.ts` | [`ops/update-supervised-recovery.md`](ops/update-supervised-recovery.md) |

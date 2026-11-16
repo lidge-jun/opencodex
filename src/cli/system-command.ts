@@ -19,7 +19,7 @@ const USAGE = `Usage:
   ocx system settings [--auto-start <on|off>] [--stream-mode <auto|legacy-tee|eager-relay>]
       [--desktop-authless <on|off>] [--client-compaction <on|off>]
       [--show-codex-credits <on|off>] [--account-picker <on|off>] [--main-account-hard-lock <on|off>]
-      [--ultra-fast-tier <on|off>] [--fast-rows <on|off>] [--json]
+      [--ultra-fast-tier <on|off>] [--fast-rows <on|off>] [--reserve <on|off>] [--json]
   ocx system startup <health|install-service|install-shim> [--json]
   ocx system diagnostics [--json]
   ocx system sync [--json]

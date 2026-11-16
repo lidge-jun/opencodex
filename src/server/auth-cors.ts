@@ -36,6 +36,7 @@ import {
 } from "../config/provider-validation";
 import { providerDestinationConfigError } from "../lib/destination-policy";
 import { gcpCredentialMarkerAccount, vertexAdcCredentialVerified, vertexConfiguredCredentialKind } from "../lib/gcp-adc";
+import { selectVertexDiscoveryCredential } from "../providers/google-vertex-model-discovery";
 import { providerEgressConfigError } from "../lib/provider-egress";
 import { providerTlsProfileConfigError } from "../lib/provider-tls-profile";
 import { redactSecretString } from "../lib/redact";
@@ -1481,8 +1482,12 @@ export function safeConfigDTO(config: OcxConfig): unknown {
       const key = provider.apiKey;
       dto.vertexCredentialKind = vertexConfiguredCredentialKind(key);
       if (dto.vertexCredentialKind === "ambient" || dto.vertexCredentialKind === "marker") {
-        try { dto.vertexCredentialVerified = vertexAdcCredentialVerified(gcpCredentialMarkerAccount(key)); }
-        catch { dto.vertexCredentialVerified = false; }
+        // Proof is reported only for the credential inference selects: an ambient row with
+        // GOOGLE_CLOUD_API_KEY set sends that key, so an ADC token says nothing about it.
+        try {
+          const selection = selectVertexDiscoveryCredential(provider);
+          if (selection.kind === "adc") dto.vertexCredentialVerified = vertexAdcCredentialVerified(gcpCredentialMarkerAccount(selection.marker));
+        } catch { dto.vertexCredentialVerified = false; }
       }
     }
     if (name === "xai") {
