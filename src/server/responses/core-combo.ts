@@ -49,6 +49,7 @@ import {
   snapshotComboQuotaCooldowns,
   comboExclusion,
   comboUnavailableDiagnostics,
+  comboTargetUnavailableCause,
   comboTargetSkipTrigger,
   noteComboSuccess,
   settleComboReprobeSuccess,
@@ -606,9 +607,10 @@ export async function executeComboResponses(
     const enabled = combo.targets.filter(target => config.providers[target.provider]?.disabled !== true);
     return enabled.length > 0 && enabled.every(target => !museToolEligible(target));
   };
-  // A mandatory tool_choice no enabled target preserves is an unsupported request (#7965).
+  // A mandatory tool_choice no target preserves is unsupported (#7965), but shared exclusion evidence
+  // (provider state, quota, live cooldowns) keeps precedence, exactly as in the readable reasons.
   const unsupportedToolChoice = (attempted: number) => comboUnavailableDiagnostics(combo.targets.length, attempted,
-    combo.targets.map(target => config.providers[target.provider]?.disabled === true ? "unavailable" : "unsupported"));
+    combo.targets.map(target => comboTargetUnavailableCause(config, comboId, target, museToolEligible) ?? "unsupported"));
   // Recovery can replace unreadable encrypted input, but cannot relax other admission checks.
   const recoveryEligible = (target: (typeof combo.targets)[number]): boolean =>
     (meteredAllowed || !target.metered)

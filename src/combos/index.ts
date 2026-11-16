@@ -24,6 +24,7 @@ export {
   clearComboSelectionState,
   comboExclusion,
   comboExclusionReasons,
+  comboTargetUnavailableCause,
   comboTargetSkipTrigger,
   comboUnavailableDiagnostics,
   NoAvailableComboTargetsError,

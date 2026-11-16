@@ -164,6 +164,43 @@ function exclusionCause(reason: ComboExclusionReason, comboId: string, target: O
  * target index, validated provider label and a closed exclusion reason are named; the same pass
  * yields the machine-readable diagnostics.
  */
+/** Why the picker would pass over one target, in picker order: provider, cooldown, then request eligibility. */
+function targetExclusionReason(
+  config: OcxConfig,
+  comboId: string,
+  target: NormalizedComboTarget,
+  eligible: ((target: NormalizedComboTarget) => boolean) | undefined,
+  now: number,
+): ComboExclusionReason | undefined {
+  let reason = providerExclusionReason(config, target, now);
+  const cooldown = reason ? undefined : earliestComboCooldown(comboId, [target], now);
+  if (cooldown) reason = "cooldown";
+  if (!reason && eligible) {
+    try {
+      if (!eligible(target)) reason = "ineligible for this request";
+    } catch {
+      // An eligibility check can exhaust the translator budget; the target still was not picked.
+      reason = "ineligible for this request";
+    }
+  }
+  return reason;
+}
+
+/**
+ * One target's `combo_unavailable` class, from the same checks and precedence as
+ * {@link comboExclusion}, or `undefined` when nothing excludes it.
+ */
+export function comboTargetUnavailableCause(
+  config: OcxConfig,
+  comboId: string,
+  target: NormalizedComboTarget,
+  eligible?: (target: NormalizedComboTarget) => boolean,
+  now = Date.now(),
+): ComboTargetUnavailableCause | undefined {
+  const reason = targetExclusionReason(config, comboId, target, eligible, now);
+  return reason ? exclusionCause(reason, comboId, target, now) : undefined;
+}
+
 export function comboExclusion(
   config: OcxConfig,
   comboId: string,
@@ -173,17 +210,7 @@ export function comboExclusion(
   const targets = getCombo(config, comboId)?.targets ?? [];
   const classes: ComboTargetUnavailableCause[] = [];
   const reasons = targets.flatMap((target, index) => {
-    let reason = providerExclusionReason(config, target, now);
-    const cooldown = reason ? undefined : earliestComboCooldown(comboId, [target], now);
-    if (cooldown) reason = "cooldown";
-    if (!reason && eligible) {
-      try {
-        if (!eligible(target)) reason = "ineligible for this request";
-      } catch {
-        // An eligibility check can exhaust the translator budget; the target still was not picked.
-        reason = "ineligible for this request";
-      }
-    }
+    const reason = targetExclusionReason(config, comboId, target, eligible, now);
     if (!reason) return [];
     classes.push(exclusionCause(reason, comboId, target, now));
     return [`target ${index + 1} (${errorDestinationText(providerErrorDestinationLabel(target.provider))}): ${reason}`];

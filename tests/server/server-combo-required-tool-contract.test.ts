@@ -7,7 +7,7 @@ import { comboProviderFactory } from "../helpers/combo-provider";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
+import { clearComboSelectionState, clearComboTargetCooldowns, coolComboTarget } from "../../src/combos";
 import { clearComboRecallForTests } from "../../src/server/responses/combo-session-recall";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { clearCodexUpstreamHealth } from "../../src/codex/routing";
@@ -303,6 +303,22 @@ describe("combo required-tool contract on buffered children (#7456)", () => {
       expect(sends).toBe(0);
     });
   }
+
+  test("a mandatory tool_choice refusal keeps a cooling target's quota class (#7965)", async () => {
+    let sends = 0;
+    const chat = provider("openai-chat", "https://chat.fixture.invalid/v1", "key-a", {
+      fetch: (async () => { sends++; throw new Error("unexpected Chat send"); }) as typeof fetch });
+    const responses = provider("openai-responses", "https://responses.fixture.invalid/v1", "key-b", {
+      fetch: (async () => { sends++; throw new Error("unexpected Responses send"); }) as typeof fetch });
+    // The compatible target is cooling after a 429, so it is skipped, not unsupported.
+    coolComboTarget("free", { provider: "b", model: "m2" }, { retryAfter: "120", status: 429 });
+    const response = await handleResponsesWith(comboConfig({ a: chat, b: responses }),
+      requiredRequest({ tools: [{ type: "file_search" }], tool_choice: "required" }));
+    expect(response.status).toBe(503);
+    const { error } = await response.json() as { error: { combo?: unknown } };
+    expect(error.combo).toEqual({ cause: "mixed", targets: 2, attempted: 1, causes: { unsupported: 1, quota: 1 } });
+    expect(sends).toBe(0);
+  });
 
   test.each(["ordinary", "exact-suffix", "disabled-fast"])("translated Chat child preserves forced tool_search on its actual wire: %s", async mode => {
     const bodies: unknown[] = [];
