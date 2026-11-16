@@ -207,7 +207,8 @@ for (const [label, route, env, expected] of [
 // OpenCodex installs its own transparent fetch wrappers (xAI, Mistral Chat); only an executor that
 // picks its own route leaves the probed name unknown.
 test("a built-in transparent fetch wrapper keeps the wait; a caller-supplied executor gets none", () => {
-  const provider = { adapter: "openai-responses", baseUrl: "https://gateway.example/v1", models: ["probe"] } as const;
+  // Pinned direct, so an ambient HTTPS_PROXY cannot turn the expected probe into the proxy's.
+  const provider = { adapter: "openai-responses", baseUrl: "https://gateway.example/v1", models: ["probe"], proxy: null } as const;
   const transparent = markEgressTransparentExecutor((async () => new Response("ok")) as unknown as typeof fetch);
   const own = (async () => new Response("ok")) as unknown as typeof fetch;
   expect(offlineResendProbeUrl("fixture", { ...provider, fetch: transparent } as never, url)).toBe(url);
