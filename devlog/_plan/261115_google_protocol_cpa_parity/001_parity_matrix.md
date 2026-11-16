@@ -100,6 +100,7 @@ later unit, with the reason).
 | AG-R7 | Input tokens include `toolUsePromptTokenCount` | B-R7 | have (3dccfa700f) | P2 | 050 |
 | AG-M1 | Tool-result images nested in `functionResponse.parts` | B-M1, C-V-28 | defer: CPA nests on CCA, but ADR-7279 extends nesting only with live upstream evidence per route, and the pinned CCA Claude "responses before images" layout was a live fix; needs an Antigravity live run | P2 | 060 |
 | AG-TOSPOOL | Opt-in pool-wide pause after a TOS suspension (CPA `antigravity_executor_credits.go:884-905`, off by default since e96d4c4) | B-X3 | defer: opencodex quarantines the one account (040); a pool-wide stop is a separate operator policy | P3 | — |
+| AG-ACP | Official `agy acp` transport as a separate provider (#8480): the CLI owns the credential; one account, no rotation, local only, Gemini only, interactive only | issue #8480 + owner decision; ACP v1 spec; Google staff answers (080) | gap: CPA has no ACP client; opencodex adds it as its own PR | P1 | 080 |
 | AG-S7 | Claude-on-CCA signature format validation | B-S7 | defer: needs a corpus of real Claude/Gemini carrier signatures to avoid dropping valid ones | P2 | — |
 | AG-TL3 | Required `reason` placeholder for argument-less tools under Claude `VALIDATED` | B-TL3 | defer: needs a live check; opencodex already repairs schema 400s once | P2 | — |
 | AG-E3 | `requestType` `image_gen`/`web_search` and their id shapes | B-E3 E4 | defer: upstream effect unverified | P3 | — |
@@ -133,8 +134,8 @@ later unit, with the reason).
 
 ## Totals
 
-Computed from the tables above (74 rows): 34 rows taken by phases 010-060 and shipped: 33 gaps (P1: 21, P2: 8,
+Computed from the tables above (75 rows): 34 rows taken by phases 010-060 and shipped: 33 gaps (P1: 21, P2: 8,
 P3: 4) plus INT-15, an intentional difference implemented in 020; 19 deferred, each with its reason (AG-M1 moved
 from 060 to deferred during the build, and INT-20 was added from review round 1);
 11 intentionally different; 9 at parity; 1 outside both projects. Grouped rows (AG-MISC, OUT-P3,
-OUT-HAVE, AG-OCX) stand for several lane rows each; the appendices keep the per-row evidence.
+OUT-HAVE, AG-OCX) stand for several lane rows each; the appendices keep the per-row evidence. AG-ACP (owner decision on #8480) is taken by 080 and ships as its own PR.
