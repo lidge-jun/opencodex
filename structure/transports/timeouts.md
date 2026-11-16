@@ -59,7 +59,8 @@ local and public expiry and the unset and `0` cases.
 `resolveOfflineResendWaitMs` in `src/lib/offline-resend.ts`. `createProviderOfflineResendWait` returns one
 single-use waiter per request, probing the name the send resolves (`offlineResendProbeUrl`: the provider's
 own `proxy`/`noProxy` route, else the global proxy unless `NO_PROXY` exempts the URL, else the provider URL, as
-`configuredOutboundFetch` routes it), or none for an IP-literal probe target or a caller-supplied `fetch` executor. The initial sends in
+`configuredOutboundFetch` routes it), or none for an IP-literal probe target or a caller-supplied `fetch` executor; OpenCodex's own xAI and Mistral
+wrappers carry `isEgressTransparentExecutor` and keep the wait. The initial sends in
 `src/server/responses/passthrough-dispatch.ts` and `src/server/responses/adapter-dispatch.ts` hand it to
 `fetchWithTransientRetry` / `fetchWithResetRetry` as `offlineWait`, except on a combo attempt, which fails over
 to its next member instead of waiting once per target. `fetchWithTransientRetry` gives the waiter to the first
