@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import type { Readable } from "node:stream";
 import { readJsonLines } from "../../src/adapters/coding-agent/protocol";
 import { fixturePath } from "../helpers/repo-root";
 
@@ -214,24 +215,47 @@ function spawnProbe(mode: string, content: Array<{ type: string; text: string }>
   return { ...tracked, marks, waitForMark };
 }
 
+interface HeldStream extends AsyncIterable<Uint8Array> {
+  /** Give the stream back without reading it, for a case that fails before its reader starts. */
+  abandon(): void;
+}
+
 /**
- * Attach to a stream now and pull from it only once `release` settles.
+ * Hold a child's stdout from now on, and pull from it only once `release` settles.
  *
- * The iterator is taken at the call, so whatever the parent's runtime buffers before the release is
- * kept: reading only after the child's `close` instead yields nothing in Bun, because the stdout
- * stream has already finished by then. Until the release, nothing is pulled, so the child's writes
- * meet a pipe that stops taking bytes once the parent's bounded buffer and the kernel's are full.
+ * Taking the iterator does not hold anything: it attaches its own `readable` listener only on the
+ * first `next()`, which is after the release. When the child exits, the child-process runtime
+ * resumes every stdio stream that has no `readable` listener, so a release that lands after the
+ * exit handler finds the buffered bytes already flowed out to nobody and the reader sees an empty
+ * stream. A loaded runner can produce that ordering on its own, since the child's exit and the stderr
+ * mark that releases the reader travel separately. The no-op listener attached here, synchronously,
+ * is what makes the exit leave the stream alone; it is removed once the iterator has drained it.
+ *
+ * Until the release, nothing is pulled, so the child's writes meet a pipe that stops taking bytes once
+ * the parent's bounded buffer and the kernel's are full.
  */
-function heldUntil<T>(source: AsyncIterable<T>, release: Promise<unknown>): AsyncIterable<T> {
-  const iterator = source[Symbol.asyncIterator]();
+function heldUntil(stream: Readable, release: Promise<unknown>): HeldStream {
+  const hold = () => {};
+  stream.on("readable", hold);
+  const iterator = stream[Symbol.asyncIterator]() as AsyncIterator<Uint8Array>;
+  let started = false;
   return {
     async *[Symbol.asyncIterator]() {
+      started = true;
       try {
         await release;
         for (let next = await iterator.next(); !next.done; next = await iterator.next()) yield next.value;
       } finally {
         await iterator.return?.();
+        stream.off("readable", hold);
       }
+    },
+    abandon() {
+      if (started) return;
+      // Nothing will read it, so undo the hold and let the stream flow as the exit would have made
+      // it; a stream left held and full would keep the child's `close` from ever arriving.
+      stream.off("readable", hold);
+      stream.resume();
     },
   };
 }
@@ -400,9 +424,10 @@ test("releasing the reader delivers the whole replay frame and the callback orde
  */
 test.skipIf(!ASYNC_STDOUT_PIPES)("exiting before the replay write drains drops the frame, which the reader reports as malformed", async () => {
   const probe = spawnProbe("exit-before-flush", replayContent(REPLAY_CHARS));
+  let stdout: HeldStream | undefined;
   try {
     const exitingMark = probe.waitForMark("exiting-before-flush");
-    const stdout = heldUntil(probe.child.stdout!, exitingMark);
+    stdout = heldUntil(probe.child.stdout!, exitingMark);
     const exiting = await exitingMark;
     if (exiting.replayAccepted !== false) {
       throw new Error(
@@ -420,6 +445,7 @@ test.skipIf(!ASYNC_STDOUT_PIPES)("exiting before the replay write drains drops t
     expect(frames.map(frame => frame.type)).toEqual(["system"]);
     expect(replayText(frames)).toBeUndefined();
   } finally {
+    stdout?.abandon();
     await reap(probe);
   }
 }, 60_000);
