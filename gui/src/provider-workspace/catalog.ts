@@ -50,6 +50,8 @@ export interface WorkspaceProvider {
   project?: string;
   location?: string;
   vertexCredentialKind?: "ambient" | "marker" | "reference" | "api-key";
+  /** Server-observed: this process minted a token from the ADC source requests would use now. */
+  vertexCredentialVerified?: boolean;
   keyOptional?: boolean;
   /** Free pricing (may still require an API key). */
   freeTier?: boolean;
@@ -161,7 +163,8 @@ function isConfigurationReady(p: WorkspaceProvider): boolean {
     p.authMode === "forward" ||
     p.authMode === "local" ||
     hasLoopbackBaseUrl(p.baseUrl) ||
-    p.hasApiKey === true;
+    p.hasApiKey === true ||
+    p.vertexCredentialVerified === true;
 }
 
 /** A keyless Vertex row can use host credentials, but the dashboard has not verified them. */
@@ -172,6 +175,7 @@ export function isVertexProvider(p: WorkspaceProvider | WorkspaceItem): boolean 
 
 export function usesUnverifiedVertexCredentials(p: WorkspaceProvider | WorkspaceItem): boolean {
   if (p.disabled || (p.authMode !== undefined && p.authMode !== "key") || !isVertexProvider(p)) return false;
+  if (p.vertexCredentialVerified === true) return false;
   if (p.vertexCredentialKind) return p.vertexCredentialKind !== "api-key";
   return !p.hasApiKey;
 }

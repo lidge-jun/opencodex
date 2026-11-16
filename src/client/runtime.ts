@@ -31,7 +31,7 @@ import { clientLinkStatePath, isChildInitiatedLink, recordChildInitiatedLink } f
 import { startMachineListener, type MachineListenerDeps } from "./machine-listener";
 import { isLinkConnection, readClientConnectionState, readClientConnectionStateWithEvidence } from "./state";
 import { withClientLifecycleSync } from "./lifecycle-lock";
-import { clientConnectionEnded, clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, restartOwnerEvidence, type ClientRestartController, type RestartOwner } from "./runtime-restart";
+import { clientConnectionEnded, clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, LEGACY_FLAG_RESTART_OWNER, restartOwnerEvidence, type ClientRestartController, type RecordedRestartOwner, type RestartOwner } from "./runtime-restart";
 import { createLinkParityReporter, type LinkParityReporter } from "./link-parity-reporter";
 import { restoreLinkClientRouting } from "./stop-routing";
 import { SUPERVISOR_MARKER_ENVS } from "../lib/supervisor-markers";
@@ -110,7 +110,7 @@ export function clientRuntimeRecord(
   pid: number,
   port: number,
   attestationSecret: string = createLocalAttestationSecret(),
-  owner: RestartOwner | null = classifiedOwner(),
+  owner: RecordedRestartOwner | null = recordedOwner(),
 ): RuntimePortState {
   let command: string[] | undefined;
   try { command = currentServingCommand(); } catch { /* no reliable relaunch identity; update admission fails closed */ }
@@ -124,6 +124,8 @@ function classifiedOwner(): RestartOwner | null {
   return ownerMemo.value;
 }
 const ownerProven = (): boolean => classifiedOwner() !== null;
+/** The record's owner: the proven one, or legacy-flag for a bare OCX_SERVICE=1 (#8545; recordedRestartOwner). */
+const recordedOwner = (): RecordedRestartOwner => classifiedOwner() ?? LEGACY_FLAG_RESTART_OWNER;
 
 export function standaloneRecycleEnv(
   env: NodeJS.ProcessEnv,
