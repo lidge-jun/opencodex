@@ -227,32 +227,11 @@ export default function ProviderAuthPanel({
   const [importResult, setImportResult] = useState<CockpitImportResult | null>(null);
   const importFileRef = useRef<HTMLInputElement>(null);
   // An imported Antigravity credential carries the same Google account-ban risk as a login, so
-  // the import goes through the same warning dialog. A file picked without it (a keyboard user can
-  // reach the hidden input directly) is held until the dialog is accepted, never imported silently.
-  const [importWarning, setImportWarning] = useState<{ file?: File } | null>(null);
-  const importAcknowledgedRef = useRef(false);
-  useEffect(() => {
-    // Dismissing the native picker must not leave the acknowledgement armed for a later pick.
-    // Engines without the input's cancel event (older WebKit/WKWebView) are covered by the window
-    // regaining focus when the picker closes; the disarm waits briefly because some engines
-    // deliver that focus before the change event of a real selection.
-    const input = importFileRef.current;
-    if (!input) return;
-    const disarm = () => { importAcknowledgedRef.current = false; };
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const disarmAfterPicker = () => {
-      if (!importAcknowledgedRef.current) return;
-      clearTimeout(timer);
-      timer = setTimeout(disarm, 1500);
-    };
-    input.addEventListener("cancel", disarm);
-    window.addEventListener("focus", disarmAfterPicker);
-    return () => {
-      clearTimeout(timer);
-      input.removeEventListener("cancel", disarm);
-      window.removeEventListener("focus", disarmAfterPicker);
-    };
-  }, [item.name]);
+  // the import goes through the same warning dialog. The acknowledgement is never armed ahead of
+  // a pick: every chosen file, whether through the button or the input reached directly, is held
+  // here and imported only from that file's own Continue. Nothing can carry an earlier acceptance
+  // over to a later selection, whatever the engine does with the picker's cancel and focus events.
+  const [importWarning, setImportWarning] = useState<{ file: File } | null>(null);
   const [manualCode, setManualCode] = useState("");
   const [manualCodeBusy, setManualCodeBusy] = useState(false);
   const [manualCodeMsg, setManualCodeMsg] = useState("");
@@ -519,15 +498,11 @@ export default function ProviderAuthPanel({
                     className="sr-only"
                     aria-describedby="cockpit-import-description cockpit-import-status"
                     disabled={importBusy}
-                    onChange={event => {
-                      const acknowledged = importAcknowledgedRef.current;
-                      importAcknowledgedRef.current = false;
-                      void importCockpitFile(event.currentTarget.files?.[0], acknowledged);
-                    }}
+                    onChange={event => { void importCockpitFile(event.currentTarget.files?.[0], false); }}
                   />
                 </div>
                 <button type="button" className="btn btn-ghost btn-sm" disabled={importBusy}
-                  onClick={() => { importAcknowledgedRef.current = false; setImportWarning({}); }}>
+                  onClick={() => importFileRef.current?.click()}>
                   {importBusy ? t("pws.cockpitImporting") : t("pws.cockpitImportChooseFile")}
                 </button>
                 {importWarning && (
@@ -541,13 +516,7 @@ export default function ProviderAuthPanel({
                     onContinue={() => {
                       const pending = importWarning;
                       setImportWarning(null);
-                      if (pending.file) {
-                        void importCockpitFile(pending.file, true);
-                        return;
-                      }
-                      // Still inside the Continue click, so the browser allows opening the picker.
-                      importAcknowledgedRef.current = true;
-                      importFileRef.current?.click();
+                      void importCockpitFile(pending.file, true);
                     }}
                   />
                 )}

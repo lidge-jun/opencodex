@@ -144,39 +144,33 @@ test("a file picked without the warning is held, never imported, until the risk 
   expect(JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body)).acknowledgeAntigravityRisk).toBe(true);
 });
 
-test("the import button shows the warning first and opens the picker only after Continue", async () => {
+test("the import button opens the picker and the chosen file still waits for the warning", async () => {
   await mount();
   let pickerOpened = 0;
   input().click = () => { pickerOpened += 1; };
   const button = Array.from(host.querySelectorAll<HTMLButtonElement>("button"))
     .find(candidate => candidate.textContent === "Choose JSON file")!;
   await act(async () => { button.click(); });
-  expect(pickerOpened).toBe(0);
-  await acceptWarning();
   expect(pickerOpened).toBe(1);
-
-  // Dismissing the native picker disarms the acknowledgement: a later direct pick asks again.
-  await act(async () => { input().dispatchEvent(new win.Event("cancel")); });
+  expect(warningDialog()).toBeNull();
   await selectFile(new win.File(["[]"], "cockpit.json", { type: "application/json" }) as unknown as File, { acknowledge: false });
   expect(warningDialog()).toBeTruthy();
   expect(fetchMock).not.toHaveBeenCalled();
 });
 
-test("without a cancel event, the window regaining focus disarms the acknowledgement", async () => {
+test("an accepted import never carries over: an immediate second pick asks again", async () => {
   await mount();
-  input().click = () => {};
-  const button = Array.from(host.querySelectorAll<HTMLButtonElement>("button"))
-    .find(candidate => candidate.textContent === "Choose JSON file")!;
-  await act(async () => { button.click(); });
-  await acceptWarning();
-  // The picker closes without a selection: only focus returns.
-  await act(async () => {
-    win.dispatchEvent(new win.Event("focus"));
-    await new Promise(resolve => setTimeout(resolve, 1600));
-  });
-  await selectFile(new win.File(["[]"], "cockpit.json", { type: "application/json" }) as unknown as File, { acknowledge: false });
+  const file = new win.File(["[]"], "cockpit.json", { type: "application/json" }) as unknown as File;
+  await selectFile(file);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  // No cancel or focus event in between: the next selection must still be held at the dialog.
+  await selectFile(file, { acknowledge: false });
   expect(warningDialog()).toBeTruthy();
-  expect(fetchMock).not.toHaveBeenCalled();
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  const cancel = Array.from(warningDialog()!.querySelectorAll<HTMLButtonElement>(".modal-actions button"))
+    .find(candidate => !candidate.className.includes("btn-primary"))!;
+  await act(async () => { cancel.click(); });
+  expect(fetchMock).toHaveBeenCalledTimes(1);
 });
 
 test("uses fixed safe statuses for invalid JSON and backend failures", async () => {
