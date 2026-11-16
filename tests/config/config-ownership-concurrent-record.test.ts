@@ -8,6 +8,7 @@ import {
   CONFIG_UNINSTALL_MANIFEST,
   ConfigOwnershipLockError,
   ConfigUninstallInProgressError,
+  type ConfigRemovalResult,
   recordOwnedConfigPath,
   removeOwnedConfigState,
   setUninstallStepHookForTests,
@@ -150,6 +151,23 @@ function holdLock(dir: string): () => void {
   return () => { database.exec("ROLLBACK"); database.close(); };
 }
 
+/**
+ * Uninstall as a user would: a run refused because another process held the ownership lock wrote
+ * nothing and asks for a retry, so it is rerun. `onBusy` runs after each busy refusal.
+ */
+function uninstallRetryingBusyLock(dir: string, onBusy: () => void): ConfigRemovalResult {
+  const deadline = Date.now() + BARRIER_MS;
+  for (;;) {
+    const result = removeOwnedConfigState(dir);
+    const busy = result.status === "refused" && /^could not lock the ownership manifest: .*busy/.test(result.reason ?? "");
+    if (!busy || Date.now() >= deadline) return result;
+    // The refused run left no tombstone, so a racing registration may still succeed and be removed by the rerun.
+    expect(manifest(dir).uninstallStartedAt).toBeUndefined();
+    onBusy();
+    Bun.sleepSync(5);
+  }
+}
+
 /** Uninstall in another process, so this process keeps its warm ownership cache. */
 function uninstallElsewhere(dir: string): string {
   const script = "import { removeOwnedConfigState } from " + JSON.stringify(modulePath) + ";\n"
@@ -185,7 +203,12 @@ describe("serialized ownership manifest (#8093)", () => {
     expect(manifest(dir).paths).not.toContain(CONFIG_OWNERSHIP_LOCK);
   }));
 
-  test("a registration racing uninstall is either removed or refused, never left unreported", withHome(async dir => {
+  // The children keep contending for the lock after the barrier releases it, so an uninstall can lose
+  // that contention and be refused as busy (macOS CI, dev run 43832690786). The second case forces it.
+  test.each([
+    ["the barrier lock released", false],
+    ["its first run finding the lock still held", true],
+  ] as const)("a registration racing uninstall is either removed or refused, never left unreported, with %s", (_label, busyFirst) => withHome(async dir => {
     expect(recordOwnedConfigPath(dir, join(dir, "seed"))).toBe(true);
     const names = Array.from({ length: 6 }, (_, i) => "racing-" + i);
     const signals = dirname(dir);
@@ -197,11 +220,16 @@ describe("serialized ownership manifest (#8093)", () => {
     expect(gates.every(gate => existsSync(gate.ready))).toBe(true);
     // Open the gate while holding the lock, so the children contend with uninstall for it.
     const release = holdLock(dir);
+    let held = true;
+    let busyRuns = 0;
+    const releaseOnce = () => { if (held) { held = false; release(); } };
+    let result: ConfigRemovalResult;
     try {
       writeFileSync(gates[0]!.go, "");
       await Bun.sleep(50);
-    } finally { release(); }
-    const result = removeOwnedConfigState(dir);
+      if (!busyFirst) releaseOnce();
+      result = uninstallRetryingBusyLock(dir, () => { busyRuns += 1; releaseOnce(); });
+    } finally { releaseOnce(); }
     const codes = await Promise.all(children.map(child => child.exited));
     expect(codes.every(code => code === 0 || code === 2 || code === 3)).toBe(true);
     names.forEach((name, i) => {
@@ -209,8 +237,10 @@ describe("serialized ownership manifest (#8093)", () => {
       if (codes[i] === 0) expect(existsSync(path)).toBe(false);
       else expect(result.residualPaths).toContain(path);
     });
+    expect(result.status).not.toBe("refused");
+    if (busyFirst) expect(busyRuns).toBeGreaterThan(0);
     expect(existsSync(join(dir, CONFIG_OWNERSHIP_LOCK))).toBe(false);
-  }), 60_000);
+  })(), 60_000);
 
   test.skipIf(process.platform === "win32" || process.getuid?.() === 0)("an interrupted uninstall refuses registrations, cached paths included, and a rerun finishes it",
     withHome(async dir => {
