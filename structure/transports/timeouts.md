@@ -74,6 +74,12 @@ first send's slow-attempt clock restarts when the wait resumes. Adapters with th
 (google Vertex and Cloud Code Assist, kiro, cursor, zed, command-code, mimo-free) are not wired; direct Google AI Studio is. One resend then
 follows inside the request's existing `attempts` budget and send accounting; no budget, a second DNS failure, an
 exhausted wait or any other failure returns the original error.
+A client cancel during the wait or a probe makes the waiter answer `false` instead of rejecting with the abort
+reason, so `fetchWithResetRetry` rethrows the original DNS error and a Codex pool send keeps the host-wide
+`connect_neutral` class in `classifyTransportFailureKind`. The resend's send carries its own recovery kind,
+`offline-resend` (cause `transport-unsent`, a localized Logs label), never `connection-reset`; like a reset
+retry it opts out of keep-alive in `applyUpstreamRecoveryInit`, because sockets pooled before the outage
+belong to the network that went away.
 `tests/responses/responses-offline-resend.test.ts` drives the probe and clock through
 `setOfflineResendDependenciesForTests`.
 

@@ -3,8 +3,13 @@ import {
   createOfflineResendWait, offlineResendProbeUrl, resolveOfflineResendWaitMs, setOfflineResendDependenciesForTests,
 } from "../../src/lib/offline-resend";
 import { markEgressTransparentExecutor } from "../../src/lib/provider-egress";
-import { fetchWithResetRetry, fetchWithTransientRetry } from "../../src/lib/upstream-retry";
+import { classifyTransportFailureKind } from "../../src/lib/upstream-reachability";
+import { causeForRecoveryKind } from "../../src/lib/request-failure-model";
+import {
+  applyUpstreamRecoveryInit, fetchWithResetRetry, fetchWithTransientRetry, type UpstreamSendRecovery,
+} from "../../src/lib/upstream-retry";
 import { handleResponses } from "../../src/server/responses";
+import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
@@ -83,7 +88,7 @@ test("only one resend per request: a second offline failure is returned", async 
   expect(sends).toBe(2);
 });
 
-test("no resend without send budget, for a failure after connect, or after a client abort", async () => {
+test("no resend without send budget, for a failure after connect, or after a client abort (original error kept)", async () => {
   probes(0);
   const url = "https://gateway.example/v1/responses";
   let sends = 0;
@@ -101,9 +106,10 @@ test("no resend without send budget, for a failure after connect, or after a cli
     delay: async () => {}, expire: neverExpires, now: () => 0,
   });
   sends = 0;
-  await expect(fetchWithResetRetry(async () => { sends += 1; throw offline(); },
+  const original = offline();
+  await expect(fetchWithResetRetry(async () => { sends += 1; throw original; },
     { attempts: 3, abortSignal: abort.signal, offlineWait: createOfflineResendWait(url, 30_000) }))
-    .rejects.toMatchObject({ name: "AbortError" });
+    .rejects.toBe(original);
   expect(sends).toBe(1);
 });
 
@@ -122,33 +128,41 @@ const completed = { id: "resp_fixture", object: "response", status: "completed",
   usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } };
 
 for (const [label, offlineResendWaitSec, expected] of [
-  ["off by default", undefined, { status: 502, sends: 1 }],
-  ["opted in", 30, { status: 200, sends: 2 }],
+  ["off by default", undefined, { status: 502, sends: 1, recoveryKinds: [] }],
+  ["opted in", 30, { status: 200, sends: 2, recoveryKinds: ["offline-resend"] }],
 ] as const) {
   test(`native Responses passthrough after an offline DNS failure: ${label}`, async () => {
     release = acquireOwnedSpendHome();
     probes(1);
     let sends = 0;
-    globalThis.fetch = (async () => {
+    const keepalive: unknown[] = [];
+    globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
       sends += 1;
+      keepalive.push(init?.keepalive);
       if (sends === 1) throw offline();
       return Response.json(completed);
     }) as unknown as typeof fetch;
+    const logCtx: RequestLogContext = { model: "", provider: "" };
     const response = await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: "fixture/probe", input: "hello", stream: false, store: false }),
-    }), nativeConfig(offlineResendWaitSec), { model: "", provider: "" });
+    }), nativeConfig(offlineResendWaitSec), logCtx);
     expect(response.status).toBe(expected.status);
     expect(sends).toBe(expected.sends);
     if (expected.status === 200) expect(await response.text()).toContain("BACK_ONLINE");
+    // The resend is logged as its own recovery, not a connection reset, and opens a fresh socket.
+    expect(logCtx.activeAttempt?.recoveryKinds ?? []).toEqual([...expected.recoveryKinds]);
+    if (expected.sends === 2) expect(keepalive).toEqual([undefined, false]);
   });
 }
 test("a translated Chat route waits and resends once when opted in", async () => {
   release = acquireOwnedSpendHome();
   probes(1);
   let sends = 0;
-  globalThis.fetch = (async () => {
+  const keepalive: unknown[] = [];
+  globalThis.fetch = (async (_input: unknown, init?: RequestInit) => {
     sends += 1;
+    keepalive.push(init?.keepalive);
     if (sends === 1) throw offline();
     return Response.json({ id: "chat_1", object: "chat.completion", created: 1, model: "probe",
       choices: [{ index: 0, message: { role: "assistant", content: "BACK_ONLINE" }, finish_reason: "stop" }],
@@ -156,13 +170,16 @@ test("a translated Chat route waits and resends once when opted in", async () =>
   }) as unknown as typeof fetch;
   const cfg = nativeConfig(30);
   (cfg.providers.fixture as { adapter: string }).adapter = "openai-chat";
+  const logCtx: RequestLogContext = { model: "", provider: "" };
   const response = await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "fixture/probe", input: "hello", stream: false }),
-  }), cfg, { model: "", provider: "" });
+  }), cfg, logCtx);
   expect(response.status).toBe(200);
   expect(sends).toBe(2);
   expect(await response.text()).toContain("BACK_ONLINE");
+  expect(logCtx.activeAttempt?.recoveryKinds).toEqual(["offline-resend"]);
+  expect(keepalive).toEqual([undefined, false]);
 });
 
 // A proxied send resolves the proxy's name, not the provider's, so that is the name the wait probes.
@@ -260,17 +277,68 @@ test("a DNS probe that never settles ends at the wait limit and keeps the origin
   expect(expiries).toEqual([5_000]);
 });
 
-test("cancelling the client during a stalled DNS probe ends the wait at once", async () => {
+test("cancelling the client during a stalled DNS probe ends the wait at once with the original error", async () => {
   const abort = new AbortController();
   setOfflineResendDependenciesForTests({
     resolveHost: () => { queueMicrotask(() => abort.abort(new DOMException("client gone", "AbortError"))); return new Promise(() => {}); },
     delay: async () => {}, expire: neverExpires, now: () => 0,
   });
   let sends = 0;
-  await expect(fetchWithResetRetry(async () => { sends += 1; throw offline(); },
+  const original = offline();
+  await expect(fetchWithResetRetry(async () => { sends += 1; throw original; },
     { attempts: 3, abortSignal: abort.signal, offlineWait: createOfflineResendWait(url, 5_000) }))
-    .rejects.toMatchObject({ name: "AbortError" });
+    .rejects.toBe(original);
   expect(sends).toBe(1);
+});
+
+test("cancelling between probes keeps the DNS error, so a pool send stays host-wide connect_neutral", async () => {
+  // The real abortable delay between probes: only the probe and the expiry are faked.
+  setOfflineResendDependenciesForTests({ resolveHost: async () => { throw offline(); }, expire: neverExpires });
+  const abort = new AbortController();
+  const original = offline();
+  let sends = 0;
+  const failure = fetchWithTransientRetry(async () => { sends += 1; throw original; },
+    { attempts: 3, abortSignal: abort.signal, offlineWait: createOfflineResendWait(url, 30_000) });
+  setTimeout(() => abort.abort(new DOMException("client gone", "AbortError")), 20);
+  const rejection = await failure.then(() => undefined, (error: unknown) => error);
+  expect(rejection).toBe(original);
+  expect(sends).toBe(1);
+  // What passthrough-dispatch charges the failure to: the host, never the account.
+  expect(classifyTransportFailureKind(rejection)).toBe("connect_neutral");
+  expect(classifyTransportFailureKind(new DOMException("client gone", "AbortError"))).toBe("connect_error");
+});
+
+test("a DNS answer that lands after the client left does not resend", async () => {
+  const abort = new AbortController();
+  setOfflineResendDependenciesForTests({
+    resolveHost: async () => { abort.abort(new DOMException("client gone", "AbortError")); },
+    delay: async () => {}, expire: neverExpires, now: () => 0,
+  });
+  const original = offline();
+  let sends = 0;
+  await expect(fetchWithResetRetry(async () => { sends += 1; throw original; },
+    { attempts: 3, abortSignal: abort.signal, offlineWait: createOfflineResendWait(url, 5_000) })).rejects.toBe(original);
+  expect(sends).toBe(1);
+});
+
+test("the offline resend reports its own recovery kind, and a later reset retry still reports connection-reset", async () => {
+  probes(0);
+  const recoveries: Array<UpstreamSendRecovery | undefined> = [];
+  const reset = Object.assign(new Error("socket hang up"), { code: "ECONNRESET" });
+  const response = await fetchWithResetRetry(async recovery => {
+    recoveries.push(recovery);
+    if (recoveries.length === 1) throw offline();
+    if (recoveries.length === 2) throw reset;
+    return new Response("ok");
+  }, { attempts: 3, replaySafe: true, offlineWait: createOfflineResendWait(url, 30_000) });
+  expect(await response.text()).toBe("ok");
+  expect(recoveries).toEqual([undefined, "offline-resend", "connection-reset"]);
+  // Nothing reached the origin before an offline resend: the cause is unsent, never ambiguous.
+  expect(causeForRecoveryKind("offline-resend")).toBe("transport-unsent");
+  // A fresh DNS answer means pooled sockets predate the outage, so the resend opts out of keep-alive.
+  const init = applyUpstreamRecoveryInit({ method: "POST" }, "offline-resend");
+  expect(init.keepalive).toBe(false);
+  expect(init.headers.get("connection")).toBe("close");
 });
 
 test("a DNS answer that arrives after the wait limit does not authorize a resend", async () => {
