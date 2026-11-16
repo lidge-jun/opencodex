@@ -163,6 +163,45 @@ test("a translated Chat route waits and resends once when opted in", async () =>
   expect(sends).toBe(2);
   expect(await response.text()).toContain("BACK_ONLINE");
 });
+
+// A proxied send resolves the proxy's name, not the provider's, so that is the name the wait probes.
+const PROXY_ENV_KEYS = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy"] as const;
+for (const [label, route, env, expected] of [
+  ["a provider proxy", { proxy: "http://proxy.corp.example:3128" }, {}, { probed: "proxy.corp.example", sends: 2 }],
+  ["the global HTTPS_PROXY", {}, { HTTPS_PROXY: "http://envproxy.example:8080" }, { probed: "envproxy.example", sends: 2 }],
+  ["a provider noProxy exemption", { noProxy: "gateway.example" }, { HTTPS_PROXY: "http://envproxy.example:8080" }, { probed: "gateway.example", sends: 2 }],
+  ["a provider pinned direct", { proxy: null }, { HTTPS_PROXY: "http://envproxy.example:8080" }, { probed: "gateway.example", sends: 2 }],
+  ["an IP-literal proxy", { proxy: "http://127.0.0.1:7890" }, {}, { probed: undefined, sends: 1 }],
+] as const) {
+  test(`the wait probes the name the send resolves: ${label}`, async () => {
+    const saved = Object.fromEntries(PROXY_ENV_KEYS.map(key => [key, process.env[key]]));
+    try {
+      for (const key of PROXY_ENV_KEYS) delete process.env[key];
+      Object.assign(process.env, env);
+      release = acquireOwnedSpendHome();
+      const { lookups } = probes(0);
+      let sends = 0;
+      globalThis.fetch = (async () => {
+        sends += 1;
+        if (sends === 1) throw offline();
+        return Response.json(completed);
+      }) as unknown as typeof fetch;
+      const cfg = nativeConfig(30);
+      Object.assign(cfg.providers.fixture!, route);
+      await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "fixture/probe", input: "hello", stream: false, store: false }),
+      }), cfg, { model: "", provider: "" });
+      expect(lookups[0]).toBe(expected.probed);
+      expect(sends).toBe(expected.sends);
+    } finally {
+      for (const key of PROXY_ENV_KEYS) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
+    }
+  });
+}
 const url = "https://gateway.example/v1/responses";
 
 test("a DNS probe that never settles ends at the wait limit and keeps the original failure", async () => {
