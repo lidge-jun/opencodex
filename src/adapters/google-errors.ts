@@ -6,6 +6,13 @@ export const ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX = "Antigravity account valid
 export const ANTIGRAVITY_ACCESS_DENIED_PREFIX = "Antigravity access denied";
 /** Leading words of a normalized Antigravity refusal whose text names the credential itself. */
 export const ANTIGRAVITY_AUTH_FAILED_PREFIX = "Antigravity authentication failed";
+/**
+ * Written right after a normalized prefix only when the response carried Google's structured
+ * `error.status: "PERMISSION_DENIED"`. Message wording alone never produces it, so a reader of the
+ * normalized string can tell a refusal Google attributed to the account from a proxy page or an
+ * enum-less envelope that merely says "expired".
+ */
+export const GOOGLE_PERMISSION_DENIED_SUFFIX = " (PERMISSION_DENIED)";
 
 function hasAntigravityValidationReason(payloadText: string): boolean {
   const payload = parseUpstreamJsonPayload(payloadText);
@@ -81,13 +88,14 @@ function classifyGoogle(label: string, status: number | undefined, enumStatus: s
     return `${label} rate limit exceeded`;
   }
   if (status === 401 || enumStatus === "UNAUTHENTICATED" || lower.includes("unauthenticated") || lower.includes("invalid authentication") || lower.includes("expired")) {
-    return `${label} authentication failed`;
+    // Keep the enum here too: the access-denial recovery accepts this wording only under it.
+    return `${label} authentication failed${enumStatus === "PERMISSION_DENIED" ? GOOGLE_PERMISSION_DENIED_SUFFIX : ""}`;
   }
   // Keep Google's explicit enum in the normalized text. Responses/combo handling receives
   // only this string, so dropping it would let location wording override the authoritative
   // permission reason during downstream classification.
   if (enumStatus === "PERMISSION_DENIED") {
-    return `${label} access denied (PERMISSION_DENIED)`;
+    return `${label} access denied${GOOGLE_PERMISSION_DENIED_SUFFIX}`;
   }
   if (status === 403 || lower.includes("permission_denied") || lower.includes("permission denied") || lower.includes("access denied")) {
     return `${label} access denied`;

@@ -647,6 +647,9 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
     ["empty body", ""],
     ["proxy HTML page", "<html><body>403 Forbidden</body></html>"],
     ["envelope without a status enum", JSON.stringify({ error: { code: 403, message: "Forbidden by upstream policy" } })],
+    // "expired" wording normalizes to "authentication failed"; without Google's enum it still says nothing about this account.
+    ["envelope without a status enum saying the token expired", JSON.stringify({ error: { code: 403, message: "Token expired" } })],
+    ["proxy HTML page saying the session expired", "<html><body>Session expired. Please sign in again.</body></html>"],
   ])("a 403 that Google did not mark PERMISSION_DENIED (%s) is not rotated and cools nothing", async (_name, rawBody) => {
     await seedOAuth();
     const failedId = getAccountSet("google-antigravity")!.activeAccountId;
@@ -665,7 +668,7 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
     } finally { await server.stop(true); }
   });
 
-  test.each([403])(
+  test.each([403, { status: 403, message: "Token expired" }])(
     "access-denied 403 %p cools the refused account and replays on the sibling without a stored verdict", async refusal => {
       await seedOAuth();
       const failedId = getAccountSet("google-antigravity")!.activeAccountId;
