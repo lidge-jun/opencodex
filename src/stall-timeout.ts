@@ -44,6 +44,17 @@ export function resolveStallTimeoutMs(configuredSec: number | undefined, options
   return resolveStallTimeoutSec(configuredSec, options) * 1_000;
 }
 
+/**
+ * The operator's explicit positive stall budget in milliseconds, or `0` when the budget is unset or
+ * non-positive. Native Responses SSE relays arm their silence clock from this value only (#8206):
+ * an explicit value applies to local and public upstreams alike, and leaving the field unset keeps
+ * that relay without a silence clock, as it was before the budget was enforced there.
+ */
+export function explicitStallTimeoutMs(configuredSec: number | undefined): number {
+  if (typeof configuredSec !== "number" || !Number.isFinite(configuredSec) || configuredSec <= 0) return 0;
+  return resolveStallTimeoutMs(configuredSec);
+}
+
 /** Header-arrival (connect) deadline applied to public upstreams when the operator sets none. */
 export const DEFAULT_CONNECT_TIMEOUT_MS = 200_000;
 

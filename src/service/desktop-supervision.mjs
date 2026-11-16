@@ -102,6 +102,11 @@ function resolveWindowsSystemDirectory() {
   return (windowsSystemDirectoryCache = directory);
 }
 
+/** The trusted system directory, for callers that run another system binary (msiexec). */
+export function trustedWindowsSystemDirectory() {
+  return resolveWindowsSystemDirectory();
+}
+
 function resolveWindowsSystemDirectoryViaFfi() {
   const { dlopen, ptr } = createRequire(import.meta.url)("bun:ffi");
   const lib = dlopen("kernel32.dll", { GetSystemDirectoryW: { args: ["ptr", "u32"], returns: "u32" } });

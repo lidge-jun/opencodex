@@ -57,6 +57,13 @@ da bulunur; bunu `Get-FileHash <file> -Algorithm SHA256` çıktısıyla karşıl
 Masaüstü güncelleyici imzası (`.msi.sig`) ve `latest.json`, imzalı yükleyiciden
 üretilir; uygulama içi güncellemeler yayın sayfasındaki aynı baytları kurar.
 
+Her yayın sayfası **Code signing** başlığı altında o yayının Windows dosyalarının
+gerçekten imzalanıp imzalanmadığını belirtir. Bu bilgi, yayın çalıştırmasının her dosya
+için kaydettiği sonuçtan gelir: bir dosya yalnızca çalıştırma `release-signing` ilkesini
+kullandıysa ve doğrulanmış imzalı dosya imzasız dosyanın yerine geçtiyse imzalı sayılır.
+Çalıştırma hiçbir sonuç kaydetmediyse yayın, Windows dosyalarının kod imzalı olmadığını
+belirtir. SignPath atfı ve ilke bağlantısı her yayında yer alır.
+
 ## Proje bakımını yapanlar için
 
 `.github/workflows/release.yml`, resmi

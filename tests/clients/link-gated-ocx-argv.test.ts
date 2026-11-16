@@ -2,10 +2,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { inflateRawSync } from "node:zlib";
 import { createHash } from "node:crypto";
 import { LinkSshArgumentError, remoteGatedOcxArgv, remotePinnedSyncArgv } from "../../src/link/ssh-argv";
-import { POWERSHELL_ENCODED_MAX, windowsScriptData } from "../../src/link/remote-windows";
+import { POWERSHELL_ENCODED_MAX, windowsScriptData, windowsInflatedScript } from "../../src/link/remote-windows";
 import { classifyUpdateApply, classifyUpdatePlanProbe, readGatedFraming, remoteUpdateApplyArgv, remoteUpdatePlanArgv } from "../../src/link/child-gated-ocx";
 import { classifySyncResult as linkClassifySyncResult } from "../../src/link/sync-fanout-classify";
 import { classifySyncResult as cliClassifySyncResult, runHomeFanout } from "../../src/cli/sync-fanout";
@@ -62,7 +61,7 @@ function inflated(argv: string[]): string {
   const outer = Buffer.from(argv[5]!, "base64").toString("utf16le");
   const packed = /\$ocxPacked='([^']+)'/.exec(outer)?.[1];
   if (!packed) throw new Error("not a packed PowerShell command");
-  return inflateRawSync(Buffer.from(Array.from(packed, ch => ch.charCodeAt(0) - 256))).toString("utf8");
+  return windowsInflatedScript(outer);
 }
 const planArgv = () => remoteUpdatePlanArgv("2.100.0", "posix");
 const applyArgv = (planToken = TOKEN) => remoteUpdateApplyArgv({ homeVersion: "2.100.0", planToken, notAfter: 1_900_000_000_000, viaLauncher: false }, "posix");
@@ -212,7 +211,7 @@ describe("Windows scripts", () => {
     expect(script).toContain("$b=@('2','97','0')");
     expect(script).toContain("ocx-fanout:child-ocx-lacks-orchestrated-update");
     expect(script).toContain("if($x -match '(^|[\\\\/])ocx-child[^\\\\/]*$'){[Console]::Error.WriteLine('ocx-fanout:child-ocx-ephemeral');exit 121}");
-    // Windows reads no census, so the Home infers entry "binary" and the script prints no entry marker.
+    // Windows prints no entry marker even for a served pair (it never applies), so the Home infers entry "binary".
     expect(script).not.toContain("ocx-fanout:entry:");
     expect(script).toContain("$env:OCX_NO_DESKTOP_HANDOFF='1'");
   });
@@ -223,10 +222,12 @@ describe("Windows scripts", () => {
     expect(windowsScriptData(Buffer.from(argv[5]!, "base64").toString("utf16le"))).toEqual({ args: ["update", "--plan", "--json", "--version", version] });
   });
 
-  test("a Windows command over the budget throws the named error", () => {
+  test("the longest valid Home version fits the Windows plan probe", () => {
+    // It overflowed before the payload was packed 14 bits per character (#8359); the named error is covered in
+    // link-windows-gated-served.test.ts with an argument that cannot fit.
     const version = "1.0.0-a" + createHash("sha512").update("x").digest("hex").slice(0, 120);
     expect(version.length).toBeLessThanOrEqual(128);
-    expect(() => remoteUpdatePlanArgv(version, "windows")).toThrow(new LinkSshArgumentError("windows-command-too-long"));
+    expect(remoteUpdatePlanArgv(version, "windows")[5]!.length).toBeLessThanOrEqual(POWERSHELL_ENCODED_MAX);
   });
 
   test("the plan probe infers entry binary on Windows", () => {

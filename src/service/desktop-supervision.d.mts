@@ -47,6 +47,8 @@ export const procfs: ProcReader;
 export function processIdentity(pid: number, execute?: DesktopSupervisionDeps["run"], onExecutable?: (path: string) => void):
   { parent: number; executable: string } | null;
 export function windowsPowerShellPath(resolveSystemDirectory?: () => string): string;
+/** Trusted Windows system directory (GetSystemDirectoryW on Bun); throws off Windows. */
+export function trustedWindowsSystemDirectory(): string;
 /** Pure consistency check over loaded-module paths; throws unless exactly one well-formed
  *  namesake per KnownDLL shares one parent directory. Exported for tests. */
 export function windowsSystemDirectoryFromSharedObjects(loaded: unknown): string;

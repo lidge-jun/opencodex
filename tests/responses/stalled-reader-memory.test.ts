@@ -11,8 +11,9 @@ import { LINK_TURN_HEADER, registerLinkTurnToken, type LinkTurnObserver } from "
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
-// #8601: a Remote Link turn, while the link WebSocket feature is on, reads its upstream body only as its client
-// drains. Every other request keeps the shared pipeline's inspection read-ahead (32 MiB past the client).
+// #8601: every relayed Remote Link turn (its observer asks for pacedReads, with the link WebSocket feature on or off) reads
+// its upstream body only as its client drains. Every other request keeps the shared pipeline's inspection read-ahead
+// (32 MiB past the client).
 
 const MiB = 1024 * 1024;
 const encoder = new TextEncoder();
@@ -81,14 +82,14 @@ describe("upstream read-ahead under a stalled reader (#8601)", () => {
     expect(run.text).toBe(delivered);
   });
 
-  test("a link turn with the feature off keeps the inspection read-ahead", async () => {
+  test("a link observer that does not ask for paced reads keeps the inspection read-ahead", async () => {
     const token = registerLinkTurnToken(observer(false));
     const run = await stalledThenDrained(() => handleResponses(request({ [LINK_TURN_HEADER]: token }), config, { model: "", provider: "" }));
     expect(run.pulls[0]).toBeGreaterThanOrEqual(32);
     expect(run.text).toBe(delivered);
   });
 
-  test("a relayed link turn with the feature on reads the upstream only as its client drains", async () => {
+  test("a relayed link turn reads the upstream only as its client drains", async () => {
     const token = registerLinkTurnToken(observer(true));
     const run = await stalledThenDrained(() => handleResponses(request({ [LINK_TURN_HEADER]: token }), config, { model: "", provider: "" }));
     // One upstream chunk ahead of what the client has read, never the 32 MiB inspection allowance.
@@ -96,7 +97,7 @@ describe("upstream read-ahead under a stalled reader (#8601)", () => {
     expect(run.text).toBe(delivered);
   });
 
-  test("a link socket turn with the feature on reads the upstream only as its client drains", async () => {
+  test("a link socket turn reads the upstream only as its client drains", async () => {
     const run = await stalledThenDrained(() => handleResponses(request(), config, { model: "", provider: "" }, { linkTurn: observer(true) }));
     run.pulls.forEach((pulls, reads) => expect(pulls).toBeLessThanOrEqual(reads + 1));
     expect(run.text).toBe(delivered);
@@ -129,7 +130,7 @@ describe("the eager relay under a stalled reader (#8601)", () => {
     expect(run.text).toBe(delivered);
   });
 
-  test("a link socket turn with the feature on reads the upstream only as its client drains", async () => {
+  test("a link socket turn reads the upstream only as its client drains", async () => {
     const run = await stalledThenDrained(() => handleResponses(request(), config, { model: "", provider: "" }, { linkTurn: observer(true) }));
     run.pulls.forEach((pulls, reads) => expect(pulls).toBeLessThanOrEqual(reads + 1));
     expect(run.text).toBe(delivered);
