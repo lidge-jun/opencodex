@@ -11,6 +11,7 @@ import { getConfigDir } from "../config";
 import { packageVersion } from "../lib/package-version";
 import { findLiveProxy } from "../server/proxy-liveness";
 import { requestBoundSystemRestart } from "../cli/system-restart-client";
+import { CLIENT_RESTART_REQUEST_MIN_REMAINING_MS } from "../lib/system-restart-contract";
 import { inspectDesktopSupervision, trustedWindowsSystemDirectory, windowsProcessPair } from "../service/desktop-supervision.mjs";
 import { tryAcquireUpdateSyncMutex } from "../update/sync-update-mutex.mjs";
 import { acquireBounded, fetchAcquireTransport, realAcquireTimers } from "./acquire";
@@ -20,7 +21,12 @@ import { windowsDesktopInstall, type WindowsDesktopInstall } from "./install";
 import { MOVED_IMAGE_PATTERN, movedImageName, sameWindowsPath } from "./runtime";
 
 export const HEADLESS_USAGE = "Usage: ocx update --desktop [--check] [--json]";
-const RESTART_REQUEST_BUDGET_MS = 20_000;
+/**
+ * The deadline handed to the bound restart request. A connected client refuses to ask for a
+ * restart it could not finish (and roll back) inside this window, so it must cover that budget.
+ */
+export const RESTART_REQUEST_WINDOW_MS = CLIENT_RESTART_REQUEST_MIN_REMAINING_MS + 5_000;
+const SERVICE_RESTART_TIMEOUT_MS = 150_000;
 const VERSION_PROBE_TIMEOUT_MS = 20_000;
 
 export function parseHeadlessArgs(args: readonly string[]): { ok: true; check: boolean; json: boolean } | { ok: false } {
@@ -69,6 +75,21 @@ async function drainRuntime(install: WindowsDesktopInstall): Promise<{ ok: boole
 function desktopSupervisor(pid: number): string | null {
   const evidence = inspectDesktopSupervision({ targetPid: pid });
   return evidence.kind === "desktop" && evidence.runtimePid === pid ? evidence.app : null;
+}
+
+/** The installed CLI's `ocx service restart`, which confirms a different serving pid or exits 1. */
+async function restartService(install: WindowsDesktopInstall): Promise<{ ok: boolean; detail?: string }> {
+  try {
+    const child = Bun.spawn([install.ocxExe, "service", "restart"], {
+      stdin: "ignore", stdout: "ignore", stderr: "pipe", windowsHide: true, timeout: SERVICE_RESTART_TIMEOUT_MS,
+    });
+    const [errors, code] = await Promise.all([new Response(child.stderr).text(), child.exited]);
+    if (code === 0) return { ok: true };
+    const last = errors.split(/\r?\n/).map(line => line.trim()).filter(Boolean).at(-1);
+    return { ok: false, detail: `exit ${code ?? "none"}${last ? `: ${last.slice(0, 200)}` : ""}` };
+  } catch {
+    return { ok: false, detail: "the installed ocx service restart could not run" };
+  }
 }
 
 const MOVEFILE_DELAY_UNTIL_REBOOT = 4;
@@ -169,10 +190,11 @@ export async function runHeadlessDesktopUpdateCommand(args: readonly string[]): 
       runtime: {
         findLive: () => findLiveProxy(),
         runtimeImage: pid => windowsProcessPair(pid).child?.exe ?? null,
-        requestRestart: (live, targetVersion) => requestBoundSystemRestart(live, Date.now() + RESTART_REQUEST_BUDGET_MS,
+        requestRestart: (live, targetVersion) => requestBoundSystemRestart(live, Date.now() + RESTART_REQUEST_WINDOW_MS,
           { cliVersion: targetVersion, respawnRunsInstalledImage: true }),
         desktopSupervisor,
         drainRuntime: () => drainRuntime(install),
+        restartService: () => restartService(install),
         now: Date.now,
         wait: ms => Bun.sleep(ms),
       },

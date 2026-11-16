@@ -93,6 +93,7 @@ function harness(s: Scenario = {}) {
       requestRestart: async (target, version) => { events.push(`restart ${target.pid} ${version}`); return { accepted: true }; },
       desktopSupervisor: () => null,
       drainRuntime: async () => { events.push("drain"); return { ok: true }; },
+      restartService: async () => { events.push("service-restart"); return { ok: true }; },
       now: () => clock,
       wait: async ms => { clock += ms; },
     },

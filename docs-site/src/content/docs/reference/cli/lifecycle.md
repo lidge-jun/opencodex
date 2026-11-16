@@ -1369,10 +1369,11 @@ a newer version is published:
 4. checks that the installed `ocx.exe` reports the new version;
 5. restarts the proxy that still serves the old version through its own in-place restart, so
    Desktop, the service, or the detached proxy starts the installed executable, and waits until
-   the new version answers `/healthz`. A connected client proxy that OpenCodex Desktop runs keeps
-   itself through that restart; when the check proves this installation's app runs exactly that
-   proxy, the installed `ocx stop --json` stops it, as the app's own updater does, and the app
-   starts the new version after a few seconds.
+   the new version answers `/healthz`. A connected client proxy keeps itself through that
+   restart: when its background service owns it, the installed `ocx service restart` replaces it;
+   when the check proves this installation's OpenCodex Desktop runs exactly that proxy, the
+   installed `ocx stop --json` stops it, as the app's own updater does, and the app starts the new
+   version after a few seconds.
 
 A proxy whose executable is not this installation's `ocx.exe`, one this home cannot attest,
 or one newer than the installation is never stopped. When no proxy was running, none is

@@ -33,6 +33,8 @@ export interface RuntimeReplaceDeps {
   desktopSupervisor(pid: number): string | null;
   /** Drain the runtime with the installed CLI's `ocx stop --json`; ok only for a confirmed stop. */
   drainRuntime(): Promise<{ ok: boolean; detail?: string }>;
+  /** Restart this installation's background service with the installed `ocx service restart`. */
+  restartService(): Promise<{ ok: boolean; detail?: string }>;
   now(): number;
   wait(ms: number): Promise<void>;
 }
@@ -45,6 +47,7 @@ export type StaleRuntimeReason =
   | "foreign-image"
   | "restart-refused"
   | "drain-failed"
+  | "service-restart-failed"
   | "replacement-timeout";
 
 export type RuntimeOutcome =
@@ -104,6 +107,13 @@ export async function settleRuntime(
   const request = await deps.requestRestart({ ...live, pid }, input.targetVersion);
   if (!request.accepted && !request.uncertain) {
     const detail = request.error instanceof Error ? request.error.message : undefined;
+    if (detail === "restart_supervised_service") {
+      // The runtime's own image is this installation's, so its service runs the installed bytes;
+      // `ocx service restart` is the owner path the refusal names.
+      const restarted = await deps.restartService();
+      if (!restarted.ok) return { kind: "stale", live, reason: "service-restart-failed", ...(restarted.detail ? { detail: restarted.detail } : {}) };
+      return observe(input, deps, pid);
+    }
     if (detail === "restart_supervised_desktop") {
       let app: string | null;
       try { app = deps.desktopSupervisor(pid); } catch { app = null; }

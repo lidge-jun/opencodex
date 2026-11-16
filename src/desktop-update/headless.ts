@@ -89,8 +89,11 @@ export interface HeadlessDeps {
 }
 
 export const INSTALLER_TIMEOUT_MS = 15 * 60_000;
-/** Room for a 75-second drain, the app's respawn backoff and the replacement's startup. */
-export const RUNTIME_DEADLINE_MS = 180_000;
+/**
+ * Room for a connected client's 90-second restart budget, or a 75-second drain or service
+ * restart, followed by the owner's respawn and the replacement's startup.
+ */
+export const RUNTIME_DEADLINE_MS = 240_000;
 
 function runtimeView(live: { pid: number | null; port: number; version?: string } | null): HeadlessResult["runtime"] {
   return live ? { pid: live.pid, port: live.port, version: live.version ?? null } : null;
@@ -113,6 +116,8 @@ function staleMessage(outcome: Extract<RuntimeOutcome, { kind: "stale" }>, targe
       return `${who}; this installation is ${target}. The runtime refused a restart (${outcome.detail ?? "refused"}), so nothing was stopped. ${retry}`;
     case "drain-failed":
       return `${who}; this installation is ${target}. Stopping it for OpenCodex Desktop to restart did not complete (${outcome.detail ?? "unconfirmed"}). Run 'ocx status'. ${retry}`;
+    case "service-restart-failed":
+      return `${who}; this installation is ${target}. Its background service owns it, and '${install.ocxExe}' service restart did not confirm the new version (${outcome.detail ?? "unconfirmed"}). Run 'ocx service status'. ${retry}`;
     case "replacement-timeout":
       return `${who}; this installation is ${target}. A restart was requested but the new version was not observed answering in time. Run 'ocx status'. ${retry}`;
   }

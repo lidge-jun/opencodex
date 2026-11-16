@@ -54,26 +54,29 @@ function live(pid: number | null, version: string | undefined, extra: Partial<Li
 }
 
 /** A runtime that answers from a script; each findLive consumes the next answer. */
-function runtime(answers: Array<LiveProxy | null>, options: { image?: string | null; restart?: "accepted" | "uncertain" | "refused" | "client-desktop"; supervisor?: string | null; drain?: boolean } = {}) {
+function runtime(answers: Array<LiveProxy | null>, options: { image?: string | null; restart?: "accepted" | "uncertain" | "refused" | "client-desktop" | "client-service"; supervisor?: string | null; drain?: boolean; service?: boolean } = {}) {
   let clock = 0;
   const restarts: Array<[number, string]> = [];
   let drains = 0;
+  let services = 0;
   const deps: RuntimeReplaceDeps = {
     findLive: async () => (answers.length > 1 ? answers.shift()! : answers[0] ?? null),
     runtimeImage: () => (options.image === undefined ? EXE.toLowerCase().replaceAll("\\", "/") : options.image),
     requestRestart: async (target, version) => {
       restarts.push([target.pid, version]);
-      if (options.restart === "refused") return { accepted: false, uncertain: false, error: new Error("restart_supervised_service") };
+      if (options.restart === "refused") return { accepted: false, uncertain: false, error: new Error("restart_supervised_service-unproven") };
+      if (options.restart === "client-service") return { accepted: false, uncertain: false, error: new Error("restart_supervised_service") };
       if (options.restart === "client-desktop") return { accepted: false, uncertain: false, error: new Error("restart_supervised_desktop") };
       if (options.restart === "uncertain") return { accepted: false, uncertain: true, error: new Error("restart_request_outcome_unknown") };
       return { accepted: true };
     },
     desktopSupervisor: () => (options.supervisor === undefined ? "C:\\Program Files\\OpenCodex\\opencodex-desktop.exe" : options.supervisor),
     drainRuntime: async () => { drains++; return options.drain === false ? { ok: false, detail: "failed/stop-failed exit 1" } : { ok: true }; },
+    restartService: async () => { services++; return options.service === false ? { ok: false, detail: "exit 1: the previous runtime is still serving" } : { ok: true }; },
     now: () => clock,
     wait: async ms => { clock += ms; },
   };
-  return { deps, restarts, drains: () => drains, elapsed: () => clock };
+  return { deps, restarts, drains: () => drains, services: () => services, elapsed: () => clock };
 }
 
 describe("runtime replacement after install", () => {
@@ -128,7 +131,7 @@ describe("runtime replacement after install", () => {
 
   test("a refused restart is reported with its code", async () => {
     const r = runtime([live(7, "2.99.0")], { restart: "refused" });
-    expect(await settleRuntime(input, r.deps)).toMatchObject({ kind: "stale", reason: "restart-refused", detail: "restart_supervised_service" });
+    expect(await settleRuntime(input, r.deps)).toMatchObject({ kind: "stale", reason: "restart-refused", detail: "restart_supervised_service-unproven" });
   });
 
   test("no runtime before the install means none is started", async () => {
@@ -199,4 +202,26 @@ test("a previous image moved aside in the installation still counts as this inst
   expect(isInstalledImage("C:\\Program Files\\OpenCodex\\ocx.exe.bak", EXE)).toBe(false);
   expect(isInstalledImage("C:\\Other\\ocx.exe.4242-1.update-old", EXE)).toBe(false);
   expect(movedImageName(42, 7)).toMatch(MOVED_IMAGE_PATTERN);
+});
+
+describe("service-owned client runtime", () => {
+  const input = { installedExe: EXE, targetVersion: "2.100.3", deadlineAt: 2_000, wasRunning: true };
+
+  test("a client kept by its service is restarted through the installed ocx service restart", async () => {
+    const r = runtime([live(7, "2.100.0", { role: "client" }), live(7, "2.100.0"), live(11, "2.100.3")], { restart: "client-service" });
+    expect(await settleRuntime(input, r.deps)).toMatchObject({ kind: "serving-target", replaced: true, live: { pid: 11 } });
+    expect([r.services(), r.drains()]).toEqual([1, 0]);
+  });
+
+  test("a service restart that does not confirm is reported, not observed as success", async () => {
+    const r = runtime([live(7, "2.100.0", { role: "client" })], { restart: "client-service", service: false });
+    expect(await settleRuntime(input, r.deps)).toMatchObject({ kind: "stale", reason: "service-restart-failed", detail: expect.stringContaining("still serving") });
+    expect(r.elapsed()).toBe(0);
+  });
+
+  test("an unproven service owner is never restarted or stopped", async () => {
+    const r = runtime([live(7, "2.100.0", { role: "client" })], { restart: "refused" });
+    expect(await settleRuntime(input, r.deps)).toMatchObject({ kind: "stale", reason: "restart-refused" });
+    expect([r.services(), r.drains()]).toEqual([0, 0]);
+  });
 });

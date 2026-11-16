@@ -216,7 +216,8 @@ safety does; see [Desktop Start at Login](../desktop-start-at-login.md).
 elevated non-interactive session (SSH, a Session 0 service) where the tray updater cannot run.
 `install.ts` admits only the compiled `ocx.exe` beside `opencodex-desktop.exe`; anything else
 exits 64, and the npm/pnpm Node launcher refuses `--desktop` before any package update.
-`src/cli/dispatch.ts` routes the flag to `cli.ts`, which binds `headless.ts` to the network,
+`src/cli/dispatch.ts` routes the flag to `cli.ts` before the orchestrated grammar sees `--json`, and
+`src/cli/preflight-exemptions.ts` skips the shim repair for it. `cli.ts` binds `headless.ts` to the network,
 filesystem, Windows Installer, the runtime record and the terminal. Every dependency of
 `headless.ts` is injected; the tests drive it with fixture keys, fake timers and fake runners.
 
@@ -260,14 +261,17 @@ leaves one already serving the target alone. It acts only on a runtime this home
 restart through `requestBoundSystemRestart` with `respawnRunsInstalledImage`. That option lets a
 CLI-newer skew proceed because every respawn runs the installed bytes: a Desktop child exits 75
 and the app starts its sibling `ocx.exe`, a service child exits for its manager, and a detached
-runtime relaunches its own image. A connected-client runtime under the app answers 409
-`restart_supervised_desktop` instead; only when `inspectDesktopSupervision` proves this
+runtime relaunches its own image. The request carries a deadline wide enough for a connected
+client's own restart budget. A connected client kept by its service answers 409
+`restart_supervised_service`, and the installed `ocx service restart` (which confirms a different
+serving pid or exits 1) is the owner path it names; an unproven service owner is left alone. A
+connected-client runtime under the app answers 409 `restart_supervised_desktop` instead; only when `inspectDesktopSupervision` proves this
 installation's `opencodex-desktop.exe` supervises exactly that pid does `drain.ts` run the installed
 `ocx stop --json` with `OCX_STOP_DEADLINE_MS`, as the app's own update drain does, accepting the
 `ocx-stop/1` result only when it and the exit code agree the runtime is down (or exit 79); the
 app's supervisor then starts its sibling `ocx.exe` after its backoff. Success is a different pid
-answering `/healthz` with the target version within 180 seconds. Another image, an unattested or newer runtime, an unknown version, a
-refused restart, an unconfirmed drain or a timeout is reported with the restart command and exit 2; nothing else is
+answering `/healthz` with the target version within 240 seconds. Another image, an unattested or newer runtime, an unknown version, a
+refused restart, an unconfirmed drain or service restart, or a timeout is reported with the restart command and exit 2; nothing else is
 stopped. The Desktop shell process keeps its pre-update image until it is relaunched.
 
 `ocx status` on such an installation replaces the CLI-newer version warning with the installed

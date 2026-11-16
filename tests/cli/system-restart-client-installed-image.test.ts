@@ -4,19 +4,20 @@ import { SYSTEM_RESTART_CAPABILITY_VERSION, SYSTEM_RESTART_PATH } from "../../sr
 import { requestBoundSystemRestart } from "../../src/cli/system-restart-client";
 import { UpdateRestartRequired } from "../../src/cli/update-restart-candidate";
 import type { LiveProxy } from "../../src/server/proxy-liveness";
+import { RESTART_REQUEST_WINDOW_MS } from "../../src/desktop-update/cli";
 
 // #8246: the headless Desktop updater proves the runtime's image is the installed ocx.exe, so its
 // in-place respawn runs the installed (newer) bytes and the CLI-newer refusal must not apply.
 const target: LiveProxy = { pid: 4242, port: 10100, hostname: "127.0.0.1", source: "runtime" };
 
-function harness() {
+function harness(role?: "client") {
   const secret = createLocalAttestationSecret();
   const challenge = "B".repeat(43);
   const posts: string[] = [];
   const fetchImpl = (async (input: string | URL | Request) => {
     const url = String(input);
     if (url.endsWith("/healthz")) {
-      return new Response(JSON.stringify({ status: "ok", service: "opencodex", version: "2.99.0", uptime: 1, pid: target.pid,
+      return new Response(JSON.stringify({ status: "ok", service: "opencodex", version: "2.99.0", uptime: 1, pid: target.pid, ...(role ? { role } : {}),
         port: target.port, restartCapability: SYSTEM_RESTART_CAPABILITY_VERSION }), {
         status: 200, headers: { "content-type": "application/json", [LOCAL_ATTESTATION_PROOF_HEADER]: createLocalAttestationProof(secret, challenge, target.pid!, target.port)! },
       });
@@ -59,4 +60,15 @@ test("installed-image proof does not admit a runtime newer than the installed ve
   expect(result.accepted).toBe(false);
   if (!result.accepted) expect((result.error as Error).message).toBe("restart_version_skew");
   expect(h.posts).toEqual([]);
+});
+
+test("the headless updater's request window admits a connected client's bound restart", async () => {
+  // Windows validation: a 20-second window made every client runtime refuse before any request.
+  const short = harness("client");
+  const refused = await requestBoundSystemRestart(target, 1_000 + 20_000, { ...short.deps, respawnRunsInstalledImage: true });
+  expect(refused.accepted).toBe(false);
+  if (!refused.accepted) expect((refused.error as Error).message).toBe("restart_deadline_expired");
+  const h = harness("client");
+  expect(await requestBoundSystemRestart(target, 1_000 + RESTART_REQUEST_WINDOW_MS, { ...h.deps, respawnRunsInstalledImage: true })).toEqual({ accepted: true });
+  expect(h.posts).toHaveLength(1);
 });
