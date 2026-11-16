@@ -89,17 +89,14 @@ export OPENCODEX_OPENCODE_API_KEY=<your key>
 
 ## Admission key не пишется на диск
 
-Когда прокси требует API-ключ, inline runtime config содержит ссылку `{env:…}` opencode, а не сам
-секрет. На loopback эта ссылка используется как `apiKey`; на не-loopback привязке она уходит
-только через `x-opencodex-api-key`, чтобы admission прокси оставался отделённым от любого
-upstream-заголовка `Authorization`.
+OpenCode V1 и V2 используют Responses. Откройте **Connect → OpenCode** и обновите управляемую конфигурацию, когда появится уведомление. `apiKey` содержит общедоступное значение `opencodex-loopback`. Ключ удалённого доступа передаётся через `options.headers` (V1) или `headers` провайдера (V2).
 
 Пример для loopback:
 
 ```json
 "options": {
   "baseURL": "http://127.0.0.1:10100/v1",
-  "apiKey": "{env:OPENCODEX_OPENCODE_API_KEY}"
+  "apiKey": "opencodex-loopback"
 }
 ```
 
@@ -110,6 +107,7 @@ upstream-заголовка `Authorization`.
 ```json
 "options": {
   "baseURL": "https://proxy.example.com/v1",
+  "apiKey": "opencodex-loopback",
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }

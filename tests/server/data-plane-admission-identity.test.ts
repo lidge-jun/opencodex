@@ -262,6 +262,18 @@ describe("the two wrappers still differ", () => {
       .toEqual({ kind: "configured", keyId: "second-key", source: "dedicated", contextPrincipalId: expect.stringMatching(/^[a-f0-9]{64}$/) });
   });
 
+  test("OpenCode's Responses placeholder cannot replace remote admission", () => {
+    const config = remoteConfig();
+    for (const headers of [{}, { "x-opencodex-api-key": "" }, { "x-opencodex-api-key": "invalid" }]) {
+      const req = request({ authorization: "Bearer opencodex-loopback", ...headers });
+      expect(resolveResponsesApiAuth(req, config)).toBeNull();
+      expect(requireResponsesApiAuth(req, config)?.status).toBe(401);
+    }
+    expect(resolveResponsesApiAuth(request({ authorization: "Bearer opencodex-loopback",
+      "x-opencodex-api-key": "ocx_data_secondsecret" }), config))
+      .toMatchObject({ kind: "configured", keyId: "second-key", source: "dedicated" });
+  });
+
   test("x-api-key is accepted only by the broad path", () => {
     const config = remoteConfig();
     expect(resolveApiAuth(request({ "x-api-key": "ocx_data_firstsecret" }), config)).not.toBeNull();

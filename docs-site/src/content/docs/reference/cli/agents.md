@@ -1118,7 +1118,12 @@ DSH 0.1.7 and newer import `settings.yaml` once into the first profile that boot
 it, so the dashboard integration writes the same provider into the `llm-pi-ai` row of the Desktop
 profile's `$DSH_HOME/profiles/desktop/cordis.patch.yml` once that profile exists.
 
-opencode interpolates `{env:OPENCODEX_OPENCODE_API_KEY}`. The generated Pi and OMP exports do
+OpenCode V1 and V2 use Responses and a non-secret SDK key placeholder, so a keyless
+loopback connection works without an environment variable. Remote admission uses a
+header reference to `{env:OPENCODEX_OPENCODE_API_KEY}` in V1 `options.headers` or V2
+provider-level `headers`.
+See the [OpenCode guide](/guides/opencode/#the-admission-key-is-not-written-to-disk).
+The generated Pi and OMP exports do
 not require an environment variable: each carries the literal `opencodex-loopback` placeholder.
 This is load-bearing because both clients resolve `apiKey` while building their model lists and
 hide the whole provider when an existing config contains an unset env reference. The proxy never

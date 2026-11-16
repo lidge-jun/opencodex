@@ -164,13 +164,14 @@ export interface OpencodeProviderBlock {
 export interface OpencodeV2ProviderBlock {
   package: string;
   name: string;
-  settings: OpencodeProviderConnection;
+  settings: Omit<OpencodeProviderConnection, "apiKey" | "headers"> & { apiKey: string };
+  headers?: Record<string, string>;
   models: Record<string, OpencodeV2ModelEntry>;
 }
 
 /**
  * Both generations, always built together: they are one document's two fragments and must
- * agree on the model set, the names, and the connection. Building them in one pass is what
+ * agree on the model set, the names, and the endpoint. Building them in one pass is what
  * makes that a fact rather than a convention.
  */
 export interface OpencodeProviderBlocks {
@@ -188,15 +189,12 @@ export interface OpencodeGeneratedConfig {
 
 /**
  * The proxy speaks the OpenAI-compatible shape at /v1, which opencode reaches through
- * the AI SDK's openai-compatible package (the same wiring users hand-write today).
+ * the AI SDK's OpenAI package for the Responses transport.
  */
-const OPENCODE_PROVIDER_NPM = "@ai-sdk/openai-compatible";
+const OPENCODE_PROVIDER_NPM = "@ai-sdk/openai";
 
-/**
- * Canonical V2 runtime spelling. Current clients alias the old @opencode-ai scope,
- * but exported documents use the documented package rather than depending on that alias.
- */
-const OPENCODE_V2_PROVIDER_PACKAGE = "@opencode/ai/providers/openai-compatible";
+/** V2 uses its native Responses runtime rather than the legacy AI SDK provider. */
+const OPENCODE_V2_PROVIDER_PACKAGE = "@opencode/ai/providers/openai-compatible-responses";
 
 /** Display name for the provider block, identical in both generations. */
 const OPENCODE_PROVIDER_NAME = "OpenCodex";
@@ -737,9 +735,9 @@ export function raycastConfigPath(env: OpencodeLaunchEnv = process.env, home: st
   return join(raycastAiDir(env, home), "providers.yaml");
 }
 
-/** Endpoint plus admission, identical for the V1 `options` and V2 `settings` field. */
-function opencodeProviderConnection(baseURL: string, config: OcxConfig): OpencodeProviderConnection {
-  const options: OpencodeProviderConnection = { baseURL };
+/** Shared Responses endpoint and admission; V2 moves headers to provider scope. */
+function opencodeProviderConnection(baseURL: string, config: OcxConfig): OpencodeProviderConnection & { apiKey: string } {
+  const options: OpencodeProviderConnection & { apiKey: string } = { baseURL, apiKey: LOOPBACK_API_KEY_PLACEHOLDER };
   // Opt-in opencode-side timeout overrides. Omitted by default so opencode keeps its native
   // header/chunk waits for every upstream routed through the proxy (current V2 defaults the
   // header wait to 5 min and the longer chunk wait to 15 min, but this repo pins no opencode
@@ -755,9 +753,7 @@ function opencodeProviderConnection(baseURL: string, config: OcxConfig): Opencod
   // stays free for Codex Direct upstream credentials when applicable.
   if (shouldInjectApiAuthHeader(config)) {
     options.headers = { "x-opencodex-api-key": OPENCODE_API_KEY_ENV_REF };
-    return options;
   }
-  options.apiKey = OPENCODE_API_KEY_ENV_REF;
   return options;
 }
 
@@ -824,17 +820,20 @@ export function opencodeProviderBlocks(
       variants: opencodeEffortVariants(model),
     };
   }
+  const connection = opencodeProviderConnection(baseURL, config);
+  const { headers, ...settings } = connection;
   return {
     v1: {
       npm: OPENCODE_PROVIDER_NPM,
       name: OPENCODE_PROVIDER_NAME,
-      options: opencodeProviderConnection(baseURL, config),
+      options: connection,
       models: v1Models,
     },
     v2: {
       package: OPENCODE_V2_PROVIDER_PACKAGE,
       name: OPENCODE_PROVIDER_NAME,
-      settings: opencodeProviderConnection(baseURL, config),
+      settings,
+      ...(headers ? { headers: { ...headers } } : {}),
       models: v2Models,
     },
   };
@@ -878,7 +877,7 @@ export function buildOpencodeProviderBlockFromCatalog(
  * The order below fixes the order of the emitted keys and nothing else: the two blocks are
  * disjoint top-level keys, and which generation opencode prefers when it merges them is
  * opencode's decision, not a consequence of where we write it. Both blocks are generated in
- * one pass so they cannot disagree about the model set, the names, or the connection.
+ * one pass so they cannot disagree about the model set, the names, or the endpoint.
  */
 function buildOpencodeClientConfig(ctx: ExportContext): OpencodeGeneratedConfig {
   const models = normalizeExportModels(ctx.models);

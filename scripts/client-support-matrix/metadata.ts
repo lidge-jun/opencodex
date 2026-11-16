@@ -95,7 +95,10 @@ export const EXPORT_CLIENT_METADATA: Readonly<Record<string, ExportClientMetadat
   },
   opencode: {
     label: "OpenCode",
-    protocolFields: [{ path: "provider.opencodex.npm", values: AI_SDK }],
+    protocolFields: [
+      { path: "provider.opencodex.npm", values: { "@ai-sdk/openai": "responses" } },
+      { path: "providers.opencodex.package", values: { "@opencode/ai/providers/openai-compatible-responses": "responses" } },
+    ],
     test: { file: "tests/config/client-config-export.test.ts", title: "carries the V1 schema and only the opencodex provider key", mentions: ["opencode"] },
     guide: "guides/opencode",
   },
@@ -244,5 +247,4 @@ export const NATIVE_CLIENT_METADATA: Readonly<Record<string, NativeClientMetadat
     guide: "guides/grok-build",
   },
 };
-
 

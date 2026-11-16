@@ -86,17 +86,14 @@ export OPENCODEX_OPENCODE_API_KEY=<your key>
 
 ## La clé d’admission n’est pas écrite sur disque
 
-La configuration enregistre la référence `{env:OPENCODEX_OPENCODE_API_KEY}`, jamais le secret lui-même.
-Sur une liaison de bouclage, cette référence est utilisée comme valeur `apiKey`. Sur une liaison hors
-bouclage, OpenCode résout la variable et n’envoie sa valeur que dans `x-opencodex-api-key`, afin que
-l’admission au proxy reste distincte de tout en-tête `Authorization` destiné au fournisseur en amont.
+OpenCode V1 et V2 utilisent Responses. Dans **Connect → OpenCode**, mettez à jour la configuration gérée quand le message apparaît. Les deux utilisent la valeur publique `opencodex-loopback` pour `apiKey`. La clé d’accès distant passe par `options.headers` (V1) ou `headers` au niveau du fournisseur (V2).
 
 Exemple de bouclage :
 
 ```json
 "options": {
   "baseURL": "http://127.0.0.1:10100/v1",
-  "apiKey": "{env:OPENCODEX_OPENCODE_API_KEY}"
+  "apiKey": "opencodex-loopback"
 }
 ```
 
@@ -107,6 +104,7 @@ Cet exemple se configure manuellement sur le client distant. Configurez d’abor
 ```json
 "options": {
   "baseURL": "https://proxy.example.com/v1",
+  "apiKey": "opencodex-loopback",
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }

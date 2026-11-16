@@ -26,7 +26,7 @@ opencodex는 AI 코딩 도구와 모델을 잇는 하나의 로컬 게이트웨�
 | Qoder CN | — | JSON | 예 | OpenAI 호환(엔드포인트는 클라이언트가 선택) | implemented | — | 로컬 리스너 전용. |
 | WorkBuddy | — | JSON | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/agent-clients.test.ts)) | — | 로컬 리스너 전용. 적용 전에 클라이언트별 검사를 실행하며 거부할 수 있습니다. |
 | WorkBuddy AI | — | JSON | 예 | Chat Completions | implemented | — | 로컬 리스너 전용. 적용 전에 클라이언트별 검사를 실행하며 거부할 수 있습니다. |
-| OpenCode | — | JSON | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/config/client-config-export.test.ts)) | — | 원격 리스너도 지원합니다(API 키 헤더를 추가). [가이드](/ko/guides/opencode/) |
+| OpenCode | — | JSON | 예 | Responses | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/config/client-config-export.test.ts)) | — | 원격 리스너도 지원합니다(API 키 헤더를 추가). [가이드](/ko/guides/opencode/) |
 | Pi | — | JSON | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/config/client-config-export.test.ts)) | — | 로컬 리스너 전용. [가이드](/ko/guides/pi/) |
 | Oh My Pi (omp) | — | YAML | 예 | Chat Completions; Responses (네이티브 OpenAI 모델만) | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/config/client-config-export.test.ts)) | — | 로컬 리스너 전용. 자기 YAML 블록만 수정합니다. |
 | Hermes | — | YAML | 예 | Chat Completions | test-covered ([테스트](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/hermes-catalog-refresh.test.ts)) | — | 원격 리스너도 지원합니다(API 키 헤더를 추가). 자기 YAML 블록만 수정합니다. |

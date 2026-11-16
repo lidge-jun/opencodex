@@ -9,16 +9,15 @@
  *
  * Opt-in — the suite skips unless the binaries are provided:
  *
- *   export OCX_TEST_OPENCODE_BIN=/path/to/opencode   # verified against 2.0.21
+ *   export OCX_TEST_OPENCODE_BIN=/path/to/opencode   # verified against 2.2.5
  *   export OCX_TEST_KILO_BIN=/path/to/kilo           # verified against 7.8.3
  *   # optional, defaults to <tmp>/ocx-live-wire:
  *   export OCX_TEST_LIVE_SCRATCH=/path/to/scratch
  *
- * Verified live on 2026-10-01 (see the header comment on the helper for the
- * client-side contract rules this encodes):
- *   - @opencode/cli 2.0.21: V2 `providers` block with per-model `variants`
+ * Client-side contracts:
+ *   - @opencode/cli 2.2.5: V2 `providers` block with per-model `variants`
  *     (including `none`) selects and lowers `settings.reasoningEffort` to
- *     `reasoning_effort`; undeclared variants fail resolution; one invalid V2
+ *     `reasoning.effort` on Responses; undeclared variants fail resolution; one invalid V2
  *     model entry discards the whole V2 block.
  *   - @kilocode/cli 7.8.3: V1 `provider` block; variant map values carry the
  *     camel `reasoningEffort` option; an all-disabled variant map is the only
@@ -163,11 +162,30 @@ describe.skipIf(!OC_BIN)("opencode export live wire (opt-in: OCX_TEST_OPENCODE_B
     const run = await client.run(["run", "--standalone", "-m", `opencodex/${ALPHA}`, "hi"]);
     const turn = lastRealTurn(since(upstream, mark));
     expect(run.code).toBe(0);
+    expect(run.stdout).toContain(`ANSWER(${ALPHA})`);
     expect(reasoningEffortOf(turn?.body)).toBe("low");
-    expect(turn?.headers.authorization).toBe(`Bearer ${LIVE_WIRE_KEY_VALUE}`);
+    expect(turn?.path).toBe("/v1/responses");
+    expect(turn?.headers.authorization).toBe("Bearer opencodex-loopback");
+    expect(turn?.body.reasoning?.effort).toBe("low");
+    expect(turn?.body.reasoning_effort).toBeUndefined();
   }, UPSTREAM_TIMEOUT);
 
-  test("each declared variant, including none, reaches the wire as reasoning_effort", async () => {
+  test("remote admission is sent as a dedicated header, not the bearer", async () => {
+    const remote = openCodeHarness(OC_BIN!, "remote-admission", LIVE_WIRE_KEY_VALUE);
+    try {
+      const config = { hostname: "0.0.0.0" } as OcxConfig;
+      remote.writeGlobalConfig(buildClientConfig("opencode", { baseUrl: upstream.url, models: liveWireExportModels(), config }));
+      upstream.reset();
+      const run = await remote.run(["run", "--standalone", "-m", `opencodex/${ALPHA}`, "hi"]);
+      const turn = lastRealTurn(upstream.requests);
+      expect(run.code).toBe(0);
+      expect(turn?.path).toBe("/v1/responses");
+      expect(turn?.headers["x-opencodex-api-key"]).toBe(LIVE_WIRE_KEY_VALUE);
+      expect(turn?.headers.authorization).toBe("Bearer opencodex-loopback");
+    } finally { remote.cleanup(); }
+  }, UPSTREAM_TIMEOUT);
+
+  test("each declared variant, including none, reaches the wire as reasoning.effort", async () => {
     for (const variant of ["none", "low", "high", "max"] as const) {
       upstream.reset();
       const run = await client.run(["run", "--standalone", "-m", `opencodex/${ALPHA}#${variant}`, "hi"]);
@@ -217,9 +235,12 @@ describe.skipIf(!OC_BIN)("opencode export live wire (opt-in: OCX_TEST_OPENCODE_B
     expect(withToolResult).toBeDefined();
     const toolMessage = findToolMessages(withToolResult!.body)[0];
     expect(String(toolMessage.content)).toContain("live-wire tool note 42");
+    expect(withToolResult!.body.input).toContainEqual(expect.objectContaining({ type: "function_call", call_id: "call_livewire_1" }));
+    expect(withToolResult!.body.input).toContainEqual(expect.objectContaining({ type: "function_call_output", call_id: "call_livewire_1" }));
+    expect(assistantReasoningReplay(withToolResult!.body, "reasoning_content")).toBe("livewire-encrypted");
   }, UPSTREAM_TIMEOUT);
 
-  test("reasoning_content from turn one is replayed on the assistant message in turn two", async () => {
+  test("encrypted Responses reasoning from turn one is replayed in turn two", async () => {
     const project = client.freshProject("oc-replay");
     upstream.reset();
     const first = await client.run(["run", "--standalone", "-m", `opencodex/${ALPHA}`, "remember the passphrase"], { project });
@@ -229,10 +250,10 @@ describe.skipIf(!OC_BIN)("opencode export live wire (opt-in: OCX_TEST_OPENCODE_B
     expect(second.code).toBe(0);
     const turn = lastRealTurn(since(upstream, mark));
     expect(rolesOf(turn?.body)).toContain("assistant");
-    expect(assistantReasoningReplay(turn?.body, "reasoning_content")).toContain("REASONING");
+    expect(assistantReasoningReplay(turn?.body, "reasoning_content")).toBe("livewire-encrypted");
   }, UPSTREAM_TIMEOUT);
 
-  test("image attachment reaches the wire as an image_url content part", async () => {
+  test("image attachment reaches the wire as an input_image content part", async () => {
     const project = client.freshProject("oc-image");
     upstream.reset();
     const run = await client.run(

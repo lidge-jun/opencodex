@@ -7,8 +7,8 @@
  *
  * Opt-in: callers gate on OCX_TEST_OPENCODE_BIN / OCX_TEST_KILO_BIN (absolute
  * paths; anything else skips). OCX_TEST_LIVE_SCRATCH relocates the disposable
- * client trees. Verified live against @opencode/cli 2.0.21 and @kilocode/cli
- * 7.8.3 on 2026-10-01; see tests/clients/client-export-live-wire.test.ts for
+ * client trees. Verified live against @opencode/cli 2.2.5 (Responses) and @kilocode/cli
+ * 7.8.3 (Chat); see tests/clients/client-export-live-wire.test.ts for
  * the full matrix, or run the compact smoke matrix directly:
  *
  *   OCX_TEST_OPENCODE_BIN=... OCX_TEST_KILO_BIN=... \
@@ -21,7 +21,7 @@ import { isAbsolute, join } from "node:path";
 import { buildClientConfig } from "../../src/clients/config-export";
 import type { ExportModel } from "../../src/clients/config-export/contracts";
 import { exportModelLabel } from "../../src/clients/config-export/model-metadata";
-import { KILO_API_KEY_ENV, OPENCODE_API_KEY_ENV } from "../../src/clients/config-export/constants";
+import { KILO_API_KEY_ENV, LOOPBACK_API_KEY_PLACEHOLDER } from "../../src/clients/config-export/constants";
 
 /** Dummy value handed to the clients through the env refs the export emits. */
 export const LIVE_WIRE_KEY_VALUE = "ocx-live-wire-key";
@@ -137,6 +137,23 @@ export function startLiveWireUpstream(): LiveWireUpstream {
       requests.push(cap);
       const body = cap.body ?? {};
       const model = String(body.model ?? "");
+      if (url.pathname.endsWith("/responses")) {
+        const input: any[] = Array.isArray(body.input) ? body.input : [];
+        const afterTool = input.some(item => item?.type === "function_call_output");
+        const callTool = !afterTool && Array.isArray(body.tools) && body.tools.length > 0 && forcedTool.has(model) && !servedTool.has(model);
+        if (callTool) servedTool.add(model);
+        const reasoning = { type: "reasoning", id: "rs_livewire", encrypted_content: "livewire-encrypted", summary: [{ type: "summary_text", text: "REASONING(livewire)" }] };
+        const item = callTool
+          ? { type: "function_call", id: "fc_livewire", call_id: "call_livewire_1", name: "read", arguments: JSON.stringify(forcedTool.get(model)), status: "completed" }
+          : { type: "message", id: "msg_livewire", role: "assistant", status: "completed", content: [{ type: "output_text", text: `ANSWER(${afterTool ? "after-tool" : model})`, annotations: [] }] };
+        const events = [
+          { type: "response.created", response: { id: "resp_livewire", status: "in_progress" } },
+          { type: "response.output_item.done", output_index: 0, item: reasoning },
+          { type: "response.output_item.done", output_index: 1, item },
+          { type: "response.completed", response: { id: "resp_livewire", status: "completed", output: [reasoning, item], usage: { input_tokens: 12, output_tokens: 7, total_tokens: 19 } } },
+        ];
+        return new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""), { headers: { "content-type": "text/event-stream" } });
+      }
       const messages: any[] = Array.isArray(body.messages) ? body.messages : [];
       const tools: any[] = Array.isArray(body.tools) ? body.tools : [];
       let events: Chunk[];
@@ -259,12 +276,12 @@ function modelName(index: number): string {
 
 /** Intended OpenCode document shape (V1 connection block + V2 provider block). */
 export function buildIntendedOpenCodeDocument(baseUrl: string): unknown {
-  const apiKey = `{env:${OPENCODE_API_KEY_ENV}}`;
+  const apiKey = "opencodex-loopback";
   return {
     $schema: "https://opencode.ai/config.json",
     provider: {
       opencodex: {
-        npm: "@ai-sdk/openai-compatible",
+        npm: "@ai-sdk/openai",
         name: "OpenCodex",
         options: { baseURL: baseUrl, apiKey },
         models: {
@@ -303,9 +320,9 @@ export function buildIntendedOpenCodeDocument(baseUrl: string): unknown {
     },
     providers: {
       opencodex: {
-        package: "@opencode/ai/providers/openai-compatible",
+        package: "@opencode/ai/providers/openai-compatible-responses",
         name: "OpenCodex",
-        settings: { baseURL: baseUrl, apiKey },
+        settings: { baseURL: baseUrl, apiKey: LOOPBACK_API_KEY_PLACEHOLDER },
         models: {
           [ALPHA]: {
             name: modelName(0),
@@ -435,14 +452,16 @@ function clientEnv(home: string): Record<string, string> {
   return {
     PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
     HOME: home,
+    USERPROFILE: home,
+    OPENCODE_TEST_HOME: home,
     XDG_CONFIG_HOME: join(home, ".config"),
     XDG_DATA_HOME: join(home, ".local", "share"),
     XDG_CACHE_HOME: join(home, ".cache"),
     TMPDIR: join(home, "tmp"),
-    // The intended documents reference both client env names; provide the same
-    // dummy value for whichever client is running.
-    OPENCODEX_OPENCODE_API_KEY: LIVE_WIRE_KEY_VALUE,
+    // Only Kilo needs the dummy key in the loopback fixture. OpenCode must work without its env key.
     OPENCODEX_KILO_API_KEY: LIVE_WIRE_KEY_VALUE,
+    OPENCODE_DISABLE_MODELS_FETCH: "true",
+    OPENCODE_DISABLE_AUTOUPDATE: "true",
     NO_COLOR: "1",
     CI: "1",
     TERM: "dumb",
@@ -516,7 +535,7 @@ export async function collectClientRun(proc: ClientProcess, timeoutMs: number, t
 }
 
 /** Run the supplied OpenCode binary against an isolated global config and projects. */
-export function openCodeHarness(bin: string, name: string): ClientHarness & { writeGlobalConfig(doc: unknown): void } {
+export function openCodeHarness(bin: string, name: string, admissionKey?: string): ClientHarness & { writeGlobalConfig(doc: unknown): void } {
   mkdirSync(SCRATCH_BASE, { recursive: true });
   const root = mkdtempSync(join(SCRATCH_BASE, `opencode-${name}-`));
   const { home } = makeTree(root);
@@ -539,7 +558,7 @@ export function openCodeHarness(bin: string, name: string): ClientHarness & { wr
     async run(args, opts = {}) {
       const project = opts.project ?? projects;
       mkdirSync(project, { recursive: true });
-      return spawnClient(bin, ["--log-level", "error", ...args], clientEnv(home), project, opts.timeoutMs ?? 150_000);
+      return spawnClient(bin, ["--log-level", "error", ...args], { ...clientEnv(home), ...(admissionKey ? { OPENCODEX_OPENCODE_API_KEY: admissionKey } : {}) }, project, opts.timeoutMs ?? 150_000);
     },
     cleanup() {
       rmSync(root, { recursive: true, force: true });
@@ -585,21 +604,22 @@ export function kiloHarness(bin: string, name: string): ClientHarness & { writeG
 
 /** Read conversation roles in wire order, treating a missing conversation as empty. */
 export function rolesOf(body: any): string[] {
-  return (body?.messages ?? []).map((m: any) => m?.role);
+  return (body?.messages ?? body?.input ?? []).map((m: any) => m?.role);
 }
 
 /** Inspect the effort actually sent upstream, not the client's configured preference. */
 export function reasoningEffortOf(body: any): unknown {
-  return body?.reasoning_effort;
+  return body?.reasoning?.effort ?? body?.reasoning_effort;
 }
 
 /** Find tool results replayed by the client after an upstream tool call. */
 export function findToolMessages(body: any): any[] {
-  return (body?.messages ?? []).filter((m: any) => m?.role === "tool");
+  return (body?.messages ?? body?.input ?? []).filter((m: any) => m?.role === "tool" || m?.type === "function_call_output").map((m: any) => m?.type === "function_call_output" ? { ...m, content: m.output } : m);
 }
 
 /** Extract textual reasoning replay from the first assistant history message. */
 export function assistantReasoningReplay(body: any, field: string): unknown {
+  if (Array.isArray(body?.input)) return body.input.find((item: any) => item?.type === "reasoning")?.encrypted_content;
   const assistant = (body?.messages ?? []).find((m: any) => m?.role === "assistant");
   const value = assistant?.[field];
   return typeof value === "string" ? value : undefined;
@@ -607,11 +627,12 @@ export function assistantReasoningReplay(body: any, field: string): unknown {
 
 /** Check whether an image survived client serialization into the upstream request. */
 export function hasImagePart(body: any): boolean {
-  for (const m of body?.messages ?? []) {
+  for (const m of body?.messages ?? body?.input ?? []) {
     const content = m?.content;
     if (!Array.isArray(content)) continue;
     for (const part of content) {
       if (part?.type === "image_url" && typeof part.image_url?.url === "string") return true;
+      if (part?.type === "input_image" && typeof part.image_url === "string") return true;
     }
   }
   return false;
@@ -621,7 +642,8 @@ export function hasImagePart(body: any): boolean {
 export function lastRealTurn(requests: CapturedChatRequest[]): CapturedChatRequest | undefined {
   for (let i = requests.length - 1; i >= 0; i--) {
     const body = requests[i]?.body;
-    if (body && Array.isArray(body.messages) && body.messages.length > 0) return requests[i];
+    if (Array.isArray(body?.input) && body.input.some((item: any) => item?.content?.some?.((part: any) => typeof part?.text === "string" && part.text.startsWith("Here is the first message of the conversation:")))) continue;
+    if (body && (Array.isArray(body.messages) && body.messages.length > 0 || Array.isArray(body.input) && body.input.length > 0)) return requests[i];
   }
   return requests[requests.length - 1];
 }

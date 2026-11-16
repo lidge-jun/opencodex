@@ -96,19 +96,14 @@ export OPENCODEX_OPENCODE_API_KEY=<anahtarınız>
 
 ## Kabul anahtarı diske yazılmaz
 
-Proxy bir API anahtarı gerektirdiğinde, satır içi çalışma zamanı yapılandırması
-sır yerine opencode'un `{env:…}` referansını taşır. Geri döngü (loopback)
-bağlantıları bu referansı `apiKey` olarak kullanır; geri döngü olmayan
-bağlantılar, proxy kabulünün herhangi bir yukarı akış `Authorization`
-başlığından ayrı kalması için bunu yalnızca `x-opencodex-api-key` üzerinden
-gönderir.
+OpenCode V1 ve V2, Responses kullanır. **Connect → OpenCode** ekranında uyarı çıktığında yönetilen yapılandırmayı güncelleyin. `apiKey`, gizli olmayan `opencodex-loopback` değeridir. Uzaktan erişim anahtarı V1 için `options.headers`, V2 için sağlayıcı düzeyindeki `headers` üzerinden gönderilir.
 
 Geri döngü örneği:
 
 ```json
 "options": {
   "baseURL": "http://127.0.0.1:10100/v1",
-  "apiKey": "{env:OPENCODEX_OPENCODE_API_KEY}"
+  "apiKey": "opencodex-loopback"
 }
 ```
 
@@ -119,6 +114,7 @@ Bu örnek uzak istemcide elle yapılandırılır. Önce bir TLS ön ucu yapılan
 ```json
 "options": {
   "baseURL": "https://proxy.example.com/v1",
+  "apiKey": "opencodex-loopback",
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }
@@ -163,5 +159,4 @@ opencode kurulu olmalı ve `PATH` üzerinde bulunmalıdır:
 ```bash
 npm install -g opencode-ai
 ```
-
 

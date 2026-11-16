@@ -110,14 +110,14 @@ export OPENCODEX_OPENCODE_API_KEY=<your key>
 
 ## La clave de acceso no se escribe en disco
 
-Cuando el proxy requiere una clave API, la configuración en línea usa la referencia `{env:…}` de OpenCode en lugar del secreto. Los listeners vinculados a loopback la usan como `apiKey`; los demás la envían solo mediante `x-opencodex-api-key`, manteniendo separadas la autenticación del proxy y la cabecera `Authorization` del proveedor de origen.
+OpenCode V1 y V2 usan Responses. Abre **Connect → OpenCode** y actualiza la configuración gestionada cuando aparezca el aviso. Ambos usan `opencodex-loopback` como valor no secreto de `apiKey`. La clave remota va en `options.headers` (V1) o en `headers` del proveedor (V2).
 
 Ejemplo de loopback:
 
 ```json
 "options": {
   "baseURL": "http://127.0.0.1:10100/v1",
-  "apiKey": "{env:OPENCODEX_OPENCODE_API_KEY}"
+  "apiKey": "opencodex-loopback"
 }
 ```
 
@@ -128,6 +128,7 @@ Este ejemplo se configura manualmente en el cliente remoto. Prepara primero un f
 ```json
 "options": {
   "baseURL": "https://proxy.example.com/v1",
+  "apiKey": "opencodex-loopback",
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }

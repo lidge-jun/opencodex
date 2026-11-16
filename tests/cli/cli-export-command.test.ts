@@ -460,8 +460,8 @@ describe("ocx export never serializes a key (accept criterion 6)", () => {
     const proxy = fakeProxy();
     const withKey = config({ apiKeys: [{ id: "k1", name: "default", key: "ocx_liveSecretValue" }] } as Partial<OcxConfig>);
     for (const [args, envRef] of [
-      [["--client", "opencode"], "{env:OPENCODEX_OPENCODE_API_KEY}"],
-      [["--client", "opencode", "--json"], "{env:OPENCODEX_OPENCODE_API_KEY}"],
+      [["--client", "opencode"], "opencodex-loopback"],
+      [["--client", "opencode", "--json"], "opencodex-loopback"],
       // Pi ships the non-secret loopback placeholder rather than an env reference;
       // the property under test is unchanged — no real key ever reaches stdout.
       [["--client", "pi"], "opencodex-loopback"],
@@ -472,7 +472,7 @@ describe("ocx export never serializes a key (accept criterion 6)", () => {
       const result = await run(args, { baseUrl: proxy.baseUrl, config: withKey });
       expect(result.code).toBe(0);
       expect(result.stdout).not.toContain("ocx_");
-      // The env REFERENCE is present; the value it stands for never is.
+      // Only the non-secret SDK placeholder is serialized.
       expect(result.stdout).toContain(envRef);
     }
   });

@@ -69,14 +69,14 @@ export OPENCODEX_OPENCODE_API_KEY=<your key>
 
 ## Admission key 不會寫入磁碟
 
-當代理程式要求 API 金鑰時，內嵌 runtime 設定承載的是 opencode 的 `{env:…}` 參考，而不是金鑰本身。Loopback 綁定把該參考用作 `apiKey`；非 loopback 綁定則只透過 `x-opencodex-api-key` 傳送，讓代理 admission 與任何上游 `Authorization` 標頭保持分離。
+OpenCode V1 與 V2 都使用 Responses。在 **Connect → OpenCode** 提示更新時，請重新整理受管理設定。`apiKey` 使用非機密的預留值 `opencodex-loopback`。遠端存取金鑰放在 V1 的 `options.headers` 或 V2 的提供者層級 `headers` 中。
 
 Loopback 範例：
 
 ```json
 "options": {
   "baseURL": "http://127.0.0.1:10100/v1",
-  "apiKey": "{env:OPENCODEX_OPENCODE_API_KEY}"
+  "apiKey": "opencodex-loopback"
 }
 ```
 
@@ -87,6 +87,7 @@ Loopback 範例：
 ```json
 "options": {
   "baseURL": "https://proxy.example.com/v1",
+  "apiKey": "opencodex-loopback",
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }

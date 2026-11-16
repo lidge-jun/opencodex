@@ -17,7 +17,8 @@ ocx opencode
 
 This ensures the proxy is running and launches opencode with the generated
 `provider.opencodex` and `providers.opencodex` blocks injected for that process — the
-legacy spelling opencode V1 reads, and the native V2 spelling. Both carry reasoning-effort
+legacy spelling opencode V1 reads, and the native V2 spelling. Both send requests to
+`/v1/responses` and carry reasoning-effort
 variants in the format their client reads. Extra arguments pass through:
 `ocx opencode run "hello"`.
 
@@ -141,6 +142,10 @@ catalog. Re-run `ocx export` after you add a provider or change model visibility
 Alternatively, [enable the managed integration](/guides/integrations/): `ocx sync` safely
 refreshes its already-owned blocks, leaving hand-edited or removed blocks untouched.
 
+If you connected OpenCode before the switch to Responses, open **Connect → OpenCode** and select
+**Refresh** when the config is marked out of date. This updates the owned provider blocks even
+if the catalog did not change. For manually exported configs, export again and merge the blocks.
+
 Once merged, export the admission key before launching opencode if the inference listener requires
 authentication. A listener bound only to loopback does not require it:
 
@@ -150,17 +155,16 @@ export OPENCODEX_OPENCODE_API_KEY=<your key>
 
 ## The admission key is not written to disk
 
-When the proxy requires an API key, the inline runtime config carries opencode's
-`{env:…}` reference rather than the secret. Loopback binds use that reference as
-`apiKey`; non-loopback binds send it only through `x-opencodex-api-key` so proxy
-admission stays separate from any upstream `Authorization` header.
+Both generations use the non-secret `opencodex-loopback` SDK placeholder as `apiKey`.
+When the proxy requires an actual admission key, OpenCode reads it from the environment
+and sends it as `x-opencodex-api-key`. It is separate from `Authorization`.
 
 Loopback example:
 
 ```json
 "options": {
   "baseURL": "http://127.0.0.1:10100/v1",
-  "apiKey": "{env:OPENCODEX_OPENCODE_API_KEY}"
+  "apiKey": "opencodex-loopback"
 }
 ```
 
@@ -171,18 +175,22 @@ This is a manually configured remote-client example. Configure a TLS frontend fi
 ```json
 "options": {
   "baseURL": "https://proxy.example.com/v1",
+  "apiKey": "opencodex-loopback",
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }
 }
 ```
 
-The real value is passed only through the child process environment.
+The examples use V1 `options`. In V2, `baseURL` and `apiKey` are in `settings` and
+`headers` is at provider level.
+
+The launcher passes the real value only through the child process environment.
 `OPENCODEX_API_AUTH_TOKEN` takes precedence, then the hardened service token file, then
 a configured API key — which is what a non-loopback bind requires.
 
 A listener bound to loopback (`127.0.0.1`, the default) does not require a data-plane key, even
-when client API keys are configured, so the `{env:…}` reference can remain unset for that listener.
+when client API keys are configured, so no environment variable is needed for that listener.
 A loopback URL alone does not establish this: a public listener bound to `0.0.0.0` still requires
 an accepted key when reached through `127.0.0.1`. Export the key when `hostname` is set beyond loopback;
 see [Remote access](/reference/configuration/server/#remote-access). This admission key is opencodex's

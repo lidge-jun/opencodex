@@ -62,14 +62,14 @@ export OPENCODEX_OPENCODE_API_KEY=<your key>
 
 ## アドミッションキーがディスクに書き込まれません
 
-プロキシが API キーを必要とする場合、インライン ランタイム設定にはシークレットではなくオープンコードの `{env:…}` 参照が含まれます。ループバック バインドでは、その参照を `apiKey` として使用します。非ループバック バインドは `x-opencodex-api-key` を介してのみ送信するため、プロキシ アドミッションはアップストリームの `Authorization` ヘッダーから分離されたままになります。
+OpenCode V1 と V2 はどちらも Responses を使用します。**Connect → OpenCode** に更新の案内が表示されたら管理対象の設定を更新してください。`apiKey` には公開の値 `opencodex-loopback` を設定し、リモート接続キーは V1 の `options.headers` または V2 のプロバイダー直下の `headers` に設定します。
 
 ループバックの例:
 
 ```json
 "options": {
   "baseURL": "http://127.0.0.1:10100/v1",
-  "apiKey": "{env:OPENCODEX_OPENCODE_API_KEY}"
+  "apiKey": "opencodex-loopback"
 }
 ```
 
@@ -80,6 +80,7 @@ export OPENCODEX_OPENCODE_API_KEY=<your key>
 ```json
 "options": {
   "baseURL": "https://proxy.example.com/v1",
+  "apiKey": "opencodex-loopback",
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }

@@ -91,17 +91,14 @@ export OPENCODEX_OPENCODE_API_KEY=<your key>
 
 ## 인증 키는 디스크에 쓰이지 않습니다
 
-프록시가 API 키를 요구할 때, 인라인 런타임 구성에는 비밀값 대신 opencode의
-`{env:…}` 참조가 들어갑니다. 루프백 바인드에서는 그 참조를 `apiKey`로 사용하고,
-루프백이 아닌 바인드에서는 `x-opencodex-api-key`로만 보내므로 프록시 인증은 상위
-`Authorization` 헤더와 분리됩니다.
+OpenCode V1과 V2 모두 Responses를 사용합니다. **Connect → OpenCode**에 안내가 표시되면 관리 구성을 업데이트하세요. `apiKey`에는 비밀이 아닌 `opencodex-loopback`을 사용하며 원격 접근 키는 V1의 `options.headers` 또는 V2의 공급자 수준 `headers`에 넣습니다.
 
 루프백 예시:
 
 ```json
 "options": {
   "baseURL": "http://127.0.0.1:10100/v1",
-  "apiKey": "{env:OPENCODEX_OPENCODE_API_KEY}"
+  "apiKey": "opencodex-loopback"
 }
 ```
 
@@ -112,6 +109,7 @@ export OPENCODEX_OPENCODE_API_KEY=<your key>
 ```json
 "options": {
   "baseURL": "https://proxy.example.com/v1",
+  "apiKey": "opencodex-loopback",
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }

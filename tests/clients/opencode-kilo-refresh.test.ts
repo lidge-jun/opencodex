@@ -138,6 +138,65 @@ describe("OpenCode and Kilo owned model configuration convergence", () => {
     expect(readFileSync(path, "utf8")).toBe(original);
   });
 
+  test("an unchanged owned OpenCode Chat config upgrades both generations to Responses", async () => {
+    expect(applyIntegration(input("opencode")).ok).toBe(true);
+    const legacy = structuredClone(expected("opencode")) as ManagedContribution;
+    const chat = legacy.fragments[1]!.value as Record<string, any>;
+    chat.package = "@opencode/ai/providers/openai-compatible";
+    chat.settings.apiKey = "{env:OPENCODEX_OPENCODE_API_KEY}";
+    const v1 = legacy.fragments[0]!.value as Record<string, any>;
+    v1.npm = "@ai-sdk/openai-compatible";
+    v1.options.apiKey = "{env:OPENCODEX_OPENCODE_API_KEY}";
+    const doc = document("opencode");
+    for (const fragment of legacy.fragments) doc[fragment.path[0]!][fragment.path[1]!] = fragment.value;
+    const path = INTEGRATION_CLIENTS.opencode.configPath({}, home);
+    const legacyBytes = JSON.stringify(doc, null, 2) + "\n";
+    writeFileSync(path, legacyBytes);
+    const record = store.readRecords().opencode!;
+    store.putRecord({ ...record, fileFingerprint: fingerprint(legacyBytes),
+      blockFingerprint: fingerprint(canonicalContribution(legacy)),
+      semanticBlockFingerprint: fingerprint(semanticContribution(legacy)) });
+    expect(readIntegrationState(input("opencode")).state).toBe("stale");
+    expect(await refreshOwnedCatalogIntegrations(input("opencode"), ["opencode"]))
+      .toEqual([{ client: "opencode", ok: true, changed: true }]);
+    const upgraded = document("opencode");
+    expect(upgraded.providers.opencodex.package).toBe("@opencode/ai/providers/openai-compatible-responses");
+    expect(upgraded.providers.opencodex.settings).toEqual({
+      baseURL: "http://127.0.0.1:10100/v1", apiKey: "opencodex-loopback",
+    });
+    expect(JSON.stringify(upgraded.providers.opencodex)).not.toContain("OPENCODEX_OPENCODE_API_KEY");
+    expect(upgraded.provider.opencodex.npm).toBe("@ai-sdk/openai");
+    expect(upgraded.provider.opencodex.options).toEqual(upgraded.providers.opencodex.settings);
+    expect(readIntegrationState(input("opencode")).state).toBe("current");
+    expect(upgraded.provider.personal.name).toBe("Keep me");
+    const refreshOp = store.listOperations("opencode")[0]!;
+    expect(store.readSnapshot(refreshOp)).toMatchObject({ kind: "stored", text: legacyBytes });
+    expect(restoreIntegration({ ...input("opencode"), opId: refreshOp.opId }).ok).toBe(true);
+    expect(readFileSync(path, "utf8")).toBe(legacyBytes);
+    expect(document("opencode").providers.opencodex.package).toBe("@opencode/ai/providers/openai-compatible");
+  });
+
+  test("a V2 package edit conflicts, disable removes both generations and a fresh apply writes Responses", async () => {
+    expect(applyIntegration(input("opencode")).ok).toBe(true);
+    const fresh = document("opencode");
+    expect(fresh.providers.opencodex.package).toBe("@opencode/ai/providers/openai-compatible-responses");
+    expect(fresh.providers.opencodex.headers).toBeUndefined();
+    expect(fresh.provider.opencodex.npm).toBe("@ai-sdk/openai");
+    expect(fresh.provider.personal.name).toBe("Keep me");
+    expect(disableIntegration(input("opencode")).ok).toBe(true);
+    expect(document("opencode")).toEqual(JSON.parse(original));
+
+    expect(applyIntegration(input("opencode")).ok).toBe(true);
+    const path = INTEGRATION_CLIENTS.opencode.configPath({}, home);
+    const edited = document("opencode");
+    edited.providers.opencodex.package = "@ai-sdk/openai-compatible";
+    const editedBytes = JSON.stringify(edited, null, 2) + "\n";
+    writeFileSync(path, editedBytes);
+    expect(await refreshOwnedCatalogIntegrations(input("opencode"), ["opencode"]))
+      .toEqual([expect.objectContaining({ client: "opencode", ok: false, state: "conflict" })]);
+    expect(readFileSync(path, "utf8")).toBe(editedBytes);
+  });
+
   test("a competing Kilo candidate refuses refresh without blocking OpenCode", async () => {
     for (const client of clients) expect(applyIntegration(input(client)).ok).toBe(true);
     const path = INTEGRATION_CLIENTS.kilo.configPath({}, home);
