@@ -3,6 +3,7 @@ import { Window } from "happy-dom";
 import { act, useLayoutEffect, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { useProviderAccountPools, type OAuthAccount } from "../src/hooks/useProviderAccountPools";
+import { useProvidersOAuth } from "../src/pages/use-providers-oauth";
 import * as dialogs from "../src/action-dialogs";
 import ProviderAuthPanel from "../src/components/provider-workspace/ProviderAuthPanel";
 import { LanguageProvider } from "../src/i18n/provider";
@@ -17,6 +18,9 @@ let roots: Root[] = [];
 let pools: ReturnType<typeof useProviderAccountPools>;
 let win: Window;
 let puts: unknown[];
+let logout: (provider: string) => Promise<void>;
+let notices: string[];
+let refetchedSets: string[];
 
 const row = (id: string, active: boolean, paused = false): OAuthAccount => ({ id, email: `${id}@example.test`, active, paused });
 const t = (key: string, vars?: unknown) => vars === undefined ? key : `${key}|${JSON.stringify(vars)}`;
@@ -27,6 +31,16 @@ function Harness() {
     oauthStatus: {}, notify: () => {}, fetchConfig: async () => {}, fetchOauth: async () => {},
     fetchProviderQuotas: async () => {}, codexActiveNeedsReauth: false });
   useLayoutEffect(() => { pools = current; }, [current]);
+  return null;
+}
+
+function LogoutHarness() {
+  const aliveRef = useRef(true);
+  const oauth = useProvidersOAuth({ apiBase: "/shared-hook", t: t as never, aliveRef, accountSets: {}, setAccountSets: () => {},
+    setBusy: () => {}, setStatus: () => {}, setLoginInfo: () => {}, setOauthStatus: () => {},
+    notify: message => { notices.push(message); }, fetchConfig: async () => {}, fetchOauth: async () => {},
+    fetchAccountSets: async providers => { refetchedSets.push(...providers); }, fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => {} });
+  useLayoutEffect(() => { logout = oauth.logoutOAuth; }, [oauth.logoutOAuth]);
   return null;
 }
 
@@ -43,11 +57,14 @@ beforeEach(async () => {
   win = new Window({ url: "http://localhost" });
   Object.defineProperty(win.navigator, "language", { configurable: true, value: "en-US" });
   puts = [];
+  notices = [];
+  refetchedSets = [];
   Object.defineProperties(globalThis, {
     document: { configurable: true, value: win.document }, window: { configurable: true, value: win },
     navigator: { configurable: true, value: win.navigator }, IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
-    fetch: { configurable: true, value: async (_input: RequestInfo | URL, init?: RequestInit) => {
-      if (init?.method && init.method !== "GET") puts.push({ method: init.method, body: init.body ? JSON.parse(String(init.body)) : undefined });
+    fetch: { configurable: true, value: async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method && init.method !== "GET") puts.push({ method: init.method, url: String(input), body: init.body ? JSON.parse(String(init.body)) : undefined });
+      if (String(input).includes("/api/oauth/logout")) return Response.json({ success: true });
       return Response.json({ activeAccountId: "a", accounts: [row("a", true), row("b", false)] });
     } },
   });
@@ -118,4 +135,26 @@ test("the Kimi (Responses) Accounts panel says its controls act on the shared Ki
   expect(note?.textContent).toContain("Kimi (Moonshot) Chat row");
   const owner = await mount(panel("kimi"));
   expect(owner.querySelector('[role="note"]')).toBeNull();
+});
+
+test("logging out from Kimi (Responses) confirms that the Kimi Chat row is signed out too, and refreshes both rows", async () => {
+  await mount(<LogoutHarness />);
+  const consent = spyOn(dialogs, "confirmAction").mockResolvedValue(false);
+  try {
+    await act(async () => { await logout("kimi-responses"); });
+    expect(consent).toHaveBeenCalledTimes(1);
+    const message = String(consent.mock.calls[0]![0].message);
+    expect(message).toStartWith("prov.logoutConfirmShared|");
+    expect(message).toContain("Kimi (Moonshot)");
+    expect(puts).toEqual([]);
+
+    consent.mockResolvedValue(true);
+    await act(async () => { await logout("kimi-responses"); });
+    expect(puts).toEqual([{ method: "POST", url: "/shared-hook/api/oauth/logout?provider=kimi-responses", body: undefined }]);
+    expect(refetchedSets).toEqual(expect.arrayContaining(["kimi-responses", "kimi"]));
+    expect(notices.at(-1)).toStartWith("prov.logoutOkShared|");
+    expect(notices.at(-1)).toContain("Kimi (Moonshot)");
+  } finally {
+    consent.mockRestore();
+  }
 });

@@ -873,6 +873,8 @@ export const en = {
   "subagentSurface.switchToV1": "Switch to v1",
   "subagentSurface.learnMore": "Why this fails",
   "prov.logoutOk": "Logged out of {provider}.",
+  "prov.logoutConfirmShared": "Log out of the active {provider} account? This is the shared {provider} login, so the {provider} Chat row is signed out of it too. Another stored {provider} account, if any, becomes active for both rows.",
+  "prov.logoutOkShared": "Logged out of the active {provider} account on both the Chat and Responses rows.",
   "prov.logoutFail": "Could not log out of {provider}. Your account state is unchanged.",
   "prov.logoutBusy": "An account change is in progress. Wait for it to finish, then try logging out again.",
   "prov.accountRemoveUnverified": "Could not verify whether {email} was removed. Refresh the account list before retrying.",

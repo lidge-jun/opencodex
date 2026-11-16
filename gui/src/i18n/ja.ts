@@ -855,6 +855,8 @@ export const ja: Record<TKey, string> = {
   "subagentSurface.switchToV1": "v1 に切り替え",
   "subagentSurface.learnMore": "失敗する理由",
   "prov.logoutOk": "{provider} からログアウトしました。",
+  "prov.logoutConfirmShared": "アクティブな {provider} アカウントからログアウトしますか? これは共有の {provider} ログインのため、{provider} Chat 行もログアウトされます。保存済みの別の {provider} アカウントがあれば、両方の行でそれが有効になります。",
+  "prov.logoutOkShared": "Chat 行と Responses 行の両方で、アクティブな {provider} アカウントからログアウトしました。",
   "prov.logoutFail": "{provider} からログアウトできませんでした。アカウント状態は変更されていません。",
   "prov.logoutBusy": "アカウントを変更中です。完了してからログアウトをもう一度お試しください。",
   "prov.accountRemoveUnverified": "{email} が削除されたか確認できません。再試行する前にアカウント一覧を更新してください。",

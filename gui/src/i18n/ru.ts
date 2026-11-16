@@ -861,6 +861,8 @@ export const ru: Record<TKey, string> = {
   "subagentSurface.switchToV1": "Переключиться на v1",
   "subagentSurface.learnMore": "Почему возникает сбой",
   "prov.logoutOk": "Выполнен выход из {provider}.",
+  "prov.logoutConfirmShared": "Выйти из активного аккаунта {provider}? Это общий вход {provider}, поэтому строка {provider} Chat тоже выйдет из него. Другой сохранённый аккаунт {provider}, если он есть, станет активным для обеих строк.",
+  "prov.logoutOkShared": "Выполнен выход из активного аккаунта {provider} в строках Chat и Responses.",
   "prov.logoutFail": "Не удалось выйти из {provider}. Состояние аккаунта не изменилось.",
   "prov.logoutBusy": "Изменение учётной записи выполняется. Дождитесь завершения и повторите выход.",
   "prov.accountRemoveUnverified": "Не удалось проверить, удалена ли учётная запись {email}. Обновите список перед повторной попыткой.",

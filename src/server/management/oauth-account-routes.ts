@@ -494,7 +494,9 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   }
 
   if (url.pathname === "/api/oauth/logout" && req.method === "POST") {
-    const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
+    // A sibling row (kimi-responses) has no login of its own: logging out of it removes the
+    // active account of the shared slot, exactly as the neighbouring account routes map it.
+    const provider = oauthCredentialSlot((url.searchParams.get("provider") ?? "").trim().toLowerCase());
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     await removeCredential(provider);
     reconcileLiveStateStores();

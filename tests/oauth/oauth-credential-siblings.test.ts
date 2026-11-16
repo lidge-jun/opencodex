@@ -4,8 +4,8 @@ import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { deriveProviderPresets } from "../../src/providers/derive";
 import { OAUTH_CREDENTIAL_SIBLINGS, oauthCredentialSlot } from "../../src/oauth/credential-siblings";
 import { getLoginStatus, getValidAccessTokenSnapshot, OAUTH_PROVIDERS, runLogin, UnsupportedOAuthProviderError, upsertOAuthProvider } from "../../src/oauth";
-import { captureOAuthAccountSelection, commitOAuthAccountSelection, getAccountSet, getCredential, mutateStore, saveCredential } from "../../src/oauth/store";
-import { clearGenericFailoverHealth, eligibleFailoverAccounts, rotateGenericOAuthAccountOn429 } from "../../src/oauth/generic-account-failover";
+import { captureOAuthAccountSelection, commitOAuthAccountSelection, getAccountSet, getCredential, mutateStore, saveCredential, setAccountPaused } from "../../src/oauth/store";
+import { clearGenericFailoverHealth, eligibleFailoverAccounts, hasFailoverAccountQuorum, rotateGenericOAuthAccountOn429 } from "../../src/oauth/generic-account-failover";
 import { releaseRemovedProviderCredentials } from "../../src/server/management/provider-credential-release";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
@@ -174,6 +174,24 @@ describe("Kimi (Responses) is a reachable sibling of the Kimi login (#8087)", ()
     try {
       expect(rotateGenericOAuthAccountOn429(live, "kimi", ids[0]!, "60")).toBe(ids[1]!);
       expect(eligibleFailoverAccounts("kimi-responses")).toEqual([ids[1]!]);
+    } finally {
+      clearGenericFailoverHealth();
+    }
+  });
+
+  test("pausing a shared account through one Kimi row updates the other row's account count at once", async () => {
+    clearGenericFailoverHealth();
+    for (const slot of ["a", "b"]) {
+      await saveCredential("kimi", { access: `kimi-access-${slot}`, refresh: `kimi-refresh-${slot}`, expires: FAR_FUTURE, accountId: `kimi-${slot}` });
+    }
+    const ids = getAccountSet("kimi")!.accounts.map(account => account.id);
+    const now = Date.now();
+    try {
+      expect(hasFailoverAccountQuorum("kimi-responses", now)).toBe(true);
+      expect((await setAccountPaused("kimi", ids[0]!, true)).status).toBe("updated");
+      // Same clock reading: only an invalidated cache can answer with the new count.
+      expect(hasFailoverAccountQuorum("kimi-responses", now)).toBe(false);
+      expect(hasFailoverAccountQuorum("kimi", now)).toBe(false);
     } finally {
       clearGenericFailoverHealth();
     }

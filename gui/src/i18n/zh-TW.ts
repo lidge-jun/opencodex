@@ -737,6 +737,8 @@ export const zhTW: Record<TKey, string> = {
   "subagentSurface.switchToV1": "切換到 v1",
   "subagentSurface.learnMore": "為什麼會失敗",
   "prov.logoutOk": "已登出 {provider}。",
+  "prov.logoutConfirmShared": "要登出目前使用中的 {provider} 帳號嗎？這是共用的 {provider} 登入，因此 {provider} Chat 列也會一併登出。若還儲存了其他 {provider} 帳號，兩列都會改用該帳號。",
+  "prov.logoutOkShared": "已在 Chat 與 Responses 兩列登出目前使用中的 {provider} 帳號。",
   "prov.logoutFail": "無法登出 {provider}。帳號狀態保持不變。",
   "prov.logoutBusy": "帳戶變更正在進行。請等待完成後再試著登出。",
   "prov.accountRemoveUnverified": "無法確認是否已移除 {email}。請重新整理帳戶清單後再試。",

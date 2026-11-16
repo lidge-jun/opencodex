@@ -874,6 +874,8 @@ export const tr: Record<TKey, string> = {
   "subagentSurface.switchToV1": "v1'e geç",
   "subagentSurface.learnMore": "Neden başarısız oluyor",
   "prov.logoutOk": "{provider} çıkışı yapıldı.",
+  "prov.logoutConfirmShared": "Etkin {provider} hesabından çıkış yapılsın mı? Bu paylaşılan {provider} oturumudur; {provider} Chat satırının da oturumu kapanır. Kayıtlı başka bir {provider} hesabı varsa iki satır için de o etkin olur.",
+  "prov.logoutOkShared": "Chat ve Responses satırlarının ikisinde de etkin {provider} hesabından çıkış yapıldı.",
   "prov.logoutFail": "{provider} çıkışı yapılamadı.",
   "prov.logoutBusy": "Hesap değişikliği sürüyor. Tamamlanmasını bekleyip tekrar çıkış yapmayı deneyin.",
   "prov.accountRemoveUnverified": "{email} hesabının kaldırılıp kaldırılmadığı doğrulanamadı. Yeniden denemeden önce hesap listesini yenileyin.",

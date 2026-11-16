@@ -860,6 +860,8 @@ export const fr: Record<TKey, string> = {
   "subagentSurface.switchToV1": "Passer à v1",
   "subagentSurface.learnMore": "Pourquoi cet échec",
   "prov.logoutOk": "Déconnexion de {provider} réussie.",
+  "prov.logoutConfirmShared": "Se déconnecter du compte {provider} actif ? Cette connexion {provider} est partagée : la ligne {provider} Chat est aussi déconnectée. Un autre compte {provider} enregistré, s'il existe, devient actif pour les deux lignes.",
+  "prov.logoutOkShared": "Déconnexion du compte {provider} actif sur les lignes Chat et Responses.",
   "prov.logoutFail": "Impossible de se déconnecter de {provider}. L’état de votre compte n’a pas changé.",
   "prov.logoutBusy": "Une modification du compte est en cours. Attendez sa fin avant de réessayer de vous déconnecter.",
   "prov.accountRemoveUnverified": "Impossible de vérifier si {email} a été supprimé. Actualisez la liste des comptes avant de réessayer.",

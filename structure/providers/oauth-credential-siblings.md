@@ -18,8 +18,12 @@ The auth store keeps one slot per login, and a sibling row never gets a slot of 
   publishes only that row through `upsertOAuthProvider(config, owner, row)`, leaving the owner's row as
   it is, or absent. Any `row` that does not share the login is refused before the login starts.
 - `/api/oauth/status`, `/api/oauth/accounts` and the account `active`, `pause`, `alias` and `DELETE`
-  routes answer a sibling name with the owner's slot. Logging out of the owner signs out both rows and
-  also clears the sibling's model cache.
+  routes answer a sibling name with the owner's slot, and so does `/api/oauth/logout`: logging out of
+  either row removes the slot's active account for both rows (another stored account, if any, becomes
+  active for both) and clears both rows' model caches. `ocx logout` (local and `--live`) accepts either
+  name and reports `credentialSlot` and `affectedRows` (`src/cli/logout-command.ts`); the dashboard
+  asks before a logout from the sibling row and names the owner's Chat row
+  (`gui/src/pages/use-providers-oauth.ts`).
 - Removing a provider row through the management API goes through
   `src/server/management/provider-credential-release.ts`: the login is released only when no configured
   row that signs in through the same slot remains, so removing `kimi` keeps the login while

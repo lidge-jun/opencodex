@@ -859,6 +859,8 @@ export const ko: Record<TKey, string> = {
   "subagentSurface.switchToV1": "v1으로 바꾸기",
   "subagentSurface.learnMore": "실패하는 이유",
   "prov.logoutOk": "{provider} 에서 로그아웃했습니다.",
+  "prov.logoutConfirmShared": "활성 {provider} 계정에서 로그아웃할까요? 공유된 {provider} 로그인이므로 {provider} Chat 행도 함께 로그아웃됩니다. 저장된 다른 {provider} 계정이 있으면 두 행 모두 그 계정을 사용합니다.",
+  "prov.logoutOkShared": "Chat 행과 Responses 행 모두에서 활성 {provider} 계정을 로그아웃했습니다.",
   "prov.logoutFail": "{provider}에서 로그아웃하지 못했습니다. 계정 상태는 그대로입니다.",
   "prov.logoutBusy": "계정 변경이 진행 중이에요. 완료된 후 로그아웃을 다시 시도해 주세요.",
   "prov.accountRemoveUnverified": "{email} 계정이 삭제되었는지 확인할 수 없어요. 다시 시도하기 전에 계정 목록을 새로고침해 주세요.",

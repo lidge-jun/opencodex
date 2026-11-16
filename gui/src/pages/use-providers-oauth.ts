@@ -10,6 +10,8 @@ import { oauthLabel } from "./providers-shared";
 import { isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../api";
 import { errorMessageFrom } from "../api-error";
 import { useRenderTargetCapture } from "../use-render-target-capture";
+import { confirmAction } from "../action-dialogs";
+import { oauthCredentialSlot } from "../../../src/oauth/credential-siblings";
 
 type AccountSet = { activeAccountId: string | null; accounts: OAuthAccount[] };
 
@@ -325,6 +327,16 @@ export function useProvidersOAuth({
   const logoutOAuth = async (provider: string) => {
     const capture = renderCapture;
     const logoutTarget = targetKey ?? apiBase;
+    // A shared-login row (Kimi (Responses)) signs out the owner's Chat row too: say so first.
+    const sharedOwner = oauthCredentialSlot(provider) !== provider ? oauthCredentialSlot(provider) : undefined;
+    if (sharedOwner) {
+      const consented = await confirmAction({
+        message: t("prov.logoutConfirmShared", { provider: oauthLabel(sharedOwner) }),
+        confirmLabel: t("prov.logout"),
+        tone: "danger",
+      });
+      if (!consented || !aliveRef.current || targetKeyRef.current !== logoutTarget || !isApiTargetCaptureCurrent(capture)) return;
+    }
     const finishLogout = beginAccountLogout?.(provider);
     if (beginAccountLogout && !finishLogout) {
       if (aliveRef.current) notify(t("prov.logoutBusy"), false);
@@ -368,11 +380,11 @@ export function useProvidersOAuth({
     }
     try {
       await Promise.all([
-        fetchAccountSets([provider]), fetchOauth(), fetchConfig(), fetchProviderQuotas(true),
+        fetchAccountSets(sharedOwner ? [provider, sharedOwner] : [provider]), fetchOauth(), fetchConfig(), fetchProviderQuotas(true),
       ]);
       bumpModelsRefresh();
       if (targetKeyRef.current === logoutTarget && isApiTargetCaptureCurrent(capture))
-        notify(t("prov.logoutOk", { provider: oauthLabel(provider) }), true);
+        notify(sharedOwner ? t("prov.logoutOkShared", { provider: oauthLabel(sharedOwner) }) : t("prov.logoutOk", { provider: oauthLabel(provider) }), true);
     } catch {
       if (targetKeyRef.current === logoutTarget && isApiTargetCaptureCurrent(capture))
         notify(t("prov.logoutFail", { provider: oauthLabel(provider) }), false);

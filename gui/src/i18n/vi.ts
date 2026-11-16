@@ -860,6 +860,8 @@ export const vi: Record<TKey, string> = {
   "subagentSurface.switchToV1": "Chuyển sang v1",
   "subagentSurface.learnMore": "Vì sao việc này thất bại",
   "prov.logoutOk": "Đã đăng xuất khỏi {provider}.",
+  "prov.logoutConfirmShared": "Đăng xuất khỏi tài khoản {provider} đang hoạt động? Đây là thông tin đăng nhập {provider} dùng chung, nên hàng {provider} Chat cũng bị đăng xuất. Nếu còn tài khoản {provider} khác đã lưu, tài khoản đó sẽ hoạt động cho cả hai hàng.",
+  "prov.logoutOkShared": "Đã đăng xuất tài khoản {provider} đang hoạt động trên cả hàng Chat và hàng Responses.",
   "prov.logoutFail": "Không thể đăng xuất khỏi {provider}. Trạng thái tài khoản của bạn vẫn không thay đổi.",
   "prov.logoutBusy": "Đang thay đổi tài khoản. Hãy đợi hoàn tất rồi thử đăng xuất lại.",
   "prov.accountRemoveUnverified": "Không thể xác nhận {email} đã được xóa hay chưa. Hãy tải lại danh sách tài khoản trước khi thử lại.",

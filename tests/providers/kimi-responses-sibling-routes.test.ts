@@ -94,6 +94,28 @@ describe("Kimi (Responses) row under the shared Kimi login (#8087)", () => {
     } finally { await server.stop(true); }
   });
 
+  test("logging out from the sibling row removes the active shared Kimi account for both rows", async () => {
+    saveConfig({ ...baseConfig(), providers: { ...baseConfig().providers, "kimi-responses": { adapter: "openai-responses", baseUrl: KIMI_BASE, authMode: "oauth" } } });
+    const second = { id: "kimi0002", credential: { access: "kimi-access-2", refresh: "kimi-refresh-2", expires: 9999999999999, accountId: "kimi-user-2", source: "oauth" } };
+    const stored = authStore() as { kimi: { accounts: unknown[] } };
+    stored.kimi.accounts.push(second);
+    writeFileSync(home.path("auth.json"), JSON.stringify(stored), { mode: 0o600 });
+    const server = startServer(0);
+    try {
+      const logout = async () => fetch(new URL("/api/oauth/logout?provider=kimi-responses", server.url), { method: "POST" });
+      const status = async (row: string) => (await fetch(new URL(`/api/oauth/status?provider=${row}`, server.url))).json() as Promise<{ loggedIn?: boolean; activeAccountId?: string }>;
+      const first = await logout();
+      expect(first.status).toBe(200);
+      expect(await first.json()).toEqual({ success: true });
+      expect(authStore().kimi).toMatchObject({ activeAccountId: "kimi0002", accounts: [{ id: "kimi0002" }] });
+      expect(Object.keys(authStore())).toEqual(["kimi"]);
+      for (const row of ["kimi", "kimi-responses"]) expect(await status(row)).toMatchObject({ loggedIn: true, activeAccountId: "kimi0002" });
+      expect((await logout()).status).toBe(200);
+      expect(authStore().kimi).toBeUndefined();
+      for (const row of ["kimi", "kimi-responses"]) expect((await status(row)).loggedIn).toBe(false);
+    } finally { await server.stop(true); }
+  });
+
   test("a login publish row must share the login it names", async () => {
     const server = startServer(0);
     try {
