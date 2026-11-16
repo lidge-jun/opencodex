@@ -108,10 +108,13 @@ export type EffortHistoryDecision =
   };
 
 interface PinnedRequest {
-  chatLineage?: string;
-  scope?: Partial<EffortHistoryScope>;
+  /** Digest of the chat lineage; the raw value is never kept. */
+  lineageKey: string;
+  /** Digest of the model and destination the capability record is keyed by. */
+  capabilityKey: string;
   effort?: string;
-  thinking?: unknown;
+  /** Digest of the emitted `thinking` field. */
+  thinkingKey: string;
   explicitCap?: number;
   emittedMaxTokens?: number;
   omittedMaxTokens?: number;
@@ -130,7 +133,7 @@ interface Entry {
   effortInEffect: string;
   lineageKey: string;
   anchorEffort: string;
-  thinking: unknown;
+  thinkingKey: string;
   budget: number;
   limit: number;
   changePoints: EffortChangePoint[];
@@ -303,7 +306,7 @@ function endOtherScopes(store: EffortHistoryStore, lineage: string, scopeKey: st
     if (entry.lineageKey === lineage && entry.scopeKey !== scopeKey) store.entries.delete(key);
   }
   for (const [key, slot] of store.pending) {
-    if (slot.req?.chatLineage !== undefined && hash(slot.req.chatLineage) === lineage && slot.scopeKey !== scopeKey) store.pending.delete(key);
+    if (slot.req?.lineageKey === lineage && slot.scopeKey !== scopeKey) store.pending.delete(key);
   }
 }
 
@@ -366,7 +369,7 @@ function decideInner(store: EffortHistoryStore, req: EffortHistoryRequest, opts:
   // Rule 3b runs before rule 4: a thinking change on a matching parent. Only emitted fields count:
   // an emitted budget_tokens change is a change; the adaptive branch's internal budget is never emitted.
   const parent = store.entries.get(parentKey);
-  if (parent && stableJson(req.thinking) !== stableJson(parent.thinking)) return offSend(store, parentKey, "thinking-change");
+  if (parent && hash(req.thinking) !== parent.thinkingKey) return offSend(store, parentKey, "thinking-change");
 
   // Rule 4: replay. The request is a turn already committed (same input hash).
   for (const [key, entry] of store.entries) {
@@ -423,8 +426,11 @@ function decideInner(store: EffortHistoryStore, req: EffortHistoryRequest, opts:
     const version = store.nextVersion++;
     const token = `${placeholder}:${version}`;
     const pinned = pin(req);
+    const pinnedBytes = bytesOf(pinned);
+    // The slot's bytes count against the store total: evict stored histories until it fits, or refuse.
+    if (!evictUntilFits(store, pinnedBytes)) return off("bounds-refused");
     store.pending.set(placeholder, {
-      kind: "new", key: placeholder, token, version, createdAt: now, inputHash, scopeKey, req: pinned, pinnedBytes: bytesOf(pinned), attemptGeneration: req.generation,
+      kind: "new", key: placeholder, token, version, createdAt: now, inputHash, scopeKey, req: pinned, pinnedBytes, attemptGeneration: req.generation,
     });
     return { action: "send", kind: "new", pendingToken: token, anchorEffort: mapEffort(req.effort) };
   }
@@ -470,10 +476,13 @@ function admitMatched(store: EffortHistoryStore, plan: MatchPlan): EffortHistory
   const version = store.nextVersion++;
   const token = `${plan.parentKey}:${version}`;
   const pinned = pin(plan.req);
+  const pinnedBytes = bytesOf(pinned);
+  // The slot holds the parent entry and its pinned values; both count against the store total.
+  if (!evictUntilFits(store, plan.parent.bytes + pinnedBytes)) return off("bounds-refused", { deleted: true });
   store.pending.set(plan.parentKey, {
     kind: "matched", key: plan.parentKey, token, version, createdAt: plan.now, inputHash: plan.inputHash,
     attemptGeneration: plan.req.generation,
-    scopeKey: plan.scopeKey, entry: plan.parent, req: pinned, pinnedBytes: bytesOf(pinned), changePoint: plan.changePoint,
+    scopeKey: plan.scopeKey, entry: plan.parent, req: pinned, pinnedBytes, changePoint: plan.changePoint,
   });
   const insert: EffortChangePoint | null = plan.changePoint
     ? { at: pinned.changeAt, wireIndex: pinned.changeWireIndex as number, effort: mapEffort(plan.req.effort as string) }
@@ -625,9 +634,9 @@ function commitInner(store: EffortHistoryStore, token: unknown, result: EffortHi
     prefixHash,
     inputHash: slot.inputHash,
     effortInEffect,
-    lineageKey: hash(req.chatLineage),
+    lineageKey: req.lineageKey,
     anchorEffort: prior ? prior.anchorEffort : effort,
-    thinking: req.thinking,
+    thinkingKey: req.thinkingKey,
     budget: BUDGET[effort] ?? 8192,
     limit: effectiveLimit(req),
     changePoints,
@@ -651,7 +660,7 @@ function rejectInner(store: EffortHistoryStore, token: unknown, { status, errorT
   const slot = takeSlot(store, token);
   if (!slot) return { action: "dropped", reason: "pending-missing" };
   if (status === 400 && typeof errorText === "string" && errorText.includes(BETA_FRAGMENT)) {
-    store.capability.set(capabilityKey(slot.req.scope ?? {}), { state: "unsupported", at: Date.now() });
+    store.capability.set(slot.req.capabilityKey, { state: "unsupported", at: Date.now() });
     while (store.capability.size > MAX_CAPABILITY) store.capability.delete(store.capability.keys().next().value as string);
     return { action: "off", reason: "capability-unsupported", deleted: true };
   }
@@ -671,10 +680,12 @@ function abandonInner(store: EffortHistoryStore, token: unknown, { sent = true, 
   return { action: "deleted", reason: "abandoned" };
 }
 
-// A pending slot keeps only what commit needs: pinned values, never the request's items.
+// A pending slot keeps only what commit needs: digests and pinned scalar values, never the request's
+// items or the raw lineage, scope or thinking field.
 function pin(req: EffortHistoryRequest): PinnedRequest {
   return {
-    chatLineage: req.chatLineage, scope: req.scope, effort: req.effort, thinking: req.thinking, explicitCap: req.explicitCap,
+    lineageKey: hash(req.chatLineage), capabilityKey: capabilityKey(req.scope ?? {}), effort: req.effort,
+    thinkingKey: hash(req.thinking), explicitCap: req.explicitCap,
     emittedMaxTokens: req.emittedMaxTokens, omittedMaxTokens: req.omittedMaxTokens,
     frame: req.frame, generation: req.generation, changeAt: changePointAt(req),
     ...(validWireIndex(req.changeWireIndex) ? { changeWireIndex: req.changeWireIndex } : {}),

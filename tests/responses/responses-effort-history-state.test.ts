@@ -1035,11 +1035,12 @@ test("pending slots count their pinned values toward the store total", () => {
   const store = createStore();
   const big = "x".repeat(100 * 1024);
   let last;
-  for (let i = 0; i < 6; i++) {
-    last = decide(store, { ...base, chatLineage: `chat-${i}`, thinking: big, parent: [], suffix: [user(`hi ${i}`)] }, ON);
+  // The thinking field is pinned as a digest, so the large pinned value here is the frame.
+  for (let i = 0; i < 5; i++) {
+    last = decide(store, { ...base, chatLineage: `chat-${i}`, frame: big + i, parent: [], suffix: [user(`hi ${i}`)] }, ON);
   }
   assert.equal(last.kind, "new");
-  assert.equal(buffer(store, last.pendingToken, 1).reason, "streaming-over-store-cap");
+  assert.equal(buffer(store, last.pendingToken, 20 * 1024).reason, "streaming-over-store-cap");
 });
 
 test("round 14: ColdFork, SuppliedHistory and Cleared are not new-chat signals", () => {
@@ -1103,5 +1104,79 @@ test("a first turn with an assistant or tool item is never new, however many use
     assert.equal(d.action, "off");
   }
   assert.equal(store.pending.size, 0);
+});
+
+// #8787 review (PRRT_kwDOS-0Gi863yAtb, PRRT_kwDOS-0Gi863yHP1): a pending slot's own bytes count at
+// admission, and the slot keeps digests of the lineage, scope and thinking field, never the raw values.
+function storeBytes(store) {
+  let total = 0;
+  for (const e of store.entries.values()) total += e.bytes;
+  for (const s of store.pending.values()) total += (s.entry ? s.entry.bytes : 0) + (s.pinnedBytes ?? 0) + (s.buffered ?? 0);
+  return total;
+}
+const FRAME_90K = (tag) => tag + "f".repeat(90 * 1024);
+function commitFramed(store, tag, now = Date.now()) {
+  const d = decide(store, { ...base, frame: FRAME_90K(tag), chatLineage: tag, parent: [], suffix: [user(tag)] }, { ...ON, now });
+  assert.equal(d.action, "send", `${tag}: ${d.reason}`);
+  const res = commit(store, d.pendingToken, { messageStop: true, cacheRead: 0, P: 100, outputItems: [asst(tag)], generation: "g1" }, now);
+  assert.equal(res.action, "committed", `${tag}: ${res.reason}`);
+  return [user(tag), asst(tag)];
+}
+
+test("bounds: a pending admission larger than the store total is refused and nothing is evicted", () => {
+  const store = createStore();
+  startChat(store, { effort: "low" });
+  const kept = [...store.entries.keys()];
+  const d = decide(store, { ...base, frame: "f".repeat(MAX_TOTAL_BYTES), chatLineage: "huge", parent: [], suffix: [user("hi")] }, ON);
+  assert.equal(d.action, "off");
+  assert.equal(d.reason, "bounds-refused");
+  assert.equal(store.pending.size, 0);
+  assert.deepEqual([...store.entries.keys()], kept);
+  assert.ok(storeBytes(store) <= MAX_TOTAL_BYTES, `total ${storeBytes(store)}`);
+});
+
+test("bounds: a new pending admission evicts the least recently used histories until it fits", () => {
+  const store = createStore();
+  for (let i = 0; i < 5; i++) commitFramed(store, `chat-${i}`, 1000 + i);
+  const oldest = [...store.entries.entries()].sort((a, b) => a[1].lastUsed - b[1].lastUsed)[0][0];
+  assert.equal(store.entries.size, 5);
+  const d = decide(store, { ...base, frame: FRAME_90K("new"), chatLineage: "new", parent: [], suffix: [user("new")] }, { ...ON, now: 2000 });
+  assert.equal(d.action, "send", d.reason);
+  assert.equal(store.entries.has(oldest), false);
+  assert.ok(storeBytes(store) <= MAX_TOTAL_BYTES, `total ${storeBytes(store)}`);
+});
+
+test("bounds: a matched pending admission counts its pinned bytes and evicts other histories to fit", () => {
+  const store = createStore();
+  const transcript = commitFramed(store, "chat-x", 5000);
+  for (let i = 0; i < 4; i++) commitFramed(store, `other-${i}`, 1000 + i);
+  const d = decide(store, { ...base, frame: FRAME_90K("chat-x"), chatLineage: "chat-x", parent: transcript, suffix: [user("next")] }, { ...ON, now: 6000 });
+  assert.equal(d.action, "send", d.reason);
+  assert.equal(d.kind, "matched");
+  assert.equal(store.entries.size, 3);
+  assert.ok(storeBytes(store) <= MAX_TOTAL_BYTES, `total ${storeBytes(store)}`);
+});
+
+test("pending slots and entries keep digests of the chat lineage and thinking field", () => {
+  const store = createStore();
+  const lineage = "L".repeat(64 * 1024);
+  const thinking = { type: "enabled", budget_tokens: 4096, note: "T".repeat(64 * 1024) };
+  const d = decide(store, { ...base, chatLineage: lineage, thinking, parent: [], suffix: [user("hi")] }, ON);
+  assert.equal(d.action, "send", d.reason);
+  const slot = [...store.pending.values()][0];
+  assert.ok(slot.pinnedBytes < 2048, `pinned ${slot.pinnedBytes}`);
+  assert.ok(!JSON.stringify(slot.req).includes("LLLL") && !JSON.stringify(slot.req).includes("TTTT"));
+  const res = commit(store, d.pendingToken, { messageStop: true, cacheRead: 0, P: 100, outputItems: [asst("r")], generation: "g1" });
+  assert.equal(res.action, "committed");
+  const entry = [...store.entries.values()][0];
+  assert.ok(entry.bytes < 2048, `entry ${entry.bytes}`);
+  assert.ok(!JSON.stringify(entry).includes("LLLL") && !JSON.stringify(entry).includes("TTTT"));
+  // The digest still decides rule 3b: the same thinking matches, a different one is a change.
+  const t = [user("hi"), asst("r")];
+  const same = decide(store, { ...base, chatLineage: lineage, thinking: structuredClone(thinking), parent: t, suffix: [user("next")] }, ON);
+  assert.equal(same.action, "send", same.reason);
+  abandon(store, same.pendingToken, { sent: false, restoreOnFailure: true });
+  const changed = decide(store, { ...base, chatLineage: lineage, thinking: { ...thinking, budget_tokens: 8192 }, parent: t, suffix: [user("next")] }, ON);
+  assert.equal(changed.reason, "thinking-change");
 });
 

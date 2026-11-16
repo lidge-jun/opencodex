@@ -29,7 +29,11 @@ change on Mythos is off because its thinking budget follows effort.
 `src/responses/effort-history.ts` owns the state machine: rkb32's contract on #6895, rules 0-9 in
 order, with the bounds in its constants (64 entries, 512 KB, one-hour entry expiry, ten-minute
 pending expiry, 128 KB committed output, 64 change points). Entries hold HMAC digests and pinned
-values under a per-process key, never transcript text. A conversation's history is keyed by scope
+values under a per-process key, never transcript text; entries and pending slots keep digests of
+the chat lineage, the model and destination, and the emitted `thinking` field, never the raw values.
+A pending slot's bytes count toward the 512 KB total when it is admitted: the least recently used
+histories are evicted until it fits, and an admission that cannot fit beside the other pending
+slots is "off" with `bounds-refused`. A conversation's history is keyed by scope
 (cohort from `src/codex/lineage.ts`, provider, destination, adapter, model, a digest of the API
 key, auth mode) and the Codex thread or prompt cache key, then by a chained digest of every raw
 input item plus the output items the turn returned; the digest treats a `null` field as absent,
@@ -41,7 +45,8 @@ A history starts only on a first turn that has no assistant, tool, compaction or
 items (user and developer items only; a Codex first turn carries its environment context as a second
 user message) and whose own Codex turn metadata reports `history_initialization` `"new"` (the
 spelling Codex 0.167 sends; `"New"` is accepted too). `src/server/responses/request-prepare.ts`
-reads that once into `_codexNewHistory`: the `x-codex-turn-metadata` header over HTTP, and over
+reads that once into `_codexNewHistory`, which the encrypted agent-task recovery re-parse carries
+over: the `x-codex-turn-metadata` header over HTTP, and over
 WebSocket only the frame's own `client_metadata` copy, because the upgrade header describes the turn
 that opened the socket. A compaction summary, a resume or a restart never starts one. Every compared request value is the one
 the serializer emitted: the `thinking` field, `max_tokens`, and a frame digest of every other body

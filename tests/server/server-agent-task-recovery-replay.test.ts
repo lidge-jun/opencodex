@@ -192,6 +192,44 @@ test.each([true, false, undefined])("fresh recovery and cache-only reparse prese
   }
 });
 
+// #8787 review (PRRT_kwDOS-0Gi863ySFf): the recovery re-parse must keep Codex's own "new" turn
+// metadata, or a recovered first turn never starts a perMessageEffort history.
+test.each([true, false])("recovery re-parse keeps the Codex new-history receipt (%s)", async (isNew) => {
+  const { post, providerResponse } = await import("../helpers/agent-task-recovery");
+  let recoveries = 0;
+  globalThis.fetch = (async (url: unknown) => {
+    if (String(url).includes("chatgpt.com")) {
+      recoveries++;
+      return new Response(recoverySse("Read the receipt assignment."));
+    }
+    return providerResponse();
+  }) as typeof fetch;
+  const seen: Array<boolean | undefined> = [];
+  const createChat = ADAPTER_REGISTRY["openai-chat"].create;
+  const factory = spyOn(ADAPTER_REGISTRY["openai-chat"], "create").mockImplementation((provider, context) => {
+    const adapter = createChat(provider, context);
+    return {
+      ...adapter,
+      buildRequest(...[parsed, incoming]: Parameters<typeof adapter.buildRequest>) {
+        seen.push(parsed._codexNewHistory);
+        return adapter.buildRequest(parsed, incoming);
+      },
+    };
+  });
+  try {
+    const headers = codexHeaders("acct-caller", {
+      "x-codex-turn-metadata": JSON.stringify({ history_initialization: isNew ? "new" : "cold_resume" }),
+    });
+    const response = await post(routedConfig({ enabled: true }), "xai/grok-4.5", encryptedInput(), headers);
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(recoveries).toBe(1);
+    expect(seen).toEqual([isNew]);
+  } finally {
+    factory.mockRestore();
+  }
+});
+
 test("MESSAGE recovery reaches the provider and survives tool-result replay", async () => {
   const { post, providerResponse } = await import("../helpers/agent-task-recovery");
   let recoveries = 0;
