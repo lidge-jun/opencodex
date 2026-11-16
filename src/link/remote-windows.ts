@@ -193,7 +193,8 @@ $r=if($env:HOME){$env:HOME}elseif($u){$u}else{"."};$h=if($env:OPENCODEX_HOME){$e
  * The install that last started serving this home (#8359), read from the first record's `command`
  * in `serving-runtimes.json` (src/config/serving-runtimes.ts): `[ocx.exe]`, or `[bun.exe, cli\index.ts]`
  * for an npm install. It moves ahead of every fixed candidate except ocx-child under a Child state,
- * the POSIX order. `A` yields its entry as an argument prefix for the run and `P` the same prefix
+ * the POSIX order. Its variables ($sx, $sy) are names no other script fragment assigns: the gate loops
+ * reuse $a, $s and $p (#8359 review). `A` yields its entry as an argument prefix for the run and `P` the same prefix
  * CRT-quoted for the helper's --version probe; any other candidate gets none. The pair runs only
  * while its entry exists. A census over 64 KiB, a first record without a command, a relative or
  * quoted path, a third element or any read error leaves the fixed order. The census sits where its
@@ -203,8 +204,8 @@ $r=if($env:HOME){$env:HOME}elseif($u){$u}else{"."};$h=if($env:OPENCODEX_HOME){$e
  * inspection, the pinned and overwrite syncs and the gated update plan all read it, so every Windows
  * Remote Link command runs the same install the Child serves from.
  */
-const SERVED_CANDIDATE = String.raw`$s=$null;$a=@();try{$o=([string]$env:OPENCODEX_HOME).Trim();if($o -match '^~([\\/]|$)'){$o=$u+$o.Substring(1)};$g=$(if($o){$o}else{"$u\.opencodex"});$j="$g\serving-runtimes.json";if((Get-Item -LiteralPath $j -Force -EA 1).Length -le 65536){$e=@(@(([IO.File]::ReadAllText($j)|ConvertFrom-Json).runtimes)[0].command);if($e.Count -in 1,2 -and !($e|?{$_ -isnot [string] -or $_ -match '["\x00-\x1f]' -or ![IO.Path]::IsPathRooted($_)})-and($e.Count -eq 1 -or [IO.File]::Exists($e[1]))){$s=$e[0];$a=@($e|select -Skip 1);$c=if([IO.File]::Exists("$g\child\state.json")-or[IO.File]::Exists("$h\child\state.json")){$k+$s+$f}else{@($s)+$f+$k}}}}catch{$null=$_}
-function A($x){if($x -eq $s){$a}}
+const SERVED_CANDIDATE = String.raw`$sx=$null;$sy=@();try{$o=([string]$env:OPENCODEX_HOME).Trim();if($o -match '^~([\\/]|$)'){$o=$u+$o.Substring(1)};$g=$(if($o){$o}else{"$u\.opencodex"});$j="$g\serving-runtimes.json";if((Get-Item -LiteralPath $j -Force -EA 1).Length -le 65536){$e=@(@(([IO.File]::ReadAllText($j)|ConvertFrom-Json).runtimes)[0].command);if($e.Count -in 1,2 -and !($e|?{$_ -isnot [string] -or $_ -match '["\x00-\x1f]' -or ![IO.Path]::IsPathRooted($_)})-and($e.Count -eq 1 -or [IO.File]::Exists($e[1]))){$sx=$e[0];$sy=@($e|select -Skip 1);$c=if([IO.File]::Exists("$g\child\state.json")-or[IO.File]::Exists("$h\child\state.json")){$k+$sx+$f}else{@($sx)+$f+$k}}}}catch{$null=$_}
+function A($x){if($x -eq $sx){$sy}}
 function P($x){(@(A $x)|%{(Quote-Native $_)+' '}) -join ''}
 `;
 
