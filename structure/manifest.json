@@ -280,6 +280,13 @@
       "documents": ["src/codex/catalog/ownership.ts"]
     },
     {
+      "path": "catalog-routed-defaults.md",
+      "tier": 2,
+      "title": "Routed catalog row defaults",
+      "scope": "Config-first routed-row instruction and verbosity defaults, their validation, capture and precedence.",
+      "documents": ["src/codex/catalog/routed-defaults.ts", "src/config/schema/routed-catalog-defaults.ts", "src/types/routed-catalog-defaults.ts"]
+    },
+    {
       "path": "subagents.md",
       "tier": 2,
       "title": "Subagents And Multi-Agent Surface",
@@ -605,6 +612,13 @@
       "title": "Anthropic progress updates",
       "scope": "Opus 5.5 progress display, visible commentary, and exact signed-block replay.",
       "documents": ["src/adapters/", "src/bridge/", "src/responses/", "src/claude/", "src/types/", "src/server/", "src/web-search/", "src/images/"]
+    },
+    {
+      "path": "providers/anthropic-per-message-effort.md",
+      "tier": 4,
+      "title": "Anthropic per-message effort",
+      "scope": "Experimental default-off effort history that keeps the Anthropic prompt cache across mid-conversation effort changes.",
+      "documents": ["src/adapters/", "src/responses/", "src/server/", "src/types/"]
     },
     {
       "path": "providers/anthropic-account-thresholds.md",
@@ -1296,7 +1310,8 @@
         "src/service/orchestration.ts",
         "src/service/repair.ts",
         "src/update/index.ts",
-        "src/update/restart-ownership.ts"
+        "src/update/restart-ownership.ts",
+        "src/desktop-update/"
       ]
     },
     {
@@ -1380,6 +1395,16 @@
         "src/codex/",
         "src/lib/",
         "src/service.ts"
+      ]
+    },
+    {
+      "path": "ops/windows-code-signing.md",
+      "tier": 6,
+      "title": "Windows Code Signing",
+      "scope": "SignPath Authenticode signing in the release legs and the per-release signing statement in the release body.",
+      "documents": [
+        ".github/",
+        "scripts/"
       ]
     },
     {

@@ -9,6 +9,7 @@ import { remoteInspectRuntimeArgv } from "../../src/link/remote-plant";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { spawnTestChild } from "../helpers/spawn-test-child";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
+import { windowsServedHome as windowsServedHomeFixture } from "../helpers/windows-served-home";
 
 const roots: string[] = [];
 // Keep any fixture whose child or inherited output pipes have not settled.
@@ -241,33 +242,7 @@ test.skipIf(process.platform !== "win32")("Windows discovery selects Desktop bef
   }
 });
 
-/** A Windows home whose census names the npm layout: this bun.exe plus a CLI entry (#8359). */
-function windowsServedHome() {
-  const home = mkdtempSync(join(tmpdir(), "ocx-windows-served-")); roots.push(home);
-  const desktop = join(home, ".opencodex-desktop", "bin", "ocx.exe");
-  mkdirSync(dirname(desktop), { recursive: true });
-  copyFileSync(process.execPath, desktop);
-  const entry = join(home, "npm prefix", "node_modules", "opencodex", "src", "cli", "index.ts");
-  mkdirSync(dirname(entry), { recursive: true });
-  writeFileSync(entry, [
-    'if (process.argv[2] === "--version") { console.log("opencodex 2.99.0"); process.exit(0); }',
-    "console.log(JSON.stringify({ served: true, args: process.argv.slice(2), input: await Bun.stdin.text() }));",
-  ].join("\n"));
-  const ocxHome = join(home, ".opencodex");
-  mkdirSync(ocxHome, { recursive: true });
-  const census = (body: unknown) => writeFileSync(join(ocxHome, "serving-runtimes.json"), JSON.stringify(body, null, 2) + "\n");
-  const run = async (argv: string[], env: Record<string, string | undefined> = { USERPROFILE: home, HOME: home, OPENCODEX_HOME: ocxHome }) => {
-    const childEnv: Record<string, string | undefined> = { ...process.env, ...env };
-    for (const key of Object.keys(childEnv)) if (childEnv[key] === undefined) delete childEnv[key];
-    const child = Bun.spawn(argv, {
-      env: childEnv,
-      stdin: new Blob(["fixture-key-stdin"]), stdout: "pipe", stderr: "pipe",
-    });
-    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
-    return { stdout, stderr, code };
-  };
-  return { home, entry, ocxHome, census, run };
-}
+const windowsServedHome = () => windowsServedHomeFixture(root => { roots.push(root); });
 
 test.skipIf(process.platform !== "win32")("Windows discovery runs the served bun.exe entry pair before the Desktop copy (#8359)", async () => {
   const f = windowsServedHome();

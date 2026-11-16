@@ -48,6 +48,7 @@
     },
     {
       "name": "Swap in the verified signed Windows binary",
+      "id": "swap-ocx",
       "if": "steps.windows-signing.outputs.mode == 'sign'",
       "continue-on-error": true,
       "shell": "pwsh",
@@ -177,6 +178,7 @@
     },
     {
       "name": "Swap in the verified signed Windows installer",
+      "id": "swap-msi",
       "if": "steps.windows-signing.outputs.mode == 'sign' && steps.windows-msi.outcome == 'success'",
       "continue-on-error": true,
       "shell": "pwsh",

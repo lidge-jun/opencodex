@@ -60,6 +60,19 @@ export function gcpCredentialMarkerAccount(value: string | undefined): string | 
   return account;
 }
 
+export type VertexConfiguredCredentialKind = "marker" | "ambient" | "reference" | "api-key";
+
+/**
+ * Classify a Vertex row's configured `apiKey` text without resolving it, so no caller has to read a
+ * keychain or the environment just to learn which kind of credential the row names. The management
+ * DTO and the static-catalog connection test share this one rule.
+ */
+export function vertexConfiguredCredentialKind(key: string | undefined): VertexConfiguredCredentialKind {
+  if (key?.startsWith(GCP_CREDENTIAL_MARKER_PREFIX)) return "marker";
+  if (!key?.trim() || key === "N/A" || key.startsWith("<")) return "ambient";
+  return key.startsWith("keychain:") || /^\$\{?\w+\}?$/.test(key) ? "reference" : "api-key";
+}
+
 /**
  * Whether a pasted API-key value is in fact a GCP credential JSON. Used by the save path to
  * divert JSON material out of the literal-key flow before it reaches `config.json`. Deliberately
@@ -125,6 +138,18 @@ const sourceObservations = new Map<string, { source: string; generation: number 
 let sourceEpoch = 0;
 let lastReconciledGeneration = 0;
 let liveSources = new Set<string>();
+// Last token exchange that succeeded, per credential scope. Proof the dashboard can show without a
+// network call; it lapses on its own once the source the next resolve would use changes.
+const verifiedSources = new Map<string, { source: string; generation: number }>();
+const adcScope = (markerAccount: string | undefined) => markerAccount ? `marker:${markerAccount}` : "host";
+
+/** True when this process minted a token from the credential source the next request would use. */
+export function vertexAdcCredentialVerified(markerAccount?: string): boolean {
+  const verified = verifiedSources.get(adcScope(markerAccount));
+  if (!verified) return false;
+  const current = observeAdcSource(markerAccount);
+  return current.source === verified.source && current.generation === verified.generation;
+}
 
 export function sweepExpiredGcpAdcTokens(now = Date.now()): number {
   const skew = getRefreshSkewMs();
@@ -244,7 +269,7 @@ function currentAdcSourceKey(markerAccount: string | undefined): string {
 
 /** Every observed source transition gets a fresh incarnation, including A→B→A. */
 function observeAdcSource(markerAccount: string | undefined): { source: string; generation: number } {
-  const scope = markerAccount ? `marker:${markerAccount}` : "host";
+  const scope = adcScope(markerAccount);
   const source = currentAdcSourceKey(markerAccount);
   const previous = sourceObservations.get(scope);
   if (previous?.source === source) return previous;
@@ -394,8 +419,13 @@ async function resolveAccessTokenUncached(markerAccount: string | undefined, sig
   );
 }
 
-/** Returns a Bearer access token for the `Authorization` header on Vertex AI calls (cached + refreshed). */
-export async function getVertexAccessTokenWithAuthority(options?: { signal?: AbortSignal; fetch?: FetchImpl; markerAccount?: string; beforeSend?: () => void }): Promise<VertexTokenAuthority> {
+/**
+ * Returns a Bearer access token for the `Authorization` header on Vertex AI calls (cached + refreshed).
+ * `forceExchange` skips the completed-token cache so the caller observes a real exchange: the
+ * connection test uses it, because a cached token outlives a revoked refresh credential. It still
+ * joins an exchange already in flight and refreshes the cache on success; other callers keep the cache.
+ */
+export async function getVertexAccessTokenWithAuthority(options?: { signal?: AbortSignal; fetch?: FetchImpl; markerAccount?: string; beforeSend?: () => void; forceExchange?: boolean }): Promise<VertexTokenAuthority> {
   // The marker travels as an argument, never as process-global state: a module-level "active
   // marker" written by the router would race across concurrent requests for different providers
   // and could resolve one provider's Vertex call with another provider's service account. The
@@ -418,7 +448,7 @@ export async function getVertexAccessTokenWithAuthority(options?: { signal?: Abo
   }
   const writerGeneration = captureConfigGeneration();
   for (const [source, cached] of tokenCache) {
-    if (source === expectedSource && cached.generation === expected.generation && cached.expiresAtMs - skew > now) {
+    if (!options?.forceExchange && source === expectedSource && cached.generation === expected.generation && cached.expiresAtMs - skew > now) {
       return { token: cached.token, source, generation: expected.generation, markerAccount };
     }
     if (cached.expiresAtMs - skew <= now) tokenCache.delete(source);
@@ -449,12 +479,25 @@ export async function getVertexAccessTokenWithAuthority(options?: { signal?: Abo
       if (source !== expectedSource || current.source !== source || current.generation !== expected.generation) {
         throw new Error("Vertex ADC source changed during token exchange");
       }
+      if (typeof token.access_token !== "string" || !token.access_token) {
+        throw new Error("Google OAuth token response has no access_token");
+      }
       const expiresAtMs = Date.now() + Math.max(0, token.expires_in * 1000);
       if (writerGeneration >= lastReconciledGeneration || liveSources.has(source)) {
         tokenCache.set(source, { token: token.access_token, expiresAtMs, generation: expected.generation });
         sweepExpiredOnWrite(Date.now());
       }
+      verifiedSources.set(adcScope(markerAccount), { source, generation: expected.generation });
       return { token: token.access_token, source, generation: expected.generation, markerAccount };
+    } catch (error) {
+      // Drop only this exchange's own proof: a newer exchange for a changed source may already
+      // have recorded its success under the same scope, and that proof still holds.
+      const scope = adcScope(markerAccount);
+      const verified = verifiedSources.get(scope);
+      if (!controller.signal.aborted && verified?.source === expectedSource && verified.generation === expected.generation) {
+        verifiedSources.delete(scope);
+      }
+      throw error;
     } finally {
       owned.settled = true;
       if (inflight.get(cacheKey) === owned) inflight.delete(cacheKey);
@@ -538,6 +581,7 @@ export function vertexRequestAuthorityIsCurrent(request: object, target?: string
 
 /** Test seam: restores complete process-local token and reconciliation state. */
 export function __resetVertexTokenCache(): void {
+  verifiedSources.clear();
   tokenCache.clear();
   for (const entry of inflight.values()) entry.controller.abort();
   inflight.clear();

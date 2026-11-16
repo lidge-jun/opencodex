@@ -1,9 +1,9 @@
 /**
  * Pacing that travels with a stream (#8601).
  *
- * A Remote Link turn while the link WebSocket feature is on reads its upstream body only as its client drains. Each
- * relay stage between the upstream and the client normally keeps one chunk queued ahead of its reader; a stage whose
- * source is paced queues none instead and marks its own output, so the whole chain pulls on demand. Streams that were
+ * Every relayed Remote Link turn reads its upstream body only as its client drains, with or without the link WebSocket
+ * feature. Each relay stage between the upstream and the client normally keeps one chunk queued ahead of its reader; a
+ * stage whose source is paced queues none instead and marks its own output, so the whole chain pulls on demand. Streams that were
  * never marked keep their default queue: every other request is unchanged.
  */
 const paced = new WeakSet<ReadableStream<Uint8Array>>();

@@ -8,6 +8,9 @@ export function skipsCodexShimAutoRestore(command: string | undefined, args: str
   // Reading the bounded link diagnostics file must not repair, harden or create anything first.
   if (command === "link" && args[1] === "diagnostics") return true;
   if (command === "update" && isOrchestratedUpdateArgv(args)) return true;
+  // The headless Desktop updater validates its installation before anything changes; with or
+  // without --json it must not repair a shim first.
+  if (command === "update" && args.includes("--desktop")) return true;
   if (command === "sync") return true;
   if (command === "status" || command === "doctor") return true;
   // Explicit orphan-token recovery must not mutate Codex before its guards run.

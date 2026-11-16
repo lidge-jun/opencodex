@@ -192,6 +192,16 @@ export function comboTargetCooldownExpiry(
   return entry.cooldownUntil;
 }
 
+/** HTTP status recorded with the target's live cooldown, when the cooling failure had one. */
+export function comboTargetCooldownStatus(
+  comboId: string,
+  target: Pick<OcxComboTarget, "provider" | "model">,
+  now = Date.now(),
+): number | undefined {
+  return isComboTargetInCooldown(comboId, target, now)
+    ? targetCooldowns.get(cooldownMapKey(comboId, target))?.status : undefined;
+}
+
 /** Identity of the current live write, independent of its possibly repeated expiry. */
 export function comboTargetCooldownRevision(
   comboId: string,

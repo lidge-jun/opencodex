@@ -273,7 +273,7 @@ export default function AddProviderModal({
       dispatch({ type: "set-oauth-tos-pending", providerId });
       return;
     }
-    void loginOAuth(providerId, oauthSetters, loginRow);
+    void loginOAuth(providerId, oauthSetters, false, loginRow);
   };
 
   // A code typed for one Accounts login belongs to that login on this target. A new login (its
@@ -407,7 +407,7 @@ export default function AddProviderModal({
           const id = oauthTosPending;
           if (!id) return;
           dispatch({ type: "set-oauth-tos-pending", providerId: null });
-          void loginOAuth(id, oauthSetters, loginRow);
+          void loginOAuth(id, oauthSetters, true, loginRow);
         }}
       />
     )}
