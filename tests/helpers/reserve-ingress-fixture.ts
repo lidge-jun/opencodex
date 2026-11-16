@@ -190,7 +190,7 @@ export async function reserveIngressFixture(options: {
       publicPort = await findAvailablePort(0, "0.0.0.0", { reservedPort: localPort });
       expect(publicPort).not.toBe(localPort);
       config = { port: publicPort, hostname, defaultProvider: "openai",
-        openaiProviderTierVersion: 2, codexDesktopAuthless: true, codexMainAccountHardLock: false,
+        openaiProviderTierVersion: 2, codexDesktopAuthless: true, codexReserveEnabled: true, codexMainAccountHardLock: false,
         websockets: true, subagentModels: [], codexAccounts: [], codexAccountNamespaces: { main: MAIN_CODEX_ACCOUNT_NAMESPACE_TARGET },
         unauthenticatedLoopbackListener: { enabled: true, port: localPort },
         providers: {

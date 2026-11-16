@@ -8,11 +8,13 @@ import type { OcxConfig } from "../types";
  * it afterwards. `codexReserveMigration` records that the seed happened.
  *
  * Until a document carries the marker, Reserve reads the legacy flag, which is exactly the value the
- * migration persists. The seed is written only when it matters: when a write changes authless (the
- * seed then comes from the persisted pre-write document, so the change cannot move Reserve), when
- * Reserve is set explicitly, or at startup for a file that already sets authless. Writes that change
- * neither leave an unmarked document byte-for-byte alone. Once the marker exists, an absent
- * `codexReserveEnabled` means off, so deleting the field cannot bring the inheritance back.
+ * migration persists. Startup records the seed for every unmarked file once, so after the first start
+ * on this version a hand edit of authless cannot move Reserve. Writers record it only when it matters:
+ * when a write changes authless (the seed then comes from the persisted pre-write document, so the
+ * change cannot move Reserve), when Reserve is set explicitly, or when a new document is created with
+ * authless on (new documents start disabled). Other writes leave an unmarked document byte-for-byte
+ * alone. Once the marker exists, an absent `codexReserveEnabled` means off, so deleting the field
+ * cannot bring the inheritance back.
  *
  * Enabling the capability never manufactures permission: every Reserve request still needs the
  * upstream, credential-bound Reserve allowance, a non-client role and a loopback admission.
@@ -68,9 +70,8 @@ export function projectReserveCapabilityMigration(persisted: unknown, candidate:
     return projected;
   }
   const explicit = typeof candidate.codexReserveEnabled === "boolean";
-  // With no file yet there is no earlier authless value to protect; the new document's own reading
-  // stands until its seed is recorded (at startup, or by the first write that changes authless).
-  const legacy = (prior ?? candidate).codexDesktopAuthless === true;
+  // A new document has no earlier authless value to carry: it starts disabled.
+  const legacy = prior ? prior.codexDesktopAuthless === true : false;
   // Nothing to record while authless keeps its persisted value: the reading is unchanged.
   if (!explicit && (candidate.codexDesktopAuthless === true) === legacy) return candidate;
   const projected = { ...candidate };

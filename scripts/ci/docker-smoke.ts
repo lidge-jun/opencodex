@@ -222,7 +222,8 @@ const stateProbe = `
   // Independent oracle measured by isolated startup; update only for an intentional contract change.
   // Do not derive expected values from runtime migration/default helpers.
   const additions = {
-    appOwnedMemoryBudgetMb: 256, fastRows: true, managementUsageMaxReadBytes: 67108864,
+    appOwnedMemoryBudgetMb: 256, codexReserveEnabled: false, codexReserveMigration: 1,
+    fastRows: true, managementUsageMaxReadBytes: 67108864,
     openaiProviderTierVersion: 2,
     subagentModels: ['gpt-6-astra', 'gpt-6.1-sol', 'gpt-6-luna'],
     subagentModelsVersion: 3,

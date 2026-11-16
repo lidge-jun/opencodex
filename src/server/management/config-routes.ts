@@ -11,7 +11,7 @@ import { mainAccountHardLockFallbackSchema } from "../../config/schema/main-acco
 import { anthropicSidecarPatchError } from "../../config/schema/anthropic-account-pool";
 import { isAnthropicInstanceId } from "../../providers/anthropic-instance-id";
 import { captureConfigTopLevelRollback } from "../../config/rebase-provenance";
-import { adoptReserveCapabilityMigration, isCodexReserveEnabled, migrateReserveCapability } from "../../config/reserve-capability";
+import { adoptReserveCapabilityMigration, isCodexReserveEnabled, RESERVE_CAPABILITY_MIGRATION_VERSION } from "../../config/reserve-capability";
 import { readConfigFileSnapshot } from "../../config/diagnostics";
 import type { IntegrationClientId } from "../../integrations/registry";
 import { randomUUID } from "node:crypto";
@@ -794,10 +794,13 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
         else if (body.codexMainAccountHardLock === true) deleteConfigTopLevelKey(config, "codexMainAccountHardLock");
         if (hardLockFallback === null) deleteConfigTopLevelKey(config, "codexMainAccountHardLockFallback");
         else if (hardLockFallback?.success) config.codexMainAccountHardLockFallback = hardLockFallback.data;
-        // Seed Reserve from the current authless value before either switch moves (#4961), so
-        // turning authless on or off can never change Reserve. An explicit false is persisted.
-        if (body.codexDesktopAuthless !== undefined || body.codexReserveEnabled !== undefined) migrateReserveCapability(config);
-        if (typeof body.codexReserveEnabled === "boolean") config.codexReserveEnabled = body.codexReserveEnabled;
+        // An explicit Reserve choice is the operator's decision (#4961); an explicit false is persisted.
+        // An authless-only change is not seeded here: the writer seeds from the file under its lock,
+        // so a stale live object cannot overwrite another process's Reserve decision.
+        if (typeof body.codexReserveEnabled === "boolean") {
+          config.codexReserveEnabled = body.codexReserveEnabled;
+          config.codexReserveMigration = RESERVE_CAPABILITY_MIGRATION_VERSION;
+        }
         if (body.codexDesktopAuthless === true) config.codexDesktopAuthless = true;
         else if (body.codexDesktopAuthless === false) deleteConfigTopLevelKey(config, "codexDesktopAuthless");
         if (body.codexClientCompaction === true) config.codexClientCompaction = true;

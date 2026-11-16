@@ -303,7 +303,7 @@ describe("terminal routed vision helpers cannot spend Reserve", () => {
   for (const transport of ["chat", "responses"] as const) {
     test.each(["still-off", "conversation", "keyed"] as const)(`${transport} %s control retains inference`, async control => {
       const fixture = await reserveIngressFixture({ primaryLoopback: true, configure: config => {
-        if (control === "still-off") config.codexDesktopAuthless = false;
+        if (control === "still-off") config.codexReserveEnabled = false;
       } });
       try {
         fixture.allow();

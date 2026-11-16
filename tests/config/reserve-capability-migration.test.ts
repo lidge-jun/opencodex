@@ -111,9 +111,9 @@ describe("projectReserveCapabilityMigration", () => {
     const fresh = projectReserveCapabilityMigration(undefined, baseConfig());
     expect(isCodexReserveEnabled(fresh)).toBe(false);
     expect(Object.hasOwn(fresh, "codexReserveEnabled")).toBe(false);
-    // A new document that sets authless keeps the legacy reading until startup records its seed.
-    const withAuthless = baseConfig({ codexDesktopAuthless: true });
-    expect(projectReserveCapabilityMigration(undefined, withAuthless)).toBe(withAuthless);
+    // A new document starts disabled even when it is created with authless on.
+    const withAuthless = projectReserveCapabilityMigration(undefined, baseConfig({ codexDesktopAuthless: true }));
+    expect(withAuthless).toMatchObject({ codexReserveEnabled: false, codexReserveMigration: MIGRATED });
   });
 
   test("a write that leaves authless alone records nothing on an unmarked document", () => {
@@ -197,11 +197,14 @@ describe("persisted writers carry the one-time migration", () => {
     migrateStartupReserveCapability(loadConfig());
     expect(readConfigFile()).toMatchObject({ codexReserveEnabled: false, codexReserveMigration: MIGRATED });
 
-    // A file that never set authless is left byte-for-byte alone and reads Reserve as off.
+    // A file that never set authless records its seed too, so a later hand edit of authless cannot move Reserve.
     writeConfigFile(baseConfig());
-    const untouched = readFileSync(getConfigPath(), "utf-8");
-    expect(isCodexReserveEnabled(migrateStartupReserveCapability(loadConfig()))).toBe(false);
-    expect(readFileSync(getConfigPath(), "utf-8")).toBe(untouched);
+    migrateStartupReserveCapability(loadConfig());
+    expect(readConfigFile()).toMatchObject({ codexReserveEnabled: false, codexReserveMigration: MIGRATED });
+    const edited = readConfigFile();
+    edited.codexDesktopAuthless = true;
+    writeConfigFile(edited);
+    expect(isCodexReserveEnabled(loadConfig())).toBe(false);
   });
 
   test("the live writer keeps another process's Reserve change instead of reapplying a stale value", () => {
@@ -247,30 +250,63 @@ describe("/api/settings exposes codexReserveEnabled", () => {
     });
   }
 
-  test("turning authless off keeps the seeded Reserve, and Reserve toggles persist explicitly", async () => {
-    const config = baseConfig({ codexDesktopAuthless: true });
-    const saved: OcxConfig[] = [];
-    const convergences = { count: 0 };
-    const read = await handleManagementAPI(request("GET"), new URL("http://127.0.0.1:10100/api/settings"), config, deps(saved, convergences));
+  function liveFrom(file: Partial<OcxConfig>): OcxConfig {
+    writeConfigFile(baseConfig(file));
+    const live = loadConfig();
+    armClaudeCodeBaseline(live);
+    return live;
+  }
+  const realDeps = (convergences = { count: 0 }): ManagementApiDeps => ({
+    getCachedStartupHealth: async () => startupHealthFixture(),
+    createManagementConvergeCodex: catalogConvergenceFactory(() => { convergences.count += 1; }),
+  });
+  const put = (config: OcxConfig, body: unknown, deps = realDeps()) =>
+    handleManagementAPI(request("PUT", body), new URL("http://127.0.0.1:10100/api/settings"), config, deps);
+
+  test("authless changes leave the seeded Reserve alone, and Reserve toggles persist explicitly", async () => {
+    const config = liveFrom({ codexDesktopAuthless: true });
+    const read = await handleManagementAPI(request("GET"), new URL("http://127.0.0.1:10100/api/settings"), config, realDeps());
     expect(await read!.json()).toMatchObject({ codexReserveEnabled: true, codexDesktopAuthless: true });
 
-    const authlessOff = await handleManagementAPI(request("PUT", { codexDesktopAuthless: false }), new URL("http://127.0.0.1:10100/api/settings"), config, deps(saved, convergences));
+    const authlessOff = await put(config, { codexDesktopAuthless: false });
     expect(authlessOff!.status).toBe(200);
     expect(await authlessOff!.json()).toMatchObject({ codexReserveEnabled: true, codexDesktopAuthless: false });
-    expect(saved.at(-1)).toMatchObject({ codexReserveEnabled: true, codexReserveMigration: MIGRATED });
+    expect(readConfigFile()).toMatchObject({ codexReserveEnabled: true, codexReserveMigration: MIGRATED });
 
-    const reserveOff = await handleManagementAPI(request("PUT", { codexReserveEnabled: false }), new URL("http://127.0.0.1:10100/api/settings"), config, deps(saved, convergences));
+    const convergences = { count: 0 };
+    const reserveOff = await put(config, { codexReserveEnabled: false }, realDeps(convergences));
     expect(reserveOff!.status).toBe(200);
     expect(await reserveOff!.json()).toMatchObject({ codexReserveEnabled: false });
-    expect(saved.at(-1)!.codexReserveEnabled).toBe(false);
-    const convergedAfterReserve = convergences.count;
+    expect(readConfigFile()).toMatchObject({ codexReserveEnabled: false, codexReserveMigration: MIGRATED });
+    expect(convergences.count).toBe(1);
 
-    const authlessOn = await handleManagementAPI(request("PUT", { codexDesktopAuthless: true }), new URL("http://127.0.0.1:10100/api/settings"), config, deps(saved, convergences));
+    const authlessOn = await put(config, { codexDesktopAuthless: true });
     expect(await authlessOn!.json()).toMatchObject({ codexReserveEnabled: false, codexDesktopAuthless: true });
-    expect(convergedAfterReserve).toBeGreaterThan(0);
+    expect(readConfigFile()).toMatchObject({ codexReserveEnabled: false, codexDesktopAuthless: true });
 
-    const bad = await handleManagementAPI(request("PUT", { codexReserveEnabled: "yes" }), new URL("http://127.0.0.1:10100/api/settings"), config, deps(saved, convergences));
+    const bad = await put(config, { codexReserveEnabled: "yes" });
     expect(bad!.status).toBe(400);
+  });
+
+  test.each([
+    [false, true],
+    [true, false],
+  ] as const)("an authless update from a stale live object keeps another process's Reserve decision (authless %p, other sets %p)", async (authless, decided) => {
+    const live = liveFrom({ codexDesktopAuthless: authless });
+    const other = loadConfig();
+    other.codexReserveEnabled = decided;
+    saveConfig(other);
+    expect(readConfigFile()).toMatchObject({ codexReserveEnabled: decided, codexReserveMigration: MIGRATED });
+    const response = await put(live, { codexDesktopAuthless: !authless });
+    expect(response!.status).toBe(200);
+    expect(await response!.json()).toMatchObject({ codexReserveEnabled: decided, codexDesktopAuthless: !authless });
+    expect(readConfigFile()).toMatchObject({ codexReserveEnabled: decided, codexReserveMigration: MIGRATED });
+  });
+
+  test("creating a config with authless on starts Reserve disabled", () => {
+    saveConfig(baseConfig({ codexDesktopAuthless: true }));
+    expect(readConfigFile()).toMatchObject({ codexDesktopAuthless: true, codexReserveEnabled: false, codexReserveMigration: MIGRATED });
+    expect(isCodexReserveEnabled(loadConfig())).toBe(false);
   });
 
   test("the real writer persists the seed when only authless changes", async () => {
