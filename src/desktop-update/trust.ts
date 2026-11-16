@@ -4,7 +4,7 @@
  * The public key and feed are the ones the Desktop GUI updater embeds in
  * `desktop/src-tauri/tauri.conf.json` (`plugins.updater`). They are restated here because a
  * compiled `ocx.exe` cannot read the Tauri configuration at run time;
- * `tests/update/desktop-headless-trust.test.ts` fails if either copy drifts, so the headless path
+ * `tests/update/update-desktop-headless-release.test.ts` fails if either copy drifts, so the headless path
  * can never verify with a key the GUI would not use.
  */
 

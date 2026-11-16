@@ -696,6 +696,45 @@ La aplicación orquestada sale con 0 cuando el resultado está verificado o ya e
 
 Las instalaciones independientes compiladas, incluido el paquete de escritorio MSI Windows, se actualizan a través de **Buscar actualizaciones...** en OpenCodex Desktop, con `ocx update --desktop` en una instalación de Desktop para Windows (que verifica el MSI publicado con la clave del actualizador de la aplicación, lo instala sin interfaz y reinicia el proxy que sigue sirviendo la versión anterior; consulta la guía de la aplicación de escritorio), o reinstalando el binario independiente desde [GitHub Lanzamientos](https://github.com/lidge-jun/opencodex/releases). `ocx system update check` reporta `installer: "standalone"`, `canUpdate: false` y `reason: "standalone_install"` con esa guía. `ocx update` sin `--desktop` sale sin éxito con la misma pista; no ejecuta una actualización de gestor de paquetes para el ejecutable compilado. Una comprobación de fuente genuina todavía reporta `installer: "source"` y `reason: "source_checkout"`.
 
+#### Actualización de Desktop para Windows sin interfaz
+
+```bash
+ocx update --desktop [--check] [--json]
+```
+
+Ejecútalo con el propio `ocx.exe` de la instalación de Desktop para Windows (el que está junto a
+`opencodex-desktop.exe`), desde una terminal con privilegios elevados, una sesión SSH o un servicio. Cualquier otro `ocx`
+sale con 64 sin cambiar nada. Lee el mismo canal de versiones que usa el actualizador de la aplicación y, cuando hay una versión más reciente publicada:
+
+1. descarga el MSI de Windows desde el recurso exacto de la versión en GitHub por HTTPS (como máximo tres
+   redirecciones a los hosts de recursos de GitHub, un límite de 1 GiB y plazos de conexión, inactividad y total), sin enviar credenciales;
+2. lo verifica con la clave pública integrada del actualizador de la aplicación, rechaza una firma incorrecta o ausente,
+   una firma de otra versión o plataforma, o un archivo que no sea un MSI, y vuelve a verificar la copia guardada justo antes de instalar;
+3. aparta su propio `ocx.exe` en ejecución dentro de la carpeta de instalación, para que el instalador no tenga que cerrar
+   el comando que lo inició, ejecuta `msiexec /i <msi> /qn /norestart /l*v <log>` y espera su código de salida (0 y 3010 son
+   éxito; 3010 indica que Windows debe reiniciarse para reemplazar archivos en uso). Una instalación fallida devuelve el archivo apartado a su lugar;
+   tras una correcta, se elimina en el siguiente reinicio o en la siguiente ejecución;
+4. comprueba que el `ocx.exe` instalado informa la nueva versión;
+5. reinicia el proxy que aún sirve la versión anterior mediante su propio reinicio en el lugar, de modo que Desktop, el servicio
+   o el proxy independiente inician el ejecutable instalado, y espera a que la nueva versión responda en `/healthz`. Un proxy de cliente
+   conectado se conserva a sí mismo en ese reinicio: si lo gestiona su servicio en segundo plano, lo reemplaza el `ocx service restart`
+   instalado; si la comprobación demuestra que el OpenCodex Desktop de esta instalación ejecuta exactamente ese proxy, el
+   `ocx stop --json` instalado lo detiene, igual que el actualizador de la propia aplicación, y la aplicación inicia la nueva versión al cabo de unos segundos.
+
+Nunca se detiene un proxy cuyo ejecutable no sea el `ocx.exe` de esta instalación, uno que este directorio de inicio no pueda acreditar
+ni uno más reciente que la instalación. Si no había ningún proxy en ejecución, no se inicia ninguno. Sin una versión más reciente publicada,
+el comando reinicia igualmente un proxy antiguo que haya dejado una instalación MSI anterior. `--check` informa las versiones publicada,
+instalada y en servicio sin descargar ni reiniciar nada.
+
+Códigos de salida: 0 actualizado, ya al día o instalado sin proxy en ejecución; 1 no se instaló nada (firma rechazada, fallo de descarga
+o fallo de Windows Installer, cuya ruta de registro se muestra); 2 instalado, pero el proxy anterior sigue sirviendo o Windows debe reiniciarse antes;
+3 el instalador no terminó en 15 minutos o informó éxito sin instalar la nueva versión; 64 uso no válido o no es una instalación de Desktop para Windows.
+`--json` imprime un objeto `ocx.desktop.headless-update/1` con `outcome`, `exitCode`, `installedVersion`,
+`targetVersion`, `runtime`, `installer`, `reason` y `message`.
+
+Cuando `ocx status` en una instalación de Desktop para Windows detecta una versión instalada más reciente que el proxy en ejecución,
+su aviso de versión nombra ambas versiones y muestra el comando `ocx update --desktop`.
+
 Cuando OpenCodex se instala a través de mise, este comando sale sin éxito antes de detener el proxy o cambiar los archivos del paquete y muestra `mise upgrade <tool>`, utilizando el alias local mise verificado. Las comprobaciones de actualización permanecen disponibles e informan la instalación como administrada externamente. Un registro de propiedad de mise ilegible o inconsistente provoca el rechazo de la operación sin intentar adivinar el nombre de la herramienta, y `--tag preview` nunca cambia la selección configurada de mise.
 
 En Linux, un servicio en segundo plano cuyo lanzador registrado es el lanzador de paquetes de mise (`<tool>/latest/node_modules/.bin/ocx`, no es una mise shim) sigue `mise upgrade` por sí mismo: dentro de unos diez segundos de la nueva versión se establece, drena las solicitudes activas y se reinicia en ella, y se recupera de la misma manera si mise poda más tarde la versión que estaba ejecutando. En macOS, para un servicio instalado a través de una shim de mise, y para un proxy en primer plano, reinicie el servidor después de actualizar (en macOS, `ocx service repair` primero).

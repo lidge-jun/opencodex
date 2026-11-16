@@ -222,7 +222,7 @@ filesystem, Windows Installer, the runtime record and the terminal. Every depend
 `headless.ts` is injected; the tests drive it with fixture keys, fake timers and fake runners.
 
 Trust is the GUI updater's. `trust.ts` restates `plugins.updater.pubkey` and its endpoint from
-`desktop/src-tauri/tauri.conf.json`, and `tests/update/desktop-headless-release.test.ts` fails when
+`desktop/src-tauri/tauri.conf.json`, and `tests/update/update-desktop-headless-release.test.ts` fails when
 they differ. `release.ts` takes the feed's `windows-x86_64` entry (a differing
 `windows-x86_64-msi` entry refuses), requires the exact
 `github.com/lidge-jun/opencodex/releases/download/v<version>/OpenCodex-<version>-windows-x64.msi`
