@@ -10,7 +10,7 @@ PR from `dev` (Closes #8480), independent of #8742 and #8771; the Gemini inbound
 this branch, so their coverage is re-checked once both land.
 
 Class C4: a provider that launches a local agent process, plus a request-scoped policy gate.
-Revision 2 resolves audit round 1 (`.tmp/research/audit-080.md`: B1-B6); revision 3 resolves round 2
+Revision 2 resolves audit round 1 (`.tmp/research/audit-080.md`: B1-B6); revision 3 resolves round 2 and revision 4 round 3 (R3-1 phase-aware model proof)
 (`.tmp/research/audit-080-r2.md`: R2-1 pure selector resolution, R2-2 sandbox honesty, R2-3 model proof).
 
 ## Sources
@@ -21,7 +21,7 @@ Revision 2 resolves audit round 1 (`.tmp/research/audit-080.md`: B1-B6); revisio
   environment"; missing credentials fail with "Authentication required").
 - Permissions and sandbox: https://antigravity.google/docs/permissions?tab=cli and
   https://antigravity.google/docs/sandbox?tab=cli (the CLI starts in `request-review`: commands always ask, file access is
-  the workspace only, anything else asks; `--sandbox` forces the OS-level terminal sandbox, Seatbelt on macOS and
+  the workspace only, anything else asks; `--sandbox` forces the OS-level terminal sandbox where it is available, Seatbelt on macOS and
   namespaces on Linux, confining commands to the workspace, temp directories and build caches and blocking ~/.ssh and
   .env; user allow/deny rules in ~/.gemini/antigravity-cli/settings.json still apply).
 - Google staff answers on personal ACP use (interactive and user-directed, not an unattended worker pool or automated
@@ -85,14 +85,20 @@ advertised; a request for them gets a fixed -32601.
    value is used only when its option name or value is a Gemini model; otherwise 400.
 6. `session/prompt`. Every `config_option_update` replaces the tracked state.
 
-Model proof (checked after `session/new`, after each setter reply, before `session/prompt`, and after every
-`config_option_update`): the complete current state must contain exactly one model selector whose `currentValue`
-resolves unambiguously to an advertised option naming a Gemini model (and, when a model was requested, to that one). A
-removed selector, an unknown, malformed or ambiguous `currentValue`, or a non-Gemini value fails closed: before the prompt
-the turn ends with 502 `agy_acp_model_unproven` without sending `session/prompt`; during the prompt it sends
-`session/cancel`, refuses pending permissions, reaps and ends with 502 `agy_acp_model_switched`. A previous state's
-selector is never kept after a replacement. Offered-value lists in 400 errors contain only validated model or effort
-identifiers, never other child-authored labels.
+Model proof is phase-aware (revision 4, audit round 3 R3-1):
+
+- After `session/new`: the complete state must contain exactly one model selector with a resolvable `currentValue`, and
+  the requested model must match exactly one advertised Gemini option. The initial `currentValue` need not be the
+  requested model (the client has not changed it yet); without a requested model it must itself be a Gemini option.
+- While the model setter is pending: a `config_option_update` replaces the state; it fails closed only when the selector
+  is removed or its value becomes unknown or ambiguous, not because the previous Gemini selection is still active.
+- After the model setter's acknowledgement, after the thought-level setter, immediately before `session/prompt`, and on
+  every update during generation: exactly one selector whose `currentValue` resolves to the requested model (or, with no
+  request, to a Gemini option).
+- Failure before the prompt ends the turn with 502 `agy_acp_model_unproven` and no `session/prompt` is sent; during
+  generation it sends `session/cancel`, refuses pending permissions, reaps and ends with 502 `agy_acp_model_switched`.
+  A previous state's selector is never kept after a replacement. Offered-value lists in 400 errors contain only validated
+  model or effort identifiers, never other child-authored labels.
 
 Dispatch by frame shape: a frame with `method` and `id` is a server request (permission → exact
 `{outcome:{outcome:"cancelled"}}` with the original id; anything else → -32601), `method` without `id` a notification,
@@ -175,7 +181,8 @@ spawn) as defense in depth. Signals:
   local and remote), `tests/config/agy-acp-config.test.ts` (pool, stale canonical adapter, custom row, OAuth mode, combo
   alias, disabled combo member, fallback map alias refused; the same Gemini model on `google` allowed; validation reads no
   credential, shown with an unavailable keychain reference), fake-child cases for an accepted `--sandbox` whose
-  enforcement is unknown (no claim is made) and for a removed model selector and an unknown `currentValue`, plus the registry authority and
+  enforcement is unknown (no claim is made) and for a removed model selector and an unknown `currentValue`, a success with initial `gemini-a` and requested `gemini-b`
+  (setter first, acknowledgement, then exactly one `session/prompt`), and a failed or wrong-model acknowledgement, plus the registry authority and
   tool-conformance lists and a Responses pipeline test for the preflight 403.
 - Docs: `docs-site` reference/adapters (+ es), guides/providers (interactive-only use with the Google citations, local
   only, sandbox and permission behavior, residual user settings), `structure/adapters/registry.md`,
