@@ -84,6 +84,11 @@ export function createRequestSpendTracker(
   const ledger = (): SpendReservationLedger => (ledgerRef ??= sharedSpendLedger());
   let admissionPolicy: SpendAdmissionPolicy | undefined;
   let capturedPolicy: SpendAdmissionPolicy | undefined;
+  const capturePolicy = (): SpendAdmissionPolicy => {
+    if (capturedPolicy) return capturedPolicy;
+    const policy = ledgerRef?.policy ?? sharedSpendPolicy();
+    return capturedPolicy = Object.freeze({ root: Object.freeze({ ...policy.root }), identity: Object.freeze({ ...policy.identity }), pool: Object.freeze({ ...policy.pool }) });
+  };
   let initialEnforced: boolean | undefined;
   // Outstanding entries; exact dispatch reports move their reservation to the end.
   const live: string[] = [];
@@ -113,7 +118,7 @@ export function createRequestSpendTracker(
     || (scopes.identityId !== undefined && policy.identity.maxTokens !== undefined)
     || (scopes.poolId !== undefined && policy.pool.maxTokens !== undefined);
   const applicable = (scopes: SpendScopes): boolean => initialEnforced
-    ?? policyApplies(admissionPolicy ?? ledgerRef?.policy ?? sharedSpendPolicy(), scopes);
+    ?? policyApplies(admissionPolicy ?? capturedPolicy ?? ledgerRef?.policy ?? sharedSpendPolicy(), scopes);
   const estimates = () => ({ inputTokens: logCtx.spendInputEstimateTokens ?? logCtx.usageLogInputTokens ?? 0,
     outputCeilingTokens: logCtx.spendOutputCeilingTokens ?? 0 });
   const seedState = (seed: SpendSeed) => [...seeds.values()].find(state => state.seed === seed);
@@ -249,15 +254,13 @@ export function createRequestSpendTracker(
     },
     startRequest(target) {
       if (admissionPolicy) return;
-      const policy = ledgerRef?.policy ?? sharedSpendPolicy();
-      admissionPolicy = Object.freeze({ root: Object.freeze({ ...policy.root }), identity: Object.freeze({ ...policy.identity }), pool: Object.freeze({ ...policy.pool }) });
-      capturedPolicy = admissionPolicy;
+      admissionPolicy = capturePolicy();
       initialEnforced = applicable(selectedScopes(target));
       if (!initialEnforced) admissionPolicy = Object.freeze({ root: Object.freeze({}), identity: Object.freeze({}), pool: Object.freeze({}) });
     },
     // Combo prepayment can fix observe-only accounting before its child has an identity.
     // Optional hosted work still consults the original ceilings, never the live ledger policy.
-    hasCapturedSpendCeiling(target) { return capturedPolicy !== undefined && policyApplies(capturedPolicy, selectedScopes(target)); },
+    hasCapturedSpendCeiling(target) { return policyApplies(capturePolicy(), selectedScopes(target)); },
     get enforced(): boolean { return applicable(selectedScopes()); },
     get policyStarted(): boolean { return admissionPolicy !== undefined; },
     get spendAdmissionPolicy(): SpendAdmissionPolicy | undefined { return admissionPolicy; },

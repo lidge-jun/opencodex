@@ -104,11 +104,12 @@ through the Responses core.
 
 Translated turns with an applicable root, identity or pool token ceiling withhold the hosted
 declaration, completed Advisor history and beta, while the main model and other tools continue.
-`sidecar-execution.ts` starts the actual authenticated target's request spend policy before optional
-planning; an already captured Combo policy stays fixed. The budget's read-only
+`sidecar-execution.ts` checks the actual authenticated target's captured ceilings before optional
+planning without starting main-model accounting; an already captured Combo policy stays fixed. The budget's read-only
 `hasCapturedSpendCeiling` checks the original numeric ceilings against that target, including an
 identity selected after Combo prepayment. It does not change the initial accounting mode or reread
-live config. An existing entry trace receives `advisor-tool-withheld-by-spend-policy`; unmarked
+live config. Its hosted-only identity binding leaves ordinary accounting scopes unchanged.
+An existing entry trace receives `advisor-tool-withheld-by-spend-policy`; unmarked
 Combo children retain the existing trace behavior. Main-model terminal usage does not independently account for
 the hosted Advisor. The proxy Advisor retains its separately budgeted consultations; see
 [Responses spend](transports/responses-spend.md). The same integration test covers all three scopes,

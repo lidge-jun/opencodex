@@ -27,8 +27,6 @@ import { closeRequestHistoryIndex } from "../../../src/routing/history/indexer";
 import { clearResponseStateForTests, flushResponseState } from "../../../src/responses/state";
 import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
 import { removeTreeAfterBackgroundWork } from "../../helpers/remove-tree";
-import { apiKeyAccountLogLabel } from "../../../src/codex/account-label";
-import { captureProviderApiKeySelection } from "../../../src/providers/api-key-selection";
 
 const previousFetch = globalThis.fetch;
 const previousHome = process.env.OPENCODEX_HOME;
@@ -251,13 +249,8 @@ describe("Copilot Auto through the Responses pipeline", () => {
     expect(f.sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(0);
     expect(fallbackBodies).toHaveLength(1); expect(fallbackBodies[0].tool_choice).toEqual(choice);
     expect(fallbackBodies[0].tools).toEqual(tools); expect(log.provider).toBe(mode === "combo" ? "combo" : "fallback");
-    // Admission follows the actual fallback key before physical log attribution; it never
-    // inherits the refused Copilot candidate's identity.
-    if (mode === "policy") {
-      const identityId = apiKeyAccountLogLabel("fallback", captureProviderApiKeySelection(f.config.providers.fallback!));
-      expect(identityId).toMatch(/^k[a-f0-9]{32}$/);
-      expect(spendTargets.at(-1)).toEqual({ poolId: "fallback", identityId });
-    }
+    // The generic key route keeps its existing pre-key-commit identity, never Copilot's candidate.
+    if (mode === "policy") expect(spendTargets.at(-1)).toEqual({ poolId: "fallback", identityId: undefined });
     if (mode === "combo") {
       expect(isComboTargetInCooldown("mandatoryAuto", { provider: "github-copilot", model: "auto" })).toBe(false);
       clearComboSelectionState(); // Reset selection history, retaining any real target cooldown.

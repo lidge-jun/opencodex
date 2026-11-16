@@ -13,7 +13,7 @@ import { createRegisteredAdvisorPlan } from "./advisor-plan-slot";
 import { ADVISOR_TOOL_NAME, createAdvisorSidecarStep } from "./advisor-slot";
 import { advisorServerToolDestination, hasAdvisorServerTools, withholdAdvisorServerTools } from "../../adapters/anthropic/advisor-tool";
 import { addProtocolEntryReason } from "../../protocols/trace";
-import { responsesSpendTarget } from "./request-spend-target";
+import { responsesHostedAdvisorSpendTarget } from "./request-spend-target";
 import { buildToolBridgeMaps } from "./collaboration";
 import {
   planImageBridge,
@@ -189,12 +189,11 @@ export async function executeResponsesSidecars(
   }
 
   // Hosted Advisor usage is not independently accounted by the main model's terminal usage.
-  // Freeze the actual authenticated target's spend policy before an optional plan can await;
-  // startRequest preserves a policy already captured by an enclosing Combo budget.
-  if (advisorServerToolDestination(route.provider) && hasAdvisorServerTools(parsed)) {
+  // Read the actual authenticated target's captured ceilings before an optional plan can await;
+  // this query never starts or changes the main-model accounting mode.
+  if (hasAdvisorServerTools(parsed) && advisorServerToolDestination(route.provider)) {
     const budget = sendBudgetState.adapterSendBudget;
-    const target = responsesSpendTarget(logCtx, route.providerName);
-    budget?.startRequest?.(target);
+    const target = responsesHostedAdvisorSpendTarget(logCtx, route.providerName);
     if (budget?.hasCapturedSpendCeiling?.(target) ?? budget?.spendEnforced) {
       withholdAdvisorServerTools(parsed);
       addProtocolEntryReason(logCtx, "advisor-tool-withheld-by-spend-policy");

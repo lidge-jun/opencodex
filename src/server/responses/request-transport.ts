@@ -70,7 +70,7 @@ import { classifyModelFamilyForQuota } from "../../oauth/account-quota-rank";
 import { expandInferenceOAuthSendBudget } from "../inference/context";
 import { stampOAuthAccountLabel, stampApiKeyAccountLabel, usesApiKeyAccount } from "../../providers/label";
 import { apiKeyAccountLogLabel, oauthAccountLogLabel } from "../../codex/account-label";
-import { bindResponsesSpendTarget, responsesSpendTarget } from "./request-spend-target";
+import { bindResponsesHostedAdvisorSpendTarget, bindResponsesSpendTarget, responsesSpendTarget } from "./request-spend-target";
 import { isXaiResponsesDestination, resolveProviderTransport } from "../../providers/xai-transport";
 import { captureRouteStaticPolicy } from "../../router";
 import { CopilotAutoHttpError, resolveCopilotAuto } from "../../providers/github-copilot-auto";
@@ -228,12 +228,15 @@ export async function prepareResponsesTransport(
     ? captureOAuthAccountSelection(route.providerName) : null;
   const anthropicManualSelectionGeneration = anthropicRouting?.captureAnthropicManualSelectionGeneration();
   let servingOAuthSnapshot: OAuthAccessSnapshot | undefined;
-  // Spend identity follows admitted credentials without changing physical log attribution.
-  // Anthropic's log uses a provider tag; its snapshot keeps same-ID instances distinct here.
-  if (deferPhysicalAttribution || usesApiKeyAccount(route.provider) || anthropicInstance) bindResponsesSpendTarget(logCtx, () => ({
+  if (deferPhysicalAttribution) bindResponsesSpendTarget(logCtx, () => ({
     poolId: logCtx.spendPoolId ?? route.providerName,
-    identityId: copilotCandidate ? copilotCandidate.accountLogLabel
-      : usesApiKeyAccount(route.provider) ? apiKeyAccountLogLabel(route.providerName, route.provider._apiKeyAttempt)
+    identityId: copilotCandidate ? copilotCandidate.accountLogLabel : logCtx.accountLogLabel,
+  }));
+  // Hosted-Advisor identity follows admitted credentials without changing main-model accounting.
+  // Anthropic's log uses a provider tag; its snapshot keeps same-ID instances distinct here.
+  if (usesApiKeyAccount(route.provider) || anthropicInstance) bindResponsesHostedAdvisorSpendTarget(logCtx, () => ({
+    poolId: logCtx.spendPoolId ?? route.providerName,
+    identityId: usesApiKeyAccount(route.provider) ? apiKeyAccountLogLabel(route.providerName, route.provider._apiKeyAttempt)
       : anthropicInstance && servingOAuthSnapshot ? oauthAccountLogLabel(servingOAuthSnapshot.accountId, servingOAuthSnapshot.provider)
       : logCtx.accountLogLabel,
   }));

@@ -10,7 +10,8 @@ import { configureSharedSpendLedger, sharedSpendLedger, spendPolicyFromConfig } 
 import { setAdvisorPlanFactory } from "../../src/server/responses/advisor-plan-slot";
 import { clearComboRecallForTests } from "../../src/server/responses/combo-session-recall";
 import { handleResponses } from "../../src/server/responses/core";
-import { responsesSpendTarget } from "../../src/server/responses/request-spend-target";
+import { responsesHostedAdvisorSpendTarget, responsesSpendTarget } from "../../src/server/responses/request-spend-target";
+import type { RequestSpendTracker } from "../../src/server/responses/request-spend";
 import type { AnthropicInstanceId } from "../../src/providers/anthropic-instance-id";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -582,38 +583,69 @@ async function withAdvisorOAuthFixture(poolEnabled: boolean, run: (f: AnthropicI
 }
 
 async function oauthAdvisorTurn(f: AnthropicInstanceFixture, instance: AnthropicInstanceId, combo = false,
-  expectedSlot = 1, duringPlan?: (log: RequestLogContext) => Promise<void>) {
+  expectedSlot = 1, duringPlan?: (log: RequestLogContext) => Promise<void>, hostedAdvisor = true, ingress: "messages" | "responses" = "messages") {
   const wires: Wire[] = [];
   const logCtx: RequestLogContext = { provider: "", model: "" };
   Object.assign(f.config.providers[instance]!, { models: [f.model], fetch: (async (_input: unknown, init?: RequestInit) => {
     const headers = new Headers(init?.headers);
     f.ledger.record({ instance, accountId: f.ids[expectedSlot - 1]!, token: headers.get("authorization")?.replace(/^Bearer /, "") ?? "" });
-    wires.push({ body: JSON.parse(String(init?.body)) as Rec, headers });
+    const body = JSON.parse(String(init?.body)) as Rec;
+    wires.push({ body, headers });
+    if (body.stream === false) return Response.json({ id: "msg_fixture", type: "message", role: "assistant", model: f.model,
+      content: [{ type: "text", text: "ok" }], stop_reason: "end_turn", usage: { input_tokens: 1, output_tokens: 5 } });
     return sse([{ ...START, message: { ...START.message, model: f.model } }, ...text(0, "ok"), ...end()]);
   }) as typeof fetch });
   f.config.combos = { waterfall: { strategy: "failover", targets: [{ provider: instance, model: f.model }] } };
   configureSharedSpendLedger(spendPolicyFromConfig(f.config.spend));
   if (duringPlan) setAdvisorPlanFactory(f.config, async () => { await duringPlan(logCtx); return null; });
   try {
-    const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
-      method: "POST", headers: { "content-type": "application/json", "anthropic-beta": BETA },
-      body: JSON.stringify({ model: combo ? "combo/waterfall" : `${instance}/${f.model}`, max_tokens: 64, stream: false,
-        tools: [READ, ADVISOR], messages: followUp([
+    const model = combo ? "combo/waterfall" : `${instance}/${f.model}`;
+    const req = new Request(`http://localhost/v1/${ingress}`, {
+      method: "POST", headers: { "content-type": "application/json", ...(hostedAdvisor ? { "anthropic-beta": BETA } : {}) },
+      body: JSON.stringify(ingress === "responses" ? { model, max_output_tokens: 64, stream: false,
+        tools: [{ type: "function", name: READ.name, description: READ.description, parameters: READ.input_schema }], input: "ordinary accounting control" }
+        : { model, max_tokens: 64, stream: false,
+        tools: hostedAdvisor ? [READ, ADVISOR] : [READ], messages: hostedAdvisor ? followUp([
           { type: "server_tool_use", id: "srvtoolu_adv1", name: "advisor", input: {} },
           { type: "advisor_tool_result", tool_use_id: "srvtoolu_adv1", content: REDACTED },
           { type: "text", text: "Earlier answer." },
-        ]) }),
-    }), f.config, logCtx, { requestId: `oauth-advisor-${crypto.randomUUID()}`, start: Date.now() });
+        ]) : [{ role: "user", content: "ordinary accounting control" }] }),
+    });
+    const context = { requestId: `oauth-advisor-${crypto.randomUUID()}`, start: Date.now() };
+    const response = ingress === "responses" ? await handleResponses(req, f.config, logCtx, context)
+      : await handleClaudeMessages(req, f.config, logCtx, context);
     return { status: response.status, body: await response.text(), wires, logCtx };
   } finally { setAdvisorPlanFactory(f.config, null); }
 }
 
 describe("hosted Advisor with admitted Anthropic OAuth identities", () => {
+  for (const ingress of ["messages", "responses"] as const) for (const instance of ["anthropic", "anthropic2"] as const)
+    for (const poolEnabled of [false, true]) test(`${ingress}: ${instance}, pool=${poolEnabled} keeps ordinary accounting without hosted Advisor`, async () => {
+    await withAdvisorOAuthFixture(poolEnabled, async f => {
+      f.config.spend = { identity: { maxTokens: 1 } };
+      const result = await oauthAdvisorTurn(f, instance, false, 1, undefined, false, ingress);
+      expect(result.status, result.body).toBe(200);
+      expect(result.wires).toHaveLength(1);
+      expect(toolTypes(result.wires[0]!)).toEqual(["function"]);
+      expect(betas(result.wires[0]!)).not.toContain(BETA);
+      expect(result.logCtx.accountLogLabel).toBeUndefined();
+      const tracker = result.logCtx.spendTracker as RequestSpendTracker;
+      expect(tracker.policyStarted).toBe(true);
+      expect(tracker.enforced).toBe(false);
+      expect(tracker.spendAdmissionPolicy).toEqual({ root: {}, identity: {}, pool: {} });
+      expect(responsesSpendTarget(result.logCtx, instance).identityId).toBeUndefined();
+      const identity = responsesHostedAdvisorSpendTarget(result.logCtx, instance).identityId;
+      expect(identity).toMatch(/^o[a-f0-9]{6}$/);
+      expect(sharedSpendLedger().snapshot("identity", identity!)).toBeUndefined();
+      f.ledger.assertNoCrossSend();
+    });
+  });
   for (const instance of ["anthropic", "anthropic2"] as const) for (const poolEnabled of [false, true])
-    for (const combo of [false, true]) for (const limited of [false, true]) {
-      test(`${instance}, pool=${poolEnabled}, combo=${combo}, identity ceiling=${limited}`, async () => {
+    for (const combo of [false, true]) for (const maxTokens of [undefined, 1, 100_000]) {
+      test(`${instance}, pool=${poolEnabled}, combo=${combo}, identity ceiling=${maxTokens}`, async () => {
         await withAdvisorOAuthFixture(poolEnabled, async f => {
-          f.config.spend = limited ? { identity: { maxTokens: 100_000 } } : {};
+          const limited = maxTokens !== undefined;
+          f.config.spend = limited ? { identity: { maxTokens } } : {};
           const result = await oauthAdvisorTurn(f, instance, combo);
           expect(result.status, result.body).toBe(200);
           expect(result.body).toContain("ok");
@@ -623,36 +655,51 @@ describe("hosted Advisor with admitted Anthropic OAuth identities", () => {
           expect(JSON.stringify(result.wires[0]!.body).includes("srvtoolu_adv1")).toBe(!limited);
           expect(JSON.stringify(result.wires[0]!.body)).toContain("Earlier answer.");
           expect(result.logCtx.accountLogLabel).toBeUndefined(); // Keep existing OAuth log attribution.
+          expect((result.logCtx.spendTracker as RequestSpendTracker).enforced).toBe(false);
           f.ledger.assertNoCrossSend();
           if (limited && !combo) {
-            const identity = responsesSpendTarget(result.logCtx, instance).identityId;
+            const identity = responsesHostedAdvisorSpendTarget(result.logCtx, instance).identityId;
             expect(identity).toMatch(/^o[a-f0-9]{6}$/);
-            const spent = sharedSpendLedger().snapshot("identity", identity!)!;
-            expect([spent.settled, spent.reserved, spent.unresolved]).toEqual([6, 0, 0]);
+            // The hosted-only identity query does not add main-model identity accounting.
+            expect(responsesSpendTarget(result.logCtx, instance).identityId).toBeUndefined();
+            expect(sharedSpendLedger().snapshot("identity", identity!)).toBeUndefined();
           }
         });
       });
     }
+
+  test("ordinary API-key accounting keeps its existing mode under a tiny identity ceiling", async () => {
+    const result = await claudeTurn({ model: `anth/${MODEL}`, stream: false, spend: { identity: { maxTokens: 1 } },
+      provider: { apiKey: "fixture-ordinary-identity-key" }, tools: [READ] });
+    expect(result.status, result.body).toBe(200);
+    expect(result.wires).toHaveLength(1);
+    expect(toolTypes(result.wires[0]!)).toEqual(["function"]);
+    expect(result.logCtx.accountLogLabel).toMatch(/^k[a-f0-9]{32}$/);
+    const tracker = result.logCtx.spendTracker as RequestSpendTracker;
+    expect(tracker.policyStarted).toBe(true);
+    expect(tracker.enforced).toBe(false);
+    expect(sharedSpendLedger().snapshot("identity", result.logCtx.accountLogLabel!)).toBeUndefined();
+  });
 
   test("target identity belongs to the admitted snapshot and keeps same-ID instances separate", async () => {
     await withAdvisorOAuthFixture(false, async f => {
       f.config.spend = { identity: { maxTokens: 100_000 } };
       const first = await oauthAdvisorTurn(f, "anthropic");
       expect(first.status, first.body).toBe(200);
-      const firstIdentity = responsesSpendTarget(first.logCtx, "anthropic").identityId;
+      const firstIdentity = responsesHostedAdvisorSpendTarget(first.logCtx, "anthropic").identityId;
       let selectedIdentity: string | undefined;
       const second = await oauthAdvisorTurn(f, "anthropic2", false, 2, async log => {
-        selectedIdentity = responsesSpendTarget(log, "anthropic2").identityId;
+        selectedIdentity = responsesHostedAdvisorSpendTarget(log, "anthropic2").identityId;
         expect(selectedIdentity).toMatch(/^o[a-f0-9]{6}$/);
         expect(selectedIdentity).not.toBe(firstIdentity);
         await f.store.setActiveAccount("anthropic2", f.ids[1]);
         // A new ambient active account cannot impersonate this request's admitted credential.
-        expect(responsesSpendTarget(log, "anthropic2").identityId).toBe(selectedIdentity);
+        expect(responsesHostedAdvisorSpendTarget(log, "anthropic2").identityId).toBe(selectedIdentity);
         expect(log.accountLogLabel).toBeUndefined();
       });
       expect(second.status, second.body).toBe(200);
       expect(second.wires).toHaveLength(1);
-      expect(responsesSpendTarget(second.logCtx, "anthropic2").identityId).not.toBe(selectedIdentity);
+      expect(responsesHostedAdvisorSpendTarget(second.logCtx, "anthropic2").identityId).not.toBe(selectedIdentity);
       expect(toolTypes(second.wires[0]!)).toEqual(["function"]);
       expect(f.ledger.sends.map(send => [send.instance, send.accountId]))
         .toEqual([["anthropic", f.ids[0]], ["anthropic2", f.ids[1]]]);

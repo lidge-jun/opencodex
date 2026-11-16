@@ -693,16 +693,15 @@ test("Combo fallback recomputes spend from the next target's original cap", asyn
   const wireFor = (pool: string, fail: boolean) => (async (_url: unknown, init?: RequestInit) => {
     observations.push({ pool, cap: JSON.parse(String(init?.body)).max_output_tokens });
     if (pool === "Q") {
-      expect(qBookings).toHaveLength(2);
-      const [provisional, bound] = qBookings;
+      expect(qBookings).toHaveLength(1);
+      const [provisional] = qBookings;
       expect(provisional!.request.scopes.identityId).toBeUndefined();
       expect(provisional!.decision.reserved).toBe(true);
       if (!provisional!.decision.reserved) throw new Error("Q provisional reservation was refused");
-      expect(abandons).toHaveBeenCalledWith(provisional!.decision.seed.sendId);
-      expect(bound!.request.scopes.identityId).toBe(qIdentity);
-      expect(bound!.decision.reserved).toBe(true);
+      // Optional hosted-tool identity lookup must not rebind ordinary main-model accounting.
+      expect(abandons).not.toHaveBeenCalledWith(provisional!.decision.seed.sendId);
       expect(ledger.snapshot("pool", "Q")).toMatchObject({ reserved: 1, settled: 0, unresolved: 0 });
-      expect(ledger.snapshot("identity", qIdentity)).toMatchObject({ reserved: 1, settled: 0, unresolved: 0 });
+      expect(ledger.snapshot("identity", qIdentity)).toBeUndefined();
     }
     return fail ? Response.json({ error: { message: "fixture overload" } }, { status: 503 }) : executorSuccess("passthrough");
   }) as typeof fetch;
@@ -729,13 +728,13 @@ test("Combo fallback recomputes spend from the next target's original cap", asyn
       { pool: "P", cap: 16 },
       { pool: "Q", cap: 1 },
     ]);
-    expect(qBookings.map(({ request }) => request.outputCeilingTokens)).toEqual([1, 1]);
+    expect(qBookings.map(({ request }) => request.outputCeilingTokens)).toEqual([1]);
     expect(budget.physicalStarted).toBe(4);
     expect(budget.used).toBe(4);
     tracker.settle({ inputTokens: 2, outputTokens: 1 });
     await ledger.waitForReporterDrain();
     expect(ledger.snapshot("pool", "P")).toMatchObject({ reserved: 0, settled: 0, unresolved: 48 });
     expect(ledger.snapshot("pool", "Q")).toMatchObject({ reserved: 0, settled: 3, unresolved: 0 });
-    expect(ledger.snapshot("identity", qIdentity)).toMatchObject({ reserved: 0, settled: 3, unresolved: 0 });
+    expect(ledger.snapshot("identity", qIdentity)).toBeUndefined();
   } finally { bookings.mockRestore(); abandons.mockRestore(); translatorBudget.dispose(); }
 }), 10_000);

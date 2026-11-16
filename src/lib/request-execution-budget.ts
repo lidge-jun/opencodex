@@ -168,7 +168,7 @@ export interface RequestSendObserver {
   readonly enforced?: boolean;
   readonly policyStarted?: boolean;
   readonly spendAdmissionPolicy?: SpendAdmissionPolicy;
-  /** Read first-captured ceilings for a later selected target without changing accounting mode. */
+  /** Capture/query original ceilings for a selected target without starting accounting. */
   hasCapturedSpendCeiling?(target?: SpendScopes): boolean;
   /** Capture request policy at its first admission or actual physical start. */
   startRequest?(target?: SpendScopes & { targetKey?: string }): void;

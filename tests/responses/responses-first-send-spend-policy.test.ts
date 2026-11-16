@@ -86,6 +86,34 @@ for (const enforced of [false, true]) test(`receipt-versus-reporter choice is fi
   } finally { translatorBudget.dispose(); }
 });
 
+for (const limited of [false, true]) test(`an early optional-tool query captures policy without starting accounting (limited=${limited})`, () => {
+  const identityPolicy = (enabled: boolean): SpendReservationPolicy => ({
+    ...DEFAULT_SPEND_RESERVATION_POLICY, identity: enabled ? { maxTokens: 1_000_000 } : {},
+  });
+  const ledger = createSpendReservationLedger({ journal: memoryJournal(), salt: "early-optional-policy", policy: identityPolicy(limited) });
+  const tracker = createRequestSpendTracker({ provider: "a", model: "m" }, undefined, ledger);
+  const parent = createRequestExecutionBudget(undefined, undefined, tracker);
+  const child = deriveRequestExecutionBudget(parent, parent.policy);
+  const target = { poolId: "a", identityId: "selected-fixture-key" };
+  for (const budget of [parent, child]) {
+    expect(budget.hasCapturedSpendCeiling?.(target)).toBe(limited);
+    expect(budget.spendPolicyStarted).toBe(false);
+    expect(budget.spendAdmissionPolicy).toBeUndefined();
+    expect(budget.physicalStarted).toBe(0);
+    expect(budget.used).toBe(0);
+    expect(ledger.snapshot("identity", target.identityId)).toBeUndefined();
+  }
+  ledger.reconfigure(identityPolicy(!limited));
+  expect(child.hasCapturedSpendCeiling?.(target)).toBe(limited);
+  // Only the real accounting admission chooses its mode, using the original policy.
+  parent.startRequest?.(target);
+  expect(parent.spendPolicyStarted).toBe(true);
+  expect(parent.spendEnforced).toBe(limited);
+  expect(parent.hasCapturedSpendCeiling?.(target)).toBe(limited);
+  expect(parent.physicalStarted).toBe(0);
+  expect(parent.used).toBe(0);
+});
+
 for (const limited of [false, true]) test(`optional-tool ceiling query retains captured identity policy without changing accounting (limited=${limited})`, () => {
   const identityPolicy = (enabled: boolean): SpendReservationPolicy => ({
     ...DEFAULT_SPEND_RESERVATION_POLICY, identity: enabled ? { maxTokens: 1_000_000 } : {},
