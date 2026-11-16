@@ -694,6 +694,7 @@ export const zhTW: Record<TKey, string> = {
   "prov.default": "預設",
   "prov.loadingConfig": "載入中…",
   "prov.targetChanged": "儀表板目標已變更。請在目前伺服器上重新開啟此表單。",
+  "prov.loginExpired": "此登入流程已結束或逾時。請重新點擊登入，然後貼上新登入的驗證碼。",
   "prov.legacyTargetPreflight": "此代理會在傳送前檢查儲存目標，但無法以原子方式驗證。若要使用目標綁定的儲存，請更新代理。",
   "prov.saved": "已儲存！重新啟動代理以生效。",
   "prov.loadConfigFail": "載入配置失敗",

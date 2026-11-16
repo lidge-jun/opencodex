@@ -2,8 +2,11 @@ import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { toolChoiceToolPredicate } from "../types";
 import type { ImageBridgePlan, VideoBridgePlan } from "./types";
 import { resolveProviderApiKey } from "../providers/key-store";
+import { isProviderApiKeyPaused } from "../providers/api-key-pause-state";
+import { isKeychainReference, keychainReferenceBelongsToProvider } from "../providers/api-key-resolve";
 import { getValidAccessToken } from "../oauth/index";
 import { getProviderRegistryEntry } from "../providers/registry";
+import { providerDestinationConfigError } from "../lib/destination-policy";
 import { IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME, isVideoGenName } from "./synthetic-tool";
 
 const DEFAULT_MODEL = "grok-imagine-image-quality";
@@ -100,6 +103,109 @@ export async function planImageBridge(
 }
 
 const DEFAULT_VIDEO_MODEL = "grok-imagine-video";
+const XAI_HOSTS = new Set(["api.x.ai", "cli-chat-proxy.grok.com"]);
+
+function pinnedXaiBaseUrl(): string {
+  return (getProviderRegistryEntry("xai")?.baseUrl ?? "https://api.x.ai/v1").replace(/\/+$/, "");
+}
+
+function hostnameOf(baseUrl: string): string | undefined {
+  try { return new URL(baseUrl).hostname.toLowerCase(); } catch { return undefined; }
+}
+
+/** Only these exact origins may receive an xAI credential: HTTPS, an xAI host, the default port. */
+function isTrustedXaiOrigin(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    return url.protocol === "https:" && url.port === "" && XAI_HOSTS.has(url.hostname.toLowerCase());
+  } catch { return false; }
+}
+
+function isXaiRow(name: string, provider: OcxProviderConfig): boolean {
+  const host = hostnameOf(provider.baseUrl);
+  return name.trim().toLowerCase() === "xai" || (host !== undefined && XAI_HOSTS.has(host));
+}
+
+/**
+ * Whether a credential is recognizably xAI's, from any of: xAI's `xai-` key format, a key held by an
+ * xAI row (disabled rows and pooled keys included), or an environment reference whose name points at
+ * xAI/Grok. Such a key may reach only xAI. An arbitrary string with none of these marks cannot be
+ * attributed to xAI; foreign keychain references are refused earlier for every destination.
+ */
+function isXaiCredential(config: OcxConfig, reference: string | undefined, token: string): boolean {
+  if (token.toLowerCase().startsWith("xai-")) return true;
+  const ref = reference?.trim() ?? "";
+  if (/^\$\{?[A-Za-z0-9_]*(XAI|GROK)[A-Za-z0-9_]*\}?$/i.test(ref)) return true;
+  for (const [name, provider] of Object.entries(config.providers)) {
+    if (!isXaiRow(name, provider)) continue;
+    for (const candidate of [provider.apiKey, ...(provider.apiKeyPool ?? []).map(entry => entry.key)]) {
+      if (resolveProviderApiKey(candidate)?.trim() === token) return true;
+    }
+  }
+  return false;
+}
+
+export type VideoProviderSelection =
+  | { ok: true; providerName: string; provider: OcxProviderConfig; auth: { baseUrl: string; token: string } }
+  | { ok: false; error: string };
+
+/**
+ * Resolve an explicit `images.videoProvider`. Returns undefined when the setting is absent, which
+ * keeps the historical xAI discovery. Every other outcome is final: an unusable selection is an
+ * error and never falls back to xAI. The chosen row's own baseUrl and key are the only destination
+ * and credential; `xai` itself stays pinned to the registry host, and a recognizably xAI credential
+ * (see {@link isXaiCredential}) is refused for every origin except HTTPS xAI hosts on the default port.
+ */
+export function selectVideoProvider(config: OcxConfig): VideoProviderSelection | undefined {
+  const configured = config.images?.videoProvider;
+  if (configured === undefined) return undefined;
+  if (typeof configured !== "string" || !configured.trim()) {
+    return { ok: false, error: "images.videoProvider must be a nonblank provider name" };
+  }
+  const providerName = configured.trim();
+  const label = `images.videoProvider "${providerName}"`;
+  const isXai = providerName === "xai";
+  if (!isXai && getProviderRegistryEntry(providerName)) {
+    return { ok: false, error: `${label} must name a custom provider or xai` };
+  }
+  const provider = Object.prototype.hasOwnProperty.call(config.providers, providerName)
+    ? config.providers[providerName]
+    : undefined;
+  if (!provider) return { ok: false, error: `${label} is not configured` };
+  if (provider.disabled === true) return { ok: false, error: `${label} is disabled` };
+  if (provider.authMode !== undefined && provider.authMode !== "key") {
+    return { ok: false, error: `${label} must be an API-key provider` };
+  }
+  if (isProviderApiKeyPaused(provider)) {
+    return { ok: false, error: `${label} is paused: its active API key is disabled` };
+  }
+  // Never resolve another row's keychain secret, whatever the destination (xAI included).
+  if (isKeychainReference(provider.apiKey) && !keychainReferenceBelongsToProvider(provider.apiKey, providerName)) {
+    return { ok: false, error: `${label} references a keychain secret it does not own` };
+  }
+  let baseUrl: string;
+  if (isXai) {
+    baseUrl = pinnedXaiBaseUrl();
+  } else {
+    baseUrl = provider.baseUrl.trim().replace(/\/+$/, "");
+    let parsed: URL | undefined;
+    try { parsed = new URL(baseUrl); } catch { /* reported below */ }
+    // The client appends paths as strings, so a query or fragment would swallow them.
+    if (!parsed || (parsed.protocol !== "https:" && parsed.protocol !== "http:")
+      || parsed.username || parsed.password || parsed.search || parsed.hash
+      || baseUrl.includes("?") || baseUrl.includes("#")) {
+      return { ok: false, error: `${label} needs a plain http(s) baseUrl without credentials, query or fragment` };
+    }
+    const destinationError = providerDestinationConfigError(providerName, provider);
+    if (destinationError) return { ok: false, error: `${label} ${destinationError}` };
+  }
+  const token = resolveProviderApiKey(provider.apiKey)?.trim();
+  if (!token) return { ok: false, error: `${label} has no usable API key` };
+  if (!isXai && !isTrustedXaiOrigin(baseUrl) && isXaiCredential(config, provider.apiKey, token)) {
+    return { ok: false, error: `${label} uses an xAI API key; an xAI API key is only sent to xAI over HTTPS` };
+  }
+  return { ok: true, providerName, provider, auth: { baseUrl, token } };
+}
 
 /**
  * Decide whether the video bridge should activate for this request. Unlike images, video
@@ -107,7 +213,9 @@ const DEFAULT_VIDEO_MODEL = "grok-imagine-video";
  * injected when `videoBridgeEnabled` is true. The bridge activates only when:
  *   1. videoBridgeEnabled is explicitly true (opt-in)
  *   2. the routed provider is NOT api.openai.com (native passthrough)
- *   3. an xAI provider with a valid API key is available
+ *   3. `images.videoProvider` names a usable provider, or, when it is unset, an xAI provider with a
+ *      valid API key is available. An unusable explicit provider yields an unavailable plan that
+ *      answers every call with its error; it never falls back to xAI.
  */
 export async function planVideoBridge(
   config: OcxConfig,
@@ -136,23 +244,26 @@ export async function planVideoBridge(
   // Don't intercept for OpenAI native passthrough
   const host = (() => { try { return new URL(routedProvider.baseUrl).hostname; } catch { return ""; } })();
   if (host === "api.openai.com") return undefined;
-  const found = findXaiProvider(config);
-  if (!found) return undefined;
-  const token = resolveXaiImageApiKey(found.provider);
-  if (!token) return undefined;
-  // Pin the baseUrl to the registry entry, ignoring any config-level baseUrl override.
-  const registryEntry = getProviderRegistryEntry("xai");
-  const pinnedBaseUrl = (registryEntry?.baseUrl ?? "https://api.x.ai/v1").replace(/\/+$/, "");
   const timeoutMs = clampImageTimeoutMs(config.images?.videoTimeoutMs);
   const keepRaw = config.images?.artifactsKeepCount;
   const artifactsKeepCount =
     typeof keepRaw === "number" && Number.isFinite(keepRaw) ? Math.floor(keepRaw) : undefined;
-  return {
-    provider: found.provider,
-    auth: { baseUrl: pinnedBaseUrl, token },
+  const common = {
     model: config.images?.videoBridgeModel ?? DEFAULT_VIDEO_MODEL,
     toolNames,
     ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     ...(artifactsKeepCount !== undefined ? { artifactsKeepCount } : {}),
   };
+  const selection = selectVideoProvider(config);
+  if (selection) {
+    return selection.ok
+      ? { ...common, provider: selection.provider, auth: selection.auth }
+      : { ...common, unavailable: selection.error };
+  }
+  const found = findXaiProvider(config);
+  if (!found) return undefined;
+  const token = resolveXaiImageApiKey(found.provider);
+  if (!token) return undefined;
+  // Pin the baseUrl to the registry entry, ignoring any config-level baseUrl override.
+  return { ...common, provider: found.provider, auth: { baseUrl: pinnedXaiBaseUrl(), token } };
 }

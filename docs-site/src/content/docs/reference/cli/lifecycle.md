@@ -229,8 +229,11 @@ to start its own replacement on the same port. If the replacement does not answe
 restart budget it is stopped, and the old runtime binds the port again and keeps serving; the
 command then reports the restart as not completed. A client runtime run by a background service or
 the desktop app refuses the request and keeps serving ("Restart not performed; the running client
-runtime was kept"); restart it with `ocx service restart` or from the app. See
-[Remote Link apply parity](#remote-link-apply-parity).
+runtime was kept"); restart it with `ocx service restart` or from the app. A client runtime that
+carries only `OCX_SERVICE=1` (a service installed before 2.49, or a proxy started by `ocx claude`,
+`ocx codex` or `ocx opencode`) cannot show its owner and is always refused, with nothing stopped:
+re-register its service once with `ocx service repair`, or, for a companion's proxy, run `ocx stop`
+and start it again. See [Remote Link apply parity](#remote-link-apply-parity).
 
 If package files or the Bun runtime remain incomplete after the installer exited or failed,
 run `ocx status`, stop any running proxy through its owner (`ocx stop`, or its service or
@@ -558,10 +561,16 @@ warning; the desktop uses `proxy-newer` to keep a takeover from downgrading the 
 Liveness has three answers: `live`, `absent-proven` (every recorded and configured endpoint
 definitively refused or answered non-opencodex), and unknown — a timed-out probe or a listener
 that withholds `/healthz` exits 1 rather than reading as absent, so only `absent-proven` may
-authorise starting a new runtime. The port is the live listener's port when a proxy answers,
+authorise starting a new runtime. One timeout is settled instead: when `hostname` is one of this
+machine's own non-loopback addresses (a Tailscale or LAN IP) and the connect itself times out,
+which Windows does for an unbound local address, resolve tries an exclusive bind on that address
+and port. Only a bind that succeeds counts as absent; a port already in use stays unknown. The port is the live listener's port when a proxy answers,
 otherwise the configured port (default 10100). Exit 0 carries a trustworthy verdict; exit 1 means
 the CLI could not resolve — including an invalid `config.json`, which is never repaired to
-defaults here — and the caller must refuse to guess; any unknown argument exits 64. Discovery uses
+defaults here — and the caller must refuse to guess. With `--json`, exit 1 still prints one
+document, `{"schema":"ocx-resolve/1","ok":false,"reason":…,"error":…}`, where `reason` is
+`config_unreadable`, `config_invalid`, `discovery_failed`, or `liveness_unknown` and `error`
+repeats the stderr message; it has no liveness or port field. Any unknown argument exits 64. Discovery uses
 the same ownership-safe probe budget as `ocx start`, because a false "nothing listening" answer
 is how duplicate proxies happen. The verb is read-only and skips the shim auto-restore preflight.
 
