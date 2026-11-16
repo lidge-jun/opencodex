@@ -362,6 +362,7 @@ export async function executeResponsesRunTurn(
             abortSignal: producerAbort.signal,
             comboAttempt: options.comboAttempt === true,
             ...(requestState.subagentFallbackSelected ? { subagentFallback: true } : {}),
+            ...(options.internalDecisionCall ? { internalDecisionCall: true } : {}),
             translatorBudget,
             providerFetch: runTurnProviderFetch,
             pacingSlot,

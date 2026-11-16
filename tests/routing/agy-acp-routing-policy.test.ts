@@ -1,8 +1,10 @@
 /**
- * The Antigravity ACP provider refuses a route chosen by subagent fallback (plan 080). The spawn
- * requests here carry only `x-openai-subagent: collab_spawn`, never `x-codex-parent-thread-id`,
- * so the typed fallback fact recorded where the fallback is selected is the only signal that can
- * refuse them: at the ordinary selection site and at the agent-task-recovery re-selection site.
+ * The Antigravity ACP provider refuses turns that combo or fallback machinery routed to it (plan 080).
+ * The spawn requests here carry only `x-openai-subagent: collab_spawn`, never
+ * `x-codex-parent-thread-id`, so the typed fallback fact recorded where the fallback is selected is
+ * the only signal that can refuse them: at the ordinary selection site and at the
+ * agent-task-recovery re-selection site. A JEV combo's decision call carries no conversation
+ * headers and is not a combo member, so its own internal-decision fact is what refuses it.
  * No CLI is started: the binary path points nowhere, so a spawn would surface a different error.
  */
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -21,6 +23,7 @@ import { resetCodexModelEntitlementCacheForTests } from "../../src/codex/model-e
 import { setMainAccountPlan } from "../../src/codex/main-account";
 import { handleResponses } from "../../src/server/responses";
 import { resetAgentTaskRecoveryState } from "../../src/server/responses/agent-task-recovery";
+import { runWithRequestPeer } from "../../src/lib/request-peer-scope";
 import type { OcxConfig } from "../../src/types";
 import { codexHeaders, encryptedInput, recoverySse } from "../helpers/agent-task-recovery";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -168,5 +171,18 @@ describe("antigravity-acp chosen by subagent fallback", () => {
     expect(response.status).toBe(403);
     // Not refused as fallback-routed; this direct handler call has no recorded local peer.
     expect(((await response.json()) as { error?: { code?: string } }).error?.code).toBe("agy_acp_local_only");
+  });
+});
+
+describe("antigravity-acp as a combo's decision model", () => {
+  test("a local JEV decision call is refused as combo machinery before any spawn", async () => {
+    const cfg = config({ defaultProvider: "antigravity-acp", subagentModelFallback: undefined });
+    globalThis.fetch = (async () => new Response("unexpected upstream call", { status: 599 })) as typeof fetch;
+    // The shape jev-model-invoke.ts sends: no conversation headers, internalDecisionCall set.
+    const response = await runWithRequestPeer({ local: true }, () => handleResponses(
+      new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ model: "antigravity-acp/gemini-3.8-flash", input: "decide", stream: false }) }),
+      cfg, { model: "", provider: "" }, { internalDecisionCall: true },
+    ));
+    await expectInteractiveOnly(response);
   });
 });

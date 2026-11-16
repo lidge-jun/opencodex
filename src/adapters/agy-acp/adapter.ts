@@ -132,7 +132,10 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
 
     async runTurn(parsed: OcxParsedRequest, incoming: IncomingMeta, emit: (event: AdapterEvent) => void) {
       // First, before any probe or spawn: the use policy (defense in depth behind the pipeline preflight).
-      const refusal = agyAcpPolicyRefusal({ headers: incoming.headers, comboAttempt: incoming.comboAttempt, subagentFallback: incoming.subagentFallback });
+      const refusal = agyAcpPolicyRefusal({
+        headers: incoming.headers, comboAttempt: incoming.comboAttempt,
+        internalDecisionCall: incoming.internalDecisionCall, subagentFallback: incoming.subagentFallback,
+      });
       if (refusal) { emit({ type: "error", ...refusal }); return; }
       if (incoming.abortSignal?.aborted) return;
 

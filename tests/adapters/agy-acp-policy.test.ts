@@ -16,6 +16,15 @@ describe("request peer scope", () => {
     expect(classifyRequestPeer("local-control", undefined).local).toBe(false);
   });
 
+  test("a loopback peer the operator declared as a reverse proxy is not local", () => {
+    const proxied = { origin: "https://dash.example.test", proxyAddresses: ["127.0.0.1"] };
+    expect(classifyRequestPeer("public", "127.0.0.1", proxied).local).toBe(false);
+    expect(classifyRequestPeer("public", "::ffff:127.0.0.1", proxied).local).toBe(false);
+    // Another loopback peer that is not the declared proxy stays local; a malformed setting declares nothing.
+    expect(classifyRequestPeer("public", "::1", proxied).local).toBe(true);
+    expect(classifyRequestPeer("public", "127.0.0.1", { proxyAddresses: "127.0.0.1" }).local).toBe(true);
+  });
+
   test("the snapshot is fixed per run, survives awaits and timers, and absence is not local", async () => {
     expect(currentRequestIsLocal()).toBe(false);
     const seen: boolean[] = [];
@@ -33,6 +42,7 @@ describe("use policy", () => {
     expect(agyAcpPolicyRefusal({ headers: new Headers(), local: true })).toBeUndefined();
     expect(agyAcpPolicyRefusal({ headers: new Headers({ "x-codex-parent-thread-id": "t" }), local: true })?.code).toBe("agy_acp_interactive_only");
     expect(agyAcpPolicyRefusal({ headers: new Headers(), comboAttempt: true, local: true })?.code).toBe("agy_acp_interactive_only");
+    expect(agyAcpPolicyRefusal({ headers: new Headers(), internalDecisionCall: true, local: true })?.code).toBe("agy_acp_interactive_only");
     expect(agyAcpPolicyRefusal({ headers: new Headers(), subagentFallback: true, local: true })?.code).toBe("agy_acp_interactive_only");
     expect(agyAcpPolicyRefusal({ headers: new Headers(), local: false })?.code).toBe("agy_acp_local_only");
     // Without an explicit value the request scope decides, and no scope is not local.
@@ -43,12 +53,13 @@ describe("use policy", () => {
 
   test("the pipeline preflight answers a structured 403 only for the ACP adapter", async () => {
     const logCtx = {} as RequestLogContext;
-    const base = { requestHeaders: new Headers(), forwardHeaders: new Headers(), comboAttempt: false, subagentFallback: false, logCtx };
+    const base = { requestHeaders: new Headers(), forwardHeaders: new Headers(), comboAttempt: false, internalDecisionCall: false, subagentFallback: false, logCtx };
     expect(agyAcpPreflightResponse({ ...base, adapterName: "google", comboAttempt: true })).toBeUndefined();
     const refused = runWithRequestPeer({ local: true }, () => agyAcpPreflightResponse({ ...base, adapterName: "agy-acp", requestHeaders: new Headers({ "x-codex-parent-thread-id": "p" }) }))!;
     expect(refused.status).toBe(403);
     expect(await refused.json()).toMatchObject({ error: { type: "permission_error", code: "agy_acp_interactive_only" } });
     expect(runWithRequestPeer({ local: true }, () => agyAcpPreflightResponse({ ...base, adapterName: "agy-acp" }))).toBeUndefined();
     expect(runWithRequestPeer({ local: true }, () => agyAcpPreflightResponse({ ...base, adapterName: "agy-acp", subagentFallback: true }))?.status).toBe(403);
+    expect(runWithRequestPeer({ local: true }, () => agyAcpPreflightResponse({ ...base, adapterName: "agy-acp", internalDecisionCall: true }))?.status).toBe(403);
   });
 });

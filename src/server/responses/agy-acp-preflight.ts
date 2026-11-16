@@ -13,6 +13,7 @@ export function agyAcpPreflightResponse(input: {
   requestHeaders: Headers;
   forwardHeaders: Headers;
   comboAttempt: boolean;
+  internalDecisionCall: boolean;
   subagentFallback: boolean;
   logCtx: RequestLogContext;
 }): Response | undefined {
@@ -22,7 +23,9 @@ export function agyAcpPreflightResponse(input: {
   if (input.requestHeaders.has("x-codex-parent-thread-id") && !headers.has("x-codex-parent-thread-id")) {
     headers.set("x-codex-parent-thread-id", "present");
   }
-  const refusal = agyAcpPolicyRefusal({ headers, comboAttempt: input.comboAttempt, subagentFallback: input.subagentFallback });
+  const refusal = agyAcpPolicyRefusal({
+    headers, comboAttempt: input.comboAttempt, internalDecisionCall: input.internalDecisionCall, subagentFallback: input.subagentFallback,
+  });
   if (!refusal) return undefined;
   const response = new Response(JSON.stringify({ error: {
     type: refusal.errorType, code: refusal.code, param: null, message: refusal.message,

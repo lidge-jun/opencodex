@@ -865,13 +865,15 @@ once per turn and talks to it over the Agent Client Protocol on stdin and stdout
   `agy acp` binary for the user's own account when use is interactive and user-directed, not an unattended worker pool
   or automated agent loop, and point programmatic workloads to a Gemini API key or Vertex AI ([forum answer](https://discuss.ai.google.dev/t/tos-clarification-is-t3-code-official-antigravity-acp-agent-permitted-under-the-antigravity-terms-of-service/192027/2),
   [forum answer](https://discuss.ai.google.dev/t/policy-question-omp-hosting-unmodified-antigravity-acp-for-one-user/199753)). OpenCodex enforces what it can know for certain: it refuses a Codex subagent turn
-  (`x-codex-parent-thread-id`), a combo member and a route chosen by subagent fallback with HTTP 403
-  `agy_acp_interactive_only`, and configuration refuses this provider as a combo target or a subagent fallback.
+  (`x-codex-parent-thread-id`), a combo member, a combo's internal decision call and a route chosen by subagent
+  fallback with HTTP 403 `agy_acp_interactive_only`, and configuration refuses this provider as a combo target, a
+  combo's `decisionModel` or a subagent fallback.
 - **This machine only:** a request that does not come from a loopback client on this machine (a LAN client, a hub link
   or the hub's management listener) is refused with HTTP 403 `agy_acp_local_only`. The provider is never shared.
-  OpenCodex judges this from the connection it receives, so a reverse proxy or `tailscale serve` that you point at the
-  proxy's own port forwards remote clients over loopback and makes them look local; do not put one in front of a
-  proxy that serves this provider.
+  A loopback address you list in `dashboardTrustedProxy.proxyAddresses` counts as a reverse proxy, so requests from it
+  are refused too. Otherwise OpenCodex judges this from the connection it receives, so an undeclared reverse proxy or
+  `tailscale serve` that you point at the proxy's own port forwards remote clients over loopback and makes them look
+  local; do not put one in front of a proxy that serves this provider.
 - **Gemini models only:** the static roster is `gemini-3.8-flash`, `gemini-4-argon` and `gemini-3.7-flash`. At each
   turn the model must also be a Gemini model the CLI offers, confirmed before the prompt is sent; anything else is
   refused. Codex reasoning effort selects the CLI's thinking level (`xhigh` selects Extra).

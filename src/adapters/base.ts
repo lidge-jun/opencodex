@@ -26,6 +26,11 @@ export interface IncomingMeta {
    */
   subagentFallback?: boolean;
   /**
+   * A combo's internal decision call (JEV) dispatched this turn. Combo machinery, not a person; it is
+   * not a combo member, so it has its own fact. The Antigravity ACP provider refuses it (plan 080).
+   */
+  internalDecisionCall?: boolean;
+  /**
    * Provider-scoped fetch prepared by the Responses router. Stateful transports that emit more
    * than one physical HTTP request per logical turn must reuse it so every request participates in
    * the same pacing queue and custom provider fetch seam.

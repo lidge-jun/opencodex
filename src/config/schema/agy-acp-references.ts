@@ -19,9 +19,9 @@ export const AGY_ACP_SEED_MODELS: readonly string[] = ["gemini-3.8-flash", "gemi
 
 type ProviderLike = {
   adapter?: unknown; apiKey?: unknown; apiKeyPool?: unknown; authMode?: unknown; models?: unknown; defaultModel?: unknown;
-  modelAliases?: unknown; alias?: unknown; oauthAccountFailover?: unknown;
+  modelAliases?: unknown; alias?: unknown; oauthAccountFailover?: unknown; anthropicAccountPool?: unknown; codexAccountMode?: unknown;
 };
-type ComboLike = { alias?: unknown; targets?: unknown };
+type ComboLike = { alias?: unknown; targets?: unknown; decisionModel?: unknown };
 export interface ConfigLike {
   providers?: Record<string, unknown>;
   defaultProvider?: unknown;
@@ -136,6 +136,9 @@ export function agyAcpConfigIssues(config: ConfigLike): AgyAcpConfigIssue[] {
     if (typeof provider.apiKey === "string" && provider.apiKey.trim()) issues.push({ path: at("apiKey"), message: CREDENTIAL_MESSAGE });
     if (provider.apiKeyPool !== undefined) issues.push({ path: at("apiKeyPool"), message: CREDENTIAL_MESSAGE });
     if (provider.oauthAccountFailover !== undefined) issues.push({ path: at("oauthAccountFailover"), message: CREDENTIAL_MESSAGE });
+    // Account binding fields: the CLI's single sign-in is the only account this provider has.
+    if (provider.anthropicAccountPool !== undefined) issues.push({ path: at("anthropicAccountPool"), message: CREDENTIAL_MESSAGE });
+    if (provider.codexAccountMode !== undefined) issues.push({ path: at("codexAccountMode"), message: CREDENTIAL_MESSAGE });
     if (provider.authMode !== undefined && provider.authMode !== "key") issues.push({ path: at("authMode"), message: CREDENTIAL_MESSAGE });
     if (Array.isArray(provider.models)) {
       provider.models.forEach((model, i) => {
@@ -159,6 +162,10 @@ export function agyAcpConfigIssues(config: ConfigLike): AgyAcpConfigIssue[] {
     }
   }
   for (const [id, combo] of comboEntries(config)) {
+    // A JEV decision model runs an automated decision call on every request through the combo.
+    if (typeof combo.decisionModel === "string" && [...selectorCandidateProviders(config, combo.decisionModel)].some(name => acp.has(name))) {
+      issues.push({ path: ["combos", id, "decisionModel"], message: "The Antigravity CLI (ACP) provider cannot decide for a combo: it serves interactive, user-directed turns only." });
+    }
     if (!Array.isArray(combo.targets)) continue;
     combo.targets.forEach((target, i) => {
       const provider = isRecord(target) && typeof target.provider === "string" ? target.provider.trim() : "";

@@ -125,4 +125,36 @@ describe.skipIf(process.platform === "win32")("antigravity-acp through the serve
       await server.stop(true);
     }
   });
+
+  test("a request through a declared loopback reverse proxy is not local: HTTP and WebSocket are refused before the CLI starts", async () => {
+    // The operator declares that loopback connections on the public listener come from a proxy, so the
+    // listener path classifies this real request as remote end to end.
+    saveConfig({ ...config(), websockets: true, dashboardTrustedProxy: { origin: "https://dash.example.test", proxyAddresses: ["127.0.0.1"] } } as OcxConfig);
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/responses", server.url), { method: "POST", headers: { "content-type": "application/json" }, body });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ error: { type: "permission_error", code: "agy_acp_local_only" } });
+
+      const socket = new WebSocket(new URL("/v1/responses", server.url).href.replace(/^http/, "ws"));
+      let received = "";
+      const ended = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("no terminal frame")), 15_000);
+        socket.onmessage = event => {
+          received += String(event.data);
+          const frame = JSON.parse(String(event.data)) as { type?: string };
+          if (frame.type === "response.completed" || frame.type === "response.failed" || frame.type === "error") { clearTimeout(timer); resolve(); }
+        };
+      });
+      await new Promise<void>((resolve, reject) => { socket.onopen = () => resolve(); socket.onerror = () => reject(new Error("websocket error")); });
+      socket.send(JSON.stringify({ type: "response.create", model: "antigravity-acp/gemini-4-argon", input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }] }));
+      await ended;
+      socket.close();
+      expect(received).toContain("agy_acp_local_only");
+      expect(received).not.toContain("fake acp answer");
+      expect(existsSync(argsFile)).toBe(false);
+    } finally {
+      await server.stop(true);
+    }
+  });
 });

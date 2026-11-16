@@ -583,7 +583,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             websocketLease,
             sessionLaneIdFromRequest(req.headers),
             classifyUsageClient(req.headers), replayPrincipal,
-          ), peerLocal: classifyRequestPeer(ingress, requestServer.requestIP(req)?.address).local },
+          ), peerLocal: classifyRequestPeer(ingress, requestServer.requestIP(req)?.address, config.dashboardTrustedProxy).local },
         })) return undefined as unknown as Response;
         websocketLease.release();
         return withCors(formatErrorResponse(426, "upgrade_required", "WebSocket upgrade failed"), req, policy);
@@ -1944,6 +1944,6 @@ export function createServeOptions(ctx: ServeOptionsContext) {
   // Each request runs with its own caller slot, which admission fills for turn-state handle binding.
   // Each request also carries its peer snapshot (listener + kernel-observed address), read by local-only providers.
   return { ...serveOptions, fetch: (req: Request, requestServer: Server<WsData>): Promise<Response> => runWithRequestPeer(
-    classifyRequestPeer(ingressForServer(requestServer), requestServer.requestIP(req)?.address), () => runTurnStateCallerScope(async () =>
+    classifyRequestPeer(ingressForServer(requestServer), requestServer.requestIP(req)?.address, config.dashboardTrustedProxy), () => runTurnStateCallerScope(async () =>
       stampServedBy(req.method, codexCompatibleUrl(req.url).pathname, await routeFetch(req, requestServer)))) } as const;
 }

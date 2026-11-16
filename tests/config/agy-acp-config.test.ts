@@ -57,6 +57,20 @@ describe("antigravity-acp configuration", () => {
     expect(messages(result)).toContain("cannot be a combo target");
   });
 
+  test("never a combo's decision model: a JEV decision call is combo machinery, not a person", () => {
+    const judge = (decisionModel: string) => config({ combos: { judge: { strategy: "jev", decisionModel, targets: [{ provider: "google", model: "gemini-3.8-flash" }] } } });
+    for (const decisionModel of ["antigravity-acp/gemini-3.8-flash", "gemini-4-argon"]) {
+      expect(messages(validateConfigCandidate(judge(decisionModel)))).toContain("cannot decide for a combo");
+    }
+    expect(validateConfigCandidate(judge("google/gemini-3.8-flash")).ok).toBe(true);
+  });
+
+  test("no account binding fields either", () => {
+    for (const field of [{ anthropicAccountPool: { enabled: true } }, { codexAccountMode: "pool" }]) {
+      expect(agyAcpConfigIssues(config({}, { "antigravity-acp": { ...acp, ...field } }) as never).map(issue => issue.message).join("\n")).toContain("uses the CLI's own sign-in");
+    }
+  });
+
   test("never a subagent fallback, through a prefix, a provider alias, a model alias, a combo or the default provider", () => {
     const cases: Array<[Record<string, unknown>, Record<string, unknown>]> = [
       [{ subagentModelFallback: ["antigravity-acp/gemini-3.8-flash"] }, {}],

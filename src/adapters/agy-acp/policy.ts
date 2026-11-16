@@ -5,8 +5,8 @@
  * when use is interactive and user-directed, not an unattended worker pool or automated agent loop,
  * and points programmatic workloads to a Gemini API key or Vertex AI. OpenCodex documents that and
  * enforces only signals it can know for certain: a subagent turn (`x-codex-parent-thread-id`), a
- * combo member, a route chosen by subagent fallback, and a request that did not come from this
- * machine. No heuristic beyond those is applied.
+ * combo member or a combo's internal decision call, a route chosen by subagent fallback, and a
+ * request that did not come from this machine. No heuristic beyond those is applied.
  */
 import { currentRequestIsLocal } from "../../lib/request-peer-scope";
 
@@ -17,6 +17,8 @@ export interface AgyAcpPolicySignals {
   headers: Headers;
   comboAttempt?: boolean;
   subagentFallback?: boolean;
+  /** A combo's internal decision call (JEV): combo machinery, refused like a combo member. */
+  internalDecisionCall?: boolean;
   /** Override for tests and callers that already hold the snapshot; defaults to the request scope. */
   local?: boolean;
 }
@@ -33,7 +35,8 @@ const LOCAL_MESSAGE = "The Antigravity CLI (ACP) provider serves only requests f
 
 /** The refusal for a turn this provider must not serve, or undefined when it may run. */
 export function agyAcpPolicyRefusal(signals: AgyAcpPolicySignals): AgyAcpPolicyRefusal | undefined {
-  if (signals.headers.has("x-codex-parent-thread-id") || signals.comboAttempt === true || signals.subagentFallback === true) {
+  if (signals.headers.has("x-codex-parent-thread-id") || signals.comboAttempt === true || signals.internalDecisionCall === true
+    || signals.subagentFallback === true) {
     return { status: 403, errorType: "permission_error", code: AGY_ACP_INTERACTIVE_ONLY, message: INTERACTIVE_MESSAGE };
   }
   const local = signals.local ?? currentRequestIsLocal();

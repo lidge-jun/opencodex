@@ -1791,7 +1791,6 @@
     "structure-ssot.test.ts": "ci-workflows",
     "subagent-context-staleness.test.ts": "routing",
     "subagent-defaults.test.ts": "routing",
-    "subagent-fallback-agy-acp.test.ts": "routing",
     "subagent-fallback-handle-responses.test.ts": "routing",
     "subagent-fallback-preview-sites.test.ts": "routing",
     "subagent-model-fallback-api.test.ts": "routing",

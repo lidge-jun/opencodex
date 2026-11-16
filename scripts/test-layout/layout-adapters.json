@@ -35,5 +35,6 @@
   "agy-acp-protocol.test.ts": "adapters",
   "agy-acp-policy.test.ts": "adapters",
   "agy-acp-config.test.ts": "config",
-  "server-agy-acp.test.ts": "server"
+  "server-agy-acp.test.ts": "server",
+  "agy-acp-routing-policy.test.ts": "routing"
 }
