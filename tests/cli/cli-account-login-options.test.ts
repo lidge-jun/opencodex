@@ -468,3 +468,57 @@ describe("Google Antigravity login acknowledgement", () => {
   });
 });
 
+
+/**
+ * `ocx account import google-antigravity` carries the same account risk as a login. Moved here from
+ * cli-account.test.ts, which sits at its file-size cap; this suite already drives cmdAccount
+ * against a recording fetch.
+ */
+describe("Google Antigravity import acknowledgement", () => {
+  const IMPORTED = { totalCount: 1, importedCount: 1, updatedCount: 0, failedCount: 0, unsupportedCount: 0, results: [{ index: 0, status: "imported", code: "imported" }] };
+  const DOCUMENT = '[{"email":"user@example.com","refresh_token":"safe-fixture-token"}]';
+  const input = (value: string, isTTY: boolean) => Object.assign(new Readable({ read() { this.push(value); this.push(null); } }), { isTTY });
+  const importArgs = (...extra: string[]) => ["import", "google-antigravity", "--format", "cockpit-tools", ...extra];
+
+  test("the acknowledgement is required before the source is read", async () => {
+    const path = home.path("accounts.json");
+    writeFileSync(path, DOCUMENT);
+    const prompt = spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      // --stdin: the document owns stdin, so nothing can answer a prompt; only the flag accepts.
+      const piped = fixture([IMPORTED]);
+      const pipedStdin = input(DOCUMENT, false);
+      expect(await cmdAccount(importArgs("--stdin"), { ...piped.deps, baseUrl: "http://127.0.0.1:32100", stdinImpl: pipedStdin })).toBe(1);
+      expect(piped.calls).toHaveLength(0);
+      expect(pipedStdin.readableEnded).toBe(false);
+      const refusal = JSON.stringify(error.mock.calls);
+      expect(refusal).toContain("This service has been disabled in this account for violation of Terms of Service.");
+      expect(refusal).toContain("antigravity_risk_not_acknowledged");
+      expect(refusal).toContain("--accept-antigravity-risk");
+
+      // --file on a terminal asks; only y proceeds, and the request carries the acknowledgement.
+      const declined = fixture([IMPORTED]);
+      error.mockClear();
+      expect(await cmdAccount(importArgs("--file", path), { ...declined.deps, baseUrl: "http://127.0.0.1:32100", stdinImpl: input("n\n", true) })).toBe(1);
+      expect(declined.calls).toHaveLength(0);
+      expect(JSON.stringify(error.mock.calls)).toContain("the risk was not accepted");
+
+      const accepted = fixture([IMPORTED]);
+      expect(await cmdAccount(importArgs("--file", path), { ...accepted.deps, baseUrl: "http://127.0.0.1:32100", stdinImpl: input("y\n", true) })).toBe(0);
+      expect(accepted.calls).toHaveLength(1);
+      expect(accepted.calls[0]).toMatchObject({ url: "http://127.0.0.1:32100/api/oauth/accounts/import", body: { acknowledgeAntigravityRisk: true } });
+      expect(JSON.stringify(prompt.mock.calls)).toContain("[y/N]");
+
+      // An agent-driven run is refused before the source is read, flag or not.
+      const agent = fixture([IMPORTED]);
+      error.mockClear();
+      const agentDeps = { ...agent.deps, baseUrl: "http://127.0.0.1:32100", antigravityRisk: { agentDriven: () => true } };
+      expect(await cmdAccount(importArgs("--accept-antigravity-risk", "--file", path), agentDeps)).toBe(1);
+      expect(agent.calls).toHaveLength(0);
+      expect(JSON.stringify(error.mock.calls)).toContain("coding agent or CI runner");
+    } finally {
+      prompt.mockRestore();
+    }
+  });
+});
+
