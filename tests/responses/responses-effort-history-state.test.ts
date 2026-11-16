@@ -1,6 +1,6 @@
 // State-machine tests for per-message effort history (#6895), ported from rkb32's offline slice
 // (gist 69ee9faf767de6aae0369244aaa0d654, effort-history.test.js). Items are test shorthand
-// ({kind}) unless a case says otherwise; tests/responses/effort-history-fixtures.test.ts drives
+// ({kind}) unless a case says otherwise; tests/responses/responses-effort-history-fixtures.test.ts drives
 // the same module with real adapter bodies and bridge output.
 import { createHash } from "node:crypto";
 import { test } from "bun:test";

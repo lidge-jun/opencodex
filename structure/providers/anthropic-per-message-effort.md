@@ -79,7 +79,7 @@ turn reads less cache than its parent wrote, so it does not commit and the histo
 
 ## Tests
 
-`tests/responses/effort-history-state.test.ts` and `tests/responses/effort-history-fixtures.test.ts`
+`tests/responses/responses-effort-history-state.test.ts` and `tests/responses/responses-effort-history-fixtures.test.ts`
 carry rkb32's state-machine tests and real-serializer fixtures.
 `tests/adapters/anthropic/anthropic-per-message-effort.test.ts` covers the seam through the real
 adapter and bridge, and `tests/responses/responses-anthropic-per-message-effort.test.ts` drives two
