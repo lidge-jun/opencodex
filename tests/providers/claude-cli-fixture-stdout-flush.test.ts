@@ -214,12 +214,34 @@ function spawnProbe(mode: string, content: Array<{ type: string; text: string }>
   return { ...tracked, marks, waitForMark };
 }
 
+/**
+ * Attach to a stream now and pull from it only once `release` settles.
+ *
+ * The iterator is taken at the call, so whatever the parent's runtime buffers before the release is
+ * kept: reading only after the child's `close` instead yields nothing in Bun, because the stdout
+ * stream has already finished by then. Until the release, nothing is pulled, so the child's writes
+ * meet a pipe that stops taking bytes once the parent's bounded buffer and the kernel's are full.
+ */
+function heldUntil<T>(source: AsyncIterable<T>, release: Promise<unknown>): AsyncIterable<T> {
+  const iterator = source[Symbol.asyncIterator]();
+  return {
+    async *[Symbol.asyncIterator]() {
+      try {
+        await release;
+        for (let next = await iterator.next(); !next.done; next = await iterator.next()) yield next.value;
+      } finally {
+        await iterator.return?.();
+      }
+    },
+  };
+}
+
 /** Drain a child through the production reader, collecting the frames or the failure. */
-async function drain(child: ChildProcess) {
+async function drain(child: ChildProcess, source: AsyncIterable<Uint8Array> = child.stdout!) {
   const frames: Record<string, unknown>[] = [];
   let readError: Error | undefined;
   try {
-    for await (const frame of readJsonLines(child.stdout!)) frames.push(frame);
+    for await (const frame of readJsonLines(source)) frames.push(frame);
   } catch (error) {
     readError = error as Error;
   }
@@ -360,10 +382,34 @@ test("releasing the reader delivers the whole replay frame and the callback orde
   }
 }, 60_000);
 
+/**
+ * The precondition is that part of the replay frame is still queued in the child when it exits, and
+ * this case establishes it rather than hoping for it. An earlier version started the reader at spawn.
+ * The runtime's synchronous write loop then keeps handing bytes over as fast as the parent drains
+ * them, so how much of the frame escaped before `process.exit` depended on scheduling. On the loaded
+ * macOS batch (run 43874258334) the whole frame escaped once, the reader saw three well-formed
+ * frames, and no protocol error was raised. A local reproduction under CPU load delivered the
+ * complete frame in 3 of 60 runs.
+ *
+ * So the reader is attached at spawn but pulls nothing until the child's mark, which the child writes
+ * synchronously in the same turn as its exit. Until then the parent's runtime buffers a bounded
+ * amount and the pipe stops taking bytes. That bound is far below the megabytes of the frame, so the
+ * tail is still queued when the exit discards it. The child's mark also carries the replay write's
+ * own return value. `true` would mean the runtime handed the whole frame over within the call, which
+ * rules the precondition out, so that is checked before anything is read.
+ */
 test.skipIf(!ASYNC_STDOUT_PIPES)("exiting before the replay write drains drops the frame, which the reader reports as malformed", async () => {
   const probe = spawnProbe("exit-before-flush", replayContent(REPLAY_CHARS));
   try {
-    const { frames, readError } = await drain(probe.child);
+    const exitingMark = probe.waitForMark("exiting-before-flush");
+    const stdout = heldUntil(probe.child.stdout!, exitingMark);
+    const exiting = await exitingMark;
+    if (exiting.replayAccepted !== false) {
+      throw new Error(
+        `precondition not established: the replay write returned ${String(exiting.replayAccepted)}, so no part of the frame was left queued at exit`,
+      );
+    }
+    const { frames, readError } = await drain(probe.child, stdout);
     await probe.closed;
 
     // The pre-fix behavior, kept as the red case. Only the small init frame survives: the replay
