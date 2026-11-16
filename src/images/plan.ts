@@ -102,33 +102,46 @@ export async function planImageBridge(
 const DEFAULT_VIDEO_MODEL = "grok-imagine-video";
 
 /**
- * Resolve `images.videoProvider` to a concrete destination, mirroring `images.provider`'s
- * relay-side semantics (src/providers/openai-sidecar.ts selectImagesProvider): the named
- * provider must exist, not be disabled, hold a usable API key, and carry an absolute baseUrl.
- * Every failure returns undefined — the bridge fails closed and never falls back to xAI,
- * and an xAI credential is never sent to another host (a named `videoProvider` uses only
- * that provider's own key and URL).
+ * What `images.videoProvider` asks for: unset, resolved to a destination, or present-but-unusable.
  */
-function resolveVideoProviderDestination(config: OcxConfig): { baseUrl: string; token: string; provider: OcxProviderConfig } | undefined {
-  const raw = config.images?.videoProvider;
-  if (raw === undefined) return undefined;
-  if (typeof raw !== "string" || !raw.trim()) return undefined; // blank fails closed, same rule as images.provider
+type VideoProviderSelection =
+  | { kind: "unset" }
+  | { kind: "unusable" }
+  | { kind: "resolved"; baseUrl: string; token: string; provider: OcxProviderConfig };
+
+/**
+ * Classify `images.videoProvider`, mirroring `images.provider`'s relay-side semantics
+ * (src/providers/openai-sidecar.ts selectImagesProvider). A blank string is treated as unset.
+ * Any other present value that does not resolve to a usable destination is `unusable`, which
+ * leaves the bridge unarmed — it never falls back to xAI, and an xAI credential is never sent to
+ * another host (the owner decision on #8175).
+ */
+function resolveVideoProviderDestination(config: OcxConfig): VideoProviderSelection {
+  // Config is schema-validated, but this block can be hand-edited JSON, so read it as unknown.
+  const raw = (config.images as { videoProvider?: unknown } | undefined)?.videoProvider;
+  if (raw === undefined) return { kind: "unset" };
+  if (typeof raw !== "string") return { kind: "unusable" }; // a non-string names nothing
+  if (!raw.trim()) return { kind: "unset" }; // blank is treated as unset: keeps the pinned-xAI default
   const providerName = raw.trim();
+  // Registry ids are built-ins this bridge must not repurpose as a destination; naming one
+  // ("xai" included) fails closed instead of following its baseUrl override with its key.
+  if (getProviderRegistryEntry(providerName)) return { kind: "unusable" };
   const provider = Object.prototype.hasOwnProperty.call(config.providers, providerName)
     ? config.providers[providerName]
     : undefined;
-  if (!provider || provider.disabled === true) return undefined;
-  if (provider.authMode === "oauth" || provider.authMode === "forward") return undefined; // the video client is bearer-key only
+  if (!provider || provider.disabled === true) return { kind: "unusable" };
+  // The video client sends a static bearer key, so OAuth and forward auth cannot carry it.
+  if (provider.authMode === "oauth" || provider.authMode === "forward") return { kind: "unusable" };
   const token = resolveProviderApiKey(provider.apiKey)?.trim();
-  if (!token) return undefined;
+  if (!token) return { kind: "unusable" };
   let parsed: URL;
   try {
     parsed = new URL(provider.baseUrl.trim());
   } catch {
-    return undefined; // invalid baseUrl fails closed; config validation reports it
+    return { kind: "unusable" }; // invalid baseUrl; config validation reports it separately
   }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return undefined;
-  return { baseUrl: provider.baseUrl.trim().replace(/\/+$/, ""), token, provider };
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return { kind: "unusable" };
+  return { kind: "resolved", baseUrl: provider.baseUrl.trim().replace(/\/+$/, ""), token, provider };
 }
 
 /**
@@ -137,7 +150,9 @@ function resolveVideoProviderDestination(config: OcxConfig): { baseUrl: string; 
  * injected when `videoBridgeEnabled` is true. The bridge activates only when:
  *   1. videoBridgeEnabled is explicitly true (opt-in)
  *   2. the routed provider is NOT api.openai.com (native passthrough)
- *   3. an xAI provider with a valid API key is available
+ *   3. either `images.videoProvider` names a usable custom provider, or an xAI provider with a
+ *      valid API key is available; a present-but-unusable `videoProvider` disarms the bridge
+ *      rather than falling back to xAI
  */
 export async function planVideoBridge(
   config: OcxConfig,
@@ -166,8 +181,12 @@ export async function planVideoBridge(
   // Don't intercept for OpenAI native passthrough
   const host = (() => { try { return new URL(routedProvider.baseUrl).hostname; } catch { return ""; } })();
   if (host === "api.openai.com") return undefined;
-  const custom = resolveVideoProviderDestination(config);
-  if (custom) {
+  const selection = resolveVideoProviderDestination(config);
+  if (selection.kind === "unusable") {
+    // A set-but-unusable videoProvider leaves the bridge unarmed: never silently arm xAI (#8175).
+    return undefined;
+  }
+  if (selection.kind === "resolved") {
     // `images.videoProvider` owns the destination: only the named provider's baseUrl and key
     // are used (#8175). The registry pin below stays the default (and the guard) for the xAI
     // path, so an xAI key never follows a baseUrl override without this explicit opt-in.
@@ -176,18 +195,15 @@ export async function planVideoBridge(
     const artifactsKeepCountCustom =
       typeof keepRawCustom === "number" && Number.isFinite(keepRawCustom) ? Math.floor(keepRawCustom) : undefined;
     return {
-      provider: custom.provider,
-      auth: { baseUrl: custom.baseUrl, token: custom.token },
+      provider: selection.provider,
+      auth: { baseUrl: selection.baseUrl, token: selection.token },
       model: config.images?.videoBridgeModel ?? DEFAULT_VIDEO_MODEL,
       toolNames,
       ...(timeoutMsCustom !== undefined ? { timeoutMs: timeoutMsCustom } : {}),
       ...(artifactsKeepCountCustom !== undefined ? { artifactsKeepCount: artifactsKeepCountCustom } : {}),
     };
   }
-  if (typeof config.images?.videoProvider === "string" && config.images.videoProvider.trim()) {
-    // A set-but-unusable videoProvider must NOT silently arm xAI (owner decision, #8175).
-    return undefined;
-  }
+  // "unset": the pinned-xAI default below.
   const found = findXaiProvider(config);
   if (!found) return undefined;
   const token = resolveXaiImageApiKey(found.provider);

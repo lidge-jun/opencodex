@@ -179,7 +179,37 @@ describe("planVideoBridge videoProvider", () => {
     expect(plan).toBeUndefined();
   });
 
-  test("blank videoProvider → xAI default, unchanged", async () => {
+  test("names a forward-auth provider → fails closed (bearer-key transport only)", async () => {
+    const config = makeCustomConfig({ videoProvider: "my-video-bridge" });
+    (config.providers as Record<string, OcxProviderConfig>)["my-video-bridge"].authMode = "forward";
+    const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
+    expect(plan).toBeUndefined();
+  });
+
+  test("names the reserved registry id \"xai\" → fails closed, never the baseUrl override", async () => {
+    const config = makeCustomConfig({ videoProvider: "xai" });
+    // The xai entry points elsewhere; naming it must not follow that host with the xAI key.
+    (config.providers as Record<string, OcxProviderConfig>).xai.baseUrl = "https://other-host.example.com/v1";
+    const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
+    expect(plan).toBeUndefined();
+  });
+
+  test("non-string videoProvider values fail closed", async () => {
+    for (const value of [42, true, null] as unknown[]) {
+      const config = makeCustomConfig({ videoProvider: value });
+      const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
+      expect(plan).toBeUndefined();
+    }
+  });
+
+  test("non-http(s) baseUrl scheme on the named provider → fails closed", async () => {
+    const config = makeCustomConfig({ videoProvider: "my-video-bridge" });
+    (config.providers as Record<string, OcxProviderConfig>)["my-video-bridge"].baseUrl = "ws://127.0.0.1:8790/v1";
+    const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
+    expect(plan).toBeUndefined();
+  });
+
+  test("blank videoProvider is treated as unset → xAI default, unchanged", async () => {
     const config = makeCustomConfig({ videoProvider: "   " });
     const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
     expect(plan).toBeDefined();

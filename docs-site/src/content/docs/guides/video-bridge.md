@@ -12,12 +12,12 @@ job to xAI, polls until completion, and downloads the result.
 
 ## Prerequisites
 
-- An `xai` provider entry with an **API key** (`ocx login xai` alone is not sufficient — the video bridge requires key auth, not OAuth)
+- An `xai` provider entry with an **API key** (`ocx login xai` alone is not sufficient — the video bridge requires key auth, not OAuth) — unless `images.videoProvider` names another key-auth provider, which then supplies both the destination and the credential
 - A non-OpenAI model as your routed provider (e.g. Anthropic Claude, Google Gemini)
 - opencodex configured to route through the non-OpenAI provider
 
-> **⚠ Provider key required:** The video bridge only activates when the `xai` provider uses
-> API key auth. Add this to your config:
+> **⚠ Provider key required:** With no `videoProvider` set, the video bridge only activates when
+> the `xai` provider uses API key auth. Add this to your config:
 >
 > ```json
 > {
@@ -80,16 +80,26 @@ for example a self-hosted bridge or any vendor exposing an xAI-compatible async 
 ```
 
 The named provider's own `baseUrl` and API key are the only destination and credential used:
-fail closed, never falling back to xAI, and an xAI key is never sent to another host. A named
-provider that is missing, disabled, or has no usable API key (OAuth is not supported — the
-video client is bearer-key only) leaves the bridge unarmed. `allowPrivateNetwork: true` is
-required for loopback/private destinations, exactly as for any provider `baseUrl`.
+fail closed, never falling back to xAI, and an xAI key is never sent to another host. The bridge
+stays **silently unarmed** in every one of these cases:
+
+- the named provider is missing, disabled, or has no usable API key
+- the named provider uses OAuth or forward auth — the video client sends a static bearer key, so
+  those auth modes are rejected rather than downgraded
+- the named provider's `baseUrl` is not an absolute http(s) URL
+- `videoProvider` is present but not a provider name (`42`, `true`, `null`) or names the reserved
+  registry id `xai` — a built-in registry entry is never adopted as the bridge destination, so an
+  `xai` entry's `baseUrl` override can never carry the xAI key to another host
+
+A blank `videoProvider` (`""` or whitespace) is treated as unset, keeping the pinned xAI default.
+`allowPrivateNetwork: true` is required for loopback/private destinations, exactly as for any
+provider `baseUrl`.
 
 ## How It Works
 
 1. opencodex detects a non-OpenAI routed model with `videoBridgeEnabled: true`
 2. A synthetic `video_gen` function tool is injected into the conversation
-3. When the model calls `video_gen`, opencodex submits a job to xAI's `/videos/generations`
+3. When the model calls `video_gen`, opencodex submits a job to `/videos/generations` — on xAI by default, or on the provider named by `images.videoProvider`
 4. The bridge polls the job status every 5-15 seconds, sending heartbeat messages to keep the stream alive
 5. When the video is ready, it's downloaded to the artifacts directory
 6. The local file path is returned to the model as a tool result
