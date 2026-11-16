@@ -1063,7 +1063,8 @@ export function parseMainPolicyUsageQuota(data: WhamUsageResponse): MainPolicyQu
   const windows = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
   if (windows.some(window => isInvalidPolicyUsagePercent(window?.used_percent))) return null;
   const quota = filterMainPolicyMonthlyQuota(parseUsageQuota(data), isThirtyDayOnlyCodexPlan(data.plan_type));
-  return quota ? withWhamShortWindowAbsence(data, quota) : null;
+  // #8596: a complete, allowed main read retires a carried monthly tuple under the pool proof (#8067).
+  return quota ? withWhamMonthlyWindowAbsence(data, withWhamShortWindowAbsence(data, quota)) : null;
 }
 
 /** Derive absence from complete WHAM topology without changing the display quota. */
@@ -1097,22 +1098,33 @@ export function poolWhamPolicyObservation(
   data: WhamUsageResponse, quota: Omit<StoredAccountQuota, "updatedAt"> | null,
 ): MainPolicyQuotaObservation | null {
   if (!quota || !isValidWhamHistoryObservation(data)) return null;
-  // Retirement releases a block, so a present reading that does not parse is not "unknown".
+  if (data.rate_limit?.allowed === false || hasMalformedWhamReading(data)) return quota;
+  return withWhamMonthlyWindowAbsence(data, withWhamShortWindowAbsence(data, quota));
+}
+
+/** Retirement releases a block, so a present reading that does not parse is not "unknown". */
+function hasMalformedWhamReading(data: WhamUsageResponse): boolean {
   const readings = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
   for (const limit of Array.isArray(data.additional_rate_limits) ? data.additional_rate_limits : []) {
     if (limit && typeof limit === "object") readings.push(limit.rate_limit?.primary_window, limit.rate_limit?.secondary_window);
   }
-  const malformed = readings.some(window => window?.used_percent != null
+  return readings.some(window => window?.used_percent != null
     && normalizeUsagePercent(window.used_percent) === undefined);
-  if (data.rate_limit?.allowed === false || malformed) return quota;
-  const observation = withWhamShortWindowAbsence(data, quota);
-  // #8067: the same complete topology proves a pool account has no monthly window when no window
-  // declares a monthly duration and no tertiary window is present, so a plan change away from a
-  // monthly primary (Free to Pro Lite) retires the carried tuple. Pool-only: main observations
-  // keep their existing retention rules.
+}
+
+/**
+ * #8067/#8596: the complete topology that proves short-window absence also proves there is no
+ * monthly window when no window declares a monthly duration and no tertiary window is present,
+ * so a plan change away from a monthly primary (Free to Pro Lite) retires the carried tuple.
+ * An explicit denial and invalid or unparseable readings never supply that proof.
+ */
+function withWhamMonthlyWindowAbsence(
+  data: WhamUsageResponse, observation: MainPolicyQuotaObservation,
+): MainPolicyQuotaObservation {
+  if (observation.shortWindowAbsent !== true || data.rate_limit?.allowed === false) return observation;
+  if (!isValidWhamHistoryObservation(data) || hasMalformedWhamReading(data)) return observation;
   const [primary, secondary, tertiary] = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
-  return observation.shortWindowAbsent === true
-    && !isExplicitMonthlyWindow(primary) && !isExplicitMonthlyWindow(secondary) && tertiary == null
+  return !isExplicitMonthlyWindow(primary) && !isExplicitMonthlyWindow(secondary) && tertiary == null
     ? { ...observation, monthlyWindowAbsent: true }
     : observation;
 }
