@@ -397,7 +397,7 @@ a replacement credential. A longer valid Retry-After from any main usage reader 
 current credential before the recovery worker takes a profile lease or prepares a token; a replacement
 credential has a separate key and may proceed immediately.
 Nonterminal 401/403 responses do not arm the successful-but-blocked recovery delay; the next
-sweep may retry, while terminal authentication failure keeps its reauth quarantine. A refusal on a reading older than 60 s first reads usage once ([refusal read](../codex-account-controls.md#hard-lock-refusal-read)).
+sweep may retry, while terminal authentication failure keeps its reauth quarantine. An eligible refusal on usage measured more than 60 s ago may read usage once first; skips and pacing are in [refusal read](../codex-account-controls.md#hard-lock-refusal-read).
 Only fresh lower usage or validated window absence releases the lock; no reset-credit consumption is added. Failed,
 missing, non-finite or out-of-range readings do not release the block. Policy validation precedes
 legacy clamping. Supplementary monthly data cannot become the fallback governing window without a

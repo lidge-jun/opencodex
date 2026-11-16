@@ -42,6 +42,11 @@ type MainPolicyQuota = { identityKey: string; quota: StoredAccountQuota };
 /** Fresh WHAM topology proof is consumed by the merge, never retained in a cache or DTO. */
 type MainPolicyQuotaObservation = Omit<StoredAccountQuota, "updatedAt"> & { shortWindowAbsent?: true; monthlyWindowAbsent?: true };
 let mainPolicyQuota: MainPolicyQuota | null = null;
+/**
+ * When a usage-bearing main policy write last landed in this process (#8113). Process-local and never
+ * persisted, so a reading restored from disk has no measurement time; credits-only merges keep it.
+ */
+let mainPolicyUsageObservation: { identityKey: string; at: number } | undefined;
 let diskHydrated = false;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let persistStartedAt: number | null = null;
@@ -442,6 +447,10 @@ export function setAccountQuotaFromParsed(
     const policyExisting = mainWriter && mainPolicyQuota?.identityKey === mainWriter.identityKey
       ? mainPolicyQuota.quota
       : undefined;
+    // A credits-only merge refreshes `updatedAt` but measures no window, so it cannot age the usage tuple.
+    if (mainWriter && policyQuota && snapshotHasUsage(policyQuota)) {
+      mainPolicyUsageObservation = { identityKey: mainWriter.identityKey, at: updatedAt };
+    }
     mainPolicyQuota = mainWriter && (policyQuota || policyExisting)
       ? {
         identityKey: mainWriter.identityKey,
@@ -831,7 +840,7 @@ export function updateAccountQuota(
   stampCodexQuotaUsageObservation(quota, { weeklyPercent: nextWeekly, monthlyPercent: nextMonthly }, existing);
   accountQuota.set(accountId, quota);
   // This legacy writer has no physical credential provenance.
-  if (accountId === MAIN_CODEX_ACCOUNT_ID) mainPolicyQuota = null;
+  if (accountId === MAIN_CODEX_ACCOUNT_ID) { mainPolicyQuota = null; mainPolicyUsageObservation = undefined; }
   schedulePersistAccountQuotas();
   // Observed like the other committed write. This function has no in-repo caller today, but it
   // is re-exported as public API through src/codex/auth-api.ts, so a future caller would
@@ -898,6 +907,7 @@ function hydrateAccountQuotasFromDisk(): void {
     quotaHistory.hydrate(parsed.history);
     // Policy evidence deliberately outlives the legacy six-hour rotation-cache TTL.
     mainPolicyQuota = readMainPolicyQuota(parsed.mainPolicyQuota);
+    mainPolicyUsageObservation = undefined;
     const now = Date.now();
     for (const [accountId, quota] of Object.entries(parsed.quotas)) {
       if (!quota || typeof quota !== "object" || typeof quota.updatedAt !== "number") continue;
@@ -955,6 +965,16 @@ export function getMainPolicyQuota(): StoredAccountQuota | null {
   return structuredClone(mainPolicyQuota.quota);
 }
 
+/**
+ * When the observed main identity's policy usage was last measured in this process, or undefined
+ * when this process has not measured it (for example a reading restored from disk) (#8113).
+ */
+export function getMainPolicyUsageObservedAt(): number | undefined {
+  hydrateAccountQuotasFromDisk();
+  if (!mainPolicyQuota || mainPolicyQuota.identityKey !== getObservedMainQuotaIdentityKey()) return undefined;
+  return mainPolicyUsageObservation?.identityKey === mainPolicyQuota.identityKey ? mainPolicyUsageObservation.at : undefined;
+}
+
 /** An owned identity observation may retire legacy main quota only when its retained policy tag proves replacement. */
 export function discardMismatchedMainQuota(): void {
   hydrateAccountQuotasFromDisk();
@@ -1001,14 +1021,14 @@ export function clearAccountQuota(accountId?: string): void {
   if (accountId) {
     hydrateAccountQuotasFromDisk();
     accountQuota.delete(accountId);
-    if (accountId === MAIN_CODEX_ACCOUNT_ID) mainPolicyQuota = null;
+    if (accountId === MAIN_CODEX_ACCOUNT_ID) { mainPolicyQuota = null; mainPolicyUsageObservation = undefined; }
     schedulePersistAccountQuotas();
     forgetCodexQuotaBaseline(accountId);
     return;
   }
   accountQuota.clear();
   forgetCodexQuotaBaseline();
-  mainPolicyQuota = null;
+  { mainPolicyQuota = null; mainPolicyUsageObservation = undefined; }
   diskHydrated = false;
   if (persistTimer) {
     clearTimeout(persistTimer);

@@ -12,7 +12,7 @@ import {
 import { tryAcquireNativeMainProfileClaim } from "../native-main-admission";
 import { isNativeMainTrafficBlocked } from "../native-profile-startup";
 import {
-  getMainPolicyQuota, isValidWhamHistoryObservation, parseMainPolicyUsageQuota, parseUsageQuota, setAccountQuotaFromParsed,
+  getMainPolicyUsageObservedAt, isValidWhamHistoryObservation, parseMainPolicyUsageQuota, parseUsageQuota, setAccountQuotaFromParsed,
   type WhamUsageResponse,
 } from "../quota";
 import { fetchCodexUsage, nextCodexUsageQueryAt } from "../quota-query-backoff";
@@ -20,6 +20,7 @@ import { WHAM_REQUEST_TIMEOUT_MS } from "../quota-recovery-timing";
 import { captureConfigGeneration } from "../../lib/state-store-sweeper";
 import type { AdmissionLease } from "../../lib/admission";
 import { fetchMainAccountInfoAttempt } from "./main-account-probe";
+import { isQuotaDispatchCurrent, nextQuotaDispatchSequence, publishQuotaDispatch } from "./pool-quota-probe";
 
 /** A hard-lock reading younger than this is current enough to refuse on (#8113). */
 export const MAIN_HARD_LOCK_REFUSAL_READ_AGE_MS = 60_000;
@@ -75,8 +76,9 @@ export async function refreshMainHardLockBeforeRefusal(
   const blocked = () => getMainAccountHardLockStatus(policy, now()).state === "blocked";
   if (!blocked()) return true;
   if (caller === null) return false;
-  const quota = getMainPolicyQuota();
-  if (quota && now() - quota.updatedAt < MAIN_HARD_LOCK_REFUSAL_READ_AGE_MS) return false;
+  // The usage measurement's age, not the snapshot's write time: credits-only merges rewrite the latter.
+  const observedAt = getMainPolicyUsageObservedAt();
+  if (observedAt !== undefined && now() - observedAt < MAIN_HARD_LOCK_REFUSAL_READ_AGE_MS) return false;
   if (isNativeMainTrafficBlocked() || isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)
     || isCodexAccountPaused(config, MAIN_CODEX_ACCOUNT_ID)) return false;
   if (!inFlight) {
@@ -89,8 +91,11 @@ export async function refreshMainHardLockBeforeRefusal(
     if (queryAfter !== undefined && queryAfter > now()) return false;
     let read: Promise<void>;
     if (caller) {
+      // Without a live proof for the caller's credential there is nothing to read; keep the minute.
+      const dispatch = captureMainQuotaDispatch(caller.bearer, caller.accountId, captureConfigGeneration());
+      if (!dispatch) return false;
       lastReadAt.set(identity, now());
-      read = readCallerMainUsage(caller);
+      read = readCallerMainUsage(caller, dispatch);
     } else {
       const lease = tryAcquireNativeMainProfileClaim();
       if (!lease) return false;
@@ -122,12 +127,14 @@ async function readMainUsage(config: OcxConfig, lease: AdmissionLease): Promise<
 }
 
 /** Usage read with the caller's own main bearer: no physical credential read, no reauth state. */
-async function readCallerMainUsage(caller: MainHardLockRefusalCaller): Promise<void> {
-  const writerGeneration = captureConfigGeneration();
+async function readCallerMainUsage(
+  caller: MainHardLockRefusalCaller, dispatch: NonNullable<ReturnType<typeof captureMainQuotaDispatch>>,
+): Promise<void> {
   // The dispatch proof also fences credential commits (refresh, reauthentication) that advance the
   // mutation epoch before the observed credential itself changes.
-  const dispatch = captureMainQuotaDispatch(caller.bearer, caller.accountId, writerGeneration);
-  if (!dispatch) return;
+  const writerGeneration = dispatch.configGeneration;
+  // Ordered like the main probe: a response publishes only if no later dispatch already published.
+  const sequence = nextQuotaDispatchSequence();
   const key = `main:${writerGeneration}:${dispatch.credentialGeneration}`;
   const admission = await fetchCodexUsage(key, {
     headers: { Authorization: `Bearer ${caller.bearer}`, "ChatGPT-Account-Id": caller.accountId },
@@ -142,11 +149,12 @@ async function readCallerMainUsage(caller: MainHardLockRefusalCaller): Promise<v
     if (data === null || typeof data !== "object" || Array.isArray(data)) return;
     // The main login may have changed while the read was in flight; never publish across it.
     if (!isMainQuotaDispatchLive(dispatch) || !matchesMainQuotaCredential(caller.bearer, caller.accountId)
-      || writerGeneration !== captureConfigGeneration()) return;
+      || writerGeneration !== captureConfigGeneration() || !isQuotaDispatchCurrent(sequence)) return;
     const quota = parseUsageQuota(data);
     if (!quota) return;
     setAccountQuotaFromParsed(MAIN_CODEX_ACCOUNT_ID, quota, writerGeneration, dispatch.writer, parseMainPolicyUsageQuota(data),
       undefined, false, false, isValidWhamHistoryObservation(data) ? quota : null);
+    publishQuotaDispatch(sequence);
     usable = true;
   } finally {
     admission.settle(usable);

@@ -11,6 +11,7 @@ import {
   resetMainHardLockRefusalReadForTests,
 } from "../../src/codex/auth-api/main-hard-lock-refusal-read";
 import { advanceCodexCredentialMutationEpoch } from "../../src/codex/credential-mutation-epoch";
+import { nextQuotaDispatchSequence, publishQuotaDispatch } from "../../src/codex/auth-api/pool-quota-probe";
 import { CodexMainAccountHardLockError, resolveCodexAuthContext } from "../../src/codex/auth-context";
 import { captureMainQuotaWriter, clearMainAccountInfoCache, observeMainQuotaCredential } from "../../src/codex/main-account-cache";
 import { getMainAccountHardLockStatus } from "../../src/codex/main-account-hard-lock";
@@ -254,4 +255,38 @@ test("switching main logins A, B, A inside one minute reads A only once", async 
   signInMain(accountId);
   await stale();
   expect(calls).toHaveLength(2);
+});
+test("a credits-only update does not make a stale usage reading look fresh", async () => {
+  const calls = wham(() => usage(0));
+  age(MAIN_HARD_LOCK_REFUSAL_READ_AGE_MS - 1_000);
+  // Credits carry the previous usage tuple and rewrite the snapshot time, but measure no window.
+  setAccountQuotaFromParsed(MAIN, { resetCredits: 2 }, undefined, captureMainQuotaWriter(accountId));
+  age(2_000);
+  expect(await refreshMainHardLockBeforeRefusal(config())).toBe(true);
+  expect(calls).toEqual([whamUrl]);
+});
+
+test("a caller-owned response older than a published dispatch does not overwrite it", async () => {
+  const gate = Promise.withResolvers<void>();
+  const calls = wham(() => usage(0), gate.promise, false);
+  observeMainQuotaCredential(mainToken, accountId);
+  const headers = new Headers({ authorization: `Bearer ${mainToken}`, "chatgpt-account-id": accountId });
+  age(MAIN_HARD_LOCK_REFUSAL_READ_AGE_MS + 1);
+  const pending = resolveCodexAuthContext(headers, config(), "pool", { requestScopedMainCredential: true });
+  while (calls.length === 0) await Promise.resolve();
+  // A later main probe publishes a still-blocking reading while the caller's read is in flight.
+  publishQuotaDispatch(nextQuotaDispatchSequence());
+  gate.resolve();
+  await expect(pending).rejects.toBeInstanceOf(CodexMainAccountHardLockError);
+  expect(getMainAccountHardLockStatus(config()).state).toBe("blocked");
+});
+
+test("an explicit stored-main selection reads through the owned probe whatever bearer arrives", async () => {
+  const calls = wham(() => usage(0));
+  age(MAIN_HARD_LOCK_REFUSAL_READ_AGE_MS + 1);
+  const unrelated = new Headers({ authorization: `Bearer ${bearer("fixture-unrelated")}`, "chatgpt-account-id": "fixture-unrelated" });
+  const direct = { ...config(), providers: { openai: { ...config().providers.openai!, codexAccountMode: "direct" as const } } };
+  await resolveCodexAuthContext(unrelated, direct, "direct", { accountId: MAIN }).catch(error => error);
+  // The stub asserts the native-main claim, which only the owned probe takes.
+  expect(calls).toEqual([whamUrl]);
 });

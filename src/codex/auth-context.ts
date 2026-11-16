@@ -1087,6 +1087,8 @@ function callerOwnedMainRefusal(
 ): { bearer: string; accountId: string } | null | undefined {
   if (options.substituteMainCredentialForDirect === true || !hasCallerCodexBearer(headers)) return undefined;
   if (mode !== "direct" && options.requestScopedMainCredential !== true) return undefined;
+  // An explicit stored-account selection resolves the proxy-owned credential, whatever bearer arrived.
+  if (options.accountId !== undefined && options.requestScopedMainCredential !== true) return undefined;
   const bearer = authorizationCredential(headers);
   const accountId = headers.get("chatgpt-account-id") ?? (bearer ? extractAccountId(undefined, bearer) : undefined);
   // Caller-owned without a usable credential: no read at all, never the physical one.
