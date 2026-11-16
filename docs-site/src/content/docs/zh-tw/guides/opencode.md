@@ -69,7 +69,7 @@ export OPENCODEX_OPENCODE_API_KEY=<your key>
 
 ## Admission key 不會寫入磁碟
 
-OpenCode V1 與 V2 都使用 Responses。在 **Connect → OpenCode** 提示更新時，請重新整理受管理設定。`apiKey` 使用非機密的預留值 `opencodex-loopback`。遠端存取金鑰放在 V1 的 `options.headers` 或 V2 的提供者層級 `headers` 中。
+OpenCode V1 與 V2 都使用 Responses。在 **Connect → OpenCode** 提示更新時，請重新整理受管理設定。`apiKey` 使用非機密的預留值 `opencodex-loopback`。遠端存取金鑰放在 V1 的 `options.headers` 或 V2 的提供者層級 `headers` 中。 對於宣告支援音訊輸入的模型，V1 仍使用 Chat Completions。
 
 Loopback 範例：
 
@@ -80,7 +80,7 @@ Loopback 範例：
 }
 ```
 
-非 loopback 範例：
+非 loopback 範例（V1）：
 
 這是遠端用戶端的手動設定範例。請先設定 TLS 前端，再使用其 HTTPS URL；OpenCodex 本身不終止 TLS，`ocx opencode` 也不會自動探索該 URL。即使在區域網路中，明文 HTTP 也會在傳輸時暴露准入憑證。另一種方式是讓代理繫結回環位址，並使用本機 SSH 通道。請參閱[資料監聽器的 TLS](/zh-tw/guides/remote-hub/#giving-the-data-listener-tls)。
 
@@ -91,6 +91,18 @@ Loopback 範例：
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }
+}
+```
+
+非 loopback 範例（V2）：
+
+```json
+"settings": {
+  "baseURL": "https://proxy.example.com/v1",
+  "apiKey": "opencodex-loopback"
+},
+"headers": {
+  "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
 }
 ```
 

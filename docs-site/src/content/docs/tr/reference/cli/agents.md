@@ -302,7 +302,7 @@ yeniden başlatma gerekmeden etkili olur. Format
 adresinde belgelenmiştir. Hiçbir `api_keys` girdisi yazılmaz; bu yüzden bu dışa aktarım
 yalnızca geri döngü içindir ve geri döngü dışı bir bağlama reddedilir.
 
-opencode `{env:OPENCODEX_OPENCODE_API_KEY}` değerini enterpole eder. Üretilen Pi
+Uzaktan erişim için OpenCode `{env:OPENCODEX_OPENCODE_API_KEY}` değerini V1’de `options.headers`, V2’de sağlayıcı düzeyindeki `headers` üzerinden okur. Üretilen Pi
 ve OMP dışa aktarımları bir ortam değişkeni gerektirmez: her biri değişmez
 `opencodex-loopback` yer tutucusunu taşır. Bu önemlidir çünkü her iki istemci de
 model listelerini oluştururken `apiKey`'i çözer ve mevcut bir yapılandırma

@@ -10,7 +10,7 @@ Sous Windows, une surcharge exigeant un chemin absolu doit inclure une lettre de
 
 | Client | Fichier de configuration | Format | Prise d'effet de la modification | Identifiant |
 |---|---|---|---|---|
-| OpenCode | `~/.config/opencode/opencode.json` | JSON | au prochain lancement direct | `OPENCODEX_OPENCODE_API_KEY` |
+| OpenCode | `~/.config/opencode/opencode.json` | JSON | au prochain lancement direct | `OPENCODEX_OPENCODE_API_KEY` (hors bouclage seulement) |
 | Pi | `~/.pi/agent/models.json` | JSON | dans les nouvelles sessions | valeur fictive de bouclage |
 | OMP | `~/.omp/agent/models.yml` | YAML | après le redémarrage d'OMP | valeur fictive `opencodex-loopback` |
 | Hermes | `~/.hermes/config.yaml` | YAML | dans les nouvelles sessions | `OPENCODEX_HERMES_API_KEY` |

@@ -227,7 +227,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 
 Raycast 导出是一份独立的 `providers.yaml` 文档，在 `providers` 序列中只有一个 `id: opencodex` 元素：`name: OpenCodex`、代理的 `/v1` 基础 URL，以及每个已路由模型及其 `abilities`（`tools` 与 `system_message` 始终支持，`vision` 取自目录的输入模态，`reasoning_effort` 在模型有 effort 阶梯时设置，`temperature` 对推理模型关闭）。Custom Providers 是 Raycast Pro 功能，且 Raycast 会监视该文件，因此保存后的更改无需重启即可生效。格式见 [manual.raycast.com/ai/custom-providers](https://manual.raycast.com/ai/custom-providers)。不会写入任何 `api_keys` 条目，所以该导出仅限回环，非回环绑定会被拒绝。
 
-opencode 会插值 `{env:OPENCODEX_OPENCODE_API_KEY}`。opencodex 生成的 Pi 导出不需要环境变量，而是携带字面占位值 `opencodex-loopback`。这个值是必需的：Pi 在构建模型列表时会解析 `apiKey`，如果已有配置包含未设置的环境变量引用，它就会隐藏整个 provider。回环上的代理从不校验生成的占位值。
+远程连接时，OpenCode 会读取 `{env:OPENCODEX_OPENCODE_API_KEY}`（V1 使用 `options.headers`，V2 使用提供方级 `headers`）。opencodex 生成的 Pi 导出不需要环境变量，而是携带字面占位值 `opencodex-loopback`。这个值是必需的：Pi 在构建模型列表时会解析 `apiKey`，如果已有配置包含未设置的环境变量引用，它就会隐藏整个 provider。回环上的代理从不校验生成的占位值。
 
 :::caution[合并，不要替换]
 `ocx export` 从不写入你的真实客户端配置。该命令只会打印目标路径供你手动合并，而 `--out` 在没有 `--force` 的情况下拒绝覆盖已有文件，因为替换配置会破坏其中已有的其他 providers、agents 和 MCP 条目。

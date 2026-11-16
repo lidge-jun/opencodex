@@ -86,7 +86,7 @@ export OPENCODEX_OPENCODE_API_KEY=<your key>
 
 ## La clé d’admission n’est pas écrite sur disque
 
-OpenCode V1 et V2 utilisent Responses. Dans **Connect → OpenCode**, mettez à jour la configuration gérée quand le message apparaît. Les deux utilisent la valeur publique `opencodex-loopback` pour `apiKey`. La clé d’accès distant passe par `options.headers` (V1) ou `headers` au niveau du fournisseur (V2).
+OpenCode V1 et V2 utilisent Responses. Dans **Connect → OpenCode**, mettez à jour la configuration gérée quand le message apparaît. Les deux utilisent la valeur publique `opencodex-loopback` pour `apiKey`. La clé d’accès distant passe par `options.headers` (V1) ou `headers` au niveau du fournisseur (V2). V1 conserve Chat Completions pour les modèles qui déclarent une entrée audio.
 
 Exemple de bouclage :
 
@@ -97,7 +97,7 @@ Exemple de bouclage :
 }
 ```
 
-Exemple sans bouclage :
+Exemple sans bouclage (V1) :
 
 Cet exemple se configure manuellement sur le client distant. Configurez d’abord un frontal TLS, puis utilisez son URL HTTPS ; OpenCodex ne termine pas TLS et ne découvre pas cette URL pour `ocx opencode`. Le HTTP en clair sur le réseau local expose l’identifiant pendant le transport. Vous pouvez aussi garder le proxy sur l’interface de bouclage et utiliser un tunnel SSH local. Voir [TLS pour le listener de données](/fr/guides/remote-hub/#giving-the-data-listener-tls).
 
@@ -108,6 +108,18 @@ Cet exemple se configure manuellement sur le client distant. Configurez d’abor
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }
+}
+```
+
+Exemple sans bouclage (V2) :
+
+```json
+"settings": {
+  "baseURL": "https://proxy.example.com/v1",
+  "apiKey": "opencodex-loopback"
+},
+"headers": {
+  "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
 }
 ```
 

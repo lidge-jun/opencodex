@@ -62,7 +62,7 @@ export OPENCODEX_OPENCODE_API_KEY=<your key>
 
 ## アドミッションキーがディスクに書き込まれません
 
-OpenCode V1 と V2 はどちらも Responses を使用します。**Connect → OpenCode** に更新の案内が表示されたら管理対象の設定を更新してください。`apiKey` には公開の値 `opencodex-loopback` を設定し、リモート接続キーは V1 の `options.headers` または V2 のプロバイダー直下の `headers` に設定します。
+OpenCode V1 と V2 はどちらも Responses を使用します。**Connect → OpenCode** に更新の案内が表示されたら管理対象の設定を更新してください。`apiKey` には公開の値 `opencodex-loopback` を設定し、リモート接続キーは V1 の `options.headers` または V2 のプロバイダー直下の `headers` に設定します。 V1 では、音声入力を宣言しているモデルには引き続き Chat Completions を使用します。
 
 ループバックの例:
 
@@ -73,7 +73,7 @@ OpenCode V1 と V2 はどちらも Responses を使用します。**Connect → 
 }
 ```
 
-非ループバックの例:
+非ループバックの例 (V1):
 
 これはリモートクライアントを手動で設定する例です。先に TLS フロントエンドを設定し、その HTTPS URL を使ってください。OpenCodex は TLS を終端せず、`ocx opencode` もその URL を自動検出しません。LAN 上でも平文 HTTP では転送中の認証情報が露出します。代わりにプロキシをループバックにバインドし、ローカル SSH トンネルを使うこともできます。[データリスナーの TLS](/ja/guides/remote-hub/#giving-the-data-listener-tls) を参照してください。
 
@@ -84,6 +84,18 @@ OpenCode V1 と V2 はどちらも Responses を使用します。**Connect → 
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }
+}
+```
+
+非ループバックの例 (V2):
+
+```json
+"settings": {
+  "baseURL": "https://proxy.example.com/v1",
+  "apiKey": "opencodex-loopback"
+},
+"headers": {
+  "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
 }
 ```
 

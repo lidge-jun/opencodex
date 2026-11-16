@@ -225,7 +225,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 
 Raycast 匯出是一份獨立的 `providers.yaml` 文件，在 `providers` 序列中只有一個 `id: opencodex` 元素：`name: OpenCodex`、proxy 的 `/v1` base URL，以及每個路由模型及其 `abilities`（`tools` 與 `system_message` 一律支援，`vision` 依目錄的輸入模態而定，`reasoning_effort` 在模型有 effort 階梯時設定，`temperature` 對推理模型關閉）。Custom Providers 是 Raycast Pro 功能，且 Raycast 會監看該檔案，因此儲存後的變更不需重新啟動即可生效。格式說明見 [manual.raycast.com/ai/custom-providers](https://manual.raycast.com/ai/custom-providers)。不會寫入任何 `api_keys` 項目，所以此匯出僅限 loopback，非 loopback 的 bind 會被拒絕。
 
-opencode 會插值 `{env:OPENCODEX_OPENCODE_API_KEY}`。Pi 與 OMP 的匯出不需要環境變數，
+遠端連線時，OpenCode 會讀取 `{env:OPENCODEX_OPENCODE_API_KEY}`（V1 使用 `options.headers`，V2 使用提供者層級的 `headers`）。Pi 與 OMP 的匯出不需要環境變數，
 而是帶有字面值 `opencodex-loopback`。DSH 匯出需要 DSH 0.1.0-rc.6 或更新版本，且只擁有
 `llm-pi-ai.providers.opencodex`。DSH 會熱重載該 provider；使用者的預設模型與
 `deepseek-official` 維持不變。這項匯出僅支援 loopback，且不含真實憑證。

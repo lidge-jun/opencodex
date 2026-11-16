@@ -289,7 +289,6 @@ export function buildIntendedOpenCodeDocument(baseUrl: string): unknown {
             name: modelName(0),
             reasoning: true,
             options: { reasoningEffort: "low" },
-            interleaved: { field: "reasoning_content" },
             variants: {
               none: { reasoningEffort: "none" },
               low: { reasoningEffort: "low" },
@@ -304,7 +303,6 @@ export function buildIntendedOpenCodeDocument(baseUrl: string): unknown {
           [BRAVO]: {
             name: modelName(1),
             reasoning: true,
-            interleaved: { field: "reasoning_content" },
             variants: KILO_SUPPRESS_VARIANTS,
             limit: { context: 128000, output: 16384 },
             attachment: false,

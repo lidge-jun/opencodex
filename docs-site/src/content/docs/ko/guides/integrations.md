@@ -9,7 +9,7 @@ Windows에서 절대 경로가 필요한 오버라이드는 드라이브 문자(
 
 | 클라이언트 | 설정 파일 | 형식 | 변경 적용 시점 | 자격 증명 |
 |---|---|---|---|---|
-| OpenCode | `~/.config/opencode/opencode.json` | JSON | 다음 직접 실행 시 | `OPENCODEX_OPENCODE_API_KEY` |
+| OpenCode | `~/.config/opencode/opencode.json` | JSON | 다음 직접 실행 시 | `OPENCODEX_OPENCODE_API_KEY` (비루프백 전용) |
 | Pi | `~/.pi/agent/models.json` | JSON | 새 세션에서 | 루프백 자리표시자 |
 | OMP | `~/.omp/agent/models.yml` | YAML | OMP 재시작 후 | `opencodex-loopback` 자리표시자 |
 | Hermes | `~/.hermes/config.yaml` | YAML | 새 세션에서 | `OPENCODEX_HERMES_API_KEY` |

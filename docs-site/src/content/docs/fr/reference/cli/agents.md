@@ -276,7 +276,7 @@ L'exportation DSH gérée nécessite DSH 0.1.0-rc.6 ou plus récent et ne possè
 `llm-pi-ai.providers.opencodex`. DSH recharge à chaud ce fournisseur ; le modèle par défaut de l'utilisateur et
 `deepseek-official` restent intacts. Cette exportation s'effectue uniquement en boucle et ne comporte aucune véritable information d'identification.
 
-opencode interpole `{env:OPENCODEX_OPENCODE_API_KEY}`. Les exports Pi et OMP générés font
+Pour l’accès distant, OpenCode lit `{env:OPENCODEX_OPENCODE_API_KEY}` dans `options.headers` (V1) ou dans `headers` au niveau du fournisseur (V2). Les exports Pi et OMP générés font
 ne nécessitent pas de variable d’environnement : chacune porte l’espace réservé littéral `opencodex-loopback`.
 Ceci est porteur car les deux clients résolvent `apiKey` lors de la construction de leurs listes de modèles et
 masquer l'intégralité du fournisseur lorsqu'une configuration existante contient une référence d'environnement non définie. Le proxy n'a jamais

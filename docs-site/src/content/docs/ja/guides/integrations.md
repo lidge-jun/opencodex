@@ -9,7 +9,7 @@ Windows で絶対パスが必要なオーバーライドには、ドライブ文
 
 | クライアント | 設定ファイル | 形式 | 変更が反映される時点 | 認証情報 |
 |---|---|---|---|---|
-| OpenCode | `~/.config/opencode/opencode.json` | JSON | 次回の直接起動時 | `OPENCODEX_OPENCODE_API_KEY` |
+| OpenCode | `~/.config/opencode/opencode.json` | JSON | 次回の直接起動時 | `OPENCODEX_OPENCODE_API_KEY` (非ループバック時のみ) |
 | Pi | `~/.pi/agent/models.json` | JSON | 新しいセッション | ループバック用プレースホルダー |
 | OMP | `~/.omp/agent/models.yml` | YAML | OMP の再起動後 | `opencodex-loopback` プレースホルダー |
 | Hermes | `~/.hermes/config.yaml` | YAML | 新しいセッション | `OPENCODEX_HERMES_API_KEY` |

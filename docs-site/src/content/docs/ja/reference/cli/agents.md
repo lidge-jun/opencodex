@@ -223,7 +223,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 
 Raycast のエクスポートは、`providers` シーケンスに `id: opencodex` 要素を 1 つだけ持つ独立した `providers.yaml` 文書です。内容は `name: OpenCodex`、プロキシの `/v1` ベース URL、および `abilities` 付きのルーティング済み全モデルです (`tools` と `system_message` は常にサポート、`vision` はカタログの入力モダリティから、`reasoning_effort` はモデルに effort ラダーがある場合、`temperature` は推論モデルではオフ)。Custom Providers は Raycast Pro の機能で、Raycast はこのファイルを監視しているため、保存した変更は再起動なしで反映されます。形式は [manual.raycast.com/ai/custom-providers](https://manual.raycast.com/ai/custom-providers) に記載されています。`api_keys` エントリは書き込まれないため、このエクスポートは loopback 専用で、loopback 以外のバインドは拒否されます。
 
-opencode は `{env:OPENCODEX_OPENCODE_API_KEY}` を補間します。opencodex が生成する Pi のエクスポートには環境変数が不要で、リテラルのプレースホルダー `opencodex-loopback` が入ります。この値は必須です。Pi はモデル リストを構築する際に `apiKey` を解決し、既存の設定に未設定の環境変数参照がある場合はプロバイダー全体を隠すためです。ループバックでは、生成されたプレースホルダーをプロキシが検査することはありません。
+リモート接続では OpenCode は `{env:OPENCODEX_OPENCODE_API_KEY}` を V1 の `options.headers` または V2 のプロバイダー直下の `headers` から参照します。opencodex が生成する Pi のエクスポートには環境変数が不要で、リテラルのプレースホルダー `opencodex-loopback` が入ります。この値は必須です。Pi はモデル リストを構築する際に `apiKey` を解決し、既存の設定に未設定の環境変数参照がある場合はプロバイダー全体を隠すためです。ループバックでは、生成されたプレースホルダーをプロキシが検査することはありません。
 
 :::caution[マージし、決して置き換えないでください]
 `ocx export` は実際のクライアント設定を書き込むことはありません。宛先は手動でマージできるように出力されます。`--out` は、`--force` なしで既存のファイルを上書きすることを拒否します。これは、設定を置き換えると、その中にすでに含まれている他のプロバイダー、エージェント、および MCP エントリが破壊されるためです。

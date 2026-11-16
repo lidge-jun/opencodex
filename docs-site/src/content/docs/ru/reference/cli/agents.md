@@ -263,7 +263,7 @@ ocx export --client opencode --out ~/opencodex-opencode.json
 `api_keys` не создаётся, поэтому этот экспорт работает только через loopback, а привязка вне loopback
 отклоняется.
 
-opencode интерполирует `{env:OPENCODEX_OPENCODE_API_KEY}`. Сгенерированный opencodex экспорт для
+Для удалённого доступа OpenCode читает `{env:OPENCODEX_OPENCODE_API_KEY}` из `options.headers` (V1) или `headers` провайдера (V2). Сгенерированный opencodex экспорт для
 Pi не требует переменной окружения и несёт литеральную заглушку `opencodex-loopback`. Это значение
 обязательно: Pi разрешает `apiKey`, когда строит список моделей, и прячет провайдера целиком, если
 существующий конфиг содержит ссылку на незаданную переменную окружения. На loopback прокси не

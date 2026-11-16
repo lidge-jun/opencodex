@@ -96,7 +96,7 @@ export OPENCODEX_OPENCODE_API_KEY=<anahtarınız>
 
 ## Kabul anahtarı diske yazılmaz
 
-OpenCode V1 ve V2, Responses kullanır. **Connect → OpenCode** ekranında uyarı çıktığında yönetilen yapılandırmayı güncelleyin. `apiKey`, gizli olmayan `opencodex-loopback` değeridir. Uzaktan erişim anahtarı V1 için `options.headers`, V2 için sağlayıcı düzeyindeki `headers` üzerinden gönderilir.
+OpenCode V1 ve V2, Responses kullanır. **Connect → OpenCode** ekranında uyarı çıktığında yönetilen yapılandırmayı güncelleyin. `apiKey`, gizli olmayan `opencodex-loopback` değeridir. Uzaktan erişim anahtarı V1 için `options.headers`, V2 için sağlayıcı düzeyindeki `headers` üzerinden gönderilir. V1, ses girişi bildiren modellerde Chat Completions kullanmaya devam eder.
 
 Geri döngü örneği:
 
@@ -107,7 +107,7 @@ Geri döngü örneği:
 }
 ```
 
-Geri döngü olmayan örnek:
+Geri döngü olmayan örnek (V1):
 
 Bu örnek uzak istemcide elle yapılandırılır. Önce bir TLS ön ucu yapılandırın ve HTTPS URL'sini kullanın; OpenCodex TLS sonlandırmaz ve `ocx opencode` bu URL'yi otomatik bulmaz. LAN üzerinde düz HTTP, kimlik bilgisini aktarım sırasında açığa çıkarır. Alternatif olarak proxy'yi loopback üzerinde tutup yerel bir SSH tüneli kullanın. Bkz. [Veri dinleyicisi için TLS](/tr/guides/remote-hub/#giving-the-data-listener-tls).
 
@@ -118,6 +118,18 @@ Bu örnek uzak istemcide elle yapılandırılır. Önce bir TLS ön ucu yapılan
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }
+}
+```
+
+Geri döngü olmayan örnek (V2):
+
+```json
+"settings": {
+  "baseURL": "https://proxy.example.com/v1",
+  "apiKey": "opencodex-loopback"
+},
+"headers": {
+  "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
 }
 ```
 

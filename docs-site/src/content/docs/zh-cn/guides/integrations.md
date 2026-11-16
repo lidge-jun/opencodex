@@ -9,7 +9,7 @@ description: 从仪表盘将 opencodex 连接到 OpenCode、Pi、OMP、Hermes、
 
 | 客户端 | 配置文件 | 格式 | 变更生效时间 | 凭据 |
 |---|---|---|---|---|
-| OpenCode | `~/.config/opencode/opencode.json` | JSON | 下次直接启动时 | `OPENCODEX_OPENCODE_API_KEY` |
+| OpenCode | `~/.config/opencode/opencode.json` | JSON | 下次直接启动时 | `OPENCODEX_OPENCODE_API_KEY` (仅非 loopback 绑定) |
 | Pi | `~/.pi/agent/models.json` | JSON | 新会话 | 回环占位符 |
 | OMP | `~/.omp/agent/models.yml` | YAML | 重启 OMP 后 | `opencodex-loopback` 占位符 |
 | Hermes | `~/.hermes/config.yaml` | YAML | 新会话 | `OPENCODEX_HERMES_API_KEY` |

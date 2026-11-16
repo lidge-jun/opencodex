@@ -11,7 +11,7 @@ Windows'ta mutlak yol gerektiren geçersiz kılmalar bir sürücü harfi (`C:\Us
 
 | İstemci | Yapılandırma dosyası | Format | Değişiklik ne zaman geçerli olur? | Kimlik bilgisi |
 |---|---|---|---|---|
-| OpenCode | `~/.config/opencode/opencode.json` | JSON | sonraki doğrudan başlatmada | `OPENCODEX_OPENCODE_API_KEY` |
+| OpenCode | `~/.config/opencode/opencode.json` | JSON | sonraki doğrudan başlatmada | `OPENCODEX_OPENCODE_API_KEY` (yalnızca geri döngü dışı bağlantılar) |
 | Pi | `~/.pi/agent/models.json` | JSON | yeni oturumlarda | geri döngü (loopback) yer tutucusu |
 | OMP | `~/.omp/agent/models.yml` | YAML | OMP yeniden başlatıldıktan sonra | `opencodex-loopback` yer tutucusu |
 | Hermes | `~/.hermes/config.yaml` | YAML | yeni oturumlarda | `OPENCODEX_HERMES_API_KEY` |

@@ -34,10 +34,13 @@ describe("OpenCode and Kilo export real per-model controls", () => {
     for (const entry of [v1, kilo]) {
       expect(entry).toMatchObject({
         reasoning: true, tool_call: true, attachment: true,
-        interleaved: { field: "reasoning_content" }, options: { reasoningEffort: "low" }, variants,
+        options: { reasoningEffort: "low" }, variants,
       });
       expect(entry).not.toHaveProperty("settings");
     }
+    expect(v1.interleaved).toBeUndefined();
+    expect(v1.provider).toBeUndefined();
+    expect(kilo.interleaved).toEqual({ field: "reasoning_content" });
     expect(v2).toMatchObject({
       capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
       compatibility: { reasoningField: "reasoning_content" }, settings: { reasoningEffort: "low" },
@@ -46,6 +49,18 @@ describe("OpenCode and Kilo export real per-model controls", () => {
     expect(v2).not.toHaveProperty("attachment");
     expect(v2).not.toHaveProperty("modalities");
     expect(v2).not.toHaveProperty("options");
+  });
+
+  test("OpenCode V1 keeps the Chat SDK for models that accept audio", () => {
+    const { v1, v2 } = configs({ ...model, inputModalities: ["text", "audio"] });
+    expect(v1).toMatchObject({
+      provider: { npm: "@ai-sdk/openai-compatible" },
+      attachment: true,
+      modalities: { input: ["text", "audio"] },
+      interleaved: { field: "reasoning_content" },
+    });
+    expect(v2).not.toHaveProperty("provider");
+    expect(v2.capabilities?.input).toEqual(["text", "audio"]);
   });
 
   test("variant options override the declared client default, including explicit off", () => {

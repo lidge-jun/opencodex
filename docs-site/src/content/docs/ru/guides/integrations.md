@@ -11,7 +11,7 @@ description: Подключайте opencodex к OpenCode, Pi, OMP, Hermes, Open
 
 | Клиент | Файл конфигурации | Формат | Когда изменение начинает действовать | Учётные данные |
 |---|---|---|---|---|
-| OpenCode | `~/.config/opencode/opencode.json` | JSON | при следующем прямом запуске | `OPENCODEX_OPENCODE_API_KEY` |
+| OpenCode | `~/.config/opencode/opencode.json` | JSON | при следующем прямом запуске | `OPENCODEX_OPENCODE_API_KEY` (только вне loopback) |
 | Pi | `~/.pi/agent/models.json` | JSON | в новых сессиях | заглушка для loopback |
 | OMP | `~/.omp/agent/models.yml` | YAML | после перезапуска OMP | заглушка `opencodex-loopback` |
 | Hermes | `~/.hermes/config.yaml` | YAML | в новых сессиях | `OPENCODEX_HERMES_API_KEY` |

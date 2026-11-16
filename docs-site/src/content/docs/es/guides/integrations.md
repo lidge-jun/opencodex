@@ -7,7 +7,7 @@ La página **Conectar** escribe el bloque de proveedor de opencodex en el archiv
 
 | Cliente | Archivo de configuración | Formato | Cuando el cambio entra en vigor | Credenciales |
 |---|---|---|---|---|
-| OpenCode | `~/.config/opencode/opencode.json` | JSON | Próximo lanzamiento directo | `OPENCODEX_OPENCODE_API_KEY` |
+| OpenCode | `~/.config/opencode/opencode.json` | JSON | Próximo lanzamiento directo | `OPENCODEX_OPENCODE_API_KEY` (solo fuera de loopback) |
 | Pi | `~/.pi/agent/models.json` | JSON | Nuevas sesiones | marcador de posición loopback |
 | Gentle Shell | `~/.gentle-shell/agent/models.json` (hogar seleccionado persistente) | JSON | después de reiniciar Gentle Shell | marcador de posición loopback |
 | OMP | `~/.omp/agent/models.yml` | YAML | después de reiniciar OMP | `opencodex-loopback` marcador de posición |

@@ -8,7 +8,7 @@ file, and removes it again. Each client below has its own switch:
 
 | Client | Config file | Format | When the change takes effect | Credential |
 |---|---|---|---|---|
-| OpenCode | `~/.config/opencode/opencode.json` | JSON | next direct launch | `OPENCODEX_OPENCODE_API_KEY` |
+| OpenCode | `~/.config/opencode/opencode.json` | JSON | next direct launch | `OPENCODEX_OPENCODE_API_KEY` (remote bind only) |
 | Pi | `~/.pi/agent/models.json` | JSON | new sessions | loopback placeholder |
 | Gentle Shell | `~/.gentle-shell/agent/models.json` (persistent selected home) | JSON | after restarting Gentle Shell | loopback placeholder |
 | OMP | `~/.omp/agent/models.yml` | YAML | after restarting OMP | `opencodex-loopback` placeholder |

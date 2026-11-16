@@ -840,7 +840,7 @@ describe("hub-resolved Fast exports", () => {
     expect(expanded.v1.models["remote/model--fast"]).toEqual({
       name: "Remote Model Fast (remote)", limit: { context: 8192, output: 8192 },
       attachment: true, modalities: { input: ["text", "image"], output: ["text"] },
-      reasoning: true, interleaved: { field: "reasoning_content" },
+      reasoning: true,
       options: { reasoningEffort: "high" },
       tool_call: true,
       variants: { none: { reasoningEffort: "none" }, high: { reasoningEffort: "high" }, ultra: { reasoningEffort: "ultra" } },

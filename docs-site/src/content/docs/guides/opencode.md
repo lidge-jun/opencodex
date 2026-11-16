@@ -17,9 +17,10 @@ ocx opencode
 
 This ensures the proxy is running and launches opencode with the generated
 `provider.opencodex` and `providers.opencodex` blocks injected for that process — the
-legacy spelling opencode V1 reads, and the native V2 spelling. Both send requests to
-`/v1/responses` and carry reasoning-effort
-variants in the format their client reads. Extra arguments pass through:
+legacy spelling opencode V1 reads, and the native V2 spelling. Both default to
+`/v1/responses` and carry reasoning-effort variants in the format their client reads.
+OpenCode V1 keeps Chat Completions for models that declare audio input, because its
+Responses SDK cannot encode inline audio attachments. Extra arguments pass through:
 `ocx opencode run "hello"`.
 
 Routed models appear in the picker under the `opencodex` provider:
@@ -168,7 +169,7 @@ Loopback example:
 }
 ```
 
-Non-loopback example:
+Remote example (V1):
 
 This is a manually configured remote-client example. Configure a TLS frontend first, then use its HTTPS URL; OpenCodex does not terminate TLS or discover that URL for `ocx opencode`. Plain LAN HTTP exposes the admission credential in transit. Alternatively, keep the proxy on loopback and use a local SSH tunnel. See [TLS for the data listener](/guides/remote-hub/#giving-the-data-listener-tls).
 
@@ -182,8 +183,17 @@ This is a manually configured remote-client example. Configure a TLS frontend fi
 }
 ```
 
-The examples use V1 `options`. In V2, `baseURL` and `apiKey` are in `settings` and
-`headers` is at provider level.
+Remote example (V2):
+
+```json
+"settings": {
+  "baseURL": "https://proxy.example.com/v1",
+  "apiKey": "opencodex-loopback"
+},
+"headers": {
+  "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
+}
+```
 
 The launcher passes the real value only through the child process environment.
 `OPENCODEX_API_AUTH_TOKEN` takes precedence, then the hardened service token file, then

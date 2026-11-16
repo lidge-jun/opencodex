@@ -91,7 +91,7 @@ export OPENCODEX_OPENCODE_API_KEY=<your key>
 
 ## 인증 키는 디스크에 쓰이지 않습니다
 
-OpenCode V1과 V2 모두 Responses를 사용합니다. **Connect → OpenCode**에 안내가 표시되면 관리 구성을 업데이트하세요. `apiKey`에는 비밀이 아닌 `opencodex-loopback`을 사용하며 원격 접근 키는 V1의 `options.headers` 또는 V2의 공급자 수준 `headers`에 넣습니다.
+OpenCode V1과 V2 모두 Responses를 사용합니다. **Connect → OpenCode**에 안내가 표시되면 관리 구성을 업데이트하세요. `apiKey`에는 비밀이 아닌 `opencodex-loopback`을 사용하며 원격 접근 키는 V1의 `options.headers` 또는 V2의 공급자 수준 `headers`에 넣습니다. V1에서는 오디오 입력을 선언한 모델에 계속 Chat Completions를 사용합니다.
 
 루프백 예시:
 
@@ -106,6 +106,8 @@ OpenCode V1과 V2 모두 Responses를 사용합니다. **Connect → OpenCode**�
 
 원격 클라이언트에서 수동으로 설정하는 예시입니다. 먼저 TLS 프런트엔드를 구성하고 해당 HTTPS URL을 사용하세요. OpenCodex는 TLS를 종료하지 않으며 `ocx opencode`가 이 URL을 자동으로 찾지도 않습니다. LAN에서도 평문 HTTP는 전송 중 자격 증명을 노출합니다. 대신 프록시를 루프백에 바인딩하고 로컬 SSH 터널을 사용할 수 있습니다. [데이터 리스너 TLS](/ko/guides/remote-hub/#giving-the-data-listener-tls)를 참고하세요.
 
+비루프백 예시 (V1):
+
 ```json
 "options": {
   "baseURL": "https://proxy.example.com/v1",
@@ -113,6 +115,18 @@ OpenCode V1과 V2 모두 Responses를 사용합니다. **Connect → OpenCode**�
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }
+}
+```
+
+비루프백 예시 (V2):
+
+```json
+"settings": {
+  "baseURL": "https://proxy.example.com/v1",
+  "apiKey": "opencodex-loopback"
+},
+"headers": {
+  "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
 }
 ```
 

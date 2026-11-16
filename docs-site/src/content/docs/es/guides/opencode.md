@@ -32,7 +32,7 @@ Se generan dos bloques de proveedor:
 
 | Bloque | Cliente que lo lee | Formato de variantes |
 |---|---|---|
-| `provider.opencodex` | OpenCode V1 (`npm` + `options`) | Mapa de opciones heredado |
+| `provider.opencodex` | OpenCode V1 (`npm` + `options`) | Mapa de opciones heredado | V1 mantiene Chat Completions para los modelos que declaran entrada de audio.
 | `providers.opencodex` | OpenCode V2 (`package` + `settings`) | Array de configuración nativo |
 
 V2 usa su array nativo de variantes en lugar del mapa heredado. Ambos bloques identifican los mismos proveedores y modelos y se combinan en una sola entrada; ningún modelo aparece duplicado. V2 siempre escribe el array de variantes, vacío cuando no se declara ninguna, para impedir que el cliente invente opciones de esfuerzo bajo, medio y alto. En el bloque heredado, los modelos conocidos de razonamiento fijo desactivan por el mismo motivo todos los niveles generados automáticamente; esas entradas desactivadas no son esfuerzos seleccionables.
@@ -121,7 +121,7 @@ Ejemplo de loopback:
 }
 ```
 
-Ejemplo fuera de loopback:
+Ejemplo fuera de loopback (V1):
 
 Este ejemplo se configura manualmente en el cliente remoto. Prepara primero un frontend TLS y usa su URL HTTPS; OpenCodex no termina TLS ni descubre esa URL para `ocx opencode`. HTTP sin cifrar en la LAN expone la credencial durante el transporte. Como alternativa, conserva el proxy en loopback y usa un túnel SSH local. Consulta [TLS para el listener de datos](/es/guides/remote-hub/#giving-the-data-listener-tls).
 
@@ -132,6 +132,18 @@ Este ejemplo se configura manualmente en el cliente remoto. Prepara primero un f
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }
+}
+```
+
+Ejemplo fuera de loopback (V2):
+
+```json
+"settings": {
+  "baseURL": "https://proxy.example.com/v1",
+  "apiKey": "opencodex-loopback"
+},
+"headers": {
+  "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
 }
 ```
 

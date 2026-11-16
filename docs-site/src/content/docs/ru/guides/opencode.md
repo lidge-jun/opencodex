@@ -89,7 +89,7 @@ export OPENCODEX_OPENCODE_API_KEY=<your key>
 
 ## Admission key не пишется на диск
 
-OpenCode V1 и V2 используют Responses. Откройте **Connect → OpenCode** и обновите управляемую конфигурацию, когда появится уведомление. `apiKey` содержит общедоступное значение `opencodex-loopback`. Ключ удалённого доступа передаётся через `options.headers` (V1) или `headers` провайдера (V2).
+OpenCode V1 и V2 используют Responses. Откройте **Connect → OpenCode** и обновите управляемую конфигурацию, когда появится уведомление. `apiKey` содержит общедоступное значение `opencodex-loopback`. Ключ удалённого доступа передаётся через `options.headers` (V1) или `headers` провайдера (V2). Для моделей, которые принимают аудио, V1 сохраняет Chat Completions.
 
 Пример для loopback:
 
@@ -100,7 +100,7 @@ OpenCode V1 и V2 используют Responses. Откройте **Connect →
 }
 ```
 
-Пример для не-loopback:
+Пример для не-loopback (V1):
 
 Это пример ручной настройки удалённого клиента. Сначала настройте TLS-фронтенд и используйте его HTTPS URL: OpenCodex не завершает TLS и не определяет этот URL для `ocx opencode`. Обычный HTTP в локальной сети раскрывает учётные данные при передаче. Либо оставьте прокси на loopback и используйте локальный SSH-туннель. См. [TLS для слушателя данных](/ru/guides/remote-hub/#giving-the-data-listener-tls).
 
@@ -111,6 +111,18 @@ OpenCode V1 и V2 используют Responses. Откройте **Connect →
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }
+}
+```
+
+Пример для не-loopback (V2):
+
+```json
+"settings": {
+  "baseURL": "https://proxy.example.com/v1",
+  "apiKey": "opencodex-loopback"
+},
+"headers": {
+  "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
 }
 ```
 

@@ -98,6 +98,8 @@ export { buildT3CodeClientConfig, t3codeConfigPath, t3codeHomeDir, type T3CodeGe
 
 export interface OpencodeModelEntry {
   name: string;
+  /** V1 model-level SDK override for attachments the Responses SDK cannot encode. */
+  provider?: { npm: "@ai-sdk/openai-compatible" };
   limit?: { context: number; input?: number; output: number };
   /**
    * opencode's own capability fields, derived from the catalog row's declared input
@@ -787,7 +789,15 @@ export function opencodeProviderBlocks(
   const v2Models: Record<string, OpencodeV2ModelEntry> = {};
   for (const model of expandFastExportModels(catalogModels)) {
     const key = model.namespaced;
-    const entry: OpencodeModelEntry = { name: exportModelLabel(model), ...legacyReasoningMetadata(model) };
+    const { interleaved, ...reasoning } = legacyReasoningMetadata(model);
+    // V1's Responses SDK rejects inline audio files before reaching the proxy.
+    // Keep those models on Chat and preserve its companion reasoning metadata.
+    const usesV1Chat = model.inputModalities?.includes("audio") === true;
+    const entry: OpencodeModelEntry = {
+      name: exportModelLabel(model),
+      ...reasoning,
+      ...(usesV1Chat ? { provider: { npm: "@ai-sdk/openai-compatible" }, ...(interleaved ? { interleaved } : {}) } : {}),
+    };
     const context = authoritativeContextWindow(model.contextWindow);
     if (context !== undefined) {
       entry.limit = { context, output: outputBudgetFor(context, model) };
@@ -815,7 +825,7 @@ export function opencodeProviderBlocks(
       name: entry.name,
       ...(entry.limit ? { limit: { ...entry.limit } } : {}),
       ...(v2Capabilities ? { capabilities: v2Capabilities } : {}),
-      ...(entry.interleaved ? { compatibility: { reasoningField: "reasoning_content" } } : {}),
+      ...(interleaved ? { compatibility: { reasoningField: "reasoning_content" } } : {}),
       ...(defaultEffort !== undefined ? { settings: { reasoningEffort: defaultEffort } } : {}),
       variants: opencodeEffortVariants(model),
     };
