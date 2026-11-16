@@ -997,7 +997,7 @@ For a loopback/private self-hosted endpoint, **before the first login**, create 
 `authMode: "oauth"`, and an explicit `allowPrivateNetwork: true`. Login preserves that operator
 setting and never grants it from a URL override. Without it, destination validation rejects the
 local endpoint for inference and model discovery. The OAuth browser callback listener itself
-does not require this provider opt-in. See the [OrcaRouter setup example](/guides/providers/).
+does not require this provider opt-in. See the [OrcaRouter setup example](/guides/api-key-catalog/).
 
 ## Provider diagnostic outbound safety
 
@@ -1649,7 +1649,7 @@ API keys and credential references can be stored in the OS credential store (mac
 The `zhipu-bigmodel-responses` preset seeds `glm-5.3`, `glm-5.3-flash` and `glm-5-turbo` with
 `liveModels: false` for `https://open.bigmodel.cn/api/v1`. Its static roster and
 per-model context, effort, and summary metadata come from the
-[BigModel Responses guide](/guides/providers/#bigmodel-coding-plan-over-responses).
+[BigModel Responses guide](/guides/api-key-catalog/#bigmodel-coding-plan-over-responses).
 The official local `models.json` example does not establish a live `/models` API.
 
 With `liveModels: false`, an empty or omitted `models` list seeds the configured `defaultModel`
