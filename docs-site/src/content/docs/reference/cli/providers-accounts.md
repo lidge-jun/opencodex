@@ -576,10 +576,8 @@ catalog. Authless Desktop mode (`--desktop-authless on`) is a separate choice; s
 [canonical authless Desktop workflow](/guides/codex-integration/#authless-codex-desktop-opt-in).
 
 Earlier versions enabled Reserve through the authless switch. An existing install keeps what it had:
-Reserve follows the authless value until a one-time seed copies it into `codexReserveEnabled` and
-records `codexReserveMigration`. Startup records the seed when `config.json` sets
-`codexDesktopAuthless`; otherwise the first change to authless or Reserve through `ocx` or the
-dashboard records it before applying the change. After that the two settings move independently, and removing `codexReserveEnabled` turns Reserve off rather than following authless
+The first start of this version copies the authless value into `codexReserveEnabled` once and
+records `codexReserveMigration`; until then Reserve follows authless. After that the two settings move independently, and removing `codexReserveEnabled` turns Reserve off rather than following authless
 again. Enabling the setting grants no entitlement; the checks below still decide every request.
 
 Each compatibility request checks a credential-bound server authorization, cached for at most

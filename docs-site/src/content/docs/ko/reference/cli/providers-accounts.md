@@ -194,8 +194,7 @@ Reserve가 활성화되지 않을 수 있습니다. 스위치를 끄면 원래 �
 
 이전 버전에서는 로그인 생략 스위치가 Reserve도 켰습니다. 기존 설치는 그 상태를 유지합니다. 한 번의 시드가
 로그인 생략 값을 `codexReserveEnabled`로 복사하고 `codexReserveMigration`을 기록하기 전까지 Reserve는 로그인 생략 값을 따릅니다.
-`config.json`에 `codexDesktopAuthless`가 있으면 시작할 때 시드를 기록하고, 없으면 `ocx`나 대시보드에서 로그인 생략이나 Reserve를
-처음 바꿀 때 변경 전에 기록합니다. 그 뒤로 두 설정은 따로 움직이며, `codexReserveEnabled`를 지우면 로그인 생략 값을 다시 따르지 않고 Reserve가
+이 버전으로 처음 시작할 때 시드를 기록합니다. 그 뒤로 두 설정은 따로 움직이며, `codexReserveEnabled`를 지우면 로그인 생략 값을 다시 따르지 않고 Reserve가
 꺼집니다. 이 설정을 켠다고 사용 권한이 생기지는 않으며, 아래 확인이 모든 요청을 판단합니다.
 
 각 요청은 해당 자격 증명에 묶인 서버 허용 결과를 확인하며, 캐시는 최대 60초만 유지합니다.

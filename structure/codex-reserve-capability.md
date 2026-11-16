@@ -11,12 +11,12 @@ reads authless. Every whole-config writer projects it through `projectPersistedC
 (`src/config/persisted-projections.ts`) against the persisted pre-write document, and records it only when
 the write changes authless (seeding from the persisted value, so the change cannot move Reserve), sets
 Reserve explicitly, or carries an already migrated file. Any other write leaves an unmarked document
-byte-for-byte alone, which keeps unchanged-save and generation invariants. The startup step
-(`src/server/reserve-capability-startup.ts`) records the seed for a file that sets authless and, on
-failure, warns and leaves the legacy reading in place; a file that never set authless reads Reserve as
-off and is left untouched. The remaining gap is a hand edit that adds authless to such a file before any
-seed is recorded: Reserve follows it, exactly as before #4961. `PUT /api/settings` seeds the live config before changing either
-switch, persists an explicit `false`, refreshes the catalog when Reserve changes, and restores both
+byte-for-byte alone, which keeps unchanged-save and generation invariants. A new document starts disabled even when created with authless on. The startup step
+(`src/server/reserve-capability-startup.ts`) records the seed for every unmarked file once (on failure it
+warns and leaves the legacy reading in place), so after the first start a hand edit of authless cannot
+move Reserve. The settings route does not seed the live object itself: an authless-only change is seeded
+by the live writer from the file under its lock, so a stale live object cannot overwrite another
+process's Reserve decision; an explicit Reserve value is recorded with the marker. `PUT /api/settings` persists an explicit `false`, refreshes the catalog when Reserve changes, and restores both
 fields only if the save fails before publication; after publication it adopts the Reserve fields from the
 published file. The startup step adopts the seed in place, because the
 loaded object carries file-backed provenance that a copy would lose. The live writer's three-way merge keeps
