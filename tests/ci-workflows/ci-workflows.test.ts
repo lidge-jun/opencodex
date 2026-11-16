@@ -848,7 +848,7 @@ describe("GitHub Actions hardening", () => {
     // notes file: at creation, or when a resumed run reuses a draft and rewrites its body from its own file (#7207).
     for (const edit of workflow.match(/gh release edit[^\n]*/g) ?? []) {
       if (edit.includes("--notes")) expect(edit).toBe('gh release edit "$release_tag" --notes-file "$notes_file" ;;');
-      else { expect(edit).toContain("--draft=false"); expect(edit).not.toMatch(/\s-[nF](\s|$)/); }
+      else { expect(edit).toContain("--draft=false"); expect(edit).not.toMatch(/\s-[nF]/); }
     }
     expect(workflow).not.toContain("--generate-notes");
 
