@@ -1277,6 +1277,59 @@ describe("combo stream preflight", () => {
     })).toBe(true);
   });
 
+  for (const field of ["tool_choice", "text.format"] as const) {
+    for (const separateChunks of [false, true]) {
+      test(`malformed ${field} cannot discard hosted output before failure (separate chunks: ${separateChunks})`, async () => {
+        const malformed = { type: { toString: null } };
+        const response = {
+          id: "completed-hosted-work", status: "in_progress",
+          output: [{ type: "mcp_call", id: "completed-call", status: "completed", name: "act", arguments: "{}", output: "done" }],
+          ...(field === "tool_choice" ? { tool_choice: malformed } : { text: { format: malformed } }),
+        };
+        const payloads = [
+          { type: "response.created", response },
+          { type: "response.failed", response: { id: response.id, status: "failed", output: [], error: { code: "server_error", message: "busy" } } },
+        ];
+        const frames = payloads.map(payload => `data: ${JSON.stringify(payload)}\n\n`);
+        const original = new Response(new ReadableStream<Uint8Array>({ start(controller) {
+          for (const frame of separateChunks ? frames : [frames.join("")]) controller.enqueue(new TextEncoder().encode(frame));
+          controller.close();
+        } }), { headers: { "content-type": "text/event-stream" } });
+        const result = await preflightComboStreamResponse(original, { model: "m1", provider: "a" });
+        expect(result.kind).toBe("accepted");
+        expect(result.response.status).toBe(200);
+        expect(await result.response.text()).toBe(frames.join(""));
+        expect(comboStreamPayloadCommitsOutput(payloads[0])).toBe(true);
+      });
+    }
+  }
+
+  test("a replay classifier exception commits the original stream", async () => {
+    const payloads = [
+      { type: "response.created", response: { id: "original", status: "in_progress", output: [] } },
+      { type: "response.failed", response: { status: "failed", output: [], error: { code: "server_error", message: "busy" } } },
+    ];
+    const original = sse(...payloads);
+    const expected = await original.clone().text();
+    const result = await preflightComboStreamResponse(original, { model: "m1", provider: "a" }, payload => {
+      if ((payload as { type: string }).type === "response.created") throw new Error("classification unavailable");
+      return true;
+    });
+    expect(result.kind).toBe("accepted");
+    expect(result.response.status).toBe(200);
+    expect(await result.response.text()).toBe(expected);
+  });
+
+  test("valid selector metadata with no output still permits terminal failover", async () => {
+    const result = await preflightComboStreamResponse(sse(
+      { type: "response.created", response: { id: "empty", status: "in_progress", output: [], tool_choice: { type: "function", name: "read" }, text: { format: { type: "text" } } } },
+      { type: "response.failed", response: { status: "failed", output: [], error: { code: "server_error", message: "busy" } } },
+    ), { model: "m1", provider: "a" });
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(502);
+    await result.response.body?.cancel();
+  });
+
   for (const type of ["response.created", "response.in_progress", "response.queued", "response.heartbeat"]) {
     for (const extra of [
       { output_text: "already produced" },
