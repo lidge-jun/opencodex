@@ -1825,6 +1825,7 @@ export const fr: Record<TKey, string> = {
   "modal.freeTierTitle": "Offre gratuite",
   "modal.subscriptionCliTitle": "CLI d'abonnement, pas une clé API",
   "modal.subscriptionCliWarning": "Ce fournisseur n'utilise pas de clé API. Il pilote la CLI officielle Claude Code connectée sur cette machine ({cmd}) et facture ce compte d'abonnement Claude. OpenCodex ne stocke aucune clé pour lui, et une clé saisie ici n'est jamais utilisée. Pour une facturation par clé API, ajoutez plutôt {apiProvider}.",
+  "modal.subscriptionCliWarningAgy": "Ce fournisseur n'utilise pas de clé API. Il pilote la CLI officielle Antigravity connectée sur cette machine ({cmd}) et facture ce compte Google Antigravity. Google ne l'autorise que pour un usage interactif dirigé par l'utilisateur ; OpenCodex ne le sert donc qu'aux requêtes de cette machine et refuse les sous-agents, les combos et le routage de repli. OpenCodex ne stocke aucune clé pour lui, et une clé saisie ici n'est jamais utilisée. Pour des charges programmatiques ou partagées, ajoutez plutôt {apiProvider}.",
   "modal.freeTierDefault": "Aucune clé API requise. Fonctionne immédiatement.",
   "modal.tab.accounts": "Comptes",
   "modal.tab.free": "Gratuit",

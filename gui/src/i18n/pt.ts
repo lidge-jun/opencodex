@@ -1836,6 +1836,7 @@ export const pt: Record<TKey, string> = {
   "modal.freeTierTitle": "Plano gratuito",
   "modal.subscriptionCliTitle": "CLI por assinatura, não chave de API",
   "modal.subscriptionCliWarning": "Este provedor não usa chave de API. Ele aciona a CLI oficial do Claude Code autenticada nesta máquina ({cmd}) e cobra da conta de assinatura do Claude. O OpenCodex não armazena nenhuma chave para ele, e uma chave informada aqui nunca é usada. Para cobrança por chave de API, adicione {apiProvider}.",
+  "modal.subscriptionCliWarningAgy": "Este provedor não usa chave de API. Ele aciona a CLI oficial do Antigravity conectada nesta máquina ({cmd}) e cobra dessa conta do Google Antigravity. O Google só permite uso interativo e dirigido pelo usuário, então o OpenCodex o usa apenas para solicitações desta máquina e recusa subagentes, combos e roteamento de fallback. O OpenCodex não armazena chave para ele, e uma chave inserida aqui nunca é usada. Para cargas programáticas ou compartilhadas, adicione {apiProvider} em vez disso.",
   "modal.freeTierDefault": "Não requer chave de API. Funciona de imediato.",
   "modal.tab.accounts": "Contas",
   "modal.tab.free": "Grátis",

@@ -1824,6 +1824,7 @@ export const vi: Record<TKey, string> = {
   "modal.freeTierTitle": "Gói miễn phí",
   "modal.subscriptionCliTitle": "CLI theo gói đăng ký, không phải API key",
   "modal.subscriptionCliWarning": "Nhà cung cấp này không dùng API key. Nó chạy Claude Code CLI chính thức đã đăng nhập trên máy này ({cmd}) và tính phí vào tài khoản gói đăng ký Claude đó. OpenCodex không lưu key nào cho nó, và key nhập ở đây sẽ không bao giờ được dùng. Để tính phí theo API key, hãy thêm {apiProvider} thay thế.",
+  "modal.subscriptionCliWarningAgy": "Nhà cung cấp này không dùng khóa API. Nó điều khiển Antigravity CLI chính thức đã đăng nhập trên máy này ({cmd}) và tính phí vào tài khoản Google Antigravity đó. Google chỉ cho phép sử dụng tương tác do người dùng chủ động, nên OpenCodex chỉ dùng nó cho yêu cầu từ máy này và từ chối tác tử con, combo và định tuyến dự phòng. OpenCodex không lưu khóa cho nó, và khóa nhập ở đây sẽ không bao giờ được dùng. Với khối lượng công việc lập trình hoặc dùng chung, hãy thêm {apiProvider} thay thế.",
   "modal.freeTierDefault": "Không cần API key. Có thể sử dụng ngay.",
   "modal.tab.accounts": "Tài khoản",
   "modal.tab.free": "Miễn phí",
