@@ -227,3 +227,9 @@ describe("Desktop installation and stale-runtime advice", () => {
     expect(parseVersionOutput("2.100.3")).toBeNull();
   });
 });
+
+test("a runtime newer than the installation is not called stale", async () => {
+  const h = harness({ installed: "2.100.3", runtime: [live(7, "2.101.0")] });
+  expect(await runHeadlessDesktopUpdate({ check: false }, h.deps)).toMatchObject({ outcome: "up-to-date", exitCode: 0, runtime: { version: "2.101.0" } });
+  expect(h.events.some(event => event.startsWith("restart") || event === "drain")).toBe(false);
+});

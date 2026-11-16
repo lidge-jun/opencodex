@@ -15,6 +15,7 @@ import { compareToInstalled, DesktopUpdateRefusal, parseDesktopFeed, verifyDeskt
 import { describeMsiOutcome, isInstalled, runMsiInstall, type InstallerSpawn, type MsiOutcome } from "./msi";
 import { settleRuntime, type RuntimeOutcome, type RuntimeReplaceDeps } from "./runtime";
 import { desktopUpdateCommand, type WindowsDesktopInstall } from "./install";
+import { computeVersionSkew } from "../cli/version-skew";
 
 export const HEADLESS_RESULT_SCHEMA = "ocx.desktop.headless-update/1";
 
@@ -128,7 +129,8 @@ export async function runHeadlessDesktopUpdate(options: { check: boolean }, deps
         message: `The installed version ${installed} cannot be compared with the published ${candidate.version}; nothing was changed.` });
     }
     const live = await deps.runtime.findLive();
-    const stale = live?.version && live.version !== installed;
+    // Only a runtime older than this installation is the one an install left behind.
+    const stale = live?.version !== undefined && computeVersionSkew(installed, live.version).relation === "cli-newer";
     if (options.check || !stale) {
       return finish({
         outcome: stale ? "old-runtime-serving" : "up-to-date",
