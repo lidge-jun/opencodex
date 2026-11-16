@@ -164,6 +164,8 @@ import { relaySseEagerBounded } from "../relay-eager";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { idleDeadline } from "../../lib/abort";
 import { resolveStallTimeoutMs } from "../../stall-timeout";
+import { createEstimatedUsagePayloadRewrite, ESTIMATED_USAGE_HEADER, estimatedUsageJson } from "./estimated-usage";
+import { estimateInputTokens } from "./input-admission";
 import { formatErrorResponse } from "../../bridge";
 import {
   httpStatusFromTerminalError,
@@ -470,6 +472,11 @@ export async function deliverPassthroughResponse(
   } = nativeExchange;
   const { commitReasoningReplayServingRoute, recordTerminalOutcomes } = responseEffects;
   const { parsed, subagentQuotaFailureModel, clientRequestedStream, translatorBudget } = requestState;
+  // #7427: opt-in estimated usage for a provider that omits it. Client-facing only; the request log,
+  // spend and quota read the provider's original body.
+  const estimateUsage = route.provider.estimateMissingUsage === true;
+  let usageInputEstimate: number | undefined;
+  const inputEstimate = (): number => usageInputEstimate ??= estimateInputTokens(parsed, route.modelId, route.provider);
   const { openAiSidecar } = sidecarState;
   const { requestBindings } = transportState;
 
@@ -981,7 +988,12 @@ export async function deliverPassthroughResponse(
         (!canonicalBufferedJson || !options.comboAttempt) && isLocalCodexImageClient(req.headers, options.admission?.kind, options.inboundWire)
           ? createHostedImageDisplayRewrite()
           : undefined,
+        // Last, so it sees the response the client receives; never on the canonical JSON fold.
+        estimateUsage && !canonicalBufferedJson
+          ? payloadRewriteAsBlockRewrite(createEstimatedUsagePayloadRewrite(inputEstimate, route.modelId))
+          : undefined,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
+      if (estimateUsage && !canonicalBufferedJson) headers.set(ESTIMATED_USAGE_HEADER, "when-missing");
       const clientBlockRewrite = blockRewrites.length > 0
         ? composeSseBlockRewrites(...blockRewrites)
         : undefined;
@@ -1506,6 +1518,13 @@ export async function deliverPassthroughResponse(
           }
           throw error;
         } finally { imageDisplay.dispose?.(); }
+      }
+      if (estimateUsage && upstreamResponse.ok) {
+        const estimated = estimatedUsageJson(clientJson, inputEstimate(), route.modelId);
+        if (estimated !== undefined) {
+          clientJson = estimated;
+          headers.set(ESTIMATED_USAGE_HEADER, "true");
+        }
       }
       // #875: the transport-neutral reliability policy forced a bounded JSON
       // upstream for a client that asked for SSE. Reframe the completed JSON

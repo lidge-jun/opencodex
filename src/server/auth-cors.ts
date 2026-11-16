@@ -1338,6 +1338,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   unsafeAllowNativeLocalExec: "editor",
   nativeLocalExec: "editor",
   messagePhaseInference: "editor",
+  estimateMissingUsage: "editor",
   tlsProfile: "editor",
 } as const satisfies Record<keyof OcxProviderConfig, ProviderConfigFieldPolicy>;
 

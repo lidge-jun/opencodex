@@ -965,6 +965,11 @@ export interface OcxProviderConfig {
    */
   messagePhaseInference?: boolean;
   /**
+   * Opt-in (#7427): on a native Responses route, add estimated `usage` to a completed response the
+   * provider sent without one, marked by `x-opencodex-usage-estimated`. Never used for cost, spend or quota.
+   */
+  estimateMissingUsage?: boolean;
+  /**
    * Opt-in hosted-web-search bridge for this KEY-auth Responses passthrough provider (#3761).
    * Absent or disabled leaves the passthrough byte-identical to today.
    */
