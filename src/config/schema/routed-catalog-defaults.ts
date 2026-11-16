@@ -7,7 +7,7 @@ import type { OcxRoutedCatalogDefaultsConfig } from "../../types/routed-catalog-
  * `routedCatalogDefaults` in config.json.
  *
  * The allowlist is the owner's decision: the three `include_*_usage_instructions` prompt-block
- * flags plus `support_verbosity` / `default_verbosity`. Nothing else is accepted, because the
+ * flags plus `default_verbosity`. Nothing else is accepted, because the
  * neighbouring row fields (tool mode, search, truncation, auto review, identity) carry execution or
  * protocol contracts that an operator default must not be able to undo. Every field is optional;
  * an omitted field keeps today's derivation, and explicit `false` stays `false`.
@@ -18,14 +18,13 @@ export const routedCatalogDefaultsSchema = z.object({
   includeSkillsUsageInstructions: z.boolean().optional(),
   includeAppsUsageInstructions: z.boolean().optional(),
   includePluginUsageInstructions: z.boolean().optional(),
-  supportVerbosity: z.boolean().optional(),
   defaultVerbosity: z.enum(ROUTED_CATALOG_VERBOSITIES).optional(),
 }).strict() satisfies z.ZodType<OcxRoutedCatalogDefaultsConfig>;
 
 export type RoutedCatalogDefaults = OcxRoutedCatalogDefaultsConfig;
 
 export const ROUTED_CATALOG_DEFAULTS_SHAPE_HINT = "accepts only optional boolean includeSkillsUsageInstructions,"
-  + " includeAppsUsageInstructions, includePluginUsageInstructions and supportVerbosity, and an optional"
+  + " includeAppsUsageInstructions and includePluginUsageInstructions, and an optional"
   + " defaultVerbosity of \"low\", \"medium\" or \"high\"";
 
 /** Write-boundary check; also drives the load-time and diagnostics warnings for a degraded block. */

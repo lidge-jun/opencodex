@@ -10,12 +10,13 @@ import { resolveRoutedCatalogDefaults } from "../../src/config/schema/routed-cat
 const invalid: unknown[] = [
   null, [], true, "high",
   { defaultVerbosity: "max" }, { defaultVerbosity: "LOW" }, { defaultVerbosity: null },
-  { supportVerbosity: "true" }, { includeSkillsUsageInstructions: 1 },
+  // supportVerbosity is outside the owner's allowlist: verbosity support stays the provider's.
+  { supportVerbosity: true }, { supportVerbosity: false }, { includeSkillsUsageInstructions: 1 },
   { includeAppsUsageInstructions: null }, { includePluginUsageInstructions: "yes" },
   // Serialized catalog spellings and fields outside the allowlist are unknown keys, not aliases.
   { include_skills_usage_instructions: true }, { supportsSearchTool: false },
   { truncationPolicy: { mode: "tokens", limit: 1 } }, { nodeReplAutoReviewRequired: true },
-  { supportVerbosity: true, toolMode: "shell" },
+  { includeSkillsUsageInstructions: true, toolMode: "shell" },
 ];
 
 describe("routedCatalogDefaults configuration", () => {
@@ -30,7 +31,6 @@ describe("routedCatalogDefaults configuration", () => {
       includeSkillsUsageInstructions: true,
       includeAppsUsageInstructions: false,
       includePluginUsageInstructions: false,
-      supportVerbosity: false,
       defaultVerbosity: "medium" as const,
     };
     const parsed = validateConfigCandidate({ ...getDefaultConfig(), routedCatalogDefaults: block });
@@ -78,10 +78,10 @@ describe("routedCatalogDefaults configuration", () => {
   });
 
   test("the resolved value is a detached snapshot of the config", () => {
-    const config = { routedCatalogDefaults: { supportVerbosity: true } };
+    const config = { routedCatalogDefaults: { includeSkillsUsageInstructions: true } };
     const resolved = resolveRoutedCatalogDefaults(config);
-    config.routedCatalogDefaults.supportVerbosity = false;
-    expect(resolved).toEqual({ supportVerbosity: true });
+    config.routedCatalogDefaults.includeSkillsUsageInstructions = false;
+    expect(resolved).toEqual({ includeSkillsUsageInstructions: true });
     expect(Object.isFrozen(resolved)).toBe(true);
   });
 });

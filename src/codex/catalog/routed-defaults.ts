@@ -8,10 +8,11 @@ import type { RawEntry } from "./parsing";
  * before provider/model metadata is applied, which fixes the precedence: concrete provider/model
  * declarations > these defaults > template values > strict-field fallbacks. The final
  * `ensureStrictCatalogFields` pass still removes `default_verbosity` from a row whose
- * `support_verbosity` ended up false, so a provider that disowns verbosity never advertises a
- * default and an operator default can never re-enable it.
+ * `support_verbosity` ended up false, so a model without verbosity support never advertises an
+ * operator default. Verbosity support itself is never set here: it stays the provider's,
+ * model's or template's own declaration.
  *
- * Only the five allowlisted serialized fields are written. Values of any other type are ignored,
+ * Only the four allowlisted serialized fields are written. Values of any other type are ignored,
  * so a caller that bypassed config validation cannot smuggle other row fields through here.
  */
 export function applyRoutedCatalogDefaults(
@@ -28,7 +29,6 @@ export function applyRoutedCatalogDefaults(
   if (typeof defaults.includePluginUsageInstructions === "boolean") {
     entry.include_plugin_usage_instructions = defaults.includePluginUsageInstructions;
   }
-  if (typeof defaults.supportVerbosity === "boolean") entry.support_verbosity = defaults.supportVerbosity;
   if (defaults.defaultVerbosity === "low" || defaults.defaultVerbosity === "medium" || defaults.defaultVerbosity === "high") {
     entry.default_verbosity = defaults.defaultVerbosity;
   }

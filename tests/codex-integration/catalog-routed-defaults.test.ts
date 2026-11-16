@@ -24,7 +24,6 @@ const FIELDS = [
   ["includeSkillsUsageInstructions", "include_skills_usage_instructions"],
   ["includeAppsUsageInstructions", "include_apps_usage_instructions"],
   ["includePluginUsageInstructions", "include_plugin_usage_instructions"],
-  ["supportVerbosity", "support_verbosity"],
 ] as const;
 const ROW_KEYS = [...FIELDS.map(([, row]) => row), "default_verbosity"];
 
@@ -63,7 +62,7 @@ const withoutDefaultedKeys = (entry: RawEntry) => Object.fromEntries(
 const plain: CatalogModel = { provider: "gateway", id: "task-model" };
 const ALL_TRUE: RoutedCatalogDefaults = {
   includeSkillsUsageInstructions: true, includeAppsUsageInstructions: true,
-  includePluginUsageInstructions: true, supportVerbosity: true, defaultVerbosity: "high",
+  includePluginUsageInstructions: true, defaultVerbosity: "high",
 };
 
 describe("routed row derivation with routedCatalogDefaults", () => {
@@ -95,7 +94,9 @@ describe("routed row derivation with routedCatalogDefaults", () => {
       }
       const all = row(build(template, [plain], ALL_TRUE), "gateway/task-model");
       for (const [, serialized] of FIELDS) expect(all[serialized]).toBe(true);
-      expect(all.default_verbosity).toBe("high");
+      // Verbosity support is never an operator default: a restrictive template keeps it off.
+      expect(all.support_verbosity).toBe(template === null);
+      expect(all.default_verbosity).toBe(template === null ? "high" : undefined);
     }
   });
 
@@ -106,14 +107,18 @@ describe("routed row derivation with routedCatalogDefaults", () => {
         expect(derived.support_verbosity).toBe(true);
         expect(derived.default_verbosity).toBe(level);
       }
-      const disowned = row(build(template, [plain], { supportVerbosity: false, defaultVerbosity: "high" }), "gateway/task-model");
-      expect(disowned.support_verbosity).toBe(false);
-      expect(disowned.default_verbosity).toBeUndefined();
     }
-    // A template that disowns verbosity is not a provider limit: the operator default re-enables it.
-    const enabled = row(build(restrictiveTemplate(), [plain], { supportVerbosity: true }), "gateway/task-model");
-    expect(enabled.support_verbosity).toBe(true);
-    expect(enabled.default_verbosity).toBe("low");
+  });
+
+  test("a default on a model without verbosity support advertises nothing", () => {
+    for (const level of ["low", "medium", "high"] as const) {
+      const derived = row(build(restrictiveTemplate(), [plain], { defaultVerbosity: level }), "gateway/task-model");
+      expect(derived.support_verbosity).toBe(false);
+      expect(derived.default_verbosity).toBeUndefined();
+      expect(Object.hasOwn(derived, "default_verbosity")).toBe(false);
+    }
+    expect(row(build(restrictiveTemplate(), [plain], { defaultVerbosity: "high" }), "gateway/task-model"))
+      .toEqual(row(build(restrictiveTemplate(), [plain]), "gateway/task-model"));
   });
 
   test("a provider that declares verbosity unsupported always wins", () => {
@@ -126,9 +131,9 @@ describe("routed row derivation with routedCatalogDefaults", () => {
     }
   });
 
-  test("a concrete provider declaration outranks the operator default in the other direction too", () => {
+  test("a provider that declares verbosity support receives the default level", () => {
     const supported: CatalogModel = { ...plain, supportsVerbosity: true };
-    const derived = row(build(null, [supported], { supportVerbosity: false, defaultVerbosity: "medium" }), "gateway/task-model");
+    const derived = row(build(restrictiveTemplate(), [supported], { defaultVerbosity: "medium" }), "gateway/task-model");
     expect(derived.support_verbosity).toBe(true);
     expect(derived.default_verbosity).toBe("medium");
   });

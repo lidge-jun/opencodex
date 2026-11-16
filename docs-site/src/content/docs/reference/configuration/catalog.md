@@ -78,7 +78,6 @@ edit to `opencodex-catalog.json` lasts only until the next sync. `routedCatalogD
     "includeSkillsUsageInstructions": true,
     "includeAppsUsageInstructions": true,
     "includePluginUsageInstructions": true,
-    "supportVerbosity": true,
     "defaultVerbosity": "medium"
   }
 }
@@ -89,7 +88,6 @@ edit to `opencodex-catalog.json` lasts only until the next sync. `routedCatalogD
 | `includeSkillsUsageInstructions` | `include_skills_usage_instructions` | `true` or `false` |
 | `includeAppsUsageInstructions` | `include_apps_usage_instructions` | `true` or `false` |
 | `includePluginUsageInstructions` | `include_plugin_usage_instructions` | `true` or `false` |
-| `supportVerbosity` | `support_verbosity` | `true` or `false` |
 | `defaultVerbosity` | `default_verbosity` | `"low"`, `"medium"`, or `"high"` |
 
 Every setting is optional. An omitted setting keeps the value the row gets without this block,
@@ -101,9 +99,10 @@ The three instruction flags tell Codex whether to add its skills, apps, and plug
 instructions to the prompt for that model. Turning one on makes every prompt for that model
 larger. The flags only add guidance text; they grant no tool access.
 
-Provider limits always win. A value the provider or model declares itself, such as
-`supportsVerbosity: false`, replaces the default on that row. A row without verbosity support
-never carries `default_verbosity`, so `defaultVerbosity` has no effect there.
+Provider limits always win. A value the provider or model declares itself replaces the default on
+that row. `defaultVerbosity` only sets the default level for models that already support
+verbosity; it never turns verbosity support on, and a row without verbosity support never carries
+`default_verbosity`, so the setting has no effect there.
 
 The block applies to routed rows written by sync and convergence and to Codex-shaped
 `/v1/models` discovery. Native OpenAI rows, account-qualified native rows, and custom models on

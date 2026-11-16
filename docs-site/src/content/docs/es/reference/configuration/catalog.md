@@ -94,7 +94,6 @@ campos en cada fila enrutada generada:
     "includeSkillsUsageInstructions": true,
     "includeAppsUsageInstructions": true,
     "includePluginUsageInstructions": true,
-    "supportVerbosity": true,
     "defaultVerbosity": "medium"
   }
 }
@@ -105,7 +104,6 @@ campos en cada fila enrutada generada:
 | `includeSkillsUsageInstructions` | `include_skills_usage_instructions` | `true` o `false` |
 | `includeAppsUsageInstructions` | `include_apps_usage_instructions` | `true` o `false` |
 | `includePluginUsageInstructions` | `include_plugin_usage_instructions` | `true` o `false` |
-| `supportVerbosity` | `support_verbosity` | `true` o `false` |
 | `defaultVerbosity` | `default_verbosity` | `"low"`, `"medium"` o `"high"` |
 
 Todos los ajustes son opcionales. Un ajuste omitido conserva el valor que la fila recibe sin este
@@ -118,10 +116,10 @@ Los tres indicadores de instrucciones le dicen a Codex si debe añadir al prompt
 instrucciones de uso de skills, apps y plugins. Activar uno hace más grande cada prompt de ese
 modelo. Los indicadores solo añaden texto de orientación; no conceden acceso a ninguna herramienta.
 
-Los límites del proveedor siempre ganan. Un valor que el proveedor o el modelo declara por sí mismo,
-como `supportsVerbosity: false`, sustituye al valor predeterminado en esa fila. Una fila sin
-soporte de verbosidad nunca lleva `default_verbosity`, así que `defaultVerbosity` no tiene
-efecto en ella.
+Los límites del proveedor siempre ganan. Un valor que el proveedor o el modelo declara por sí mismo
+sustituye al valor predeterminado en esa fila. `defaultVerbosity` solo fija el nivel predeterminado
+en modelos que ya admiten verbosidad; nunca activa ese soporte, y una fila sin soporte de
+verbosidad nunca lleva `default_verbosity`, así que el ajuste no tiene efecto en ella.
 
 El bloque se aplica a las filas enrutadas que escriben la sincronización y la convergencia, y al
 descubrimiento `/v1/models` con forma de Codex. Las filas nativas de OpenAI, las filas nativas

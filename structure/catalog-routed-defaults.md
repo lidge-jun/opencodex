@@ -1,11 +1,11 @@
 # Routed catalog row defaults
 
-`routedCatalogDefaults` (#6872) is a top-level `config.json` block that sets five serialized
+`routedCatalogDefaults` (#6872) is a top-level `config.json` block that sets four serialized
 fields on every freshly derived routed Codex catalog row. The owner-approved allowlist is the three
 prompt-block flags `include_skills_usage_instructions`, `include_apps_usage_instructions` and
-`include_plugin_usage_instructions`, plus `support_verbosity` and `default_verbosity`. The config
-spellings are `includeSkillsUsageInstructions`, `includeAppsUsageInstructions`,
-`includePluginUsageInstructions`, `supportVerbosity` (all optional booleans) and
+`include_plugin_usage_instructions`, plus `default_verbosity`. The config spellings are
+`includeSkillsUsageInstructions`, `includeAppsUsageInstructions`,
+`includePluginUsageInstructions` (all optional booleans) and
 `defaultVerbosity` (`"low"`, `"medium"` or `"high"`). It is config-only; no Dashboard control or
 management route writes it.
 
@@ -38,10 +38,10 @@ account-bound builds do not.
 on the template clone, and after the tool-mode stamp on the no-template fallback. Both points are
 before `applyCatalogMetadata` and `applyCatalogModelMetadata`, so precedence is: concrete
 provider/model declarations, then these defaults, then inherited template values, then the
-`ensureStrictCatalogFields` fallbacks. A provider's `supportsVerbosity` therefore replaces
-`supportVerbosity` in either direction, and the final strict pass deletes `default_verbosity`
-whenever `support_verbosity` is false, so an unsupported row never carries an operator default.
-A template's `support_verbosity: false` is not a provider limit and the default may override it.
+`ensureStrictCatalogFields` fallbacks. Verbosity support (`support_verbosity`) is never an operator default: it stays
+the provider's, model's or template's own value, and the final strict pass deletes
+`default_verbosity` whenever `support_verbosity` is false, so `defaultVerbosity` only reaches rows
+that already support verbosity.
 
 Rows that mirror native contracts are excluded: native rows, account-bound native clones, and
 Codex-forward native-capability aliases (`codexForwardNativeCapabilityAlias`) keep their native

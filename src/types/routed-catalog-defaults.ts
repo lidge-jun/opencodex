@@ -12,8 +12,6 @@ export interface OcxRoutedCatalogDefaultsConfig {
   includeAppsUsageInstructions?: boolean;
   /** Serialized as `include_plugin_usage_instructions`. */
   includePluginUsageInstructions?: boolean;
-  /** Serialized as `support_verbosity`. */
-  supportVerbosity?: boolean;
-  /** Serialized as `default_verbosity`; dropped whenever the row ends up without verbosity support. */
+  /** Serialized as `default_verbosity`; applies only to rows that support verbosity, and never turns support on. */
   defaultVerbosity?: "low" | "medium" | "high";
 }
