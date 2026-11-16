@@ -844,11 +844,11 @@ describe("GitHub Actions hardening", () => {
     expect(workflow).toMatch(/gh release create[\s\S]*?--notes-file "\$notes_file"/);
     // The release is created as a draft and published only after the verified
     // bundle is attached, because a published release is immutable and rejects
-    // every later upload. That draft flip is the one edit allowed: notes still
-    // come from the validated notes file, never from an edit or a regeneration.
+    // every later upload. That draft flip is the one publication edit. Notes come only from the validated
+    // notes file: at creation, or when a resumed run reuses a draft and rewrites its body from its own file (#7207).
     for (const edit of workflow.match(/gh release edit[^\n]*/g) ?? []) {
-      expect(edit).toContain("--draft=false");
-      expect(edit).not.toContain("--notes");
+      if (edit.includes("--notes")) expect(edit).toBe('gh release edit "$release_tag" --notes-file "$notes_file" ;;');
+      else { expect(edit).toContain("--draft=false"); expect(edit).not.toMatch(/\s-[nF]/); }
     }
     expect(workflow).not.toContain("--generate-notes");
 
