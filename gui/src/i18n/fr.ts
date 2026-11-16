@@ -826,6 +826,7 @@ export const fr: Record<TKey, string> = {
   "prov.default": "Par défaut",
   "prov.loadingConfig": "Chargement…",
   "prov.targetChanged": "La cible du tableau de bord a changé. Rouvrez ce formulaire sur le serveur actuel.",
+  "prov.loginExpired": "Cette connexion est terminée. Cliquez à nouveau sur Connexion, puis collez le code de la nouvelle connexion.",
   "prov.legacyTargetPreflight": "Ce proxy vérifie la cible d’enregistrement avant l’envoi, mais ne peut pas la vérifier de façon atomique. Mettez à jour le proxy pour des enregistrements liés à la cible.",
   "prov.saved": "Enregistré ! Redémarrez le proxy pour appliquer les modifications.",
   "prov.loadConfigFail": "Échec du chargement de la configuration",

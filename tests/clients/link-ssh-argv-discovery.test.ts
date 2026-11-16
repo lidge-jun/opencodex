@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { windowsOcxArgv, windowsNativeArgv, windowsChildHttpArgv, windowsPinnedSyncArgv, packedPowerShellArgv, powershellArgv, windowsScriptData, windowsScriptHelperSource, OCX_JOB_SOURCE, WINDOWS_CONTAINMENT_EXIT } from "../../src/link/remote-windows";
+import { windowsOcxArgv, windowsInspectRuntimeArgv, windowsNativeArgv, windowsChildHttpArgv, windowsPinnedSyncArgv, packedPowerShellArgv, powershellArgv, windowsScriptData, windowsScriptHelperSource, OCX_JOB_SOURCE, WINDOWS_CONTAINMENT_EXIT } from "../../src/link/remote-windows";
 import { quoteRemote, REMOTE_OCX_SCRIPT, REMOTE_SERVED_RUNTIME, remoteOcxArgv } from "../../src/link/ssh-argv";
 import { recordServingRuntime } from "../../src/config/serving-runtimes";
 import { remoteInspectRuntimeArgv } from "../../src/link/remote-plant";
@@ -240,6 +240,104 @@ test.skipIf(process.platform !== "win32")("Windows discovery selects Desktop bef
     else rmSync(expected);
   }
 });
+
+/** A Windows home whose census names the npm layout: this bun.exe plus a CLI entry (#8359). */
+function windowsServedHome() {
+  const home = mkdtempSync(join(tmpdir(), "ocx-windows-served-")); roots.push(home);
+  const desktop = join(home, ".opencodex-desktop", "bin", "ocx.exe");
+  mkdirSync(dirname(desktop), { recursive: true });
+  copyFileSync(process.execPath, desktop);
+  const entry = join(home, "npm prefix", "node_modules", "opencodex", "src", "cli", "index.ts");
+  mkdirSync(dirname(entry), { recursive: true });
+  writeFileSync(entry, [
+    'if (process.argv[2] === "--version") { console.log("opencodex 2.99.0"); process.exit(0); }',
+    "console.log(JSON.stringify({ served: true, args: process.argv.slice(2), input: await Bun.stdin.text() }));",
+  ].join("\n"));
+  const ocxHome = join(home, ".opencodex");
+  mkdirSync(ocxHome, { recursive: true });
+  const census = (body: unknown) => writeFileSync(join(ocxHome, "serving-runtimes.json"), JSON.stringify(body, null, 2) + "\n");
+  const run = async (argv: string[], env: Record<string, string | undefined> = { USERPROFILE: home, HOME: home, OPENCODEX_HOME: ocxHome }) => {
+    const childEnv: Record<string, string | undefined> = { ...process.env, ...env };
+    for (const key of Object.keys(childEnv)) if (childEnv[key] === undefined) delete childEnv[key];
+    const child = Bun.spawn(argv, {
+      env: childEnv,
+      stdin: new Blob(["fixture-key-stdin"]), stdout: "pipe", stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+    return { stdout, stderr, code };
+  };
+  return { home, entry, ocxHome, census, run };
+}
+
+test.skipIf(process.platform !== "win32")("Windows discovery runs the served bun.exe entry pair before the Desktop copy (#8359)", async () => {
+  const f = windowsServedHome();
+  recordServingRuntime({ command: [process.execPath, f.entry], version: "2.99.0", servedAt: "2026-11-15T00:00:00.000Z" }, f.ocxHome);
+  const args = ["link", "probe", "it's x", 'q"uote', "tail\\", "--json"];
+  const result = await f.run(windowsOcxArgv(args));
+  expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
+  expect(JSON.parse(result.stdout)).toEqual({ served: true, args, input: "fixture-key-stdin" });
+}, SPAWN_BUDGET_MS);
+
+test.skipIf(process.platform !== "win32")("Windows runtime inspection reports the served pair's version over the Desktop copy (#8359)", async () => {
+  const f = windowsServedHome();
+  recordServingRuntime({ command: [process.execPath, f.entry], version: "2.99.0", servedAt: "2026-11-15T00:00:00.000Z" }, f.ocxHome);
+  const result = await f.run(windowsInspectRuntimeArgv());
+  expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
+  const lines = result.stdout.trim().split(/\r?\n/u);
+  expect(lines).toContain("ocx-inspect:kind:full");
+  expect(lines).toContain("ocx-inspect:version:opencodex 2.99.0");
+}, SPAWN_BUDGET_MS);
+
+test.skipIf(process.platform !== "win32")("the Windows census is found where its writer's getConfigDir puts it (#8359)", async () => {
+  const f = windowsServedHome();
+  recordServingRuntime({ command: [process.execPath, f.entry], version: "2.99.0", servedAt: "2026-11-15T00:00:00.000Z" }, f.ocxHome);
+  const elsewhere = join(f.home, "git-bash-home");
+  mkdirSync(elsewhere, { recursive: true });
+  const args = ["link", "port"];
+  // A padded OPENCODEX_HOME is trimmed, and without one the profile home wins over HOME, as homedir() does.
+  for (const env of [
+    { USERPROFILE: f.home, HOME: elsewhere, OPENCODEX_HOME: "  " + f.ocxHome + "  " },
+    { USERPROFILE: f.home, HOME: elsewhere, OPENCODEX_HOME: undefined },
+  ]) {
+    const result = await f.run(windowsOcxArgv(args), env);
+    expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: "" });
+    expect(JSON.parse(result.stdout)).toEqual({ served: true, args, input: "fixture-key-stdin" });
+  }
+}, SPAWN_BUDGET_MS * 2);
+
+
+test.skipIf(process.platform !== "win32")("a Child state beside the census keeps ocx-child ahead of the served install (#8359)", async () => {
+  const f = windowsServedHome();
+  recordServingRuntime({ command: [process.execPath, f.entry], version: "2.99.0", servedAt: "2026-11-15T00:00:00.000Z" }, f.ocxHome);
+  mkdirSync(join(f.ocxHome, "child"), { recursive: true });
+  writeFileSync(join(f.ocxHome, "child", "state.json"), "{}");
+  const ocxChild = join(f.home, ".local", "bin", "ocx-child.exe");
+  mkdirSync(dirname(ocxChild), { recursive: true });
+  copyFileSync(process.execPath, ocxChild);
+  const elsewhere = join(f.home, "git-bash-home");
+  mkdirSync(elsewhere, { recursive: true });
+  // HOME points elsewhere, so only the census directory (the profile's .opencodex) holds the Child state.
+  const result = await f.run(windowsOcxArgv(["-e", 'console.log("child")']), { USERPROFILE: f.home, HOME: elsewhere, OPENCODEX_HOME: undefined });
+  expect({ code: result.code, stderr: result.stderr, stdout: result.stdout.trim() }).toEqual({ code: 0, stderr: "", stdout: "child" });
+}, SPAWN_BUDGET_MS);
+
+
+test.skipIf(process.platform !== "win32")("a Windows census the reader cannot trust falls through to the Desktop copy (#8359)", async () => {
+  const f = windowsServedHome();
+  const desktopRun = ["-e", 'console.log("desktop")'];
+  for (const body of [
+    { runtimes: [{ command: [process.execPath, join(f.home, "gone", "index.ts")], version: "2.99.0" }] },
+    { runtimes: [{ version: "2.99.0" }, { command: [process.execPath, f.entry], version: "2.99.0" }] },
+    { runtimes: [{ command: ["relative\\bun.exe", f.entry], version: "2.99.0" }] },
+    { runtimes: [{ command: [process.execPath, f.entry, f.entry], version: "2.99.0" }] },
+    { runtimes: [{ command: [process.execPath, f.entry], version: "x".repeat(70_000) }] },
+  ]) {
+    f.census(body);
+    const result = await f.run(windowsOcxArgv(desktopRun));
+    expect({ code: result.code, stderr: result.stderr, stdout: result.stdout.trim() }).toEqual({ code: 0, stderr: "", stdout: "desktop" });
+  }
+}, SPAWN_BUDGET_MS * 5);
+
 
 test("encoded Windows commands enforce argument and HTTP boundaries before launch", () => {
   expect(() => windowsNativeArgv("x", ["\0"])).toThrow();

@@ -13,7 +13,9 @@ plugin({
         const error = Object.assign(new Error("fixture connection refused"), { code: "ECONNREFUSED" });
         console.error("[refused-probe] " + error.code);
         throw error;
-      }`,
+      }
+      // A refusal is never a connect-phase timeout; proxy-liveness imports this beside the fetch.
+      export function isConnectPhaseTimeout() { return false; }`,
     }));
   },
 });
