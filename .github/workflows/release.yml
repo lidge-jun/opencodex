@@ -333,6 +333,14 @@ jobs:
           DRY_RUN: ${{ inputs.dry-run }}
         run: bash scripts/ci/windows-signing-plan.sh
 
+      # Start this leg's signing record as not signed (#7207). The step after the swap rewrites it; if that step never runs
+      # or fails, this record still exists, so the overwrite upload replaces any record an earlier attempt left.
+      - name: Start the Windows signing outcome as not signed
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: bash
+        run: bash scripts/ci/windows-signing-outcome.sh standalone "$RUNNER_TEMP/windows-signing-outcome"
+
       - name: Install dependencies
         run: bun install --frozen-lockfile --os=${{ matrix.dependency_os }} --cpu=${{ matrix.dependency_cpu }}
 
@@ -572,6 +580,14 @@ jobs:
           SIGNPATH_SIGNING_POLICY: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
           DRY_RUN: ${{ inputs.dry-run }}
         run: bash scripts/ci/windows-signing-plan.sh
+
+      # Start this leg's signing record as not signed (#7207). The step after the swap rewrites it; if that step never runs
+      # or fails, this record still exists, so the overwrite upload replaces any record an earlier attempt left.
+      - name: Start the Windows signing outcome as not signed
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: bash
+        run: bash scripts/ci/windows-signing-outcome.sh desktop "$RUNNER_TEMP/windows-signing-outcome"
 
       # The desktop build takes its version from tauri.conf.json and Cargo.toml (the widget
       # plist inherits it), not from package.json or this input, while the updater manifest is

@@ -16,10 +16,12 @@ failure. It writes the step output `signed=true` only after the verified swap, a
 
 ## The signing outcome in the release body
 
-Each Windows leg then runs `scripts/ci/windows-signing-outcome.sh <standalone|desktop>` on every run
+Each Windows leg first writes its record as not signed (right after the signing decision), then runs
+`scripts/ci/windows-signing-outcome.sh <standalone|desktop>` again after the swap on every run
 (`always() && runner.os == 'Windows'`, continuing on error) and uploads the record as
 `windows-signing-outcome-<kind>`, a name neither `standalone-*` nor `desktop-*` matches, so it never becomes a
-release asset. A record says signed only when the plan's mode was `sign`, its trust `release`, and the swap
+release asset; the upload sets `overwrite: true`, and because the early record guarantees a file, a re-run always replaces an
+earlier attempt's record. A record says signed only when the plan's mode was `sign`, its trust `release`, and the swap
 reported `signed=true`; a skipped plan, a test certificate, or a failed or skipped swap records false.
 
 `publish` downloads `windows-signing-outcome-*` (continuing on error) and passes the directory to

@@ -158,7 +158,7 @@ describe("release workflow wiring of the signing outcome", () => {
       const swapIndex = steps.findIndex(step => step.name === swap);
       const swapStep = steps[swapIndex]!;
       expect(swapStep.id, job).toBeTruthy();
-      const recordIndex = steps.findIndex(step => step.run?.includes("scripts/ci/windows-signing-outcome.sh"));
+      const recordIndex = steps.findIndex(step => step.name === "Record the Windows signing outcome");
       const recordStep = steps[recordIndex]!;
       expect(recordIndex, job).toBeGreaterThan(swapIndex);
       expect(recordStep.run).toContain("windows-signing-outcome.sh " + kind + " ");
@@ -178,6 +178,23 @@ describe("release workflow wiring of the signing outcome", () => {
       expect(upload.with?.overwrite).toBe(true);
       // verify-release bundles standalone-* and desktop-*; the record must never become a release asset.
       expect(name.startsWith("standalone-") || name.startsWith("desktop-")).toBe(false);
+    }
+  });
+
+  test("each Windows leg starts its record as not signed before signing, so a failed record step never keeps an older one", () => {
+    // The final upload then always finds a file, so overwrite always replaces an earlier attempt's record (#8780 review r3).
+    for (const { job, kind, swap } of legs) {
+      const steps = stepsOf(job);
+      const decide = steps.findIndex(step => step.id === "windows-signing");
+      const reset = steps.findIndex(step => step.name === "Start the Windows signing outcome as not signed");
+      const swapIndex = steps.findIndex(step => step.name === swap);
+      expect(reset, job).toBeGreaterThan(decide);
+      expect(reset).toBeLessThan(swapIndex);
+      const step = steps[reset]!;
+      expect(step.if).toBe("runner.os == 'Windows'");
+      expect(step.run).toBe('bash scripts/ci/windows-signing-outcome.sh ' + kind + ' "$RUNNER_TEMP/windows-signing-outcome"');
+      // No plan or swap input: the script records signed false.
+      expect(step.env).toBeUndefined();
     }
   });
 
