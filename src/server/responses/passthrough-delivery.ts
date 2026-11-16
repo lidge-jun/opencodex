@@ -793,17 +793,21 @@ export async function deliverPassthroughResponse(
             );
             // The same provider can leave a complete continuation open without a terminal, which
             // stalls the bridge's decide loop exactly like the first leg — so every leg gets the
-            // same repair, not only the intercepted first one.
-            if (!terminalRepairPolicy || !continuation.ok || !continuation.body) return continuation;
+            // same repair and the same explicit silence clock, not only the intercepted first one.
+            if (!continuation.ok || !continuation.body) return continuation;
+            const guardedContinuation = nativeSseStallMs > 0
+              ? guardResponseBodyInactivity(continuation, upstream.signal, nativeSseStallMs).response
+              : continuation;
+            if (!terminalRepairPolicy) return guardedContinuation;
             return new Response(
               relayResponsesSseWithTerminalRepair(
-                continuation.body,
+                guardedContinuation.body!,
                 upstream,
                 terminalRepairPolicy,
                 translatorBudget,
                 options.responsesTerminalRepairScheduler, logCtx,
               ),
-              continuation,
+              guardedContinuation,
             );
           },
           execute: createPassthroughWebSearchBridgeExecutor(webSearchBridgePlan, {

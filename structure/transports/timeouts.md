@@ -41,7 +41,8 @@ Native Responses SSE is the one stall consumer that reads only an explicit budge
 `explicitStallTimeoutMs` in `src/stall-timeout.ts` returns the positive operator value and `0`
 when `stallTimeoutSec` is unset or non-positive, so the unset local/public defaults never reach this
 relay. `src/server/responses/passthrough-delivery.ts` guards the upstream body with
-`src/lib/response-body-inactivity.ts` before terminal repair, the web-search bridge and the relay,
+`src/lib/response-body-inactivity.ts` before terminal repair, the web-search bridge and the relay (each web-search continuation leg too), measuring byte
+silence rather than model progress,
 keeping the Response object and its relay markers. The canonical JSON fold keeps its own silence and
 whole-turn deadlines. Reset selection in `src/server/responses/passthrough-completion.ts` already
 guards the bodies it publishes with the resolved budget and marks them

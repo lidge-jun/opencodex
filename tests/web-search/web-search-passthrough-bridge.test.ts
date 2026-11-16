@@ -1452,6 +1452,38 @@ describe("the reported turn, end to end through handleResponses", () => {
     expect(result.body).not.toContain("web_search_call");
   });
 
+  test("an explicit stallTimeoutSec also bounds a silent continuation leg (#8206)", async () => {
+    const savedFetch = globalThis.fetch;
+    let legs = 0;
+    globalThis.fetch = (async (input: unknown) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
+      if (url.includes("/api/web_search")) {
+        return Response.json({ results: [{ title: "Releases", url: "https://example.test/rel", content: "opencodex 2.50.0" }] });
+      }
+      legs += 1;
+      if (legs === 1) return new Response(searchLeg(), { headers: { "content-type": "text/event-stream" } });
+      // The continuation answers its head and one event, then goes silent.
+      const created = new TextEncoder().encode(frame("response.created", { response: { id: "resp_2", status: "in_progress" } }) + "\n\n");
+      return new Response(new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(created); } }),
+        { headers: { "content-type": "text/event-stream" } });
+    }) as unknown as typeof fetch;
+    const releaseSpendHome = acquireOwnedSpendHome();
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json", authorization: "Bearer caller-inbound" },
+        body: clientRequest,
+      }), { ...config(armed), stallTimeoutSec: 1 } as OcxConfig, { model: "", provider: "" });
+      const body = await response.text();
+      expect(legs).toBe(2);
+      expect(body).toContain("response.failed");
+      expect(body).toContain("stalled for 1000ms");
+    } finally {
+      releaseSpendHome();
+      globalThis.fetch = savedFetch;
+    }
+  });
+
   test("with the opt-in the client sees a hosted search cell and the answer", async () => {
     const result = await post(config(armed), [searchLeg(), answerLeg()]);
 
