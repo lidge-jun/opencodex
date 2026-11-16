@@ -154,6 +154,8 @@ export interface MainAccountInfoProbeOptions {
   passive?: boolean;
   /** Exact owned result obtained before entering WHAM's shared credential claim. Never serialized. */
   preparedToken?: MainAccountToken | null;
+  /** Always use paced usage scheduling, so failure backoff and Retry-After are recorded in every mode. */
+  paced?: boolean;
 }
 
 export const EMPTY_MAIN_ACCOUNT_INFO: MainAccountInfo = { email: null, plan: null, quota: null };
@@ -215,7 +217,7 @@ export async function fetchMainAccountInfoAttempt(
       }
     }
     const probeOptions = preparedToken === undefined ? options : { ...options, preparedToken };
-    const paced = sharedMainQuotaPacingEnabled(config ?? loadConfig());
+    const paced = options.paced === true || sharedMainQuotaPacingEnabled(config ?? loadConfig());
     const operation = async () => ({
       ...await fetchMainAccountInfoWhileOwned(forceRefresh, retriesRemaining, nativeMainLease, explicitRefresh, postReset, paced, probeOptions),
       identityGeneration: captureMainAccountIdentityGeneration(),

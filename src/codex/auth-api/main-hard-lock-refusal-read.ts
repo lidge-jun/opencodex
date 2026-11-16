@@ -6,8 +6,8 @@ import { isAccountNeedsReauth } from "../account-runtime-state";
 import { getMainAccountHardLockStatus } from "../main-account-hard-lock";
 import { getValidMainAccountToken, mainAccountTokenIsCurrent, mainAccountTokenQuotaWriter } from "../main-account";
 import {
-  captureMainAccountIdentityGeneration, captureMainQuotaWriter, getMainQuotaCredentialGeneration, getObservedMainQuotaIdentityKey,
-  isMainAccountIdentityGenerationLive, isMainQuotaWriterLive, matchesMainQuotaCredential, observeMainQuotaCredential,
+  captureMainAccountIdentityGeneration, captureMainQuotaDispatch, getMainQuotaCredentialGeneration, getObservedMainQuotaIdentityKey,
+  isMainAccountIdentityGenerationLive, isMainQuotaDispatchLive, matchesMainQuotaCredential, observeMainQuotaCredential,
 } from "../main-account-cache";
 import { tryAcquireNativeMainProfileClaim } from "../native-main-admission";
 import { isNativeMainTrafficBlocked } from "../native-profile-startup";
@@ -26,7 +26,8 @@ export const MAIN_HARD_LOCK_REFUSAL_READ_AGE_MS = 60_000;
 /** At most one refusal-triggered WHAM read per main identity in this window. */
 export const MAIN_HARD_LOCK_REFUSAL_READ_INTERVAL_MS = 60_000;
 
-let lastRead: { identity: string; at: number } | undefined;
+// Last refusal read per main identity, kept for the whole interval so an A→B→A switch cannot reset it.
+const lastReadAt = new Map<string, number>();
 let inFlight: Promise<void> | undefined;
 
 /**
@@ -42,7 +43,7 @@ export interface MainHardLockRefusalCaller {
 
 /** Test-only: forget the per-identity pacing and any settled read. */
 export function resetMainHardLockRefusalReadForTests(): void {
-  lastRead = undefined;
+  lastReadAt.clear();
   inFlight = undefined;
 }
 
@@ -80,17 +81,20 @@ export async function refreshMainHardLockBeforeRefusal(
     || isCodexAccountPaused(config, MAIN_CODEX_ACCOUNT_ID)) return false;
   if (!inFlight) {
     const identity = getObservedMainQuotaIdentityKey() ?? "";
-    if (lastRead?.identity === identity && now() - lastRead.at < MAIN_HARD_LOCK_REFUSAL_READ_INTERVAL_MS) return false;
+    for (const [key, at] of lastReadAt) {
+      if (now() - at >= MAIN_HARD_LOCK_REFUSAL_READ_INTERVAL_MS) lastReadAt.delete(key);
+    }
+    if (lastReadAt.has(identity)) return false;
     const queryAfter = nextCodexUsageQueryAt(`main:${captureConfigGeneration()}:${getMainQuotaCredentialGeneration()}`);
     if (queryAfter !== undefined && queryAfter > now()) return false;
     let read: Promise<void>;
     if (caller) {
-      lastRead = { identity, at: now() };
+      lastReadAt.set(identity, now());
       read = readCallerMainUsage(caller);
     } else {
       const lease = tryAcquireNativeMainProfileClaim();
       if (!lease) return false;
-      lastRead = { identity, at: now() };
+      lastReadAt.set(identity, now());
       read = readMainUsage(config, lease).finally(() => lease.release());
     }
     read = read
@@ -112,16 +116,19 @@ async function readMainUsage(config: OcxConfig, lease: AdmissionLease): Promise<
     if (!mainAccountTokenIsCurrent(prepared)) return;
   } else observeMainQuotaCredential(prepared.accessToken, prepared.chatgptAccountId);
   if (!isMainAccountIdentityGenerationLive(identityGeneration) || isAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID)) return;
-  await fetchMainAccountInfoAttempt(true, 1, lease, false, false, false, config, { passive: true, preparedToken: prepared });
+  // Paced in every account mode: a failed or Retry-After answer must defer the next read.
+  await fetchMainAccountInfoAttempt(true, 1, lease, false, false, false, config,
+    { passive: true, preparedToken: prepared, paced: true });
 }
 
 /** Usage read with the caller's own main bearer: no physical credential read, no reauth state. */
 async function readCallerMainUsage(caller: MainHardLockRefusalCaller): Promise<void> {
-  const writer = captureMainQuotaWriter(caller.accountId);
-  if (!writer || !matchesMainQuotaCredential(caller.bearer, caller.accountId)) return;
   const writerGeneration = captureConfigGeneration();
-  const credentialGeneration = getMainQuotaCredentialGeneration();
-  const key = `main:${writerGeneration}:${credentialGeneration}`;
+  // The dispatch proof also fences credential commits (refresh, reauthentication) that advance the
+  // mutation epoch before the observed credential itself changes.
+  const dispatch = captureMainQuotaDispatch(caller.bearer, caller.accountId, writerGeneration);
+  if (!dispatch) return;
+  const key = `main:${writerGeneration}:${dispatch.credentialGeneration}`;
   const admission = await fetchCodexUsage(key, {
     headers: { Authorization: `Bearer ${caller.bearer}`, "ChatGPT-Account-Id": caller.accountId },
     signal: AbortSignal.timeout(WHAM_REQUEST_TIMEOUT_MS),
@@ -134,11 +141,11 @@ async function readCallerMainUsage(caller: MainHardLockRefusalCaller): Promise<v
     const data = await admission.response.json() as WhamUsageResponse;
     if (data === null || typeof data !== "object" || Array.isArray(data)) return;
     // The main login may have changed while the read was in flight; never publish across it.
-    if (!matchesMainQuotaCredential(caller.bearer, caller.accountId) || !isMainQuotaWriterLive(writer)
-      || credentialGeneration !== getMainQuotaCredentialGeneration()) return;
+    if (!isMainQuotaDispatchLive(dispatch) || !matchesMainQuotaCredential(caller.bearer, caller.accountId)
+      || writerGeneration !== captureConfigGeneration()) return;
     const quota = parseUsageQuota(data);
     if (!quota) return;
-    setAccountQuotaFromParsed(MAIN_CODEX_ACCOUNT_ID, quota, writerGeneration, writer, parseMainPolicyUsageQuota(data),
+    setAccountQuotaFromParsed(MAIN_CODEX_ACCOUNT_ID, quota, writerGeneration, dispatch.writer, parseMainPolicyUsageQuota(data),
       undefined, false, false, isValidWhamHistoryObservation(data) ? quota : null);
     usable = true;
   } finally {

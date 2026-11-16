@@ -145,13 +145,15 @@ keeps the default-mode fallbacks.
 `resolveCodexAuthContext` (`src/codex/auth-context.ts`) catches a `CodexMainAccountHardLockError` and asks
 `refreshMainHardLockBeforeRefusal` (`src/codex/auth-api/main-hard-lock-refusal-read.ts`) for one fresh
 usage read before refusing (#8113). The read runs only when the policy reading behind the block is older
-than 60 s; concurrent refusals share one in-flight read, and one main identity gets at most one read per
-minute. Usage-query backoff, a paused or reauthentication-required main and native-main maintenance skip
+than 60 s; concurrent refusals share one in-flight read, and each main identity gets at most one read per
+minute, remembered per identity so switching logins cannot reset it. Usage-query backoff, a paused or reauthentication-required main and native-main maintenance skip
 it, and the read is passive: it never sets or clears the reauthentication quarantine. If the fresh reading
 no longer blocks, the request is resolved once more; otherwise the original refusal stands.
-A refusal on the proxy-owned main credential reads through the recovery probe under the native-main claim.
+A refusal on the proxy-owned main credential reads through the recovery probe under the native-main claim,
+always with paced usage scheduling so a failure or `Retry-After` defers the next read in Direct mode too.
 A caller-owned main request (caller-owned Direct, or a request-scoped main bearer in Pool) never reads the
 physical credential: it reads with its own bearer and publishes only while that bearer still HMAC-matches the
-observed main credential, the writer is live and the credential generation is unchanged. Coverage:
+observed main credential and its `MainQuotaDispatch` proof is still live, which also fences credential commits
+that advance the mutation epoch before the observed credential changes. Coverage:
 `tests/codex-integration/main-account-hard-lock-refusal-read.test.ts` and the startup restore cases in
 `tests/codex-integration/main-account-hard-lock-auth.test.ts`.

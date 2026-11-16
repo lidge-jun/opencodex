@@ -7,8 +7,10 @@ import * as authCollision from "../../src/codex/auth-collision";
 import { reconcileMainCodexAccountRuntimeState, resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
 import { clearAccountNeedsReauth } from "../../src/codex/account-runtime-state";
 import {
-  MAIN_HARD_LOCK_REFUSAL_READ_AGE_MS, refreshMainHardLockBeforeRefusal, resetMainHardLockRefusalReadForTests,
+  MAIN_HARD_LOCK_REFUSAL_READ_AGE_MS, MAIN_HARD_LOCK_REFUSAL_READ_INTERVAL_MS, refreshMainHardLockBeforeRefusal,
+  resetMainHardLockRefusalReadForTests,
 } from "../../src/codex/auth-api/main-hard-lock-refusal-read";
+import { advanceCodexCredentialMutationEpoch } from "../../src/codex/credential-mutation-epoch";
 import { CodexMainAccountHardLockError, resolveCodexAuthContext } from "../../src/codex/auth-context";
 import { captureMainQuotaWriter, clearMainAccountInfoCache, observeMainQuotaCredential } from "../../src/codex/main-account-cache";
 import { getMainAccountHardLockStatus } from "../../src/codex/main-account-hard-lock";
@@ -40,19 +42,28 @@ function config(): OcxConfig {
 }
 
 /** Synthetic unsigned claims for the fixture identity; not a real credential. */
-function bearer(): string {
+function bearer(account = accountId): string {
   const payload = Buffer.from(JSON.stringify({
     exp: Math.floor(Date.now() / 1000) + 86_400,
-    "https://api.openai.com/auth": { chatgpt_account_id: accountId },
+    "https://api.openai.com/auth": { chatgpt_account_id: account },
   })).toString("base64url");
   return `header.${payload}.signature`;
 }
 
 /** Seed a blocking 99% short-window reading observed at the current fixture clock. */
-function block(): void {
-  const writer = captureMainQuotaWriter(accountId);
+function block(account = accountId): void {
+  const writer = captureMainQuotaWriter(account);
   if (!writer) throw new Error("fixture identity must be observed");
   setAccountQuotaFromParsed(MAIN, { shortPercent: 99, shortWindowSeconds: 18_000 }, undefined, writer);
+}
+
+/** Make `account` the physical main login and block it on a reading observed now. */
+function signInMain(account: string): void {
+  writeFileSync(join(home, "auth.json"), JSON.stringify({ tokens: {
+    access_token: bearer(account), refresh_token: "fixture-refresh", account_id: account,
+  } }));
+  reconcileMainCodexAccountRuntimeState();
+  block(account);
 }
 
 function usage(percent: number): Response {
@@ -201,4 +212,46 @@ test("a caller-owned main bearer refusal gets the same fresh read", async () => 
   expect(calls).toEqual([whamUrl]);
   expect(physicalReads).not.toHaveBeenCalled();
   physicalReads.mockRestore();
+});
+test("a credential commit during a caller-owned read keeps the refusal", async () => {
+  const gate = Promise.withResolvers<void>();
+  const calls = wham(() => usage(0), gate.promise, false);
+  observeMainQuotaCredential(mainToken, accountId);
+  const headers = new Headers({ authorization: `Bearer ${mainToken}`, "chatgpt-account-id": accountId });
+  age(MAIN_HARD_LOCK_REFUSAL_READ_AGE_MS + 1);
+  const pending = resolveCodexAuthContext(headers, config(), "pool", { requestScopedMainCredential: true });
+  while (calls.length === 0) await Promise.resolve();
+  // A native refresh or same-account reauthentication commits before the observed HMAC changes.
+  advanceCodexCredentialMutationEpoch();
+  gate.resolve();
+  await expect(pending).rejects.toBeInstanceOf(CodexMainAccountHardLockError);
+  expect(calls).toEqual([whamUrl]);
+  expect(getMainAccountHardLockStatus(config()).state).toBe("blocked");
+});
+
+test("a Direct-mode refusal read records Retry-After, so the next minute does not read again", async () => {
+  const direct = { ...config(), providers: { openai: { ...config().providers.openai!, codexAccountMode: "direct" as const } } };
+  const calls = wham(() => new Response("slow down", { status: 429, headers: { "retry-after": "600" } }));
+  age(MAIN_HARD_LOCK_REFUSAL_READ_AGE_MS + 1);
+  expect(await refreshMainHardLockBeforeRefusal(direct)).toBe(false);
+  age(MAIN_HARD_LOCK_REFUSAL_READ_INTERVAL_MS);
+  expect(await refreshMainHardLockBeforeRefusal(direct)).toBe(false);
+  expect(calls).toEqual([whamUrl]);
+});
+
+test("switching main logins A, B, A inside one minute reads A only once", async () => {
+  const calls = wham(() => new Response("unavailable", { status: 503 }));
+  const stale = async (): Promise<void> => {
+    age(MAIN_HARD_LOCK_REFUSAL_READ_AGE_MS + 1);
+    expect(await refreshMainHardLockBeforeRefusal(config())).toBe(false);
+    // Lift the failed-read pacing so only the per-identity minute decides.
+    resetQuotaQueryBackoffForTests();
+    clock -= MAIN_HARD_LOCK_REFUSAL_READ_AGE_MS;
+  };
+  await stale();
+  signInMain("fixture-refusal-other");
+  await stale();
+  signInMain(accountId);
+  await stale();
+  expect(calls).toHaveLength(2);
 });
