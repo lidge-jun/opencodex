@@ -221,7 +221,7 @@ describe("native Claude tiers on the passthrough (#5755)", () => {
     expect(effectiveModelEnv(undefined, buildClaudeContextWindows([], [], undefined, passthrough))).toEqual({
       ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5-5[1m]",
       ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5-5[1m]",
-      ANTHROPIC_DEFAULT_FABLE_MODEL: "claude-fable-5-1[1m]",
+      ANTHROPIC_DEFAULT_FABLE_MODEL: "claude-fable-5-2[1m]",
     });
   });
 
@@ -242,7 +242,7 @@ describe("native Claude tiers on the passthrough (#5755)", () => {
     }, windows);
     expect(env.ANTHROPIC_DEFAULT_OPUS_MODEL).toBe("mock/small-model");
     expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe("claude-sonnet-5[1m]");
-    expect(env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("claude-fable-5-1[1m]");
+    expect(env.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe("claude-fable-5-2[1m]");
     // Haiku 4.5 is a 200k model.
     expect(env.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe("claude-haiku-4-5");
   });

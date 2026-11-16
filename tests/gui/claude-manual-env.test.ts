@@ -76,11 +76,14 @@ test("a 200k draft without slot evidence still strips automatic marks", () => {
     effectiveModelEnv: {
       ANTHROPIC_MODEL: "mock/test-model[1m]",
       ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5-5[1m]",
+      ANTHROPIC_DEFAULT_FABLE_MODEL: "claude-fable-5-2[1m]",
     },
   }));
   expect(env).toContain("export ANTHROPIC_MODEL=mock/test-model\n");
   expect(env).not.toContain("[1m]");
   expect(env).not.toContain("ANTHROPIC_DEFAULT_OPUS_MODEL");
+  // The server's native Fable fill is dropped the same way, so the list here must track it.
+  expect(env).not.toContain("ANTHROPIC_DEFAULT_FABLE_MODEL");
   expect(env).not.toContain("CLAUDE_CODE_AUTO_COMPACT_WINDOW");
 });
 

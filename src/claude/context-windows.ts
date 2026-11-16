@@ -21,12 +21,14 @@ export { AUTO_COMPACT_WINDOW_DEFAULT, AUTO_CONTEXT_FLOOR } from "./long-context"
 
 /**
  * The native id each Claude Code tier alias resolves to (2.1.296: `--model opus` sends
- * `claude-opus-5-5`, `sonnet` sends `claude-sonnet-5-5`, `fable` sends `claude-fable-5-1`).
+ * `claude-opus-5-5`, `sonnet` sends `claude-sonnet-5-5`; 2.1.323: `fable` sends `claude-fable-5-2`,
+ * where 2.1.296 sent `claude-fable-5-1`). A stale id here is not neutral: the filled slot overrides
+ * the CLI's own alias, so `--model fable` stays on the older model.
  * Behind a gateway Claude Code accounts an unmarked id at 200k, so an unset tier slot is filled
  * with this id when the map marks it (#5755). A marked alias cannot stand in: Claude Code sends
  * `sonnet[1m]` upstream unresolved. Haiku has no entry; its 200k window never marks.
  */
-const CLAUDE_CODE_NATIVE_TIERS = { opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", fable: "claude-fable-5-1" } as const;
+const CLAUDE_CODE_NATIVE_TIERS = { opus: "claude-opus-5-5", sonnet: "claude-sonnet-5-5", fable: "claude-fable-5-2" } as const;
 
 /** Binary-verified accepted range for CLAUDE_CODE_AUTO_COMPACT_WINDOW (2.1.207: pSo=1e5, yDs=1e6). */
 export const AUTO_COMPACT_WINDOW_MIN = 100_000;
