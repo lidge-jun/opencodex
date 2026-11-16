@@ -997,7 +997,7 @@ For a loopback/private self-hosted endpoint, **before the first login**, create 
 `authMode: "oauth"`, and an explicit `allowPrivateNetwork: true`. Login preserves that operator
 setting and never grants it from a URL override. Without it, destination validation rejects the
 local endpoint for inference and model discovery. The OAuth browser callback listener itself
-does not require this provider opt-in. See the [OrcaRouter setup example](/guides/providers/).
+does not require this provider opt-in. See the [OrcaRouter setup example](/guides/api-key-catalog/).
 
 ## Provider diagnostic outbound safety
 
@@ -1366,13 +1366,21 @@ against the request's existing send budget. A transient refresh failure keeps th
 Paused, reauthentication-required and cooling accounts are skipped;
 the failed credential gets a 60-second in-process cooldown only while its generation is current.
 The same main dispatch may also switch once on a 403 when Google's bounded error normalization
-finds a complete structured `VALIDATION_REQUIRED` reason. The 401 and 403 paths share one sibling
-attempt per request; an unrelated or incomplete 403 keeps its original error. A rejected sibling,
-cancellation or exhausted send budget does not cause another upstream send.
-The fetch-based web-search loop also rotates once on this structured 403 reason, using the sibling's
+finds a complete structured `VALIDATION_REQUIRED` reason. A complete, bounded 403 that simply refuses
+the account (Google's structured `PERMISSION_DENIED`) also moves to the next eligible sibling: the refused
+credential gets the same 60-second in-process cooldown, nothing is written to disk, and the request
+keeps walking the pool while siblings remain, up to the per-request failover limit. A 403 asking you
+to verify the account keeps its own quarantine path, and an incomplete 403, or one Google did not mark `PERMISSION_DENIED` (an empty body, a proxy or WAF error page, an envelope without the status), keeps its original error and cools no account.
+A 502, 503 or 504 that survives the same-account transient retries before any output is replayed once
+on an eligible sibling; the failing account is cooled for 15 seconds in process, and a pool-wide
+outage costs at most two retry ladders per request. A cooldown already running for an account is never
+shortened by a shorter one. A rejected sibling, cancellation or exhausted send budget does not cause
+another upstream send.
+The fetch-based web-search loop also rotates once on these 403 refusals, using the sibling's
 OAuth token and matching Cloud Code Assist project. It accepts only complete, bounded Google error
-envelopes with `error.details[].reason === "VALIDATION_REQUIRED"`; verification wording alone does
-not authorize rotation, and this path does not persist a reauthentication mark. Each physical send,
+envelopes with `error.details[].reason === "VALIDATION_REQUIRED"` or a `PERMISSION_DENIED` access denial;
+verification wording alone does not authorize rotation, and this path does not persist a
+reauthentication mark. Each physical send,
 including a 429 retry, consumes the same request budget exactly once. A disabled pool, cancellation,
 exhausted budget or unavailable sibling preserves the failure. If sibling request construction or
 dispatch fails, the original bounded 403 remains the error; a replay rejected before physical
@@ -1641,7 +1649,7 @@ API keys and credential references can be stored in the OS credential store (mac
 The `zhipu-bigmodel-responses` preset seeds `glm-5.3`, `glm-5.3-flash` and `glm-5-turbo` with
 `liveModels: false` for `https://open.bigmodel.cn/api/v1`. Its static roster and
 per-model context, effort, and summary metadata come from the
-[BigModel Responses guide](/guides/providers/#bigmodel-coding-plan-over-responses).
+[BigModel Responses guide](/guides/api-key-catalog/#bigmodel-coding-plan-over-responses).
 The official local `models.json` example does not establish a live `/models` API.
 
 With `liveModels: false`, an empty or omitted `models` list seeds the configured `defaultModel`

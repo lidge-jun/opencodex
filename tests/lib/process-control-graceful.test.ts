@@ -46,8 +46,10 @@ describe("gracefulStopHost", () => {
 
 describe("stopProxyGracefully", () => {
   test("a refused mayTerminate keeps the forced-stop fallback from signalling the process", async () => {
-    // A throwaway child as the target: a regression could only ever signal it.
-    const child = Bun.spawn(["/bin/sleep", "30"], { stdout: "ignore", stderr: "ignore" });
+    // A throwaway child as the target: a regression could only ever signal it. The runtime's own
+    // binary is the idle process, so the case runs where /bin/sleep does not exist; on Windows the
+    // forced fallback it guards is taskkill, behind the same mayTerminate check.
+    const child = Bun.spawn([process.execPath, "-e", "setTimeout(() => {}, 30_000)"], { stdout: "ignore", stderr: "ignore" });
     try {
       await expect(stopProxy(child.pid, {
         runtimeEndpoint: { hostname: "127.0.0.1", port: 1 }, runtimeEndpointOnly: true,

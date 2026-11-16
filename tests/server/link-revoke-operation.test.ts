@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
@@ -501,8 +501,11 @@ test("a recorded purge does not finish another removal's receipt and is not cred
 test("a resumed retirement settles its entry before clearing the receipt, so a failed settle is resumed again", async () => {
   // The journal becomes unwritable after the commit and its cleanup (at the tunnel reload), before the settle.
   let broken = false;
-  writeFileSync(join(root, "not-a-dir"), "");
-  const h = harness({ operationsPath: () => broken ? join(root, "not-a-dir", "operations.json") : undefined, onReload: () => { broken = true; } });
+  // A directory where the journal file belongs fails both its read (EISDIR) and its write on every
+  // platform. A path under a file did not: Windows reports ENOENT there, which the journal rightly
+  // reads as "no journal" (dev batch 43451726885).
+  mkdirSync(join(root, "journal-is-a-directory"));
+  const h = harness({ operationsPath: () => broken ? join(root, "journal-is-a-directory") : undefined, onReload: () => { broken = true; } });
   claimLinkRetirement(record(), root, () => h.store, "force", OP);
   h.store = { ...h.store, links: [] };
   const at = new Date(NOW).toISOString();
@@ -974,8 +977,11 @@ test.skipIf(process.platform !== "darwin")("a plain --force that cannot disown t
 test("a plain --force settles the owner it took over before clearing the receipt, so a crash after the clear cannot credit the owner", async () => {
   // The owner wrote its record_removed intent and died before the store write.
   let broken = false;
-  writeFileSync(join(root, "not-a-dir"), "");
-  const h = harness({ operationsPath: () => broken ? join(root, "not-a-dir", "operations.json") : undefined, onReload: () => { broken = true; } });
+  // A directory where the journal file belongs fails both its read (EISDIR) and its write on every
+  // platform. A path under a file did not: Windows reports ENOENT there, which the journal rightly
+  // reads as "no journal" (dev batch 43451726885).
+  mkdirSync(join(root, "journal-is-a-directory"));
+  const h = harness({ operationsPath: () => broken ? join(root, "journal-is-a-directory") : undefined, onReload: () => { broken = true; } });
   claimLinkRetirement(record(), root, () => h.store, "force", OP);
   writeOperationsJournal(h.journalPath, { version: 1, operations: [{
     operationId: OP, kind: "revoke", alias: ALIAS, linkId: LINK, digest: revokeOperationDigest({ linkId: LINK, purge: false, force: true }),

@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { inflateRawSync } from "node:zlib";
 import { join } from "node:path";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
 import type { ManagementContext } from "../../src/server/management/context";
@@ -17,7 +16,7 @@ const replaceTombstone = (t: Parameters<typeof recordTombstone>[0]) => { removeT
 import { serialized } from "../../src/server/management/link-enrollment";
 import { registerOperationRecoveryResolver } from "../../src/link/operation-recovery-slot";
 import { POSIX_RECOVER_RECEIPT_SCRIPT, remoteManagedPurgeDisconnectArgv, remotePurgePlantedChildArgv, remoteRecoverReceiptArgv } from "../../src/link/remote-plant";
-import { windowsScriptData } from "../../src/link/remote-windows";
+import { windowsScriptData, windowsInflatedScript } from "../../src/link/remote-windows";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 // Home side of lane O5: a forced revoke of an ephemeral link leaves a tombstone, and
@@ -243,7 +242,16 @@ describe("POST /api/link/recover", () => {
     h.answer(() => ok("", 2, "Usage: ocx-child detach [--keep-catalog] [--purge] [--json]\n"));
     const res = await h.request("POST", "/api/link/recover", { linkId: ID });
     expect(res.status).toBe(409);
-    expect((await errorOf(res)).code).toBe("child_recover_unsupported");
+    const error = await errorOf(res);
+    expect(error.code).toBe("child_recover_unsupported");
+    // No plain detach on the strength of a status check: status cannot show an interrupted attach of another link, which a
+    // plain detach would restore and remove (#8691 review). The machine is left, and a person forgets the tombstone.
+    expect(error.message).toContain("Do not run its plain detach on that machine");
+    expect(error.message).toContain("Leave the machine");
+    expect(error.message).not.toContain("only if it shows this link's id");
+    expect(error.message).toContain("ocx link recover --forget --link-id " + ID + " --yes");
+    expect(error.message).toContain("Once the machine is gone, or a person on that machine has checked and cleaned its ocx-child records by hand");
+    expect(error.message).not.toContain("<id>");
     expect(tombstones().map(t => t.linkId)).toEqual([ID]);
   });
 
@@ -432,7 +440,7 @@ test("the Windows scripts keep a kept binary and require the planted binary to b
   const decode = (argv: string[]) => {
     const outer = Buffer.from(argv.at(-1)!, "base64").toString("utf16le");
     const packed = /\$ocxPacked='([^']+)'/.exec(outer)![1]!;
-    return inflateRawSync(Buffer.from(Array.from(packed, ch => ch.charCodeAt(0) - 256))).toString("utf8");
+    return windowsInflatedScript(outer);
   };
   const rollback = decode(remotePurgePlantedChildArgv("windows"));
   expect(rollback).not.toMatch(/detach --purge'\)\);if\(\$rc -ne 0\)\{exit \$rc\};try\{\[IO\.File\]::Delete\(\$dst\)\}/);
@@ -446,7 +454,7 @@ test("the Windows recover scripts carry the link id as data, never spliced into 
   const outer = (argv: string[]) => Buffer.from(argv.at(-1)!, "base64").toString("utf16le");
   const source = (argv: string[]) => {
     const packed = /\$ocxPacked='([^']+)'/.exec(outer(argv))![1]!;
-    return inflateRawSync(Buffer.from(Array.from(packed, ch => ch.charCodeAt(0) - 256))).toString("utf8");
+    return windowsInflatedScript(outer(argv));
   };
   const receipt = remoteRecoverReceiptArgv("windows", ID);
   expect(windowsScriptData(outer(receipt))).toEqual({ args: [ID] });
@@ -476,6 +484,17 @@ describe("recover over an exclusive explicit route (O6)", () => {
     expect(h.commands[0]).toContain("User=builder");
     expect(h.commands[0]).toContain("Port=22");
     expect(tombstones()).toEqual([]);
+  });
+
+  test("a keyed route's tombstone keeps its identity file, and recover offers that key alone (O7)", async () => {
+    const keyed = { ...route, identityFile: "/home/builder/.ssh/hub_ed25519" };
+    const h = harness([link({ explicitRoute: keyed, exclusive: true })]);
+    await forceRevoke(h);
+    expect(tombstones()[0]).toMatchObject({ explicitRoute: keyed, exclusive: true });
+    const res = await h.request("POST", "/api/link/recover", { linkId: ID });
+    expect(res.status).toBe(200);
+    expect(h.commands).toHaveLength(1);
+    for (const option of ["IdentitiesOnly=yes", "IdentityAgent=none", "IdentityFile=" + keyed.identityFile]) expect(h.commands[0]).toContain(option);
   });
 
   test("an explicit route in a tombstone needs exclusive, as on a link record", async () => {
@@ -791,7 +810,12 @@ describe("ordinary and --purge revokes are bound to their link (--expect-link)",
   test.each(sameMachine)("an older Child is not disconnected unbound while %s", async (_name, other) => {
     const h = harness([link(), link(other)], { ordinary: () => ok("", 2, "Error: Unexpected argument(s)") });
     const res = await h.request("DELETE", "/api/link/" + ID, {});
-    expect([res.status, (await errorOf(res)).hint]).toEqual([502, "expect_link_unsupported"]);
+    const error = await errorOf(res);
+    expect([res.status, error.hint]).toEqual([502, "expect_link_unsupported"]);
+    // No status check can show the other link is stale, so the way out is --force on this link, never that link's revoke.
+    expect(error.message).toContain("Otherwise revoke this link with --force");
+    expect(error.message).toContain("no status check can show it is stale");
+    expect(error.message).not.toContain("only if it is stale too");
     expect(h.commands.filter(c => c.includes("disconnect"))).toHaveLength(1);
     expect(h.store.links.map(l => l.id)).toEqual([ID, OTHER]);
   });
@@ -829,7 +853,12 @@ describe("ordinary and --purge revokes are bound to their link (--expect-link)",
     else expect(["child_link_mismatch", "child_residual", "child_disconnect_pending"]).not.toContain(body.error?.hint);
     // A remedy never sends the operator to disconnect a machine another link owns (#8662 review P2-1).
     expect(body.error?.message ?? "").not.toContain("joined this Home by itself");
-    if (hint === "child_link_mismatch") expect(body.error?.message).toContain("Do not disconnect it there");
+    if (hint === "child_link_mismatch") {
+      expect(body.error?.message).toContain("Do not disconnect it there");
+      // Nothing may be in progress (an unreadable rollback, a dead rotation): a repeat of the same answer ends in --force.
+      expect(body.error?.message).toContain("a connect or key rotation of it may be in progress");
+      expect(body.error?.message).toContain("if the same answer comes back, revoke this link with --force once any enrollment of this link has finished");
+    }
     expect(body.outcome).toBe(outcome);
     expect(h.store.links.map(l => l.id)).toEqual([ID]);
   });
@@ -911,9 +940,13 @@ describe("recover while another link names the alias", () => {
     const res = await h.request("POST", "/api/link/recover", { linkId: ID });
     const error = await errorOf(res);
     expect([res.status, error.code]).toEqual([409, "alias_linked"]);
-    // That link may be the one the machine runs now: the remedy revokes it only if it is stale too.
-    expect(error.message).toContain("Only if that link is stale too");
-    expect(error.message).toContain("If the machine runs that link, leave it");
+    // That link may be the one the machine runs now, and no status check can show it is stale: the remedy leaves it.
+    expect(error.message).toContain("Leave that link: no status check on the machine can show it is stale");
+    expect(error.message).toContain("do that only if you mean to end that link");
+    expect(error.message).toContain("then run ocx link recover again");
+    expect(error.message).not.toContain("recover runs then");
+    expect(error.message).not.toContain("Only if it shows");
+    expect(error.message).toContain("A person on this Home can instead forget this tombstone once the machine is confirmed clean or gone.");
     expect(error.message).not.toContain("settle any open operation on that link (ocx link operations), revoke the link, then recover");
     expect(h.commands.filter(c => c.includes("ocx-managed-purge"))).toEqual([]);
     expect(tombstones().map(t => t.linkId)).toEqual([ID]);

@@ -42,6 +42,14 @@ type MainPolicyQuota = { identityKey: string; quota: StoredAccountQuota };
 /** Fresh WHAM topology proof is consumed by the merge, never retained in a cache or DTO. */
 type MainPolicyQuotaObservation = Omit<StoredAccountQuota, "updatedAt"> & { shortWindowAbsent?: true; monthlyWindowAbsent?: true };
 let mainPolicyQuota: MainPolicyQuota | null = null;
+/**
+ * When each main policy usage window was last measured in this process (#8113). A window's time
+ * moves only when a write measures that window's percentage; reset metadata, credits and other
+ * windows never renew it. Process-local and never persisted: a reading restored from disk has none.
+ */
+type PolicyUsageWindow = "shortPercent" | "weeklyPercent" | "monthlyPercent";
+const POLICY_USAGE_WINDOWS: readonly PolicyUsageWindow[] = ["shortPercent", "weeklyPercent", "monthlyPercent"];
+let mainPolicyUsageObservation: { identityKey: string; at: Partial<Record<PolicyUsageWindow, number>> } | undefined;
 let diskHydrated = false;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let persistStartedAt: number | null = null;
@@ -442,6 +450,13 @@ export function setAccountQuotaFromParsed(
     const policyExisting = mainWriter && mainPolicyQuota?.identityKey === mainWriter.identityKey
       ? mainPolicyQuota.quota
       : undefined;
+    // Only a measured percentage renews its own window; anything else keeps the earlier time.
+    if (mainWriter && policyQuota) {
+      const at = mainPolicyUsageObservation?.identityKey === mainWriter.identityKey && policyExisting
+        ? { ...mainPolicyUsageObservation.at } : {};
+      for (const window of POLICY_USAGE_WINDOWS) if (finitePercent(policyQuota[window])) at[window] = updatedAt;
+      mainPolicyUsageObservation = { identityKey: mainWriter.identityKey, at };
+    }
     mainPolicyQuota = mainWriter && (policyQuota || policyExisting)
       ? {
         identityKey: mainWriter.identityKey,
@@ -450,6 +465,7 @@ export function setAccountQuotaFromParsed(
           : policyExisting!,
       }
       : null;
+    if (!mainPolicyQuota) mainPolicyUsageObservation = undefined;
   }
   schedulePersistAccountQuotas();
   // Credits carry the previous usage tuple; they must not refresh its observation clock.
@@ -831,7 +847,7 @@ export function updateAccountQuota(
   stampCodexQuotaUsageObservation(quota, { weeklyPercent: nextWeekly, monthlyPercent: nextMonthly }, existing);
   accountQuota.set(accountId, quota);
   // This legacy writer has no physical credential provenance.
-  if (accountId === MAIN_CODEX_ACCOUNT_ID) mainPolicyQuota = null;
+  if (accountId === MAIN_CODEX_ACCOUNT_ID) { mainPolicyQuota = null; mainPolicyUsageObservation = undefined; }
   schedulePersistAccountQuotas();
   // Observed like the other committed write. This function has no in-repo caller today, but it
   // is re-exported as public API through src/codex/auth-api.ts, so a future caller would
@@ -898,6 +914,7 @@ function hydrateAccountQuotasFromDisk(): void {
     quotaHistory.hydrate(parsed.history);
     // Policy evidence deliberately outlives the legacy six-hour rotation-cache TTL.
     mainPolicyQuota = readMainPolicyQuota(parsed.mainPolicyQuota);
+    mainPolicyUsageObservation = undefined;
     const now = Date.now();
     for (const [accountId, quota] of Object.entries(parsed.quotas)) {
       if (!quota || typeof quota !== "object" || typeof quota.updatedAt !== "number") continue;
@@ -955,6 +972,26 @@ export function getMainPolicyQuota(): StoredAccountQuota | null {
   return structuredClone(mainPolicyQuota.quota);
 }
 
+/**
+ * The oldest measurement time among the windows the observed main identity's policy reading
+ * retains, or undefined when any of them was not measured in this process (for example a reading
+ * restored from disk) (#8113). Any stale retained window therefore makes the whole reading stale.
+ */
+export function getMainPolicyUsageObservedAt(): number | undefined {
+  hydrateAccountQuotasFromDisk();
+  if (!mainPolicyQuota || mainPolicyQuota.identityKey !== getObservedMainQuotaIdentityKey()) return undefined;
+  const observation = mainPolicyUsageObservation?.identityKey === mainPolicyQuota.identityKey
+    ? mainPolicyUsageObservation.at : undefined;
+  let oldest: number | undefined;
+  for (const window of POLICY_USAGE_WINDOWS) {
+    if (!finitePercent(mainPolicyQuota.quota[window])) continue;
+    const at = observation?.[window];
+    if (at === undefined) return undefined;
+    oldest = oldest === undefined ? at : Math.min(oldest, at);
+  }
+  return oldest;
+}
+
 /** An owned identity observation may retire legacy main quota only when its retained policy tag proves replacement. */
 export function discardMismatchedMainQuota(): void {
   hydrateAccountQuotasFromDisk();
@@ -1001,14 +1038,14 @@ export function clearAccountQuota(accountId?: string): void {
   if (accountId) {
     hydrateAccountQuotasFromDisk();
     accountQuota.delete(accountId);
-    if (accountId === MAIN_CODEX_ACCOUNT_ID) mainPolicyQuota = null;
+    if (accountId === MAIN_CODEX_ACCOUNT_ID) { mainPolicyQuota = null; mainPolicyUsageObservation = undefined; }
     schedulePersistAccountQuotas();
     forgetCodexQuotaBaseline(accountId);
     return;
   }
   accountQuota.clear();
   forgetCodexQuotaBaseline();
-  mainPolicyQuota = null;
+  { mainPolicyQuota = null; mainPolicyUsageObservation = undefined; }
   diskHydrated = false;
   if (persistTimer) {
     clearTimeout(persistTimer);
@@ -1063,7 +1100,8 @@ export function parseMainPolicyUsageQuota(data: WhamUsageResponse): MainPolicyQu
   const windows = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
   if (windows.some(window => isInvalidPolicyUsagePercent(window?.used_percent))) return null;
   const quota = filterMainPolicyMonthlyQuota(parseUsageQuota(data), isThirtyDayOnlyCodexPlan(data.plan_type));
-  return quota ? withWhamShortWindowAbsence(data, quota) : null;
+  // #8596: a complete, allowed main read retires a carried monthly tuple under the pool proof (#8067).
+  return quota ? withWhamMonthlyWindowAbsence(data, withWhamShortWindowAbsence(data, quota)) : null;
 }
 
 /** Derive absence from complete WHAM topology without changing the display quota. */
@@ -1097,22 +1135,33 @@ export function poolWhamPolicyObservation(
   data: WhamUsageResponse, quota: Omit<StoredAccountQuota, "updatedAt"> | null,
 ): MainPolicyQuotaObservation | null {
   if (!quota || !isValidWhamHistoryObservation(data)) return null;
-  // Retirement releases a block, so a present reading that does not parse is not "unknown".
+  if (data.rate_limit?.allowed === false || hasMalformedWhamReading(data)) return quota;
+  return withWhamMonthlyWindowAbsence(data, withWhamShortWindowAbsence(data, quota));
+}
+
+/** Retirement releases a block, so a present reading that does not parse is not "unknown". */
+function hasMalformedWhamReading(data: WhamUsageResponse): boolean {
   const readings = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
   for (const limit of Array.isArray(data.additional_rate_limits) ? data.additional_rate_limits : []) {
     if (limit && typeof limit === "object") readings.push(limit.rate_limit?.primary_window, limit.rate_limit?.secondary_window);
   }
-  const malformed = readings.some(window => window?.used_percent != null
+  return readings.some(window => window?.used_percent != null
     && normalizeUsagePercent(window.used_percent) === undefined);
-  if (data.rate_limit?.allowed === false || malformed) return quota;
-  const observation = withWhamShortWindowAbsence(data, quota);
-  // #8067: the same complete topology proves a pool account has no monthly window when no window
-  // declares a monthly duration and no tertiary window is present, so a plan change away from a
-  // monthly primary (Free to Pro Lite) retires the carried tuple. Pool-only: main observations
-  // keep their existing retention rules.
+}
+
+/**
+ * #8067/#8596: the complete topology that proves short-window absence also proves there is no
+ * monthly window when no window declares a monthly duration and no tertiary window is present,
+ * so a plan change away from a monthly primary (Free to Pro Lite) retires the carried tuple.
+ * An explicit denial and invalid or unparseable readings never supply that proof.
+ */
+function withWhamMonthlyWindowAbsence(
+  data: WhamUsageResponse, observation: MainPolicyQuotaObservation,
+): MainPolicyQuotaObservation {
+  if (observation.shortWindowAbsent !== true || data.rate_limit?.allowed === false) return observation;
+  if (!isValidWhamHistoryObservation(data) || hasMalformedWhamReading(data)) return observation;
   const [primary, secondary, tertiary] = [data.rate_limit?.primary_window, data.rate_limit?.secondary_window, data.rate_limit?.tertiary_window];
-  return observation.shortWindowAbsent === true
-    && !isExplicitMonthlyWindow(primary) && !isExplicitMonthlyWindow(secondary) && tertiary == null
+  return !isExplicitMonthlyWindow(primary) && !isExplicitMonthlyWindow(secondary) && tertiary == null
     ? { ...observation, monthlyWindowAbsent: true }
     : observation;
 }

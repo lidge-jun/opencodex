@@ -1,7 +1,7 @@
 /** Regression coverage for #7966: integrity scans never run on the serving thread. */
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
-import { closeSync, mkdtempSync, openSync, readFileSync, renameSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, ftruncateSync, mkdtempSync, openSync, readFileSync, renameSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -27,7 +27,12 @@ import {
   withRequestHistoryRead,
 } from "../../src/routing/history/indexer";
 import { HISTORY_META_KEYS, HISTORY_SCHEMA_VERSION } from "../../src/routing/history/schema";
-import { RequestHistoryIntegrityMonitor } from "../../src/routing/history/integrity";
+import {
+  REQUEST_HISTORY_INTEGRITY_CHECK_MAX_TIMEOUT_MS,
+  REQUEST_HISTORY_INTEGRITY_CHECK_TIMEOUT_MS,
+  RequestHistoryIntegrityMonitor,
+  requestHistoryIntegrityCheckTimeoutMs,
+} from "../../src/routing/history/integrity";
 import { isHistoryIndexCorruption } from "../../src/routing/history/sqlite-errors";
 import { computeRoutingAnalytics } from "../../src/routing/analytics";
 import { clearHealthHistoryCacheForTests, healthEvidenceForCandidate } from "../../src/routing/health";
@@ -634,6 +639,33 @@ describe("request-history integrity lifecycle (#7966)", () => {
     exits[1]!();
     await next.promise;
     expect(monitor.inspect(replacement, "index.sqlite").state).toBe("ready");
+  });
+
+  test("the check bound floors at 30 s, scales with index size and stays capped", () => {
+    expect(requestHistoryIntegrityCheckTimeoutMs(undefined)).toBe(REQUEST_HISTORY_INTEGRITY_CHECK_TIMEOUT_MS);
+    expect(requestHistoryIntegrityCheckTimeoutMs(0)).toBe(REQUEST_HISTORY_INTEGRITY_CHECK_TIMEOUT_MS);
+    expect(requestHistoryIntegrityCheckTimeoutMs(1024)).toBe(REQUEST_HISTORY_INTEGRITY_CHECK_TIMEOUT_MS);
+    expect(requestHistoryIntegrityCheckTimeoutMs(4 * 1024 * 1024 * 1024)).toBe(128_000);
+    expect(requestHistoryIntegrityCheckTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(REQUEST_HISTORY_INTEGRITY_CHECK_MAX_TIMEOUT_MS);
+  });
+
+  test("a large index gets a size-scaled check bound instead of the 30 s floor", async () => {
+    const path = join(testDir, "large-index.sqlite");
+    const fd = openSync(path, "w");
+    try { ftruncateSync(fd, 4 * 1024 * 1024 * 1024); } finally { closeSync(fd); }
+    const fires: number[] = [];
+    const monitor = new RequestHistoryIntegrityMonitor({
+      now: () => 0,
+      scheduleTimeout: (_callback: () => void, ms: number) => { fires.push(ms); return () => {}; },
+      createJob: () => ({
+        check: () => new Promise<boolean>(() => {}),
+        dispose: async () => {},
+        afterExit: async (cleanup: () => void) => { cleanup(); },
+      }),
+    });
+    const pending = monitor.inspect({}, path);
+    expect(pending.state).toBe("pending");
+    expect(fires).toEqual([128_000]);
   });
 
   test("a delayed healthy check cannot clear corruption reported by a statement", async () => {

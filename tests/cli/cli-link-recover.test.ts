@@ -94,13 +94,56 @@ describe("ocx link recover", () => {
       expect(stderr()).toContain("alias_linked");
       expect(stderr()).toContain("another Home-initiated link");
       expect(stderr()).toContain("ocx link revoke");
-      // The other link may be the live one: revoke it only if it is stale too, else leave it and let the tombstone wait (#8662 review).
-      expect(stderr()).toContain("only if that other link is stale too");
-      expect(stderr()).toContain("If the machine runs that link, leave it");
-      expect(stderr()).toContain("ocx link recover --forget --link-id <id> --yes");
+      // The other link may be the live one, and no status check can show it is stale: an attach of it in progress can show no
+      // link or an earlier one (ocx-child's status reads only state.json), and unreadable state shows none (#8691 review).
+      expect(stderr()).toContain("Leave that link: no status check on the machine can show it is stale");
+      expect(stderr()).toContain("do that only if you mean to end that link");
+      // Recover is never run for the operator; the revoke names the other link's id (#8691 final review).
+      expect(stderr()).toContain("then run ocx link recover --link-id " + ID + " again");
+      expect(stderr()).toContain("ocx link revoke --link-id <that link's id>, shown by ocx link status");
+      expect(stderr()).not.toContain("recover runs then");
+      expect(stderr()).not.toContain("Only if it shows");
+      expect(stderr()).not.toContain("Check which link it runs");
+      // The forget way out is its own sentence (not under the branch that keeps the machine running), with this link's id.
+      expect(stderr()).toContain("A person on this Home can instead forget this tombstone (ocx link recover --forget --link-id " + ID + " --yes) once the machine is confirmed clean or gone.");
+      expect(stderr()).not.toContain("--link-id <id>");
       expect(stderr()).not.toContain("Do not run ocx-child detach on the machine: settle");
       expect(stderr()).not.toContain("server text");
     }
+  });
+
+  // The CLI prints its own text, never the server's, so child_recover_unsupported needs one: no plain detach (its status cannot
+  // show an interrupted attach of another link), and the forget way out with this link's id (#8691 review).
+  test("child_recover_unsupported says to leave the machine and how a person forgets, in text and --json", async () => {
+    for (const json of [false, true]) {
+      errors.mockClear();
+      const f = fixture({ error: { code: "child_recover_unsupported", message: "server text" } }, 409);
+      expect(await runLinkCommand(["recover", "--link-id", ID, ...(json ? ["--json"] : [])], f.deps)).toBe(5);
+      expect(stderr()).toContain("child_recover_unsupported: the planted ocx-child predates detach --expect-link");
+      expect(stderr()).toContain("Do not run its plain detach on the machine");
+      expect(stderr()).toContain("ocx link recover --forget --link-id " + ID + " --yes");
+      // No path to "clean" exists through recover with this build: gone, or cleaned by hand on the machine (#8691 final review).
+      expect(stderr()).toContain("Once the machine is gone, or a person on that machine has checked and cleaned its ocx-child records by hand");
+      expect(stderr()).not.toContain("confirmed clean or gone");
+      expect(stderr()).not.toContain("server text");
+    }
+  });
+
+  // An --operation-id recover's target comes from the journal, not a tombstone (--list shows only tombstones), so its steps
+  // name the operation id the CLI validated (#8694 final review).
+  test.each([
+    ["child_recover_unsupported", "a person on this Home can run ocx link operations resolve --operation-id enroll-7 --yes"],
+    ["alias_linked", "then run ocx link recover --operation-id enroll-7 again"],
+    ["alias_linked", "resolve the operation (ocx link operations resolve --operation-id enroll-7 --yes)"],
+  ])("a %s refusal for an --operation-id recover names the operation id", async (code, expected) => {
+    errors.mockClear();
+    const f = fixture({ error: { code, message: "server text" } }, 409);
+    expect(await runLinkCommand(["recover", "--operation-id", "enroll-7"], f.deps)).toBe(5);
+    expect(stderr()).toContain(expected);
+    expect(stderr()).not.toContain("--link-id <the link's id");
+    expect(stderr()).not.toContain("ocx link recover --list>");
+    expect(stderr()).not.toContain("This tombstone");
+    expect(stderr()).not.toContain("server text");
   });
 
   // A full install refuses --purge (purge_unsupported), so link_present names --purge only for a lightweight Child.

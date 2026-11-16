@@ -264,7 +264,7 @@ database 並移除目前的 WAL、SHM 與 journal sidecar，再發布先前的 s
 
 ## 3. API 金鑰目錄
 
-opencodex 內建 107 個 preset：86 個 key-based、17 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
+opencodex 內建 108 個 preset：87 個 key-based、17 個 OAuth、3 個 local，以及 1 個預設 ChatGPT-forward
 preset。儀表板的 **Add provider** picker 會開啟 key provider 的 dashboard、驗證金鑰並儲存；驗證方式
 依 provider 而異。主要條目如下。
 
@@ -317,7 +317,7 @@ IDE／CLI，不透過 API；`minimax/minimax-m2.5` 是文件列出的 API 免費
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
 | Zhipu AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
-| [BigModel Coding Plan — Responses (靜態模型清單)](/guides/providers/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
+| [BigModel Coding Plan — Responses (靜態模型清單)](/guides/api-key-catalog/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
 | Qwen Cloud | Token plan（預設）：`https://token-plan.maas.qwencloudapi.com/compatible-mode/v1` · pay as you go：`https://dashscope.aliyuncs.com/compatible-mode/v1` · 或 Custom |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |

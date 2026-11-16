@@ -27,8 +27,11 @@ Drives no management route.
 | `--version` | string | Select an exact version for a plan or apply. |
 | `--expect-plan` | string | Require the apply plan to match this planToken. |
 | `--not-after` | string | Refuse mutation after this Unix millisecond deadline. |
+| `--desktop` | boolean | Update a Windows Desktop installation headlessly (signature-verified MSI). |
+| `--check` | boolean | With --desktop, report the published and serving versions without installing. |
 
 - Orchestrated exit codes: 0 verified or up-to-date; 10 refused; 11 previous version verified; 12 uncertain; 64 usage.
+- --desktop exit codes: 0 done or up to date; 1 nothing installed; 2 old runtime still serving or reboot pending; 3 installer uncertain; 64 usage.
 
 ### `ocx companion`
 

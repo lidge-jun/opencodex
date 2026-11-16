@@ -27,7 +27,8 @@ afterEach(() => {
 });
 
 const fingerprint = "SHA256:abcdefghijklmnop";
-const recovery = "Run ocx disconnect and ocx restart on the Child before retrying.";
+// The Child's step is bound to the attempt's link id, which the answer names (#8691 final review).
+const recovery = expect.stringMatching(/^Run ocx disconnect --expect-link lnk_[0-9a-f]{16} on the Child and, if it disconnected, ocx restart, before retrying: it disconnects only while the Child is connected to this attempt's link /);
 const result = (stdout = "", code = 0): SshRunResult => ({ code, stdout, stderr: "" });
 const http = (body: unknown, status = 200) => result(`${JSON.stringify(body)}\n${status}`);
 const health = (role: string, restartCapability: string | null = "v1") => http({ service: "opencodex", pid: 4321, port: 10100, role, ...(restartCapability === null ? {} : { restartCapability }) });
@@ -324,7 +325,7 @@ describe("Home enrollment of a standalone Child", () => {
   // The refusal names the failed condition and the command that fixes it; a phase name alone
   // left a Home operator guessing whether the Child was still linked, stale, old or misbound.
   for (const [name, step, output, hint] of [
-    ["config still linked", "config", result('{"port":10100,"runtimeRole":"client"}'), "still linked to a Home (config runtimeRole client). On the Child run: ocx disconnect, then ocx restart"],
+    ["config still linked", "config", result('{"port":10100,"runtimeRole":"client"}'), "still linked to a Home (config runtimeRole client). To end that link and move it here, on the Child run: ocx disconnect, then ocx restart"],
     ["config Hub", "config", result('{"port":10100,"runtimeRole":"hub"}'), "is a Hub (config runtimeRole hub). On the Child run: ocx hub disable"],
     ["stale client runtime", "before", health("client"), "still serves a client runtime (/healthz role client on port 10100). On the Child run: ocx restart"],
     ["Hub runtime", "before", health("hub"), "serves a Hub runtime (/healthz role hub on port 10100). On the Child run: ocx hub disable, then ocx restart"],

@@ -229,8 +229,11 @@ to start its own replacement on the same port. If the replacement does not answe
 restart budget it is stopped, and the old runtime binds the port again and keeps serving; the
 command then reports the restart as not completed. A client runtime run by a background service or
 the desktop app refuses the request and keeps serving ("Restart not performed; the running client
-runtime was kept"); restart it with `ocx service restart` or from the app. See
-[Remote Link apply parity](#remote-link-apply-parity).
+runtime was kept"); restart it with `ocx service restart` or from the app. A client runtime that
+carries only `OCX_SERVICE=1` (a service installed before 2.49, or a proxy started by `ocx claude`,
+`ocx codex` or `ocx opencode`) cannot show its owner and is always refused, with nothing stopped:
+re-register its service once with `ocx service repair`, or, for a companion's proxy, run `ocx stop`
+and start it again. See [Remote Link apply parity](#remote-link-apply-parity).
 
 If package files or the Bun runtime remain incomplete after the installer exited or failed,
 run `ocx status`, stop any running proxy through its owner (`ocx stop`, or its service or
@@ -558,10 +561,16 @@ warning; the desktop uses `proxy-newer` to keep a takeover from downgrading the 
 Liveness has three answers: `live`, `absent-proven` (every recorded and configured endpoint
 definitively refused or answered non-opencodex), and unknown — a timed-out probe or a listener
 that withholds `/healthz` exits 1 rather than reading as absent, so only `absent-proven` may
-authorise starting a new runtime. The port is the live listener's port when a proxy answers,
+authorise starting a new runtime. One timeout is settled instead: when `hostname` is one of this
+machine's own non-loopback addresses (a Tailscale or LAN IP) and the connect itself times out,
+which Windows does for an unbound local address, resolve tries an exclusive bind on that address
+and port. Only a bind that succeeds counts as absent; a port already in use stays unknown. The port is the live listener's port when a proxy answers,
 otherwise the configured port (default 10100). Exit 0 carries a trustworthy verdict; exit 1 means
 the CLI could not resolve — including an invalid `config.json`, which is never repaired to
-defaults here — and the caller must refuse to guess; any unknown argument exits 64. Discovery uses
+defaults here — and the caller must refuse to guess. With `--json`, exit 1 still prints one
+document, `{"schema":"ocx-resolve/1","ok":false,"reason":…,"error":…}`, where `reason` is
+`config_unreadable`, `config_invalid`, `discovery_failed`, or `liveness_unknown` and `error`
+repeats the stderr message; it has no liveness or port field. Any unknown argument exits 64. Discovery uses
 the same ownership-safe probe budget as `ocx start`, because a false "nothing listening" answer
 is how duplicate proxies happen. The verb is read-only and skips the shim auto-restore preflight.
 
@@ -886,8 +895,9 @@ If launchd refuses the changed definition and its state can be checked, repair r
 and attempts to restore the previous definition; a job still serving the expected command is left
 running with the previous plist back on disk. A matching command alone cannot confirm the new policy.
 If the initial launchd probe cannot check state, repair refuses before writing a new plist or backup.
-If state becomes uncheckable after bootstrap, repair keeps the new plist and any backup without another eviction:
+If the probe immediately after bootstrap cannot check state, repair keeps the new plist and any backup without another eviction:
 a refused bootstrap throws, while an accepted bootstrap reports an unverified reload with a warning.
+For an unchanged definition, a successful recovery kickstart followed by an uncheckable probe can still trigger another eviction.
 Inspect the job with `launchctl print gui/$(id -u)/com.opencodex.proxy` before retrying repair.
 An unconfirmed definition remains pending across repairs, including after a token change. Registration
 is retried only when the initial launchd probe is checkable; a GUI login session may be required.
@@ -1340,7 +1350,64 @@ and 64 for invalid usage. `rolledBack` is true only when an actual installer
 rollback and its verification succeeded. A plan command emits its plan with exit 0;
 the `canApply` and `reason` fields describe eligibility.
 
-Compiled standalone installs, including the Windows MSI Desktop bundle, are updated through **Check for Updates…** in OpenCodex Desktop, or by reinstalling the standalone binary from [GitHub Releases](https://github.com/lidge-jun/opencodex/releases). `ocx system update check` reports `installer: "standalone"`, `canUpdate: false`, and `reason: "standalone_install"` with that guidance. `ocx update` exits unsuccessfully with the same hint; it does not run a package-manager update for the compiled executable. A genuine source checkout still reports `installer: "source"` and `reason: "source_checkout"`.
+Compiled standalone installs, including the Windows MSI Desktop bundle, are updated through **Check for Updates…** in OpenCodex Desktop, by `ocx update --desktop` on a Windows Desktop installation (below), or by reinstalling the standalone binary from [GitHub Releases](https://github.com/lidge-jun/opencodex/releases). `ocx system update check` reports `installer: "standalone"`, `canUpdate: false`, and `reason: "standalone_install"` with that guidance. `ocx update` without `--desktop` exits unsuccessfully with the same hint; it does not run a package-manager update for the compiled executable. A genuine source checkout still reports `installer: "source"` and `reason: "source_checkout"`.
+
+#### Headless Windows Desktop update
+
+```bash
+ocx update --desktop [--check] [--json]
+```
+
+Run this with the Windows Desktop installation's own `ocx.exe` (the one beside
+`opencodex-desktop.exe`), from an elevated terminal or SSH session signed in as the account that
+runs the proxy. The command finds the proxy through that account's OpenCodex home: a service, a
+SYSTEM scheduled task or another administrator account has a different home, does not find it,
+and would install the update but leave the old proxy serving. Any other `ocx`
+exits 64 without changing anything. It reads the release feed the app's updater uses and, when
+a newer version is published:
+
+1. downloads the Windows MSI from the exact GitHub release asset over HTTPS (at most three
+   redirects to GitHub's release-asset hosts, a 1 GiB cap, and connect, idle and total
+   deadlines), sending no credentials;
+2. verifies it with the app updater's embedded public key, refusing a bad or missing signature,
+   a signature for another version or platform, or a file that is not an MSI. It saves the MSI
+   and its log in a new folder (from an elevated session, under `%SystemRoot%\Temp` with access
+   for SYSTEM and Administrators only, so no program without those rights can replace the file
+   before the installer opens it) and verifies the saved copy again;
+3. renames its own running `ocx.exe` aside within the installation folder and puts a copy back
+   under the installed name, so the installer does not have to close the command that started it
+   and an interrupted command leaves nothing to put back (Windows Installer finishes or rolls back
+   on its own), runs
+   `msiexec /i <msi> /qn /norestart /l*v <log>` and waits for its exit code (0 and 3010 are
+   success; 3010 means Windows must restart to replace files that were in use). After a failed
+   install the folder keeps the previous `ocx.exe` and the log; an installer still running after
+   15 minutes is left alone with its staging folder;
+4. checks that the installed `ocx.exe` reports the new version, and only then schedules the
+   moved file for deletion at the next restart (each run also removes earlier leftovers);
+5. restarts the proxy that still serves the old version through its own in-place restart, so
+   Desktop, the service, or the detached proxy starts the installed executable, and waits until
+   the new version answers `/healthz`. A connected client proxy keeps itself through that
+   restart: when its background service owns it, the installed `ocx service restart` replaces it;
+   when the check proves this installation's OpenCodex Desktop runs exactly that proxy, the
+   installed `ocx stop --json` stops it, as the app's own updater does, and the app starts the new
+   version after a few seconds.
+
+A proxy whose executable is not this installation's `ocx.exe`, one this home cannot attest,
+or one newer than the installation is never stopped. When no proxy for this home was found, none is
+started (`installed-stopped`). With nothing newer published, the command still restarts an old proxy left behind by an
+earlier MSI install. `--check` reports the published, installed and serving versions without
+downloading or restarting anything.
+
+Exit codes: 0 updated, already current, or installed when no proxy for this home was found; 1 nothing was
+installed (refused signature, download failure, or a Windows Installer failure, whose log path
+is printed); 2 installed, but the old proxy is still serving or Windows must restart first;
+3 the installer did not finish within 15 minutes, or reported success without installing the
+new version; 64 invalid usage or not a Windows Desktop installation. `--json` prints one
+`ocx.desktop.headless-update/1` object with `outcome`, `exitCode`, `installedVersion`,
+`targetVersion`, `runtime`, `installer`, `reason` and `message`.
+
+When `ocx status` on a Windows Desktop installation sees an installed version newer than the
+running proxy, its version warning names both versions and prints this command.
 
 When OpenCodex is installed through mise, this command exits unsuccessfully before stopping the proxy or changing package files and shows `mise upgrade <tool>`, using the verified local mise alias. Update checks remain available and report the installation as externally managed. An unreadable or inconsistent mise ownership record fails closed without guessing a tool name, and `--tag preview` never changes mise's configured selection.
 
@@ -1541,11 +1608,15 @@ A forced success returns `{linkId,remoteCleanup:"skipped",recovery}`. Idempotent
 link-not-found instead reports `remoteCleanup:"unverified"`. Both can exit 0;
 these facts derive from CLI intent, not a server cleanup report. Neither means
 remote disconnect was attempted or confirmed. Follow the recovery instruction when
-that action is authorized: on a full Child, run `ocx disconnect` there only if
-`ocx connect status --json` shows this link's id or no connection, right after
-that check (an enrollment that lands between the two commands would be removed),
-and leave it if it shows another link, a hub or another Home; a lightweight Child
-uses `ocx link recover` (below).
+that action is authorized: on a full Child, run `ocx disconnect --expect-link <id>`
+there, which acts only while the machine is connected to this link. An OpenCodex
+older than that flag refuses it as a usage error before it acts on the link; then
+run `ocx disconnect` only if `ocx connect status --json` shows this link's id or no
+connection, right after that check (an enrollment that lands between the two
+commands would be removed), and leave it if it shows another link, a hub or
+another Home, or its state cannot be read. A lightweight Child uses
+`ocx link recover` (below). A link saved before the Home recorded the Child type
+keeps no tombstone, so the instruction names both installs' link-bound commands.
 
 A forced revoke of a lightweight (`ocx-child`) Child that the Home reached over
 SSH leaves a tombstone on the Home naming the link, its alias and its pinned host
@@ -1559,8 +1630,11 @@ ocx link recover --link-id lnk_0123456789abcdef --json
 The Home connects over the link's alias with the host key it recorded (a changed
 key refuses with `host_key_changed` before connecting) and runs the planted
 binary's `disconnect --purge --expect-link <id>`. The Child restores its
-`~/.codex` files and removes the planted binary only when its state and its
-ownership record both name that link. Success prints
+`~/.codex` files and removes the planted binary only when its records name that
+link and no other: its state and its ownership record both name it, or an
+interrupted detach or attach of that link left the ownership record naming it
+without the state (any attach rollback left, including one a detach stopped
+while restoring, may name no link or that link, never another). Success prints
 `{linkId,outcome:"clean",purged:true}` and removes the tombstone; `purged:false`
 means the Child restored its state but kept the planted binary because another
 OpenCodex home on that machine runs a relay from it, and the tombstone is removed
@@ -1574,9 +1648,12 @@ can run `ocx link recover --forget --link-id <id> --yes`.
 `child_conflict` (exit 5) means the Child belongs to another link or OpenCodex
 home, and nothing was changed. `alias_linked` (exit 5) means another Home-initiated link still uses that
 alias, as its alias or one of its routes, so the machine may belong to that link: do not run
-`ocx-child detach` there. Only if that other link is stale too (the machine does not run it), settle any
-open operation on it, revoke it, then recover; if the machine runs that link, leave it: the tombstone
-waits until that link is removed, then recover, or a person forgets it once the machine is confirmed clean.
+`ocx-child detach` there. Leave that link: no status check on the machine can show it is stale,
+since an attach of it still in progress can show no link or an earlier one, and state that cannot be read
+shows none. The tombstone waits until that link is removed; then run recover again. Revoking that link (after
+settling any open operation on it) ends it and disconnects the machine if the machine runs it, so do that
+only if you mean to end that link. A person on the Home can instead forget the tombstone once the machine
+is confirmed clean or gone.
 `link_present` (exit 5) means the link itself still exists; revoke it instead (with `--purge` for a lightweight Child).
 `--operation-id` recovers a Child that an
 interrupted enrollment left behind; it needs the link operation journal and

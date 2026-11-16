@@ -23,7 +23,7 @@ ocx init
 
 `ocx init` te guía por estos pasos:
 
-1. **Elegir un proveedor**: selecciona uno de los 107 preajustes del registro integrado o `custom` para introducir una URL base y un adaptador.
+1. **Elegir un proveedor**: selecciona uno de los 108 preajustes del registro integrado o `custom` para introducir una URL base y un adaptador.
 2. **Clave API**: pega una clave o indica una variable de entorno como `${ANTHROPIC_API_KEY}`.
 3. **Modelo predeterminado**: para proveedores con clave, locales o personalizados, acepta el preajuste o introduce un identificador de modelo.
 4. **Puerto del proxy**: `10100` de forma predeterminada.

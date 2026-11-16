@@ -13,6 +13,7 @@ function scenario(body: string, enabledIds = ["pi"], explicitClients?: string[],
   const root = mkdtempSync(join(tmpdir(), "ocx-route-connected-")); const home = join(root, "home"); mkdirSync(home);
   try {
     const result = spawnSync(process.execPath, ["--eval", `
+      import './tests/helpers/windows-acl-process-stubs';
       import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
       import { join, dirname } from 'node:path';
       import { getDefaultConfig, saveConfig, loadConfig, setPersistedConfigMutationBeforeCommitForTests } from './src/config';

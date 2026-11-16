@@ -166,7 +166,10 @@ describe("git config guard", () => {
     const linked = join(tempDir("ocx-git-guard-linked-"), "wt");
     git(root, "worktree", "add", "-q", "--detach", linked);
     expect(resolveCommonGitConfigPath(root)).toBe(config);
-    expect(realpathSync(resolveCommonGitConfigPath(linked)!)).toBe(realpathSync(config));
+    // Native canonicalization on both sides: git records the linked worktree's gitdir with Windows' long
+    // name (runneradmin), while the fixture root keeps the 8.3 short spelling (RUNNER~1) the JS
+    // realpathSync leaves in place (run 43413601225). realpathSync.native expands both to one path.
+    expect(realpathSync.native(resolveCommonGitConfigPath(linked)!)).toBe(realpathSync.native(config));
     expect(resolveCommonGitConfigPath(tempDir("ocx-git-guard-none-"))).toBeNull();
   });
 

@@ -13,6 +13,7 @@ function scenario(body: string, initialCodex?: boolean | "absent") {
   mkdirSync(join(home, ".codex"));
   try {
     const child = spawnSync(process.execPath, ["--eval", `
+      import './tests/helpers/windows-acl-process-stubs';
       import { mkdirSync, writeFileSync, readFileSync, existsSync, unlinkSync } from 'node:fs';
       import { join } from 'node:path';
       import { getDefaultConfig, saveConfig, loadConfig } from './src/config';
