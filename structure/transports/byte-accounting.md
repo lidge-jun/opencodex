@@ -388,8 +388,8 @@ and covers Unicode collisions, short values, overlapping spans and request isola
 strings without escape introducers when decoding is enabled, and all ASCII strings
 when it is disabled. The identity offset array is cached lazily and pattern matchers
 request it only after a credential label matches; absent labels allocate no offset
-array. Other strings keep the general Unicode/escape fold; all
-credential masking passes still run. `tests/lib/redact.test.ts` compares both paths.
+array. Other strings keep the general Unicode/escape fold, preserving credential
+matching coverage. `tests/lib/redact.test.ts` compares both paths.
 Literal ASCII without label delimiters (`:`, `=`, `<`) or escape introducers
 (`\`, `%`, `&`) bypasses label folding; token-pattern redaction still runs.
 

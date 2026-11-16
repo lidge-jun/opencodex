@@ -1,5 +1,8 @@
 # Terminal-repair PR: bounded credential-masking comparison
 
+This is the initial record at `dad1813b3`. The subsequent production fix and
+new base/head measurements are in [the profiled follow-up](020_profiled_redaction_fix.md).
+
 ## Question and result
 
 PR #8774 reuses the incremental SSE buffer in Responses terminal repair. Its
