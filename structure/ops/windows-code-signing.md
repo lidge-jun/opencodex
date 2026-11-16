@@ -28,7 +28,13 @@ reported `signed=true`; a skipped plan, a test certificate, or a failed or skipp
 matching kind, a boolean); a missing, malformed or mislabelled record is "not recorded" and never counts as signed.
 The section always starts with the SignPath attribution and the code signing policy link that SignPath Foundation
 requires on the download page, then states one of: both files signed; "The Windows files in this release are not
-code-signed" (no file signed, or nothing recorded); or, for a mixed result, which file is signed and which is not.
+code-signed" (no file signed, or nothing recorded); or, when at least one file is signed and another is not, which
+file is signed and which is not.
+
+The body is written when `publish` creates the draft release. A resumed run (`resume-after-npm-publish`) that reuses
+an existing draft rewrites its body from that run's notes with `gh release edit --notes-file`, because the resumed
+run's Windows legs record their own outcome and `attach-release` attaches that run's bundle. A published release is
+immutable, and `attach-release` already requires its assets to match the run's verified digests.
 
 Release bodies published before this record existed carry an explicit "not code-signed" line added by hand; the
 workflow never rewrites a published body. `tests/ci-workflows/release-windows-signing-outcome.test.ts` covers the

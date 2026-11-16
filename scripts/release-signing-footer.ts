@@ -22,7 +22,7 @@ export type WindowsSignedFileKind = typeof WINDOWS_SIGNED_FILES[number]["kind"];
 export type WindowsFileSigning = "signed" | "unsigned" | "unknown";
 
 export interface WindowsSigningOutcome {
-  /** signed: every file signed; unsigned: none signed; partial: anything mixed; unknown: no file has a record. */
+  /** signed: every file signed; partial: some signed, some not; unsigned: none signed; unknown: no file has a record. */
   status: "signed" | "unsigned" | "partial" | "unknown";
   files: Record<WindowsSignedFileKind, WindowsFileSigning>;
 }
@@ -57,10 +57,12 @@ export function readWindowsSigningOutcomes(dir: string | undefined): WindowsSign
   if (!dir) return UNRECORDED_WINDOWS_SIGNING;
   const files = { standalone: readRecord(dir, "standalone"), desktop: readRecord(dir, "desktop") };
   const states = Object.values(files);
+  // partial only when at least one file is signed and another is not: a result with nothing signed never reads as partly
+  // signed, and an unrecorded file never counts as signed.
   const status = states.every(state => state === "signed") ? "signed"
-    : states.every(state => state === "unsigned") ? "unsigned"
     : states.every(state => state === "unknown") ? "unknown"
-    : "partial";
+    : states.some(state => state === "signed") ? "partial"
+    : "unsigned";
   return { status, files };
 }
 
@@ -74,7 +76,7 @@ const FILE_STATE_TEXT: Record<WindowsFileSigning, string> = {
 export function codeSigningFooter(outcome: WindowsSigningOutcome = UNRECORDED_WINDOWS_SIGNING): string {
   let statement: string;
   if (outcome.status === "signed") {
-    statement = "The Windows files in this release, `ocx.exe` and the MSI installer, are Authenticode-signed with the SignPath Foundation certificate.";
+    statement = "`ocx.exe` and the MSI installer (with the executables it installs) are Authenticode-signed with the SignPath Foundation certificate. The third-party keyring addons bundled in the standalone zip keep their upstream form.";
   } else if (outcome.status === "unsigned") {
     statement = "**The Windows files in this release are not code-signed.**";
   } else if (outcome.status === "unknown") {

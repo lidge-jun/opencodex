@@ -64,6 +64,16 @@ describe("the release body's code signing footer", () => {
     } finally { removeTreeWithRetry(dir); }
   });
 
+  test("one file not signed and the other not recorded reads as not code-signed, never as partly signed", () => {
+    const dir = outcomes({ "standalone.json": record("standalone", false) });
+    try {
+      expect(readWindowsSigningOutcomes(dir).status).toBe("unsigned");
+      const body = notes(dir).body;
+      expect(body).toContain("**The Windows files in this release are not code-signed.**");
+      expect(body).not.toContain("Not every Windows file");
+    } finally { removeTreeWithRetry(dir); }
+  });
+
   test("missing, malformed or mislabelled records never read as signed", () => {
     const cases: Array<Record<string, string>> = [
       {},
@@ -179,6 +189,19 @@ describe("release workflow wiring of the signing outcome", () => {
     expect(steps[download]!.with?.["merge-multiple"]).toBe(true);
     expect(steps[build]!.run).toContain('--windows-signing-outcomes "$RUNNER_TEMP/windows-signing-outcome"');
     expect(steps[download]!.with?.path).toBe("${{ runner.temp }}/windows-signing-outcome");
+  });
+
+  test("a resumed run that reuses a draft rewrites its body from this run's notes (#8780 review)", () => {
+    // The Windows legs rerun on a resume and record a fresh outcome; the draft's body from the earlier run could claim a
+    // signature the files this run attaches do not have.
+    const step = stepsOf("publish").find(step => step.run?.includes("reusing it for attachment"));
+    expect(step).toBeDefined();
+    const run = step!.run!;
+    const reuse = run.indexOf("reusing it for attachment");
+    const refresh = run.indexOf('gh release edit "$release_tag" --notes-file "$notes_file"');
+    expect(refresh).toBeGreaterThan(reuse);
+    // Only a draft is edited: a published release is immutable and its assets must already match this run's digests.
+    expect(run.slice(reuse, refresh)).toContain("--json isDraft --jq .isDraft");
   });
 
   test("the swap script reports signed only after the verified swap", () => {

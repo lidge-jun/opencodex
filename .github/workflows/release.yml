@@ -1459,7 +1459,8 @@ jobs:
           # assets and left the desktop updater without anything to download. The
           # release is therefore created as a draft and becomes public here, once the
           # verified bundle is attached. The only edit permitted is this flip — the
-          # notes still come from the validated notes file written at creation.
+          # notes come from the run's validated notes file, written at creation or,
+          # for a draft a resumed run reused, refreshed from that run's file.
           draft_state="$(gh release view "$release_tag" --json isDraft --jq .isDraft)"
           case "$draft_state" in
             true) gh release edit "$release_tag" --draft=false ;;
@@ -1920,6 +1921,15 @@ jobs:
           if gh release view "$release_tag" >/dev/null 2>&1; then
             if [ "$RESUME" = "true" ]; then
               echo "::notice::GitHub Release ${release_tag} already exists; reusing it for attachment"
+              # This run attaches its own verified bundle, and its Windows legs recorded their own signing outcome
+              # (#7207), so a reused draft takes this run's validated notes. A published release is immutable, and
+              # attach-release already requires its assets to match this run's digests.
+              reused_draft="$(gh release view "$release_tag" --json isDraft --jq .isDraft)"
+              case "$reused_draft" in
+                true) gh release edit "$release_tag" --notes-file "$notes_file" ;;
+                false) ;;
+                *) echo "::error::Unexpected draft state for ${release_tag}: ${reused_draft}"; exit 1 ;;
+              esac
             else
               echo "::error::GitHub Release ${release_tag} already exists; refusing to reuse it outside the resume path"
               exit 1
