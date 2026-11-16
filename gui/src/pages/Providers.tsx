@@ -819,7 +819,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
           const pending = oauthTosPending;
           if (!pending) return;
           setOauthTosPending(null);
-          void loginOAuth(pending.provider, pending.addAccount, pending.accountId);
+          void loginOAuth(pending.provider, pending.addAccount, pending.accountId, true);
         }}
       />
     </>

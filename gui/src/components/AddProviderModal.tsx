@@ -398,7 +398,7 @@ export default function AddProviderModal({
           const id = oauthTosPending;
           if (!id) return;
           dispatch({ type: "set-oauth-tos-pending", providerId: null });
-          void loginOAuth(id, oauthSetters);
+          void loginOAuth(id, oauthSetters, true);
         }}
       />
     )}

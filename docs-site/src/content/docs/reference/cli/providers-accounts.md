@@ -324,6 +324,24 @@ and account failover preferences. Login-owned transport/authentication fields an
 catalog metadata are refreshed. A live-discovery provider keeps its selected default model; a
 static provider can replace a default that no longer exists in its refreshed catalog.
 
+**Google Antigravity can get Gemini and Antigravity access on your Google account disabled.** The
+Antigravity login is issued for Google's own Antigravity app, and users of third-party tools have
+reported that access on their Google accounts being disabled with
+`This service has been disabled in this account for violation of Terms of Service.`
+That ban covers the Google account's Gemini Code Assist and Antigravity access, and getting it back
+depends on Google's appeal process. Use only a separate account you can afford to lose; a Gemini API
+key (the `google` preset) is the supported way to use Gemini from other tools. Every way of adding an
+Antigravity account therefore asks first. `ocx login google-antigravity`,
+`ocx account login google-antigravity` (including `--reauth`) and
+`ocx account import google-antigravity` print the warning and continue only when a terminal answers
+`y`. A non-interactive run must pass `--accept-antigravity-risk`, which skips the question but still
+prints the warning; without it the command exits before contacting the proxy or reading an import
+document. `--stdin` imports always need the flag, because the document occupies stdin. The flag is
+refused for any other provider, and a run driven by a coding agent or CI runner is refused with or
+without it: only the account owner can accept this risk (see `AGENTS_INSTALL.md`). The dashboard asks
+through a checkbox that starts unticked every time, and the management API refuses an Antigravity
+login or import that does not carry the acknowledgement.
+
 For Antigravity, an upstream `401` can refresh the rejected account’s OAuth credential and
 retry the request once. The retry uses that credential’s Cloud Code Assist project. If refresh
 fails or no usable project is available, the request returns an authentication error; use the
