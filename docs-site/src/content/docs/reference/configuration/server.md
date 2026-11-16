@@ -207,6 +207,25 @@ history; review the full-scope warning in the lifecycle reference before running
 
 Native Chat also uses `stallTimeoutSec` while waiting for upstream output, with the same local-vs-public default: an unset budget is disabled for a local upstream and 300 s for a public one, and `0` disables it everywhere. Nonempty text, reasoning, refusal, tool updates, and finish frames renew the allowance; keepalive comments, role-only frames, and usage alone do not. Waiting for a slow client to read pauses the allowance. A stall produces `upstream_stall_timeout`: an error frame for streaming clients, or HTTP 502 for non-streaming clients. Cancellation before a terminal result returns a cancellation error instead of a successful partial answer. Buffered Chat results accept both LF and CRLF SSE framing, including multiline data.
 
+### Combo selection keepalive
+
+A streaming `POST /v1/responses` request to a combo can wait while the combo chooses a target:
+it inspects each child stream before any output, hops past zero-output failures, and can wait out a
+short cooldown. If that selection takes longer than 15 seconds, OpenCodex commits an HTTP 200
+`text/event-stream` head and sends a `: keepalive` comment, then another every 15 seconds until a
+target is chosen, so a proxy or load balancer with an idle limit does not drop the connection. The
+threshold and interval are fixed; there is no setting for them.
+
+Committing the head commits the status. After it, the chosen target's stream follows in the same
+response, and a failure of every target arrives as one `response.failed` event whose `error.code`
+(and `type` and message) is the one the HTTP error would have carried, for example
+`combo_unavailable`. Response headers of the chosen target, such as `Retry-After` or
+`openai-model`, are not sent once the head is committed; the request log still records the
+failure's original HTTP status. A selection that finishes within 15 seconds is unchanged: the
+client receives the chosen target's own status and headers, and an all-targets failure keeps its
+real HTTP status. Non-streaming requests, WebSocket requests, and the Chat Completions and
+Anthropic Messages endpoints keep the HTTP status in every case.
+
 ## Codex quota network diagnostics
 
 The main Codex account row may include `quotaRefresh` when a quota fetch was
