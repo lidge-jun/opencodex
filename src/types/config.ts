@@ -861,10 +861,10 @@ export interface OcxConfig extends OcxLinkHomeConfig {
    * Unknown windows use maxTokens alone; overflow is archived locally with a path notice.
    * Native and opaque compaction output keep their existing protocols. */
   reasoningRetention?: { enabled?: boolean; maxContextPercent?: number; maxTokens?: number };
-  /** Canonical ChatGPT reasoning replay allowances; both default off. */
-  nativeReasoningRetention?: { modelSwitch?: boolean; accountSwitch?: boolean };
+  nativeReasoningRetention?: { modelSwitch?: boolean; accountSwitch?: boolean }; // canonical ChatGPT reasoning replay allowances; both default off
   /** Per-root fan-out ceilings (src/lib/workflow-budget.ts); omitted fields keep 8 / 256 / 64. */
   workflowBudget?: { maxConcurrentChildren?: number; maxPhysicalSends?: number; maxDistinctChildren?: number };
+  routedCatalogDefaults?: import("./routed-catalog-defaults").OcxRoutedCatalogDefaultsConfig; // #6872; provider/model declarations win
   /** Explicit opt-in; resumes Observe only using an existing trusted certificate and endpoints. */
   desktopCompatibility?: { startOnProxyStart: boolean };
   /**
