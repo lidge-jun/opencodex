@@ -4,7 +4,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 
-import { resolveTrustedWindowsSystemDirectory } from "../../src/lib/windows-elevation";
+import { resolveTrustedWindowsPowerShellExe, resolveTrustedWindowsSystemDirectory } from "../../src/lib/windows-elevation";
 import {
   decodeServiceStatusProcess,
   fileTimeToEpochMs,
@@ -231,6 +231,40 @@ describe("Windows process evidence: facades", () => {
 
 const liveX64 = process.platform !== "win32" || process.arch !== "x64";
 
+for (const expired of [false, true]) test.skipIf(process.platform !== "win32")("owner enrichment retains every row (expired=" + expired + ")", async () => {
+  const script = WINDOWS_PROCESS_SNAPSHOT_SCRIPT.replace(
+    "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value", "'S-1-5-21-100-200-300-1001'",
+  ).replace("[Diagnostics.Stopwatch]::StartNew()", expired ? "[pscustomobject]@{ ElapsedMilliseconds = 1500 }" : "[Diagnostics.Stopwatch]::StartNew()");
+  const prelude = [
+    "$script:ownerReads = 0; $script:refreshReads = 0;",
+    "function Get-CimInstance { param($ClassName, $InputObject, $ErrorAction, $OperationTimeoutSec)",
+    "  if ($InputObject) { $script:refreshReads++; return $InputObject };",
+    "  1..40 | ForEach-Object { [pscustomobject]@{ ProcessId = $_; ParentProcessId = 900; Name = 'cmd.exe';",
+    "    CommandLine = 'cmd.exe'; CreationDate = [datetime]'2026-11-12T01:02:03Z' } } };",
+    "function Invoke-CimMethod { param($InputObject, $MethodName, $ErrorAction, $OperationTimeoutSec)",
+    "  $script:ownerReads++; @{ Sid = $currentSid; ReturnValue = 0 } };",
+    "$rows = & { " + script + " };",
+    "[pscustomobject]@{ Snapshot = $rows; OwnerReads = $script:ownerReads; RefreshReads = $script:refreshReads } | ConvertTo-Json -Compress",
+  ].join(" ");
+  const child = Bun.spawn([resolveTrustedWindowsPowerShellExe(), "-NoProfile", "-NonInteractive", "-Command", prelude], {
+    stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: 5_000,
+  });
+  const [output, errors, exitCode] = await Promise.all([
+    new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+  ]);
+  expect(errors).toBe("");
+  expect(exitCode).toBe(0);
+  const result = JSON.parse(output);
+  const rows = parseWindowsProcessSnapshot(result.Snapshot)!;
+  expect(rows).toHaveLength(40);
+  if (expired) expect(result.OwnerReads).toBe(0);
+  else expect(result.OwnerReads).toBeGreaterThan(0);
+  expect(result.OwnerReads).toBeLessThanOrEqual(32);
+  expect(result.RefreshReads).toBe(result.OwnerReads);
+  expect(rows.slice(0, result.OwnerReads).every(row => row.foreignOwner === false)).toBe(true);
+  expect(rows.slice(result.OwnerReads).every(row => row.foreignOwner === null)).toBe(true);
+}, 10_000);
+
 test.skipIf(process.platform !== "win32")("the live capped snapshot reads and refreshes a wrapper child's owner", async () => {
   // /d disables AutoRun. `rem` does no work; /k and an open stdin keep this owned child
   // alive for the real CIM owner query, refresh, parser, and optional native overlay.
@@ -239,7 +273,20 @@ test.skipIf(process.platform !== "win32")("the live capped snapshot reads and re
     stdio: ["pipe", "ignore", "ignore"], windowsHide: true,
   });
   try {
-    const snapshot = await windowsProcessSnapshot({ timeoutMs: 5_000 });
+    // Scope the real CIM input to our child: enrichment is intentionally bounded, so a
+    // busy machine's unrelated wrappers may use up a full snapshot's optional budget.
+    const snapshot = await windowsProcessSnapshot({ timeoutMs: 5_000, run: async command => {
+      const args = command.args.map(arg => arg.replace("Get-CimInstance Win32_Process |",
+        "Get-CimInstance Win32_Process -Filter 'ProcessId = " + child.pid + "' |"));
+      const helper = Bun.spawn([resolveTrustedWindowsPowerShellExe(), ...args], {
+        stdio: ["ignore", "pipe", "pipe"], windowsHide: true, timeout: command.timeoutMs,
+      });
+      const [output, errors, code] = await Promise.all([
+        new Response(helper.stdout).text(), new Response(helper.stderr).text(), helper.exited,
+      ]);
+      if (code !== 0 || errors) throw new Error("child-scoped snapshot failed");
+      return output;
+    } });
     expect(snapshot).not.toBeNull();
     const wrapper = snapshot!.find(row => row.pid === child.pid);
     expect(wrapper).toBeDefined();

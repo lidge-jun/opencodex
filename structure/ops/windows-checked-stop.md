@@ -31,7 +31,11 @@ Windows ARM64, other platforms and any test that simulates a platform get no nat
 `src/service/windows-process-evidence.ts` is the facade the operations use. Its process snapshot is
 one capped PowerShell snapshot that emits `CreationDate` as an ISO UTC string. It reads owner
 SIDs only for wrapper images, unreadable images, and command lines containing the fixed
-`opencodex-service` basename prefix (the guarded path also considers other images). A successful
+`opencodex-service` basename prefix (the guarded path also considers other images). Owner
+enrichment admits at most 32 candidates while its 1.5 s budget remains, with a 1 s
+operation timeout on each owner/refresh call. Exhaustion retains every row with unknown ownership.
+The budget starts with row projection, after the initial enumeration; the refresh is skipped if
+the owner query spends the budget. A successful
 `GetOwnerSid` result proves another user's owner only when both SIDs are valid and a fresh CIM
 read after the owner query reports the original creation time. Supported service installs run
 as the current account; only differing local/domain or Entra ID account SIDs prove a foreign

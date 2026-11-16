@@ -100,21 +100,27 @@ function powershellArgs(script: string): string[] {
 }
 
 /**
- * Owner reads share the snapshot's cap and only cover possible wrapper candidates. The
+ * Owner enrichment admits at most 32 candidates within 1.5 s; individual CIM calls also
+ * have a 1 s operation cap. Unqueried owners stay unknown and every process row survives.
+ * Owner reads only cover possible wrapper candidates. The
  * fixed basename prefix covers the guarded path's image-independent matches too, without
  * embedding a home path in this helper's own command line. A fresh CIM read after GetOwnerSid
  * binds that owner to the original creation time; a reused PID cannot prove a foreign owner.
  */
 export const WINDOWS_PROCESS_SNAPSHOT_SCRIPT = [
   "$currentSid = $null; try { $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch { $currentSid = $null };",
+  "$ownerBudget = @{ Remaining = 32; Clock = $null };",
   "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine,",
   "@{Name='CreationDate';Expression={ if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') } else { $null } }},",
   "@{Name='CurrentUserSid';Expression={ $currentSid }},",
   "@{Name='Owner';Expression={",
-  "  if ($currentSid -and (($_.Name -match '^(wscript|cscript|cmd)\\.exe$') -or (-not $_.Name) -or ($_.CommandLine -like '*opencodex-service*'))) {",
+  "  if ($null -eq $ownerBudget.Clock) { $ownerBudget.Clock = [Diagnostics.Stopwatch]::StartNew() };",
+  "  if ($currentSid -and $ownerBudget.Remaining -gt 0 -and $ownerBudget.Clock.ElapsedMilliseconds -lt 1500 -and (($_.Name -match '^(wscript|cscript|cmd)\\.exe$') -or (-not $_.Name) -or ($_.CommandLine -like '*opencodex-service*'))) {",
+  "    $ownerBudget.Remaining--;",
   "    try {",
-  "      $owner = Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop;",
-  "      $after = Get-CimInstance -InputObject $_ -ErrorAction Stop;",
+  "      $owner = Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -OperationTimeoutSec 1 -ErrorAction Stop;",
+  "      if ($ownerBudget.Clock.ElapsedMilliseconds -ge 1500) { return $null };",
+  "      $after = Get-CimInstance -InputObject $_ -OperationTimeoutSec 1 -ErrorAction Stop;",
   "      @{ Sid = $owner.Sid; ReturnValue = $owner.ReturnValue;",
   "         CreationDate = if ($after.CreationDate) { $after.CreationDate.ToUniversalTime().ToString('o') } else { $null } }",
   "    } catch { $null }",
