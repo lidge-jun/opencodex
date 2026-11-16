@@ -34,6 +34,9 @@ canonical Codex client identities or Codex turn metadata; an incidental `codex` 
 in another client's name does not activate it. Explicitly deferred tools, conversation
 text, and other API clients are not counted.
 
+The diagnostic has a fixed work budget. If a catalog or its surrounding input exceeds
+that budget, OpenCodex skips the warning and processes the request unchanged.
+
 Routed models advertise deferred discovery. In Code Mode, discover available tools
 through `ALL_TOOLS` and call them through `tools`; a separate `tool_search` function
 is not required. Models using the direct tool interface can expose `tool_search`.

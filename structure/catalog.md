@@ -470,11 +470,12 @@ declarations into `exec.description`, a measured 2.7x turn-1 payload increase (9
 this can exceed the 120,000-byte `McpTools` ceiling and drop `exec` and `wait` (#1830). Hosted search is separate:
 non-Cursor routes keep `web_search_tool_type: "text_and_image"`; Cursor omits it because runTurn bypasses the sidecar.
 
-Canonical Codex identities or turn metadata activate a diagnostic, never a refusal: at `EAGER_CODEX_MCP_TOOL_WARNING_THRESHOLD` (64) eager MCP definitions
-in top-level `tools`, client-sent Responses Lite `additional_tools`, or rendered Code Mode `exec` sections, `src/server/responses/codex-tool-catalog.ts` logs
-only the count and threshold and forwards the request unchanged. Codex resends a window's catalog at the head of each request, so position cannot mark
-history; the count runs after `expandPreviousResponseInput` and excludes only the proxy-restored prefix. Deferred definitions and compaction `input` are
-excluded. Dedup is one session, or one request without a session identity, in a bounded LRU. Test: `tests/responses/codex-eager-tool-catalog.test.ts`.
+Canonical Codex identities or turn metadata activate a diagnostic, never a refusal: `src/server/responses/codex-tool-catalog.ts` warns at 64 eager MCP definitions,
+logging only count and threshold. It counts top-level `tools`, client-sent Responses Lite `additional_tools`, and rendered Code Mode `exec` sections.
+The count runs after `expandPreviousResponseInput`, excluding proxy-restored history, deferred definitions, and compaction `input`; a client's own catalog resend counts.
+A shared budget allows 4,096 input/catalog entries (including rendered names) and 1,048,576 UTF-16 code units across canonical names and Code Mode descriptions.
+Costs are reserved before scans, replay copies, namespace expansion, Set insertion, and parsing; duplicates consume budget. Exhaustion skips the warning and its dedup entry.
+Requests stay unchanged. Warnings dedup per session in a bounded LRU, or per anonymous logical request. Test: `tests/responses/codex-eager-tool-catalog.test.ts`.
 
 > Decision record: [ADR-0022](decisions/ADR-0022-routed-tool-discovery-and-hosted-search.md)
 
