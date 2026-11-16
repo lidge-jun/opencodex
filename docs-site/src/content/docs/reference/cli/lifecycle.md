@@ -1367,7 +1367,8 @@ a newer version is published:
    before the installer opens it) and verifies the saved copy again;
 3. renames its own running `ocx.exe` aside within the installation folder and puts a copy back
    under the installed name, so the installer does not have to close the command that started it
-   and the folder keeps an `ocx.exe` even if the command is interrupted, runs
+   and an interrupted command leaves nothing to put back (Windows Installer finishes or rolls back
+   on its own), runs
    `msiexec /i <msi> /qn /norestart /l*v <log>` and waits for its exit code (0 and 3010 are
    success; 3010 means Windows must restart to replace files that were in use). After a failed
    install the folder keeps the previous `ocx.exe` and the log; an installer still running after

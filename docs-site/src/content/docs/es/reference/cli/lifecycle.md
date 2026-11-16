@@ -711,7 +711,7 @@ sale con 64 sin cambiar nada. Lee el mismo canal de versiones que usa el actuali
 2. lo verifica con la clave pública integrada del actualizador de la aplicación, rechaza una firma incorrecta o ausente,
    una firma de otra versión o plataforma, o un archivo que no sea un MSI. Guarda el MSI y su registro en una carpeta nueva (desde una sesión elevada, bajo `%SystemRoot%\Temp` con acceso solo para SYSTEM y Administradores, para que ningún programa sin esos permisos pueda reemplazar el archivo antes de que el instalador lo abra) y vuelve a verificar la copia guardada;
 3. aparta su propio `ocx.exe` en ejecución dentro de la carpeta de instalación y vuelve a poner una copia con el nombre instalado, para que el instalador no tenga que cerrar
-   el comando que lo inició y la carpeta conserve un `ocx.exe` aunque se interrumpa el comando, ejecuta `msiexec /i <msi> /qn /norestart /l*v <log>` y espera su código de salida (0 y 3010 son
+   el comando que lo inició y un comando interrumpido no deje nada que restaurar (Windows Installer termina o revierte por sí mismo), ejecuta `msiexec /i <msi> /qn /norestart /l*v <log>` y espera su código de salida (0 y 3010 son
    éxito; 3010 indica que Windows debe reiniciarse para reemplazar archivos en uso). Tras una instalación fallida la carpeta conserva el `ocx.exe` anterior y el registro;
    un instalador que sigue en ejecución tras 15 minutos se deja en paz junto con su carpeta de preparación;
 4. comprueba que el `ocx.exe` instalado informa la nueva versión y solo entonces programa la eliminación del archivo apartado en el siguiente reinicio (cada ejecución elimina además los restos anteriores);

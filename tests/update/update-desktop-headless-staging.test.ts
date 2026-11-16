@@ -19,7 +19,7 @@ function installation() {
 }
 
 describe("the updater's own running image", () => {
-  test("the installed path still holds an ocx.exe while msiexec runs, so an interrupted command loses nothing", () => {
+  test("after the swap the installed path holds an unmapped copy, so a command killed during the install has nothing to restore", () => {
     const { install, mover } = installation();
     const moved = mover.moveAsideOwnImage();
     expect(moved).toBe(join(install.dir, "ocx.exe.42-1.update-old"));

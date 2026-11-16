@@ -252,8 +252,11 @@ TEMP, because its msiexec has no more rights than a process that could change th
 `image.ts` then copies its own running `ocx.exe` to `ocx.exe.<pid>-<ms>.update-new`, renames the running
 file to `ocx.exe.<pid>-<ms>.update-old` and the copy to `ocx.exe` (Windows allows renaming a running
 image; otherwise the installer's Restart Manager closes this process and its console and the install
-rolls back). The installed path therefore holds an unmapped `ocx.exe` throughout the wait, so a
-killed command (Ctrl+C, closed console, dropped SSH session) leaves nothing to restore. It then runs `msiexec.exe /i <msi> /qn /norestart /l*v <log>`
+rolls back). The installed name is empty only between those two renames and while Windows
+Installer's major upgrade removes and rewrites the file, and the installer finishes or rolls back
+its own transaction, so a killed command (Ctrl+C, closed console, dropped SSH session) leaves
+nothing to restore (observed on Windows: after `taskkill /F` mid-install the service completed and
+`ocx.exe` ran). It then runs `msiexec.exe /i <msi> /qn /norestart /l*v <log>`
 from `trustedWindowsSystemDirectory()`
 (`src/service/desktop-supervision.mjs`) and waits for its exit code (`msi.ts`). 0 is installed,
 3010 and 1641 installed with a reboot pending, 1618 busy, 1602 cancelled, anything else a

@@ -5,9 +5,10 @@
  * which would end this command and everything sharing its console and roll the install back.
  * Windows allows renaming a running image, so the running file is renamed aside inside the
  * installation directory, where its mapping stays valid, and an unmapped copy of it takes the
- * installed name. The installed path therefore holds an `ocx.exe` at every point of the wait on
- * msiexec: if this command is killed there (Ctrl+C, a closed console, a dropped SSH session),
- * nothing has to be put back. Windows Installer replaces the copy, or restores it on rollback.
+ * installed name. The name is empty only between two back-to-back renames, and then only while
+ * Windows Installer itself replaces the file (a major upgrade removes the old one first); the
+ * installer finishes or rolls back its own transaction even if this command is killed (Ctrl+C, a
+ * closed console, a dropped SSH session), so nothing this command did has to be put back.
  */
 import { constants, copyFileSync, existsSync, readdirSync, renameSync, rmSync } from "node:fs";
 import { win32 } from "node:path";
