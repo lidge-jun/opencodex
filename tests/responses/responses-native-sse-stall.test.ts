@@ -83,3 +83,18 @@ test.each([undefined, 0])("stallTimeoutSec %p leaves a public native Responses S
     expect(delays).toEqual([]);
   } finally { spy.mockRestore(); }
 });
+test("only the explicit-budget guard is reported as a stall; other inactivity keeps the reset tail", async () => {
+  const { buildFailedTailPayload } = await import("../../src/server/relay");
+  const { guardResponseBodyInactivity, ResponseBodyInactivityError } = await import("../../src/lib/response-body-inactivity");
+  // Reset selection with stallTimeoutSec unset guards with the default budget; that path stays as before.
+  const unset = JSON.parse(buildFailedTailPayload(new ResponseBodyInactivityError(300_000))).response.error;
+  expect(unset.code).toBe("upstream_reset");
+  expect(unset.message).toBe("Upstream stream terminated unexpectedly: Upstream response body stalled for 300000ms");
+  // The explicit guard's own error is the stall terminal.
+  const silent = new Response(new ReadableStream<Uint8Array>({ start() {} }));
+  const reader = guardResponseBodyInactivity(silent, undefined, 1, { explicitBudget: true }).response.body!.getReader();
+  const error = await reader.read().then(() => undefined, (reason: unknown) => reason);
+  expect(error).toBeInstanceOf(ResponseBodyInactivityError);
+  expect(JSON.parse(buildFailedTailPayload(error)).response.error)
+    .toMatchObject({ code: "upstream_stall_timeout", message: "Upstream response body stalled for 1ms" });
+});

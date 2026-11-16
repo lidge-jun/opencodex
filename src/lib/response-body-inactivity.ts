@@ -11,6 +11,12 @@ export class ResponseBodyInactivityError extends DOMException {
   }
 }
 
+/**
+ * The same expiry from a guard armed by the operator's explicit `stallTimeoutSec` (#8206). Only this
+ * one reaches clients as `upstream_stall_timeout`; a guard on a default budget keeps its old terminal.
+ */
+export class ExplicitBodyStallError extends ResponseBodyInactivityError {}
+
 // Published responses whose upstream reads already run under a positive inactivity guard.
 const guardedResponses = new WeakSet<Response>();
 
@@ -36,13 +42,16 @@ export function guardResponseBodyInactivity(
   response: Response,
   signal: AbortSignal | undefined,
   timeoutMs: number,
+  options: { explicitBudget?: boolean } = {},
 ): ResponseBodyInactivityGuard {
   const source = response.body;
   if (!source) return { response, dispose: () => {} };
 
   const reader = source.getReader();
   const timeoutEnabled = Number.isFinite(timeoutMs) && timeoutMs > 0;
-  const timeoutError = new ResponseBodyInactivityError(timeoutMs);
+  const timeoutError = options.explicitBudget === true
+    ? new ExplicitBodyStallError(timeoutMs)
+    : new ResponseBodyInactivityError(timeoutMs);
   let output!: ReadableStreamDefaultController<Uint8Array>;
   let settled = false;
   let timer: ReturnType<typeof setTimeout> | undefined;

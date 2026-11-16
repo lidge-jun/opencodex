@@ -3,7 +3,7 @@ import { formatErrorResponse } from "../../bridge";
 import type { MainQuotaDispatch } from "../../codex/main-account-cache";
 import { isLocalUpstream } from "../../lib/local-upstream";
 import { guardResponseBodyInactivity, markResponseBodyInactivityGuarded } from "../../lib/response-body-inactivity";
-import { resolveStallTimeoutMs } from "../../stall-timeout";
+import { explicitStallTimeoutMs, resolveStallTimeoutMs } from "../../stall-timeout";
 import type { OcxConfig } from "../../types";
 import { recordKeyWireAttemptUsage, usageFromResponsesPayload, type RequestLogContext } from "../request-log";
 import { selectProtocolSafeResetResponse, type ProtocolSafeResetRecovery } from "./combo-stream-preflight";
@@ -79,8 +79,10 @@ export function selectPassthroughResetResponse(
   const openGateway = options.request.url === "https://apis.opengateway.ai/v1/responses"
     && response.status === 200 && response.body !== null;
   const stallMs = resolveStallTimeoutMs(options.config.stallTimeoutSec, { localUpstream: isLocalUpstream(options.request.url) });
+  // The same budget, but reported as a stall only when the operator set it explicitly (#8206).
+  const explicitBudget = explicitStallTimeoutMs(options.config.stallTimeoutSec) > 0;
   const protect = (source: Response): Response =>
-    carryResponseToolOwnership(source, guardResponseBodyInactivity(source, options.signal, stallMs).response);
+    carryResponseToolOwnership(source, guardResponseBodyInactivity(source, options.signal, stallMs, { explicitBudget }).response);
   const quotaOwner = (): MainQuotaDispatch | undefined =>
     admission.authCtx.kind === "main" ? admission.authCtx.mainQuotaDispatch : undefined;
   const originalOwner = quotaOwner();

@@ -748,7 +748,7 @@ export async function deliverPassthroughResponse(
       const nativeSseStallMs = canonicalBufferedJson || isResponseBodyInactivityGuarded(upstreamResponse)
         ? 0 : explicitStallTimeoutMs(config.stallTimeoutSec);
       const nativeSseBody = nativeSseStallMs > 0
-        ? guardResponseBodyInactivity(upstreamResponse, upstream.signal, nativeSseStallMs).response.body!
+        ? guardResponseBodyInactivity(upstreamResponse, upstream.signal, nativeSseStallMs, { explicitBudget: true }).response.body!
         : upstreamResponse.body;
       // Repair must observe the raw first leg before the bridge suppresses an intercepted search
       // lifecycle. Otherwise a provider that leaves that complete call open never arms repair's
@@ -799,7 +799,7 @@ export async function deliverPassthroughResponse(
             // reset selection already guarded the first leg (and so left nativeSseStallMs at 0).
             const continuationStallMs = explicitStallTimeoutMs(config.stallTimeoutSec);
             const guardedContinuation = continuationStallMs > 0
-              ? guardResponseBodyInactivity(continuation, upstream.signal, continuationStallMs).response
+              ? guardResponseBodyInactivity(continuation, upstream.signal, continuationStallMs, { explicitBudget: true }).response
               : continuation;
             if (!terminalRepairPolicy) return guardedContinuation;
             return new Response(

@@ -46,9 +46,11 @@ silence rather than model progress,
 keeping the Response object and its relay markers. The canonical JSON fold keeps its own silence and
 whole-turn deadlines. Reset selection in `src/server/responses/passthrough-completion.ts` already
 guards the bodies it publishes with the resolved budget and marks them
-(`markResponseBodyInactivityGuarded`), so they get no second clock. `buildFailedTailPayload` in
-`src/server/relay.ts` reports an expired guard as `upstream_stall_timeout` with the guard's message
-instead of `upstream_reset`. `tests/responses/responses-native-sse-stall.test.ts` covers explicit
+(`markResponseBodyInactivityGuarded`), so they get no second clock. Guards armed by the explicit budget (delivery, continuation legs, and reset
+selection when the field is set) raise `ExplicitBodyStallError`, which `buildFailedTailPayload` in `src/server/relay.ts` reports
+as `upstream_stall_timeout`; a guard on a default budget keeps the earlier `upstream_reset` tail. Native steering and
+injection chains (`isNativeControlResponse`) stay unguarded: between responses they wait for the client's continuation,
+which a byte-silence clock cannot tell from upstream silence, and they keep their own timeliness checks. `tests/responses/responses-native-sse-stall.test.ts` covers explicit
 local and public expiry and the unset and `0` cases.
 
 ## OpenCode timeout export
