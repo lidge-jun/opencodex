@@ -197,6 +197,7 @@ function apiKeyDiscoveryAuth(selection: { key: string | undefined; ambient?: tru
 export async function resolveVertexDiscoveryAuth(
   provider: OcxProviderConfig,
   signal: AbortSignal = vertexDiscoveryDeadline(),
+  options: { forceExchange?: boolean } = {},
 ): Promise<VertexDiscoveryAuth | undefined> {
   if (provider.authMode === "forward" || isVertexApiKeyPoolPaused(provider)) return undefined;
   const selection = selectVertexDiscoveryCredential(provider);
@@ -204,7 +205,11 @@ export async function resolveVertexDiscoveryAuth(
   let authority: Awaited<ReturnType<typeof getVertexAccessTokenWithAuthority>>;
   try {
     const markerAccount = gcpCredentialMarkerAccount(selection.marker);
-    authority = await getVertexAccessTokenWithAuthority({ signal, ...(markerAccount ? { markerAccount } : {}) });
+    authority = await getVertexAccessTokenWithAuthority({
+      signal,
+      ...(markerAccount ? { markerAccount } : {}),
+      ...(options.forceExchange ? { forceExchange: true } : {}),
+    });
   } catch {
     return undefined;
   }

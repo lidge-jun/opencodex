@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { inflateRawSync } from "node:zlib";
 import {
   childArtifactFilename,
   hostChildTargetTriple,
@@ -26,6 +25,7 @@ import {
   windowsOcxArgv,
   windowsPlantChildArgv,
   windowsPurgePlantedChildArgv,
+  windowsInflatedScript,
 } from "../../src/link/remote-windows";
 import { quoteRemote } from "../../src/link/ssh-argv";
 import { parseLinkStore, readLinkStore, writeLinkStore } from "../../src/link/store";
@@ -329,7 +329,7 @@ describe("remote-plant POSIX & Windows command contracts", () => {
     const outer = Buffer.from(windowsPurgePlantedChildArgv()[5]!, "base64").toString("utf16le");
     const packed = /\$ocxPacked='([^']+)'/.exec(outer);
     expect(packed).not.toBeNull();
-    const script = inflateRawSync(Buffer.from(Array.from(packed![1]!, ch => ch.charCodeAt(0) - 256))).toString("utf8");
+    const script = windowsInflatedScript(outer);
     for (const name of ["state.json", "codex-journal.json", "attach-rollback.json", ".ocx-child-owner.json"]) expect(script).toContain(name);
     expect(script).toContain("$env:CODEX_HOME");
     expect(script).toContain("\\.codex");

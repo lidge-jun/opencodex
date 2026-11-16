@@ -32,6 +32,7 @@ import { canCreateJevAutoFrom } from "../jev-decision-service";
 import { useProviderSettingsDeepLink } from "./providers-deep-link";
 import { subscribeKiroDeviceFinal } from "../kiro-device-login-finalizer";
 import type { BrowserLaunch } from "../oauth-browser-launch";
+import { oauthCredentialSiblingsOf, oauthCredentialSlot } from "../../../src/oauth/credential-siblings";
 
 /** The page's real refresh tickets: only the captured report epoch and account read can settle them. */
 // oxlint-disable-next-line react/only-export-components -- keep the page-owned coordinator and its direct race tests in the authorized owner.
@@ -162,6 +163,13 @@ function useAccountSelectionEvents(
               if (value.revision <= (revisions.get(key) ?? -1)) return;
               revisions.set(key, value.revision);
               pending.set(key, { provider: value.provider, kind: value.kind });
+              // One login can serve several rows (kimi, kimi-responses); the event names the slot.
+              if (value.kind === "oauth") {
+                const slot = oauthCredentialSlot(value.provider);
+                for (const row of [slot, ...oauthCredentialSiblingsOf(slot)]) {
+                  if (row !== value.provider) pending.set(`${value.kind}:${row}`, { provider: row, kind: value.kind });
+                }
+              }
               flush();
             }
           };
@@ -508,7 +516,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
 
   const bumpModelsRefresh = () => setModelsRefreshToken(n => n + 1);
 
-  const { cancelLoginOAuth, loginOAuth, logoutOAuth, onNativeLoginSettled, loginCapture } = useProvidersOAuth({
+  const { cancelLoginOAuth, loginOAuth, logoutOAuth, onNativeLoginSettled, loginCapture, loginEndedCapture } = useProvidersOAuth({
     apiBase, targetKey: draftTargetKey, t, aliveRef, accountSets, setAccountSets,
     setBusy, setStatus, setLoginInfo, setOauthStatus, invalidateOauthStatusReads, captureOauthStatusRead, beginAccountLogout, notify,
     fetchConfig, fetchOauth, fetchAccountSets, fetchProviderQuotas, bumpModelsRefresh,
@@ -539,13 +547,16 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
    * in could refresh a high-risk credential without ever seeing the ToS modal — the map
    * gated the first login and nothing after it.
    */
-  const requestLoginOAuth = (provider: string, addAccount = false, accountId?: string) => {
+  const requestLoginOAuth = (name: string, addAccount = false, accountId?: string) => {
+    // A shared-login row (Kimi (Responses)) signs in through its owner and republishes only itself.
+    const provider = oauthCredentialSlot(name);
+    const row = provider !== name ? name : undefined;
     if (busy === provider) return;
     if (oauthTosRisk(provider)) {
       setOauthTosPending({ provider, addAccount, ...(accountId ? { accountId } : {}) });
       return;
     }
-    void loginOAuth(provider, addAccount, accountId);
+    void loginOAuth(provider, addAccount, accountId, false, row);
   };
 
   if (!config) {
@@ -682,7 +693,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
         onQuotaRefreshSettled={settleQuotaRefresh}
         onRefreshAllQuotas={refreshAllProviderQuotas}
         detail={(item, data) => {
-          const loginStatus = accountLoginStatus[item.name] ?? oauthStatus[item.name];
+          const loginStatus = accountLoginStatus[item.name] ?? oauthStatus[item.name] ?? oauthStatus[oauthCredentialSlot(item.name)];
           return (
           <ProviderDetails
             key={item.name}
@@ -721,7 +732,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
             pausingAccountId={pausingAccounts[item.name]?.accountId ?? null}
             busyProvider={busy}
             loginHint={loginInfo}
-            loginCapture={loginCapture(item.name)}
+            loginCapture={loginCapture(oauthCredentialSlot(item.name))}
             authHandlers={authHandlers}
             onRefreshQuota={() => refreshProviderQuota(item.name)}
             isDefault={item.name === config.defaultProvider}
@@ -766,6 +777,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
         addModalAccountRows={addModalAccountRows}
         accountLoginStatus={accountLoginStatus}
         accountLoginHint={loginInfo}
+        accountLoginCaptures={{ active: loginCapture, ended: loginEndedCapture }}
         removeConfirmName={removeConfirmName}
         removeDefaultProvider={removeConfirmName === config.defaultProvider
           ? Object.entries(config.providers).find(([name, provider]) => name !== removeConfirmName && provider.disabled !== true)?.[0] ?? null
@@ -818,7 +830,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
           const pending = oauthTosPending;
           if (!pending) return;
           setOauthTosPending(null);
-          void loginOAuth(pending.provider, pending.addAccount, pending.accountId);
+          void loginOAuth(pending.provider, pending.addAccount, pending.accountId, true);
         }}
       />
     </>

@@ -76,7 +76,7 @@ export const PKG = "@bitkyc08/opencodex";
 const HERE = dirname(fileURLToPath(import.meta.url)); // .../opencodex/src/update
 
 export type Installer = DetectedInstall | "standalone";
-export const STANDALONE_UPDATE_HINT = "Update via OpenCodex Desktop (Check for Updates…) or reinstall the standalone binary from GitHub Releases.";
+export const STANDALONE_UPDATE_HINT = "Update via OpenCodex Desktop (Check for Updates…), on a Windows Desktop installation from a terminal or remote session with 'ocx update --desktop', or reinstall the standalone binary from GitHub Releases.";
 export type Channel = "latest" | "preview";
 export type InstallOwnership = PackageInstallOwnership | { installer: "standalone" };
 export type { MiseInstallOwner };

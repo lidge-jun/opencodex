@@ -6,6 +6,7 @@ import { LanguageProvider } from "../src/i18n/provider";
 import { useT } from "../src/i18n/shared";
 import AddProviderModal from "../src/components/AddProviderModal";
 import { OAUTH_LOGIN_POLL_INTERVAL_MS } from "../src/components/use-add-provider-oauth";
+import { BROWSER_LOGIN_POLL_ATTEMPTS } from "../src/oauth-login-budget";
 import { useProvidersOAuth } from "../src/pages/use-providers-oauth";
 import type { OAuthAccount, OAuthStatus } from "../src/pages/providers-shared";
 import { configureApiTargets } from "../src/api";
@@ -794,7 +795,8 @@ for (const surface of ["providers", "modal"] as const) {
           await act(async () => { server.logins[0]!.reject(new Error("request failed")); });
         } else {
           await server.answerLogin(0);
-          for (let i = 0; i < (surface === "modal" ? 100 : 150); i++) await server.tick();
+          // Both surfaces share one browser budget (#8618).
+          for (let i = 0; i < BROWSER_LOGIN_POLL_ATTEMPTS; i++) await server.tick();
         }
         expect(server.cancels).toHaveLength(1);
         await act(async () => { win.dispatchEvent(new win.Event("pagehide")); });

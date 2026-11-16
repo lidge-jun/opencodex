@@ -76,6 +76,9 @@ export const PROVIDER_DISPLAY_CARRY_FIELDS = [
   // cannot send either, so an unrelated save must not silently return the model to the default.
   "thinkingDisplay",
   "modelThinkingDisplay",
+  // The experimental Anthropic per-message effort switch (#6895) is operator configuration the form
+  // cannot send; an unrelated save must not silently turn it off.
+  "perMessageEffort",
 ] as const satisfies readonly (keyof OcxProviderConfig)[];
 
 /** Display policies that are plain booleans and can share one validation/patch branch. */

@@ -156,6 +156,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   escapeBuiltinToolNames: "none",
   anthropicEofTolerance: "none",
   forwardAdvisorTool: "none",
+  perMessageEffort: "none",
   noVisionModels: "list",
   googleMode: "none",
   googleToolSchemaPolicy: "none",
@@ -166,6 +167,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   unsafeAllowNativeLocalExec: "none",
   nativeLocalExec: "none",
   messagePhaseInference: "none",
+  estimateMissingUsage: "none",
   tlsProfile: "none",
 } as const satisfies Record<keyof OcxProviderConfig, ModelRenameRole>;
 

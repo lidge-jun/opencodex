@@ -11,6 +11,13 @@
  */
 export const DEVICE_LOGIN_POLL_BUDGET_MS = 31 * 60_000;
 
+/**
+ * Poll attempts a browser login gets on every dashboard surface (five minutes at the 2-second
+ * interval). A first-time sign-in with 2FA or e-mail verification easily runs past three minutes,
+ * and the providers page and the add-provider form must not disagree about when it ends (#8618).
+ */
+export const BROWSER_LOGIN_POLL_ATTEMPTS = 150;
+
 /** Poll attempts for a login, stretched to the device budget once the flow shows a device code. */
 export function loginPollAttempts(isDeviceFlow: boolean, intervalMs: number, browserAttempts: number): number {
   if (!isDeviceFlow) return browserAttempts;
