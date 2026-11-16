@@ -243,6 +243,7 @@ Désactiver (`PATCH /api/providers?name=<provider>` avec `disabled: true`) ou su
 | --- | --- | --- | --- |
 | `provider?` | `string` | sélection automatique OpenAI | Fournisseur personnalisé `openai-responses` à clé API, sélectionné explicitement pour `/v1/images/generations` et `/v1/images/edits`. Les identifiants gérés par le registre sont rejetés. |
 | `timeoutMs?` | `number` | `300000` | Délai d’expiration de l’ensemble de la demande pour une demande d’images autonome. |
+| `videoProvider?` | `string` | xAI | Fournisseur à clé d'API qui traite le pont `video_gen` en cours de tour avec ses propres `baseUrl` et clé. `xai` reste fixé à `https://api.x.ai/v1` ; les autres identifiants du registre sont refusés. Une valeur inutilisable renvoie son erreur à chaque appel `video_gen` et n'envoie rien. Voir [Pont vidéo](/fr/guides/video-bridge/#choisir-le-fournisseur-vidéo). |
 
 La sélection explicite échoue de manière sûre lorsque le fournisseur est absent, désactivé, incompatible ou ne dispose pas d'une
 clé utilisable ; elle ne se rabat jamais sur un autre service en amont payant. Le point de terminaison doit implémenter les routes de

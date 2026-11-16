@@ -334,8 +334,8 @@ Google's account verification, then run `ocx login google-antigravity`. Silent t
 does not clear this verification requirement. If OpenCodex cannot save the quarantine, this adapter exchange preserves the original `403` without another recovery send; the account has not been durably quarantined. If a sibling request cannot be built or admitted for sending, the exchange delivers the original `403` through normal error formatting. An enclosing combo or policy route can still apply its existing fallback rules.
 
 For fetch-based web-search requests, automatic sibling rotation accepts only a complete, bounded
-Google error envelope containing `error.details[].reason === "VALIDATION_REQUIRED"`. Verification
-wording alone does not rotate. This request-scoped recovery uses the sibling's token and project
+Google error envelope containing `error.details[].reason === "VALIDATION_REQUIRED"` or a `PERMISSION_DENIED`
+access denial. Verification wording alone does not rotate. This request-scoped recovery uses the sibling's token and project
 without persisting a `needs-reauth` mark; cancellation, committed output, budget exhaustion or an
 unavailable sibling preserves the failure.
 
@@ -511,6 +511,7 @@ stay at least five minutes apart, and the next check is pulled in to the latest 
 or reauthentication-required main receives no checks before its predicted reset. A longer `Retry-After` also delays profile and token preparation. Only fresh valid usage or authoritative window-absence evidence
 can lift the block. In Pool mode, a quota `--refresh` bypasses cache freshness but still honors failed-read pacing;
 a deferred read makes no new diagnostic attempt. Other pause, reauthentication, and upstream limits remain independent.
+Before refusing a request, if the usage behind the block was last measured more than 60 seconds ago, OpenCodex may read usage once more. When that fresh reading no longer blocks under the configured thresholds, for example after a reset redeemed outside OpenCodex cleared every blocking window, the request is resolved again; a reading that still blocks, or a failed or deferred read, keeps the refusal. Concurrent refusals share that read, the main account gets at most one such read per minute, and failed-read pacing, a paused or reauthentication-required main, and native-main maintenance skip it. A request that authenticates as the main login itself uses its own credential for that read and never the stored one.
 
 Protection treats one fresh valid WHAM usage response as a replacement for the old 5h reading when
 its primary window explicitly lasts **at least 24 hours** and reports valid usage, or its primary window is

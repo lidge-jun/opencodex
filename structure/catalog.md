@@ -292,7 +292,7 @@ base instructions, modalities, auto-compact fields, and strict parser booleans. 
 the canonical `provider/model`. Its display name uses the provider's exact `modelDisplayNames` override first,
 then trusted catalog metadata such as a configured qualified provider/model alias, then the public slug.
 This overlay never changes route identity or the upstream wire model, and its catalog fingerprint makes
-a label edit refresh Codex output.
+a label edit refresh Codex output. Operator defaults for the routed instruction and verbosity fields follow the [routed catalog row defaults contract](catalog-routed-defaults.md).
 
 Raw `/v1/models` rows advertise positive safe capacity values in both Cursor's nested
 `capabilities` object and top-level discovery fields used by other clients. A model with a larger

@@ -64,6 +64,7 @@ import {
   sleepWithAbort,
 } from "../../lib/upstream-retry";
 import { describeUpstreamConnectFailure } from "./upstream-error";
+import { createProviderOfflineResendWait } from "../../lib/offline-resend";
 import type { OpaqueBlobRecoveryGuard } from "./core-opaque-recovery";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import type { OAuthAccessSnapshot } from "../../oauth";
@@ -92,6 +93,7 @@ import {
   quarantineKiroSuspendedAccount,
   failoverAccountSnapshot,
   rotateAntigravityAccountOnAuthRefusal,
+  rotateAntigravityAccountOnUpstreamFault,
 } from "../../oauth/generic-account-failover";
 import {
   attemptOpaqueBlobRecovery,
@@ -119,10 +121,12 @@ import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import { chargeWorkflowSends } from "../../lib/workflow-budget";
 import { hasWorkflowSendObserver } from "../../lib/request-execution-budget";
-import { isAntigravityValidationRefusal } from "./antigravity-validation-refusal";
+import { isAntigravityAccessDeniedRefusal, isAntigravityValidationRefusal } from "./antigravity-validation-refusal";
 import { createAntigravityModelDenialRecovery, recoverAntigravityAccount } from "./antigravity-model-denial-recovery";
+import { isAntigravityFaultRotatable } from "./antigravity-fault-rotation";
 import { adapterSendBudgetRefusal } from "../workflow-refusal";
 import { AdmissionModelDeniedError, admissionModelDeniedResponse, projectAdmissionModelDeniedLog } from "../admission-model-scope";
+import { rejectAnthropicPerMessageEffort } from "../../adapters/anthropic/per-message-effort";
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function prepareAdapterExchange(
   requestContext: Pick<ResponsesRequestContext, "options" | "config" | "logCtx" | "req">,
@@ -521,6 +525,7 @@ export async function prepareAdapterExchange(
           abortSignal: upstream.signal,
           label: safeHostLabel(builtInitialRequest.url), destination: errorDestinationLabel(builtInitialRequest.url),
           claimAmbiguousResend: claimPreHeaderResend,
+          offlineWait: options.comboAttempt ? undefined : createProviderOfflineResendWait(route.providerName, route.provider, builtInitialRequest.url, config.offlineResendWaitSec),
           ...(sendBudgetState.workflowRootId || sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
             || billingPoolRequest || autoPauseEnabled
             ? {
@@ -611,6 +616,9 @@ export async function prepareAdapterExchange(
     const consoleGoUploadRetryGuard: { attempted: boolean } = { attempted: false };
     let oauth401ReplayAttempted = transportState.oauth401ReplayAttempted;
     let antigravityAuthRotationAttempted = false;
+    let antigravityFaultRotationAttempted = false;
+    const antigravityFaultRotatable = (response: Response) => isAntigravityFaultRotatable(route.providerName, response,
+      transportState, antigravityPoolActivated, antigravityFaultRotationAttempted);
     // Direct requests get one reasoning-effort downgrade. Combo candidates may walk down the
     // published ladder one refused rung at a time; the request send budget bounds those retries.
     const reasoningEffortDowngradeGuard: { attempted: boolean } = { attempted: false };
@@ -877,14 +885,14 @@ export async function prepareAdapterExchange(
     const rotateAntigravityAuth = async (
       failedResponse: Response,
       recovery: AttemptRecoveryKind,
-      modelAccountId?: string,
+      // An account id (model-404 recovery already chose it) or a selector; the 403 refusal default.
+      pick: string | ((sent: { accountId: string; generation: string }) => string | null) = sent =>
+        rotateAntigravityAccountOnAuthRefusal(antigravityPoolActivated, sent.accountId, sent.generation, route.modelId),
     ): Promise<Response | null> => {
       const sent = transportState.replayOAuthCredentialSnapshot ?? transportState.sentOAuthSnapshot;
       if (!antigravityPoolActivated || !sent
         || transportState.genericFailovers >= transportState.genericFailoverLimit) return null;
-      const nextId = modelAccountId ?? rotateAntigravityAccountOnAuthRefusal(
-        antigravityPoolActivated, sent.accountId, sent.generation, route.modelId,
-      );
+      const nextId = typeof pick === "string" ? pick : pick(sent);
       if (!nextId) return null;
       const adapterOwnsDispatch = transportState.activeAdapter.fetchResponse !== undefined;
       return recoverAntigravityAccount({ nextId, failedResponse, adapterOwnsDispatch,
@@ -931,6 +939,7 @@ export async function prepareAdapterExchange(
 
       // Preserve the terminal verdict through adapter and combo error formatting.
       // This also covers a reset reached by a 401/429/413 recovery refetch.
+      await rejectAnthropicPerMessageEffort(parsed, upstreamResponse, upstream.signal);
       if (isNonReplayableResponse(upstreamResponse)) {
         try {
           return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal);
@@ -1076,12 +1085,23 @@ export async function prepareAdapterExchange(
 
       if (route.providerName === "google-antigravity" && upstreamResponse.status === 403
         && transportState.activeAdapter.name === "google"
-        && antigravityPoolActivated && !antigravityAuthRotationAttempted
+        && antigravityPoolActivated
         && !isNonReplayableResponse(upstreamResponse)
         && transportState.genericFailovers < transportState.genericFailoverLimit
-        && await isAntigravityValidationRefusal(upstreamResponse, options.abortSignal)) {
+        && (!antigravityAuthRotationAttempted && await isAntigravityValidationRefusal(upstreamResponse, options.abortSignal)
+          // A plain access-denied 403 keeps rotating while siblings remain: each refused account is
+          // cooled before the hop, so the ring advances and `genericFailoverLimit` bounds the sends.
+          || await isAntigravityAccessDeniedRefusal(upstreamResponse, options.abortSignal))) {
         antigravityAuthRotationAttempted = true;
         const rotated = await rotateAntigravityAuth(upstreamResponse, "oauth-account-403");
+        if (rotated) { upstreamResponse = rotated; continue recovery; }
+      }
+
+      // A 502/503/504 that outlived the same-account ladder replays once on a live sibling.
+      if (antigravityFaultRotatable(upstreamResponse)) {
+        antigravityFaultRotationAttempted = true;
+        const rotated = await rotateAntigravityAuth(upstreamResponse, "transient-5xx", sent =>
+          rotateAntigravityAccountOnUpstreamFault(antigravityPoolActivated, sent.accountId, sent.generation, route.modelId));
         if (rotated) { upstreamResponse = rotated; continue recovery; }
       }
 
@@ -1629,8 +1649,9 @@ export async function prepareAdapterExchange(
           }
          upstreamResponse = result;
           // The hop's permit is already settled by the dispatch boundary above; continuing
-          // only skips the remaining arms, it does not abandon a reservation.
-          if (isNonReplayableResponse(upstreamResponse)) continue recovery;
+          // only skips the remaining arms, it does not abandon a reservation. A replacement's
+          // surviving 502/503/504 re-enters recovery so the one-hop fault rotation can run.
+          if (isNonReplayableResponse(upstreamResponse) || antigravityFaultRotatable(upstreamResponse)) continue recovery;
        } catch (err) {
           // A local admission denial is terminal for the whole request: rotating to another
           // account cannot re-scope the key, so the refusal answers in place of the 429.

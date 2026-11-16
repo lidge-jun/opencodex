@@ -1368,6 +1368,7 @@ export const en = {
   "logs.detail.attempt.e2eNote": "Top-level tok/s is end-to-end; each attempt uses its own duration.",
   "logs.detail.attempt.recovery.transient5xx": "Transient 5xx",
   "logs.detail.attempt.recovery.connectionReset": "Connection reset",
+  "logs.detail.attempt.recovery.offlineResend": "Resent after the network returned",
   "logs.detail.attempt.recovery.oauth401": "OAuth re-authentication",
   "logs.detail.attempt.recovery.key429": "Key rate-limited (429)",
   "logs.detail.attempt.recovery.rateLimit429": "Rate-limited (429)",
