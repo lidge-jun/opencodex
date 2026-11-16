@@ -1251,6 +1251,7 @@ export const ja: Record<TKey, string> = {
   "logs.detail.attempt.e2eNote": "トップレベルの tok/s はエンドツーエンドです; 各試行は自身の所要時間を使います。",
   "logs.detail.attempt.recovery.transient5xx": "一時的な5xxエラー",
   "logs.detail.attempt.recovery.connectionReset": "接続がリセットされました",
+  "logs.detail.attempt.recovery.offlineResend": "ネットワーク復旧後に再送信",
   "logs.detail.attempt.recovery.oauth401": "OAuth 再認証",
   "logs.detail.attempt.recovery.key429": "キーがレート制限 (429)",
   "logs.detail.attempt.recovery.rateLimit429": "レート制限 (429)",

@@ -3270,6 +3270,7 @@ export const zhTW: Record<TKey, string> = {
   "logs.detail.source.user": "供應商設定的價格覆蓋",
   "logs.detail.attempt.recovery.transient5xx": "暫時性 5xx",
   "logs.detail.attempt.recovery.connectionReset": "連線重設",
+  "logs.detail.attempt.recovery.offlineResend": "網路恢復後重新傳送",
   "logs.detail.attempt.recovery.oauth401": "OAuth 重新驗證",
   "logs.detail.attempt.recovery.key429": "金鑰被限流 (429)",
   "logs.detail.attempt.recovery.rateLimit429": "被限流 (429)",

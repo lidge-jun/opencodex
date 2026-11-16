@@ -1310,6 +1310,7 @@ export const de: Record<TKey, string> = {
   "logs.detail.attempt.e2eNote": "Tok/s auf oberster Ebene ist Ende-zu-Ende; jeder Versuch nutzt seine eigene Dauer.",
   "logs.detail.attempt.recovery.transient5xx": "Vorübergehender 5xx-Fehler",
   "logs.detail.attempt.recovery.connectionReset": "Verbindung zurückgesetzt",
+  "logs.detail.attempt.recovery.offlineResend": "Nach Wiederherstellung des Netzwerks erneut gesendet",
   "logs.detail.attempt.recovery.oauth401": "OAuth-Neuanmeldung",
   "logs.detail.attempt.recovery.key429": "Schlüssel ratenbegrenzt (429)",
   "logs.detail.attempt.recovery.rateLimit429": "Ratenbegrenzt (429)",

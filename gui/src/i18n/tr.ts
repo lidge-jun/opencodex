@@ -1354,6 +1354,7 @@ export const tr: Record<TKey, string> = {
   "logs.detail.attempt.e2eNote": "Süreç bilgisi",
   "logs.detail.attempt.recovery.transient5xx": "Geçici 5xx",
   "logs.detail.attempt.recovery.connectionReset": "Bağlantı sıfırlandı",
+  "logs.detail.attempt.recovery.offlineResend": "Ağ geri geldikten sonra yeniden gönderildi",
   "logs.detail.attempt.recovery.oauth401": "OAuth yeniden doğrulaması",
   "logs.detail.attempt.recovery.key429": "Anahtar oranı kısıtlandı (429)",
   "logs.detail.attempt.recovery.rateLimit429": "Oran kısıtlandı (429)",

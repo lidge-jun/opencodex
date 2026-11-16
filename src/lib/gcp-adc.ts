@@ -419,8 +419,13 @@ async function resolveAccessTokenUncached(markerAccount: string | undefined, sig
   );
 }
 
-/** Returns a Bearer access token for the `Authorization` header on Vertex AI calls (cached + refreshed). */
-export async function getVertexAccessTokenWithAuthority(options?: { signal?: AbortSignal; fetch?: FetchImpl; markerAccount?: string; beforeSend?: () => void }): Promise<VertexTokenAuthority> {
+/**
+ * Returns a Bearer access token for the `Authorization` header on Vertex AI calls (cached + refreshed).
+ * `forceExchange` skips the completed-token cache so the caller observes a real exchange: the
+ * connection test uses it, because a cached token outlives a revoked refresh credential. It still
+ * joins an exchange already in flight and refreshes the cache on success; other callers keep the cache.
+ */
+export async function getVertexAccessTokenWithAuthority(options?: { signal?: AbortSignal; fetch?: FetchImpl; markerAccount?: string; beforeSend?: () => void; forceExchange?: boolean }): Promise<VertexTokenAuthority> {
   // The marker travels as an argument, never as process-global state: a module-level "active
   // marker" written by the router would race across concurrent requests for different providers
   // and could resolve one provider's Vertex call with another provider's service account. The
@@ -443,7 +448,7 @@ export async function getVertexAccessTokenWithAuthority(options?: { signal?: Abo
   }
   const writerGeneration = captureConfigGeneration();
   for (const [source, cached] of tokenCache) {
-    if (source === expectedSource && cached.generation === expected.generation && cached.expiresAtMs - skew > now) {
+    if (!options?.forceExchange && source === expectedSource && cached.generation === expected.generation && cached.expiresAtMs - skew > now) {
       return { token: cached.token, source, generation: expected.generation, markerAccount };
     }
     if (cached.expiresAtMs - skew <= now) tokenCache.delete(source);
