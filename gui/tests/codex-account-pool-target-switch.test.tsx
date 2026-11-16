@@ -149,7 +149,15 @@ async function switchTarget(targetKey: string, releasePrevious: () => void) {
     await new Promise<void>(resolve => {
       root!.render(<Probe targetKey={targetKey} onSwitch={() => { releasePrevious(); resolve(); }} />);
     });
-    await new Promise(resolve => setTimeout(resolve, 0));
+    // The new target's first read is kicked from a passive effect plus a queued
+    // microtask, so the layout commit alone cannot prove it started. Wait until the
+    // in-flight state is painted: `refreshing` turns true only after the read's
+    // fetch was issued and React committed the new counter. The timer is the yield
+    // between observations, not an assumption that effects have completed.
+    for (let spins = 0; seen?.refreshing !== true; spins += 1) {
+      if (spins >= 1000) throw new Error("the new target's read never reached in-flight state");
+      await new Promise(resolve => setTimeout(resolve, 0));
+    }
   } finally {
     actEnvironment(true);
   }
