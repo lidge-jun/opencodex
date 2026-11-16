@@ -92,6 +92,52 @@ describe("images.videoProvider selection", () => {
     const plan = await planVideoBridge(config({ xai: xai(), "grok-direct": bridge({ baseUrl: "https://api.x.ai/v1", apiKey: XAI_KEY }) }, "grok-direct"), parsed(), routed);
     expect(plan?.auth).toEqual({ baseUrl: "https://api.x.ai/v1", token: XAI_KEY });
   });
+
+  test.each([
+    ["an xai- formatted key with no xAI row", {}, bridge({ apiKey: "xai-unlisted" })],
+    ["a key held by a differently cased, overridden XAI row", { XAI: xai({ baseUrl: "https://elsewhere.example/v1", apiKey: "plain-1" }) }, bridge({ apiKey: "plain-1" })],
+    ["a key held by a disabled xai row", { xai: xai({ disabled: true, apiKey: "plain-2" }) }, bridge({ apiKey: "plain-2" })],
+    ["an environment reference named for xAI", {}, bridge({ apiKey: "${VP_TEST_XAI_KEY}" })],
+    ["an xAI key over cleartext HTTP to api.x.ai", {}, bridge({ baseUrl: "http://api.x.ai/v1", apiKey: "xai-k" })],
+    ["an xAI key to api.x.ai on another port", {}, bridge({ baseUrl: "https://api.x.ai:8443/v1", apiKey: "xai-k" })],
+  ] as const)("refuses %s off the trusted xAI origin", async (_label, extra, row) => {
+    process.env.VP_TEST_XAI_KEY = "plain-env-value";
+    try {
+      const plan = await planVideoBridge(config({ ...extra, "my-bridge": row } as Record<string, OcxProviderConfig>, "my-bridge"), parsed(), routed);
+      expect(plan!.auth).toBeUndefined();
+      expect(plan!.unavailable).toContain("xAI API key");
+    } finally {
+      delete process.env.VP_TEST_XAI_KEY;
+    }
+  });
+
+  test("a keychain reference to another row's secret is never used", async () => {
+    const plan = await planVideoBridge(config({ "my-bridge": bridge({ apiKey: "keychain:xai" }) }, "my-bridge"), parsed(), routed);
+    expect(plan!.auth).toBeUndefined();
+    expect(plan!.unavailable).toBeDefined();
+  });
+
+  test("a paused active key fails closed even when another pooled key is enabled", async () => {
+    const pooled = bridge({ apiKey: "k-paused", apiKeyPool: [{ id: "a", key: "k-paused", disabled: true }, { id: "b", key: "k-live" }] });
+    const plan = await planVideoBridge(config({ "my-bridge": pooled }, "my-bridge"), parsed(), routed);
+    expect(plan!.auth).toBeUndefined();
+    expect(plan!.unavailable).toContain("paused");
+    const explicitXai = await planVideoBridge(config({
+      xai: xai({ apiKey: "xai-paused", apiKeyPool: [{ id: "a", key: "xai-paused", disabled: true }, { id: "b", key: "xai-live" }] }),
+    }, "xai"), parsed(), routed);
+    expect(explicitXai!.auth).toBeUndefined();
+  });
+
+  test.each([
+    "https://proxy.example/v1?token=fixture",
+    "https://proxy.example/v1#frag",
+    "https://user:pass@proxy.example.test/v1",
+    "ftp://proxy.example/v1",
+  ])("refuses the base URL %s", async baseUrl => {
+    const plan = await planVideoBridge(config({ "my-bridge": bridge({ baseUrl }) }, "my-bridge"), parsed(), routed);
+    expect(plan!.auth).toBeUndefined();
+    expect(plan!.unavailable).toContain("plain http(s) baseUrl");
+  });
 });
 
 describe("video_gen with an unavailable videoProvider", () => {

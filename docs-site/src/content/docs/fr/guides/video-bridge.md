@@ -13,6 +13,8 @@ achèvement, puis télécharge le résultat.
 
 ## Prérequis
 
+Ces prérequis concernent la destination xAI par défaut. Si `images.videoProvider` est défini, voir [Choisir le fournisseur vidéo](#choisir-le-fournisseur-vidéo).
+
 - Une entrée de fournisseur `xai` avec une **clé API** (`ocx login xai` seul ne suffit pas : le pont vidéo exige une authentification par clé, et non OAuth)
 - Un modèle autre qu'OpenAI comme fournisseur routé (par exemple Anthropic Claude ou Google Gemini)
 - opencodex configuré pour acheminer les requêtes vers ce fournisseur autre qu'OpenAI
@@ -80,7 +82,7 @@ Par défaut, le pont envoie les tâches `video_gen` à xAI avec la clé d'API du
 - Seuls le `baseUrl` et la clé d'API du fournisseur désigné servent de destination et d'identifiant. L'adaptateur importe peu, mais l'authentification doit se faire par clé d'API.
 - `"videoProvider": "xai"` conserve le point de terminaison fixe `https://api.x.ai/v1`, quel que soit le `baseUrl` de l'entrée `xai`. Les autres identifiants de fournisseurs intégrés sont refusés ; désignez un fournisseur personnalisé.
 - Un `baseUrl` en boucle locale ou en réseau privé exige `allowPrivateNetwork: true` sur ce fournisseur, comme pour le reste du trafic des fournisseurs.
-- Une clé appartenant à une entrée de fournisseur xAI est refusée pour tout hôte autre que celui de xAI : une clé xAI n'est donc jamais envoyée à un autre backend.
+- Une clé reconnaissable comme xAI (clé `xai-`, clé détenue par une entrée `xai`, référence de trousseau vers le secret d'un autre fournisseur ou référence d'environnement nommée d'après xAI ou Grok) est refusée pour toute origine autre que `https://api.x.ai` : une clé xAI n'est donc jamais envoyée à un autre backend. Une clé active en pause est également refusée, et le `baseUrl` ne peut contenir ni identifiants, ni requête, ni fragment.
 - Si le fournisseur est absent, désactivé, en pause, sans clé ou refusé, chaque appel `video_gen` renvoie cette erreur au modèle. Rien n'est envoyé et le pont ne se rabat jamais sur xAI.
 - La vidéo terminée n'est toujours téléchargée que depuis une URL `data:` en base64 ou une URL `https:` publique ; un pont local doit donc renvoyer l'une des deux dans `video.url`.
 
@@ -88,7 +90,7 @@ Par défaut, le pont envoie les tâches `video_gen` à xAI avec la clé d'API du
 
 1. opencodex détecte qu'un modèle routé autre qu'OpenAI est utilisé avec `videoBridgeEnabled: true`.
 2. Un outil de fonction synthétique `video_gen` est injecté dans la conversation.
-3. Lorsque le modèle appelle `video_gen`, opencodex soumet une tâche à `/videos/generations` chez xAI.
+3. Lorsque le modèle appelle `video_gen`, opencodex soumet une tâche à `/videos/generations` chez xAI (ou au `images.videoProvider` configuré).
 4. Le pont interroge l'état de la tâche toutes les 5 à 15 secondes et envoie des messages de maintien afin de garder le flux actif.
 5. Une fois la vidéo prête, elle est téléchargée dans le répertoire des artefacts.
 6. Le chemin du fichier local est renvoyé au modèle comme résultat de l'outil.

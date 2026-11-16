@@ -2,6 +2,8 @@ import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../types";
 import { toolChoiceToolPredicate } from "../types";
 import type { ImageBridgePlan, VideoBridgePlan } from "./types";
 import { resolveProviderApiKey } from "../providers/key-store";
+import { isProviderApiKeyPaused } from "../providers/api-key-pause-state";
+import { KEYCHAIN_REFERENCE_PREFIX } from "../providers/api-key-resolve";
 import { getValidAccessToken } from "../oauth/index";
 import { getProviderRegistryEntry } from "../providers/registry";
 import { providerDestinationConfigError } from "../lib/destination-policy";
@@ -111,19 +113,39 @@ function hostnameOf(baseUrl: string): string | undefined {
   try { return new URL(baseUrl).hostname.toLowerCase(); } catch { return undefined; }
 }
 
-/** Every key held by a row that talks to xAI, so a reused key can be refused off-host. */
-function configuredXaiKeys(config: OcxConfig): Set<string> {
-  const keys = new Set<string>();
+/** Only these exact origins may receive an xAI credential: HTTPS, an xAI host, the default port. */
+function isTrustedXaiOrigin(baseUrl: string): boolean {
+  try {
+    const url = new URL(baseUrl);
+    return url.protocol === "https:" && url.port === "" && XAI_HOSTS.has(url.hostname.toLowerCase());
+  } catch { return false; }
+}
+
+function isXaiRow(name: string, provider: OcxProviderConfig): boolean {
+  const host = hostnameOf(provider.baseUrl);
+  return name.trim().toLowerCase() === "xai" || (host !== undefined && XAI_HOSTS.has(host));
+}
+
+/**
+ * Whether a credential is recognizably xAI's, from any of: xAI's `xai-` key format, a key held by an
+ * xAI row (disabled rows and pooled keys included), a keychain reference to another row's secret,
+ * or an environment reference whose name points at xAI/Grok. Such a key may reach only xAI.
+ */
+function isXaiCredential(config: OcxConfig, ownerName: string, reference: string | undefined, token: string): boolean {
+  if (token.toLowerCase().startsWith("xai-")) return true;
+  const ref = reference?.trim() ?? "";
+  if (ref.startsWith(KEYCHAIN_REFERENCE_PREFIX)) {
+    const account = ref.slice(KEYCHAIN_REFERENCE_PREFIX.length).split("/")[0] ?? "";
+    if (account !== ownerName) return true;
+  }
+  if (/^\$\{?[A-Za-z0-9_]*(XAI|GROK)[A-Za-z0-9_]*\}?$/i.test(ref)) return true;
   for (const [name, provider] of Object.entries(config.providers)) {
-    const host = hostnameOf(provider.baseUrl);
-    if (name !== "xai" && !(host && XAI_HOSTS.has(host))) continue;
-    const candidates = [provider.apiKey, ...(provider.apiKeyPool ?? []).map(entry => entry.key)];
-    for (const candidate of candidates) {
-      const key = resolveProviderApiKey(candidate)?.trim();
-      if (key) keys.add(key);
+    if (!isXaiRow(name, provider)) continue;
+    for (const candidate of [provider.apiKey, ...(provider.apiKeyPool ?? []).map(entry => entry.key)]) {
+      if (resolveProviderApiKey(candidate)?.trim() === token) return true;
     }
   }
-  return keys;
+  return false;
 }
 
 export type VideoProviderSelection =
@@ -134,8 +156,8 @@ export type VideoProviderSelection =
  * Resolve an explicit `images.videoProvider`. Returns undefined when the setting is absent, which
  * keeps the historical xAI discovery. Every other outcome is final: an unusable selection is an
  * error and never falls back to xAI. The chosen row's own baseUrl and key are the only destination
- * and credential; `xai` itself stays pinned to the registry host, and a key that belongs to an xAI
- * row is refused for any host other than xAI's.
+ * and credential; `xai` itself stays pinned to the registry host, and a recognizably xAI credential
+ * (see {@link isXaiCredential}) is refused for every origin except HTTPS xAI hosts on the default port.
  */
 export function selectVideoProvider(config: OcxConfig): VideoProviderSelection | undefined {
   const configured = config.images?.videoProvider;
@@ -157,27 +179,29 @@ export function selectVideoProvider(config: OcxConfig): VideoProviderSelection |
   if (provider.authMode !== undefined && provider.authMode !== "key") {
     return { ok: false, error: `${label} must be an API-key provider` };
   }
-  if (provider.apiKeyPool?.length && provider.apiKeyPool.every(entry => entry.disabled === true)) {
-    return { ok: false, error: `${label} is paused: every pooled API key is disabled` };
+  if (isProviderApiKeyPaused(provider)) {
+    return { ok: false, error: `${label} is paused: its active API key is disabled` };
   }
   let baseUrl: string;
   if (isXai) {
     baseUrl = pinnedXaiBaseUrl();
   } else {
     baseUrl = provider.baseUrl.trim().replace(/\/+$/, "");
-    let protocol: string | undefined;
-    try { protocol = new URL(baseUrl).protocol; } catch { /* reported below */ }
-    if (protocol !== "https:" && protocol !== "http:") {
-      return { ok: false, error: `${label} needs an http(s) baseUrl` };
+    let parsed: URL | undefined;
+    try { parsed = new URL(baseUrl); } catch { /* reported below */ }
+    // The client appends paths as strings, so a query or fragment would swallow them.
+    if (!parsed || (parsed.protocol !== "https:" && parsed.protocol !== "http:")
+      || parsed.username || parsed.password || parsed.search || parsed.hash
+      || baseUrl.includes("?") || baseUrl.includes("#")) {
+      return { ok: false, error: `${label} needs a plain http(s) baseUrl without credentials, query or fragment` };
     }
     const destinationError = providerDestinationConfigError(providerName, provider);
     if (destinationError) return { ok: false, error: `${label} ${destinationError}` };
   }
   const token = resolveProviderApiKey(provider.apiKey)?.trim();
   if (!token) return { ok: false, error: `${label} has no usable API key` };
-  const host = hostnameOf(baseUrl);
-  if (!isXai && !(host && XAI_HOSTS.has(host)) && configuredXaiKeys(config).has(token)) {
-    return { ok: false, error: `${label} reuses an xAI API key; an xAI API key is only sent to xAI` };
+  if (!isXai && !isTrustedXaiOrigin(baseUrl) && isXaiCredential(config, providerName, provider.apiKey, token)) {
+    return { ok: false, error: `${label} uses an xAI API key; an xAI API key is only sent to xAI over HTTPS` };
   }
   return { ok: true, providerName, provider, auth: { baseUrl, token } };
 }

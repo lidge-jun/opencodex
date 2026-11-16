@@ -9,6 +9,8 @@ Video Bridge 允许你通过 opencodex 路由的任意非 OpenAI 模型使用 xA
 
 ## 前提条件
 
+这些前提条件适用于默认的 xAI 目标。如果设置了 `images.videoProvider`，请参见[选择视频提供方](#选择视频提供方)。
+
 - 一个带有 **API key** 的 `xai` provider 条目（仅执行 `ocx login xai` 不够，视频桥接需要 key 认证，而不是 OAuth）
 - 作为路由目标的非 OpenAI 模型（例如 Anthropic Claude、Google Gemini）
 - 已配置 opencodex 通过该非 OpenAI provider 路由
@@ -75,7 +77,7 @@ Video Bridge 允许你通过 opencodex 路由的任意非 OpenAI 模型使用 xA
 - 只使用所指定提供方自身的 `baseUrl` 和 API 密钥作为目标和凭据。适配器类型不限，但必须使用 API 密钥认证。
 - `"videoProvider": "xai"` 始终使用固定的 `https://api.x.ai/v1`，与 `xai` 条目的 `baseUrl` 无关。其他内置提供方 ID 会被拒绝，请改为指定自定义提供方。
 - 回环或私有网络的 `baseUrl` 与其他提供方流量一样，需要在该提供方上设置 `allowPrivateNetwork: true`。
-- 属于 xAI 提供方条目的密钥在 xAI 以外的主机上会被拒绝，因此 xAI 密钥绝不会发送到其他后端。
+- 可识别为 xAI 的密钥（`xai-` 格式的密钥、任何 `xai` 条目持有的密钥、指向其他提供方机密的钥匙串引用，或以 xAI、Grok 命名的环境变量引用）在 `https://api.x.ai` 以外的所有来源都会被拒绝，因此 xAI 密钥绝不会发送到其他后端。已暂停的当前密钥同样会被拒绝，`baseUrl` 也不能包含凭据、查询参数或片段。
 - 如果提供方不存在、已禁用、已暂停、没有密钥或被拒绝，每次 `video_gen` 调用都会把该错误返回给模型。不会发送任何内容，也不会回退到 xAI。
 - 生成的视频仍然只从 base64 `data:` URL 或公网 `https:` URL 下载，因此本地桥接必须以 `video.url` 返回其中之一。
 
@@ -83,7 +85,7 @@ Video Bridge 允许你通过 opencodex 路由的任意非 OpenAI 模型使用 xA
 
 1. opencodex 检测到一个已路由的非 OpenAI 模型，并且 `videoBridgeEnabled: true`
 2. 系统会在对话中注入一个合成的 `video_gen` 函数工具
-3. 当模型调用 `video_gen` 时，opencodex 会向 xAI 的 `/videos/generations` 提交任务
+3. 当模型调用 `video_gen` 时，opencodex 会向 xAI 的 `/videos/generations` 提交任务（若设置了 `images.videoProvider`，则提交到该提供方）
 4. 桥接每隔 5-15 秒轮询一次任务状态，并发送心跳消息以保持流持续存活
 5. 视频准备就绪后，会下载到 artifacts 目录
 6. 本地文件路径会作为工具结果返回给模型

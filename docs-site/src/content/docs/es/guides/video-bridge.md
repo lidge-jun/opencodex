@@ -13,6 +13,8 @@ El puente de video permite generar videos con Grok Imagine Video de xAI desde cu
 
 ## Requisitos previos
 
+Estos requisitos se aplican al destino xAI predeterminado. Si defines `images.videoProvider`, consulta [Elegir el proveedor de video](#elegir-el-proveedor-de-video).
+
 - Un proveedor `xai` con una **clave API**: `ocx login xai` por sí solo no basta; el puente requiere autenticación con clave.
 - Un modelo de otro proveedor, como Anthropic Claude o Google Gemini.
 - opencodex configurado para enrutar mediante ese proveedor.
@@ -83,7 +85,7 @@ De forma predeterminada, el puente envía los trabajos de `video_gen` a xAI con 
 - Solo se usan como destino y credencial el `baseUrl` y la clave de API del proveedor indicado. El adaptador no importa, pero debe usar autenticación por clave de API.
 - `"videoProvider": "xai"` mantiene el endpoint fijo `https://api.x.ai/v1`, sea cual sea el `baseUrl` de la fila `xai`. Los demás identificadores de proveedores integrados se rechazan; indica un proveedor personalizado.
 - Un `baseUrl` de loopback o de red privada necesita `allowPrivateNetwork: true` en ese proveedor, igual que el resto del tráfico de proveedores.
-- Una clave que pertenece a una fila de proveedor xAI se rechaza para cualquier host distinto del de xAI, de modo que una clave de xAI nunca se envía a otro backend.
+- Una clave reconocible como de xAI (una clave `xai-`, una clave de cualquier fila `xai`, una referencia de llavero al secreto de otro proveedor o una referencia de entorno con nombre de xAI o Grok) se rechaza para cualquier origen salvo `https://api.x.ai`, de modo que una clave de xAI nunca se envía a otro backend. Una clave activa en pausa también falla de forma cerrada, y el `baseUrl` no puede llevar credenciales, consulta ni fragmento.
 - Si el proveedor no existe, está deshabilitado, en pausa, sin clave o rechazado, cada llamada a `video_gen` devuelve ese error al modelo. No se envía nada y el puente nunca recurre a xAI.
 - El video terminado solo se descarga desde una URL `data:` en base64 o una URL `https:` pública, así que un puente local debe devolver una de ellas como `video.url`.
 
@@ -91,7 +93,7 @@ De forma predeterminada, el puente envía los trabajos de `video_gen` a xAI con 
 
 1. opencodex detecta un modelo enrutado no OpenAI con `videoBridgeEnabled: true`
 2. Una herramienta de función sintética `video_gen` se inyecta en la conversación
-3. Cuando el modelo llama al `video_gen`, opencodex envía un trabajo al endpoint `/videos/generations` de xAI
+3. Cuando el modelo llama al `video_gen`, opencodex envía un trabajo al endpoint `/videos/generations` de xAI (o al `images.videoProvider` configurado)
 4. El puente sondea el estado del trabajo cada 5-15 segundos, enviando mensajes de latido para mantener viva la transmisión
 5. Cuando el video está listo, se descarga en el directorio de artefactos
 6. La ruta local del archivo se devuelve al modelo como resultado de la herramienta

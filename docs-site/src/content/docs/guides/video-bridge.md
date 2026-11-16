@@ -12,6 +12,8 @@ job to xAI, polls until completion, and downloads the result.
 
 ## Prerequisites
 
+These prerequisites apply to the default xAI destination. With `images.videoProvider` set, see [Choosing the video provider](#choosing-the-video-provider) instead.
+
 - An `xai` provider entry with an **API key** (`ocx login xai` alone is not sufficient — the video bridge requires key auth, not OAuth)
 - A non-OpenAI model as your routed provider (e.g. Anthropic Claude, Google Gemini)
 - opencodex configured to route through the non-OpenAI provider
@@ -85,8 +87,10 @@ bridge:
   `xai` row carries. Other built-in provider ids are refused; name a custom provider instead.
 - A loopback or private-network `baseUrl` needs `allowPrivateNetwork: true` on that provider, as for
   other provider traffic.
-- A key that belongs to an xAI provider row is refused for any host other than xAI's, so an xAI key is
-  never sent to another backend.
+- A recognizably xAI key (an `xai-` key, a key held by any `xai` row, a keychain reference to another
+  provider's secret, or an environment reference named for xAI or Grok) is refused for every origin
+  except `https://api.x.ai`, so an xAI key is never sent to another backend. A paused active key also
+  fails closed, and the `baseUrl` may not carry credentials, a query or a fragment.
 - If the provider is missing, disabled, paused, keyless or refused, every `video_gen` call returns
   that error to the model. Nothing is sent, and the bridge never falls back to xAI.
 - The finished video is still downloaded only from a base64 `data:` URL or a public `https:` URL, so
@@ -96,7 +100,7 @@ bridge:
 
 1. opencodex detects a non-OpenAI routed model with `videoBridgeEnabled: true`
 2. A synthetic `video_gen` function tool is injected into the conversation
-3. When the model calls `video_gen`, opencodex submits a job to xAI's `/videos/generations`
+3. When the model calls `video_gen`, opencodex submits a job to xAI's `/videos/generations` (or to the configured `images.videoProvider`)
 4. The bridge polls the job status every 5-15 seconds, sending heartbeat messages to keep the stream alive
 5. When the video is ready, it's downloaded to the artifacts directory
 6. The local file path is returned to the model as a tool result

@@ -45,8 +45,12 @@ pins the destination to the registry `xai` base URL, so an `xai` row's `baseUrl`
 receives the key. `selectVideoProvider` resolves an explicit value: `xai` stays pinned, other
 registry ids are refused, and a custom row contributes only its own `baseUrl` and API key after the
 shared `providerDestinationConfigError` check (`allowPrivateNetwork` governs loopback and private
-hosts). A key held by any xAI row (`xai`, or a row whose host is xAI's) is refused for every other
-host, so an xAI key is never sent elsewhere even when an operator reuses it.
+hosts). The base URL may not carry userinfo, a query or a fragment, because the client appends
+endpoint paths as strings, and a paused active key fails closed through `isProviderApiKeyPaused`.
+A recognizably xAI credential (an `xai-` key, a key held by any row named `xai` in any case or
+pointing at an xAI host, a keychain reference to another row's account, or an environment reference
+named for xAI or Grok) is refused unless the origin is HTTPS on an xAI host and the default port, so
+an xAI key is never sent elsewhere even when an operator reuses it.
 
 An explicit value that cannot be used produces an unavailable plan: the `video_gen` tool is still
 claimed, and `src/images/loop.ts` answers each call with the configuration error before any paid-call
