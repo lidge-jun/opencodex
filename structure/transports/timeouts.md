@@ -35,6 +35,20 @@ policy, public header expiry, client/overall cancellation and explicit local bod
 `tests/responses/refreshed-upstream-deadlines.test.ts` covers queued Responses destination changes;
 `tests/providers/kiro/kiro-fallback-error-body.test.ts` checks disabled and positive fallback budgets.
 
+## Offline wait and resend
+
+`offlineResendWaitSec` (#7958) is off unless set to a positive number of seconds, capped at 300 by
+`resolveOfflineResendWaitMs` in `src/lib/offline-resend.ts`. `createOfflineResendWait` returns one
+single-use waiter per request; the initial sends in `src/server/responses/passthrough-dispatch.ts` and
+`src/server/responses/adapter-dispatch.ts` hand it to `fetchWithResetRetry` as `offlineWait`. Only a
+rejection `isPreConnectReachabilityError` proves never reached the origin (DNS failure, network
+unreachable, connection refused) qualifies, and only before a reset was seen. The waiter polls the
+destination's DNS once a second until it resolves or the wait ends; client abort ends the wait. One
+resend then follows inside the request's existing `attempts` budget and send accounting; no budget,
+a second offline failure, an exhausted wait or any other failure returns the original error.
+`tests/responses/responses-offline-resend.test.ts` drives the probe and clock through
+`setOfflineResendDependenciesForTests`.
+
 ## OpenCode timeout export
 
 `src/types/config.ts` declares `opencodeClientExport`; `src/config/schema/leaf-validators.ts`

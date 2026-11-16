@@ -552,6 +552,12 @@ export interface ResetRetryOptions {
    * `attempts`, exactly like every other send this leg makes.
    */
   claimAmbiguousResend?: () => boolean;
+  /**
+   * Opt-in offline wait (#7958): asked once a send failed before reaching the origin; true means
+   * the destination is reachable again and one resend may follow inside `attempts`. See
+   * `createOfflineResendWait` in offline-resend.ts, which owns the single-use and pre-connect rules.
+   */
+  offlineWait?: (error: unknown, signal?: AbortSignal) => Promise<boolean>;
 }
 
 export interface TransientRetryOptions extends ResetRetryOptions {
@@ -688,6 +694,8 @@ export async function fetchWithResetRetry(
         // evidence: keep it attached so the terminal rejection cannot be
         // downgraded to the pre-connection neutral class (#914 review).
         if (sawReset) throw new UpstreamRetryEvidenceError([], err, true);
+        // Nothing reached the origin, so one resend after reachability returns cannot repeat an effect.
+        if (attempt + 1 < attempts && opts.offlineWait && await opts.offlineWait(err, opts.abortSignal)) continue;
         throw err;
       }
       if (opts.replaySafe === true) {

@@ -139,6 +139,7 @@ import { classifyTransportFailureKind, transportErrorCode } from "../../lib/upst
 import { captureAccountAutoPauseAttempt, wasAccountAutoPaused, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
 import { codexFailureWindowOutcomeMeta, recordCodexUpstreamOutcome } from "../../codex/routing";
 import { describeUpstreamConnectFailure } from "./upstream-error";
+import { createOfflineResendWait, resolveOfflineResendWaitMs } from "../../lib/offline-resend";
 import type { OpaqueBlobRecoveryGuard } from "./core-opaque-recovery";
 import {
   rateLimitRetryPolicyFor,
@@ -1047,6 +1048,7 @@ export async function preparePassthroughExchange(
           // by `onPhysicalDispatch`; a reporter as well would count them twice.
           ...(receiptMode ? {} : { onSendsConsumed: initialAccounting.report }),
           claimAmbiguousResend: claimPreHeaderResend,
+          offlineWait: createOfflineResendWait(request.url, resolveOfflineResendWaitMs(config.offlineResendWaitSec)),
         },
       );
     } catch (err) {

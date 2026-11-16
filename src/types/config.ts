@@ -1068,6 +1068,7 @@ export interface OcxConfig extends OcxLinkHomeConfig {
    * can hold the connection silent for minutes on a large prompt before the first header arrives.
    */
   connectTimeoutMs?: number;
+  /** Opt-in (#7958): seconds (max 300) to wait for DNS after a pre-connect failure, then resend once. Unset or 0 is off. */ offlineResendWaitSec?: number;
   /** Graceful shutdown drain timeout (ms). Active turns are aborted after this deadline. Default 5000. */
   shutdownTimeoutMs?: number;
   /** Advertise supports_websockets so Codex opens the WS endpoint. Default false; set true to opt in. */ websockets?: boolean;
