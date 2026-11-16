@@ -40,4 +40,8 @@ The auth store keeps one slot per login, and a sibling row never gets a slot of 
 The dashboard picker lists `kimi-responses` (`dashboardPreset: true`). When the owner is already signed
 in, adding it posts the preset row to `/api/providers` with no login; otherwise it logs in through `kimi`
 with `row: "kimi-responses"`. A sibling row's status and login buttons resolve through the owner.
+Its Accounts panel lists the owner's accounts, and every control there acts on the shared account (owner
+decision on #8087): the panel says so, and removing an account or pausing one (which stops the owner's
+Chat row from using it too) asks for confirmation that names the owner's row
+(`gui/src/hooks/useProviderAccountPools.ts`, `gui/tests/provider-shared-account-controls.test.tsx`).
 `ocx provider add kimi-responses` (local or `--live`) adds the row and points at `ocx login kimi`.

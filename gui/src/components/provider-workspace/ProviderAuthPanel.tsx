@@ -11,6 +11,8 @@ import { formatAccountPauseTooltip } from "../../account-pause-display";
 import { IconLock, IconRefresh, IconTrash } from "../../icons";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { oauthAccountDisplayLabel, providerAuthSurface } from "../../provider-workspace/auth";
+import { oauthCredentialSlot } from "../../../../src/oauth/credential-siblings";
+import { oauthLabel } from "../../pages/providers-shared";
 import { displayAccountId } from "../../lib/privacy";
 import AccountAutoSwitchControl from "../AccountAutoSwitchControl";
 import {
@@ -580,6 +582,12 @@ export default function ProviderAuthPanel({
                     {t("pws.retryAccounts")}
                   </button>
                 )}
+              </div>
+            )}
+            {accounts.length > 0 && oauthCredentialSlot(item.name) !== item.name && (
+              // A shared-login row (Kimi (Responses)) lists its owner's accounts: every control below acts on them.
+              <div className="pwi-auth-state" role="note">
+                {t("pws.sharedAccountsNote", { provider: oauthLabel(oauthCredentialSlot(item.name)) })}
               </div>
             )}
             {accounts.length > 0 && (
