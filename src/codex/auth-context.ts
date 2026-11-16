@@ -1064,6 +1064,43 @@ export async function resolveCodexAuthContext(
   mode: CodexAccountMode,
   options: ResolveCodexAuthContextOptions = {},
 ): Promise<CodexAuthContext> {
+  try {
+    return await resolveCodexAuthContextWithHint(headers, config, mode, options);
+  } catch (error) {
+    // #8113: a refusal resting on a reading older than 60 s first gets one fresh WHAM read, so a
+    // reset redeemed outside OpenCodex lifts the lock now instead of at the next paced recovery.
+    if (!(error instanceof CodexMainAccountHardLockError)) throw error;
+    const { refreshMainHardLockBeforeRefusal } = await import("./auth-api/main-hard-lock-refusal-read");
+    if (!await refreshMainHardLockBeforeRefusal(config, options.codexAuthPolicy ?? config, options.signal,
+      callerOwnedMainRefusal(headers, mode, options))) throw error;
+    return await resolveCodexAuthContextWithHint(headers, config, mode, options);
+  }
+}
+
+/**
+ * A refusal for a request that authenticates as the main login itself. That request may never
+ * read the physical main credential, so its fresh read uses the caller's own bearer (#8113).
+ * Any other refusal is about the proxy-owned main credential.
+ */
+function callerOwnedMainRefusal(
+  headers: Headers, mode: CodexAccountMode, options: ResolveCodexAuthContextOptions,
+): { bearer: string; accountId: string } | null | undefined {
+  if (options.substituteMainCredentialForDirect === true || !hasCallerCodexBearer(headers)) return undefined;
+  if (mode !== "direct" && options.requestScopedMainCredential !== true) return undefined;
+  // An explicit stored-account selection resolves the proxy-owned credential, whatever bearer arrived.
+  if (options.accountId !== undefined && options.requestScopedMainCredential !== true) return undefined;
+  const bearer = authorizationCredential(headers);
+  const accountId = headers.get("chatgpt-account-id") ?? (bearer ? extractAccountId(undefined, bearer) : undefined);
+  // Caller-owned without a usable credential: no read at all, never the physical one.
+  return bearer && accountId ? { bearer, accountId } : null;
+}
+
+async function resolveCodexAuthContextWithHint(
+  headers: Headers,
+  config: OcxConfig,
+  mode: CodexAccountMode,
+  options: ResolveCodexAuthContextOptions,
+): Promise<CodexAuthContext> {
   // Filled by the inner resolver with the request's own fenced model evidence, so the hint obeys it.
   const eligibility: RecoveryHintEligibility = {};
   try {
