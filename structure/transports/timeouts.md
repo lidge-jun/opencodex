@@ -43,7 +43,9 @@ single-use waiter per request; the initial sends in `src/server/responses/passth
 `src/server/responses/adapter-dispatch.ts` hand it to `fetchWithResetRetry` as `offlineWait`. Only a
 rejection `isPreConnectReachabilityError` proves never reached the origin (DNS failure, network
 unreachable, connection refused) qualifies, and only before a reset was seen. The waiter polls the
-destination's DNS once a second until it resolves or the wait ends; client abort ends the wait. One
+destination's DNS once a second until it resolves or the wait ends; each probe races the remaining budget and client
+cancellation, and a success after the deadline does not count. `fetchWithTransientRetry` restarts its slow-attempt clock
+when the wait resumes. Adapters with their own `fetchResponse` transport (google, kiro, cursor) are not wired. One
 resend then follows inside the request's existing `attempts` budget and send accounting; no budget,
 a second offline failure, an exhausted wait or any other failure returns the original error.
 `tests/responses/responses-offline-resend.test.ts` drives the probe and clock through

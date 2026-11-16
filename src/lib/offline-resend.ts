@@ -17,6 +17,8 @@ export interface OfflineResendDependencies {
   resolveHost?: (hostname: string) => Promise<unknown>;
   /** Abortable delay between probes. */
   delay?: (ms: number, signal?: AbortSignal) => Promise<void>;
+  /** Abortable timer that ends a probe still pending when the wait runs out. */
+  expire?: (ms: number, signal?: AbortSignal) => Promise<void>;
   now?: () => number;
 }
 
@@ -52,15 +54,28 @@ export function createOfflineResendWait(url: string, maxWaitMs: number): Offline
     const deps = testDependencies ?? {};
     const resolveHost = deps.resolveHost ?? ((host: string) => lookup(host));
     const delay = deps.delay ?? abortableDelay;
+    const expire = deps.expire ?? abortableDelay;
     const now = deps.now ?? Date.now;
     const deadline = now() + maxWaitMs;
     for (;;) {
       signal?.throwIfAborted();
+      let remaining = deadline - now();
+      if (remaining <= 0) return false;
+      // A stalled system resolver must not outlive the wait or the client: race each probe against
+      // the remaining budget and cancellation, and accept a success only inside the budget.
+      const settle = new AbortController();
+      const raceSignal = signal ? AbortSignal.any([signal, settle.signal]) : settle.signal;
+      const expiry = expire(remaining, raceSignal).then(() => "expired" as const);
+      let outcome: boolean | "expired";
       try {
-        await resolveHost(hostname);
-        return true;
-      } catch { /* still offline */ }
-      const remaining = deadline - now();
+        outcome = await Promise.race([resolveHost(hostname).then(() => true, () => false), expiry]);
+      } finally {
+        settle.abort();
+        expiry.catch(() => { /* cancelled with the race */ });
+      }
+      if (outcome === "expired") return false;
+      if (outcome) return now() <= deadline;
+      remaining = deadline - now();
       if (remaining <= 0) return false;
       await delay(Math.min(OFFLINE_REACHABILITY_PROBE_INTERVAL_MS, remaining), signal);
     }

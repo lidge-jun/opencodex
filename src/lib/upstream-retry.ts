@@ -859,7 +859,16 @@ export async function fetchWithTransientRetry(
   try {
   if (budget === 0) throw new SendBudgetExhaustedError(opts.destination ?? (opts.label ? errorDestinationLabel(opts.label) : undefined));
   let attemptStart = Date.now();
-  let res = await fetchWithResetRetry(countedFetch, innerResetOptions());
+  // Time spent waiting for the network to return is not part of the resend's own attempt.
+  const offlineWait = opts.offlineWait;
+  let res = await fetchWithResetRetry(countedFetch, {
+    ...innerResetOptions(),
+    ...(offlineWait ? { offlineWait: async (error: unknown, signal?: AbortSignal) => {
+      const resumed = await offlineWait(error, signal);
+      if (resumed) attemptStart = Date.now();
+      return resumed;
+    } } : {}),
+  });
   for (let attempt = 0; sent < budget; attempt++) {
     // A non-replayable gateway status was settled after the request body had already left
     // for the origin; retrying it here is the automatic resend the marker exists to forbid.
