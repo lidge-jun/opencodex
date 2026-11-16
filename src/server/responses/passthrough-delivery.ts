@@ -1225,7 +1225,7 @@ export async function deliverPassthroughResponse(
       }
 
       const relayPlatform = relayPlatformForTests ?? process.platform;
-      // A Remote Link turn while the link WebSocket feature is on reads its upstream only as its client drains (#8601);
+      // Every relayed Remote Link turn reads its upstream only as its client drains (#8601), feature switch or not;
       // every other request keeps the relays' read-ahead below. Its chunks travel in slices, and the paced mark makes the
       // tee, the eager relay and every stage after them read one slice at a time as the client asks (src/lib/paced-stream.ts).
       if (linkTurnPacesReads(logCtx)) passthroughSseBody = markPacedStream(sliceChunks(passthroughSseBody, LINK_PACED_SLICE_BYTES));
