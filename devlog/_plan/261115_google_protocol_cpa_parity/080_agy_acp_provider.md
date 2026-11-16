@@ -10,7 +10,8 @@ PR from `dev` (Closes #8480), independent of #8742 and #8771; the Gemini inbound
 this branch, so their coverage is re-checked once both land.
 
 Class C4: a provider that launches a local agent process, plus a request-scoped policy gate.
-Revision 2 resolves audit round 1 (`.tmp/research/audit-080.md`: B1-B6).
+Revision 2 resolves audit round 1 (`.tmp/research/audit-080.md`: B1-B6); revision 3 resolves round 2
+(`.tmp/research/audit-080-r2.md`: R2-1 pure selector resolution, R2-2 sandbox honesty, R2-3 model proof).
 
 ## Sources
 
@@ -46,17 +47,25 @@ Revision 2 resolves audit round 1 (`.tmp/research/audit-080.md`: B1-B6).
   scoped env, private cwd, no shell, never run for a denied request), `policy.ts` (the gate), `process.ts` (spawn and
   process-group reaping), `adapter.ts` (`runTurn`, disabled HTTP path, side-effect-free construction).
 - Spawn: `agy acp --sandbox` (never `--add-dir`, `--dangerously-skip-permissions`, `--agent` or `--login`), cwd = a fresh
-  private directory per turn created with mkdtemp under the OS temp root (mode 0700, outside the OpenCodex home),
-  `TMPDIR` pointed inside it, environment from `baseScopedEnv()` plus `NO_COLOR`; removed after the turn. A build that
-  rejects `--sandbox` exits before `initialize` and the turn fails closed (503, fixed text).
+  private directory per turn created with mkdtemp under the OS temp root (mode 0700), checked to be absolute and outside
+  the OpenCodex home after resolving symlinks (a redirected TMPDIR/TEMP that lands inside the home is refused), with
+  `TMPDIR`/`TEMP`/`TMP` pointed at a private subdirectory, environment from `baseScopedEnv()` plus `NO_COLOR`; spawn cwd and
+  `session/new.cwd` are the same path; removed after the reap with a bounded cleanup. A build that rejects `--sandbox`
+  exits before `initialize` and the turn fails closed (503, fixed text).
 
 ## Filesystem boundary (B4)
 
-What confines the child: the CLI's own permission engine (request-review: every command asks, file access is the
-workspace, which is the empty private directory), every ask refused here, and the OS terminal sandbox forced by
-`--sandbox`. What does not: the cwd alone, and `baseScopedEnv`, which is environment hygiene that keeps HOME. Residual,
-documented for the user: allow rules or `toolPermission` the user has set in their own agy settings still apply, and
-OpenCodex does not read that file (it may hold an API key). Client `fs/*` and `terminal/*` capabilities are never
+The promised boundary is the vendor's permission engine applied with every ask refused: the CLI starts in
+request-review, where every command asks and file access outside the workspace (the empty private directory) asks, and
+this client answers every ask with `cancelled`. `--sandbox` is passed as additional hardening of the agent's terminal
+commands only; it is not promised. Google documents that from CLI 1.4.4, where the sandbox is unavailable (for example
+Windows 10, earlier Windows 11 builds, Linux hosts or containers without the needed namespaces) `--sandbox` has no
+effect, and no positive availability check is documented, so OpenCodex makes no OS-confinement claim and the docs say
+the flag may be inert on such hosts. The ACP server itself is never described as sandboxed. What does not confine: the
+cwd alone, and `baseScopedEnv`, which is environment hygiene that keeps HOME. Residual, documented for the user: allow
+rules, allowed paths or `toolPermission` the user has set in their own agy settings still apply without prompting, and
+OpenCodex does not read that file (it may hold an API key). OpenCodex never adds `--add-dir` or grants a permission to
+make a turn succeed. Client `fs/*` and `terminal/*` capabilities are never
 advertised; a request for them gets a fixed -32601.
 
 ## Turn sequence (B3)
@@ -74,8 +83,16 @@ advertised; a request for them gets a fixed -32601.
    Not offered → 400 listing the values; no effort → unchanged.
 5. Verify the acknowledged model value is the one requested (Gemini). Without a requested model, the CLI's current
    value is used only when its option name or value is a Gemini model; otherwise 400.
-6. `session/prompt`. Every `config_option_update` replaces the tracked state; a switch to a non-Gemini model sends
-   `session/cancel`, refuses pending permissions, reaps, and ends with 502 `agy_acp_model_switched`.
+6. `session/prompt`. Every `config_option_update` replaces the tracked state.
+
+Model proof (checked after `session/new`, after each setter reply, before `session/prompt`, and after every
+`config_option_update`): the complete current state must contain exactly one model selector whose `currentValue`
+resolves unambiguously to an advertised option naming a Gemini model (and, when a model was requested, to that one). A
+removed selector, an unknown, malformed or ambiguous `currentValue`, or a non-Gemini value fails closed: before the prompt
+the turn ends with 502 `agy_acp_model_unproven` without sending `session/prompt`; during the prompt it sends
+`session/cancel`, refuses pending permissions, reaps and ends with 502 `agy_acp_model_switched`. A previous state's
+selector is never kept after a replacement. Offered-value lists in 400 errors contain only validated model or effort
+identifiers, never other child-authored labels.
 
 Dispatch by frame shape: a frame with `method` and `id` is a server request (permission → exact
 `{outcome:{outcome:"cancelled"}}` with the original id; anything else → -32601), `method` without `id` a notification,
@@ -95,7 +112,7 @@ limits as the retired module.
 | missing/invalid prompt reply, exit before reply | error 502 `agy_acp_protocol` with phase and exit code |
 | -32000 at any request | error 401 `authentication_error` `agy_login_required`: "Antigravity CLI is not signed in. Run `agy acp --login` (or `agy`) and sign in." |
 
-Exactly one terminal event. On abort: `session/cancel` when a session exists, refuse pending permissions, then reap.
+At most one terminal event; the caller-abort path is settled by the caller's cancellation. On abort: `session/cancel` when a session exists, refuse pending permissions, then reap.
 
 ## Errors carry fixed text (B5)
 
@@ -130,10 +147,15 @@ spawn) as defense in depth. Signals:
    `websocket-handler.ts` around each frame. No snapshot → refused. Adapter unit tests enter an explicit local scope.
 3. Configuration (B2), in the whole-config superRefine: an ACP provider is the canonical `antigravity-acp` id or any row
    whose effective adapter is `agy-acp`. It may not carry a populated `apiKey`, an `apiKeyPool`, account or OAuth binding
-   fields, or a credential auth mode; its `models` and model aliases must be Gemini ids. Combo targets (including disabled
-   members) and `subagentModelFallback` / `subagentModelFallbackByModel` entries are resolved to their provider with the
-   router's selector resolution and refused when the provider is an ACP provider; the same Gemini model on another
-   provider stays allowed.
+   fields, or a credential auth mode; its `models` and model aliases must be Gemini ids. References are resolved by a pure
+   leaf module, `src/config/schema/agy-acp-references.ts`, that reuses the schema's lexical selector grammar and imports
+   no router, routed-config, key store or runtime selection state (so validation never reads a credential and no import
+   cycle forms). Combo members are read from their structured `{provider, model}` entries, every member regardless of
+   disabled or cooldown state. `subagentModelFallback` / `subagentModelFallbackByModel` strings are resolved structurally:
+   a `provider/model` prefix names that provider; a bare id or alias (synthetic effort suffixes stripped) yields every
+   configured provider that lists it or aliases it, following alias references with a depth bound. A reference is
+   refused when any candidate is an ACP provider; an unresolvable reference is not treated as allowed for this check
+   (the runtime guard still refuses at dispatch). The same Gemini model on another provider stays allowed.
 
 ## Files
 
@@ -151,7 +173,9 @@ spawn) as defense in depth. Signals:
   argument, descendant reaping, version gate, no spawn when denied), `agy-acp-policy.test.ts`,
   `tests/server/request-peer-scope.test.ts` (HTTP local/remote/link, WebSocket after the upgrade scope ended, interleaved
   local and remote), `tests/config/agy-acp-config.test.ts` (pool, stale canonical adapter, custom row, OAuth mode, combo
-  alias, fallback map alias refused; the same Gemini model on `google` allowed), plus the registry authority and
+  alias, disabled combo member, fallback map alias refused; the same Gemini model on `google` allowed; validation reads no
+  credential, shown with an unavailable keychain reference), fake-child cases for an accepted `--sandbox` whose
+  enforcement is unknown (no claim is made) and for a removed model selector and an unknown `currentValue`, plus the registry authority and
   tool-conformance lists and a Responses pipeline test for the preflight 403.
 - Docs: `docs-site` reference/adapters (+ es), guides/providers (interactive-only use with the Google citations, local
   only, sandbox and permission behavior, residual user settings), `structure/adapters/registry.md`,
