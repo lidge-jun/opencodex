@@ -30,6 +30,8 @@ achèvement, puis télécharge le résultat.
 >
 > Définissez `XAI_API_KEY` dans l’environnement de démarrage du proxy et gardez `${XAI_API_KEY}` avec `authMode: "key"`. Une exportation dans un autre terminal ne change pas un proxy actif : redémarrez-le via Desktop, son service ou son terminal propriétaire. Ne partagez pas les clés littérales.
 
+> **⚠ Éligibilité du fournisseur :** Une clé seule ne suffit pas : le fournisseur désigné doit être éligible (configuré, authentification par clé, baseUrl http(s) absolue) et ne pas être un identifiant de registre réservé comme `xai`. S'il n'est pas éligible, le pont reste désactivé et ne revient pas à xAI. Les règles complètes sont dans le [guide anglais](/guides/video-bridge/).
+
 ## Configuration
 
 Ajoutez `videoBridgeEnabled: true` à votre configuration `images` :

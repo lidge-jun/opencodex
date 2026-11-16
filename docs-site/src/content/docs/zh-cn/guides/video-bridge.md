@@ -25,6 +25,8 @@ Video Bridge 允许你通过 opencodex 路由的任意非 OpenAI 模型使用 xA
 >
 > 在代理的启动环境中设置 `XAI_API_KEY`，保留 `${XAI_API_KEY}` 并明确使用 `authMode: "key"`。在其他终端导出不会改变已运行的代理；请通过所属 Desktop、服务或前台终端重启。不要将密钥写入提交、日志或共享报告。
 
+> **⚠ 提供者资格：** 仅凭密钥并不足够：指定的提供者必须符合条件（已配置、密钥认证、绝对 http(s) baseUrl），且不能是 `xai` 等保留注册表 ID。不符合条件时桥接不会启用，也不会回退到 xAI。完整规则见[英文指南](/guides/video-bridge/)。
+
 ## 配置
 
 在你的 `images` 配置中添加 `videoBridgeEnabled: true`：

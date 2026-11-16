@@ -26,6 +26,8 @@ Video Bridge는 opencodex가 라우팅한 OpenAI가 아닌 모델로 xAI의 Grok
 >
 > `XAI_API_KEY`는 프록시 시작 환경에 설정하고 `${XAI_API_KEY}`와 `authMode: "key"`를 유지하세요. 다른 터미널의 export는 실행 중인 프록시를 바꾸지 않습니다. 소유한 Desktop, 서비스 또는 전경 터미널을 통해 재시작하세요. 키를 커밋이나 로그에 넣지 마세요.
 
+> **⚠ 공급자 자격:** 키만으로는 부족합니다. 지정된 공급자는 자격 요건(구성됨, 키 인증, 절대 http(s) baseUrl)을 충족해야 하며 `xai` 같은 예약 레지스트리 ID여서는 안 됩니다. 부적격 시 브리지는 동작하지 않으며 xAI로 대체(fallback)되지 않습니다. 자세한 내용은 [영어 가이드](/guides/video-bridge/)를 참조하세요.
+
 ## 구성
 
 `images` 설정에 `videoBridgeEnabled: true`를 추가하십시오:

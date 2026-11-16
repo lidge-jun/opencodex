@@ -34,6 +34,8 @@ indirir.
 >
 > `XAI_API_KEY` değerini proxy başlangıç ortamında ayarlayın; `${XAI_API_KEY}` ve `authMode: "key"` korunsun. Başka terminalde export, çalışan proxy’yi değiştirmez; sahibi Desktop, hizmet veya ön plan terminalinden yeniden başlatın. Anahtarları commit ve günlüklere koymayın.
 
+> **⚠ Sağlayıcı uygunluğu:** Tek başına anahtar yeterli değildir: belirtilen sağlayıcı uygun olmalıdır (yapılandırılmış, anahtar kimlik doğrulaması, mutlak http(s) baseUrl) ve `xai` gibi ayrılmış bir kayıt kimliği olmamalıdır. Uygun değilse köprü devre dışı kalır ve xAI'ye geri düşmez. Tam kurallar için [İngilizce kılavuza](/guides/video-bridge/) bakın.
+
 ## Yapılandırma
 
 `images` yapılandırmanıza `videoBridgeEnabled: true` ekleyin:
