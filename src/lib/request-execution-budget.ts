@@ -15,7 +15,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
  * sends plus one alternate -- by funding the alternate from a reserve that a validated
  * sanitized repair can spend instead, but never both.
  */
-import type { SpendSeed, SpendScopes, SpendReservationProof, SpendAdmissionPolicy } from "./spend-reservation-ledger";
+import { sharedSpendPolicy, type SpendSeed, type SpendScopes, type SpendReservationProof, type SpendAdmissionPolicy } from "./spend-reservation-ledger";
 import type { TransientSendBudget } from "./upstream-retry";
 
 export type SendClass =
@@ -293,6 +293,29 @@ interface SharedSendLedger {
 }
 
 const sharedSendLedgers = new WeakMap<RequestExecutionBudget, SharedSendLedger>();
+// Only optional-work queries capture this fallback. Factory scopes key it by their shared
+// ledger; legacy/foreign holders key it by their public owner. No accounting observer is added.
+const fallbackSpendPolicies = new WeakMap<object, SpendAdmissionPolicy>();
+function fallbackHasCapturedSpendCeiling(owner: object, target: SpendScopes = {}): boolean {
+  let policy = fallbackSpendPolicies.get(owner);
+  if (!policy) {
+    const current = sharedSpendPolicy();
+    policy = Object.freeze({ root: Object.freeze({ ...current.root }), identity: Object.freeze({ ...current.identity }), pool: Object.freeze({ ...current.pool }) });
+    fallbackSpendPolicies.set(owner, policy);
+  }
+  return (Boolean(target.rootId) && policy.root.maxTokens !== undefined)
+    || (Boolean(target.identityId) && policy.identity.maxTokens !== undefined)
+    || (Boolean(target.poolId) && policy.pool.maxTokens !== undefined);
+}
+
+/** An authoritative query's false is final; only absent query authority uses the fallback. */
+export function requestHasCapturedSpendCeiling(budget: TransientSendBudget, target?: SpendScopes): boolean {
+  const execution = budget as Partial<RequestExecutionBudget>;
+  if (execution.hasCapturedSpendCeiling) return execution.hasCapturedSpendCeiling(target);
+  if (execution.spendEnforced === true) return true;
+  return fallbackHasCapturedSpendCeiling(budget, target);
+}
+
 interface SameTargetRecoveryScope {
   targetKey: string;
   maxAdditionalSends: number;
@@ -495,7 +518,13 @@ function createRequestExecutionBudgetWithLedger(
     get workflowCountObserved(): boolean { return observer?.beforePhysicalSend !== undefined; },
     get spendPolicyStarted(): boolean { return observer?.policyStarted === true; },
     get spendAdmissionPolicy(): SpendAdmissionPolicy | undefined { return observer?.spendAdmissionPolicy; },
-    hasCapturedSpendCeiling(target) { return observer?.hasCapturedSpendCeiling?.(target) ?? observer?.enforced === true; },
+    hasCapturedSpendCeiling(target) {
+      if (observer?.hasCapturedSpendCeiling) return observer.hasCapturedSpendCeiling(target);
+      if (observer?.enforced === true) return true;
+      return counter.recoveryOwner
+        ? requestHasCapturedSpendCeiling(counter.recoveryOwner, target)
+        : fallbackHasCapturedSpendCeiling(counter, target);
+    },
     startRequest(target) {
       observer?.startRequest?.(target);
       if (observer?.enforced && counter.physicalLimit === undefined) {

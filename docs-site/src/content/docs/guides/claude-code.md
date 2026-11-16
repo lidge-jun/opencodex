@@ -1109,6 +1109,8 @@ request and returns a `server_tool_use` block named `advisor` followed by an
 - If the request's captured policy has an applicable root, identity or provider-pool token spend
   ceiling, the hosted Advisor declaration, completed history and beta are withheld. The main turn
   continues. On directly routed requests the log records `advisor-tool-withheld-by-spend-policy`.
+  A forced choice of the withheld `advisor` becomes `auto`, unless an ordinary client tool or
+  the OpenCodex Advisor owns that name. Other tool choices remain unchanged.
   This uses the policy captured for that request, including
   its selected account and pool; later configuration changes do not alter the decision. Requests
   without an applicable ceiling keep the forwarding rules above.

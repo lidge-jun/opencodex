@@ -7,9 +7,9 @@ import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import { clearResponseStateForTests, flushResponseState } from "../../src/responses/state";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { resetProviderRequestPacingForTest } from "../../src/providers/request-pacing";
-import { createPhysicalSendReporter, createRequestExecutionBudget, deriveRequestExecutionBudget } from "../../src/lib/request-execution-budget";
-import { createSpendReservationLedger, DEFAULT_SPEND_RESERVATION_POLICY, type SpendJournal, type SpendReservationPolicy } from "../../src/lib/spend-reservation-ledger";
-import { SendBudgetExhaustedError, providerErrorDestinationLabel, fetchWithTransientRetry } from "../../src/lib/upstream-retry";
+import { createPhysicalSendReporter, createRequestExecutionBudget, deriveRequestExecutionBudget, isRequestExecutionBudget, requestHasCapturedSpendCeiling } from "../../src/lib/request-execution-budget";
+import { configureSharedSpendLedger, createSpendReservationLedger, DEFAULT_SPEND_RESERVATION_POLICY, sharedSpendLedger, sharedSpendPolicy, spendPolicyFromConfig, type SpendJournal, type SpendReservationPolicy } from "../../src/lib/spend-reservation-ledger";
+import { SendBudgetExhaustedError, providerErrorDestinationLabel, fetchWithTransientRetry, type TransientSendBudget } from "../../src/lib/upstream-retry";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
 import { createResponsesSendBudget } from "../../src/server/responses/request-send-budget";
@@ -61,6 +61,15 @@ function trackerFixture(enforced: boolean) {
   const tracker = createRequestSpendTracker(log, undefined, ledger);
   const budget = createRequestExecutionBudget(undefined, undefined, tracker);
   return { ledger, log, tracker, budget };
+}
+
+function unobservedHolder(kind: "legacy" | "observerless" | "foreign"): TransientSendBudget {
+  if (kind === "legacy") return { used: 0 };
+  const original = createRequestExecutionBudget();
+  if (kind === "observerless") return original;
+  const foreign = { ...original, get used() { return original.used; }, set used(value: number) { original.used = value; } };
+  delete foreign.hasCapturedSpendCeiling;
+  return foreign;
 }
 
 for (const enforced of [false, true]) test(`receipt-versus-reporter choice is fixed by the Combo booking (enforced=${enforced})`, () => {
@@ -115,6 +124,7 @@ for (const limited of [false, true]) test(`an early optional-tool query captures
 });
 
 for (const limited of [false, true]) test(`optional-tool ceiling query retains captured identity policy without changing accounting (limited=${limited})`, () => {
+  const previousPolicy = sharedSpendPolicy();
   const identityPolicy = (enabled: boolean): SpendReservationPolicy => ({
     ...DEFAULT_SPEND_RESERVATION_POLICY, identity: enabled ? { maxTokens: 1_000_000 } : {},
   });
@@ -126,6 +136,8 @@ for (const limited of [false, true]) test(`optional-tool ceiling query retains c
   if (!booking.allowed) throw new Error("fixture reservation refused");
   const translatorBudget = createTranslatorBudget();
   try {
+    // A captured unlimited answer is authoritative even when shared configuration now limits it.
+    configureSharedSpendLedger(spendPolicyFromConfig(limited ? {} : { identity: { maxTokens: 1 } }));
     const child = deriveRequestExecutionBudget(parent, parent.policy);
     const owner = createResponsesSendBudget({ req: new Request("http://localhost/v1/responses"), logCtx: log,
       options: { translatorBudget, sendBudget: child, comboInitialSend: { permit: booking.permit } } });
@@ -135,6 +147,7 @@ for (const limited of [false, true]) test(`optional-tool ceiling query retains c
     expect(parent.spendEnforced).toBe(false); // The parent did not yet have an account.
     ledger.reconfigure(identityPolicy(!limited));
     const target = { poolId: "a", identityId: "selected-fixture-key" };
+    expect(owner.hasCapturedSpendCeiling(target)).toBe(limited);
     for (const budget of [parent, child, owner.adapterDispatchBudget!]) {
       expect(budget.hasCapturedSpendCeiling?.(target)).toBe(limited);
       expect(budget.hasCapturedSpendCeiling?.({ poolId: "a" })).toBe(false);
@@ -144,9 +157,166 @@ for (const limited of [false, true]) test(`optional-tool ceiling query retains c
       expect(budget.physicalLimit).toBeUndefined();
       expect(budget.used).toBe(1);
     }
-  } finally { booking.permit.release(); translatorBudget.dispose(); }
+  } finally { booking.permit.release(); translatorBudget.dispose(); configureSharedSpendLedger(previousPolicy); }
   expect(parent.used).toBe(0);
 });
+
+for (const kind of ["legacy", "observerless", "foreign"] as const) for (const scope of ["root", "identity", "pool"] as const) for (const limited of [false, true]) {
+  test(`${kind} holders share a lazy frozen ${scope} ceiling query without accounting (limited=${limited})`, () => {
+    const previousPolicy = sharedSpendPolicy();
+    const policy = (enabled: boolean) => spendPolicyFromConfig(enabled ? { [scope]: { maxTokens: 100_000 } } : {});
+    const translatorBudget = createTranslatorBudget();
+    const rootId = `${kind}-optional-${scope}-${limited}`;
+    const req = new Request("http://localhost/v1/responses", { headers: { "x-codex-parent-thread-id": rootId } });
+    const logs: RequestLogContext[] = [];
+    const createOwner = (holder: TransientSendBudget) => {
+      const log: RequestLogContext = { model: "m", provider: "" }; logs.push(log);
+      const owner = createResponsesSendBudget({ req, logCtx: log, options: { translatorBudget, sendBudget: holder } });
+      if (owner instanceof Response) throw new Error("unexpected workflow refusal");
+      return owner;
+    };
+    const holder = unobservedHolder(kind); holder.used = 2;
+    const target = { identityId: "selected-legacy-identity", poolId: "selected-legacy-pool" };
+    try {
+      configureSharedSpendLedger(policy(!limited));
+      const child = isRequestExecutionBudget(holder) ? deriveRequestExecutionBudget(holder, holder.policy) : holder;
+      const first = createOwner(holder), inherited = createOwner(child);
+      // Construction does not capture a policy for optional work that may never be present.
+      configureSharedSpendLedger(policy(limited));
+      if (scope === "identity") expect(first.hasCapturedSpendCeiling({ poolId: target.poolId })).toBe(false);
+      expect(first.hasCapturedSpendCeiling(target)).toBe(limited);
+      configureSharedSpendLedger(policy(!limited));
+      const laterChild = isRequestExecutionBudget(holder) ? deriveRequestExecutionBudget(holder, holder.policy) : holder;
+      const later = createOwner(laterChild);
+      for (const owner of [first, inherited, later]) {
+        expect(owner.hasCapturedSpendCeiling(target)).toBe(limited);
+        if (kind === "legacy") {
+          expect(owner.adapterSendBudget).toBeUndefined();
+          expect(owner.adapterDispatchBudget).toBeUndefined();
+        } else {
+          const view = owner.adapterDispatchBudget!;
+          const derivedView = deriveRequestExecutionBudget(view, view.policy);
+          for (const budget of [owner.adapterSendBudget!, view, owner.refundableAdapterDispatchBudget!, derivedView]) {
+            expect(requestHasCapturedSpendCeiling(budget, { ...target, rootId })).toBe(limited);
+            expect(budget.spendEnforced).toBe(false);
+            expect(budget.spendPolicyStarted).toBe(false);
+            expect(budget.spendAdmissionPolicy).toBeUndefined();
+            expect(budget.physicalStarted).toBe(0);
+            expect(budget.physicalLimit).toBeUndefined();
+            expect(budget.used).toBe(2);
+          }
+        }
+        expect(owner.sendsUsed).toBe(2);
+        expect(owner.remainingTransientSendBudget(3)).toBe(1);
+      }
+      expect(createOwner(unobservedHolder(kind)).hasCapturedSpendCeiling(target)).toBe(!limited);
+      expect(holder.used).toBe(2);
+      if (kind === "legacy") expect(holder).toEqual({ used: 2 });
+      expect(logs.every(log => log.spendTracker === undefined && log.accountLogLabel === undefined)).toBe(true);
+      expect(sharedSpendLedger().snapshot("root", rootId)).toBeUndefined();
+      expect(sharedSpendLedger().snapshot("identity", target.identityId)).toBeUndefined();
+      expect(sharedSpendLedger().snapshot("pool", target.poolId)).toBeUndefined();
+    } finally { configureSharedSpendLedger(previousPolicy); translatorBudget.dispose(); }
+  });
+}
+
+for (const kind of ["legacy", "observerless", "foreign"] as const) test(`${kind} optional-work queries cannot invent a workflow root`, () => {
+  const previousPolicy = sharedSpendPolicy(), translatorBudget = createTranslatorBudget();
+  try {
+    configureSharedSpendLedger(spendPolicyFromConfig({ root: { maxTokens: 1 } }));
+    const owner = createResponsesSendBudget({ req: new Request("http://localhost/v1/responses"),
+      logCtx: { provider: "a", model: "m" }, options: { translatorBudget, sendBudget: unobservedHolder(kind) } });
+    if (owner instanceof Response) throw new Error("unexpected workflow refusal");
+    expect(owner.hasCapturedSpendCeiling({ rootId: "untrusted-target-root", poolId: "a" })).toBe(false);
+    expect(owner.sendsUsed).toBe(0);
+  } finally { configureSharedSpendLedger(previousPolicy); translatorBudget.dispose(); }
+});
+
+for (const queried of [false, true]) for (const enforced of [false, true]) {
+  test(`observer query authority is distinct from its answer (query=${queried}, enforced=${enforced})`, () => {
+    const previousPolicy = sharedSpendPolicy(), translatorBudget = createTranslatorBudget();
+    const effects: string[] = [];
+    const parent = createRequestExecutionBudget(undefined, undefined, {
+      enforced,
+      ...(queried ? { hasCapturedSpendCeiling: () => false } : {}),
+      startRequest: () => { effects.push("start"); },
+      charge: () => { effects.push("charge"); return true; },
+      refund: () => { effects.push("refund"); },
+    });
+    try {
+      configureSharedSpendLedger(spendPolicyFromConfig(enforced ? {} : { identity: { maxTokens: 1 } }));
+      const owner = createResponsesSendBudget({ req: new Request("http://localhost/v1/responses"), logCtx: { model: "m", provider: "a" },
+        options: { translatorBudget, sendBudget: parent } });
+      if (owner instanceof Response) throw new Error("unexpected workflow refusal");
+      const target = { identityId: "authoritative-query-account", poolId: "a" };
+      expect(owner.hasCapturedSpendCeiling(target)).toBe(!queried);
+      for (const budget of [parent, deriveRequestExecutionBudget(parent, parent.policy), owner.adapterDispatchBudget!]) {
+        expect(requestHasCapturedSpendCeiling(budget, target)).toBe(!queried);
+        expect(budget.spendEnforced).toBe(enforced);
+        expect(budget.spendPolicyStarted).toBe(false);
+        expect(budget.spendAdmissionPolicy).toBeUndefined();
+        expect(budget.physicalStarted).toBe(0);
+        expect(budget.physicalLimit).toBeUndefined();
+        expect(budget.used).toBe(0);
+      }
+      expect(effects).toEqual([]);
+    } finally { configureSharedSpendLedger(previousPolicy); translatorBudget.dispose(); }
+  });
+}
+
+for (const kind of ["legacy", "observerless", "derived"] as const) for (const scope of [undefined, "root", "identity", "pool"] as const) {
+  test(`a ${kind} holder withholds only spend-limited hosted work at the injected wire (scope=${scope ?? "none"})`, async () => {
+    const previousPolicy = sharedSpendPolicy();
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => { throw new Error("legacy-holder fixture forbids uninjected network calls"); }) as typeof fetch;
+    const wires: Array<{ body: Record<string, unknown>; headers: Headers }> = [];
+    const model = "claude-opus-5-5";
+    const parent = unobservedHolder(kind === "derived" ? "observerless" : kind);
+    const holder = kind === "derived" && isRequestExecutionBudget(parent) ? deriveRequestExecutionBudget(parent, parent.policy) : parent;
+    const config = {
+      port: 0, defaultProvider: "anth", spend: scope ? { [scope]: { maxTokens: 1 } } : {},
+      webSearchSidecar: { enabled: false },
+      providers: { anth: { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "key",
+        apiKey: "fixture-legacy-holder-key", liveModels: false, models: [model],
+        fetch: async (_input: unknown, init?: RequestInit) => {
+          wires.push({ body: JSON.parse(String(init?.body)), headers: new Headers(init?.headers) });
+          const frames = [
+            { type: "message_start", message: { id: "msg_fixture", type: "message", role: "assistant", model,
+              content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 0 } } },
+            { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+            { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+            { type: "content_block_stop", index: 0 },
+            { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } },
+            { type: "message_stop" },
+          ];
+          return new Response(frames.map(frame => `event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`).join(""),
+            { headers: { "content-type": "text/event-stream" } });
+        } } },
+    } as unknown as OcxConfig;
+    configureSharedSpendLedger(spendPolicyFromConfig(config.spend));
+    const log: RequestLogContext = { provider: "", model: "" };
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json", "x-codex-parent-thread-id": `${kind}-wire-${scope ?? "none"}` },
+        body: JSON.stringify({ model: `anth/${model}`, stream: true, input: "Synthetic optional-tool check.",
+          tools: [{ type: "function", name: "Read", parameters: { type: "object", properties: {} } }] }),
+      }), config, log, {
+        inboundWire: "anthropic", sendBudget: holder,
+        anthropicServerTools: [{ type: "advisor_20260301", name: "advisor", model: "claude-opus-4-8", max_uses: 2 }],
+      });
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("ok");
+      expect(wires).toHaveLength(1);
+      const types = (wires[0]!.body.tools as Record<string, unknown>[]).map(tool => tool.type ?? "function");
+      expect(types).toEqual(scope ? ["function"] : ["function", "advisor_20260301"]);
+      expect((wires[0]!.headers.get("anthropic-beta") ?? "").includes("advisor-tool-2026-03-01")).toBe(scope === undefined);
+      // This compatibility holder retains its original receipt/accounting behavior.
+      expect(holder.used).toBe(1);
+      expect(parent.used).toBe(1);
+      expect(log.spendTracker).toBeUndefined();
+    } finally { globalThis.fetch = originalFetch; configureSharedSpendLedger(previousPolicy); }
+  });
+}
 
 /** Combo -> Responses passthrough upstream, observing whether the policy had started at the wire. */
 for (const enforced of [false, true]) test(`passthrough Combo send starts spend policy from its booking before the wire (enforced=${enforced})`, async () => {

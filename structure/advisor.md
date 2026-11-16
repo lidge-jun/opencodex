@@ -109,6 +109,10 @@ planning without starting main-model accounting; an already captured Combo polic
 `hasCapturedSpendCeiling` checks the original numeric ceilings against that target, including an
 identity selected after Combo prepayment. It does not change the initial accounting mode or reread
 live config. Its hosted-only identity binding leaves ordinary accounting scopes unchanged.
+After the final tool catalog is known, a named `advisor` choice whose hosted tool was withheld
+becomes `auto` only when no ordinary or proxy function owns that selection. Other choices and
+allow-lists stay unchanged. The delivery maps are rebuilt and charged for newly usable tools;
+normal, web-search and image/video paths apply this before the adapter builds its request.
 An existing entry trace receives `advisor-tool-withheld-by-spend-policy`; unmarked
 Combo children retain the existing trace behavior. Main-model terminal usage does not independently account for
 the hosted Advisor. The proxy Advisor retains its separately budgeted consultations; see

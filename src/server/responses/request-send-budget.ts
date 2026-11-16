@@ -1,7 +1,7 @@
 import { createInferenceSendBudget } from "../inference/context";
 import { responsesSpendTarget } from "./request-spend-target";
 import type { ResponsesRequestContext } from "./core-options";
-import { claimDispatchSpendProof, createPhysicalSendReporter, createRequestExecutionBudget, isRequestExecutionBudget, hasWorkflowSendObserver, reportDispatchSends } from "../../lib/request-execution-budget";
+import { claimDispatchSpendProof, createPhysicalSendReporter, createRequestExecutionBudget, isRequestExecutionBudget, hasWorkflowSendObserver, reportDispatchSends, requestHasCapturedSpendCeiling } from "../../lib/request-execution-budget";
 import {
   chargeWorkflowSends,
   reserveWorkflowSend,
@@ -13,6 +13,7 @@ import { poolContinuityRefusalReason, workflowRefusalResponse } from "../workflo
 import type { AttemptRecoveryKind, AttemptRecoveryWithheld } from "../../usage/log";
 import { noteAttemptRecoveryWithheld, noteAttemptSend } from "../request-log";
 import { TRANSIENT_RETRY_MAX_ATTEMPTS, SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import type { SpendScopes } from "../../lib/spend-reservation-ledger";
 import { estimateTokens } from "../../lib/token-estimate";
 import type {
   DispatchDecision,
@@ -189,6 +190,11 @@ export function createResponsesSendBudget(
   // typed as the narrow holder so a caller that predates this can still pass one, so narrow it
   // once here rather than asserting at each adapter call site.
   const adapterSendBudget = isRequestExecutionBudget(sendBudget) ? sendBudget : undefined;
+  const hasCapturedSpendCeiling = (target: SpendScopes = {}): boolean => requestHasCapturedSpendCeiling(sendBudget, {
+    rootId: workflowRootId,
+    identityId: target.identityId ?? logCtx.accountLogLabel,
+    poolId: target.poolId ?? logCtx.spendPoolId ?? logCtx.provider,
+  });
   /**
    * Records an adapter's OWN inner retries against this attempt.
    *
@@ -426,6 +432,7 @@ export function createResponsesSendBudget(
      */
     get sendsUsed(): number { return sendBudget.used; },
     adapterSendBudget,
+    hasCapturedSpendCeiling,
     dispatchSidecarSend,
     adapterDispatchBudget,
     refundableAdapterDispatchBudget,
@@ -474,7 +481,7 @@ function adapterDispatchBudgetView(
     get spendEnforced() { return budget.spendEnforced; },
     get spendPolicyStarted() { return budget.spendPolicyStarted; },
     get spendAdmissionPolicy() { return budget.spendAdmissionPolicy; },
-    hasCapturedSpendCeiling: target => budget.hasCapturedSpendCeiling?.(target) ?? budget.spendEnforced === true,
+    hasCapturedSpendCeiling: target => requestHasCapturedSpendCeiling(budget, target),
     startRequest: target => budget.startRequest?.(target),
     claimPhysicalSend: auxiliary => auxiliary ? budget.claimPhysicalSend?.(true) : budget.claimPhysicalSend?.(),
     claimContinuationPhysicalSend: () => budget.claimContinuationPhysicalSend?.(),

@@ -120,7 +120,13 @@ keeps its policy. `request-spend.ts` retains the original frozen ceilings even w
 selected observe-only accounting before its child had an identity. `hasCapturedSpendCeiling` on
 `src/lib/request-execution-budget.ts` and its derived/adapter views checks that snapshot against the
 actual target without changing enforcement mode, effective admission policy, physical limits or
-reservations. `tests/responses/responses-first-send-spend-policy.test.ts` covers that separation and
+reservations. The Responses owner exposes that query separately from its adapter budget and supplies
+the actual request root, never a target-supplied root. An observer's query is authoritative even when
+it returns false; without that query, an enforced observer still withholds optional work. Otherwise
+`requestHasCapturedSpendCeiling` lazily freezes numeric ceilings for the shared factory ledger or
+legacy/foreign holder. Derived scopes and adapter views retain the same query owner and snapshot.
+Querying does not install a spend observer, promote a holder or change main-model accounting.
+`tests/responses/responses-first-send-spend-policy.test.ts` covers these holder forms, that separation and
 live policy changes in both directions. The hosted-only target binding in `src/server/responses/request-transport.ts`
 resolves a selected API key's existing account label before physical log attribution, so policy
 checks do not record an unsent attempt as served. `request-spend-target.ts` keeps that read-only

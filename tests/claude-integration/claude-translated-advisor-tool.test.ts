@@ -81,6 +81,7 @@ interface TurnOptions {
   baseUrl?: string; provider?: Rec; model?: string; stream?: boolean; direct?: boolean;
   messages?: unknown[]; tools?: unknown[]; frames?: Rec[]; gptFirst?: boolean; gptOnly?: boolean; nativeRollout?: boolean; requestId?: string;
   spend?: OcxConfig["spend"]; rootId?: string; policyDuringPlan?: OcxConfig["spend"]; proxyAdvisor?: boolean;
+  toolChoice?: Rec;
 }
 
 async function claudeTurn(options: TurnOptions = {}): Promise<{ wires: Wire[]; status: number; body: string; logCtx: RequestLogContext }> {
@@ -128,6 +129,7 @@ async function claudeTurn(options: TurnOptions = {}): Promise<{ wires: Wire[]; s
       body: JSON.stringify({
         model: options.model ?? (options.direct ? `anth/${MODEL}` : "combo/waterfall"), max_tokens: 64, stream: options.stream ?? true,
         tools: options.tools ?? [READ, ADVISOR],
+        tool_choice: options.toolChoice,
         messages: options.messages ?? [{ role: "user", content: "Plan the shutdown." }],
       }),
     }), config, logCtx, { requestId: options.requestId ?? `advisor-turn-${crypto.randomUUID()}`, start: Date.now() });
@@ -253,6 +255,71 @@ describe("hosted Advisor under the request's token spend policy", () => {
     expect(advisors[0]).toHaveProperty("input_schema");
     expect(toolTypes(result.wires[0]!)).not.toContain("advisor_20260301");
     expect(betas(result.wires[0]!)).not.toContain(BETA);
+  });
+
+  for (const model of ["claude-sonnet-4-6", MODEL]) for (const direct of [false, true]) {
+    test(`a withheld named Advisor keeps ordinary tool calls usable (${model}, direct=${direct})`, async () => {
+      const result = await claudeTurn({ model: `anth/${model}`, provider: { models: [model] }, direct,
+        spend: { pool: limit }, toolChoice: { type: "tool", name: "advisor" }, frames: [START,
+          { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_read_after_withholding", name: "Read", input: {} } },
+          { type: "content_block_stop", index: 0 }, ...end("tool_use"),
+        ] });
+      expect(result.status, result.body).toBe(200);
+      expect(result.wires).toHaveLength(1);
+      expect(result.wires[0]!.body.tool_choice).toEqual({ type: "auto" });
+      expect((result.wires[0]!.body.tools as Rec[]).map(tool => tool.name)).toEqual(["Read"]);
+      expect(betas(result.wires[0]!)).not.toContain(BETA);
+      expect(clientContent(result.body, true)).toContainEqual({ type: "tool_use", id: "toolu_read_after_withholding", name: "Read", input: {} });
+    });
+
+    test(`an unlimited named hosted Advisor keeps its model's choice contract (${model}, direct=${direct})`, async () => {
+      const result = await claudeTurn({ model: `anth/${model}`, provider: { models: [model] }, direct,
+        toolChoice: { type: "tool", name: "advisor" } });
+      expect(result.status, result.body).toBe(200);
+      expect(result.wires).toHaveLength(1);
+      expect(result.wires[0]!.body.tool_choice).toEqual(model === MODEL ? { type: "auto" } : { type: "tool", name: "advisor" });
+      expect(toolTypes(result.wires[0]!)).toContain("advisor_20260301");
+      expect(betas(result.wires[0]!)).toContain(BETA);
+    });
+  }
+
+  for (const owner of ["client", "proxy"] as const) {
+    test(`withholding the hosted Advisor preserves the named ${owner} Advisor`, async () => {
+      const model = "claude-sonnet-4-6";
+      const result = await claudeTurn({ model: `anth/${model}`, provider: { models: [model] },
+        spend: { pool: limit }, toolChoice: { type: "tool", name: "advisor" }, proxyAdvisor: owner === "proxy",
+        tools: owner === "client" ? [READ, { ...READ, name: "advisor" }, ADVISOR] : [READ, ADVISOR] });
+      expect(result.status, result.body).toBe(200);
+      expect(result.wires).toHaveLength(1);
+      expect(result.wires[0]!.body.tool_choice).toEqual({ type: "tool", name: "advisor" });
+      const declared = result.wires[0]!.body.tools as Rec[];
+      expect(declared.filter(tool => tool.name === "advisor")).toHaveLength(1);
+      expect(declared.find(tool => tool.name === "advisor")).toHaveProperty("input_schema");
+      expect(betas(result.wires[0]!)).not.toContain(BETA);
+    });
+  }
+
+  for (const choice of [{ type: "none" }, { type: "auto" }, { type: "any" }, { type: "tool", name: "Read" }]) {
+    test(`withholding preserves an unrelated tool choice (${JSON.stringify(choice)})`, async () => {
+      const model = "claude-sonnet-4-6";
+      const result = await claudeTurn({ model: `anth/${model}`, provider: { models: [model] },
+        spend: { pool: limit }, toolChoice: choice });
+      expect(result.status, result.body).toBe(200);
+      expect(result.wires).toHaveLength(1);
+      expect(result.wires[0]!.body.tool_choice).toEqual(choice);
+      expect(toolTypes(result.wires[0]!)).toEqual(["function"]);
+    });
+  }
+
+  test("withheld replay cannot leave a forced Advisor choice without a declaration", async () => {
+    const model = "claude-sonnet-4-6";
+    const result = await claudeTurn({ model: `anth/${model}`, provider: { models: [model] },
+      spend: { pool: limit }, tools: [READ], messages: replay, toolChoice: { type: "tool", name: "advisor" } });
+    expect(result.status, result.body).toBe(200);
+    expect(result.wires).toHaveLength(1);
+    expect(result.wires[0]!.body.tool_choice).toEqual({ type: "auto" });
+    expect(toolTypes(result.wires[0]!)).toEqual(["function"]);
+    expect(JSON.stringify(result.wires[0]!.body)).not.toContain("srvtoolu_adv1");
   });
 });
 

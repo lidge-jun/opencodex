@@ -52,7 +52,7 @@ import {
 } from "../../oauth/anthropic-routing";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { bindRouteReasoningReplayScope, adapterNeedsForcedContinuation, adapterNeedsToolCallContinuation } from "./core-replay";
-import { namespacedToolName, toolChoiceToolPredicate } from "../../types";
+import { namespacedToolName, toolChoiceCandidates, toolChoiceToolPredicate } from "../../types";
 import { providerFetch } from "./fetch-helpers";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { recordAdapterReasoning, recordAdapterTier } from "../request-log";
@@ -110,7 +110,7 @@ export async function executeResponsesSidecars(
     | "notifyResponseComplete"
     | "cancelResponseCompletion"
   >,
-  sendBudgetState: Pick<ResponsesSendBudget, "sendBudgetExhausted" | "reserveCredentialHop" | "refundableAdapterDispatchBudget" | "adapterDispatchBudget" | "adapterSendBudget" | "noteInitialDispatch" | "noteAdapterPhysicalSend" | "noteAdapterRecoveryWithheld" | "pendingHopPermit" | "dispatchSidecarSend">,
+  sendBudgetState: Pick<ResponsesSendBudget, "sendBudgetExhausted" | "hasCapturedSpendCeiling" | "reserveCredentialHop" | "refundableAdapterDispatchBudget" | "adapterDispatchBudget" | "adapterSendBudget" | "noteInitialDispatch" | "noteAdapterPhysicalSend" | "noteAdapterRecoveryWithheld" | "pendingHopPermit" | "dispatchSidecarSend">,
 ) {
   const { config, options, logCtx } = requestContext;
   const antigravityPoolActivated = requestState.route.providerName === "google-antigravity"
@@ -191,14 +191,25 @@ export async function executeResponsesSidecars(
   // Hosted Advisor usage is not independently accounted by the main model's terminal usage.
   // Read the actual authenticated target's captured ceilings before an optional plan can await;
   // this query never starts or changes the main-model accounting mode.
+  let hostedAdvisorWithheld = false;
   if (hasAdvisorServerTools(parsed) && advisorServerToolDestination(route.provider)) {
-    const budget = sendBudgetState.adapterSendBudget;
     const target = responsesHostedAdvisorSpendTarget(logCtx, route.providerName);
-    if (budget?.hasCapturedSpendCeiling?.(target) ?? budget?.spendEnforced) {
+    if (sendBudgetState.hasCapturedSpendCeiling(target)) {
       withholdAdvisorServerTools(parsed);
+      hostedAdvisorWithheld = true;
       addProtocolEntryReason(logCtx, "advisor-tool-withheld-by-spend-policy");
     }
   }
+  const normalizeWithheldAdvisorChoice = () => {
+    const choice = parsed.options.toolChoice;
+    // Wait for the final catalog: a client function or the later proxy Advisor may own this name.
+    if (!hostedAdvisorWithheld || typeof choice !== "object" || choice === null || !("name" in choice)
+      || choice.name !== ADVISOR_TOOL_NAME || toolChoiceCandidates(parsed.context.tools, choice.name).length !== 0) return;
+    parsed.options = { ...parsed.options, toolChoice: "auto" };
+    // The unmatched named choice authorized no earlier map entries. Charge the newly usable
+    // tools once and rebuild their delivery mappings before an adapter can emit their calls.
+    requestState.toolBridgeMaps = buildToolBridgeMaps(parsed, translatorBudget);
+  };
 
   // Advisor sidecar plan (optional subsystem; null when disabled, unconfigured, or when this
   // request IS an advisor loopback consultation — the recursion fence). The plan carries
@@ -577,6 +588,7 @@ export async function executeResponsesSidecars(
       && (tc.name === "image_generation" || imgPlan.toolNames.has(tc.name))) {
       parsed.options.toolChoice = { ...tc, name: IMAGE_GEN_TOOL_NAME };
     }
+    normalizeWithheldAdvisorChoice();
     const imageProviderFetch = providerFetch(
       route.provider,
       options.codexWsRuntimeIdentity,
@@ -701,6 +713,7 @@ export async function executeResponsesSidecars(
         kind: "retained_collectors",
       });
     }
+    normalizeWithheldAdvisorChoice();
     // Resolve the mutable route at send time: a 429 rotation replaces route.provider, so retaining
     // one pre-rotation providerFetch would keep the old credential and transport pin.
     const routedProviderFetch = ((input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) =>
@@ -846,5 +859,6 @@ export async function executeResponsesSidecars(
     advisorPlan.attachGuard(parsed);
   }
 
+  normalizeWithheldAdvisorChoice();
   return undefined;
 }
