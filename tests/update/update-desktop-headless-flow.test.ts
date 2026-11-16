@@ -42,6 +42,7 @@ interface Scenario {
   image?: string;
   moveFails?: boolean;
   restoreBlocked?: boolean;
+  discardFails?: boolean;
 }
 
 function harness(s: Scenario = {}) {
@@ -70,7 +71,7 @@ function harness(s: Scenario = {}) {
       write: (path, bytes) => { events.push(`write ${path}`); files.set(path, bytes); },
       read: path => { const bytes = Buffer.from(files.get(path)!); if (s.tamperStaged) bytes[bytes.length - 1] ^= 1; return bytes; },
       join: (dir, name) => `${dir}\\${name}`,
-      discard: (dir, keep) => { events.push(`discard ${dir} keep=${keep.join(",")}`); },
+      discard: (dir, keep) => { events.push(`discard ${dir} keep=${keep.join(",")}`); if (s.discardFails) throw new Error("EBUSY: resource busy or locked"); },
     },
     moveAsideOwnImage: () => {
       if (s.moveFails) throw new Error("EPERM");
@@ -116,8 +117,8 @@ describe("ocx update --desktop", () => {
       "write C:\\Temp\\ocx-desktop-update-1\\OpenCodex-2.100.3-windows-x64.msi",
       "move-aside",
       "msiexec C:\\Windows\\System32\\msiexec.exe /i C:\\Temp\\ocx-desktop-update-1\\OpenCodex-2.100.3-windows-x64.msi /qn /norestart /l*v C:\\Temp\\ocx-desktop-update-1\\msiexec.log",
-      `retire ${MOVED}`,
       `version ${INSTALL.ocxExe}`,
+      `retire ${MOVED}`,
       "discard C:\\Temp\\ocx-desktop-update-1 keep=",
       "restart 7 2.100.3",
     ]);
@@ -220,14 +221,18 @@ describe("Desktop installation and stale-runtime advice", () => {
   });
 
   test("ocx status names the installed and serving versions and the command that finishes the update", () => {
-    const skew = withDesktopSkewAdvice(computeVersionSkew("2.100.3", "2.99.0"), INSTALL);
+    const skew = withDesktopSkewAdvice(computeVersionSkew("2.100.3", "2.99.0"), INSTALL, "runtime");
     expect(skew.warning).toBe('OpenCodex Desktop 2.100.3 is installed, but the running proxy still serves 2.99.0. '
       + 'Replace it with: "C:\\Program Files\\OpenCodex\\ocx.exe" update --desktop (or quit and reopen OpenCodex Desktop).');
     expect(skew.relation).toBe("cli-newer");
     const other = computeVersionSkew("2.100.3", "2.101.0");
-    expect(withDesktopSkewAdvice(other, INSTALL)).toBe(other);
+    expect(withDesktopSkewAdvice(other, INSTALL, "runtime")).toBe(other);
     const plain = computeVersionSkew("2.100.3", "2.99.0");
-    expect(withDesktopSkewAdvice(plain, null)).toBe(plain);
+    expect(withDesktopSkewAdvice(plain, null, "runtime")).toBe(plain);
+    // A proxy found without this home's runtime record (another home's) gets no Desktop advice.
+    expect(withDesktopSkewAdvice(plain, INSTALL, "config")).toBe(plain);
+    expect(withDesktopSkewAdvice(plain, INSTALL, undefined)).toBe(plain);
+    expect(withDesktopSkewAdvice(plain, INSTALL, "runtime").warning).toContain("update --desktop");
   });
 
   test("argument and version parsing are exact", () => {
@@ -277,5 +282,41 @@ describe("the updater's own image and Windows Installer", () => {
     expect(result.outcome).toBe("installer-uncertain");
     expect(result.message).toContain(MOVED);
     expect(h.events.some(event => event.startsWith("restore"))).toBe(false);
+  });
+
+  test("an installer that may still hold the package keeps the whole staging directory", async () => {
+    const h = harness({ installerExit: "hang" });
+    const work = runHeadlessDesktopUpdate({ check: false }, h.deps);
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    h.fireInstallerDeadline();
+    const result = await work;
+    expect(result).toMatchObject({ outcome: "installer-uncertain", exitCode: HEADLESS_EXIT.uncertain });
+    expect(h.events.some(event => event.startsWith("discard"))).toBe(false);
+    expect(result.message).toContain("C:\\Temp\\ocx-desktop-update-1");
+  });
+
+  test("a staging directory that cannot be removed does not change the outcome", async () => {
+    const cases: Array<[Scenario, string, number]> = [
+      [{}, "updated", HEADLESS_EXIT.ok],
+      [{ installerExit: 1603 }, "installer-failed", HEADLESS_EXIT.unchanged],
+      [{ tamperStaged: true }, "refused", HEADLESS_EXIT.unchanged],
+      [{ readBack: "2.99.0" }, "installed-version-mismatch", HEADLESS_EXIT.uncertain],
+    ];
+    for (const [scenario, outcome, exitCode] of cases) {
+      const h = harness({ ...scenario, discardFails: true });
+      expect(await runHeadlessDesktopUpdate({ check: false }, h.deps)).toMatchObject({ outcome, exitCode });
+    }
+  });
+
+  test("the moved image is retired only after the installed version reads back", async () => {
+    const mismatch = harness({ readBack: "2.99.0" });
+    const result = await runHeadlessDesktopUpdate({ check: false }, mismatch.deps);
+    expect(result.outcome).toBe("installed-version-mismatch");
+    expect(mismatch.events).not.toContain(`retire ${MOVED}`);
+    expect(result.message).toContain(`The previous ocx.exe is at ${MOVED}.`);
+    const reboot = harness({ installerExit: 3010, readBack: "2.99.0" });
+    const pending = await runHeadlessDesktopUpdate({ check: false }, reboot.deps);
+    expect(reboot.events).not.toContain(`retire ${MOVED}`);
+    expect(pending.message).toContain(`The previous ocx.exe is at ${MOVED}.`);
   });
 });

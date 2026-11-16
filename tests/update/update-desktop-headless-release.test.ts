@@ -98,10 +98,12 @@ describe("installer verification", () => {
     expect(code(() => verifyDesktopInstaller(script, candidate(signer.signBytes(script, comment)), signer.pubkey))).toBe("not_msi");
   });
 
-  test("a prerelease may be signed under its numeric core name, never another version", () => {
+  test("a prerelease is signed under its full version name, never its numeric core or another version", () => {
     const pre = "2.101.0-preview.1";
     const sig = (file: string) => signer.signBytes(MSI, `timestamp:1\tfile:${file}`);
-    expect(code(() => verifyDesktopInstaller(MSI, candidate(sig("OpenCodex_2.101.0_x64_en-US.msi"), pre), signer.pubkey))).toBe("accepted");
+    // The release signs the full name, as published for v2.99.0-preview.20261108.
+    expect(code(() => verifyDesktopInstaller(MSI, candidate(sig("OpenCodex_2.101.0-preview.1_x64_en-US.msi"), pre), signer.pubkey))).toBe("accepted");
+    expect(code(() => verifyDesktopInstaller(MSI, candidate(sig("OpenCodex_2.101.0_x64_en-US.msi"), pre), signer.pubkey))).toBe("signed_target");
     expect(code(() => verifyDesktopInstaller(MSI, candidate(sig("OpenCodex_2.101.1_x64_en-US.msi"), pre), signer.pubkey))).toBe("signed_target");
   });
 });

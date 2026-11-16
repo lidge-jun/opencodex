@@ -2,9 +2,10 @@
  * Headless Windows Desktop update (`ocx update --desktop`, #8246).
  *
  * One pass: read the published channel, and when it announces a newer version, download the
- * Windows MSI under the acquisition contract, verify it with the GUI updater's embedded key
- * (again immediately before handing it to msiexec), install it non-interactively and wait for
- * the installer's exit code, read the installed `ocx.exe` version back, then make the serving
+ * Windows MSI under the acquisition contract, verify it with the GUI updater's embedded key,
+ * stage it where nothing with fewer rights than the installer can change it (`./staging.ts`) and
+ * verify the staged copy again, install it non-interactively and wait for the installer's exit
+ * code, read the installed `ocx.exe` version back, then make the serving
  * runtime that version. When nothing newer is published, the same pass still finishes an
  * earlier install whose old runtime is still serving. Every dependency is injected; the
  * production wiring is in `./cli.ts`.
@@ -72,7 +73,10 @@ export interface HeadlessDeps {
    * when the image cannot be moved.
    */
   moveAsideOwnImage(): string | null;
-  /** Put a moved image back when the install did not complete; false when something is already there. */
+  /**
+   * After an install that did not complete, make sure the installed path holds an `ocx.exe`:
+   * true when it already does or the moved image was put back.
+   */
   restoreOwnImage(moved: string): boolean;
   /** Best effort: delete images earlier runs moved aside, and schedule `current` for deletion. */
   retireMovedImages(current: string | null): void;
@@ -190,6 +194,11 @@ export async function runHeadlessDesktopUpdate(options: { check: boolean }, deps
   let logPath: string | null = null;
   let moved: string | null = null;
   let installer: MsiOutcome;
+  // Best effort: a file still held open (msiexec, an indexer) stays in this operation's directory.
+  const discard = (keep: readonly string[]) => {
+    if (!dir) return;
+    try { deps.staging.discard(dir, keep); } catch { /* left for the user or the next temp cleanup */ }
+  };
   try {
     deps.retireMovedImages(null);
     dir = deps.staging.create();
@@ -206,38 +215,40 @@ export async function runHeadlessDesktopUpdate(options: { check: boolean }, deps
       { spawn: deps.spawnInstaller, timers: deps.timers });
   } catch (error) {
     if (moved) deps.restoreOwnImage(moved);
-    if (dir) deps.staging.discard(dir, []);
+    discard([]);
     return failure(error, candidate.version);
   }
   const installerView = { exitCode: installer.code, log: logPath, rebootRequired: installer.kind === "installed-reboot-required" };
-  const keepLog = (keep: boolean) => { if (dir) deps.staging.discard(dir, keep && logPath ? [logPath] : []); };
+  const previous = moved ? ` The previous ocx.exe is at ${moved}.` : "";
   if (!isInstalled(installer)) {
-    // A finished, rolled-back install leaves no ocx.exe in place of the one moved aside; an
-    // installer that may still be running is left alone and the moved path is reported.
-    const restored = moved && installer.kind !== "uncertain" ? deps.restoreOwnImage(moved) : false;
+    // A finished, rolled-back install has restored the copy at the installed path; the moved image
+    // goes back only if that path is empty. An installer that may still be running is left alone
+    // with everything it may hold open: the package, the log and the moved image.
+    const uncertain = installer.kind === "uncertain";
+    const restored = moved && !uncertain ? deps.restoreOwnImage(moved) : false;
     const stranded = moved && !restored ? ` The previous ocx.exe is at ${moved}.` : "";
-    keepLog(true);
-    return finish({ outcome: installer.kind === "uncertain" ? "installer-uncertain" : "installer-failed",
-      exitCode: installer.kind === "uncertain" ? HEADLESS_EXIT.uncertain : HEADLESS_EXIT.unchanged,
+    if (!uncertain) discard(logPath ? [logPath] : []);
+    return finish({ outcome: uncertain ? "installer-uncertain" : "installer-failed",
+      exitCode: uncertain ? HEADLESS_EXIT.uncertain : HEADLESS_EXIT.unchanged,
       targetVersion: candidate.version, runtime: runtimeView(before), installer: installerView, reason: installer.kind,
-      message: `${describeMsiOutcome(installer)} Log: ${logPath}${stranded}` });
+      message: `${describeMsiOutcome(installer)} Log: ${logPath}${uncertain ? ` The staged installer is kept in ${dir}.` : ""}${stranded}` });
   }
   deps.log(describeMsiOutcome(installer));
-  deps.retireMovedImages(moved);
 
-  // 5. Read the installed binary back.
+  // 5. Read the installed binary back; the moved image is retired only once it matches.
   const readBack = await deps.readInstalledVersion(deps.install.ocxExe);
   if (readBack !== candidate.version) {
-    keepLog(true);
+    discard(logPath ? [logPath] : []);
     const reboot = installer.kind === "installed-reboot-required";
     return finish({ outcome: reboot ? "reboot-required" : "installed-version-mismatch",
       exitCode: reboot ? HEADLESS_EXIT.runtimeStale : HEADLESS_EXIT.uncertain,
       targetVersion: candidate.version, runtime: runtimeView(before), installer: installerView, reason: "installed_version",
       message: reboot
-        ? `The installer finished but ${deps.install.ocxExe} still reports ${readBack ?? "no version"}; restart Windows to complete the update to ${candidate.version}. Log: ${logPath}`
-        : `The installer reported success but ${deps.install.ocxExe} reports ${readBack ?? "no version"}, not ${candidate.version}. Log: ${logPath}` });
+        ? `The installer finished but ${deps.install.ocxExe} still reports ${readBack ?? "no version"}; restart Windows to complete the update to ${candidate.version}. Log: ${logPath}${previous}`
+        : `The installer reported success but ${deps.install.ocxExe} reports ${readBack ?? "no version"}, not ${candidate.version}. Log: ${logPath}${previous}` });
   }
-  keepLog(false);
+  deps.retireMovedImages(moved);
+  discard([]);
 
   // 6. Replace the runtime that still serves the old version.
   const settled = await settleRuntime({ installedExe: deps.install.ocxExe, targetVersion: candidate.version, deadlineAt: runtimeDeadline(), wasRunning: before !== null, ...(before ? { expectedPort: before.port } : {}) }, deps.runtime);
@@ -252,7 +263,7 @@ export async function runHeadlessDesktopUpdate(options: { check: boolean }, deps
     }
     if (settled.kind === "not-running") {
       return finish({ outcome: "installed-stopped", exitCode: HEADLESS_EXIT.ok, targetVersion: target, installer: installerResult,
-        message: `OpenCodex Desktop ${target} is installed. No proxy was running, so none was started.${reboot}` });
+        message: `OpenCodex Desktop ${target} is installed. No proxy for this home was found, so none was started.${reboot}` });
     }
     return finish({ outcome: "old-runtime-serving", exitCode: HEADLESS_EXIT.runtimeStale, targetVersion: target,
       runtime: runtimeView(settled.live), installer: installerResult, reason: settled.reason,

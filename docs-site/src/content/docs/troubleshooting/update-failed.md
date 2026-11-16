@@ -253,7 +253,7 @@ Before running the installer, stop the proxy through its owner and confirm it ha
 Run the downloaded installer, then reopen the desktop app or restart the owning service.
 
 On Windows, `"C:\Program Files\OpenCodex\ocx.exe" update --desktop` (from an elevated
-terminal, adjusting the folder to your installation) performs the same verified download and a
+terminal signed in as the account that runs OpenCodex, adjusting the folder to your installation) performs the same verified download and a
 silent install without the app window, then restarts the proxy into the new version. If you
 already ran an MSI by hand and `ocx status` warns that the installed version is newer than the
 running proxy, the same command restarts that old proxy without reinstalling.

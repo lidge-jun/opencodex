@@ -80,9 +80,9 @@ function escapeRegExp(text: string): string {
 
 /** File names the release signer may have signed for this version's Windows x64 MSI. */
 function signedFileMatches(file: string, version: string): boolean {
-  const core = version.replace(/[-+].*$/, "");
-  const versions = core === version ? [version] : [version, core];
-  return versions.some(v => new RegExp(`^OpenCodex_${escapeRegExp(v)}_x64_[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*\\.msi$`).test(file));
+  // The release signs the full version in the name, prereleases included (only the WiX
+  // ProductVersion inside the package is reduced to the numeric core).
+  return new RegExp(`^OpenCodex_${escapeRegExp(version)}_x64_[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*\\.msi$`).test(file);
 }
 
 /**

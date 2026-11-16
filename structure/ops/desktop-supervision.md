@@ -241,20 +241,33 @@ Content-Length only refuses early. The transport is injected; no production sett
 loopback mock.
 
 `headless.ts` holds the home's sync/update mutex for an apply (`--check` only reads), writes the
-verified bytes (`wx`, 0600) into a fresh `mkdtemp` directory, reads them back and verifies again,
-renames its own running `ocx.exe` to `ocx.exe.<pid>-<ms>.update-old` in the same directory (Windows
-allows renaming a running image; otherwise the installer's Restart Manager closes this process and
-its console and the install rolls back), then runs `msiexec.exe /i <msi> /qn /norestart /l*v <log>`
+verified bytes (`wx`) into a fresh staging directory, reads them back and verifies again.
+`staging.ts` places that directory: for an elevated token (`TokenElevation`; an unreadable token
+counts as elevated) it is `<GetSystemDirectory parent>\Temp\ocx-desktop-update-<random>`, created by
+`CreateDirectoryW` with `D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;RC;;;OW)`, so no non-elevated
+process of the same user can swap the package, plant a link at the log path, or move the directory
+away before the elevated msiexec opens them (Users cannot delete another account's entry in
+`Windows\Temp`); a creation failure refuses. A token that is not elevated keeps `mkdtemp` in its own
+TEMP, because its msiexec has no more rights than a process that could change the file there.
+`image.ts` then copies its own running `ocx.exe` to `ocx.exe.<pid>-<ms>.update-new`, renames the running
+file to `ocx.exe.<pid>-<ms>.update-old` and the copy to `ocx.exe` (Windows allows renaming a running
+image; otherwise the installer's Restart Manager closes this process and its console and the install
+rolls back). The installed path therefore holds an unmapped `ocx.exe` throughout the wait, so a
+killed command (Ctrl+C, closed console, dropped SSH session) leaves nothing to restore. It then runs `msiexec.exe /i <msi> /qn /norestart /l*v <log>`
 from `trustedWindowsSystemDirectory()`
 (`src/service/desktop-supervision.mjs`) and waits for its exit code (`msi.ts`). 0 is installed,
 3010 and 1641 installed with a reboot pending, 1618 busy, 1602 cancelled, anything else a
-rolled-back failure whose log is kept and whose moved image is renamed back when no `ocx.exe`
-replaced it. After an install the moved image is scheduled for deletion at restart, and each apply
-first deletes earlier ones no process still maps. An installer still running after 15 minutes is left alone
+rolled-back failure whose log is kept (the moved image is renamed back only if the installed path is
+empty). An installer still running after 15 minutes is left alone with its whole staging directory
 and the outcome is uncertain (exit 3). The installed `ocx.exe --version` must then equal the target;
-a 3010 install still reporting the old version asks for a reboot (exit 2).
+a 3010 install still reporting the old version asks for a reboot (exit 2), and a mismatch reports
+where the moved image is. Only after a matching read-back is the moved image scheduled for deletion
+at restart; each apply first deletes earlier `.update-old`/`.update-new` files no process still maps.
+Removing the staging directory is best effort and never changes the outcome.
 
-`runtime.ts` starts no runtime when none answered before the install (`installed-stopped`) and
+`runtime.ts` starts no runtime when none of this home's answered before the install (`installed-stopped`:
+the command finds the proxy through the invoking account's home, so it has to run as the account that
+owns the proxy; a service, SYSTEM task or other account sees none) and
 leaves one already serving the target alone. It acts only on a runtime this home attests
 (`source: "runtime"` with a pid) that is older than the target and whose Win32 image
 (`windowsProcessPair`) is this installation's `ocx.exe` or an image this updater moved aside there, by asking it for its bound in-place
@@ -277,6 +290,7 @@ replacement. Another image, an unattested or newer runtime, an unknown version, 
 refused restart, an unconfirmed drain or service restart, or a timeout is reported with the restart command and exit 2; nothing else is
 stopped. The Desktop shell process keeps its pre-update image until it is relaunched.
 
-`ocx status` on such an installation replaces the CLI-newer version warning with the installed
+`ocx status` on such an installation, for a proxy this home's runtime record attests
+(`source: "runtime"`), replaces the CLI-newer version warning with the installed
 and serving versions and `"<dir>\ocx.exe" update --desktop` (`withDesktopSkewAdvice` in
 `install.ts`, applied in `src/cli/status.ts`).

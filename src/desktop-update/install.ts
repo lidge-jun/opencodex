@@ -40,10 +40,11 @@ export function desktopUpdateCommand(install: WindowsDesktopInstall): string {
 
 /**
  * On a Desktop installation, a CLI newer than the serving proxy means the MSI installed an update
- * the running runtime has not picked up. Say so, with the command that completes it.
+ * the running runtime has not picked up. Say so, with the command that completes it, only for a
+ * proxy this home's runtime record attests: the command never replaces any other.
  */
-export function withDesktopSkewAdvice(skew: VersionSkew, install: WindowsDesktopInstall | null): VersionSkew {
-  if (!install || skew.relation !== "cli-newer" || !skew.proxyVersion) return skew;
+export function withDesktopSkewAdvice(skew: VersionSkew, install: WindowsDesktopInstall | null, liveSource: string | undefined): VersionSkew {
+  if (!install || liveSource !== "runtime" || skew.relation !== "cli-newer" || !skew.proxyVersion) return skew;
   return {
     ...skew,
     warning: `OpenCodex Desktop ${skew.cliVersion} is installed, but the running proxy still serves ${skew.proxyVersion}. `

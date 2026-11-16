@@ -337,10 +337,11 @@ project's signed updater public key before installation. On macOS, in-app update
 The release manifest is generated only when the updater key secret is configured and then
 requires all four platforms to be signed.
 
-On Windows you can also update without the app window, for example over SSH or from a
-scheduled task. Run the installation's own `ocx.exe` from an elevated terminal:
+On Windows you can also update without the app window, for example over SSH. Run the installation's own `ocx.exe` from an elevated terminal signed in as
+the Windows account that runs OpenCodex:
 `"C:\Program Files\OpenCodex\ocx.exe" update --desktop` (adjust the folder if you installed
-elsewhere). It checks the same published release the tray does, verifies the MSI with the same
+elsewhere). A service, a SYSTEM scheduled task or another account has its own OpenCodex home, does
+not find this proxy, and would leave it running the old version. It checks the same published release the tray does, verifies the MSI with the same
 updater key and refuses on any mismatch, installs it silently, and then restarts the proxy that
 is still running the old version so that the new version is the one answering. Add `--check` to
 only report what is published and what is running, and `--json` for a machine-readable result.

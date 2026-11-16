@@ -1350,7 +1350,10 @@ ocx update --desktop [--check] [--json]
 ```
 
 Run this with the Windows Desktop installation's own `ocx.exe` (the one beside
-`opencodex-desktop.exe`), from an elevated terminal, SSH session or service. Any other `ocx`
+`opencodex-desktop.exe`), from an elevated terminal or SSH session signed in as the account that
+runs the proxy. The command finds the proxy through that account's OpenCodex home: a service, a
+SYSTEM scheduled task or another administrator account has a different home, does not find it,
+and would install the update but leave the old proxy serving. Any other `ocx`
 exits 64 without changing anything. It reads the release feed the app's updater uses and, when
 a newer version is published:
 
@@ -1358,15 +1361,19 @@ a newer version is published:
    redirects to GitHub's release-asset hosts, a 1 GiB cap, and connect, idle and total
    deadlines), sending no credentials;
 2. verifies it with the app updater's embedded public key, refusing a bad or missing signature,
-   a signature for another version or platform, or a file that is not an MSI, and verifies the
-   saved copy again just before installing;
-3. moves its own running `ocx.exe` aside within the installation folder, so the installer does
-   not have to close the command that started it, runs
+   a signature for another version or platform, or a file that is not an MSI. It saves the MSI
+   and its log in a new folder (from an elevated session, under `%SystemRoot%\Temp` with access
+   for SYSTEM and Administrators only, so no program without those rights can replace the file
+   before the installer opens it) and verifies the saved copy again;
+3. renames its own running `ocx.exe` aside within the installation folder and puts a copy back
+   under the installed name, so the installer does not have to close the command that started it
+   and the folder keeps an `ocx.exe` even if the command is interrupted, runs
    `msiexec /i <msi> /qn /norestart /l*v <log>` and waits for its exit code (0 and 3010 are
-   success; 3010 means Windows must restart to replace files that were in use). A failed install
-   puts the moved file back; after a successful one it is deleted at the next restart or by the
-   next run;
-4. checks that the installed `ocx.exe` reports the new version;
+   success; 3010 means Windows must restart to replace files that were in use). After a failed
+   install the folder keeps the previous `ocx.exe` and the log; an installer still running after
+   15 minutes is left alone with its staging folder;
+4. checks that the installed `ocx.exe` reports the new version, and only then schedules the
+   moved file for deletion at the next restart (each run also removes earlier leftovers);
 5. restarts the proxy that still serves the old version through its own in-place restart, so
    Desktop, the service, or the detached proxy starts the installed executable, and waits until
    the new version answers `/healthz`. A connected client proxy keeps itself through that
@@ -1376,12 +1383,12 @@ a newer version is published:
    version after a few seconds.
 
 A proxy whose executable is not this installation's `ocx.exe`, one this home cannot attest,
-or one newer than the installation is never stopped. When no proxy was running, none is
-started. With nothing newer published, the command still restarts an old proxy left behind by an
+or one newer than the installation is never stopped. When no proxy for this home was found, none is
+started (`installed-stopped`). With nothing newer published, the command still restarts an old proxy left behind by an
 earlier MSI install. `--check` reports the published, installed and serving versions without
 downloading or restarting anything.
 
-Exit codes: 0 updated, already current, or installed with no proxy running; 1 nothing was
+Exit codes: 0 updated, already current, or installed when no proxy for this home was found; 1 nothing was
 installed (refused signature, download failure, or a Windows Installer failure, whose log path
 is printed); 2 installed, but the old proxy is still serving or Windows must restart first;
 3 the installer did not finish within 15 minutes, or reported success without installing the
