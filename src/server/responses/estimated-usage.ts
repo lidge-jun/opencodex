@@ -11,6 +11,8 @@ export const ESTIMATED_USAGE_HEADER = "x-opencodex-usage-estimated";
 
 /** Terminal events whose `response.usage` a client reads for context accounting. */
 const TERMINAL_TYPES = new Set(["response.completed", "response.incomplete"]);
+/** Response statuses that end a turn with output a client counts; failed and running ones do not. */
+const TERMINAL_STATUSES = new Set(["completed", "incomplete"]);
 
 /**
  * Whether this turn may carry an estimate: the provider opted in, and the client spoke HTTP
@@ -63,8 +65,11 @@ function outputText(output: unknown): string {
 export function withEstimatedUsage(
   response: unknown, inputTokens: number, modelId: string,
 ): Record<string, unknown> | undefined {
-  // Only a Responses object with output; error bodies and partial events are left alone.
+  // Only a finished Responses object with output; error bodies, failed turns and partial events
+  // are left alone even when they arrive with HTTP 200.
   if (!isRecord(response) || isRecord(response.usage) || !Array.isArray(response.output)) return undefined;
+  if (typeof response.status !== "string" || !TERMINAL_STATUSES.has(response.status)) return undefined;
+  if (response.error !== undefined && response.error !== null) return undefined;
   const input = Math.max(0, Math.round(inputTokens));
   const output = estimateTokens(outputText(response.output), modelId);
   return { ...response, usage: { input_tokens: input, output_tokens: output, total_tokens: input + output } };

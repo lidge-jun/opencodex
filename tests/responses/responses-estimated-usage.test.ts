@@ -2,9 +2,10 @@ import { afterEach, expect, test } from "bun:test";
 import { handleResponses } from "../../src/server/responses";
 import type { HandleResponsesOptions } from "../../src/server/responses/core-options";
 import { setRelayPlatformForTests } from "../../src/server/responses/passthrough-delivery";
-import { isEagerRelaySseResponse } from "../../src/server/relay";
+import { isEagerRelaySseResponse, responseWithDeferredRequestLog } from "../../src/server/relay";
 import { ESTIMATED_USAGE_HEADER, estimatedUsageJson, withEstimatedUsage } from "../../src/server/responses/estimated-usage";
 import type { RequestLogContext } from "../../src/server/request-log";
+import { spendLedgerOwnerSnapshot } from "../../src/lib/spend-ledger-owner";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
@@ -15,6 +16,8 @@ let release: (() => void) | undefined;
 afterEach(() => {
   globalThis.fetch = originalFetch; release?.(); release = undefined;
   setRelayPlatformForTests(undefined);
+  // Every request in a case shares one lease; a second acquisition would keep the journal held.
+  expect(spendLedgerOwnerSnapshot().ownership).toBe("unheld");
 });
 
 const answer = "The capital of France is Paris, and it has been for a long time.";
@@ -46,14 +49,16 @@ function sse(body: Record<string, unknown>, terminal = "response.completed"): Re
 }
 
 async function send(cfg: OcxConfig, stream: boolean, upstream: Response, options: HandleResponsesOptions = {}) {
-  release = acquireOwnedSpendHome();
+  release ??= acquireOwnedSpendHome();
   globalThis.fetch = (async () => upstream) as unknown as typeof fetch;
   const log = { model: "", provider: "" } as RequestLogContext;
   const response = await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "fixture/probe", input: "What is the capital of France?", stream, store: false }),
   }), cfg, log, options);
-  const text = await response.text();
+  // Read the body through the request-log finalizer the server wraps every response in, so the
+  // log assertions below see what request history records.
+  const text = await responseWithDeferredRequestLog(response, "ocx-test-estimate", Date.now(), log, () => {}).text();
   const terminal = stream
     ? JSON.parse(text.split("\n").find(line => line.startsWith("data: {\"type\":\"response.completed\"")
       || line.startsWith("data: {\"type\":\"response.incomplete\""))!.slice(6)).response
@@ -104,10 +109,24 @@ test("JSON: opted in, a missing usage is estimated, marked true, and kept out of
 
 test("JSON: provider usage is not marked as estimated", async () => {
   const usage = { input_tokens: 5, output_tokens: 6, total_tokens: 11 };
-  const { response, terminal } = await send(config(true), false, Response.json(completed(usage)));
+  const { response, terminal, log } = await send(config(true), false, Response.json(completed(usage)));
   expect(response.headers.get(ESTIMATED_USAGE_HEADER)).toBeNull();
   expect(terminal.usage).toEqual(usage);
+  expect(log.usage).toMatchObject({ inputTokens: 5, outputTokens: 6 });
 });
+
+// A 200 body is not a finished turn: a failed or still-running response keeps its missing usage.
+for (const [label, body] of [
+  ["failed", { ...completed(), status: "failed", error: { code: "server_error", message: "failed" }, output: [] }],
+  ["in-progress", { ...completed(), status: "in_progress" }],
+] as const) {
+  test(`JSON: a ${label} response with HTTP 200 gets no estimate and no marker`, async () => {
+    const { response, terminal, log } = await send(config(true), false, Response.json({ ...body, usage: null }));
+    expect(response.headers.get(ESTIMATED_USAGE_HEADER)).toBeNull();
+    expect(terminal.usage).toBeNull();
+    expect(log.usage).toBeUndefined();
+  });
+}
 
 test("streaming: a response.incomplete terminal without usage is estimated too", async () => {
   const body = { ...completed(), status: "incomplete", incomplete_details: { reason: "max_output_tokens" } };

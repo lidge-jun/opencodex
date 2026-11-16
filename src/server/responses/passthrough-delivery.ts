@@ -1526,6 +1526,8 @@ export async function deliverPassthroughResponse(
         if (estimated !== undefined) {
           clientJson = estimated;
           headers.set(ESTIMATED_USAGE_HEADER, "true");
+          // The request-log finalizer parses the delivered body again; keep the estimate out of it.
+          logCtx.usageEstimatedForClient = true;
         }
       }
       // #875: the transport-neutral reliability policy forced a bounded JSON
