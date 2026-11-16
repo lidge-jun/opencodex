@@ -11,6 +11,19 @@ export class ResponseBodyInactivityError extends DOMException {
   }
 }
 
+// Published responses whose upstream reads already run under a positive inactivity guard.
+const guardedResponses = new WeakSet<Response>();
+
+/** Record that `response` relays bytes from guarded upstream reads, so no second clock is armed. */
+export function markResponseBodyInactivityGuarded(response: Response): Response {
+  guardedResponses.add(response);
+  return response;
+}
+
+export function isResponseBodyInactivityGuarded(response: Response): boolean {
+  return guardedResponses.has(response);
+}
+
 /**
  * Bound silence only while the consumer is waiting for upstream bytes.
  *

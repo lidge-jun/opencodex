@@ -2,7 +2,7 @@ import type { AdapterRequest } from "../../adapters/base";
 import { formatErrorResponse } from "../../bridge";
 import type { MainQuotaDispatch } from "../../codex/main-account-cache";
 import { isLocalUpstream } from "../../lib/local-upstream";
-import { guardResponseBodyInactivity } from "../../lib/response-body-inactivity";
+import { guardResponseBodyInactivity, markResponseBodyInactivityGuarded } from "../../lib/response-body-inactivity";
 import { resolveStallTimeoutMs } from "../../stall-timeout";
 import type { OcxConfig } from "../../types";
 import { recordKeyWireAttemptUsage, usageFromResponsesPayload, type RequestLogContext } from "../request-log";
@@ -101,6 +101,7 @@ export function selectPassthroughResetResponse(
     signal: options.signal,
     maxSelectionMs: stallMs > 0 ? stallMs : undefined,
     onCommit: (published, owner) => {
+      if (stallMs > 0) markResponseBodyInactivityGuarded(published);
       if (openGateway) guardedResetResponses.set(published, heldSince);
       if (options.delivery === "buffered-json") bufferedSelectionStarts.set(published, selectionStartedAt);
       bindPublishedMainQuotaDispatch(published, owner === "replacement" ? replacementOwner : originalOwner);

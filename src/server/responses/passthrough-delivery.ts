@@ -163,7 +163,8 @@ import { registerTurn, unregisterTurn, trackStreamLifetime } from "../lifecycle"
 import { relaySseEagerBounded } from "../relay-eager";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { idleDeadline } from "../../lib/abort";
-import { resolveStallTimeoutMs } from "../../stall-timeout";
+import { explicitStallTimeoutMs, resolveStallTimeoutMs } from "../../stall-timeout";
+import { guardResponseBodyInactivity, isResponseBodyInactivityGuarded } from "../../lib/response-body-inactivity";
 import { formatErrorResponse } from "../../bridge";
 import {
   httpStatusFromTerminalError,
@@ -741,18 +742,26 @@ export async function deliverPassthroughResponse(
       });
       // Capture the binding that actually served the first leg, after its permitted reselection.
       const webSearchBridgeBinding = requestBindings.get(nativeExchange.request);
+      // #8206: an explicit stallTimeoutSec bounds silence on the native upstream body for every
+      // streaming relay. Unset keeps this relay without a clock; the canonical JSON fold keeps
+      // its own deadlines, and reset selection already guarded the bodies it published.
+      const nativeSseStallMs = canonicalBufferedJson || isResponseBodyInactivityGuarded(upstreamResponse)
+        ? 0 : explicitStallTimeoutMs(config.stallTimeoutSec);
+      const nativeSseBody = nativeSseStallMs > 0
+        ? guardResponseBodyInactivity(upstreamResponse, upstream.signal, nativeSseStallMs).response.body!
+        : upstreamResponse.body;
       // Repair must observe the raw first leg before the bridge suppresses an intercepted search
       // lifecycle. Otherwise a provider that leaves that complete call open never arms repair's
       // grace timer, so the bridge cannot execute the search or begin its continuation.
       let passthroughSseBody = terminalRepairPolicy
         ? relayResponsesSseWithTerminalRepair(
-          upstreamResponse.body,
+          nativeSseBody,
           upstream,
           terminalRepairPolicy,
           translatorBudget,
           options.responsesTerminalRepairScheduler, logCtx,
         )
-        : upstreamResponse.body;
+        : nativeSseBody;
       passthroughSseBody = webSearchBridgePlan
         ? createPassthroughWebSearchBridgeStream({
           plan: webSearchBridgePlan,

@@ -11,6 +11,7 @@ import {
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
+import { ResponseBodyInactivityError } from "../lib/response-body-inactivity";
 import { carryPacedStream, pacedQueuingStrategy } from "../lib/paced-stream";
 import { carryReplayRefusal, isReplayRefusalResponse } from "../lib/upstream-retry";
 import { isUsageDebugEnabled } from "../usage/debug";
@@ -133,14 +134,18 @@ export function relayWithAbort(
 
 export function buildFailedTailPayload(err: unknown, maskCredential?: (text: string) => string): string {
   const translatorOverflow = isTranslatorBudgetExceededError(err);
+  // A body inactivity guard expired: the upstream went silent, it did not reset. Report the same
+  // terminal the adapter paths use, so logs and clients see a stall rather than a connection reset.
+  const stalled = err instanceof ResponseBodyInactivityError;
   const raw = translatorOverflow
     ? "upstream translation buffer exceeded the safe limit"
+    : stalled ? err.message
     : `Upstream stream terminated unexpectedly: ${err instanceof Error ? err.message : String(err)}`;
   // Exact mask before pattern redaction, which could split a credential and hide it from the mask.
   const message = redactSecretString(maskCredential?.(raw) ?? raw).slice(0, MAX_TAIL_ERROR_MESSAGE_CHARS);
   const failure = {
     type: "upstream_error",
-    code: translatorOverflow ? "translation_buffer_limit" : "upstream_reset",
+    code: translatorOverflow ? "translation_buffer_limit" : stalled ? "upstream_stall_timeout" : "upstream_reset",
     message,
   };
   return JSON.stringify({
