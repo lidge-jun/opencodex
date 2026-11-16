@@ -449,6 +449,8 @@ jobs:
           path: ${{ runner.temp }}/windows-signing-outcome/standalone.json
           if-no-files-found: error
           retention-days: 7
+          # A re-run of this leg replaces its earlier record, so a stale "signed" never outlives a re-run that did not sign.
+          overwrite: true
 
 
       - name: Archive standalone release
@@ -875,6 +877,8 @@ jobs:
           path: ${{ runner.temp }}/windows-signing-outcome/desktop.json
           if-no-files-found: error
           retention-days: 7
+          # A re-run of this leg replaces its earlier record, so a stale "signed" never outlives a re-run that did not sign.
+          overwrite: true
 
       - name: Verify the packaged universal macOS runtime
         if: runner.os == 'macOS'

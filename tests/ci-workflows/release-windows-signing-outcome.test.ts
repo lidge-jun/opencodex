@@ -173,6 +173,9 @@ describe("release workflow wiring of the signing outcome", () => {
       expect(upload["continue-on-error"]).toBe(true);
       const name = String(upload.with?.name);
       expect(name).toBe("windows-signing-outcome-" + kind);
+      // A re-run of a leg that recorded signed and then failed before its asset upload must replace that record: without
+      // overwrite the second upload is a swallowed 409 (continue-on-error) and the stale "signed" reaches the notes.
+      expect(upload.with?.overwrite).toBe(true);
       // verify-release bundles standalone-* and desktop-*; the record must never become a release asset.
       expect(name.startsWith("standalone-") || name.startsWith("desktop-")).toBe(false);
     }
