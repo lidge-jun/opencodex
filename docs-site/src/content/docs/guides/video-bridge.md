@@ -92,7 +92,10 @@ bridge:
   submit or poll request connects, so a hostname that resolves to a local address is refused without
   it. Plain `http` works only for `localhost` or a loopback or private IP address with that setting;
   every other destination must use `https`. Requests follow the provider's own `proxy` and
-  `noProxy` settings.
+  `noProxy` settings. When a provider or global proxy carries the request, the proxy resolves
+  the hostname and connects itself, so the address check above covers only the local DNS answer and
+  cannot pin the peer the proxy picks: route a provider through a proxy only if you trust that proxy's
+  DNS and network path to keep private destinations unreachable.
 - A key OpenCodex can recognize as xAI's (an `xai-` key, a key held by any `xai` row, or an
   environment reference named for xAI or Grok) is sent only to `https://api.x.ai` or
   `https://cli-chat-proxy.grok.com`; any other origin is refused. A key with none of those marks cannot
