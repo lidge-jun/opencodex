@@ -1028,9 +1028,13 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                 continue;
               }
               const vArgs = parseVideoCallArgs(call.args);
+              const videoAuth = videoPlan!.auth;
               let vResult;
               if (!vArgs.ok) {
                 vResult = { ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0, error: vArgs.error };
+              } else if (!videoAuth) {
+                // An unusable images.videoProvider answers the call; it never reaches any upstream.
+                vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt, files: [], count: 0, error: videoPlan!.unavailable };
               } else {
                 paidVideoCalls += 1;
                 const videoTimeout = videoTimeoutMs ?? 300_000;
@@ -1048,13 +1052,13 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                       ...(vArgs.resolution != null ? { resolution: vArgs.resolution } : {}),
                       ...(vArgs.aspectRatio != null ? { aspectRatio: vArgs.aspectRatio } : {}),
                     },
-                    videoPlan!.auth, linkedDeadline,
+                    videoAuth, linkedDeadline,
                   );
                   const remainingMs = videoDeadline - Date.now();
                   if (remainingMs <= 0) {
                     vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt, files: [], count: 0, error: `video generation timed out after ${Math.floor(videoTimeout / 1000)}s` };
                   } else {
-                  const pollGen = pollVideoWithHeartbeats(requestId, videoPlan!.auth, linkedDeadline, remainingMs);
+                  const pollGen = pollVideoWithHeartbeats(requestId, videoAuth, linkedDeadline, remainingMs);
                   let pollResult: { ok: true; videoUrl: string } | { ok: false; error: string };
                   try {
                     for (;;) {

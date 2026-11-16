@@ -1890,6 +1890,7 @@
     "version-line.test.ts": "ci-workflows",
     "vertex-catalog.test.ts": "adapters/google",
     "vertex-model-discovery.test.ts": "adapters/google",
+    "video-provider.test.ts": "videos",
     "vision-anthropic.test.ts": "vision",
     "vision-backend-union.test.ts": "vision",
     "vision-cache.test.ts": "vision",
