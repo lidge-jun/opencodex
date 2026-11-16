@@ -11,6 +11,7 @@
  * applies the selected row's `allowPrivateNetwork` to every DNS answer and pins the connection to
  * a validated address, so a hostname that resolves to loopback or private space never receives the
  * bearer key without the opt-in and a later DNS answer cannot redirect it (rebinding).
+ * The poll GET carries the same key as the submit POST, so it obeys the same cleartext rules.
  */
 import type { OcxProviderConfig } from "../types";
 import { getProviderRegistryEntry } from "../providers/registry";
@@ -87,6 +88,9 @@ function outboundDependencies(dependencies: VideoOutboundDependencies): Provider
     // A self-hosted http video service is reachable only on localhost or a local address
     // literal, and only when the row itself sets allowPrivateNetwork (see provider-outbound).
     allowLocalCleartextPost: true,
+    // The poll GET sends the bearer key too, so it gets exactly the submit POST's cleartext rules:
+    // a public answer for an http host, or a proxied http route, is refused before any send.
+    cleartextPolicy: "credentialed",
   };
 }
 

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { planVideoBridge } from "../../src/images/plan";
 import { pollVideoJob, submitVideoJob, type VideoOutboundDependencies, type VideoProviderAuth } from "../../src/images/xai-video-client";
-import { resolvePublicAddresses } from "../../src/lib/destination-policy";
+import { DestinationDnsResolutionError, resolvePublicAddresses } from "../../src/lib/destination-policy";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 
 // A custom video destination named by hostname, answered by DNS with an address the policy must judge.
@@ -128,4 +128,60 @@ describe("the plan carries the selected row's destination policy to the client",
     expect(sent).toEqual([{ url: "https://" + HOST + "/v1/videos/generations", address: "127.0.0.1", authorization: "Bearer " + KEY }]);
     expect(rawFetches).toEqual([]);
   });
+});
+
+// The poll GET carries the same bearer key as the submit POST, so it must obey the same cleartext
+// rules: https, or an opted-in local literal (or localhost) whose every DNS answer stays local and
+// that no proxy carries. Each case runs both calls to show the poll matches the submit exactly.
+describe("a cleartext poll obeys the submit cleartext rules", () => {
+  const local = (overrides: Partial<VideoProviderAuth> = {}): VideoProviderAuth => ({
+    baseUrl: "http://127.0.0.1:8790/v1", token: KEY, providerName: "my-video-relay",
+    allowPrivateNetwork: true, noProxy: "127.0.0.1", ...overrides,
+  });
+  for (const phase of ["submit", "poll"] as const) {
+    const call = (auth: VideoProviderAuth, deps: VideoOutboundDependencies) => phase === "submit"
+      ? submitVideoJob({ prompt: "synthetic prompt" }, auth, undefined, deps)
+      : pollVideoJob("job-1", auth, undefined, deps);
+    const path = phase === "submit" ? "/v1/videos/generations" : "/v1/videos/job-1";
+
+    test(phase + ": an http hostname that resolves publicly is refused and the key is never sent", async () => {
+      trapRawFetch();
+      const cases = [
+        { host: HOST, baseUrl: "http://" + HOST + "/v1", message: "must use HTTPS" },
+        // localhost answering with a public address (rebinding) after an earlier local answer.
+        { host: "localhost", baseUrl: "http://localhost:8790/v1", message: "outside the local address allowlist" },
+      ];
+      for (const { host, baseUrl, message } of cases) {
+        const sent: Sent[] = [];
+        const error = await call(local({ baseUrl, noProxy: host }), {
+          resolveAddresses: dns(host, "104.18.1.1"), ...transport(sent, { request_id: "r", status: "done" }),
+        }).then(() => undefined, (caught: unknown) => caught);
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).message).toContain(message);
+        expect(sent).toEqual([]);
+      }
+      expect(rawFetches).toEqual([]);
+    });
+
+    test(phase + ": an http local address literal with allowPrivateNetwork still reaches the pinned address", async () => {
+      trapRawFetch();
+      const sent: Sent[] = [];
+      await call(local(), { resolveAddresses: dns("127.0.0.1", "127.0.0.1"), ...transport(sent, { request_id: "r", status: "processing" }) });
+      expect(sent).toEqual([{ url: "http://127.0.0.1:8790" + path, address: "127.0.0.1", authorization: "Bearer " + KEY }]);
+      expect(rawFetches).toEqual([]);
+    });
+
+    test(phase + ": an http request is refused while a proxy applies, even when local DNS cannot answer", async () => {
+      trapRawFetch();
+      const sent: Sent[] = [];
+      const error = await call(local({ baseUrl: "http://localhost:8790/v1", proxy: "http://provider-egress.example:8080", noProxy: undefined }), {
+        resolveAddresses: async () => { throw new DestinationDnsResolutionError("localhost did not resolve"); },
+        ...transport(sent, { request_id: "r", status: "done" }),
+      }).then(() => undefined, (caught: unknown) => caught);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain("cannot use an outbound proxy");
+      expect(sent).toEqual([]);
+      expect(rawFetches).toEqual([]);
+    });
+  }
 });

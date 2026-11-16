@@ -52,7 +52,8 @@ hosts). That plan-time check sees only address literals, so it is repeated at co
 the opt-in to every answer and pins the connection to a validated address, so a hostname that
 resolves to loopback or private space never receives the key without the opt-in and a later DNS
 answer cannot move it. Cleartext `http` is admitted only for `localhost` or a local address literal
-on a row that sets `allowPrivateNetwork` itself. The pinned xAI destination is sent as `xai` with no
+on a row that sets `allowPrivateNetwork` itself; the poll GET passes `cleartextPolicy: "credentialed"`
+so it obeys exactly the submit POST's cleartext rules. The pinned xAI destination is sent as `xai` with no
 private-network opt-in, whatever the row carries, and only its registry `/videos/` URLs qualify for the
 fake-IP TUN exception. The base URL may not carry userinfo, a query or a fragment, because the client appends
 endpoint paths as strings, and a paused active key fails closed through `isProviderApiKeyPaused`.
