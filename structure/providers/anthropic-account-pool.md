@@ -120,6 +120,9 @@ generation; native also checks its UUID. The header writer's numeric config
 generation is separate from the credential-generation string and preserves the
 existing live-roster exception. Explicit combos retain their declared targets;
 direct Pool 2 account recovery never selects the primary pool.
+Translated Responses [spend targets](../transports/responses-spend.md#prepaid-initial-sends) use the
+admitted credential snapshot's provider and account ID, independently of display tags and the
+ambient active account; equal account IDs in different instances retain separate spend identities.
 
 `src/oauth/anthropic-send-ownership.ts` captures the account incarnation and
 login identity before the physical fetch. Header publication and refusal binding

@@ -7,7 +7,7 @@ import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import { clearResponseStateForTests, flushResponseState } from "../../src/responses/state";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { resetProviderRequestPacingForTest } from "../../src/providers/request-pacing";
-import { createPhysicalSendReporter, createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
+import { createPhysicalSendReporter, createRequestExecutionBudget, deriveRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { createSpendReservationLedger, DEFAULT_SPEND_RESERVATION_POLICY, type SpendJournal, type SpendReservationPolicy } from "../../src/lib/spend-reservation-ledger";
 import { SendBudgetExhaustedError, providerErrorDestinationLabel, fetchWithTransientRetry } from "../../src/lib/upstream-retry";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
@@ -84,6 +84,40 @@ for (const enforced of [false, true]) test(`receipt-versus-reporter choice is fi
     expect(f.budget.spendEnforced).toBe(enforced);
     booking.permit.release();
   } finally { translatorBudget.dispose(); }
+});
+
+for (const limited of [false, true]) test(`optional-tool ceiling query retains captured identity policy without changing accounting (limited=${limited})`, () => {
+  const identityPolicy = (enabled: boolean): SpendReservationPolicy => ({
+    ...DEFAULT_SPEND_RESERVATION_POLICY, identity: enabled ? { maxTokens: 1_000_000 } : {},
+  });
+  const ledger = createSpendReservationLedger({ journal: memoryJournal(), salt: "first-send-identity-policy", policy: identityPolicy(limited) });
+  const log: RequestLogContext = { model: "m", provider: "a", spendPoolId: "a", spendOutputCeilingTokens: 64 };
+  const tracker = createRequestSpendTracker(log, undefined, ledger);
+  const parent = createRequestExecutionBudget(undefined, undefined, tracker);
+  const booking = parent.reserveDispatch({ sendClass: "initial", targetKey: "a/m", countedExternally: true });
+  if (!booking.allowed) throw new Error("fixture reservation refused");
+  const translatorBudget = createTranslatorBudget();
+  try {
+    const child = deriveRequestExecutionBudget(parent, parent.policy);
+    const owner = createResponsesSendBudget({ req: new Request("http://localhost/v1/responses"), logCtx: log,
+      options: { translatorBudget, sendBudget: child, comboInitialSend: { permit: booking.permit } } });
+    if (owner instanceof Response) throw new Error("unexpected workflow refusal");
+    const frozenAccountingPolicy = parent.spendAdmissionPolicy;
+    expect(frozenAccountingPolicy).toEqual({ root: {}, identity: {}, pool: {} });
+    expect(parent.spendEnforced).toBe(false); // The parent did not yet have an account.
+    ledger.reconfigure(identityPolicy(!limited));
+    const target = { poolId: "a", identityId: "selected-fixture-key" };
+    for (const budget of [parent, child, owner.adapterDispatchBudget!]) {
+      expect(budget.hasCapturedSpendCeiling?.(target)).toBe(limited);
+      expect(budget.hasCapturedSpendCeiling?.({ poolId: "a" })).toBe(false);
+      budget.startRequest?.(target);
+      expect(budget.spendAdmissionPolicy).toBe(frozenAccountingPolicy);
+      expect(budget.spendEnforced).toBe(false);
+      expect(budget.physicalLimit).toBeUndefined();
+      expect(budget.used).toBe(1);
+    }
+  } finally { booking.permit.release(); translatorBudget.dispose(); }
+  expect(parent.used).toBe(0);
 });
 
 /** Combo -> Responses passthrough upstream, observing whether the policy had started at the wire. */

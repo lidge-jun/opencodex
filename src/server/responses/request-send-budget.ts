@@ -474,6 +474,7 @@ function adapterDispatchBudgetView(
     get spendEnforced() { return budget.spendEnforced; },
     get spendPolicyStarted() { return budget.spendPolicyStarted; },
     get spendAdmissionPolicy() { return budget.spendAdmissionPolicy; },
+    hasCapturedSpendCeiling: target => budget.hasCapturedSpendCeiling?.(target) ?? budget.spendEnforced === true,
     startRequest: target => budget.startRequest?.(target),
     claimPhysicalSend: auxiliary => auxiliary ? budget.claimPhysicalSend?.(true) : budget.claimPhysicalSend?.(),
     claimContinuationPhysicalSend: () => budget.claimContinuationPhysicalSend?.(),

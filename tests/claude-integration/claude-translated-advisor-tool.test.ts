@@ -1,19 +1,21 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { declaredAnthropicServerTools, hasAnthropicOnlyServerTool, hasNativeOnlyTool, replayedAnthropicServerBlocks } from "../../src/claude/inbound-content-options";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { markProtocolEntry, protocolTraceForRequest } from "../../src/protocols/trace";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { getRequestLogEntries } from "../../src/server/request-log";
+import type { RequestLogContext } from "../../src/server/request-log";
+import { configureSharedSpendLedger, sharedSpendLedger, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
 import { setAdvisorPlanFactory } from "../../src/server/responses/advisor-plan-slot";
 import { clearComboRecallForTests } from "../../src/server/responses/combo-session-recall";
 import { handleResponses } from "../../src/server/responses/core";
+import { responsesSpendTarget } from "../../src/server/responses/request-spend-target";
+import type { AnthropicInstanceId } from "../../src/providers/anthropic-instance-id";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { createTempHome } from "../helpers/temp-home";
+import { createAnthropicInstanceFixture, type AnthropicInstanceFixture } from "../helpers/anthropic-instance-fixture";
 import { planAnthropicServerTools, withholdAdvisorServerTools } from "../../src/adapters/anthropic/advisor-tool";
 import { webSearchPairFromItem } from "../../src/claude/outbound";
 
@@ -32,20 +34,15 @@ const PLAIN = { type: "advisor_result", text: "Close the input channel first.", 
 const REDACTED = { type: "advisor_redacted_result", encrypted_content: CIPHERTEXT };
 const ERRORED = { type: "advisor_tool_result_error", error_code: "overloaded" };
 
-let previousHome: string | undefined;
-let home = "";
+let home: ReturnType<typeof createTempHome>;
 let releaseSpend: (() => void) | undefined;
 beforeAll(() => {
-  previousHome = process.env.OPENCODEX_HOME;
-  home = mkdtempSync(join(tmpdir(), "ocx-advisor-server-tool-"));
-  process.env.OPENCODEX_HOME = home;
+  home = createTempHome("ocx-advisor-server-tool-");
   releaseSpend = acquireOwnedSpendHome();
 });
 afterAll(() => {
   releaseSpend?.();
-  if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
-  else process.env.OPENCODEX_HOME = previousHome;
-  removeTreeWithRetry(home);
+  home.remove();
 });
 // A refused child cools its combo target down; every case starts from a fresh waterfall.
 beforeEach(() => {
@@ -82,9 +79,10 @@ interface Wire { body: Rec; headers: Headers }
 interface TurnOptions {
   baseUrl?: string; provider?: Rec; model?: string; stream?: boolean; direct?: boolean;
   messages?: unknown[]; tools?: unknown[]; frames?: Rec[]; gptFirst?: boolean; gptOnly?: boolean; nativeRollout?: boolean; requestId?: string;
+  spend?: OcxConfig["spend"]; rootId?: string; policyDuringPlan?: OcxConfig["spend"]; proxyAdvisor?: boolean;
 }
 
-async function claudeTurn(options: TurnOptions = {}): Promise<{ wires: Wire[]; status: number; body: string }> {
+async function claudeTurn(options: TurnOptions = {}): Promise<{ wires: Wire[]; status: number; body: string; logCtx: RequestLogContext }> {
   const wires: Wire[] = [];
   const capture = (target: "anth" | "gpt") => (async (_input: unknown, init?: RequestInit) => {
     wires.push({ body: JSON.parse(String(init?.body)) as Rec, headers: new Headers(init?.headers) });
@@ -98,6 +96,7 @@ async function claudeTurn(options: TurnOptions = {}): Promise<{ wires: Wire[]; s
   const gpt = { provider: "gpt", model: "g" };
   const config = {
     port: 0, defaultProvider: "anth",
+    spend: options.spend,
     claudeCode: { nativePassthrough: false },
     webSearchSidecar: { enabled: false },
     ...(options.direct || options.nativeRollout
@@ -108,16 +107,31 @@ async function claudeTurn(options: TurnOptions = {}): Promise<{ wires: Wire[]; s
     },
     combos: { waterfall: { strategy: "failover", targets: options.gptOnly ? [gpt] : options.gptFirst ? [gpt, anth] : [anth, gpt] } },
   } as unknown as OcxConfig;
-  const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
-    method: "POST",
-    headers: { "content-type": "application/json", "anthropic-beta": BETA },
-    body: JSON.stringify({
-      model: options.model ?? (options.direct ? `anth/${MODEL}` : "combo/waterfall"), max_tokens: 64, stream: options.stream ?? true,
-      tools: options.tools ?? [READ, ADVISOR],
-      messages: options.messages ?? [{ role: "user", content: "Plan the shutdown." }],
-    }),
-  }), config, { model: "", provider: "" }, options.requestId ? { requestId: options.requestId, start: Date.now() } : undefined);
-  return { wires, status: response.status, body: await response.text() };
+  configureSharedSpendLedger(spendPolicyFromConfig(config.spend));
+  if (options.proxyAdvisor || options.policyDuringPlan !== undefined) setAdvisorPlanFactory(config, async () => {
+    if (options.policyDuringPlan !== undefined) {
+      config.spend = options.policyDuringPlan;
+      configureSharedSpendLedger(spendPolicyFromConfig(config.spend));
+    }
+    return options.proxyAdvisor ? {
+      tool: { name: "advisor", description: "proxy advisor", parameters: { type: "object", properties: {} }, advisor: true },
+      preflightInject: async () => false, attachGuard: () => {},
+    } : null;
+  });
+  const logCtx: RequestLogContext = { model: "", provider: "" };
+  try {
+    const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
+      method: "POST",
+      headers: { "content-type": "application/json", "anthropic-beta": BETA,
+        ...(options.rootId ? { "x-codex-parent-thread-id": options.rootId } : {}) },
+      body: JSON.stringify({
+        model: options.model ?? (options.direct ? `anth/${MODEL}` : "combo/waterfall"), max_tokens: 64, stream: options.stream ?? true,
+        tools: options.tools ?? [READ, ADVISOR],
+        messages: options.messages ?? [{ role: "user", content: "Plan the shutdown." }],
+      }),
+    }), config, logCtx, { requestId: options.requestId ?? `advisor-turn-${crypto.randomUUID()}`, start: Date.now() });
+    return { wires, status: response.status, body: await response.text(), logCtx };
+  } finally { setAdvisorPlanFactory(config, null); }
 }
 
 const toolTypes = (wire: Wire) => ((wire.body.tools ?? []) as Rec[]).map(tool => String(tool.type ?? "function"));
@@ -142,6 +156,104 @@ function clientContent(body: string, stream: boolean): Rec[] {
 const followUp = (assistant: unknown[]) => [
   { role: "user", content: "Plan the shutdown." }, { role: "assistant", content: assistant }, { role: "user", content: "Go on." },
 ];
+
+describe("hosted Advisor under the request's token spend policy", () => {
+  const limit = { maxTokens: 100_000 };
+  const replay = followUp([
+    { type: "server_tool_use", id: "srvtoolu_adv1", name: "advisor", input: {} },
+    { type: "advisor_tool_result", tool_use_id: "srvtoolu_adv1", content: REDACTED },
+    { type: "text", text: "Earlier answer." },
+  ]);
+  for (const scope of ["root", "identity", "pool"] as const) for (const stream of [false, true]) {
+    test(`${scope} ceiling withholds the optional declaration, replay and beta (stream=${stream})`, async () => {
+      const rootId = `advisor-spend-${scope}-${stream}`;
+      const beforePool = sharedSpendLedger().snapshot("pool", "anth")?.settled ?? 0;
+      const result = await claudeTurn({ model: `anth/${MODEL}`, spend: { [scope]: limit }, rootId, stream,
+        provider: { apiKey: `sk-ant-fixture-spend-${scope}-${stream}` }, messages: replay,
+        tools: [READ, ADVISOR, { type: "web_search_20250305", name: "web_search" }] });
+      expect(result.status, result.body).toBe(200);
+      expect(result.body).toContain("ok");
+      expect(result.wires).toHaveLength(1);
+      const wire = result.wires[0]!;
+      expect(toolTypes(wire)).toEqual(["function", "web_search_20250305"]);
+      expect(betas(wire)).not.toContain(BETA);
+      expect(JSON.stringify(wire.body)).not.toContain("srvtoolu_adv1");
+      expect(JSON.stringify(wire.body)).not.toContain(CIPHERTEXT);
+      expect(JSON.stringify(wire.body)).toContain("Earlier answer.");
+      expect(protocolTraceForRequest(result.logCtx, result.logCtx.attempts)?.reasonCodes)
+        .toContain("advisor-tool-withheld-by-spend-policy");
+      // Read the actual provider credential identity assigned by auth; never invent a main label.
+      expect(result.logCtx.accountLogLabel).toBeString();
+      expect(result.logCtx.accountLogLabel).not.toBe("main");
+      const id = scope === "root" ? rootId : scope === "identity" ? result.logCtx.accountLogLabel! : "anth";
+      const settled = sharedSpendLedger().snapshot(scope, id);
+      expect(settled).toBeDefined();
+      expect(settled!.reserved).toBe(0);
+      expect(settled!.unresolved).toBe(0);
+      expect(settled!.settled - (scope === "pool" ? beforePool : 0)).toBe(6);
+    });
+  }
+
+  for (const stream of [false, true]) test(`an identity ceiling captured before Combo account selection withholds Advisor (stream=${stream})`, async () => {
+    const before = sharedSpendLedger().snapshot("pool", "anth")?.settled ?? 0;
+    const result = await claudeTurn({ model: "combo/waterfall", spend: { identity: limit }, stream, messages: replay });
+    expect(result.status, result.body).toBe(200);
+    expect(result.body).toContain("ok");
+    expect(result.wires).toHaveLength(1);
+    expect(result.logCtx.accountLogLabel).toMatch(/^k[a-f0-9]{32}$/);
+    expect(toolTypes(result.wires[0]!)).toEqual(["function"]);
+    expect(betas(result.wires[0]!)).not.toContain(BETA);
+    expect(JSON.stringify(result.wires[0]!.body)).not.toContain("srvtoolu_adv1");
+    // Advisor withholding does not change the Combo's existing main-send accounting mode.
+    const settled = sharedSpendLedger().snapshot("pool", "anth")!;
+    expect([settled.settled - before, settled.reserved, settled.unresolved]).toEqual([6, 0, 0]);
+  });
+
+  test("an opted-in gateway's direct encoder withholds Advisor while keeping the main turn", async () => {
+    const result = await claudeTurn({ baseUrl: GATEWAY, provider: { forwardAdvisorTool: true }, direct: true,
+      spend: { pool: limit }, messages: replay });
+    expect(result.status, result.body).toBe(200);
+    expect(toolTypes(result.wires[0]!)).toEqual(["function"]);
+    expect(betas(result.wires[0]!)).not.toContain(BETA);
+    expect(JSON.stringify(result.wires[0]!.body)).not.toContain(CIPHERTEXT);
+  });
+
+  test("history alone cannot restore the Advisor beta under an enforced ceiling", async () => {
+    const result = await claudeTurn({ model: `anth/${MODEL}`, spend: { pool: limit }, messages: replay, tools: [READ] });
+    expect(result.status, result.body).toBe(200);
+    expect(betas(result.wires[0]!)).not.toContain(BETA);
+    expect(JSON.stringify(result.wires[0]!.body)).not.toContain("srvtoolu_adv1");
+    expect(protocolTraceForRequest(result.logCtx, result.logCtx.attempts)?.reasonCodes)
+      .toContain("advisor-tool-withheld-by-spend-policy");
+  });
+
+  test("a configured root ceiling without a root is not applicable", async () => {
+    const result = await claudeTurn({ model: `anth/${MODEL}`, spend: { root: limit } });
+    expect(result.status, result.body).toBe(200);
+    expect(toolTypes(result.wires[0]!)).toContain("advisor_20260301");
+    expect(betas(result.wires[0]!)).toContain(BETA);
+  });
+
+  for (const scope of ["identity", "pool"] as const) for (const initialLimited of [false, true]) for (const combo of [false, true]) {
+    test(`captured ${scope} ceiling survives a live change (limited=${initialLimited}, combo=${combo})`, async () => {
+      const result = await claudeTurn({ model: combo ? "combo/waterfall" : `anth/${MODEL}`,
+        spend: initialLimited ? { [scope]: limit } : {}, policyDuringPlan: initialLimited ? {} : { [scope]: limit } });
+      expect(result.status, result.body).toBe(200);
+      expect(toolTypes(result.wires[0]!).includes("advisor_20260301")).toBe(!initialLimited);
+      expect(betas(result.wires[0]!).includes(BETA)).toBe(!initialLimited);
+    });
+  }
+
+  test("the independently budgeted proxy Advisor keeps its synthetic tool", async () => {
+    const result = await claudeTurn({ model: `anth/${MODEL}`, spend: { pool: limit }, proxyAdvisor: true });
+    expect(result.status, result.body).toBe(200);
+    const advisors = (result.wires[0]!.body.tools as Rec[]).filter(tool => tool.name === "advisor");
+    expect(advisors).toHaveLength(1);
+    expect(advisors[0]).toHaveProperty("input_schema");
+    expect(toolTypes(result.wires[0]!)).not.toContain("advisor_20260301");
+    expect(betas(result.wires[0]!)).not.toContain(BETA);
+  });
+});
 
 describe("advisor declarations on the translated Messages lane", () => {
   test("module: advisor is carried out of body and is not a native-only or Anthropic-only tool", () => {
@@ -446,5 +558,104 @@ describe("advisor exchanges only come from, and replay with, checked fields", ()
       { type: "server_tool_use", id: "srvtoolu_adv1", name: "advisor", input: {} },
       { type: "advisor_tool_result", tool_use_id: "srvtoolu_adv1", content: PLAIN },
     ]]);
+  });
+});
+
+async function withAdvisorOAuthFixture(poolEnabled: boolean, run: (f: AnthropicInstanceFixture) => Promise<void>): Promise<void> {
+  // The process can own only one spend home. Release the ordinary fixture before the isolated
+  // OAuth fixture takes its real lease, and reacquire only after its environment is restored.
+  releaseSpend?.(); releaseSpend = undefined;
+  let f: AnthropicInstanceFixture | undefined, release: (() => void) | undefined;
+  try {
+    f = await createAnthropicInstanceFixture({ anthropic: { enabled: poolEnabled }, anthropic2: { enabled: poolEnabled } });
+    await f.seed();
+    release = acquireOwnedSpendHome();
+    f.config.claudeCode = { nativePassthrough: false };
+    f.config.webSearchSidecar = { enabled: false };
+    f.config.protocols = { rollout: { managedMessagesNative: false, managedMessagesNativeOAuth: false } };
+    await run(f);
+  } finally {
+    release?.();
+    try { await f?.dispose(); }
+    finally { releaseSpend = acquireOwnedSpendHome(); }
+  }
+}
+
+async function oauthAdvisorTurn(f: AnthropicInstanceFixture, instance: AnthropicInstanceId, combo = false,
+  expectedSlot = 1, duringPlan?: (log: RequestLogContext) => Promise<void>) {
+  const wires: Wire[] = [];
+  const logCtx: RequestLogContext = { provider: "", model: "" };
+  Object.assign(f.config.providers[instance]!, { models: [f.model], fetch: (async (_input: unknown, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    f.ledger.record({ instance, accountId: f.ids[expectedSlot - 1]!, token: headers.get("authorization")?.replace(/^Bearer /, "") ?? "" });
+    wires.push({ body: JSON.parse(String(init?.body)) as Rec, headers });
+    return sse([{ ...START, message: { ...START.message, model: f.model } }, ...text(0, "ok"), ...end()]);
+  }) as typeof fetch });
+  f.config.combos = { waterfall: { strategy: "failover", targets: [{ provider: instance, model: f.model }] } };
+  configureSharedSpendLedger(spendPolicyFromConfig(f.config.spend));
+  if (duringPlan) setAdvisorPlanFactory(f.config, async () => { await duringPlan(logCtx); return null; });
+  try {
+    const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
+      method: "POST", headers: { "content-type": "application/json", "anthropic-beta": BETA },
+      body: JSON.stringify({ model: combo ? "combo/waterfall" : `${instance}/${f.model}`, max_tokens: 64, stream: false,
+        tools: [READ, ADVISOR], messages: followUp([
+          { type: "server_tool_use", id: "srvtoolu_adv1", name: "advisor", input: {} },
+          { type: "advisor_tool_result", tool_use_id: "srvtoolu_adv1", content: REDACTED },
+          { type: "text", text: "Earlier answer." },
+        ]) }),
+    }), f.config, logCtx, { requestId: `oauth-advisor-${crypto.randomUUID()}`, start: Date.now() });
+    return { status: response.status, body: await response.text(), wires, logCtx };
+  } finally { setAdvisorPlanFactory(f.config, null); }
+}
+
+describe("hosted Advisor with admitted Anthropic OAuth identities", () => {
+  for (const instance of ["anthropic", "anthropic2"] as const) for (const poolEnabled of [false, true])
+    for (const combo of [false, true]) for (const limited of [false, true]) {
+      test(`${instance}, pool=${poolEnabled}, combo=${combo}, identity ceiling=${limited}`, async () => {
+        await withAdvisorOAuthFixture(poolEnabled, async f => {
+          f.config.spend = limited ? { identity: { maxTokens: 100_000 } } : {};
+          const result = await oauthAdvisorTurn(f, instance, combo);
+          expect(result.status, result.body).toBe(200);
+          expect(result.body).toContain("ok");
+          expect(result.wires).toHaveLength(1);
+          expect(toolTypes(result.wires[0]!).includes("advisor_20260301")).toBe(!limited);
+          expect(betas(result.wires[0]!).includes(BETA)).toBe(!limited);
+          expect(JSON.stringify(result.wires[0]!.body).includes("srvtoolu_adv1")).toBe(!limited);
+          expect(JSON.stringify(result.wires[0]!.body)).toContain("Earlier answer.");
+          expect(result.logCtx.accountLogLabel).toBeUndefined(); // Keep existing OAuth log attribution.
+          f.ledger.assertNoCrossSend();
+          if (limited && !combo) {
+            const identity = responsesSpendTarget(result.logCtx, instance).identityId;
+            expect(identity).toMatch(/^o[a-f0-9]{6}$/);
+            const spent = sharedSpendLedger().snapshot("identity", identity!)!;
+            expect([spent.settled, spent.reserved, spent.unresolved]).toEqual([6, 0, 0]);
+          }
+        });
+      });
+    }
+
+  test("target identity belongs to the admitted snapshot and keeps same-ID instances separate", async () => {
+    await withAdvisorOAuthFixture(false, async f => {
+      f.config.spend = { identity: { maxTokens: 100_000 } };
+      const first = await oauthAdvisorTurn(f, "anthropic");
+      expect(first.status, first.body).toBe(200);
+      const firstIdentity = responsesSpendTarget(first.logCtx, "anthropic").identityId;
+      let selectedIdentity: string | undefined;
+      const second = await oauthAdvisorTurn(f, "anthropic2", false, 2, async log => {
+        selectedIdentity = responsesSpendTarget(log, "anthropic2").identityId;
+        expect(selectedIdentity).toMatch(/^o[a-f0-9]{6}$/);
+        expect(selectedIdentity).not.toBe(firstIdentity);
+        await f.store.setActiveAccount("anthropic2", f.ids[1]);
+        // A new ambient active account cannot impersonate this request's admitted credential.
+        expect(responsesSpendTarget(log, "anthropic2").identityId).toBe(selectedIdentity);
+        expect(log.accountLogLabel).toBeUndefined();
+      });
+      expect(second.status, second.body).toBe(200);
+      expect(second.wires).toHaveLength(1);
+      expect(responsesSpendTarget(second.logCtx, "anthropic2").identityId).not.toBe(selectedIdentity);
+      expect(toolTypes(second.wires[0]!)).toEqual(["function"]);
+      expect(f.ledger.sends.map(send => [send.instance, send.accountId]))
+        .toEqual([["anthropic", f.ids[0]], ["anthropic2", f.ids[1]]]);
+    });
   });
 });

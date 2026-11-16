@@ -110,6 +110,29 @@ cleanup releases an unsent hop once, except while an asynchronous runTurn produc
 Producer settlement performs that release instead, clearing only the matching pending-hop reference.
 Direct callers retain their prior hop reporting contract.
 
+The optional Anthropic-hosted Advisor on translated Messages turns is withheld whenever this
+request's captured policy has an applicable root, identity or pool token ceiling. Its secondary model usage
+has no independent reservation and settlement contract. Before optional planning,
+`src/server/responses/sidecar-execution.ts` captures the policy with the actual authenticated spend
+target if a destination-eligible Advisor declaration or replay is present; an already started budget
+keeps its policy. `request-spend.ts` retains the original frozen ceilings even when Combo prepayment
+selected observe-only accounting before its child had an identity. `hasCapturedSpendCeiling` on
+`src/lib/request-execution-budget.ts` and its derived/adapter views checks that snapshot against the
+actual target without changing enforcement mode, effective admission policy, physical limits or
+reservations. `tests/responses/responses-first-send-spend-policy.test.ts` covers that separation and
+live policy changes in both directions. The request-local target binding in `src/server/responses/request-transport.ts`
+resolves a selected API key's existing account label before physical log attribution, so policy
+capture and send admission use the same identity without recording an unsent attempt as served.
+For Anthropic OAuth it hashes the admitted serving snapshot's provider and account ID with the
+existing OAuth label function. Same-ID accounts in the two instances stay separate; an ambient
+selection change cannot replace the request's identity until the normal credential admission
+accepts a new snapshot. Provider display tags and generic account log fields remain unchanged.
+Both declaration and Advisor replay are removed, so neither can restore the beta.
+The main turn proceeds, other tools keep their contracts, and requests without an applicable ceiling
+keep destination-based forwarding. `tests/claude-integration/claude-translated-advisor-tool.test.ts`
+checks the wire, actual scope accounting, and captured-policy changes. The separately budgeted
+[proxy Advisor](../advisor.md#claude-codes-typed-advisor-server-tool) remains available.
+
 ## Auxiliary search inference
 
 Anthropic web-search helpers in Responses, RunTurn and the passthrough bridge reserve an `auxiliary`

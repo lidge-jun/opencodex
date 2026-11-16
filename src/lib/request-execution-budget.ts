@@ -168,6 +168,8 @@ export interface RequestSendObserver {
   readonly enforced?: boolean;
   readonly policyStarted?: boolean;
   readonly spendAdmissionPolicy?: SpendAdmissionPolicy;
+  /** Read first-captured ceilings for a later selected target without changing accounting mode. */
+  hasCapturedSpendCeiling?(target?: SpendScopes): boolean;
   /** Capture request policy at its first admission or actual physical start. */
   startRequest?(target?: SpendScopes & { targetKey?: string }): void;
   ensureSeed?(target: SpendScopes & { targetKey?: string; auxiliary?: boolean; estimate?: { inputTokens: number; outputCeilingTokens: number }; explicitEstimate?: boolean }, proof?: SpendReservationProof): SpendSeed | undefined;
@@ -192,6 +194,8 @@ export interface RequestExecutionBudget extends TransientSendBudget {
   readonly workflowCountObserved?: boolean;
   readonly spendPolicyStarted?: boolean;
   readonly spendAdmissionPolicy?: SpendAdmissionPolicy;
+  /** Optional hosted work checks the original ceilings even before an account was selected. */
+  hasCapturedSpendCeiling?(target?: SpendScopes): boolean;
   startRequest?(target?: SpendScopes & { targetKey?: string }): void;
   claimPhysicalSend?(auxiliary?: boolean): number | undefined;
   /** A validated explicit successor still pays root/spend admission, not the recovery allowance. */
@@ -491,6 +495,7 @@ function createRequestExecutionBudgetWithLedger(
     get workflowCountObserved(): boolean { return observer?.beforePhysicalSend !== undefined; },
     get spendPolicyStarted(): boolean { return observer?.policyStarted === true; },
     get spendAdmissionPolicy(): SpendAdmissionPolicy | undefined { return observer?.spendAdmissionPolicy; },
+    hasCapturedSpendCeiling(target) { return observer?.hasCapturedSpendCeiling?.(target) ?? observer?.enforced === true; },
     startRequest(target) {
       observer?.startRequest?.(target);
       if (observer?.enforced && counter.physicalLimit === undefined) {

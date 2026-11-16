@@ -11,8 +11,9 @@ import { formatErrorResponse } from "../../bridge";
 import { planWebSearch, buildWebSearchTool, runWithWebSearch } from "../../web-search";
 import { createRegisteredAdvisorPlan } from "./advisor-plan-slot";
 import { ADVISOR_TOOL_NAME, createAdvisorSidecarStep } from "./advisor-slot";
-import { advisorServerToolDestination, withholdAdvisorServerTools } from "../../adapters/anthropic/advisor-tool";
+import { advisorServerToolDestination, hasAdvisorServerTools, withholdAdvisorServerTools } from "../../adapters/anthropic/advisor-tool";
 import { addProtocolEntryReason } from "../../protocols/trace";
+import { responsesSpendTarget } from "./request-spend-target";
 import { buildToolBridgeMaps } from "./collaboration";
 import {
   planImageBridge,
@@ -109,7 +110,7 @@ export async function executeResponsesSidecars(
     | "notifyResponseComplete"
     | "cancelResponseCompletion"
   >,
-  sendBudgetState: Pick<ResponsesSendBudget, "sendBudgetExhausted" | "reserveCredentialHop" | "refundableAdapterDispatchBudget" | "adapterDispatchBudget" | "noteInitialDispatch" | "noteAdapterPhysicalSend" | "noteAdapterRecoveryWithheld" | "pendingHopPermit" | "dispatchSidecarSend">,
+  sendBudgetState: Pick<ResponsesSendBudget, "sendBudgetExhausted" | "reserveCredentialHop" | "refundableAdapterDispatchBudget" | "adapterDispatchBudget" | "adapterSendBudget" | "noteInitialDispatch" | "noteAdapterPhysicalSend" | "noteAdapterRecoveryWithheld" | "pendingHopPermit" | "dispatchSidecarSend">,
 ) {
   const { config, options, logCtx } = requestContext;
   const antigravityPoolActivated = requestState.route.providerName === "google-antigravity"
@@ -184,6 +185,19 @@ export async function executeResponsesSidecars(
         "invalid_request_error",
         "tool result requires a non-empty string call_id",
       );
+    }
+  }
+
+  // Hosted Advisor usage is not independently accounted by the main model's terminal usage.
+  // Freeze the actual authenticated target's spend policy before an optional plan can await;
+  // startRequest preserves a policy already captured by an enclosing Combo budget.
+  if (advisorServerToolDestination(route.provider) && hasAdvisorServerTools(parsed)) {
+    const budget = sendBudgetState.adapterSendBudget;
+    const target = responsesSpendTarget(logCtx, route.providerName);
+    budget?.startRequest?.(target);
+    if (budget?.hasCapturedSpendCeiling?.(target) ?? budget?.spendEnforced) {
+      withholdAdvisorServerTools(parsed);
+      addProtocolEntryReason(logCtx, "advisor-tool-withheld-by-spend-policy");
     }
   }
 

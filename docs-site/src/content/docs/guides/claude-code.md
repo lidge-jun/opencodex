@@ -1106,6 +1106,12 @@ request and returns a `server_tool_use` block named `advisor` followed by an
 - A declaration whose `model` the caller's API key scope does not admit is not forwarded, and the
   request log records `advisor-tool-outside-model-scope`. The managed native Messages lane
   refuses such a request instead.
+- If the request's captured policy has an applicable root, identity or provider-pool token spend
+  ceiling, the hosted Advisor declaration, completed history and beta are withheld. The main turn
+  continues. On directly routed requests the log records `advisor-tool-withheld-by-spend-policy`.
+  This uses the policy captured for that request, including
+  its selected account and pool; later configuration changes do not alter the decision. Requests
+  without an applicable ceiling keep the forwarding rules above.
 - The `server_tool_use` and `advisor_tool_result` blocks reach Claude Code unchanged, with their
   `srvtoolu_` ids, for streaming and non-streaming requests. That covers the plaintext
   `advisor_result`, the encrypted `advisor_redacted_result` and `advisor_tool_result_error`.
@@ -1119,9 +1125,9 @@ request and returns a `server_tool_use` block named `advisor` followed by an
   declaration and the beta, so the model can consult again.
 - When the OpenCodex Advisor owns the name for a turn, Claude Code's earlier Advisor exchanges are
   also withheld for every request of that turn, so the prompt does not change partway through it.
-- Anthropic reports the advisor model's tokens separately from the main model's usage, and
-  OpenCodex does not add them to its usage log, key spend or the usage Claude Code receives.
-  Check Anthropic's console for the advisor cost.
+- OpenCodex does not independently account for the hosted advisor model's tokens in its usage log,
+  key spend or the usage Claude Code receives. This is why token ceilings withhold that optional
+  tool. When it is forwarded without a ceiling, check Anthropic's console for the advisor cost.
 
 ### Unicode-property patterns in tool schemas
 

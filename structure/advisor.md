@@ -96,11 +96,23 @@ reason `advisor-tool-shadowed-by-proxy-advisor` for a destination that would oth
 `planAnthropicServerTools` (`src/adapters/anthropic/advisor-tool.ts`) also withholds the completed
 Advisor history and the beta while a function tool named `advisor` owns the name, the same rule that
 keeps the web-search sidecar's `web_search` ahead of a typed search. With
-this sidecar off, the declaration reaches first-party Anthropic, or a gateway with
-`forwardAdvisorTool: true`, and its blocks round-trip to the client. Destination, replay and scope
+this sidecar off and no applicable token spend ceiling, the declaration reaches first-party
+Anthropic, or a gateway with `forwardAdvisorTool: true`, and its blocks round-trip to the client. Destination, replay and scope
 rules are in [providers and adapters](providers-and-adapters.md);
 `tests/claude-integration/claude-translated-advisor-tool.test.ts` covers both sides of the precedence
 through the Responses core.
+
+Translated turns with an applicable root, identity or pool token ceiling withhold the hosted
+declaration, completed Advisor history and beta, while the main model and other tools continue.
+`sidecar-execution.ts` starts the actual authenticated target's request spend policy before optional
+planning; an already captured Combo policy stays fixed. The budget's read-only
+`hasCapturedSpendCeiling` checks the original numeric ceilings against that target, including an
+identity selected after Combo prepayment. It does not change the initial accounting mode or reread
+live config. An existing entry trace receives `advisor-tool-withheld-by-spend-policy`; unmarked
+Combo children retain the existing trace behavior. Main-model terminal usage does not independently account for
+the hosted Advisor. The proxy Advisor retains its separately budgeted consultations; see
+[Responses spend](transports/responses-spend.md). The same integration test covers all three scopes,
+streaming and buffered responses, replay, opted-in gateways, and policy changes after capture.
 
 ## Recursion fence (server-owned authority)
 

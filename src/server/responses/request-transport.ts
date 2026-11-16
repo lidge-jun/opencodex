@@ -69,6 +69,7 @@ import { tryKiroAlternateAfterTerminalRefresh } from "../../oauth/kiro-terminal-
 import { classifyModelFamilyForQuota } from "../../oauth/account-quota-rank";
 import { expandInferenceOAuthSendBudget } from "../inference/context";
 import { stampOAuthAccountLabel, stampApiKeyAccountLabel, usesApiKeyAccount } from "../../providers/label";
+import { apiKeyAccountLogLabel, oauthAccountLogLabel } from "../../codex/account-label";
 import { bindResponsesSpendTarget, responsesSpendTarget } from "./request-spend-target";
 import { isXaiResponsesDestination, resolveProviderTransport } from "../../providers/xai-transport";
 import { captureRouteStaticPolicy } from "../../router";
@@ -151,10 +152,6 @@ export async function prepareResponsesTransport(
   const deferPhysicalAttribution = route.providerName === "github-copilot" && route.provider.authMode !== "forward";
   let copilotCandidate: { model: string; adapter: string; accountLogLabel?: string } | undefined;
   bindResponsesSpendTarget(logCtx);
-  if (deferPhysicalAttribution) bindResponsesSpendTarget(logCtx, () => ({
-    poolId: logCtx.spendPoolId ?? route.providerName,
-    identityId: copilotCandidate ? copilotCandidate.accountLogLabel : logCtx.accountLogLabel,
-  }));
   const genericAffinityMode = genericSessionAffinityEnabled(config, route.providerName);
   const anthropicInstance = route.provider.authMode === "oauth"
     ? configuredAnthropicInstance(config, route.providerName) : undefined;
@@ -231,6 +228,15 @@ export async function prepareResponsesTransport(
     ? captureOAuthAccountSelection(route.providerName) : null;
   const anthropicManualSelectionGeneration = anthropicRouting?.captureAnthropicManualSelectionGeneration();
   let servingOAuthSnapshot: OAuthAccessSnapshot | undefined;
+  // Spend identity follows admitted credentials without changing physical log attribution.
+  // Anthropic's log uses a provider tag; its snapshot keeps same-ID instances distinct here.
+  if (deferPhysicalAttribution || usesApiKeyAccount(route.provider) || anthropicInstance) bindResponsesSpendTarget(logCtx, () => ({
+    poolId: logCtx.spendPoolId ?? route.providerName,
+    identityId: copilotCandidate ? copilotCandidate.accountLogLabel
+      : usesApiKeyAccount(route.provider) ? apiKeyAccountLogLabel(route.providerName, route.provider._apiKeyAttempt)
+      : anthropicInstance && servingOAuthSnapshot ? oauthAccountLogLabel(servingOAuthSnapshot.accountId, servingOAuthSnapshot.provider)
+      : logCtx.accountLogLabel,
+  }));
   // These owners also serve early passthrough and sidecar sends. A dispatch-time
   // rebuild must update every later builder, without entering a later block's TDZ.
   let adapter: ProviderAdapter;
