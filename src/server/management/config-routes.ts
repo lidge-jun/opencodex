@@ -11,7 +11,8 @@ import { mainAccountHardLockFallbackSchema } from "../../config/schema/main-acco
 import { anthropicSidecarPatchError } from "../../config/schema/anthropic-account-pool";
 import { isAnthropicInstanceId } from "../../providers/anthropic-instance-id";
 import { captureConfigTopLevelRollback } from "../../config/rebase-provenance";
-import { isCodexReserveEnabled, migrateReserveCapability } from "../../config/reserve-capability";
+import { adoptReserveCapabilityMigration, isCodexReserveEnabled, migrateReserveCapability } from "../../config/reserve-capability";
+import { readConfigFileSnapshot } from "../../config/diagnostics";
 import type { IntegrationClientId } from "../../integrations/registry";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -870,9 +871,12 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
         if (previousSettings.hasCodexDesktopAuthless) {
           config.codexDesktopAuthless = previousSettings.codexDesktopAuthless;
         } else deleteConfigTopLevelKey(config, "codexDesktopAuthless");
-        // Once the file was published, it holds the new Reserve state; rolling only the live object
-        // back would leave the running proxy disagreeing with disk.
-        if (!(error instanceof ConfigWritePublishedError)) {
+        // Once the file was published it is the authority: adopt its Reserve fields, since the
+        // failure may have come before the writer adopted the projection it wrote.
+        if (error instanceof ConfigWritePublishedError) {
+          const published = readConfigFileSnapshot();
+          if (published.diagnostics.source === "file") adoptReserveCapabilityMigration(config, published.diagnostics.config);
+        } else {
           if (previousSettings.hasCodexReserveEnabled) config.codexReserveEnabled = previousSettings.codexReserveEnabled;
           else deleteConfigTopLevelKey(config, "codexReserveEnabled");
           if (previousSettings.hasCodexReserveMigration) config.codexReserveMigration = previousSettings.codexReserveMigration;

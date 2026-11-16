@@ -279,4 +279,22 @@ describe("/api/settings exposes codexReserveEnabled", () => {
     expect(outcome).not.toBe(200);
     expect(config.codexReserveEnabled).toBe(published);
   });
+
+  test("after a published save fails before adoption, live Reserve follows the published file", async () => {
+    // An unmarked live object still inherits authless; another process has migrated and disabled Reserve.
+    writeConfigFile(baseConfig({ codexDesktopAuthless: true, codexReserveEnabled: false, codexReserveMigration: MIGRATED }));
+    const config = baseConfig({ codexDesktopAuthless: true });
+    const outcome = await handleManagementAPI(request("PUT", { codexDesktopAuthless: false }), new URL("http://127.0.0.1:10100/api/settings"), config, {
+      getCachedStartupHealth: async () => startupHealthFixture(),
+      saveConfigPreservingClaudeCode: () => {
+        writeConfigFile(baseConfig({ codexReserveEnabled: false, codexReserveMigration: MIGRATED }));
+        throw new ConfigWritePublishedError(new Error("bookkeeping"));
+      },
+      createManagementConvergeCodex: catalogConvergenceFactory(() => {}),
+    }).then(response => response?.status ?? "no response", () => "threw");
+    expect(outcome).not.toBe(200);
+    expect(config.codexReserveEnabled).toBe(false);
+    expect(config.codexReserveMigration).toBe(MIGRATED);
+    expect(isCodexReserveEnabled(config)).toBe(false);
+  });
 });
