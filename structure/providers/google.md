@@ -85,6 +85,10 @@ row's own `modelReasoningEfforts` / `noReasoningModels` still win in the catalog
 `tests/adapters/google/vertex-model-discovery.test.ts` and
 `tests/adapters/google/vertex-catalog.test.ts` cover these boundaries.
 
+## Vertex ADC verification state
+
+`src/lib/gcp-adc.ts` records, per credential scope (host ADC or one `gcp-sa:` marker account), the source key and observed generation of the last token exchange that succeeded in this process. `vertexAdcCredentialVerified` returns true only while the source the next resolve would use still matches that record, so replacing the ADC file or switching `GOOGLE_APPLICATION_CREDENTIALS` lapses the proof without a network call; with no record it returns false before reading any credential source. A failed exchange clears only its own record, never a newer exchange's. `safeConfigDTO` in `src/server/auth-cors.ts` exposes this as the boolean `vertexCredentialVerified` on ambient and marker rows only; no credential material, source path or account reaches the DTO. The static-catalog branch of `POST /api/providers/test` calls `src/server/management/static-catalog-probe.ts`, which mints one Vertex ADC token through the existing discovery auth for keyless or marker Vertex rows and returns only ok/latency; every other static catalog, including Antigravity, answers `static_catalog` before any credential resolution, and so does an API-key Vertex row, whether the key is literal or a `keychain:`/`${ENV}` reference: `vertexConfiguredCredentialKind` (the rule behind the DTO's `vertexCredentialKind`) classifies the configured text before anything is resolved, so the probe never reads the credential store for a row it cannot test. A token response without a non-empty `access_token` fails the exchange and records no proof. A minted token proves the credential, not Vertex IAM permissions. `tests/adapters/google/vertex-adc-verified.test.ts` covers the lapse on source change, the exchange race, the probe branches and the dashboard labels.
+
 ## Vertex credential markers
 
 `src/lib/gcp-adc.ts` resolves an explicit `gcp-sa:<account>` through the OS credential store.

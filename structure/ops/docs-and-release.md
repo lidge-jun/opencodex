@@ -476,10 +476,9 @@ publication by hand.
 
 ### Release notes
 
-The release workflow invokes `scripts/build-release-changelog.ts`, which builds notes from
-the actual Git range and uses generated PR notes as enrichment. Its categorized summaries
-contain one bullet per PR or direct commit, followed by `## Changelog` entries retaining PR
-titles and authors or sanitized direct-commit text. A comparison baseline adds a compare link.
+The release workflow invokes `scripts/build-release-changelog.ts`, which builds notes from the actual Git range and uses generated PR notes as enrichment. Its categorized summaries
+contain one bullet per PR or direct commit, followed by `## Changelog` entries retaining PR titles and authors or sanitized direct-commit text. A comparison baseline adds a compare link.
+The closing code signing section states whether the release's Windows files were signed; [Windows code signing](windows-code-signing.md) owns that contract.
 Preview notes are incremental; stable notes cover the range since the previous stable tag.
 The standalone `scripts/release-notes.ts render` command retains its separate scope-grouped
 summary and carried-preview rendering behavior.

@@ -1296,7 +1296,8 @@
         "src/service/orchestration.ts",
         "src/service/repair.ts",
         "src/update/index.ts",
-        "src/update/restart-ownership.ts"
+        "src/update/restart-ownership.ts",
+        "src/desktop-update/"
       ]
     },
     {
@@ -1380,6 +1381,16 @@
         "src/codex/",
         "src/lib/",
         "src/service.ts"
+      ]
+    },
+    {
+      "path": "ops/windows-code-signing.md",
+      "tier": 6,
+      "title": "Windows Code Signing",
+      "scope": "SignPath Authenticode signing in the release legs and the per-release signing statement in the release body.",
+      "documents": [
+        ".github/",
+        "scripts/"
       ]
     },
     {

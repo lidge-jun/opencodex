@@ -26,7 +26,7 @@ passthrough, including native WebSocket output, retain their existing stop behav
 | `noProxy?` | `string \| string[]` | — | Hosts that bypass `proxy`, merged with inherited `NO_PROXY` and loopback entries. A string may use comma-separated `NO_PROXY` syntax or `${ENV_VAR}`. |
 | `emptyCompletionRetry?` | `boolean` | `false` | Opt in to one identical Responses retry when a turn has no text or tool call, including a stream that ends before a terminal event and a Vertex AI `MALFORMED_FUNCTION_CALL` failure that arrives before any output. The retry may be billable. `OCX_EMPTY_COMPLETION_RETRY=0` disables it without changing config; combo and routed-compaction turns remain excluded. |
 | `dropCodexSafetyBuffering?` | `boolean` | `false` | Remove optional client-facing hints from canonical Codex Responses passthrough: the two `x-codex-safety-buffering-enabled` / `x-codex-safety-buffering-faster-model` response headers, `response.metadata` events whose metadata type is `safety_buffering`, and top-level `safety_buffering` fields. Other headers, response data, policy refusals and failures are preserved. This does not disable provider safety enforcement or upstream buffering. Native `codex.response.metadata.headers` WebSocket metadata and `/responses/compact` are outside this filter. |
-| `stallTimeoutSec?` | `number` | `300` (public) / disabled (local) | Seconds without meaningful upstream progress (Responses and native Chat) before the stream is cut. Unset, a **local** upstream (loopback, private, or a `.local`/`.lan` name) defaults to disabled and a public upstream to 300 s; a positive value applies to both (minimum 1 s); `0` disables the silence watchdog everywhere. Disabled leaves a silent-but-healthy local model connected (keep-alives still flow). Canonical ChatGPT Responses folded from SSE into non-streaming JSON retain a separate 15-minute whole-turn ceiling even when the silence watchdog is disabled. Pending `/v1/responses/compact` body reads share this budget but default to 300 s even for a local upstream — the route buffers the complete body while holding an active-turn lease — and an explicit value, including `0`, still wins. |
+| `stallTimeoutSec?` | `number` | `300` (public) / disabled (local) | Seconds without meaningful upstream progress (Responses and native Chat) before the stream is cut. Unset, a **local** upstream (loopback, private, or a `.local`/`.lan` name) defaults to disabled and a public upstream to 300 s; a positive value applies to both (minimum 1 s); `0` disables the silence watchdog everywhere. Native Responses passthrough streams (an `openai-responses` provider, or the native ChatGPT route relayed to a streaming client) are cut only when you set a positive value explicitly; when the field is unset, they behave as they did before this budget covered them. On those streams the budget measures byte silence: any bytes from the provider, including SSE comments, count as activity, and web-search continuation legs are bounded the same way. Native steering and injection WebSocket chains are not, because between responses they wait for the client. A stall there ends the stream with `response.failed` and code `upstream_stall_timeout`. Disabled leaves a silent-but-healthy local model connected (keep-alives still flow). Canonical ChatGPT Responses folded from SSE into non-streaming JSON retain a separate 15-minute whole-turn ceiling even when the silence watchdog is disabled. Pending `/v1/responses/compact` body reads share this budget but default to 300 s even for a local upstream — the route buffers the complete body while holding an active-turn lease — and an explicit value, including `0`, still wins. |
 | `oauthOpenBrowser?` | `boolean` | `true` | Whether a login may open a browser on the machine running the proxy. Absent and `true` both open, so an existing install is unchanged; only an explicit `false` declines. Decline when you need the authorization link in a different browser profile, or when the dashboard is not on the proxy's machine — the login still starts and the URL is still returned and displayed. `POST /api/oauth/login` and `POST /api/codex-auth/login` accept a per-request `openBrowser` boolean that overrides this, and the dashboard exposes the same choice beside the login button. Both routes report the outcome as `browserLaunch`: `started`, `failed` (nothing could be opened; the dashboard says so), or `skipped`. Device-code flows never open a browser either way. |
 | `connectTimeoutMs?` | `number` | `200000` (public) / disabled (local) | Per-attempt deadline from dispatch until the upstream returns its first response header (DNS/TCP/TLS and the header wait); it ends before body generation and is unrelated to `stallTimeoutSec`, which governs the body stream. Unset, a **local** upstream (loopback, private, or a `.local`/`.lan` name) defaults to disabled and a public upstream to 200 s; a positive value applies to both; `0` (or any non-positive value) disables the header deadline everywhere. Disabled is what lets a local model spend minutes in prompt prefill on a large prompt without the first-header clock cutting a healthy turn. |
 | `shutdownTimeoutMs?` | `number` | `5000` | Graceful drain deadline before active turns are aborted. |
@@ -206,6 +206,25 @@ history; review the full-scope warning in the lifecycle reference before running
 ### Native Chat timeouts and completion
 
 Native Chat also uses `stallTimeoutSec` while waiting for upstream output, with the same local-vs-public default: an unset budget is disabled for a local upstream and 300 s for a public one, and `0` disables it everywhere. Nonempty text, reasoning, refusal, tool updates, and finish frames renew the allowance; keepalive comments, role-only frames, and usage alone do not. Waiting for a slow client to read pauses the allowance. A stall produces `upstream_stall_timeout`: an error frame for streaming clients, or HTTP 502 for non-streaming clients. Cancellation before a terminal result returns a cancellation error instead of a successful partial answer. Buffered Chat results accept both LF and CRLF SSE framing, including multiline data.
+
+### Combo selection keepalive
+
+A streaming `POST /v1/responses` request to a combo can wait while the combo chooses a target:
+it inspects each child stream before any output, hops past zero-output failures, and can wait out a
+short cooldown. If that selection takes longer than 15 seconds, OpenCodex commits an HTTP 200
+`text/event-stream` head and sends a `: keepalive` comment, then another every 15 seconds until a
+target is chosen, so a proxy or load balancer with an idle limit does not drop the connection. The
+threshold and interval are fixed; there is no setting for them.
+
+Committing the head commits the status. After it, the chosen target's stream follows in the same
+response, and a failure of every target arrives as one `response.failed` event whose `error.code`
+(and `type` and message) is the one the HTTP error would have carried, for example
+`combo_unavailable`. Response headers of the chosen target, such as `Retry-After` or
+`openai-model`, are not sent once the head is committed; the request log still records the
+failure's original HTTP status. A selection that finishes within 15 seconds is unchanged: the
+client receives the chosen target's own status and headers, and an all-targets failure keeps its
+real HTTP status. Non-streaming requests, WebSocket requests, and the Chat Completions and
+Anthropic Messages endpoints keep the HTTP status in every case.
 
 ## Codex quota network diagnostics
 
@@ -1086,10 +1105,12 @@ interception.
 | --- | --- | --- | --- |
 | `provider?` | `string` | automatic OpenAI selection | Explicit custom API-key `openai-responses` provider for `/v1/images/generations` and `/v1/images/edits`. Registry-managed ids are rejected. |
 | `timeoutMs?` | `number` | `300000` | Whole-request timeout for one standalone Images request. |
+| `videoProvider?` | `string` | xAI | API-key provider that serves the in-turn `video_gen` bridge with its own `baseUrl` and key. `xai` stays pinned to `https://api.x.ai/v1`; other registry ids are rejected. See [Video Bridge](/guides/video-bridge/#choosing-the-video-provider). |
 
 Explicit selection fails closed when the provider is missing, disabled, incompatible, or lacks a
 usable key; it never falls back to another paid upstream. The endpoint must implement the OpenAI
-Images API paths and response shape expected by Codex.
+Images API paths and response shape expected by Codex. `videoProvider` follows the same rule: an
+unusable value answers each `video_gen` call with its error and sends nothing.
 
 Both search loops keep `web_search` declared after the search budget is exhausted. Further calls receive a paired limit-reached result without another physical search; at most `maxSearchesPerTurn + 3` model iterations run before a terminal error. Ordinary caller tools and cancellation still end the loop. Empty-answer recovery alone removes all tools.
 

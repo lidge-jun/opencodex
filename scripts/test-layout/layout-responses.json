@@ -2,6 +2,7 @@
   "responses-effort-history-state.test.ts": "responses",
   "responses-effort-history-fixtures.test.ts": "responses",
   "responses-anthropic-per-message-effort.test.ts": "responses",
+  "responses-native-sse-stall.test.ts": "responses",
   "responses-forward-client-headers-live.test.ts": "responses",
   "pool-retry-client-metadata.test.ts": "responses",
   "chat-inbound-tool-strict-defaults.test.ts": "responses",
