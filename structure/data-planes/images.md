@@ -47,10 +47,12 @@ registry ids are refused, and a custom row contributes only its own `baseUrl` an
 shared `providerDestinationConfigError` check (`allowPrivateNetwork` governs loopback and private
 hosts). The base URL may not carry userinfo, a query or a fragment, because the client appends
 endpoint paths as strings, and a paused active key fails closed through `isProviderApiKeyPaused`.
-A recognizably xAI credential (an `xai-` key, a key held by any row named `xai` in any case or
-pointing at an xAI host, a keychain reference to another row's account, or an environment reference
-named for xAI or Grok) is refused unless the origin is HTTPS on an xAI host and the default port, so
-an xAI key is never sent elsewhere even when an operator reuses it.
+A keychain reference the selected row does not own (`keychainReferenceBelongsToProvider`) is refused
+for every destination, xAI included, before any secret is read. A recognizably xAI credential (an
+`xai-` key, a key held by any row named `xai` in any case or pointing at an xAI host, or an
+environment reference named for xAI or Grok) is refused unless the origin is HTTPS on an xAI host
+and the default port. The limit is recognition: an arbitrary literal with none of those marks cannot
+be attributed to xAI, which the guide tells operators.
 
 An explicit value that cannot be used produces an unavailable plan: the `video_gen` tool is still
 claimed, and `src/images/loop.ts` answers each call with the configuration error before any paid-call

@@ -3,7 +3,7 @@ import { toolChoiceToolPredicate } from "../types";
 import type { ImageBridgePlan, VideoBridgePlan } from "./types";
 import { resolveProviderApiKey } from "../providers/key-store";
 import { isProviderApiKeyPaused } from "../providers/api-key-pause-state";
-import { KEYCHAIN_REFERENCE_PREFIX } from "../providers/api-key-resolve";
+import { isKeychainReference, keychainReferenceBelongsToProvider } from "../providers/api-key-resolve";
 import { getValidAccessToken } from "../oauth/index";
 import { getProviderRegistryEntry } from "../providers/registry";
 import { providerDestinationConfigError } from "../lib/destination-policy";
@@ -128,16 +128,13 @@ function isXaiRow(name: string, provider: OcxProviderConfig): boolean {
 
 /**
  * Whether a credential is recognizably xAI's, from any of: xAI's `xai-` key format, a key held by an
- * xAI row (disabled rows and pooled keys included), a keychain reference to another row's secret,
- * or an environment reference whose name points at xAI/Grok. Such a key may reach only xAI.
+ * xAI row (disabled rows and pooled keys included), or an environment reference whose name points at
+ * xAI/Grok. Such a key may reach only xAI. An arbitrary string with none of these marks cannot be
+ * attributed to xAI; foreign keychain references are refused earlier for every destination.
  */
-function isXaiCredential(config: OcxConfig, ownerName: string, reference: string | undefined, token: string): boolean {
+function isXaiCredential(config: OcxConfig, reference: string | undefined, token: string): boolean {
   if (token.toLowerCase().startsWith("xai-")) return true;
   const ref = reference?.trim() ?? "";
-  if (ref.startsWith(KEYCHAIN_REFERENCE_PREFIX)) {
-    const account = ref.slice(KEYCHAIN_REFERENCE_PREFIX.length).split("/")[0] ?? "";
-    if (account !== ownerName) return true;
-  }
   if (/^\$\{?[A-Za-z0-9_]*(XAI|GROK)[A-Za-z0-9_]*\}?$/i.test(ref)) return true;
   for (const [name, provider] of Object.entries(config.providers)) {
     if (!isXaiRow(name, provider)) continue;
@@ -182,6 +179,10 @@ export function selectVideoProvider(config: OcxConfig): VideoProviderSelection |
   if (isProviderApiKeyPaused(provider)) {
     return { ok: false, error: `${label} is paused: its active API key is disabled` };
   }
+  // Never resolve another row's keychain secret, whatever the destination (xAI included).
+  if (isKeychainReference(provider.apiKey) && !keychainReferenceBelongsToProvider(provider.apiKey, providerName)) {
+    return { ok: false, error: `${label} references a keychain secret it does not own` };
+  }
   let baseUrl: string;
   if (isXai) {
     baseUrl = pinnedXaiBaseUrl();
@@ -200,7 +201,7 @@ export function selectVideoProvider(config: OcxConfig): VideoProviderSelection |
   }
   const token = resolveProviderApiKey(provider.apiKey)?.trim();
   if (!token) return { ok: false, error: `${label} has no usable API key` };
-  if (!isXai && !isTrustedXaiOrigin(baseUrl) && isXaiCredential(config, providerName, provider.apiKey, token)) {
+  if (!isXai && !isTrustedXaiOrigin(baseUrl) && isXaiCredential(config, provider.apiKey, token)) {
     return { ok: false, error: `${label} uses an xAI API key; an xAI API key is only sent to xAI over HTTPS` };
   }
   return { ok: true, providerName, provider, auth: { baseUrl, token } };

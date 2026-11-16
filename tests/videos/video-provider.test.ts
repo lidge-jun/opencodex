@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { setProviderKeychainEntryFactoryForTests } from "../../src/providers/api-key-resolve";
 import { planVideoBridge } from "../../src/images/plan";
 import { runWithImageBridge } from "../../src/images/loop";
 import type { ProviderAdapter } from "../../src/adapters/base";
@@ -111,10 +112,24 @@ describe("images.videoProvider selection", () => {
     }
   });
 
-  test("a keychain reference to another row's secret is never used", async () => {
-    const plan = await planVideoBridge(config({ "my-bridge": bridge({ apiKey: "keychain:xai" }) }, "my-bridge"), parsed(), routed);
-    expect(plan!.auth).toBeUndefined();
-    expect(plan!.unavailable).toBeDefined();
+  test.each([
+    ["an untrusted host", "my-bridge", bridge({ apiKey: "keychain:other" })],
+    ["an xAI host", "grok-direct", bridge({ baseUrl: "https://api.x.ai/v1", apiKey: "keychain:other" })],
+    ["explicit xai", "xai", xai({ apiKey: "keychain:other" })],
+  ] as const)("a resolvable keychain secret owned by another row is never used for %s", async (_label, name, row) => {
+    const secrets = new Map([["other", "plain-other-secret"], [name, "own-secret"]]);
+    setProviderKeychainEntryFactoryForTests((_service, account) => ({
+      getPassword: () => secrets.get(account) ?? null, setPassword: () => {}, deletePassword: () => false,
+    }));
+    try {
+      const plan = await planVideoBridge(config({ [name]: row }, name), parsed(), routed);
+      expect(plan!.auth).toBeUndefined();
+      expect(plan!.unavailable).toContain("keychain secret it does not own");
+      const own = await planVideoBridge(config({ [name]: { ...row, apiKey: `keychain:${name}` } }, name), parsed(), routed);
+      expect(own!.auth?.token).toBe("own-secret");
+    } finally {
+      setProviderKeychainEntryFactoryForTests(null);
+    }
   });
 
   test("a paused active key fails closed even when another pooled key is enabled", async () => {

@@ -12,6 +12,8 @@ Model bunu herhangi bir fonksiyon aracı gibi çağırır; opencodex çağrıyı
 xAI'a bir video üretim görevi gönderir, tamamlanana kadar yoklar ve sonucu
 indirir.
 
+Varsayılan olarak işler xAI'a gider; `images.videoProvider` bunları uyumlu başka bir arka uca gönderebilir.
+
 ## Ön Koşullar
 
 Bu ön koşullar varsayılan xAI hedefi için geçerlidir. `images.videoProvider` ayarlıysa [Video sağlayıcısını seçme](#video-sağlayıcısını-seçme) bölümüne bakın.
@@ -86,7 +88,7 @@ Köprü varsayılan olarak `video_gen` işlerini `xai` sağlayıcısının API a
 - Hedef ve kimlik bilgisi olarak yalnızca adı verilen sağlayıcının kendi `baseUrl` değeri ve API anahtarı kullanılır. Bağdaştırıcı önemli değildir, ancak API anahtarı kimlik doğrulaması gerekir.
 - `"videoProvider": "xai"`, `xai` satırındaki `baseUrl` ne olursa olsun sabit `https://api.x.ai/v1` uç noktasını korur. Diğer yerleşik sağlayıcı kimlikleri reddedilir; özel bir sağlayıcı belirtin.
 - Geri döngü veya özel ağ `baseUrl` değeri, diğer sağlayıcı trafiğinde olduğu gibi o sağlayıcıda `allowPrivateNetwork: true` gerektirir.
-- xAI'a ait olduğu anlaşılan bir anahtar (`xai-` biçimli anahtar, herhangi bir `xai` satırının anahtarı, başka bir sağlayıcının sırrına işaret eden anahtar zinciri başvurusu veya adında xAI ya da Grok geçen ortam değişkeni başvurusu) `https://api.x.ai` dışındaki her kaynak için reddedilir; böylece xAI anahtarı hiçbir zaman başka bir arka uca gönderilmez. Duraklatılmış etkin anahtar da reddedilir ve `baseUrl` kimlik bilgisi, sorgu veya parça içeremez.
+- OpenCodex'in xAI'a ait olarak tanıyabildiği bir anahtar (`xai-` biçimli anahtar, herhangi bir `xai` satırının anahtarı veya adında xAI ya da Grok geçen ortam değişkeni başvurusu) yalnızca `https://api.x.ai` veya `https://cli-chat-proxy.grok.com` adresine gönderilir; diğer her kaynak reddedilir. Bu işaretleri taşımayan bir anahtar tanınamaz, bu yüzden xAI anahtarınızı başka bir sağlayıcının satırına yapıştırmayın. Başka bir sağlayıcının sırrına işaret eden anahtar zinciri başvurusu her zaman reddedilir, duraklatılmış etkin anahtar da reddedilir ve `baseUrl` kimlik bilgisi, sorgu veya parça içeremez.
 - Sağlayıcı yoksa, devre dışıysa, duraklatılmışsa, anahtarı yoksa veya reddedildiyse her `video_gen` çağrısı bu hatayı modele döndürür. Hiçbir şey gönderilmez ve köprü asla xAI'a geri dönmez.
 - Tamamlanan video yine yalnızca base64 `data:` URL'sinden veya herkese açık bir `https:` URL'sinden indirilir; bu nedenle yerel bir köprü `video.url` olarak bunlardan birini döndürmelidir.
 

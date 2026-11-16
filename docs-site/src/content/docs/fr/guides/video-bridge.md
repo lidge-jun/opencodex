@@ -11,6 +11,8 @@ n'importe quel modèle autre qu'OpenAI acheminé par opencodex. Lorsqu'il est ac
 opencodex intercepte l'appel, soumet une tâche de génération vidéo à xAI, interroge son état jusqu'à son
 achèvement, puis télécharge le résultat.
 
+Par défaut, les tâches vont à xAI ; `images.videoProvider` peut les envoyer à un autre backend compatible.
+
 ## Prérequis
 
 Ces prérequis concernent la destination xAI par défaut. Si `images.videoProvider` est défini, voir [Choisir le fournisseur vidéo](#choisir-le-fournisseur-vidéo).
@@ -82,7 +84,7 @@ Par défaut, le pont envoie les tâches `video_gen` à xAI avec la clé d'API du
 - Seuls le `baseUrl` et la clé d'API du fournisseur désigné servent de destination et d'identifiant. L'adaptateur importe peu, mais l'authentification doit se faire par clé d'API.
 - `"videoProvider": "xai"` conserve le point de terminaison fixe `https://api.x.ai/v1`, quel que soit le `baseUrl` de l'entrée `xai`. Les autres identifiants de fournisseurs intégrés sont refusés ; désignez un fournisseur personnalisé.
 - Un `baseUrl` en boucle locale ou en réseau privé exige `allowPrivateNetwork: true` sur ce fournisseur, comme pour le reste du trafic des fournisseurs.
-- Une clé reconnaissable comme xAI (clé `xai-`, clé détenue par une entrée `xai`, référence de trousseau vers le secret d'un autre fournisseur ou référence d'environnement nommée d'après xAI ou Grok) est refusée pour toute origine autre que `https://api.x.ai` : une clé xAI n'est donc jamais envoyée à un autre backend. Une clé active en pause est également refusée, et le `baseUrl` ne peut contenir ni identifiants, ni requête, ni fragment.
+- Une clé qu'OpenCodex peut reconnaître comme xAI (clé `xai-`, clé détenue par une entrée `xai` ou référence d'environnement nommée d'après xAI ou Grok) n'est envoyée qu'à `https://api.x.ai` ou `https://cli-chat-proxy.grok.com` ; toute autre origine est refusée. Une clé sans ces marques ne peut pas être reconnue : ne collez donc pas votre clé xAI dans l'entrée d'un autre fournisseur. Une référence de trousseau vers le secret d'un autre fournisseur est toujours refusée, une clé active en pause est refusée, et le `baseUrl` ne peut contenir ni identifiants, ni requête, ni fragment.
 - Si le fournisseur est absent, désactivé, en pause, sans clé ou refusé, chaque appel `video_gen` renvoie cette erreur au modèle. Rien n'est envoyé et le pont ne se rabat jamais sur xAI.
 - La vidéo terminée n'est toujours téléchargée que depuis une URL `data:` en base64 ou une URL `https:` publique ; un pont local doit donc renvoyer l'une des deux dans `video.url`.
 

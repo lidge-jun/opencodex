@@ -10,6 +10,8 @@ routed by opencodex. When enabled, a synthetic `video_gen` tool is injected into
 The model calls it like any function tool; opencodex intercepts the call, submits a video generation
 job to xAI, polls until completion, and downloads the result.
 
+By default jobs go to xAI; `images.videoProvider` can send them to another compatible backend instead.
+
 ## Prerequisites
 
 These prerequisites apply to the default xAI destination. With `images.videoProvider` set, see [Choosing the video provider](#choosing-the-video-provider) instead.
@@ -87,10 +89,12 @@ bridge:
   `xai` row carries. Other built-in provider ids are refused; name a custom provider instead.
 - A loopback or private-network `baseUrl` needs `allowPrivateNetwork: true` on that provider, as for
   other provider traffic.
-- A recognizably xAI key (an `xai-` key, a key held by any `xai` row, a keychain reference to another
-  provider's secret, or an environment reference named for xAI or Grok) is refused for every origin
-  except `https://api.x.ai`, so an xAI key is never sent to another backend. A paused active key also
-  fails closed, and the `baseUrl` may not carry credentials, a query or a fragment.
+- A key OpenCodex can recognize as xAI's (an `xai-` key, a key held by any `xai` row, or an
+  environment reference named for xAI or Grok) is sent only to `https://api.x.ai` or
+  `https://cli-chat-proxy.grok.com`; any other origin is refused. A key with none of those marks cannot
+  be recognized, so do not paste your xAI key into another provider's row. A keychain reference to
+  another provider's secret is always refused, a paused active key fails closed, and the `baseUrl`
+  may not carry credentials, a query or a fragment.
 - If the provider is missing, disabled, paused, keyless or refused, every `video_gen` call returns
   that error to the model. Nothing is sent, and the bridge never falls back to xAI.
 - The finished video is still downloaded only from a base64 `data:` URL or a public `https:` URL, so
