@@ -111,6 +111,8 @@ export const RESPONSES_CORE_MODULES = [
   "advisor-retention.ts",
   "advisor-plan-slot.ts",
   "policy-refusal.ts",
+  // Reached from core-pipeline.ts: the Antigravity ACP use-policy preflight (plan 080, #8480).
+  "agy-acp-preflight.ts",
 ] as const;
 
 export type ResponsesCoreModule = typeof RESPONSES_CORE_MODULES[number];
