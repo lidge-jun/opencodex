@@ -47,7 +47,8 @@ with `row: "kimi-responses"`. A sibling row's status and login buttons resolve t
 login capture and Cancel, so a Kimi device login started from Kimi (Responses) shows its code there; a
 login that settles selects the row it published. Selecting, pausing or deleting an account through either
 row clears both rows' model caches, and a manual selection seeds both rows' rotation cursors
-(`seedGenericPoolSelection`).
+(`seedGenericPoolSelection`). In the dashboard, a logout from either row and an account-selection event for the
+login refresh the accounts of every row on it.
 Its Accounts panel lists the owner's accounts, and every control there acts on the shared account (owner
 decision on #8087): the panel says so, and removing an account or pausing one (which stops the owner's
 Chat row from using it too) asks for confirmation that names the owner's row

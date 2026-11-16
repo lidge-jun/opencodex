@@ -12,7 +12,7 @@ import { isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from ".
 import { errorMessageFrom } from "../api-error";
 import { useRenderTargetCapture } from "../use-render-target-capture";
 import { confirmAction } from "../action-dialogs";
-import { oauthCredentialSlot } from "../../../src/oauth/credential-siblings";
+import { oauthCredentialSiblingsOf, oauthCredentialSlot } from "../../../src/oauth/credential-siblings";
 
 type AccountSet = { activeAccountId: string | null; accounts: OAuthAccount[] };
 
@@ -333,6 +333,9 @@ export function useProvidersOAuth({
     const logoutTarget = targetKey ?? apiBase;
     // A shared-login row (Kimi (Responses)) signs out the owner's Chat row too: say so first.
     const sharedOwner = oauthCredentialSlot(provider) !== provider ? oauthCredentialSlot(provider) : undefined;
+    // Every other row on this login (kimi <-> kimi-responses): logout removes their active account too.
+    const sharedRows = [oauthCredentialSlot(provider), ...oauthCredentialSiblingsOf(oauthCredentialSlot(provider))]
+      .filter(row => row !== provider);
     if (sharedOwner) {
       const consented = await confirmAction({
         message: t("prov.logoutConfirmShared", { provider: oauthLabel(sharedOwner) }),
@@ -358,10 +361,10 @@ export function useProvidersOAuth({
     bumpLoginGeneration(provider);
     setBusy(current => current === provider ? null : current);
     setLoginInfo(current => current?.provider === provider ? null : current);
-    // The shared login's flows and status reads are keyed by the owner (kimi): fence those too,
-    // so a late owner status read or login poll cannot report the removed account as signed in.
+    // Fence the other rows on this login too, and the owner's login flows (keyed by kimi), so a
+    // late status read or login poll cannot report the removed account as signed in.
+    for (const row of sharedRows) invalidateOauthStatusReads?.(row);
     if (sharedOwner) {
-      invalidateOauthStatusReads?.(sharedOwner);
       bumpLoginGeneration(sharedOwner);
       setBusy(current => current === sharedOwner ? null : current);
       setLoginInfo(current => current?.provider === sharedOwner ? null : current);
@@ -384,16 +387,16 @@ export function useProvidersOAuth({
     // A read started while the server was processing logout can still describe
     // the old account. Only a read started after settlement can verify status.
     if (invalidateOauthStatusReads?.(provider, false) === false) return;
-    if (sharedOwner) invalidateOauthStatusReads?.(sharedOwner);
+    for (const row of sharedRows) invalidateOauthStatusReads?.(row);
     clearStatus();
     if (!success) {
-      void fetchAccountSets([provider]).catch(() => {});
+      void fetchAccountSets([provider, ...sharedRows]).catch(() => {});
       void fetchOauth();
       return;
     }
     try {
       await Promise.all([
-        fetchAccountSets(sharedOwner ? [provider, sharedOwner] : [provider]), fetchOauth(), fetchConfig(), fetchProviderQuotas(true),
+        fetchAccountSets([provider, ...sharedRows]), fetchOauth(), fetchConfig(), fetchProviderQuotas(true),
       ]);
       bumpModelsRefresh();
       if (targetKeyRef.current === logoutTarget && isApiTargetCaptureCurrent(capture))

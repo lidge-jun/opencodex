@@ -32,7 +32,7 @@ import { canCreateJevAutoFrom } from "../jev-decision-service";
 import { useProviderSettingsDeepLink } from "./providers-deep-link";
 import { subscribeKiroDeviceFinal } from "../kiro-device-login-finalizer";
 import type { BrowserLaunch } from "../oauth-browser-launch";
-import { oauthCredentialSlot } from "../../../src/oauth/credential-siblings";
+import { oauthCredentialSiblingsOf, oauthCredentialSlot } from "../../../src/oauth/credential-siblings";
 
 /** The page's real refresh tickets: only the captured report epoch and account read can settle them. */
 // oxlint-disable-next-line react/only-export-components -- keep the page-owned coordinator and its direct race tests in the authorized owner.
@@ -163,6 +163,13 @@ function useAccountSelectionEvents(
               if (value.revision <= (revisions.get(key) ?? -1)) return;
               revisions.set(key, value.revision);
               pending.set(key, { provider: value.provider, kind: value.kind });
+              // One login can serve several rows (kimi, kimi-responses); the event names the slot.
+              if (value.kind === "oauth") {
+                const slot = oauthCredentialSlot(value.provider);
+                for (const row of [slot, ...oauthCredentialSiblingsOf(slot)]) {
+                  if (row !== value.provider) pending.set(`${value.kind}:${row}`, { provider: row, kind: value.kind });
+                }
+              }
               flush();
             }
           };

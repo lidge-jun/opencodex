@@ -170,6 +170,20 @@ test("logging out from Kimi (Responses) confirms that the Kimi Chat row is signe
   }
 });
 
+test("logging out from the Kimi row refreshes the Kimi (Responses) accounts too, without the sibling confirmation", async () => {
+  await mount(<LogoutHarness />);
+  const consent = spyOn(dialogs, "confirmAction").mockResolvedValue(true);
+  try {
+    await act(async () => { await logout("kimi"); });
+    expect(consent).not.toHaveBeenCalled();
+    expect(puts).toEqual([{ method: "POST", url: "/shared-hook/api/oauth/logout?provider=kimi", body: undefined }]);
+    expect(refetchedSets).toEqual(expect.arrayContaining(["kimi", "kimi-responses"]));
+    expect(invalidated).toContain("kimi-responses");
+  } finally {
+    consent.mockRestore();
+  }
+});
+
 test("a sibling logout also fences the owner's status reads and login hint", async () => {
   await mount(<LogoutHarness />);
   const consent = spyOn(dialogs, "confirmAction").mockResolvedValue(true);
