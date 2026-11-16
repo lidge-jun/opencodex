@@ -1,5 +1,8 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
+import type { OcxProviderConfig } from "../types";
+import { resolveProviderEgress } from "./provider-egress";
+import { effectiveProxyFor, noProxyMatches } from "./proxy-env";
 import { UpstreamRetryEvidenceError } from "./upstream-retry";
 
 /** Longest configurable offline wait (#7958): five minutes, the span of a laptop sleep/Wi-Fi hop. */
@@ -110,4 +113,34 @@ function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
     const timer = setTimeout(() => { signal?.removeEventListener("abort", onAbort); resolve(); }, ms);
     signal?.addEventListener("abort", onAbort, { once: true });
   });
+}
+
+/**
+ * The URL whose name the provider's send actually resolves, or `undefined` when that is unknown.
+ * A proxied send resolves the proxy's name, and its DNS failure is the proxy's, so the wait probes
+ * the proxy; probing the provider instead could resend into a proxy that still fails, or wait out
+ * a provider name only the proxy can resolve. The route follows `configuredOutboundFetch`: the
+ * provider's own `proxy`/`noProxy` first, then the global proxy unless `NO_PROXY` exempts the URL.
+ * A caller-supplied executor picks its own transport, and a malformed route fails the send anyway.
+ */
+export function offlineResendProbeUrl(providerName: string, provider: OcxProviderConfig, url: string): string | undefined {
+  if (typeof (provider as { fetch?: unknown }).fetch === "function") return undefined;
+  let target: URL;
+  try { target = new URL(url); } catch { return undefined; }
+  let egress: ReturnType<typeof resolveProviderEgress>;
+  try { egress = resolveProviderEgress({ providerName, provider, url: target }); } catch { return undefined; }
+  if (egress.kind === "proxy") return egress.proxyUrl;
+  if (egress.kind === "direct") return url;
+  const globalProxy = effectiveProxyFor(target);
+  return globalProxy !== null && !noProxyMatches(target) ? globalProxy : url;
+}
+
+/** The request's offline waiter (#7958), probing the name its send resolves; `undefined` when off. */
+export function createProviderOfflineResendWait(
+  providerName: string, provider: OcxProviderConfig, url: string, configuredSec: unknown,
+): OfflineResendWait | undefined {
+  const maxWaitMs = resolveOfflineResendWaitMs(configuredSec);
+  if (maxWaitMs <= 0) return undefined;
+  const probeUrl = offlineResendProbeUrl(providerName, provider, url);
+  return probeUrl === undefined ? undefined : createOfflineResendWait(probeUrl, maxWaitMs);
 }
