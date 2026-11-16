@@ -3,6 +3,14 @@ import { acquireBounded, admitAcquireUrl, DesktopAcquireError, type AcquireRespo
 
 const FEED = "https://github.com/lidge-jun/opencodex/releases/latest/download/latest.json";
 
+/** Userinfo is set programmatically so no credential-shaped literal sits in the source. */
+function withUserinfo(raw: string): string {
+  const url = new URL(raw);
+  url.username = "user";
+  url.password = "secret";
+  return url.href;
+}
+
 /** Timers that fire only when the test says so: no wall clock, no sleeps. */
 function manualTimers() {
   const pending = new Map<number, { ms: number; fire: () => void }>();
@@ -53,7 +61,7 @@ describe("acquisition URL admission", () => {
     for (const url of [
       "http://github.com/lidge-jun/opencodex/releases/latest/download/latest.json",
       "https://github.com/someone/opencodex/releases/latest/download/latest.json",
-      "https://user:pw@github.com/lidge-jun/opencodex/releases/latest/download/latest.json",
+      withUserinfo(FEED),
       "https://github.com:8443/lidge-jun/opencodex/releases/latest/download/latest.json",
       "https://release-assets.githubusercontent.com/x",
       "https://127.0.0.1/lidge-jun/opencodex/releases/x",
@@ -64,7 +72,7 @@ describe("acquisition URL admission", () => {
     expect(admitAcquireUrl("https://release-assets.githubusercontent.com/github-production-release-asset/1", false).hostname).toBe("release-assets.githubusercontent.com");
     expect(admitAcquireUrl("https://objects.githubusercontent.com/x", false).hostname).toBe("objects.githubusercontent.com");
     for (const url of ["https://evil.example/x", "https://github.com/other/repo/releases/x", "http://objects.githubusercontent.com/x",
-      "https://objects.githubusercontent.com:444/x", "https://a:b@objects.githubusercontent.com/x"]) {
+      "https://objects.githubusercontent.com:444/x", withUserinfo("https://objects.githubusercontent.com/x")]) {
       expect(() => admitAcquireUrl(url, false)).toThrow(DesktopAcquireError);
     }
   });
