@@ -48,6 +48,37 @@ Video Bridge を使用すると、opencodex によってルーティングされ
 | `videoBridgeModel` | `"grok-imagine-video"` | xAI ビデオ モデル ID。 |
 | `videoMaxRounds` | `2` |最終回答を強制するまでの最大ビデオ生成ラウンド数。 |
 | `videoTimeoutMs` | `300000` (5 分) |ポーリングを含むビデオごとのタイムアウト。 |
+| `videoProvider` | 未設定 (xAI) | 独自の `baseUrl` とキーで `video_gen` を処理する API キープロバイダー (任意)。[動画プロバイダーの選択](#動画プロバイダーの選択) を参照してください。 |
+
+## 動画プロバイダーの選択
+
+既定では、ブリッジは `xai` プロバイダーの API キーで `video_gen` ジョブを xAI に送信します。同じ非同期 API (`POST {baseUrl}/videos/generations` の後に `GET {baseUrl}/videos/{id}`) を実装する別のバックエンド (セルフホストのメディアブリッジなど) に送るには、`images.videoProvider` を設定します。
+
+```json
+{
+  "providers": {
+    "my-video-bridge": {
+      "adapter": "openai-chat",
+      "baseUrl": "http://127.0.0.1:8790/v1",
+      "apiKey": "${VIDEO_BRIDGE_KEY}",
+      "authMode": "key",
+      "allowPrivateNetwork": true
+    }
+  },
+  "images": {
+    "videoBridgeEnabled": true,
+    "videoProvider": "my-video-bridge",
+    "videoBridgeModel": "grok-imagine-video"
+  }
+}
+```
+
+- 宛先と資格情報には、指定したプロバイダー自身の `baseUrl` と API キーだけを使用します。アダプターは問いませんが、API キー認証が必要です。
+- `"videoProvider": "xai"` は、`xai` 行の `baseUrl` にかかわらず固定の `https://api.x.ai/v1` を使用します。その他の組み込みプロバイダー ID は拒否されるため、カスタムプロバイダーを指定してください。
+- ループバックまたはプライベートネットワークの `baseUrl` には、他のプロバイダー通信と同様に、そのプロバイダーで `allowPrivateNetwork: true` が必要です。
+- xAI プロバイダー行に属するキーは xAI 以外のホストでは拒否されるため、xAI キーが別のバックエンドに送信されることはありません。
+- プロバイダーが存在しない、無効、一時停止中、キーなし、または拒否された場合、すべての `video_gen` 呼び出しはそのエラーをモデルに返します。何も送信されず、xAI へのフォールバックもありません。
+- 完成した動画は引き続き base64 の `data:` URL または公開 `https:` URL からのみダウンロードされるため、ローカルブリッジは `video.url` としてそのいずれかを返す必要があります。
 
 ## 仕組み
 
@@ -71,7 +102,7 @@ Video Bridge を使用すると、opencodex によってルーティングされ
 
 ## 制限事項
 
-- **xAI のみ**: ビデオ生成は、xAI の Grok Imagine Video API を通じてのみ利用できます。
+- **既定は xAI**: `videoProvider` がない場合、ビデオ生成は xAI の Grok Imagine Video API を使用します。別のバックエンドは同じ非同期 API を実装する必要があります
 - **非同期**: ビデオの生成には 30 ～ 120 秒かかります
 - **コスト**: ビデオ生成は有料の xAI 機能です (480p で ~$0.05/秒、720p で ~$0.07/秒)
 - **呼び出しごとに 1 つのビデオ**: `video_gen` 呼び出しごとに 1 つのビデオが生成されます

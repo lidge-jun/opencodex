@@ -56,6 +56,37 @@ indirir.
 | `videoBridgeModel` | `"grok-imagine-video"` | xAI video model kimliği. |
 | `videoMaxRounds` | `2` | Zorunlu nihai yanıttan önceki maksimum video üretim turu. |
 | `videoTimeoutMs` | `300000` (5 dk) | Yoklama dahil video başına zaman aşımı süresi. |
+| `videoProvider` | ayarlanmamış (xAI) | `video_gen` çağrılarını kendi `baseUrl` ve anahtarıyla karşılayan isteğe bağlı API anahtarlı sağlayıcı. Bkz. [Video sağlayıcısını seçme](#video-sağlayıcısını-seçme). |
+
+## Video sağlayıcısını seçme
+
+Köprü varsayılan olarak `video_gen` işlerini `xai` sağlayıcısının API anahtarıyla xAI'a gönderir. Bunları aynı eşzamansız API'yi (`POST {baseUrl}/videos/generations`, ardından `GET {baseUrl}/videos/{id}`) uygulayan başka bir arka uca, örneğin kendi barındırdığınız bir medya köprüsüne göndermek için `images.videoProvider` ayarlayın:
+
+```json
+{
+  "providers": {
+    "my-video-bridge": {
+      "adapter": "openai-chat",
+      "baseUrl": "http://127.0.0.1:8790/v1",
+      "apiKey": "${VIDEO_BRIDGE_KEY}",
+      "authMode": "key",
+      "allowPrivateNetwork": true
+    }
+  },
+  "images": {
+    "videoBridgeEnabled": true,
+    "videoProvider": "my-video-bridge",
+    "videoBridgeModel": "grok-imagine-video"
+  }
+}
+```
+
+- Hedef ve kimlik bilgisi olarak yalnızca adı verilen sağlayıcının kendi `baseUrl` değeri ve API anahtarı kullanılır. Bağdaştırıcı önemli değildir, ancak API anahtarı kimlik doğrulaması gerekir.
+- `"videoProvider": "xai"`, `xai` satırındaki `baseUrl` ne olursa olsun sabit `https://api.x.ai/v1` uç noktasını korur. Diğer yerleşik sağlayıcı kimlikleri reddedilir; özel bir sağlayıcı belirtin.
+- Geri döngü veya özel ağ `baseUrl` değeri, diğer sağlayıcı trafiğinde olduğu gibi o sağlayıcıda `allowPrivateNetwork: true` gerektirir.
+- Bir xAI sağlayıcı satırına ait anahtar, xAI dışındaki her ana makine için reddedilir; böylece xAI anahtarı hiçbir zaman başka bir arka uca gönderilmez.
+- Sağlayıcı yoksa, devre dışıysa, duraklatılmışsa, anahtarı yoksa veya reddedildiyse her `video_gen` çağrısı bu hatayı modele döndürür. Hiçbir şey gönderilmez ve köprü asla xAI'a geri dönmez.
+- Tamamlanan video yine yalnızca base64 `data:` URL'sinden veya herkese açık bir `https:` URL'sinden indirilir; bu nedenle yerel bir köprü `video.url` olarak bunlardan birini döndürmelidir.
 
 ## Nasıl Çalışır?
 
@@ -82,8 +113,7 @@ indirir.
 
 ## Sınırlamalar
 
-- **Yalnızca xAI**: Video üretimi yalnızca xAI'ın Grok Imagine Video API'si
-  aracılığıyla kullanılabilir
+- **Varsayılan olarak xAI**: `videoProvider` olmadan video üretimi xAI'ın Grok Imagine Video API'sini kullanır; başka bir arka uç aynı eşzamansız API'yi uygulamalıdır
 - **Zaman uyumsuz (Asynchronous)**: Video üretimi 30-120 saniye sürer
 - **Maliyet**: Video üretimi ücretli bir xAI özelliğidir (~$0.05/sn @480p,
   ~$0.07/sn @720p)

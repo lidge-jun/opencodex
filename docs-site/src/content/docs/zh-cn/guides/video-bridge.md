@@ -47,6 +47,37 @@ Video Bridge 允许你通过 opencodex 路由的任意非 OpenAI 模型使用 xA
 | `videoBridgeModel` | `"grok-imagine-video"` | xAI 视频模型 id。 |
 | `videoMaxRounds` | `2` | 在强制输出最终答案前允许的最大视频生成轮数。 |
 | `videoTimeoutMs` | `300000`（5 分钟） | 单个视频的超时时间，包括轮询在内。 |
+| `videoProvider` | 未设置（xAI） | 可选的 API 密钥提供方，使用其自身的 `baseUrl` 和密钥处理 `video_gen`。参见[选择视频提供方](#选择视频提供方)。 |
+
+## 选择视频提供方
+
+默认情况下，桥接使用 `xai` 提供方的 API 密钥把 `video_gen` 任务发送到 xAI。若要发送到实现了相同异步 API（先 `POST {baseUrl}/videos/generations`，再 `GET {baseUrl}/videos/{id}`）的其他后端（例如自托管的媒体桥接），请设置 `images.videoProvider`。
+
+```json
+{
+  "providers": {
+    "my-video-bridge": {
+      "adapter": "openai-chat",
+      "baseUrl": "http://127.0.0.1:8790/v1",
+      "apiKey": "${VIDEO_BRIDGE_KEY}",
+      "authMode": "key",
+      "allowPrivateNetwork": true
+    }
+  },
+  "images": {
+    "videoBridgeEnabled": true,
+    "videoProvider": "my-video-bridge",
+    "videoBridgeModel": "grok-imagine-video"
+  }
+}
+```
+
+- 只使用所指定提供方自身的 `baseUrl` 和 API 密钥作为目标和凭据。适配器类型不限，但必须使用 API 密钥认证。
+- `"videoProvider": "xai"` 始终使用固定的 `https://api.x.ai/v1`，与 `xai` 条目的 `baseUrl` 无关。其他内置提供方 ID 会被拒绝，请改为指定自定义提供方。
+- 回环或私有网络的 `baseUrl` 与其他提供方流量一样，需要在该提供方上设置 `allowPrivateNetwork: true`。
+- 属于 xAI 提供方条目的密钥在 xAI 以外的主机上会被拒绝，因此 xAI 密钥绝不会发送到其他后端。
+- 如果提供方不存在、已禁用、已暂停、没有密钥或被拒绝，每次 `video_gen` 调用都会把该错误返回给模型。不会发送任何内容，也不会回退到 xAI。
+- 生成的视频仍然只从 base64 `data:` URL 或公网 `https:` URL 下载，因此本地桥接必须以 `video.url` 返回其中之一。
 
 ## 工作原理
 
@@ -70,7 +101,7 @@ Video Bridge 允许你通过 opencodex 路由的任意非 OpenAI 模型使用 xA
 
 ## 限制
 
-- **仅限 xAI**：视频生成只可通过 xAI 的 Grok Imagine Video API 使用
+- **默认使用 xAI**：未设置 `videoProvider` 时，视频生成使用 xAI 的 Grok Imagine Video API；其他后端必须实现相同的异步 API
 - **异步**：视频生成需要 30-120 秒
 - **费用**：视频生成是 xAI 的付费功能（约 `480p` 每秒 `$0.05`，`720p` 每秒 `$0.07`）
 - **每次调用只生成一个视频**：每次 `video_gen` 调用只会生成一个视频

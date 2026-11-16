@@ -37,6 +37,23 @@ Fetch-based Anthropic model iterations use the [thinking-signature recovery cont
 
 Fetch-based Anthropic image bridge account recovery follows [the revoked-token contract](../providers/anthropic-account-pool.md#revoked-oauth-access-token-recovery), including output commitment and send-budget gates.
 
+## Video bridge destination
+
+`planVideoBridge` in `src/images/plan.ts` decides where `video_gen` submit and poll requests go and
+which key they carry. With `images.videoProvider` unset it keeps the historical xAI discovery and
+pins the destination to the registry `xai` base URL, so an `xai` row's `baseUrl` override never
+receives the key. `selectVideoProvider` resolves an explicit value: `xai` stays pinned, other
+registry ids are refused, and a custom row contributes only its own `baseUrl` and API key after the
+shared `providerDestinationConfigError` check (`allowPrivateNetwork` governs loopback and private
+hosts). A key held by any xAI row (`xai`, or a row whose host is xAI's) is refused for every other
+host, so an xAI key is never sent elsewhere even when an operator reuses it.
+
+An explicit value that cannot be used produces an unavailable plan: the `video_gen` tool is still
+claimed, and `src/images/loop.ts` answers each call with the configuration error before any paid-call
+accounting or network request. It never falls back to xAI. The submit and poll clients keep
+`redirect: "manual"`, and the finished-video download keeps its public-HTTPS or `data:` policy.
+`tests/videos/video-provider.test.ts` covers both halves.
+
 ## Hosted Responses image display
 
 For loopback-admitted Codex Responses clients,

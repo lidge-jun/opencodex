@@ -53,8 +53,39 @@ Agregue `videoBridgeEnabled: true` a su configuración `images`:
 | `videoBridgeModel` | `"grok-imagine-video"` | Id. de modelo de vídeo xAI. |
 | `videoMaxRounds` | `2` | Número máximo de rondas de generación de video antes de forzar la respuesta final. |
 | `videoTimeoutMs` | `300000` (5 min) | Plazo máximo por video, incluidas las consultas de estado. |
+| `videoProvider` | sin definir (xAI) | Proveedor opcional con clave de API que atiende `video_gen` con su propio `baseUrl` y clave. Consulta [Elegir el proveedor de video](#elegir-el-proveedor-de-video). |
 
 <a id="how-it-works"></a>
+
+## Elegir el proveedor de video
+
+De forma predeterminada, el puente envía los trabajos de `video_gen` a xAI con la clave de API del proveedor `xai`. Define `images.videoProvider` para enviarlos a otro backend que implemente la misma API asíncrona (`POST {baseUrl}/videos/generations` y luego `GET {baseUrl}/videos/{id}`), como un puente multimedia autoalojado:
+
+```json
+{
+  "providers": {
+    "my-video-bridge": {
+      "adapter": "openai-chat",
+      "baseUrl": "http://127.0.0.1:8790/v1",
+      "apiKey": "${VIDEO_BRIDGE_KEY}",
+      "authMode": "key",
+      "allowPrivateNetwork": true
+    }
+  },
+  "images": {
+    "videoBridgeEnabled": true,
+    "videoProvider": "my-video-bridge",
+    "videoBridgeModel": "grok-imagine-video"
+  }
+}
+```
+
+- Solo se usan como destino y credencial el `baseUrl` y la clave de API del proveedor indicado. El adaptador no importa, pero debe usar autenticación por clave de API.
+- `"videoProvider": "xai"` mantiene el endpoint fijo `https://api.x.ai/v1`, sea cual sea el `baseUrl` de la fila `xai`. Los demás identificadores de proveedores integrados se rechazan; indica un proveedor personalizado.
+- Un `baseUrl` de loopback o de red privada necesita `allowPrivateNetwork: true` en ese proveedor, igual que el resto del tráfico de proveedores.
+- Una clave que pertenece a una fila de proveedor xAI se rechaza para cualquier host distinto del de xAI, de modo que una clave de xAI nunca se envía a otro backend.
+- Si el proveedor no existe, está deshabilitado, en pausa, sin clave o rechazado, cada llamada a `video_gen` devuelve ese error al modelo. No se envía nada y el puente nunca recurre a xAI.
+- El video terminado solo se descarga desde una URL `data:` en base64 o una URL `https:` pública, así que un puente local debe devolver una de ellas como `video.url`.
 
 ## Cómo funciona
 
@@ -82,7 +113,7 @@ La herramienta `video_gen` acepta:
 
 ## Limitaciones
 
-- **xAI solamente**: La generación de video solo está disponible mediante la API Grok Imagine Video de xAI
+- **xAI de forma predeterminada**: sin `videoProvider`, la generación de video usa la API Grok Imagine Video de xAI; otro backend debe implementar la misma API asíncrona
 - **Asíncrono**: La generación de video toma 30-120 segundos
 - **Coste**: la generación de video es una función de pago de xAI. Consulta las [tarifas oficiales](https://docs.x.ai/developers/pricing) antes de usarla.
 - **Un video por llamada**: Cada llamada `video_gen` produce un vídeo

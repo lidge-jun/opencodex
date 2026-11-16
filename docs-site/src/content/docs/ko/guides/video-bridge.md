@@ -48,6 +48,37 @@ Video Bridge는 opencodex가 라우팅한 OpenAI가 아닌 모델로 xAI의 Grok
 | `videoBridgeModel` | `"grok-imagine-video"` | xAI 비디오 모델 id입니다. |
 | `videoMaxRounds` | `2` | 강제 최종 답변 전에 허용하는 최대 video-gen 라운드 수입니다. |
 | `videoTimeoutMs` | `300000` (5분) | 폴링 시간을 포함한 비디오별 타임아웃입니다. |
+| `videoProvider` | 미설정 (xAI) | `video_gen`을 자체 `baseUrl`과 키로 처리할 API 키 제공자(선택). [영상 제공자 선택](#영상-제공자-선택)을 참고하세요. |
+
+## 영상 제공자 선택
+
+기본적으로 브리지는 `xai` 제공자의 API 키로 xAI에 `video_gen` 작업을 보냅니다. 같은 비동기 API(`POST {baseUrl}/videos/generations` 후 `GET {baseUrl}/videos/{id}`)를 구현한 다른 백엔드(예: 직접 운영하는 미디어 브리지)로 보내려면 `images.videoProvider`를 설정하세요.
+
+```json
+{
+  "providers": {
+    "my-video-bridge": {
+      "adapter": "openai-chat",
+      "baseUrl": "http://127.0.0.1:8790/v1",
+      "apiKey": "${VIDEO_BRIDGE_KEY}",
+      "authMode": "key",
+      "allowPrivateNetwork": true
+    }
+  },
+  "images": {
+    "videoBridgeEnabled": true,
+    "videoProvider": "my-video-bridge",
+    "videoBridgeModel": "grok-imagine-video"
+  }
+}
+```
+
+- 지정한 제공자의 `baseUrl`과 API 키만 목적지와 자격 증명으로 사용합니다. 어댑터 종류는 상관없지만 API 키 인증이어야 합니다.
+- `"videoProvider": "xai"`는 `xai` 항목의 `baseUrl`과 관계없이 고정된 `https://api.x.ai/v1`을 사용합니다. 다른 내장 제공자 ID는 거부되므로 사용자 지정 제공자를 지정하세요.
+- 루프백 또는 사설망 `baseUrl`은 다른 제공자 트래픽과 마찬가지로 해당 제공자에 `allowPrivateNetwork: true`가 필요합니다.
+- xAI 제공자 항목에 속한 키는 xAI가 아닌 호스트로는 거부되므로 xAI 키가 다른 백엔드로 전송되지 않습니다.
+- 제공자가 없거나, 비활성화되었거나, 일시 중지되었거나, 키가 없거나, 거부되면 모든 `video_gen` 호출이 그 오류를 모델에 반환합니다. 아무것도 전송하지 않으며 xAI로 대체하지 않습니다.
+- 완성된 영상은 여전히 base64 `data:` URL이나 공개 `https:` URL에서만 내려받으므로, 로컬 브리지는 `video.url`로 둘 중 하나를 반환해야 합니다.
 
 ## 동작 방식
 
@@ -71,7 +102,7 @@ Video Bridge는 opencodex가 라우팅한 OpenAI가 아닌 모델로 xAI의 Grok
 
 ## 제한 사항
 
-- **xAI 전용**: 영상 생성은 xAI의 Grok Imagine Video API로만 사용할 수 있습니다
+- **기본값은 xAI**: `videoProvider`가 없으면 xAI의 Grok Imagine Video API를 사용합니다. 다른 백엔드는 같은 비동기 API를 구현해야 합니다
 - **비동기**: 영상 생성에는 30-120초가 걸립니다
 - **비용**: 영상 생성은 유료 xAI 기능입니다(~$0.05/sec @480p, ~$0.07/sec @720p)
 - **한 번에 한 편**: 각 `video_gen` 호출은 영상 하나를 생성합니다

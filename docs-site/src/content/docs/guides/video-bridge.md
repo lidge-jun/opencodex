@@ -51,6 +51,46 @@ Add `videoBridgeEnabled: true` to your `images` config:
 | `videoBridgeModel` | `"grok-imagine-video"` | xAI video model id. |
 | `videoMaxRounds` | `2` | Max video-gen rounds before forced final answer. |
 | `videoTimeoutMs` | `300000` (5 min) | Per-video timeout including polling. |
+| `videoProvider` | unset (xAI) | Optional API-key provider that serves `video_gen` with its own `baseUrl` and key. See [Choosing the video provider](#choosing-the-video-provider). |
+
+## Choosing the video provider
+
+By default the bridge sends `video_gen` jobs to xAI with the `xai` provider's API key. Set
+`images.videoProvider` to send them to another backend that implements the same asynchronous API
+(`POST {baseUrl}/videos/generations`, then `GET {baseUrl}/videos/{id}`), such as a self-hosted media
+bridge:
+
+```json
+{
+  "providers": {
+    "my-video-bridge": {
+      "adapter": "openai-chat",
+      "baseUrl": "http://127.0.0.1:8790/v1",
+      "apiKey": "${VIDEO_BRIDGE_KEY}",
+      "authMode": "key",
+      "allowPrivateNetwork": true
+    }
+  },
+  "images": {
+    "videoBridgeEnabled": true,
+    "videoProvider": "my-video-bridge",
+    "videoBridgeModel": "grok-imagine-video"
+  }
+}
+```
+
+- The named provider's own `baseUrl` and API key are the only destination and credential used. Its
+  adapter does not matter, but it must use API-key auth.
+- `"videoProvider": "xai"` keeps the pinned `https://api.x.ai/v1` endpoint, whatever `baseUrl` the
+  `xai` row carries. Other built-in provider ids are refused; name a custom provider instead.
+- A loopback or private-network `baseUrl` needs `allowPrivateNetwork: true` on that provider, as for
+  other provider traffic.
+- A key that belongs to an xAI provider row is refused for any host other than xAI's, so an xAI key is
+  never sent to another backend.
+- If the provider is missing, disabled, paused, keyless or refused, every `video_gen` call returns
+  that error to the model. Nothing is sent, and the bridge never falls back to xAI.
+- The finished video is still downloaded only from a base64 `data:` URL or a public `https:` URL, so
+  a local bridge must return one of those as `video.url`.
 
 ## How It Works
 
@@ -74,7 +114,7 @@ The `video_gen` tool accepts:
 
 ## Limitations
 
-- **xAI only**: Video generation is only available through xAI's Grok Imagine Video API
+- **xAI by default**: without `videoProvider`, video generation uses xAI's Grok Imagine Video API; another backend must implement the same asynchronous API
 - **Asynchronous**: Video generation takes 30-120 seconds
 - **Cost**: video generation is a paid xAI feature. Check the [official pricing](https://docs.x.ai/developers/pricing) before using it.
 - **One video per call**: Each `video_gen` call produces one video
