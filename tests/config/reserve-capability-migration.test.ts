@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getConfigPath, loadConfig, mutatePersistedConfig, saveConfig } from "../../src/config";
+import { armClaudeCodeBaseline, getConfigPath, loadConfig, mutatePersistedConfig, saveConfig, saveConfigPreservingClaudeCode } from "../../src/config";
+import { ConfigWritePublishedError } from "../../src/config/persist-unlocked";
 import {
   isCodexReserveEnabled,
   migrateReserveCapability,
@@ -167,7 +168,10 @@ describe("persisted writers carry the one-time migration", () => {
 
   test("startup persists the seed once and keeps an explicit false", () => {
     writeConfigFile(baseConfig({ codexDesktopAuthless: true }));
-    const migrated = migrateStartupReserveCapability(loadConfig());
+    const loaded = loadConfig();
+    const migrated = migrateStartupReserveCapability(loaded);
+    // In place: the loaded object's identity carries file-backed provenance.
+    expect(migrated).toBe(loaded);
     expect(migrated.codexReserveEnabled).toBe(true);
     expect(readConfigFile()).toMatchObject({ codexReserveEnabled: true, codexReserveMigration: MIGRATED });
     const before = readFileSync(getConfigPath(), "utf-8");
@@ -177,6 +181,19 @@ describe("persisted writers carry the one-time migration", () => {
     writeConfigFile(baseConfig({ codexDesktopAuthless: false }));
     migrateStartupReserveCapability(loadConfig());
     expect(readConfigFile()).toMatchObject({ codexReserveEnabled: false, codexReserveMigration: MIGRATED });
+  });
+
+  test("the live writer keeps another process's Reserve change instead of reapplying a stale value", () => {
+    writeConfigFile(baseConfig({ codexReserveEnabled: true, codexReserveMigration: MIGRATED }));
+    const live = loadConfig();
+    armClaudeCodeBaseline(live);
+    const other = loadConfig();
+    other.codexReserveEnabled = false;
+    saveConfig(other);
+    live.oauthOpenBrowser = false;
+    saveConfigPreservingClaudeCode(live);
+    expect(readConfigFile()).toMatchObject({ codexReserveEnabled: false, codexReserveMigration: MIGRATED, oauthOpenBrowser: false });
+    expect(isCodexReserveEnabled(live)).toBe(false);
   });
 
   test("a failed startup publication stays visible and leaves the legacy reading in place", () => {
@@ -235,14 +252,31 @@ describe("/api/settings exposes codexReserveEnabled", () => {
     expect(bad!.status).toBe(400);
   });
 
-  test("a failed save rolls the capability back and reports the failure", async () => {
-    const config = baseConfig({ codexReserveEnabled: false, codexReserveMigration: MIGRATED });
-    const response = await handleManagementAPI(request("PUT", { codexReserveEnabled: true }), new URL("http://127.0.0.1:10100/api/settings"), config, {
+  test("the real writer persists the seed when only authless changes", async () => {
+    writeConfigFile(baseConfig({ codexDesktopAuthless: true }));
+    const config = loadConfig();
+    armClaudeCodeBaseline(config);
+    const response = await handleManagementAPI(request("PUT", { codexDesktopAuthless: false }), new URL("http://127.0.0.1:10100/api/settings"), config, {
       getCachedStartupHealth: async () => startupHealthFixture(),
-      saveConfigPreservingClaudeCode: () => { throw new Error("disk full"); },
       createManagementConvergeCodex: catalogConvergenceFactory(() => {}),
-    }).catch(error => error as Error);
-    if (response instanceof Response) expect(response.ok).toBe(false);
-    expect(config.codexReserveEnabled).toBe(false);
+    });
+    expect(response!.status).toBe(200);
+    const persisted = readConfigFile();
+    expect(persisted).toMatchObject({ codexReserveEnabled: true, codexReserveMigration: MIGRATED });
+    expect(Object.hasOwn(persisted, "codexDesktopAuthless")).toBe(false);
+  });
+
+  test.each([
+    ["before publication", () => new Error("disk full"), false],
+    ["after publication", () => new ConfigWritePublishedError(new Error("bookkeeping")), true],
+  ] as const)("a save that fails %s leaves live Reserve matching disk", async (_label, failure, published) => {
+    const config = baseConfig({ codexReserveEnabled: false, codexReserveMigration: MIGRATED });
+    const outcome = await handleManagementAPI(request("PUT", { codexReserveEnabled: true }), new URL("http://127.0.0.1:10100/api/settings"), config, {
+      getCachedStartupHealth: async () => startupHealthFixture(),
+      saveConfigPreservingClaudeCode: () => { throw failure(); },
+      createManagementConvergeCodex: catalogConvergenceFactory(() => {}),
+    }).then(response => response?.status ?? "no response", () => "threw");
+    expect(outcome).not.toBe(200);
+    expect(config.codexReserveEnabled).toBe(published);
   });
 });

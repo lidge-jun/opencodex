@@ -870,10 +870,14 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
         if (previousSettings.hasCodexDesktopAuthless) {
           config.codexDesktopAuthless = previousSettings.codexDesktopAuthless;
         } else deleteConfigTopLevelKey(config, "codexDesktopAuthless");
-        if (previousSettings.hasCodexReserveEnabled) config.codexReserveEnabled = previousSettings.codexReserveEnabled;
-        else deleteConfigTopLevelKey(config, "codexReserveEnabled");
-        if (previousSettings.hasCodexReserveMigration) config.codexReserveMigration = previousSettings.codexReserveMigration;
-        else deleteConfigTopLevelKey(config, "codexReserveMigration");
+        // Once the file was published, it holds the new Reserve state; rolling only the live object
+        // back would leave the running proxy disagreeing with disk.
+        if (!(error instanceof ConfigWritePublishedError)) {
+          if (previousSettings.hasCodexReserveEnabled) config.codexReserveEnabled = previousSettings.codexReserveEnabled;
+          else deleteConfigTopLevelKey(config, "codexReserveEnabled");
+          if (previousSettings.hasCodexReserveMigration) config.codexReserveMigration = previousSettings.codexReserveMigration;
+          else deleteConfigTopLevelKey(config, "codexReserveMigration");
+        }
         if (previousSettings.hasCodexClientCompaction) {
           config.codexClientCompaction = previousSettings.codexClientCompaction;
         } else deleteConfigTopLevelKey(config, "codexClientCompaction");

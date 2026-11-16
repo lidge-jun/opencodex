@@ -394,7 +394,9 @@ against the persisted pre-write document, so a write that also flips authless ca
 startup step (`src/server/reserve-capability-startup.ts`) persists it early and, on failure, warns and
 leaves the legacy reading in place. `PUT /api/settings` seeds the live config before changing either
 switch, persists an explicit `false`, refreshes the catalog when Reserve changes, and restores both
-fields if the save fails. After the marker exists an absent value means off, so deleting the field cannot
+fields only if the save fails before publication. The startup step adopts the seed in place, because the
+loaded object carries file-backed provenance that a copy would lose. The live writer's three-way merge keeps
+another process's Reserve change rather than reapplying a stale value. After the marker exists an absent value means off, so deleting the field cannot
 reinstate inheritance. Enabling the capability manufactures no permission: the credential-bound upstream
 Reserve check (`src/codex/reserve-availability.ts`) still decides each request.
 `tests/config/reserve-capability-migration.test.ts` covers the combinations, the writers and the route.
