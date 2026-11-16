@@ -3,7 +3,8 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildReleaseNotes, type ReleaseCommit } from "../../scripts/build-release-changelog";
-import { CODE_SIGNING_ATTRIBUTION, codeSigningFooter, readWindowsSigningOutcomes } from "../../scripts/release-signing-footer";
+import { CODE_SIGNING_ATTRIBUTION, codeSigningFooter, readPublishedWindowsDigests, readWindowsSigningOutcomes,
+  type PublishedWindowsDigests } from "../../scripts/release-signing-footer";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
 
@@ -24,14 +25,19 @@ function outcomes(files: Record<string, string>): string {
   for (const [name, text] of Object.entries(files)) writeFileSync(join(dir, name), text);
   return dir;
 }
-const record = (kind: string, signed: boolean) => JSON.stringify({ schema: "ocx.windows-signing-outcome/1", kind, signed }) + "\n";
+const DIGEST_A = "a".repeat(64);
+const DIGEST_B = "b".repeat(64);
+const record = (kind: string, signed: boolean, sha256: string | null = DIGEST_A, attempt: string | null = "1") =>
+  JSON.stringify({ schema: "ocx.windows-signing-outcome/2", kind, signed, sha256, attempt }) + "\n";
+const PUBLISHED: PublishedWindowsDigests = { standalone: DIGEST_A, desktop: DIGEST_A };
 
 describe("the release body's code signing footer", () => {
   const commits: ReleaseCommit[] = [{ sha: "a".repeat(40), subject: "fix(api): keep coverage (#10)", body: "", pulls: [
     { number: 10, title: "fix(api): keep coverage", author: "alice", labels: ["bug"], merged: true },
   ] }];
-  const notes = (dir: string | undefined) => buildReleaseNotes({ version: "1.1.0", tags: ["v1.0.0"], npmMetadata: "", repository: "lidge-jun/opencodex",
-    generatedNotes: "", commits, windowsSigning: readWindowsSigningOutcomes(dir) });
+  const notes = (dir: string | undefined, published: PublishedWindowsDigests = PUBLISHED) => buildReleaseNotes({ version: "1.1.0",
+    tags: ["v1.0.0"], npmMetadata: "", repository: "lidge-jun/opencodex",
+    generatedNotes: "", commits, windowsSigning: readWindowsSigningOutcomes(dir, published) });
 
   test("both Windows files signed with release trust: the notes say so, with the attribution", () => {
     const dir = outcomes({ "standalone.json": record("standalone", true), "desktop.json": record("desktop", true) });
@@ -40,7 +46,7 @@ describe("the release body's code signing footer", () => {
       expect(body).toContain(CODE_SIGNING_ATTRIBUTION);
       expect(body).toContain("are Authenticode-signed");
       expect(body).not.toContain("not code-signed");
-      expect(body.trimEnd().endsWith(codeSigningFooter(readWindowsSigningOutcomes(dir)))).toBe(true);
+      expect(body.trimEnd().endsWith(codeSigningFooter(readWindowsSigningOutcomes(dir, PUBLISHED)))).toBe(true);
     } finally { removeTreeWithRetry(dir); }
   });
 
@@ -67,7 +73,7 @@ describe("the release body's code signing footer", () => {
   test("one file not signed and the other not recorded reads as not code-signed, never as partly signed", () => {
     const dir = outcomes({ "standalone.json": record("standalone", false) });
     try {
-      expect(readWindowsSigningOutcomes(dir).status).toBe("unsigned");
+      expect(readWindowsSigningOutcomes(dir, PUBLISHED).status).toBe("unsigned");
       const body = notes(dir).body;
       expect(body).toContain("**The Windows files in this release are not code-signed.**");
       expect(body).not.toContain("Not every Windows file");
@@ -82,11 +88,16 @@ describe("the release body's code signing footer", () => {
       { "standalone.json": record("standalone", true), "desktop.json": record("standalone", true) },
       { "standalone.json": record("standalone", true), "desktop.json": JSON.stringify({ schema: "ocx.windows-signing-outcome/1", kind: "desktop", signed: "true" }) },
       { "standalone.json": record("standalone", true), "desktop.json": JSON.stringify({ schema: "other/1", kind: "desktop", signed: true }) },
+      // The first record format carried no digest, so it cannot say which file it describes.
+      { "standalone.json": record("standalone", true), "desktop.json": JSON.stringify({ schema: "ocx.windows-signing-outcome/1", kind: "desktop", signed: true }) },
+      { "standalone.json": record("standalone", true), "desktop.json": record("desktop", true, null) },
+      { "standalone.json": record("standalone", true), "desktop.json": record("desktop", true, DIGEST_A.toUpperCase()) },
+      { "standalone.json": record("standalone", true), "desktop.json": record("desktop", true, DIGEST_A, null) },
     ];
     for (const files of cases) {
       const dir = outcomes(files);
       try {
-        const outcome = readWindowsSigningOutcomes(dir);
+        const outcome = readWindowsSigningOutcomes(dir, PUBLISHED);
         expect(outcome.status, JSON.stringify(files)).not.toBe("signed");
         const body = notes(dir).body;
         expect(body).toContain(CODE_SIGNING_ATTRIBUTION);
@@ -95,8 +106,55 @@ describe("the release body's code signing footer", () => {
       } finally { removeTreeWithRetry(dir); }
     }
     // A directory that does not exist (the download step failed) is the same as no records.
-    expect(readWindowsSigningOutcomes(join(tmpdir(), "ocx-no-such-signing-outcome-dir")).status).toBe("unknown");
-    expect(readWindowsSigningOutcomes(undefined).status).toBe("unknown");
+    expect(readWindowsSigningOutcomes(join(tmpdir(), "ocx-no-such-signing-outcome-dir"), PUBLISHED).status).toBe("unknown");
+    expect(readWindowsSigningOutcomes(undefined, PUBLISHED).status).toBe("unknown");
+  });
+
+  test("a stale signed record from an earlier attempt never vouches for a re-run's assets (#8780 review)", () => {
+    // Attempt 1 signed and uploaded its records; attempt 2 rebuilt the files without signing and its record upload failed,
+    // so the downloaded records are attempt 1's while the release publishes attempt 2's bytes. Both the record shape
+    // written before this fix (no digest) and a current record hashed over attempt 1's file are stale.
+    const stale = (kind: string) => [JSON.stringify({ schema: "ocx.windows-signing-outcome/1", kind, signed: true }) + "\n", record(kind, true, DIGEST_A, "1")];
+    for (const index of [0, 1]) {
+      const dir = outcomes({ "standalone.json": stale("standalone")[index]!, "desktop.json": stale("desktop")[index]! });
+      try {
+        const rerun = { standalone: DIGEST_B, desktop: DIGEST_B };
+        const outcome = readWindowsSigningOutcomes(dir, rerun);
+        expect(outcome, String(index)).toEqual({ status: "unknown", files: { standalone: "unknown", desktop: "unknown" } });
+        const body = notes(dir, rerun).body;
+        expect(body).not.toContain("are Authenticode-signed");
+        expect(body).toContain("The release run recorded no signing outcome for them.");
+        // Without published digests at all (no receipt), no record is trusted either.
+        expect(readWindowsSigningOutcomes(dir, {}).status).toBe("unknown");
+      } finally { removeTreeWithRetry(dir); }
+    }
+  });
+
+  test("a record whose digest differs from the published asset reads as not recorded for that file", () => {
+    const dir = outcomes({ "standalone.json": record("standalone", true, DIGEST_A), "desktop.json": record("desktop", true, DIGEST_B) });
+    try {
+      const outcome = readWindowsSigningOutcomes(dir, { standalone: DIGEST_A, desktop: DIGEST_A });
+      expect(outcome).toEqual({ status: "partial", files: { standalone: "signed", desktop: "unknown" } });
+      const body = notes(dir).body;
+      expect(body).toMatch(/`ocx\.exe`[^\n]*: signed/);
+      expect(body).toMatch(/MSI installer[^\n]*: signing outcome not recorded; treat it as not code-signed/);
+    } finally { removeTreeWithRetry(dir); }
+  });
+
+  test("the published digests come from the verified release receipt under this version's Windows asset names", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-signing-receipt-"));
+    try {
+      const write = (value: unknown) => { const file = join(dir, "receipt.json"); writeFileSync(file, JSON.stringify(value)); return file; };
+      const assets = { "ocx-1.1.0-bun-windows-x64.zip": DIGEST_A, "OpenCodex-1.1.0-windows-x64.msi": DIGEST_B, "ocx-1.1.0-bun-linux-x64.tar.gz": "c".repeat(64) };
+      expect(readPublishedWindowsDigests(write({ version: "1.1.0", assets }), "1.1.0")).toEqual({ standalone: DIGEST_A, desktop: DIGEST_B });
+      // A receipt for another version, a malformed digest or a missing receipt binds nothing.
+      expect(readPublishedWindowsDigests(write({ version: "1.0.9", assets }), "1.1.0")).toEqual({});
+      expect(readPublishedWindowsDigests(write({ version: "1.1.0", assets: { ...assets, "OpenCodex-1.1.0-windows-x64.msi": "nope" } }), "1.1.0"))
+        .toEqual({ standalone: DIGEST_A });
+      expect(readPublishedWindowsDigests(write({ version: "1.1.0", assets: [] }), "1.1.0")).toEqual({});
+      expect(readPublishedWindowsDigests(join(dir, "missing.json"), "1.1.0")).toEqual({});
+      expect(readPublishedWindowsDigests(undefined, "1.1.0")).toEqual({});
+    } finally { removeTreeWithRetry(dir); }
   });
 
   test("without signing evidence the builder defaults to not claiming a signature", () => {
@@ -108,11 +166,12 @@ describe("the release body's code signing footer", () => {
 
 describe("Windows signing outcome record (scripts/ci/windows-signing-outcome.sh)", () => {
   const bash = process.platform === "win32" ? null : Bun.which("bash");
-  function run(kind: string, env: Record<string, string>) {
+  function run(kind: string, env: Record<string, string>, packaged?: (dir: string) => string) {
     const dir = mkdtempSync(join(tmpdir(), "ocx-signing-record-"));
     try {
       const out = join(dir, "out");
-      const result = Bun.spawnSync([bash!, "--noprofile", "--norc", repoPath("scripts", "ci", "windows-signing-outcome.sh"), kind, out], {
+      const extra = packaged ? [packaged(dir)] : [];
+      const result = Bun.spawnSync([bash!, "--noprofile", "--norc", repoPath("scripts", "ci", "windows-signing-outcome.sh"), kind, out, ...extra], {
         env: { PATH: process.env.PATH ?? "", BASH_ENV: "", ENV: "", ...env },
       });
       let text: string | null = null;
@@ -134,9 +193,22 @@ describe("Windows signing outcome record (scripts/ci/windows-signing-outcome.sh)
       for (const [env, signed] of cases) {
         const result = run(kind, env);
         expect(result.exitCode, JSON.stringify(env)).toBe(0);
-        expect(result.record, JSON.stringify(env)).toEqual({ schema: "ocx.windows-signing-outcome/1", kind, signed });
+        // No packaged file, so nothing binds the record to an asset and it never records signed.
+        expect(result.record, JSON.stringify(env)).toEqual({ schema: "ocx.windows-signing-outcome/2", kind, signed: false, sha256: null, attempt: null });
+        const bytes = new TextEncoder().encode(kind + " packaged bytes\r\n");
+        const bound = run(kind, { ...env, GITHUB_RUN_ATTEMPT: "3" }, dir => { const file = join(dir, "asset.bin"); writeFileSync(file, bytes); return file; });
+        expect(bound.exitCode, JSON.stringify(env)).toBe(0);
+        expect(bound.record, JSON.stringify(env)).toEqual({ schema: "ocx.windows-signing-outcome/2", kind, signed,
+          sha256: new Bun.CryptoHasher("sha256").update(bytes).digest("hex"), attempt: "3" });
       }
     }
+  });
+
+  test.skipIf(!bash)("a packaged file that does not exist leaves the record unbound and not signed", () => {
+    const result = run("desktop", { SIGNING_MODE: "sign", SIGNING_TRUST: "release", SIGNED: "true", GITHUB_RUN_ATTEMPT: "2" },
+      dir => join(dir, "missing.msi"));
+    expect(result.exitCode).toBe(0);
+    expect(result.record).toEqual({ schema: "ocx.windows-signing-outcome/2", kind: "desktop", signed: false, sha256: null, attempt: "2" });
   });
 
   test.skipIf(!bash)("an unknown kind writes nothing and fails the step", () => {
@@ -148,12 +220,14 @@ describe("Windows signing outcome record (scripts/ci/windows-signing-outcome.sh)
 
 describe("release workflow wiring of the signing outcome", () => {
   const legs = [
-    { job: "package-standalone", kind: "standalone", swap: "Swap in the verified signed Windows binary" },
-    { job: "package-desktop", kind: "desktop", swap: "Swap in the verified signed Windows installer" },
+    { job: "package-standalone", kind: "standalone", swap: "Swap in the verified signed Windows binary", packaging: "Archive standalone release",
+      asset: "dist/ocx-${{ needs.validate-dispatch.outputs.version }}-${{ matrix.target }}.zip" },
+    { job: "package-desktop", kind: "desktop", swap: "Swap in the verified signed Windows installer", packaging: "Rename release assets",
+      asset: "dist/release/OpenCodex-${{ needs.validate-dispatch.outputs.version }}-windows-x64.msi" },
   ];
 
-  test("each Windows leg records its swap's signed output after the swap, on every Windows run, without failing it", () => {
-    for (const { job, kind, swap } of legs) {
+  test("each Windows leg records its swap's signed output and the packaged asset's digest, on every Windows run, without failing it", () => {
+    for (const { job, kind, swap, packaging, asset } of legs) {
       const steps = stepsOf(job);
       const swapIndex = steps.findIndex(step => step.name === swap);
       const swapStep = steps[swapIndex]!;
@@ -161,7 +235,11 @@ describe("release workflow wiring of the signing outcome", () => {
       const recordIndex = steps.findIndex(step => step.name === "Record the Windows signing outcome");
       const recordStep = steps[recordIndex]!;
       expect(recordIndex, job).toBeGreaterThan(swapIndex);
-      expect(recordStep.run).toContain("windows-signing-outcome.sh " + kind + " ");
+      // After the file the release publishes exists, so the digest describes the published bytes (#8780 review).
+      expect(recordIndex, job).toBeGreaterThan(steps.findIndex(step => step.name === packaging));
+      expect(steps.findIndex(step => step.name === packaging), job).toBeGreaterThan(swapIndex);
+      expect(recordStep.run).toBe("bash scripts/ci/windows-signing-outcome.sh " + kind + ' "$RUNNER_TEMP/windows-signing-outcome" "$PACKAGED_FILE"');
+      expect(recordStep.env?.PACKAGED_FILE).toBe(asset);
       expect(recordStep.if).toBe("always() && runner.os == 'Windows'");
       expect(recordStep["continue-on-error"]).toBe(true);
       expect(recordStep.env?.SIGNING_MODE).toBe("${{ steps.windows-signing.outputs.mode }}");
@@ -198,12 +276,17 @@ describe("release workflow wiring of the signing outcome", () => {
     }
   });
 
-  test("the publish job reads the records into the changelog build", () => {
+  test("the publish job reads the records and the verified receipt's digests into the changelog build", () => {
     const steps = stepsOf("publish");
     const download = steps.findIndex(step => step.uses?.startsWith("actions/download-artifact@") && step.with?.pattern === "windows-signing-outcome-*");
     const build = steps.findIndex(step => step.name === "Build and validate release changelog");
+    const receipt = steps.findIndex(step => step.uses?.startsWith("actions/download-artifact@") && step.with?.name === "release-verification-receipt");
     expect(download).toBeGreaterThanOrEqual(0);
     expect(download).toBeLessThan(build);
+    expect(receipt).toBeGreaterThanOrEqual(0);
+    expect(receipt).toBeLessThan(build);
+    expect(steps[receipt]!.with?.path).toBe("verification");
+    expect(steps[build]!.run).toContain("--release-receipt verification/receipt.json");
     // A failed download leaves no records, which the footer reads as "not recorded", never as signed.
     expect(steps[download]!["continue-on-error"]).toBe(true);
     expect(steps[download]!.with?.["merge-multiple"]).toBe(true);
@@ -238,7 +321,7 @@ describe("release workflow wiring of the signing outcome", () => {
 describe("the build script requires the signing records argument", () => {
   test("the usage names --windows-signing-outcomes", () => {
     const source = readFileSync(repoPath("scripts", "build-release-changelog.ts"), "utf8");
-    expect(source).toContain("--windows-signing-outcomes <dir>");
+    expect(source).toContain("--windows-signing-outcomes <dir> --release-receipt <file>");
   });
 });
 
