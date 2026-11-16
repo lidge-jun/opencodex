@@ -483,9 +483,9 @@ the formatter in `tests/server/retry-after-429.test.ts`, and the native Chat cla
 A combo child is admitted against two budgets, not one. `resolveInputCeiling` in
 `src/server/responses/input-admission.ts` answers "how much input may this target take", which
 `modelMaxInputTokens` can tighten below the window. The context window itself is what input and
-output actually share. When the caller declared `max_output_tokens`,
-`checkComboTargetInputAdmission` requires both `estimated input <= ceiling` and
-`estimated input + min(declared output, target output ceiling) <= window`, so the output reserve
+output actually share. When the caller declared `max_output_tokens`, `checkComboTargetInputAdmission` requires
+both `margin-adjusted estimate <= ceiling` and
+`margin-adjusted estimate + min(declared output, target output ceiling) <= window`, so the output reserve
 is counted once rather than charged twice against an already-tightened input budget.
 Both direct and combo estimates use the Chat adapter's effective thinking replay policy (explicit
 preserve lists, or DeepSeek Flash/Pro detection when unset), omitting thinking only when that wire omits it.
