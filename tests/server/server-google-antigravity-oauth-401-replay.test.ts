@@ -789,6 +789,33 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
     } finally { await server.stop(true); }
   });
 
+  test("a 429 hop whose sibling then answers 5xx takes the one fault hop to a third account", async () => {
+    await seedOAuth();
+    const firstId = getAccountSet("google-antigravity")!.activeAccountId;
+    const siblingId = await seedSibling();
+    await seedThirdSibling();
+    saveConfig(antigravityConfig());
+    const rateLimited = { status: 429, rawBody: JSON.stringify({ error: { code: 429, status: "RESOURCE_EXHAUSTED", message: "Rate limit exceeded." } }) };
+    const observed = installOAuthFetch([rateLimited, rateLimited, rateLimited, 503, 503, 503, 200]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer rejected-access", "Bearer rejected-access",
+        "Bearer access-b", "Bearer access-b", "Bearer access-b", "Bearer access-c"]);
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(observed.chatProjects.at(-1)).toBe("project-c");
+      // A keeps its rate-limit cooldown and B gets the short fault cooldown; neither is marked.
+      const eligible = eligibleFailoverAccounts("google-antigravity", Date.now(), classifyModelFamilyForQuota("google-antigravity", "gemini-3.8-flash"));
+      expect(eligible).not.toContain(firstId);
+      expect(eligible).not.toContain(siblingId);
+      for (const row of getAccountSet("google-antigravity")!.accounts) expect(row.needsReauth).not.toBe(true);
+      const kinds = readUsageEntries().at(-1)?.attempts?.flatMap(attempt => attempt.recoveryKinds) ?? [];
+      expect(kinds).toContain("oauth-account-429");
+      expect(kinds).toContain("transient-5xx");
+    } finally { await server.stop(true); }
+  });
+
   test("a 503 on every account stops after one sibling hop and returns the 503", async () => {
     await seedOAuth();
     await seedSibling();
