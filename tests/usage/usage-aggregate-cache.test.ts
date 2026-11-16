@@ -22,6 +22,7 @@ import {
 import type { OcxConfig } from "../../src/types/config";
 import { resetUsageReadCacheForTests, type PersistedUsageEntry } from "../../src/usage/log";
 import * as usageLedgerScannerModule from "../../src/usage/ledger-scanner";
+import * as usageSummaryModule from "../../src/usage/summary";
 import { getUsageSourceFacets, SourceFacetsBusyError } from "../../src/server/management/usage-source-facets";
 import { refreshUserCostOverlays } from "../../src/usage/user-cost-overlays";
 import { buildRouteDecisionTrace } from "../../src/routing/trace";
@@ -81,6 +82,43 @@ afterEach(() => {
 });
 
 describe("retained usage aggregate cache", () => {
+  test("costly accumulator work yields within one indexed candidate page", async () => {
+    const count = 40;
+    writeFileSync(join(testDir, "usage.jsonl"), Array.from({ length: count }, (_, index) => line(`costly-${index}`)).join(""));
+    // Build the shared index with another filter so ingestion cannot supply the observed yield.
+    const warm = await getFilteredUsageAggregate({ provider: "anthropic" });
+    expect(warm.filterIndex).toMatchObject({ totalRows: count, candidateRows: 0 });
+    let elapsed = 0;
+    let visited = 0;
+    let visitedAtTimer = -1;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const original = usageSummaryModule.createUsageSummaryAccumulator;
+    const clock = spyOn(performance, "now").mockImplementation(() => elapsed);
+    const create = spyOn(usageSummaryModule, "createUsageSummaryAccumulator").mockImplementation(options => {
+      const accumulator = original(options);
+      const add = accumulator.add.bind(accumulator);
+      accumulator.add = value => {
+        add(value);
+        visited += 1;
+        elapsed += 10;
+        if (timer === undefined) timer = setTimeout(() => { visitedAtTimer = visited; }, 0);
+      };
+      return accumulator;
+    });
+    try {
+      const result = await getFilteredUsageAggregate({ provider: "openai" });
+      expect(result.filterIndex).toMatchObject({ totalRows: count, candidateRows: count });
+      expect(visited).toBe(count);
+      expect(visitedAtTimer).toBeGreaterThan(0);
+      expect(visitedAtTimer).toBeLessThan(count);
+      expect(result.accumulator.summarize("all", NOW).summary).toMatchObject({ requests: count, totalTokens: count * 2 });
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      create.mockRestore();
+      clock.mockRestore();
+    }
+  });
+
   test("app breakdowns survive filtered cache appends and match fresh scans", async () => {
     const path = join(testDir, "usage.jsonl");
     const row = (id: string, client: "codex_cli" | "claude_code", apiKeyId: string) => ({ ...entry(id), client, apiKeyId });
