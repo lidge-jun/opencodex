@@ -325,7 +325,7 @@ El identificador de modelo que elige es una familia de modelos, y el esfuerzo de
 - La conversación se aplana en un único prompt de texto; el texto de sistema viaja en `session/new` cuando la CLI anuncia soporte de prompt de sistema.
 - Las solicitudes de permiso se responden con `cancelled`, las solicitudes de sistema de archivos y de terminal de la CLI no se ejecutan, y los errores llevan texto fijo: nunca se devuelven el stderr de la CLI ni sus mensajes de error.
 - `end_turn` completa; `max_tokens` y `refusal` completan como truncado y filtrado de contenido; `max_turn_requests`, un `cancelled` no solicitado y un motivo de parada desconocido hacen fallar el turno.
-- Rechaza turnos de subagente, miembros de combo, rutas de reserva de subagentes y solicitudes de otras máquinas; consulta el [catálogo de claves API](/es/guides/api-key-catalog/#antigravity-cli-acp-local).
+- Rechaza turnos de subagente, miembros de combo y llamadas de decisión de combos, rutas de reserva de subagentes y solicitudes de otras máquinas; consulta el [catálogo de claves API](/es/guides/api-key-catalog/#antigravity-cli-acp-local).
 
 ## `azure-openai` (alias: `azure`)
 

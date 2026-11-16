@@ -30,7 +30,7 @@ export interface AgyAcpPolicyRefusal {
   message: string;
 }
 
-const INTERACTIVE_MESSAGE = "The Antigravity CLI (ACP) provider is for interactive, user-directed turns only: it refuses subagent turns, combo members and subagent-fallback routing, per Google's terms for the agy acp binary. Use a Gemini API key or Vertex AI for programmatic workloads.";
+const INTERACTIVE_MESSAGE = "The Antigravity CLI (ACP) provider is for interactive, user-directed turns only: it refuses subagent turns, combo members and combo decision calls, and subagent-fallback routing, per Google's terms for the agy acp binary. Use a Gemini API key or Vertex AI for programmatic workloads.";
 const LOCAL_MESSAGE = "The Antigravity CLI (ACP) provider serves only requests from this machine: it is never shared over a hub, link or remote listener. Use a Gemini API key or Vertex AI for shared or programmatic workloads.";
 
 /** The refusal for a turn this provider must not serve, or undefined when it may run. */
