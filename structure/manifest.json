@@ -280,6 +280,13 @@
       "documents": ["src/codex/catalog/ownership.ts"]
     },
     {
+      "path": "catalog-routed-defaults.md",
+      "tier": 2,
+      "title": "Routed catalog row defaults",
+      "scope": "Config-first routed-row instruction and verbosity defaults, their validation, capture and precedence.",
+      "documents": ["src/codex/catalog/routed-defaults.ts", "src/config/schema/routed-catalog-defaults.ts", "src/types/routed-catalog-defaults.ts"]
+    },
+    {
       "path": "subagents.md",
       "tier": 2,
       "title": "Subagents And Multi-Agent Surface",
@@ -607,6 +614,13 @@
       "documents": ["src/adapters/", "src/bridge/", "src/responses/", "src/claude/", "src/types/", "src/server/", "src/web-search/", "src/images/"]
     },
     {
+      "path": "providers/anthropic-per-message-effort.md",
+      "tier": 4,
+      "title": "Anthropic per-message effort",
+      "scope": "Experimental default-off effort history that keeps the Anthropic prompt cache across mid-conversation effort changes.",
+      "documents": ["src/adapters/", "src/responses/", "src/server/", "src/types/"]
+    },
+    {
       "path": "providers/anthropic-account-thresholds.md",
       "tier": 4,
       "title": "Anthropic Account Thresholds",
@@ -810,6 +824,16 @@
       "documents": [
         "src/codex/",
         "src/config.ts"
+      ]
+    },
+    {
+      "path": "providers/native-main-login-retention.md",
+      "tier": 3,
+      "title": "Native-Main Login Retention",
+      "scope": "Retention of the last complete native-main login while Codex rewrites its login file, and the events that end it.",
+      "documents": [
+        "src/codex/native-main-credentials.ts",
+        "src/codex/main-account.ts"
       ]
     },
     {
@@ -1279,7 +1303,8 @@
         "src/service/orchestration.ts",
         "src/service/repair.ts",
         "src/update/index.ts",
-        "src/update/restart-ownership.ts"
+        "src/update/restart-ownership.ts",
+        "src/desktop-update/"
       ]
     },
     {
@@ -1363,6 +1388,16 @@
         "src/codex/",
         "src/lib/",
         "src/service.ts"
+      ]
+    },
+    {
+      "path": "ops/windows-code-signing.md",
+      "tier": 6,
+      "title": "Windows Code Signing",
+      "scope": "SignPath Authenticode signing in the release legs and the per-release signing statement in the release body.",
+      "documents": [
+        ".github/",
+        "scripts/"
       ]
     },
     {

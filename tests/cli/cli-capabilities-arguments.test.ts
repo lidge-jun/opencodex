@@ -45,6 +45,8 @@ describe("capabilities argument validation", () => {
       expect(CAPABILITY_CONTRACTS).toContain("sync.home-fanout/1");
       // The explicit, exclusive route of a Remote Link (structure/remote-link.md, "Explicit route").
       expect(CAPABILITY_CONTRACTS).toContain("link.route/1");
+      // ... and its identity file (--ssh-identity-file), declared beside it: link.route/1 still holds for the flags it named.
+      expect(CAPABILITY_CONTRACTS).toContain("link.route/2");
       // ocx link add|revoke --operation-id, --require-ephemeral and the journal (structure/remote-link.md, "Operation journal").
       expect(CAPABILITY_CONTRACTS).toContain("link.operation/1");
       for (const args of [["--contracts", "--mutating-only"], ["--contracts", "--route", "/api/logs"]]) expect(await runCapabilities(args)).toBe(64);

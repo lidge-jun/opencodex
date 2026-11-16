@@ -99,6 +99,7 @@ import {
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "./catalog/native-models";
 import { providerCodexAccountMode } from "../providers/registry";
 import { OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
+import { resolveRoutedCatalogDefaults } from "../config/schema/routed-catalog-defaults";
 import { withCatalogWriteSerialization } from "./catalog-write-serialization";
 import {
   auditRefusedCatalogReplacement,
@@ -351,6 +352,7 @@ function prepareCatalog(
     disabledNativeAccountSlugs: new Set(),
     multiAgentV2Enabled,
     openaiContextCap,
+    routedCatalogDefaults: resolveRoutedCatalogDefaults(config),
   });
   const accountBoundEntries = accountSelectors.length === 0
     ? []

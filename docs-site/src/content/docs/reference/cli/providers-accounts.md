@@ -324,6 +324,24 @@ and account failover preferences. Login-owned transport/authentication fields an
 catalog metadata are refreshed. A live-discovery provider keeps its selected default model; a
 static provider can replace a default that no longer exists in its refreshed catalog.
 
+**Google Antigravity can get Gemini and Antigravity access on your Google account disabled.** The
+Antigravity login is issued for Google's own Antigravity app, and users of third-party tools have
+reported that access on their Google accounts being disabled with
+`This service has been disabled in this account for violation of Terms of Service.`
+That ban covers the Google account's Gemini Code Assist and Antigravity access, and getting it back
+depends on Google's appeal process. Use only a separate account you can afford to lose; a Gemini API
+key (the `google` preset) is the supported way to use Gemini from other tools. Every way of adding an
+Antigravity account therefore asks first. `ocx login google-antigravity`,
+`ocx account login google-antigravity` (including `--reauth`) and
+`ocx account import google-antigravity` print the warning and continue only when a terminal answers
+`y`. A non-interactive run must pass `--accept-antigravity-risk`, which skips the question but still
+prints the warning; without it the command exits before contacting the proxy or reading an import
+document. `--stdin` imports always need the flag, because the document occupies stdin. The flag is
+refused for any other provider, and a run driven by a coding agent or CI runner is refused with or
+without it: only the account owner can accept this risk (see `AGENTS_INSTALL.md`). The dashboard asks
+through a checkbox that starts unticked every time, and the management API refuses an Antigravity
+login or import that does not carry the acknowledgement.
+
 For Antigravity, an upstream `401` can refresh the rejected account’s OAuth credential and
 retry the request once. The retry uses that credential’s Cloud Code Assist project. If refresh
 fails or no usable project is available, the request returns an authentication error; use the
@@ -334,8 +352,8 @@ Google's account verification, then run `ocx login google-antigravity`. Silent t
 does not clear this verification requirement. If OpenCodex cannot save the quarantine, this adapter exchange preserves the original `403` without another recovery send; the account has not been durably quarantined. If a sibling request cannot be built or admitted for sending, the exchange delivers the original `403` through normal error formatting. An enclosing combo or policy route can still apply its existing fallback rules.
 
 For fetch-based web-search requests, automatic sibling rotation accepts only a complete, bounded
-Google error envelope containing `error.details[].reason === "VALIDATION_REQUIRED"`. Verification
-wording alone does not rotate. This request-scoped recovery uses the sibling's token and project
+Google error envelope containing `error.details[].reason === "VALIDATION_REQUIRED"` or a `PERMISSION_DENIED`
+access denial. Verification wording alone does not rotate. This request-scoped recovery uses the sibling's token and project
 without persisting a `needs-reauth` mark; cancellation, committed output, budget exhaustion or an
 unavailable sibling preserves the failure.
 
@@ -511,6 +529,7 @@ stay at least five minutes apart, and the next check is pulled in to the latest 
 or reauthentication-required main receives no checks before its predicted reset. A longer `Retry-After` also delays profile and token preparation. Only fresh valid usage or authoritative window-absence evidence
 can lift the block. In Pool mode, a quota `--refresh` bypasses cache freshness but still honors failed-read pacing;
 a deferred read makes no new diagnostic attempt. Other pause, reauthentication, and upstream limits remain independent.
+Before refusing a request, if the usage behind the block was last measured more than 60 seconds ago, OpenCodex may read usage once more. When that fresh reading no longer blocks under the configured thresholds, for example after a reset redeemed outside OpenCodex cleared every blocking window, the request is resolved again; a reading that still blocks, or a failed or deferred read, keeps the refusal. Concurrent refusals share that read, the main account gets at most one such read per minute, and failed-read pacing, a paused or reauthentication-required main, and native-main maintenance skip it. A request that authenticates as the main login itself uses its own credential for that read and never the stored one.
 
 Protection treats one fresh valid WHAM usage response as a replacement for the old 5h reading when
 its primary window explicitly lasts **at least 24 hours** and reports valid usage, or its primary window is

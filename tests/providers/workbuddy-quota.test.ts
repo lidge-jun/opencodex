@@ -35,6 +35,49 @@ test("decimal package totals preserve the reported remaining balance", () => {
   expect(parseWorkBuddyCredits({ Packages: [{ CycleTotalCapacity: 1e-300, CycleUsedCapacity: 0, CycleRemainCapacity: 5e-301 }] })?.remaining).toBe(5e-301);
 });
 
+test("quoted decimals keep exact total and remaining text bound to the numeric fields", () => {
+  const credits = parseWorkBuddyCredits({ Packages: [amounts("0.5", "0", "0.4975"), amounts("0.5", "0", "0.49750000000000005")] })!;
+  expect(credits.exact).toEqual({ total: "1", remaining: "0.99500000000000005" });
+  expect([credits.total, credits.remaining]).toEqual([1, Number("0.99500000000000005")]);
+  expect(normalizeWorkBuddyCredits(JSON.parse(JSON.stringify(credits)))).toEqual(credits);
+  const { exact: _exact, ...numericOnly } = credits;
+  expect(normalizeWorkBuddyCredits(numericOnly)).toEqual(numericOnly);
+  // Unquoted numbers keep their established shortest-decimal meaning; estimates subtract exactly.
+  expect(parseWorkBuddyCredits({ Packages: [{ CycleTotalCapacity: 0.3, CycleUsedCapacity: 0.2 }] })?.exact).toEqual({ total: "0.3", remaining: "0.1" });
+  expect(parseWorkBuddyCredits({ Packages: [{ ...amounts("1", "0.75"), CycleRemainCapacity: undefined, CycleFrozenCapacity: "0.5" }] })?.exact)
+    .toEqual({ total: "1", remaining: "0" });
+  const half = "4503599627370495.5", tiny = `0.${"0".repeat(31)}1`;
+  expect(parseWorkBuddyCredits({ Packages: [amounts(half, "0", tiny), amounts(half, "0", tiny)] })?.exact)
+    .toEqual({ total: String(Number.MAX_SAFE_INTEGER), remaining: `0.${"0".repeat(31)}2` });
+});
+
+test("values without a bounded exact form keep only the numeric projection", () => {
+  const long = `0.${"1".repeat(33)}`;
+  for (const packages of [
+    [{ CycleTotalCapacity: 1e-300, CycleUsedCapacity: 0, CycleRemainCapacity: 5e-301 }],
+    [{ CycleTotalCapacity: 5e-324, CycleUsedCapacity: 0, CycleRemainCapacity: 5e-324 }],
+    [amounts("1", "0", long)],
+    [amounts("1", "0", "0.5"), amounts("1", "0", long)],
+  ]) {
+    const credits = parseWorkBuddyCredits({ Packages: packages });
+    expect(credits).toBeDefined();
+    expect(credits).not.toHaveProperty("exact");
+  }
+  expect(parseWorkBuddyCredits({ Packages: [amounts("1", "0", long)] })?.remaining).toBe(Number(long));
+});
+
+test("malformed or inconsistent exact metadata rejects the balance", () => {
+  const credits = parseWorkBuddyCredits({ Packages: [amounts("0.5", "0", "0.4975"), amounts("0.5", "0", "0.49750000000000005")] })!;
+  for (const exact of [
+    null, "1", [], { total: "1" }, { total: 1, remaining: "0.99500000000000005" },
+    { total: "1", remaining: "0.9" }, { total: "2", remaining: "0.99500000000000005" },
+    { total: "1e0", remaining: "0.99500000000000005" }, { total: "-1", remaining: "0.99500000000000005" },
+    { total: "1", remaining: ".99500000000000005" }, { total: "1", remaining: "0.99500000000000005", used: "0" },
+    { total: `${"0".repeat(16)}1`, remaining: "0.99500000000000005" },
+    { total: `1.${"0".repeat(33)}`, remaining: "0.99500000000000005" },
+  ]) expect(normalizeWorkBuddyCredits({ ...credits, exact })).toBeUndefined();
+});
+
 test("enterprise decimal balance retains half-percent rounding in the dashboard", async () => {
   globalThis.fetch = (async input => Response.json({ code: 0, data: String(input).endsWith("summary")
     ? { Packages: [] } : { limitNum: "1", credit: "0.285" } })) as typeof fetch;
@@ -44,6 +87,22 @@ test("enterprise decimal balance retains half-percent rounding in the dashboard"
   expect(report).toMatchObject({ quota: { workbuddyCredits: { remaining: 0.715 } } });
   const rows = buildQuotaSummary(freshQuotaReportsFromResponse([report]), provider => provider);
   expect(formatQuotaPercent(rows[0]?.headline.percent)).toBe("29%");
+});
+
+test("enterprise fallback keeps exact metadata for quoted meter values", async () => {
+  const percent = async (credit: unknown) => {
+    globalThis.fetch = (async input => Response.json({ code: 0, data: String(input).endsWith("summary")
+      ? { Packages: [] } : { limitNum: "1", credit } })) as typeof fetch;
+    const credential = credentials();
+    credential.workbuddy!.enterpriseId = "fixture-team";
+    const report = await fetchWorkBuddyQuota("workbuddy-ai", credential);
+    const wire = JSON.parse(JSON.stringify(report));
+    return [wire.quota.workbuddyCredits.exact, formatQuotaPercent(buildQuotaSummary(freshQuotaReportsFromResponse([wire]), p => p)[0]?.headline.percent)];
+  };
+  expect(await percent("0.00499999999999995")).toEqual([{ total: "1", remaining: "0.99500000000000005" }, "0%"]);
+  expect(await percent("0.005")).toEqual([{ total: "1", remaining: "0.995" }, "1%"]);
+  expect(await percent("2")).toEqual([{ total: "1", remaining: "0" }, "100%"]);
+  expect(await percent(5e-324)).toEqual([undefined, "0%"]);
 });
 function stubSummary(value: unknown) {
   globalThis.fetch = (async (input, init) => {

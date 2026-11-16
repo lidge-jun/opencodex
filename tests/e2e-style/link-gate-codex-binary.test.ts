@@ -28,11 +28,18 @@ function fakeCodex(dir: string): string {
 
 const sha256 = (file: string) => createHash("sha256").update(readFileSync(file)).digest("hex");
 
-/** Runs `path` from `cwd` with only `pathDir` on PATH; resolves with the path of the executable that ran. */
+/**
+ * Runs `path` from `cwd` with only `pathDir` on PATH; resolves with the path of the executable that ran.
+ *
+ * Both sides of every comparison go through realpathSync.native. The fixture root comes from tmpdir(), which on the
+ * hosted Windows runner keeps the 8.3 short spelling (C:\Users\RUNNER~1\...), while the child reports its own
+ * long name (runneradmin); the JS realpathSync leaves the short name in place, so one file compared unequal to itself
+ * (dev run 43483630535). The native call resolves both to the same canonical path.
+ */
 async function whoRan(path: string, cwd: string, pathDir: string): Promise<string> {
   const child = Bun.spawn([path, ...PRINT_SELF], { cwd, env: { PATH: pathDir + delimiter + (process.env.PATH ?? "") }, stdout: "pipe", stderr: "pipe" });
   await child.exited;
-  return realpathSync((await new Response(child.stdout).text()).trim());
+  return realpathSync.native((await new Response(child.stdout).text()).trim());
 }
 
 describe("the pinned Codex binary of the release gate: what is hashed is what runs", () => {
@@ -51,7 +58,7 @@ describe("the pinned Codex binary of the release gate: what is hashed is what ru
     expect(prepared.digest).toBe(sha256(hashed));
     expect(prepared.digest).not.toBe(sha256(onPathFile));
     // The executable that runs is the file the gate names (the copy of the hashed file), never the codex on PATH.
-    expect(await whoRan(prepared.path, cwd, onPath)).toBe(realpathSync(resolve(cwd, prepared.path)));
+    expect(await whoRan(prepared.path, cwd, onPath)).toBe(realpathSync.native(resolve(cwd, prepared.path)));
     expect(isAbsolute(prepared.path)).toBe(true);
     expect(sha256(prepared.path)).toBe(prepared.digest);
   });
@@ -63,7 +70,7 @@ describe("the pinned Codex binary of the release gate: what is hashed is what ru
     mkdirSync(scratch);
     const prepared = preparePinnedCodex(original, { cwd, scratch })!;
     writeFileSync(original, "replaced after hashing");
-    expect(await whoRan(prepared.path, cwd, join(root, "none"))).toBe(realpathSync(prepared.path));
+    expect(await whoRan(prepared.path, cwd, join(root, "none"))).toBe(realpathSync.native(prepared.path));
     expect(sha256(prepared.path)).toBe(prepared.digest);
     // The copy that runs is read-only.
     if (process.platform !== "win32") expect(statSync(prepared.path).mode & 0o222).toBe(0);

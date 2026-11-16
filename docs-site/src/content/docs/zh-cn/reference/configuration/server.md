@@ -183,6 +183,7 @@ Codex 会为标题、提交信息等任务使用较小的辅助模型。启用
 | --- | --- | --- | --- |
 | `provider?` | `string` | 自动选择 OpenAI | 用于 `/v1/images/generations` 和 `/v1/images/edits` 的显式自定义 API key `openai-responses` 提供方。注册表管理的 id 会被拒绝。 |
 | `timeoutMs?` | `number` | `300000` | 单次独立 Images 请求的整请求超时。 |
+| `videoProvider?` | `string` | xAI | 以自身的 `baseUrl` 和密钥处理轮内 `video_gen` 桥接的 API 密钥提供方。`xai` 固定为 `https://api.x.ai/v1`，其他注册表 ID 会被拒绝。不可用的值会让每次 `video_gen` 调用返回错误且不发送任何内容。参见[视频桥接](/zh-cn/guides/video-bridge/#选择视频提供方)。 |
 
 如果提供方缺失、被禁用、不兼容，或者没有可用密钥，显式选择就会失败并关闭；它绝不会回退到另一个付费上游。该端点必须实现 Codex 期望的 OpenAI Images API 路径和响应形状。
 
