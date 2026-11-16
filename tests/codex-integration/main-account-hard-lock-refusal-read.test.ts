@@ -74,11 +74,13 @@ function usage(percent: number): Response {
 }
 
 /** Stub WHAM. An owned read runs under the native-main claim; a caller-owned read takes none. */
-function wham(respond: () => Response, gate?: Promise<void>, claimed = true): string[] {
-  const calls: string[] = [];
+function wham(respond: () => Response, gate?: Promise<void>, claimed = true): string[] & { claims: number[] } {
+  const calls = Object.assign([] as string[], { claims: [] as number[] });
   globalThis.fetch = Object.assign(async (input: Parameters<typeof fetch>[0]) => {
     const url = String(input);
     calls.push(url);
+    // Recorded as well as asserted: a failed assertion here becomes a handled refusal upstream.
+    calls.claims.push(getNativeMainProfileRequestCount());
     expect(url).toBe(whamUrl);
     expect(getNativeMainProfileRequestCount()).toBe(claimed ? 1 : 0);
     await gate;
@@ -286,9 +288,12 @@ test("an explicit stored-main selection reads through the owned probe whatever b
   age(MAIN_HARD_LOCK_REFUSAL_READ_AGE_MS + 1);
   const unrelated = new Headers({ authorization: `Bearer ${bearer("fixture-unrelated")}`, "chatgpt-account-id": "fixture-unrelated" });
   const direct = { ...config(), providers: { openai: { ...config().providers.openai!, codexAccountMode: "direct" as const } } };
-  await resolveCodexAuthContext(unrelated, direct, "direct", { accountId: MAIN }).catch(error => error);
-  // The stub asserts the native-main claim, which only the owned probe takes.
+  // Stored main serves the request once the owned probe's fresh reading lifts the lock.
+  await expect(resolveCodexAuthContext(unrelated, direct, "direct", { accountId: MAIN }))
+    .resolves.toMatchObject({ accountId: MAIN });
   expect(calls).toEqual([whamUrl]);
+  // Only the owned probe holds the native-main claim while it reads.
+  expect(calls.claims).toEqual([1]);
 });
 test.each([
   ["reset metadata alone", { shortResetAt: 1_900_000_000 }],
