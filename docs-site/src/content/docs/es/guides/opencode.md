@@ -110,7 +110,7 @@ export OPENCODEX_OPENCODE_API_KEY=<your key>
 
 ## La clave de acceso no se escribe en disco
 
-OpenCode V1 y V2 usan Responses. Abre **Connect → OpenCode** y actualiza la configuración gestionada cuando aparezca el aviso. Ambos usan `opencodex-loopback` como valor no secreto de `apiKey`. La clave remota va en `options.headers` (V1) o en `headers` del proveedor (V2).
+OpenCode V1 y V2 envían solicitudes a `/v1/responses`. Abre **Connect → OpenCode** y actualiza la configuración gestionada cuando aparezca el aviso. Ambos usan `opencodex-loopback` como valor no secreto de `apiKey`. En V1, `baseURL` y `apiKey` van en `options`; en V2 van en `settings`. La clave remota usa la cabecera `x-opencodex-api-key` en `options.headers` (V1) o en `headers` del proveedor (V2), separada de `Authorization`.
 
 Ejemplo de loopback:
 

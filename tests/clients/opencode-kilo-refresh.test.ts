@@ -138,7 +138,7 @@ describe("OpenCode and Kilo owned model configuration convergence", () => {
     expect(readFileSync(path, "utf8")).toBe(original);
   });
 
-  test("an unchanged owned OpenCode Chat config upgrades both generations to Responses", async () => {
+  test.each(["Connect update", "owned refresh"] as const)("an unchanged owned OpenCode Chat config upgrades both generations via %s", async method => {
     expect(applyIntegration(input("opencode")).ok).toBe(true);
     const legacy = structuredClone(expected("opencode")) as ManagedContribution;
     const chat = legacy.fragments[1]!.value as Record<string, any>;
@@ -157,8 +157,12 @@ describe("OpenCode and Kilo owned model configuration convergence", () => {
       blockFingerprint: fingerprint(canonicalContribution(legacy)),
       semanticBlockFingerprint: fingerprint(semanticContribution(legacy)) });
     expect(readIntegrationState(input("opencode")).state).toBe("stale");
-    expect(await refreshOwnedCatalogIntegrations(input("opencode"), ["opencode"]))
-      .toEqual([{ client: "opencode", ok: true, changed: true }]);
+    if (method === "Connect update") {
+      expect(applyIntegration(input("opencode")).ok).toBe(true);
+    } else {
+      expect(await refreshOwnedCatalogIntegrations(input("opencode"), ["opencode"]))
+        .toEqual([{ client: "opencode", ok: true, changed: true }]);
+    }
     const upgraded = document("opencode");
     expect(upgraded.providers.opencodex.package).toBe("@opencode/ai/providers/openai-compatible-responses");
     expect(upgraded.providers.opencodex.settings).toEqual({
