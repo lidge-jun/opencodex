@@ -647,6 +647,9 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
     ["empty body", ""],
     ["proxy HTML page", "<html><body>403 Forbidden</body></html>"],
     ["envelope without a status enum", JSON.stringify({ error: { code: 403, message: "Forbidden by upstream policy" } })],
+    // "expired" wording normalizes to "authentication failed"; without Google's enum it still says nothing about this account.
+    ["envelope without a status enum saying the token expired", JSON.stringify({ error: { code: 403, message: "Token expired" } })],
+    ["proxy HTML page saying the session expired", "<html><body>Session expired. Please sign in again.</body></html>"],
   ])("a 403 that Google did not mark PERMISSION_DENIED (%s) is not rotated and cools nothing", async (_name, rawBody) => {
     await seedOAuth();
     const failedId = getAccountSet("google-antigravity")!.activeAccountId;
@@ -665,7 +668,7 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
     } finally { await server.stop(true); }
   });
 
-  test.each([403])(
+  test.each([403, { status: 403, message: "Token expired" }])(
     "access-denied 403 %p cools the refused account and replays on the sibling without a stored verdict", async refusal => {
       await seedOAuth();
       const failedId = getAccountSet("google-antigravity")!.activeAccountId;
@@ -785,6 +788,33 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
       expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer access-b", "Bearer access-b", "Bearer access-b", "Bearer access-c"]);
       const kinds = readUsageEntries().at(-1)?.attempts?.flatMap(attempt => attempt.recoveryKinds) ?? [];
       expect(kinds).toContain("oauth-account-403");
+      expect(kinds).toContain("transient-5xx");
+    } finally { await server.stop(true); }
+  });
+
+  test("a 429 hop whose sibling then answers 5xx takes the one fault hop to a third account", async () => {
+    await seedOAuth();
+    const firstId = getAccountSet("google-antigravity")!.activeAccountId;
+    const siblingId = await seedSibling();
+    await seedThirdSibling();
+    saveConfig(antigravityConfig());
+    const rateLimited = { status: 429, rawBody: JSON.stringify({ error: { code: 429, status: "RESOURCE_EXHAUSTED", message: "Rate limit exceeded." } }) };
+    const observed = installOAuthFetch([rateLimited, rateLimited, rateLimited, 503, 503, 503, 200]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer rejected-access", "Bearer rejected-access",
+        "Bearer access-b", "Bearer access-b", "Bearer access-b", "Bearer access-c"]);
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(observed.chatProjects.at(-1)).toBe("project-c");
+      // A keeps its rate-limit cooldown and B gets the short fault cooldown; neither is marked.
+      const eligible = eligibleFailoverAccounts("google-antigravity", Date.now(), classifyModelFamilyForQuota("google-antigravity", "gemini-3.8-flash"));
+      expect(eligible).not.toContain(firstId);
+      expect(eligible).not.toContain(siblingId);
+      for (const row of getAccountSet("google-antigravity")!.accounts) expect(row.needsReauth).not.toBe(true);
+      const kinds = readUsageEntries().at(-1)?.attempts?.flatMap(attempt => attempt.recoveryKinds) ?? [];
+      expect(kinds).toContain("oauth-account-429");
       expect(kinds).toContain("transient-5xx");
     } finally { await server.stop(true); }
   });

@@ -7,7 +7,7 @@ import { requiredToolContractOf } from "../../src/server/responses/combo-require
 import type { AdapterRequest } from "../../src/adapters/base";
 import { handleResponses } from "../../src/server/responses";
 import { setRelayPlatformForTests } from "../../src/server/responses/passthrough-delivery";
-import { LINK_TURN_HEADER, registerLinkTurnToken, type LinkTurnObserver } from "../../src/server/link-turn";
+import { LINK_TURN_HEADER, bindLinkTurnChild, linkTurnPacesReads, notifyLinkTurnFinal, observeLinkTurnExpansion, registerLinkTurnToken, type LinkTurnObserver } from "../../src/server/link-turn";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
@@ -101,6 +101,41 @@ describe("upstream read-ahead under a stalled reader (#8601)", () => {
     const run = await stalledThenDrained(() => handleResponses(request(), config, { model: "", provider: "" }, { linkTurn: observer(true) }));
     run.pulls.forEach((pulls, reads) => expect(pulls).toBeLessThanOrEqual(reads + 1));
     expect(run.text).toBe(delivered);
+  });
+
+  test("a relayed link turn routed through a combo reads paced, and its terminal notice fires once", async () => {
+    // A combo child runs on its own log context; it paces as the parent's link turn does, and only the parent's
+    // final log reports the terminal (PRRT_kwDOS-0Gi863w6KX, PRRT_kwDOS-0Gi863w6Ke).
+    const comboConfig = { ...config, combos: { linked: { alias: "chain/linked", strategy: "failover", waitForCooldownMs: 0,
+      targets: [{ provider: "fixture", model: "m" }] } } } as unknown as OcxConfig;
+    const terminals: Array<string | undefined> = [];
+    const token = registerLinkTurnToken({ ...observer(true), terminal(status) { terminals.push(status); } });
+    const parentLog = { model: "", provider: "" };
+    const comboRequest = new Request("http://127.0.0.1/v1/responses", { method: "POST",
+      headers: { "content-type": "application/json", [LINK_TURN_HEADER]: token },
+      body: JSON.stringify({ model: "chain/linked", stream: true, input: "ping" }) });
+    const run = await stalledThenDrained(() => handleResponses(comboRequest, comboConfig, parentLog));
+    // About one upstream chunk ahead of the client, never the 32 MiB inspection allowance. Before the first read the combo's
+    // stream preflight also holds the first chunk it read to commit the target, which that read then delivers.
+    run.pulls.forEach((pulls, reads) => expect(pulls).toBeLessThanOrEqual(Math.max(reads, 1) + 1));
+    expect(run.text).toBe(delivered);
+    // The server writes one final log, the parent's.
+    notifyLinkTurnFinal(parentLog, "completed");
+    expect(terminals).toEqual(["completed"]);
+  });
+
+  test("a combo child's context paces for the parent's link turn without taking its terminal notice", () => {
+    const terminals: Array<string | undefined> = [];
+    const parentLog = {}, childLog = {}, unrelatedChild = {};
+    observeLinkTurnExpansion({ ...observer(true), terminal(status) { terminals.push(status); } }, request(), parentLog, {});
+    bindLinkTurnChild(parentLog, childLog);
+    bindLinkTurnChild({}, unrelatedChild);
+    expect([linkTurnPacesReads(childLog), linkTurnPacesReads(unrelatedChild)]).toEqual([true, false]);
+    notifyLinkTurnFinal(childLog, "failed");
+    expect(terminals).toEqual([]);
+    notifyLinkTurnFinal(parentLog, "completed");
+    notifyLinkTurnFinal(parentLog, "completed");
+    expect(terminals).toEqual(["completed"]);
   });
   test("with upstream chunks smaller than a slice, no relay stage queues one ahead of the client", async () => {
     // A stage that lost the paced mark would queue one more of these whole chunks, which the bound below catches.

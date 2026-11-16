@@ -1,7 +1,8 @@
 import { afterEach, expect, spyOn, test } from "bun:test";
 import {
-  createOfflineResendWait, resolveOfflineResendWaitMs, setOfflineResendDependenciesForTests,
+  createOfflineResendWait, offlineResendProbeUrl, resolveOfflineResendWaitMs, setOfflineResendDependenciesForTests,
 } from "../../src/lib/offline-resend";
+import { markEgressTransparentExecutor } from "../../src/lib/provider-egress";
 import { classifyTransportFailureKind } from "../../src/lib/upstream-reachability";
 import { causeForRecoveryKind } from "../../src/lib/request-failure-model";
 import {
@@ -219,6 +220,48 @@ for (const [label, route, env, expected] of [
     }
   });
 }
+
+// OpenCodex installs its own transparent fetch wrappers (xAI, Mistral Chat); only an executor that
+// picks its own route leaves the probed name unknown.
+test("a built-in transparent fetch wrapper keeps the wait; a caller-supplied executor gets none", () => {
+  // Pinned direct, so an ambient HTTPS_PROXY cannot turn the expected probe into the proxy's.
+  const provider = { adapter: "openai-responses", baseUrl: "https://gateway.example/v1", models: ["probe"], proxy: null } as const;
+  const transparent = markEgressTransparentExecutor((async () => new Response("ok")) as unknown as typeof fetch);
+  const own = (async () => new Response("ok")) as unknown as typeof fetch;
+  expect(offlineResendProbeUrl("fixture", { ...provider, fetch: transparent } as never, url)).toBe(url);
+  expect(offlineResendProbeUrl("fixture", { ...provider, fetch: own } as never, url)).toBeUndefined();
+});
+
+test("an xAI route, sent through its built-in transport wrapper, waits and resends once", async () => {
+  const saved = Object.fromEntries(PROXY_ENV_KEYS.map(key => [key, process.env[key]]));
+  try {
+    for (const key of PROXY_ENV_KEYS) delete process.env[key];
+    release = acquireOwnedSpendHome();
+    const { lookups } = probes(0);
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends += 1;
+      if (sends === 1) throw offline();
+      return Response.json(completed);
+    }) as unknown as typeof fetch;
+    // The wrapper is installed by provider name, so the route must be the `xai` provider itself.
+    const cfg = nativeConfig(30);
+    cfg.providers = { xai: { ...cfg.providers.fixture!, baseUrl: "https://api.x.ai/v1" } };
+    cfg.defaultProvider = "xai";
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "xai/probe", input: "hello", stream: false, store: false }),
+    }), cfg, { model: "", provider: "" });
+    expect(lookups[0]).toBe("api.x.ai");
+    expect(sends).toBe(2);
+    expect(response.status).toBe(200);
+  } finally {
+    for (const key of PROXY_ENV_KEYS) {
+      if (saved[key] === undefined) delete process.env[key];
+      else process.env[key] = saved[key];
+    }
+  }
+});
 const url = "https://gateway.example/v1/responses";
 
 test("a DNS probe that never settles ends at the wait limit and keeps the original failure", async () => {

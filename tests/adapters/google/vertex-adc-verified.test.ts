@@ -13,13 +13,14 @@ import { removeTreeWithRetry } from "../../helpers/remove-tree";
 import * as apiKeyResolve from "../../../src/providers/api-key-resolve";
 
 const OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
-const ENV_KEYS = ["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_API_KEY", "CLOUDSDK_CONFIG"];
+const ENV_KEYS = ["GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_API_KEY", "CLOUDSDK_CONFIG", "GOOGLE_VERTEX_REFRESH_SKEW_MS"];
 const VERTEX = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", googleMode: "vertex", project: "demo", location: "global", liveModels: false } as OcxProviderConfig;
 
 let gcloudDir: string;
 let realFetch: typeof fetch;
 let tokenStatus = 200;
 let tokenBody: unknown = { access_token: "vertex-tok", expires_in: 3600 };
+let tokenRequests = 0;
 let saved: Record<string, string | undefined> = {};
 
 function writeUserAdc(refreshToken: string): void {
@@ -27,8 +28,8 @@ function writeUserAdc(refreshToken: string): void {
     JSON.stringify({ type: "authorized_user", client_id: "fixture", client_secret: "fixture", refresh_token: refreshToken }));
 }
 
-function dashboardVertex(): Record<string, unknown> {
-  const config = { port: 0, defaultProvider: "google-vertex", providers: { "google-vertex": VERTEX } } as OcxConfig;
+function dashboardVertex(row: OcxProviderConfig = VERTEX): Record<string, unknown> {
+  const config = { port: 0, defaultProvider: "google-vertex", providers: { "google-vertex": row } } as OcxConfig;
   return (safeConfigDTO(config) as { providers: Record<string, Record<string, unknown>> }).providers["google-vertex"]!;
 }
 
@@ -37,6 +38,7 @@ beforeAll(() => {
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url;
     if (url !== OAUTH_TOKEN_URL) return new Response("nope", { status: 404 });
+    tokenRequests += 1;
     return tokenStatus === 200
       ? new Response(JSON.stringify(tokenBody), { status: 200, headers: { "content-type": "application/json" } })
       : new Response(JSON.stringify({ error: "invalid_grant" }), { status: tokenStatus, headers: { "content-type": "application/json" } });
@@ -52,6 +54,7 @@ beforeEach(() => {
   process.env.CLOUDSDK_CONFIG = gcloudDir;
   tokenStatus = 200;
   tokenBody = { access_token: "vertex-tok", expires_in: 3600 };
+  tokenRequests = 0;
 });
 
 afterEach(() => {
@@ -84,13 +87,33 @@ describe("Vertex ADC verification", () => {
     expect(dashboardVertex().vertexCredentialVerified).toBe(false);
   });
 
-  test("a refused token exchange is not verified", async () => {
+  test("a refused refresh after the cached token expires drops the proof", async () => {
+    writeUserAdc("fixture-refresh");
+    let clock = Date.now();
+    const now = spyOn(Date, "now").mockImplementation(() => clock);
+    try {
+      tokenBody = { access_token: "vertex-tok", expires_in: 120 };
+      await getVertexAccessToken();
+      // Past the token's expiry less the 60 s refresh skew, with the proof still standing.
+      clock += 61_000;
+      expect(dashboardVertex().vertexCredentialVerified).toBe(true);
+      tokenStatus = 400;
+      await expect(getVertexAccessToken()).rejects.toThrow();
+      expect(tokenRequests).toBe(2);
+      expect(dashboardVertex().vertexCredentialVerified).toBe(false);
+    } finally { now.mockRestore(); }
+  });
+
+  test.each([undefined, "N/A"])("an ambient row (apiKey %p) that sends GOOGLE_CLOUD_API_KEY never reads verified from an ADC token", async apiKey => {
     writeUserAdc("fixture-refresh");
     await getVertexAccessToken();
-    __resetVertexTokenCache();
-    tokenStatus = 400;
-    await expect(getVertexAccessToken()).rejects.toThrow();
-    expect(dashboardVertex().vertexCredentialVerified).toBe(false);
+    const row = { ...VERTEX, ...(apiKey === undefined ? {} : { apiKey }) };
+    expect(dashboardVertex(row).vertexCredentialVerified).toBe(true);
+    process.env.GOOGLE_CLOUD_API_KEY = "fixture-ambient-key";
+    const item = dashboardVertex(row);
+    expect(item.vertexCredentialKind).toBe("ambient");
+    expect(item.vertexCredentialVerified).toBeUndefined();
+    expect(binProviderStatus({ name: "google-vertex", ...item, hasApiKey: false } as never)).not.toBe("ready");
   });
 
   test("an older exchange failing after the source changed keeps the newer exchange's proof", async () => {
@@ -127,6 +150,20 @@ describe("Vertex ADC verification", () => {
     writeUserAdc("fixture-refresh");
     tokenStatus = 400;
     expect(await staticCatalogConnectionTest("google-vertex", VERTEX)).toMatchObject({ ok: false });
+  });
+
+  test("connection test exchanges again instead of trusting a cached token, and inference keeps the cache", async () => {
+    writeUserAdc("fixture-refresh");
+    expect(await staticCatalogConnectionTest("google-vertex", VERTEX)).toMatchObject({ ok: true });
+    expect(tokenRequests).toBe(1);
+    // The refresh credential is revoked while the token it minted is still cached.
+    tokenStatus = 400;
+    expect(await staticCatalogConnectionTest("google-vertex", VERTEX)).toMatchObject({ ok: false });
+    expect(tokenRequests).toBe(2);
+    expect(dashboardVertex().vertexCredentialVerified).toBe(false);
+    // An ordinary caller is not forced: it is served from the cache with no further exchange.
+    expect(await getVertexAccessToken()).toBe("vertex-tok");
+    expect(tokenRequests).toBe(2);
   });
 
   test.each([{}, { access_token: "", expires_in: 3600 }, { access_token: 7, expires_in: 3600 }])(

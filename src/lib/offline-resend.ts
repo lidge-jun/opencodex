@@ -1,7 +1,7 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import type { OcxProviderConfig } from "../types";
-import { resolveProviderEgress } from "./provider-egress";
+import { isEgressTransparentExecutor, resolveProviderEgress } from "./provider-egress";
 import { effectiveProxyFor, noProxyMatches } from "./proxy-env";
 import { UpstreamRetryEvidenceError } from "./upstream-retry";
 
@@ -122,10 +122,13 @@ function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
  * the proxy; probing the provider instead could resend into a proxy that still fails, or wait out
  * a provider name only the proxy can resolve. The route follows `configuredOutboundFetch`: the
  * provider's own `proxy`/`noProxy` first, then the global proxy unless `NO_PROXY` exempts the URL.
- * A caller-supplied executor picks its own transport, and a malformed route fails the send anyway.
+ * A caller-supplied executor picks its own transport, so it gets no probe; OpenCodex's own wrappers
+ * (xAI, Mistral Chat) carry the egress-transparent mark because they send through that same route.
+ * A malformed route fails the send anyway.
  */
 export function offlineResendProbeUrl(providerName: string, provider: OcxProviderConfig, url: string): string | undefined {
-  if (typeof (provider as { fetch?: unknown }).fetch === "function") return undefined;
+  const executor = (provider as { fetch?: unknown }).fetch;
+  if (typeof executor === "function" && !isEgressTransparentExecutor(executor)) return undefined;
   let target: URL;
   try { target = new URL(url); } catch { return undefined; }
   let egress: ReturnType<typeof resolveProviderEgress>;
