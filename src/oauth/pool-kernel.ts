@@ -274,10 +274,6 @@ export function clearPoolRotationState(poolKey?: string): void {
     return;
   }
   selectionState.delete(poolKey);
-  const prefix = `${poolKey}:`;
-  for (const key of [...selectionState.keys()]) {
-    if (key.startsWith(prefix)) selectionState.delete(key);
-  }
 }
 
 export function reconcilePoolRotationState(context: GenerationContext): number {
