@@ -19,7 +19,7 @@ import {
   sanitizeCommitText,
   stripPrEnforcementPrefix,
 } from "./release-notes";
-import { codeSigningFooter, readWindowsSigningOutcomes, type WindowsSigningOutcome } from "./release-signing-footer";
+import { codeSigningFooter, readPublishedWindowsDigests, readWindowsSigningOutcomes, type WindowsSigningOutcome } from "./release-signing-footer";
 
 // The reviewed one-time main -> dev transition (2.99.0 was tagged on the retired main line). The
 // publication-history collector owns and verifies this mapping; the changelog only reads it.
@@ -555,7 +555,7 @@ export function parseAssociatedPulls(data: unknown): AssociatedPullRequest[] {
 }
 
 function parseFlags(rest: string[]): Map<string, string> {
-  const known = new Set(["version", "dist-tag", "repository", "target", "out", "windows-signing-outcomes"]);
+  const known = new Set(["version", "dist-tag", "repository", "target", "out", "windows-signing-outcomes", "release-receipt"]);
   const flags = new Map<string, string>();
   for (let index = 0; index < rest.length; index += 1) {
     const arg = rest[index];
@@ -587,14 +587,16 @@ async function main(argv: string[]): Promise<void> {
   const repository = flags.get("repository");
   const target = flags.get("target");
   const out = flags.get("out");
-  // Required, so the workflow cannot drop it by accident. A directory the download never created reads as no records.
+  // Required, so the workflow cannot drop them by accident. A directory the download never created reads as no records,
+  // and a missing receipt as no published digests, so no record is trusted.
   const signingOutcomes = flags.get("windows-signing-outcomes");
-  if (!version || !distTag || !repository || !target || !out || !signingOutcomes) {
+  const releaseReceipt = flags.get("release-receipt");
+  if (!version || !distTag || !repository || !target || !out || !signingOutcomes || !releaseReceipt) {
     throw new Error(
-      "Usage: bun scripts/build-release-changelog.ts --version <version> --dist-tag <tag> --repository <owner/name> --target <sha> --out <file> --windows-signing-outcomes <dir>",
+      "Usage: bun scripts/build-release-changelog.ts --version <version> --dist-tag <tag> --repository <owner/name> --target <sha> --out <file> --windows-signing-outcomes <dir> --release-receipt <file>",
     );
   }
-  const windowsSigning = readWindowsSigningOutcomes(signingOutcomes);
+  const windowsSigning = readWindowsSigningOutcomes(signingOutcomes, readPublishedWindowsDigests(releaseReceipt, version));
   console.log(`Windows signing outcome: ${windowsSigning.status} (standalone ${windowsSigning.files.standalone}, desktop ${windowsSigning.files.desktop})`);
 
   await commandText(["git", "fetch", "--force", "--tags", "origin"]);

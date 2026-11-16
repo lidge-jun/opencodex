@@ -17,17 +17,28 @@ failure. It writes the step output `signed=true` only after the verified swap, a
 ## The signing outcome in the release body
 
 Each Windows leg first writes its record as not signed (right after the signing decision), then runs
-`scripts/ci/windows-signing-outcome.sh <standalone|desktop>` again after the swap on every run
+`scripts/ci/windows-signing-outcome.sh <standalone|desktop> <dir> <packaged-file>` again once the file it publishes
+exists (after `Archive standalone release` for the zip, after `Rename release assets` for the MSI) on every run
 (`always() && runner.os == 'Windows'`, continuing on error) and uploads the record as
 `windows-signing-outcome-<kind>`, a name neither `standalone-*` nor `desktop-*` matches, so it never becomes a
 release asset; the upload sets `overwrite: true`, and because the early record guarantees a file, a re-run always replaces an
 earlier attempt's record. A record says signed only when the plan's mode was `sign`, its trust `release`, and the swap
-reported `signed=true`; a skipped plan, a test certificate, or a failed or skipped swap records false.
+reported `signed=true`; a skipped plan, a test certificate, or a failed or skipped swap records false. The record also
+carries the packaged file's `sha256` and `GITHUB_RUN_ATTEMPT`; with no packaged file to hash it has no digest and never
+records signed.
 
-`publish` downloads `windows-signing-outcome-*` (continuing on error) and passes the directory to
-`scripts/build-release-changelog.ts` through its required `--windows-signing-outcomes` flag.
-`scripts/release-signing-footer.ts` reads the records strictly (schema `ocx.windows-signing-outcome/1`, the
-matching kind, a boolean); a missing, malformed or mislabelled record is "not recorded" and never counts as signed.
+The upload continues on error, so `overwrite` alone cannot retire a record: a re-run whose upload fails leaves the
+earlier attempt's record in the run, and that record may say signed about files the re-run rebuilt unsigned. The digest
+is what binds a record to the bytes it describes.
+
+`publish` downloads `windows-signing-outcome-*` (continuing on error) and passes the directory and the verified
+release receipt (`verification/receipt.json`, whose `assets` map every release file to the sha256 `attach-release`
+holds the release to) to `scripts/build-release-changelog.ts` through its required `--windows-signing-outcomes` and
+`--release-receipt` flags. `scripts/release-signing-footer.ts` reads the records strictly (schema
+`ocx.windows-signing-outcome/2`, the matching kind, a boolean, a positive attempt) and trusts one only when its
+`sha256` equals the receipt's digest for that version's `ocx-<version>-bun-windows-x64.zip` or
+`OpenCodex-<version>-windows-x64.msi`. A missing, malformed, mislabelled, earlier-schema or digest-mismatched record,
+or a receipt for another version, is "not recorded" and never counts as signed.
 The section always starts with the SignPath attribution and the code signing policy link that SignPath Foundation
 requires on the download page, then states one of: both files signed; "The Windows files in this release are not
 code-signed" (no file signed, or nothing recorded); or, when at least one file is signed and another is not, which
@@ -40,5 +51,5 @@ immutable, and `attach-release` already requires its assets to match the run's v
 
 Release bodies published before this record existed carry an explicit "not code-signed" line added by hand; the
 workflow never rewrites a published body. `tests/ci-workflows/release-windows-signing-outcome.test.ts` covers the
-record script, the workflow wiring and each wording; `tests/ci-workflows/release-windows-signing.test.ts` covers the
-plan, the SignPath gates and the swap script.
+record script, the workflow wiring, each wording, and stale or digest-mismatched records;
+`tests/ci-workflows/release-windows-signing.test.ts` covers the plan, the SignPath gates and the swap script.
