@@ -3,7 +3,9 @@ import { adoptReserveCapabilityMigration, isReserveCapabilityMigrated, migrateRe
 import type { OcxConfig } from "../types";
 
 /**
- * Persist the one-time Reserve seed at startup so the file states the capability explicitly (#4961).
+ * Persist the one-time Reserve seed at startup for a file that sets `codexDesktopAuthless` (#4961), so
+ * a later hand edit of authless cannot move Reserve. A file that never set authless reads Reserve as
+ * off and is left untouched; its seed is recorded by the first write that changes authless.
  *
  * Only the two Reserve fields are adopted, in place: earlier startup migrations may hold in-memory
  * results whose persistence was unavailable, and the loaded object carries identity-keyed state
@@ -14,7 +16,7 @@ export function migrateStartupReserveCapability(
   config: OcxConfig,
   mutate: typeof mutatePersistedConfig = mutatePersistedConfig,
 ): OcxConfig {
-  if (isReserveCapabilityMigrated(config)) return config;
+  if (isReserveCapabilityMigrated(config) || config.codexDesktopAuthless === undefined) return config;
   try {
     const outcome = mutate(fresh => ({ changed: migrateReserveCapability(fresh), value: fresh }));
     if (outcome.status === "unavailable") {

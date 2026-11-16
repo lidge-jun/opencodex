@@ -108,7 +108,22 @@ describe("projectReserveCapabilityMigration", () => {
   });
 
   test("a new config starts disabled", () => {
-    expect(projectReserveCapabilityMigration(undefined, baseConfig()).codexReserveEnabled).toBe(false);
+    const fresh = projectReserveCapabilityMigration(undefined, baseConfig());
+    expect(isCodexReserveEnabled(fresh)).toBe(false);
+    expect(Object.hasOwn(fresh, "codexReserveEnabled")).toBe(false);
+    // A new document that sets authless keeps the legacy reading until startup records its seed.
+    const withAuthless = baseConfig({ codexDesktopAuthless: true });
+    expect(projectReserveCapabilityMigration(undefined, withAuthless)).toBe(withAuthless);
+  });
+
+  test("a write that leaves authless alone records nothing on an unmarked document", () => {
+    for (const authless of [true, false, undefined]) {
+      const persisted = authless === undefined ? {} : { codexDesktopAuthless: authless };
+      const candidate = baseConfig(authless === undefined ? { port: 20200 } : { codexDesktopAuthless: authless, port: 20200 });
+      expect(projectReserveCapabilityMigration(persisted, candidate)).toBe(candidate);
+    }
+    const explicit = projectReserveCapabilityMigration({ codexDesktopAuthless: true }, baseConfig({ codexDesktopAuthless: true, codexReserveEnabled: false }));
+    expect(explicit).toMatchObject({ codexReserveEnabled: false, codexReserveMigration: MIGRATED });
   });
 
   test("a stale unmigrated snapshot carries the persisted capability instead of reseeding", () => {
@@ -181,6 +196,12 @@ describe("persisted writers carry the one-time migration", () => {
     writeConfigFile(baseConfig({ codexDesktopAuthless: false }));
     migrateStartupReserveCapability(loadConfig());
     expect(readConfigFile()).toMatchObject({ codexReserveEnabled: false, codexReserveMigration: MIGRATED });
+
+    // A file that never set authless is left byte-for-byte alone and reads Reserve as off.
+    writeConfigFile(baseConfig());
+    const untouched = readFileSync(getConfigPath(), "utf-8");
+    expect(isCodexReserveEnabled(migrateStartupReserveCapability(loadConfig()))).toBe(false);
+    expect(readFileSync(getConfigPath(), "utf-8")).toBe(untouched);
   });
 
   test("the live writer keeps another process's Reserve change instead of reapplying a stale value", () => {

@@ -267,7 +267,8 @@ describe("terminal routed vision helpers cannot spend Reserve", () => {
 
   test("off-to-on during owned auth refuses a helper even after positive Reserve authorization", async () => {
     const fixture = await reserveIngressFixture({ primaryLoopback: true, configure: config => {
-      config.codexDesktopAuthless = false;
+      // Reserve has its own switch (#4961); authless stays on to show it no longer decides Reserve.
+      config.codexReserveEnabled = false;
     } });
     fixture.allow();
     const gate = fixture.holdCredential();
@@ -280,7 +281,7 @@ describe("terminal routed vision helpers cannot spend Reserve", () => {
       await Promise.race([gate.started, observed.then(() => { throw new Error("Request skipped awaited owned auth"); })]);
       expect(fixture.counters.credential).toBe(1);
       expect(fixture.counters.wham).toBe(0);
-      fixture.setAuthless(true);
+      fixture.setReserve(true);
       gate.release();
       const outcome = await observed;
       if (outcome.status !== "fulfilled") throw outcome.error;

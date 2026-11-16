@@ -279,9 +279,9 @@ export async function reserveIngressFixture(options: {
         holdCredential = deferred<void>(); credentialStarted = deferred<void>();
         return { started: credentialStarted.promise, release: () => holdCredential?.resolve() };
       },
-      setAuthless: (enabled: boolean) => {
+      setReserve: (enabled: boolean) => {
         if (!liveConfig) throw new Error("Fixture server did not publish its live config");
-        liveConfig.codexDesktopAuthless = enabled;
+        liveConfig.codexReserveEnabled = enabled;
       },
       assertConfigUnchanged: () => {
         expect(JSON.stringify(liveConfig)).toBe(baselineConfig);
