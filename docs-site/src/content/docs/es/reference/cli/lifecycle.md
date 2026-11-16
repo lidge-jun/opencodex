@@ -89,6 +89,8 @@ Una salida proxy sola no confirma que la restauración compartida Codex / Grok t
 
 En Windows, `ocx stop` detiene una tarea registrada del Programador de tareas o un servicio nativo WinSW mediante una parada verificada. Primero finaliza la tarea y después solo los procesos envoltorios `wscript.exe` y `cmd.exe` que puede vincular a esta instalación (el lanzador o script de servicio de este directorio, una cadena de procesos padres que conduce al proxy o al servicio del Programador de tareas, y una hora de inicio registrada), y espera a que terminen. Solo entonces detiene el proxy de forma controlada. Después confirma que el puerto permanezca libre unos seis segundos y que ningún envoltorio se haya reiniciado, para impedir que un bucle de reinicio vuelva a iniciar el proxy tras una parada exitosa.
 
+Las comprobaciones de envoltorios ignoran los procesos cuya pertenencia a otra cuenta de usuario se ha confirmado. Si no puede confirmarse el propietario, el proceso sigue sujeto a las comprobaciones y puede impedir la parada.
+
 Si no puede demostrarse que el servicio se detuvo, `ocx stop` no envía una solicitud de parada al proxy, deja intacta la configuración del cliente y falla. Con `--json`, el resumen conserva `outcome: "failed"` y `proxy: "unknown"`, y añade `serviceStopReason`:
 
 | `serviceStopReason` | Significado | Qué hacer |

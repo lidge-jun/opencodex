@@ -63,13 +63,51 @@ describe("Windows process evidence: pure decoding", () => {
 
   test("the snapshot carries ISO creation times as epoch ms; malformed output is unread", () => {
     expect(parseWindowsProcessSnapshot(SNAPSHOT_JSON)).toEqual([
-      { pid: 20, parentPid: 900, name: "wscript.exe", commandLine: "wscript.exe x.vbs", startTime: Date.parse("2026-11-12T01:02:03.123Z") },
-      { pid: 4, parentPid: null, name: "System", commandLine: null, startTime: null },
+      { pid: 20, parentPid: 900, name: "wscript.exe", commandLine: "wscript.exe x.vbs", startTime: Date.parse("2026-11-12T01:02:03.123Z"), foreignOwner: null },
+      { pid: 4, parentPid: null, name: "System", commandLine: null, startTime: null, foreignOwner: null },
     ]);
     expect(parseWindowsProcessSnapshot(JSON.stringify({ ProcessId: 7, ParentProcessId: 1, Name: "a", CommandLine: "a", CreationDate: "x" })))
-      .toEqual([{ pid: 7, parentPid: 1, name: "a", commandLine: "a", startTime: null }]);
+      .toEqual([{ pid: 7, parentPid: 1, name: "a", commandLine: "a", startTime: null, foreignOwner: null }]);
     expect(parseWindowsProcessSnapshot("")).toEqual([]);
     expect(parseWindowsProcessSnapshot("{not json")).toBeNull();
+  });
+
+  test("only stable, successful SID evidence proves a foreign owner; service accounts remain candidates", () => {
+    const current = "S-1-5-21-100-200-300-1001";
+    const foreign = "S-1-5-21-100-200-300-1002";
+    const created = "2026-11-12T01:02:03.1234567Z";
+    const row = {
+      ProcessId: 20, ParentProcessId: 900, Name: "cmd.exe", CommandLine: "cmd.exe", CreationDate: created,
+      CurrentUserSid: current, Owner: { Sid: foreign, ReturnValue: 0, CreationDate: created },
+    };
+    const parse = (value: unknown) => parseWindowsProcessSnapshot(JSON.stringify(value))![0]!;
+    expect(parse(row).foreignOwner).toBe(true);
+    expect(parse({ ...row, Owner: { ...row.Owner, Sid: current.toLowerCase() } }).foreignOwner).toBe(false);
+    expect(parse({ ...row, Owner: { ...row.Owner, Sid: "S-1-12-1-100-200-300-400" } }).foreignOwner).toBe(true);
+    expect(parse({ ...row, CurrentUserSid: "S-1-12-1-100-200-300-400" }).foreignOwner).toBe(true);
+    for (const owner of ["S-1-5-18", "S-1-5-19", "S-1-5-20", "S-1-5-80-1-2-3-4-5", "S-1-5-82-1-2-3-4-5", "S-1-99-1"]) {
+      expect(parse({ ...row, Owner: { ...row.Owner, Sid: owner } }).foreignOwner).toBeNull();
+    }
+    for (const invalid of [null, "", "not-a-sid", "S-1-", "S-1-5-21-100-200-300-4294967296", "S-1-5-" + "1".repeat(257)]) {
+      expect(parse({ ...row, CurrentUserSid: invalid }).foreignOwner).toBeNull();
+      expect(parse({ ...row, Owner: { ...row.Owner, Sid: invalid } }).foreignOwner).toBeNull();
+    }
+    for (const invalid of [undefined, null, 2, "0"]) {
+      expect(parse({ ...row, Owner: { ...row.Owner, ReturnValue: invalid } }).foreignOwner).toBeNull();
+    }
+    for (const changed of [undefined, null, "2026-11-12T01:02:03.1234568Z"]) {
+      expect(parse({ ...row, Owner: { ...row.Owner, CreationDate: changed } }).foreignOwner).toBeNull();
+    }
+    expect(parse({ ...row, CreationDate: null }).foreignOwner).toBeNull();
+    expect(parse({ ...row, Owner: null, foreignOwner: true }).foreignOwner).toBeNull();
+    expect(JSON.stringify(parse(row))).not.toContain(current);
+    expect(JSON.stringify(parse(row))).not.toContain(foreign);
+
+    const known = parse(row);
+    expect(overlayNativeCreationTimes([known], () => known.startTime!)[0]!.foreignOwner).toBe(true);
+    expect(overlayNativeCreationTimes([known], () => known.startTime! + 2_000)[0])
+      .toMatchObject({ startTime: null, foreignOwner: null });
+    expect(overlayNativeCreationTimes([known], () => null)[0]!.foreignOwner).toBeNull();
   });
 
   test("a native creation time replaces CIM's only when both agree to the millisecond", () => {
@@ -132,6 +170,10 @@ describe("Windows process evidence: facades", () => {
     expect(commands).toHaveLength(1);
     expect(commands[0]).toMatchObject({ program: "powershell", timeoutMs: 5_000 });
     expect(commands[0]!.args.at(-1)).toBe(WINDOWS_PROCESS_SNAPSHOT_SCRIPT);
+    // Owner queries only cover potential candidates, and re-read identity AFTER the SID.
+    expect(WINDOWS_PROCESS_SNAPSHOT_SCRIPT).toContain("-like '*opencodex-service*'");
+    expect(WINDOWS_PROCESS_SNAPSHOT_SCRIPT.indexOf("Get-CimInstance -InputObject $_"))
+      .toBeGreaterThan(WINDOWS_PROCESS_SNAPSHOT_SCRIPT.indexOf("-MethodName GetOwnerSid"));
     expect(snapshot?.map(row => [row.pid, row.startTime])).toEqual([[20, cim], [4, null]]);
     expect(await windowsProcessSnapshot({ timeoutMs: 5_000, run: async () => { throw new Error("timeout"); } })).toBeNull();
   });

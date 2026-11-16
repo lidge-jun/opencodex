@@ -11,14 +11,14 @@ import {
   type WindowsWinswScmState,
 } from "../../src/service/windows-checked-stop";
 import type { WindowsProcessWatch, WindowsTerminateResult } from "../../src/service/windows-process-native";
-import type { WindowsStopProcessEntry } from "../../src/service/windows-process-evidence";
+import { parseWindowsProcessSnapshot, type WindowsStopProcessEntry } from "../../src/service/windows-process-evidence";
 import {
   DEFAULT_WINSW_STOP_TIMEOUT_MS,
   windowsPartBWindowMs,
   windowsStopWorstCase,
 } from "../../src/service/windows-stop-budget";
 import {
-  PATHS, SCHEDULE_PID, entry, launcher, loop, scheduleHost, supervisedTree, virtualClock,
+  CMD, PATHS, SCHEDULE_PID, entry, launcher, loop, scheduleHost, supervisedTree, virtualClock,
 } from "../helpers/windows-checked-stop-fixtures";
 
 const never = <T>(): Promise<T> => new Promise<T>(() => undefined);
@@ -65,6 +65,25 @@ function harness(overrides: Partial<WindowsCheckedStopDeps> = {}, snapshot: Wind
 const mutations = (calls: string[]) => calls.filter(call => call === "end" || call === "winsw-stop" || call.startsWith("terminate:"));
 
 describe("checked Windows stop, part A", () => {
+  test.each([false, true])("another user's path-only wrapper cannot veto the stop (registered=%s)", async registered => {
+    const created = "2026-11-12T01:02:03.1234567Z";
+    const foreign = parseWindowsProcessSnapshot(JSON.stringify({
+      ProcessId: 60, ParentProcessId: 500, Name: "cmd.exe", CommandLine: `cmd.exe /d /k rem "${CMD}"`,
+      CreationDate: created, CurrentUserSid: "S-1-5-21-100-200-300-1001",
+      Owner: { Sid: "S-1-5-21-100-200-300-1002", ReturnValue: 0, CreationDate: created },
+    }))!;
+    const shell = entry(500, 4, "explorer.exe", "explorer.exe", 2_000);
+    const h = harness({
+      childPid: registered ? 42 : null,
+      probeScheduler: () => ({ status: registered ? "present" : "absent" }),
+    }, [...(registered ? supervisedTree() : []), shell, ...foreign]);
+    const result = await stopWindowsServiceChecked(h.deps);
+    expect(result).toMatchObject({ outcome: registered ? "stopped" : "absent", reason: null, unbound: [] });
+    expect(mutations(h.calls)).toEqual(registered ? ["end", "terminate:30", "terminate:20"] : []);
+    expect(h.alive.has(60)).toBe(true);
+    expect(h.calls).not.toContain("close:60");
+  });
+
   test("/end leaves the loop alive: the wrappers are terminated deepest first and the child is left alone", async () => {
     const h = harness();
     const result = await stopWindowsServiceChecked(h.deps);

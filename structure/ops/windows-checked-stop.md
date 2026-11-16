@@ -29,9 +29,19 @@ lazily, caches a failed load as unavailable, and closes every handle in a `final
 
 Windows ARM64, other platforms and any test that simulates a platform get no native API.
 `src/service/windows-process-evidence.ts` is the facade the operations use. Its process snapshot is
-one capped `Get-CimInstance Win32_Process` query that emits `CreationDate` as an ISO UTC string. On
+one capped PowerShell snapshot that emits `CreationDate` as an ISO UTC string. It reads owner
+SIDs only for wrapper images, unreadable images, and command lines containing the fixed
+`opencodex-service` basename prefix (the guarded path also considers other images). A successful
+`GetOwnerSid` result proves another user's owner only when both SIDs are valid and a fresh CIM
+read after the owner query reports the original creation time. Supported service installs run
+as the current account; only differing local/domain or Entra ID account SIDs prove a foreign
+owner. Other SID namespaces, including built-in and virtual service accounts, remain candidates,
+as do unreadable or missing owner results. Raw
+SIDs stay within the snapshot parser; later operations receive only nullable `foreignOwner`.
+All reads share the existing timeout and output cap. On
 x64 each creation time is re-read natively and kept only when it agrees with CIM to the
-millisecond; a disagreement (a PID reused between the two reads) is unreadable. Elsewhere the
+millisecond; a disagreement (a PID reused between the two reads) makes both creation time and
+foreign-owner evidence unreadable. Elsewhere the
 CIM time is the bound value. The Schedule PID falls back to `sc.exe queryex Schedule` from the
 trusted system directory with a cap. The ARM64 terminate is one trusted PowerShell script that
 re-reads `Get-Process -Id` StartTime, compares it with the bound time within 1 s (UTC), calls
@@ -54,7 +64,9 @@ token; it is an ancestor of the identity-checked child, a descendant of a bound 
 of the Schedule host (SCM PID), or, only while this home's task is registered, an orphan (a parent
 that is missing or was created after it); and its creation time was read. The proxy child is
 never a candidate. A wrapper that matches image and path but fails lineage is reported unbound and
-left alone. Unreadable evidence about a candidate is reported unreadable: a matching wrapper
+left alone. A proven foreign owner is excluded from both bound and unbound candidates, while its
+row remains available for ancestry so a live parent cannot be mistaken for an orphan. Missing
+or unreadable ownership does not exclude a candidate. Unreadable evidence about a candidate is reported unreadable: a matching wrapper
 without a creation time or image name, and a wrapper image with no readable command line under a
 bound wrapper or, while a manager is registered, above the child. Bound wrappers are ordered
 deepest first and carry pid, creation time, image and a SHA-256 digest of the command line.
@@ -90,7 +102,10 @@ route's 4 s sweep and 6 s Part A in 030) needs an outer race or smaller caps.
 graceful child stop. The port must stay free for a 6 s hold, measured between sample starts,
 inside a window of `min(12 s, remaining - 0.5 s - 5 s - reserve)` with a 6 s floor. A final
 enumeration (5 s, sharing its cap with the listener identification) must show no wrapper image
-with this home's path token. An unreadable table is not success. A listener is ours
+with this home's path token after excluding proven foreign owners. The same exclusion applies
+to the unreadable-image check and the guarded manager's candidate checks. Its inspection-only
+`windowsProcessList` shares the owner snapshot and parser but does not expose creation times or
+gain terminate authority. An unreadable table is not success. A listener is ours
 (`survived`), foreign (`portHeldByForeign`) or left by an exited owner, which is not foreign.
 `resolveWindowsStopPort` picks the runtime-port record, then the wrapper's baked port, then the
 configured port.

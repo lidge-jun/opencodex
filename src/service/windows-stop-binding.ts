@@ -23,6 +23,7 @@
  * manager is registered, is an ancestor of the child.
  *
  * Pure: the caller supplies the snapshot and every fact; nothing here reads the machine.
+ * Proven foreign owners are never candidates, but stay in the table for parent evidence.
  */
 import { createHash } from "node:crypto";
 
@@ -114,7 +115,7 @@ export function bindWindowsStopWrappers(context: WindowsStopBindingContext): Win
   const unreadable = new Set<number>();
   const candidates: WindowsStopProcessEntry[] = [];
   for (const entry of processes) {
-    if (entry.pid === context.childPid || !matchesPath(entry)) continue;
+    if (entry.pid === context.childPid || entry.foreignOwner === true || !matchesPath(entry)) continue;
     if (entry.name === null) unreadable.add(entry.pid);
     else if (windowsWrapperImage(entry.name)) candidates.push(entry);
   }
@@ -149,7 +150,7 @@ export function bindWindowsStopWrappers(context: WindowsStopBindingContext): Win
   }
 
   for (const entry of processes) {
-    if (entry.pid === context.childPid || entry.commandLine?.trim() || !windowsWrapperImage(entry.name)) continue;
+    if (entry.pid === context.childPid || entry.foreignOwner === true || entry.commandLine?.trim() || !windowsWrapperImage(entry.name)) continue;
     if (descendsFromBound(entry) || (context.managerRegistered && childAncestors.has(entry.pid))) {
       unreadable.add(entry.pid);
     }
@@ -181,7 +182,7 @@ export function windowsHomeWrapperPids(
   selfPid?: number,
 ): number[] {
   return processes
-    .filter(entry => entry.pid !== selfPid && windowsWrapperImage(entry.name)
+    .filter(entry => entry.pid !== selfPid && entry.foreignOwner !== true && windowsWrapperImage(entry.name)
       && canonicalPaths.some(path => commandLineHasPathToken(entry.commandLine, path)))
     .map(entry => entry.pid);
 }

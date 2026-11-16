@@ -151,6 +151,9 @@ exit. Only then does it stop the proxy gracefully. Afterwards it confirms that t
 for about six seconds and that no wrapper started again, so a wrapper's restart loop cannot bring
 the proxy back behind a successful stop.
 
+The wrapper checks ignore processes proven to belong to a different user account. If the
+owner cannot be confirmed, the process is still checked and may prevent the stop.
+
 When the service cannot be proven stopped, `ocx stop` sends no stop request to the proxy, leaves
 your client configuration alone, and fails. With `--json` the summary keeps `outcome: "failed"`
 and `proxy: "unknown"`, and adds `serviceStopReason`:

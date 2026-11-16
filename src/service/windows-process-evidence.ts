@@ -99,11 +99,48 @@ function powershellArgs(script: string): string[] {
   return ["-NoProfile", "-NoLogo", "-NonInteractive", "-Command", script];
 }
 
-/** The snapshot query. CreationDate is emitted as an ISO UTC string, never as a JSON date. */
-export const WINDOWS_PROCESS_SNAPSHOT_SCRIPT = "Get-CimInstance Win32_Process | Select-Object "
-  + "ProcessId,ParentProcessId,Name,CommandLine,"
-  + "@{Name='CreationDate';Expression={ if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') } else { $null } }} "
-  + "| ConvertTo-Json -Compress";
+/**
+ * Owner reads share the snapshot's cap and only cover possible wrapper candidates. The
+ * fixed basename prefix covers the guarded path's image-independent matches too, without
+ * embedding a home path in this helper's own command line. A fresh CIM read after GetOwnerSid
+ * binds that owner to the original creation time; a reused PID cannot prove a foreign owner.
+ */
+export const WINDOWS_PROCESS_SNAPSHOT_SCRIPT = [
+  "$currentSid = $null; try { $currentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch {};",
+  "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine,",
+  "@{Name='CreationDate';Expression={ if ($_.CreationDate) { $_.CreationDate.ToUniversalTime().ToString('o') } else { $null } }},",
+  "@{Name='CurrentUserSid';Expression={ $currentSid }},",
+  "@{Name='Owner';Expression={",
+  "  if ($currentSid -and (($_.Name -match '^(wscript|cscript|cmd)\\.exe$') -or (-not $_.Name) -or ($_.CommandLine -like '*opencodex-service*'))) {",
+  "    try {",
+  "      $owner = Invoke-CimMethod -InputObject $_ -MethodName GetOwnerSid -ErrorAction Stop;",
+  "      $after = Get-CimInstance -InputObject $_ -ErrorAction Stop;",
+  "      @{ Sid = $owner.Sid; ReturnValue = $owner.ReturnValue;",
+  "         CreationDate = if ($after.CreationDate) { $after.CreationDate.ToUniversalTime().ToString('o') } else { $null } }",
+  "    } catch { $null }",
+  "  } else { $null }",
+  "}} | ConvertTo-Json -Depth 3 -Compress",
+].join(" ");
+
+const SID_PATTERN = /^S-1-\d+(?:-\d+){1,15}$/i;
+const USER_ACCOUNT_SID_PATTERN = /^S-1-(?:5-21|12-1)(?:-\d{1,10}){4}$/i;
+
+function foreignProcessOwner(record: Record<string, unknown>, startTime: number | null): boolean | null {
+  const sid = (value: unknown): string | null => typeof value === "string" && value.length <= 256 && SID_PATTERN.test(value)
+    && value.split("-").slice(3).every(part => Number(part) <= 0xffff_ffff)
+    ? value.toUpperCase() : null;
+  const current = sid(record.CurrentUserSid);
+  const owner = record.Owner;
+  if (startTime === null || current === null || typeof owner !== "object" || owner === null) return null;
+  const evidence = owner as Record<string, unknown>;
+  const observed = sid(evidence.Sid);
+  if (evidence.ReturnValue !== 0 || observed === null || evidence.CreationDate !== record.CreationDate) return null;
+  if (observed === current) return false;
+  // Supported installs run as the current account: local/domain or Entra ID. Other SID
+  // namespaces, including built-in and virtual service accounts, remain conservative.
+  // This exclusion never adds authority to terminate a candidate.
+  return USER_ACCOUNT_SID_PATTERN.test(current) && USER_ACCOUNT_SID_PATTERN.test(observed) ? true : null;
+}
 
 /** Parse the snapshot JSON. Unparseable output is null: an unread table proves nothing. */
 export function parseWindowsProcessSnapshot(output: string): WindowsStopProcessEntry[] | null {
@@ -130,6 +167,7 @@ export function parseWindowsProcessSnapshot(output: string): WindowsStopProcessE
       name: typeof record.Name === "string" ? record.Name : null,
       commandLine: typeof record.CommandLine === "string" ? record.CommandLine : null,
       startTime: Number.isFinite(created) ? created : null,
+      foreignOwner: foreignProcessOwner(record, Number.isFinite(created) ? created : null),
     });
   }
   return entries;
@@ -145,7 +183,7 @@ export function overlayNativeCreationTimes(
   creationTime: (pid: number) => number | null,
 ): WindowsStopProcessEntry[] {
   return entries.map(entry => {
-    if (entry.startTime === null) return entry;
+    if (entry.startTime === null) return { ...entry, foreignOwner: null };
     let native: number | null;
     try {
       native = creationTime(entry.pid);
@@ -153,7 +191,7 @@ export function overlayNativeCreationTimes(
       native = null;
     }
     const agrees = native !== null && Math.abs(native - entry.startTime) <= NATIVE_CIM_TOLERANCE_MS;
-    return { ...entry, startTime: agrees ? native : null };
+    return { ...entry, startTime: agrees ? native : null, foreignOwner: agrees ? entry.foreignOwner : null };
   });
 }
 

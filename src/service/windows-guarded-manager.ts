@@ -34,6 +34,7 @@ import { probeWindowsSchedulerTask, querySchtasks, type WindowsSchedulerTaskProb
 import { windowsWscript } from "./windows-wscript";
 import { windowsTaskRegistrationHealthy, windowsTaskRegistrationRefreshableLegacy } from "./windows-taskxml";
 import { commandLineHasPathToken } from "./windows-command-line-token";
+import { parseWindowsProcessSnapshot, WINDOWS_PROCESS_SNAPSHOT_SCRIPT } from "./windows-process-evidence";
 
 // Re-exported for existing importers; the function lives in a leaf module to keep the binding rule
 // (windows-stop-binding.ts) free of an import cycle with this inspection.
@@ -45,6 +46,8 @@ export interface WindowsProcessEntry {
   parentPid: number | null;
   name: string | null;
   commandLine: string | null;
+  /** Only true proves another user's owner SID; missing/unreadable evidence excludes nothing. */
+  foreignOwner?: boolean | null;
 }
 
 /** Get-ScheduledTask State, collapsed to what the stop decision needs. */
@@ -115,28 +118,10 @@ function runPowerShell(command: string): string {
 export function windowsProcessList(): WindowsProcessEntry[] | null {
   if (process.platform !== "win32") return null;
   try {
-    const output = runPowerShell(
-      "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress",
-    );
-    const trimmed = output.trim();
-    if (!trimmed) return [];
-    const parsed: unknown = JSON.parse(trimmed);
-    const rows = Array.isArray(parsed) ? parsed : [parsed];
-    const entries: WindowsProcessEntry[] = [];
-    for (const row of rows) {
-      if (typeof row !== "object" || row === null) continue;
-      const record = row as { ProcessId?: unknown; ParentProcessId?: unknown; Name?: unknown; CommandLine?: unknown };
-      const pid = Number(record.ProcessId);
-      const parent = Number(record.ParentProcessId);
-      if (!Number.isSafeInteger(pid) || pid <= 0) continue;
-      entries.push({
-        pid,
-        parentPid: Number.isSafeInteger(parent) && parent > 0 ? parent : null,
-        name: typeof record.Name === "string" ? record.Name : null,
-        commandLine: typeof record.CommandLine === "string" ? record.CommandLine : null,
-      });
-    }
-    return entries;
+    // Share owner evidence, but do not add creation-time/terminate authority to this
+    // inspection-only table. Part A still requires windowsProcessSnapshot's native overlay.
+    return parseWindowsProcessSnapshot(runPowerShell(WINDOWS_PROCESS_SNAPSHOT_SCRIPT))
+      ?.map(({ pid, parentPid, name, commandLine, foreignOwner }) => ({ pid, parentPid, name, commandLine, foreignOwner })) ?? null;
   } catch {
     return null;
   }
@@ -300,7 +285,7 @@ export function ancestorWrapperPids(
     const parent = entry.parentPid;
     if (parent === null || parent <= 0) break;
     const parentEntry = byPid.get(parent);
-    if (parentEntry?.commandLine
+    if (parentEntry?.commandLine && parentEntry.foreignOwner !== true
       && canonicalPaths.some(path => commandLineHasPathToken(parentEntry.commandLine, path))) {
       found.push(parent);
     }
@@ -322,7 +307,7 @@ export function wrapperProcessesAlive(
   canonicalPaths: readonly string[],
 ): number[] {
   return processes
-    .filter(entry => entry.pid !== process.pid && entry.commandLine
+    .filter(entry => entry.pid !== process.pid && entry.foreignOwner !== true && entry.commandLine
       && canonicalPaths.some(path => commandLineHasPathToken(entry.commandLine, path)))
     .map(entry => entry.pid);
 }
@@ -335,7 +320,7 @@ export function wrapperProcessesAlive(
  * guarded stop unreachable on an ordinary desktop.
  */
 function isUnreadableWrapperCandidate(entry: WindowsProcessEntry): boolean {
-  return !entry.commandLine?.trim() && /^(?:wscript|cscript|cmd)\.exe$/i.test(entry.name ?? "");
+  return entry.foreignOwner !== true && !entry.commandLine?.trim() && /^(?:wscript|cscript|cmd)\.exe$/i.test(entry.name ?? "");
 }
 
 /** Unreadable wrapper candidates among pid's ancestors, nearest first. */
