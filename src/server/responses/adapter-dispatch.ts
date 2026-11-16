@@ -932,13 +932,13 @@ export async function prepareAdapterExchange(
 
       // Preserve the terminal verdict through adapter and combo error formatting.
       // This also covers a reset reached by a 401/429/413 recovery refetch.
+      await rejectAnthropicPerMessageEffort(parsed, upstreamResponse, upstream.signal);
       if (isNonReplayableResponse(upstreamResponse)) {
         try {
           return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal);
         } finally { cleanupUpstreamAbort(); }
       }
       bindAnthropicRejectionResponse(transportState.sameTargetRequest, upstreamResponse);
-      await rejectAnthropicPerMessageEffort(parsed, upstreamResponse, upstream.signal);
       if (await thinkingSignatureRecovery.prepareHttp(
         upstreamResponse, transportState.activeAdapter.name,
       )) {

@@ -189,13 +189,16 @@ function requestFor(build: PerMessageEffortBuild, input: unknown[]): EffortHisto
   };
 }
 
-function applySend(build: PerMessageEffortBuild, decision: Extract<EffortHistoryDecision, { action: "send" }>): boolean {
+function applySend(build: PerMessageEffortBuild, decision: Extract<EffortHistoryDecision, { action: "send" }>, userIndex: number | undefined): boolean {
   const messages = build.body.messages;
   if (!Array.isArray(messages)) return false;
-  const points = [...(decision.changePoints ?? [])].sort((a, b) => b.wireIndex - a.wireIndex);
-  // Every stored index must still name a user message in the matched prefix; otherwise nothing is changed.
-  if (points.some(point => !isRec(messages[point.wireIndex]) || (messages[point.wireIndex] as Rec).role !== "user")) return false;
-  for (const point of points) {
+  const points = decision.changePoints ?? [];
+  // Every index must still name a user message, the indices must rise strictly in prefix order, and
+  // only this turn's own change point may sit at this turn's user message; otherwise nothing changes.
+  if (points.some((point, i) => !isRec(messages[point.wireIndex]) || (messages[point.wireIndex] as Rec).role !== "user"
+    || (i > 0 && point.wireIndex <= points[i - 1].wireIndex))) return false;
+  if (userIndex !== undefined && points.some(point => point === decision.insert ? point.wireIndex !== userIndex : point.wireIndex >= userIndex)) return false;
+  for (const point of [...points].reverse()) {
     messages.splice(point.wireIndex, 0, { role: "system", content: [], output_config: { effort: point.effort } });
   }
   build.body.output_config = { ...(isRec(build.body.output_config) ? build.body.output_config : {}), effort: decision.anchorEffort };
@@ -223,14 +226,21 @@ export function applyAnthropicPerMessageEffort(build: PerMessageEffortBuild): vo
   const turn: PerMessageEffortTurn = existing ?? { builds: 1, generation: KEY_GENERATION };
   parsed._perMessageEffort = turn;
   if (outsideOption(parsed) || !isRec(parsed._rawBody) || !Array.isArray(parsed._rawBody.input)) return;
-  const decision = decide(store, requestFor(build, parsed._rawBody.input), {
+  let request: EffortHistoryRequest;
+  try {
+    request = requestFor(build, parsed._rawBody.input);
+  } catch {
+    // Mapping the build failed (for example a pathologically deep body): off, sent as today.
+    return;
+  }
+  const decision = decide(store, request, {
     enabled: true,
     activated: true,
     websocketHeaderRead: true,
     compactionMarkerIdentified: true,
   });
   if (decision.action !== "send") return;
-  if (!applySend(build, decision)) {
+  if (!applySend(build, decision, request.changeWireIndex)) {
     abandon(store, decision.pendingToken, { sent: false });
     return;
   }

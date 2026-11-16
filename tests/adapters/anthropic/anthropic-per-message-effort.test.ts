@@ -247,6 +247,25 @@ describe("off paths send today's request", () => {
   });
 
 
+  test("a stored change point at or past this turn's user message is never applied", async () => {
+    const input1 = [userMsg("fix the bug")];
+    const t1 = await build(input1, "high");
+    const r1 = await respond(t1, "first");
+    finish(t1, r1.response, { read: 0, write: 1000 });
+    const input2 = [...input1, ...r1.items, userMsg("now the tests")];
+    const t2 = await build(input2, "low");
+    const r2 = await respond(t2, "second");
+    finish(t2, r2.response, { read: 1000, write: 200 });
+    // Defense in depth: corrupt the stored index so it names this turn's user message.
+    const input3 = [...input2, ...r2.items, userMsg("and the docs")];
+    const userIndex = JSON.parse(await todayBody(input3, "low")).messages.length - 1;
+    for (const entry of perMessageEffortStoreForTests().entries.values()) entry.changePoints = entry.changePoints.map(point => ({ ...point, wireIndex: userIndex }));
+    const t3 = await build(input3, "low");
+    expect(JSON.stringify(t3.body)).toBe(await todayBody(input3, "low"));
+    expect(betaOf(t3.headers)).not.toContain(PER_MESSAGE_EFFORT_BETA);
+  });
+
+
   test("an OAuth provider is outside the first slice", async () => {
     const oauth: OcxProviderConfig = { ...KEY_PROVIDER, authMode: "oauth", apiKey: "oauth-access" };
     const input = [userMsg("fix the bug")];

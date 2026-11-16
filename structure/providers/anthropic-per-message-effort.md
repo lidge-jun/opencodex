@@ -53,7 +53,8 @@ either direction; no cap is raised to make a turn eligible.
 `src/adapters/anthropic/per-message-effort.ts` maps one build onto the state machine and is called
 once from `src/adapters/anthropic.ts` after prompt caching is applied. On a send decision it sets
 `output_config.effort` to the first turn's effort, inserts every recorded change point at its
-stored `messages` index (highest first, so earlier indices do not move), and merges the beta into
+stored `messages` index (highest first, so earlier indices do not move); the indices must name
+user messages, rise strictly, and stay before this turn's user message, except this turn's own change point, which sits at it; then it merges the beta into
 `anthropic-beta`. A change point's index is the wire message that starts with that turn's user
 text, found in the trailing user-role run of the serialized body; a user message merged behind
 other content or opening with an image has none, and the turn goes off. The parsed request carries
@@ -67,7 +68,9 @@ usage's `cached_tokens` as the cache read and that read plus `cache_write_tokens
 turn whose cache read is below the parent's P, any other status, a rebuilt turn, or another
 adapter deletes the slot. `src/server/responses/adapter-dispatch.ts` deletes the slot on an
 upstream error status; the documented 400 "requires a model that supports per-turn effort" also
-marks that model and destination unsupported for an hour. Nothing here resends.
+marks that model and destination unsupported for an hour. Nothing here resends. A hosted sidecar loop that fails does
+not reject its turn; the pending slot stays until its ten-minute expiry, and a retry of the same
+turn finds it and goes off.
 
 The proxy's own message injections, such as the multi-agent guidance that
 `src/server/responses/collaboration.ts` adds at `max` and `ultra` effort, are unchanged and are not
