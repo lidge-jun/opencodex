@@ -139,7 +139,7 @@ describe("Google Antigravity danger dialog", () => {
     expect(q(".modal-card")?.className).toContain("oauth-tos-card--danger");
     expect(q("h3")?.className).toContain("oauth-tos-danger-title");
     expect(q("h3 svg")).not.toBeNull();
-    expect(q("h3")?.textContent).toBe("Google may permanently disable this Google account");
+    expect(q("h3")?.textContent).toBe("Google may permanently disable Gemini and Antigravity on this Google account");
     expect(q(".notice-err")).not.toBeNull();
     expect(q(".notice-warn")).toBeNull();
 
@@ -225,7 +225,7 @@ test("every locale carries the Antigravity dialog copy with the same anchors", (
     expect(dict["oauthTos.antigravityConditions"].split("\n"), code).toHaveLength(4);
     expect(dict["oauthTos.antigravitySaferPath"], code).toContain("API");
   }
-  expect(DICTS.ko["oauthTos.antigravityTitle"]).toBe("Google이 이 Google 계정을 영구 정지할 수 있습니다");
+  expect(DICTS.ko["oauthTos.antigravityTitle"]).toBe("Google이 이 Google 계정의 Gemini·Antigravity 이용을 영구 정지할 수 있습니다");
   expect(DICTS.ko["oauthTos.antigravityContinue"]).toBe("위험을 감수하고 계속");
 });
 

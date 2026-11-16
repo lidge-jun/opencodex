@@ -37,6 +37,8 @@ function fixture(replies: unknown[] = [{ url: "https://example.test/auth", flowI
   const calls: Call[] = [];
   let probes = 0, reads = 0;
   const deps: RuntimeApiDeps = {
+    // Pinned: this suite runs under coding agents and CI, which the Antigravity gate refuses.
+    antigravityRisk: { agentDriven: () => false, promptVisible: () => true },
     stdinImpl: new Readable({ read() { reads++; this.push(`${SECRET}\n`); this.push(null); } }),
     findLiveProxy: async () => { probes++; return { port: 32000 + probes, hostname: "127.0.0.1", pid: 1, source: "runtime" }; },
     fetchImpl: (async (input, init) => {
@@ -414,7 +416,7 @@ describe("Google Antigravity login acknowledgement", () => {
     const f = fixture([START]);
     expect(await handleAccountAuthCommand("login", ["google-antigravity", "--accept-antigravity-risk", "--no-wait", "--json"], f.deps)).toBe(0);
     expect(f.calls[0]?.body).toEqual({ provider: "google-antigravity", addAccount: true, acknowledgeAntigravityRisk: true });
-    expect(JSON.stringify(error.mock.calls)).toContain("permanently disabled");
+    expect(JSON.stringify(error.mock.calls)).toContain("permanently disable Gemini and Antigravity access");
 
     const reauth = fixture([START]);
     expect(await handleAccountAuthCommand("login", ["google-antigravity", "--reauth", "--id", "acct-1", "--accept-antigravity-risk", "--no-wait", "--json"], reauth.deps)).toBe(0);
@@ -434,6 +436,25 @@ describe("Google Antigravity login acknowledgement", () => {
         expect(no.calls).toHaveLength(0);
       }
     } finally { write.mockRestore(); }
+  });
+
+  test("a coding agent or CI runner is refused even with the flag or a y answer", async () => {
+    for (const [args, stdin] of [[["--accept-antigravity-risk"], undefined], [[], tty("y\n")]] as const) {
+      const f = fixture([START]);
+      const deps = { ...f.deps, antigravityRisk: { agentDriven: () => true, promptVisible: () => true }, ...(stdin ? { stdinImpl: stdin } : {}) };
+      error.mockClear();
+      expect(await handleAccountAuthCommand("login", ["google-antigravity", ...args, "--no-wait", "--json"], deps)).toBe(2);
+      expect(f.calls).toHaveLength(0);
+      expect(JSON.stringify(error.mock.calls)).toContain("coding agent or CI runner");
+    }
+  });
+
+  test("a terminal stdin with an invisible prompt is not interactive", async () => {
+    const f = fixture([START]);
+    const deps = { ...f.deps, antigravityRisk: { agentDriven: () => false, promptVisible: () => false }, stdinImpl: tty("y\n") };
+    expect(await handleAccountAuthCommand("login", ["google-antigravity", "--no-wait", "--json"], deps)).toBe(2);
+    expect(f.calls).toHaveLength(0);
+    expect(JSON.stringify(error.mock.calls)).toContain("no interactive terminal");
   });
 
   test("the flag is refused for other providers, and other providers never prompt", async () => {

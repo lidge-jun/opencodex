@@ -129,7 +129,7 @@ test("a file picked without the warning is held, never imported, until the risk 
   const file = new win.File(["[]"], "cockpit.json", { type: "application/json" }) as unknown as File;
   await selectFile(file, { acknowledge: false });
   expect(fetchMock).not.toHaveBeenCalled();
-  expect(warningDialog()?.textContent).toContain("Google may permanently disable this Google account");
+  expect(warningDialog()?.textContent).toContain("Google may permanently disable Gemini and Antigravity on this Google account");
 
   // Cancel drops the held file and imports nothing.
   const cancel = Array.from(warningDialog()!.querySelectorAll<HTMLButtonElement>(".modal-actions button"))
@@ -157,6 +157,23 @@ test("the import button shows the warning first and opens the picker only after 
 
   // Dismissing the native picker disarms the acknowledgement: a later direct pick asks again.
   await act(async () => { input().dispatchEvent(new win.Event("cancel")); });
+  await selectFile(new win.File(["[]"], "cockpit.json", { type: "application/json" }) as unknown as File, { acknowledge: false });
+  expect(warningDialog()).toBeTruthy();
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
+test("without a cancel event, the window regaining focus disarms the acknowledgement", async () => {
+  await mount();
+  input().click = () => {};
+  const button = Array.from(host.querySelectorAll<HTMLButtonElement>("button"))
+    .find(candidate => candidate.textContent === "Choose JSON file")!;
+  await act(async () => { button.click(); });
+  await acceptWarning();
+  // The picker closes without a selection: only focus returns.
+  await act(async () => {
+    win.dispatchEvent(new win.Event("focus"));
+    await new Promise(resolve => setTimeout(resolve, 1600));
+  });
   await selectFile(new win.File(["[]"], "cockpit.json", { type: "application/json" }) as unknown as File, { acknowledge: false });
   expect(warningDialog()).toBeTruthy();
   expect(fetchMock).not.toHaveBeenCalled();

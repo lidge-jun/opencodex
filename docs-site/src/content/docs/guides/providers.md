@@ -258,9 +258,9 @@ login-only too: `ocx login google-antigravity` signs in with your Google account
 Assist wire, and the `google` preset beside it is the AI Studio Gemini API — a different product
 reached with its own key, not a key mode for the same login.
 
-:::danger[Google can disable the Google account]
+:::danger[Google can disable Gemini and Antigravity on the Google account]
 The Antigravity login is meant for Google's own Antigravity app. Users of third-party tools have
-reported their Google accounts being disabled with "This service has been disabled in this account
+reported Gemini and Antigravity access on their Google accounts being disabled with "This service has been disabled in this account
 for violation of Terms of Service." The ban covers that account's Gemini Code Assist and Antigravity
 access, and restoring it depends on Google's appeal process. Sign in only with a separate Google
 account you can afford to lose, never a main, personal, school or work account; a Gemini API key is

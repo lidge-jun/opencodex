@@ -24,6 +24,7 @@ import {
   requiresAntigravityRiskAcknowledgement,
   resolveAntigravityRiskAcknowledgement,
 } from "./antigravity-risk";
+import { isAgentDriven } from "../cli/agent-driven";
 
 /**
  * Seams a test drives in place of a browser, a terminal and a real provider. Production passes
@@ -40,8 +41,10 @@ export interface LoginCliDeps {
   warn?: (message: string) => void;
   /** Ask one question, read one line. Defaults to a readline prompt that owns its own lifetime. */
   ask?: (question: string) => Promise<string>;
-  /** Whether a person can answer a prompt. Defaults to stdin being a terminal. */
+  /** Whether a person can answer a prompt. Defaults to stdin and stdout both being terminals. */
   isInteractive?: () => boolean;
+  /** Whether a coding agent or CI runner drives this process. Defaults to isAgentDriven(). */
+  agentDriven?: () => boolean;
 }
 
 /**
@@ -230,7 +233,9 @@ export async function handleOAuthLogin(name: string, deps: LoginCliDeps = {}, op
   if (requiresAntigravityRiskAcknowledgement(name)) {
     const decision = await resolveAntigravityRiskAcknowledgement({
       flag: opts.acceptAntigravityRisk === true,
-      interactive: (deps.isInteractive ?? (() => process.stdin.isTTY === true))(),
+      // readline writes the question to stdout, so both ends must be a terminal.
+      interactive: (deps.isInteractive ?? (() => process.stdin.isTTY === true && process.stdout.isTTY === true))(),
+      agentDriven: (deps.agentDriven ?? isAgentDriven)(),
       warn: text => console.error(text),
       ask: question => withPrompt(deps.ask, ask => ask(question)),
     });

@@ -88,17 +88,17 @@ describe("acknowledgement contract", () => {
 
   test("the CLI warning names the ban message, the account scope and the safer path", () => {
     expect(ANTIGRAVITY_RISK_WARNING).toContain(ANTIGRAVITY_TOS_BAN_MESSAGE);
-    expect(ANTIGRAVITY_RISK_WARNING).toContain("permanently disabled");
+    expect(ANTIGRAVITY_RISK_WARNING).toContain("permanently disable Gemini and Antigravity access");
     expect(ANTIGRAVITY_RISK_WARNING).toContain("Never use your main");
     expect(ANTIGRAVITY_RISK_WARNING).toContain("Gemini API key");
   });
 
   test("the prompt accepts only an explicit yes and always shows the warning", async () => {
-    const run = async (flag: boolean, interactive: boolean, answer: string | Error) => {
+    const run = async (flag: boolean, interactive: boolean, answer: string | Error, agentDriven = false) => {
       const warned: string[] = [];
       const asked: string[] = [];
       const decision = await resolveAntigravityRiskAcknowledgement({
-        flag, interactive,
+        flag, interactive, agentDriven,
         warn: text => warned.push(text),
         ask: async question => {
           asked.push(question);
@@ -115,6 +115,8 @@ describe("acknowledgement contract", () => {
     for (const yes of ["y", "Y", " yes ", "YES"]) expect((await run(false, true, yes)).decision).toBe("accepted");
     for (const no of ["", "n", "no", "sure", "yess"]) expect((await run(false, true, no)).decision).toBe("declined");
     expect((await run(false, true, new Error("stdin closed"))).decision).toBe("declined");
+    // An agent is refused before the flag or a prompt can decide.
+    expect(await run(true, true, "y", true)).toEqual({ decision: "agent", asked: 0 });
   });
 });
 
@@ -189,7 +191,7 @@ describe("POST /api/oauth/accounts/import", () => {
  * prompt is the only gate, and these cases prove it holds before the flow starts.
  */
 describe("ocx login google-antigravity", () => {
-  async function runLogin(opts: { flag?: boolean; interactive: boolean; answer?: string; provider?: string }) {
+  async function runLogin(opts: { flag?: boolean; interactive: boolean; answer?: string; provider?: string; agent?: boolean }) {
     const started: string[] = [];
     const asked: string[] = [];
     const errors: string[] = [];
@@ -203,6 +205,7 @@ describe("ocx login google-antigravity", () => {
         openUrl: async () => ({ status: "started" }),
         warn: () => {},
         isInteractive: () => opts.interactive,
+        agentDriven: () => opts.agent === true,
         ask: async question => { asked.push(question); return opts.answer ?? ""; },
       }, { acceptAntigravityRisk: opts.flag === true });
     } catch (error) {
@@ -237,6 +240,16 @@ describe("ocx login google-antigravity", () => {
     expect(flagged.started).toEqual(["google-antigravity"]);
     expect(flagged.asked).toEqual([]);
     expect(flagged.errors).toContain(ANTIGRAVITY_TOS_BAN_MESSAGE);
+  });
+
+  test("a coding agent or CI runner is refused even with the flag or a y answer", async () => {
+    for (const run of [{ flag: true, interactive: false }, { interactive: true, answer: "y" }]) {
+      const result = await runLogin({ ...run, agent: true });
+      expect(result.exit).toBe("process.exit:1");
+      expect(result.started).toEqual([]);
+      expect(result.asked).toEqual([]);
+      expect(result.errors).toContain("coding agent or CI runner");
+    }
   });
 
   test("other providers neither prompt nor accept the flag", async () => {

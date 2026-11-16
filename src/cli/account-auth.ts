@@ -12,6 +12,7 @@ import {
   requiresAntigravityRiskAcknowledgement,
   resolveAntigravityRiskAcknowledgement,
 } from "../oauth/antigravity-risk";
+import { isAgentDriven } from "./agent-driven";
 import {
   RuntimeApiError,
   CliUsageError,
@@ -265,7 +266,10 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
   if (antigravityRisk) {
     const decision = await resolveAntigravityRiskAcknowledgement({
       flag: acceptAntigravityRisk,
-      interactive: (deps.stdinImpl ?? process.stdin).isTTY === true,
+      // The question goes to stderr, so a redirected stderr is not a terminal a person can answer.
+      interactive: (deps.stdinImpl ?? process.stdin).isTTY === true
+        && (deps.antigravityRisk?.promptVisible ?? (() => process.stderr.isTTY === true))(),
+      agentDriven: (deps.antigravityRisk?.agentDriven ?? isAgentDriven)(),
       warn: text => console.error(text),
       ask: async question => {
         process.stderr.write(question);

@@ -378,7 +378,8 @@ async function mockManagementApi(req: Request): Promise<Response> {
 }
 
 function defaultDeps(): AccountDeps {
-  return { baseUrl, loadConfigImpl: fixtureConfig };
+  // Pinned: this suite runs under coding agents and CI, which the Antigravity gate refuses.
+  return { baseUrl, loadConfigImpl: fixtureConfig, antigravityRisk: { agentDriven: () => false, promptVisible: () => true } };
 }
 
 function stdinFrom(value: string, isTTY = false): AccountStdin {
@@ -2222,6 +2223,12 @@ describe("ocx account CLI (issue #180 matrix)", () => {
       expect(requests).toHaveLength(before + 1);
       expect(requests.at(-1)).toMatchObject({ path: "/api/oauth/accounts/import", body: { acknowledgeAntigravityRisk: true } });
       expect(JSON.stringify(prompt.mock.calls)).toContain("[y/N]");
+
+      // An agent-driven run is refused before the source is read, flag or not.
+      const agent = await run(["import", "google-antigravity", "--accept-antigravity-risk", "--format", "cockpit-tools", "--file", path], { ...defaultDeps(), antigravityRisk: { agentDriven: () => true } });
+      expect(agent.code).toBe(1);
+      expect(requests).toHaveLength(before + 1);
+      expect(agent.stderr).toContain("coding agent or CI runner");
     } finally {
       prompt.mockRestore();
       removeTreeWithRetry(directory);

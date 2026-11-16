@@ -41,7 +41,7 @@ State-changing: yes. JSON mode: `payload`.
 | `--accept-antigravity-risk` | boolean | google-antigravity only: accept the Google account-ban risk without the interactive y/N prompt. |
 
 - openai, codex and chatgpt address the Codex pool. Native main uses the separate account main reauth flow.
-- google-antigravity (login and reauth) prints an account-ban warning and needs a y answer on a terminal or --accept-antigravity-risk; otherwise it is refused before any request. Agents must not pass the flag on the user's behalf.
+- google-antigravity (login and reauth) prints an account-ban warning and needs a y answer on a terminal or --accept-antigravity-risk; otherwise it is refused before any request. Agent-driven runs are refused even with the flag (AGENTS_INSTALL.md).
 - Login is a human authorization handoff. Codes, verification material and credentials must not be copied into agent transcripts. Legacy argv code input warns about exposure; use stdin.
 - No --live flag is implemented. Provider OAuth --id requires --reauth; --method is Kiro add-only.
 - Omitted options preserve each flow's existing defaults. Explicit browser flags are refused for Codex device, known native-device providers and native Kiro method; add-account is refused for reauth/Codex/Kiro method.
@@ -580,7 +580,7 @@ State-changing: yes. JSON mode: `envelope`.
 | `--json` | boolean | Emit sanitized per-record import outcomes. |
 
 - Human-controlled credential handoff: choose exactly one source. Unsupported providers/formats are refused before source I/O. Partial failures or unsupported records return nonzero; do not echo the document.
-- Prints the Antigravity account-ban warning before reading the source; --file on a terminal asks y/N, otherwise --accept-antigravity-risk is required.
+- Prints the Antigravity account-ban warning before reading the source; --file on a terminal asks y/N, otherwise --accept-antigravity-risk is required. Agent-driven runs are refused even with the flag (AGENTS_INSTALL.md).
 
 ### `ocx account reauth`
 

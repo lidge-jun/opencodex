@@ -233,11 +233,25 @@ export default function ProviderAuthPanel({
   const importAcknowledgedRef = useRef(false);
   useEffect(() => {
     // Dismissing the native picker must not leave the acknowledgement armed for a later pick.
+    // Engines without the input's cancel event (older WebKit/WKWebView) are covered by the window
+    // regaining focus when the picker closes; the disarm waits briefly because some engines
+    // deliver that focus before the change event of a real selection.
     const input = importFileRef.current;
     if (!input) return;
     const disarm = () => { importAcknowledgedRef.current = false; };
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const disarmAfterPicker = () => {
+      if (!importAcknowledgedRef.current) return;
+      clearTimeout(timer);
+      timer = setTimeout(disarm, 1500);
+    };
     input.addEventListener("cancel", disarm);
-    return () => input.removeEventListener("cancel", disarm);
+    window.addEventListener("focus", disarmAfterPicker);
+    return () => {
+      clearTimeout(timer);
+      input.removeEventListener("cancel", disarm);
+      window.removeEventListener("focus", disarmAfterPicker);
+    };
   }, [item.name]);
   const [manualCode, setManualCode] = useState("");
   const [manualCodeBusy, setManualCodeBusy] = useState(false);

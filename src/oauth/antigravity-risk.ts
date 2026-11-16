@@ -43,7 +43,7 @@ export function hasAntigravityRiskAcknowledgement(body: unknown): boolean {
 /** The API refusal body, shared by every route that can add an Antigravity account. */
 export function antigravityRiskRefusalBody(): { error: string; code: typeof ANTIGRAVITY_RISK_REFUSAL_CODE } {
   return {
-    error: "Google Antigravity sign-in can get the Google account disabled. Acknowledge the risk in the OpenCodex dashboard, or pass "
+    error: "Google Antigravity sign-in can get Gemini and Antigravity access disabled on the Google account. Acknowledge the risk in the OpenCodex dashboard, or pass "
       + ANTIGRAVITY_RISK_CLI_FLAG + " to the CLI.",
     code: ANTIGRAVITY_RISK_REFUSAL_CODE,
   };
@@ -52,9 +52,9 @@ export function antigravityRiskRefusalBody(): { error: string; code: typeof ANTI
 /** Terminal warning shown before every CLI Antigravity sign-in or import, flag or not. */
 export const ANTIGRAVITY_RISK_WARNING = [
   "",
-  "WARNING: Google Antigravity sign-in can get this Google account permanently disabled.",
+  "WARNING: Google may permanently disable Gemini and Antigravity access on the Google account you sign in with.",
   "  The Antigravity login is meant for Google's own Antigravity app. OpenCodex is a third-party",
-  "  proxy, and users of third-party tools have reported their Google accounts being disabled with:",
+  "  proxy, and users of third-party tools have reported that access being disabled with:",
   "    \"" + ANTIGRAVITY_TOS_BAN_MESSAGE + "\"",
   "  - The ban applies to the Google account: its Gemini Code Assist and Antigravity access can",
   "    stop everywhere, including in Google's own tools.",
@@ -67,20 +67,35 @@ export const ANTIGRAVITY_RISK_WARNING = [
 
 export const ANTIGRAVITY_RISK_PROMPT = "Continue with Google Antigravity and accept the risk? [y/N]: ";
 
-export type AntigravityRiskDecision = "accepted" | "declined" | "noninteractive";
+export type AntigravityRiskDecision = "accepted" | "declined" | "noninteractive" | "agent";
+
+/**
+ * Test and platform seams for the CLI gate. Production reads the environment: a coding agent or
+ * CI runner is detected by {@link isAgentDriven}, and a prompt counts as visible only when the
+ * stream it is written to is a terminal.
+ */
+export interface AntigravityRiskSeams {
+  agentDriven?: () => boolean;
+  promptVisible?: () => boolean;
+}
 
 /**
  * The CLI gate. The warning is always shown, even with the flag, so a script's log records what
- * was accepted. Without the flag only an interactive terminal may answer, and only an explicit
- * "y" or "yes" accepts: an empty line, EOF, a timeout or a read error all decline.
+ * was accepted. Adding an Antigravity account spends the user's Google identity, so the repository
+ * rule for such actions applies (AGENTS.md, "User-consent actions"; AGENTS_INSTALL.md): a process
+ * driven by a coding agent or CI runner is refused outright, flag or not, because the agent would
+ * be the one answering. Otherwise the flag accepts, an interactive terminal may answer, and only
+ * an explicit "y" or "yes" accepts: an empty line, EOF, a timeout or a read error all decline.
  */
 export async function resolveAntigravityRiskAcknowledgement(opts: {
   flag: boolean;
   interactive: boolean;
+  agentDriven: boolean;
   warn: (text: string) => void;
   ask: (question: string) => Promise<string>;
 }): Promise<AntigravityRiskDecision> {
   opts.warn(ANTIGRAVITY_RISK_WARNING);
+  if (opts.agentDriven) return "agent";
   if (opts.flag) return "accepted";
   if (!opts.interactive) return "noninteractive";
   let answer: string;
@@ -94,8 +109,18 @@ export async function resolveAntigravityRiskAcknowledgement(opts: {
 }
 
 export function antigravityRiskDecisionMessage(decision: Exclude<AntigravityRiskDecision, "accepted">): string {
-  return decision === "noninteractive"
-    ? "Refusing Google Antigravity without acknowledgement (" + ANTIGRAVITY_RISK_REFUSAL_CODE + "): no interactive terminal to confirm. "
-      + "Re-run in a terminal, or pass " + ANTIGRAVITY_RISK_CLI_FLAG + " to accept the risk explicitly."
-    : "Google Antigravity cancelled: the risk was not accepted. Nothing was changed.";
+  switch (decision) {
+    case "agent":
+      return "Refusing Google Antigravity (" + ANTIGRAVITY_RISK_REFUSAL_CODE + "): this run is driven by a coding agent or CI runner, "
+        + "and only the account owner can accept the risk. Run the command yourself in a terminal, or use the OpenCodex dashboard.";
+    case "noninteractive":
+      return "Refusing Google Antigravity without acknowledgement (" + ANTIGRAVITY_RISK_REFUSAL_CODE + "): no interactive terminal to confirm. "
+        + "Re-run in a terminal, or pass " + ANTIGRAVITY_RISK_CLI_FLAG + " to accept the risk explicitly.";
+    case "declined":
+      return "Google Antigravity cancelled: the risk was not accepted. Nothing was changed.";
+    default: {
+      const exhaustive: never = decision;
+      return exhaustive;
+    }
+  }
 }

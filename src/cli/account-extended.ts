@@ -12,6 +12,7 @@ import {
   antigravityRiskDecisionMessage,
   resolveAntigravityRiskAcknowledgement,
 } from "../oauth/antigravity-risk";
+import { isAgentDriven } from "./agent-driven";
 import { closeSync, openSync, readSync, readFileSync, statSync } from "node:fs";
 import {
   MAX_ACCOUNT_PRIORITY,
@@ -589,7 +590,9 @@ export async function cmdImport(args: string[], deps: AccountDeps): Promise<numb
   const stdinInput: AccountStdin = deps.stdinImpl ?? process.stdin;
   const decision = await resolveAntigravityRiskAcknowledgement({
     flag: acceptRisk,
-    interactive: !fromStdin && stdinInput.isTTY === true,
+    interactive: !fromStdin && stdinInput.isTTY === true
+      && (deps.antigravityRisk?.promptVisible ?? (() => process.stderr.isTTY === true))(),
+    agentDriven: (deps.antigravityRisk?.agentDriven ?? isAgentDriven)(),
     warn: text => console.error(text),
     ask: async question => {
       process.stderr.write(question);
