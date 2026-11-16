@@ -1764,7 +1764,7 @@ export async function prepareAdapterExchange(
           transportState.genericFailovers += 1;
           try { void failedResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
           upstreamResponse = result;
-          if (isNonReplayableResponse(upstreamResponse)) continue recovery;
+          if (isNonReplayableResponse(upstreamResponse) || antigravityFaultRotatable(upstreamResponse)) continue recovery;
         } catch {
           hop.permit?.release();
           break;

@@ -6,8 +6,8 @@ import { isNonReplayableResponse } from "../../lib/upstream-retry";
  * per-request `attempted` flag keeps a pool-wide outage to one extra ladder per request.
  *
  * The recovery loop asks this for the response it is holding and again for the response a 429
- * account hop just produced: that hop's replacement can be the 5xx, and without asking here the
- * 429 loop would leave recovery with the one-hop fault rotation still unspent.
+ * account hop or a verify-account 403 hop just produced: that hop's replacement can be the 5xx, and
+ * without asking here the hop loop would leave recovery with the one-hop fault rotation still unspent.
  */
 export function isAntigravityFaultRotatable(
   providerName: string,
