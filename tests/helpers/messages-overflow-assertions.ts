@@ -1,5 +1,4 @@
 import { messagesFold502Cases } from "./messages-sse-fold-exceptions";
-import { hostedWindowsQuarantine } from "./windows-ci-quarantine";
 import { expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -140,8 +139,7 @@ export function registerMessagesOverflowRows(lanes: readonly Row["lane"][]) {
     expect(slices.flat().map(key)).toEqual(rows.map(key));
     for (const [index, selected] of slices.entries()) {
       const offset = index * sliceSize;
-      // #8262 hosted-Windows quarantine stays until a Windows lane=all run passes with it removed.
-      test.skipIf(hostedWindowsQuarantine && WINDOWS_SLOW_LANES.has(lane))(`${lane}: origin/dev rows ${offset + 1}-${offset + selected.length}`, async () => {
+      test(`${lane}: origin/dev rows ${offset + 1}-${offset + selected.length}`, async () => {
         const started = performance.now();
         const scratch = mkdtempSync(join(overflowScratchBase(), "ocx-overflow-slice-"));
         let safeToRemove = true;

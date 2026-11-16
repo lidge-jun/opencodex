@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { readDesktopDisconnectReceipt } from "../claude/desktop-remote-store";
 import { flushLinkDiagnostics, recordLinkDiagnostic } from "../link/diagnostics";
 import { existsSync } from "node:fs";
 import type { Server } from "bun";
@@ -29,7 +30,7 @@ import { clientInitiatedLinkReadiness, createHomeInitiatedLinkReadiness } from "
 import { createClientLinkSupervisor, type ClientLinkSupervisor } from "./link-tunnel";
 import { clientLinkStatePath, isChildInitiatedLink, recordChildInitiatedLink } from "./link-state";
 import { startMachineListener, type MachineListenerDeps } from "./machine-listener";
-import { isLinkConnection, readClientConnectionState, readClientConnectionStateWithEvidence } from "./state";
+import { isLinkConnection, pendingClientConnectMayOwnToken, readClientConnectionState, readClientConnectionStateWithEvidence, sameClientConnectionOwner } from "./state";
 import { withClientLifecycleSync } from "./lifecycle-lock";
 import { clientConnectionEnded, clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, restartOwnerEvidence, type ClientRestartController, type RestartOwner } from "./runtime-restart";
 import { createLinkParityReporter, type LinkParityReporter } from "./link-parity-reporter";
@@ -52,7 +53,8 @@ let recycleScheduled = false;
 let recycleTimer: ReturnType<typeof setTimeout> | undefined;
 let recycleFlight: Promise<void> | null = null;
 let clientStopping = false;
-let explicitClientStopRequested = false;
+let explicitClientStopRequested: boolean | undefined;
+let standaloneRecycleAllowed = () => !clientStopping;
 
 /**
  * When this runtime's process started (OCX-6, P5): what `/healthz` reports as `startedAt` and the
@@ -115,7 +117,7 @@ export function clientRuntimeRecord(
 ): RuntimePortState {
   let command: string[] | undefined;
   try { command = currentServingCommand(); } catch { /* no reliable relaunch identity; update admission fails closed */ }
-  return { pid, port, hostname: "127.0.0.1", attestationSecret, ...(command ? { command } : {}), ...siblingRuntimeField(), ...(clientStopping ? { clientStopping: true as const } : {}), ...(explicitClientStopRequested ? { clientStopRequested: true as const } : {}), ...(owner ? { restartOwner: owner } : {}) };
+  return { pid, port, hostname: "127.0.0.1", attestationSecret, ...(command ? { command } : {}), ...siblingRuntimeField(), ...(clientStopping ? { clientStopping: true as const } : {}), ...(explicitClientStopRequested !== undefined ? { clientStopRequested: explicitClientStopRequested } : {}), ...(owner ? { restartOwner: owner } : {}) };
 }
 
 /** Evaluated once: the launch environment and parent of this process do not change. */
@@ -154,11 +156,11 @@ export function standaloneRecycleEnv(
 }
 
 export function scheduleStandaloneRecycle(disconnectedTokenFingerprint: string): void {
-  if (recycleScheduled || clientStopping) return;
+  if (recycleScheduled || !standaloneRecycleAllowed()) return;
   recycleScheduled = true;
   recycleTimer = setTimeout(() => {
     recycleTimer = undefined;
-    if (clientStopping) return;
+    if (!standaloneRecycleAllowed()) { recycleScheduled = false; return; }
     recycleFlight = recycleStandalone(disconnectedTokenFingerprint).finally(() => { recycleFlight = null; });
     void recycleFlight.catch(error => { if (!clientStopping) throw error; });
   }, 50);
@@ -361,11 +363,11 @@ export async function startClientRuntime(
   let servedPort = preferred;
   const observeExplicitStop = (): boolean => {
     const current = readRuntimePort(process.pid);
-    if (current?.port === servedPort && current.attestationSecret === attestationSecret && current.clientStopRequested) {
-      explicitClientStopRequested = true;
+    if (current?.port === servedPort && current.attestationSecret === attestationSecret && current.clientStopRequested !== undefined) {
+      explicitClientStopRequested = current.clientStopRequested;
       clientStopping = true;
     }
-    return explicitClientStopRequested;
+    return explicitClientStopRequested === true;
   };
   // Returns false only for a rollback whose connection changed while it was binding: the new
   // listener is then closed unpublished and the caller recycles.
@@ -478,8 +480,25 @@ export async function startClientRuntime(
   };
 
   let shuttingDown = false;
+  standaloneRecycleAllowed = () => {
+    try {
+      if (shuttingDown || observeExplicitStop()) return false;
+      if (!clientStopping) return true;
+      // A retained sync fence is not an active exit. Only a completed disconnect of this exact
+      // served owner permits recovery; partial cleanup, a new connect or uncertain state cannot.
+      return withConfigMutationLockSync(() => {
+        if (observeExplicitStop()) return false;
+        const receipt = readDesktopDisconnectReceipt();
+        return ownerProven() && !pendingClientConnectMayOwnToken()
+          && readClientConnectionStateWithEvidence().kind === "disconnected"
+          && receipt.kind === "valid" && receipt.value.phase === "complete"
+          && sameClientConnectionOwner(receipt.value.owner, state.value)
+          && receipt.value.tokenFingerprint === state.value.tokenFingerprint;
+      });
+    } catch { return false; }
+  };
   const restartController: ClientRestartController = createClientRestartController({
-    stopping: () => shuttingDown || observeExplicitStop(),
+    stopping: () => !standaloneRecycleAllowed(),
     supervisor: io.restartSupervisor ?? clientRestartSupervisor,
     connectionChanged: () => clientConnectionEnded(state.value, readClientConnectionStateWithEvidence()),
     ownerProven,

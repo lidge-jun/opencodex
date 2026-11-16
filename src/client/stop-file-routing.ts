@@ -1,7 +1,7 @@
 /** Stop only the file routes this Link created; connection and recovery records remain. */
 import { loadConfig } from "../config";
 import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
-import { cleanupConnectedFileRouteIntent } from "../integrations/route-intent-disconnect";
+import { cleanupConnectedFileRouteIntent, readConnectedFileRouteIntentForCleanup } from "../integrations/route-intent-disconnect";
 import { readRouteIntentReceiptStrict } from "../integrations/route-intent-state";
 import { readServiceApiTokenState } from "../lib/service-secrets";
 import type { OcxClientConnectionConfig } from "../types";
@@ -17,9 +17,18 @@ export async function restoreLinkFileRouting(
   const expected = structuredClone(connection);
   const ownership = stopRestoreWriteGuard(expected);
   const port = loadConfig().port;
-  const guard = () => ownership.run(() => {
+  const boundary = () => {
     options.beforeWrite?.();
     if (loadConfig().port !== port) throw new Error("client_route_port_changed");
+  };
+  // A fenced Link with no owned file route needs no credential or lifecycle mutation. Keep the
+  // strict disk proof (including missing-receipt residue) and recheck the owner after its awaits.
+  if (!await readConnectedFileRouteIntentForCleanup(expected)) {
+    ownership.run(boundary);
+    return false;
+  }
+  const guard = () => ownership.run(() => {
+    boundary();
     const token = readServiceApiTokenState();
     if (token.kind !== "present" || token.fingerprint !== expected.tokenFingerprint) throw new Error("client_token_changed");
   });

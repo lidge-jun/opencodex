@@ -58,6 +58,17 @@ export function markClientRuntimeStopping(
   });
 }
 
+/** Finish only this parent's exact-runtime stop; sync stays fenced until its process exits. */
+export function finishClientRuntimeStop(expected: Required<Pick<RuntimePortState, "pid" | "port" | "attestationSecret">>): void {
+  withConfigMutationLockSync(() => {
+    const current = readSyncRuntime();
+    if (current?.pid === expected.pid && current.port === expected.port
+      && current.attestationSecret === expected.attestationSecret && current.clientStopRequested === true) {
+      writeRuntimePort({ ...current, clientStopRequested: false });
+    }
+  });
+}
+
 /** Yield only for proved SQLite contention; storage/identity failures remain immediate refusals. */
 export async function markClientRuntimeStoppingWithRetry(
   expected: Required<Pick<RuntimePortState, "pid" | "port" | "attestationSecret">>,

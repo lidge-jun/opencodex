@@ -93,7 +93,9 @@ export async function assertConnectedClientStopSupported(
 }
 
 /** Fail before either service-manager path, including a manager that cascades process exit. */
-export async function preflightConnectedClientStop(approved?: ConnectedStopTarget): Promise<StopOutcome | "already-stopped" | null> {
+export async function preflightConnectedClientStop(
+  approved: ConnectedStopTarget | undefined, onFence: (finish: () => Promise<void>) => void,
+): Promise<StopOutcome | "already-stopped" | null> {
   try {
     const connection = readClientConnectionState();
     let target = approved;
@@ -128,13 +130,20 @@ export async function preflightConnectedClientStop(approved?: ConnectedStopTarge
       // A manager can kill the Child before its signal handler runs. Drain these file routes
       // first, under an exact runtime fence; refusal must return before any manager/kill step.
       if (!pinned?.attestationSecret || !Bun.deepEquals(readRuntimePort(target.pid), pinned, true)) throw unsupportedConnectedStop();
-      const { markClientRuntimeStopping, markClientRuntimeStoppingWithRetry } = await import("../client/sync-runtime");
+      const { finishClientRuntimeStop, markClientRuntimeStopping, markClientRuntimeStoppingWithRetry } = await import("../client/sync-runtime");
       const { restoreLinkFileRouting } = await import("../client/stop-file-routing");
+      const identity = { pid: target.pid, port: target.port, attestationSecret: pinned.attestationSecret };
+      // The CLI holds its ownership mutation lease through this finalizer. A retained listener
+      // can distinguish a finished stop from one still about to call a manager or kill fallback.
+      onFence(async () => {
+        const finished = await markClientRuntimeStoppingWithRetry(identity, { mark: () => finishClientRuntimeStop(identity) });
+        if (!finished) console.warn("The retained Child's stop state could not be finalized; repair its runtime record before retrying recovery.");
+      });
       const stopping = { ...pinned, clientStopping: true, clientStopRequested: true };
       const checkRuntime = () => {
         if (!Bun.deepEquals(readRuntimePort(target!.pid), stopping, true)) throw new Error("client_runtime_changed");
       };
-      const fenced = await markClientRuntimeStoppingWithRetry({ pid: target.pid, port: target.port, attestationSecret: pinned.attestationSecret }, {
+      const fenced = await markClientRuntimeStoppingWithRetry(identity, {
         mark: () => stopRestoreWriteGuard(connection.value).run(() => {
           const current = readRuntimePort(target!.pid);
           if (!Bun.deepEquals(current, pinned, true) && !Bun.deepEquals(current, stopping, true)) throw new Error("client_runtime_changed");

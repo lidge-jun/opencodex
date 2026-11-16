@@ -50,6 +50,51 @@ async function runStop(options: Record<string, unknown>) {
   }
 }
 
+async function runRecovery(mode: string, scheduled = false) {
+  const root = mkdtempSync(join(tmpdir(), "ocx-link-stop-recovery-"));
+  const child = Bun.spawn([process.execPath, fixturePath("client-link-stop-recovery-runner.ts")], {
+    cwd: repoPath(), stdin: new Blob([JSON.stringify({ mode, scheduled })]), stdout: "pipe", stderr: "pipe",
+    env: { ...process.env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: join(root, "ocx"), CODEX_HOME: join(root, "codex"), OCX_SERVICE_MANAGED: "0" },
+  });
+  const timeout = setTimeout(() => child.kill("SIGKILL"), 15_000);
+  try {
+    const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(exit, stderr).toBe(0);
+    expect(stderr).not.toContain("uncaughtException");
+    const line = stdout.split("\n").find(line => line.startsWith("{"));
+    expect(line, stdout + stderr).toBeDefined();
+    return JSON.parse(line!);
+  } finally {
+    clearTimeout(timeout);
+    if (child.exitCode === null) { child.kill("SIGKILL"); await child.exited; }
+    removeTreeWithRetry(root);
+  }
+}
+
+for (const mode of ["parent", "signal"]) for (const scheduled of [false, true]) {
+  test(`a refused ${mode} stop permits completed disconnect recovery through ${scheduled ? "scheduled recycle" : "bound restart"}`, async () => {
+    const result = await runRecovery(mode, scheduled);
+    expect(result).toMatchObject({ beforeRecoveryAdmission: 409, role: "standalone", spawned: 1,
+      file: { userSetting: "keep" }, state: "disconnected", token: "absent", phase: "complete", runtimePresent: false });
+    if (mode === "parent") expect(result).toMatchObject({ stopRefused: true, activeAdmission: 409, finishedMarker: false });
+    if (!scheduled) expect(result.recoveryAdmission).toBe(202);
+  }, 20_000);
+}
+
+for (const mode of ["parent-active", "signal-active", "pending", "foreign-owner", "wrong-token", "corrupt-receipt", "missing-config", "new-connection", "pending-connect"]) {
+  test(`retained stop refuses disconnect recycle while ${mode}`, async () => {
+    const result = await runRecovery(mode);
+    expect(result).toMatchObject({ beforeRecoveryAdmission: 409, recoveryAdmission: 409, role: "client", spawned: 0,
+      file: { userSetting: "keep" }, token: "absent", runtimePresent: true });
+    if (mode === "parent-active") expect(result.marker).toBe(true);
+  }, 20_000);
+}
+
+test("a parent stop admitted before a recovery timer fires prevents the scheduled replacement", async () => {
+  const result = await runRecovery("timer-parent-active");
+  expect(result).toMatchObject({ role: "client", spawned: 0, state: "disconnected", phase: "complete", marker: true, runtimePresent: true });
+}, 20_000);
+
 test("Link signal drains Home-created Pi and OpenCode routes before listener release", async () => {
   const report = await runStop({ mode: "runtime", fileClients: ["pi", "opencode"], fileOnly: true, osSignal: process.platform !== "win32" });
   expect(report.result).toEqual({ atListenerStop: true });
@@ -60,6 +105,18 @@ test("Link signal drains Home-created Pi and OpenCode routes before listener rel
     expect(report.fileAfter[client]).not.toContain("127.0.0.1");
   }
   expect(report.protectedUnchanged).toBe(true);
+}, 20_000);
+
+test("a fenced stop with proved file absence needs no file token mutation", async () => {
+  const report = await runStop({ mode: "runtime", fileOnly: true, removeToken: true });
+  expect(report.result).toEqual({ atListenerStop: true });
+  expect(report.protectedUnchanged).toBe(false);
+}, 20_000);
+
+test("a missing token still refuses an owned file route and retains the listener", async () => {
+  const report = await runStop({ mode: "runtime", fileOnly: true, fileClients: ["pi"], removeToken: true, observeFileRefusal: true, expectedFileRefusal: true });
+  expect(report.result).toEqual({ refused: true, bound: true, stopping: true });
+  expect(report.fileAfter).toEqual(report.fileOwnedBytes);
 }, 20_000);
 
 test("an already-started Home file sync cannot reapply a route after signal cleanup", async () => {
@@ -119,6 +176,13 @@ test("ordinary restart rollback keeps file routes and admits fresh sync", async 
   expect(report.protectedUnchanged).toBe(true);
 }, 20_000);
 
+test("a finished parent stop preserves the retained sync fence through restart rollback", async () => {
+  const report = await runStop({ mode: "file-restart-overlap", preserve: "restart-rollback", fileClients: ["pi"], finishStopBeforeRollback: true });
+  expect(report.result).toEqual({ preflight: null, rolledBack: true, bound: true, stopping: true, explicitStop: false, retainedStop: true,
+    sync: "client_runtime_stopping", admission: { kind: "stopping" } });
+  expect(report.fileAfter.pi).not.toContain("127.0.0.1");
+}, 20_000);
+
 test("the parent preflight refuses a conflicting file route without releasing its listener", async () => {
   const report = await runStop({ mode: "file-preflight", fileClients: ["pi"], fileConflict: true, expectedFileRefusal: true });
   expect(report.result).toMatchObject({ outcome: { ok: false, summary: { runtimeDown: false, proxy: "ownership-refused" } }, bound: true, stopping: true });
@@ -133,6 +197,12 @@ test("ocx stop refuses a file conflict before any service stop, signal or kill f
   expect(JSON.parse(report.fileAfter.pi).providers.opencodex.apiKey).toBe("operator-edited-placeholder");
   expect(report.after).toBe(report.before);
   expect(report.protectedUnchanged).toBe(true);
+}, 20_000);
+
+test("failure to finalize a retained parent fence does not replace the original stop refusal", async () => {
+  const report = await runStop({ mode: "file-stop", fileClients: ["pi"], fileConflict: true, finalizeFailure: true, expectedFileRefusal: true });
+  expect(report.result).toEqual({ exitCode: 1, calls: { service: 0, killed: 0 }, bound: true, stopping: true, activeStop: true });
+  expect(JSON.parse(report.fileAfter.pi).providers.opencodex.apiKey).toBe("operator-edited-placeholder");
 }, 20_000);
 
 test("ocx stop refuses an attested older Link runtime before file, service or process changes", async () => {

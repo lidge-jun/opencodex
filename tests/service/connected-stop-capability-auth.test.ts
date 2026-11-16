@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { assertConnectedClientStopSupported } from "../../src/cli/stop-restore";
 import { startMachineListener } from "../../src/client/machine-listener";
 import { saveConfig } from "../../src/config";
-import { writeRuntimePort } from "../../src/config/process-state";
+import { isValidRuntimePortState, readRuntimePort, writeRuntimePort } from "../../src/config/process-state";
+import { clientSyncRuntimeGuard, finishClientRuntimeStop, markClientRuntimeStopping } from "../../src/client/sync-runtime";
 import {
   createLocalAttestationChallenge,
   createLocalAttestationProof,
@@ -62,6 +63,30 @@ afterEach(async () => {
   if (oldAdmin === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
   else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = oldAdmin;
   removeTreeWithRetry(home);
+});
+
+test("finishing an exact parent stop keeps sync fenced and never changes a different runtime", () => {
+  const identity = { pid: process.pid, port: 17001, attestationSecret: SECRET };
+  writeRuntimePort({ ...identity, clientStopping: true, clientStopRequested: true });
+  const active = readRuntimePort(process.pid);
+  for (const foreign of [{ ...identity, pid: process.pid + 1 }, { ...identity, port: 17002 }, { ...identity, attestationSecret: "B".repeat(43) }]) {
+    finishClientRuntimeStop(foreign);
+    expect(readRuntimePort(process.pid)).toEqual(active);
+  }
+  finishClientRuntimeStop(identity);
+  expect(readRuntimePort(process.pid)).toMatchObject({ ...identity, clientStopping: true, clientStopRequested: false });
+  expect(() => clientSyncRuntimeGuard()).toThrow("client_runtime_stopping");
+  const finished = readRuntimePort(process.pid);
+  finishClientRuntimeStop(identity);
+  expect(readRuntimePort(process.pid)).toEqual(finished);
+  markClientRuntimeStopping(identity, { explicitStop: true });
+  expect(readRuntimePort(process.pid)?.clientStopRequested).toBe(true);
+});
+
+test.each([true, false])("both parent stop states require a stopping sync fence (%s)", clientStopRequested => {
+  const identity = { pid: process.pid, port: 17001, attestationSecret: SECRET, clientStopRequested };
+  expect(isValidRuntimePortState(identity)).toBe(false);
+  expect(isValidRuntimePortState({ ...identity, clientStopping: true })).toBe(true);
 });
 
 type FixtureOptions = {

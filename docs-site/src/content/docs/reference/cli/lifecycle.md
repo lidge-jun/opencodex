@@ -82,7 +82,7 @@ ocx start --socks5-off
 
 ### `ocx stop [--json] [--deadline-ms <ms>]`
 
-An unsupervised Link Child handling a shutdown signal removes file integrations created by the Link, then restores native Codex and managed Grok before releasing its listener, rechecking the served connection before each write. Pre-existing standalone file integrations and user edits are preserved. If a file conflicts or its ownership cannot be verified, the listener stays bound with synchronization paused; repair the reported configuration or ownership evidence and retry `ocx stop`. Service/Desktop supervision, sibling ownership, restart/recycle handoff and pending parent stop receipts preserve integrations. Shutdown rejects bound restart with `409 runtime_stopping`. An explicit `ocx stop` verifies the Child and drains Link-created file integrations before stopping its process or service; a refused file cleanup stops that command before any termination fallback. An older running Child that cannot prove support for this stop fence is refused before changes; update and restart it through its supervisor, then retry. Forced termination can bypass signal handlers; parent `ocx stop` restoration remains necessary. To route Codex through Home again after such a stop, start the Child (`ocx start`, or `ocx service start` for an installed service) and then run `ocx sync --restart-codex`. Starting alone does not reapply routing. With Home available, sync also reapplies its enabled file integrations. A sync run while the Child is stopped still reapplies routing, which points Codex at a listener that is not running, so start the Child first.
+An unsupervised Link Child handling a shutdown signal removes file integrations created by the Link, then restores native Codex and managed Grok before releasing its listener, rechecking the served connection before each write. Pre-existing standalone file integrations and user edits are preserved. If a file conflicts or its ownership cannot be verified, the listener stays bound with synchronization paused; repair the reported configuration or ownership evidence and retry `ocx stop`. To leave Home after a refused stop, `ocx disconnect --recover-config --yes` completes configuration recovery and restarts the retained Child as standalone OpenCodex. A stop or recovery still in progress continues to refuse restart. Service/Desktop supervision, sibling ownership, restart/recycle handoff and pending parent stop receipts preserve integrations. Shutdown rejects bound restart with `409 runtime_stopping`. An explicit `ocx stop` verifies the Child and drains Link-created file integrations before stopping its process or service; a refused file cleanup stops that command before any termination fallback. An older running Child that cannot prove support for this stop fence is refused before changes; update and restart it through its supervisor, then retry. Forced termination can bypass signal handlers; parent `ocx stop` restoration remains necessary. To route Codex through Home again after such a stop, start the Child (`ocx start`, or `ocx service start` for an installed service) and then run `ocx sync --restart-codex`. Starting alone does not reapply routing. With Home available, sync also reapplies its enabled file integrations. A sync run while the Child is stopped still reapplies routing, which points Codex at a listener that is not running, so start the Child first.
 
 Stop the running proxy (by PID), remove the PID file, and restore native Codex for standalone owners. If a managed
 background service is installed, `ocx stop` also stops it first so it cannot respawn the proxy.
@@ -558,10 +558,16 @@ warning; the desktop uses `proxy-newer` to keep a takeover from downgrading the 
 Liveness has three answers: `live`, `absent-proven` (every recorded and configured endpoint
 definitively refused or answered non-opencodex), and unknown — a timed-out probe or a listener
 that withholds `/healthz` exits 1 rather than reading as absent, so only `absent-proven` may
-authorise starting a new runtime. The port is the live listener's port when a proxy answers,
+authorise starting a new runtime. One timeout is settled instead: when `hostname` is one of this
+machine's own non-loopback addresses (a Tailscale or LAN IP) and the connect itself times out,
+which Windows does for an unbound local address, resolve tries an exclusive bind on that address
+and port. Only a bind that succeeds counts as absent; a port already in use stays unknown. The port is the live listener's port when a proxy answers,
 otherwise the configured port (default 10100). Exit 0 carries a trustworthy verdict; exit 1 means
 the CLI could not resolve — including an invalid `config.json`, which is never repaired to
-defaults here — and the caller must refuse to guess; any unknown argument exits 64. Discovery uses
+defaults here — and the caller must refuse to guess. With `--json`, exit 1 still prints one
+document, `{"schema":"ocx-resolve/1","ok":false,"reason":…,"error":…}`, where `reason` is
+`config_unreadable`, `config_invalid`, `discovery_failed`, or `liveness_unknown` and `error`
+repeats the stderr message; it has no liveness or port field. Any unknown argument exits 64. Discovery uses
 the same ownership-safe probe budget as `ocx start`, because a false "nothing listening" answer
 is how duplicate proxies happen. The verb is read-only and skips the shim auto-restore preflight.
 

@@ -50,7 +50,7 @@ import {
   runCodexHistoryJob,
 } from "../codex/history-job";
 import { findCrossHomeOwner, markCrossHomeSibling, markLiveHomeSibling } from "./cross-home-owner";
-import { inspectClientRotationRecoveryGate, readClientConnectionState } from "../client/state";
+import { clientStartupRefusalMessage, inspectClientRotationRecoveryGate, readClientConnectionState } from "../client/state";
 import {
   codexAutoStartEnabled,
   getConfigDir,
@@ -489,7 +489,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   const rotationGate = inspectClientRotationRecoveryGate(clientState);
   if (clientState.kind === "connected") {
     if (rotationGate.kind === "recovery-required" || rotationGate.kind === "unsafe") {
-      throw new Error(`client startup refused: ${rotationGate.reason}`);
+      throw new Error(clientStartupRefusalMessage(rotationGate.reason));
     }
     const { startClientRuntime } = await import("../client/runtime");
     // Same lease-held owner recheck as the server path below: this branch binds and publishes too.
@@ -1013,8 +1013,10 @@ async function handleRestartStartWhenStopped(recoveringLiveRestart = false): Pro
 }
 async function handleStop(approval?: StopApproval) {
   const lease = acquireOwnershipMutationLease(serviceStatePaths());
+  let finishConnectedStop: (() => Promise<void>) | undefined;
+  const stop = (snapshot?: GuardedStopSnapshot) => handleStopUnlocked(snapshot, finish => { finishConnectedStop = finish; });
   try {
-    if (!approval) return await handleStopUnlocked();
+    if (!approval) return await stop();
     return await runApprovedStop(
       approval,
       async () => {
@@ -1029,13 +1031,13 @@ async function handleStop(approval?: StopApproval) {
       },
       describeTrackedRuntimeTarget,
       () => inspectGuardedTarget(approval.pid, approval.port),
-      snapshot => handleStopUnlocked(snapshot),
+      stop,
     );
   }
-  finally { lease.release(); }
+  finally { try { await finishConnectedStop?.(); } finally { lease.release(); } }
 }
 
-async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
+async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onFence: (finish: () => Promise<void>) => void) {
   // The receipt must name the endpoint the owner was stopping — an obligation nobody can
   // locate cannot be proven discharged. Only the runtime record knows it; a proxy started
   // with an explicit --port is not on the configured one.
@@ -1100,7 +1102,7 @@ async function handleStopUnlocked(snapshot?: GuardedStopSnapshot) {
   const connectedClientSkip = stoppingSibling ? null : connectedClientStopSkipLine(connectedClientState);
   let connectedClientAlreadyStopped = false;
   if (!stoppingSibling && connectedClientState.kind === "connected") {
-    const preflight = await preflightConnectedClientStop(snapshot?.approval);
+    const preflight = await preflightConnectedClientStop(snapshot?.approval, onFence);
     if (preflight === "already-stopped") connectedClientAlreadyStopped = true;
     else if (preflight) return preflight;
   }

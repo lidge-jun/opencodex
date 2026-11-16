@@ -29,6 +29,9 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   lateFileSync?: boolean;
   deferFileApply?: boolean;
   oldStopCapability?: boolean;
+  finishStopBeforeRollback?: boolean;
+  removeToken?: boolean;
+  finalizeFailure?: boolean;
   repairFileRefusal?: boolean;
   observeFileRefusal?: boolean;
   preserve?: "service" | "desktop" | "receipt" | "sibling" | "restart" | "restart-rollback" | "recycle-pending" | "restart-rollback-recycle";
@@ -41,8 +44,8 @@ const lifecycle = await import("../../src/client/lifecycle-lock");
 const lock = lifecycle.withClientLifecycleSync;
 const asyncLock = lifecycle.withClientLifecycle;
 mock.module("../../src/client/lifecycle-lock", () => ({ ...lifecycle,
-  withClientLifecycleSync: (work: Parameters<typeof lock>[0]) => lock(work, { lockPath: join(home, "lifecycle.sqlite") }),
-  withClientLifecycle: (work: Parameters<typeof asyncLock>[0]) => asyncLock(work, { lockPath: join(home, "lifecycle.sqlite") }),
+  withClientLifecycleSync: (work: Parameters<typeof lock>[0], deps?: Parameters<typeof lock>[1]) => lock(work, { lockPath: deps?.lockPath ?? join(home, "lifecycle.sqlite") }),
+  withClientLifecycle: (work: Parameters<typeof asyncLock>[0], deps?: Parameters<typeof asyncLock>[1]) => asyncLock(work, { lockPath: deps?.lockPath ?? join(home, "lifecycle.sqlite") }),
 }));
 const token = `ocx_data_${"c".repeat(40)}`;
 const config = getDefaultConfig();
@@ -177,7 +180,7 @@ const snapshot = (result: unknown) => ({
   profileAfter: existsSync(CODEX_PROFILE_PATH) ? readFileSync(CODEX_PROFILE_PATH, "utf8") : null,
   journalRetained: existsSync(JOURNAL_PATH),
   journalHomeBound: existsSync(JOURNAL_PATH) && typeof JSON.parse(readFileSync(JOURNAL_PATH, "utf8")).opencodexHome === "string",
-  protectedUnchanged: protectedPaths.every((path, index) => readFileSync(path, "utf8") === protectedBefore[index]),
+  protectedUnchanged: protectedPaths.every((path, index) => existsSync(path) && readFileSync(path, "utf8") === protectedBefore[index]),
   catalogBefore, catalogAfter: JSON.parse(readFileSync(DEFAULT_CATALOG_PATH, "utf8")),
   grokBefore, grokAfter: readFileSync(grokPath, "utf8"),
   fileOwnedBytes, fileAfter: Object.fromEntries(Object.entries(filePaths).map(([id, path]) => [id, readFileSync(path, "utf8")])), fileRefusal, fileLateResult,
@@ -270,7 +273,9 @@ if (options.mode === "retry") {
     let preflight: unknown;
     if (options.mode === "file-restart-overlap") {
       await restartStopping;
-      preflight = await (await import("../../src/cli/stop-restore")).preflightConnectedClientStop({ pid: process.pid, port: config.port, hostname: "127.0.0.1" });
+      let finishStop = async () => {};
+      preflight = await (await import("../../src/cli/stop-restore")).preflightConnectedClientStop({ pid: process.pid, port: config.port, hostname: "127.0.0.1" }, finish => { finishStop = finish; });
+      if (options.finishStopBeforeRollback) await finishStop();
       releaseRestartStop();
     }
     let after = readRuntimePort(process.pid)!;
@@ -282,7 +287,8 @@ if (options.mode === "retry") {
     const admission = options.mode === "file-restart-overlap" ? await requestRestart() : undefined;
     const health = await fetch(`http://127.0.0.1:${config.port}/healthz`);
     report({ preflight, rolledBack: after.servingGeneration !== before.servingGeneration, bound: health.ok,
-      stopping: after.clientStopping === true, explicitStop: after.clientStopRequested === true, sync, admission });
+      stopping: after.clientStopping === true, explicitStop: after.clientStopRequested === true,
+      ...(options.finishStopBeforeRollback ? { retainedStop: after.clientStopRequested === false } : {}), sync, admission });
     process.exit(0);
   }
   if (options.lateFileSync) {
@@ -304,6 +310,10 @@ if (options.mode === "retry") {
     await ready;
   }
   if (options.mode === "file-stop") {
+    if (options.finalizeFailure) {
+      const sync = await import("../../src/client/sync-runtime");
+      mock.module("../../src/client/sync-runtime", () => ({ ...sync, finishClientRuntimeStop: () => { throw new Error("fixture storage refusal"); } }));
+    }
     const calls = { service: 0, killed: 0 };
     const kill = process.kill;
     process.kill = ((pid: number, signal?: number | NodeJS.Signals) => {
@@ -323,7 +333,9 @@ if (options.mode === "retry") {
     mock.module("../../src/cli/dispatch", () => ({ ...dispatch, dispatchCommand: async (...args: Parameters<typeof command>) => {
       const exitCode = await command(...args);
       const health = await fetch(`http://127.0.0.1:${config.port}/healthz`);
-      report({ exitCode, calls, bound: health.ok, stopping: JSON.parse(readFileSync(join(home, "runtime-port.json"), "utf8")).clientStopping === true });
+      const runtime = JSON.parse(readFileSync(join(home, "runtime-port.json"), "utf8"));
+      report({ exitCode, calls, bound: health.ok, stopping: runtime.clientStopping === true,
+        ...(options.finalizeFailure ? { activeStop: runtime.clientStopRequested === true } : {}) });
       return exitCode;
     } }));
     mock.module("../../src/cli/codex-shim-autorestore", () => ({ async maybeAutoRestoreCodexShimAsync() {} }));
@@ -335,7 +347,7 @@ if (options.mode === "retry") {
     const { withConfigMutationLockSync } = await import("../../src/config");
     const admitted = options.deferFileApply ? clientSyncRuntimeGuard() : undefined;
     const { preflightConnectedClientStop } = await import("../../src/cli/stop-restore");
-    const outcome = await preflightConnectedClientStop({ pid: process.pid, port: config.port, hostname: "127.0.0.1" });
+    const outcome = await preflightConnectedClientStop({ pid: process.pid, port: config.port, hostname: "127.0.0.1" }, () => {});
     if (admitted) {
       try {
         await (await import("../../src/integrations/route-intent-connected")).applyConnectedRouteIntent(expected, token, preparedFileIntent, {
@@ -397,7 +409,8 @@ if (options.mode === "retry") {
     else { const record = JSON.parse(readFileSync(path, "utf8")); record.pid += 100_000; writeFileSync(path, JSON.stringify(record)); }
   }
   mutate();
-  protectedBefore = protectedPaths.map(path => readFileSync(path, "utf8"));
+  if (options.removeToken) unlinkSync(join(home, "service-api-token"));
+  if (!options.removeToken) protectedBefore = protectedPaths.map(path => readFileSync(path, "utf8"));
   if (options.preserve === "restart") {
     if (!requestRestart) throw new Error("fixture missing real restart admission");
     void requestRestart();

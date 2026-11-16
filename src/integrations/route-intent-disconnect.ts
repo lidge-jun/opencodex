@@ -8,6 +8,7 @@ import { readServiceApiTokenState } from "../lib/service-secrets";
 import { readLocalRouteIntentOff, readRouteIntentReceiptStrict, readRouteIntentUnappliedProof } from "./route-intent-state";
 import { homeRouteIntentPath } from "../client/link-home";
 import type { OcxClientConnectionConfig } from "../types";
+import type { RouteIntentReceipt } from "./route-intent-contract";
 
 /** Droid's empty-roster contribution has no selectors, so its generic classifier cannot prove absence. */
 async function droidRoutingAbsent(port: number): Promise<boolean> {
@@ -33,10 +34,8 @@ async function droidRoutingAbsent(port: number): Promise<boolean> {
   } catch { return false; }
 }
 
-/** Shared file-only cleanup; the caller supplies its stop or disconnect ownership fence. */
-export async function cleanupConnectedFileRouteIntent(
-  connection: OcxClientConnectionConfig, guard: () => void, lifecycleLockDeps?: ClientLifecycleLockDeps, recoverConflicts = false,
-): Promise<boolean> {
+/** Read-only ownership/absence proof. Callers still fence every subsequent file write. */
+export async function readConnectedFileRouteIntentForCleanup(connection: OcxClientConnectionConfig): Promise<RouteIntentReceipt | null> {
   const receipt = readRouteIntentReceiptStrict();
   if (!receipt) {
     let homeReceiptPresent = false;
@@ -67,11 +66,20 @@ export async function cleanupConnectedFileRouteIntent(
         throw new Error("Route intent cleanup receipt is missing; preserve the connection and repair its route ownership evidence before retrying cleanup");
       }
     }
-    return false;
+    return null;
   }
   // A valid unbound receipt is standalone Home state, not evidence of a Child apply.
-  if (receipt.linkId === undefined) return false;
+  if (receipt.linkId === undefined) return null;
   if (!connection.link || receipt.linkId !== connection.link.linkId) throw new Error("Route intent cleanup receipt belongs to another context; preserve it before retrying cleanup");
+  return receipt;
+}
+
+/** Shared file-only cleanup; the caller supplies its stop or disconnect ownership fence. */
+export async function cleanupConnectedFileRouteIntent(
+  connection: OcxClientConnectionConfig, guard: () => void, lifecycleLockDeps?: ClientLifecycleLockDeps, recoverConflicts = false,
+): Promise<boolean> {
+  const receipt = await readConnectedFileRouteIntentForCleanup(connection);
+  if (!receipt || !connection.link) return false;
   const local = loadConfig();
   const { cleanupRouteIntent } = await import("./route-intent");
   const config = { ...local, hostname: "127.0.0.1", unauthenticatedLoopbackListener: undefined };
