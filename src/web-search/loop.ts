@@ -13,6 +13,7 @@ import { isTruncatedStopReason } from "../responses/truncated-stop-reason";
 import { bridgeToResponsesSSE } from "../bridge";
 import { guardEmptyToolCatalogStream, type ClientToolCatalogRestriction } from "../lib/empty-tool-catalog";
 import { mergeUsage } from "../server/responses/empty-completion-guard";
+import { analyzeTerminalTurn, buildContinuationRequest } from "../server/responses/terminal-guard";
 import { markSidecarContextOverflow, sidecarLoopTerminalEvent, upstreamErrorCode, type SidecarLoopFailure } from "../server/responses/context-overflow";
 import { markVerifiedModelNotInPlanResponse, MODEL_NOT_IN_PLAN_CODE, UNDECLARED_TOOL_CALL_ERROR_CODE, verifiedPlanRefusalMessage } from "../lib/errors";
 import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type SidecarSettings } from "./executor";
@@ -358,6 +359,7 @@ function loopFailure(e: LoopError): SidecarLoopFailure {
  */
 export interface WebSearchLoopDeps {
   parsed: OcxParsedRequest;
+  terminalContinuationGuard?: boolean;
   advisor?: AdvisorSidecarStep;
   /** Chat delivery only; never copied into parsed generation options. */
   chatRawReasoningVisible?: boolean;
@@ -514,8 +516,9 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
 
   // Hard iteration bound (termination safety net); forceAnswer normally ends the loop sooner.
   // One iteration beyond the forced answer is reserved for its empty-answer recovery below.
-  const HARD_CAP = maxSearches + 3 + (deps.advisor ? MAX_ADVISOR_CONTINUATIONS_PER_REQUEST : 0);
+  const HARD_CAP = maxSearches + 3 + 2 * Number(deps.terminalContinuationGuard === true) + (deps.advisor ? MAX_ADVISOR_CONTINUATIONS_PER_REQUEST : 0);
   let emptyAnswerRetries = 0;
+  let terminalContinuations = 0;
   // Every iteration re-sends the full context, but only the last one's terminal reaches the bridge.
   // Search-calling passes and the discarded empty forced answer are summed here and added to what
   // onUsage reports, so the request log meters what was actually sent. The client-facing terminal
@@ -1191,6 +1194,25 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
             && !split.passthrough.some(event => event.type === "incomplete" || event.type === "error"
               || (event.type === "done" && isTruncatedStopReason(event.stopReason)));
           if (!shouldLoop) {
+            const final = split.passthrough.find(event => event.type === "done");
+            // Use the existing action/plan classifier and keep all hosted tool results.
+            // A second announcement is a visible failure, never another silent stop.
+            const currentParsed = { ...parsed, context: { ...parsed.context, messages } };
+            if (deps.terminalContinuationGuard && adapter.name === "openai-chat"
+              && final?.type === "done" && !isTruncatedStopReason(final.stopReason)
+              && !signal.aborted && !split.hasMalformedToolCall && split.calls.length === 0
+              && analyzeTerminalTurn(currentParsed, split.passthrough).decision === "continue") {
+              hiddenUsage = mergeUsage(hiddenUsage, final.usage);
+              if (terminalContinuations++ > 0) {
+                throw new LoopError(502, "Provider announced work again without calling a tool", {
+                  type: "error", status: 502, code: "terminal_continuation_failed",
+                  message: "Provider announced work again without calling a tool", errorType: "server_error" });
+              }
+              const continuation = buildContinuationRequest(currentParsed, split.passthrough);
+              messages.splice(0, messages.length, ...continuation.context.messages);
+              yield { type: "assistant_boundary" };
+              continue;
+            }
             // #1001: a forced-answer pass that ends `done` must have produced
             // usable output — never a malformed tool call, and never silence.
             if (forceAnswer) {

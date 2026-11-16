@@ -701,6 +701,8 @@ export async function executeResponsesSidecars(
         ...sidecarBudget.fetchOptions(transportState.adapter),
       })(input, init)) as typeof globalThis.fetch;
     const loopResponse = await runWithWebSearch({
+      terminalContinuationGuard: route.provider.terminalContinuationGuard === true
+        && !options.comboAttempt && !routedCompaction,
       dispatchSidecarSend: sendBudgetState.dispatchSidecarSend,
       parsed, adapter: transportState.adapter,
       ...(webSearchAdvisor ? { advisor: createAdvisorSidecarStep(webSearchAdvisor as Parameters<typeof createAdvisorSidecarStep>[0]) } : {}),

@@ -1,4 +1,5 @@
 {
+  "search-terminal-continuation.test.ts": "responses",
   "responses-estimated-usage.test.ts": "responses",
   "responses-combo-unavailable-cause.test.ts": "responses",
   "responses-native-sse-stall.test.ts": "responses",
