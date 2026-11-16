@@ -664,6 +664,10 @@ const commandRunners: Record<string, CommandRunner> = {
       printSubcommandUsage("update");
       return 0;
     }
+    // #8246: the headless Windows Desktop updater has its own grammar and never reaches the package updater.
+    if (deps.args.slice(1).includes("--desktop")) {
+      return (await import("../desktop-update/cli")).runHeadlessDesktopUpdateCommand(deps.args.slice(1));
+    }
     const { runUpdate } = await import("../update");
     await runUpdate();
     return Number(process.exitCode ?? 0);
