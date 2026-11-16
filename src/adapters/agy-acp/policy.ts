@@ -4,10 +4,13 @@
  * Google permits a personal app to launch the official `agy acp` binary for the user's own account
  * when use is interactive and user-directed, not an unattended worker pool or automated agent loop,
  * and points programmatic workloads to a Gemini API key or Vertex AI. OpenCodex documents that and
- * enforces only signals it can know for certain: a subagent turn (`x-codex-parent-thread-id`), a
+ * enforces only signals it can know for certain: a subagent turn (`x-codex-parent-thread-id`), an
+ * unattended Codex turn that Codex itself labels (a memory-pipeline turn or a spawned thread), a
  * combo member or a combo's internal decision call, a route chosen by subagent fallback, and a
  * request that did not come from this machine. No heuristic beyond those is applied.
  */
+import { detectMemoryModelPhase } from "../../server/responses/memory-models";
+import { isThreadSpawnRequest } from "../../server/effort-policy";
 import { currentRequestIsLocal } from "../../lib/request-peer-scope";
 
 export const AGY_ACP_INTERACTIVE_ONLY = "agy_acp_interactive_only";
@@ -15,6 +18,8 @@ export const AGY_ACP_LOCAL_ONLY = "agy_acp_local_only";
 
 export interface AgyAcpPolicySignals {
   headers: Headers;
+  /** The request body, for the frame's own copy of Codex's turn metadata (WebSocket turns carry it there). */
+  body?: unknown;
   comboAttempt?: boolean;
   subagentFallback?: boolean;
   /** A combo's internal decision call (JEV): combo machinery, refused like a combo member. */
@@ -30,13 +35,24 @@ export interface AgyAcpPolicyRefusal {
   message: string;
 }
 
-const INTERACTIVE_MESSAGE = "The Antigravity CLI (ACP) provider is for interactive, user-directed turns only: it refuses subagent turns, combo members and combo decision calls, and subagent-fallback routing, per Google's terms for the agy acp binary. Use a Gemini API key or Vertex AI for programmatic workloads.";
+const INTERACTIVE_MESSAGE = "The Antigravity CLI (ACP) provider is for interactive, user-directed turns only: it refuses subagent and spawned-thread turns, Codex memory turns, combo members and combo decision calls, and subagent-fallback routing, per Google's terms for the agy acp binary. Use a Gemini API key or Vertex AI for programmatic workloads.";
 const LOCAL_MESSAGE = "The Antigravity CLI (ACP) provider serves only requests from this machine: it is never shared over a hub, link or remote listener. Use a Gemini API key or Vertex AI for shared or programmatic workloads.";
+
+/**
+ * A turn Codex itself labels as unattended, without a parent-thread header: Codex's memory
+ * pipeline (`x-openai-subagent: memory_consolidation`, `x-openai-memgen-request`, or memory turn
+ * metadata in the header or the body copy) and a spawned thread (`isThreadSpawnRequest`).
+ */
+function isUnattendedCodexTurn(headers: Headers, body: unknown): boolean {
+  if (headers.get("x-openai-subagent") === "memory_consolidation" || headers.has("x-openai-memgen-request")) return true;
+  if (isThreadSpawnRequest(headers)) return true;
+  return detectMemoryModelPhase(body, headers) !== null;
+}
 
 /** The refusal for a turn this provider must not serve, or undefined when it may run. */
 export function agyAcpPolicyRefusal(signals: AgyAcpPolicySignals): AgyAcpPolicyRefusal | undefined {
   if (signals.headers.has("x-codex-parent-thread-id") || signals.comboAttempt === true || signals.internalDecisionCall === true
-    || signals.subagentFallback === true) {
+    || signals.subagentFallback === true || isUnattendedCodexTurn(signals.headers, signals.body)) {
     return { status: 403, errorType: "permission_error", code: AGY_ACP_INTERACTIVE_ONLY, message: INTERACTIVE_MESSAGE };
   }
   const local = signals.local ?? currentRequestIsLocal();

@@ -1,10 +1,11 @@
 /**
- * The Antigravity ACP provider refuses turns that combo or fallback machinery routed to it (plan 080).
- * The spawn requests here carry only `x-openai-subagent: collab_spawn`, never
- * `x-codex-parent-thread-id`, so the typed fallback fact recorded where the fallback is selected is
- * the only signal that can refuse them: at the ordinary selection site and at the
- * agent-task-recovery re-selection site. A JEV combo's decision call carries no conversation
- * headers and is not a combo member, so its own internal-decision fact is what refuses it.
+ * The Antigravity ACP provider refuses turns that no person drives (plan 080). The spawn requests
+ * here carry `x-openai-subagent: collab_spawn` and never `x-codex-parent-thread-id`: Codex labels
+ * them spawned threads, which the policy refuses, and the typed fallback fact recorded where a
+ * fallback is selected (ordinary site and agent-task-recovery site) is a second, independent
+ * refusal. A Codex memory turn is labelled by Codex and refused the same way. A JEV combo's
+ * decision call carries no conversation headers and is not a combo member, so its own
+ * internal-decision fact is what refuses it.
  * No CLI is started: the binary path points nowhere, so a spawn would surface a different error.
  */
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -158,7 +159,7 @@ describe("antigravity-acp chosen by subagent fallback", () => {
     expect(bodies.filter(body => body.length > 0 && !body.includes("capture_assignment"))).toEqual([]);
   });
 
-  test("a selection that keeps the requested model is not a fallback", async () => {
+  test("a spawned turn is refused by its own label, even when fallback keeps its model", async () => {
     // A cooled primary with no usable candidate: selection returns the primary itself (from === to).
     const now = 1_800_000_000_000;
     Date.now = () => now;
@@ -168,9 +169,19 @@ describe("antigravity-acp chosen by subagent fallback", () => {
     }
     globalThis.fetch = (async () => new Response("unexpected upstream call", { status: 599 })) as typeof fetch;
     const response = await spawn(cfg, { model: "antigravity-acp/gemini-3.8-flash", input: "hello", stream: false });
-    expect(response.status).toBe(403);
-    // Not refused as fallback-routed; this direct handler call has no recorded local peer.
-    expect(((await response.json()) as { error?: { code?: string } }).error?.code).toBe("agy_acp_local_only");
+    await expectInteractiveOnly(response);
+  });
+
+  test("a Codex memory-consolidation turn from this machine is refused before any spawn", async () => {
+    const cfg = config({ defaultProvider: "antigravity-acp", subagentModelFallback: undefined });
+    globalThis.fetch = (async () => new Response("unexpected upstream call", { status: 599 })) as typeof fetch;
+    for (const headers of [{ "x-openai-subagent": "memory_consolidation" }, { "x-codex-turn-metadata": JSON.stringify({ thread_source: "memory_consolidation" }) }]) {
+      const response = await runWithRequestPeer({ local: true }, () => handleResponses(
+        new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify({ model: "antigravity-acp/gemini-3.8-flash", input: "consolidate", stream: false }) }),
+        cfg, { model: "", provider: "" }, {},
+      ));
+      await expectInteractiveOnly(response);
+    }
   });
 });
 

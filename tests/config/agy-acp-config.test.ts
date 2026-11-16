@@ -71,6 +71,15 @@ describe("antigravity-acp configuration", () => {
     }
   });
 
+  test("never a memory-pipeline model or the shadow-call target: both run unattended", () => {
+    const memory = (phase: string) => config({ memoryModels: { [phase]: { model: "antigravity-acp/gemini-3.8-flash" } } });
+    for (const phase of ["extract", "consolidation"]) {
+      expect(messages(validateConfigCandidate(memory(phase)))).toContain("cannot run Codex memory");
+    }
+    expect(messages(validateConfigCandidate(config({ shadowCallIntercept: { enabled: true, model: "antigravity-acp/gemini-3.8-flash" } })))).toContain("cannot be the shadow-call target");
+    expect(validateConfigCandidate(config({ memoryModels: { extract: { model: "google/gemini-3.8-flash" } }, shadowCallIntercept: { enabled: true, model: "google/gemini-3.8-flash" } })).ok).toBe(true);
+  });
+
   test("never a subagent fallback, through a prefix, a provider alias, a model alias, a combo or the default provider", () => {
     const cases: Array<[Record<string, unknown>, Record<string, unknown>]> = [
       [{ subagentModelFallback: ["antigravity-acp/gemini-3.8-flash"] }, {}],

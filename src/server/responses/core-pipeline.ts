@@ -51,7 +51,7 @@ export async function handleResponsesInner(
     if (transportState instanceof Response) return markProxyError(transportState);
     const agyAcpRefusal = agyAcpPreflightResponse({
       adapterName: transportState.runTurnAdapter.name, requestHeaders: req.headers,
-      forwardHeaders: requestState.selectedForwardHeaders, comboAttempt: options.comboAttempt === true,
+      forwardHeaders: requestState.selectedForwardHeaders, body: requestState.parsed._rawBody, comboAttempt: options.comboAttempt === true,
       internalDecisionCall: options.internalDecisionCall === true, subagentFallback: requestState.subagentFallbackSelected, logCtx,
     });
     if (agyAcpRefusal) return agyAcpRefusal;

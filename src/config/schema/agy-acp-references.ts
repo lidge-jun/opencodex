@@ -29,6 +29,8 @@ export interface ConfigLike {
   customModels?: unknown;
   subagentModelFallback?: unknown;
   subagentModelFallbackByModel?: unknown;
+  memoryModels?: unknown;
+  shadowCallIntercept?: unknown;
 }
 export interface AgyAcpConfigIssue { path: (string | number)[]; message: string }
 
@@ -185,6 +187,20 @@ export function agyAcpConfigIssues(config: ConfigLike): AgyAcpConfigIssue[] {
   checkList(config.subagentModelFallback, ["subagentModelFallback"]);
   if (isRecord(config.subagentModelFallbackByModel)) {
     for (const [model, list] of Object.entries(config.subagentModelFallbackByModel)) checkList(list, ["subagentModelFallbackByModel", model]);
+  }
+  // Codex's memory pipeline and the shadow-call helper redirect run without a person driving them.
+  const selectsAcp = (selector: unknown): boolean =>
+    typeof selector === "string" && [...selectorCandidateProviders(config, selector)].some(name => acp.has(name));
+  if (isRecord(config.memoryModels)) {
+    for (const phase of ["extract", "consolidation"] as const) {
+      const setting = config.memoryModels[phase];
+      if (isRecord(setting) && selectsAcp(setting.model)) {
+        issues.push({ path: ["memoryModels", phase, "model"], message: "The Antigravity CLI (ACP) provider cannot run Codex memory turns: it serves interactive, user-directed turns only." });
+      }
+    }
+  }
+  if (isRecord(config.shadowCallIntercept) && config.shadowCallIntercept.enabled === true && selectsAcp(config.shadowCallIntercept.model)) {
+    issues.push({ path: ["shadowCallIntercept", "model"], message: "The Antigravity CLI (ACP) provider cannot be the shadow-call target: it serves interactive, user-directed turns only." });
   }
   return issues;
 }

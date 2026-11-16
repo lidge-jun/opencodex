@@ -19,6 +19,13 @@ describe("request peer scope", () => {
     expect(classifyRequestPeer("unauthenticated-loopback", null).local).toBe(false);
   });
 
+  test("a loopback peer relaying forwarding headers is a same-machine reverse proxy, not local", () => {
+    for (const name of ["Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Real-IP", "Tailscale-User-Login", "CF-Connecting-IP", "True-Client-IP", "Via"]) {
+      expect(classifyRequestPeer("public", "127.0.0.1", undefined, new Headers({ [name]: "203.0.113.9" })).local).toBe(false);
+    }
+    expect(classifyRequestPeer("public", "127.0.0.1", undefined, new Headers({ "user-agent": "codex_cli_rs" })).local).toBe(true);
+  });
+
   test("a loopback peer the operator declared as a reverse proxy is not local", () => {
     const proxied = { origin: "https://dash.example.test", proxyAddresses: ["127.0.0.1"] };
     expect(classifyRequestPeer("public", "127.0.0.1", proxied).local).toBe(false);
@@ -54,9 +61,23 @@ describe("use policy", () => {
     expect(agyAcpPolicyRefusal({ headers: new Headers({ "thread-id": "x", "user-agent": "codex_exec" }), local: true })).toBeUndefined();
   });
 
+  test("unattended Codex turns without a parent-thread header are refused: memory and spawned threads", () => {
+    const refused = (headers: Record<string, string>, body?: unknown) => agyAcpPolicyRefusal({ headers: new Headers(headers), body, local: true })?.code;
+    expect(refused({ "x-openai-subagent": "memory_consolidation" })).toBe("agy_acp_interactive_only");
+    expect(refused({ "x-openai-memgen-request": "true" })).toBe("agy_acp_interactive_only");
+    expect(refused({ "x-codex-turn-metadata": JSON.stringify({ request_kind: "memory" }) })).toBe("agy_acp_interactive_only");
+    expect(refused({ "x-codex-turn-metadata": JSON.stringify({ thread_source: "memory_consolidation" }) })).toBe("agy_acp_interactive_only");
+    expect(refused({ "x-openai-subagent": "collab_spawn" })).toBe("agy_acp_interactive_only");
+    expect(refused({ "x-codex-turn-metadata": JSON.stringify({ subagent_kind: "thread_spawn" }) })).toBe("agy_acp_interactive_only");
+    // The WebSocket frame's own copy of the turn metadata travels in the body.
+    expect(refused({}, { client_metadata: { "x-codex-turn-metadata": JSON.stringify({ thread_source: "memory_consolidation" }) } })).toBe("agy_acp_interactive_only");
+    // An ordinary interactive turn, with ordinary turn metadata, still runs.
+    expect(refused({ "x-codex-turn-metadata": JSON.stringify({ thread_source: "user" }) })).toBeUndefined();
+  });
+
   test("the pipeline preflight answers a structured 403 only for the ACP adapter", async () => {
     const logCtx = {} as RequestLogContext;
-    const base = { requestHeaders: new Headers(), forwardHeaders: new Headers(), comboAttempt: false, internalDecisionCall: false, subagentFallback: false, logCtx };
+    const base = { requestHeaders: new Headers(), forwardHeaders: new Headers(), body: {}, comboAttempt: false, internalDecisionCall: false, subagentFallback: false, logCtx };
     expect(agyAcpPreflightResponse({ ...base, adapterName: "google", comboAttempt: true })).toBeUndefined();
     const refused = runWithRequestPeer({ local: true }, () => agyAcpPreflightResponse({ ...base, adapterName: "agy-acp", requestHeaders: new Headers({ "x-codex-parent-thread-id": "p" }) }))!;
     expect(refused.status).toBe(403);

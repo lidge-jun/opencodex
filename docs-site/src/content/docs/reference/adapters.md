@@ -1006,7 +1006,7 @@ Protocol v1 (newline-delimited JSON-RPC on stdio).
   errors carry fixed text: the CLI's stderr and its error messages are never returned.
 - `end_turn` completes; `max_tokens` and `refusal` complete as truncated and content-filtered; `max_turn_requests`, an
   unrequested `cancelled` and an unknown stop reason fail the turn.
-- Refuses subagent turns, combo members and combo decision calls, subagent-fallback routing and requests from other machines; see the
+- Refuses subagent, spawned-thread and Codex memory turns, combo members and combo decision calls, subagent-fallback routing and requests from other machines or relayed by a reverse proxy; see the
   [API-key catalog](/guides/api-key-catalog/#antigravity-cli-acp-local).
 
 ## `azure-openai` (alias: `azure`)

@@ -12,19 +12,21 @@ export function agyAcpPreflightResponse(input: {
   adapterName: string;
   requestHeaders: Headers;
   forwardHeaders: Headers;
+  /** The parsed request body: the frame's own copy of Codex's turn metadata (memory turns). */
+  body: unknown;
   comboAttempt: boolean;
   internalDecisionCall: boolean;
   subagentFallback: boolean;
   logCtx: RequestLogContext;
 }): Response | undefined {
   if (input.adapterName !== "agy-acp") return undefined;
-  // The subagent marker counts wherever it arrived: on the caller's request or on the forwarded set.
-  const headers = new Headers(input.forwardHeaders);
-  if (input.requestHeaders.has("x-codex-parent-thread-id") && !headers.has("x-codex-parent-thread-id")) {
-    headers.set("x-codex-parent-thread-id", "present");
-  }
+  // A marker counts wherever it arrived: on the caller's request or on the forwarded set. The merge
+  // is for this decision only; nothing here is forwarded.
+  const headers = new Headers(input.requestHeaders);
+  input.forwardHeaders.forEach((value, name) => headers.set(name, value));
   const refusal = agyAcpPolicyRefusal({
-    headers, comboAttempt: input.comboAttempt, internalDecisionCall: input.internalDecisionCall, subagentFallback: input.subagentFallback,
+    headers, body: input.body, comboAttempt: input.comboAttempt, internalDecisionCall: input.internalDecisionCall,
+    subagentFallback: input.subagentFallback,
   });
   if (!refusal) return undefined;
   const response = new Response(JSON.stringify({ error: {

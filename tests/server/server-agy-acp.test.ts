@@ -157,4 +157,34 @@ describe.skipIf(process.platform === "win32")("antigravity-acp through the serve
       await server.stop(true);
     }
   });
+
+  test("a same-machine reverse proxy's forwarding headers make a loopback request remote: HTTP and WebSocket", async () => {
+    saveConfig({ ...config(), websockets: true } as OcxConfig);
+    const server = startServer(0);
+    try {
+      for (const header of [{ "X-Forwarded-For": "203.0.113.9" }, { "Tailscale-User-Login": "someone@example.test" }]) {
+        const response = await fetch(new URL("/v1/responses", server.url), { method: "POST", headers: { "content-type": "application/json", ...header }, body });
+        expect(response.status).toBe(403);
+        expect(await response.json()).toMatchObject({ error: { code: "agy_acp_local_only" } });
+      }
+      const socket = new WebSocket(new URL("/v1/responses", server.url).href.replace(/^http/, "ws"), { headers: { "CF-Connecting-IP": "203.0.113.9" } } as unknown as string[]);
+      let received = "";
+      const ended = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("no terminal frame")), 15_000);
+        socket.onmessage = event => {
+          received += String(event.data);
+          const frame = JSON.parse(String(event.data)) as { type?: string };
+          if (frame.type === "response.completed" || frame.type === "response.failed" || frame.type === "error") { clearTimeout(timer); resolve(); }
+        };
+      });
+      await new Promise<void>((resolve, reject) => { socket.onopen = () => resolve(); socket.onerror = () => reject(new Error("websocket error")); });
+      socket.send(JSON.stringify({ type: "response.create", model: "antigravity-acp/gemini-4-argon", input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }] }));
+      await ended;
+      socket.close();
+      expect(received).toContain("agy_acp_local_only");
+      expect(existsSync(argsFile)).toBe(false);
+    } finally {
+      await server.stop(true);
+    }
+  });
 });
