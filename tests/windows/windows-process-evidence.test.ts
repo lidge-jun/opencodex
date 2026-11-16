@@ -231,10 +231,10 @@ describe("Windows process evidence: facades", () => {
 
 const liveX64 = process.platform !== "win32" || process.arch !== "x64";
 
-for (const expired of [false, true]) test.skipIf(process.platform !== "win32")("owner enrichment retains every row (expired=" + expired + ")", async () => {
+for (const budget of ["available", "expired", "expires-during-owner"] as const) test.skipIf(process.platform !== "win32")("owner enrichment retains every row (budget=" + budget + ")", async () => {
   const script = WINDOWS_PROCESS_SNAPSHOT_SCRIPT.replace(
     "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value", "'S-1-5-21-100-200-300-1001'",
-  ).replace("[Diagnostics.Stopwatch]::StartNew()", expired ? "[pscustomobject]@{ ElapsedMilliseconds = 1500 }" : "[Diagnostics.Stopwatch]::StartNew()");
+  ).replace("[Diagnostics.Stopwatch]::StartNew()", "[pscustomobject]@{ ElapsedMilliseconds = " + (budget === "expired" ? 1500 : 0) + " }");
   const prelude = [
     "$script:ownerReads = 0; $script:refreshReads = 0;",
     "function Get-CimInstance { param($ClassName, $InputObject, $ErrorAction, $OperationTimeoutSec)",
@@ -242,7 +242,8 @@ for (const expired of [false, true]) test.skipIf(process.platform !== "win32")("
     "  1..40 | ForEach-Object { [pscustomobject]@{ ProcessId = $_; ParentProcessId = 900; Name = 'cmd.exe';",
     "    CommandLine = 'cmd.exe'; CreationDate = [datetime]'2026-11-12T01:02:03Z' } } };",
     "function Invoke-CimMethod { param($InputObject, $MethodName, $ErrorAction, $OperationTimeoutSec)",
-    "  $script:ownerReads++; @{ Sid = $currentSid; ReturnValue = 0 } };",
+    "  $script:ownerReads++; " + (budget === "expires-during-owner" ? "$ownerBudget.Clock.ElapsedMilliseconds = 1500; " : "")
+      + "@{ Sid = $currentSid; ReturnValue = 0 } };",
     "$rows = & { " + script + " };",
     "[pscustomobject]@{ Snapshot = $rows; OwnerReads = $script:ownerReads; RefreshReads = $script:refreshReads } | ConvertTo-Json -Compress",
   ].join(" ");
@@ -257,12 +258,12 @@ for (const expired of [false, true]) test.skipIf(process.platform !== "win32")("
   const result = JSON.parse(output);
   const rows = parseWindowsProcessSnapshot(result.Snapshot)!;
   expect(rows).toHaveLength(40);
-  if (expired) expect(result.OwnerReads).toBe(0);
-  else expect(result.OwnerReads).toBeGreaterThan(0);
-  expect(result.OwnerReads).toBeLessThanOrEqual(32);
-  expect(result.RefreshReads).toBe(result.OwnerReads);
-  expect(rows.slice(0, result.OwnerReads).every(row => row.foreignOwner === false)).toBe(true);
-  expect(rows.slice(result.OwnerReads).every(row => row.foreignOwner === null)).toBe(true);
+  expect(rows.map(row => row.pid)).toEqual(Array.from({ length: 40 }, (_, index) => index + 1));
+  expect(result.OwnerReads).toBe(budget === "available" ? 32 : budget === "expired" ? 0 : 1);
+  const refreshed = budget === "available" ? 32 : 0;
+  expect(result.RefreshReads).toBe(refreshed);
+  expect(rows.slice(0, refreshed).every(row => row.foreignOwner === false)).toBe(true);
+  expect(rows.slice(refreshed).every(row => row.foreignOwner === null)).toBe(true);
 }, 10_000);
 
 test.skipIf(process.platform !== "win32")("the live capped snapshot reads and refreshes a wrapper child's owner", async () => {
