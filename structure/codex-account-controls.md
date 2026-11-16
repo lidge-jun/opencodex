@@ -145,8 +145,9 @@ keeps the default-mode fallbacks.
 `resolveCodexAuthContext` (`src/codex/auth-context.ts`) catches a `CodexMainAccountHardLockError` and asks
 `refreshMainHardLockBeforeRefusal` (`src/codex/auth-api/main-hard-lock-refusal-read.ts`) for one fresh
 usage read before refusing (#8113). The read runs only when the blocking usage was last measured more
-than 60 s ago (`getMainPolicyUsageObservedAt` in `src/codex/quota.ts`; credits-only merges keep that time, and a
-reading restored from disk has none, so it counts as stale); concurrent refusals share one in-flight read, and each main identity gets at most one read per
+than 60 s ago (`getMainPolicyUsageObservedAt` in `src/codex/quota.ts`: the oldest per-window measurement time among the
+windows the reading retains; only a measured percentage renews its own window, never credits, reset metadata or
+another window, and a reading restored from disk has none, so it counts as stale); concurrent refusals share one in-flight read, and each main identity gets at most one read per
 minute, remembered per identity so switching logins cannot reset it. Usage-query backoff, a paused or reauthentication-required main and native-main maintenance skip
 it, and the read is passive: it never sets or clears the reauthentication quarantine. If the fresh reading
 no longer blocks, the request is resolved once more; otherwise the original refusal stands.

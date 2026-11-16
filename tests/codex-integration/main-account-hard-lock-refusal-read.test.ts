@@ -16,7 +16,7 @@ import { CodexMainAccountHardLockError, resolveCodexAuthContext } from "../../sr
 import { captureMainQuotaWriter, clearMainAccountInfoCache, observeMainQuotaCredential } from "../../src/codex/main-account-cache";
 import { getMainAccountHardLockStatus } from "../../src/codex/main-account-hard-lock";
 import { setMainAccountPlan } from "../../src/codex/main-account";
-import { clearAccountQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
+import { clearAccountQuota, getMainPolicyUsageObservedAt, setAccountQuotaFromParsed } from "../../src/codex/quota";
 import { resetQuotaQueryBackoffForTests } from "../../src/codex/quota-query-backoff";
 import { clearCodexUpstreamHealth } from "../../src/codex/routing";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
@@ -289,4 +289,21 @@ test("an explicit stored-main selection reads through the owned probe whatever b
   await resolveCodexAuthContext(unrelated, direct, "direct", { accountId: MAIN }).catch(error => error);
   // The stub asserts the native-main claim, which only the owned probe takes.
   expect(calls).toEqual([whamUrl]);
+});
+test.each([
+  ["reset metadata alone", { shortResetAt: 1_900_000_000 }],
+  ["a reading of another window", { weeklyPercent: 10 }],
+] as const)("%s does not renew the retained blocking window's age", async (_label, partial) => {
+  const calls = wham(() => usage(0));
+  age(MAIN_HARD_LOCK_REFUSAL_READ_AGE_MS + 1);
+  setAccountQuotaFromParsed(MAIN, partial, undefined, captureMainQuotaWriter(accountId));
+  expect(getMainAccountHardLockStatus(config()).state).toBe("blocked");
+  expect(await refreshMainHardLockBeforeRefusal(config())).toBe(true);
+  expect(calls).toEqual([whamUrl]);
+});
+
+test("a writer-free invalidation drops the measurement times with the policy reading", () => {
+  setAccountQuotaFromParsed(MAIN, { shortPercent: 5 }, undefined, undefined);
+  setAccountQuotaFromParsed(MAIN, { resetCredits: 1 }, undefined, captureMainQuotaWriter(accountId));
+  expect(getMainPolicyUsageObservedAt()).toBeUndefined();
 });

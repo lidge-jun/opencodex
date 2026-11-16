@@ -43,10 +43,13 @@ type MainPolicyQuota = { identityKey: string; quota: StoredAccountQuota };
 type MainPolicyQuotaObservation = Omit<StoredAccountQuota, "updatedAt"> & { shortWindowAbsent?: true; monthlyWindowAbsent?: true };
 let mainPolicyQuota: MainPolicyQuota | null = null;
 /**
- * When a usage-bearing main policy write last landed in this process (#8113). Process-local and never
- * persisted, so a reading restored from disk has no measurement time; credits-only merges keep it.
+ * When each main policy usage window was last measured in this process (#8113). A window's time
+ * moves only when a write measures that window's percentage; reset metadata, credits and other
+ * windows never renew it. Process-local and never persisted: a reading restored from disk has none.
  */
-let mainPolicyUsageObservation: { identityKey: string; at: number } | undefined;
+type PolicyUsageWindow = "shortPercent" | "weeklyPercent" | "monthlyPercent";
+const POLICY_USAGE_WINDOWS: readonly PolicyUsageWindow[] = ["shortPercent", "weeklyPercent", "monthlyPercent"];
+let mainPolicyUsageObservation: { identityKey: string; at: Partial<Record<PolicyUsageWindow, number>> } | undefined;
 let diskHydrated = false;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let persistStartedAt: number | null = null;
@@ -447,9 +450,12 @@ export function setAccountQuotaFromParsed(
     const policyExisting = mainWriter && mainPolicyQuota?.identityKey === mainWriter.identityKey
       ? mainPolicyQuota.quota
       : undefined;
-    // A credits-only merge refreshes `updatedAt` but measures no window, so it cannot age the usage tuple.
-    if (mainWriter && policyQuota && snapshotHasUsage(policyQuota)) {
-      mainPolicyUsageObservation = { identityKey: mainWriter.identityKey, at: updatedAt };
+    // Only a measured percentage renews its own window; anything else keeps the earlier time.
+    if (mainWriter && policyQuota) {
+      const at = mainPolicyUsageObservation?.identityKey === mainWriter.identityKey && policyExisting
+        ? { ...mainPolicyUsageObservation.at } : {};
+      for (const window of POLICY_USAGE_WINDOWS) if (finitePercent(policyQuota[window])) at[window] = updatedAt;
+      mainPolicyUsageObservation = { identityKey: mainWriter.identityKey, at };
     }
     mainPolicyQuota = mainWriter && (policyQuota || policyExisting)
       ? {
@@ -459,6 +465,7 @@ export function setAccountQuotaFromParsed(
           : policyExisting!,
       }
       : null;
+    if (!mainPolicyQuota) mainPolicyUsageObservation = undefined;
   }
   schedulePersistAccountQuotas();
   // Credits carry the previous usage tuple; they must not refresh its observation clock.
@@ -966,13 +973,23 @@ export function getMainPolicyQuota(): StoredAccountQuota | null {
 }
 
 /**
- * When the observed main identity's policy usage was last measured in this process, or undefined
- * when this process has not measured it (for example a reading restored from disk) (#8113).
+ * The oldest measurement time among the windows the observed main identity's policy reading
+ * retains, or undefined when any of them was not measured in this process (for example a reading
+ * restored from disk) (#8113). Any stale retained window therefore makes the whole reading stale.
  */
 export function getMainPolicyUsageObservedAt(): number | undefined {
   hydrateAccountQuotasFromDisk();
   if (!mainPolicyQuota || mainPolicyQuota.identityKey !== getObservedMainQuotaIdentityKey()) return undefined;
-  return mainPolicyUsageObservation?.identityKey === mainPolicyQuota.identityKey ? mainPolicyUsageObservation.at : undefined;
+  const observation = mainPolicyUsageObservation?.identityKey === mainPolicyQuota.identityKey
+    ? mainPolicyUsageObservation.at : undefined;
+  let oldest: number | undefined;
+  for (const window of POLICY_USAGE_WINDOWS) {
+    if (!finitePercent(mainPolicyQuota.quota[window])) continue;
+    const at = observation?.[window];
+    if (at === undefined) return undefined;
+    oldest = oldest === undefined ? at : Math.min(oldest, at);
+  }
+  return oldest;
 }
 
 /** An owned identity observation may retire legacy main quota only when its retained policy tag proves replacement. */
