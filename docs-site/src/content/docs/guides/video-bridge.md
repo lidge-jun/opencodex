@@ -87,8 +87,12 @@ bridge:
   adapter does not matter, but it must use API-key auth.
 - `"videoProvider": "xai"` keeps the pinned `https://api.x.ai/v1` endpoint, whatever `baseUrl` the
   `xai` row carries. Other built-in provider ids are refused; name a custom provider instead.
-- A loopback or private-network `baseUrl` needs `allowPrivateNetwork: true` on that provider, as for
-  other provider traffic.
+- A loopback or private-network destination needs `allowPrivateNetwork: true` on that provider, as
+  for other provider traffic. The check runs on the addresses the hostname resolves to when each
+  submit or poll request connects, so a hostname that resolves to a local address is refused without
+  it. Plain `http` works only for `localhost` or a loopback or private IP address with that setting;
+  every other destination must use `https`. Requests follow the provider's own `proxy` and
+  `noProxy` settings.
 - A key OpenCodex can recognize as xAI's (an `xai-` key, a key held by any `xai` row, or an
   environment reference named for xAI or Grok) is sent only to `https://api.x.ai` or
   `https://cli-chat-proxy.grok.com`; any other origin is refused. A key with none of those marks cannot
