@@ -57,7 +57,7 @@ export async function runAntigravitySession(
   let nextId = 0;
   let sessionId: string | undefined;
   let prompting = false;
-  let expectedConfig: ReadonlyMap<string, string> | undefined;
+  let expectedConfig: Map<string, string> | undefined;
   let pending: { id: number; finish: (error?: Error, result?: unknown) => void } | undefined;
   const lines = createInterface({ input: child.stdout });
   const childClosed = new Promise<void>(resolve => child.once("close", resolve));
@@ -159,13 +159,13 @@ export async function runAntigravitySession(
       }
       return result.configOptions;
     }
+    expectedConfig = new Map([[mode.id, "plan"]]);
     await setOption(mode.id, "plan");
+    expectedConfig.set(model.id, selected);
     const config = await setOption(model.id, selected);
     if (!config.some(option => option.id === mode.id && option.currentValue === "plan")) {
       throw new Error("The Antigravity CLI did not retain plan mode after model selection.");
     }
-    expectedConfig = new Map([[model.id, selected], [mode.id, "plan"]]);
-
     write("Antigravity ACP: " + selected + " · plan mode. Type /exit to quit.\n");
     for (;;) {
       const text = (await question("You> ", stop.signal)).trim();

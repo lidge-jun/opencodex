@@ -5,6 +5,8 @@ import { antigravityRefusal, runAntigravitySession } from "../../src/cli/antigra
 const fakeAgy = String.raw`
 const { createInterface } = require("node:readline");
 const write = (packet) => console.log(JSON.stringify({ jsonrpc: "2.0", ...packet }));
+const writeBatch = (...packets) => process.stdout.write(packets.map(packet =>
+  JSON.stringify({ jsonrpc: "2.0", ...packet })).join("\n") + "\n");
 const reply = (id, result) => write({ id, result });
 const bad = (id) => write({ id, error: { code: -32602 } });
 const sessionId = "fixture";
@@ -27,8 +29,17 @@ createInterface({ input: process.stdin }).on("line", line => {
     if (params.configId === "model" && params.value === "gemini-example") model = params.value;
     else if (params.configId === "mode" && params.value === "plan") mode = params.value;
     else return bad(id);
-    reply(id, { configOptions: configOptions() });
+    if (params.configId === "model" && process.argv.includes("setup-drift")) {
+      writeBatch(
+        { id, result: { configOptions: configOptions() } },
+        { method: "session/update", params: { sessionId, update: {
+          sessionUpdate: "config_option_update",
+          configOptions: [{ id: "model", type: "select", currentValue: "claude-opus-example" }],
+        } } },
+      );
+    } else reply(id, { configOptions: configOptions() });
   } else if (method === "session/prompt") {
+    process.stderr.write("PROMPT_SENT");
     if (model !== "gemini-example" || mode !== "plan" || params.prompt[0].text !== "hello") return bad(id);
     promptId = id;
     write({ id: "permission", method: "session/request_permission", params: { sessionId, options: [
@@ -93,6 +104,23 @@ describe("Antigravity ACP command", () => {
         async () => answers.shift() ?? "/exit", () => {}, stop,
       )).rejects.toThrow("Antigravity changed the session model or mode.");
       expect(answers).toEqual(["/exit"]);
+    } finally {
+      clearTimeout(timer);
+    }
+  });
+
+  test("rejects a setup-time model update before sending the first prompt", async () => {
+    const child = spawn(process.execPath, ["-e", fakeAgy, "--", "setup-drift"], { windowsHide: true });
+    const stop = new AbortController();
+    const timer = setTimeout(() => stop.abort(new Error("Mock ACP timed out")), 4_000);
+    const errors: string[] = [];
+    child.stderr.on("data", chunk => errors.push(String(chunk)));
+    const answers = ["", "hello"];
+    try {
+      await expect(runAntigravitySession(child, process.cwd(),
+        async () => answers.shift() ?? "/exit", () => {}, stop,
+      )).rejects.toThrow("Antigravity changed the session model or mode.");
+      expect(errors.join("")).toBe("");
     } finally {
       clearTimeout(timer);
     }
