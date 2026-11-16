@@ -1,0 +1,284 @@
+import { afterEach, expect, spyOn, test } from "bun:test";
+import {
+  createOfflineResendWait, resolveOfflineResendWaitMs, setOfflineResendDependenciesForTests,
+} from "../../src/lib/offline-resend";
+import { fetchWithResetRetry, fetchWithTransientRetry } from "../../src/lib/upstream-retry";
+import { handleResponses } from "../../src/server/responses";
+import type { OcxConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+
+// #7958: an opt-in wait (default off) for reachability after a pre-connect DNS/connect failure,
+// then one resend under the existing send budget.
+const originalFetch = globalThis.fetch;
+let release: (() => void) | undefined;
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  setOfflineResendDependenciesForTests(undefined);
+  release?.();
+  release = undefined;
+});
+
+const offline = () => Object.assign(new TypeError("getaddrinfo ENOTFOUND gateway.example"), { code: "ENOTFOUND" });
+
+/** An expiry that never fires on its own and rejects only when its signal aborts. */
+const neverExpires = (_ms: number, signal?: AbortSignal) => new Promise<void>((_resolve, reject) => {
+  signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+});
+
+/** A DNS probe that fails `failures` times, and a clock that advances only by the waited delays. */
+function probes(failures: number) {
+  let clock = 0;
+  const lookups: string[] = [];
+  const delays: number[] = [];
+  setOfflineResendDependenciesForTests({
+    resolveHost: async host => { lookups.push(host); if (lookups.length <= failures) throw offline(); },
+    delay: async ms => { delays.push(ms); clock += ms; },
+    expire: neverExpires,
+    now: () => clock,
+  });
+  return { lookups, delays };
+}
+
+test("the wait is off unless a positive number of seconds is configured, and is capped at 300 s", () => {
+  for (const value of [undefined, 0, -1, Number.NaN, "30"]) expect(resolveOfflineResendWaitMs(value)).toBe(0);
+  expect(resolveOfflineResendWaitMs(1.5)).toBe(1_500);
+  expect(resolveOfflineResendWaitMs(9_999)).toBe(300_000);
+  expect(createOfflineResendWait("https://gateway.example/v1/responses", 0)).toBeUndefined();
+});
+
+test("a pre-connect failure waits for DNS, resends once, and the resend counts against the budget", async () => {
+  const { lookups, delays } = probes(2);
+  let sends = 0;
+  const consumed: number[] = [];
+  const response = await fetchWithResetRetry(async () => {
+    sends += 1;
+    if (sends === 1) throw offline();
+    return new Response("ok");
+  }, { attempts: 3, onSendsConsumed: count => consumed.push(count),
+    offlineWait: createOfflineResendWait("https://gateway.example/v1/responses", 30_000) });
+  expect(await response.text()).toBe("ok");
+  expect(sends).toBe(2);
+  expect(consumed).toEqual([1, 1]);
+  expect(lookups).toEqual(["gateway.example", "gateway.example", "gateway.example"]);
+  expect(delays).toEqual([1_000, 1_000]);
+});
+
+test("the wait ends at its limit and keeps the original failure", async () => {
+  const { delays } = probes(Number.POSITIVE_INFINITY);
+  let sends = 0;
+  const failure = fetchWithResetRetry(async () => { sends += 1; throw offline(); },
+    { attempts: 3, offlineWait: createOfflineResendWait("https://gateway.example/v1/responses", 2_500) });
+  await expect(failure).rejects.toMatchObject({ code: "ENOTFOUND" });
+  expect(sends).toBe(1);
+  expect(delays).toEqual([1_000, 1_000, 500]);
+});
+
+test("only one resend per request: a second offline failure is returned", async () => {
+  probes(0);
+  let sends = 0;
+  const failure = fetchWithResetRetry(async () => { sends += 1; throw offline(); },
+    { attempts: 3, offlineWait: createOfflineResendWait("https://gateway.example/v1/responses", 30_000) });
+  await expect(failure).rejects.toMatchObject({ code: "ENOTFOUND" });
+  expect(sends).toBe(2);
+});
+
+test("no resend without send budget, for a failure after connect, or after a client abort", async () => {
+  probes(0);
+  const url = "https://gateway.example/v1/responses";
+  let sends = 0;
+  await expect(fetchWithResetRetry(async () => { sends += 1; throw offline(); },
+    { attempts: 1, offlineWait: createOfflineResendWait(url, 30_000) })).rejects.toMatchObject({ code: "ENOTFOUND" });
+  expect(sends).toBe(1);
+  sends = 0;
+  const tls = Object.assign(new Error("certificate has expired"), { code: "CERT_HAS_EXPIRED" });
+  await expect(fetchWithResetRetry(async () => { sends += 1; throw tls; },
+    { attempts: 3, offlineWait: createOfflineResendWait(url, 30_000) })).rejects.toBe(tls);
+  expect(sends).toBe(1);
+  const abort = new AbortController();
+  setOfflineResendDependenciesForTests({
+    resolveHost: async () => { abort.abort(new DOMException("client gone", "AbortError")); throw offline(); },
+    delay: async () => {}, expire: neverExpires, now: () => 0,
+  });
+  sends = 0;
+  await expect(fetchWithResetRetry(async () => { sends += 1; throw offline(); },
+    { attempts: 3, abortSignal: abort.signal, offlineWait: createOfflineResendWait(url, 30_000) }))
+    .rejects.toMatchObject({ name: "AbortError" });
+  expect(sends).toBe(1);
+});
+
+function nativeConfig(offlineResendWaitSec?: number): OcxConfig {
+  return {
+    port: 0, defaultProvider: "fixture",
+    ...(offlineResendWaitSec === undefined ? {} : { offlineResendWaitSec }),
+    providers: { fixture: { adapter: "openai-responses", authMode: "key", apiKey: "fixture-key",
+      baseUrl: "https://gateway.example/v1", models: ["probe"] } },
+  } as unknown as OcxConfig;
+}
+
+const completed = { id: "resp_fixture", object: "response", status: "completed", model: "probe",
+  output: [{ type: "message", id: "msg_1", role: "assistant", status: "completed",
+    content: [{ type: "output_text", text: "BACK_ONLINE", annotations: [] }] }],
+  usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } };
+
+for (const [label, offlineResendWaitSec, expected] of [
+  ["off by default", undefined, { status: 502, sends: 1 }],
+  ["opted in", 30, { status: 200, sends: 2 }],
+] as const) {
+  test(`native Responses passthrough after an offline DNS failure: ${label}`, async () => {
+    release = acquireOwnedSpendHome();
+    probes(1);
+    let sends = 0;
+    globalThis.fetch = (async () => {
+      sends += 1;
+      if (sends === 1) throw offline();
+      return Response.json(completed);
+    }) as unknown as typeof fetch;
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "fixture/probe", input: "hello", stream: false, store: false }),
+    }), nativeConfig(offlineResendWaitSec), { model: "", provider: "" });
+    expect(response.status).toBe(expected.status);
+    expect(sends).toBe(expected.sends);
+    if (expected.status === 200) expect(await response.text()).toContain("BACK_ONLINE");
+  });
+}
+test("a translated Chat route waits and resends once when opted in", async () => {
+  release = acquireOwnedSpendHome();
+  probes(1);
+  let sends = 0;
+  globalThis.fetch = (async () => {
+    sends += 1;
+    if (sends === 1) throw offline();
+    return Response.json({ id: "chat_1", object: "chat.completion", created: 1, model: "probe",
+      choices: [{ index: 0, message: { role: "assistant", content: "BACK_ONLINE" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } });
+  }) as unknown as typeof fetch;
+  const cfg = nativeConfig(30);
+  (cfg.providers.fixture as { adapter: string }).adapter = "openai-chat";
+  const response = await handleResponses(new Request("http://localhost/v1/responses", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "fixture/probe", input: "hello", stream: false }),
+  }), cfg, { model: "", provider: "" });
+  expect(response.status).toBe(200);
+  expect(sends).toBe(2);
+  expect(await response.text()).toContain("BACK_ONLINE");
+});
+const url = "https://gateway.example/v1/responses";
+
+test("a DNS probe that never settles ends at the wait limit and keeps the original failure", async () => {
+  const expiries: number[] = [];
+  setOfflineResendDependenciesForTests({
+    resolveHost: () => new Promise(() => {}),
+    delay: async () => {}, expire: async ms => { expiries.push(ms); }, now: () => 0,
+  });
+  let sends = 0;
+  await expect(fetchWithResetRetry(async () => { sends += 1; throw offline(); },
+    { attempts: 3, offlineWait: createOfflineResendWait(url, 5_000) })).rejects.toMatchObject({ code: "ENOTFOUND" });
+  expect(sends).toBe(1);
+  expect(expiries).toEqual([5_000]);
+});
+
+test("cancelling the client during a stalled DNS probe ends the wait at once", async () => {
+  const abort = new AbortController();
+  setOfflineResendDependenciesForTests({
+    resolveHost: () => { queueMicrotask(() => abort.abort(new DOMException("client gone", "AbortError"))); return new Promise(() => {}); },
+    delay: async () => {}, expire: neverExpires, now: () => 0,
+  });
+  let sends = 0;
+  await expect(fetchWithResetRetry(async () => { sends += 1; throw offline(); },
+    { attempts: 3, abortSignal: abort.signal, offlineWait: createOfflineResendWait(url, 5_000) }))
+    .rejects.toMatchObject({ name: "AbortError" });
+  expect(sends).toBe(1);
+});
+
+test("a DNS answer that arrives after the wait limit does not authorize a resend", async () => {
+  let clock = 0;
+  setOfflineResendDependenciesForTests({
+    resolveHost: async () => { clock += 5_001; },
+    delay: async () => {}, expire: neverExpires, now: () => clock,
+  });
+  let sends = 0;
+  await expect(fetchWithResetRetry(async () => { sends += 1; throw offline(); },
+    { attempts: 3, offlineWait: createOfflineResendWait(url, 5_000) })).rejects.toMatchObject({ code: "ENOTFOUND" });
+  expect(sends).toBe(1);
+});
+
+test("time spent waiting offline does not make the resend count as a slow attempt", async () => {
+  let clock = 1_000_000;
+  const clockSpy = spyOn(Date, "now").mockImplementation(() => clock);
+  setOfflineResendDependenciesForTests({
+    resolveHost: (() => { let probes = 0; return async () => { probes += 1; if (probes === 1) throw offline(); }; })(),
+    delay: async ms => { clock += ms; }, expire: neverExpires, now: () => clock,
+  });
+  try {
+    const statuses: number[] = [];
+    const response = await fetchWithTransientRetry(async () => {
+      if (statuses.length === 0) { statuses.push(0); throw offline(); }
+      const status = statuses.length === 1 ? 503 : 200;
+      statuses.push(status);
+      return new Response("x", { status });
+    }, { attempts: 3, slowAttemptMs: 500, offlineWait: createOfflineResendWait(url, 30_000) });
+    // The 503 after a 1 s offline wait is still retried: the slow clock restarted at the resend.
+    expect(response.status).toBe(200);
+    expect(statuses).toEqual([0, 503, 200]);
+  } finally { clockSpy.mockRestore(); }
+});
+test("only a DNS resolution failure waits; refused, unreachable and IP-literal failures return at once", async () => {
+  const { lookups } = probes(0);
+  for (const code of ["ECONNREFUSED", "ConnectionRefused", "ENETUNREACH", "EHOSTUNREACH"]) {
+    let sends = 0;
+    const error = Object.assign(new TypeError(`connect ${code}`), { code });
+    await expect(fetchWithResetRetry(async () => { sends += 1; throw error; },
+      { attempts: 3, offlineWait: createOfflineResendWait(url, 30_000) })).rejects.toBe(error);
+    expect(sends).toBe(1);
+  }
+  // An IP literal needs no DNS, so DNS answering proves nothing about it.
+  expect(createOfflineResendWait("https://203.0.113.7/v1/responses", 30_000)).toBeUndefined();
+  expect(createOfflineResendWait("http://[2001:db8::1]:8080/v1/responses", 30_000)).toBeUndefined();
+  expect(lookups).toEqual([]);
+  let sends = 0;
+  const dnsAgain = Object.assign(new TypeError("getaddrinfo EAI_AGAIN gateway.example"), { code: "EAI_AGAIN" });
+  await fetchWithResetRetry(async () => { sends += 1; if (sends === 1) throw dnsAgain; return new Response("ok"); },
+    { attempts: 3, offlineWait: createOfflineResendWait(url, 30_000) });
+  expect(sends).toBe(2);
+});
+
+test("the wait belongs to the first send only; a later transient-5xx leg never waits", async () => {
+  const { lookups } = probes(0);
+  const sends: Array<number | "offline"> = [];
+  const failure = fetchWithTransientRetry(async () => {
+    if (sends.length === 0) { sends.push(503); return new Response("x", { status: 503 }); }
+    sends.push("offline");
+    throw offline();
+  }, { attempts: 4, offlineWait: createOfflineResendWait(url, 30_000) });
+  await expect(failure).rejects.toBeDefined();
+  expect(sends).toEqual([503, "offline"]);
+  expect(lookups).toEqual([]);
+});
+
+test("a combo fails over instead of waiting once per target", async () => {
+  release = acquireOwnedSpendHome();
+  const { lookups } = probes(0);
+  const hosts: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const host = new URL(input instanceof Request ? input.url : String(input)).host;
+    hosts.push(host);
+    if (host === "down.example") throw offline();
+    return Response.json(completed);
+  }) as unknown as typeof fetch;
+  const target = (name: string) => ({ adapter: "openai-responses", authMode: "key", apiKey: "fixture-key",
+    baseUrl: `https://${name}.example/v1`, models: ["probe"] });
+  const cfg = { port: 0, defaultProvider: "down", offlineResendWaitSec: 30,
+    providers: { down: target("down"), up: target("up") },
+    combos: { pair: { strategy: "failover", targets: [{ provider: "down", model: "probe" }, { provider: "up", model: "probe" }] } },
+  } as unknown as OcxConfig;
+  const response = await handleResponses(new Request("http://localhost/v1/responses", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "combo/pair", input: "hello", stream: false, store: false }),
+  }), cfg, { model: "", provider: "" });
+  expect(response.status).toBe(200);
+  expect(await response.text()).toContain("BACK_ONLINE");
+  // No DNS wait and no resend to the unreachable member: the combo moved on to the reachable one.
+  expect(lookups).toEqual([]);
+  expect(hosts).toEqual(["down.example", "up.example"]);
+});

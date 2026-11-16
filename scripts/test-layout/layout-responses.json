@@ -27,5 +27,6 @@
   "ws-native-continuation-send-budget.test.ts": "responses",
   "responses-native-compact-ocx-envelope.test.ts": "responses",
   "responses-reset-replay-chained.test.ts": "responses",
+  "responses-offline-resend.test.ts": "responses",
   "stalled-reader-memory.test.ts": "responses"
 }
