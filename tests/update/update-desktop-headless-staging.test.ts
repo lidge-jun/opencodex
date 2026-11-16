@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import * as fs from "node:fs";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -35,6 +36,28 @@ describe("the updater's own running image", () => {
     expect(() => mover.moveAsideOwnImage()).toThrow();
     expect(readFileSync(install.ocxExe, "utf8")).toBe("old image");
     expect(existsSync(join(install.dir, "ocx.exe.42-1.update-old"))).toBe(false);
+  });
+
+  test("when neither rename can give back the installed name, both copies stay and the error names them (#8795 review r2)", () => {
+    const { install, mover } = installation();
+    const realRename = fs.renameSync;
+    // Something (an antivirus lock, say) refuses every rename onto the installed name.
+    const rename = spyOn(fs, "renameSync").mockImplementation((from, to) => {
+      if (String(to) === install.ocxExe) throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" });
+      return realRename(from, to);
+    });
+    try {
+      let message = "";
+      try { mover.moveAsideOwnImage(); } catch (error) { message = (error as Error).message; }
+      const moved = join(install.dir, "ocx.exe.42-1.update-old");
+      const copy = join(install.dir, "ocx.exe.42-1.update-new");
+      // The only usable images are kept, and the error says where they are.
+      expect(readFileSync(moved, "utf8")).toBe("old image");
+      expect(readFileSync(copy, "utf8")).toBe("old image");
+      expect(message).toContain(moved);
+      expect(message).toContain(copy);
+      expect(message).toContain(install.ocxExe);
+    } finally { rename.mockRestore(); }
   });
 
   test("an install that replaced ocx.exe is never overwritten by the restore, and leftovers are retired", () => {

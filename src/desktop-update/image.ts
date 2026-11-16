@@ -54,7 +54,12 @@ export function ownImageMover(install: WindowsDesktopInstall, options: OwnImageO
       catch (error) { rmSync(copy, { force: true }); throw error; }
       try { renameSync(copy, install.ocxExe); }
       catch (error) {
-        try { renameSync(moved, install.ocxExe); } catch { /* reported by the caller's restore */ }
+        try { renameSync(moved, install.ocxExe); }
+        catch {
+          // Neither image is back at the installed name: keep both and say where they are, never delete the last copy.
+          const detail = error instanceof Error ? error.message : String(error);
+          throw new Error(`${install.ocxExe} could not be put back (${detail}). The previous ocx.exe is at ${moved} and an identical copy at ${copy}; rename either one to ${install.ocxExe}.`);
+        }
         rmSync(copy, { force: true });
         throw error;
       }
