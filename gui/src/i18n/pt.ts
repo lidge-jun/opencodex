@@ -1363,6 +1363,7 @@ export const pt: Record<TKey, string> = {
   "logs.detail.attempt.e2eNote": "O tok/s de nível superior é ponta a ponta; cada tentativa usa sua própria duração.",
   "logs.detail.attempt.recovery.transient5xx": "5xx transitório",
   "logs.detail.attempt.recovery.connectionReset": "Conexão reiniciada",
+  "logs.detail.attempt.recovery.offlineResend": "Reenviada após o retorno da rede",
   "logs.detail.attempt.recovery.oauth401": "Reautenticação OAuth",
   "logs.detail.attempt.recovery.key429": "Chave com limite de taxa (429)",
   "logs.detail.attempt.recovery.rateLimit429": "Limite de taxa (429)",

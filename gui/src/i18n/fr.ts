@@ -1349,6 +1349,7 @@ export const fr: Record<TKey, string> = {
   "logs.detail.attempt.e2eNote": "Le débit global en jetons/s est calculé de bout en bout ; chaque tentative utilise sa propre durée.",
   "logs.detail.attempt.recovery.transient5xx": "Erreur 5xx temporaire",
   "logs.detail.attempt.recovery.connectionReset": "Réinitialisation de la connexion",
+  "logs.detail.attempt.recovery.offlineResend": "Renvoyée après le retour du réseau",
   "logs.detail.attempt.recovery.emptyCompletion": "Nouvelle tentative après une réponse vide",
   "logs.detail.attempt.recovery.consoleGoUpload": "Nouvelle tentative d’envoi Console",
   "logs.detail.attempt.recovery.key401": "Ré-authentification de la clé API",

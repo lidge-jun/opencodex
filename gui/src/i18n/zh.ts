@@ -1322,6 +1322,7 @@ export const zh: Record<TKey, string> = {
   "logs.detail.attempt.e2eNote": "顶层 tok/s 为端到端值；每次尝试使用各自耗时。",
   "logs.detail.attempt.recovery.transient5xx": "临时 5xx 错误",
   "logs.detail.attempt.recovery.connectionReset": "连接已重置",
+  "logs.detail.attempt.recovery.offlineResend": "网络恢复后重新发送",
   "logs.detail.attempt.recovery.oauth401": "OAuth 重新认证",
   "logs.detail.attempt.recovery.key429": "密钥被限流 (429)",
   "logs.detail.attempt.recovery.rateLimit429": "被限流 (429)",
