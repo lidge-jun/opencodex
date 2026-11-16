@@ -156,10 +156,14 @@ describe("Home -R tunnel and SSH capture", () => {
       await supervisor.stop();
     }
     const dir = sshCaptureDir(linkDirectory);
-    const file = readdirSync(dir).find(name => name.endsWith(".jsonl"))!;
-    // The default opener is per directory; give its async writer a moment.
-    for (let wait = 0; wait < 50 && !readFileSync(join(dir, file), "utf8").includes("auth.denied"); wait++) await Bun.sleep(10);
-    const stored = readFileSync(join(dir, file), "utf8");
+    // The default opener is per directory and writes asynchronously: on Windows the file itself
+    // can appear after stop() returns (lane=all run 43680563343), so wait for the file and its line.
+    const captured = (): string => {
+      const file = existsSync(dir) ? readdirSync(dir).find(name => name.endsWith(".jsonl")) : undefined;
+      return file ? readFileSync(join(dir, file), "utf8") : "";
+    };
+    for (const deadline = Date.now() + 2_000; Date.now() < deadline && !captured().includes("auth.denied");) await Bun.sleep(10);
+    const stored = captured();
     expect(stored).toContain("\"event\":\"auth.denied\"");
     expect(stored).toContain("\"tunnel\":\"home\"");
     expect(stored).not.toMatch(/child\.example\.test|203\.0\.113|alice/);

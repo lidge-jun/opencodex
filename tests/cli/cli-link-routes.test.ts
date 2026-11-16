@@ -103,3 +103,14 @@ test("an edit stored but not applied exits 1 and says the routes are stored and 
   expect(stderr).toContain("ocx link routes --link-id " + LINK + " reads them");
 });
 
+test("an edit refused while a removal of the link is unfinished names the way to finish that removal", async () => {
+  const body = { error: { code: "link_retirement_pending", message: "server-chosen text" } };
+  const result = await run(["remove", "--link-id", LINK, "--route", "alpha-lan"], body, 409);
+  expect(result.code).toBe(5);
+  const stderr = result.stderr.join("\n");
+  expect(stderr).toContain("link_retirement_pending");
+  expect(stderr).toContain("repeating the revoke that started it");
+  expect(stderr).toContain("ocx link revoke --link-id " + LINK + " --force --yes without --operation-id");
+  expect(stderr).not.toContain("server-chosen text");
+});
+

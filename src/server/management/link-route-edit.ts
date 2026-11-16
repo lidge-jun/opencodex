@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { withConfigMutationLockSync } from "../../config/mutation-lock";
 import { checkRouteTrust } from "../../link/route-trust";
+import { readLinkRetirement } from "../../link/retirement";
 import { routeOutcomeOfStderr } from "../../link/route-select";
 import { buildRouteProbeArgv, isSshAlias } from "../../link/ssh-argv";
 import { effectiveLinkRoutes, MAX_LINK_ROUTES, type LinkRecord } from "../../link/store";
@@ -44,6 +45,20 @@ function routesBody(record: LinkRecord): { linkId: string; pin: string; routes: 
 /** An exclusive link has one route, its alias, fixed at enrollment (structure/remote-link.md, "Explicit route"). */
 function exclusiveRefusal(): Response {
   return fail("link_exclusive", "This link is exclusive: its one route is fixed, so routes cannot be added, removed or reordered.", 409);
+}
+
+/**
+ * An outstanding retirement receipt (an interrupted removal, src/link/retirement.ts) holds a byte-exact copy of the record,
+ * and every revoke compares the stored record with it. An edit now would leave them unequal and the removal unfinishable
+ * (lidge-jun/opencodex#8678), so the edit waits for the removal to finish. A receipt that cannot be read counts as
+ * outstanding: the revoke that would finish it refuses the same file.
+ */
+function retirementPending(id: string): boolean {
+  try { return readLinkRetirement(id) !== null; } catch { return true; }
+}
+
+function retirementRefusal(): Response {
+  return fail("link_retirement_pending", "An unfinished removal holds this link: finish the revoke before editing its routes.", 409);
 }
 
 function document(record: LinkRecord): Response {
@@ -108,6 +123,8 @@ export async function handleLinkRouteEdit(ctx: ManagementContext, state: LinkRou
 }
 
 async function applyEdit(ctx: ManagementContext, state: LinkRouteState, record: LinkRecord, current: string[], next: string[], added: string | null): Promise<Response> {
+  // Checked before the probe, and again under the config mutation lock at the commit, which claimLinkRetirement also holds.
+  if (retirementPending(record.id)) return retirementRefusal();
   const hostsPath = knownHostsFile(ctx);
   let pinned: string | null = null;
   if (added !== null) {
@@ -121,7 +138,8 @@ async function applyEdit(ctx: ManagementContext, state: LinkRouteState, record: 
     const refused = await proveRoute(ctx, record, added, pinned);
     if (refused) return refused;
   }
-  const outcome = withConfigMutationLockSync((): "link_changed" | "pin_changed" | "link_exclusive" | LinkRecord => {
+  const outcome = withConfigMutationLockSync((): "link_changed" | "pin_changed" | "link_exclusive" | "link_retirement_pending" | LinkRecord => {
+    if (retirementPending(record.id)) return "link_retirement_pending";
     const fresh = readStoreFor(ctx);
     const target = fresh.links.find(link => link.id === record.id);
     if (target?.exclusive) return "link_exclusive";
@@ -136,6 +154,7 @@ async function applyEdit(ctx: ManagementContext, state: LinkRouteState, record: 
     return target;
   });
   if (outcome === "link_exclusive") return exclusiveRefusal();
+  if (outcome === "link_retirement_pending") return retirementRefusal();
   if (outcome === "link_changed") return fail("link_changed", "The link changed while its routes were being edited; read it again.", 409);
   if (outcome === "pin_changed") return fail("pin_changed", "The link's pinned key changed while the route was being proved.", 409);
   try { await state.supervisor.reload(); } catch {

@@ -325,7 +325,7 @@ describe("Home enrollment of a standalone Child", () => {
   // The refusal names the failed condition and the command that fixes it; a phase name alone
   // left a Home operator guessing whether the Child was still linked, stale, old or misbound.
   for (const [name, step, output, hint] of [
-    ["config still linked", "config", result('{"port":10100,"runtimeRole":"client"}'), "still linked to a Home (config runtimeRole client). On the Child run: ocx disconnect, then ocx restart"],
+    ["config still linked", "config", result('{"port":10100,"runtimeRole":"client"}'), "still linked to a Home (config runtimeRole client). To end that link and move it here, on the Child run: ocx disconnect, then ocx restart"],
     ["config Hub", "config", result('{"port":10100,"runtimeRole":"hub"}'), "is a Hub (config runtimeRole hub). On the Child run: ocx hub disable"],
     ["stale client runtime", "before", health("client"), "still serves a client runtime (/healthz role client on port 10100). On the Child run: ocx restart"],
     ["Hub runtime", "before", health("hub"), "serves a Hub runtime (/healthz role hub on port 10100). On the Child run: ocx hub disable, then ocx restart"],

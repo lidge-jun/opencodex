@@ -619,14 +619,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       if (!latest) return jsonResponse({ error: "account not found" }, 404);
       return jsonResponse({ error: latest.paused ? "account is paused" : "account selection changed" }, 409);
     }
-    const { forgetGenericFailoverRoster } = await import("../../oauth/generic-account-failover");
+    const { forgetGenericFailoverRoster, seedGenericPoolSelection } = await import("../../oauth/generic-account-failover");
     forgetGenericFailoverRoster(provider);
     // Seed the rotation cursor on the operator's pick, or a sticky round-robin ring hands the
     // very next dispatch back to whatever the pool had chosen. forgetGenericFailoverRoster
     // only drops the presence count; it has never touched the cursor. Same defect the Codex
     // side carries resetCodexRoutingForManualSelection for.
-    const { genericPoolKey, seedPoolRotationAccount } = await import("../../oauth/pool-kernel");
-    seedPoolRotationAccount(genericPoolKey(provider), body.accountId);
+    seedGenericPoolSelection(provider, body.accountId);
     const anthropicRouting = isAnthropicOAuthInstance(provider)
       ? (await import("../../oauth/anthropic-routing")).anthropicRoutingFor(provider) : undefined;
     anthropicRouting?.resetAnthropicRoutingForManualSelection(body.accountId);
@@ -710,8 +709,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     }
     if (result.activeAccountChanged) {
       if (!anthropicRouting) {
-        const { genericPoolKey, seedPoolRotationAccount } = await import("../../oauth/pool-kernel");
-        seedPoolRotationAccount(genericPoolKey(provider), result.activeAccountId);
+        const { seedGenericPoolSelection } = await import("../../oauth/generic-account-failover");
+        seedGenericPoolSelection(provider, result.activeAccountId);
       }
       const { clearModelCache } = await import("../../codex/model-cache");
       const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");

@@ -476,8 +476,10 @@ that environment key takes precedence. ADC also needs a project and location, su
 form or by `GOOGLE_CLOUD_PROJECT` / `GCLOUD_PROJECT` and `GOOGLE_CLOUD_LOCATION` on the proxy
 host. Adding the provider does not verify that credentials or permissions are usable. A key
 without an explicit project uses Vertex express mode.
-The dashboard preset uses a static catalog seeded by the configured default model; its connection
-test does not verify Vertex credentials or permissions.
+The dashboard preset uses a static catalog seeded by the configured default model. With ADC its
+connection test mints an access token, which proves the credential but not Vertex permissions; the
+provider shows as verified once the proxy has minted a token from the current ADC source. An API
+key on a static catalog is not tested.
 Existing Vertex rows without `liveModels` retain live discovery through the generic discovery endpoint.
 Use `liveModels: false` for a static catalog; Settings can switch between the two modes.
 
@@ -891,7 +893,17 @@ configuration that names the old id is rewritten at startup.
 - Tool definitions are encoded in the request and tool-call events are decoded from the response
   stream. Cognition enforces a per-tool-description length limit (6,998 chars) and an exact-phrase
   blocklist; the adapter sanitizes known triggers and truncates over-long descriptions before
-  encoding.
+  encoding. Known trigger rewrites also apply to the leading system prompt (request field #2).
+- `OPENCODEX_DEVIN_SANITIZE_DATA_SURFACES` is off by default and enables only for the exact value
+  `"1"`; an unset variable or any other value leaves history data outside the sanitizer. When
+  enabled, it also rewrites joined message text (#3), tool-call `arguments_json` (#6.3), image
+  captions (#10.3), and replayed thinking (#11). Tool names, tool-call IDs, and image bytes remain
+  untouched. This changes literal history received by the model, including quoted file content
+  and tool arguments. If a rewrite changes thinking, that prompt sends the rewritten #11 text
+  without its original #12 signature or #18 signature type. Unchanged thinking preserves both
+  signature fields byte-for-byte, even when another data field changes; signature-only replay
+  also remains intact. Rewritten thinking therefore uses unsigned replay, which can weaken
+  signed reasoning continuity for that turn. This option does not guarantee upstream acceptance.
 - Devin/Cognition API keys have no refresh endpoint. If Cognition rejects a stored key with 401,
   OpenCodex marks that account for reauthentication and can use another signed-in account for
   the turn. Run `ocx login devin` again for a revoked browser-login key. A CLI-imported account
