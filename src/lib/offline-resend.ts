@@ -1,7 +1,7 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import type { OcxProviderConfig } from "../types";
-import { resolveProviderEgress } from "./provider-egress";
+import { isEgressTransparentExecutor, resolveProviderEgress } from "./provider-egress";
 import { effectiveProxyFor, noProxyMatches } from "./proxy-env";
 import { UpstreamRetryEvidenceError } from "./upstream-retry";
 
@@ -31,7 +31,8 @@ export function isDnsResolutionFailure(error: unknown): boolean {
 
 /**
  * Decides, at most once per logical request, whether a pre-connect failure may be resent after
- * the destination became reachable again. Returns false for every later call.
+ * the destination became reachable again. Returns false for every later call, and never rejects
+ * with the abort reason: a cancelled wait answers false so the caller keeps the original failure.
  */
 export type OfflineResendWait = (error: unknown, signal?: AbortSignal) => Promise<boolean>;
 
@@ -64,7 +65,9 @@ export function resolveOfflineResendWaitMs(configuredSec: unknown): number {
  * then allow one resend. An IP-literal destination never qualifies: DNS proves nothing about it.
  * Nothing was delivered, so the resend cannot repeat an upstream effect; the caller's send budget
  * still counts it. A rejection that is not pre-connect, a second failure, an exhausted wait or a
- * client abort returns the original failure.
+ * client abort returns the original failure. A client abort answers false rather than throwing:
+ * the abort reason would replace the DNS error, and a Codex pool send would then classify a
+ * host-wide `connect_neutral` failure as account-attributed `connect_error`.
  */
 export function createOfflineResendWait(url: string, maxWaitMs: number): OfflineResendWait | undefined {
   if (!(maxWaitMs > 0)) return undefined;
@@ -82,32 +85,30 @@ export function createOfflineResendWait(url: string, maxWaitMs: number): Offline
     const now = deps.now ?? Date.now;
     const deadline = now() + maxWaitMs;
     for (;;) {
-      signal?.throwIfAborted();
+      if (signal?.aborted) return false;
       let remaining = deadline - now();
       if (remaining <= 0) return false;
       // A stalled system resolver must not outlive the wait or the client: race each probe against
-      // the remaining budget and cancellation, and accept a success only inside the budget.
+      // the remaining budget and cancellation, and accept a success only inside the budget. An
+      // expiry that rejects (cancellation) ends the wait the same way as one that fires.
       const settle = new AbortController();
       const raceSignal = signal ? AbortSignal.any([signal, settle.signal]) : settle.signal;
-      const expiry = expire(remaining, raceSignal).then(() => "expired" as const);
+      const expiry = new Promise<void>(resolve => resolve(expire(remaining, raceSignal)))
+        .then(() => "expired" as const, () => "expired" as const);
+      const probe = new Promise(resolve => resolve(resolveHost(hostname))).then(() => true, () => false);
       let outcome: boolean | "expired";
-      try {
-        outcome = await Promise.race([resolveHost(hostname).then(() => true, () => false), expiry]);
-      } finally {
-        settle.abort();
-        expiry.catch(() => { /* cancelled with the race */ });
-      }
-      if (outcome === "expired") return false;
+      try { outcome = await Promise.race([probe, expiry]); } finally { settle.abort(); }
+      if (outcome === "expired" || signal?.aborted) return false;
       if (outcome) return now() <= deadline;
       remaining = deadline - now();
       if (remaining <= 0) return false;
-      await delay(Math.min(OFFLINE_REACHABILITY_PROBE_INTERVAL_MS, remaining), signal);
+      try { await delay(Math.min(OFFLINE_REACHABILITY_PROBE_INTERVAL_MS, remaining), signal); } catch { return false; }
     }
   };
 }
 
 function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
-  signal?.throwIfAborted();
+  if (signal?.aborted) return Promise.reject(signal.reason);
   return new Promise<void>((resolve, reject) => {
     const onAbort = () => { clearTimeout(timer); reject(signal?.reason); };
     const timer = setTimeout(() => { signal?.removeEventListener("abort", onAbort); resolve(); }, ms);
@@ -121,10 +122,13 @@ function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
  * the proxy; probing the provider instead could resend into a proxy that still fails, or wait out
  * a provider name only the proxy can resolve. The route follows `configuredOutboundFetch`: the
  * provider's own `proxy`/`noProxy` first, then the global proxy unless `NO_PROXY` exempts the URL.
- * A caller-supplied executor picks its own transport, and a malformed route fails the send anyway.
+ * A caller-supplied executor picks its own transport, so it gets no probe; OpenCodex's own wrappers
+ * (xAI, Mistral Chat) carry the egress-transparent mark because they send through that same route.
+ * A malformed route fails the send anyway.
  */
 export function offlineResendProbeUrl(providerName: string, provider: OcxProviderConfig, url: string): string | undefined {
-  if (typeof (provider as { fetch?: unknown }).fetch === "function") return undefined;
+  const executor = (provider as { fetch?: unknown }).fetch;
+  if (typeof executor === "function" && !isEgressTransparentExecutor(executor)) return undefined;
   let target: URL;
   try { target = new URL(url); } catch { return undefined; }
   let egress: ReturnType<typeof resolveProviderEgress>;

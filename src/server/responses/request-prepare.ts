@@ -1202,6 +1202,7 @@ export async function prepareResponsesRequest(
             "_reasoningReplayScope",
             "_nativeReasoningRetention",
             "_cursorIsolateConversation",
+            "_codexNewHistory",
           ];
           for (const key of kept) {
             if (parsed[key] !== undefined) {

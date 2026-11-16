@@ -38,6 +38,13 @@ import {
   waitForLoginSettled,
 } from "../../oauth";
 import { OAuthMutationBusyError, removeCredential } from "../../oauth/store";
+import {
+  ANTIGRAVITY_RISK_PROVIDER,
+  ANTIGRAVITY_RISK_REFUSAL_CODE,
+  antigravityRiskRefusalBody,
+  hasAntigravityRiskAcknowledgement,
+  requiresAntigravityRiskAcknowledgement,
+} from "../../oauth/antigravity-risk";
 import { cancelKiroDeviceLogin, kiroDeviceConfigBaseline, selectKiroDeviceProfile, startKiroDeviceLogin, statusKiroDeviceLogin, type KiroDeviceMethod } from "../../oauth/kiro-device-login";
 import { parseKiroIamOptions } from "../../oauth/kiro-iam-identity-center";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
@@ -268,6 +275,11 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown; method?: unknown; mode?: unknown; device?: unknown; startUrl?: unknown; region?: unknown; flowId?: unknown; profileArn?: unknown };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    // Antigravity sign-in can get the Google account disabled. Every client asks first; this is
+    // the check none of them can skip, and it runs before any flow state is created.
+    if (requiresAntigravityRiskAcknowledgement(provider) && !hasAntigravityRiskAcknowledgement(body)) {
+      return jsonResponse(antigravityRiskRefusalBody(), 403);
+    }
     // Omitted mode is the localhost-callback flow this route has always run.
     if (body.mode !== undefined && body.mode !== "callback" && body.mode !== "code") {
       return jsonResponse({ error: "mode must be \"callback\" or \"code\"" }, 400);
@@ -1072,6 +1084,12 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       if (!isPlainRecord(rawBody)) return jsonResponse({ code: "invalid_document" }, 400);
       const provider = typeof rawBody.provider === "string" ? rawBody.provider : "";
       const format = typeof rawBody.format === "string" ? rawBody.format : "";
+      // An imported Antigravity credential carries the same account risk as a fresh login. Import
+      // admits only the exact provider id, so the gate matches it exactly too; other spellings
+      // keep their unsupported_provider answer.
+      if (provider === ANTIGRAVITY_RISK_PROVIDER && !hasAntigravityRiskAcknowledgement(rawBody)) {
+        return jsonResponse({ code: ANTIGRAVITY_RISK_REFUSAL_CODE }, 403);
+      }
       const { importAccounts } = await import("../../oauth/account-import");
       const imported = await importAccounts({
         provider,

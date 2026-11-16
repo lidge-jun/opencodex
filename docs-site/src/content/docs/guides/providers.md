@@ -35,8 +35,8 @@ rows are re-enabled without replacing saved mode or model settings, and noncanon
 rows are not offered that recovery path.
 
 Luna Reserve compatibility is a ChatGPT account capability on the canonical OpenAI forward path,
-not an OpenAI API-key entitlement. Its manual stored-main selector requires effective local authless
-Desktop mode and current credential-bound upstream permission; a catalog entry alone does not
+not an OpenAI API-key entitlement. Its manual stored-main selector requires the `codexReserveEnabled`
+setting on a loopback, non-client proxy and current credential-bound upstream permission; a catalog entry alone does not
 authorize a request. See [Luna Reserve alongside routed models](/reference/cli/providers-accounts/#luna-reserve-alongside-routed-models)
 for setup, restart order, authorization requirements, and unsupported helpers.
 
@@ -257,6 +257,17 @@ Cursor, Kiro, Zed Hosted AI and Nous Portal are login-only and have no API-key e
 login-only too: `ocx login google-antigravity` signs in with your Google account over the Cloud Code
 Assist wire, and the `google` preset beside it is the AI Studio Gemini API — a different product
 reached with its own key, not a key mode for the same login.
+
+:::danger[Google can disable Gemini and Antigravity on the Google account]
+The Antigravity login is meant for Google's own Antigravity app. Users of third-party tools have
+reported Gemini and Antigravity access on their Google accounts being disabled with "This service has been disabled in this account
+for violation of Terms of Service." The ban covers that account's Gemini Code Assist and Antigravity
+access, and restoring it depends on Google's appeal process. Sign in only with a separate Google
+account you can afford to lose, never a main, personal, school or work account; a Gemini API key is
+the safer path. OpenCodex asks for an explicit acknowledgement before every Antigravity login,
+reauthentication or import: a checkbox in the dashboard, a `y` answer or `--accept-antigravity-risk`
+in the CLI.
+:::
 If Antigravity login cannot discover a Cloud Code Assist project, the failure includes a sanitized
 summary for `loadCodeAssist` and the last `onboardUser` response: HTTP status, response category,
 completion/error presence and known project-field types. It distinguishes HTTP refusal, unusable

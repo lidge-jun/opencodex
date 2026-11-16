@@ -11,7 +11,8 @@ export type StaticCatalogProbeResult =
  * Connection test for a provider without live model discovery. There is no models endpoint to
  * call, so most such providers have nothing to test. Vertex on Application Default Credentials
  * (or a `gcp-sa:` marker) still has a credential: minting an access token proves it, needs no
- * model list, and is the same exchange the first real request performs.
+ * model list, and is the same exchange the first real request performs. The probe forces a new
+ * exchange: a cached token would keep reporting ok for up to an hour after the credential is revoked.
  */
 export async function staticCatalogConnectionTest(name: string, provider: OcxProviderConfig, signal?: AbortSignal): Promise<StaticCatalogProbeResult> {
   if (effectiveGoogleMode(name, provider) !== "vertex") {
@@ -24,7 +25,7 @@ export async function staticCatalogConnectionTest(name: string, provider: OcxPro
     return { applicable: false, reason: "static_catalog", latencyMs: 0 };
   }
   const started = Date.now();
-  const auth = await resolveVertexDiscoveryAuth(provider, vertexDiscoveryDeadline(signal));
+  const auth = await resolveVertexDiscoveryAuth(provider, vertexDiscoveryDeadline(signal), { forceExchange: true });
   const latencyMs = Date.now() - started;
   return auth
     ? { ok: true, latencyMs, message: "Google Cloud credentials verified (access token issued). Static model catalog; no live model list." }

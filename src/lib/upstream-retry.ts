@@ -574,7 +574,8 @@ export interface TransientRetryOptions extends ResetRetryOptions {
   retryAfterCeilingMs?: number;
 }
 
-export type UpstreamSendRecovery = "connection-reset" | "transient-5xx";
+/** `offline-resend` is the single send after an offline wait (#7958), never a reset retry. */
+export type UpstreamSendRecovery = "connection-reset" | "transient-5xx" | "offline-resend";
 type ReplayableFetch = (recovery?: UpstreamSendRecovery) => Promise<Response>;
 
 /**
@@ -610,20 +611,25 @@ export class UpstreamRetryEvidenceError extends Error {
 }
 
 /**
- * Opt out of Bun's keep-alive pool after a connection-reset retry.
+ * Opt out of Bun's keep-alive pool after a connection-reset retry or an offline resend.
  *
  * Prefer the Bun fetch extension `keepalive: false` (transport-level) over
  * relying on the hop-by-hop `Connection: close` header alone — Bun has ignored
  * that header in past releases (oven-sh/bun#20492), so a header-only retry can
  * still reuse the same half-closed pooled socket. Still set Connection: close
  * as a belt-and-suspenders signal for intermediaries that honor it.
+ *
+ * An offline resend (#7958) follows a DNS outage, typically a sleep or a network change, so any
+ * socket still pooled for that origin or proxy was opened on the network that went away. Reusing
+ * one fails after the body may have left, which turns a provably unsent request into an ambiguous
+ * reset; a fresh connection is what the resend needs anyway.
  */
 export function applyUpstreamRecoveryInit<T extends RequestInit>(
   init: T,
   recovery?: UpstreamSendRecovery,
 ): T & { headers: Headers } {
   const headers = new Headers(init.headers);
-  if (recovery !== "connection-reset") {
+  if (recovery !== "connection-reset" && recovery !== "offline-resend") {
     return { ...init, headers };
   }
   headers.set("connection", "close");
@@ -670,6 +676,8 @@ export async function fetchWithResetRetry(
   // settles as the refusal or an unambiguous answer: a second send of a possibly-executed turn
   // is already out, and handing the client anything it would retry compounds it.
   let spentOperatorReplacement = false;
+  // The recovery the next send reports: the caller's for the first, then whichever path resent it.
+  let recovery = firstRecovery;
   for (let attempt = 0; attempt < attempts; attempt++) {
     if (opts.abortSignal?.aborted) throw abortError(opts.abortSignal);
     // Reported before the await, one physical send at a time: a send that rejects has still
@@ -679,7 +687,7 @@ export async function fetchWithResetRetry(
     if (!opts.onSendsConsumed?.beforeSend) opts.onSendsConsumed?.(1);
     try {
       let response: Response;
-      try { const run = () => doFetch(attempt === 0 ? firstRecovery : "connection-reset");
+      try { const sendRecovery = recovery; const run = () => doFetch(sendRecovery);
         response = await (opts.onSendsConsumed?.execute ? opts.onSendsConsumed.execute(run) : run()); }
       finally { if (opts.onSendsConsumed?.beforeSend) opts.onSendsConsumed(1); }
       return spentOperatorReplacement ? settleOperatorReplacement(response) : response;
@@ -695,7 +703,12 @@ export async function fetchWithResetRetry(
         // downgraded to the pre-connection neutral class (#914 review).
         if (sawReset) throw new UpstreamRetryEvidenceError([], err, true);
         // Nothing reached the origin, so one resend after reachability returns cannot repeat an effect.
-        if (attempt + 1 < attempts && opts.offlineWait && await opts.offlineWait(err, opts.abortSignal)) continue;
+        // A client that left during the wait gets this failure back, never the abort reason.
+        if (attempt + 1 < attempts && opts.offlineWait && await opts.offlineWait(err, opts.abortSignal)
+          && !opts.abortSignal?.aborted) {
+          recovery = "offline-resend";
+          continue;
+        }
         throw err;
       }
       if (opts.replaySafe === true) {
@@ -715,6 +728,7 @@ export async function fetchWithResetRetry(
       }
       sawReset = true;
       lastError = err;
+      recovery = "connection-reset";
       console.warn(
         `[upstream-retry] connection reset${opts.label ? ` (${opts.label})` : ""} — ${
           spentOperatorReplacement ? "replacing" : "retrying"

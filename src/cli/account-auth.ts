@@ -6,6 +6,14 @@ import { warnIfCodexCatalogRefreshPending } from "./account-catalog-refresh";
 import { isCodexResetCreditOperationId } from "../codex/reset-credit-recovery";
 import { BROWSER_LAUNCH_FAILED_NOTICE } from "../lib/browser-launch-notice";
 import {
+  ANTIGRAVITY_RISK_ACK_FIELD,
+  ANTIGRAVITY_RISK_CLI_FLAG,
+  antigravityRiskDecisionMessage,
+  requiresAntigravityRiskAcknowledgement,
+  resolveAntigravityRiskAcknowledgement,
+} from "../oauth/antigravity-risk";
+import { isAgentDriven } from "./agent-driven";
+import {
   RuntimeApiError,
   CliUsageError,
   printData,
@@ -39,7 +47,7 @@ function writeStdoutFully(text: string): void {
 }
 
 const USAGE = `Usage:
-  ocx account login <provider> [--id <account-id>] [--reauth] [--device] [--method builder-id|google|github] [--open-browser on|off] [--add-account on|off] [--code -] [--no-wait] [--json]
+  ocx account login <provider> [--id <account-id>] [--reauth] [--device] [--method builder-id|google|github] [--open-browser on|off] [--add-account on|off] [--code -] [--no-wait] [--json] [--accept-antigravity-risk]
   ocx account code <provider> [--flow <flow-id>] [--json]   (reads the code from stdin)
   ocx account cancel <provider> [--flow <flow-id>] [--json] (--flow required for codex)
   ocx account reset-credits <account-id|main> [--consume --yes [--operation-id <uuid>]] [--json]
@@ -223,8 +231,11 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
   const suppliedCode = takeOptionWithSyntax(args, "--code");
   const openBrowser = loginBoolean(args, "--open-browser");
   const addAccount = loginBoolean(args, "--add-account");
+  const acceptAntigravityRisk = takeFlag(args, ANTIGRAVITY_RISK_CLI_FLAG);
   if (provider && !isValidProviderName(provider)) throw new CliUsageError("invalid provider name", USAGE);
   if (!provider) throw new CliUsageError("provider is required", USAGE);
+  const antigravityRisk = requiresAntigravityRiskAcknowledgement(provider);
+  if (acceptAntigravityRisk && !antigravityRisk) throw new CliUsageError(`${ANTIGRAVITY_RISK_CLI_FLAG} only applies to google-antigravity`, USAGE);
   if (method !== undefined) {
     if (provider !== "kiro" || !["builder-id", "google", "github"].includes(method)) {
       throw new CliUsageError("--method requires kiro and builder-id, google, or github", USAGE);
@@ -250,6 +261,23 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
   if (addAccount !== undefined && (reauth || CODEX_NAMES.has(provider))) throw new CliUsageError("--add-account is only valid for fresh provider OAuth login", USAGE);
   if (openBrowser !== undefined && (device || DEVICE_NATIVE_PROVIDERS.has(provider))) throw new CliUsageError("--open-browser is not supported for device login", USAGE);
   if (!CODEX_NAMES.has(provider) && id && !reauth) throw new CliUsageError("--id is only valid with --reauth for provider OAuth accounts", USAGE);
+  // Antigravity can get the Google account disabled: warn and get an answer before anything
+  // else touches stdin or the proxy. A refusal here sends no request at all.
+  if (antigravityRisk) {
+    const decision = await resolveAntigravityRiskAcknowledgement({
+      flag: acceptAntigravityRisk,
+      // The question goes to stderr, so a redirected stderr is not a terminal a person can answer.
+      interactive: (deps.stdinImpl ?? process.stdin).isTTY === true
+        && (deps.antigravityRisk?.promptVisible ?? (() => process.stderr.isTTY === true))(),
+      agentDriven: (deps.antigravityRisk?.agentDriven ?? isAgentDriven)(),
+      warn: text => console.error(text),
+      ask: async question => {
+        process.stderr.write(question);
+        return await readSecretLine(deps, "confirmation");
+      },
+    });
+    if (decision !== "accepted") throw new CliUsageError(antigravityRiskDecisionMessage(decision));
+  }
   // Only resolve when --code was actually given: a plain `ocx account login`
   // opens the browser flow and polls, and must not block on stdin.
   const code = await resolveCode(suppliedCode, deps, false);
@@ -346,7 +374,7 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
 
   const start = publicLoginStart(await runtimeRequest<unknown>("/api/oauth/login", {
     method: "POST", redirect: "error",
-    body: JSON.stringify({ provider, addAccount: addAccount ?? !reauth, ...(device && DEVICE_OPT_IN_PROVIDERS.has(provider) ? { device: true } : {}), ...(openBrowser === undefined ? {} : { openBrowser }), ...(reauth && id ? { accountId: id, reauth: true } : {}) }),
+    body: JSON.stringify({ provider, addAccount: addAccount ?? !reauth, ...(device && DEVICE_OPT_IN_PROVIDERS.has(provider) ? { device: true } : {}), ...(openBrowser === undefined ? {} : { openBrowser }), ...(reauth && id ? { accountId: id, reauth: true } : {}), ...(antigravityRisk ? { [ANTIGRAVITY_RISK_ACK_FIELD]: true } : {}) }),
   }, pinned));
   const xaiDevice = provider === "xai" && device;
   if (xaiDevice && (!start.flowId?.trim() || !start.url?.trim() || !start.deviceCode?.trim())) {

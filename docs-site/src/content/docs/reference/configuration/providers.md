@@ -1372,10 +1372,11 @@ finds a complete structured `VALIDATION_REQUIRED` reason. A complete, bounded 40
 the account (Google's structured `PERMISSION_DENIED`) also moves to the next eligible sibling: the refused
 credential gets the same 60-second in-process cooldown, nothing is written to disk, and the request
 keeps walking the pool while siblings remain, up to the per-request failover limit. A 403 asking you
-to verify the account keeps its own quarantine path, and an incomplete 403, or one Google did not mark `PERMISSION_DENIED` (an empty body, a proxy or WAF error page, an envelope without the status), keeps its original error and cools no account.
+to verify the account keeps its own quarantine path, and an incomplete 403, or one Google did not mark `PERMISSION_DENIED` (an empty body, a proxy or WAF error page, an envelope without the status), keeps its original error and cools no account, even when its text says the session or token expired.
 A 502, 503 or 504 that survives the same-account transient retries before any output is replayed once
 on an eligible sibling; the failing account is cooled for 15 seconds in process, and a pool-wide
-outage costs at most two retry ladders per request. A cooldown already running for an account is never
+outage costs at most two retry ladders per request. This includes a 5xx from the sibling that a 429 or
+verify-account hop just switched to. A cooldown already running for an account is never
 shortened by a shorter one. A rejected sibling, cancellation or exhausted send budget does not cause
 another upstream send.
 The fetch-based web-search loop also rotates once on these 403 refusals, using the sibling's

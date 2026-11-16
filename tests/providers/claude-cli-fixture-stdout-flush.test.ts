@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
+import type { Readable } from "node:stream";
 import { readJsonLines } from "../../src/adapters/coding-agent/protocol";
 import { fixturePath } from "../helpers/repo-root";
 
@@ -214,12 +215,57 @@ function spawnProbe(mode: string, content: Array<{ type: string; text: string }>
   return { ...tracked, marks, waitForMark };
 }
 
+interface HeldStream extends AsyncIterable<Uint8Array> {
+  /** Give the stream back without reading it, for a case that fails before its reader starts. */
+  abandon(): void;
+}
+
+/**
+ * Hold a child's stdout from now on, and pull from it only once `release` settles.
+ *
+ * Taking the iterator does not hold anything: it attaches its own `readable` listener only on the
+ * first `next()`, which is after the release. When the child exits, the child-process runtime
+ * resumes every stdio stream that has no `readable` listener, so a release that lands after the
+ * exit handler finds the buffered bytes already flowed out to nobody and the reader sees an empty
+ * stream. A loaded runner can produce that ordering on its own, since the child's exit and the stderr
+ * mark that releases the reader travel separately. The no-op listener attached here, synchronously,
+ * is what makes the exit leave the stream alone; it is removed once the iterator has drained it.
+ *
+ * Until the release, nothing is pulled, so the child's writes meet a pipe that stops taking bytes once
+ * the parent's bounded buffer and the kernel's are full.
+ */
+function heldUntil(stream: Readable, release: Promise<unknown>): HeldStream {
+  const hold = () => {};
+  stream.on("readable", hold);
+  const iterator = stream[Symbol.asyncIterator]() as AsyncIterator<Uint8Array>;
+  let started = false;
+  return {
+    async *[Symbol.asyncIterator]() {
+      started = true;
+      try {
+        await release;
+        for (let next = await iterator.next(); !next.done; next = await iterator.next()) yield next.value;
+      } finally {
+        await iterator.return?.();
+        stream.off("readable", hold);
+      }
+    },
+    abandon() {
+      if (started) return;
+      // Nothing will read it, so undo the hold and let the stream flow as the exit would have made
+      // it; a stream left held and full would keep the child's `close` from ever arriving.
+      stream.off("readable", hold);
+      stream.resume();
+    },
+  };
+}
+
 /** Drain a child through the production reader, collecting the frames or the failure. */
-async function drain(child: ChildProcess) {
+async function drain(child: ChildProcess, source: AsyncIterable<Uint8Array> = child.stdout!) {
   const frames: Record<string, unknown>[] = [];
   let readError: Error | undefined;
   try {
-    for await (const frame of readJsonLines(child.stdout!)) frames.push(frame);
+    for await (const frame of readJsonLines(source)) frames.push(frame);
   } catch (error) {
     readError = error as Error;
   }
@@ -360,10 +406,35 @@ test("releasing the reader delivers the whole replay frame and the callback orde
   }
 }, 60_000);
 
+/**
+ * The precondition is that part of the replay frame is still queued in the child when it exits, and
+ * this case establishes it rather than hoping for it. An earlier version started the reader at spawn.
+ * The runtime's synchronous write loop then keeps handing bytes over as fast as the parent drains
+ * them, so how much of the frame escaped before `process.exit` depended on scheduling. On the loaded
+ * macOS batch (run 43874258334) the whole frame escaped once, the reader saw three well-formed
+ * frames, and no protocol error was raised. A local reproduction under CPU load delivered the
+ * complete frame in 3 of 60 runs.
+ *
+ * So the reader is attached at spawn but pulls nothing until the child's mark, which the child writes
+ * synchronously in the same turn as its exit. Until then the parent's runtime buffers a bounded
+ * amount and the pipe stops taking bytes. That bound is far below the megabytes of the frame, so the
+ * tail is still queued when the exit discards it. The child's mark also carries the replay write's
+ * own return value. `true` would mean the runtime handed the whole frame over within the call, which
+ * rules the precondition out, so that is checked before anything is read.
+ */
 test.skipIf(!ASYNC_STDOUT_PIPES)("exiting before the replay write drains drops the frame, which the reader reports as malformed", async () => {
   const probe = spawnProbe("exit-before-flush", replayContent(REPLAY_CHARS));
+  let stdout: HeldStream | undefined;
   try {
-    const { frames, readError } = await drain(probe.child);
+    const exitingMark = probe.waitForMark("exiting-before-flush");
+    stdout = heldUntil(probe.child.stdout!, exitingMark);
+    const exiting = await exitingMark;
+    if (exiting.replayAccepted !== false) {
+      throw new Error(
+        `precondition not established: the replay write returned ${String(exiting.replayAccepted)}, so no part of the frame was left queued at exit`,
+      );
+    }
+    const { frames, readError } = await drain(probe.child, stdout);
     await probe.closed;
 
     // The pre-fix behavior, kept as the red case. Only the small init frame survives: the replay
@@ -374,6 +445,7 @@ test.skipIf(!ASYNC_STDOUT_PIPES)("exiting before the replay write drains drops t
     expect(frames.map(frame => frame.type)).toEqual(["system"]);
     expect(replayText(frames)).toBeUndefined();
   } finally {
+    stdout?.abandon();
     await reap(probe);
   }
 }, 60_000);

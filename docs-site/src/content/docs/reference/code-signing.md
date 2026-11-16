@@ -63,8 +63,11 @@ installer, so in-app updates install the same bytes the release page offers.
 Each release page states, under **Code signing**, whether that release's Windows files were
 actually signed. The statement comes from what the release run recorded for each file: a file
 counts as signed only when the run used the `release-signing` policy and the verified signed file
-replaced the unsigned one. A release whose run recorded no outcome says its Windows files are not
-code-signed. The SignPath attribution and the policy link appear on every release either way.
+replaced the unsigned one, and only when the recorded SHA-256 matches the file the release
+publishes. A file without such a record, for example one rebuilt by a re-run whose record did
+not reach the release job, is listed as not recorded and treated as not code-signed. A release
+whose run recorded no outcome says its Windows files are not code-signed. The SignPath attribution
+and the policy link appear on every release either way.
 
 ## For maintainers
 
