@@ -139,6 +139,8 @@ export function useAddProviderOAuth({
     setters: OAuthLoginSetters,
     // Only the warning dialog's Continue passes true (see oauthRiskAcknowledgementBody).
     riskAcknowledged = false,
+    /** A sibling row (Kimi (Responses)) the login publishes instead of the login's own row. */
+    row?: string,
   ) => {
     // A per-login clone keeps the render target while letting the capture map tell an
     // older login's cleanup from its replacement.
@@ -169,7 +171,7 @@ export function useAddProviderOAuth({
         return targetFetch(capture, `${apiBase}/api/oauth/login`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ provider: providerId, ...openBrowserRequestField(), ...oauthRiskAcknowledgementBody(providerId, riskAcknowledged) }),
+          body: JSON.stringify({ provider: providerId, ...(row ? { row } : {}), ...openBrowserRequestField(), ...oauthRiskAcknowledgementBody(providerId, riskAcknowledged) }),
         });
       });
       if (!res || !aliveRef.current || !isCurrent()) return;
@@ -199,7 +201,7 @@ export function useAddProviderOAuth({
         await new Promise(r => setTimeout(r, OAUTH_LOGIN_POLL_INTERVAL_MS));
         if (!aliveRef.current || !isCurrent()) return;
         const sRes = await targetFetch(capture, `${apiBase}/api/oauth/status?provider=${providerId}`).catch(() => null);
-        const s = sRes ? await readJsonIfOk<{ loggedIn?: boolean; error?: string; hint?: LoginHintData }>(sRes) : null;
+        const s = sRes ? await readJsonIfOk<{ loggedIn?: boolean; status?: string; error?: string; hint?: LoginHintData }>(sRes) : null;
         if (!aliveRef.current || !isCurrent()) return;
         if (s?.error) {
           releaseSetters();
@@ -209,10 +211,12 @@ export function useAddProviderOAuth({
             : t("modal.loginError", { error: s.error }));
           return;
         }
-        if (s?.loggedIn) {
+        // `loggedIn` reads the stored credential, which an earlier login (the shared Kimi login) can
+        // already hold; a flow the server still reports as pending is not finished yet.
+        if (s?.loggedIn && s.status !== "pending") {
           releaseSetters();
           setOauthMsg("");
-          onAdded(providerId);
+          onAdded(row ?? providerId);
           return;
         }
         const hint = s?.hint;

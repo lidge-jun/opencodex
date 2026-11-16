@@ -11,6 +11,8 @@ import { formatAccountPauseTooltip } from "../../account-pause-display";
 import { IconLock, IconRefresh, IconTrash } from "../../icons";
 import type { WorkspaceItem } from "../../provider-workspace/catalog";
 import { oauthAccountDisplayLabel, providerAuthSurface } from "../../provider-workspace/auth";
+import { oauthCredentialSlot } from "../../../../src/oauth/credential-siblings";
+import { oauthLabel } from "../../pages/providers-shared";
 import { displayAccountId } from "../../lib/privacy";
 import AccountAutoSwitchControl from "../AccountAutoSwitchControl";
 import {
@@ -315,7 +317,9 @@ export default function ProviderAuthPanel({
 
   if (!surface || !authHandlers) return null;
 
-  const hintForThis = loginHint?.provider === item.name ? loginHint : null;
+  // A shared-login row (Kimi (Responses)) signs in through its owner, so its flow is keyed by the owner.
+  const loginOwner = oauthCredentialSlot(item.name);
+  const hintForThis = loginHint?.provider === loginOwner ? loginHint : null;
   // Paste fallback for when the browser cannot reach the loopback callback
   // (remote dashboard, SSH, blocked localhost). A rejected paste reports why and
   // leaves the flow running, so the user can correct it and try again.
@@ -333,7 +337,7 @@ export default function ProviderAuthPanel({
       const res = await targetFetch(loginCapture, `${apiBase}/api/oauth/login/code`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider: item.name, input }),
+        body: JSON.stringify({ provider: loginOwner, input }),
       });
       if (!isApiTargetCaptureCurrent(loginCapture)) {
         setManualCodeOk(false);
@@ -578,7 +582,7 @@ export default function ProviderAuthPanel({
                     }}
                   />
                   {authHandlers.onCancelLogin && (
-                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => void authHandlers.onCancelLogin?.(item.name)}>
+                    <button type="button" className="btn btn-ghost btn-sm" onClick={() => void authHandlers.onCancelLogin?.(loginOwner)}>
                       {t("common.cancel")}
                     </button>
                   )}
@@ -607,6 +611,12 @@ export default function ProviderAuthPanel({
                     {t("pws.retryAccounts")}
                   </button>
                 )}
+              </div>
+            )}
+            {accounts.length > 0 && oauthCredentialSlot(item.name) !== item.name && (
+              // A shared-login row (Kimi (Responses)) lists its owner's accounts: every control below acts on them.
+              <div className="pwi-auth-state" role="note">
+                {t("pws.sharedAccountsNote", { provider: oauthLabel(oauthCredentialSlot(item.name)) })}
               </div>
             )}
             {accounts.length > 0 && (
