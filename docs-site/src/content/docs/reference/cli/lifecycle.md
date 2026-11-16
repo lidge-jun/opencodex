@@ -1341,7 +1341,51 @@ and 64 for invalid usage. `rolledBack` is true only when an actual installer
 rollback and its verification succeeded. A plan command emits its plan with exit 0;
 the `canApply` and `reason` fields describe eligibility.
 
-Compiled standalone installs, including the Windows MSI Desktop bundle, are updated through **Check for Updates…** in OpenCodex Desktop, or by reinstalling the standalone binary from [GitHub Releases](https://github.com/lidge-jun/opencodex/releases). `ocx system update check` reports `installer: "standalone"`, `canUpdate: false`, and `reason: "standalone_install"` with that guidance. `ocx update` exits unsuccessfully with the same hint; it does not run a package-manager update for the compiled executable. A genuine source checkout still reports `installer: "source"` and `reason: "source_checkout"`.
+Compiled standalone installs, including the Windows MSI Desktop bundle, are updated through **Check for Updates…** in OpenCodex Desktop, by `ocx update --desktop` on a Windows Desktop installation (below), or by reinstalling the standalone binary from [GitHub Releases](https://github.com/lidge-jun/opencodex/releases). `ocx system update check` reports `installer: "standalone"`, `canUpdate: false`, and `reason: "standalone_install"` with that guidance. `ocx update` without `--desktop` exits unsuccessfully with the same hint; it does not run a package-manager update for the compiled executable. A genuine source checkout still reports `installer: "source"` and `reason: "source_checkout"`.
+
+#### Headless Windows Desktop update
+
+```bash
+ocx update --desktop [--check] [--json]
+```
+
+Run this with the Windows Desktop installation's own `ocx.exe` (the one beside
+`opencodex-desktop.exe`), from an elevated terminal, SSH session or service. Any other `ocx`
+exits 64 without changing anything. It reads the release feed the app's updater uses and, when
+a newer version is published:
+
+1. downloads the Windows MSI from the exact GitHub release asset over HTTPS (at most three
+   redirects to GitHub's release-asset hosts, a 1 GiB cap, and connect, idle and total
+   deadlines), sending no credentials;
+2. verifies it with the app updater's embedded public key, refusing a bad or missing signature,
+   a signature for another version or platform, or a file that is not an MSI, and verifies the
+   saved copy again just before installing;
+3. runs `msiexec /i <msi> /qn /norestart /l*v <log>` and waits for its exit code (0 and 3010
+   are success; 3010 means Windows must restart to replace files that were in use);
+4. checks that the installed `ocx.exe` reports the new version;
+5. restarts the proxy that still serves the old version through its own in-place restart, so
+   Desktop, the service, or the detached proxy starts the installed executable, and waits until
+   the new version answers `/healthz`. A connected client proxy that OpenCodex Desktop runs keeps
+   itself through that restart; when the check proves this installation's app runs exactly that
+   proxy, the installed `ocx stop --json` stops it, as the app's own updater does, and the app
+   starts the new version after a few seconds.
+
+A proxy whose executable is not this installation's `ocx.exe`, one this home cannot attest,
+or one newer than the installation is never stopped. When no proxy was running, none is
+started. With nothing newer published, the command still restarts an old proxy left behind by an
+earlier MSI install. `--check` reports the published, installed and serving versions without
+downloading or restarting anything.
+
+Exit codes: 0 updated, already current, or installed with no proxy running; 1 nothing was
+installed (refused signature, download failure, or a Windows Installer failure, whose log path
+is printed); 2 installed, but the old proxy is still serving or Windows must restart first;
+3 the installer did not finish within 15 minutes, or reported success without installing the
+new version; 64 invalid usage or not a Windows Desktop installation. `--json` prints one
+`ocx.desktop.headless-update/1` object with `outcome`, `exitCode`, `installedVersion`,
+`targetVersion`, `runtime`, `installer`, `reason` and `message`.
+
+When `ocx status` on a Windows Desktop installation sees an installed version newer than the
+running proxy, its version warning names both versions and prints this command.
 
 When OpenCodex is installed through mise, this command exits unsuccessfully before stopping the proxy or changing package files and shows `mise upgrade <tool>`, using the verified local mise alias. Update checks remain available and report the installation as externally managed. An unreadable or inconsistent mise ownership record fails closed without guessing a tool name, and `--tag preview` never changes mise's configured selection.
 
