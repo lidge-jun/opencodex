@@ -15,7 +15,7 @@ import { CLIENT_RESTART_REQUEST_MIN_REMAINING_MS } from "../lib/system-restart-c
 import { inspectDesktopSupervision, trustedWindowsSystemDirectory, windowsProcessPair } from "../service/desktop-supervision.mjs";
 import { tryAcquireUpdateSyncMutex } from "../update/sync-update-mutex.mjs";
 import { acquireBounded, fetchAcquireTransport, realAcquireTimers } from "./acquire";
-import { DRAIN_DEADLINE_MS, DRAIN_STOP_DEADLINE_ENV, parseDrainResult } from "./drain";
+import { DRAIN_DEADLINE_MS, DRAIN_STOP_DEADLINE_ENV, parseDrainResult, serviceRestartFailureDetail } from "./drain";
 import { HEADLESS_EXIT, runHeadlessDesktopUpdate, type HeadlessResult } from "./headless";
 import { windowsDesktopInstall, type WindowsDesktopInstall } from "./install";
 import { MOVED_IMAGE_PATTERN, movedImageName, sameWindowsPath } from "./runtime";
@@ -85,8 +85,7 @@ async function restartService(install: WindowsDesktopInstall): Promise<{ ok: boo
     });
     const [errors, code] = await Promise.all([new Response(child.stderr).text(), child.exited]);
     if (code === 0) return { ok: true };
-    const last = errors.split(/\r?\n/).map(line => line.trim()).filter(Boolean).at(-1);
-    return { ok: false, detail: `exit ${code ?? "none"}${last ? `: ${last.slice(0, 200)}` : ""}` };
+    return { ok: false, detail: serviceRestartFailureDetail(errors.slice(-65_536), code) };
   } catch {
     return { ok: false, detail: "the installed ocx service restart could not run" };
   }

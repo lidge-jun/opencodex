@@ -117,7 +117,8 @@ function staleMessage(outcome: Extract<RuntimeOutcome, { kind: "stale" }>, targe
     case "drain-failed":
       return `${who}; this installation is ${target}. Stopping it for OpenCodex Desktop to restart did not complete (${outcome.detail ?? "unconfirmed"}). Run 'ocx status'. ${retry}`;
     case "service-restart-failed":
-      return `${who}; this installation is ${target}. Its background service owns it, and '${install.ocxExe}' service restart did not confirm the new version (${outcome.detail ?? "unconfirmed"}). Run 'ocx service status'. ${retry}`;
+      return `${who}; this installation is ${target}. Its background service owns it, and '${install.ocxExe}' service restart did not replace it (${outcome.detail ?? "unconfirmed"}). `
+        + `Nothing else was stopped; the installed version starts the next time that service starts the proxy, for example after Windows restarts. Run 'ocx service status'. ${retry}`;
     case "replacement-timeout":
       return `${who}; this installation is ${target}. A restart was requested but the new version was not observed answering in time. Run 'ocx status'. ${retry}`;
   }

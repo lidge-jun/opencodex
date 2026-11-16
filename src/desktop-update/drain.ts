@@ -26,3 +26,15 @@ export function parseDrainResult(stdout: string, exitCode: number | null): { ok:
   const message = typeof summary.message === "string" ? `: ${summary.message.slice(0, 200)}` : "";
   return { ok: false, detail: `${String(summary.outcome)}/${String(summary.proxy)} exit ${exitCode ?? "none"}${message}` };
 }
+
+/**
+ * The reason `ocx service restart` gives for not restarting: its first warning or error line,
+ * which names the cause, rather than the trailing log path. Bounded; emoji markers dropped.
+ */
+export function serviceRestartFailureDetail(stderr: string, exitCode: number | null): string {
+  const lines = stderr.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const marker = /^(?:\u26a0\ufe0f|\u26a0|\u274c)\s*/u;
+  const reason = lines.find(line => marker.test(line)) ?? lines.find(line => !/^(?:Log|Diagnostics):/i.test(line));
+  const text = reason?.replace(marker, "").slice(0, 400);
+  return `exit ${exitCode ?? "none"}${text ? `: ${text}` : ""}`;
+}

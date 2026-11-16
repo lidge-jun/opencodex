@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { classifyMsiExit, msiexecArguments, runMsiInstall } from "../../src/desktop-update/msi";
 import { isInstalledImage, MOVED_IMAGE_PATTERN, movedImageName, sameWindowsPath, settleRuntime, type RuntimeReplaceDeps } from "../../src/desktop-update/runtime";
-import { parseDrainResult } from "../../src/desktop-update/drain";
+import { parseDrainResult, serviceRestartFailureDetail } from "../../src/desktop-update/drain";
 import type { AcquireTimers } from "../../src/desktop-update/acquire";
 import type { LiveProxy } from "../../src/server/proxy-liveness";
 
@@ -224,4 +224,18 @@ describe("service-owned client runtime", () => {
     expect(await settleRuntime(input, r.deps)).toMatchObject({ kind: "stale", reason: "restart-refused" });
     expect([r.services(), r.drains()]).toEqual([0, 0]);
   });
+});
+
+test("a refused service restart reports the service's own reason, not its log path", () => {
+  const stderr = [
+    "\u26a0\ufe0f  Service restart did not complete: Nothing was changed, and this Child keeps serving under its existing task. 'ocx service restart' does not restart a Child connected over a Remote Link under Task Scheduler.",
+    "The previous runtime (PID 24880) is still answering on port 10100; it was kept, not replaced.",
+    "Log: C:\\Users\\user\\.opencodex\\service.log",
+  ].join("\r\n");
+  const detail = serviceRestartFailureDetail(stderr, 1);
+  expect(detail.startsWith("exit 1: Service restart did not complete: Nothing was changed")).toBe(true);
+  expect(detail).toContain("Remote Link under Task Scheduler");
+  expect(detail).not.toContain("service.log");
+  expect(serviceRestartFailureDetail("Log: x\n", 1)).toBe("exit 1");
+  expect(serviceRestartFailureDetail("", null)).toBe("exit none");
 });
