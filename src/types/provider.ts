@@ -619,7 +619,10 @@ export interface OcxProviderConfig {
    * `apiKey` seeds a one-entry pool on first management touch.
    */
   apiKeyPool?: Array<{ id: string; key: string; label?: string; addedAt?: number; disabled?: boolean; pauseDetails?: AccountPauseDetails; pauseRevision?: string }>;
-  /** Explicit opt-in permanent account refusal policy; default off. */
+  /**
+   * Permanent account refusal policy. Explicit opt-in; with no key at all, a Cloud Code Assist
+   * provider still pauses on the first Terms of Service account ban (see `effectiveAccountAutoPause`).
+   */
   accountAutoPause?: AccountAutoPausePolicy;
   /**
    * Optional proactive ordering for `apiKeyPool` when the committed key is already

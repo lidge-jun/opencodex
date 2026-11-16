@@ -7,6 +7,7 @@ import { markProxyError, carryProxyError, isProxyError } from "../../lib/client-
 import { codexAdapterBuildRefusal } from "./passthrough-build-error";
 import { createAutoPauseRefreshErrorMapper, recoverAutoPausedAccount } from "./account-auto-pause-recovery";
 import { wasAccountAutoPaused, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
+import { effectiveAccountAutoPause } from "../../config/account-auto-pause-revisions";
 import { bindAnthropicRejectionResponse } from "../../adapters/anthropic-rejection-memo";
 import { deferPhysicalSendReporter } from "./deferred-send-reporter";
 import { usesApiKeyAccount } from "../../providers/label";
@@ -398,7 +399,7 @@ export async function prepareAdapterExchange(
     upstreamResponse = carryProxyError(original, new Response(text, { status: original.status, statusText: original.statusText, headers }));
     return upstreamResponse;
   };
-  const autoPauseEnabled = config.providers[route.providerName]?.accountAutoPause?.enabled === true;
+  const autoPauseEnabled = effectiveAccountAutoPause(config.providers[route.providerName]) !== undefined;
   const billingPoolRequest = isAnthropicBillingKeyPool(route.provider);
   let billingRecoveryActive = false;
   const genericRefetchCountsSends = () => !!sendBudgetState.workflowRootId || options.comboAttempt === true || sendBudgetState.adapterSendBudget?.spendEnforced === true
