@@ -1005,6 +1005,10 @@ export async function prepareResponsesRequest(
   };
   let selectedForwardHeaders = req.headers;
   let subagentFallbackAccountId = config.activeCodexAccountId ?? null;
+  // A typed fact for providers that refuse fallback-routed turns (the Antigravity ACP policy): set only
+  // where a fallback actually moves the route (a selection that keeps the requested model is not one),
+  // never inferred from headers, models or tools.
+  let subagentFallbackSelected = false;
   let subagentFallbackAccountPreview: SubagentPoolAccountPreview | undefined;
   let subagentFallbackModelEligibleAccountIdsForModel: SubagentModelEligibleAccountIds | undefined;
   let subagentQuotaFailureModel = parsed.modelId;
@@ -1101,6 +1105,7 @@ export async function prepareResponsesRequest(
     );
     if (fallback?.refusal) return fallback.refusal;
     if (fallback) {
+      if (fallback.to !== fallback.from) subagentFallbackSelected = true;
       (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
       (logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo = fallback.to;
       if (isInjectionDebugEnabled()) {
@@ -1325,6 +1330,7 @@ export async function prepareResponsesRequest(
           })();
           if (fallback?.refusal) return fallback.refusal;
           if (fallback) {
+            if (fallback.to !== fallback.from) subagentFallbackSelected = true;
             (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
             (logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo = fallback.to;
             if (isInjectionDebugEnabled()) {
@@ -1730,6 +1736,7 @@ export async function prepareResponsesRequest(
       subagentFallbackAccountId = value;
     },
     subagentQuotaFailureModel,
+    subagentFallbackSelected,
     poolAffinityKey,
     clientRequestedStream,
     substituteMainCredential,

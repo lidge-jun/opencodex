@@ -91,6 +91,7 @@ export async function executeResponsesRunTurn(
     PreparedResponsesRequest,
     | "parsed"
     | "route"
+    | "subagentFallbackSelected"
     | "selectedForwardHeaders"
     | "translatorBudget"
     | "inboundWire"
@@ -360,6 +361,7 @@ export async function executeResponsesRunTurn(
             headers: requestState.selectedForwardHeaders,
             abortSignal: producerAbort.signal,
             comboAttempt: options.comboAttempt === true,
+            ...(requestState.subagentFallbackSelected ? { subagentFallback: true } : {}),
             translatorBudget,
             providerFetch: runTurnProviderFetch,
             pacingSlot,

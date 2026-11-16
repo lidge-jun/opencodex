@@ -21,6 +21,11 @@ export interface IncomingMeta {
   /** Combo children must surface a pre-output refusal so the selector can try the next target. */
   comboAttempt?: boolean;
   /**
+   * Subagent fallback selected this route (request-prepare records the decision). A typed fact, never
+   * inferred from headers or models; the Antigravity ACP provider refuses such turns (plan 080).
+   */
+  subagentFallback?: boolean;
+  /**
    * Provider-scoped fetch prepared by the Responses router. Stateful transports that emit more
    * than one physical HTTP request per logical turn must reuse it so every request participates in
    * the same pacing queue and custom provider fetch seam.
