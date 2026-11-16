@@ -1467,19 +1467,23 @@ describe("the reported turn, end to end through handleResponses", () => {
       return new Response(new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(created); } }),
         { headers: { "content-type": "text/event-stream" } });
     }) as unknown as typeof fetch;
-    const releaseSpendHome = acquireOwnedSpendHome();
     try {
-      const response = await handleResponses(new Request("http://localhost/v1/responses", {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: "Bearer caller-inbound" },
-        body: clientRequest,
-      }), { ...config(armed), stallTimeoutSec: 1 } as OcxConfig, { model: "", provider: "" });
-      const body = await response.text();
-      expect(legs).toBe(2);
-      expect(body).toContain("response.failed");
-      expect(body).toContain("stalled for 1000ms");
+      const releaseSpendHome = acquireOwnedSpendHome();
+      try {
+        const response = await handleResponses(new Request("http://localhost/v1/responses", {
+          method: "POST",
+          headers: { "content-type": "application/json", authorization: "Bearer caller-inbound" },
+          body: clientRequest,
+        }), { ...config(armed), stallTimeoutSec: 1 } as OcxConfig, { model: "", provider: "" });
+        const body = await response.text();
+        expect(legs).toBe(2);
+        expect(body).toContain("response.failed");
+        expect(body).toContain("stalled for 1000ms");
+      } finally {
+        releaseSpendHome();
+      }
     } finally {
-      releaseSpendHome();
+      // Restored even if the lease cleanup throws, so later tests never inherit this open stream.
       globalThis.fetch = savedFetch;
     }
   });

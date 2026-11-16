@@ -795,8 +795,11 @@ export async function deliverPassthroughResponse(
             // stalls the bridge's decide loop exactly like the first leg — so every leg gets the
             // same repair and the same explicit silence clock, not only the intercepted first one.
             if (!continuation.ok || !continuation.body) return continuation;
-            const guardedContinuation = nativeSseStallMs > 0
-              ? guardResponseBodyInactivity(continuation, upstream.signal, nativeSseStallMs).response
+            // A continuation is a fresh upstream body: guard it from the explicit budget even when
+            // reset selection already guarded the first leg (and so left nativeSseStallMs at 0).
+            const continuationStallMs = explicitStallTimeoutMs(config.stallTimeoutSec);
+            const guardedContinuation = continuationStallMs > 0
+              ? guardResponseBodyInactivity(continuation, upstream.signal, continuationStallMs).response
               : continuation;
             if (!terminalRepairPolicy) return guardedContinuation;
             return new Response(
