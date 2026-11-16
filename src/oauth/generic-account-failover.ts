@@ -17,6 +17,7 @@ import { isBuiltinAnthropicInstanceRow } from "../providers/anthropic-instance";
  * Both are excluded by `isGenericFailoverProvider`.
  */
 import { credentialGeneration, getAccountSet } from "./store";
+import { oauthCredentialSlot } from "./credential-siblings";
 import { accountInFlight } from "./kiro-account-load";
 import type { ProviderAccount } from "./types";
 import { getValidAccessSnapshotForAccount, type OAuthAccessSnapshot } from "./index";
@@ -105,8 +106,12 @@ const presence = new Map<string, PresenceEntry>();
 
 subscribeOAuthAccountPauseChanges(provider => presence.delete(provider));
 
-const healthKey = (provider: string, accountId: string, family?: QuotaModelFamily) =>
-  family ? `${provider}\u0000${accountId}\u0000${family}` : `${provider}\u0000${accountId}`;
+// Keyed by the login slot: rows that share one login (Kimi and Kimi (Responses)) share each
+// account's health, so a cooldown earned through one row is honored by the other.
+const healthKey = (provider: string, accountId: string, family?: QuotaModelFamily) => {
+  const slot = oauthCredentialSlot(provider);
+  return family ? `${slot}\u0000${accountId}\u0000${family}` : `${slot}\u0000${accountId}`;
+};
 
 export function quarantineKiroSuspendedAccount(accountId: string, generation?: string, now = Date.now()): void {
   const live = getAccountSet("kiro")?.accounts.find(row => row.id === accountId);
@@ -880,7 +885,7 @@ export function preferredInitialAccount(
 
 /** Earliest remaining cooldown, for a client-facing Retry-After when every account is cooled. */
 export function genericFailoverRetryAfterSeconds(providerName: string, now = Date.now()): number | null {
-  const prefix = `${providerName}\u0000`;
+  const prefix = `${oauthCredentialSlot(providerName)}\u0000`;
   let earliest: number | null = null;
   for (const [key, entry] of health) {
     if (!key.startsWith(prefix) || entry.cooldownUntil <= now) continue;
@@ -902,8 +907,9 @@ export function clearGenericFailoverHealth(providerName?: string): void {
     return;
   }
   presence.delete(providerName);
+  const slot = oauthCredentialSlot(providerName);
   for (const key of [...health.keys()]) {
-    if (key.startsWith(`${providerName}\u0000`)) health.delete(key);
+    if (key.startsWith(`${slot}\u0000`)) health.delete(key);
   }
 }
 
@@ -918,7 +924,7 @@ export function clearGenericFailoverHealth(providerName?: string): void {
 export function clearGenericFailoverHealthForAccount(providerName: string, accountId: string): void {
   const live = getAccountSet(providerName)?.accounts.find(row => row.id === accountId);
   const current = live ? credentialGeneration(live.credential) : undefined;
-  const bare = `${providerName}\u0000${accountId}`;
+  const bare = healthKey(providerName, accountId);
   for (const key of [...health.keys()]) {
     if (key !== bare && !key.startsWith(`${bare}\u0000`)) continue;
     const entry = health.get(key);

@@ -20,9 +20,16 @@ The auth store keeps one slot per login, and a sibling row never gets a slot of 
 - `/api/oauth/status`, `/api/oauth/accounts` and the account `active`, `pause`, `alias` and `DELETE`
   routes answer a sibling name with the owner's slot. Logging out of the owner signs out both rows and
   also clears the sibling's model cache.
-- Removing a provider row goes through `src/server/management/provider-credential-release.ts`: the login
-  is released only when no remaining OAuth row resolves to the same slot, so removing `kimi` keeps the
-  login while `kimi-responses` still uses it, and removing the last row removes the login.
+- Removing a provider row, through the management API or local `ocx provider remove`, goes through
+  `src/server/management/provider-credential-release.ts`: the login is released only when no remaining
+  row that signs in through the same slot is left, so removing `kimi` keeps the login while
+  `kimi-responses` still uses it, and removing the last row removes the login. "Signs in" is
+  routing's effective auth (`rowUsesOAuthLogin`): a registry OAuth entry counts whatever its stored
+  `authMode` says, unless the entry allows a key override and the row selects it. The check runs inside
+  the serialized auth-store write (`releaseProviderAccountSetUnlessRetained`), so a sibling published
+  while the release waited keeps the login.
+- Generic OAuth failover keys account health by the slot (`src/oauth/generic-account-failover.ts`), so a
+  cooldown earned through one row is honored by its sibling for the same shared account.
 - Quota probes and the Accounts tab stay on the owner (`kimi`); the sibling row has no quota bars of its own.
 
 The dashboard picker lists `kimi-responses` (`dashboardPreset: true`). When the owner is already signed

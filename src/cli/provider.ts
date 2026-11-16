@@ -17,6 +17,7 @@ import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../providers/regist
 import { providerConfigSeed } from "../providers/derive";
 import { assertAnthropicInstanceLoginConfig } from "../oauth/store-anthropic-instance";
 import { oauthCredentialSlot } from "../oauth/credential-siblings";
+import { releaseRemovedProviderCredentials, rowUsesOAuthLogin } from "../server/management/provider-credential-release";
 import { dropProviderCustomModels } from "../providers/provider-id-rewrite";
 import { cleanupRemovedGcpCredentials, commitProviderGcpCredentialRemoval, providerGcpCredentialMarkers } from "../providers/gcp-credential-cleanup";
 import { providerCredentialInputError } from "../providers/api-keys";
@@ -476,7 +477,7 @@ async function handleAdd(args: string[], deps: ProviderCommandDeps): Promise<voi
 // provider remove
 // ---------------------------------------------------------------------------
 
-function handleRemove(args: string[]): void {
+async function handleRemove(args: string[]): Promise<void> {
   const restArgs = [...args];
   const wantsJson = consumeFlag(restArgs, "--json");
   const name = restArgs[0];
@@ -491,6 +492,7 @@ function handleRemove(args: string[]): void {
     console.error(`Provider "${name}" is not configured.`);
     process.exit(1);
   }
+  const removedProvider = config.providers[name];
 
   if (name === config.defaultProvider) {
     console.error(`Cannot remove "${name}" — it is the default provider. Change the default first: ocx provider set-default <other>`);
@@ -517,6 +519,11 @@ function handleRemove(args: string[]): void {
     validateAndSave(config);
     return dropped;
   });
+  // Same ownership rule as the management delete: release the login unless a remaining row
+  // (Kimi and Kimi (Responses) share one) still signs in through it.
+  if (removedProvider && rowUsesOAuthLogin(name, removedProvider)) {
+    await releaseRemovedProviderCredentials(config, name);
+  }
 
   if (wantsJson) {
     console.log(JSON.stringify({

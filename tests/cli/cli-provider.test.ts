@@ -483,6 +483,36 @@ describe("ocx provider", () => {
     }
   });
 
+  test("local provider remove keeps the shared Kimi login until the last Kimi row goes (#8087)", async () => {
+    const kimiBase = "https://api.kimi.com/coding/v1";
+    const { dir } = freshConfig({
+      providers: {
+        openai: { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" },
+        kimi: { adapter: "openai-chat", baseUrl: kimiBase, authMode: "oauth" },
+        "kimi-responses": { adapter: "openai-responses", baseUrl: kimiBase, authMode: "oauth" },
+      },
+    });
+    const priorHome = process.env.OPENCODEX_HOME;
+    try {
+      process.env.OPENCODEX_HOME = dir;
+      const { saveCredential } = await import("../../src/oauth/store");
+      await saveCredential("kimi", { access: "synthetic-access", refresh: "synthetic-refresh", expires: Date.now() + 3_600_000, accountId: "kimi-user" });
+      const authStore = () => JSON.parse(readFileSync(join(dir, "auth.json"), "utf8")) as Record<string, unknown>;
+
+      const sibling = runCli(["provider", "remove", "kimi-responses"], { OPENCODEX_HOME: dir }, true);
+      expect(sibling.status).toBe(0);
+      expect(Object.keys(authStore())).toContain("kimi");
+
+      const last = runCli(["provider", "remove", "kimi"], { OPENCODEX_HOME: dir }, true);
+      expect(last.status).toBe(0);
+      expect(Object.keys(authStore())).not.toContain("kimi");
+      expect(readConfig(dir).providers.kimi).toBeUndefined();
+    } finally {
+      if (priorHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = priorHome;
+      removeTreeWithRetry(dir);
+    }
+  });
+
   test("provider remove drops that provider's custom models (#1273)", () => {
     const { dir } = freshConfig({
       providers: {

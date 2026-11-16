@@ -4,7 +4,8 @@ import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { deriveProviderPresets } from "../../src/providers/derive";
 import { OAUTH_CREDENTIAL_SIBLINGS, oauthCredentialSlot } from "../../src/oauth/credential-siblings";
 import { getLoginStatus, getValidAccessTokenSnapshot, OAUTH_PROVIDERS, runLogin, UnsupportedOAuthProviderError, upsertOAuthProvider } from "../../src/oauth";
-import { captureOAuthAccountSelection, commitOAuthAccountSelection, getAccountSet, getCredential, saveCredential } from "../../src/oauth/store";
+import { captureOAuthAccountSelection, commitOAuthAccountSelection, getAccountSet, getCredential, mutateStore, saveCredential } from "../../src/oauth/store";
+import { clearGenericFailoverHealth, eligibleFailoverAccounts, rotateGenericOAuthAccountOn429 } from "../../src/oauth/generic-account-failover";
 import { releaseRemovedProviderCredentials } from "../../src/server/management/provider-credential-release";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
@@ -102,11 +103,56 @@ describe("Kimi (Responses) is a reachable sibling of the Kimi login (#8087)", ()
     expect(getAccountSet("kimi")).toBeNull();
   });
 
-  test("a remaining key-auth row of the same name does not hold the login", async () => {
+  test("a Kimi row stays on the login whatever its stored authMode says (routing's effective auth)", async () => {
     await saveCredential("kimi", { access: "kimi-access-1", refresh: "kimi-refresh-1", expires: FAR_FUTURE, accountId: "kimi-user" });
+    // Kimi allows no key override, so routing treats this row as OAuth; it keeps the login.
     const live = config({ kimi: { ...KIMI_ROW, authMode: "key", apiKey: "synthetic" } });
-    expect(await releaseRemovedProviderCredentials(live, "kimi-responses")).toBe("released");
-    expect(getAccountSet("kimi")).toBeNull();
+    expect(await releaseRemovedProviderCredentials(live, "kimi-responses")).toBe("retained");
+    expect(getAccountSet("kimi")?.accounts).toHaveLength(1);
+  });
+
+  test("rows that omit authMode still hold the shared login", async () => {
+    await saveCredential("kimi", { access: "kimi-access-1", refresh: "kimi-refresh-1", expires: FAR_FUTURE, accountId: "kimi-user" });
+    const { authMode: _sibling, ...sibling } = SIBLING_ROW;
+    expect(await releaseRemovedProviderCredentials(config({ "kimi-responses": sibling }), "kimi")).toBe("retained");
+    const { authMode: _kimi, ...kimi } = KIMI_ROW;
+    expect(await releaseRemovedProviderCredentials(config({ kimi }), "kimi-responses")).toBe("retained");
+    expect(getAccountSet("kimi")?.accounts).toHaveLength(1);
+  });
+
+  test("a sibling published while the release waits for the store keeps the login", async () => {
+    await saveCredential("kimi", { access: "kimi-access-1", refresh: "kimi-refresh-1", expires: FAR_FUTURE, accountId: "kimi-user" });
+    const live = config({ fixture: { adapter: "openai-chat", baseUrl: "https://fixture.example.test/v1", authMode: "key", apiKey: "k" } });
+    let releaseWriter!: () => void;
+    let writerHeld!: () => void;
+    const held = new Promise<void>(resolve => { writerHeld = resolve; });
+    const writer = mutateStore(async () => {
+      writerHeld();
+      await new Promise<void>(resolve => { releaseWriter = resolve; });
+      return false;
+    });
+    await held;
+    const pending = releaseRemovedProviderCredentials(live, "kimi");
+    live.providers["kimi-responses"] = SIBLING_ROW;
+    releaseWriter();
+    await writer;
+    expect(await pending).toBe("retained");
+    expect(getAccountSet("kimi")?.accounts).toHaveLength(1);
+  });
+
+  test("a cooldown earned through one Kimi row is honored by the other", async () => {
+    clearGenericFailoverHealth();
+    for (const slot of ["a", "b"]) {
+      await saveCredential("kimi", { access: `kimi-access-${slot}`, refresh: `kimi-refresh-${slot}`, expires: FAR_FUTURE, accountId: `kimi-${slot}` });
+    }
+    const ids = getAccountSet("kimi")!.accounts.map(account => account.id);
+    const live = config({ kimi: KIMI_ROW, "kimi-responses": SIBLING_ROW });
+    try {
+      expect(rotateGenericOAuthAccountOn429(live, "kimi", ids[0]!, "60")).toBe(ids[1]!);
+      expect(eligibleFailoverAccounts("kimi-responses")).toEqual([ids[1]!]);
+    } finally {
+      clearGenericFailoverHealth();
+    }
   });
 
   test("an unrelated provider still releases its own login on removal", async () => {

@@ -1632,6 +1632,23 @@ export async function replaceProviderAccountSet(
 export type ProviderCredentialRekeyOutcome = "moved" | "absent" | "conflict";
 
 /**
+ * Clear `provider`'s login slot unless `retain()` reports that a remaining row still signs in
+ * through it. `retain` runs inside the serialized store write, so a row published while this
+ * release waited is seen before the credential is removed. Returns whether a slot was cleared.
+ */
+export async function releaseProviderAccountSetUnlessRetained(
+  provider: string,
+  retain: () => boolean,
+): Promise<"released" | "retained"> {
+  provider = oauthCredentialSlot(provider);
+  return mutateStore<"released" | "retained">(store => {
+    if (retain()) return "retained";
+    delete store[provider];
+    return "released";
+  }, [provider], { scrubLegacyBackup: outcome => outcome === "released" ? [provider] : [] });
+}
+
+/**
  * Move a provider's whole account set to a different provider key.
  *
  * Used by provider-id merge migrations (e.g. devin-cli -> devin): the
