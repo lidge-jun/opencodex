@@ -179,7 +179,7 @@ async function postChat(server: ReturnType<typeof startServer>): Promise<Respons
 }
 
 function installOAuthFetch(
-  apiStatuses: Array<number | { status: number; reason?: string; oversized?: boolean; message?: string }>,
+  apiStatuses: Array<number | { status: number; reason?: string; oversized?: boolean; message?: string; rawBody?: string }>,
   options: {
     tokenErrorDescription?: string;
     tokenHttpStatus?: number;
@@ -302,6 +302,9 @@ function installOAuthFetch(
       if (statusCode === 403 && !forbiddenObserved) {
         forbiddenObserved = true;
         await options.beforeFirstForbidden?.();
+      }
+      if (typeof status !== "number" && status.rawBody !== undefined) {
+        return new Response(status.rawBody, { status: statusCode });
       }
       if (statusCode >= 400) {
         return new Response(JSON.stringify({
@@ -623,8 +626,46 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
     } finally { await server.stop(true); }
   });
 
-  test.each([403, { status: 403, reason: "VALIDATION_REQUIRED", oversized: true },
+  test.each([{ status: 403, reason: "VALIDATION_REQUIRED", oversized: true },
     { status: 403, message: ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX }])(
+    "unclassified 403 %p retains the refusal without a sibling send", async refusal => {
+      await seedOAuth();
+      await seedSibling();
+      saveConfig(antigravityConfig());
+      const observed = installOAuthFetch([refusal, 200]);
+      const server = startServer(0);
+      try {
+        const response = await postResponses(server);
+        const body = await response.text();
+        expect(response.status).toBe(403);
+        expect(body).toContain("Antigravity");
+        expect(observed.chatAuth).toEqual(["Bearer rejected-access"]);
+      } finally { await server.stop(true); }
+    });
+
+  test.each([
+    ["empty body", ""],
+    ["proxy HTML page", "<html><body>403 Forbidden</body></html>"],
+    ["envelope without a status enum", JSON.stringify({ error: { code: 403, message: "Forbidden by upstream policy" } })],
+  ])("a 403 that Google did not mark PERMISSION_DENIED (%s) is not rotated and cools nothing", async (_name, rawBody) => {
+    await seedOAuth();
+    const failedId = getAccountSet("google-antigravity")!.activeAccountId;
+    await seedSibling();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([{ status: 403, rawBody }, 200]);
+    const server = startServer(0);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(403);
+      await response.text();
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access"]);
+      expect(eligibleFailoverAccounts("google-antigravity", Date.now(),
+        classifyModelFamilyForQuota("google-antigravity", "gemini-3.8-flash"))).toContain(failedId);
+      for (const row of getAccountSet("google-antigravity")!.accounts) expect(row.needsReauth).not.toBe(true);
+    } finally { await server.stop(true); }
+  });
+
+  test.each([403])(
     "access-denied 403 %p cools the refused account and replays on the sibling without a stored verdict", async refusal => {
       await seedOAuth();
       const failedId = getAccountSet("google-antigravity")!.activeAccountId;

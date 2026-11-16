@@ -11,16 +11,24 @@ export function hasAntigravityValidationRefusalMarker(text: string): boolean {
 }
 
 /**
- * A normalized 403 that names this account's access, not a validation demand and not a "verify your
- * account" conviction (the dedicated quarantine path owns that one). The caller cools the account and
- * tries a sibling; nothing here marks the account durably, so a body that is wrong for every account
- * costs at most the bounded sibling hops, never a stored verdict.
+ * A normalized 403 that Google itself attributed to this account: a structured `PERMISSION_DENIED`
+ * envelope (`classifyGoogle` keeps the "(PERMISSION_DENIED)" suffix only when it parsed that enum) or
+ * the "authentication failed" wording Google sometimes puts under PERMISSION_DENIED. Not a validation
+ * demand and not a "verify your account" conviction (the dedicated quarantine path owns that one). The
+ * caller cools the account and tries a sibling; nothing here marks the account durably.
  *
- * Google's 403 sometimes carries "invalid authentication credentials" wording under PERMISSION_DENIED;
- * `classifyGoogle` names that one "authentication failed", and it refuses this account just the same.
+ * `classifyGoogle` writes the bare "Antigravity access denied" prefix for every 403, including an empty
+ * body, a proxy or WAF HTML page, or an envelope without the enum. That bare prefix says nothing about
+ * this account, so it does not qualify: accepting it would walk the whole pool and cool every account
+ * on a failure that is wrong for all of them.
+ *
+ * Text that carries the validation marker is never an access denial: that wording belongs to the
+ * validation path, and an upstream message imitating it must not earn a different recovery.
  */
 export function hasAntigravityAccessDeniedMarker(text: string): boolean {
-  return (text.startsWith(ANTIGRAVITY_ACCESS_DENIED_PREFIX) || text.startsWith(ANTIGRAVITY_AUTH_FAILED_PREFIX))
+  return (text.startsWith(`${ANTIGRAVITY_ACCESS_DENIED_PREFIX} (PERMISSION_DENIED)`)
+    || text.startsWith(ANTIGRAVITY_AUTH_FAILED_PREFIX))
+    && !text.includes(ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX)
     && classifyAntigravityRefusal(403, text).kind === "other";
 }
 

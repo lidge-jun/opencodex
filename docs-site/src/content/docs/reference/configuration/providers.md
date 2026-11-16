@@ -1367,10 +1367,10 @@ Paused, reauthentication-required and cooling accounts are skipped;
 the failed credential gets a 60-second in-process cooldown only while its generation is current.
 The same main dispatch may also switch once on a 403 when Google's bounded error normalization
 finds a complete structured `VALIDATION_REQUIRED` reason. A complete, bounded 403 that simply refuses
-the account (Google's `PERMISSION_DENIED`) also moves to the next eligible sibling: the refused
+the account (Google's structured `PERMISSION_DENIED`) also moves to the next eligible sibling: the refused
 credential gets the same 60-second in-process cooldown, nothing is written to disk, and the request
 keeps walking the pool while siblings remain, up to the per-request failover limit. A 403 asking you
-to verify the account keeps its own quarantine path, and an incomplete 403 keeps its original error.
+to verify the account keeps its own quarantine path, and an incomplete 403, or one Google did not mark `PERMISSION_DENIED` (an empty body, a proxy or WAF error page, an envelope without the status), keeps its original error and cools no account.
 A 502, 503 or 504 that survives the same-account transient retries before any output is replayed once
 on an eligible sibling; the failing account is cooled for 15 seconds in process, and a pool-wide
 outage costs at most two retry ladders per request. A cooldown already running for an account is never
@@ -1378,7 +1378,7 @@ shortened by a shorter one. A rejected sibling, cancellation or exhausted send b
 another upstream send.
 The fetch-based web-search loop also rotates once on these 403 refusals, using the sibling's
 OAuth token and matching Cloud Code Assist project. It accepts only complete, bounded Google error
-envelopes with `error.details[].reason === "VALIDATION_REQUIRED"` or a plain access denial;
+envelopes with `error.details[].reason === "VALIDATION_REQUIRED"` or a `PERMISSION_DENIED` access denial;
 verification wording alone does not authorize rotation, and this path does not persist a
 reauthentication mark. Each physical send,
 including a 429 retry, consumes the same request budget exactly once. A disabled pool, cancellation,

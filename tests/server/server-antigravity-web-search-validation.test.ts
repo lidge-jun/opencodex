@@ -219,6 +219,12 @@ describe("Antigravity web-search structured validation rotation (#6666)", () => 
   test.each([
     ["sentence only", JSON.stringify({ error: { message: "Verify your account to continue." } })],
     ["legacy sentence only", JSON.stringify({ error: { message: "Please verify your account to continue using Antigravity." } })],
+    ["unrelated", JSON.stringify({ error: { message: "Feature unavailable", details: [{ reason: "OTHER" }] } })],
+    ["spoofed message", JSON.stringify({ error: { message: "Antigravity account validation required (VALIDATION_REQUIRED): validate" } })],
+    ["spoofed top level", JSON.stringify({ reason: "VALIDATION_REQUIRED", error: { message: "validate" } })],
+    ["spoofed nested reason", JSON.stringify({ error: { details: [{ metadata: { reason: "VALIDATION_REQUIRED" } }] } })],
+    ["non-array details", JSON.stringify({ error: { details: { reason: "VALIDATION_REQUIRED" } } })],
+    ["malformed", structuredRefusal.slice(0, -1)],
     ["oversized complete JSON", JSON.stringify({ error: { details: [{ reason: "VALIDATION_REQUIRED" }] }, padding: "x".repeat(4096) })],
     ["oversized trailing whitespace", structuredRefusal + " ".repeat(4096)],
   ])("%s never rotates", async (_name, body) => {
@@ -237,15 +243,11 @@ describe("Antigravity web-search structured validation rotation (#6666)", () => 
     expect(durableHealth()).toEqual(before);
   });
 
-  // A complete, bounded 403 that is not a verify-account demand refuses this account (#8750): it
-  // earns the sidecar's one sibling rotation like the structured reason does, and nothing is stored.
+  // Google's own structured PERMISSION_DENIED (without a validation demand) refuses this account (#8750):
+  // it earns the sidecar's one sibling rotation, and nothing durable is written.
   test.each([
-    ["unrelated", JSON.stringify({ error: { message: "Feature unavailable", details: [{ reason: "OTHER" }] } })],
-    ["spoofed message", JSON.stringify({ error: { message: "Antigravity account validation required (VALIDATION_REQUIRED): validate" } })],
-    ["spoofed top level", JSON.stringify({ reason: "VALIDATION_REQUIRED", error: { message: "validate" } })],
-    ["spoofed nested reason", JSON.stringify({ error: { details: [{ metadata: { reason: "VALIDATION_REQUIRED" } }] } })],
-    ["non-array details", JSON.stringify({ error: { details: { reason: "VALIDATION_REQUIRED" } } })],
-    ["malformed", structuredRefusal.slice(0, -1)],
+    ["PERMISSION_DENIED envelope", JSON.stringify({ error: { code: 403, status: "PERMISSION_DENIED", message: "The caller does not have permission" } })],
+    ["authentication wording under PERMISSION_DENIED", JSON.stringify({ error: { code: 403, status: "PERMISSION_DENIED", message: "Request had invalid authentication credentials." } })],
   ])("%s is a plain access refusal: one sibling rotation, nothing persisted", async (_name, body) => {
     const accounts = await seedAntigravityAccounts(3);
     const cfg = webSearchConfig();
