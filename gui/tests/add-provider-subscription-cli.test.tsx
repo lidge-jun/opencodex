@@ -165,6 +165,8 @@ test("the Antigravity ACP row is a subscription CLI with its own warning, never 
   const note = warning();
   expect(note?.textContent).toContain("Subscription CLI, not an API key");
   expect(note?.textContent).toContain("agy acp");
+  // It names only the fallback the code refuses: subagent fallback, not every fallback route.
+  expect(note?.textContent).toContain("subagent fallback routing");
   expect(note?.textContent).toContain("google");
   expect(note?.textContent).not.toContain("Claude");
   expect(win.document.body.textContent).not.toContain("Free tier");

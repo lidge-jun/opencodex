@@ -1515,7 +1515,7 @@ export const zhTW: Record<TKey, string> = {
   "modal.freeTierTitle": "免費層級",
   "modal.subscriptionCliTitle": "訂閱 CLI，而非 API 金鑰",
   "modal.subscriptionCliWarning": "此供應商不使用 API 金鑰。它會呼叫本機已登入的官方 Claude Code CLI（{cmd}），並向該 Claude 訂閱帳戶計費。OpenCodex 不會為其儲存任何金鑰，在此輸入的金鑰也永遠不會被使用。如需以 API 金鑰計費，請改為新增 {apiProvider}。",
-  "modal.subscriptionCliWarningAgy": "此供應商不使用 API 金鑰。它會呼叫本機已登入的官方 Antigravity CLI（{cmd}），並向該 Google Antigravity 帳戶計費。Google 僅允許由使用者主導的互動式使用，因此 OpenCodex 只為來自本機的請求使用它，並拒絕子代理、組合與備援路由。OpenCodex 不會為它儲存金鑰，在此輸入的金鑰也不會被使用。如需程式化或共用的工作負載，請改為新增 {apiProvider}。",
+  "modal.subscriptionCliWarningAgy": "此供應商不使用 API 金鑰。它會呼叫本機已登入的官方 Antigravity CLI（{cmd}），並向該 Google Antigravity 帳戶計費。Google 僅允許由使用者主導的互動式使用，因此 OpenCodex 只為來自本機的請求使用它，並拒絕子代理回合、組合與子代理備援路由。OpenCodex 不會為它儲存金鑰，在此輸入的金鑰也不會被使用。如需程式化或共用的工作負載，請改為新增 {apiProvider}。",
   "modal.freeTierDefault": "無需 API 金鑰，開箱即用。",
   "modal.tab.accounts": "帳號",
   "modal.tab.free": "免費",

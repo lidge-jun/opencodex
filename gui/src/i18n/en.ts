@@ -1852,7 +1852,7 @@ export const en = {
   "modal.freeTierTitle": "Free tier",
   "modal.subscriptionCliTitle": "Subscription CLI, not an API key",
   "modal.subscriptionCliWarning": "This provider does not use an API key. It drives the official Claude Code CLI signed in on this machine ({cmd}) and bills that Claude subscription account. OpenCodex stores no key for it, and a key entered here is never used. For API-key billing, add {apiProvider} instead.",
-  "modal.subscriptionCliWarningAgy": "This provider does not use an API key. It drives the official Antigravity CLI signed in on this machine ({cmd}) and bills that Google Antigravity account. Google permits it only for interactive, user-directed use, so OpenCodex serves it only to requests from this machine and refuses subagents, combos and fallback routing. OpenCodex stores no key for it, and a key entered here is never used. For programmatic or shared workloads, add {apiProvider} instead.",
+  "modal.subscriptionCliWarningAgy": "This provider does not use an API key. It drives the official Antigravity CLI signed in on this machine ({cmd}) and bills that Google Antigravity account. Google permits it only for interactive, user-directed use, so OpenCodex serves it only to requests from this machine and refuses subagent turns, combos and subagent fallback routing. OpenCodex stores no key for it, and a key entered here is never used. For programmatic or shared workloads, add {apiProvider} instead.",
   "modal.freeTierDefault": "No API key required. Works out of the box.",
   "modal.tab.accounts": "Accounts",
   "modal.tab.free": "Free",

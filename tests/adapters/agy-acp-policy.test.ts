@@ -14,6 +14,9 @@ describe("request peer scope", () => {
     expect(classifyRequestPeer("hub-link", "127.0.0.1").local).toBe(false);
     expect(classifyRequestPeer("hub-management", "127.0.0.1").local).toBe(false);
     expect(classifyRequestPeer("local-control", undefined).local).toBe(false);
+    // A server that cannot report the peer (no requestIP) is never local, on a local listener too.
+    expect(classifyRequestPeer("public", undefined).local).toBe(false);
+    expect(classifyRequestPeer("unauthenticated-loopback", null).local).toBe(false);
   });
 
   test("a loopback peer the operator declared as a reverse proxy is not local", () => {

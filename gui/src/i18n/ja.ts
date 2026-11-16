@@ -1735,7 +1735,7 @@ export const ja: Record<TKey, string> = {
   "modal.freeTierTitle": "無料枠",
   "modal.subscriptionCliTitle": "サブスクリプション CLI（API キーではありません）",
   "modal.subscriptionCliWarning": "このプロバイダーは API キーを使用しません。このマシンでサインイン済みの公式 Claude Code CLI（{cmd}）を実行し、その Claude サブスクリプションアカウントに課金されます。OpenCodex はキーを保存せず、ここに入力したキーが使われることもありません。API キーで課金する場合は、代わりに {apiProvider} を追加してください。",
-  "modal.subscriptionCliWarningAgy": "このプロバイダーは API キーを使用しません。このマシンでサインイン済みの公式 Antigravity CLI（{cmd}）を実行し、その Google Antigravity アカウントに課金されます。Google はユーザーが指示する対話的な利用のみを認めているため、OpenCodex はこのマシンからのリクエストにのみ使用し、サブエージェント、コンボ、フォールバックルーティングは拒否します。OpenCodex はキーを保存せず、ここに入力したキーが使われることもありません。プログラムによる利用や共有ワークロードには、代わりに {apiProvider} を追加してください。",
+  "modal.subscriptionCliWarningAgy": "このプロバイダーは API キーを使用しません。このマシンでサインイン済みの公式 Antigravity CLI（{cmd}）を実行し、その Google Antigravity アカウントに課金されます。Google はユーザーが指示する対話的な利用のみを認めているため、OpenCodex はこのマシンからのリクエストにのみ使用し、サブエージェントのターン、コンボ、サブエージェントのフォールバックルーティングは拒否します。OpenCodex はキーを保存せず、ここに入力したキーが使われることもありません。プログラムによる利用や共有ワークロードには、代わりに {apiProvider} を追加してください。",
   "modal.freeTierDefault": "API キー不要です。そのまま利用できます。",
   "modal.tab.accounts": "アカウント",
   "modal.tab.free": "無料",

@@ -3059,7 +3059,7 @@ export const ko: Record<TKey, string> = {
   "modal.freeTierTitle": "무료 티어",
   "modal.subscriptionCliTitle": "API 키가 아닌 구독 CLI 방식",
   "modal.subscriptionCliWarning": "이 프로바이더는 API 키를 쓰지 않습니다. 이 컴퓨터에 로그인된 공식 Claude Code CLI({cmd})를 실행하고, 요금은 그 Claude 구독 계정에 청구됩니다. OpenCodex는 이 프로바이더의 키를 저장하지 않으며, 여기에 입력한 키는 쓰이지 않습니다. API 키로 과금하려면 대신 {apiProvider}를 추가하세요.",
-  "modal.subscriptionCliWarningAgy": "이 프로바이더는 API 키를 쓰지 않습니다. 이 컴퓨터에 로그인된 공식 Antigravity CLI({cmd})를 실행하고, 요금은 그 Google Antigravity 계정에 청구됩니다. Google은 사용자가 직접 지시하는 대화형 사용만 허용하므로, OpenCodex는 이 컴퓨터에서 온 요청에만 이 프로바이더를 쓰고 서브에이전트, 콤보, 폴백 라우팅은 거부합니다. OpenCodex는 이 프로바이더의 키를 저장하지 않으며, 여기에 입력한 키는 쓰이지 않습니다. 프로그램 방식이나 공유 작업에는 대신 {apiProvider}를 추가하세요.",
+  "modal.subscriptionCliWarningAgy": "이 프로바이더는 API 키를 쓰지 않습니다. 이 컴퓨터에 로그인된 공식 Antigravity CLI({cmd})를 실행하고, 요금은 그 Google Antigravity 계정에 청구됩니다. Google은 사용자가 직접 지시하는 대화형 사용만 허용하므로, OpenCodex는 이 컴퓨터에서 온 요청에만 이 프로바이더를 쓰고 서브에이전트 턴, 콤보, 서브에이전트 폴백 라우팅은 거부합니다. OpenCodex는 이 프로바이더의 키를 저장하지 않으며, 여기에 입력한 키는 쓰이지 않습니다. 프로그램 방식이나 공유 작업에는 대신 {apiProvider}를 추가하세요.",
   "modal.freeTierDefault": "API 키가 필요 없습니다. 바로 사용할 수 있습니다.",
   "modal.tab.accounts": "계정",
   "modal.tab.free": "무료",
