@@ -296,7 +296,10 @@ describe("combo required-tool contract on buffered children (#7456)", () => {
         fetch: (async () => { sends++; throw new Error("unexpected Chat send"); }) as typeof fetch });
       const response = await handleResponsesWith(comboConfig({ a: chat }), requiredRequest(extra));
       expect(response.status).toBe(503);
-      expect(await response.text()).toContain("attempted targets cannot preserve mandatory tool_choice");
+      const { error } = await response.json() as { error: { message: string; combo?: unknown } };
+      expect(error.message).toContain("attempted targets cannot preserve mandatory tool_choice");
+      // #7965: the same refusal is machine-readable as an unsupported request.
+      expect(error.combo).toEqual({ cause: "unsupported", targets: 1, attempted: 1, causes: { unsupported: 1 } });
       expect(sends).toBe(0);
     });
   }
