@@ -1035,7 +1035,7 @@
   "usage-telemetry-profile-contract.test.ts": "usage", "usage-telemetry-profile-sync.test.ts": "usage", "usage-telemetry-profile-collector.test.ts": "usage", "usage-telemetry-profile-lifecycle.test.ts": "usage", "server-telemetry-profile-routes.test.ts": "server", "cli-telemetry-profile.test.ts": "cli", "docs-telemetry-leaderboard.test.ts": "ci-workflows",
   "live-service-manager-guard.test.ts": "service",
   "linux-desktop-packaged-e2e.test.ts": "ci-workflows", "link-boundary.test.ts": "clients",
-  "link-ssh-argv.test.ts": "clients", "link-ssh-runner.test.ts": "clients", "link-ssh-argv-discovery.test.ts": "clients", "link-ssh-config.test.ts": "clients",
+  "link-ssh-argv.test.ts": "clients", "link-ssh-runner.test.ts": "clients", "link-ssh-argv-discovery.test.ts": "clients", "link-windows-gated-served.test.ts": "clients", "link-ssh-config.test.ts": "clients",
   "link-store.test.ts": "clients", "link-retirement.test.ts": "clients", "link-tunnel-state.test.ts": "clients",
   "link-routes-store.test.ts": "clients", "link-routes-argv.test.ts": "clients", "link-ssh-runner-abort.test.ts": "clients",
   "link-route-select.test.ts": "clients", "link-route-proof.test.ts": "clients", "link-route-supervisor.test.ts": "clients", "link-routes-status.test.ts": "clients", "link-routes-openssh.test.ts": "clients", "link-route-proof-relay.test.ts": "clients", "link-route-trust.test.ts": "clients",
