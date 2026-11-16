@@ -1,5 +1,5 @@
-import { test } from "bun:test";
-import { checkHostedChatCompletion, type CompletionCase } from "../helpers/hosted-chat-completion";
+import { expect, test } from "bun:test";
+import { checkHostedChatCompletion, checkHostedRecoveryIteration, type CompletionCase } from "../helpers/hosted-chat-completion";
 
 const cases: CompletionCase[] = [
   { name: "plain-empty", search: false, frames: ["", ""], sends: 2, final: "response.failed", errorCode: "empty_completion_retry_failed" },
@@ -22,3 +22,58 @@ for (const row of cases) {
     test(`${row.name} (stream=${stream})`, () => checkHostedChatCompletion({ empty: true, ...row }, stream));
   }
 }
+
+test("Chat recovery opt-in does not expand another adapter's search iteration cap", async () => {
+  const { runWithWebSearch } = await import("../../src/web-search/loop");
+  const { buildWebSearchTool } = await import("../../src/web-search/synthetic-tool");
+  const { createTestTranslatorBudget } = await import("../helpers/translator-budget");
+  const { strict: assert } = await import("node:assert");
+  const originalFetch = globalThis.fetch;
+  let sends = 0;
+  try {
+    globalThis.fetch = async () => Response.json({ results: [] });
+    const response = await runWithWebSearch({
+      emptyCompletionRetry: true,
+      parsed: { modelId: "fixture", stream: true, options: {}, context: { messages: [], tools: [buildWebSearchTool()] } },
+      adapter: {
+        name: "fixture",
+        buildRequest() {
+          sends++;
+          return { url: "https://fixture.invalid", method: "POST", headers: {}, body: "{}" };
+        },
+        fetchResponse: async () => new Response("wire"),
+        async *parseStream() {
+          yield { type: "tool_call_start", id: "fixture-search-" + sends, name: "web_search" };
+          yield { type: "tool_call_delta", arguments: '{"query":"fixture"}' };
+          yield { type: "tool_call_end" };
+          yield { type: "done" };
+        },
+      },
+      backend: "exa", exaApiKey: "synthetic-not-a-key", hostedTool: { type: "web_search" },
+      settings: { model: "fixture", reasoning: "low", timeoutMs: 1000 }, maxSearches: 1,
+      incomingMeta: { headers: new Headers(), translatorBudget: createTestTranslatorBudget() },
+    });
+    const result = await response.text();
+    assert.equal(sends, 4, "non-Chat retains the existing maxSearches + 3 cap");
+    assert.ok(result.includes("web-search loop exceeded its iteration cap"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+
+test("live reasoning is delivered once without an empty-completion resend", async () => {
+  const result = await checkHostedRecoveryIteration(["thinking", "Fixed."], true);
+  expect(result.seen).toHaveLength(1);
+  expect(result.text).toContain("Checking the fixture.");
+  expect(result.text).toContain('"type":"response.completed"');
+});
+
+test("an empty forced answer retains its tools-disabled recovery", async () => {
+  const result = await checkHostedRecoveryIteration(["search", "", "Fixed."]);
+  expect(result.seen).toHaveLength(3);
+  expect(result.searches).toBe(1);
+  expect(result.seen[2]!.context.tools).toEqual([]);
+  expect(result.seen[2]!.options.toolChoice).toBe("none");
+  expect(result.text).toContain('"type":"response.completed"');
+});

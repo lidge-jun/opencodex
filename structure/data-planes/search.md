@@ -86,3 +86,5 @@ Single-result query and answer truncation in `src/web-search/format-result.ts` u
 ## Chat empty completion recovery
 
 The global `emptyCompletionRetry` opt-in also covers clean empty final Chat iterations in `src/web-search/loop.ts`, including a turn that declares hosted search but never invokes it. One identical model-leg retry keeps gathered results without repeating hosted searches; another empty completion fails with `empty_completion_retry_failed`. The environment opt-out, combo/compaction exclusions, refusal, truncation, malformed/real tools and cancellation boundaries remain intact. Hidden attempt usage is accumulated. `tests/responses/search-empty-completion.test.ts` covers Responses requests with stream=true and stream=false.
+
+Recovery allowance expands the iteration ceiling only for Chat. Already streamed reasoning prevents an empty-completion resend. Once the search allowance is exhausted, the existing tools-disabled empty-answer recovery remains authoritative.
