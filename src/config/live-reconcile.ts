@@ -3,6 +3,7 @@ import type { OcxConfig, OcxProviderConfig, ProviderCostOverlay } from "../types
 import { configReasoningPinsConfigError } from "./provider-validation";
 import { carryPersistedTelemetry } from "./telemetry-carry";
 import { adoptPersistedConfigMigrations, projectPersistedConfigMigrations } from "./persisted-projections";
+import { RESERVE_CAPABILITY_KEYS } from "./reserve-capability";
 import { refreshPreservedProviderOwner } from "../usage/user-cost-overlays";
 import { refreshConfigDerivedRegistries } from "./derived-registries";
 import {
@@ -598,6 +599,8 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
             ...(provenanceExists
               ? Object.keys(persistedDiagnostics.config as unknown as Record<string, unknown>)
               : []),
+            // An absent Reserve value reads as off, so a disk-only value is never left behind.
+            ...RESERVE_CAPABILITY_KEYS,
           ]);
           for (const key of Object.keys(persistedDiagnostics.config as unknown as Record<string, unknown>)) {
             if (!rebaseableKeys.has(key)) skipped.add(key);

@@ -220,6 +220,35 @@ describe("persisted writers carry the one-time migration", () => {
     expect(isCodexReserveEnabled(live)).toBe(false);
   });
 
+  // CodeRabbit on #8788: after the marker, an absent codexReserveEnabled means off, so a live save of
+  // an unrelated setting must not drop a value another process wrote meanwhile.
+  for (const [label, file] of [
+    ["the migrated value is absent", { codexReserveMigration: MIGRATED }],
+    ["the value is explicit", { codexReserveEnabled: false, codexReserveMigration: MIGRATED }],
+  ] as const) test(`an unrelated live save keeps another process's Reserve value when ${label}`, () => {
+    writeConfigFile(baseConfig(file));
+    const live = loadConfig();
+    armClaudeCodeBaseline(live);
+    const other = loadConfig();
+    other.codexReserveEnabled = true;
+    saveConfig(other);
+    live.oauthOpenBrowser = false;
+    saveConfigPreservingClaudeCode(live);
+    expect(readConfigFile()).toMatchObject({ codexReserveEnabled: true, codexReserveMigration: MIGRATED, oauthOpenBrowser: false });
+    expect(isCodexReserveEnabled(live)).toBe(true);
+  });
+
+  test("a live deletion of codexReserveEnabled still writes it as off", () => {
+    writeConfigFile(baseConfig({ codexReserveEnabled: true, codexReserveMigration: MIGRATED }));
+    const live = loadConfig();
+    armClaudeCodeBaseline(live);
+    delete live.codexReserveEnabled;
+    saveConfigPreservingClaudeCode(live);
+    expect(readConfigFile().codexReserveEnabled).toBeUndefined();
+    expect(readConfigFile().codexReserveMigration).toBe(MIGRATED);
+    expect(isCodexReserveEnabled(loadConfig())).toBe(false);
+  });
+
   test("a failed startup publication stays visible and leaves the legacy reading in place", () => {
     const config = baseConfig({ codexDesktopAuthless: true });
     const warnings: string[] = [];

@@ -20,7 +20,9 @@ process's Reserve decision; an explicit Reserve value is recorded with the marke
 fields only if the save fails before publication; after publication it adopts the Reserve fields from the
 published file. The startup step adopts the seed in place, because the
 loaded object carries file-backed provenance that a copy would lose. The live writer's three-way merge keeps
-another process's Reserve change rather than reapplying a stale value. After the marker exists an absent value means off, so deleting the field cannot
+another process's Reserve change rather than reapplying a stale value, and it always rebases both Reserve
+fields against disk (`RESERVE_CAPABILITY_KEYS` in `src/config/live-reconcile.ts`), so a value that only another
+process wrote survives an unrelated live save even when the live config and its baseline both omit it. After the marker exists an absent value means off, so deleting the field cannot
 reinstate inheritance. Enabling the capability manufactures no permission: the credential-bound upstream
 Reserve check (`src/codex/reserve-availability.ts`) still decides each request.
 `tests/config/reserve-capability-migration.test.ts` covers the combinations, the writers and the route.

@@ -21,6 +21,13 @@ import type { OcxConfig } from "../types";
  */
 export const RESERVE_CAPABILITY_MIGRATION_VERSION = 1;
 
+/**
+ * The two Reserve fields. A live save always rebases them against disk, even when the live config and
+ * its baseline both omit them: after the marker an absent value reads as off, so skipping a value only
+ * another process wrote would silently turn Reserve off. Explicit live edits still win the merge.
+ */
+export const RESERVE_CAPABILITY_KEYS: readonly string[] = ["codexReserveEnabled", "codexReserveMigration"];
+
 type ReserveCapabilityFields = Pick<OcxConfig, "codexReserveEnabled" | "codexReserveMigration" | "codexDesktopAuthless">;
 
 function configRecord(value: unknown): Record<string, unknown> | undefined {
