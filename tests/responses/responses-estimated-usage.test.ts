@@ -1,5 +1,8 @@
 import { afterEach, expect, test } from "bun:test";
 import { handleResponses } from "../../src/server/responses";
+import type { HandleResponsesOptions } from "../../src/server/responses/core-options";
+import { setRelayPlatformForTests } from "../../src/server/responses/passthrough-delivery";
+import { isEagerRelaySseResponse } from "../../src/server/relay";
 import { ESTIMATED_USAGE_HEADER, estimatedUsageJson, withEstimatedUsage } from "../../src/server/responses/estimated-usage";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
@@ -9,7 +12,10 @@ import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 // marked by a response header and never reaches the request log, spend or quota accounting.
 const originalFetch = globalThis.fetch;
 let release: (() => void) | undefined;
-afterEach(() => { globalThis.fetch = originalFetch; release?.(); release = undefined; });
+afterEach(() => {
+  globalThis.fetch = originalFetch; release?.(); release = undefined;
+  setRelayPlatformForTests(undefined);
+});
 
 const answer = "The capital of France is Paris, and it has been for a long time.";
 const completed = (usage?: Record<string, number>) => ({
@@ -19,37 +25,40 @@ const completed = (usage?: Record<string, number>) => ({
   ...(usage ? { usage } : {}),
 });
 
-function config(estimateMissingUsage?: boolean): OcxConfig {
+function config(estimateMissingUsage?: boolean, streamMode?: OcxConfig["streamMode"]): OcxConfig {
   return {
-    port: 0, defaultProvider: "fixture",
+    port: 0, defaultProvider: "fixture", ...(streamMode ? { streamMode } : {}),
     providers: { fixture: { adapter: "openai-responses", authMode: "key", apiKey: "fixture-key",
       baseUrl: "https://gateway.example/v1", models: ["probe"],
       ...(estimateMissingUsage === undefined ? {} : { estimateMissingUsage }) } },
   } as unknown as OcxConfig;
 }
 
-function sse(body: Record<string, unknown>): Response {
+function sse(body: Record<string, unknown>, terminal = "response.completed"): Response {
   const events = [
     { type: "response.created", response: { ...body, status: "in_progress", output: [], usage: undefined } },
-    { type: "response.completed", response: body },
+    // A delta whose text mentions a terminal type must not be mistaken for one.
+    { type: "response.output_text.delta", delta: "response.completed", item_id: "msg_1", output_index: 0, content_index: 0 },
+    { type: terminal, response: body },
   ];
   return new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""),
     { headers: { "content-type": "text/event-stream" } });
 }
 
-async function send(cfg: OcxConfig, stream: boolean, upstream: Response) {
+async function send(cfg: OcxConfig, stream: boolean, upstream: Response, options: HandleResponsesOptions = {}) {
   release = acquireOwnedSpendHome();
   globalThis.fetch = (async () => upstream) as unknown as typeof fetch;
   const log = { model: "", provider: "" } as RequestLogContext;
   const response = await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "fixture/probe", input: "What is the capital of France?", stream, store: false }),
-  }), cfg, log);
+  }), cfg, log, options);
   const text = await response.text();
   const terminal = stream
-    ? JSON.parse(text.split("\n").find(line => line.startsWith("data: ") && line.includes('"response.completed"'))!.slice(6)).response
+    ? JSON.parse(text.split("\n").find(line => line.startsWith("data: {\"type\":\"response.completed\"")
+      || line.startsWith("data: {\"type\":\"response.incomplete\""))!.slice(6)).response
     : JSON.parse(text);
-  return { response, terminal, log };
+  return { response, terminal, log, text };
 }
 
 test("estimates count the request input and the response output, and leave usage the provider sent", () => {
@@ -99,3 +108,66 @@ test("JSON: provider usage is not marked as estimated", async () => {
   expect(response.headers.get(ESTIMATED_USAGE_HEADER)).toBeNull();
   expect(terminal.usage).toEqual(usage);
 });
+
+test("streaming: a response.incomplete terminal without usage is estimated too", async () => {
+  const body = { ...completed(), status: "incomplete", incomplete_details: { reason: "max_output_tokens" } };
+  const { response, terminal, log } = await send(config(true), true, sse(body, "response.incomplete"));
+  expect(response.headers.get(ESTIMATED_USAGE_HEADER)).toBe("when-missing");
+  expect(terminal.status).toBe("incomplete");
+  expect(terminal.usage.output_tokens).toBeGreaterThan(0);
+  expect(log.usage).toBeUndefined();
+});
+
+test("usage: null counts as omitted and is estimated, in a stream and in JSON", async () => {
+  const body = { ...completed(), usage: null };
+  const streamed = await send(config(true), true, sse(body));
+  expect(streamed.terminal.usage.input_tokens).toBeGreaterThan(0);
+  expect(streamed.log.usage).toBeUndefined();
+  const json = await send(config(true), false, Response.json(body));
+  expect(json.response.headers.get(ESTIMATED_USAGE_HEADER)).toBe("true");
+  expect(json.terminal.usage.output_tokens).toBeGreaterThan(0);
+  expect(json.log.usage).toBeUndefined();
+});
+
+test("a delta that merely mentions a terminal type is forwarded byte for byte", async () => {
+  const { text } = await send(config(true), true, sse(completed()));
+  expect(text).toContain('"delta":"response.completed"');
+});
+
+for (const [name, platform, streamMode, eager] of [
+  ["tee", "linux", "legacy-tee", false],
+  ["eager relay", "darwin", "eager-relay", true],
+] as const) {
+  test(`streaming over the ${name}: the client sees the estimate, the log sees the provider's body`, async () => {
+    setRelayPlatformForTests(platform);
+    const estimated = await send(config(true, streamMode), true, sse(completed()));
+    expect(isEagerRelaySseResponse(estimated.response)).toBe(eager);
+    expect(estimated.response.headers.get(ESTIMATED_USAGE_HEADER)).toBe("when-missing");
+    expect(estimated.terminal.usage.output_tokens).toBeGreaterThan(0);
+    expect(estimated.log.usage).toBeUndefined();
+    const usage = { input_tokens: 5, output_tokens: 6, total_tokens: 11 };
+    const reported = await send(config(true, streamMode), true, sse(completed(usage)));
+    expect(isEagerRelaySseResponse(reported.response)).toBe(eager);
+    expect(reported.terminal.usage).toEqual(usage);
+    expect(reported.log.usage).toMatchObject({ inputTokens: 5, outputTokens: 6 });
+  });
+}
+
+// The Chat Completions and Claude Messages bridges and the WebSocket ingress rebuild their own usage
+// fields from the response and would forward an estimate without the marker; an internal decision
+// call settles spend from the body. None of them is estimated.
+for (const [name, options] of [
+  ["Chat Completions bridge", { inboundWire: "chat" }],
+  ["Claude Messages bridge", { inboundWire: "anthropic" }],
+  ["WebSocket ingress", { inboundTransport: "websocket" }],
+  ["internal decision call", { internalDecisionCall: true }],
+] as const satisfies ReadonlyArray<readonly [string, HandleResponsesOptions]>) {
+  for (const stream of [true, false]) {
+    test(`${name} (${stream ? "stream" : "JSON"}): no estimate and no marker even when opted in`, async () => {
+      const { response, terminal } = await send(config(true), stream, stream ? sse(completed()) : Response.json(completed()), options);
+      expect(response.headers.get(ESTIMATED_USAGE_HEADER)).toBeNull();
+      expect(terminal.usage).toBeUndefined();
+    });
+  }
+}
+

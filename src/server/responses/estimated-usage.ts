@@ -1,5 +1,7 @@
 import { estimateTokens } from "../../lib/token-estimate";
 import type { SsePayloadRewrite } from "../sse-payload-rewrite";
+import type { HandleResponsesOptions } from "./core-options";
+import type { OcxProviderConfig } from "../../types";
 
 /**
  * Response header marking estimated usage (#7427). `true`: the JSON body's usage is an estimate.
@@ -9,6 +11,23 @@ export const ESTIMATED_USAGE_HEADER = "x-opencodex-usage-estimated";
 
 /** Terminal events whose `response.usage` a client reads for context accounting. */
 const TERMINAL_TYPES = new Set(["response.completed", "response.incomplete"]);
+
+/**
+ * Whether this turn may carry an estimate: the provider opted in, and the client spoke HTTP
+ * Responses. The Chat Completions and Claude Messages bridges and the WebSocket ingress rebuild
+ * their own usage fields from the response and would pass an estimate on without the marker, so
+ * they never get one. An internal decision call (JEV) settles spend from its response body, so it
+ * never gets one either.
+ */
+export function estimatesMissingUsage(
+  provider: Pick<OcxProviderConfig, "estimateMissingUsage">,
+  options: Pick<HandleResponsesOptions, "inboundWire" | "inboundTransport" | "internalDecisionCall">,
+): boolean {
+  return provider.estimateMissingUsage === true
+    && (options.inboundWire ?? "responses") === "responses"
+    && options.inboundTransport !== "websocket"
+    && options.internalDecisionCall !== true;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -56,7 +75,8 @@ export function createEstimatedUsagePayloadRewrite(
   inputTokens: () => number, modelId: string, onApplied?: () => void,
 ): SsePayloadRewrite {
   return payload => {
-    if (!payload.includes("\"response.")) return payload;
+    // Cheap gate: only a terminal event is parsed, never every delta.
+    if (!payload.includes("response.completed") && !payload.includes("response.incomplete")) return payload;
     let parsed: unknown;
     try { parsed = JSON.parse(payload); } catch { return payload; }
     if (!isRecord(parsed) || typeof parsed.type !== "string" || !TERMINAL_TYPES.has(parsed.type)) return payload;

@@ -164,7 +164,9 @@ import { relaySseEagerBounded } from "../relay-eager";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { idleDeadline } from "../../lib/abort";
 import { resolveStallTimeoutMs } from "../../stall-timeout";
-import { createEstimatedUsagePayloadRewrite, ESTIMATED_USAGE_HEADER, estimatedUsageJson } from "./estimated-usage";
+import {
+  createEstimatedUsagePayloadRewrite, ESTIMATED_USAGE_HEADER, estimatedUsageJson, estimatesMissingUsage,
+} from "./estimated-usage";
 import { estimateInputTokens } from "./input-admission";
 import { formatErrorResponse } from "../../bridge";
 import {
@@ -474,7 +476,7 @@ export async function deliverPassthroughResponse(
   const { parsed, subagentQuotaFailureModel, clientRequestedStream, translatorBudget } = requestState;
   // #7427: opt-in estimated usage for a provider that omits it. Client-facing only; the request log,
   // spend and quota read the provider's original body.
-  const estimateUsage = route.provider.estimateMissingUsage === true;
+  const estimateUsage = estimatesMissingUsage(route.provider, options);
   let usageInputEstimate: number | undefined;
   const inputEstimate = (): number => usageInputEstimate ??= estimateInputTokens(parsed, route.modelId, route.provider);
   const { openAiSidecar } = sidecarState;
