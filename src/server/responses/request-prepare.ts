@@ -190,6 +190,7 @@ import {
 
 import { redactHostedImageDisplayPaths } from "../responses-hosted-image-display";
 import { eagerCodexToolCatalogSurface, warnEagerCodexToolCatalog } from "./codex-tool-catalog";
+import { codexTurnStartsNewHistory } from "../../adapters/anthropic/per-message-effort";
 
 /** Policy-routing evidence. The direct lane's settings-only body has no conversation to scan. */
 function routeEvidence(options: Pick<HandleResponsesOptions, "directRequest">, parsed: OcxParsedRequest): PolicyRequestEvidence {
@@ -527,6 +528,8 @@ export async function prepareResponsesRequest(
     // client body. Inside this try so a decode error answers exactly like a parse error.
     if (options.directRequest) parsed = options.directRequest.decode(parsed);
     parsed._nativeReasoningRetention = resolveNativeReasoningRetention(config);
+    // Codex's own "New" turn metadata, for the experimental Anthropic perMessageEffort option (#6895).
+    parsed._codexNewHistory = codexTurnStartsNewHistory(body, req.headers, options.inboundTransport);
     // Capture before route rewrites or hosted sidecars can add tools; replayed catalogs are history.
     // Direct decoders already own current function names (including legacy Chat functions).
     // Project only those names; bridging the conversation would retain its reasoning twice.
