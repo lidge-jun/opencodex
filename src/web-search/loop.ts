@@ -516,7 +516,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
 
   // Hard iteration bound (termination safety net); forceAnswer normally ends the loop sooner.
   // One iteration beyond the forced answer is reserved for its empty-answer recovery below.
-  const HARD_CAP = maxSearches + 3 + 2 * Number(deps.terminalContinuationGuard === true) + (deps.advisor ? MAX_ADVISOR_CONTINUATIONS_PER_REQUEST : 0);
+  const HARD_CAP = maxSearches + 3 + 2 * Number(deps.terminalContinuationGuard === true && adapter.name === "openai-chat") + (deps.advisor ? MAX_ADVISOR_CONTINUATIONS_PER_REQUEST : 0);
   let emptyAnswerRetries = 0;
   let terminalContinuations = 0;
   // Every iteration re-sends the full context, but only the last one's terminal reaches the bridge.
@@ -530,6 +530,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   const routedModelStallTimeoutMs = deps.routedModelStallTimeoutMs ?? 200_000;
 
   interface IterationResponse {
+    parsed: OcxParsedRequest;
     response: Response;
     responseAdapter: ProviderAdapter;
     clientAdvisorAllowed: boolean;
@@ -725,7 +726,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           && (!!declaredAdvisor || deps.advisor.exhausted())
           && toolChoiceToolPredicate(iterParsed.options.toolChoice,
             declaredAdvisor ? iterTools : [...iterTools, advisorCandidate])(advisorCandidate);
-        return { response, responseAdapter: requestAdapter, clientAdvisorAllowed, syntheticAdvisorAllowed };
+        return { parsed: iterParsed, response, responseAdapter: requestAdapter, clientAdvisorAllowed, syntheticAdvisorAllowed };
       };
 
       const recover = async (error: WebSearchAdapterEventError): Promise<IterationResponse | undefined> => {
@@ -1197,7 +1198,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
             const final = split.passthrough.find(event => event.type === "done");
             // Use the existing action/plan classifier and keep all hosted tool results.
             // A second announcement is a visible failure, never another silent stop.
-            const currentParsed = { ...parsed, context: { ...parsed.context, messages } };
+            const currentParsed = prepared.parsed;
             if (deps.terminalContinuationGuard && adapter.name === "openai-chat"
               && final?.type === "done" && !isTruncatedStopReason(final.stopReason)
               && !signal.aborted && !split.hasMalformedToolCall && split.calls.length === 0

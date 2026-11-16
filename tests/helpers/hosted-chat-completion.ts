@@ -116,3 +116,50 @@ export async function checkHostedChatCompletion(row: CompletionCase, stream: boo
     release();
   }
 }
+
+
+// Exercise iteration policy directly, including live output and the forced-answer request.
+export async function checkHostedRecoveryIteration(frames: string[], live = false) {
+  const release = acquireOwnedSpendHome();
+  const { runWithWebSearch } = await import("../../src/web-search/loop");
+  const { buildWebSearchTool } = await import("../../src/web-search/synthetic-tool");
+  const { createTestTranslatorBudget } = await import("./translator-budget");
+  const originalFetch = globalThis.fetch;
+  const seen: import("../../src/types").OcxParsedRequest[] = [];
+  let frame: string | undefined;
+  let searches = 0;
+  try {
+    globalThis.fetch = async () => { searches++; return Response.json({ results: [] }); };
+    const response = await runWithWebSearch({
+      terminalContinuationGuard: true, streamRoutedModelOutput: live,
+      parsed: { modelId: "fixture", stream: true, options: {}, context: {
+        messages: [{ role: "user", content: "Please fix the file and test it." }],
+        tools: [{ name: "read_fixture", parameters: { type: "object", properties: {} } }, buildWebSearchTool()],
+      } },
+      adapter: {
+        name: "openai-chat",
+        buildRequest(request) {
+          frame = frames[seen.length];
+          seen.push(structuredClone(request));
+          assert.notEqual(frame, undefined, "unexpected recovery send");
+          return { url: "https://fixture.invalid", method: "POST", headers: {}, body: "{}" };
+        },
+        fetchResponse: async () => new Response("wire"),
+        async *parseStream() {
+          if (frame === "search") {
+            yield { type: "tool_call_start", id: "fixture-search", name: "web_search" };
+            yield { type: "tool_call_delta", arguments: '{"query":"fixture"}' };
+            yield { type: "tool_call_end" };
+          } else if (frame === "thinking") yield { type: "thinking_delta", thinking: "Checking the fixture." };
+          else if (frame) yield { type: "text_delta", text: frame === "plan" ? "I'll inspect the file and apply the fix." : frame };
+          yield { type: "done" };
+        },
+      },
+      backend: "exa", exaApiKey: "synthetic-not-a-key", hostedTool: { type: "web_search" },
+      settings: { model: "fixture", reasoning: "low", timeoutMs: 1000 }, maxSearches: 1,
+      incomingMeta: { headers: new Headers(), translatorBudget: createTestTranslatorBudget() },
+    });
+    const text = await response.text();
+    return { seen, searches, text };
+  } finally { globalThis.fetch = originalFetch; release(); }
+}
