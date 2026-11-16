@@ -14,8 +14,10 @@ import type { ProviderModelDiscoverySpec } from "./types";
 // overview, migration guide, effort and pricing pages (platform.claude.com).
 // 261008 Claude Haiku 5.5: 1M / 128K, adaptive thinking, effort low..max (default medium),
 // per platform.claude.com Haiku 5.5 overview, migration guide and pricing page.
-export const ANTHROPIC_MODELS = ["claude-fable-5-1", "claude-fable-5", "claude-sonnet-5-5", "claude-sonnet-5", "claude-opus-5-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-5-5", "claude-haiku-4-5"];
-export const ANTHROPIC_MODEL_CONTEXT_WINDOWS: Record<string, number> = { "claude-fable-5-1": 1_000_000, "claude-sonnet-5-5": 1_000_000, "claude-sonnet-5": 1_000_000, "claude-fable-5": 1_000_000, "claude-opus-5-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000, "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-haiku-5-5": 1_000_000, "claude-haiku-4-5": 200_000 };
+// 261110 Claude Fable 5.2 (`claude-fable-5-2`, released 2026-11-09): 1M / 128K, adaptive thinking
+// always on, effort low..max (default high), per the Fable 5.2 overview, what's-new and pricing pages.
+export const ANTHROPIC_MODELS = ["claude-fable-5-2", "claude-fable-5-1", "claude-fable-5", "claude-sonnet-5-5", "claude-sonnet-5", "claude-opus-5-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-5-5", "claude-haiku-4-5"];
+export const ANTHROPIC_MODEL_CONTEXT_WINDOWS: Record<string, number> = { "claude-fable-5-2": 1_000_000, "claude-fable-5-1": 1_000_000, "claude-sonnet-5-5": 1_000_000, "claude-sonnet-5": 1_000_000, "claude-fable-5": 1_000_000, "claude-opus-5-5": 1_000_000, "claude-opus-5": 1_000_000, "claude-opus-4-8": 1_000_000, "claude-opus-4-7": 1_000_000, "claude-opus-4-6": 1_000_000, "claude-sonnet-4-6": 1_000_000, "claude-haiku-5-5": 1_000_000, "claude-haiku-4-5": 200_000 };
 // All seeded Claude models support vision: https://platform.claude.com/docs/en/models/overview
 export const ANTHROPIC_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
   ANTHROPIC_MODELS.map(id => [id, ["text", "image"]]),
@@ -43,6 +45,7 @@ export const ANTHROPIC_DEFAULT_MAX_OUTPUT_TOKENS = 64_000;
  */
 export const ANTHROPIC_MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   "claude-haiku-5-5": 128_000,
+  "claude-fable-5-2": 128_000,
   "claude-fable-5-1": 128_000,
   "claude-fable-5": 128_000,
   "claude-sonnet-5-5": 128_000,
@@ -1168,8 +1171,11 @@ export const CLINE_PASS_MODEL_INPUT_MODALITIES: Record<string, string[]> = Objec
 // (anthropic/claude-sonnet-4-6) pin one route and stay valid, they are just not seeded.
 // 260923: `claude-opus-5-5` pool (anthropic, aws eu, vertex, vertex-eu members; all 1M / 128K,
 // vision) read from the same catalogue endpoint the day after Anthropic's release.
+// 261110: `claude-fable-5-2` pool (api.opper.ai/v3/models?q=claude-fable-5-2: pooled, Anthropic US route,
+// 1M / 128K).
 export const OPPER_MODELS = [
   "claude-sonnet-4-6",
+  "claude-fable-5-2",
   "claude-opus-5-5",
   "claude-opus-5",
   "gpt-5.5",
@@ -1183,6 +1189,7 @@ export const OPPER_MODELS = [
 // (kimi-k3 output); live discovery owns which models exist.
 export const OPPER_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "claude-sonnet-4-6": 1_000_000,
+  "claude-fable-5-2": 1_000_000,
   "claude-opus-5-5": 1_000_000,
   "claude-opus-5": 1_000_000,
   "gpt-5.5": 1_050_000,
@@ -1194,6 +1201,7 @@ export const OPPER_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
 };
 export const OPPER_MODEL_MAX_OUTPUT_TOKENS: Record<string, number> = {
   "claude-sonnet-4-6": 64_000,
+  "claude-fable-5-2": 128_000,
   "claude-opus-5-5": 128_000,
   "claude-opus-5": 128_000,
   "gpt-5.5": 128_000,
@@ -1252,3 +1260,38 @@ export const STEPFUN_MODEL_INPUT_MODALITIES: Record<string, string[]> = {
 export const STEPFUN_NO_VISION_MODELS = ["step-3.5-flash"];
 
 export const STEPFUN_REASONING_EFFORTS = ["low", "medium", "high"];
+
+/*
+ * Morph Ultra plan (https://www.morphllm.com/products/ultra, verified 2026-11-13). Ultra is one
+ * subscription with no token meter on Kimi K3.1 and DeepSeek V4.1 Flash; every other Morph model
+ * bills per token, and `morph-dsv41flash-abliterated` is Ultra-covered only for accounts approved
+ * for privileged access (403 otherwise). Only the covered rows are seeded, so the picker cannot
+ * offer a model the subscription does not include. Per docs.morphllm.com/sdk/components/fast-models
+ * all of them are 1,048,576-token, text+image, tool- and reasoning-capable.
+ */
+export const MORPH_ULTRA_MODELS = ["morph-kimik31", "morph-dsv41flash-1017"];
+export const MORPH_ULTRA_CONTEXT_WINDOW = 1_048_576;
+export const MORPH_ULTRA_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
+  MORPH_ULTRA_MODELS.map(id => [id, MORPH_ULTRA_CONTEXT_WINDOW]),
+);
+export const MORPH_ULTRA_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
+  MORPH_ULTRA_MODELS.map(id => [id, ["text", "image"]]),
+);
+/*
+ * Kimi K3.1 documents none/low/medium/high/xhigh/max. DeepSeek V4.1 Flash documents
+ * none/low/high/xhigh/max and folds medium into high; `minimal` is a Codex-side sentinel that
+ * requestToCodexEffort maps to `low`, so it needs no wire entry there.
+ *
+ * `none` needs an explicit identity entry on both models. Without one, mapReasoningEffort turns
+ * `none` into `undefined` (requestToCodexEffort) and the adapter omits `reasoning_effort`
+ * entirely — which Morph reads as "reasoning on by default", the opposite of what the picker
+ * promised. The identity entry sends `reasoning_effort: "none"` and actually disables it.
+ */
+export const MORPH_ULTRA_REASONING_EFFORTS: Record<string, string[]> = {
+  "morph-kimik31": ["none", "low", "medium", "high", "xhigh", "max"],
+  "morph-dsv41flash-1017": ["none", "low", "high", "xhigh", "max"],
+};
+export const MORPH_ULTRA_REASONING_EFFORT_MAPS: Record<string, Record<string, string>> = {
+  "morph-kimik31": { none: "none" },
+  "morph-dsv41flash-1017": { none: "none", medium: "high" },
+};

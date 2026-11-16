@@ -17,6 +17,7 @@ import {
   jevDecisionModelOptions,
 } from "../jev-decision-service";
 import type { ModelOption, ProviderOption } from "./combo-workspace-types";
+import { Select } from "../ui";
 
 export type JevDecisionPatch = {
   decisionProvider?: string | null;
@@ -186,29 +187,26 @@ export function ComboJevDecisionSection({
       {method === "systemone" && servers.length > 0 && (
         <div className="cwi-field" style={{ marginTop: 8 }}>
           <label htmlFor={`${idPrefix}-decision-provider`}>{t("cws.jev.decisionService")}</label>
-          <select
+          <Select
             id={`${idPrefix}-decision-provider`}
-            className="input"
+            fullWidth
             value={decisionProvider?.trim() ?? ""}
             disabled={disabled}
-            aria-describedby={selectedServer?.issue
-              ? `${idPrefix}-decision-provider-hint ${idPrefix}-decision-provider-issue`
-              : `${idPrefix}-decision-provider-hint`}
-            aria-invalid={selectedServer?.issue ? true : undefined}
-            onChange={(e) => onChange({ decisionProvider: e.target.value, decisionModel: null })}
-          >
-            {!selectedServer && <option value="" disabled>—</option>}
-            {servers.map(option => (
+            describedBy={selectedServer?.issue
+              ? idPrefix + "-decision-provider-hint " + idPrefix + "-decision-provider-issue"
+              : idPrefix + "-decision-provider-hint"}
+            invalid={selectedServer?.issue !== undefined}
+            onChange={(next) => onChange({ decisionProvider: next, decisionModel: null })}
+            options={[
+              ...(selectedServer ? [] : [{ value: "", label: "—", disabled: true }]),
               // An unusable row stays visible with its reason; only the stored one stays selectable.
-              <option
-                key={option.id!}
-                value={option.id!}
-                disabled={option.issue !== undefined && option.id !== selectedServer?.id}
-              >
-                {option.issue ? `${option.id} (${t(JEV_DECISION_ISSUE_LABEL_KEYS[option.issue])})` : option.id}
-              </option>
-            ))}
-          </select>
+              ...servers.map(option => ({
+                value: option.id!,
+                label: option.issue ? `${option.id} (${t(JEV_DECISION_ISSUE_LABEL_KEYS[option.issue])})` : option.id!,
+                disabled: option.issue !== undefined && option.id !== selectedServer?.id,
+              })),
+            ]}
+          />
           <p id={`${idPrefix}-decision-provider-hint`} className="muted" style={{ fontSize: 12, margin: "8px 0 0", overflowWrap: "anywhere" }}>
             {t("cws.jev.decisionServiceHint")}
             {selectedServer?.baseUrl && <> <code>{selectedServer.baseUrl}</code></>}

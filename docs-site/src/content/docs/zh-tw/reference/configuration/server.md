@@ -10,7 +10,7 @@ description: 監聽器、遠端存取、許可金鑰、逾時、儲存、sidecar
 | 欄位 | 型別 | 預設值 | 意義 |
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | 代理監聽連接埠。 |
-| `hostname?` | `string` | `"127.0.0.1"` | 綁定位址。非回送綁定需要 `OPENCODEX_API_AUTH_TOKEN`。 |
+| `hostname?` | `string` | `"127.0.0.1"` | 繫結位址。非回環繫結需要 `config.apiKeys` 中的用戶端金鑰，或依序從 `OPENCODEX_API_AUTH_TOKEN`、`OCX_API_TOKEN_FILE`、已安裝且僅擁有者可讀的 `service-api-token` 解析的共用資料權杖。參閱[遠端存取](#remote-access)。 |
 | `proxy?` | `string` | — | 對外 HTTP(S) 或 SOCKS5 代理 URL（`socks5://host:port`）或 `${ENV_VAR}`。HTTP URL 僅在那些變數未設定時套用至 `HTTP_PROXY` / `HTTPS_PROXY`。SOCKS5 URL 使用內建的真實 SOCKS5 通道，也會套用至 `ALL_PROXY`（`ocx start --socks5`），並清除此行程繼承的 `HTTP(S)_PROXY`。回送保留在 `NO_PROXY` 中。 |
 | `emptyCompletionRetry?` | `boolean` | `false` | 明確啟用：當 Responses 完成時沒有文字或工具呼叫，以相同請求重試一次。重試可能產生費用。`OCX_EMPTY_COMPLETION_RETRY=0` 可在不變更設定的情況下停用；combo 與 routed-compaction turn 不適用。 |
 | `stallTimeoutSec?` | `number` | `300`（public）/ 停用（local） | 上游無有效進展（Responses 與原生 Chat）多少秒後切斷串流。未設定時**本地**上游（loopback、private、`.local`/`.lan` 名稱）預設停用，公網上游預設 300 秒；正值對兩者生效（最小 1 秒）；`0` 全面停用靜默 watchdog。對於把 canonical ChatGPT SSE 折疊為非串流 JSON 的 Responses 請求，即使 watchdog 已停用，仍保留獨立的 15 分鐘整體上限。`/v1/responses/compact` 的擱置回應本文讀取共用此預算，但即使本地上游也預設 300 秒；明確值（含 `0`）優先。 |
@@ -30,6 +30,7 @@ description: 監聽器、遠端存取、許可金鑰、逾時、儲存、sidecar
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | 可用時開啟 | 網頁搜尋 sidecar 選項。 |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | 可用時開啟 | 圖片描述 sidecar 選項。 |
 | `images?` | `OcxImagesConfig` | 自動 OpenAI 選擇 | Codex `image_gen` 的獨立 Images 中繼選項。 |
+| `telemetry?` | `OcxTelemetryConfig` | 人工知悉提示後預設開啟 | 匿名每日使用遙測的同意狀態（`decision`、`decidedAt`、`noticeShownAt`）。在人工看到提示或主動同意之前不會傳送任何資料。可被 `OCX_TELEMETRY=0` 或 `DO_NOT_TRACK=1` 覆寫。請見[遙測（`telemetry`）](#遙測telemetry)與[遙測與隱私](/zh-tw/guides/telemetry/)。 |
 
 若較舊的開發組建在備份支援存在前變更了 resume-history 中繼資料，請執行 `ocx recover-history --legacy-openai --yes` 以強制原生供應商復原。
 此命令會重新標記所有含有使用者訊息的 `opencodex` row，其中也包含正常的專用 provider 歷史；執行前請查看 lifecycle reference 中的完整範圍警告。
@@ -38,16 +39,18 @@ description: 監聽器、遠端存取、許可金鑰、逾時、儲存、sidecar
 
 原生 Chat 等待上游輸出時也使用 `stallTimeoutSec`。非空文字、推理、拒絕內容、工具更新及完成事件會重設等待額度；保活註解、僅角色事件及單獨的用量資訊不會。等待慢速用戶端讀取時暫停計時。逾時產生 `upstream_stall_timeout`：串流請求收到錯誤事件，非串流請求回傳 HTTP 502。終態結果到達前取消請求會回傳取消錯誤，不會將部分答案當成成功。非串流 Chat 支援 LF、CRLF 與多行 data 的 SSE 格式。
 
+<a id="remote-access"></a>
+
 ## 遠端存取
 
-預設的 `127.0.0.1` 綁定僅限回送。如 `0.0.0.0` 的非回送位址需要在 `/api/*` 與 data plane 上都進行 token 認證。在啟動前匯出 token：
+預設的 `127.0.0.1` 僅繫結回環位址。繫結至 `0.0.0.0` 等非回環位址時，模型請求需要 `config.apiKeys` 中的用戶端金鑰或共用資料權杖。管理路由 `/api/*` 使用獨立的 `OPENCODEX_ADMIN_AUTH_TOKEN` 或產生的管理員權杖，在回環上也一樣。資料憑證不授予管理存取權；切勿將管理員權杖交給模型用戶端。
 
 ```bash
 export OPENCODEX_API_AUTH_TOKEN="your-secret-token"
 ocx start
 ```
 
-代理在沒有此變數時拒絕遠端綁定。對於背景服務，請在 `ocx service install` 前匯出它，以便 launchd、systemd 或 Task Scheduler 接收它。客戶端應發送：
+範例使用環境變數權杖。若 `OCX_API_TOKEN_FILE` 或私有 `service-api-token` 已提供權杖，或已設定有效的用戶端金鑰，就不必匯出該變數。`ocx service install` 可以建立缺少的權杖檔案，不強制要求匯出此變數。模型用戶端可以傳送：
 
 ```text
 x-opencodex-api-key: your-secret-token
@@ -55,13 +58,13 @@ x-opencodex-api-key: your-secret-token
 
 | 端點 | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
 | --- | --- | --- | --- |
-| `/v1/responses` | 不接受 | **必填** | 不接受 |
-| `/v1/chat/completions` | 不接受 | **必填** | 不接受 |
+| `/v1/responses` | 接受 | 接受 | 不接受 |
+| `/v1/chat/completions` | 接受 | 接受 | 不接受 |
 | `/v1/messages` | 接受 | 接受 | 接受 |
 | `/v1/messages/count_tokens` | 接受 | 接受 | 接受 |
 | `/v1/models` | 接受 | 接受 | 接受 |
 
-Responses 與 Chat Completions 為可能的 Codex Direct passthrough 保留 `Authorization`，因此那裡僅接受專屬的許可標頭。儀表板生成的 `apiKeys` 可在啟動後取代環境 token；候選值以常數時間比對。
+Responses 與 Chat Completions 接受 `x-opencodex-api-key` 中已識別的資料平面憑證；僅當該專用標頭缺少或移除前後空白後為空時，也接受 `Authorization: Bearer`。移除前後空白後非空的專用標頭具有優先權，即使其值無效，有效 bearer 也不能補救。無關 bearer 不授予代理存取權，這些路由不接受 `x-api-key`。產生的 `apiKeys` 與共用資料權杖以常數時間比較；管理憑證不授予模型存取權。
 
 Messages 與 `count_tokens` 為相容路由客戶端仍接受三種許可形式。但在非回環綁定上，原生 Anthropic 透傳只透過
 `x-opencodex-api-key` 接受代理許可，並將 `Authorization` 與 `x-api-key` 保留給 Anthropic
@@ -126,6 +129,35 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 :::caution[轉發的回送未認證]
 普通 `ssh -L` 在你的本機回送上監聽，對預設的未認證綁定是安全的。請勿使用 `ssh -g -L`、廣泛的容器發布，或將客戶端暴露在 `0.0.0.0` 上的轉發模式。不確定時請用 `ssh -L 127.0.0.1:20100:localhost:10100` 明確綁定。
 :::
+
+## 遙測（`telemetry`）
+
+匿名每日使用遙測僅在使用者看到告知提示（透過 GUI 彈窗或互動式終端機提示）後才預設開啟。`config.json` 中的 `telemetry` 區塊記錄該同意狀態：
+
+```json
+{
+  "telemetry": {
+    "decision": "accepted",
+    "decidedAt": "2026-11-07T09:00:00.000Z",
+    "noticeShownAt": "2026-11-07T09:00:00.000Z"
+  }
+}
+```
+
+| 欄位 | 型別 | 預設值 | 意義 |
+| --- | --- | --- | --- |
+| `telemetry.decision?` | `"accepted" \| "declined"` | 未設定（未決定） | 使用者的明確選擇。`"declined"` 會停用遙測並立即刪除 `<OPENCODEX_HOME>/telemetry-id.json`；`"accepted"` 會啟用每日報告。 |
+| `telemetry.decidedAt?` | `string` (ISO 8601) | 未設定 | 記錄 `decision` 的 UTC 時間戳記。僅傳送嚴格晚於 `decidedAt ?? noticeShownAt` 所在 UTC 日期的已完成 UTC 日曆日（`day > formatUtcDay(decidedAt ?? noticeShownAt)`）；同意當天及更早的日期絕不會補送。 |
+| `telemetry.noticeShownAt?` | `string` (ISO 8601) | 未設定 | 人類使用者在網頁儀表板或互動式終端機中看到告知提示的 UTC 時間戳記。當 `decision` 未設定時，僅在已設定 `noticeShownAt` 時才會傳送遙測（`default-on`）；否則代理保持在 `awaiting-notice` 狀態。 |
+
+收集器端點（`https://telemetry.opencodex.me/v1/events`）是程式碼常數，無法在 `config.json` 中設定。
+
+兩個環境變數會覆寫 `config.json` 並立即停用遙測，且不會修改已儲存的 `config.json`（在代理啟動或排程器週期偵測到任一變數時，還會在 `<OPENCODEX_HOME>/telemetry-state.json` 中記錄當日 UTC 日期為 `ineligibleThroughDay` 並刪除 `<OPENCODEX_HOME>/telemetry-id.json`，因此移除變數後不會補送這些日期，並會產生新的安裝 ID）：
+
+- `OCX_TELEMETRY=0`（不分大小寫，也接受 `false`、`off` 或 `no`）
+- `DO_NOT_TRACK=1`（不分大小寫，也接受 `true` 或 `yes`）
+
+`ocx config set telemetry` 與 `ocx config unset telemetry` 會被拒絕，且 `ocx config import` 對所有呼叫方都會忽略匯入的 `telemetry` 區塊並保留已持久化的同意狀態；請改用 `ocx telemetry enable`（需要互動式終端機並確認告知提示，否則以 `agent_consent_required` / `tty_required` 結束）、`ocx telemetry disable`、`ocx telemetry status [--json]` 或儀表板 **Proxy details** 中的開關。完整負載結構與保留政策請參閱[遙測與隱私](/zh-tw/guides/telemetry/)。
 
 ## 儲存清理
 

@@ -4,16 +4,20 @@
 // Probe rows confer no update authority. Child rows retain only their own child.
 import { orchestratedChildReview } from "./update-review-orchestrated-child";
 import { orchestratedEntryReview } from "./update-review-orchestrated-entry";
+import { signedSupplyReview } from "./update-review-signed-supply";
 
 const basePrimitiveAllowlist: readonly (readonly [string, string])[] = [
+  ["src/update/config-preflight.ts:<module>:import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync } from \"node:fs\";", "read-only config preflight: open with O_RDONLY | O_NONBLOCK, inspect and read the fd, then close it"],
+  ["src/update/config-preflight.ts:runConfigPreflight:openSync", "read-only config preflight default opener; called with O_RDONLY | O_NONBLOCK"],
+  ["src/update/config-preflight.ts:runConfigPreflight:closeSync", "read-only config preflight default descriptor closer"],
   ["bin/ocx.mjs:runPackageManagerSelfUpdate:probeSpawnSync(bun.path, [\"--no-env-file\", join(here, \"../src/update/orchestrated-identity-probe-entry.ts\"), \"__update-orchestrated-identity\"], { encoding: \"utf8\", timeout: 8000, maxBuffer: 8192, windowsHide: true, stdio: [\"ignore\", \"pipe\", \"ignore\"], env: { ...updateHomeProbeEnvironment(process.env, { codexHome: process.env.CODEX_HOME ?? \"\", opencodexHome: configDir() }), OCX_IDENTITY_CLI_ROOT: resolve(here, \"..\"), OCX_IDENTITY_INSTALLER: manager, OCX_IDENTITY_TARGET: child.version }, })","read-only: verify child identity before mutation"],
   ["bin/ocx.mjs:<module>:probeSpawnSync(bun.path, [\"--no-env-file\", join(here, \"../src/update/orchestrated-identity-probe-entry.ts\"), process.argv[2]], { stdio: \"inherit\", timeout: 8000, windowsHide: true, env: { ...process.env, OCX_IDENTITY_CLI_ROOT: resolve(here, \"..\"), OCX_IDENTITY_INSTALLER: \"\", OCX_IDENTITY_TARGET: \"\" }, })","read-only: identity probe before launcher mutation"],
   ["bin/ocx.mjs:<module>:probeSpawnSync(bun.path, [\"--no-env-file\", cliPath, \"update\", \"--plan\", \"--json\", ...(version ? [\"--version\", version] : tag ? [\"--tag\", tag] : [])], { encoding: \"utf8\", maxBuffer: 65536, timeout: 60000, windowsHide: true, stdio: [\"ignore\", \"pipe\", 2], env: process.env })","read-only: orchestrated plan probe"],
   ["bin/ocx.mjs:<module>:probeSpawnSync(bun.path, [\"--no-env-file\", join(here, \"../src/update/orchestrated-identity-probe-entry.ts\"), \"__update-orchestrated-identity\"], { encoding: \"utf8\", maxBuffer: 8192, timeout: 8000, windowsHide: true, stdio: [\"ignore\", \"pipe\", 2], env: { ...updateHomeProbeEnvironment(process.env, { codexHome: process.env.CODEX_HOME ?? \"\", opencodexHome: configDir() }), OCX_IDENTITY_CLI_ROOT: resolve(here, \"..\"), OCX_IDENTITY_INSTALLER: \"\", OCX_IDENTITY_TARGET: \"\" }, })","read-only: orchestrated identity probe"],
-  ["bin/ocx.mjs:<module>:probeSpawnSync(invocation.file, invocation.args, { stdio: capture ? \"pipe\" : \"ignore\", encoding: \"utf8\", timeout: 20000, windowsHide: true, cwd: PNPM_READ_CWD, env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(process.env)), ...invocation.options })","read-only: pnpm ownership query"],
+  ["bin/ocx.mjs:<module>:probeSpawnSync(invocation.file, invocation.args, { stdio: capture ? \"pipe\" : \"ignore\", encoding: \"utf8\", timeout: 20000, windowsHide: true, cwd, env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(invocation.env ?? process.env)), ...invocation.options })","read-only: pnpm ownership query"],
   ["bin/ocx.mjs:<module>:spawn: probeSpawn","pre-mutation: orchestrator spawns an independently admitted update child"],
-  ["src/update/index.ts:runPnpmCandidate:probeSpawn(invocation.file, invocation.args, { stdio: capture ? \"pipe\" : \"ignore\", encoding: \"utf8\", timeout: 20_000, windowsHide: true, cwd: PNPM_READ_CWD, env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(probeEnv)), ...invocation.options, })","read-only: pass probe to pnpm ownership or registry inspection"],
-  ["src/update/index.ts:resolveCurrentPnpmGlobalOwner:runPnpmCandidate(commandPath, args, capture, probeSpawn, deps.env)","read-only: pass probe to pnpm ownership or registry inspection"],
+  ["src/update/index.ts:runPnpmCandidate:probeSpawn(invocation.file, invocation.args, { stdio: capture ? \"pipe\" : \"ignore\", encoding: \"utf8\", timeout: 20_000, windowsHide: true, cwd, env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(owner ? pnpmOwnerEnvironment(owner, probeEnv) : probeEnv)), ...invocation.options, })","read-only: pass probe to pnpm ownership or registry inspection"],
+  ["src/update/index.ts:resolveCurrentPnpmGlobalOwner:runPnpmCandidate(commandPath, args, capture, probeSpawn, deps.env, owner)","read-only: pass probe to pnpm ownership or registry inspection"],
   ["src/update/index.ts:selectedPnpmOwner:spawn: probeSpawn","read-only: pass probe to pnpm ownership or registry inspection"],
   ["src/update/index.ts:latestVersion:selectedPnpmOwner(owner, probeSpawn, probeEnv)","read-only: pass probe to pnpm ownership or registry inspection"],
   ["src/update/index.ts:latestVersion:probeSpawn(manager.bin, manager.args, { encoding: \"utf8\", timeout: 12000, windowsHide: true, cwd: installer === \"pnpm\" ? PNPM_READ_CWD : undefined, env: installer === \"pnpm\" ? pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(manager.env ?? probeEnv ?? process.env)) : unprivilegedOwnershipMutationEnvironment(manager.env ?? probeEnv ?? process.env), ...manager.options, })","read-only: pass probe to pnpm ownership or registry inspection"],
@@ -27,6 +31,10 @@ const basePrimitiveAllowlist: readonly (readonly [string, string])[] = [
   ["src/update/posix-install-supervisor.mjs:publish:writeFileSync(temp, JSON.stringify({ ...marker, installerPid: pid, installerPgid: pid }), { flag: \"wx\", mode: 0o600 })","supervisor child: replaces only an existing marker in phase mutating with an integer pid (exclusive 0600 temp then rename); every reviewed caller passes join(configDir(), update-orchestrated.json)"],
   ["src/update/posix-install-supervisor.mjs:publish:renameSync(temp, path)","supervisor child: replaces only an existing marker in phase mutating with an integer pid; every reviewed caller passes join(configDir(), update-orchestrated.json)"],
   ["src/update/posix-install-supervisor.mjs:publish:unlinkSync(temp)","supervisor child: removes only its own unrenamed temp file"],
+  ["src/update/windows-installer-marker.mjs:<module>:import { readFileSync, renameSync, unlinkSync, writeFileSync } from \"node:fs\";","Windows installer witness: marker publication below; reviewed callers runNpmInstall and the runWindowsInstallerSync bridge pass join(configDir(), update-orchestrated.json)"],
+  ["src/update/windows-installer-marker.mjs:publishWindowsInstallerPid:writeFileSync(temp, JSON.stringify({ ...marker, installerPid: pid }), { flag: \"wx\", mode: 0o600 })","Windows installer witness: replaces only a marker awaiting an installer with the supervisor pid (exclusive 0600 temp then rename)"],
+  ["src/update/windows-installer-marker.mjs:publishWindowsInstallerPid:renameSync(temp, markerPath)","Windows installer witness: replaces only a marker awaiting an installer with the supervisor pid"],
+  ["src/update/windows-installer-marker.mjs:publishWindowsInstallerPid:unlinkSync(temp)","Windows installer witness: removes only its own unrenamed temp file"],
   ["src/update/posix-install-supervisor.mjs:alive:process.kill(-pgid, 0)","supervisor child: signal-zero probe of the installer group this supervisor spawned"],
   ["src/update/posix-install-supervisor.mjs:supervise:spawn(process.execPath, [entry, \"install\"], { detached: true, stdio: [\"pipe\", \"ignore\", \"inherit\"], cwd: config.cwd, env: process.env })","supervisor child: starts its own detached installer group; reviewed caller runPosixInstallerSync launches this entry via guardedSpawnSync(authorizeMutation, 'package') at posix-install-supervisor.mjs:18"],
   ["src/update/posix-install-supervisor.mjs:runPosixInstallerSupervisorMain:spawn(input.file, input.args, { cwd: input.cwd, env: process.env, stdio: [\"ignore\", \"inherit\", \"inherit\"] })","supervisor child: runs exactly the installer its stdin caller supplied, with the invoking user's authority; reviewed caller runPosixInstallerSync launches this entry via guardedSpawnSync(authorizeMutation, 'package') at posix-install-supervisor.mjs:18"],
@@ -60,7 +68,7 @@ const basePrimitiveAllowlist: readonly (readonly [string, string])[] = [
     "bounded probe or ordinary launcher; no update control"
   ],
   [
-    "bin/ocx.mjs:runPackageManagerSelfUpdate:probeSpawnSync(invocation.file, invocation.args, { stdio: capture ? \"pipe\" : \"ignore\", encoding: \"utf8\", timeout: 20_000, windowsHide: true, cwd: PNPM_READ_CWD, env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(process.env)), ...invocation.options, })",
+    "bin/ocx.mjs:runPackageManagerSelfUpdate:probeSpawnSync(invocation.file, invocation.args, { stdio: capture ? \"pipe\" : \"ignore\", encoding: \"utf8\", timeout: 20_000, windowsHide: true, cwd, env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(invocation.env ?? process.env)), ...invocation.options, })",
     "bounded probe or ordinary launcher; no update control"
   ],
   [
@@ -86,10 +94,6 @@ const basePrimitiveAllowlist: readonly (readonly [string, string])[] = [
   [
     "bin/ocx.mjs:<module>:probeSpawn(bun, [cliPath, `${NODE_LAUNCH_PROOF_PREFIX}${launchProof}`, ...process.argv.slice(2).filter(arg => !arg.startsWith(NODE_LAUNCH_PROOF_PREFIX))], { stdio: \"inherit\", // A headless Windows parent (Task Scheduler, dashboard restart, shortcut) has no // console to inherit. Without this flag Windows allocates a visible console for // the long-running Bun child, and closing that window kills the proxy (#1236). windowsHide: true, env: { // A cache shared with another Bun version (the CI test runner's) is evicted on every start. ...scopeTranspilerCacheToRuntime(inheritedEnv, bunRuntime.version, join), [NODE_LAUNCH_CONTEXT_ENV]: launchContext, [BUN_RUNTIME_SOURCE_ENV]: bunRuntime.source, [BUN_RUNTIME_PATH_ENV]: bunRuntime.path, }, })",
     "bounded probe or ordinary launcher; no update control"
-  ],
-  [
-    "bin/ocx.mjs:<module>:child.kill(sig)",
-    "only this function's exact returned child / ordinary signal relay"
   ],
   [
     "src/update/async-check.ts:<module>:defaultDeps: AsyncLookupDeps = { ownerFn: pnpmOwner, spawnFn: probeSpawn }",
@@ -209,7 +213,7 @@ const basePrimitiveAllowlist: readonly (readonly [string, string])[] = [
   ["src/update/pnpm-read-policy.mjs:withPnpmCommandCwd:writeFileSync(join(cwd, files[0]), \"packages: []\\nignorePnpmfile: true\\n\", { flag: \"wx\", mode: 0o600 })","exclusive private workspace files or identity-checked empty directory"],
   ["src/update/pnpm-read-policy.mjs:withPnpmCommandCwd:writeFileSync(join(cwd, files[1]), \"ignore-pnpmfile=true\\n\", { flag: \"wx\", mode: 0o600 })","exclusive private workspace files or identity-checked empty directory"],
   ["src/update/pnpm-read-policy.mjs:withPnpmCommandCwd:rmdirSync(cwd)","exclusive private workspace files or identity-checked empty directory"],
-  ["src/update/transactional-install.mjs:<module>:import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from \"node:fs\";","private workspace, stage marker and committed-transaction recovery marker writes below only"],
+  ["src/update/transactional-install.mjs:<module>:import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync, writeFileSync } from \"node:fs\";","private workspace, stage marker and committed-transaction recovery marker writes below only"],
   ["src/update/transactional-install.mjs:createOwnedStage:writeFileSync(join(stageRoot, UPDATE_OWNER_MARKER), JSON.stringify({ schema: 1, kind: \"staging\", pkgName, pid: process.pid, createdAt: (deps.now ?? Date.now)(), }), { flag: \"wx\" })","exclusive private staging marker"],
   ["src/update/transactional-install.mjs:npmUpdateTransaction:writeFileSync(recoveryMarkerPath(scopeDir), JSON.stringify({ at: new Date().toISOString(), backup: backupPackage, live: packageDir, restore: 'move \"' + backupPackage + '\" back to \"' + packageDir + '\"', error: String(error?.message ?? error), rollbackError: String(rollbackError?.message ?? rollbackError), }, null, 2))","recovery marker for this already committed package transaction"],
   ["src/update/transactional-install.mjs:npmUpdateTransaction:writeFileSync(recoveryMarkerPath(scopeDir), JSON.stringify({ at: new Date().toISOString(), backup: backupPackage, live: packageDir, restore: 'move \"' + backupPackage + '\" back to \"' + packageDir + '\"', error: \"post-swap verification failed: \" + liveCheck.failures.join(\"; \"), rollbackError: String(rollbackError?.message ?? rollbackError), }, null, 2))","recovery marker for this already committed package transaction"],
@@ -217,4 +221,4 @@ const basePrimitiveAllowlist: readonly (readonly [string, string])[] = [
   ["src/update/npm-install.mjs:runNpmInstall:process.stderr.write(chunk)","bounded helper protocol output; no successful update publication"],
   ["src/update/refresh-scheduler.ts:createRefreshScheduler:deps.write(tag, latest, deps.now())","version badge cache only; no runtime or install authority"]
 ];
-export const updatePrimitiveAllowlist: readonly (readonly [string, string])[] = [...basePrimitiveAllowlist, ...orchestratedEntryReview.primitive, ...orchestratedChildReview.primitive];
+export const updatePrimitiveAllowlist: readonly (readonly [string, string])[] = [...basePrimitiveAllowlist, ...orchestratedEntryReview.primitive, ...orchestratedChildReview.primitive, ...signedSupplyReview.primitive];

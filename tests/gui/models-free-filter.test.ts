@@ -104,12 +104,12 @@ describe("free-only runs before the page slice (#3666)", () => {
     // it shows. The bulk actions read the same set, so "All on" cannot reach rows the header is
     // not counting.
     //
-    // Scoped to the renderGroup body on purpose. The provider rail further down the file renders
-    // the same models.active label from its own locally computed activeCount, and it SHOULD keep
-    // reading the whole provider: it is a navigation index answering "how big is this provider",
-    // not a description of the list the user is currently looking at.
+    // Scoped to the renderGroup body on purpose. The provider rail (its own component, mounted
+    // further down the file) renders the same models.active label from its own per-provider
+    // counts, and it SHOULD keep reading the whole provider: it is a navigation index answering
+    // "how big is this provider", not a description of the list the user is currently looking at.
     const start = at(modelsPage, "const renderGroup = (group:");
-    const end = at(modelsPage, "models-workspace-rail-row");
+    const end = at(modelsPage, "<ModelsProviderRail");
     expect(start).toBeLessThan(end);
     const group = modelsPage.slice(start, end);
     expect(group).toContain('t("models.active", { active: activeCount, total: scoped.length })');

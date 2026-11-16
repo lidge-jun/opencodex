@@ -1,14 +1,17 @@
+import { clientFacingModelLabel } from "../../src/lib/error-destination";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
+import { clearModelCache } from "../../src/codex/model-cache";
+import * as oauth from "../../src/oauth";
 import {
   antigravityModelUnlistedMessage,
   antigravitySelectedAccountUnlistedMessage,
   clearGenericFailoverHealth,
 } from "../../src/oauth/generic-account-failover";
-import { getAccountSet, saveCredential, setAccountPaused, setActiveAccount, getAccountCredentialWithStatus, mergeAccountCredential } from "../../src/oauth/store";
+import { createOAuthRefreshIntentLock, getAccountSet, saveCredential, setAccountPaused, setActiveAccount, getAccountCredentialWithStatus, mergeAccountCredential } from "../../src/oauth/store";
 import { clearPoolRotationState } from "../../src/oauth/pool-kernel";
 import { antigravityAccountSupportsModel, clearAntigravityAccountRosters, recordAntigravityAccountRoster } from "../../src/providers/antigravity-account-roster";
 import { handleResponses } from "../../src/server/responses";
@@ -19,6 +22,8 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import * as retry from "../../src/lib/upstream-retry";
 import * as failover from "../../src/oauth/generic-account-failover";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
+import { recoverAntigravityAccount } from "../../src/server/responses/antigravity-model-denial-recovery";
+import * as proxyEnv from "../../src/lib/proxy-env";
 
 // #7500: an Antigravity request reaches only accounts whose own model discovery may serve it.
 const provider = "google-antigravity";
@@ -29,6 +34,9 @@ let previousHome: string | undefined;
 let codexHome: IsolatedCodexHome;
 let release: () => void;
 let originalFetch: typeof fetch;
+const inactiveFetch = (() => { throw new Error("No active in-memory Antigravity fixture"); }) as typeof fetch;
+let providerFetch = inactiveFetch;
+let configuredFetch: ReturnType<typeof spyOn>;
 let sleep: ReturnType<typeof spyOn>;
 let ids: string[];
 let sends: string[];
@@ -52,7 +60,7 @@ beforeEach(async () => {
   await setActiveAccount(provider, ids[0]!);
   sends = [];
   onSend = undefined;
-  globalThis.fetch = (async (input, init) => {
+  providerFetch = (async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input));
     if (url.href === "https://oauth2.googleapis.com/token")
       return Response.json({ access_token: "synthetic-refreshed", expires_in: 3600, token_type: "Bearer" });
@@ -65,9 +73,13 @@ beforeEach(async () => {
       usageMetadata: { promptTokenCount: 5, candidatesTokenCount: 3, totalTokenCount: 8 },
     } });
   }) as typeof fetch;
+  globalThis.fetch = providerFetch;
+  configuredFetch = spyOn(proxyEnv, "configuredOutboundFetch").mockImplementation((input, init) => providerFetch(input, init));
 });
 
 afterEach(() => {
+  providerFetch = inactiveFetch;
+  configuredFetch.mockRestore();
   globalThis.fetch = originalFetch;
   sleep.mockRestore();
   release();
@@ -83,6 +95,7 @@ afterEach(() => {
 function config(enabled?: boolean): OcxConfig {
   const cfg = { defaultProvider: provider, providers: { [provider]: {
     adapter: "google", authMode: "oauth", baseUrl: origin, googleMode: "cloud-code-assist", models: [model],
+    fetch: (input: RequestInfo | URL, init?: RequestInit) => providerFetch(input, init),
     ...(enabled === undefined ? {} : { oauthAccountFailover: { enabled } }),
   } } } as unknown as OcxConfig;
   saveConfig(cfg);
@@ -108,6 +121,51 @@ async function turn(cfg: OcxConfig, options: Parameters<typeof handleResponses>[
 
 const bearer = (index: number) => `Bearer synthetic-${["one", "two", "three"][index]}`;
 
+test("an independent request retries a discovery-owned refresh cancelled before dispatch", async () => {
+  const cfg = config(true);
+  const id = ids[1]!;
+  const prior = getAccountCredentialWithStatus(provider, id)!.credential;
+  await mergeAccountCredential(provider, id, { ...prior, expires: Date.now() - 1 });
+  rosters(false, true, false);
+  const guard = await createOAuthRefreshIntentLock(provider, id).acquire();
+  let current = true, joined!: () => void;
+  const atJoin = new Promise<void>(resolve => { joined = resolve; });
+  const discovery = oauth.getValidAccessSnapshotForAccount(provider, id, {
+    requireUsableAccount: true, authorityCurrent: () => current,
+  }).catch(error => error);
+  const originalResolve = oauth.getValidAccessSnapshotForAccount;
+  const resolver = spyOn(oauth, "getValidAccessSnapshotForAccount").mockImplementation((...args) => {
+    const result = originalResolve(...args);
+    if (args[1] === id && !args[2]?.authorityCurrent) joined();
+    return result;
+  });
+  let tokenRequests = 0;
+  const projects: unknown[] = [];
+  const fixtureFetch = globalThis.fetch;
+  globalThis.fetch = (async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (url.href === "https://oauth2.googleapis.com/token") tokenRequests++;
+    if (url.pathname.endsWith(":generateContent")) projects.push(JSON.parse(String(init?.body)).project);
+    return fixtureFetch(input, init);
+  }) as typeof fetch;
+  providerFetch = globalThis.fetch;
+  const request = turn(cfg);
+  try {
+    await atJoin;
+    expect(tokenRequests).toBe(0);
+    current = false;
+    clearModelCache(provider);
+    expect(antigravityAccountSupportsModel(provider, ids[0]!, model)).toBe(false);
+    guard.release();
+    expect(await discovery).toBeInstanceOf(oauth.OAuthTokenRefreshStaleError);
+    expect((await request).status).toBe(200);
+    expect(tokenRequests).toBe(1);
+    expect(sends).toEqual(["Bearer synthetic-refreshed"]);
+    expect(projects).toEqual([prior.projectId]);
+    expect(getAccountCredentialWithStatus(provider, id)!.needsReauth).toBe(false);
+  } finally { guard.release(); await Promise.allSettled([request, discovery]); resolver.mockRestore(); clearModelCache(); }
+});
+
 test("an active account that lists the model, or has no roster yet, is used unchanged", async () => {
   rosters(undefined, true, true);
   expect((await turn(config(true))).status).toBe(200);
@@ -129,7 +187,7 @@ test("every usable account omitting the model refuses locally without an upstrea
   const result = await turn(config(true));
   expect(result.status).toBe(403);
   expect(result.body.error).toMatchObject({
-    type: "permission_error", code: "permission_denied", message: antigravityModelUnlistedMessage(model),
+    type: "permission_error", code: "permission_denied", message: antigravityModelUnlistedMessage(clientFacingModelLabel(`${provider}/${model}`)),
   });
   expect(sends).toEqual([]);
 });
@@ -139,7 +197,7 @@ test("without failover an omitting selected account is refused, not moved", asyn
   for (const enabled of [undefined, false]) {
     const result = await turn(config(enabled));
     expect(result.status).toBe(403);
-    expect(result.body.error?.message).toBe(antigravitySelectedAccountUnlistedMessage(model));
+    expect(result.body.error?.message).toBe(antigravitySelectedAccountUnlistedMessage(clientFacingModelLabel(`${provider}/${model}`)));
   }
   expect(sends).toEqual([]);
   expect(getAccountSet(provider)!.activeAccountId).toBe(ids[0]);
@@ -277,4 +335,24 @@ test("replacement admission failure is reported separately from no eligible acco
     expect(result.body.error?.message).toContain("could not be resolved, admitted, or sent within the request budget");
     expect(result.body.error?.message).not.toContain("No eligible stored");
   } finally { failure?.mockRestore(); }
+});
+
+for (const allowed of [false, true]) test(`generic Antigravity recovery obeys physical permit admission (${allowed})`, async () => {
+  config(true);
+  const budget = createRequestExecutionBudget(undefined, undefined, {
+    beforePhysicalSend: () => allowed, charge: () => true, refund: () => {},
+  });
+  let calls = 0, completed = false;
+  const result = await recoverAntigravityAccount({
+    nextId: ids[1]!, failedResponse: new Response("model missing", { status: 404 }),
+    reserve: () => budget.reserveDispatch({ sendClass: "auth-recovery", targetKey: "antigravity/recovery" }),
+    applyFailoverSnapshot: async snapshot => snapshot,
+    prepare: () => {}, adapterOwnsDispatch: false, setPermit: () => {},
+    refetch: async onDispatch => { onDispatch(); calls++; return new Response("recovered"); },
+    complete: () => { completed = true; },
+  });
+  expect(calls).toBe(allowed ? 1 : 0);
+  expect(completed).toBe(allowed);
+  expect(budget.used).toBe(allowed ? 1 : 0);
+  expect(result?.status ?? null).toBe(allowed ? 200 : null);
 });

@@ -27,6 +27,10 @@ function outputCommits(output: unknown): boolean {
   return !Array.isArray(output) || output.some(item => !isPlainObject(item)
     || (item.type !== "reasoning" && (item.type !== "message" || !Array.isArray(item.content) || item.content.some(partCommits))));
 }
+/** A snapshot's aggregate output_text is output too; anything but absent, null or "" is evidence (#8333). */
+function snapshotTextCommits(snapshot: RecordValue): boolean {
+  return snapshot.output_text != null && snapshot.output_text !== "";
+}
 function wellFormedEmpty(snapshot: unknown): snapshot is RecordValue {
   return isPlainObject(snapshot) && typeof snapshot.id === "string" && snapshot.id.trim().length > 0
     && snapshot.object === "response" && snapshot.status === "completed" && Array.isArray(snapshot.output)
@@ -39,7 +43,7 @@ function eventCommits(event: RecordValue): boolean {
   if (event.replayUnsafe === true) return true;
   switch (event.type) {
     case "response.created": case "response.in_progress": case "response.queued": case "response.heartbeat":
-      return isPlainObject(event.response) && outputCommits(event.response.output);
+      return isPlainObject(event.response) && (outputCommits(event.response.output) || snapshotTextCommits(event.response));
     case "response.output_item.added": case "response.output_item.done": return outputCommits([event.item]);
     case "response.content_part.added": case "response.content_part.done": return partCommits(event.part);
     case "response.output_text.delta": return event.delta !== "";
@@ -56,6 +60,10 @@ export interface OpenGatewayCompletionGuardOptions {
   readonly recordUsage: (usage: unknown) => void;
   readonly retryEnabled?: boolean;
   readonly stallTimeoutMs?: number;
+  /** This response's real upstream body is already guarded before reset preflight. */
+  readonly initialBodyInactivityGuarded?: boolean;
+  /** Time reset selection already held this response's head; the first hold is shortened by it. */
+  readonly initialHoldSpentMs?: number;
   /** Expiry releases original bytes; it never aborts a healthy upstream. */
   readonly holdTimeoutMs?: number;
 }
@@ -63,19 +71,19 @@ export interface OpenGatewayCompletionGuardOptions {
 type Inspection = { kind: "pass"; response: Response }
   | { kind: "empty" | "invalid"; snapshot: RecordValue; streaming: boolean };
 
-async function inspect(response: Response, options: OpenGatewayCompletionGuardOptions): Promise<Inspection> {
+async function inspect(response: Response, options: OpenGatewayCompletionGuardOptions, alreadyGuarded: boolean, heldMs: number): Promise<Inspection> {
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   const streaming = contentType.includes("text/event-stream")
     || (!contentType && isPlainObject(options.body) && options.body.stream === true);
   if (!response.body || (!streaming && !contentType.includes("application/json"))) return { kind: "pass", response };
-  const guarded = guardResponseBodyInactivity(response, options.signal, streaming ? options.stallTimeoutMs ?? 0 : 0);
+  const guarded = guardResponseBodyInactivity(response, options.signal, streaming && !alreadyGuarded ? options.stallTimeoutMs ?? 0 : 0);
   const reader = guarded.response.body?.getReader();
   if (!reader) return { kind: "pass", response };
   const framer = new BoundedSseFrameBuffer(MAX_BYTES);
   const held: Array<Uint8Array | undefined> = [];
   let bytes = 0, events = 0, transferred = false, cleaned = false;
   let pending: ReturnType<typeof reader.read> | undefined;
-  const holdMs = options.holdTimeoutMs ?? MAX_HOLD_MS;
+  const holdMs = Math.max(0, (options.holdTimeoutMs ?? MAX_HOLD_MS) - heldMs);
   const deadline = performance.now() + holdMs;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<"expired">(resolve => { timer = setTimeout(() => resolve("expired"), holdMs); });
@@ -150,7 +158,7 @@ async function inspect(response: Response, options: OpenGatewayCompletionGuardOp
         let snapshot: unknown;
         try { snapshot = JSON.parse(decoder.decode(joinSseFrameBytes(held.flatMap(chunk => chunk ? [chunk] : [])))); }
         catch { return terminal(undefined); }
-        if (isPlainObject(snapshot) && (outputCommits(snapshot.output)
+        if (isPlainObject(snapshot) && (outputCommits(snapshot.output) || snapshotTextCommits(snapshot)
           || snapshot.error != null || ["failed", "incomplete", "queued", "in_progress"].includes(String(snapshot.status)))) return pass();
         return terminal(snapshot);
       }
@@ -167,7 +175,7 @@ async function inspect(response: Response, options: OpenGatewayCompletionGuardOp
         if (!isPlainObject(event)) return pass();
         if (event.replayUnsafe === true) return pass();
         if (event.type === "response.completed") {
-          if (isPlainObject(event.response) && outputCommits(event.response.output)) return pass();
+          if (isPlainObject(event.response) && (outputCommits(event.response.output) || snapshotTextCommits(event.response))) return pass();
           return terminal(event.response);
         }
         if (eventCommits(event)) return pass();
@@ -213,7 +221,9 @@ export async function guardOpenGatewayCompletion(response: Response, options: Op
     && selfContainedResponsesBody(body) && !isNonReplayableResponse(response);
   let selected = response;
   for (let attempt = 0; ; attempt++) {
-    const inspected = await inspect(selected, options);
+    const initial = attempt === 0;
+    const inspected = await inspect(selected, options, initial && options.initialBodyInactivityGuarded === true,
+      initial ? Math.max(0, options.initialHoldSpentMs ?? 0) : 0);
     if (inspected.kind === "pass") return inspected.response;
     const usage = inspected.snapshot.usage;
     options.recordUsage(usage);

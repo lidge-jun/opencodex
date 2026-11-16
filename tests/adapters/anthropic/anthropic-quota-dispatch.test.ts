@@ -1,7 +1,7 @@
 /** Physical response attribution through the real adapter and response/search loops. */
-import { afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { clearAnthropicAccountPoolState, forgetAnthropicFailoverQuorum, getEligibleAnthropicAccounts, getAnthropicAccountHealthSnapshot } from "../../../src/oauth/anthropic-routing";
@@ -173,6 +173,94 @@ function deferred<T>() {
   const promise = new Promise<T>(done => { resolve = done; });
   return { promise, resolve };
 }
+
+test("an affinity reset during the OAuth commit fences stale transport admission", async () => {
+  const [active] = await seed();
+  const config = configFor(() => answer(false));
+  config.anthropicAccountPool = { enabled: true, autoSwitchThreshold: 0 };
+  const oauthStore = await import("../../../src/oauth/store");
+  const { anthropicRoutingFor } = await import("../../../src/oauth/anthropic-routing");
+  const { anthropicAffinityPath, flushAnthropicSessionAffinity } = await import("../../../src/oauth/anthropic-session-affinity-store");
+  const originalCommit = oauthStore.commitOAuthAccountSelection;
+  let reset = true;
+  let commits = 0;
+  const commit = spyOn(oauthStore, "commitOAuthAccountSelection").mockImplementation(async (...args) => {
+    commits++;
+    const committed = await originalCommit(...args);
+    if (reset) {
+      reset = false;
+      expect(await anthropicRoutingFor("anthropic").resetAnthropicSessionAffinityConfirmed()).toBe(true);
+    }
+    return committed;
+  });
+  try {
+    const response = await post(config, { prompt_cache_key: "reset-during-commit" });
+    expect(response.status).toBe(409);
+    await response.text();
+    expect(commits).toBe(1);
+    expect(sent).toHaveLength(0);
+    expect(getAccountSet("anthropic")!.activeAccountId).toBe(active!);
+    await flushAnthropicSessionAffinity();
+    expect(JSON.parse(readFileSync(anthropicAffinityPath(home, "anthropic"), "utf8")).entries).toEqual([]);
+    const fresh = await post(config, { prompt_cache_key: "reset-during-commit" });
+    expect(fresh.status).toBe(200);
+    await fresh.text();
+    expect(sent).toHaveLength(1);
+  } finally { commit.mockRestore(); }
+}, 20_000);
+
+test("an affinity reset during credential resolution avoids an obsolete OAuth commit", async () => {
+  const [active] = await seed();
+  const config = configFor(() => answer(false));
+  config.anthropicAccountPool = { enabled: true, autoSwitchThreshold: 0 };
+  const oauthStore = await import("../../../src/oauth/store");
+  const oauth = await import("../../../src/oauth");
+  const { anthropicRoutingFor } = await import("../../../src/oauth/anthropic-routing");
+  const credential = oauthStore.getAccountCredentialWithStatus("anthropic", active!)!.credential;
+  await saveAccountCredential("anthropic", active!, { ...credential, expires: Date.now() + 1_000 });
+  const originalCommit = oauthStore.commitOAuthAccountSelection;
+  const token = spyOn(oauth, "getValidAccessTokenForAccount").mockImplementation(async (provider, accountId) => {
+    expect(provider).toBe("anthropic"); expect(accountId).toBe(active!);
+    expect(await anthropicRoutingFor("anthropic").resetAnthropicSessionAffinityConfirmed()).toBe(true);
+    await saveAccountCredential("anthropic", active!, { ...credential, expires: Date.now() + 3_600_000 });
+    return credential.access;
+  });
+  const commit = spyOn(oauthStore, "commitOAuthAccountSelection").mockImplementation(originalCommit);
+  try {
+    const response = await post(config, { prompt_cache_key: "reset-before-commit" });
+    expect(response.status).toBe(409);
+    await response.text();
+    expect(token).toHaveBeenCalledTimes(1);
+    expect(commit).not.toHaveBeenCalled();
+    expect(sent).toHaveLength(0);
+  } finally {
+    token.mockRestore(); commit.mockRestore();
+  }
+}, 20_000);
+
+test.each([200, 429])("an affinity reset during a physical %i response preserves cleared bindings", async status => {
+  await seed();
+  const { anthropicRoutingFor } = await import("../../../src/oauth/anthropic-routing");
+  const { anthropicAffinityPath, flushAnthropicSessionAffinity } = await import("../../../src/oauth/anthropic-session-affinity-store");
+  const config = configFor(async () => {
+    if (sent.length === 1) {
+      expect(await anthropicRoutingFor("anthropic").resetAnthropicSessionAffinityConfirmed()).toBe(true);
+      return status === 429 ? limited() : answer(false);
+    }
+    return answer(false);
+  });
+  config.anthropicAccountPool = { enabled: true, autoSwitchThreshold: 0 };
+  const response = await post(config, { prompt_cache_key: "reset-before-recovery" });
+  expect(response.status).toBe(status);
+  await response.text();
+  expect(sent).toHaveLength(1);
+  await flushAnthropicSessionAffinity();
+  expect(JSON.parse(readFileSync(anthropicAffinityPath(home, "anthropic"), "utf8")).entries).toEqual([]);
+  const fresh = await post(config, { prompt_cache_key: "reset-before-recovery" });
+  expect(fresh.status).toBe(200);
+  await fresh.text();
+  expect(sent).toHaveLength(2);
+}, 20_000);
 
 test.each([307, 308])("OAuth provider override pins manual dispatch after adapter init for %i", async status => {
   await seed(1);

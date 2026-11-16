@@ -48,9 +48,26 @@ function openInBrowser(url: string) {
   window.location.assign(url);
 }
 
-export function DesktopStarOnboarding({ apiBase, enabled }: { apiBase: string; enabled: boolean }) {
+export function DesktopStarOnboarding({
+  apiBase,
+  enabled,
+  onSettled,
+}: {
+  apiBase: string;
+  enabled: boolean;
+  onSettled?: () => void;
+}) {
   const [status, setStatus] = useState<StarStatus | null>(null);
   const [done, setDone] = useState(onboardingSeen);
+  const settledRef = useRef(false);
+
+  useEffect(() => {
+    if (!enabled || settledRef.current) return;
+    if (done || !isDesktopShell()) {
+      settledRef.current = true;
+      onSettled?.();
+    }
+  }, [done, enabled, onSettled]);
 
   useEffect(() => {
     if (!enabled || done || !isDesktopShell()) return;

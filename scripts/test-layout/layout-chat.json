@@ -4,5 +4,9 @@
   "chat-raw-reasoning-delivery.test.ts": "responses",
   "chat-incomplete-length-reason.test.ts": "responses",
   "openai-chat-required-tool.test.ts": "adapters/openai",
-  "responses-required-chat-tool.test.ts": "responses"
+  "responses-required-chat-tool.test.ts": "responses",
+  "client-error-body.test.ts": "lib",
+  "chat-error-body-normalization.test.ts": "responses",
+  "chat-error-collector-verdicts.test.ts": "responses",
+  "server-chat-error-body-evidence.test.ts": "server"
 }

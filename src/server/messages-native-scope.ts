@@ -1,3 +1,4 @@
+import { clientFacingModelLabel } from "../lib/error-destination";
 import {
   AdmissionModelDeniedError, routeAllowedByScope, UNNAMED_DESTINATION_MODEL, type AdmissionModelScope,
 } from "./admission-model-scope";
@@ -58,7 +59,7 @@ export function nativeMessagesToolScopeDenial(
     if (!isAdvisor(tool)) continue;
     const modelId = typeof tool.model === "string" && tool.model.trim() ? tool.model : undefined;
     if (modelId === undefined || !routeAllowedByScope(scope, { providerName, modelId })) {
-      return new AdmissionModelDeniedError(requestedModel, { providerName, modelId: modelId ?? UNNAMED_DESTINATION_MODEL });
+      return new AdmissionModelDeniedError(clientFacingModelLabel(requestedModel), { providerName, modelId: modelId ?? UNNAMED_DESTINATION_MODEL });
     }
   }
   return undefined;

@@ -1,3 +1,4 @@
+import { carryProxyError } from "../../lib/client-error-body";
 import { isNonReplayableResponse, isReplayRefusalResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
 import { clientCancelledResponse, readDisplaySafeErrorText } from "./core-errors";
 
@@ -44,5 +45,5 @@ export async function sanitizeNonReplayableUpstreamError(
     status: response.status, headers,
   });
   markResponseNonReplayable(safe);
-  return safe;
+  return carryProxyError(response, safe);
 }

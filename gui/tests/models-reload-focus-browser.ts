@@ -1,0 +1,58 @@
+/** WebKit focus transitions on the real Models page, with intercepted synthetic reads. */
+import { pathToFileURL } from "node:url";
+const modulePath = process.env.PLAYWRIGHT_MODULE_PATH;
+if (!modulePath?.startsWith("/")) throw new Error("PLAYWRIGHT_MODULE_PATH must be an absolute path");
+const { webkit } = await import(pathToFileURL(modulePath).href);
+const browser = await webkit.launch({ headless: true });
+try {
+  const page = await browser.newPage({ viewport: { width: 1100, height: 900 }, colorScheme: "dark" });
+  const reads: Array<(state: "fresh" | "stale") => Promise<void>> = [];
+  await page.route("**/api/system/codex-app-server", route => new Promise<void>(resolve => {
+    reads.push(async state => { await route.fulfill({ json: { state, runningCount: 1 } }); resolve(); });
+  }));
+  const initialRead = page.waitForRequest("**/api/system/codex-app-server");
+  await page.goto(`${process.env.GUI_TEST_BASE ?? "http://127.0.0.1:15174"}/tests/models-reload-focus.html`, { waitUntil: "domcontentloaded" });
+  await initialRead;
+  const head = page.locator(".page-head-actions").getByRole("button", { name: "Reload Codex models" });
+  const banner = page.locator(".codex-stale-banner button");
+  await head.waitFor();
+  await head.focus();
+  if (!reads[0]) throw new Error("Missing initial status read");
+  await reads[0]("stale");
+  await banner.waitFor();
+  if (process.env.FOCUS_SCREENSHOT_PATH) await page.locator(".codex-stale-banner").screenshot({ path: process.env.FOCUS_SCREENSHOT_PATH });
+  if (!await banner.evaluate(el => el === document.activeElement)) throw new Error("Focus lost on stale transition");
+  const secondRead = page.waitForRequest("**/api/system/codex-app-server");
+  await page.evaluate(() => window.dispatchEvent(new Event("fixture-refresh")));
+  await head.waitFor();
+  await secondRead;
+  if (!await head.evaluate(el => el === document.activeElement)) throw new Error("Focus lost on fresh transition");
+  if (!reads[1]) throw new Error("Missing second status read");
+  await reads[1]("fresh");
+  const thirdRead = page.waitForRequest("**/api/system/codex-app-server");
+  await page.evaluate(() => window.dispatchEvent(new Event("fixture-refresh")));
+  await thirdRead;
+  await page.locator("#other").focus();
+  if (!reads[2]) throw new Error("Missing third status read");
+  await reads[2]("stale");
+  await banner.waitFor();
+  if (!await page.locator("#other").evaluate(el => el === document.activeElement)) throw new Error("Stale transition stole unrelated focus");
+  await banner.focus();
+  await page.keyboard.press("Enter");
+  const dialog = page.locator("dialog.modal-overlay");
+  await dialog.waitFor();
+  const fourthRead = page.waitForRequest("**/api/system/codex-app-server");
+  await page.evaluate(() => window.dispatchEvent(new Event("fixture-refresh")));
+  await fourthRead;
+  await head.waitFor();
+  await page.keyboard.press("Escape");
+  if (process.env.DIALOG_FOCUS_SCREENSHOT_PATH) await page.locator(".page-head").screenshot({ path: process.env.DIALOG_FOCUS_SCREENSHOT_PATH });
+  if (!await head.evaluate(el => el === document.activeElement)) throw new Error("Dialog failed to restore focus to replacement");
+  if (!reads[3]) throw new Error("Missing fourth status read");
+  await reads[3]("fresh");
+  await page.locator("#probe-head").focus();
+  await page.evaluate(() => window.dispatchEvent(new Event("fixture-blur-before-commit")));
+  await page.locator("#probe-banner").waitFor();
+  if (!await page.evaluate(() => document.activeElement === document.body)) throw new Error("Deliberate pre-commit blur was overridden");
+  console.log("PASS: WebKit preserves reload focus in both directions without stealing focus");
+} finally { await browser.close(); }

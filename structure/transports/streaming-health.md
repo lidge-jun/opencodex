@@ -125,11 +125,11 @@ A body timeout publishes a typed read failure and cancels only that body's reade
 it does not abort the request-wide signal before the enclosing bridge can emit
 its failure terminal. A caught body failure is classified before signal state, so a
 source cancellation that synchronously aborts the shared signal still reports the
-stall. Buffered initial timeouts return HTTP 504; continuation
-timeouts become an in-stream error with status 504, while caller cancellation
-retains status 499. Normal completion does not abort a shared request.
+stall. Buffered initial and locally marked continuation timeouts return HTTP 504; streamed initial,
+recovery and continuation timeouts emit `upstream_stall_timeout` and retain 504 terminal classification.
+Provider-supplied codes cannot mint the local marker; caller cancellation retains 499. Normal completion does not abort a shared request.
 
-Regression coverage lives in `tests/lib/abort-idle-deadline.test.ts`.
+Regression coverage lives in `tests/lib/abort-idle-deadline.test.ts` and `tests/server/terminal-guard-server.test.ts`.
 
 ### Pre-stream provider input overflow
 
@@ -256,8 +256,8 @@ egress. HTTP/SSE fallback retains Bun fetch's own proxy rules, which do not cons
 The endpoint handles `response.create`, ignores `response.processed`, supports warmup
 `generate: false`, and feeds the same request pipeline as HTTP/SSE.
 
-Incoming Responses connections share a 128-socket admission limit. Only when a new upgrade
-finds that limit full, the handler reclaims the least recently used eligible idle connection.
+Incoming Responses connections share a 128-socket admission limit. Only when a new local upgrade
+finds that limit full, the handler reclaims the least recently used eligible idle connection; a [Remote Link upgrade](../remote-link.md#responses-websocket-over-the-link) may reclaim only an idle Remote Link socket.
 Message handling and turn completion refresh a monotonic use order; connection age alone
 does not choose the victim. Eligibility requires an open socket, no active turn, no pending
 client tool or approval result, no retained native steering/injection owner, and no buffered
@@ -358,13 +358,13 @@ Pool quota producers and account commands follow the [bounded raw-observation co
 
 Account quota surfaces use [safe probe diagnostics](inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; an initial JEV null choice separately strips caller effort.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; in the default `decide` mode an initial JEV null choice separately strips caller effort.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 
 ## Translated Chat inline-image budget
 
-`src/adapters/openai-chat-images.ts` reuses the shared image normalization ladder for translated Chat bodies above a 3.5 MiB base64-image budget. This is best effort, not a whole-request ceiling. Remote URLs are not fetched; unprocessable and terminal images remain attached, and retained bytes continue to count during demotion. Under-budget construction stays synchronous; delegating MiMo awaits conditional asynchronous construction. Native decoding is admitted through a process-wide four-operation gate, guarded by a 16-million-pixel ceiling confirmed from codec metadata, and request cancellation stops queued and subsequent normalization work. Native Chat passthrough and Anthropic-only 413 retry policy retain their existing behavior.
+`src/adapters/openai-chat-images.ts` reuses the shared image normalization ladder for translated Chat bodies above a 3.5 MiB base64-image budget. This is best effort, not a whole-request ceiling. Remote URLs are not fetched; unprocessable and terminal images remain attached, and retained bytes continue to count during demotion. Under-budget construction stays synchronous; delegating MiMo awaits conditional asynchronous construction. Native decoding is admitted through a process-wide four-operation gate, guarded by a 16-million-pixel ceiling confirmed from codec metadata, and request cancellation stops queued and subsequent normalization work. Native Chat passthrough and Anthropic-only 413 retry policy retain their existing behavior. A provider whose registry row declares `minImageEdge` (Venice: 64) then has every decodable inline image whose short edge is below it upscaled to that edge, keeping the aspect ratio unless the long edge would pass 4096, where it is capped (extreme strips are then stretched); this runs after budget normalization because the 320px terminal tier can floor a wide screenshot under the minimum, and an image that fails to decode keeps its original URL.
 
 The [explicit model-capability contract](../config.md#explicit-per-model-capability-declarations) preserves operator declarations through provider storage and catalog capture; it does not infer upstream capability or change this surface's routing behavior.
 
@@ -397,8 +397,8 @@ accompany results, but privileged messages, unrelated IDs and duplicate results 
 implementation pins routing, models and tools; validated generation overrides follow the
 [continuation-setting contract](#steering-settings-public-api-and-diagnostic-probe). A failed steer does not
 cancel an explicit continuation already dispatched. Explicit continuations
-are paced and recheck the captured dispatch guard after waiting. No tools, accepted input
-or ambiguously delivered sends are automatically replayed.
+are paced, recheck the captured dispatch guard and follow the [workflow physical-send ceiling](responses-spend.md#workflow-physical-send-ceiling) under the existing turn lease.
+No tools, accepted input or ambiguously delivered sends are automatically replayed; a known local budget refusal is not an upstream failure.
 
 `src/server/responses/native-steering-replay.ts` journals only committed native input into
 the existing thread-scoped replay cache. Rejected/uncommitted steer text is excluded. Sparse
@@ -463,7 +463,7 @@ unreturned advertised calls retain the socket. Late tool results still reach tha
 socket. A `response_already_completed` failure is relayed unchanged, including its
 returned input; only an explicit same-parent/lane/settings client create can supply
 those saved outputs once. The existing continuation pacing and captured dispatch
-guard run again. The proxy never reruns tools, invents acceptance, switches accounts
+guard and [physical-send admission](responses-spend.md#workflow-physical-send-ceiling) run again. The proxy never reruns tools, invents acceptance, switches accounts
 or automatically creates a recovery response. Unknown delivery terminates without
 HTTP fallback or replay. The client decides how to recover other failures.
 
@@ -550,9 +550,9 @@ charged against the unchanged 32 MiB serialized history budget. The existing
 body-persistence eligibility and accepted-only steering commit rules still apply.
 `tests/responses/ws-steering-stability.test.ts` binds these deadline and replay
 contracts to deterministic clocks and a synthetic real-handler continuation test.
-`src/server/responses/native-response-json.ts` owns content comparison without
-importing either control owner, keeping the replay dependency graph acyclic.
-Injection retains its existing helper export names and comparison semantics.
+`src/server/responses/native-response-json.ts` owns content comparison and
+[bounded output identity](inventory.md#native-output-identity) without importing either control owner.
+Injection retains its existing helper export names and SHA-256 comparison semantics.
 
 ## Steering settings, public API and diagnostic probe
 

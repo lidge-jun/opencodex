@@ -68,7 +68,9 @@ the `server/responses.ts` facade and its `server/responses/*.ts` modules:
 6. For routed models with a hosted `web_search` tool, `web-search/` exposes a synthetic function,
    executes the real search through the configured backend (the OpenAI/ChatGPT sidecar or Anthropic),
    feeds results back to the routed model, and repeats within the configured loop limit. This loop
-   supports only the standard HTTP path; adapters that implement `runTurn`, such as Cursor, bypass it.
+   uses the fetch-based path for ordinary HTTP adapters. Adapters that implement `runTurn`,
+   including Cursor, use the separate `runTurnWebSearchLoop` in
+   `server/responses/run-turn-execution.ts` when the search plan is eligible.
 7. `bridge/sse.ts` / `bridge/response-json.ts` produces Responses SSE or JSON. `server/request-log.ts` and `usage/` collect terminal
    status, latency, provider/model labels, and best-effort token usage without changing the response.
 
@@ -78,6 +80,8 @@ models excluded by the effective Chat thinking replay policy (an explicit
 the estimate excludes it too; history that never reaches the provider therefore cannot cause a local
 context-limit refusal. Models that preserve reasoning, and other adapters,
 send that thinking and still count it.
+
+Character-based token estimates apply the existing denser CJK weight to supplementary Han characters such as 𠀀 as well as BMP Chinese and Korean text. A supplementary Han surrogate pair contributes two UTF-16 units to that bucket. These remain heuristics: model ratios, context-window caps and provider-reported usage are unchanged.
 
 ## The parser
 
@@ -122,6 +126,13 @@ and disabled for a local one (`stallTimeoutSec`; `0` disables it everywhere);
 reaching it aborts the upstream and emits `response.incomplete` with reason
 `upstream_stall_timeout`, preventing a hung connection from blocking Codex indefinitely.
 
+The adapter's response-body inactivity guard has a separate failure path. When an initial or
+recovery, terminal-guard continuation, or empty-completion retry response body stalls during translated Responses streaming, the terminal event is
+`response.failed` with code `upstream_stall_timeout` and a bounded-duration message. The request
+log classifies that terminal as 504 and can record the duration as `body_stall`. HTTP headers
+already sent for the stream cannot change. A buffered initial or continuation body stall returns
+HTTP 504 with the same bounded-duration message, which can also produce the `body_stall` detail.
+
 Tool calls are disambiguated into three Responses item types using the namespace map, the freeform
 set, and the tool-search set captured by the parser — so MCP namespaces, `apply_patch`-style freeform
 tools, and client-executed `tool_search` all round-trip. A `buildResponseJSON()` variant produces a
@@ -133,9 +144,12 @@ single non-streaming response object from the same events.
 `server/management/*.ts`. Its `/api/*` routes cover safe config/settings,
 provider CRUD and key pools, model selection/context caps/v2 controls, catalog sync, diagnostics and
 debug logs, usage and quotas, sidecar settings, updates, generated client API keys, OAuth login/status/
-logout and account selection, Codex account management, and graceful stop. `server/auth-cors.ts`
-requires `OPENCODEX_API_AUTH_TOKEN` for both `/api/*` and `/v1/*` when the proxy binds beyond
-loopback; configured `corsAllowOrigins` entries extend the local-origin allowlist.
+logout and account selection, Codex account management, and graceful stop. Management access to
+`/api/*` uses the separate `OPENCODEX_ADMIN_AUTH_TOKEN` or generated admin token; the dashboard
+uses management sessions. Model admission on `/v1/*` uses data-plane credentials, such as
+`OPENCODEX_API_AUTH_TOKEN` or configured client API keys. `server/auth-cors.ts` requires a data
+credential when binding beyond loopback; a model token does not grant management access.
+Configured `corsAllowOrigins` entries extend the local-origin allowlist.
 
 OAuth implementations live in `oauth/`; access tokens are loaded or refreshed immediately before a
 routed call, while `oauth/token-guardian.ts` can proactively refresh only providers whose policy
@@ -164,7 +178,7 @@ later quota updates are attributed to the serving account, not retroactively
 added to headers already sent. A failure after a WS request was sent does not
 trigger an automatic HTTP resend. These mappings do not enable the client-facing
 WebSocket setting or change other providers' transport selection.
-Bundled Bun 1.3.14, prereleases, and unverifiable runtime identities use HTTP/SSE. Successful
+The current package bundles Bun **1.4.4**. Older bundles such as Bun 1.3.14, prereleases, and unverifiable runtime identities use HTTP/SSE instead of that upstream WS optimization. Successful
 upstream WS responses keep the downstream SSE contract and bypass `tee()` through a bounded eager
 single-reader relay (4 MiB per raw/enveloped frame and an 8 MiB producer queue). Queue overflow
 closes the upstream and emits a terminal downstream `response.failed` event followed by `[DONE]`.
@@ -242,8 +256,9 @@ keepalives do not reset the adapter-event stall watchdog. The default stall
 timeout stays 300 seconds; encrypted compaction content is preserved unchanged.
 
 Native compact response buffering also enforces a body-byte inactivity deadline
-using `stallTimeoutSec` (300 seconds for a public upstream, disabled for a local one,
-and disabled everywhere when set to `0`). Nonempty chunks reset that
+using `stallTimeoutSec`. Unlike streaming, this route keeps its 300-second default even
+for a local upstream, because it buffers the whole body while holding an active-turn
+lease; an explicit value, including `0`, still wins. Nonempty chunks reset that
 deadline; a stalled body returns HTTP 504, client cancellation retains HTTP 499,
 and cleanup does not wait for a stuck upstream cancellation promise. The 32 MiB
 response ceiling and the original body bytes are preserved.

@@ -43,8 +43,11 @@ function filesUnder(root: string): string[] {
   const out: string[] = [];
   for (const name of readdirSync(root)) {
     const path = join(root, name);
-    if (statSync(path).isDirectory()) out.push(...filesUnder(path));
-    else out.push(path);
+    const stat = statSync(path);
+    if (stat.isDirectory()) out.push(...filesUnder(path));
+    // Only regular files can persist an assertion. The proxy's local control socket lives here
+    // once the temp path is short enough to bind it, and opening a socket fails with ENXIO.
+    else if (stat.isFile()) out.push(path);
   }
   return out;
 }

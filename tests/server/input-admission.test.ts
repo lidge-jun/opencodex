@@ -395,3 +395,24 @@ describe("combo target input admission", () => {
     expect(resolveOutputCeiling(impostor, "openai", "gpt-5.3-codex-spark")).toBeNull();
   });
 });
+
+for (const headroom of [false, true]) test(`input ceiling messages retain the actual context window headroom=${headroom}`, async () => {
+  const { inputAdmissionRefusalMessage } = await import("../../src/server/responses/input-admission");
+  const { clientFacingModelLabel } = await import("../../src/lib/error-destination");
+  const parsed = request([userText("a".repeat(4000))]);
+  if (headroom) parsed.options.maxOutputTokens = 8;
+  const provider: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://provider.example/v1", contextWindow: 200, modelMaxInputTokens: { "test-model": 16 } };
+  const result = headroom ? checkComboTargetInputAdmission(parsed, provider, "fixture", "test-model") : checkInputAdmission(parsed, provider, "fixture", "test-model");
+  expect(result.admitted).toBe(false); expect(result.ceiling).toBe(16); expect(result.contextWindow).toBe(200);
+  const message = inputAdmissionRefusalMessage(result, clientFacingModelLabel("client-model"));
+  expect(message).toContain("input limit of client-model (16 tokens; context window: 200 tokens)");
+});
+
+test("output headroom compares against the shared window after the input cap", async () => {
+  const { inputAdmissionRefusalMessage } = await import("../../src/server/responses/input-admission");
+  const { clientFacingModelLabel } = await import("../../src/lib/error-destination");
+  const parsed = request([userText("hi")]); parsed.options.maxOutputTokens = 200;
+  const result = checkComboTargetInputAdmission(parsed, { adapter: "openai-chat", baseUrl: "https://provider.example/v1", contextWindow: 100, modelMaxInputTokens: { "test-model": 16 } }, "fixture", "test-model");
+  expect(result.admitted).toBe(false); expect(result.estimatedTokens).toBeLessThanOrEqual(16);
+  expect(inputAdmissionRefusalMessage(result, clientFacingModelLabel("client-model"))).toContain("context window of client-model (100 tokens; input limit: 16 tokens)");
+});

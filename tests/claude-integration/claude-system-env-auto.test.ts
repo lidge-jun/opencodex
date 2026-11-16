@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { injectSystemEnv } from "../../src/server/system-env";
 import { PROXY_MARKER } from "../../src/claude/auth-detect";
+import { claudeKeychainReader } from "../../src/oauth/claude-keychain-read";
 import type { OcxConfig } from "../../src/types";
 
 /**
@@ -13,8 +14,8 @@ import type { OcxConfig } from "../../src/types";
  * nothing from auto-connect (devlog 260726_claude_auth_auto/035).
  *
  * The detector reads HOME-relative files and probes the macOS keychain, so these
- * tests point HOME and CLAUDE_CONFIG_DIR at an empty temp dir AND stub `spawnSync`
- * with the keychain's real "item not found" exit code. Without the spawn stub the
+ * tests point HOME and CLAUDE_CONFIG_DIR at an empty temp dir AND stub the shared
+ * Keychain probe with the item-not-found answer ("absent"). Without the probe stub the
  * suite reads the developer's own keychain and every assertion inverts.
  */
 
@@ -63,16 +64,8 @@ beforeEach(() => {
     if (file === "/bin/launchctl" && args?.[0] === "getenv") return "";
     return "";
   }) as never);
-  // 44 = SecKeychainSearchCopyNext "item not found": a REAL absent, not a probe failure.
-  spawnSpy = spyOn(childProcess, "spawnSync").mockImplementation((() => ({
-    status: 44,
-    signal: null,
-    error: undefined,
-    stdout: null,
-    stderr: null,
-    output: [],
-    pid: 0,
-  })) as never);
+  // "absent" is the probe's answer for exit 44 (item not found): a REAL absent, not a failure.
+  spawnSpy = spyOn(claudeKeychainReader, "probe").mockResolvedValue("absent");
   readSpy = spyOn(fs, "readFileSync").mockImplementation(((path: string) => {
     if (String(path).includes("system-env-port")) throw new Error("ENOENT");
     return "";
@@ -105,6 +98,16 @@ afterEach(() => {
 test("auto with no detectable auth writes the proxy marker", async () => {
   await injectSystemEnv(4567, baseConfig);
   expect(shellEnvContents).toContain(`ANTHROPIC_AUTH_TOKEN='${PROXY_MARKER}'`);
+});
+
+test("auto with a Keychain credential withholds the marker, and an unreadable Keychain does too", async () => {
+  for (const presence of ["present", "unknown"] as const) {
+    spawnSpy.mockResolvedValue(presence);
+    shellEnvContents = "";
+    await injectSystemEnv(4567, baseConfig);
+    // A stored Claude login keeps the subscription; an unreadable Keychain is never "absent".
+    expect({ presence, marker: shellEnvContents.includes(PROXY_MARKER) }).toEqual({ presence, marker: false });
+  }
 });
 
 test("an explicit subscription withholds the marker even under the same detection", async () => {

@@ -5,7 +5,7 @@ import * as cliStatus from "../../src/cli/status";
 import * as desktopSupervision from "../../src/service/desktop-supervision.mjs";
 import * as cliHelp from "../../src/cli/help";
 import { getDefaultConfig } from "../../src/config";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
@@ -39,6 +39,9 @@ import {
   LOCAL_MANAGEMENT_READ_PATHS,
   verifyLocalManagementReadCapability,
 } from "../../src/lib/local-management-capability";
+import { createLocalAttestationProof, LOCAL_ATTESTATION_PROOF_HEADER } from "../../src/lib/local-management-attestation";
+import { readRuntimePort, removeRuntimePort, writeRuntimePort } from "../../src/config/process-state";
+import { fetchNativeMainAdmission, formatNativeMainAdmissionLines } from "../../src/cli/doctor";
 import { findDeadPid } from "../helpers/dead-pid";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { STORE_BUDGET_MS } from "../helpers/test-budget";
@@ -423,6 +426,192 @@ describe("doctor", () => {
       classification: "native_main_recovery_manual",
       authenticated: false,
     });
+  });
+});
+
+describe("live native-main admission in doctor", () => {
+  test("reports the fenced proxy's result through its attested admission response", async () => {
+    // The doctor caller's own startup gate is normally ready. The fenced verdict must come
+    // from the distinct service process identified by this live target, never that local gate.
+    const target = { hostname: "127.0.0.1", port: 10100, pid: 4242, source: "runtime" } as const;
+    const secret = "A".repeat(43);
+    const nonce = "B".repeat(43);
+    const now = 1_800_000_000_000;
+    const report = await fetchNativeMainAdmission(target, {
+      readRuntime: () => ({ pid: 4242, port: 10100, attestationSecret: secret }),
+      createNonce: () => nonce,
+      now: () => now,
+      fetchImpl: (async (_input, init) => {
+        const requestHeaders = new Headers(init?.headers);
+        expect(requestHeaders.get(LOCAL_MANAGEMENT_EXPECTED_PID_HEADER)).toBe("4242");
+        expect(verifyLocalManagementReadCapability(
+          secret,
+          requestHeaders.get(LOCAL_MANAGEMENT_NONCE_HEADER),
+          "GET",
+          LOCAL_MANAGEMENT_READ_PATHS.nativeMainAdmission,
+          4242,
+          10100,
+          Number(requestHeaders.get(LOCAL_MANAGEMENT_CAPABILITY_EXPIRES_AT_HEADER)),
+          requestHeaders.get(LOCAL_MANAGEMENT_CAPABILITY_HEADER),
+          now,
+        )).toBe(true);
+        return Response.json({
+          admissionStatus: "blocked",
+          admissionBlockReason: "foreign-ownership",
+        }, {
+          status: 200,
+          headers: {
+            [LOCAL_ATTESTATION_PROOF_HEADER]: createLocalAttestationProof(secret, nonce, 4242, 10100)!,
+          },
+        });
+      }) as typeof fetch,
+    });
+
+    expect(report).toEqual({ status: "blocked", reason: "foreign-ownership" });
+    expect(formatNativeMainAdmissionLines(report).join("\n")).toContain("reason: foreign-ownership");
+  });
+
+  test("reports an error status as unavailable, including an older proxy without the route", async () => {
+    // The admission route always answers 200 from the gate snapshot. Any other status, such
+    // as 404 from a proxy that predates the route, is not a verdict about admission.
+    const target = { hostname: "127.0.0.1", port: 10100, pid: 4242, source: "runtime" } as const;
+    const secret = "A".repeat(43);
+    const nonce = "B".repeat(43);
+    const read = (status: number, body: Record<string, unknown>) => fetchNativeMainAdmission(target, {
+      readRuntime: () => ({ pid: 4242, port: 10100, attestationSecret: secret }),
+      createNonce: () => nonce,
+      now: () => 1_800_000_000_000,
+      fetchImpl: (async () => Response.json(body, {
+        status,
+        headers: { [LOCAL_ATTESTATION_PROOF_HEADER]: createLocalAttestationProof(secret, nonce, 4242, 10100)! },
+      })) as unknown as typeof fetch,
+    });
+    expect(await read(404, { error: "Not found" })).toEqual({ status: "unavailable", reason: "http 404" });
+    const fenced = await read(503, { admissionStatus: "blocked", admissionBlockReason: "foreign-ownership" });
+    expect(fenced).toEqual({ status: "unavailable", reason: "http 503" });
+    expect(formatNativeMainAdmissionLines(fenced)).toEqual(["  --  native-main admission unavailable from the running proxy"]);
+  });
+
+  test("reports a healthy ready proxy as no admission warning", async () => {
+    const target = { hostname: "127.0.0.1", port: 10100, pid: 4242, source: "runtime" } as const;
+    const secret = "A".repeat(43);
+    const nonce = "B".repeat(43);
+    const report = await fetchNativeMainAdmission(target, {
+      readRuntime: () => ({ pid: 4242, port: 10100, attestationSecret: secret }),
+      createNonce: () => nonce,
+      now: () => 1_800_000_000_000,
+      fetchImpl: (async () => Response.json({ admissionStatus: "ready" }, {
+        status: 200,
+        headers: { [LOCAL_ATTESTATION_PROOF_HEADER]: createLocalAttestationProof(secret, nonce, 4242, 10100)! },
+      })) as typeof fetch,
+    });
+
+    expect(report).toEqual({ status: "ready" });
+    expect(formatNativeMainAdmissionLines(report)).toEqual([]);
+  });
+
+  test("runDoctor reports a separate fenced service process, not its local gate", async () => {
+    const secret = "A".repeat(43);
+    const home = mkdtempSync(join(tmpdir(), "ocx-doctor-admission-"));
+    const opencodexHome = join(home, "opencodex");
+    const codexHome = join(home, "codex");
+    mkdirSync(opencodexHome, { recursive: true });
+    mkdirSync(codexHome, { recursive: true });
+    const previousOpenCodexHome = process.env.OPENCODEX_HOME;
+    const previousCodexHome = process.env.CODEX_HOME;
+    const previousRuntime = readRuntimePort();
+    const serverUrl = new URL("../../src/server/direct-local-http.ts", import.meta.url).href;
+    const authUrl = new URL("../../src/lib/local-management-attestation.ts", import.meta.url).href;
+    const capabilityUrl = new URL("../../src/lib/local-management-capability.ts", import.meta.url).href;
+    const source = [
+      `const { directLocalHttpFetch } = await import(${JSON.stringify(serverUrl)});`,
+      `const { createLocalAttestationProof, LOCAL_ATTESTATION_PROOF_HEADER } = await import(${JSON.stringify(authUrl)});`,
+      `const { LOCAL_MANAGEMENT_NONCE_HEADER, LOCAL_MANAGEMENT_READ_PATHS } = await import(${JSON.stringify(capabilityUrl)});`,
+      `const secret = process.env.OCX_TEST_NATIVE_DOCTOR_PROXY_SECRET;`,
+      `const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {`,
+      `  const url = new URL(request.url);`,
+      `  const nonce = request.headers.get(LOCAL_MANAGEMENT_NONCE_HEADER);`,
+      `  const proof = nonce ? createLocalAttestationProof(secret, nonce, process.pid, server.port) : null;`,
+      `  const headers = proof ? { [LOCAL_ATTESTATION_PROOF_HEADER]: proof } : undefined;`,
+      `  if (url.pathname === LOCAL_MANAGEMENT_READ_PATHS.nativeMainAdmission) return Response.json({ admissionStatus: "blocked", admissionBlockReason: "foreign-ownership" }, { status: 200, headers });`,
+      `  if (url.pathname === LOCAL_MANAGEMENT_READ_PATHS.systemMemory) return Response.json({}, { status: 401, headers });`,
+      `  return Response.json({}, { status: 404, headers });`,
+      `} });`,
+      `console.log(JSON.stringify({ pid: process.pid, port: server.port }));`,
+    ].join("\n");
+    const proxy = spawn(process.execPath, ["-e", source], {
+      cwd: process.cwd(),
+      env: { ...process.env, OCX_TEST_NATIVE_DOCTOR_PROXY_SECRET: secret },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let childStderr = "";
+    proxy.stderr.setEncoding("utf8").on("data", (chunk: string) => { childStderr += chunk; });
+    const { pid, port } = await new Promise<{ pid: number; port: number }>((resolve, reject) => {
+      let stdout = "";
+      const timer = setTimeout(() => {
+        proxy.kill("SIGTERM");
+        reject(new Error(`native doctor test proxy did not start: ${childStderr}`));
+      }, 8_000);
+      proxy.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+        stdout += chunk;
+        for (const line of stdout.split("\n")) {
+          try {
+            const ready = JSON.parse(line) as { pid?: unknown; port?: unknown };
+            if (typeof ready.pid === "number" && typeof ready.port === "number") {
+              clearTimeout(timer);
+              resolve({ pid: ready.pid, port: ready.port });
+              return;
+            }
+          } catch { /* Bun preloads may print a diagnostic before the readiness record. */ }
+        }
+      });
+      proxy.once("error", error => { clearTimeout(timer); reject(error); });
+      proxy.once("exit", code => { clearTimeout(timer); reject(new Error(`native doctor test proxy exited (${code}): ${childStderr}`)); });
+    });
+    const target = { hostname: "127.0.0.1", port, pid, source: "runtime" as const };
+    const restore: Array<() => void> = [];
+    const logs: string[] = [];
+    try {
+      process.env.OPENCODEX_HOME = opencodexHome;
+      process.env.CODEX_HOME = codexHome;
+      writeRuntimePort({ pid, port, hostname: "127.0.0.1", attestationSecret: secret });
+      writeFileSync(join(opencodexHome, "config.json"), JSON.stringify({ ...getDefaultConfig(), port, hostname: "127.0.0.1", codexAutoStart: false }));
+      const live = spyOn(proxyLiveness, "findLiveProxy").mockResolvedValue(target);
+      restore.push(() => live.mockRestore());
+      const startup = spyOn(cliStatus, "fetchLiveStartupHealth").mockResolvedValue(null);
+      restore.push(() => startup.mockRestore());
+      const inspect = spyOn(desktopSupervision, "inspectDesktopSupervision").mockReturnValue({ kind: "unsupported" });
+      restore.push(() => inspect.mockRestore());
+      const fetch = spyOn(globalThis, "fetch").mockImplementation(async () => new Response(null, { status: 503 }));
+      restore.push(() => fetch.mockRestore());
+      const log = spyOn(console, "log").mockImplementation((...args: unknown[]) => { logs.push(args.map(String).join(" ")); });
+      restore.push(() => log.mockRestore());
+
+      await runDoctor([]);
+      const report = logs.join("\n");
+      expect(report).toContain("native-main admission is fenced (reason: foreign-ownership)");
+      expect(report).toContain("Native model requests return 503 until this clears.");
+    } finally {
+      for (const cleanup of restore.reverse()) cleanup();
+      if (proxy.exitCode === null) {
+        await new Promise<void>(resolve => {
+          proxy.once("exit", () => resolve());
+          proxy.kill("SIGTERM");
+        });
+      }
+      if (previousOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousOpenCodexHome;
+      if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = previousCodexHome;
+      if (previousRuntime) writeRuntimePort(previousRuntime);
+      else removeRuntimePort(pid);
+      removeTreeWithRetry(home);
+    }
+  }, 20_000);
+
+  test("reports an unavailable result when no live proxy can be queried", () => {
+    expect(formatNativeMainAdmissionLines({ status: "unavailable", reason: "proxy-not-found" }))
+      .toContain("  --  native-main admission unavailable from the running proxy");
   });
 });
 

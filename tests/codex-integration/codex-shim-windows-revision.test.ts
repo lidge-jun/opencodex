@@ -17,6 +17,7 @@ import { ownedWrapperFingerprint, wrapperInodeIsOurs } from "../../src/codex/shi
 import { readBoundedRegularFile } from "../../src/codex/shim-state-file";
 import { tryAcquireShimRestoreLock } from "../../src/codex/shim-restore-lock";
 import { refreshObsoleteWindowsShim } from "../../src/codex/shim-windows-refresh";
+import { legacyShimBackupPath } from "../../src/codex/shim-legacy-record";
 import { buildWindowsCodexShim, buildWindowsPowerShellCodexShim, WINDOWS_SHIM_REVISION_MARKER } from "../../src/codex/shim-templates";
 import { isolateCodexShimEnvironment } from "../helpers/codex-shim-install-fixture";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -167,7 +168,7 @@ function previousTemplate(flavor: "cmd" | "ps1", backing: string): string {
 }
 
 function seed(flavor: "cmd" | "ps1"): { wrapper: string; backing: string; previous: string } {
-  const wrapper = join(dir, `codex.${flavor}`), backing = `${wrapper}.opencodex-real`;
+  const wrapper = join(dir, `codex.${flavor}`), backing = legacyShimBackupPath(wrapper);
   const previous = previousTemplate(flavor, backing);
   fs.writeFileSync(wrapper, previous);
   fs.writeFileSync(backing, "native fixture launcher");
@@ -261,7 +262,7 @@ describe("obsolete Windows refresh transaction never clobbers a concurrent repla
 
   test("a partial sibling upgrade resumes automatically instead of deferring forever", () => {
     const cmd = join(dir, "codex.cmd"), ps1 = join(dir, "codex.ps1");
-    const wrappers = [cmd, ps1].map(wrapperPath => ({ originalPath: wrapperPath, wrapperPath, backupPath: `${wrapperPath}.opencodex-real` }));
+    const wrappers = [cmd, ps1].map(wrapperPath => ({ originalPath: wrapperPath, wrapperPath, backupPath: legacyShimBackupPath(wrapperPath) }));
     for (const file of wrappers) fs.writeFileSync(file.backupPath, "native fixture launcher");
     fs.writeFileSync(cmd, buildWindowsCodexShim(wrappers[0]!.backupPath, "C:\\bun.exe", "C:\\cli.ts", "process"));
     fs.writeFileSync(ps1, previousTemplate("ps1", wrappers[1]!.backupPath));
@@ -324,7 +325,7 @@ describe("round-4 identity bindings", () => {
 
   test("a current sibling replaced during the stability wait defers without adopting it", () => {
     const cmd = join(dir, "codex.cmd"), ps1 = join(dir, "codex.ps1");
-    const wrappers = [cmd, ps1].map(wrapperPath => ({ originalPath: wrapperPath, wrapperPath, backupPath: `${wrapperPath}.opencodex-real` }));
+    const wrappers = [cmd, ps1].map(wrapperPath => ({ originalPath: wrapperPath, wrapperPath, backupPath: legacyShimBackupPath(wrapperPath) }));
     for (const file of wrappers) fs.writeFileSync(file.backupPath, "native fixture launcher");
     fs.writeFileSync(cmd, buildWindowsCodexShim(wrappers[0]!.backupPath, "C:\\bun.exe", "C:\\cli.ts", "process"));
     const obsolete = previousTemplate("ps1", wrappers[1]!.backupPath);

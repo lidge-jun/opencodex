@@ -9,6 +9,7 @@ import { IconStar } from "../../icons";
 import {
   binProviderStatus,
   isFreeProvider,
+  usesUnverifiedVertexCredentials,
   type WorkspaceItem,
   type WorkspaceProvider,
 } from "../../provider-workspace/catalog";
@@ -20,6 +21,7 @@ export function statusLabel(p: WorkspaceProvider, t: TFn): string {
   const s = binProviderStatus(p);
   if (s === "disabled") return t("prov.disabledBadge");
   if (s === "ready") return t("pws.status.ready");
+  if (usesUnverifiedVertexCredentials(p)) return t("pws.vertexUnverified");
   if ("activeNeedsReauth" in p && (p as WorkspaceItem).activeNeedsReauth) {
     return t("pws.status.needsAttention");
   }
@@ -27,6 +29,7 @@ export function statusLabel(p: WorkspaceProvider, t: TFn): string {
 }
 
 export function authModeLabel(item: WorkspaceItem, t: TFn): string {
+  if (usesUnverifiedVertexCredentials(item)) return t("pws.vertexHostAuth");
   // Configured with authMode "key" (the registry's authKind), but no key is ever used.
   if (isSubscriptionCliProvider(item)) return t("modal.badge.subscriptionCli");
   switch (item.authMode) {

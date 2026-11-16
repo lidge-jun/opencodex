@@ -1,4 +1,7 @@
+import type { MessagesSseErrorFilter } from "./messages-sse-error-filter";
+import type { MessagesSseFrameHooks } from "../lib/messages-sse-error-presentation";
 import type { TranslatorBudget } from "../lib/translator-budget";
+import { carryPacedStream, pacedQueuingStrategy } from "../lib/paced-stream";
 import { Buffer } from "node:buffer";
 
 /**
@@ -89,6 +92,7 @@ export function createSseBlockBuffer(
   next(): { block: string; delimiter: string } | null;
   tail(): string;
   isEmpty(): boolean;
+  endsWithLineFeed(): boolean;
   compact(): void;
   clear(): void;
 } {
@@ -169,6 +173,7 @@ export function createSseBlockBuffer(
     },
     tail: () => buffer.slice(offset),
     isEmpty: () => offset === buffer.length,
+    endsWithLineFeed: () => lastCodeUnit === 10,
     compact,
     clear() {
       budget.releaseRetained(bufferBytes, scope);
@@ -271,8 +276,10 @@ export function relaySseWithPayloadRewrite(
   body: ReadableStream<Uint8Array>,
   rewrite: SsePayloadRewrite,
   translatorBudget: TranslatorBudget,
+  frameHooks?: MessagesSseFrameHooks,
+  clientFilter?: MessagesSseErrorFilter,
 ): ReadableStream<Uint8Array> {
-  return relaySseWithBlockRewrite(body, payloadRewriteAsBlockRewrite(rewrite), translatorBudget);
+  return relaySseWithBlockRewrite(body, payloadRewriteAsBlockRewrite(rewrite), translatorBudget, frameHooks, clientFilter);
 }
 
 /**
@@ -285,6 +292,8 @@ export function relaySseWithBlockRewrite(
   body: ReadableStream<Uint8Array>,
   rewrite: SseBlockRewrite,
   translatorBudget: TranslatorBudget,
+  frameHooks?: MessagesSseFrameHooks,
+  clientFilter?: MessagesSseErrorFilter,
 ): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
@@ -298,20 +307,27 @@ export function relaySseWithBlockRewrite(
   const disposeRewrite = (): void => {
     if (disposed) return;
     disposed = true;
+    frameHooks?.dispose();
+    clientFilter?.dispose();
     try { rewrite.dispose?.(); } catch { /* teardown must not throw */ }
   };
 
   const enqueueText = (
     controller: ReadableStreamDefaultController<Uint8Array>,
     text: string,
-  ): void => {
+    original?: string,
+  ): number => {
     const bytes = Buffer.byteLength(text, "utf8");
     const reservation = translatorBudget.reserveTransient(bytes, { kind: "live_transient" });
     try {
       const encoded = encoder.encode(text);
-      controller.enqueue(encoded);
+      if (original !== undefined) frameHooks?.output(original, encoded);
+      let emitted = 0;
+      if (clientFilter) clientFilter.push(encoded, value => { controller.enqueue(value); emitted++; });
+      else { controller.enqueue(encoded); emitted++; }
       reservation.commitRetained();
       translatorBudget.releaseRetained(bytes, { kind: "live_transient" });
+      return emitted;
     } catch (error) {
       reservation.release();
       throw error;
@@ -336,8 +352,7 @@ export function relaySseWithBlockRewrite(
         // Synthetic earlier blocks need a settled delimiter; only the final one can
         // inherit an upstream LF in a later chunk. Completing CR as CRLF is equivalent.
         const settled = index < outBlocks.length - 1 && delimiter.endsWith("\r") ? delimiter + "\n" : delimiter;
-        enqueueText(controller, outBlocks[index]! + settled);
-        emitted += 1;
+        emitted += enqueueText(controller, outBlocks[index]! + settled, block + delimiter);
       }
     }
     buffer.compact();
@@ -349,8 +364,7 @@ export function relaySseWithBlockRewrite(
       // blocks must still be framed as separate events (#893 review).
       const tailDelimiter = tail.includes("\r\n") ? "\r\n\r\n" : "\n\n";
       for (let i = 0; i < tailBlocks.length; i++) {
-        enqueueText(controller, tailBlocks[i]! + (i < tailBlocks.length - 1 ? tailDelimiter : ""));
-        emitted += 1;
+        emitted += enqueueText(controller, tailBlocks[i]! + (i < tailBlocks.length - 1 ? tailDelimiter : ""), tail);
       }
       buffer.clear();
     }
@@ -367,14 +381,11 @@ export function relaySseWithBlockRewrite(
     // Consume a late LF before scanning, so it cannot pair with a new LF to create
     // a phantom empty callback. Any following line ending stays in the input buffer.
     buffer.append(fragment);
-    if (continuation && pendingLineFeedVisible) {
-      enqueueText(controller, "\n");
-      return 1;
-    }
+    if (continuation && pendingLineFeedVisible) return enqueueText(controller, "\n");
     return 0;
   };
 
-  return new ReadableStream<Uint8Array>({
+  return carryPacedStream(body, new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
         // A network chunk is not an SSE-event boundary. Bun may not issue a
@@ -392,10 +403,12 @@ export function relaySseWithBlockRewrite(
             emitProcessedBlocks(controller, true);
             if (cancelled) return;
             buffer.clear();
+            clientFilter?.finish(value => controller.enqueue(value));
             disposeRewrite();
             controller.close();
             return;
           }
+          frameHooks?.input(value, buffer.isEmpty(), !buffer.isEmpty() && buffer.endsWithLineFeed(), pendingLineFeed);
           const continuation = appendFragment(controller, decoder.decode(value, { stream: true }));
           const emitted = continuation + emitProcessedBlocks(controller);
           if (cancelled || emitted > 0) return;
@@ -415,5 +428,5 @@ export function relaySseWithBlockRewrite(
       disposeRewrite();
       reader.cancel(reason).catch(() => {});
     },
-  });
+  }, pacedQueuingStrategy(body)));
 }

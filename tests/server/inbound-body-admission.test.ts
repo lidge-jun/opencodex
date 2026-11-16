@@ -591,7 +591,7 @@ describe("raised inbound body admission lifetime", () => {
   }
 
   for (const normalized of [false, true]) {
-    test(`retains measured JSON bytes with translator normalization ${normalized}`, async () => {
+    test(`retains normalized JSON bytes with translator budget ${normalized}`, async () => {
       const text = "1e20";
       const req = admissionRequest("/v1/responses", text);
       const translator = normalized ? createTranslatorBudget() : undefined;
@@ -602,8 +602,31 @@ describe("raised inbound body admission lifetime", () => {
           assert.equal(await readJsonRequestBody(req, translator, RAISED_BODY_LIMIT), 1e20);
           return new Response("held");
         }, req);
-        const expected = normalized ? Buffer.byteLength(JSON.stringify(1e20)) : Buffer.byteLength(text);
+        const expected = Buffer.byteLength(JSON.stringify(1e20));
         assert.deepEqual(testBudget.snapshot(), { reservedBytes: expected, activeLeases: 1, queuedRequests: 0 });
+        await response.text();
+      } finally {
+        await response?.body?.cancel().catch(() => undefined);
+        translator?.dispose();
+      }
+    });
+  }
+
+  for (const normalized of [false, true]) {
+    test(`measures a deeply nested valid JSON body with translator budget ${normalized}`, async () => {
+      // Deeper than the call stack allows a recursive serializer to walk, and well under the limit.
+      const depth = 500_000;
+      const text = "[".repeat(depth) + "]".repeat(depth);
+      const req = admissionRequest("/v1/responses", text);
+      const translator = normalized ? createTranslatorBudget() : undefined;
+      let response: Response | undefined;
+      try {
+        response = await admittedBodyWork(async () => {
+          assert.equal(Array.isArray(await readJsonRequestBody(req, translator, RAISED_BODY_LIMIT)), true);
+          return new Response("held");
+        }, req);
+        assert.equal(response.status, 200);
+        assert.deepEqual(testBudget.snapshot(), { reservedBytes: text.length, activeLeases: 1, queuedRequests: 0 });
         await response.text();
       } finally {
         await response?.body?.cancel().catch(() => undefined);

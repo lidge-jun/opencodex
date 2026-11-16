@@ -3,6 +3,8 @@ import { loadConfig } from "../config";
 import { anthropicProviderIdentityError, cmdAnthropicAccountThreshold } from "./account-anthropic-threshold";
 import { isReservedCodexAccountWord, reportCodexAccountTargetError, resolveCodexAccountTarget } from "./account-target";
 import { hasPassiveAccountQuota } from "../providers/quota";
+import { isWeeklyAllowancePercent } from "../providers/quota-types";
+import { terminalSafeText } from "./runtime-api";
 import { closeSync, openSync, readSync, readFileSync, statSync } from "node:fs";
 import {
   MAX_ACCOUNT_PRIORITY,
@@ -46,7 +48,7 @@ const EXTENDED_USAGE = `Usage:
   ocx account alias <provider> <id|alias|main> <display-name|-> [--json]
   ocx account priority <provider> <id|alias|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]
   ocx account pause <provider> <id|alias|main> [--json]
-  ocx account resume <provider> <id|alias|main> [--json]
+  ocx account resume <provider> <id|alias|main> [--if-healthy] [--json]
   ocx account pause-exhausted <provider> [--json]
   ocx account strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>] [--json]
   ocx account sticky <provider> [<1-100>] [--json]
@@ -275,16 +277,28 @@ function refreshLine(row: FamilyRows["rows"][number]): string {
 
 function quotaParts(quota: ProviderQuotaDto): string[] {
   const parts: string[] = [];
-  const add = (label: string, percent: number | undefined, resetAt?: number) => {
+  const add = (label: string, percent: number | undefined, resetAt?: number, note?: string) => {
     if (percent === undefined) return;
-    parts.push(`${label} ${percent}%`);
+    parts.push(`${label} ${percent}%${note ? ` (${note})` : ""}`);
     const reset = resetIso(resetAt);
     if (reset) parts.push(`resets ${reset}`);
   };
   add("5h", quota.fiveHourPercent, quota.fiveHourResetAt);
   add("weekly", quota.weeklyPercent, quota.weeklyResetAt);
   add("monthly", quota.monthlyPercent, quota.monthlyResetAt);
-  for (const window of quota.customWindows ?? []) add(window.label, window.percent, window.resetAt);
+  for (const window of quota.customWindows ?? []) add(terminalSafeText(window.displayLabel ?? window.label), window.percent, window.resetAt);
+  // Same rule as the dashboard: a routed row with the same label wins over a display-only one.
+  const routed = new Set((quota.customWindows ?? []).map(window => window.label));
+  for (const window of quota.displayWindows ?? []) {
+    if (routed.has(window.label)) continue;
+    const share = isWeeklyAllowancePercent(window.weeklyAllowancePercent) ? `up to ${window.weeklyAllowancePercent}% of weekly; ` : "";
+    add(terminalSafeText(window.label), window.percent, window.resetAt, `${share}not in effect`);
+  }
+  for (const window of quota.unknownBudgetWindows ?? []) {
+    parts.push(`${terminalSafeText(window.label)} unknown`);
+    const reset = resetIso(window.resetAt);
+    if (reset) parts.push(`resets ${reset}`);
+  }
   return parts;
 }
 
@@ -803,14 +817,26 @@ function resolveGenericOAuthAccountTarget(accounts: unknown[], requested: string
 /** Pause or resume a Codex, OAuth, or API-key pool account. */
 export async function cmdPause(args: string[], deps: AccountDeps, paused: boolean): Promise<number> {
   const wantsJson = flag(args, "--json");
+  // #8398: an explicit resume the server performs only after an account-bound health read.
+  const ifHealthy = flag(args, "--if-healthy");
   const name = args.shift();
   const requestedId = args.shift();
   const verb = paused ? "pause" : "resume";
   if (!name || !requestedId || args.length) return usage();
+  if (ifHealthy && paused) return usage("Error: --if-healthy applies only to resume");
   const classified = configAndType(deps, name);
   if ("error" in classified) return usage(`Error: ${classified.error}`);
+  if (ifHealthy && classified.type === "api-key") return usage("Error: --if-healthy applies to the openai Codex account pool or an OAuth provider pool");
   const baseUrl = await resolveBaseUrl(deps);
   if (!baseUrl) return proxyUnreachable();
+  const healthGate = ifHealthy ? { ifHealthy: true } : {};
+  // A refused health-gated resume is an answer, not a failure: exit 3 lets a supervisor tell it apart.
+  const refusedResume = (json: Record<string, unknown>, id: string): number | undefined => {
+    if (!ifHealthy || json.code !== "resume_refused" || typeof json.reason !== "string") return undefined;
+    if (wantsJson) console.log(JSON.stringify({ ok: false, provider: name, id, resumed: false, reason: json.reason }, null, 2));
+    else console.log(`${name}: ${requestedId} not resumed: ${json.reason}`);
+    return 3;
+  };
 
   if (classified.type === "oauth") {
     const list = await apiJson(deps, baseUrl, "GET", `/api/oauth/accounts?provider=${encodeURIComponent(name)}`);
@@ -823,8 +849,10 @@ export async function cmdPause(args: string[], deps: AccountDeps, paused: boolea
       provider: name,
       accountId: target.id,
       paused,
+      ...healthGate,
     });
     if (response.status === 0) return proxyUnreachable(response.transportError);
+    if (response.status === 409) { const refused = refusedResume(response.json, target.id); if (refused !== undefined) return refused; }
     if (response.status !== 200) return apiError(response.json, `failed to ${verb} ${requestedId}`, response.status);
 
     if (wantsJson) {
@@ -848,7 +876,32 @@ export async function cmdPause(args: string[], deps: AccountDeps, paused: boolea
     const result = await apiJson(deps, baseUrl, "PUT", "/api/providers/keys/pause", { name, id: target.id, paused });
     if (result.status === 0) return proxyUnreachable(result.transportError);
     if (result.status !== 200) return apiError(result.json, `failed to ${verb} account`, result.status);
-    console.log(wantsJson ? JSON.stringify({ ok: true, provider: name, id: target.id, paused }, null, 2) : `${name}: account ${paused ? "paused" : "resumed"}`);
+    const idx = rows.rows.findIndex(row => row.id === target.id);
+    const ordered = idx >= 0 ? [...rows.rows.slice(idx + 1), ...rows.rows.slice(0, idx)] : rows.rows;
+    const beforeActiveId = rows.rows.find(row => row.active && !row.paused)?.id ?? null;
+    const inferredActiveId = paused
+      ? (beforeActiveId === target.id
+        ? (ordered.find(row => row.id !== target.id && !row.paused)?.id ?? null)
+        : beforeActiveId)
+      : (beforeActiveId ?? (rows.rows.some(row => row.paused) ? target.id : null));
+    const activeAccountId = result.json.activeAccountId !== undefined
+      ? result.json.activeAccountId
+      : result.json.activeId !== undefined
+        ? result.json.activeId
+        : inferredActiveId;
+    const activeAccountChanged = typeof result.json.activeAccountChanged === "boolean"
+      ? result.json.activeAccountChanged
+      : beforeActiveId !== activeAccountId;
+    if (wantsJson) {
+      console.log(JSON.stringify({ ok: true, provider: name, id: target.id, paused,
+        activeAccountId: activeAccountId ?? null,
+        activeAccountChanged }, null, 2));
+    } else {
+      console.log(`${name}: account ${paused ? "paused" : "resumed"}`);
+      if (activeAccountChanged) {
+        console.error(`Active account changed to ${String(activeAccountId ?? "none")}.`);
+      }
+    }
     return 0;
   }
   if (classified.type !== "codex") {
@@ -859,10 +912,11 @@ export async function cmdPause(args: string[], deps: AccountDeps, paused: boolea
   if ("error" in target) return reportCodexAccountTargetError(target);
   const id = target.id;
 
-  const response = await apiJson(deps, baseUrl, "PUT", "/api/codex-auth/accounts/pause", { id, paused });
+  const response = await apiJson(deps, baseUrl, "PUT", "/api/codex-auth/accounts/pause", { id, paused, ...healthGate });
   // Transport sentinel first: status 0 means the proxy never answered, and comparing it to
   // 200 would report an unreachable proxy as a management error.
   if (response.status === 0) return proxyUnreachable(response.transportError);
+  if (response.status === 409) { const refused = refusedResume(response.json, id); if (refused !== undefined) return refused; }
   if (response.status !== 200) return apiError(response.json, `failed to ${verb} ${requestedId}`, response.status);
 
   if (wantsJson) {

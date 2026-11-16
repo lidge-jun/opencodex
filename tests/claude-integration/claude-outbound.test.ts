@@ -827,7 +827,7 @@ describe("claude outbound SSE", () => {
     const names = events.map(e => e.name);
     // open text block is closed before the error event
     expect(names).toEqual(["message_start", "ping", "content_block_start", "content_block_delta", "content_block_stop", "error"]);
-    expect(events.at(-1)!.data).toEqual({ type: "error", error: { type: "rate_limit_error", message: "rate limited" } });
+    expect(events.at(-1)!.data).toEqual({ type: "error", error: { type: "rate_limit_error", message: "The provider rate limit was reached; retry later." } });
   });
 
   test("incomplete(max_output_tokens) -> max_tokens; EOF w/o terminal fails closed", async () => {
@@ -857,7 +857,7 @@ describe("claude outbound SSE", () => {
       sse("response.failed", { response: { status: "failed", error: { status: 502, message: "bad gateway" } } }),
     ].join("");
     const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
-    expect(events.at(-1)!.data).toEqual({ type: "error", error: { type: "overloaded_error", message: "bad gateway" } });
+    expect(events.at(-1)!.data).toEqual({ type: "error", error: { type: "overloaded_error", message: "The provider failed to complete the request." } });
   });
 
   test("pre-output heartbeat stays transport-only before an initial error", async () => {
@@ -869,7 +869,7 @@ describe("claude outbound SSE", () => {
     const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m", { pingIntervalMs: 0 }));
     expect(events.map(event => event.name)).toEqual(["ping", "error"]);
     expect(events.some(event => event.name === "message_start")).toBe(false);
-    expect(events.at(-1)!.data).toEqual({ type: "error", error: { type: "overloaded_error", message: "bad gateway" } });
+    expect(events.at(-1)!.data).toEqual({ type: "error", error: { type: "overloaded_error", message: "The provider failed to complete the request." } });
   });
 
   test("failed with NO status (relaySseWithFailedTail synthetic tail) -> default 500 -> overloaded_error", async () => {
@@ -880,7 +880,7 @@ describe("claude outbound SSE", () => {
     const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
     expect(events.at(-1)!.data).toEqual({
       type: "error",
-      error: { type: "overloaded_error", message: "Upstream stream terminated unexpectedly" },
+      error: { type: "overloaded_error", message: "The provider failed to complete the request." },
     });
   });
 
@@ -902,7 +902,7 @@ describe("claude outbound SSE", () => {
     const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
     expect(events.at(-1)!.data).toEqual({
       type: "error",
-      error: { type: "rate_limit_error", message: "Cursor rate limit exceeded: quota exhausted" },
+      error: { type: "rate_limit_error", message: "The provider rate limit was reached; retry later." },
     });
   });
 
@@ -919,7 +919,7 @@ describe("claude outbound SSE", () => {
     const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
     expect(events.at(-1)!.data).toEqual({
       type: "error",
-      error: { type: "authentication_error", message: "Cursor authentication failed: expired token" },
+      error: { type: "authentication_error", message: "The provider rejected the configured credentials." },
     });
   });
 
@@ -936,7 +936,7 @@ describe("claude outbound SSE", () => {
     const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
     expect(events.at(-1)!.data).toEqual({
       type: "error",
-      error: { type: "invalid_request_error", message: "prompt is too long: Cursor context limit exceeded", code: "context_length_exceeded" },
+      error: { type: "invalid_request_error", message: "prompt is too long: The request exceeds the model's context window.", code: "context_length_exceeded" },
     });
   });
 
@@ -953,7 +953,7 @@ describe("claude outbound SSE", () => {
     const events = await collectEvents(responsesSseToAnthropicSse(streamFrom(upstream), "m"));
     expect(events.at(-1)!.data).toEqual({
       type: "error",
-      error: { type: "overloaded_error", message: "Cursor server overloaded: unavailable" },
+      error: { type: "overloaded_error", message: "The provider is temporarily unavailable; retry later." },
     });
   });
 
@@ -984,7 +984,7 @@ describe("claude outbound SSE", () => {
       type: "error",
       error: {
         type: "overloaded_error",
-        message: "upstream stream produced malformed tool call arguments",
+        message: "The provider failed to complete the request.",
       },
     });
   });
@@ -999,7 +999,7 @@ describe("claude outbound SSE", () => {
       },
     });
     const events = await collectEvents(responsesSseToAnthropicSse(boom, "m"));
-    expect(events.at(-1)!.data).toMatchObject({ type: "error", error: { type: "api_error", message: "proxy-internal read failure" } });
+    expect(events.at(-1)!.data).toMatchObject({ type: "error", error: { type: "api_error", message: "The proxy could not reach or read the provider." } });
   });
 
   test("incomplete(content_filter) -> refusal stop_reason", async () => {
@@ -1036,7 +1036,7 @@ describe("claude outbound SSE", () => {
         type: "error",
         error: {
           type: "overloaded_error",
-          message: "Kiro produced no final answer on its bounded completion retry",
+          message: "The provider stream ended before the request completed.",
         },
       },
     });
@@ -1050,7 +1050,7 @@ describe("claude outbound SSE", () => {
       type: "error",
       error: {
         type: "overloaded_error",
-        message: "upstream response was incomplete (reasoning_only_kiro_fallback)",
+        message: "The provider stream ended before the request completed.",
       },
     });
   });

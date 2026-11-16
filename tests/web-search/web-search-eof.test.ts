@@ -17,6 +17,40 @@ function eofResponse(wire: string, fragmented = false): Response {
 
 const prefix = 'data: {"type":"response.output_text.delta","delta":"draft"}\n\n';
 
+describe("Responses sidecar terminal boundary", () => {
+  for (const terminal of [
+    'data: {"type":"response.completed"}\n\n',
+    'data: {"type":"response.done"}\n\n',
+    "data: [DONE]\n\n",
+  ]) {
+    for (const fragmented of [false, true]) {
+      test(`ignores later events after ${terminal.trim()} (${fragmented ? "fragmented" : "one chunk"})`, async () => {
+        const wire = prefix + terminal + 'data: {"type":"response.output_text.delta","delta":"unexpected"}\n\n' +
+          'data: {"type":"response.failed","error":{"message":"late failure"}}\n\n';
+        expect(await parseSidecarSSE(eofResponse(wire, fragmented))).toEqual({ text: "draft", sources: [] });
+      });
+    }
+  }
+
+  for (const fragmented of [false, true]) {
+    test(`a failure cannot acquire a later response's final output (${fragmented ? "fragmented" : "one chunk"})`, async () => {
+      const wire = prefix + 'data: {"type":"response.failed","error":{"message":"stopped"}}\n\n' +
+        `data: ${JSON.stringify({ type: "response.completed", response: { output: [
+          { type: "message", content: [{ type: "output_text", text: "Later response" }] },
+        ] } })}\n\n`;
+      expect(await parseSidecarSSE(eofResponse(wire, fragmented))).toEqual({
+        text: "draft", sources: [], error: "stopped",
+      });
+    });
+
+    test(`text after completion cannot consume the decoded budget (${fragmented ? "fragmented" : "one chunk"})`, async () => {
+      const wire = prefix + 'data: {"type":"response.completed"}\n\n' +
+        `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "x".repeat(MAX_SIDECAR_DECODED_CHARS) })}\n\n`;
+      expect(await parseSidecarSSE(eofResponse(wire, fragmented))).toEqual({ text: "draft", sources: [] });
+    });
+  }
+});
+
 describe("Responses sidecar final data line at EOF", () => {
   test.each(["response.completed", "response.done"])("accepts an unterminated %s with authoritative text and sources", async type => {
     const final = { type, response: { output: [{ type: "message", content: [{

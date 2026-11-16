@@ -2,10 +2,11 @@ import { readFileSync } from "node:fs";
 import type { OcxConfig } from "../../types";
 import { ConfigWriteDestinationChanged, type LockHandle } from "../config-write-lock";
 import { CODEX_CONFIG_PATH } from "../paths";
+import type { CodexCliSelectionAsyncParentWrite } from "../cli-update-selection-gate";
 
 /**
  * Reconcile the native `features.multi_agent_v2` override when an injection carries an
- * explicit v1 surface pin.
+ * explicit pin-driven surface ("v1" or "v2-plaintext").
  *
  * Codex resolves the global v2 feature before catalog-level `multi_agent_version` pins, so a
  * config.toml that still enables `multi_agent_v2` would run v2 sessions under a catalog the
@@ -14,10 +15,15 @@ import { CODEX_CONFIG_PATH } from "../paths";
  * injection on a previously-v2 Codex home the common trigger. The explicit mode selectors
  * (`ocx v2 mode`, `PUT /api/v2`) already run the same format-preserving transition; this is
  * the injection-side half of that contract.
+ *
+ * "v2-plaintext" joins the reconcile for a different reason: its whole surface already
+ * runs v2, but through catalog pins rather than the global feature. Leaving the flag on
+ * would outrank those pins and change the native agent-enable and thread-limit semantics,
+ * so the flag is disabled the same way.
  */
 export type InjectedV1SurfaceReconcile =
   | { ok: true; content: string; changed: boolean }
-  | { ok: false; message: string };
+  | { ok: false; message: string; retryable?: boolean };
 
 let toggleForTests: ((enabled: boolean, env: NodeJS.ProcessEnv, validateBeforeSpawn: () => void) => void) | undefined;
 
@@ -44,6 +50,9 @@ export interface PreparedV1SurfaceReconcile {
    * only — `run()` re-checks the flag on the bytes present under the lock.
    */
   readonly enabledAtPrepare: boolean;
+  /** Acquire before the config lock; an already-v1 home needs no selection lease. */
+  admit(): Promise<boolean>;
+  release(): void;
   /**
    * `heldConfigWriteLock` is the injector's own held write-lock handle: the
    * transition would otherwise re-acquire the same file and refuse itself.
@@ -63,7 +72,8 @@ export async function prepareInjectedV1SurfaceReconcile(
   config: Pick<OcxConfig, "multiAgentMode"> | undefined,
   options: { validateOnly?: boolean },
 ): Promise<PreparedV1SurfaceReconcile | null> {
-  if (options.validateOnly || config?.multiAgentMode !== "v1") {
+  const mode = config?.multiAgentMode;
+  if (options.validateOnly || (mode !== "v1" && mode !== "v2-plaintext")) {
     return null;
   }
   const { isMultiAgentV2Enabled, transitionMultiAgentV2 } = await import("../features");
@@ -74,22 +84,44 @@ export async function prepareInjectedV1SurfaceReconcile(
     toggle = (enabled, env, validate) => runCodexFeaturesCommand(enabled ? "enable" : "disable", "multi_agent_v2", env, validate);
   }
   const resolvedToggle = toggle;
+  const { beginCodexCliSelectionParentWriteAsync, CodexCliSelectionMutationBusyError } = await import("../cli-update-selection-gate");
+  let selection: CodexCliSelectionAsyncParentWrite | undefined;
+  const busy = (): InjectedV1SurfaceReconcile => ({
+    ok: false, retryable: true,
+    message: "Codex config injection refused: the v1 transition has no current CLI selection admission. Retry the injection after the CLI update finishes.",
+  });
   return {
     enabledAtPrepare,
+    async admit() {
+      if (!enabledAtPrepare) return true;
+      if (selection) return selection.entered;
+      selection = await beginCodexCliSelectionParentWriteAsync();
+      return selection.entered;
+    },
+    release() { selection?.exit(); },
     run(heldConfigWriteLock) {
       // Decide on the bytes present NOW, under the lock — the prepare-time
       // answer is stale the moment another writer could have touched the file.
       if (!isMultiAgentV2Enabled()) {
         return { ok: true, content: readFileSync(CODEX_CONFIG_PATH, "utf-8"), changed: false };
       }
-      const transition = transitionMultiAgentV2(false, resolvedToggle, {
-        ...(heldConfigWriteLock !== undefined ? { heldConfigWriteLock } : {}),
-      });
+      // A prepare-time no-op may have become a transition. Refuse without a child;
+      // a fresh pass can acquire admission before taking the config lock.
+      if (!selection?.entered) return busy();
+      let transition: ReturnType<typeof transitionMultiAgentV2>;
+      try {
+        transition = selection.commit(() => transitionMultiAgentV2(false, resolvedToggle, {
+          ...(heldConfigWriteLock !== undefined ? { heldConfigWriteLock } : {}),
+        }));
+      } catch (error) {
+        if (error instanceof CodexCliSelectionMutationBusyError) return busy();
+        throw error;
+      }
       if (!transition.ok) {
         if (transition.retryable === false) throw new ConfigWriteDestinationChanged(transition.error);
         return {
           ok: false,
-          message: `Codex config injection refused: could not reconcile the v1 surface with the global multi_agent_v2 feature: ${transition.error}.`,
+          message: `Codex config injection refused: could not reconcile the ${mode} surface with the global multi_agent_v2 feature: ${transition.error}.`,
         };
       }
       return { ok: true, content: readFileSync(CODEX_CONFIG_PATH, "utf-8"), changed: transition.changed };

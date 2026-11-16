@@ -11,7 +11,7 @@ description: Listener, удалённый доступ, admission key, тайм�
 | Поле | Тип | По умолчанию | Значение |
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | Порт, который слушает прокси. |
-| `hostname?` | `string` | `"127.0.0.1"` | Адрес bind'а. Не-loopback bind требует `OPENCODEX_API_AUTH_TOKEN`. |
+| `hostname?` | `string` | `"127.0.0.1"` | Адрес привязки. Вне loopback нужен клиентский ключ из `config.apiKeys` либо общий токен данных: `OPENCODEX_API_AUTH_TOKEN`, затем `OCX_API_TOKEN_FILE`, затем установленный файл `service-api-token`, доступный только владельцу. См. [Удалённый доступ](#remote-access). |
 | `proxy?` | `string` | — | URL исходящего HTTP(S) или SOCKS5-прокси (`socks5://host:port`) или `${ENV_VAR}`. HTTP URL пишутся в `HTTP_PROXY` / `HTTPS_PROXY`, если те не заданы. SOCKS5 используют встроенный SOCKS5-туннель и также пишутся в `ALL_PROXY` (`ocx start --socks5`); унаследованные `HTTP(S)_PROXY` сбрасываются в этом процессе. Loopback всегда остаётся в `NO_PROXY`. |
 | `emptyCompletionRetry?` | `boolean` | `false` | Явно включает один идентичный повтор Responses, если в turn нет ни текста, ни tool call, включая случай, когда stream завершается до terminal event. Повтор может тарифицироваться. `OCX_EMPTY_COMPLETION_RETRY=0` отключает его без изменения config; combo и routed-compaction turn исключены. |
 | `dropCodexSafetyBuffering?` | `boolean` | `false` | Удаляет подсказки Codex safety-buffering из passthrough-ответов Codex Responses: заголовки `x-codex-safety-buffering-enabled` / `x-codex-safety-buffering-faster-model`, SSE-события `response.metadata` типа `safety_buffering` и поле `safety_buffering` в других SSE-событиях. Codex TUI отображает их как предложение повторить запрос с более быстрой моделью, действие по умолчанию в котором переключает сессию на более слабую модель. Остальные заголовки `x-codex-*` и содержимое других SSE-событий передаются без изменений, кроме удаления этого поля. По умолчанию выключено. |
@@ -33,6 +33,7 @@ description: Listener, удалённый доступ, admission key, тайм�
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | Настройки sidecar'а web-search. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | Настройки sidecar'а описания изображений. |
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Настройки standalone Images relay для Codex `image_gen`. |
+| `telemetry?` | `OcxTelemetryConfig` | включено по умолчанию после уведомления человека | Состояние согласия на ежедневную анонимную телеметрию (`decision`, `decidedAt`, `noticeShownAt`). Ничего не отправляется, пока человек не увидит уведомление или не даст согласие. Переопределяется `OCX_TELEMETRY=0` или `DO_NOT_TRACK=1`. См. [Телеметрия (`telemetry`)](#телеметрия-telemetry) и [Телеметрия и конфиденциальность](/ru/guides/telemetry/). |
 
 Если более старая development-сборка изменила metadata resume-history до появления резервного
 backup'а, выполните `ocx recover-history --legacy-openai --yes`, чтобы принудительно вернуть
@@ -43,19 +44,18 @@ native-provider history.
 
 Нативный Chat также использует `stallTimeoutSec` при ожидании вывода upstream. Непустой текст, рассуждения, отказ, обновления инструментов и события завершения обновляют время ожидания; комментарии keepalive, только роль и только статистика использования его не обновляют. Ожидание чтения медленным клиентом приостанавливает отсчёт. При зависании возникает `upstream_stall_timeout`: событие ошибки для потокового клиента или HTTP 502 без потоковой передачи. Отмена до конечного результата возвращает ошибку отмены вместо успешного частичного ответа. Непотоковый Chat поддерживает SSE с LF, CRLF и многострочными полями data.
 
+<a id="remote-access"></a>
+
 ## Удалённый доступ
 
-По умолчанию bind `127.0.0.1` доступен только на loopback. Не-loopback-адрес, например
-`0.0.0.0`, требует token-auth и для `/api/*`, и для data plane. Экспортируйте токен перед стартом:
+Привязка по умолчанию `127.0.0.1` ограничена loopback. Вне loopback, например на `0.0.0.0`, запросы моделей требуют клиентского ключа из `config.apiKeys` или общего токена данных. Маршруты управления `/api/*` используют отдельный `OPENCODEX_ADMIN_AUTH_TOKEN` или созданный токен администратора, в том числе на loopback. Учётные данные плоскости данных не дают доступа к управлению; не передавайте токен администратора модельному клиенту.
 
 ```bash
 export OPENCODEX_API_AUTH_TOKEN="your-secret-token"
 ocx start
 ```
 
-Без этой переменной прокси откажется подниматься на удалённом bind'е. Для фоновой службы
-экспортируйте её до `ocx service install`, чтобы launchd, systemd или Task Scheduler получили
-значение. Затем клиенты должны отправлять:
+В примере используется токен окружения. Экспорт не нужен, если уже есть токен из `OCX_API_TOKEN_FILE` или приватного `service-api-token` либо настроен действующий клиентский ключ. `ocx service install` может создать отсутствующий файл токена и не требует обязательного экспорта этой переменной. Модельные клиенты могут отправлять:
 
 ```text
 x-opencodex-api-key: your-secret-token
@@ -63,15 +63,13 @@ x-opencodex-api-key: your-secret-token
 
 | Эндпоинт | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
 | --- | --- | --- | --- |
-| `/v1/responses` | not accepted | **required** | not accepted |
-| `/v1/chat/completions` | not accepted | **required** | not accepted |
+| `/v1/responses` | принимается | принимается | не принимается |
+| `/v1/chat/completions` | принимается | принимается | не принимается |
 | `/v1/messages` | accepted | accepted | accepted |
 | `/v1/messages/count_tokens` | accepted | accepted | accepted |
 | `/v1/models` | accepted | accepted | accepted |
 
-Responses и Chat Completions резервируют `Authorization` под возможный passthrough Codex Direct,
-поэтому там принимается только dedicated admission-header. Сгенерированные в дашборде `apiKeys`
-могут после старта заменить env-token; сравнение кандидатов выполняется constant-time.
+Responses и Chat Completions принимают распознанные учётные данные плоскости данных в `x-opencodex-api-key` либо, если этот заголовок отсутствует или пуст после удаления пробелов, в `Authorization: Bearer`. Непустой после удаления пробелов выделенный заголовок приоритетен даже с неверным значением; действующий bearer не отменяет отказ. Посторонний bearer не даёт доступа к прокси, а `x-api-key` на этих маршрутах не принимается. Сгенерированные `apiKeys` и общий токен данных сравниваются за постоянное время; административные данные не дают доступа к моделям.
 
 Messages и `count_tokens` ради совместимости routed-клиентов по-прежнему принимают все три формы admission. Но на
 non-loopback bind нативный passthrough Anthropic принимает proxy admission только через
@@ -109,6 +107,35 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 проброса, которые открывают клиентскую сторону на `0.0.0.0`. Если сомневаетесь, явно указывайте
 `ssh -L 127.0.0.1:20100:localhost:10100`.
 :::
+
+## Телеметрия (`telemetry`)
+
+Ежедневная анонимная телеметрия использования включается по умолчанию только после того, как человек увидел уведомление (во всплывающем окне GUI или в интерактивном терминале). Блок `telemetry` в `config.json` хранит это состояние согласия:
+
+```json
+{
+  "telemetry": {
+    "decision": "accepted",
+    "decidedAt": "2026-11-07T09:00:00.000Z",
+    "noticeShownAt": "2026-11-07T09:00:00.000Z"
+  }
+}
+```
+
+| Поле | Тип | По умолчанию | Значение |
+| --- | --- | --- | --- |
+| `telemetry.decision?` | `"accepted" \| "declined"` | не задано (не решено) | Явный выбор пользователя. `"declined"` отключает телеметрию и удаляет `<OPENCODEX_HOME>/telemetry-id.json`; `"accepted"` включает ежедневные отчёты. |
+| `telemetry.decidedAt?` | `string` (ISO 8601) | не задано | Временная метка UTC, когда было записано `decision`. Отправляются только завершённые календарные сутки UTC строго после суток UTC `decidedAt ?? noticeShownAt` (`day > formatUtcDay(decidedAt ?? noticeShownAt)`); сами сутки согласия и более ранние дни никогда не досылаются. |
+| `telemetry.noticeShownAt?` | `string` (ISO 8601) | не задано | Временная метка UTC, когда человек увидел уведомление в веб-дашборде или интерактивном терминале. Когда `decision` не задано, телеметрия отправляется только при наличии `noticeShownAt` (`default-on`); без него прокси остаётся в состоянии `awaiting-notice`. |
+
+Адрес коллектора (`https://telemetry.opencodex.me/v1/events`) задан константой в коде и не настраивается через `config.json`.
+
+Две переменные окружения переопределяют `config.json` и немедленно отключают телеметрию без изменения `config.json` (при обнаружении при запуске прокси или на тике планировщика также сохраняется `ineligibleThroughDay` в `<OPENCODEX_HOME>/telemetry-state.json` и удаляется `<OPENCODEX_HOME>/telemetry-id.json`, поэтому дни отключения не досылаются, а после снятия переменной создаётся новый ID):
+
+- `OCX_TELEMETRY=0` (также принимает `false`, `off` или `no` без учёта регистра)
+- `DO_NOT_TRACK=1` (также принимает `true` или `yes` без учёта регистра)
+
+Команды `ocx config set telemetry` и `ocx config unset telemetry` отклоняются, а `ocx config import` игнорирует импортируемый блок `telemetry` для всех клиентов, сохраняя текущее состояние; используйте `ocx telemetry enable` (требует интерактивного терминала и подтверждения, иначе завершается с `agent_consent_required` / `tty_required`), `ocx telemetry disable`, `ocx telemetry status [--json]` или переключатель в разделе **Proxy details** веб-дашборда. Полная схема пакета и правила хранения описаны в разделе [Телеметрия и конфиденциальность](/ru/guides/telemetry/).
 
 ## Очистка storage
 

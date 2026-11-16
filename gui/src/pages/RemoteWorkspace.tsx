@@ -1,9 +1,12 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useKeyedClientResource } from "../client-resource";
 import { readJsonOrThrow } from "../fetch-json";
-import { IconLink, IconMonitor, IconPlus, IconRefresh, IconTerminal, IconTrash } from "../icons";
+import { IconCheck, IconLink, IconMonitor, IconPlus, IconRefresh, IconTerminal, IconTrash } from "../icons";
 import { useT } from "../i18n/shared";
-import { Notice, Select } from "../ui";
+import { Select } from "../ui";
+import { Button } from "@/components/ui-v2/button";
+import { cn } from "@/lib/utils";
+import { Banner, IconButton, PageHeader, Panel } from "../components/v2-startup/primitives";
 import { confirmAction } from "../action-dialogs";
 import { remoteWorkspacePairingCommands } from "../remote-workspace-command";
 import { RemoteWorkspaceChats } from "../components/remote-workspace/RemoteWorkspaceChats";
@@ -24,6 +27,13 @@ async function copyText(text: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** A labelled field of the new-session form. */
+function field(label: string, control: ReactNode) {
+  return (
+    <label className="flex min-w-0 flex-col gap-1.5"><span className="text-[12px] leading-4 font-medium text-fg-muted">{label}</span>{control}</label>
+  );
 }
 
 export default function RemoteWorkspace({ apiBase, hubOrigin }: { apiBase: string; hubOrigin: string }) {
@@ -136,113 +146,101 @@ export default function RemoteWorkspace({ apiBase, hubOrigin }: { apiBase: strin
     setCopiedCommand(await copyText(command) ? kind : null);
   };
 
-  if (!state && !resource.error) return <div className="alert">{t("remote.loading")}</div>;
+  if (!state && !resource.error) return <Banner tone="info">{t("remote.loading")}</Banner>;
   if (resource.error && !state) {
-    return <><Notice tone="err">{t("remote.loadFailed")}</Notice><button type="button" className="btn btn-ghost" onClick={() => void resource.refresh()}>{t("common.retry")}</button></>;
+    return <Banner tone="err" action={<Button variant="outline" size="sm" onClick={() => void resource.refresh()}>{t("common.retry")}</Button>}>{t("remote.loadFailed")}</Banner>;
   }
-  if (state?.available === false) return <Notice tone="err">{t("remote.hubRequired")}</Notice>;
+  if (state?.available === false) return <Banner tone="err">{t("remote.hubRequired")}</Banner>;
 
   return (
-    <section className="remote-workspace-page">
-      <div className="page-head">
-        <div>
-          <h2>{t("remote.title")}</h2>
-          <p className="page-sub">{t("remote.subtitle")}</p>
-        </div>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={() => void resource.refresh()} disabled={resource.refreshing}>
-          <IconRefresh /> {t("remote.refresh")}
-        </button>
-      </div>
+    <section className="remote-workspace-page flex min-w-0 flex-col gap-5 font-sans text-fg">
+      <PageHeader title={t("remote.title")} subtitle={t("remote.subtitle")} actions={(
+        <Button variant="ghost" size="sm" onClick={() => void resource.refresh()} disabled={resource.refreshing}><IconRefresh /> {t("remote.refresh")}</Button>
+      )} />
 
-      {stale ? <Notice tone="err">{t("remote.loadFailed")}</Notice> : null}
-      {notice ? <Notice tone={notice.tone}>{notice.text}</Notice> : null}
+      {stale ? <Banner tone="err">{t("remote.loadFailed")}</Banner> : null}
+      {notice ? <Banner tone={notice.tone}>{notice.text}</Banner> : null}
 
-      <div className="remote-workspace-grid">
-        <div className="remote-workspace-column">
-          <article className="panel panel-accent remote-pair-card">
-            <div className="remote-panel-head">
-              <div className="remote-icon"><IconLink /></div>
-              <div><h3>{t("remote.addComputer")}</h3><p>{t("remote.addComputerHint")}</p></div>
-            </div>
-            <button type="button" className="btn btn-primary" onClick={() => void createPairing()} disabled={busy !== null}>
-              <IconPlus /> {t("remote.createPairing")}
-            </button>
+      <div className="grid min-w-0 items-start gap-4 lg:grid-cols-[minmax(280px,0.85fr)_minmax(0,1.3fr)]">
+        <div className="flex min-w-0 flex-col gap-4">
+          <Panel icon={<IconLink />} title={t("remote.addComputer")} description={t("remote.addComputerHint")}>
+            <div className="flex flex-col gap-4 p-4">
+            <Button variant="outline" className="self-start" onClick={() => void createPairing()} disabled={busy !== null}><IconPlus /> {t("remote.createPairing")}</Button>
             {pairing ? (
-              <div className="remote-pairing-result">
-                <span className="field-label">{t("remote.pairingCode")}</span>
-                <div className="remote-pairing-code">{pairing.code}</div>
-                <div className="remote-expiry">{t("remote.pairingExpires", { time: new Date(pairing.expiresAt).toLocaleTimeString() })}</div>
-                <span className="field-label">{t("remote.pairingCommandPosix")}</span>
-                <pre><code>{pairingCommands.posix}</code></pre>
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => void copyPairingCommand("posix", pairingCommands.posix)}>
-                  {copiedCommand === "posix" ? t("remote.copied") : t("remote.copyCommand")}
-                </button>
-                <span className="field-label">{t("remote.pairingCommandWindows")}</span>
-                <pre><code>{pairingCommands.powershell}</code></pre>
-                <button type="button" className="btn btn-ghost btn-sm" onClick={() => void copyPairingCommand("powershell", pairingCommands.powershell)}>
-                  {copiedCommand === "powershell" ? t("remote.copied") : t("remote.copyCommand")}
-                </button>
-              </div>
-            ) : null}
-          </article>
-
-          <section className="panel remote-device-panel">
-            <div className="remote-section-title"><h3>{t("remote.devices")}</h3><span>{devices.length}</span></div>
-            {devices.length === 0 ? <p className="remote-empty">{t("remote.noDevices")}</p> : (
-              <div className="remote-device-list">
-                {devices.map(device => (
-                  <div
-                    key={device.id}
-                    className={`remote-device${effectiveDevice?.id === device.id ? " selected" : ""}`}
-                  >
-                    <button
-                      type="button"
-                      className="remote-device-main"
-                      onClick={() => { setSelectedDeviceId(device.id); setSelectedRootId(device.roots[0]?.id ?? ""); }}
-                      aria-pressed={effectiveDevice?.id === device.id}
-                    >
-                      <span className={`remote-online-dot${device.online ? " online" : ""}`} />
-                      <span className="remote-device-copy"><strong>{device.name}</strong><small>{device.platform} · {device.online ? t("remote.online") : t("remote.offline")} · {device.capabilities.includes("workspace.exec") ? t("remote.capability.full") : t("remote.capability.files")}</small></span>
-                    </button>
-                    <button
-                      type="button"
-                      className="remote-revoke"
-                      aria-label={t("remote.revoke")}
-                      disabled={busy !== null}
-                      onClick={() => void revokeDevice(device)}
-                    ><IconTrash /></button>
+              <div className="remote-pairing-result flex flex-col gap-3 border-t border-line pt-4">
+                <div className="flex flex-col gap-1">
+                  <span className="text-[12px] font-medium text-fg-muted">{t("remote.pairingCode")}</span>
+                  <span className="font-mono text-[24px] leading-8 font-semibold tracking-[0.1em] text-fg">{pairing.code}</span>
+                  <span className="text-[12px] text-fg-subtle">{t("remote.pairingExpires", { time: new Date(pairing.expiresAt).toLocaleTimeString() })}</span>
+                </div>
+                {([["posix", t("remote.pairingCommandPosix"), pairingCommands.posix], ["powershell", t("remote.pairingCommandWindows"), pairingCommands.powershell]] as const).map(([kind, label, command]) => (
+                  <div key={kind} className="flex min-w-0 flex-col gap-1.5">
+                    <span className="text-[12px] font-medium text-fg-muted">{label}</span>
+                    <div className="flex min-w-0 items-start gap-1 rounded-[8px] bg-surface py-1 pr-1 pl-3 ring-1 ring-line">
+                      <pre className="m-0 min-w-0 flex-1 py-1.5 font-mono text-[12px] leading-[18px] whitespace-pre-wrap text-fg [overflow-wrap:anywhere]"><code>{command}</code></pre>
+                      <Button variant="ghost" size="sm" onClick={() => void copyPairingCommand(kind, command)}>
+                        {copiedCommand === kind ? t("remote.copied") : t("remote.copyCommand")}
+                      </Button>
+                    </div>
                   </div>
                 ))}
               </div>
+            ) : null}
+            </div>
+          </Panel>
+
+          <Panel title={t("remote.devices")} meta={devices.length}>
+            {devices.length === 0 ? <p className="m-0 px-4 py-6 text-center text-[13px] text-fg-muted">{t("remote.noDevices")}</p> : (
+              <ul className="m-0 flex list-none flex-col gap-1 p-1">
+                {devices.map(device => {
+                  const selected = effectiveDevice?.id === device.id;
+                  return (
+                    <li key={device.id} className={cn("remote-device flex min-w-0 items-center gap-1 rounded-[8px] pr-1 transition-colors hover:bg-surface", selected && "bg-surface ring-1 ring-line-strong")}>
+                      <button type="button" aria-pressed={selected}
+                        onClick={() => { setSelectedDeviceId(device.id); setSelectedRootId(device.roots[0]?.id ?? ""); }}
+                        className="ui-v2 flex min-w-0 flex-1 cursor-pointer items-center gap-3 rounded-[8px] px-3 py-2.5 text-left focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-highlight">
+                        <span aria-hidden="true" className={cn("size-2 shrink-0 rounded-full", device.online ? "bg-success" : "bg-fg-subtle")} />
+                        <span className="flex min-w-0 flex-col">
+                          <strong className="truncate text-[14px] font-semibold">{device.name}</strong>
+                          <small className="truncate text-[12px] text-fg-muted">{device.platform} · {device.online ? t("remote.online") : t("remote.offline")} · {device.capabilities.includes("workspace.exec") ? t("remote.capability.full") : t("remote.capability.files")}</small>
+                        </span>
+                        {selected && <span aria-hidden="true" className="ml-auto text-fg [&_svg]:size-4"><IconCheck /></span>}
+                      </button>
+                      <IconButton label={t("remote.revoke")} tone="danger" disabled={busy !== null} onClick={() => void revokeDevice(device)}><IconTrash /></IconButton>
+                    </li>
+                  );
+                })}
+              </ul>
             )}
-          </section>
+          </Panel>
         </div>
 
-        <div className="remote-workspace-column remote-session-column">
-          <section className="panel remote-launch-panel">
-            <div className="remote-section-title"><h3>{t("remote.newSession")}</h3><IconMonitor /></div>
-            <div className="remote-launch-fields">
-              <label><span className="field-label">{t("remote.device")}</span><Select value={effectiveDevice?.id ?? ""} options={devices.map(device => ({ value: device.id, label: device.name }))} onChange={value => { setSelectedDeviceId(value); setSelectedRootId(devices.find(device => device.id === value)?.roots[0]?.id ?? ""); }} label={t("remote.device")} disabled={devices.length === 0} /></label>
-              <label><span className="field-label">{t("remote.folder")}</span><Select value={effectiveRoot?.id ?? ""} options={(effectiveDevice?.roots ?? []).map(root => ({ value: root.id, label: root.label }))} onChange={setSelectedRootId} label={t("remote.folder")} disabled={!effectiveDevice} /></label>
-              <label><span className="field-label">{t("remote.runtime")}</span><Select value={effectiveProfile} options={PROFILES.map(profile => ({ value: profile, label: state?.runtimes?.[profile]?.available ? PROFILE_LABEL[profile] : `${PROFILE_LABEL[profile]} · ${t("remote.unavailable")}` }))} onChange={value => { if (isRuntimeProfile(value)) setSelectedProfile(value); }} label={t("remote.runtime")} /></label>
-              <label><span className="field-label">{t("remote.access")}</span><Select value={selectedAccessMode} options={[{ value: "read-only", label: t("remote.access.readOnly") }, { value: "workspace", label: workspaceAccessLabel }]} onChange={value => { if (isRemoteAccessMode(value)) setSelectedAccessMode(value); }} label={t("remote.access")} /></label>
+        <Panel icon={<IconMonitor />} title={t("remote.newSession")}>
+          <div className="flex flex-col gap-4 p-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              {field(t("remote.device"), <Select fullWidth value={effectiveDevice?.id ?? ""} options={devices.map(device => ({ value: device.id, label: device.name }))} onChange={value => { setSelectedDeviceId(value); setSelectedRootId(devices.find(device => device.id === value)?.roots[0]?.id ?? ""); }} label={t("remote.device")} disabled={devices.length === 0} />)}
+              {field(t("remote.folder"), <Select fullWidth value={effectiveRoot?.id ?? ""} options={(effectiveDevice?.roots ?? []).map(root => ({ value: root.id, label: root.label }))} onChange={setSelectedRootId} label={t("remote.folder")} disabled={!effectiveDevice} />)}
+              {field(t("remote.runtime"), <Select fullWidth value={effectiveProfile} options={PROFILES.map(profile => ({ value: profile, label: state?.runtimes?.[profile]?.available ? PROFILE_LABEL[profile] : `${PROFILE_LABEL[profile]} · ${t("remote.unavailable")}` }))} onChange={value => { if (isRuntimeProfile(value)) setSelectedProfile(value); }} label={t("remote.runtime")} />)}
+              {field(t("remote.access"), <Select fullWidth value={selectedAccessMode} options={[{ value: "read-only", label: t("remote.access.readOnly") }, { value: "workspace", label: workspaceAccessLabel }]} onChange={value => { if (isRemoteAccessMode(value)) setSelectedAccessMode(value); }} label={t("remote.access")} />)}
             </div>
             {effectiveDevice ? (
-              <div className="remote-execution-map">
-                <span><strong>{PROFILE_LABEL[effectiveProfile]}</strong>{t("remote.runsOnHub")}</span>
-                <span><strong>{effectiveDevice.name}</strong>{selectedAccessMode === "read-only" ? t("remote.runsReadOnly") : selectedCanExecute ? t("remote.runsFilesCommands") : t("remote.runsFilesOnly")}</span>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {([[PROFILE_LABEL[effectiveProfile], t("remote.runsOnHub")], [effectiveDevice.name, selectedAccessMode === "read-only" ? t("remote.runsReadOnly") : selectedCanExecute ? t("remote.runsFilesCommands") : t("remote.runsFilesOnly")]] as const).map(([name, where]) => (
+                  <span key={where} className="flex min-w-0 flex-col gap-0.5 rounded-[8px] bg-surface px-3 py-2.5 text-[12px] text-fg-muted ring-1 ring-line">
+                    <strong className="truncate text-[13px] font-semibold text-fg">{name}</strong>{where}
+                  </span>
+                ))}
               </div>
             ) : null}
-            {selectedAccessMode === "workspace" && !selectedCanExecute && effectiveDevice ? <Notice tone="err">{t("remote.execUnavailable")}</Notice> : null}
+            {selectedAccessMode === "workspace" && !selectedCanExecute && effectiveDevice ? <Banner tone="err">{t("remote.execUnavailable")}</Banner> : null}
             {!state?.runtimes?.[effectiveProfile]?.available && state?.runtimes?.[effectiveProfile]?.reason
-              ? <p className="remote-runtime-reason">{state.runtimes[effectiveProfile].reason}</p>
+              ? <p className="m-0 text-[12px] leading-[18px] text-danger">{state.runtimes[effectiveProfile].reason}</p>
               : null}
-            <button type="button" className="btn btn-primary remote-start" onClick={() => void createSession()} disabled={!effectiveDevice?.online || !effectiveRoot || !state?.runtimes?.[effectiveProfile]?.available || busy !== null}>
+            <Button variant="primary" className="w-full" onClick={() => void createSession()} disabled={!effectiveDevice?.online || !effectiveRoot || !state?.runtimes?.[effectiveProfile]?.available || busy !== null}>
               <IconTerminal /> {t("remote.startSession")}
-            </button>
-          </section>
-
-        </div>
+            </Button>
+          </div>
+        </Panel>
       </div>
       <RemoteWorkspaceChats key={apiBase} apiBase={apiBase} sessions={sessions} devices={devices} selectedSessionId={selectedSessionId} stale={stale} refresh={resource.refresh} />
     </section>

@@ -141,6 +141,39 @@ describe("sub-agent surface default and advisory", () => {
     expect(multiAgentSurfaceAdvisoryRequired({ multiAgentMode: "v1", multiAgentSurfaceAdvisoryVersion: 0 })).toBe(false);
   });
 
+  test("v2-plaintext is silent whatever the stored acknowledgement", () => {
+    // The mode is itself the consent record, whether it arrived through the acknowledged
+    // API/CLI entry or a hand edit; the generic v1 recommendation must not re-ask it.
+    expect(multiAgentSurfaceAdvisoryRequired({ multiAgentMode: "v2-plaintext" })).toBe(false);
+    expect(multiAgentSurfaceAdvisoryRequired({ multiAgentMode: "v2-plaintext", multiAgentSurfaceAdvisoryVersion: 0 })).toBe(false);
+    expect(multiAgentSurfaceAdvisory({ multiAgentMode: "v2-plaintext" })).toMatchObject({
+      required: false,
+      mode: "v2-plaintext",
+    });
+  });
+
+  test("a stored unanswered advisory stays stored and resurfaces after leaving v2-plaintext", () => {
+    const config = {
+      ...getDefaultConfig(),
+      multiAgentMode: "v2-plaintext" as const,
+      multiAgentSurfaceAdvisoryVersion: 0,
+    };
+    expect(multiAgentSurfaceAdvisoryRequired(config)).toBe(false);
+    expect(multiAgentSurfaceAdvisoryRequired({ ...config, multiAgentMode: "v2" as const })).toBe(true);
+    expect(multiAgentSurfaceAdvisoryRequired({ ...config, multiAgentMode: "default" as const })).toBe(true);
+  });
+
+  test("a repaired v2-plaintext config is still v2-plaintext and silent", () => {
+    const stored = { ...getDefaultConfig(), multiAgentMode: "v2-plaintext" } as Record<string, unknown>;
+    delete stored.defaultProvider;
+    delete stored.multiAgentSurfaceAdvisoryVersion;
+    writeConfig(stored);
+
+    const loaded = loadConfig();
+    expect(loaded.multiAgentMode).toBe("v2-plaintext");
+    expect(multiAgentSurfaceAdvisoryRequired(loaded)).toBe(false);
+  });
+
   test("the fresh default survives save and load", () => {
     saveConfig(getDefaultConfig());
     const loaded = loadConfig();

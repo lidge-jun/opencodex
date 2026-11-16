@@ -96,6 +96,12 @@ function aggregateState(states: readonly IntegrationState[]): IntegrationState {
   return states.every(state => state === "current") ? "current" : "stale";
 }
 
+/** A profile the user left unselected that carries no block is neutral, not pending (#8355). */
+function listedAggregateState(profiles: readonly AsideProfileState[]): IntegrationState {
+  const relevant = profiles.filter(profile => profile.enabled || profile.state !== "absent");
+  return aggregateState((relevant.length > 0 ? relevant : profiles).map(profile => profile.state));
+}
+
 async function profileState(ctx: AsideProfileContext, profile: AsideProfile): Promise<AsideProfileState> {
   const metadata = {
     profileId: profile.id, ...(profile.name !== undefined ? { name: profile.name } : {}),
@@ -134,7 +140,7 @@ export async function listAsideProfileStates(input: AsideProfilesInput): Promise
     clientId: "aside", profiles, total: profiles.length, enabledCount,
     allEnabled: profiles.length > 0 && enabledCount === profiles.length,
     appliedCount: profiles.filter(profile => profile.state === "current" || profile.state === "stale").length,
-    state: aggregateState(profiles.map(profile => profile.state)),
+    state: listedAggregateState(profiles),
     installed: profiles.some(profile => profile.installed),
     configPath: profiles.find(profile => profile.current)?.configPath ?? profiles[0]?.configPath ?? "",
     snapshotCount, retentionDegraded: profiles.some(profile => profile.retentionDegraded),

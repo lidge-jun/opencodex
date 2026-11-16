@@ -84,10 +84,74 @@ ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
+ocx link recover (--link-id <id> | --operation-id <id>) [--json]
 ocx link reconnect --link-id <id> [--json]
+ocx link check (--link-id <id> | --all) [--no-wait] [--json]
+ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]
+ocx link sync (--link-id <id> | --all) [--no-wait] [--json]
+ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]
+ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]
 ```
 
 非交互式终端（非 TTY）必须提供 `--expect-fingerprint`。交互式终端中可省略该参数，但必须明确确认所提供的指纹。
+
+在 Home 上，`ocx link check (--link-id <id> | --all)` 会读取每个由 Home 添加的子机的已安装版本、安装类型和更新途径：它通过链接的 SSH 连接在子机上运行 `ocx update --plan`（每台子机 60 秒，同时最多三台），该命令只计算更新计划，不做任何修改。早于 2.97.0 的子机显示为 `owner-action`（`legacy-ocx`），其版本在 macOS 和 Linux 上通过再一次只读 SSH 调用获取，在 Windows 上取自子机通过链接上报的版本。由子机发起的链接和 `ocx-child` 子机不经 SSH 直接报告。`ocx link status --json` 会为每一行添加 `child` 块（版本、版本差异、目录是否最新、活动情况、最近一次操作）。详情和退出码见 [Child install, catalog and activity](/guides/remote-link/#child-install-catalog-and-activity)（英文）。
+
+### 从 Home 操作子机
+
+`ocx link sync`、`ocx link restart-codex` 和 `ocx link update` 通过链接的 SSH 连接在由 Home 添加的子机上运行，并以 JSON 输出任务。`sync` 运行固定的 `ocx sync --expect-link`（子机需 2.93.0 或更高版本）。`restart-codex` 先同步，再重启子机上的 Codex app-server，使正在运行的 Codex 加载当前目录；`--scope codex` 还会重新启动桌面应用。重启只能指定一个链接；`restart-codex` 和 `--restart-codex` 需要 `--yes`，而 `ocx link sync --link-id <id> --restart-app-server-only` 无需确认即可重启 app-server。当 Home 正在为该子机中继模型请求时，重启会被跳过（`restart-skipped:link-active`）。对于早于 2.69 的子机，非流式请求要到响应开始后才能被看到。`update --yes` 使用子机自己的更新程序把子机的 OpenCodex 更新到本 Home 的版本，绝不会更新到其他版本（子机需 2.97.0 或更高版本；npm 和 pnpm 安装通过其 Node 启动器应用更新，因此 `ocx link check` 也会在那里以只读方式运行 `node --version`）。每次更新一台子机，应用成功、失败或回滚后会再次同步；结果未知的应用不会重试也不会同步，请用 `ocx link check` 检查。正在为该子机中继的请求会中断。Windows 子机只支持 `sync`，`ocx-child` 子机会将重启和更新报告为不支持。CLI 需要绑定到 loopback 的 Home；在其他 Home 上无法执行这些操作，仪表盘的 Remote Link 页面会为由 Home 添加的子机提供相同的操作。详情和退出码见 [Operating Children from the Home](/guides/remote-link/#operating-children-from-the-home)（英文）。 此保护为尽力而为：在检查与重启之间开始的请求仍可能被结束，因此需要保留轮次时，请先暂停该子机上的新请求。 Home 也无法判断 Codex 是否正处在运行工具而非模型请求的轮次中，因此在重启该子机上的 Codex 或更新其 OpenCodex 之前，请等待进行中的 Codex 轮次结束。手动更新会重启该子机的 OpenCodex，并结束仍为其中继的任何轮次；自动更新会等到子机空闲。 `ocx sync --restart-children`（或 `--restart-children=codex --yes`）在 Home 同步向外传播时，对所有子机或用 `--child <linkId>` 指定的子机应用同一规则：每台子机都会同步，只有在有中继请求进行时才跳过其重启（`restart-skipped:link-active`）。
+
+### 子机版本与操作
+
+在 Home 上，每个 Remote Link 行都会显示 Home 最后获知的该子机信息，由 Home 添加的行还带有对该子机的控件。徽标含义如下：
+
+- 子机版本，以及旁边的 `Behind Home (<home version>)`、`Same version as Home` 或 `Newer than Home`；可以应用更新时还会显示 `Update available: <home version>`。从子机自身仪表盘启动的链接只显示版本，没有版本差异徽标；`ocx-child` 子机始终显示 `unknown`。
+- 安装类型（`Desktop app`、`GOAT`、`Source checkout`），本版本未命名的类型以等宽字体显示原始标记。
+- `Catalog current` 或 `Catalog out of date`。`Codex restart needed (<n>)` 与 `Codex not running` 徽章只有在 Child 报告其 Codex 状态后才会出现，该报告将由后续版本加入；目前还没有 Child 版本会发送它，因此这两个徽章现在还不会显示。
+- 上一次操作，显示为 `Last <operation>: <state>`，原因以等宽字体显示；任务占用该链接期间显示正在运行的操作。
+
+当 Home 无法自行更新该子机时，该行会说明应改做什么：在该子机的 OpenCodex Desktop 中使用 Check for Updates、手动更新、通过 `mise` 更新，或交给 GOAT 处理。未知原因会以标记显示，而不是猜测的句子。
+
+这四个操作启动与 CLI 相同的任务，因此子机也需要相同的版本：
+
+- **Check** 像 `ocx link check` 一样读取子机的安装信息。
+- **Sync now** 在该处像 `ocx link sync` 一样运行固定版本的 `ocx sync --expect-link`。
+- **Restart Codex** 会打开范围选择。`Codex app-servers` 重启子机的后台 app-server，使其加载当前目录；它不会刷新 Codex 桌面应用自身的 app-server，因此这种情况请重启桌面应用。`Codex desktop app` 还会退出并重新启动桌面应用，其中打开的对话会结束。
+- **Update** 像 `ocx link update` 一样，用子机自身的更新程序把子机的 OpenCodex 更新到本 Home 的版本。确认文字会说明子机的 OpenCodex 会重启、仍为该子机中继的任何轮次会结束，并且自动更新会等到子机空闲。
+
+**Check all** 和 **Update all** 作用于所有符合条件的 Home 添加链接；Update all 仍然一次只处理一台子机，且绝不针对其他版本。正在运行的任务会为每台子机显示一行，包含状态、更新前后的版本、目录同步结果和重启结果。任务结束后面板消失，各行刷新；Home 已不再知道的任务（因为 Home 重启过）会如此说明，并以各行自身的状态作为答案。任务占用链接期间，该行的操作和 Disconnect 会被禁用；服务器本来也会拒绝该请求。
+
+列表下方的 **Child automation** 面板显示并编辑与 `ocx link policy` 相同的策略文件：目录分发（默认自动）、Codex 重启（默认从不）、更新（默认空闲时自动，本版本尚未启用）以及空闲时长。保存时只写入你更改过的值。如果策略文件已损坏，面板会说明自动目录分发和自动更新已关闭，此时保存会写入全部设置，使你选择的模式得以保留。这些控件不会绕过服务器：服务器会在每个任务中重新检查策略、链接状态和子机活动。
+
+不要链接你不拥有的机器：Home 会用你的 SSH 密钥在那里运行命令。
+
+### 目录自动分发与子机策略
+
+目录分发默认开启。当 Home 的目录发生变化时（目录自动刷新报告了变化，或每 5 分钟一次的检查发现了在仪表盘或管理 API 中所做的编辑），Home 会等待 60 秒让编辑稳定下来（距第一次变化最多 5 分钟）。之后无需你进行任何操作，它会在后台为每台符合条件的子机打开一个 SSH 会话，运行与 `ocx link sync` 相同的固定 `ocx sync --expect-link`；除非你启用（见下文 `childCodexRestart`），否则不会重启 Codex。符合条件的子机是：由 Home 发起的链接、隧道已连接、没有其他操作在运行，并且此 Home 在那里最后一次运行的同步早于这次变化；只下载过目录的子机仍被视为落后。正在中继模型请求的子机，只有在其 Codex 设置已经与 Home 一致、且应用这些设置后其 OpenCodex 客户端运行时已经重启过时才会同步，否则同步会重启该运行时；否则会在它空闲后再同步。同步失败会在 5 分钟后重试，间隔逐次翻倍，最长 6 小时；低于 2.93.0 的子机在报告其他版本之前不会重试。这些任务与其他任务显示方式相同，带有 `trigger: "auto"`。没有链接的 Home 不会运行其中任何部分。
+
+分发修复的是子机的目录文件。子机上已经在运行的 Codex app-server 会继续使用已加载的列表，直到重启：请使用 `ocx link restart-codex --link-id <id> --yes` 或 `ocx sync --restart-children`，或者用 `ocx link policy --child-codex-restart app-server-when-idle` 让 Home 重启 app-server；Home 只会在同步运行时仍然空闲的子机上这样做。该设置从下一次自动同步起生效；目录已是最新的子机不会被同步，因此也不会被重启，请手动重启它。
+
+策略保存在 Home 的 `<configDir>/link/child-policy.json` 中，不会写入 `config.json`：
+
+| 设置 | 默认值 | 取值 |
+|---|---|---|
+| `catalogFanout` | `auto` | `auto`, `manual` |
+| `childCodexRestart` | `never` | `never`, `app-server-when-idle` |
+| `updates` | `auto-when-idle` | `off`, `notify`, `auto-when-idle` |
+| `idleAfterMs` | `600000` (10 分钟) | 1 到 60 分钟 |
+
+`updates` 默认会自动让空闲的子机保持与 Home 相同的版本。本版本中自动更新尚未生效；该设置现在就会保存，因此用 `ocx link policy --updates notify` 或 `--updates off` 做出的退出选择，在自动更新到来时依然有效。`idleAfterMs` 表示子机在没有被中继的模型请求的情况下持续多久才算空闲；它也决定 `ocx link status` 中的 `activity.idle`。
+
+```text
+ocx link policy                                    # 读取策略
+ocx link policy --catalog-fanout manual            # 关闭目录自动分发
+ocx link policy --child-codex-restart app-server-when-idle
+ocx link policy --updates off --idle-after-minutes 20 --json
+```
+
+`GET` 和 `PUT /api/link/children/policy` 读取和修改相同的设置（环回上的管理令牌，或仪表盘会话）；`PUT` 只发送要修改的设置。如果文件损坏或包含未知取值，目录自动分发和更新都会关闭，并且 `ocx link policy` 会提示这一点。保存会清除警告，但未指定的设置仍保持关闭，请显式开启，例如 `ocx link policy --catalog-fanout auto --updates auto-when-idle`。Home 从不自行改写该文件。
+
+不要链接不属于你的机器：Home 会用你的 SSH 密钥在那里运行命令。
 
 ## 相关指南
 

@@ -1,6 +1,6 @@
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -116,6 +116,42 @@ describe("ocx config display redaction", () => {
     }
   });
 
+  test("#8319: a key the running proxy reads only at startup says a restart is needed", () => {
+    const dir = freshConfig();
+    try {
+      const cors = runCli(["config", "set", "corsAllowOrigins", '["http://localhost:10100"]'], { OPENCODEX_HOME: dir });
+      expect(cors.status).toBe(0);
+      expect(cors.stdout).toContain("Set corsAllowOrigins.");
+      expect(cors.stdout).toContain("restart");
+
+      const hub = runCli(["config", "set", "hub", '{"managementPublicOrigin":"https://hub.test"}'], { OPENCODEX_HOME: dir });
+      expect(hub.status).toBe(0);
+      expect(hub.stdout).toContain("restart");
+      // The nested paths take the same note (#8495 review): the management listener and its origin
+      // are created when the hub starts.
+      const origin = runCli(["config", "set", "hub.managementPublicOrigin", '"https://hub2.test"'], { OPENCODEX_HOME: dir });
+      expect(origin.status).toBe(0);
+      expect(origin.stdout).toContain("restart");
+      const ingress = runCli(["config", "set", "hub.managementIngress", '{"enabled":false}'], { OPENCODEX_HOME: dir });
+      expect(ingress.status).toBe(0);
+      expect(ingress.stdout).toContain("restart");
+
+      // The JSON payload keeps its shape; the note is for people reading the terminal.
+      const json = runCli(["config", "set", "corsAllowOrigins", '["http://localhost:9999"]', "--json"], { OPENCODEX_HOME: dir });
+      expect(json.status).toBe(0);
+      expect(Object.keys(JSON.parse(json.stdout)).sort()).toEqual(["ok", "path", "value"]);
+
+      // Nothing is said for an unchanged value or for an unrelated key.
+      const again = runCli(["config", "set", "corsAllowOrigins", '["http://localhost:9999"]'], { OPENCODEX_HOME: dir });
+      expect(again.stdout).not.toContain("restart");
+      const other = runCli(["config", "set", "defaultProvider", '"blsc"'], { OPENCODEX_HOME: dir });
+      expect(other.status).toBe(0);
+      expect(other.stdout).not.toContain("restart");
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
   test("config show --json never prints secret-shaped modelCosts keys", () => {
     const dir = freshConfig();
     try {
@@ -172,5 +208,39 @@ test("config validate stdin exits 1 with a single JSON failure payload", () => {
     expect(result.status).toBe(1);
     expect(JSON.parse(result.stdout)).toMatchObject({ ok: false });
     expect(result.stderr).toBe("");
+  } finally { removeTreeWithRetry(dir); }
+});
+
+test.each(["set", "normalized set", "import"])("config %s cannot enter plaintext mode without the dedicated transition", action => {
+  const dir = freshConfig();
+  const configPath = join(dir, "config.json");
+  const importPath = join(dir, "restore.json");
+  try {
+    const before = readFileSync(configPath, "utf8");
+    const candidate = { ...JSON.parse(before), multiAgentMode: "v2-plaintext", plaintextV2AgentMessages: true };
+    writeFileSync(importPath, JSON.stringify(candidate));
+    const args = action === "import" ? ["import", importPath, "--yes"]
+      : ["set", action === "normalized set" ? " . multiAgentMode . " : "multiAgentMode", "v2-plaintext"];
+    const refused = runCli(["config", ...args, "--json"], { OPENCODEX_HOME: dir });
+    expect(refused.status).toBe(2);
+    expect(refused.stdout + refused.stderr).toContain("ocx v2 mode v2-plaintext --acknowledge-plaintext-agent-messages");
+    expect(readFileSync(configPath, "utf8")).toBe(before);
+
+    // A previously acknowledged mode remains editable/restorable without a new transition.
+    writeFileSync(configPath, JSON.stringify(candidate));
+    const repeated = runCli(["config", ...args, "--json"], { OPENCODEX_HOME: dir });
+    expect(repeated.status).toBe(0);
+    expect(JSON.parse(readFileSync(configPath, "utf8"))).toMatchObject({
+      multiAgentMode: "v2-plaintext", plaintextV2AgentMessages: true,
+    });
+    expect(runCli(["config", "set", "port", "10123", "--json"], { OPENCODEX_HOME: dir }).status).toBe(0);
+    expect(JSON.parse(readFileSync(configPath, "utf8")).port).toBe(10123);
+
+    // Leaving the mode never needs consent and never rewrites the independent legacy flag.
+    expect(runCli(["config", "unset", "multiAgentMode", "--json"], { OPENCODEX_HOME: dir }).status).toBe(0);
+    const exited = JSON.parse(readFileSync(configPath, "utf8"));
+    expect(exited.multiAgentMode).toBeUndefined();
+    expect(exited.plaintextV2AgentMessages).toBe(true);
+    expect(runCli(["config", "set", "multiAgentMode", "v2", "--json"], { OPENCODEX_HOME: dir }).status).toBe(0);
   } finally { removeTreeWithRetry(dir); }
 });

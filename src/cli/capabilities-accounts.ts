@@ -3,6 +3,14 @@ import type { Capability } from "./capability-types";
 /** Account pool operations and physical native-login profiles have separate owners. */
 export const ACCOUNT_CAPABILITIES: readonly Capability[] = [
   {
+    command: ["account", "reset-affinity"], summary: "Confirm a provider-wide Anthropic session-affinity reset.",
+    usage: "ocx account reset-affinity <anthropic|anthropic2> [--json]",
+    routes: [{ method: "PUT", path: "/api/oauth/accounts/affinity-reset" }],
+    flags: [{ name: "--json", value: "boolean", summary: "Emit the confirmed reset or failure receipt." }],
+    mutates: true, json: "envelope",
+    details: ["Clears all provider session bindings, including bindings formed after an earlier failed reset. Works with an empty roster; never selects or resumes an account. Sends once and requires an explicit durable confirmation."],
+  },
+  {
     command: ["account", "preserve-signed-in"], summary: "Prefer other Codex identities and reserve the native sign-in as fallback.",
     usage: "ocx account preserve-signed-in openai [on|off|status] [--apply-to-bound] [--json]",
     routes: [{ method: "GET", path: "/api/codex-auth/preserve-signed-in" }, { method: "PUT", path: "/api/codex-auth/preserve-signed-in" }],
@@ -88,7 +96,7 @@ export const ACCOUNT_CAPABILITIES: readonly Capability[] = [
     summary: "Reauthenticate a provider account through the existing login flow.",
     usage: "ocx account reauth <provider> [--id <account-id>] [--device] [--code -] [--no-wait] [--open-browser <on|off>] [--json]",
     routes: [{"method":"POST","path":"/api/codex-auth/login"},{"method":"GET","path":"/api/codex-auth/login-status"},{"method":"POST","path":"/api/codex-auth/login/code"},{"method":"POST","path":"/api/oauth/login"},{"method":"GET","path":"/api/oauth/status"},{"method":"POST","path":"/api/oauth/login/code"}],
-    flags: [{"name":"--id","value":"string","summary":"Account identity to reauthenticate."},{"name":"--device","value":"boolean","summary":"Codex device login; accepted for already-device-native kimi, nous and github-copilot."},{"name":"--code","value":"string","summary":"Use - to read the short-lived authorization code from stdin."},{"name":"--no-wait","value":"boolean","summary":"Return after starting the flow."},{"name":"--json","value":"boolean","summary":"Emit login instructions or completion state."},{"name":"--open-browser","value":"string","summary":"on or off for browser-capable login; rejected for explicit/native device flows."}],
+    flags: [{"name":"--id","value":"string","summary":"Account identity to reauthenticate."},{"name":"--device","value":"boolean","summary":"Codex device login or xAI device authorization; a no-op for already-device-native kimi, nous and github-copilot."},{"name":"--code","value":"string","summary":"Use - to read the short-lived authorization code from stdin."},{"name":"--no-wait","value":"boolean","summary":"Return after starting the flow."},{"name":"--json","value":"boolean","summary":"Emit login instructions or completion state; xAI --device requires --no-wait."},{"name":"--open-browser","value":"string","summary":"on or off for browser-capable login; rejected for explicit/native device flows."}],
     mutates: true,
     json: "payload",
     details: ["Alias of account login with --reauth. openai, codex and chatgpt address the pool; native main uses account main reauth. Human completes authorization; keep returned login material out of transcripts. Kiro --method cannot be combined with reauth.","Explicit add-account is incompatible with reauth. Browser preference is accepted only by browser-capable flows; device verification remains manual."],
@@ -104,8 +112,8 @@ export const ACCOUNT_CAPABILITIES: readonly Capability[] = [
     command: ["account", "cancel"], summary: "Cancel a pending account login flow.",
     usage: "ocx account cancel <provider> [--flow <flow-id>] [--json]",
     routes: [{ method: "POST", path: "/api/codex-auth/login/cancel" }, { method: "POST", path: "/api/oauth/login/cancel" }],
-    flags: [{ name: "--flow", value: "string", summary: "Required for Codex; selects a native Kiro flow when supplied." }, { name: "--json", value: "boolean", summary: "Emit cancellation receipt." }], mutates: true, json: "payload",
-    details: ["Codex cancellation sends flowId. Other providers send provider; Kiro additionally forwards a supplied flowId."],
+    flags: [{ name: "--flow", value: "string", summary: "Required for Codex; selects a native Kiro or xAI flow when supplied." }, { name: "--json", value: "boolean", summary: "Emit cancellation receipt." }], mutates: true, json: "payload",
+    details: ["Codex cancellation sends flowId. Other providers send provider; Kiro and xAI additionally forward a supplied flowId."],
   },
   {
     command: ["account", "reset-credits"], summary: "Read Codex reset-credit state, or explicitly consume one with operator authorization.",

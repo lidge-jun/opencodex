@@ -443,7 +443,7 @@ describe("managed native Messages", () => {
       if (upstreamRetryAfter) expect(message).not.toContain("Try again in 15s");
       else expect(message).toContain("Try again in 15s");
     } else {
-      expect(message).toBe(upstreamMessage);
+      expect(message).toBe(upstreamCode === "insufficient_quota" ? "The provider account has no remaining quota or credits." : "The provider rate limit was reached; retry later.");
     }
     // The row carries the classified condition, never the provider's message.
     expect(row.upstreamError).toBeUndefined();
@@ -455,7 +455,7 @@ describe("managed native Messages", () => {
       { type: "error", error: { type: "invalid_request_error", message: "bad fixture" } }, { status: 400 })));
     const { response, text } = await send(config, { ...SOURCE_BODY, stream: false });
     expect(response.status).toBe(400);
-    expect(JSON.parse(text)).toMatchObject({ type: "error", error: { type: "invalid_request_error", message: "bad fixture" } });
+    expect(JSON.parse(text)).toMatchObject({ type: "error", error: { type: "invalid_request_error", message: "The provider rejected the request." } });
     expect(text).not.toContain("fixture-key-alpha");
   });
 
@@ -495,7 +495,7 @@ describe("managed native Messages", () => {
       expect(text).toContain("streamed");
       expect(text).toContain("\n\nevent: error\ndata: ");
       expect(text).toContain('"type":"api_error"');
-      expect(text).toContain("anthropic passthrough upstream stream failed: ");
+      expect(text).toContain('"message":"anthropic passthrough upstream stream failed"');
       expect(truncated.requests()).toBe(1);
       const row = rowFor(requestId);
       expect(row.status).toBe(502);
@@ -520,7 +520,7 @@ describe("managed native Messages", () => {
       const { requestId, response, text } = await send(config, { ...SOURCE_BODY, stream: false });
       expect(response.status).toBe(502);
       expect(JSON.parse(text)).toMatchObject({ type: "error", error: { type: "api_error" } });
-      expect(text).toContain("anthropic passthrough upstream stream failed: ");
+      expect(text).toContain("The proxy could not reach or read the provider.");
       const row = rowFor(requestId);
       // Same row as the streaming lane for the same reset.
       expect(row.status).toBe(502);
@@ -538,7 +538,8 @@ describe("managed native Messages", () => {
       { claudeCode: { bodyMaxBytes: 64 } as OcxConfig["claudeCode"] });
     const { requestId, response, text } = await send(config, { ...SOURCE_BODY, stream: false });
     expect(response.status).toBe(502);
-    expect(text).toContain("exceeded 64 bytes");
+    expect(text).toContain("anthropic passthrough body exceeded the safe limit");
+    expect(text.length).toBeGreaterThan(0); expect(text).not.toContain("64 bytes");
     const row = rowFor(requestId);
     expect(row.status).toBe(502);
     expect(row.closeReason).toBe("body_overflow");
@@ -549,7 +550,7 @@ describe("managed native Messages", () => {
     const config = fixtureConfig(startUpstream(ok), { claudeCode: { bodyMaxBytes: 64 } as OcxConfig["claudeCode"] });
     const { requestId, response, text } = await send(config, { ...SOURCE_BODY, stream: true });
     expect(response.status).toBe(200);
-    expect(text).toContain("exceeded 64 bytes");
+    expect(text).toContain("anthropic passthrough body exceeded the safe limit");
     const row = rowFor(requestId);
     expect(row.status).toBe(502);
     expect(row.terminalStatus).toBe("incomplete");

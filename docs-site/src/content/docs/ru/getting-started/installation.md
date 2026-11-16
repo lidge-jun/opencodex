@@ -19,7 +19,7 @@ opencodex устанавливает два эквивалентных имен�
 ## Установка
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ```
 
 :::note[npm заблокировал postinstall-скрипт bun?]
@@ -66,7 +66,7 @@ ChatGPT, OpenAI по API-ключу, OpenRouter и эксперименталь�
 Используйте канал preview только для тестирования ещё не выпущенных сборок opencodex:
 
 ```bash
-npm install -g @bitkyc08/opencodex@preview
+npm install -g --allow-scripts=bun @bitkyc08/opencodex@preview
 ocx update --tag preview
 ```
 

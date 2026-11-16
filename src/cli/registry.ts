@@ -51,11 +51,12 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "stop",
-    usage: "ocx stop [--json]",
+    usage: "ocx stop [--json] [--deadline-ms <ms>]",
     summary: "Stop the proxy; preserve connected-client integrations, restore native Codex config for standalone owners.",
     details: [
       "--json keeps the stop path unchanged and prints one structured summary document on stdout; human output moves to stderr.",
       "Exit codes are identical with and without --json: 0, 1, 79 (history cleanup incomplete), 80 (teardown deferred).",
+      "--deadline-ms <ms>  Windows: finish the service stop within <ms> of this command's start, or refuse up front with nothing changed (default 60000; OCX_STOP_DEADLINE_MS is read when the flag is absent).",
     ],
   },
   {
@@ -152,16 +153,27 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "link",
-    usage: "ocx link <port|issue|status|revoke|reconnect|cleanup>",
+    usage: "ocx link <port|issue|status|diagnostics|revoke|reconnect|cleanup|check|update|sync|restart-codex|capture|policy>",
     summary: "Allocate and manage a loopback remote home link.",
     details: [
       "Port: ocx link port [--json]",
       "Issue: ocx link issue --alias <alias> --tunnel-port <port> [--json]",
       "Status: ocx link status [--json]",
+      "Diagnostics: ocx link diagnostics [--limit <n>] [--since <iso-time|epoch-ms>] [--json]",
       "Revoke: ocx link revoke --link-id <id> [--force --yes] [--json]",
       "Reconnect: ocx link reconnect --link-id <id> [--json]",
       "Cleanup: ocx link cleanup [--link-id <id>] [--json]",
-      "Issue, status, revoke, and reconnect use the running proxy's loopback management API and admin token.",
+      "Check: ocx link check (--link-id <id> | --all) [--no-wait] [--json]",
+      "Update: ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]",
+      "Sync: ocx link sync (--link-id <id> | --all) [--no-wait] [--json]",
+      "Sync with a restart: ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--ignore-activity] [--no-wait] [--json]",
+      "Restart Codex: ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--ignore-activity] [--no-wait] [--json]",
+      "Capture: ocx link capture <start [--minutes <1-60>]|stop|status> [--json]",
+      "Policy: ocx link policy [--updates off|notify|auto-when-idle] [--catalog-fanout auto|manual] [--child-codex-restart never|app-server-when-idle] [--idle-after-minutes <1-60>] [--json]",
+      "Activity holds: ocx link activity clear --link-id <id> [--json]",
+      "Issue, status, revoke, reconnect, check, update, sync, restart-codex, policy and activity use the running proxy's loopback management API and admin token; update, sync and restart-codex act only on Home-initiated links.",
+      "Capture is a local file operation on this machine; it needs no running proxy, works on a Home and a Child, and no sync or remote input can start it.",
+      "Diagnostics reads this computer's link diagnostics file directly and needs no running proxy.",
     ],
   },
   {
@@ -178,16 +190,19 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "disconnect",
-    usage: "ocx disconnect [--keep-catalog] [--json]",
+    usage: "ocx disconnect [--keep-catalog] [--recover-config --yes] [--json] [--expect-link <linkId>]",
     summary: "Restore local client state offline and clear the remote-hub connection.",
+    details: [
+      "--expect-link <linkId> disconnects only when this machine is a connected Remote Link Child of that link, or, once its connection is already cleared, finishes the unfinished disconnect. A Home's revoke sends it so a delayed revoke of an old link cannot disconnect a newer one. Any other state (disconnected with no unfinished disconnect, another link or key, a hub client, a pending key rotation or connect, another connection's unfinished disconnect while connected, unreadable state) changes nothing, exits 5, and prints {\"phase\":\"child_link_mismatch\",\"reason\":...} as the last stderr line. A client-initiated link (this machine joined its Home itself, shown by its sidecar or by the marker that outlives a lost sidecar) is refused the same way (reason client_initiated_link); disconnect it without --expect-link. A malformed or repeated flag, or one combined with --orphaned-token or --recover-config, exits 2.",
+    ],
   },
   {
     name: "sync",
-    usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--local-only] [--json] [--restart-codex] [--restart-app-server-only]",
+    usage: "ocx sync [--expect-link <linkId> | --expect-hub-key <apiKeyId>] [--overwrite-conflict [--overwrite-client <id>]] [--local-only] [--json] [--restart-codex] [--restart-app-server-only] [--child <linkId>]... [--restart-children[=app-server] | --restart-children=codex --yes]",
     summary: "Fetch provider models and inject them into Codex config.",
     details: [
       "A current Home catalog fans out to linked Children; --local-only disables fan-out and --json emits the result. Partial fan-out exits 6.",
-      "Fan-out never requests a Codex app or app-server restart on a Child; use GOAT or ocx sync --restart-codex on the Child. The Child's pinned sync may restart its OpenCodex client runtime after applying changed Home settings.",
+      "--child <linkId> (repeatable) limits fan-out to those links; the others report not-selected. A Child held by a Child operation is skipped as child-busy. Fan-out requests no Codex restart on a Child unless --restart-children[=app-server] or --restart-children=codex --yes is given; the Home then skips the restart, never the sync, for a Child with a model request in flight (restart-skipped:link-active), on Windows Children, and on ocx-child, and exits 6. The Child's pinned sync may restart its OpenCodex client runtime after applying changed Home settings.",
       "After writing the catalog, warns if long-lived Codex app-server processes are still running.",
       "An update in flight or an unavailable update/sync mutex refuses without changes: update-in-flight, exit 7. Another sync reports sync-in-progress, exit 1.",
       "--restart-codex restarts the app-servers AND fully quits and relaunches the Codex desktop app on macOS, Linux and Windows, after catalog/cache writes or a committed configuration change. It ends live conversations.",
@@ -244,6 +259,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     summary: "OAuth or API-key login for a provider.",
     details: [
       "--headless (anthropic, anthropic2): no browser and no local port; approve in any browser and paste the displayed code.",
+      "--headless (xai): device authorization instead of the loopback callback; no local port, confirm the printed short code in any browser, nothing to paste.",
       "Codex/ChatGPT: ocx login codex runs the Codex account-pool login (same flow as ocx account login codex).",
       "That one needs a running proxy; the OAuth and API-key providers log in locally.",
       "'chatgpt' and 'openai' are the same route; an OpenAI platform API key is 'ocx login openai-apikey'.",
@@ -252,10 +268,11 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   { name: "logout", usage: "ocx logout <provider>", summary: "Remove a stored provider login." },
   {
     name: "gui",
-    usage: "ocx gui [pair --origin <browser-origin> [--json]]",
+    usage: "ocx gui [pair [--desktop] --origin <browser-origin> [--json]]",
     summary: "Open the opencodex dashboard or create a secret single-use remote pairing grant.",
     details: [
       "Pairing requires an explicit allowed --origin; there is no localhost or config-derived default.",
+        "--desktop authorizes only Desktop compatibility actions in an existing standalone local dashboard session, for at most five minutes; it does not authorize Remote Link or key disclosure.",
       "The printed grant is secret, single-use, short-lived, and must not be persisted.",
     ],
   },
@@ -379,7 +396,7 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     usage: "ocx models <list|live|add|edit|remove|enable|disable|provider|selected|preset|context|shadow> ...",
     summary: "List models and manage custom (manually registered) models.",
     details: [
-      "List available models from static config with no subcommand (liveModels may add more at runtime).",
+      "List available models: saved and router-known IDs include custom models and the process-local cache; models live reads the running proxy catalog.",
       "add/remove support --live for the selected proxy; live or JSON removal requires --yes.",
       "Local add/remove JSON reports saved state and opportunistic sync; no proxy keeps the save successful/pending.",
       "display-name <provider/raw-model> --set <label> or --clear changes an exact upstream model label.",
@@ -406,9 +423,9 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     details: [
       "ocx advisor and ocx advisor status read the resolved settings; use --json for machine-readable output.",
       "ocx advisor on requires current context-sharing consent. Pass --ack-context-sharing to record consent v1 and enable. ocx advisor off disables the sidecar without granting consent.",
-      "ocx advisor consent records consent v1 after printing the disclosure. ocx advisor consent --revoke removes it and stops task-context transfer.",
-      "ocx advisor set updates --model, --effort, --policy and --timeout-ms; the model may be any routable model string (bare native, provider/model, or account-qualified). set does not grant consent.",
-      "policy manual consults only when the worker calls the synthetic advisor tool; policy preflight also attempts one automatic consultation per task with a stable conversation identity, once the task shows orientation evidence. Without a stable identity, each eligible request may trigger another consultation. Both require current consent before any task context is sent.",
+      "ocx advisor consent records consent v1 after printing the disclosure. ocx advisor consent --revoke removes it: consultations not yet dispatched are blocked, while a dispatched consultation cannot be cancelled and task content already sent cannot be retracted.",
+      "ocx advisor set updates --model, --effort, --policy, --context-mode, --max-consultations and --timeout-ms; the model may be any routable model string (bare native, provider/model, or account-qualified). set does not grant consent.",
+      "In the default context mode, policy manual consults only when the worker calls the synthetic advisor tool; policy preflight also attempts one automatic consultation per task with a stable conversation identity, once the task shows orientation evidence. Without a stable identity, each eligible request may trigger another consultation. Both require current consent before any task context is sent. The question-only mode pauses automatic consultations.",
     ],
   },
   {
@@ -431,8 +448,8 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "route",
-    usage: "ocx route <combo|policy> <subcommand>",
-    summary: "Manage combo routing and routing profiles.",
+    usage: "ocx route <combo|policy|to> <subcommand>",
+    summary: "Manage combo routing, routing profiles and per-device client intent.",
   },
   {
     name: "effort",
@@ -833,6 +850,19 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
     hidden: true,
     usage: "ocx __gui-update-worker <jobId> [channel] [restart]",
     summary: "Hidden internal: run the GUI update worker.",
+  },
+  {
+    name: "telemetry",
+    usage: "ocx telemetry <status|enable|disable|profile> [--json]",
+    summary: "Inspect or change anonymous daily usage telemetry consent and preview the payload.",
+    details: [
+      "status [--json]   Show effective state, reason, install channel, last sent day, and exact preview payload.",
+      "enable [--json]   Confirm and opt in to anonymous telemetry in an interactive terminal (refused with agent_consent_required or tty_required otherwise).",
+      "disable [--json]  Opt out of anonymous telemetry and delete telemetry-id.json.",
+      "profile [status] [--json]  Show the opt-in public leaderboard profile, the next day it would send, and its ranks.",
+      "profile connect --handle <h> [--name <n>] [--avatar <colour>] [--json]  Create a public profile in an interactive terminal (refused with agent_consent_required or tty_required otherwise).",
+      "profile disconnect [--json]  Delete the public profile and all its data on the server; always permitted.",
+    ],
   },
 ];
 

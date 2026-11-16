@@ -79,7 +79,11 @@ async function mount(apiBase = "http://localhost") {
   });
 }
 const row = (id: string) => container.querySelector<HTMLButtonElement>(`button[aria-label="proxy/${id}"]`)!;
-const pressed = (id: string) => row(id).getAttribute("aria-pressed");
+const pressed = (id: string) => {
+  const toggle = row(id);
+  expect(toggle.getAttribute("role")).toBe("switch");
+  return toggle.getAttribute("aria-checked");
+};
 async function click(id: string) { await act(async () => { row(id).click(); }); }
 async function settle(response?: Response) { await act(async () => { writes.shift()!(response); }); }
 function holdRead() {

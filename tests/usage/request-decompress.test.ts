@@ -2,6 +2,7 @@ import { describe, expect, spyOn, test } from "bun:test";
 import { deflateRawSync, deflateSync } from "node:zlib";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import {
+  attachParsedRequestBody,
   DecompressedBodyTooLargeError,
   decodeRequestBody,
   describeInboundBodyRefusal,
@@ -10,12 +11,14 @@ import {
   MIN_CONFIGURABLE_INBOUND_BODY_BYTES,
   readBoundedJsonRequestBody,
   readJsonRequestBody,
+  takeParsedRequestBody,
   resolveInboundBodyLimitBytes,
   UnsupportedContentEncodingError,
 } from "../../src/server/request-decompress";
 import { MANAGEMENT_JSON_BODY_MAX_BYTES } from "../../src/server/management/body";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { decodeRequestErrorResponse } from "../../src/server/responses/core";
+import { serializedJsonByteLength } from "../../src/server/json-serialized-bytes";
 import type { OcxConfig } from "../../src/types";
 
 const PAYLOAD = { model: "gpt-5.5", input: "hello", stream: true };
@@ -214,6 +217,9 @@ describe("decodeRequestBody", () => {
     // 100MB is over the old limit and under the current one, so it must now decode.
     const OLD_CAP = 64 * 1024 * 1024;
     const between = new Uint8Array(OLD_CAP + 36 * 1024 * 1024); // ~100MB, < MAX_DECOMPRESSED_BODY_BYTES
+    // Screenshot payloads barely compress, so the body is random bytes, not zeros: an all-zero body
+    // compresses 32,000:1, which the compression-ratio bound (#3023) rightly refuses as a bomb.
+    for (let offset = 0; offset < between.byteLength; offset += 65_536) crypto.getRandomValues(between.subarray(offset, offset + 65_536));
     expect(between.byteLength).toBeGreaterThan(OLD_CAP);
     expect(between.byteLength).toBeLessThan(MAX_DECOMPRESSED_BODY_BYTES);
     const compressed = Bun.zstdCompressSync(between);
@@ -622,5 +628,50 @@ describe("readJsonRequestBody", () => {
       body: Bun.zstdCompressSync(new TextEncoder().encode("{\"model\":")),
     });
     await expect(readJsonRequestBody(req)).rejects.toBeInstanceOf(SyntaxError);
+  });
+});
+
+describe("serializedJsonByteLength", () => {
+  test("matches the UTF-8 length of JSON.stringify for parsed JSON", () => {
+    const sources = [
+      "null", "true", "false", "0", "-0", "1e20", "1e400", "-1e400", "0.1", "1.5e-7", "123456789012345678901234567890",
+      "\"\"", "\"plain\"", "\"\\ud800\"", "\"\\udc00x\\ud83d\\ude00\"", "\"\\u0000\\u001f\\u007f\"", "\"é漢字\\\"\\\\\\n\"",
+      "[]", "{}", "[[]]", "[{}]", "{\"a\":{}}", "[[],[[]],{}]", "[1,\"x\",null,true,[2,3],{\"k\":[]}]",
+      "{\"__proto__\":{\"x\":1},\"constructor\":[1]}", "{\"a\":1,\"a\":2}", "{\"2\":1,\"1\":2,\"b\":3,\"a\":4}",
+      "{\"\\ud800\":\"\\udfff\",\"é\":\"漢\"}", JSON.stringify({ input: [{ role: "user", content: "x".repeat(1000) }] }),
+    ];
+    for (const source of sources) {
+      const parsed: unknown = JSON.parse(source);
+      expect([source, serializedJsonByteLength(parsed)]).toEqual([source, Buffer.byteLength(JSON.stringify(parsed), "utf8")]);
+    }
+  });
+
+  test("measures nesting deeper than a recursive serializer can walk", () => {
+    const depth = 500_000;
+    const parsed: unknown = JSON.parse("[".repeat(depth) + "]".repeat(depth));
+    expect(() => JSON.stringify(parsed)).toThrow(RangeError);
+    expect(serializedJsonByteLength(parsed)).toBe(2 * depth);
+  });
+
+  test("measures wide and mixed containers exactly", () => {
+    const wide = JSON.parse("[" + Array(1_000_000).fill("0").join(",") + "]");
+    expect(serializedJsonByteLength(wide)).toBe(Buffer.byteLength(JSON.stringify(wide), "utf8"));
+    const mixed = JSON.parse(JSON.stringify({ a: Array.from({ length: 50_000 }, (_, i) => ({ [`k${i}`]: [i, "é", null] })) }));
+    expect(serializedJsonByteLength(mixed)).toBe(Buffer.byteLength(JSON.stringify(mixed), "utf8"));
+  });
+});
+
+describe("a parsed body bound to its own request (#8600)", () => {
+  test("goes only with that request, once; a request built from it, as a policy fallback or a compaction recovery builds one, reads its own body", async () => {
+    const original = new Request("http://127.0.0.1/v1/responses", { method: "POST", headers: { "content-type": "application/json" } });
+    const parsed = { model: "a/m", input: "hi" };
+    attachParsedRequestBody(original, parsed);
+    // How policy-fallback.ts and compaction-recovery.ts build their next request: a new Request from the old one's URL and headers.
+    const headers = new Headers(original.headers);
+    const child = new Request(original.url, { method: "POST", headers, body: JSON.stringify({ ...parsed, model: "b/m" }), signal: original.signal });
+    expect(takeParsedRequestBody(child)).toBeUndefined();
+    expect(await child.json()).toEqual({ model: "b/m", input: "hi" });
+    expect(takeParsedRequestBody(original)).toEqual({ body: parsed });
+    expect(takeParsedRequestBody(original)).toBeUndefined();
   });
 });

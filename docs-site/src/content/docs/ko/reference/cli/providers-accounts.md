@@ -213,7 +213,7 @@ Luna 메타데이터임을 표시해 사용합니다. 목록에 보인다는 사
 실행 중인 프록시를 통해 제공자 계정과 API 키 풀을 나열하고 전환합니다. 제공되는 도움말 표면은 다음과 같습니다:
 
 ```text
-Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
+Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|reset-affinity|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 history openai <pool-account-id> [--limit <1-200>]  Recent routing decisions for one Codex pool account.
@@ -227,6 +227,7 @@ pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+reset-affinity <anthropic|anthropic2> [--json]  Confirm all session bindings are cleared, even with no accounts; selection and pause state stay unchanged. Run on the Home; a Remote Link Child names the Home and sends no request.
 strategy <provider> [<quota|round-robin|fill-first|reset-first>]  Pool placement strategy; omit the value to read it.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
@@ -241,7 +242,7 @@ main <doctor|list|register|add|reauth|switch|recover>  Manage the Codex App logi
 Codex pool selection applies to the next request after clearing existing affinity; in-flight requests keep their captured account.
 ```
 
-하위 명령은 프록시가 실행 중이어야 하며 기록된 런타임 포트를 자동으로 찾습니다. 다만 `import-orca`는 예외로, 미리보기는 로컬 전용이고 `import-orca --apply`는 프록시가 멈춰 있어야 합니다. 성공한 작업은 종료 코드 0으로 끝납니다. 잘못된 사용, 알 수 없는 제공자 또는 계정/키 id, 도달할 수 없는 프록시, API 실패는 종료 코드 1로 끝납니다. 자격 증명 필드는 관리 API가 반환한 그대로 표시됩니다(마스킹도 그대로 포함됩니다). 원시 API 키와 OAuth 토큰은 절대 반환하지 않습니다. 표시 편의 기능은 대시보드와 마찬가지로 클라이언트 쪽에서 합성합니다. `main`은 `openai` 계정 풀의 Codex App 로그인에 대한 CLI 별칭이고, 이메일이 없는 OAuth 계정은 `Account N`으로 표시되며, plan/label 열은 plan, 마스킹된 이메일, label, 마스킹된 키 순으로 대체합니다.
+하위 명령은 프록시가 실행 중이어야 하며 기록된 런타임 포트를 자동으로 찾습니다. 다만 `import-orca`는 예외로, 미리보기는 로컬 전용이고 `import-orca --apply`는 프록시가 멈춰 있어야 합니다. 성공한 작업은 종료 코드 0으로 끝납니다. 잘못된 사용, 알 수 없는 제공자 또는 계정/키 id, 도달할 수 없는 프록시, API 실패는 기본적으로 종료 코드 1로 끝납니다. 단, `reset-affinity`는 HTTP 404에 종료 코드 4, HTTP 409에 종료 코드 5를 반환하며, 그 밖의 API 실패나 확인되지 않은 결과는 종료 코드 1을 반환합니다. 자격 증명 필드는 관리 API가 반환한 그대로 표시됩니다(마스킹도 그대로 포함됩니다). 원시 API 키와 OAuth 토큰은 절대 반환하지 않습니다. 표시 편의 기능은 대시보드와 마찬가지로 클라이언트 쪽에서 합성합니다. `main`은 `openai` 계정 풀의 Codex App 로그인에 대한 CLI 별칭이고, 이메일이 없는 OAuth 계정은 `Account N`으로 표시되며, plan/label 열은 plan, 마스킹된 이메일, label, 마스킹된 키 순으로 대체합니다.
 
 `--json` 계정 행은 다음 공통 형태를 사용합니다(사용할 수 없는 필드는 생략됩니다):
 
@@ -469,13 +470,15 @@ native-main 트래픽이나 저널 복구를 허용하기 전에 수명 주기 �
 
 ### `ocx models [subcommand]` · `ocx model <subcommand>`
 
-`ocx model`은 `ocx models`의 별칭입니다. 하위 명령이 없으면 설정된 제공자에 사전 등록된 모델을 나열합니다. `--provider`는 설정된 제공자 하나를 필터링하고 `--json`은 모델 메타데이터를 반환합니다. `live`는 실행 중인 카탈로그를 읽습니다. `add`, `edit`, `remove`, `list-custom`은 수동 카탈로그 항목을 관리합니다. `enable`, `disable`, `provider`는 가시성을 제어합니다. `selected`는 제공자 허용 목록을 제어합니다. `context`는 제공자 컨텍스트 한도를 제어합니다. `shadow`는 백그라운드 shadow-call 가로채기를 관리합니다.
+`ocx model`은 `ocx models`의 별칭입니다. 하위 명령이 없으면 저장된 모델과 라우터가 아는 모델 ID를 나열합니다. 레지스트리 시드, 사용자 정의 모델, 현재 CLI 프로세스의 검색 캐시가 포함됩니다. 새 CLI 프로세스의 캐시는 비어 있을 수 있으며 실행 중인 프록시 카탈로그와 다릅니다. 일부 기존 키 방식 프리셋은 접속 주소를 바꾼 뒤에도 레지스트리 시드를 유지할 수 있습니다. `--provider`는 설정된 제공자 하나를 필터링하고 `--json`은 모델 메타데이터를 반환합니다. `live`는 실행 중인 카탈로그를 읽습니다. `add`, `edit`, `remove`, `list-custom`은 수동 카탈로그 항목을 관리합니다. `enable`, `disable`, `provider`는 가시성을 제어합니다. `selected`는 제공자 허용 목록을 제어합니다. `context`는 제공자 컨텍스트 한도를 제어합니다. `shadow`는 백그라운드 shadow-call 가로채기를 관리합니다.
+
+`reasoningEfforts` 목록은 `--json`에서만 표시됩니다. `null`은 목록을 알 수 없거나 조회하지 않았다는 뜻이며, 확인하려면 OS 키체인을 열어야 하는 경우도 포함합니다. 빈 배열 `[]`은 명시적으로 비어 있는 목록이거나 `noReasoningModels` 등으로 해당 모델의 reasoning effort가 비활성화됐다는 뜻입니다. 실행 중인 프록시의 카탈로그는 `ocx models live`로 확인합니다.
 
 `add`·`remove`는 기본적으로 로컬 저장이며 `--live`를 주면 실행 중인 프록시를 바꿉니다. 로컬 `--json` 저장은 프록시가 없으면 `sync.status: "not-attempted"`, `needsSync: true`, 종료 코드 0을 반환합니다. 실제 동기화 시도가 실패하면 저장은 유지하고 0이 아닌 코드로 끝납니다. `list-custom`은 로컬 목록입니다. 발견된 모델의 표시 이름은 raw upstream ID를 받는 `display-name`으로 바꾸고, picker 순서는 public ID를 받는 `order`로 바꿉니다. [영문 절차](/reference/cli/providers-accounts/#display-names-and-picker-identities)에서 전체 목록·featured 접두부·native 순서 초기화 제약을 확인하세요.
 
 | 하위 명령 | 지원 플래그 | 동작 |
 | --- | --- | --- |
-| `list` (기본값) | `--provider <name>`, `--json` | 설정된 제공자에 사전 등록된 모델을 나열합니다. |
+| `list` (기본값) | `--provider <name>`, `--json` | 로컬에 저장된 모델과 라우터가 아는 모델을 나열합니다. |
 | `live` | `--provider <name>`, `--json` | 런타임에 발견된 모델을 포함해 실행 중인 카탈로그를 읽습니다. 행에는 `native`/`routed`, `custom`, `enabled`/`disabled` 표시가 붙습니다. |
 | `add <provider> <modelId>` | `--display-name <name>`, `--context-window <tokens>`, `--modalities <text,image,audio>`, `--live`, `--json` | 사용자 정의 모델을 로컬에 등록하거나 `--live`로 실행 중인 프록시에 등록합니다. |
 | `edit <custom-id>` | `--model-id <id>`, `--display-name <name\|->`, `--context-window <tokens\|0>`, `--modalities <text,image,audio\|->`, `--json` | 사용자 지정 모델을 수정합니다. `-`는 필드를 지우고, `0`은 컨텍스트 창을 지웁니다. |

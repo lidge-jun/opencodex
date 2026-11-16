@@ -9,8 +9,9 @@ import { verifyOrchestratedInstall } from "./orchestrated-tree.mjs";
 import { decidePostStopUpdate } from "./stop-decision.mjs";
 import { existsSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join, resolve } from "node:path";
-import { getConfigDir, loadConfig } from "../config";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { getConfigDir, getConfigPath, loadConfig } from "../config";
+import { runConfigPreflight } from "./config-preflight";
 import { readPid, readRuntimePort, getRuntimePortPath } from "../config/process-state";
 import { pendingTeardownOutstanding } from "../config/pending-teardown";
 import type { ServiceOwnership } from "../service/state";
@@ -28,6 +29,7 @@ import type {
 } from "./install-detection.d.mts";
 import {
   pnpmOwnerInvocation,
+  pnpmOwnerEnvironment,
   readPnpmGlobalPackage,
   resolvePnpmGlobalOwner,
   runPnpmGlobalUpdate,
@@ -47,6 +49,7 @@ import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { createLegacyUpdateSession, createOrchestratedChildSession, decodeOrchestratedExpect } from "./orchestrated-session.mjs";
 import { runPosixInstallerSync } from "./posix-install-supervisor.mjs";
 import { runWindowsInstallerSync } from "./npm-install.mjs";
+import { staleUpdateMarkerHint } from "./sync-update-mutex.mjs";
 import { protectOrchestratedWorkerSignals } from "./orchestrated-child.mjs";
 import type { OrchestratedChildArgs } from "./orchestrated-arguments.mjs";
 import { PNPM_READ_CWD, withPnpmCommandCwd, pnpmReadEnvironment } from "./pnpm-read-policy.mjs";
@@ -116,18 +119,19 @@ function runPnpmCandidate(
   capture = false,
   probeSpawn: typeof probeSpawnSync = probeSpawnSync,
   probeEnv: NodeJS.ProcessEnv = process.env,
+  owner?: PnpmGlobalOwner,
 ): { status: number | null; stdout?: string | null; stderr?: string | null } {
-  const invocation = pnpmInvocationForPath(commandPath, args);
+  const invocation = owner ? pnpmOwnerInvocation(owner, args, process.platform, probeEnv) : pnpmInvocationForPath(commandPath, args);
   if (!invocation) return { status: 1 };
-  return probeSpawn(invocation.file, invocation.args, {
+  return withPnpmCommandCwd(args, cwd => probeSpawn(invocation.file, invocation.args, {
     stdio: capture ? "pipe" : "ignore",
     encoding: "utf8",
     timeout: 20_000,
     windowsHide: true,
-    cwd: PNPM_READ_CWD,
-    env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(probeEnv)),
+    cwd,
+    env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(owner ? pnpmOwnerEnvironment(owner, probeEnv) : probeEnv)),
     ...invocation.options,
-  });
+  }));
 }
 
 /** Resolve the exact pnpm executable/group/bin that own this package. */
@@ -141,7 +145,8 @@ export function resolveCurrentPnpmGlobalOwner(
     packagePath: packageRoot(),
     commandPaths: deps.commandPaths ?? resolvePnpmCommands(),
     runningShimPath: runningPnpmShimPath(invoked),
-    runPnpm: (commandPath, args, capture) => runPnpmCandidate(commandPath, args, capture, probeSpawn, deps.env),
+    runPnpm: (commandPath, args, capture, owner) => runPnpmCandidate(commandPath, args, capture, probeSpawn, deps.env, owner),
+    env: deps.env ?? process.env,
   });
 }
 
@@ -165,7 +170,9 @@ export function runOwnedPnpm(
   capture: boolean,
   stdio: "inherit" | "pipe" | "ignore" = capture ? "pipe" : "inherit",
   probeSpawn: typeof probeSpawnSync = probeSpawnSync,
-  authorizeMutation: (kind: "package") => boolean = () => ["root", "bin", "list", "config", "view", "--version"].includes(args[0] ?? ""),
+  authorizeMutation: (kind: "package") => boolean = () => ["root", "bin", "list", "config", "view", "--version"].includes(args[0] ?? "")
+    || (args[0] === "store" && args[1] === "path" && args.length === 3
+      && args[2]?.startsWith("--dir=") === true && isAbsolute(args[2].slice("--dir=".length))),
   session?: Pick<ReturnType<typeof createOrchestratedChildSession>, "retainInstallerFence" | "noteUntrackedInstaller" | "confirmInstallerExit">,
   markerPath = join(getConfigDir(), "update-orchestrated.json"),
 ): { status: number | null; stdout?: string | null; stderr?: string | null; processTreeExited?: boolean } {
@@ -177,7 +184,7 @@ export function runOwnedPnpm(
       const env = pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(target.env));
       if (process.platform === "win32") {
         session.noteUntrackedInstaller();
-        const result = runWindowsInstallerSync({ file: target.bin, args: target.args, options: target.options }, { cwd, env, authorizeMutation });
+        const result = runWindowsInstallerSync({ file: target.bin, args: target.args, options: target.options }, { cwd, env, authorizeMutation, markerPath });
         if (result.processTreeExited && Number.isInteger(result.status)) session.confirmInstallerExit();
         else { session.retainInstallerFence(); return { ...result, processTreeExited: false }; }
         return result;
@@ -207,6 +214,7 @@ export function runOwnedPnpm(
 
 /** Re-read the owning group's active package and return its verified launcher. */
 export function resolvePnpmActiveLauncher(owner: PnpmGlobalOwner): string | null {
+  if (owner.globalStore && !Array.isArray(owner.virtualStoreDirs)) return null;
   const active = readPnpmGlobalPackage(
     PKG,
     (args, capture = false) => runOwnedPnpm(owner, args, capture),
@@ -363,7 +371,13 @@ export function updateCommand(installer: Installer, tag: Channel, resolvedVersio
     return { bin: "pnpm", args: ["add", "-g", "--allow-build=bun", `${PKG}@${target}`] };
   }
   const bin = "npm";
-  const args = ["install", "-g", `${PKG}@${target}`];
+  // npm 12 blocks dependency lifecycle scripts by default, and bun's postinstall is what
+  // copies the selected @oven/bun-* executable into bun/bin. Without this narrow approval
+  // the install succeeds but leaves bun's un-downloaded placeholder, so the next `ocx`
+  // cannot start (#8361). npm 6 through 11 run bun's postinstall anyway and install with the
+  // flag on global installs, so it is unconditional rather than version-gated; some npm 11
+  // releases print an "Unknown cli config" warning for it and still install.
+  const args = ["install", "-g", "--allow-scripts=bun", `${PKG}@${target}`];
   return { bin, args };
 }
 
@@ -466,7 +480,12 @@ export async function runUpdate(child?: Extract<OrchestratedChildArgs, { ok: tru
   } else {
     session = createLegacyUpdateSession({ home: getConfigDir() });
     const started = session.start();
-    if (!started.ok) { console.error(`opencodex: ${started.error}`); process.exitCode = 1; return; }
+    if (!started.ok) {
+      console.error(`opencodex: ${started.error}`);
+      if (started.staleMarker) for (const line of staleUpdateMarkerHint(getConfigDir())) console.error(line);
+      process.exitCode = 1;
+      return;
+    }
     process.once("exit", () => session?.finishPreflight());
   }
   try { await runUpdateWithSession(child, session); }
@@ -561,6 +580,19 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
   const { inspectUpdateServiceHome } = await import("./service-home-authority");
   const homePolicy = createUpdateServiceHomePolicy(inspectUpdateServiceHome, message => console.warn(message), process.argv.includes("--update-package-only"), parseUpdateWorkerHome(process.argv));
   if (!homePolicy.authorizeMutation("package")) return 1;
+  const configPath = getConfigPath(), configPreflight = runConfigPreflight(configPath);
+  if (!configPreflight.ok) {
+    console.error(`⚠️  Configuration preflight failed for ${configPath}; aborting update before stopping services.`);
+    if (configPreflight.error) console.error(`    ${configPreflight.error}`);
+    if (configPreflight.reason === "read_error") {
+      console.error("    Inspect the config path, permissions, and any symlink target; correct them or restore a readable regular config from a trusted backup, then retry.");
+      console.error("    'ocx config validate' may report defaults if a symlink target is missing; it does not change the file.");
+    } else {
+      console.error("    Run 'ocx config validate' to diagnose the configuration; it does not change the file. Back up and correct the file, then retry.");
+    }
+    return 1;
+  }
+
   // Remember whether a background service manages the proxy BEFORE stopping — `ocx stop`
   // unloads it, so a successful update must repair/restart it afterwards.
   let serviceWasInstalled = false;
@@ -667,6 +699,8 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
     // An ordinary owner: a stray sibling marker would otherwise mark it before any probe.
     const env = mutation.controlEnvironment(withoutSiblingMarker(process.env));
     delete env.OCX_SERVICE;
+    // Not launched by a supervisor: none of its markers (src/lib/supervisor-markers.ts) may ride along.
+    for (const name of ["OCX_DESKTOP_SUPERVISED", "OCX_SERVICE_MANAGED", "OCX_WINDOWS_WRAPPER_PROTOCOL"]) delete env[name];
     const runtimeEnv = withProcessRuntimeProvenance(env);
     if (!homePolicy.authorizeMutation("runtime")) return "refused";
     const child = guardedSpawn(homePolicy.authorizeMutation, "runtime", process.execPath, [postUpdateLauncher, "start", "--port", String(capturedListen.port)], {
@@ -987,6 +1021,7 @@ async function runUpdateWithSession(child: Extract<OrchestratedChildArgs, { ok: 
       session.noteUntrackedInstaller();
       const supervised = runWindowsInstallerSync({ file: target.bin, args: target.args, options: target.options }, {
         env: mutation.unprivilegedEnvironment(), authorizeMutation: homePolicy.authorizeMutation,
+        markerPath: join(getConfigDir(), "update-orchestrated.json"),
       });
       if (supervised.processTreeExited === true && Number.isInteger(supervised.status)) session.confirmInstallerExit();
       else session.retainInstallerFence();

@@ -63,6 +63,7 @@ import { buildWebSearchTool, WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
 import { safeWebSearchSources } from "./sources";
 import { runOllamaWebSearch } from "./ollama-executor";
 import { runAnthropicWebSearch } from "./anthropic-executor";
+import type { AuxiliaryModelSend } from "../lib/request-execution-budget";
 import { runXaiWebSearch, validateXaiSearchOptions } from "./xai-executor";
 import { runGeminiWebSearch } from "./gemini-executor";
 import { runExaWebSearch } from "./exa-executor";
@@ -831,6 +832,7 @@ export function createOllamaBridgeExecutor(
 
 /** Per-search credentials and sidecar settings. Secrets stay off the plan object. */
 export interface PassthroughWebSearchBridgeExecutorContext {
+  dispatchSidecarSend?: AuxiliaryModelSend;
   providerApiKey?: string;
   auth?: PassthroughWebSearchBridgeAuth;
   hostedTool?: Record<string, unknown>;
@@ -972,6 +974,7 @@ export function createPassthroughWebSearchBridgeExecutor(
           settings,
           querySignal,
           anthropic.config,
+          context.dispatchSidecarSend,
         );
       }
       case "xai": {

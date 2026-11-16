@@ -61,7 +61,7 @@ describe("buildModelsRequest google routing", () => {
   test("google-vertex without googleMode resolves vertex via registry, not ai-studio", () => {
     const prov = { adapter: "google", authMode: "key", baseUrl: "https://aiplatform.googleapis.com" } as OcxProviderConfig;
     const { url } = buildModelsRequest(prov, "gk-123", "google-vertex");
-    expect(url).toBe("https://aiplatform.googleapis.com/models");
+    expect(url).toBe("https://aiplatform.googleapis.com/v1beta1/publishers/google/models?pageSize=300");
   });
 });
 

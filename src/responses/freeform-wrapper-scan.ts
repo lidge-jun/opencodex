@@ -56,7 +56,9 @@ const NEVER = -2;
 export type FreeformWrapperScan =
   | { kind: "hold" }
   | { kind: "raw" }
-  | { kind: "input"; valueStart: number };
+  // `canonical` is false for a fallback field, which a closed object resolved and trailing text
+  // can still withdraw; an own `input` is decided by its prefix and stays decided.
+  | { kind: "input"; valueStart: number; canonical: boolean };
 
 /** Index of the first non-whitespace character at or after `from`, or HOLD past the end. */
 function skipWhitespace(text: string, from: number): number {
@@ -249,7 +251,7 @@ export function scanFreeformWrapper(text: string, fallbackKeys: readonly string[
       // non-string value is decidable too, in the other direction: completion hands back the
       // argument text unchanged rather than unwrapping a value it cannot use.
       return bounded[valueAt] === '"'
-        ? { kind: "input", valueStart: valueAt + 1 }
+        ? { kind: "input", valueStart: valueAt + 1, canonical: true }
         : { kind: "raw" };
     }
 
@@ -300,7 +302,7 @@ function afterTopLevelClose(
   if (!wholeText) return { kind: "hold" };
   const candidates = fallbackKeys.filter(key => members.get(key)?.stringValue === true);
   if (candidates.length === 1) {
-    return { kind: "input", valueStart: members.get(candidates[0]!)!.valueStart };
+    return { kind: "input", valueStart: members.get(candidates[0]!)!.valueStart, canonical: false };
   }
   return { kind: "raw" };
 }

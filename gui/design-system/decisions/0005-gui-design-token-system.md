@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted
+Accepted. The styling stack (no utility framework) and font decisions are superseded by
+[ADR 0006](0006-gui-design-system-v2-tailwind.md); role-based tokens remain in force.
 
 ## Context
 

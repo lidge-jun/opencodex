@@ -20,23 +20,25 @@ import type { CatalogLoginHint } from "./provider-catalog/login-hint-visibility"
 import { baseUrlForChoice, matchChoiceId, resolvedBaseUrlForChoice } from "../base-url-choice";
 import { AddProviderOAuthPane } from "./add-provider-oauth-pane";
 import { AddProviderFormPane } from "./add-provider-form-pane";
-import { useAddProviderOAuth } from "./use-add-provider-oauth";
+import { useAddProviderOAuth, type OAuthLoginCaptureOwner } from "./use-add-provider-oauth";
 import type { BrowserLaunch } from "../oauth-browser-launch";
 import {
   addProviderModalReducer,
   createInitialAddProviderState,
 } from "./add-provider-modal-reducer";
+import { captureApiTarget, isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../api";
 
 export type ProviderConfig = ProviderPayload;
 
 type Preset = CatalogPreset;
 
 export default function AddProviderModal({
-  apiBase, existingNames, onClose, onAdded, initialTier, initialCustom = false,
+  apiBase, targetKey, existingNames, onClose, onAdded, initialTier, initialCustom = false,
   accountRows, accountStatus, accountBusy, accountLoginHint = null,
-  onAccountLogin, onAccountCancelLogin, onAccountLogout, onAccountManage, onOpen,
+  accountLoginCaptures, onAccountLogin, onAccountCancelLogin, onAccountLogout, onAccountManage, onOpen,
 }: {
   apiBase: string;
+  targetKey?: string;
   existingNames: string[];
   onClose: () => void;
   onAdded: (name: string) => void;
@@ -47,6 +49,8 @@ export default function AddProviderModal({
   accountBusy?: string | null;
   /** Login hint for an Accounts-tab login in flight, owned by the providers page. */
   accountLoginHint?: CatalogLoginHint | null;
+  /** The providers page's captures for those logins; a code pasted into an Accounts row uses them (#8618). */
+  accountLoginCaptures?: OAuthLoginCaptureOwner;
   onAccountLogin?: (provider: string, addAccount?: boolean) => void;
   onAccountCancelLogin?: (provider: string) => void;
   onAccountLogout?: (provider: string) => void;
@@ -62,6 +66,12 @@ export default function AddProviderModal({
     initialCustom,
     (custom) => createInitialAddProviderState(custom, t("modal.customProvider")),
   );
+  const [renderCapture] = useState<ApiTargetCapture>(() => captureApiTarget("shared", apiBase));
+  // An empty string is a legacy "the caller had no logical key", not a target named "".
+  // Only an explicit non-empty key is validated against the render capture; otherwise the
+  // capture this modal rendered under is authoritative.
+  const suppliedTargetKey = targetKey && targetKey.trim() ? targetKey : undefined;
+  const renderedTargetKey = suppliedTargetKey ?? renderCapture.targetKey;
   const aliveRef = useRef(true);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -74,8 +84,8 @@ export default function AddProviderModal({
   const [catalogQuery, setCatalogQuery] = useState("");
 
   const oauthPoll = useKeyedClientResource(
-    `add-provider-oauth:${apiBase}`,
-    [apiBase],
+    `add-provider-oauth:${suppliedTargetKey ?? apiBase}`,
+    [apiBase, suppliedTargetKey],
     async (signal) => {
       const res = await fetch(`${apiBase}/api/oauth/providers`, { signal });
       if (!res.ok) return [] as string[];
@@ -84,8 +94,8 @@ export default function AddProviderModal({
     },
   );
   const presetsPoll = useKeyedClientResource(
-    `add-provider-presets:${apiBase}`,
-    [apiBase],
+    `add-provider-presets:${suppliedTargetKey ?? apiBase}`,
+    [apiBase, suppliedTargetKey],
     async (signal) => {
       const res = await fetch(`${apiBase}/api/provider-presets`, { signal });
       if (!res.ok) throw new Error(String(res.status));
@@ -94,8 +104,8 @@ export default function AddProviderModal({
     },
   );
   const usagePoll = useKeyedClientResource(
-    usageSummary30dResourceKey(apiBase),
-    [apiBase],
+    usageSummary30dResourceKey(apiBase, "all", suppliedTargetKey),
+    [apiBase, suppliedTargetKey],
     async (signal) => {
       const res = await fetch(`${apiBase}/api/usage?range=30d`, { signal });
       return await readUsageResponseJson<UsageReadMetadata & { providers?: Array<{ provider: string; requests: number }> }>(res);
@@ -174,6 +184,7 @@ export default function AddProviderModal({
         apiKey: "",
         apiKeyTransport: undefined,
         defaultModel: p.defaultModel ?? "",
+        ...(p.id === "google-vertex" ? { googleMode: "vertex" as const, project: "", location: "" } : {}),
         allowPrivateNetwork: false,
       },
     });
@@ -181,6 +192,10 @@ export default function AddProviderModal({
 
   const submit = async () => {
     if (!form) return;
+    if (renderedTargetKey !== renderCapture.targetKey) {
+      dispatch({ type: "set-error", error: t("prov.targetChanged") });
+      return;
+    }
     const reserved = preset ? isReservedCodexForwardPreset(preset) : false;
     const resolvedBaseUrl = preset?.baseUrlChoices?.length
       ? resolvedBaseUrlForChoice(preset.baseUrlChoices, endpointChoice, form.baseUrl)
@@ -200,14 +215,25 @@ export default function AddProviderModal({
     dispatch({ type: "set-saving", saving: true });
     dispatch({ type: "set-error", error: "" });
     try {
-      const res = await fetch(`${apiBase}/api/providers`, {
+      const res = await targetFetch(renderCapture, `${apiBase}/api/providers`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(postBody),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({})) as { error?: string };
-        dispatch({ type: "set-error", error: d.error || t("modal.failedStatus", { status: res.status }) });
+        dispatch({
+          type: "set-error",
+          error: d.error === "target_changed"
+            ? t("prov.targetChanged")
+            : (d.error || t("modal.failedStatus", { status: res.status })),
+        });
+        return;
+      }
+      // The POST belongs to the target that opened this modal. A completion after a
+      // switch must not select the provider or show its notice on the new target.
+      if (!isApiTargetCaptureCurrent(renderCapture)) {
+        dispatch({ type: "set-error", error: t("prov.targetChanged") });
         return;
       }
       onAdded(postBody.name);
@@ -222,7 +248,7 @@ export default function AddProviderModal({
     cancelLoginOAuth,
     loginOAuth,
     submitManualCode: submitManualCodeApi,
-  } = useAddProviderOAuth({ apiBase, t, aliveRef, onAdded });
+  } = useAddProviderOAuth({ apiBase, targetKey: suppliedTargetKey, t, aliveRef, onAdded });
 
   const oauthSetters = {
     setOauthBusy: (busy: boolean) => dispatch({ type: "set-oauth-busy", busy }),
@@ -245,13 +271,23 @@ export default function AddProviderModal({
     void loginOAuth(providerId, oauthSetters);
   };
 
-  const submitManualCode = (providerId: string) => {
+  // A code typed for one Accounts login belongs to that login on this target. A new login (its
+  // hint changes) or a target change clears it, so it can never be submitted to the next one.
+  const accountLoginIdentity = accountLoginHint
+    ? [accountLoginHint.provider, accountLoginHint.url ?? "", accountLoginHint.deviceCode ?? ""].join("\u0000")
+    : "";
+  useEffect(() => {
+    dispatch({ type: "set-manual-code", code: "" });
+    dispatch({ type: "set-manual-code-msg", msg: "", ok: true });
+  }, [accountLoginIdentity, apiBase, suppliedTargetKey]);
+
+  const submitManualCode = (providerId: string, owner?: OAuthLoginCaptureOwner) => {
     void submitManualCodeApi(providerId, manualCode, manualCodeBusy, {
       setManualCodeBusy: busy => dispatch({ type: "set-manual-code-busy", busy }),
       setManualCode: code => dispatch({ type: "set-manual-code", code }),
       setManualCodeOk: ok => dispatch({ type: "set-manual-code-msg", msg: manualCodeMsg, ok }),
       setManualCodeMsg: msg => dispatch({ type: "set-manual-code-msg", msg }),
-    });
+    }, owner);
   };
 
   const isCustom = preset?.id === "custom";
@@ -297,7 +333,8 @@ export default function AddProviderModal({
               message: manualCodeMsg,
               ok: manualCodeOk,
               onChange: code => dispatch({ type: "set-manual-code", code }),
-              onSubmit: providerId => { void submitManualCode(providerId); },
+              // Accounts rows log in through the providers page, which owns their capture.
+              onSubmit: providerId => { void submitManualCode(providerId, accountLoginCaptures); },
             }}
           />
         ) : form && (

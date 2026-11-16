@@ -34,8 +34,9 @@ describe("page polish", () => {
 
   test("Subagents: order hint is a focusable named tooltip; guidance/ultra sit behind a closed details", () => {
     expect(subagents).not.toContain("swi-featured-hint");
-    expect(subagents).toContain('<Tooltip content={<Trans k="sub.orderHint" cmd="spawn_agent" />}');
-    expect(subagents).toContain('{t("sub.orderHintAria")}');
+    // The "?" beside the counter is a HelpTip: a focusable Tooltip trigger named by orderHintAria.
+    expect(subagents).toContain('<HelpTip label={t("sub.orderHintAria")}><Trans k="sub.orderHint" cmd="spawn_agent" /></HelpTip>');
+    expect(read("../src/components/v2-subagents/frame.tsx")).toContain("<Tooltip content={children}");
     const at = delegation.indexOf('<details className="swi-advanced">');
     expect(at).toBeGreaterThan(-1);
     expect(delegation).not.toMatch(/<details className="swi-advanced"[^>]*\bopen\b/);

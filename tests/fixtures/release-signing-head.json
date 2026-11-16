@@ -1,0 +1,229 @@
+{
+  "package-standalone": [
+    {
+      "name": "Decide Windows code signing",
+      "id": "windows-signing",
+      "if": "runner.os == 'Windows'",
+      "shell": "bash",
+      "env": {
+        "SIGNPATH_CONFIGURED": "${{ secrets.SIGNPATH_API_TOKEN != '' }}",
+        "SIGNPATH_ORGANIZATION_ID": "${{ vars.SIGNPATH_ORGANIZATION_ID }}",
+        "SIGNPATH_PROJECT_SLUG": "${{ vars.SIGNPATH_PROJECT_SLUG }}",
+        "SIGNPATH_SIGNING_POLICY": "${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}",
+        "DRY_RUN": "${{ inputs.dry-run }}"
+      },
+      "run": "bash scripts/ci/windows-signing-plan.sh"
+    },
+    {
+      "name": "Upload the unsigned Windows binary for signing",
+      "id": "unsigned-ocx",
+      "if": "steps.windows-signing.outputs.mode == 'sign'",
+      "continue-on-error": true,
+      "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      "with": {
+        "name": "signpath-unsigned-${{ matrix.target }}",
+        "path": "dist/standalone/${{ matrix.target }}/ocx.exe",
+        "if-no-files-found": "error",
+        "retention-days": 1
+      }
+    },
+    {
+      "name": "Sign the Windows binary through SignPath",
+      "id": "sign-ocx",
+      "if": "steps.windows-signing.outputs.mode == 'sign' && steps.unsigned-ocx.outcome == 'success'",
+      "continue-on-error": true,
+      "uses": "signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092",
+      "timeout-minutes": 65,
+      "with": {
+        "api-token": "${{ secrets.SIGNPATH_API_TOKEN }}",
+        "organization-id": "${{ vars.SIGNPATH_ORGANIZATION_ID }}",
+        "project-slug": "${{ vars.SIGNPATH_PROJECT_SLUG }}",
+        "signing-policy-slug": "${{ steps.windows-signing.outputs.policy }}",
+        "artifact-configuration-slug": "windows-standalone-zip",
+        "github-artifact-id": "${{ steps.unsigned-ocx.outputs.artifact-id }}",
+        "wait-for-completion": true,
+        "wait-for-completion-timeout-in-seconds": 3600,
+        "output-artifact-directory": "${{ runner.temp }}/signpath-signed-ocx"
+      }
+    },
+    {
+      "name": "Swap in the verified signed Windows binary",
+      "if": "steps.windows-signing.outputs.mode == 'sign'",
+      "continue-on-error": true,
+      "shell": "pwsh",
+      "env": {
+        "STANDALONE_TARGET": "${{ matrix.target }}",
+        "SIGNPATH_OUTCOME": "${{ steps.sign-ocx.outcome }}",
+        "SIGNING_TRUST": "${{ steps.windows-signing.outputs.trust }}"
+      },
+      "run": "./scripts/ci/apply-signed-windows-artifact.ps1 `\n  -Target \"dist/standalone/$env:STANDALONE_TARGET/ocx.exe\" `\n  -SignedDirectory (Join-Path $env:RUNNER_TEMP \"signpath-signed-ocx\") `\n  -SubmitOutcome \"$env:SIGNPATH_OUTCOME\" `\n  -Trust $env:SIGNING_TRUST\n"
+    }
+  ],
+  "package-desktop": [
+    {
+      "name": "Decide Windows code signing",
+      "id": "windows-signing",
+      "if": "runner.os == 'Windows'",
+      "shell": "bash",
+      "env": {
+        "SIGNPATH_CONFIGURED": "${{ secrets.SIGNPATH_API_TOKEN != '' }}",
+        "SIGNPATH_ORGANIZATION_ID": "${{ vars.SIGNPATH_ORGANIZATION_ID }}",
+        "SIGNPATH_PROJECT_SLUG": "${{ vars.SIGNPATH_PROJECT_SLUG }}",
+        "SIGNPATH_SIGNING_POLICY": "${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}",
+        "DRY_RUN": "${{ inputs.dry-run }}"
+      },
+      "run": "bash scripts/ci/windows-signing-plan.sh"
+    },
+    {
+      "name": "Import the release signing certificate",
+      "if": "runner.os == 'macOS'",
+      "env": {
+        "APPLE_CERTIFICATE": "${{ secrets.APPLE_CERTIFICATE }}",
+        "APPLE_CERTIFICATE_PASSWORD": "${{ secrets.APPLE_CERTIFICATE_PASSWORD }}",
+        "APPLE_ID": "${{ secrets.APPLE_ID }}",
+        "APPLE_PASSWORD": "${{ secrets.APPLE_PASSWORD }}",
+        "APPLE_TEAM_ID": "${{ secrets.APPLE_TEAM_ID }}",
+        "DRY_RUN": "${{ inputs.dry-run }}"
+      },
+      "run": "set -euo pipefail\n# Checked as a set, because a partial set is the dangerous case: the Tauri CLI skips\n# notarization without failing when the notary credentials are missing, and the\n# unnotarized artifact is uploaded and attached exactly as a good one would be.\nmissing=\"\"\nfor name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do\n  eval \"value=\\${$name:-}\"\n  [ -n \"$value\" ] || missing=\"$missing $name\"\ndone\nif [ -n \"$missing\" ]; then\n  if [ \"${DRY_RUN}\" != \"true\" ]; then\n    echo \"::error::A real release needs the full signing and notarization credential set.\"\n    echo \"::error::Missing:$missing\"\n    exit 1\n  fi\n  echo \"Signing credentials are incomplete, so this build stays ad-hoc signed:$missing\"\n  echo \"It is usable for local validation and is not a release asset.\"\n  exit 0\nfi\nkeychain=\"$RUNNER_TEMP/opencodex-signing.keychain-db\"\n# Recorded before anything is created, so the cleanup step can still find a keychain\n# that a failure left half-built.\necho \"OPENCODEX_SIGNING_KEYCHAIN=$keychain\" >> \"$GITHUB_ENV\"\nkeychain_password=\"$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')\"\ncertificate=\"$RUNNER_TEMP/opencodex-signing.p12\"\n# The decoded certificate must not outlive this step even when a later command fails.\ntrap 'shred -u \"$certificate\" 2>/dev/null || rm -Pf \"$certificate\" 2>/dev/null || true' EXIT\nprintf '%s' \"$APPLE_CERTIFICATE\" | base64 --decode > \"$certificate\"\nsecurity create-keychain -p \"$keychain_password\" \"$keychain\"\nsecurity set-keychain-settings -lut 21600 \"$keychain\"\nsecurity unlock-keychain -p \"$keychain_password\" \"$keychain\"\nsecurity import \"$certificate\" -k \"$keychain\" -P \"$APPLE_CERTIFICATE_PASSWORD\" \\\n  -T /usr/bin/codesign\nsecurity set-key-partition-list -S apple-tool:,apple:,codesign: \\\n  -s -k \"$keychain_password\" \"$keychain\" > /dev/null\n# shellcheck disable=SC2046 # the keychain list is intentionally word-split into arguments\nsecurity list-keychain -d user -s \"$keychain\" $(security list-keychains -d user | tr -d '\"')\n"
+    },
+    {
+      "name": "Build WidgetKit extension",
+      "if": "runner.os == 'macOS'",
+      "env": {
+        "MACOS_SIGN_IDENTITY": "${{ secrets.APPLE_SIGNING_IDENTITY }}",
+        "WIDGET_SIGN_REQUIRED": "${{ env.DESKTOP_SIGNING_CONFIGURED == 'true' && '1' || '0' }}"
+      },
+      "run": "bash desktop/scripts/build-widget.sh"
+    },
+    {
+      "name": "Verify the extension carries the release signature",
+      "if": "runner.os == 'macOS'",
+      "env": {
+        "APPLE_TEAM_ID": "${{ secrets.APPLE_TEAM_ID }}",
+        "DRY_RUN": "${{ inputs.dry-run }}"
+      },
+      "run": "set -euo pipefail\nappex=desktop/src-tauri/widget/OpenCodexWidget.appex\nif [ -z \"${APPLE_TEAM_ID}\" ]; then\n  if [ \"${DRY_RUN}\" != \"true\" ]; then\n    echo \"::error::A real release cannot assert its own signature without APPLE_TEAM_ID.\"\n    exit 1\n  fi\n  echo \"No team configured; skipping the signature assertion for this non-release build.\"\n  exit 0\nfi\ncodesign --verify --strict --deep \"$appex\"\ndescription=\"$(codesign -dvvv \"$appex\" 2>&1)\"\necho \"$description\"\necho \"$description\" | grep -q \"TeamIdentifier=$APPLE_TEAM_ID\"\necho \"$description\" | grep -q \"flags=.*runtime\"\necho \"$description\" | grep -q \"Timestamp=\"\n"
+    },
+    {
+      "name": "Sign the packaged keyring addons",
+      "if": "runner.os == 'macOS'",
+      "env": {
+        "MACOS_SIGN_IDENTITY": "${{ secrets.APPLE_SIGNING_IDENTITY }}",
+        "APPLE_TEAM_ID": "${{ secrets.APPLE_TEAM_ID }}",
+        "DRY_RUN": "${{ inputs.dry-run }}"
+      },
+      "run": "set -euo pipefail\nshopt -s nullglob\naddons=(desktop/src-tauri/resources/keyring/*.darwin-*.node)\nif [ \"${#addons[@]}\" -eq 0 ]; then\n  echo \"::error::No macOS keyring addon was prepared for the bundle.\"\n  exit 1\nfi\nif [ \"${DESKTOP_SIGNING_CONFIGURED}\" != \"true\" ]; then\n  if [ \"${DRY_RUN}\" != \"true\" ]; then\n    echo \"::error::A real release must sign the packaged keyring addons.\"\n    exit 1\n  fi\n  echo \"No signing material; the keyring addons stay as prepared for this non-release build.\"\n  exit 0\nfi\nfor addon in \"${addons[@]}\"; do\n  codesign --force --timestamp --options runtime --sign \"$MACOS_SIGN_IDENTITY\" \"$addon\"\n  codesign --verify --strict \"$addon\"\n  description=\"$(codesign -dvvv \"$addon\" 2>&1)\"\n  echo \"$description\"\n  # Here-strings, not pipes: under pipefail a matcher that exits on its first hit can\n  # SIGPIPE the writer and fail the assertion it was meant to pass.\n  grep -q \"TeamIdentifier=$APPLE_TEAM_ID\" <<<\"$description\"\n  grep -q \"flags=.*runtime\" <<<\"$description\"\n  grep -q \"Timestamp=\" <<<\"$description\"\ndone\n"
+    },
+    {
+      "name": "Build desktop bundles",
+      "if": "runner.os != 'Linux'",
+      "working-directory": "desktop",
+      "env": {
+        "TAURI_SIGNING_PRIVATE_KEY": "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}",
+        "TAURI_SIGNING_PRIVATE_KEY_PASSWORD": "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}",
+        "APPLE_CERTIFICATE": "${{ secrets.APPLE_CERTIFICATE }}",
+        "APPLE_CERTIFICATE_PASSWORD": "${{ secrets.APPLE_CERTIFICATE_PASSWORD }}",
+        "APPLE_SIGNING_IDENTITY": "${{ secrets.APPLE_SIGNING_IDENTITY }}",
+        "APPLE_ID": "${{ secrets.APPLE_ID }}",
+        "APPLE_PASSWORD": "${{ secrets.APPLE_PASSWORD }}",
+        "APPLE_TEAM_ID": "${{ secrets.APPLE_TEAM_ID }}",
+        "MACOS_SIGN_IDENTITY": "${{ secrets.APPLE_SIGNING_IDENTITY }}"
+      },
+      "run": "bunx tauri ${{ runner.os == 'Linux' && '--verbose' || '' }} build --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --config \"${{ runner.os == 'Windows' && format('{0}/opencodex-msi.json', runner.temp) || '{}' }}\""
+    },
+    {
+      "name": "Locate the Windows installer for signing",
+      "id": "windows-msi",
+      "if": "steps.windows-signing.outputs.mode == 'sign'",
+      "continue-on-error": true,
+      "shell": "bash",
+      "env": {
+        "DESKTOP_TARGET": "${{ matrix.target }}"
+      },
+      "run": "set -euo pipefail\nshopt -s nullglob\ninstallers=(\"desktop/src-tauri/target/$DESKTOP_TARGET/release/bundle/msi/\"*.msi)\nif [ \"${#installers[@]}\" -ne 1 ]; then\n  echo \"::warning::Expected one MSI to sign, found ${#installers[@]}; the installer ships unsigned.\"\n  exit 1\nfi\necho \"path=${installers[0]}\" >> \"$GITHUB_OUTPUT\"\n"
+    },
+    {
+      "name": "Upload the unsigned Windows installer for signing",
+      "id": "unsigned-msi",
+      "if": "steps.windows-signing.outputs.mode == 'sign' && steps.windows-msi.outcome == 'success'",
+      "continue-on-error": true,
+      "uses": "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      "with": {
+        "name": "signpath-unsigned-${{ matrix.target }}",
+        "path": "${{ steps.windows-msi.outputs.path }}",
+        "if-no-files-found": "error",
+        "retention-days": 1
+      }
+    },
+    {
+      "name": "Sign the Windows installer through SignPath",
+      "id": "sign-msi",
+      "if": "steps.windows-signing.outputs.mode == 'sign' && steps.unsigned-msi.outcome == 'success'",
+      "continue-on-error": true,
+      "uses": "signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092",
+      "timeout-minutes": 65,
+      "with": {
+        "api-token": "${{ secrets.SIGNPATH_API_TOKEN }}",
+        "organization-id": "${{ vars.SIGNPATH_ORGANIZATION_ID }}",
+        "project-slug": "${{ vars.SIGNPATH_PROJECT_SLUG }}",
+        "signing-policy-slug": "${{ steps.windows-signing.outputs.policy }}",
+        "artifact-configuration-slug": "windows-msi-zip",
+        "github-artifact-id": "${{ steps.unsigned-msi.outputs.artifact-id }}",
+        "wait-for-completion": true,
+        "wait-for-completion-timeout-in-seconds": 3600,
+        "output-artifact-directory": "${{ runner.temp }}/signpath-signed-msi"
+      }
+    },
+    {
+      "name": "Swap in the verified signed Windows installer",
+      "if": "steps.windows-signing.outputs.mode == 'sign' && steps.windows-msi.outcome == 'success'",
+      "continue-on-error": true,
+      "shell": "pwsh",
+      "env": {
+        "MSI_PATH": "${{ steps.windows-msi.outputs.path }}",
+        "SIGNPATH_OUTCOME": "${{ steps.sign-msi.outcome }}",
+        "SIGNING_TRUST": "${{ steps.windows-signing.outputs.trust }}",
+        "TAURI_SIGNING_PRIVATE_KEY": "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}",
+        "TAURI_SIGNING_PRIVATE_KEY_PASSWORD": "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}"
+      },
+      "run": "./scripts/ci/apply-signed-windows-artifact.ps1 `\n  -Target \"$env:MSI_PATH\" `\n  -SignedDirectory (Join-Path $env:RUNNER_TEMP \"signpath-signed-msi\") `\n  -SubmitOutcome \"$env:SIGNPATH_OUTCOME\" `\n  -Trust $env:SIGNING_TRUST `\n  -Installer `\n  -UpdaterSignature\n"
+    },
+    {
+      "name": "Build Linux AppImage bundle",
+      "if": "runner.os == 'Linux'",
+      "working-directory": "desktop",
+      "env": {
+        "CARGO_TARGET_DIR": "${{ runner.temp }}/opencodex-appimage-target",
+        "TAURI_SIGNING_PRIVATE_KEY": "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}",
+        "TAURI_SIGNING_PRIVATE_KEY_PASSWORD": "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}"
+      },
+      "run": "bunx tauri build --ci --target ${{ matrix.target }} --bundles appimage"
+    },
+    {
+      "name": "Build Linux deb bundle",
+      "if": "runner.os == 'Linux'",
+      "working-directory": "desktop",
+      "env": {
+        "CARGO_TARGET_DIR": "${{ runner.temp }}/opencodex-deb-target",
+        "TAURI_SIGNING_PRIVATE_KEY": "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}",
+        "TAURI_SIGNING_PRIVATE_KEY_PASSWORD": "${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}"
+      },
+      "run": "bunx tauri build --ci --target ${{ matrix.target }} --bundles deb"
+    },
+    {
+      "name": "Verify every Mach-O in the bundle carries the release identity",
+      "if": "runner.os == 'macOS'",
+      "env": {
+        "APPLE_TEAM_ID": "${{ secrets.APPLE_TEAM_ID }}",
+        "DRY_RUN": "${{ inputs.dry-run }}"
+      },
+      "run": "set -euo pipefail\nif [ -z \"${APPLE_TEAM_ID}\" ]; then\n  if [ \"${DRY_RUN}\" != \"true\" ]; then\n    echo \"::error::A real release cannot verify its bundle without APPLE_TEAM_ID.\"\n    exit 1\n  fi\n  echo \"No team configured; skipping the bundle-wide assertion for this local build.\"\n  exit 0\nfi\n# Executables are found by their magic bytes rather than by path or extension. A bundler\n# signs what it placed; anything copied in afterwards is invisible to it, and the\n# binaries that get missed are the ones with no extension to filter on.\napps=0\nmachos=0\nbad=0\nwhile IFS= read -r app; do\n  apps=$((apps + 1))\n  echo \"checking $app\"\n  while IFS= read -r -d '' file; do\n    # All eight Mach-O leading words: thin and fat, 32- and 64-bit, both byte orders.\n    # A list that covers only the common ones skips the rest in silence while the\n    # non-zero counter below still reports a healthy sweep.\n    case \"$(head -c 4 \"$file\" | xxd -p)\" in\n      cefaedfe|cffaedfe|feedface|feedfacf) ;;\n      cafebabe|bebafeca|cafebabf|bfbafeca) ;;\n      *) continue ;;\n    esac\n    machos=$((machos + 1))\n    if ! codesign -dvvv \"$file\" 2>&1 | grep -q \"TeamIdentifier=$APPLE_TEAM_ID\"; then\n      echo \"::error::$file is not signed with the release identity\"\n      bad=1\n    fi\n  done < <(find \"$app\" -type f -print0)\ndone < <(find desktop/src-tauri/target -maxdepth 6 -type d -name '*.app')\necho \"inspected $machos Mach-O files across $apps app bundles\"\n# A sweep that inspected nothing is the failure mode this step exists to prevent.\nif [ \"$apps\" -eq 0 ] || [ \"$machos\" -eq 0 ]; then\n  echo \"::error::found $apps app bundles and $machos Mach-O files; the sweep inspected nothing\"\n  exit 1\nfi\nexit \"$bad\"\n"
+    },
+    {
+      "name": "Remove the signing keychain",
+      "if": "always() && runner.os == 'macOS'",
+      "run": "if [ -n \"${OPENCODEX_SIGNING_KEYCHAIN:-}\" ] && [ -f \"${OPENCODEX_SIGNING_KEYCHAIN}\" ]; then\n  security delete-keychain \"${OPENCODEX_SIGNING_KEYCHAIN}\"\nfi\n"
+    }
+  ]
+}

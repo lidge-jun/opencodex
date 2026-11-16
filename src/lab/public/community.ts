@@ -5,7 +5,7 @@ import { ensureLabDirs, labCommunityDir } from "../paths";
 import { validateCommunityEvidenceAuthorities } from "./community-authority";
 import { communityBundleFileName } from "./community-files";
 import { privateRegularFileSize, readPrivateRegularFile } from "./file-safety";
-import { withPublicEvidenceMutationLock } from "./mutation-lock";
+import { isMutationLockEntryName, withPublicEvidenceMutationLock } from "./mutation-lock";
 import { recordLocalPublicOrigin } from "./origin";
 import {
   cleanupStalePrivateFileStages,
@@ -31,7 +31,6 @@ const MAX_DEPTH = 8;
 const MAX_OBJECT_KEYS = 64;
 const MAX_ARRAY_ELEMENTS = 512;
 const MAX_GENERIC_STRING_BYTES = 384 * 1024;
-const COMMUNITY_MUTATION_LOCK_NAME = ".mutation-lock";
 const COMMUNITY_BUNDLE_FILE_RE = /^bundle-([0-9a-f]{64})-([0-9a-f]{64})\.json$/;
 const COMMUNITY_REVOCATION_FILE_RE = /^revocation-([0-9a-f]{64})\.json$/;
 
@@ -148,7 +147,7 @@ function cacheUsage(configDir?: string): { names: string[]; bytes: number } {
   const dir = labCommunityDir(configDir);
   cleanupStalePrivateFileStagesInDir(dir);
   const names = readdirSync(dir)
-    .filter((name) => name !== COMMUNITY_MUTATION_LOCK_NAME && !isPrivateFileStageName(name))
+    .filter((name) => !isMutationLockEntryName(name) && !isPrivateFileStageName(name))
     .sort();
   if (names.length > MAX_CACHE_FILES) {
     throw new PublicEvidenceValidationError("community_cache_bound", "community cache file bound exceeded");

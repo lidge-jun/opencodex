@@ -13,7 +13,7 @@
  * Either way a click opens the desktop update page in the app shell, or runs a fresh
  * package check in a browser dashboard where the existing dialog owns installation.
  */
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { useKeyedClientResource } from "../client-resource";
 import { IconDownload, IconGithub, IconStar, IconTerminal } from "../icons";
 import { useT } from "../i18n/shared";
@@ -48,12 +48,15 @@ export function SidebarGithubRow({
   apiBase,
   onOpenUpdate,
   onOpenTerminalCommand,
+  version,
 }: {
   apiBase: string;
   /** Opens desktop updates in the app shell, or the package update surface in a browser. */
   onOpenUpdate: () => void;
   /** Opens the local terminal-command settings in the desktop app shell. */
   onOpenTerminalCommand: () => void;
+  /** The running version, shown right after the GitHub link. */
+  version?: ReactNode;
 }) {
   const t = useT();
   const [starring, setStarring] = useState(false);
@@ -138,6 +141,7 @@ export function SidebarGithubRow({
       <a className="sidebar-link sidebar-github-link" href={repoUrl} target="_blank" rel="noreferrer">
         <IconGithub /> {t("common.github")}
       </a>
+      {version}
       <div className="sidebar-github-actions">
         <button
           type="button"

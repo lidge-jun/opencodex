@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OcxProviderConfig } from "../../src/types";
@@ -78,6 +78,30 @@ afterEach(() => {
 });
 
 describe("models.dev reasoning metadata", () => {
+  test("an offline read uses a stale ladder without requesting a refresh", async () => {
+    const stale = snapshotFile({ "opencode-go": {
+      [MUSE_SPARK]: { reasoning: true, options: [{ type: "effort", values: ["low", "high"] }] },
+    } });
+    stale.fetchedAt = Date.now() - 25 * 60 * 60 * 1000;
+    const { effort, metadata } = await load({ "reasoning-metadata-cache.json": JSON.stringify(stale) });
+    const file = join(process.env.OPENCODEX_HOME!, "reasoning-metadata-cache.json");
+    const before = readFileSync(file, "utf8");
+    const previousFetch = globalThis.fetch;
+    let requests = 0;
+    try {
+      globalThis.fetch = (() => { requests++; return Promise.reject(new Error("offline fixture")); }) as typeof fetch;
+      expect(effort.configuredReasoningEfforts(ZEN_GO, MUSE_SPARK, { refreshMetadata: false })).toEqual(["low", "high"]);
+      expect(requests).toBe(0);
+      expect(readFileSync(file, "utf8")).toBe(before);
+      // Positive control: omission keeps the existing refresh behavior.
+      expect(effort.configuredReasoningEfforts(ZEN_GO, MUSE_SPARK)).toEqual(["low", "high"]);
+      expect(requests).toBe(1);
+    } finally {
+      globalThis.fetch = previousFetch;
+      metadata.resetReasoningMetadataCachesForTests();
+    }
+  });
+
   test("an expired snapshot read refreshes in the background with Codex integration off; a missing snapshot does not", async () => {
     const stale = snapshotFile({
       "opencode-go": {

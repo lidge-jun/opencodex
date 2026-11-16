@@ -4,6 +4,7 @@ import { getCachedProviderAccountQuota } from "../providers/quota/account-cache"
 import type { ProviderQuota, ProviderQuotaWindow } from "../providers/quota-types";
 import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
 import type { GenerationContext } from "../lib/state-store-sweeper";
+import { familyWeeklyEquivalentPercent } from "../providers/quota/anthropic-usage-windows";
 
 export const ANTHROPIC_PASSIVE_FAMILY_MAX_AGE_MS = 30 * 60_000;
 import { anthropicModelFamily } from "./anthropic-model-family";
@@ -160,4 +161,15 @@ export function anthropicFamilyRetryAt(id: string, model?: string, now = Date.no
 export function anthropicModelWeeklyPercent(quota: ProviderQuota | null, model?: string): number | undefined {
   const family = anthropicModelFamily(model);
   return family ? quota?.customWindows?.find(window => window.scope === "model" && window.label === family)?.percent : undefined;
+}
+
+/**
+ * The requested family's usage for comparing accounts, restated on the shared weekly scale when
+ * upstream reported its allowance. Thresholds keep `anthropicModelWeeklyPercent`: a fresh Fable
+ * seat reads 50 here, which ranks correctly but is not usage an operator's threshold means.
+ */
+export function anthropicModelRankPercent(quota: ProviderQuota | null, model?: string): number | undefined {
+  const family = anthropicModelFamily(model);
+  const window = family ? quota?.customWindows?.find(window => window.scope === "model" && window.label === family) : undefined;
+  return window ? familyWeeklyEquivalentPercent(window) : undefined;
 }

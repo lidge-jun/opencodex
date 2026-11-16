@@ -19,6 +19,7 @@ import { findCommand } from "./registry";
 import { printUnknownCommand } from "./help-recovery";
 import { noteCredentialArgv, redactSecretArgs } from "./secret-args";
 import { maybeNoticeVersionSkew } from "./version-skew-notice";
+import { settleConfigRootForCli } from "./config-root-startup";
 import { isOrchestratedUpdateArgv } from "../update/orchestrated-arguments.mjs";
 
 export interface CliHead {
@@ -140,7 +141,7 @@ export async function runCli(argv: string[]): Promise<CliHead> {
         process.exit(1);
       }
       if (head.command === "stop" && !parseStopApproval(head.args.slice(1)).ok) {
-        console.error("Usage: ocx stop [--json [--expect-pid <pid> --expect-port <port> --expect-hostname <host> --expect-config-home <home> --expect-cli-version <version> --expect-compatibility-token <hex>]]");
+        console.error("Usage: ocx stop [--deadline-ms <ms>] [--json [--expect-pid <pid> --expect-port <port> --expect-hostname <host> --expect-config-home <home> --expect-cli-version <version> --expect-compatibility-token <hex>]]");
         process.exit(64);
       }
       const uninstallError = uninstallArgsError(head.command, head.args);
@@ -161,6 +162,9 @@ export async function runCli(argv: string[]): Promise<CliHead> {
           process.exit(SYNC_EXPECTATION_USAGE_EXIT);
         }
       }
+      // Before any preflight or command write: wait once for the config-root ACL flight (#7815).
+      // Commands skipsCodexShimAutoRestore exempts are skipped there too; see config-root-startup.
+      await settleConfigRootForCli(head.command, head.args);
       await maybeNoticeVersionSkew(head.command, head.args);
       await maybeAutoRestoreCodexShimAsync(head.command, head.args);
       return head;

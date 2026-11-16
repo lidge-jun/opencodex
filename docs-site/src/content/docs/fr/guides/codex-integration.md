@@ -134,6 +134,16 @@ configuration de référence et de repli. Sur l'interface de bouclage, ce fichie
 vous pouvez fusionner manuellement si l'injection automatique a été supprimée ; hors bouclage, il contient la
 forme avec fournisseur dédié. Le mode de fournisseur externe laisse ce profil intact.
 
+Quand ce fichier est régénéré, les clés racine simples qu'OpenCodex ne gère pas sont conservées : un réglage
+que vous ajoutez, comme `stream_idle_timeout_ms` ou `stream_max_retries`, survit à l'injection suivante.
+Chaque affectation conservée est copiée telle quelle, y compris les valeurs sur plusieurs lignes et les entiers
+64 bits, et placée avant la première table. Les clés à l'intérieur des tables et les clés racine pointées comme
+`a.b = 1` ne sont pas conservées. En cas de conflit, OpenCodex l'emporte toujours : les clés racine qu'il gère
+(`model_provider`, `model_catalog_json`, `openai_base_url`) sont réécrites pour le mode de routage actif, et
+une clé racine portant le nom d'une table écrite par le profil, par exemple un `features = { ... }` en ligne
+quand le profil écrit `[features]`, est supprimée. Si le fichier change pendant qu'une injection attend le
+verrou d'écriture, l'injection s'arrête avec une erreur réessayable et laisse votre modification en place.
+
 :::caution
 Les clés racine telles que `openai_base_url`, `model_provider` et `model_catalog_json` **doivent** précéder le
 premier en-tête `[table]`. L'injecteur garantit ce placement, supprime ses propres copies obsolètes ou en double
@@ -183,6 +193,8 @@ Codex soumises à un compte, comme dans Codex natif. opencodex sert également `
 fournisseur dédié n'annonce `supports_websockets = true` que lorsque `"websockets": true`. Sur l'interface de
 bouclage, le fournisseur intégré de Codex peut tenter WebSocket en premier ; si cette fonction est désactivée,
 le proxy renvoie `426` et Codex se rabat sur HTTP/SSE.
+
+Lorsque le mode `v2-plaintext` ou l’option `plaintextV2AgentMessages` est activé, la relecture locale exige le même appelant OpenCodex admis et le `thread-id` non vide propre à la requête. Un fil parent, une adresse de bouclage, des identifiants amont ou une clé de substitution ne constituent pas cette identité. Les clients sans principal d’appelant admis et les requêtes sans fil propre doivent renvoyer la conversation complète sans `previous_response_id`. Les configurations Codex et DSH de bouclage par défaut n’établissent pas cette identité. L’état conservé pendant l’activation de l’un ou l’autre réglage reste lié après sa désactivation. Dans le mode `v1` par défaut, l’état non lié conserve le comportement de continuation existant, limité au fil parent, y compris pour les appelants de bouclage par défaut. Cela reste distinct des ID Responses natifs appartenant au service amont.
 
 ## Identité et historique du fil de discussion
 

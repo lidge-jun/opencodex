@@ -1,6 +1,6 @@
 import { AnthropicTokenError } from "./anthropic";
 import { OAuthProviderNamespaceCollisionError, OAuthProviderPublicationError, publicOAuthAuthenticationErrorMessage } from "./index";
-import { XaiTokenRequestError } from "./xai";
+import { XaiRedirectRefusedError, XaiTokenRequestError } from "./xai";
 import { AnthropicInstanceCollisionError, AnthropicInstanceConfigReadError } from "./store-anthropic-instance";
 
 // Standard RFC 6749 / RFC 6750 / RFC 8628 error codes. A provider's `error` field is printed only
@@ -18,6 +18,10 @@ export function oauthLoginFailureDiagnostic(error: unknown): string {
     || error instanceof AnthropicInstanceCollisionError || error instanceof AnthropicInstanceConfigReadError) {
     return "configuration_error";
   }
+  // A refused redirect is a definitive server answer, not a transport fault: the request was
+  // not delivered anywhere it was allowed to go. Reporting it as `network_error` would invite a
+  // retry that can only be refused again.
+  if (error instanceof XaiRedirectRefusedError) return "oauth_authentication_failed";
   const status = error instanceof AnthropicTokenError ? error.httpStatus
     : error instanceof XaiTokenRequestError ? error.status : undefined;
   const oauthError = error instanceof AnthropicTokenError || error instanceof XaiTokenRequestError

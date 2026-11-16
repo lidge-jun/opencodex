@@ -65,5 +65,7 @@ account id와 이메일도 공개하지 않는 편이 좋으니, 가능하면 �
 opencodex는 관리형 `config.toml`과 `opencodex-catalog.json` 파일을 임시 파일로 쓴 뒤 rename하는
 방식(`atomicWriteFile`)으로 저장합니다.
 이렇게 하면 `ocx stop`과 프록시 종료 handler처럼 동시에 실행되는 writer가 Codex를 되돌릴 때도
-부분 파일이 생기지 않습니다.
+부분 파일이 생기지 않습니다. Windows에서 `opencodex-catalog.json`에 읽기 전용 속성이 있어
+rename이 거부되면 opencodex가 속성을 해제하고 한 번만 재시도합니다. 그래도 실패하면 원시 `EPERM` 대신
+`Codex catalog is read-only: <path>`를 보고합니다.
 :::

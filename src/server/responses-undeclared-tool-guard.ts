@@ -1,3 +1,4 @@
+import { UNDECLARED_TOOL_CALL_MESSAGE } from "../lib/client-error-body";
 import { UNDECLARED_TOOL_CALL_ERROR_CODE } from "../lib/errors";
 import { hasItemProvenance, isHistoricalItem } from "../responses/item-provenance";
 import {
@@ -13,6 +14,7 @@ import {
   normalizeDeclaredToolName,
 } from "../types";
 import { replaceSseDataPayload, sseDataPayload, type SseBlockRewrite } from "./sse-payload-rewrite";
+import { TOOL_SEARCH_FUNCTION_NAME } from "../responses/tool-search-compat";
 
 /** Item types the client executes through a request-declared wire name. */
 export const CLIENT_EXECUTED_CALL_TYPES: ReadonlySet<string> = new Set([
@@ -77,9 +79,6 @@ const NAMELESS_TOOL_SPEC_TYPES = new Set([
   "x_search",
 ]);
 
-/** An upstream-supplied name reaches the error message; keep it bounded. */
-const MAX_REPORTED_NAME_CHARS = 100;
-
 export { UNDECLARED_TOOL_CALL_ERROR_CODE };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -91,6 +90,7 @@ function addWireToolName(
   tool: unknown,
   namespace?: string,
   ambiguousDottedAliases?: ReadonlySet<string>,
+  canonicalOnly = false,
 ): void {
   if (!isPlainObject(tool)) return;
   const name = wireToolInnerName(tool);
@@ -103,6 +103,7 @@ function addWireToolName(
     return;
   }
   names.add(namespacedToolName(namespace, name));
+  if (canonicalOnly) return;
   // Some routed providers echo the flattened wire name with a dot (`ns.name`, observed with
   // muse-spark via opencode-go) instead of `ns__name`. It is the same tool identity, so register
   // the dotted spelling too, mirroring `toolChoiceAliases` (#3402) -- but only while that
@@ -150,16 +151,17 @@ function addWireToolSpecs(
   names: Set<string>,
   specs: unknown,
   ambiguousDottedAliases?: ReadonlySet<string>,
+  canonicalOnly = false,
 ): void {
   if (!Array.isArray(specs)) return;
   for (const spec of specs) {
     if (!isPlainObject(spec)) continue;
     if (spec.type === "namespace" && Array.isArray(spec.tools)) {
       const namespace = typeof spec.name === "string" ? spec.name : undefined;
-      for (const inner of spec.tools) addWireToolName(names, inner, namespace, ambiguousDottedAliases);
+      for (const inner of spec.tools) addWireToolName(names, inner, namespace, ambiguousDottedAliases, canonicalOnly);
       continue;
     }
-    addWireToolName(names, spec, undefined, ambiguousDottedAliases);
+    addWireToolName(names, spec, undefined, ambiguousDottedAliases, canonicalOnly);
   }
 }
 
@@ -171,7 +173,7 @@ function addWireToolSpecs(
  * inside `input`, routed custom-tool rewrites) that the internal list flattens or renames, and
  * only the wire names can be compared against what the provider echoes back.
  */
-export function collectDeclaredWireToolNames(body: unknown): Set<string> {
+export function collectDeclaredWireToolNames(body: unknown, options?: { canonicalOnly?: boolean }): Set<string> {
   const names = new Set<string>();
   if (!isPlainObject(body)) return names;
   const specGroups: unknown[] = [body.tools];
@@ -184,7 +186,29 @@ export function collectDeclaredWireToolNames(body: unknown): Set<string> {
     }
   }
   const ambiguousDottedAliases = collectAmbiguousDottedAliases(specGroups);
-  for (const specs of specGroups) addWireToolSpecs(names, specs, ambiguousDottedAliases);
+  for (const specs of specGroups) addWireToolSpecs(names, specs, ambiguousDottedAliases, options?.canonicalOnly);
+  return names;
+}
+
+/**
+ * Function names that translated adapters give to nameless hosted declarations in this catalog.
+ * The parser exposes a declared `{type:"tool_search"}` to Chat-style providers as the function
+ * `tool_search`, so only a declaration present in this (current-turn) body authorizes that name.
+ */
+export function collectTranslatedHostedToolNames(body: unknown): Set<string> {
+  const names = new Set<string>();
+  if (!isPlainObject(body)) return names;
+  const specGroups: unknown[] = [body.tools];
+  if (Array.isArray(body.input)) {
+    for (const item of body.input) {
+      if (isPlainObject(item) && item.type === "additional_tools") specGroups.push(item.tools);
+    }
+  }
+  for (const specs of specGroups) {
+    if (Array.isArray(specs) && specs.some(spec => isPlainObject(spec) && spec.type === "tool_search")) {
+      names.add(TOOL_SEARCH_FUNCTION_NAME);
+    }
+  }
   return names;
 }
 
@@ -519,12 +543,10 @@ export function undeclaredToolCallNameInResponse(
 /**
  * Formats an error message indicating that a routed provider emitted an undeclared tool call.
  *
- * @param name - The undeclared tool name emitted by the provider.
  * @returns A formatted error message string.
  */
-export function undeclaredToolCallMessage(name: string): string {
-  const reported = name.slice(0, MAX_REPORTED_NAME_CHARS);
-  return `routed provider emitted undeclared client tool "${reported}"; only request-declared tools may be called`;
+export function undeclaredToolCallMessage(): string {
+  return UNDECLARED_TOOL_CALL_MESSAGE;
 }
 
 /**
@@ -694,11 +716,11 @@ export function normalizeDefaultNamespaceInJson(
   }
 }
 
-function failedBlocks(name: string, newline: string): readonly string[] {
+function failedBlocks(newline: string): readonly string[] {
   const failure = {
     type: "upstream_error",
     code: UNDECLARED_TOOL_CALL_ERROR_CODE,
-    message: undeclaredToolCallMessage(name),
+    message: undeclaredToolCallMessage(),
   };
   const payload = JSON.stringify({
     type: "response.failed",
@@ -716,7 +738,7 @@ function failedBlocks(name: string, newline: string): readonly string[] {
  * it has no top-level handler for — `apply_patch`, which under code mode exists only as a nested
  * `tools.apply_patch(...)` helper inside `exec` — and the turn surfaced as a bare `aborted` with
  * no output and no explanation. Replacing the offending event with an explicit `response.failed`
- * turns that silent dead end into a compatibility error naming the tool.
+ * turns that silent dead end into a compatibility error describing the request catalog restriction.
  *
  * Everything after the trip is dropped so a later `response.completed` cannot contradict the
  * terminal already sent. Non-JSON and non-item blocks pass through untouched.
@@ -734,7 +756,7 @@ export function createUndeclaredToolCallGuardBlockRewrite(
   providerExecutedCallTypes: ProviderExecutedCallTypes = EMPTY_PROVIDER_EXECUTED_CALL_TYPES,
   declaredBare?: ReadonlySet<string>,
   declaredCustom?: ReadonlySet<string>,
-  options?: { refuseUndeclared?: boolean },
+  options?: { refuseUndeclared?: boolean; onRefusal?: (message: string) => void },
 ): SseBlockRewrite {
   // Deferred-catalog wires (Chat/Anthropic) keep the default-namespace normalization — the
   // client can only resolve the bare name it declared — while the refusal itself stays off.
@@ -754,7 +776,8 @@ export function createUndeclaredToolCallGuardBlockRewrite(
       const name = undeclaredToolCallName(parsed, declared, declaredNamelessClientCallTypes, providerExecutedCallTypes, declaredBare, declaredCustom);
       if (name !== undefined) {
         tripped = true;
-        return failedBlocks(name, block.includes("\r\n") ? "\r\n" : "\n");
+        options?.onRefusal?.(undeclaredToolCallMessage());
+        return failedBlocks(block.includes("\r\n") ? "\r\n" : "\n");
       }
     }
     const normalized = normalizeDefaultNamespaceInPayload(parsed, declared, declaredBare);

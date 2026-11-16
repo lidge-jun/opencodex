@@ -342,7 +342,7 @@ olmayan bir makineden oturum açmak bundan etkilenmez.
 
 ## 3. API anahtarı kataloğu
 
-opencodex 106 yerleşik önayar ile birlikte gelir: 85 anahtar tabanlı, 17
+opencodex 108 yerleşik önayar ile birlikte gelir: 87 anahtar tabanlı, 17
 OAuth, üç yerel ve bir varsayılan ChatGPT iletme önayarı. Kontrol panelinin
 **Sağlayıcı ekle** seçicisi bir anahtar sağlayıcısının kontrol panelini açar,
 anahtarı doğrular ve saklar; doğrulama sağlayıcıya özgüdür. Dikkate değer
@@ -403,7 +403,7 @@ yalnızca Cline IDE/CLI içinde mevcuttur; `minimax/minimax-m2.5` belgelenmiş A
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Kodlama) | `https://api.z.ai/api/coding/paas/v4` |
 | Zhipu AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
-| [BigModel Coding Plan — Responses (statik model listesi)](/guides/providers/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
+| [BigModel Coding Plan — Responses (statik model listesi)](/guides/api-key-catalog/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
 | Qwen Cloud | Token planı (varsayılan): `https://token-plan.maas.qwencloudapi.com/compatible-mode/v1` · Kullandıkça öde: `https://dashscope.aliyuncs.com/compatible-mode/v1` · veya Özel |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |

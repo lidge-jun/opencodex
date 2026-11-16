@@ -69,6 +69,8 @@ account without a formable ARN is not probed. Persisted quota and exhaustion evi
 are bound independently by observation time, reset, and login identity, never by token
 or raw account label; removal, identity change, expiry, or malformed disk degrades routing
 evidence to unknown. Initial routing reads it through `kiroAccountEvidence`.
+Display-only account quota is excluded from that evidence; an independently recorded refusal
+verdict remains separate.
 The same identity-fenced reading carries precise plan `kiroCreditsUsed` and
 `kiroCreditsLimit`; missing or expired evidence has no metric sample. The automatic
 candidate filter and account list both use `kiroAutoSelection` from
@@ -133,20 +135,163 @@ Kiro's own `kiroToolName` rewrite in `src/adapters/kiro-wire.ts` is CodeWhispere
 reserves the private completion tool. Meta Muse 64-character MCP aliases live in
 `src/responses/muse-tool-name-alias.ts` and must not import that Kiro helper.
 
+## Kiro tool catalog and schema policy
+
+`convertKiroToolContext` in `src/adapters/kiro-tools.ts` builds the outbound client-tool
+catalog, and two limits apply there per request: at most `MAX_KIRO_TOOL_COUNT` (48) converted
+tools and `MAX_KIRO_TOOL_CATALOG_BYTES` (96 KB) of serialized tool JSON. Above either limit the
+catalog is sorted by `boundedCatalogPriority` — results loaded through tool search, then the
+Codex code-mode `exec` tool, then the tool-search gateway, then the rest in declaration order —
+and admitted until the next tool would not fit. The omitted tools are named in one
+`systemAdditions` notice so the model knows what it cannot call; the notice is not an error and
+the request still goes out.
+
+Each tool description is cut to 1,024 characters, or 9,216 for `gpt-5.6-sol`, with a
+surrogate-safe ellipsis. Truncation happens while each tool is converted, before the budget
+chooses entries, so the byte limit measures the truncated strings.
+
+`OCX_KIRO_TOOL_BUDGET=off` (`KIRO_TOOL_BUDGET_ENV`) and
+`OCX_KIRO_TOOL_DESCRIPTION_LIMIT=off` (`KIRO_TOOL_DESCRIPTION_LIMIT_ENV`) are operator opt-outs
+read at request-conversion time. Turning the budget off removes both limits, so the priority sort
+and the `exec` reservation have nothing to exclude: every declared tool goes on the wire in
+declaration order and no omission notice is emitted. An oversized catalog therefore reaches Kiro
+intact and the upstream `ValidationException` becomes the failure mode instead of a trimmed
+request. The default remains bounded because that is the shape a fresh Kiro account is measured to
+accept.
+
+Schema sanitization is chosen per model id and per keyword, not per family or transport.
+`kiroRejectedSchemaKeys(modelId)` returns `KIRO_REJECTED_SCHEMA_KEYS` for every id except those in
+`KIRO_SCHEMA_KEY_EXCEPTIONS`, which maps an id to the rejected keys minus the ones a probe measured
+it taking. An exception can only widen what a probe covered; it is never "this model accepts
+everything".
+
+PR #8451 reports an opus-4.5 probe covering every rejected keyword, so its exception is the empty
+set. Its list writes 27 items because `if/then/else` stands for three keys, which is exactly the
+29 keys of the set, while the report states that total as 28 — one fewer than the keys its list
+names. The accepted keys, not the stated count, are what the exception encodes. It reports a
+constrained tool probe on `claude-opus-5.5` and `claude-sonnet-5.5` naming `pattern` and
+`maximum`; only those two keys survive for those ids. The report does not establish the other
+schema keys.
+
+The remaining Claude ids on this provider (`claude-opus-5`, `claude-opus-4.8`,
+`claude-opus-4.7`, `claude-opus-4.6`, `claude-sonnet-5`, `claude-sonnet-4.6`,
+`claude-sonnet-4.5`, `claude-sonnet-4.0`, `claude-haiku-5.5`, `claude-haiku-4.5`) were not
+probed for schema keywords and keep the full strip. The scope is deliberate: this wire already
+separates Claude models on another field — Haiku 4.5, Opus 4.5 and Sonnet 4.5 reject
+`output_config.effort` outright and the 4.6 pair rejects `xhigh` — so a family-wide promise would
+be an inference, and a wrong one surfaces as an upstream `ValidationException` for the whole
+request rather than a lost hint. The prose contract restates the original schema only when it fits
+the instruction budget; otherwise stripped constraints are absent from the model-facing
+structured-output request.
+
+Both the client-tool path and the structured-output tool (`kiroStructuredOutputSpec` in
+`src/adapters/kiro/structured-output.ts`) pass that set into `sanitizeKiroSchema`, so the two
+cannot drift. Root
+`oneOf`/`anyOf`/`allOf` flattening in `ensureRootObjectType` stays unconditional for every
+model: it is a wire requirement, not a constraint strip.
+
+The Codex tool-catalog nudge is scoped by inbound surface, not by routed model. Requests prepared
+from the Anthropic Messages wire carry `_anthropicInbound`
+(`src/server/responses/request-prepare.ts`), and `src/adapters/kiro/payload.ts` omits the nudge
+for them: its text names Codex-only concepts (code mode, neighboring-agent tool bans) that a
+Claude Code or Claude Desktop turn does not have, and every such client sends its own tool rules.
+A non-Claude model routed from that surface therefore drops the nudge too, while the same model
+keeps it on the Codex surface. Coverage: `tests/providers/kiro/kiro-tool-catalog.test.ts`.
+
 ## Kiro Responses text controls
 
 Kiro shares the Responses freeform restoration boundary in
 `src/responses/apply-patch-envelope.ts`: contractual `input` wrappers are unwrapped, while alternate
 field and outer-fence recovery is limited to unambiguous bare or `default.`-prefixed `exec` and `apply_patch` bodies.
 
-Kiro refuses structured output and tolerates every other Responses `text` member. `text.format`
-of type `json_schema` or `json_object` is a contract the CodeWhisperer wire cannot honour, so the
-adapter rejects it rather than returning prose to a caller expecting JSON. `text.verbosity` and
-`text.format: {"type":"text"}` are preferences, not contracts; they are accepted and dropped,
-because `buildKiroPayload` composes `conversationState` from parsed fields and never forwards the
-raw body.
+`text.verbosity` and `text.format: {"type":"text"}` are preferences, not contracts; they are
+accepted and dropped, because `buildKiroPayload` composes `conversationState` from parsed fields
+and never forwards the raw body.
 
 > Decision record: [ADR-0061](../decisions/ADR-0061-kiro-responses-text-controls.md)
+
+### Kiro structured output
+
+`text.format` of type `json_schema` or `json_object` (`options.textFormat`; on `/v1/messages` it
+comes from `output_config.format`) is a contract the CodeWhisperer wire has no response mode for.
+`src/adapters/kiro/structured-output.ts` emulates it with the private terminal tool
+`codex_kiro_structured_output`, reserved against client tools in `src/adapters/kiro-wire.ts`:
+
+- The tool's input schema is the caller's schema, stripped of the keywords `kiroRejectedSchemaKeys`
+  lists for that model id, exactly as a client tool schema is. A root that
+  is not a plain `type: "object"` (array, scalar, root `anyOf`/`oneOf`/`allOf`/`$ref`) is wrapped
+  as `{value: <schema>}` with `$defs`/`definitions` hoisted and every other local `$ref` (`#`,
+  `#/items`, ...) re-pointed under `#/properties/value`, rather than flattened the way
+  `src/adapters/kiro-tools.ts` flattens ordinary argument schemas. `json_object` advertises
+  `{type: "object"}`. Sanitization copies `const`, `enum`, `default` and `examples` verbatim,
+  because they hold data whose keys only look like keywords.
+- It replaces `codex_kiro_final_answer` as the terminal channel and forces completion mode
+  `required` even on a tool-free turn. Client tools are still advertised ahead of it; a tool-free
+  turn carries no tool-catalog nudge. The prose contract restates the caller's unsanitized schema
+  when it fits the injected-instruction budget, and is otherwise sent without it.
+- The stream relays a valid call's input as one `final_answer` text delta and surfaces no tool
+  call. The direct form relays the model's bytes; the wrapped form relays the original bytes of
+  `value`, so numbers past 2^53 or the double range are never rewritten. A value past the reader's
+  512-level nesting limit is refused rather than re-serialized.
+  Without `strict: true`, validation is light: the input parses, the root matches the schema's declared `type` (or, for a root `anyOf`/`oneOf` whose branches all declare one, one of the branch types), and the
+  root's `required` keys are present. With `strict: true`, `src/adapters/kiro/structured-output-schema.ts`
+  prepares the original schema into a validation graph once, at the boundary, and validates the whole
+  value exactly and in bounded work. A strict format whose schema is missing or not a JSON object
+  (such as `false`) is refused. Anything outside this subset is refused before anything is sent,
+  with the same refusal structured output had before emulation:
+  (A Messages `output_config.format` schema counts as strict regardless of the `strict` its
+  Responses translation states: `src/server/responses/request-prepare.ts` sets the process-local
+  `_structuredOutputConformance` for Anthropic inbound requests.)
+  - `type` (a known type or a non-empty array of them) with no repeated type, `properties`, `required`,
+    `additionalProperties` (boolean or schema), single-schema `items`, `enum`, `const`, `anyOf`.
+    A `const` or `enum` literal that contains a number is refused: the request arrives parsed, so
+    `1.0000000000000001` is already `1`, and exact equality could accept a value the caller excluded.
+  - `$ref` only as `#/$defs/<name>` or `#/definitions/<name>` naming a root definition, with no
+    JSON Pointer escape other than `~0`/`~1`; the
+    fragment is percent-decoded before its segments are read, so an encoded `/` is a separator;
+    `$defs`/`definitions` only at the root. Root-relative references (`#`, `#/properties/...`),
+    references into annotations (`#/default`), remote references, and a cycle of `$ref`/`anyOf`
+    edges that consumes none of the value are refused. Recursion through properties or items is allowed.
+    A `$ref` beside an assertion keyword is refused, because drafts disagree on whether those
+    siblings apply; annotations and root `$defs`/`definitions` beside it are fine. A `$id` below the
+    root (a new resource that references would resolve against) and `$anchor`/`$dynamicAnchor` are refused.
+  - `minLength`, `maxLength`, `minItems`, `maxItems` as non-negative safe integers.
+  - `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum` must be a safe integer or a
+    non-integer with at most 15 significant digits. This is a heuristic: a bound written with more
+    digits than a double holds can still arrive rounded, so a value within about one unit in the last
+    place of the bound may be judged on the wrong side. The model's numbers are compared by their
+    original text with exact decimal arithmetic (`src/adapters/kiro/structured-output-json.ts`).
+  - `multipleOf`, `pattern` and `patternProperties` are refused: `multipleOf` is exact equality on
+    a possibly rounded number, and a regular expression run against model output can take
+    super-linear time on the request path.
+  - Annotations (`title`, `description`, `default`, `examples`, ...) are ignored.
+
+  One validation visits at most 10,000 schema nodes plus 16 per JSON value in the answer, and one
+  depth limit of 128 schema levels spans references, `anyOf` branches, properties and items; the
+  reader stops at 512 levels of nesting. A value that needs more is non-conforming (it takes the
+  bounded retry like any invalid answer), so a recursive `anyOf` cannot branch exponentially and a
+  deep value cannot exhaust the stack. `const`/`enum` comparisons, each pass over a `required`
+  list or an object's entries, string length checks and number comparisons (each number parsed once) are charged to the same budget, long strings
+  in proportion to their length. Preparation is bounded too: a schema with more than
+  10,000 nodes, or more than 10,000 JSON values across its `const`/`enum` literals, is refused, and
+  the reference-cycle check is linear in nodes and edges. Validation problems and refusals are fixed
+  categories: they never quote a path, a property name, or a schema key outside the JSON Schema
+  vocabulary, because they reach the caller.
+- A clean-stop text answer (`END_TURN`, `STOP_SEQUENCE`, or no stop reason) that is itself the
+  JSON, optionally in one whole-message code fence, is accepted without a retry. Prose, an empty clean response, or a tool
+  input that fails validation (including truncated JSON), takes the one bounded `text_fallback` retry with a structured-output
+  retry instruction, but only after a clean stop: under `MAX_TOKENS`, a content filter or an exhausted context window the stop's own terminal applies, because a retry would hit the same limit or verdict. The retry accepts JSON text only after a clean stop too. If the retry yields neither a valid call nor JSON text, including an empty or reasoning-only retry, the turn ends with a
+  non-retryable 502 `invalid_kiro_structured_output` error.
+- Held prose never reaches a structured-output caller: every drain of held events drops text and
+  releases only non-text events. Commentary that precedes a real client tool call is released with
+  that call, as on ordinary turns.
+- A call to whichever private tool the turn did not advertise is a protocol error, never a client
+  tool call.
+
+Coverage: `tests/providers/kiro/kiro-structured-output.test.ts`, `tests/providers/kiro/kiro-structured-output-strict.test.ts` and
+`tests/server/server-kiro-structured-output-e2e.test.ts`.
+
+> Decision record: [ADR-8071](../decisions/ADR-8071-kiro-structured-output-emulation.md)
 
 ## Bounded fallback HTTP errors
 
@@ -159,6 +304,13 @@ budget until emitted, discarded, or cancelled; replay collectors are released af
 retry construction. Native `END_TURN` and `STOP_SEQUENCE` alone do not distinguish
 progress from an answer and therefore still require validation. Normal private completion
 and real tool calls need no completion retry.
+Validation also fires when the held text already was the answer: claude-sonnet-5 answers a
+trivial request in plain text with `END_TURN`, where the 5.5 models call the completion tool.
+The retry instruction (`KIRO_COMPLETION_RETRY_MESSAGE`) therefore states that ordinary text has
+not reached the user and asks for an already complete reply to be resubmitted unchanged through
+the completion tool, rather than telling the model to continue an existing task, which it read as
+the user's next message and answered with "no active task to continue" in place of the real answer.
+Coverage: `tests/providers/kiro/kiro-completion-retry-wording.test.ts`.
 The retry snapshots cloneable request fields without top-level runtime callbacks, leaving the original request intact.
 
 A turn can carry a real tool call and the private completion call together, in either order.
@@ -172,7 +324,14 @@ Coverage: `tests/providers/kiro/kiro-single-final.test.ts`,
 `tests/providers/kiro/kiro-completion-with-real-tools.test.ts` and
 `tests/server/server-kiro-completion-e2e.test.ts`.
 
-`src/adapters/kiro-retry.ts` uses the configured executor for every generation send and may try the existing `q.{region}.amazonaws.com` host once after a canonical-host HTTP 502/503/504 before output, subject to the same send budget. Reset, 429, alternate, and completion-fallback sends wait for a pacing slot; only the first send is pre-paid. Kiro web-search turns are paced as well. A Kiro-local wrapper maps its header deadline to HTTP 504 without changing shared or Google fetch behavior; caller cancellation remains an abort. Final HTTP 5xx text is fixed for clients, and opt-in provider diagnostics carry only closed-set status and classification codes.
+## Content-filter stops
+
+A `metadataEvent` `stopReason` of `CONTENT_FILTERED` or `GUARDRAIL_INTERVENED` is mapped in every completion mode (`disabled`, `required`, and the bounded `text_fallback` retry) before any empty-stream or fallback classification. For Claude models it is the model's own safety classifier, deterministic for that context, so the adapter ends the turn with the non-retryable `content_filter` incomplete and never starts a completion retry. Claude outbound renders it as `stop_reason: "refusal"`; Responses delivers a terminal `response.failed` with `invalid_prompt` (`src/bridge/terminal-refusal.ts`); the empty-completion guard passes it through. Text that streamed before the filter is not promoted to a final answer. A validated final answer and a real tool call keep their precedence over the stop. When the bounded retry is the attempt that gets filtered, neither attempt produced an accepted answer, so the first attempt's held progress is released (retry text normally supersedes it) and the retry's partial text follows as commentary.
+
+Kiro attaches `stopDetails.refusal` (`category`, `explanation`) to the stop. `src/adapters/kiro-events.ts` reads it leniently, so a malformed shape drops only the details, and bounds both fields. The incomplete message carries them: `Kiro stopped with CONTENT_FILTERED, category BIO: <explanation>`. Before this, a tool-less turn (`disabled` mode carries no content when refused) fell through to the replay-safe `empty_kiro_stream`, which Claude clients saw as a retryable 502 overload. A stream with no content and no stop reason is still `empty_kiro_stream` and stays retryable.
+Coverage: `tests/providers/kiro/kiro-content-filter.test.ts` and `tests/server/server-kiro-refusal-e2e.test.ts`.
+
+`src/adapters/kiro-retry.ts` names exhausted-budget destinations only through the [bounded error-label contract](../data-planes/error-detail.md#client-error-bodies-chat); the shared constructor removes configured URL userinfo, path, query and fragment. It uses the configured executor for every generation send and may try the existing `q.{region}.amazonaws.com` host once after a canonical-host HTTP 502/503/504 before output, subject to the same send budget. Reset, 429, alternate, and completion-fallback sends wait for a pacing slot; only the first send is pre-paid. Kiro web-search turns are paced as well. A Kiro-local wrapper maps its header deadline to HTTP 504 without changing shared or Google fetch behavior; caller cancellation remains an abort. Final HTTP 5xx text is fixed for clients, and opt-in provider diagnostics carry only closed-set status and classification codes.
 
 When a first Kiro stream needs a completion fallback, the fallback response's non-success
 body is read through the shared display-safe bounded reader with the attempt's abort signal.
@@ -197,10 +356,42 @@ on the matching `assistantResponseMessage.reasoningContent` to preserve model re
 turns; dropping it makes every turn restart without the previous turn's reasoning. Verified on
 kiro-cli 2.14.1 and 2.16.0, all three models.
 
-Native effort admission is narrower than model eligibility: luna and terra send only
-`low`, `medium`, `high`, and `max` on the native field. Their `xhigh` requests retain the
-previous emulated thinking tags because that native rung is unverified. A future shared
-effort rung does not expand this allowlist. Sol and Opus keep their existing native ladder.
+Native effort admission is narrower than model eligibility, and the narrowing lives in
+`kiroNativeEffortField` rather than in `KIRO_NATIVE_EFFORT_FIELDS` alone
+(`src/adapters/kiro/reasoning.ts`): a model can be in the field table and still send an
+individual rung on the emulated path. Luna and terra send only `low`, `medium`, `high`, and
+`max` on the native field, and their `xhigh` keeps the previous emulated thinking tags because
+that native rung is unverified. On the Claude side, `claude-opus-4.6` and `claude-sonnet-4.6`
+reject a native `xhigh` (HTTP 400 in the 2026-11-07 probe), so `KIRO_NO_XHIGH_NATIVE_MODELS`
+routes that rung to the emulated block instead.
+
+`KIRO_NATIVE_EFFORTS` is `low`, `medium`, `high`, `xhigh`, `max`. For `minimal`
+`buildKiroPayload` throws, and the request becomes HTTP 400 `invalid_request_error` before
+anything is sent, unless `kiroEmulatesUnsupportedEffort` accepts the model. Responses includes
+the adapter detail; Messages and Chat Completions use the fixed request-rejected message.
+`minimal` is the only outside-ladder value a caller's own request can deliver: the
+Responses parser folds `ultra` to `max` for both surfaces — the Messages translator copies
+`output_config.effort` through verbatim and hands the translated body to the same parser — and
+combo resolution draws from the catalog's `low`..`max` ladder. The emulation set is the seven
+Claude ids #8451 moved to native effort —
+`claude-opus-4.8`, `claude-opus-4.7`, `claude-opus-4.6`, `claude-sonnet-5.5`, `claude-sonnet-5`,
+`claude-sonnet-4.6`, `claude-haiku-5.5` — and they emulated every effort before the change, so
+they keep the emulated block for `minimal` instead of failing a request they used to serve.
+`claude-opus-5` and `claude-opus-5.5` are deliberately absent: they had native effort before the
+change, so `minimal` stays an error for them, as it is for the GPT models with native effort.
+
+An operator pin is applied after parsing by `applyPinnedEffort` (`src/server/effort-policy.ts`),
+so `ultra` reaches `buildKiroPayload`. For models in `KIRO_NATIVE_EFFORT_FIELDS`, the builder
+folds it to native `max` before validating and emitting the wire field. Models outside the table
+keep the emulated path: `kiroThinkingBudget` has no `ultra` entry, so the request is sent without
+a reasoning signal. Other unsupported values still fail native validation.
+`tests/providers/kiro/kiro-pinned-effort-ultra.test.ts` covers the pin forms and client surfaces.
+
+The split is operator-visible. A `minimal` request reaches the seven as the emulated thinking
+block with no error, while the same request to Opus 5, Opus 5.5 or a native GPT model is a 400
+`invalid_request_error` with the surface split described above. This is an enumerated fallback,
+not a general unknown-effort path: a value outside both the ladder and this set still throws. A
+future shared effort rung does not widen any of these allowlists.
 
 The two members of `reasoningContent` are not interchangeable. The wire validates the shape of the
 member rather than its content, and the signature is not base64 — its alphabet contains `.` and
@@ -235,6 +426,12 @@ reading the percentage from `metadataEvent` alone never saw a value — but the 
 finite `contextUsagePercentage` (and a `tokenUsage` block) there as a fallback, so a value parsed
 from `metadataEvent` is legitimate rather than impossible. Both feed the same field, and any
 positive value overwrites an earlier one.
+
+When no usable context percentage is available, `src/adapters/kiro/usage.ts` estimates the
+walked payload using the shared CJK classifier, including both UTF-16 units of supplementary Han.
+Kiro's wire expansion applies only to the non-CJK bucket, and the payload adds entry framing.
+`tests/providers/kiro/kiro-wire-estimate.test.ts` covers the wire estimate and streamed context
+usage when supplementary Han is mixed with other scripts.
 
 Spend arrives in `meteringEvent` as **credits, not tokens**. Kiro token usage stays estimated
 unless a `metadataEvent` carries a `tokenUsage` block; no captured response did. That block is the

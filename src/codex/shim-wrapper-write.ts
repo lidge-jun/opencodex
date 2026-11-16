@@ -12,6 +12,7 @@ import { basename, dirname, join } from "node:path";
 import { durableBunRuntime, type BunRuntimeSource, type DurableBunRuntime } from "../lib/bun-runtime";
 import { sameFileIdentity, type FileIdentity } from "../lib/file-identity";
 import { serviceApiTokenFilePath } from "../lib/service-secrets";
+import { assertLegacyShimMutationAllowed } from "./shim-legacy-record";
 import {
   buildUnixCodexShim,
   buildWindowsCodexShim,
@@ -58,6 +59,12 @@ export function windowsShimContent(wrapperPath: string, realCodexPath: string, r
 export function writeShim(wrapperPath: string, realCodexPath: string, runtime?: DurableBunRuntime): FileIdentity | undefined {
   const { bun, bunRuntimeSource, cli } = cliEntry(runtime);
   if (process.platform === "win32") {
+    assertLegacyShimMutationAllowed();
+    // Never write through a link or a file another path shares: the write would land outside this wrapper.
+    const existing = (() => { try { return lstatSync(wrapperPath, { bigint: true }); } catch { return null; } })();
+    if (existing && (existing.isSymbolicLink() || !existing.isFile() || existing.nlink > 1n)) {
+      throw new Error("Codex shim wrapper path is not a private regular file; refusing to write through it");
+    }
     writeFileSync(wrapperPath, windowsShimContent(wrapperPath, realCodexPath, runtime), "utf8");
     return undefined;
   } else {

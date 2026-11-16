@@ -661,6 +661,10 @@ main:has(.lp) .content-panel:first-child { padding-block: 0; }
   border-radius: var(--ocx-radius);
   border: 1px solid var(--sl-color-hairline-light);
 }
+@media (prefers-reduced-motion: reduce), (width < 48rem) {
+  .lp-scrub-canvas { display: none !important; }
+  .lp-scrub-poster { display: block !important; }
+}
 .lp-scrub-caption {
   margin: 0;
   color: var(--sl-color-gray-3);
@@ -1144,7 +1148,7 @@ footer.sl-flex .meta { color: var(--sl-color-gray-4); }
       .lp-scene { view-timeline: --scene block; }
       .lp-scene-hero, .lp-scene-quick { height: 150dvh; }
       /* long travel = slow frame rate feel on the scrub */
-      .lp-scene-scrub { height: 480dvh; }
+      .lp-scene-scrub[data-scrub-active] { height: 480dvh; }
       .lp-scene-inner {
         position: sticky;
         top: calc(var(--sl-nav-height) + 0.5rem);

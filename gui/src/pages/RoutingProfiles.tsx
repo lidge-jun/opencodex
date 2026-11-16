@@ -17,7 +17,7 @@ import {
   normalizeCompatibilityDto,
 } from "../routing-profile-editor-data";
 import { readJsonIfOk } from "../fetch-json";
-import { Notice } from "../ui";
+import { Notice, Select } from "../ui";
 import { confirmAction } from "../action-dialogs";
 import { useI18n, useT } from "../i18n/shared";
 import { ROUTING_COMPATIBILITY_FIELD_LABELS } from "../i18n/routing-compatibility-labels";
@@ -171,10 +171,10 @@ function fmtExclusion(code: string, t: ReturnType<typeof useT>): string {
 
 
 function parseProfiles(raw: unknown): RoutingProfileDto[] {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("invalid-profiles-response");
   const profiles = (raw as { profiles?: unknown }).profiles;
-  if (!Array.isArray(profiles)) return [];
-  return profiles.filter((profile): profile is RoutingProfileDto => {
+  if (!Array.isArray(profiles)) throw new Error("invalid-profiles-response");
+  const valid = profiles.filter((profile): profile is RoutingProfileDto => {
     if (!isPlainObject(profile)) return false;
     // Validate the complete DTO shape: routingProfileDraftFromDto dereferences
     // these nested objects, so a management response that omits any of them
@@ -187,7 +187,9 @@ function parseProfiles(raw: unknown): RoutingProfileDto[] {
       && isPlainObject(profile.optimize)
       && isPlainObject(profile.limits)
       && isPlainObject(profile.unknownEvidence);
-  }).map(profile => {
+  });
+  if (profiles.length > 0 && valid.length === 0) throw new Error("invalid-profiles-response");
+  return valid.map(profile => {
     const compatibility = normalizeCompatibilityDto(
       "compatibility" in profile ? profile.compatibility : undefined,
     );
@@ -258,6 +260,7 @@ export default function RoutingProfiles({
   const compatibilityFieldLabels = ROUTING_COMPATIBILITY_FIELD_LABELS[locale];
   const unavailable = t("routing.unavailable");
   const [profiles, setProfiles] = useState<RoutingProfileDto[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [analytics, setAnalytics] = useState<Analytics | null>(null);
   const [providerNames, setProviderNames] = useState<string[]>([]);
   const [providerDefaults, setProviderDefaults] = useState<Record<string, string>>({});
@@ -345,6 +348,7 @@ export default function RoutingProfiles({
     loadAbortRef.current = controller;
     const { signal } = controller;
     const generation = ++loadGenerationRef.current;
+    setLoaded(false);
     setLoadError("");
     try {
       const [profilesRes, analyticsRes, configRes, modelsRes, catalogRes] = await Promise.all([
@@ -382,6 +386,7 @@ export default function RoutingProfiles({
 
       selectedRef.current = refreshed;
       setProfiles(nextProfiles);
+      setLoaded(true);
       setSelected(refreshed);
       setDraft(refreshed ? routingProfileDraftFromDto(refreshed) : null);
       setAnalytics(analyticsJson);
@@ -602,6 +607,7 @@ export default function RoutingProfiles({
   const selectedModelOptions = draft?.candidates.map(
     candidate => modelOptionsForProvider(models, candidate.provider),
   ) ?? [];
+  const unknownEvidenceOptions = UNKNOWN_EVIDENCE_OPTIONS.map(mode => ({ value: mode, label: t(`routing.unknownEvidence.${mode}` as const) }));
 
   return (
     <div className="page" data-page="routing">
@@ -621,6 +627,7 @@ export default function RoutingProfiles({
 
       {loadError ? <Notice tone="err">{t("routing.loadFailed")}: {loadError}</Notice> : null}
       {status ? <Notice tone={status.ok ? "ok" : "err"}>{status.message}</Notice> : null}
+      {loaded && !loadError && profiles.length === 0 && !draft ? <p className="muted">{t("routing.empty")}</p> : null}
 
       {profiles.length > 0 ? (
         <div className="panel" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -689,15 +696,16 @@ export default function RoutingProfiles({
                     <div className="model-grid">
                       <label className="field-label">
                         <code>provider</code>
-                        <select
-                          className="input"
+                        <Select
+                          fullWidth
                           required
                           value={candidate.provider}
-                          onChange={event => updateCandidate(index, "provider", event.target.value)}
-                        >
-                          <option value="" disabled>{t("routing.none")}</option>
-                          {candidateProviders.map(provider => <option key={provider} value={provider}>{provider}</option>)}
-                        </select>
+                          onChange={provider => updateCandidate(index, "provider", provider)}
+                          options={[
+                            { value: "", label: t("routing.none"), disabled: true },
+                            ...candidateProviders.map(provider => ({ value: provider, label: provider })),
+                          ]}
+                        />
                       </label>
                       <label className="field-label">
                         <code>model</code>
@@ -767,21 +775,22 @@ export default function RoutingProfiles({
               {BOOLEAN_REQUIREMENTS.map(key => (
                 <label key={key} className="field-label">
                   <code>{key}</code>
-                  <select
-                    className="input"
+                  <Select
+                    fullWidth
                     value={draft.require[key]}
-                    onChange={event => setDraft(current => current ? {
+                    onChange={value => setDraft(current => current ? {
                       ...current,
                       require: {
                         ...current.require,
-                        [key]: event.target.value as OptionalBoolean,
+                        [key]: value as OptionalBoolean,
                       },
                     } : current)}
-                  >
-                    <option value="">{t("routing.none")}</option>
-                    <option value="true">{t("routing.yes")}</option>
-                    <option value="false">{t("routing.no")}</option>
-                  </select>
+                    options={[
+                      { value: "", label: t("routing.none") },
+                      { value: "true", label: t("routing.yes") },
+                      { value: "false", label: t("routing.no") },
+                    ]}
+                  />
                 </label>
               ))}
             </div>
@@ -828,21 +837,18 @@ export default function RoutingProfiles({
             </label>
             <label className="field-label">
               <code>onUnknownCost</code>
-              <select
-                className="input"
+              <Select
+                fullWidth
                 value={draft.limits.onUnknownCost}
-                onChange={event => setDraft(current => current ? {
+                onChange={value => setDraft(current => current ? {
                   ...current,
                   limits: {
                     ...current.limits,
-                    onUnknownCost: event.target.value as UnknownCostCapMode,
+                    onUnknownCost: value as UnknownCostCapMode,
                   },
                 } : current)}
-              >
-                {UNKNOWN_COST_CAP_OPTIONS.map(mode => (
-                  <option key={mode} value={mode}>{t(`routing.unknownEvidence.${mode}` as const)}</option>
-                ))}
-              </select>
+                options={UNKNOWN_COST_CAP_OPTIONS.map(mode => ({ value: mode, label: t(`routing.unknownEvidence.${mode}` as const) }))}
+              />
             </label>
           </fieldset>
 
@@ -852,21 +858,18 @@ export default function RoutingProfiles({
               {UNKNOWN_EVIDENCE_KEYS.map(key => (
                 <label key={key} className="field-label">
                   <code>{key}</code>
-                  <select
-                    className="input"
+                  <Select
+                    fullWidth
                     value={draft.unknownEvidence[key]}
-                    onChange={event => setDraft(current => current ? {
+                    onChange={value => setDraft(current => current ? {
                       ...current,
                       unknownEvidence: {
                         ...current.unknownEvidence,
-                        [key]: event.target.value as UnknownEvidenceMode,
+                        [key]: value as UnknownEvidenceMode,
                       },
                     } : current)}
-                  >
-                    {UNKNOWN_EVIDENCE_OPTIONS.map(mode => (
-                      <option key={mode} value={mode}>{t(`routing.unknownEvidence.${mode}` as const)}</option>
-                    ))}
-                  </select>
+                    options={unknownEvidenceOptions}
+                  />
                 </label>
               ))}
             </div>
@@ -928,21 +931,22 @@ export default function RoutingProfiles({
                 </div>
                 <label className="field-label">
                   {t("routing.compatibility.minStatus")}
-                  <select
-                    className="input"
+                  <Select
+                    fullWidth
                     value={draft.compatibility.minStatus}
-                    onChange={event => setDraft(current => current ? {
+                    onChange={value => setDraft(current => current ? {
                       ...current,
                       compatibility: {
                         ...current.compatibility,
-                        minStatus: event.target.value as RoutingProfileDraft["compatibility"]["minStatus"],
+                        minStatus: value as RoutingProfileDraft["compatibility"]["minStatus"],
                       },
                     } : current)}
-                  >
-                    <option value="">{t("routing.none")}</option>
-                    <option value="PROBED">{t("lab.verdict.PROBED")}</option>
-                    <option value="VERIFIED">{t("lab.verdict.VERIFIED")}</option>
-                  </select>
+                    options={[
+                      { value: "", label: t("routing.none") },
+                      { value: "PROBED", label: t("lab.verdict.PROBED") },
+                      { value: "VERIFIED", label: t("lab.verdict.VERIFIED") },
+                    ]}
+                  />
                 </label>
                 <label className="field-label">
                   {compatibilityFieldLabels.maxEvidenceAgeMs}
@@ -959,39 +963,33 @@ export default function RoutingProfiles({
                 </label>
                 <label className="field-label">
                   {compatibilityFieldLabels.unknownEvidence}
-                  <select
-                    className="input"
+                  <Select
+                    fullWidth
                     value={draft.compatibility.unknownEvidence}
-                    onChange={event => setDraft(current => current ? {
+                    onChange={value => setDraft(current => current ? {
                       ...current,
                       compatibility: {
                         ...current.compatibility,
-                        unknownEvidence: event.target.value as UnknownEvidenceMode,
+                        unknownEvidence: value as UnknownEvidenceMode,
                       },
                     } : current)}
-                  >
-                    {UNKNOWN_EVIDENCE_OPTIONS.map(mode => (
-                      <option key={mode} value={mode}>{t(`routing.unknownEvidence.${mode}` as const)}</option>
-                    ))}
-                  </select>
+                    options={unknownEvidenceOptions}
+                  />
                 </label>
                 <label className="field-label">
                   {compatibilityFieldLabels.degradedEvidence}
-                  <select
-                    className="input"
+                  <Select
+                    fullWidth
                     value={draft.compatibility.degradedEvidence}
-                    onChange={event => setDraft(current => current ? {
+                    onChange={value => setDraft(current => current ? {
                       ...current,
                       compatibility: {
                         ...current.compatibility,
-                        degradedEvidence: event.target.value as UnknownEvidenceMode,
+                        degradedEvidence: value as UnknownEvidenceMode,
                       },
                     } : current)}
-                  >
-                    {UNKNOWN_EVIDENCE_OPTIONS.map(mode => (
-                      <option key={mode} value={mode}>{t(`routing.unknownEvidence.${mode}` as const)}</option>
-                    ))}
-                  </select>
+                    options={unknownEvidenceOptions}
+                  />
                 </label>
               </div>
             ) : null}

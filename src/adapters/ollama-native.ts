@@ -641,7 +641,17 @@ function usageFromNative(value: JsonRecord | undefined): OcxUsage | undefined {
   const input = isFiniteNonNegativeInteger(value.prompt_eval_count) ? value.prompt_eval_count : undefined;
   const output = isFiniteNonNegativeInteger(value.eval_count) ? value.eval_count : undefined;
   if (input === undefined && output === undefined) return undefined;
-  return { inputTokens: input ?? 0, outputTokens: output ?? 0 };
+  // Ollama reports prompt_eval_cached_count as the cached subset of prompt_eval_count (api/types.go;
+  // its CLI prints prompt_eval_count - cached as the uncached share), which is OCX's cache-read
+  // convention. Omitted means unknown, so no cache field is invented; a count that exceeds the
+  // prompt is not a subset and is ignored rather than clamped (#8101).
+  const cached = input !== undefined && isFiniteNonNegativeInteger(value.prompt_eval_cached_count)
+    && value.prompt_eval_cached_count <= input ? value.prompt_eval_cached_count : undefined;
+  return {
+    inputTokens: input ?? 0,
+    outputTokens: output ?? 0,
+    ...(cached !== undefined ? { cachedInputTokens: cached, cacheReadInputTokens: cached } : {}),
+  };
 }
 
 function stopReasonFromNative(value: unknown): string | undefined {

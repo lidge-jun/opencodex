@@ -31,6 +31,7 @@ import {
   type SidecarOutcomeRecorder,
 } from "./executor";
 import { runAnthropicWebSearch } from "./anthropic-executor";
+import type { AuxiliaryModelSend } from "../lib/request-execution-budget";
 import { runXaiWebSearch } from "./xai-executor";
 import { runGeminiWebSearch } from "./gemini-executor";
 import { runExaWebSearch } from "./exa-executor";
@@ -55,6 +56,7 @@ export interface RunTurnWebSearchDeps {
   exaApiKey?: string;
   abortSignal?: AbortSignal;
   recordSidecarOutcome?: SidecarOutcomeRecorder;
+  dispatchSidecarSend?: AuxiliaryModelSend;
   /** Preserve the request's opt-in empty-completion retry before the search cap. */
   emptyCompletionRetry?: boolean;
   /**
@@ -269,7 +271,7 @@ export async function* runTurnWebSearchLoop(
       switch (plan.backend) {
         case "anthropic":
           return plan.anthropicSidecar
-            ? await runAnthropicWebSearch(query, plan.anthropicSidecar.providerName, plan.anthropicSidecar.provider, plan.settings, signal, plan.anthropicSidecar.config)
+            ? await runAnthropicWebSearch(query, plan.anthropicSidecar.providerName, plan.anthropicSidecar.provider, plan.settings, signal, plan.anthropicSidecar.config, deps.dispatchSidecarSend)
             : { text: "", sources: [], error: "anthropic backend selected without a resolved sidecar provider" };
         case "xai":
           return plan.xaiSidecar

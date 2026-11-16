@@ -36,6 +36,7 @@ import { RailRow } from "./ProviderRail";
 import type { PricingFilter, ProviderModelUsageRow, ProviderUsageTotals, StatusFilter, TypeFilter } from "./types";
 import ProviderOverviewDashboard from "./ProviderOverviewDashboard";
 import ProviderJsonEditor, { type JsonEditorState } from "./ProviderJsonEditor";
+import { providerDraftTargetLabel } from "../../provider-workspace/target-drafts";
 
 import type { ModelRow } from "../../pages/models-shared";
 import { parseModelInventory, countModelInventory, parseModelSelection, parseProviderDiscoveryMap } from "../../provider-workspace/model-inventory";
@@ -78,6 +79,8 @@ function readFreshQuotaReportCache(key: string): Record<string, ProviderQuotaRep
 export default function ProviderWorkspaceShell({
   providers,
   apiBase,
+  targetKey,
+  targetLabel,
   defaultProvider,
   selectedName,
   onSelect,
@@ -99,6 +102,10 @@ export default function ProviderWorkspaceShell({
 }: {
   providers: Record<string, WorkspaceProvider>;
   apiBase: string;
+  /** Logical target identity for target-scoped usage caches. */
+  targetKey?: string;
+  /** Nonsecret logical target label for draft/save-target copy. */
+  targetLabel?: string;
   defaultProvider: string;
   selectedName: string | null;
   onSelect: (name: string | null) => void;
@@ -144,7 +151,7 @@ export default function ProviderWorkspaceShell({
 }) {
   const t = useT();
   const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>({ ready: true, needsSetup: true, disabled: true });
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>({ ready: true, needsSetup: true, unverified: true, disabled: true });
   const [pricingFilter, setPricingFilter] = useState<PricingFilter>({ free: true, paid: true });
   const [typeFilter, setTypeFilter] = useState<TypeFilter>({ cloud: true, local: true, selfHosted: true, login: true });
   const [sortMode, setSortMode] = useState<ProviderSortMode>("az");
@@ -156,8 +163,9 @@ export default function ProviderWorkspaceShell({
   } | null>(null);
   const [modelsLoading, setModelsLoading] = useState(false);
   const [modelsLoadFailed, setModelsLoadFailed] = useState(false);
-  const quotasCacheKey = `ocx.providers.quotas.v1:${apiBase}`;
-  const usageCacheKey = `ocx.providers.usage.v2:${apiBase}`;
+  const cacheTarget = targetKey ?? apiBase;
+  const quotasCacheKey = `ocx.providers.quotas.v1:${cacheTarget}`;
+  const usageCacheKey = `ocx.providers.usage.v2:${cacheTarget}`;
   const [usageMetadata, setUsageMetadata] = useState<UsageReadMetadata>(() => (
     readUsageMetadata(readSessionListCache(usageCacheKey))
   ));
@@ -176,14 +184,14 @@ export default function ProviderWorkspaceShell({
     return !cached || Object.keys(cached).length === 0;
   });
   const [modelsLoadEpoch, setModelsLoadEpoch] = useState(0);
-  const modelRevision = JSON.stringify([apiBase, modelsRefreshToken, modelsLoadEpoch]);
+  const modelRevision = JSON.stringify([apiBase, cacheTarget, modelsRefreshToken, modelsLoadEpoch]);
   const modelRowsReady = modelSnapshot?.revision === modelRevision && !modelsLoading && !modelsLoadFailed;
   const modelCounts = useMemo(() => countModelInventory(modelSnapshot?.rows ?? []), [modelSnapshot]);
   const modelsSettled = useRef(onModelsSettled);
   useEffect(() => { modelsSettled.current = onModelsSettled; }, [onModelsSettled]);
   const filterWrapRef = useRef<HTMLDivElement>(null);
   // Shared usage-summary key: all four subscribers raise the deadline together (30d usage is ~5s cold).
-  const usageResource = useKeyedClientResource(usageSummary30dResourceKey(apiBase), [apiBase], async (signal) => {
+  const usageResource = useKeyedClientResource(usageSummary30dResourceKey(apiBase, "all", targetKey), [apiBase, targetKey], async (signal) => {
     const res = await fetch(apiBase + "/api/usage?range=30d", { signal });
     return await readUsageResponseJson(res);
   }, { deadlineMs: 60_000 });
@@ -328,7 +336,7 @@ export default function ProviderWorkspaceShell({
   }, [filterOpen]);
 
   const allItems = useMemo(
-    () => [...sections.ready, ...sections.needsSetup, ...sections.disabled],
+    () => [...sections.ready, ...sections.needsSetup, ...sections.unverified, ...sections.disabled],
     [sections],
   );
   const freeCount = useMemo(() => allItems.filter(isFreeProvider).length, [allItems]);
@@ -355,18 +363,19 @@ export default function ProviderWorkspaceShell({
     return {
       ready: statusFilter.ready ? byQueryAndFacets(sections.ready) : [],
       needsSetup: statusFilter.needsSetup ? byQueryAndFacets(sections.needsSetup) : [],
+      unverified: statusFilter.unverified ? byQueryAndFacets(sections.unverified) : [],
       disabled: statusFilter.disabled ? byQueryAndFacets(sections.disabled) : [],
     };
   }, [sections, search, statusFilter, pricingFilter, typeFilter, sortMode]);
 
   const filterActive =
-    !statusFilter.ready || !statusFilter.needsSetup || !statusFilter.disabled
+    !statusFilter.ready || !statusFilter.needsSetup || !statusFilter.unverified || !statusFilter.disabled
     || !pricingFilter.free || !pricingFilter.paid
     || !typeFilter.cloud || !typeFilter.local || !typeFilter.selfHosted || !typeFilter.login
     || sortMode !== "az";
 
   const resetFilters = () => {
-    setStatusFilter({ ready: true, needsSetup: true, disabled: true });
+    setStatusFilter({ ready: true, needsSetup: true, unverified: true, disabled: true });
     setPricingFilter({ free: true, paid: true });
     setTypeFilter({ cloud: true, local: true, selfHosted: true, login: true });
     setSortMode("az");
@@ -397,11 +406,13 @@ export default function ProviderWorkspaceShell({
   const statusFilterOptions = [
     { key: "ready" as const, label: t("pws.status.ready"), count: sections.ready.length },
     { key: "needsSetup" as const, label: t("pws.status.needsSetup"), count: sections.needsSetup.length },
+    { key: "unverified" as const, label: t("pws.vertexUnverified"), count: sections.unverified.length },
     { key: "disabled" as const, label: t("prov.disabledBadge"), count: sections.disabled.length },
   ];
   const railGroups = [
     { id: "ready", label: t("pws.status.ready"), count: filteredSections.ready.length, ariaLabel: t("pws.groupReady", { count: filteredSections.ready.length }), items: filteredSections.ready },
     { id: "needs-setup", label: t("pws.status.needsSetup"), count: filteredSections.needsSetup.length, ariaLabel: t("pws.groupNeedsSetup", { count: filteredSections.needsSetup.length }), items: filteredSections.needsSetup },
+    { id: "unverified", label: t("pws.vertexUnverified"), count: filteredSections.unverified.length, ariaLabel: `${t("pws.vertexUnverified")} (${filteredSections.unverified.length})`, items: filteredSections.unverified },
     { id: "disabled", label: t("prov.disabledBadge"), count: filteredSections.disabled.length, ariaLabel: t("pws.groupDisabled", { count: filteredSections.disabled.length }), items: filteredSections.disabled },
   ];
   const visibleRailNames = railGroups.flatMap(group => group.items.map(item => item.name));
@@ -589,6 +600,7 @@ export default function ProviderWorkspaceShell({
           <ProviderJsonEditor
             editor={jsonEditor}
             providerName={t("nav.providers")}
+            targetLabel={targetLabel ?? providerDraftTargetLabel(apiBase)}
             saving={jsonSaving}
             onSave={() => { void jsonEditor.onSave(); }}
           />

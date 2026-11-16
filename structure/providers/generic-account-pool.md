@@ -1,5 +1,7 @@
 # Generic OAuth Account Pool
 
+Muse's in-band quota evidence follows the serving credential and its per-account incarnation independently of the operator's selection; selection still fences an in-flight publication. The physical-send and reset contracts are described in [Providers and adapters](../providers-and-adapters.md).
+
 ## Conversation affinity
 
 `src/oauth/generic-session-affinity.ts` owns opt-in generic-pool conversation bindings. Provider-local
@@ -25,6 +27,14 @@ are excluded. `tests/oauth/generic-session-affinity.test.ts` and
 `src/types/provider.ts` declares the optional `sessionAffinity` mode; omission keeps existing behavior.
 
 ## Combo sibling probes
+
+Antigravity sibling discovery passes its root/cache authority through `src/oauth/index.ts` to
+generic refresh dispatch. After the account lock is acquired and newer credentials are adopted,
+stale discovery stops before the token request without marking the account for reauthentication.
+A rotation already dispatched still persists its result under the existing credential CAS.
+An independent consumer sharing a discovery-cancelled flight releases its waiter permit before
+one new resolution attempt. Callers carrying discovery authority keep the cancellation; unknown
+stale outcomes, including post-dispatch uncertainty, never receive this automatic retry.
 
 Antigravity model routing in `src/oauth/generic-account-failover.ts` ranks siblings by configured strategy or family headroom only within the best readiness/model-support tier. A known omission stays excluded, and unknown support stays usable. Reactive model-404 rotation excludes accounts already attempted in the request and prefers positive support before unknown support without changing account-wide auth or cooldown state.
 

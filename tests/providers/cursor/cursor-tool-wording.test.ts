@@ -111,7 +111,13 @@ describe("Cursor target-specific tool wording", () => {
     const codeHint = cursorNativeExecRedirectHint(legacy.catalogs.code, [], modelId)!;
     expect(codeHint).toContain("text(await tools.exec_command(");
     expect(codeHint).toContain("not top-level tools");
-    expect(codeHint).toContain("Every other listed tool remains callable");
+    expect(codeHint).toContain("Every other listed tool is called directly, outside `exec`.");
+    // #8132: Cursor may defer listed tools behind CallDynamicTool, so the hint names that path.
+    expect(codeHint).not.toContain("callable at the top level");
+    expect(codeHint).toContain("call `CallDynamicTool` with namespace `opencodex-responses`, `toolName`");
+    const codeGuidance = buildCursorToolGuidanceSystemNote(legacy.catalogs.code, undefined, modelId)!;
+    expect(codeGuidance).not.toContain("callable at the top level");
+    expect(codeGuidance).toContain("CallDynamicTool");
     expect(cursorNativeExecRedirectHint(legacy.catalogs.client, [], modelId)).not.toContain("shell_command");
   });
   test.each(OTHER_MODELS)("non-Claude text matches pre-change snapshots byte-for-byte: %s", modelId => {

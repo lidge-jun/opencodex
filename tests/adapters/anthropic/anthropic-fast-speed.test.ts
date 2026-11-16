@@ -5,6 +5,7 @@ import { enrichProviderFromRegistry } from "../../../src/providers/derive";
 import { getProviderRegistryEntry } from "../../../src/providers/registry";
 import { fastPolicyForModel } from "../../../src/providers/service-tier";
 import { tierObservationContext } from "../../../src/providers/fastwire";
+import { fastRowEligible } from "../../../src/server/fast-row";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import { createTestTranslatorBudget, withTestTranslatorBudget } from "../../helpers/translator-budget";
 
@@ -24,10 +25,10 @@ function provider(authMode: "key" | "oauth" = "key", overrides: Partial<OcxProvi
   return result;
 }
 
-function parsed(configured: OcxProviderConfig, decision: "set" | "drop" | "none" = "set"): OcxParsedRequest {
-  const policy = fastPolicyForModel(configured, "claude-opus-5-5", configured.authMode === "oauth" ? "anthropic" : "anthropic-apikey");
+function parsed(configured: OcxProviderConfig, decision: "set" | "drop" | "none" = "set", modelId = "claude-opus-5-5"): OcxParsedRequest {
+  const policy = fastPolicyForModel(configured, modelId, configured.authMode === "oauth" ? "anthropic" : "anthropic-apikey");
   return {
-    modelId: "claude-opus-5-5",
+    modelId,
     stream: false,
     context: { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
     options: {
@@ -136,12 +137,32 @@ describe("Anthropic fast registry", () => {
     const entry = getProviderRegistryEntry(id)!;
     expect(entry.fastWire).toMatchObject({ kind: "anthropic-speed", canonicalToWire: { priority: "fast" } });
     expect(entry.modelSupportsServiceTier).toEqual({
-      "claude-opus-5-5": true, "claude-opus-5": true, "claude-opus-4-8": true,
+      "claude-fable-5-2": true, "claude-opus-5-5": true, "claude-opus-5": true, "claude-opus-4-8": true,
     });
     const configured = provider(id === "anthropic" ? "oauth" : "key");
     expect(fastPolicyForModel(configured, "claude-opus-5-5", id)).toMatchObject({ capability: true, eligibility: "eligible" });
-    for (const model of ["claude-opus-4-6", "claude-sonnet-5"]) {
+    expect(fastPolicyForModel(configured, "claude-fable-5-2", id)).toMatchObject({ capability: true, eligibility: "eligible" });
+    for (const model of ["claude-opus-4-6", "claude-sonnet-5", "claude-fable-5-1", "claude-fable-5"]) {
       expect(fastPolicyForModel(configured, model, id)).toMatchObject({ eligibility: "unclassified" });
     }
+  });
+
+  test.each(["anthropic", "anthropic-apikey"])("%s publishes a Fable 5.2 fast row only after the opt-in", id => {
+    const enabled = provider(id === "anthropic" ? "oauth" : "key");
+    expect(fastRowEligible(enabled, "claude-fable-5-2", id)).toBe(true);
+    expect(fastRowEligible(enabled, "claude-fable-5-1", id)).toBe(false);
+    const disabled = provider(id === "anthropic" ? "oauth" : "key", { fastEnabled: false });
+    expect(fastRowEligible(disabled, "claude-fable-5-2", id)).toBe(false);
+  });
+
+  test("a Fable 5.2 fast request sends speed and the fast beta", async () => {
+    const configured = provider();
+    const request = await withTestTranslatorBudget(createAnthropicAdapter(configured))
+      .buildRequest(parsed(configured, "set", "claude-fable-5-2"));
+    const body = JSON.parse(String(request.body));
+    expect(body.model).toBe("claude-fable-5-2");
+    expect(body.speed).toBe("fast");
+    expect(request.headers["anthropic-beta"]).toContain(FAST_BETA);
+    expect(request.tierLog?.outcome).toMatchObject({ wireKind: "anthropic-speed", wireValue: "fast", fastOutcome: "applied" });
   });
 });

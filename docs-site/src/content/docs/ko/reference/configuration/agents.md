@@ -3,14 +3,16 @@ title: 에이전트 설정
 description: 멀티 에이전트 표면, 위임 안내, 선호 모델, 대체 체인, 기본값 동기화, 노력 상한을 다룹니다.
 ---
 
+`multiAgentMode: "v2-plaintext"`는 새 채팅에 V2를 선택하면서 전역 V2 강제를 끄고, 조건에 맞는 공식 ChatGPT Responses 경로에 실험적 평문 작업 전달을 적용하는 명시적 선택입니다. 대시보드 확인 또는 `ocx v2 mode v2-plaintext --live --acknowledge-plaintext-agent-messages`로 진입합니다. 작업 텍스트는 이력·선택한 제공자의 요청·로컬 디버그 상태에 남을 수 있지만 HTTPS와 인증은 유지됩니다. 기존 암호문을 복호화하지 않으며 기존 채팅 기록도 변경하지 않습니다. 별도 `plaintextV2AgentMessages` 설정은 다른 모드로 돌아갈 때도 보존됩니다. 컴파일러는 현재 설정을 따르므로 기존 V2 세션의 후속 적격 요청도 적용 대상입니다. 비활성화해도 이력·제공자 요청·로컬 응답·디버그 상태에 이미 보존된 사본은 삭제되지 않습니다.
+
 에이전트 설정은 어떤 Codex 협업 표면을 노출할지와, opencodex가 위임 작업을 어떻게 안내하고, 라우팅하고, 제한할지를 제어합니다.
 
 ## 에이전트 필드
 
 | 필드 | 형식 | 기본값 | 의미 |
 | --- | --- | --- | --- |
-| `multiAgentMode?` | `"v1" \| "default" \| "v2"` | `"default"` | `v1`은 카탈로그의 모든 모델에 v1을 표시하고, `v2`는 모든 모델에 v2를 표시합니다. `default`는 상위 고정값(Sol/Terra는 v2, Luna는 v1)을 복원하고, 그 외에는 네이티브 `multi_agent_v2` 플래그를 따릅니다. 새 세션에 적용됩니다. |
-| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna` | 최대 다섯 개의 bare native id, account-qualified `<selector>/<native-openai-model>` id 또는 routed `provider/model` id를 서브에이전트 선택기에서 우선 표시합니다. Subagents 페이지는 bare native와 routed id만 제공하며 저장할 때 exact account-qualified 선택을 제외합니다. exact 선택은 `ocx agent subagents set`을 사용하거나 설정을 직접 편집하세요. [Astra 최초 업그레이드](/reference/configuration/agents/#astra-roster-upgrade) 이후에는 빈 목록도 그대로 보존됩니다. |
+| `multiAgentMode?` | `"v1" \| "default" \| "v2" \| "v2-plaintext"` | `"default"` | `v1`은 카탈로그의 모든 모델에 v1을 표시하고, `v2`는 모든 모델에 v2를 표시합니다. `default`는 상위 고정값(Sol/Terra는 v2, Luna는 v1)을 복원하고, 그 외에는 네이티브 `multi_agent_v2` 플래그를 따릅니다. `v2-plaintext`는 실험적 평문 작업 전달을 함께 켜고 전역 강제는 끕니다. 카탈로그 고정값은 새 세션에 적용되며, 활성화된 컴파일러는 기존 V2 세션의 후속 적격 요청에도 적용됩니다. |
+| `subagentModels?` | `string[]` | `gpt-6-astra`, `gpt-6.1-sol`, `gpt-6-luna` | 최대 다섯 개의 bare native id, account-qualified `<selector>/<native-openai-model>` id 또는 routed `provider/model` id를 서브에이전트 선택기에 우선 표시합니다. 새 선택 항목으로는 bare native와 routed id를 제공합니다. 저장할 때는 현재 카탈로그에 없는 항목을 포함하여 이미 설정된 정확한 account-qualified id를 보존합니다. 새 정확한 account-qualified id를 추가하려면 `ocx agent subagents set`을 사용하거나 설정을 편집하세요. [Astra 최초 업그레이드](/reference/configuration/agents/#astra-roster-upgrade) 이후에는 명시적으로 빈 목록도 보존됩니다. |
 | `injectionModel?` | `string` | — | 프록시가 작성한 v2 위임 안내에서 사용하는 선호 네이티브 또는 라우팅된 서브에이전트 모델입니다. |
 | `injectionEffort?` | `string` | — | 선호 노력(`low`부터 `ultra`까지)입니다. `injectionModel`이 있을 때만 의미가 있습니다. |
 | `injectionPrompt?` | `string` | — | 내장 v2 안내 본문을 대체합니다. `{{model}}`, `{{effort}}`, `{{roster}}`, `{{fallback}}`를 지원합니다. `injectionModel`만 설정되어 있어도 사용자 정의 프롬프트가 발동합니다. |
@@ -21,14 +23,21 @@ description: 멀티 에이전트 표면, 위임 안내, 선호 모델, 대체 �
 | `subagentModelFallbackPollMs?` | `number` | `60000` | 사용 가능성 검사 캐시 간격입니다. 1000 ms 미만의 값은 기본값으로 돌아갑니다. |
 | `effortCap?` | `string` | — | 자격을 갖춘 v2 메인 턴과 표시된 생성 하위 턴에 대한 하드 상한입니다. `low`부터 `ultra`까지 허용합니다. |
 | `subagentEffortCap?` | `string` | — | 생성된 하위 턴에만 적용되는 추가 상한입니다. 두 상한이 모두 적용되면 더 낮은 값이 이깁니다. |
+| `plaintextV2AgentMessages?` | `boolean` | — (설정되지 않음) | 실험적 선택 기능입니다. 명시적 `true` 또는 `multiAgentMode: "v2-plaintext"`는 적격 네이티브 ChatGPT v2 부모가 `spawn_agent`, `send_message`, `followup_task`의 메시지 인수를 평문으로 내보내도록 합니다. |
 
-이 표면은 대시보드나 `ocx v2 status|on|off|mode <v1|default|v2>|threads <n>`로 관리합니다. 모드 변경은 새 세션에 적용됩니다. `maxConcurrentThreadsPerSession`은 `config.json` 키가 아니라 `PUT /api/v2` 필드입니다. `ocx v2 threads <n>`는 v2가 활성화된 뒤 Codex의 `$CODEX_HOME/config.toml` 안 `[features.multi_agent_v2]` 아래에 `max_concurrent_threads_per_session`을 기록합니다.
+이 표면은 대시보드나 `ocx v2 status|on|off|mode <v1|default|v2|v2-plaintext>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>`로 관리합니다. `v2-plaintext` 진입에는 `--acknowledge-plaintext-agent-messages`가 필요합니다. 카탈로그 고정값 변경은 새 세션에 적용됩니다. 평문 컴파일러는 현재 설정에 따라 기존 V2 세션의 후속 적격 요청도 처리합니다. `maxConcurrentThreadsPerSession`은 `config.json` 키가 아니라 `PUT /api/v2` 필드입니다. `ocx v2 threads <n>`는 v2가 활성화된 뒤 Codex의 `$CODEX_HOME/config.toml` 안 `[features.multi_agent_v2]` 아래에 `max_concurrent_threads_per_session`을 기록합니다.
 
 관리 API는 `GET`/`PUT /api/v2`, `/api/injection-model`, `/api/effort-caps`, `/api/subagent-models`, `/api/subagent-model-fallback`를 제공합니다. injection-model 업데이트는 부분 업데이트입니다. 사용자 지정 프롬프트는 이 API의 `prompt` 필드입니다.
+
+`PUT /api/v2`로 `v2-plaintext`에 진입하려면 `plaintextAgentMessagesAcknowledged: true`가 필요합니다. 일반 `config set`과 `config import`는 이 모드로 새로 진입할 수 없습니다. 해당 모드가 포함된 내보내기를 복원하려면 먼저 확인을 거쳐 모드로 전환한 뒤 가져오세요.
+
+새 설정에서 `plaintextV2AgentMessages`는 설정되지 않으며, 명시적으로 `true`로 설정하는 방법과 `v2-plaintext` 모드 선택은 독립적인 활성화 방법입니다. 호출자는 Responses 프로토콜을 사용하고 최종 대상은 `adapter: "openai-responses"`, `authMode: "forward"`, 정확한 기본 URL `https://chatgpt.com/backend-api/codex`를 사용하는 공식 ChatGPT 전달 경로여야 합니다. OpenAI API 키 제공자, 사용자 지정 호환 게이트웨이, 다른 제공자 라우트 및 Responses가 아닌 호출자는 제외됩니다. 독립 필드는 `ocx config set plaintextV2AgentMessages true`로 설정할 수 있으며 변경 후 프록시를 재시작하세요.
 
 ## 항상 능동 위임
 
 서브에이전트 → 고급의 **항상 능동 위임**(이전 이름: **울트라 모드**)은 추론 노력을 바꾸지 않고 위임을 시작하는 조건만 변경합니다. 권장 프리셋에서도 사용자 지침, 권한 경계, 작업 범위, 도구 규칙은 유지됩니다.
+
+대시보드 스위치를 켜려면 네이티브 기능이 활성화된 명시적 `multiAgentMode: "v2"` 또는 전역 강제를 끄고 카탈로그 pin을 사용하는 `multiAgentMode: "v2-plaintext"`가 필요합니다. `ocx v2 on`만으로는 조건을 충족하지 않습니다.
 
 `GET`과 `PUT /api/v2`는 `multiAgentModeHintRecommendation: { text, revision }`도 반환합니다. 대시보드는 프리셋을 켜거나 복원할 때 서버가 제공한 텍스트를 사용하며, 고정된 대체 문구는 사용하지 않습니다. 이전 서버가 권장값을 제공하지 않거나 잘못된 형식으로 반환하면 프리셋 적용·복원은 사용할 수 없으며, 기존 사용자 지정 힌트의 편집·삭제는 계속 사용할 수 있습니다. **프리셋 복원**은 로컬 초안만 바꾸고, **저장**을 눌러야 저장됩니다.
 
@@ -68,13 +77,13 @@ opencodex는 비활성, 라우팅 불가, 비정상, 쿨다운 중, 또는 할�
 ```json
 {
   "multiAgentMode": "v2",
-  "subagentModels": ["gpt-5.5", "anthropic/claude-sonnet-5"],
-  "injectionModel": "gpt-5.5",
+  "subagentModels": ["gpt-6.1-sol", "anthropic/claude-sonnet-5"],
+  "injectionModel": "gpt-6.1-sol",
   "injectionEffort": "high",
   "syncCodexSubagentDefaults": true,
-  "subagentModelFallback": ["gpt-5.6-luna"],
+  "subagentModelFallback": ["gpt-6-luna"],
   "subagentModelFallbackByModel": {
-    "gpt-5.5": ["gpt-5.6-luna"]
+    "gpt-6.1-sol": ["gpt-6-luna"]
   },
   "subagentModelFallbackPollMs": 60000,
   "subagentEffortCap": "high"

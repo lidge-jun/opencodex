@@ -1,4 +1,5 @@
 import { beforeAll, describe, expect, test } from "bun:test";
+import { execFile } from "node:child_process";
 import { randomUUID, X509Certificate } from "node:crypto";
 import { createCertificateAuthority } from "../../src/claude/intercept/local-ca";
 import type { StoredDesktopAuthority } from "../../src/codex/desktop-compatibility/certificate-store";
@@ -7,6 +8,27 @@ import {
   type DesktopCertificateTrust, type TrustCommandExec, type TrustOperation,
 } from "../../src/codex/desktop-compatibility/windows-certificate-trust";
 import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmColdSpawn } from "../helpers/cold-spawn-warmup";
+
+/** What the real runner's child did, which the runner itself folds into `unknown`. */
+type InspectionEvidence = { spawnMs?: number; elapsedMs?: number; code?: unknown; signal?: unknown; killed?: boolean; stderr?: string };
+
+/** The runner's own execFile call, unchanged, recording when the child started and how it ended. */
+function recordingExec(evidence: InspectionEvidence): TrustCommandExec {
+  return (file, args, options, callback) => {
+    const startedAt = performance.now();
+    const child = execFile(file, args, options, (error, stdout, stderr) => {
+      evidence.elapsedMs = Math.round(performance.now() - startedAt);
+      if (error) {
+        const failure = error as Error & { code?: unknown; signal?: unknown; killed?: boolean };
+        Object.assign(evidence, { code: failure.code, signal: failure.signal, killed: failure.killed });
+      }
+      evidence.stderr = String(stderr ?? "").trim().slice(-600);
+      callback(error, String(stdout));
+    });
+    child.once("spawn", () => { evidence.spawnMs = Math.round(performance.now() - startedAt); });
+    return child;
+  };
+}
 
 function fixture(serverAuthOnly = true): StoredDesktopAuthority {
   const commonName = `OpenCodex Codex Desktop ${randomUUID()}`;
@@ -98,6 +120,17 @@ describe("exact Windows compatibility certificate trust", () => {
   });
 });
 
+test("the warm-up recorder reports how a failed inspection child ended", async () => {
+  const value = fixture(), evidence: InspectionEvidence = {};
+  // Any executable that rejects PowerShell's arguments stands in for a store that never answers.
+  const runner = createPowerShellCertificateTrustRunner({ platform: "win32", resolvePowerShell: () => process.execPath, exec: recordingExec(evidence) });
+  expect(await inspectWindowsCertificateTrust(value.authority.certPem, value.fingerprint, runner)).toBe("unknown");
+  expect(evidence.spawnMs).toBeGreaterThanOrEqual(0);
+  expect(evidence.elapsedMs).toBeGreaterThanOrEqual(evidence.spawnMs!);
+  expect(evidence.code).not.toBe(0);
+  expect(evidence.code).toBeDefined();
+});
+
 describe.skipIf(process.platform !== "win32")("exact Windows compatibility certificate trust on the real store", () => {
   // The first PowerShell in a shard pays process start, .NET load and the X509 store open; on a
   // loaded runner that crossed the 10s status deadline and read as `unknown` (#7569). Replaying the
@@ -105,9 +138,13 @@ describe.skipIf(process.platform !== "win32")("exact Windows compatibility certi
   beforeAll(async () => {
     await warmColdSpawn("powershell/desktop-certificate-trust-inspect", async deadlineMs => {
       const value = fixture();
-      const runner = createPowerShellCertificateTrustRunner({ inspectDeadlineMs: deadlineMs });
+      // The recorder only observes: a cold stall must name where it stalled (no spawn, a kill at the
+      // deadline, or an error with stderr) instead of reading as a bare `unknown` (run 43343080374).
+      const evidence: InspectionEvidence = {};
+      const runner = createPowerShellCertificateTrustRunner({ inspectDeadlineMs: deadlineMs, exec: recordingExec(evidence) });
       const state = await inspectWindowsCertificateTrust(value.authority.certPem, value.fingerprint, runner);
-      if (state === "unknown") throw new Error(`[cold-spawn-warmup] real CurrentUser Root inspection gave no answer within ${deadlineMs}ms`);
+      if (state === "unknown") throw new Error(`[cold-spawn-warmup] real CurrentUser Root inspection gave no answer within ${deadlineMs}ms: ${JSON.stringify(evidence)}`);
+      console.log(`[cold-spawn-warmup] powershell/desktop-certificate-trust-inspect spawnMs=${evidence.spawnMs} elapsedMs=${evidence.elapsedMs}`);
     });
   }, COLD_SPAWN_WARMUP_HOOK_BUDGET_MS);
 

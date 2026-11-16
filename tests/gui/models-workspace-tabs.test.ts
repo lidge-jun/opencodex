@@ -144,6 +144,7 @@ describe("legacy lab hash", () => {
     expect(readModelsTab("#labs")).toBe("catalog");
     expect(readModelsTab("#label")).toBe("catalog");
     expect(readModelsTab("#lab-legacy")).toBe("catalog");
-    expect(resolveAppHashChange("labs")).toEqual({ page: "dashboard", replaceTo: "dashboard" });
+    // An unknown page lands on Home (design system v2), so a stale #labs bookmark does too.
+    expect(resolveAppHashChange("labs")).toEqual({ page: "home", replaceTo: "home" });
   });
 });

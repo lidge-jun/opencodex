@@ -137,7 +137,7 @@ Bir sağlayıcı için saklanan OAuth kimlik bilgisini kaldırın.
 listeleyin ve değiştirin. Sağlanan yardım arayüzü şöyledir:
 
 ```text
-Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
+Usage: ocx account <list|history|current|use|clear|refresh|auto-switch|alias|priority|pause|resume|reset-affinity|pause-exhausted|strategy|sticky|remove|clear-cooldown|add-key|import|import-orca|login|reauth|code|cancel|reset-credits|grok-reset-coupons|main> ...
 
 list [provider]     Codex account pool, OAuth accounts and API keys (identifiers shown masked as the API returns them).
 history openai <pool-account-id> [--limit <1-200>]  Recent routing decisions for one Codex pool account.
@@ -151,6 +151,7 @@ pause <provider> <id|alias|main>  Hold an account out of automatic selection.
 resume <provider> <id|alias|main>  Return a paused account to automatic selection.
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
+reset-affinity <anthropic|anthropic2> [--json]  Confirm all session bindings are cleared, even with no accounts; selection and pause state stay unchanged. Run on the Home; a Remote Link Child names the Home and sends no request.
 strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>]  Havuz stratejisi; least-loaded yalnızca Kiro içindir.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
@@ -168,7 +169,7 @@ A selection-order change applies from the next unbound request and never moves a
 
 `import-orca` dışındaki alt komutlar proxy'nin çalışmasını gerektirir ve kaydedilen çalışma zamanı portunu otomatik çözer; `import-orca` önizlemesi tamamen yereldir ve `import-orca --apply` proxy'nin durdurulmuş olmasını gerektirir. Başarılı işlemler 0 ile çıkar. Geçersiz kullanım,
 bilinmeyen bir sağlayıcı veya hesap/anahtar kimliği, erişilemeyen bir proxy veya
-bir API hatası 1 ile çıkar. Kimlik bilgisi alanları tam olarak yönetim API'sinin
+bir API hatası normalde 1 ile çıkar. `reset-affinity` için HTTP 404 çıkış kodu 4, HTTP 409 çıkış kodu 5 döndürür; diğer API hataları ve doğrulanmamış sonuçlar 1 döndürür. Kimlik bilgisi alanları tam olarak yönetim API'sinin
 döndürdüğü gibi (maskelemesi dahil) görüntülenir; ham API anahtarları ve OAuth
 belirteçleri asla döndürülmez. Görüntüleme kolaylıkları kontrol paneli gibi
 istemci tarafında sentezlenir: `main`, `openai` hesap havuzundaki Codex App

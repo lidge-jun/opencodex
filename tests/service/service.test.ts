@@ -18,6 +18,7 @@ import { resolveCurrentWindowsPrincipal, setWindowsPrincipalRunnerForTests } fro
 import { setAsyncIcaclsRunnerForTests, setIcaclsRunnerForTests } from "../../src/lib/windows-secret-acl";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { ALL_PART_A_FAILURES, partAResult, partBResult } from "../helpers/windows-stop-caller-fixtures";
 import { repoRoot } from "../helpers/repo-root";
 
 const TEST_WINDOWS_TASK_SID = "S-1-5-21-111-222-333-1001";
@@ -73,7 +74,6 @@ async function readText(path: string): Promise<string> {
 function windowsBatchValue(value: string): string {
   return value
     .replace(/%/g, "%%")
-    .replace(/\^/g, "^^")
     .replace(/"/g, "")
     .replace(/[\r\n]/g, "");
 }
@@ -438,35 +438,6 @@ describe("systemd service unit", () => {
     expect(script).not.toContain("HTTPS_PROXY=");
   });
 
-
-  test("preserves custom Codex and OpenCodex homes", () => {
-    const oldCodexHome = process.env.CODEX_HOME;
-    const oldCodexSqliteHome = process.env.CODEX_SQLITE_HOME;
-    const oldOpenCodexHome = process.env.OPENCODEX_HOME;
-    const oldApiAuthToken = process.env.OPENCODEX_API_AUTH_TOKEN;
-    try {
-      process.env.CODEX_HOME = "/tmp/codex-home";
-      process.env.CODEX_SQLITE_HOME = "/tmp/codex-sqlite-home";
-      process.env.OPENCODEX_HOME = "/tmp/opencodex-home";
-      process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
-      const unit = buildUnit();
-      expect(unit).toContain('Environment="CODEX_HOME=/tmp/codex-home"');
-      expect(unit).toContain('Environment="CODEX_SQLITE_HOME=/tmp/codex-sqlite-home"');
-      expect(unit).toContain('Environment="OPENCODEX_HOME=/tmp/opencodex-home"');
-      expectTextToContainPath(unit, serviceApiTokenFilePath());
-      expect(unit).not.toContain("local-secret");
-      expect(unit).not.toContain("Environment=\"OPENCODEX_API_AUTH_TOKEN=");
-    } finally {
-      if (oldCodexHome === undefined) delete process.env.CODEX_HOME;
-      else process.env.CODEX_HOME = oldCodexHome;
-      if (oldCodexSqliteHome === undefined) delete process.env.CODEX_SQLITE_HOME;
-      else process.env.CODEX_SQLITE_HOME = oldCodexSqliteHome;
-      if (oldOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
-      else process.env.OPENCODEX_HOME = oldOpenCodexHome;
-      if (oldApiAuthToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
-      else process.env.OPENCODEX_API_AUTH_TOKEN = oldApiAuthToken;
-    }
-  });
 
   test("service start checks for the systemd user unit before shelling out", async () => {
     const service = await readText("src/service/systemd.ts");
@@ -1208,23 +1179,29 @@ describe("Windows service task", () => {
 
   test("escapes environment values that would break out of set quotes", () => {
     const oldPath = process.env.PATH;
+    const oldCodexHome = process.env.CODEX_HOME;
     const oldOpenCodexHome = process.env.OPENCODEX_HOME;
     const oldApiAuthToken = process.env.OPENCODEX_API_AUTH_TOKEN;
     try {
       process.env.PATH = 'C:\\safe" & echo PWNED & rem "';
+      process.env.CODEX_HOME = 'C:\\codex" & del C:\\important & rem "';
       process.env.OPENCODEX_HOME = 'C:\\ocx" & del C:\\important & rem "';
       process.env.OPENCODEX_API_AUTH_TOKEN = 'token" & echo LEAK & rem "';
       const script = buildWindowsServiceScript();
       expect(script).toContain('set "PATH=C:\\safe & echo PWNED & rem "');
-      expect(script).toContain('set "OPENCODEX_HOME=C:\\ocx & del C:\\important & rem "');
+      expect(script).toContain('set "CODEX_HOME=C:\\codex & del C:\\important & rem "');
+      expect(script).toContain('C:\\ocx & del C:\\important & rem ');
       expect(script).toContain('set "OCX_API_TOKEN_FILE=');
       expect(script).toContain('set /p OPENCODEX_API_AUTH_TOKEN=<"%OCX_API_TOKEN_FILE%"');
       expect(script).not.toContain('set "PATH=C:\\safe" & echo PWNED');
-      expect(script).not.toContain('set "OPENCODEX_HOME=C:\\ocx" & del');
+      expect(script).not.toContain('set "CODEX_HOME=C:\\codex" & del');
+      expect(script).not.toContain('C:\\ocx" & del');
       expect(script).not.toContain("token & echo LEAK");
     } finally {
       if (oldPath === undefined) delete process.env.PATH;
       else process.env.PATH = oldPath;
+      if (oldCodexHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = oldCodexHome;
       if (oldOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = oldOpenCodexHome;
       if (oldApiAuthToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
@@ -1239,7 +1216,7 @@ describe("Windows service task", () => {
       cli: "C:\\OpenCodex&Dir\\cli.ts",
     });
 
-    expect(script).toContain('set "OCX_BUN=C:\\Bun&Dir\\100%%bun^^\\bun.exe"');
+    expect(script).toContain('set "OCX_BUN=C:\\Bun&Dir\\100%%bun^\\bun.exe"');
     expect(script).toContain('set "OCX_CLI=C:\\OpenCodex&Dir\\cli.ts"');
     expect(script).toContain('"%OCX_BUN%" "%OCX_CLI%" start --port');
     expect(script).not.toContain('"C:\\Bun&Dir\\100%bun^\\bun.exe"');
@@ -1411,16 +1388,23 @@ describe("launchd service plist", () => {
     const oldCodexSqliteHome = process.env.CODEX_SQLITE_HOME;
     const oldOpenCodexHome = process.env.OPENCODEX_HOME;
     const oldApiAuthToken = process.env.OPENCODEX_API_AUTH_TOKEN;
+    const root = mkdtempSync(join(tmpdir(), "ocx-plist-&'-"));
+    const codexHome = join(root, "codex-home");
+    const openCodexHome = join(root, "opencodex-home");
+    const xml = (value: string) => value.replaceAll("&", "&amp;").replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&apos;")
+      .replaceAll("\t", "&#9;").replaceAll("\n", "&#10;").replaceAll("\r", "&#13;");
     try {
-      process.env.CODEX_HOME = "/tmp/codex-home";
+      process.env.CODEX_HOME = codexHome;
       process.env.CODEX_SQLITE_HOME = "/tmp/codex-sqlite-home";
-      process.env.OPENCODEX_HOME = "/tmp/opencodex-home";
+      process.env.OPENCODEX_HOME = openCodexHome;
       process.env.OPENCODEX_API_AUTH_TOKEN = "local-secret";
       const plist = buildPlist();
-      expect(plist).toContain("<key>CODEX_HOME</key><string>/tmp/codex-home</string>");
+      expect(plist).toContain(`<key>CODEX_HOME</key><string>${xml(codexHome)}</string>`);
       expect(plist).toContain("<key>CODEX_SQLITE_HOME</key><string>/tmp/codex-sqlite-home</string>");
-      expect(plist).toContain("<key>OPENCODEX_HOME</key><string>/tmp/opencodex-home</string>");
-      expectTextToContainPath(plist, serviceApiTokenFilePath());
+      expect(plist).toContain(`<key>OPENCODEX_HOME</key><string>${xml(openCodexHome)}</string>`);
+      const quotedTokenPath = "'" + serviceApiTokenFilePath().split("'").join("'\\''") + "'";
+      expect(plist).toContain(xml(quotedTokenPath));
       expect(plist).not.toContain("local-secret");
       expect(plist).not.toContain("<key>OPENCODEX_API_AUTH_TOKEN</key>");
     } finally {
@@ -1432,6 +1416,7 @@ describe("launchd service plist", () => {
       else process.env.OPENCODEX_HOME = oldOpenCodexHome;
       if (oldApiAuthToken === undefined) delete process.env.OPENCODEX_API_AUTH_TOKEN;
       else process.env.OPENCODEX_API_AUTH_TOKEN = oldApiAuthToken;
+      removeTreeWithRetry(root);
     }
   });
 
@@ -1518,7 +1503,7 @@ describe("launchd service plist", () => {
       service.indexOf("export function restartLaunchdJob"),
     );
     expect(installLaunchd).not.toContain("stableLauncherEntry");
-    expect(installLaunchd).toContain("buildPlist(resolvedProxyEnv())");
+    expect(installLaunchd).toContain("buildPlist(resolvedProxyEnv(), { homes })");
     expect(installLaunchd).toContain('writeServiceInstallState("scheduler")');
   });
 
@@ -2285,24 +2270,16 @@ describe("service lifecycle cleanup ordering", () => {
     ]);
   });
 
-  test("service install stops the recorded backend, requested backend, and standalone before loading assets", async () => {
+  test("Windows service install runs the checked stop, the standalone stop and Part B before loading assets", async () => {
     const calls: string[] = [];
-    const managerOps = (backend: "scheduler" | "native") => ({
-      status: () => { calls.push(`status:${backend}`); return "present"; },
-      stop: () => { calls.push(`stop:${backend}`); },
-    });
     await installServiceSafely("native", () => { calls.push("install:native"); }, {
       platform: "win32",
-      diagnose: () => ({ supported: true, installed: true, enabled: true, running: true, viable: true, startable: true, stale: false, conflict: false, backend: "scheduler", summary: "test" }),
-      managerOps,
-      killServiceWrappers: () => { calls.push("kill:wrappers"); },
+      // #7771: Part A stops every registered manager (both on a conflicting install) and ends the bound wrappers.
+      windowsPartA: async () => { calls.push("partA"); return partAResult("stopped"); },
+      windowsPartB: async () => { calls.push("partB"); return partBResult("freed"); },
       stopTrackedProxy: async () => { calls.push("stop:standalone"); },
     });
-    expect(calls).toEqual([
-      "status:scheduler", "stop:scheduler",
-      "status:native", "stop:native",
-      "kill:wrappers", "stop:standalone", "install:native",
-    ]);
+    expect(calls).toEqual(["partA", "stop:standalone", "partB", "install:native"]);
   });
 
   test("legacy systemd reports an absent unit without stopping cleanup or blocking install", async () => {
@@ -2395,21 +2372,12 @@ describe("service lifecycle cleanup ordering", () => {
   });
 
   test("service install fails closed before install on manager or standalone cleanup errors", async () => {
-    for (const failure of ["status", "stop", "standalone"] as const) {
+    for (const failure of ["partA", "partB", "standalone"] as const) {
       let installed = false;
       const run = installServiceSafely("scheduler", () => { installed = true; }, {
         platform: "win32",
-        diagnose: () => ({ supported: true, installed: true, enabled: true, running: true, viable: true, startable: true, stale: false, conflict: false, backend: "scheduler", summary: "test" }),
-        managerOps: () => ({
-          status: () => {
-            if (failure === "status") throw new Error("status failed");
-            return "present";
-          },
-          stop: () => {
-            if (failure === "stop") throw new Error("stop failed");
-          },
-        }),
-        killServiceWrappers: () => {},
+        windowsPartA: async () => { if (failure === "partA") throw new Error("partA failed"); return partAResult("stopped"); },
+        windowsPartB: async () => { if (failure === "partB") throw new Error("partB failed"); return partBResult("freed"); },
         stopTrackedProxy: async () => {
           if (failure === "standalone") throw new Error("standalone failed");
         },
@@ -2419,16 +2387,14 @@ describe("service lifecycle cleanup ordering", () => {
     }
   });
 
-  test("conflicting Windows install preparation stops both managers", async () => {
-    const stopped: string[] = [];
-    await prepareServiceInstall("scheduler", {
-      platform: "win32",
-      diagnose: () => ({ supported: true, installed: true, enabled: true, running: true, viable: false, startable: false, stale: false, conflict: true, backend: "scheduler", summary: "test" }),
-      managerOps: backend => ({ status: () => "present", stop: () => { stopped.push(backend); } }),
-      killServiceWrappers: () => { stopped.push("wrappers"); },
-      stopTrackedProxy: async () => {},
-    });
-    expect(stopped).toEqual(["scheduler", "native", "wrappers"]);
+  test("Windows install preparation refuses before replacing anything unless Part A stopped or found nothing", async () => {
+    for (const outcome of ALL_PART_A_FAILURES) {
+      const stopped: string[] = [];
+      await expect(prepareServiceInstall("scheduler", { platform: "win32", windowsPartA: async () => partAResult(outcome),
+        windowsPartB: async () => { stopped.push("partB"); return partBResult("freed"); },
+        stopTrackedProxy: async () => { stopped.push("standalone"); } })).rejects.toThrow(`could not be proven stopped (${outcome})`);
+      expect(stopped).toEqual([]);
+    }
   });
 
   test("direct service stop kills the tracked proxy before restoring native Codex", async () => {
@@ -2490,7 +2456,7 @@ describe("service lifecycle cleanup ordering", () => {
 
   test("Windows service uninstall verifies task deletion before removing assets", async () => {
     const service = await readText("src/service/windows-ops.ts");
-    const uninstallWindows = service.slice(service.indexOf("function uninstallWindows()"), service.indexOf("function classifyWindowsServiceStop("));
+    const uninstallWindows = service.slice(service.indexOf("function uninstallWindows()"));
 
     expect(uninstallWindows).toContain("probeWindowsSchedulerTask(TASK)");
     expect(uninstallWindows).toContain("windowsServiceScriptPath()");
@@ -2505,16 +2471,16 @@ describe("service lifecycle cleanup ordering", () => {
     expect(service).toContain('verifyPidIdentity');
     expect(service).toContain("removeRuntimePort(pid);");
     expect(service).toContain('import { isProcessAlive, stopProxy } from "../lib/process-control";');
-    expect(service).toContain('import { findLiveProxy, SERVICE_STOP_LIVENESS } from "../server/proxy-liveness";');
+    expect(service).toContain('import { findLiveProxy, proveLiveProxyOwnedByHome, proxyIdentityAt, SERVICE_STOP_LIVENESS } from "../server/proxy-liveness";');
     expect(service).toContain('type TrackedProxyCleanupResult = "none" | "stale" | "stopped";');
     const health = await readText("src/service/health.ts");
     expect(health).toContain('import { proxyIdentityAt } from "../server/proxy-liveness";');
-    expect(service).toContain("async function stopTrackedProxyIfRunning(): Promise<TrackedProxyCleanupResult>");
+    expect(service).toContain("async function stopTrackedProxyIfRunning(io: TrackedProxyStopIo = {}): Promise<TrackedProxyCleanupResult>");
     expect(service).toContain("...SERVICE_STOP_LIVENESS");
     expect(service).toContain("deadlineAt:");
     expect(service).toContain("SERVICE_STOP_LIVENESS");
-    expect(service).toContain("await stopProxy(trackedKillPid);");
-    expect(service).toContain("await stopProxy(liveKillPid);");
+    expect(service).toContain("await stopProxy(trackedKillPid, io);");
+    expect(service).toContain("await stopProxy(liveKillPid, io);");
     expect(service).toContain("removePid(pid);");
     expect(service).toContain('return "stopped";');
   });
@@ -2556,7 +2522,7 @@ describe("service lifecycle cleanup ordering", () => {
   test("service command cleanup logs kill failures without skipping restore/delete", async () => {
     const service = await readText("src/service/orchestration.ts");
 
-    expect(service).toContain("async function stopTrackedProxyForServiceCommand(): Promise<TrackedProxyCleanupResult>");
+    expect(service).toContain("async function stopTrackedProxyForServiceCommand(io: TrackedProxyStopIo = {}): Promise<TrackedProxyCleanupResult>");
     expect(service).toContain("catch (err)");
     expect(service).toContain("Failed to stop proxy");
     expect(service).toContain('return "none";');

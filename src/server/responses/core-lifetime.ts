@@ -1,9 +1,13 @@
+import { carryProxyError } from "../../lib/client-error-body";
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { carryResponseToolOwnership } from "./response-tool-ownership";
+import { carryPolicyCandidateRefusal } from "./policy-request-scope";
 import { finalizeTranslatorBudgetResponse } from "../../lib/translator-budget";
+import { carryPacedStream, pacedQueuingStrategy } from "../../lib/paced-stream";
 import { carryReplayRefusal, isNonReplayableResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
 import { isVerifiedModelNotInPlanResponse, markVerifiedModelNotInPlanResponse } from "../../lib/errors";
 import { carryCodexAccountCooldownResponse } from "../../codex/account-cooldown-response";
+import { carryFormattedQuotaSource } from "../../bridge/errors";
 import {
   isNativePassthroughSseResponse,
   markNativePassthroughSseResponse,
@@ -43,7 +47,7 @@ export const UPSTREAM_JSON_BODY_READ_OPTIONS = {
 
 
 export function finalizeOwnedTranslatorBudget(response: Response, budget: TranslatorBudget, signal?: AbortSignal): Response {
-  const finalizedResponse = finalizeTranslatorBudgetResponse(response, budget, signal);
+  const finalizedResponse = carryProxyError(response, finalizeTranslatorBudgetResponse(response, budget, signal));
   if (isNativePassthroughSseResponse(response)) {
     markNativePassthroughSseResponse(finalizedResponse);
   }
@@ -55,7 +59,8 @@ export function finalizeOwnedTranslatorBudget(response: Response, budget: Transl
   if (isVerifiedModelNotInPlanResponse(response)) markVerifiedModelNotInPlanResponse(finalizedResponse);
   if (runTurnAdapterSseResponses.has(response)) runTurnAdapterSseResponses.add(finalizedResponse);
   carryCodexAccountCooldownResponse(response, finalizedResponse);
-  return carryResponseToolOwnership(response, finalizedResponse);
+  carryPolicyCandidateRefusal(response, finalizedResponse);
+  return carryResponseToolOwnership(response, carryFormattedQuotaSource(response, finalizedResponse));
 }
 
 /** Release a serving-account slot when the client body ends, errors or is cancelled. */
@@ -64,7 +69,7 @@ export function finalizeAccountLease(response: Response, release: () => void, on
   const reader = response.body.getReader();
   let done = false;
   const finish = () => { if (!done) { done = true; release(); } };
-  const body = new ReadableStream<Uint8Array>({
+  const body = carryPacedStream(response.body, new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
         const next = await reader.read();
@@ -73,8 +78,9 @@ export function finalizeAccountLease(response: Response, release: () => void, on
       } catch (error) { finish(); controller.error(error); }
     },
     async cancel(reason) { onCancel?.(); try { await reader.cancel(reason); } finally { finish(); } },
-  });
+  }, pacedQueuingStrategy(response.body)));
   const wrapped = new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+  carryProxyError(response, wrapped);
   if (isNonReplayableResponse(response)) markResponseNonReplayable(wrapped);
   if (isVerifiedModelNotInPlanResponse(response)) markVerifiedModelNotInPlanResponse(wrapped);
   if (isNativePassthroughSseResponse(response)) markNativePassthroughSseResponse(wrapped);
@@ -83,7 +89,8 @@ export function finalizeAccountLease(response: Response, release: () => void, on
   if (runTurnAdapterSseResponses.has(response)) runTurnAdapterSseResponses.add(wrapped);
   // Retained compaction delivers through this lease wrapper; keep a local cooldown refusal local (#7850).
   carryCodexAccountCooldownResponse(response, wrapped);
-  return carryResponseToolOwnership(response, carryReplayRefusal(response, wrapped));
+  carryPolicyCandidateRefusal(response, wrapped);
+  return carryResponseToolOwnership(response, carryReplayRefusal(response, carryFormattedQuotaSource(response, wrapped)));
 }
 
 

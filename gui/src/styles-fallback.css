@@ -1,3 +1,6 @@
+/* Imported by its component, so it sits in the `legacy` cascade layer itself:
+   unlayered CSS would outrank design/bridge.css and every Tailwind utility. */
+@layer legacy {
 /* OCX-11 fallback controls (gui/src/components/FallbackPanel.tsx). Existing tokens only. */
 .fallback-panel { display: flex; flex-direction: column; gap: var(--space-2); }
 .fallback-panel .card-sub { padding: 2px 0 0; margin: 0; }
@@ -12,3 +15,4 @@
 .fallback-device-head th { color: var(--muted); font-size: var(--text-label); font-weight: inherit; }
 .fallback-device-id { margin-left: var(--space-2); color: var(--muted); }
 .fallback-last p { margin: 0; }
+}

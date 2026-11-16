@@ -161,7 +161,12 @@ describe("desktop CLI contracts", () => {
     // The shell does not re-derive the outcome; it carries the CLI's own words into its diagnostic.
     expect(stopRs).toContain("summary.outcome");
     expect(stopRs).toContain("summary.exit_code");
-    expect(stopRs).toContain("summary.message");
+    // The CLI's message reaches the diagnostic through `described()`, which starts with that
+    // message and only appends the additive stop-reason notes (#7771); it is never replaced.
+    expect(stopRs).toContain("summary.described()");
+    const described = stopRs.slice(stopRs.indexOf("pub fn described("), stopRs.indexOf("pub enum StopResult"));
+    expect(described).toContain("format!(\"{}; {notes}\", self.message)");
+    expect(described).toContain("None => self.message.clone()");
     expect(stopRs).not.toContain('== "stopped"');
   });
 });

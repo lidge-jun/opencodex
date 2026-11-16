@@ -124,6 +124,13 @@ env_key = "OPENCODEX_API_AUTH_TOKEN"
 在 loopback 情况下，它包含可在自动注入被移除后手动合并的 root keys；在非 loopback 情况下，
 它包含专用 provider 形式。外部 provider 模式会保持这个 profile 不变。
 
+重新生成这个文件时，会保留 OpenCodex 不管理的普通 root keys，所以你添加的 `stream_idle_timeout_ms` 或
+`stream_max_retries` 这类设置在下一次注入后仍然存在。保留的赋值按原样复制，包括跨多行的值和 64 位整数，
+并放在第一个表之前。表内的键以及 `a.b = 1` 这样的点分 root key 不会保留。发生冲突时总是以 OpenCodex
+为准：它拥有的 root keys（`model_provider`、`model_catalog_json`、`openai_base_url`）会按当前路由模式
+重写；与 profile 写入的表同名的 root key（例如 profile 写入 `[features]` 时的内联 `features = { ... }`）
+会被丢弃。如果在注入等待写锁期间文件发生变化，注入会以可重试的错误停止，并保留你的修改。
+
 :::caution
 像 `openai_base_url`、`model_provider` 和 `model_catalog_json` 这样的 root keys **必须** 位于第一个
 `[table]` 头之前。注入器会保证这一点，移除自己留下的陈旧/重复副本，并且绝不会覆盖用户拥有的 root
@@ -142,7 +149,7 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-在 macOS 上，opencodex 在显式选择、shim、PATH、既有安装路径和可运行的裸 `codex` 后备命令之后，依次检查 `/Applications/ChatGPT.app` 和 `~/Applications/ChatGPT.app` 中的 Codex 应用内置 CLI，要求其 XML `Info.plist` 标识为 `com.openai.codex`，且不会用应用候选项自动替换仍可运行的已保存选择。
+在 macOS 上，opencodex 在显式选择、shim、PATH、既有安装路径和可运行的裸 `codex` 后备命令之后，依次检查 `/Applications/ChatGPT.app` 和 `~/Applications/ChatGPT.app` 中的 Codex 应用内置 CLI，要求其 XML `Info.plist` 标识为 `com.openai.codex`，且不会用应用候选项自动替换仍可运行的已保存选择。 如果完全没有发现 Codex CLI，则 `ocx connect status` 就绪状态背后的目录探测也会尝试这些内置位置，因此仅装有应用内置 CLI 的 Child 会报告其支持的推理级别，而不是 `unverified`；执行时仍会应用下述检查。
 
 执行检查还会识别任意位置的 `Codex.app` 和 `ChatGPT.app`，包括移动后的应用包、显式
 `CODEX_CLI_PATH` 或配置的运行时命令，以及符号链接别名。名称只触发验证，不代表可信。
@@ -165,6 +172,8 @@ $CODEX_HOME/models_cache.json
 opencodex 也会通过 WebSocket 提供 `/v1/responses`。专用 provider 只有在 `"websockets": true` 时才会声明
 `supports_websockets = true`；在 loopback 情况下，Codex 的内置 provider 可能会先尝试 WebSocket，而关闭的 proxy
 会返回 `426`，从而让 Codex fallback 到 HTTP/SSE。
+
+启用 `v2-plaintext` 模式或 `plaintextV2AgentMessages` 标志时，本地重放要求同一个获准的 OpenCodex 调用方和请求自身的非空白 `thread-id`。父线程、loopback 地址、上游凭据或占位密钥都不是该身份。没有获准调用方主体标识的客户端以及没有自身线程的请求必须省略 `previous_response_id`，重新发送完整对话。默认的 loopback Codex 与 DSH 配置不建立该调用方身份。任一设置启用期间保留的状态在禁用后仍保持绑定。默认 `v1` 对未绑定的状态保留现有的父线程范围续接行为，包括默认 loopback 调用方。这与上游原生拥有的 Responses ID 相互独立。
 
 ## 线程标识与历史记录
 

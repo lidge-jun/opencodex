@@ -15,9 +15,13 @@ Thanks for helping with opencodex.
 
 ## Branches
 
-- `dev` — the only integration target for pull requests.
-- `main` — releases only; moves by maintainer-controlled promotion from `dev`.
-- `preview` — prerelease train.
+- `dev` — the only integration target for pull requests and the repository
+  default branch. Stable and preview releases are cut from eligible `dev`
+  commits by the release workflow, which stamps the version into build
+  checkouts.
+- `main` and `preview` were deleted once the single-branch model was in place.
+  Their released history remains reachable through tags; neither is an
+  integration, promotion, or review target.
 
 The `dev2-go` Go native-port line has been retired. Its history is archived at
 [lidge-jun/opencodex-go-archive](https://github.com/lidge-jun/opencodex-go-archive),
@@ -40,7 +44,7 @@ Bun through that bundled dependency.
 
 - Pull requests run **only the fast Ubuntu subset**.
 - Full cross-platform (macOS/Windows) CI runs **only** via manual
-  `workflow_dispatch` and on push to `main`/`preview` (release lines).
+  `workflow_dispatch` on `dev`; there is no push trigger.
 - **Never** add a `dev` push trigger, or `pull_request` runs for macOS/Windows
   jobs, to any workflow. PRs that change this policy will be closed.
 
@@ -72,8 +76,8 @@ A ready-for-review PR is the author's claim that the change is complete, underst
 The suite uses Bun 1.4.4 (`testRunnerBun`) while the shipped runtime is 1.4.4.
 `scripts/test.ts` finds a 1.4.4 binary on PATH or in `~/.bun/bin`, or uses
 `OCX_TEST_RUNNER_BUN`; install that version locally if it is missing.
-The roles remain independently checked even when their versions match. Promotion requires
-a successful full cross-platform `lane=all` run on the candidate head.
+The roles remain independently checked even when their versions match. Release selection
+requires a successful full cross-platform `lane=all` run on the exact candidate `dev` SHA.
 
 Run `bun run test` before review readiness. If the full local suite is too costly
 for the task or available resources, run at least focused regression tests for

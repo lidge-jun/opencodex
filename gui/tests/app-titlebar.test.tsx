@@ -146,15 +146,17 @@ test("the shortcut stays off in the plain browser shell", async () => {
 });
 
 test("the traffic-light position and the CSS row stay in step", () => {
-  // desktop/src-tauri/src/lib.rs parks the lights with `traffic_light_position`; the
-  // strips' height and the lights inset live in app-titlebar.css. Drift between them
-  // puts the lights on top of the toggle — this is the check for that.
+  // desktop/src-tauri/src/lib.rs parks the lights with `traffic_light_position` at the
+  // values in traffic_lights.rs; the strips' height and the lights inset live in
+  // app-titlebar.css. Drift between them puts the lights on top of the toggle — this is
+  // the check for that.
   const lib = readFileSync(new URL("../../desktop/src-tauri/src/lib.rs", import.meta.url), "utf8");
+  const lights = readFileSync(new URL("../../desktop/src-tauri/src/traffic_lights.rs", import.meta.url), "utf8");
   const css = readFileSync(new URL("../src/components/app-titlebar.css", import.meta.url), "utf8");
   const styles = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
-  const position = lib.match(/traffic_light_position\(\s*tauri::Position::Logical\(\s*tauri::LogicalPosition::new\(\s*([\d.]+),\s*([\d.]+)/);
-  expect(position).not.toBeNull();
-  const [lightX, lightY] = [Number(position![1]), Number(position![2])];
+  expect(lib).toMatch(/traffic_light_position\(tauri::Position::Logical\(tauri::LogicalPosition::new\(\s*traffic_lights::X,\s*traffic_lights::y_for\(traffic_lights::macos_major\(\)\),/);
+  const constant = (name: string) => Number(lights.match(new RegExp(`pub const ${name}: f64 = ([\\d.]+);`))?.[1]);
+  const [lightX, lightY, preTahoeY] = [constant("X"), constant("Y_TAHOE"), constant("Y_PRE_TAHOE")];
   const inset = Number(css.match(/--tl-inset:\s*(\d+)px/)?.[1]);
   const row = Number(css.match(/--titlebar-h:\s*(\d+)px/)?.[1]);
   const clear = Number(css.match(/\.app--macos\s*\{\s*--chrome-clear:\s*(\d+)px/)?.[1]);
@@ -164,6 +166,9 @@ test("the traffic-light position and the CSS row stay in step", () => {
   // Measured on-device: tao treats y like a container inset, not the buttons' top
   // edge — the light centers land ~2px BELOW y. Verified center = row/2 at y=22.
   expect(row).toBe(2 * (lightY - 2));
+  // macOS 15 and earlier draw 16pt-tall buttons that sit 4pt lower for the same y, so
+  // their y is 4pt smaller to land on the same center line (#8280).
+  expect(preTahoeY).toBe(lightY - 4);
   expect(clear).toBeGreaterThanOrEqual(inset + 28 + 16);
   // The expanded strip floats over exactly the sidebar column (.app's first grid track).
   const column = Number(styles.match(/\.app\s*\{[^}]*grid-template-columns:\s*(\d+)px/)?.[1]);

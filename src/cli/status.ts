@@ -753,9 +753,11 @@ export function unusedProxyWarningLines(input: {
     ];
   }
   if (!input.proxyUp) return [];
+  // `ocx start` refuses beside a live proxy (and under the desktop app); `ocx sync` writes the
+  // routing to the running one under every owner.
   return [
     "⚠️  Codex routing is native — the running proxy is unused.",
-    "   Codex requests go to OpenAI, not this proxy. Re-point with: ocx start",
+    "   Codex requests go to OpenAI, not this proxy. Re-point with: ocx sync",
   ];
 }
 
@@ -912,7 +914,7 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
     }
   })();
   const clientConnection = collectClientConnectionStatus(Date.now(), undefined, {
-    selectedCodexCommand: resolvedRuntime.runtime.command,
+    selectedCodexRuntime: resolvedRuntime.runtime,
   });
   // Asked before the local probes below so a connected client's report is hub-sourced from its
   // first line. Bounded and failure-tolerant: an offline hub degrades the remoteHub block, it

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
+import { clearRequestLogsForTests, getRequestLogEntries } from "../../src/server/request-log";
 import { resetProviderRequestPacingForTest } from "../../src/providers/request-pacing";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -117,7 +118,7 @@ describe("Responses passthrough deferred tool delivery by inbound wire", () => {
               ]));
               if (wire === "responses" && toolName === "Write") {
                 expect(text).toContain("undeclared client tool");
-                expect(text).toContain("Write");
+                expect(text).not.toContain("Write");
                 if (stream && upstreamSse) {
                   expect(result.status).toBe(200);
                   expect(text).toContain("response.failed");
@@ -183,7 +184,7 @@ describe("explicit empty tool catalog is deny-all on deferred wires", () => {
           const text = await result.text();
           expect(upstream.seen).toHaveLength(1);
           expect(text).toContain("undeclared client tool");
-          expect(text).toContain("Write");
+          expect(text).not.toContain("Write");
           if (wire === "anthropic") {
             // Deterministic refusal: api_error identity, never a retryable overload.
             expect(text).not.toContain("overloaded_error");
@@ -253,3 +254,41 @@ describe("registered deferred catalog input items authorize calls", () => {
     }
   }
 });
+
+const toolNameSentinel = "zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e";
+for (const wire of Object.keys(endpoints) as InboundWire[]) {
+  for (const stream of [true, false]) {
+    test(`${wire} ${stream ? "stream" : "buffered"}: undeclared refusal contains only proxy wording`, async () => {
+      clearRequestLogsForTests();
+      const upstream = mockResponsesUpstream(toolNameSentinel, stream);
+      saveConfig({ port: 0, defaultProvider: "mock", providers: { mock: {
+        adapter: "openai-responses", apiKey: "mock-key", authMode: "key",
+        baseUrl: `${upstream.server.url.toString().replace(/\/$/, "")}/v1`, allowPrivateNetwork: true,
+      } } } as OcxConfig);
+      const server = startServer(0);
+      try {
+        const result = await fetch(new URL(endpoints[wire], server.url), {
+          method: "POST", headers: { "content-type": "application/json", "anthropic-version": "2023-06-01" },
+          body: JSON.stringify({ ...requestBody(wire, stream), tools: [] }),
+        });
+        const text = await result.text();
+        expect(upstream.seen).toHaveLength(1);
+        expect(result.status).toBe(stream ? 200 : 502);
+        const payloads = stream ? text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6))) : [JSON.parse(text)];
+        const failure = payloads.find(value => value.error || value.response?.error);
+        expect(failure).toBeDefined();
+        const error = failure.error ?? failure.response.error;
+        expect(error.code).toBe("undeclared_tool_call");
+        expect(error.type).toBe(wire === "anthropic" ? "api_error" : stream && wire === "responses" ? "upstream_error" : "server_error");
+        expect(error.message).toContain("undeclared client tool");
+        for (let attempt = 0; attempt < 30 && getRequestLogEntries().length === 0; attempt++) await Bun.sleep(10);
+        const row = getRequestLogEntries().at(-1);
+        expect(row).toBeDefined();
+        expect(row!.status).toBe(stream ? 200 : 502);
+        expect(row!.errorCode).toBe(stream ? undefined : "upstream_server_error");
+        expect(text).not.toContain(toolNameSentinel);
+        expect(JSON.stringify(row)).not.toContain(toolNameSentinel);
+      } finally { await server.stop(true); upstream.server.stop(true); }
+    });
+  }
+}

@@ -10,7 +10,7 @@ description: 리스너, 원격 접근, admission 키, 타임아웃, 저장소, �
 | 필드 | 형식 | 기본값 | 의미 |
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` | 프록시 수신 포트입니다. |
-| `hostname?` | `string` | `"127.0.0.1"` | 바인드 주소입니다. 루프백이 아닌 바인드에는 데이터 admission 토큰이 필요하며, `OPENCODEX_API_AUTH_TOKEN` → `OCX_API_TOKEN_FILE` → 설치된 owner-only `service-api-token` 순서로 결정됩니다. 손으로 내보낼 값은 없습니다. [Remote access](#remote-access)를 보세요. |
+| `hostname?` | `string` | `"127.0.0.1"` | 바인드 주소입니다. 비루프백에서는 `config.apiKeys`의 클라이언트 키 또는 `OPENCODEX_API_AUTH_TOKEN` → `OCX_API_TOKEN_FILE` → 설치된 소유자 전용 `service-api-token` 순서로 확인한 공유 데이터 토큰이 필요합니다. [원격 접근](#remote-access)을 참고하세요. |
 | `proxy?` | `string` | — | 송신용 HTTP(S) 또는 SOCKS5 프록시 URL(`socks5://host:port`) 또는 `${ENV_VAR}`입니다. HTTP URL은 해당 변수가 비어 있을 때 `HTTP_PROXY` / `HTTPS_PROXY`에 적용됩니다. SOCKS5 URL은 내장 SOCKS5 터널을 사용하고 `ALL_PROXY`에도 적용되며(`ocx start --socks5`), 이 프로세스에서 상속된 `HTTP(S)_PROXY`를 지웁니다. 루프백은 `NO_PROXY`에 그대로 남습니다. |
 | `emptyCompletionRetry?` | `boolean` | `false` | 텍스트나 도구 호출이 없는 Responses 턴을, 터미널 이벤트 전에 스트림이 종료된 경우를 포함해 동일한 요청으로 한 번 재시도하도록 선택합니다. 재시도에는 비용이 발생할 수 있습니다. `OCX_EMPTY_COMPLETION_RETRY=0`은 설정을 바꾸지 않고 비활성화하며, combo 및 routed-compaction turn은 제외됩니다. |
 | `dropCodexSafetyBuffering?` | `boolean` | `false` | Canonical Codex Responses 응답의 선택적 safety-buffering 헤더 두 개와 SSE 힌트를 제거합니다. 공급자의 안전 정책이나 거절 응답은 바뀌지 않습니다. Native WS 메타데이터와 compact는 제외됩니다. |
@@ -32,6 +32,7 @@ description: 리스너, 원격 접근, admission 키, 타임아웃, 저장소, �
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` | on when usable | 웹 검색 사이드카 옵션입니다. |
 | `visionSidecar?` | `OcxVisionSidecarConfig` | on when usable | 이미지 설명 사이드카 옵션입니다. |
 | `images?` | `OcxImagesConfig` | automatic OpenAI selection | Codex `image_gen`용 독립형 Images 릴레이 옵션입니다. |
+| `telemetry?` | `OcxTelemetryConfig` | 사용자 고지 후 기본 켜짐 | 익명 일일 사용 텔레메트리 동의 상태(`decision`, `decidedAt`, `noticeShownAt`)입니다. 사람이 고지를 보거나 동의하기 전에는 아무것도 전송하지 않습니다. `OCX_TELEMETRY=0` 또는 `DO_NOT_TRACK=1`로 재정의할 수 있습니다. [Telemetry (`telemetry`)](#telemetry-telemetry) 및 [텔레메트리 및 개인정보](/ko/guides/telemetry/)를 참고하세요. |
 
 오래된 개발 빌드가 백업 지원이 생기기 전에 resume-history 메타데이터를 바꿨다면, native-provider 복구를 강제로 수행하려면 `ocx recover-history --legacy-openai --yes`를 실행합니다.
 이 명령은 정상적인 dedicated-provider history를 포함해 사용자 메시지가 있는 모든 `opencodex` row를 재태깅합니다. 실행하기 전에 lifecycle reference의 전체 범위 경고를 확인하세요.
@@ -42,7 +43,7 @@ description: 리스너, 원격 접근, admission 키, 타임아웃, 저장소, �
 
 ## Remote access
 
-기본 `127.0.0.1` 바인드는 루프백 전용입니다. `0.0.0.0`이나 tailnet IP처럼 루프백이 아닌 주소는 `/api/*`와 데이터 플레인 모두에서 토큰 인증이 필요합니다.
+기본 `127.0.0.1` 바인드는 루프백 전용입니다. `0.0.0.0`이나 tailnet IP 같은 비루프백 주소의 모델 요청에는 `config.apiKeys`에 설정한 클라이언트 키 또는 공유 데이터 토큰이 필요합니다. 관리 경로 `/api/*`는 루프백에서도 별도의 `OPENCODEX_ADMIN_AUTH_TOKEN` 또는 생성된 관리자 토큰을 사용합니다. 데이터 자격 증명은 관리 접근을 허용하지 않습니다. 관리자 토큰을 모델 클라이언트에 제공하지 마세요.
 
 토큰을 직접 만들 필요는 없습니다. 루프백이 아닌 바인드에서 `ocx service install`이 다음 순서로 토큰을 준비합니다: 설치하는 셸의 `OPENCODEX_API_AUTH_TOKEN` → 기존 owner-only `service-api-token` 파일 → 무작위 32바이트 새 값. 결과는 `0600`으로 기록되고 실행 래퍼(launchd plist, systemd unit, Windows 래퍼)가 시작할 때 그 파일을 읽으므로, 값이 서비스 정의나 argv에 들어가지 않습니다. 포그라운드 `ocx start`도 같은 우선순위(환경 변수 → `OCX_API_TOKEN_FILE` → 설치된 `service-api-token`)를 적용하므로 토큰을 내보내지 않아도 루프백이 아닌 hostname에 바인드합니다.
 
@@ -63,13 +64,13 @@ x-opencodex-api-key: your-secret-token
 
 | 엔드포인트 | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
 | --- | --- | --- | --- |
-| `/v1/responses` | 허용되지 않음 | **필수** | 허용되지 않음 |
-| `/v1/chat/completions` | 허용되지 않음 | **필수** | 허용되지 않음 |
+| `/v1/responses` | 허용 | 허용 | 허용되지 않음 |
+| `/v1/chat/completions` | 허용 | 허용 | 허용되지 않음 |
 | `/v1/messages` | 허용됨 | 허용됨 | 허용됨 |
 | `/v1/messages/count_tokens` | 허용됨 | 허용됨 | 허용됨 |
 | `/v1/models` | 허용됨 | 허용됨 | 허용됨 |
 
-Responses와 Chat Completions는 `Authorization`을 향후 Codex Direct 패스스루 용도로 예약해 두므로, 여기서는 전용 admission 헤더만 허용됩니다. 대시보드에서 생성한 `apiKeys`는 시작 후 환경 토큰을 대체할 수 있으며, 후보 값은 상수 시간으로 비교합니다.
+Responses와 Chat Completions는 인식된 데이터 플레인 자격 증명을 `x-opencodex-api-key`에서 받으며, 이 전용 헤더가 없거나 앞뒤 공백을 제거한 값이 비어 있을 때는 `Authorization: Bearer`에서도 받습니다. 앞뒤 공백을 제거한 전용 헤더 값이 비어 있지 않으면 잘못된 값이어도 우선하므로, 유효한 bearer로 그 거부를 우회할 수 없습니다. 무관한 bearer는 프록시 접근을 허용하지 않으며 이 경로는 `x-api-key`를 받지 않습니다. 생성된 `apiKeys`와 공유 데이터 토큰은 상수 시간으로 비교됩니다. 관리 자격 증명은 모델 접근 권한을 부여하지 않습니다.
 
 Messages와 `count_tokens`는 라우팅 클라이언트 호환성을 위해 세 admission 형식을 계속 허용합니다. 하지만 비루프백
 바인드의 네이티브 Anthropic 패스스루는 프록시 admission을 `x-opencodex-api-key`로만 받고,
@@ -141,6 +142,35 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 :::caution[Forwarded loopback is unauthenticated]
 일반 `ssh -L`은 로컬 루프백에서만 수신하므로 기본 비인증 바인드에는 안전합니다. `ssh -g -L`, 광범위한 컨테이너 퍼블리싱, 또는 클라이언트 쪽을 `0.0.0.0`에 노출하는 포워딩 모드는 사용하지 마십시오. 확신이 없으면 `ssh -L 127.0.0.1:20100:localhost:10100`처럼 명시적으로 바인드합니다.
 :::
+
+## Telemetry (`telemetry`)
+
+익명 일일 사용 텔레메트리는 사람이 고지 안내(GUI 팝업 또는 대화형 터미널 프롬프트)를 확인한 뒤에만 기본으로 켜집니다. `config.json`의 `telemetry` 블록은 이 동의 상태를 기록합니다.
+
+```json
+{
+  "telemetry": {
+    "decision": "accepted",
+    "decidedAt": "2026-11-07T09:00:00.000Z",
+    "noticeShownAt": "2026-11-07T09:00:00.000Z"
+  }
+}
+```
+
+| 키 | 형식 | 기본값 | 설명 |
+| --- | --- | --- | --- |
+| `telemetry.decision?` | `"accepted" \| "declined"` | 미설정 (미결정) | 사용자의 명시적 선택입니다. `"declined"`는 텔레메트리를 끄고 `<OPENCODEX_HOME>/telemetry-id.json`을 즉시 삭제하며, `"accepted"`는 일일 보고서를 활성화합니다. |
+| `telemetry.decidedAt?` | `string` (ISO 8601) | 미설정 | `decision`이 기록된 UTC 시각입니다. `decidedAt ?? noticeShownAt`의 UTC 날짜보다 strictly 이후인 완료된 UTC 달력 날짜(`day > formatUtcDay(decidedAt ?? noticeShownAt)`)만 전송하며, 동의 당일과 이전 날짜는 절대 전송하지 않습니다. |
+| `telemetry.noticeShownAt?` | `string` (ISO 8601) | 미설정 | 웹 대시보드나 대화형 터미널에서 사람이 고지를 확인한 UTC 시각입니다. `decision`이 미설정일 때는 `noticeShownAt`이 있어야만 전송되며(`default-on`), 없으면 `awaiting-notice` 상태로 유지됩니다. |
+
+수집 서버 엔드포인트(`https://telemetry.opencodex.me/v1/events`)는 코드 상수이며 `config.json`에서 변경할 수 없습니다.
+
+두 환경 변수는 저장된 `config.json`을 수정하지 않고 즉시 텔레메트리를 비활성화합니다(프록시 시작 시나 스케줄러 틱에서 감지되면 `<OPENCODEX_HOME>/telemetry-state.json`에 오늘 UTC 날짜를 `ineligibleThroughDay`로 기록하고 `<OPENCODEX_HOME>/telemetry-id.json`을 삭제하므로, 이후 환경 변수를 제거해도 해당 날짜는 전송되지 않으며 새 ID가 생성됩니다).
+
+- `OCX_TELEMETRY=0` (대소문자 구분 없이 `false`, `off`, `no`도 허용)
+- `DO_NOT_TRACK=1` (대소문자 구분 없이 `true`, `yes`도 허용)
+
+`ocx config set telemetry`와 `ocx config unset telemetry`는 거부되며, `ocx config import`도 모든 호출자에 대해 가져온 `telemetry` 블록을 무시하고 기존 동의 상태를 그대로 유지합니다. 대신 `ocx telemetry enable`(대화형 터미널 필수, 고지문과 확인 프롬프트 표시 후 기록하며 아닐 경우 `agent_consent_required` / `tty_required`로 종료), `ocx telemetry disable`, `ocx telemetry status [--json]` 또는 대시보드 **Proxy details** 토글을 사용하세요. 전체 페이로드 스키마와 보관 정책은 [텔레메트리 및 개인정보](/ko/guides/telemetry/)를 참고하세요.
 
 ## Storage cleanup
 

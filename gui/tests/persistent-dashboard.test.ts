@@ -116,6 +116,23 @@ test("a hung Remember response body is aborted and cannot install a session", as
   expect(attempts).toBe(1); expect(verdict).toBe("unavailable"); expect(signal?.aborted).toBe(true); expect(hasApiSession("shared")).toBe(false);
 });
 
+for (const [label, body, expected] of [
+  ["the server's direct-origin refusal", { error: "Remember requires a direct HTTPS dashboard (or loopback) and matching Origin", code: "remember_requires_direct_origin" }, "remember-unsupported"],
+  ["an uncoded 403", { error: "Admin token required" }, "unavailable"],
+] as const) {
+  test(`Remember maps ${label} to ${expected} (#8338)`, async () => {
+    let verdict: unknown;
+    resetApiAuthFetchForTests(async verify => { verdict = await verify("ocx_admin_fixture", true); return null; });
+    window.fetch = (async input => String(input).endsWith("/api/session/remember")
+      ? Response.json(body, { status: 403 })
+      : new Response(null, { status: 401 })) as typeof fetch;
+    installApiAuthFetch();
+    expect((await window.fetch("/api/config")).status).toBe(401);
+    expect(verdict).toBe(expected); expect(hasApiSession("shared")).toBe(false);
+    expect(localStorage.getItem(PROOF_KEY)).toBeNull();
+  });
+}
+
 function sessionHtml(): string {
   return `<meta name="opencodex-session-token" content="ocx_session_remembered">
     <meta name="opencodex-session-csrf" content="csrf-fixture">

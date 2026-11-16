@@ -109,6 +109,7 @@
 
 .models-workspace-rail-row {
   display: flex;
+  flex-shrink: 0;
   flex-direction: column;
   gap: var(--space-0-5);
   width: 100%;

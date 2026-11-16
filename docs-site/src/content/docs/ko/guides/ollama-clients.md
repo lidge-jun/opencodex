@@ -43,6 +43,10 @@ curl "$OLLAMA_HOST/api/tags"
 - `options`: `temperature`, `top_p`, `num_predict`, `stop`.
 - `format`: `"json"`만 지원합니다.
 
+각 `/api/chat` 요청은 모든 assistant 메시지에 걸쳐 **도구 호출을 합계 1,024개까지** 허용합니다.
+이미 결과가 있는 호출도 합계에 포함됩니다. 한도를 넘으면 프로바이더로 보내기 전에 HTTP 400을 반환합니다.
+대화 이력을 줄인 뒤 다시 보내세요. 남겨 둔 도구 결과에는 해당 assistant 도구 호출도 함께 남겨야 합니다.
+
 그 밖의 항목은 무시되지 않고 HTTP 400으로 거부됩니다. `think`, `keep_alive`, `suffix`, `raw`,
 `template`, `context`, 기타 `options`, JSON 스키마 `format`, 이미지 URL이 여기에 해당합니다. Ollama의 모델
 관리 및 임베딩 엔드포인트는 제공되지 않습니다.

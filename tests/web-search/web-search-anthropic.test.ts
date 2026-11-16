@@ -20,7 +20,19 @@ import {
 } from "../../src/web-search";
 import { parseAnthropicSidecarSSE, runAnthropicWebSearch } from "../../src/web-search/anthropic-executor";
 import { CLAUDE_CODE_SYSTEM_INSTRUCTION } from "../../src/oauth/anthropic";
-import type { OcxConfig, OcxProviderConfig } from "../../src/types";
+import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
+import type { ProviderAdapter } from "../../src/adapters/base";
+import { repoPath } from "../helpers/repo-root";
+import { createRequestExecutionBudget, type AuxiliaryModelSend } from "../../src/lib/request-execution-budget";
+import { createSpendReservationLedger, DEFAULT_SPEND_RESERVATION_POLICY, type SpendJournal } from "../../src/lib/spend-reservation-ledger";
+import { createRequestSpendTracker } from "../../src/server/responses/request-spend";
+import { createResponsesSendBudget } from "../../src/server/responses/request-send-budget";
+import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import { estimateTokens } from "../../src/lib/token-estimate";
+import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
+import { runWithWebSearch } from "../../src/web-search/loop";
+import { runTurnWebSearchLoop } from "../../src/web-search/run-turn-loop";
+import { createPassthroughWebSearchBridgeExecutor } from "../../src/web-search/passthrough-bridge";
 
 const routedProvider: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://routed.test/v1", apiKey: "routed-key" };
 const forwardProvider: OcxProviderConfig = { adapter: "openai-responses", baseUrl: "https://chatgpt.test/v1", authMode: "forward" };
@@ -35,6 +47,159 @@ function config(overrides: Partial<OcxConfig> = {}): OcxConfig {
 function parsedWithWebSearch() {
   return parseRequest({ model: "routed/model", input: "Search current docs", stream: true, tools: [{ type: "web_search" }] });
 }
+
+describe("Anthropic helper physical admission", () => {
+  const originalFetch = globalThis.fetch;
+  const settings = { model: "claude-sonnet-5", reasoning: "low", timeoutMs: 5000, describeImages: false };
+  afterEach(() => { globalThis.fetch = originalFetch; oauthAccessError = undefined; });
+  function owner(maxTokens = 100_000, helperPool = "anthropic") {
+    const lines: string[] = [];
+    const journal: SpendJournal = { read: () => [...lines], append: line => { lines.push(line); }, rewrite: next => { lines.splice(0, lines.length, ...next); } };
+    const ledger = createSpendReservationLedger({ journal, policy: { ...DEFAULT_SPEND_RESERVATION_POLICY,
+      pool: { maxTokens }, canonicalProviderIds: ["parent", helperPool] } });
+    const log: Parameters<typeof createRequestSpendTracker>[0] = { provider: "parent", model: "parent", accountLogLabel: "parent-account", spendInputEstimateTokens: 1, spendOutputCeilingTokens: 1 };
+    const tracker = createRequestSpendTracker(log, undefined, ledger);
+    const budget = createRequestExecutionBudget(undefined, "anthropic-helper", tracker);
+    const translatorBudget = createTranslatorBudget();
+    const value = createResponsesSendBudget({ req: new Request("http://localhost/v1/responses"), logCtx: log,
+      options: { sendBudget: budget, translatorBudget } });
+    if (value instanceof Response) { translatorBudget.dispose(); throw new Error("fixture refused"); }
+    return { value, budget, tracker, ledger, lines, log, close: () => translatorBudget.dispose() };
+  }
+  const ok = () => sseResponse([
+    { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+    { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+    { type: "content_block_stop", index: 0 }, { type: "message_stop" },
+  ]);
+
+  test("a helper's own output ceiling refuses before fetch despite a tiny parent estimate", async () => {
+    const f = owner(100);
+    let fetches = 0;
+    globalThis.fetch = (async () => { fetches++; return ok(); }) as typeof fetch;
+    try {
+      const out = await runAnthropicWebSearch("q", "anthropic", anthropicProvider, settings, undefined, undefined, f.value.dispatchSidecarSend);
+      expect(fetches).toBe(0);
+      expect(out.error).toBe("anthropic sidecar send_budget_exhausted");
+      expect(f.tracker.refusals).toBe(1);
+      expect(f.budget.used).toBe(0);
+    } finally { f.tracker.settle(undefined); f.close(); }
+  });
+
+  test("a nonterminal auxiliary pool refusal leaves a successful routed answer unmarked", async () => {
+    const f = owner(100, "claude-fixture");
+    let fetches = 0;
+    globalThis.fetch = (async () => { fetches++; return ok(); }) as typeof fetch;
+    const passes: AdapterEvent[][] = [
+      [{ type: "tool_call_start", id: "s1", name: "web_search" }, { type: "tool_call_delta", arguments: '{"query":"fixture"}' }, { type: "tool_call_end" }, { type: "done" }],
+      [{ type: "text_delta", text: "normal answer" }, { type: "done" }],
+    ];
+    const adapter: ProviderAdapter = { name: "nonterminal-auxiliary-fixture",
+      buildRequest: () => ({ url: "https://routed.test", method: "POST", headers: {}, body: "{}" }),
+      fetchResponse: async () => new Response("wire"), async *parseStream() { yield* passes.shift()!; } };
+    const translatorBudget = createTranslatorBudget();
+    try {
+      const response = await runWithWebSearch({ parsed: parsedWithWebSearch(), adapter, backend: "anthropic",
+        anthropicSidecar: { providerName: "claude-fixture", provider: anthropicProvider,
+          config: config({ providers: { routed: routedProvider, "claude-fixture": anthropicProvider } }) },
+        dispatchSidecarSend: f.value.dispatchSidecarSend, settings, maxSearches: 1, hostedTool: { type: "web_search" },
+        selectedForwardHeaders: new Headers(), incomingMeta: { headers: new Headers(), translatorBudget } });
+      expect(await response.text()).toContain("normal answer"); expect(fetches).toBe(0);
+      expect(f.tracker.refusals).toBe(1); expect(f.tracker.lastRefusal?.reason).toBe("workflow-spend-exhausted");
+      expect(f.log.localTerminalReason).toBeUndefined(); expect(f.log.errorCode).toBeUndefined();
+      expect(f.log.terminalSource).toBeUndefined();
+    } finally { f.tracker.settle(undefined); translatorBudget.dispose(); f.close(); }
+  });
+
+  test("each query owns a seed and reset replay counts each actual send", async () => {
+    const f = owner();
+    let fetches = 0;
+    const reserves = () => f.lines.map(line => JSON.parse(line)).filter(row => row.kind === "reserve").length;
+    const countsAtWire: number[] = [];
+    const wireBodies: string[] = [];
+    globalThis.fetch = (async (_url, init) => {
+      wireBodies.push(String(init?.body));
+      fetches++; countsAtWire.push(reserves());
+      if (fetches === 1) throw Object.assign(new Error("connection reset by peer"), { code: "ECONNRESET" });
+      return ok();
+    }) as typeof fetch;
+    try {
+      const first = await runAnthropicWebSearch("q1", "anthropic", anthropicProvider, settings, undefined, undefined, f.value.dispatchSidecarSend);
+      const second = await runAnthropicWebSearch("q2", "anthropic", anthropicProvider, settings, undefined, undefined, f.value.dispatchSidecarSend);
+      expect(first.error).toBeUndefined(); expect(second.error).toBeUndefined();
+      expect(first.text).toBe("ok"); expect(second.text).toBe("ok");
+      expect(fetches).toBe(3);
+      expect(countsAtWire).toEqual([1, 1, 3]);
+      expect(reserves()).toBe(3);
+      expect(f.budget.used).toBe(3);
+      const expectedHold = wireBodies.reduce((total, body) =>
+        total + Math.max(1, estimateTokens(body, settings.model)) + (JSON.parse(body) as { max_tokens: number }).max_tokens, 0);
+      expect(f.ledger.snapshot("pool", "anthropic")!.reserved).toBe(expectedHold);
+      expect(f.ledger.snapshot("identity", "parent-account")).toBeUndefined();
+      expect(f.ledger.snapshot("pool", "parent")).toBeUndefined();
+    } finally { f.tracker.settle(undefined); f.close(); }
+  });
+
+  test("an already aborted query never admits or sends a helper", async () => {
+    const f = owner();
+    let fetches = 0;
+    globalThis.fetch = (async () => { fetches++; return ok(); }) as typeof fetch;
+    try {
+      const out = await runAnthropicWebSearch("q", "anthropic", anthropicProvider, settings, AbortSignal.abort(), undefined, f.value.dispatchSidecarSend);
+      expect(out.error).toBeDefined(); expect(fetches).toBe(0);
+      expect(f.budget.used).toBe(0); expect(f.lines).toHaveLength(0);
+    } finally { f.tracker.settle(undefined); f.close(); }
+  });
+
+  for (const path of ["fetch-loop", "run-turn", "passthrough-bridge"] as const) {
+    test(`${path} forwards helper admission and preserves a refused search as a tool error`, async () => {
+      let admissions = 0, fetches = 0;
+      globalThis.fetch = (async () => { fetches++; return ok(); }) as typeof fetch;
+      const dispatchSidecarSend: AuxiliaryModelSend = async target => {
+        expect(target.poolId).toBe("claude-fixture");
+        expect(target.identityId).toBe("");
+        admissions++; throw new SendBudgetExhaustedError();
+      };
+      const anthropicSidecar = { providerName: "claude-fixture", provider: anthropicProvider, config: config() };
+      const parsed: OcxParsedRequest = { modelId: "fixture", stream: true, options: {}, context: { messages: [], tools: [] } };
+      const search: AdapterEvent[] = [
+        { type: "tool_call_start", id: "search-1", name: "web_search" },
+        { type: "tool_call_delta", arguments: '{"query":"fixture"}' }, { type: "tool_call_end" }, { type: "done" },
+      ];
+      const answer: AdapterEvent[] = [{ type: "text_delta", text: "answer" }, { type: "done" }];
+      async function* stream(events: AdapterEvent[]) { yield* events; }
+      const translatorBudget = createTranslatorBudget();
+      let continued: OcxParsedRequest | undefined;
+      try {
+        if (path === "fetch-loop") {
+          const passes = [search, answer];
+          const adapter: ProviderAdapter = {
+            name: "helper-admission-fixture",
+            buildRequest: request => { continued = request; return { url: "https://routed.test", method: "POST", headers: {}, body: "{}" }; },
+            fetchResponse: async () => new Response("wire"),
+            async *parseStream() { yield* passes.shift()!; },
+          };
+          const response = await runWithWebSearch({ parsed, adapter, backend: "anthropic", anthropicSidecar,
+            dispatchSidecarSend, settings, hostedTool: { type: "web_search" }, maxSearches: 1,
+            selectedForwardHeaders: new Headers(), incomingMeta: { headers: new Headers(), translatorBudget } });
+          expect(await response.text()).toContain("answer");
+        } else if (path === "run-turn") {
+          const events: AdapterEvent[] = [];
+          for await (const event of runTurnWebSearchLoop(stream(search), { parsed, translatorBudget, dispatchSidecarSend,
+            plan: { backend: "anthropic", anthropicSidecar, settings, hostedTool: { type: "web_search" }, maxSearches: 1,
+              routedModelStallTimeoutMs: 1000, stallTimeoutSec: 1, streamRoutedModelOutput: false },
+            dispatch: request => { continued = request; return stream(answer); } })) events.push(event);
+          expect(events.some(event => event.type === "text_delta" && event.text === "answer")).toBe(true);
+        } else {
+          const execute = createPassthroughWebSearchBridgeExecutor({ backend: "anthropic", maxSearches: 1, timeoutMs: 5000 },
+            { auth: { anthropic: anthropicSidecar }, dispatchSidecarSend });
+          expect((await execute(["fixture"])).error).toBe("anthropic sidecar send_budget_exhausted");
+        }
+        if (continued) expect(JSON.stringify(continued.context.messages)).toContain("send_budget_exhausted");
+        expect(admissions).toBe(1); expect(fetches).toBe(0);
+      } finally { translatorBudget.dispose(); }
+    });
+  }
+});
 
 /** Build an Anthropic-style SSE stream Response from frame objects. */
 function sseResponse(frames: Record<string, unknown>[], opts: { crlf?: boolean; unterminated?: boolean; chunkSize?: number } = {}): Response {
@@ -89,6 +254,106 @@ describe("web-search anthropic backend resolution", () => {
 });
 
 describe("parseAnthropicSidecarSSE", () => {
+  const partial = { type: "content_block_delta", delta: { type: "text_delta", text: "partial answer" } };
+  const delta = (reason: string) => ({ type: "message_delta", delta: { stop_reason: reason } });
+
+  test.each([
+    ["upstream error", [partial, { type: "error", error: { type: "overloaded_error" } }]],
+    ["missing completion", [partial]],
+    ["search tool error", [{ type: "content_block_start", content_block: { type: "web_search_tool_result", content: { type: "web_search_tool_result_error", error_code: "max_uses_exceeded" } } }, partial, { type: "message_stop" }]],
+    ["max_tokens", [partial, delta("max_tokens"), { type: "message_stop" }]],
+    ["error stop reason", [partial, delta("error"), { type: "message_stop" }]],
+    ["empty stop reason", [partial, delta(""), { type: "message_stop" }]],
+    ["empty stop reason at EOF", [partial, delta("")]],
+    ["content after stop reason", [partial, delta("end_turn"), partial]],
+  ])("reports %s without losing partial text", async (_name, frames) => {
+    const out = await parseAnthropicSidecarSSE(sseResponse(frames));
+    expect(out.text).toContain("partial answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("accepts clean EOF after a complete successful message_delta and ping", async () => {
+    const out = await parseAnthropicSidecarSSE(sseResponse([partial, delta("end_turn"), { type: "ping" }]));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeUndefined();
+  });
+
+  test("does not accept an unterminated message_delta as clean EOF", async () => {
+    const out = await parseAnthropicSidecarSSE(sseResponse([partial, delta("end_turn")], { unterminated: true }));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("does not treat ping-named terminal data as completion", async () => {
+    const body = `data: ${JSON.stringify(partial)}\n\nevent: ping\ndata: {"type":"message_stop"}\n\n`;
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("a partial frame after a completed delta invalidates clean EOF", async () => {
+    const body = `data: ${JSON.stringify(partial)}\n\ndata: ${JSON.stringify(delta("end_turn"))}\n\nevent: content_block_delta\ndata: {"type":`;
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("a trailing SSE comment keeps the clean EOF completion", async () => {
+    const body = `data: ${JSON.stringify(partial)}\n\ndata: ${JSON.stringify(delta("end_turn"))}\n\n: keepalive\n`;
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeUndefined();
+  });
+
+  test("complete field-only SSE blocks do not invalidate clean EOF", async () => {
+    const body = `data: ${JSON.stringify(partial)}\n\ndata: ${JSON.stringify(delta("end_turn"))}\n\nid: 123\nretry: 500\n\nevent: custom\n\n`;
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeUndefined();
+  });
+
+  test("an unfinished field-only SSE block still invalidates clean EOF", async () => {
+    const body = `data: ${JSON.stringify(partial)}\n\ndata: ${JSON.stringify(delta("end_turn"))}\n\nevent: content_block_delta`;
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("accepts CR-only framing and a clean EOF", async () => {
+    const body = `data: ${JSON.stringify(partial)}\r\rdata: ${JSON.stringify(delta("end_turn"))}\r\r`;
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeUndefined();
+  });
+
+  test("reports malformed data after message_stop", async () => {
+    const body = `data: ${JSON.stringify(partial)}\n\ndata: {"type":"message_stop"}\n\ndata: {`;
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("does not hide malformed data before message_stop", async () => {
+    const body = `data: ${JSON.stringify(partial)}\n\ndata: {broken\n\ndata: {"type":"message_stop"}\n\n`;
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("reports a failed reader after preserving decoded text", async () => {
+    const encoded = new TextEncoder().encode(`data: ${JSON.stringify(partial)}\n\n`);
+    let sent = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!sent) { sent = true; controller.enqueue(encoded); }
+        else controller.error(new Error("synthetic read failure"));
+      },
+    }, { highWaterMark: 0 });
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("partial answer");
+    expect(out.error).toBeDefined();
+  });
+
   test("folds web_search_tool_result + text + citations into {text, sources} and dedups by url", async () => {
     const res = sseResponse([
       { type: "message_start" },
@@ -194,6 +459,150 @@ describe("parseAnthropicSidecarSSE", () => {
 });
 
 describe("Anthropic sidecar byte boundaries", () => {
+  test.each(["\n", "\r\n", "\r"])("accepts a complete message_stop at the byte cap with %j framing", async (nl) => {
+    const prefix = `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "answer" } })}${nl}${nl}`;
+    const terminal = `data: {"type":"message_stop"}${nl}${nl}`;
+    const size = 64 * 1024;
+    const filler = `:${"x".repeat(size - new TextEncoder().encode(prefix + terminal).length - 1 - 2 * nl.length)}${nl}${nl}`;
+    const body = prefix + filler + terminal;
+    expect(new TextEncoder().encode(body).byteLength).toBe(size);
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out).toEqual({ text: "answer", sources: [] });
+  });
+
+  test("still reports max_tokens when its complete terminal lands at the byte cap", async () => {
+    const prefix = `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "partial" } })}\n\n`;
+    const terminal = 'data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"}}\n\ndata: {"type":"message_stop"}\n\n';
+    const size = 64 * 1024;
+    const filler = `:${"x".repeat(size - new TextEncoder().encode(prefix + terminal).length - 3)}\n\n`;
+    const out = await parseAnthropicSidecarSSE(new Response(prefix + filler + terminal));
+    expect(out.text).toBe("partial");
+    expect(out.error).toBe("anthropic sidecar produced an incomplete answer");
+  });
+
+  test("accepts a complete successful stop-reason delta and clean EOF at the byte cap", async () => {
+    const prefix = `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "answer" } })}\n\n`;
+    const terminal = 'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n';
+    const size = 64 * 1024;
+    const filler = `:${"x".repeat(size - new TextEncoder().encode(prefix + terminal).length - 3)}\n\n`;
+    const out = await parseAnthropicSidecarSSE(new Response(prefix + filler + terminal));
+    expect(out).toEqual({ text: "answer", sources: [] });
+  });
+
+  test("does not accept a successful stop-reason delta when EOF is not clean at the cap", async () => {
+    const prefix = `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "answer" } })}\n\n`;
+    const terminal = 'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\n\n';
+    const size = 64 * 1024;
+    const filler = `:${"x".repeat(size - new TextEncoder().encode(prefix + terminal).length - 3)}\n\n`;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(prefix + filler + terminal));
+        controller.enqueue(new TextEncoder().encode('data: {"type":"error"}\n\n'));
+        controller.close();
+      },
+    });
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("does not hide over-cap bytes after a complete terminal in the same chunk", async () => {
+    const prefix = `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "answer" } })}\n\n`;
+    const terminal = 'data: {"type":"message_stop"}\n\n';
+    const size = 64 * 1024;
+    const filler = `:${"x".repeat(size - new TextEncoder().encode(prefix + terminal).length - 3)}\n\n`;
+    const out = await parseAnthropicSidecarSSE(new Response(prefix + filler + terminal + "x"));
+    expect(out.text).toBe("answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("does not hide over-cap bytes in a later chunk after a terminal", async () => {
+    const prefix = `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "answer" } })}\n\n`;
+    const terminal = 'data: {"type":"message_stop"}\n\n';
+    const size = 64 * 1024;
+    const filler = `:${"x".repeat(size - new TextEncoder().encode(prefix + terminal).length - 3)}\n\n`;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(prefix + filler + terminal));
+        controller.enqueue(new TextEncoder().encode('data: {"type":"error"}\n\n'));
+        controller.close();
+      },
+    });
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out.text).toBe("answer");
+    expect(out.error).toBeDefined();
+  });
+
+  test("accepts EOF after empty chunks following a terminal at the byte cap", async () => {
+    const prefix = `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "answer" } })}\n\n`;
+    const terminal = 'data: {"type":"message_stop"}\n\n';
+    const size = 64 * 1024;
+    const filler = `:${"x".repeat(size - new TextEncoder().encode(prefix + terminal).length - 3)}\n\n`;
+    let pulls = 0;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode(prefix + filler + terminal)); },
+      pull(controller) {
+        if (pulls++ < 3) controller.enqueue(new Uint8Array(0));
+        else controller.close();
+      },
+    }, { highWaterMark: 0 });
+    const out = await parseAnthropicSidecarSSE(new Response(body));
+    expect(out).toEqual({ text: "answer", sources: [] });
+  });
+
+  test("does not wait indefinitely when EOF cannot be verified at the byte cap", async () => {
+    const prefix = `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "answer" } })}\n\n`;
+    const terminal = 'data: {"type":"message_stop"}\n\n';
+    const size = 64 * 1024;
+    const filler = `:${"x".repeat(size - new TextEncoder().encode(prefix + terminal).length - 3)}\n\n`;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { controller.enqueue(new TextEncoder().encode(prefix + filler + terminal)); },
+      cancel() { cancelled = true; return new Promise<void>(() => {}); },
+    }, { highWaterMark: 0 });
+    let watchdog: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const outcome = await Promise.race([
+        parseAnthropicSidecarSSE(new Response(body)),
+        new Promise<"hung">(resolve => { watchdog = setTimeout(() => resolve("hung"), 3_000); }),
+      ]);
+      expect(outcome).not.toBe("hung");
+      if (outcome === "hung") throw new Error("sidecar parser did not finish");
+      expect(outcome.error).toBeDefined();
+      expect(cancelled).toBe(true);
+    } finally { if (watchdog !== undefined) clearTimeout(watchdog); }
+  });
+
+  test("synchronous empty chunks cannot starve the bounded EOF probe", async () => {
+    const script = `
+      import { parseAnthropicSidecarSSE } from ${JSON.stringify(repoPath("src/web-search/anthropic-executor.ts"))};
+      const prefix = 'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"answer"}}\\n\\n';
+      const terminal = 'data: {"type":"message_stop"}\\n\\n';
+      const filler = ':' + 'x'.repeat(65536 - new TextEncoder().encode(prefix + terminal).length - 3) + '\\n\\n';
+      const body = new ReadableStream({
+        start(c) { c.enqueue(new TextEncoder().encode(prefix + filler + terminal)); },
+        pull(c) { c.enqueue(new Uint8Array(0)); },
+      }, { highWaterMark: 0 });
+      const outcome = await parseAnthropicSidecarSSE(new Response(body));
+      process.stdout.write(outcome.error ?? 'unexpected success');
+    `;
+    const child = Bun.spawn([process.execPath, "--eval", script], { stdout: "pipe", stderr: "pipe" });
+    let timedOut = false;
+    const watchdog = setTimeout(() => { timedOut = true; child.kill(); }, 5_000);
+    try {
+      const [status, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      expect({ timedOut, status, stdout, stderr }).toEqual({
+        timedOut: false,
+        status: 0,
+        stdout: "anthropic sidecar response byte limit reached before EOF",
+        stderr: "",
+      });
+    } finally { clearTimeout(watchdog); }
+  }, 10_000);
   test.each([64 * 1024, 80 * 1024])("preserves complete prefix frames at %i bytes without awaiting cancel", async (size) => {
     const prefix = `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "prefix 한글" } })}\n\n`;
     const tail = `data: ${JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "discard" } })}`;
@@ -209,7 +618,7 @@ describe("Anthropic sidecar byte boundaries", () => {
     }, { highWaterMark: 0 }));
     const out = await parseAnthropicSidecarSSE(res);
     expect(cancelled).toBe(true);
-    expect(out).toEqual({ text: "prefix 한글", sources: [] });
+    expect(out).toEqual({ text: "prefix 한글", sources: [], error: "anthropic sidecar response exceeded the byte limit" });
   });
 });
 

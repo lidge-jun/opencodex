@@ -13,6 +13,11 @@ does not release a hosted hop while its runTurn producer is active; producer set
 unsent hop and clears only its matching pending reference. Standalone Images and direct callers
 retain their existing behavior.
 
+For a selected Claude CLI adapter, Responses request handling refuses instruction images and
+file-backed image references in messages, agent messages or tool results before vision preprocessing or helper
+dispatch. Other provider routes retain their own image handling; a usable image URL takes
+precedence over a file ID. `tests/providers/claude-cli-client-http.test.ts` covers this boundary.
+
 Mistral's registry entry in `src/providers/registry/entries-extended.ts` declares `zai-glm-5-3` native input as text-only, so registry enrichment enrolls that model in the enabled vision sidecar for existing configurations: the catalog advertises image attachments and request preprocessing sends GLM descriptions. Native Mistral vision models and explicit operator modalities retain precedence (`tests/vision/mistral-vision-sidecar.test.ts`).
 
 A registry entry can also declare `inputModalities` for the whole provider. It covers ids the per-model maps do not list, such as models from live discovery, and a per-model declaration still wins. AI Stupid Level declares text, so an image for one of its pinned models is described or stripped instead of being sent to the router (`tests/providers/aistupidlevel-provider.test.ts`).
@@ -109,7 +114,14 @@ distinct. A proxy admission bearer leaves managed Pool eligible: Pool replaces i
 credential, while Direct cannot forward it. A selected Pool authentication failure remains its own
 error rather than falling through to a separately billed keyed provider. The outbound Images send
 has one selected Authorization value, validated before the non-idempotent upstream POST.
-The keyed path never enters `handleResponses`, so `src/server/images.ts` repeats
+Images providers, including the default OpenAI API fallback, can recover a stale paused active key
+to an enabled pool entry inside the keyed branch. Audio and Live retain their strict snapshot
+selector; only Images opts in to deferred recovery. A fully paused pool never dispatches one of its
+keys. Implicit Images routing still tries eligible forward destinations and, for generations, CCA;
+if no alternative handles the request, the paused-pool error is 403 `permission_error`. An eligible
+alternative's own error retains its status, and an explicit custom provider remains fail-closed.
+The keyed path never
+enters `handleResponses`, so `src/server/images.ts` repeats
 `selectProactiveApiKeyTransport` inside the keyed branch and rebuilds Authorization from the
 returned clone rather than the earlier snapshot. Opt-in request-local round-robin uses that same selection seam and maps exhausted-key allocation to retryable 429. Genuine distributed 401/429 responses record the actual selected key cooldown, retaining Retry-After; synthetic replay refusals do not cool keys, and no paid POST is replayed. The standalone Images relay remains a single direct non-idempotent fetch outside the inference request-pacing executor; provider/key pacing limits do not cover that relay.
 
@@ -201,7 +213,7 @@ Pool quota producers and account commands follow the [bounded raw-observation co
 
 Account quota surfaces use [safe probe diagnostics](../transports/inventory.md#account-quota-failure-diagnostics) separately from quota validity, credential health and routing authority.
 
-Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; an initial JEV null choice separately strips caller effort.
+Combo child requests normalize effort and thinking controls against the selected target while retaining reasoning summaries; strict unknown targets preserve caller controls. The [Responses transport owner](../transports/responses.md) documents this boundary, and native Chat also honors explicit per-axis capability declarations; in the default `decide` mode an initial JEV null choice separately strips caller effort.
 
 Live sideband admission and its bounded upstream handshake follow the [runtime contract](../runtime.md#live-sideband-handshake); the ordinary Responses WebSocket exchange remains separate.
 

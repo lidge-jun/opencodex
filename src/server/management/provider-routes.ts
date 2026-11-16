@@ -2,6 +2,7 @@ import { contextTierRecordConfigError, modelCapabilitiesConfigError, mergeModelC
 import { DECLARABLE_HOSTED_TOOL_TYPES } from "../../responses/hosted-tool-policy";
 import { randomUUID } from "node:crypto";
 import { cleanupRemovedGcpCredentials, providerGcpCredentialMarkers, snapshotProviderGcpCredentialMarkers } from "../../providers/gcp-credential-cleanup";
+import { providerHasStoredApiKey } from "../../providers/api-keys";
 import { providerGcpCredentialInputResponse, removeProviderWithGcpCredentials } from "./provider-gcp-credential-routes";
 import { readFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
@@ -49,8 +50,6 @@ import { ProviderOutboundPolicyError, providerOutboundGet, providerOutboundPost,
 import { fetchCursorUsableModels } from "../../adapters/cursor/live-models";
 import { fetchDevinUsableModels } from "../../adapters/devin/live-models";
 import { resolveDevinApiBaseUrl } from "../../oauth/devin/api-base";
-import { fetchQoderModels } from "../../adapters/qoder/live-models";
-import { resolveQoderProfile } from "../../adapters/qoder/profiles";
 import { parseAntigravityAvailableModels } from "../../providers/antigravity-models";
 import { enrichProviderFromCatalog, listKeyLoginProviders } from "../../oauth/key-providers";
 import {
@@ -72,12 +71,20 @@ import {
   readBoundedDiscoveryJson,
   resolveProviderModelDiscovery,
 } from "../../providers/model-discovery";
-import { extractGoogleAiStudioModelItems } from "../../providers/google-ai-studio-model-discovery";
+import {
+  buildVertexProviderModelsRequest,
+  collectVertexPublisherModelPages,
+  countDiscoveryResponseBytes,
+  extractGoogleNativeModelItems,
+  resolveVertexDiscoveryAuth,
+  vertexDiscoveryAuthIsCurrent,
+  vertexDiscoveryDeadline,
+  type VertexDiscoveryAuth,
+} from "../../providers/google-vertex-model-discovery";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
-import { getCachedProviderRoutingQuota } from "../../providers/quota-routing-cache";
-import { PROVIDER_QUOTA_MAX_AGE_MS, type ProviderRoutingQuota } from "../../providers/quota-types";
-import { cachedProviderQuotaIsExhausted } from "../../combos/resolve";
+import { clearPassiveKeyLimits, listPassiveKeyLimits, passiveProviderOwnership } from "../../providers/passive-key-observation";
+import { providerRoutingQuota } from "./provider-routing-quota";
 import { probeJevDecisionProvider } from "../../combos/jev";
 import { comboDependsOnProviderRoute } from "./decision-model-validation";
 import { clearKeyCooldowns, forgetApiKeyRotationCursor } from "../../providers/key-failover";
@@ -122,6 +129,7 @@ import {
 } from "../auth-cors";
 import { providerCatalogCapabilityConfigError } from "./provider-capability-config";
 import { providerEmptyToolOutputConfigError } from "../../config/provider-validation";
+import { applyThinkingDisplayPatchFields } from "./provider-thinking-display-patch";
 import { applySystemEnvToggle } from "../system-env";
 import {
   LOCAL_PROVIDER_RELOAD_NAME_HEADER,
@@ -154,7 +162,7 @@ type ProviderPatchApplication =
       headersTouched: boolean;
     };
 
-const PROVIDER_ALIAS_OVERLAY_FIELDS = ["alias", "modelAliases", "defaultAliases"] as const;
+const PROVIDER_ALIAS_OVERLAY_FIELDS = ["alias", "modelAliases", "defaultAliases", "aliasTemplate"] as const;
 type ProviderAliasOverlayField = typeof PROVIDER_ALIAS_OVERLAY_FIELDS[number];
 
 /**
@@ -383,6 +391,14 @@ function applyProviderPatchFields(
     const dm = rawBody.defaultModel.trim();
     if (dm) next.defaultModel = dm;
     else delete next.defaultModel;
+    touched = true;
+  }
+  for (const field of ["project", "location"] as const) {
+    if (!Object.hasOwn(rawBody, field)) continue;
+    const value = rawBody[field];
+    if (typeof value !== "string") return { error: `${field} must be a string` };
+    if (value.trim()) next[field] = value.trim();
+    else delete next[field];
     touched = true;
   }
   if (Object.hasOwn(rawBody, "authMode")) {
@@ -682,6 +698,11 @@ function applyProviderPatchFields(
     }
     touched = true;
   }
+  if (Object.hasOwn(rawBody, "thinkingDisplay") || Object.hasOwn(rawBody, "modelThinkingDisplay")) {
+    const displayError = applyThinkingDisplayPatchFields(next, rawBody);
+    if (displayError) return displayError;
+    touched = true;
+  }
   if (Object.hasOwn(rawBody, "noStructuredOutputModels")) {
     const value = rawBody.noStructuredOutputModels;
     if (value === null) {
@@ -708,23 +729,25 @@ function applyProviderPatchFields(
     }
     touched = true;
   }
-  if (Object.hasOwn(rawBody, "unsupportedHostedTools")) {
-    const value = rawBody.unsupportedHostedTools;
+  // The conditional list (#8204) shares the unconditional list's vocabulary and clearing rules.
+  for (const field of ["unsupportedHostedTools", "unsupportedHostedToolsWithClientTools"] as const) {
+    if (!Object.hasOwn(rawBody, field)) continue;
+    const value = rawBody[field];
     if (value === null) {
-      delete next.unsupportedHostedTools;
+      delete next[field];
     } else {
-      const error = nonBlankStringArrayConfigError(value, "unsupportedHostedTools");
+      const error = nonBlankStringArrayConfigError(value, field);
       if (error) return { error };
       const tools = normalizeNonBlankStringArray(value as string[]);
       const unknownTool = tools.find(tool => !DECLARABLE_HOSTED_TOOL_TYPES.has(tool));
       if (unknownTool !== undefined) {
         return {
-          error: `unsupportedHostedTools must name only hosted tool types: `
+          error: `${field} must name only hosted tool types: `
             + `${[...DECLARABLE_HOSTED_TOOL_TYPES].join(", ")}`,
         };
       }
-      if (tools.length > 0) next.unsupportedHostedTools = tools;
-      else delete next.unsupportedHostedTools;
+      if (tools.length > 0) next[field] = tools;
+      else delete next[field];
     }
     touched = true;
   }
@@ -848,40 +871,6 @@ function canonicalOpenAiBudgetPatchError(
     ?? providerEmptyToolOutputConfigError("openai", applied.next);
 }
 
-function providerRoutingQuota(config: OcxConfig, name: string, now: number): ProviderRoutingQuota {
-  const provider = hasOwnProvider(config.providers, name) ? config.providers[name] : undefined;
-  const quota = getCachedProviderRoutingQuota(name, provider, now);
-  if (!quota || !Number.isFinite(quota.updatedAt) || quota.updatedAt < 0 || quota.updatedAt > now
-    || now >= quota.updatedAt + PROVIDER_QUOTA_MAX_AGE_MS) return { state: "unknown" };
-
-  // Removing search/MCP windows may leave only a timestamp. That is not inference evidence.
-  const percentages = [quota.fiveHourPercent, quota.weeklyPercent, quota.monthlyPercent,
-    ...(quota.customWindows ?? []).filter(window => window.modelId === undefined).map(window => window.percent)];
-  const hasPercentage = percentages.some(value => typeof value === "number" && Number.isFinite(value) && value >= 0);
-  const credits = quota.creditsUsd;
-  const hasCredits = credits !== undefined && Number.isFinite(credits.percent)
-    && credits.percent >= 0 && Number.isFinite(credits.remaining);
-  if (!hasPercentage && !hasCredits) return { state: "unknown" };
-
-  const state = cachedProviderQuotaIsExhausted(quota, now) ? "exhausted" : "available";
-  let validUntil = quota.updatedAt + PROVIDER_QUOTA_MAX_AGE_MS;
-  if (state === "exhausted") {
-    const resets = [quota.fiveHourResetAt, quota.weeklyResetAt, quota.monthlyResetAt,
-      ...(quota.customWindows ?? []).filter(window => window.modelId === undefined).map(window => window.resetAt)]
-      .filter((reset): reset is number => typeof reset === "number" && Number.isFinite(reset)
-        && reset > now && reset < validUntil)
-      .sort((left, right) => left - right);
-    // Reuse dispatch's predicate: another exhausted window or USD cap may still block.
-    for (const reset of resets) {
-      if (!cachedProviderQuotaIsExhausted(quota, reset)) {
-        validUntil = reset;
-        break;
-      }
-    }
-  }
-  return { state, updatedAt: quota.updatedAt, validUntil };
-}
-
 export async function handleProviderRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url, config, deps, principal, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 
@@ -891,6 +880,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const now = Date.now();
     return jsonResponse({
       ...snapshot,
+      passiveKeyLimits: listPassiveKeyLimits(config),
       reports: snapshot.reports.map(report => ({
         ...report,
         routingQuota: providerRoutingQuota(config, report.provider, now),
@@ -903,12 +893,14 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
 
   if (url.pathname === "/api/providers" && req.method === "GET") {
     return jsonResponse(Object.entries(config.providers).map(([name, p]) => ({
-      name, adapter: p.adapter, baseUrl: publicProviderBaseUrl(p.baseUrl), defaultModel: p.defaultModel, hasApiKey: !!p.apiKey,
+      name, adapter: p.adapter, baseUrl: publicProviderBaseUrl(p.baseUrl), defaultModel: p.defaultModel,
+      hasApiKey: providerHasStoredApiKey(p),
       // Presence only (#959 review): header names and values never leave the process.
       hasHeaders: !!p.headers && Object.keys(p.headers).length > 0,
       allowPrivateNetwork: p.allowPrivateNetwork === true,
       preserveResponsesReasoningContent: p.preserveResponsesReasoningContent,
       promoteAdditionalTools: p.promoteAdditionalTools,
+      forwardAdvisorTool: p.forwardAdvisorTool,
       liveModels: p.liveModels !== false,
       requestPacing: p.requestPacing,
       models: p.models ?? [],
@@ -925,6 +917,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       noStructuredOutputModels: p.noStructuredOutputModels,
       noJsonSchemaModels: p.noJsonSchemaModels,
       unsupportedHostedTools: p.unsupportedHostedTools,
+      unsupportedHostedToolsWithClientTools: p.unsupportedHostedToolsWithClientTools,
       retainModels: p.retainModels,
       omitReasoningEffortWithToolsModels: p.omitReasoningEffortWithToolsModels,
       upstreamHttpVersion: p.upstreamHttpVersion,
@@ -1009,6 +1002,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     if (sourceChanged || currentDiskConfig === null) {
       return jsonResponse({ error: "provider reload source changed" }, 409);
     }
+    clearPassiveKeyLimits(name);
     reconcileLiveStateStores();
     // The complete disk snapshot owns display overlays, including providers that this
     // live routing instance deliberately does not adopt.
@@ -1116,6 +1110,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
 
     cleanupRemovedGcpCredentials(removedCredentials);
     adoptProviderEditorCandidate(config, outcome.value.config);
+    clearPassiveKeyLimits();
     reconcileLiveStateStores();
     refreshConfigDerivedRegistries(outcome.value.config);
     clearGatherRoutedModelsInflight();
@@ -1257,6 +1252,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // An overwrite must not spend a second subscription account's quota as a side effect.
     const existingFailover = config.providers[name]?.oauthAccountFailover;
     if (existingFailover && !prov.oauthAccountFailover) prov.oauthAccountFailover = existingFailover;
+
+    if (!Object.hasOwn(body.provider, "cacheAffinity") && config.providers[name]?.cacheAffinity !== undefined) {
+      prov.cacheAffinity = config.providers[name]!.cacheAffinity;
+    }
     // ...and to hand-edited context windows. `ProviderPayload` (gui/src/provider-payload.ts)
     // has no member for either field, so the add/edit form structurally cannot send them:
     // absence in the request means "not carried", never "the user deleted it". Deletion goes
@@ -1395,6 +1394,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       }
     });
     if (validationError !== undefined) return jsonResponse({ error: validationError }, 400);
+    clearPassiveKeyLimits(name);
     cleanupRemovedGcpCredentials(removedCredentials);
     reconcileLiveStateStores();
     if (prov.apiKey && prov.apiKeyPool) {
@@ -1586,9 +1586,18 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         const validation = validateConfigCandidate({ ...config, providers: { ...config.providers, [name]: candidate } });
         if (!validation.ok) { replayError = validation.error; return; }
       }
-      commitProviderPatch(config, () => {
-        config.providers[name] = candidate;
-      }, deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode);
+      const previousOwnership = passiveProviderOwnership(config.providers[name]);
+      try {
+        commitProviderPatch(config, () => {
+          config.providers[name] = candidate;
+        }, deps.saveConfigPreservingClaudeCode ?? saveConfigPreservingClaudeCode);
+      } finally {
+        // Persistence may rebase the row or publish before throwing. Compare the resulting
+        // live owner under the lock, after rollback when the save did not publish.
+        if (!isDeepStrictEqual(previousOwnership, passiveProviderOwnership(config.providers[name]))) {
+          clearPassiveKeyLimits(name);
+        }
+      }
     });
     if (replayError !== undefined) return jsonResponse({ error: replayError }, 409);
     reconcileLiveStateStores();
@@ -1601,7 +1610,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       success: true,
       name,
       disabled: config.providers[name]!.disabled === true,
-      hasApiKey: !!config.providers[name]!.apiKey,
+      hasApiKey: providerHasStoredApiKey(config.providers[name]!),
       ...(shadowDependency ? { dependentShadowIntercept: shadowDependency } : {}),
       ...(name === "xai"
         ? { xaiResponsesOptInState: xaiResponsesOptInState(config.providers[name]!) }
@@ -1652,8 +1661,14 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     const snapshot = prov.authMode === "oauth" && mayResolveModelsOAuth(name, config.providers[name])
       ? await getModelsOAuthAccessSnapshot(name, prov).catch(() => undefined)
       : undefined;
-    const apiKey = prov.authMode === "oauth" ? snapshot?.accessToken : await resolveModelsAuthToken(name, prov);
-    if (prov.authMode === "oauth" && !apiKey) {
+    const vertexDeadline = effectiveGoogleMode(name, prov) === "vertex" ? vertexDiscoveryDeadline(req.signal) : undefined;
+    let vertexAuth: VertexDiscoveryAuth | undefined;
+    const apiKey = prov.authMode === "oauth"
+      ? snapshot?.accessToken
+      : vertexDeadline
+        ? (vertexAuth = await resolveVertexDiscoveryAuth(prov, vertexDeadline))?.token
+        : await resolveModelsAuthToken(name, prov);
+    if ((prov.authMode === "oauth" || effectiveGoogleMode(name, prov) === "vertex") && !apiKey) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "static catalog only — upstream not verified (not logged in)" });
     }
     if (prov.adapter === "zed") return (await import("./zed-provider-probe")).probeZedProvider(prov, apiKey, snapshot?.providerUserId);
@@ -1702,34 +1717,15 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       });
     }
     if (prov.adapter === "qoder") {
-      const started = Date.now();
-      const profile = resolveQoderProfile(prov.baseUrl);
-      if (!profile) {
-        return jsonResponse({ ok: false, latencyMs: 0, error: "qoder discovery refused a non-canonical destination" });
-      }
-      const live = await fetchQoderModels(profile, apiKey ?? "");
-      const latencyMs = Date.now() - started;
-      if (!live.ok) {
-        return jsonResponse({
-          ok: false,
-          latencyMs,
-          error: `qoder discovery ${live.error}${live.detail ? `: ${live.detail}` : ""}`,
-        });
-      }
-      return jsonResponse({
-        ok: true,
-        latencyMs,
-        models: live.models.length,
-        message: `Connected. ${live.models.length} models.`,
-      });
+      // A late success re-syncs the catalog through the same convergence every mutation uses.
+      return (await import("./qoder-provider-probe")).probeQoderProvider(name, prov, apiKey, convergeCodexCatalog);
     }
     const project = prov.project ?? snapshot?.projectId;
     if (antigravity && !project) {
       return jsonResponse({ ok: false, latencyMs: 0, error: "Antigravity project unavailable — re-run `ocx login google-antigravity`" });
     }
-    const { method, url: modelsUrl, headers } = buildModelsRequest(prov, apiKey, name, {
-      oauthApiBaseUrl: snapshot?.apiBaseUrl, workbuddy: snapshot?.workbuddy,
-    });
+    const { method, url: modelsUrl, headers } = buildVertexProviderModelsRequest(name, prov, apiKey)
+      ?? buildModelsRequest(prov, apiKey, name, { oauthApiBaseUrl: snapshot?.apiBaseUrl, workbuddy: snapshot?.workbuddy });
     const discovery = resolveProviderModelDiscovery(name, prov);
     const started = Date.now();
     try {
@@ -1737,9 +1733,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       // own fixed discovery URL survives purely-benchmark (Clash/Surge/Mihomo
       // fake-IP) DNS without proxy env.
       const outboundDependencies = { isCanonicalUrl: isRegistryModelDiscoveryUrl,
-        beforeSend: () => prov.authMode !== "oauth" || (mayResolveModelsOAuth(name, config.providers[name])
+        beforeSend: () => (!vertexAuth || vertexDiscoveryAuthIsCurrent(prov, vertexAuth, headers))
+          && (prov.authMode !== "oauth" || (mayResolveModelsOAuth(name, config.providers[name])
           && modelsOAuthTargetMatches(name, config.providers[name], authorizedTarget)
-          && (name !== "anthropic2" || new URL(modelsUrl).href === authorizedTarget)) };
+          && (name !== "anthropic2" || new URL(modelsUrl).href === authorizedTarget))) };
       const res = method === "POST"
         ? await providerOutboundPost(name, prov, modelsUrl, {
           headers,
@@ -1748,7 +1745,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         }, outboundDependencies)
         : await providerOutboundGet(name, prov, modelsUrl, {
           headers,
-          signal: AbortSignal.timeout(8000),
+          signal: vertexDeadline ?? AbortSignal.timeout(8000),
         }, outboundDependencies);
       const latencyMs = Date.now() - started;
       const redirectError = await providerRedirectError(res, modelsUrl);
@@ -1767,7 +1764,8 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         }
         return jsonResponse({ ok: false, latencyMs, error: `upstream model discovery returned ${res.status}` });
       }
-      const bounded = await readBoundedDiscoveryJson(res, discovery.maxResponseBytes);
+      const vertexFirstPage = vertexDeadline ? countDiscoveryResponseBytes(res) : undefined;
+      const bounded = await readBoundedDiscoveryJson(vertexFirstPage?.response ?? res, discovery.maxResponseBytes);
       if (!bounded.ok) {
         return jsonResponse({
           ok: false,
@@ -1781,30 +1779,34 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       if (antigravity && !ccaModels) {
         return jsonResponse({ ok: false, latencyMs, error: "upstream CCA model discovery returned an unexpected shape" });
       }
+      const listing = !ccaModels && vertexDeadline
+        ? await collectVertexPublisherModelPages(modelsUrl, bounded.value,
+          { ...discovery, firstPageBytes: vertexFirstPage?.bytes(), signal: vertexDeadline },
+          (pageUrl, signal) => providerOutboundGet(name, prov, pageUrl, { headers, signal }, outboundDependencies))
+        : { ok: true as const, value: bounded.value };
+      if (!listing.ok) return jsonResponse({ ok: false, latencyMs, error: `upstream Vertex model listing is incomplete: ${listing.diagnostic}` });
       // OpenAI-style lists (and Together top-level arrays) use the same validation/dedupe/filter
       // as catalog discovery. Google AI Studio parses the native `models[]` envelope and filters to
       // `generateContent`, while other providers fall back to generic envelope rows if they return `models[]`.
-      const record = bounded.value !== null && typeof bounded.value === "object" && !Array.isArray(bounded.value)
-        ? bounded.value as Record<string, unknown>
+      const record = listing.value !== null && typeof listing.value === "object" && !Array.isArray(listing.value)
+        ? listing.value as Record<string, unknown>
         : undefined;
-      const isAiStudio = effectiveGoogleMode(name, prov) === "ai-studio";
-      const googleAiStudio = !ccaModels && isAiStudio
-        ? extractGoogleAiStudioModelItems(bounded.value, discovery.maxModels)
+      const googleNative = !ccaModels
+        ? extractGoogleNativeModelItems(name, prov, listing.value, discovery.maxModels)
         : undefined;
       const extracted = ccaModels
         ? undefined
-        : googleAiStudio?.ok
-        ? googleAiStudio
-        : Array.isArray(bounded.value) || Array.isArray(record?.data)
-        ? extractProviderModelItems(bounded.value, discovery)
-        : extractModelEnvelopeRows(bounded.value, discovery.maxModels, ["models"]);
+        : googleNative
+        ?? (Array.isArray(listing.value) || Array.isArray(record?.data)
+          ? extractProviderModelItems(listing.value, discovery)
+          : extractModelEnvelopeRows(listing.value, discovery.maxModels, ["models"]));
       if (extracted && !extracted.ok) {
         return jsonResponse({
           ok: false,
           latencyMs,
           error: extracted.reason === "too_many_models"
             ? `upstream /models exceeded the ${discovery.maxModels}-row model limit`
-            : `upstream /models returned an unexpected shape${invalidModelDiscoveryHint("diagnostic" in extracted && typeof extracted.diagnostic === "string" ? extracted.diagnostic : undefined)}`,
+            : `upstream /models returned an unexpected shape${invalidModelDiscoveryHint("diagnostic" in extracted && typeof extracted.diagnostic === "string" ? extracted.diagnostic : undefined, discovery.skipInvalidRows === true)}`,
         });
       }
       const models = ccaModels?.length ?? ("items" in extracted! ? extracted!.items.length : extracted!.rows.length);
@@ -1812,7 +1814,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         ok: true,
         latencyMs,
         models,
-        message: `Connected — ${models} model${models === 1 ? "" : "s"} available.`,
+        message: `Connected — ${models} model${models === 1 ? "" : "s"} available${extracted && "skippedInvalidRows" in extracted && extracted.skippedInvalidRows ? ` (${extracted.skippedInvalidRows} invalid row${extracted.skippedInvalidRows === 1 ? "" : "s"} skipped)` : ""}.`,
       });
     } catch (err) {
       return jsonResponse({

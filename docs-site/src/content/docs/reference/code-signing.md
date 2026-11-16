@@ -6,14 +6,18 @@ description: How OpenCodex signs its Windows binaries through SignPath Foundatio
 OpenCodex is moving its Windows downloads, the standalone `ocx.exe` and the desktop installer
 `OpenCodex-<version>-windows-x64.msi`, to Authenticode code signing through
 [SignPath Foundation](https://signpath.org). A signed file tells Windows, SmartScreen and antivirus
-products who published it and that nobody changed it after the build, which is what stops
-unsigned-binary false positives like the one reported in
+products who published it and that nobody changed it after the build. Signing can reduce
+unsigned-binary warnings and false positives like the one reported in
 [#7207](https://github.com/lidge-jun/opencodex/issues/7207).
+It does not guarantee SmartScreen acceptance or prove that a file is safe:
+[Microsoft explains](https://learn.microsoft.com/windows/apps/package-and-deploy/smartscreen-reputation)
+that newly signed binaries can still trigger reputation warnings.
 
 Signing is rolling out. The release workflow is wired, and SignPath is validating it with a test
 certificate. Until the production certificate is issued, Windows release files stay unsigned, and
-SmartScreen may ask once (**More info → Run anyway**). Releases published after that switch carry
-a signature from **SignPath Foundation**.
+SmartScreen may ask once (**More info → Run anyway**). After that switch, the workflow attempts
+production signing through **SignPath Foundation**. If signing or verification fails, the release
+can still contain the original unsigned file, as described below.
 
 ## Code signing policy
 
@@ -30,11 +34,7 @@ SignPath Foundation policy forbids signing them with the project certificate.
 
 ### Privacy
 
-This program will not transfer any information to other networked systems unless specifically
-requested by the user or the person installing or operating it. In practice, OpenCodex forwards
-requests to the providers you configure. To look for new versions it also reads release
-metadata from GitHub and the npm registry, and those checks carry none of your prompts,
-credentials or usage data.
+opencodex sends one anonymous daily usage summary (a per-day install hash that changes daily, version, release channel, platform, install channel, provider kind, coarse model family, active minutes and request, token and error counts; never prompts, model outputs, keys, accounts, hostnames or paths) to telemetry.opencodex.me, and only after the person installing or operating it has seen the notice in the dashboard or an interactive CLI prompt and has not declined. It can be turned off in that notice, in the Windows installer ("Send anonymous usage statistics", checked by default), in Proxy details, or with ocx telemetry disable, OCX_TELEMETRY=0 or DO_NOT_TRACK=1. Only project-wide aggregates of this anonymous data are public. A separate public leaderboard profile is off unless you connect one yourself (dashboard Home or ocx telemetry profile connect); it shares only a chosen handle, display name and colour and your daily request, token and model-family totals, never your anonymous telemetry ID, and disconnecting deletes it. Everything else goes only to the providers and services you configure. To look for new versions, opencodex also reads release metadata from GitHub and the npm registry, and those version checks carry none of your prompts or credentials. See [Telemetry and Privacy](/guides/telemetry/).
 
 ## Verifying a download
 
@@ -85,7 +85,8 @@ Signing never blocks a release. What a run does depends on the policy:
 | `release-signing` | Signed and verified as trusted | Signed and verified as trusted |
 
 If a signing request fails, times out or is rejected, or if verification fails, the job logs a
-warning and ships the unsigned file together with its original updater signature.
+warning and ships the original unsigned file. An MSI retains its original updater signature
+when present; the standalone `ocx.exe` has no updater signature.
 
 **Switching to the production certificate.** Once SignPath issues it, set the repository variable
 `SIGNPATH_SIGNING_POLICY_SLUG` to `release-signing` (Settings → Secrets and variables → Actions →

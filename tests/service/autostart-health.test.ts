@@ -452,8 +452,9 @@ describe("routing visibility (#2411)", () => {
     // Routing that is already ours needs no re-point.
     expect(unusedProxyWarningLines({ proxyUp: true, routingKind: "opencodex-local", connectedClient: link })).toEqual([]);
     expect(unusedProxyWarningLines({ proxyUp: false, routingKind: "opencodex-local", connectedClient: link })).toEqual([]);
-    // Standalone wording is unchanged.
-    expect(unusedProxyWarningLines({ proxyUp: true, routingKind: "native" }).join("\n")).toContain("Re-point with: ocx start");
+    // Standalone: 'ocx start' refuses beside a live proxy (and under the desktop app), so the
+    // re-point is the command that writes routing to the running one.
+    expect(unusedProxyWarningLines({ proxyUp: true, routingKind: "native" }).join("\n")).toContain("Re-point with: ocx sync");
   });
 
   test("the dead-proxy restore advice names the way back only on a connected client", () => {
@@ -473,7 +474,7 @@ describe("routing visibility (#2411)", () => {
     expect(statusUnusedProxyLines(view(true, "link", "native", true)).join("\n")).toContain("not the Home. Re-point with: ocx sync --restart-codex");
     expect(statusUnusedProxyLines(view(true, undefined, "native", false)).join("\n")).toContain("not the hub");
     expect(statusUnusedProxyLines(view(true, "link", "native", false)).join("\n")).toContain("'ocx service start'");
-    expect(statusUnusedProxyLines(view(false, undefined, "native", true)).join("\n")).toContain("Re-point with: ocx start");
+    expect(statusUnusedProxyLines(view(false, undefined, "native", true)).join("\n")).toContain("Re-point with: ocx sync");
     expect(statusDeadProxyLines(view(true, "link", "opencodex-local", false)).join("\n")).toContain("ocx sync --restart-codex");
     expect(statusDeadProxyLines(view(false, undefined, "opencodex-local", false)).join("\n")).not.toContain("ocx sync");
     const routedDown = statusDeadProxyLines(view(true, "link", "opencodex-local", false)).join("\n");
@@ -767,7 +768,7 @@ test("desktop recovery guidance is scoped to routing owned by OpenCodex", () => 
     supervisor: { supervisorPid: 3131, runtimePid: 4242, app: "/fixture/opencodex-desktop" } };
   const local = deriveStartupHealth({ ...base, platform: "darwin", desktop });
   expect(local.recommendedCommand).toBeNull();
-  expect(local.recommendedAction).toContain("Turn on Start at Login");
+  expect(local.recommendedAction).toContain("Check Start at Login");
   const stopped = deriveStartupHealth({ ...base, platform: "darwin",
     desktop: { owned: true, loginEnabled: true, running: false, viable: false } });
   expect(stopped.recommendedAction).toBe("Reopen OpenCodex and check Start at Login.");

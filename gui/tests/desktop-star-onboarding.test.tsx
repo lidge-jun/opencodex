@@ -150,3 +150,43 @@ test("a disabled prompt is not shown and not marked seen", async () => {
   expect(host.querySelector(".star-onboarding")).toBeNull();
   expect(win.localStorage.getItem(STAR_ONBOARDING_KEY)).toBeNull();
 });
+
+test("onSettled waits until the star prompt closes when shown, and fires immediately when skipped", async () => {
+  setup(DESKTOP_UA);
+  let settledCount = 0;
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(
+      <LanguageProvider>
+        <DesktopStarOnboarding apiBase="" enabled onSettled={() => { settledCount += 1; }} />
+      </LanguageProvider>,
+    );
+  });
+  await act(async () => { await new Promise((r) => setTimeout(r, 1400)); });
+  expect(host.querySelector(".star-onboarding")).toBeTruthy();
+  expect(settledCount).toBe(0);
+
+  await act(async () => { click(host.querySelector(".star-onboarding .btn-ghost")!); });
+  expect(host.querySelector(".star-onboarding")).toBeNull();
+  expect(settledCount).toBe(1);
+});
+
+test("onSettled fires without opening the dialog when already starred or outside the desktop shell", async () => {
+  setup(DESKTOP_UA);
+  starState = "starred";
+  let settledCount = 0;
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(
+      <LanguageProvider>
+        <DesktopStarOnboarding apiBase="" enabled onSettled={() => { settledCount += 1; }} />
+      </LanguageProvider>,
+    );
+  });
+  expect(settledCount).toBe(0);
+  await act(async () => { await new Promise((r) => setTimeout(r, 1400)); });
+  expect(host.querySelector(".star-onboarding")).toBeNull();
+  expect(settledCount).toBe(1);
+});

@@ -10,11 +10,12 @@ import FileIntegrationPage from "./FileIntegrationPage";
 import ConsequenceDialog, { type ConsequenceCopy } from "./ConsequenceDialog";
 import { describeRefusal, describeAsideProfileOutcome } from "./refusal-copy";
 import type { AsideProfileOutcome } from "./aside-profile-contract";
+import { previewRecoveryFor, type PreviewRecovery } from "./preview-recovery";
 import {
   bindingFor,
   IntegrationApiError,
-  isIntegrationPreviewUnavailable,
   previewIntegrationMutation,
+  loadIntegrationState,
   toggleIntegration,
   type IntegrationMutationPlan,
 } from "./integration-api";
@@ -44,6 +45,7 @@ export default function AsideProfilesPage({ apiBase, active = true }: { apiBase:
     plan: IntegrationMutationPlan | null;
     loading: boolean;
     failure: string | null;
+    recovery: PreviewRecovery | null;
   } | null>(null);
   const previewAbortRef = useRef<AbortController | null>(null);
   const previewGenerationRef = useRef(0);
@@ -104,29 +106,50 @@ export default function AsideProfilesPage({ apiBase, active = true }: { apiBase:
       setPending(null);
     }
   };
-  const requestProfileMutation = async (profile: AsideProfileStatus, enabled: boolean) => {
-    if (pendingRef.current || planned) return;
+  const requestProfileMutation = async (
+    profile: AsideProfileStatus,
+    enabled: boolean,
+    /** Recovery replaces the failed plan it is retrying; the first request never does. */
+    replacing = false,
+  ) => {
+    if (pendingRef.current || (planned && !replacing)) return;
     const controller = new AbortController();
     const generation = previewGenerationRef.current + 1;
     previewGenerationRef.current = generation;
     previewAbortRef.current?.abort();
     previewAbortRef.current = controller;
-    setPlanned({ profile, enabled, plan: null, loading: true, failure: null });
+    setPlanned({ profile, enabled, plan: null, loading: true, failure: null, recovery: null });
     try {
       const plan = await previewIntegrationMutation(apiBase, "aside", enabled ? "apply" : "disable", controller.signal, profile.profileId);
       if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
       previewAbortRef.current = null;
-      setPlanned({ profile, enabled, plan, loading: false, failure: null });
+      setPlanned({ profile, enabled, plan, loading: false, failure: null, recovery: null });
     } catch (error) {
       if (controller.signal.aborted || generation !== previewGenerationRef.current) return;
       previewAbortRef.current = null;
-      if (isIntegrationPreviewUnavailable(error)) {
-        setPlanned(null);
-        resource.refresh();
-        return;
-      }
-      setPlanned({ profile, enabled, plan: null, loading: false, failure: t("integrations.preview.failed") });
+      // A missing retained roster is recoverable: keep the dialog and offer the
+      // ordinary profile read that fills it, so the retry can produce a plan.
+      const recovery = previewRecoveryFor(error);
+      setPlanned({
+        profile, enabled, plan: null, loading: false, recovery,
+        failure: recovery === null ? t("integrations.preview.failed") : null,
+      });
     }
+  };
+  const recoverPlanned = async () => {
+    const pendingPlan = planned;
+    if (!pendingPlan) return;
+    // Close and any newer preview move the generation; a stale recovery must not revive it.
+    const generation = previewGenerationRef.current;
+    try {
+      await loadIntegrationState(apiBase, "aside", undefined, pendingPlan.profile.profileId);
+    } catch {
+      // Fall through: the preview answers again, and a second banner here
+      // would only hide the refusal the user can act on.
+    }
+    if (generation !== previewGenerationRef.current) return;
+    resource.refresh();
+    await requestProfileMutation(pendingPlan.profile, pendingPlan.enabled, true);
   };
   const closePlanned = () => {
     previewGenerationRef.current += 1;
@@ -235,6 +258,8 @@ export default function AsideProfilesPage({ apiBase, active = true }: { apiBase:
           plan={planned.plan}
           planLoading={planned.loading}
           planFailure={planned.failure}
+          previewRecovery={planned.recovery}
+          onPreviewRecovery={recoverPlanned}
           onClose={closePlanned}
           onConfirm={async plan => {
             if (!plan) return;

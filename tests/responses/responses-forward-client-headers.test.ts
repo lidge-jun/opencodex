@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-responses/passthrough";
+import { copyResponsesClientMetadata } from "../../src/adapters/openai-responses/transport";
 import { providerForwardClientHeadersConfigError } from "../../src/config/provider-validation";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { providerConfigSeed } from "../../src/providers/derive";
@@ -29,6 +30,74 @@ function buildHeaders(provider: OcxProviderConfig, incoming: Record<string, stri
 }
 
 describe("openai-responses forwardClientHeaders", () => {
+  const codexMetadata = {
+    "x-codex-window-id": "caller-window-fixture",
+    "x-codex-installation-id": "caller-installation-fixture",
+  };
+  const gateway: OcxProviderConfig = {
+    adapter: "openai-responses", baseUrl: "https://gateway.example.test/v1",
+    authMode: "key", apiKey: "provider-key",
+  };
+
+  test.each(["key", "forward"] as const)("preserves opted-in Codex identifiers on a custom %s route", authMode => {
+    const selected = ["originator", " X-Codex-Window-ID ", "X-Codex-Installation-Id"];
+    expect(providerForwardClientHeadersConfigError(selected)).toBeNull();
+    expect(providerManagementConfigError("gateway", { ...gateway, forwardClientHeaders: selected })).toBeNull();
+    const headers = buildHeaders({ ...gateway, authMode, forwardClientHeaders: selected }, {
+      ...codexMetadata, originator: "codex_cli_rs", "user-agent": "CodexFixture/1.0",
+      authorization: "Bearer caller-secret",
+    });
+    for (const [name, value] of Object.entries(codexMetadata)) expect(headers[name]).toBe(value);
+    expect(headers.originator).toBe("codex_cli_rs");
+    expect(headers["user-agent"]).toBe("CodexFixture/1.0");
+    expect(headers.authorization).toBe(authMode === "key" ? "Bearer provider-key" : undefined);
+  });
+
+  test("Codex identifier forwarding is per-provider and never synthesizes absent fields", () => {
+    const names = Object.keys(codexMetadata);
+    const disabled = buildHeaders(gateway, codexMetadata);
+    const absent = buildHeaders({ ...gateway, forwardClientHeaders: names }, {});
+    const selected = buildHeaders({ ...gateway, forwardClientHeaders: [names[0]!] }, codexMetadata);
+    for (const name of names) {
+      expect(disabled[name]).toBeUndefined();
+      expect(absent[name]).toBeUndefined();
+    }
+    expect(selected["x-codex-window-id"]).toBe(codexMetadata["x-codex-window-id"]);
+    expect(selected["x-codex-installation-id"]).toBeUndefined();
+  });
+
+  test("configured Codex identifiers remain authoritative across compact metadata handoffs", () => {
+    const provider = { ...gateway, forwardClientHeaders: Object.keys(codexMetadata),
+      headers: { "X-Codex-Window-Id": "provider-window-fixture" } };
+    const headers = buildHeaders(provider, codexMetadata);
+    expect(headers["x-codex-window-id"]).toBe("provider-window-fixture");
+    expect(headers["x-codex-installation-id"]).toBe(codexMetadata["x-codex-installation-id"]);
+    const target = new Headers({ "X-Codex-Window-Id": "existing-window-fixture" });
+    copyResponsesClientMetadata(target, new Headers(codexMetadata), provider);
+    expect(target.get("x-codex-window-id")).toBe("existing-window-fixture");
+    expect(target.get("x-codex-installation-id")).toBe(codexMetadata["x-codex-installation-id"]);
+    const disabled = new Headers();
+    copyResponsesClientMetadata(disabled, new Headers(codexMetadata), gateway);
+    for (const name of Object.keys(codexMetadata)) expect(disabled.has(name)).toBe(false);
+  });
+
+  test("Codex metadata opt-in still rejects arbitrary prefixes and authentication evidence", () => {
+    const blocked = ["x-codex-*", "x-codex-secret", "x-codex-turn-metadata",
+      "x-oai-attestation", "x-openai-agent-assertion", "authorization", "cookie", "chatgpt-account-id"];
+    const incoming = { ...codexMetadata, ...Object.fromEntries(blocked.map(name => [name, "private-fixture"])) };
+    const provider = { ...gateway, forwardClientHeaders: [...Object.keys(codexMetadata), ...blocked] };
+    const headers = buildHeaders(provider, incoming);
+    const compact = new Headers();
+    copyResponsesClientMetadata(compact, new Headers(incoming), provider);
+    for (const name of blocked) {
+      expect(providerForwardClientHeadersConfigError([name])).not.toBeNull();
+      expect(headers[name]).toBe(name === "authorization" ? "Bearer provider-key" : undefined);
+      expect(compact.has(name)).toBe(false);
+    }
+    expect(providerForwardClientHeadersConfigError(["x-codex-window-id", "X-Codex-Window-Id"]))
+      .toContain("must not repeat");
+  });
+
   test("copies only selected caller metadata while provider headers remain authoritative", () => {
     const headers = buildHeaders({
       adapter: "openai-responses",

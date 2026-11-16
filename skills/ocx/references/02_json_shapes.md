@@ -398,6 +398,33 @@ Disabled Hub observation (outer HTTP 200) instead prints `available:false`, a fi
 activation/Hub reason, `devices:[]`, `runtimes:{}`, `sessions:[]` and exits 1. Inner
 HTTP 409 exits 5 with stderr and no fabricated empty success.
 
+## Remote Link Child block and job document
+
+On a Home, each `ocx link status` row can carry `child`:
+`{homeVersion, runningVersion, installedVersion, installKind, versionSkew, update:{route, reason, observedAt},
+catalog:{state, pulledAt, homeChangedAt}, codex, activity:{idle, inFlight, lastDataEndAt}, activeJob, lastOperation}`.
+`installedVersion`, `installKind` and `update` come from the last `ocx link check` and are null until one ran;
+`runningVersion` is the version the Child sent over the link. `versionSkew` is `same`, `behind`, `ahead` or
+`unknown` (always `unknown` for an `ocx-child`). `catalog.state` is `current` when the Child's last pulled or
+synced catalog has the Home's current etag, `behind` when not and `unknown` without a pull; a pull proves a fetch,
+not that the Child applied it. `activity.idle` means no relayed model turn for 10 minutes; it is false when the
+Home cannot tell. `codex` is null for now. Times are epoch milliseconds except the ISO `observedAt`. The CLI
+drops keys it does not know and reads an unknown enum value as `unknown`.
+
+`ocx link check|update|sync|restart-codex` print an `ocx.link.child-job/1` document:
+`{schema, jobId, op:"observe"|"sync"|"restart-codex"|"update", trigger:"manual"|"auto", restart:"none"|"app-server"|"codex",
+state:"queued"|"running"|"done", createdAt, finishedAt, items}`, each item
+`{linkId, alias, state, reason, hint?, fromVersion?, toVersion?, sync?, restart?, startedAt, finishedAt}`.
+`sync` is `{state:"synced"|"skipped"|"failed"|"timed-out", reason}` for the pinned sync the item ran;
+`restart` is `{requested:"app-server"|"codex", outcome}` with `outcome` `requested` (sent, not confirmed),
+`unsupported` (Windows or `ocx-child`), `not-run` (the sync before it failed) or `skipped` (a relayed request was in
+flight). Item states are `queued` and `running` while the job runs (a `--no-wait` document can carry them), then `succeeded`, `up-to-date`, `busy`, `offline`, `refused`, `owner-action`,
+`unsupported`, `failed` and `uncertain`. Reasons are closed tokens such as `legacy-ocx`, `child-initiated`,
+`ssh-failed`, `link-removed`, `link-operation-in-progress`, `restart-skipped:link-active`,
+`restart-result-unknown`, `post-update-sync-failed`, `rolled-back`, `windows-apply` or `launcher-node-missing`;
+`hint` is operator guidance written by the Home. No remote output is included. The CLI drops keys it does not
+know and keeps an enum value it does not know for display.
+
 ## Maintenance receipts
 
 New storage policy setters return `{ok:true,policy,job:{status}}`. Policy preserves

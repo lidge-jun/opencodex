@@ -229,6 +229,22 @@ describe("ocx stop under an update handover", () => {
     expect(receiptNames()).toEqual([]);
   });
 
+  test("a manager-stopped Link Child cannot leave a standalone update-handover receipt", () => {
+    const serverUrl = "http://127.0.0.1:10200";
+    writeFileSync(join(home, "config.json"), JSON.stringify({ runtimeRole: "client", providers: {}, defaultProvider: "openai", client: {
+      serverUrl, managementUrl: serverUrl, managementTransport: "direct", transport: "link",
+      link: { tunnelPort: 10200, linkId: "lnk_0123456789abcdef" }, selectedClients: ["codex"],
+      tokenEnv: "OPENCODEX_API_AUTH_TOKEN", apiKeyId: "fixture-client", tokenFingerprint: "a".repeat(64),
+      protocolVersion: 1, connectedAt: "2026-10-01T00:00:00.000Z",
+    } }));
+    const run = runStop(true, { managerCascades: true, deadPidReadsNull: true });
+    expect(run.exitCode, run.stderr).toBe(0);
+    expect(run.calls).toMatchObject({ native: 1, grok: 1, service: 1 });
+    expect(run.receiptExists).toBe(false);
+    expect(receiptNames()).toEqual([]);
+    expect(JSON.parse(run.stdout)).toMatchObject({ sharedTeardown: "restored", exitCode: 0 });
+  });
+
   test("without a runtime record the stop restores instead of handing over a guessed receipt", () => {
     const run = runStop(true, { noRuntimeRecord: true, nativeSignal: true });
     expect(run.exitCode, run.stderr).toBe(0);
@@ -376,6 +392,11 @@ describe("dashboard update job", () => {
         } }),
         resolvePnpmActiveLauncherFn: () => "/pnpm/owner/global/v11/node_modules/@bitkyc08/opencodex/bin/ocx.mjs",
         integrityFn: () => ({ ok: true as const, integrity: "sha512-testfixturevalue000000000" }),
+        serviceHomeAuthorityFn: () => ({ kind: "absent" }),
+        launcherSupportsUpdateHomeFn: () => true,
+        // This fixture checks the update child's environment, not a real Windows tray process.
+        trayHandoffFn: () => ({ installed: false, running: false, stopBeforeReplacement: false,
+          refreshAfterReplacement: false, restoreOnFailure: false, installArgs: ["tray", "install", "--no-start"] }),
         // Only the environment handed to the update child matters here; failing the command
         // ends the job before any restart work, which other suites already cover.
         runCommandFn: (_job, _bin, _args, _timeout, env) => { updateEnv = env; return { status: 1, signal: null }; },

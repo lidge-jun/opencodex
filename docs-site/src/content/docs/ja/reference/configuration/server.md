@@ -10,7 +10,7 @@ description: リスナー、リモート アクセス、アドミッション �
 |フィールド |タイプ |デフォルト |意味 |
 | --- | --- | --- | --- |
 | `port` | `number` | `10100` |プロキシリッスンポート。 |
-| `hostname?` | `string` | `"127.0.0.1"` |バインドアドレス。非ループバック バインドには `OPENCODEX_API_AUTH_TOKEN` が必要です。 |
+| `hostname?` | `string` | `"127.0.0.1"` | バインド先。非ループバックでは `config.apiKeys` のクライアントキー、または `OPENCODEX_API_AUTH_TOKEN` → `OCX_API_TOKEN_FILE` → 所有者専用のインストール済み `service-api-token` から解決される共有データトークンが必要です。[リモートアクセス](#remote-access)を参照してください。 |
 | `proxy?` | `string` | — |送信 HTTP(S) または SOCKS5 プロキシ URL（`socks5://host:port`）または `${ENV_VAR}`。HTTP URL は未設定時のみ `HTTP_PROXY` / `HTTPS_PROXY` に適用されます。SOCKS5 URL は組み込みの SOCKS5 トンネルを使用し、`ALL_PROXY` にも適用されます（`ocx start --socks5`）。このプロセスで継承した `HTTP(S)_PROXY` はクリアされます。ループバックは `NO_PROXY` に残ります。 |
 | `emptyCompletionRetry?` | `boolean` | `false` | テキストもツール呼び出しもない Responses ターンを、ターミナルイベント前にストリームが終了した場合も含め、同一リクエストで 1 回再試行するよう明示的に有効化します。再試行は課金対象になる場合があります。`OCX_EMPTY_COMPLETION_RETRY=0` で設定を変更せず無効化できます。combo と routed-compaction turn は対象外です。 |
 | `dropCodexSafetyBuffering?` | `boolean` | `false` | Codex Responses パススルーから Codex の safety-buffering ヒントを除去します。対象は `x-codex-safety-buffering-enabled` / `x-codex-safety-buffering-faster-model` 応答ヘッダー、`safety_buffering` 型の `response.metadata` SSE イベント、およびその他の SSE イベントにある `safety_buffering` フィールドです。Codex TUI はこれらを、既定の操作でセッションをより弱いモデルに切り替える「より高速なモデルで再試行」プロンプトとして表示します。その他の `x-codex-*` ヘッダーと SSE イベントの内容は、そのフィールドの除去を除いて変更せずに転送されます。既定ではオフです。 |
@@ -32,6 +32,7 @@ description: リスナー、リモート アクセス、アドミッション �
 | `webSearchSidecar?` | `OcxWebSearchSidecarConfig` |使用可能な場合はオン | Web 検索サイドカー オプション。 |
 | `visionSidecar?` | `OcxVisionSidecarConfig` |使用可能な場合はオン |画像説明サイドカー オプション。 |
 | `images?` | `OcxImagesConfig` | OpenAI の自動選択 | Codex `image_gen` のスタンドアロン イメージ リレー オプション。 |
+| `telemetry?` | `OcxTelemetryConfig` | 人間への通知後に既定でオン | 匿名の1日ごとの利用統計テレメトリの同意状態（`decision`、`decidedAt`、`noticeShownAt`）。人が通知を見るか同意するまで何も送信されません。`OCX_TELEMETRY=0` または `DO_NOT_TRACK=1` で上書きされます。[テレメトリ (`telemetry`)](#テレメトリ-telemetry) と [テレメトリとプライバシー](/ja/guides/telemetry/) を参照してください。 |
 
 バックアップ サポートが存在する前に古い開発ビルドで再開履歴メタデータが変更された場合は、`ocx recover-history --legacy-openai --yes` を実行してネイティブ プロバイダーの回復を強制します。
 このコマンドは、正当な専用プロバイダー履歴を含む、ユーザーメッセージを持つすべての `opencodex` 行を再ラベル付けします。実行前にライフサイクル リファレンスの全範囲に関する警告を確認してください。
@@ -40,16 +41,18 @@ description: リスナー、リモート アクセス、アドミッション �
 
 ネイティブ Chat も上流出力の待機に `stallTimeoutSec` を使用します。空でないテキスト、推論、拒否内容、ツール更新、完了イベントは待機時間を更新しますが、キープアライブのコメント、ロールのみのイベント、使用量のみのイベントは更新しません。低速クライアントの読み取り待ちは計時を停止します。タイムアウト時は `upstream_stall_timeout` が返り、ストリーミングではエラーイベント、非ストリーミングでは HTTP 502 になります。終端結果より前のキャンセルは成功した部分回答ではなくキャンセルエラーになります。非ストリーミング Chat は LF、CRLF、複数行 data の SSE に対応します。
 
+<a id="remote-access"></a>
+
 ## リモートアクセス
 
-デフォルトの `127.0.0.1` バインドはループバックのみです。 `0.0.0.0` などの非ループバック アドレスには、`/api/*` とデータ プレーンの両方でトークン認証が必要です。開始する前にトークンをエクスポートします。
+既定の `127.0.0.1` はループバック専用です。`0.0.0.0` などへの非ループバックバインドでは、モデルリクエストに `config.apiKeys` のクライアントキーまたは共有データトークンが必要です。管理ルート `/api/*` はループバックでも独立した `OPENCODEX_ADMIN_AUTH_TOKEN` または生成済み管理トークンを使います。データ認証情報で管理アクセスはできません。管理トークンをモデルクライアントに渡さないでください。
 
 ```bash
 export OPENCODEX_API_AUTH_TOKEN="your-secret-token"
 ocx start
 ```
 
-プロキシは、この変数がないとリモート バインドを拒否します。バックグラウンド サービスの場合は、`ocx service install` の前にエクスポートして、launchd、systemd、またはタスク スケジューラがそれを受信できるようにします。クライアントは以下を送信する必要があります:
+例は環境トークンを使います。`OCX_API_TOKEN_FILE` または所有者専用の `service-api-token` にトークンがある場合や、有効なクライアントキーを設定済みの場合、変数のエクスポートは不要です。`ocx service install` は不足するトークンファイルを作成でき、この変数のエクスポートを必須にしません。モデルクライアントは次のヘッダーを送れます。
 
 ```text
 x-opencodex-api-key: your-secret-token
@@ -57,13 +60,13 @@ x-opencodex-api-key: your-secret-token
 
 |エンドポイント | `Authorization: Bearer` | `x-opencodex-api-key` | `x-api-key` |
 | --- | --- | --- | --- |
-| `/v1/responses` |受け入れられません | **必須** |受け入れられません |
-| `/v1/chat/completions` |受け入れられません | **必須** |受け入れられません |
+| `/v1/responses` | 受け入れられる | 受け入れられる | 受け入れられません |
+| `/v1/chat/completions` | 受け入れられる | 受け入れられる | 受け入れられません |
 | `/v1/messages` |受け入れられました |受け入れられました |受け入れられました |
 | `/v1/messages/count_tokens` |受け入れられました |受け入れられました |受け入れられました |
 | `/v1/models` |受け入れられました |受け入れられました |受け入れられました |
 
-応答とチャット完了では、Codex Direct パススルーの可能性のために `Authorization` を予約しているため、そこでは専用のアドミッション ヘッダーのみが受け入れられます。ダッシュボードで生成された `apiKeys` は、起動後に環境トークンを置き換える可能性があります。候補値は定数時間で比較されます。
+Responses と Chat Completions は、認識されたデータプレーン認証情報を `x-opencodex-api-key`、またはその専用ヘッダーがないか、前後の空白を除去すると空になる場合は `Authorization: Bearer` で受け付けます。前後の空白を除去して空でない専用ヘッダーがあれば、無効でも優先され、有効な bearer でその拒否を回避できません。無関係な bearer はプロキシへのアクセスを許可せず、この経路は `x-api-key` を受け付けません。生成された `apiKeys` と共有データトークンは定数時間で比較されます。管理認証情報はモデルアクセスを許可しません。
 
 Messages と `count_tokens` はルーティングクライアントとの互換性のために 3 つの admission 形式を引き続き受け入れます。
 ただし非ループバック bind のネイティブ Anthropic パススルーでは、プロキシ admission は
@@ -93,6 +96,35 @@ ssh -L 20100:localhost:10100 -L 1455:localhost:1455 you@remote
 :::caution[転送されたループバックは認証されていません]
 プレーン `ssh -L` はローカル ループバックでリッスンし、デフォルトの非認証バインドに対して安全です。 `ssh -g -L`、ブロードコンテナパブリッシング、または `0.0.0.0` でクライアント側を公開する転送モードを使用しないでください。不明な場合は、`ssh -L 127.0.0.1:20100:localhost:10100` と明示的にバインドします。
 :::
+
+## テレメトリ (`telemetry`)
+
+匿名の1日ごとの利用統計テレメトリは、人が通知（GUI ポップアップまたは対話型ターミナルのプロンプト）を見た後にのみ既定でオンになります。`config.json` の `telemetry` ブロックはこの同意状態を記録します。
+
+```json
+{
+  "telemetry": {
+    "decision": "accepted",
+    "decidedAt": "2026-11-07T09:00:00.000Z",
+    "noticeShownAt": "2026-11-07T09:00:00.000Z"
+  }
+}
+```
+
+| フィールド | 型 | 既定値 | 説明 |
+| --- | --- | --- | --- |
+| `telemetry.decision?` | `"accepted" \| "declined"` | 未設定（未決定） | 明示的なユーザーの選択。`"declined"` はテレメトリを無効化し `<OPENCODEX_HOME>/telemetry-id.json` を削除します。`"accepted"` は日次レポートを有効化します。 |
+| `telemetry.decidedAt?` | `string` (ISO 8601) | 未設定 | `decision` が記録された UTC タイムスタンプ。`decidedAt ?? noticeShownAt` の UTC 日より後の完了済み UTC 暦日（`day > formatUtcDay(decidedAt ?? noticeShownAt)`）のみが送信され、同意当日およびそれ以前の日は送信されません。 |
+| `telemetry.noticeShownAt?` | `string` (ISO 8601) | 未設定 | ウェブダッシュボードまたは対話型ターミナルで人間が開示通知を見た UTC タイムスタンプ。`decision` が未設定の場合、`noticeShownAt` が設定されているときのみ送信され（`default-on`）、未設定なら `awaiting-notice` のまま待機します。 |
+
+コレクターのエンドポイント（`https://telemetry.opencodex.me/v1/events`）はコード定数であり、`config.json` では変更できません。
+
+2 つの環境変数が `config.json` より優先され、保存済み `config.json` を変更せずにテレメトリを即座に無効化します（起動時またはスケジューラのティックで検出されると `<OPENCODEX_HOME>/telemetry-state.json` に当日の UTC 日を `ineligibleThroughDay` として記録し `<OPENCODEX_HOME>/telemetry-id.json` を削除するため、後から変数を解除してもその期間の日次データは送信されず新しい ID が発行されます）。
+
+- `OCX_TELEMETRY=0`（大文字・小文字を問わず `false`、`off`、`no` も可）
+- `DO_NOT_TRACK=1`（大文字・小文字を問わず `true`、`yes` も可）
+
+`ocx config set telemetry` と `ocx config unset telemetry` は拒否され、`ocx config import` もすべての呼び出し元でインポートされた `telemetry` ブロックを無視して既存の状態を保持します。代わりに `ocx telemetry enable`（対話型ターミナルが必須で開示と確認を表示し、それ以外は `agent_consent_required` / `tty_required` で終了）、`ocx telemetry disable`、`ocx telemetry status [--json]`、またはダッシュボードの **プロキシ詳細** トグルを使用してください。ペイロードスキーマと保持ポリシーの詳細は [テレメトリとプライバシー](/ja/guides/telemetry/) を参照してください。
 
 ## ストレージのクリーンアップ
 

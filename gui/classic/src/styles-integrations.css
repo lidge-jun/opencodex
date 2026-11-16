@@ -1,0 +1,219 @@
+/* Integrations surfaces (devlog/_fin/260802_client_toggle_api/060).
+   Existing tokens only — no new color is introduced here. */
+
+/* Conflict and Cannot-verify are the two states a user must not misread as
+   ordinary drift, so they carry the same danger color with different weight:
+   filled for a conflict we can describe, outlined for a file we could not
+   even read. */
+.integration-badge--danger { background: var(--red-soft); color: var(--red); }
+.integration-badge--danger-outline { background: transparent; color: var(--red); border-color: var(--red); }
+
+.integration-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 18px; padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--raised); margin-bottom: 14px; }
+.integration-summary-cell { display: flex; flex-direction: column; gap: 2px; }
+.integration-summary-label { font-size: var(--text-caption); color: var(--muted); }
+.integration-summary .btn { margin-left: auto; }
+
+/* `stretch` (the grid default) already equalizes row heights; what varied was
+   the CONTENT height, because a two-line config path pushed the action row
+   down while a one-line one did not. Reserving the detail line's height keeps
+   the switches on one baseline across the row. */
+/* `minmax(260px, …)` is a floor the track cannot go under, so on a 320px viewport
+   the card stayed 260px wide inside a content box narrower than that and its action
+   row spilled out — measured at left=326, right=409 against a 320px page. Wrapping
+   the floor in `min()` keeps the two-column intent on wide screens while letting a
+   narrow one fall back to the width it actually has. */
+.integration-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: 12px; list-style: none; padding: 0; margin: 14px 0; }
+/*
+  One full-width row, not a wide card: no grid cell, no hover border, no
+  stretched title. `flex-wrap` is what keeps long German/Russian action copy
+  moving below the label at 320-390px instead of clipping.
+*/
+.integration-api-keys-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px 14px; margin: 14px 0 0; border: 1px solid var(--border); border-radius: var(--radius); background: var(--raised); }
+.integration-api-keys-copy { display: flex; flex-direction: column; gap: 2px; flex: 1 1 220px; min-width: 0; }
+.integration-api-keys-copy h4 { margin: 0; }
+.integration-api-keys-row .integration-meta { margin: 0; min-height: 0; }
+.integration-card { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--raised); }
+.integration-card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.integration-card-head h4 { margin: 0; }
+/* Stretched link: the title is the real control and its ::after covers the
+   card, so the whole card navigates from ONE tab stop named after the client.
+   The action row is lifted above that overlay — it needs `position` as well as
+   `z-index`, since neither the row nor the shared `.switch` sets one, and
+   without it the overlay silently swallows every toggle. */
+.integration-card-link { appearance: none; background: none; border: none; padding: 0; margin: 0; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.integration-card-link::after { content: ""; position: absolute; inset: 0; border-radius: var(--radius); }
+.integration-card-link:focus-visible { outline: none; }
+.integration-card-link:focus-visible::after { outline: 2px solid var(--accent-ring); outline-offset: -2px; }
+.integration-card:hover { border-color: var(--accent-ring); }
+/* The row that carried the overflow outward: a long action label used to push the
+   whole row past the card edge instead of moving to a second line. */
+.integration-card-actions { position: relative; z-index: 1; display: flex; flex-wrap: wrap; min-width: 0; align-items: center; gap: 10px; margin-top: auto; }
+.integration-card-actions .btn { margin-left: auto; }
+
+.integration-empty { padding: 20px; border: 1px dashed var(--border); border-radius: var(--radius); text-align: center; color: var(--muted); }
+
+.integration-client-head { display: flex; align-items: center; gap: 10px; }
+.integration-client-head h3 { margin: 0; }
+
+.droid-reasoning-panel { display: flex; flex-direction: column; gap: 12px; margin: 16px 0; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--raised); }
+.droid-reasoning-heading { display: flex; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
+.droid-reasoning-heading h4, .droid-reasoning-heading p { margin: 0; }
+.droid-reasoning-heading p { margin-top: 4px; }
+.droid-reasoning-list, .droid-reasoning-unsupported ul { list-style: none; padding: 0; margin: 0; }
+.droid-reasoning-row { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 10px 0; border-top: 1px solid var(--border-soft); }
+.droid-reasoning-model { display: grid; gap: 2px; min-width: 0; }
+.droid-reasoning-model code, .droid-reasoning-unsupported code { overflow-wrap: anywhere; }
+.droid-reasoning-unsupported { padding-top: 10px; border-top: 1px solid var(--border-soft); }
+.droid-reasoning-unsupported p { margin: 0 0 8px; color: var(--red); font-weight: var(--weight-semibold); }
+.droid-reasoning-unsupported li { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 4px 0; }
+.droid-reasoning-unsupported .btn { margin-left: auto; }
+
+/* One brand mark, four surfaces. Sized from a custom property so the same three
+   rules serve the 14px tab strip, the 20px overview card and the 24px client
+   page header without a variant class per size. */
+.client-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: var(--client-mark-size, 20px);
+  height: var(--client-mark-size, 20px);
+}
+
+.client-mark--img img {
+  width: 100%;
+  height: 100%;
+  border-radius: 2px;
+}
+
+/* A single-ink mark is painted with the surrounding text color instead of its
+   own, so it follows the theme. Without this a white-on-transparent logo is
+   invisible in light mode and a near-black one invisible in dark -- which is
+   not hypothetical, it shipped that way for prime, opencode and kimi. */
+.client-mark--mask {
+  background: var(--text);
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  -webkit-mask-size: contain;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+}
+
+/* Placeholder for a client whose vendor publishes no usable asset. Honest about
+   being one: muted, and the slot a real mark drops into later. */
+.client-mark--monogram {
+  font-size: var(--text-label);
+  font-weight: var(--weight-semibold);
+  color: var(--muted);
+  line-height: 1;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--raised);
+}
+
+/* The card head is space-between, so without this the badge would land between
+   the mark and the title. The title takes the free space instead. */
+.integration-card-head h4 { flex: 1 1 auto; min-width: 0; }
+
+.page-tab > .client-mark { margin-right: 6px; vertical-align: -2px; }
+.integration-client-head .switch { margin-left: auto; }
+
+/* A config path is the thing a user copies when a refusal tells them to
+   finish by hand, so it must never be truncated into uselessness. */
+.integration-path { font-family: var(--font-code); font-size: var(--text-caption); color: var(--muted); overflow-wrap: anywhere; margin: 4px 0; }
+.integration-meta { font-size: var(--text-caption); color: var(--muted); }
+/* Two lines of a long config path, so a card with a short path and a card with
+   a wrapped one land their action rows on the same line. */
+.integration-card .integration-path,
+.integration-card .integration-meta { margin: 0; min-height: calc(var(--text-caption) * var(--leading-ui) * 2); }
+
+/*
+  One boundary, separators inside.
+
+  The journal used to give every row its own border and radius, which read as a
+  stack of loose strips rather than a list — and both surfaces rendered up to
+  fifty of them under the real controls. A single container border with
+  `border-top` separators states the same grouping once.
+*/
+.integration-history { margin: 8px 0; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--raised); overflow: hidden; }
+.integration-history-list { list-style: none; padding: 0; margin: 0; }
+.integration-history-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 12px; }
+/* Separators only BETWEEN rows: the container already draws the outer edges,
+   and the disclosure below supplies its own top rule. */
+.integration-history-list .integration-history-row + .integration-history-row { border-top: 1px solid var(--border-soft); }
+.integration-history-older { border-top: 1px solid var(--border-soft); }
+.integration-history-older > summary { padding: 8px 12px; color: var(--muted); font-size: var(--text-caption); cursor: pointer; }
+.integration-history-older > summary:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: -2px; }
+/* The disclosure's own rows sit under the summary, so the first one needs the
+   separator the sibling selector above cannot give it. */
+.integration-history-older .integration-history-row:first-child { border-top: 1px solid var(--border-soft); }
+.integration-history-more { margin: 8px 12px; }
+.integration-history-kind { font-family: var(--font-code); font-size: var(--text-caption); font-weight: var(--weight-semibold); }
+.integration-history-client { font-size: var(--text-caption); color: var(--muted); }
+.integration-history-at { font-size: var(--text-caption); color: var(--muted); margin-right: auto; }
+
+/*
+  At 320-390px the timestamp and the action stop fitting on the label's line.
+  `margin-right: auto` on the timestamp keeps pushing the button to the far
+  edge of whatever line it lands on, so the row needs an explicit stacked
+  arrangement rather than relying on wrap alone.
+*/
+@media (max-width: 420px) {
+  .integration-history-at { margin-right: 0; flex: 1 1 100%; }
+  .integration-history-row .btn { margin-left: auto; }
+}
+
+.integration-restore-dialog .integration-path { margin: 10px 0; }
+/* A missing-store remedy names a path that may have no break opportunity (a long Windows path).
+   The notice text is a flex child, so it needs min-width: 0 before it can wrap. */
+.integration-client-page .notice > span { min-width: 0; overflow-wrap: anywhere; }
+
+/* Consequence facts are read in a fixed order; spacing separates the four
+   questions without turning them into decorative cards. */
+.integration-consequence-body { display: flex; flex-direction: column; gap: 12px; }
+.integration-consequence-body p { margin: 0; font-size: var(--text-caption); line-height: var(--leading-body); }
+.integration-consequence-body code { font-family: var(--font-code); font-size: inherit; overflow-wrap: anywhere; }
+.integration-plan { margin-top: 14px; }
+.integration-plan h4, .integration-plan h5 { margin: 0 0 8px; }
+.integration-plan-group + .integration-plan-group { margin-top: 14px; }
+.integration-plan-details { display: flex; flex-direction: column; gap: 8px; }
+.integration-plan-details p { margin: 0; overflow-wrap: anywhere; }
+.integration-plan-changes { margin: 0; padding-inline-start: 20px; }
+.integration-plan-changes li { margin: 4px 0; }
+.integration-plan-changes code { font-family: var(--font-code); overflow-wrap: anywhere; }
+
+/* The Claude Code connection switch, relocated out of the sidebar. */
+
+/* Cursor tab: a read-only companion page — detection, the two gateway values, last-seen, and the model table. */
+.cursor-page { display: flex; flex-direction: column; gap: 14px; }
+.cursor-card { display: flex; flex-direction: column; gap: 8px; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--raised); }
+.cursor-card h4 { margin: 0; }
+.cursor-detect-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cursor-detect-name { font-weight: var(--weight-semibold); min-width: 12ch; }
+.cursor-detect-path { font-family: var(--font-code); font-size: var(--text-caption); overflow-wrap: anywhere; }
+.cursor-gateway-row { display: grid; grid-template-columns: minmax(7ch, auto) 1fr auto; align-items: center; gap: 10px; }
+.cursor-gateway-label { font-weight: var(--weight-semibold); }
+.cursor-gateway-value { font-family: var(--font-code); padding: 4px 8px; border-radius: var(--radius); background: var(--bg); border: 1px solid var(--border); overflow-wrap: anywhere; }
+.cursor-model-table { width: 100%; border-collapse: collapse; font-size: var(--text-caption); }
+.cursor-model-table th, .cursor-model-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.cursor-model-table th { font-weight: var(--weight-semibold); color: var(--muted); }
+.cursor-effort-rows { margin-left: .5rem; font-size: .85em; }
+
+.aside-profile-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+.aside-profile-toolbar > .btn { margin-left: auto; }
+.aside-profile-list { border-top: 1px solid var(--border); }
+.hermes-profile-list { list-style: none; margin: 0; padding: 0; }
+.aside-profile-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 16px; padding: 16px 0; border-bottom: 1px solid var(--border); }
+.aside-profile-info { min-width: 0; display: grid; gap: 4px; justify-items: start; }
+.aside-profile-name { padding: 2px 0; min-height: 28px; max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: left; }
+.aside-profile-meta, .aside-profile-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.aside-profile-meta code { color: var(--muted); }
+.aside-profile-controls { justify-content: flex-end; }
+@media (max-width: 560px) {
+  .aside-profile-row { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .aside-profile-controls { width: 100%; justify-content: flex-start; }
+  .aside-profile-controls > .switch { margin-left: auto; }
+  .aside-profile-toolbar > .btn { margin-left: 0; }
+}
+.aside-profile-failure { white-space: pre-line; overflow-wrap: anywhere; }

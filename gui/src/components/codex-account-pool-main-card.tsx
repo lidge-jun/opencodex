@@ -1,9 +1,8 @@
 import type { ReactNode } from "react";
-import { IconLock, IconPause, IconPlay, IconPlus, IconRefresh, IconTicket } from "../icons";
+import { IconLock, IconPause, IconPlay, IconPlus, IconRefresh } from "../icons";
 import AccountPriorityControl, { AccountPriorityBadge } from "./AccountPriorityControl";
 import AccountAutoSwitchControl from "./AccountAutoSwitchControl";
 import { AccountCreditsToggle, CreditsOnBadge } from "./CodexCreditSpend";
-import QuotaBars from "./QuotaBars";
 import CodexCreditsRow from "./CodexCreditsRow";
 import { useI18n } from "../i18n/shared";
 import { CodexPauseToggleLabel, CodexPinnedBadge, CodexTicketBadge } from "./codex-account-pool-helpers";
@@ -15,6 +14,10 @@ import { LoginHint } from "./login-url-block";
 import type { NoticeTone } from "../ui";
 import { navigateHash } from "../hash-routing";
 import { hardLockThresholds } from "../hooks/useCodexAccountPool";
+import QuotaBars from "./QuotaBars";
+import { AccountMore, AccountRow, AccountSetting } from "./v2-accounts/account-row";
+import { InlineBanner } from "./v2-accounts/surface";
+import { cn } from "@/lib/utils";
 import {
   doctorCopyButtonLabel,
   formatOAuthHealthLabel,
@@ -122,87 +125,83 @@ export function CodexAccountPoolMainCard({
   const healthSummary = main
     ? formatOAuthHealthSummary(t, "codex", mainId, main.health)
     : null;
+  const showDoctor = onCopyDoctor && oauthHealthShowsDoctor(main?.health?.status);
+  const mainLabel = main?.alias ?? (main?.email || t("codexAuth.mainAccount"));
+  const doctorButton = showDoctor ? (
+    <button type="button" className="link-btn codex-auth-action-btn" onClick={() => onCopyDoctor(mainId)}>
+      <span aria-live="polite">{doctorCopyButtonLabel(t, doctorCopyOutcomeFor?.(mainId))}</span>
+    </button>
+  ) : null;
 
   return (
-    <div className={`card ${isMainActive && !hardLocked ? "card-active" : ""}`} style={{ marginBottom: 12 }}>
-      <div className="card-head">
-        <span className={`dot ${showReauth || hardLocked ? "dot-amber" : "dot-green"}`} />
-        <strong>{t("codexAuth.mainAccount")}</strong>
-        <span className="card-badges">
-          {main?.plan && <span className="badge badge-green">{main.plan}</span>}
-          {main?.paused && (
-            <span className="badge badge-muted" title={t("codexAuth.pausedHint")}>
-              {t("codexAuth.paused")}
-            </span>
-          )}
-          <AccountPriorityBadge value={mainSwitchEntry.priority} />
-          <CreditsOnBadge enabled={main?.creditsAfterLimit} />
-          {pinnedId === "__main__" && !main?.paused && <CodexPinnedBadge t={t} onUnpin={() => onUnpin(mainSwitchEntry)} />}
-          {main && <CodexTicketBadge t={t} account={{ ...main, id: "__main__" } as CodexAccountEntry} onClick={() => onOpenReset({ ...main, id: "__main__" } as CodexAccountEntry)} />}
-          {healthLabel && (
-            <span className={oauthHealthBadgeClass(main?.health?.status)}>{healthLabel}</span>
-          )}
-          {showReauth && !healthLabel && <span className="badge badge-amber">{t("codexAuth.needsReauth")}</span>}
-          {!main?.paused && !hardLocked && (
-            <span className={`badge ${isMainActive ? "badge-primary" : "badge-muted"}`}>
-              {isMainActive
-                ? t(accountModeState === "direct" ? "codexAuth.poolPrepared" : "codexAuth.nextSession")
-                : t("codexAuth.current")}
-            </span>
-          )}
+    <AccountRow
+      active={isMainActive && !hardLocked}
+      paused={main?.paused}
+      dot={showReauth || hardLocked ? "warn" : main?.paused ? "idle" : isMainActive ? "active" : "ok"}
+      name={main?.email || t("codexAuth.appLogin")}
+      chips={<>
+        {!main?.paused && !hardLocked && isMainActive && (
+          <span className="badge badge-primary">
+            {t(accountModeState === "direct" ? "codexAuth.poolPrepared" : "codexAuth.nextSession")}
+          </span>
+        )}
+        <span className="badge badge-plan acc-main-tag" title={t("codexAuth.appLogin")}>
+          <IconLock width={11} aria-hidden="true" /> {t("codexAuth.mainAccount")}
         </span>
+        {main?.plan && <span className="badge badge-plan">{main.plan}</span>}
+        {main?.paused && (
+          <span className="badge badge-muted" title={t("codexAuth.pausedHint")}>
+            {t("codexAuth.paused")}
+          </span>
+        )}
+        <AccountPriorityBadge value={mainSwitchEntry.priority} />
+        <CreditsOnBadge enabled={main?.creditsAfterLimit} />
+        {pinnedId === "__main__" && !main?.paused && <CodexPinnedBadge t={t} onUnpin={() => onUnpin(mainSwitchEntry)} />}
+        {main && <CodexTicketBadge t={t} account={{ ...main, id: "__main__" } as CodexAccountEntry} onClick={() => onOpenReset({ ...main, id: "__main__" } as CodexAccountEntry)} />}
+        {healthLabel && (
+          <span className={oauthHealthBadgeClass(main?.health?.status)}>{healthLabel}</span>
+        )}
+        {showReauth && !healthLabel && <span className="badge badge-amber">{t("codexAuth.needsReauth")}</span>}
+        {!main?.paused && !hardLocked && !isMainActive && (
+          <span className="badge badge-muted">{t("codexAuth.current")}</span>
+        )}
+      </>}
+      actions={<>
         {!main?.paused && !hardLocked && (!isMainActive || pinnedId !== "__main__") && !showReauth && !inCooldown && (
           <button type="button" className="btn btn-ghost btn-sm codex-account-switch" onClick={() => onSwitch(mainSwitchEntry)}>
             {switchActionLabel}
           </button>
         )}
-        {onCopyDoctor && oauthHealthShowsDoctor(main?.health?.status) && (
-          <button type="button" className="btn btn-ghost btn-sm codex-auth-action-btn" onClick={() => onCopyDoctor(mainId)}>
-            <span aria-live="polite">{doctorCopyButtonLabel(t, doctorCopyOutcomeFor?.(mainId))}</span>
-          </button>
-        )}
         {main && (
           <button
             type="button"
-            className="btn btn-sm btn-ghost codex-auth-action-btn"
+            className="acc-icon-btn codex-auth-action-btn"
             onClick={() => onTogglePause(mainSwitchEntry)}
             disabled={pauseBusy}
-            title={main.paused ? t("codexAuth.pausedHint") : undefined}
+            aria-busy={pauseUpdatingId === "__main__" || undefined}
+            title={main.paused ? t("codexAuth.pausedHint") : t("codexAuth.pause")}
             aria-label={main.paused ? `${t("codexAuth.resume")}. ${t("codexAuth.pausedHint")}` : t("codexAuth.pause")}
           >
-            {main.paused ? <IconPlay width={14} /> : <IconPause width={14} />}
-            <CodexPauseToggleLabel
-              t={t}
-              paused={!!main.paused}
-              saving={pauseUpdatingId === "__main__"}
-            />
+            {main.paused ? <IconPlay width={15} /> : <IconPause width={15} />}
+            <span className="sr-only">
+              <CodexPauseToggleLabel
+                t={t}
+                paused={!!main.paused}
+                saving={pauseUpdatingId === "__main__"}
+              />
+            </span>
           </button>
         )}
-        {/* Same disclosure as the pool cards' "more" actions; the main login only carries its
-            credits switch there. */}
-        {main?.hasCredential && onToggleCreditsAfterLimit && (
-          <details className="codex-account-more card-right">
-            <summary className="btn btn-ghost btn-sm" aria-label={`${t("codexAuth.moreActions")} — ${t("codexAuth.mainAccount")}`} title={t("codexAuth.moreActions")}>⋯</summary>
-            <div className="codex-account-more-body">
-              <AccountCreditsToggle
-                accountLabel={main.alias ?? (main.email || t("codexAuth.mainAccount"))}
-                enabled={main.creditsAfterLimit}
-                saving={creditsAfterLimitUpdatingId === "__main__"}
-                disabled={creditsAfterLimitUpdatingId !== null}
-                hint={t("codexAuth.creditsAfterLimitMainHint")}
-                onChange={enabled => onToggleCreditsAfterLimit(mainSwitchEntry, enabled)}
-              />
-            </div>
-          </details>
-        )}
-        <span className="card-right"><IconLock width={14} /> {t("codexAuth.appLogin")}</span>
-      </div>
-      <div className="codex-account-identity">
-        <div className="codex-account-identity-copy">{main?.email || t("codexAuth.appLogin")}{main?.plan ? ` · ${main.plan}` : ""}</div>
-        {/* The main card keeps its order select inline: it is one control, not one per pool row,
-            and the main card has no ⋯ disclosure to fold it into. */}
-        {main && (
-          <div className="codex-account-controls">
+      </>}
+      more={main ? (
+        // Same disclosure as the pool rows. The order select and the threshold override stay
+        // mounted here (the main row has no on-demand mount), the credits switch joins them
+        // once the main login carries a credential.
+        <AccountMore
+          label={`${t("codexAuth.moreActions")} — ${t("codexAuth.mainAccount")}`}
+          title={t("codexAuth.moreActions")}
+        >
+          <AccountSetting>
             <AccountPriorityControl
               value={mainSwitchEntry.priority}
               // Derived from the synthesized id rather than hardcoded as "-main": a pool account
@@ -216,6 +215,8 @@ export function CodexAccountPoolMainCard({
               disabled={priorityUpdatingId !== null || switchingId !== null}
               onChange={(priority) => onPriorityChange(mainSwitchEntry, priority)}
             />
+          </AccountSetting>
+          <AccountSetting>
             <AccountAutoSwitchControl
               key={mainSwitchEntry.id}
               accountLabel={mainSwitchEntry.email}
@@ -225,79 +226,100 @@ export function CodexAccountPoolMainCard({
               disabled={autoSwitchDisabled}
               onChange={(next) => onAutoSwitchThresholdChange(mainSwitchEntry, next)}
             />
-          </div>
-        )}
-      </div>
-      {policy?.enabled && (
-        <div className={`codex-main-hard-lock-status${hardLocked ? " is-blocked" : ""}`}>
-          <p role="status">{t(hardLocked ? "codexAuth.mainHardLockBlocked"
-            : policy.state === "ready" ? "codexAuth.mainHardLockMonitoring" : "codexAuth.mainHardLockUnknown", hardLockThresholds(policy.thresholds))}</p>
-          {onManageMainHardLock
-            ? <button type="button" className="link-btn" onClick={onManageMainHardLock}>{t("codexAuth.mainHardLockManage")}</button>
-            : <button type="button" className="link-btn" onClick={() => navigateHash("codex-set")}>{t("codexAuth.mainHardLockManage")}</button>}
+          </AccountSetting>
+          {main.hasCredential && onToggleCreditsAfterLimit && (
+            <AccountSetting>
+              <AccountCreditsToggle
+                accountLabel={mainLabel}
+                enabled={main.creditsAfterLimit}
+                saving={creditsAfterLimitUpdatingId === "__main__"}
+                disabled={creditsAfterLimitUpdatingId !== null}
+                hint={t("codexAuth.creditsAfterLimitMainHint")}
+                onChange={enabled => onToggleCreditsAfterLimit(mainSwitchEntry, enabled)}
+              />
+            </AccountSetting>
+          )}
+        </AccountMore>
+      ) : undefined}
+    >
+      {(policy?.enabled || policy?.externalUsage || healthSummary || inCooldown || showReauth || showDoctor) && (
+        <div className="acc-row__notes">
+          {policy?.enabled && (
+            <div className={`codex-main-hard-lock-status${hardLocked ? " is-blocked" : ""}`}>
+              <p role="status">{t(hardLocked ? "codexAuth.mainHardLockBlocked"
+                : policy.state === "ready" ? "codexAuth.mainHardLockMonitoring" : "codexAuth.mainHardLockUnknown", hardLockThresholds(policy.thresholds))}</p>
+              {onManageMainHardLock
+                ? <button type="button" className="link-btn" onClick={onManageMainHardLock}>{t("codexAuth.mainHardLockManage")}</button>
+                : <button type="button" className="link-btn" onClick={() => navigateHash("codex-set")}>{t("codexAuth.mainHardLockManage")}</button>}
+            </div>
+          )}
+          {policy?.externalUsage && <div className="codex-main-hard-lock-status is-blocked"><p role="status">{t("codexAuth.mainExternalUsageWarning")}</p></div>}
+          {healthSummary && (
+            <div className="card-sub faint"><span>{healthSummary}</span>{doctorButton}</div>
+          )}
+          {!healthSummary && doctorButton && <div className="card-sub faint">{doctorButton}</div>}
+          {inCooldown && (
+            <div className="card-sub faint">{t("pws.healthCooldownHint")}</div>
+          )}
+          {showReauth && (
+            <div className="card-sub faint acc-reauth">
+              <p role="status">{t("codexAuth.mainTokenExpired")}</p>
+              {mainReauth && (mainReauth.state.phase === "idle" || mainReauth.state.phase === "failed" || mainReauth.state.phase === "cancelled") && (
+                <>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm codex-auth-action-btn"
+                    onClick={() => { void mainReauth.start(); }}
+                  >
+                    {t("codexAuth.mainReauthDevice")}
+                  </button>
+                  {mainReauth.state.phase === "failed" && (
+                    <span className="badge badge-amber">{t("codexAuth.mainReauthFailed")}: {mainReauth.state.code}</span>
+                  )}
+                </>
+              )}
+              {mainReauth && mainReauth.state.phase === "starting" && (
+                <span className="faint">{t("codexAuth.mainReauthPending")}</span>
+              )}
+              {mainReauth && (mainReauth.state.phase === "pending" || mainReauth.state.phase === "committing") && (
+                <span className="codex-main-reauth-pending">
+                  {/* The shared renderer every other login surface uses: a copyable code, a
+                      selectable and copyable URL, and one click to copy the code and open the
+                      page. Plain text here left the user retyping both by hand. */}
+                  <LoginHint hint={{ url: mainReauth.state.verificationUrl, deviceCode: mainReauth.state.deviceCode }} />
+                  <span className="faint">{t("codexAuth.mainReauthPending")}</span>
+                  {mainReauth.state.cancelFailed && (
+                    <span role="status" className="badge badge-amber">{t("codexAuth.mainReauthFailed")}</span>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm codex-auth-action-btn"
+                    onClick={() => { void mainReauth.cancel(); }}
+                  >
+                    {t("codexAuth.mainReauthCancel")}
+                  </button>
+                </span>
+              )}
+              {mainReauth && mainReauth.state.phase === "succeeded" && (
+                <span className="badge badge-primary">{t("codexAuth.mainReauthSucceeded")}</span>
+              )}
+            </div>
+          )}
         </div>
       )}
-      {policy?.externalUsage && <div className="codex-main-hard-lock-status is-blocked"><p role="status">{t("codexAuth.mainExternalUsageWarning")}</p></div>}
-      {healthSummary && (
-        <div className="card-sub faint">{healthSummary}</div>
+      {!showReauth && !inCooldown && (
+        <div className="acc-row__meters">
+          <QuotaBars
+            quota={main?.quota ?? null}
+            plan={main?.plan}
+            threshold={mainSwitchEntry.autoSwitchThresholdOverride ?? threshold}
+            t={t}
+            pending={main != null && main.quota == null && (loading || !showCredits)}
+            afterWeekly={showCredits && !loading ? <CodexCreditsRow credits={main?.credits} t={t} locale={locale} /> : undefined}
+          />
+        </div>
       )}
-      {inCooldown && (
-        <div className="card-sub faint">{t("pws.healthCooldownHint")}</div>
-      )}
-      {showReauth
-        ? <div className="card-sub faint">
-            <p role="status">{t("codexAuth.mainTokenExpired")}</p>
-            {mainReauth && (mainReauth.state.phase === "idle" || mainReauth.state.phase === "failed" || mainReauth.state.phase === "cancelled") && (
-              <>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm codex-auth-action-btn"
-                  onClick={() => { void mainReauth.start(); }}
-                >
-                  {t("codexAuth.mainReauthDevice")}
-                </button>
-                {mainReauth.state.phase === "failed" && (
-                  <span className="badge badge-amber">{t("codexAuth.mainReauthFailed")}: {mainReauth.state.code}</span>
-                )}
-              </>
-            )}
-            {mainReauth && mainReauth.state.phase === "starting" && (
-              <span className="faint">{t("codexAuth.mainReauthPending")}</span>
-            )}
-            {mainReauth && (mainReauth.state.phase === "pending" || mainReauth.state.phase === "committing") && (
-              <span className="codex-main-reauth-pending">
-                {/* The shared renderer every other login surface uses: a copyable code, a
-                    selectable and copyable URL, and one click to copy the code and open the
-                    page. Plain text here left the user retyping both by hand. */}
-                <LoginHint hint={{ url: mainReauth.state.verificationUrl, deviceCode: mainReauth.state.deviceCode }} />
-                <span className="faint">{t("codexAuth.mainReauthPending")}</span>
-                {mainReauth.state.cancelFailed && (
-                  <span role="status" className="badge badge-amber">{t("codexAuth.mainReauthFailed")}</span>
-                )}
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm codex-auth-action-btn"
-                  onClick={() => { void mainReauth.cancel(); }}
-                >
-                  {t("codexAuth.mainReauthCancel")}
-                </button>
-              </span>
-            )}
-            {mainReauth && mainReauth.state.phase === "succeeded" && (
-              <span className="badge badge-primary">{t("codexAuth.mainReauthSucceeded")}</span>
-            )}
-          </div>
-        : !inCooldown && <>
-            <QuotaBars
-              quota={main?.quota ?? null}
-              plan={main?.plan}
-              threshold={mainSwitchEntry.autoSwitchThresholdOverride ?? threshold}
-              t={t}
-              pending={main != null && main.quota == null && (loading || !showCredits)}
-              afterWeekly={showCredits && !loading ? <CodexCreditsRow credits={main?.credits} t={t} locale={locale} /> : undefined}
-            />
-          </>}
-    </div>
+    </AccountRow>
   );
 }
 
@@ -334,7 +356,7 @@ export function CodexAccountPoolPageHead({
 }) {
   return (
     <div
-      className={embedded ? "row" : "page-head codex-auth-page-head"}
+      className={embedded ? "row acc-head acc-head--embedded" : "page-head codex-auth-page-head acc-head"}
       style={embedded ? { justifyContent: "flex-end", marginBottom: 8 } : undefined}
     >
       {!embedded && <h2 className="page-title">{t("nav.codexAuth")}</h2>}
@@ -363,7 +385,7 @@ export function CodexAccountPoolPageHead({
           </span>
         )}
         {creditSpendControl}
-        {/* The standalone pause/refresh row sits next to the account cards. Embedded
+        {/* The standalone pause/refresh row sits on the accounts panel. Embedded
             surfaces keep those actions beside feedback because there is no page title. */}
         {embedded && (
           <CodexAccountPoolActionButtons
@@ -412,7 +434,7 @@ export function CodexAccountPoolActionButtons({
         onClick={onRefresh}
         disabled={refreshingQuota || pausingExhausted || !!pauseBusy}
       >
-        <IconRefresh width={14} /> {refreshingQuota ? t("codexAuth.refreshingQuota") : t("codexAuth.refreshQuota")}
+        <span className={cn("inline-flex", refreshingQuota && "animate-spin")}><IconRefresh width={14} /></span> {refreshingQuota ? t("codexAuth.refreshingQuota") : t("codexAuth.refreshQuota")}
       </button>
     </>
   );
@@ -420,7 +442,7 @@ export function CodexAccountPoolActionButtons({
 
 /**
  * Standalone-page action row: the pause/refresh pair, moved out of the page head and
- * placed directly above the account cards they operate on.
+ * placed on the accounts panel they operate on.
  */
 export function CodexAccountPoolActions(props: {
   t: TFn;
@@ -450,45 +472,20 @@ export function CodexAccountPoolLoadStates({
   accountsCount: number;
   onRetry: () => void;
 }): ReactNode {
-  // Cold start with no seeded accounts: mirror the ready layout (main card + pool
-  // section + empty) so Auto-switch / strategy do not jump when real nodes mount.
-  // Caller places this below the stable account-mode banner.
+  // Cold start with no seeded accounts: one skeleton row where the main login will land,
+  // inside the same panel body, so nothing below jumps when the real rows mount.
   if (loadState === "loading" && accountsCount === 0) {
     return (
-      <div className="codex-auth-load-skeleton" role="status" aria-live="polite" aria-busy="true">
-        {/* Match ready MainCard chrome (badge + pause + app-login) so head height does not jump. */}
-        <div className="card codex-auth-load-skeleton__main" style={{ marginBottom: 12 }} aria-hidden="true">
-          <div className="card-head">
-            <span className="dot dot-muted" />
-            <strong>{t("codexAuth.mainAccount")}</strong>
-            <span className="card-badges">
-              <span className="badge badge-muted codex-ticket-badge-slot" aria-hidden="true">
-                <IconTicket width={12} />0
-              </span>
-              <span className="badge badge-primary">{t("codexAuth.nextSession")}</span>
-            </span>
-            <button type="button" className="btn btn-sm btn-ghost" tabIndex={-1} disabled>
-              <IconPause width={14} /> {t("codexAuth.pause")}
-            </button>
-            <span className="card-right"><IconLock width={14} /> {t("codexAuth.appLogin")}</span>
+      <div className="codex-auth-load-skeleton acc-row-skeleton" role="status" aria-live="polite" aria-busy="true">
+        <div className="card acc-row" aria-hidden="true">
+          <div className="acc-row__head flex items-center gap-3">
+            <span className="inline-block size-2 rounded-full bg-fg-subtle" />
+            <span className="acc-skel h-3.5 w-48 rounded-full" />
+            <span className="acc-skel h-4 w-16 rounded-full" />
           </div>
-          <div className="card-sub">
-            {/* Strut keeps the sub line-box equal to ready email/plan text; shimmer is visual only. */}
-            <span className="codex-auth-load-skeleton__strut">{t("codexAuth.appLogin")}</span>
-            <span className="codex-auth-load-skeleton__line codex-auth-load-skeleton__line--sub" />
+          <div className="acc-row__meters">
+            <QuotaBars quota={null} threshold={0} t={t} pending />
           </div>
-          <QuotaBars quota={null} threshold={0} t={t} pending />
-        </div>
-        <div className="section-sep" aria-hidden="true">
-          <span className="section-label">{t("codexAuth.accountPool")}</span>
-          <div className="sep-line" />
-          {/* Same Add control as ready section-sep (inert) so the row height matches. */}
-          <button type="button" className="btn btn-sm btn-ghost" tabIndex={-1} disabled>
-            <IconPlus width={14} /> {t("codexAuth.add")}
-          </button>
-        </div>
-        <div className="empty codex-auth-pool-empty codex-auth-load-skeleton__empty" aria-hidden="true">
-          <div className="title">{t("codexAuth.noPool")}</div>
         </div>
         <span className="sr-only">{t("pws.accountsLoading")}</span>
       </div>
@@ -496,10 +493,10 @@ export function CodexAccountPoolLoadStates({
   }
   if (loadState === "error") {
     return (
-      <div className="pwi-auth-state pwi-auth-state--error" role="alert">
-        <span>{t("codexAuth.loadFailed")}</span>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={onRetry}>{t("pws.retryAccounts")}</button>
-      </div>
+      <InlineBanner tone="err" role="alert" className="pwi-auth-state pwi-auth-state--error acc-row-banner"
+        action={<button type="button" className="btn btn-ghost btn-sm" onClick={onRetry}>{t("pws.retryAccounts")}</button>}>
+        {t("codexAuth.loadFailed")}
+      </InlineBanner>
     );
   }
   // Rows survived a failed refresh, so they are still worth showing — but they are the ones from
@@ -507,11 +504,20 @@ export function CodexAccountPoolLoadStates({
   // nothing on screen is wrong, it is just older than it looks.
   if (refreshFailed && accountsCount > 0) {
     return (
-      <div className="pwi-auth-state pwi-auth-state--stale" role="status">
-        <span>{t("codexAuth.accountsRefreshFailed")}</span>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={onRetry}>{t("pws.retryAccounts")}</button>
-      </div>
+      <InlineBanner tone="warn" role="status" className="pwi-auth-state pwi-auth-state--stale acc-row-banner"
+        action={<button type="button" className="btn btn-ghost btn-sm" onClick={onRetry}>{t("pws.retryAccounts")}</button>}>
+        {t("codexAuth.accountsRefreshFailed")}
+      </InlineBanner>
     );
   }
   return null;
+}
+
+/** The "+ Add" for the accounts panel header. */
+export function CodexAccountPoolAddButton({ t, onAdd }: { t: TFn; onAdd: () => void }) {
+  return (
+    <button type="button" className="btn btn-ghost btn-sm acc-add-btn" onClick={onAdd}>
+      <IconPlus width={14} /> {t("codexAuth.add")}
+    </button>
+  );
 }

@@ -345,7 +345,8 @@ fn invalidation_and_stopped_source_discard_late_catalogs() {
 async function loadCase(change,phase) {
   let current = phase!=='before-call', release, entered, executions=0;
   const enteredPromise=new Promise(resolve=>{entered=resolve});
-  const deps={commandCandidates:()=>['C:\\fixture\\codex.exe'],
+  // Use the real fixture executable so macOS can validate the candidate.
+  const deps={commandCandidates:()=>[process.env.CODEX_CLI_PATH],
     execFile:()=>new Promise(resolve=>{executions++;release=resolve;entered()})};
   const pending=bundled.loadBundledCodexCatalogAsync(deps,()=>current);
   const mutate=()=>{if(change==='invalidate')bundled.invalidateBundledCatalogCache();else current=false};
@@ -475,16 +476,19 @@ fn refresh_deadline_settles_an_uncooperative_executor_and_allows_the_next_load()
 const realTimeout = globalThis.setTimeout;
 globalThis.setTimeout = (callback,delay,...args)=>realTimeout(callback,delay===45000?20:delay,...args);
 const keepAlive = setInterval(()=>{},100);
-const expired = await bundled.loadBundledCodexCatalogAsync({commandCandidates:()=>['C:\\fixture\\codex.exe'],
-  execFile:()=>new Promise(()=>{})});
+let entered = false, aborted = false;
+const expired = await bundled.loadBundledCodexCatalogAsync({commandCandidates:()=>[process.env.CODEX_CLI_PATH],
+  execFile:(_file,_args,options)=>{entered=true; options.signal.addEventListener('abort',()=>{aborted=true}); return new Promise(()=>{})}});
 clearInterval(keepAlive);
 globalThis.setTimeout = realTimeout;
-const fresh = await bundled.loadBundledCodexCatalogAsync({commandCandidates:()=>['C:\\fixture\\codex.exe'],
+const fresh = await bundled.loadBundledCodexCatalogAsync({commandCandidates:()=>[process.env.CODEX_CLI_PATH],
   execFile:async()=>JSON.stringify(catalog)});
-return {expired:expired===null,fresh:fresh?.models.map(row=>row.slug)};
+return {expired:expired===null,entered,aborted,fresh:fresh?.models.map(row=>row.slug)};
 "#,
     );
     assert_eq!(result["expired"], true);
+    assert_eq!(result["entered"], true);
+    assert_eq!(result["aborted"], true);
     assert_eq!(
         result["fresh"],
         serde_json::json!(["gpt-5.5", "gpt-5.6-sol"])

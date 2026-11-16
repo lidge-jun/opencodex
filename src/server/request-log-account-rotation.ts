@@ -1,4 +1,5 @@
 import { ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
+import { anthropicAccountTag } from "../providers/label";
 import { isCodexUsageAccountLogLabel, type PersistedUsageAttempt } from "../usage/log";
 
 /**
@@ -42,6 +43,11 @@ export function sealRequestAttemptIdentity(
   attempt.adapter = adapter;
   if (attempt.sendCount === 0) {
     attempt.provider = provider;
+    // The Anthropic pool tag is a pure function of this frozen provider, so a failover split
+    // (a fresh attempt sealed with the next account's provider) carries the next account's tag.
+    const accountTag = anthropicAccountTag(provider);
+    if (accountTag) attempt.accountTag = accountTag;
+    else delete attempt.accountTag;
     if (isCodexUsageAccountLogLabel(accountLogLabel)) attempt.accountLogLabel = accountLogLabel;
     else delete attempt.accountLogLabel;
     return;

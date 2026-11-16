@@ -5,6 +5,7 @@
   "ignore": {
     "files": [
       "dist/**",
+      "classic/**",
       "node_modules/**"
     ],
     "overrides": [

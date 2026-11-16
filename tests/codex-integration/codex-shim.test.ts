@@ -1858,6 +1858,54 @@ exit 127
     });
   });
 
+  // #8317: a lock directory holding several aged owner records used to be unreadable, so it was never reclaimed.
+  function seedAgedLockEntries(lockPath: string, pids: number[], extra: string[] = []): string[] {
+    mkdirSync(lockPath);
+    pids.forEach((pid, index) => {
+      const ownerPath = join(lockPath, `aged-owner-${index}.json`);
+      writeFileSync(ownerPath, `${JSON.stringify({ version: 1, token: `aged-owner-${index}`, pid, createdAt: 0 })}\n`, "utf8");
+      utimesSync(ownerPath, new Date(0), new Date(0));
+    });
+    for (const name of extra) {
+      writeFileSync(join(lockPath, name), "unaccounted\n", "utf8");
+      utimesSync(join(lockPath, name), new Date(0), new Date(0));
+    }
+    return readdirSync(lockPath).sort();
+  }
+
+  test("an aged lock whose owner records all name dead pids is reclaimed", () => {
+    withInstalledShim(({ home, wrappers }) => {
+      const lockPath = join(home, "codex-shim.autorestore.lock");
+      wrappers.forEach((path, index) => process.platform === "win32"
+        ? writeFileSync(path, successfulLauncher(`two-dead-owners-${index}`), "utf8") : chmodSync(path, 0o644));
+      seedAgedLockEntries(lockPath, [2_147_483_647, 2_147_483_646]);
+
+      expect(autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait }).status).toBe("restored");
+      expect(existsSync(lockPath)).toBe(false);
+      wrappers.forEach(path => expect(readFileSync(path, "utf8")).toContain(SHIM_MARKER));
+    });
+  });
+
+  for (const [label, pids, extra] of [
+    ["one live owner", [2_147_483_647, process.pid], []],
+    ["an unaccounted entry", [2_147_483_647, 2_147_483_646], ["stray.tmp"]],
+  ] as const) {
+    test(`an aged multi-owner lock with ${label} is never reclaimed`, () => {
+      withInstalledShim(({ home, wrappers }) => {
+        const lockPath = join(home, "codex-shim.autorestore.lock");
+        const oldWrappers = wrappers.map(path => readFileSync(path));
+        wrappers.forEach((path, index) => process.platform === "win32"
+          ? writeFileSync(path, `replacement-${index}\n`, "utf8") : chmodSync(path, 0o644));
+        const entries = seedAgedLockEntries(lockPath, [...pids], [...extra]);
+
+        expect(autoRestoreCodexShim({ enabled: () => true, stabilitySleep: skipStabilityWait })).toEqual({ status: "deferred" });
+        expect(readdirSync(lockPath).sort()).toEqual(entries);
+        wrappers.forEach((path, index) => process.platform === "win32"
+          ? expect(readFileSync(path, "utf8")).toBe(`replacement-${index}\n`) : expect(readFileSync(path)).toEqual(oldWrappers[index]));
+      });
+    });
+  }
+
   test("stalled partial write changing during the observation interval is never promoted", () => {
     withInstalledShim(({ wrappers, backups }) => {
       if (process.platform !== "win32") {

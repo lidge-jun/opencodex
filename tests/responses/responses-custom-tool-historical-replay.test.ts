@@ -220,7 +220,7 @@ describe("undeclared historical custom-tool replay on the passthrough wire", () 
       ]));
       const body = await response.text();
       expect(body).toContain("undeclared client tool");
-      expect(body).toContain("exec");
+      expect(body).not.toContain("exec");
       expect(body).not.toContain("\"type\":\"custom_tool_call\"");
     } finally {
       globalThis.fetch = savedFetch;

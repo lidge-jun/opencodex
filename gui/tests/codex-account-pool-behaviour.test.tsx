@@ -31,6 +31,7 @@ let bulkResponseActiveId: string | null = null;
 let priorityResponseOk = true;
 let nextPriorityResponseGate: Promise<void> | null = null;
 let nextPauseResponseGate: Promise<void> | null = null;
+let pauseMutatesServer = true;
 let nextActiveResponseGate: Promise<void> | null = null;
 let nextActivePutGate: Promise<void> | null = null;
 let activePinned = false;
@@ -59,6 +60,7 @@ beforeEach(() => {
   priorityResponseOk = true;
   nextPriorityResponseGate = null;
   nextPauseResponseGate = null;
+  pauseMutatesServer = true;
   nextActiveResponseGate = null;
   nextActivePutGate = null;
   activePinned = false;
@@ -132,12 +134,14 @@ beforeEach(() => {
         nextPauseResponseGate = null;
         if (gate) await gate;
         const body = JSON.parse(String(init?.body)) as { id: string; paused: boolean };
-        accounts = accounts.map(account => (
-          typeof account === "object" && account !== null && "id" in account
-            && (account.id === body.id || (body.id === "__main__" && "isMain" in account && account.isMain === true))
-            ? { ...account, paused: body.paused }
-            : account
-        ));
+        if (pauseMutatesServer) {
+          accounts = accounts.map(account => (
+            typeof account === "object" && account !== null && "id" in account
+              && (account.id === body.id || (body.id === "__main__" && "isMain" in account && account.isMain === true))
+              ? { ...account, paused: body.paused }
+              : account
+          ));
+        }
         if (body.paused && activePinnedAccountId === body.id) activePinnedAccountId = null;
         return { ok: true, json: async () => ({ activeCodexAccountId: pauseResponseActiveId }) } as unknown as Response;
       }
@@ -245,6 +249,66 @@ async function mountController(enabled = true) {
   await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
   return seen;
 }
+
+/** Mounts the hook with a mutable apiBase so a target change keeps the same instance. */
+async function mountControllerAt(apiBase: string) {
+  const seen: { current: CodexAccountPoolController | null } = { current: null };
+  function Probe({ base }: { base: string }) {
+    const controller = useCodexAccountPool(base, true);
+    useLayoutEffect(() => { seen.current = controller; }, [controller]);
+    return null;
+  }
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root = createRoot(host);
+    root.render(<Probe base={apiBase} />);
+  });
+  await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+  return {
+    seen,
+    rerender: async (base: string) => {
+      await act(async () => { root!.render(<Probe base={base} />); });
+    },
+  };
+}
+
+test("a switch accepted on the old target cannot set the new target's active account", async () => {
+  const { seen, rerender } = await mountControllerAt("/old");
+  let releaseSwitch!: () => void;
+  nextActivePutGate = new Promise<void>(resolve => { releaseSwitch = resolve; });
+  let pending!: Promise<unknown>;
+  await act(async () => { pending = seen.current!.switchAccount("a2"); await Promise.resolve(); });
+  // Hold the new target's read so its result cannot satisfy the assertion.
+  let releaseActive!: () => void;
+  nextActiveResponseGate = new Promise<void>(resolve => { releaseActive = resolve; });
+  await rerender("/new");
+  await act(async () => { releaseSwitch(); await pending; });
+  expect(seen.current!.activeId).not.toBe("a2");
+  expect(seen.current!.switchingId).toBeNull();
+  await act(async () => { releaseActive(); await new Promise(r => setTimeout(r, 10)); });
+});
+
+test("a pause accepted on the old target cannot mark the new target's account paused", async () => {
+  const { seen, rerender } = await mountControllerAt("/old");
+  // The server's own state must not change, so the assertion measures the client fence.
+  pauseMutatesServer = false;
+  let releasePause!: () => void;
+  nextPauseResponseGate = new Promise<void>(resolve => { releasePause = resolve; });
+  let pending!: Promise<unknown>;
+  await act(async () => { pending = seen.current!.setAccountPaused("a1", true); await Promise.resolve(); });
+  let releaseAccounts!: () => void;
+  nextAccountsResponseGate = new Promise<void>(resolve => { releaseAccounts = resolve; });
+  await rerender("/new");
+  await act(async () => { releaseAccounts(); await new Promise(r => setTimeout(r, 20)); });
+  expect(seen.current!.accounts.find(account => account.id === "a1")?.paused).toBe(false);
+  // Gate the completion's follow-up reload so it cannot mask a stale write.
+  let releaseFollowUp!: () => void;
+  nextAccountsResponseGate = new Promise<void>(resolve => { releaseFollowUp = resolve; });
+  await act(async () => { releasePause(); await pending; });
+  expect(seen.current!.accounts.find(account => account.id === "a1")?.paused).toBe(false);
+  expect(seen.current!.pauseUpdatingId).toBeNull();
+  await act(async () => { releaseFollowUp(); await new Promise(r => setTimeout(r, 10)); });
+});
 
 test("the controller loads once on mount", async () => {
   const seen = await mountController();

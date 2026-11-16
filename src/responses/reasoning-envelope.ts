@@ -20,6 +20,8 @@ export const OCX_REASONING_PREFIX = "ocxr1:";
 export interface ReasoningEnvelope {
   /** Anthropic thinking-block signature (signature_delta), if captured. */
   sig?: string;
+  /** Immediately preceding output item owned by this late turn signature. */
+  aft?: string;
   /** ID of the immediately following commentary copy of this signed thinking block. */
   upd?: string;
   /** Raw redacted_thinking block data payloads, order preserved. */
@@ -147,6 +149,8 @@ export function decodeReasoningEnvelope(encryptedContent: string, budget?: Trans
       const obj = parsed as { sig?: unknown; red?: unknown };
       const envelope: ReasoningEnvelope = {};
       if (typeof obj.sig === "string") envelope.sig = obj.sig;
+      const aft = (parsed as { aft?: unknown }).aft;
+      if (typeof aft === "string" && aft.length > 0) envelope.aft = aft;
       const upd = (parsed as { upd?: unknown }).upd;
       if (typeof upd === "string" && /^msg_[a-f0-9]{32}$/.test(upd)) envelope.upd = upd;
       if (Array.isArray(obj.red)) {

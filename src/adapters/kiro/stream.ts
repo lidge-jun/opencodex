@@ -6,7 +6,11 @@ import {
 } from "../../lib/translator-budget";
 import type { AdapterEvent, OcxUsage } from "../../types";
 import { recordKiroCalibration, rekeyKiroCalibration } from "../kiro-calibration";
-import { KIRO_COMPLETION_TOOL_NAME, type KiroCompletionMode } from "../kiro-constants";
+import {
+  KIRO_COMPLETION_TOOL_NAME,
+  KIRO_STRUCTURED_OUTPUT_TOOL_NAME,
+  type KiroCompletionMode,
+} from "../kiro-constants";
 import {
   classifyKiroEventError,
   classifyKiroHttpError,
@@ -15,13 +19,23 @@ import {
   safeKiroHttpErrorMessage,
   type KiroErrorClassification,
 } from "../kiro-errors";
-import { parseKiroEvent } from "../kiro-events";
+import { parseKiroEvent, type KiroRefusalDetails } from "../kiro-events";
 import { noteKiroTransientThrottle } from "../kiro-retry";
 import { InlineThinkTagParser } from "../inline-think-tags";
 import { isCompleteKiroToolInput, kiroTruncationErrorMessage } from "../kiro-truncation";
 import { isValidKiroConversationId } from "../kiro-wire";
 import { readDisplaySafeErrorPayloadText } from "../upstream-http-error";
 import { tagKiroReasoningBlob } from "./reasoning";
+import {
+  isKiroStructuredCleanStop,
+  KIRO_STRUCTURED_EMPTY_FAILURE,
+  KIRO_STRUCTURED_TEXT_FAILURE,
+  kiroStructuredOutputFailure,
+  kiroStructuredStopFailure,
+  parseKiroStructuredText,
+  parseKiroStructuredToolInput,
+  type KiroStructuredOutputSpec,
+} from "./structured-output";
 import { estimateKiroTokens, kiroUpstreamContextWindow } from "./usage";
 
 // Stream parsing (shared by parseStream + parseResponse)
@@ -210,6 +224,37 @@ function retryableKiroIncomplete(
 }
 
 /**
+ * Kiro's safety-filter stops. For Claude models CONTENT_FILTERED is the model's own safety
+ * classifier, a deterministic verdict on this exact context, so every completion mode maps it to
+ * the non-retryable `content_filter` incomplete: Claude outbound renders `stop_reason: "refusal"`
+ * and Responses a terminal `response.failed` (`src/bridge/terminal-refusal.ts`). Kiro's refusal
+ * category and explanation are model-side copy, never request content, so they ride the message.
+ */
+function isKiroContentFilterStop(
+  stopReason: string | undefined,
+): stopReason is "CONTENT_FILTERED" | "GUARDRAIL_INTERVENED" {
+  return stopReason === "CONTENT_FILTERED" || stopReason === "GUARDRAIL_INTERVENED";
+}
+
+/** The non-retryable `content_filter` incomplete for a filter stop, carrying Kiro's refusal category and explanation when present. */
+function kiroContentFilterIncomplete(
+  stopReason: string,
+  refusal: KiroRefusalDetails | undefined,
+  usage: OcxUsage,
+  providerState: { kiro: { conversationId: string } } | undefined,
+): AdapterEvent {
+  const category = refusal?.category ? `, category ${refusal.category}` : "";
+  const explanation = refusal?.explanation ? `: ${refusal.explanation}` : "";
+  return retryableKiroIncomplete(
+    "content_filter",
+    `Kiro stopped with ${stopReason}${category}${explanation}`,
+    usage,
+    providerState,
+    false,
+  );
+}
+
+/**
  * Catch-path retryability for #519: only transport/socket failures with no emitted output
  * are replay-safe. Malformed event payloads (`invalid Kiro …`) and any post-output failure
  * stay terminal — same spirit as cursor's emittedOutput gate.
@@ -227,6 +272,10 @@ export function isRetryableKiroStreamCatchError(err: unknown, emittedOutput: boo
 /** Native clean-stop reason eligible for bounded private-completion validation. */
 const KIRO_END_TURN_STOP_REASON = "END_TURN";
 
+/**
+ * Run one attempt through `parseKiroAttemptEvents` while holding commentary until completion is
+ * validated, and hand the held events back to the caller so a bounded retry can release or drop them.
+ */
 async function* parseKiroAttempt(
   response: Response,
   budget: TranslatorBudget,
@@ -240,6 +289,7 @@ async function* parseKiroAttempt(
   /** True when an earlier attempt has output that must survive a failed retry. */
   priorEmittedOutput = false,
   priorAttempt?: KiroAttemptResult,
+  structuredOutput?: KiroStructuredOutputSpec,
 ): AsyncGenerator<AdapterEvent, KiroAttemptResult> {
   // Hold commentary through completion validation; tools and failures still release progress.
   const deferred: AdapterEvent[] = [];
@@ -271,7 +321,13 @@ async function* parseKiroAttempt(
     contextInputEstimate,
     priorEmittedOutput,
     priorAttempt,
+    structuredOutput,
   );
+  // Held text that no terminal claimed is prose. On an ordinary turn that is still real progress
+  // and is released before a failure; for a structured-output caller it is exactly the wrong-format
+  // answer the contract exists to withhold, so only its non-text events are released. A real tool
+  // call has already flushed its leading commentary by the time anything reaches these drains.
+  const dropHeldProse = structuredOutput !== undefined;
   let handedOff = false;
   try {
     const result = yield* attempt;
@@ -284,8 +340,8 @@ async function* parseKiroAttempt(
     if (staged && !result.needsFallback) {
       recordKiroCalibration(staged.conversationId, staged.estimated, staged.charged);
     }
-    if (priorAttempt) yield* priorAttempt.drainDeferred();
-    if (!result.needsFallback) yield* drainDeferred();
+    if (priorAttempt) yield* priorAttempt.drainDeferred(dropHeldProse);
+    if (!result.needsFallback) yield* drainDeferred(dropHeldProse);
     handedOff = true;
     return {
       ...result, drainDeferred,
@@ -297,6 +353,11 @@ async function* parseKiroAttempt(
   }
 }
 
+/**
+ * Parse one Kiro attempt's event stream into adapter events and a terminal decision: text, reasoning,
+ * real tool calls, the private terminal tool, usage and the stop reason. In `required` mode it may
+ * return `needsFallback` instead of a terminal, which asks the caller for the one bounded retry.
+ */
 async function* parseKiroAttemptEvents(
   response: Response,
   budget: TranslatorBudget,
@@ -312,6 +373,7 @@ async function* parseKiroAttemptEvents(
   contextInputEstimate?: number,
   priorEmittedOutput = false,
   priorAttempt?: KiroAttemptResult,
+  structuredOutput?: KiroStructuredOutputSpec,
 ): AsyncGenerator<AdapterEvent, KiroAttemptParseResult> {
   const emptyResult = (): KiroAttemptParseResult => ({ assistantText: "", sawReasoning: false });
   // Every early return below is a failure path that stages nothing; only the completion path
@@ -323,7 +385,7 @@ async function* parseKiroAttemptEvents(
     };
   }
 
-  let open: { id: string; name: string; chunks: string[]; completion: boolean } | null = null;
+  let open: { id: string; name: string; chunks: string[]; inputBytes: number; completion: boolean } | null = null;
   let openCallId: string | undefined;
   const closeOpenCall = () => {
     if (!openCallId) return;
@@ -341,9 +403,16 @@ async function* parseKiroAttemptEvents(
   let sawRealTool = false;
   let completionAnswer: string | undefined;
   let completionCalls = 0;
+  // A structured-output call whose input failed validation on the FIRST attempt. It earns the one
+  // bounded retry instead of failing the turn, because the likely fault (a missing required key, a
+  // wrong root type) is one the model can correct when told; the retry itself gets no second one.
+  let structuredRetry = false;
+  // Structured output replaces the completion tool as the turn's terminal channel (payload.ts).
+  const terminalToolName = structuredOutput ? KIRO_STRUCTURED_OUTPUT_TOOL_NAME : KIRO_COMPLETION_TOOL_NAME;
   let authoritativeUsage: OcxUsage | undefined;
   let providerCredits: number | undefined;
   let stopReason: string | undefined;
+  let refusal: KiroRefusalDetails | undefined;
   const fallbackEvents: AdapterEvent[] = [];
   const thinking = new InlineThinkTagParser(budget);
 
@@ -408,6 +477,7 @@ async function* parseKiroAttemptEvents(
     };
   };
 
+  /** The terminal for a classified upstream error frame; retryable only while nothing has been emitted. */
   const classifiedTerminal = (failure: KiroErrorClassification): AdapterEvent => {
     // Upstream exception/error frames can arrive after commentary was already staged (and will be
     // flushed before this terminal is yielded). Replaying after that content would duplicate it.
@@ -433,8 +503,16 @@ async function* parseKiroAttemptEvents(
     };
   };
 
+  /**
+   * The terminal for a protocol violation. A malformed private-tool answer on the bounded retry is
+   * a retryable incomplete for ordinary turns and a non-retryable failure for structured output;
+   * everything else is a non-retryable 502.
+   */
   const protocolTerminal = (message: string, malformedCompletion = false): AdapterEvent => {
     if (mode === "text_fallback" && malformedCompletion) {
+      // The bounded retry was the structured contract's second ask; a malformed answer on it ends
+      // the turn with the non-retryable structured failure, never a replayable incomplete.
+      if (structuredOutput) return kiroStructuredOutputFailure(message, usage());
       return retryableKiroIncomplete(
         "malformed_kiro_completion",
         message,
@@ -463,12 +541,22 @@ async function* parseKiroAttemptEvents(
     console.warn("[kiro] dropped the private final-answer call; the turn also carried a real tool call");
   };
 
+  /**
+   * Mark a tool call as the turn's private terminal tool or an ordinary client tool, and return a
+   * terminal when the call names a reserved tool this turn did not advertise or completion is disabled.
+   */
   const classifyTool = (
     tool: { id: string; name: string; chunks: string[]; completion: boolean },
   ): AdapterEvent | undefined => {
-    if (tool.name !== KIRO_COMPLETION_TOOL_NAME) {
+    if (tool.name !== KIRO_COMPLETION_TOOL_NAME && tool.name !== KIRO_STRUCTURED_OUTPUT_TOOL_NAME) {
       tool.completion = false;
       return undefined;
+    }
+    // Both private names are reserved against client tools (kiro-wire.ts), so a call to the one
+    // this turn did not advertise can only be the model inventing it. Relaying it as a client
+    // tool would hand the client a call to a tool it never declared.
+    if (tool.name !== terminalToolName) {
+      return protocolTerminal("Kiro returned a reserved private tool this turn did not advertise");
     }
     if (mode === "disabled") {
       return protocolTerminal("Kiro returned the reserved private final-answer tool while explicit completion was disabled");
@@ -483,8 +571,8 @@ async function* parseKiroAttemptEvents(
   const beginTool = (
     id: string,
     name: string,
-  ): { tool?: { id: string; name: string; chunks: string[]; completion: boolean }; terminal?: AdapterEvent } => {
-    const next = { id, name, chunks: [], completion: false };
+  ): { tool?: { id: string; name: string; chunks: string[]; inputBytes: number; completion: boolean }; terminal?: AdapterEvent } => {
+    const next = { id, name, chunks: [], inputBytes: 0, completion: false };
     const terminal = classifyTool(next);
     return terminal ? { terminal } : { tool: next };
   };
@@ -501,6 +589,11 @@ async function* parseKiroAttemptEvents(
     return [{ type: "heartbeat" }];
   };
 
+  /**
+   * Account for one content event and route it by completion mode: emitted directly when completion
+   * is disabled, held until validation in `required` mode, and retained for the bounded retry's
+   * decision in `text_fallback` mode.
+   */
   const stage = (event: AdapterEvent): AdapterEvent[] => {
     if (event.type === "text_delta") {
       const nextAssistantTextBytes = appendedUtf8Bytes(assistantText, assistantTextBytes, event.text);
@@ -547,7 +640,12 @@ async function* parseKiroAttemptEvents(
     return mode === "required" ? defer(event) : [event];
   };
 
+  /** Parse the private terminal tool's input into the answer text: the validated JSON for structured output, otherwise the completion tool's `answer`. */
   const parseCompletion = (chunks: string[]): string | Error => {
+    if (structuredOutput) {
+      const parsed = parseKiroStructuredToolInput(structuredOutput, chunks.join(""));
+      return "json" in parsed ? parsed.json : new Error(parsed.error);
+    }
     const raw = chunks.join("").trim();
     let value: unknown;
     try {
@@ -565,6 +663,10 @@ async function* parseKiroAttemptEvents(
     return answer;
   };
 
+  /**
+   * Close the open tool call: record a private terminal answer (or schedule its bounded retry), or
+   * emit a real client tool call. Returns a terminal when the call cannot be accepted.
+   */
   const flushOpen = (): { events: AdapterEvent[]; terminal?: AdapterEvent } => {
     if (!open) return { events: [] };
     const tool = open;
@@ -572,6 +674,14 @@ async function* parseKiroAttemptEvents(
     closeOpenCall();
     const input = tool.chunks.join("");
     if (!isCompleteKiroToolInput(input)) {
+      // A truncated structured answer is the same correctable fault as one that fails to parse: it
+      // earns the bounded retry, decided with the stop reason at the end of the attempt. The retry
+      // itself (text_fallback) ends non-retryably through protocolTerminal.
+      if (structuredOutput && mode === "required" && tool.completion) {
+        completionCalls++;
+        structuredRetry = true;
+        return { events: [] };
+      }
       return { events: [], terminal: protocolTerminal(kiroTruncationErrorMessage("incomplete tool input JSON"), tool.completion) };
     }
     if (tool.completion) {
@@ -580,6 +690,11 @@ async function* parseKiroAttemptEvents(
         return { events: [], terminal: protocolTerminal("Kiro returned more than one private final-answer tool call", true) };
       }
       const answer = parseCompletion(tool.chunks);
+      if (answer instanceof Error && structuredOutput) {
+        if (mode !== "required") return { events: [], terminal: kiroStructuredOutputFailure(answer.message, usage()) };
+        structuredRetry = true;
+        return { events: [] };
+      }
       if (answer instanceof Error) return { events: [], terminal: protocolTerminal(answer.message, true) };
       if (sawRealTool) {
         noteDroppedCompletion();
@@ -639,6 +754,7 @@ async function* parseKiroAttemptEvents(
             contextUsagePercentage = ev.contextUsagePercentage;
           }
           if (ev.stopReason !== undefined) stopReason = ev.stopReason;
+          if (ev.refusal) refusal = ev.refusal;
           break;
         case "message_metadata":
           if (isValidKiroConversationId(ev.conversationId)) {
@@ -715,12 +831,13 @@ async function* parseKiroAttemptEvents(
             }
           }
           if (open && ev.input !== undefined) {
-            const previousCallBytes = open.chunks.reduce((total, chunk) => total + Buffer.byteLength(chunk), 0);
+            const previousCallBytes = open.inputBytes;
             const nextCallBytes = previousCallBytes + Buffer.byteLength(ev.input);
             const callReservation = budget.reserveTransient(nextCallBytes, { kind: "tool_args", callId: open.id });
             open.chunks.push(ev.input);
             callReservation.commitRetained();
             budget.releaseRetained(previousCallBytes, { kind: "tool_args", callId: open.id });
+            open.inputBytes = nextCallBytes;
             const nextOutputCharsBytes = appendedUtf8Bytes(outputChars, outputCharsBytes, ev.input);
             const toolOutputReservation = budget.reserveTransient(nextOutputCharsBytes, { kind: "retained_collectors" });
             outputChars += ev.input;
@@ -758,7 +875,11 @@ async function* parseKiroAttemptEvents(
     }
     if (open) {
       const input = open.chunks.join("");
-      if (!isCompleteKiroToolInput(input)) {
+      // A truncated structured answer still open at end of stream goes through flushOpen like one
+      // closed by a tool-stop frame: the bounded retry, decided with the stop reason below. Every
+      // other open call keeps this guard's terminal.
+      const structuredTruncation = structuredOutput !== undefined && mode === "required" && open.completion;
+      if (!structuredTruncation && !isCompleteKiroToolInput(input)) {
         const privateTool = open.completion;
         open = null;
         return {
@@ -824,7 +945,12 @@ async function* parseKiroAttemptEvents(
       sawRealTool,
       completionCalls,
       nativeCompletionStop,
-      ...(stopReason !== undefined ? { stopReason } : {}),
+      ...(structuredOutput ? { structuredOutput: true, structuredRetry } : {}),
+      ...(stopReason !== undefined ? { stopReason: [
+        "END_TURN", "STOP_SEQUENCE", "MAX_TOKENS", "MODEL_CONTEXT_WINDOW_EXCEEDED",
+        "MALFORMED_TOOL_USE", "MALFORMED_MODEL_OUTPUT", "TOOL_USE",
+        "CONTENT_FILTERED", "GUARDRAIL_INTERVENED",
+      ].includes(normalizedStopReason ?? "") ? normalizedStopReason : "other" } : {}),
       assistantChars: assistantText.length,
     });
 
@@ -833,8 +959,27 @@ async function* parseKiroAttemptEvents(
     }
 
     if (mode === "text_fallback") {
+      // A validated final answer and a real tool call keep their precedence; only a turn that would
+      // otherwise end on its text is read as refused. Neither attempt produced an accepted answer, so
+      // the first attempt's held progress is released rather than superseded (retry text normally
+      // replaces it), and the filtered retry text follows as the commentary it was staged as.
+      if (completionAnswer === undefined && !sawRealTool && isKiroContentFilterStop(normalizedStopReason)) {
+        // A structured-output caller never receives prose: text from either attempt is dropped and
+        // only their non-text events and the filter terminal remain.
+        if (priorAttempt) yield* priorAttempt.drainDeferred(structuredOutput !== undefined);
+        yield* structuredOutput ? consumeSupersededByCompletion(fallbackEvents) : emitRetained(fallbackEvents);
+        return {
+          assistantText,
+          sawReasoning,
+          terminal: kiroContentFilterIncomplete(normalizedStopReason, refusal, finalUsage, finalProviderState),
+        };
+      }
       if (priorAttempt) {
-        yield* priorAttempt.drainDeferred(completionAnswer !== undefined || (sawText && !sawRealTool));
+        // Structured output supersedes first-attempt prose on every outcome but a real tool call:
+        // success replaces it, and failure must not relay it (see `dropHeldProse`).
+        yield* priorAttempt.drainDeferred(structuredOutput
+          ? !sawRealTool
+          : completionAnswer !== undefined || (sawText && !sawRealTool));
       }
       if (completionAnswer !== undefined) {
         yield* consumeSupersededByCompletion(fallbackEvents);
@@ -853,6 +998,25 @@ async function* parseKiroAttemptEvents(
           terminal: { type: "done", usage: finalUsage, endTurn: false, ...(finalProviderState ? { providerState: finalProviderState } : {}) },
         };
       }
+      if (sawText && structuredOutput) {
+        // Same clean-stop rule as the first attempt: text a MAX_TOKENS cut ended is not an answer,
+        // even when its prefix parses.
+        const cleanStop = isKiroStructuredCleanStop(normalizedStopReason);
+        const json = cleanStop ? parseKiroStructuredText(structuredOutput, assistantText) : undefined;
+        yield* consumeSupersededByCompletion(fallbackEvents);
+        if (json === undefined) {
+          const message = !cleanStop && normalizedStopReason
+            ? kiroStructuredStopFailure(normalizedStopReason)
+            : KIRO_STRUCTURED_TEXT_FAILURE;
+          return { assistantText, sawReasoning, terminal: kiroStructuredOutputFailure(message, finalUsage) };
+        }
+        yield { type: "text_delta", text: json, phase: "final_answer" };
+        return {
+          assistantText,
+          sawReasoning,
+          terminal: { type: "done", usage: finalUsage, endTurn: true, ...(finalProviderState ? { providerState: finalProviderState } : {}) },
+        };
+      }
       if (sawText) {
         for (const event of fallbackEvents) {
           try {
@@ -867,6 +1031,13 @@ async function* parseKiroAttemptEvents(
           sawReasoning,
           terminal: { type: "done", usage: finalUsage, endTurn: true, ...(finalProviderState ? { providerState: finalProviderState } : {}) },
         };
+      }
+      if (structuredOutput) {
+        // The model was already asked twice inside this turn; an empty or reasoning-only retry ends
+        // the structured contract with its non-retryable failure, never a retryable empty fallback
+        // that would let the proxy replay the whole turn.
+        yield* consumeSupersededByCompletion(fallbackEvents);
+        return { assistantText, sawReasoning, terminal: kiroStructuredOutputFailure(KIRO_STRUCTURED_EMPTY_FAILURE, finalUsage) };
       }
       yield* emitRetained(fallbackEvents);
       return {
@@ -885,6 +1056,17 @@ async function* parseKiroAttemptEvents(
       };
     }
 
+    // Ahead of the empty-stream fallback below: a tool-less (`disabled`) turn Kiro refuses carries
+    // no content at all, and reading it as a replay-safe empty stream made clients resend a refusal
+    // that repeats deterministically. Partial text before the filter is not a finished answer either.
+    // A validated final answer and a real tool call keep their precedence, as on the retry path.
+    if (completionAnswer === undefined && !sawRealTool && isKiroContentFilterStop(normalizedStopReason)) {
+      return {
+        assistantText,
+        sawReasoning,
+        terminal: kiroContentFilterIncomplete(normalizedStopReason, refusal, finalUsage, finalProviderState),
+      };
+    }
     if (completionAnswer !== undefined) {
       yield { type: "text_delta", text: completionAnswer, phase: "final_answer" };
       return {
@@ -899,6 +1081,34 @@ async function* parseKiroAttemptEvents(
         sawReasoning,
         terminal: { type: "done", usage: finalUsage, endTurn: false, ...(finalProviderState ? { providerState: finalProviderState } : {}) },
       };
+    }
+    if (mode === "required" && structuredOutput) {
+      // Any stop reason other than a clean one falls through to its own handling below: a failed
+      // structured answer under MAX_TOKENS, a content filter or an exhausted context window earns no
+      // retry, and a MAX_TOKENS cut is never mistaken for an answer even when its prefix parses.
+      const cleanStop = isKiroStructuredCleanStop(normalizedStopReason);
+      if (structuredRetry && cleanStop) {
+        return { assistantText, sawReasoning, needsFallback: true, usage: finalUsage, providerState: finalProviderState };
+      }
+      // A model that wrote the requested JSON as text, and stopped cleanly, has answered: accept it
+      // without a second paid request.
+      const json = sawText && cleanStop && completionCalls === 0
+        ? parseKiroStructuredText(structuredOutput, assistantText)
+        : undefined;
+      if (json !== undefined) {
+        yield* consumeSupersededByCompletion(deferred);
+        yield { type: "text_delta", text: json, phase: "final_answer" };
+        return {
+          assistantText,
+          sawReasoning,
+          terminal: { type: "done", usage: finalUsage, endTurn: true, ...(finalProviderState ? { providerState: finalProviderState } : {}) },
+        };
+      }
+      // A clean stop without an accepted answer, prose or nothing at all, earns the one bounded
+      // retry: an empty END_TURN is as recoverable as prose, and the caller still needs JSON.
+      if (cleanStop) {
+        return { assistantText, sawReasoning, needsFallback: true, usage: finalUsage, providerState: finalProviderState };
+      }
     }
     if (mode === "required" && nativeCompletionStop) {
       return {
@@ -953,9 +1163,6 @@ async function* parseKiroAttemptEvents(
         };
       }
       if (normalizedStopReason === "MAX_TOKENS") return incomplete("max_output_tokens", true);
-      if (normalizedStopReason === "CONTENT_FILTERED" || normalizedStopReason === "GUARDRAIL_INTERVENED") {
-        return incomplete("content_filter", false);
-      }
       if (normalizedStopReason === "MALFORMED_TOOL_USE") return incomplete("kiro_malformed_tool_use", false);
       if (normalizedStopReason === "MALFORMED_MODEL_OUTPUT") return incomplete("kiro_malformed_model_output", false);
       // TOOL_USE here means Kiro claimed a tool call it never emitted.
@@ -1042,6 +1249,10 @@ async function* parseKiroAttemptEvents(
   }
 }
 
+/**
+ * Parse a Kiro response into adapter events, running at most one bounded retry through
+ * `fallbackFactory` when the first attempt ends without a validated answer.
+ */
 export async function* parseKiroStream(
   response: Response,
   budget: TranslatorBudget,
@@ -1053,8 +1264,11 @@ export async function* parseKiroStream(
   completionMode: KiroCompletionMode = "disabled",
   fallbackFactory?: KiroFallbackFactory,
   contextInputEstimate?: number,
+  structuredOutput?: KiroStructuredOutputSpec,
 ): AsyncGenerator<AdapterEvent> {
   const contextWindowState: KiroContextWindowState = { value: contextWindow };
+  // See `dropHeldProse` in parseKiroAttempt: a structured-output caller never receives held prose.
+  const dropHeldProse = structuredOutput !== undefined;
   const firstResult = yield* parseKiroAttempt(
     response,
     budget,
@@ -1066,6 +1280,8 @@ export async function* parseKiroStream(
     conversationId,
     contextInputEstimate,
     false,
+    undefined,
+    structuredOutput,
   );
   try {
     if (!firstResult.needsFallback) {
@@ -1073,7 +1289,7 @@ export async function* parseKiroStream(
       return;
     }
     if (!fallbackFactory) {
-      yield* firstResult.drainDeferred();
+      yield* firstResult.drainDeferred(dropHeldProse);
       yield retryableKiroIncomplete(
         "uncompleted_kiro_response",
         "Kiro produced progress without an explicit final answer and no bounded retry transport was available",
@@ -1098,7 +1314,7 @@ export async function* parseKiroStream(
         budget,
       );
     } catch (err) {
-      yield* firstResult.drainDeferred();
+      yield* firstResult.drainDeferred(dropHeldProse);
       firstAssistantText = "";
       firstResult.assistantText = "";
       firstResult.releaseRetained();
@@ -1130,7 +1346,7 @@ export async function* parseKiroStream(
     firstResult.releaseCollectors();
     fallback.releaseRequestBody?.();
     if (!fallback.response.ok) {
-      yield* firstResult.drainDeferred();
+      yield* firstResult.drainDeferred(dropHeldProse);
       const payload = await readDisplaySafeErrorPayloadText(fallback.response, fallback.abortSignal);
       const failure = classifyKiroHttpError(fallback.response.status, fallback.response.headers, payload);
       yield {
@@ -1158,6 +1374,7 @@ export async function* parseKiroStream(
       // Failed validation will release the held first-attempt progress.
       priorEmittedOutput,
       firstResult,
+      structuredOutput,
     );
     try {
       if (!secondResult.terminal) {

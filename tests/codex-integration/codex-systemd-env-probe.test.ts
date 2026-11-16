@@ -44,17 +44,44 @@ for (const offline of [false, true]) describe(`systemd home decoding (${offline 
   }
 
   test("production buildUnit values round trip quotes, percent, backslash, spaces and newline", () => {
-    const codexHome = '/fixture/a "quoted" 50% \\ path\nsecond/.codex';
-    const opencodexHome = '/fixture/b \\n literal %% "value"/.opencodex';
+    const codexHome = join(testHome, 'a "quoted" 50% \\ path\nsecond', ".codex");
+    const opencodexHome = join(testHome, 'b \\n literal %% "value"', ".opencodex");
     process.env.CODEX_HOME = codexHome;
     process.env.OPENCODEX_HOME = opencodexHome;
-    writeFileSync(unitPath, buildUnit([], {
+    const unit = buildUnit([], {
       launcher: "/fixture/bin/ocx",
       runtime: { path: "/fixture/bin/bun", source: "bundled", overrideEnv: "OPENCODEX_BUN_PATH" },
-    }));
+    });
+    const codexLines = unit.split("\n").filter(line => line.startsWith('Environment="CODEX_HOME='));
+    const ocxLines = unit.split("\n").filter(line => line.startsWith('Environment="OPENCODEX_HOME='));
+    expect(codexLines).toHaveLength(1);
+    expect(ocxLines).toHaveLength(1);
+    const codexSuffix = process.platform === "win32"
+      ? String.raw`\\a \"quoted\" 50%% \\ path\nsecond\\.codex"`
+      : String.raw`/a \"quoted\" 50%% \\ path\nsecond/.codex"`;
+    const ocxSuffix = process.platform === "win32"
+      ? String.raw`\\b \\n literal %%%% \"value\"\\.opencodex"`
+      : String.raw`/b \\n literal %%%% \"value\"/.opencodex"`;
+    expect(codexLines[0]!).toEndWith(codexSuffix);
+    expect(ocxLines[0]!).toEndWith(ocxSuffix);
+    writeFileSync(unitPath, unit);
     const result = inspectServiceManagerInstallation(probe());
     expect(result.kind).toBe("present");
     if (result.kind !== "present") return;
+    expect(result.claims[0]?.homes).toEqual({ codexHome, opencodexHome });
+    expect(result.claims[0]?.registration).toBe(offline ? "absent" : "present");
+  });
+
+  test("handwritten systemd environment preserves literal backslashes and escaped characters", () => {
+    const codexHome = '/fixture/a "quoted" 50% \\ path\nsecond/.codex';
+    const opencodexHome = '/fixture/b \\n literal %% "value"/.opencodex';
+    writeFileSync(unitPath, ["[Service]",
+      String.raw`Environment="CODEX_HOME=/fixture/a \"quoted\" 50%% \\ path\nsecond/.codex"`,
+      String.raw`Environment="OPENCODEX_HOME=/fixture/b \\n literal %%%% \"value\"/.opencodex"`,
+    ].join("\n"));
+    const result = inspectServiceManagerInstallation(probe());
+    expect(result.kind).toBe("present");
+    if (result.kind !== "present") throw new Error("expected fixture service");
     expect(result.claims[0]?.homes).toEqual({ codexHome, opencodexHome });
     expect(result.claims[0]?.registration).toBe(offline ? "absent" : "present");
   });
@@ -100,7 +127,7 @@ for (const offline of [false, true]) describe(`systemd home decoding (${offline 
 
   test.each([
     ["unknown escape", 'Environment="CODEX_HOME=/fixture/\\q"'],
-    ["unsupported tab escape", 'Environment="CODEX_HOME=/fixture/\\t"'],
+    ["unsupported hex escape", 'Environment="CODEX_HOME=/fixture/\\x41"'],
     ["systemd specifier", 'Environment="CODEX_HOME=%h/.codex"'],
     ["single trailing percent", 'Environment="CODEX_HOME=/fixture/50%"'],
     ["unclosed quote", 'Environment="CODEX_HOME=/fixture/.codex'],

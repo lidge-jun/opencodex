@@ -4,13 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   getValidAccessTokenForAccount,
+  getValidAccessSnapshotForAccount,
   MAX_OAUTH_TOKEN_REFRESH_WAITERS,
   OAuthTokenRefreshBusyError,
   OAuthTokenRefreshStaleError,
   OAUTH_PROVIDERS,
   seedOAuthTokenRefreshFlightsForTests,
 } from "../../src/oauth";
-import { credentialGeneration, getAccountCredential, getAccountSet, readOAuthRefreshIntent,
+import { createOAuthRefreshIntentLock, credentialGeneration, getAccountCredential, getAccountSet, readOAuthRefreshIntent,
   saveCredential, writeOAuthRefreshIntent } from "../../src/oauth/store";
 import { AnthropicTokenError } from "../../src/oauth/anthropic";
 import * as store from "../../src/oauth/store";
@@ -42,6 +43,39 @@ async function seed(provider: "anthropic" | "kimi") {
   await saveCredential(provider, { access: "fixture-old", refresh: "fixture-refresh", expires: 1, accountId: "fixture-account" });
   return getAccountSet(provider)!.activeAccountId;
 }
+
+test("an independent resolver does not retry an unknown stale refresh outcome", async () => {
+  const id = await seed("kimi");
+  const unknown = new OAuthTokenRefreshStaleError();
+  let calls = 0;
+  OAUTH_PROVIDERS.kimi!.refresh = async () => { calls++; throw unknown; };
+  await expect(getValidAccessSnapshotForAccount("kimi", id)).rejects.toBe(unknown);
+  expect(calls).toBe(1);
+  expect(getAccountCredential("kimi", id)?.access).toBe("fixture-old");
+  expect(getAccountSet("kimi")!.accounts.find(a => a.id === id)?.needsReauth).not.toBe(true);
+});
+
+test("saturated independent waiters release admission before replacing a cancelled discovery owner", async () => {
+  const id = await seed("kimi");
+  const guard = await createOAuthRefreshIntentLock("kimi", id).acquire();
+  let current = true, calls = 0;
+  OAUTH_PROVIDERS.kimi!.refresh = async () => {
+    calls++;
+    return { access: "fixture-independent-new", refresh: "fixture-independent-next", expires: Date.now() + 3_600_000 };
+  };
+  const owner = getValidAccessSnapshotForAccount("kimi", id, { authorityCurrent: () => current }).catch(error => error);
+  const waiters = Array.from({ length: MAX_OAUTH_TOKEN_REFRESH_WAITERS - 1 }, () =>
+    getValidAccessSnapshotForAccount("kimi", id).catch(error => error));
+  try {
+    await expect(getValidAccessSnapshotForAccount("kimi", id)).rejects.toBeInstanceOf(OAuthTokenRefreshBusyError);
+    current = false; guard.release();
+    expect(await owner).toBeInstanceOf(OAuthTokenRefreshStaleError);
+    const snapshots = await Promise.all(waiters);
+    expect(snapshots.every(row => row.accessToken === "fixture-independent-new" && row.accountId === id)).toBe(true);
+    expect(calls).toBe(1);
+    expect(getAccountCredential("kimi", id)?.refresh).toBe("fixture-independent-next");
+  } finally { guard.release(); await Promise.allSettled([owner, ...waiters]); }
+});
 
 // A rejected admission must not discard the stale owner's generation-bound intent evidence.
 test("saturated stale post-dispatch owner remains retryable after all 256 consumers settle", async () => {

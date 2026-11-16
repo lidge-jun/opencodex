@@ -8,6 +8,7 @@ import ProviderDetails from "../src/components/provider-workspace/ProviderDetail
 import { navigateHash } from "../src/hash-routing";
 import { LanguageProvider } from "../src/i18n/provider";
 import Combos from "../src/pages/Combos";
+import { chooseOption, selectOptions, selectTrigger, selectValue } from "./helpers/custom-select";
 import type { ComboItem } from "../src/combo-workspace-data";
 
 const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
@@ -60,11 +61,6 @@ async function flush(rounds = 3) {
   });
 }
 
-function setSelect(select: HTMLSelectElement, value: string) {
-  Object.getOwnPropertyDescriptor(testWindow.HTMLSelectElement.prototype, "value")!
-    .set!.call(select, value);
-  select.dispatchEvent(new testWindow.Event("change", { bubbles: true }));
-}
 
 function setInput(input: HTMLInputElement, value: string) {
   Object.getOwnPropertyDescriptor(testWindow.HTMLInputElement.prototype, "value")!
@@ -149,9 +145,9 @@ test("a keyless self-hosted decision row creates JEV Auto with itself as the dec
   expect(dialog).not.toBeNull();
   // The deep-linked row selects the System One method; the select lists only server rows.
   expect(host.querySelector("#cwi-new-decision-method-systemone")?.getAttribute("aria-pressed")).toBe("true");
-  const service = host.querySelector<HTMLSelectElement>("#cwi-new-decision-provider")!;
-  expect(service.value).toBe("tev-local");
-  expect([...service.options].map(option => [option.value, option.textContent, option.disabled])).toEqual([
+  const service = selectTrigger(host, "#cwi-new-decision-provider");
+  expect(selectValue(service)).toBe("tev-local");
+  expect((await selectOptions(service)).map(option => [option.value, option.label, option.disabled])).toEqual([
     ["tev-local", "tev-local", false],
     // A disabled decision row is listed with its reason but cannot be picked.
     ["tev-off", "tev-off (disabled)", true],
@@ -229,8 +225,8 @@ test("the overview names each JEV combo's service; the editor clears it and hide
   await act(async () => { row!.click(); });
   await flush(); // the detail panel syncs its draft from the baseline on a zero-delay timer
 
-  const service = host.querySelector<HTMLSelectElement>("#cwi-edit-decision-provider")!;
-  expect(service.value).toBe("tev-local");
+  const service = selectTrigger(host, "#cwi-edit-decision-provider");
+  expect(selectValue(service)).toBe("tev-local");
   expect(host.querySelector<HTMLInputElement>("#cwi-edit-decision-timeout")!.value).toBe("30000");
 
   // Switching to TypeSafe is a method choice; the server select goes away with it.
@@ -292,11 +288,11 @@ test("a stored decision service that is gone stays selected with its reason and 
   await act(async () => { host.querySelector<HTMLButtonElement>('[data-decision-provider="gone"]')!.click(); });
   await flush();
 
-  const service = host.querySelector<HTMLSelectElement>("#cwi-edit-decision-provider")!;
+  const service = selectTrigger(host, "#cwi-edit-decision-provider");
   // Opening the editor never rewrites the stored id.
-  expect(service.value).toBe("gone");
-  const stored = [...service.options].find(option => option.value === "gone")!;
-  expect(stored.textContent).toBe("gone (not configured)");
+  expect(selectValue(service)).toBe("gone");
+  const stored = (await selectOptions(service)).find(option => option.value === "gone")!;
+  expect(stored.label).toBe("gone (not configured)");
   expect(stored.disabled).toBe(false);
   expect(service.getAttribute("aria-invalid")).toBe("true");
   expect(service.getAttribute("aria-describedby"))
@@ -312,7 +308,7 @@ test("a stored decision service that is gone stays selected with its reason and 
   expect(host.querySelector(".notice-err")?.textContent)
     .toBe("Decision service gone can't be used (not configured). Choose another service or TypeSafe JEV.");
 
-  await act(async () => { setSelect(service, "tev-local"); });
+  await chooseOption(service, "tev-local");
   await act(async () => { host.querySelector<HTMLButtonElement>("#cwi-edit-save")!.click(); });
   await flush();
   expect(saved.at(-1)).toMatchObject({ decisionProvider: "tev-local", decisionTimeoutMs: 5000 });

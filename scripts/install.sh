@@ -21,11 +21,11 @@ fi
 
 echo "Using Node $(node --version)"
 
-# Install opencodex globally
-# If npm reports "install scripts blocked" for bun, rerun as:
-#   npm install -g --allow-scripts=bun @bitkyc08/opencodex
+# Install opencodex globally. npm 12 blocks dependency lifecycle scripts by default, and
+# bun's postinstall is what unpacks the bundled runtime; without this approval the install
+# succeeds but `ocx` cannot start (#8361). npm 8 through 11 accept the flag on global installs.
 # (keep sudo if the original install used sudo)
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 
 if ! command -v ocx &>/dev/null; then
   NPM_BIN="$(npm bin -g 2>/dev/null || printf "%s/bin" "$(npm prefix -g)")"

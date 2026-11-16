@@ -75,11 +75,16 @@ only. It copies no request content and adds no bytes to the upstream wire; see t
 
 `src/server/request-decompress.ts` observes the UTF-8 sizes of decoded text and reserialized JSON
 without allocating encoded byte arrays solely to count them. Parsed-body accounting still uses
-`JSON.stringify(parsed)`: numeric normalization can make it larger than the input text. These
+the byte length of `JSON.stringify(parsed)`: numeric normalization can make it larger than the input
+text. `src/server/json-serialized-bytes.ts` computes that length with an iterative walk, so a valid
+body nested deeper than the call stack is measured instead of throwing during accounting. These
 observations retain the existing ownership and release lifecycle and do not consume the translator's
 hard byte cap. Per-body limits, parsing, compression, and reader error envelopes are unchanged.
 `tests/usage/request-decompress.test.ts` covers exact accounting across codecs and Unicode/numeric
-normalization, UTF-8 counting without encoded copies, and release after malformed or optional empty input.
+normalization, UTF-8 counting without encoded copies, release after malformed or optional empty input,
+and serialized-length parity with `JSON.stringify` including nesting it cannot walk.
+
+An encoded request body's decoded size is bounded by its ratio as well as by the inbound limit (#3023): `decodeRequestBody` passes zlib a `maxOutputLength` of max(8 MiB, 200 x its wire bytes), never above the inbound limit (`compressedBodyDecodeLimit`), so inflation stops there and memory and time are bounded by it. A 2,067-byte zstd frame inflates to 64 MiB, so before this bound one tiny request could allocate up to the whole inbound limit. A body past the ratio bound fails with `CompressionRatioExceededError`, a `DecompressedBodyTooLargeError` (413 on every route that maps one) whose message names the compression-bomb guard and does not advise raising `maxInboundBodyBytes`. A body that decodes to 8 MiB or less is never refused for its ratio. The bound applies to every encoded body, a local Codex's own zstd included. Decoding is synchronous, so one decode runs at a time, but decoded bodies stay alive while their requests run; so an encoded body on a JSON data route joins the shared inbound budget (`withRaisedInboundBodyAdmission` in `src/server/inbound-body-admission.ts`) at every inbound limit, not only a raised one. It reserves what it may decode to (`compressedBodyDecodeLimit` of its declared wire bytes, or the whole limit without a declaration) before a byte is read, the reader shrinks that to the measured size, and the reservation ends when the response settles; a body that does not fit waits in the budget's queue or is refused with 503 `server_busy`, unread. Identity bodies at the default limit stay ungated, as before. `tests/server/inbound-encoded-body-budget.test.ts` covers the reservation, the shrink, the release and a refusal while identity bodies pass. Three frame shapes are pinned to what the runtime's zstd does: a truncated frame decodes to its complete blocks only (no error; the data plane then answers 400 because the JSON does not parse), concatenated frames decode in full with the ratio bound counting their total, and a frame header asking for a window above 128 MiB (zstd's default `windowLogMax` of 27) is refused before any output (400), while one at 128 MiB is accepted; since decoding is synchronous, at most one such window buffer exists at a time. `tests/usage/request-decompress-ratio.test.ts` covers zstd and gzip bombs, the floor, an ordinary body above it, the unchanged absolute limit, the data-plane 413, and the three frame shapes.
 
 The final native ChatGPT Responses HTTP send in `src/server/responses/fetch-helpers.ts` encodes JSON
 strings of at least 1 MiB as a UTF-8 buffer for Bun upload compatibility. This is a transport copy,
@@ -105,7 +110,7 @@ discarding active leases or FIFO waiters; lowering capacity cannot erase outstan
 checks, before any request body is read. Default and smaller allowances do not consume this budget.
 Missing or small Content-Length and compressed wire bodies do not reduce the upload reservation.
 After successful bounded JSON parsing, the reader reduces it to the largest observed wire/decoded
-size, including normalized JSON bytes when the existing translator measurement is enabled.
+size, including normalized JSON bytes whether or not the route uses a translator budget.
 This reduction never exceeds the original allowance. The measured charge remains live;
 parsing never frees the whole lease.
 An already-aborted request or explicitly oversized declaration keeps the existing abort/413 path.
@@ -139,6 +144,30 @@ It does not bound state beyond the HTTP lifetime or change default-cap concurren
 envelopes, and real HTTP streams; `tests/server/inbound-body-budget.test.ts` covers FIFO/accounting.
 
 ## Stream-buffer accounting
+
+Kiro tool-input collection in `src/adapters/kiro/stream.ts` keeps a per-call UTF-8 byte
+total, measuring only the arriving fragment instead of remeasuring retained chunks.
+Each new call starts at zero; transient replacement admission, per-call limits and
+close/cancellation release remain unchanged. `tests/providers/kiro/kiro-tool-byte-accounting.test.ts`
+bounds measurement work and covers Unicode byte limits and consecutive-call reset.
+
+Command Code NDJSON in `src/adapters/command-code.ts` holds one `live_transient` charge for
+its decoded buffer. Growth reserves only the positive byte delta; draining releases only the
+removed bytes. Recounting an unchanged residual does not reserve it twice. Failed growth keeps
+the previous charge owned until `finally` releases it, without releasing other owners' bytes.
+The turn limit and transport-read accounting remain in force. `tests/providers/command-code-buffer-budget.test.ts`
+covers exact-limit Unicode records across whole/one-byte reads and newline/EOF termination,
+one-byte overflow, another retained owner, consumer return and upstream cancellation. Byte sizing
+measures only new decoded text, including EOF replacement bytes; newline searches run only when
+new text contains a newline, and only a drained residual is remeasured. The same tests bound total
+measurement and search input by wire size for both newline and EOF termination.
+
+Devin Connect-RPC in `src/adapters/devin/cloud-direct/chat.ts` compacts surviving chunks in place
+and truncates the queue, or clears it when no bytes remain. No deleted-chunk
+result array is allocated. Partial head slices and later
+frames retain their order without one `shift()` per chunk. `tests/providers/devin-stream-queue.test.ts`
+bounds prefix-removal calls and discarded-array slots on fragmented frames and covers split/coalesced headers and payloads,
+Unicode, empty frames and gzip. Existing frame/inflation caps, EOS handling and teardown remain in force.
 
 Native Ollama NDJSON in `src/adapters/ollama-native.ts` measures new decoded fragments without
 allocating UTF-8 arrays. A fragment without a newline extends the cached residual byte count;
@@ -193,6 +222,17 @@ budget until downstream delivery. Cancellation and overflow release held events 
 the request translator budget. Each owner releases its own reservations on completion, error,
 cancellation or consumer closure; a buffer-limit failure terminates without another search.
 
+`src/server/messages-sse-error-filter.ts` keeps one confirmed first-field-error suffix in a single
+allocation capped at 1 MiB, including original-order protocol fields for a within-bound rename.
+Crossing the cap immediately drops that allocation and scans only finite framing state until the
+boundary. Ordinary fields have no prefix hold or new limit. Boundary parse/stringify uses transient
+O(1 MiB) objects, separate from the retained wire-byte cap. Cancellation, stream failure and failed
+enqueue release the suffix. This client presentation copy does not admit against TranslatorBudget:
+legacy tap/guard/rewrite bytes retain the original charges, so fixed frame growth cannot create 413.
+The final existing enqueue stage runs the filter synchronously with no extra stream queue or timer.
+`tests/claude-integration/messages-sse-guard-errors.test.ts` checks fixed growth near the turn limit;
+`tests/server/messages-sse-error-lifecycle.test.ts` covers teardown and ordinary events above 32 MiB.
+
 `src/server/sse-payload-rewrite.ts` shares an incremental block buffer with native Chat. It scans
 only new input plus a three-character delimiter prefix and counts consumed blocks rather than
 remaining suffixes. CR, LF and CRLF share partial-event, injection/drop and EOF behavior.
@@ -214,17 +254,27 @@ original wire bytes. `src/server/relay.ts` re-exports the canonical extractor an
 Empty byte results across the relay and `src/server/sse-frame-buffer.ts` reuse one immutable
 zero-length view; non-empty frame ownership,
 frame limits, cancellation and wire ownership remain bounded. The byte framer and inspection share
+an unfinished-byte count for the native combo replay observer, without exposing or copying its buffer. They share
 one CR/LF/CRLF delimiter scanner; WebSocket projection uses the canonical data extractor. A terminal
 CR dispatches without awaiting EOF. A later LF extends that delimiter: byte delivery returns a
 framing-only continuation, excluded from event-count limits and the next event's byte cap;
 inspection consumes it without creating an event. The text rewrite relay keeps that continuation
 outside rewrite/drop callbacks and settles injected nonfinal CR delimiters as CRLF.
+The relay counts actual client enqueues, including late LF continuations suppressed by the Messages
+filter; with no emitted chunk it keeps reading through the next event or EOF.
+`tests/responses/sse-payload-rewrite-continuation.test.ts` binds that progress across rewrite, tap
+and standalone filter delivery; endpoint coverage also preserves later event bytes.
 
 `src/server/responses-custom-tool-repair.ts` continues to own retained routed argument bytes and
-their charge/release lifecycle while it asks the pure progressive decoder in
-`src/responses/progressive-freeform-input.ts` which prefix is safe to publish. The decoder neither
-charges nor releases translator budget; extracting it from `src/bridge/sse.ts` does not create a
+their charge/release lifecycle while it asks a per-call progressive reader from
+`src/responses/progressive-freeform-input.ts` which prefix is safe to publish. The reader holds only
+parse position and decoded text, and it neither charges nor releases translator budget; extracting
+it from `src/bridge/sse.ts` does not create a
 second retention owner or change terminal, failure, incomplete, or disposal release behavior.
+Both callers keep one reader per open call, in their own call state, and feed it the growing
+arguments. It resumes where the previous delta stopped, so the canonical value is decoded and
+checked for a nested executable wrapper once per call; rescanning both on every delta made
+one-character deltas quadratic in the body length.
 Canonical routed `apply_patch` progress is also tracked by that owner. If authoritative completion
 does not extend the emitted stable prefix, the owner releases every retained call and pending block
 before raising the rewrite failure; the relay emits a failed terminal and never exposes a successful
@@ -269,6 +319,13 @@ plus exact separators, without joining a second full JSON array. `src/lib/admiss
 truncates diagnostic text at UTF-8 code-point boundaries without allocating arrays per character;
 byte sizing retains TextEncoder's coercion behavior for legacy non-string runtime callers.
 These optimizations do not add request queues, retry policies, or RSS-based admission gates.
+
+Zed framing in `src/adapters/zed.ts` searches retained text for newlines only when newly decoded
+text contains one. An incomplete line is not rescanned for every transport fragment. The existing
+character ceiling is checked on every read, including reads without a newline; framing, Unicode
+decoding, terminal suppression and EOF failure behavior stay unchanged.
+`tests/providers/zed-hosted-provider.test.ts` bounds newline-search work and checks fragmented
+UTF-8, split CRLF and coalesced frames.
 
 The buffered collector in `src/adapters/zed.ts` charges each delegated event before retaining it
 and releases owned events when collection fails. Its translated stream is cancelled on early exit
@@ -324,6 +381,33 @@ The allowance can be exceeded by one source chunk plus native tee prefetch; it i
 not an RSS limit or a producer-side bound for push transports. Existing eager-path
 selection, WebSocket bounds and SSE frame/output-item limits are unchanged.
 Client departure releases pacing to the existing 15-second/32-MiB bounded drain.
+A stream marked paced (`src/lib/paced-stream.ts`) changes that for its own request: the
+inspection branch leads its client by one chunk instead of the allowance, the eager relay
+queues one chunk instead of 8 MiB, and each stage that reads a paced source (the block
+rewrite, the failed-tail relay, the translator-budget and account-lease wrappers, a combo
+preflight's replay) queues
+nothing ahead and marks its own output, so the chain reads as the client asks. Only a Remote
+Link turn while the link WebSocket feature is on is paced (#8601, `remote-link.md`); its
+upstream chunks are also cut into 256 KiB views (`sliceChunks`), so each stage holds a slice
+rather than a whole source chunk. Unmarked streams keep every queue described above.
+The slicer sits where delivery picks its relay (`passthrough-delivery.ts`), so the stages
+before it are not paced: terminal repair and the web-search bridge, which wrap the upstream
+body first, and the encrypted-output preflight in `passthrough-dispatch.ts` (through
+`combo-stream-preflight.ts`, bounded to 4 MiB before it commits) each keep their default
+queue of one upstream chunk on a paced turn. They are opt-in per provider or bounded, and
+marking them would need the paced decision before the exchange is built.
+A passthrough turn also keeps no parsed copy of its outbound body while it streams
+(`src/server/responses/passthrough-dispatch.ts`): the undeclared-tool guard parses it once when
+the request is built, and only its tool scope (`outboundToolScope` in
+`src/server/responses/outbound-request-body.ts`: the tool catalog, the selection, the parallel
+flag and the input items that declare tools) stays for the later readers, snapshot repair and
+the Grok tool scope, so a large request's input is not held twice (#8601). A streaming combo
+child's required-tool check (`src/server/responses/combo-required-tool-fulfillments.ts`) also
+parses the outbound body once when it is built and keeps whether it denies every tool and its
+tool declarations (shallow copies, which can share nested schema objects with the parse), never the
+parsed body. A combo preflight's replay lets go of each buffered chunk as it hands it to the
+client, and of all of them on cancel, so a committed child's prefix is not held for the rest of
+its turn.
 One tee branch's cancellation is never awaited by the wrapper, because that
 promise may depend on its sibling. A hard owner abort discards pending candidates
 rather than flushing them as successful terminals; genuine EOF/read-error tail
@@ -432,3 +516,18 @@ events and opaque usage are charged until emitted or replaced; cancellation, rea
 identity/argument refusal release every relay-owned buffer. Failed terminals close outstanding calls
 incomplete and replay queued semantics before the error; diagnostic usage keeps only numeric counters,
 releasing any previously retained opaque usage. Ciphertext alone transfers with its done lease.
+
+## Link traffic counters
+
+`src/link/traffic.ts` counts what a Remote Link carried, per link, in one book per process
+(the Child's and the Home's); the counters are plain additions with no lock, timer or disk, and
+`structure/remote-link.md` owns their definition. Relayed HTTP counts body bytes. A link
+WebSocket is one request in the same book on both sides, in the same units: message payload bytes
+each way, without WebSocket framing, handshake or control frames. The Home counts it complete when
+any close frame ended it; the Child also counts its own overload, binary and protocol closes as
+incomplete. On the Home the
+gate in `src/server/index/link-websocket.ts` opens the flow when it opens an admitted socket,
+counts each message that reached it, and ends the flow on close; `sendTextFrame` in
+`src/server/ws-bridge.ts` counts each message Bun took for a link socket (a dropped send is not
+counted). A local socket has no flow, and link sockets exist only while the link WebSocket's
+switch and release gate are on.

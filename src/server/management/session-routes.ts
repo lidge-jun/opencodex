@@ -1,12 +1,15 @@
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
 
+/** The Remember enrollment route; the management Origin gate names its refusal reason (#8338). */
+export const SESSION_REMEMBER_PATH = "/api/session/remember";
+
 export function handleSessionRoutes(ctx: ManagementContext): Response | null {
   if (ctx.url.pathname === "/api/session/remember" && ctx.req.method === "POST") {
     if (ctx.principal !== "admin-token") return jsonResponse({ error: "Admin token required" }, 403, ctx.req, ctx.config);
     try {
       const remembered = ctx.sessionControl?.rememberDevice?.(ctx.req, ctx.config);
-      if (!remembered) return jsonResponse({ error: "Remember requires a direct HTTPS dashboard (or loopback) and matching Origin" }, 403, ctx.req, ctx.config);
+      if (!remembered) return jsonResponse({ error: "Remember requires a direct HTTPS dashboard (or loopback) and matching Origin", code: "remember_requires_direct_origin" }, 403, ctx.req, ctx.config);
       const response = jsonResponse({ session: remembered.session, device: remembered.device }, 200, ctx.req, ctx.config);
       response.headers.set("Set-Cookie", remembered.cookie);
       response.headers.set("Cache-Control", "no-store");

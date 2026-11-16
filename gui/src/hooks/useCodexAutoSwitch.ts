@@ -9,6 +9,8 @@ import {
   putAutoSwitchThreshold,
 } from "../codex-auto-switch";
 import type { AutoSwitchFeedback } from "../components/CodexAutoSwitchSetting";
+import { isApiTargetCaptureCurrent, targetFetch } from "../api";
+import { useRenderTargetCapture } from "../use-render-target-capture";
 
 export interface CodexAutoSwitchController {
   /** Always a number — seeded with the default so the card never waits on /active. */
@@ -38,7 +40,10 @@ export function useCodexAutoSwitch(
     updateFailed: string;
     invalid: string;
   },
+  targetKey?: string,
 ): CodexAutoSwitchController {
+  // The hook's render owns the target for its save.
+  const renderCapture = useRenderTargetCapture(apiBase, targetKey);
   // Seed immediately — paint chrome with the default, but block writes until /active confirms.
   const [threshold, setThreshold] = useState(DEFAULT_AUTO_SWITCH_THRESHOLD);
   const [draft, setDraftState] = useState(String(DEFAULT_AUTO_SWITCH_THRESHOLD));
@@ -154,9 +159,13 @@ export function useCodexAutoSwitch(
     clearFeedback();
     setSaving(true);
     revisionRef.current += 1;
+    const capture = renderCapture;
     try {
-      const ok = await putAutoSwitchThreshold(apiBase, next);
+      const ok = await putAutoSwitchThreshold(apiBase, next, (input, init) => targetFetch(capture, input, init));
       revisionRef.current += 1;
+      // The accepted write belongs to the target that started it; a switch must not
+      // apply its threshold or announce success on the new one.
+      if (!isApiTargetCaptureCurrent(capture)) return false;
       if (ok) {
         deferredServerValueRef.current = null;
         apply(next);
@@ -171,7 +180,7 @@ export function useCodexAutoSwitch(
       setSaving(false);
     }
   // oxlint-disable-next-line react/react-compiler -- preserve existing callback dependency semantics during Oxlint migration
-  }, [apiBase, apply, clearFeedback, messages.updateFailed, messages.updated, reconcileDeferred, showFeedback]);
+  }, [apiBase, apply, clearFeedback, messages.updateFailed, messages.updated, reconcileDeferred, renderCapture, showFeedback]);
 
   const rejectDraft = useCallback(() => {
     editingRef.current = false;

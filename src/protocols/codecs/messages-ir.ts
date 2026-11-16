@@ -1,3 +1,5 @@
+import { messagesRolePresentation } from "../../lib/messages-error-body";
+import { CLAUDE_CONTEXT_OVERFLOW_MESSAGE, markProxyError } from "../../lib/client-error-body";
 /**
  * Anthropic Messages -> IR, directly (the Antigravity direct lane).
  *
@@ -169,10 +171,10 @@ export function messagesConversationToIr(
   budget: TranslatorBudget,
   modelId: string,
 ): MessagesIrConversation {
-  if (!isRec(raw)) throw new AnthropicRequestError("request body must be a JSON object");
-  if (typeof raw.model !== "string" || raw.model.length === 0) throw new AnthropicRequestError("model is required");
+  if (!isRec(raw)) throw markProxyError(new AnthropicRequestError("request body must be a JSON object"));
+  if (typeof raw.model !== "string" || raw.model.length === 0) throw markProxyError(new AnthropicRequestError("model is required"));
   if (!Array.isArray(raw.messages) || raw.messages.length === 0) {
-    throw new AnthropicRequestError("messages must be a non-empty array");
+    throw markProxyError(new AnthropicRequestError("messages must be a non-empty array"));
   }
   const requestedModel = raw.model;
   const now = Date.now();
@@ -332,7 +334,7 @@ export function messagesConversationToIr(
         case "tool_result": {
           flush();
           if (typeof block.tool_use_id !== "string" || block.tool_use_id.length === 0) {
-            throw new AnthropicRequestError("tool_result requires tool_use_id");
+            throw markProxyError(new AnthropicRequestError("tool_result requires tool_use_id"));
           }
           pushToolResult(
             block.tool_use_id,
@@ -376,7 +378,7 @@ export function messagesConversationToIr(
         case "tool_use":
           flush();
           if (typeof block.id !== "string" || block.id.length === 0 || typeof block.name !== "string" || block.name.length === 0) {
-            throw new AnthropicRequestError("tool_use requires id and name");
+            throw markProxyError(new AnthropicRequestError("tool_use requires id and name"));
           }
           pushToolCall(block.id, block.name, block.input);
           break;
@@ -386,9 +388,9 @@ export function messagesConversationToIr(
           const signature = typeof block.signature === "string" ? block.signature : "";
           if (signature.startsWith(OCX_REASONING_PREFIX)) {
             const owned = decodeReasoningEnvelope(signature, budget);
-            if (!owned) throw new AnthropicRequestError(MALFORMED_REASONING_SIGNATURE);
+            if (!owned) throw markProxyError(new AnthropicRequestError(MALFORMED_REASONING_SIGNATURE));
             if (Object.hasOwn(owned, "sig")) {
-              throw new AnthropicRequestError("OpenCodex reasoning continuity cannot be replayed as an Anthropic signature");
+              throw markProxyError(new AnthropicRequestError("OpenCodex reasoning continuity cannot be replayed as an Anthropic signature"));
             }
             if (owned.nat) {
               // The provider's own blob goes back only to the model that minted it.
@@ -429,13 +431,17 @@ export function messagesConversationToIr(
   };
 
   for (const message of raw.messages) {
-    if (!isRec(message)) throw new AnthropicRequestError("each message must be an object");
+    if (!isRec(message)) throw markProxyError(new AnthropicRequestError("each message must be an object"));
     if (message.role === "user") userContent(message.content);
     else if (message.role === "assistant") assistantContent(message.content);
     else if (message.role === "system") {
       const text = systemMessageText(message.content);
       if (text.length > 0) pushDeveloper(text);
-    } else throw new AnthropicRequestError(`unsupported message role: ${String(message.role)}`);
+    } else {
+      const role = messagesRolePresentation(message.role);
+      if (role.coercionFailed) throw markProxyError(new TypeError("unsupported message role: unsupported"));
+      throw markProxyError(new AnthropicRequestError(role.overflow ? CLAUDE_CONTEXT_OVERFLOW_MESSAGE : "unsupported message role: unsupported"));
+    }
   }
 
   const system = anthropicSystemLayout(raw.system, cc);

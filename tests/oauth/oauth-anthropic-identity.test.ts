@@ -257,6 +257,7 @@ test("explicit import enriches legacy shared-token slot without changing its id 
   expect(getAccountCredential("anthropic", id)!.anthropicIdentity).toEqual(proof("synthetic-old"));
 });
 
+// A CLI credential change while the writer is queued is caught by the awaited re-read inside it.
 for (const mutation of ["login", "identity", "pause", "disk"] as const) {
   test(`serialized adoption guard catches queued ${mutation} after the profile recheck`, async () => {
     const { id, credential } = await seed(); disk();
@@ -290,6 +291,31 @@ for (const mutation of ["login", "identity", "pause", "disk"] as const) {
     } finally {
       finishProfile.resolve(); finishWriter.resolve(); mergeSpy.mockRestore();
     }
+  });
+}
+
+for (const reread of ["unavailable", "rotated"] as const) {
+  test(`adoption fails closed when the CLI re-read just before persistence is ${reread}`, async () => {
+    const { id, credential } = await seed(); disk();
+    const intent = writeOAuthRefreshIntent("anthropic", id, credentialGeneration(credential));
+    const originalDetect = localTokens.detectClaudeCodeTokenAsync;
+    let reads = 0;
+    const detect = spyOn(localTokens, "detectClaudeCodeTokenAsync").mockImplementation(async () => {
+      reads += 1;
+      const observed = await originalDetect();
+      if (reads === 1 || !observed) return observed;
+      // A locked Keychain (timeout, backoff or a busy slot) reads as no credential.
+      return reread === "unavailable" ? null : { ...observed, access: "synthetic-rotated", refresh: "synthetic-rotated-rt" };
+    });
+    const before = getAccountSet("anthropic");
+    try {
+      await expect(refreshAnthropicAccountWithLock("anthropic", id, noRefresh, credential, {
+        resolveIdentity: async access => proof(access),
+      })).rejects.toBeInstanceOf(OAuthTokenRefreshStaleError);
+      expect(reads).toBe(2);
+      expect(getAccountSet("anthropic")).toEqual(before);
+      expect(readOAuthRefreshIntent("anthropic", id)).toEqual(intent);
+    } finally { detect.mockRestore(); }
   });
 }
 
@@ -504,10 +530,10 @@ test("different CLI account can clear an obsolete intent after durable same-acco
 
 test("adoption reads the CLI generation only at observation and inside persistence", async () => {
   const { id, credential } = await seed(); disk();
-  const originalDetect = localTokens.detectClaudeCodeToken;
+  const originalDetect = localTokens.detectClaudeCodeTokenAsync;
   const reads: boolean[] = [];
   let insidePersistence = false;
-  const detect = spyOn(localTokens, "detectClaudeCodeToken").mockImplementation(() => {
+  const detect = spyOn(localTokens, "detectClaudeCodeTokenAsync").mockImplementation(() => {
     reads.push(insidePersistence);
     return originalDetect();
   });

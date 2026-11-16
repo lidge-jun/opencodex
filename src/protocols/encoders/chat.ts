@@ -1,3 +1,6 @@
+import { isProxyError, hasProxyErrorMessage } from "../../lib/client-error-body";
+import type { FailureVerdictSink } from "../../chat/failure-verdict";
+import { ownedChatErrorResponse } from "../../chat/outbound";
 /**
  * AdapterEvent -> OpenAI Chat Completions, without the internal Responses SSE (PF-09).
  *
@@ -14,7 +17,6 @@ import type { TranslatorBudget } from "../../lib/translator-budget";
 import { responsesUsage } from "../../bridge/internal";
 import {
   appendedUtf8Bytes,
-  chatCompletionsErrorResponse,
   chatCompletionsFailedResponse,
   chatCompletionsIncompleteOutcome,
   chatCompletionsStreamErrorPayload,
@@ -40,9 +42,11 @@ type Rec = Record<string, unknown>;
 export interface ChatCompletionEncodeOptions extends AdapterEventEncodeOptions {
   /** The model string the client asked for; every chunk carries it. */
   model: string;
+  failureVerdictSink?: FailureVerdictSink;
+  proxyErrorContext?: object;
 }
 
-function createChatCompletionWriter(sink: ClientFrameSink, model: string): ClientWireWriter {
+function createChatCompletionWriter(sink: ClientFrameSink, model: string, failureVerdictSink?: FailureVerdictSink, proxyErrorContext?: object): ClientWireWriter {
   const id = completionId();
   const created = Math.floor(Date.now() / 1000);
   let started = false;
@@ -149,10 +153,11 @@ function createChatCompletionWriter(sink: ClientFrameSink, model: string): Clien
     terminated = true;
     failed = true;
     // A real error event, then an abnormal close without [DONE].
-    const { payload, bounded } = chatCompletionsStreamErrorPayload(message, details);
+    const { payload, bounded, verdict } = chatCompletionsStreamErrorPayload(message, details);
     try {
       if (bounded) sink.emitBounded(dataFrame(payload));
       else sink.emit(dataFrame(payload), { terminal: true });
+      if (failureVerdictSink) { failureVerdictSink.verdict = verdict; failureVerdictSink.contract = details?.contract; failureVerdictSink.proxyAuthored = details?.proxyAuthored; }
     } catch {
       /* the converter drops an unadmittable error frame the same way */
     }
@@ -236,12 +241,13 @@ function createChatCompletionWriter(sink: ClientFrameSink, model: string): Clien
         if ("finishReason" in outcome) {
           finish(outcome.finishReason, terminal.usageOnWire ? responsesUsage(terminal.usage) : null);
         } else {
-          fail(outcome.failMessage);
+          fail(outcome.originalFailMessage, { contract: "stream_incomplete",
+            proxyAuthored: isProxyError(terminal) });
         }
         return;
       }
       const failure = chatCompletionsFailedResponse((terminal.error ?? {}) as unknown as Rec);
-      fail(failure.message, failure.details);
+      fail(failure.message, { ...failure.details, proxyAuthored: hasProxyErrorMessage(proxyErrorContext, failure.message, failure.details) });
     },
     overflow() {
       fail("upstream translation buffer exceeded the safe limit", {
@@ -259,7 +265,7 @@ export function encodeChatCompletionSse(
   events: AsyncIterable<AdapterEvent>,
   options: ChatCompletionEncodeOptions,
 ): ReadableStream<Uint8Array> {
-  return encodeAdapterEventStream(events, sink => createChatCompletionWriter(sink, options.model), options);
+  return encodeAdapterEventStream(events, sink => createChatCompletionWriter(sink, options.model, options.failureVerdictSink, options.proxyErrorContext), options);
 }
 
 /**
@@ -271,18 +277,19 @@ export async function collectChatCompletionResponse(
   stream: ReadableStream<Uint8Array>,
   model: string,
   translatorBudget: TranslatorBudget,
+  failureVerdictSink?: FailureVerdictSink,
 ): Promise<Response> {
   try {
-    const completion = await collectChatCompletion(stream, model, translatorBudget);
+    const completion = await collectChatCompletion(stream, model, translatorBudget, failureVerdictSink);
     return new Response(JSON.stringify(completion), {
       status: 200,
       headers: { "Content-Type": "application/json" },
     });
   } catch (err) {
     if (isChatCompletionsStreamError(err)) {
-      return chatCompletionsErrorResponse(err.status, err.message, err.type, err.code);
+      return ownedChatErrorResponse(err.status, err.message, err.type, err.code, failureVerdictSink?.contract, failureVerdictSink?.proxyAuthored);
     }
-    return chatCompletionsErrorResponse(502, err instanceof Error ? err.message : String(err), "server_error");
+    return ownedChatErrorResponse(502, err instanceof Error ? err.message : String(err), "server_error");
   }
 }
 
@@ -291,5 +298,6 @@ export function foldChatCompletion(
   events: AsyncIterable<AdapterEvent>,
   options: ChatCompletionEncodeOptions,
 ): Promise<Response> {
-  return collectChatCompletionResponse(encodeChatCompletionSse(events, options), options.model, options.translatorBudget);
+  const failureVerdictSink: FailureVerdictSink = {};
+  return collectChatCompletionResponse(encodeChatCompletionSse(events, { ...options, failureVerdictSink }), options.model, options.translatorBudget, failureVerdictSink);
 }

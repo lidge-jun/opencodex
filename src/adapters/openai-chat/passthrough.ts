@@ -1,9 +1,11 @@
+import { applyChatDestinationPolicy, mistralNativeChatEffort } from "./destination-policy";
 import { protectGlmSummaryBudget } from "./summary-budget";
 import { openAIChatTransport, stripBracketedModelSuffix } from "./wire";
 import type { AdapterRequest } from "../base";
 import { frameAgentRouterMessages } from "../agentrouter";
 import { applyExplicitChatDeveloperRole } from "./developer-role";
 import { singleLeadingSystemMessages } from "./single-system";
+import { limitMistralChatImages } from "./mistral-image-limit";
 import { openRouterProviderPayload, resolveOpenRouterRouting } from "../../providers/openrouter-routing";
 import { resolveVercelGatewayRouting, vercelGatewayProviderPayload } from "../../providers/vercel-gateway-routing";
 import { fastPolicyForModel } from "../../providers/service-tier";
@@ -15,7 +17,8 @@ import { modelInList, type OcxProviderConfig } from "../../types";
 import { mapReasoningEffort, modelRecordValue } from "../../reasoning-effort";
 import { resolveReasoningCapabilities } from "../../providers/reasoning-capabilities";
 import { chatParallelToolCallsWireValue } from "./parallel-tool-calls";
-import { applyExplicitChatReasoningWirePolicy, declaresIndependentChatReasoningControls } from "./reasoning-wire";
+import { applyExplicitChatReasoningWirePolicy, declaresIndependentChatReasoningControls,
+  nativeChatUltraWireEffort } from "./reasoning-wire";
 import { declaresThinkingToggleWire, reasoningControlsAreUnsupported } from "../reasoning-controls";
 import { planNativeChatReasoningReplay } from "./reasoning-replay";
 import type { OcxReasoningReplayScopeRef } from "../../types";
@@ -78,11 +81,12 @@ export function buildOpenAIChatPassthroughRequest(
     // and the conversion changes the role of those messages and nothing else, so the position
     // of every message and every other field survive unchanged. Missing thinking history is
     // repaired below using the same preserve policy as the translated Chat builder.
-    // The explicit single-system policy can then merge instruction slots.
-    messages: singleLeadingSystemMessages(applyExplicitChatDeveloperRole(
+    // The explicit single-system policy can then merge instruction slots, and Mistral's
+    // per-request image cap applies as it does to translated Chat.
+    messages: limitMistralChatImages(singleLeadingSystemMessages(applyExplicitChatDeveloperRole(
       frameAgentRouterMessages(provider.baseUrl, rawBody.messages),
       provider,
-    ), provider),
+    ), provider), provider, modelId),
     stream,
   };
   for (const field of CHAT_PASSTHROUGH_FIELDS) {
@@ -98,6 +102,16 @@ export function buildOpenAIChatPassthroughRequest(
     || (!toggleWire && rawEfforts?.length === 0) || reasoningControlsAreUnsupported(provider, modelId);
   if (reasoningDisabled) {
     delete body.reasoning_effort;
+  }
+  if (body.reasoning_effort === "ultra") {
+    const folded = nativeChatUltraWireEffort(provider, modelId);
+    if (folded === undefined) delete body.reasoning_effort;
+    else body.reasoning_effort = folded;
+  }
+  if (typeof body.reasoning_effort === "string") {
+    const effort = mistralNativeChatEffort(provider, modelId, body.reasoning_effort);
+    if (effort === undefined) delete body.reasoning_effort;
+    else body.reasoning_effort = effort;
   }
   const hasTools = Array.isArray(rawBody.tools) && rawBody.tools.length > 0;
   const requestedEffort = typeof body.reasoning_effort === "string" ? body.reasoning_effort : undefined;
@@ -188,6 +202,7 @@ export function buildOpenAIChatPassthroughRequest(
     body.stream_options = rawBody.stream_options;
   }
 
+  applyChatDestinationPolicy(body, provider);
   const transformedBody = () => applyGithubCopilotContextTier(body, provider, modelId, providerName);
   // The binding constraint is the final size base + net, so a shrinking replay may legitimately
   // measure a base above the cap; only a base above max - net makes the result unserializable.

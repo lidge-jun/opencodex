@@ -118,8 +118,11 @@ describe.skipIf(process.platform === "win32")("duration-weighted shards, execute
 
   test("the shards still tile the suite exactly under a skewed table", () => {
     const durations = { "alpha.test.ts": 9_000, "delta.test.ts": 4_000, "foxtrot.test.ts": 3_500 };
-    const seen = [1, 2, 3, 4].flatMap(index => filesOf(runShard(`${index}/4`, { durations })));
-    expect([...seen].sort()).toEqual(tests(FILES));
+    for (const count of [4, 5]) {
+      const shards = Array.from({ length: count }, (_, index) => filesOf(runShard(`${index + 1}/${count}`, { durations })));
+      for (const shard of shards) expect(shard.length).toBeGreaterThan(0);
+      expect(shards.flat().sort()).toEqual(tests(FILES));
+    }
   }, SPAWN_BUDGET_MS);
 
   test("each shard runs its files in sorted order", () => {

@@ -15,6 +15,17 @@ const validatorSource = readFileSync(
 );
 
 describe("ocx.mjs package launcher (source invariants)", () => {
+  test("Bun child signal forwarders are installed before the child is spawned", () => {
+    // A forwarder registered after spawn() returns lets a signal that lands once the child has
+    // started kill the launcher by default action and orphan the child.
+    const install = source.indexOf("const forwarding = forwardLauncherSignals();");
+    const spawnCall = source.indexOf("const child = probeSpawn(bun,");
+    expect(install).toBeGreaterThan(-1);
+    expect(spawnCall).toBeGreaterThan(install);
+    expect(source.indexOf("forwarding.attach(child);", spawnCall)).toBeGreaterThan(spawnCall);
+    expect(source).not.toMatch(/process\.on\(sig, handler\)/);
+  });
+
   test("PATH fallback follows bundled installer recovery and returns process provenance", () => {
     const start = source.indexOf("function resolveBun(");
     const end = source.indexOf("// `ocx update --help`", start);

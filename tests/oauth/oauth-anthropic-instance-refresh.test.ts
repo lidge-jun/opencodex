@@ -131,12 +131,12 @@ test("continuity owners read their own instance despite equal local account IDs"
 });
 
 test("B CLI continuity returns absent before detector entry, even for legacy local-cli provenance", async () => {
-  const detect = spyOn(localTokens, "detectClaudeCodeToken").mockImplementation(() => { throw new Error("detector must not run"); });
+  const detect = spyOn(localTokens, "detectClaudeCodeTokenAsync").mockImplementation(() => { throw new Error("detector must not run"); });
   try {
     expect(await newerClaudeCredentialForInstance("anthropic2", { ...credential("anthropic2"), source: "local-cli" }, Date.now())).toEqual({ kind: "absent" });
     const id = await seedBoth();
     expect(captureAnthropicCredentialOwnerForInstance("anthropic2", getAccountSet("anthropic2")!, id)(
-      { anthropic2: getAccountSet("anthropic2")! }, "synthetic-disk-generation")).toBe(false);
+      { anthropic2: getAccountSet("anthropic2")! }, true)).toBe(false);
     expect(detect).not.toHaveBeenCalled();
   } finally { detect.mockRestore(); }
 });

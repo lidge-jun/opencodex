@@ -79,7 +79,7 @@ beforeEach(() => {
         return response({ ok: true });
       }
       if (path === "/api/startup-health") return response(desktop ? {
-        ...health(desktopViable ? "protected" : "at-risk"), protection: desktopViable ? "desktop" : "none", serviceInstalled: false, serviceViable: false,
+        ...health(desktopViable ? "protected" : "at-risk"), protection: desktopViable ? "desktop" : "none", serviceViable: false,
         shimInstalled: brokenStarters, shimHealthy: false, serviceInstalled: brokenStarters, serviceStale: brokenStarters,
         ...(activationPending ? { shimActivationPending: true } : {}),
         diagnosticStale: staleReading,
@@ -111,12 +111,12 @@ test("protected: hero carries the state line and the sentence; no stat grid, no 
   await mount();
   expect(container.querySelector(".startup-state-grid")).toBeNull();
   expect([...container.querySelectorAll("button")].map(b => b.textContent?.trim())).not.toContain("Back to Dashboard");
-  const hero = container.querySelector(".startup-hero")!;
-  expect(hero.querySelector(".startup-state-line")?.textContent).toContain("·");
+  const hero = container.querySelector(".startup-status")!;
+  expect(hero.querySelector(".startup-status-line")?.textContent).toContain("·");
   // The old subtitle is a visible sentence inside the hero, not a title attribute.
   expect(hero.textContent).toContain("Verify that Codex can reach opencodex");
   expect(container.querySelector('[title*="Verify that Codex"]')).toBeNull();
-  const details = container.querySelector<HTMLDetailsElement>("details.startup-recovery-details")!;
+  const details = container.querySelector<HTMLDetailsElement>("details.startup-recovery")!;
   expect(details).not.toBeNull();
   expect(details.open).toBe(false);
   // Commands are still there, one click away.
@@ -126,15 +126,15 @@ test("protected: hero carries the state line and the sentence; no stat grid, no 
 test("at-risk: recovery details open by default", async () => {
   status = "at-risk";
   await mount();
-  const details = container.querySelector<HTMLDetailsElement>("details.startup-recovery-details")!;
+  const details = container.querySelector<HTMLDetailsElement>("details.startup-recovery")!;
   expect(details.open).toBe(true);
 });
 
 test("desktop protection is named separately and cannot install a competing service", async () => {
   desktop = true;
   await mount();
-  expect(container.querySelector(".startup-state-line")?.textContent).toContain("Desktop app");
-  expect(container.querySelector(".startup-details")?.textContent).toContain("desktop app supervises");
+  expect(container.querySelector(".startup-status-line")?.textContent).toContain("Desktop app");
+  expect(container.querySelector(".startup-options")?.textContent).toContain("desktop app supervises");
   const install = container.querySelector<HTMLButtonElement>('button[aria-label="Background service - Install"]');
   expect(install).not.toBeNull();
   expect(install!.disabled).toBe(true);
@@ -150,13 +150,13 @@ test("non-viable desktop ownership blocks a competing service, keeps the shim, a
   // #6971: the shim's ensure waits for or starts Desktop, so it no longer competes with it.
   const shim = container.querySelector<HTMLButtonElement>('button[aria-label="Codex launcher shim - Install"]');
   expect(shim!.disabled).toBe(false);
-  const recovery = container.querySelector(".startup-recovery-details")!;
-  expect(recovery.textContent).toContain("Start at Login");
+  const recovery = container.querySelector(".startup-recovery")!;
+  expect(recovery.textContent).not.toContain("Start at Login");
   expect(recovery.textContent).not.toContain("ocx service install");
   expect(recovery.textContent).toContain("ocx shim install");
   expect(recovery.textContent).not.toContain("background service is recommended");
   expect(recovery.textContent).toContain("ocx restore");
-  expect(container.querySelector(".startup-hero")!.textContent).toContain("Start at Login");
+  expect(container.querySelector(".startup-status")!.textContent).toContain("Start at Login");
 });
 
 test("desktop ownership blocks service repair but allows shim repair", async () => {
@@ -177,7 +177,7 @@ test("#6971: an intact shim the dashboard cannot see on PATH asks for activation
   activationPending = true;
   await mount();
   expect(container.querySelector('button[aria-label="Codex launcher shim - Repair"]')).toBeNull();
-  const row = [...container.querySelectorAll(".startup-details .startup-detail-row")]
+  const row = [...container.querySelectorAll(".startup-options .startup-option")]
     .find(item => item.textContent?.includes("Codex launcher shim"))!;
   expect(row.textContent).toContain("Installed · activation not confirmed");
   expect(row.textContent).toContain("codex-shell-env.sh");
@@ -197,9 +197,9 @@ test("a CLI-owned unprotected install still offers service and shim actions", as
 const SUPERVISOR = { supervisorPid: 123, runtimePid: 456, app: "/Applications/OpenCodex.app/Contents/MacOS/opencodex-desktop" };
 
 function desktopBadge(): string {
-  const row = [...container.querySelectorAll(".startup-details .startup-detail-row")]
+  const row = [...container.querySelectorAll(".startup-options .startup-option")]
     .find(item => item.textContent?.includes("Desktop app"));
-  return row?.querySelector(".badge")?.textContent ?? "";
+  return row?.querySelector(".startup-badge")?.textContent ?? "";
 }
 
 test("#6963: a supervised Desktop running without verified Start at Login names the missing login item", async () => {
@@ -207,9 +207,13 @@ test("#6963: a supervised Desktop running without verified Start at Login names 
   desktopViable = false;
   desktopFacts = { owned: false, supervisor: SUPERVISOR, loginEnabled: false, running: true, viable: false };
   await mount();
-  expect(desktopBadge()).toBe("Running · Start at Login not verified");
-  const details = container.querySelector(".startup-details")!.textContent!;
-  expect(details).toContain("Login Items & Extensions");
+  expect(desktopBadge()).toBe("Start at Login not verified");
+  const details = container.querySelector(".startup-options")!.textContent!;
+  expect(details).not.toContain("Login Items & Extensions");
+  expect(container.querySelector(".startup-status")!.textContent).toContain("Check Start at Login in the OpenCodex menu.");
+  expect(container.textContent).not.toContain("Action required");
+  expect(container.querySelector(".startup-status")?.getAttribute("aria-live")).toBe("polite");
+  expect(container.textContent?.split("Check Start at Login in the OpenCodex menu.").length).toBe(2);
   expect(details).not.toContain("Installed but unhealthy");
   // Startup management stays with the app; the shim only waits for or starts it (#6971).
   expect(container.querySelector<HTMLButtonElement>('button[aria-label="Background service - Install"]')!.disabled).toBe(true);
@@ -221,18 +225,28 @@ test("#6963: an owned Desktop running without Start at Login gets the same badge
   desktopViable = false;
   desktopFacts = { owned: true, loginEnabled: false, running: true, viable: false };
   await mount();
-  expect(desktopBadge()).toBe("Running · Start at Login not verified");
-  const details = container.querySelector(".startup-details")!.textContent!;
-  expect(details).toContain("OpenCodex owns this proxy");
-  // The owned guidance names the macOS allowance too, matching the badge.
-  expect(details).toContain("Login Items & Extensions");
+  expect(desktopBadge()).toBe("Start at Login not verified");
+  const details = container.querySelector(".startup-options")!.textContent!;
+  expect(details).not.toContain("OpenCodex owns this proxy");
+  expect(container.querySelector(".startup-status")!.textContent).toContain("Check Start at Login in the OpenCodex menu.");
 });
 
-test("#6963: a stopped Desktop and a stale reading stay unhealthy; a verified Desktop is ready", async () => {
+test("verified disabled login without other protection requires action", async () => {
+  desktop = true;
+  desktopViable = false;
+  desktopFacts = { owned: true, loginEnabled: false, loginState: "disabled", running: true, viable: false };
+  await mount();
+  expect(container.querySelector(".startup-status")?.textContent).toContain("Action required");
+  expect(desktopBadge()).toBe("Running · Start at Login off");
+});
+
+test("#6963: a stopped Desktop needs action, a stale reading is calm, and a verified Desktop is ready", async () => {
   desktop = true;
   desktopViable = false;
   await mount();
   expect(desktopBadge()).toBe("Installed but unhealthy");
+  expect(container.querySelector(".startup-status")?.textContent).toContain("Action required");
+  expect(container.querySelector(".startup-status")?.textContent).toContain("Reopen the desktop app");
   await act(async () => { root!.unmount(); });
   root = null;
   clearClientResourceStoresForTests();
@@ -240,7 +254,7 @@ test("#6963: a stopped Desktop and a stale reading stay unhealthy; a verified De
   desktopFacts = { owned: false, supervisor: SUPERVISOR, loginEnabled: false, running: true, viable: false };
   staleReading = true;
   await mount();
-  expect(desktopBadge()).toBe("Installed but unhealthy");
+  expect(desktopBadge()).toBe("Start at Login not verified");
   await act(async () => { root!.unmount(); });
   root = null;
   clearClientResourceStoresForTests();
@@ -257,13 +271,13 @@ test("#6963: a failed refresh that keeps the last Desktop reading does not claim
   desktopViable = false;
   desktopFacts = { owned: false, supervisor: SUPERVISOR, loginEnabled: false, running: true, viable: false };
   await mount();
-  expect(desktopBadge()).toBe("Running · Start at Login not verified");
+  expect(desktopBadge()).toBe("Start at Login not verified");
   healthFails = true;
   const refresh = [...container.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.includes("Refresh"))!;
   await act(async () => { refresh.click(); });
   await act(async () => { await new Promise<void>(r => testWindow.setTimeout(r, 30)); });
-  expect(container.querySelector(".startup-details")).not.toBeNull();
-  expect(desktopBadge()).toBe("Installed but unhealthy");
+  expect(container.querySelector(".startup-options")).not.toBeNull();
+  expect(desktopBadge()).toBe("Start at Login not verified");
 });
 
 test("an in-flight install disables every starter action until it settles", async () => {

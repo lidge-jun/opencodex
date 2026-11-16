@@ -45,10 +45,13 @@ const USAGE = `Usage:
   ocx account reset-credits <account-id|main> [--consume --yes [--operation-id <uuid>]] [--json]
   ocx account grok-reset-coupons [<account-id>] [--consume --yes [--token-id <token-id>] [--operation-id <uuid>]] [--json]
 
---device runs the OpenAI device-code login instead of the browser callback: use
-it when the proxy has no browser or nothing can reach localhost:1455, such as a
-headless or remote hub. Enter the printed code at the printed URL from any other
-machine.
+--device runs the device-code login instead of the browser callback (codex and
+xai): use it when the proxy has no browser or nothing can reach its localhost
+callback, such as a headless or remote hub. Both print a URL and a short code;
+confirm that code in any browser and the login finishes here, so nothing is
+pasted back and no local port is used. Each flow polls until its own deadline:
+Codex's 15-minute device grant, and xAI's provider-issued expires_in bounded to
+30 minutes and to one poll a second.
 
 The redirect URL or authorization code is a short-lived credential. Pipe it in
 rather than passing it as an argument, where it lands in shell history and is
@@ -162,12 +165,23 @@ const STDIN_SENTINEL = "-";
 
 /** Providers whose ONLY login is already a device flow; --device is redundant, not wrong. */
 const DEVICE_NATIVE_PROVIDERS = new Set(["kimi", "nous", "github-copilot"]);
-const stripTerminalControls = (value: string): string => value.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/g, "");
+/** Providers with a device grant besides their browser login; --device selects it. */
+const DEVICE_OPT_IN_PROVIDERS = new Set(["xai"]);
+/**
+ * The native Kiro handoff, rendered for a terminal.
+ *
+ * Every field here is provider- or proxy-supplied, so they go through the same sanitizer as the
+ * OAuth CLI's instructions rather than a local strip regex: a narrower strip both left characters
+ * reachable (the Arabic letter mark, the line separators, the deprecated `U+206A`–`U+206F` bidi
+ * controls) and deleted ones that must survive (ZWNJ/ZWJ, which shape Persian and emoji). Escaping
+ * keeps the value readable in a pasted report and leaves the layout below intact, because a
+ * newline inside a field is escaped rather than allowed to add a line.
+ */
 export function formatKiroDeviceInstructions(start: { verificationUriComplete?: string; verificationUri?: string; userCode?: string; flowId?: string }): string {
   return [
-    stripTerminalControls(start.verificationUriComplete ?? start.verificationUri ?? ""),
-    start.userCode ? `User code: ${stripTerminalControls(start.userCode)}` : "",
-    start.flowId ? `Flow: ${stripTerminalControls(start.flowId)}` : "",
+    terminalSafeText(start.verificationUriComplete ?? start.verificationUri ?? ""),
+    start.userCode ? `User code: ${terminalSafeText(start.userCode)}` : "",
+    start.flowId ? `Flow: ${terminalSafeText(start.flowId)}` : "",
   ].filter(Boolean).join("\n");
 }
 
@@ -225,9 +239,14 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
   // kimi, nous, and github-copilot are already device flows, so --device is a
   // true statement about them and is accepted as a no-op rather than an error.
   // Anything else has no device grant at all and must fail loudly.
-  if (device && !CODEX_NAMES.has(provider) && !DEVICE_NATIVE_PROVIDERS.has(provider)) {
+  if (device && !CODEX_NAMES.has(provider) && !DEVICE_NATIVE_PROVIDERS.has(provider) && !DEVICE_OPT_IN_PROVIDERS.has(provider)) {
     throw new CliUsageError("--device is not supported for this provider", USAGE);
   }
+  // A device grant never asks for a pasted code: the CLI would have spent the caller's stdin, and
+  // the proxy would have accepted the paste into a flow with nothing to do with it (the device flow
+  // is not a code flow, so `submitLoginCode` stashes it and the login still waits for approval).
+  if (device && suppliedCode) throw new CliUsageError("--code cannot be combined with --device", USAGE);
+  if (provider === "xai" && device && wantsJson && !noWait) throw new CliUsageError("xAI device login with --json requires --no-wait; use the returned handoff to complete authorization", USAGE);
   if (addAccount !== undefined && (reauth || CODEX_NAMES.has(provider))) throw new CliUsageError("--add-account is only valid for fresh provider OAuth login", USAGE);
   if (openBrowser !== undefined && (device || DEVICE_NATIVE_PROVIDERS.has(provider))) throw new CliUsageError("--open-browser is not supported for device login", USAGE);
   if (!CODEX_NAMES.has(provider) && id && !reauth) throw new CliUsageError("--id is only valid with --reauth for provider OAuth accounts", USAGE);
@@ -274,11 +293,11 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
       // One atomic pre-poll block, flushed synchronously so a piped parent
       // reads the URL before the polling window starts (#1007).
       writeLoginInstructions([
-        start.url ? `Open this URL to sign in:\n${start.url}` : "",
-        start.deviceCode ? `Device code: ${start.deviceCode}` : "",
+        start.url ? `Open this URL to sign in:\n${terminalSafeText(start.url)}` : "",
+        start.deviceCode ? `Device code: ${terminalSafeText(start.deviceCode)}` : "",
         start.instructions ?? "",
         start.browserLaunch === "failed" ? BROWSER_LAUNCH_FAILED_HINT : "",
-        start.flowId ? `Flow: ${start.flowId}` : "",
+        start.flowId ? `Flow: ${terminalSafeText(start.flowId)}` : "",
       ]);
     }
     if (code && !start.flowId) throw new Error("Code submission requires a returned flow id");
@@ -327,13 +346,24 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
 
   const start = publicLoginStart(await runtimeRequest<unknown>("/api/oauth/login", {
     method: "POST", redirect: "error",
-    body: JSON.stringify({ provider, addAccount: addAccount ?? !reauth, ...(openBrowser === undefined ? {} : { openBrowser }), ...(reauth && id ? { accountId: id, reauth: true } : {}) }),
+    body: JSON.stringify({ provider, addAccount: addAccount ?? !reauth, ...(device && DEVICE_OPT_IN_PROVIDERS.has(provider) ? { device: true } : {}), ...(openBrowser === undefined ? {} : { openBrowser }), ...(reauth && id ? { accountId: id, reauth: true } : {}) }),
   }, pinned));
+  const xaiDevice = provider === "xai" && device;
+  if (xaiDevice && (!start.flowId?.trim() || !start.url?.trim() || !start.deviceCode?.trim())) {
+    let cleanupFailed = false;
+    try {
+      await runtimeRequest("/api/oauth/login/cancel", {
+        method: "POST", redirect: "error",
+        body: JSON.stringify({ provider, ...(start.flowId?.trim() ? { flowId: start.flowId } : {}) }),
+      }, pinned);
+    } catch { cleanupFailed = true; }
+    throw new CliUsageError(`Running proxy does not support xAI device login; restart or upgrade it.${cleanupFailed ? " Could not cancel the unintended login flow." : ""}`);
+  }
   if (!wantsJson) {
     writeLoginInstructions([
-      start.url ? `Open this URL to sign in:\n${start.url}` : "",
-      start.instructions ?? "",
-      start.deviceCode ? `Device code: ${start.deviceCode}` : "",
+      start.url ? `Open this URL to sign in:\n${terminalSafeText(start.url)}` : "",
+      provider === "xai" && device ? terminalSafeText(start.instructions ?? "") : start.instructions ?? "",
+      start.deviceCode ? `Device code: ${terminalSafeText(start.deviceCode)}` : "",
     ]);
   }
   if (code) {
@@ -347,13 +377,16 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
     printData({ ...start, modelSelection: modelSelectionNextSteps(provider, true) }, wantsJson, modelSelectionGuidance(provider, true));
     return;
   }
-  for (let attempt = 0; attempt < 100; attempt++) {
+  // A device grant waits on a person at another machine: outlast xAI's 30-minute code.
+  for (let attempt = 0; attempt < (device ? 930 : 100); attempt++) {
     await Bun.sleep(2_000);
-    const raw = await runtimeRequest<Record<string, unknown>>(`/api/oauth/status?provider=${encodeURIComponent(provider)}`, { redirect: "error" }, pinned);
+    const raw = await runtimeRequest<Record<string, unknown>>(`/api/oauth/status?provider=${encodeURIComponent(provider)}${xaiDevice ? `&flowId=${encodeURIComponent(start.flowId!)}` : ""}`, { redirect: "error" }, pinned);
     if (loginObject(raw).error) throw new Error("Provider login failed");
+    if (xaiDevice && (raw.flowId !== start.flowId || raw.status === "idle")) throw new Error("Device login flow is unavailable");
     const state = publicLoginStatus(raw);
-    if (state.done === true && state.loggedIn !== true) throw new Error("Provider login ended without authentication");
-    if (state.loggedIn === true) {
+    if (state.done === true && state.loggedIn !== true && !(xaiDevice && raw.status === "complete")) throw new Error("Provider login ended without authentication");
+    // A device login adds an account, so an already signed-in provider is not done until its flow is.
+    if ((xaiDevice && raw.status === "complete") || (state.loggedIn === true && (!device || (state.done === true && !xaiDevice)))) {
       printData({ ...state, modelSelection: modelSelectionNextSteps(provider) }, wantsJson, [`Logged in to ${provider}.`, ...modelSelectionGuidance(provider)]);
       return;
     }
@@ -407,7 +440,7 @@ async function cancel(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   }
   const result = await runtimeRequest(codex ? "/api/codex-auth/login/cancel" : "/api/oauth/login/cancel", {
     method: "POST",
-    body: JSON.stringify(codex ? { flowId } : { provider, ...(provider === "kiro" && flowId ? { flowId } : {}) }),
+    body: JSON.stringify(codex ? { flowId } : { provider, ...((provider === "kiro" || provider === "xai") && flowId ? { flowId } : {}) }),
   }, deps);
   printData(result, wantsJson, [`Cancelled ${provider} login.`]);
 }

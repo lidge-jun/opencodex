@@ -32,6 +32,73 @@ const ONE_SEND_LEFT: RequestExecutionBudgetPolicy = {
   maxTargetTransitions: 1,
 };
 
+describe("auxiliary inference reservations", () => {
+  const helper = (targetKey = "search:q1") => ({
+    sendClass: "auxiliary" as const, targetKey,
+    spendScopes: { poolId: "anthropic", identityId: "" },
+    spendEstimate: { inputTokens: 2, outputCeilingTokens: 8 },
+  });
+
+  test("the first helper occupies the last slot before either dispatch starts", () => {
+    const budget = createRequestExecutionBudget(ONE_SEND_LEFT);
+    const first = budget.reserveDispatch(helper());
+    expect(first.allowed).toBe(true);
+    expect(budget.used).toBe(1);
+    expect(budget.reserveDispatch(helper("search:q2"))).toEqual({ allowed: false, reason: "total-exhausted" });
+    if (!first.allowed) throw new Error("missing first permit");
+    first.permit.release();
+    expect(budget.used).toBe(0);
+    const next = budget.reserveDispatch(helper("search:q2"));
+    if (!next.allowed) throw new Error("unspent capacity was not returned");
+    expect(next.permit.use()).toBe(true);
+    expect(next.permit.use()).toBe(false);
+    next.permit.release();
+    expect(budget.used).toBe(1);
+  });
+
+  test("helper starts leave routed target history and final recovery intact", () => {
+    const budget = createRequestExecutionBudget();
+    const initial = budget.reserveDispatch({ sendClass: "initial", targetKey: "parent/a" });
+    if (!initial.allowed) throw new Error("initial refused");
+    expect(initial.permit.use()).toBe(true);
+    for (const key of ["search:q1", "search:q2"]) {
+      const next = budget.reserveDispatch(helper(key));
+      if (!next.allowed) throw new Error("helper refused");
+      expect(next.permit.use()).toBe(true);
+      next.permit.release();
+      expect(budget.lastTargetKey).toBe("parent/a");
+    }
+    expect(budget.used).toBe(3);
+    expect(budget.targetTransitions).toBe(0);
+    expect(budget.alternateTargetSends).toBe(0);
+    expect(budget.reserveSpent).toBe(false);
+    expect(budget.reserveDispatch(helper("search:q3"))).toEqual({ allowed: false, reason: "base-allowance-exhausted" });
+    const recovery = budget.reserveDispatch({ sendClass: "account-failover", targetKey: "parent/b" });
+    expect(recovery.allowed).toBe(true);
+    if (!recovery.allowed) throw new Error("parent recovery was consumed");
+    recovery.permit.release();
+    expect(budget.lastTargetKey).toBe("parent/a");
+    expect(budget.used).toBe(3);
+  });
+
+  test("an auxiliary refund does not rebase a later parent target", () => {
+    const budget = createRequestExecutionBudget();
+    const parent = budget.reserveDispatch({ sendClass: "initial", targetKey: "parent/a" });
+    if (!parent.allowed) throw new Error("initial refused");
+    parent.permit.use();
+    const aux = budget.reserveDispatch(helper());
+    if (!aux.allowed) throw new Error("helper refused");
+    const moved = budget.reserveDispatch({ sendClass: "account-failover", targetKey: "parent/b" });
+    if (!moved.allowed) throw new Error("parent move refused");
+    moved.permit.use();
+    aux.permit.release();
+    expect(budget.lastTargetKey).toBe("parent/b");
+    expect(budget.targetTransitions).toBe(1);
+    expect(budget.alternateTargetSends).toBe(1);
+    expect(budget.used).toBe(2);
+  });
+});
+
 function policyEpochFixture(maxTokens?: number, limit = 4) {
   const journal = spendTestJournal();
   const policy = { ...DEFAULT_SPEND_RESERVATION_POLICY, pool: { maxTokens }, canonicalProviderIds: ["P"] };

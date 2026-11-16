@@ -22,8 +22,9 @@ import {
 } from "../../src/quota-pool/identity";
 import { parseUpstreamQuotaHeaders } from "../../src/codex/quota";
 import { getAccountSet, saveCredential } from "../../src/oauth/store";
-import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../../src/providers/quota";
-import { setProviderQuotaReportCache } from "../../src/providers/quota/report-cache";
+import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports, setCachedProviderAccountQuotaForTests } from "../../src/providers/quota";
+import { claudeSignedInIdentity, recordClaudeSignedInIdentity } from "../../src/providers/claude-cli-usage-state";
+import { captureReportOwner, setProviderQuotaReportCache, type ProviderQuotaReport } from "../../src/providers/quota/report-cache";
 import { nullPaths, QuotaPoolSchema } from "../helpers/quota-pool-schema";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { COLD_SPAWN_WARMUP_HOOK_BUDGET_MS, warmModuleGraph } from "../helpers/cold-spawn-warmup";
@@ -54,6 +55,11 @@ function config(): OcxConfig {
   } as OcxConfig;
 }
 
+function heldFixture(report: ProviderQuotaReport, cfg: OcxConfig): ProviderQuotaReport {
+  captureReportOwner(report.provider, cfg.providers[report.provider]!)(report);
+  return report;
+}
+
 beforeEach(async () => {
   priorHome = process.env.OPENCODEX_HOME;
   home = mkdtempSync(join(tmpdir(), "ocx-quota-pool-"));
@@ -76,16 +82,18 @@ beforeEach(async () => {
       customWindows: [{ label: "Opus", percent: 100, resetAt: NOW + 72 * HOUR, scope: "model" }],
     },
   }));
-  setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports: [{
+  recordClaudeSignedInIdentity("c".repeat(64));
+  setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports: [heldFixture({
     provider: "openrouter", label: "OpenRouter", source: "fixture", updatedAt: NOW - 120_000,
     quota: { creditsUsd: { used: 7.5, limit: 10, remaining: 2.5, percent: 75 }, updatedAt: NOW - 120_000 },
-  }] } });
+  }, config())] } });
 });
 
 afterEach(() => {
   setQuotaPoolIdentityHooksForTests();
   setProviderQuotaReportCache(null);
   clearAccountQuotaCache("xai");
+  recordClaudeSignedInIdentity(null);
   resetQuotaPoolIdentityMemoForTests();
   if (priorHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = priorHome;
@@ -95,6 +103,29 @@ afterEach(() => {
 const read = () => readQuotaPool(config(), { now: () => NOW, claudeUsageStatePath: admissionPath });
 
 describe("ocx.quota-pool/1 producer", () => {
+  test("a collected key report is pooled until its owner changes", async () => {
+    ensureQuotaPoolIdentity();
+    const cfg = { port: 0, defaultProvider: "openrouter", providers: { openrouter: { ...config().providers.openrouter! } } } as OcxConfig;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => Response.json({ data: { limit: 10, limit_remaining: 2.5 } })) as typeof fetch;
+    try {
+      expect((await fetchProviderQuotaReports(cfg, true)).reports).toHaveLength(1);
+      const readCurrent = async () => {
+        const result = await readQuotaPool(cfg);
+        if (!result.ok) throw new Error(result.error);
+        return result.pool.providers.find(row => row.provider === "openrouter")?.pooled.windows ?? [];
+      };
+      expect((await readCurrent()).map(window => window.usedPercent)).toEqual([75]);
+      cfg.providers.openrouter!.apiKey = "replacement-key";
+      expect(await readCurrent()).toEqual([]);
+      cfg.providers.openrouter!.apiKey = "fixture-openrouter-key";
+      expect((await readCurrent()).map(window => window.usedPercent)).toEqual([75]);
+      cfg.providers.openrouter!.disabled = true;
+      expect(await readCurrent()).toEqual([]);
+      delete cfg.providers.openrouter;
+      expect(await readCurrent()).toEqual([]);
+    } finally { globalThis.fetch = originalFetch; clearProviderQuotaCache(); }
+  });
   test("reports the identity as unavailable instead of minting one on the read path", async () => {
     expect(await read()).toEqual({ ok: false, error: "quota_pool_identity_unavailable" });
     expect(() => readFileSync(quotaPoolIdentityPath())).toThrow();
@@ -178,10 +209,10 @@ describe("ocx.quota-pool/1 producer", () => {
   test("a held report never stands in for the account rows of a tracked provider", async () => {
     ensureQuotaPoolIdentity();
     // A report claiming a newer, emptier pool than the rows it would have been computed from.
-    setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports: [{
+    setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports: [heldFixture({
       provider: "xai", label: "xAI", source: "fixture", updatedAt: NOW,
       quota: { weeklyPercent: 3, weeklyResetAt: NOW + 48 * HOUR, updatedAt: NOW },
-    }] } });
+    }, config())] } });
     const result = await read();
     if (!result.ok) throw new Error(result.error);
     const xai = result.pool.providers.find(provider => provider.provider === "xai")!;
@@ -191,12 +222,12 @@ describe("ocx.quota-pool/1 producer", () => {
 
   test("a per-account provider configured with an API key keeps its key's report as the pool", async () => {
     ensureQuotaPoolIdentity();
-    setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports: [{
-      provider: "xai", label: "xAI", source: "fixture", updatedAt: NOW - 120_000,
-      quota: { weeklyPercent: 3, weeklyResetAt: NOW + 48 * HOUR, updatedAt: NOW - 120_000 },
-    }] } });
     const keyed = config();
     keyed.providers.xai = { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", apiKey: "fixture-xai-key" };
+    setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports: [heldFixture({
+      provider: "xai", label: "xAI", source: "fixture", updatedAt: NOW - 120_000,
+      quota: { weeklyPercent: 3, weeklyResetAt: NOW + 48 * HOUR, updatedAt: NOW - 120_000 },
+    }, keyed)] } });
     const result = await readQuotaPool(keyed, { now: () => NOW, claudeUsageStatePath: admissionPath });
     if (!result.ok) throw new Error(result.error);
     const xai = result.pool.providers.find(provider => provider.provider === "xai")!;
@@ -204,6 +235,46 @@ describe("ocx.quota-pool/1 producer", () => {
     expect(xai.pooled.windows.map(window => [window.id, window.usedPercent, window.source, window.observedAt]))
       .toEqual([["weekly", 3, "measured", "2026-10-21T11:58:00.000Z"]]);
   });
+
+  test.each([["signed out", null], ["another account", "d".repeat(64)]] as const)(
+    "the Claude CLI row is absent when the recorded sign-in is %s",
+    async (_, signedIn) => {
+      ensureQuotaPoolIdentity();
+      recordClaudeSignedInIdentity(signedIn);
+      const result = await read();
+      if (!result.ok) throw new Error(result.error);
+      const claude = result.pool.providers.find(provider => provider.provider === "claude-cli")!;
+      expect(claude.accounts).toEqual([]);
+      expect(claude.pooled.windows).toEqual([]);
+    },
+  );
+
+  test.each([["signed out", null], ["another account", "d".repeat(64)]] as const)(
+    "a sign-in change during the suspended Codex snapshot never pools the old Claude report (%s)",
+    async (_, next) => {
+      ensureQuotaPoolIdentity();
+      const oldIdentity = "c".repeat(64);
+      const stale = { provider: "claude-cli", label: "Claude", source: "fixture", updatedAt: NOW, quota: { weeklyPercent: 61, updatedAt: NOW } };
+      const { accountReportCurrent } = await import("../../src/providers/quota/report-cache");
+      accountReportCurrent.set(stale, () => claudeSignedInIdentity() === oldIdentity);
+      setProviderQuotaReportCache({ key: "fixture", ts: NOW, response: { generatedAt: NOW, reports: [stale] } });
+      let release!: (value: { accounts: []; mainIdentityGeneration: number }) => void;
+      let started!: () => void;
+      const waiting = new Promise<void>(resolve => { started = resolve; });
+      const cfg = config();
+      cfg.providers.openai = { adapter: "openai-responses", baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" } as never;
+      const resultPromise = readQuotaPool(cfg, { now: () => NOW, claudeUsageStatePath: admissionPath,
+        codexSnapshot: () => { started(); return new Promise(resolve => { release = resolve; }); } });
+      await waiting;
+      recordClaudeSignedInIdentity(next);
+      release({ accounts: [], mainIdentityGeneration: 0 });
+      const result = await resultPromise;
+      if (!result.ok) throw new Error(result.error);
+      const claude = result.pool.providers.find(provider => provider.provider === "claude-cli")!;
+      expect(claude.accounts).toEqual([]);
+      expect(claude.pooled.windows).toEqual([]);
+    },
+  );
 
   test("accountRef is opaque, stable across restarts and distinct per provider and account", async () => {
     ensureQuotaPoolIdentity();

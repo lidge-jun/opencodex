@@ -28,6 +28,7 @@ import {
 } from "./lib/windows-elevation";
 import { decodeWindowsTextBytes } from "./lib/windows-text";
 import { WINSW_SERVICE_ID } from "./lib/winsw";
+import { decodePlistString } from "./service/plist-xml";
 import { BUN_RUNTIME_PATH_ENV, BUN_RUNTIME_SOURCE_ENV } from "./lib/bun-runtime";
 import { REAL_BUN_MIN_BYTES } from "./lib/bun-binary-validator.mjs";
 import { WINDOWS_WRAPPER_PROTOCOL_ENV, WINDOWS_WRAPPER_STAY_OUT_EXIT_CODE } from "./service/windows-wrapper-exit";
@@ -247,16 +248,9 @@ function unknown(reason: string): ServiceManagerInstallation {
   return { kind: "unknown", reason };
 }
 
-/** Decode the entities buildPlist's plistString applies. `&amp;` goes last so a
- *  literal `&amp;lt;` written by a double-escaped value stays `&lt;`. */
-function plistStringValue(raw: string): string {
-  return raw
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, "\"")
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
-}
+/** Decode the entities and character references buildPlist's encoder applies, in one pass,
+ *  so a literal `&amp;lt;` written by a double-escaped value stays `&lt;`. */
+const plistStringValue = decodePlistString;
 
 /** Pull `<key>NAME</key><string>VALUE</string>` out of a plist body. */
 function plistEnvValue(body: string, key: string): string | null {

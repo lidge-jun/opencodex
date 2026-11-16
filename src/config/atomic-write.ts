@@ -29,6 +29,11 @@ import {
   renameAtomicFile,
   renameAtomicFileAsync,
 } from "../lib/windows-atomic-replace";
+import {
+  catalogReadOnlyRepairFor,
+  publishWithReadOnlyRepair,
+  setCatalogReadOnlyRepairForTests as setCatalogReadOnlyRepairOverride,
+} from "../lib/codex-catalog-read-only";
 import { getConfigDir } from "./paths";
 
 let atomicSequence = 0;
@@ -101,6 +106,16 @@ export interface AtomicWriteHooks {
   validateBeforeRename?: (targetPath: string) => void;
   /** Publication receipt; runs before any post-rename cleanup can fail. */
   afterRename?: (targetPath: string) => void;
+}
+
+/**
+ * Test seam for the read-only catalog repair (#8358). `null` disables it, `undefined`
+ * restores the production rule (win32 and the OpenCodex catalog artifact only).
+ */
+export function setCatalogReadOnlyRepairForTests(
+  repair: Parameters<typeof setCatalogReadOnlyRepairOverride>[0],
+): void {
+  setCatalogReadOnlyRepairOverride(repair);
 }
 
 export class AtomicWriteResidualTempError extends Error {
@@ -377,7 +392,13 @@ function atomicWriteFileToTarget(
       publicationAttempted = true;
       linkSync(tmp, target);
       assertIdentity(target);
-    } else effective.rename(tmp, target);
+    } else {
+      // The Codex catalog owner repairs its own read-only artifact (#8358); every
+      // other destination, and every other platform, keeps the plain rename.
+      const repair = catalogReadOnlyRepairFor(target);
+      if (repair) publishWithReadOnlyRepair(() => effective.rename(tmp, target), target, repair);
+      else effective.rename(tmp, target);
+    }
     hooks.afterRename?.(target);
     if (exclusive) { assertIdentity(tmp); effective.unlink(tmp); }
     // The rename is only as durable as the directory entry recording it. Fsyncing the temp's
@@ -529,6 +550,8 @@ export async function atomicWriteFileAsync(
       }
       try { chmodSync(tempPath, 0o600); } catch { /* platform may ignore chmod */ }
     },
+    // The read-only catalog repair (#8358) is wired only into the sync writer; no async
+    // caller writes the Codex catalog today. Route one through publishWithReadOnlyRepair too.
     rename: renameAtomicFileAsync,
     truncate: target => truncateSync(target, 0),
     unlink: unlinkSync,

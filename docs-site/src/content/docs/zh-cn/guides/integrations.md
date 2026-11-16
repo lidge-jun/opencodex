@@ -25,7 +25,7 @@ description: 从仪表盘将 opencodex 连接到 OpenCode、Pi、OMP、Hermes、
 | omo | `~/.omo/agent/models.json` | JSON | 新会话 | 回环占位符 |
 | Cline CLI | `~/.cline/data/settings/providers.json` 及同目录下的 `models.json` | JSON 文件对 | 停止并重启 Cline 后 | 回环占位符 |
 | Kilo | `~/.config/kilo` 下最先存在的 `kilo.jsonc`、`kilo.json`、`opencode.jsonc`、`opencode.json` 或 `config.json`（`XDG_CONFIG_HOME` 可迁移目录；均不存在时创建 `kilo.jsonc`） | JSONC | 新会话 | `OPENCODEX_KILO_API_KEY` |
-| Command Code | `~/.commandcode/providers.json` (Windows 使用默认主目录时：仅当 `HOME ?? USERPROFILE` 的值非空、非纯空白且为 Windows 绝对路径时使用，否则使用 `homedir()`；单独传入的主目录保持不变；文件位于其下的 `.commandcode\providers.json`) | JSON | 下次启动 Command Code 时 | 无 — 无密钥回环 (`apiKey: false`) |
+| Command Code | `~/.commandcode/providers.json` (Windows 使用默认主目录时：仅当 `HOME ?? USERPROFILE` 的值非空、非纯空白且为 Windows 绝对路径时使用，否则使用 `homedir()`；单独传入的主目录保持不变；文件位于其下的 `.commandcode\providers.json`) | JSON | 下次启动 Command Code 时 | 无 — 无密钥回环 (`apiKey: false`)；桌面应用需要自行登录，opencodex 绝不写入 `auth.json` |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` Windows 上) | JSON | 文件变更时立即生效 | 无密钥回环 |
 
 生成的目录只包含各提供商选择中已启用的模型。下载文件和托管集成都遵循这一规则，Pi 和 Aside 也不例外。管理模型列表仍显示完整阵容，以便启用更多模型。
@@ -100,9 +100,9 @@ Apply、Replace、Disable 和 Restore 都先显示预览。对话框准确列出
 
 如果计划显示没有变更，说明托管客户端文档已处于请求的状态。对于选中的 Aside 配置文件，即使托管文档不变，确认操作仍可能保存该配置文件的同步偏好。
 
-如果检查后文件发生变化，写入会因计划过期而被拒绝。对话框会用更新后的计划替换旧计划，并要求再次确认；绝不会自动重试写入。如果预览暂时不可用，请正常重新加载页面，再发起操作。
+如果检查后文件发生变化，写入会因计划过期而被拒绝。对话框会用更新后的计划替换旧计划，并要求再次确认；绝不会自动重试写入。如果预览提示尚未加载模型目录，对话框会保持打开并提供 **加载目录并重试**：它会重新读取集成列表，然后再次请求计划。
 
-Aside 对单个选中配置文件采用相同的预览和确认流程。**Sync all profiles** 仍是单独的批量操作，不与一份合并预览绑定。
+Aside 对单个选中配置文件采用相同的预览和确认流程。**Sync all profiles** 仍是单独的批量操作，不与一份合并预览绑定。一份计划只描述一个配置文件的文件，因此处于冲突状态的 Aside 概览卡片会提供 **选择配置文件**，请在该配置文件页面替换配置块。
 
 ## 实际效果与限制
 

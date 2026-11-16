@@ -17,8 +17,9 @@ import { NAV_GROUPS } from "../src/nav-groups";
  * on rendered geometry.
  */
 test("the codex-set nav row renders the upstream Codex mark, under any symbol name", () => {
-  const row = NAV_GROUPS.find(group => group.id === "codex-set");
-  expect(row, "NAV_GROUPS has no codex-set row").toBeDefined();
+  // Design system v2: Codex Set leads the "Accounts & limits" row, which keeps the Codex mark.
+  const row = NAV_GROUPS.find(group => group.pages[0] === "codex-set");
+  expect(row, "NAV_GROUPS has no row led by codex-set").toBeDefined();
   const Icon = row!.Icon as FC<SVGProps<SVGSVGElement>>;
   expect(Object.values(icons), "the codex-set row's Icon is not exported by icons.tsx").toContain(Icon);
 

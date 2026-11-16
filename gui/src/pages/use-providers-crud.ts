@@ -1,7 +1,9 @@
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
 import type { TFn } from "../i18n/shared";
 import type { ProviderUpdatePatch, ProviderUpdateResult } from "../components/provider-workspace/types";
-import { apiErrorMessage } from "../api-error";
+import { apiErrorMessage, errorMessageFrom } from "../api-error";
+import { isApiTargetCaptureCurrent, targetFetch, type ApiTargetCapture } from "../api";
+import { useRenderTargetCapture } from "../use-render-target-capture";
 
 type ProviderError = { code?: unknown; combos?: unknown; error?: unknown };
 type ShadowDependency = { model: string; enabled: boolean };
@@ -22,12 +24,13 @@ function providerErrorMessage(data: ProviderError, t: TFn, fallback: string): st
     }
     case "default_provider_disabled": return t("prov.defaultDisabled");
     default:
-      return typeof data.error === "string" && data.error.trim() ? data.error.trim() : fallback;
+      return errorMessageFrom(data, fallback, t("prov.targetChanged"));
   }
 }
 
 export function useProvidersCrud({
   apiBase,
+  targetKey,
   t,
   removeBusyRef,
   workspaceSelected,
@@ -38,8 +41,11 @@ export function useProvidersCrud({
   fetchOauth,
   fetchProviderQuotas,
   refreshCodexAccount,
+  onProviderRemoved,
 }: {
   apiBase: string;
+  /** Logical dashboard target; a relay apiBase is shared across a re-pair. */
+  targetKey?: string;
   t: TFn;
   removeBusyRef: React.MutableRefObject<boolean>;
   workspaceSelected: string | null;
@@ -52,23 +58,44 @@ export function useProvidersCrud({
   fetchProviderQuotas: (refresh?: boolean) => Promise<void>;
   /** Shared Codex account controller refresh (Providers.tsx passes codexPool.load). */
   refreshCodexAccount?: () => Promise<unknown> | unknown;
+  /** Confirmed removal only: drop this target's parked draft for the provider. */
+  onProviderRemoved?: (name: string) => void;
 }) {
+  // This page's render owns the target for its own actions. A module-level target change
+  // that has not re-rendered the page cannot retarget a stale closure.
+  const renderCapture = useRenderTargetCapture(apiBase, targetKey);
+  // The confirmation belongs to the target that opened it, not to the target live when
+  // the user finally confirms.
+  const pendingRemoveRef = useRef<{ name: string; capture: ApiTargetCapture } | null>(null);
   const removeProvider = useCallback(async (name: string) => {
+    pendingRemoveRef.current = { name, capture: renderCapture };
     setRemoveConfirmName(name);
-  }, [setRemoveConfirmName]);
+  }, [renderCapture, setRemoveConfirmName]);
 
   const confirmRemoveProvider = useCallback(async (removeConfirmName: string | null) => {
     const name = removeConfirmName;
     if (!name || removeBusyRef.current) return;
+    const pending = pendingRemoveRef.current;
+    const capture = pending?.name === name ? pending.capture : renderCapture;
+    // The dashboard moved while the confirmation was open: refuse rather than delete the
+    // same-named provider on the new target.
+    if (!isApiTargetCaptureCurrent(capture)) {
+      setRemoveConfirmName(null);
+      notify(t("prov.targetChanged"), false);
+      return;
+    }
     removeBusyRef.current = true;
     setRemoveConfirmName(null);
     const fallback = t("prov.removeFail", { name });
     try {
-      const res = await fetch(`${apiBase}/api/providers?name=${encodeURIComponent(name)}`, { method: "DELETE" });
+      const res = await targetFetch(capture, `${apiBase}/api/providers?name=${encodeURIComponent(name)}`, { method: "DELETE" });
       if (res.ok) {
+        pendingRemoveRef.current = null;
         const data = await res.json().catch(() => ({})) as { defaultProvider?: unknown; dependentShadowIntercept?: unknown };
         const defaultProvider = typeof data.defaultProvider === "string" ? data.defaultProvider : null;
         const shadow = activeShadowDependency(data);
+        onProviderRemoved?.(name);
+        if (!isApiTargetCaptureCurrent(capture)) return;
         if (shadow) notify(t("prov.removedShadowTarget", { name, model: shadow.model }), false, "warn");
         else notify(defaultProvider
           ? t("prov.removedDefault", { name, defaultProvider })
@@ -86,36 +113,49 @@ export function useProvidersCrud({
     } finally {
       removeBusyRef.current = false;
     }
-  }, [apiBase, fetchConfig, fetchOauth, fetchProviderQuotas, notify, removeBusyRef, setRemoveConfirmName, setWorkspaceSelected, t, workspaceSelected]);
+  }, [apiBase, fetchConfig, fetchOauth, fetchProviderQuotas, notify, onProviderRemoved, removeBusyRef, renderCapture, setRemoveConfirmName, setWorkspaceSelected, t, workspaceSelected]);
 
   const setProviderDisabled = useCallback(async (name: string, disabled: boolean) => {
-    const res = await fetch(`${apiBase}/api/providers?name=${encodeURIComponent(name)}`, {
+    const capture = renderCapture;
+    const res = await targetFetch(capture, `${apiBase}/api/providers?name=${encodeURIComponent(name)}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ disabled }),
     });
     if (!res.ok) {
-      notify(await apiErrorMessage(res, disabled ? t("prov.disableFail", { name }) : t("prov.enableFail", { name })), false);
+      notify(await apiErrorMessage(
+        res,
+        disabled ? t("prov.disableFail", { name }) : t("prov.enableFail", { name }),
+        t("prov.targetChanged"),
+      ), false);
       return;
     }
     const data = await res.json().catch(() => ({})) as { dependentShadowIntercept?: unknown };
+    if (!isApiTargetCaptureCurrent(capture)) return;
     const shadow = activeShadowDependency(data);
     if (shadow) notify(t("prov.disabledShadowTarget", { name, model: shadow.model }), false, "warn");
     else notify(disabled ? t("prov.disabled", { name }) : t("prov.enabled", { name }), true);
     fetchConfig();
     fetchOauth();
     fetchProviderQuotas(true);
-  }, [apiBase, fetchConfig, fetchOauth, fetchProviderQuotas, notify, t]);
+  }, [apiBase, fetchConfig, fetchOauth, fetchProviderQuotas, notify, renderCapture, t]);
 
-  const updateProvider = useCallback(async (name: string, patch: ProviderUpdatePatch): Promise<ProviderUpdateResult> => {
+  const updateProvider = useCallback(async (
+    name: string,
+    patch: ProviderUpdatePatch,
+    captureOverride?: ApiTargetCapture,
+  ): Promise<ProviderUpdateResult> => {
+    // A caller that owns the form passes its render capture. Never replace it with a live
+    // capture: that is exactly how a stale form used to write to the new hub.
+    const capture = captureOverride ?? renderCapture;
     try {
-      const res = await fetch(`${apiBase}/api/providers?name=${encodeURIComponent(name)}`, {
+      const res = await targetFetch(capture, `${apiBase}/api/providers?name=${encodeURIComponent(name)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
       });
       if (!res.ok) {
-        return { ok: false, error: await apiErrorMessage(res, t("prov.updateFail")) };
+        return { ok: false, error: await apiErrorMessage(res, t("prov.updateFail"), t("prov.targetChanged")) };
       }
       const data = await res.json().catch(() => ({})) as { xaiResponsesOptInState?: unknown };
       // Await refresh so callers (e.g. notes editor) only leave edit mode once
@@ -138,11 +178,12 @@ export function useProvidersCrud({
     } catch {
       return { ok: false, error: t("prov.networkError") };
     }
-  }, [apiBase, fetchConfig, fetchProviderQuotas, refreshCodexAccount, t]);
+  }, [apiBase, fetchConfig, fetchProviderQuotas, refreshCodexAccount, renderCapture, t]);
 
   const setDefaultProvider = useCallback(async (name: string): Promise<boolean> => {
+    const capture = renderCapture;
     try {
-      const res = await fetch(`${apiBase}/api/providers?name=${encodeURIComponent(name)}`, {
+      const res = await targetFetch(capture, `${apiBase}/api/providers?name=${encodeURIComponent(name)}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ setDefault: true }),
@@ -152,6 +193,7 @@ export function useProvidersCrud({
         notify(providerErrorMessage(data, t, t("prov.setDefaultFail", { name })), false);
         return false;
       }
+      if (!isApiTargetCaptureCurrent(capture)) return false;
       notify(t("prov.setDefaultSuccess", { name }), true);
       await fetchConfig();
       return true;
@@ -159,7 +201,7 @@ export function useProvidersCrud({
       notify(t("prov.setDefaultFail", { name }), false);
       return false;
     }
-  }, [apiBase, fetchConfig, notify, t]);
+  }, [apiBase, fetchConfig, notify, renderCapture, t]);
 
   return { removeProvider, confirmRemoveProvider, setProviderDisabled, setDefaultProvider, updateProvider };
 }

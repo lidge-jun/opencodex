@@ -35,6 +35,10 @@ Une commande réussie renvoie le code 0. Une syntaxe non valide, une commande ou
 
 Les opérations de suppression destructive, d’importation, de consommation de crédits et de mise à jour qui annoncent une confirmation exigent `--yes` en mode non interactif. Ce drapeau constitue un consentement explicite : son absence ne doit jamais confirmer silencieusement l’opération.
 
+## Entrer dans le mode expérimental de sous-agents en clair
+
+Utilisez `ocx v2 mode v2-plaintext --acknowledge-plaintext-agent-messages`. Les commandes génériques `config set` et `config import` refusent une nouvelle entrée dans ce mode, car la commande dédiée coordonne aussi la transition native. Avant de restaurer une configuration exportée contenant `multiAgentMode: "v2-plaintext"`, effectuez d’abord cette transition avec consentement, puis importez le fichier. Restaurer un mode déjà actif, modifier d’autres paramètres et quitter ce mode restent possibles. La préférence indépendante `plaintextV2AgentMessages` reste inchangée.
+
 ## Version et cibles de répartition internes
 
 `ocx --version`, `ocx -v` et `ocx version` affichent une seule ligne de version exploitable par un script, puis se terminent.

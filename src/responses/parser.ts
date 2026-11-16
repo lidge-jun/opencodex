@@ -217,6 +217,12 @@ function nameDestinationContent(
   return changed ? parts : content;
 }
 
+/**
+ * Validate a Responses body and normalize its tools, options and conversation.
+ * Restores signed or opaque reasoning from replayed items; late signatures require
+ * adjacent output ownership and retain thinking/signature ordering.
+ * @throws Error when the body fails Responses schema validation.
+ */
 export function parseRequest(
   body: unknown,
   parseOptions?: { replayCacheScope?: OcxReasoningReplayScopeRef },
@@ -457,6 +463,27 @@ export function parseRequest(
         if (envelope?.krc && thinkingText.length === 0) {
           const previous = messages[messages.length - 1];
           if (previous?.role === "assistant") previous.kiroRedactedReasoning = envelope.krc;
+          continue;
+        }
+
+        // Late turn signatures follow the closed output on the wire. Bind only to the
+        // immediately preceding item named by the carrier, never the following turn.
+        if (envelope?.aft) {
+          const previousItem = inputItems[itemIndex - 1] as { id?: string; type?: string; role?: string; execution?: string } | undefined;
+          const previous = messages[messages.length - 1];
+          const properOutput = previousItem?.type === "function_call" || previousItem?.type === "custom_tool_call"
+            || (previousItem?.type === "tool_search_call" && previousItem.execution === "client")
+            || ((previousItem?.type === "message" || previousItem?.type === undefined) && previousItem?.role === "assistant");
+          if (envelope.sig && properOutput && previous?.role === "assistant"
+            && (previousItem?.id === undefined || previousItem.id === envelope.aft)) {
+            // Preserve thinking/signature adjacency even after prefatory text or earlier calls.
+            const afterThinking = previous.content.findLastIndex(part => part.type === "thinking") + 1;
+            previous.content.splice(afterThinking, 0, {
+              type: "thinking", thinking: thinkingText, signature: envelope.sig,
+              ...(envelope.red ? { redacted: envelope.red } : {}),
+              ...(reasoning.id ? { itemId: reasoning.id } : {}),
+            });
+          }
           continue;
         }
 

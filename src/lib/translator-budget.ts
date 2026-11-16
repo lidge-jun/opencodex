@@ -1,4 +1,5 @@
 import { carryReplayRefusal, isNonReplayableResponse, markResponseNonReplayable } from "./upstream-retry";
+import { carryPacedStream, pacedQueuingStrategy } from "./paced-stream";
 
 export const TRANSLATOR_MAX_CALL_ARGUMENT_BYTES = 2 * 1024 * 1024;
 export const TRANSLATOR_MAX_TURN_BYTES = 32 * 1024 * 1024;
@@ -392,7 +393,7 @@ export function finalizeTranslatorBudgetResponse(response: Response, budget: Tra
   };
   // The transport owns cancellation and terminal precedence. Abort releases only
   // accounting here, including when no consumer ever pulls or cancels this body.
-  const body = new ReadableStream<Uint8Array>({
+  const body = carryPacedStream(response.body, new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
         const result = await reader.read();
@@ -409,7 +410,7 @@ export function finalizeTranslatorBudgetResponse(response: Response, budget: Tra
       finalize();
       await reader.cancel(reason);
     },
-  });
+  }, pacedQueuingStrategy(response.body)));
   if (signal?.aborted) finalize();
   else signal?.addEventListener("abort", finalize, { once: true });
   const finalizedResponse = new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });

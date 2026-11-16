@@ -13,7 +13,7 @@ dosyalardan kaynaklanan yanlış alarmları önlemeye yardımcı olur.
 Geçiş sürüyor. Yayın iş akışı hazır; SignPath bunu test sertifikasıyla doğruluyor.
 Üretim sertifikası verilene kadar Windows yayın dosyaları imzasız kalır ve
 SmartScreen bir kez **Ek bilgi → Yine de çalıştır** seçimini isteyebilir.
-Geçişten sonra yayımlanan sürümler **SignPath Foundation** imzası taşır.
+Geçişten sonra iş akışı **SignPath Foundation** ile üretim imzalamayı dener. İmzalama veya doğrulama başarısız olursa, aşağıda açıklandığı gibi özgün imzasız dosya yine de yayımlanabilir.
 
 ## Kod imzalama ilkesi
 
@@ -31,11 +31,7 @@ imzalanmasını yasaklar.
 
 ### Gizlilik
 
-Bu program; kullanıcı, kuran kişi veya çalıştıran kişi açıkça istemedikçe başka
-ağ sistemlerine bilgi aktarmaz. OpenCodex, istekleri yapılandırdığınız sağlayıcılara
-iletir. Yeni sürümler için GitHub ve npm kayıt deposundan yayın meta verilerini
-de okur; bu kontroller istemlerinizi, kimlik bilgilerinizi veya kullanım verilerinizi
-taşımaz.
+opencodex, yalnızca kuran veya çalıştıran kişi kontrol panelinde ya da etkileşimli bir CLI isteminde bildirimi gördükten ve reddetmedikten sonra `telemetry.opencodex.me` adresine günde bir kez anonim kullanım özeti (her gün değişen bir kurulum karması, sürüm, sürüm kanalı, platform, kurulum kanalı, sağlayıcı türü, kaba model ailesi, etkin dakikalar ve istek, jeton ve hata sayaçları; istemler, model çıktıları, anahtarlar, hesaplar, ana bilgisayar adları veya dosya yolları asla gönderilmez) gönderir. Bu özellik bu bildirimde, Windows yükleyicisinde (varsayılan olarak işaretli "Send anonymous usage statistics" onay kutusu), Proxy ayrıntılarında veya `ocx telemetry disable`, `OCX_TELEMETRY=0` ya da `DO_NOT_TRACK=1` ile kapatılabilir. Bu anonim verilerin yalnızca proje genelindeki toplamları herkese açıktır. Ayrı bir herkese açık sıralama profili, siz kendiniz bağlamadıkça (pano Ana ekranı veya ocx telemetry profile connect) kapalıdır; yalnızca seçtiğiniz kullanıcı adını, görünen adı ve rengi ile günlük istek, jeton ve model ailesi toplamlarınızı paylaşır, anonim telemetri kimliğinizi asla paylaşmaz ve bağlantıyı kesmek profili siler. Bunun dışındaki tüm veriler yalnızca yapılandırdığınız sağlayıcılara ve hizmetlere gider. Yeni sürümleri kontrol etmek için GitHub ve npm kayıt deposundan yayın meta verilerini de okur; bu sürüm kontrolleri istemlerinizi veya kimlik bilgilerinizi taşımaz. Bkz. [Telemetri ve Gizlilik](/tr/guides/telemetry/).
 
 ## İndirmeyi doğrulama
 
@@ -86,7 +82,8 @@ SignPath çıktı yapılandırmaları: `windows-standalone-zip` (ZIP kökünde t
 | `release-signing` | İmzalanır ve güvenilirliği doğrulanır | İmzalanır ve güvenilirliği doğrulanır |
 
 İstek başarısız olur, zaman aşımına uğrar veya reddedilirse ya da doğrulama
-başarısız olursa iş uyarı kaydeder; imzasız dosyayı özgün güncelleyici imzasıyla yayımlar.
+başarısız olursa iş uyarı kaydeder ve özgün imzasız dosyayı yayımlar. MSI, varsa özgün
+güncelleyici imzasını korur; bağımsız `ocx.exe` dosyasının güncelleyici imzası yoktur.
 
 **Üretim sertifikasına geçiş:** SignPath sertifikayı verince depo değişkeni
 `SIGNPATH_SIGNING_POLICY_SLUG` değerini `release-signing` yapın

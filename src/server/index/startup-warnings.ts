@@ -1,4 +1,6 @@
 import { currentServiceHomes, serviceStatePathsForOpenCodexHome } from "../../service";
+import type { OcxConfig } from "../../types";
+import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import {
   createWindowsTaskListingCache,
   inspectNativeCodexOwnership,
@@ -100,22 +102,15 @@ import {
 
 const REQUEST_LOG_ID_RESPONSE_HEADER = "x-opencodex-request-id";
 
-/** Messages clients persist request-id; the upstream diagnostic id has a separate namespace. */
+/** Messages clients correlate requests with the proxy ledger ID. */
 export function withMessagesRequestLogId(response: Response, requestId: string): Response {
-  const upstreamId = response.headers.get("request-id");
   const correlated = withRequestLogId(response, requestId);
   correlated.headers.delete("x-opencodex-upstream-request-id");
-  if (upstreamId && /^req_[A-Za-z0-9_-]{1,128}$/.test(upstreamId)) {
-    correlated.headers.set("x-opencodex-upstream-request-id", upstreamId);
-  }
   correlated.headers.set("request-id", requestId);
-  const exposed = correlated.headers.get("Access-Control-Expose-Headers") ?? "";
-  const names = exposed.split(",").map(name => name.trim().toLowerCase());
-  const additions = ["request-id", ...(correlated.headers.has("x-opencodex-upstream-request-id")
-    ? ["x-opencodex-upstream-request-id"] : [])].filter(name => !names.includes(name));
-  if (additions.length) {
-    correlated.headers.set("Access-Control-Expose-Headers", [exposed, ...additions].filter(Boolean).join(", "));
-  }
+  const names = (correlated.headers.get("Access-Control-Expose-Headers") ?? "").split(",")
+    .map(name => name.trim().toLowerCase()).filter(name => name && name !== "x-opencodex-upstream-request-id");
+  names.push("request-id");
+  correlated.headers.set("Access-Control-Expose-Headers", [...new Set(names)].join(", "));
   return correlated;
 }
 
@@ -149,6 +144,8 @@ export function withRequestLogId(response: Response, requestId: string): Respons
 }
 
 export interface StartServerDeps {
+  /** Test-only observer of what the hub-link admission reports to the link listener (route proofs). */
+  observeAuthenticatedCatalog?: (apiKeyId: string, routeProofId?: string) => void;
   /** Test-only CONNECT binder; permits kernel-assigned ports without probe-and-release races. */
   startClaudeInterceptProxy?: typeof import("../../claude/intercept/connect-proxy").startConnectProxy;
   /** Test-only seam; production always initializes its own management credential state. */
@@ -273,8 +270,10 @@ export function resolveInboundBodyLimitWithWarning(config: { maxInboundBodyBytes
   return limit;
 }
 
-export function warnPlaintextV2AgentMessagesStartup(config: { plaintextV2AgentMessages?: boolean }): void {
-  if (config.plaintextV2AgentMessages !== true) return;
+export function warnPlaintextV2AgentMessagesStartup(
+  config: Pick<OcxConfig, "multiAgentMode" | "plaintextV2AgentMessages">,
+): void {
+  if (!isPlaintextV2AgentMessagesEnabled(config)) return;
   console.warn("⚠️  Experimental plaintext V2 agent messages are enabled.");
   console.warn("   Eligible ChatGPT collaboration calls may carry plaintext message arguments. HTTPS remains encrypted, but task text may be retained in Codex history, selected providers, and local response/debug state.");
   console.warn("   This depends on undocumented ChatGPT and Codex behavior; it does not decrypt existing tasks.");

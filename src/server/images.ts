@@ -32,6 +32,8 @@ import { sidecarEnter } from "../lib/sidecar-tracker";
 import { isNonReplayableResponse } from "../lib/upstream-retry";
 import type { OcxConfig } from "../types";
 import { resolveFirstUsableOpenAiSidecar, selectImagesProvider } from "../providers/openai-sidecar";
+import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../providers/api-key-pause";
+import { resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
 import { recordDistributedKeyFailure, selectProactiveApiKeyTransport } from "../providers/key-failover";
 import { requestPacingOverloadResponse } from "./responses/pacing-overload";
 import { getProviderRegistryEntry } from "../providers/registry";
@@ -669,8 +671,8 @@ export async function handleImages(
     const xaiRelay = await tryXaiImageRelay(body, config, logCtx, req.signal, endpoint, admission);
     if (xaiRelay) return xaiRelay;
   }
-  if (candidates.error) {
-    return formatErrorResponse(400, "invalid_request_error", candidates.error);
+  if (candidates.error && (config.images?.provider !== undefined || !candidates.paused)) {
+    return formatErrorResponse(candidates.paused ? 403 : 400, candidates.paused ? "permission_error" : "invalid_request_error", candidates.error);
   }
   const explicitKeyedProvider = config.images?.provider !== undefined && candidates.keyed !== undefined;
   // Admission bearer is valid proxy auth (requireApiAuth already passed) but must never be
@@ -709,6 +711,9 @@ export async function handleImages(
     const ccaResponse = await tryCcaImageGeneration(body, config, logCtx, req.signal, endpoint, admission);
     if (ccaResponse) return ccaResponse;
     if (forwardScopeDenial) return forwardScopeDenial;
+    if (candidates.paused) {
+      return formatErrorResponse(403, "permission_error", candidates.error ?? new ProviderApiKeyPausedError().message);
+    }
     // 400, not 5xx: codex retries every 5xx up to 5 total attempts, and this is a permanent
     // configuration state that must surface on the first attempt.
     return formatErrorResponse(
@@ -812,27 +817,47 @@ export async function handleImages(
     // Transport variant: this branch reads `provider.baseUrl` and `provider.headers` to build
     // the URL and the request, and it comes back with the credential already resolved.
     let warmKeyProvider;
-    try { warmKeyProvider = selectProactiveApiKeyTransport(config, providerName, candidates.keyed.provider); }
-    catch (error) {
+    let currentKeyProvider;
+    try {
+      warmKeyProvider = selectProactiveApiKeyTransport(config, providerName, candidates.keyed.provider);
+      currentKeyProvider = warmKeyProvider ?? resolveCurrentProviderApiKeyTransport(
+        config,
+        providerName,
+        { ...candidates.keyed.provider, _apiKeyAttempt: undefined },
+      );
+      if (isProviderApiKeyPaused(currentKeyProvider ?? config.providers[providerName])) {
+        throw new ProviderApiKeyPausedError();
+      }
+    } catch (error) {
+      if (error instanceof ProviderApiKeyPausedError) {
+        if (config.images?.provider === undefined) {
+          const ccaResponse = await tryCcaImageGeneration(body, config, logCtx, req.signal, endpoint, admission);
+          if (ccaResponse) return ccaResponse;
+        }
+        return formatErrorResponse(403, "permission_error", error.message);
+      }
+      if (error instanceof OAuthAccountPausedError) {
+        return formatErrorResponse(403, "permission_error", error.message);
+      }
       const refusal = requestPacingOverloadResponse(error);
       if (refusal) return refusal;
       throw error;
     }
-    const provider = warmKeyProvider ?? candidates.keyed.provider;
-    recordKeyFailure = (status, retryAfter) => { recordDistributedKeyFailure(config, providerName, provider._apiKeyAttempt, status, Date.now(), retryAfter); };
-    // No fall back to the earlier snapshot once a pick has happened. The picker COMMITS its
-    // choice before returning, so if the chosen reference will not resolve -- revoked keychain
-    // entry, unset env var -- sending the previous key would authenticate a non-idempotent
-    // POST with a credential the config no longer considers active, and the previous key is
-    // the one that was cooling. Fail loudly instead.
-    if (warmKeyProvider && !warmKeyProvider.apiKey?.trim()) {
+    const provider = currentKeyProvider;
+    if (!provider || !provider.apiKey?.trim()) {
       return formatErrorResponse(
         500,
         "configuration_error",
         `image generation selected an API key for "${providerName}" that cannot be resolved`,
       );
     }
-    const apiKey = warmKeyProvider?.apiKey ?? candidates.keyed.apiKey;
+    recordKeyFailure = (status, retryAfter) => { recordDistributedKeyFailure(config, providerName, provider._apiKeyAttempt, status, Date.now(), retryAfter); };
+    // No fall back to the earlier snapshot once a pick has happened. The picker COMMITS its
+    // choice before returning, so if the chosen reference will not resolve -- revoked keychain
+    // entry, unset env var -- sending the previous key would authenticate a non-idempotent
+    // POST with a credential the config no longer considers active, and the previous key is
+    // the one that was cooling. Fail loudly instead.
+    const apiKey = provider.apiKey;
     try {
       for (const [name, value] of Object.entries(provider.headers ?? {})) headers.set(name, value);
       headers.set("authorization", `Bearer ${apiKey}`);
@@ -847,6 +872,9 @@ export async function handleImages(
     // No usable OpenAI credential — try CCA before giving up.
     const ccaResponse = await tryCcaImageGeneration(body, config, logCtx, req.signal, endpoint, admission);
     if (ccaResponse) return ccaResponse;
+    if (candidates.paused) {
+      return formatErrorResponse(403, "permission_error", candidates.error ?? new ProviderApiKeyPausedError().message);
+    }
     return formatErrorResponse(
       401,
       "authentication_error",

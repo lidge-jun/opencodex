@@ -256,6 +256,51 @@ describe("combo required-tool contract on buffered children (#7456)", () => {
     });
   }
 
+  for (const [carrier, extra] of [
+    ["tools", { tools: [{ type: "file_search" }], tool_choice: "required" }],
+    ["additional_tools", {
+      tools: [], tool_choice: "required",
+      input: [{ role: "user", content: "hi" }, { type: "additional_tools", tools: [{ type: "file_search" }] }],
+    }],
+    ["tool_search_output", {
+      tools: [], tool_choice: "required",
+      input: [{ role: "user", content: "hi" },
+        { type: "tool_search_output", call_id: "ts_1", status: "completed", tools: [{ type: "file_search" }] }],
+    }],
+  ] as const) {
+    test(`parsed-catalog mandatory refusal hops the combo to a compatible child: ${carrier}`, async () => {
+      // The static eligibility check runs without the parsed catalog, so a hosted-only
+      // declaration that buildTools drops still looks preservable to it. Request preparation
+      // is the first point that sees the empty catalog — its refusal must keep the local
+      // refusal identity or the combo reports the child's bare 400 instead of hopping.
+      let chatSends = 0;
+      const bodies: unknown[] = [];
+      const backup = serve(async request => {
+        bodies.push(await request.json());
+        return Response.json(completedWithHostedCall("m2", "file_search_call"));
+      });
+      const chat = provider("openai-chat", "https://chat.fixture.invalid/v1", "key-a", {
+        fetch: (async () => { chatSends++; throw new Error("unexpected Chat send"); }) as typeof fetch });
+      const response = await handleResponsesWith(comboConfig({
+        a: chat,
+        b: provider("openai-responses", baseUrl(backup), "key-b"),
+      }), requiredRequest(extra));
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(chatSends).toBe(0);
+      expect(bodies).toHaveLength(1);
+    });
+    test(`parsed-catalog mandatory refusal reports combo exhaustion: ${carrier}`, async () => {
+      let sends = 0;
+      const chat = provider("openai-chat", "https://chat.fixture.invalid/v1", "key-a", {
+        fetch: (async () => { sends++; throw new Error("unexpected Chat send"); }) as typeof fetch });
+      const response = await handleResponsesWith(comboConfig({ a: chat }), requiredRequest(extra));
+      expect(response.status).toBe(503);
+      expect(await response.text()).toContain("attempted targets cannot preserve mandatory tool_choice");
+      expect(sends).toBe(0);
+    });
+  }
+
   test.each(["ordinary", "exact-suffix", "disabled-fast"])("translated Chat child preserves forced tool_search on its actual wire: %s", async mode => {
     const bodies: unknown[] = [];
     const upstream = serve(async request => {

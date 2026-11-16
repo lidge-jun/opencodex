@@ -8,6 +8,7 @@ import {
   codexWsPreOutputRefusalHold,
   codexWsPreOutputRefusalStatus,
   codexWsSocketDeathStage,
+  isEmptyCodexWsLifecycleEvent,
   isCodexWsPreOutputRefusal,
   isCodexWsUpstreamResponse,
   readCodexWsStage,
@@ -104,10 +105,16 @@ function exchange(
 
 const CREATED = { type: "response.created", response: { id: "resp_1", status: "in_progress", output: [] } };
 const IN_PROGRESS = { type: "response.in_progress", response: { id: "resp_1", status: "in_progress", output: [] } };
+const HEARTBEAT = { type: "response.heartbeat" };
 const OVERLOADED = {
   type: "error",
   status: 503,
   error: { type: "server_error", code: "server_is_overloaded", message: "Our servers are currently overloaded. Please try again later." },
+};
+/** The same refusal without a numeric wrapper: the code inside the error object is the only identity. */
+const OVERLOADED_BARE = {
+  type: "error",
+  error: { code: "server_is_overloaded", message: "Our servers are currently overloaded. Please try again later." },
 };
 const SERVER_ERROR = {
   type: "error",
@@ -169,6 +176,24 @@ describe("an authoritative refusal before any output becomes a replayable gatewa
     expect(body.startsWith("event: error")).toBe(true);
   });
 
+  test("a heartbeat before the refusal does not commit the held preamble", async () => {
+    const projection = await exchange(opened(CREATED, HEARTBEAT, IN_PROGRESS, OVERLOADED));
+    expect(projection.status).toBe(503);
+    expect(isCodexWsPreOutputRefusal(projection)).toBe(true);
+    expect(readCodexWsStage(projection)).toMatchObject({
+      relayedEvents: 4, terminalEvent: "error", terminalErrorStatus: 503,
+    });
+  });
+
+  test("the field shape: heartbeat, then a bare-code refusal with no wrapper status", async () => {
+    const projection = await exchange(opened(CREATED, { ...HEARTBEAT, sequence_number: 2 }, IN_PROGRESS, OVERLOADED_BARE));
+    expect(projection.status).toBe(503);
+    expect(isCodexWsPreOutputRefusal(projection)).toBe(true);
+    expect(readCodexWsStage(projection)).toMatchObject({
+      relayedEvents: 4, terminalEvent: "error", terminalErrorStatus: null,
+    });
+  });
+
   test("as an empty response.failed carrying the overload class", async () => {
     const projection = await exchange(opened(CREATED, FAILED_OVERLOADED));
     expect(projection.status).toBe(503);
@@ -201,6 +226,43 @@ describe("everything else keeps today's settle", () => {
     expect(body).toContain("server_is_overloaded");
   });
 
+  test("output after a heartbeat still commits the held preamble", async () => {
+    const body = await committed(await exchange(opened(CREATED, HEARTBEAT, OUTPUT_ITEM, OVERLOADED)));
+    expect(body).toContain("response.heartbeat");
+    expect(body).toContain("response.output_item.added");
+    expect(body).toContain("server_is_overloaded");
+  });
+
+  test("a heartbeat naming another response commits the held preamble", async () => {
+    const foreign = { type: "response.heartbeat", response: { id: "resp_other", output: [] } };
+    const body = await committed(await exchange(opened(CREATED, foreign, OVERLOADED)));
+    expect(body).toContain("server_is_overloaded");
+  });
+
+  test("a heartbeat is empty only without output and without a side-effect mark", () => {
+    expect(isEmptyCodexWsLifecycleEvent(HEARTBEAT)).toBe(true);
+    expect(isEmptyCodexWsLifecycleEvent({ ...HEARTBEAT, sequence_number: 2 })).toBe(true);
+    expect(isEmptyCodexWsLifecycleEvent({
+      type: "response.heartbeat", response: { id: "resp_1", output: [] },
+    })).toBe(true);
+    expect(isEmptyCodexWsLifecycleEvent({
+      type: "response.heartbeat", response: { id: "resp_1", output: [{ id: "t", type: "function_call" }] },
+    })).toBe(false);
+    expect(isEmptyCodexWsLifecycleEvent({ ...HEARTBEAT, replayUnsafe: true })).toBe(false);
+    expect(isEmptyCodexWsLifecycleEvent({ ...HEARTBEAT, replayUnsafe: false })).toBe(true);
+    for (const malformed of ["true", 1, null]) {
+      // An uncertain mark cannot prove the frame had no side effect.
+      expect(isEmptyCodexWsLifecycleEvent({ ...HEARTBEAT, replayUnsafe: malformed })).toBe(false);
+    }
+    expect(isEmptyCodexWsLifecycleEvent({ ...HEARTBEAT, sequence_number: "2" })).toBe(false);
+    for (const marker of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(isEmptyCodexWsLifecycleEvent({ ...HEARTBEAT, sequence_number: marker })).toBe(false);
+    }
+    expect(isEmptyCodexWsLifecycleEvent({ ...HEARTBEAT, stream_id: "other" })).toBe(false);
+    // An unknown field may describe output or an effect this version does not know; fail closed.
+    expect(isEmptyCodexWsLifecycleEvent({ ...HEARTBEAT, delta: "visible" })).toBe(false);
+  });
+
   test("a created snapshot that already carries output commits", async () => {
     const resumed = { type: "response.created", response: { id: "resp_1", output: [{ id: "msg_0", type: "message" }] } };
     expect(await committed(await exchange(opened(resumed, OVERLOADED)))).toContain("server_is_overloaded");
@@ -216,7 +278,10 @@ describe("everything else keeps today's settle", () => {
     ["doubled wrapper aliases", { ...OVERLOADED, status_code: 503 }],
     ["an unrecognized code without a wrapper status", { type: "error", error: { code: "mystery", message: "x" } }],
   ])("after the preamble, %s is relayed in the body", async (_name, frame) => {
-    await committed(await exchange(opened(CREATED, frame)));
+    const body = await committed(await exchange(opened(CREATED, frame)));
+    // The name claims this frame reaches the client: prove that frame, not only a 200.
+    expect(body).toContain(`event: ${frame.type}`);
+    expect(body).toContain(frame.error.message);
   });
 
   test.each([

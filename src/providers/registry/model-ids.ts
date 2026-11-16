@@ -81,6 +81,7 @@ export const REGISTRY_FIELD_MODEL_ID_ROLES = {
   annotateEmptyToolOutputs: NONE,
   supportsServiceTier: NONE,
   supportsOpenAiWebSearchToolFields: NONE,
+  minImageEdge: NONE,
   supportsResponsesCustomTools: NONE,
   modelSupportsServiceTier: RECORD_KEYS,
   keyAuthServiceTier: KEY_AUTH_SERVICE_TIER,

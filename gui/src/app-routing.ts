@@ -3,6 +3,9 @@
 import { normalizeHashPath, splitHashQuery } from "./hash-routing";
 
 export type Page =
+  | "home"
+  | "setup"
+  | "advanced"
   | "dashboard"
   | "startup"
   | "providers"
@@ -19,6 +22,9 @@ export type Page =
   | "claude";
 
 export const VALID_PAGES = new Set<Page>([
+  "home",
+  "setup",
+  "advanced",
   "dashboard",
   "startup",
   "providers",
@@ -61,7 +67,8 @@ export function readPageFromHash(hash?: string): Page {
   if (raw === "integrations/claude" || raw === "integrations/claude/desktop") return "claude";
   // Claude accounts live on Providers now; the old Account sub-tab bookmark opens them there.
   if (raw === "claude/account") return "providers";
-  return VALID_PAGES.has(pageId) ? pageId : "dashboard";
+  // No hash (or an unknown one) opens Home, the v2 landing page.
+  return VALID_PAGES.has(pageId) ? pageId : "home";
 }
 
 /**
@@ -171,8 +178,9 @@ export function hashBelongsToPage(rawHash: string, page: Page): boolean {
   return rawHash === page
     || (page === "claude" && ["claude/code", "claude/desktop"].includes(rawHash))
     || (page === "logs" && rawHash === "logs/debug")
+    || (page === "startup" && rawHash === "startup/desktop")
     || (page === "usage" && rawHash === "usage/companion")
-    || (page === "codex-set" && (rawHash === "codex-set/prompt" || rawHash === "codex-set/desktop"))
+    || (page === "codex-set" && (rawHash === "codex-set/prompt" || rawHash === "codex-set/desktop" || rawHash === "codex-set/cli"))
     || (page === "models" && (
       (MODELS_TAB_HASHES as readonly string[]).includes(rawHash)
       || rawHash === JEV_AUTO_CREATE_HASH

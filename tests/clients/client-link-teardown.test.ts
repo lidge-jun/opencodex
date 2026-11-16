@@ -1,5 +1,9 @@
+// First: in-process connectClient writes the catalog through src/codex/paths, fixed at import.
+import { assertCodexHomeOwned } from "../helpers/codex-home-sandbox";
 import { expect, spyOn, test } from "bun:test";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { CODEX_HOME } from "../../src/codex/paths";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { handleDisconnectCommand } from "../../src/cli/connect";
 import { connectClient } from "../../src/client/connect";
@@ -7,6 +11,12 @@ import { teardownClientLink } from "../../src/client/link-teardown";
 import { clientLinkStatePath, writeClientLinkState } from "../../src/client/link-state";
 import { quoteRemote, remoteOcxArgv } from "../../src/link/ssh-argv";
 import { createTempHome } from "../helpers/temp-home";
+import { fixturePath, repoPath } from "../helpers/repo-root";
+import { randomUUID } from "node:crypto";
+
+const FIXTURE_TOKEN_FILE = ".ocx-fixture-token";
+
+assertCodexHomeOwned(CODEX_HOME);
 
 const linkId = "lnk_0123456789abcdef";
 const key = `ocx_data_${"a".repeat(40)}`;
@@ -150,4 +160,142 @@ test("an unreadable sidecar skips the revoke but still reports the manual revoke
   });
   expect(standalone).toEqual({ linkId: null, homeRevoke: "not_applicable", tunnel: { tunnel: "absent" } });
   expect(calls).toBe(0);
+});
+
+
+test("a desktop-remote folder with no state or receipt is named, with the way to clear it", async () => {
+  const home = createTempHome("ocx-client-link-desktop-store-");
+  try {
+    const config = getDefaultConfig();
+    config.port = 10100;
+    saveConfig(config);
+    mkdirSync(home.codexHome, { recursive: true });
+    writeFileSync(home.path(".codex", "config.toml"), "model_provider = \"openai\"\n");
+    await connectClient({
+      serverUrl: "http://127.0.0.1:34567",
+      managementUrl: "http://127.0.0.1:34567",
+      managementTransport: "direct",
+      transport: "link",
+      link: { tunnelPort: 34567, linkId },
+      credential: { kind: "link", apiKeyId: "key-1", key },
+      selectedClients: ["codex"],
+      noSync: true,
+    }, {
+      fetchImpl: async input => String(input).endsWith("/readyz")
+        ? Response.json({ status: "ready", protocol: 1, minimumClientProtocol: 1, managementUrl: "http://127.0.0.1:34567" })
+        : Response.json({ models: [] }),
+      catalogCompatibility: { supportedEfforts: () => new Set() },
+      lifecycleLockDeps: { lockPath: home.path("lifecycle.sqlite") },
+    });
+    // Seen on a Child: someone renamed the receipt, leaving the folder with nothing OpenCodex reads.
+    mkdirSync(home.path("desktop-remote"), { recursive: true });
+    writeFileSync(home.path("desktop-remote", "disconnect.json.stale-20261108"), "{}");
+    const logs = spyOn(console, "log").mockImplementation(() => {});
+    const errors = spyOn(console, "error").mockImplementation(() => {});
+    let exit = -1;
+    let output = "";
+    try {
+      exit = await handleDisconnectCommand([], {
+        lifecycleLockDeps: { lockPath: home.path("lifecycle.sqlite") },
+        linkTeardownDeps: {
+          reapOrphanTunnel: async () => ({ tunnel: "absent" }),
+          runner: { run: async () => ({ code: 1, stdout: "", stderr: "" }) },
+          knownHostsFile,
+        },
+      });
+      output = errors.mock.calls.flat().join("\n");
+    } finally {
+      logs.mockRestore();
+      errors.mockRestore();
+    }
+    expect(exit).not.toBe(0);
+    expect(output).toContain("desktop_lifecycle_unsafe");
+    expect(output).toContain(realpathSync.native(home.path("desktop-remote")));
+    expect(output).toContain("holds no Claude Desktop remote state or disconnect receipt");
+    expect(output).toContain("Move that folder aside, then run ocx disconnect again");
+  } finally {
+    home.remove();
+  }
+});
+
+/**
+ * Scenarios that write the Codex files directly. Those paths are fixed when src/codex/paths loads,
+ * so they run in tests/fixtures/client-link-journal-runner.ts, a child whose CODEX_HOME and
+ * OPENCODEX_HOME point into this test's own temp home before anything is imported; this process
+ * never touches a Codex path, and only that owned home is removed.
+ */
+async function runJournalScenario(scenario: "catalog-changed" | "standalone-handover" | "foreign-journal") {
+  const home = createTempHome("ocx-client-link-journal-");
+  try {
+    const codex = home.path("codex");
+    mkdirSync(codex, { recursive: true });
+    mkdirSync(home.path("ocx"), { recursive: true });
+    // The runner writes only into a home that carries the one-time token this process hands it.
+    const token = randomUUID();
+    writeFileSync(home.path(FIXTURE_TOKEN_FILE), token);
+    const child = Bun.spawn([process.execPath, fixturePath("client-link-journal-runner.ts")], {
+      cwd: repoPath(), stdin: new Blob([scenario]), stdout: "pipe", stderr: "pipe",
+      env: { ...process.env, HOME: home.root, USERPROFILE: home.root, OPENCODEX_HOME: home.path("ocx"), CODEX_HOME: codex, OCX_SERVICE: "", OCX_SERVICE_MANAGED: "0", OCX_FIXTURE_TOKEN: token },
+    });
+    const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+    expect(exit, stderr).toBe(0);
+    return JSON.parse(stdout.trim().split("\n").at(-1)!) as { exit?: number; injected?: boolean; before?: unknown; after?: unknown; warnings: string[]; errors: string[] };
+  } finally {
+    home.remove();
+  }
+}
+
+test("a catalog changed after connect names what was found and --keep-catalog", async () => {
+  const result = await runJournalScenario("catalog-changed");
+  expect(result.exit).not.toBe(0);
+  const output = result.errors.join("\n");
+  expect(output).toContain("client_catalog_ownership_changed");
+  expect(output).toContain("matches neither the catalog this connection wrote nor the one recorded before it connected");
+  expect(output).toContain("ocx disconnect --keep-catalog");
+});
+
+test("connect --link over a standalone injection hands the Codex journal to the committed client", async () => {
+  const result = await runJournalScenario("standalone-handover");
+  expect(result.injected).toBe(true);
+  expect((result.before as { kind: string }).kind).toBe("process");
+  expect(result.after).toEqual({ kind: "client", apiKeyId: "key-1" });
+});
+
+// Review round 4: a connect over a journal an earlier connection owns must say so, not report a
+// clean handover; the routing is restored on the next restart and a sync after it re-applies it.
+test("connect over an earlier connection's Codex journal warns with the recovery step", async () => {
+  const result = await runJournalScenario("foreign-journal");
+  expect(result.after).toEqual({ kind: "client", apiKeyId: "earlier-key" });
+  expect(result.warnings.join("\n")).toContain("belongs to an earlier connection");
+  expect(result.warnings.join("\n")).toContain("ocx sync --restart-codex");
+});
+
+
+// Coordinator review round 4: run by hand, with HOME pointing at a real home, the runner must
+// refuse before any write. A temp folder stands in for that home and is asserted untouched.
+test("the journal runner refuses a home its parent did not create, and writes nothing", async () => {
+  const home = createTempHome("ocx-client-link-runner-direct-");
+  try {
+    const realLike = home.path("real-home");
+    mkdirSync(join(realLike, ".codex"), { recursive: true });
+    mkdirSync(join(realLike, ".opencodex"), { recursive: true });
+    writeFileSync(join(realLike, ".codex", "config.toml"), "model_provider = \"real\"\n");
+    writeFileSync(join(realLike, ".opencodex", "config.json"), "{\"real\":true}");
+    for (const token of [undefined, "forged-token"]) {
+      const child = Bun.spawn([process.execPath, fixturePath("client-link-journal-runner.ts")], {
+        cwd: repoPath(), stdin: new Blob(["standalone-handover"]), stdout: "pipe", stderr: "pipe",
+        env: { PATH: process.env.PATH ?? "", HOME: realLike, OPENCODEX_HOME: join(realLike, ".opencodex"), CODEX_HOME: join(realLike, ".codex"), ...(token ? { OCX_FIXTURE_TOKEN: token } : {}) },
+      });
+      const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
+      expect(exit).not.toBe(0);
+      expect(stdout).toBe("");
+      expect(stderr.trim().split("\n")).toEqual(["client-link-journal-runner.ts is a test fixture; run it through tests/clients/client-link-teardown.test.ts."]);
+    }
+    expect(readdirSync(join(realLike, ".codex"))).toEqual(["config.toml"]);
+    expect(readFileSync(join(realLike, ".codex", "config.toml"), "utf8")).toBe("model_provider = \"real\"\n");
+    expect(readdirSync(join(realLike, ".opencodex"))).toEqual(["config.json"]);
+    expect(readFileSync(join(realLike, ".opencodex", "config.json"), "utf8")).toBe("{\"real\":true}");
+  } finally {
+    home.remove();
+  }
 });
