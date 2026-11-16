@@ -654,6 +654,8 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { clearModelCache } = await import("../../codex/model-cache");
     const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
     clearModelCache(provider);
+    // A shared-login row (kimi-responses) caches its roster under its own name.
+    for (const row of oauthCredentialSiblingsOf(provider)) clearModelCache(row);
     clearGatherRoutedModelsInflight();
     clearQuotaCachesAfterAccountMutation(provider, false);
     if (affinityReset && !await affinityReset) {
@@ -736,6 +738,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
       const { clearModelCache } = await import("../../codex/model-cache");
       const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
       clearModelCache(provider);
+      for (const row of oauthCredentialSiblingsOf(provider)) clearModelCache(row);
       clearGatherRoutedModelsInflight();
       clearQuotaCachesAfterAccountMutation(provider, false);
     }
@@ -1167,6 +1170,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { clearModelCache } = await import("../../codex/model-cache");
     const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
     clearModelCache(provider);
+    for (const row of oauthCredentialSiblingsOf(provider)) clearModelCache(row);
     clearGatherRoutedModelsInflight();
     clearQuotaCachesAfterAccountMutation(provider, true);
     // Same reasoning as logout. Removing the last account for a provider used to

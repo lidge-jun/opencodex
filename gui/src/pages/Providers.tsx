@@ -549,7 +549,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
       setOauthTosPending({ provider, addAccount, ...(accountId ? { accountId } : {}) });
       return;
     }
-    void loginOAuth(provider, addAccount, accountId, row);
+    void loginOAuth(provider, addAccount, accountId, false, row);
   };
 
   if (!config) {
@@ -725,7 +725,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
             pausingAccountId={pausingAccounts[item.name]?.accountId ?? null}
             busyProvider={busy}
             loginHint={loginInfo}
-            loginCapture={loginCapture(item.name)}
+            loginCapture={loginCapture(oauthCredentialSlot(item.name))}
             authHandlers={authHandlers}
             onRefreshQuota={() => refreshProviderQuota(item.name)}
             isDefault={item.name === config.defaultProvider}

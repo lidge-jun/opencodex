@@ -5,7 +5,8 @@ import { deriveProviderPresets } from "../../src/providers/derive";
 import { OAUTH_CREDENTIAL_SIBLINGS, oauthCredentialSlot } from "../../src/oauth/credential-siblings";
 import { getLoginStatus, getValidAccessTokenSnapshot, OAUTH_PROVIDERS, runLogin, UnsupportedOAuthProviderError, upsertOAuthProvider } from "../../src/oauth";
 import { captureOAuthAccountSelection, commitOAuthAccountSelection, getAccountSet, getCredential, mutateStore, saveCredential, setAccountPaused } from "../../src/oauth/store";
-import { clearGenericFailoverHealth, eligibleFailoverAccounts, hasFailoverAccountQuorum, rotateGenericOAuthAccountOn429 } from "../../src/oauth/generic-account-failover";
+import { clearGenericFailoverHealth, eligibleFailoverAccounts, hasFailoverAccountQuorum, rotateGenericOAuthAccountOn429, seedGenericPoolSelection } from "../../src/oauth/generic-account-failover";
+import { clearPoolRotationState, genericPoolKey, peekRoundRobinAccount } from "../../src/oauth/pool-kernel";
 import { releaseRemovedProviderCredentials } from "../../src/server/management/provider-credential-release";
 import type { OcxConfig, OcxProviderConfig } from "../../src/types";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
@@ -195,6 +196,19 @@ describe("Kimi (Responses) is a reachable sibling of the Kimi login (#8087)", ()
     } finally {
       clearGenericFailoverHealth();
     }
+  });
+
+  test("a manual selection through either Kimi row seeds both rows' rotation cursors", () => {
+    const ids = ["kimi-a", "kimi-b"];
+    for (const [selectedThrough, other] of [["kimi", "kimi-responses"], ["kimi-responses", "kimi"]] as const) {
+      clearPoolRotationState();
+      const unseeded = peekRoundRobinAccount(genericPoolKey(other), ids, 5);
+      const pick = ids.find(id => id !== unseeded)!;
+      seedGenericPoolSelection(selectedThrough, pick);
+      expect(peekRoundRobinAccount(genericPoolKey(other), ids, 5)).toBe(pick);
+      expect(peekRoundRobinAccount(genericPoolKey(selectedThrough), ids, 5)).toBe(pick);
+    }
+    clearPoolRotationState();
   });
 
   test("an unrelated provider still releases its own login on removal", async () => {

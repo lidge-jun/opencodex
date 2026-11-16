@@ -879,7 +879,7 @@ export const pt: Record<TKey, string> = {
   "subagentSurface.switchToV1": "Mudar para a v1",
   "subagentSurface.learnMore": "Por que isso falha",
   "prov.logoutOk": "Sessão de {provider} encerrada.",
-  "prov.logoutConfirmShared": "Encerrar a sessão da conta {provider} ativa? Este é o login {provider} compartilhado, então a linha {provider} Chat também é desconectada. Outra conta {provider} salva, se houver, passa a ser a ativa nas duas linhas.",
+  "prov.logoutConfirmShared": "Encerrar a sessão da conta {provider} ativa? Este é o login {provider} compartilhado, então a linha {provider} Chat também é desconectada. Se outra conta {provider} salva puder ser usada, ela passa a ser a ativa nas duas linhas; se as contas restantes estiverem todas pausadas ou precisarem de novo login, nenhuma linha terá uma conta utilizável até você retomar ou refazer o login de uma delas.",
   "prov.logoutOkShared": "Sessão da conta {provider} ativa encerrada nas linhas Chat e Responses.",
   "prov.logoutFail": "Não foi possível sair de {provider}. O estado da sua conta não mudou.",
   "prov.logoutBusy": "Uma alteração de conta está em andamento. Aguarde sua conclusão e tente sair novamente.",

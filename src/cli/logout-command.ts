@@ -19,7 +19,7 @@ function sharedLogin(provider: string): { slot: string; rows: string[] } | null 
 }
 
 function sharedLoginLine(shared: { slot: string; rows: string[] }): string {
-  return `This removed the active account of the shared ${shared.slot} login, so the ${shared.rows.join(" and ")} rows are both signed out of it; another stored ${shared.slot} account, if any, is now active for both.`;
+  return `This removed the active account of the shared ${shared.slot} login, so the ${shared.rows.join(" and ")} rows are both signed out of it. Another stored ${shared.slot} account, if any, is now active for both; if it is paused or needs re-login, neither row can use it until you resume or re-login.`;
 }
 
 /** Explicit target selection precedes all credential access; never fall back between targets. */

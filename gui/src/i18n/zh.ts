@@ -861,7 +861,7 @@ export const zh: Record<TKey, string> = {
   "subagentSurface.switchToV1": "切换到 v1",
   "subagentSurface.learnMore": "为什么失败",
   "prov.logoutOk": "已退出 {provider}。",
-  "prov.logoutConfirmShared": "要退出当前使用的 {provider} 账户吗？这是共享的 {provider} 登录，因此 {provider} Chat 行也会一并退出。如果还保存了其他 {provider} 账户，两行都会改用该账户。",
+  "prov.logoutConfirmShared": "要退出当前使用的 {provider} 账户吗？这是共享的 {provider} 登录，因此 {provider} Chat 行也会一并退出。如果还保存了其他可用的 {provider} 账户，两行都会改用该账户；如果其余账户都已暂停或需要重新登录，在你恢复或重新登录其中一个之前，两行都没有可用账户。",
   "prov.logoutOkShared": "已在 Chat 和 Responses 两行退出当前使用的 {provider} 账户。",
   "prov.logoutFail": "无法退出 {provider}。账户状态保持不变。",
   "prov.logoutBusy": "账户更改正在进行。请等待完成后重试退出登录。",

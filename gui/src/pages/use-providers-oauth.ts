@@ -283,7 +283,8 @@ export function useProvidersOAuth({
             }));
           }
           setLoginInfo(null);
-          onLoginSettled?.(provider);
+          // The row this login published (Kimi (Responses)) is the one to select; it may be the only one.
+          onLoginSettled?.(row ?? provider);
           await reloadAccountsAfterLogin(provider);
           if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
           const sameIdentityAdd = addAccount && !reauthTargetId && statusCount <= baselineCount;
@@ -357,6 +358,14 @@ export function useProvidersOAuth({
     bumpLoginGeneration(provider);
     setBusy(current => current === provider ? null : current);
     setLoginInfo(current => current?.provider === provider ? null : current);
+    // The shared login's flows and status reads are keyed by the owner (kimi): fence those too,
+    // so a late owner status read or login poll cannot report the removed account as signed in.
+    if (sharedOwner) {
+      invalidateOauthStatusReads?.(sharedOwner);
+      bumpLoginGeneration(sharedOwner);
+      setBusy(current => current === sharedOwner ? null : current);
+      setLoginInfo(current => current?.provider === sharedOwner ? null : current);
+    }
     let success = false;
     let failed = false;
     try {
@@ -375,6 +384,7 @@ export function useProvidersOAuth({
     // A read started while the server was processing logout can still describe
     // the old account. Only a read started after settlement can verify status.
     if (invalidateOauthStatusReads?.(provider, false) === false) return;
+    if (sharedOwner) invalidateOauthStatusReads?.(sharedOwner);
     clearStatus();
     if (!success) {
       void fetchAccountSets([provider]).catch(() => {});

@@ -855,7 +855,7 @@ export const de: Record<TKey, string> = {
   "subagentSurface.switchToV1": "Zu v1 wechseln",
   "subagentSurface.learnMore": "Warum das fehlschlägt",
   "prov.logoutOk": "Von {provider} abgemeldet.",
-  "prov.logoutConfirmShared": "Vom aktiven {provider}-Konto abmelden? Es ist die gemeinsame {provider}-Anmeldung, daher wird auch die {provider}-Chat-Zeile davon abgemeldet. Ein weiteres gespeichertes {provider}-Konto wird, falls vorhanden, für beide Zeilen aktiv.",
+  "prov.logoutConfirmShared": "Vom aktiven {provider}-Konto abmelden? Es ist die gemeinsame {provider}-Anmeldung, daher wird auch die {provider}-Chat-Zeile davon abgemeldet. Ist ein weiteres gespeichertes {provider}-Konto nutzbar, wird es für beide Zeilen aktiv; sind alle übrigen Konten pausiert oder brauchen eine neue Anmeldung, hat keine Zeile ein nutzbares Konto, bis Sie eines fortsetzen oder neu anmelden.",
   "prov.logoutOkShared": "Vom aktiven {provider}-Konto in der Chat- und der Responses-Zeile abgemeldet.",
   "prov.logoutFail": "Abmeldung von {provider} fehlgeschlagen. Der Kontostatus bleibt unverändert.",
   "prov.logoutBusy": "Eine Kontoänderung läuft. Warten Sie bis zum Abschluss und versuchen Sie die Abmeldung erneut.",

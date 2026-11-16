@@ -17,7 +17,7 @@ import { isBuiltinAnthropicInstanceRow } from "../providers/anthropic-instance";
  * Both are excluded by `isGenericFailoverProvider`.
  */
 import { credentialGeneration, getAccountSet } from "./store";
-import { oauthCredentialSlot } from "./credential-siblings";
+import { oauthCredentialSiblingsOf, oauthCredentialSlot } from "./credential-siblings";
 import { accountInFlight } from "./kiro-account-load";
 import type { ProviderAccount } from "./types";
 import { getValidAccessSnapshotForAccount, type OAuthAccessSnapshot } from "./index";
@@ -964,7 +964,9 @@ export function genericFailoverRetryAfterSeconds(providerName: string, now = Dat
 
 /** A manual selection must win in every ring a request can read, including the per-family ones. */
 export function seedGenericPoolSelection(providerName: string, accountId: string): void {
-  seedPoolRotationAccount(genericPoolKey(providerName), accountId);
+  // Dispatch keys the cursor by row name, so seed every row that shares this login (kimi-responses).
+  const slot = oauthCredentialSlot(providerName);
+  for (const row of new Set([providerName, slot, ...oauthCredentialSiblingsOf(slot)])) seedPoolRotationAccount(genericPoolKey(row), accountId);
   if (providerName !== "google-antigravity") return;
   for (const family of ["gem", "cla"] satisfies QuotaModelFamily[]) seedPoolRotationAccount(genericPoolKey(providerName, family), accountId);
 }

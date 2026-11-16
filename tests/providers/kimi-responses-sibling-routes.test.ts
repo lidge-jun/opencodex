@@ -4,6 +4,7 @@ import { managementFetch as fetch } from "../helpers/management-auth";
 import { saveConfig, loadConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import { deriveProviderPresets } from "../../src/providers/derive";
+import { getStaleCached, setCached } from "../../src/codex/model-cache";
 import { handleProviderLifecycleRuntimeCommand as lifecycle } from "../../src/cli/provider-lifecycle-runtime";
 import type { RuntimeApiDeps } from "../../src/cli/runtime-api";
 import type { OcxConfig } from "../../src/types";
@@ -115,6 +116,30 @@ describe("Kimi (Responses) row under the shared Kimi login (#8087)", () => {
       for (const row of ["kimi", "kimi-responses"]) expect((await status(row)).loggedIn).toBe(false);
     } finally { await server.stop(true); }
   });
+
+  test("selecting, pausing or deleting a shared account through the sibling row clears the sibling's model cache", async () => {
+    saveConfig({ ...baseConfig(), providers: { ...baseConfig().providers, "kimi-responses": { adapter: "openai-responses", baseUrl: KIMI_BASE, authMode: "oauth" } } });
+    const stored = authStore() as { kimi: { accounts: unknown[] } };
+    for (const n of [2, 3]) stored.kimi.accounts.push({ id: `kimi000${n}`, credential: { access: `kimi-access-${n}`, refresh: `kimi-refresh-${n}`, expires: 9999999999999, accountId: `kimi-user-${n}`, source: "oauth" } });
+    writeFileSync(home.path("auth.json"), JSON.stringify(stored), { mode: 0o600 });
+    const server = startServer(0);
+    const seed = () => { setCached("kimi-responses", [{ id: "previous-account-model" }] as never); expect(getStaleCached("kimi-responses")).not.toBeNull(); };
+    const send = (path: string, method: string, body?: unknown) => fetch(new URL(path, server.url), {
+      method, ...(body ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}),
+    });
+    try {
+      seed();
+      expect((await send("/api/oauth/accounts/active", "PUT", { provider: "kimi-responses", accountId: "kimi0002" })).status).toBe(200);
+      expect(getStaleCached("kimi-responses")).toBeNull();
+      seed();
+      expect((await send("/api/oauth/accounts/pause", "PUT", { provider: "kimi-responses", accountId: "kimi0002", paused: true })).status).toBe(200);
+      expect(getStaleCached("kimi-responses")).toBeNull();
+      seed();
+      expect((await send("/api/oauth/accounts?provider=kimi-responses&id=kimi0003", "DELETE")).status).toBe(200);
+      expect(getStaleCached("kimi-responses")).toBeNull();
+    } finally { await server.stop(true); }
+    // One real server start and stop; on a loaded runner those alone have taken over 20 s.
+  }, 60_000);
 
   test("a login publish row must share the login it names", async () => {
     const server = startServer(0);
