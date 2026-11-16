@@ -47,8 +47,9 @@ keeping the Response object and its relay markers. The canonical JSON fold keeps
 whole-turn deadlines. Reset selection in `src/server/responses/passthrough-completion.ts` already
 guards the bodies it publishes with the resolved budget and marks them
 (`markResponseBodyInactivityGuarded`), so they get no second clock. Guards armed by the explicit budget (delivery, continuation legs, and reset
-selection when the field is set) raise `ExplicitBodyStallError`, which `buildFailedTailPayload` in `src/server/relay.ts` reports
-as `upstream_stall_timeout`; a guard on a default budget keeps the earlier `upstream_reset` tail. Native steering and
+selection when the field is set) raise `ExplicitBodyStallError`, which `buildFailedTailPayload` in `src/server/relay.ts` and the
+leg read catch in `src/web-search/passthrough-bridge.ts` report as `upstream_stall_timeout` (the bridge keeps
+`web_search_bridge_failed` for every other leg read failure); a guard on a default budget keeps the earlier `upstream_reset` tail on the relay path, while a default-budget stall during a bridge leg read reaches that catch as an ordinary read failure and reports `web_search_bridge_failed`. Native steering and
 injection chains (`isNativeControlResponse`) stay unguarded: between responses they wait for the client's continuation,
 which a byte-silence clock cannot tell from upstream silence, and they keep their own timeliness checks. `tests/responses/responses-native-sse-stall.test.ts` covers explicit
 local and public expiry and the unset and `0` cases.
