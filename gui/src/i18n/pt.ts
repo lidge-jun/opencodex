@@ -1795,6 +1795,8 @@ export const pt: Record<TKey, string> = {
   "modal.add": "Adicionar provedor",
   "modal.search": "Buscar provedores…",
   "modal.logInWith": "Entrar com {label}",
+  "modal.sharedLoginNote": "{label} entra com o seu login do {provider}. Um único login serve os dois provedores; sair do {provider} desconecta ambos.",
+  "modal.addWithExistingLogin": "Adicionar {label} com o seu login do {provider}",
   "modal.waitingBrowser": "Aguardando o navegador…",
   "modal.providerName": "Nome do provedor",
   "modal.adapter": "Adaptador",

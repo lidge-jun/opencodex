@@ -19,6 +19,7 @@ import type { CatalogPreset } from "./provider-catalog/provider-presets";
 import type { CatalogLoginHint } from "./provider-catalog/login-hint-visibility";
 import { baseUrlForChoice, matchChoiceId, resolvedBaseUrlForChoice } from "../base-url-choice";
 import { AddProviderOAuthPane } from "./add-provider-oauth-pane";
+import { sharedLoginRow } from "./shared-login-row";
 import { AddProviderFormPane } from "./add-provider-form-pane";
 import { useAddProviderOAuth, type OAuthLoginCaptureOwner } from "./use-add-provider-oauth";
 import type { BrowserLaunch } from "../oauth-browser-launch";
@@ -190,7 +191,8 @@ export default function AddProviderModal({
     });
   };
 
-  const submit = async () => {
+  /** `sharedLogin`: add a Kimi (Responses)-style row on the owner's existing login (authMode oauth). */
+  const submit = async (sharedLogin = false) => {
     if (!form) return;
     if (renderedTargetKey !== renderCapture.targetKey) {
       dispatch({ type: "set-error", error: t("prov.targetChanged") });
@@ -207,6 +209,7 @@ export default function AddProviderModal({
     let postBody: { name: string; provider: ProviderPayload };
     try {
       postBody = buildProviderPostBody(preset ?? { id: "custom" }, submitForm);
+      if (sharedLogin) postBody.provider.authMode = "oauth";
     } catch {
       dispatch({ type: "set-error", error: t("modal.invalidPreset") });
       return;
@@ -262,13 +265,15 @@ export default function AddProviderModal({
   };
 
   const dup = form ? existingNames.includes(form.name.trim()) && form.name.trim() !== "" : false;
+  // Kimi (Responses) logs in through Kimi and publishes only its own row.
+  const loginRow = preset ? sharedLoginRow(preset) : undefined;
   const requestLoginOAuth = (providerId: string) => {
     if (oauthBusy) return;
     if (oauthTosRisk(providerId)) {
       dispatch({ type: "set-oauth-tos-pending", providerId });
       return;
     }
-    void loginOAuth(providerId, oauthSetters);
+    void loginOAuth(providerId, oauthSetters, loginRow);
   };
 
   // A code typed for one Accounts login belongs to that login on this target. A new login (its
@@ -353,7 +358,11 @@ export default function AddProviderModal({
               manualCodeBusy={manualCodeBusy}
               manualCodeMsg={manualCodeMsg}
               manualCodeOk={manualCodeOk}
+              ownerLoggedIn={loginRow !== undefined && accountStatus?.[preset.oauthProvider ?? ""]?.loggedIn === true}
+              saving={saving}
+              error={error}
               onRequestLogin={requestLoginOAuth}
+              onUseExistingLogin={() => { void submit(true); }}
               onCancelLogin={providerId => { void cancelLoginOAuth(providerId, oauthSetters, preset.label); }}
               onUseApiKeyInstead={() => {
                 if (oauthBusy && preset.oauthProvider) void cancelLoginOAuth(preset.oauthProvider, oauthSetters, preset.label);
@@ -398,7 +407,7 @@ export default function AddProviderModal({
           const id = oauthTosPending;
           if (!id) return;
           dispatch({ type: "set-oauth-tos-pending", providerId: null });
-          void loginOAuth(id, oauthSetters);
+          void loginOAuth(id, oauthSetters, loginRow);
         }}
       />
     )}

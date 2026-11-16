@@ -1641,6 +1641,8 @@ export const ko: Record<TKey, string> = {
   "modal.add": "프로바이더 추가",
   "modal.search": "프로바이더 검색…",
   "modal.logInWith": "{label} 로 로그인",
+  "modal.sharedLoginNote": "{label} 는 {provider} 로그인으로 인증합니다. 한 번의 로그인으로 두 제공자를 모두 쓰며, {provider} 에서 로그아웃하면 둘 다 로그아웃됩니다.",
+  "modal.addWithExistingLogin": "{provider} 로그인으로 {label} 추가",
   "modal.waitingBrowser": "브라우저 대기 중…",
   "modal.providerName": "프로바이더 이름",
   "modal.adapter": "어댑터",

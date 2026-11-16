@@ -1797,6 +1797,8 @@ export const tr: Record<TKey, string> = {
   "modal.add": "Sağlayıcı ekle",
   "modal.search": "Sağlayıcılarda ara…",
   "modal.logInWith": "{label} ile giriş yap",
+  "modal.sharedLoginNote": "{label}, {provider} girişinizle oturum açar. Tek giriş iki sağlayıcıya da hizmet eder; {provider} oturumunu kapatmak ikisini de kapatır.",
+  "modal.addWithExistingLogin": "{label} sağlayıcısını {provider} girişinizle ekleyin",
   "modal.waitingBrowser": "Tarayıcı bekleniyor…",
   "modal.providerName": "Sağlayıcı adı",
   "modal.adapter": "Adaptör",

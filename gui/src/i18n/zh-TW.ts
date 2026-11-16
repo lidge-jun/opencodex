@@ -1474,6 +1474,8 @@ export const zhTW: Record<TKey, string> = {
   "modal.add": "新增供應商",
   "modal.search": "搜尋供應商…",
   "modal.logInWith": "使用 {label} 登入",
+  "modal.sharedLoginNote": "{label} 使用你的 {provider} 登入。一次登入同時用於兩個提供者；登出 {provider} 會同時登出兩者。",
+  "modal.addWithExistingLogin": "使用你的 {provider} 登入新增 {label}",
   "modal.waitingBrowser": "等待瀏覽器…",
   "modal.providerName": "供應商名稱",
   "modal.adapter": "介面卡",

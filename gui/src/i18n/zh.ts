@@ -1614,6 +1614,8 @@ export const zh: Record<TKey, string> = {
   "modal.add": "添加提供方",
   "modal.search": "搜索提供方…",
   "modal.logInWith": "使用 {label} 登录",
+  "modal.sharedLoginNote": "{label} 使用你的 {provider} 登录。一次登录同时用于两个提供商；退出 {provider} 会同时退出两者。",
+  "modal.addWithExistingLogin": "使用你的 {provider} 登录添加 {label}",
   "modal.waitingBrowser": "等待浏览器…",
   "modal.providerName": "提供方名称",
   "modal.adapter": "适配器",

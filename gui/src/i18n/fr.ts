@@ -1784,6 +1784,8 @@ export const fr: Record<TKey, string> = {
   "modal.add": "Ajouter un fournisseur",
   "modal.search": "Rechercher des fournisseurs…",
   "modal.logInWith": "Se connecter avec {label}",
+  "modal.sharedLoginNote": "{label} se connecte avec votre connexion {provider}. Une seule connexion sert les deux fournisseurs ; se déconnecter de {provider} déconnecte les deux.",
+  "modal.addWithExistingLogin": "Ajouter {label} avec votre connexion {provider}",
   "modal.waitingBrowser": "En attente du navigateur…",
   "modal.providerName": "Nom du fournisseur",
   "modal.adapter": "Adaptateur",

@@ -32,6 +32,7 @@ import { canCreateJevAutoFrom } from "../jev-decision-service";
 import { useProviderSettingsDeepLink } from "./providers-deep-link";
 import { subscribeKiroDeviceFinal } from "../kiro-device-login-finalizer";
 import type { BrowserLaunch } from "../oauth-browser-launch";
+import { oauthCredentialSlot } from "../../../src/oauth/credential-siblings";
 
 /** The page's real refresh tickets: only the captured report epoch and account read can settle them. */
 // oxlint-disable-next-line react/only-export-components -- keep the page-owned coordinator and its direct race tests in the authorized owner.
@@ -539,13 +540,16 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
    * in could refresh a high-risk credential without ever seeing the ToS modal — the map
    * gated the first login and nothing after it.
    */
-  const requestLoginOAuth = (provider: string, addAccount = false, accountId?: string) => {
+  const requestLoginOAuth = (name: string, addAccount = false, accountId?: string) => {
+    // A shared-login row (Kimi (Responses)) signs in through its owner and republishes only itself.
+    const provider = oauthCredentialSlot(name);
+    const row = provider !== name ? name : undefined;
     if (busy === provider) return;
     if (oauthTosRisk(provider)) {
       setOauthTosPending({ provider, addAccount, ...(accountId ? { accountId } : {}) });
       return;
     }
-    void loginOAuth(provider, addAccount, accountId);
+    void loginOAuth(provider, addAccount, accountId, row);
   };
 
   if (!config) {
@@ -682,7 +686,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
         onQuotaRefreshSettled={settleQuotaRefresh}
         onRefreshAllQuotas={refreshAllProviderQuotas}
         detail={(item, data) => {
-          const loginStatus = accountLoginStatus[item.name] ?? oauthStatus[item.name];
+          const loginStatus = accountLoginStatus[item.name] ?? oauthStatus[item.name] ?? oauthStatus[oauthCredentialSlot(item.name)];
           return (
           <ProviderDetails
             key={item.name}

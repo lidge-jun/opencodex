@@ -1597,6 +1597,8 @@ export const de: Record<TKey, string> = {
   "modal.add": "Anbieter hinzufügen",
   "modal.search": "Anbieter suchen…",
   "modal.logInWith": "Anmelden mit {label}",
+  "modal.sharedLoginNote": "{label} meldet sich mit deinem {provider}-Login an. Ein Login gilt für beide Provider; eine Abmeldung von {provider} meldet beide ab.",
+  "modal.addWithExistingLogin": "{label} mit deinem {provider}-Login hinzufügen",
   "modal.waitingBrowser": "Warten auf Browser…",
   "modal.providerName": "Anbietername",
   "modal.adapter": "Adapter",

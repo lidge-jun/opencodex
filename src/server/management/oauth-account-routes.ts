@@ -38,6 +38,7 @@ import {
   waitForLoginSettled,
 } from "../../oauth";
 import { OAuthMutationBusyError, removeCredential } from "../../oauth/store";
+import { isOAuthCredentialSiblingOf, oauthCredentialSiblingsOf, oauthCredentialSlot } from "../../oauth/credential-siblings";
 import { cancelKiroDeviceLogin, kiroDeviceConfigBaseline, selectKiroDeviceProfile, startKiroDeviceLogin, statusKiroDeviceLogin, type KiroDeviceMethod } from "../../oauth/kiro-device-login";
 import { parseKiroIamOptions } from "../../oauth/kiro-iam-identity-center";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
@@ -265,9 +266,13 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // the provider's loopback callback server (inside this process) captures the redirect in the
   // background, then the credential is persisted. The GUI opens the URL and polls /api/oauth/status.
   if (url.pathname === "/api/oauth/login" && req.method === "POST") {
-    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown; method?: unknown; mode?: unknown; device?: unknown; startUrl?: unknown; region?: unknown; flowId?: unknown; profileArn?: unknown };
+    const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; row?: unknown; addAccount?: boolean; accountId?: string; reauth?: boolean; openBrowser?: unknown; method?: unknown; mode?: unknown; device?: unknown; startUrl?: unknown; region?: unknown; flowId?: unknown; profileArn?: unknown };
     const provider = (body.provider ?? "").trim().toLowerCase();
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
+    // `row`: the sibling provider row this login publishes (Kimi (Responses) through the Kimi login).
+    if (body.row !== undefined && (typeof body.row !== "string" || !isOAuthCredentialSiblingOf(body.row, provider))) {
+      return jsonResponse({ error: "row must be a provider that shares this login" }, 400);
+    }
     // Omitted mode is the localhost-callback flow this route has always run.
     if (body.mode !== undefined && body.mode !== "callback" && body.mode !== "code") {
       return jsonResponse({ error: "mode must be \"callback\" or \"code\"" }, 400);
@@ -340,6 +345,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
         ...(accountId ? { reauthAccountId: accountId } : {}),
         ...(codeMode ? { codeMode: true } : {}),
         ...(device ? { flow: "device" as const } : {}),
+        ...(typeof body.row === "string" ? { publishRow: body.row } : {}),
       }, {
         ...(flowId ? { flowId } : {}),
         // startLoginFlow returns the authorization URL before background persistence completes.
@@ -467,7 +473,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   }
 
   if (url.pathname === "/api/oauth/status" && req.method === "GET") {
-    const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
+    const provider = oauthCredentialSlot((url.searchParams.get("provider") ?? "").trim().toLowerCase());
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (provider === "kiro" && url.searchParams.has("flowId")) {
       const flowId = url.searchParams.get("flowId") ?? "";
@@ -496,6 +502,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     const { clearModelCache } = await import("../../codex/model-cache");
     const { clearGatherRoutedModelsInflight } = await import("../../codex/catalog");
     clearModelCache(provider);
+    for (const row of oauthCredentialSiblingsOf(provider)) clearModelCache(row);
     clearGatherRoutedModelsInflight();
     // Drop cached/last-good quota rows tied to the removed credential.
     clearQuotaCachesAfterAccountMutation(provider, true);
@@ -512,7 +519,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   // one, or remove one. Emails and accountLabel follow privacy.maskEmails, maskedLabel is always
   // masked, and tokens never leave the store.
   if (url.pathname === "/api/oauth/accounts" && req.method === "GET") {
-    const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
+    const provider = oauthCredentialSlot((url.searchParams.get("provider") ?? "").trim().toLowerCase());
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     const quotaMode = providerOAuthAccountQuotaMode(provider);
     const quotaProvider = config.providers[provider];
@@ -606,7 +613,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   }
   if (url.pathname === "/api/oauth/accounts/active" && req.method === "PUT") {
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: string; accountId?: string };
-    const provider = (body.provider ?? "").trim().toLowerCase();
+    const provider = oauthCredentialSlot((body.provider ?? "").trim().toLowerCase());
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (provider === "anthropic2" && !configuredAnthropicInstance(config, provider)) return jsonResponse({ error: "Anthropic pool instance is not configured" }, 409);
     if (!body.accountId) return jsonResponse({ error: "missing accountId" }, 400);
@@ -648,7 +655,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
   if (url.pathname === "/api/oauth/accounts/pause" && req.method === "PUT") {
     const body = await readManagementJsonBodyOr(req, {});
     if (!isPlainRecord(body)) return jsonResponse({ error: "body must be an object" }, 400);
-    const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
+    const provider = oauthCredentialSlot(typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "");
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (typeof body.accountId !== "string" || body.accountId.length === 0) {
       return jsonResponse({ error: "missing accountId" }, 400);
@@ -1101,7 +1108,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
 
   if (url.pathname === "/api/oauth/accounts/alias" && req.method === "PUT") {
     const body = await readManagementJsonBodyOr(req, {}) as { provider?: unknown; accountId?: unknown; alias?: unknown };
-    const provider = typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "";
+    const provider = oauthCredentialSlot(typeof body.provider === "string" ? body.provider.trim().toLowerCase() : "");
     const accountId = typeof body.accountId === "string" ? body.accountId.trim() : "";
     const alias = typeof body.alias === "string" ? body.alias.trim() : "";
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
@@ -1114,7 +1121,7 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     return jsonResponse({ ok: true, provider, accountId, alias: alias || null });
   }
   if (url.pathname === "/api/oauth/accounts" && req.method === "DELETE") {
-    const provider = (url.searchParams.get("provider") ?? "").trim().toLowerCase();
+    const provider = oauthCredentialSlot((url.searchParams.get("provider") ?? "").trim().toLowerCase());
     const id = url.searchParams.get("id") ?? "";
     if (!isPublicOAuthProvider(provider)) return jsonResponse({ error: "unknown oauth provider" }, 400);
     if (!id) return jsonResponse({ error: "missing id" }, 400);

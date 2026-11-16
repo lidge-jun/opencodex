@@ -1811,6 +1811,8 @@ export const en = {
   "modal.add": "Add provider",
   "modal.search": "Search providers…",
   "modal.logInWith": "Log in with {label}",
+  "modal.sharedLoginNote": "{label} signs in with your {provider} login. One login serves both providers; signing out of {provider} signs out both.",
+  "modal.addWithExistingLogin": "Add {label} with your {provider} login",
   "modal.waitingBrowser": "Waiting for browser…",
   "modal.providerName": "Provider name",
   "modal.adapter": "Adapter",

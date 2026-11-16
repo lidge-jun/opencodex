@@ -136,6 +136,8 @@ export function useAddProviderOAuth({
   const loginOAuth = useCallback(async (
     providerId: string,
     setters: OAuthLoginSetters,
+    /** A sibling row (Kimi (Responses)) the login publishes instead of the login's own row. */
+    row?: string,
   ) => {
     // A per-login clone keeps the render target while letting the capture map tell an
     // older login's cleanup from its replacement.
@@ -166,7 +168,7 @@ export function useAddProviderOAuth({
         return targetFetch(capture, `${apiBase}/api/oauth/login`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ provider: providerId, ...openBrowserRequestField() }),
+          body: JSON.stringify({ provider: providerId, ...(row ? { row } : {}), ...openBrowserRequestField() }),
         });
       });
       if (!res || !aliveRef.current || !isCurrent()) return;
@@ -209,7 +211,7 @@ export function useAddProviderOAuth({
         if (s?.loggedIn) {
           releaseSetters();
           setOauthMsg("");
-          onAdded(providerId);
+          onAdded(row ?? providerId);
           return;
         }
         const hint = s?.hint;

@@ -1694,6 +1694,8 @@ export const ja: Record<TKey, string> = {
   "modal.add": "プロバイダーを追加",
   "modal.search": "プロバイダーを検索…",
   "modal.logInWith": "{label} でログイン",
+  "modal.sharedLoginNote": "{label} は {provider} のログインでサインインします。1 回のログインで両方のプロバイダーが使え、{provider} からログアウトすると両方ともログアウトされます。",
+  "modal.addWithExistingLogin": "{provider} のログインで {label} を追加",
   "modal.waitingBrowser": "ブラウザを待機中…",
   "modal.providerName": "プロバイダー名",
   "modal.adapter": "アダプター",

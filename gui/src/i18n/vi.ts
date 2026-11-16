@@ -1783,6 +1783,8 @@ export const vi: Record<TKey, string> = {
   "modal.add": "Thêm provider",
   "modal.search": "Tìm Provider…",
   "modal.logInWith": "Đăng nhập bằng {label}",
+  "modal.sharedLoginNote": "{label} đăng nhập bằng tài khoản {provider} của bạn. Một lần đăng nhập dùng cho cả hai nhà cung cấp; đăng xuất khỏi {provider} sẽ đăng xuất cả hai.",
+  "modal.addWithExistingLogin": "Thêm {label} bằng đăng nhập {provider} của bạn",
   "modal.waitingBrowser": "Đang đợi trình duyệt…",
   "modal.providerName": "Tên provider",
   "modal.adapter": "Adapter",

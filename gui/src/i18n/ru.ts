@@ -1770,6 +1770,8 @@ export const ru: Record<TKey, string> = {
   "modal.add": "Добавить провайдера",
   "modal.search": "Поиск провайдеров…",
   "modal.logInWith": "Войти через {label}",
+  "modal.sharedLoginNote": "{label} использует ваш вход в {provider}. Один вход обслуживает оба провайдера; выход из {provider} отключает оба.",
+  "modal.addWithExistingLogin": "Добавить {label} с вашим входом в {provider}",
   "modal.waitingBrowser": "Ожидание браузера…",
   "modal.providerName": "Название провайдера",
   "modal.adapter": "Адаптер",
