@@ -3,7 +3,7 @@ import { toolChoiceToolPredicate } from "../types";
 import type { ImageBridgePlan, VideoBridgePlan } from "./types";
 import { resolveProviderApiKey } from "../providers/key-store";
 import { getValidAccessToken } from "../oauth/index";
-import { getProviderRegistryEntry } from "../providers/registry";
+import { getProviderRegistryEntry, PROVIDER_REGISTRY } from "../providers/registry";
 import { IMAGE_GEN_TOOL_NAME, VIDEO_GEN_TOOL_NAME, isVideoGenName } from "./synthetic-tool";
 
 const DEFAULT_MODEL = "grok-imagine-image-quality";
@@ -125,7 +125,10 @@ function resolveVideoProviderDestination(config: OcxConfig): VideoProviderSelect
   const providerName = raw.trim();
   // Registry ids are built-ins this bridge must not repurpose as a destination; naming one
   // ("xai" included) fails closed instead of following its baseUrl override with its key.
-  if (getProviderRegistryEntry(providerName)) return { kind: "unusable" };
+  // Compared case-insensitively: getProviderRegistryEntry matches exact case only, so "XAI"
+  // would otherwise resolve to a config entry spelled that way and reach its host.
+  const loweredName = providerName.toLowerCase();
+  if (PROVIDER_REGISTRY.some(entry => entry.id.toLowerCase() === loweredName)) return { kind: "unusable" };
   const provider = Object.prototype.hasOwnProperty.call(config.providers, providerName)
     ? config.providers[providerName]
     : undefined;

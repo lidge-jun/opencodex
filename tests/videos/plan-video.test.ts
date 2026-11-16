@@ -194,8 +194,22 @@ describe("planVideoBridge videoProvider", () => {
     expect(plan).toBeUndefined();
   });
 
+  test("mirrored registry-name case \"XAI\" → fails closed, never the baseUrl override", async () => {
+    const config = makeCustomConfig({ videoProvider: "XAI" });
+    // A config entry spelled XAI (not the registry id) must not slip past the guard, which
+    // matches registry ids case-insensitively rather than by getProviderRegistryEntry.
+    (config.providers as Record<string, OcxProviderConfig>).XAI = {
+      name: "XAI",
+      baseUrl: "https://other-host.example.com/v1",
+      authMode: "key",
+      apiKey: "xai-test-key",
+    };
+    const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
+    expect(plan).toBeUndefined();
+  });
+
   test("non-string videoProvider values fail closed", async () => {
-    for (const value of [42, true, null] as unknown[]) {
+    for (const value of [42, true, null, {}, 0, ["xai"]] as unknown[]) {
       const config = makeCustomConfig({ videoProvider: value });
       const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
       expect(plan).toBeUndefined();
@@ -210,11 +224,52 @@ describe("planVideoBridge videoProvider", () => {
   });
 
   test("blank videoProvider is treated as unset → xAI default, unchanged", async () => {
-    const config = makeCustomConfig({ videoProvider: "   " });
-    const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
-    expect(plan).toBeDefined();
-    expect(plan!.auth.baseUrl).toBe("https://api.x.ai/v1");
-    expect(plan!.auth.token).toBe("xai-test-key");
+    for (const blank of ["", "   "] as const) {
+      const config = makeCustomConfig({ videoProvider: blank });
+      const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
+      expect(plan).toBeDefined();
+      expect(plan!.auth.baseUrl).toBe("https://api.x.ai/v1");
+      expect(plan!.auth.token).toBe("xai-test-key");
+      expect(plan!.provider).toBe((config.providers as Record<string, OcxProviderConfig>).xai);
+    }
+  });
+
+  test("no-fallback invariant: every disarmed videoProvider yields no plan even with an armed xai provider", async () => {
+    type Prep = (config: OcxConfig) => void;
+    const setBridge = (patch: Partial<OcxProviderConfig>): Prep => config => {
+      Object.assign((config.providers as Record<string, OcxProviderConfig>)["my-video-bridge"], patch);
+    };
+    const cases: Array<[string, Record<string, unknown>, Prep?]> = [
+      ["null", { videoProvider: null }],
+      ["object", { videoProvider: {} }],
+      ["number", { videoProvider: 0 }],
+      ["missing provider", { videoProvider: "ghost-bridge" }],
+      ["disabled provider", { videoProvider: "my-video-bridge" }, setBridge({ disabled: true })],
+      ["keyless provider", { videoProvider: "my-video-bridge" }, setBridge({ apiKey: undefined })],
+      ["oauth provider", { videoProvider: "my-video-bridge" }, setBridge({ authMode: "oauth" })],
+      ["forward-auth provider", { videoProvider: "my-video-bridge" }, setBridge({ authMode: "forward" })],
+      ["ws baseUrl", { videoProvider: "my-video-bridge" }, setBridge({ baseUrl: "ws://127.0.0.1:8790/v1" })],
+      ["invalid baseUrl", { videoProvider: "my-video-bridge" }, setBridge({ baseUrl: "not a url" })],
+      ["reserved xai", { videoProvider: "xai" }],
+      ["reserved XAI", { videoProvider: "XAI" }],
+      ["reserved Xai", { videoProvider: "Xai" }],
+      ["padded reserved xai", { videoProvider: "  xai  " }],
+      ["padded reserved XAI", { videoProvider: " \tXAI " }],
+    ];
+    for (const [label, images, prep] of cases) {
+      const config = makeCustomConfig(images);
+      // A colliding config entry spelled XAI/ Xai would otherwise be a real destination.
+      (config.providers as Record<string, OcxProviderConfig>).XAI = {
+        name: "XAI", baseUrl: "https://other-host.example.com/v1", authMode: "key", apiKey: "xai-test-key",
+      };
+      (config.providers as Record<string, OcxProviderConfig>).Xai = {
+        name: "Xai", baseUrl: "https://other-host.example.com/v1", authMode: "key", apiKey: "xai-test-key",
+      };
+      prep?.(config);
+      const plan = await planVideoBridge(config, makeParsed(), makeProvider("api.anthropic.com"));
+      // The xai provider stays fully armed in every case, so any fallback would arm the bridge.
+      expect(`${label} → ${plan ? "planned" : "unarmed"}`).toBe(`${label} → unarmed`);
+    }
   });
 
   test("invalid baseUrl on the named provider → fails closed", async () => {
