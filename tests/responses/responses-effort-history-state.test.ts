@@ -1135,6 +1135,25 @@ test("bounds: a pending admission larger than the store total is refused and not
   assert.ok(storeBytes(store) <= MAX_TOTAL_BYTES, `total ${storeBytes(store)}`);
 });
 
+// #8845 review (PRRT_kwDOS-0Gi864A9SR): the entry-count limit must not evict before the byte check
+// refuses, or a refused admission costs an unrelated chat its history.
+test("bounds: a refused oversized admission at the entry-count limit evicts no history", () => {
+  const store = createStore();
+  for (let i = 0; i < MAX_ENTRIES; i++) {
+    const d = decide(store, { ...base, chatLineage: `small-${i}`, parent: [], suffix: [user(`small-${i}`)] }, { ...ON, now: 1000 + i });
+    assert.equal(d.action, "send", `small-${i}: ${d.reason}`);
+    const res = commit(store, d.pendingToken, { messageStop: true, cacheRead: 0, P: 100, outputItems: [asst("ok")], generation: "g1" }, 1000 + i);
+    assert.equal(res.action, "committed", `small-${i}: ${res.reason}`);
+  }
+  const kept = [...store.entries.keys()].sort();
+  assert.equal(kept.length, MAX_ENTRIES);
+  const d = decide(store, { ...base, frame: "f".repeat(MAX_TOTAL_BYTES), chatLineage: "huge", parent: [], suffix: [user("hi")] }, { ...ON, now: 2000 });
+  assert.equal(d.action, "off");
+  assert.equal(d.reason, "bounds-refused");
+  assert.equal(store.pending.size, 0);
+  assert.deepEqual([...store.entries.keys()].sort(), kept);
+});
+
 test("bounds: a new pending admission evicts the least recently used histories until it fits", () => {
   const store = createStore();
   for (let i = 0; i < 5; i++) commitFramed(store, `chat-${i}`, 1000 + i);

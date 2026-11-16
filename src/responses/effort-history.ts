@@ -418,17 +418,19 @@ function decideInner(store: EffortHistoryStore, req: EffortHistoryRequest, opts:
     const newChat = req.newTranscriptReceipt === true && req.parent.length === 0
       && userCount >= 1 && suffix.every(item => isUser(item) || isDeveloper(item));
     if (!newChat) return off("no-history");
-    if (store.entries.size + store.pending.size >= MAX_ENTRIES) {
-      const oldest = leastRecentlyUsed(store);
-      if (oldest === undefined) return off("bounds-refused");
-      store.entries.delete(oldest);
-    }
-    const version = store.nextVersion++;
-    const token = `${placeholder}:${version}`;
     const pinned = pin(req);
     const pinnedBytes = bytesOf(pinned);
-    // The slot's bytes count against the store total: evict stored histories until it fits, or refuse.
+    // Decide first, evict second: a refused admission must not cost another chat its history, so
+    // both the byte check and the entry-count check run before anything is evicted.
+    if (!canFit(store, pinnedBytes)) return off("bounds-refused");
+    const atCount = store.entries.size + store.pending.size >= MAX_ENTRIES;
+    const oldest = atCount ? leastRecentlyUsed(store) : undefined;
+    if (atCount && oldest === undefined) return off("bounds-refused");
+    if (oldest !== undefined) store.entries.delete(oldest);
+    // The slot's bytes count against the store total: evict stored histories until it fits.
     if (!evictUntilFits(store, pinnedBytes)) return off("bounds-refused");
+    const version = store.nextVersion++;
+    const token = `${placeholder}:${version}`;
     store.pending.set(placeholder, {
       kind: "new", key: placeholder, token, version, createdAt: now, inputHash, scopeKey, req: pinned, pinnedBytes, attemptGeneration: req.generation,
     });
@@ -561,12 +563,16 @@ function bufferInner(store: EffortHistoryStore, token: unknown, bytes: number): 
   return { action: "buffering" };
 }
 
-function evictUntilFits(store: EffortHistoryStore, bytes: number): boolean {
-  // Decide first, evict second: if the pending bytes alone do not leave room, nothing is evicted.
+// Whether evicting stored histories could make room: pending bytes are not evictable.
+function canFit(store: EffortHistoryStore, bytes: number): boolean {
   let evictable = 0;
   for (const entry of store.entries.values()) evictable += entry.bytes;
-  const pendingBytes = totalBytes(store) - evictable;
-  if (pendingBytes + bytes > MAX_TOTAL_BYTES) return false;
+  return totalBytes(store) - evictable + bytes <= MAX_TOTAL_BYTES;
+}
+
+function evictUntilFits(store: EffortHistoryStore, bytes: number): boolean {
+  // Decide first, evict second: if the pending bytes alone do not leave room, nothing is evicted.
+  if (!canFit(store, bytes)) return false;
   while (totalBytes(store) + bytes > MAX_TOTAL_BYTES) {
     const oldest = leastRecentlyUsed(store);
     if (oldest === undefined) return false;

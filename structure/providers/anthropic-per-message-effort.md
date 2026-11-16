@@ -33,7 +33,8 @@ values under a per-process key, never transcript text; entries and pending slots
 the chat lineage, the model and destination, and the emitted `thinking` field, never the raw values.
 A pending slot's bytes count toward the 512 KB total when it is admitted: the least recently used
 histories are evicted until it fits, and an admission that cannot fit beside the other pending
-slots is "off" with `bounds-refused`. A conversation's history is keyed by scope
+slots is "off" with `bounds-refused` and evicts nothing, not even for the entry-count limit.
+A conversation's history is keyed by scope
 (cohort from `src/codex/lineage.ts`, provider, destination, adapter, model, a digest of the API
 key, auth mode) and the Codex thread or prompt cache key, then by a chained digest of every raw
 input item plus the output items the turn returned; the digest treats a `null` field as absent,
