@@ -74,6 +74,7 @@
   "link-ssh-argv.test.ts": "clients",
   "link-ssh-runner.test.ts": "clients",
   "link-ssh-argv-discovery.test.ts": "clients",
+  "link-windows-gated-served.test.ts": "clients",
   "link-ssh-config.test.ts": "clients",
   "link-store.test.ts": "clients",
   "link-retirement.test.ts": "clients",
