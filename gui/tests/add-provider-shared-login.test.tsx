@@ -120,3 +120,40 @@ test("without a Kimi login, the sibling logs in through Kimi and publishes only 
   expect(login?.body).toMatchObject({ provider: "kimi", row: "kimi-responses" });
   expect(posts.some((post) => post.path === "/api/providers")).toBe(false);
 });
+
+test("a stored Kimi credential does not finish a pending sibling login early", async () => {
+  // The poll waits 2 s between reads; hold those timers and release them one at a time.
+  const polls: Array<() => void> = [];
+  const realSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = ((callback: () => void, ms?: number) => {
+    if (ms === 2_000) { polls.push(callback); return 0; }
+    return realSetTimeout(callback, ms);
+  }) as unknown as typeof setTimeout;
+  let flow: "pending" | "complete" = "pending";
+  const fetchStub = globalThis.fetch;
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL, init?: RequestInit) => {
+    if (new URL(String(input), "http://localhost").pathname === "/api/oauth/status") {
+      return Response.json({ loggedIn: true, status: flow, done: flow === "complete",
+        ...(flow === "pending" ? { hint: { url: "https://auth.kimi.test/device", deviceCode: "ABCD-EFGH" } } : {}) });
+    }
+    return fetchStub(input, init);
+  } });
+  try {
+    const added: string[] = [];
+    await mountModal({ kimi: { loggedIn: false } }, (name) => added.push(name));
+    click("Kimi (Responses)");
+    await settle();
+    click("Log in with Kimi (Moonshot)");
+    await settle();
+    await act(async () => { polls.shift()!(); });
+    await settle();
+    expect(added).toEqual([]);
+    expect(host.textContent).toContain("ABCD-EFGH");
+    flow = "complete";
+    await act(async () => { polls.shift()!(); });
+    await settle();
+    expect(added).toEqual(["kimi-responses"]);
+  } finally {
+    globalThis.setTimeout = realSetTimeout;
+  }
+});

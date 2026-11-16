@@ -201,7 +201,7 @@ export function useAddProviderOAuth({
         await new Promise(r => setTimeout(r, OAUTH_LOGIN_POLL_INTERVAL_MS));
         if (!aliveRef.current || !isCurrent()) return;
         const sRes = await targetFetch(capture, `${apiBase}/api/oauth/status?provider=${providerId}`).catch(() => null);
-        const s = sRes ? await readJsonIfOk<{ loggedIn?: boolean; error?: string; hint?: LoginHintData }>(sRes) : null;
+        const s = sRes ? await readJsonIfOk<{ loggedIn?: boolean; status?: string; error?: string; hint?: LoginHintData }>(sRes) : null;
         if (!aliveRef.current || !isCurrent()) return;
         if (s?.error) {
           releaseSetters();
@@ -211,7 +211,9 @@ export function useAddProviderOAuth({
             : t("modal.loginError", { error: s.error }));
           return;
         }
-        if (s?.loggedIn) {
+        // `loggedIn` reads the stored credential, which an earlier login (the shared Kimi login) can
+        // already hold; a flow the server still reports as pending is not finished yet.
+        if (s?.loggedIn && s.status !== "pending") {
           releaseSetters();
           setOauthMsg("");
           onAdded(row ?? providerId);
