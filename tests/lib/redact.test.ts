@@ -25,7 +25,7 @@ describe("redactSecretString", () => {
       } };
     });
     try {
-      const text = "z".repeat(100_000);
+      const text = "status: unavailable " + "z".repeat(100_000);
       expect(redactSecretString(text)).toBe(text);
       expect(mappedChars).toBe(0);
       expect(redactSecretString(`${text} authorization: fixture-value`)).toBe(`${text} authorization: ${REDACTED_SECRET}`);
@@ -36,6 +36,18 @@ describe("redactSecretString", () => {
     const view = foldForMatching("ASCII offsets");
     expect(view.map).toBe(view.map);
     expect(view.map).toEqual(Array.from({ length: 14 }, (_, i) => i));
+  });
+
+  test("unframed ASCII skips label folds but retains token-pattern redaction", () => {
+    const fold = spyOn(folding, "foldForMatching");
+    try {
+      const plain = "ordinary output ".repeat(1_000);
+      expect(redactSecretString(plain)).toBe(plain);
+      expect(redactSecretString("Bearer access-token-value-123456")).toBe(`Bearer ${REDACTED_SECRET}`);
+      expect(fold).not.toHaveBeenCalled();
+    } finally {
+      fold.mockRestore();
+    }
   });
 
   test("ASCII folding preserves every byte and original offset, including literal escape syntax (#7846)", () => {

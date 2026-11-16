@@ -409,7 +409,11 @@ function isSensitiveKey(key: string): boolean {
 }
 
 export function redactSecretString(value: string): string {
-  let redacted = redactOpenCodexCredentials(maskOtherFramings(maskCredentialHeaders(value)));
+  // Every labelled grammar needs ':', '=' or '<'. Only literal ASCII without escape introducers
+  // can rule those out before folding; encoded or Unicode aliases must keep both matching views.
+  // Minted OpenCodex credentials need no label, so their mask runs on both paths.
+  let redacted = redactOpenCodexCredentials(/[<:=\\%&]|[^\x00-\x7f]/.test(value)
+    ? maskOtherFramings(maskCredentialHeaders(value)) : value);
   for (const rule of SECRET_VALUE_PATTERNS) {
     redacted = typeof rule === "function" ? rule(redacted) : redacted.replace(rule[0], rule[1]);
   }

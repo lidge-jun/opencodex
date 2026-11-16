@@ -375,12 +375,23 @@ item/metadata limits and lifecycle behavior; raw continuation replay stays upstr
 
 ## Response-log inspection
 
+`src/lib/outbound-credential-registry.ts` rejects impossible two-code-unit prefix starts
+before slicing an eight-character credential window. Each nonempty window/prefix index owns
+an 8 KiB bitset of UTF-16 low-byte pairs; collisions still require the original exact
+lookup, so Unicode and escaped spellings retain their matching behavior. Per-text work
+remains linear and confirmation/KMP work retains its fail-closed budget. Once every long
+secret has received a complete overlapping-occurrence scan, no further prefix walk is
+needed. `tests/responses/sse-untyped-credential-mask.test.ts` bounds slice/lookup counts
+and covers Unicode collisions, short values, overlapping spans and request isolation.
+
 `src/lib/redact-folding.ts` uses an identity fold and UTF-16 offset map for ASCII
 strings without escape introducers when decoding is enabled, and all ASCII strings
 when it is disabled. The identity offset array is cached lazily and pattern matchers
 request it only after a credential label matches; absent labels allocate no offset
 array. Other strings keep the general Unicode/escape fold; all
 credential masking passes still run. `tests/lib/redact.test.ts` compares both paths.
+Literal ASCII without label delimiters (`:`, `=`, `<`) or escape introducers
+(`\`, `%`, `&`) bypasses label folding; token-pattern redaction still runs.
 
 `src/lib/redact.ts` scans XML identifying attributes over disjoint tag spans rather than
 searching the remaining suffix from each opening delimiter. Tag terminators are quote-aware,
