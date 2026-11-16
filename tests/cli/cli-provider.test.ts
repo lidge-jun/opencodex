@@ -483,7 +483,7 @@ describe("ocx provider", () => {
     }
   });
 
-  test("local provider remove keeps the shared Kimi login until the last Kimi row goes (#8087)", async () => {
+  test("local provider remove leaves stored logins in place, Kimi rows included (#8087)", async () => {
     const kimiBase = "https://api.kimi.com/coding/v1";
     const { dir } = freshConfig({
       providers: {
@@ -503,9 +503,10 @@ describe("ocx provider", () => {
       expect(sibling.status).toBe(0);
       expect(Object.keys(authStore())).toContain("kimi");
 
+      // Like every other provider, local removal never deletes a login; the dashboard delete does.
       const last = runCli(["provider", "remove", "kimi"], { OPENCODEX_HOME: dir }, true);
       expect(last.status).toBe(0);
-      expect(Object.keys(authStore())).not.toContain("kimi");
+      expect(Object.keys(authStore())).toContain("kimi");
       expect(readConfig(dir).providers.kimi).toBeUndefined();
     } finally {
       if (priorHome === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = priorHome;

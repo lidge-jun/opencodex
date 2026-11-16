@@ -3,6 +3,7 @@ import { oauthCredentialSlot } from "../../oauth/credential-siblings";
 import { releaseProviderAccountSetUnlessRetained } from "../../oauth/store";
 import { getProviderRegistryEntry } from "../../providers/registry";
 import { providerUsesKeyAuthOverride } from "../../providers/key-store";
+import { readConfigFileSnapshot } from "../../config/diagnostics";
 
 /**
  * Whether a configured row signs in through its OAuth login, decided the way routing decides it
@@ -21,9 +22,10 @@ export function rowUsesOAuthLogin(row: string, provider: OcxProviderConfig): boo
  *
  * Kimi and Kimi (Responses) share one login (src/oauth/credential-siblings.ts): removing one of
  * the two rows keeps the login the other still uses, and removing the last one releases it, so
- * neither row is left on a credential it no longer owns. The "still used" check reads `config`
- * inside the serialized store write, so a sibling row published while the release waited keeps
- * the login instead of losing it.
+ * neither row is left on a credential it no longer owns. The "still used" check runs inside the
+ * serialized store write and reads both the live `config` and the persisted config.json, so a
+ * row published while the release waited (by this process or another, including a re-created row
+ * of the removed name) keeps the login instead of losing it.
  */
 export async function releaseRemovedProviderCredentials(
   config: OcxConfig,
@@ -31,6 +33,12 @@ export async function releaseRemovedProviderCredentials(
   release: typeof releaseProviderAccountSetUnlessRetained = releaseProviderAccountSetUnlessRetained,
 ): Promise<"released" | "retained"> {
   const slot = oauthCredentialSlot(name);
-  return release(name, () => Object.entries(config.providers).some(([row, provider]) =>
-    row !== name && oauthCredentialSlot(row) === slot && rowUsesOAuthLogin(row, provider)));
+  // `config` no longer holds the removed row, so any row named `name` here was re-created.
+  const usesSlot = (providers: OcxConfig["providers"]): boolean => Object.entries(providers).some(([row, provider]) =>
+    oauthCredentialSlot(row) === slot && rowUsesOAuthLogin(row, provider));
+  return release(name, () => {
+    if (usesSlot(config.providers)) return true;
+    const persisted = readConfigFileSnapshot({ passive: true }).diagnostics;
+    return persisted.source === "file" && usesSlot(persisted.config.providers);
+  });
 }

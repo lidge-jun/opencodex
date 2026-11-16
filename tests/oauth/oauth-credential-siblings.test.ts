@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { deriveProviderPresets } from "../../src/providers/derive";
 import { OAUTH_CREDENTIAL_SIBLINGS, oauthCredentialSlot } from "../../src/oauth/credential-siblings";
@@ -137,6 +137,30 @@ describe("Kimi (Responses) is a reachable sibling of the Kimi login (#8087)", ()
     releaseWriter();
     await writer;
     expect(await pending).toBe("retained");
+    expect(getAccountSet("kimi")?.accounts).toHaveLength(1);
+  });
+
+  test("a re-created row of the removed name keeps the login", async () => {
+    await saveCredential("kimi", { access: "kimi-access-1", refresh: "kimi-refresh-1", expires: FAR_FUTURE, accountId: "kimi-user" });
+    const live = config({ fixture: { adapter: "openai-chat", baseUrl: "https://fixture.example.test/v1", authMode: "key", apiKey: "k" } });
+    let releaseWriter!: () => void;
+    let writerHeld!: () => void;
+    const held = new Promise<void>(resolve => { writerHeld = resolve; });
+    const writer = mutateStore(async () => { writerHeld(); await new Promise<void>(resolve => { releaseWriter = resolve; }); return false; });
+    await held;
+    const pending = releaseRemovedProviderCredentials(live, "kimi");
+    live.providers.kimi = KIMI_ROW;
+    releaseWriter();
+    await writer;
+    expect(await pending).toBe("retained");
+    expect(getAccountSet("kimi")?.accounts).toHaveLength(1);
+  });
+
+  test("a sibling another process saved to config.json keeps the login", async () => {
+    await saveCredential("kimi", { access: "kimi-access-1", refresh: "kimi-refresh-1", expires: FAR_FUTURE, accountId: "kimi-user" });
+    const live = config({ fixture: { adapter: "openai-chat", baseUrl: "https://fixture.example.test/v1", authMode: "key", apiKey: "k" } });
+    writeFileSync(home.path("config.json"), JSON.stringify(config({ ...live.providers, "kimi-responses": SIBLING_ROW })));
+    expect(await releaseRemovedProviderCredentials(live, "kimi")).toBe("retained");
     expect(getAccountSet("kimi")?.accounts).toHaveLength(1);
   });
 
