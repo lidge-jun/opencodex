@@ -229,8 +229,11 @@ to start its own replacement on the same port. If the replacement does not answe
 restart budget it is stopped, and the old runtime binds the port again and keeps serving; the
 command then reports the restart as not completed. A client runtime run by a background service or
 the desktop app refuses the request and keeps serving ("Restart not performed; the running client
-runtime was kept"); restart it with `ocx service restart` or from the app. See
-[Remote Link apply parity](#remote-link-apply-parity).
+runtime was kept"); restart it with `ocx service restart` or from the app. A client runtime that
+carries only `OCX_SERVICE=1` (a service installed before 2.49, or a proxy started by `ocx claude`,
+`ocx codex` or `ocx opencode`) cannot show its owner and is always refused, with nothing stopped:
+re-register its service once with `ocx service repair`, or, for a companion's proxy, run `ocx stop`
+and start it again. See [Remote Link apply parity](#remote-link-apply-parity).
 
 If package files or the Bun runtime remain incomplete after the installer exited or failed,
 run `ocx status`, stop any running proxy through its owner (`ocx stop`, or its service or
