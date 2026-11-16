@@ -165,6 +165,63 @@ function workerRequest(input: unknown, threadId?: string, stream = true, tools?:
 }
 
 describe("advisor responses wiring (end-to-end)", () => {
+  for (const stream of [true, false]) for (const wireName of ["work__advisor", "work.advisor", "advisor"]) {
+  test(`a selected namespaced client advisor stays client-owned (stream=${stream}, echo=${wireName})`, async () => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const workerBodies: string[] = [], chatRequests: string[] = [];
+    const frames = JSON.parse(JSON.stringify(advisorCallFrames).replaceAll('"advisor"', JSON.stringify(wireName))) as unknown[];
+    const workerFetch: typeof fetch = stream ? workerProviderFetch([frames], workerBodies) : (async (_url, init) => {
+      workerBodies.push(String(init?.body));
+      return Response.json({ choices: [{ message: { role: "assistant", content: null,
+        tool_calls: [{ id: "call_adv_1", type: "function", function: { name: wireName, arguments: '{"question":"client task"}' } }] }, finish_reason: "tool_calls" }] });
+    }) as typeof fetch;
+    const config = advisorConfig({ enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1", policy: "manual" },
+      workerFetch);
+    loopbackInterceptor(config, { chatRequests });
+    const response = await handleResponses(workerRequest("Use the client tool", undefined, stream,
+      [{ type: "namespace", name: "work", tools: [{ type: "function", name: "advisor", parameters: { type: "object" } }] }],
+      { type: "function", namespace: "work", name: "advisor" }), config, logCtx);
+    const body = await response.text();
+    expect(chatRequests).toHaveLength(0);
+    expect(workerBodies).toHaveLength(1);
+    expect(JSON.parse(workerBodies[0]!).tools.map((tool: { function: { name: string } }) => tool.function.name)).toEqual(["work__advisor"]);
+    expect(body).toContain("call_adv_1");
+    expect(body).toContain('"namespace":"work"');
+    expect(body).not.toContain("undeclared_tool_call");
+  });
+  }
+
+  for (const stream of [true, false]) {
+    for (const choice of ["none", { type: "function", name: "shell" },
+      { type: "allowed_tools", mode: "auto", tools: [{ type: "function", name: "shell" }] }]) {
+      test(`ordinary Advisor calls obey effective tool choice (stream=${stream}, choice=${JSON.stringify(choice)})`, async () => {
+        releaseSpendHome = acquireOwnedSpendHome();
+        const workerBodies: string[] = [], chatRequests: string[] = [];
+        const workerFetch: typeof fetch = stream
+          ? workerProviderFetch([advisorCallFrames, plainFrames("continued")], workerBodies)
+          : (async (_url, init) => {
+            workerBodies.push(String(init?.body));
+            const called = workerBodies.length === 1;
+            return Response.json({ choices: [{ message: called
+              ? { role: "assistant", content: null, tool_calls: [{ id: "call_adv_1", type: "function", function: { name: "advisor", arguments: '{"question":"Where do I start?"}' } }] }
+              : { role: "assistant", content: "continued" }, finish_reason: called ? "tool_calls" : "stop" }] });
+          }) as typeof fetch;
+        const config = advisorConfig({ enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1", policy: "manual" },
+          workerFetch);
+        loopbackInterceptor(config, { chatRequests });
+        const response = await handleResponses(workerRequest("Use the permitted tools", undefined, stream,
+          [{ type: "function", name: "shell", parameters: { type: "object" } }], choice), config, logCtx);
+        const body = await response.text();
+        expect(chatRequests).toHaveLength(0);
+        expect(workerBodies).toHaveLength(1);
+        expect(workerBodies[0]).not.toContain('"advisor"');
+        expect(body).toContain("undeclared_tool_call");
+        expect(body).not.toContain("call_adv_1");
+        expect(body).not.toContain(ADVISOR_ADVICE);
+      });
+    }
+  }
+
   test.each([true, false])("question-only invalid calls preserve consultation allowance and bound continuations (corrected=%s)", async corrected => {
     releaseSpendHome = acquireOwnedSpendHome();
     const workerBodies: string[] = []; const chatRequests: string[] = [];

@@ -156,6 +156,12 @@ log can be sent. OpenCodex does not run general DLP.
 Manual advice is a tool result for the `advisor` call the worker made. The result is a JSON
 object. Its `advice` field is the Advisor model's text. Its `status` is set by the runtime.
 
+Manual calls also require the current request's `tool_choice` to allow `advisor`. `none`, a
+different named tool, or an allowlist that excludes Advisor prevents consultation and worker
+redispatch. This applies to ordinary translated Responses and Messages requests as well as web
+search. A forbidden call is rejected before its ID or arguments reach the client. Automatic
+preflight and adaptive consultations follow their separate operator-configured policy.
+
 Automatic preflight keeps the fixed runtime transport instruction in a developer message and
 puts the quoted JSON advice in a separate **user-role advisory message**. Advisor-generated text
 never enters developer/system content, including when translated OpenAI Chat maps developer

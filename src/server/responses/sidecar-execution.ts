@@ -811,6 +811,12 @@ export async function executeResponsesSidecars(
   // run-turn adapter, not compaction). Web-search handles advisor in its own loop above; the
   // image/video and run-turn loops cannot intercept it. Preflight still applies to those paths.
   if (advisorPlan && !routedCompaction && !transportState.adapter.runTurn && !wsPlan && !imgPlan && !vidPlan) {
+    if (!toolChoiceToolPredicate(parsed.options.toolChoice, [...(parsed.context.tools ?? []), advisorPlan.tool])(advisorPlan.tool)) {
+      // Keep the refusal guard without injecting or shadowing tools. Direct Messages delivery
+      // must not expose a forbidden synthetic call merely because it was never advertised.
+      advisorPlan.attachGuard(parsed);
+      return undefined;
+    }
     // A client-declared tool named "advisor" would collide with the synthetic injection (one
     // wire name, two schemas); the synthetic runtime owns the name for this turn.
     parsed.context.tools = [

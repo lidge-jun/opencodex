@@ -62,6 +62,10 @@ multi-call pairing, overlap and lifecycle release.
   `tests/advisor/advisor-responses-wiring.test.ts` exercises real streaming and buffered delivery.
   Client catalog checks wrap the Advisor guard, so synthetic calls are consumed internally before
   final worker output is checked against current client declarations, including direct encoders.
+  Synthetic injection requires the request's effective `tool_choice` to permit Advisor. The guard
+  rechecks that choice on each worker leg and refuses a forbidden call before consultation,
+  continuation, or disclosure of its ID and arguments. This also applies to linked Messages replay
+  configurations; automatic policy preflight retains its separate operator-configured behavior.
 - Run-turn adapters: preflight support only — the automatic pre-dispatch consultation attempt
   applies, but the synthetic tool is never injected because the run-turn loop cannot intercept it.
 - Native OpenAI passthrough: no advisor support in PR1. The request path is byte-identical to a

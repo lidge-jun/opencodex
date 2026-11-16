@@ -29,8 +29,10 @@ import type {
   OcxToolResultMessage,
   OcxUsage,
 } from "../../types";
+import { toolChoiceToolPredicate } from "../../types";
+import { UNDECLARED_TOOL_CALL_ERROR_CODE } from "../../lib/errors";
 import { jsonStringPartsUtf8Bytes, jsonUtf8Bytes } from "../../lib/json-byte-size";
-import { isTranslatorBudgetExceededError, TRANSLATOR_MAX_CALL_ARGUMENT_BYTES, TranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
+import { isTranslatorBudgetExceededError, releaseTranslatedEvent, TRANSLATOR_MAX_CALL_ARGUMENT_BYTES, TranslatorBudgetExceededError, type TranslatorBudget } from "../../lib/translator-budget";
 import { AdvisorRetention } from "./advisor-retention";
 import { clipAdvisorQuestion } from "./advisor-question";
 
@@ -234,6 +236,7 @@ export function createAdvisorStreamGuard(options: AdvisorGuardOptions): AsyncGen
 export function createAdvisorGuard(plan: AdvisorPlan): NonNullable<OcxParsedRequest["_advisorGuard"]> {
   // Shared across invocations of this request's guard, including an empty-completion retry.
   const sidecar = createAdvisorSidecarStep(plan);
+  const advisorTool = { name: ADVISOR_TOOL_NAME };
   return async function* guardAdvisorStream(options: Omit<AdvisorGuardOptions, "plan">): AsyncGenerator<AdapterEvent> {
     let parsed = options.parsed;
     let accumulatedUsage: OcxUsage | undefined;
@@ -241,6 +244,15 @@ export function createAdvisorGuard(plan: AdvisorPlan): NonNullable<OcxParsedRequ
     const retention = new AdvisorRetention(options.translatorBudget);
     try {
     while (true) {
+      // A continuation or reused guard may have a narrower choice than the original turn.
+      const catalog = parsed.context.tools ?? [];
+      const advisorAllowed = toolChoiceToolPredicate(parsed.options.toolChoice, [...catalog, advisorTool])(advisorTool);
+      const callerToolAllowed = toolChoiceToolPredicate(parsed.options.toolChoice, catalog);
+      // The bridge restores a unique authorized namespaced tool's bare echo. When no
+      // synthetic Advisor was permitted, that alias still belongs to the caller's tool.
+      const callerAdvisorOwners = new Set(catalog.filter(tool => !tool.advisor && tool.name === ADVISOR_TOOL_NAME && callerToolAllowed(tool))
+        .map(tool => tool.namespace ?? ""));
+      const callerOwnsAdvisorAlias = !advisorAllowed && callerAdvisorOwners.size === 1;
       const held: HeldAdvisorCall[] = [];
       const legEvents: AdapterEvent[] = [];
       let legTextChars = 0;
@@ -256,8 +268,15 @@ export function createAdvisorGuard(plan: AdvisorPlan): NonNullable<OcxParsedRequ
 
       for await (const event of source) {
         if (event.type === "tool_call_start") {
+          if (event.name === ADVISOR_TOOL_NAME && !advisorAllowed && !callerOwnsAdvisorAlias) {
+            if (options.translatorBudget) releaseTranslatedEvent(event, options.translatorBudget);
+            yield { type: "error", status: 502, errorType: "upstream_error", code: UNDECLARED_TOOL_CALL_ERROR_CODE,
+              message: "routed provider emitted an Advisor call outside the current request's tool choice",
+              ...(accumulatedUsage ? { usage: accumulatedUsage } : {}) };
+            return;
+          }
           if (pending) { held.push(pending); pending = null; }
-          holdingCurrent = event.name === ADVISOR_TOOL_NAME;
+          holdingCurrent = event.name === ADVISOR_TOOL_NAME && !callerOwnsAdvisorAlias;
           if (!holdingCurrent) {
             hasRealToolCall = true;
             // No continuation can use this leg. Real-tool arguments are never copied.
