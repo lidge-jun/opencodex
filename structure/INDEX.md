@@ -73,6 +73,7 @@ The wire surfaces a client actually talks to.
 | [`data-planes/protocol-paths.md`](data-planes/protocol-paths.md) | Shared protocol vocabulary, declared feature dispositions, the ingress-by-upstream baseline, plan/trace shapes, and protocol settings. |
 | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) | Per-account Pool wire installation identity, private secret, existence gates and fail-closed delivery. |
 | [`providers/codex-request-owned-affinity.md`](providers/codex-request-owned-affinity.md) | Opt-in conversation affinity for a caller's own ChatGPT bearer in Pool mode, honest selection-time affinity labels, and the persistence exclusion contract. |
+| [`providers/native-main-login-retention.md`](providers/native-main-login-retention.md) | Retention of the last complete native-main login while Codex rewrites its login file, and the events that end it. |
 | [`fallback-policy.md`](fallback-policy.md) | OCX-11 fallback off: what is a model or provider fallback (and what intra-pool rotation is not), scope precedence, the guarded hop sites, the fallback_refused and home_unreachable contracts, and the ocx.fallback/1 state. |
 | [`remote-workspace.md`](remote-workspace.md) | Opt-in workspace identity, executor grants, runtime adapters, management and dashboard integration. |
 | [`remote-link.md`](remote-link.md) | SSH machine-link building blocks: OpenSSH argument policy, ssh_config candidates, tunnel lifecycle reducer, the private link store, and standalone pairing-grant delivery. |
@@ -170,6 +171,7 @@ Background service, docs, release, and design discipline.
 | [`ops/update-supervised-recovery.md`](ops/update-supervised-recovery.md) | Manager-first recovery after a failed post-update service refresh, and the non-zero unsupervised fallback. |
 | [`ops/plugins.md`](ops/plugins.md) | Plugin loading from OPENCODEX_HOME/plugins and the upstream rewrite slot plugins attach to. |
 | [`ops/docs-and-release.md`](ops/docs-and-release.md) | Docs site, workflow map, branch policy, release flow, and cross-platform CI. |
+| [`ops/windows-code-signing.md`](ops/windows-code-signing.md) | SignPath Authenticode signing in the release legs and the per-release signing statement in the release body. |
 | [`design-methodology.md`](design-methodology.md) | Stage ordering for new GUI, CLI, and user-facing surfaces. |
 | [`ops/cross-platform-ci.md`](ops/cross-platform-ci.md) | Test lanes, platform coverage, aggregate gating, and release CI proof. |
 | [`ops/test-sandbox-cleanup.md`](ops/test-sandbox-cleanup.md) | Test-runner home, case-scoped lifecycle teardown, and Bun test lock generation ownership. |
@@ -181,7 +183,7 @@ A source area can be described by more than one doc, because these docs are orga
 
 | Source path | Described by |
 | --- | --- |
-| `.github/` | [`ops/docs-and-release.md`](ops/docs-and-release.md) |
+| `.github/` | [`ops/docs-and-release.md`](ops/docs-and-release.md)<br>[`ops/windows-code-signing.md`](ops/windows-code-signing.md) |
 | `app/` | [`overview.md`](overview.md)<br>[`companion.md`](companion.md) |
 | `bin/` | [`runtime.md`](runtime.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
 | `bin/ocx.mjs` | [`codex-cli-update.md`](codex-cli-update.md)<br>[`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
@@ -211,7 +213,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `gui/src/components/ModelPriceDialog.tsx` | [`pricing.md`](pricing.md) |
 | `gui/src/hooks/useProviderAccountPools.ts` | [`account-auto-pause.md`](account-auto-pause.md) |
 | `native/ocx-child/` | [`remote-link.md`](remote-link.md) |
-| `scripts/` | [`overview.md`](overview.md)<br>[`clients/client-support-matrix.md`](clients/client-support-matrix.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md) |
+| `scripts/` | [`overview.md`](overview.md)<br>[`clients/client-support-matrix.md`](clients/client-support-matrix.md)<br>[`ops/docs-and-release.md`](ops/docs-and-release.md)<br>[`ops/windows-code-signing.md`](ops/windows-code-signing.md) |
 | `scripts/generate-ocx-skill-surface.ts` | [`cli-management.md`](cli-management.md) |
 | `scripts/test-run-lock-gate.ts` | [`ops/test-sandbox-cleanup.md`](ops/test-sandbox-cleanup.md) |
 | `scripts/test-run-lock.ts` | [`ops/test-sandbox-cleanup.md`](ops/test-sandbox-cleanup.md) |
@@ -322,6 +324,8 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/codex/cli-windows-plan-provenance.ts` | [`codex-cli-update.md`](codex-cli-update.md) |
 | `src/codex/forward-transport-headers.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
 | `src/codex/installation-id.ts` | [`providers/codex-installation-identity.md`](providers/codex-installation-identity.md) |
+| `src/codex/main-account.ts` | [`providers/native-main-login-retention.md`](providers/native-main-login-retention.md) |
+| `src/codex/native-main-credentials.ts` | [`providers/native-main-login-retention.md`](providers/native-main-login-retention.md) |
 | `src/codex/provider-routing.ts` | [`codex-provider-routing.md`](codex-provider-routing.md) |
 | `src/codex/quota.ts` | [`quota-snapshots.md`](quota-snapshots.md) |
 | `src/codex/request-owned-affinity.ts` | [`providers/codex-request-owned-affinity.md`](providers/codex-request-owned-affinity.md) |
@@ -353,6 +357,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/config/schema/config-schema.ts` | [`transports/max-output-completion.md`](transports/max-output-completion.md)<br>[`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) |
 | `src/config/schema/leaf-validators.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`providers/hosted-tool-denials.md`](providers/hosted-tool-denials.md)<br>[`pricing.md`](pricing.md)<br>[`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) |
 | `src/config/telemetry-carry.ts` | [`telemetry.md`](telemetry.md) |
+| `src/desktop-update/` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/generated/` | [`runtime.md`](runtime.md) |
 | `src/github/` | [`runtime.md`](runtime.md) |
 | `src/grok/` | [`runtime.md`](runtime.md) |

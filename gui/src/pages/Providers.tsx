@@ -508,7 +508,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
 
   const bumpModelsRefresh = () => setModelsRefreshToken(n => n + 1);
 
-  const { cancelLoginOAuth, loginOAuth, logoutOAuth, onNativeLoginSettled, loginCapture } = useProvidersOAuth({
+  const { cancelLoginOAuth, loginOAuth, logoutOAuth, onNativeLoginSettled, loginCapture, loginEndedCapture } = useProvidersOAuth({
     apiBase, targetKey: draftTargetKey, t, aliveRef, accountSets, setAccountSets,
     setBusy, setStatus, setLoginInfo, setOauthStatus, invalidateOauthStatusReads, captureOauthStatusRead, beginAccountLogout, notify,
     fetchConfig, fetchOauth, fetchAccountSets, fetchProviderQuotas, bumpModelsRefresh,
@@ -766,6 +766,7 @@ export default function Providers({ apiBase, targetKey, targetLabel }: { apiBase
         addModalAccountRows={addModalAccountRows}
         accountLoginStatus={accountLoginStatus}
         accountLoginHint={loginInfo}
+        accountLoginCaptures={{ active: loginCapture, ended: loginEndedCapture }}
         removeConfirmName={removeConfirmName}
         removeDefaultProvider={removeConfirmName === config.defaultProvider
           ? Object.entries(config.providers).find(([name, provider]) => name !== removeConfirmName && provider.disabled !== true)?.[0] ?? null

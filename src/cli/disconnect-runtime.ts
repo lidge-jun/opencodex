@@ -5,10 +5,14 @@
  * therefore restarts that runtime itself (the same restart as `ocx restart`, which a disconnected
  * client runtime hands to whichever owner holds it), bound to the runtime generation it observed,
  * and exits 0 only when no client runtime remained or a live standalone runtime answers afterwards.
- * Every other outcome exits 1, so a Home-driven leave stops before its own `ocx restart`.
+ * Every other outcome exits 1, so a Home-driven leave stops before its own `ocx restart`. One
+ * exception keeps the runtime on purpose: a record stating `legacy-flag` (only a bare OCX_SERVICE=1, so
+ * its owner cannot be proven; #8545) gets no restart request and exits 0 with the re-register advice,
+ * because the disconnect itself completed and a later `ocx restart` refuses it with the same advice.
  */
 import type { ProxyRestartIo, ProxyRestartLive, ProxyRestartRequestOutcome } from "./tray-proxy";
-import { RESTART_OWNERS, type RestartOwner } from "../client/runtime-restart";
+import { LEGACY_FLAG_RESTART_OWNER, RESTART_OWNERS, type RestartOwner } from "../client/runtime-restart";
+import { LEGACY_FLAG_OWNER_ADVICE } from "./restart-failure";
 
 function isHandledRestartOwner(value: string | undefined): value is RestartOwner {
   return value !== undefined && (RESTART_OWNERS as readonly string[]).includes(value);
@@ -24,7 +28,7 @@ export interface RuntimeGeneration {
   port: number;
   hostname?: string;
   attestationSecret: string;
-  /** The owner the runtime classified from positive evidence; absent for a bare flag or an older runtime. */
+  /** The owner the runtime classified from positive evidence, legacy-flag for a bare flag; absent for an older runtime. */
   restartOwner?: string;
 }
 
@@ -127,10 +131,16 @@ export async function restartRuntimeAfterDisconnect(deps: DisconnectRuntimeDeps)
   if (client && !target) {
     return fail(`Disconnected, but this machine could not identify the running client runtime${client.pid ? ` (pid ${client.pid})` : ""}: its runtime record is missing or names another process, so it was not restarted.`, { kind: "unknown" });
   }
+  // A bare OCX_SERVICE=1 runtime is kept and nothing is stopped on inference (#8545 owner decision): no
+  // restart request, the disconnect's own exit 0, and the advice to re-register the service once.
+  if (target?.restartOwner === LEGACY_FLAG_RESTART_OWNER) {
+    error(`Disconnected, but the client runtime${client?.pid ? ` (pid ${client.pid})` : ""} was kept and still serves the old connection; nothing was stopped. ${LEGACY_FLAG_OWNER_ADVICE}`);
+    return 0;
+  }
   // Only a record that states an owner this step handles (written by a runtime with this change:
-  // the desktop app, a service manager with a current marker, or no supervisor) is restarted. Any
-  // other record, a bare OCX_SERVICE=1 runtime or one started before this change, is left exactly
-  // as origin/dev's `ocx disconnect` left it: no restart request, the disconnect's own exit 0.
+  // the desktop app, a service manager with a current marker, or no supervisor) is restarted. A
+  // record from a runtime started before restartOwner existed, or naming a later value, is left
+  // exactly as origin/dev's `ocx disconnect` left it: no restart request, the disconnect's own exit 0.
   if (target && !isHandledRestartOwner(target.restartOwner)) return 0;
   const before = deps.connectionState();
   if (before.kind !== "disconnected") {

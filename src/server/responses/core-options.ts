@@ -227,6 +227,14 @@ export interface HandleResponsesOptions {
   /** Internal transport identity for route-scoped upstream compatibility policy. */
   inboundTransport?: "websocket";
   /**
+   * Set by the HTTP `/v1/responses` ingress only: a streaming combo turn whose target selection
+   * outlasts `COMBO_SELECTION_KEEPALIVE_THRESHOLD_MS` commits a 200 SSE head and sends keepalive
+   * comments (#8326). `clock` is a test seam; production uses the global timers.
+   */
+  comboSelectionKeepalive?: {
+    clock?: { setTimeout(callback: () => void, ms: number): unknown; clearTimeout(handle: unknown): void };
+  };
+  /**
    * Claude replay may add native-main auth so OpenAI sidecars remain available.
    * Strip only that internal credential when the final route is a noncanonical
    * forward/caller-auth destination; final routing can differ from Claude's preflight route.

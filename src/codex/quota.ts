@@ -42,6 +42,14 @@ type MainPolicyQuota = { identityKey: string; quota: StoredAccountQuota };
 /** Fresh WHAM topology proof is consumed by the merge, never retained in a cache or DTO. */
 type MainPolicyQuotaObservation = Omit<StoredAccountQuota, "updatedAt"> & { shortWindowAbsent?: true; monthlyWindowAbsent?: true };
 let mainPolicyQuota: MainPolicyQuota | null = null;
+/**
+ * When each main policy usage window was last measured in this process (#8113). A window's time
+ * moves only when a write measures that window's percentage; reset metadata, credits and other
+ * windows never renew it. Process-local and never persisted: a reading restored from disk has none.
+ */
+type PolicyUsageWindow = "shortPercent" | "weeklyPercent" | "monthlyPercent";
+const POLICY_USAGE_WINDOWS: readonly PolicyUsageWindow[] = ["shortPercent", "weeklyPercent", "monthlyPercent"];
+let mainPolicyUsageObservation: { identityKey: string; at: Partial<Record<PolicyUsageWindow, number>> } | undefined;
 let diskHydrated = false;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let persistStartedAt: number | null = null;
@@ -442,6 +450,13 @@ export function setAccountQuotaFromParsed(
     const policyExisting = mainWriter && mainPolicyQuota?.identityKey === mainWriter.identityKey
       ? mainPolicyQuota.quota
       : undefined;
+    // Only a measured percentage renews its own window; anything else keeps the earlier time.
+    if (mainWriter && policyQuota) {
+      const at = mainPolicyUsageObservation?.identityKey === mainWriter.identityKey && policyExisting
+        ? { ...mainPolicyUsageObservation.at } : {};
+      for (const window of POLICY_USAGE_WINDOWS) if (finitePercent(policyQuota[window])) at[window] = updatedAt;
+      mainPolicyUsageObservation = { identityKey: mainWriter.identityKey, at };
+    }
     mainPolicyQuota = mainWriter && (policyQuota || policyExisting)
       ? {
         identityKey: mainWriter.identityKey,
@@ -450,6 +465,7 @@ export function setAccountQuotaFromParsed(
           : policyExisting!,
       }
       : null;
+    if (!mainPolicyQuota) mainPolicyUsageObservation = undefined;
   }
   schedulePersistAccountQuotas();
   // Credits carry the previous usage tuple; they must not refresh its observation clock.
@@ -831,7 +847,7 @@ export function updateAccountQuota(
   stampCodexQuotaUsageObservation(quota, { weeklyPercent: nextWeekly, monthlyPercent: nextMonthly }, existing);
   accountQuota.set(accountId, quota);
   // This legacy writer has no physical credential provenance.
-  if (accountId === MAIN_CODEX_ACCOUNT_ID) mainPolicyQuota = null;
+  if (accountId === MAIN_CODEX_ACCOUNT_ID) { mainPolicyQuota = null; mainPolicyUsageObservation = undefined; }
   schedulePersistAccountQuotas();
   // Observed like the other committed write. This function has no in-repo caller today, but it
   // is re-exported as public API through src/codex/auth-api.ts, so a future caller would
@@ -898,6 +914,7 @@ function hydrateAccountQuotasFromDisk(): void {
     quotaHistory.hydrate(parsed.history);
     // Policy evidence deliberately outlives the legacy six-hour rotation-cache TTL.
     mainPolicyQuota = readMainPolicyQuota(parsed.mainPolicyQuota);
+    mainPolicyUsageObservation = undefined;
     const now = Date.now();
     for (const [accountId, quota] of Object.entries(parsed.quotas)) {
       if (!quota || typeof quota !== "object" || typeof quota.updatedAt !== "number") continue;
@@ -955,6 +972,26 @@ export function getMainPolicyQuota(): StoredAccountQuota | null {
   return structuredClone(mainPolicyQuota.quota);
 }
 
+/**
+ * The oldest measurement time among the windows the observed main identity's policy reading
+ * retains, or undefined when any of them was not measured in this process (for example a reading
+ * restored from disk) (#8113). Any stale retained window therefore makes the whole reading stale.
+ */
+export function getMainPolicyUsageObservedAt(): number | undefined {
+  hydrateAccountQuotasFromDisk();
+  if (!mainPolicyQuota || mainPolicyQuota.identityKey !== getObservedMainQuotaIdentityKey()) return undefined;
+  const observation = mainPolicyUsageObservation?.identityKey === mainPolicyQuota.identityKey
+    ? mainPolicyUsageObservation.at : undefined;
+  let oldest: number | undefined;
+  for (const window of POLICY_USAGE_WINDOWS) {
+    if (!finitePercent(mainPolicyQuota.quota[window])) continue;
+    const at = observation?.[window];
+    if (at === undefined) return undefined;
+    oldest = oldest === undefined ? at : Math.min(oldest, at);
+  }
+  return oldest;
+}
+
 /** An owned identity observation may retire legacy main quota only when its retained policy tag proves replacement. */
 export function discardMismatchedMainQuota(): void {
   hydrateAccountQuotasFromDisk();
@@ -1001,14 +1038,14 @@ export function clearAccountQuota(accountId?: string): void {
   if (accountId) {
     hydrateAccountQuotasFromDisk();
     accountQuota.delete(accountId);
-    if (accountId === MAIN_CODEX_ACCOUNT_ID) mainPolicyQuota = null;
+    if (accountId === MAIN_CODEX_ACCOUNT_ID) { mainPolicyQuota = null; mainPolicyUsageObservation = undefined; }
     schedulePersistAccountQuotas();
     forgetCodexQuotaBaseline(accountId);
     return;
   }
   accountQuota.clear();
   forgetCodexQuotaBaseline();
-  mainPolicyQuota = null;
+  { mainPolicyQuota = null; mainPolicyUsageObservation = undefined; }
   diskHydrated = false;
   if (persistTimer) {
     clearTimeout(persistTimer);

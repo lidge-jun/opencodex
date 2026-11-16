@@ -910,6 +910,16 @@
       ]
     },
     {
+      "path": "providers/native-main-login-retention.md",
+      "tier": 3,
+      "title": "Native-Main Login Retention",
+      "scope": "Retention of the last complete native-main login while Codex rewrites its login file, and the events that end it.",
+      "documents": [
+        "src/codex/native-main-credentials.ts",
+        "src/codex/main-account.ts"
+      ]
+    },
+    {
       "path": "providers/codex-round-robin-placement.md",
       "tier": 4,
       "title": "Codex Round-Robin Placement",
@@ -1418,7 +1428,8 @@
         "src/service/orchestration.ts",
         "src/service/repair.ts",
         "src/update/index.ts",
-        "src/update/restart-ownership.ts"
+        "src/update/restart-ownership.ts",
+        "src/desktop-update/"
       ]
     },
     {
@@ -1507,6 +1518,16 @@
         "src/codex/",
         "src/lib/",
         "src/service.ts"
+      ]
+    },
+    {
+      "path": "ops/windows-code-signing.md",
+      "tier": 6,
+      "title": "Windows Code Signing",
+      "scope": "SignPath Authenticode signing in the release legs and the per-release signing statement in the release body.",
+      "documents": [
+        ".github/",
+        "scripts/"
       ]
     },
     {
