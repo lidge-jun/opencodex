@@ -54,13 +54,15 @@ function unpackPowerShell(script: string): string {
  * host's. One finally block releases the attribute list, its value buffer and the thread, process
  * and Job handles on every path, and terminates the child through its own handle if anything
  * fails after creation. If Add-Type or any step fails, the host exits 126; there is no
- * uncontained fallback. Ok is the bounded --version probe for discovery. Layouts are x64:
+ * uncontained fallback. V is the bounded --version probe (ten seconds, at most 256 characters of
+ * stdout, exit 0) and Ok is V succeeding; both take an already CRT-quoted argument prefix, empty
+ * for a binary and the entry of a served [bun.exe, entry] pair (#8359). Layouts are x64:
  * STARTUPINFOEXW is 112 bytes with the attribute list at byte 104, and LimitFlags sits at byte 16
  * of the 144-byte JOBOBJECT_EXTENDED_LIMIT_INFORMATION. Warnings fail Add-Type in Windows
  * PowerShell, so this source must compile without any.
  */
 export const OCX_JOB_SOURCE = [
-  "using System;using System.Text;using System.Diagnostics;using System.Runtime.InteropServices;",
+  "using System;using System.Text;using System.Diagnostics;using System.Runtime.InteropServices;using System.Threading.Tasks;",
   "public static class OcxJob{",
   "[DllImport(\"kernel32\")]static extern IntPtr CreateJobObjectW(IntPtr a,IntPtr n);",
   "[DllImport(\"kernel32\")]static extern bool SetInformationJobObject(IntPtr j,int c,byte[] i,int l);",
@@ -73,15 +75,12 @@ export const OCX_JOB_SOURCE = [
   "[DllImport(\"kernel32\")]static extern bool TerminateProcess(IntPtr p,int c);",
   "[DllImport(\"kernel32\")]static extern bool CloseHandle(IntPtr h);",
   "static void F(bool k){if(!k)throw new Exception();}",
-  "public static bool Ok(string x){try{",
-  "var q=Process.Start(new ProcessStartInfo(x,\"--version\"){UseShellExecute=false,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true});",
-  "q.StandardInput.Close();q.StandardOutput.ReadToEndAsync();q.StandardError.ReadToEndAsync();",
-  "if(q.WaitForExit(10000))return q.ExitCode==0;q.Kill();}catch{return false;}return false;}",
-  "public static string V(string x){Process q=null;try{",
-  "q=Process.Start(new ProcessStartInfo(x,\"--version\"){UseShellExecute=false,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true});q.StandardInput.Close();",
-  "var p=q;var read=System.Threading.Tasks.Task.Run(()=>{var b=new char[257];int n=0,k;while(n<257&&(k=p.StandardOutput.Read(b,n,257-n))>0)n+=k;return n>256?null:new string(b,0,n);});",
-  "System.Threading.Tasks.Task.Run(()=>{var b=new char[1024];while(p.StandardError.Read(b,0,b.Length)>0){} });",
-  "var clock=Stopwatch.StartNew();var done=System.Threading.Tasks.Task.Run(()=>p.WaitForExit());if(!read.Wait(10000)||read.Result==null||!done.Wait(Math.Max(0,10000-(int)clock.ElapsedMilliseconds))){q.Kill();q.WaitForExit();return null;}return q.ExitCode==0?read.Result:null;",
+  "public static bool Ok(string x,string a){return V(x,a)!=null;}",
+  "public static string V(string x,string a){Process q=null;try{",
+  "q=Process.Start(new ProcessStartInfo(x,a+\"--version\"){UseShellExecute=false,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true});q.StandardInput.Close();",
+  "var p=q;var read=Task.Run(()=>{var b=new char[257];int n=0,k;while(n<257&&(k=p.StandardOutput.Read(b,n,257-n))>0)n+=k;return n>256?null:new string(b,0,n);});",
+  "Task.Run(()=>{var b=new char[1024];while(p.StandardError.Read(b,0,b.Length)>0){} });",
+  "var clock=Stopwatch.StartNew();var done=Task.Run(()=>p.WaitForExit());if(!read.Wait(10000)||read.Result==null||!done.Wait(Math.Max(0,10000-(int)clock.ElapsedMilliseconds))){q.Kill();q.WaitForExit();return null;}return q.ExitCode==0?read.Result:null;",
   "}catch{try{if(q!=null&&!q.HasExited){q.Kill();q.WaitForExit();}}catch{return null;}return null;}finally{if(q!=null)q.Dispose();}}",
   "public static int Run(string x,string c){",
   "IntPtr z=IntPtr.Zero,j=z,l=z,v=z,h=z,t=z;bool listed=false,done=false;",
@@ -161,19 +160,38 @@ $f+=@((Get-Command ocx.exe -Type Application -EA 0).Source)
 $k=@("$u\.local\bin\ocx-child.exe","$u\.cache\opencodex\bin\ocx-child.exe");if($env:LOCALAPPDATA){$k+="$env:LOCALAPPDATA\opencodex\bin\ocx-child.exe"};$k+=@((Get-Command ocx-child.exe -Type Application -EA 0).Source)
 $r=if($env:HOME){$env:HOME}elseif($u){$u}else{"."};$h=if($env:OPENCODEX_HOME){$env:OPENCODEX_HOME}else{"$r\.opencodex"};$c=if([IO.File]::Exists("$h\child\state.json")){$k+$f}else{$f+$k}
 `;
+/**
+ * The install that last started serving this home (#8359), read from the first record's `command`
+ * in `serving-runtimes.json` (src/config/serving-runtimes.ts): `[ocx.exe]`, or `[bun.exe, cli\index.ts]`
+ * for an npm install. It moves ahead of every fixed candidate except ocx-child under a Child state,
+ * the POSIX order. `A` yields its entry as an argument prefix for the run and `P` the same prefix
+ * CRT-quoted for the helper's --version probe; any other candidate gets none. The pair runs only
+ * while its entry exists. A census over 64 KiB, a first record without a command, a relative or
+ * quoted path, a third element or any read error leaves the fixed order. The census sits where its
+ * writer's `getConfigDir()` puts it: a trimmed `OPENCODEX_HOME` (a leading ~ is the profile), else
+ * `%USERPROFILE%\.opencodex`, which is what `homedir()` answers on Windows; a Child state in that
+ * directory or the legacy `$h` one keeps ocx-child first. Discovery and runtime
+ * inspection read it; the gated update and pinned-sync scripts sit at the command-line budget and
+ * keep the fixed order.
+ */
+const SERVED_CANDIDATE = String.raw`$s=$null;$a=@();try{$o=([string]$env:OPENCODEX_HOME).Trim();if($o -match '^~([\\/]|$)'){$o=$u+$o.Substring(1)};$g=$(if($o){$o}else{"$u\.opencodex"});$j="$g\serving-runtimes.json";if((Get-Item -LiteralPath $j -Force -EA 1).Length -le 65536){$e=@(@(([IO.File]::ReadAllText($j)|ConvertFrom-Json).runtimes)[0].command);if($e.Count -in 1,2 -and !($e|?{$_ -isnot [string] -or $_ -match '["\x00-\x1f]' -or ![IO.Path]::IsPathRooted($_)})-and($e.Count -eq 1 -or [IO.File]::Exists($e[1]))){$s=$e[0];$a=@($e|select -Skip 1);$c=if([IO.File]::Exists("$g\child\state.json")-or[IO.File]::Exists("$h\child\state.json")){$k+$s+$f}else{@($s)+$f+$k}}}}catch{$null=$_}
+function A($x){if($x -eq $s){$a}}
+function P($x){(@(A $x)|%{(Quote-Native $_)+' '}) -join ''}
+`;
+
 export function windowsOcxArgv(args: readonly string[]): string[] {
   const sweep = args.includes("--purge") ? String.raw`foreach($r in @($env:LOCALAPPDATA,$env:USERPROFILE)){if($r){foreach($s in @("$r\opencodex\bin","$r\.cache\opencodex\bin")){if([IO.Directory]::Exists($s)){Get-ChildItem -LiteralPath $s -Filter '.ocx-child.purge.*.old' -Force -EA 0|%{try{[IO.File]::Delete($_.FullName)}catch{$null=$_}}}}}};` : "";
-  const run = sweep ? `try{$c=[OcxJob]::Run($x,((@($x)+$d.args|%{Quote-Native $_}) -join ' '))}catch{Fail};${sweep}exit $c` : `Invoke-Native $x @($d.args)`;
-  return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args }) + OCX_CANDIDATES + String.raw`
-foreach($x in ($c|select -Unique)){if([IO.File]::Exists($x)-and[OcxJob]::Ok($x)){` + run + String.raw`}}
+  const run = sweep ? `try{$c=[OcxJob]::Run($x,((@($x)+@(A $x)+$d.args|%{Quote-Native $_}) -join ' '))}catch{Fail};${sweep}exit $c` : `Invoke-Native $x (@(A $x)+@($d.args))`;
+  return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args }) + OCX_CANDIDATES + SERVED_CANDIDATE + String.raw`
+foreach($x in ($c|select -Unique)){if([IO.File]::Exists($x)-and[OcxJob]::Ok($x,(P $x))){` + run + String.raw`}}
 [Console]::Error.WriteLine('No runnable ocx.exe found; install the Windows standalone archive.');exit 127
 `);
 }
 
 export function windowsInspectRuntimeArgv(): string[] {
-  return packedPowerShellArgv(NATIVE_PROCESS + OCX_CANDIDATES + String.raw`
+  return packedPowerShellArgv(NATIVE_PROCESS + OCX_CANDIDATES + SERVED_CANDIDATE + String.raw`
 [Console]::Out.WriteLine('ocx-inspect:arch:'+[string]$env:PROCESSOR_ARCHITECTURE)
-foreach($x in ($c|select -Unique)){if(![IO.File]::Exists($x)){continue};$v=[OcxJob]::V($x);if($null -ne $v){$k=if(([IO.Path]::GetFileName($x)).ToLowerInvariant().StartsWith('ocx-child')){'ephemeral'}else{'full'};[Console]::Out.WriteLine('ocx-inspect:kind:'+$k);[Console]::Out.WriteLine('ocx-inspect:version:'+$v.Trim());exit 0}}
+foreach($x in ($c|select -Unique)){if(![IO.File]::Exists($x)){continue};$v=[OcxJob]::V($x,(P $x));if($null -ne $v){$k=if(([IO.Path]::GetFileName($x)).ToLowerInvariant().StartsWith('ocx-child')){'ephemeral'}else{'full'};[Console]::Out.WriteLine('ocx-inspect:kind:'+$k);[Console]::Out.WriteLine('ocx-inspect:version:'+$v.Trim());exit 0}}
 [Console]::Out.WriteLine('ocx-inspect:kind:missing');exit 0
 `);
 }
@@ -203,7 +221,7 @@ export function windowsPurgePlantedChildArgv(): string[] {
   return packedPowerShellArgv(NATIVE_PROCESS + WINDOWS_MANAGED_BIN + String.raw`
 $r=if($env:HOME){$env:HOME}elseif($env:USERPROFILE){$env:USERPROFILE}else{"."};$h=if($env:OPENCODEX_HOME){$env:OPENCODEX_HOME}else{"$r\.opencodex"};$cd="$h\child";$cx=if($env:CODEX_HOME){$env:CODEX_HOME}else{"$r\.codex"}
 $rec=@(@("$cd\state.json","$cd\codex-journal.json","$cd\attach-rollback.json","$cx\.ocx-child-owner.json")|?{[IO.File]::Exists($_)-or[IO.Directory]::Exists($_)});$pend=$rec.Count -gt 0;if($pend){$m='ocx-child recovery record remains at '+$rec[0]+'; keeping the planted binary for detach.'}
-try{$dir=Resolve-PlantDir;$dst="$dir\ocx-child.exe";if([IO.File]::Exists($dst)){if([OcxJob]::Ok($dst)){$rc=[OcxJob]::Run($dst,('"'+$dst+'" detach --purge'));if($rc -ne 0){exit $rc};if([IO.File]::Exists($dst)){[Console]::Error.WriteLine('ocx-child kept the planted binary: another ocx-child relay runs from it.')}}elseif($pend){[Console]::Error.WriteLine($m);exit 1}else{try{[IO.File]::Delete($dst)}catch{$null=$_}}}elseif($pend){[Console]::Error.WriteLine($m);exit 1};Get-ChildItem -LiteralPath $dir -Filter '.ocx-child.purge.*.old' -Force -EA 0|%{try{[IO.File]::Delete($_.FullName)}catch{$null=$_}}}catch{exit 1};exit 0
+try{$dir=Resolve-PlantDir;$dst="$dir\ocx-child.exe";if([IO.File]::Exists($dst)){if([OcxJob]::Ok($dst,'')){$rc=[OcxJob]::Run($dst,('"'+$dst+'" detach --purge'));if($rc -ne 0){exit $rc};if([IO.File]::Exists($dst)){[Console]::Error.WriteLine('ocx-child kept the planted binary: another ocx-child relay runs from it.')}}elseif($pend){[Console]::Error.WriteLine($m);exit 1}else{try{[IO.File]::Delete($dst)}catch{$null=$_}}}elseif($pend){[Console]::Error.WriteLine($m);exit 1};Get-ChildItem -LiteralPath $dir -Filter '.ocx-child.purge.*.old' -Force -EA 0|%{try{[IO.File]::Delete($_.FullName)}catch{$null=$_}}}catch{exit 1};exit 0
 `);
 }
 
@@ -228,7 +246,7 @@ export function windowsManagedPurgeDisconnectArgv(expectLink?: string): string[]
   if (expectLink !== undefined && !/^lnk_[0-9a-f]{16}$/.test(expectLink)) throw new Error("invalid link id");
   return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args: expectLink === undefined ? [] : [expectLink] }) + WINDOWS_MANAGED_BIN + String.raw`
 try{$dir=Resolve-PlantDir}catch{[Console]::Error.WriteLine('Refusing a reparse point in the managed ocx-child directory.');exit 1}
-$dst="$dir\ocx-child.exe";if(-not([IO.File]::Exists($dst)-and[OcxJob]::Ok($dst))){[Console]::Error.WriteLine('${MANAGED_PURGE_CHILD_MISSING_MARKER}');exit 1}
+$dst="$dir\ocx-child.exe";if(-not([IO.File]::Exists($dst)-and[OcxJob]::Ok($dst,''))){[Console]::Error.WriteLine('${MANAGED_PURGE_CHILD_MISSING_MARKER}');exit 1}
 $x=@($d.args);$e=if($x.Count -gt 0){' --expect-link '+(Quote-Native ([string]$x[0]))}else{''}
 try{$rc=[OcxJob]::Run($dst,('"'+$dst+'" disconnect --purge --json'+$e))}catch{exit 1}
 Get-ChildItem -LiteralPath $dir -Filter '.ocx-child.purge.*.old' -Force -EA 0|%{try{[IO.File]::Delete($_.FullName)}catch{$null=$_}};exit $rc
@@ -261,7 +279,7 @@ export function windowsGatedOcxArgv(cmd: WindowsGatedCommand): string[] {
   const clock = cmd.reportClock ? String.raw`[Console]::Error.WriteLine('ocx-fanout:child-now:'+[DateTimeOffset]::Now.ToUnixTimeMilliseconds());` : "";
   return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args: cmd.args }) + OCX_CANDIDATES + String.raw`$env:OCX_NO_DESKTOP_HANDOFF='1'
 foreach($x in ($c|select -Unique)){
- if(![IO.File]::Exists($x)){continue};` + overwriteEphemeral + String.raw`$v=[OcxJob]::V($x);if($null -eq $v){continue};$v=$v.Trim();if($v.StartsWith('opencodex ')){$v=$v.Substring(10)}
+ if(![IO.File]::Exists($x)){continue};` + overwriteEphemeral + String.raw`$v=[OcxJob]::V($x,'');if($null -eq $v){continue};$v=$v.Trim();if($v.StartsWith('opencodex ')){$v=$v.Substring(10)}
  $m=[regex]::Match($v,'^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$')
  $bad=(!$m.Success -or $v.Length -gt 128);if(!$bad -and $m.Groups[4].Success){foreach($p in $m.Groups[4].Value.Split('.')){if(!$p -or ($p -match '^\d+$' -and $p.Length -gt 1 -and $p[0] -eq '0')){$bad=$true}}}
  if($bad){[Console]::Error.WriteLine('ocx-fanout:child-ocx-version-unknown');exit 121}
@@ -286,7 +304,7 @@ export function windowsOverwriteSyncArgv(linkId: string, overwriteConflict = fal
   const ephemeral = overwriteConflict ? String.raw`if(([IO.Path]::GetFileName($x)).ToLowerInvariant().StartsWith('ocx-child')){[Console]::Error.WriteLine('ocx-fanout:child-ephemeral-no-overwrite');exit 121};` : "";
   return packedPowerShellArgv(NATIVE_PROCESS + dataLine({ args: ["sync", "--expect-link", linkId, "--json", ...(overwriteConflict ? ["--overwrite-conflict"] : []), ...(overwriteClient ? ["--overwrite-client", overwriteClient] : [])] }) + OCX_CANDIDATES + String.raw`$env:OCX_NO_DESKTOP_HANDOFF=1
 foreach($x in $c){
- if(![IO.File]::Exists($x)){continue};` + ephemeral + String.raw`$v=[OcxJob]::V($x);if($null -eq $v){continue};$v=$v.Trim();if($v.StartsWith('opencodex ')){$v=$v.Substring(10)}
+ if(![IO.File]::Exists($x)){continue};` + ephemeral + String.raw`$v=[OcxJob]::V($x,'');if($null -eq $v){continue};$v=$v.Trim();if($v.StartsWith('opencodex ')){$v=$v.Substring(10)}
  $m=[regex]::Match($v,'^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$')
  $bad=(!$m.Success -or $v.Length -gt 128);if(!$bad -and $m.Groups[4].Success){foreach($p in $m.Groups[4].Value.Split('.')){if(!$p -or ($p -match '^\d+$' -and $p.Length -gt 1 -and $p[0] -eq '0')){$bad=$true}}}
  if($bad){[Console]::Error.WriteLine('ocx-fanout:child-ocx-version-unknown');exit 121}

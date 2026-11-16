@@ -116,7 +116,7 @@ describe("ocx resolve real subprocess", () => {
       writeFileSync(join(home, "config.json"), "{ not json", "utf8");
       const run = await runResolveCli(["resolve", "--json"], home);
       expect(run.exitCode).toBe(1);
-      expect(run.stdout).toBe("");
+      expect(JSON.parse(run.stdout)).toMatchObject({ schema: "ocx-resolve/1", ok: false, reason: "config_invalid" });
       expect(run.stderr).toContain("refusing to guess");
     } finally {
       removeTreeWithRetry(home);

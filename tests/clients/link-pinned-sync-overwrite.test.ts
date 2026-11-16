@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { inflateRawSync } from "node:zlib";
 import { remotePinnedSyncArgv, ROUTE_OVERWRITE_MIN_CHILD_VERSION } from "../../src/link/ssh-argv";
 import { POWERSHELL_ENCODED_MAX, windowsScriptData } from "../../src/link/remote-windows";
+import { ROUTE_CLIENT_IDS } from "../../src/link/route-intent";
 import { classifySyncResult } from "../../src/cli/sync-fanout";
 
 /**
@@ -84,4 +85,11 @@ test("the Windows overwrite sync carries the same gate and ocx-child refusal wit
   expect(plain).toContain("$b=@('2','93','0')");
   expect(plain).toContain("ocx-fanout:child-ocx-lacks-expect-link");
   expect(plain).not.toContain("child-ephemeral-no-overwrite");
+});
+
+test("the Windows overwrite sync fits the command line for every route client", () => {
+  // Only "pi" was measured before, and the longest client names had already crossed the budget.
+  for (const client of ROUTE_CLIENT_IDS) {
+    expect(remotePinnedSyncArgv(linkId, "windows", true, client)[5]!.length).toBeLessThanOrEqual(POWERSHELL_ENCODED_MAX);
+  }
 });

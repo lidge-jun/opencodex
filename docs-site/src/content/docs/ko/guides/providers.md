@@ -266,7 +266,7 @@ Cline IDE/CLI에서만 제공되며 API로는 사용할 수 없습니다. `minim
 | NVIDIA NIM | `https://integrate.api.nvidia.com/v1` |
 | Z.AI (GLM Coding) | `https://api.z.ai/api/coding/paas/v4` |
 | Zhipu AI (BigModel) | `https://open.bigmodel.cn/api/paas/v4` |
-| [BigModel Coding Plan — Responses (정적 모델 목록)](/guides/providers/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
+| [BigModel Coding Plan — Responses (정적 모델 목록)](/guides/api-key-catalog/#bigmodel-coding-plan-over-responses) | `https://open.bigmodel.cn/api/v1` |
 | Qwen Cloud | Token plan(기본): `https://token-plan.maas.qwencloudapi.com/compatible-mode/v1` · 종량제: `https://dashscope.aliyuncs.com/compatible-mode/v1` · 또는 사용자 지정 |
 | Tencent Cloud Coding Plan | `https://api.lkeap.cloud.tencent.com/coding/v3` |
 | SiliconFlow | `https://api.siliconflow.cn/v1` |

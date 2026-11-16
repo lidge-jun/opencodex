@@ -354,7 +354,7 @@ native("Windows plan cleanup stops its owned child before releasing its fixture"
 // This case owns a real Bun child, its real lifetime-probe child, and Windows ACL
 // subprocesses. It reached 5.02s locally against Bun's 5s default; Windows CI
 // already supplies 60s. The shared spawn budget bounds the same intrinsic work.
-test.skipIf(hostedWindowsQuarantine || process.platform !== "win32" || process.arch !== "x64")("an unsafe Windows ledger refuses admission and a disabled plan never installs", async () => {
+test.skipIf(process.platform !== "win32" || process.arch !== "x64")("an unsafe Windows ledger refuses admission and a disabled plan never installs", async () => {
   const epoch = planCleanupEpoch;
   try {
   // The child may outlive this test and the preload sandbox after a timeout.

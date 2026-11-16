@@ -87,8 +87,8 @@ sidebar and either add localized copies or intentionally accept Starlight fallba
 
 Provider preset totals are recounted from the current registry when a preset lands. The
 documented split is 108 total: 87 key-based, 17 OAuth, three local, and one default
-ChatGPT-forward preset. The English provider guide, every translated copy, and every locale's
-quickstart carry the same counts.
+ChatGPT-forward preset. The English and Spanish API-key catalog pages, every other locale's provider guide, and every locale's
+quickstart carry the same counts. Section 3 of the provider guide lives on its own page, `docs-site/src/content/docs/guides/api-key-catalog.md` (with its Spanish copy), so the guide stays under the file-size ratchet's 2,000-line default; the guide keeps a section 3 stub that links every moved heading anchor, and other locales keep section 3 in their provider guide until they add a translated catalog page.
 
 That recount is no longer a manual obligation. These numbers are repeated across the guides and
 quickstarts and drifted once already — the English guide reached 95 while every translation and every
@@ -118,7 +118,7 @@ sharing a model-name fragment remain distinct from current Codex-native support.
 The Remote Hub guide distinguishes selected-runtime readiness from general runtime diagnostics;
 `tests/cli/cli-connect-readiness.test.ts` exercises that boundary and general status's single discovery pass with isolated executable fixtures.
 
-The provider guide's OrcaRouter login section in English and every translated source follows
+The OrcaRouter login section (on the API-key catalog page in English and Spanish, in the provider guide elsewhere) follows
 the [bounded ingestion contract](../transports/inventory.md#bounded-response-ingestion-and-orcarouter-login):
 64 KiB of valid UTF-8 JSON and one 30-second deadline covering headers and body. These are login
 limits, so the public guide does not apply them to inference payloads.
