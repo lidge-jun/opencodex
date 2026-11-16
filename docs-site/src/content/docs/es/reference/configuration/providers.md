@@ -1203,7 +1203,8 @@ Para un selector nativo-primero, incluya los identificadores nativos en `modelPi
 
 Con el [adaptador `openai-responses`](/es/reference/adapters/#openai-responses), los elementos
 `agent_message` de Codex se convierten en mensajes de usuario si contienen una lista no vacía
-de partes de texto sin formato admitidas y `authMode` no es `"forward"` (por ejemplo, `"key"`).
+de partes admitidas (`input_text`, `input_image` o `input_file`) y `authMode` no es `"forward"`
+(por ejemplo, `"key"`).
 Los proveedores que usan `authMode: "forward"` conservan estos elementos sin cambios.
 `agent_message` es un tipo privado del backend de ChatGPT Codex. Los destinos enrutados
 observados hasta ahora rechazan toda la solicitud con `422 unknown item type "agent_message"`.

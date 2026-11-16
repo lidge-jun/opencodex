@@ -1807,8 +1807,9 @@ their previous behavior. See the
 ## Routed agent messages
 
 With the [`openai-responses` adapter](/reference/adapters/#openai-responses), Codex
-`agent_message` items containing nonempty arrays of supported plaintext parts become user messages when `authMode` is not `"forward"`
-(for example, `"key"`). Providers using `authMode: "forward"` retain these items unchanged.
+`agent_message` items containing nonempty arrays of supported parts (`input_text`, `input_image`
+or `input_file`) become user messages when `authMode` is not `"forward"` (for example, `"key"`).
+Providers using `authMode: "forward"` retain these items unchanged.
 `agent_message` is private to the ChatGPT Codex backend, and the routed destinations
 reported so far answer the whole request with
 `422 unknown item type "agent_message"`; Codex replays sub-agent history on every

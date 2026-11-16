@@ -798,18 +798,18 @@ ocx catalog pull https://proxy.example.com/v1/catalog \
 The value is sent as a Bearer token but is never accepted as an argv value. Redirects are refused,
 so authorization cannot cross origins. Catalog and cache writes use the shared Codex catalog lock
 and atomic writer. A failed fetch, validation, lock acquisition, catalog write, or cache rebuild
-preserves the last-known-good files. Identical catalog bytes are a no-op that preserves mtimes and
-never touches processes. `--restart-codex`, `--restart-app-server-only`, and the deprecated
-`--restart-desktop-app` alias mean the same thing here as they do on `ocx sync` and
-`ocx sync-cache`, and they apply only after a real write.
+preserves the last-known-good files. `--restart-codex`, `--restart-app-server-only`, and the
+deprecated `--restart-desktop-app` alias select the same processes as on `ocx sync` and
+`ocx sync-cache`. For a catalog pull, they apply only when the catalog itself is written.
 
 The URL must name `/v1/catalog` at the host root. A reverse proxy that serves the endpoint under a
 path prefix is not supported by this command.
 
 The command downloads the full catalog and compares bytes locally instead of issuing an `ETag` /
-`If-None-Match` conditional request. Identical bytes are treated as a complete no-op, so a
-Codex home whose catalog is correct but whose `models_cache.json` is missing or stale is not
-repaired by this command; use `ocx sync-cache` for that.
+`If-None-Match` conditional request. Identical catalog bytes leave the catalog file untouched.
+The command still repairs a missing or stale `models_cache.json`; in that case, the result can
+report `status: "unchanged"` with `cacheSynced: true`. If both files already match, their
+modification times are unchanged.
 
 `--json` emits one stable envelope on stdout. `schemaVersion`, `ok`, `status`, `catalogWritten`,
 `cacheSynced`, and `codexRestarted` are always present. `codexRestarted` still means app-servers
