@@ -1068,6 +1068,7 @@ export interface OcxConfig extends OcxLinkHomeConfig {
    * can hold the connection silent for minutes on a large prompt before the first header arrives.
    */
   connectTimeoutMs?: number;
+  /** Opt-in (#7958): seconds (max 300) to wait for DNS after a pre-connect failure, then resend once. Unset or 0 is off. */ offlineResendWaitSec?: number;
   /** Graceful shutdown drain timeout (ms). Active turns are aborted after this deadline. Default 5000. */
   shutdownTimeoutMs?: number;
   /** Advertise supports_websockets so Codex opens the WS endpoint. Default false; set true to opt in. */ websockets?: boolean;
@@ -1702,6 +1703,8 @@ export interface OcxImagesConfig {
   artifactsKeepCount?: number;
   /** Master switch for the video bridge. Default false — must be explicitly opted in. */
   videoBridgeEnabled?: boolean;
+  /** Optional API-key provider that serves `video_gen` (its own baseUrl and key). Unset keeps xAI; an unusable value fails closed. */
+  videoProvider?: string;
   /** Model for xAI video generation. Default "grok-imagine-video". */
   videoBridgeModel?: string;
   /** Max video-gen rounds before forced-final. Default 2 (video is slower than image). */

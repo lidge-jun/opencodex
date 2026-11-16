@@ -27,7 +27,7 @@ import {
   unreadableEncryptedAgentTaskResponse,
 } from "./core-errors";
 import { parseSyntheticRowId } from "../fast-row";
-import { resolveComboId, comboIdFromRawBody, comboExclusionReasons, NoAvailableComboTargetsError, pickComboTarget } from "../../combos";
+import { resolveComboId, comboIdFromRawBody, comboExclusion, NoAvailableComboTargetsError, pickComboTarget } from "../../combos";
 import { INTERCEPT_TARGET_UNAVAILABLE_CODE, interceptTargetUnavailableResponse, resolveChosenTarget, resolveShadowCallTarget } from "./shadow-target-availability";
 import {
   MEMORY_MODEL_TARGET_UNAVAILABLE_CODE,
@@ -736,7 +736,7 @@ export async function prepareResponsesRequest(
       });
       if (!pick) {
         throw new NoAvailableComboTargetsError(candidate.combo.comboId,
-          comboExclusionReasons(config, candidate.combo.comboId, target => !target.metered));
+          comboExclusion(config, candidate.combo.comboId, target => !target.metered));
       }
       const routed = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
       candidate = { ...routed, combo: pick, routeKind: "combo", routeReason: routed.routeReason === "blocked-model-redirect" ? "blocked-model-redirect" : "combo-pick" };
@@ -903,7 +903,7 @@ export async function prepareResponsesRequest(
     if (policyRefusal) return policyRefusal;
     if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(err, logCtx));
     if (err instanceof NoAvailableComboTargetsError) {
-      return comboUnavailable(err.comboId, undefined, err.reasons);
+      return comboUnavailable(err.comboId, undefined, err.exclusion);
     }
     if (err instanceof NoEligiblePolicyCandidateError) {
       // Persist the evaluation trace (per-candidate exclusions + the
@@ -1128,7 +1128,7 @@ export async function prepareResponsesRequest(
         if (policyRefusal) return policyRefusal;
         if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(err, logCtx));
         if (err instanceof NoAvailableComboTargetsError) {
-          return comboUnavailable(err.comboId, undefined, err.reasons);
+          return comboUnavailable(err.comboId, undefined, err.exclusion);
         }
         if (err instanceof NoEligiblePolicyCandidateError) {
           logCtx.routeDecision = err.trace;
@@ -1353,7 +1353,7 @@ export async function prepareResponsesRequest(
               if (policyRefusal) return policyRefusal;
               if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(err, logCtx));
               if (err instanceof NoAvailableComboTargetsError) {
-                return comboUnavailable(err.comboId, undefined, err.reasons);
+                return comboUnavailable(err.comboId, undefined, err.exclusion);
               }
               if (err instanceof NoEligiblePolicyCandidateError) {
                 logCtx.routeDecision = err.trace;

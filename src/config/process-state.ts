@@ -166,9 +166,10 @@ export type RuntimePortState = {
   servingGeneration?: string;
   /**
    * The owner a client runtime classified from positive evidence (src/client/runtime-restart.ts
-   * restartOwnerEvidence: desktop, service-manager or none). Absent for a bare OCX_SERVICE=1 and for
-   * runtimes older than this field; `ocx disconnect` restarts only a runtime whose record states a
-   * value it recognises. Any string is accepted here so a later value never invalidates the record.
+   * recordedRestartOwner: desktop, service-manager or none), or legacy-flag for a bare OCX_SERVICE=1
+   * (#8545). Absent for runtimes older than this field; `ocx disconnect` restarts only a runtime whose
+   * record states a proven owner, and gives the re-register advice for legacy-flag. Any string is
+   * accepted here so a later value never invalidates the record.
    */
   restartOwner?: string;
   /**

@@ -552,6 +552,12 @@ export interface ResetRetryOptions {
    * `attempts`, exactly like every other send this leg makes.
    */
   claimAmbiguousResend?: () => boolean;
+  /**
+   * Opt-in offline wait (#7958): asked once a send failed before reaching the origin; true means
+   * the destination is reachable again and one resend may follow inside `attempts`. See
+   * `createOfflineResendWait` in offline-resend.ts, which owns the single-use and pre-connect rules.
+   */
+  offlineWait?: (error: unknown, signal?: AbortSignal) => Promise<boolean>;
 }
 
 export interface TransientRetryOptions extends ResetRetryOptions {
@@ -688,6 +694,8 @@ export async function fetchWithResetRetry(
         // evidence: keep it attached so the terminal rejection cannot be
         // downgraded to the pre-connection neutral class (#914 review).
         if (sawReset) throw new UpstreamRetryEvidenceError([], err, true);
+        // Nothing reached the origin, so one resend after reachability returns cannot repeat an effect.
+        if (attempt + 1 < attempts && opts.offlineWait && await opts.offlineWait(err, opts.abortSignal)) continue;
         throw err;
       }
       if (opts.replaySafe === true) {
@@ -844,6 +852,8 @@ export async function fetchWithTransientRetry(
     ...opts,
     attempts: remaining(),
     onSendsConsumed: undefined,
+    // The offline wait belongs to the request's first send only (see below); later legs never wait.
+    offlineWait: undefined,
   });
   // Reported in `finally` rather than at each exit: this function returns from five places
   // and throws from one, and a caller sharing the budget across request legs must be told the
@@ -851,7 +861,16 @@ export async function fetchWithTransientRetry(
   try {
   if (budget === 0) throw new SendBudgetExhaustedError(opts.destination ?? (opts.label ? errorDestinationLabel(opts.label) : undefined));
   let attemptStart = Date.now();
-  let res = await fetchWithResetRetry(countedFetch, innerResetOptions());
+  // Time spent waiting for the network to return is not part of the resend's own attempt.
+  const offlineWait = opts.offlineWait;
+  let res = await fetchWithResetRetry(countedFetch, {
+    ...innerResetOptions(),
+    ...(offlineWait ? { offlineWait: async (error: unknown, signal?: AbortSignal) => {
+      const resumed = await offlineWait(error, signal);
+      if (resumed) attemptStart = Date.now();
+      return resumed;
+    } } : {}),
+  });
   for (let attempt = 0; sent < budget; attempt++) {
     // A non-replayable gateway status was settled after the request body had already left
     // for the origin; retrying it here is the automatic resend the marker exists to forbid.

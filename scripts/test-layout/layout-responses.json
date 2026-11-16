@@ -1,4 +1,7 @@
 {
+  "responses-estimated-usage.test.ts": "responses",
+  "responses-combo-unavailable-cause.test.ts": "responses",
+  "responses-native-sse-stall.test.ts": "responses",
   "responses-forward-client-headers-live.test.ts": "responses",
   "pool-retry-client-metadata.test.ts": "responses",
   "chat-inbound-tool-strict-defaults.test.ts": "responses",
@@ -24,5 +27,6 @@
   "ws-native-continuation-send-budget.test.ts": "responses",
   "responses-native-compact-ocx-envelope.test.ts": "responses",
   "responses-reset-replay-chained.test.ts": "responses",
+  "responses-offline-resend.test.ts": "responses",
   "stalled-reader-memory.test.ts": "responses"
 }

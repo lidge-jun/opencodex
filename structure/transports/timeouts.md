@@ -35,6 +35,45 @@ policy, public header expiry, client/overall cancellation and explicit local bod
 `tests/responses/refreshed-upstream-deadlines.test.ts` covers queued Responses destination changes;
 `tests/providers/kiro/kiro-fallback-error-body.test.ts` checks disabled and positive fallback budgets.
 
+## Native Responses SSE stall
+
+Native Responses SSE is the one stall consumer that reads only an explicit budget (#8206).
+`explicitStallTimeoutMs` in `src/stall-timeout.ts` returns the positive operator value and `0`
+when `stallTimeoutSec` is unset or non-positive, so the unset local/public defaults never reach this
+relay. `src/server/responses/passthrough-delivery.ts` guards the upstream body with
+`src/lib/response-body-inactivity.ts` before terminal repair, the web-search bridge and the relay (each web-search continuation leg too), measuring byte
+silence rather than model progress,
+keeping the Response object and its relay markers. The canonical JSON fold keeps its own silence and
+whole-turn deadlines. Reset selection in `src/server/responses/passthrough-completion.ts` already
+guards the bodies it publishes with the resolved budget and marks them
+(`markResponseBodyInactivityGuarded`), so they get no second clock. Guards armed by the explicit budget (delivery, continuation legs, and reset
+selection when the field is set) raise `ExplicitBodyStallError`, which `buildFailedTailPayload` in `src/server/relay.ts` reports
+as `upstream_stall_timeout`; a guard on a default budget keeps the earlier `upstream_reset` tail. Native steering and
+injection chains (`isNativeControlResponse`) stay unguarded: between responses they wait for the client's continuation,
+which a byte-silence clock cannot tell from upstream silence, and they keep their own timeliness checks. `tests/responses/responses-native-sse-stall.test.ts` covers explicit
+local and public expiry and the unset and `0` cases.
+
+## Offline wait and resend
+
+`offlineResendWaitSec` (#7958) is off unless set to a positive number of seconds, capped at 300 by
+`resolveOfflineResendWaitMs` in `src/lib/offline-resend.ts`. `createOfflineResendWait` returns one
+single-use waiter per request, or none for an IP-literal destination. The initial sends in
+`src/server/responses/passthrough-dispatch.ts` and `src/server/responses/adapter-dispatch.ts` hand it to
+`fetchWithTransientRetry` / `fetchWithResetRetry` as `offlineWait`, except on a combo attempt, which fails over
+to its next member instead of waiting once per target. `fetchWithTransientRetry` gives the waiter to the first
+send only; later transient-5xx legs never wait. Only a DNS resolution failure (`isDnsResolutionFailure`:
+`ENOTFOUND` or `EAI_AGAIN` through a bounded cause chain, never message text, and never retry-evidence errors)
+qualifies, because DNS answering again is the evidence that failure lacked; refused or unreachable connections
+would resend into the same failure, and with an outbound proxy a direct reachability probe would not test the
+request's path. The waiter polls the destination's DNS once a second until it resolves or the wait ends; each
+probe races the remaining budget and client cancellation, and a success after the deadline does not count. The
+first send's slow-attempt clock restarts when the wait resumes. Adapters with their own `fetchResponse` transport
+(google Vertex and Cloud Code Assist, kiro, cursor) are not wired; direct Google AI Studio is. One resend then
+follows inside the request's existing `attempts` budget and send accounting; no budget, a second DNS failure, an
+exhausted wait or any other failure returns the original error.
+`tests/responses/responses-offline-resend.test.ts` drives the probe and clock through
+`setOfflineResendDependenciesForTests`.
+
 ## OpenCode timeout export
 
 `src/types/config.ts` declares `opencodeClientExport`; `src/config/schema/leaf-validators.ts`

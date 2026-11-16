@@ -85,6 +85,8 @@ sudo apt install ./OpenCodex-<version>-linux-amd64.deb
 
 安装更新前，会使用项目已签名的更新器公钥进行验证。在 macOS 上，应用内更新会下载 `OpenCodex-<version>-macos.app.tar.gz`；DMG 用于首次安装。只有配置了更新器密钥 secret，才会生成发布清单；生成时要求四个平台都完成签名。
 
+在 Windows 上也可以不打开应用窗口进行更新，例如通过 SSH。以运行 OpenCodex 的 Windows 账户打开具有管理员权限的终端，运行安装目录中的 `ocx.exe`：`"C:\Program Files\OpenCodex\ocx.exe" update --desktop`（如果安装在其他位置，请相应调整文件夹）。服务、以 SYSTEM 运行的计划任务或其他账户使用各自的 OpenCodex 主目录，找不到这个代理，会让它继续运行旧版本。它检查与托盘相同的已发布版本，使用相同的更新器密钥验证 MSI，任何不一致都会拒绝，然后静默安装，并重启仍在运行旧版本的代理，使新版本开始响应。`--check` 只报告状态，`--json` 输出机器可读的结果。退出码 0 表示完成或已是最新；1 表示没有安装任何内容；2 表示更新已安装但旧代理仍在运行（或需要先重启 Windows）；3 表示安装程序未在时限内结束。从其他安装启动的代理永远不会被停止。如果你手动安装了 MSI，`ocx status` 会提示已安装版本比正在运行的代理更新，并显示此命令。
+
 ## Widget
 
 macOS 应用包含 OpenCodex WidgetKit 扩展。widget 的设置和本地快照细节参见 [macOS 菜单栏应用指南](/zh-cn/guides/macos-menu-bar/)。

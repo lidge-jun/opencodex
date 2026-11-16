@@ -11,7 +11,11 @@ n'importe quel modèle autre qu'OpenAI acheminé par opencodex. Lorsqu'il est ac
 opencodex intercepte l'appel, soumet une tâche de génération vidéo à xAI, interroge son état jusqu'à son
 achèvement, puis télécharge le résultat.
 
+Par défaut, les tâches vont à xAI ; `images.videoProvider` peut les envoyer à un autre backend compatible.
+
 ## Prérequis
+
+Ces prérequis concernent la destination xAI par défaut. Si `images.videoProvider` est défini, voir [Choisir le fournisseur vidéo](#choisir-le-fournisseur-vidéo).
 
 - Une entrée de fournisseur `xai` avec une **clé API** (`ocx login xai` seul ne suffit pas : le pont vidéo exige une authentification par clé, et non OAuth)
 - Un modèle autre qu'OpenAI comme fournisseur routé (par exemple Anthropic Claude ou Google Gemini)
@@ -52,12 +56,43 @@ Ajoutez `videoBridgeEnabled: true` à votre configuration `images` :
 | `videoBridgeModel` | `"grok-imagine-video"` | Identifiant du modèle vidéo xAI. |
 | `videoMaxRounds` | `2` | Nombre maximal de tours de génération vidéo avant une réponse finale forcée. |
 | `videoTimeoutMs` | `300000` (5 min) | Délai maximal par vidéo, interrogation comprise. |
+| `videoProvider` | non défini (xAI) | Fournisseur facultatif à clé d'API qui traite `video_gen` avec ses propres `baseUrl` et clé. Voir [Choisir le fournisseur vidéo](#choisir-le-fournisseur-vidéo). |
+
+## Choisir le fournisseur vidéo
+
+Par défaut, le pont envoie les tâches `video_gen` à xAI avec la clé d'API du fournisseur `xai`. Définissez `images.videoProvider` pour les envoyer à un autre backend qui implémente la même API asynchrone (`POST {baseUrl}/videos/generations`, puis `GET {baseUrl}/videos/{id}`), par exemple un pont multimédia auto-hébergé :
+
+```json
+{
+  "providers": {
+    "my-video-bridge": {
+      "adapter": "openai-chat",
+      "baseUrl": "http://127.0.0.1:8790/v1",
+      "apiKey": "${VIDEO_BRIDGE_KEY}",
+      "authMode": "key",
+      "allowPrivateNetwork": true
+    }
+  },
+  "images": {
+    "videoBridgeEnabled": true,
+    "videoProvider": "my-video-bridge",
+    "videoBridgeModel": "grok-imagine-video"
+  }
+}
+```
+
+- Seuls le `baseUrl` et la clé d'API du fournisseur désigné servent de destination et d'identifiant. L'adaptateur importe peu, mais l'authentification doit se faire par clé d'API.
+- `"videoProvider": "xai"` conserve le point de terminaison fixe `https://api.x.ai/v1`, quel que soit le `baseUrl` de l'entrée `xai`. Les autres identifiants de fournisseurs intégrés sont refusés ; désignez un fournisseur personnalisé.
+- Un `baseUrl` en boucle locale ou en réseau privé exige `allowPrivateNetwork: true` sur ce fournisseur, comme pour le reste du trafic des fournisseurs.
+- Une clé qu'OpenCodex peut reconnaître comme xAI (clé `xai-`, clé détenue par une entrée `xai` ou référence d'environnement nommée d'après xAI ou Grok) n'est envoyée qu'à `https://api.x.ai` ou `https://cli-chat-proxy.grok.com` ; toute autre origine est refusée. Une clé sans ces marques ne peut pas être reconnue : ne collez donc pas votre clé xAI dans l'entrée d'un autre fournisseur. Une référence de trousseau vers le secret d'un autre fournisseur est toujours refusée, une clé active en pause est refusée, et le `baseUrl` ne peut contenir ni identifiants, ni requête, ni fragment.
+- Si le fournisseur est absent, désactivé, en pause, sans clé ou refusé, chaque appel `video_gen` renvoie cette erreur au modèle. Rien n'est envoyé et le pont ne se rabat jamais sur xAI.
+- La vidéo terminée n'est toujours téléchargée que depuis une URL `data:` en base64 ou une URL `https:` publique ; un pont local doit donc renvoyer l'une des deux dans `video.url`.
 
 ## Fonctionnement
 
 1. opencodex détecte qu'un modèle routé autre qu'OpenAI est utilisé avec `videoBridgeEnabled: true`.
 2. Un outil de fonction synthétique `video_gen` est injecté dans la conversation.
-3. Lorsque le modèle appelle `video_gen`, opencodex soumet une tâche à `/videos/generations` chez xAI.
+3. Lorsque le modèle appelle `video_gen`, opencodex soumet une tâche à `/videos/generations` chez xAI (ou au `images.videoProvider` configuré).
 4. Le pont interroge l'état de la tâche toutes les 5 à 15 secondes et envoie des messages de maintien afin de garder le flux actif.
 5. Une fois la vidéo prête, elle est téléchargée dans le répertoire des artefacts.
 6. Le chemin du fichier local est renvoyé au modèle comme résultat de l'outil.
@@ -75,7 +110,7 @@ L'outil `video_gen` accepte les paramètres suivants :
 
 ## Limitations
 
-- **xAI uniquement** : la génération vidéo est disponible exclusivement par l'intermédiaire de l'API Grok Imagine Video de xAI.
+- **xAI par défaut** : sans `videoProvider`, la génération vidéo utilise l'API Grok Imagine Video de xAI ; un autre backend doit implémenter la même API asynchrone.
 - **Asynchrone** : la génération d'une vidéo prend de 30 à 120 secondes.
 - **Coût** : la génération vidéo est une fonctionnalité xAI payante (environ 0.05 $/s en 480p et 0.07 $/s en 720p).
 - **Une vidéo par appel** : chaque appel à `video_gen` produit une vidéo.

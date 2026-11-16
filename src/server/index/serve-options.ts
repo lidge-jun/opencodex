@@ -1465,6 +1465,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
               advisorAdmissionPolicy,
               onRequestBodyRead: () => disableResponsesRequestTimeout(req, requestServer),
               abortSignal: req.signal,
+              comboSelectionKeepalive: {},
               onFirstOutput: () => recordFirstOutput(logCtx, start),
               onNativePassthroughTerminal: status => {
                 finalizeNativePassthroughLog(httpStatusForRequestLogTerminal(status, logCtx), {
