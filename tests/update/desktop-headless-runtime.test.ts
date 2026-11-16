@@ -80,7 +80,7 @@ function runtime(answers: Array<LiveProxy | null>, options: { image?: string | n
 }
 
 describe("runtime replacement after install", () => {
-  const input = { installedExe: EXE, targetVersion: "2.100.3", deadlineAt: 2_000, wasRunning: true };
+  const input = { installedExe: EXE, targetVersion: "2.100.3", deadlineAt: 2_000, wasRunning: true, expectedPort: 10100 };
 
   test("a runtime already on the target is left alone", async () => {
     const r = runtime([live(7, "2.100.3")]);
@@ -124,7 +124,8 @@ describe("runtime replacement after install", () => {
       [live(7, "2.101.0"), "runtime-newer"],
     ] as const) {
       const r = runtime([answer]);
-      expect(await settleRuntime(input, r.deps)).toMatchObject({ kind: "stale", reason });
+      // No runtime of this home answered before the install, so nothing is observed for one.
+      expect(await settleRuntime({ ...input, wasRunning: false, expectedPort: undefined }, r.deps)).toMatchObject({ kind: "stale", reason });
       expect(r.restarts).toEqual([]);
     }
   });
@@ -154,7 +155,7 @@ describe("runtime replacement after install", () => {
 });
 
 describe("Desktop-owned client runtime", () => {
-  const input = { installedExe: EXE, targetVersion: "2.100.3", deadlineAt: 2_000, wasRunning: true };
+  const input = { installedExe: EXE, targetVersion: "2.100.3", deadlineAt: 2_000, wasRunning: true, expectedPort: 10100 };
 
   test("a refused client restart under this installation's app is drained for the app to restart", async () => {
     const r = runtime([live(7, "2.99.0", { role: "client" }), live(7, "2.99.0"), null, live(9, "2.100.3")], { restart: "client-desktop" });
@@ -205,7 +206,7 @@ test("a previous image moved aside in the installation still counts as this inst
 });
 
 describe("service-owned client runtime", () => {
-  const input = { installedExe: EXE, targetVersion: "2.100.3", deadlineAt: 2_000, wasRunning: true };
+  const input = { installedExe: EXE, targetVersion: "2.100.3", deadlineAt: 2_000, wasRunning: true, expectedPort: 10100 };
 
   test("a client kept by its service is restarted through the installed ocx service restart", async () => {
     const r = runtime([live(7, "2.100.0", { role: "client" }), live(7, "2.100.0"), live(11, "2.100.3")], { restart: "client-service" });
@@ -238,4 +239,28 @@ test("a refused service restart reports the service's own reason, not its log pa
   expect(detail).not.toContain("service.log");
   expect(serviceRestartFailureDetail("Log: x\n", 1)).toBe("exit 1");
   expect(serviceRestartFailureDetail("", null)).toBe("exit none");
+});
+
+describe("replacement is observed on the replaced runtime only", () => {
+  const input = { installedExe: EXE, targetVersion: "2.100.3", deadlineAt: 2_000, wasRunning: true, expectedPort: 10199 };
+
+  // Windows validation: while a detached runtime on 10199 relaunched, discovery fell back to the
+  // configured port and found another home's runtime on 10100 already on 2.100.3, which was taken
+  // as the replacement.
+  test("another port or an unattested answer on the target version is not the replacement", async () => {
+    const other = live(25108, "2.100.3", { port: 10100 });
+    const config = live(25108, "2.100.3", { port: 10199, source: "config" });
+    const r = runtime([live(25332, "2.100.0", { port: 10199 }), other, config, other]);
+    expect(await settleRuntime(input, r.deps)).toMatchObject({ kind: "stale", reason: "replacement-timeout" });
+    const ok = runtime([live(25332, "2.100.0", { port: 10199 }), other, null, live(15220, "2.100.3", { port: 10199 })]);
+    expect(await settleRuntime(input, ok.deps)).toMatchObject({ kind: "serving-target", replaced: true, live: { pid: 15220, port: 10199 } });
+  });
+
+  test("a proxy without this home's record is never acted on", async () => {
+    const foreign = runtime([live(25108, "2.100.3", { port: 10100, source: "config" })]);
+    expect(await settleRuntime({ ...input, wasRunning: false, expectedPort: undefined }, foreign.deps)).toEqual({ kind: "not-running" });
+    const old = runtime([live(25108, "2.99.0", { port: 10100, source: "config" })]);
+    expect(await settleRuntime({ ...input, wasRunning: false, expectedPort: undefined }, old.deps)).toMatchObject({ kind: "stale", reason: "unattested" });
+    expect([foreign.restarts, old.restarts]).toEqual([[], []]);
+  });
 });

@@ -87,18 +87,24 @@ export function isInstalledImage(image: string, installedExe: string): boolean {
  * a runtime just to prove the update, and reports `not-running` instead.
  */
 export async function settleRuntime(
-  input: { installedExe: string; targetVersion: string; deadlineAt: number; wasRunning: boolean },
+  input: { installedExe: string; targetVersion: string; deadlineAt: number; wasRunning: boolean; expectedPort?: number },
   deps: RuntimeReplaceDeps,
 ): Promise<RuntimeOutcome> {
-  const live = await deps.findLive();
-  if (!live) return input.wasRunning ? observe(input, deps, null) : { kind: "not-running" };
+  const found = await deps.findLive();
+  // Only this home's attested runtime record identifies the runtime this installation serves; a
+  // proxy found on the configured port without it may belong to another home.
+  const live = found && found.source === "runtime" && found.pid !== null ? found : null;
+  if (!live) {
+    if (input.wasRunning && input.expectedPort !== undefined) return observe(input, deps, null, input.expectedPort);
+    if (!found || found.version === input.targetVersion) return { kind: "not-running" };
+    return { kind: "stale", live: found, reason: "unattested" };
+  }
   if (live.version === input.targetVersion) return { kind: "serving-target", live, replaced: false };
   if (!live.version) return { kind: "stale", live, reason: "unknown-version" };
   const relation = computeVersionSkew(input.targetVersion, live.version).relation;
   if (relation === "proxy-newer") return { kind: "stale", live, reason: "runtime-newer" };
   if (relation !== "cli-newer") return { kind: "stale", live, reason: "incomparable" };
-  if (live.source !== "runtime" || live.pid === null) return { kind: "stale", live, reason: "unattested" };
-  const pid = live.pid;
+  const pid = live.pid!;
   let image: string | null;
   try { image = deps.runtimeImage(pid); } catch { image = null; }
   if (!image || !isInstalledImage(image, input.installedExe)) {
@@ -112,7 +118,7 @@ export async function settleRuntime(
       // `ocx service restart` is the owner path the refusal names.
       const restarted = await deps.restartService();
       if (!restarted.ok) return { kind: "stale", live, reason: "service-restart-failed", ...(restarted.detail ? { detail: restarted.detail } : {}) };
-      return observe(input, deps, pid);
+      return observe(input, deps, pid, live.port);
     }
     if (detail === "restart_supervised_desktop") {
       let app: string | null;
@@ -120,24 +126,27 @@ export async function settleRuntime(
       if (app && sameWindowsPath(win32.dirname(app), win32.dirname(input.installedExe))) {
         const drained = await deps.drainRuntime();
         if (!drained.ok) return { kind: "stale", live, reason: "drain-failed", ...(drained.detail ? { detail: drained.detail } : {}) };
-        return observe(input, deps, pid);
+        return observe(input, deps, pid, live.port);
       }
     }
     return { kind: "stale", live, reason: "restart-refused", ...(detail ? { detail } : {}) };
   }
   // An uncertain answer may still have been accepted: observe instead of asking twice.
-  return observe(input, deps, pid);
+  return observe(input, deps, pid, live.port);
 }
 
 async function observe(
   input: { targetVersion: string; deadlineAt: number },
   deps: RuntimeReplaceDeps,
   oldPid: number | null,
+  port: number,
 ): Promise<RuntimeOutcome> {
   let last: LiveProxy | null = null;
   while (deps.now() < input.deadlineAt) {
     last = await deps.findLive();
-    if (last && last.version === input.targetVersion && (oldPid === null || last.pid !== oldPid)) {
+    // Bound to the replaced runtime: this home's attested record, on the same port, with a new pid.
+    if (last && last.source === "runtime" && last.port === port && last.version === input.targetVersion
+      && last.pid !== null && last.pid !== oldPid) {
       return { kind: "serving-target", live: last, replaced: true };
     }
     await deps.wait(Math.max(0, Math.min(RUNTIME_OBSERVE_INTERVAL_MS, input.deadlineAt - deps.now())));

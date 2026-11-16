@@ -147,8 +147,9 @@ export async function runHeadlessDesktopUpdate(options: { check: boolean }, deps
         message: `The installed version ${installed} cannot be compared with the published ${candidate.version}; nothing was changed.` });
     }
     const live = await deps.runtime.findLive();
-    // Only a runtime older than this installation is the one an install left behind.
-    const stale = live?.version !== undefined && computeVersionSkew(installed, live.version).relation === "cli-newer";
+    // Only this home's attested runtime, older than this installation, is one an install left behind.
+    const stale = live?.source === "runtime" && live.version !== undefined
+      && computeVersionSkew(installed, live.version).relation === "cli-newer";
     if (options.check || !stale) {
       return finish({
         outcome: stale ? "old-runtime-serving" : "up-to-date",
@@ -160,7 +161,7 @@ export async function runHeadlessDesktopUpdate(options: { check: boolean }, deps
       });
     }
     deps.log(`OpenCodex Desktop ${installed} is installed, but the running proxy serves ${live!.version}; replacing it.`);
-    const settled = await settleRuntime({ installedExe: deps.install.ocxExe, targetVersion: installed, deadlineAt: runtimeDeadline(), wasRunning: true }, deps.runtime);
+    const settled = await settleRuntime({ installedExe: deps.install.ocxExe, targetVersion: installed, deadlineAt: runtimeDeadline(), wasRunning: true, expectedPort: live!.port }, deps.runtime);
     return fromRuntime(settled, installed, null, "runtime-replaced");
   }
 
@@ -171,7 +172,9 @@ export async function runHeadlessDesktopUpdate(options: { check: boolean }, deps
   }
 
   // 3. Download and verify.
-  const before = await deps.runtime.findLive();
+  const found = await deps.runtime.findLive();
+  // A proxy without this home's runtime record is not the one this update must replace.
+  const before = found?.source === "runtime" ? found : null;
   deps.log(`Downloading OpenCodex Desktop ${candidate.version}…`);
   let bytes: Uint8Array;
   try {
@@ -237,7 +240,7 @@ export async function runHeadlessDesktopUpdate(options: { check: boolean }, deps
   keepLog(false);
 
   // 6. Replace the runtime that still serves the old version.
-  const settled = await settleRuntime({ installedExe: deps.install.ocxExe, targetVersion: candidate.version, deadlineAt: runtimeDeadline(), wasRunning: before !== null }, deps.runtime);
+  const settled = await settleRuntime({ installedExe: deps.install.ocxExe, targetVersion: candidate.version, deadlineAt: runtimeDeadline(), wasRunning: before !== null, ...(before ? { expectedPort: before.port } : {}) }, deps.runtime);
   return fromRuntime(settled, candidate.version, { ...installerView, log: null }, "updated");
 
   function fromRuntime(settled: RuntimeOutcome, target: string, installerResult: HeadlessResult["installer"], done: "updated" | "runtime-replaced"): HeadlessResult {

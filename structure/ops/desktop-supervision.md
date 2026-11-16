@@ -269,8 +269,11 @@ connected-client runtime under the app answers 409 `restart_supervised_desktop` 
 installation's `opencodex-desktop.exe` supervises exactly that pid does `drain.ts` run the installed
 `ocx stop --json` with `OCX_STOP_DEADLINE_MS`, as the app's own update drain does, accepting the
 `ocx-stop/1` result only when it and the exit code agree the runtime is down (or exit 79); the
-app's supervisor then starts its sibling `ocx.exe` after its backoff. Success is a different pid
-answering `/healthz` with the target version within 240 seconds. Another image, an unattested or newer runtime, an unknown version, a
+app's supervisor then starts its sibling `ocx.exe` after its backoff. Success is a different pid in
+this home's attested runtime record, on the replaced runtime's port, answering `/healthz` with the
+target version within 240 seconds; a proxy found on the configured port without this home's record
+(another home's, for example) neither counts as the runtime before the install nor as its
+replacement. Another image, an unattested or newer runtime, an unknown version, a
 refused restart, an unconfirmed drain or service restart, or a timeout is reported with the restart command and exit 2; nothing else is
 stopped. The Desktop shell process keeps its pre-update image until it is relaunched.
 
