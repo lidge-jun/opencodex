@@ -852,6 +852,8 @@ export async function fetchWithTransientRetry(
     ...opts,
     attempts: remaining(),
     onSendsConsumed: undefined,
+    // The offline wait belongs to the request's first send only (see below); later legs never wait.
+    offlineWait: undefined,
   });
   // Reported in `finally` rather than at each exit: this function returns from five places
   // and throws from one, and a caller sharing the budget across request legs must be told the

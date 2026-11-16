@@ -522,7 +522,7 @@ export async function prepareAdapterExchange(
           abortSignal: upstream.signal,
           label: safeHostLabel(builtInitialRequest.url), destination: errorDestinationLabel(builtInitialRequest.url),
           claimAmbiguousResend: claimPreHeaderResend,
-          offlineWait: createOfflineResendWait(builtInitialRequest.url, resolveOfflineResendWaitMs(config.offlineResendWaitSec)),
+          offlineWait: options.comboAttempt ? undefined : createOfflineResendWait(builtInitialRequest.url, resolveOfflineResendWaitMs(config.offlineResendWaitSec)),
           ...(sendBudgetState.workflowRootId || sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
             || billingPoolRequest || autoPauseEnabled
             ? {

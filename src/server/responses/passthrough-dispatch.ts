@@ -1048,7 +1048,8 @@ export async function preparePassthroughExchange(
           // by `onPhysicalDispatch`; a reporter as well would count them twice.
           ...(receiptMode ? {} : { onSendsConsumed: initialAccounting.report }),
           claimAmbiguousResend: claimPreHeaderResend,
-          offlineWait: createOfflineResendWait(request.url, resolveOfflineResendWaitMs(config.offlineResendWaitSec)),
+          // A combo fails over to another member instead of waiting once per target.
+          offlineWait: options.comboAttempt ? undefined : createOfflineResendWait(request.url, resolveOfflineResendWaitMs(config.offlineResendWaitSec)),
         },
       );
     } catch (err) {

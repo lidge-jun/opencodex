@@ -1,10 +1,30 @@
 import { lookup } from "node:dns/promises";
-import { isPreConnectReachabilityError } from "./upstream-reachability";
+import { isIP } from "node:net";
+import { UpstreamRetryEvidenceError } from "./upstream-retry";
 
 /** Longest configurable offline wait (#7958): five minutes, the span of a laptop sleep/Wi-Fi hop. */
 export const MAX_OFFLINE_RESEND_WAIT_SEC = 300;
 /** Interval between reachability probes while offline. */
 export const OFFLINE_REACHABILITY_PROBE_INTERVAL_MS = 1_000;
+
+/**
+ * Only a DNS resolution failure qualifies (#7958): DNS answering again is exactly the evidence that
+ * failure lacked. A refused or unreachable connection would resend into the same failure, and with
+ * an outbound proxy a direct reachability probe would not test the path the request takes.
+ */
+const DNS_FAILURE_CODES = new Set(["ENOTFOUND", "EAI_AGAIN"]);
+const MAX_CAUSE_DEPTH = 3;
+
+/** A DNS resolution failure, read from `code` through a bounded cause chain; never from message text. */
+export function isDnsResolutionFailure(error: unknown): boolean {
+  let current: unknown = error instanceof UpstreamRetryEvidenceError ? undefined : error;
+  for (let depth = 0; depth < MAX_CAUSE_DEPTH && current instanceof Error; depth++) {
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === "string" && DNS_FAILURE_CODES.has(code)) return true;
+    current = current.cause;
+  }
+  return false;
+}
 
 /**
  * Decides, at most once per logical request, whether a pre-connect failure may be resent after
@@ -36,9 +56,9 @@ export function resolveOfflineResendWaitMs(configuredSec: unknown): number {
 }
 
 /**
- * Opt-in offline wait for one request (#7958). After a send fails before any byte reached the
- * origin (DNS failure, network unreachable, connection refused; see `isPreConnectReachabilityError`),
- * poll the destination's DNS until it resolves or `maxWaitMs` passes, then allow one resend.
+ * Opt-in offline wait for one request (#7958). After a send fails because the destination's name
+ * did not resolve (`isDnsResolutionFailure`), poll its DNS until it resolves or `maxWaitMs` passes,
+ * then allow one resend. An IP-literal destination never qualifies: DNS proves nothing about it.
  * Nothing was delivered, so the resend cannot repeat an upstream effect; the caller's send budget
  * still counts it. A rejection that is not pre-connect, a second failure, an exhausted wait or a
  * client abort returns the original failure.
@@ -47,9 +67,10 @@ export function createOfflineResendWait(url: string, maxWaitMs: number): Offline
   if (!(maxWaitMs > 0)) return undefined;
   let hostname: string;
   try { hostname = new URL(url).hostname.replace(/^\[|\]$/g, ""); } catch { return undefined; }
+  if (isIP(hostname) !== 0) return undefined;
   let claimed = false;
   return async (error, signal) => {
-    if (claimed || !isPreConnectReachabilityError(error)) return false;
+    if (claimed || !isDnsResolutionFailure(error)) return false;
     claimed = true;
     const deps = testDependencies ?? {};
     const resolveHost = deps.resolveHost ?? ((host: string) => lookup(host));

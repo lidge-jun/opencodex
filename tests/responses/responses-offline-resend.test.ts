@@ -223,3 +223,62 @@ test("time spent waiting offline does not make the resend count as a slow attemp
     expect(statuses).toEqual([0, 503, 200]);
   } finally { clockSpy.mockRestore(); }
 });
+test("only a DNS resolution failure waits; refused, unreachable and IP-literal failures return at once", async () => {
+  const { lookups } = probes(0);
+  for (const code of ["ECONNREFUSED", "ConnectionRefused", "ENETUNREACH", "EHOSTUNREACH"]) {
+    let sends = 0;
+    const error = Object.assign(new TypeError(`connect ${code}`), { code });
+    await expect(fetchWithResetRetry(async () => { sends += 1; throw error; },
+      { attempts: 3, offlineWait: createOfflineResendWait(url, 30_000) })).rejects.toBe(error);
+    expect(sends).toBe(1);
+  }
+  // An IP literal needs no DNS, so DNS answering proves nothing about it.
+  expect(createOfflineResendWait("https://203.0.113.7/v1/responses", 30_000)).toBeUndefined();
+  expect(createOfflineResendWait("http://[2001:db8::1]:8080/v1/responses", 30_000)).toBeUndefined();
+  expect(lookups).toEqual([]);
+  let sends = 0;
+  const dnsAgain = Object.assign(new TypeError("getaddrinfo EAI_AGAIN gateway.example"), { code: "EAI_AGAIN" });
+  await fetchWithResetRetry(async () => { sends += 1; if (sends === 1) throw dnsAgain; return new Response("ok"); },
+    { attempts: 3, offlineWait: createOfflineResendWait(url, 30_000) });
+  expect(sends).toBe(2);
+});
+
+test("the wait belongs to the first send only; a later transient-5xx leg never waits", async () => {
+  const { lookups } = probes(0);
+  const sends: Array<number | "offline"> = [];
+  const failure = fetchWithTransientRetry(async () => {
+    if (sends.length === 0) { sends.push(503); return new Response("x", { status: 503 }); }
+    sends.push("offline");
+    throw offline();
+  }, { attempts: 4, offlineWait: createOfflineResendWait(url, 30_000) });
+  await expect(failure).rejects.toBeDefined();
+  expect(sends).toEqual([503, "offline"]);
+  expect(lookups).toEqual([]);
+});
+
+test("a combo fails over instead of waiting once per target", async () => {
+  release = acquireOwnedSpendHome();
+  const { lookups } = probes(0);
+  const hosts: string[] = [];
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const host = new URL(input instanceof Request ? input.url : String(input)).host;
+    hosts.push(host);
+    if (host === "down.example") throw offline();
+    return Response.json(completed);
+  }) as unknown as typeof fetch;
+  const target = (name: string) => ({ adapter: "openai-responses", authMode: "key", apiKey: "fixture-key",
+    baseUrl: `https://${name}.example/v1`, models: ["probe"] });
+  const cfg = { port: 0, defaultProvider: "down", offlineResendWaitSec: 30,
+    providers: { down: target("down"), up: target("up") },
+    combos: { pair: { strategy: "failover", targets: [{ provider: "down", model: "probe" }, { provider: "up", model: "probe" }] } },
+  } as unknown as OcxConfig;
+  const response = await handleResponses(new Request("http://localhost/v1/responses", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "combo/pair", input: "hello", stream: false, store: false }),
+  }), cfg, { model: "", provider: "" });
+  expect(response.status).toBe(200);
+  expect(await response.text()).toContain("BACK_ONLINE");
+  // No DNS wait and no resend to the unreachable member: the combo moved on to the reachable one.
+  expect(lookups).toEqual([]);
+  expect(hosts).toEqual(["down.example", "up.example"]);
+});

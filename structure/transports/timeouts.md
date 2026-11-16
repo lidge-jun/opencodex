@@ -39,15 +39,20 @@ policy, public header expiry, client/overall cancellation and explicit local bod
 
 `offlineResendWaitSec` (#7958) is off unless set to a positive number of seconds, capped at 300 by
 `resolveOfflineResendWaitMs` in `src/lib/offline-resend.ts`. `createOfflineResendWait` returns one
-single-use waiter per request; the initial sends in `src/server/responses/passthrough-dispatch.ts` and
-`src/server/responses/adapter-dispatch.ts` hand it to `fetchWithResetRetry` as `offlineWait`. Only a
-rejection `isPreConnectReachabilityError` proves never reached the origin (DNS failure, network
-unreachable, connection refused) qualifies, and only before a reset was seen. The waiter polls the
-destination's DNS once a second until it resolves or the wait ends; each probe races the remaining budget and client
-cancellation, and a success after the deadline does not count. `fetchWithTransientRetry` restarts its slow-attempt clock
-when the wait resumes. Adapters with their own `fetchResponse` transport (google, kiro, cursor) are not wired. One
-resend then follows inside the request's existing `attempts` budget and send accounting; no budget,
-a second offline failure, an exhausted wait or any other failure returns the original error.
+single-use waiter per request, or none for an IP-literal destination. The initial sends in
+`src/server/responses/passthrough-dispatch.ts` and `src/server/responses/adapter-dispatch.ts` hand it to
+`fetchWithTransientRetry` / `fetchWithResetRetry` as `offlineWait`, except on a combo attempt, which fails over
+to its next member instead of waiting once per target. `fetchWithTransientRetry` gives the waiter to the first
+send only; later transient-5xx legs never wait. Only a DNS resolution failure (`isDnsResolutionFailure`:
+`ENOTFOUND` or `EAI_AGAIN` through a bounded cause chain, never message text, and never retry-evidence errors)
+qualifies, because DNS answering again is the evidence that failure lacked; refused or unreachable connections
+would resend into the same failure, and with an outbound proxy a direct reachability probe would not test the
+request's path. The waiter polls the destination's DNS once a second until it resolves or the wait ends; each
+probe races the remaining budget and client cancellation, and a success after the deadline does not count. The
+first send's slow-attempt clock restarts when the wait resumes. Adapters with their own `fetchResponse` transport
+(google Vertex and Cloud Code Assist, kiro, cursor) are not wired; direct Google AI Studio is. One resend then
+follows inside the request's existing `attempts` budget and send accounting; no budget, a second DNS failure, an
+exhausted wait or any other failure returns the original error.
 `tests/responses/responses-offline-resend.test.ts` drives the probe and clock through
 `setOfflineResendDependenciesForTests`.
 
