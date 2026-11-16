@@ -8,6 +8,7 @@ import { baseScopedEnv, runCodingAgentTurn, type CodingAgentDeps, type CodingAge
 import { QODER_PROFILES, resolveQoderProfile, type QoderProfile } from "./profiles";
 import { QoderScaffoldFilter, QODER_SCAFFOLD_ERROR_CODE, qoderScaffoldErrorMessage } from "./scaffold-guard";
 import { ToolEnvelopeEchoFilter } from "../../lib/tool-envelope-echo-filter";
+import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { buildQoderConversationInput, qoderCnImageInputSupported } from "./image-input";
 
 export type QoderAdapterDeps = CodingAgentDeps;
@@ -132,7 +133,13 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
   };
 
   const forwardText = (text: string, refuseOnMatch = true): void => {
-    const safe = replayFilter.feed(text);
+    let safe: string;
+    try { safe = replayFilter.feed(text); }
+    catch (error) {
+      if (!isTranslatorBudgetExceededError(error)) throw error;
+      refuse("an unresolved tool envelope exceeding its buffer limit");
+      return;
+    }
     // An overflowing fenced hold can release an unverified marker. Refuse it
     // before publication rather than leaking the envelope under a memory cap.
     if (replayFilter.unverifiedMarker) {

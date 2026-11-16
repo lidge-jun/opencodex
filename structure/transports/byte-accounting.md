@@ -145,6 +145,15 @@ envelopes, and real HTTP streams; `tests/server/inbound-body-budget.test.ts` cov
 
 ## Stream-buffer accounting
 
+`src/lib/tool-envelope-echo-filter.ts` retains at most 65,536 UTF-16 code units in an
+unresolved marker line, independently of its existing bounded fenced-code hold. Whitespace
+following a whole marker is classified one arriving scalar at a time; only line settlement or
+prose divergence rescans the retained suffix. Exceeding the pending limit clears retained text
+and permanently fails that filter with `TranslatorBudgetExceededError` (`live_transient`,
+128 KiB), without releasing the candidate as prose or claiming a successful echo match.
+`tests/adapters/tool-envelope-echo-whole-line.test.ts` bounds scanned input units at increasing
+padding sizes and covers chunking, Unicode whitespace, exact-limit settlement and refusal.
+
 Kiro tool-input collection in `src/adapters/kiro/stream.ts` keeps a per-call UTF-8 byte
 total, measuring only the arriving fragment instead of remeasuring retained chunks.
 Each new call starts at zero; transient replacement admission, per-call limits and

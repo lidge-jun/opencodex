@@ -1,4 +1,5 @@
 import { ToolEnvelopeEchoFilter, stripToolEnvelopeEcho } from "../lib/tool-envelope-echo-filter";
+import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
 import { replaceSseDataPayload, sseDataPayload, type SseBlockRewrite } from "./sse-payload-rewrite";
 
 function record(value: unknown): value is Record<string, unknown> {
@@ -38,7 +39,9 @@ export function stripGrokUpstreamEnvelopeEchoFromResponsesJson(json: string): st
     const value = JSON.parse(json) as unknown;
     outputText(value);
     return JSON.stringify(value);
-  } catch {
+  } catch (error) {
+    // Returning the original JSON after a filter refusal would publish the held envelope.
+    if (isTranslatorBudgetExceededError(error)) throw error;
     return json;
   }
 }

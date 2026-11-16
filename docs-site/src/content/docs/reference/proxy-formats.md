@@ -459,6 +459,13 @@ buffer budget, the relay reports the failure without waiting for upstream inspec
 to finish. It cancels the upstream work and emits `response.failed` followed by
 `data: [DONE]`; a budget overflow uses the `translation_buffer_limit` error code.
 
+When filtering replayed tool results, Cursor, xAI Responses and Qoder hold lines that might be
+echoed tool envelopes until they can distinguish them from prose. An unresolved line is limited
+to 65,536 UTF-16 code units, including trailing whitespace. Exceeding this limit ends the turn
+without publishing the held text or a successful completion. Cursor and xAI report
+`translation_buffer_limit`; Qoder reports its existing non-retryable `vendor_scaffold_detected`
+refusal. Ordinary prose and closed fenced examples within the limit remain intact.
+
 Responses SSE accepts CR, LF and CRLF line endings, including mixed endings and CRLF split across
 network chunks. Tool validation, Chat translation, terminal inspection and WebSocket projection
 use the same event boundaries. A CR-only completion does not wait for the upstream connection to close.

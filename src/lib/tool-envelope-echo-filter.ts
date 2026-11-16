@@ -1,3 +1,5 @@
+import { TranslatorBudgetExceededError } from "./translator-budget";
+
 /** Line-aware filter for echoed tool envelopes in incremental assistant text. */
 const MARKERS = ["[Tool Result]", "[Tool Error]", "[tool_result]", "[Tool Call]", "[Tool call:"] as const;
 const UNTERMINATED_MARKERS = ["[Tool Result", "[Tool Error", "[tool_result", "[Tool Call"] as const;
@@ -77,6 +79,9 @@ export function closedFenceLines(lines: readonly string[]): boolean[] {
 // closes. Output from that line is held: a matching closer releases it as code, the end of the turn
 // drops it as an echo. The hold is bounded, so a long block cannot stall the stream.
 const MAX_HELD_CHARS = 64 * 1024;
+// A whole marker followed only by whitespace is still ambiguous until newline/EOF or prose.
+// Bound that unresolved line independently of the fenced hold; never release it on overflow.
+const MAX_PENDING_CHARS = 64 * 1024;
 
 interface Fence {
   char: string;
@@ -88,6 +93,8 @@ interface Fence {
 
 export class ToolEnvelopeEchoFilter {
   private pending = "";
+  private pendingWholeMarker = false;
+  private failure: TranslatorBudgetExceededError | null = null;
   private safeLine = false;
   private fence: Fence | null = null;
   private held: string | null = null;
@@ -96,6 +103,7 @@ export class ToolEnvelopeEchoFilter {
   unverifiedMarker = false;
 
   feed(delta: string): string {
+    if (this.failure) throw this.failure;
     if (this.matched) return "";
     let output = "";
     for (const char of delta) {
@@ -105,11 +113,21 @@ export class ToolEnvelopeEchoFilter {
         if (char === "\n") this.safeLine = false;
         continue;
       }
+      if (this.pending.length + char.length > MAX_PENDING_CHARS) {
+        this.takePending();
+        this.held = null;
+        this.fence = null;
+        this.failure = new TranslatorBudgetExceededError("live_transient", MAX_PENDING_CHARS * 2);
+        throw this.failure;
+      }
       this.pending += char;
       if (char === "\n") {
         output += this.completeLine();
         continue;
       }
+      // Check only the new scalar, not the growing whitespace suffix. A non-whitespace scalar
+      // either completes an unterminated marker (']') or makes the line prose below.
+      if (this.pendingWholeMarker && char.trimEnd() === "") continue;
       const probe = this.pending.replace(/^[ \t]*/, "");
       const indent = this.pending.length - probe.length;
       if (indent <= MAX_INDENT && probe === TOOL_CALL_LINE) {
@@ -129,10 +147,11 @@ export class ToolEnvelopeEchoFilter {
       const fenceCandidate = indent <= MAX_FENCE_INDENT
         && this.pending.length <= MAX_FENCE_LINE
         && (FENCE_PREFIX.test(probe) || FENCE_RUN.test(probe));
+      this.pendingWholeMarker = indent <= MAX_INDENT && WHOLE_LINE_MARKERS.includes(probe);
       const markerCandidate = indent <= MAX_INDENT
         && (probe === ""
           || MARKERS.some(marker => marker.startsWith(probe))
-          || WHOLE_LINE_MARKERS.includes(probe.trimEnd()));
+          || this.pendingWholeMarker);
       if (fenceCandidate || markerCandidate) continue;
       this.flushLineStart();
       output += this.emit(this.takePending());
@@ -146,6 +165,7 @@ export class ToolEnvelopeEchoFilter {
    * line that merely starts with a result or error marker, is prose.
    */
   finish(): string {
+    if (this.failure) throw this.failure;
     if (this.matched) return "";
     // A closing fence may end the stream without a trailing newline; settle it before the hold.
     const settled = this.pending !== "" && parseFenceLine(this.pending) ? this.completeLine() : "";
@@ -211,6 +231,7 @@ export class ToolEnvelopeEchoFilter {
   private takePending(): string {
     const pending = this.pending;
     this.pending = "";
+    this.pendingWholeMarker = false;
     return pending;
   }
 

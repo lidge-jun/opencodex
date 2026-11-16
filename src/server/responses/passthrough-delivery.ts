@@ -1,4 +1,5 @@
 import { clientFacingModelText } from "../../lib/error-destination";
+import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
 import { noteRelaySyntheticTail, noteRequestSentValueGuard } from "../request-log-terminal-status";
 import { createSentValueGuard } from "../../lib/outbound-credential-registry";
@@ -1455,7 +1456,13 @@ export async function deliverPassthroughResponse(
         return formatErrorResponse(502, "upstream_error", PLAINTEXT_V2_AGENT_MESSAGE_RESTORE_OVERFLOW_MESSAGE);
       }
       if (grokUpstreamEchoEnabled) {
-        clientJson = stripGrokUpstreamEnvelopeEchoFromResponsesJson(clientJson);
+        try { clientJson = stripGrokUpstreamEnvelopeEchoFromResponsesJson(clientJson); }
+        catch (error) {
+          if (!isTranslatorBudgetExceededError(error)) throw error;
+          return markProxyError(formatErrorResponse(502, "upstream_error", "upstream translation buffer exceeded the safe limit", {
+            code: "translation_buffer_limit", classified: true,
+          }));
+        }
       }
       // Both response formats use this body, before a refused turn can enter continuation state.
       if (nativeExchange.undeclaredToolGuardActive) {
