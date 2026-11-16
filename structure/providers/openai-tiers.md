@@ -254,12 +254,12 @@ ON/OFF action for explicit retry. OFF also clears unavailable windows with stale
 
 Exact `gpt-reserve` has a separate process-local quota scope. Only global/default and shared
 ordinary scopes can receive a generic quota-recovery claim; ordinary success cannot clear Reserve.
-Effective Desktop authless compatibility adds only configured main-selector Reserve catalog rows,
+The effective Reserve capability (`isEffectiveCodexReserve`) adds only configured main-selector Reserve catalog rows,
 never global/native/API-key or added-account discovery. Prefer observed Reserve metadata; a
 Luna-derived fallback is explicitly marked and never becomes an observed native source on resync.
 Loopback injection and catalog eligibility share the pure `loopback-target` predicates.
 Runtime eligibility is separate: only trusted receiving-listener admission with source loopback,
-the opt-in flag and non-client role activates compatibility. A secondary listener's existence does
+the `codexReserveEnabled` capability and non-client role activates compatibility. A secondary listener's existence does
 not affect public ingress. Admission flows through Responses, compact, WS handshake/turns,
 translated replay and helper planning; missing admission is not inferred from a URL or Host header.
 Claude's replay keeps its existing sidecar/routing overrides but passes the original live policy
@@ -285,15 +285,15 @@ Upstream remains the entitlement authority.
 
 `isCodexReserveOptInMissing` in `src/codex/loopback-target.ts` is the strict complement of
 `isCodexReserveRequestEligible` for the opt-in reason alone: exact `gpt-reserve`, a non-client role,
-loopback admission, and the flag off. Callers classify the destination as canonical forward first.
+loopback admission, and the Reserve capability off. Callers classify the destination as canonical forward first.
 A request matching it is refused locally with HTTP 400 `invalid_request_error` naming
-`codexDesktopAuthless` and `ocx system settings --desktop-authless on`, carrying no account
+`codexReserveEnabled` and `ocx system settings --reserve on`, carrying no account
 identifier, credential or request body, and no retry semantics. It is not a cooldown and does not use
 `CodexReserveUnavailableError`, whose `CodexAccountCooldownError` base maps to 429
 `rate_limit_error` through `cooldownErrorResponse` and would restate the upstream verdict this
 refusal exists to replace. The other two ineligibility reasons, a client role and a non-loopback
 admission source, still forward unchanged, as does a `gpt-reserve` selector an operator has aliased
-or routed onto a noncanonical provider. Enabling the flag restores eligibility rather than the
+or routed onto a noncanonical provider. Enabling the capability restores eligibility rather than the
 refusal, so the two predicates can never both hold.
 
 ### Spendable Codex credits

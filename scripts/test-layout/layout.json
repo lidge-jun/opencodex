@@ -1504,6 +1504,7 @@
     "reserve-auth-context.test.ts": "codex-integration",
     "reserve-availability.test.ts": "codex-integration",
     "reserve-catalog-lifecycle.test.ts": "codex-integration",
+    "reserve-capability-migration.test.ts": "config",
     "reserve-catalog.test.ts": "codex-integration",
     "reserve-claude-policy.test.ts": "server",
     "reserve-dispatch-ws.test.ts": "responses",

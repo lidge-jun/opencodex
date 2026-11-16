@@ -1,5 +1,5 @@
 import type { OcxConfig } from "../types";
-import { projectCustomModelCatalogMigration } from "../codex/custom-model-catalog-migration";
+import { projectPersistedConfigMigrations } from "./persisted-projections";
 import { readConfigFileSnapshot, type ConfigFileSnapshot } from "./diagnostics";
 import { bumpGenerationForCooperatingConfigWrite, withConfigMutationLockSync } from "./mutation-lock";
 import { persistConfigUnlocked } from "./persist-unlocked";
@@ -89,7 +89,7 @@ export function mutatePersistedConfig<T>(
         continue;
       }
 
-      const projected = projectCustomModelCatalogMigration(
+      const projected = projectPersistedConfigMigrations(
         commitBase.diagnostics.config,
         projectConfigRebaseProvenance(confirmedConfig),
       );

@@ -344,6 +344,9 @@ export const configSchema = z.object({
   }).strict().optional().catch(undefined)),
   codexShimAutoRestore: z.boolean().optional(),
   codexDesktopAuthless: z.boolean().optional().catch(undefined),
+  codexReserveEnabled: z.boolean().optional().catch(undefined),
+  // A malformed marker degrades to unmigrated, which reseeds from the persisted authless flag.
+  codexReserveMigration: z.number().int().positive().optional().catch(undefined),
   codexClientCompaction: z.boolean().optional().catch(undefined),
   // Presentation-only label for the injected provider. A malformed value degrades to undefined
   // and the default label is emitted, rather than failing the parse or writing a config Codex

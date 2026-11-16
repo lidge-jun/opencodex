@@ -535,7 +535,7 @@ export class CodexReserveUnavailableError extends CodexAccountCooldownError {
     this.name = "CodexReserveUnavailableError";
     this.message = "Codex Reserve is unavailable for this main credential."
       + " Use the stored main login or its matching caller credential, and retry when OpenAI grants Reserve access."
-      + " Reserve compatibility requires the effective local Desktop authless opt-in; it cannot switch accounts automatically.";
+      + " Reserve compatibility requires the local Reserve setting (codexReserveEnabled); it cannot switch accounts automatically.";
   }
 }
 
@@ -587,7 +587,8 @@ export class CodexRecoveryWithheldError extends CodexAccountCooldownError {
 }
 
 export type CodexAuthPolicyConfig = Readonly<Pick<OcxConfig,
-  "codexMainAccountHardLock" | "codexMainAccountHardLockThresholds" | "codexDesktopAuthless" | "runtimeRole" | "pausedCodexAccountIds"
+  "codexMainAccountHardLock" | "codexMainAccountHardLockThresholds" | "codexDesktopAuthless" | "codexReserveEnabled"
+  | "codexReserveMigration" | "runtimeRole" | "pausedCodexAccountIds"
   | "creditCodexAccountIds" | "codexAccounts" | "codexUseRemainingQuotaAccountIds"
 >>;
 

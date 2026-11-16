@@ -380,10 +380,10 @@ Pool mode routes across main plus added Codex credentials. Key rules:
   an omission has no row to carry a reason, catalog sync emits one warn-once line naming the
   cause — absent canonical OpenAI provider, explicitly disabled picker, empty selector map, or a
   map with no main-account target — and the action that restores it
-  (`src/codex/catalog/reserve-warn.ts`). It is scoped to an install where authless Codex Desktop
-  routing is effective, so an install that never opted in is never told about a Reserve row it
-  did not ask for. An install that stores the flag where it cannot take effect is a different
-  silence, reported as `inertReason` by `describeCodexDesktopSwitches` rather than repeated here.
+  (`src/codex/catalog/reserve-warn.ts`). It is scoped to an install where the Reserve capability
+  is effective (`isEffectiveCodexReserve`), so an install that never opted in is never told about
+  a Reserve row it did not ask for. An install that enables Reserve where it cannot take effect is
+  a different silence and is not repeated here.
 - **Rotation is sticky.** A conversation stays on its selected account while that account is
   usable; failure moves it, success does not (`src/codex/pool-rotation.ts`).
 - **A transient hold is probed half-open, never opened all at once.** While a bound account is

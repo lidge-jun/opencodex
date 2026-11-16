@@ -1104,6 +1104,14 @@ export interface OcxConfig extends OcxLinkHomeConfig {
    */
   codexDesktopAuthless?: boolean;
   /**
+   * Luna Reserve compatibility (#4961), independent of `codexDesktopAuthless`. Seeded once from that
+   * flag by the `codexReserveMigration` step; afterwards absent means off. Enabling it grants no
+   * entitlement: upstream Reserve permission, a non-client role and loopback admission still apply.
+   */
+  codexReserveEnabled?: boolean;
+  /** Internal one-time marker for the Reserve seed from `codexDesktopAuthless`. */
+  codexReserveMigration?: number;
+  /**
    * Opt into Codex-owned client compaction while keeping OpenCodex routing. On an authenticated
    * loopback bind, inject the dedicated `opencodex` model provider instead of overriding the
    * built-in `openai` provider, so Codex does not select native remote compaction. Default off.

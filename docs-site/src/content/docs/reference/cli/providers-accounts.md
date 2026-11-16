@@ -562,17 +562,24 @@ keeps Desktop's native Reserve-only picker gate inactive. It also disables Deskt
 Reserve handling: Reserve is an explicit model choice, not an automatic fallback.
 
 Keep the built-in OpenAI provider enabled in ChatGPT-forward mode, enable the account model picker,
-and configure a public selector for the stored main account. With effective loopback authless mode
-enabled, `ocx sync` includes `<main-selector>/gpt-reserve` alongside routed provider models. A bare
+and configure a public selector for the stored main account. With the Reserve setting
+(`codexReserveEnabled`) enabled on a loopback bind, `ocx sync` includes `<main-selector>/gpt-reserve` alongside routed provider models. A bare
 `gpt-reserve`, an added-account selector, and API-key model discovery are not added to the catalog.
-The authless setting is ignored for remote-client routing or a listener that needs an admission header.
+The Reserve setting is ignored for remote-client routing or a listener that needs an admission header.
 When public and local listeners run together, Reserve compatibility applies only to requests admitted
 by the local listener. An authenticated public request stays on the normal path even if it originates
 from the same machine; request headers cannot select the local policy.
 
-Enable authless Desktop mode with `ocx system settings --desktop-authless on`, run `ocx sync`,
-then fully quit and reopen Codex Desktop so it reloads the rewritten configuration and catalog.
-Follow the [canonical authless Desktop workflow](/guides/codex-integration/#authless-codex-desktop-opt-in).
+Enable Reserve with `ocx system settings --reserve on` (or `"codexReserveEnabled": true` in
+`config.json`), run `ocx sync`, then fully quit and reopen Codex Desktop so it reloads the rewritten
+catalog. Authless Desktop mode (`--desktop-authless on`) is a separate choice; see the
+[canonical authless Desktop workflow](/guides/codex-integration/#authless-codex-desktop-opt-in).
+
+Earlier versions enabled Reserve through the authless switch. An existing install keeps what it had:
+the first time this version writes `config.json` (or starts), it copies the authless value into
+`codexReserveEnabled` once and records `codexReserveMigration`. After that the two settings move
+independently, and removing `codexReserveEnabled` turns Reserve off rather than following authless
+again. Enabling the setting grants no entitlement; the checks below still decide every request.
 
 Each compatibility request checks a credential-bound server authorization, cached for at most
 60 seconds. OpenCodex sends the Reserve capability header on an owned main-account usage read and
