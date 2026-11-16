@@ -1266,6 +1266,7 @@
   "release-pipeline-contract.test.ts": "ci-workflows", "release-preflight.test.ts": "ci-workflows",
   "release-resume-identity.test.ts": "ci-workflows", "release-version-line.test.ts": "ci-workflows",
   "release-version-sources.test.ts": "ci-workflows", "release-windows-signing.test.ts": "ci-workflows",
+  "release-windows-signing-outcome.test.ts": "ci-workflows",
   "remote-catalog.test.ts": "clients",
   "remote-control-prototype.test.ts": "clients", "remote-workspace-activation.test.ts": "clients",
   "remote-workspace-agent-wire.test.ts": "clients", "remote-workspace-app-server.integration.test.ts": "clients",

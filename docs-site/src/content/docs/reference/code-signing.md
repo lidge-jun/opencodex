@@ -60,6 +60,12 @@ compare with `Get-FileHash <file> -Algorithm SHA256`.
 The desktop updater signature (`.msi.sig`) and `latest.json` are produced from the signed
 installer, so in-app updates install the same bytes the release page offers.
 
+Each release page states, under **Code signing**, whether that release's Windows files were
+actually signed. The statement comes from what the release run recorded for each file: a file
+counts as signed only when the run used the `release-signing` policy and the verified signed file
+replaced the unsigned one. A release whose run recorded no outcome says its Windows files are not
+code-signed. The SignPath attribution and the policy link appear on every release either way.
+
 ## For maintainers
 
 The release workflow (`.github/workflows/release.yml`) signs through the official

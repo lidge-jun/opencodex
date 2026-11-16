@@ -1366,6 +1366,16 @@
       ]
     },
     {
+      "path": "ops/windows-code-signing.md",
+      "tier": 6,
+      "title": "Windows Code Signing",
+      "scope": "SignPath Authenticode signing in the release legs and the per-release signing statement in the release body.",
+      "documents": [
+        ".github/",
+        "scripts/"
+      ]
+    },
+    {
       "path": "design-methodology.md",
       "tier": 6,
       "title": "Design Methodology For New Surfaces",

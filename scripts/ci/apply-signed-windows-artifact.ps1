@@ -14,6 +14,10 @@
 #   -Installer         Verify as an MSI, including every executable it installs.
 #   -UpdaterSignature  Regenerate <msi>.sig with "tauri signer sign" when TAURI_SIGNING_PRIVATE_KEY is set.
 #   -FailOnError       Throw instead of warning (the non-publishing signing test wants a red run).
+#
+# Step output: signed=true only after the verified signed file is in place, signed=false otherwise. The
+# release legs record it (scripts/ci/windows-signing-outcome.sh) so the release notes state whether this
+# release's Windows files were actually signed.
 [CmdletBinding()]
 param(
   [Parameter(Mandatory = $true)][string]$Target,
@@ -28,6 +32,10 @@ param(
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+
+function Write-SignedOutput([string]$Value) {
+  if ($env:GITHUB_OUTPUT) { Add-Content -LiteralPath $env:GITHUB_OUTPUT -Value "signed=$Value" }
+}
 
 function Write-Outcome([string]$Line) {
   Write-Host $Line
@@ -92,6 +100,7 @@ try {
     Copy-Item -LiteralPath $stagedSignature -Destination $signaturePath
   }
   Write-Outcome "$name is Authenticode-signed ($Trust trust)."
+  Write-SignedOutput "true"
 } catch {
   $reason = $_.Exception.Message
   if ($swapStarted) {
@@ -102,6 +111,7 @@ try {
       Copy-Item -LiteralPath $originalSignature -Destination $signaturePath
     }
   }
+  Write-SignedOutput "false"
   if ($FailOnError) { throw }
   Write-Host "::warning::$name ships unsigned: $reason"
   Write-Outcome "$name ships unsigned: $reason"

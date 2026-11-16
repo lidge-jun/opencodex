@@ -412,6 +412,7 @@ jobs:
           output-artifact-directory: ${{ runner.temp }}/signpath-signed-ocx
 
       - name: Swap in the verified signed Windows binary
+        id: swap-ocx
         if: steps.windows-signing.outputs.mode == 'sign'
         continue-on-error: true
         shell: pwsh
@@ -425,6 +426,29 @@ jobs:
             -SignedDirectory (Join-Path $env:RUNNER_TEMP "signpath-signed-ocx") `
             -SubmitOutcome "$env:SIGNPATH_OUTCOME" `
             -Trust $env:SIGNING_TRUST
+
+      # The release notes state whether this release's Windows files were actually signed (#7207). The record is written
+      # on every Windows run, signed or not, and only a release-trust plan whose verified swap succeeded records signed.
+      # Its artifact name matches neither standalone-* nor desktop-*, so it never becomes a release asset.
+      - name: Record the Windows signing outcome
+        if: always() && runner.os == 'Windows'
+        continue-on-error: true
+        shell: bash
+        env:
+          SIGNING_MODE: ${{ steps.windows-signing.outputs.mode }}
+          SIGNING_TRUST: ${{ steps.windows-signing.outputs.trust }}
+          SIGNED: ${{ steps.swap-ocx.outputs.signed }}
+        run: bash scripts/ci/windows-signing-outcome.sh standalone "$RUNNER_TEMP/windows-signing-outcome"
+
+      - name: Upload the Windows signing outcome
+        if: always() && runner.os == 'Windows'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-signing-outcome-standalone
+          path: ${{ runner.temp }}/windows-signing-outcome/standalone.json
+          if-no-files-found: error
+          retention-days: 7
 
 
       - name: Archive standalone release
@@ -810,6 +834,7 @@ jobs:
       # same key before swapping both in; verify-release then checks that signature against the
       # final MSI and writes latest.json from it.
       - name: Swap in the verified signed Windows installer
+        id: swap-msi
         if: steps.windows-signing.outputs.mode == 'sign' && steps.windows-msi.outcome == 'success'
         continue-on-error: true
         shell: pwsh
@@ -827,6 +852,29 @@ jobs:
             -Trust $env:SIGNING_TRUST `
             -Installer `
             -UpdaterSignature
+
+      # The release notes state whether this release's Windows files were actually signed (#7207). The record is written
+      # on every Windows run, signed or not, and only a release-trust plan whose verified swap succeeded records signed.
+      # Its artifact name matches neither standalone-* nor desktop-*, so it never becomes a release asset.
+      - name: Record the Windows signing outcome
+        if: always() && runner.os == 'Windows'
+        continue-on-error: true
+        shell: bash
+        env:
+          SIGNING_MODE: ${{ steps.windows-signing.outputs.mode }}
+          SIGNING_TRUST: ${{ steps.windows-signing.outputs.trust }}
+          SIGNED: ${{ steps.swap-msi.outputs.signed }}
+        run: bash scripts/ci/windows-signing-outcome.sh desktop "$RUNNER_TEMP/windows-signing-outcome"
+
+      - name: Upload the Windows signing outcome
+        if: always() && runner.os == 'Windows'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-signing-outcome-desktop
+          path: ${{ runner.temp }}/windows-signing-outcome/desktop.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Verify the packaged universal macOS runtime
         if: runner.os == 'macOS'
@@ -1624,6 +1672,16 @@ jobs:
           if [ "$RESUME" = true ] && [ -n "$existing_tag_sha" ]; then allow="--allow-existing-tag-at-head"; fi
           git tag --list 'v*' | bun scripts/version-line.ts assert-releasable "$RELEASE_VERSION" ${allow:+"$allow"}
 
+      # What the Windows legs recorded about signing (#7207). A failed download leaves no records, and the notes then
+      # claim no signature (scripts/release-signing-footer.ts).
+      - name: Download the Windows signing outcomes
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: windows-signing-outcome-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/windows-signing-outcome
+
       - name: Build and validate release changelog
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1632,7 +1690,8 @@ jobs:
           set -euo pipefail
           notes_file="$GITHUB_WORKSPACE/.release-notes.md"
           bun scripts/build-release-changelog.ts --version "$RELEASE_VERSION" --dist-tag "$NPM_DIST_TAG" \
-            --repository "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --out "$notes_file"
+            --repository "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --out "$notes_file" \
+            --windows-signing-outcomes "$RUNNER_TEMP/windows-signing-outcome"
           test -s "$notes_file"
 
       - name: Require publication hold to be enabled
