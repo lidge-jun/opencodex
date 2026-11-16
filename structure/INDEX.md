@@ -353,6 +353,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/config/schema/config-schema.ts` | [`transports/max-output-completion.md`](transports/max-output-completion.md)<br>[`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) |
 | `src/config/schema/leaf-validators.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`providers/hosted-tool-denials.md`](providers/hosted-tool-denials.md)<br>[`pricing.md`](pricing.md)<br>[`clients/omo-export-dialect.md`](clients/omo-export-dialect.md) |
 | `src/config/telemetry-carry.ts` | [`telemetry.md`](telemetry.md) |
+| `src/desktop-update/` | [`ops/desktop-supervision.md`](ops/desktop-supervision.md) |
 | `src/generated/` | [`runtime.md`](runtime.md) |
 | `src/github/` | [`runtime.md`](runtime.md) |
 | `src/grok/` | [`runtime.md`](runtime.md) |

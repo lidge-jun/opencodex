@@ -44,6 +44,12 @@ export interface BoundSystemRestartDeps {
   /** Invoking CLI version for the skew guard; defaults to this bundle's package version. */
   cliVersion?: string;
   readUpdateHome?: typeof readUpdateRestartHome;
+  /**
+   * The caller proved the runtime's image is the installed executable whose version is
+   * `cliVersion` (the headless Desktop updater, #8246). Its in-place respawn then runs those
+   * installed bytes, so a CLI-newer skew is the expected state rather than a reason to refuse.
+   */
+  respawnRunsInstalledImage?: boolean;
 }
 
 function rejected(code: string): ProxyRestartRequestOutcome {
@@ -162,7 +168,7 @@ export async function requestBoundSystemRestart(
     return rejected("restart_target_recheck_failed");
   }
   if (!sameRestartTarget(target, observed)) return rejected("restart_target_changed");
-  if (skew.relation === "cli-newer") {
+  if (skew.relation === "cli-newer" && !deps.respawnRunsInstalledImage) {
     if (!updateHome) return rejected("update_restart_home_unverified");
     try {
       if (JSON.stringify((deps.readUpdateHome ?? readUpdateRestartHome)()) !== JSON.stringify(updateHome)) {

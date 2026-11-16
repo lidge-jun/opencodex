@@ -1289,7 +1289,8 @@
         "src/service/orchestration.ts",
         "src/service/repair.ts",
         "src/update/index.ts",
-        "src/update/restart-ownership.ts"
+        "src/update/restart-ownership.ts",
+        "src/desktop-update/"
       ]
     },
     {
