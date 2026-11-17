@@ -20,8 +20,13 @@ beforeAll(() => {
     hostname: "127.0.0.1",
     port: 0,
     fetch(req, srv) {
+      const url = new URL(req.url);
+      if (url.pathname === "/to-public") return new Response(null, { status: 307, headers: { location: "https://chatgpt.com/backend-api/codex/responses" } });
+      if (url.pathname === "/to-local") return new Response(null, { status: 302, headers: { location: "/landed" } });
+      if (url.pathname === "/landed") return new Response(req.method + " landed");
       if (srv.upgrade(req, { data: undefined })) return undefined;
-      return new Response("local");
+      // A proxied request arrives in absolute form, naming the upstream host.
+      return new Response(url.hostname === "upstream.example" ? "proxied" : "local");
     },
     websocket: { open(ws) { ws.close(1000, "done"); }, message() {} },
   });
@@ -99,6 +104,33 @@ describe("the test network guard (#8848)", () => {
 
   test("a reserved .invalid name keeps its DNS failure", async () => {
     await expect(fetch("http://nothing.invalid/")).rejects.not.toThrow("test network guard");
+  });
+
+  test("a loopback redirect to a public host is refused; a local redirect is followed", async () => {
+    const base = `http://127.0.0.1:${server.port}`;
+    await expect(fetch(`${base}/to-public`, { method: "POST", body: "fixture" })).rejects.toMatchObject({ code: "ECONNREFUSED" });
+    const followed = await fetch(`${base}/to-local`, { method: "POST", body: "fixture" });
+    expect(await followed.text()).toBe("GET landed");
+    expect(followed.redirected).toBe(true);
+    expect(followed.url).toBe(`${base}/landed`);
+    // A caller that handles redirects itself still sees the 3xx.
+    const manual = await fetch(`${base}/to-public`, { redirect: "manual" });
+    expect(manual.status).toBe(307);
+    expect(manual.headers.get("location")).toBe("https://chatgpt.com/backend-api/codex/responses");
+  });
+
+  test("a public proxy is refused even for an allowed target; a loopback proxy passes", async () => {
+    await expect(fetch("http://fixture.test/", { proxy: "http://8.8.8.8:8080" } as RequestInit)).rejects.toMatchObject({ code: "ECONNREFUSED" });
+    const viaLocal = await fetch("http://upstream.example/", { proxy: `http://127.0.0.1:${server.port}` } as RequestInit);
+    expect(await viaLocal.text()).toBe("proxied");
+    const socket = new WebSocket(`ws://127.0.0.1:${server.port}/`, { proxy: "http://8.8.8.8:8080" } as never);
+    expect(socket.url).toBe(REFUSED_WEBSOCKET_URL);
+    socket.close();
+  });
+
+  test("schemes that reach the network without an HTTP host (s3:) are refused", async () => {
+    await expect(fetch("s3://fixture-bucket/key")).rejects.toMatchObject({ code: "ECONNREFUSED" });
+    expect(await (await fetch("data:text/plain,local")).text()).toBe("local");
   });
 });
 
