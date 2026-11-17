@@ -53,6 +53,7 @@ const STRUCTURED: ReadonlyArray<readonly [UpstreamCondition, ReadonlySet<string>
   ["model_unavailable", new Set(["model_not_found", "unsupported_model", "model_not_available", "model_not_supported", "deployment_not_found"])],
   ["rate_limited", new Set(["rate_limit_exceeded", "rate_limit_error", "too_many_requests", "throttling", "throttled", "rate_limited"])],
   ["upstream_unavailable", new Set(["server_is_overloaded", "overloaded_error", "service_unavailable", "unavailable"])],
+  ["upstream_failed", new Set(["upstream_reset_replay_refused", "upstream_closed_before_response", "upstream_no_response"])],
 ];
 
 // Context overflow from message text uses the same verdict the combo router trusts, so a validation

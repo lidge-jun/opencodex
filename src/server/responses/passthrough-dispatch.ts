@@ -794,7 +794,7 @@ export async function preparePassthroughExchange(
       if (allowed) replayGuard.authorize();
       return allowed;
     };
-    const claimPreHeaderResend = (): boolean => claimRecoveryResend("pre-header");
+    const claimPreHeaderResend = (): boolean => claimRecoveryResend("pre-header"); const isReplaySafe = (): boolean => parsed._compactionRequest === true || replayGuard.isSelfContained();
     /**
      * The one replacement send the ambiguous rows at the end of the recovery loop may buy: an SSE
      * body that died before any output, and a Codex WebSocket that died under its create frame
@@ -1047,7 +1047,7 @@ export async function preparePassthroughExchange(
           // Reporter path: direct requests and enforced spend. Receipt-mode sends are settled
           // by `onPhysicalDispatch`; a reporter as well would count them twice.
           ...(receiptMode ? {} : { onSendsConsumed: initialAccounting.report }),
-          claimAmbiguousResend: claimPreHeaderResend,
+          claimAmbiguousResend: claimPreHeaderResend, replaySafe: isReplaySafe(),
           // A combo fails over to another member instead of waiting once per target.
           offlineWait: options.comboAttempt ? undefined : createProviderOfflineResendWait(route.providerName, route.provider, request.url, config.offlineResendWaitSec),
         },
@@ -1184,7 +1184,7 @@ export async function preparePassthroughExchange(
           },
           { abortSignal: upstream.signal, label: safeHostLabel(request.url), destination: errorDestinationLabel(request.url), attempts: allowance.attempts,
             onSendsConsumed: recoveryAccounting.report,
-            claimAmbiguousResend: recovery === "empty-completion" ? undefined : claimPreHeaderResend },
+            claimAmbiguousResend: recovery === "empty-completion" ? undefined : claimPreHeaderResend, replaySafe: isReplaySafe() },
         );
       } catch (err) {
         return { failed: transportFailureResponse(err) };
@@ -1328,7 +1328,7 @@ export async function preparePassthroughExchange(
           },
           { abortSignal: upstream.signal, label: safeHostLabel(request.url), destination: errorDestinationLabel(request.url),
             attempts: remainingTransientSendBudget(transientSendAttempts()),
-            onSendsConsumed: transientSendReporter(), claimAmbiguousResend: claimPreHeaderResend },
+            onSendsConsumed: transientSendReporter(), claimAmbiguousResend: claimPreHeaderResend, replaySafe: isReplaySafe() },
         );
       } catch (err) {
         return transportFailureResponse(err);
@@ -1453,7 +1453,7 @@ export async function preparePassthroughExchange(
               .then(adoptObservedResponse);
           },
           { abortSignal: upstream.signal, label: safeHostLabel(request.url), destination: errorDestinationLabel(request.url), attempts: remainingTransientSendBudget(transientSendAttempts()),
-            onSendsConsumed: oauthReplayAccounting.report, claimAmbiguousResend: claimPreHeaderResend },
+            onSendsConsumed: oauthReplayAccounting.report, claimAmbiguousResend: claimPreHeaderResend, replaySafe: isReplaySafe() },
         );
       } catch (err) {
         return transportFailureResponse(err);
@@ -1603,7 +1603,7 @@ export async function preparePassthroughExchange(
               .then(adoptObservedResponse);
           },
           { abortSignal: upstream.signal, label: safeHostLabel(request.url), destination: errorDestinationLabel(request.url), attempts: remainingTransientSendBudget(transientSendAttempts()),
-            onSendsConsumed: failoverAccounting.report, claimAmbiguousResend: claimPreHeaderResend },
+            onSendsConsumed: failoverAccounting.report, claimAmbiguousResend: claimPreHeaderResend, replaySafe: isReplaySafe() },
         );
       } catch (err) {
         return transportFailureResponse(err);

@@ -248,7 +248,7 @@ export async function prepareAdapterExchange(
   const claimPreHeaderResend = (): boolean => authorizeResendForRecovery(
     "pre-header", "connection-reset",
     ambiguousResendAllowanceFor(route.provider, requestIsSelfContained, claimAmbiguousResend),
-  ).allowed;
+  ).allowed; const isReplaySafe = (): boolean => parsed._compactionRequest === true || requestIsSelfContained();
   const upstream = new AbortController();
   const cleanupUpstreamAbort = linkAbortSignal(upstream, options.abortSignal);
   /** Contain replacement negotiation before adapter admission and release its upstream abort link. */
@@ -524,7 +524,7 @@ export async function prepareAdapterExchange(
         {
           abortSignal: upstream.signal,
           label: safeHostLabel(builtInitialRequest.url), destination: errorDestinationLabel(builtInitialRequest.url),
-          claimAmbiguousResend: claimPreHeaderResend,
+          claimAmbiguousResend: claimPreHeaderResend, replaySafe: isReplaySafe(),
           offlineWait: options.comboAttempt ? undefined : createProviderOfflineResendWait(route.providerName, route.provider, builtInitialRequest.url, config.offlineResendWaitSec),
           ...(sendBudgetState.workflowRootId || sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
             || billingPoolRequest || autoPauseEnabled
@@ -810,7 +810,7 @@ export async function prepareAdapterExchange(
               {
                 abortSignal: upstream.signal,
                 label: safeHostLabel(retryRequest.url), destination: errorDestinationLabel(retryRequest.url),
-                claimAmbiguousResend: claimPreHeaderResend,
+                claimAmbiguousResend: claimPreHeaderResend, replaySafe: isReplaySafe(),
                 ...(refetchAllowance
                   ? {
                     attempts: refetchAllowance.attempts,

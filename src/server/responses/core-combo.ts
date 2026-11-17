@@ -141,7 +141,7 @@ import {
   streamingIncompleteResponse,
 } from "./context-overflow";
 import { mandatoryResponsesReasoningReplayUnavailable } from "./core-replay";
-import { isReplayRefusalResponse, settleOperatorReplacement, UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../../lib/upstream-retry";
+import { isNonReplayableResponse, isReplayRefusalResponse, settleOperatorReplacement, UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../../lib/upstream-retry";
 import { attributeFinalRequest } from "../request-log-failure-attribution";
 import { createComboProtocolLanes, dispatchNativeComboChild } from "./core-combo-native";
 import { createJevModelInvoker } from "./jev-model-invoke";
@@ -1447,7 +1447,7 @@ export async function executeComboResponses(
     toolChoiceRefusalsOnly = (toolChoiceRefusalsOnly ?? true) && isMandatoryToolChoiceRefusal(failure.response);
     // A real target failure ends the session pin; the next turn is decided afresh (#7525).
     jevPin?.forget();
-    if (!quotaFailure && (lastFailure.status === 429 || lastFailure.status === 402)) {
+    if (!quotaFailure && !isNonReplayableResponse(lastFailure) && !isReplayRefusalResponse(lastFailure) && (lastFailure.status === 429 || lastFailure.status === 402)) {
       quotaFailure = lastFailure;
       quotaFailedChildLog = childLog;
     }

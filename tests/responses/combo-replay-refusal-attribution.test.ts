@@ -13,6 +13,7 @@ import { clearAccountQuota, updateAccountQuota } from "../../src/codex/auth-api"
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { resendPermission } from "../../src/lib/request-failure-model";
 import { isReplayRefusalResponse, retainReplayRefusal } from "../../src/lib/upstream-retry";
+import { selfContainedResponsesBody } from "../../src/server/responses/reset-replay";
 import { consumeComboFailure } from "../../src/server/responses/core-combo-failure";
 import { runOptionalShutdownHooks } from "../../src/lib/optional-shutdown-hooks";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -182,3 +183,71 @@ for (const ingress of ["HTTP", "WebSocket"] as const) {
     });
   }
 }
+
+test("selfContainedResponsesBody recognises compaction item types as client input", () => {
+  expect(selfContainedResponsesBody({ store: false, input: [{ type: "compaction_trigger" }] })).toBe(true);
+  expect(selfContainedResponsesBody({ store: false, input: [{ type: "compaction_summary" }] })).toBe(true);
+  expect(selfContainedResponsesBody({ store: false, input: [{ type: "context_compaction" }] })).toBe(true);
+  expect(selfContainedResponsesBody({ store: true, input: [{ type: "compaction_trigger" }] })).toBe(false);
+});
+
+test("compaction request on combo hops past connection-reset target to succeeding target", async () => {
+  const config = {
+    port: 0,
+    defaultProvider: "fixture-a",
+    websockets: false,
+    providers: {
+      "fixture-a": { adapter: "openai-responses", baseUrl: "https://combo-fixture-a.invalid/v1", authMode: "key", apiKey: "key-a" },
+      "fixture-b": { adapter: "openai-responses", baseUrl: "https://combo-fixture-b.invalid/v1", authMode: "key", apiKey: "key-b" },
+    },
+    combos: {
+      compactionCombo: {
+        alias: "chain/compactor",
+        strategy: "failover",
+        targets: [
+          { provider: "fixture-a", model: "model-a" },
+          { provider: "fixture-b", model: "model-b" },
+        ],
+      },
+    },
+  } as unknown as OcxConfig;
+  saveConfig(config);
+  const server = startServer(0);
+  finishClient = async () => { await server.stop(true); };
+
+  const targetCalls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (new URL(url).hostname === "127.0.0.1" || new URL(url).hostname === "localhost") {
+      return originalFetch(input, init);
+    }
+    if (url.includes("combo-fixture-a")) {
+      targetCalls.push("fixture-a");
+      throw Object.assign(new Error("connection reset by peer"), { code: "ECONNRESET" });
+    }
+    if (url.includes("combo-fixture-b")) {
+      targetCalls.push("fixture-b");
+      return Response.json({
+        id: "resp_test",
+        status: "completed",
+        output: [{ type: "message", role: "assistant", content: [{ type: "output_text", text: "summary" }] }],
+      });
+    }
+    return originalFetch(input, init);
+  }) as typeof fetch;
+
+  const response = await originalFetch(new URL("/v1/responses", server.url), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      model: "chain/compactor",
+      store: false,
+      input: [{ type: "message", role: "user", content: "hello" }, { type: "compaction_trigger" }],
+    }),
+  });
+
+  expect(targetCalls).toEqual(["fixture-a", "fixture-b"]);
+  expect(response.status).toBe(200);
+  const json = await response.json() as { id: string; status: string };
+  expect(json.status).toBe("completed");
+});

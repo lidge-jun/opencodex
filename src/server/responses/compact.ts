@@ -1814,7 +1814,7 @@ export async function handleResponsesCompact(
   try {
     const inputItems = retention.input;
     const internalBody = {
-      ...raw,
+      ...raw, store: false,
       // Canonical ChatGPT Responses rejects non-streaming turns. Daybreak cannot use the
       // native compact endpoint either, so run its synthetic compaction as SSE and collapse
       // the completed event back into the v1 compact JSON contract below. Combo-dispatched
