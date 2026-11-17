@@ -154,6 +154,10 @@ export function publishConfigWrite<T>(configPath: string, held: LockHandle, run:
       destinations.set(held, after);
       // A payload-aware publisher records the digest of what it wrote; this re-read only
       // covers writers whose bytes this process never sees (a native child, the empty file).
+      // Known limit for a native child: the `codex` CLI renames its own file and exits, and this
+      // re-read runs after it exits, so a write by a non-OpenCodex process (the Codex app, an
+      // editor) landing between the child's rename and this line is recorded as OpenCodex's and a
+      // later compensation in the same section could revert it. The child cannot report its bytes.
       if (!payloadKnown) publishedConfigDigests.set(held, fileDigest(canonical));
       const watched = targets.get(held);
       if (watched) for (const [path, expected] of watched) if (expected.canonical === canonical) watched.set(path, after);

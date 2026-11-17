@@ -52,8 +52,12 @@ function readConfigOrNull(path: string): string | null {
  *
  * The lock excludes other OpenCodex writers and its inode witness refuses an atomic rename, which
  * is how Codex writes. Neither sees a writer that rewrites the file in place, and restore used to
- * rename over such a write and report success. Comparing the bytes immediately before the rename
- * refuses that too; a refusal writes nothing and is retryable.
+ * rename over such a write and report success. Comparing the bytes in `validateBeforeRename`
+ * refuses any write that landed before that comparison; a refusal writes nothing and is retryable.
+ *
+ * What it cannot do: an in-place write landing after the comparison and before the rename (the
+ * rename is the next system call) keeps the inode and is replaced. Closing that needs a
+ * replace-if-unchanged primitive the filesystem does not offer, so the window is narrowed, not closed.
  */
 export function publishCodexConfigIfUnchanged(held: LockHandle, site: CodexConfigPublishSite, expected: string | null, next: string): void {
   publishCodexArtifact(CODEX_CONFIG_PATH, held, (path, hooks) => atomicWriteFile(path, next, undefined, {

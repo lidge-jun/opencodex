@@ -23,10 +23,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { CODEX_CONFIG_PATH } from "./paths";
-import {
-  REALTIME_WS_BASE_URL_KEY,
-  rootTomlString,
-} from "./injected-marker";
+import { REALTIME_WS_BASE_URL_KEY } from "./injected-marker";
 
 export interface CodexConfigDrift {
   /**
@@ -79,16 +76,22 @@ export function codexConfigDrift(
   } catch {
     return { drifted: false, missingKeys: [] };
   }
+  // Presence comes from the parsed document, so a multiline assignment counts as present. A file
+  // that does not parse is present-unknown: nothing is reported missing and no heal is started.
+  let root: Record<string, unknown>;
+  try { root = Bun.TOML.parse(content.replace(/^\uFEFF/, "")) as Record<string, unknown>; }
+  catch { return { drifted: false, missingKeys: [] }; }
   const missingKeys: string[] = [];
   // Missing, or rewritten back to a value an EARLIER injection wrote (the Codex app restoring its
   // own older copy). Another value is the user's and stays out of this check.
   const drifted = (key: "openai_base_url" | typeof REALTIME_WS_BASE_URL_KEY, latest: string) => {
-    const value = rootTomlString(content, key);
-    return value === null || (value !== latest && (journal?.injectedRootValues?.[key] ?? []).includes(value));
+    if (!Object.hasOwn(root, key)) return true;
+    const value = root[key];
+    return typeof value === "string" && value !== latest && (journal?.injectedRootValues?.[key] ?? []).includes(value);
   };
   if (journaledBaseUrl && drifted("openai_base_url", journaledBaseUrl)) missingKeys.push("openai_base_url");
   if (journaledRealtimeWsUrl && drifted(REALTIME_WS_BASE_URL_KEY, journaledRealtimeWsUrl)) missingKeys.push(REALTIME_WS_BASE_URL_KEY);
-  if (journaledCatalogPath && rootTomlString(content, "model_catalog_json") === null) missingKeys.push("model_catalog_json");
+  if (journaledCatalogPath && !Object.hasOwn(root, "model_catalog_json")) missingKeys.push("model_catalog_json");
   return { drifted: missingKeys.length > 0, missingKeys };
 }
 

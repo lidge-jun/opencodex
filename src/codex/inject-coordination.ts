@@ -8,7 +8,7 @@ import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 
 import { publishCodexArtifact, publishCodexConfigIfUnchanged } from "./inject/config-write-section";
-import { configDigest, publishedConfigDigest, withConfigWriteLockHeld, type LockHandle } from "./config-write-lock";
+import { ConfigWriteContentChanged, configDigest, publishedConfigDigest, withConfigWriteLockHeld, type LockHandle } from "./config-write-lock";
 import { atomicWriteFile } from "../config";
 import type { CodexWriteLockResult, CodexWriteLockSkipReason } from "./codex-write-lock";
 import { HUB_GATED_SKIP_MESSAGE } from "./desired-state";
@@ -399,19 +399,22 @@ export function restoreCodexPreImages(
    * publication; any other bytes there belong to another writer. A direct call without a held lock
    * has no publication record and keeps the unconditional config restore it always had.
    */
-  const decide = (name: string, path: string, bytes: string | null, held: LockHandle | undefined): "skip" | "foreign" | "restore" => {
+  // Returns the bytes the decision was made on (undefined when unreadable), so the restore can
+  // refuse when the file changed after it was judged to be OpenCodex's.
+  type Decision = readonly ["skip" | "foreign" | "restore", (string | null)?];
+  const decide = (name: string, path: string, bytes: string | null, held: LockHandle | undefined): Decision => {
     let current: string | null;
     // An unreadable surface proves nothing; the guarded restore attempt reports it as unrestored.
-    try { current = readOrNull(path); } catch { return "restore"; }
-    if (current === bytes) return "skip";
+    try { current = readOrNull(path); } catch { return ["restore"]; }
+    if (current === bytes) return ["skip", current];
     if (name === "profile" && profilePublish
-      && (profilePublish.published === undefined || current !== profilePublish.published)) return "skip";
-    if (name !== "config") return "restore";
+      && (profilePublish.published === undefined || current !== profilePublish.published)) return ["skip", current];
+    if (name !== "config") return ["restore", current];
     const ours = held ? publishedConfigDigest(held) : undefined;
-    if (ours === undefined) return held ? "skip" : "restore";
-    return configDigest(current) === ours ? "restore" : "foreign";
+    if (ours === undefined) return [held ? "skip" : "restore", current];
+    return [configDigest(current) === ours ? "restore" : "foreign", current];
   };
-  if (surfaces.every(([name, path, bytes]) => decide(name, path, bytes, heldConfigWriteLock) === "skip")) {
+  if (surfaces.every(([name, path, bytes]) => decide(name, path, bytes, heldConfigWriteLock)[0] === "skip")) {
     return { complete: true, unrestored: [] };
   }
   const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, heldConfigWriteLock, held => {
@@ -420,12 +423,20 @@ export function restoreCodexPreImages(
     // The current journal remains recovery authority until both artifacts are restored.
     if (name === "journal" && unrestored.length > 0) { unrestored.push(name); continue; }
     try {
-      const need = decide(name, path, bytes, heldConfigWriteLock === undefined ? undefined : held);
+      const [need, decided] = decide(name, path, bytes, heldConfigWriteLock === undefined ? undefined : held);
       if (need === "skip") continue;
       if (need === "foreign") { unrestored.push(name); continue; }
       afterCompensationDecisionForTests?.(name);
-      if (name === "config" && bytes !== null && heldConfigWriteLock !== undefined) {
-        publishCodexConfigIfUnchanged(held, "compensate", readOrNull(path), bytes);
+      if (name === "config" && heldConfigWriteLock !== undefined) {
+        if (decided === undefined) throw new ConfigWriteContentChanged();
+        // Publish over, or remove, only the exact bytes judged to be this section's publication.
+        if (bytes !== null) { publishCodexConfigIfUnchanged(held, "compensate", decided, bytes); continue; }
+        publishCodexArtifact(path, held, (destination, hooks) => {
+          hooks.validateBeforeRename?.(destination);
+          if (readOrNull(destination) !== decided) throw new ConfigWriteContentChanged();
+          if (existsSync(destination)) require("node:fs").unlinkSync(destination);
+          hooks.afterRename?.(destination);
+        });
         continue;
       }
       publishCodexArtifact(path, held, (destination, hooks) => {
@@ -444,7 +455,7 @@ export function restoreCodexPreImages(
   if (locked.ok) return locked.value;
   // The section can no longer publish (its destination changed). Name only what still differs
   // from its preimage; a surface already holding it was not left partial.
-  const unrestored = surfaces.filter(([name, path, bytes]) => decide(name, path, bytes, heldConfigWriteLock) !== "skip").map(([name]) => name);
+  const unrestored = surfaces.filter(([name, path, bytes]) => decide(name, path, bytes, heldConfigWriteLock)[0] !== "skip").map(([name]) => name);
   if (unrestored.length > 0 && !unrestored.includes("journal")) unrestored.push("journal");
   return { complete: false, unrestored };
 }

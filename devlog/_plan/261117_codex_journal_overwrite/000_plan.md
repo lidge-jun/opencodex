@@ -66,3 +66,15 @@ Temporary homes only; never the real `~/.codex`/`~/.opencodex`; no config values
 - Residual: a native `codex` child's publication digest is a post-rename re-read; the strip-path rename race leaves the generated profile removed until a retry.
 - Subagents: research, plan audit r2, wp2 audit r2 and diff review r2 ran on codex / `morph/morph-dsv41flash-1017`. Plan audit r1, wp2 audit r1 and diff review r1 stalled or returned no verdict and were cancelled or retried.
 - CI on `d08070fa3a`: gates, structure gate, api usage, docker smoke, npm-global, storage policy, catalog async contracts, CodeRabbit and test shards 1, 3, 4 and 5 passed. Shard 2 failed in `tests/ci-workflows/file-size-ratchet.test.ts`: registering the two tests in `scripts/test-layout/layout.json` took it to 2,000 lines (`NEW_OVERSIZED`). They moved to the new shard `scripts/test-layout/layout-codex-journal.json`, which leaves `layout.json` at its `dev` length of 1,999.
+
+## CodeRabbit round on #8878 (wp5)
+
+| Thread | Disposition |
+|---|---|
+| inject-coordination removal path (Major) | Fixed: removing a config.toml this section created requires the file to still hold the exact bytes judged to be its publication. `compensate-remove-race` failed first at `618fccd98c`. |
+| journal reconcileJournal ConfigWriteContentChanged (Minor) | Fixed: start and mismatched-client recovery log, keep the journal and return false; the failed-connect rollback in `src/client/connect.ts` records a partial rollback. `start-recovery-race` and `client-recovery-race` failed first (child crashed). |
+| markJournalInjectedState history (Minor) | Fixed: the outgoing latest URLs go into `injectedRootHistory` before the overwrite. `legacy-history` failed first. |
+| drift multiline model_catalog_json (Minor) | Fixed: presence comes from the parsed document; an unparseable file reports nothing missing. Two unit cases failed first. |
+| inject-coordination re-read before publish (Minor) | Fixed: `decide` returns the bytes it hashed and the publisher compares against them. `compensate-replace-race` failed first. |
+| config-write-section guarantee (Minor) | Narrowed in the docstring, INV-RESTORE-02 and codex-home.md: a write between the final comparison and the rename is still replaced. No test, because one would have to assert the data loss. |
+| runConfigWriteChild post-rename digest (Major, heavy) | Documented as a known limit (`src/codex/config-write-lock.ts` comment, codex-home.md, PR body). The native `codex` CLI cannot report the bytes it wrote. The window runs from the child's own rename to OpenCodex's re-read after the child exits, under the OpenCodex lock, so only non-OpenCodex writers can land in it. Only a compensation later in the same section could then revert that write. |

@@ -148,8 +148,9 @@ still cover the rule, which is a judgement only review makes.
   Enforced by `tests/codex-integration/codex-catalog-restore.test.ts`.
 - **INV-RESTORE-02** — Restore never reverts a `config.toml` change made after injection: every
   stop, recovery and disconnect path removes only OpenCodex's own keys, a whole saved original is
-  replayed only over the byte-identical injected file, and a write landing mid-restore is refused,
-  never overwritten; see [codex-home.md](codex-home.md#codex-home).
+  replayed only over the byte-identical injected file, and a write that lands before the final
+  pre-rename comparison is refused, never overwritten (one landing between that comparison and the
+  rename is not detectable); see [codex-home.md](codex-home.md#codex-home).
   Enforced by `tests/codex-integration/codex-restore-later-edits.test.ts`.
 - **INV-TESTS-01** — `tests/` is organised by domain (`tests/<domain>/`, mirroring `src/`); the explicit map
   is `scripts/test-layout/layout.json` plus its `explicitShards` sibling maps, with regex seeds and migration state in
