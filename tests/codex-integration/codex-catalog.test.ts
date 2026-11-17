@@ -314,6 +314,26 @@ describe("combo catalog capability intersection", () => {
     expect(empty).not.toHaveProperty("defaultReasoningEffort");
   });
 
+  test("a JEV combo whose decision owns the effort advertises no effort ladder", () => {
+    // In `decide` mode the proxy overrides the caller's effort with the decision's, so a picker
+    // control on the row would be discarded. `client` leaves effort to the caller and keeps it.
+    const decide = deriveComboCatalogModel(
+      "jev-decide",
+      normalizedCombo({ strategy: "jev", jevEffortMode: "decide", defaultEffort: "medium" }),
+      [memberA, memberB],
+    );
+    expect(decide?.reasoningEfforts).toEqual([]);
+    expect(decide).not.toHaveProperty("defaultReasoningEffort");
+
+    const client = deriveComboCatalogModel(
+      "jev-client",
+      normalizedCombo({ strategy: "jev", jevEffortMode: "client", defaultEffort: "medium" }),
+      [memberA, memberB],
+    );
+    expect(client?.reasoningEfforts).toEqual(["low", "medium"]);
+    expect(client?.defaultReasoningEffort).toBe("medium");
+  });
+
   test("adaptive mode keeps the surviving ladder when a target advertises no effort control", () => {
     // The strict case above is the baseline: memberB's explicit [] empties the picker for
     // the whole combo. Adaptive is the opt-in that excludes it instead, so the effort
