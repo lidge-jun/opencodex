@@ -181,7 +181,8 @@ interface ResolvedContextLimits {
  */
 function devinRecordValue(record: Record<string, number> | undefined, modelId: string): number | null {
   const normalized = modelId.replace(/\./g, "-");
-  const collapsed = collapseDevinModelUid(normalized);
+  // Lower-case before collapsing so an upper-case effort suffix (SWE-1-7-MEDIUM) is removed too.
+  const collapsed = collapseDevinModelUid(normalized.toLowerCase());
   for (const key of new Set([modelId, collapseDevinModelUid(modelId), normalized, collapsed])) {
     const value = positive(modelRecordValue(record, key));
     if (value !== null) return value;

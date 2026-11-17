@@ -507,6 +507,7 @@ describe("devin adapter window fallback", () => {
       modelMaxInputTokens: { "SWE-1.7": 100_000 },
     };
     expect(resolveInputCeiling(provider, "devin", "swe-1-7-medium")).toBe(100_000);
+    expect(resolveInputCeiling(provider, "devin", "SWE-1-7-MEDIUM")).toBe(100_000);
   });
 
   test("non-devin adapters stay unresolved", () => {
