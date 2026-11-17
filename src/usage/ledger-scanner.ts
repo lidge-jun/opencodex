@@ -486,6 +486,12 @@ export async function scanUsageLedgerCooperatively(
 export interface ReadUsageLedgerRowsOptions {
   /** Ascending, distinct row-start offsets reported by an earlier scan of the same file. */
   offsets: readonly number[];
+  /**
+   * Folds rows as they are decoded instead of retaining them in `entries`. Callback work shares
+   * the cooperative time slice. Results are provisional until this read resolves: discard them
+   * if identity or content validation fails, as with the full-ledger scanner's callback.
+   */
+  onEntry?: (entry: PersistedUsageEntry, rowStartBytes: number) => void;
   /** Identity those offsets were captured under; a replaced file invalidates all of them. */
   expectedIdentityKey: string;
   /** Revision the offsets were captured under. Any movement re-validates the boundary. */
@@ -503,6 +509,7 @@ export interface ReadUsageLedgerRowsOptions {
 }
 
 export interface UsageLedgerRowRead {
+  /** Empty when an onEntry callback consumes the rows. */
   entries: PersistedUsageEntry[];
   /** Offsets that no longer frame a complete, normalizable row. */
   unreadableOffsets: number[];
@@ -626,27 +633,32 @@ export async function readUsageLedgerRowsAtOffsets(
       return null;
     };
 
-    const walk = (visit: (bytes: Buffer, offset: number) => boolean): number[] => {
+    const walk = async (visit: (bytes: Buffer, offset: number) => boolean): Promise<number[]> => {
       const unreadableOffsets: number[] = [];
+      let lastYieldAt = performance.now();
       for (const offset of options.offsets) {
         throwIfAborted(options.signal);
         if (!Number.isSafeInteger(offset) || offset < 0 || offset >= size) {
           unreadableOffsets.push(offset);
-          continue;
+        } else {
+          const bytes = lineAt(offset);
+          if (!bytes || !visit(bytes, offset)) unreadableOffsets.push(offset);
         }
-        const bytes = lineAt(offset);
-        if (!bytes) {
-          unreadableOffsets.push(offset);
-          continue;
+        // A bounded candidate count does not bound decoding or aggregation time. Include the
+        // visitor in the same slice as the full scanner, and let timers/cancellation run even
+        // within one page. A single row remains atomic.
+        if (performance.now() - lastYieldAt >= MAX_SCAN_SLICE_MS) {
+          await new Promise<void>(resolve => setTimeout(resolve, 0));
+          throwIfAborted(options.signal);
+          lastYieldAt = performance.now();
         }
-        if (!visit(bytes, offset)) unreadableOffsets.push(offset);
       }
       return unreadableOffsets;
     };
 
     const entries: PersistedUsageEntry[] = [];
     const captured = createHash("sha256");
-    const unreadableOffsets = walk((bytes, offset) => {
+    const unreadableOffsets = await walk((bytes, offset) => {
       captured.update(bytes);
       captured.update("\0");
       captured.update(String(offset));
@@ -660,7 +672,8 @@ export async function readUsageLedgerRowsAtOffsets(
       // normalizes means the ledger moved under the projection, so it is unreadable rather than
       // silently dropped: the caller rebuilds instead of reporting a smaller complete result.
       if (!entry) return false;
-      entries.push(entry);
+      if (options.onEntry) options.onEntry(entry, offset);
+      else entries.push(entry);
       return true;
     });
     const capturedDigest = captured.digest("hex");
@@ -675,6 +688,7 @@ export async function readUsageLedgerRowsAtOffsets(
     if (!pathRevision || usageLogIdentityKey(pathRevision) !== options.expectedIdentityKey) {
       throw rebuildRequired("identity_mismatch");
     }
+    if (pathRevision.size < size) throw rebuildRequired("shrink");
     // Any write during the read can be an in-place rewrite, not just an append. Re-read the
     // same offsets and compare, so a rewrite that lands between two batches cannot publish a
     // mixture of old and new rows. A pure append leaves every selected row unchanged.
@@ -686,8 +700,11 @@ export async function readUsageLedgerRowsAtOffsets(
       if (physical !== undefined && endingRevision.size <= physical) {
         throw rebuildRequired("content_changed");
       }
+      // Verification must read the file again, not re-hash a small page still in the read cache.
+      windowStart = -1;
+      windowLength = 0;
       const verified = createHash("sha256");
-      const recheck = walk((bytes, offset) => {
+      const recheck = await walk((bytes, offset) => {
         verified.update(bytes);
         verified.update("\0");
         verified.update(String(offset));
@@ -697,7 +714,24 @@ export async function readUsageLedgerRowsAtOffsets(
         || verified.digest("hex") !== capturedDigest) {
         throw rebuildRequired("content_changed");
       }
+      const verifiedFdRevision = revisionFromStat(path, fd, fstatSync(fd));
+      const verifiedPathRevision = currentUsageLogRevision();
+      if (!verifiedPathRevision
+        || usageLogIdentityKey(verifiedFdRevision) !== options.expectedIdentityKey
+        || usageLogIdentityKey(verifiedPathRevision) !== options.expectedIdentityKey) {
+        throw rebuildRequired("identity_mismatch");
+      }
+      if (verifiedFdRevision.size < size || verifiedPathRevision.size < size) {
+        throw rebuildRequired("shrink");
+      }
+      // Verification yields too. A later write could change bytes already checked, so retry
+      // rather than publish a result whose verification raced another mutation.
+      if (usageLogRevisionKey(verifiedFdRevision) !== usageLogRevisionKey(endingRevision)
+        || usageLogRevisionKey(verifiedPathRevision) !== usageLogRevisionKey(pathRevision)) {
+        throw rebuildRequired("content_changed");
+      }
     }
+    throwIfAborted(options.signal);
     return { entries, unreadableOffsets };
   } finally {
     closeSync(fd);

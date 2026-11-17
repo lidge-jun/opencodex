@@ -477,14 +477,18 @@ async function accumulateCandidates(
   try {
     let first = true;
     for (;;) {
-      // Candidate selection and row decoding are synchronous bounded chunks. A timer yield
-      // between them prevents a broad authenticated query from monopolizing the event loop.
+      // Candidate selection is synchronous and bounded. Row decoding and accumulation also
+      // yield within each page; keep the page-boundary yield for cheap rows and SQL work.
       if (!first) await new Promise<void>(resolve => setTimeout(resolve, 0));
       const offsets = read.nextPage();
       if (!first && offsets.length === 0) break;
       first = false;
       const rows = await readUsageLedgerRowsAtOffsets({
         offsets,
+        // This accumulator is private to the rebuild/append attempt and is discarded if the
+        // reader's final validation fails. Fold inside its time slice instead of retaining a
+        // page of parsed rows and then aggregating all of them in one synchronous turn.
+        onEntry: entry => accumulator.add(entry),
         expectedIdentityKey: read.snapshot.identityKey,
         // The offsets belong to this index snapshot. If the ledger moved since the snapshot,
         // the reader re-validates the boundary before trusting any of them, and a rewrite of
@@ -499,7 +503,6 @@ async function accumulateCandidates(
         // Serving only the rows that happened to parse would silently under-report the filter.
         throw new UsageFilterIndexCorruptError();
       }
-      for (const entry of rows.entries) accumulator.add(entry);
       if (offsets.length === 0) break;
     }
   } finally {

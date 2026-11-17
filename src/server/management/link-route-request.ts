@@ -5,7 +5,8 @@
  * none), so a probe made by another caller with another route can never be confirmed or applied here.
  */
 import { checkExplicitRoute, IDENTITY_FILE_GUIDANCE, identityFileProblem, sameExplicitRoute, type ExplicitRoute } from "../../link/explicit-route";
-import { fail, isRecord } from "./link-route-state";
+import type { ManagementContext } from "./context";
+import { adminLoopback, fail, isRecord, pairedSession } from "./link-route-state";
 
 export interface RouteRequest {
   explicitRoute: ExplicitRoute | null;
@@ -15,11 +16,12 @@ export interface RouteRequest {
 export const NO_ROUTE_REQUEST: RouteRequest = { explicitRoute: null, exclusive: false };
 
 /**
- * The body without the route keys, and the route it asked for; a refusal is a 400 before any SSH. Only the form is checked
- * here: the identity file itself is checked by identityFileRefusal where a request is about to run SSH, so a repeat of a
- * journalled apply replays its recorded outcome (or answers operation_mismatch) whatever its key file looks like now.
+ * The body without the route keys, and the route it asked for. Invalid forms receive a 400 before any SSH; a supplied
+ * command then requires owner-backed authority. The identity file itself is checked by
+ * identityFileRefusal where a request is about to run SSH, so an authorized repeat of a journalled apply replays its
+ * recorded outcome (or answers operation_mismatch) whatever its key file looks like now.
  */
-export function splitRouteRequest(value: unknown): { body: unknown; route: RouteRequest } | { error: Response } {
+export function splitRouteRequest(value: unknown, ctx: ManagementContext): { body: unknown; route: RouteRequest } | { error: Response } {
   if (!isRecord(value) || (!("explicitRoute" in value) && !("exclusive" in value))) return { body: value, route: NO_ROUTE_REQUEST };
   const { explicitRoute, exclusive, ...body } = value;
   if (exclusive !== undefined && exclusive !== true) return { error: fail("invalid_body", "exclusive must be true when present.", 400) };
@@ -29,6 +31,10 @@ export function splitRouteRequest(value: unknown): { body: unknown; route: Route
     if (!checked.ok) return { error: fail("invalid_explicit_route", "explicitRoute must be {proxyCommand, user, port} with an optional identityFile, in the accepted form.", 400, checked.reason) };
     route = checked.route;
     if (exclusive !== true) return { error: fail("explicit_route_requires_exclusive", "A link with an explicit route must be exclusive.", 400) };
+    // A loopback bootstrap proves no ownership of the executable supplied in ProxyCommand.
+    if (!pairedSession(ctx) && !adminLoopback(ctx)) {
+      return { error: fail("forbidden", "An explicit SSH route requires an operator-paired dashboard session or a trusted loopback admin token.", 403) };
+    }
   }
   return { body, route: { explicitRoute: route, exclusive: exclusive === true } };
 }

@@ -63,20 +63,30 @@ describe.skipIf(process.platform === "win32")("message MCP CLI", () => {
     } finally {await client.close();await f.close();}
   }, 15000);
 
-  test("wait requests share the four-operation bound and disconnect cancels paused waits",async()=>{
-    const f=queueMcpFixture("reply-wait-empty");
+  test("wait requests share the four-operation bound and disconnect cancels blocked waits",async()=>{
+    const f=queueMcpFixture("reply-wait-bound-barrier");
     const client=new Client({name:"fixture",version:"1"});
     const transport=new StdioClientTransport({command:process.execPath,
       args:[repoPath("src/cli/index.ts"),"message","mcp","--codex",f.options.codex,"--codex-home",f.options.codexHome,"--allow-reply-read"],stderr:"pipe"});
     const pending:Promise<unknown>[]=[];
+    let settled=0;
+    const blocked=()=>f.calls().filter(c=>c.frame.method === "thread/items/list" && c.frame.params?.turnId);
     try {
       await client.connect(transport);
-      for(let i=0;i<4;i++) pending.push(client.callTool({name:"codex_wait_reply",arguments:{threadId:QUEUE_MCP_TARGET,clientMessageId:REPLY_MCP_CLIENT}}).catch(e=>e));
+      for(let i=0;i<4;i++) pending.push(client.callTool({name:"codex_wait_reply",arguments:{threadId:QUEUE_MCP_TARGET,clientMessageId:REPLY_MCP_CLIENT}}).catch(e=>e).finally(()=>{settled++;}));
       const until=performance.now()+5_000;
-      while(f.calls().filter(c=>c.frame.method === "thread/turns/list").length<4 && performance.now()<until) await Bun.sleep(10);
-      expect(f.calls().filter(c=>c.frame.method === "thread/turns/list")).toHaveLength(4);
+      // Repeated snapshots are not four live operations. Each distinct helper is held on its first reply RPC.
+      while(blocked().length<4 && performance.now()<until) await Bun.sleep(10);
+      expect(blocked()).toHaveLength(4);
+      const blockedPids=new Set(blocked().map(c=>c.pid));
+      expect(blockedPids.size).toBe(4);
+      expect(settled).toBe(0);
+      for(const pid of blockedPids) expect(()=>process.kill(pid,0)).not.toThrow();
       expect((await client.callTool({name:"codex_wait_reply",arguments:{threadId:QUEUE_MCP_TARGET,clientMessageId:REPLY_MCP_CLIENT}})).isError).toBe(true);
+      expect(blocked()).toHaveLength(4);
+      expect(settled).toBe(0);
       await client.close();await Promise.allSettled(pending);
+      expect(settled).toBe(4);
       const count=f.calls().length;await Bun.sleep(100);expect(f.calls()).toHaveLength(count);
       for(const pid of new Set(f.calls().map(c=>c.pid))) expect(()=>process.kill(pid,0)).toThrow();
     } finally {await client.close();await Promise.allSettled(pending);await f.close();}
