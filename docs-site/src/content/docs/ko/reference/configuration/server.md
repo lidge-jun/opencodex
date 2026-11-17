@@ -220,6 +220,7 @@ Codex는 제목과 커밋 메시지 같은 작업에 작은 보조 모델을 사
 | --- | --- | --- | --- |
 | `provider?` | `string` | automatic OpenAI selection | `/v1/images/generations`와 `/v1/images/edits`에 사용하는 명시적인 custom API-key `openai-responses` provider입니다. registry-managed ids는 거부됩니다. |
 | `timeoutMs?` | `number` | `300000` | 단일 standalone Images 요청 하나에 대한 전체 요청 제한 시간입니다. |
+| `videoProvider?` | `string` | xAI | 자체 `baseUrl`과 키로 대화 중 `video_gen` 브리지를 처리하는 API 키 제공자. `xai`는 `https://api.x.ai/v1`에 고정되고 다른 레지스트리 ID는 거부됩니다. 사용할 수 없는 값은 각 `video_gen` 호출에 오류를 반환하고 아무것도 보내지 않습니다. [영상 브리지](/ko/guides/video-bridge/#영상-제공자-선택) 참고. |
 
 명시적으로 선택하면 provider가 없거나, 비활성화되어 있거나, 호환되지 않거나, 사용할 수 있는 키가 없을 때는 닫힌 상태로 실패하며, 다른 유료 업스트림으로 절대 폴백하지 않습니다. 이 엔드포인트는 Codex가 기대하는 OpenAI Images API 경로와 응답 형식을 구현해야 합니다.
 

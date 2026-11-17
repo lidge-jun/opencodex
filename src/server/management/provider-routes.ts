@@ -42,7 +42,7 @@ import {
 import { commitProviderPatch } from "./provider-patch-transaction";
 import { captureConfigTopLevelRollback } from "../../config/rebase-provenance";
 import { canonicalAutoReviewModelKey, mergeModelPinnedEfforts, modelPinnedEffortsConfigError, pinnedReasoningEffortConfigError } from "../../config/provider-validation";
-import { replaceProviderAccountSet } from "../../oauth/store";
+import { releaseRemovedProviderCredentials } from "./provider-credential-release";
 import { captureModelsOAuthTarget, mayResolveModelsOAuth, modelsOAuthTargetMatches } from "../../oauth/model-discovery-auth";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
@@ -1655,10 +1655,10 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       return jsonResponse(await probeJevDecisionProvider(config, name, { signal: req.signal }));
     }
     if (prov.liveModels === false) {
-      // A static catalog has no live discovery endpoint to test. This is neither
-      // positive connectivity evidence nor an outage, and it must stay before
-      // credential resolution/network access for providers such as Antigravity.
-      return jsonResponse({ applicable: false, reason: "static_catalog", latencyMs: 0 });
+      // No live discovery endpoint. Only Vertex ADC still has a credential to verify; every other
+      // static catalog must stay before credential resolution/network access (e.g. Antigravity).
+      const { staticCatalogConnectionTest } = await import("./static-catalog-probe");
+      return jsonResponse(await staticCatalogConnectionTest(name, prov, req.signal));
     }
     const { buildModelsRequest, getModelsOAuthAccessSnapshot, resolveModelsAuthToken } = await import("../../oauth");
     const antigravity = effectiveGoogleMode(name, prov) === "cloud-code-assist";
@@ -1865,7 +1865,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // Deleting still succeeds; the response names the shadow-call target left without a provider.
     const shadowDependency = shadowInterceptProviderDependency(config, name);
     const droppedCustomModels = removeProviderWithGcpCredentials(config, name, fallbackDefault, save);
-    await replaceProviderAccountSet(name, null);
+    await releaseRemovedProviderCredentials(config, name);
     reconcileLiveStateStores();
     const { clearModelCache: clearCache } = await import("../../codex/model-cache");
     clearCache(name);

@@ -42,6 +42,7 @@ import { declaresThinkingToggleWire, reasoningControlsAreUnsupported } from "./r
 import { applyAgentRouterLanguageFraming, isAgentRouterEndpoint } from "./agentrouter";
 import { anthropicCacheWrite1hTokens, resolveAnthropicCacheRetention, type AnthropicCacheRetention } from "./anthropic/cache-retention";
 import { advisorServerExchange, advisorServerToolDestination, planAnthropicServerTools } from "./anthropic/advisor-tool";
+import { applyAnthropicPerMessageEffort } from "./anthropic/per-message-effort";
 import { claudeFamilyVersion, rejectsCombinedSampling, rejectsForcedToolChoice, rejectsSamplingParameters, supportsExplicitThinkingDisable, usesAdaptiveThinking, usesBetweenToolsFloor } from "./anthropic-model-contract";
 
 /** Map a user content part to an Anthropic content block (text or image source). */
@@ -1320,6 +1321,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       });
       enforceCacheControlLimit(body, explicitLimit);
       normalizeTtlOrdering(body);
+      // Experimental, default off (#6895): pin the top-level effort and carry changes as effort messages.
+      applyAnthropicPerMessageEffort({ provider, parsed, incoming, body, headers, url, isOAuth, chatLineage: resolveTranslatedAnthropicSessionKey(parsed, incoming) });
 
       const request = {
         url,

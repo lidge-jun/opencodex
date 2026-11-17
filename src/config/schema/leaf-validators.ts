@@ -463,8 +463,10 @@ export const providerConfigSchema = z.object({
   }).strict().optional(),
   responsesSnapshotRepair: z.boolean().optional(),
   messagePhaseInference: z.boolean().optional(),
+  estimateMissingUsage: z.boolean().optional(),
   hideRawReasoning: z.boolean().optional(),
   forwardAdvisorTool: z.boolean().optional(),
+  perMessageEffort: z.boolean().optional(),
   // Invalid blocks degrade to "absent" rather than failing the whole config load: an unusable
   // bridge block must never send an operator through invalid-config recovery for an opt-in
   // feature that is off by default. The management write boundary still rejects it loudly.

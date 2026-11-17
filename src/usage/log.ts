@@ -1492,17 +1492,27 @@ function usageLogRevision(path: string, fd: number, stat: ReturnType<typeof fsta
   };
 }
 
-export function usageLogRevisionKey(revision: UsageLogRevision | null): string {
+/**
+ * ChangeTime is part of the key on POSIX only. On NTFS the config home's background icacls
+ * harden re-applies inherited ACEs to usage.jsonl and moves its ChangeTime with every other
+ * field unchanged, and content cannot change without moving mtime; counting it rebuilt the
+ * filter index and every retained aggregate. On POSIX it still exposes an mtime-restoring rewrite.
+ */
+export function usageLogRevisionKey(
+  revision: UsageLogRevision | null,
+  platform: NodeJS.Platform = process.platform,
+): string {
   if (!revision) return "missing";
-  return [
+  const parts: Array<string | number> = [
     revision.path,
     revision.dev,
     revision.ino,
     revision.birthtimeMs,
     revision.size,
     revision.mtimeMs,
-    revision.ctimeMs,
-  ].join("\0");
+  ];
+  if (platform !== "win32") parts.push(revision.ctimeMs);
+  return parts.join("\0");
 }
 
 /** Identity of the usage ledger file, excluding size/mtime/ctime so appends can share work. */

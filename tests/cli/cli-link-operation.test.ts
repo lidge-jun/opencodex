@@ -317,10 +317,11 @@ describe("closed guidance for the refusals of a journalled revoke (O1c)", () => 
   });
 
   // Generic codes still get a next step; where a path's answer differs, the text says what a repeat's answer means (the
-  // table in structure/remote-link.md). link_changed can come from a stale retirement receipt that no repeat clears (#8678).
+  // table in structure/remote-link.md). link_changed can come from a stale retirement receipt that no repeat clears; a current
+  // Home refuses the route edit that left one (#8678), so the text names an older Home's edit or one by hand.
   test.each([
     ["operation_journal_failed", 500, 1, ["then repeat the revoke with the same operation id", "if that answers link_retirement_owned", "this id may still own the removal"]],
-    ["link_changed", 409, 5, ["no longer matches", "ocx link status", "repeat the revoke with the same operation id", "If it answers link_changed again", "ocx link routes", "A new operation id can remove it only when no unfinished removal"]],
+    ["link_changed", 409, 5, ["no longer matches", "ocx link status", "repeat the revoke with the same operation id", "If it answers link_changed again", "ocx link routes on an older Home", "or by hand", "A new operation id can remove it only when no unfinished removal"]],
   ])("%s names a next step, conditional where a repeat can answer the same code, and claims nothing about state", async (code, status, exit, parts) => {
     const h = harness([{ status, body: { error: { code, message: "server-chosen text" } } }]); try {
       expect(await runLinkCommand(["revoke", "--link-id", LINK, "--purge", "--operation-id", "detach-12"], h.deps)).toBe(exit);

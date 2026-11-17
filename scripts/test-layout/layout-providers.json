@@ -5,6 +5,7 @@
   "provider-capability-probe.test.ts": "providers",
   "provider-capability-probe-provenance.test.ts": "server",
   "provider-passive-wire-model.test.ts": "providers",
+  "video-outbound-destination.test.ts": "videos",
   "passive-key-observation.test.ts": "providers",
   "claude-chat-gateway-tool-schema.test.ts": "providers",
   "provider-anthropic-usage-windows.test.ts": "providers",
