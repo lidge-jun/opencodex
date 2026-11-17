@@ -175,14 +175,25 @@ interface ResolvedContextLimits {
 /**
  * Devin spells one model dotted in catalog families (`swe-1.7`) and hyphenated in uids
  * (`swe-1-7`), with optional effort suffixes (`swe-2-flash-medium`). A per-model record is
- * matched on the exact id first, then the effort-collapsed id, then both hyphenated forms, so
+ * matched on the exact id first, then the effort-collapsed id, then both hyphenated forms, and
+ * finally on record keys folded the same way (`swe-1.7` serves a `swe-1-7-medium` request), so
  * an operator override on any of those spellings binds before a provider-wide default.
  */
 function devinRecordValue(record: Record<string, number> | undefined, modelId: string): number | null {
   const normalized = modelId.replace(/\./g, "-");
-  for (const key of new Set([modelId, collapseDevinModelUid(modelId), normalized, collapseDevinModelUid(normalized)])) {
+  const collapsed = collapseDevinModelUid(normalized);
+  for (const key of new Set([modelId, collapseDevinModelUid(modelId), normalized, collapsed])) {
     const value = positive(modelRecordValue(record, key));
     if (value !== null) return value;
+  }
+  if (!record) return null;
+  // Exact spellings missed; fold dotted record keys only now so an exact key always wins.
+  for (const target of new Set([normalized, collapsed])) {
+    for (const [key, raw] of Object.entries(record)) {
+      if (key.replace(/\./g, "-") !== target) continue;
+      const value = positive(raw);
+      if (value !== null) return value;
+    }
   }
   return null;
 }

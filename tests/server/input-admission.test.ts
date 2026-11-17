@@ -489,6 +489,18 @@ describe("devin adapter window fallback", () => {
     expect(checkComboTargetInputAdmission(devinRequest(200_000, "swe-1.7-medium"), provider, "devin", "swe-1.7-medium").admitted).toBe(false);
   });
 
+  test("a hyphenated id honors overrides keyed by the dotted spelling", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "devin", baseUrl: "https://devin.test", contextWindow: 900_000,
+      modelContextWindows: { "swe-1.7": 111_000 },
+      modelMaxInputTokens: { "swe-1.7": 100_000 },
+    };
+    expect(resolveInputCeiling(provider, "devin", "swe-1-7-medium")).toBe(100_000);
+    expect(checkComboTargetInputAdmission(devinRequest(150_000, "swe-1-7-medium"), provider, "devin", "swe-1-7-medium").admitted).toBe(false);
+    const windowOnly: OcxProviderConfig = { ...provider, modelMaxInputTokens: undefined };
+    expect(resolveInputCeiling(windowOnly, "devin", "swe-1-7")).toBe(111_000);
+  });
+
   test("non-devin adapters stay unresolved", () => {
     const other: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://example.test/v1" };
     expect(resolveInputCeiling(other, "custom", "swe-2-flash")).toBeNull();
