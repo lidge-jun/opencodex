@@ -682,12 +682,15 @@ label. Later fallback targets use ordinary Combo policy from the original reques
 
 A turn is usually several requests: the model calls a tool, the client runs it, and the next request
 returns the result. Those tool-call continuations stay on the turn's target without another decision
-call, and in `decide` mode they keep the effort JEV chose for the turn. In `client` mode they use the
-caller's effort like every other request.
+call, and in `decide` mode they keep the effort JEV chose for the turn. In `client` mode they use
+ordinary Combo effort policy like every other request: the caller's effort, unless
+`defaultEffortMode` is `"force"`.
 
 Since JEV sets the effort in `decide` mode, the Combo's catalog row advertises no effort levels and
-clients show no effort control for it. A fallback target, which JEV did not choose, runs at the
-Combo's `defaultEffort` when one is set and at the provider default otherwise. `client` mode keeps
+clients show no effort control for it. A fallback target, which JEV did not choose, uses ordinary
+Combo effort policy. A caller effort takes precedence unless `defaultEffortMode` is `"force"`. Without
+one, the Combo's `defaultEffort` applies when set, and the provider default applies otherwise. A
+continuation of a turn that a fallback target answered follows the same policy. `client` mode keeps
 the effort levels its targets share.
 
 After the Combo has served requests, open **Models → Combos → jev-auto → Stats** to inspect JEV's
