@@ -1,4 +1,5 @@
 import { assertWorkBuddyDestination } from "../providers/workbuddy";
+import { assertCodeBuddyAiDestination } from "../providers/codebuddy-ai";
 import type { OcxProviderConfig } from "../types";
 import { isBuiltinAnthropicInstanceRow } from "../providers/anthropic-instance";
 import { resolveProviderModelDiscoveryUrl } from "../providers/model-discovery";
@@ -12,6 +13,10 @@ export function mayResolveModelsOAuth(name: string, provider: OcxProviderConfig 
   if (name === "workbuddy-ai" || provider?.adapter === "workbuddy-ai") {
     if (name !== "workbuddy-ai" || provider?.adapter !== "workbuddy-ai" || provider.disabled) return false;
     try { assertWorkBuddyDestination(provider.baseUrl); return true; } catch { return false; }
+  }
+  if (name === "codebuddy-ai" || provider?.adapter === "codebuddy-ai") {
+    if (name !== "codebuddy-ai" || provider?.adapter !== "codebuddy-ai" || provider.disabled) return false;
+    try { assertCodeBuddyAiDestination(provider.baseUrl); return true; } catch { return false; }
   }
   return name !== "anthropic2" || (provider !== undefined && provider.disabled !== true
     && isBuiltinAnthropicInstanceRow(name, provider));

@@ -7,7 +7,7 @@ Esta página contiene la sección 3 de la guía de [Proveedores](/es/guides/prov
 con clave API incluidos y las notas específicas de cada proveedor. Los modos de autenticación, los inicios de sesión
 de cuentas y los proveedores locales siguen en esa página.
 
-opencodex incluye 108 preajustes integrados: 87 con clave, 17 OAuth, tres locales y uno predeterminado de reenvío a ChatGPT. El selector **Añadir proveedor** abre el formulario del proveedor con clave, valida la credencial y la guarda; cada proveedor tiene su propia validación. Entre ellos:
+opencodex incluye 109 preajustes integrados: 87 con clave, 18 OAuth, tres locales y uno predeterminado de reenvío a ChatGPT. El selector **Añadir proveedor** abre el formulario del proveedor con clave, valida la credencial y la guarda; cada proveedor tiene su propia validación. Entre ellos:
 
 **ClinePass** utiliza una clave API de Cline con el [catálogo oficial de suscripción](https://docs.cline.bot/getting-started/clinepass) y el [punto final de Chat Completions](https://docs.cline.bot/api/chat-completions), operados por Cline Bot Inc. bajo [los términos de Cline](https://cline.bot/tos). Un id enrutado como `cline-pass/cline-pass/kimi-k3` es intencional: el primer segmento selecciona el proveedor de opencodex, mientras que `cline-pass/kimi-k3` es el identificador de modelo completo que se envía aguas arriba. La cuota de ClinePass se comparte por cuenta entre límites rotativos de 5 horas, semanales y mensuales. Una sonda en vivo del 2026-08-13 verificó que todos los modelos estáticos de ClinePass aceptan `low`, `medium`, `high`, `xhigh` y `max` en el límite de entrada de la pasarela. opencodex conserva los niveles solicitados; cualquier normalización específica del backend sigue siendo responsabilidad de ClinePass.
 
@@ -254,6 +254,22 @@ Completa el inicio de sesión en el navegador. OpenCodex consulta la autorizaci�
 Los modelos y capacidades proceden del catálogo de productos de tu cuenta. Después de iniciar sesión, elige un modelo `workbuddy-ai/<model-id>`; si el descubrimiento no está disponible, se ofrece `workbuddy-ai/default-model` como selector de respaldo. El streaming, las herramientas y las respuestas almacenadas usan el endpoint Chat de WorkBuddy. Las pestañas Resumen y Cuentas muestran créditos restantes, usados y totales, saldos base y de regalo y los próximos créditos no diarios que caducan, cuando esa información está disponible. Actualizar consulta el resumen de facturación de la cuenta; una lectura fallida no significa saldo cero. Los créditos son informativos: agotarlos no desactiva los modelos gratuitos.
 
 Se utiliza un protocolo de suscripción no oficial basado en el [plugin WorkBuddy de Magpie](https://github.com/magpie-community/plugins/tree/e7f65641df820dfd715c0d2241f99f2092e4efb1/packages/workbuddy). Las restricciones del canal del cliente o de la cuenta se devuelven al solicitante. OpenCodex no reescribe instrucciones de identidad del agente para evitarlas. La disponibilidad depende de tu cuenta, región, permisos de modelo y la API vigente de WorkBuddy. Es independiente de los proveedores CodeBuddy CLI con clave API y no conecta el cliente WorkBuddy Desktop a OpenCodex.
+
+<a id="codebuddy-ai-subscription"></a>
+
+## Suscripción CodeBuddy AI
+
+`codebuddy-ai` conecta tu suscripción internacional de CodeBuddy AI como proveedor de modelos. Elige **CodeBuddy AI** en Proveedores e inicia sesión, o ejecuta:
+
+```bash
+ocx login codebuddy-ai
+```
+
+Completa el inicio de sesión en el navegador. OpenCodex consulta la autorización durante un máximo de cinco minutos, guarda los tokens y los renueva cuando hace falta. Puedes añadir cuentas mediante la lista OAuth existente; la identidad del equipo permanece asociada a su propio token. No necesitas instalar CodeBuddy Desktop ni importar archivos de credenciales.
+
+Los modelos y capacidades proceden del catálogo de productos de tu cuenta. Después de iniciar sesión, elige un modelo `codebuddy-ai/<model-id>`; si el descubrimiento no está disponible, se ofrece `codebuddy-ai/default-model` como selector de respaldo. El streaming, las herramientas y las respuestas almacenadas usan el endpoint Chat de CodeBuddy. Las pestañas Resumen y Cuentas muestran créditos restantes, usados y totales, saldos base y de regalo y los próximos créditos no diarios que caducan, cuando esa información está disponible. Actualizar consulta el resumen de facturación de la cuenta; una lectura fallida no significa saldo cero. Los créditos son informativos: agotarlos no desactiva los modelos gratuitos.
+
+Se utiliza un protocolo de suscripción no oficial basado en el [plugin WorkBuddy de Magpie](https://github.com/magpie-community/plugins/tree/e7f65641df820dfd715c0d2241f99f2092e4efb1/packages/workbuddy), con el origen de CodeBuddy y la identidad de cliente de la CLI. Las restricciones del canal del cliente o de la cuenta se devuelven al solicitante. OpenCodex no reescribe instrucciones de identidad del agente para evitarlas. La disponibilidad depende de tu cuenta, región, permisos de modelo y la API vigente de CodeBuddy. Es independiente de los proveedores CodeBuddy CLI con clave API y no conecta el cliente CodeBuddy Desktop a OpenCodex.
 
 ## CodeBuddy Code CLI oficial (Global y CN)
 

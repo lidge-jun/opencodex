@@ -29,7 +29,9 @@ client and conversation headers, preserves user-turn identity across tool-result
 and uses process-salted digests rather than prompt text in IDs. It reuses Chat tool-name aliasing
 and restores names on responses; `src/adapters/workbuddy-schema.ts` normalizes tool schemas.
 Client-channel and restricted-account refusals remain refusals; prompts are not rewritten to
-evade those checks. Inference uses the shared executor, cancellation and send budgets.
+evade those checks. `src/adapters/tencent-error-code.ts` reads the business code from both
+envelopes the gateway uses, the flat `code` and the nested `error.data.code` that carries
+credits-exhausted. Inference uses the shared executor, cancellation and send budgets.
 
 `src/providers/workbuddy-models.ts` extracts only the `cli` agent roster from `/v3/config`,
 including input/output limits, image capability and reasoning efforts. WorkBuddy AI GLM rows

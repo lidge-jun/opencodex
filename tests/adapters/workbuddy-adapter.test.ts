@@ -86,3 +86,15 @@ test("refusals expose fixed diagnostics and preserve upstream channel restrictio
   expect(adapter.formatErrorBody!(400, new Headers(), '{"code":11128,"msg":"private details"}')).toContain("rejected this client channel");
   expect(adapter.formatErrorBody!(401, new Headers(), 'fixture-access')).not.toContain("fixture-access");
 });
+
+test("rewrites the Claude Code identity line that the upstream gateway rejects with 11128", async () => {
+  const identity = "You are Claude Code, Anthropic's official CLI for Claude.";
+  const req = await createWorkBuddyAdapter(provider).buildRequest(
+    parsed("Hello", { instructions: `x-billing: cc\n\n${identity}\n\nKeep the rest.` }), meta());
+  const body = JSON.parse(req.body);
+  const system = body.messages[0];
+  expect(system.role).toBe("system");
+  expect(String(system.content)).not.toContain("Claude Code");
+  expect(String(system.content)).toContain("x-billing: cc");
+  expect(String(system.content)).toContain("Keep the rest.");
+});

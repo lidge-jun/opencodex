@@ -71,6 +71,7 @@ import {
   readBoundedDiscoveryJson,
   resolveProviderModelDiscovery,
 } from "../../providers/model-discovery";
+import { extractCodeBuddyAiModels } from "../../providers/codebuddy-ai-models";
 import {
   buildVertexProviderModelsRequest,
   collectVertexPublisherModelPages,
@@ -1725,7 +1726,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       return jsonResponse({ ok: false, latencyMs: 0, error: "Antigravity project unavailable — re-run `ocx login google-antigravity`" });
     }
     const { method, url: modelsUrl, headers } = buildVertexProviderModelsRequest(name, prov, apiKey)
-      ?? buildModelsRequest(prov, apiKey, name, { oauthApiBaseUrl: snapshot?.apiBaseUrl, workbuddy: snapshot?.workbuddy });
+      ?? buildModelsRequest(prov, apiKey, name, { oauthApiBaseUrl: snapshot?.apiBaseUrl, workbuddy: snapshot?.workbuddy, codeBuddyAi: snapshot?.codeBuddyAi });
     const discovery = resolveProviderModelDiscovery(name, prov);
     const started = Date.now();
     try {
@@ -1794,9 +1795,11 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       const googleNative = !ccaModels
         ? extractGoogleNativeModelItems(name, prov, listing.value, discovery.maxModels)
         : undefined;
+      const codeBuddyModels = discovery.spec?.format === "codebuddy-ai" ? extractCodeBuddyAiModels(listing.value, discovery.maxModels) : undefined;
       const extracted = ccaModels
         ? undefined
-        : googleNative
+        : codeBuddyModels
+        ?? googleNative
         ?? (Array.isArray(listing.value) || Array.isArray(record?.data)
           ? extractProviderModelItems(listing.value, discovery)
           : extractModelEnvelopeRows(listing.value, discovery.maxModels, ["models"]));

@@ -159,7 +159,7 @@ export function withOpenAIChatToolNames<T>(
   let registry = createOpenAIChatToolNameRegistry(undefined);
   return build({
     messages(parsed, baseUrl, messages): unknown {
-      registry = createOpenAIChatToolNameRegistry(openAIChatToolNameIdentities(parsed), baseUrl === "https://www.workbuddy.ai/v2");
+      registry = createOpenAIChatToolNameRegistry(openAIChatToolNameIdentities(parsed), baseUrl === "https://www.workbuddy.ai/v2" || baseUrl === "https://www.codebuddy.ai/v2");
       return frameAgentRouterMessages(baseUrl, aliasOpenAIChatMessageToolNames(messages, registry));
     },
     registry: () => registry,

@@ -168,6 +168,26 @@ describe("POST /api/providers/test (WP040 connectivity probe)", () => {
     }
   });
 
+  test("CodeBuddy probe reads the CLI roster from its own envelope", async () => {
+    const urls: string[] = [];
+    globalThis.fetch = (async (input, init) => {
+      urls.push(String(input));
+      expect(new Headers(init?.headers).get("x-user-id")).toBe("fixture-user");
+      return Response.json({ code: 0, data: {
+        agents: [{ name: "cli", models: ["glm-fixture"] }],
+        models: [{ id: "glm-fixture" }, { id: "not-cli" }],
+      } });
+    }) as typeof fetch;
+    await saveCredential("codebuddy-ai", {
+      access: "fixture-access", refresh: "fixture-refresh", expires: Number.MAX_SAFE_INTEGER,
+      accountId: "fixture-user", codeBuddyAi: { uid: "fixture-user", domain: "international" },
+    });
+    const config = baseConfig({ "codebuddy-ai": { ...structuredClone(OAUTH_PROVIDERS["codebuddy-ai"]!.providerConfig) } });
+    const { body } = await probe(config, "codebuddy-ai");
+    expect(urls).toEqual(["https://www.codebuddy.ai/v3/config"]);
+    expect(body).toMatchObject({ ok: true, models: 1 });
+  });
+
   test("Copilot key probe uses the configured endpoint instead of a stored OAuth host", async () => {
     const calls: { url: string; authorization: string | null }[] = [];
     globalThis.fetch = (async (input, init) => {

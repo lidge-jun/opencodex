@@ -3,6 +3,8 @@ import type { ProviderAdapter } from "./base";
 import { workBuddyToolParameters } from "./workbuddy-schema";
 import { retainTranslatedEvent, releaseTranslatedEvent } from "../lib/translator-budget";
 import { createOpenAIChatAdapter } from "./openai-chat";
+import { neutralizeClaudeCodeIdentity } from "./claude-code-identity";
+import { tencentBusinessCode } from "./tencent-error-code";
 import type { AdapterEvent, OcxProviderConfig } from "../types";
 import { assertWorkBuddyDestination, WORKBUDDY_BASE_URL, workBuddyHeaders } from "../providers/workbuddy";
 
@@ -20,6 +22,7 @@ export function createWorkBuddyAdapter(provider: OcxProviderConfig): ProviderAda
       const body = JSON.parse(req.body);
       const messages = body.messages as Array<Record<string, unknown>>;
       for (const message of messages) if (message.role === "developer") message.role = "system";
+      neutralizeClaudeCodeIdentity(messages);
       if (messages[0]?.role !== "system") messages.unshift({ role: "system", content: "You are a helpful assistant." });
       if (body.max_completion_tokens !== undefined) { body.max_tokens = body.max_completion_tokens; delete body.max_completion_tokens; }
       if (body.tool_choice === "none") { delete body.tools; delete body.tool_choice; }
@@ -57,8 +60,7 @@ export function createWorkBuddyAdapter(provider: OcxProviderConfig): ProviderAda
       }
     },
     formatErrorBody(status, _headers, payload) {
-      let code: unknown;
-      try { code = JSON.parse(payload)?.code; } catch { /* Only structured numeric codes are public. */ }
+      const code = tencentBusinessCode(payload);
       if (Number(code) === 11128) return "WorkBuddy AI rejected this client channel (11128).";
       if (Number(code) === 11140) return "WorkBuddy AI restricted this account (11140); contact WorkBuddy support.";
       if (Number(code) === 14018) return "WorkBuddy AI credits exhausted (14018).";
