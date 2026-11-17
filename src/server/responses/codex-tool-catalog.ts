@@ -1,6 +1,7 @@
 import { currentTurnWireToolCatalogBody } from "../responses-undeclared-tool-guard";
 import { sessionLaneIdFromRequest } from "../request-log-conversation";
 import { codeModeRenderedToolNames } from "./code-mode-collab-surface";
+import { CODE_MODE_EXEC_TOOL_NAME } from "../../types";
 
 /**
  * Eager MCP definitions at which a Codex request is diagnosed as carrying an expanded catalog.
@@ -21,6 +22,17 @@ const warnedSessions = new Map<string, true>();
 /** Logical requests already warned without a session identity; weak so completed requests leave no trace. */
 const warnedAnonymousRequests = new WeakSet<object>();
 const CODEX_CLIENT_IDENTITY = /^(?:codex|codex_cli_rs|codex_app|codex_work_desktop|codexless_agent|Codex Desktop)(?:\/|$)/i;
+// This optional diagnostic has a request-wide work/storage budget, not an admission limit.
+const MAX_DIAGNOSTIC_ITEMS = 4_096;
+const MAX_DIAGNOSTIC_CHARACTERS = 1 << 20;
+interface DiagnosticBudget { items: number; characters: number }
+
+function reserveDiagnosticBudget(budget: DiagnosticBudget, items: number, characters = 0): boolean {
+  if (items > budget.items || characters > budget.characters) return false;
+  budget.items -= items;
+  budget.characters -= characters;
+  return true;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -36,32 +48,48 @@ export function eagerCodexToolCatalogSurface(
 ): "responses" | "compact" {
   if (compactionRecoveryKind === "compaction-v1") return "compact";
   const input = isRecord(body) && Array.isArray(body.input) ? body.input : [];
+  // An oversized unknown surface is skipped by the count's input budget too.
+  if (input.length > MAX_DIAGNOSTIC_ITEMS) return "responses";
   return input.some(item => isRecord(item) && item.type === "compaction_trigger") ? "compact" : "responses";
 }
 
-function collectEagerMcpTools(specs: unknown[], names: Set<string>, namespace?: string): void {
+function collectEagerMcpTools(specs: unknown[], names: Set<string>, budget: DiagnosticBudget, namespace?: string): boolean {
+  if (!reserveDiagnosticBudget(budget, specs.length)) return false;
   for (const spec of specs) {
     if (!isRecord(spec) || spec.defer_loading === true) continue;
     // Codex namespaces are one level deep. A namespace nested inside another is not a Codex
     // declaration, and recursing into caller-shaped depth could exhaust the stack.
     if (spec.type === "namespace" && typeof spec.name === "string" && Array.isArray(spec.tools)) {
-      if (namespace === undefined) collectEagerMcpTools(spec.tools, names, spec.name);
+      if (namespace === undefined && !collectEagerMcpTools(spec.tools, names, budget, spec.name)) return false;
       continue;
     }
     const tool = isRecord(spec.function) ? spec.function : spec;
     if (tool.defer_loading === true || typeof tool.name !== "string") continue;
     // `functions` is the reserved unnamespaced group (as in the undeclared-tool guard and parser),
     // so an MCP tool declared inside it keeps its own `mcp__` name.
-    const name = namespace && namespace !== "functions" ? `${namespace}__${tool.name}` : tool.name;
-    if (name.startsWith("mcp__")) names.add(name);
+    const prefix = namespace && namespace !== "functions" ? namespace : undefined;
+    const isMcp = prefix === undefined ? tool.name.startsWith("mcp__")
+      : prefix === "mcp" || prefix === "mcp_" || prefix.startsWith("mcp__");
+    if (isMcp) {
+      // Charge every occurrence, including duplicates, before concatenation or Set hashing.
+      const length = tool.name.length + (prefix === undefined ? 0 : prefix.length + 2);
+      if (!reserveDiagnosticBudget(budget, 0, length)) return false;
+      names.add(prefix === undefined ? tool.name : `${prefix}__${tool.name}`);
+    }
     // Code Mode renders each enabled, non-deferred nested tool into the exec description. Codex
     // sends exec bare or, on Responses Lite, inside its `functions` namespace.
-    if ((namespace === undefined || namespace === "functions") && spec.type === "custom") {
-      for (const nested of codeModeRenderedToolNames(tool.name, tool.description)) {
+    if ((namespace === undefined || namespace === "functions") && spec.type === "custom"
+      && tool.name === CODE_MODE_EXEC_TOOL_NAME && typeof tool.description === "string") {
+      // Reserving the complete description bounds parsing, copies and all names it can render.
+      if (!reserveDiagnosticBudget(budget, 0, tool.description.length)) return false;
+      const rendered = codeModeRenderedToolNames(tool.name, tool.description);
+      if (!reserveDiagnosticBudget(budget, rendered.length)) return false;
+      for (const nested of rendered) {
         if (nested.startsWith("mcp__")) names.add(nested);
       }
     }
   }
+  return true;
 }
 
 /**
@@ -86,7 +114,8 @@ function clientSentAdditionalTools(input: unknown[]): unknown[][] {
  * Eager MCP definitions a canonical Codex client declared for this request, or 0 for any other
  * client. `replayPrefixLength` is the leading input the proxy restored from stored continuation
  * state; those items are history and grant no declaration for this turn. Compaction reads only
- * top-level `tools`: its `input` is history.
+ * top-level `tools`: its `input` is history. Exceeding the diagnostic budget returns 0 rather
+ * than a partial count; it neither rejects nor rewrites the request.
  */
 export function eagerCodexMcpToolCount(
   body: unknown,
@@ -97,12 +126,20 @@ export function eagerCodexMcpToolCount(
   if (!headers.has("x-codex-turn-metadata")
     && !CODEX_CLIENT_IDENTITY.test(headers.get("originator") ?? "")
     && !CODEX_CLIENT_IDENTITY.test(headers.get("user-agent") ?? "")) return 0;
-  const current = currentTurnWireToolCatalogBody(body, replayPrefixLength);
+  if (!isRecord(body)) return 0;
+  const budget = { items: MAX_DIAGNOSTIC_ITEMS, characters: MAX_DIAGNOSTIC_CHARACTERS };
+  const input = surface === "responses" && Array.isArray(body.input) ? body.input : undefined;
+  if (input !== undefined && !reserveDiagnosticBudget(budget, input.length)) return 0;
+  // Bound replay scans/copies before invoking the shared helper, and never spread unrelated
+  // request fields or inspect compaction history just to compute an optional diagnostic.
+  const current = currentTurnWireToolCatalogBody({ tools: body.tools, input }, replayPrefixLength);
   if (!isRecord(current)) return 0;
   const names = new Set<string>();
-  if (Array.isArray(current.tools)) collectEagerMcpTools(current.tools, names);
+  if (Array.isArray(current.tools) && !collectEagerMcpTools(current.tools, names, budget)) return 0;
   if (surface === "responses" && Array.isArray(current.input)) {
-    for (const tools of clientSentAdditionalTools(current.input)) collectEagerMcpTools(tools, names);
+    for (const tools of clientSentAdditionalTools(current.input)) {
+      if (!collectEagerMcpTools(tools, names, budget)) return 0;
+    }
   }
   return names.size;
 }
