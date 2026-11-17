@@ -282,14 +282,13 @@ export function convertKiroToolContext(
   const filled: unknown[] = [];
   for (const entry of candidates) {
     if (entry === reserved) continue;
-    // Measure the projected FINAL array: the byte budget is computed over the serialized array, so
-    // subtracting a standalone size would misjudge it by the separators JSON adds between entries.
-    const projected = reserved ? [...filled, entry.converted, reserved.converted] : [...filled, entry.converted];
-    if (
-      !unbounded
-      && (projected.length > MAX_KIRO_TOOL_COUNT
-        || serializedToolCatalogBytes(projected) > MAX_KIRO_TOOL_CATALOG_BYTES)
-    ) break;
+    if (!unbounded) {
+      // Measure the projected FINAL array only while enforcing a budget. Repeatedly copying
+      // the admitted prefix would make an unbounded catalog quadratic even without measuring it.
+      const projected = reserved ? [...filled, entry.converted, reserved.converted] : [...filled, entry.converted];
+      if (projected.length > MAX_KIRO_TOOL_COUNT
+        || serializedToolCatalogBytes(projected) > MAX_KIRO_TOOL_CATALOG_BYTES) break;
+    }
     filled.push(entry.converted);
     admitted.add(entry.index);
   }

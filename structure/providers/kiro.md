@@ -154,7 +154,9 @@ chooses entries, so the byte limit measures the truncated strings.
 `OCX_KIRO_TOOL_DESCRIPTION_LIMIT=off` (`KIRO_TOOL_DESCRIPTION_LIMIT_ENV`) are operator opt-outs
 read at request-conversion time. Turning the budget off removes both limits, so the priority sort
 and the `exec` reservation have nothing to exclude: every declared tool goes on the wire in
-declaration order and no omission notice is emitted. An oversized catalog therefore reaches Kiro
+declaration order and no omission notice is emitted. Admission does not build or measure projected
+catalogs when the budget is off, so it performs linear work in the number of converted entries.
+An oversized catalog therefore reaches Kiro
 intact and the upstream `ValidationException` becomes the failure mode instead of a trimmed
 request. The default remains bounded because that is the shape a fresh Kiro account is measured to
 accept.
