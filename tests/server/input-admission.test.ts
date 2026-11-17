@@ -471,6 +471,24 @@ describe("devin adapter window fallback", () => {
     expect(resolveInputCeiling(provider, "devin", "swe-1.7")).toBe(100_000);
   });
 
+  test("an effort-suffixed dotted id honors an override on its dotted base", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "devin", baseUrl: "https://devin.test",
+      modelContextWindows: { "swe-1.7": 111_000 },
+    };
+    expect(resolveInputCeiling(provider, "devin", "swe-1.7-medium")).toBe(111_000);
+    expect(checkComboTargetInputAdmission(devinRequest(150_000, "swe-1.7-medium"), provider, "devin", "swe-1.7-medium").admitted).toBe(false);
+  });
+
+  test("a per-model override on any devin spelling binds before the provider-wide window", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "devin", baseUrl: "https://devin.test", contextWindow: 900_000,
+      modelContextWindows: { "swe-1-7-medium": 111_000 },
+    };
+    expect(resolveInputCeiling(provider, "devin", "swe-1.7-medium")).toBe(111_000);
+    expect(checkComboTargetInputAdmission(devinRequest(200_000, "swe-1.7-medium"), provider, "devin", "swe-1.7-medium").admitted).toBe(false);
+  });
+
   test("non-devin adapters stay unresolved", () => {
     const other: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://example.test/v1" };
     expect(resolveInputCeiling(other, "custom", "swe-2-flash")).toBeNull();

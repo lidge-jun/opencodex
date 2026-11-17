@@ -173,25 +173,18 @@ interface ResolvedContextLimits {
 }
 
 /**
- * Adapter-owned static window, consulted only when the routed provider config declares none.
- * Devin is the case that matters: its live catalog windows reach the Codex-facing model list
- * but never `provider.modelContextWindows`, so without this fallback every devin target
- * resolved `window: null` and the strict combo gate stayed fail-open on exactly the turns it
- * exists to skip. Explicit provider config still wins; the effort-suffix collapse covers
- * catalog UIDs like `swe-2-flash-medium`.
+ * Devin spells one model dotted in catalog families (`swe-1.7`) and hyphenated in uids
+ * (`swe-1-7`), with optional effort suffixes (`swe-2-flash-medium`). A per-model record is
+ * matched on the exact id first, then the effort-collapsed id, then both hyphenated forms, so
+ * an operator override on any of those spellings binds before a provider-wide default.
  */
-function adapterContextWindow(provider: OcxProviderConfig, modelId: string): number | null {
-  if (provider.adapter !== "devin") return null;
-  // Devin spells the same model dotted in catalog families (`swe-1.7`) and hyphenated
-  // in uids (`swe-1-7`); normalize before either lookup so both spellings resolve.
+function devinRecordValue(record: Record<string, number> | undefined, modelId: string): number | null {
   const normalized = modelId.replace(/\./g, "-");
-  const collapsed = collapseDevinModelUid(normalized);
-  // A configured window for the collapsed base (operator override or registry seed) still
-  // wins over the static table for effort-suffixed ids like swe-2-flash-medium.
-  return positive(modelRecordValue(provider.modelContextWindows, normalized))
-    ?? positive(modelRecordValue(provider.modelContextWindows, collapsed))
-    ?? positive(modelRecordValue(DEVIN_MODEL_CONTEXT_WINDOWS, normalized))
-    ?? positive(modelRecordValue(DEVIN_MODEL_CONTEXT_WINDOWS, collapsed));
+  for (const key of new Set([modelId, collapseDevinModelUid(modelId), normalized, collapseDevinModelUid(normalized)])) {
+    const value = positive(modelRecordValue(record, key));
+    if (value !== null) return value;
+  }
+  return null;
 }
 
 function resolveContextLimits(
@@ -203,7 +196,10 @@ function resolveContextLimits(
   // `modelRecordValue`, not a bare lookup: the catalog resolves these same two maps that
   // way, so a `gpt-oss` entry covers `gpt-oss:120b`. Reading raw here made the gate fall
   // back to the provider-wide window and refuse turns the model can plainly hold.
-  const configured = positive(modelRecordValue(provider.modelContextWindows, modelId))
+  const devin = provider.adapter === "devin";
+  const configured = (devin
+    ? devinRecordValue(provider.modelContextWindows, modelId)
+    : positive(modelRecordValue(provider.modelContextWindows, modelId)))
     ?? positive(provider.contextWindow);
 
   // The canonical `openai` registry entry declares no context fields, so without this the
@@ -225,12 +221,14 @@ function resolveContextLimits(
     : null;
   const nativeMaxInput = canonicalNativeBare ? positive(nativeOpenAiMaxInputTokens(modelId, nativeLimits)) : null;
 
-  const window = canonicalNativeBare ? (native ?? generatedNativeWindow(modelId, configured, nativeContextCap)) : (configured ?? adapterContextWindow(provider, modelId));
+  // Devin's live catalog windows reach the Codex model list but never `provider.modelContextWindows`;
+  // without the adapter table every devin combo target resolved no window and the strict gate stayed open.
+  const window = canonicalNativeBare ? (native ?? generatedNativeWindow(modelId, configured, nativeContextCap))
+    : (configured ?? (devin ? devinRecordValue(DEVIN_MODEL_CONTEXT_WINDOWS, modelId) : null));
   // modelMaxInputTokens is an input-only cap, so it can only tighten the window.
-  const configuredMaxInput = positive(modelRecordValue(provider.modelMaxInputTokens, modelId))
-    ?? (provider.adapter === "devin"
-      ? positive(modelRecordValue(provider.modelMaxInputTokens, modelId.replace(/\./g, "-")))
-      : null);
+  const configuredMaxInput = devin
+    ? devinRecordValue(provider.modelMaxInputTokens, modelId)
+    : positive(modelRecordValue(provider.modelMaxInputTokens, modelId));
   const limits = [window, configuredMaxInput, nativeMaxInput].filter((v): v is number => v !== null);
   return { window, ceiling: limits.length === 0 ? null : Math.min(...limits) };
 }
