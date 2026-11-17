@@ -28,13 +28,14 @@ import { CommandCodeToolTextFilter, type CommandCodeDeclaredTools } from "./comm
 import { EMPTY_COMMAND_CODE_PROJECT_CONTEXT, loadCommandCodeProjectContext } from "./command-code-project-context";
 
 /**
- * Text-call recovery validates against the schema the model was shown (`wireTools`), so a
+ * Text-call recovery matches markup against the schema the model was shown (`wireTools`), so a
  * root-composed tool keeps the top-level `properties` its markup names. Definitions are dropped
  * because the restored-value validator accepts no `$ref`: a reference left in the normalized
- * schema still fails closed there.
+ * schema still fails closed there. The original schema is validated too (`declaredSchema`),
+ * because the wire view flattens root alternatives and would otherwise admit calls the tool
+ * itself rejects.
  */
 function recoverySchema(tool: OcxTool): Record<string, unknown> {
-  if (tool.freeform === true) return tool.parameters;
   const { $defs: _defs, definitions: _definitions, ...schema } = normalizeAnthropicInputSchema(tool.parameters);
   return schema;
 }
@@ -42,7 +43,9 @@ function recoverySchema(tool: OcxTool): Record<string, unknown> {
 function declaredTools(tools: OcxTool[]): CommandCodeDeclaredTools {
   return new Map(tools.map(tool => [
     namespacedToolName(tool.namespace, tool.name),
-    { freeform: tool.freeform === true, schema: recoverySchema(tool) },
+    tool.freeform === true
+      ? { freeform: true, schema: tool.parameters }
+      : { freeform: false, schema: recoverySchema(tool), declaredSchema: tool.parameters },
   ]));
 }
 

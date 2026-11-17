@@ -481,21 +481,48 @@ describe("normalizeAnthropicInputSchema review follow-ups (#8873)", () => {
     expect(properties.path).toEqual({ allOf: [{ maxLength: 10 }, { type: "string", minLength: 1 }] });
     expect(properties.mode).toEqual({ allOf: [{ type: "string" }, { enum: ["fast", "slow"] }] });
   });
+
+  test("repeated allOf collisions extend one flat allOf list instead of nesting", () => {
+    const normalized = normalizeAnthropicInputSchema({
+      $defs: { Base: { allOf: [{ properties: { path: { pattern: "^src/" } } }] } },
+      properties: { path: { type: "string" } },
+      allOf: [
+        { properties: { path: { minLength: 1 } } },
+        { $ref: "#/$defs/Base", properties: { path: { maxLength: 10 } } },
+        { properties: { path: { not: { const: "src/x" } } } },
+      ],
+    });
+    const path = JSON.parse(JSON.stringify((normalized.properties as Record<string, unknown>).path));
+    expect(path).toEqual({
+      allOf: [
+        { type: "string" },
+        { minLength: 1 },
+        { maxLength: 10 },
+        { pattern: "^src/" },
+        { not: { const: "src/x" } },
+      ],
+    });
+  });
+
+  test("a caller's own allOf property schema is kept as one member, not spliced", () => {
+    const own = { allOf: [{ type: "string" }, { minLength: 1 }] };
+    const normalized = normalizeAnthropicInputSchema({
+      properties: { path: own },
+      allOf: [{ properties: { path: { maxLength: 10 } } }],
+    });
+    expect(JSON.parse(JSON.stringify((normalized.properties as Record<string, unknown>).path)))
+      .toEqual({ allOf: [own, { maxLength: 10 }] });
+  });
 });
 
 describe("Command Code text-call recovery uses the wire schema (#8873)", () => {
-  test("restores a MiMo text call for a root-composed tool", async () => {
-    const tool = {
-      name: "read_args",
-      description: "Read a file",
-      parameters: {
-        $defs: { Args: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
-        allOf: [{ $ref: "#/$defs/Args" }],
-      },
-    } as OcxTool;
+  /** One MiMo text call through buildRequest, fetchResponse and parseStream. */
+  async function recover(tool: OcxTool, parameters: Record<string, string>): Promise<{ calls: Array<{ name: string; args: string }>; text: string }> {
+    const markup = `<tool_call>\n<function=${tool.name}>\n${Object.entries(parameters)
+      .map(([key, value]) => `<parameter=${key}>\n${value}\n</parameter>\n`).join("")}</function>\n</tool_call>`;
     const events = [
       { type: "text-start", id: "t" },
-      { type: "text-delta", id: "t", text: "<tool_call>\n<function=read_args>\n<parameter=path>\nsrc/a.ts\n</parameter>\n</function>\n</tool_call>" },
+      { type: "text-delta", id: "t", text: markup },
       { type: "text-end", id: "t" },
       { type: "finish", rawFinishReason: "stop" },
     ];
@@ -506,9 +533,59 @@ describe("Command Code text-call recovery uses the wire schema (#8873)", () => {
     const request = await adapter.buildRequest({ ...parsedRequest([tool]), modelId: "xiaomi/mimo-v2.6-flash" });
     const out: AdapterEvent[] = [];
     for await (const event of adapter.parseStream(await adapter.fetchResponse!(request), createTestTranslatorBudget())) out.push(event);
-    const starts = out.filter(event => event.type === "tool_call_start") as Array<{ name: string }>;
-    const args = out.filter(event => event.type === "tool_call_delta").map(event => (event as { arguments: string }).arguments).join("");
-    expect(starts.map(event => event.name)).toEqual(["read_args"]);
-    expect(JSON.parse(args)).toEqual({ path: "src/a.ts" });
+    const calls: Array<{ name: string; args: string }> = [];
+    let text = "";
+    for (const event of out) {
+      if (event.type === "tool_call_start") calls.push({ name: event.name, args: "" });
+      if (event.type === "tool_call_delta") calls[calls.length - 1]!.args += event.arguments;
+      if (event.type === "text_delta") text += event.text;
+    }
+    return { calls, text };
+  }
+
+  test("restores a MiMo text call for a root-composed tool", async () => {
+    const tool = {
+      name: "read_args",
+      description: "Read a file",
+      parameters: { allOf: [{ type: "object", properties: { path: { type: "string" } }, required: ["path"] }] },
+    } as OcxTool;
+    const { calls, text } = await recover(tool, { path: "src/a.ts" });
+    expect(text).toBe("");
+    expect(calls.map(call => call.name)).toEqual(["read_args"]);
+    expect(JSON.parse(calls[0]!.args)).toEqual({ path: "src/a.ts" });
+  });
+
+  test("also validates against the declared schema, so a lossy wire flattening cannot admit a call", async () => {
+    // The wire schema flattens the root anyOf away; the declared schema still requires
+    // command or script, so a call carrying only cwd stays text instead of becoming a tool call.
+    const tool = {
+      name: "run",
+      description: "Run something",
+      parameters: {
+        type: "object",
+        properties: { command: { type: "string" }, script: { type: "string" }, cwd: { type: "string" } },
+        anyOf: [{ required: ["command"] }, { required: ["script"] }],
+      },
+    } as OcxTool;
+    const rejected = await recover(tool, { cwd: "/tmp" });
+    expect(rejected.calls).toEqual([]);
+    expect(rejected.text).toContain("<function=run>");
+    const accepted = await recover(tool, { command: "ls", cwd: "/tmp" });
+    expect(accepted.calls.map(call => call.name)).toEqual(["run"]);
+    expect(JSON.parse(accepted.calls[0]!.args)).toEqual({ command: "ls", cwd: "/tmp" });
+  });
+
+  test("a declared schema the restored-value validator cannot evaluate keeps the markup as text", async () => {
+    const tool = {
+      name: "read_ref",
+      description: "Read a file",
+      parameters: {
+        $defs: { Args: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
+        allOf: [{ $ref: "#/$defs/Args" }],
+      },
+    } as OcxTool;
+    const { calls, text } = await recover(tool, { path: "src/a.ts" });
+    expect(calls).toEqual([]);
+    expect(text).toContain("<function=read_ref>");
   });
 });

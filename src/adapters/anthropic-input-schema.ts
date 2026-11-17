@@ -10,7 +10,7 @@ import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
  * `allOf`; composition on both sides is kept, not replaced. A property met twice on an all-`allOf`
  * path is conjoined the same way. Composition branches and direct alias hops share one 4096-step
  * budget. Shared by the anthropic and command-code adapters; Command Code's text-call recovery
- * validates against the same normalized schema.
+ * matches markup against the normalized schema and validates it against the declared one too.
  *
  * Flattening root alternatives is lossy: later branches win for a same-named property, and
  * `oneOf`/`anyOf` branch `required` members are not promoted because no branch is guaranteed.
@@ -73,6 +73,23 @@ function asSchemaMap(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+/** Conjunctions this module built, so a later collision extends them instead of nesting. */
+const builtConjunctions = new WeakSet<object>();
+
+/**
+ * Both schemas apply. A conjunction built here gains one more member; a caller's own `allOf`
+ * schema stays a single member so its meaning is not spliced into ours.
+ */
+function conjoin(existing: unknown, schema: unknown): Record<string, unknown> {
+  const members = existing && typeof existing === "object" && builtConjunctions.has(existing)
+    ? [...((existing as { allOf: unknown[] }).allOf)]
+    : [existing];
+  if (!members.includes(schema)) members.push(schema);
+  const conjunction = { allOf: members };
+  builtConjunctions.add(conjunction);
+  return conjunction;
+}
+
 /**
  * JSON Schema applies a `$ref` sibling's keywords alongside the referenced schema rather than
  * replacing them. Spread would let a sibling that adds one parameter drop the referenced ones, so
@@ -93,7 +110,7 @@ function mergeRefSiblings(
     for (const [name, schema] of Object.entries(resolvedProperties ?? {})) properties[name] = schema;
     for (const [name, schema] of Object.entries(siblingProperties ?? {})) {
       const existing = properties[name];
-      properties[name] = existing === undefined ? schema : { allOf: [existing, schema] };
+      properties[name] = existing === undefined ? schema : conjoin(existing, schema);
     }
     merged.properties = properties;
   }
@@ -159,7 +176,7 @@ function collectProperty(
 ): void {
   const existing = properties[name];
   if (existing === schema) return;
-  properties[name] = conjunctive && existing !== undefined ? { allOf: [existing, schema] } : schema;
+  properties[name] = conjunctive && existing !== undefined ? conjoin(existing, schema) : schema;
 }
 
 /**
