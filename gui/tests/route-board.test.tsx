@@ -35,6 +35,7 @@ import {
   moveChannel,
   planStrategyChange,
   quotaTone,
+  rebaseChannelDraft,
   withIdleRoutingFields,
 } from "../src/route-board-model";
 import { chooseOption } from "./helpers/custom-select";
@@ -217,6 +218,22 @@ describe("route board model", () => {
     expect(withIdleRoutingFields({ targets: [{ weight: 7 }], stickyLimit: 2 }, { stickyLimit: 5, targets: [{ weight: 3 }] }))
       .toEqual({ targets: [{ weight: 7 }], stickyLimit: 2 });
     expect(withIdleRoutingFields({ targets: [{}] }, { stickyLimit: 1, targets: [{}] })).toEqual({ targets: [{}] });
+  });
+
+  test("an open draft rebases onto a newer stored list", () => {
+    const ch = (key: string, lastResort = false) => ({ key, lastResort });
+    const base = [ch("a"), ch("b"), ch("c")];
+    // No edits: the draft is the stored list.
+    expect(rebaseChannelDraft(base, base, [ch("b"), ch("d", true)])).toEqual([ch("b"), ch("d", true)]);
+    // Reordered draft: removed channels leave, added ones join at the end, the order stays the operator's.
+    expect(rebaseChannelDraft([ch("c"), ch("a"), ch("b")], base, [ch("a"), ch("c"), ch("d")]))
+      .toEqual([ch("c"), ch("a"), ch("d")]);
+    // An untouched fallback-only mark follows the store; one the operator flipped stays flipped.
+    expect(rebaseChannelDraft([ch("b"), ch("a", true), ch("c")], base, [ch("a"), ch("b"), ch("c", true)]))
+      .toEqual([ch("b"), ch("a", true), ch("c", true)]);
+    // A channel the operator added that the store also gained appears once.
+    expect(rebaseChannelDraft([ch("a"), ch("b"), ch("c"), ch("d")], base, [ch("a"), ch("b"), ch("c"), ch("d", true)]))
+      .toEqual([ch("a"), ch("b"), ch("c"), ch("d")]);
   });
 
   test("context windows read as tokens", () => {
@@ -503,6 +520,28 @@ describe("Combos overview page", () => {
       { provider: "anthropic", model: "claude", lastResort: false },
       { provider: "openai", model: "gpt-5", modelProfile: "subscription first", lastResort: false },
     ]);
+  });
+
+  test("an open editor takes in channels saved elsewhere and keeps its own unsaved order", async () => {
+    const payload = combosPayload as { combos: Array<Record<string, unknown> & { targets: unknown[] }> };
+    payload.combos.push({ ...toPutBody(combo("beta", [["openai", "gpt-5"]])).combo, id: "beta", model: "combo/beta" });
+    await renderPage();
+    await act(async () => { row("alpha").querySelector<HTMLButtonElement>(".rb-row-toggle")!.click(); });
+    const shown = () => [...row("alpha").querySelectorAll(".rb-editor .rb-channel code")].map(code => code.textContent);
+    await act(async () => { row("alpha").querySelector<HTMLButtonElement>('.rb-editor button[aria-label$="gpt-5 down"]')!.click(); });
+    // A refresh that brings nothing new for alpha leaves the draft alone.
+    await chooseOption(strategyTrigger("beta"), "round-robin");
+    await flush();
+    expect(shown()).toEqual(["claude", "gpt-5"]);
+    // Another tab adds a channel to alpha: the next refresh carries it into the open draft.
+    payload.combos[0]!.targets.push({ provider: "openai", model: "gpt-5-mini" });
+    await chooseOption(strategyTrigger("beta"), "random");
+    await flush();
+    expect(shown()).toEqual(["claude", "gpt-5", "gpt-5-mini"]);
+    await act(async () => { button(row("alpha").querySelector(".rb-editor")!, "Save").click(); });
+    await flush();
+    const body = calls.at(-1)!.body as ReturnType<typeof toPutBody>;
+    expect(body.combo.targets.map(target => target.model)).toEqual(["claude", "gpt-5", "gpt-5-mini"]);
   });
 
   test("pointer drag: the row itself follows, the others slide aside, one commit on release", async () => {

@@ -6,11 +6,13 @@ import { formatProviderDisplayName } from "../../provider-icons";
 import {
   capabilityPatch,
   channelKey,
+  channelSignature,
   combineLists,
   comboContextWindow,
   withInferredGaps,
   memberFacts,
   moveChannel,
+  rebaseChannelDraft,
   type CapabilityPolicy,
   type ChannelQuota,
   type ComboCapabilitySettings,
@@ -119,6 +121,14 @@ export function ChannelEditor({
 }) {
   const t = useT();
   const [channels, setChannels] = useState<EditableChannel[]>(() => [...initial]);
+  // The stored channels can change while this editor is open (another tab, the advanced
+  // editor): rebase the draft onto them while rendering. The row passes a fresh array every
+  // render, so the comparison is by content, never by identity.
+  const [base, setBase] = useState(initial);
+  if (channelSignature(base) !== channelSignature(initial)) {
+    setBase(initial);
+    setChannels((draft) => rebaseChannelDraft(draft, base, initial));
+  }
   const listRef = useRef<HTMLOListElement>(null);
   const [moreOpen, setMoreOpen] = useState(moreOpenInitially);
   const moreRef = useRef<HTMLDivElement>(null);

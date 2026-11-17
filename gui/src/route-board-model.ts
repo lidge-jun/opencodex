@@ -685,3 +685,34 @@ export function withIdleRoutingFields<C extends { targets: Array<{ weight?: numb
     ...(combo.stickyLimit === undefined && item.stickyLimit !== 1 ? { stickyLimit: item.stickyLimit } : {}),
   };
 }
+
+/** Content key for a channel list, so a fresh array with the same channels reads as unchanged. */
+export function channelSignature(list: readonly Pick<RouteChannel, "key" | "lastResort">[]): string {
+  return list.map((channel) => `${channel.key}${channel.lastResort ? " !" : ""}`).join("\n");
+}
+
+/**
+ * Carry an open editor's draft onto a newer stored list (another tab or the advanced editor
+ * saved meanwhile): channels the store dropped leave the draft, channels it added join at the
+ * end, and a fallback-only mark the operator has not touched follows the store. A draft with
+ * no edits simply becomes the stored list.
+ */
+export function rebaseChannelDraft<T extends Pick<RouteChannel, "key" | "lastResort">>(
+  draft: readonly T[],
+  base: readonly T[],
+  next: readonly T[],
+): T[] {
+  if (channelSignature(draft) === channelSignature(base)) return [...next];
+  const before = new Map(base.map((channel) => [channel.key, channel]));
+  const after = new Map(next.map((channel) => [channel.key, channel]));
+  const kept = draft
+    .filter((channel) => !before.has(channel.key) || after.has(channel.key))
+    .map((channel) => {
+      const stored = after.get(channel.key);
+      return stored && before.get(channel.key)?.lastResort === channel.lastResort
+        ? { ...channel, lastResort: stored.lastResort }
+        : channel;
+    });
+  const present = new Set(kept.map((channel) => channel.key));
+  return [...kept, ...next.filter((channel) => !before.has(channel.key) && !present.has(channel.key))];
+}
