@@ -1,5 +1,7 @@
 # 010 — carry #8563, #8749, #8575
 
+Stale check at wp1 entry: `origin/dev` still `c36793a933`; PR heads unchanged (c359dcac7, 180caac76, 013dc428e).
+
 Each carry is one commit created by squashing the PR head onto the lane branch. Commit author stays the
 lane; the original author is credited with a `Co-authored-by` trailer (AGENTS.md, "Landing another
 author's work").
@@ -65,4 +67,13 @@ bun run typecheck
 
 Regression proof: #8563's and #8749's new tests fail on `origin/dev` source (checked by reverting the
 `src/` hunk of each commit and rerunning that file); #8575's input-admission devin cases likewise.
+
+## Outcome (wp1)
+
+Commits `306d3ee75` (#8563), `65d76c8e5` (#8749), `e48adb1c9` (#8575 plus the doc amendment). Focused set
+plus `tests/lab/core-lab-boundary.test.ts`: 361 pass, 0 fail; `bun run typecheck` clean (2,564 files).
+Reverting each commit's `src/` files fails its new tests (5, 1 and 7 failures respectively), so each test
+guards its fix. What did not change: #8575's seed repair still rewrites an operator's deliberate 262_000 for
+`swe-2`, the same rule every existing stale-window entry follows; the review thread asking for an opt-in
+repair stays a residual for maintainers.
 
