@@ -43,7 +43,6 @@ import { redactSecretString } from "../../lib/redact";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { bindRouteReasoningReplayScope } from "./core-replay";
 import {
-  ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
   anthropicRoutingFor,
   formatAnthropicProviderForLog,
 } from "../../oauth/anthropic-routing";
@@ -102,7 +101,7 @@ export function createAdapterContinuations(
     | "commitResolvedOAuthSelection"
     | "genericFailoverAccountId"
     | "genericFailovers"
-    | "genericFailoverLimit"
+    | "genericFailoverLimit" | "anthropicFailoverLimit"
     | "applyFailoverSnapshot"
     | "replayOAuthCredentialSnapshot"
     | "noteRoutedAttemptSend"
@@ -201,8 +200,8 @@ export function createAdapterContinuations(
     allowAccountRefusal = false,
   ): AsyncGenerator<AdapterEvent> {
     let response: Response | undefined;
-    let kiroRefusalPendingReplay: Response | undefined;
-    let kiroReplaySetupFailed = false;
+    let refusalPendingReplay: Response | undefined;
+    let replaySetupFailed = false;
     // One-shot recovery label for the next top-of-loop continuation send after a failover rotation.
     let nextContinuationRecoveryKind: AttemptRecoveryKind | undefined = initialRecoveryKind;
     /**
@@ -313,9 +312,11 @@ export function createAdapterContinuations(
             // Same request-scoped budget as the initial send and the 429/rotation refetches:
             // a terminal-guard continuation is another leg of ONE request, so handing it a
             // fresh `attempts` would let one request exceed the configured total-send ceiling.
-            ...(continuationTransientPolicy || sendBudgetState.adapterSendBudget?.spendEnforced
+            ...(continuationTransientPolicy || anthropicInstance || sendBudgetState.adapterSendBudget?.spendEnforced
               ? {
-                attempts: remainingTransientSendBudget(continuationTransientPolicy?.attempts ?? 1),
+                attempts: Math.min(continuationTransientPolicy?.attempts ?? 1,
+                  remainingTransientSendBudget(continuationTransientPolicy?.attempts ?? 1)
+                    + (sendBudgetState.pendingHopPermit ? 1 : 0)),
                 onSendsConsumed: deferredContinuation?.report ?? continuationReporter,
               }
               : {}),
@@ -338,20 +339,25 @@ export function createAdapterContinuations(
           invalidateSameTargetRequest();
           response = await fetchContinuation("opaque-blob-rejection");
         }
-        if (kiroRefusalPendingReplay) {
-          try { void kiroRefusalPendingReplay.body?.cancel().catch(() => {}); } catch { /* already closed */ }
-          kiroRefusalPendingReplay = undefined;
+        if (refusalPendingReplay) {
+          try { void refusalPendingReplay.body?.cancel().catch(() => {}); } catch { /* already closed */ }
+          refusalPendingReplay = undefined;
           sendBudgetState.pendingHopPermit = undefined;
         }
       } catch (error) {
-        if (kiroRefusalPendingReplay && !options.abortSignal?.aborted && !upstream.signal.aborted) {
+        if (refusalPendingReplay && !options.abortSignal?.aborted && !upstream.signal.aborted) {
           sendBudgetState.pendingHopPermit?.release();
           sendBudgetState.pendingHopPermit = undefined;
-          response = kiroRefusalPendingReplay;
-          kiroRefusalPendingReplay = undefined;
-          kiroReplaySetupFailed = true;
+          response = refusalPendingReplay;
+          refusalPendingReplay = undefined;
+          replaySetupFailed = true;
         } else {
-        yield continuationFailureEvent(error); return;
+          if (refusalPendingReplay) {
+            sendBudgetState.pendingHopPermit?.release();
+            sendBudgetState.pendingHopPermit = undefined;
+            try { void refusalPendingReplay.body?.cancel().catch(() => {}); } catch { /* closed */ }
+          }
+          yield continuationFailureEvent(error); return;
         }
       }
 
@@ -360,7 +366,7 @@ export function createAdapterContinuations(
       // loop; only after the attempts are exhausted does the continuation fail over.
      while (
        response.status === 429
-        && !kiroReplaySetupFailed
+        && !replaySetupFailed
         // A synthesized replay refusal is not a rate limit; replaying the continuation on
         // it would re-send a turn whose first send may already have been processed.
         && !isNonReplayableResponse(response) && !isSameTargetRetryHold(response)
@@ -447,19 +453,25 @@ export function createAdapterContinuations(
        (response.status === 429 || response.status === 403 || response.status === 401)
        && anthropicInstance
        && transportState.anthropicPoolAccountId
-        && !isNonReplayableResponse(response)
+        && !replaySetupFailed && !isNonReplayableResponse(response)
       ) {
-        const nextAccountId = await rotateAnthropicAccountOnResponseForInstance(anthropicInstance, response, {
-          config, accountId: transportState.anthropicPoolAccountId, sessionKey: anthropicSessionKey,
-          model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, currentDecision: currentAnthropicRouteDecision, signal: upstream.signal,
-          canRetry: !sendBudgetExhausted() && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
-          allowAccountRefusal, allow429Recovery: allowAccountRefusal,
-        });
+        const adapterOwnsDispatch = transportState.activeAdapter.fetchResponse !== undefined;
+        const hop = reserveCredentialHop("auth-recovery", `${route.providerName}|${route.modelId}|continuation-anthropic-429`,
+          !adapterOwnsDispatch);
+        let nextAccountId: string | null;
+        try {
+          nextAccountId = await rotateAnthropicAccountOnResponseForInstance(anthropicInstance, response, {
+            config, accountId: transportState.anthropicPoolAccountId, sessionKey: anthropicSessionKey,
+            model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, currentDecision: currentAnthropicRouteDecision, signal: upstream.signal,
+            canRetry: hop.allowed && transportState.anthropicPoolFailovers < transportState.anthropicFailoverLimit,
+            allowAccountRefusal, allow429Recovery: allowAccountRefusal,
+          });
+        } catch (error) { hop.permit?.release(); throw error; }
+        if (!nextAccountId) hop.permit?.release();
         if (nextAccountId) {
           try {
             const admitted = await commitResolvedOAuthSelection(await anthropicRoutingFor(anthropicInstance).getAnthropicPoolAccessSnapshot(nextAccountId));
             if (!admitted) throw new Error("OAuth selection changed during recovery");
-            try { void response.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
             transportState.anthropicPoolAccountId = admitted.accountId;
             transportState.anthropicPoolFailovers += 1;
             route.provider = { ...route.provider, apiKey: admitted.accessToken };
@@ -483,8 +495,11 @@ export function createAdapterContinuations(
             recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
             nextContinuationRecoveryKind = response.status === 401 ? "oauth-401"
               : response.status === 403 ? "oauth-account-403" : "anthropic-oauth-429";
+            sendBudgetState.pendingHopPermit = hop.permit;
+            refusalPendingReplay = response;
             continue;
           } catch {
+            hop.permit?.release();
             // fall through to emit continuation error below
           }
         }
@@ -499,7 +514,7 @@ export function createAdapterContinuations(
        (response.status === 429 || response.status === 400 || response.status === 403)
        && transportState.genericFailoverAccountId
         && !isNonReplayableResponse(response)
-        && !kiroReplaySetupFailed
+        && !replaySetupFailed
       ) {
         const refusal = classifyKiroRefusal(response.status,
           await readDisplaySafeErrorText(response.clone(), upstream.signal, ""));
@@ -583,7 +598,7 @@ export function createAdapterContinuations(
               // same permit so its reporter settles only this booking.
               sendBudgetState.pendingHopPermit = hop.permit;
               nextContinuationRecoveryKind = "oauth-account-429";
-              kiroRefusalPendingReplay = response;
+              refusalPendingReplay = response;
               continue;
             }
           } catch {
