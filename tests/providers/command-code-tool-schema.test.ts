@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { createCommandCodeAdapter } from "../../src/adapters/command-code";
 import { normalizeAnthropicInputSchema } from "../../src/adapters/anthropic-input-schema";
-import type { OcxParsedRequest, OcxProviderConfig, OcxTool } from "../../src/types";
+import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxTool } from "../../src/types";
+import { createTestTranslatorBudget } from "../helpers/translator-budget";
 
 const provider: OcxProviderConfig = {
   adapter: "command-code",
@@ -418,5 +419,96 @@ describe("normalizeAnthropicInputSchema", () => {
       }],
     });
     expect(normalized.required).toEqual(["path", "mode"]);
+  });
+});
+
+describe("normalizeAnthropicInputSchema review follow-ups (#8873)", () => {
+  const ARGS = { type: "object", properties: { path: { type: "string" } }, required: ["path"] };
+
+  test("percent-decodes a pointer fragment before splitting it (RFC 6901 section 6)", () => {
+    const normalized = normalizeAnthropicInputSchema({
+      $defs: { "My Args": ARGS },
+      allOf: [{ $ref: "#/$defs/My%20Args" }],
+    });
+    expect(normalized.properties).toEqual({ path: { type: "string" } });
+    expect(normalized.required).toEqual(["path"]);
+  });
+
+  test("a malformed percent escape stays an unresolved reference instead of throwing", () => {
+    const normalized = normalizeAnthropicInputSchema({
+      $defs: { Args: ARGS },
+      allOf: [{ $ref: "#/$defs/%E0%A4%A" }],
+    });
+    expect(normalized.properties).toEqual({});
+    expect(normalized.required).toBeUndefined();
+  });
+
+  test("numeric pointer tokens select array elements such as a composition branch", () => {
+    const normalized = normalizeAnthropicInputSchema({
+      $defs: { Wrapper: { allOf: [ARGS] } },
+      allOf: [{ $ref: "#/$defs/Wrapper/allOf/0" }],
+    });
+    expect(normalized.properties).toEqual({ path: { type: "string" } });
+    expect(normalized.required).toEqual(["path"]);
+    // A token that is not a canonical index does not select an element.
+    expect(normalizeAnthropicInputSchema({
+      $defs: { Wrapper: { allOf: [ARGS] } },
+      allOf: [{ $ref: "#/$defs/Wrapper/allOf/00" }],
+    }).properties).toEqual({});
+  });
+
+  test("a direct $ref alias chain is bounded by the expansion limit", () => {
+    const aliasChain = (length: number): Record<string, unknown> => {
+      const defs: Record<string, unknown> = { A0: ARGS };
+      for (let index = 1; index < length; index += 1) defs[`A${index}`] = { $ref: `#/$defs/A${index - 1}` };
+      return { $defs: defs, allOf: [{ $ref: `#/$defs/A${length - 1}` }] };
+    };
+    expect(normalizeAnthropicInputSchema(aliasChain(40)).properties).toEqual({ path: { type: "string" } });
+    expect(() => normalizeAnthropicInputSchema(aliasChain(10_000)))
+      .toThrow("tool input schema reference expansion exceeded the supported limit");
+  });
+
+  test("conjoins same-name properties met on allOf paths instead of letting the later one win", () => {
+    const normalized = normalizeAnthropicInputSchema({
+      $defs: { Base: { allOf: [{ properties: { path: { type: "string", minLength: 1 } } }] } },
+      properties: { mode: { type: "string" } },
+      allOf: [
+        { $ref: "#/$defs/Base", properties: { path: { maxLength: 10 } } },
+        { properties: { mode: { enum: ["fast", "slow"] } } },
+      ],
+    });
+    const properties = JSON.parse(JSON.stringify(normalized.properties)) as Record<string, unknown>;
+    expect(properties.path).toEqual({ allOf: [{ maxLength: 10 }, { type: "string", minLength: 1 }] });
+    expect(properties.mode).toEqual({ allOf: [{ type: "string" }, { enum: ["fast", "slow"] }] });
+  });
+});
+
+describe("Command Code text-call recovery uses the wire schema (#8873)", () => {
+  test("restores a MiMo text call for a root-composed tool", async () => {
+    const tool = {
+      name: "read_args",
+      description: "Read a file",
+      parameters: {
+        $defs: { Args: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
+        allOf: [{ $ref: "#/$defs/Args" }],
+      },
+    } as OcxTool;
+    const events = [
+      { type: "text-start", id: "t" },
+      { type: "text-delta", id: "t", text: "<tool_call>\n<function=read_args>\n<parameter=path>\nsrc/a.ts\n</parameter>\n</function>\n</tool_call>" },
+      { type: "text-end", id: "t" },
+      { type: "finish", rawFinishReason: "stop" },
+    ];
+    const adapter = createCommandCodeAdapter({
+      ...provider,
+      fetch: (async () => new Response(events.map(event => JSON.stringify(event)).join("\n"))) as typeof fetch,
+    } as OcxProviderConfig);
+    const request = await adapter.buildRequest({ ...parsedRequest([tool]), modelId: "xiaomi/mimo-v2.6-flash" });
+    const out: AdapterEvent[] = [];
+    for await (const event of adapter.parseStream(await adapter.fetchResponse!(request), createTestTranslatorBudget())) out.push(event);
+    const starts = out.filter(event => event.type === "tool_call_start") as Array<{ name: string }>;
+    const args = out.filter(event => event.type === "tool_call_delta").map(event => (event as { arguments: string }).arguments).join("");
+    expect(starts.map(event => event.name)).toEqual(["read_args"]);
+    expect(JSON.parse(args)).toEqual({ path: "src/a.ts" });
   });
 });

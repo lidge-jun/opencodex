@@ -204,6 +204,25 @@ describe("anthropic tool input_schema normalization", () => {
     expect(inputSchema.allOf).toBeUndefined();
   });
 
+  test("follows encoded and array-index pointers and conjoins allOf property collisions", async () => {
+    const inputSchema = await toolSchema({
+      $defs: {
+        "Base Args": { allOf: [{ type: "object", properties: { path: { type: "string", minLength: 1 } }, required: ["path"] }] },
+        Wrapper: { allOf: [{ type: "object", properties: { mode: { type: "string" } }, required: ["mode"] }] },
+      },
+      allOf: [
+        { $ref: "#/$defs/Base%20Args", properties: { path: { maxLength: 10 } } },
+        { $ref: "#/$defs/Wrapper/allOf/0" },
+      ],
+    });
+
+    expect(JSON.parse(JSON.stringify(inputSchema.properties))).toEqual({
+      path: { allOf: [{ maxLength: 10 }, { type: "string", minLength: 1 }] },
+      mode: { type: "string" },
+    });
+    expect([...(inputSchema.required as string[])].sort()).toEqual(["mode", "path"]);
+  });
+
   test("keeps the documented last-branch-wins loss for root alternatives", async () => {
     const schema = await toolSchema({
       oneOf: [

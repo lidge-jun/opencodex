@@ -27,10 +27,22 @@ import {
 import { CommandCodeToolTextFilter, type CommandCodeDeclaredTools } from "./command-code-tool-text";
 import { EMPTY_COMMAND_CODE_PROJECT_CONTEXT, loadCommandCodeProjectContext } from "./command-code-project-context";
 
+/**
+ * Text-call recovery validates against the schema the model was shown (`wireTools`), so a
+ * root-composed tool keeps the top-level `properties` its markup names. Definitions are dropped
+ * because the restored-value validator accepts no `$ref`: a reference left in the normalized
+ * schema still fails closed there.
+ */
+function recoverySchema(tool: OcxTool): Record<string, unknown> {
+  if (tool.freeform === true) return tool.parameters;
+  const { $defs: _defs, definitions: _definitions, ...schema } = normalizeAnthropicInputSchema(tool.parameters);
+  return schema;
+}
+
 function declaredTools(tools: OcxTool[]): CommandCodeDeclaredTools {
   return new Map(tools.map(tool => [
     namespacedToolName(tool.namespace, tool.name),
-    { freeform: tool.freeform === true, schema: tool.parameters },
+    { freeform: tool.freeform === true, schema: recoverySchema(tool) },
   ]));
 }
 

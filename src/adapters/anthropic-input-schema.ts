@@ -3,11 +3,14 @@ import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
 /**
  * Anthropic rejects a root-level missing `type` and root-level `oneOf`/`anyOf`/`allOf` in
  * `input_schema`. Normalize the root only: ensure `type:"object"` + `properties`, flatten root
- * composition while preserving nested schemas, and inline local `#/...` refs (`$defs` and the like)
- * before flattening so a referenced branch keeps its parameters and required members. A `$ref`
- * with siblings merges both property maps, unions `required`, and keeps a property declared on
- * both sides conjunctive under `allOf`; composition on both sides is kept, not replaced.
- * Shared by the anthropic and command-code adapters.
+ * composition while preserving nested schemas, and inline local `#/...` refs (RFC 6901: the
+ * fragment is percent-decoded, numeric tokens index arrays) before flattening so a referenced
+ * branch keeps its parameters and required members. A `$ref` with siblings merges both property
+ * maps, unions `required`, and keeps a property declared on both sides conjunctive under
+ * `allOf`; composition on both sides is kept, not replaced. A property met twice on an all-`allOf`
+ * path is conjoined the same way. Composition branches and direct alias hops share one 4096-step
+ * budget. Shared by the anthropic and command-code adapters; Command Code's text-call recovery
+ * validates against the same normalized schema.
  *
  * Flattening root alternatives is lossy: later branches win for a same-named property, and
  * `oneOf`/`anyOf` branch `required` members are not promoted because no branch is guaranteed.
@@ -23,17 +26,41 @@ const COMPOSITION_KEYS = ["oneOf", "anyOf", "allOf"] as const;
 const ROOT_COMPOSITION_EXPANSION_LIMIT = 4096;
 const ROOT_COMPOSITION_LIMIT_MESSAGE =
   "tool input schema reference expansion exceeded the supported limit";
+/** Shared work budget: composition branches and direct `$ref` alias hops both count against it. */
+interface ExpansionBudget { count: number }
+
+function spend(budget: ExpansionBudget): void {
+  budget.count += 1;
+  if (budget.count > ROOT_COMPOSITION_EXPANSION_LIMIT) throw new Error(ROOT_COMPOSITION_LIMIT_MESSAGE);
+}
 
 function decodePointerSegment(segment: string): string {
   return segment.replace(/~1/g, "/").replace(/~0/g, "~");
 }
 
+/**
+ * RFC 6901: a URI fragment is percent-decoded before it is split into tokens, each token then
+ * undoes `~1`/`~0`, and a canonical decimal token selects an array element. A malformed escape
+ * or a path that does not resolve leaves the reference unresolved.
+ */
 function resolveLocalPointer(root: Record<string, unknown>, pointer: string): Record<string, unknown> | undefined {
   if (!pointer.startsWith(LOCAL_REF_PREFIX)) return undefined;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(pointer.slice(2));
+  } catch {
+    return undefined;
+  }
   let node: unknown = root;
-  for (const segment of pointer.slice(2).split("/")) {
-    if (!node || typeof node !== "object" || Array.isArray(node)) return undefined;
-    node = (node as Record<string, unknown>)[decodePointerSegment(segment)];
+  for (const segment of decoded.split("/")) {
+    const token = decodePointerSegment(segment);
+    if (Array.isArray(node)) {
+      if (!/^(?:0|[1-9]\d*)$/.test(token)) return undefined;
+      node = node[Number(token)];
+      continue;
+    }
+    if (!node || typeof node !== "object" || !Object.hasOwn(node, token)) return undefined;
+    node = (node as Record<string, unknown>)[token];
   }
   return node && typeof node === "object" && !Array.isArray(node)
     ? node as Record<string, unknown>
@@ -94,23 +121,45 @@ function mergeRefSiblings(
   return merged;
 }
 
-/** Inline a local `#/...` reference so root-composition branches keep their definitions. */
+/**
+ * Inline a local `#/...` reference so root-composition branches keep their definitions. Each
+ * alias hop spends the shared budget, so a long direct chain fails explicitly instead of
+ * recursing until the stack or allocation gives out.
+ */
 function dereferenceLocal(
   node: unknown,
   root: Record<string, unknown>,
   seen: ReadonlySet<string>,
+  budget: ExpansionBudget,
 ): Record<string, unknown> | undefined {
   if (!node || typeof node !== "object" || Array.isArray(node)) return undefined;
   const record = node as Record<string, unknown>;
   const ref = record.$ref;
   if (typeof ref !== "string" || !ref.startsWith(LOCAL_REF_PREFIX) || seen.has(ref)) return record;
+  spend(budget);
   const target = resolveLocalPointer(root, ref);
   if (!target) return record;
   const nextSeen = new Set(seen);
   nextSeen.add(ref);
-  const resolved = dereferenceLocal(target, root, nextSeen) ?? target;
+  const resolved = dereferenceLocal(target, root, nextSeen, budget) ?? target;
   const { $ref: _ignored, ...siblings } = record;
   return mergeRefSiblings(resolved, siblings);
+}
+
+/**
+ * `allOf` applies every branch, so a property met twice on an all-`allOf` path keeps both
+ * schemas under `allOf`. On a path through `oneOf`/`anyOf` the documented last-branch-wins
+ * flattening still applies. The same schema object reached twice (a shared `$ref`) is kept once.
+ */
+function collectProperty(
+  properties: Record<string, unknown>,
+  name: string,
+  schema: unknown,
+  conjunctive: boolean,
+): void {
+  const existing = properties[name];
+  if (existing === schema) return;
+  properties[name] = conjunctive && existing !== undefined ? { allOf: [existing, schema] } : schema;
 }
 
 /**
@@ -128,7 +177,7 @@ function collectRootComposition(
   mergeRequired: boolean,
   properties: Record<string, unknown>,
   required: Set<string>,
-  visits: { count: number },
+  budget: ExpansionBudget,
 ): void {
   for (const key of COMPOSITION_KEYS) {
     const variants = node[key];
@@ -139,17 +188,20 @@ function collectRootComposition(
       if (!record) continue;
       const ref = typeof record.$ref === "string" ? record.$ref : undefined;
       if (ref && chain.has(ref)) continue;
-      visits.count += 1;
-      if (visits.count > ROOT_COMPOSITION_EXPANSION_LIMIT) throw new Error(ROOT_COMPOSITION_LIMIT_MESSAGE);
-      const resolved = dereferenceLocal(variant, root, chain);
+      spend(budget);
+      const resolved = dereferenceLocal(variant, root, chain, budget);
       if (!resolved) continue;
       const nextChain = ref ? new Set(chain).add(ref) : chain;
       const branchProperties = asSchemaMap(resolved.properties);
-      if (branchProperties) Object.assign(properties, branchProperties);
+      if (branchProperties) {
+        for (const [name, schema] of Object.entries(branchProperties)) {
+          collectProperty(properties, name, schema, branchMergesRequired);
+        }
+      }
       if (branchMergesRequired && Array.isArray(resolved.required)) {
         for (const item of resolved.required) if (typeof item === "string") required.add(item);
       }
-      collectRootComposition(resolved, root, nextChain, branchMergesRequired, properties, required, visits);
+      collectRootComposition(resolved, root, nextChain, branchMergesRequired, properties, required, budget);
     }
   }
 }
@@ -159,7 +211,8 @@ export function normalizeAnthropicInputSchema(schema: unknown): Record<string, u
   const obj = stripped && typeof stripped === "object" && !Array.isArray(stripped)
     ? stripped as Record<string, unknown>
     : {};
-  const root = dereferenceLocal(obj, obj, new Set()) ?? obj;
+  const budget: ExpansionBudget = { count: 0 };
+  const root = dereferenceLocal(obj, obj, new Set(), budget) ?? obj;
   const hasRootComposition = COMPOSITION_KEYS.some(key => Array.isArray(root[key]));
   const type = root.type;
   const rootObjectType = type === "object" || (Array.isArray(type) && type.includes("object"));
@@ -185,7 +238,7 @@ export function normalizeAnthropicInputSchema(schema: unknown): Record<string, u
     for (const item of root.required) if (typeof item === "string") required.add(item);
   }
 
-  collectRootComposition(root, root, new Set(), true, properties, required, { count: 0 });
+  collectRootComposition(root, root, new Set(), true, properties, required, budget);
 
   const normalized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(root)) {
