@@ -602,6 +602,65 @@ De forma predeterminada, un combo publica el **intersección** de las modalidade
 
 En el panel de control, el interruptor **Imagen / multimodal** se puede habilitar siempre que cada objetivo tenga capacidades conocidas de entrada de imagen o texto. Los miembros de la imagen nativa permanecen sin cambios; los miembros de solo texto se declaran automáticamente solo texto en guardar (`modelCapabilities[model].inputModalities = ["text"]`), por lo que el [Visión Sidecar](/es/guides/sidecars/) describe sus imágenes. La sugerencia del switch nombra a los miembros que se inscribirán. Un miembro cuyas modalidades son desconocidas o no tienen entrada de texto (por ejemplo, un modelo de solo audio) no puede ser cubierto por el sidecar; mantiene el interruptor no disponible y se nombra en la sugerencia. Si el [Visión Sidecar](/es/guides/sidecars/) está deshabilitado globalmente, habilitar el interruptor muestra una advertencia que enlaza con el tablero: la inscripción aún se guarda, pero las imágenes se reemplazan con una nota de omisión y las solicitudes continúan sin descripciones de imágenes hasta que se vuelve a habilitar el sidecar. Desactivar el interruptor desactiva la entrada de imagen para el combo pero mantiene esas declaraciones del proveedor, y `PUT /api/combos` acepta la misma inscripción como una matriz opcional `visionSidecarTargets` de nivel superior de objetivos `{ provider, model }` exactos (solamente solicitud; nunca se almacena en el combo y se rechaza mientras `imageInput` es `"disabled"` cuando la lista de inscripción no está vacía). Las entradas que ya aceptan la entrada de imagen o se declaran sin texto se rechazan con HTTP 400 en lugar de sobrescribirlas, las entradas que el sidecar ya cubre se omiten y se rechaza un guardado antes de que la publicación restaure el combo y cada declaración juntos. Eliminar un miembro del combo no elimina su declaración de solo texto; límpialo en el editor del proveedor si ya no lo deseas.
 
+<a id="union-capabilities-capabilitypolicy"></a>
+
+## Capacidades de unión (`capabilityPolicy`)
+
+La regla de intersección existe porque el selector ve una sola fila mientras que el combo enrutaba sin
+mirar la solicitud. Establece `capabilityPolicy: "union"` para anunciar lo que **cualquier** destino puede
+servir y que el combo elija por solicitud:
+
+- **Catálogo.** `inputModalities` es la unión de las modalidades de los destinos, así que un único respaldo
+  de solo texto ya no oculta la entrada de imagen. Con `reasoningEffortMode: "adaptive"`, la escala de
+  esfuerzo es la unión de las escalas no vacías de los destinos, ordenada por rango; `"strict"` mantiene la
+  intersección, porque strict promete que cada destino sirve tal cual el nivel anunciado. `contextWindow`,
+  `maxInputTokens` y `autoCompactTokenLimit` son los del destino **más grande**, de modo que el cliente
+  mantiene la conversación hasta llenar la ventana mayor. `maxOutputTokens` sigue siendo el mínimo, porque
+  limita cada respuesta y una solicitud rara vez dice cuánta salida necesita. `imageInput: "disabled"`
+  sigue eliminando la imagen.
+- **Imágenes.** Para una solicitud con imágenes, cada destino es nativo (acepta imágenes), degradado (de
+  solo texto comprobado, y el [Vision Sidecar](/es/guides/sidecars/) está habilitado, así que describe la
+  imagen) o incapaz (de solo texto comprobado con el sidecar deshabilitado). Los destinos nativos y
+  degradados conservan su orden configurado, así que un destino de suscripción degradado sigue sirviendo
+  antes que uno nativo posterior; solo se omiten los incapaces. Un destino cuya capacidad de imagen se
+  desconoce cuenta como nativo, el mismo paso directo que el destino aplica por sí solo.
+- **Contexto.** Antes de elegir, el proxy estima los tokens de entrada de la solicitud con el mismo
+  estimador que usa su admisión de contexto (sobrestima un poco a propósito) y omite un destino cuyo
+  límite de entrada no puede contenerlos. Un destino sin ventana conocida nunca se omite. Los turnos de
+  compactación nunca se filtran.
+- **Esfuerzo.** Con `"adaptive"`, un esfuerzo del llamador que falta en la escala conocida de un destino
+  se baja al nivel más alto de ese destino que no lo supere (`xhigh` en un destino low/medium/high se
+  envía como `high`).
+- **Orden de degradación.** Un destino de solo texto recibe primero la descripción de la imagen del
+  sidecar. Las imágenes solo se descartan cuando no es posible ninguna descripción, y eso se registra
+  como advertencia. El esfuerzo baja al nivel admitido más cercano del destino, registrado a nivel debug
+  con los niveles solicitado y enviado.
+- **Nada puede servir.** Cuando la ventana de ningún destino puede contener la entrada,
+  `onUnservable: "degrade"` (el valor predeterminado) la envía al destino con la ventana más grande, con
+  la misma admisión flexible que recibe una solicitud directa, y registra una advertencia. Cuando hay
+  destinos que pueden contenerla pero ninguno puede tomar su imagen, `"degrade"` la despacha igualmente:
+  el destino reemplaza cada imagen con una nota de omisión y el proxy registra una advertencia.
+  `onUnservable: "reject"` responde HTTP 400 antes de llamar a cualquier destino en ambos casos.
+
+```json
+{
+  "combos": {
+    "claude": {
+      "targets": [
+        { "provider": "anthropic", "model": "claude-opus-5-5" },
+        { "provider": "relay", "model": "deepseek-v4.1-flash" }
+      ],
+      "reasoningEffortMode": "adaptive",
+      "capabilityPolicy": "union"
+    }
+  }
+}
+```
+
+El valor predeterminado es `"intersection"`, que mantiene el comportamiento descrito arriba. Ambos campos
+se almacenan solo cuando difieren de sus valores predeterminados, y un `PUT /api/combos` que los omite
+conserva los valores almacenados.
+
 <a id="encrypted-v2-sub-agent-tasks"></a>
 
 ## Tareas de subagentes encriptadas v2
@@ -700,6 +759,8 @@ Los combos se almacenan en el objeto `combos` de nivel superior, con la clave de
 | `defaultEffortMode` | No | `"fallback"` | `"fallback"` preserva el esfuerzo explícito de la persona que llama. `"force"` anula el esfuerzo del llamante válido, requiere un valor predeterminado no nulo válido y puede aumentar el costo y la latencia. |
 | `reasoningEffortMode` | No | `"strict"` | `"strict"` intersecta los niveles de esfuerzo anunciados por todos los destinos conocidos: si uno no anuncia ningún control de esfuerzo, el selector del combo queda vacío. `"adaptive"` excluye esas listas vacías de la intersección publicada. Al enviar la solicitud, una lista explícitamente vacía, o desconocida en modo adaptativo, elimina los controles de esfuerzo/pensamiento no admitidos y conserva los campos de razonamiento independientes del esfuerzo que sí se admiten, como `reasoning.summary`. Los destinos con niveles conocidos y no vacíos mantienen la resolución de esfuerzo existente. |
 | `jevEffortMode` | No | `"decide"` | Solo combos JEV. `"decide"` aplica el esfuerzo decidido sobre el cliente. `"client"` conserva destino y esfuerzo de cliente/escala, sin retier del modelo por JEV; `defaultEffortMode: "force"` sigue prevaleciendo. Caché depende de esfuerzo, destino, prefijo, proveedor y cuenta estables. |
+| `capabilityPolicy` | No | `"intersection"` | `"intersection"` anuncia solo lo que sirven todos los destinos. `"union"` anuncia lo que sirve cualquier destino (entrada de imagen y, con `"adaptive"`, la escala de esfuerzo), anuncia la ventana de contexto y el límite de entrada más grandes, omite los destinos que no pueden tomar la imagen de la solicitud o contener su entrada, y baja por destino un esfuerzo del llamador no admitido. La salida máxima sigue siendo el mínimo. Consulta [Capacidades de unión](#union-capabilities-capabilitypolicy). |
+| `onUnservable` | No | `"degrade"` | Solo combos `"union"`. Cuando la ventana de ningún destino puede contener la entrada, `"degrade"` envía a la ventana más grande con una advertencia; cuando ningún destino habilitado puede tomar la imagen, despacha y omite las imágenes con una advertencia. `"reject"` responde HTTP 400 en ambos casos. |
 | `imageInput` | No | `"auto"` | `"auto"` o `"disabled"`. `"auto"` publica soporte de imagen solo cuando cada objetivo soporta imágenes; `"disabled"` fuerza el texto solamente (cae la imagen de las modalidades publicadas y rechaza las solicitudes portadoras de imágenes antes del envío). |
 | `alias` | No | Ninguno | ID de modelo público recortado opcional; use las reglas de alias anteriores. Un valor vacío se almacena como ningún alias. |
 | `nativeAlias` | No | `false` | Permitir explícitamente que un `alias` nativo desnudo actualmente soportado tenga prioridad de enrutamiento y catálogo. Nunca se infiere del alias. |
