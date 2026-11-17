@@ -29,11 +29,11 @@ afterEach(async () => {
   }
 });
 
-async function render(items: string[], scope = "agy") {
+async function render(items: string[], scope = "agy", expandAll = false) {
   const { createRoot } = await import("react-dom/client");
   await act(async () => {
     root ??= createRoot(host);
-    root.render(<LanguageProvider><FamilyGroupList items={items} slugOf={slug => slug} scope={scope}
+    root.render(<LanguageProvider><FamilyGroupList items={items} slugOf={slug => slug} scope={scope} expandAll={expandAll}
       renderItem={slug => <div key={slug} className="row-probe">{slug}</div>} /></LanguageProvider>);
   });
 }
@@ -60,6 +60,18 @@ test("collapsing hides the rows and is remembered across a remount", async () =>
   expect(rows()).toEqual(["a/gemini-3"]);
   await render(["a/gpt-6", "a/gemini-3"], "other-provider");
   expect(rows()).toEqual(["a/gpt-6", "a/gemini-3"]);
+});
+
+test("a search query shows matches inside a collapsed family and leaves the fold for later", async () => {
+  await render(["a/gpt-6", "a/gemini-3"]);
+  await act(async () => { heads()[0]!.click(); });
+  expect(rows()).toEqual(["a/gemini-3"]);
+  await render(["a/gpt-6", "a/gemini-3"], "agy", true);
+  expect(rows()).toEqual(["a/gpt-6", "a/gemini-3"]);
+  expect(heads().every(head => head.disabled && head.getAttribute("aria-expanded") === "true")).toBe(true);
+  await render(["a/gpt-6", "a/gemini-3"]);
+  expect(heads()[0]!.getAttribute("aria-expanded")).toBe("false");
+  expect(rows()).toEqual(["a/gemini-3"]);
 });
 
 test("one family renders flat without a header", async () => {

@@ -16,13 +16,19 @@ interface FamilyGroupListProps<T> {
    * (a family header is not a list item), and `renderItem` returns an `<li>`.
    */
   listClassName?: string;
+  /**
+   * Set while a search query narrows `items`: every family shows its rows, because a match inside
+   * a collapsed family would otherwise be hidden behind a header the user has no reason to open.
+   * The remembered folds are left untouched and return once the query is cleared.
+   */
+  expandAll?: boolean;
 }
 
 /**
  * Lists models under collapsible family headers (GPT, Gemini, Claude, ...). A list that holds a
  * single family is rendered flat: one header over every row would only add a click.
  */
-export function FamilyGroupList<T>({ items, slugOf, scope, renderItem, listClassName }: FamilyGroupListProps<T>) {
+export function FamilyGroupList<T>({ items, slugOf, scope, renderItem, listClassName, expandAll = false }: FamilyGroupListProps<T>) {
   const t = useT();
   const [collapsed, setCollapsed] = useState(() => readCollapsedFamilies());
   const groups = groupByModelFamily(items, slugOf);
@@ -34,7 +40,7 @@ export function FamilyGroupList<T>({ items, slugOf, scope, renderItem, listClass
     <>
       {groups.map(({ family, items: rows }) => {
         const key = familyGroupKey(scope, family.id);
-        const open = !collapsed.has(key);
+        const open = expandAll || !collapsed.has(key);
         const name = family.id === "other" ? t("models.family.other") : family.label;
         return (
           <div key={family.id} className="model-family-group" role="group" aria-label={name}>
@@ -42,6 +48,7 @@ export function FamilyGroupList<T>({ items, slugOf, scope, renderItem, listClass
               type="button"
               className="model-family-head"
               aria-expanded={open}
+              disabled={expandAll}
               aria-label={t("models.family.toggleLabel", { family: name, count: rows.length })}
               onClick={() => setCollapsed(toggleCollapsedFamily(key))}
             >

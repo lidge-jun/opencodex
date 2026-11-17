@@ -1,10 +1,12 @@
 // Model family registry: the one table that says which family a model belongs to and where that
-// family sits in a grouped picker. Pure and dependency-free so the proxy, the CLI and the GUI
-// bundle all import this same file instead of keeping their own copy of the rules.
+// family sits in a grouped picker. Pure and dependency-free so the CLI picker ordering
+// (src/cli/model-picker-ordering.ts) and the GUI bundle import this same file instead of keeping
+// their own copy of the rules. The proxy does not import it: it only applies the saved
+// `pickerOrder` that one of those two computed.
 
 export const MODEL_FAMILY_IDS = [
   "gpt", "gemini", "claude", "grok", "deepseek",
-  "qwen", "kimi", "glm", "minimax", "llama", "mistral",
+  "qwen", "kimi", "glm", "minimax", "llama", "mistral", "gemma",
   "other",
 ] as const;
 export type ModelFamilyId = (typeof MODEL_FAMILY_IDS)[number];
@@ -22,7 +24,7 @@ export interface ModelFamily {
  * nothing by test and is the fallback; it stays last.
  */
 export const MODEL_FAMILIES: readonly ModelFamily[] = [
-  { id: "gpt", label: "GPT", test: /\bgpt|\bo[134](?:\b|-)|\bchatgpt/ },
+  { id: "gpt", label: "GPT", test: /\bgpt|\bo[134](?:\b|-)|\bchatgpt|(?:^|\/)codex-mini/ },
   { id: "gemini", label: "Gemini", test: /gemini/ },
   { id: "claude", label: "Claude", test: /claude|\b(?:opus|sonnet|haiku|fable)\b/ },
   { id: "grok", label: "Grok", test: /grok/ },
@@ -33,6 +35,7 @@ export const MODEL_FAMILIES: readonly ModelFamily[] = [
   { id: "minimax", label: "MiniMax", test: /minimax/ },
   { id: "llama", label: "Llama", test: /\bllama/ },
   { id: "mistral", label: "Mistral", test: /mistral|mixtral|codestral|devstral|magistral/ },
+  { id: "gemma", label: "Gemma", test: /gemma/ },
   { id: "other", label: "Other", test: /(?!)/ },
 ];
 

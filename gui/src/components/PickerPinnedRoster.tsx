@@ -30,6 +30,7 @@ export default function PickerPinnedRoster({ apiBase, onSaved }: { apiBase: stri
   const full = chosen.length >= FEATURED_MAX;
   const freeSlots = Math.max(0, FEATURED_MAX - chosen.length);
 
+  const searching = query.trim() !== "";
   const availableFiltered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return available.filter(m => !q || m.toLowerCase().includes(q));
@@ -118,7 +119,7 @@ export default function PickerPinnedRoster({ apiBase, onSaved }: { apiBase: stri
           {availableFiltered.length === 0 ? (
             <p className="m-0 px-4 py-6 text-center text-[13px] text-fg-muted">{t("sub.noModels")}</p>
           ) : (
-            <FamilyGroupList items={availableFiltered} slugOf={m => m} scope="picker-pinned"
+            <FamilyGroupList items={availableFiltered} slugOf={m => m} scope="picker-pinned" expandAll={searching}
               listClassName="m-0 flex min-w-0 list-none flex-col divide-y divide-line p-0" renderItem={m => {
               const isFeatured = chosenSet.has(m);
               const priority = isFeatured ? chosen.indexOf(m) + 1 : null;

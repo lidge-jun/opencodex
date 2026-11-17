@@ -23,7 +23,10 @@
   text-align: left;
 }
 
-.model-family-head:hover { background: var(--hover); }
+.model-family-head:not(:disabled):hover { background: var(--hover); }
+
+/* Disabled while a search query forces every family open. */
+.model-family-head:disabled { cursor: default; }
 
 .model-family-head:focus-visible {
   outline: 2px solid var(--accent-ring);

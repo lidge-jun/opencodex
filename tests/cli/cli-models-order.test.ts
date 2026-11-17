@@ -167,10 +167,18 @@ describe("models order commands", () => {
     ]);
     expect(f.writes()[0]?.body).toEqual({ pickerOrder: ["beta/z", "alpha/a", "alpha/b"], pickerOrderMode: null });
   });
-  for (const mode of ["alphabetical", "provider", "family", "most-used"]) test(`preset ${mode} does not prepend featured`, async () => {
+  for (const mode of ["alphabetical", "provider", "most-used"]) test(`preset ${mode} does not prepend featured`, async () => {
     const f = fixture({ settings: { ...initial, chosen: ["beta/z"] } });
     expect(await handleModelsOrderCommand(["set", `--mode=${mode}`, "--json"], f.deps)).toBe(0);
     expect(f.writes()[0]?.body).toEqual({ pickerOrder: ["alpha/a", "alpha/b", "beta/z"], pickerOrderMode: mode });
+  });
+  test("preset family groups ids from different families by family, not by provider or featured", async () => {
+    const mixed = ["alpha/claude-x", "beta/gpt-6", "alpha/gemini-3"];
+    const models = mixed.map(namespaced => ({ provider: namespaced.split("/")[0]!, id: namespaced.split("/")[1]!, namespaced }));
+    const f = fixture({ settings: { ...initial, pickerAvailable: mixed, chosen: ["alpha/claude-x"] }, models });
+    expect(await handleModelsOrderCommand(["set", "--mode=family", "--json"], f.deps)).toBe(0);
+    // Provider order would be claude-x, gemini-3, gpt-6; featured-first would lead with claude-x.
+    expect(f.writes()[0]?.body).toEqual({ pickerOrder: ["beta/gpt-6", "alpha/gemini-3", "alpha/claude-x"], pickerOrderMode: "family" });
   });
   test("most-used queries all/all and attributes requested identity instead of resolved model", async () => {
     const f = fixture({ usage: { models: [{ provider: "beta", model: "z", requests: 10, resolvedModel: "alpha/a" }] } });

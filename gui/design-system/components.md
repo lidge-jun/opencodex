@@ -106,4 +106,5 @@
 
 - `FamilyGroupList`(`gui/src/components/FamilyGroupList.tsx`)는 모델 목록을 GPT, Gemini, Claude 같은 모델 계열별로 접을 수 있는 헤더 아래에 묶는다. 계열은 `src/lib/model-families.ts` 한 곳에서 정의한다.
 - 헤더는 `aria-expanded` 버튼이고 이름과 개수를 보여 준다. 접힘 상태는 `localStorage`에 기억하며 기본값은 펼침이다. 계열이 하나뿐인 목록은 헤더 없이 그대로 그린다.
+- 검색어가 있는 동안(`expandAll`)은 접힌 계열 안의 일치 항목이 숨지 않도록 모든 계열을 펼치고 헤더를 비활성화한다. 기억된 접힘 상태는 건드리지 않으므로 검색어를 지우면 돌아온다.
 - 스타일은 `gui/src/styles/model-family-groups.css`에 두고 토큰만 쓴다.

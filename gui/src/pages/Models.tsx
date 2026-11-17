@@ -1697,7 +1697,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
             {freeOnlyActive && scoped.length === 0 && rows.length > 0 && (
               <p className="muted text-label" role="status">{t("models.noFreeMatch")}</p>
             )}
-             <FamilyGroupList items={visible} slugOf={m => m.namespaced} scope={provider} renderItem={m => {
+             <FamilyGroupList items={visible} slugOf={m => m.namespaced} scope={provider} expandAll={q !== ""} renderItem={m => {
                // The row reflects the same final-visibility answer as the count and the picker.
                const off = !isVisible(m);
                return (
