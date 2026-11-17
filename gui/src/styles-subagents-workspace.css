@@ -1,7 +1,7 @@
 /* ============================================================================
    subagents-workspace — what Tailwind utilities on the v2 Subagents page cannot say.
    The panels, rows and controls are utilities in the components (v2-subagents/frame.tsx);
-   this file keeps the page width, the scroll offset under the sticky section strip, and
+   this file keeps the page width, the scroll offset under the sticky page header, and
    the delegation suggest form. Namespace: subagents-workspace-  |  widgets: swi-
    ============================================================================ */
 
@@ -16,7 +16,7 @@
   container-name: subagents-workspace;
 }
 
-/* The sticky section strip covers the top of a section it jumps to. */
+/* The sticky page header covers the top of a section the "In effect now" tiles jump to. */
 .subagents-workspace-section {
   min-width: 0;
   scroll-margin-top: 72px;

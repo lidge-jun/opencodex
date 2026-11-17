@@ -4,7 +4,7 @@ import { readJsonOrThrow } from "../fetch-json";
 import { IconArrowDown, IconArrowUp, IconGrip } from "../icons";
 import { useT, type TKey } from "../i18n/shared";
 import {
-  customPickerRows, isPickerOrderSaved, isPickerOrderSettings, movePickerBefore,
+  customPickerRows, isPickerOrderSaved, isPickerOrderSettings, movePickerBefore, rebasePickerDraft,
   pickerSnapshotSignature, stepPickerOrder, type PickerModelIdentity, type PickerOrderSaved,
 } from "../model-picker-order";
 
@@ -22,8 +22,10 @@ function newDragToken(): string {
   return `picker-${Date.now().toString(36)}-${sequence}`;
 }
 
-export default function ModelPickerOrderEditor({ apiBase, active, identities, onAccepted, onBusyChange }: {
+export default function ModelPickerOrderEditor({ apiBase, active, identities, rosterRevision = 0, onAccepted, onBusyChange }: {
   apiBase: string; active: boolean; identities: readonly PickerModelIdentity[];
+  /** Bumped after each saved pinned-roster edit; the editor re-reads its pinned rows. */
+  rosterRevision?: number;
   onAccepted: (receipt: Receipt) => void; onBusyChange: (busy: boolean) => void;
 }) {
   const t = useT();
@@ -72,7 +74,8 @@ export default function ModelPickerOrderEditor({ apiBase, active, identities, on
   }, [apiBase, active, onBusyChange]);
   useLayoutEffect(() => { lifetime.current.drag = null; }, [disabled, snapshot, identitySignature]);
 
-  const run = async (save: boolean) => {
+  /** `keep` is an unsaved draft to re-seat on the fresh rows instead of replacing it. */
+  const run = async (save: boolean, keep?: readonly string[]) => {
     if (!active || lifetime.current.flight || (save && (disabled || !dirty))) return;
     const owner = lifetime.current.generation, bounded = createBoundedFetch(15_000);
     lifetime.current.flight = bounded; setBusy(true); onBusyChange(true); setError(false); clearDrag();
@@ -97,7 +100,8 @@ export default function ModelPickerOrderEditor({ apiBase, active, identities, on
         return;
       }
       if (!save) {
-        setSnapshot({ ...rows, signature, identities: identitySignature }); setDraft(rows.order);
+        setSnapshot({ ...rows, signature, identities: identitySignature });
+        setDraft(keep ? rebasePickerDraft(keep, rows) : rows.order);
         setBlocked(null); setAnnouncement(""); return;
       }
       const result = await fetch(`${apiBase}/api/subagent-models`, {
@@ -126,6 +130,14 @@ export default function ModelPickerOrderEditor({ apiBase, active, identities, on
     if (active && holder.generation === owner) void run(false);
   });
   useEffect(() => { if (active) void enter(); }, [apiBase, active, onBusyChange]);
+  // A pin change keeps the editor mounted: re-read the pinned rows and carry an unsaved draft over.
+  const rebase = useEffectEvent(() => { if (snapshot) void run(false, dirty ? draft : undefined); });
+  const seenRoster = useRef(rosterRevision);
+  useEffect(() => {
+    if (seenRoster.current === rosterRevision) return;
+    seenRoster.current = rosterRevision;
+    rebase();
+  }, [rosterRevision]);
 
   const move = (id: string, next: string[]) => {
     if (disabled) return;

@@ -76,7 +76,7 @@ GUI session 簽發到服務的頁面中，並在到期或代理重啟時靜默�
 | **Providers** | 新增、編輯、啟用/停用、刪除 provider，並在支援時管理 OAuth 帳號池和 API key 池。額度重新整理會略過暫停的 OAuth 帳號與停用的 API key；這些被略過的列即使沒有快取讀值，仍會顯示不可用，但不影響重新整理結果。當未暫停的 OAuth 帳號或已啟用且支援額度讀取的 API key 讀值不可用時，重新整理會回報失敗。 |
 | **Add provider** | 分頁上方的單一搜尋框可同時搜尋帳號、免費、本機、付費四個分頁。搜尋時選取的分頁不會跳轉，結果依分頁分組並顯示數量。本機執行環境（Ollama、vLLM、LM Studio、LiteLLM）有專屬分頁，過長的說明會截斷為兩行，點擊即可查看全文。 |
 | **Codex Auth** | 新增 ChatGPT/Codex 池帳號，選擇下一 session 的帳號，重新整理 5h / 每週 / 30d 配額，啟用或停用配額自動切換，設定其 1–100% 閾值和臨時故障 failover。 |
-| **Subagents** | 在 `spawn_agent` override 列表中置頂最多五個原生或路由模型。 |
+| **Subagents** | `spawn_agent` 的置頂名單（`subagentModels`，最多五個原生或路由模型）已移到 **模型 → 用戶端模型選擇器**，此頁面不再編輯它。 |
 | **Models** | 開關原生 GPT 與路由模型，設定 provider allowlist、上下文上限、v1/base/v2 以及 v2 thread 數量。頁面會區分已儲存至中樞端、此用戶端已取得，以及已在執行中的用戶端生效這三種狀態。取得時間無法證明內容包含中樞端最新儲存，執行階段生效狀態會明確顯示為尚未驗證。 |
 | **Logs** | 自動重新整理近期請求，顯示 token、請求強度、實際模型、provider、狀態、request id、耗時和錯誤詳情。 |
 | **Usage / Debug** | 檢視 token usage 覆蓋率與趨勢，或啟用可選的 provider transport 和 usage 提取診斷。 |

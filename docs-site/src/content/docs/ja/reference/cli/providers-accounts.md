@@ -348,7 +348,7 @@ native-main トラフィックまたはジャーナル復旧を受け入れる�
 
 `reasoningEfforts` は `--json` でのみ表示されます。`null` は一覧が不明または未照会であることを示し、OS のキーチェーンを開く必要がある場合も含みます。空配列 `[]` は明示的な空の一覧、または `noReasoningModels` などによってそのモデルの推論 effort が無効であることを示します。稼働中のプロキシのカタログは `ocx models live` で確認できます。
 
-`add` と `remove` は既定でローカル保存し、`--live` で稼働中のプロキシを変更します。ローカル `--json` 保存時にプロキシがなければ `sync.status: "not-attempted"`、`needsSync: true`、終了コード 0 を返します。試行した同期が失敗しても保存は維持され、終了コードは非ゼロです。`list-custom` はローカル一覧です。`display-name` は raw upstream ID、`order` は picker の public ID を使います。完全な並べ替え、featured 接頭部、native 順序のリセット制約は[英語版](/reference/cli/providers-accounts/#display-names-and-picker-identities)を参照してください。
+`add` と `remove` は既定でローカル保存し、`--live` で稼働中のプロキシを変更します。ローカル `--json` 保存時にプロキシがなければ `sync.status: "not-attempted"`、`needsSync: true`、終了コード 0 を返します。試行した同期が失敗しても保存は維持され、終了コードは非ゼロです。`list-custom` はローカル一覧です。`display-name` は raw upstream ID、`order` は picker の public ID を使います。完全な並べ替え、固定接頭部、native 順序のリセット制約は[英語版](/reference/cli/providers-accounts/#display-names-and-picker-identities)を参照してください。
 
 |サブコマンド |サポートされているフラグ |アクション |
 | --- | --- | --- |

@@ -508,7 +508,7 @@ görünürlüğü kontrol eder; `selected` bir sağlayıcı izin listesini kontr
 `context` sağlayıcı bağlam sınırlarını kontrol eder; ve `shadow` arka plan gölge
 çağrı müdahalesini yönetir.
 
-`add` ve `remove` varsayılan olarak yerel kaydeder; `--live` çalışan proxy’yi değiştirir. Proxy yoksa yerel `--json` kaydı `sync.status: "not-attempted"`, `needsSync: true` ve çıkış kodu 0 döndürür. Denenen eşitleme başarısız olduğunda kayıt korunur ve çıkış kodu sıfırdan farklıdır. `list-custom` yerel listedir. `display-name` ham upstream ID, `order` ise picker’ın public ID değerlerini kullanır. Tam permütasyon, featured öneki ve native sıra sıfırlama kısıtları için [İngilizce adımlara](/reference/cli/providers-accounts/#display-names-and-picker-identities) bakın.
+`add` ve `remove` varsayılan olarak yerel kaydeder; `--live` çalışan proxy’yi değiştirir. Proxy yoksa yerel `--json` kaydı `sync.status: "not-attempted"`, `needsSync: true` ve çıkış kodu 0 döndürür. Denenen eşitleme başarısız olduğunda kayıt korunur ve çıkış kodu sıfırdan farklıdır. `list-custom` yerel listedir. `display-name` ham upstream ID, `order` ise picker’ın public ID değerlerini kullanır. Tam permütasyon, sabitlenmiş öneki ve native sıra sıfırlama kısıtları için [İngilizce adımlara](/reference/cli/providers-accounts/#display-names-and-picker-identities) bakın.
 
 | Alt komut | Desteklenen bayraklar | Eylem |
 | --- | --- | --- |

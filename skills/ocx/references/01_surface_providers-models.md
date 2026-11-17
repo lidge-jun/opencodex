@@ -1021,7 +1021,7 @@ State-changing: no. JSON mode: `envelope`.
 
 ### `ocx models order set`
 
-Usage: `ocx models order set (--models <csv> | --mode <default|alphabetical|provider|most-used>) [--json]`
+Usage: `ocx models order set (--models <csv> | --mode <default|alphabetical|provider|family|most-used>) [--json]`
 
 Replace the routed picker order with an explicit list or sort mode.
 
@@ -1037,7 +1037,7 @@ State-changing: yes. JSON mode: `envelope`.
 | Flag | Value | Meaning |
 |---|---|---|
 | `--models` | string | Complete unique routed candidate permutation, preserving the exact featured prefix; exclusive with --mode. |
-| `--mode` | string | default clears; alphabetical, provider and most-used compute complete routed orders. |
+| `--mode` | string | default clears; alphabetical, provider, family and most-used compute complete routed orders. |
 | `--json` | boolean | Emit the validated command result as JSON. |
 
 - Manual/preset replacement refuses a native-inclusive saved order until explicit reset/default. It never edits the featured models/force fields.

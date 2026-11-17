@@ -4,9 +4,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { readJsonOrThrow } from "../fetch-json";
 import { Notice } from "../ui";
 import { useT } from "../i18n/shared";
-import SubagentsWorkspace, { FEATURED_MAX } from "../components/subagents-workspace/SubagentsWorkspace";
+import { Trans } from "../i18n/provider";
+import SubagentsWorkspace from "../components/subagents-workspace/SubagentsWorkspace";
 import { readSessionListCache, writeSessionListCache } from "../session-list-cache";
-import { useDataSurface } from "../data-surface";
 import { DataSurfaceSkeleton } from "../components/data-surface";
 import SubagentSurfaceWarningModal from "../components/SubagentSurfaceWarningModal";
 import PlaintextV2ConsentModal from "../components/PlaintextV2ConsentModal";
@@ -15,28 +15,28 @@ import { useSubagentDelegation, type UltraModePatch, type UltraModeState } from 
 import { InEffectSummary } from "../components/v2-subagents/InEffectSummary";
 import { formatNamespacedModelId } from "../provider-icons";
 import { sectionAnchorId } from "../section-anchors";
+import { modelLabel } from "../model-display";
+import { useSubagentRoster } from "./use-subagent-roster";
+import { jumpToClientPicker } from "./client-picker-jump";
 
-type CachedSubagents = { available: string[]; chosen: string[]; fallback?: string[]; pollMs?: number; fallbackAvailable?: string[] };
+type CachedFallback = { fallback: string[]; pollMs: number; fallbackAvailable: string[] };
 
 const UNLOADED_ULTRA_MODE: UltraModeState = {
   enabled: false, hintText: null, recommendation: null,
   multiAgentV2Enabled: false, multiAgentMode: "default",
 };
 
-function seedSubagents(cacheKey: string): CachedSubagents | null {
-  return readSessionListCache<CachedSubagents>(cacheKey);
-}
-
 /** Scrolls the page to one of its sections, for the section index. */
-function jump(target: "featured" | "delegation" | "pin") {
+function jump(target: "delegation" | "pin") {
   document.getElementById(sectionAnchorId("subagents", target))?.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
 export default function Subagents({ apiBase }: { apiBase: string }) {
   const t = useT();
-  const cacheKey = `ocx.subagents.v1:${apiBase}`;
-  const cached = seedSubagents(cacheKey);
-  const [chosen, setChosen] = useState<string[]>(() => cached?.chosen ?? []);
+  const fallbackCacheKey = `ocx.subagents.fallback.v1:${apiBase}`;
+  const cached = readSessionListCache<CachedFallback>(fallbackCacheKey);
+  // The page reads the pinned roster; the Models page client picker section edits it.
+  const { state, snapshot, chosen, refresh: load } = useSubagentRoster(apiBase);
   const [fallback, setFallback] = useState<string[]>(() => cached?.fallback ?? []);
   const [fallbackPollMs, setFallbackPollMs] = useState(() => cached?.pollMs ?? 60000);
   const [fallbackBusy, setFallbackBusy] = useState(false);
@@ -45,25 +45,10 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
   const [fallbackError, setFallbackError] = useState("");
   const [fallbackLoading, setFallbackLoading] = useState(true);
   const fallbackLoadController = useRef<AbortController | null>(null);
-  const fallbackSnapshot = useRef<Pick<CachedSubagents, "fallback" | "pollMs" | "fallbackAvailable">>({
-    fallback: cached?.fallback, pollMs: cached?.pollMs, fallbackAvailable: cached?.fallbackAvailable,
-  });
   const fallbackRevision = useRef(0);
-  const rosterRevision = useRef(0);
   const fallbackSaveInFlight = useRef(false);
-  const committed = useRef<CachedSubagents | null>(cached);
   const [status, setStatus] = useState("");
   const [ok, setOk] = useState(false);
-  /** True for the whole autosave drain, so a roster refresh never lands between two writes. */
-  const saveInFlight = useRef(false);
-  /** The newest roster waiting behind the in-flight write; older queued lists are dropped. */
-  const queuedRoster = useRef<string[] | null>(null);
-  /** Mirrors `chosen` synchronously, so two clicks in one render both build on the latest list. */
-  const latestChosen = useRef<string[]>(chosen);
-  const setRoster = useCallback((next: string[]) => {
-    latestChosen.current = next;
-    setChosen(next);
-  }, []);
   const delegation = useSubagentDelegation(apiBase);
   /** The Claude Code pin as the pin panel last read or wrote it, for the summary tiles. */
   const [pin, setPin] = useState<string | null | undefined>(undefined);
@@ -212,17 +197,12 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       }
       if (signal.aborted || readRevision !== fallbackRevision.current || fallbackSaveInFlight.current) return;
       const next = { fallback: data.models, pollMs: data.pollMs, fallbackAvailable: data.available };
-      fallbackSnapshot.current = next;
       setFallback(next.fallback);
       setFallbackPollMs(next.pollMs);
       setFallbackAvailable(next.fallbackAvailable);
       setFallbackLoaded(true);
       setFallbackError("");
-      // An auxiliary success cannot seed a successful roster before its own read settles.
-      if (committed.current) {
-        committed.current = { ...committed.current, ...next };
-        writeSessionListCache(cacheKey, committed.current);
-      }
+      writeSessionListCache(fallbackCacheKey, next);
     } catch (error) {
       if (signal.aborted || readRevision !== fallbackRevision.current || fallbackSaveInFlight.current) return;
       setFallbackLoaded(false);
@@ -230,106 +210,12 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
     } finally {
       if (!signal.aborted) setFallbackLoading(false);
     }
-  }, [apiBase, cacheKey, t]);
+  }, [apiBase, fallbackCacheKey, t]);
 
   useEffect(() => {
     void (async () => { await loadFallback(); })();
     return () => { fallbackLoadController.current?.abort(); };
   }, [loadFallback]);
-
-  const loadSubagents = useCallback(async (signal?: AbortSignal): Promise<CachedSubagents> => {
-    // Auxiliary fallback discovery must neither reject nor delay the roster resource.
-    const rosterReadRevision = rosterRevision.current;
-    const rosterRes = await fetch(`${apiBase}/api/subagent-models`, { signal });
-    const response = await readJsonOrThrow<{ available?: string[]; chosen?: string[] }>(rosterRes, t("sub.loadFail"));
-    if (!response) throw new Error(t("sub.loadFail"));
-    const available = response.available ?? [];
-    const availableSet = new Set(available);
-    const rosterCurrent = rosterReadRevision === rosterRevision.current && !saveInFlight.current;
-    const next = {
-      ...fallbackSnapshot.current,
-      available,
-      chosen: rosterCurrent ? (response.chosen ?? []).filter(model => availableSet.has(model)) : committed.current?.chosen ?? [],
-    };
-    if (signal?.aborted) throw signal.reason;
-    committed.current = next;
-    if (rosterCurrent) setRoster(next.chosen);
-    writeSessionListCache(cacheKey, next);
-    return next;
-  }, [apiBase, cacheKey, setRoster, t]);
-
-  // The shared resource owns mount loading and retries; the session seed keeps this workspace
-  // usable while the first live response is in flight.
-  const resource = useDataSurface<CachedSubagents>(
-    cacheKey,
-    [apiBase],
-    loadSubagents,
-    { isEmpty: () => false, initialData: cached ?? undefined },
-  );
-  const { state } = resource;
-  const load = resource.refresh;
-  const snapshot = state.data ?? cached;
-  const available = snapshot?.available ?? [];
-
-  // Every roster edit saves itself. Writes are serialized: while one PUT is in flight only the
-  // newest edit waits, so rapid clicks end on the last list the operator made.
-  const persistRoster = async (models: string[]) => {
-    queuedRoster.current = models;
-    if (saveInFlight.current) return;
-    saveInFlight.current = true;
-    setStatus("");
-    let failure: unknown = null;
-    let applied = models;
-    while (queuedRoster.current) {
-      const sending = queuedRoster.current;
-      queuedRoster.current = null;
-      try {
-        const r = await fetch(`${apiBase}/api/subagent-models`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ models: sending }),
-        });
-        const d = await readJsonOrThrow<{ applied?: string[] }>(r, t("sub.saveFailed"));
-        applied = d?.applied ?? sending;
-        // The server holds this list even if a newer edit is queued, so it is the restore point.
-        // A legacy roster-only seed does not prove that an empty fallback was loaded.
-        committed.current = { ...committed.current, available, chosen: applied };
-        writeSessionListCache(cacheKey, committed.current);
-        failure = null;
-      } catch (error) {
-        failure = error;
-      }
-    }
-    rosterRevision.current += 1;
-    saveInFlight.current = false;
-    if (failure) {
-      setRoster(committed.current?.chosen ?? []);
-      setOk(false);
-      setStatus(failure instanceof Error && failure.message ? failure.message : t("sub.networkError"));
-      return;
-    }
-    setRoster(applied);
-    setOk(true);
-    setStatus(t("sub.saved", { n: applied.length, cmd: "ocx sync" }));
-  };
-
-  const editRoster = (next: string[]) => {
-    rosterRevision.current += 1;
-    setRoster(next);
-    void persistRoster(next);
-  };
-  const toggle = (m: string) => {
-    const prev = latestChosen.current;
-    if (!prev.includes(m) && prev.length >= FEATURED_MAX) return;
-    editRoster(prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m]);
-  };
-  const move = (i: number, dir: -1 | 1) => {
-    const j = i + dir;
-    const next = [...latestChosen.current];
-    if (j < 0 || j >= next.length) return;
-    [next[i], next[j]] = [next[j]!, next[i]!];
-    editRoster(next);
-  };
 
   const saveFallback = async () => {
     if (!fallbackLoaded || fallbackSaveInFlight.current || !Number.isInteger(fallbackPollMs) || fallbackPollMs < 5000 || fallbackPollMs > 600000) return;
@@ -350,10 +236,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       fallbackRevision.current += 1;
       setFallback(d.models);
       setFallbackPollMs(d.pollMs);
-      fallbackSnapshot.current = { ...fallbackSnapshot.current, fallback: d.models, pollMs: d.pollMs };
-      const next = { available, chosen: committed.current?.chosen ?? [], ...fallbackSnapshot.current };
-      committed.current = next;
-      writeSessionListCache(cacheKey, next);
+      if (fallbackAvailable) writeSessionListCache(fallbackCacheKey, { fallback: d.models, pollMs: d.pollMs, fallbackAvailable });
       setOk(true);
       setStatus(t("sub.fallbackSaved"));
     } catch (error) {
@@ -392,13 +275,18 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
       </div>
       <div className="mt-5 mb-6">
         <InEffectSummary
-          chosen={chosen}
-          max={FEATURED_MAX}
           firstModel={firstModel}
           firstEffort={delegation.effort}
           pin={pin}
           onJump={jump}
         />
+        <p className="subagents-pinned-pointer mt-3 mb-0 flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-fg-muted">
+          <span><Trans k="subagentsV2.pinnedPointer" cmd="spawn_agent" /></span>
+          {chosen.length === 0
+            ? <span>{t("subagentsV2.pinnedNone")}</span>
+            : chosen.map(m => <code key={m} className="chip subagents-pinned-model">{modelLabel(m)}</code>)}
+          <button type="button" className="btn btn-ghost btn-sm" onClick={jumpToClientPicker}>{t("subagentsV2.pinnedEdit")}</button>
+        </p>
       </div>
       {status && <Notice tone={ok ? "ok" : "err"}>{status}</Notice>}
       {state.showError && <Notice tone="err">{t("sub.loadFail")}</Notice>}
@@ -410,11 +298,7 @@ export default function Subagents({ apiBase }: { apiBase: string }) {
         </Notice>
       )}
       <SubagentsWorkspace
-        available={available}
         fallbackAvailable={fallbackAvailable ?? []}
-        chosen={chosen}
-        onToggle={toggle}
-        onMove={move}
         fallback={fallback}
         fallbackPollMs={fallbackPollMs}
         fallbackBusy={fallbackBusy || !fallbackLoaded}

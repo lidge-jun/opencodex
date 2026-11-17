@@ -1,40 +1,28 @@
 /*
- * "In effect now": the three answers people open this page for, before any control — what
- * Codex offers first, which model it calls first, and whether Claude Code is pinned. Each
- * tile jumps to the place that changes it. It summarises; it never lists the order twice.
+ * "In effect now": the answers people open this page for, before any control — which model
+ * Codex calls first, and whether Claude Code is pinned. Each tile jumps to the place that
+ * changes it.
  */
 import type { ReactNode } from "react";
 import { IconChevron } from "../../icons";
 import { useT } from "../../i18n/shared";
-import { modelLabel } from "../../model-display";
 import { cn } from "@/lib/utils";
 
 interface Props {
-  chosen: string[];
-  max: number;
   /** Label of the delegation model, or "" when none is set. */
   firstModel: string;
   firstEffort: string;
   /** Committed Claude Code pin: null = off, undefined = still loading. */
   pin: string | null | undefined;
-  onJump: (target: "featured" | "delegation" | "pin") => void;
+  onJump: (target: "delegation" | "pin") => void;
 }
 
-export function InEffectSummary({ chosen, max, firstModel, firstEffort, pin, onJump }: Props) {
+export function InEffectSummary({ firstModel, firstEffort, pin, onJump }: Props) {
   const t = useT();
-  const top = chosen[0];
   return (
     <section aria-label={t("subagentsV2.nowTitle")} className="flex flex-col gap-2">
       <h3 className="m-0 text-[12px] font-medium text-fg-subtle">{t("subagentsV2.nowTitle")}</h3>
-      <div className="grid gap-3 md:grid-cols-3">
-        <Tile
-          label={t("subagentsV2.nowOrder")}
-          value={top ? modelLabel(top) : t("subagentsV2.nowOrderNone")}
-          mono={!!top}
-          muted={!top}
-          caption={t("subagentsV2.nowOrderCaption", { n: chosen.length, max })}
-          onClick={() => onJump("featured")}
-        />
+      <div className="grid gap-3 md:grid-cols-2">
         <Tile
           label={t("sub.delegation.model")}
           value={firstModel || t("dash.injectionNone")}

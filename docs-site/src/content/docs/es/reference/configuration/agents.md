@@ -211,7 +211,7 @@ La búsqueda consulta primero el selector final antes de normalizar el prefijo d
 
 Para el reenvío canónico de OpenAI prevalece la lista de esfuerzos del modelo final: `gpt-6.1-sol` y `gpt-6.1-terra` empiezan en `low`, por lo que `none` o `minimal` entrantes se envían como `low`, también tras cambiar de modelo de compactación o durante un fallback de combo.
 
-`GET /api/effort-caps` incluye el mapa. `PUT /api/effort-caps` acepta `modelPinnedEfforts` junto con los límites existentes: los campos omitidos no cambian, `null` borra el mapa y una entrada con `null` o `""` elimina solo esa clave. Una actualización combinada inválida no modifica los límites ni las asignaciones. Guardar una asignación no cambia la lista de subagentes destacados.
+`GET /api/effort-caps` incluye el mapa. `PUT /api/effort-caps` acepta `modelPinnedEfforts` junto con los límites existentes: los campos omitidos no cambian, `null` borra el mapa y una entrada con `null` o `""` elimina solo esa clave. Una actualización combinada inválida no modifica los límites ni las asignaciones. Guardar una asignación no cambia la lista de subagentes fijados.
 
 ## Actualizaciones de la CLI durante la sincronización v1
 

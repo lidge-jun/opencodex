@@ -430,7 +430,7 @@ ocx claude config set --context-accounting 200k
 
 ## 名冊代理（injectAgents）
 
-`ocx claude`（以及系統環境 daemon）會把你的精選子代理名冊（Subagents 標籤頁，最多 5 個模型）
+`ocx claude`（以及系統環境 daemon）會把你的選擇器置頂子代理名冊（Models 頁的「用戶端模型選擇器」，最多 5 個模型）
 和 `ocx-self` 同步到 `~/.claude/agents/ocx-*.md`。
 
 - **`ocx-self`** 固定你在 `/model` 選擇器中的預設模型（回退到 `claudeCode.model`）；兩者均

@@ -574,8 +574,8 @@ seçer.
 
 ## Kadro ajanları (injectAgents)
 
-`ocx claude` (ve sistem ortamı arka plan programı), öne çıkan alt ajan kadronuzu
-(Alt Ajanlar sekmesi, en fazla 5 model) artı `ocx-self`'i
+`ocx claude` (ve sistem ortamı arka plan programı), sabitlenmiş alt ajan kadronuzu
+(Models → İstemci model seçici, en fazla 5 model) artı `ocx-self`'i
 `~/.claude/agents/ocx-*.md` içine senkronize eder.
 
 - **`ocx-self`**, `/model` seçici varsayılanınızı sabitler (`claudeCode.model`'e

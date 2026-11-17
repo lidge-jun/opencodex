@@ -448,7 +448,7 @@ ocx claude config set --context-accounting 200k
 
 ## 로스터 에이전트(injectAgents)
 
-프록시 시작/ensure, `ocx claude`, 관련 대시보드 저장은 추천 서브에이전트 로스터(Subagents 탭, 최대 5개 모델)와
+프록시 시작/ensure, `ocx claude`, 관련 대시보드 저장은 추천 서브에이전트 로스터(Models의 「클라이언트 모델 선택기」, 최대 5개 모델)와
 `ocx-self`를 `~/.claude/agents/ocx-*.md`에 동기화해요.
 
 - **`ocx-self`**는 `/model` 선택기의 기본값을 고정하고, 값이 없으면 `claudeCode.model`을 사용해요.

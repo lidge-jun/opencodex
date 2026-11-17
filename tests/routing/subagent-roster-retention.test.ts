@@ -236,4 +236,11 @@ describe("picker updates preserve roster and persistence intent", () => {
     expect(result.catalogRefresh.status).toBe("failed");
     expect(config.modelPickerOrder).toEqual(["alpha/one"]);
   });
+  test("family is an accepted picker mode and is persisted", async () => {
+    const config = makeConfig();
+    const ctx = context(config, { pickerOrder: ["alpha/one"], pickerOrderMode: "family" });
+    const result = await (await handleAgentSettingsRoutes(ctx))!.json() as { pickerOrderMode: string | null };
+    expect(result.pickerOrderMode).toBe("family");
+    expect(config.modelPickerOrderMode).toBe("family");
+  });
 });

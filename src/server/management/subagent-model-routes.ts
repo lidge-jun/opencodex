@@ -73,8 +73,8 @@ export async function handleSubagentModelRoutes(ctx: ManagementContext, autoAppl
     }
     const mode = body.pickerOrderMode;
     if (mode !== undefined && (!updatesPicker || (mode !== null
-      && mode !== "alphabetical" && mode !== "provider" && mode !== "most-used"))) {
-      return jsonResponse({ error: "pickerOrderMode requires pickerOrder and must be alphabetical, provider, most-used, or null" }, 400);
+      && mode !== "alphabetical" && mode !== "provider" && mode !== "family" && mode !== "most-used"))) {
+      return jsonResponse({ error: "pickerOrderMode requires pickerOrder and must be alphabetical, provider, family, most-used, or null" }, 400);
     }
     let pickerOrder: string[] | undefined;
     if (updatesPicker) {
@@ -134,7 +134,7 @@ export async function handleSubagentModelRoutes(ctx: ManagementContext, autoAppl
         deleteConfigTopLevelKey(draft, "modelPickerOrderMode");
       } else {
         draft.modelPickerOrder = pickerOrder;
-        if (mode === "alphabetical" || mode === "provider" || mode === "most-used") draft.modelPickerOrderMode = mode;
+        if (mode === "alphabetical" || mode === "provider" || mode === "family" || mode === "most-used") draft.modelPickerOrderMode = mode;
         else deleteConfigTopLevelKey(draft, "modelPickerOrderMode");
       }
     }
@@ -174,7 +174,7 @@ export async function handleSubagentModelRoutes(ctx: ManagementContext, autoAppl
               deleteConfigTopLevelKey(persisted, "modelPickerOrderMode");
             } else {
               persisted.modelPickerOrder = pickerOrder;
-              if (mode === "alphabetical" || mode === "provider" || mode === "most-used") persisted.modelPickerOrderMode = mode;
+              if (mode === "alphabetical" || mode === "provider" || mode === "family" || mode === "most-used") persisted.modelPickerOrderMode = mode;
               else deleteConfigTopLevelKey(persisted, "modelPickerOrderMode");
             }
           }

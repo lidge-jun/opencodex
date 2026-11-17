@@ -251,9 +251,9 @@ La [guía de la API de OpenAI](https://developers.openai.com/api/docs/guides/ult
 
 ## Selección de subagentes
 
-Codex ordena las entradas del catálogo visibles en el selector por `priority` ascendente y anuncia las cinco primeras como alternativas de modelo para `spawn_agent`. La página Subagentes del dashboard permite seleccionar y guardar hasta cinco identificadores nativos sin prefijo o identificadores `provider/model` enrutados. Un `subagentModels` configurado manualmente también acepta identificadores `<selector>/<native-openai-model>` que especifican una cuenta. El dashboard conserva esos identificadores exactos al guardar la lista, incluso si sus modelos ya no están disponibles en el catálogo actual. opencodex asigna prioridades bajas de catálogo en el orden seleccionado; cuando están habilitadas las filas del selector por cuenta, las selecciones nativas sin prefijo se expanden a grupos por selector. Los demás modelos siguen siendo invocables mediante su identificador exacto.
+Codex ordena las entradas del catálogo visibles en el selector por `priority` ascendente y anuncia las cinco primeras como alternativas de modelo para `spawn_agent`. La página Modelos del dashboard (sección **Client model picker**) permite seleccionar y guardar hasta cinco identificadores nativos sin prefijo o identificadores `provider/model` enrutados. Un `subagentModels` configurado manualmente también acepta identificadores `<selector>/<native-openai-model>` que especifican una cuenta. El dashboard conserva esos identificadores exactos al guardar la lista, incluso si sus modelos ya no están disponibles en el catálogo actual. opencodex asigna prioridades bajas de catálogo en el orden seleccionado; cuando están habilitadas las filas del selector por cuenta, las selecciones nativas sin prefijo se expanden a grupos por selector. Los demás modelos siguen siendo invocables mediante su identificador exacto.
 
-La lista de modelos destacados está separada de la selección **Delegación de subagentes** del Dashboard. Controla que anula Codex ofrece primero; no selecciona un modelo o desencadenar delegación por sí mismo.
+La lista de modelos fijados está separada de la selección **Delegación de subagentes** del Dashboard. Controla que anula Codex ofrece primero; no selecciona un modelo o desencadenar delegación por sí mismo.
 
 <a id="desktop-remote-servers"></a>
 

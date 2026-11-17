@@ -211,6 +211,21 @@ for (const failure of ["rejected", "malformed JSON", "malformed receipt", "netwo
     await reply(3, initial()); expect(requests[4]?.body).toEqual({ pickerOrder: changedDraft, pickerOrderMode: null });
   });
 
+test("a saved pin change re-reads the pinned rows and keeps the unsaved draft order", async () => {
+  await edit();
+  expect(order()).toEqual(changedDraft);
+  await act(async () => {
+    root!.render(<LanguageProvider><ModelPickerOrderEditor apiBase="/a" active identities={ids} rosterRevision={1}
+      onAccepted={onAccepted} onBusyChange={onBusyChange} /></LanguageProvider>);
+  });
+  expect(requests).toHaveLength(2);
+  expect(requests[1]!.method).toBe("GET");
+  await reply(1, { ...initial(), chosen: ["native", "p/f", "p/c"] });
+  // p/c is pinned now and joins p/f at the top; p/b stays ahead of p/a as the draft had it.
+  expect(order()).toEqual(["p/f", "p/c", "p/b", "p/a"]);
+  expect(button("Save draft").disabled).toBe(false);
+});
+
 test("pending accepted receipt publishes saved fields and requires reload before editing again", async () => {
   await edit(); await click("Save draft"); await reply(1, initial());
   const accepted = { pickerOrder: changedDraft, pickerOrderMode: null, catalogRefresh: { status: "pending", degraded: true } };
@@ -371,9 +386,11 @@ test("Models pins cache-inferred Custom across late parent GET publication, then
   } });
   const { createRoot } = await import("react-dom/client");
   await act(async () => { root = createRoot(host); root.render(<LanguageProvider><Models apiBase="/a" /></LanguageProvider>); });
-  // Parent resource and editor have separate initial reads; resolve both without relying on effect order.
+  // Parent resource, editor, and the pinned roster hook each read /api/subagent-models once on
+  // their own (the roster is the same resource the Subagents page reads, so a third GET is the
+  // accepted cost of keeping them independent); resolve all without relying on effect order.
   const initialReads = requests.map((request, index) => ({ request, index }));
-  expect(initialReads).toHaveLength(2);
+  expect(initialReads).toHaveLength(3);
   for (const { index } of initialReads) await reply(index, custom);
   expect(order()).toEqual(["p/f", "p/c", "p/a", "p/b"]);
   await click("Move p/a down"); const editor = host.querySelector(".picker-order-editor");

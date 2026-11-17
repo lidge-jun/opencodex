@@ -316,10 +316,10 @@ export const PROVIDER_MODEL_CAPABILITIES: readonly Capability[] = [
   },
   {
     command: ["models","order","set"],
-    usage: "ocx models order set (--models <csv> | --mode <default|alphabetical|provider|most-used>) [--json]",
+    usage: "ocx models order set (--models <csv> | --mode <default|alphabetical|provider|family|most-used>) [--json]",
     summary: "Replace the routed picker order with an explicit list or sort mode.",
     routes: [{"method":"GET","path":"/api/subagent-models"},{"method":"GET","path":"/api/models"},{"method":"GET","path":"/api/usage"},{"method":"PUT","path":"/api/subagent-models"}],
-    flags: [{"name":"--models","value":"string","summary":"Complete unique routed candidate permutation, preserving the exact featured prefix; exclusive with --mode."},{"name":"--mode","value":"string","summary":"default clears; alphabetical, provider and most-used compute complete routed orders."},{"name":"--json","value":"boolean","summary":"Emit the validated command result as JSON."}],
+    flags: [{"name":"--models","value":"string","summary":"Complete unique routed candidate permutation, preserving the exact featured prefix; exclusive with --mode."},{"name":"--mode","value":"string","summary":"default clears; alphabetical, provider, family and most-used compute complete routed orders."},{"name":"--json","value":"boolean","summary":"Emit the validated command result as JSON."}],
     mutates: true,
     json: "envelope",
     details: ["Manual/preset replacement refuses a native-inclusive saved order until explicit reset/default. It never edits the featured models/force fields.","Manual mode rechecks settings and identities before PUT and refuses observed drift; this is not server CAS. Raw/encoded ambiguities and missing identities refuse before writing.","Most-used reads all/all usage, uses requested model identities and refuses incomplete evidence. Presets retain unranked candidates. A saved receipt does not prove client convergence."],

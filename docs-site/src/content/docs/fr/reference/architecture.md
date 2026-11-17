@@ -104,7 +104,7 @@ Le compactage du contexte Codex fonctionne avec les modèles routés. `server/re
 ## Mise en cache et catalogue
 
 - `codex/model-cache.ts` conserve en mémoire, par fournisseur, un cache TTL des résultats actifs de `/models` (5 min par défaut, comme le propre cache de Codex), avec repli sur une version périmée en cas d’échec de récupération.
-- `codex/catalog/sync.ts`, exporté par la façade `codex/catalog.ts`, fusionne les modèles routés dans le catalogue de Codex sous forme d’entrées avec espace de noms, place en premier les [modèles de sous-agents](/fr/guides/codex-integration/#le-sélecteur-de-sous-agents) mis en avant, filtre `disabledModels` et peut restaurer intégralement le catalogue d’origine à partir d’une sauvegarde créée une seule fois.
+- `codex/catalog/sync.ts`, exporté par la façade `codex/catalog.ts`, fusionne les modèles routés dans le catalogue de Codex sous forme d’entrées avec espace de noms, place en premier les [modèles de sous-agents](/fr/guides/codex-integration/#le-sélecteur-de-sous-agents) épinglé, filtre `disabledModels` et peut restaurer intégralement le catalogue d’origine à partir d’une sauvegarde créée une seule fois.
 
 ## Effort de raisonnement
 

@@ -26,7 +26,7 @@ import { isValidCost4Rate, validCost4 } from "../usage/user-cost-overlays";
 const USAGE = `Usage:
   ocx models display-name <provider/raw-model> (--set <text> | --clear) [--json]
   ocx models order status|reset [--json]
-  ocx models order set (--models <csv> | --mode <default|alphabetical|provider|most-used>) [--json]
+  ocx models order set (--models <csv> | --mode <default|alphabetical|provider|family|most-used>) [--json]
   ocx models live [--provider <name>] [--free-only] [--json]
   ocx models price <provider/model> [--json]
   ocx models set-price <provider/model> --input N --output N [--cache-read N] [--cache-write N] [--json]

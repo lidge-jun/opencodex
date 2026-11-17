@@ -357,7 +357,7 @@ Preview 建置使用 `<OPENCODEX_HOME>/native-main-profiles`。該配置絕不�
 
 `reasoningEfforts` 清單僅在使用 `--json` 時顯示。`null` 表示清單未知或未查詢，包括查詢需要開啟系統鑰匙圈的情況。空陣列 `[]` 表示明確設定了空清單，或該模型的推理強度已停用，例如透過 `noReasoningModels` 停用。使用 `ocx models live` 查看執行中代理的目錄。
 
-`add` 與 `remove` 預設儲存至本機；`--live` 修改執行中的代理。本機 `--json` 儲存時若無代理，回傳 `sync.status: "not-attempted"`、`needsSync: true`，結束碼為 0。實際嘗試的同步失敗時保留儲存結果，以非零碼結束。`list-custom` 是本機清單。`display-name` 使用原始上游 ID，`order` 使用 picker 的 public ID。完整排列、featured 前綴與 native 順序重設限制請見[英文步驟](/reference/cli/providers-accounts/#display-names-and-picker-identities)。
+`add` 與 `remove` 預設儲存至本機；`--live` 修改執行中的代理。本機 `--json` 儲存時若無代理，回傳 `sync.status: "not-attempted"`、`needsSync: true`，結束碼為 0。實際嘗試的同步失敗時保留儲存結果，以非零碼結束。`list-custom` 是本機清單。`display-name` 使用原始上游 ID，`order` 使用 picker 的 public ID。完整排列、選擇器置頂前綴與 native 順序重設限制請見[英文步驟](/reference/cli/providers-accounts/#display-names-and-picker-identities)。
 
 | 子指令 | 支援的旗標 | 動作 |
 | --- | --- | --- |

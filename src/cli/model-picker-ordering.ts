@@ -1,5 +1,6 @@
 // Deliberate pure port of gui/src/model-picker-order.ts; test-only conformance guards drift.
-export type ModelPickerOrderMode = "default" | "alphabetical" | "provider" | "most-used" | "custom";
+import { modelFamilyRank } from "../lib/model-families";
+export type ModelPickerOrderMode = "default" | "alphabetical" | "provider" | "family" | "most-used" | "custom";
 export type SavedModelPickerOrderMode = Exclude<ModelPickerOrderMode, "default" | "custom">;
 export interface ModelPickerUsage {
   provider: string;
@@ -18,7 +19,7 @@ function stringList(value: unknown): value is string[] {
   return Array.isArray(value) && value.every(id => typeof id === "string" && id.trim().length > 0);
 }
 function savedMode(value: unknown): value is SavedModelPickerOrderMode | null {
-  return value === null || value === "alphabetical" || value === "provider" || value === "most-used";
+  return value === null || value === "alphabetical" || value === "provider" || value === "family" || value === "most-used";
 }
 export function isPickerOrderSaved(value: unknown): value is PickerOrderSaved {
   if (value === null || typeof value !== "object") return false;
@@ -48,6 +49,8 @@ function byProvider(a: string, b: string): number {
   const [ap, am] = parts(a), [bp, bm] = parts(b);
   return compare(ap, bp) || compare(am, bm);
 }
+// Families are one contiguous run each, in registry order; within a family the provider order.
+const byFamily = (a: string, b: string) => modelFamilyRank(a) - modelFamilyRank(b) || byProvider(a, b);
 
 export function modelPickerOrder(
   mode: Exclude<ModelPickerOrderMode, "custom">,
@@ -59,6 +62,7 @@ export function modelPickerOrder(
   const unique = [...new Set(models)];
   if (mode === "alphabetical") return unique.sort((a, b) => compare(parts(a)[1], parts(b)[1]) || byProvider(a, b));
   if (mode === "provider") return unique.sort(byProvider);
+  if (mode === "family") return unique.sort(byFamily);
   const candidates = new Set(unique);
   const raw = new Map<string, Set<string>>();
   const owners = new Map<string, Set<string>>();

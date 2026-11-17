@@ -32,9 +32,9 @@ const usesField = (source: string, field: string): boolean =>
 /** Surfaces migrated so far, in migration order. */
 const MIGRATED = [
   { name: "Grok", file: "../src/pages/Grok.tsx" },
-  { name: "Subagents", file: "../src/pages/Subagents.tsx" },
+  { name: "Subagents", file: "../src/pages/Subagents.tsx", resourceFile: "../src/pages/use-subagent-roster.ts", hook: "useSubagentRoster(" },
   { name: "Combos", file: "../src/pages/Combos.tsx" },
-  { name: "Usage", file: "../src/pages/Usage.tsx", resourceFile: "../src/components/v2-usage/use-usage-report.ts" },
+  { name: "Usage", file: "../src/pages/Usage.tsx", resourceFile: "../src/components/v2-usage/use-usage-report.ts", hook: "useUsageReport(" },
   { name: "Startup", file: "../src/pages/Startup.tsx" },
   { name: "Logs", file: "../src/pages/Logs.tsx" },
   { name: "Debug", file: "../src/pages/Debug.tsx" },
@@ -49,7 +49,7 @@ const MIGRATED = [
 test("every migrated surface subscribes through the shared resource layer", async () => {
   for (const surface of MIGRATED) {
     const source = await read(surface.file);
-    if ("resourceFile" in surface) expect(source, surface.name).toContain("useUsageReport(");
+    if ("resourceFile" in surface) expect(source, surface.name).toContain(surface.hook);
     expect("resourceFile" in surface ? await read(surface.resourceFile) : source, surface.name).toContain("useDataSurface");
   }
 });
