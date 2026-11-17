@@ -67,7 +67,7 @@ describe("ocx claude per-model compact settings", () => {
   const windows = { "mock/mid": 524_000, "ocx-claude-mock--mid": 524_000, "native-large": 872_000 };
   const env = { CLAUDE_CODE_AUTO_COMPACT_WINDOW: "829800", KEEP: "unchanged" };
   const build = (args: string[] = [], base: Record<string, string> = {}, map = windows, config = cfg()) =>
-    withClaudeContextSettings(args, env, config, map, base);
+    withClaudeContextSettings(args, env, config, map, base, { selectors: Object.keys(map) });
   const settings = (args: string[]) => JSON.parse(args[args.indexOf("--settings") + 1]!);
 
   test("switchable selectors get safe windows without changing the large-model default or source env", () => {
@@ -78,6 +78,22 @@ describe("ocx claude per-model compact settings", () => {
     expect(result.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
     expect(result.env.KEEP).toBe("unchanged");
     expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("829800");
+  });
+
+  test("only discovery selectors and launcher model slots are emitted", () => {
+    const childEnv = { ...env, ANTHROPIC_DEFAULT_SONNET_MODEL: "mock/mid" };
+    const result = withClaudeContextSettings([], childEnv, cfg(), {
+      ...windows, "legacy-unused": 524_000, "never-listed": 400_000,
+    }, {}, { selectors: ["ocx-claude-mock--mid", "unknown"], platform: "win32" });
+    expect(Object.keys(settings(result.args).modelSettings).sort()).toEqual(["mock/mid", "ocx-claude-mock--mid"]);
+  });
+
+  test("a large registry with one pickable model stays small", () => {
+    const map = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`unused-${i}`, 524_000]));
+    map["mock/mid"] = 524_000;
+    const result = withClaudeContextSettings([], env, cfg(), map, {}, { selectors: ["mock/mid"], platform: "win32" });
+    expect(settings(result.args).modelSettings).toEqual({ "mock/mid": { autoCompactWindow: 497_800 } });
+    expect(result.args[1]!.length).toBeLessThanOrEqual(4000);
   });
 
   test("preserves explicit compact env, autocompact CLI, disabled accounting and missing metadata", () => {

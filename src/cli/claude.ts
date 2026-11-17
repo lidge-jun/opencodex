@@ -916,7 +916,9 @@ export async function cmdClaude(args: string[]): Promise<number> {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`⚠ Claude agent definitions could not be synced: ${message}`);
   }
-  const launch = withClaudeContextSettings(args, env, config, contextWindows, process.env);
+  const launch = withClaudeContextSettings(args, env, config, contextWindows, process.env, {
+    selectors: gateway?.models.map(model => model.id) ?? [],
+  });
   return spawnClaude(launch.args, launch.env);
 }
 
