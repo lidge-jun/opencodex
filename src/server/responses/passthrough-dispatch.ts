@@ -794,7 +794,7 @@ export async function preparePassthroughExchange(
       if (allowed) replayGuard.authorize();
       return allowed;
     };
-    const claimPreHeaderResend = (): boolean => claimRecoveryResend("pre-header"); const isReplaySafe = (): boolean => parsed._compactionRequest === true || replayGuard.isSelfContained();
+    const claimPreHeaderResend = (): boolean => claimRecoveryResend("pre-header"); const isReplaySafe = (): boolean => (parsed._compactionRequest === true && (parsed._rawBody as { store?: unknown } | null | undefined)?.store === false) || replayGuard.isSelfContained();
     /**
      * The one replacement send the ambiguous rows at the end of the recovery loop may buy: an SSE
      * body that died before any output, and a Codex WebSocket that died under its create frame

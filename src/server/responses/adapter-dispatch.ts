@@ -248,7 +248,7 @@ export async function prepareAdapterExchange(
   const claimPreHeaderResend = (): boolean => authorizeResendForRecovery(
     "pre-header", "connection-reset",
     ambiguousResendAllowanceFor(route.provider, requestIsSelfContained, claimAmbiguousResend),
-  ).allowed; const isReplaySafe = (): boolean => parsed._compactionRequest === true || requestIsSelfContained();
+  ).allowed; const isReplaySafe = (): boolean => (parsed._compactionRequest === true && (parsed._rawBody as { store?: unknown } | null | undefined)?.store === false) || requestIsSelfContained();
   const upstream = new AbortController();
   const cleanupUpstreamAbort = linkAbortSignal(upstream, options.abortSignal);
   /** Contain replacement negotiation before adapter admission and release its upstream abort link. */
