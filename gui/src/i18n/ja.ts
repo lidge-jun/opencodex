@@ -3295,6 +3295,8 @@ export const ja: Record<TKey, string> = {
   "claude.autoCompactWindowWarn": "これを変更すると GPT モデルが壊れる可能性があります — モデルの実際の上限より高く設定すると、要約が働く前にチャットがエラーになります。",
   "claude.injectAgents": "サブエージェントを自動登録",
   "claude.injectAgentsDesc": "サブエージェントタブで選んだモデル(と現在のデフォルトモデル)をディスパッチ可能な Claude Code エージェント(ocx-*)として登録します。次回セッションから適用されます。",
+  "claude.nativePassthrough": "Claude ネイティブパススルー",
+  "claude.nativePassthroughDesc": "オン(既定): Claude モデルへのリクエストを Claude Code 自身のログインで Anthropic に直接送ります。オフ: OpenCodex の Anthropic アカウント経由でルーティングするため、Claude アカウントプールが適用されます。実行中の Claude Code セッションは再起動が必要です。",
   "claude.webSearchSidecar": "ウェブ検索サイドカーの上書き",
   "claude.webSearchSidecarHint": "Claude Code リクエストのメインウェブ検索サイドカーを上書きします。",
   "claude.visionSidecar": "ビジョンサイドカーの上書き",

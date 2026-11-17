@@ -3437,6 +3437,8 @@ export const pt: Record<TKey, string> = {
   "claude.autoCompactWindowWarn": "Alterar isto pode quebrar modelos GPT — se for definido acima do limite real do modelo, as conversas darão erro antes de o resumo entrar em ação.",
   "claude.injectAgents": "Registrar subagentes automaticamente",
   "claude.injectAgentsDesc": "Registra os modelos escolhidos na aba Subagentes (mais o modelo padrão atual) como agentes despacháveis do Claude Code (ocx-*). Vale a partir da próxima sessão.",
+  "claude.nativePassthrough": "Passagem direta nativa do Claude",
+  "claude.nativePassthroughDesc": "Ativado (padrão): os modelos Claude vão direto para a Anthropic com o próprio login do Claude Code. Desativado: eles são roteados pelas contas Anthropic do OpenCodex, e o pool de contas Claude passa a valer. Reinicie as sessões do Claude Code que já estiverem abertas.",
   "claude.webSearchSidecar": "Substituição do sidecar de busca na web",
   "claude.webSearchSidecarHint": "Substitui o sidecar principal de busca na web nas requisições do Claude Code.",
   "claude.visionSidecar": "Substituição do sidecar de visão",

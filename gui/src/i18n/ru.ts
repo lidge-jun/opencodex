@@ -3386,6 +3386,8 @@ export const ru: Record<TKey, string> = {
   "claude.autoCompactWindowWarn": "Изменение этого значения может сломать модели GPT — если задать порог выше реального лимита модели, чаты будут выдавать ошибку ещё до срабатывания суммаризации.",
   "claude.injectAgents": "Авторегистрация подагентов",
   "claude.injectAgentsDesc": "Регистрирует модели, выбранные на вкладке «Подагенты» (плюс текущую модель по умолчанию), как доступных для вызова агентов Claude Code (ocx-*). Применяется со следующей сессии.",
+  "claude.nativePassthrough": "Нативный проброс Claude",
+  "claude.nativePassthroughDesc": "Вкл. (по умолчанию): модели Claude идут напрямую в Anthropic через собственный вход Claude Code. Выкл.: запросы маршрутизируются через аккаунты Anthropic в OpenCodex, и применяется пул аккаунтов Claude. Уже запущенные сессии Claude Code нужно перезапустить.",
   "claude.webSearchSidecar": "Переопределение сайдкара веб-поиска",
   "claude.webSearchSidecarHint": "Переопределяет основной сайдкар веб-поиска для запросов Claude Code.",
   "claude.visionSidecar": "Переопределение сайдкара для изображений",

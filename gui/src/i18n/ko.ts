@@ -2863,6 +2863,8 @@ export const ko: Record<TKey, string> = {
   "claude.autoCompactWindowWarn": "값을 직접 바꾸면 GPT 모델들이 제대로 동작하지 않을 수 있어요 — 모델의 실제 한도보다 크게 잡으면 요약이 되기 전에 대화가 오류로 멈춥니다.",
   "claude.injectAgents": "서브에이전트 자동 등록",
   "claude.injectAgentsDesc": "위 '서브에이전트' 탭에서 고른 모델들(+현재 기본 모델)을 Claude Code의 파견 가능한 에이전트(ocx-*)로 자동 등록합니다. 새 세션부터 적용돼요.",
+  "claude.nativePassthrough": "Claude 네이티브 패스스루",
+  "claude.nativePassthroughDesc": "켜짐(기본값): Claude 모델 요청을 Claude Code 자체 로그인으로 Anthropic에 바로 보내요. 꺼짐: OpenCodex의 Anthropic 계정으로 라우팅하므로 Claude 계정 풀이 적용돼요. 이미 실행 중인 Claude Code 세션은 다시 실행해야 해요.",
   "claude.webSearchSidecar": "웹 검색 사이드카 덮어쓰기",
   "claude.webSearchSidecarHint": "Claude Code 요청에만 메인 웹 검색 사이드카 대신 이 설정을 씁니다.",
   "claude.visionSidecar": "비전 사이드카 덮어쓰기",

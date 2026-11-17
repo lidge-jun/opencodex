@@ -30,6 +30,7 @@ const STATE = {
   autoCompactWindow: null,
   contextAccounting: "1m",
   injectAgents: true,
+  nativePassthrough: true,
   smallFastModel: "",
   effectiveModelEnv: {},
   available: ["a/model"],
@@ -169,6 +170,14 @@ test("context accounting is saved, dirties the draft, and older states read as t
   expect(normalizeContextAccounting(undefined)).toBe("1m");
   expect(normalizeContextAccounting("bogus")).toBe("1m");
   expect(normalizeContextAccounting("200k")).toBe("200k");
+});
+
+test("native passthrough is saved, dirties the draft, survives a poll and reverts", () => {
+  const draft = editable({ nativePassthrough: false });
+  expect(claudeCodeSaveBody(draft.state, []).nativePassthrough).toBe(false);
+  expect(isClaudeCodeDraftDirty(draft, editable())).toBe(true);
+  expect(mergeServerRead(draft.state, STATE).nativePassthrough).toBe(false);
+  expect(revertEditable(draft.state, STATE).nativePassthrough).toBe(true);
 });
 
 const sidecarTyped = (disabled: SidecarOverride | undefined, model: string) =>

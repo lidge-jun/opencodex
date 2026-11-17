@@ -3415,6 +3415,8 @@ export const tr: Record<TKey, string> = {
   "claude.autoCompactWindowWarn": "Bunu değiştirmek GPT modellerini bozabilir — bir modelin gerçek sınırından daha yüksek ayarlanırsa, sohbetler özet devreye girmeden önce hata verecektir.",
   "claude.injectAgents": "Alt ajanları otomatik kaydet",
   "claude.injectAgentsDesc": "Alt Ajanlar sekmesinde seçilen modelleri (ve mevcut varsayılan modeli) çağrılabilir Claude Code ajanları (ocx-*) olarak kaydeder. Sonraki oturumdan itibaren uygulanır.",
+  "claude.nativePassthrough": "Yerel Claude geçişi",
+  "claude.nativePassthroughDesc": "Açık (varsayılan): Claude modelleri Claude Code'un kendi oturumuyla doğrudan Anthropic'e gider. Kapalı: OpenCodex'in Anthropic hesapları üzerinden yönlendirilir, böylece Claude hesap havuzu devreye girer. Zaten çalışan Claude Code oturumlarını yeniden başlatın.",
   "claude.webSearchSidecar": "Web arama yan araç geçersiz kılması",
   "claude.webSearchSidecarHint": "Claude Code istekleri için ana web arama sidecar'ını geçersiz kılın.",
   "claude.visionSidecar": "Görsel yan araç geçersiz kılması",

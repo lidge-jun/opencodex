@@ -2836,6 +2836,8 @@ export const zh: Record<TKey, string> = {
   "claude.autoCompactWindowWarn": "修改该值可能导致 GPT 模型异常——若超过模型真实上限，会在摘要触发前报错。",
   "claude.injectAgents": "自动注册子代理",
   "claude.injectAgentsDesc": "将“子代理”页选中的模型（以及当前默认模型）注册为 Claude Code 可派遣的代理（ocx-*）。从下一个会话开始生效。",
+  "claude.nativePassthrough": "Claude 原生透传",
+  "claude.nativePassthroughDesc": "开启（默认）：Claude 模型请求使用 Claude Code 自己的登录直接发送到 Anthropic。关闭：改为通过 OpenCodex 的 Anthropic 账户路由，因此 Claude 账户池会生效。已在运行的 Claude Code 会话需要重新启动。",
   "claude.webSearchSidecar": "网页搜索附属服务覆盖",
   "claude.webSearchSidecarHint": "仅对 Claude Code 请求覆盖主网页搜索附属服务设置。",
   "claude.visionSidecar": "视觉附属服务覆盖",

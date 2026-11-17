@@ -3405,6 +3405,8 @@ export const vi: Record<TKey, string> = {
   "claude.autoCompactWindowWarn": "Việc thay đổi điều này có thể làm hỏng các model GPT — nếu đặt cao hơn giới hạn thực của model, các cuộc trò chuyện sẽ gặp lỗi trước khi quá trình tóm tắt bắt đầu.",
   "claude.injectAgents": "Tự động đăng ký các subagent",
   "claude.injectAgentsDesc": "Đăng ký các model được chọn trên thẻ Subagents (cộng với model mặc định hiện tại) làm các agent Claude Code có thể điều phối (ocx-*). Có hiệu lực từ phiên làm việc tiếp theo.",
+  "claude.nativePassthrough": "Chuyển tiếp Claude gốc",
+  "claude.nativePassthroughDesc": "Bật (mặc định): các model Claude được gửi thẳng tới Anthropic bằng đăng nhập riêng của Claude Code. Tắt: chúng được định tuyến qua các tài khoản Anthropic của OpenCodex, nên Claude account pool được áp dụng. Hãy khởi động lại các phiên Claude Code đang chạy.",
   "claude.webSearchSidecar": "Ghi đè sidecar tìm kiếm web",
   "claude.webSearchSidecarHint": "Ghi đè sidecar tìm kiếm web chính đối với các yêu cầu từ Claude Code.",
   "claude.visionSidecar": "Ghi đè sidecar thị giác (vision sidecar)",
