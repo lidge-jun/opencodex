@@ -51,3 +51,27 @@ bun run typecheck
 Regression proof: `anthropic-funded-roster.test.ts` fails against `origin/dev` source (four refusals then a
 healthy fifth account returns the 429 under the fixed cap of 3).
 
+## Outcome (wp2)
+
+`b65d4232b` carries #8857. A fresh Morph DeepSeek security reviewer returned GO-WITH-FIXES with no
+High/Critical finding: snapshot, clamp, budget intersection, credential identity, committed-output replay,
+logging and cancellation hold. Its finding 1 (Medium) was introduced by the carry and is fixed in
+`fd4ed80e0`: counting Anthropic initial sends had narrowed them to one attempt, removing the opted-in
+offline resend and the reset ladder for every Anthropic OAuth request. The new funded-roster case fails
+with 502 before the fix. The continuation arm passes no resend claim, offline wait or replay-safety, so
+its attempt cap has no observable effect and was left as carried. `bd00faf2a` adds the Spanish copy of the
+new public-doc paragraph, which `tests/ci-workflows/docs-spanish-localization.test.ts` requires.
+
+Residuals for maintainers (not fixed here):
+
+- Medium: the sidecar Anthropic rotation does not release its hop permit if the rotator throws
+  (`src/server/responses/sidecar-execution.ts`, the `rotateAnthropicAccountOnResponseForInstance` call in the
+  Anthropic arm). This predates the carry: `origin/dev` has the same unguarded call.
+- Low: the sidecar thinking-recovery budget guard ignores an inherited combo permit; the continuation keeps a
+  settled hop permit across the opaque-blob retry; the native Messages roster snapshot sits outside the abort
+  cleanup scope; `refusalAttribution` is not cleared after a successful replay; the roster snapshot adds a
+  synchronous auth-store read per Anthropic OAuth request.
+
+Focused set (5 Anthropic files, offline resend, Spanish localization, core-lab boundary, layout, ratchet):
+299 pass, 0 fail. `bun run typecheck` clean.
+
