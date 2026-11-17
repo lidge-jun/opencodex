@@ -21,7 +21,10 @@ const home = process.env.CODEX_HOME!;
 const { injectCodexConfig, restoreNativeCodex, restoreNativeCodexAsync } = await import("../../src/codex/inject");
 const { setBeforeCodexConfigPublishForTests } = await import("../../src/codex/inject/config-write-section");
 const { retainOcxProviderTableOnDisk } = await import("../../src/codex/inject/remove");
-const { reconcileJournal, restoreJournalState } = await import("../../src/codex/journal");
+const { journaledInjectedRootValues, reconcileJournal, restoreJournalState } = await import("../../src/codex/journal");
+const { withConfigWriteLock } = await import("../../src/codex/config-write-lock");
+const { beginCodexWriteSection, publishCodexConfigIfUnchanged } = await import("../../src/codex/inject/config-write-section");
+const { restoreCodexPreImages, setAfterCompensationDecisionForTests } = await import("../../src/codex/inject-coordination");
 const configPath = join(home, "config.toml");
 const journalPath = join(home, "opencodex-journal.json");
 const [scenario = "", variant = ""] = process.argv.slice(2);
@@ -206,6 +209,45 @@ switch (scenario) {
     const synced = Bun.TOML.parse(read()) as Record<string, unknown>;
     const result = restoreNativeCodex({ skipHistory: true });
     report({ syncedUrl: synced.openai_base_url ?? null, snapshotHasLaterEdit: original.includes("approval_policy"), snapshotHasLoopback: original.includes("127.0.0.1"), success: result.success });
+    break;
+  }
+  case "start-recovery-race":
+  case "client-recovery-race": {
+    // Recovery decides from the bytes it read; a write landing before it publishes must make it
+    // defer (journal kept for a later start), never crash the start.
+    await inject(); laterEdits();
+    setOwner(scenario === "start-recovery-race" ? { kind: "process", pid: DEAD_PID } : { kind: "client", apiKeyId: "fixture-other-client" });
+    setBeforeCodexConfigPublishForTests(site => { if (site === "journal") concurrentWrite(); });
+    const restored = scenario === "start-recovery-race" ? reconcileJournal() : reconcileJournal({ activeClientApiKeyId: ACTIVE_CLIENT });
+    report({ restored });
+    break;
+  }
+  case "legacy-history": {
+    // A journal written before injectedRootHistory existed, then a reinjection on another port.
+    await inject(10100);
+    const journal = JSON.parse(readFileSync(journalPath, "utf8")) as Record<string, unknown>;
+    delete journal.injectedRootHistory;
+    writeFileSync(journalPath, JSON.stringify(journal));
+    await inject(10200);
+    report({ recordedUrls: journaledInjectedRootValues("openai_base_url", { readOnly: true }) });
+    break;
+  }
+  case "compensate-replace-race":
+  case "compensate-remove-race": {
+    // A lock section publishes config.toml, then compensates. A write landing after compensation
+    // decided the file is still OpenCodex's publication must survive.
+    const removal = scenario === "compensate-remove-race";
+    if (removal) renameSync(configPath, configPath + ".seed");
+    const pre = removal ? null : read();
+    let result: { complete: boolean; unrestored: readonly string[] } | undefined;
+    const locked = withConfigWriteLock(configPath, held => {
+      beginCodexWriteSection(held);
+      publishCodexConfigIfUnchanged(held, "inject", pre, (pre ?? "") + 'openai_base_url = "http://127.0.0.1:10100/v1"\n');
+      setAfterCompensationDecisionForTests(surface => { if (surface === "config") writeFileSync(configPath, read() + '\n[projects."/fixture/concurrent"]\ntrust_level = "trusted"\n'); });
+      result = restoreCodexPreImages({ config: pre, profile: null, journal: null }, held);
+    });
+    if (!locked.ok) throw new Error("fixture lock unavailable");
+    report({ compensation: result });
     break;
   }
   default:

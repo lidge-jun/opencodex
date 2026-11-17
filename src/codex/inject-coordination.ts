@@ -375,6 +375,12 @@ export function recordCodexNativeTransactionProvenance(
  * holds exactly those bytes. A refusal before the publish, or a profile another
  * writer replaced since, is left as it is.
  */
+let afterCompensationDecisionForTests: ((surface: string) => void) | undefined;
+/** Test seam: runs after compensation decided a surface must be restored and before it publishes. */
+export function setAfterCompensationDecisionForTests(hook: typeof afterCompensationDecisionForTests): void {
+  afterCompensationDecisionForTests = hook;
+}
+
 export function restoreCodexPreImages(
   pre: CodexPreImages,
   heldConfigWriteLock?: LockHandle,
@@ -417,6 +423,7 @@ export function restoreCodexPreImages(
       const need = decide(name, path, bytes, heldConfigWriteLock === undefined ? undefined : held);
       if (need === "skip") continue;
       if (need === "foreign") { unrestored.push(name); continue; }
+      afterCompensationDecisionForTests?.(name);
       if (name === "config" && bytes !== null && heldConfigWriteLock !== undefined) {
         publishCodexConfigIfUnchanged(held, "compensate", readOrNull(path), bytes);
         continue;

@@ -85,6 +85,24 @@ describe("INV-RESTORE-02 restore never overwrites a write that lands while it is
     }
   }
 
+  for (const scenario of ["start-recovery-race", "client-recovery-race"]) {
+    test(scenario + ": a write landing during recovery defers it and keeps the journal, never aborts start", () => {
+      const { report, stderr } = runRestoreChild(root, scenario, "in-place");
+      expect(report.concurrentKept).toBe(true);
+      expect(report.restored).toBe(false);
+      expect(report.journal).toBe(true);
+      expect(stderr).toContain("changed during journal recovery");
+    }, SPAWN_BUDGET_MS);
+  }
+
+  for (const scenario of ["compensate-replace-race", "compensate-remove-race"]) {
+    test(scenario + ": compensation never reverts a write that lands after it decided the file was OpenCodex's", () => {
+      const { report } = runRestoreChild(root, scenario);
+      expect(report.concurrentKept).toBe(true);
+      expect(report.compensation).toEqual({ complete: false, unrestored: ["config", "journal"] });
+    }, SPAWN_BUDGET_MS);
+  }
+
   test("the provider-table retention write refuses when config.toml changed after it was read", () => {
     const { report } = runRestoreChild(root, "race-retain", "in-place");
     expect(report.concurrentKept).toBe(true);

@@ -49,6 +49,24 @@ describe("config drift detection", () => {
     expect(codexConfigDrift(() => earlier, "/fixture/config.toml", read("https://gateway.invalid/v1"), () => true)).toEqual({ drifted: false, missingKeys: [] });
   });
 
+  test("a multiline model_catalog_json assignment is present, not drift", () => {
+    const content = 'openai_base_url = "' + url + '"\nmodel_catalog_json = """\n/fixture/custom.json"""\n';
+    expect(codexConfigDrift(journal, "/fixture/config.toml", () => content, () => true)).toEqual({ drifted: false, missingKeys: [] });
+  });
+
+  test("a config that does not parse is not reported as missing keys", () => {
+    const content = 'openai_base_url = "' + url + '"\nmodel_catalog_json = """\nunterminated\n';
+    expect(codexConfigDrift(journal, "/fixture/config.toml", () => content, () => true)).toEqual({ drifted: false, missingKeys: [] });
+  });
+
+  test("reinjection over a journal without history keeps the URL it replaces", () => {
+    const root = makeRestoreHomes("ocx-legacy-history-");
+    try {
+      const { report } = runRestoreChild(root, "legacy-history");
+      expect(report.recordedUrls).toEqual(["http://127.0.0.1:10200/v1", "http://127.0.0.1:10100/v1"]);
+    } finally { removeTreeWithRetry(root); }
+  }, SPAWN_BUDGET_MS);
+
   test("the first heal of an app rewrite is reported once, later heals quietly", async () => {
     const heal = await import("../../src/codex/config-drift-heal") as Record<string, unknown>;
     expect(typeof heal.codexConfigHealNotice).toBe("function");
