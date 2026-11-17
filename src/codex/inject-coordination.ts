@@ -388,8 +388,10 @@ export function restoreCodexPreImages(
   /*
    * What a surface needs. One already holding its preimage needs nothing, and must not be made to
    * pass a destination check: a foreign atomic rename of config.toml would otherwise fail the
-   * untouched profile and journal too. config.toml is reverted only when this section published it
-   * and it still holds that publication; any other bytes there belong to another writer.
+   * untouched profile and journal too. With a held lock (every injection and restore section),
+   * config.toml is reverted only when this section published it and it still holds that
+   * publication; any other bytes there belong to another writer. A direct call without a held lock
+   * has no publication record and keeps the unconditional config restore it always had.
    */
   const decide = (name: string, path: string, bytes: string | null, held: LockHandle | undefined): "skip" | "foreign" | "restore" => {
     const current = readOrNull(path);
