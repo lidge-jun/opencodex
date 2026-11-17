@@ -292,7 +292,7 @@ base instructions, modalities, auto-compact fields, and strict parser booleans. 
 the canonical `provider/model`. Its display name uses the provider's exact `modelDisplayNames` override first,
 then trusted catalog metadata such as a configured qualified provider/model alias, then the public slug.
 This overlay never changes route identity or the upstream wire model, and its catalog fingerprint makes
-a label edit refresh Codex output.
+a label edit refresh Codex output. Operator defaults for the routed instruction and verbosity fields follow the [routed catalog row defaults contract](catalog-routed-defaults.md).
 
 Raw `/v1/models` rows advertise positive safe capacity values in both Cursor's nested
 `capabilities` object and top-level discovery fields used by other clients. A model with a larger
@@ -380,10 +380,10 @@ Pool mode routes across main plus added Codex credentials. Key rules:
   an omission has no row to carry a reason, catalog sync emits one warn-once line naming the
   cause — absent canonical OpenAI provider, explicitly disabled picker, empty selector map, or a
   map with no main-account target — and the action that restores it
-  (`src/codex/catalog/reserve-warn.ts`). It is scoped to an install where authless Codex Desktop
-  routing is effective, so an install that never opted in is never told about a Reserve row it
-  did not ask for. An install that stores the flag where it cannot take effect is a different
-  silence, reported as `inertReason` by `describeCodexDesktopSwitches` rather than repeated here.
+  (`src/codex/catalog/reserve-warn.ts`). It is scoped to an install where the Reserve capability
+  is effective (`isEffectiveCodexReserve`), so an install that never opted in is never told about
+  a Reserve row it did not ask for. An install that enables Reserve where it cannot take effect is
+  a different silence and is not repeated here.
 - **Rotation is sticky.** A conversation stays on its selected account while that account is
   usable; failure moves it, success does not (`src/codex/pool-rotation.ts`).
 - **A transient hold is probed half-open, never opened all at once.** While a bound account is

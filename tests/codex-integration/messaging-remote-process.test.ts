@@ -36,6 +36,29 @@ test("Linux inspection allows absent IPv6 tables but refuses failed or public li
   } finally { budget.dispose(); }
 });
 
+test("Linux inspection reads a busy host's whole listener table instead of refusing it by size", async () => {
+  const budget = new MessageBudget(), capacity = new RemoteCapacity();
+  // Kernel rows are 150 bytes; 30,000 TIME_WAIT rows put the table past 4 MiB, as on a shared CI host.
+  const row = (index: number, address: string, port: string, state: string) =>
+    ` ${index}: ${address}:${port} 0100007F:1F90 ${state}`.padEnd(149) + "\n";
+  const table = (tail: string) => "header".padEnd(149) + "\n" + row(0, "0100007F", "5BA0", "0A")
+    + Array.from({ length: 30_000 }, (_, index) => row(index + 1, "0100007F", "9C40", "06")).join("") + tail;
+  const inspect = (ipv4: string) => remotePortIsLoopback(23456, budget, capacity, { platform: "linux", async openProc(path) {
+    if (path.endsWith("tcp6")) throw Object.assign(new Error("fixture open"), { code: "ENOENT" });
+    const bytes = Buffer.from(ipv4); let offset = 0;
+    return { async read(buffer, start, length) {
+      const bytesRead = bytes.copy(buffer, start, offset, offset + length); offset += bytesRead; return { bytesRead };
+    }, async close() {} };
+  } });
+  try {
+    const busy = table("");
+    expect(busy.length).toBeGreaterThan(4 * 1024 * 1024);
+    expect(await inspect(busy)).toBe(true);
+    // The public row lies past the old 4 MiB cut-off, so the whole table must still be read.
+    expect(await inspect(table(row(30_001, "00000000", "5BA0", "0A")))).toBe(false);
+  } finally { budget.dispose(); }
+});
+
 function fakeProcess(options: { exitCode?: number; output?: string; stderr?: string; inputFailure?: boolean; asyncInputFailure?: boolean; exitOnSignal?: boolean; holdPipes?: boolean } = {}) {
   let finish!: (code: number) => void, exitCode = options.exitCode ?? null;
   const signals: NodeJS.Signals[] = [];

@@ -11,7 +11,7 @@
 import type { HomeCodexSettingsRecord } from "../client/link-home";
 import { findLiveProxy, probeHostname, type LiveProxy } from "../server/proxy-liveness";
 import type { ProxyRestartStartOutcome } from "./tray-proxy";
-import type { RestartSupervisor } from "./restart-failure";
+import { LEGACY_FLAG_OWNER_ADVICE, type RestartSupervisor } from "./restart-failure";
 
 export type ApplyRestartOutcome =
   | { kind: "current" }
@@ -73,7 +73,9 @@ export function applyRestartMessage(outcome: ApplyRestartOutcome): string {
     case "restarted": return "Client runtime restarted after applying the Home's settings.";
     case "deferred-supervisor": return outcome.supervisor === "desktop"
       ? "Client runtime restart deferred; the settings take effect when OpenCodex Desktop restarts it. Use Quit in the OpenCodex tray menu, then reopen OpenCodex."
-      : "Client runtime restart deferred; the settings take effect when the background service restarts it. Run `ocx service restart`.";
+      : outcome.supervisor === "legacy-flag"
+        ? `Client runtime restart deferred; nothing was stopped, and the settings take effect when the runtime restarts. ${LEGACY_FLAG_OWNER_ADVICE}`
+        : "Client runtime restart deferred; the settings take effect when the background service restarts it. Run `ocx service restart`.";
     case "failed": return "The client runtime restart did not complete; the previous runtime keeps serving. If a background service or the desktop app owns it, restart it there; otherwise retry with 'ocx restart' or 'ocx sync'.";
   }
 }

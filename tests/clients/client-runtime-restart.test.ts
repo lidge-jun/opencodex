@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Server } from "bun";
 import { startMachineListener } from "../../src/client/machine-listener";
-import { classifyClientRestartSupervisor, clientConnectionEnded, clientRestartRollbackAction, createClientRestartController, restartOwnerEvidence, restartOwnerProven, type ClientRestartAdmission, type ClientRestartIo } from "../../src/client/runtime-restart";
+import { classifyClientRestartSupervisor, clientConnectionEnded, clientRestartRollbackAction, createClientRestartController, recordedRestartOwner, restartOwnerEvidence, restartOwnerProven, type ClientRestartAdmission, type ClientRestartIo } from "../../src/client/runtime-restart";
 import { readClientConnectionState, readClientConnectionStateWithEvidence } from "../../src/client/state";
 import { claudeProxyStartEnv } from "../../src/cli/claude";
 import { opencodeProxyStartEnv } from "../../src/cli/opencode";
@@ -474,14 +474,11 @@ describe("who supervises a client restart (real service diagnostics)", () => {
   });
 });
 
-// Final review round 4 (scope split): a runtime whose only supervisor evidence is a bare
-// OCX_SERVICE=1 (a legacy service child, or the proxy of ocx claude, ocx codex or ocx opencode)
-// keeps origin/dev's `ocx restart` decision exactly. The oracle is written from the merge base
-// b1148220574917c8: src/client/runtime-restart.ts:114-119 (desktop, else no OCX_SERVICE -> none,
-// else isServiceViable() ? "service" : none) and :98-106 (a supervisor refuses, none restarts with
-// a replacement; no ended-connection branch).
-describe("a bare OCX_SERVICE=1 keeps origin/dev's ocx restart decision", () => {
-  const devSupervisor = (env: NodeJS.ProcessEnv, viable: boolean) => (env.OCX_SERVICE !== "1" ? null : viable ? "service" : null);
+// #8545 owner decision (lidge-jun, 2026-11-16): a runtime whose only supervisor evidence is a bare OCX_SERVICE=1 (a
+// service registered before the manager marker, or the proxy of ocx claude, ocx codex or ocx opencode) is refused with
+// the re-register advice. Nothing is stopped, replaced or recycled on inference, whatever the service diagnostic says
+// and whether or not the connection ended.
+describe("a bare OCX_SERVICE=1 is refused, never stopped on inference (#8545)", () => {
   const bareEnvs = [
     ["a legacy service child", () => ({ OCX_SERVICE: "1", PATH: "/usr/bin" }) as NodeJS.ProcessEnv],
     ["ocx claude's proxy", () => claudeProxyStartEnv({ PATH: "/usr/bin" })],
@@ -494,32 +491,30 @@ describe("a bare OCX_SERVICE=1 keeps origin/dev's ocx restart decision", () => {
     deriveSystemdServiceDiagnostic({ installed: true, enabled: true, running: true, stale: false, diagnostics: "test" }),
   ];
   for (const [name, env] of bareEnvs) {
-    for (const viable of [true, false]) {
-      test(`${name}, service viable ${viable}, connection ended or not: the same admission as origin/dev`, async () => {
-        expect(env().OCX_SERVICE).toBe("1");
-        expect(restartOwnerProven({ desktop: false, env: env() })).toBe(false);
-        for (const diagnostic of anyDiagnostic) {
-          const supervisor = classifyClientRestartSupervisor({ desktop: false, env: env(), diagnose: () => diagnostic, legacyServiceViable: () => viable });
-          expect(supervisor).toBe(devSupervisor(env(), viable));
-          for (const ended of [true, false]) {
-            const recycled: unknown[] = [];
-            const { io, calls } = fakeIo({
-              supervisor: async () => supervisor,
-              ownerProven: () => restartOwnerProven({ desktop: false, env: env() }),
-              connectionChanged: () => ended,
-              recycle: async verdict => { recycled.push(verdict); },
-            });
-            const controller = createClientRestartController(io);
-            const admission = await controller.request();
-            await controller.settled();
-            // origin/dev: a supervisor refuses; none runs the replacement restart. Never the recycle.
-            expect(admission).toEqual(viable ? { kind: "supervised", supervisor: "service" } : { kind: "accepted", alreadyRestarting: false });
-            expect(calls).toEqual(viable ? [] : ["stop:20000", "spawn:71000", "exit:0"]);
-            expect(recycled).toEqual([]);
-          }
+    test(`${name}, any service state, connection ended or not: refused as legacy-flag, nothing stopped`, async () => {
+      expect(env().OCX_SERVICE).toBe("1");
+      expect(restartOwnerProven({ desktop: false, env: env() })).toBe(false);
+      expect(recordedRestartOwner({ desktop: false, env: env() })).toBe("legacy-flag");
+      for (const diagnostic of anyDiagnostic) {
+        const supervisor = classifyClientRestartSupervisor({ desktop: false, env: env(), diagnose: () => diagnostic });
+        expect(supervisor).toBe("legacy-flag");
+        for (const ended of [true, false]) {
+          const recycled: unknown[] = [];
+          const { io, calls } = fakeIo({
+            supervisor: async () => supervisor,
+            ownerProven: () => restartOwnerProven({ desktop: false, env: env() }),
+            connectionChanged: () => ended,
+            recycle: async verdict => { recycled.push(verdict); },
+          });
+          const controller = createClientRestartController(io);
+          const admission = await controller.request();
+          await controller.settled();
+          expect(admission).toEqual({ kind: "supervised", supervisor: "legacy-flag" });
+          expect(calls).toEqual([]);
+          expect(recycled).toEqual([]);
         }
-      });
-    }
+      }
+    });
   }
 
   test("positive evidence opens the ended-connection recycle: desktop, a manager's marker, or no OCX_SERVICE", () => {
@@ -529,12 +524,12 @@ describe("a bare OCX_SERVICE=1 keeps origin/dev's ocx restart decision", () => {
     expect(restartOwnerProven({ desktop: false, env: {} })).toBe(true);
   });
 
-  // Final review round 6: a markerless legacy Windows registration (only OCX_SERVICE=1; its parent is
-  // this install's Task Scheduler wrapper) is recognised by the real parent-command-line derivation,
-  // but that is inference, not a current manager marker. It stays on origin/dev's path for restart,
-  // disconnect and sync. The production default is routed through the real Windows derivation with
-  // faked process data, so the branch is reached on any host.
-  test("a markerless legacy Windows service child stays on origin/dev's path: restart, disconnect, sync", async () => {
+  // A markerless legacy Windows registration (only OCX_SERVICE=1; its parent is this install's Task Scheduler wrapper)
+  // is recognised by the parent-command-line derivation the start-time ownership check uses. That is inference: the
+  // restart owner never reads it (#8545 owner decision), so restart, disconnect and sync refuse it like any bare flag.
+  // The production default is routed through the real Windows derivation with faked process data, so the branch is
+  // reached on any host.
+  test("a markerless legacy Windows service child is refused, not inferred from its parent: restart, disconnect, sync", async () => {
     const wrapper = "C:\\Users\\u\\.opencodex\\service\\opencodex-service.cmd";
     const windowsParent = { platform: "win32" as const, parentPid: () => 4242, processCommandLine: () => `cmd.exe /d /c "${wrapper}"`, serviceHostPaths: () => [wrapper] };
     const env = { OCX_SERVICE: "1", PATH: "C:\\Windows" } as NodeJS.ProcessEnv;
@@ -542,30 +537,33 @@ describe("a bare OCX_SERVICE=1 keeps origin/dev's ocx restart decision", () => {
     expect(real(env, windowsParent)).toBe(true);
     const spy = spyOn(serviceChildOwnership, "isSupervisedServiceChild").mockImplementation(e => real(e, windowsParent));
     try {
-      // Recorded with no owner, and classified as origin/dev classifies a bare flag (task disabled: not viable).
-      const owner = restartOwnerEvidence({ desktop: false, env });
-      expect(owner).toBeNull();
-      const supervisor = classifyClientRestartSupervisor({ desktop: false, env, diagnose: () => ({ viable: false, running: true }), legacyServiceViable: () => false });
-      expect(supervisor).toBeNull();
-      // ocx restart: origin/dev's replacement restart, never the recycle.
+      const owner = recordedRestartOwner({ desktop: false, env });
+      expect(owner).toBe("legacy-flag");
+      for (const diagnostic of [{ viable: false, running: true }, { viable: true, running: true }]) {
+        expect(classifyClientRestartSupervisor({ desktop: false, env, diagnose: () => diagnostic })).toBe("legacy-flag");
+      }
+      const supervisor = classifyClientRestartSupervisor({ desktop: false, env, diagnose: () => ({ viable: true, running: true }) });
+      // ocx restart: refused, nothing stopped, never the recycle.
       const { io, calls } = fakeIo({ supervisor: async () => supervisor, ownerProven: () => restartOwnerProven({ desktop: false, env }), connectionChanged: () => true, recycle: async () => { calls.push("recycle"); } });
       const controller = createClientRestartController(io);
-      expect(await controller.request()).toEqual({ kind: "accepted", alreadyRestarting: false });
+      expect(await controller.request()).toEqual({ kind: "supervised", supervisor: "legacy-flag" });
       await controller.settled();
-      expect(calls).toEqual(["stop:20000", "spawn:71000", "exit:0"]);
-      // ocx disconnect: the record states no owner, so no restart request and exit 0.
+      expect(calls).toEqual([]);
+      // ocx disconnect: the record states legacy-flag, so no restart request; the advice names the re-registration.
       const record = clientRuntimeRecord(4321, 10100, createLocalAttestationSecret(), owner);
-      expect(record.restartOwner).toBeUndefined();
+      expect(record.restartOwner).toBe("legacy-flag");
       let restarts = 0;
+      const errors: string[] = [];
       const code = await restartRuntimeAfterDisconnect({
         observe: async () => ({ kind: "live", live: { pid: 4321, port: 10100, role: "client" } }),
         capture: () => ({ ...record, attestationSecret: record.attestationSecret! }),
         connectionState: () => ({ kind: "disconnected" }),
         restart: async () => { restarts += 1; return { ok: true }; },
-        json: false, info: () => {}, error: () => {},
+        json: false, info: () => {}, error: line => { errors.push(line); },
       });
       expect({ code, restarts }).toEqual({ code: 0, restarts: 0 });
-      // ocx sync: restarted as on origin/dev, not reported as a service deferral.
+      expect(errors.join("\n")).toContain("ocx service repair");
+      // ocx sync: deferred with the legacy-flag advice, never restarted.
       const syncController = createClientRestartController({ ...fakeIo({ supervisor: async () => supervisor, ownerProven: () => restartOwnerProven({ desktop: false, env }), connectionChanged: () => false }).io });
       const outcome = await restartRuntimeAfterApply({ linkId: "lnk_x", fetchedAt: "2026-11-11T00:00:00.000Z", appliedAt: "2026-11-11T00:00:00.000Z", document: {} } as never, {
         findLive: async () => ({ pid: 4321, port: 10100, source: "runtime", role: "client" }) as never,
@@ -574,7 +572,7 @@ describe("a bare OCX_SERVICE=1 keeps origin/dev's ocx restart decision", () => {
         recoveryStart: async () => ({ status: "skipped" }),
         connectionUnchanged: () => true,
       });
-      expect(outcome).toEqual({ kind: "restarted" });
+      expect(outcome).toEqual({ kind: "deferred-supervisor", supervisor: "legacy-flag" });
     } finally {
       spy.mockRestore();
     }

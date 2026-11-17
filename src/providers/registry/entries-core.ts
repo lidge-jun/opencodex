@@ -672,8 +672,11 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // its matching result (#4726); the flag is live on this wire.
     requiresAdjacentResponsesToolResults: true,
     featured: false,
-    // Shares the kimi OAuth account: the login flow and credential store are keyed by
-    // oauthId, so adding this preset after logging into kimi needs no second login.
+    // Listed in the add-provider picker (#8087). It is not an OAUTH_PROVIDERS login, so the
+    // Accounts tab still draws Kimi once; the row signs in through src/oauth/credential-siblings.ts.
+    dashboardPreset: true,
+    // Shares the kimi OAuth account: OAUTH_CREDENTIAL_SIBLINGS maps this row to the kimi
+    // auth-store slot, so adding this preset after logging into kimi needs no second login.
     oauthId: "kimi",
     jawcodeBundle: "moonshot",
     note: "Same Kimi account login, routed over the OpenAI Responses wire. Thinking content stays encrypted server-side; tool calls and results stay visible. Chat wire remains the default preset for transparency.",
