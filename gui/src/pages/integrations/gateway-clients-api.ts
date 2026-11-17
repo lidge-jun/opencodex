@@ -57,6 +57,9 @@ export async function runGatewayClientAction(
   model?: string,
 ): Promise<GatewayClientActionOutcome> {
   try {
+    // A refusal's JSON carries the code the page translates, so the body is read on every status;
+    // `ok` below still requires response.ok.
+    // react-doctor-disable-next-line react-doctor/no-fetch-response-used-without-status-check
     const response = await fetch(`${apiBase}/api/gateway-clients/${id}/${action}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
