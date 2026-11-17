@@ -38,7 +38,7 @@ export function childConfigFailureHint(result: { code: number; stderr: string })
  */
 export function childRoleRefusalHint(runtimeRole: unknown): string {
   return runtimeRole === "client"
-    ? "The Child is still linked to a Home (config runtimeRole client). On the Child run: ocx disconnect, then ocx restart."
+    ? "The Child is still linked to a Home (config runtimeRole client). To end that link and move it here, on the Child run: ocx disconnect, then ocx restart."
     : `The Child is a Hub (config runtimeRole ${runtimeRole === "hub" ? "hub" : "unknown"}). On the Child run: ocx hub disable, then retry.`;
 }
 

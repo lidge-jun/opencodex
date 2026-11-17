@@ -327,8 +327,22 @@ describe("bundled app catalog consumer", () => {
  * selection on the bare `codex` sentinel. The readiness probe then asked a command that does
  * not exist while a real, trusted Codex sat inside the app.
  */
-// The virtual app paths below are POSIX; on Windows the exec boundary treats them as relative.
-describe.skipIf(process.platform === "win32")("app-bundled CLI fallback for connect readiness (#8360)", () => {
+describe("app-bundled CLI fallback for connect readiness (#8360)", () => {
+  function bundledFixture() {
+    const configDir = mkdtempSync(join(tmpdir(), "ocx-app-catalog-"));
+    roots.push(configDir);
+    // Only configDir touches the host filesystem. The simulated darwin exec boundary
+    // needs POSIX-absolute app paths even when this test runs on Windows.
+    const home = "/fixture/home";
+    const versions = new Map<string, string>();
+    const deps: ResolveCodexRuntimeDeps = {
+      platform: "darwin", env: { HOME: home, PATH: "" }, configDir,
+      existsSync: path => versions.has(path), executable: path => versions.has(path),
+      realpath: path => path, readBundleIdentifier: () => null,
+      macBundleTrustReason: () => null, macBundleTrustReasonAsync: async () => null,
+    };
+    return { deps, versions, current: `${home}/Applications/ChatGPT.app/${CURRENT}` };
+  }
   /** A catalog with a distinctive ladder, so a warm fixture value cannot pass by accident. */
   const bundledCatalog = JSON.stringify({ models: [{
     slug: "gpt-5.6-sol",
@@ -346,7 +360,7 @@ describe.skipIf(process.platform === "win32")("app-bundled CLI fallback for conn
   }
 
   test("an app-bundled-only layout yields the bundled ladder and reports ready", () => {
-    const f = fixture();
+    const f = bundledFixture();
     // The bundle identity is not classifiable (the shape an app update can leave behind), so
     // discovery declines the app candidate and the resolver ends on the bare sentinel.
     f.deps.readBundleIdentifier = () => null;
@@ -367,7 +381,7 @@ describe.skipIf(process.platform === "win32")("app-bundled CLI fallback for conn
   });
 
   test("app locations that do not exist leave the ladder unverified instead of inventing one", () => {
-    const f = fixture();
+    const f = bundledFixture();
     f.deps.readBundleIdentifier = () => null;
     const spawned: string[] = [];
     const exec = bundledOnlyExec(f.current, spawned);
@@ -382,7 +396,7 @@ describe.skipIf(process.platform === "win32")("app-bundled CLI fallback for conn
   });
 
   test("a resolved absolute command is probed as given, without widening to app candidates", () => {
-    const f = fixture();
+    const f = bundledFixture();
     const standalone = "/fixture/bin/codex";
     f.versions.set(standalone, "0.167.0");
     f.versions.set(f.current, "0.166.0-alpha.6");
@@ -399,7 +413,7 @@ describe.skipIf(process.platform === "win32")("app-bundled CLI fallback for conn
   });
 
   test("a selected runnable bare command keeps its own answer instead of borrowing the app's ladder", async () => {
-    const f = fixture();
+    const f = bundledFixture();
     f.versions.set(f.current, "0.166.0-alpha.6");
     const spawned: string[] = [];
     // Only the app answers. The selected bare command was runnable when it was resolved (it has a
@@ -422,7 +436,7 @@ describe.skipIf(process.platform === "win32")("app-bundled CLI fallback for conn
   });
 
   test("the async bundled-catalog driver widens a bare sentinel the same way", async () => {
-    const f = fixture();
+    const f = bundledFixture();
     f.versions.set(f.current, "0.166.0-alpha.6");
     const spawned: string[] = [];
     const exec = bundledOnlyExec(f.current, spawned);

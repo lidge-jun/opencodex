@@ -52,6 +52,7 @@ import { PICKER_ORDER_PRIORITY_BASE, SPAWN_PRIORITY_FIELD } from "./subagent-ros
 import { applyConfiguredUltraFast, configuredUltraFastSlugs } from "./configured-tiers";
 import { applyNativeUltraFastTier } from "./native-ultrafast";
 import { applyNativePriority, retainedNativeSourcePriorities, type NativePrioritySource } from "./native-priority";
+import type { RoutedCatalogDefaults } from "../../config/schema/routed-catalog-defaults";
 
 export interface ObservedCatalogEntryBuildInput {
   readonly template: RawEntry | null;
@@ -76,6 +77,8 @@ export interface ObservedCatalogEntryBuildInput {
   /** Codex-only manual selector metadata; deliberately independent of live permission. */
   readonly reserve?: ReserveCatalogProjection;
   readonly nativeSource?: NativePrioritySource;
+  /** Captured `routedCatalogDefaults` (#6872); applied to routed rows only, never read from config here. */
+  readonly routedCatalogDefaults?: Readonly<RoutedCatalogDefaults>;
 }
 
 /** Build entries with the process-observed Codex feature state. */
@@ -96,6 +99,7 @@ export function buildCatalogEntries(
   keepNativeChatGptOnV1 = false,
   modelPickerOrder: readonly string[] = [],
   nativeSource?: NativePrioritySource,
+  routedCatalogDefaults?: Readonly<RoutedCatalogDefaults>,
 ): RawEntry[] {
   const entries = buildCatalogEntriesFromObservedState({
     template,
@@ -115,6 +119,7 @@ export function buildCatalogEntries(
     accountNativeSlugs,
     accountNativeSlugsBySelector,
     nativeSource,
+    routedCatalogDefaults,
   });
   // Live discovery does not run the disk merge; use the same captured declarations and row fences.
   const configured = configuredUltraFastSlugs(goModels);
@@ -148,6 +153,7 @@ export function buildCatalogEntriesFromObservedState({
   accountNativeSlugsBySelector,
   reserve,
   nativeSource,
+  routedCatalogDefaults,
 }: ObservedCatalogEntryBuildInput): RawEntry[] {
   // Codex's models-manager sorts by `priority` ASC and advertises the first 5 picker-visible
   // models to spawn_agent (sort_by_key(priority) + MAX_MODEL_OVERRIDES_IN_SPAWN_AGENT=5). Catalog
@@ -228,6 +234,8 @@ export function buildCatalogEntriesFromObservedState({
       5,
       nativeAlias,
       exactComboSlugs,
+      undefined,
+      routedCatalogDefaults,
     );
     routed.opencodex_catalog_kind = CODEX_NATIVE_ALIAS_CATALOG_KIND;
     const rankHit = rank.get(slug) ?? rank.get(`${nativeAlias.provider}/${nativeAlias.id}`);
@@ -286,6 +294,8 @@ export function buildCatalogEntriesFromObservedState({
       5,
       m,
       exactComboSlugs,
+      undefined,
+      routedCatalogDefaults,
     );
     if (m.provider === COMBO_NAMESPACE && m.nativeAlias === true && !slug.includes("/")) {
       e.opencodex_catalog_kind = CODEX_NATIVE_ALIAS_CATALOG_KIND;

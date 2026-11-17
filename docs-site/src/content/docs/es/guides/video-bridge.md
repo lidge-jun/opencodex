@@ -11,7 +11,11 @@ El puente de video permite generar videos con Grok Imagine Video de xAI desde cu
 
 <a id="prerequisites"></a>
 
+De forma predeterminada los trabajos van a xAI; `images.videoProvider` puede enviarlos a otro backend compatible.
+
 ## Requisitos previos
+
+Estos requisitos se aplican al destino xAI predeterminado. Si defines `images.videoProvider`, consulta [Elegir el proveedor de video](#elegir-el-proveedor-de-video).
 
 - Un proveedor `xai` con una **clave API**: `ocx login xai` por sí solo no basta; el puente requiere autenticación con clave.
 - Un modelo de otro proveedor, como Anthropic Claude o Google Gemini.
@@ -53,14 +57,45 @@ Agregue `videoBridgeEnabled: true` a su configuración `images`:
 | `videoBridgeModel` | `"grok-imagine-video"` | Id. de modelo de vídeo xAI. |
 | `videoMaxRounds` | `2` | Número máximo de rondas de generación de video antes de forzar la respuesta final. |
 | `videoTimeoutMs` | `300000` (5 min) | Plazo máximo por video, incluidas las consultas de estado. |
+| `videoProvider` | sin definir (xAI) | Proveedor opcional con clave de API que atiende `video_gen` con su propio `baseUrl` y clave. Consulta [Elegir el proveedor de video](#elegir-el-proveedor-de-video). |
 
 <a id="how-it-works"></a>
+
+## Elegir el proveedor de video
+
+De forma predeterminada, el puente envía los trabajos de `video_gen` a xAI con la clave de API del proveedor `xai`. Define `images.videoProvider` para enviarlos a otro backend que implemente la misma API asíncrona (`POST {baseUrl}/videos/generations` y luego `GET {baseUrl}/videos/{id}`), como un puente multimedia autoalojado:
+
+```json
+{
+  "providers": {
+    "my-video-bridge": {
+      "adapter": "openai-chat",
+      "baseUrl": "http://127.0.0.1:8790/v1",
+      "apiKey": "${VIDEO_BRIDGE_KEY}",
+      "authMode": "key",
+      "allowPrivateNetwork": true
+    }
+  },
+  "images": {
+    "videoBridgeEnabled": true,
+    "videoProvider": "my-video-bridge",
+    "videoBridgeModel": "grok-imagine-video"
+  }
+}
+```
+
+- Solo se usan como destino y credencial el `baseUrl` y la clave de API del proveedor indicado. El adaptador no importa, pero debe usar autenticación por clave de API.
+- `"videoProvider": "xai"` mantiene el endpoint fijo `https://api.x.ai/v1`, sea cual sea el `baseUrl` de la fila `xai`. Los demás identificadores de proveedores integrados se rechazan; indica un proveedor personalizado.
+- Un destino de loopback o de red privada necesita `allowPrivateNetwork: true` en ese proveedor, igual que el resto del tráfico de proveedores. La comprobación se hace sobre las direcciones a las que resuelve el nombre de host cuando se conecta cada solicitud de envío o de sondeo, así que un nombre de host que resuelve a una dirección local se rechaza sin ese ajuste. `http` sin cifrar solo funciona con `localhost` o con una dirección IP de loopback o privada y ese ajuste; cualquier otro destino debe usar `https`. Las solicitudes siguen los ajustes `proxy` y `noProxy` del propio proveedor. Cuando un proxy del proveedor o un proxy global transporta la solicitud, es el proxy quien resuelve el nombre de host y se conecta, así que la comprobación de direcciones anterior solo cubre la respuesta DNS local y no puede fijar el destino que elige el proxy: enruta un proveedor por un proxy solo si confías en que el DNS y la ruta de red de ese proxy mantienen inaccesibles los destinos privados. Si el DNS local no puede resolver el nombre de host mientras se aplica un proxy, la solicitud sigue pasando por ese proxy sin ninguna respuesta local que comprobar, y OpenCodex registra una advertencia. Cuando se aplica un proxy, se rechazan tanto una solicitud `http` sin cifrar como un nombre de host cuya respuesta DNS local es una dirección privada, incluso con `allowPrivateNetwork`; ese proveedor de vídeo local necesita una ruta directa. Excluye su host con el `noProxy` del proveedor (para un `proxy` del proveedor) o con `NO_PROXY` (para un proxy global).
+- Una clave que OpenCodex puede reconocer como de xAI (una clave `xai-`, una clave de cualquier fila `xai` o una referencia de entorno con nombre de xAI o Grok) solo se envía a `https://api.x.ai` o `https://cli-chat-proxy.grok.com`; cualquier otro origen se rechaza. Una clave sin esas marcas no se puede reconocer, así que no pegues tu clave de xAI en la fila de otro proveedor. Una referencia de llavero al secreto de otro proveedor siempre se rechaza, una clave activa en pausa falla de forma cerrada y el `baseUrl` no puede llevar credenciales, consulta ni fragmento.
+- Si el proveedor no existe, está deshabilitado, en pausa, sin clave o rechazado, cada llamada a `video_gen` devuelve ese error al modelo. No se envía nada y el puente nunca recurre a xAI.
+- El video terminado solo se descarga desde una URL `data:` en base64 o una URL `https:` pública, así que un puente local debe devolver una de ellas como `video.url`.
 
 ## Cómo funciona
 
 1. opencodex detecta un modelo enrutado no OpenAI con `videoBridgeEnabled: true`
 2. Una herramienta de función sintética `video_gen` se inyecta en la conversación
-3. Cuando el modelo llama al `video_gen`, opencodex envía un trabajo al endpoint `/videos/generations` de xAI
+3. Cuando el modelo llama al `video_gen`, opencodex envía un trabajo al endpoint `/videos/generations` de xAI (o al `images.videoProvider` configurado)
 4. El puente sondea el estado del trabajo cada 5-15 segundos, enviando mensajes de latido para mantener viva la transmisión
 5. Cuando el video está listo, se descarga en el directorio de artefactos
 6. La ruta local del archivo se devuelve al modelo como resultado de la herramienta
@@ -82,7 +117,7 @@ La herramienta `video_gen` acepta:
 
 ## Limitaciones
 
-- **xAI solamente**: La generación de video solo está disponible mediante la API Grok Imagine Video de xAI
+- **xAI de forma predeterminada**: sin `videoProvider`, la generación de video usa la API Grok Imagine Video de xAI; otro backend debe implementar la misma API asíncrona
 - **Asíncrono**: La generación de video toma 30-120 segundos
 - **Coste**: la generación de video es una función de pago de xAI. Consulta las [tarifas oficiales](https://docs.x.ai/developers/pricing) antes de usarla.
 - **Un video por llamada**: Cada llamada `video_gen` produce un vídeo

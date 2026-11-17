@@ -13,6 +13,8 @@ import { createTestTranslatorBudget } from "../helpers/translator-budget";
 // argv it was actually given, and real PATH resolution and spawn. Linux quoting fixtures cannot
 // show what CreateProcess, cmd.exe and PowerShell deliver, so this file only runs on win32.
 const ISOLATION_ARGS = ["--tools", "", "--strict-mcp-config", "--setting-sources", "", "--max-turns", "1"];
+// #8704: inline settings carry JSON double quotes, which cmd.exe and CreateProcess must deliver intact.
+const LAZY_LOAD_OFF = ["--settings", '{"mcp":{"lazyLoad":false}}'];
 
 let root = "";
 let entryDir = "";
@@ -91,10 +93,11 @@ describe.skipIf(process.platform !== "win32")("Windows coding-agent empty argv (
   });
 
   test("control: a dispatcher that forwards %* directly keeps them through cmd.exe", () => {
-    runDispatcher(join(entryDir, "shimcn.cmd"), ISOLATION_ARGS);
+    runDispatcher(join(entryDir, "shimcn.cmd"), [...ISOLATION_ARGS, ...LAZY_LOAD_OFF]);
     const argv = receivedArgv();
     expect(containsRun(argv, ["--tools", ""])).toBe(true);
     expect(containsRun(argv, ["--setting-sources", "", "--max-turns", "1"])).toBe(true);
+    expect(containsRun(argv, LAZY_LOAD_OFF)).toBe(true);
   });
 
   test("a turn with the dispatcher first on PATH launches the native executable and delivers both empty values", async () => {
@@ -104,6 +107,7 @@ describe.skipIf(process.platform !== "win32")("Windows coding-agent empty argv (
     const argv = receivedArgv();
     expect(containsRun(argv, ["--tools", ""])).toBe(true);
     expect(containsRun(argv, ["--setting-sources", "", "--max-turns", "1"])).toBe(true);
+    expect(containsRun(argv, LAZY_LOAD_OFF)).toBe(true);
   });
 
   test("a dispatcher-only install is refused before anything is spawned", async () => {

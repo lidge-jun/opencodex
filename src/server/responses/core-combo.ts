@@ -23,7 +23,7 @@ import {
 } from "../../reasoning-effort";
 import { admissionMayUseMeteredComboTargets, resolveAdmissionModelScope, routeAllowedByScope } from "../admission-model-scope";
 import { recordAttemptRequestedEffort } from "../request-log";
-import { failLinkTurnExpansion, markLinkTurnMissing, observeLinkTurnExpansion } from "../link-turn";
+import { bindLinkTurnChild, failLinkTurnExpansion, markLinkTurnMissing, observeLinkTurnExpansion } from "../link-turn";
 import {
   CODEX_TEXT_GUARDED_BUDGET_POLICY,
   deriveRequestExecutionBudget,
@@ -47,7 +47,9 @@ import {
   comboDefaultEffort,
   isComboTargetInCooldown,
   snapshotComboQuotaCooldowns,
-  comboExclusionReasons,
+  comboExclusion,
+  comboUnavailableDiagnostics,
+  comboTargetUnavailableCause,
   comboTargetSkipTrigger,
   noteComboSuccess,
   settleComboReprobeSuccess,
@@ -605,6 +607,10 @@ export async function executeComboResponses(
     const enabled = combo.targets.filter(target => config.providers[target.provider]?.disabled !== true);
     return enabled.length > 0 && enabled.every(target => !museToolEligible(target));
   };
+  // A mandatory tool_choice no target preserves is unsupported (#7965), but shared exclusion evidence
+  // (provider state, quota, live cooldowns) keeps precedence, exactly as in the readable reasons.
+  const unsupportedToolChoice = (attempted: number) => comboUnavailableDiagnostics(combo.targets.length, attempted,
+    combo.targets.map(target => comboTargetUnavailableCause(config, comboId, target, museToolEligible) ?? "unsupported"));
   // Recovery can replace unreadable encrypted input, but cannot relax other admission checks.
   const recoveryEligible = (target: (typeof combo.targets)[number]): boolean =>
     (meteredAllowed || !target.metered)
@@ -725,12 +731,13 @@ export async function executeComboResponses(
         { parentThreadId: inboundClientThreadId },
       );
       if (!options.abortSignal?.aborted && onlyMuseToolIncompatible()) {
-        return comboUnavailableResponse("No available targets for combo; targets cannot preserve mandatory tool_choice");
+        return comboUnavailableResponse("No available targets for combo; targets cannot preserve mandatory tool_choice",
+          { diagnostics: unsupportedToolChoice(0) });
       }
       return options.abortSignal?.aborted
         ? clientCancelledResponse()
         : comboUnavailable(comboId, undefined,
-          comboExclusionReasons(config, comboId, recoveryEligible));
+          comboExclusion(config, comboId, recoveryEligible));
     }
     if (!(await recoverUnreadableEncryptedTask())) {
       return options.abortSignal?.aborted
@@ -745,11 +752,12 @@ export async function executeComboResponses(
     if (protocolRefusal) return protocolRefusal;
     if (onlyReplayIncompatibleTargetsRemain()) return targetIncompatibleResponse();
     if (!options.abortSignal?.aborted && onlyMuseToolIncompatible()) {
-      return comboUnavailableResponse("No available targets for combo; targets cannot preserve mandatory tool_choice");
+      return comboUnavailableResponse("No available targets for combo; targets cannot preserve mandatory tool_choice",
+        { diagnostics: unsupportedToolChoice(0) });
     }
     return options.abortSignal?.aborted
       ? clientCancelledResponse()
-      : comboUnavailable(comboId, undefined, comboExclusionReasons(config, comboId, targetEligible));
+      : comboUnavailable(comboId, undefined, comboExclusion(config, comboId, targetEligible));
   }
   // OCX-11: an ordered failover combo that starts on a later target than its first one, for any
   // reason (cooling down, provider disabled, cached quota spent, ineligible for this request),
@@ -780,7 +788,7 @@ export async function executeComboResponses(
     const choices = eligibleJevComboChoices(config, comboId, targetEligible, Date.now(), pick.cooldownReprobeTargets);
     const first = choices[0];
     if (!first) {
-      return comboUnavailable(comboId, undefined, comboExclusionReasons(config, comboId, target =>
+      return comboUnavailable(comboId, undefined, comboExclusion(config, comboId, target =>
         targetEligible(target) && target.provider !== JEV_PROVIDER_ID && jevChoiceEfforts(config, target, false) !== undefined));
     }
     const fallbackFor = (choice: JevComboChoice): Pick<JevDecision, "targetKey" | "effort"> => {
@@ -894,7 +902,7 @@ export async function executeComboResponses(
     });
     // A completed decision belongs to the parent log even if no model can be dispatched.
     if (selectionUnavailable) {
-      return comboUnavailable(comboId, undefined, comboExclusionReasons(config, comboId, target =>
+      return comboUnavailable(comboId, undefined, comboExclusion(config, comboId, target =>
         targetEligible(target) && target.provider !== JEV_PROVIDER_ID && jevChoiceEfforts(config, target, false) !== undefined));
     }
   }
@@ -970,12 +978,13 @@ export async function executeComboResponses(
     const returnsQuota = lastFailure && [400, 401, 403].includes(lastFailure.status) && quotaFailure;
     const failedChildLog = returnsQuota ? quotaFailedChildLog : lastFailedChildLog;
     if (failedChildLog) adoptFailedChildLog(failedChildLog);
-    if (targetsExhausted && toolChoiceRefusalsOnly === true) return comboUnavailableResponse("No available targets for combo; attempted targets cannot preserve mandatory tool_choice");
+    if (targetsExhausted && toolChoiceRefusalsOnly === true) return comboUnavailableResponse("No available targets for combo; attempted targets cannot preserve mandatory tool_choice", { diagnostics: unsupportedToolChoice(comboTargetsDispatched) });
     if (!lastFailure || ![400, 401, 403].includes(lastFailure.status)) return lastFailure!;
     if (quotaFailure) return quotaFailure;
     // The quota-refused target was cooled before this request picked, so the ladder never saw
     // its refusal. The cooldown, with its Retry-After, is still the honest answer.
     let quotaCooldownUntil: number | undefined;
+    let quotaCooledTargets = 0;
     const now = Date.now();
     for (const { target, cooldownUntil } of quotaCooldownSnapshot) {
       if (cooldownUntil <= now) continue;
@@ -986,11 +995,15 @@ export async function executeComboResponses(
         continue;
       }
       quotaCooldownUntil = Math.min(quotaCooldownUntil ?? cooldownUntil, cooldownUntil);
+      quotaCooledTargets += 1;
     }
     const remainingQuotaCooldownMs = quotaCooldownUntil === undefined ? 0 : quotaCooldownUntil - Date.now();
     return remainingQuotaCooldownMs > 0
       ? comboUnavailableResponse("No available targets for combo", {
         retryAfter: String(Math.max(1, Math.ceil(remainingQuotaCooldownMs / 1000))),
+        // Only quota-cooled eligible targets can produce this answer, so its class is quota.
+        diagnostics: comboUnavailableDiagnostics(combo.targets.length, comboTargetsDispatched,
+          Array.from({ length: quotaCooledTargets }, () => "quota" as const)),
       }) : lastFailure;
   };
   // The caller's output ceiling, captured once so a floor applied to one target never
@@ -1093,6 +1106,8 @@ export async function executeComboResponses(
       ...(logCtx.affinityLane ? { affinityLane: logCtx.affinityLane } : {}),
       ...(logCtx.surface ? { surface: logCtx.surface } : {}),
     };
+    // A link turn's child reads its upstream only as the client drains, as the parent would (#8601).
+    bindLinkTurnChild(logCtx, childLog);
     const targetReasoningEfforts = supportedLadderFor({
       provider: targetRoute.provider,
       modelId: targetRoute.modelId,

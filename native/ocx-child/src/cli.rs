@@ -1999,15 +1999,17 @@ fn check_expected_link(guard: &CodexHomeGuard, link_id: &str, json_mode: bool) -
         };
     }
     let state_names_link = matches!(state, StateReadOutcome::Valid(_));
-    // The record names this link without its state: an attach of it stopped before its state write (phase attaching), or a
+    // The record names this link without its state: an attach of it stopped before its state write (phase attaching), a
     // detach of it stopped after marking the record detaching, whether before or after it removed state.json, and possibly
-    // while it restored an attach rollback (#8691 review). The bound detach finishes either as a plain one would. Any
+    // while it restored an attach rollback (#8691 review), or a detach of it stopped inside release() after marking the
+    // record cleanup complete and before removing it (#8696; only release() writes that phase, and an attach overwrites
+    // it). The bound detach finishes each as a plain one would. Any
     // rollback left names no link (the machine had none) or this one, since one naming another link was refused above, so
     // restoring it puts back no other link.
     let own_interrupted = owner.is_some_and(|r| {
         matches!(
             r.phase,
-            OwnershipPhase::Attaching | OwnershipPhase::Detaching
+            OwnershipPhase::Attaching | OwnershipPhase::Detaching | OwnershipPhase::CleanupComplete
         )
     }) && rollback
         .as_ref()
