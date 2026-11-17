@@ -3297,6 +3297,7 @@ export const ja: Record<TKey, string> = {
   "claude.injectAgentsDesc": "サブエージェントタブで選んだモデル(と現在のデフォルトモデル)をディスパッチ可能な Claude Code エージェント(ocx-*)として登録します。次回セッションから適用されます。",
   "claude.nativePassthrough": "Claude ネイティブパススルー",
   "claude.nativePassthroughDesc": "オン(既定): モデルマッピングのない Claude モデルは、Claude Code が自身のログイン資格情報を送るとき、そのログインで Anthropic に直接送ります。それ以外のリクエストはルーティングされます。オフ: これらのモデルも OpenCodex 経由でルーティングされ、設定されたルートと Anthropic アカウントが処理します。Claude アカウントプールを有効にしていればプールが適用されます。マッピングされたモデルはどちらの場合もマッピング先に送られます。実行中の Claude Code セッションは再起動が必要です。",
+  "claude.nativePassthroughLoadFailed": "パススルー設定を読み込めませんでした。",
   "claude.webSearchSidecar": "ウェブ検索サイドカーの上書き",
   "claude.webSearchSidecarHint": "Claude Code リクエストのメインウェブ検索サイドカーを上書きします。",
   "claude.visionSidecar": "ビジョンサイドカーの上書き",

@@ -368,7 +368,8 @@ bir kimlikle yeniden yazılır. Uygun kimlikler değiştirilmeden gönderilir, b
 400 döner.
 
 `claudeCode.nativePassthrough: false`, `ocx claude config set --native-passthrough off` veya
-panodaki Claude Code ayarlarında bulunan **Yerel Claude geçişi** anahtarıyla devre dışı bırakın;
+panodaki Providers → Anthropic Claude → Accounts bölümünde Claude hesap havuzunun altında bulunan
+**Yerel Claude geçişi** anahtarıyla devre dışı bırakın;
 `claudeCode.anthropicBaseUrl` ile başka bir yeri işaret edin. Geçiş kapalıyken takma adı veya
 `modelMap` girdisi olmayan bir Claude modeli de diğer modeller gibi yönlendirilir: sağlayıcıyı
 yapılandırılmış rota belirler (başka bir sağlayıcının modelini gösteren bir `modelMap` girdisi her iki

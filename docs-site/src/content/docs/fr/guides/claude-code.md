@@ -327,8 +327,8 @@ l'en-tête d'admission dédié du proxy est valide. Par conséquent, l'avertisse
 La seule modification du corps concerne les identifiants d'appel d'outil. Un `tool_use.id` ou `tool_result.tool_use_id` qu'Anthropic refuserait (caractères hors de `a-zA-Z0-9_-`, ou plus de 64), par exemple créé plus tôt dans la session par un modèle routé, est réécrit en identifiant conforme sans rompre l'appariement appel/résultat. Les identifiants conformes sont envoyés tels quels, et un identifiant vide reçoit une erreur 400 locale.
 
 Désactivez ce comportement avec `claudeCode.nativePassthrough: false`,
-`ocx claude config set --native-passthrough off` ou l'interrupteur **Relais Claude natif** dans les
-réglages Claude Code du tableau de bord ; définissez une autre destination avec
+`ocx claude config set --native-passthrough off` ou l'interrupteur **Relais Claude natif** sous le
+groupe de comptes Claude dans Providers → Anthropic Claude → Accounts du tableau de bord ; définissez une autre destination avec
 `claudeCode.anthropicBaseUrl`. Relais désactivé, un modèle Claude sans alias ni entrée `modelMap` est
 routé comme les autres : la route configurée choisit le fournisseur (une entrée `modelMap` qui pointe
 vers le modèle d'un autre fournisseur y va dans les deux cas). Quand la route est un fournisseur OAuth

@@ -643,26 +643,6 @@ test("the 1P switch's re-read keeps an unsaved draft", async () => {
   }
 });
 
-test("native passthrough reads an absent field as on and is saved through the Save bar", async () => {
-  // SERVER has no nativePassthrough field, like a proxy that predates it: the default is on.
-  const server: Server = { modelMap: {}, cliFirstParty: false, puts: [] };
-  serve(server);
-  const page = await mount();
-  try {
-    const toggle = page.container.querySelector<HTMLInputElement>('input[aria-label="Native Claude passthrough"]')!;
-    expect(toggle.checked).toBe(true);
-    await page.click(toggle);
-    expect(toggle.checked).toBe(false);
-    expect(page.barState()).toBe("Unsaved changes");
-    await page.click(page.button("Save"));
-    expect(server.puts).toHaveLength(1);
-    expect(server.puts[0]).toMatchObject({ nativePassthrough: false });
-  } finally {
-    await act(async () => page.root.unmount());
-    page.testWindow.close();
-  }
-});
-
 test("the connection switch is the last setting row, right above the Save bar", async () => {
   serve({ modelMap: {}, cliFirstParty: false, puts: [] });
   const page = await mount();

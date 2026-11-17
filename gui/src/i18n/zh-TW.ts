@@ -2569,6 +2569,7 @@ export const zhTW: Record<TKey, string> = {
   "claude.injectAgentsDesc": "將“子代理”頁選中的模型（以及當前預設模型）註冊為 Claude Code 可派遣的代理（ocx-*）。從下一個會話開始生效。",
   "claude.nativePassthrough": "Claude 原生透傳",
   "claude.nativePassthroughDesc": "開啟（預設）：沒有模型對應的 Claude 模型在 Claude Code 送出自己的登入憑證時，直接用該登入送往 Anthropic；其他請求走路由。關閉：這些模型改為透過 OpenCodex 路由，由設定的路由及其 Anthropic 帳號處理；若已啟用 Claude 帳號池，則帳號池生效。有對應的模型在兩種情況下都送往對應目標。已在執行的 Claude Code 會話需要重新啟動。",
+  "claude.nativePassthroughLoadFailed": "無法載入透傳設定。",
   "claude.webSearchSidecar": "網頁搜尋附屬服務覆蓋",
   "claude.webSearchSidecarHint": "僅對 Claude Code 請求覆蓋主網頁搜尋附屬服務設定。",
   "claude.visionSidecar": "視覺附屬服務覆蓋",

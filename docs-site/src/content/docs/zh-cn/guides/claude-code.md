@@ -118,7 +118,7 @@ Anthropic。若任一提供方请求头包含代理准入密钥，该密钥会�
 使用代理已保存 OAuth 凭据的受管理原生请求还会统一已声明自定义工具在延迟引用和内联添加或删除中的名称。参数、模式和缓存标记保持不变。系统消息中的内联工具变更需要发送 `inline-tools-2026-09-15`；存在相应类型的块时，面向 Anthropic 官方 API 的构建器会保留该请求头。
 
 可以设置 `claudeCode.nativePassthrough: false`、运行 `ocx claude config set --native-passthrough off`，
-或关闭仪表盘 Claude Code 设置中的 **Claude 原生透传** 开关来禁用；也可以通过
+或关闭仪表盘 Providers → Anthropic Claude → Accounts 中 Claude 账户池下方的 **Claude 原生透传** 开关来禁用；也可以通过
 `claudeCode.anthropicBaseUrl` 指向其他位置。关闭透传后，没有别名或 `modelMap` 条目的 Claude 模型会像其他
 模型一样被路由，由配置的路由决定提供商（指向其他提供商模型的 `modelMap` 条目在两种状态下都会发往那里）。
 当路由是 Anthropic OAuth 提供商时，由 OpenCodex 中保存的 Anthropic 账户处理请求；再保存一个账户即可在

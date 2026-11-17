@@ -87,14 +87,6 @@ export function ClaudeCodeSettingsCard({
         </div>
       )}
 
-      <div className="setting-row">
-        <div className="setting-label">
-          <span className="title">{t("claude.nativePassthrough")}</span>
-          <span className="desc">{t("claude.nativePassthroughDesc")}</span>
-        </div>
-        <SettingToggle label={t("claude.nativePassthrough")} checked={state.nativePassthrough} onChange={nativePassthrough => onStateChange({ ...state, nativePassthrough })} />
-      </div>
-
       <AutoConnectSetting
         supported={state.autoConnectSupported}
         checked={state.systemEnv}

@@ -125,7 +125,8 @@ hook を削除します。Claude Desktop は独立した profile を使用し、
 プロキシが保存済み OAuth 認証情報を使う管理対象のネイティブリクエストでは、宣言されたカスタムツール名も遅延参照とインライン追加・削除で揃えます。引数、スキーマ、キャッシュマーカーは保持します。システムメッセージ内のインライン変更には `inline-tools-2026-09-15` を指定してください。対応する型付きブロックがある場合、ファーストパーティ宛てのビルダーはこのヘッダーを保持します。
 
 `claudeCode.nativePassthrough: false`、`ocx claude config set --native-passthrough off`、または
-ダッシュボードの Claude Code 設定にある **Claude ネイティブパススルー** トグルでオフにでき、
+ダッシュボードの Providers → Anthropic Claude → Accounts にある Claude アカウントプールの下の
+**Claude ネイティブパススルー** トグルでオフにでき、
 `claudeCode.anthropicBaseUrl` で別のアドレスを指定できます。パススルーをオフにすると、エイリアスや
 `modelMap` エントリのない Claude モデルもほかのモデルと同じようにルーティングされ、設定されたルートが
 プロバイダーを決めます(別プロバイダーのモデルを指す `modelMap` エントリは、どちらの状態でもそこへ送られます)。

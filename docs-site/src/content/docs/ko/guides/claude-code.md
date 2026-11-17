@@ -166,7 +166,8 @@ hook을 제거해요. Claude Desktop은 별도 profile을 사용하며 shell hoo
 프록시에 저장된 OAuth 자격 증명을 쓰는 관리형 네이티브 요청은 선언된 커스텀 도구 이름도 지연 참조와 인라인 추가·제거에 맞춰 바꿔요. 인수, 스키마, 캐시 표시는 유지해요. 시스템 메시지의 인라인 변경에는 `inline-tools-2026-09-15`를 지정하세요. 해당 타입의 블록이 있으면 Anthropic 원본 API로 보내는 빌더가 이 헤더를 유지해요.
 
 `claudeCode.nativePassthrough: false`, `ocx claude config set --native-passthrough off`, 또는
-대시보드 Claude Code 설정의 **Claude 네이티브 패스스루** 토글로 끌 수 있고,
+대시보드 Providers → Anthropic Claude → Accounts의 Claude 계정 풀 아래에 있는
+**Claude 네이티브 패스스루** 토글로 끌 수 있고,
 `claudeCode.anthropicBaseUrl`로 다른 주소를 지정할 수 있어요. 패스스루를 끄면 별칭이나 `modelMap`
 항목이 없는 Claude 모델도 다른 모델처럼 라우팅되고, 설정된 경로가 공급자를 정해요(다른 공급자의 모델을
 가리키는 `modelMap` 항목은 두 상태 모두 그쪽으로 가요). 경로가 Anthropic OAuth 공급자이면 OpenCodex에

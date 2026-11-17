@@ -67,8 +67,6 @@ export interface ClaudeCodeState {
   /** Configured main slot. The manual snippet uses it to tell an explicit `[1m]` from an automatic one. */
   model?: string;
   injectAgents: boolean;
-  /** Bare Claude ids go to Anthropic with Claude Code's own login; off routes them. Default on. */
-  nativePassthrough: boolean;
   smallFastModel: string;
   tierModels?: { opus?: string; sonnet?: string; haiku?: string; fable?: string };
   effectiveModelEnv: Record<string, string>;

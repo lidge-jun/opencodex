@@ -3439,6 +3439,7 @@ export const pt: Record<TKey, string> = {
   "claude.injectAgentsDesc": "Registra os modelos escolhidos na aba Subagentes (mais o modelo padrão atual) como agentes despacháveis do Claude Code (ocx-*). Vale a partir da próxima sessão.",
   "claude.nativePassthrough": "Passagem direta nativa do Claude",
   "claude.nativePassthroughDesc": "Ativado (padrão): um modelo Claude sem mapeamento de modelo vai direto para a Anthropic com o próprio login do Claude Code, quando o Claude Code o envia; as demais requisições são roteadas. Desativado: esses modelos são roteados pelo OpenCodex, então a rota configurada e suas contas Anthropic os atendem, e o pool de contas Claude passa a valer se estiver ativado. Modelos mapeados seguem o mapeamento nos dois casos. Reinicie as sessões do Claude Code que já estiverem abertas.",
+  "claude.nativePassthroughLoadFailed": "Não foi possível carregar a configuração de passthrough.",
   "claude.webSearchSidecar": "Substituição do sidecar de busca na web",
   "claude.webSearchSidecarHint": "Substitui o sidecar principal de busca na web nas requisições do Claude Code.",
   "claude.visionSidecar": "Substituição do sidecar de visão",

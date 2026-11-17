@@ -49,8 +49,6 @@ function normalizeFirstPartyState(state: ClaudeCodeState): ClaudeCodeState {
     contextAccounting: normalizeContextAccounting(state.contextAccounting),
     // The GET has no separate field: the env on this read was built under the accounting it reports.
     servedContextAccounting: normalizeContextAccounting(state.servedContextAccounting ?? state.contextAccounting),
-    // Default-on like the server: an older cache or server without the field reads as on.
-    nativePassthrough: state.nativePassthrough !== false,
   };
 }
 

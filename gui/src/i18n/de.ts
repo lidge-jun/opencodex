@@ -2818,6 +2818,7 @@ export const de: Record<TKey, string> = {
   "claude.injectAgentsDesc": "Registriert die im Subagenten-Tab gewählten Modelle (plus das aktuelle Standardmodell) als aufrufbare Claude-Code-Agenten (ocx-*). Gilt ab der nächsten Sitzung.",
   "claude.nativePassthrough": "Native Claude-Durchleitung",
   "claude.nativePassthroughDesc": "An (Standard): Claude-Modelle ohne Modellzuordnung gehen mit der eigenen Anmeldung von Claude Code direkt an Anthropic, sofern Claude Code diese mitsendet; andere Anfragen werden geroutet. Aus: Diese Modelle werden über OpenCodex geroutet, sodass die konfigurierte Route und ihre Anthropic-Konten sie bedienen und der Claude-Kontenpool greift, wenn er aktiviert ist. Zugeordnete Modelle folgen in beiden Fällen ihrer Zuordnung. Bereits laufende Claude-Code-Sitzungen müssen neu gestartet werden.",
+  "claude.nativePassthroughLoadFailed": "Die Passthrough-Einstellung konnte nicht geladen werden.",
   "claude.webSearchSidecar": "Websuche-Sidecar überschreiben",
   "claude.webSearchSidecarHint": "Überschreibt den allgemeinen Websuche-Sidecar für Claude-Code-Anfragen.",
   "claude.visionSidecar": "Vision-Sidecar überschreiben",
