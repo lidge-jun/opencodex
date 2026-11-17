@@ -30,6 +30,7 @@ import { isNonReplayableResponse } from "../../lib/upstream-retry";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { currentTurnToolBridgeMaps, guardEmptyToolCatalogEvents, guardEmptyToolCatalogStream } from "../../lib/empty-tool-catalog";
 import { guardCompactionSummary } from "../../responses/compaction-summary";
+import { settleAnthropicPerMessageEffort } from "../../adapters/anthropic/per-message-effort";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function deliverAdapterResponse(
@@ -208,6 +209,7 @@ export async function deliverAdapterResponse(
     // direct client encoder from the fold of the same events.
     const onCompletedResponse = (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) => {
       if (!options.abortSignal?.aborted) thinkingSignatureRecovery.rememberSuccess(response);
+      settleAnthropicPerMessageEffort(parsed, response, transportState.activeAdapter.name);
       const served = transportState.sentOAuthSnapshot;
       if (transportState.activeAdapter.name === "kiro" && response.status === "completed" && served
         && noteKiroServedSuccess(served.accountId, served.generation)) persistKiroAccountState();

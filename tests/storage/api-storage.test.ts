@@ -3,6 +3,7 @@ import { managementFetch as fetch } from "../helpers/management-auth";
 import { mkdirSync, mkdtempSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { waitForNativeMainStartupGate } from "../../src/codex/native-profile-startup";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
@@ -79,6 +80,13 @@ describe("GET /api/storage", () => {
     writeSessionsFixture(isolatedCodexHome!.path);
     const server = startServer(0);
     try {
+      // Native-main startup takes its CODEX_HOME owner lock and runs its first exclusive claim
+      // in the background after startServer() returns; on Windows the lock's ACL hardening is a
+      // subprocess. In dev batch run 43818098370 the owner journal and the claim database landed
+      // between the scan and the inventory below. The startup gate settles only after both, and
+      // nothing writes into CODEX_HOME after it, so the scan and the inventory see the same tree.
+      await waitForNativeMainStartupGate();
+      const settledInventory = inventoryCodexHome(isolatedCodexHome!.path);
       const res = await fetch(new URL("/api/storage", server.url));
       expect(res.status).toBe(200);
       const body = await res.json();
@@ -100,6 +108,7 @@ describe("GET /api/storage", () => {
       // config.toml and live native-main coordination files legitimately land in
       // "other"; compare against the filesystem without fixing their exact count.
       const inventory = inventoryCodexHome(isolatedCodexHome!.path);
+      expect(inventory).toEqual(settledInventory);
       expect(body.total).toEqual({ bytes: inventory.bytes, fileCount: inventory.fileCount });
       const fixturePaths = [
         "archived_sessions/rollout-y.jsonl",

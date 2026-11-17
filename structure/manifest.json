@@ -138,6 +138,13 @@
       ]
     },
     {
+      "path": "codex-reserve-capability.md",
+      "tier": 4,
+      "title": "Luna Reserve Capability",
+      "scope": "codexReserveEnabled, its one-time seed from codexDesktopAuthless, and the shared writer projection.",
+      "documents": ["src/config/reserve-capability.ts", "src/config/persisted-projections.ts", "src/server/reserve-capability-startup.ts"]
+    },
+    {
       "path": "config-ownership.md",
       "tier": 4,
       "title": "Config Ownership Manifest",
@@ -278,6 +285,13 @@
       "title": "Routed-row authorship",
       "scope": "Generated routed-row ownership signals and combo catalog description overrides.",
       "documents": ["src/codex/catalog/ownership.ts"]
+    },
+    {
+      "path": "catalog-routed-defaults.md",
+      "tier": 2,
+      "title": "Routed catalog row defaults",
+      "scope": "Config-first routed-row instruction and verbosity defaults, their validation, capture and precedence.",
+      "documents": ["src/codex/catalog/routed-defaults.ts", "src/config/schema/routed-catalog-defaults.ts", "src/types/routed-catalog-defaults.ts"]
     },
     {
       "path": "subagents.md",
@@ -607,6 +621,13 @@
       "documents": ["src/adapters/", "src/bridge/", "src/responses/", "src/claude/", "src/types/", "src/server/", "src/web-search/", "src/images/"]
     },
     {
+      "path": "providers/anthropic-per-message-effort.md",
+      "tier": 4,
+      "title": "Anthropic per-message effort",
+      "scope": "Experimental default-off effort history that keeps the Anthropic prompt cache across mid-conversation effort changes.",
+      "documents": ["src/adapters/", "src/responses/", "src/server/", "src/types/"]
+    },
+    {
       "path": "providers/anthropic-account-thresholds.md",
       "tier": 4,
       "title": "Anthropic Account Thresholds",
@@ -628,6 +649,13 @@
       "title": "OAuth Preset Reconciliation",
       "scope": "Operator limits and per-model declarations across startup reconciliation and OAuth upsert.",
       "documents": ["src/oauth/"]
+    },
+    {
+      "path": "providers/oauth-credential-siblings.md",
+      "tier": 4,
+      "title": "OAuth Credential Siblings",
+      "scope": "Provider rows that sign in through another provider's login: one auth-store slot, owner-named refresh, sibling-only login publication and last-row credential release.",
+      "documents": ["src/oauth/", "src/server/management/provider-credential-release.ts"]
     },
     {
       "path": "providers/antigravity-account-import.md",
@@ -1289,7 +1317,8 @@
         "src/service/orchestration.ts",
         "src/service/repair.ts",
         "src/update/index.ts",
-        "src/update/restart-ownership.ts"
+        "src/update/restart-ownership.ts",
+        "src/desktop-update/"
       ]
     },
     {
@@ -1373,6 +1402,16 @@
         "src/codex/",
         "src/lib/",
         "src/service.ts"
+      ]
+    },
+    {
+      "path": "ops/windows-code-signing.md",
+      "tier": 6,
+      "title": "Windows Code Signing",
+      "scope": "SignPath Authenticode signing in the release legs and the per-release signing statement in the release body.",
+      "documents": [
+        ".github/",
+        "scripts/"
       ]
     },
     {

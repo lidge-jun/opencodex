@@ -216,6 +216,8 @@ const RECOVERY_KIND_CAUSE = {
   // turn. One kind cannot say both, so it says the weaker thing.
   "transient-5xx": "upstream-fault",
   "connection-reset": "transport-ambiguous",
+  // The send it replaced failed DNS resolution, so those bytes provably never left (#7958).
+  "offline-resend": "transport-unsent",
   "oauth-401": "credential-rejected",
   "oauth-account-403": "credential-rejected",
   "key-401": "credential-rejected",

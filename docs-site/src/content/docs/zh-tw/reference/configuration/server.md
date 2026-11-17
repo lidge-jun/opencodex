@@ -207,6 +207,7 @@ Codex 使用小型 helper 模型處理如標題與 commit 訊息等任務。啟�
 | --- | --- | --- | --- |
 | `provider?` | `string` | 自動 OpenAI 選擇 | 用於 `/v1/images/generations` 與 `/v1/images/edits` 的明確自訂 API-key `openai-responses` 供應商。Registry 管理的 id 被拒絕。 |
 | `timeoutMs?` | `number` | `300000` | 一個獨立 Images 請求的整體請求逾時。 |
+| `videoProvider?` | `string` | xAI | 以自身的 `baseUrl` 與金鑰處理回合內 `video_gen` 橋接的 API 金鑰提供者。`xai` 固定為 `https://api.x.ai/v1`，其他登錄 ID 會被拒絕。無法使用的值會讓每次 `video_gen` 呼叫回傳錯誤且不送出任何內容。請參閱[影片橋接](/zh-tw/guides/video-bridge/#選擇影片提供者)。 |
 
 明確選擇在供應商缺失、停用、不相容或缺少可用金鑰時 fail closed；它永不後退到另一個付費上游。端點必須實作 Codex 預期的 OpenAI Images API 路徑與回應結構。
 

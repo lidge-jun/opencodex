@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { inflateRawSync } from "node:zlib";
 import { join } from "node:path";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
 import type { ManagementContext } from "../../src/server/management/context";
@@ -17,7 +16,7 @@ const replaceTombstone = (t: Parameters<typeof recordTombstone>[0]) => { removeT
 import { serialized } from "../../src/server/management/link-enrollment";
 import { registerOperationRecoveryResolver } from "../../src/link/operation-recovery-slot";
 import { POSIX_RECOVER_RECEIPT_SCRIPT, remoteManagedPurgeDisconnectArgv, remotePurgePlantedChildArgv, remoteRecoverReceiptArgv } from "../../src/link/remote-plant";
-import { windowsScriptData } from "../../src/link/remote-windows";
+import { windowsScriptData, windowsInflatedScript } from "../../src/link/remote-windows";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 // Home side of lane O5: a forced revoke of an ephemeral link leaves a tombstone, and
@@ -441,7 +440,7 @@ test("the Windows scripts keep a kept binary and require the planted binary to b
   const decode = (argv: string[]) => {
     const outer = Buffer.from(argv.at(-1)!, "base64").toString("utf16le");
     const packed = /\$ocxPacked='([^']+)'/.exec(outer)![1]!;
-    return inflateRawSync(Buffer.from(Array.from(packed, ch => ch.charCodeAt(0) - 256))).toString("utf8");
+    return windowsInflatedScript(outer);
   };
   const rollback = decode(remotePurgePlantedChildArgv("windows"));
   expect(rollback).not.toMatch(/detach --purge'\)\);if\(\$rc -ne 0\)\{exit \$rc\};try\{\[IO\.File\]::Delete\(\$dst\)\}/);
@@ -455,7 +454,7 @@ test("the Windows recover scripts carry the link id as data, never spliced into 
   const outer = (argv: string[]) => Buffer.from(argv.at(-1)!, "base64").toString("utf16le");
   const source = (argv: string[]) => {
     const packed = /\$ocxPacked='([^']+)'/.exec(outer(argv))![1]!;
-    return inflateRawSync(Buffer.from(Array.from(packed, ch => ch.charCodeAt(0) - 256))).toString("utf8");
+    return windowsInflatedScript(outer(argv));
   };
   const receipt = remoteRecoverReceiptArgv("windows", ID);
   expect(windowsScriptData(outer(receipt))).toEqual({ args: [ID] });

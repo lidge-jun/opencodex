@@ -553,7 +553,7 @@ Aside refresh from `ocx sync` also uses a one-shot process-bound capability for 
 It never sends the reusable management credential to a listener selected through public liveness
 discovery, and configured-port-only legacy proxies must be restarted before they can own this mutation.
 
-The `kimi-responses` preset shares Kimi's icon and display brand while its provider id remains distinct.
+The `kimi-responses` preset shares Kimi's icon and display brand while its provider id remains distinct; its shared Kimi login follows [OAuth Credential Siblings](providers/oauth-credential-siblings.md).
 
 The dashboard's auto-switch route accepts `{ threshold }` for the global value and `{ id, threshold }`
 for an account override. Account thresholds are integers 0..100 or `null` to inherit, and account-list

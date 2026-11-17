@@ -19,7 +19,7 @@ import { repoPath } from "../helpers/repo-root";
 // for a drain, or every relayed HTTP response waiting for its reader after handing it a chunk (#8600). What both share
 // (the pipeline's parsed and serialized request under a stalled reader, #8601) is a cost of the pipeline and
 // is not part of this bound.
-// The definition, the measured numbers and how they were taken are in structure/remote-link.md.
+// The definition is in structure/remote-link.md; the recorded runs are in devlog/_plan/261113_link_websocket_gate_opening/010_memory_investigation.md.
 // The peak is the kernel's high-water mark (VmHWM, reset after the idle reading) on Linux 4.0 or later;
 // elsewhere the Home samples RSS on its own event loop, may miss a short peak, reports "sampled", and cannot pass.
 // Any other OCX_LINK_WS_RSS_* setting turns the run into a diagnostic: it prints its numbers and never reports an

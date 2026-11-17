@@ -12,6 +12,7 @@ import { tryAdmitTurn } from "../lifecycle";
 import type { RequestLogContext } from "../request-log";
 import { createSseInspector } from "../relay";
 import type { HandleResponsesOptions } from "./core-options";
+import { ESTIMATED_USAGE_HEADER } from "./estimated-usage";
 
 type HandleResponses = (
   req: Request,
@@ -183,8 +184,12 @@ export function createJevModelInvoker(context: JevModelInvokerContext): JevModel
           if (!isRecord(parsed)) throw new JevModelInvokeError("malformed", "decision response is not an object");
           return terminalResult(parsed, "");
         })();
-      usage = result.usage;
-      return quotaOmitted ? { ...result, quotaOmitted: true } : result;
+      // A marked response carries an estimate for a client's display, never spend evidence.
+      const estimated = response.headers.has(ESTIMATED_USAGE_HEADER);
+      const { usage: bodyUsage, ...withoutUsage } = result;
+      const settled = estimated ? withoutUsage : result;
+      usage = estimated ? undefined : bodyUsage;
+      return quotaOmitted ? { ...settled, quotaOmitted: true } : settled;
     } finally {
       // No final log row is written for this detached context, so settle its spend here.
       childLog.spendTracker?.settle(childLog.usage ?? (usage
