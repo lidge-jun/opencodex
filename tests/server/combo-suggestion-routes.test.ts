@@ -46,6 +46,8 @@ test("excluded providers round-trip through config.json, and an empty list remov
   expect(await call(live, "PUT", { excludedProviders: [" cursor ", "cursor", "trae"] }))
     .toEqual({ status: 200, body: { excludedProviders: ["cursor", "trae"] } });
   expect(onDisk().comboSuggestionExcludedProviders).toEqual(["cursor", "trae"]);
+  // The running server reads the in-memory config, so the write must land there too.
+  expect(live.comboSuggestionExcludedProviders).toEqual(["cursor", "trae"]);
   expect(loadConfig().comboSuggestionExcludedProviders).toEqual(["cursor", "trae"]);
   expect(await call(loadConfig(), "GET")).toEqual({ status: 200, body: { excludedProviders: ["cursor", "trae"] } });
 

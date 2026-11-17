@@ -119,4 +119,9 @@ describe("latestPerFamily", () => {
     expect(latestPerFamily(["claude-sonnet-4-5-20251101", "claude-sonnet-4-5-2025-12-01"])).toEqual(["claude-sonnet-4-5-2025-12-01"]);
     expect(latestPerFamily(["claude-sonnet-4-5-2025-12-01", "claude-sonnet-4-5-20251101"])).toEqual(["claude-sonnet-4-5-2025-12-01"]);
   });
+
+  test("a year written last still orders by year first", () => {
+    expect(latestPerFamily(["command-r7b-12-2024", "command-r7b-01-2025"])).toEqual(["command-r7b-01-2025"]);
+    expect(latestPerFamily(["command-r7b-01-2025", "command-r7b-12-2024"])).toEqual(["command-r7b-01-2025"]);
+  });
 });

@@ -391,8 +391,25 @@ describe("Combos overview page", () => {
     await renderPage();
     await chooseOption(strategyTrigger("alpha"), "round-robin");
     await flush();
-    const saved = { ...alpha, displayName: "Alpha", targets: [{ provider: "openai", model: "gpt-5", modelProfile: "subscription first" }, { provider: "anthropic", model: "claude" }] };
-    expect(calls).toEqual([{ url: "/api/combos", method: "PUT", body: toPutBody({ ...saved, strategy: "round-robin" }) }]);
+    expect(calls).toEqual([{
+      url: "/api/combos",
+      method: "PUT",
+      body: {
+        id: "alpha",
+        combo: {
+          targets: [
+            { provider: "openai", model: "gpt-5", weight: 1, modelProfile: "subscription first" },
+            { provider: "anthropic", model: "claude", weight: 1 },
+          ],
+          strategy: "round-robin",
+          stickyLimit: 1,
+          defaultEffort: null,
+          imageInput: "auto",
+          reasoningEffortMode: "strict",
+          displayName: "Alpha",
+        },
+      },
+    }]);
     expect(JSON.stringify(calls[0]!.body)).not.toContain("lastResort");
   });
 

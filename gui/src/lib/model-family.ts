@@ -136,8 +136,17 @@ function newerInFamily(a: ModelFamily, b: ModelFamily): boolean {
   if (c !== 0) return c > 0;
   if (a.preview !== b.preview) return b.preview;
   if ((a.snapshot === "") !== (b.snapshot === "")) return a.snapshot === "";
-  // 2025-12-01 and 20251101 are both dates: compare the digits, not where the dashes fall
-  return a.snapshot.replace(/-/g, "") > b.snapshot.replace(/-/g, "");
+  return snapshotOrder(a.snapshot) > snapshotOrder(b.snapshot);
+}
+
+/**
+ * A snapshot's digits in date order. 2025-12-01 and 20251101 are both dates: compare the
+ * digits, not where the dashes fall. A trailing year (MM-YYYY, MM-DD-YYYY) moves to the front,
+ * or 12-2024 would sort after 01-2025.
+ */
+function snapshotOrder(snapshot: string): string {
+  const yearLast = /^((?:\d{2}-){1,2})(20\d{2})$/.exec(snapshot);
+  return (yearLast ? yearLast[2]! + yearLast[1]! : snapshot).replace(/-/g, "");
 }
 
 /**
