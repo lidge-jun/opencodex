@@ -680,6 +680,18 @@ Request and attempt logs show a differing applied effort as `high->xhigh` or `hi
 adjustments such as `high->xhigh->medium`. An unchanged effort or a no-effort choice keeps the existing
 label. Later fallback targets use ordinary Combo policy from the original request, without another JEV call.
 
+A turn is usually several requests: the model calls a tool, the client runs it, and the next request
+returns the result. Those tool-call continuations stay on the turn's target without another decision
+call, and in `decide` mode they keep the effort JEV chose for the turn while the target still offers
+it; once it does not, ordinary Combo policy applies. In `client` mode they use
+ordinary Combo effort policy like every other request: the caller's effort, unless
+`defaultEffortMode` is `"force"`.
+
+A fallback target, which JEV did not choose, uses ordinary Combo effort policy. A caller effort takes
+precedence unless `defaultEffortMode` is `"force"`. Without one, the Combo's `defaultEffort` applies
+when set, and the provider default applies otherwise. A continuation of a turn that a fallback target
+answered follows the same policy.
+
 After the Combo has served requests, open **Models → Combos → jev-auto → Stats** to inspect JEV's
 picks without replacing the normal model picker or Usage page. The tab separates backend-reported decision
 tokens from tokens reported by physical model sends, and shows decision gates, fail-open picks,
