@@ -61,12 +61,14 @@ export type ComboSuggestion =
     members: SuggestedMember[];
   };
 
-const EFFORT_SUFFIX = /-(?:minimal|low|medium|high|xhigh|max)$/;
+/** No `max`: it names distinct models (`gpt-5.1-codex-max` is not `gpt-5.1-codex` at max effort). */
+const EFFORT_SUFFIX = /-(?:minimal|low|medium|high|xhigh)$/;
 
 /**
  * One model's name across providers: no `provider/` prefix, lowercase, runs of spaces,
  * underscores and dashes as one dash, a version dot as a dash (`claude-opus-5.5` is
- * `claude-opus-5-5`), and no trailing effort suffix (`gpt-6.1-sol-high` is `gpt-6-1-sol`).
+ * `claude-opus-5-5`), and no trailing effort suffix (`gpt-6.1-sol-high` is `gpt-6-1-sol`;
+ * `gpt-5.1-codex-max-high` is `gpt-5-1-codex-max`).
  */
 export function normalizeModelName(id: string): string {
   let name = id.trim().toLowerCase();

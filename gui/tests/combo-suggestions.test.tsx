@@ -66,6 +66,12 @@ describe("normalizeModelName", () => {
     expect(normalizeModelName("claude-opus-5-5-20260801")).not.toBe(normalizeModelName("claude-opus-5-5"));
     expect(normalizeModelName("gemini-3.8-flash-thinking")).toBe("gemini-3-8-flash-thinking");
   });
+
+  test("max names a model, not an effort: codex-max stays apart from codex", () => {
+    expect(normalizeModelName("gpt-5.1-codex-max")).toBe("gpt-5-1-codex-max");
+    expect(normalizeModelName("gpt-5.1-codex-max-high")).toBe("gpt-5-1-codex-max");
+    expect(suggest({ models: models([["openai", "gpt-5.1-codex"], ["cursor", "gpt-5.1-codex-max"]]) })).toEqual([]);
+  });
 });
 
 describe("buildComboSuggestions", () => {
