@@ -20,6 +20,12 @@ configured, `GOOGLE_CLOUD_API_KEY` and then Application Default Credentials. If 
 credential, the same way requests refuse to start. When the listing cannot be read completely,
 OpenCodex keeps the previous or configured models rather than publishing part of the list.
 
+Live discovery and connection tests require an HTTPS Google endpoint:
+`aiplatform.googleapis.com` or `<location>-aiplatform.googleapis.com`, with the standard HTTPS
+port and no URL username or password. Custom gateway endpoints do not receive Vertex credentials.
+Restore the Google endpoint to use live discovery; configured models remain available when
+discovery cannot verify the destination.
+
 Reasoning levels follow the preset: Gemini 4 Hydrogen offers low, medium, high (the default) and
 xhigh; Gemini 4 Carbon and Argon offer low, medium and high. A model the preset gives no levels
 to, such as `gemini-3-pro`, shows none, because requests to it carry no thinking level.

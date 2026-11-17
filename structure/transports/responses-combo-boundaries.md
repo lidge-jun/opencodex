@@ -160,6 +160,8 @@ resend gate decides. Control frames (`response.in_progress`, `response.queued`,
 not advance the stage. Once output commits the stream or a terminal ends inspection, a later read
 error belongs to the relay and never reaches the resend gate. A lifecycle event with output, an error, incomplete details, a contradictory
 status, a replay-unsafe mark, unknown event or snapshot fields, or unsafe nested metadata commits the original stream.
+Snapshot selector types are validated without coercion. A replay-classification exception also
+commits the original stream, preserving its bytes and preventing a replacement attempt.
 An SSE event name that conflicts with its JSON type, an opaque frame,
 or an unfinished output/error/terminal frame on a rejected read also keeps the original bytes and
 read error; the last SSE event field is authoritative. A clean EOF before output or a terminal is offered only to the native reset recovery

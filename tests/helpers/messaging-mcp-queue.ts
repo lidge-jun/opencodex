@@ -110,7 +110,8 @@ rl.on("line", line => {
       if(!searching && mode === "reply-wait-failure" && reads>=2) return emit({id:2,error:{code:-32601,message:"PRIVATE_READ_FAILURE"}});
       if(!searching && mode === "reply-wait-hang-second" && reads>=2) return;
     }
-    if(!searching && mode === "reply-deadline-barrier") return;
+    // Hold the first reply RPC for each logical wait until the MCP disconnect cancels it.
+    if(!searching && ["reply-deadline-barrier","reply-wait-bound-barrier"].includes(mode)) return;
     return emit({id:2,result:{data,nextCursor}});
   }
   if(f.method === "thread/list") {

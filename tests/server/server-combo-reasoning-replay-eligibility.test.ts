@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { clearKeyCooldowns } from "../../src/providers/key-failover";
 import { clearReasoningReplayCacheForTests } from "../../src/responses/reasoning-replay-cache";
+import { encodeReasoningEnvelope } from "../../src/responses/reasoning-envelope";
 import {
   clearResponseStateForTests,
   flushResponseState,
@@ -164,6 +165,69 @@ describe("combo mandatory reasoning replay failover", () => {
     {
       preserveResponsesReasoningContent: true,
       requiresAdjacentResponsesToolResults: true,
+    },
+  );
+
+  test.each([false, true])(
+    "a child turn preserves the parent's Claude thinking prefix (combo=%s)",
+    async (combo) => {
+      takeSpendHome();
+      const bodies: Array<{ messages: unknown[] }> = [];
+      const claude = serve(async request => {
+        bodies.push(await request.json() as { messages: unknown[] });
+        return Response.json({
+          id: "msg_mock", type: "message", role: "assistant", model: "claude-opus-5-5",
+          content: [{ type: "text", text: "Mock reply" }], stop_reason: "end_turn",
+          usage: { input_tokens: 10, output_tokens: 2 },
+        });
+      });
+      const other = serve(() => chatSuccess("Mock child reply", "gpt-test"));
+      const config = comboConfig({
+        claude: provider("anthropic", baseUrl(claude), "key-claude"),
+        other: provider("openai-chat", baseUrl(other), "key-other"),
+      }, [{ provider: "claude", model: "claude-opus-5-5" }]);
+      const signature = "A".repeat(64);
+      const raw = {
+        model: combo ? "combo/free" : "claude/claude-opus-5-5",
+        reasoning: { effort: "high" },
+        prompt_cache_key: "parent-thread",
+        input: [
+          { type: "message", role: "user", content: "Earlier question" },
+          {
+            type: "reasoning",
+            id: "rs_mock",
+            summary: [{ type: "summary_text", text: "Earlier thinking" }],
+            encrypted_content: encodeReasoningEnvelope({ sig: signature }),
+          },
+          { type: "message", role: "assistant", content: "Earlier answer" },
+          { type: "message", role: "user", content: "Continue" },
+        ],
+      };
+      const parent = { "thread-id": "parent-thread", session_id: "shared-session" };
+      const child = { ...parent, "thread-id": "child-thread", "x-codex-parent-thread-id": "parent-thread" };
+      const sibling = { ...child, "thread-id": "sibling-thread" };
+      const send = async (body: Record<string, unknown>, headers: Record<string, string>): Promise<void> => {
+        const response = await post(config, body, {}, headers);
+        expect(response.status).toBe(200);
+        await response.text();
+      };
+
+      await send(raw, parent);
+      const original = structuredClone(bodies[0]!.messages);
+      expect(JSON.stringify(original)).toContain(`"signature":"${signature}"`);
+      await send({ model: "other/gpt-test", input: "Child task", prompt_cache_key: "parent-thread" }, child);
+      // The parent's next Claude turn must still carry the signature the child never saw.
+      await send(raw, parent);
+      expect(bodies[1]!.messages).toEqual(original);
+      await send(raw, sibling);
+      expect(bodies[2]!.messages).toEqual(original);
+      // The child's own turn really changed route, so its foreign signature is stripped.
+      await send(raw, child);
+      expect(JSON.stringify(bodies[3]!.messages)).not.toContain(signature);
+      // A real model switch inside the parent still strips it.
+      await send({ model: "other/gpt-test", input: "Switch parent model" }, parent);
+      await send(raw, parent);
+      expect(JSON.stringify(bodies[4]!.messages)).not.toContain(signature);
     },
   );
 

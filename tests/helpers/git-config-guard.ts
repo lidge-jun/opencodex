@@ -14,10 +14,10 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { withoutGitRepositoryEnv } from "../../scripts/git-repository-env";
+import { EMPTY_GLOBAL_GIT_CONFIG } from "./git-fixture";
 
 export const GUARDED_GIT_CONFIG_KEYS = ["core.bare", "core.hookspath", "core.worktree", "user.email", "user.name"] as const;
 
-const NULL_DEVICE = process.platform === "win32" ? "NUL" : "/dev/null";
 const CONTEXT = "this test or a concurrent test worker";
 const REMEDY = "A git command reached the developer's repository instead of a fixture: pass an env from tests/helpers/git-fixture.ts. If you changed it yourself, ignore this once.";
 
@@ -50,7 +50,7 @@ function readBytes(path: string): Buffer | null {
 /** Guarded keys as git itself parses them (quoting, comments, repeats, continuations); null if git refuses. */
 function readGuarded(path: string): GuardedValues | null {
   const run = Bun.spawnSync(["git", "config", "--file", path, "--null", "--list"], {
-    env: { ...withoutGitRepositoryEnv(process.env), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: NULL_DEVICE },
+    env: { ...withoutGitRepositoryEnv(process.env), GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: EMPTY_GLOBAL_GIT_CONFIG },
     stdout: "pipe",
     stderr: "pipe",
   });
