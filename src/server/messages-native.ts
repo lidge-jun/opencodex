@@ -50,6 +50,7 @@ import type { AdmissionLease } from "../lib/admission";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { classifyError } from "../lib/errors";
 import { relaySseWithPayloadRewrite } from "./sse-payload-rewrite";
+import { EMPTY_BYTES, joinSseFrameBytes } from "./sse-frame-buffer";
 import { redactSecretString } from "../lib/redact";
 import { formatClientRetryAfter, resolveClientRetryAfter } from "../lib/retry-after";
 import { enrichOpenCodeZenUpstreamMessage } from "../providers/opencode-zen-rate-limit";
@@ -289,56 +290,81 @@ function messageStartWithModel(frame: string, model: string): string | undefined
  * (`responsesSseToAnthropicSse` is given the requested model). Works on bytes: frames before and
  * including `message_start` are split on the blank line, and everything after is relayed as is.
  */
-function echoRequestedModel(body: ReadableStream<Uint8Array>, model: string, frames: MessagesSseFrameContext): ReadableStream<Uint8Array> {
+export function echoRequestedModel(body: ReadableStream<Uint8Array>, model: string, frames: MessagesSseFrameContext): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
-  let pending = new Uint8Array(0);
+  let carry = EMPTY_BYTES;
+  let carryLength = 0;
   let scanning = true;
   let scanned = 0;
-  const frameEnd = (bytes: Uint8Array): number => {
-    for (let i = 0; i + 1 < bytes.length; i++) if (bytes[i] === 10 && bytes[i + 1] === 10) return i + 2;
-    return -1;
+  const take = (suffix: Uint8Array): Uint8Array => {
+    if (carryLength === 0) return suffix;
+    const frame = joinSseFrameBytes([carry.subarray(0, carryLength), suffix]);
+    carry = EMPTY_BYTES;
+    carryLength = 0;
+    return frame;
+  };
+  const retain = (suffix: Uint8Array): void => {
+    if (suffix.byteLength === 0) return;
+    const nextLength = carryLength + suffix.byteLength;
+    if (nextLength > carry.byteLength) {
+      const grown = new Uint8Array(Math.min(MODEL_ECHO_SCAN_BYTES, Math.max(1024, nextLength, carry.byteLength * 2)));
+      grown.set(carry.subarray(0, carryLength));
+      carry = grown;
+    }
+    carry.set(suffix, carryLength);
+    carryLength = nextLength;
   };
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
-      const { done, value } = await reader.read();
-      if (done) {
-        if (pending.length > 0) controller.enqueue(pending);
-        pending = new Uint8Array(0);
-        controller.close();
-        return;
-      }
-      if (!scanning) {
-        controller.enqueue(value);
-        return;
-      }
-      scanned += value.byteLength;
-      const joined = new Uint8Array(pending.length + value.byteLength);
-      joined.set(pending);
-      joined.set(value, pending.length);
-      pending = joined;
-      let end: number;
-      while (scanning && (end = frameEnd(pending)) !== -1) {
-        const frame = pending.subarray(0, end);
-        pending = pending.subarray(end);
-        const rewritten = messageStartWithModel(decoder.decode(frame), model);
-        if (rewritten !== undefined) {
+      // Keep reading until there is something to enqueue or the upstream closes.
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          if (carryLength > 0) controller.enqueue(take(EMPTY_BYTES));
+          controller.close();
+          return;
+        }
+        if (!scanning) {
+          controller.enqueue(value);
+          return;
+        }
+        scanned += value.byteLength;
+        let start = 0;
+        for (let lf = value.indexOf(10); lf !== -1; lf = value.indexOf(10, lf + 1)) {
+          // Only the last retained byte can complete a delimiter across chunks.
+          const previous = lf === start ? carry[carryLength - 1] : value[lf - 1];
+          if (previous !== 10) continue;
+          const frame = take(value.subarray(start, lf + 1));
+          start = lf + 1;
+          const decoded = decoder.decode(frame);
+          const rewritten = messageStartWithModel(decoded, model);
+          if (rewritten === undefined) {
+            controller.enqueue(frame);
+            continue;
+          }
           const bytes = encoder.encode(rewritten);
-          if (messagesSseEchoRenamedError(decoder.decode(frame))) frames.register(bytes, { echoRenamedError: true });
+          if (messagesSseEchoRenamedError(decoded)) frames.register(bytes, { echoRenamedError: true });
           controller.enqueue(bytes);
           scanning = false;
-        } else {
-          controller.enqueue(frame);
+          break;
         }
-      }
-      if (scanning && scanned > MODEL_ECHO_SCAN_BYTES) scanning = false;
-      if (!scanning && pending.length > 0) {
-        controller.enqueue(pending);
-        pending = new Uint8Array(0);
+        const suffix = value.subarray(start);
+        if (!scanning || scanned > MODEL_ECHO_SCAN_BYTES) {
+          scanning = false;
+          const remaining = take(suffix);
+          if (remaining.byteLength > 0) controller.enqueue(remaining);
+          if (start > 0 || remaining.byteLength > 0) return;
+          continue;
+        }
+        retain(suffix);
+        if (start > 0) return;
       }
     },
     cancel(reason) {
+      carry = EMPTY_BYTES;
+      carryLength = 0;
       return reader.cancel(reason);
     },
   });

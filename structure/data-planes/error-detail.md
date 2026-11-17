@@ -499,7 +499,10 @@ delay. A final error uses one full JSON parse and the shared private diagnostic 
 `src/lib/messages-error-body.ts`: truthy top-level message, otherwise whole-value serialization,
 with the pinned SDK's parsed-or-raw SSE fallback. Empty named errors retain generic SDK dispatch.
 `src/lib/messages-sse-error-presentation.ts` renders closed type/code/message literals and carries
-complete-frame construction identity. The single pre-echo flag authorizes owned data under the
+complete-frame construction identity. While looking for `message_start`, the native model echo
+scans each incoming chunk once for LF pairs and grows incomplete frame storage geometrically.
+It reads through fragments until a frame is ready, the scan window ends, or EOF arrives.
+The single pre-echo flag authorizes owned data under the
 existing message_start name; guard replacements retire that flag. Local guard and tap products
 keep their original observer bytes and separate fixed client products. Stall/cap text omits numbers;
 reader errors omit exception suffixes. Guard callbacks, tap accounting/settlement, budgets,
