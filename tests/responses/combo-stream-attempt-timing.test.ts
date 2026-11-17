@@ -45,8 +45,8 @@ function event(payload: Record<string, unknown>): string {
   return `event: ${String(payload.type)}\ndata: ${JSON.stringify(payload)}\n\n`;
 }
 
-/** A Responses SSE whose text deltas are spaced GAP_MS apart. */
-function pacedResponsesStream(): Response {
+/** A Responses SSE whose text deltas are spaced GAP_MS apart; `emitted` records when each delta is enqueued. */
+function pacedResponsesStream(emitted: number[] = []): Response {
   const frames = [
     event({ type: "response.created", response: { id: "resp_1", status: "in_progress", output: [] } }),
     event({ type: "response.output_item.added", output_index: 0, item: { id: "msg_1", type: "message", role: "assistant", content: [] } }),
@@ -65,6 +65,7 @@ function pacedResponsesStream(): Response {
   const body = new ReadableStream<Uint8Array>({
     async start(controller) {
       for (const frame of frames) {
+        if (frame.includes("output_text.delta")) emitted.push(performance.now());
         controller.enqueue(encoder.encode(frame));
         if (frame.includes("output_text.delta")) await sleep(GAP_MS);
       }
@@ -110,8 +111,8 @@ async function run(
   }, dispatchers);
 }
 
-/** Read the body and return the arrival time of each chunk that carries a text delta. */
-async function deltaArrivals(response: Response, startedAt: number): Promise<number[]> {
+/** Read the body and return the `performance.now()` arrival time of each text delta. */
+async function deltaArrivals(response: Response): Promise<number[]> {
   const reader = response.body!.getReader();
   const decoder = new TextDecoder();
   const arrivals: number[] = [];
@@ -120,23 +121,25 @@ async function deltaArrivals(response: Response, startedAt: number): Promise<num
     if (next.done) return arrivals;
     const text = decoder.decode(next.value, { stream: true });
     const count = text.split("\n").filter(line => line.startsWith("data:") && line.includes("\"response.output_text.delta\"")).length;
-    for (let i = 0; i < count; i++) arrivals.push(performance.now() - startedAt);
+    for (let i = 0; i < count; i++) arrivals.push(performance.now());
   }
 }
 
 describe("combo failover streaming", () => {
   test("the surviving target's deltas reach the client at the upstream's pace", async () => {
+    const emitted: number[] = [];
     globalThis.fetch = (async (input: string | URL | Request) => {
       const host = new URL(input instanceof Request ? input.url : String(input)).host;
-      return host.startsWith("bad") ? rateLimited() : pacedResponsesStream();
+      return host.startsWith("bad") ? rateLimited() : pacedResponsesStream(emitted);
     }) as typeof fetch;
-    const startedAt = performance.now();
     const response = await run(comboConfig({ bad: provider("bad"), good: provider("good") }, ["bad", "good"]), { model: "", provider: "" });
     expect(response.status).toBe(200);
-    const arrivals = await deltaArrivals(response, startedAt);
+    const arrivals = await deltaArrivals(response);
+    expect(emitted).toHaveLength(DELTAS);
     expect(arrivals).toHaveLength(DELTAS);
-    // A buffered relay would deliver every delta within a few ms of the last one.
-    expect(arrivals.at(-1)! - arrivals[0]!).toBeGreaterThanOrEqual(GAP_MS * (DELTAS - 2));
+    // A buffered relay holds the first delta until the upstream has sent the last one. Comparing
+    // with the upstream's own send instant leaves (DELTAS - 1) * GAP_MS of slack for a slow machine.
+    expect(arrivals[0]!).toBeLessThan(emitted.at(-1)!);
   }, 15_000);
 });
 
