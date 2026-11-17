@@ -1334,18 +1334,20 @@ snapshot:
 Normal picker behavior returns when the 5-hour window resets.
 
 **What the proxy answers while that state holds.** Once the app has collapsed the picker it sends
-`gpt-reserve`, and without the [authless Desktop opt-in](#authless-codex-desktop-opt-in) opencodex
-holds no Reserve entitlement to send with it. That request used to be forwarded as an ordinary
+`gpt-reserve`, and with the [Reserve setting](/reference/cli/providers-accounts/#luna-reserve-alongside-routed-models)
+off opencodex holds no Reserve entitlement to send with it. That request used to be forwarded as an ordinary
 native model and come back as the upstream's own `The usage limit has been reached`, which names
 neither the real cause nor the setting that would change it. It is now refused locally with an HTTP
-400 that says `codexDesktopAuthless` is off and gives the command that turns it on
-(`ocx system settings --desktop-authless on`). Nothing is sent upstream and no quota is spent.
+400 that says the Reserve setting (`codexReserveEnabled`) is off and gives the command that turns it on
+(`ocx system settings --reserve on`). Nothing is sent upstream and no quota is spent.
 
 The refusal is deliberately narrow. It applies only to `gpt-reserve` on a loopback-admitted request
 that would reach the canonical ChatGPT forward route. A `gpt-reserve` selector an operator has
 aliased or routed onto another provider keeps working, a request admitted on a non-loopback listener
-still forwards, and a proxy running in the `client` runtime role is unchanged. Enabling the opt-in
-restores the normal Reserve path rather than the refusal.
+still forwards, and a proxy running in the `client` runtime role is unchanged. Enabling the setting
+restores the normal Reserve path rather than the refusal. The authless Desktop switch no longer
+affects this; see [Luna Reserve alongside routed models](/reference/cli/providers-accounts/#luna-reserve-alongside-routed-models)
+for how an existing install's value carries over.
 
 ## The subagent picker
 

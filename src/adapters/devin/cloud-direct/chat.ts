@@ -223,8 +223,11 @@ function encodeChatMessagePrompt(
     signature?: string;
     signatureType?: string;
     isError?: boolean;
+    sanitizeDataSurfaces?: boolean;
   },
 ): Buffer {
+  const data = (s: string): string =>
+    opts?.sanitizeDataSurfaces ? sanitizeTextForCognition(s) : s;
   const textParts = content.filter((p): p is { type: 'text'; text: string } => p.type === 'text');
   const imageParts = content.filter((p): p is { type: 'image'; mimeType: string; base64Data: string; caption?: string } => p.type === 'image');
   const joined = textParts.map((p) => p.text).join('\n');
@@ -232,7 +235,7 @@ function encodeChatMessagePrompt(
     // #1 message_id. The verified turn-1 capture stamps one on every prompt.
     encodeString(1, crypto.randomUUID()),
     encodeVarintField(2, source),
-    encodeString(3, joined),
+    encodeString(3, data(joined)),
   ];
   // Tool-result message: attach the id of the call this result answers.
   // Without it, the model can't pair multi-tool conversations.
@@ -245,20 +248,31 @@ function encodeChatMessagePrompt(
   // Assistant message with tool_calls: encode each as a ChatToolCall.
   if (opts?.toolCalls && opts.toolCalls.length > 0) {
     for (const tc of opts.toolCalls) {
-      parts.push(encodeMessage(6, encodeChatToolCall(tc)));
+      // #2 name + #1 id are identifiers — only the #3 arguments_json is a
+      // data surface a user can quote blocklisted text into.
+      parts.push(encodeMessage(6, encodeChatToolCall({ ...tc, arguments: data(tc.arguments) })));
     }
   }
   for (const img of imageParts) {
-    parts.push(encodeMessage(10, encodeImageData(img)));
+    parts.push(encodeMessage(10, encodeImageData({
+      ...img,
+      caption: img.caption === undefined ? undefined : data(img.caption),
+    })));
   }
   // Reasoning replay. This adapter used to assert that Cognition has no
   // reasoning-replay field and drop the assistant's own thinking, so a
   // reasoning model restarted its chain on every turn of a tool loop. Two
   // independent clients of the same service write it here: #11 thinking,
   // #12 signature, #18 signature_type on the assistant prompt.
-  if (opts?.thinking) parts.push(encodeString(11, opts.thinking));
-  if (opts?.signature) parts.push(encodeString(12, opts.signature));
-  if (opts?.signatureType) parts.push(encodeString(18, opts.signatureType));
+  const thinking = opts?.thinking === undefined ? undefined : data(opts.thinking);
+  if (thinking) parts.push(encodeString(11, thinking));
+  // A signature can only attest the original thinking. Rewritten text uses
+  // unsigned replay; unchanged text (including signature-only turns) keeps
+  // the original signature and type without altering the stored history.
+  if (thinking === opts?.thinking) {
+    if (opts?.signature) parts.push(encodeString(12, opts.signature));
+    if (opts?.signatureType) parts.push(encodeString(18, opts.signatureType));
+  }
   return Buffer.concat(parts);
 }
 
@@ -551,6 +565,15 @@ interface BuildArgs {
   requestId: bigint;
   triggerId: string;
   tools?: ToolDef[];
+  /**
+   * Opt-in: also run the Cognition blocklist rewrite over *data* surfaces —
+   * prompt text (#3), tool-call arguments (#6.3), image captions (#10.3) and
+   * replayed thinking (#11). Off by default: a rewrite inside literal content
+   * silently changes what the model sees, so callers who prefer a refusal over
+   * altered history keep the default. Enabled by the
+   * OPENCODEX_DEVIN_SANITIZE_DATA_SURFACES env var at the call site.
+   */
+  sanitizeDataSurfaces?: boolean;
   /** Default 5 = CHAT_MESSAGE_REQUEST_TYPE_CASCADE (matches captured LS body). */
   requestType?: number;
   completionOpts?: {
@@ -632,15 +655,31 @@ const MAX_TOOL_DESC_LEN = 6998;
  * for "whether to allow", verified live to clear the filter while preserving
  * the instruction's meaning.
  *
- * Scope note: the sanitizer only ever touches *instruction surfaces* —
- * tool descriptions and the #2 system prompt, where a meaning-preserving
- * reword loses nothing. It deliberately does NOT touch data fields:
- * message text (#3), replayed thinking (#11), and tool-call arguments
- * (#6.3) carry literal content (patches, exact needles, quoted file bytes)
+ * Entries five and six are more Codex CLI boilerplate, isolated by live
+ * bisection on a denied thread: "Codex refers to the open-source agentic
+ * coding interface" (the CLI's identity sentence — once Cognition listed it,
+ * every request from a Codex CLI client was refused) and "Don't output ANSI
+ * escape codes directly — the CLI renderer applies them" (a formatting
+ * bullet). Matching is flexible on case, whitespace, the open-source hyphen,
+ * and the Don't apostrophe; each rewrite swaps one required word.
+ *
+ * Scope note: by default the sanitizer only ever touches *instruction
+ * surfaces* — tool descriptions and the #2 system prompt, where a
+ * meaning-preserving reword loses nothing. Data fields — message text (#3),
+ * replayed thinking (#11), image captions (#10.3), and tool-call arguments
+ * (#6.3) — carry literal content (patches, exact needles, quoted file bytes)
  * where a rewrite would silently change what the model did or sees. If a
  * blocklisted phrase reaches the cloud inside one of those, the request is
- * refused and the caller sees the upstream `permission_denied` — which is
- * the correct failure, better than corrupting the data.
+ * refused and the caller sees the upstream `permission_denied`.
+ *
+ * That refusal is the correct failure for short histories, but a long thread
+ * keeps resending its earlier turns, so one quoted trigger phrase anywhere
+ * in the history (e.g. a tool description pasted into the transcript, or a
+ * mid-conversation system block Codex injected) permanently refuses every
+ * subsequent request. Operators who would rather have the rewrites applied
+ * to data surfaces than lose the thread can set
+ * `OPENCODEX_DEVIN_SANITIZE_DATA_SURFACES=1` — it is opt-in precisely
+ * because rewriting literal history changes what the model is told.
  */
 const COGNITION_BLOCKLIST_REWRITES: ReadonlyArray<[RegExp, string]> = [
   [/\bTakes a task_id parameter identifying the task\b/g, "Accepts a task_id parameter identifying the task"],
@@ -655,6 +694,14 @@ const COGNITION_BLOCKLIST_REWRITES: ReadonlyArray<[RegExp, string]> = [
   [
     /\basking\s+the\s+user\s+if\s+they\s+want\s+to\s+allow\s+the\s+action\s+in\s+`?justification`?\s+parameter\b/gi,
     "asking the user whether to allow the action in the `justification` parameter",
+  ],
+  [
+    /\bCodex\s+refers\s+to\s+the\s+open[-\s]?source\s+agentic\s+coding\s+interface\b/gi,
+    "Codex refers to the open-source agentic coding tool",
+  ],
+  [
+    /\bDon[\u0060'’]?t\s+output\s+ANSI\s+escape\s+codes\s+directly\s*[—-]\s*the\s+CLI\s+renderer\s+applies\s+them\b/gi,
+    "Don’t emit ANSI escape codes directly — the CLI renderer applies them",
   ],
 ];
 
@@ -742,6 +789,7 @@ function buildGetChatMessageRequest(args: BuildArgs): Buffer {
           signature: m.role === 'assistant' ? m.signature : undefined,
           signatureType: m.role === 'assistant' ? m.signature_type : undefined,
           isError: m.role === 'tool' ? m.is_error : undefined,
+          sanitizeDataSurfaces: args.sanitizeDataSurfaces,
         },
       ),
     ),
@@ -1232,6 +1280,11 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
   const userJwt = process.env.OPENCODEX_DEVIN_SEND_USER_JWT === "1"
     ? await getCachedUserJwt(req.apiKey, host, req.signal)
     : undefined;
+  // Opt-in: extend the blocklist rewrite to data surfaces too. Default keeps
+  // history byte-exact; setting this trades a possible meaning-preserving
+  // rewrite inside quoted content for not having the whole request refused
+  // when a long thread's history happens to contain a trigger phrase.
+  const sanitizeDataSurfaces = process.env.OPENCODEX_DEVIN_SANITIZE_DATA_SURFACES === "1";
 
   // Pre-flight: consult the per-account model catalog. Cognition's cloud
   // returns an opaque `permission_denied: "an internal error occurred (trace
@@ -1270,6 +1323,7 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
     modelUid: req.modelUid,
     messages: req.messages,
     tools: req.tools,
+    sanitizeDataSurfaces,
     cascadeId: sessionIds.cascadeId,
     sessionId: sessionIds.sessionId,
     trajectoryId: req.trajectoryId,
@@ -1639,7 +1693,10 @@ export async function* streamChatEvents(req: CloudChatRequest): AsyncGenerator<C
       const enriched =
         `Cognition denied this request (permission_denied). If tool descriptions ` +
         `are present, a blocklisted phrase may have triggered this — see the ` +
-        `COGNITION_BLOCKLIST_REWRITES table in cloud-direct/chat.ts. ` +
+        `COGNITION_BLOCKLIST_REWRITES table in cloud-direct/chat.ts. A phrase ` +
+        `quoted inside history data (message text, thinking, tool-call args) can ` +
+        `also trip it; OPENCODEX_DEVIN_SANITIZE_DATA_SURFACES=1 extends the ` +
+        `rewrite to those surfaces at the cost of altering quoted content. ` +
         `(cloud trace ID: ${trailerError.traceId ?? 'n/a'})`;
       throw new CloudChatError(
         enriched,

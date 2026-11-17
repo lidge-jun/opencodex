@@ -41,6 +41,12 @@ Owner publication probes before exposing a new directory; failed publication
 never recursively deletes through the current canonical path. Retirement checks
 directory identity and owner contents before and after quarantine rename. An
 unexpected displaced object is preserved rather than restored over another owner.
+The quarantine rename retries an `EACCES`/`EPERM` refusal inside the gate for two
+seconds while the generation is unchanged: Windows refuses to rename a directory
+while any process holds a file in it open, and giving up the gate on the first
+refusal handed the retirement the holder had already decided to the next waiter.
+Waiters read `owner.json` outside the gate only to announce the wait or explain a
+timeout, never on every poll, so they do not cause that refusal themselves.
 Only the original owner capability releases a generation; joined release is a no-op.
 
 The canonical name, version 1 owner records, member names and legacy live-PID veto

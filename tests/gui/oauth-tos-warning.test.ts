@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import {
+  oauthRiskAcknowledgementBody,
   oauthTosCopyKeys,
   oauthTosRisk,
   oauthTosRiskBodyKey,
   oauthTosRiskTitleKey,
 } from "../../gui/src/oauth-tos-risk";
+import { ANTIGRAVITY_RISK_ACK_FIELD, ANTIGRAVITY_TOS_BAN_MESSAGE, hasAntigravityRiskAcknowledgement } from "../../src/oauth/antigravity-risk";
 
 describe("oauth ToS risk map", () => {
   test("flags high-risk subscription OAuth providers", () => {
@@ -40,8 +42,9 @@ describe("oauth ToS risk map", () => {
     expect(oauthTosRiskBodyKey("elevated")).toBe("oauthTos.elevatedBody");
   });
 
-  test("Anthropic gets its own dialog copy; other providers keep the shared keys", () => {
+  test("Anthropic and Antigravity get their own dialog copy; other providers keep the shared keys", () => {
     expect(oauthTosCopyKeys(" Anthropic ", "high")).toEqual({
+      tone: "warning",
       title: "oauthTos.anthropicTitle",
       body: "oauthTos.anthropicBody",
       conditions: "oauthTos.anthropicConditions",
@@ -49,16 +52,34 @@ describe("oauth ToS risk map", () => {
       acknowledge: "oauthTos.anthropicAcknowledge",
       continue: "oauthTos.anthropicContinue",
     });
-    expect(oauthTosCopyKeys("google-antigravity", "high")).toEqual({
+    expect(oauthTosCopyKeys(" Google-Antigravity ", "high")).toEqual({
+      tone: "danger",
+      title: "oauthTos.antigravityTitle",
+      body: "oauthTos.antigravityBody",
+      conditions: "oauthTos.antigravityConditions",
+      saferPath: "oauthTos.antigravitySaferPath",
+      acknowledge: "oauthTos.antigravityAcknowledge",
+      continue: "oauthTos.antigravityContinue",
+    });
+    expect(oauthTosCopyKeys("meta-muse", "high")).toEqual({
+      tone: "warning",
       title: "oauthTos.highTitle",
       body: "oauthTos.highBody",
       conditions: null,
-      saferPath: "oauthTos.saferPath",
+      saferPath: null,
       acknowledge: "oauthTos.acknowledge",
       continue: "oauthTos.continue",
     });
     expect(oauthTosCopyKeys("cursor", "elevated").title).toBe("oauthTos.elevatedTitle");
     expect(oauthTosCopyKeys("cursor", "elevated").saferPath).toBeNull();
+  });
+
+  test("the dashboard sends the exact acknowledgement the API requires, and only when acknowledged", () => {
+    const sent = oauthRiskAcknowledgementBody("google-antigravity", true);
+    expect(Object.keys(sent)).toEqual([ANTIGRAVITY_RISK_ACK_FIELD]);
+    expect(hasAntigravityRiskAcknowledgement({ provider: "google-antigravity", ...sent })).toBe(true);
+    expect(oauthRiskAcknowledgementBody("google-antigravity", false)).toEqual({});
+    expect(oauthRiskAcknowledgementBody("anthropic", true)).toEqual({});
   });
 });
 
@@ -98,7 +119,6 @@ describe("oauth ToS warning UI seam", () => {
       "oauthTos.anthropicBody",
       "oauthTos.highBody",
       "oauthTos.elevatedBody",
-      "oauthTos.saferPath",
       "oauthTos.acknowledge",
       "oauthTos.continue",
       "oauthTos.anthropicTitle",
@@ -106,12 +126,21 @@ describe("oauth ToS warning UI seam", () => {
       "oauthTos.anthropicSaferPath",
       "oauthTos.anthropicAcknowledge",
       "oauthTos.anthropicContinue",
+      "oauthTos.antigravityTitle",
+      "oauthTos.antigravityBody",
+      "oauthTos.antigravityConditions",
+      "oauthTos.antigravitySaferPath",
+      "oauthTos.antigravityAcknowledge",
+      "oauthTos.antigravityContinue",
     ];
-    for (const locale of ["en", "de", "fr", "ja", "ko", "ru", "tr", "vi", "zh", "zh-TW"]) {
+    for (const locale of ["en", "de", "fr", "ja", "ko", "pt", "ru", "tr", "vi", "zh", "zh-TW"]) {
       const text = await Bun.file(`gui/src/i18n/${locale}.ts`).text();
       for (const key of keys) {
         expect(text).toContain(`"${key}"`);
       }
+      // The ban message is quoted verbatim, in English, in every locale: it is what the user
+      // will actually see from Google, so a translation would make it unrecognisable.
+      expect(text, locale).toContain(ANTIGRAVITY_TOS_BAN_MESSAGE);
     }
   });
 });

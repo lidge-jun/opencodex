@@ -401,11 +401,11 @@ posixTest("each refusal says what to fix, the key's own directory apart from a d
   rmSync(join(root, "keys"), { recursive: true, force: true });
   const above = await h.call("POST", "probe", { alias: ALIAS, includeVersion: true, explicitRoute: { ...ROUTE, identityFile: keyUnder(0o775) }, exclusive: true });
   const message = (answer: { body: Record<string, unknown> }) => (answer.body.error as { message: string }).message;
-  // A key put straight into /tmp gets the same text: it must not read as "remove write access on /tmp" (with sudo, or for a Home
-  // running as root, which owns /tmp, that breaks the machine), so moving the key comes first and the chmod is only for a private
-  // directory of the user's, never a shared or system one.
-  expect(message(own)).toBe("The directory that holds the identity file must be owned by this user or root and not writable by group or others. Move the key to a path that passes; if a tool chose the path, run chmod go-w on that tool's own private folder or have it use a path that passes. Never change a shared or system directory such as /tmp, even when the Home runs as root.");
-  expect(message(above)).toBe("Every directory above the identity file must be owned by this user or root and not writable by group or others unless sticky, and every symlink on its path must be owned by this user or root; a folder made under umask 002 is group-writable. Run chmod go-w on such a private folder of this user's or of the tool that chose the path, or use a path that passes. Never change a shared or system directory or another user's symlink, even as root.");
+  // The key's own directory (group-writable here, as /tmp is world-writable) and a directory above it get different texts. Neither
+  // may read as "remove write access on /tmp" (with sudo, or for a Home running as root, which owns /tmp, that breaks the machine),
+  // so moving the key comes first and the chmod is only for a private folder the user owns, never a shared or system one.
+  expect(message(own)).toBe("The directory that holds the identity file must be owned by this user or root and not writable by group or others. Move the key to a path that passes, or run chmod go-w on that directory only if it is a private folder this user owns (its own, or one a tool made for it); a tool that chose the path can instead be set to use a path that passes. Never change a shared or system directory such as /tmp, even when the Home runs as root.");
+  expect(message(above)).toBe("Every directory above the identity file must be owned by this user or root and not writable by group or others unless sticky, and every symlink on its path must be owned by this user or root; a folder made under umask 002 is group-writable. Run chmod go-w on such a folder only if it is a private folder this user owns (its own, or one a tool made for it), or use a path that passes. Never change a shared or system directory or another user's symlink, even as root.");
   for (const answer of [own, above]) expect(JSON.stringify(answer.body)).not.toContain(root);
 });
 
@@ -415,7 +415,7 @@ posixTest("a path with a symlink loop is refused as unreadable, and the text say
   symlinkSync(join(root, "a"), join(root, "b"));
   const refused = await h.call("POST", "probe", { alias: ALIAS, includeVersion: true, explicitRoute: { ...ROUTE, identityFile: join(root, "a", "goat_hub_ed25519") }, exclusive: true });
   expect({ hint: (refused.body.error as { hint?: string }).hint, message: (refused.body.error as { message?: string }).message })
-    .toEqual({ hint: "identity_file_unreadable", message: "This user cannot read the identity file or a directory on its path, or the path is too long or has too many symlinks. Use a shorter path without symlink loops; fix read access only on this user's own file or folder." });
+    .toEqual({ hint: "identity_file_unreadable", message: "This user cannot read the identity file or a directory on its path, or the path is too long or has too many symlinks. Use a shorter path without symlink loops; fix read access only on this user's own file or folder, with chmod u+r on the file or u+rx on a folder, and never add group or other access." });
   expect(h.ssh).toEqual([]);
 });
 
@@ -427,17 +427,17 @@ test.if(WINDOWS)("on a Windows Home a probe that names an identity file is refus
   expect(h.ssh).toEqual([]);
 });
 
-posixTest("a key file another user could chown is not the fix: the permissions text says to use a key of this user's own", async () => {
+posixTest("a key file open to its group is refused, and the permissions text limits chmod 600 to a key of this user's own", async () => {
   const h = harness();
   const refused = await h.call("POST", "probe", { alias: ALIAS, includeVersion: true, explicitRoute: { ...ROUTE, identityFile: keyFile(0o640) }, exclusive: true });
   expect({ hint: (refused.body.error as { hint?: string }).hint, message: (refused.body.error as { message?: string }).message })
-    .toEqual({ hint: "identity_file_permissions", message: "The identity file must be owned by this user with no group or other permissions (chmod 600 on it). Use a key file of this user's own; never chown another user's or the system's key." });
+    .toEqual({ hint: "identity_file_permissions", message: "The identity file must be owned by this user with no group or other permissions. Use a key file of this user's own and run chmod 600 on it; never chown or chmod another user's or the system's key." });
 });
 
 posixTest("a path with a component too long for the filesystem is refused as unreadable with the same text, before any SSH", async () => {
   const h = harness();
   const refused = await h.call("POST", "probe", { alias: ALIAS, includeVersion: true, explicitRoute: { ...ROUTE, identityFile: join(root, "k".repeat(256)) }, exclusive: true });
   expect({ hint: (refused.body.error as { hint?: string }).hint, message: (refused.body.error as { message?: string }).message })
-    .toEqual({ hint: "identity_file_unreadable", message: "This user cannot read the identity file or a directory on its path, or the path is too long or has too many symlinks. Use a shorter path without symlink loops; fix read access only on this user's own file or folder." });
+    .toEqual({ hint: "identity_file_unreadable", message: "This user cannot read the identity file or a directory on its path, or the path is too long or has too many symlinks. Use a shorter path without symlink loops; fix read access only on this user's own file or folder, with chmod u+r on the file or u+rx on a folder, and never add group or other access." });
   expect(h.ssh).toEqual([]);
 });

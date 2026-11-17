@@ -1,0 +1,333 @@
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { Window } from "happy-dom";
+import { act, useEffect, useRef } from "react";
+import type { Root } from "react-dom/client";
+import { LanguageProvider } from "../src/i18n/provider";
+import { useT } from "../src/i18n/shared";
+import { en } from "../src/i18n/en";
+import { OAUTH_LOGIN_POLL_INTERVAL_MS, useAddProviderOAuth } from "../src/components/use-add-provider-oauth";
+import { BROWSER_LOGIN_POLL_ATTEMPTS } from "../src/oauth-login-budget";
+import { captureApiTarget, configureApiTargets, type ApiTargetCapture } from "../src/api";
+import { standaloneApiTargets } from "../src/api-targets";
+import AddProviderModal from "../src/components/AddProviderModal";
+
+/**
+ * #8618: a pasted code whose login already ended (poll budget spent, cancelled) must say the
+ * login ended, not that the dashboard target changed. A real target change keeps its own
+ * message, and no path posts an old login's code anywhere.
+ */
+
+const AUTH_URL = "https://windsurf.test/signin?state=one";
+const globals = ["document", "window", "navigator", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
+let previous: Record<(typeof globals)[number], unknown>;
+let win: Window;
+let root: Root | null = null;
+let originalFetch: typeof globalThis.fetch;
+let timeoutSpy: ReturnType<typeof spyOn> | undefined;
+let statusPolls = 0;
+let holdStatus = false;
+let heldStatus: Array<() => void> = [];
+let heldLogins: Array<() => void> = [];
+let holdNextLogin = false;
+let cancelled: string[] = [];
+let codePosts: Array<{ provider?: string; input?: string }> = [];
+let api: ReturnType<typeof useAddProviderOAuth>;
+const ui = { manualCodeMsg: "", manualCodeOk: true };
+const surface = { busy: false, url: "", msg: "" };
+
+const setters = {
+  setOauthBusy: (busy: boolean) => { surface.busy = busy; },
+  setOauthMsg: (msg: string) => { surface.msg = msg; },
+  setOauthMsgTone: () => {},
+  setOauthUrl: (url: string) => { surface.url = url; },
+  setManualCode: () => {},
+  setManualCodeMsg: (msg: string) => { ui.manualCodeMsg = msg; },
+  setManualCodeOk: (ok: boolean) => { ui.manualCodeOk = ok; },
+};
+const codeSetters = {
+  setManualCodeBusy: () => {},
+  setManualCode: () => {},
+  setManualCodeOk: (ok: boolean) => { ui.manualCodeOk = ok; },
+  setManualCodeMsg: (msg: string) => { ui.manualCodeMsg = msg; },
+};
+
+function Harness({ targetKey }: { targetKey?: string }) {
+  const t = useT();
+  const aliveRef = useRef(true);
+  useEffect(() => () => { aliveRef.current = false; }, []);
+  const hook = useAddProviderOAuth({ apiBase: "", targetKey, t, aliveRef, onAdded: () => {} });
+  useEffect(() => { api = hook; }, [hook]);
+  return null;
+}
+
+beforeEach(() => {
+  previous = Object.fromEntries(globals.map((k) => [k, Reflect.get(globalThis, k)])) as typeof previous;
+  originalFetch = globalThis.fetch;
+  win = new Window({ url: "http://localhost/" });
+  Object.defineProperty(win.navigator, "language", { configurable: true, value: "en-US" });
+  Object.defineProperties(globalThis, {
+    document: { configurable: true, value: win.document },
+    window: { configurable: true, value: win },
+    navigator: { configurable: true, value: win.navigator },
+    localStorage: { configurable: true, value: win.localStorage },
+  });
+  (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  statusPolls = 0;
+  holdStatus = false;
+  heldStatus = [];
+  heldLogins = [];
+  holdNextLogin = false;
+  cancelled = [];
+  codePosts = [];
+  ui.manualCodeMsg = "";
+  ui.manualCodeOk = true;
+  Object.assign(surface, { busy: false, url: "", msg: "" });
+  // The poll interval elapses at once, so a spent budget is reached without waiting minutes.
+  const realSetTimeout = globalThis.setTimeout;
+  timeoutSpy = spyOn(globalThis, "setTimeout").mockImplementation(((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) => {
+    if (delay === OAUTH_LOGIN_POLL_INTERVAL_MS) {
+      queueMicrotask(() => callback(...args));
+      return 0 as unknown as ReturnType<typeof setTimeout>;
+    }
+    return realSetTimeout(callback, delay, ...args);
+  }) as typeof setTimeout);
+  Object.defineProperty(globalThis, "fetch", {
+    configurable: true,
+    value: async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input), "http://localhost");
+      const method = init?.method ?? "GET";
+      if (url.pathname === "/api/oauth/login" && method === "POST") {
+        if (holdNextLogin) {
+          holdNextLogin = false;
+          await new Promise<void>((resolve) => { heldLogins.push(resolve); });
+        }
+        return Response.json({ url: AUTH_URL });
+      }
+      if (url.pathname === "/api/oauth/login/cancel" && method === "POST") {
+        cancelled.push(String((JSON.parse(String(init?.body ?? "{}")) as { provider?: string }).provider));
+        return Response.json({ ok: true, cancelled: true });
+      }
+      if (url.pathname === "/api/oauth/login/code" && method === "POST") {
+        codePosts.push(JSON.parse(String(init?.body ?? "{}")) as { provider?: string; input?: string });
+        return Response.json({ ok: true });
+      }
+      if (url.pathname === "/api/oauth/status") {
+        statusPolls++;
+        if (holdStatus) await new Promise<void>((resolve) => { heldStatus.push(resolve); });
+        return Response.json({ loggedIn: false });
+      }
+      return Response.json({});
+    },
+  });
+});
+
+afterEach(async () => {
+  holdStatus = false;
+  for (const release of heldStatus.splice(0)) release();
+  for (const release of heldLogins.splice(0)) release();
+  if (root) {
+    const current = root;
+    await act(async () => { current.unmount(); });
+    root = null;
+  }
+  timeoutSpy?.mockRestore();
+  for (const key of globals) Object.defineProperty(globalThis, key, { configurable: true, value: previous[key] });
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: originalFetch });
+  await win.happyDOM?.close?.();
+});
+
+async function render(targetKey?: string) {
+  configureApiTargets(standaloneApiTargets(""));
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root ??= createRoot(win.document.body as unknown as HTMLElement);
+    root.render(<LanguageProvider><Harness targetKey={targetKey} /></LanguageProvider>);
+  });
+}
+
+const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+const submit = () => act(async () => { await api.submitManualCode("devin", "pasted-code", false, codeSetters); });
+
+test("a browser login whose poll budget ran out reports an ended login and posts nothing", async () => {
+  await render();
+  await act(async () => { await api.loginOAuth("devin", setters); });
+  // The add-provider surface keeps the same browser budget as the providers page.
+  expect(statusPolls).toBe(BROWSER_LOGIN_POLL_ATTEMPTS);
+  expect(cancelled).toEqual(["devin"]);
+  await submit();
+  expect(ui).toEqual({ manualCodeMsg: en["prov.loginExpired"], manualCodeOk: false });
+  expect(codePosts).toEqual([]);
+});
+
+test("an old target's late completion leaves the replacement login on the new target alone", async () => {
+  holdStatus = true;
+  await render("hub-a");
+  void api.loginOAuth("devin", setters);
+  await settle();
+  await render("hub-b");
+  void api.loginOAuth("devin", setters);
+  await settle();
+  expect(surface).toMatchObject({ busy: true, url: AUTH_URL });
+  // Releasing the polls ends the hub-a login; the hub-b login keeps polling.
+  await act(async () => { for (const release of heldStatus.splice(0)) release(); await new Promise((r) => setTimeout(r, 20)); });
+  expect(surface).toEqual({ busy: true, url: AUTH_URL, msg: en["modal.waitingLogin"] });
+});
+
+
+test("a login whose target moved under the same key resets the surface instead of leaving a dead paste box", async () => {
+  holdStatus = true;
+  await render("hub-a");
+  void api.loginOAuth("devin", setters);
+  await settle();
+  expect(surface).toMatchObject({ busy: true, url: AUTH_URL });
+  // A relay re-pair moves the target while the logical key stays "hub-a".
+  configureApiTargets(standaloneApiTargets("/relay-b"));
+  holdStatus = false;
+  await act(async () => { for (const release of heldStatus.splice(0)) release(); await new Promise((r) => setTimeout(r, 20)); });
+  expect(surface).toEqual({ busy: false, url: "", msg: en["prov.targetChanged"] });
+  await submit();
+  expect(ui).toEqual({ manualCodeMsg: en["prov.targetChanged"], manualCodeOk: false });
+  expect(codePosts).toEqual([]);
+});
+
+
+test("a code typed for one Accounts login is cleared before another login or target can take it", async () => {
+  const owner = captureApiTarget("shared", "");
+  const captures = { active: () => owner, ended: () => undefined };
+  const { createRoot } = await import("react-dom/client");
+  configureApiTargets(standaloneApiTargets(""));
+  const renderAt = async (targetKey: string, url: string) => {
+    await act(async () => {
+      root ??= createRoot(win.document.body as unknown as HTMLElement);
+      root.render(
+        <LanguageProvider>
+          <AddProviderModal apiBase="" targetKey={targetKey} existingNames={[]} initialTier="accounts" onClose={() => {}} onAdded={() => {}}
+            accountRows={[{ id: "devin", label: "Devin", kind: "oauth" }]} accountStatus={{}} accountBusy="devin"
+            accountLoginHint={{ provider: "devin", url }} accountLoginCaptures={captures} />
+        </LanguageProvider>,
+      );
+    });
+    await settle();
+  };
+  const field = () => win.document.querySelector(".login-hint-paste-input") as unknown as HTMLInputElement;
+  await renderAt("hub-a", AUTH_URL);
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!.call(field(), "code-for-hub-a");
+    field().dispatchEvent(new win.Event("input", { bubbles: true }) as unknown as Event);
+  });
+  // A re-render of the same login (a status poll) keeps what the user typed.
+  await renderAt("hub-a", AUTH_URL);
+  expect(field().value).toBe("code-for-hub-a");
+  // The same provider's login on another target starts with an empty field.
+  await renderAt("hub-b", AUTH_URL + "&state=two");
+  expect(field().value).toBe("");
+  expect(codePosts).toEqual([]);
+});
+
+
+async function renderCatalog(owner: { active: (provider: string) => ApiTargetCapture | undefined; ended: (provider: string) => ApiTargetCapture | undefined }) {
+  configureApiTargets(standaloneApiTargets(""));
+  const { createRoot } = await import("react-dom/client");
+  await act(async () => {
+    root ??= createRoot(win.document.body as unknown as HTMLElement);
+    root.render(
+      <LanguageProvider>
+        <AddProviderModal apiBase="" existingNames={[]} initialTier="accounts" onClose={() => {}} onAdded={() => {}}
+          accountRows={[{ id: "devin", label: "Devin", kind: "oauth" }]} accountStatus={{}} accountBusy="devin"
+          accountLoginHint={{ provider: "devin", url: AUTH_URL }} accountLoginCaptures={owner} />
+      </LanguageProvider>,
+    );
+  });
+  await settle();
+}
+
+async function pasteInCatalog(code: string) {
+  const input = win.document.querySelector(".login-hint-paste-input") as unknown as HTMLInputElement | null;
+  expect(input).toBeTruthy();
+  await act(async () => {
+    const setter = Object.getOwnPropertyDescriptor(win.HTMLInputElement.prototype, "value")!.set!;
+    setter.call(input, code);
+    input!.dispatchEvent(new win.Event("input", { bubbles: true }) as unknown as Event);
+  });
+  const submit = Array.from(win.document.querySelectorAll(".login-hint-paste-row button"))
+    .find(button => button.textContent === en["prov.pasteSubmit"]) as unknown as HTMLButtonElement | undefined;
+  expect(submit).toBeTruthy();
+  await act(async () => { submit!.dispatchEvent(new win.MouseEvent("click", { bubbles: true }) as unknown as Event); });
+  await settle();
+}
+
+// The Accounts rows start logins through the providers page, so the page owns their capture.
+test("an Accounts-row login takes its pasted code through the page login that owns it", async () => {
+  const owner = captureApiTarget("shared", "");
+  await renderCatalog({ active: () => owner, ended: () => undefined });
+  await pasteInCatalog("pasted-code");
+  expect(codePosts).toEqual([{ provider: "devin", input: "pasted-code" }]);
+  expect(win.document.body.textContent).toContain(en["prov.pasteOk"]);
+});
+
+test("an Accounts-row login that ended reports an ended login and posts nothing", async () => {
+  const owner = captureApiTarget("shared", "");
+  await renderCatalog({ active: () => undefined, ended: () => owner });
+  await pasteInCatalog("pasted-code");
+  expect(codePosts).toEqual([]);
+  expect(win.document.body.textContent).toContain(en["prov.loginExpired"]);
+});
+
+
+test("a cancelled login reports an ended login and posts nothing", async () => {
+  holdStatus = true;
+  await render();
+  void api.loginOAuth("devin", setters);
+  await settle();
+  await act(async () => { await api.cancelLoginOAuth("devin", setters); });
+  await submit();
+  expect(ui).toEqual({ manualCodeMsg: en["prov.loginExpired"], manualCodeOk: false });
+  expect(codePosts).toEqual([]);
+});
+
+test("a login still inside its lifetime accepts the pasted code", async () => {
+  holdStatus = true;
+  await render();
+  void api.loginOAuth("devin", setters);
+  await settle();
+  await submit();
+  expect(codePosts).toEqual([{ provider: "devin", input: "pasted-code" }]);
+  expect(ui).toEqual({ manualCodeMsg: en["prov.pasteOk"], manualCodeOk: true });
+});
+
+test("a superseded login ending late neither clears nor expires its replacement", async () => {
+  holdStatus = true;
+  await render();
+  holdNextLogin = true;
+  void api.loginOAuth("devin", setters);
+  await settle();
+  void api.loginOAuth("devin", setters);
+  await settle();
+  // The first login's start answer lands after the replacement took over.
+  for (const release of heldLogins.splice(0)) release();
+  await settle();
+  await submit();
+  expect(codePosts).toEqual([{ provider: "devin", input: "pasted-code" }]);
+  expect(ui.manualCodeMsg).toBe(en["prov.pasteOk"]);
+});
+
+test("a real target change still reports the target change and posts nothing", async () => {
+  holdStatus = true;
+  await render("hub-a");
+  void api.loginOAuth("devin", setters);
+  await settle();
+  await render("hub-b");
+  await submit();
+  expect(ui).toEqual({ manualCodeMsg: en["prov.targetChanged"], manualCodeOk: false });
+  expect(codePosts).toEqual([]);
+});
+
+test("a login that ended before a target change reports the target change", async () => {
+  await render("hub-a");
+  await act(async () => { await api.loginOAuth("devin", setters); });
+  await render("hub-b");
+  await submit();
+  expect(ui).toEqual({ manualCodeMsg: en["prov.targetChanged"], manualCodeOk: false });
+  expect(codePosts).toEqual([]);
+});
+

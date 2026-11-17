@@ -6,5 +6,7 @@
   "combo-codex-ws-overload-failover.test.ts": "responses",
   "combo-stream-attempt-timing.test.ts": "responses",
   "combo-cooldown-persistence.test.ts": "routing",
-  "server-combo-cooldown-recording.test.ts": "server"
+  "server-combo-cooldown-recording.test.ts": "server",
+  "combo-selection-keepalive.test.ts": "routing",
+  "server-combo-selection-keepalive.test.ts": "server"
 }

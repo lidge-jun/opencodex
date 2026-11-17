@@ -107,7 +107,7 @@ the revision, generation, threshold and route. A pause commits only while all of
 equal, both in memory and in the fresh persisted file inside the config mutation lock. The OAuth
 automatic commit runs its final check and auth publication under that lock, and contention means
 no pause. API-key commits use the same disk check in their selection mutation, and Codex commits
-check it beside `src/codex/account-pause.ts` state. Revision records exist only for providers present after disk-only provider
+check it beside `src/codex/account-pause.ts` state; pausing `__main__` there also ends any retained native-main login ([native-main login retention](providers/native-main-login-retention.md)). Revision records exist only for providers present after disk-only provider
 preservation: deleting a provider reclaims its record, and both the persisted and the observed
 maps stay bounded by the provider list. Every new observed record and every generation advance draws
 from one process-wide counter, so a deleted and recreated provider can never reproduce an older
