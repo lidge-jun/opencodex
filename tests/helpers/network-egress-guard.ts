@@ -74,11 +74,13 @@ export function isTestEgressAllowed(rawHost: string | null | undefined): boolean
 
 const LOCAL_FETCH_SCHEMES = new Set(["data:", "blob:", "file:"]);
 const NETWORK_SCHEMES = new Set(["http:", "https:", "ws:", "wss:"]);
+/** WebSocket over a Unix socket (local messaging daemons): it never leaves this machine. */
+const UNIX_SOCKET_SCHEMES = new Set(["ws+unix:", "wss+unix:"]);
 
 function urlHostAllowed(raw: string | URL): { allowed: boolean; label: string; parsed: boolean } {
   let url: URL;
   try { url = typeof raw === "string" ? new URL(raw) : raw; } catch { return { allowed: true, label: "", parsed: false }; }
-  if (LOCAL_FETCH_SCHEMES.has(url.protocol)) return { allowed: true, label: url.protocol, parsed: true };
+  if (LOCAL_FETCH_SCHEMES.has(url.protocol) || UNIX_SOCKET_SCHEMES.has(url.protocol)) return { allowed: true, label: url.protocol, parsed: true };
   // Any other scheme Bun can fetch (s3:) reaches the network without a host this guard can judge.
   if (!NETWORK_SCHEMES.has(url.protocol)) return { allowed: false, label: url.protocol + "//" + url.host, parsed: true };
   return { allowed: isTestEgressAllowed(url.hostname), label: url.protocol + "//" + url.hostname, parsed: true };
