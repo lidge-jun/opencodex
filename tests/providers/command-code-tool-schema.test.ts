@@ -144,6 +144,57 @@ describe("Command Code wireTools input_schema", () => {
     expect(schema!.allOf).toBeUndefined();
   });
 
+  test("keeps composition from both sides of a $ref with composing siblings", async () => {
+    // JSON Schema conjoins a $ref with its siblings, so a sibling allOf adds to the referenced
+    // definition's allOf instead of replacing it. Both-sided alternatives keep every branch's
+    // properties and, like any root alternative, promote no required member.
+    const schemas = await wiredSchemas([
+      {
+        name: "both_all",
+        description: "both_all",
+        parameters: {
+          $defs: {
+            A: { allOf: [{ type: "object", properties: { a: { type: "string" } }, required: ["a"] }] },
+          },
+          allOf: [{
+            $ref: "#/$defs/A",
+            allOf: [{ type: "object", properties: { b: { type: "number" } }, required: ["b"] }],
+          }],
+        },
+      },
+      {
+        name: "both_one",
+        description: "both_one",
+        parameters: {
+          $defs: {
+            A: {
+              oneOf: [
+                { type: "object", properties: { a1: { type: "string" } }, required: ["a1"] },
+                { type: "object", properties: { a2: { type: "string" } }, required: ["a2"] },
+              ],
+            },
+          },
+          allOf: [{
+            $ref: "#/$defs/A",
+            oneOf: [
+              { type: "object", properties: { b1: { type: "string" } }, required: ["b1"] },
+              { type: "object", properties: { b2: { type: "string" } }, required: ["b2"] },
+            ],
+          }],
+        },
+      },
+    ] as OcxTool[]);
+
+    expect(schemas.both_all!.properties).toEqual({ a: { type: "string" }, b: { type: "number" } });
+    expect([...(schemas.both_all!.required as string[])].sort()).toEqual(["a", "b"]);
+    expect(Object.keys(schemas.both_one!.properties as object).sort()).toEqual(["a1", "a2", "b1", "b2"]);
+    expect(schemas.both_one!.required).toBeUndefined();
+    for (const schema of Object.values(schemas)) {
+      expect(schema.allOf).toBeUndefined();
+      expect(schema.oneOf).toBeUndefined();
+    }
+  });
+
   test("preserves nested composition inside an outbound property", async () => {
     const nested = { anyOf: [{ type: "string" }, { type: "number" }] };
     const [schema] = Object.values(await wiredSchemas([{

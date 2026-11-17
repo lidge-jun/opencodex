@@ -190,6 +190,20 @@ describe("anthropic tool input_schema normalization", () => {
     expect(schema.required).toEqual(["path", "mode"]);
   });
 
+  test("keeps composition from both sides of a $ref with composing siblings", async () => {
+    const inputSchema = await toolSchema({
+      $defs: { A: { allOf: [{ type: "object", properties: { a: { type: "string" } }, required: ["a"] }] } },
+      allOf: [{
+        $ref: "#/$defs/A",
+        allOf: [{ type: "object", properties: { b: { type: "number" } }, required: ["b"] }],
+      }],
+    });
+
+    expect(inputSchema.properties).toEqual({ a: { type: "string" }, b: { type: "number" } });
+    expect([...(inputSchema.required as string[])].sort()).toEqual(["a", "b"]);
+    expect(inputSchema.allOf).toBeUndefined();
+  });
+
   test("keeps the documented last-branch-wins loss for root alternatives", async () => {
     const schema = await toolSchema({
       oneOf: [

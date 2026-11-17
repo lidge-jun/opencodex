@@ -3,10 +3,11 @@ import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
 /**
  * Anthropic rejects a root-level missing `type` and root-level `oneOf`/`anyOf`/`allOf` in
  * `input_schema`. Normalize the root only: ensure `type:"object"` + `properties`, flatten root
- * composition while preserving nested schemas, and inline local `#/$defs`/`#/definitions` refs
+ * composition while preserving nested schemas, and inline local `#/...` refs (`$defs` and the like)
  * before flattening so a referenced branch keeps its parameters and required members. A `$ref`
  * with siblings merges both property maps, unions `required`, and keeps a property declared on
- * both sides conjunctive under `allOf`. Shared by the anthropic and command-code adapters.
+ * both sides conjunctive under `allOf`; composition on both sides is kept, not replaced.
+ * Shared by the anthropic and command-code adapters.
  *
  * Flattening root alternatives is lossy: later branches win for a same-named property, and
  * `oneOf`/`anyOf` branch `required` members are not promoted because no branch is guaranteed.
@@ -77,6 +78,18 @@ function mergeRefSiblings(
   }
   if (required.size > 0) merged.required = [...required];
   else delete merged.required;
+
+  // The spread above lets a sibling's composition replace the referenced schema's. Both sides
+  // apply, so concatenate `allOf` and keep each side's `oneOf`/`anyOf` as its own `allOf` entry.
+  const allOf: unknown[] = [];
+  for (const source of [resolved, siblings]) if (Array.isArray(source.allOf)) allOf.push(...source.allOf);
+  for (const key of ["oneOf", "anyOf"] as const) {
+    if (Array.isArray(resolved[key]) && Array.isArray(siblings[key])) {
+      allOf.push({ [key]: resolved[key] }, { [key]: siblings[key] });
+      delete merged[key];
+    }
+  }
+  if (allOf.length > 0) merged.allOf = allOf;
 
   return merged;
 }
