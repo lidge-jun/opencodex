@@ -39,6 +39,9 @@ export function withClaudeContextSettings(
   if (Object.keys(modelSettings).length === 0) return unchanged;
 
   const serialized = JSON.stringify({ autoCompactWindow: auto.compactWindow, modelSettings });
+  // Leave headroom for cmd.exe shim escaping and the rest of the command line.
+  const budget = (options.platform ?? process.platform) === "win32" ? 4000 : 32000;
+  if (serialized.length > budget) return unchanged;
   const childEnv = { ...env };
   delete childEnv.CLAUDE_CODE_AUTO_COMPACT_WINDOW;
   return { args: ["--settings", serialized, ...args], env: childEnv };

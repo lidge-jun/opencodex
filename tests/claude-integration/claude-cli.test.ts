@@ -88,6 +88,14 @@ describe("ocx claude per-model compact settings", () => {
     expect(Object.keys(settings(result.args).modelSettings).sort()).toEqual(["mock/mid", "ocx-claude-mock--mid"]);
   });
 
+  test("large Windows settings fall back to the original argv and compact env", () => {
+    const map = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`ocx-claude-fixture--model-${i}`, 524_000]));
+    const args = ["--print", "hello"];
+    const result = withClaudeContextSettings(args, env, cfg(), map, {}, { selectors: Object.keys(map), platform: "win32" });
+    expect(result).toEqual({ args, env });
+    expect(result.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("829800");
+  });
+
   test("a large registry with one pickable model stays small", () => {
     const map = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`unused-${i}`, 524_000]));
     map["mock/mid"] = 524_000;
