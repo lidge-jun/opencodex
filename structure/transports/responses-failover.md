@@ -527,7 +527,7 @@ Send-budget refusal is attributed as a withheld rotation only when a model-famil
 check confirms from the live roster that at least two accounts exist and an alternate is not currently
 cooled. That check applies no cooldown and advances no rotation.
 
-Generic OAuth snapshots its eligible roster before dispatch. Its request rotation ceiling is
+Generic OAuth and Anthropic OAuth snapshot their eligible rosters before dispatch. Their request rotation ceiling is
 `max(3, min(eligibleCount, GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST) - 1)` (the cap is six); the live picker still filters cooldowns, so the snapshot supplies the
 stable ceiling without making a cooled account eligible. Same-provider auth recovery keeps the last
 physical target, rather than a diagnostic key, and a real send is charged once even when recovery

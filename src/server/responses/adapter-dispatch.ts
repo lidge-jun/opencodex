@@ -82,7 +82,6 @@ import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { bindRouteReasoningReplayScope } from "./core-replay";
 import {
   AnthropicAccountCooldownError,
-  ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
   anthropicRoutingFor,
   formatAnthropicProviderForLog,
 } from "../../oauth/anthropic-routing";
@@ -172,7 +171,7 @@ export async function prepareAdapterExchange(
     | "commitResolvedOAuthSelection"
     | "genericFailoverAccountId"
     | "genericFailovers"
-    | "genericFailoverLimit"
+    | "genericFailoverLimit" | "anthropicFailoverLimit"
     | "applyFailoverSnapshot"
     | "noteRoutedAttemptSend" | "attemptSendDeferred" | "deferPhysicalAttribution"
   >,
@@ -406,7 +405,7 @@ export async function prepareAdapterExchange(
   let billingRecoveryActive = false;
   const genericRefetchCountsSends = () => !!sendBudgetState.workflowRootId || options.comboAttempt === true || sendBudgetState.adapterSendBudget?.spendEnforced === true
     || transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null
-    || billingPoolRequest || billingRecoveryActive || autoPauseEnabled;
+    || !!anthropicInstance || billingPoolRequest || billingRecoveryActive || autoPauseEnabled;
   let handoffPermit: ResponsesSendBudget["pendingHopPermit"];
   try {
     if (transportState.activeAdapter.fetchResponse) {
@@ -527,10 +526,10 @@ export async function prepareAdapterExchange(
           claimAmbiguousResend: claimPreHeaderResend,
           offlineWait: options.comboAttempt ? undefined : createProviderOfflineResendWait(route.providerName, route.provider, builtInitialRequest.url, config.offlineResendWaitSec),
           ...(sendBudgetState.workflowRootId || sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
-            || billingPoolRequest || autoPauseEnabled
+            || anthropicInstance || billingPoolRequest || autoPauseEnabled
             ? {
               // A pending compaction permit already booked this leg's first physical send.
-              ...(transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt || autoPauseEnabled
+              ...(transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt || anthropicInstance || autoPauseEnabled
                 ? {
                   attempts: Math.min(initialSendCap,
                     sendBudgetState.initialSendAllowance(initialSendCap) + (compactPrepaid ? 1 : 0)),
@@ -1387,7 +1386,7 @@ export async function prepareAdapterExchange(
             model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, currentDecision: currentAnthropicRouteDecision, signal: upstream.signal,
             // A denied reservation must not rotate on base headroom its bounds cannot see.
             canRetry: hop.allowed && (hop.permit !== undefined || !sendBudgetExhausted())
-              && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
+              && transportState.anthropicPoolFailovers < transportState.anthropicFailoverLimit,
           });
         } catch (rotationError) {
           hop.permit?.release();

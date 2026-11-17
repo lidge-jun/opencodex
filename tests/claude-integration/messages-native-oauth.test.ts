@@ -870,7 +870,7 @@ test("shared quota exhaustion is bounded and never resends an already-tried alte
   }) as typeof fetch;
   const { response } = await send(config, { ...BODY, stream: false });
   expect(response.status).toBe(429);
-  expect(sent.length).toBeLessThanOrEqual(4);
+  expect(sent).toHaveLength(5);
   expect(new Set(sent.map(entry => entry.headers.get("authorization"))).size).toBe(sent.length);
 });
 
