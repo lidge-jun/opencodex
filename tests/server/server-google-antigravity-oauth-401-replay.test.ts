@@ -968,6 +968,11 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
       expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer fresh-access"]);
       expect(observed.chatProjects).toEqual(["initial-project-id", "refreshed-project-id"]);
       expect(observed.counts.refresh).toBe(1);
+      const attempts = readUsageEntries().at(-1)?.attempts;
+      expect(attempts?.map(attempt => ({ status: attempt.status, sendCount: attempt.sendCount })))
+        .toEqual([{ status: 401, sendCount: 1 }, { status: 200, sendCount: 1 }]);
+      expect(attempts?.[1].accountLogLabel).toBe(attempts?.[0].accountLogLabel);
+      expect(attempts?.[1].recoveryKinds).toContain("oauth-401");
     } finally { await server.stop(true); }
   });
 
