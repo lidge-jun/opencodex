@@ -1,5 +1,8 @@
 # 020 — carry #8857 (Closes #8759)
 
+Stale check at wp2 entry: `origin/dev` still `c36793a933`; PR head unchanged (d1545947d). Publishing goes
+through the coordinator (this host cannot push); the lane hands over branch and exact SHA.
+
 ## Commands
 
 ```bash
