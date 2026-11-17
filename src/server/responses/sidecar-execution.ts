@@ -44,6 +44,7 @@ import { noteKiroMonthlyRefusal, noteKiroServedSuccess } from "../../providers/k
 import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
 import { anthropicPoolCooldownResponse, readDisplaySafeErrorText } from "./core-errors";
 import { sidecarContextOverflowResponse } from "./context-overflow";
+import { emptyCompletionRetryEnabled } from "./empty-completion-guard";
 import {
   ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
   anthropicRoutingFor,
@@ -701,8 +702,7 @@ export async function executeResponsesSidecars(
         ...sidecarBudget.fetchOptions(transportState.adapter),
       })(input, init)) as typeof globalThis.fetch;
     const loopResponse = await runWithWebSearch({
-      emptyCompletionRetry: config.emptyCompletionRetry === true
-        && process.env.OCX_EMPTY_COMPLETION_RETRY !== "0" && !options.comboAttempt && !routedCompaction,
+      emptyCompletionRetry: emptyCompletionRetryEnabled(config) && !options.comboAttempt && !routedCompaction,
       dispatchSidecarSend: sendBudgetState.dispatchSidecarSend,
       parsed, adapter: transportState.adapter,
       ...(webSearchAdvisor ? { advisor: createAdvisorSidecarStep(webSearchAdvisor as Parameters<typeof createAdvisorSidecarStep>[0]) } : {}),

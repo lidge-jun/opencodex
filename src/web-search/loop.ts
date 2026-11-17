@@ -358,6 +358,7 @@ function loopFailure(e: LoopError): SidecarLoopFailure {
  */
 export interface WebSearchLoopDeps {
   parsed: OcxParsedRequest;
+  /** The global emptyCompletionRetry opt-in; the loop applies it only to final openai-chat iterations. */
   emptyCompletionRetry?: boolean;
   advisor?: AdvisorSidecarStep;
   /** Chat delivery only; never copied into parsed generation options. */
@@ -1198,6 +1199,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
             const final = split.passthrough.find(event => event.type === "done");
             if (deps.emptyCompletionRetry && !forceAnswer && adapter.name === "openai-chat"
               && final?.type === "done" && !isTruncatedStopReason(final.stopReason)
+              && !split.passthrough.some(event => event.type === "error" || event.type === "incomplete")
               && !signal.aborted && !split.hasMalformedToolCall && !split.hasRealToolCall
               && split.streamedPassthroughCount === 0 && !hasVisibleAssistantText(split.passthrough)) {
               hiddenUsage = mergeUsage(hiddenUsage, final.usage);

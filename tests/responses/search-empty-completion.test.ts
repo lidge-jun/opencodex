@@ -65,7 +65,8 @@ test("Chat recovery opt-in does not expand another adapter's search iteration ca
 test("live reasoning is delivered once without an empty-completion resend", async () => {
   const result = await checkHostedRecoveryIteration(["thinking", "Fixed."], true);
   expect(result.seen).toHaveLength(1);
-  expect(result.text).toContain("Checking the fixture.");
+  expect(result.text.split("\n").filter(line => line.includes('"type":"response.reasoning_summary_text.delta"')
+    && line.includes("Checking the fixture."))).toHaveLength(1);
   expect(result.text).toContain('"type":"response.completed"');
 });
 
