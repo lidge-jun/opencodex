@@ -219,6 +219,11 @@ export function UsageModelsTable({
   );
 }
 
+const LEGACY_WIRE_NAMES: Record<NonNullable<UsageApp["legacyWire"]>, string> = {
+  responses: "Responses API", chat: "Chat Completions", messages: "Anthropic Messages",
+  claude: "Claude", "claude-desktop": "Claude Desktop", grok: "Grok",
+};
+
 export function UsageAppsTable({ apps, locale, t }: { apps?: UsageApp[]; locale: Locale; t: TFn }) {
   const names: Record<UsageApp["client"], string> = {
     codex: "Codex", claude_code: "Claude Code", claude_desktop: "Claude Desktop", grok: "Grok", opencode: "OpenCode", aside: "Aside",
@@ -226,11 +231,7 @@ export function UsageAppsTable({ apps, locale, t }: { apps?: UsageApp[]; locale:
     other: t("usageV2.other"), unknown: t("usageV2.unknown"), unclassified: t("usageV2.unclassified"),
   };
   const disclaimerId = "usage-apps-list-price-disclaimer";
-  const wires: Record<NonNullable<UsageApp["legacyWire"]>, string> = {
-    responses: "Responses API", chat: "Chat Completions", messages: "Anthropic Messages",
-    claude: "Claude", "claude-desktop": "Claude Desktop", grok: "Grok",
-  };
-  const label = (app: UsageApp) => app.name ?? (app.legacyWire ? t("usageV2.legacyWire", { wire: wires[app.legacyWire] }) : names[app.client]);
+  const label = (app: UsageApp) => app.name ?? (app.legacyWire ? t("usageV2.legacyWire", { wire: LEGACY_WIRE_NAMES[app.legacyWire] }) : names[app.client]);
   return (
     <UsageWorkspaceSection title={t("usageV2.apps")} titleId="usage-apps-title" meta={apps ? String(apps.length) : undefined}>
       {!apps || apps.length === 0 ? (
