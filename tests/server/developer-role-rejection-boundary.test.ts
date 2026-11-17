@@ -27,12 +27,18 @@ beforeAll(() => {
   process.env.OPENCODEX_HOME = home;
   upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
     await req.text();
+    if (new URL(req.url).pathname.endsWith("/messages")) {
+      return Response.json({ type: "error", error: { type: "invalid_request_error", message: upstreamMessage } }, { status: 400 });
+    }
     return Response.json({ error: { message: upstreamMessage, type: "invalid_request_error", param: null, code: "invalid_request_error" } }, { status: 400 });
   } });
   releaseSpendHome = acquireOwnedSpendHome();
   saveConfig({
     port: 0, defaultProvider: "dsx",
-    providers: { dsx: { adapter: "openai-chat", baseUrl: upstream.url.origin + "/v1", authMode: "key", apiKey: "test-key", allowPrivateNetwork: true, models: ["m1"] } },
+    providers: {
+      dsx: { adapter: "openai-chat", baseUrl: upstream.url.origin + "/v1", authMode: "key", apiKey: "test-key", allowPrivateNetwork: true, models: ["m1"] },
+      dsa: { adapter: "anthropic", baseUrl: upstream.url.origin, authMode: "key", apiKey: "test-key", allowPrivateNetwork: true, models: ["claude-x"] },
+    },
   } as unknown as OcxConfig);
 });
 afterAll(() => {
@@ -42,7 +48,7 @@ afterAll(() => {
   if (home) removeTreeWithRetry(home);
 });
 
-async function exchange(stream: boolean) {
+async function exchange(stream: boolean, path = "/v1/chat/completions", body?: Record<string, unknown>) {
   const printed: string[] = [];
   const originals = { warn: console.warn, error: console.error, log: console.log, info: console.info };
   for (const name of ["warn", "error", "log", "info"] as const) console[name] = (...args: unknown[]) => { printed.push(args.map(String).join(" ")); };
@@ -51,9 +57,9 @@ async function exchange(stream: boolean) {
     server = startServer(0);
     const earlier = new Set(getRequestLogEntries().map(entry => entry.requestId));
     const before = existsSync(usageLogPath()) ? readFileSync(usageLogPath(), "utf8").length : 0;
-    const res = await fetch(new URL("/v1/chat/completions", server.url), {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: "dsx/m1", stream, messages: [{ role: "developer", content: "be terse" }, { role: "user", content: "hi" }] }),
+    const res = await fetch(new URL(path, server.url), {
+      method: "POST", headers: { "content-type": "application/json", "anthropic-version": "2023-06-01" },
+      body: JSON.stringify(body ?? { model: "dsx/m1", stream, messages: [{ role: "developer", content: "be terse" }, { role: "user", content: "hi" }] }),
     });
     const text = await res.text();
     const deadline = Date.now() + 5_000;
@@ -75,7 +81,7 @@ function clientMessage(text: string): string {
   return (JSON.parse(json) as { error: { message: string } }).error.message;
 }
 
-describe("native Chat developer-role rejection", () => {
+describe("developer-role rejection at the client boundary", () => {
   for (const stream of [false, true]) {
     test("stream=" + stream + " names the cause to the client and in the request log", async () => {
       upstreamMessage = DASHSCOPE;
@@ -92,6 +98,16 @@ describe("native Chat developer-role rejection", () => {
       }
     });
   }
+
+  test("a Messages client gets the same sentence without the provider text", async () => {
+    upstreamMessage = DASHSCOPE;
+    const result = await exchange(false, "/v1/messages", { model: "dsa/claude-x", max_tokens: 16, messages: [{ role: "user", content: "hi" }] });
+    expect(result.status).toBe(400);
+    expect(clientMessage(result.text)).toBe(DEVELOPER_ROLE_REFUSAL_MESSAGE);
+    for (const recorded of [result.text, JSON.stringify(result.rows), result.persisted, result.printed]) {
+      expect(recorded).not.toContain("is not one of");
+    }
+  });
 
   test("an unrelated 400 keeps the generic sentence and records no pair", async () => {
     upstreamMessage = UNRELATED;

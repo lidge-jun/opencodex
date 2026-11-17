@@ -82,8 +82,11 @@ export function projectLocalModelRefusalLog(
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
-/** The closed pair a developer-role rejection records (#8864); the dashboard already renders it. */
-const DEVELOPER_ROLE_VALIDATION: ValidationIssue[] = [{ field: "messages.role", type: "enum" }];
+/**
+ * The closed pair a developer-role rejection records (#8864); the dashboard already renders it. A fresh
+ * array per row, because a valid list is stored by reference and must not be shared between rows.
+ */
+const developerRoleValidation = (): ValidationIssue[] => [{ field: "messages.role", type: "enum" }];
 
 /**
  * Capture bounded schema facts before a 4xx is replaced by the client-facing error policy. Only a caller
@@ -105,7 +108,7 @@ export function recordUpstreamValidationDetail(
     : typeof record?.message === "string" ? record.message : typeof record?.error === "string" ? record.error : undefined;
   // Read once to choose the closed pair; the message itself is dropped here.
   const validation = upstreamValidationIssues(parsed)
-    ?? (options.providerBody && isDeveloperRoleRejection(status, message) ? DEVELOPER_ROLE_VALIDATION : undefined);
+    ?? (options.providerBody && isDeveloperRoleRejection(status, message) ? developerRoleValidation() : undefined);
   if (!validation) return;
   logCtx.failureDetail = boundedFailureDetail({ code: "provider_error", type: nested?.type ?? record?.type, validation });
 }
