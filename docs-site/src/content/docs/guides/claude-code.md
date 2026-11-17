@@ -820,6 +820,9 @@ default) fixes that:
    is within the client's supported range. Switching with `/model` selects the corresponding
    compact window. No Claude Code settings file is written. With no eligible smaller window,
    the launcher retains the existing `CLAUDE_CODE_AUTO_COMPACT_WINDOW` injection.
+   Generated keys are limited to gateway-discovered model IDs and the launcher's model slots.
+   Serialized settings above 4,000 characters on Windows or 32,000 elsewhere also fall back
+   to the existing environment-variable injection; per-model windows are not applied then.
 
 An explicitly exported `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `--autocompact`, or `--settings`
 keeps precedence and disables generated per-model settings. Existing `--settings` JSON/file
@@ -828,6 +831,11 @@ Code to interpret; the launcher neither reads nor rewrites those files. This app
 `ocx claude` launches, not native fallback, Desktop, or plain `claude` launches. The
 `modelUsage.contextWindow` accounting field can still differ from the working compact window
 shown by `/context`.
+
+Generated session-only `--settings` take precedence over `autoCompactWindow` and
+`modelSettings` in user/project settings files. The files are not read by this launcher helper.
+To retain a file's compact policy, explicitly pass it with `--settings <file>` (which skips
+injection), or supply `--autocompact` or an explicit compact environment variable.
 
 Three config states:
 
