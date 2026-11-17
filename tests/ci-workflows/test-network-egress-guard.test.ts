@@ -128,6 +128,19 @@ describe("the test network guard (#8848)", () => {
     socket.close();
   });
 
+  test("a WebSocket over a Unix socket (ws+unix:) stays local and is not rewritten", () => {
+    // Local messaging connects to its daemon this way; refusing it broke every messaging suite.
+    const url = "ws+unix:///nonexistent/opencodex-test-network-guard-allowed.sock:/";
+    const socket = new WebSocket(url);
+    socket.onerror = () => {};
+    try {
+      expect(socket.url).not.toBe(REFUSED_WEBSOCKET_URL);
+      expect(socket.url).toBe(url);
+    } finally {
+      socket.close();
+    }
+  });
+
   test("schemes that reach the network without an HTTP host (s3:) are refused", async () => {
     await expect(fetch("s3://fixture-bucket/key")).rejects.toMatchObject({ code: "ECONNREFUSED" });
     expect(await (await fetch("data:text/plain,local")).text()).toBe("local");
