@@ -501,6 +501,14 @@ describe("devin adapter window fallback", () => {
     expect(resolveInputCeiling(windowOnly, "devin", "swe-1-7")).toBe(111_000);
   });
 
+  test("the dotted-key fallback folds case like the exact-spelling lookup", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "devin", baseUrl: "https://devin.test", contextWindow: 900_000,
+      modelMaxInputTokens: { "SWE-1.7": 100_000 },
+    };
+    expect(resolveInputCeiling(provider, "devin", "swe-1-7-medium")).toBe(100_000);
+  });
+
   test("non-devin adapters stay unresolved", () => {
     const other: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://example.test/v1" };
     expect(resolveInputCeiling(other, "custom", "swe-2-flash")).toBeNull();

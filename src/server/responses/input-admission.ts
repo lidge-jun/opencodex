@@ -189,8 +189,10 @@ function devinRecordValue(record: Record<string, number> | undefined, modelId: s
   if (!record) return null;
   // Exact spellings missed; fold dotted record keys only now so an exact key always wins.
   for (const target of new Set([normalized, collapsed])) {
+    // Fold case too, like modelRecordValue's exact-spelling lookup.
+    const folded = target.toLowerCase();
     for (const [key, raw] of Object.entries(record)) {
-      if (key.replace(/\./g, "-") !== target) continue;
+      if (key.replace(/\./g, "-").toLowerCase() !== folded) continue;
       const value = positive(raw);
       if (value !== null) return value;
     }
