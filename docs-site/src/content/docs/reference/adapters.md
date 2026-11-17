@@ -497,6 +497,9 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
   is Google's — the proxy does not route around it.
 - System prompt → `systemInstruction`; messages → `contents[]` (assistant → `model`); tools →
   `functionDeclarations`. Data-URL images → `inline_data`.
+- The shared tool-catalog guidance uses wording verified with Antigravity Gemini 3.8 Flash to
+  avoid a prompt-triggered `429 RESOURCE_EXHAUSTED`. The available tools, argument constraints,
+  and Codex code-mode helper rules stay the same. This does not suppress real quota errors.
 - Tool-call ids are synthesized when Gemini omits them. Vertex and Antigravity preserve and replay
   opaque `thoughtSignature` values so tool-result continuations retain Gemini reasoning continuity.
   The signature cache is snapshotted to the config directory, so continuations also survive proxy
@@ -597,8 +600,9 @@ Use `liveModels: false` for a static catalog; Settings can switch between the tw
 - Strips the JSON Schema keywords Kiro's validator rejects (`pattern`, `minLength`, `maximum`,
   `additionalProperties` and 25 others) from tool and structured-output schemas, except the
   keywords a probe measured a model taking. `claude-opus-4.5` keeps all of them. `claude-opus-5.5`
-  and `claude-sonnet-5.5` keep `pattern` and `maximum`; their other keywords stay stripped, because no
-  probe sent them to those models. Every other Kiro
+  keeps the twelve keywords the Claude Desktop and Claude Code catalogs carry (`$schema`, `additionalProperties`, `pattern`, `format`, `minLength`, `maxLength`, `minimum`, `maximum`, `exclusiveMinimum`, `minItems`, `maxItems`, `propertyNames`),
+  measured on production traffic; `claude-sonnet-5.5` keeps `pattern` and `maximum`. Their other keywords
+  stay stripped, because nothing sent them to those models. Every other Kiro
   model, including the other Claude ids, keeps the full strip. The exception is per model and per
   keyword because this wire already separates Claude models on reasoning effort, and a keyword
   Kiro rejects fails the whole request rather than just costing the model a hint.

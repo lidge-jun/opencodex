@@ -111,7 +111,8 @@ state is read from `schtasks /query /fo CSV`. The status words observed from shi
 ko-KR resources are recognized there (#8863), because a cold `Get-ScheduledTask` takes 1.6 s to
 4.9 s and cannot finish inside the 1 s cap; any other localized word still falls back to it. A
 `schtasks /end` that fails with a localized message is `not-running` only when the same CSV read,
-inside the end command's own cap, shows the task idle. A running WinSW service is only this home's manager
+inside the end command's own cap, shows the task idle; a zh-CN or ko-KR access denial stays
+`denied` without that read. A running WinSW service is only this home's manager
 when `sc qc` shows a `BINARY_PATH_NAME` naming this installation's WinSW executable, the same
 proof the guarded manager path uses: the service ID is fixed, so a successful `sc query` alone
 would let Part A stop another installation's service. An unreadable registration is `unknown`

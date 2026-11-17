@@ -140,6 +140,12 @@ describe("capped command answers", () => {
     const english = idleEnd(null, result(1, "", "ERROR: There is no running instance of the task."));
     expect(await english.ended).toBe("not-running");
     expect(english.programs).toEqual(["schtasks /end"]);
+    // A localized denial stays denied even when the task reads idle, and never queries again.
+    for (const denial of ["错误: 拒绝访问。", "오류: 액세스가 거부되었습니다."]) {
+      const denied = idleEnd('"\\opencodex-proxy","N/A","就绪"', result(1, "", denial));
+      expect(await denied.ended).toBe("denied");
+      expect(denied.programs).toEqual(["schtasks /end"]);
+    }
   });
 
   test("sc.exe query and stop", () => {

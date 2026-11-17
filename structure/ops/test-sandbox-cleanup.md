@@ -211,7 +211,11 @@ connection failure, the same answer an offline runner gives.
   `node:http` are covered too. A refused WebSocket is redirected to a Unix path that does not
   exist, so it dispatches `error` and `close` without dialing.
 - Allowed: loopback and wildcard addresses, `localhost` and `*.localhost`, the reserved `.test`,
-  `.example` and `.invalid` names, Unix sockets, and a fetch or WebSocket whose proxy is loopback.
+  `.example` and `.invalid` names, Unix sockets, `data:`/`blob:`/`file:` fetches, and a fetch or
+  WebSocket whose proxy is loopback. An explicit non-loopback proxy is refused whatever the target,
+  and any other fetch scheme (`s3:`) is refused. Followed redirects are walked one hop at a time,
+  because real fetch follows them internally past both hooks; every hop must pass, the final
+  response keeps `redirected`, and `redirect: "manual"` / `"error"` callers are untouched.
   `allowOwnInterfaceAddressesForTest()` admits this machine's own interface addresses until its
   returned function runs; only `tests/server/loopback-listener-integration.test.ts` needs it.
 - Child processes never run the preload. Pass `NETWORK_EGRESS_GUARD_PRELOAD` as `--preload` to a

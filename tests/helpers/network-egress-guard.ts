@@ -72,16 +72,28 @@ export function isTestEgressAllowed(rawHost: string | null | undefined): boolean
   return RESERVED_SUFFIXES.some(suffix => host.endsWith(suffix));
 }
 
-function urlHostAllowed(raw: string | URL): { allowed: boolean; label: string } {
+const LOCAL_FETCH_SCHEMES = new Set(["data:", "blob:", "file:"]);
+const NETWORK_SCHEMES = new Set(["http:", "https:", "ws:", "wss:"]);
+/** WebSocket over a Unix socket (local messaging daemons): it never leaves this machine. */
+const UNIX_SOCKET_SCHEMES = new Set(["ws+unix:", "wss+unix:"]);
+
+function urlHostAllowed(raw: string | URL): { allowed: boolean; label: string; parsed: boolean } {
   let url: URL;
-  try { url = typeof raw === "string" ? new URL(raw) : raw; } catch { return { allowed: true, label: "" }; }
-  if (!["http:", "https:", "ws:", "wss:"].includes(url.protocol)) return { allowed: true, label: url.protocol };
-  return { allowed: isTestEgressAllowed(url.hostname), label: url.protocol + "//" + url.hostname };
+  try { url = typeof raw === "string" ? new URL(raw) : raw; } catch { return { allowed: true, label: "", parsed: false }; }
+  if (LOCAL_FETCH_SCHEMES.has(url.protocol) || UNIX_SOCKET_SCHEMES.has(url.protocol)) return { allowed: true, label: url.protocol, parsed: true };
+  // Any other scheme Bun can fetch (s3:) reaches the network without a host this guard can judge.
+  if (!NETWORK_SCHEMES.has(url.protocol)) return { allowed: false, label: url.protocol + "//" + url.host, parsed: true };
+  return { allowed: isTestEgressAllowed(url.hostname), label: url.protocol + "//" + url.hostname, parsed: true };
+}
+
+/** A proxy option that actually routes the request; null, false, "" and absent mean none. */
+function hasExplicitProxy(proxy: unknown): boolean {
+  return proxy !== undefined && proxy !== null && proxy !== false && proxy !== "";
 }
 
 function proxyAllowed(proxy: unknown): boolean {
-  if (proxy === undefined || proxy === null || proxy === "") return false;
-  const raw = typeof proxy === "string" ? proxy : typeof proxy === "object" && "url" in proxy ? String((proxy as { url: unknown }).url) : null;
+  if (!hasExplicitProxy(proxy)) return false;
+  const raw = typeof proxy === "string" ? proxy : typeof proxy === "object" && proxy !== null && "url" in proxy ? String((proxy as { url: unknown }).url) : null;
   if (raw === null) return false;
   try { return isTestEgressAllowed(new URL(raw).hostname); } catch { return false; }
 }
@@ -102,6 +114,50 @@ function connectTarget(args: unknown[]): { host?: string; path?: string } {
   return { host: typeof second === "string" ? second : undefined };
 }
 
+type GuardedInit = RequestInit & { proxy?: unknown; unix?: unknown };
+
+const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
+const MAX_REDIRECTS = 20;
+const BODY_HEADERS = ["content-type", "content-length", "content-encoding", "content-language", "content-location"];
+
+/**
+ * Follow redirects one hop at a time so every destination passes the guard: real fetch follows
+ * them internally, past both this wrapper and the patched socket API, so a loopback fixture that
+ * redirected to a public host would otherwise carry the request off the machine.
+ */
+async function followGuardedRedirects(realFetch: typeof fetch, self: unknown, start: Request, init: GuardedInit | undefined, label: string): Promise<Response> {
+  const { method: _method, headers: _headers, body: _body, redirect: _redirect, ...extras } = init ?? {};
+  let request = start;
+  for (let hop = 0; ; hop++) {
+    const replay = request.clone();
+    const response = await realFetch.call(self, request, { ...extras, redirect: "manual" } as RequestInit);
+    const location = response.headers.get("location");
+    if (!REDIRECT_STATUSES.has(response.status) || location === null) {
+      if (hop > 0) Object.defineProperty(response, "redirected", { value: true });
+      return response;
+    }
+    await response.body?.cancel();
+    const next = new URL(location, request.url);
+    const target = urlHostAllowed(next);
+    if (!target.allowed) throw refusal(target.label + " (redirected from " + label + ")");
+    if (hop >= MAX_REDIRECTS) throw new TypeError("fetch: too many redirects");
+    const toGet = response.status === 303
+      ? replay.method !== "GET" && replay.method !== "HEAD"
+      : (response.status === 301 || response.status === 302) && replay.method === "POST";
+    const headers = new Headers(replay.headers);
+    if (toGet) for (const name of BODY_HEADERS) headers.delete(name);
+    // A cross-origin hop drops credentials, as the Fetch standard does.
+    if (next.origin !== new URL(request.url).origin) headers.delete("authorization");
+    request = new Request(next, {
+      method: toGet ? "GET" : replay.method,
+      headers,
+      body: toGet ? null : replay.body,
+      signal: replay.signal,
+      duplex: "half",
+    } as RequestInit);
+  }
+}
+
 /** Preload file for child Bun processes, which never run tests/preload.ts. */
 export const NETWORK_EGRESS_GUARD_PRELOAD = join(import.meta.dir, "network-egress-guard-preload.ts");
 
@@ -112,11 +168,18 @@ export function installNetworkEgressGuard(): void {
   registry[INSTALLED] = true;
 
   const realFetch = globalThis.fetch;
-  const guardedFetch = function (this: unknown, input: RequestInfo | URL, init?: RequestInit & { proxy?: unknown; unix?: unknown }): Promise<Response> {
+  const guardedFetch = async function (this: unknown, input: RequestInfo | URL, init?: GuardedInit): Promise<Response> {
     const raw = input instanceof Request ? input.url : input instanceof URL ? input : String(input);
-    const { allowed, label } = urlHostAllowed(raw);
-    if (!allowed && !(init?.unix) && !proxyAllowed(init?.proxy)) return Promise.reject(refusal(label));
-    return realFetch.call(this, input, init);
+    const proxied = hasExplicitProxy(init?.proxy);
+    // A public proxy receives the request line and headers whatever the target is.
+    if (proxied && !proxyAllowed(init?.proxy)) throw refusal("a non-loopback proxy");
+    const first = urlHostAllowed(raw);
+    if (!first.allowed && !init?.unix && !proxied) throw refusal(first.label);
+    const mode = init?.redirect ?? (input instanceof Request ? input.redirect : "follow");
+    // Through a loopback proxy or a Unix socket every hop stays on this machine; an unparseable URL
+    // keeps real fetch's own error.
+    if (mode !== "follow" || proxied || init?.unix || !first.parsed) return realFetch.call(this, input, init);
+    return followGuardedRedirects(realFetch, this, new Request(input as RequestInfo, init), init, first.label);
   };
   Object.assign(guardedFetch, realFetch);
   globalThis.fetch = guardedFetch as typeof fetch;
@@ -126,7 +189,7 @@ export function installNetworkEgressGuard(): void {
     constructor(url: string | URL, options?: unknown) {
       const opts = options as { proxy?: unknown } | string | string[] | undefined;
       const proxy = opts !== null && typeof opts === "object" && !Array.isArray(opts) ? opts.proxy : undefined;
-      const allowed = urlHostAllowed(url).allowed || proxyAllowed(proxy);
+      const allowed = hasExplicitProxy(proxy) ? proxyAllowed(proxy) : urlHostAllowed(url).allowed;
       super(allowed ? url : REFUSED_WEBSOCKET_URL, options as never);
     }
   }
