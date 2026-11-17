@@ -665,3 +665,23 @@ export function channelTargetsForPut<T extends { provider: string; model: string
     return { ...target, lastResort: channel?.lastResort === true };
   });
 }
+
+/**
+ * Overview saves keep what the row does not show. `toPutBody` sends weights and the sticky
+ * limit only for the strategies that use them, and the server stores what it is sent, so a
+ * round-robin combo switched to failover from the row (or edited there) would lose both.
+ * Non-default values ride along so switching back restores them. Targets map 1:1 to `item`.
+ */
+export function withIdleRoutingFields<C extends { targets: Array<{ weight?: number }>; stickyLimit?: number }>(
+  combo: C,
+  item: { stickyLimit: number; targets: readonly { weight?: number }[] },
+): C {
+  return {
+    ...combo,
+    targets: combo.targets.map((target, index) => {
+      const weight = item.targets[index]?.weight;
+      return target.weight === undefined && weight !== undefined && weight !== 1 ? { ...target, weight } : target;
+    }),
+    ...(combo.stickyLimit === undefined && item.stickyLimit !== 1 ? { stickyLimit: item.stickyLimit } : {}),
+  };
+}

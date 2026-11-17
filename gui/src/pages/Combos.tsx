@@ -33,6 +33,7 @@ import {
   channelQuota,
   quotaWindowsByProvider,
   channelTargetsForPut,
+  withIdleRoutingFields,
   capabilitySource,
   parseCapabilitySources,
   parseInferredCapabilities,
@@ -527,11 +528,13 @@ export default function Combos({
           ? { visionSidecarTargets: comboVisionSidecarTargets(item.targets, capabilityModels) }
           : {}),
       });
+      // Overview saves (row strategy pick, channel editor) keep idle weights and sticky limit.
+      const kept = overview ? { ...body, combo: withIdleRoutingFields(body.combo, item) } : body;
       // Only the channel editor sends `lastResort`; every other save omits it and the server keeps it.
       // Capability fields go out only when the operator changed them in the channel editor.
       const wire = channels
-        ? { ...body, combo: { ...body.combo, targets: channelTargetsForPut(body.combo.targets, channels), ...overview?.capability } }
-        : body;
+        ? { ...kept, combo: { ...kept.combo, targets: channelTargetsForPut(kept.combo.targets, channels), ...overview?.capability } }
+        : kept;
       const res = await fetch(`${apiBase}/api/combos`, {
         method: "PUT",
         headers: { "content-type": "application/json" },

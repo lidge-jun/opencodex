@@ -3,6 +3,7 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import type { Root } from "react-dom/client";
 import { resolveAppHashChange } from "../src/app-routing";
+import { clearClientResourceStoresForTests } from "../src/client-resource";
 import { toPutBody, type ComboItem } from "../src/combo-workspace-data";
 import { LanguageProvider } from "../src/i18n/provider";
 import Combos from "../src/pages/Combos";
@@ -34,6 +35,7 @@ import {
   moveChannel,
   planStrategyChange,
   quotaTone,
+  withIdleRoutingFields,
 } from "../src/route-board-model";
 import { chooseOption } from "./helpers/custom-select";
 
@@ -207,6 +209,16 @@ describe("route board model", () => {
     )).toEqual([{ provider: "p", model: "1", weight: 2, lastResort: false }, { provider: "q", model: "2", lastResort: true }]);
   });
 
+  test("overview saves keep non-default weights and sticky limit the PUT body left out", () => {
+    const item = { stickyLimit: 5, targets: [{ weight: 3 }, { weight: 1 }, {}] };
+    expect(withIdleRoutingFields({ targets: [{ provider: "p" }, { provider: "q" }, { provider: "r" }] }, item))
+      .toEqual({ targets: [{ provider: "p", weight: 3 }, { provider: "q" }, { provider: "r" }], stickyLimit: 5 });
+    // Weighted strategies already send their own values; nothing is overridden.
+    expect(withIdleRoutingFields({ targets: [{ weight: 7 }], stickyLimit: 2 }, { stickyLimit: 5, targets: [{ weight: 3 }] }))
+      .toEqual({ targets: [{ weight: 7 }], stickyLimit: 2 });
+    expect(withIdleRoutingFields({ targets: [{}] }, { stickyLimit: 1, targets: [{}] })).toEqual({ targets: [{}] });
+  });
+
   test("context windows read as tokens", () => {
     expect([formatContextWindow(1_000_000), formatContextWindow(1_048_576), formatContextWindow(1_500_000), formatContextWindow(128_000)]).toEqual(["1M", "1M", "1.5M", "128K"]);
   });
@@ -329,6 +341,8 @@ beforeEach(() => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   root = null;
   probeReply = "ok";
+  // The combos resource store is module-level: a test with its own payload must not seed the next.
+  clearClientResourceStoresForTests();
   installFetch();
 });
 
@@ -411,6 +425,33 @@ describe("Combos overview page", () => {
       },
     }]);
     expect(JSON.stringify(calls[0]!.body)).not.toContain("lastResort");
+  });
+
+  test("switching a weighted combo to failover from the row keeps its weights and sticky limit", async () => {
+    const gamma = combo("gamma", [], {
+      strategy: "round-robin",
+      stickyLimit: 5,
+      targets: [{ provider: "openai", model: "gpt-5", weight: 3 }, { provider: "anthropic", model: "claude" }],
+    });
+    combosPayload = { combos: [{ ...toPutBody(gamma).combo, id: "gamma", model: "combo/gamma" }] };
+    await renderPage();
+    await chooseOption(strategyTrigger("gamma"), "failover");
+    await flush();
+    expect(calls).toEqual([{
+      url: "/api/combos",
+      method: "PUT",
+      body: {
+        id: "gamma",
+        combo: {
+          targets: [{ provider: "openai", model: "gpt-5", weight: 3 }, { provider: "anthropic", model: "claude" }],
+          strategy: "failover",
+          stickyLimit: 5,
+          defaultEffort: null,
+          imageInput: "auto",
+          reasoningEffortMode: "strict",
+        },
+      },
+    }]);
   });
 
   test("picking JEV saves nothing and opens the advanced editor on that combo", async () => {
