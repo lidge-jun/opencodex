@@ -29,14 +29,14 @@ Platform bugs and #8848 come first.
 | #8848 fixture credentials to real hosts | issue | CARRY (wp5) | Confirmed on this host (chatgpt.com wss, wham/usage, auth.openai.com/oauth/token, api.githubcopilot.com via node:https). A preload egress guard refuses non-local targets; leaking files that depend on the real answer get seams. |
 | #8852 host-install dependent suites | issue | DEFER | Five suites read ambient host process and install state; each needs its own isolation seam and a host that reproduces it. Not bounded for this lane. |
 | #8853 server suites time out under load | issue | DEFER | `tests/helpers/test-budget.ts` forbids raising a budget unless the wait is intrinsic; server-images and server-search are in the #8848 leak set (chatgpt.com wss), so re-measure after the guard lands. |
-| #8817 [draft] Windows stop owner filter | PR | decided in wp6 | C4 (termination authority). Needs an independent security review before any carry; the author still marks it draft pending maintainer security review and a Windows run of its new PowerShell cases. |
+| #8817 [draft] Windows stop owner filter | PR | DEFER | Independent security review: SAFE-WITH-FIXES. Termination candidates only shrink, but the foreign-owner exclusion also drops wrappers from the confirmation paths (`windowsHomeWrapperPids`, Part B `unnamed`, `wrapperProcessesAlive`), so a stop run from another account (a separate-admin shell) can report freed while this home's wrapper still lives. The fix compares against the task/install account instead of the stop process's identity; it needs a cross-user Windows run the lane cannot do. |
 | #8746 [draft] /dev/null git config on Windows | PR | CARRY (wp3) | Test-only, sound; Git for Windows 2.56 rejects `NUL`. Carried with author credit. |
 | #8851 MCP wait bound barrier | PR | MERGE-READY | head 35200782988a; test-only; independent review on the merged tree: 15 pass, typecheck clean. |
 | #8834 link post-proof fixtures | PR | MERGE-READY | head 0fbc43b8f086; test-only; 26 pass on merged tree. |
 | #8800 usage cooperative decoding | PR | MERGE-READY | head 1743a9314768; 186 pass on merged tree; new cases fail on base. |
 | #8801 ocx-child WS event retention | PR | MERGE-READY | head bf259f16c346; cargo lib 57 pass, feature-gated 56 + 5 integration pass. |
 | #8804 kiro linear catalog admission | PR | MERGE-READY | head 6d0cf4653d56; 77 pass; new cases fail on base. |
-| #8810 eager catalog diagnostic budget | PR | MERGE-READY (security check of its mask-test rewrite in flight) | head f50f78a503e1; 161 pass; new cases fail on base. |
+| #8810 eager catalog diagnostic budget | PR | MERGE-READY | head f50f78a503e1; 161 pass on merged tree; new cases fail on base; fresh security review of its credential-mask test rewrite: SAFE (no-leak assertion kept, exact payload added, spy restored in finally). |
 
 ## Work-phase map (dependency order)
 
@@ -49,5 +49,6 @@ Platform bugs and #8848 come first.
 | wp5 | 050_phase5_8848_test_egress_guard.md | #8848 |
 | wp6 | 060_phase6_pr_carries.md | #8817 and any PR the review returns as NOT-READY but carryable |
 | wp7 | 070_phase7_lane_pr.md | verification, lane PR, exact-head checks, report |
+
 
 

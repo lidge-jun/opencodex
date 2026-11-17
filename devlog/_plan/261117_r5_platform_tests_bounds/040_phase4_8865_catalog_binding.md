@@ -15,8 +15,8 @@ needs a maintainer decision; this record is what a later lane executes.
   (`config-toml.ts:602-604`), so a relative value stays "ours".
 - Breaks if the journal records a relative path: `src/codex/catalog/restore.ts:76` passes
   `injectedCatalogPath` raw to `readCatalog` and `catalogBackupPathFor` (cwd-relative);
-  `src/codex/inject/restore.ts:742,854` publish the raw path and `catalog-self-heal.ts:252-274`
-  stat-compares it. `journal-config-restore.ts:160-175` compares raw strings, so a mixed
+  `src/codex/inject/restore.ts:742,854` publish the raw path and `catalog-self-heal.ts:143,167`
+  compares it through `compareCatalogHealPaths`. `journal-config-restore.ts:160-175` compares raw strings, so a mixed
   absolute/relative pair loses the exact preimage and falls back to the owned-fields strip.
 - Upstream: `model_catalog_json` arrived as `Option<AbsolutePathBuf>` in openai/codex #12101
   (rust-v0.105.0), after relative resolution against the config base landed in #7796

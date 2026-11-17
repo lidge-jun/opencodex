@@ -11,7 +11,8 @@ Invalid argument`), so every fixture repository and the config guard fail on Win
 ## Diff (from the PR, rebased onto the base)
 
 - MODIFY tests/helpers/git-fixture.ts: export `EMPTY_GLOBAL_GIT_CONFIG = "/dev/null"` with the
-  reason; `fixtureGitEnv` uses it.
+  reason (Git for Windows maps it in compat/mingw.c on open; a missing file is fatal for
+  `git config --global --list`, so it is not a fallback); `fixtureGitEnv` uses it.
 - MODIFY tests/helpers/git-config-guard.ts: import the constant; drop the local `NUL` branch.
 - MODIFY tests/ci-workflows/test-git-isolation.test.ts: oracle env and assertion use the constant;
   NEW case runs the installed git with `fixtureGitEnv()` (`git config --global --list`) and
