@@ -18,6 +18,7 @@ import { formatClock, formatDuration } from "./route-format";
 import { rowKey, type RouteRow } from "./route-rows";
 import type { GroupMode } from "./request-groups";
 import { useAccountNames, useRouteRows } from "./use-route-live";
+import { modelsTabHash } from "../models-tab";
 import "./route-live.css";
 
 function OutcomeLine({ outcome, row }: { outcome: FlowOutcome; row: RouteRow }) {
@@ -104,7 +105,7 @@ function Selected({ row, flow, pinned, onBack }: { row: RouteRow; flow: RouteFlo
       <PoolLine row={row} />
       {flow.outcome.kind !== "local" && <TimeSection row={row} />}
       <ContextCard row={row} />
-      {row.routeDecision?.routeKind === "combo" && <p className="rl-muted"><a href="#models/combos">{t("routeLive.linkCombos")}</a></p>}
+      {row.routeDecision?.routeKind === "combo" && <p className="rl-muted"><a href={`#${modelsTabHash("combos")}`}>{t("routeLive.linkCombos")}</a></p>}
     </section>
   );
 }

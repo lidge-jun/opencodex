@@ -95,8 +95,14 @@
 }
 .rl-ctx-cache { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin: 0; font-size: var(--text-label); }
 .rl-ctx-cache-head { color: var(--muted); }
-.rl-ctx-meter { flex: 0 1 160px; min-width: 80px; height: 6px; border-radius: var(--radius-2xs); overflow: hidden; background: var(--raised); border: 1px solid var(--border); }
-.rl-ctx-meter > i { display: block; height: 100%; background: var(--green); }
+/* A native <meter>: each engine's pseudo-elements sit in their own rule, since one unknown
+   selector drops the whole rule. */
+.rl-ctx-meter { appearance: none; display: block; flex: 0 1 160px; min-width: 80px; height: 6px; margin: 0; border-radius: var(--radius-2xs); overflow: hidden; background: var(--raised); border: 1px solid var(--border); }
+.rl-ctx-meter::-webkit-meter-bar { height: 100%; border: 0; border-radius: 0; background: var(--raised); }
+.rl-ctx-meter::-webkit-meter-optimum-value { background: var(--green); }
+.rl-ctx-meter::-webkit-meter-suboptimum-value { background: var(--green); }
+.rl-ctx-meter::-webkit-meter-even-less-good-value { background: var(--green); }
+.rl-ctx-meter::-moz-meter-bar { background: var(--green); }
 .rl-ctx-kind--system { --k: var(--rl-ctx-system); }
 .rl-ctx-kind--tools { --k: var(--blue); }
 .rl-ctx-kind--skills { --k: var(--muted); }

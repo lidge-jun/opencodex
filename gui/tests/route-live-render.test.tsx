@@ -124,7 +124,7 @@ test("context card shows the used/window header, one bar segment per filled part
   expect(doc.querySelector(".rl-ctx-legend li .rl-num")?.textContent).toContain("10%");
   expect(doc.querySelector(".rl-ctx-cache")?.textContent).toContain("命中 50%");
   expect(doc.querySelector(".rl-ctx-cache")?.textContent).toContain("已缓存");
-  expect(doc.querySelector(".rl-ctx-meter")?.getAttribute("aria-valuenow")).toBe("50");
+  expect(doc.querySelector("meter.rl-ctx-meter")?.getAttribute("value")).toBe("50");
 });
 
 test("context card says so when the window is unknown, the sizes are estimated, the cache is unreported or the history is held", () => {

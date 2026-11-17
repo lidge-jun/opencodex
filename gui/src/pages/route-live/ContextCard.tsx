@@ -43,12 +43,7 @@ function CacheMeter({ row }: { row: RouteRow }) {
     <div className="rl-ctx-cache">
       <span className="rl-ctx-cache-head">{t("routeLive.ctxCacheHead")}</span>
       <strong>{t("routeLive.ctxCacheHit", { pct: formatPercent(percent, localeTag) })}</strong>
-      <div
-        className="rl-ctx-meter" role="meter" aria-label={t("routeLive.ctxCacheHead")}
-        aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(percent)}
-      >
-        <i style={{ width: `${percent.toFixed(1)}%` }} />
-      </div>
+      <meter className="rl-ctx-meter" aria-label={t("routeLive.ctxCacheHead")} min={0} max={100} value={Math.round(percent)} />
       <span className="rl-muted">
         {t("routeLive.ctxCacheSplit", {
           cached: formatCount(meter.read, localeTag), fresh: formatCount(meter.total - meter.read, localeTag),
