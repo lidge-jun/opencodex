@@ -264,7 +264,13 @@ describe("runResolve", () => {
         stderr: { error: value => errors.push(value) },
       });
       expect(code).toBe(1);
-      expect(lines).toEqual([]);
+      // --json still owes the caller one document on stdout (#8318): a structured refusal.
+      expect(lines.map(line => JSON.parse(line))).toEqual([{
+        schema: "ocx-resolve/1",
+        ok: false,
+        reason: "liveness_unknown",
+        error: errors[0],
+      }]);
       expect(errors.join("\n")).toContain("unknown");
     }
   });
@@ -308,7 +314,7 @@ describe("runResolve", () => {
     expect((JSON.parse(lines[0]!) as { liveness: { status: string } }).liveness.status).toBe("absent-proven");
   });
 
-  test("a config read failure exits 1 with nothing on stdout", async () => {
+  test("a config read failure exits 1 with a structured failure on stdout", async () => {
     const lines: string[] = [];
     const errors: string[] = [];
     const code = await runResolve({ json: true }, {
@@ -321,9 +327,31 @@ describe("runResolve", () => {
       stderr: { error: value => errors.push(value) },
     });
     expect(code).toBe(1);
-    expect(lines).toEqual([]);
+    expect(lines.map(line => JSON.parse(line))).toEqual([{ schema: "ocx-resolve/1", ok: false, reason: "config_unreadable", error: errors[0] }]);
     expect(errors.join("\n")).toContain("config.json is not readable");
   });
+
+  test("a discovery failure is a structured refusal under --json and silent on stdout otherwise (#8318)", async () => {
+    for (const json of [true, false]) {
+      const lines: string[] = [];
+      const errors: string[] = [];
+      const code = await runResolve({ json }, {
+        configDir: () => "/h",
+        readDiagnostics: () => ({ config: {}, source: "default", error: null } as ConfigDiagnostics),
+        findLive: async () => { throw new Error("pid file unreadable"); },
+        cliVersion: () => "1.2.3",
+        ...ioOwnership(),
+        stdout: { log: value => lines.push(value) },
+        stderr: { error: value => errors.push(value) },
+      });
+      expect(code).toBe(1);
+      expect(errors).toEqual(["resolve failed: pid file unreadable"]);
+      expect(lines.map(line => JSON.parse(line))).toEqual(json
+        ? [{ schema: "ocx-resolve/1", ok: false, reason: "discovery_failed", error: errors[0] }]
+        : []);
+    }
+  });
+
 
   test("an invalid config is refused, not repaired to defaults", async () => {
     // loadConfig repairs a broken config to factory defaults; a shell contract must not
@@ -342,7 +370,7 @@ describe("runResolve", () => {
       stderr: { error: value => errors.push(value) },
     });
     expect(code).toBe(1);
-    expect(lines).toEqual([]);
+    expect(lines.map(line => JSON.parse(line))).toEqual([{ schema: "ocx-resolve/1", ok: false, reason: "config_invalid", error: errors[0] }]);
     expect(errors.join("\n")).toContain("refusing to guess");
     // No liveness probe may run against a guessed port.
     expect(probed).toBe(false);

@@ -275,7 +275,7 @@ describe("meta-muse plan refusal: documentation and registry", () => {
   });
 
   test("the English provider guide and adapter reference say it before a user hits it", () => {
-    const guide = readFileSync(repoPath("docs-site/src/content/docs/guides/providers.md"), "utf8");
+    const guide = readFileSync(repoPath("docs-site/src/content/docs/guides/api-key-catalog.md"), "utf8");
     const adapters = readFileSync(repoPath("docs-site/src/content/docs/reference/adapters.md"), "utf8");
     expect(guide).toContain("This API key is billed to a Muse Code subscription");
     expect(guide).toContain("plan restriction");

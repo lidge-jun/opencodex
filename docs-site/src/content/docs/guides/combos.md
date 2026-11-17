@@ -847,6 +847,13 @@ returned to the client and is never replayed on another provider, which prevents
 execution. If the pre-output buffer reaches its safety cap without a terminal or output boundary,
 OpenCodex also commits the current target instead of growing memory without a bound.
 
+A streaming HTTP `POST /v1/responses` request (WebSocket excluded) whose target selection takes longer than 15 seconds gets an HTTP 200
+event-stream head and `: keepalive` comments every 15 seconds while the combo keeps choosing, so an
+idle-limited proxy does not close it. From that point a failure of every target arrives as an
+in-stream `response.failed` with the same `error.code` (for example `combo_unavailable`) instead of
+an HTTP error status. Faster selections keep the real HTTP status. See
+[Combo selection keepalive](/reference/configuration/server/#combo-selection-keepalive).
+
 ## Request-local target compatibility
 
 When routing Claude Code to the canonical ChatGPT Codex backend, OpenCodex removes the unsupported top-level `user` metadata field without changing the session/cache key, input messages, tool schemas, or safety identifiers. Public Responses API and noncanonical forward gateways keep that field.
@@ -1130,6 +1137,16 @@ why each target was skipped, for example
 When a cooling target sets the earliest recovery, the response carries it in `Retry-After` and the
 message names the same wait, for example `(retry in ~2m)`, so a client that hides the header still
 shows it. The Claude Messages listener adds the same wait to its fixed combo sentence.
+On `/v1/responses`, the `combo_unavailable` error also carries a machine-readable `combo` object, for
+example `"combo": { "cause": "mixed", "targets": 3, "attempted": 0, "causes": { "quota": 2, "permission": 1 } }`.
+`cause` is one class shared by every skipped target (a target already dispatched is classified only as `unsupported` after refusing a mandatory `tool_choice`), `mixed` when they differ, or `unknown` when none was
+classified. The classes are `quota` (cached quota spent, or a cooldown set by a 429 or 402), `permission` (a
+cooldown set by a 401 or 403), `transient` (any other cooldown), `unsupported` (the target cannot serve this
+request, including a mandatory `tool_choice` no target preserves) and `unavailable` (provider missing or
+disabled). `targets` counts the configured targets, `attempted` the targets dispatched to a child attempt (a child may refuse before any upstream send), and `causes`
+how many targets fell in each class. The object never names the combo, a provider, a model or upstream text.
+The code stays `combo_unavailable`; the Claude Messages and Chat Completions listeners keep their own error
+shapes.
 For cooldowns, follow an observed `Retry-After` value first;
 Codex reset headers also take precedence over `cooldownMs`.
 If neither upstream signal is usable, the configured `cooldownMs` applies, or the upstream fallback applies

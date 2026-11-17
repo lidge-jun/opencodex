@@ -1,6 +1,8 @@
 import { setDecisionAccountUsable } from "../lib/decision-quota-sink";
 import { captureConfigGeneration, type GenerationContext } from "../lib/state-store-sweeper";
 import { isCodexAccountGenerationLive } from "./account-store";
+import { MAIN_CODEX_ACCOUNT_ID } from "./account-id";
+import { invalidateRetainedNativeMainLogin } from "./native-main-credentials";
 
 /**
  * Accounts quarantined for reauthentication, each remembering WHICH credential produced the
@@ -25,6 +27,7 @@ const refusedMainRefreshGrants = new Set<string>();
 const MAX_REFUSED_MAIN_REFRESH_GRANTS = 64;
 
 export function markMainRefreshGrantRejected(key: string): void {
+  invalidateRetainedNativeMainLogin("revocation");
   refusedMainRefreshGrants.add(key);
   if (refusedMainRefreshGrants.size > MAX_REFUSED_MAIN_REFRESH_GRANTS) {
     refusedMainRefreshGrants.delete(refusedMainRefreshGrants.values().next().value!);
@@ -47,6 +50,7 @@ export function markAccountNeedsReauth(
   credentialGeneration?: number,
 ): void {
   if (writerGeneration < lastReconciledGeneration && !liveAccountIds.has(id)) return;
+  if (id === MAIN_CODEX_ACCOUNT_ID) invalidateRetainedNativeMainLogin("revocation");
   setDecisionAccountUsable(id === "__main__" ? "codex-main" : "codex", id, false, credentialGeneration);
   // An account-wide mark supersedes a generation-scoped one: it is the stronger claim.
   if (credentialGeneration === undefined || !reauthAccounts.has(id)) {

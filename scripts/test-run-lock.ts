@@ -32,6 +32,12 @@ export const TEST_RUN_NO_QUEUE_ENV = "OCX_TEST_NO_QUEUE";
 const OWNER_FILE = "owner.json";
 const MEMBERS_DIR = "members";
 const INCOMPLETE_OWNER_GRACE_MS = 10_000;
+// Windows refuses to rename a directory while any process holds a file inside it
+// open (antivirus scans, a waiter reading owner.json). The gate holder that
+// reached a stale verdict retries its quarantine rename for this bounded window
+// before giving the gate up, so a transient refusal cannot hand the retirement
+// it already decided to whichever waiter polls next.
+const RECLAIM_RENAME_RETRY_MS = 2_000;
 const POSIX_PRIVATE_MODE = 0o700;
 
 interface RuntimeDirectoryEntry {
@@ -773,11 +779,19 @@ function sameGeneration(lockPath: string, expected: LockGeneration): boolean {
 function reclaimStaleLock(lockPath: string, expected: LockGeneration): boolean {
   if (!sameGeneration(lockPath, expected)) return false;
   const stalePath = `${lockPath}.stale-${process.pid}-${randomUUID()}`;
-  try {
-    renameSync(lockPath, stalePath);
-  } catch (error) {
-    if (["ENOENT", "EACCES", "EPERM"].includes((error as NodeJS.ErrnoException).code ?? "")) return false;
-    throw error;
+  const deadline = performance.now() + RECLAIM_RENAME_RETRY_MS;
+  for (let delayMs = 5; ; delayMs = Math.min(delayMs * 2, 100)) {
+    try {
+      renameSync(lockPath, stalePath);
+      break;
+    } catch (error) {
+      const code = errorCode(error);
+      if (code === "ENOENT") return false;
+      if (code !== "EACCES" && code !== "EPERM") throw error;
+      // Still refused at the deadline: defer to the next poll, as before.
+      if (performance.now() + delayMs > deadline || !sameGeneration(lockPath, expected)) return false;
+      Bun.sleepSync(delayMs);
+    }
   }
   if (!sameGeneration(stalePath, expected)) {
     // Cannot undo an old in-flight actor's pathname race. Preserve the displaced
@@ -924,12 +938,16 @@ export async function acquireTestRunLock(options: AcquireTestRunLockOptions): Pr
         if (attempt.value.acquired && announced) options.onAcquiredAfterWait?.(Date.now() - startedAt);
         return attempt.value;
       }
-      const current = readOwner(lockPath);
+      const timedOut = Date.now() - startedAt >= maxWaitMs;
+      // Outside the gate, open owner.json only to announce the wait or explain a
+      // timeout. A per-poll read holds a handle inside the lock directory that
+      // can make the gate holder's Windows quarantine rename fail.
+      const current = !announced || timedOut ? readOwner(lockPath) : null;
       if (!announced) {
         announced = true;
         options.onWait?.(current);
       }
-      if (Date.now() - startedAt >= maxWaitMs) {
+      if (timedOut) {
         const holder = current ? `pid ${current.pid} (run ${current.runId})` : "an initializing runner";
         throw new Error(
           `timed out after ${Math.round(maxWaitMs / 1000)}s waiting for ${holder} to release ${lockPath}; `

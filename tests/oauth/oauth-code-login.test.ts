@@ -119,6 +119,36 @@ async function postCode(body: unknown, server: { url: string | URL }): Promise<R
   });
 }
 
+const spyOnServe = () => spyOn(Bun, "serve");
+type ServeSpy = ReturnType<typeof spyOnServe>;
+
+/**
+ * The callback login prefers port 54545 and moves to a free port when anything already holds it
+ * (src/oauth/callback-server.ts). This file does not own 54545: a management server started on
+ * port 0 can be handed it, because macOS assigns ephemeral ports in sequence, and CI then saw the
+ * redirect on 54547. So assert what holds either way: 54545 is tried first, another port is used
+ * only after a bind on 54545 failed, and the advertised redirect names the port that is listening.
+ */
+function expectLocalhostCallbackRedirect(authUrl: string, serve: ServeSpy): void {
+  const redirect = new URL(new URL(authUrl).searchParams.get("redirect_uri")!);
+  expect(redirect.protocol).toBe("http:");
+  expect(redirect.hostname).toBe("localhost");
+  expect(redirect.pathname).toBe("/callback");
+  const attempts = serve.mock.calls.map((call, index) => {
+    const options = call[0] as { hostname?: string; port?: number };
+    return { hostname: options.hostname, port: options.port, result: serve.mock.results[index] };
+  });
+  const ipv4 = attempts.filter(attempt => attempt.hostname === "127.0.0.1");
+  expect(ipv4[0]?.port).toBe(54545);
+  const listening = ipv4.filter(attempt => attempt.result?.type === "return").at(-1);
+  const listeningPort = (listening?.result?.value as { port?: number } | undefined)?.port;
+  expect(listeningPort).toBeGreaterThan(0);
+  expect(Number(redirect.port)).toBe(listeningPort!);
+  if (listeningPort !== 54545) {
+    expect(attempts.some(attempt => attempt.port === 54545 && attempt.result?.type === "throw")).toBe(true);
+  }
+}
+
 describe("OAuth code-display login", () => {
   beforeEach(() => {
     previousOpencodexHome = process.env.OPENCODEX_HOME;
@@ -176,7 +206,8 @@ describe("OAuth code-display login", () => {
       // including any instructions text.
       expect(raw.toLowerCase()).not.toContain("localhost");
       expect(raw).not.toContain("127.0.0.1");
-      expect(raw).not.toContain("54545");
+      // The callback port as a port: the random state, challenge or expiry can contain the digits.
+      expect(raw).not.toMatch(/(?::|%3a)54545(?!\d)/i);
     } finally {
       await server.stop(true);
     }
@@ -189,9 +220,6 @@ describe("OAuth code-display login", () => {
     try {
       await startCodeLogin();
       expect(serve.mock.calls.length).toBe(0);
-      // The port the callback flow would have taken is still free, from outside the process.
-      const probe = Bun.serve({ hostname: "127.0.0.1", port: 54545, reusePort: false, fetch: () => new Response("") });
-      probe.stop(true);
       cancelLoginFlow("anthropic");
       clearLoginState("anthropic");
 
@@ -199,7 +227,7 @@ describe("OAuth code-display login", () => {
       serve.mockClear();
       const callback = await startLoginFlow("anthropic", { forceLogin: true });
       expect(serve.mock.calls.length).toBeGreaterThan(0);
-      expect(new URL(callback.url).searchParams.get("redirect_uri")).toBe("http://localhost:54545/callback");
+      expectLocalhostCallbackRedirect(callback.url, serve);
     } finally {
       serve.mockRestore();
       cancelLoginFlow("anthropic");
@@ -589,6 +617,7 @@ describe("OAuth code-display login", () => {
   // Spec test 8.
   test("omitting mode keeps the callback response shape and the localhost redirect", async () => {
     const server = startServer(0);
+    const serve = spyOnServe();
     try {
       const response = await fetch(new URL("/api/oauth/login", server.url), {
         method: "POST",
@@ -597,13 +626,14 @@ describe("OAuth code-display login", () => {
       });
       expect(response.status).toBe(200);
       const body = await response.json() as Record<string, unknown>;
-      expect(new URL(String(body.url)).searchParams.get("redirect_uri")).toBe("http://localhost:54545/callback");
+      expectLocalhostCallbackRedirect(String(body.url), serve);
       // The code-mode fields are absent, not null: an old caller sees exactly today's keys.
       expect(body).not.toHaveProperty("mode");
       expect(body).not.toHaveProperty("flowId");
       expect(body).not.toHaveProperty("expiresAt");
       expect(getLoginStatus("anthropic").mode).toBeUndefined();
     } finally {
+      serve.mockRestore();
       await server.stop(true);
     }
   });

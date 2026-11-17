@@ -255,11 +255,12 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "login",
-    usage: "ocx login <provider> [--headless]",
+    usage: "ocx login <provider> [--headless] [--accept-antigravity-risk]",
     summary: "OAuth or API-key login for a provider.",
     details: [
       "--headless (anthropic, anthropic2): no browser and no local port; approve in any browser and paste the displayed code.",
       "--headless (xai): device authorization instead of the loopback callback; no local port, confirm the printed short code in any browser, nothing to paste.",
+      "google-antigravity: Google can disable the whole Google account for this sign-in. The warning always prints; a terminal must answer y, and a non-interactive run needs --accept-antigravity-risk or is refused. Runs driven by a coding agent or CI are always refused.",
       "Codex/ChatGPT: ocx login codex runs the Codex account-pool login (same flow as ocx account login codex).",
       "That one needs a running proxy; the OAuth and API-key providers log in locally.",
       "'chatgpt' and 'openai' are the same route; an OpenAI platform API key is 'ocx login openai-apikey'.",
@@ -310,11 +311,13 @@ export const CLI_COMMANDS: CliCommandEntry[] = [
   },
   {
     name: "update",
-    usage: "ocx update [--tag latest|preview] | --plan --json [--tag latest|preview | --version <version>] | --yes --json [--tag latest|preview | --version <version>] [--expect-plan <token>] [--not-after <unix-ms>]",
+    usage: "ocx update [--tag latest|preview] | --plan --json [--tag latest|preview | --version <version>] | --yes --json [--tag latest|preview | --version <version>] [--expect-plan <token>] [--not-after <unix-ms>] | --desktop [--check] [--json]",
     summary: "Update opencodex. Preview installs stay on the preview tag unless overridden.",
     details: [
       "--plan --json previews an orchestrated update; --yes --json applies it. --expect-plan binds apply to the returned planToken; --not-after sets a Unix millisecond mutation deadline.",
       "Orchestrated exit codes: 0 verified or up-to-date; 10 refused; 11 failed with previous version verified; 12 unverified or still running; 64 invalid usage.",
+      "--desktop updates a Windows OpenCodex Desktop installation without its window: it verifies the published MSI with the app's updater key, installs it silently and restarts the runtime that still serves the old version. Run it with that installation's ocx.exe from an elevated terminal. --check only reports.",
+      "Desktop exit codes: 0 done or up to date; 1 nothing installed; 2 installed but the old runtime still serves (or a reboot is pending); 3 installer outcome uncertain; 64 invalid usage or not a Desktop installation.",
     ],
   },
   {

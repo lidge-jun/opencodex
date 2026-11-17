@@ -24,8 +24,8 @@ const KEY_PRESETS = PROVIDER_REGISTRY.filter(entry => entry.authKind === "key").
 
 /** Guides state the total and the key-based split on one line. */
 const GUIDES = [
-  { locale: "es", path: "docs-site/src/content/docs/es/guides/providers.md", anchor: "preajustes integrados" },
-  { locale: "en", path: "docs-site/src/content/docs/guides/providers.md", anchor: "opencodex ships" },
+  { locale: "es", path: "docs-site/src/content/docs/es/guides/api-key-catalog.md", anchor: "preajustes integrados" },
+  { locale: "en", path: "docs-site/src/content/docs/guides/api-key-catalog.md", anchor: "opencodex ships" },
   { locale: "ja", path: "docs-site/src/content/docs/ja/guides/providers.md", anchor: "組み込みプリセットが" },
   { locale: "ko", path: "docs-site/src/content/docs/ko/guides/providers.md", anchor: "빌트인 프리셋이" },
   { locale: "fr", path: "docs-site/src/content/docs/fr/guides/providers.md", anchor: "préréglages intégrés" },

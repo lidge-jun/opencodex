@@ -20,6 +20,8 @@ export type CliStdin = NodeJS.ReadableStream & { isTTY?: boolean; readableEnded?
 
 export const MAX_LINK_CREDENTIAL_BYTES = 4 * 1024;
 
+import type { AntigravityRiskSeams } from "../oauth/antigravity-risk";
+
 export interface RuntimeApiDeps {
   baseUrl?: string;
   fetchImpl?: typeof fetch;
@@ -32,6 +34,8 @@ export interface RuntimeApiDeps {
   findLiveProxy?: (io?: LivenessIo) => Promise<LiveProxy | null>;
   /** Remote Link Child: how allowlisted reads reach the Home (#6957). */
   linkHome?: LinkHomeDeps;
+  /** Test seams for the Google Antigravity acknowledgement (agent detection, prompt visibility). */
+  antigravityRisk?: AntigravityRiskSeams;
 }
 
 export class CliUsageError extends Error {

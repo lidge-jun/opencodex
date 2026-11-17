@@ -106,10 +106,16 @@ describe("ZCode client config", () => {
   });
 
   test("resolves the data-dir override and the documented v2 destination", () => {
-    expect(zcodeHomeDir({}, "/home/u")).toBe(join("/home/u", ".zcode"));
-    expect(zcodeConfigPath({}, "/home/u")).toBe(join("/home/u", ".zcode", "v2", "config.json"));
-    expect(zcodeConfigPath({ ZCODE_DATA_DIR: join(tmpdir(), "elsewhere") }, "/home/u")).toBe(join(join(tmpdir(), "elsewhere"), "v2", "config.json"));
-    expect(() => zcodeConfigPath({ ZCODE_DATA_DIR: "relative" }, "/home/u")).toThrow(ClientPathError);
+    const reads: string[] = [];
+    const missingBootstrap = { readText: (path: string) => {
+      reads.push(path);
+      return { kind: "missing" as const };
+    } };
+    expect(zcodeHomeDir({}, "/home/u", missingBootstrap)).toBe(join("/home/u", ".zcode"));
+    expect(zcodeConfigPath({}, "/home/u", missingBootstrap)).toBe(join("/home/u", ".zcode", "v2", "config.json"));
+    expect(zcodeConfigPath({ ZCODE_DATA_DIR: join(tmpdir(), "elsewhere") }, "/home/u", missingBootstrap)).toBe(join(join(tmpdir(), "elsewhere"), "v2", "config.json"));
+    expect(() => zcodeConfigPath({ ZCODE_DATA_DIR: "relative" }, "/home/u", missingBootstrap)).toThrow(ClientPathError);
+    expect(reads).toEqual(Array(2).fill(join("/home/u", ".zcode", "v2", "setting.json")));
   });
 });
 

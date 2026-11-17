@@ -370,6 +370,14 @@ describe("Home Remote Link enrollment, SSH plant, and --purge removal with ephem
     expect(residualRecovery("ephemeral", id, "windows")).toContain('"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --expect-link ' + id);
     expect(residualRecovery("ephemeral", id, "windows")).toContain('"%USERPROFILE%\\.cache\\opencodex\\bin\\ocx-child.exe" detach --expect-link ' + id);
     expect(residualRecovery("ephemeral", id, "windows")).toContain("where.exe ocx-child");
+    // A copy placed by hand is first sought in ~/.local/bin (%USERPROFILE%\.local\bin), which need not be on PATH (#8696).
+    expect(residualRecovery("ephemeral", id, "posix")).toContain("through ~/.local/bin/ocx-child, which need not be on PATH");
+    expect(residualRecovery("ephemeral", id, "windows")).toContain("through %USERPROFILE%\\.local\\bin\\ocx-child.exe, which need not be on PATH");
+    expect(residualRecovery("enrollment", id)).toContain("~/.local/bin/ocx-child (%USERPROFILE%\\.local\\bin\\ocx-child.exe on Windows)");
+    // A purge path that is not found means no planted binary is there: the text says what that means (#8696).
+    for (const platform of ["posix", "windows", undefined] as const) {
+      expect(residualRecovery("plant", id, platform)).toContain("If the command is not found there, the binary is not installed");
+    }
     expect(residualRecovery("ephemeral", id)).toContain('"%LOCALAPPDATA%\\opencodex\\bin\\ocx-child.exe" detach --expect-link ' + id);
     expect(residualRecovery("enrollment", id)).toContain("~/.cache/opencodex/bin/ocx-child detach --expect-link " + id);
     for (const kind of ["ephemeral", "enrollment"] as const) expect(residualRecovery(kind, id)).not.toContain(" ocx-child detach --expect-link");
