@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { parseQueueMcpArgs } from "../../src/cli/message-mcp-command";
+import { appendFileSync } from "node:fs";
+import { join } from "node:path";
 import { QUEUE_MCP_TARGET, REPLY_MCP_CLIENT, queueMcpFixture } from "../helpers/messaging-mcp-queue";
 import { repoPath } from "../helpers/repo-root";
 
@@ -16,6 +18,14 @@ test("message mcp requires exactly one explicit absolute CLI and home", () => {
     ["--remote", "/a", "--codex-home", "/b"], ["--codex", "/a\0b", "--codex-home", "/b"]]) {
     expect(parseQueueMcpArgs(args)).toBeNull();
   }
+});
+
+test("fixture capture reads skip a line another process is still appending", () => {
+  const f = queueMcpFixture();
+  try {
+    appendFileSync(join(f.root, "capture.jsonl"), JSON.stringify({ frame: { method: "initialize" }, argv: [], home: "/h", pid: 1 }) + "\n" + '{"frame":{"method":"thr');
+    expect(f.calls().map(call => call.frame.method)).toEqual(["initialize"]);
+  } finally { f.close(); }
 });
 
 describe.skipIf(process.platform === "win32")("message MCP CLI", () => {
