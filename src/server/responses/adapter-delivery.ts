@@ -8,9 +8,9 @@ import type { ResponsesCompletionPolicy } from "./completion-policy";
 import type { AdapterExchange } from "./adapter-dispatch";
 import type { AdapterContinuations } from "./adapter-continuation";
 import { guardTerminalEventStream } from "./terminal-guard";
-import { guardEmptyCompletionEventStream } from "./empty-completion-guard";
+import { guardEmptyCompletionEventStream, mergeUsage } from "./empty-completion-guard";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse } from "../../bridge";
-import type { OcxProviderContinuationState, AdapterEvent } from "../../types";
+import type { OcxProviderContinuationState, AdapterEvent, OcxUsage } from "../../types";
 import { rememberResponseState } from "../../responses/state";
 import { trackStreamLifetime } from "../lifecycle";
 import { awaitThoughtSignatureDurability } from "../../responses/thought-signature-replay";
@@ -128,6 +128,17 @@ export async function deliverAdapterResponse(
   const clientToolCatalog = requestState.clientToolCatalogRestriction && route.provider.authMode !== "forward"
     ? requestState.clientToolCatalogRestriction : undefined;
   const deliveryToolBridgeMaps = currentTurnToolBridgeMaps(toolBridgeMaps, clientToolCatalog);
+  // Legs the terminal guard re-asked: the client terminal carries only the final leg's usage
+  // (clients size their context window from it, #8877), while the request log meters every leg
+  // that was sent. Hidden legs add counters only: their context checkpoint and raw wire usage
+  // are not the final terminal's (same split as the web-search loop).
+  let terminalGuardHiddenUsage: OcxUsage | undefined;
+  const onHiddenUsage = ({ contextTotalTokens: _context, rawUsage: _raw, ...counters }: OcxUsage): void => {
+    terminalGuardHiddenUsage = mergeUsage(terminalGuardHiddenUsage, counters);
+  };
+  const bindDeliveredUsage = (usage: OcxUsage | undefined): void => {
+    transportState.bindKeyUsageFromBridge(mergeUsage(terminalGuardHiddenUsage, usage));
+  };
 
 
   if (parsed.stream) {
@@ -175,6 +186,7 @@ export async function deliverAdapterResponse(
           adapterName: transportState.activeAdapter.name,
           maxAutoContinuations: 1,
           continuation: next => fetchTerminalGuardContinuation(next, undefined, !parsed.stream),
+          onHiddenUsage,
         })
       : recoveredEvents;
     // Optional advisor guard (registered per request by the sidecar planner; absent unless the
@@ -252,7 +264,7 @@ export async function deliverAdapterResponse(
         stopUpstream: () => { cancelResponseCompletion(); upstream.abort(); },
         onStreamDone: cleanupUpstreamAbort,
         onCompletedResponse,
-        bindUsage: usage => transportState.bindKeyUsageFromBridge(usage),
+        bindUsage: bindDeliveredUsage,
       });
     }
     const sseStream = bridgeToResponsesSSE(
@@ -280,10 +292,8 @@ export async function deliverAdapterResponse(
         textFormat: parsed.options.textFormat,
         // Same grok-surface split as the runTurn branch above.
         ...(logCtx.surface === "grok" ? { heartbeatStyle: "comment" as const } : {}),
-        onUsage: usage => {
-          // Raw adapter usage, pre wire-normalization (see the runTurn branch above).
-          transportState.bindKeyUsageFromBridge(usage);
-        },
+        // Raw adapter usage, pre wire-normalization (see the runTurn branch above).
+        onUsage: bindDeliveredUsage,
         onCompletedResponse,
       },
     );
@@ -331,6 +341,7 @@ export async function deliverAdapterResponse(
           adapterName: transportState.activeAdapter.name,
           maxAutoContinuations: 1,
           continuation: next => fetchTerminalGuardContinuation(next, undefined, !parsed.stream),
+          onHiddenUsage,
         })) guardedEvents.push(event);
       } else {
         guardedEvents = recoveredEvents;
@@ -392,9 +403,7 @@ export async function deliverAdapterResponse(
       completeOnMaxOutputTokens: config.completeOnMaxOutputTokens === true && options.inboundWire !== "chat" && options.inboundWire !== "anthropic",
       textFormat: parsed.options.textFormat,
       onProviderState: state => { providerState = state; },
-      onUsage: usage => {
-        transportState.bindKeyUsageFromBridge(usage);
-      },
+      onUsage: bindDeliveredUsage,
     });
     // See the streaming branch: compaction turns skip the continuation cache.
     if (!routedCompaction) {

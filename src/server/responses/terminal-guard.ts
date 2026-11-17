@@ -174,6 +174,13 @@ export interface GuardedEventStreamOptions {
   continuation: (parsed: OcxParsedRequest) => AsyncIterable<AdapterEvent> | Promise<AsyncIterable<AdapterEvent>>;
   adapterName?: string;
   maxAutoContinuations?: number;
+  /**
+   * Receives the usage of the legs the guard re-asked, so the caller can meter them. When it is
+   * set, a successful terminal carries only the final leg's usage: clients size their context
+   * window from it, and every leg re-sends the whole conversation, so a sum reads as a context
+   * about twice its real size (#8877). Without it, the terminal carries the sum of every leg.
+   */
+  onHiddenUsage?: (usage: OcxUsage) => void;
 }
 
 /**
@@ -228,7 +235,8 @@ export function mergeUsage(first: OcxUsage | undefined, second: OcxUsage | undef
  * @param options Initial stream, parsed history, and continuation callback. The caller owns
  * provider opt-in; the continuation limit defaults to one and is clamped to at most two.
  * @yields Unchanged content events, internal assistant boundaries, and terminal events with
- * accumulated reported usage when available. Returning the iterator closes its active source.
+ * accumulated reported usage when available (only the final leg's on a successful terminal when
+ * `onHiddenUsage` takes the earlier legs). Returning the iterator closes its active source.
  */
 export async function* guardTerminalEventStream(options: GuardedEventStreamOptions): AsyncGenerator<AdapterEvent> {
   const maxContinuations = Math.max(0, Math.min(2, Math.floor(options.maxAutoContinuations ?? 1)));
@@ -276,6 +284,11 @@ export async function* guardTerminalEventStream(options: GuardedEventStreamOptio
             return;
           }
           break;
+        }
+        if (options.onHiddenUsage && accumulatedUsage && event.usage) {
+          options.onHiddenUsage(accumulatedUsage);
+          yield event;
+          return;
         }
         const usage = mergeUsage(accumulatedUsage, event.usage);
         yield usage ? { ...event, usage } : event;
