@@ -23,7 +23,7 @@ import { publishCredentialSync } from "../local-credentials/generation";
 import { notifyAuthStoreLoaded } from "../lib/decision-quota-sink";
 import { isPassiveRead } from "../lib/passive-read";
 import { accountPauseDetailsSchema, accountPauseEvidenceSchema } from "../config/schema/account-auto-pause";
-import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
+import { mergeOAuthOrganizationName, normalizeOAuthOrganizationName, normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
 import { normalizeAnthropicIdentity, mergeAnthropicIdentity } from "./anthropic-identity";
 import { findAnthropicImportSlot, findAnthropicLoginSlot, observeAnthropicSlotOrganizations } from "./anthropic-login-slot";
 import { normalizeWorkBuddyMetadata } from "../providers/workbuddy";
@@ -578,6 +578,9 @@ function normalizeCredential(cred: unknown): OAuthCredentials | null {
   const identity = normalizeAnthropicIdentity(candidate.anthropicIdentity, candidate.access);
   if (identity) normalized.anthropicIdentity = identity;
   if (candidate.plan !== undefined) normalized.plan = normalizeOAuthPlan(candidate.plan) ?? null;
+  if (candidate.organizationName !== undefined) {
+    normalized.organizationName = normalizeOAuthOrganizationName(candidate.organizationName) ?? null;
+  }
   if (isCredentialSource(candidate.source)) normalized.source = candidate.source;
   if (typeof candidate.projectId === "string" && candidate.projectId.length > 0) normalized.projectId = candidate.projectId;
   if (typeof candidate.apiBaseUrl === "string" && candidate.apiBaseUrl.length > 0) {
@@ -1002,8 +1005,9 @@ export async function saveCredentialWithReceipt(
     } else if (provider === "anthropic" && safe.source === "local-cli") {
       const existing = findAnthropicImportSlot(set.accounts, safe, anthropicOrganizations, set.activeAccountId);
       if (existing) {
-        existing.credential = { ...safe, ...mergeAnthropicIdentity(safe, existing.credential),
-          plan: mergeOAuthPlan(safe, existing.credential),
+        const identity = mergeAnthropicIdentity(safe, existing.credential);
+        existing.credential = { ...safe, ...identity, plan: mergeOAuthPlan(safe, existing.credential),
+          organizationName: mergeOAuthOrganizationName({ ...safe, ...identity }, existing.credential),
           accountId: safe.accountId ?? existing.credential.accountId, email: safe.email ?? existing.credential.email };
         set.selectionRevision = previousSelectionRevision;
         delete existing.needsReauth;
@@ -1030,7 +1034,9 @@ export async function saveCredentialWithReceipt(
         // Same identity: a login whose tier read failed keeps the stored label (plan absent),
         // while an observed unknown (plan null) still clears it.
         const plan = mergeOAuthPlan(incoming, existing.credential);
-        existing.credential = plan === undefined ? incoming : { ...incoming, plan };
+        const organizationName = mergeOAuthOrganizationName(incoming, existing.credential);
+        existing.credential = { ...incoming, ...(plan === undefined ? {} : { plan }),
+          ...(organizationName === undefined ? {} : { organizationName }) };
         delete existing.needsReauth;
         delete existing.needsReauthReason;
         delete existing.refreshAttentionGeneration;

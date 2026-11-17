@@ -77,6 +77,8 @@ export type OAuthAccountRow = AccountQuotaReading & {
   autoSwitchThreshold?: number;
   effectiveAutoSwitchThreshold?: number;
   plan?: string | null;
+  /** Anthropic: display-only name of the organization the grant serves. */
+  organizationName?: string;
   health?: { status: OAuthAccountHealthStatus; reason?: string; until?: string };
   healthLabel?: string;
   healthSummary?: string;

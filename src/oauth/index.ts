@@ -99,7 +99,7 @@ import { codexAccountNamespaceProviderCollisionError } from "../codex/account-na
 import { REFRESH_SKEW_MS } from "./refresh-policy";
 import { newerClaudeCredentialForInstance, captureAnthropicCredentialOwnerForInstance, claudeCredentialGenerationCurrent } from "./anthropic-continuity";
 import { anthropicSubscriptionLabel } from "../providers/anthropic-subscription";
-import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
+import { mergeOAuthOrganizationName, normalizeOAuthOrganizationName, normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
 import { mergeAnthropicIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
 import { anthropicReauthSlotRefused } from "./anthropic-login-slot";
 import { AnthropicCrossInstanceDuplicateError, AnthropicLocalCliImportError, assertAnthropicCredentialSource } from "./store-anthropic-instance";
@@ -803,10 +803,12 @@ function definitivelyAnswered(error: unknown): boolean {
 
 function authoritative(stored:OAuthCredentials,active:boolean,now:()=>number):OAuthCredentials{if(stored.source!=="local-cli")return stored;const disk=detectGrokCliToken();if(!disk)return stored;const allowed=isSameGrokIdentity(stored,disk)||(active&&!hasComparableGrokIdentity(stored,disk));return allowed&&shouldAdoptGrokGeneration(stored,disk,now(),REFRESH_SKEW_MS)?disk:stored;}
 function merged(fresh: OAuthCredentials, previous: OAuthCredentials): OAuthCredentials {
+  const identity = mergeAnthropicIdentity(fresh, previous, { sameGrant: true });
   return {
     ...fresh,
-    ...mergeAnthropicIdentity(fresh, previous, { sameGrant: true }),
+    ...identity,
     plan: mergeOAuthPlan(fresh, previous),
+    organizationName: mergeOAuthOrganizationName({ ...fresh, ...identity }, previous),
     // Shared: a refresh function returns "local-cli" only when the credential it hands back
     // still is the local CLI's (Devin re-reading the CLI file, Meta Muse echoing its durable
     // CLI key). Relabelling that "oauth" would stop the next forced refresh from re-reading it.
@@ -1699,7 +1701,9 @@ export async function runLogin(
       }
       // Proven same account: a reauth whose tier read failed keeps the stored label.
       const reauthPlan = mergeOAuthPlan(cred, existing);
-      const reauthCred = reauthPlan === undefined ? cred : { ...cred, plan: reauthPlan };
+      const reauthName = mergeOAuthOrganizationName(cred, existing);
+      const reauthCred = { ...cred, ...(reauthPlan === undefined ? {} : { plan: reauthPlan }),
+        ...(reauthName === undefined ? {} : { organizationName: reauthName }) };
       const reauthAccountId = opts.reauthAccountId;
       const written = await (deps.saveAccountCredential ?? saveAccountCredential)(provider, reauthAccountId, reauthCred, {
         assertBeforePersist: deps.assertCurrentOwner,
@@ -1829,6 +1833,8 @@ export interface OAuthAccountSummary {
   plan: string | null;
   /** Anthropic display-only subscription name; absent when no tier was observed. */
   planLabel?: string;
+  /** Anthropic display-only organization name of the grant; absent when none was observed. */
+  organizationName?: string;
 }
 
 /**
@@ -1858,6 +1864,8 @@ export function getLoginStatus(provider: string, maskEmails = true, flowId?: str
     plan: normalizeOAuthPlan(a.credential.plan) ?? null,
     ...((provider === "anthropic" || provider === "anthropic2") && anthropicSubscriptionLabel(a.credential.plan)
       ? { planLabel: anthropicSubscriptionLabel(a.credential.plan) } : {}),
+    ...((provider === "anthropic" || provider === "anthropic2") && normalizeOAuthOrganizationName(a.credential.organizationName)
+      ? { organizationName: normalizeOAuthOrganizationName(a.credential.organizationName) } : {}),
   }));
 
   // A stored credential counts as "logged in" when it exists and is not marked for

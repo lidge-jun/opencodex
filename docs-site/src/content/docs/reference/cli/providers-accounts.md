@@ -323,7 +323,8 @@ A Claude account that belongs to several organizations can be added once per org
 `ocx login anthropic` again and pick the other organization on Claude's consent screen. Each
 organization has its own subscription and limits, so it becomes its own pool account instead of
 replacing the first. Logging in to an organization that already has an account refreshes that
-account.
+account. The dashboard shows each account's organization name under its label once Claude has
+reported it (at login or on the next token refresh).
 
 All of this depends on organization evidence, which Claude reports at login and on token refresh;
 it is recorded only when that report succeeds. A login gets its own account only when both

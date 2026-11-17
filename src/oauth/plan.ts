@@ -33,6 +33,25 @@ function boundOrganization(credential: OAuthCredentials): string | undefined {
   return credential.anthropicIdentity?.organizationUuid?.toLowerCase();
 }
 
+/** Display-only organization name: trimmed, at most 128 characters, no control or format characters. */
+export function normalizeOAuthOrganizationName(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const name = value.trim();
+  return name.length > 0 && name.length <= 128 && !/[\p{Cc}\p{Cf}]/u.test(name) ? name : undefined;
+}
+
+/**
+ * A fresh observation wins and an observed unknown clears it. Unlike the plan, a name claims which
+ * organization a row serves, so it carries only between credentials proven to serve the same one;
+ * an unknown organization on either side drops it until the next profile read names it again.
+ */
+export function mergeOAuthOrganizationName(fresh: OAuthCredentials, previous: OAuthCredentials): string | null | undefined {
+  if (fresh.organizationName !== undefined) return normalizeOAuthOrganizationName(fresh.organizationName) ?? null;
+  const organization = boundOrganization(fresh);
+  if (organization === undefined || organization !== boundOrganization(previous)) return undefined;
+  return previous.organizationName === null ? null : normalizeOAuthOrganizationName(previous.organizationName);
+}
+
 /** An observed unknown clears old metadata; an account replacement cannot inherit a plan. */
 export function mergeOAuthPlan(fresh: OAuthCredentials, previous: OAuthCredentials): string | null | undefined {
   if (fresh.plan !== undefined) return normalizeOAuthPlan(fresh.plan) ?? null;

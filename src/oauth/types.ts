@@ -74,6 +74,11 @@ export type OAuthCredentials = {
   /** Validated upstream subscription label; null is an observed unknown, absent is not read. */
   plan?: string | null;
   /**
+   * Display-only name of the organization the grant serves (Anthropic), read with the plan from
+   * the same bearer's profile; null is an observed unknown, absent is not read. Never identity.
+   */
+  organizationName?: string | null;
+  /**
    * Private authenticated account proof; never projected into account summaries. The optional
    * organization is the grant's scope, observed from the same bearer; it never proves identity.
    */

@@ -17,7 +17,7 @@ import { OAuthReauthIdentityMismatchError, runLogin } from "../../src/oauth";
 import { mergeAnthropicIdentity } from "../../src/oauth/anthropic-identity";
 import { newerClaudeCredential } from "../../src/oauth/anthropic-continuity";
 import { findAnthropicLoginSlot } from "../../src/oauth/anthropic-login-slot";
-import { mergeOAuthPlan } from "../../src/oauth/plan";
+import { mergeOAuthOrganizationName, mergeOAuthPlan } from "../../src/oauth/plan";
 import { AnthropicCrossInstanceDuplicateError, assertNoCrossAnthropicRegistration } from "../../src/oauth/store-anthropic-instance";
 import type { AuthStore } from "../../src/oauth/store";
 import type { OAuthController } from "../../src/oauth/types";
@@ -821,3 +821,58 @@ test("a stored proof without an organization asks its own bearer before adopting
   expect((await newerClaudeCredential(stored, Date.now(), undefined, resolve)).kind).toBe("different");
   expect(asked.sort()).toEqual(["synthetic-old", "synthetic-other"]);
 });
+
+/** Token and profile answers for one grant of synthetic-account-a; profile 503 when `profile` is undefined. */
+function orgNameFetch(organizationUuid: string, profile?: Record<string, unknown>) {
+  globalThis.fetch = (async (_url, init) => init?.method === "POST"
+    ? Response.json({ access_token: "synthetic-fresh", refresh_token: "synthetic-fresh-refresh", expires_in: 3600,
+      account: { uuid: "synthetic-account-a" }, organization: { uuid: organizationUuid } })
+    : profile === undefined ? new Response(null, { status: 503 })
+      : Response.json({ account: { uuid: "synthetic-account-a" }, organization: profile })) as typeof fetch;
+}
+
+test("the profile names the grant's organization and status shows it as display-only metadata", async () => {
+  orgNameFetch(ORG_A, { uuid: ORG_A, name: " Synthetic Org A " });
+  await saveCredential("anthropic", await refreshAnthropicToken("synthetic-old-refresh"));
+  const row = getLoginStatus("anthropic").accounts![0]!;
+  expect(row.organizationName).toBe("Synthetic Org A");
+  expect(row).not.toHaveProperty("anthropicIdentity");
+  for (const [profile, expected] of [
+    [{ name: "Synthetic Org A" }, null],
+    [{ uuid: ORG_A, name: "bad\u0007name" }, null],
+    [{ uuid: ORG_A, name: "Synthetic\u202eOrg" }, null],
+    [{ uuid: ORG_B, name: "Synthetic Org B" }, null],
+  ] as const) {
+    orgNameFetch(ORG_A, profile);
+    expect((await refreshAnthropicToken("synthetic-old-refresh")).organizationName).toBe(expected);
+  }
+});
+
+test("each organization row keeps its own name", async () => {
+  orgProfiles({});
+  await saveCredential("anthropic", { ...orgCredential("synthetic-org-a", ORG_A), organizationName: "Synthetic Org A" });
+  await saveCredential("anthropic", { ...orgCredential("synthetic-org-b", ORG_B), organizationName: "Synthetic Org B" });
+  expect(getLoginStatus("anthropic").accounts!.map(row => row.organizationName).sort())
+    .toEqual(["Synthetic Org A", "Synthetic Org B"]);
+});
+
+test("an organization name is kept through an unread profile but never crosses organizations", async () => {
+  const previous = { ...orgCredential("synthetic-old", ORG_A), organizationName: "Synthetic Org A" };
+  expect(mergeOAuthOrganizationName(orgCredential("synthetic-new", ORG_A), previous)).toBe("Synthetic Org A");
+  expect(mergeOAuthOrganizationName(orgCredential("synthetic-new", ORG_B), previous)).toBeUndefined();
+  expect(mergeOAuthOrganizationName({ ...orgCredential("synthetic-new", ORG_A), organizationName: null }, previous)).toBeNull();
+  // A name claims which organization a row serves: an unknown organization on either side drops it.
+  expect(mergeOAuthOrganizationName(orgCredential("synthetic-new"), previous)).toBeUndefined();
+  expect(mergeOAuthOrganizationName(orgCredential("synthetic-new", ORG_A),
+    { ...orgCredential("synthetic-old"), organizationName: "Synthetic Org A" })).toBeUndefined();
+  await saveCredential("anthropic", { ...previous, expires: 1 });
+  const id = getAccountSet("anthropic")!.activeAccountId;
+  orgNameFetch(ORG_A);
+  await refreshAnthropicAccountWithLock("anthropic", id, OAUTH_PROVIDERS.anthropic!, getAccountCredential("anthropic", id)!);
+  expect(getLoginStatus("anthropic").accounts![0]!.organizationName).toBe("Synthetic Org A");
+  orgNameFetch(ORG_A, { uuid: ORG_A, name: "Synthetic Org A Renamed" });
+  await mutateStore(store => { store.anthropic!.accounts[0]!.credential.expires = 1; });
+  await refreshAnthropicAccountWithLock("anthropic", id, OAUTH_PROVIDERS.anthropic!, getAccountCredential("anthropic", id)!);
+  expect(getLoginStatus("anthropic").accounts![0]!.organizationName).toBe("Synthetic Org A Renamed");
+});
+

@@ -4,13 +4,14 @@ import { createHash } from "node:crypto";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { CLAUDE_CLI_USER_AGENT } from "../providers/claude-cli-identity";
 import type { OAuthCredentials } from "./types";
+import { normalizeOAuthOrganizationName } from "./plan";
 import { normalizeAnthropicPlan } from "../providers/anthropic-subscription";
 
 const PROFILE_URL = "https://api.anthropic.com/api/oauth/profile";
 const PROFILE_TIMEOUT_MS = 10_000;
 const PROFILE_MAX_BYTES = 65_536;
 export type AnthropicIdentity = NonNullable<OAuthCredentials["anthropicIdentity"]>;
-export type AnthropicIdentityResolver = (access: string, signal?: AbortSignal) => Promise<(AnthropicIdentity & { plan?: string }) | undefined>;
+export type AnthropicIdentityResolver = (access: string, signal?: AbortSignal) => Promise<(AnthropicIdentity & { plan?: string; organizationName?: string }) | undefined>;
 
 const ORGANIZATION_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -80,7 +81,8 @@ export const resolveAnthropicAccountIdentity: AnthropicIdentityResolver = async 
       ? bindAnthropicIdentity(access, account.uuid, org?.uuid) : undefined;
     if (!identity) return undefined;
     const plan = normalizeAnthropicPlan(org?.rate_limit_tier) ?? normalizeAnthropicPlan(org?.organization_type);
-    return { ...identity, ...(plan ? { plan } : {}) };
+    const organizationName = identity.organizationUuid ? normalizeOAuthOrganizationName(org?.name) : undefined;
+    return { ...identity, ...(plan ? { plan } : {}), ...(organizationName ? { organizationName } : {}) };
   } catch {
     // Unavailable identity is an explicit unresolved result, never an ownership guess.
     return undefined;

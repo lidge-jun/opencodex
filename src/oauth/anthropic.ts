@@ -171,7 +171,10 @@ async function withAccountProfile(credential: OAuthCredentials, signal?: AbortSi
   // The same bearer's profile names the grant's organization when the token response did not.
   const organization = identity && !identity.organizationUuid && profile.organizationUuid
     ? { anthropicIdentity: { ...identity, organizationUuid: profile.organizationUuid } } : {};
-  return { ...credential, ...organization, plan: profile.plan ?? null };
+  // The name labels the organization this profile proved; a disagreeing token response gets none.
+  const sameOrganization = !identity?.organizationUuid || identity.organizationUuid === profile.organizationUuid;
+  return { ...credential, ...organization, plan: profile.plan ?? null,
+    organizationName: sameOrganization ? profile.organizationName ?? null : null };
 }
 
 export class AnthropicOAuthFlow extends OAuthCallbackFlow {
@@ -259,7 +262,8 @@ export async function loginAnthropic(
         const identity = await resolveAnthropicAccountIdentity(local.access, ctrl.signal);
         ctrl.signal?.throwIfAborted();
         return { ...local, ...(identity ? { accountId: identity.accountUuid,
-          anthropicIdentity: normalizeAnthropicIdentity(identity, local.access), plan: identity.plan ?? null } : {}) };
+          anthropicIdentity: normalizeAnthropicIdentity(identity, local.access), plan: identity.plan ?? null,
+          organizationName: identity.organizationName ?? null } : {}) };
       }
       try {
         return { ...(await refreshAnthropicToken(local.refresh)), source: "local-cli" };
