@@ -114,3 +114,11 @@ and `recordUpstreamProviderErrorDetail` calls `recordUpstreamValidationDetail(lo
 
 `bun test tests/lib/developer-role-rejection.test.ts tests/server/developer-role-rejection-boundary.test.ts tests/server/upstream-error-detail-boundaries.test.ts tests/usage/request-log-error-detail.test.ts tests/usage/provider-failure-detail.test.ts`, the Chat/Messages error suites touched by `test:changed`, `bun run typecheck`, `bun run structure:check`, `bun run privacy:scan`; the new tests are run once against the pre-change source (stash) to show they fail.
 
+
+## wp2 cycle record
+
+- Previous D (wp1): export and registry fix landed in 3b7dd0b2ee and e8f0314c33 (es docs required by `tests/ci-workflows/docs-spanish-localization.test.ts`); 448 focused tests pass. `test:changed` hit its 900s cap on a host at load ~23 and its failures were timeouts and cascades; left to PR CI and wp3. Direction: implement this doc.
+- Stale check: wp1 touched none of the files this doc changes (`src/lib/client-error-body.ts`, `src/server/request-log-failure-detail.ts`, `structure/data-planes/error-detail.md`, `scripts/test-layout/layout.json`); `origin/dev` is still `c36793a933`.
+- Architect consultation: D4-D6 in [002_architect.md](002_architect.md), with reflection gaps 1-3 folded; no new design decision.
+- Test-first order: write both new tests and run them against the unchanged source (expect the verdict module import to fail and the boundary test to see the generic sentence), then implement.
+
