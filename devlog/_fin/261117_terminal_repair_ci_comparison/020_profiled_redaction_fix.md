@@ -113,8 +113,8 @@ The new counter tests run after the original timed tests in that file.
 The commands use the initial document's preload as an absolute PROBE path:
 
 ```sh
-bun run test -- --parallel=4 --preload PROBE tests/responses/sse-untyped-credential-mask.test.ts
-bun run test -- --parallel=4 --preload PROBE tests/responses/sse-untyped-credential-mask.test.ts tests/responses/responses-terminal-repair.test.ts tests/responses/sse-payload-rewrite.test.ts tests/responses/sse-failed-tail.test.ts
+bun run test -- --parallel=4 --preload "$PROBE" tests/responses/sse-untyped-credential-mask.test.ts
+bun run test -- --parallel=4 --preload "$PROBE" tests/responses/sse-untyped-credential-mask.test.ts tests/responses/responses-terminal-repair.test.ts tests/responses/sse-payload-rewrite.test.ts tests/responses/sse-failed-tail.test.ts
 ```
 
 The one-file scenario has no other test-file worker load. The four-file scenario
