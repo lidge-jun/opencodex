@@ -1,5 +1,5 @@
 import type { ProviderAdapter } from "../adapters/base";
-import { isAllowedToolChoice, type AdapterEvent, type OcxAssistantContentPart, type OcxContentPart, type OcxMessage, type OcxParsedRequest, type OcxTool } from "../types";
+import { isAllowedToolChoice, toolRestrictsCallers, type AdapterEvent, type OcxAssistantContentPart, type OcxContentPart, type OcxMessage, type OcxParsedRequest, type OcxTool } from "../types";
 import { isRec, type Rec } from "./inbound-records";
 import { readClientToolDiscovery } from "./inbound-tool-loading";
 
@@ -62,6 +62,9 @@ function appendText(content: string | OcxContentPart[], text: string): string | 
 export function projectChatToolDispatch(parsed: OcxParsedRequest, raw: Rec): ChatToolDispatchProjection | null {
   const tools = parsed.context.tools;
   if (!Array.isArray(tools)) return null;
+  // Keep caller restrictions visible to the final adapter guard; the dispatcher cannot
+  // preserve them by moving a restricted declaration into ToolSearch result text.
+  if (tools.some(toolRestrictsCallers)) return null;
 
   const declared = new Map<string, OcxTool>();
   for (const tool of tools) {
