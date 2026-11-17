@@ -210,10 +210,12 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
       expect(json.output?.find(item => item.type === "message")?.content?.[0]?.text).toBe("ok after refresh");
       expect(observed.counts.refresh).toBe(1);
       expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer fresh-access"]);
-      const attempt = readUsageEntries().at(-1)?.attempts?.[0];
-      expect(attempt?.credentialSource).toBe("grok-oauth");
-      expect(attempt?.sendCount).toBe(2);
-      expect(attempt?.totalTokens).toBe(5);
+      const attempts = readUsageEntries().at(-1)?.attempts;
+      expect(attempts?.map(attempt => ({ status: attempt.status, sendCount: attempt.sendCount, credentialSource: attempt.credentialSource })))
+        .toEqual([{ status: 401, sendCount: 1, credentialSource: "grok-oauth" },
+          { status: 200, sendCount: 1, credentialSource: "grok-oauth" }]);
+      expect(attempts?.[1].totalTokens).toBe(5);
+      expect(attempts?.[1].recoveryKinds).toContain("oauth-401");
       const persisted = readFileSync(usageLogPath(), "utf8");
       expect(persisted).not.toContain("rejected-access");
       expect(persisted).not.toContain("fresh-access");
