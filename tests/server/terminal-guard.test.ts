@@ -293,6 +293,28 @@ describe("terminal guard", () => {
     });
   });
 
+  // A final leg cut at max_tokens is still the prompt the conversation continues from.
+  test("a final leg stopped at max_tokens still reports only its own usage beside onHiddenUsage", async () => {
+    const hidden: unknown[] = [];
+    const actual: AdapterEvent[] = [];
+    for await (const event of guardTerminalEventStream({
+      parsed: parsed("请检查这个问题并修复代码"),
+      firstEvents: (async function* () {
+        yield { type: "text_delta", text: "我接下来会修改相关文件。" } as AdapterEvent;
+        yield { type: "done", usage: { inputTokens: 10, outputTokens: 2 } } as AdapterEvent;
+      })(),
+      continuation: () => (async function* () {
+        yield { type: "text_delta", text: "partial" } as AdapterEvent;
+        yield { type: "done", stopReason: "max_tokens", usage: { inputTokens: 20, outputTokens: 3 } } as AdapterEvent;
+      })(),
+      adapterName: "anthropic",
+      onHiddenUsage: usage => hidden.push(usage),
+    })) actual.push(event);
+
+    expect(hidden).toEqual([{ inputTokens: 10, outputTokens: 2 }]);
+    expect(actual.at(-1)).toEqual({ type: "done", stopReason: "max_tokens", usage: { inputTokens: 20, outputTokens: 3 } });
+  });
+
   test("keeps the hidden legs on the terminal when the final leg reports no usage", async () => {
     const hidden: unknown[] = [];
     const actual: AdapterEvent[] = [];

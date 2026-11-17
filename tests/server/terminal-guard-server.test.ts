@@ -200,6 +200,41 @@ describe("server terminal guard integration", () => {
     expect(log.usage).toMatchObject({ inputTokens: 30, outputTokens: 5 });
   });
 
+  // #8877, empty-completion retry path: the retry runs its own terminal guard, and a re-ask
+  // there must not sum its legs into the client terminal either. The empty first attempt stays
+  // on the terminal (the empty-completion guard's documented merge); the log meters all three.
+  test("a re-ask inside the empty-completion retry reports the final leg's usage to the client", async () => {
+    takeInheritedSpendHome();
+    const emptyTurn = [
+      'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":5,"output_tokens":0}}}\n\n',
+      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":0}}\n\n',
+      'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+    ].join("");
+    globalThis.fetch = (async () => {
+      calls += 1;
+      return anthropicSse(calls === 1 ? emptyTurn : calls === 2 ? firstTurn : continuationTurn);
+    }) as typeof fetch;
+    const log: RequestLogContext = { model: "", provider: "" };
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "se-claude-opus-4.8",
+        input: "请检查这个问题并修复代码",
+        stream: true,
+        tools: [{ type: "function", name: "exec_command", description: "run a command", parameters: { type: "object" } }],
+      }),
+    }), { ...config, emptyCompletionRetry: true } as OcxConfig, log);
+
+    const text = await response.text();
+    expect(response.status).toBe(200);
+    expect(calls).toBe(3);
+    const usage = text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)))
+      .find(frame => frame.type === "response.completed")?.response?.usage;
+    expect(usage).toMatchObject({ input_tokens: 25, output_tokens: 3 });
+    expect(log.usage).toMatchObject({ inputTokens: 35, outputTokens: 5 });
+  });
+
   test("terminal-guard continuation 429 replays on the same key before surfacing", async () => {
     takeInheritedSpendHome();
     const retryConfig = {

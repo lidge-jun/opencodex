@@ -209,7 +209,7 @@ export async function deliverAdapterResponse(
     const completionGuardedEventStream = emptyCompletionGuardEnabled
       ? guardEmptyCompletionEventStream({
           firstEvents: advisorStream,
-          continuation: fetchGuardedEmptyCompletionRetry,
+          continuation: () => fetchGuardedEmptyCompletionRetry(onHiddenUsage),
           preserveRetryError: isContinuationBodyStall,
         })
       : advisorStream;
@@ -361,7 +361,7 @@ export async function deliverAdapterResponse(
         events = [];
         for await (const event of guardEmptyCompletionEventStream({
           firstEvents: (async function* () { yield* guardedEvents; })(),
-          continuation: fetchGuardedEmptyCompletionRetry,
+          continuation: () => fetchGuardedEmptyCompletionRetry(onHiddenUsage),
           preserveRetryError: isContinuationBodyStall,
         })) events.push(event);
       } else {
