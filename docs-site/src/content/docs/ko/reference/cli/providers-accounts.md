@@ -179,18 +179,23 @@ Reserve가 활성화되지 않을 수 있습니다. 스위치를 끄면 원래 �
 전환도 꺼지므로, Reserve는 직접 선택해야 합니다.
 
 기본 OpenAI 공급자를 ChatGPT 전달 모드로 켜 두고, 계정별 모델 선택기를 켠 뒤 저장된 메인
-계정의 공개 선택자 이름을 지정합니다. 로컬 루프백 로그인 생략 모드가 실제로 적용된 상태에서
+계정의 공개 선택자 이름을 지정합니다. 루프백 바인드에서 Reserve 설정(`codexReserveEnabled`)을 켠 상태에서
 `ocx sync`를 실행하면 `<메인-선택자>/gpt-reserve`가 다른 공급자 모델과 함께 추가됩니다.
 접두사 없는 `gpt-reserve`, 추가 계정 선택자, API 키용 모델 목록에는 추가하지 않습니다.
-원격 클라이언트나 별도 접근 헤더가 필요한 리스너에서는 이 모드를 적용하지 않습니다.
+원격 클라이언트나 별도 접근 헤더가 필요한 리스너에서는 Reserve 설정을 적용하지 않습니다.
 공개 리스너와 로컬 리스너를 함께 켜도 Reserve 호환 모드는 로컬 리스너로 받은 요청에만
 적용됩니다. 같은 컴퓨터에서 보냈더라도 공개 리스너로 인증한 요청은 원래 경로를 유지하며,
 요청 헤더로 로컬 정책을 고를 수는 없습니다.
 
-`ocx system settings --desktop-authless on`으로 Desktop 로그인 생략 모드를 켜고,
+`ocx system settings --reserve on`(또는 `config.json`의 `"codexReserveEnabled": true`)으로 Reserve를 켜고,
 `ocx sync`를 실행한 다음 Codex Desktop을 완전히 종료했다가 다시 여세요.
-다시 쓴 설정과 모델 목록을 읽으려면 이 순서가 필요합니다. 자세한 절차는
-[Desktop 로그인 생략 모드 가이드](/guides/codex-integration/#authless-codex-desktop-opt-in)를 따르세요.
+다시 쓴 모델 목록을 읽으려면 이 순서가 필요합니다. Desktop 로그인 생략 모드(`--desktop-authless on`)는 별개의 선택이며,
+자세한 절차는 [Desktop 로그인 생략 모드 가이드](/guides/codex-integration/#authless-codex-desktop-opt-in)를 따르세요.
+
+이전 버전에서는 로그인 생략 스위치가 Reserve도 켰습니다. 기존 설치는 그 상태를 유지합니다. 한 번의 시드가
+로그인 생략 값을 `codexReserveEnabled`로 복사하고 `codexReserveMigration`을 기록하기 전까지 Reserve는 로그인 생략 값을 따릅니다.
+이 버전으로 처음 시작할 때 시드를 기록합니다. 그 뒤로 두 설정은 따로 움직이며, `codexReserveEnabled`를 지우면 로그인 생략 값을 다시 따르지 않고 Reserve가
+꺼집니다. 이 설정을 켠다고 사용 권한이 생기지는 않으며, 아래 확인이 모든 요청을 판단합니다.
 
 각 요청은 해당 자격 증명에 묶인 서버 허용 결과를 확인하며, 캐시는 최대 60초만 유지합니다.
 메인 계정 사용량을 조회할 때 Reserve 기능 헤더를 보내고, 일반 사용량 불허·Luna Reserve 안내·

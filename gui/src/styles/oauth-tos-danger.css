@@ -1,0 +1,81 @@
+/*
+ * The Google Antigravity sign-in dialog (OAuthTosWarningModal, tone "danger").
+ * Google can disable the whole Google account for this sign-in, so the dialog reads as a
+ * destructive confirmation: red frame, red title with a warning icon, an error notice, a
+ * checklist of consequences, and a red Continue that stays disabled until the box is ticked.
+ * Colours come from the shared --red / --red-soft tokens so light and dark themes follow.
+ */
+/* Qualified with .modal-card: this sheet is imported before styles.css's own .modal-card rule. */
+.modal-card.oauth-tos-card--danger {
+  border: 1px solid color-mix(in srgb, var(--red) 55%, transparent);
+  border-top: 4px solid var(--red);
+}
+
+.oauth-tos-danger-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--red);
+}
+
+.oauth-tos-danger-title svg {
+  flex-shrink: 0;
+  color: var(--red);
+}
+
+.oauth-tos-danger-body {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+}
+
+.oauth-tos-danger-body .modal-desc {
+  color: inherit;
+  font-weight: var(--weight-medium);
+}
+
+.oauth-tos-conditions {
+  margin: 12px 0 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 6px;
+  color: var(--text);
+  font-size: var(--text-label);
+  line-height: var(--leading-ui);
+}
+
+.oauth-tos-conditions li::marker {
+  color: var(--red);
+}
+
+.oauth-tos-safer {
+  color: var(--text);
+  font-weight: var(--weight-semibold);
+}
+
+.oauth-tos-ack--danger {
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--red) 40%, transparent);
+  border-radius: var(--radius-sm);
+  background: var(--red-soft);
+}
+
+.oauth-tos-ack--danger input {
+  accent-color: var(--red);
+}
+
+.btn.btn-primary.oauth-tos-continue--danger {
+  background: var(--red);
+  border-color: var(--red);
+  color: var(--surface);
+}
+
+.btn.btn-primary.oauth-tos-continue--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--red) 85%, var(--text));
+}
+
+.btn.btn-primary.oauth-tos-continue--danger:disabled {
+  background: var(--red-soft);
+  border-color: color-mix(in srgb, var(--red) 30%, transparent);
+  color: var(--red);
+  opacity: 0.7;
+}

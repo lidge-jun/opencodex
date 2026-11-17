@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import { createConnection, createServer as createTcpServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { directLocalHttpFetch } from "../../src/server/direct-local-http";
+import { directLocalHttpFetch, isConnectPhaseTimeout } from "../../src/server/direct-local-http";
 import { repoPath, repoRoot } from "../helpers/repo-root";
 import { watchdogMs } from "../helpers/ci-watchdog";
 
@@ -286,6 +286,43 @@ describe("local management direct transport", () => {
     expect(deadlineFired).toBe(false);
     expect(deadlineActive).toBe(false);
   });
+
+  test("a timeout before the connect completes is marked connect-phase (#8318)", async () => {
+    for (const deadline of ["local", "signal"] as const) {
+      const socket = Object.assign(new EventEmitter(), {
+        setTimeout() { return this; },
+        destroy() { return this; },
+      }) as unknown as Socket;
+      const controller = new AbortController();
+      const pending = directLocalHttpFetch("http://100.88.46.13:9/healthz", { signal: controller.signal }, {
+        timeoutMs: deadline === "local" ? 20 : 1_000,
+        connect: () => socket,
+      });
+      if (deadline === "signal") setTimeout(() => controller.abort(new DOMException("probe deadline", "TimeoutError")), 20);
+      const error = await pending.then(() => undefined, (reason: unknown) => reason);
+      expect(error).toMatchObject({ name: "TimeoutError" });
+      expect(isConnectPhaseTimeout(error)).toBe(true);
+    }
+  });
+
+  test("a timeout after the connect completed is not connect-phase (#8318)", async () => {
+    const socket = Object.assign(new EventEmitter(), {
+      setTimeout() { return this; },
+      destroy() { return this; },
+      write() { return true; },
+    }) as unknown as Socket;
+    const pending = directLocalHttpFetch("http://127.0.0.1:9/healthz", {}, { timeoutMs: 20, connect: () => socket });
+    socket.emit("connect");
+    const error = await pending.then(() => undefined, (reason: unknown) => reason);
+    expect(error).toMatchObject({ name: "TimeoutError" });
+    expect(isConnectPhaseTimeout(error)).toBe(false);
+    // An abort that is not a timeout is never relabelled either.
+    const aborted = new AbortController();
+    aborted.abort();
+    expect(isConnectPhaseTimeout(await directLocalHttpFetch("http://127.0.0.1:9/healthz", { signal: aborted.signal })
+      .then(() => undefined, (reason: unknown) => reason))).toBe(false);
+  });
+
 
   test("times out an accepted silent socket without an AbortSignal", async () => {
     let accept!: () => void;

@@ -9,7 +9,9 @@ import { existsSync, mkdirSync } from "node:fs";
 import { connect } from "node:net";
 import { join } from "node:path";
 import * as accountStore from "../../src/codex/account-store";
+import { setCodexPoolQuotaTokenResolverForTests } from "../../src/codex/auth-api/pool-mode-gate";
 import { saveConfig } from "../../src/config";
+import { settleBackgroundWork } from "../../src/lib/background-work";
 import { startServer } from "../../src/server";
 import { activeRegistryMetrics } from "../../src/server/lifecycle";
 import type { OcxConfig } from "../../src/types";
@@ -176,6 +178,14 @@ test("a client that cancels during credential resolution releases admission befo
     entered.resolve();
     return held.promise;
   });
+  // The startup and pre-route quota primes resolve this expired credential through their own
+  // resolver, captured at module load, so the spy above never reaches them. Left alone they POST
+  // the fixture refresh token to the real token endpoint, bounded only by the 30 s refresh
+  // ceiling, and a stalled network outlives the file's 15 s cleanup. Refuse before any dial.
+  const restorePrimeResolver = setCodexPoolQuotaTokenResolverForTests(async () => {
+    throw new Error("fixture: quota prime has no credential");
+  });
+  let primeSettlement: Awaited<ReturnType<typeof settleBackgroundWork>> | undefined;
   let dials = 0;
   const server = startServer(0, {
     inspectNativeCodexOwnership: ownedServiceHomeInspection("server-live-cancel fixture"),
@@ -207,6 +217,10 @@ test("a client that cancels during credential resolution releases admission befo
     held.reject(new Error("fixture released"));
     client.destroy();
     await server.stop(true);
+    // A prime started late still reads the resolver; restore it only once that work is done.
+    primeSettlement = await settleBackgroundWork({ timeoutMs: 5_000 });
+    restorePrimeResolver();
     tokenSpy.mockRestore();
   }
+  expect(primeSettlement).toEqual({ settled: true, pending: [] });
 }, { timeout: 15_000 });

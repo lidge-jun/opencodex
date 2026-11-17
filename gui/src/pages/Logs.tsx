@@ -357,6 +357,7 @@ const ESTIMATE_REASON_KEYS = {
 const RECOVERY_KIND_KEYS = {
   "transient-5xx": "logs.detail.attempt.recovery.transient5xx",
   "connection-reset": "logs.detail.attempt.recovery.connectionReset",
+  "offline-resend": "logs.detail.attempt.recovery.offlineResend",
   "oauth-401": "logs.detail.attempt.recovery.oauth401",
   "oauth-account-403": "logs.detail.attempt.recovery.oauthAccount403",
   "key-401": "logs.detail.attempt.recovery.key401",

@@ -9,7 +9,7 @@ import { getFilteredUsageAggregate, getUsageAggregate, resetUsageAggregateCacheF
 import { getUsageSummaryCacheEntry, resetUsageSummaryCacheForTests } from "../../src/server/management/usage-summary-cache";
 import type { OcxConfig, PromptLengthPricing } from "../../src/types";
 import { estimateRequestCost } from "../../src/usage/cost";
-import { currentUsageLogRevision, resetUsageReadCacheForTests, type PersistedUsageEntry, type UsageLogRevision } from "../../src/usage/log";
+import { currentUsageLogRevision, resetUsageReadCacheForTests, type PersistedUsageEntry } from "../../src/usage/log";
 import { refreshUserCostOverlays, resetPreservedDiskOnlyProvidersForTests, userCostOverlayVersion } from "../../src/usage/user-cost-overlays";
 import { stopUserCostOverlayReconciler } from "../../src/usage/user-cost-overlay-reconciler";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -113,11 +113,6 @@ test("policy-only API writes refresh warm estimate, summary and aggregate caches
     const recorded = (result: { revision: unknown; overlayVersion: number; timeZone: string }) =>
       ({ revision: result.revision, overlayVersion: result.overlayVersion, timeZone: result.timeZone });
     const ledgerCtime = () => currentUsageLogRevision()?.ctimeMs ?? null;
-    const withoutCtime = (revision: UsageLogRevision | null) => {
-      if (!revision) return revision;
-      const { ctimeMs: _ctimeMs, ...rest } = revision;
-      return rest;
-    };
     let prevBase: unknown = null;
     for (const [stage, { policy, total }] of stages.entries()) {
       const inputsAtStageStart = aggregateInputs();
@@ -163,25 +158,15 @@ test("policy-only API writes refresh warm estimate, summary and aggregate caches
       const ctimeAfterFiltered = ledgerCtime();
       expect(readFileSync(ledgerPath, "utf8")).toBe(ledger);
       // The next stage's warm read is compared with the base read here, after all of this
-      // stage's work. On Windows something in the stage tail moved usage.jsonl's ChangeTime
-      // alone (batch 42694893702, stage 2), after refreshedAggregate had recorded its revision;
-      // a directory ACL operation is the suspected mover, but no Windows trace has named it.
-      // The revision key counts ChangeTime on purpose, so that read rebuilds. Only that move is
-      // tolerated, only on Windows, and the ChangeTime after each step is logged to name it.
+      // stage's work. On Windows the config home's background ACL harden re-applies inherited
+      // ACEs to usage.jsonl and moves its ChangeTime alone (batch 42694893702, stage 2). The
+      // revision key ignores ChangeTime there (usageLogRevisionKey), so that move must not
+      // rebuild; the ChangeTime after each step is still reported to name any other mover.
       const settled = await getUsageAggregate({ now });
-      if (settled.update !== "unchanged") {
-        const moved = JSON.stringify({ stage, update: settled.update, from: recorded(refreshedAggregate),
-          to: recorded(settled), ctime: { afterWrite: ctimeAfterWrite, afterSummary: ctimeAfterSummary,
-            refreshed: refreshedAggregate.revision?.ctimeMs ?? null, afterFiltered: ctimeAfterFiltered } });
-        expect(process.platform, moved).toBe("win32");
-        expect(settled.update, moved).toBe("rebuild");
-        expect(settled.revision && refreshedAggregate.revision, moved).toBeTruthy();
-        expect(settled.revision?.ctimeMs, moved).not.toBe(refreshedAggregate.revision?.ctimeMs);
-        expect(withoutCtime(settled.revision), moved).toEqual(withoutCtime(refreshedAggregate.revision));
-        expect(settled.overlayVersion, moved).toBe(refreshedAggregate.overlayVersion);
-        expect(settled.timeZone, moved).toBe(refreshedAggregate.timeZone);
-        console.warn(`[model-costs-pricing-cache] usage.jsonl ChangeTime moved within a stage: ${moved}`);
-      }
+      expect(settled.update, JSON.stringify({ stage, update: settled.update, from: recorded(refreshedAggregate),
+        to: recorded(settled), ctime: { afterWrite: ctimeAfterWrite, afterSummary: ctimeAfterSummary,
+          refreshed: refreshedAggregate.revision?.ctimeMs ?? null, afterFiltered: ctimeAfterFiltered } }))
+        .toBe("unchanged");
       expect(settled.accumulator.summarize("all", now).summary.estimatedCostUsd).toBeCloseTo(total, 12);
       prevBase = recorded(settled);
       previousTotal = total;
