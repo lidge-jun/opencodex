@@ -161,20 +161,21 @@ switch (scenario) {
     report({ restored: reconcileJournal(), beforeSha256: before });
     break;
   }
-  case "race-replay": {
-    // Untouched since injection, so restore takes the whole-file replay.
-    await inject();
-    setBeforeCodexConfigPublishForTests(site => { if (site === "journal") concurrentWrite(); });
-    const result = restoreNativeCodex({ skipHistory: true });
-    report({ success: result.success });
-    break;
-  }
+  case "race-replay":
   case "race-strip": {
-    // Changed since injection, so restore takes the field-level strip.
-    await inject(); laterEdits();
-    setBeforeCodexConfigPublishForTests(site => { if (site === "remove") concurrentWrite(); });
-    const result = restoreNativeCodex({ skipHistory: true });
-    report({ success: result.success });
+    // Untouched since injection takes the whole-file replay; changed takes the field-level strip.
+    await inject();
+    if (scenario === "race-strip") laterEdits();
+    setBeforeCodexConfigPublishForTests(site => { if (site === (scenario === "race-replay" ? "journal" : "remove")) concurrentWrite(); });
+    try {
+      const result = restoreNativeCodex({ skipHistory: true });
+      report({ success: result.success, retryable: result.artifacts.config.retryable === true });
+    } catch (error) {
+      // A partial-write refusal is reported with exactly what it could not put back.
+      const unrestored = (error as { unrestored?: readonly string[] }).unrestored;
+      if (!unrestored) throw error;
+      report({ success: false, unrestored });
+    }
     break;
   }
   case "race-retain": {

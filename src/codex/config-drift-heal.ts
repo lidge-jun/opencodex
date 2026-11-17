@@ -48,8 +48,17 @@ export interface CodexConfigDrift {
  * `keptUserBaseUrl`, and re-journaled as null) own that case, so a heal triggered on a
  * missing key runs into them and stops on its own rather than stomping a user's routing.
  */
+export interface JournaledCodexConfigKeys {
+  injectedOpenaiBaseUrl?: string | null;
+  injectedRealtimeWsBaseUrl?: string | null;
+  /** The catalog path the last injection wrote; its root key going missing is drift too. */
+  injectedCatalogPath?: string | null;
+  /** Every URL injections under this journal wrote per root key, so a write-back of an older one is drift. */
+  injectedRootValues?: Partial<Record<"openai_base_url" | typeof REALTIME_WS_BASE_URL_KEY, readonly string[]>>;
+}
+
 export function codexConfigDrift(
-  readJournal: () => { injectedOpenaiBaseUrl?: string | null; injectedRealtimeWsBaseUrl?: string | null } | null,
+  readJournal: () => JournaledCodexConfigKeys | null,
   configPath: string = CODEX_CONFIG_PATH,
   readFile: (path: string) => string = path => readFileSync(path, "utf-8"),
   fileExists: (path: string) => boolean = existsSync,
@@ -57,7 +66,8 @@ export function codexConfigDrift(
   const journal = readJournal();
   const journaledBaseUrl = journal?.injectedOpenaiBaseUrl;
   const journaledRealtimeWsUrl = journal?.injectedRealtimeWsBaseUrl;
-  if (!journaledBaseUrl && !journaledRealtimeWsUrl) {
+  const journaledCatalogPath = journal?.injectedCatalogPath;
+  if (!journaledBaseUrl && !journaledRealtimeWsUrl && !journaledCatalogPath) {
     return { drifted: false, missingKeys: [] };
   }
   if (!fileExists(configPath)) {
@@ -70,11 +80,31 @@ export function codexConfigDrift(
     return { drifted: false, missingKeys: [] };
   }
   const missingKeys: string[] = [];
-  if (journaledBaseUrl && rootTomlString(content, "openai_base_url") === null) {
-    missingKeys.push("openai_base_url");
-  }
-  if (journaledRealtimeWsUrl && rootTomlString(content, REALTIME_WS_BASE_URL_KEY) === null) {
-    missingKeys.push(REALTIME_WS_BASE_URL_KEY);
-  }
+  // Missing, or rewritten back to a value an EARLIER injection wrote (the Codex app restoring its
+  // own older copy). Another value is the user's and stays out of this check.
+  const drifted = (key: "openai_base_url" | typeof REALTIME_WS_BASE_URL_KEY, latest: string) => {
+    const value = rootTomlString(content, key);
+    return value === null || (value !== latest && (journal?.injectedRootValues?.[key] ?? []).includes(value));
+  };
+  if (journaledBaseUrl && drifted("openai_base_url", journaledBaseUrl)) missingKeys.push("openai_base_url");
+  if (journaledRealtimeWsUrl && drifted(REALTIME_WS_BASE_URL_KEY, journaledRealtimeWsUrl)) missingKeys.push(REALTIME_WS_BASE_URL_KEY);
+  if (journaledCatalogPath && rootTomlString(content, "model_catalog_json") === null) missingKeys.push("model_catalog_json");
   return { drifted: missingKeys.length > 0, missingKeys };
+}
+
+/**
+ * What to print after a heal. The first heal in a process is a warning that says what happened and
+ * what was kept; later ones are one quiet line, so an app that keeps rewriting the file is reported
+ * once instead of on every tick.
+ */
+export function codexConfigHealNotice(missingKeys: readonly string[], firstReport: boolean): { level: "warn" | "info"; message: string } {
+  if (!firstReport) {
+    return { level: "info", message: "[catalog-auto-refresh] injected Codex config keys were rewritten externally; re-injected" };
+  }
+  return {
+    level: "warn",
+    message: "[catalog-auto-refresh] Codex rewrote config.toml without OpenCodex's " + missingKeys.join(", ")
+      + "; re-injected only those keys and other settings were kept. If this repeats, the Codex app is"
+      + " rewriting config.toml from its own copy; run 'ocx sync' once it settles.",
+  };
 }

@@ -74,6 +74,13 @@ describe("INV-RESTORE-02 restore never overwrites a write that lands while it is
         expect(report.success).toBe(false);
         // The refusal kept the journal, so a retry can still restore.
         expect(report.journal).toBe(true);
+        if (scenario === "race-strip" && variant === "rename") {
+          // The journal step had already removed the generated profile, and a replaced config.toml
+          // forbids every publication in the section; that one file is named, nothing else.
+          expect(report.unrestored).toEqual(["profile", "journal"]);
+        } else {
+          expect(report.retryable).toBe(true);
+        }
       }, SPAWN_BUDGET_MS);
     }
   }

@@ -99,7 +99,7 @@ Call sites (MODIFY):
       }
 ```
 
-The existing profile/journal branches stay as they are.
+For every surface, first: \`if (readOrNull(path) === bytes) continue;\` — a surface already holding its preimage needs no publication, and asserting its destination after a foreign atomic rename of config.toml is what made the wp2 rename races throw \`CodexPartialWriteError\` over untouched profile/journal files. The profile \`profilePublish\` rule and the journal ordering stay.
 
 ## 3. Recovery uses the key-level restore (MODIFY)
 
@@ -186,3 +186,11 @@ export function codexConfigHealNotice(missingKeys: readonly string[], firstRepor
 ## Verification for this phase
 
 `bun test tests/codex-integration/codex-restore-later-edits.test.ts tests/codex-integration/codex-app-rewrite-routing.test.ts` all pass; then the neighbours: `codex-journal-recovery`, `codex-journal`, `codex-restore-app-rewrite`, `codex-config-write-lock`, `codex-provider-table-retention`, `codex-inject-integration`, `codex-inject-v1-reconcile`, `codex-config-preservation`, `codex-sync-user-edits`, `client-disconnect-recovery`, `codex-catalog-heal-integration`, `codex-journal-provider-reserialization`, `codex-inject-retained-table`; `bun run typecheck`.
+
+## As built (wp3)
+
+- §2 became a shared `decide` step in `restoreCodexPreImages` (skip / foreign / restore), run once before the held-lock destination check as well. When every surface already holds its preimage, the call returns complete without touching the lock. When the section can no longer publish (a foreign rename of config.toml), it names only the surfaces that still differ, plus the journal as recovery authority. A caller without a held lock keeps the old unconditional config restore.
+- In the strip-path rename race, the journal step has already removed the generated profile. The guard that refuses every publication after a destination change is unchanged, so restore reports `CodexPartialWriteError` naming `profile, journal` and keeps Codex's write and the journal; a retry completes. The test asserts exactly that.
+- `restoreCodexConfigInlineImpl` marks a `ConfigWriteContentChanged` failure retryable.
+- Drift also flags a root URL that holds an earlier injection's value (`injectedRootValues`), so a running proxy heals the app's stale write-back without waiting for the next sync.
+- `tests/codex-integration/codex-config-write-lock.test.ts` "retargeting during compensation…": one setup line records that the section published the `post` bytes. Under the new rule an unpublished foreign config is left alone, and this line keeps the test exercising the refused config publication. The assertion is unchanged.

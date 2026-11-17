@@ -1,4 +1,4 @@
-import { beginCodexWriteSection, publishCodexArtifact, runBeforeCodexConfigPublishForTests } from "./inject/config-write-section";
+import { beginCodexWriteSection, publishCodexArtifact, publishCodexConfigIfUnchanged } from "./inject/config-write-section";
 import { createHash } from "node:crypto";
 import type { AtomicWriteHooks } from "../config/atomic-write";
 import { existsSync, lstatSync, readFileSync, unlinkSync } from "node:fs";
@@ -10,7 +10,7 @@ import { configWriteLockFailureMessage, withConfigWriteLockHeld } from "./config
 import type { LockHandle } from "./config-write-lock";
 import { CODEX_HOME, CODEX_CONFIG_PATH, CODEX_PROFILE_PATH } from "./paths";
 import { transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "./subagent-defaults";
-import { captureJournalConfigFields, restoreJournalConfigFields, snapshotDisconnectRecovery, type JournalConfigFields } from "./journal-config-restore";
+import { appendInjectedRootHistory, captureJournalConfigFields, parseInjectedRootHistory, restoreJournalConfigFields, snapshotDisconnectRecovery, type InjectedRootHistory, type InjectedRootKey, type JournalConfigFields } from "./journal-config-restore";
 
 /**
  * Exported so that anything reasoning ABOUT the journal points at the journal.
@@ -88,6 +88,15 @@ interface Journal {
    * untouched managed line apart from an edited one. Null when no managed default was written.
    */
   injectedSubagentDefaults?: WrittenSubagentDefaults | null;
+  /**
+   * Every root routing URL injections under this journal wrote, newest last, bounded.
+   *
+   * The latest-value fields above prove only the most recent write. The Codex app can rewrite
+   * config.toml from its own older copy, putting back an EARLIER injection's URL without the marker
+   * comment; with only the latest value as evidence, sync took that URL for the user's, snapshotted
+   * it as native and kept pointing Codex at a dead port that restore could never remove.
+   */
+  injectedRootHistory?: InjectedRootHistory;
   /** Injection binding survives native snapshot replacement and is released by native restore. */
   opencodexHome?: string;
   pid: number;
@@ -213,6 +222,10 @@ export function writeJournal(options: WriteJournalOptions = {}, hooks: AtomicWri
     originalConfig: Buffer.from(config).toString("base64"),
     originalProfile: profile !== null ? Buffer.from(profile).toString("base64") : null,
     opencodexHome: opencodexHomeForInjection(previous?.opencodexHome),
+    ...(previous ? { injectedRootHistory: appendInjectedRootHistory(previous.injectedRootHistory, {
+      openai_base_url: previous.injectedOpenaiBaseUrl,
+      experimental_realtime_ws_base_url: previous.injectedRealtimeWsBaseUrl,
+    }) } : {}),
     pid: process.pid,
     owner: options.owner?.kind === "client"
       ? { kind: "client", apiKeyId: options.owner.apiKeyId }
@@ -262,6 +275,10 @@ export function markJournalInjectedState(
   journal.replacedRootWebSearch = ownership.replacedRootWebSearch ?? null;
   journal.injectedSubagentDefaults = ownership.injectedSubagentDefaults ?? null;
   journal.injectedCatalogPath = ownership.injectedCatalogPath;
+  journal.injectedRootHistory = appendInjectedRootHistory(journal.injectedRootHistory, {
+    openai_base_url: ownership.injectedOpenaiBaseUrl,
+    experimental_realtime_ws_base_url: ownership.injectedRealtimeWsBaseUrl,
+  });
   journal.opencodexHome = opencodexHomeForInjection(journal.opencodexHome);
   atomicWriteFile(JOURNAL_PATH, JSON.stringify(journal), undefined, hooks);
 }
@@ -281,6 +298,15 @@ export function journaledInjectedOpenaiBaseUrl(options: { readOnly?: boolean } =
 /** The root `experimental_realtime_ws_base_url` the last injection wrote, or null. */
 export function journaledInjectedRealtimeWsBaseUrl(options: { readOnly?: boolean } = {}): string | null {
   return readJournal(options.readOnly !== true)?.injectedRealtimeWsBaseUrl ?? null;
+}
+
+/** Every value injections under this journal wrote for a root routing URL, latest first. */
+export function journaledInjectedRootValues(key: InjectedRootKey, options: { readOnly?: boolean } = {}): string[] {
+  const journal = readJournal(options.readOnly !== true);
+  if (!journal) return [];
+  const latest = key === "openai_base_url" ? journal.injectedOpenaiBaseUrl : journal.injectedRealtimeWsBaseUrl;
+  const values = [latest, ...[...(parseInjectedRootHistory(journal.injectedRootHistory)[key] ?? [])].reverse()];
+  return [...new Set(values.filter((value): value is string => typeof value === "string" && value.length > 0))];
 }
 
 /** The root `web_search` value the last injection wrote, or null when it wrote none. */
@@ -432,11 +458,15 @@ export function restoreJournalState(
   let configRewritten = false;
   let profileRewritten = false;
   if ((configUnchanged || fieldRestore !== null) && !configRestored) {
-    options.beforeWrite?.();
-    runBeforeCodexConfigPublishForTests("journal");
-    publishCodexArtifact(CODEX_CONFIG_PATH, held, (path, hooks) => atomicWriteFile(path, fieldRestore ?? comparison.originalConfig, undefined, hooks));
+    const restoredConfig = fieldRestore ?? comparison.originalConfig;
+    // Published only over the bytes this decision was computed from; a write that landed since
+    // is refused rather than replaced, and the journal stays for a retry.
+    if (restoredConfig !== currentConfig) {
+      options.beforeWrite?.();
+      publishCodexConfigIfUnchanged(held, "journal", currentConfig, restoredConfig);
+      configRewritten = true;
+    }
     configRestored = true;
-    configRewritten = true;
   }
   if (profileUnchanged && !profileRestored) {
     if (comparison.originalProfile !== null) {
@@ -579,7 +609,7 @@ export function reconcileJournal(options: ReconcileJournalOptions = {}): boolean
   const owner = journal.owner ?? (Number.isSafeInteger(journal.pid) && journal.pid > 0 ? { kind: "process" as const, pid: journal.pid } : null);
   if (owner?.kind === "client") {
     if (options.activeClientApiKeyId === owner.apiKeyId) return false;
-    const restored = restoreJournalState({ heldConfigWriteLock: handle });
+    const restored = restoreJournalState({ heldConfigWriteLock: handle, preserveConfigEdits: true });
     if (restored.unverified) {
       console.error("⚠️ Codex journal recovery was not verified; current configuration files and the journal were preserved.");
       return false;
@@ -612,7 +642,9 @@ export function reconcileJournal(options: ReconcileJournalOptions = {}): boolean
     catch { console.error("⚠️ The Codex journal handed over by an update could not be adopted; the journal and configuration were preserved."); }
     return false;
   }
-  const restored = restoreJournalState({ heldConfigWriteLock: handle });
+  // Key-level like disconnect: a config changed since injection keeps every later edit and loses
+  // only OpenCodex's own fields; only the byte-identical injected file is replayed whole.
+  const restored = restoreJournalState({ heldConfigWriteLock: handle, preserveConfigEdits: true });
   if (restored.unverified) {
     console.error("⚠️ Codex journal recovery was not verified; current configuration files and the journal were preserved.");
     return false;

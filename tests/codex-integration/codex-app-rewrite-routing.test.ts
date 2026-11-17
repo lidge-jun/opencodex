@@ -41,6 +41,15 @@ describe("config drift detection", () => {
     expect(drift).toEqual({ drifted: true, missingKeys: ["model_catalog_json"] });
   });
 
+  test("a root URL written back to an earlier injection's value is drift; a user's own value is not", () => {
+    const latest = "http://127.0.0.1:10200/v1";
+    const earlier = { injectedOpenaiBaseUrl: latest, injectedRootValues: { openai_base_url: [latest, url] } };
+    const read = (value: string) => () => 'openai_base_url = "' + value + '"
+';
+    expect(codexConfigDrift(() => earlier, "/fixture/config.toml", read(url), () => true)).toEqual({ drifted: true, missingKeys: ["openai_base_url"] });
+    expect(codexConfigDrift(() => earlier, "/fixture/config.toml", read("https://gateway.invalid/v1"), () => true)).toEqual({ drifted: false, missingKeys: [] });
+  });
+
   test("the first heal of an app rewrite is reported once, later heals quietly", async () => {
     const heal = await import("../../src/codex/config-drift-heal") as Record<string, unknown>;
     expect(typeof heal.codexConfigHealNotice).toBe("function");

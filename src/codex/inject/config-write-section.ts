@@ -1,7 +1,8 @@
 import type { AtomicWriteHooks } from "../../config/atomic-write";
 import { existsSync, readFileSync } from "node:fs";
 import { withConfigMutationLockSync } from "../../config";
-import { ConfigWriteLockRefusal, assertConfigWriteDestination, publishConfigWriteTarget, removeConfigWriteEntry, watchConfigWriteTargets, withConfigWriteLockHeld, type LockHandle } from "../config-write-lock";
+import { atomicWriteFile } from "../../config/atomic-write";
+import { ConfigWriteContentChanged, ConfigWriteLockRefusal, assertConfigWriteDestination, configDigest, publishConfigWriteTarget, recordPublishedConfigDigest, removeConfigWriteEntry, watchConfigWriteTargets, withConfigWriteLockHeld, type LockHandle } from "../config-write-lock";
 import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH } from "../paths";
 import { getCodexHome } from "../paths";
 import { codexHomeIsAbsent } from "../codex-home-owner";
@@ -35,13 +36,36 @@ export function cleanExternalProviderJournal(beforeClientWrite?: () => void): vo
   });
   if (!locked.ok) throw new ConfigWriteLockRefusal(locked);
 }
-/** Where a restore publishes config.toml; the test seam below names the site. */
-export type CodexConfigPublishSite = "journal" | "remove" | "retain";
+/** Where OpenCodex publishes config.toml; the test seam below names the site. */
+export type CodexConfigPublishSite = "inject" | "journal" | "remove" | "retain" | "compensate";
 let beforeCodexConfigPublishForTests: ((site: CodexConfigPublishSite) => void) | undefined;
-/** Test seam: runs after a restore decided its bytes and before it publishes config.toml. */
+/** Test seam: runs after a writer decided its bytes and immediately before it publishes config.toml. */
 export function setBeforeCodexConfigPublishForTests(hook: typeof beforeCodexConfigPublishForTests): void {
   beforeCodexConfigPublishForTests = hook;
 }
-export function runBeforeCodexConfigPublishForTests(site: CodexConfigPublishSite): void {
-  beforeCodexConfigPublishForTests?.(site);
+function readConfigOrNull(path: string): string | null {
+  try { return readFileSync(path, "utf-8"); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
+}
+/**
+ * Publish config.toml only while it still holds `expected`, the bytes the caller decided from.
+ *
+ * The lock excludes other OpenCodex writers and its inode witness refuses an atomic rename, which
+ * is how Codex writes. Neither sees a writer that rewrites the file in place, and restore used to
+ * rename over such a write and report success. Comparing the bytes immediately before the rename
+ * refuses that too; a refusal writes nothing and is retryable.
+ */
+export function publishCodexConfigIfUnchanged(held: LockHandle, site: CodexConfigPublishSite, expected: string | null, next: string): void {
+  publishCodexArtifact(CODEX_CONFIG_PATH, held, (path, hooks) => atomicWriteFile(path, next, undefined, {
+    ...hooks,
+    validateBeforeRename: target => {
+      beforeCodexConfigPublishForTests?.(site);
+      if (readConfigOrNull(target) !== expected) throw new ConfigWriteContentChanged();
+      hooks.validateBeforeRename?.(target);
+    },
+    afterRename: target => {
+      recordPublishedConfigDigest(held, configDigest(next));
+      hooks.afterRename?.(target);
+    },
+  }));
 }

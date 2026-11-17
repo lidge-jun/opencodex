@@ -7,8 +7,8 @@
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 
-import { publishCodexArtifact } from "./inject/config-write-section";
-import { withConfigWriteLockHeld, type LockHandle } from "./config-write-lock";
+import { publishCodexArtifact, publishCodexConfigIfUnchanged } from "./inject/config-write-section";
+import { configDigest, publishedConfigDigest, withConfigWriteLockHeld, type LockHandle } from "./config-write-lock";
 import { atomicWriteFile } from "../config";
 import type { CodexWriteLockResult, CodexWriteLockSkipReason } from "./codex-write-lock";
 import { HUB_GATED_SKIP_MESSAGE } from "./desired-state";
@@ -380,19 +380,43 @@ export function restoreCodexPreImages(
   heldConfigWriteLock?: LockHandle,
   profilePublish?: CodexProfilePublish,
 ): { complete: boolean; unrestored: readonly string[] } {
-  const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, heldConfigWriteLock, held => {
-  const unrestored: string[] = [];
   const surfaces: readonly [string, string, string | null][] = [
     ["config", CODEX_CONFIG_PATH, pre.config],
     ["profile", CODEX_PROFILE_PATH, pre.profile],
     ["journal", JOURNAL_PATH, pre.journal],
   ];
+  /*
+   * What a surface needs. One already holding its preimage needs nothing, and must not be made to
+   * pass a destination check: a foreign atomic rename of config.toml would otherwise fail the
+   * untouched profile and journal too. config.toml is reverted only when this section published it
+   * and it still holds that publication; any other bytes there belong to another writer.
+   */
+  const decide = (name: string, path: string, bytes: string | null, held: LockHandle | undefined): "skip" | "foreign" | "restore" => {
+    const current = readOrNull(path);
+    if (current === bytes) return "skip";
+    if (name === "profile" && profilePublish
+      && (profilePublish.published === undefined || current !== profilePublish.published)) return "skip";
+    if (name !== "config") return "restore";
+    const ours = held ? publishedConfigDigest(held) : undefined;
+    if (ours === undefined) return held ? "skip" : "restore";
+    return configDigest(current) === ours ? "restore" : "foreign";
+  };
+  if (surfaces.every(([name, path, bytes]) => decide(name, path, bytes, heldConfigWriteLock) === "skip")) {
+    return { complete: true, unrestored: [] };
+  }
+  const locked = withConfigWriteLockHeld(CODEX_CONFIG_PATH, heldConfigWriteLock, held => {
+  const unrestored: string[] = [];
   for (const [name, path, bytes] of surfaces) {
     // The current journal remains recovery authority until both artifacts are restored.
     if (name === "journal" && unrestored.length > 0) { unrestored.push(name); continue; }
     try {
-      if (name === "profile" && profilePublish
-        && (profilePublish.published === undefined || readOrNull(path) !== profilePublish.published)) continue;
+      const need = decide(name, path, bytes, heldConfigWriteLock === undefined ? undefined : held);
+      if (need === "skip") continue;
+      if (need === "foreign") { unrestored.push(name); continue; }
+      if (name === "config" && bytes !== null && heldConfigWriteLock !== undefined) {
+        publishCodexConfigIfUnchanged(held, "compensate", readOrNull(path), bytes);
+        continue;
+      }
       publishCodexArtifact(path, held, (destination, hooks) => {
         if (bytes === null) {
           hooks.validateBeforeRename?.(destination);
@@ -406,7 +430,12 @@ export function restoreCodexPreImages(
   }
   return { complete: unrestored.length === 0, unrestored };
   });
-  return locked.ok ? locked.value : { complete: false, unrestored: ["config", "profile", "journal"] };
+  if (locked.ok) return locked.value;
+  // The section can no longer publish (its destination changed). Name only what still differs
+  // from its preimage; a surface already holding it was not left partial.
+  const unrestored = surfaces.filter(([name, path, bytes]) => decide(name, path, bytes, heldConfigWriteLock) !== "skip").map(([name]) => name);
+  if (unrestored.length > 0 && !unrestored.includes("journal")) unrestored.push("journal");
+  return { complete: false, unrestored };
 }
 
 export function buildInjectWitness(
