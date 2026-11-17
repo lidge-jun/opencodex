@@ -120,7 +120,7 @@ Anthropic。若任一提供方请求头包含代理准入密钥，该密钥会�
 可以设置 `claudeCode.nativePassthrough: false`、运行 `ocx claude config set --native-passthrough off`，
 或关闭仪表盘 Providers → Anthropic Claude → Accounts 中 Claude 账户池下方的 **Claude 原生透传** 开关来禁用；也可以通过
 `claudeCode.anthropicBaseUrl` 指向其他位置。关闭透传后，没有别名或 `modelMap` 条目的 Claude 模型会像其他
-模型一样被路由，会先交给已启用的 `anthropic` 或 `anthropic-*` 提供商；若没有，则按常规路由（列出该模型的提供商、别名，最后是默认提供商）。指向其他提供商模型的 `modelMap` 条目在两种状态下都会发往那里。
+模型一样被路由，路由器依次检查：`defaultModel` 为该 ID 的已启用提供商、已启用的 `anthropic` 或 `anthropic-*` 提供商、模型列表包含该 ID 的提供商、别名，最后是默认提供商。指向其他提供商模型的 `modelMap` 条目在两种状态下都会发往那里。
 当路由是 Anthropic OAuth 提供商时，由 OpenCodex 中保存的 Anthropic 账户处理请求；再保存一个账户即可在
 429 时故障转移，而主动的 Claude OAuth 账户池 需要开启 `anthropicAccountPool.enabled` 才会生效。
 路由从下一个请求开始按新设置执行；已在运行的 Claude Code 会话需要重新启动，以便模型槽位和上下文窗口
