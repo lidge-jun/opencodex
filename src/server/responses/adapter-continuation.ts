@@ -202,6 +202,14 @@ export function createAdapterContinuations(
     let response: Response | undefined;
     let refusalPendingReplay: Response | undefined;
     let replaySetupFailed = false;
+    // Refused account's request attribution, restored when its replacement fails before sending.
+    let refusalAttribution: { provider: string; label?: string; ordinal?: number; sends?: number;
+      attemptLabel?: NonNullable<typeof logCtx.activeAttempt>["accountLogLabel"] } | undefined;
+    const captureRefusalAttribution = () => {
+      const attempt = logCtx.activeAttempt;
+      refusalAttribution = { provider: logCtx.provider, label: logCtx.accountLogLabel, ordinal: attempt?.ordinal,
+        sends: attempt?.sendCount, attemptLabel: attempt?.accountLogLabel };
+    };
     // One-shot recovery label for the next top-of-loop continuation send after a failover rotation.
     let nextContinuationRecoveryKind: AttemptRecoveryKind | undefined = initialRecoveryKind;
     /**
@@ -351,6 +359,15 @@ export function createAdapterContinuations(
           response = refusalPendingReplay;
           refusalPendingReplay = undefined;
           replaySetupFailed = true;
+          const attempt = logCtx.activeAttempt;
+          // Same attempt and send count: the replacement never dispatched, so the refusal stays the refused account's.
+          if (attempt && refusalAttribution && attempt.ordinal === refusalAttribution.ordinal && attempt.sendCount === refusalAttribution.sends) {
+            logCtx.provider = refusalAttribution.provider;
+            if (refusalAttribution.label === undefined) delete logCtx.accountLogLabel;
+            else logCtx.accountLogLabel = refusalAttribution.label;
+            if (refusalAttribution.attemptLabel === undefined) delete attempt.accountLogLabel;
+            else attempt.accountLogLabel = refusalAttribution.attemptLabel;
+          }
         } else {
           if (refusalPendingReplay) {
             sendBudgetState.pendingHopPermit?.release();
@@ -469,6 +486,7 @@ export function createAdapterContinuations(
         } catch (error) { hop.permit?.release(); throw error; }
         if (!nextAccountId) hop.permit?.release();
         if (nextAccountId) {
+          captureRefusalAttribution();
           try {
             const admitted = await commitResolvedOAuthSelection(await anthropicRoutingFor(anthropicInstance).getAnthropicPoolAccessSnapshot(nextAccountId));
             if (!admitted) throw new Error("OAuth selection changed during recovery");
@@ -565,6 +583,7 @@ export function createAdapterContinuations(
             // metadata, so a token-only swap would mix one account's credential with another's
             // routing data.
             const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
+            captureRefusalAttribution();
             const applied = await applyFailoverSnapshot(snapshot, nextParsed);
             if (!applied) hop.permit?.release();
             if (applied) {

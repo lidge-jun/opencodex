@@ -1,6 +1,7 @@
 /** Bounded Anthropic recovery through real local HTTP ingress and provider endpoints. */
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import type { Server } from "bun";
+import { ADAPTER_REGISTRY } from "../../../src/adapters/registry";
 import { createRequestExecutionBudget } from "../../../src/lib/request-execution-budget";
 import * as inference from "../../../src/server/inference/context";
 import { createAnthropicInstanceFixture, type AnthropicInstanceFixture } from "../../helpers/anthropic-instance-fixture";
@@ -14,6 +15,8 @@ let sends: string[];
 let reply: (index: number, body: Record<string, unknown>) => Response | Promise<Response>;
 let options: import("../../../src/server/responses/core-options").HandleResponsesOptions;
 let budgetSpy: ReturnType<typeof spyOn> | undefined;
+let adapterSpy: ReturnType<typeof spyOn> | undefined;
+let lastLog: { model: string; provider: string };
 const realFetch = globalThis.fetch;
 const model = "claude-sonnet-4-6";
 
@@ -69,7 +72,7 @@ beforeEach(async () => {
   const { handleResponses } = await import("../../../src/server/responses");
   const { handleClaudeMessages } = await import("../../../src/server/claude-messages");
   ingress = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(request) {
-    const log = { model: "", provider: "" };
+    const log = lastLog = { model: "", provider: "" };
     return new URL(request.url).pathname === "/v1/messages"
       ? handleClaudeMessages(request, fixture.config, log)
       : handleResponses(request, fixture.config, log, options);
@@ -77,6 +80,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   budgetSpy?.mockRestore(); budgetSpy = undefined;
+  adapterSpy?.mockRestore(); adapterSpy = undefined;
   await ingress?.stop(true); await provider?.stop(true);
   releaseSpend?.(); releaseSpend = undefined;
   const { clearResponseStateForTests } = await import("../../../src/responses/state");
@@ -210,4 +214,26 @@ test("continuation after committed assistant output never replays on another acc
   expect(await response.text()).toContain("I will modify the file now.");
   expect(sends).toEqual(["Bearer synthetic-roster-0", "Bearer synthetic-roster-0"]);
   expect(fixture.store.getAccountSet("anthropic")!.activeAccountId).toBe(fixture.store.getAccountSet("anthropic")!.accounts[0]!.id);
+});
+
+for (const replacementSends of [false, true]) test(`continuation refusal stays on refused account unless replacement sends (${replacementSends})`, async () => {
+  await seed(3); fixture.config.emptyCompletionRetry = true; fixture.publishConfig();
+  const create = ADAPTER_REGISTRY.anthropic.create;
+  if (!replacementSends) adapterSpy = spyOn(ADAPTER_REGISTRY.anthropic, "create").mockImplementation((provider, context) => {
+    const adapter = create(provider, context);
+    if (provider.apiKey === "synthetic-roster-1") adapter.buildRequest = async () => { throw new Error("synthetic replacement setup failure"); };
+    return adapter;
+  });
+  let refusedProvider = "";
+  reply = index => {
+    if (index === 1) return answer(true, "");
+    if (index === 2) { refusedProvider = lastLog.provider; return refusal(); }
+    return Response.json({ type: "error", error: { type: "api_error", message: "Synthetic replacement failure" } }, { status: 500 });
+  };
+  await post(false, true);
+  expect(sends).toEqual(["Bearer synthetic-roster-0", "Bearer synthetic-roster-0",
+    ...(replacementSends ? ["Bearer synthetic-roster-1"] : [])]);
+  expect(refusedProvider).not.toBe("");
+  if (replacementSends) expect(lastLog.provider).not.toBe(refusedProvider);
+  else expect(lastLog.provider).toBe(refusedProvider);
 });
