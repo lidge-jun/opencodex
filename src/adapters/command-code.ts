@@ -14,6 +14,7 @@ import { configuredReasoningEfforts, modelRecordValue } from "../reasoning-effor
 import { commandCodeReasoningEfforts, refreshCommandCodeReasoningEfforts } from "../providers/command-code-efforts";
 import { identifyRoutedModel } from "./identity";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
+import { normalizeAnthropicInputSchema } from "./anthropic-input-schema";
 import { parseDataUrl } from "./image";
 import { createAdapterPhysicalSend } from "./physical-send";
 import { SendBudgetExhaustedError } from "../lib/upstream-retry";
@@ -207,7 +208,7 @@ function wireTools(tools: OcxTool[]): Array<Record<string, unknown>> {
   return tools.map(tool => ({
     name: namespacedToolName(tool.namespace, tool.name),
     description: tool.description,
-    input_schema: tool.parameters,
+    input_schema: normalizeAnthropicInputSchema(tool.parameters),
   }));
 }
 

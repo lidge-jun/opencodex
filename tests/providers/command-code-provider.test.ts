@@ -792,7 +792,7 @@ describe("Command Code provider", () => {
     };
     const built = await builtRequest(namespacedParsed);
     const tools = JSON.parse(built.body).params.tools;
-    expect(tools).toEqual([{ name: "functions__exec_command", description: "exec", input_schema: { type: "object" } }]);
+    expect(tools).toEqual([{ name: "functions__exec_command", description: "exec", input_schema: { type: "object", properties: {} } }]);
 
     const bareBuilt = await builtRequest({
       ...namespacedParsed,
