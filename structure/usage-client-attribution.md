@@ -195,6 +195,20 @@ newly scoped by that rule. `src/server/hub-usage.ts` binds a client-filtered dat
 key and emits a safe scope echo; `src/remote/hub-usage.ts` projects it without key IDs, and
 `src/client/hub-client.ts` rejects a missing or mismatched echo.
 
+## Credential recovery attempts
+
+`noteProviderAttemptSend` in `src/server/request-log.ts` closes a sent attempt before a
+credential recovery even when the provider and opaque account label are unchanged, such as a
+same-account OAuth refresh after 401. `credentialRecoveryStatus` in
+`src/server/request-log-attempt-recovery.ts` maps the closed credential-recovery roster to its
+401, 402, 403 or 429 refusal status; an already recorded upstream status takes precedence.
+The existing in-place split preserves the active object, keeps the refused send's usage on its
+sealed row and records the replacement send on a fresh row. A recovery before the first send
+creates no extra row. Same-account waits and transport resends remain on the existing attempt.
+`tests/usage/key-attribution.test.ts` covers the split and non-split kinds; the loopback server
+case in `tests/server/server-google-antigravity-oauth-401-replay.test.ts` records separate 401
+and 200 rows for a same-account refresh.
+
 ## Anthropic pool account tag
 
 Anthropic pool attempts carry no `accountLogLabel`; the pool folds the account into the logged
