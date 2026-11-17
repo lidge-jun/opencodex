@@ -277,6 +277,20 @@ function elsewhere(row: OverviewRow): boolean {
     && !(row.toggleOn ?? row.applied);
 }
 
+/*
+ * "Update needed" with the switch ON is a drifted file the user already chose to
+ * keep applied, so the pill can repeat the apply the switch would have made. Not
+ * when the switch is off (stale there means cleanup is pending, and applying would
+ * undo the user's choice), and never for Aside, whose apply is per profile.
+ */
+function canReapply(row: OverviewRow): boolean {
+  return row.state === "stale"
+    && row.installed
+    && row.toggle !== null
+    && Boolean(row.toggleOn ?? row.applied)
+    && row.status?.clientId !== "aside";
+}
+
 export default function IntegrationsOverview({
   apiBase,
   active = true,
@@ -796,17 +810,6 @@ export default function IntegrationsOverview({
    *
    * Errors propagate so the dialog can show them while the user still has cancel.
    */
-  /*
-   * "Update needed" with the switch ON is a drifted file the user already chose to
-   * keep applied, so the pill can repeat the apply the switch would have made. Not
-   * when the switch is off (stale there means cleanup is pending, and applying would
-   * undo the user's choice), and never for Aside, whose apply is per profile.
-   */
-  const canReapply = (row: OverviewRow) => row.state === "stale"
-    && row.installed
-    && row.toggle !== null
-    && (row.toggleOn ?? row.applied)
-    && row.status?.clientId !== "aside";
   const reapplyCard = (row: OverviewRow) => {
     // File clients keep their consequence dialog; native clients re-run the same PUT the switch sends.
     if (row.status) void requestFilePlan(row, "apply");
