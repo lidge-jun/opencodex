@@ -394,7 +394,9 @@ export function restoreCodexPreImages(
    * has no publication record and keeps the unconditional config restore it always had.
    */
   const decide = (name: string, path: string, bytes: string | null, held: LockHandle | undefined): "skip" | "foreign" | "restore" => {
-    const current = readOrNull(path);
+    let current: string | null;
+    // An unreadable surface proves nothing; the guarded restore attempt reports it as unrestored.
+    try { current = readOrNull(path); } catch { return "restore"; }
     if (current === bytes) return "skip";
     if (name === "profile" && profilePublish
       && (profilePublish.published === undefined || current !== profilePublish.published)) return "skip";
