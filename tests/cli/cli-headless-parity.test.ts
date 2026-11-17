@@ -553,6 +553,9 @@ describe("headless GUI parity CLI", () => {
       ["/api/selected-models", "ocx models"],
       ["/api/custom-models", "ocx models"],
       ["/api/model", "ocx models"],
+      // Forcing a public price-list refresh is a dashboard button. The route registry records
+      // the CLI verb as owed (deferred-verb, owner structure/pricing.md).
+      ["/api/pricing/refresh", "(none — GUI price-list refresh; CLI verb deferred in the route registry)"],
       ["/api/combos", "ocx combo"],
       ["/api/client-config", "ocx export"],
       ["/api/client-integrations", "ocx integration client"],
