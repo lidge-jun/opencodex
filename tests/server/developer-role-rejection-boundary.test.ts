@@ -51,7 +51,10 @@ afterAll(() => {
 async function exchange(stream: boolean, path = "/v1/chat/completions", body?: Record<string, unknown>) {
   const printed: string[] = [];
   const originals = { warn: console.warn, error: console.error, log: console.log, info: console.info };
-  for (const name of ["warn", "error", "log", "info"] as const) console[name] = (...args: unknown[]) => { printed.push(args.map(String).join(" ")); };
+  // Objects are printed with their nested fields, so provider text inside a logged object is still caught.
+  for (const name of ["warn", "error", "log", "info"] as const) console[name] = (...args: unknown[]) => {
+    printed.push(args.map(arg => typeof arg === "string" ? arg : Bun.inspect(arg, { depth: Infinity })).join(" "));
+  };
   let server: ReturnType<typeof startServer> | undefined;
   try {
     server = startServer(0);
