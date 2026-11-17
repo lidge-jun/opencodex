@@ -321,7 +321,10 @@ applies to xAI and to Kimi Code at its exact HTTPS Responses endpoint
 (`https://api.kimi.com/coding/v1/responses`); unrelated Responses destinations keep their original include list.
 The exact [OpenCode Go Responses endpoint](https://opencode.ai/zen/go/v1/responses) uses the same
 output-include cleanup across its models because some backends reject the field. This preserves
-`reasoning.encrypted_content` and other include entries; it does not drop encrypted reasoning history.
+`reasoning.encrypted_content` and other include entries, and the cleanup itself does not drop encrypted
+reasoning history. A provider that lists the model in `arkKimiResponsesModels` still runs the separate
+Ark Kimi strip first, which removes `encrypted_content` only from an unreferenced, summary-less reasoning
+item left between two user messages.
 
 These request-shape fixes do not change account entitlements. Meta limits Muse Code
 subscription credentials to the Muse Code client; other clients require a separately
