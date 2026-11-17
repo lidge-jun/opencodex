@@ -57,3 +57,11 @@ Not reproduced on dev: a systematic whole-file replay reverting later settings. 
 ## Constraints
 
 Temporary homes only; never the real `~/.codex`/`~/.opencodex`; no config values printed. `src/codex/inject.ts` sits at its file-size cap (987) so its change is net ≤ 0 lines. `structure/codex-home.md` is at the 600-line doc budget, so its update edits existing paragraphs. New test files register in `scripts/test-layout/layout.json` and `tests/fixtures/test-layout-expected.json`.
+
+## Status (wp4)
+
+- PR: https://github.com/lidge-jun/opencodex/pull/8878 (base `dev`, label `ci:full`).
+- Fail-first: 11/18 new tests failed at `cc48be64d9` (tests + seam), each for the recorded reason; 19/19 pass after the fix.
+- Local gates at `514b258e33`: typecheck 0; 546/546 focused; structure:check and privacy:scan pass; test:changed 37,999 pass with 5 load timeouts that pass on their own.
+- Residual: a native `codex` child's publication digest is a post-rename re-read; the strip-path rename race leaves the generated profile removed until a retry.
+- Subagents: research, plan audit r2, wp2 audit r2 and diff review r2 ran on codex / `morph/morph-dsv41flash-1017`. Plan audit r1, wp2 audit r1 and diff review r1 stalled or returned no verdict and were cancelled or retried.
