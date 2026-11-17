@@ -22,7 +22,7 @@ const CLAUDE_USAGE = `Usage:
   ocx claude config set [--enabled <on|off>] [--auth-mode <auto|proxy|subscription>]
       [--system-env <on|off>] [--fast-mode <on|off>] [--auto-context <on|off>]
       [--compact-window <tokens|default>] [--context-accounting <1m|200k>] [--inject-agents <on|off>]
-      [--small-fast-model <id|->] [--model-map <from=to,from=to|->]
+      [--native-passthrough <on|off>] [--small-fast-model <id|->] [--model-map <from=to,from=to|->]
       [--blocked-skills <name,name|->] [--web-model <id|->] [--web-backend <openai|anthropic|xai|gemini|exa|->]
       [--vision-model <id|->] [--vision-backend <openai|anthropic|->] [--json]
   ocx claude config set --first-party <on|off> [--json]`;
@@ -80,6 +80,7 @@ export async function handleClaudeConfigCommand(argv: string[], deps: RuntimeApi
     const compact = takeOption(args, "--compact-window");
     const accounting = takeOption(args, "--context-accounting");
     const injectAgents = takeBooleanOption(args, "--inject-agents");
+    const nativePassthrough = takeBooleanOption(args, "--native-passthrough");
     const smallFastModel = takeOption(args, "--small-fast-model");
     const modelMap = takeOption(args, "--model-map");
     const blockedSkills = takeOption(args, "--blocked-skills");
@@ -107,6 +108,7 @@ export async function handleClaudeConfigCommand(argv: string[], deps: RuntimeApi
       body.contextAccounting = value;
     }
     if (injectAgents !== undefined) body.injectAgents = injectAgents;
+    if (nativePassthrough !== undefined) body.nativePassthrough = nativePassthrough;
     if (smallFastModel !== undefined) body.smallFastModel = smallFastModel === "-" ? "" : smallFastModel;
     if (modelMap !== undefined) body.modelMap = parseMap(modelMap);
     if (blockedSkills !== undefined) body.blockedSkills = blockedSkills === "-" ? null : csv(blockedSkills);

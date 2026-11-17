@@ -984,6 +984,33 @@ test("PUT/GET round-trips contextAccounting; 1m drops the key, anything else is 
   }
 });
 
+test("PUT/GET round-trips nativePassthrough; true drops the key, a non-boolean is a 400", async () => {
+  const applySpy = spyOn(systemEnv, "applySystemEnvToggle").mockResolvedValue({ reverted: false, reason: "test" });
+  const server = startServer(0);
+  const put = (nativePassthrough: unknown) => fetch(new URL("/api/claude-code", server.url), {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ nativePassthrough }),
+  });
+  const get = async () => (await fetch(new URL("/api/claude-code", server.url)).then(r => r.json()) as Record<string, unknown>).nativePassthrough;
+  try {
+    expect(await get()).toBe(true);
+    expect((await put(false)).status).toBe(200);
+    expect(loadConfig().claudeCode?.nativePassthrough).toBe(false);
+    expect(await get()).toBe(false);
+    expect((await put(true)).status).toBe(200);
+    expect(loadConfig().claudeCode?.nativePassthrough).toBeUndefined();
+    expect(await get()).toBe(true);
+    const bad = await put("off");
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as { error: string }).error).toBe("nativePassthrough must be a boolean");
+    expect(loadConfig().claudeCode?.nativePassthrough).toBeUndefined();
+    // Routing reads the live config per request; the launchd env carries nothing that depends on it.
+    expect(applySpy).not.toHaveBeenCalled();
+  } finally {
+    applySpy.mockRestore();
+    await server.stop(true);
+  }
+});
+
 test("PUT/GET round-trips auto-context (devlog 260712 020)", async () => {
   const server = startServer(0);
   try {
@@ -1075,6 +1102,7 @@ test("PUT validation rejects bad shapes", async () => {
       [{ alwaysEnableEffort: "on" }, "alwaysEnableEffort must be a boolean"],
       [{ autoContext: "on" }, "autoContext must be a boolean"],
       [{ injectAgents: "on" }, "injectAgents must be a boolean"],
+      [{ nativePassthrough: "on" }, "nativePassthrough must be a boolean"],
       [{ blockedSkills: "claude-api" }, "blockedSkills must be an array of non-empty strings, or null"],
       [{ blockedSkills: [""] }, "blockedSkills must be an array of non-empty strings, or null"],
       [{ blockedSkills: [1] }, "blockedSkills must be an array of non-empty strings, or null"],

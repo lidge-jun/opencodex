@@ -1626,6 +1626,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       contextAccounting: config.claudeCode?.contextAccounting === "200k" ? "200k" : "1m",
       blockedSkills: config.claudeCode?.blockedSkills ?? null,
       injectAgents: config.claudeCode?.injectAgents !== false,
+      nativePassthrough: config.claudeCode?.nativePassthrough !== false,
       sidecarPools: {
         webSearchSidecar: sidecarAnthropicPoolOptions(config, { ...config.webSearchSidecar, ...webSearchOverride }, helperParent),
         visionSidecar: sidecarAnthropicPoolOptions(config, { ...helperVision, backend: helperVisionBackend }, helperParent),
@@ -1660,7 +1661,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       return prototype === Object.prototype || prototype === null;
     };
     if (!isPlainObject(parsedBody)) return jsonResponse({ error: "body must be an object" }, 400);
-    const body = parsedBody as { enabled?: unknown; cliFirstParty?: unknown; authMode?: unknown; model?: unknown; smallFastModel?: unknown; modelMap?: unknown; classifierModel?: unknown; classifierFallbacks?: unknown; systemEnv?: unknown; fastMode?: unknown; maxContextTokens?: unknown; alwaysEnableEffort?: unknown; tierModels?: unknown; autoContext?: unknown; autoCompactWindow?: unknown; contextAccounting?: unknown; blockedSkills?: unknown; injectAgents?: unknown; webSearchSidecar?: unknown; visionSidecar?: unknown };
+    const body = parsedBody as { enabled?: unknown; cliFirstParty?: unknown; authMode?: unknown; model?: unknown; smallFastModel?: unknown; modelMap?: unknown; classifierModel?: unknown; classifierFallbacks?: unknown; systemEnv?: unknown; fastMode?: unknown; maxContextTokens?: unknown; alwaysEnableEffort?: unknown; tierModels?: unknown; autoContext?: unknown; autoCompactWindow?: unknown; contextAccounting?: unknown; blockedSkills?: unknown; injectAgents?: unknown; nativePassthrough?: unknown; webSearchSidecar?: unknown; visionSidecar?: unknown };
     if (body.cliFirstParty !== undefined && typeof body.cliFirstParty !== "boolean")
       return jsonResponse({ error: "cliFirstParty must be a boolean" }, 400);
     if (body.cliFirstParty !== undefined && Object.keys(body).length !== 1)
