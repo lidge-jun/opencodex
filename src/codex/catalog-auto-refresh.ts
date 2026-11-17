@@ -253,9 +253,8 @@ async function tick(): Promise<void> {
     if (entryGeneration !== generation) return;
     if (heal === "healed") {
       const { codexConfigHealNotice } = await import("./config-drift-heal");
-      const notice = codexConfigHealNotice(lastHealMissingKeys, !healReported);
+      console.info(codexConfigHealNotice(lastHealMissingKeys, !healReported));
       healReported = true;
-      (notice.level === "warn" ? console.warn : console.info)(notice.message);
     } else if (heal === "not-healed") {
       console.info("[catalog-auto-refresh] injected Codex config keys were rewritten externally; not re-injected this tick");
     }

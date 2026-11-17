@@ -44,8 +44,7 @@ describe("config drift detection", () => {
   test("a root URL written back to an earlier injection's value is drift; a user's own value is not", () => {
     const latest = "http://127.0.0.1:10200/v1";
     const earlier = { injectedOpenaiBaseUrl: latest, injectedRootValues: { openai_base_url: [latest, url] } };
-    const read = (value: string) => () => 'openai_base_url = "' + value + '"
-';
+    const read = (value: string) => () => 'openai_base_url = "' + value + '"\n';
     expect(codexConfigDrift(() => earlier, "/fixture/config.toml", read(url), () => true)).toEqual({ drifted: true, missingKeys: ["openai_base_url"] });
     expect(codexConfigDrift(() => earlier, "/fixture/config.toml", read("https://gateway.invalid/v1"), () => true)).toEqual({ drifted: false, missingKeys: [] });
   });
@@ -53,11 +52,12 @@ describe("config drift detection", () => {
   test("the first heal of an app rewrite is reported once, later heals quietly", async () => {
     const heal = await import("../../src/codex/config-drift-heal") as Record<string, unknown>;
     expect(typeof heal.codexConfigHealNotice).toBe("function");
-    const notice = heal.codexConfigHealNotice as (missing: readonly string[], firstReport: boolean) => { level: "warn" | "info"; message: string };
+    const notice = heal.codexConfigHealNotice as (missing: readonly string[], firstReport: boolean) => string;
     const first = notice(["openai_base_url", "model_catalog_json"], true);
-    expect(first.level).toBe("warn");
-    expect(first.message).toContain("openai_base_url, model_catalog_json");
-    expect(first.message).toContain("other settings were kept");
-    expect(notice(["openai_base_url"], false).level).toBe("info");
+    expect(first).toContain("openai_base_url, model_catalog_json");
+    expect(first).toContain("other settings were kept");
+    const later = notice(["openai_base_url"], false);
+    expect(later).toContain("re-injected");
+    expect(later).not.toContain("other settings were kept");
   });
 });

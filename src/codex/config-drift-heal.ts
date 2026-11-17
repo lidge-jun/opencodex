@@ -93,18 +93,13 @@ export function codexConfigDrift(
 }
 
 /**
- * What to print after a heal. The first heal in a process is a warning that says what happened and
- * what was kept; later ones are one quiet line, so an app that keeps rewriting the file is reported
- * once instead of on every tick.
+ * What to print after a heal. The first heal in a process says what happened and what was kept;
+ * later ones are one quiet line, so an app that keeps rewriting the file is explained once instead
+ * of on every tick.
  */
-export function codexConfigHealNotice(missingKeys: readonly string[], firstReport: boolean): { level: "warn" | "info"; message: string } {
-  if (!firstReport) {
-    return { level: "info", message: "[catalog-auto-refresh] injected Codex config keys were rewritten externally; re-injected" };
-  }
-  return {
-    level: "warn",
-    message: "[catalog-auto-refresh] Codex rewrote config.toml without OpenCodex's " + missingKeys.join(", ")
-      + "; re-injected only those keys and other settings were kept. If this repeats, the Codex app is"
-      + " rewriting config.toml from its own copy; run 'ocx sync' once it settles.",
-  };
+export function codexConfigHealNotice(missingKeys: readonly string[], firstReport: boolean): string {
+  if (!firstReport) return "[catalog-auto-refresh] injected Codex config keys were rewritten externally; re-injected";
+  return "[catalog-auto-refresh] Codex rewrote config.toml without OpenCodex's " + missingKeys.join(", ")
+    + "; re-injected only those keys and other settings were kept. If this repeats, the Codex app is"
+    + " rewriting config.toml from its own copy; run 'ocx sync' once it settles.";
 }
