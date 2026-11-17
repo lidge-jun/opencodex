@@ -110,7 +110,10 @@ export function AccountQuotaTable({ accounts, strategy, renderAccount, renderAct
           </thead>
           {table.rows.map(row => {
             const details = renderDetails?.(row);
-            const withDetails = hasContent(details);
+            // No pool column to carry the notice (a refused account rarely has a quota reading),
+            // so it goes on the detail line instead of being lost behind the status flag.
+            const bannedLine = table.pools.length === 0 && row.account.banned ? <BannedNotice banned={row.account.banned} /> : null;
+            const withDetails = bannedLine !== null || hasContent(details);
             return (
               <tbody key={row.account.id} className={`aqt-group${row.account.active ? " aqt-group--active" : ""}${withDetails ? " aqt-group--details" : ""}`} data-flag={row.flag}>
                 <tr className="aqt-row">
@@ -146,7 +149,7 @@ export function AccountQuotaTable({ accounts, strategy, renderAccount, renderAct
                 </tr>
                 {withDetails && (
                   <tr className="aqt-detail-row">
-                    <td colSpan={columns} className="aqt-detail">{details}</td>
+                    <td colSpan={columns} className="aqt-detail">{bannedLine}{details}</td>
                   </tr>
                 )}
               </tbody>

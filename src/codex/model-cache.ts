@@ -21,6 +21,8 @@ interface CacheEntry {
   sizeBytes: number;
   /** Irreversible credential/account identity for entitlement-sensitive catalogs. */
   authorityIdentity?: string;
+  /** Set by {@link expireModelCache}: the rows stay as the fallback but no longer count as fresh. */
+  expired?: true;
 }
 
 export type ProviderModelDiscoveryFailureReason =
@@ -211,7 +213,7 @@ export function isModelsFetchCoolingDown(
 export function getFreshCached(provider: string, ttlMs: number, now = Date.now(), authorityIdentity?: string): CatalogModel[] | null {
   const entry = cache.get(provider);
   if (!entry) return null;
-  if (authorityIdentity !== undefined && entry.authorityIdentity !== authorityIdentity) return null;
+  if (entry.expired || (authorityIdentity !== undefined && entry.authorityIdentity !== authorityIdentity)) return null;
   return now - entry.fetchedAt < ttlMs ? entry.models : null;
 }
 
@@ -302,6 +304,19 @@ export function setCached(
   // Published and accepted, so anything derived from this provider's rows is now out of date.
   bumpProviderCacheRevision(provider);
   return true;
+}
+
+/**
+ * Force the next resolve for one provider to fetch live while keeping its rows as the
+ * last-known-good fallback, so a failed fetch still serves them. Also lifts the failure cooldown
+ * and forgets the discovery status, which the next attempt records afresh. The generation stays:
+ * nothing about the provider's authority changed, so in-flight discoveries may still publish.
+ */
+export function expireModelCache(provider: string): void {
+  const entry = cache.get(provider);
+  if (entry) entry.expired = true;
+  failureAt.delete(provider);
+  discoveryStatus.delete(provider);
 }
 
 /** Drop one provider's cache (or all) so the next resolve forces a live re-fetch. */

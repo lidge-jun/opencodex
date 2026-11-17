@@ -302,7 +302,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     return jsonResponse({ ok: true, provider, acknowledged: [...acknowledged], catalogRefresh });
   }
 
-  // Operator-triggered discovery for one provider: drop its model cache, then run the normal
+  // Operator-triggered discovery for one provider: expire its model cache, then run the normal
   // catalog convergence, which re-fetches the live roster and records arrivals through the
   // existing new-model policy. Reports only the arrivals this call recorded as `newArrivals`,
   // in the same `state` projection GET /api/model-discovery uses.
@@ -316,8 +316,8 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     }
     const arrivalKey = (row: { id: string; at: string }) => `${row.id}\0${row.at}`;
     const before = new Set((config.modelDiscovery?.recentArrivals?.[provider] ?? []).map(arrivalKey));
-    const { clearModelCache, getProviderDiscoveryStatus, getProviderLiveModelCount } = await import("../../codex/model-cache");
-    clearModelCache(provider);
+    const { expireModelCache, getProviderDiscoveryStatus, getProviderLiveModelCount } = await import("../../codex/model-cache");
+    expireModelCache(provider); // Not cleared: a failed fetch must still fall back to the last good list.
     const catalogRefresh = await convergeCodexCatalog();
     // Convergence can return before it fetches anything (no Codex catalog to publish, a sibling
     // proxy owns it, a stale snapshot). Discovery must not depend on catalog publication, so a

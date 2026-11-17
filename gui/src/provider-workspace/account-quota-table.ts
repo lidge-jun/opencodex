@@ -150,7 +150,8 @@ function accountFlag(account: QuotaTableAccount): { flag: AccountFlag; probeStat
   if (account.needsReauth || account.health?.status === "reauth_required") return { flag: "reauth" };
   if (account.health?.status === "cooldown") return { flag: account.health.reason === "rate_limit" ? "rateLimited" : "quotaLimited" };
   const probe = account.probe;
-  if (probe && probe.status !== "ok" && probe.status !== "paused") return { flag: "probeFailed", probeStatus: probe.status };
+  // An expired access token is routine (refreshed on the next request), not a failed probe.
+  if (probe && probe.status !== "ok" && probe.status !== "paused" && probe.status !== "token_expired") return { flag: "probeFailed", probeStatus: probe.status };
   if (account.health?.status === "warning") return { flag: "warning" };
   if (probe?.status === "ok" && typeof probe.latencyMs === "number" && probe.latencyMs > SLOW_PROBE_MS) return { flag: "slow" };
   if (account.quotaUnavailable) return { flag: "stale" };

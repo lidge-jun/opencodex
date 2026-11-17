@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { antigravityCliUserAgent } from "../../src/adapters/client-fingerprint";
 import { handleModelsRuntimeCommand } from "../../src/cli/models-runtime";
-import { clearModelCache } from "../../src/codex/model-cache";
+import { clearModelCache, getStaleCached } from "../../src/codex/model-cache";
 import { PROXY_ENV_KEYS } from "../../src/lib/proxy-env";
 import { setAntigravityAccountQuotaTransportForTests } from "../../src/providers/quota/antigravity";
 import {
@@ -132,7 +132,7 @@ describe("probeAntigravityAccounts", () => {
     // Read-only: the auth store is byte-identical and no token appears in the result.
     expect(readFileSync(path, "utf8")).toBe(before);
     const serialized = JSON.stringify(results);
-    for (const token of ["tok-ok", "tok-verify", "tok-denied", "tok-limit", "tok-paused-expired", "refresh-"]) {
+    for (const token of ["tok-ok", "tok-verify", "tok-denied", "tok-limit", "tok-paused", "tok-expired", "tok-noproj", "refresh-"]) {
       expect(serialized).not.toContain(token);
     }
     expect(byId.okacct1!.maskedLabel).not.toBe("okacct1@example.com");
@@ -258,6 +258,24 @@ describe("management routes", () => {
     expect(fetched).toBeGreaterThan(0);
     expect(refreshed.json.discovery).toMatchObject({ status: "ok" });
     expect(refreshed.json.liveModelCount).toBe(1);
+  });
+
+  test("a refresh whose live fetch fails keeps the last good list as the fallback", async () => {
+    clearModelCache();
+    const live = config();
+    let fail = false;
+    (live.providers.live as { fetch?: typeof fetch }).fetch = (async () => fail
+      ? new Response("down", { status: 500 })
+      : Response.json({ object: "list", data: [{ id: "known", object: "model" }, { id: "extra", object: "model" }] })) as unknown as typeof fetch;
+    try {
+      expect((await call(live, "/api/model-discovery/refresh", { provider: "live" })).json.discovery).toMatchObject({ status: "ok" });
+      fail = true;
+      const failed = await call(live, "/api/model-discovery/refresh", { provider: "live" });
+      expect(failed.json.discovery).toMatchObject({ status: "failed" });
+      expect((getStaleCached("live") ?? []).map(row => row.id).sort()).toEqual(["extra", "known"]);
+    } finally {
+      clearModelCache();
+    }
   });
 });
 
