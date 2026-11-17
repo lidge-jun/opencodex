@@ -319,6 +319,9 @@ request before inference. `reasoning.encrypted_content` and other include entrie
 intact, so stateless reasoning replay is preserved. The same exact-entry normalization
 applies to xAI and to Kimi Code at its exact HTTPS Responses endpoint
 (`https://api.kimi.com/coding/v1/responses`); unrelated Responses destinations keep their original include list.
+The exact [OpenCode Go Responses endpoint](https://opencode.ai/zen/go/v1/responses) uses the same
+output-include cleanup across its models because some backends reject the field. This preserves
+`reasoning.encrypted_content` and other include entries; it does not drop encrypted reasoning history.
 
 These request-shape fixes do not change account entitlements. Meta limits Muse Code
 subscription credentials to the Muse Code client; other clients require a separately
