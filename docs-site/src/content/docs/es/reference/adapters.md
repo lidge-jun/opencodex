@@ -137,9 +137,11 @@ Para Meta Responses en el host exacto `api.meta.ai`, OpenCodex omite la entrada 
 El [endpoint Responses exacto de OpenCode Go](https://opencode.ai/zen/go/v1/responses) aplica la misma
 limpieza de include a sus modelos porque algunos rechazan ese campo. Conserva
 `reasoning.encrypted_content` y las demás entradas, y esa limpieza no elimina el historial de razonamiento
-cifrado. Un proveedor que incluya el modelo en `arkKimiResponsesModels` sigue aplicando antes la limpieza
-separada de Ark Kimi, que solo quita `encrypted_content` de un elemento de razonamiento sin resumen ni
-referencias que quede entre dos mensajes de usuario.
+cifrado. Cuando `authMode` no es `forward`, un proveedor que incluya el modelo en
+`arkKimiResponsesModels` sigue aplicando antes la limpieza separada de Ark Kimi. Solo quita
+`encrypted_content` de un elemento de razonamiento sin referencias, con resumen vacío y sin otros campos,
+cuando sigue a un mensaje de usuario o a una llamada de función emparejada con su salida, y precede a un
+mensaje de usuario o, tras ese par de herramienta, a un mensaje de desarrollador.
 
 Estas correcciones del formato no cambian los permisos de la cuenta. Meta limita las credenciales de suscripción Muse Code al cliente Muse Code; otros clientes requieren una clave API de Meta con facturación separada. Una clave de suscripción puede devolver HTTP 403 a través de OpenCodex aunque el formato sea válido. Consulta las [reglas de suscripción de Meta](https://dev.meta.ai/docs/muse-code/subscriptions).
 
