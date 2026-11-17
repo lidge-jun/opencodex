@@ -151,6 +151,16 @@ describe("unoffered tool-call refusal", () => {
       },
     });
     expect(comboFailureDecision(400, mixed)).toBe("stop");
+    // A policy code nested in the param object is a competing diagnostic, not a carrier detail.
+    const nestedPolicy = JSON.stringify({
+      id: "",
+      error: {
+        message: verdict, type: "AI_APICallError",
+        param: { error: verdict, message: verdict, code: "cyber_policy" },
+      },
+    });
+    expect(comboFailureDecision(400, nestedPolicy)).toBe("stop");
+    expect(comboFailureCooldownScope(400, nestedPolicy)).not.toBe("none");
     expect(comboFailureCooldownScope(400, mixed)).toBe("target");
   });
 });

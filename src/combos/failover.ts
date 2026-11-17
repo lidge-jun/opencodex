@@ -1067,6 +1067,15 @@ function unofferedToolCallRecordShape(record: Record<string, unknown>): boolean 
       for (const diagnostic of diagnostics) {
         if (typeof diagnostic !== "string" || !isUnofferedToolCallVerdict(diagnostic)) return false;
       }
+      // The nested record is held to the same closed code/type sets and carrier ban as the
+      // envelope, so a policy code tucked inside `param` cannot ride the verdict into a hop.
+      if (nested.param !== undefined && nested.param !== null) return false;
+      if (nested.code !== undefined && nested.code !== null
+        && (typeof nested.code !== "string" && typeof nested.code !== "number"
+          || !UNOFFERED_TOOL_CALL_CODES.has(normalizedFailureCode(nested.code)))) return false;
+      if (nested.type !== undefined && nested.type !== null
+        && (typeof nested.type !== "string" || !UNOFFERED_TOOL_CALL_TYPES.has(normalizedFailureCode(nested.type)))) return false;
+      if (UNOFFERED_TOOL_CALL_CARRIERS.some(carrier => nested[carrier] !== undefined && nested[carrier] !== null)) return false;
     } else {
       return false;
     }

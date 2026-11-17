@@ -34,7 +34,7 @@ and `tests/responses/responses-combo-exhausted-error.test.ts`.
 target-local model failures: that a model called a function the request never offered (`The model
 called a function that was not offered in tools.`) alongside the parser control-marker refusal
 (`The model returned an unexpected parser control marker; no output was published.`). The match is
-anchored to each sentence inside a bounded envelope walk — closed code/type/param sets, competing
+anchored to each sentence inside a bounded envelope walk — closed code/type/param sets (applied again inside an object-valued `param`), competing
 diagnostic carriers and a contradicting root message all fail closed — so quoted or reflected
 occurrences cannot impersonate the verdict. `consumeComboFailure` classifies the intact bounded body
 and passes the verdict through `unofferedToolCallRefusal`, because the 500-character display prefix
