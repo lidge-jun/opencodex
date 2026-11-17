@@ -111,10 +111,15 @@ describe("Claude native passthrough setting", () => {
     expect(host.querySelector('[role="alert"]')?.textContent).toBe(DICTS.en["claude.saveFailed"]);
   });
 
-  test("a failed load disables the switch and says why", async () => {
+  test("a failed load disables the switch, says why, and Retry loads it again", async () => {
     stubClaudeCode("fail");
     const host = await mount();
     expect(host.querySelector<HTMLButtonElement>("button.toggle")!.disabled).toBe(true);
     expect(host.textContent).toContain(DICTS.en["claude.nativePassthroughLoadFailed"]);
+    stubClaudeCode({ nativePassthrough: false });
+    const retry = [...host.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === DICTS.en["common.retry"])!;
+    await act(async () => { retry.click(); await flush(); });
+    expect(toggleOf(host).disabled).toBe(false);
+    expect(toggleOf(host).getAttribute("aria-pressed")).toBe("false");
   });
 });

@@ -476,6 +476,10 @@ export default function ProviderAuthPanel({
             onUpdateProvider={onUpdateProvider}
           />
         )}
+        {/* An API-key Anthropic row has no pool card, but the global switch still applies to Claude Code. */}
+        {item.name === "anthropic" && !isOauth && (
+          <ClaudeNativePassthroughSetting key={`${apiBase}:passthrough`} apiBase={apiBase} targetKey={targetKey} />
+        )}
         {isOauth && (
           <>
             {isAnthropicPool && (

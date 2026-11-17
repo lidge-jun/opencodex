@@ -17,6 +17,8 @@ export default function ClaudeNativePassthroughSetting({ apiBase, targetKey }: {
   const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
+  // GET /api/claude-code gathers the catalog and can answer 503 while it is busy; Retry reloads.
+  const [reloadVersion, setReloadVersion] = useState(0);
   const mountedRef = useRef(true);
 
   useLayoutEffect(() => {
@@ -47,7 +49,7 @@ export default function ClaudeNativePassthroughSetting({ apiBase, targetKey }: {
       cancelled = true;
       ac.abort();
     };
-  }, [apiBase]);
+  }, [apiBase, reloadVersion]);
 
   const toggle = async () => {
     if (enabled === null || saving) return;
@@ -93,6 +95,12 @@ export default function ClaudeNativePassthroughSetting({ apiBase, targetKey }: {
           <span className="toggle-knob" />
         </button>
       </div>
+      {loadFailed && (
+        <button type="button" className="btn btn-ghost btn-sm" style={{ marginTop: 8 }} onClick={() => {
+          setLoadFailed(false);
+          setReloadVersion(version => version + 1);
+        }}>{t("common.retry")}</button>
+      )}
       {saveFailed && (
         <div role="alert" className="card-sub" style={{ marginTop: 8, color: "var(--danger, #c44)" }}>
           {t("claude.saveFailed")}
