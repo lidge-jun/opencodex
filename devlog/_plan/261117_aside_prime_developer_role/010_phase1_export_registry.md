@@ -111,3 +111,11 @@ NEW `tests/providers/alibaba-token-plan-developer-role.test.ts`: `describe.each(
 - Before the source change: `bun test tests/clients/pi-family-developer-role.test.ts` fails for prime and aside; `bun test tests/providers/alibaba-token-plan-developer-role.test.ts` fails on the seed/backfill/passthrough cases.
 - After: `bun test tests/clients/pi-family-developer-role.test.ts tests/clients/prime-client.test.ts tests/providers/aside-client.test.ts tests/clients/omo-client.test.ts tests/config/client-config-export.test.ts tests/config/client-config-export-new-clients.test.ts tests/providers/alibaba-token-plan-developer-role.test.ts tests/providers/moonshot-developer-role.test.ts tests/test-layout.test.ts tests/test-layout-tooling.test.ts` exits 0; `bun run typecheck` exits 0.
 
+
+## wp1 cycle record
+
+- Previous D (wp0): roadmap locked after architect reflection and audit r1 (GO-WITH-FIXES, blockers=0); direction: implement this doc unchanged.
+- Stale check 2026-11-17: `origin/dev` still `c36793a933`; `git diff --stat c36793a933 origin/dev` over every file this doc touches is empty, so the diffs above apply as written.
+- Architect consultation: decisions D1-D3 and D7 in [002_architect.md](002_architect.md) cover this phase; no new design decision, so no new proposal round.
+- Test-first order: write both new tests and the prime/aside test edits, run them against the unchanged source (expect failures), then apply the source diffs.
+
