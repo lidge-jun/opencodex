@@ -649,8 +649,7 @@ Disable with `claudeCode.nativePassthrough: false`, `ocx claude config set --nat
 or the **Native Claude passthrough** switch under the Claude account pool in Providers → Anthropic
 Claude → Accounts; point elsewhere
 with `claudeCode.anthropicBaseUrl`. With passthrough off, a Claude model without an alias or
-`modelMap` entry is routed like any other model: the configured route decides the provider (a
-`modelMap` entry that points at another provider's model goes there in either state). When the route
+`modelMap` entry is routed like any other model: an enabled `anthropic` or `anthropic-*` provider takes it first, and otherwise the usual routing applies (a provider listing the model, an alias, then the default provider). A `modelMap` entry that points at another provider's model goes there in either state. When the route
 is an Anthropic OAuth provider, the Anthropic accounts stored in OpenCodex serve the request; a second
 stored account adds 429 failover, and the proactive
 [Claude OAuth account pool](#claude-oauth-account-pool-experimental) applies once `anthropicAccountPool.enabled` is on. Routing follows

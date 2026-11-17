@@ -249,7 +249,7 @@ Anthropic。若任一供應商標頭含有代理許可密鑰，該密鑰會被�
 可以設定 `claudeCode.nativePassthrough: false`、執行 `ocx claude config set --native-passthrough off`，
 或關閉儀表板 Providers → Anthropic Claude → Accounts 中 Claude 帳號池下方的 **Claude 原生透傳** 開關來停用；也可以透過
 `claudeCode.anthropicBaseUrl` 指向其他位置。關閉透傳後，沒有別名或 `modelMap` 項目的 Claude 模型會像其他
-模型一樣被路由，由設定的路由決定提供者（指向其他提供者模型的 `modelMap` 項目在兩種狀態下都會送往那裡）。
+模型一樣被路由，會先交給已啟用的 `anthropic` 或 `anthropic-*` 提供者；若沒有，則依一般路由（列出該模型的提供者、別名，最後是預設提供者）。指向其他提供者模型的 `modelMap` 項目在兩種狀態下都會送往那裡。
 當路由是 Anthropic OAuth 提供者時，由 OpenCodex 中儲存的 Anthropic 帳號處理請求；再儲存一個帳號即可在
 429 時容錯移轉，而主動的 [Claude OAuth 帳號池](#claude-oauth-帳號池實驗性) 需要開啟 `anthropicAccountPool.enabled` 才會生效。
 路由從下一個請求開始依新設定執行；已在執行的 Claude Code 工作階段需要重新啟動，讓模型槽位和上下文視窗

@@ -128,8 +128,7 @@ hook を削除します。Claude Desktop は独立した profile を使用し、
 ダッシュボードの Providers → Anthropic Claude → Accounts にある Claude アカウントプールの下の
 **Claude ネイティブパススルー** トグルでオフにでき、
 `claudeCode.anthropicBaseUrl` で別のアドレスを指定できます。パススルーをオフにすると、エイリアスや
-`modelMap` エントリのない Claude モデルもほかのモデルと同じようにルーティングされ、設定されたルートが
-プロバイダーを決めます(別プロバイダーのモデルを指す `modelMap` エントリは、どちらの状態でもそこへ送られます)。
+`modelMap` エントリのない Claude モデルもほかのモデルと同じようにルーティングされ、有効な `anthropic` または `anthropic-*` プロバイダーが最初に受け取り、なければ通常のルーティング(モデルを登録したプロバイダー、エイリアス、既定のプロバイダーの順)に従います。別プロバイダーのモデルを指す `modelMap` エントリは、どちらの状態でもそこへ送られます。
 ルートが Anthropic OAuth プロバイダーの場合は OpenCodex に保存した Anthropic アカウントが処理し、2 つ目の
 アカウントを保存していれば 429 時のフェイルオーバーが加わります。能動的な
 Claude OAuth アカウントプールは `anthropicAccountPool.enabled` を有効にすると適用されます。
