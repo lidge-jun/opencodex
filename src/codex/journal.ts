@@ -1,4 +1,4 @@
-import { beginCodexWriteSection, publishCodexArtifact } from "./inject/config-write-section";
+import { beginCodexWriteSection, publishCodexArtifact, runBeforeCodexConfigPublishForTests } from "./inject/config-write-section";
 import { createHash } from "node:crypto";
 import type { AtomicWriteHooks } from "../config/atomic-write";
 import { existsSync, lstatSync, readFileSync, unlinkSync } from "node:fs";
@@ -433,6 +433,7 @@ export function restoreJournalState(
   let profileRewritten = false;
   if ((configUnchanged || fieldRestore !== null) && !configRestored) {
     options.beforeWrite?.();
+    runBeforeCodexConfigPublishForTests("journal");
     publishCodexArtifact(CODEX_CONFIG_PATH, held, (path, hooks) => atomicWriteFile(path, fieldRestore ?? comparison.originalConfig, undefined, hooks));
     configRestored = true;
     configRewritten = true;

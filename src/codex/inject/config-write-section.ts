@@ -35,3 +35,13 @@ export function cleanExternalProviderJournal(beforeClientWrite?: () => void): vo
   });
   if (!locked.ok) throw new ConfigWriteLockRefusal(locked);
 }
+/** Where a restore publishes config.toml; the test seam below names the site. */
+export type CodexConfigPublishSite = "journal" | "remove" | "retain";
+let beforeCodexConfigPublishForTests: ((site: CodexConfigPublishSite) => void) | undefined;
+/** Test seam: runs after a restore decided its bytes and before it publishes config.toml. */
+export function setBeforeCodexConfigPublishForTests(hook: typeof beforeCodexConfigPublishForTests): void {
+  beforeCodexConfigPublishForTests = hook;
+}
+export function runBeforeCodexConfigPublishForTests(site: CodexConfigPublishSite): void {
+  beforeCodexConfigPublishForTests?.(site);
+}

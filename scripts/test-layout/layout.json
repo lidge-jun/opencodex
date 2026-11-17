@@ -707,6 +707,7 @@
     "codex-reset-credit-recovery.test.ts": "codex-integration",
     "codex-restart-contract-parity.test.ts": "codex-integration",
     "codex-restart-route.test.ts": "codex-integration",
+    "codex-app-rewrite-routing.test.ts": "codex-integration", "codex-restore-later-edits.test.ts": "codex-integration",
     "codex-restore-app-rewrite.test.ts": "codex-integration",
     "codex-retained-root-serialization.test.ts": "codex-integration",
     "codex-affinity-restart.test.ts": "codex-integration", "codex-affinity-restart-matrix.test.ts": "codex-integration", "codex-affinity-request-owned.test.ts": "codex-integration", "codex-affinity-lease-gap.test.ts": "codex-integration", "codex-routing-cache-affinity-detour.test.ts": "codex-integration", "codex-routing-elapsed-short-reset.test.ts": "codex-integration", "codex-routing.test.ts": "codex-integration",

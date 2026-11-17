@@ -1,4 +1,4 @@
-import { beginCodexWriteSection, publishCodexArtifact, removeCodexProfileEntry } from "./config-write-section";
+import { beginCodexWriteSection, publishCodexArtifact, removeCodexProfileEntry, runBeforeCodexConfigPublishForTests } from "./config-write-section";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { normalizeStructuralWhitespace, rootAssignmentKey, rootSourceLines, sourceAssignment, sourceText } from "../toml-source-lines";
 import { atomicWriteFile } from "../../config";
@@ -62,7 +62,10 @@ export function retainOcxProviderTableOnDisk(block: string, heldConfigWriteLock?
     const eol = dominantEol(rawContent);
     const content = applyEol(rawContent, "\n");
     const next = appendOcxProviderTableBlock(content, block);
-    if (next !== content) publishCodexArtifact(CODEX_CONFIG_PATH, held, (path, hooks) => atomicWriteFile(path, applyEol(next, eol), undefined, hooks));
+    if (next !== content) {
+      runBeforeCodexConfigPublishForTests("retain");
+      publishCodexArtifact(CODEX_CONFIG_PATH, held, (path, hooks) => atomicWriteFile(path, applyEol(next, eol), undefined, hooks));
+    }
     return block.replace(/\n+$/, "").split("\n");
   });
   if (!locked.ok) throw new ConfigWriteLockRefusal(locked);
@@ -260,6 +263,7 @@ export function removeCodexConfig(
     ? stripped.content
     : appendOcxProviderTableBlock(stripped.content, retainedBlock);
   if (had || finalContent !== content) {
+    runBeforeCodexConfigPublishForTests("remove");
     publishCodexArtifact(CODEX_CONFIG_PATH, held, (path, hooks) => atomicWriteFile(path, applyEol(finalContent, eol), undefined, hooks));
   }
   if (!options.preserveProfile && existsSync(CODEX_PROFILE_PATH))
