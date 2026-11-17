@@ -838,14 +838,20 @@ test("the profile names the grant's organization and status shows it as display-
   expect(row.organizationName).toBe("Synthetic Org A");
   expect(row).not.toHaveProperty("anthropicIdentity");
   for (const [profile, expected] of [
-    [{ name: "Synthetic Org A" }, null],
+    // No organization in the profile: it cannot confirm the token response's, so nothing is observed.
+    [{ name: "Synthetic Org A" }, undefined],
     [{ uuid: ORG_A, name: "bad\u0007name" }, null],
     [{ uuid: ORG_A, name: "Synthetic\u202eOrg" }, null],
-    [{ uuid: ORG_B, name: "Synthetic Org B" }, null],
   ] as const) {
     orgNameFetch(ORG_A, profile);
     expect((await refreshAnthropicToken("synthetic-old-refresh")).organizationName).toBe(expected);
   }
+  // A profile for another organization than the token response observed a different grant: its
+  // name and tier stay unobserved, so the stored labels of this grant survive the merge.
+  orgNameFetch(ORG_A, { uuid: ORG_B, name: "Synthetic Org B", rate_limit_tier: "default_claude_max_20x" });
+  const mismatched = await refreshAnthropicToken("synthetic-old-refresh");
+  expect(mismatched.organizationName).toBeUndefined();
+  expect(mismatched.plan).toBeUndefined();
 });
 
 test("each organization row keeps its own name", async () => {
@@ -876,3 +882,14 @@ test("an organization name is kept through an unread profile but never crosses o
   expect(getLoginStatus("anthropic").accounts![0]!.organizationName).toBe("Synthetic Org A Renamed");
 });
 
+test("adopting Claude Code's rotated refresh token on the same bearer keeps the organization name", async () => {
+  const stored: OAuthCredentials = { ...orgCredential("synthetic-same", ORG_A), source: "local-cli",
+    organizationName: "Synthetic Org A", expires: Date.now() + 120_000 };
+  disk("synthetic-same", "synthetic-rotated-refresh");
+  const observation = await newerClaudeCredential(stored, Date.now());
+  expect(observation.kind).toBe("adopt");
+  if (observation.kind === "adopt") {
+    expect(observation.credential.refresh).toBe("synthetic-rotated-refresh");
+    expect(observation.credential.organizationName).toBe("Synthetic Org A");
+  }
+});

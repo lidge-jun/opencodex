@@ -30,8 +30,11 @@ export async function newerClaudeCredentialForInstance(
   const diskGeneration = credentialGeneration(disk);
   const before = normalizeAnthropicIdentity(stored.anthropicIdentity, stored.access);
   if (hasClaudeCredentialContinuity(stored, disk)) {
+    // The same bearer keeps its proof, and with it the organization its name labels.
+    const retained = disk.access === stored.access ? before : undefined;
     return { kind: "adopt", diskGeneration: credentialGeneration(disk), credential: {
-      ...stored, ...disk, plan: mergeOAuthPlan(disk, stored), organizationName: mergeOAuthOrganizationName(disk, stored), anthropicIdentity: disk.access === stored.access ? before : undefined,
+      ...stored, ...disk, plan: mergeOAuthPlan(disk, stored), anthropicIdentity: retained,
+      organizationName: mergeOAuthOrganizationName({ ...disk, anthropicIdentity: retained }, stored),
     } };
   }
   // Independent observations share a deadline through the caller signal; neither extends the other.

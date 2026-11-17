@@ -171,10 +171,12 @@ async function withAccountProfile(credential: OAuthCredentials, signal?: AbortSi
   // The same bearer's profile names the grant's organization when the token response did not.
   const organization = identity && !identity.organizationUuid && profile.organizationUuid
     ? { anthropicIdentity: { ...identity, organizationUuid: profile.organizationUuid } } : {};
-  // The name labels the organization this profile proved; a disagreeing token response gets none.
-  const sameOrganization = !identity?.organizationUuid || identity.organizationUuid === profile.organizationUuid;
-  return { ...credential, ...organization, plan: profile.plan ?? null,
-    organizationName: sameOrganization ? profile.organizationName ?? null : null };
+  // A profile that names another organization than the token response did observed a different
+  // grant: neither its tier nor its name describes this one, so both stay unobserved.
+  if (identity?.organizationUuid && identity.organizationUuid !== profile.organizationUuid) {
+    return { ...credential, ...organization };
+  }
+  return { ...credential, ...organization, plan: profile.plan ?? null, organizationName: profile.organizationName ?? null };
 }
 
 export class AnthropicOAuthFlow extends OAuthCallbackFlow {
