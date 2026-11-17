@@ -16,6 +16,8 @@ export interface CompletionCase {
   final?: "response.failed" | "response.incomplete";
   errorCode?: string;
   identicalRetry?: boolean;
+  /** The search backend answers 500, so later calls for the same query get the repeat placeholder. */
+  searchFails?: boolean;
 }
 
 // Synthetic full Responses dispatch. No real provider or search requests are sent.
@@ -30,6 +32,7 @@ export async function checkHostedChatCompletion(row: CompletionCase, stream: boo
     globalThis.fetch = async (input: any) => {
       assert.equal(String(input), "https://api.exa.ai/search", "unexpected external request");
       searches++;
+      if (row.searchFails) return new Response("search backend unavailable", { status: 500 });
       return Response.json({ results: [
         { title: "Fixture", url: "https://example.invalid/fixture", text: "Fixture result" },
       ] });

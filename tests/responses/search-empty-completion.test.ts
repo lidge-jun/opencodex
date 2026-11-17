@@ -15,6 +15,14 @@ const cases: CompletionCase[] = [
   { name: "truncated", frames: ["truncated"], sends: 1, final: "response.incomplete" },
   { name: "search-then-empty", frames: ["search", "", "Fixed after search."], sends: 3, searches: 1 },
   { name: "search-then-empty-twice", frames: ["search", "", ""], sends: 3, searches: 1, final: "response.failed", errorCode: "empty_completion_retry_failed" },
+  // Repeat placeholders for a failed query do not count as searches, so they can use every ordinary
+  // iteration (maxSearches + 3). An empty completion in the last one must still get its retry, and
+  // the opt-in must not lend ordinary iterations the slot reserved for that retry.
+  { name: "failed-search-last-iteration-then-empty", searchFails: true,
+    frames: ["search", "search", "search", "search", "search", "", "Fixed."], sends: 7, searches: 1 },
+  { name: "failed-search-repeats-keep-ordinary-cap", searchFails: true,
+    frames: ["search", "search", "search", "search", "search", "search", "", "Fixed."], sends: 6, searches: 1,
+    final: "response.failed" },
 ];
 
 for (const row of cases) {
