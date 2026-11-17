@@ -12,6 +12,7 @@ const PROVIDER_EDITOR_DERIVED_FIELDS = [
   "hasApiKey",
   "hasHeaders",
   "vertexCredentialKind",
+  "vertexCredentialVerified",
   "xaiResponsesOptInState",
   "initialModelSelection",
 ] as const;

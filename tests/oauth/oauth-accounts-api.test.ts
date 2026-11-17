@@ -619,12 +619,12 @@ describe("multiauth accounts API", () => {
       for (const [body, code] of [
         [{ provider: "openai", format: "cockpit-tools", document: [] }, "unsupported_provider"],
         [{ provider: "unknown", format: "cockpit-tools", document: [] }, "unsupported_provider"],
-        [{ provider: "google-antigravity", format: "unknown", document: [] }, "unsupported_format"],
-        [{ provider: "google-antigravity", format: "cockpit-tools", document: { accounts: [] } }, "invalid_document"],
-        [{ provider: "google-antigravity", format: "cockpit-tools", document: "not-an-array" }, "invalid_document"],
+        [{ provider: "google-antigravity", acknowledgeAntigravityRisk: true, format: "unknown", document: [] }, "unsupported_format"],
+        [{ provider: "google-antigravity", acknowledgeAntigravityRisk: true, format: "cockpit-tools", document: { accounts: [] } }, "invalid_document"],
+        [{ provider: "google-antigravity", acknowledgeAntigravityRisk: true, format: "cockpit-tools", document: "not-an-array" }, "invalid_document"],
         [{ provider: "Google-Antigravity", format: "cockpit-tools", document: [] }, "unsupported_provider"],
         [{ provider: " google-antigravity ", format: "cockpit-tools", document: [] }, "unsupported_provider"],
-        [{ provider: "google-antigravity", format: "Cockpit-Tools", document: [] }, "unsupported_format"],
+        [{ provider: "google-antigravity", acknowledgeAntigravityRisk: true, format: "Cockpit-Tools", document: [] }, "unsupported_format"],
       ] as const) {
         const response = await fetch(new URL("/api/oauth/accounts/import", server.url), {
           method: "POST",
@@ -654,7 +654,7 @@ describe("multiauth accounts API", () => {
       headers: { "Content-Type": "application/json" },
       body: new ReadableStream<Uint8Array>({
         start(controller) {
-          controller.enqueue(new TextEncoder().encode('{"provider":"google-antigravity",'));
+          controller.enqueue(new TextEncoder().encode('{"provider":"google-antigravity","acknowledgeAntigravityRisk":true,'));
         },
         cancel() { bodyCancelled = true; },
       }),
@@ -725,6 +725,7 @@ describe("multiauth accounts API", () => {
         body: JSON.stringify({
           provider: "google-antigravity",
           format: "cockpit-tools",
+          acknowledgeAntigravityRisk: true,
           document: [
             { email: "first@example.com", refresh_token: "first-refresh" },
             { email: "second@example.com", refresh_token: "second-refresh" },
@@ -769,6 +770,7 @@ describe("multiauth accounts API", () => {
         body: JSON.stringify({
           provider: "google-antigravity",
           format: "cockpit-tools",
+          acknowledgeAntigravityRisk: true,
           document: [{ email: "IMPORTED@example.com", refresh_token: refreshToken, tags: ["tag"], notes: "ignored" }],
         }),
       });
@@ -808,6 +810,7 @@ describe("multiauth accounts API", () => {
       const boundaryBody = JSON.stringify({
         provider: "google-antigravity",
         format: "cockpit-tools",
+        acknowledgeAntigravityRisk: true,
         document: boundaryDocument,
       });
       expect(encoder.encode(JSON.stringify(boundaryDocument)).byteLength).toBe(ACCOUNT_IMPORT_MAX_BYTES);
@@ -864,6 +867,7 @@ describe("multiauth accounts API", () => {
         body: JSON.stringify({
           provider: "google-antigravity",
           format: "cockpit-tools",
+          acknowledgeAntigravityRisk: true,
           document: [
             { email: "claimed@example.com", refresh_token: canary },
             { email: "provider@example.com", refresh_token: "rejected-token" },
@@ -897,6 +901,7 @@ describe("multiauth accounts API", () => {
         body: JSON.stringify({
           provider: "google-antigravity",
           format: "cockpit-tools",
+          acknowledgeAntigravityRisk: true,
           document: [{ email: "provider@example.com", refresh_token: "safe", notes: "x".repeat(ACCOUNT_IMPORT_MAX_BYTES) }],
         }),
       });

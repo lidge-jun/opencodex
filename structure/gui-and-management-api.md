@@ -347,7 +347,7 @@ later status hints for the same login, and `LoginHint` shows a warning only for 
 code gets a single "Copy code & open" action that copies before calling `window.open`, so both run
 inside the click's user activation; only http(s) URLs get it. Once a device code appears, the
 provider pollers stretch their budget to `gui/src/oauth-login-budget.ts` (longer than the longest
-provider grant) instead of cancelling a still-valid grant at the browser-flow budget.
+provider grant) instead of cancelling a still-valid grant at the browser-flow budget. Browser flows on the providers page and in the add-provider form share `BROWSER_LOGIN_POLL_ATTEMPTS` from the same file (five minutes at the 2-second interval). In the add-provider form, a code pasted after its login ended on the still-current target (budget spent, cancelled, failed or finished) is refused locally with `prov.loginExpired`; `prov.targetChanged` stays for a target that moved and for a server `409 target_changed`. Neither path posts the code anywhere (#8618). Coverage: `gui/tests/add-provider-oauth-ended-login.test.tsx`. An Accounts row in the same modal starts its login through the providers page (`gui/src/pages/use-providers-oauth.ts`), so a code pasted there goes through that page's capture (`accountLoginCaptures`, its active and ended captures) instead of the form's own, which never held one: before, every such paste answered `prov.targetChanged`. The typed code is cleared when that row's login (its hint) or the target changes, so it cannot be submitted to the next login. A form login whose target moves under an unchanged key (a relay re-pair) resets the form with `prov.targetChanged` instead of leaving its URL and paste box behind.
 
 > Decision record: [OAuth login continuations](decisions/ADR-5877-oauth-login-continuations.md); headless `mode: "code"` logins: [OAuth code-display login](providers/oauth-code-display-login.md).
 
@@ -553,7 +553,7 @@ Aside refresh from `ocx sync` also uses a one-shot process-bound capability for 
 It never sends the reusable management credential to a listener selected through public liveness
 discovery, and configured-port-only legacy proxies must be restarted before they can own this mutation.
 
-The `kimi-responses` preset shares Kimi's icon and display brand while its provider id remains distinct.
+The `kimi-responses` preset shares Kimi's icon and display brand while its provider id remains distinct; its shared Kimi login follows [OAuth Credential Siblings](providers/oauth-credential-siblings.md).
 
 The dashboard's auto-switch route accepts `{ threshold }` for the global value and `{ id, threshold }`
 for an account override. Account thresholds are integers 0..100 or `null` to inherit, and account-list

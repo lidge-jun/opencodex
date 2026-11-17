@@ -98,8 +98,14 @@ if (process.argv[4] === "image-replay") {
   // exit drops the tail by leaving it queued, which is not the production sequence.
   if (probeMode === "exit-before-flush") {
     emit(init);
-    emit({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: replayText } } });
+    const replayAccepted = emit({ type: "stream_event", event: { type: "content_block_delta", delta: { type: "text_delta", text: replayText } } });
     emit({ type: "result", subtype: "success", usage: { input_tokens: 2, output_tokens: 4 } });
+    // Written synchronously, in the same turn as the exit below, so the test can hold its reader until
+    // the child has issued every write and is leaving. `replayAccepted` is the replay write's own
+    // return value. `true` would mean the whole frame was handed over within the call, which rules
+    // out the test's precondition. `false` is necessary but not sufficient: it was also observed when
+    // a reader drained the frame completely, so the test's held reader is what keeps the tail queued.
+    mark({ phase: "exiting-before-flush", replayAccepted });
     process.exit(0);
   }
   if (probeMode === "malformed-hang") {
