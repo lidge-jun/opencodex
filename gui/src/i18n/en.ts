@@ -3480,7 +3480,7 @@ export const en = {
   "claude.injectAgents": "Auto-register subagents",
   "claude.injectAgentsDesc": "Registers the models picked on the Subagents tab (plus the current default model) as dispatchable Claude Code agents (ocx-*). Applies from the next session.",
   "claude.nativePassthrough": "Native Claude passthrough",
-  "claude.nativePassthroughDesc": "On (default): Claude models go straight to Anthropic with Claude Code's own login. Off: they are routed through OpenCodex's Anthropic accounts, so the Claude account pool applies. Relaunch Claude Code sessions that are already running.",
+  "claude.nativePassthroughDesc": "On (default): a Claude model without a model mapping goes straight to Anthropic with Claude Code's own login when Claude Code sends one; other requests are routed. Off: those models are routed through OpenCodex, so the configured route and its Anthropic accounts serve them, and the Claude account pool applies when it is enabled. Mapped models follow their mapping either way. Relaunch Claude Code sessions that are already running.",
   "claude.webSearchSidecar": "Web search sidecar override",
   "claude.webSearchSidecarHint": "Override the main web search sidecar for Claude Code requests.",
   "claude.visionSidecar": "Vision sidecar override",

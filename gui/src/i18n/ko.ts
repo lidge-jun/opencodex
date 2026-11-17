@@ -2864,7 +2864,7 @@ export const ko: Record<TKey, string> = {
   "claude.injectAgents": "서브에이전트 자동 등록",
   "claude.injectAgentsDesc": "위 '서브에이전트' 탭에서 고른 모델들(+현재 기본 모델)을 Claude Code의 파견 가능한 에이전트(ocx-*)로 자동 등록합니다. 새 세션부터 적용돼요.",
   "claude.nativePassthrough": "Claude 네이티브 패스스루",
-  "claude.nativePassthroughDesc": "켜짐(기본값): Claude 모델 요청을 Claude Code 자체 로그인으로 Anthropic에 바로 보내요. 꺼짐: OpenCodex의 Anthropic 계정으로 라우팅하므로 Claude 계정 풀이 적용돼요. 이미 실행 중인 Claude Code 세션은 다시 실행해야 해요.",
+  "claude.nativePassthroughDesc": "켜짐(기본값): 모델 매핑이 없는 Claude 모델은 Claude Code가 자체 로그인 자격 증명을 보낼 때 그 로그인으로 Anthropic에 바로 보내고, 그 밖의 요청은 라우팅해요. 꺼짐: 이 모델들도 OpenCodex로 라우팅되어 설정된 경로와 Anthropic 계정이 처리하고, Claude 계정 풀을 켜 두었다면 계정 풀이 적용돼요. 매핑된 모델은 두 경우 모두 매핑 대상으로 가요. 이미 실행 중인 Claude Code 세션은 다시 실행해야 해요.",
   "claude.webSearchSidecar": "웹 검색 사이드카 덮어쓰기",
   "claude.webSearchSidecarHint": "Claude Code 요청에만 메인 웹 검색 사이드카 대신 이 설정을 씁니다.",
   "claude.visionSidecar": "비전 사이드카 덮어쓰기",

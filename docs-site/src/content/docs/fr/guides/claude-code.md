@@ -328,11 +328,15 @@ La seule modification du corps concerne les identifiants d'appel d'outil. Un `to
 
 Désactivez ce comportement avec `claudeCode.nativePassthrough: false`,
 `ocx claude config set --native-passthrough off` ou l'interrupteur **Relais Claude natif** dans les
-réglages Claude Code du tableau de bord ; définissez une autre destination avec
-`claudeCode.anthropicBaseUrl`. Relais désactivé, les modèles Claude sont routés comme les autres : les
-comptes Anthropic configurés dans OpenCodex les servent et le groupe de comptes Claude s'applique. Le
-routage suit le réglage dès la requête suivante ; relancez les sessions Claude Code déjà ouvertes pour
-que leurs emplacements de modèle et leurs fenêtres de contexte correspondent.
+réglages Claude Code du tableau de bord ; définissez une autre destination avec
+`claudeCode.anthropicBaseUrl`. Relais désactivé, un modèle Claude sans alias ni entrée `modelMap` est
+routé comme les autres : la route configurée choisit le fournisseur (une entrée `modelMap` qui pointe
+vers le modèle d'un autre fournisseur y va dans les deux cas). Quand la route est un fournisseur OAuth
+Anthropic, les comptes Anthropic enregistrés dans OpenCodex servent la requête ; un deuxième compte
+enregistré ajoute la bascule sur 429, et le [groupe de comptes OAuth Claude](#groupe-de-comptes-oauth-claude-expérimental) proactif s'applique
+dès que `anthropicAccountPool.enabled` est activé. Le routage suit le réglage dès la requête suivante ;
+relancez les sessions Claude Code déjà ouvertes pour que leurs emplacements de modèle et leurs fenêtres
+de contexte correspondent.
 
 ## Claude Desktop connecté à un hub distant
 

@@ -3416,7 +3416,7 @@ export const tr: Record<TKey, string> = {
   "claude.injectAgents": "Alt ajanları otomatik kaydet",
   "claude.injectAgentsDesc": "Alt Ajanlar sekmesinde seçilen modelleri (ve mevcut varsayılan modeli) çağrılabilir Claude Code ajanları (ocx-*) olarak kaydeder. Sonraki oturumdan itibaren uygulanır.",
   "claude.nativePassthrough": "Yerel Claude geçişi",
-  "claude.nativePassthroughDesc": "Açık (varsayılan): Claude modelleri Claude Code'un kendi oturumuyla doğrudan Anthropic'e gider. Kapalı: OpenCodex'in Anthropic hesapları üzerinden yönlendirilir, böylece Claude hesap havuzu devreye girer. Zaten çalışan Claude Code oturumlarını yeniden başlatın.",
+  "claude.nativePassthroughDesc": "Açık (varsayılan): Model eşlemesi olmayan Claude modelleri, Claude Code kendi oturum kimlik bilgisini gönderdiğinde bu oturumla doğrudan Anthropic'e gider; diğer istekler yönlendirilir. Kapalı: bu modeller OpenCodex üzerinden yönlendirilir; yapılandırılmış rota ve onun Anthropic hesapları onlara hizmet eder, etkinse Claude hesap havuzu devreye girer. Eşlenmiş modeller her iki durumda da eşlendikleri hedefe gider. Zaten çalışan Claude Code oturumlarını yeniden başlatın.",
   "claude.webSearchSidecar": "Web arama yan araç geçersiz kılması",
   "claude.webSearchSidecarHint": "Claude Code istekleri için ana web arama sidecar'ını geçersiz kılın.",
   "claude.visionSidecar": "Görsel yan araç geçersiz kılması",

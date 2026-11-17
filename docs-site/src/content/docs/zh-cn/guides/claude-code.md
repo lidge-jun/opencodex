@@ -119,9 +119,12 @@ Anthropic。若任一提供方请求头包含代理准入密钥，该密钥会�
 
 可以设置 `claudeCode.nativePassthrough: false`、运行 `ocx claude config set --native-passthrough off`，
 或关闭仪表盘 Claude Code 设置中的 **Claude 原生透传** 开关来禁用；也可以通过
-`claudeCode.anthropicBaseUrl` 指向其他位置。关闭透传后，Claude 模型会像其他模型一样被路由，由 OpenCodex
-中配置的 Anthropic 账户处理，Claude 账户池随之生效。路由从下一个请求开始按新设置执行；已在运行的
-Claude Code 会话需要重新启动，以便模型槽位和上下文窗口保持一致。
+`claudeCode.anthropicBaseUrl` 指向其他位置。关闭透传后，没有别名或 `modelMap` 条目的 Claude 模型会像其他
+模型一样被路由，由配置的路由决定提供商（指向其他提供商模型的 `modelMap` 条目在两种状态下都会发往那里）。
+当路由是 Anthropic OAuth 提供商时，由 OpenCodex 中保存的 Anthropic 账户处理请求；再保存一个账户即可在
+429 时故障转移，而主动的 Claude OAuth 账户池 需要开启 `anthropicAccountPool.enabled` 才会生效。
+路由从下一个请求开始按新设置执行；已在运行的 Claude Code 会话需要重新启动，以便模型槽位和上下文窗口
+保持一致。
 
 ## Claude Desktop 模式：网关（默认）与第一方
 

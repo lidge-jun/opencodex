@@ -126,10 +126,14 @@ hook を削除します。Claude Desktop は独立した profile を使用し、
 
 `claudeCode.nativePassthrough: false`、`ocx claude config set --native-passthrough off`、または
 ダッシュボードの Claude Code 設定にある **Claude ネイティブパススルー** トグルでオフにでき、
-`claudeCode.anthropicBaseUrl` で別のアドレスを指定できます。パススルーをオフにすると Claude モデルも
-ほかのモデルと同じようにルーティングされ、OpenCodex に設定した Anthropic アカウントが処理し、Claude
-アカウントプールが適用されます。ルーティングは次のリクエストから切り替わります。実行中の Claude Code
-セッションは、モデルスロットとコンテキストウィンドウを合わせるために再起動してください。
+`claudeCode.anthropicBaseUrl` で別のアドレスを指定できます。パススルーをオフにすると、エイリアスや
+`modelMap` エントリのない Claude モデルもほかのモデルと同じようにルーティングされ、設定されたルートが
+プロバイダーを決めます(別プロバイダーのモデルを指す `modelMap` エントリは、どちらの状態でもそこへ送られます)。
+ルートが Anthropic OAuth プロバイダーの場合は OpenCodex に保存した Anthropic アカウントが処理し、2 つ目の
+アカウントを保存していれば 429 時のフェイルオーバーが加わります。能動的な
+Claude OAuth アカウントプールは `anthropicAccountPool.enabled` を有効にすると適用されます。
+ルーティングは次のリクエストから切り替わります。実行中の Claude Code セッションは、モデルスロットと
+コンテキストウィンドウを合わせるために再起動してください。
 
 ## Claude Desktop のモード: ゲートウェイ（デフォルト）と 1P
 

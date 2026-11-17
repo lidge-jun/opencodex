@@ -647,11 +647,14 @@ The one change to the body is tool-call ids. A `tool_use.id` or `tool_result.too
 
 Disable with `claudeCode.nativePassthrough: false`, `ocx claude config set --native-passthrough off`,
 or the **Native Claude passthrough** toggle in the dashboard's Claude Code settings; point elsewhere
-with `claudeCode.anthropicBaseUrl`. With passthrough off, Claude models are routed like any other
-model, so the Anthropic accounts configured in OpenCodex serve them and the
-[Claude OAuth account pool](#claude-oauth-account-pool-experimental) applies. Routing follows the
-setting from the next request; relaunch Claude Code sessions that are already running so their model
-slots and context windows match.
+with `claudeCode.anthropicBaseUrl`. With passthrough off, a Claude model without an alias or
+`modelMap` entry is routed like any other model: the configured route decides the provider (a
+`modelMap` entry that points at another provider's model goes there in either state). When the route
+is an Anthropic OAuth provider, the Anthropic accounts stored in OpenCodex serve the request; a second
+stored account adds 429 failover, and the proactive
+[Claude OAuth account pool](#claude-oauth-account-pool-experimental) applies once `anthropicAccountPool.enabled` is on. Routing follows
+the setting from the next request; relaunch Claude Code sessions that are already running so their
+model slots and context windows match.
 
 **Rate limits on passthrough.** A passthrough request uses the credential the caller sent, so it is
 subject to that login's limits. When the login answers 429, OpenCodex returns the 429 with its

@@ -3395,7 +3395,7 @@ export const fr: Record<TKey, string> = {
   "claude.injectAgents": "Enregistrer automatiquement les sous-agents",
   "claude.injectAgentsDesc": "Enregistre les modèles choisis dans l’onglet Sous-agents (ainsi que le modèle par défaut actuel) comme agents Claude Code délégables (ocx-*). S’applique à partir de la prochaine session.",
   "claude.nativePassthrough": "Relais Claude natif",
-  "claude.nativePassthroughDesc": "Activé (par défaut) : les modèles Claude partent directement vers Anthropic avec la connexion propre de Claude Code. Désactivé : ils sont routés via les comptes Anthropic d’OpenCodex, et le groupe de comptes Claude s’applique. Relancez les sessions Claude Code déjà ouvertes.",
+  "claude.nativePassthroughDesc": "Activé (par défaut) : un modèle Claude sans correspondance de modèle part directement vers Anthropic avec la connexion propre de Claude Code, lorsque Claude Code l’envoie ; les autres requêtes sont routées. Désactivé : ces modèles sont routés via OpenCodex, donc la route configurée et ses comptes Anthropic les servent, et le groupe de comptes Claude s’applique s’il est activé. Les modèles avec correspondance suivent leur correspondance dans les deux cas. Relancez les sessions Claude Code déjà ouvertes.",
   "claude.webSearchSidecar": "Remplacement du service auxiliaire de recherche Web",
   "claude.webSearchSidecarHint": "Remplace le service auxiliaire principal de recherche Web pour les requêtes Claude Code.",
   "claude.visionSidecar": "Remplacement du service auxiliaire de vision",
