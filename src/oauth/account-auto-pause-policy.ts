@@ -38,6 +38,15 @@ export interface PermanentAccountRefusalEvidence {
   message?: string;
 }
 
+/**
+ * The stored form of an upstream refusal sentence: one line, redacted, at most 300 characters.
+ * The classifier admits only fixed sentences today, so redaction and the cap are a boundary guard
+ * for whatever a later classifier admits; redaction runs first so the cap cannot split a secret.
+ */
+export function pauseEvidenceMessage(raw: string): string {
+  return sanitizeUpstreamErrorText(raw.replace(/\s+/g, " ").trim()).slice(0, 300);
+}
+
 export async function permanentAccountRefusalEvidence(response: Response, signal?: AbortSignal): Promise<PermanentAccountRefusalEvidence | undefined> {
   if (response.status !== 401 && response.status !== 403) return;
   try {
@@ -48,7 +57,7 @@ export async function permanentAccountRefusalEvidence(response: Response, signal
     const reason = classifyPermanentAccountRefusal(response.status, payload);
     if (!reason) return;
     const raw = (payload as { error?: { message?: unknown } }).error?.message;
-    const message = typeof raw === "string" ? sanitizeUpstreamErrorText(raw.replace(/\s+/g, " ").trim()).slice(0, 300) : "";
+    const message = typeof raw === "string" ? pauseEvidenceMessage(raw) : "";
     return { reason, statusCode: response.status, ...(message ? { message } : {}) };
   } catch { return; }
 }

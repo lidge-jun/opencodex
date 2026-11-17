@@ -70,8 +70,8 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
     };
     pause = async reason => (await setAccountPaused(name, oauth.accountId, true, {
       generation: oauth.generation, pauseRevision: revision, isCurrent: policyCurrent,
-      assertPolicyBeforePersist: () => { if (!accountAutoPauseFenceMatchesDisk(name, fence)) throw new Error("Account auto-pause policy changed before persistence"); }, details: { reason, pausedAt: Date.now(),
-        ...(evidence?.reason === reason ? { statusCode: evidence.statusCode, ...(evidence.message ? { message: evidence.message } : {}) } : {}) },
+      assertPolicyBeforePersist: () => { if (!accountAutoPauseFenceMatchesDisk(name, fence)) throw new Error("Account auto-pause policy changed before persistence"); }, details: { reason, pausedAt: Date.now() },
+      ...(evidence?.reason === reason ? { evidence: { statusCode: evidence.statusCode, ...(evidence.message ? { message: evidence.message } : {}) } } : {}),
     })).status === "updated";
   } else if (provider.authMode === "forward") {
     if (!codex || codex.kind !== "pool" && codex.kind !== "main-pool") return;

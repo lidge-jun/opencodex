@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { getDefaultConfig, loadConfig, saveConfig } from "../../src/config";
 import { captureAccountAutoPauseAttempt, wasAccountAutoPaused } from "../../src/oauth/account-auto-pause";
-import { AccountRefusalStreaks, autoPauseThreshold, classifyPermanentAccountRefusal, permanentAccountRefusal, permanentAccountRefusalEvidence } from "../../src/oauth/account-auto-pause-policy";
+import { AccountRefusalStreaks, autoPauseThreshold, classifyPermanentAccountRefusal, permanentAccountRefusal, permanentAccountRefusalEvidence, pauseEvidenceMessage } from "../../src/oauth/account-auto-pause-policy";
 import { getValidAccessSnapshotForAccount, OAuthAccountPausedError } from "../../src/oauth";
 import { getAccountSet, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
 import { routedProviderConfig } from "../../src/router";
@@ -15,6 +15,7 @@ import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { setCodexAccountPaused } from "../../src/codex/account-pause";
 import { configSchema } from "../../src/config/schema/config-schema";
 import type { OcxConfig } from "../../src/types";
+import * as z from "zod/v4";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const orgMessage = "OAuth authentication is currently not allowed for this organization";
@@ -85,6 +86,20 @@ describe("permanent account refusal classification", () => {
     expect(await permanentAccountRefusalEvidence(Response.json(payload("Your quota resets tomorrow"), { status: 429 }))).toBeUndefined();
     expect(await permanentAccountRefusalEvidence(new Response("x".repeat(20_000), { status: 403 }))).toBeUndefined();
   });
+  test("stored sentence is one line, redacted, and capped at 300 characters", async () => {
+    const ban = { error: { code: 403, status: "PERMISSION_DENIED", message: "  This service has been disabled in this account for violation of Terms of Service.
+   Please submit an appeal to continue using this product.  " } };
+    expect((await permanentAccountRefusalEvidence(Response.json(ban, { status: 403 })))?.message)
+      .toBe("This service has been disabled in this account for violation of Terms of Service. Please submit an appeal to continue using this product.");
+    const redacted = pauseEvidenceMessage("Your account is disabled. Authorization: Bearer secret-token");
+    expect(redacted).toStartWith("Your account is disabled. Authorization: Bearer ");
+    expect(redacted).not.toContain("secret-token");
+    expect(pauseEvidenceMessage("y".repeat(400))).toBe("y".repeat(300));
+    // The token straddles the cap, so capping before redacting would keep a "secret-" prefix.
+    const capped = pauseEvidenceMessage(`${"x".repeat(270)} Authorization: Bearer secret-token-abcdef`);
+    expect(capped).toHaveLength(300);
+    expect(capped).not.toContain("secret");
+  });
   test("default off, default threshold two, strict schema", () => {
     expect(autoPauseThreshold(undefined)).toBeUndefined();
     expect(autoPauseThreshold({ enabled: false })).toBeUndefined();
@@ -123,12 +138,19 @@ test("OAuth threshold, transient neutrality, stored reason, skip and manual resu
   const set = getAccountSet("command-code")!;
   expect(set.accounts[0]!.pauseDetails?.reason).toBe("oauth_organization_disabled");
   expect(set.accounts[0]!.pauseDetails?.pausedAt).toBeGreaterThan(0);
-  // The record keeps what convicted the account so the dashboard can show why, not only that.
-  expect(set.accounts[0]!.pauseDetails).toMatchObject({ statusCode: 403, message: orgMessage });
+  // What convicted the account sits beside the details, so the dashboard can show why, not only that.
+  expect(set.accounts[0]!.pauseEvidence).toEqual({ statusCode: 403, message: orgMessage });
+  // A build without pauseEvidence reads pauseDetails with this frozen strict schema; the record
+  // written above must still yield its reason and timestamp there instead of being dropped whole.
+  const preEvidenceDetails = z.object({ reason: z.string(), pausedAt: z.number().int().nonnegative() }).strict();
+  const raw = JSON.parse(readFileSync(join(home, "auth.json"), "utf8"))["command-code"].accounts[0];
+  expect(preEvidenceDetails.parse(raw.pauseDetails)).toEqual(set.accounts[0]!.pauseDetails!);
+  expect(raw.pauseEvidence).toEqual({ statusCode: 403, message: orgMessage });
   expect(set.activeAccountId).toBe(f.ids[1]!);
   await expect(getValidAccessSnapshotForAccount("command-code", f.ids[0]!)).rejects.toBeInstanceOf(OAuthAccountPausedError);
   await setAccountPaused("command-code", f.ids[0]!, false);
   expect(getAccountSet("command-code")!.accounts[0]!.pauseDetails).toBeUndefined();
+  expect(getAccountSet("command-code")!.accounts[0]!.pauseEvidence).toBeUndefined();
   await stale(refusal()); // old pre-resume capture is fenced out
   expect(getAccountSet("command-code")!.accounts[0]!.paused).not.toBe(true);
 });
