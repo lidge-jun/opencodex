@@ -320,7 +320,7 @@ El passthrough se activa cuando se cumplen todas estas condiciones: `nativePasst
 
 El único cambio en el cuerpo son los identificadores de llamada a herramientas. Un `tool_use.id` o `tool_result.tool_use_id` que Anthropic rechazaría (caracteres fuera de `a-zA-Z0-9_-`, o de más de 64), como uno que un modelo enrutado creó antes en la sesión, se reescribe a un id válido conservando el emparejamiento entre llamada y resultado. Los identificadores válidos se envían sin cambios, y un identificador vacío se responde con un 400 local.
 
-Deshabilitar con `claudeCode.nativePassthrough: false`; punto en otro lugar con `claudeCode.anthropicBaseUrl`.
+Deshabilitar con `claudeCode.nativePassthrough: false`, `ocx claude config set --native-passthrough off` o el interruptor **Native Claude passthrough** en los ajustes de Claude Code del panel; punto en otro lugar con `claudeCode.anthropicBaseUrl`. Con el passthrough desactivado, los modelos Claude se enrutan como cualquier otro modelo: los atienden las cuentas de Anthropic configuradas en OpenCodex y se aplica el pool de cuentas de Claude. El enrutamiento sigue el ajuste desde la siguiente solicitud; reinicia las sesiones de Claude Code que ya estén en marcha para que sus ranuras de modelo y ventanas de contexto coincidan.
 
 <a id="claude-desktop-on-a-connected-remote-hub"></a>
 

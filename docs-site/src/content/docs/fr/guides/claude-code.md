@@ -326,8 +326,13 @@ l'en-tête d'admission dédié du proxy est valide. Par conséquent, l'avertisse
 
 La seule modification du corps concerne les identifiants d'appel d'outil. Un `tool_use.id` ou `tool_result.tool_use_id` qu'Anthropic refuserait (caractères hors de `a-zA-Z0-9_-`, ou plus de 64), par exemple créé plus tôt dans la session par un modèle routé, est réécrit en identifiant conforme sans rompre l'appariement appel/résultat. Les identifiants conformes sont envoyés tels quels, et un identifiant vide reçoit une erreur 400 locale.
 
-Désactivez ce comportement avec `claudeCode.nativePassthrough: false` ; définissez une autre destination avec
-`claudeCode.anthropicBaseUrl`.
+Désactivez ce comportement avec `claudeCode.nativePassthrough: false`,
+`ocx claude config set --native-passthrough off` ou l'interrupteur **Relais Claude natif** dans les
+réglages Claude Code du tableau de bord ; définissez une autre destination avec
+`claudeCode.anthropicBaseUrl`. Relais désactivé, les modèles Claude sont routés comme les autres : les
+comptes Anthropic configurés dans OpenCodex les servent et le groupe de comptes Claude s'applique. Le
+routage suit le réglage dès la requête suivante ; relancez les sessions Claude Code déjà ouvertes pour
+que leurs emplacements de modèle et leurs fenêtres de contexte correspondent.
 
 ## Claude Desktop connecté à un hub distant
 

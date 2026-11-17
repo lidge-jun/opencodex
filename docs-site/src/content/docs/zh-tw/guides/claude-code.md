@@ -246,8 +246,11 @@ Anthropic。若任一供應商標頭含有代理許可密鑰，該密鑰會被�
 
 請求本文中唯一會改動的是工具呼叫 ID。Anthropic 會拒絕的 `tool_use.id` 或 `tool_result.tool_use_id`（含 `a-zA-Z0-9_-` 以外的字元或超過 64 個字元，例如工作階段早先由路由模型產生的 ID）會被改寫為合規 ID，並保持呼叫與結果的配對。合規 ID 原樣送出，空 ID 會在本地直接回傳 400。
 
-可以設定 `claudeCode.nativePassthrough: false` 來停用；也可以透過
-`claudeCode.anthropicBaseUrl` 指向其他位置。
+可以設定 `claudeCode.nativePassthrough: false`、執行 `ocx claude config set --native-passthrough off`，
+或關閉儀表板 Claude Code 設定中的 **Claude 原生透傳** 開關來停用；也可以透過
+`claudeCode.anthropicBaseUrl` 指向其他位置。關閉透傳後，Claude 模型會像其他模型一樣被路由，由 OpenCodex
+中設定的 Anthropic 帳號處理，Claude 帳號池隨之生效。路由從下一個請求開始依新設定執行；已在執行的
+Claude Code 工作階段需要重新啟動，讓模型槽位和上下文視窗保持一致。
 
 ## 連接遠端 hub 的 Claude Desktop
 

@@ -645,8 +645,13 @@ dedicated proxy admission header is valid. This also means the
 
 The one change to the body is tool-call ids. A `tool_use.id` or `tool_result.tool_use_id` that Anthropic would reject (characters outside `a-zA-Z0-9_-`, or longer than 64), such as one a routed model minted earlier in the session, is rewritten to a conforming id with its call/result pairing kept. Conforming ids are sent unchanged, and an empty id is answered with a local 400.
 
-Disable with `claudeCode.nativePassthrough: false`; point elsewhere with
-`claudeCode.anthropicBaseUrl`.
+Disable with `claudeCode.nativePassthrough: false`, `ocx claude config set --native-passthrough off`,
+or the **Native Claude passthrough** toggle in the dashboard's Claude Code settings; point elsewhere
+with `claudeCode.anthropicBaseUrl`. With passthrough off, Claude models are routed like any other
+model, so the Anthropic accounts configured in OpenCodex serve them and the
+[Claude OAuth account pool](#claude-oauth-account-pool-experimental) applies. Routing follows the
+setting from the next request; relaunch Claude Code sessions that are already running so their model
+slots and context windows match.
 
 **Rate limits on passthrough.** A passthrough request uses the credential the caller sent, so it is
 subject to that login's limits. When the login answers 429, OpenCodex returns the 429 with its
