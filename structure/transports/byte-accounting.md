@@ -145,6 +145,13 @@ envelopes, and real HTTP streams; `tests/server/inbound-body-budget.test.ts` cov
 
 ## Stream-buffer accounting
 
+`src/responses/citation-markers.ts` keeps unchanged streaming memory-citation text, including
+literal `<` characters and complete real blocks, as input spans. Ordinary `<` characters advance
+a cursor without an output fragment or body-lookahead slice; only a rewrite or held suffix
+flushes the unchanged span. Full opening-tag candidates keep the bounded lookahead and 16,384-unit
+hold limit. Output, held-byte accounting and Chat/Messages passthrough remain unchanged.
+`tests/responses/citation-markers.test.ts` bounds slice counts and covers bridge delta/done parity.
+
 Kiro tool-input collection in `src/adapters/kiro/stream.ts` keeps a per-call UTF-8 byte
 total, measuring only the arriving fragment instead of remeasuring retained chunks.
 Each new call starts at zero; transient replacement admission, per-call limits and
