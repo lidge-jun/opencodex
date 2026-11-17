@@ -1896,8 +1896,11 @@ export function projectUsageSummary<T extends UsageSummary>(
   });
   for (const entry of entries ?? []) accumulator.add(entry);
   const projected = accumulator.summarize(summary.range, summary.generatedAt, summary.surface);
+  // The unfiltered count describes every row; a filtered projection carries it only when the
+  // filter is a source filter that recounted it, exactly as the accumulator's own output does.
+  const { legacyUnclassifiedRequests: _unfilteredLegacy, ...unfiltered } = summary;
   return {
-    ...summary,
+    ...unfiltered as T,
     summary: projected.summary,
     days: projected.days,
     models: projected.models,
