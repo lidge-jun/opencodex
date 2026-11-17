@@ -76,6 +76,17 @@ describe("account quota table", () => {
     ]);
   });
 
+  test("an expired access token is routine: not a failed probe, and the row still gets the next marker", () => {
+    const table = buildQuotaTable([
+      antigravity("e", { probe: { status: "token_expired", latencyMs: 100 } }, [["Cla (Weekly)", 10, 20]]),
+    ], NOW, "reset-first");
+    const row = table.rows[0]!;
+    expect(row.flag).not.toBe("probeFailed");
+    expect(row.probeStatus).toBeUndefined();
+    expect(row.flag).toBe("ok");
+    expect(row.next).toEqual(["claudeGpt"]);
+  });
+
   test("plan names come from the upstream tier field; missing tier stays unknown", () => {
     expect(planDisplayName("g1-pro-tier")).toBe("Pro");
     expect(planDisplayName("free-tier")).toBe("Free");
