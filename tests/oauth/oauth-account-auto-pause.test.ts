@@ -87,8 +87,7 @@ describe("permanent account refusal classification", () => {
     expect(await permanentAccountRefusalEvidence(new Response("x".repeat(20_000), { status: 403 }))).toBeUndefined();
   });
   test("stored sentence is one line, redacted, and capped at 300 characters", async () => {
-    const ban = { error: { code: 403, status: "PERMISSION_DENIED", message: "  This service has been disabled in this account for violation of Terms of Service.
-   Please submit an appeal to continue using this product.  " } };
+    const ban = { error: { code: 403, status: "PERMISSION_DENIED", message: "  This service has been disabled in this account for violation of Terms of Service.\n   Please submit an appeal to continue using this product.  " } };
     expect((await permanentAccountRefusalEvidence(Response.json(ban, { status: 403 })))?.message)
       .toBe("This service has been disabled in this account for violation of Terms of Service. Please submit an appeal to continue using this product.");
     const redacted = pauseEvidenceMessage("Your account is disabled. Authorization: Bearer secret-token");

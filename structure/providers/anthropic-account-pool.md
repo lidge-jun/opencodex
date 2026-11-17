@@ -589,6 +589,6 @@ and late-writer fences follow [loaded advisory quota](jev-decision.md#loaded-adv
 The separate `providers.<instance>.accountAutoPause` policy is default off. Physical
 Responses and native Messages sends observe their captured bearer before recovery. Exact
 organization/OAuth or subscription refusals can persist `pauseDetails` with a fixed reason
-and timestamp through `src/oauth/store.ts`. `pauseRevision` changes on resume, so late
+and timestamp through `src/oauth/store.ts`, with a sibling `pauseEvidence` (`statusCode` plus an optional redacted message of at most 300 characters) stored beside it. `pauseRevision` changes on resume, so late
 pre-resume responses cannot pause the resumed account. The existing selectors rebuild an
 eligible sibling within their send budgets; proactive-pool activation is not required.

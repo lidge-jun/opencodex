@@ -30,7 +30,7 @@ counters. Their transport and lifetime follow the [Responses image replay contra
 `consecutiveFailures` in 1–100 (default 2). `src/config/schema/account-auto-pause.ts` validates
 the policy and allowlisted reason/timestamp DTO. OAuth pause metadata is stored with the
 auth row; Codex metadata/revision fences use `codexAccountPauseState`; key pools retain
-`disabled`, `pauseDetails` and `pauseRevision` per entry. Runtime counters are process-local.
+`disabled`, `pauseDetails` and `pauseRevision` per entry. OAuth accounts also store a sibling `pauseEvidence` (`statusCode` plus an optional redacted message of at most 300 characters) next to `pauseDetails`, so older builds still read the strict `pauseDetails`. Runtime counters are process-local.
 Manual resume (including an already enabled key) clears details and changes the revision, fencing already-sent refusals.
 
 ## Explicit health-gated resume and login (#8398)
@@ -124,7 +124,7 @@ Regression coverage: `tests/oauth/oauth-account-auto-pause-revision.test.ts` and
 ## Auto-paused account recovery
 
 OAuth and Codex account-list DTOs project optional `pauseDetails` (fixed reason plus epoch
-ms timestamp) beside the existing pause flag. The CLI preserves those fields and includes
+ms timestamp) beside the existing pause flag. The OAuth account list API also returns the sibling `pauseEvidence` (`statusCode` and an optional redacted message of at most 300 characters; OAuth accounts only) beside `pauseDetails`. The CLI preserves those fields and includes
 the reason in account listings. `src/server/management/oauth-account-routes.ts` also serves
 `PUT /api/providers/keys/pause` with provider `name`, key `id` and boolean `paused`, through
 the existing management authorization boundary. Its success response reports the committed
