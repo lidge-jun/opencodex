@@ -23,3 +23,20 @@ Verification: the five `tests/windows/*` files of the PR, `file-size-ratchet`,
 If the review answers UNSAFE, or the change would land without any Windows execution of its new
 PowerShell cases, the item is DEFER with the review's reason.
 
+
+## Outcome (2026-11-17)
+
+DEFER. The independent security review answered SAFE-WITH-FIXES: termination candidates only
+shrink, owner evidence is bound to the creation time, nothing process-controlled reaches
+PowerShell, and service accounts and the current user are never foreign. On the merged tree the
+five focused files gave 127 pass / 6 skip / 0 fail.
+
+The blocking finding: the foreign-owner exclusion is also applied to the confirmation paths
+(`windowsHomeWrapperPids` in src/service/windows-stop-binding.ts, Part B's `unnamed` in
+src/service/windows-stop-confirm.ts, `wrapperProcessesAlive` in
+src/service/windows-guarded-manager.ts). Ownership is compared with the stop process's own SID,
+so a stop run from another account (an elevated shell under a separate admin) classifies this
+home's wrapper as foreign and can report the port freed while the wrapper still lives and can
+respawn the proxy. The fix keeps the exclusion in `bindWindowsStopWrappers` candidate selection
+only, or compares against the task/install account. Both need a cross-user Windows run before
+they can be called correct, which this lane cannot do.

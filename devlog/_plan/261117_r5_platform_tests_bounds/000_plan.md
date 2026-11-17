@@ -28,7 +28,7 @@ Platform bugs and #8848 come first.
 | #8865 Windows-absolute model_catalog_json | issue | DEFER | Correct fix rewrites the generated binding on every install and the journaled restore paths (`catalog/restore.ts:76` reads the journal path cwd-relative); needs a maintainer decision on platform scope and journal migration. Design in 040. |
 | #8848 fixture credentials to real hosts | issue | CARRY (wp5) | Confirmed on this host (chatgpt.com wss, wham/usage, auth.openai.com/oauth/token, api.githubcopilot.com via node:https). A preload egress guard refuses non-local targets; leaking files that depend on the real answer get seams. |
 | #8852 host-install dependent suites | issue | DEFER | Five suites read ambient host process and install state; each needs its own isolation seam and a host that reproduces it. Not bounded for this lane. |
-| #8853 server suites time out under load | issue | DEFER | `tests/helpers/test-budget.ts` forbids raising a budget unless the wait is intrinsic; server-images and server-search are in the #8848 leak set (chatgpt.com wss), so re-measure after the guard lands. |
+| #8853 server suites time out under load | issue | DEFER | `tests/helpers/test-budget.ts` forbids raising a budget unless the wait is intrinsic. server-images and server-search were in the #8848 leak set (chatgpt.com wss); with the guard those attempts fail locally (82 and 29 pass, unloaded). Re-measure under load before any budget change. |
 | #8817 [draft] Windows stop owner filter | PR | DEFER | Independent security review: SAFE-WITH-FIXES. Termination candidates only shrink, but the foreign-owner exclusion also drops wrappers from the confirmation paths (`windowsHomeWrapperPids`, Part B `unnamed`, `wrapperProcessesAlive`), so a stop run from another account (a separate-admin shell) can report freed while this home's wrapper still lives. The fix compares against the task/install account instead of the stop process's identity; it needs a cross-user Windows run the lane cannot do. |
 | #8746 [draft] /dev/null git config on Windows | PR | CARRY (wp3) | Test-only, sound; Git for Windows 2.56 rejects `NUL`. Carried with author credit. |
 | #8851 MCP wait bound barrier | PR | MERGE-READY | head 35200782988a; test-only; independent review on the merged tree: 15 pass, typecheck clean. |
@@ -47,7 +47,7 @@ Platform bugs and #8848 come first.
 | wp3 | 030_phase3_8746_git_null_config.md | carry #8746; #8697 stays DEFER (recorded above) |
 | wp4 | 040_phase4_8865_catalog_binding.md | #8865 deferral design record (docs only) |
 | wp5 | 050_phase5_8848_test_egress_guard.md | #8848 |
-| wp6 | 060_phase6_pr_carries.md | #8817 and any PR the review returns as NOT-READY but carryable |
+| wp6 | 060_phase6_pr_carries.md | #8817 conditional carry, resolved to DEFER by the security review |
 | wp7 | 070_phase7_lane_pr.md | verification, lane PR, exact-head checks, report |
 
 
