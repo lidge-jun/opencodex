@@ -78,6 +78,32 @@ El enrutamiento y la visibilidad del catálogo son controles separados:
 }
 ```
 
+<a id="watching-routing-live"></a>
+
+## Ver el enrutamiento en vivo
+
+La pestaña **Models › Live routing** del panel (`#models/live`) muestra cómo se enrutó cada solicitud
+y se actualiza cada pocos segundos mientras está abierta. Para la última solicitud, o la que elija en
+la lista de abajo, verá:
+
+- **La ruta.** El cliente, luego OpenCodex, luego cada candidato: la cuenta o el destino del combo que
+  respondió, los que fallaron (con el estado HTTP y el motivo) y los que se omitieron antes de enviar.
+  Un grupo OAuth de varias cuentas muestra el estado de cada cuenta al terminar la solicitud: pausada,
+  pendiente de iniciar sesión, en enfriamiento, sin cuota o sin listar el modelo. Cuando el enrutador
+  registró por qué eligió esta ruta, ese motivo aparece debajo.
+- **En qué se fue el tiempo.** El tiempo propio de OpenCodex, los intentos fallidos anteriores, la
+  espera del primer token y el streaming. Cada segmento se mide; DNS y TLS no se separan.
+- **La ventana de contexto.** Tokens estimados para el prompt del sistema, las herramientas, las
+  skills, los archivos de memoria como `AGENTS.md` y `CLAUDE.md`, los archivos, los resultados de
+  herramientas y la conversación, en una barra con la parte del prompt de cada uno, lo llena que está
+  la ventana del modelo que respondió y la tasa de aciertos de la caché de prompts. Solo se registran
+  tamaños, nunca el texto del prompt, y se guardan en memoria con el registro de solicitudes.
+
+La lista de solicitudes agrupa por solicitud, sesión o clave API y muestra la cuenta, el modelo, el
+esfuerzo, la duración, el tiempo hasta el primer token, los tokens, la tasa de aciertos de caché, los
+tokens por segundo y el costo estimado. Los combos y las cuentas conservan sus propias páginas; la
+pestaña enlaza a ellas.
+
 <a id="tips"></a>
 
 ## Propinas
