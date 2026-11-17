@@ -32,7 +32,7 @@ Call sites (no-ops in production):
 - `tests/codex-integration/codex-restore-later-edits.test.ts` — INV-RESTORE-02 (below).
 - `tests/codex-integration/codex-app-rewrite-routing.test.ts` — app rewrite cases (below).
 
-Register both test files: `scripts/test-layout/layout.json` codex-integration explicit map and `tests/fixtures/test-layout-expected.json`, alphabetically beside `codex-restore-app-rewrite.test.ts`:
+Register both test files (as built: in the new shard `scripts/test-layout/layout-codex-journal.json`, because `layout.json` sits at the 2,000-line ratchet threshold): originally planned for `scripts/test-layout/layout.json` codex-integration explicit map and `tests/fixtures/test-layout-expected.json`, alphabetically beside `codex-restore-app-rewrite.test.ts`:
 
 ```json
 "codex-app-rewrite-routing.test.ts": "codex-integration",
