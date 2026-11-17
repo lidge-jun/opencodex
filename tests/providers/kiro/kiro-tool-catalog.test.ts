@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createKiroAdapter } from "../../../src/adapters/kiro";
-import { KIRO_TOOL_BUDGET_ENV, KIRO_TOOL_DESCRIPTION_LIMIT_ENV, MAX_KIRO_TOOL_CATALOG_BYTES, MAX_KIRO_TOOL_COUNT } from "../../../src/adapters/kiro-tools";
+import { convertKiroToolContext, KIRO_TOOL_BUDGET_ENV, KIRO_TOOL_DESCRIPTION_LIMIT_ENV, MAX_KIRO_TOOL_CATALOG_BYTES, MAX_KIRO_TOOL_COUNT } from "../../../src/adapters/kiro-tools";
 import type { OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 
@@ -86,6 +86,43 @@ describe("kiro catalog budget opt-out", () => {
     expect(names).toEqual(catalog.map(tool => tool.name));
     expect(content).not.toContain("Kiro's outbound catalog budget allows");
   });
+
+  for (const reserveExec of [false, true]) {
+    test(`off visits converted tools linearly (reserved exec: ${reserveExec})`, () => {
+      process.env[KIRO_TOOL_BUDGET_ENV] = "off";
+      const tools = Array.from({ length: 2_048 }, (_, index) => ({
+        name: `tool_${index}`, description: "Tool", parameters: { type: "object" },
+      }));
+      const catalog = reserveExec
+        ? [...tools, { name: "exec", description: "Execute code", freeform: true, parameters: { type: "object" } }]
+        : tools;
+      // Count actual array traversal rather than wall time. Abort repeated copying early, so
+      // the regression remains bounded even if the quadratic fill loop returns.
+      const iterate = Array.prototype[Symbol.iterator];
+      let convertedVisits = 0;
+      let result: ReturnType<typeof convertKiroToolContext>;
+      try {
+        Array.prototype[Symbol.iterator] = function () {
+          const iterator = iterate.call(this);
+          const next = iterator.next.bind(iterator);
+          iterator.next = () => {
+            const step = next();
+            if (!step.done && step.value && typeof step.value === "object" && Object.hasOwn(step.value, "toolSpecification")) {
+              if (++convertedVisits > catalog.length * 4) throw new Error("unbounded catalog repeatedly traversed converted tools");
+            }
+            return step;
+          };
+          return iterator;
+        };
+        result = convertKiroToolContext(parsedWith([{ role: "user", content: "hi" }], catalog));
+      } finally {
+        Array.prototype[Symbol.iterator] = iterate;
+      }
+      expect(convertedVisits).toBeLessThanOrEqual(catalog.length * 4);
+      expect(result.tools.map(tool => (tool as { toolSpecification: { name: string } }).toolSpecification.name)).toEqual(catalog.map(tool => tool.name));
+      expect(result.systemAdditions).toEqual([]);
+    });
+  }
 
   test("any other value keeps the budget", async () => {
     process.env[KIRO_TOOL_BUDGET_ENV] = "0";
