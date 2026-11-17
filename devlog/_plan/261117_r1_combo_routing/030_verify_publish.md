@@ -16,9 +16,14 @@ with a `NOT RUN:` line.
 
 ## Publish
 
-`git push -u origin triage/r1-combo-routing`, then `gh pr create --base dev --body-file <tmp>` with the
-template sections (Summary, Verification, Checklist), `Supersedes #8563 #8749 #8575 #8857`, `Closes #8759`,
-and the `Co-authored-by` trailers repeated in the description. Link the PR with `goat_pull_request_link`.
+Amended at wp3 entry by coordinator instruction: this host's GitHub credential cannot push. The lane sends
+`origin.report` with READY-TO-PUBLISH, the branch, exact head SHA, base SHA and the full PR title and body
+(template sections Summary, Verification, Checklist; `Supersedes` lines for #8563 #8749 #8575 #8857,
+`Closes #8759`, `Co-authored-by` credit). The coordinator fetches that SHA from this worktree, pushes it,
+opens the PR and replies with its URL. Published history is never rewritten; fixes land as new commits.
+
+The gates above run on the exact head that is handed over, so this unit records no later outcome commit;
+the CI result goes into the final `origin.report`.
 
 ## CI
 
