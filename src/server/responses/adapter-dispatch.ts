@@ -61,7 +61,7 @@ import {
   SendBudgetExhaustedError, errorDestinationLabel,
   UpstreamRetryEvidenceError,
   prepareSameTarget429Wait,
-  sleepWithAbort,
+  sleepWithAbort, RESET_RETRY_MAX_ATTEMPTS,
 } from "../../lib/upstream-retry";
 import { describeUpstreamConnectFailure } from "./upstream-error";
 import { createProviderOfflineResendWait } from "../../lib/offline-resend";
@@ -474,7 +474,8 @@ export async function prepareAdapterExchange(
         || (options.comboAttempt && route.provider.adapter === "google")
         ? transientSendCapFor(transientPolicy?.attempts,
           (options.comboAttempt || compactPrepaid) ? 0 : sendBudgetState.sendsUsed)
-        : 1;
+        // Anthropic sends are counted for the funded roster, not narrowed: keep the reset ladder.
+        : anthropicInstance && !options.comboAttempt && !compactPrepaid && !autoPauseEnabled ? RESET_RETRY_MAX_ATTEMPTS : 1;
       const fetchWithRetryPolicy = (route.provider.adapter === "google" || transientPolicy)
         ? fetchWithTransientRetry
         : fetchWithResetRetry;

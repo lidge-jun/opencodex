@@ -166,7 +166,7 @@ export function carryReplayRefusal<T extends Response>(source: Response, rewrapp
 }
 
 // 1 initial + 2 retries: the pool may hold more than one stale socket.
-const RESET_RETRY_MAX_ATTEMPTS = 3;
+export const RESET_RETRY_MAX_ATTEMPTS = 3;
 const RESET_RETRY_BASE_DELAY_MS = 150;
 const RESET_RETRY_MAX_DELAY_MS = 1_000;
 

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import type { Server } from "bun";
 import { ADAPTER_REGISTRY } from "../../../src/adapters/registry";
 import { createRequestExecutionBudget } from "../../../src/lib/request-execution-budget";
+import { setOfflineResendDependenciesForTests } from "../../../src/lib/offline-resend";
 import * as inference from "../../../src/server/inference/context";
 import { createAnthropicInstanceFixture, type AnthropicInstanceFixture } from "../../helpers/anthropic-instance-fixture";
 import { acquireOwnedSpendHome } from "../../helpers/owned-spend-home";
@@ -81,6 +82,7 @@ beforeEach(async () => {
 afterEach(async () => {
   budgetSpy?.mockRestore(); budgetSpy = undefined;
   adapterSpy?.mockRestore(); adapterSpy = undefined;
+  globalThis.fetch = realFetch; setOfflineResendDependenciesForTests(undefined);
   await ingress?.stop(true); await provider?.stop(true);
   releaseSpend?.(); releaseSpend = undefined;
   const { clearResponseStateForTests } = await import("../../../src/responses/state");
@@ -237,3 +239,22 @@ for (const replacementSends of [false, true]) test(`continuation refusal stays o
   if (replacementSends) expect(lastLog.provider).not.toBe(refusedProvider);
   else expect(lastLog.provider).toBe(refusedProvider);
 });
+
+test("counting Anthropic sends keeps the opted-in offline resend on the first send", async () => {
+  await seed(1);
+  // The built-in transport keeps the offline wait; a caller-supplied executor would not get one.
+  delete (fixture.config.providers.anthropic as { fetch?: unknown }).fetch;
+  fixture.config.offlineResendWaitSec = 30; fixture.publishConfig();
+  setOfflineResendDependenciesForTests({ resolveHost: async () => {}, delay: async () => {} });
+  let upstreamSends = 0;
+  globalThis.fetch = (async () => {
+    upstreamSends += 1;
+    if (upstreamSends === 1) throw Object.assign(new TypeError("getaddrinfo ENOTFOUND api.anthropic.com"), { code: "ENOTFOUND" });
+    return answer();
+  }) as unknown as typeof fetch;
+  const { response, text } = await post(false);
+  expect(response.status).toBe(200);
+  expect(text).toContain("The answer is complete.");
+  expect(upstreamSends).toBe(2);
+});
+
