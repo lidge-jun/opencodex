@@ -446,3 +446,17 @@ test("one parent endpoint pair serves the entire inventory instead of per-chip r
   expect(reads["/api/models"]).toBe(1); expect(reads["/api/selected-models"]).toBe(1);
   expect(reads["/api/custom-models"]).toBe(1);
 });
+
+test("latest per family never hides a custom definition or the provider's default model", async () => {
+  win.localStorage.setItem("ocx.models.latestPerFamily.v1", "1");
+  rows = [row("claude-sonnet-4-4"), row("claude-sonnet-4-5"), row("claude-sonnet-4-6")];
+  addCustom("custom-1", "vendor", "claude-sonnet-4-3");
+  const vendor = providers.vendor!;
+  providers.vendor = { ...vendor, defaultModel: "claude-sonnet-4-4" };
+  try {
+    await mount(); await current(); await waitFor(() => ids().length > 0);
+    expect([...ids()].sort()).toEqual(["claude-sonnet-4-3", "claude-sonnet-4-4", "claude-sonnet-4-6"]);
+  } finally {
+    providers.vendor = vendor;
+  }
+});

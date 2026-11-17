@@ -90,7 +90,10 @@ function ProviderModelInventory({ item, apiBase, availableModels, selectedModels
   // prices, and a stale `freeOnly` would otherwise keep filtering an inventory in which nothing
   // can classify as free.
   const freeOnlyActive = freeOnlyInForce(freeOnly, visible);
-  const newest = latestOnly ? latestPerFamilyBy(visible, row => row.id) : visible;
+  // "Latest only" hides older family members, never the operator's own: custom definitions
+  // and the provider's default model stay, or their delete/default controls would vanish.
+  const latest = latestOnly ? new Set(latestPerFamilyBy(visible, row => row.id)) : null;
+  const newest = latest ? visible.filter(row => latest.has(row) || row.custom === true || row.id === item.defaultModel) : visible;
   const priced = filterFreeModelRows(newest, freeOnlyActive);
   const normalizedQuery = query.trim().toLowerCase();
   const filtered = priced.filter(row => [row.id, row.namespaced].some(value => value.toLowerCase().includes(normalizedQuery)));
