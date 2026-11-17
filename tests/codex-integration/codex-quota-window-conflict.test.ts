@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { detectWeeklyWindowConflicts } from "../../src/codex/quota-window-conflict";
 import type { QuotaHistorySample } from "../../src/codex/quota-history";
+import { DICTS, LOCALES } from "../../gui/src/i18n/shared";
 
 const H = 3_600_000;
 const D = 24 * H;
@@ -200,13 +201,12 @@ describe("the conflict reaches the dashboard and CLI without free text (#8574)",
     expect(weeklyWindowConflictText(outOfRange, t, "en-US")).toBeUndefined();
   });
 
-  test("every locale translates the sentence and keeps both placeholders", async () => {
-    for (const locale of ["en", "ko", "ja", "zh", "zh-TW", "de", "fr", "pt", "ru", "tr", "vi"]) {
-      const catalog = Object.values(await import(`../../gui/src/i18n/${locale}`))[0] as Record<string, string>;
-      const sentence = catalog["codexAuth.weeklyConflict"];
+  test("every locale translates the sentence and keeps both placeholders", () => {
+    for (const { code: locale } of LOCALES) {
+      const sentence = DICTS[locale]["codexAuth.weeklyConflict"];
       expect(sentence, locale).toContain("{first}");
       expect(sentence, locale).toContain("{second}");
-      if (locale !== "en") expect(sentence, locale).not.toBe((Object.values(await import("../../gui/src/i18n/en"))[0] as Record<string, string>)["codexAuth.weeklyConflict"]);
+      if (locale !== "en") expect(sentence, locale).not.toBe(DICTS.en["codexAuth.weeklyConflict"]);
     }
   });
 

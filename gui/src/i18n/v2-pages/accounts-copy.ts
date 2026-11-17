@@ -1,11 +1,11 @@
 import { copyTable, type Row } from "./copy-table";
 
 /*
- * Copy for the v2 Accounts & limits (Codex Set, Providers) page. Columns: en, ko, de, fr, zh, zh-TW, ru, ja, tr, vi, pt.
+ * Copy for the v2 Accounts & limits (Codex Set, Providers) page. Columns: en, ko, de, fr, zh, zh-TW, ru, ja, tr, vi, pt, es.
  * Keys render as `accountsV2.<key>`.
  */
 const rows = {
-  servingNow: ["Serving now", "지금 사용 중", "Gerade im Einsatz", "En service", "当前使用", "目前使用", "Используется сейчас", "現在使用中", "Şu an kullanılan", "Đang phục vụ", "Em uso agora"],
+  servingNow: ["Serving now", "지금 사용 중", "Gerade im Einsatz", "En service", "当前使用", "目前使用", "Используется сейчас", "現在使用中", "Şu an kullanılan", "Đang phục vụ", "Em uso agora", "Atendiendo solicitudes"],
   servingPool: [
     "New sessions start on this account. The pool switches by your rotation strategy.",
     "새 세션은 이 계정으로 시작하고, 풀은 로테이션 전략에 따라 계정을 바꿉니다.",
@@ -18,6 +18,7 @@ const rows = {
     "Yeni oturumlar bu hesapla başlar. Havuz, döndürme stratejinize göre geçiş yapar.",
     "Phiên mới bắt đầu trên tài khoản này. Nhóm tài khoản chuyển đổi theo chiến lược xoay vòng của bạn.",
     "Novas sessões começam nesta conta. O pool alterna conforme sua estratégia de rotação.",
+    "Las sesiones nuevas empiezan en esta cuenta. El grupo alterna según la estrategia de rotación que elijas.",
   ],
   servingDirect: [
     "Direct mode: every request uses the main login.",
@@ -31,6 +32,7 @@ const rows = {
     "Doğrudan mod: her istek ana oturumu kullanır.",
     "Chế độ trực tiếp: mọi yêu cầu đều dùng đăng nhập chính.",
     "Modo direto: toda solicitação usa o login principal.",
+    "Modo directo: todas las solicitudes usan la sesión principal.",
   ],
   servingNone: [
     "No account can take requests right now.",
@@ -44,8 +46,9 @@ const rows = {
     "Şu anda istek alabilecek bir hesap yok.",
     "Hiện không có tài khoản nào nhận được yêu cầu.",
     "Nenhuma conta pode receber solicitações agora.",
+    "En este momento ninguna cuenta puede atender solicitudes.",
   ],
-  left: ["{pct}% left", "{pct}% 남음", "{pct} % übrig", "{pct} % restant", "剩余 {pct}%", "剩餘 {pct}%", "осталось {pct}%", "残り {pct}%", "%{pct} kaldı", "còn {pct}%", "{pct}% restante"],
+  left: ["{pct}% left", "{pct}% 남음", "{pct} % übrig", "{pct} % restant", "剩余 {pct}%", "剩餘 {pct}%", "осталось {pct}%", "残り {pct}%", "%{pct} kaldı", "còn {pct}%", "{pct}% restante", "Queda {pct} %"],
   quotaUnknown: [
     "Quota not read yet",
     "아직 할당량을 읽지 못했습니다",
@@ -58,8 +61,9 @@ const rows = {
     "Kota henüz okunmadı",
     "Chưa đọc được hạn mức",
     "Cota ainda não lida",
+    "Aún no se consultó la cuota",
   ],
-  accounts: ["Accounts", "계정", "Konten", "Comptes", "账号", "帳號", "Аккаунты", "アカウント", "Hesaplar", "Tài khoản", "Contas"],
+  accounts: ["Accounts", "계정", "Konten", "Comptes", "账号", "帳號", "Аккаунты", "アカウント", "Hesaplar", "Tài khoản", "Contas", "Cuentas"],
   emptyPoolHint: [
     "In pool mode, add another ChatGPT account so requests can move to it when one reaches its limit.",
     "풀 모드에서는 다른 ChatGPT 계정을 추가해 두면, 한 계정이 한도에 닿았을 때 요청이 그 계정으로 넘어갈 수 있어요.",
@@ -72,15 +76,16 @@ const rows = {
     "Havuz modunda başka bir ChatGPT hesabı ekleyin; bir hesap limitine ulaştığında istekler ona geçebilir.",
     "Ở chế độ nhóm, hãy thêm một tài khoản ChatGPT khác để yêu cầu có thể chuyển sang khi một tài khoản chạm hạn mức.",
     "No modo pool, adicione outra conta do ChatGPT para que as solicitações possam passar para ela quando uma atingir o limite.",
+    "En modo de grupo, añade otra cuenta de ChatGPT para que las solicitudes pasen a ella si una cuenta alcanza su límite.",
   ],
-  about: ["About: {name}", "{name} 설명", "Erklärung: {name}", "Explication : {name}", "说明：{name}", "說明：{name}", "Пояснение: {name}", "{name} の説明", "Açıklama: {name}", "Giải thích: {name}", "Explicação: {name}"],
-  howItWorks: ["How it works", "작동 방식", "So funktioniert es", "Fonctionnement", "工作方式", "運作方式", "Как это работает", "仕組み", "Nasıl çalışır", "Cách hoạt động", "Como funciona"],
-  accountSettings: ["Account settings", "계정 설정", "Kontoeinstellungen", "Réglages du compte", "账号设置", "帳號設定", "Настройки аккаунта", "アカウント設定", "Hesap ayarları", "Cài đặt tài khoản", "Configurações da conta"],
-  mainLogin: ["Main login", "메인 로그인", "Hauptanmeldung", "Connexion principale", "主登录", "主登入", "Основной вход", "メインログイン", "Ana oturum", "Đăng nhập chính", "Login principal"],
-  tabsLabel: ["Codex settings", "Codex 설정", "Codex-Einstellungen", "Réglages Codex", "Codex 设置", "Codex 設定", "Настройки Codex", "Codex 設定", "Codex ayarları", "Cài đặt Codex", "Configurações do Codex"],
-  status: ["Status", "상태", "Status", "État", "状态", "狀態", "Состояние", "状態", "Durum", "Trạng thái", "Estado"],
-  actions: ["Actions", "작업", "Aktionen", "Actions disponibles", "操作", "操作", "Действия", "操作", "İşlemler", "Thao tác", "Ações"],
-  providersList: ["Providers", "프로바이더", "Anbieter", "Fournisseurs", "提供方", "提供者", "Провайдеры", "プロバイダー", "Sağlayıcılar", "Nhà cung cấp", "Provedores"],
+  about: ["About: {name}", "{name} 설명", "Erklärung: {name}", "Explication : {name}", "说明：{name}", "說明：{name}", "Пояснение: {name}", "{name} の説明", "Açıklama: {name}", "Giải thích: {name}", "Explicação: {name}", "Acerca de {name}"],
+  howItWorks: ["How it works", "작동 방식", "So funktioniert es", "Fonctionnement", "工作方式", "運作方式", "Как это работает", "仕組み", "Nasıl çalışır", "Cách hoạt động", "Como funciona", "Cómo funciona"],
+  accountSettings: ["Account settings", "계정 설정", "Kontoeinstellungen", "Réglages du compte", "账号设置", "帳號設定", "Настройки аккаунта", "アカウント設定", "Hesap ayarları", "Cài đặt tài khoản", "Configurações da conta", "Configuración de cuentas"],
+  mainLogin: ["Main login", "메인 로그인", "Hauptanmeldung", "Connexion principale", "主登录", "主登入", "Основной вход", "メインログイン", "Ana oturum", "Đăng nhập chính", "Login principal", "Inicio de sesión principal"],
+  tabsLabel: ["Codex settings", "Codex 설정", "Codex-Einstellungen", "Réglages Codex", "Codex 设置", "Codex 設定", "Настройки Codex", "Codex 設定", "Codex ayarları", "Cài đặt Codex", "Configurações do Codex", "Configuración de Codex"],
+  status: ["Status", "상태", "Status", "État", "状态", "狀態", "Состояние", "状態", "Durum", "Trạng thái", "Estado", "Estado"],
+  actions: ["Actions", "작업", "Aktionen", "Actions disponibles", "操作", "操作", "Действия", "操作", "İşlemler", "Thao tác", "Ações", "Acciones"],
+  providersList: ["Providers", "프로바이더", "Anbieter", "Fournisseurs", "提供方", "提供者", "Провайдеры", "プロバイダー", "Sağlayıcılar", "Nhà cung cấp", "Provedores", "Proveedores"],
 } satisfies Record<string, Row>;
 
 export const accountsV2Copy = copyTable("accountsV2", rows);

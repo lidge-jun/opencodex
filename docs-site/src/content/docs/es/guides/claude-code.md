@@ -541,7 +541,7 @@ Un catálogo mixto que contiene un puente Codex `exec_command` o `shell_command`
 
 ## Esfuerzo de razonamiento
 
-En las solicitudes traducidas Messages → Responses, Claude Code `/effort` Configuración de mapas de la siguiente manera:
+Al traducir solicitudes de Messages a Responses, se asigna el valor de `/effort` de Claude Code así:
 
 | Formato de protocolo | Mapeo |
 | --- | --- |
