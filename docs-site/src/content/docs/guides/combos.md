@@ -682,7 +682,8 @@ label. Later fallback targets use ordinary Combo policy from the original reques
 
 A turn is usually several requests: the model calls a tool, the client runs it, and the next request
 returns the result. Those tool-call continuations stay on the turn's target without another decision
-call, and in `decide` mode they keep the effort JEV chose for the turn. In `client` mode they use
+call, and in `decide` mode they keep the effort JEV chose for the turn while the target still offers
+it; once it does not, ordinary Combo policy applies. In `client` mode they use
 ordinary Combo effort policy like every other request: the caller's effort, unless
 `defaultEffortMode` is `"force"`.
 
