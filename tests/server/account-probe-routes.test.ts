@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { antigravityCliUserAgent } from "../../src/adapters/client-fingerprint";
@@ -12,6 +12,7 @@ import {
   probeAntigravityAccounts,
 } from "../../src/providers/quota/antigravity-account-probe";
 import { handleManagementAPI } from "../../src/server/management-api";
+import type { ManagementPrincipal } from "../../src/server/management-auth";
 import type { OcxConfig } from "../../src/types";
 import { ManagementRequest as Request } from "../helpers/management-auth";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -93,6 +94,81 @@ describe("classifyAntigravityProbeResponse", () => {
 });
 
 describe("probeAntigravityAccounts", () => {
+  test("omits untrusted error strings and projects only known quota windows", async () => {
+    writeStore([account("denied1", "fixture-access"), account("okacct1", "fixture-ok")]);
+    const seen = installUpstream({
+      "fixture-access": () => new Response(googleError(403, "FIXTURE_STATUS", "fixture-access", "FIXTURE_REASON"), { status: 403 }),
+      "fixture-ok": () => Response.json({ groups: [{ displayName: "fixture-ok", buckets: [{ window: "5h", remainingFraction: 0.8 }] }] }),
+    });
+    const rows = await probeAntigravityAccounts();
+    expect(seen).toHaveLength(2);
+    expect(rows).toEqual([
+      expect.objectContaining({ accountId: "denied1", status: "permission_denied", reason: "PERMISSION_DENIED", message: null }),
+      expect.objectContaining({ accountId: "okacct1", quota: null }),
+    ]);
+    expect(JSON.stringify(rows)).not.toMatch(/fixture-access|fixture-ok|FIXTURE_REASON|FIXTURE_STATUS/);
+  });
+
+  test.each([200, 403])("cancels an oversized HTTP %i body and returns a closed error", async status => {
+    writeStore([account("okacct1", "tok-ok")]);
+    let canceled = false;
+    const seen = installUpstream({
+      "tok-ok": () => new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(new Uint8Array(600 * 1024)); },
+        pull(controller) { controller.close(); },
+        cancel() { canceled = true; },
+      }, { highWaterMark: 0 }), { status }),
+    });
+    const rows = await probeAntigravityAccounts();
+    expect(seen).toHaveLength(1);
+    expect(rows?.[0]).toMatchObject({ status: "error", reason: "response_unusable", quota: null });
+    expect(canceled).toBe(true);
+  });
+
+  test("the deadline cancels a stalled error body", async () => {
+    writeStore([account("okacct1", "tok-ok")]);
+    const deadline = new AbortController();
+    let canceled = false;
+    const seen = installUpstream({
+      "tok-ok": () => new Response(new ReadableStream<Uint8Array>({
+        pull(controller) {
+          deadline.abort(new DOMException("fixture deadline", "TimeoutError"));
+          setTimeout(() => { if (!canceled) controller.close(); }, 50);
+        },
+        cancel() { canceled = true; },
+      }, { highWaterMark: 0 }), { status: 403 }),
+    });
+    const rows = await probeAntigravityAccounts({ signal: deadline.signal });
+    expect(seen).toHaveLength(1);
+    expect(rows?.[0]).toMatchObject({ status: "error", reason: "timeout" });
+    expect(canceled).toBe(true);
+  });
+
+  test("a passive probe leaves the store bytes and filesystem metadata untouched", async () => {
+    const path = writeStore([account("okacct1", "tok-ok")]);
+    const before = readFileSync(path, "utf8");
+    chmodSync(path, 0o644);
+    installUpstream({ "tok-ok": () => Response.json({}) });
+    expect((await probeAntigravityAccounts())?.[0]?.status).toBe("ok");
+    expect(readFileSync(path, "utf8")).toBe(before);
+    if (process.platform !== "win32") expect(statSync(path).mode & 0o777).toBe(0o644);
+  });
+
+  test("a queued account removed during a batch sends no request", async () => {
+    const ids = ["acct1", "acct2", "acct3", "acct4", "acct5"];
+    const rows = ids.map(id => account(id, `tok-${id}`));
+    writeStore(rows, "acct1");
+    const seen = installUpstream({
+      "tok-acct1": () => {
+        writeStore(rows.slice(0, 4), "acct1");
+        return Response.json({});
+      },
+    });
+    const result = await probeAntigravityAccounts();
+    expect(seen.map(row => row.auth)).toHaveLength(4);
+    expect(result?.map(row => row.accountId)).not.toContain("acct5");
+  });
+
   test("probes each account with its own token under the CLI fingerprint, never writes the store, never leaks tokens", async () => {
     const path = writeStore([
       account("okacct1", "tok-ok"),
@@ -185,7 +261,7 @@ describe("management routes", () => {
   }
   const liveRoster = (async () => Response.json({ object: "list", data: [{ id: "known", object: "model" }] })) as unknown as typeof fetch;
 
-  async function call(live: OcxConfig, path: string, body: unknown, onConverge?: () => void) {
+  async function call(live: OcxConfig, path: string, body: unknown, onConverge?: () => void, principal: ManagementPrincipal | null = "admin-token") {
     const url = new URL(`http://localhost${path}`);
     const response = await handleManagementAPI(new Request(url, {
       method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body),
@@ -195,9 +271,47 @@ describe("management routes", () => {
         onConverge?.();
         return { kind: "catalog-only", changed: false, catalogRefresh: { status: "unchanged" }, observed: {} as never, history: {} as never };
       },
-    });
+    }, principal ?? undefined);
     return { status: response!.status, json: await response!.json() as Record<string, unknown> };
   }
+
+  test("account probes require an admin token or dashboard session principal", async () => {
+    writeStore([account("okacct1", "tok-ok")]);
+    const seen = installUpstream({ "tok-ok": () => Response.json({}) });
+    for (const principal of [null, "local-read-capability"] as const) {
+      expect((await call(config(), "/api/oauth/accounts/probe", { provider: "google-antigravity" }, undefined, principal)).status).toBe(403);
+    }
+    expect(seen).toHaveLength(0);
+    expect((await call(config(), "/api/oauth/accounts/probe", { provider: "google-antigravity" }, undefined, "gui-session")).status).toBe(200);
+    expect(seen).toHaveLength(1);
+  });
+
+  test("a running batch rejects overlapping management probes", async () => {
+    writeStore([account("okacct1", "tok-ok")]);
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const seen = installUpstream({
+      "tok-ok": () => {
+        started.resolve();
+        return new Response(new ReadableStream({
+          async pull(controller) { await release.promise; controller.close(); },
+        }));
+      },
+    });
+    const first = call(config(), "/api/oauth/accounts/probe", { provider: "google-antigravity" });
+    await started.promise;
+    const second = call(config(), "/api/oauth/accounts/probe", { provider: "google-antigravity", accountId: "okacct1" });
+    const finish = setTimeout(release.resolve, 100);
+    try {
+      expect((await second).status).toBe(409);
+      expect(seen).toHaveLength(1);
+    } finally {
+      release.resolve();
+      clearTimeout(finish);
+      await first;
+    }
+    expect((await call(config(), "/api/oauth/accounts/probe", { provider: "google-antigravity" })).status).toBe(200);
+  });
 
   test("POST /api/oauth/accounts/probe validates input and returns per-account results", async () => {
     writeStore([account("okacct1", "tok-ok")]);
