@@ -88,12 +88,14 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   prose remain intact. Protocol errors may include a numeric code. Probe and turn workspaces are created under the
   system temporary directory outside the OpenCodex home. Windows requires a private NTFS ACL before either
   child can start. Retained workspaces can accumulate when cleanup repeatedly cannot be confirmed.
-  The version probe and the turn remove their workspaces after confirmed tree exit. POSIX requires a successful
-  group SIGKILL or ESRCH, leader exit and a group existence check returning ESRCH. Windows requires successful
+  The version probe and each turn start with a fresh private workspace containing only an empty temp directory.
+  On POSIX, workspace removal follows confirmed leader exit and a group check returning ESRCH after SIGKILL or
+  ESRCH. Descendants that deliberately leave the process group are outside that check. Removing the workspace
+  exposes no pre-existing user files. Windows requires successful
   tree taskkill and leader closure. An inconclusive cleanup retains the workspace and logs a fixed warning.
   An inconclusive cleanup fails the turn, except that an existing dispatch refusal keeps its original error.
   A version probe that exited zero can still supply its version.
-  The terminal event is published after reaping. Coverage:
+  The terminal event is published after cleanup settles. Coverage:
   `tests/adapters/agy-acp-{adapter,protocol,policy}.test.ts`, `tests/config/agy-acp-config.test.ts`,
   `tests/server/server-agy-acp.test.ts`.
 - `devin` is direct for a related reason. It streams Cognition's

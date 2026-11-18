@@ -1022,6 +1022,10 @@ Protocol v1 (newline-delimited JSON-RPC on stdio).
   flattened prompt and can be partly or wholly truncated.
 - Permission requests are answered `cancelled`, file system and terminal requests from the CLI are not executed, and
   errors carry fixed text: the CLI's stderr and its error messages are never returned.
+- Each turn starts in a fresh, empty private workspace containing only its own empty temp directory.
+  On POSIX, cleanup confirms that the CLI's process group is gone before removing the workspace.
+  A descendant that deliberately leaves the group is outside that check. Removing the workspace exposes no
+  pre-existing user files.
 - `end_turn` completes; `max_tokens` and `refusal` complete as truncated and content-filtered; `max_turn_requests`, an
   unrequested `cancelled` and an unknown stop reason fail the turn.
 - Refuses subagent, spawned-thread and Codex memory turns, combo members and combo decision calls, and
