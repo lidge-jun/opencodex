@@ -543,6 +543,24 @@ describe("business/enterprise group-based spend control quota", () => {
     expect(isValidWhamHistoryObservation(payload)).toBe(true);
   });
 
+  it.each([
+    [null, 0, 0],
+    [null, "5e-324", Number.MIN_VALUE],
+    [null, "Infinity", undefined],
+    [null, -1, undefined],
+    [null, " ", undefined],
+    ["0", "4875.5", 0],
+  ])("normalizes group remaining for credit balance %p and remaining %p", (balance, remaining, expected) => {
+    const payload = baseEnterprisePayload({
+      credits: { has_credits: true, balance },
+      spend_control: {
+        reached: false,
+        individual_limit: { source: "group_based_spend_controls", remaining },
+      },
+    });
+    expect(parseUsageQuota(payload)?.credits?.balance).toBe(expected);
+  });
+
   it.each([undefined, null])("marks the quota exhausted when reached is true and used_percent is %p", usedPercent => {
     const payload = baseEnterprisePayload({
       spend_control: {

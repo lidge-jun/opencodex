@@ -1,9 +1,9 @@
-import { parseCodexCredits, rememberCodexCredits } from "../credits";
+import { rememberCodexCredits } from "../credits";
 import { fetchCodexUsage } from "../quota-query-backoff";
 import type { CodexUsageOwner } from "../quota-query-backoff";
 import { capturePoolQuotaWriter, getValidCodexToken, isCodexAccountGenerationLive, forceRefreshCodexPoolToken, markCodexAccountValidated, markCodexAccountValidationFailed, readCodexAccountRecord, isTerminalCodexPoolRefreshFailure, CodexCredentialGenerationConflictError, CodexCredentialRefreshLockTimeoutError, CodexCredentialRefreshBusyError, CodexCredentialRefreshStaleError, TokenRefreshError } from "../account-store";
 import type { PoolQuotaWriter } from "../quota-types";
-import { isValidWhamHistoryObservation, getAccountQuota, isCompleteCodexQuotaRecoverySnapshot, parseUsageQuota, poolWhamPolicyObservation, setAccountQuotaFromParsed } from "../quota";
+import { isValidWhamHistoryObservation, getAccountQuota, isCompleteCodexQuotaRecoverySnapshot, parseUsageQuota, parseWhamCredits, poolWhamPolicyObservation, setAccountQuotaFromParsed } from "../quota";
 import type { StoredAccountQuota, WhamUsageResponse } from "../quota";
 import type { ManualResetRefreshLineage } from "../routing";
 import { clearAccountNeedsReauth, markAccountNeedsReauth } from "../account-runtime-state";
@@ -359,11 +359,11 @@ export async function commitPoolQuotaResponse(
   if (ctx.mayPublish?.() === false) {
     return { quota: getAccountQuota(accountId), needsReauth: false, credentialGeneration: generation };
   }
-  if (ctx.poolWriter && isCodexAccountGenerationLive(accountId, generation)) {
-    rememberCodexCredits(accountId, ctx.poolWriter.historyIdentity, parseCodexCredits(data.credits));
-  }
   const freshPlan = nonEmptyPlan(data.plan_type) ?? undefined;
   const usage = { ...data, plan_type: freshPlan ?? configuredPlan };
+  if (ctx.poolWriter && isCodexAccountGenerationLive(accountId, generation)) {
+    rememberCodexCredits(accountId, ctx.poolWriter.historyIdentity, parseWhamCredits(usage));
+  }
   const quota = parseUsageQuota(usage);
   const freshResetCredits = quota?.resetCredits;
   if (!quota) {
