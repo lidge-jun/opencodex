@@ -11,11 +11,11 @@ beforeEach(resetState);
 afterEach(() => { mock.restore(); resetState(); });
 
 test.each([
-  ["responses", "persists a decision when readmission fails"],
-  ["chat/completions", "persists a decision when readmission fails"],
-  ["messages", "persists a decision when readmission fails"],
-  ["messages", "honors metered consent revoked by management during image planning"],
-] as const)("%s %s", async (endpoint, scenario) => {
+  ["responses", "persists a decision when readmission fails", { status: 503, type: "server_error", code: "combo_unavailable" }],
+  ["chat/completions", "persists a decision when readmission fails", { status: 503, type: "server_error", code: "server_is_overloaded" }],
+  ["messages", "persists a decision when readmission fails", { status: 503, type: "api_error", code: "combo_unavailable" }],
+  ["messages", "honors metered consent revoked by management during image planning", { status: 503, type: "api_error", code: "combo_unavailable" }],
+] as const)("%s %s", async (endpoint, scenario, contract) => {
     const revokeConsent = scenario.startsWith("honors");
     const home = createTempHome("ocx-jev-readmission-");
     const releaseSpend = acquireOwnedSpendHome();
@@ -84,9 +84,9 @@ test.each([
         body: JSON.stringify({ model: "jev-auto", stream: false,
           ...(endpoint === "responses" ? { input: messages } : { messages, max_tokens: 64 }) }),
       });
-      expect(response.status).toBe(503);
+      expect(response.status).toBe(contract.status);
       const text = await response.text();
-      expect(JSON.parse(text).error.code).toBe("combo_unavailable");
+      expect(JSON.parse(text).error).toMatchObject({ type: contract.type, code: contract.code });
       expect(text).not.toContain(details);
       expect(decisions).toBe(revokeConsent ? 0 : 1);
       expect(children).toBe(0);

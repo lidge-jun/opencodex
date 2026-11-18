@@ -714,8 +714,6 @@ async function handleChatCompletionsWithBudget(
       // The guard's deterministic refusal keeps its wire identity — same code the
       // streamed `response.failed` frame and the Anthropic surface carry.
       classified.code = UNDECLARED_TOOL_CALL_ERROR_CODE;
-    } else if (upstream.status === 503 && upstreamCode === "combo_unavailable" && isProxyError(upstream)) {
-      classified.code = upstreamCode;
     } else if (upstreamCode !== undefined && upstreamCode !== null && classified.code == null) {
       classified.code = upstreamCode;
     }
