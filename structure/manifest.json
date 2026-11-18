@@ -651,6 +651,13 @@
       "documents": ["src/oauth/"]
     },
     {
+      "path": "providers/oauth-credential-siblings.md",
+      "tier": 4,
+      "title": "OAuth Credential Siblings",
+      "scope": "Provider rows that sign in through another provider's login: one auth-store slot, owner-named refresh, sibling-only login publication and last-row credential release.",
+      "documents": ["src/oauth/", "src/server/management/provider-credential-release.ts"]
+    },
+    {
       "path": "providers/antigravity-account-import.md",
       "tier": 4,
       "title": "Antigravity Account Import",

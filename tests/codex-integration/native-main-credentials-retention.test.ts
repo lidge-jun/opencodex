@@ -30,6 +30,8 @@ import { retainNativeMainOwner } from "../../src/codex/native-main-owner";
 import { resolveNativeProfileContext } from "../../src/codex/native-profile-store";
 import { loadConfig, saveConfig } from "../../src/config";
 import { advanceCodexCredentialMutationEpoch } from "../../src/codex/credential-mutation-epoch";
+import { reconcileMainCodexAccountRuntimeState, resetMainCodexAccountIdentityTrackingForTests } from "../../src/codex/account-lifecycle";
+import { captureMainAccountIdentityGeneration, clearMainAccountInfoCache, getMainAccountInfoCache, setMainAccountInfoCache } from "../../src/codex/main-account-cache";
 import { fakeChatGptJwt } from "../helpers/agent-task-recovery";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import type { OcxConfig } from "../../src/types";
@@ -60,12 +62,14 @@ beforeEach(() => {
   process.env.CODEX_HOME = home;
   setNativeMainRefreshResolutionForTests(OPENCODEX_MODE);
   resetNativeMainRetentionForTests();
+  resetMainCodexAccountIdentityTrackingForTests();
   clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
 });
 
 afterEach(() => {
   setNativeMainRefreshResolutionForTests(null);
   resetNativeMainRetentionForTests();
+  resetMainCodexAccountIdentityTrackingForTests();
   clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
   if (previousCodexHome === undefined) delete process.env.CODEX_HOME;
   else process.env.CODEX_HOME = previousCodexHome;
@@ -96,6 +100,107 @@ async function served(): Promise<string | null> {
 }
 
 describe("native-main login retention (#7345)", () => {
+  test("the first same-account reconciliation preserves a complete login read", async () => {
+    const a = login("acct-first-observation");
+    writeInPlace(a.raw);
+    expect(await served()).toBe(a.access);
+    expect(reconcileMainCodexAccountRuntimeState()).toBe(false);
+    writeInPlace("");
+    expect(await served()).toBe(a.access);
+  });
+
+  for (const readStatus of [false, true]) for (const partial of ["", '{"tokens": {']) {
+    test(`a complete ${readStatus ? "status" : "token"} read keeps the new account through reconciliation and an ${partial ? "incomplete" : "empty"} rewrite`, async () => {
+      const a = login("acct-a");
+      writeInPlace(a.raw);
+      reconcileMainCodexAccountRuntimeState();
+      expect(await served()).toBe(a.access);
+      setMainAccountInfoCache({ email: "account-a@example.test", plan: "plus", quota: null, ts: Date.now() });
+      const identity = fileIdentity(authPath);
+      const b = login("acct-b");
+      writeInPlace(b.raw);
+      expect(fileIdentity(authPath)).toEqual(identity);
+      if (readStatus) expect(getMainAccountCredentialStatus().usable).toBe(true);
+      else expect(await served()).toBe(b.access);
+      const infoAfterRead = getMainAccountInfoCache();
+      const generation = captureMainAccountIdentityGeneration();
+      const changedAgain = reconcileMainCodexAccountRuntimeState();
+      writeInPlace(partial);
+      expect(await served()).toBe(b.access);
+      expect(getMainAccountCredentialStatus().usable).toBe(true);
+      expect(infoAfterRead).toBeNull();
+      expect(changedAgain).toBe(false);
+      expect(captureMainAccountIdentityGeneration()).toBe(generation);
+    });
+  }
+
+  for (const partial of ["", '{"tokens": {']) {
+    test(`an independently observed account replacement ends retention during ${partial ? "partial" : "empty"} rewrites`, async () => {
+      const a = login("acct-a");
+      writeInPlace(a.raw);
+      reconcileMainCodexAccountRuntimeState();
+      expect(await served()).toBe(a.access);
+      const identity = fileIdentity(authPath);
+      const b = login("acct-b");
+      writeInPlace(b.raw);
+      expect(fileIdentity(authPath)).toEqual(identity);
+      expect(reconcileMainCodexAccountRuntimeState()).toBe(true);
+      writeInPlace(partial);
+      expect(getMainAccountCredentialStatus().usable).toBe(false);
+      expect(await served()).toBeNull();
+      expect(lastNativeMainRetentionInvalidationForTests()).toBe("account-replacement");
+      writeInPlace(b.raw);
+      expect(await served()).toBe(b.access);
+      writeInPlace(partial);
+      expect(await served()).toBe(b.access);
+    });
+  }
+
+  test("returning to a previously observed account cannot revive its earlier retained login", async () => {
+    const a = login("acct-a");
+    writeInPlace(a.raw);
+    reconcileMainCodexAccountRuntimeState();
+    expect(await served()).toBe(a.access);
+    writeInPlace(login("acct-b").raw);
+    expect(reconcileMainCodexAccountRuntimeState()).toBe(true);
+    writeInPlace(a.raw);
+    expect(reconcileMainCodexAccountRuntimeState()).toBe(true);
+    writeInPlace("");
+    expect(await served()).toBeNull();
+    expect(lastNativeMainRetentionInvalidationForTests()).toBe("account-replacement");
+  });
+
+  test("an observation ticket cannot retain across account identity changes", () => {
+    const a = login("acct-a");
+    writeInPlace(a.raw);
+    reconcileMainCodexAccountRuntimeState();
+    const owner = { codexHome: home, path: authPath };
+    const identity = fileIdentity(authPath);
+    const ticket = beginNativeMainObservation();
+    writeInPlace(login("acct-b").raw);
+    expect(reconcileMainCodexAccountRuntimeState()).toBe(true);
+    writeInPlace(a.raw);
+    expect(reconcileMainCodexAccountRuntimeState()).toBe(true);
+    const options = { fingerprint: "a", configuredRefreshMode: () => "auto" };
+    expect(retainNativeMainLogin(ticket, owner, identity, { token: "a" }, options)).toBe(false);
+    expect(retainedNativeMainLogin(owner, identity, () => "auto")).toBeUndefined();
+  });
+
+  test("a fresh observation cannot reuse an identical entry from an invalidated identity generation", () => {
+    writeInPlace(login("acct-a").raw);
+    reconcileMainCodexAccountRuntimeState();
+    const owner = { codexHome: home, path: authPath };
+    const identity = fileIdentity(authPath);
+    expect(retainNativeMainLogin(beginNativeMainObservation(), owner, identity, { token: "a" },
+      { fingerprint: "a", configuredRefreshMode: () => "auto" })).toBe(true);
+    clearMainAccountInfoCache();
+    let modeReads = 0;
+    expect(retainNativeMainLogin(beginNativeMainObservation(), owner, identity, { token: "a-new" },
+      { fingerprint: "a", configuredRefreshMode: () => { modeReads += 1; return "opencodex"; } })).toBe(true);
+    expect(modeReads).toBe(1);
+    expect(retainedNativeMainLogin(owner, identity, () => "opencodex")).toEqual({ token: "a-new" });
+  });
+
   test("truncate then restore: the in-place rewrite window keeps the last complete login", async () => {
     const a = login("acct-a");
     writeInPlace(a.raw);
@@ -234,6 +339,29 @@ describe("native-main login retention (#7345)", () => {
     expect(getMainAccountCredentialStatus().usable).toBe(false);
     expect(await served()).toBeNull();
   });
+
+  for (const forced of [false, true]) {
+    test(`a ${forced ? "forced" : "regular"} refresh ticket stays stale after an observed account round trip`, async () => {
+      const a = login("acct-a", { expired: !forced, refresh: "grant-a" });
+      writeInPlace(a.raw);
+      reconcileMainCodexAccountRuntimeState();
+      const fresh = fakeChatGptJwt("acct-a");
+      const dependencies = { refreshToken: async () => {
+        writeInPlace(login("acct-b").raw);
+        expect(reconcileMainCodexAccountRuntimeState()).toBe(true);
+        writeInPlace(a.raw);
+        expect(reconcileMainCodexAccountRuntimeState()).toBe(true);
+        return { access: fresh, refresh: "grant-a2", expires: Date.now() + 3_600_000, accountId: "acct-a" } as never;
+      } };
+      const result = forced
+        ? await forceRefreshMainAccountToken(a.access, dependencies)
+        : await getValidMainAccountToken(dependencies);
+      expect(result?.accessToken).toBe(fresh);
+      writeInPlace("");
+      expect(getMainAccountCredentialStatus().usable).toBe(false);
+      expect(await served()).toBeNull();
+    });
+  }
 
   test("a refresh that completes under the same owner retains the published login", async () => {
     const a = login("acct-a", { expired: true, refresh: "grant-a" });
@@ -378,6 +506,15 @@ describe("native-main login retention (#7345)", () => {
     expect(await served()).toBe(a.access);
     writeInPlace("");
     expect(() => beginNativeMainReauth()).toThrow(NativeMainReauthUnavailableError);
+  });
+
+  test("a write-guard snapshot does not publish a new account identity", () => {
+    writeInPlace(login("acct-a").raw);
+    reconcileMainCodexAccountRuntimeState();
+    const generation = captureMainAccountIdentityGeneration();
+    writeInPlace(login("acct-b").raw);
+    beginNativeMainReauth();
+    expect(captureMainAccountIdentityGeneration()).toBe(generation);
   });
 
   test("classification separates the rewrite window from authoritative states", () => {

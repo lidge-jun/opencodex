@@ -1157,6 +1157,12 @@ function buildPiClientConfig(ctx: ExportContext, options: PiExportOptions = {}):
  */
 const PI_EXPORT_OPTIONS: PiExportOptions = { sendSessionAffinityHeaders: true, foldDeveloperRole: true };
 const PI_NATIVE_SELECTOR_OPTIONS: PiExportOptions = { ...PI_EXPORT_OPTIONS, rawNestedModelIds: true, omitNativeInCodexDirect: true };
+/**
+ * Prime and Aside run the Pi runtime and read the same models.json, so they need Pi's developer-role
+ * statement (#8864): without it they send their system prompt as `developer`, which DashScope and
+ * Moonshot reject with a 400. Session affinity stays Pi's alone (eb8cc9ab73).
+ */
+const PI_DEVELOPER_ROLE_OPTIONS: PiExportOptions = { foldDeveloperRole: true };
 
 /** Do not let provider-controlled catalog text become an environment lookup. */
 function containsEnvInterpolation(value: string): boolean {
@@ -1413,7 +1419,7 @@ function buildGajaeContribution(ctx: ExportContext): ManagedContribution {
  * code is stamping the right client id on the ownership record.
  */
 function buildPrimeContribution(ctx: ExportContext): ManagedContribution {
-  const doc = buildPiClientConfig(ctx);
+  const doc = buildPiClientConfig(ctx, PI_DEVELOPER_ROLE_OPTIONS);
   return singleFragment("prime", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
 }
 
@@ -1436,7 +1442,7 @@ function buildPrimeContribution(ctx: ExportContext): ManagedContribution {
  * the fragment this client recorded and not one another client wrote.
  */
 function buildAsideContribution(ctx: ExportContext): ManagedContribution {
-  const doc = buildPiClientConfig(ctx);
+  const doc = buildPiClientConfig(ctx, PI_DEVELOPER_ROLE_OPTIONS);
   return singleFragment("aside", ["providers", OPENCODE_PROVIDER_ID], doc.providers[OPENCODE_PROVIDER_ID]);
 }
 
@@ -1449,9 +1455,8 @@ function buildAsideContribution(ctx: ExportContext): ManagedContribution {
  * `thinkingLevelMap` levels. Evidence:
  * `devlog/_fin/260912_omo_client_integration/001_omo_contract.md`.
  *
- * The flag is passed HERE as well as in the spec's `build`, which is the one
- * thing Prime and Aside do not do. They pass the default on both paths, so they
- * are consistent; passing it on only one would make `ocx export --client omo`
+ * The flag is passed HERE as well as in the spec's `build`, the same rule Prime
+ * and Aside follow with their own options; passing it on only one would make `ocx export --client omo`
  * emit a `compat` block while enable and refresh wrote a file without it, and
  * the two would drift apart at the first refresh.
  *
@@ -1668,7 +1673,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     destination: env => primeConfigPath(env),
     apiKeyEnv: "",
     exportHint: "Prime Agent reads a non-secret placeholder from models.json; loopback needs no key.",
-    build: buildPiClientConfig,
+    build: ctx => buildPiClientConfig(ctx, PI_DEVELOPER_ROLE_OPTIONS),
     format: "json",
     summarize: summarizePi,
     buildContribution: buildPrimeContribution,
@@ -1686,7 +1691,7 @@ export const EXPORT_CLIENTS: Record<ExportClientId, ExportClientSpec> = {
     destination: env => asideConfigPath(env),
     apiKeyEnv: "",
     exportHint: "Aside reads a non-secret placeholder from models.json; loopback needs no key.",
-    build: buildPiClientConfig,
+    build: ctx => buildPiClientConfig(ctx, PI_DEVELOPER_ROLE_OPTIONS),
     format: "json",
     summarize: summarizePi,
     buildContribution: buildAsideContribution,

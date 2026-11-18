@@ -449,3 +449,102 @@ test("a margin-only input-cap refusal names the cap, not the window", async () =
   expect(message).toContain("input limit of client-model (90000 tokens");
   expect(message).not.toContain("cannot fit the context window");
 });
+
+describe("devin adapter window fallback", () => {
+  const devin: OcxProviderConfig = { adapter: "devin", baseUrl: "https://server.codeium.com" };
+  const devinRequest = (inputTokens: number, modelId: string): OcxParsedRequest => ({
+    ...request([userText(asciiTokens(inputTokens))]),
+    modelId,
+    options: { maxOutputTokens: 64_000 },
+  });
+
+  test("resolves the adapter window when provider config declares none", () => {
+    // swe-2-flash serves ~256KiB even though the live catalog advertises 850k;
+    // observed turns terminate at totalTokens 262,140.
+    expect(resolveInputCeiling(devin, "devin", "swe-2-flash")).toBe(262_000);
+    // Effort-suffixed catalog UIDs collapse to the base row.
+    expect(resolveInputCeiling(devin, "devin", "swe-2-flash-medium")).toBe(262_000);
+    expect(resolveInputCeiling(devin, "devin", "swe-2")).toBe(850_000);
+  });
+
+  test("a turn that cannot fit is skipped before any upstream bytes", () => {
+    // 250k estimated input + 64k declared output exceeds the 262k serving window --
+    // the shape that used to answer 200, emit a few hundred tokens and stop on
+    // max_output_tokens with output already committed and no target left to try.
+    const result = checkComboTargetInputAdmission(devinRequest(250_000, "swe-2-flash"), devin, "devin", "swe-2-flash");
+    expect(result.admitted).toBe(false);
+    expect(result.ceiling).toBe(262_000);
+  });
+
+  test("explicit provider windows still win over the adapter table", () => {
+    const wider: OcxProviderConfig = { ...devin, contextWindow: 900_000 };
+    expect(checkComboTargetInputAdmission(devinRequest(250_000, "swe-2-flash"), wider, "devin", "swe-2-flash").admitted).toBe(true);
+    const narrower: OcxProviderConfig = { ...devin, modelContextWindows: { "swe-2-flash": 200_000 } };
+    expect(resolveInputCeiling(narrower, "devin", "swe-2-flash")).toBe(200_000);
+  });
+
+  test("dotted devin ids resolve the hyphenated window", () => {
+    const provider: OcxProviderConfig = { adapter: "devin", baseUrl: "https://devin.test" };
+    expect(resolveInputCeiling(provider, "devin", "swe-1.7")).toBe(262_000);
+  });
+
+  test("dotted id honors a configured window on the normalized spelling", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "devin", baseUrl: "https://devin.test",
+      modelContextWindows: { "swe-1-7-medium": 111_000 },
+    };
+    expect(resolveInputCeiling(provider, "devin", "swe-1.7-medium")).toBe(111_000);
+  });
+
+  test("dotted id honors a configured input cap on the normalized spelling", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "devin", baseUrl: "https://devin.test",
+      modelMaxInputTokens: { "swe-1-7": 100_000 },
+    };
+    expect(resolveInputCeiling(provider, "devin", "swe-1.7")).toBe(100_000);
+  });
+
+  test("an effort-suffixed dotted id honors an override on its dotted base", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "devin", baseUrl: "https://devin.test",
+      modelContextWindows: { "swe-1.7": 111_000 },
+    };
+    expect(resolveInputCeiling(provider, "devin", "swe-1.7-medium")).toBe(111_000);
+    expect(checkComboTargetInputAdmission(devinRequest(150_000, "swe-1.7-medium"), provider, "devin", "swe-1.7-medium").admitted).toBe(false);
+  });
+
+  test("a per-model override on any devin spelling binds before the provider-wide window", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "devin", baseUrl: "https://devin.test", contextWindow: 900_000,
+      modelContextWindows: { "swe-1-7-medium": 111_000 },
+    };
+    expect(resolveInputCeiling(provider, "devin", "swe-1.7-medium")).toBe(111_000);
+    expect(checkComboTargetInputAdmission(devinRequest(200_000, "swe-1.7-medium"), provider, "devin", "swe-1.7-medium").admitted).toBe(false);
+  });
+
+  test("a hyphenated id honors overrides keyed by the dotted spelling", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "devin", baseUrl: "https://devin.test", contextWindow: 900_000,
+      modelContextWindows: { "swe-1.7": 111_000 },
+      modelMaxInputTokens: { "swe-1.7": 100_000 },
+    };
+    expect(resolveInputCeiling(provider, "devin", "swe-1-7-medium")).toBe(100_000);
+    expect(checkComboTargetInputAdmission(devinRequest(150_000, "swe-1-7-medium"), provider, "devin", "swe-1-7-medium").admitted).toBe(false);
+    const windowOnly: OcxProviderConfig = { ...provider, modelMaxInputTokens: undefined };
+    expect(resolveInputCeiling(windowOnly, "devin", "swe-1-7")).toBe(111_000);
+  });
+
+  test("the dotted-key fallback folds case like the exact-spelling lookup", () => {
+    const provider: OcxProviderConfig = {
+      adapter: "devin", baseUrl: "https://devin.test", contextWindow: 900_000,
+      modelMaxInputTokens: { "SWE-1.7": 100_000 },
+    };
+    expect(resolveInputCeiling(provider, "devin", "swe-1-7-medium")).toBe(100_000);
+    expect(resolveInputCeiling(provider, "devin", "SWE-1-7-MEDIUM")).toBe(100_000);
+  });
+
+  test("non-devin adapters stay unresolved", () => {
+    const other: OcxProviderConfig = { adapter: "openai-chat", baseUrl: "https://example.test/v1" };
+    expect(resolveInputCeiling(other, "custom", "swe-2-flash")).toBeNull();
+  });
+});

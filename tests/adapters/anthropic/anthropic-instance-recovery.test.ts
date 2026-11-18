@@ -248,9 +248,8 @@ for (const instance of instances) {
 
   test(`${instance}: exhausted recovery budget retains the original account refusal without another physical send`, async () => {
     const { createRequestExecutionBudget } = await import("../../../src/lib/request-execution-budget");
-    // The existing reset-only initial leg is not charged to this shared ledger. This fixture
-    // therefore grants zero RECOVERY sends, as the fast-downgrade refusal fixture does.
-    const sendBudget = createRequestExecutionBudget({ maxTotalModelSends: 0, baseSendAllowance: 0, finalRecoveryAllowance: 0,
+    // The first physical send spends the whole caller-owned allowance; no recovery may follow.
+    const sendBudget = createRequestExecutionBudget({ maxTotalModelSends: 1, baseSendAllowance: 1, finalRecoveryAllowance: 0,
       maxAlternateTargetSends: 0, maxTargetTransitions: 0 }, "instance-refusal-no-recovery-send");
     reply = () => refusal(403);
     const response = await post(instance, { sendBudget }); await response.text();

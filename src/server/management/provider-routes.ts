@@ -42,7 +42,7 @@ import {
 import { commitProviderPatch } from "./provider-patch-transaction";
 import { captureConfigTopLevelRollback } from "../../config/rebase-provenance";
 import { canonicalAutoReviewModelKey, mergeModelPinnedEfforts, modelPinnedEffortsConfigError, pinnedReasoningEffortConfigError } from "../../config/provider-validation";
-import { replaceProviderAccountSet } from "../../oauth/store";
+import { releaseRemovedProviderCredentials } from "./provider-credential-release";
 import { captureModelsOAuthTarget, mayResolveModelsOAuth, modelsOAuthTargetMatches } from "../../oauth/model-discovery-auth";
 import { providerDestinationResolvedError } from "../../lib/destination-policy";
 import { reconcileLiveStateStores } from "../../lib/state-store-registrations";
@@ -1732,21 +1732,21 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       // Same canonical-URL TUN transparency as catalog discovery: the registry's
       // own fixed discovery URL survives purely-benchmark (Clash/Surge/Mihomo
       // fake-IP) DNS without proxy env.
-      const outboundDependencies = { isCanonicalUrl: isRegistryModelDiscoveryUrl,
-        beforeSend: () => (!vertexAuth || vertexDiscoveryAuthIsCurrent(prov, vertexAuth, headers))
+      const outboundDependencies = (requestUrl: string) => ({ isCanonicalUrl: isRegistryModelDiscoveryUrl,
+        beforeSend: () => (!vertexAuth || vertexDiscoveryAuthIsCurrent(prov, vertexAuth, headers, requestUrl))
           && (prov.authMode !== "oauth" || (mayResolveModelsOAuth(name, config.providers[name])
           && modelsOAuthTargetMatches(name, config.providers[name], authorizedTarget)
-          && (name !== "anthropic2" || new URL(modelsUrl).href === authorizedTarget))) };
+          && (name !== "anthropic2" || new URL(requestUrl).href === authorizedTarget))) });
       const res = method === "POST"
         ? await providerOutboundPost(name, prov, modelsUrl, {
           headers,
           body: JSON.stringify({ project }),
           signal: AbortSignal.timeout(8000),
-        }, outboundDependencies)
+        }, outboundDependencies(modelsUrl))
         : await providerOutboundGet(name, prov, modelsUrl, {
           headers,
           signal: vertexDeadline ?? AbortSignal.timeout(8000),
-        }, outboundDependencies);
+        }, outboundDependencies(modelsUrl));
       const latencyMs = Date.now() - started;
       const redirectError = await providerRedirectError(res, modelsUrl);
       if (redirectError) {
@@ -1782,7 +1782,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       const listing = !ccaModels && vertexDeadline
         ? await collectVertexPublisherModelPages(modelsUrl, bounded.value,
           { ...discovery, firstPageBytes: vertexFirstPage?.bytes(), signal: vertexDeadline },
-          (pageUrl, signal) => providerOutboundGet(name, prov, pageUrl, { headers, signal }, outboundDependencies))
+          (pageUrl, signal) => providerOutboundGet(name, prov, pageUrl, { headers, signal }, outboundDependencies(pageUrl)))
         : { ok: true as const, value: bounded.value };
       if (!listing.ok) return jsonResponse({ ok: false, latencyMs, error: `upstream Vertex model listing is incomplete: ${listing.diagnostic}` });
       // OpenAI-style lists (and Together top-level arrays) use the same validation/dedupe/filter
@@ -1861,7 +1861,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     // Deleting still succeeds; the response names the shadow-call target left without a provider.
     const shadowDependency = shadowInterceptProviderDependency(config, name);
     const droppedCustomModels = removeProviderWithGcpCredentials(config, name, fallbackDefault, save);
-    await replaceProviderAccountSet(name, null);
+    await releaseRemovedProviderCredentials(config, name);
     reconcileLiveStateStores();
     const { clearModelCache: clearCache } = await import("../../codex/model-cache");
     clearCache(name);

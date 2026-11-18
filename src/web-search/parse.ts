@@ -1,6 +1,7 @@
 import { sseFieldValue } from "../lib/sse-decoder";
 import {
   appendSafeWebSearchSource,
+  fillMissingWebSearchSourceTitle,
   safeWebSearchSources,
   type SafeWebSearchSource,
 } from "./sources";
@@ -323,24 +324,13 @@ export const MAX_SIDECAR_DECODED_CHARS = 64 * 1024;
 function collectAnnotation(ann: AnnotationLike | undefined, sources: WebSearchSource[], seen: Set<string>): void {
   if (!ann || ann.type !== "url_citation" || typeof ann.url !== "string") return;
   if (seen.has(ann.url)) {
-    fillMissingTitle(sources, ann.url, ann.title);
+    fillMissingWebSearchSourceTitle(sources, ann.url, ann.title);
     return;
   }
   if (appendSafeWebSearchSource(sources, {
     url: ann.url,
     ...(ann.title !== undefined ? { title: ann.title } : {}),
   })) seen.add(ann.url);
-}
-
-function fillMissingTitle(sources: WebSearchSource[], url: string, title: unknown): void {
-  if (title === undefined) return;
-  const index = sources.findIndex(source => source.url === url);
-  if (index < 0 || sources[index]!.title !== undefined) return;
-  const candidate = sources.map((source, at) => at === index ? { url, title } : source);
-  // Re-run the shared checks: an invalid title is dropped, and a title that would push the
-  // list past its byte cap drops a source, so either outcome leaves the list unchanged.
-  const checked = safeWebSearchSources(candidate);
-  if (checked.length === sources.length && checked[index]!.title !== undefined) sources[index] = checked[index]!;
 }
 
 /**
