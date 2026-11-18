@@ -28,6 +28,7 @@ type ProviderOption = {
   authMode?: string;
   googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
   canonicalOpenAiForward?: boolean;
+  knownSubscriptionOAuth?: boolean;
   vertexCredentialKind?: "marker" | "ambient" | "reference" | "api-key";
   adapter?: string;
   baseUrl?: string;
@@ -52,6 +53,7 @@ type ProviderDto = {
   authMode?: string;
   googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
   canonicalOpenAiForward?: boolean;
+  knownSubscriptionOAuth?: boolean;
   vertexCredentialKind?: "marker" | "ambient" | "reference" | "api-key";
 };
 type ConfigDto = { providers?: Record<string, ProviderDto> };
@@ -181,6 +183,7 @@ export default function Combos({
       hiddenFromPicker: p.adapter === "jev-decision" || !Object.hasOwn(visibleProviders, name),
       authMode: p.authMode,
       canonicalOpenAiForward: p.canonicalOpenAiForward,
+      knownSubscriptionOAuth: p.knownSubscriptionOAuth,
       googleMode: p.googleMode,
       vertexCredentialKind: p.vertexCredentialKind,
       adapter: p.adapter,

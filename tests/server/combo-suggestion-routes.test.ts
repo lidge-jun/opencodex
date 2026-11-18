@@ -132,9 +132,11 @@ test("config DTO computes forward eligibility before redacting provider URLs", a
   const live = loadConfig();
   setCanonicalForward(live);
   live.providers.gateway = { ...live.providers.mock!, baseUrl: "https://chatgpt.com/backend-api/codex?route=custom" };
+  live.providers.kimi = { adapter: "openai-chat", authMode: "oauth", baseUrl: "https://api.kimi.com/coding/v1?route=custom", models: ["kimi-for-coding"] };
   expect(safeConfigDTO(live)).toMatchObject({ providers: {
     mock: { canonicalOpenAiForward: true },
     gateway: { baseUrl: live.providers.mock!.baseUrl, canonicalOpenAiForward: false },
+    kimi: { baseUrl: "https://api.kimi.com/coding/v1", knownSubscriptionOAuth: false },
   } });
 });
 
@@ -254,5 +256,30 @@ test("append inserts a subscription before explicitly metered targets without re
   expect(response.status).toBe(200);
   for (const config of [live, loadConfig()]) {
     expect(config.combos?.mix?.targets).toEqual([target, ...existing]);
+  }
+});
+
+test.each(["create", "append"] as const)("Devin %s requires stored spend consent", async (mode) => {
+  const live = seedPaidSuggestion();
+  live.providers.devin = { adapter: "devin", authMode: "oauth", baseUrl: "https://server.codeium.com", models: ["gemini"] };
+  delete live.combos!.mix!.allowMeteredTargets;
+  saveConfig(live);
+  const target = { provider: "devin", model: "gemini" };
+  const request = { id: mode === "create" ? "draft" : "mix", mode, targets: [target] };
+  const before = onDisk();
+  const denied = await saveSuggestion(live, request);
+  expect(denied.status).toBe(409);
+  expect(await denied.json()).toMatchObject({ code: "suggestion_consent_required" });
+  expect(onDisk()).toEqual(before);
+  expect(live.combos?.draft).toBeUndefined();
+  expect(live.combos?.mix?.targets).toHaveLength(1);
+
+  if (mode === "append") {
+    live.combos!.mix!.allowMeteredTargets = true;
+    saveConfig(live);
+    expect((await saveSuggestion(live, request)).status).toBe(200);
+    for (const config of [live, loadConfig()]) {
+      expect(config.combos?.mix?.targets).toContainEqual({ ...target, metered: true });
+    }
   }
 });

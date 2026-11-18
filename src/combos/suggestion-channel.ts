@@ -1,4 +1,4 @@
-import { isCanonicalOpenAiForwardProvider } from "../providers/openai-forward-destination";
+import { isCanonicalOpenAiForwardProvider, normalizedBaseUrl } from "../providers/openai-forward-destination";
 
 export interface SuggestionProvider {
   name: string;
@@ -6,6 +6,7 @@ export interface SuggestionProvider {
   hiddenFromPicker?: boolean;
   authMode?: string;
   canonicalOpenAiForward?: boolean;
+  knownSubscriptionOAuth?: boolean;
   googleMode?: string;
   vertexCredentialKind?: string;
   adapter?: string;
@@ -41,16 +42,31 @@ const MODEL_MAKERS: ReadonlyArray<[RegExp, string]> = [
   [/^(?:gpt|o\d|codex|chatgpt)/, "openai"],
   [/^(?:gemini|gemma)/, "google"],
   [/^grok/, "xai"],
-  [/^deepseek/, "deepseek"],
+  [/^kimi/, "moonshot"],
 ];
 
-const PROVIDER_MAKERS: ReadonlyArray<[RegExp, string]> = [
-  [/(?:^|\.)anthropic\.com$/, "anthropic"],
-  [/(?:^|\.)(?:openai\.com|chatgpt\.com)$/, "openai"],
-  [/(?:^|\.)googleapis\.com$/, "google"],
-  [/(?:^|\.)x\.ai$/, "xai"],
-  [/(?:^|\.)deepseek\.com$/, "deepseek"],
-];
+// Keep this allowlist aligned with the documented subscription channels in structure/config.md.
+const SUBSCRIPTION_OAUTH_CHANNELS = [
+  { name: "xai", adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", maker: "xai" },
+  { name: "xai", adapter: "openai-chat", baseUrl: "https://cli-chat-proxy.grok.com/v1", maker: "xai" },
+  { name: "kimi", adapter: "openai-chat", baseUrl: "https://api.kimi.com/coding/v1", maker: "moonshot" },
+  { name: "kimi-responses", adapter: "openai-responses", baseUrl: "https://api.kimi.com/coding/v1", maker: "moonshot" },
+] as const;
+
+function subscriptionMaker(provider: SuggestionProvider): string | undefined {
+  if (provider.authMode === "forward") {
+    return provider.canonicalOpenAiForward !== false && isCanonicalOpenAiForwardProvider(provider) ? "openai" : undefined;
+  }
+  return provider.knownSubscriptionOAuth === false ? undefined : oauthSubscriptionMaker(provider);
+}
+
+export function oauthSubscriptionMaker(provider: SuggestionProvider): string | undefined {
+  if (provider.authMode !== "oauth" || !provider.baseUrl) return undefined;
+  const baseUrl = normalizedBaseUrl(provider.baseUrl);
+  return SUBSCRIPTION_OAUTH_CHANNELS.find((channel) =>
+    channel.name === provider.name && channel.adapter === provider.adapter && channel.baseUrl === baseUrl
+  )?.maker;
+}
 
 function hostOf(baseUrl: string | undefined): string {
   if (!baseUrl) return "";
@@ -66,9 +82,9 @@ export function channelTier(provider: SuggestionProvider, model: string): Channe
   if (provider.authMode === "forward"
     && (provider.canonicalOpenAiForward === false || !isCanonicalOpenAiForwardProvider(provider))) return "metered";
   if (provider.googleMode === "vertex" || provider.vertexCredentialKind || /(?:^|[.-])aiplatform\.googleapis\.com$/.test(host) || /vertex/i.test(provider.name)) return "vertex";
-  if (provider.authMode !== "oauth" && provider.authMode !== "forward") return "metered";
+  const providerMaker = subscriptionMaker(provider);
+  if (!providerMaker) return "metered";
   const modelMaker = MODEL_MAKERS.find(([re]) => re.test(normalizeModelName(model)))?.[1];
-  const providerMaker = PROVIDER_MAKERS.find(([re]) => re.test(host))?.[1];
   return modelMaker !== undefined && modelMaker === providerMaker ? "own-subscription" : "subscription";
 }
 
