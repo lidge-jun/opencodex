@@ -17,12 +17,10 @@ import {
   WINDOWS_PROCESS_SNAPSHOT_SCRIPT,
   openWindowsProcessWatch,
   overlayNativeCreationTimes,
-  parseFallbackTerminateOutput,
   parseScQueryexPid,
   parseWindowsProcessSnapshot,
   readScheduleServicePid,
   terminateWindowsProcessBound,
-  windowsFallbackTerminateScript,
   windowsProcessSnapshot,
   type WindowsEvidenceCommand,
 } from "../../src/service/windows-process-evidence";
@@ -74,7 +72,7 @@ describe("Windows process evidence: pure decoding", () => {
     expect(parseWindowsProcessSnapshot("{not json")).toBeNull();
   });
 
-  test("only stable, successful SID evidence proves a foreign owner; service accounts remain candidates", () => {
+  test("only stable, successful SID evidence proves a foreign owner; service accounts remain unverified", () => {
     const current = "S-1-5-21-100-200-300-1001";
     const foreign = "S-1-5-21-100-200-300-1002";
     const created = "2026-11-12T01:02:03.1234567Z";
@@ -131,26 +129,24 @@ describe("Windows process evidence: pure decoding", () => {
     expect(parseScQueryexPid("garbage")).toBeNull();
   });
 
-  test("the ARM64 terminate script compares StartTime and kills the same Process object", () => {
-    const script = windowsFallbackTerminateScript(4_242, 1_794_445_323_123, 1_000);
-    expect(script).toContain("Get-Process -Id 4242");
-    expect(script).toContain("FromUnixTimeMilliseconds(1794445323123)");
-    expect(script).toContain("-gt 1000) { 'reused'");
-    expect(script.indexOf("$p.Kill()")).toBeGreaterThan(script.indexOf("'reused'"));
-    expect(script).toContain("$p.WaitForExit(1000)");
-    expect(() => windowsFallbackTerminateScript(1.5, 1, 1)).toThrow();
-    expect(() => windowsFallbackTerminateScript(-1, 1, 1)).toThrow();
-    expect(parseFallbackTerminateOutput("terminated-exited\r\n")).toEqual({ status: "terminated", exited: true });
-    expect(parseFallbackTerminateOutput("terminated")).toEqual({ status: "terminated", exited: false });
-    expect(parseFallbackTerminateOutput("noise\nreused\n")).toEqual({ status: "reused" });
-    expect(parseFallbackTerminateOutput("denied")).toEqual({ status: "denied" });
-    expect(parseFallbackTerminateOutput("gone")).toEqual({ status: "gone" });
-    expect(parseFallbackTerminateOutput("")).toEqual({ status: "unavailable" });
-    expect(parseFallbackTerminateOutput("Killed")).toEqual({ status: "unavailable" });
-  });
 });
 
 describe("Windows process evidence: facades", () => {
+  test("ARM64 without a native handle cannot terminate using only a PID and timestamp", async () => {
+    setWindowsProcessPlatformForTests("win32");
+    setWindowsProcessNativeForTests(null);
+    const commands: WindowsEvidenceCommand[] = [];
+    const result = await terminateWindowsProcessBound(20, 5_000, {
+      timeoutMs: 3_000,
+      run: async command => {
+        commands.push(command);
+        return "terminated-exited";
+      },
+    });
+    expect(commands).toEqual([]);
+    expect(result).toEqual({ status: "unavailable" });
+  });
+
   test("a simulated platform reaches neither the kernel nor a spawn", async () => {
     setWindowsProcessPlatformForTests("win32");
     expect(windowsProcessNative()).toBeNull();
@@ -195,37 +191,12 @@ describe("Windows process evidence: facades", () => {
     expect(await readScheduleServicePid({ timeoutMs: 2_000, run: async () => { throw new Error("1060"); } })).toBeNull();
   });
 
-  test("terminate prefers the handle primitive and otherwise runs the bounded fallback script", async () => {
+  test("terminate uses the native handle primitive when available", async () => {
     setWindowsProcessPlatformForTests("win32");
     const seen: Array<[number, number]> = [];
     setWindowsProcessNativeForTests(fakeNative({ terminate: (pid, start) => { seen.push([pid, start]); return { status: "reused" }; } }));
     expect(await terminateWindowsProcessBound(20, 5_000, { timeoutMs: 3_000 })).toEqual({ status: "reused" });
     expect(seen).toEqual([[20, 5_000]]);
-
-    setWindowsProcessNativeForTests(null);
-    const scripts: string[] = [];
-    const result = await terminateWindowsProcessBound(20, 5_000, {
-      timeoutMs: 3_000,
-      run: async command => { scripts.push(command.args.at(-1)!); return "terminated-exited\n"; },
-    });
-    expect(result).toEqual({ status: "terminated", exited: true });
-    expect(scripts[0]).toContain("Get-Process -Id 20");
-    expect(await terminateWindowsProcessBound(20, 5_000, { timeoutMs: 3_000, run: async () => { throw new Error("x"); } }))
-      .toEqual({ status: "unavailable" });
-  });
-
-  test("a fractional deadline-derived timeout reaches the fallback as whole milliseconds", async () => {
-    setWindowsProcessPlatformForTests("win32");
-    setWindowsProcessNativeForTests(null);
-    const commands: WindowsEvidenceCommand[] = [];
-    const run = async (command: WindowsEvidenceCommand) => { commands.push(command); return "terminated\n"; };
-    expect(await terminateWindowsProcessBound(20, 5_000, { timeoutMs: 1_250.5, run }))
-      .toEqual({ status: "terminated", exited: false });
-    expect(commands.map(command => command.timeoutMs)).toEqual([1_250]);
-    expect(commands[0]!.args.at(-1)).toContain("$p.WaitForExit(750)");
-    // Under 1 ms floors to 0, which execFile reads as "no timeout": nothing is spawned.
-    expect(await terminateWindowsProcessBound(20, 5_000, { timeoutMs: 0.5, run })).toEqual({ status: "unavailable" });
-    expect(commands).toHaveLength(1);
   });
 });
 

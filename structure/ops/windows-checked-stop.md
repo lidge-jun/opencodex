@@ -21,9 +21,10 @@ lazily, caches a failed load as unavailable, and closes every handle in a `final
 
 - creation time through `GetProcessTimes`, as epoch milliseconds truncated from the FILETIME;
 - a checked terminate: `OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE)`,
-  the creation time read on that handle and compared with the bound value, `TerminateProcess` on
-  the same handle. The result is `terminated`, `gone`, `reused` (identity mismatch, untouched),
-  `denied` or `unavailable`;
+  then compare the creation time with the bound value and read the token user on that handle.
+  Call `TerminateProcess` on the same handle only when the token user SID equals the current
+  process token user SID. The result is `terminated`, `gone`, `reused` (creation mismatch),
+  `owner-unverified`, `denied` or `unavailable`;
 - an exit watch: a handle opened at bind time and polled with `WaitForSingleObject(handle, 0)`;
 - the Task Scheduler service host PID through `QueryServiceStatusEx` on `Schedule`, only while it runs.
 
@@ -35,29 +36,15 @@ SIDs only for wrapper images, unreadable images, and command lines containing th
 enrichment admits at most 32 candidates while its 1.5 s budget remains, with a 1 s
 operation timeout on each owner/refresh call. Exhaustion retains every row with unknown ownership.
 The budget starts with row projection, after the initial enumeration; the refresh is skipped if
-the owner query spends the budget. A successful
-`GetOwnerSid` result proves another user's owner only when both SIDs are valid and a fresh CIM
-read after the owner query reports the original creation time. Supported service installs run
-as the current account; only differing local/domain or Entra ID account SIDs prove a foreign
-owner. Other SID namespaces, including built-in and virtual service accounts, remain candidates,
-as do unreadable or missing owner results. Raw
-SIDs stay within the snapshot parser; later operations receive only nullable `foreignOwner`.
-All reads share the existing timeout and output cap. On
-x64 each creation time is re-read natively and kept only when it agrees with CIM to the
-millisecond; a disagreement (a PID reused between the two reads) makes both creation time and
-foreign-owner evidence unreadable. Elsewhere the
-CIM time is the bound value. The Schedule PID falls back to `sc.exe queryex Schedule` from the
-trusted system directory with a cap. The ARM64 terminate is one trusted PowerShell script that
-re-reads `Get-Process -Id` StartTime, compares it with the bound time within 1 s (UTC), calls
-`Kill()` on the same `Process` object and reads the exit back. `Kill()` opens its own handle by PID, so
-a window between the in-script check and the kill remains; that window and the 1 s tolerance are
-the accepted residuals of the fallback. Only integers reach a script: a fractional timeout is
-floored to whole milliseconds, and one that floors to 0 spawns nothing.
-
-With no ARM64 device run, 050 ships ARM64 with the strict variant (kill nothing, report `unknown`).
-`terminateWindowsProcessBound` does not enforce that: on win32 without the native API it runs the
-fallback script. The caller's terminate adapter gates strict itself; see
-`devlog/_plan/261111_windows_service_stop/060_implementation.md`.
+the owner query spends the budget. Owner verification requires a successful `GetOwnerSid`,
+valid local/domain or Entra ID SIDs, and a fresh CIM read reporting the original creation time.
+Matching SIDs prove the current account. Different supported SIDs prove a foreign account.
+Built-in and virtual service SIDs and failed or skipped lookups leave ownership unverified.
+Raw SIDs stay within the snapshot parser. Later operations receive nullable `foreignOwner`.
+All reads share the snapshot timeout and output cap. On x64 a native creation time is kept
+only when it agrees with CIM within one millisecond. A disagreement clears creation time
+and owner evidence. Elsewhere the CIM time is used for observation. The Schedule PID falls
+back to a capped `sc.exe queryex Schedule` from the trusted system directory.
 
 ## Binding rule
 
@@ -66,13 +53,15 @@ may be terminated. A process is bound only when its image is `wscript.exe`, `csc
 `cmd.exe`; its command line carries this home's launcher VBS or service script path as a complete
 token; it is an ancestor of the identity-checked child, a descendant of a bound wrapper, a child
 of the Schedule host (SCM PID), or, only while this home's task is registered, an orphan (a parent
-that is missing or was created after it); and its creation time was read. The proxy child is
-never a candidate. A wrapper that matches image and path but fails lineage is reported unbound and
+that is missing or was created after it); its creation time was read; and its owner SID
+was verified as the current user's SID. The proxy child is never a candidate. A wrapper that matches image and path but fails lineage is reported unbound and
 left alone. A proven foreign owner is excluded from both bound and unbound candidates, while its
-row remains available for ancestry so a live parent cannot be mistaken for an orphan. Missing
-or unreadable ownership does not exclude a candidate. Unreadable evidence about a candidate is reported unreadable: a matching wrapper
-without a creation time or image name, and a wrapper image with no readable command line under a
-bound wrapper or, while a manager is registered, above the child. Bound wrappers are ordered
+row remains available for ancestry so a live parent cannot be mistaken for an orphan.
+Unverified ownership on an otherwise eligible wrapper ends Part A with `evidence-unreadable`
+before mutation. The output directs the operator to the owning session and Task Manager.
+A matching wrapper without a creation time or image name, or a wrapper image with no readable
+command line under a bound wrapper or above the child while a manager is registered, also
+leaves evidence unreadable. Bound wrappers are ordered
 deepest first and carry pid, creation time, image and a SHA-256 digest of the command line.
 
 ## Part A and Part B
@@ -86,7 +75,7 @@ process enumeration, including when WinSW is stopped, so ancestry and stray-wrap
 are checked before a stop can be confirmed. Admission then compares the time left on the
 caller's deadline, which already excludes these first steps, with the worst case still to come,
 and returns `unverified-budget` without changing anything when it does not fit. It binds, ends
-the task (`schtasks /end`, 2 s) or stops WinSW (a
+the task (definition, principal, and `schtasks /end` share 2 s) or stops WinSW (a
 2 s stop command and an SCM poll capped at `<stoptimeout>` + 2 s), terminates bound survivors
 deepest first, waits on the bind-time watches (terminates and wait share 3 s), and reads the
 manager state once (1 s). Denied stops every further step. A cap overrun is `unknown`. A wrapper or
@@ -125,8 +114,12 @@ window.
 asynchronous `schtasks` and `sc.exe` calls through `execFile` (a deadline-derived timeout is
 floored to whole milliseconds and one that floors to 0 spawns nothing, because `execFile` reads 0
 as no timeout), the evidence snapshot `windowsProcessSnapshot` for every bind, the checked
-terminate, the exit watch, the Part B port sampler and the listener identity. The task's running
-state is read from `schtasks /query /fo CSV`. The status words observed from shipped zh-CN and
+terminate, the exit watch, the Part B port sampler and the listener identity. Before `/end`,
+the live adapter reads the registered XML and checks the recognized task shape, exact launcher
+path, and the single run-as principal against the current Windows account. Trigger user IDs
+are checked separately from the principal. Failed proof returns `evidence-unreadable` with
+instructions to verify the task in Task Scheduler and stop it from its owning session. The
+proof and the name-based end are separate scheduler commands. The task's running state is read from `schtasks /query /fo CSV`. The status words observed from shipped zh-CN and
 ko-KR resources are recognized there (#8863), because a cold `Get-ScheduledTask` takes 1.6 s to
 4.9 s and cannot finish inside the 1 s cap; any other localized word still falls back to it. A
 `schtasks /end` that fails with a localized message is `not-running` only when the same CSV read,
@@ -272,13 +265,10 @@ commands, install and switch) refuses.
 
 ## ARM64
 
-No ARM64 device run exists, so ARM64 ships the strict variant (050).
-`terminateWindowsProcessBound` falls back to the PowerShell script whenever the native API is
-missing, so the strict gate sits in the caller's adapter: `windowsStopTerminate` answers
-`unavailable` whenever `windowsProcessNative()` is null (ARM64, or an x64 whose DLL load failed)
-and never reaches the fallback, which leaves Part A `unknown` / `evidence-unreadable` wherever a
-terminate would be needed. `WINDOWS_ARM64_BOUNDED_TERMINATE_ENABLED` turns the fallback on once
-the 040 ARM64 device case has run.
+The terminate primitive requires a native process handle. On ARM64, or if the native API
+cannot load on x64, `terminateWindowsProcessBound` returns `unavailable` without spawning a
+helper. If a wrapper survives the manager stop, Part A returns `unknown` / `evidence-unreadable`
+with instructions to use Task Manager from the owning session.
 
 ## Tests
 

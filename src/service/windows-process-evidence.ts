@@ -12,16 +12,8 @@
  *   (unreadable) instead of silently taking the new process's identity;
  * - Schedule PID: QueryServiceStatusEx on x64, else sc.exe queryex Schedule run from the
  *   trusted system directory with a cap; unreadable is null;
- * - terminate: the handle primitive on x64. ARM64 runs ONE trusted PowerShell script that
- *   re-reads Get-Process -Id StartTime, compares it with the bound CIM creation time
- *   (1 s tolerance, UTC), calls Kill() on the same Process object and reads the exit back.
- *   Kill() opens its own handle by PID, so a window between the in-script check and the
- *   kill remains; that, and the 1 s tolerance, are the accepted residuals of the fallback;
- * - watch: x64 only; elsewhere "unavailable", and the checked stop takes the exit from
- *   the terminate read-back.
- *
- * Only integers ever reach a script; paths and command lines are compared in TypeScript.
- * Nothing calls this module yet.
+ * - terminate and watch: native process handles are required. No PID-only termination
+ *   is attempted when the native API is unavailable.
  */
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -60,8 +52,6 @@ export type WindowsStopProcessEntry = WindowsProcessEntry & { startTime: number 
 const SNAPSHOT_MAX_BUFFER = 16 * 1024 * 1024;
 const SMALL_MAX_BUFFER = 64 * 1024;
 const NATIVE_CIM_TOLERANCE_MS = 1;
-/** Kill() read-back inside the ARM64 script; the checked stop's wait covers the rest. */
-export const FALLBACK_TERMINATE_EXIT_WAIT_MS = 1_000;
 
 function trustedProgram(program: WindowsEvidenceCommand["program"]): string {
   if (program === "powershell") return resolveTrustedWindowsPowerShellExe();
@@ -141,7 +131,7 @@ function foreignProcessOwner(record: Record<string, unknown>, startTime: number 
   const evidence = owner as Record<string, unknown>;
   const observed = sid(evidence.Sid);
   if (evidence.ReturnValue !== 0 || observed === null || evidence.CreationDate !== record.CreationDate) return null;
-  if (observed === current) return false;
+  if (observed === current && USER_ACCOUNT_SID_PATTERN.test(current)) return false;
   // Supported installs run as the current account: local/domain or Entra ID. Other SID
   // namespaces, including built-in and virtual service accounts, remain conservative.
   // This exclusion never adds authority to terminate a candidate.
@@ -258,67 +248,16 @@ export async function readScheduleServicePid(options: WindowsEvidenceOptions): P
   }
 }
 
-/**
- * The ARM64 terminate script. pid and the bound time must be safe integers; nothing else
- * is interpolated. One status word is printed on the last line.
- */
-export function windowsFallbackTerminateScript(pid: number, boundStartTime: number, exitWaitMs: number): string {
-  for (const value of [pid, boundStartTime, exitWaitMs]) {
-    if (!Number.isSafeInteger(value) || value < 0) throw new Error("terminate script inputs must be non-negative integers");
-  }
-  return [
-    "$ErrorActionPreference = 'Stop';",
-    "try { $p = Get-Process -Id " + pid + " -ErrorAction Stop } catch { 'gone'; exit 0 };",
-    "try { $start = $p.StartTime.ToUniversalTime() } catch {",
-    "  try { if ($p.HasExited) { 'gone' } else { 'denied' } } catch { 'denied' }; exit 0 };",
-    "$bound = [DateTimeOffset]::FromUnixTimeMilliseconds(" + boundStartTime + ").UtcDateTime;",
-    "if ([Math]::Abs(($start - $bound).TotalMilliseconds) -gt 1000) { 'reused'; exit 0 };",
-    "try { $p.Kill() }",
-    "catch [System.InvalidOperationException] { 'gone'; exit 0 }",
-    "catch [System.ComponentModel.Win32Exception] { 'denied'; exit 0 }",
-    "catch { 'unavailable'; exit 0 };",
-    "if ($p.WaitForExit(" + exitWaitMs + ")) { 'terminated-exited' } else { 'terminated' }",
-  ].join(" ");
-}
-
-/** Map the script's last line; anything unexpected is "unavailable", never success. */
-export function parseFallbackTerminateOutput(output: string): WindowsTerminateResult {
-  const lines = output.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-  const word = lines[lines.length - 1] ?? "";
-  if (word === "terminated-exited") return { status: "terminated", exited: true };
-  if (word === "terminated") return { status: "terminated", exited: false };
-  if (word === "gone" || word === "reused" || word === "denied") return { status: word };
-  return { status: "unavailable" };
-}
-
-/** Terminate pid only if it is still the process created at boundStartTime. */
+/** Terminate only through a handle that verifies creation identity and token ownership. */
 export async function terminateWindowsProcessBound(
   pid: number,
   boundStartTime: number,
   options: WindowsEvidenceOptions,
 ): Promise<WindowsTerminateResult> {
   const native = options.run ? null : windowsProcessNative();
-  if (native) {
-    try {
-      return native.terminate(pid, boundStartTime);
-    } catch {
-      return { status: "unavailable" };
-    }
-  }
-  const run = runnerFor(options);
-  if (!run) return { status: "unavailable" };
-  // A timeout derived from a deadline can be fractional, and both execFile and the script
-  // take whole milliseconds. A timeout that floors to 0 would mean no timeout at all.
-  const timeoutMs = Math.floor(options.timeoutMs);
-  if (!(timeoutMs > 0)) return { status: "unavailable" };
-  const exitWaitMs = Math.max(0, Math.min(FALLBACK_TERMINATE_EXIT_WAIT_MS, timeoutMs - 500));
+  if (!native) return { status: "unavailable" };
   try {
-    return parseFallbackTerminateOutput(await run({
-      program: "powershell",
-      args: powershellArgs(windowsFallbackTerminateScript(pid, boundStartTime, exitWaitMs)),
-      timeoutMs,
-      maxBufferBytes: SMALL_MAX_BUFFER,
-    }));
+    return native.terminate(pid, boundStartTime);
   } catch {
     return { status: "unavailable" };
   }

@@ -12,11 +12,7 @@
  * a millisecond-truncated CIM time, the terminate then answers "reused" and Part A treats a
  * live wrapper as exited.
  *
- * Windows ARM64 ships the STRICT variant (050 "Rollout", step 3): no ARM64 device run has
- * happened, so a terminate there is "unavailable" and Part A reports unknown with
- * evidence-unreadable instead of killing through the bounded PowerShell fallback. The
- * fallback stays in the evidence module, unreachable until the constant below flips after
- * the 040 ARM64 device case is run.
+ * Without a native API, Part A refuses direct termination and reports evidence-unreadable.
  */
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -26,13 +22,14 @@ import { inspectOcxStartProcessIdentity, readPid, verifyPidIdentity, type OcxSta
 import { isProcessAlive } from "../lib/process-control";
 import { isTestHomeGuardArmed } from "../lib/test-home-guard";
 import { resolveTrustedWindowsPowerShellExe, resolveTrustedWindowsSchtasksExe, resolveTrustedWindowsSystemDirectory, toWindowsSchtasksError } from "../lib/windows-elevation";
+import { resolveCurrentWindowsPrincipalAsync } from "../lib/windows-user-principal";
 import { WINSW_SERVICE_ID, winswExePath, type WinswStatus } from "../lib/winsw";
 import { decodeWindowsTextBytes } from "../lib/windows-text";
 import { parseScQcBinaryPathName, scBinaryPathNamesExecutable } from "../service-manager-probe";
 import { parseListenPidsFromNetstat, type ListenPidScan } from "../server/port-reclaim";
 import { dropWindowsTcpRowsForLocalPort } from "../server/windows-tcp-drop";
 import { TASK, windowsLauncherVbsPath, windowsServiceScriptPath } from "./state";
-import { ancestorWrapperPids } from "./windows-guarded-manager";
+import { ancestorWrapperPids, windowsTaskRegistrationIsOurs } from "./windows-guarded-manager";
 import type { WindowsCheckedStopDeps, WindowsTaskEndResult, WindowsWinswScmState, WindowsWinswStopResult } from "./windows-checked-stop";
 import {
   openWindowsProcessWatch,
@@ -44,12 +41,7 @@ import {
 import { windowsProcessNative, type WindowsProcessNativeApi, type WindowsTerminateResult } from "./windows-process-native";
 import type { WindowsListenerIdentity, WindowsPortSample, WindowsStopConfirmDeps } from "./windows-stop-confirm";
 import { windowsSchedulerCsvIncludesTask } from "./windows-scheduler";
-
-/**
- * 050: without an ARM64 device run, ARM64 ships strict. Flip only after the 040 ARM64 device
- * case passes; the bounded PowerShell terminate in windows-process-evidence.ts then runs.
- */
-export const WINDOWS_ARM64_BOUNDED_TERMINATE_ENABLED = false;
+import { cachedWindowsTaskUserIds, windowsTaskActionMatches, windowsTaskPrincipalMatches } from "./windows-taskxml";
 
 export interface WindowsStopCommandResult {
   status: number | null;
@@ -75,7 +67,7 @@ function programPath(program: "schtasks" | "sc" | "powershell"): string {
 
 export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, args, timeoutMs) => new Promise(resolve => {
   // execFile reads a 0 timeout as "no timeout": a deadline-derived fraction is floored, and a
-  // timeout that floors to 0 spawns nothing (the same rule as terminateWindowsProcessBound).
+  // timeout that floors to 0 spawns nothing.
   const timeout = Math.floor(timeoutMs);
   if (!(timeout > 0)) {
     resolve({ status: null, stdout: "", stderr: "", timedOut: true });
@@ -181,10 +173,7 @@ export function windowsStopCanonicalPaths(): string[] {
 }
 
 /**
- * The terminate Part A uses. terminateWindowsProcessBound runs the PowerShell fallback by
- * itself whenever the native API is missing (ARM64, or an x64 whose DLL load failed), so the
- * strict variant is enforced HERE (060 "ARM64 decision for PR2"): without the native
- * primitive the answer is "unavailable" and the fallback is never reached.
+ * The terminate Part A uses. Without a native process handle, no termination is attempted.
  */
 export async function windowsStopTerminate(
   pid: number,
@@ -192,7 +181,7 @@ export async function windowsStopTerminate(
   timeoutMs: number,
   io: { native?: () => WindowsProcessNativeApi | null; terminate?: typeof terminateWindowsProcessBound } = {},
 ): Promise<WindowsTerminateResult> {
-  if ((io.native ?? windowsProcessNative)() === null && !WINDOWS_ARM64_BOUNDED_TERMINATE_ENABLED) return { status: "unavailable" };
+  if ((io.native ?? windowsProcessNative)() === null) return { status: "unavailable" };
   return (io.terminate ?? terminateWindowsProcessBound)(pid, startTime, { timeoutMs });
 }
 
@@ -229,9 +218,21 @@ export interface WindowsCheckedStopLiveOptions {
    * executable. Defaults to the capped runner; tests inject it.
    */
   scQcRun?: (timeoutMs: number) => Promise<WindowsStopCommandResult>;
+  /** Capped effective-account lookup for the task's exported run-as principal. */
+  taskUserIds?: (timeoutMs: number) => Promise<readonly string[] | null>;
   /** Checked before every manager command (the route's cap, the updater's authorizer). */
   gate?: () => boolean;
   snapshot?: (timeoutMs: number) => Promise<readonly WindowsStopProcessEntry[] | null>;
+}
+
+async function currentTaskUserIds(timeoutMs: number): Promise<readonly string[] | null> {
+  if (process.platform !== "win32") return null;
+  try {
+    await resolveCurrentWindowsPrincipalAsync(timeoutMs);
+    return cachedWindowsTaskUserIds();
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -302,8 +303,19 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
     },
     async endTask(timeoutMs) {
       if (!gate()) return "failed";
-      const started = Date.now();
-      const ended = await run("schtasks", ["/end", "/tn", TASK], timeoutMs);
+      const deadline = performance.now() + timeoutMs;
+      const [definition, userIds] = await Promise.all([
+        run("schtasks", ["/query", "/tn", TASK, "/xml"], timeoutMs),
+        (options.taskUserIds ?? currentTaskUserIds)(timeoutMs),
+      ]);
+      const launcher = windowsLauncherVbsPath();
+      if (definition.status !== 0 || definition.timedOut || userIds === null
+        || !windowsTaskRegistrationIsOurs(definition.stdout, userIds, launcher)
+        || !windowsTaskActionMatches(definition.stdout, launcher)
+        || !windowsTaskPrincipalMatches(definition.stdout, userIds)) return "unverified-registration";
+      const endTimeout = wholeTimeoutMs(deadline - performance.now());
+      if (endTimeout === null || !gate()) return "unverified-registration";
+      const ended = await run("schtasks", ["/end", "/tn", TASK], endTimeout);
       const verdict = classifyTaskEnd(ended);
       // schtasks localizes "no running instance" as well (#8863). After a real nonzero exit, an
       // idle task is not-running only when its own CSV state says so; a running or unreadable
@@ -311,7 +323,7 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
       // denial: Part A stops at it whatever the task's state.
       if (verdict !== "failed" || ended.timedOut || ended.status === null) return verdict;
       if (LOCALIZED_ACCESS_DENIED.test(ended.stderr + "\n" + ended.stdout)) return "denied";
-      const left = Math.floor(timeoutMs - (Date.now() - started));
+      const left = Math.floor(deadline - performance.now());
       if (left < 1) return "failed";
       const csv = await run("schtasks", ["/query", "/tn", TASK, "/fo", "CSV", "/nh"], left);
       return csv.status === 0 && !csv.timedOut && parseTaskCsvState(csv.stdout) === "not-running" ? "not-running" : "failed";

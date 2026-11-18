@@ -518,11 +518,21 @@ export function windowsTaskHasSessionRecoveryTriggers(
     scoped.some(element =>
       taskXmlDecodedValueEquals(element, "StateChange", stateChange)
       && taskXmlOptionalValueEquals(element, "Enabled", "true")
-      && windowsTaskTriggerScopeAcceptable(element, expectedUserId)));
+      && windowsTaskUserIdMatches(element, expectedUserId)));
+}
+
+/** Verify the exported run-as user. Trigger scopes do not identify the task principal. */
+export function windowsTaskPrincipalMatches(xml: string, expectedUserIds: readonly string[]): boolean {
+  const scrubbed = taskXmlWithoutCommentsAndCdata(xml);
+  if (taskXmlHasPrefixedTag(scrubbed, "Principals") || taskXmlElementCount(scrubbed, "Principals") !== 1
+    || taskXmlHasPrefixedTag(scrubbed, "Principal") || taskXmlElementCount(scrubbed, "Principal") !== 1) return false;
+  const principal = taskXmlSection(taskXmlSection(scrubbed, "Principals"), "Principal");
+  return taskXmlElementCount(principal, "GroupId") === 0 && !taskXmlHasPrefixedTag(principal, "GroupId")
+    && windowsTaskUserIdMatches(principal, expectedUserIds);
 }
 
 /**
- * A trigger's scope is acceptable only when it names the expected account exactly.
+ * A principal or trigger names the expected account only when its UserId matches exactly.
  *
  * An unscoped recovery trigger is not identity proof. Production registration resolves a SID
  * before writing XML; a missing scope therefore means the fixed-name task is legacy or foreign
@@ -530,7 +540,7 @@ export function windowsTaskHasSessionRecoveryTriggers(
  * Treating an unknown expected identity as a wildcard would let a fresh status process accept a
  * task bound to another user's session and suppress the repair that should replace it.
  */
-function windowsTaskTriggerScopeAcceptable(
+function windowsTaskUserIdMatches(
   element: string,
   expectedUserId: ExpectedWindowsTaskUserId | undefined,
 ): boolean {

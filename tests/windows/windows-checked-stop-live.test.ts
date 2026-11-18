@@ -20,19 +20,16 @@ import {
   windowsStopTerminate,
   winswStatusFromScState,
   windowsCheckedStopLiveDeps,
-  WINDOWS_ARM64_BOUNDED_TERMINATE_ENABLED,
 } from "../../src/service/windows-checked-stop-live";
 import type { WindowsProcessNativeApi } from "../../src/service/windows-process-native";
+import { windowsLauncherVbsPath } from "../../src/service/state";
+import { buildWindowsTaskXml } from "../../src/service/windows-taskxml";
 import { winswExePath } from "../../src/lib/winsw";
 import { PATHS, entry, launcher, loop, proxy, supervisedTree } from "../helpers/windows-checked-stop-fixtures";
 
 const result = (status: number | null, stdout = "", stderr = "", timedOut = false) => ({ status, stdout, stderr, timedOut });
 
 describe("ARM64 strict variant (050, 060 'ARM64 decision for PR2')", () => {
-  test("ships strict: the bounded PowerShell fallback is disabled", () => {
-    expect(WINDOWS_ARM64_BOUNDED_TERMINATE_ENABLED).toBe(false);
-  });
-
   test("without the native primitive the terminate is unavailable and the fallback is never called", async () => {
     let fallbackCalls = 0;
     const terminate = async () => { fallbackCalls++; return { status: "terminated" as const, exited: true }; };
@@ -110,11 +107,16 @@ describe("capped command answers", () => {
   });
 
   test("a localized /end failure on an idle task is not-running only when the CSV says so (#8863)", async () => {
+    const sid = "S-1-5-21-100-200-300-1001";
+    const xml = buildWindowsTaskXml(undefined, windowsLauncherVbsPath(), undefined, sid)
+      .replace('<Principal id="Author">', '<Principal id="Author"><UserId>' + sid + '</UserId>');
     const idleEnd = (csv: string | null, endResult = result(1, "", "错误: 任务没有正在运行的实例。")) => {
       const programs: string[] = [];
       const deps = windowsCheckedStopLiveDeps({
+        taskUserIds: async () => [sid],
         run: async (program, args) => {
           programs.push(program + " " + args[0]);
+          if (args.includes("/xml")) return result(0, xml);
           if (args[0] === "/end") return endResult;
           return csv === null ? result(1, "", "query failed") : result(0, csv);
         },
@@ -123,7 +125,7 @@ describe("capped command answers", () => {
     };
     const ready = idleEnd('"\\opencodex-proxy","N/A","就绪"');
     expect(await ready.ended).toBe("not-running");
-    expect(ready.programs).toEqual(["schtasks /end", "schtasks /query"]);
+    expect(ready.programs).toEqual(["schtasks /query", "schtasks /end", "schtasks /query"]);
     expect(await idleEnd('"\\opencodex-proxy","N/A","준비"', result(1, "", "오류: 작업의 실행 중인 인스턴스가 없습니다.")).ended).toBe("not-running");
     // A task that is still running, or a state that cannot be read, keeps the failure.
     expect(await idleEnd('"\\opencodex-proxy","N/A","正在运行"').ended).toBe("failed");
@@ -132,19 +134,19 @@ describe("capped command answers", () => {
     // A timed-out, refused or unspawned /end never reaches a second query.
     const timedOut = idleEnd('"\\opencodex-proxy","N/A","就绪"', result(null, "", "", true));
     expect(await timedOut.ended).toBe("failed");
-    expect(timedOut.programs).toEqual(["schtasks /end"]);
+    expect(timedOut.programs).toEqual(["schtasks /query", "schtasks /end"]);
     const refused = idleEnd('"\\opencodex-proxy","N/A","就绪"', result(null, "", "refusing a machine-global service mutation from an armed test process"));
     expect(await refused.ended).toBe("failed");
-    expect(refused.programs).toEqual(["schtasks /end"]);
+    expect(refused.programs).toEqual(["schtasks /query", "schtasks /end"]);
     // The English answer keeps its direct classification.
     const english = idleEnd(null, result(1, "", "ERROR: There is no running instance of the task."));
     expect(await english.ended).toBe("not-running");
-    expect(english.programs).toEqual(["schtasks /end"]);
+    expect(english.programs).toEqual(["schtasks /query", "schtasks /end"]);
     // A localized denial stays denied even when the task reads idle, and never queries again.
     for (const denial of ["错误: 拒绝访问。", "오류: 액세스가 거부되었습니다."]) {
       const denied = idleEnd('"\\opencodex-proxy","N/A","就绪"', result(1, "", denial));
       expect(await denied.ended).toBe("denied");
-      expect(denied.programs).toEqual(["schtasks /end"]);
+      expect(denied.programs).toEqual(["schtasks /query", "schtasks /end"]);
     }
   });
 

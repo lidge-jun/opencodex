@@ -3,6 +3,10 @@
 import { describe, expect, test } from "bun:test";
 
 import type { WinswStatus } from "../../src/lib/winsw";
+import { windowsCheckedStopLiveDeps, type WindowsStopCommandRunner } from "../../src/service/windows-checked-stop-live";
+import { windowsLauncherVbsPath } from "../../src/service/state";
+import { buildWindowsTaskXml } from "../../src/service/windows-taskxml";
+import { describeWindowsPartA } from "../../src/service/windows-service-stop";
 import {
   guardedStopWindowsServiceChecked,
   stopWindowsServiceChecked,
@@ -65,6 +69,45 @@ function harness(overrides: Partial<WindowsCheckedStopDeps> = {}, snapshot: Wind
 const mutations = (calls: string[]) => calls.filter(call => call === "end" || call === "winsw-stop" || call.startsWith("terminate:"));
 
 describe("checked Windows stop, part A", () => {
+  const userSid = "S-1-5-21-100-200-300-1001";
+  const created = "2026-11-12T01:02:03.1234567Z";
+  test.each([
+    ["skipped", null],
+    ["failed", { Sid: userSid, ReturnValue: 2, CreationDate: created }],
+    ["malformed", { Sid: "DOMAIN\\user", ReturnValue: 0, CreationDate: created }],
+    ["SYSTEM", { Sid: "S-1-5-18", ReturnValue: 0, CreationDate: created }],
+    ["virtual service", { Sid: "S-1-5-80-1-2-3-4-5", ReturnValue: 0, CreationDate: created }],
+  ])("refuses a same-lineage wrapper with %s owner evidence", async (_kind, owner) => {
+    const [candidate] = parseWindowsProcessSnapshot(JSON.stringify({
+      ProcessId: 30, ParentProcessId: 900, Name: "cmd.exe", CommandLine: `cmd.exe /c "${CMD}"`,
+      CreationDate: created, CurrentUserSid: userSid, Owner: owner,
+    }))!;
+    const h = harness({ childPid: null }, [scheduleHost, candidate!]);
+    const result = await stopWindowsServiceChecked(h.deps);
+    expect(mutations(h.calls)).toEqual([]);
+    expect(result).toMatchObject({ outcome: "unknown", reason: "evidence-unreadable", changed: false });
+    expect(describeWindowsPartA(result)).toContain("same-account ownership");
+    expect(describeWindowsPartA(result)).toContain("Task Manager");
+  });
+
+  test("a foreign run-as principal refuses /end even when the task action and triggers match", async () => {
+    const xml = buildWindowsTaskXml(undefined, windowsLauncherVbsPath(), undefined, userSid)
+      .replace('<Principal id="Author">', '<Principal id="Author"><UserId>S-1-5-21-100-200-300-1002</UserId>');
+    const commands: string[] = [];
+    const run: WindowsStopCommandRunner = async (program, args) => {
+      commands.push(program + " " + args.join(" "));
+      return { status: 0, stdout: xml, stderr: "", timedOut: false };
+    };
+    const identity = { taskUserIds: async () => [userSid] };
+    const { endTask } = windowsCheckedStopLiveDeps({ run, ...identity });
+    const h = harness({ endTask }, []);
+    const result = await stopWindowsServiceChecked(h.deps);
+    expect(commands).toEqual(["schtasks /query /tn opencodex-proxy /xml"]);
+    expect(result).toMatchObject({ outcome: "unknown", reason: "evidence-unreadable", changed: false });
+    expect(describeWindowsPartA(result)).toContain("run-as account");
+    expect(describeWindowsPartA(result)).toContain("Task Scheduler");
+  });
+
   test.each([false, true])("another user's path-only wrapper cannot veto the stop (registered=%s)", async registered => {
     const created = "2026-11-12T01:02:03.1234567Z";
     const foreign = parseWindowsProcessSnapshot(JSON.stringify({

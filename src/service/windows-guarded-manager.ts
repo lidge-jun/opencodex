@@ -29,7 +29,7 @@ import { cachedCurrentWindowsIdentity, resolveCurrentWindowsPrincipal, WINDOWS_P
 import { statusWinswRaw, winswExePath, WINSW_SERVICE_ID, type WinswStatus } from "../lib/winsw";
 import type { GuardedManagerStopped, GuardedManagerTarget } from "./guarded-manager-target";
 import { TASK, windowsLauncherVbsPath, windowsServiceScriptPath } from "./state";
-import { bindWindowsStopWrappers } from "./windows-stop-binding";
+import { bindWindowsStopWrappers, WRAPPER_OWNER_REFUSAL } from "./windows-stop-binding";
 import { probeWindowsSchedulerTask, querySchtasks, type WindowsSchedulerTaskProbe } from "./windows-scheduler";
 import { windowsWscript } from "./windows-wscript";
 import { windowsTaskRegistrationHealthy, windowsTaskRegistrationRefreshableLegacy } from "./windows-taskxml";
@@ -46,7 +46,7 @@ export interface WindowsProcessEntry {
   parentPid: number | null;
   name: string | null;
   commandLine: string | null;
-  /** Only true proves another user's owner SID; missing/unreadable evidence excludes nothing. */
+  /** False proves the same account; true proves a different user account; otherwise unverified. */
   foreignOwner?: boolean | null;
 }
 
@@ -384,6 +384,9 @@ function bindStrayWrappers(
     managerRegistered: true,
     scheduleServicePid: io.winSchedulePid(),
   });
+  if (binding.ownershipUnverified.length > 0) {
+    return unknown(WRAPPER_OWNER_REFUSAL, "evidence-unreadable");
+  }
   if (binding.unreadable.length > 0) {
     return unknown("a surviving scheduler wrapper has unreadable evidence", "evidence-unreadable");
   }
