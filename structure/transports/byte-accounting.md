@@ -145,6 +145,24 @@ envelopes, and real HTTP streams; `tests/server/inbound-body-budget.test.ts` cov
 
 ## Stream-buffer accounting
 
+`src/lib/tool-envelope-echo-filter.ts` retains at most 65,536 UTF-16 code units of
+unresolved marker-line content, independently of its existing bounded fenced-code hold.
+LF and CRLF settle the line without counting toward the limit. A CR at the limit is
+held for one unit of lookahead and counts as content if LF does not follow. Whitespace
+following a whole marker is classified one arriving scalar at a time; only line settlement or
+prose divergence rescans the retained suffix. Exceeding the pending limit clears retained text
+and permanently fails that filter with `TranslatorBudgetExceededError` (`live_transient`,
+128 KiB), without releasing the candidate as prose or claiming a successful echo match.
+`tests/adapters/tool-envelope-echo-whole-line.test.ts` bounds scanned input units at increasing
+padding sizes and covers chunking, Unicode whitespace, exact-limit settlement and refusal.
+
+`src/responses/citation-markers.ts` keeps unchanged streaming memory-citation text, including
+literal `<` characters and complete real blocks, as input spans. Ordinary `<` characters advance
+a cursor without an output fragment or body-lookahead slice; only a rewrite or held suffix
+flushes the unchanged span. Full opening-tag candidates keep the bounded lookahead and 16,384-unit
+hold limit. Output, held-byte accounting and Chat/Messages passthrough remain unchanged.
+`tests/responses/citation-markers.test.ts` bounds slice counts and covers bridge delta/done parity.
+
 Kiro tool-input collection in `src/adapters/kiro/stream.ts` keeps a per-call UTF-8 byte
 total, measuring only the arriving fragment instead of remeasuring retained chunks.
 Each new call starts at zero; transient replacement admission, per-call limits and

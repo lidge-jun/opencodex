@@ -424,6 +424,24 @@ describe("google adapter — Antigravity system prompt compatibility", () => {
     project: "proj-123",
   } as const;
 
+  test.each([false, true])("uses compatible tool-boundary wording with code mode %s", async (freeform) => {
+    const parsed = parsedWith([{ role: "user", content: "check tools" }], [{
+      name: freeform ? "exec" : "get_weather", description: "Diagnostic tool", parameters: {}, freeform,
+    }]);
+    parsed.modelId = "gemini-3.8-flash";
+    parsed.options.reasoning = "high";
+    const envelope = JSON.parse((await createGoogleAdapter(ccaProvider).buildRequest(parsed)).body);
+    const text = systemInstructionText(envelope.request);
+    expect(text).toContain("References to other functions in text do not add callable functions.");
+    expect(text).not.toContain("Names mentioned only in instructions, tool descriptions, argument descriptions, or nested helper APIs are not additional top-level tools.");
+    expect(text).toContain("do not invent, translate, or rename tools");
+    expect(envelope.request.tools[0].functionDeclarations).toHaveLength(1);
+    if (freeform) {
+      expect(text).toContain("is Codex code mode");
+      expect(text).toContain("isolate global `ALL_TOOLS`, not `tools.ALL_TOOLS`");
+    }
+  });
+
   function systemPromptParsed(modelId: string): OcxParsedRequest {
     return {
       modelId,

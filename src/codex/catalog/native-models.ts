@@ -57,6 +57,10 @@ export const NATIVE_GPT61_SOL_MODEL = "gpt-6.1-sol";
  */
 export const NATIVE_GPT61_TERRA_MODEL = "gpt-6.1-terra";
 
+/** Self-described flagships pinned from openai/codex #62106. */
+export const NATIVE_GPT62_SOL_MODEL = "gpt-6.2-sol";
+export const NATIVE_GPT62_ASTRA_MODEL = "gpt-6.2-astra";
+
 /**
  * Unreleased GPT-6 Astra variant. No public row exists anywhere — neither the codex-rs bundle nor
  * the 2026-09-23 main-account roster probe carries it — so it is ACCOUNT-GATED: hidden and
@@ -72,7 +76,7 @@ export const NATIVE_GPT6_ASTRA_MINOR_MODEL = "gpt-6-astra-minor";
  * Context pair every GPT-6 native ships in its upstream row: a 272,000-token default window
  * against an 872,000-token ceiling (and input limit) reached only through the long-window opt-in.
  * The built-in GPT-6 rows and every configured native (below) inherit this one value, except
- * GPT-6.1 Sol and Terra, whose default windows are 500,000.
+ * GPT-6.1 Sol and Terra and GPT-6.2 Sol, whose default windows are 500,000.
  */
 export const NATIVE_GPT6_CONTEXT: Readonly<{ contextWindow: number; maxContextWindow: number; maxInputTokens: number }> =
   Object.freeze({ contextWindow: 272_000, maxContextWindow: 872_000, maxInputTokens: 872_000 });
@@ -80,8 +84,8 @@ export const NATIVE_GPT6_CONTEXT: Readonly<{ contextWindow: number; maxContextWi
 /**
  * GPT-6.1 Sol through Codex & Work: OpenAI raised the default context from 272k to 500k
  * (Tibo Sottiaux, 2026-10-11, https://x.com/thsottiaux/status/2109430343346581527), while
- * overrides stay allowed and the model maximum is described as 1M. The bundled codex-rs row
- * still reads 272,000 / 872,000, and built-in natives never take roster values, so the default
+ * overrides stay allowed and the model maximum is described as 1M. The original pinned row
+ * reads 272,000 / 872,000, and built-in natives never take roster values, so the default
  * lives here. The 872,000 ceiling (and input limit) is kept on purpose: the announcement does
  * not say how "1M" maps onto the native window and input fields, and raising maxInputTokens
  * would assert an input allowance nobody has measured. Overrides therefore clamp to 872,000.
@@ -94,7 +98,7 @@ export const NATIVE_GPT61_TERRA_CONTEXT: Readonly<{ contextWindow: number; maxCo
   Object.freeze({ ...NATIVE_GPT6_CONTEXT, contextWindow: 500_000 });
 
 /** Pinned row a configured native borrows its capability metadata from: the current Sol. */
-export const CONFIGURED_NATIVE_OPENAI_TEMPLATE_MODEL = NATIVE_GPT61_SOL_MODEL;
+export const CONFIGURED_NATIVE_OPENAI_TEMPLATE_MODEL = NATIVE_GPT62_SOL_MODEL;
 
 /**
  * Native ChatGPT/Codex ids whose availability is proven per authenticated account.
@@ -162,6 +166,8 @@ const selfDescribedNativeModels = new Set<string>([
   NATIVE_GPT6_LUNA_MODEL,
   NATIVE_GPT61_SOL_MODEL,
   NATIVE_GPT61_TERRA_MODEL,
+  NATIVE_GPT62_SOL_MODEL,
+  NATIVE_GPT62_ASTRA_MODEL,
 ]);
 
 export const SELF_DESCRIBED_NATIVE_OPENAI_MODELS: ReadonlySet<string> = selfDescribedNativeModels;
@@ -238,7 +244,7 @@ export function configuredNativeOpenAiDisplayName(slug: string): string {
 function configuredNativePresentation(slug: string): { displayName: string; description: string } {
   return {
     displayName: configuredNativeOpenAiDisplayName(slug),
-    description: "OpenAI native model added through providers.openai.models; uses GPT-6-Sol capabilities.",
+    description: "OpenAI native model added through providers.openai.models; uses GPT-6.2-Sol capabilities.",
   };
 }
 
@@ -266,6 +272,8 @@ const BUILT_IN_NATIVE_OPENAI_MODELS: readonly string[] = Object.freeze([
   NATIVE_GPT6_SOL_MODEL, NATIVE_GPT6_LUNA_MODEL,
   NATIVE_GPT61_SOL_MODEL,
   NATIVE_GPT61_TERRA_MODEL,
+  NATIVE_GPT62_SOL_MODEL,
+  NATIVE_GPT62_ASTRA_MODEL,
   NATIVE_GPT6_ASTRA_MINOR_MODEL,
 ]);
 
@@ -283,7 +291,7 @@ export const SUPPORTED_NATIVE_OPENAI_SLUGS = new Set(NATIVE_OPENAI_MODELS);
  * canonical Codex forward provider, so a new upstream GPT model needs a config entry rather than a
  * release — the way a Claude id listed under `providers.anthropic.models` already works.
  *
- * A configured native borrows `gpt-6.1-sol`'s pinned row (ladder, modalities, instructions, speed
+ * A configured native borrows `gpt-6.2-sol`'s pinned row (ladder, modalities, instructions, speed
  * tiers) under its own generated name, uses the GPT-6 272k/872k context pair, and is never
  * account-gated. Filtering the config lives in `src/config/derived-registries.ts`; this module stays
  * import-free because the GUI bundles it. Registration runs inside `loadConfig` and every config
@@ -412,4 +420,6 @@ export const NATIVE_MAIN_DRAIN_SENTINEL_MODELS: ReadonlySet<string> = new Set([
   NATIVE_GPT6_LUNA_MODEL,
   NATIVE_GPT61_SOL_MODEL,
   NATIVE_GPT61_TERRA_MODEL,
+  NATIVE_GPT62_SOL_MODEL,
+  NATIVE_GPT62_ASTRA_MODEL,
 ]);

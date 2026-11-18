@@ -28,6 +28,15 @@ opencodex/kiro/glm-5
 opencodex/gpt-5.6-sol      # native slugs stay unprefixed
 ```
 
+## Protocol per model
+
+Both blocks send requests to `/v1/responses` by default: V1 through `@ai-sdk/openai`, V2 through
+`@opencode/ai/providers/openai-compatible-responses`. A model routed directly to a Chat Completions
+provider that uses key or local auth gets a per-model override back to `/v1/chat/completions`
+(`provider.npm` in V1, `package` in V2), so its turns keep that provider's own wire. Native
+OpenAI models, combos, routing policies and models whose route cannot be resolved use Responses.
+Refresh a managed integration or re-export a manual snapshot to pick up a protocol change.
+
 ## Reasoning effort
 
 opencode exposes reasoning effort as model *variants*. opencodex writes one variant per

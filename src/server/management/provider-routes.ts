@@ -82,6 +82,7 @@ import {
   type VertexDiscoveryAuth,
 } from "../../providers/google-vertex-model-discovery";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
+import { isXaiGrokOAuth, readXaiLegacyPrivacyError, XAI_LEGACY_PRIVACY_MESSAGE } from "../../providers/xai-privacy-mode";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { clearPassiveKeyLimits, listPassiveKeyLimits, passiveProviderOwnership } from "../../providers/passive-key-observation";
 import { providerRoutingQuota } from "./provider-routing-quota";
@@ -1732,21 +1733,21 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       // Same canonical-URL TUN transparency as catalog discovery: the registry's
       // own fixed discovery URL survives purely-benchmark (Clash/Surge/Mihomo
       // fake-IP) DNS without proxy env.
-      const outboundDependencies = { isCanonicalUrl: isRegistryModelDiscoveryUrl,
-        beforeSend: () => (!vertexAuth || vertexDiscoveryAuthIsCurrent(prov, vertexAuth, headers))
+      const outboundDependencies = (requestUrl: string) => ({ isCanonicalUrl: isRegistryModelDiscoveryUrl,
+        beforeSend: () => (!vertexAuth || vertexDiscoveryAuthIsCurrent(prov, vertexAuth, headers, requestUrl))
           && (prov.authMode !== "oauth" || (mayResolveModelsOAuth(name, config.providers[name])
           && modelsOAuthTargetMatches(name, config.providers[name], authorizedTarget)
-          && (name !== "anthropic2" || new URL(modelsUrl).href === authorizedTarget))) };
+          && (name !== "anthropic2" || new URL(requestUrl).href === authorizedTarget))) });
       const res = method === "POST"
         ? await providerOutboundPost(name, prov, modelsUrl, {
           headers,
           body: JSON.stringify({ project }),
           signal: AbortSignal.timeout(8000),
-        }, outboundDependencies)
+        }, outboundDependencies(modelsUrl))
         : await providerOutboundGet(name, prov, modelsUrl, {
           headers,
           signal: vertexDeadline ?? AbortSignal.timeout(8000),
-        }, outboundDependencies);
+        }, outboundDependencies(modelsUrl));
       const latencyMs = Date.now() - started;
       const redirectError = await providerRedirectError(res, modelsUrl);
       if (redirectError) {
@@ -1757,6 +1758,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         });
       }
       if (!res.ok) {
+        if (isXaiGrokOAuth(name, prov) && await readXaiLegacyPrivacyError(res)) {
+          return jsonResponse({ ok: false, latencyMs, error: XAI_LEGACY_PRIVACY_MESSAGE });
+        }
         try {
           void res.body?.cancel().catch(() => undefined);
         } catch {
@@ -1782,7 +1786,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
       const listing = !ccaModels && vertexDeadline
         ? await collectVertexPublisherModelPages(modelsUrl, bounded.value,
           { ...discovery, firstPageBytes: vertexFirstPage?.bytes(), signal: vertexDeadline },
-          (pageUrl, signal) => providerOutboundGet(name, prov, pageUrl, { headers, signal }, outboundDependencies))
+          (pageUrl, signal) => providerOutboundGet(name, prov, pageUrl, { headers, signal }, outboundDependencies(pageUrl)))
         : { ok: true as const, value: bounded.value };
       if (!listing.ok) return jsonResponse({ ok: false, latencyMs, error: `upstream Vertex model listing is incomplete: ${listing.diagnostic}` });
       // OpenAI-style lists (and Together top-level arrays) use the same validation/dedupe/filter

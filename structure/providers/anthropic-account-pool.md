@@ -102,6 +102,11 @@ Pool 2 selector leaves `anthropic2` only through an operator blocked-model redir
 selection, affinity, quorum, manual preference, cooldown and rotation to one
 instance. Legacy named exports mean the primary pool. Model routes widen only
 within that instance's roster. Pure protocol/model transformations remain shared.
+Responses dispatch, continuation, sidecar and native Messages share the [finite funded-roster
+and physical-send intersection](../transports/responses-spend.md#credential-hop-reservations).
+Cooldown writes cannot shrink that request's snapshot; new accounts cannot enlarge it.
+`tests/adapters/anthropic/anthropic-funded-roster.test.ts` exercises local HTTP dispatch and native Messages;
+`tests/adapters/anthropic/anthropic-sidecar-account-failover.test.ts` covers the sidecar hook.
 Pause, policy and selection notifications affect only the matching existing state.
 
 `src/oauth/anthropic-model-quota.ts`, `src/oauth/anthropic-rate-limit-policy.ts` and `src/providers/quota/anthropic-cooldown-recovery.ts`

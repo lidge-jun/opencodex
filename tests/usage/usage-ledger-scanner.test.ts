@@ -1,15 +1,18 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { appendFileSync, mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  readUsageLedgerRowsAtOffsets,
   scanUsageLedgerCooperatively,
   USAGE_LEDGER_BOUNDARY_DIGEST_BYTES,
   USAGE_LEDGER_MAX_LINE_BYTES,
   UsageLedgerRebuildRequiredError,
+  type ReadUsageLedgerRowsOptions,
 } from "../../src/usage/ledger-scanner";
-import { normalizePersistedUsageRow, usageLogIdentityKey, usageLogPath, type PersistedUsageEntry } from "../../src/usage/log";
+import { currentUsageLogRevision, normalizePersistedUsageRow, usageLogIdentityKey, usageLogPath, usageLogRevisionKey, type PersistedUsageEntry } from "../../src/usage/log";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -31,6 +34,30 @@ function entry(requestId: string, overrides: Partial<PersistedUsageEntry> = {}):
 
 function line(requestId: string, overrides: Partial<PersistedUsageEntry> = {}): string {
   return `${JSON.stringify(entry(requestId, overrides))}\n`;
+}
+
+function indexedFixture(count = 40): { options: ReadUsageLedgerRowsOptions; contents: string; ids: string[] } {
+  const ids = Array.from({ length: count }, (_, index) => `indexed-${index}`);
+  const rows = ids.map(id => line(id));
+  const offsets: number[] = [];
+  let size = 0;
+  for (const row of rows) { offsets.push(size); size += Buffer.byteLength(row); }
+  const contents = rows.join("");
+  writeFileSync(usageLogPath(), contents);
+  const revision = currentUsageLogRevision();
+  return {
+    contents,
+    ids,
+    options: {
+      offsets,
+      expectedIdentityKey: usageLogIdentityKey(revision),
+      expectedRevisionKey: usageLogRevisionKey(revision),
+      expectedProcessedThroughBytes: size,
+      expectedProcessedThroughDigest: createHash("sha256")
+        .update(Buffer.from(contents).subarray(-USAGE_LEDGER_BOUNDARY_DIGEST_BYTES)).digest("hex"),
+      expectedFileSize: size,
+    },
+  };
 }
 
 beforeEach(() => {
@@ -590,5 +617,192 @@ describe("usage ledger cooperative scanner", () => {
     await expect(scanUsageLedgerCooperatively({
       onEntry: () => { throw sentinel; },
     })).rejects.toBe(sentinel);
+  });
+});
+
+describe("usage ledger indexed row reader", () => {
+  test("folds a single page cooperatively without retaining entries", async () => {
+    const { options, ids, contents } = indexedFixture();
+    expect(Buffer.byteLength(contents)).toBeLessThan(USAGE_LEDGER_BOUNDARY_DIGEST_BYTES);
+    const seen: Array<[string, number]> = [];
+    let elapsed = 0;
+    let visitedAtTimer = -1;
+    const clock = spyOn(performance, "now").mockImplementation(() => elapsed);
+    const timer = setTimeout(() => { visitedAtTimer = seen.length; }, 0);
+    try {
+      const result = await readUsageLedgerRowsAtOffsets({
+        ...options,
+        onEntry(value, offset) { seen.push([value.requestId, offset]); elapsed += 10; },
+      });
+      expect(visitedAtTimer).toBeGreaterThan(0);
+      expect(visitedAtTimer).toBeLessThan(ids.length);
+      expect(seen).toEqual(ids.map((id, index) => [id, options.offsets[index]]));
+      expect(result).toEqual({ entries: [], unreadableOffsets: [] });
+    } finally {
+      clearTimeout(timer);
+      clock.mockRestore();
+    }
+  });
+
+  test("cancels inside one page with the original reason and closes its descriptor", async () => {
+    const { options, ids } = indexedFixture();
+    const controller = new AbortController();
+    const reason = new Error("cancel indexed page");
+    let visited = 0;
+    let elapsed = 0;
+    const clock = spyOn(performance, "now").mockImplementation(() => elapsed);
+    const opened = spyOn(fs, "openSync");
+    const closed = spyOn(fs, "closeSync");
+    const timer = setTimeout(() => controller.abort(reason), 0);
+    try {
+      await expect(readUsageLedgerRowsAtOffsets({
+        ...options,
+        signal: controller.signal,
+        onEntry() { visited += 1; elapsed += 10; },
+      })).rejects.toBe(reason);
+      expect(visited).toBeGreaterThan(0);
+      expect(visited).toBeLessThan(ids.length);
+      const fd = opened.mock.results[0]?.value as number;
+      expect(typeof fd).toBe("number");
+      expect(closed).toHaveBeenCalledWith(fd);
+      expect(() => fs.fstatSync(fd)).toThrow();
+    } finally {
+      clearTimeout(timer);
+      closed.mockRestore();
+      opened.mockRestore();
+      clock.mockRestore();
+    }
+  });
+
+  test("propagates a fold failure instead of treating the row as unreadable", async () => {
+    const { options } = indexedFixture(2);
+    const reason = new Error("indexed fold failed");
+    let visited = 0;
+    await expect(readUsageLedgerRowsAtOffsets({
+      ...options,
+      onEntry() { visited += 1; throw reason; },
+    })).rejects.toBe(reason);
+    expect(visited).toBe(1);
+  });
+
+  test("keeps the returned-array contract and selected row order without a fold callback", async () => {
+    const { options, ids } = indexedFixture(5);
+    const selected = [0, 2, 4];
+    const result = await readUsageLedgerRowsAtOffsets({
+      ...options,
+      offsets: selected.map(index => options.offsets[index]!),
+    });
+    expect(result.entries).toEqual(selected.map(index => entry(ids[index]!)));
+    expect(result.unreadableOffsets).toEqual([]);
+  });
+
+  test("rejects a rewrite plus append even when every selected row fits the cached read window", async () => {
+    const { options, contents } = indexedFixture();
+    expect(Buffer.byteLength(contents)).toBeLessThan(USAGE_LEDGER_BOUNDARY_DIGEST_BYTES);
+    let elapsed = 0;
+    let rewritten = false;
+    const clock = spyOn(performance, "now").mockImplementation(() => elapsed);
+    const timer = setTimeout(() => {
+      writeFileSync(usageLogPath(), contents.replace("indexed-0", "changed-0") + line("appended"));
+      rewritten = true;
+    }, 0);
+    try {
+      await expect(readUsageLedgerRowsAtOffsets({
+        ...options,
+        onEntry() { elapsed += 10; },
+      })).rejects.toMatchObject({ code: "usage_ledger_rebuild_required", reason: "content_changed" });
+      expect(rewritten).toBe(true);
+    } finally {
+      clearTimeout(timer);
+      clock.mockRestore();
+    }
+  });
+
+  test("accepts a pure append while folding exactly the original selection once", async () => {
+    const { options, ids } = indexedFixture();
+    const seen: string[] = [];
+    let elapsed = 0;
+    let appended = false;
+    const clock = spyOn(performance, "now").mockImplementation(() => elapsed);
+    const timer = setTimeout(() => { appendFileSync(usageLogPath(), line("appended")); appended = true; }, 0);
+    try {
+      const result = await readUsageLedgerRowsAtOffsets({
+        ...options,
+        onEntry(value) { seen.push(value.requestId); elapsed += 10; },
+      });
+      expect(appended).toBe(true);
+      expect(seen).toEqual(ids);
+      expect(result).toEqual({ entries: [], unreadableOffsets: [] });
+    } finally {
+      clearTimeout(timer);
+      clock.mockRestore();
+    }
+  });
+
+  test.each(["replacement", "shrink", "rewrite-append", "abort"] as const)(
+    "refuses %s delivered during cooperative verification",
+    async kind => {
+      const { options, contents, ids } = indexedFixture();
+      const controller = new AbortController();
+      const reason = new Error("cancel indexed verification");
+      let visited = 0;
+      let elapsed = 0;
+      let mutationRan = false;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const clock = spyOn(performance, "now").mockImplementation(() => elapsed);
+      const realRead = fs.readSync;
+      const reads = spyOn(fs, "readSync").mockImplementation((...args: Parameters<typeof fs.readSync>) => {
+        const result = realRead(...args);
+        // Arm the race only after every row was folded and verification reads fresh bytes.
+        if (visited === ids.length && timer === undefined) {
+          elapsed += 10;
+          timer = setTimeout(() => {
+            if (kind === "replacement") {
+              renameSync(usageLogPath(), `${usageLogPath()}.old`);
+              writeFileSync(usageLogPath(), contents);
+            } else if (kind === "shrink") {
+              writeFileSync(usageLogPath(), line("short"));
+            } else if (kind === "rewrite-append") {
+              writeFileSync(usageLogPath(), contents.replace("indexed-0", "changed-0") + line("appended-again"));
+            } else controller.abort(reason);
+            mutationRan = true;
+          }, 0);
+        }
+        return result;
+      });
+      try {
+        const read = readUsageLedgerRowsAtOffsets({
+          ...options,
+          signal: controller.signal,
+          onEntry() {
+            visited += 1;
+            // Force a verification pass while leaving every selected row unchanged.
+            if (visited === ids.length) appendFileSync(usageLogPath(), line("appended"));
+          },
+        });
+        if (kind === "abort") await expect(read).rejects.toBe(reason);
+        else await expect(read).rejects.toMatchObject({
+          code: "usage_ledger_rebuild_required",
+          reason: kind === "replacement" ? "identity_mismatch" : kind === "shrink" ? "shrink" : "content_changed",
+        });
+        expect(mutationRan).toBe(true);
+        expect(visited).toBe(ids.length);
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
+        reads.mockRestore();
+        clock.mockRestore();
+      }
+    },
+  );
+
+  test("honors cancellation from the final callback without needing another row or timer", async () => {
+    const { options } = indexedFixture(1);
+    const controller = new AbortController();
+    const reason = new Error("cancel after final indexed row");
+    await expect(readUsageLedgerRowsAtOffsets({
+      ...options,
+      signal: controller.signal,
+      onEntry() { controller.abort(reason); },
+    })).rejects.toBe(reason);
   });
 });

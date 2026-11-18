@@ -43,6 +43,43 @@ function build(modelId: string, rawBody: Record<string, unknown>, configuredProv
   return JSON.parse(request.body) as Record<string, unknown>;
 }
 
+describe("OpenCode Go Responses include compatibility (#8702)", () => {
+  test.each(["muse-spark-1.2-contributor", "grok-4.7", "gpt-5.6-luna"])(
+    "%s removes only the unsupported output encryption include", model => {
+      const raw = {
+        include: ["reasoning.encrypted_content", "output.encrypted_content", "message.output_text.logprobs", "future.include"],
+        store: false,
+      };
+      const original = structuredClone(raw);
+      const body = build(model, raw);
+      expect(body.include).toEqual(["reasoning.encrypted_content", "message.output_text.logprobs", "future.include"]);
+      expect(body.store).toBe(false);
+      expect(raw).toEqual(original);
+    },
+  );
+
+  test("omits an include containing only output encryption", () => {
+    expect(build("grok-4.7", { include: ["output.encrypted_content"] })).not.toHaveProperty("include");
+  });
+
+  test("leaves malformed includes for upstream validation", () => {
+    for (const include of [null, "output.encrypted_content", { value: "output.encrypted_content" }, [["output.encrypted_content"]]]) {
+      expect(build("grok-4.7", { include }).include).toEqual(include);
+    }
+  });
+
+  test("does not infer Go from the model id, a lookalike host or another resource", () => {
+    for (const baseUrl of [
+      "https://api.openai.com/v1", "https://opencode.ai/zen/v1",
+      "https://opencode.ai.example.test/zen/go/v1", "https://fixture.invalid/zen/go/v1",
+      "http://opencode.ai/zen/go/v1", "https://opencode.ai:444/zen/go/v1",
+    ]) {
+      const include = ["reasoning.encrypted_content", "output.encrypted_content"];
+      expect(build("grok-4.7", { include }, provider(baseUrl)).include).toEqual(include);
+    }
+  });
+});
+
 describe("OpenCode Go Grok Responses compatibility", () => {
   test("routes the documented Grok models to Responses", () => {
     const configured = providerConfigSeed(registryEntry);
