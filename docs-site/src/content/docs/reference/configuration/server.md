@@ -583,7 +583,8 @@ the section or `enabled` may be absent. Refresh runs every 60 minutes, with one 
 about three minutes after startup. A hub without a managed local client discovers native models
 using its stored ChatGPT Pool accounts, without reading the host's native Codex login, probing
 its runtime, or writing its local client catalog/config by default. Explicit `"enabled": true`
-keeps the existing local catalog convergence after discovery. Other instances with the Codex integration
+keeps the existing local catalog convergence after discovery. Hub catalog downloads include discovered
+models without writing the host catalog, so connected clients receive them on their next sync. Other instances with the Codex integration
 turned off, or instances beside another live proxy, retain opt-in refresh (`"enabled": true`)
 without reading Codex sources.
 
