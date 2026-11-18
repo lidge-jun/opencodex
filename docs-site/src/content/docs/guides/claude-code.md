@@ -449,9 +449,9 @@ in Chromium’s user NSS database. Chromium uses an existing `~/.pki/nssdb` firs
 `${XDG_DATA_HOME:-$HOME/.local/share}/pki/nssdb`. OpenCodex remembers the database used to install
 the CA. If that database is unavailable or removal cannot be confirmed, OpenCodex keeps the
 removal pending and retries at the next start.
-If an older removal record has no database binding and cleanup reports that the original
-NSS database is unknown, restart OpenCodex with the `XDG_DATA_HOME` that was set when
-you installed the certificate.
+For older removal records, OpenCodex saves the NSS database identity before deleting the CA so
+it can verify removal there on retry. If cleanup reports that the original NSS database is
+unknown, restart OpenCodex with the `XDG_DATA_HOME` that was set when you installed the certificate.
 
 Picker mode allows up to 64 KiB of headers on incoming requests and ordinary HTTP
 responses, preserving browser session cookies. Larger upstream response headers return

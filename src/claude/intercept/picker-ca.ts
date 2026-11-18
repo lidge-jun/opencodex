@@ -483,6 +483,28 @@ function samePendingUntrust(current: PendingPickerCaUntrust | null, pending: Pen
     && current.sha256 === pending.sha256 && sameLinuxPickerTrustStore(current.linuxStore, pending.linuxStore);
 }
 
+/** Record the verified NSS store before mutating it, conditional on the journal we read. */
+export function bindPendingPickerCaLinuxStore(
+  configDir: string,
+  pending: PendingPickerCaUntrust,
+  store: LinuxPickerTrustStore,
+): PendingPickerCaUntrust {
+  if (pending.linuxStore || !isLinuxPickerTrustStore(store)) throw new Error("picker_ca_linux_store_invalid");
+  const checkPending = () => {
+    if (!samePendingUntrust(readPendingPickerCaUntrust(configDir, "linux"), pending)) {
+      throw new Error("picker_ca_pending_untrust_changed");
+    }
+  };
+  // The lock setup hardens the state directory. Validate ownership and mode before it runs.
+  checkPending();
+  return lockedPickerCa(configDir, () => {
+    checkPending();
+    const bound = { ...pending, linuxStore: store };
+    writePrivateTrustState(pickerCaPendingUntrustPath(configDir), bound);
+    return bound;
+  });
+}
+
 /** A pending CA may still be serving when journal publication preceded a failed PEM replacement. */
 export function pendingPickerCaHasLivePublishedOwner(
   configDir: string,

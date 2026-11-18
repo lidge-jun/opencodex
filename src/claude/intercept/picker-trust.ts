@@ -146,7 +146,7 @@ export async function untrustPickerCa(
   run: SecurityRunner = defaultSecurityRunner,
   platform: NodeJS.Platform = process.platform,
   linuxHome?: string,
-  linux?: { store?: LinuxPickerTrustStore; configDir?: string; requireRemoval?: boolean },
+  linux?: { store?: LinuxPickerTrustStore; configDir?: string; bindStore?: (store: LinuxPickerTrustStore) => void },
 ): Promise<LinuxPickerUntrustResult> {
   if (platform === "win32") {
     try {
@@ -159,7 +159,7 @@ export async function untrustPickerCa(
       const pem = readFileSync(caPath, "utf8");
       const remove = (linuxStore?: LinuxPickerTrustStore) => untrustPickerCaLinux(
         fingerprintSha1, run === defaultSecurityRunner ? undefined : run, linuxHome,
-        { pem, linuxStore, requireRemoval: linux?.requireRemoval });
+        { pem, linuxStore, bindStore: linux?.bindStore });
       if (!linux?.configDir) return await remove(linux?.store);
       return await withPublishedPickerCaLinuxTrust(linux.configDir, pem, async (store, _save, clear) => {
         const result = await remove(store);

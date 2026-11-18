@@ -309,10 +309,15 @@ export async function trustPickerCaLinux(
   }
 }
 
-type NssRemoval = "removed" | "absent" | "failed";
+interface NssRemoval {
+  selected: NssDb;
+  store: LinuxPickerTrustStore | undefined;
+  before: Map<string, NssEntry>;
+  nickname: string;
+}
 export type LinuxPickerUntrustResult = { ok: boolean; reason?: "original_store_unknown" };
 
-async function removeFromStore(run: LinuxTrustRunner, selected: NssDb, sha1: string, expected: X509Certificate): Promise<NssRemoval> {
+async function prepareRemoval(run: LinuxTrustRunner, selected: NssDb, sha1: string, expected: X509Certificate): Promise<NssRemoval | "absent" | "failed"> {
   const store = identifyStore(selected);
   const before = await inventory(run, selected);
   if (!before || !unchanged(selected, store)) return "failed";
@@ -322,32 +327,43 @@ async function removeFromStore(run: LinuxTrustRunner, selected: NssDb, sha1: str
   if (!target) return [...before.values()].some(cert => cert.fingerprint === expected.fingerprint256) ? "failed" : "absent";
   if (target.fingerprint !== expected.fingerprint256
     || [...before].some(([name, cert]) => name !== nickname && cert.fingerprint === target.fingerprint)) return "failed";
+  return { selected, store, before, nickname };
+}
 
+async function removeFromStore(
+  run: LinuxTrustRunner, { selected, store, before, nickname }: NssRemoval, expected: X509Certificate,
+  bindStore?: (store: LinuxPickerTrustStore) => void,
+): Promise<boolean> {
   const fresh = await listCertificates(run, selected.db);
-  if (fresh.kind !== "listed" || !fresh.entries.has(nickname)) return "failed";
+  if (fresh.kind !== "listed" || !fresh.entries.has(nickname)) return false;
   const verified = await exportCertificate(run, selected, nickname);
-  if (!verified?.raw.equals(expected.raw) || !unchanged(selected, store)) return "failed";
+  if (!verified?.raw.equals(expected.raw) || !unchanged(selected, store)) return false;
+
+  if (bindStore) {
+    if (!store) return false;
+    bindStore(store);
+    if (!unchanged(selected, store)) return false;
+  }
 
   // -D resolves the nickname again. Keep the pre-delete check and verify that the exact
   // predecessor is gone and the surviving entries kept their certificate and trust flags.
   const deleted = await run(["-D", "-d", selected.db, "-n", nickname]);
-  if (deleted.code !== 0 || !unchanged(selected, store)) return "failed";
+  if (deleted.code !== 0 || !unchanged(selected, store)) return false;
   const after = await inventory(run, selected);
   if (!after || !unchanged(selected, store)
-    || [...after.values()].some(cert => cert.fingerprint === expected.fingerprint256)) return "failed";
+    || [...after.values()].some(cert => cert.fingerprint === expected.fingerprint256)) return false;
   before.delete(nickname);
-  const survivorsUnchanged = [...before].every(([name, cert]) => {
+  return [...before].every(([name, cert]) => {
     const survivor = after.get(name);
     return survivor?.fingerprint === cert.fingerprint && survivor.flags === cert.flags;
   });
-  return survivorsUnchanged ? "removed" : "failed";
 }
 
 export async function untrustPickerCaLinux(
   fingerprintSha1: string,
   run: LinuxTrustRunner = defaultLinuxCertutilRunner,
   home?: string,
-  authority?: { pem: string; linuxStore?: LinuxPickerTrustStore; requireRemoval?: boolean },
+  authority?: { pem: string; linuxStore?: LinuxPickerTrustStore; bindStore?: (store: LinuxPickerTrustStore) => void },
   xdgDataHome = home === undefined ? process.env.XDG_DATA_HOME : undefined,
 ): Promise<LinuxPickerUntrustResult> {
   const failed = { ok: false };
@@ -359,7 +375,9 @@ export async function untrustPickerCaLinux(
     if (authority.linuxStore) {
       const recorded = openNssDb(authority.linuxStore.dir);
       if (!sameLinuxPickerTrustStore(authority.linuxStore, identifyStore(recorded))) return failed;
-      return { ok: await removeFromStore(run, recorded, sha1, expected) !== "failed" };
+      const removal = await prepareRemoval(run, recorded, sha1, expected);
+      if (removal === "failed") return failed;
+      return { ok: removal === "absent" || await removeFromStore(run, removal, expected) };
     }
 
     // Pre-identity records may refer to either Chromium path. Check existing stores
@@ -368,16 +386,25 @@ export async function untrustPickerCaLinux(
     const userHome = home ?? homedir();
     const dirs = new Set([legacyDbDir(userHome), xdgDbDir(userHome), xdgDbDir(userHome, xdgDataHome)]);
     const candidates = [...dirs].map(dir => ({ dir, db: statIfPresent(dir) ? openNssDb(dir) : undefined }));
-    let removed = false;
+    const removals = new Map<string, NssRemoval>();
     for (const { db } of candidates) {
       if (!db) continue;
-      const result = await removeFromStore(run, db, sha1, expected);
-      if (result === "failed") return failed;
-      if (result === "removed") removed = true;
+      const removal = await prepareRemoval(run, db, sha1, expected);
+      if (removal === "failed") return failed;
+      if (removal !== "absent") removals.set(removal.store?.dir ?? db.dir, removal);
     }
-    if (!candidates.every(({ dir, db }) => db ? unchanged(db, identifyStore(db)) : !statIfPresent(dir))) return failed;
-    if (authority.requireRemoval && !removed) return { ok: false, reason: "original_store_unknown" };
-    return { ok: true };
+    const candidatesUnchanged = () => candidates.every(({ dir, db }) => db ? unchanged(db, identifyStore(db)) : !statIfPresent(dir));
+    if (!candidatesUnchanged()) return failed;
+    if (authority.bindStore) {
+      if (!removals.size) return { ok: false, reason: "original_store_unknown" };
+      // The pending record can carry one store identity. Scan before deleting so an
+      // ambiguous match cannot strand trust in a second store after a partial failure.
+      if (removals.size !== 1) return failed;
+    }
+    for (const removal of removals.values()) {
+      if (!await removeFromStore(run, removal, expected, authority.bindStore)) return failed;
+    }
+    return { ok: candidatesUnchanged() };
   } catch { // no-excuse-ok: catch -- any uncertainty keeps the pending record.
     return failed;
   }

@@ -535,6 +535,87 @@ test("a legacy journal checks XDG even when the empty legacy directory is prefer
   expect(existsSync(journal)).toBe(false);
 });
 
+function writeUnboundJournal(configDir: string, root: { pem: string }): string {
+  const journal = pickerCaPendingUntrustPath(configDir);
+  mkdirSync(dirname(journal), { recursive: true, mode: 0o700 });
+  writeFileSync(journal, JSON.stringify({ certPem: root.pem, ...pickerCaFingerprints(root.pem) }), { mode: 0o600 });
+  return journal;
+}
+
+test("an unbound journal retries after the fake NSS delete succeeds and verification fails", async () => {
+  const h = home(false);
+  const dir = linuxNssDbDir(h);
+  const configDir = join(h, "config");
+  const root = pickerRoot();
+  const db = nss([entry(root)]);
+  await initializeNss(db.run, dir);
+  const journal = writeUnboundJournal(configDir, root);
+
+  let beforeDelete: { linuxStore?: unknown } | undefined;
+  let failNextRead = false;
+  const run: LinuxTrustRunner = async args => {
+    if (args[0] === "-D") beforeDelete = JSON.parse(readFileSync(journal, "utf8"));
+    if (args[0] === "-L" && failNextRead) {
+      failNextRead = false;
+      return exit255;
+    }
+    const result = await db.run(args);
+    if (args[0] === "-D" && result.code === 0) failNextRead = true;
+    return result;
+  };
+  expect(await drainPendingPickerCaUntrust(configDir, run, "linux", h)).toBe(false);
+  expect(db.certs).toEqual([]);
+  expect(failNextRead).toBe(false);
+  const retained = JSON.parse(readFileSync(journal, "utf8"));
+  expect(await drainPendingPickerCaUntrust(configDir, db.run, "linux", h)).toBe(true);
+  expect(existsSync(journal)).toBe(false);
+  expect(db.calls.filter(call => call[0] === "-D")).toHaveLength(1);
+  const fileId = (path: string) => {
+    const { dev, ino } = fs.lstatSync(path, { bigint: true });
+    return `${dev}:${ino}`;
+  };
+  expect(retained.linuxStore).toEqual({ dir: realpathSync(dir), directoryId: fileId(dir), certDbId: fileId(join(dir, "cert9.db")) });
+  expect(beforeDelete).toEqual(retained);
+});
+
+test("an unbound journal changed during NSS lookup prevents deletion", async () => {
+  const h = home(false);
+  const configDir = join(h, "config");
+  const root = pickerRoot();
+  const replacement = pickerRoot();
+  const db = nss([entry(root)]);
+  await initializeNss(db.run, linuxNssDbDir(h));
+  const journal = writeUnboundJournal(configDir, root);
+  const run: LinuxTrustRunner = args => {
+    if (args[0] === "-L" && args.includes("-n")) writeUnboundJournal(configDir, replacement);
+    return db.run(args);
+  };
+  expect(await drainPendingPickerCaUntrust(configDir, run, "linux", h)).toBe(false);
+  expect(JSON.parse(readFileSync(journal, "utf8"))).toEqual({ certPem: replacement.pem, ...pickerCaFingerprints(replacement.pem) });
+  expect(db.certs).toEqual([entry(root)]);
+  expect(db.calls.some(call => call[0] === "-D")).toBe(false);
+});
+
+test("an unbound journal finds no unique store when two NSS databases contain the CA", async () => {
+  const h = home(false);
+  const configDir = join(h, "config");
+  const root = pickerRoot();
+  const xdg = linuxNssDbDir(h);
+  const legacy = join(h, ".pki", "nssdb");
+  const db = nss([entry(root)]);
+  const shadow = nss([entry(root)]);
+  await initializeNss(db.run, xdg);
+  await initializeNss(shadow.run, legacy);
+  const journal = writeUnboundJournal(configDir, root);
+  const recorded = readFileSync(journal, "utf8");
+  const run: LinuxTrustRunner = args => args.includes(`sql:${legacy}`) ? shadow.run(args) : db.run(args);
+  expect(await drainPendingPickerCaUntrust(configDir, run, "linux", h)).toBe(false);
+  expect(readFileSync(journal, "utf8")).toBe(recorded);
+  expect(db.certs).toEqual([entry(root)]);
+  expect(shadow.certs).toEqual([entry(root)]);
+  expect([...db.calls, ...shadow.calls].some(call => call[0] === "-D")).toBe(false);
+});
+
 realNssTest("real NSS cleanup retains the journal when store preference changes and the recorded store is replaced" + nssSkipReason, async () => {
   const h = home(false);
   const run = realNssRunner(h);
@@ -607,6 +688,54 @@ realNssTest("real NSS unbound journal needs removal after a custom XDG change" +
   expect((await drain(original)).drained).toBe("true");
   expect(existsSync(journal)).toBe(false);
   expect(await inspectPickerTrustLinux(root.sha1, run, h, original)).toBe("untrusted");
+});
+
+realNssTest("real NSS startup retries after the unbound delete succeeds and verification fails" + nssSkipReason, async () => {
+  const h = home(false);
+  const xdg = join(h, "custom-data");
+  const run = realNssRunner(h);
+  const root = pickerRoot();
+  const configDir = join(h, "config");
+  expect(await trustPickerCaLinux("/ca.pem", run, root, h, xdg)).toEqual({ ok: true });
+  const journal = writeUnboundJournal(configDir, root);
+
+  const child = Bun.spawn([process.execPath, "-e", `
+    import { readFileSync } from "node:fs";
+    import { preparePersistentPickerAuthority } from "./src/claude/intercept/picker-ca-startup";
+    import { createLinuxCertutilRunner } from "./src/claude/intercept/picker-trust-linux";
+    import { memoryPickerCaStore } from "./tests/helpers/picker-ca-store";
+    const [configDir, journal, certutil] = process.argv.slice(1);
+    const run = createLinuxCertutilRunner(certutil);
+    const store = memoryPickerCaStore().store;
+    let deleted = 0;
+    let failedReads = 0;
+    const failVerification = async args => {
+      if (args[0] === "-L" && deleted === 1 && failedReads === 0) {
+        failedReads++;
+        return { code: 255, stdout: "", stderr: "injected post-delete read failure" };
+      }
+      const result = await run(args);
+      if (args[0] === "-D" && result.code === 0) deleted++;
+      return result;
+    };
+    const prepare = security => preparePersistentPickerAuthority({ configDir, platform: "linux", security, store })
+      .then(ca => ca.fingerprint, error => error.message);
+    const first = await prepare(failVerification);
+    const retained = JSON.parse(readFileSync(journal, "utf8"));
+    const retry = await prepare(run);
+    console.log(JSON.stringify({ first, retained, retry, deleted, failedReads }));
+  `, configDir, journal, realCertutil!], {
+    cwd: repoPath("."), env: { ...process.env, HOME: h, USERPROFILE: h, XDG_DATA_HOME: xdg },
+    stdout: "pipe", stderr: "pipe",
+  });
+  const [stdout, stderr, code] = await Promise.all([child.stdout.text(), child.stderr.text(), child.exited]);
+  expect(code, stderr).toBe(0);
+  const result = JSON.parse(stdout);
+  expect(result).toMatchObject({ first: "picker_ca_pending_untrust", deleted: 1, failedReads: 1 });
+  expect(await inspectPickerTrustLinux(root.sha1, run, h, xdg)).toBe("untrusted");
+  expect(result.retry, stderr).toMatch(/^[A-F0-9]{64}$/);
+  expect(result.retained.linuxStore.dir).toBe(realpathSync(linuxNssDbDir(h, xdg)));
+  expect(existsSync(journal)).toBe(false);
 });
 
 test.skipIf(realCertutil === null || process.platform === "win32")(
