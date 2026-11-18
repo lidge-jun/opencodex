@@ -3,7 +3,7 @@
  */
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdtempSync, readdirSync, writeFileSync, renameSync, statSync, utimesSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, writeFileSync, realpathSync, renameSync, statSync, symlinkSync, utimesSync } from "node:fs";
 import * as fsPromises from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -207,7 +207,8 @@ describe("agy acp turn", () => {
     }
   });
 
-  test.each([false, true])("checks the executable again after workspace setup (replacement %s)", async replace => {
+  const identityChanges = process.platform === "win32" ? ["unchanged", "replacement"] : ["unchanged", "replacement", "symlink retarget"];
+  test.each(identityChanges)("checks the executable again after workspace setup (%s)", async change => {
     const root = mkdtempSync(join(tmpdir(), "ocx-agy-turn-identity-"));
     const bin = join(root, "agy");
     const replacement = join(root, "replacement");
@@ -217,18 +218,29 @@ describe("agy acp turn", () => {
       utimesSync(file, stamp, stamp);
     }
     const original = statSync(bin);
+    const originalPath = realpathSync(bin);
+    const replacementPath = realpathSync(replacement);
+    const link = join(root, "override");
     let workspaces = 0;
     let removed = 0;
-    const spawns: string[] = [];
+    const spawns: [string, string][] = [];
     try {
+      if (change === "symlink retarget") symlinkSync(bin, link);
       const h = await run(script(), { deps: {
-        resolveBinary: () => bin, probeVersion: undefined,
+        resolveBinary: () => change === "symlink retarget" ? link : bin, probeVersion: undefined,
         createWorkspace: async () => {
-          if (++workspaces === 2 && replace) renameSync(replacement, bin);
+          if (++workspaces === 2) {
+            if (change === "replacement") renameSync(replacement, bin);
+            if (change === "symlink retarget") {
+              const newLink = join(root, "override-next");
+              symlinkSync(replacement, newLink);
+              renameSync(newLink, link);
+            }
+          }
           return { dir: root, tmp: root, remove: async () => { removed++; } };
         },
         spawn: (target, args) => {
-          spawns.push(args[0]!);
+          spawns.push([target, args[0]!]);
           const child = new FakeChild();
           if (args[0] === "--version") {
             queueMicrotask(() => {
@@ -239,11 +251,14 @@ describe("agy acp turn", () => {
           return child;
         },
       } });
-      expect(spawns).toEqual(replace ? ["--version", "--version"] : ["--version", "acp"]);
+      expect(spawns).toEqual([
+        [originalPath, "--version"],
+        [change === "symlink retarget" ? replacementPath : originalPath, change === "unchanged" ? "acp" : "--version"],
+      ]);
       expect(removed).toBe(workspaces);
-      expect(terminal(h)).toEqual(replace
-        ? [expect.objectContaining({ code: "agy_acp_unavailable", message: expect.stringContaining("1.5.2") })]
-        : [{ type: "done" }]);
+      expect(terminal(h)).toEqual(change === "unchanged"
+        ? [{ type: "done" }]
+        : [expect.objectContaining({ code: "agy_acp_unavailable", message: expect.stringContaining("1.5.2") })]);
     } finally {
       removeTreeWithRetry(root);
     }
