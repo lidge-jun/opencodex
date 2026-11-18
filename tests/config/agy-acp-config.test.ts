@@ -12,6 +12,7 @@ import { AGY_ACP_PROVIDER_ID, agyAcpConfigIssues, selectorCandidateProviders } f
 import { AGY_ACP_DEFAULT_MODEL, AGY_ACP_SEED_MODELS } from "../../src/providers/registry/agy-acp-models";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import { AGY_ACP_MIN_VERSION } from "../../src/adapters/agy-acp/binary";
+import { previewRouteModel } from "../../src/router";
 import type { OcxConfig } from "../../src/types";
 import { repoPath } from "../helpers/repo-root";
 
@@ -276,10 +277,19 @@ describe("antigravity-acp configuration", () => {
     expect(row?.defaultModel).toBe(AGY_ACP_DEFAULT_MODEL);
   });
 
-  test("the canonical row's seeded and default models, custom models and case-folded aliases resolve like the router", () => {
+  test("seeded ACP IDs are known for explicit routes and conservatively refused as unattended candidates", () => {
     const bare = { adapter: "agy-acp", baseUrl: "https://antigravity.google/docs/cli/acp" };
-    // No models list: the router still knows the registry seed and the default model.
-    expect(messages(validateConfigCandidate(config({ subagentModelFallback: ["gemini-4-argon"] }, { "antigravity-acp": bare, google: { ...google, models: ["gemini-3.8-flash"] } })))).toContain("cannot be a subagent fallback");
+    const providers = { "antigravity-acp": bare, google: { ...google, models: ["gemini-3.8-flash"] } };
+    const candidate = config({}, providers);
+    expect(previewRouteModel(candidate, "gemini-4-argon").providerName).toBe("google");
+    expect(previewRouteModel(candidate, "antigravity-acp/gemini-4-argon").providerName).toBe("antigravity-acp");
+    for (const model of ["gemini-4-argon", "antigravity-acp/gemini-4-argon"]) {
+      expect(messages(validateConfigCandidate(config({ subagentModelFallback: [model] }, providers)))).toContain("cannot be a subagent fallback");
+    }
+  });
+
+  test("custom ACP model IDs and case-folded aliases participate in unattended validation", () => {
+    const bare = { adapter: "agy-acp", baseUrl: "https://antigravity.google/docs/cli/acp" };
     expect(messages(validateConfigCandidate(config({ subagentModelFallback: ["gemini-9-custom"] }, { "my-agy": { ...bare, defaultModel: "gemini-9-custom" } })))).toContain("cannot be a subagent fallback");
     expect(messages(validateConfigCandidate(config({
       subagentModelFallback: ["gemini-9-extra"],
