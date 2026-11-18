@@ -232,8 +232,12 @@ describe("managed native Messages", () => {
       const first = await Promise.race([reader.read(), pulledPastFrame.promise]);
       expect(first).not.toBe("pending");
       if (first === "pending") return;
-      expect(decoder.decode(first.value)).toBe(ECHOED_SSE_TEXT.split("\n\n")[0] + "\n\n");
-      if (lateLf) upstream.enqueue(encoder.encode(lateLf));
+      const echoedStart = ECHOED_SSE_TEXT.split("\n\n")[0]!.replaceAll("\n", newline);
+      expect(decoder.decode(first.value)).toBe(echoedStart + ending.join(""));
+      if (lateLf) {
+        upstream.enqueue(encoder.encode(lateLf));
+        expect(decoder.decode((await reader.read()).value)).toBe(lateLf);
+      }
       upstream.enqueue(encoder.encode(suffix));
       expect(decoder.decode((await reader.read()).value)).toBe(suffix);
     } finally {
@@ -241,28 +245,47 @@ describe("managed native Messages", () => {
     }
   });
 
-  test.each([
-    ["joined to the next frame", ": keep this comment\n\r", true, true],
-    ["joined to the next frame across the scan limit", ":" + "a".repeat(65_536 - 3) + "\n\r", true, true],
-    ["alone at the scan limit", ":" + "a".repeat(65_535 - 3) + "\n\r", false, true],
-    ["alone past the scan limit", ":" + "a".repeat(65_536 - 3) + "\n\r", false, false],
-  ] as const)("preserves the LF continuation of an untouched frame %s", async (_label, prefix, joined, rewrite) => {
+  test.each([65_535, 65_536, 65_537])("uses the same raw-byte cutoff for split and coalesced input ending at %i", async end => {
     const start = sseText(SSE_FRAMES.slice(0, 1));
-    const encoder = new TextEncoder();
-    const chunks = joined ? [prefix, "\n" + start] : [prefix, "\n", start];
-    const body = new ReadableStream<Uint8Array>({ start(controller) {
-      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
-      controller.close();
-    } });
-    const echoed = echoRequestedModel(body, "anth/claude-x", new MessagesSseFrameContext());
-    const expected = rewrite ? ECHOED_SSE_TEXT.split("\n\n")[0] + "\n\n" : start;
-    expect(new Uint8Array(await new Response(echoed).arrayBuffer())).toEqual(encoder.encode(prefix + "\n" + expected));
+    const prefix = ":" + "a".repeat(end - start.length - 3) + "\n\n";
+    const expected = prefix + (end <= 65_536 ? ECHOED_SSE_TEXT.split("\n\n")[0] + "\n\n" : start);
+    for (const chunks of [[prefix + start], [prefix, start], [prefix, start.slice(0, -1), start.slice(-1)]]) {
+      const body = new ReadableStream<Uint8Array>({ start(controller) {
+        for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk));
+        controller.close();
+      } });
+      expect(await new Response(echoRequestedModel(body, "anth/claude-x", new MessagesSseFrameContext())).text()).toBe(expected);
+    }
+  });
+
+  test.each(["\n", "\r\n", "\r"])("preserves message_start control fields with line ending %j", async newline => {
+    const source = ["id: stream-42", "event: message_start",
+      'data: {"type":"message_start",', ": keep this comment", "retry: 1500",
+      'data: "message":{"model":"provider"}}', "", ""].join(newline);
+    const expected = ["id: stream-42", "event: message_start",
+      'data: {"type":"message_start","message":{"model":"anth/claude-x"}}',
+      ": keep this comment", "retry: 1500", "", ""].join(newline);
+    expect(await new Response(echoRequestedModel(new Response(source).body!, "anth/claude-x",
+      new MessagesSseFrameContext())).text()).toBe(expected);
+  });
+
+  test("relays a post-cutoff frame and split LF continuation unchanged", async () => {
+    const prefix = ":" + "a".repeat(65_536 - 3) + "\n\r";
+    const start = sseText(SSE_FRAMES.slice(0, 1));
+    const expected = prefix + "\n" + start;
+    for (const chunks of [[expected], [prefix, "\n" + start], [prefix, "\n", start]]) {
+      const body = new ReadableStream<Uint8Array>({ start(controller) {
+        for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk));
+        controller.close();
+      } });
+      expect(await new Response(echoRequestedModel(body, "anth/claude-x", new MessagesSseFrameContext())).text()).toBe(expected);
+    }
   });
 
   test("joins bare-CR SSE data lines before parsing message_start", async () => {
     const malformed = 'event: message_start\rdata: {"type":"message_start","message":{"id":"a\rdata: b","model":"provider"}}\r\r';
     const valid = 'event: message_start\rdata: {"type":"message_start",\rdata: "message":{"id":"good","model":"provider"}}\r\r';
-    const rewritten = 'event: message_start\ndata: {"type":"message_start","message":{"id":"good","model":"anth/claude-x"}}\n\n';
+    const rewritten = 'event: message_start\rdata: {"type":"message_start","message":{"id":"good","model":"anth/claude-x"}}\r\r';
     const body = new Response(malformed + valid).body!;
     const echoed = echoRequestedModel(body, "anth/claude-x", new MessagesSseFrameContext());
     expect(new Uint8Array(await new Response(echoed).arrayBuffer())).toEqual(new TextEncoder().encode(malformed + rewritten));

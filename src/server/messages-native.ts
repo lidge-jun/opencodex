@@ -276,7 +276,7 @@ function observeNativeMessagesChunks(
 const MODEL_ECHO_SCAN_BYTES = 64 * 1024;
 
 /** The `message_start` frame with `message.model` set to `model`, or undefined for any other frame. */
-function messageStartWithModel(frame: string, model: string): string | undefined {
+function messageStartWithModel(frame: string, model: string, renameError: boolean): string | undefined {
   const data = frame
     .split(/\r\n|\r|\n/)
     .map(line => sseFieldValue(line, "data"))
@@ -287,7 +287,16 @@ function messageStartWithModel(frame: string, model: string): string | undefined
   try { parsed = JSON.parse(data); } catch { return undefined; }
   if (!isRec(parsed) || parsed.type !== "message_start" || !isRec(parsed.message)) return undefined;
   parsed.message.model = model;
-  return `event: message_start\ndata: ${JSON.stringify(parsed)}\n\n`;
+  const replacement = `data: ${JSON.stringify(parsed)}`;
+  if (renameError) return `event: message_start\n${replacement}\n\n`;
+  let replaced = false;
+  return frame.replace(/[^\r\n]*(?:\r\n|\r|\n)/g, line => {
+    const ending = line.match(/(?:\r\n|\r|\n)$/)![0];
+    if (sseFieldValue(line.slice(0, -ending.length), "data") === null) return line;
+    if (replaced) return "";
+    replaced = true;
+    return replacement + ending;
+  });
 }
 
 /**
@@ -334,17 +343,20 @@ export function echoRequestedModel(body: ReadableStream<Uint8Array>, model: stri
           return;
         }
         if (chunk.byteLength === 0) continue;
-        if (scanning) scanned += chunk.byteLength;
+        const scanBytes = Math.min(chunk.byteLength, MODEL_ECHO_SCAN_BYTES - scanned);
+        if (scanning) scanned += scanBytes;
+        let continuationBytes = 0;
         let value = chunk;
         let relayedLf = false;
         if (pendingLf && chunk[0] === 10) {
           relayedLf = pendingLf === "relay";
           if (relayedLf) controller.enqueue(chunk.subarray(0, 1));
+          continuationBytes = 1;
           value = chunk.subarray(1);
         }
         pendingLf = undefined;
         if (value.byteLength === 0) {
-          if (scanned > MODEL_ECHO_SCAN_BYTES) scanning = false;
+          if (scanned === MODEL_ECHO_SCAN_BYTES) scanning = false;
           if (relayedLf) return;
           continue;
         }
@@ -353,7 +365,7 @@ export function echoRequestedModel(body: ReadableStream<Uint8Array>, model: stri
           return;
         }
         const carried = carryLength;
-        const length = carried + value.byteLength;
+        const length = carried + Math.max(0, scanBytes - continuationBytes);
         const byteAt = (index: number): number => index < carried ? carry[index]! : value[index - carried]!;
         let start = 0;
         let index = scanFrom;
@@ -370,21 +382,28 @@ export function echoRequestedModel(body: ReadableStream<Uint8Array>, model: stri
           start = end;
           index = end;
           const decoded = decoder.decode(frame);
-          const rewritten = messageStartWithModel(decoded, model);
+          const renameError = messagesSseEchoRenamedError(decoded);
+          const rewritten = messageStartWithModel(decoded, model, renameError);
           // A bare CR completes the frame now. A later LF belongs to that same delimiter.
-          if (endsOnCr) pendingLf = rewritten === undefined ? "relay" : "drop";
+          if (endsOnCr) {
+            if (end - carried === value.byteLength) {
+              pendingLf = rewritten !== undefined && renameError ? "drop" : "relay";
+            } else if (rewritten !== undefined && renameError && value[end - carried] === 10) {
+              start += 1;
+            }
+          }
           if (rewritten === undefined) {
             controller.enqueue(frame);
             continue;
           }
           const bytes = encoder.encode(rewritten);
-          if (messagesSseEchoRenamedError(decoded)) frames.register(bytes, { echoRenamedError: true });
+          if (renameError) frames.register(bytes, { echoRenamedError: true });
           controller.enqueue(bytes);
           scanning = false;
           break;
         }
         const suffix = value.subarray(Math.max(0, start - carried));
-        if (!scanning || scanned > MODEL_ECHO_SCAN_BYTES) {
+        if (!scanning || scanned === MODEL_ECHO_SCAN_BYTES) {
           scanning = false;
           const remaining = take(suffix);
           if (remaining.byteLength > 0) controller.enqueue(remaining);

@@ -508,12 +508,14 @@ with the pinned SDK's parsed-or-raw SSE fallback. Empty named errors retain gene
 complete-frame construction identity. While looking for `message_start`, the native model echo
 uses the shared byte delimiter scanner for CR, LF, CRLF and mixed blank lines. A blank line
 ending in CR completes the frame immediately. A subsequent LF belongs to that delimiter and
-is relayed only when the frame is untouched. It scans each incoming chunk once and grows incomplete frame storage geometrically.
-It reads through fragments until a frame is ready, the scan window ends, or EOF arrives. The
-64 KiB cutoff counts raw bytes, including a standalone LF continuation. A complete
-`message_start` in the chunk that crosses the cutoff can still be rewritten. If the echo
-finds no match in that chunk, it relays the pending bytes and stops scanning. It joins
-multiple SSE data fields with LF before parsing the frame's JSON. The native Messages tap
+is relayed for ordinary frames. The scanner grows incomplete frame storage geometrically and
+reads through fragments until a frame is ready, the scan window ends, or EOF arrives. It scans
+at most 64 KiB of raw bytes, including any LF continuation within the window. A complete
+`message_start` ending at the limit can be rewritten. Frames that need bytes beyond the
+limit are relayed unchanged, regardless of upstream chunk boundaries. The echo joins SSE
+data fields with LF before parsing JSON and replaces those fields while retaining control
+lines and their original endings. Eligible renamed error frames retain their canonical form.
+The native Messages tap
 refreshes its pending-read stall deadline on each nonempty raw chunk before frame buffering.
 The single pre-echo flag authorizes owned data under the
 existing message_start name; guard replacements retire that flag. Local guard and tap products
