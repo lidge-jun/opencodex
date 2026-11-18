@@ -817,8 +817,8 @@ instead of version 1 are unsupported; the client does not fall back to locally g
 
 If discovery is superseded, the hub serves its last complete snapshot while the IDs still
 resolve to the same models. If the hub has no usable snapshot, it returns HTTP 503 with
-`error.code: desktop_snapshot_busy` and `Retry-After: 1`. Connected apply keeps the existing
-Desktop profile.
+the error code `desktop_snapshot_busy` and `Retry-After: 1`. Connected apply keeps the
+existing Desktop profile.
 
 The snapshot remains a read-only model-list contract; it is not a key-rotation or profile-upload
 API. Connected Desktop key migration, recovery and disconnect operate through the existing client
