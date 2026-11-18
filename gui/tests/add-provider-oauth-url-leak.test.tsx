@@ -37,6 +37,7 @@ let cancelledProviders: string[] = [];
 const PRESETS = [
   { id: "claude", label: "Claude", adapter: "anthropic", baseUrl: "https://api.anthropic.com", auth: "oauth", oauthProvider: "claude" },
   { id: "gemini", label: "Gemini", adapter: "gemini", baseUrl: "https://generativelanguage.googleapis.com", auth: "oauth", oauthProvider: "gemini" },
+  { id: "m365-copilot", label: "Microsoft 365 Copilot", adapter: "m365-copilot", baseUrl: "https://substrate.office.com/m365Copilot", auth: "oauth", oauthProvider: "m365-copilot" },
 ];
 
 beforeEach(() => {
@@ -59,7 +60,7 @@ beforeEach(() => {
     configurable: true,
     value: async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new URL(String(input), "http://localhost");
-      if (url.pathname === "/api/oauth/providers") return Response.json({ providers: ["claude", "gemini"] });
+      if (url.pathname === "/api/oauth/providers") return Response.json({ providers: PRESETS.map(preset => preset.oauthProvider) });
       if (url.pathname === "/api/provider-presets") return Response.json({ providers: PRESETS });
       if (url.pathname === "/api/usage") return Response.json({ providers: [] });
       if (url.pathname === "/api/oauth/login" && (init?.method ?? "GET") === "POST") {
@@ -410,6 +411,20 @@ test("a proxy-owned login is polled past the dashboard's own browser budget", ()
   // a dashboard budget shorter than that cancelled flows that were still live.
   expect(serverOwnedLoginAttempts(OAUTH_LOGIN_POLL_INTERVAL_MS) * OAUTH_LOGIN_POLL_INTERVAL_MS)
     .toBeGreaterThan(12 * 60_000);
+});
+
+test("the add-provider pane keeps a proxy-owned login cancellable after pagehide", async () => {
+  await mountModal();
+  await act(async () => { clickByText("Microsoft 365 Copilot"); });
+  await act(async () => { clickByText("Log in with Microsoft 365 Copilot"); });
+  expect(pendingLogins).toHaveLength(1);
+  await act(async () => { pendingLogins.shift()!(""); });
+  await act(async () => { win.dispatchEvent(new win.Event("pagehide")); });
+  expect(cancelledProviders).toEqual([]);
+  expect(host.textContent).toContain("Waiting for browser");
+  await act(async () => { clickByText("Cancel"); });
+  expect(cancelledProviders).toEqual(["m365-copilot"]);
+  expect(host.textContent).toContain("Microsoft 365 Copilot login cancelled");
 });
 
 test("the add-provider OAuth pane can cancel an in-flight login", async () => {

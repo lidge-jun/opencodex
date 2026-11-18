@@ -84,7 +84,10 @@ export function useProvidersOAuth({
     setBusy(null);
     setLoginInfo(null);
     setStatus("");
-    for (const [provider, capture] of active) void cancelOAuthLogin(capture, provider);
+    for (const [provider, capture] of active) {
+      if (isServerOwnedLogin(provider)) continue;
+      void cancelOAuthLogin(capture, provider);
+    }
   }, [setBusy, setLoginInfo, setStatus, targetKey]);
 
   const bumpLoginGeneration = useCallback((provider: string) => {
@@ -133,9 +136,14 @@ export function useProvidersOAuth({
       for (const [provider, generation] of active) {
         const capture = activeLoginCapturesRef.current.get(provider);
         activeLoginCapturesRef.current.delete(provider);
-        // The proxy owns this login (its own isolated window and budget), so a
-        // dashboard teardown must not cancel a flow the user is completing there.
-        if (isServerOwnedLogin(provider)) continue;
+        if (isServerOwnedLogin(provider)) {
+          // A page restored from the back-forward cache still needs its original Cancel target.
+          if (clearUi && capture) {
+            activeLoginGenerationsRef.current.set(provider, generation);
+            activeLoginCapturesRef.current.set(provider, capture);
+          }
+          continue;
+        }
         if (capture) endedLoginCapturesRef.current.set(provider, capture);
         if (oauthLoginGenerationRef.current!.get(provider) === generation) bumpLoginGeneration(provider);
         if (clearUi) {

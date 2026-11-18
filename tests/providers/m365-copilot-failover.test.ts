@@ -53,7 +53,7 @@ for (const stream of [true, false]) {
       options.onText("backup served"); return "backup served";
     };
     const response = await handleResponses(new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: "combo/planners", input: "fixture", stream, tools: [{ type: "function", name: "fixture_tool", parameters: { type: "object", properties: {} } }] }),
+      body: JSON.stringify({ model: "combo/planners", input: "fixture", stream, reasoning: { summary: "auto" }, tools: [{ type: "function", name: "fixture_tool", parameters: { type: "object", properties: {} } }] }),
     }), config(), { model: "", provider: "" });
     const body = await response.text();
     expect(hits).toEqual(["Claude_Opus", "Gpt_61_Sol_Reasoning"]);
@@ -63,15 +63,22 @@ for (const stream of [true, false]) {
 }
 test("real Copilot thinking output keeps a subsequent refusal on the committed model", async () => {
   const hits: string[] = [];
+  const refusal = Promise.withResolvers<void>();
   turn = async options => {
     options.beforeSend?.(); hits.push(options.model); options.onThinking?.("visible reasoning");
+    await refusal.promise;
     throw new M365CopilotTurnError("Microsoft 365 Copilot account quota or rate limit reached", 429);
   };
+  // dev holds reasoning-only output during preflight. Release the refusal once
+  // the route has committed the stream, so the test crosses that boundary.
   const response = await handleResponses(new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model: "combo/planners", input: "fixture", stream: true }),
-  }), config(), { model: "", provider: "" });
+    body: JSON.stringify({ model: "combo/planners", input: "fixture", stream: true, reasoning: { summary: "auto" } }),
+  }), config(), { model: "", provider: "" }).finally(() => refusal.resolve());
   const body = await response.text();
-  expect(hits).toEqual(["Claude_Opus"]); expect(body).not.toContain("backup served"); expect(body).toContain("rate_limit_exceeded");
+  expect(hits).toEqual(["Claude_Opus"]);
+  expect(body).toContain("visible reasoning");
+  expect(body).not.toContain("backup served");
+  expect(body).toContain("rate_limit_exceeded");
 }, 30_000);
 
 test("two Copilot quota refusals advance to the next provider in planners", async () => {

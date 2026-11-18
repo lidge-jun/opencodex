@@ -1991,8 +1991,7 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
     return jsonResponse({ error: "provider string and enabled boolean are required" }, 400);
   }
 
-  // Complete GUI picker presets, derived from the canonical provider registry. The GUI is a
-  // standalone Vite package, so it consumes this runtime view instead of importing repo-root src.
+  // The standalone Vite GUI consumes these canonical registry presets through the API.
   if (url.pathname === "/api/provider-presets" && req.method === "GET") {
     return jsonResponse({ providers: deriveProviderPresets() });
   }

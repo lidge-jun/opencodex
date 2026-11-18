@@ -96,7 +96,6 @@ export {
 } from "./health";
 export { OAUTH_REFRESH_LOCK_WAIT_MS, peekAuthStore, peekOAuthRefreshIntent } from "./store";
 import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
-
 import { REFRESH_SKEW_MS } from "./refresh-policy";
 import { newerClaudeCredentialForInstance, captureAnthropicCredentialOwnerForInstance, claudeCredentialGenerationCurrent } from "./anthropic-continuity";
 import { anthropicSubscriptionLabel } from "../providers/anthropic-subscription";
@@ -116,12 +115,9 @@ export interface OAuthAccessSnapshot {
   /** Safe request-routing subset; refresh-only Kiro client secrets never leave the credential store. */
   kiro?: Pick<KiroOAuthMetadata, "profileArn" | "apiRegion" | "ssoRegion" | "authType">;
   /**
-   * Allowlisted API origin belonging to THIS account.
-   *
-   * Copilot and Devin pin credentials to account-scoped regional or tenant hosts. Initial routing,
-   * discovery, refresh, and account failover must resolve transport from this same snapshot;
-   * rereading the active account can pair account A's token with account B's origin during a
-   * concurrent switch (#2568d).
+   * Allowlisted origin for this account. Copilot and Devin pin credentials to regional or tenant
+   * hosts. Routing, discovery, refresh and failover use the same snapshot so a concurrent switch
+   * cannot pair one account's token with another account's origin (#2568d).
    */
   apiBaseUrl?: string;
   /**

@@ -75,7 +75,10 @@ export function useAddProviderOAuth({
       setters.setOauthMsg("");
     }
     // Cancel each abandoned login on the target it started against.
-    for (const [providerId, capture] of captures) void cancelOAuthLogin(capture, providerId);
+    for (const [providerId, capture] of captures) {
+      if (isServerOwnedLogin(providerId)) continue;
+      void cancelOAuthLogin(capture, providerId);
+    }
   }, [targetKey]);
 
   const bumpLoginGeneration = useCallback((providerId: string) => {
@@ -97,18 +100,23 @@ export function useAddProviderOAuth({
       const captures = new Map(activeCapturesRef.current);
       activeProvidersRef.current.clear();
       activeCapturesRef.current.clear();
-      for (const [providerId, capture] of captures) endedCapturesRef.current.set(providerId, capture);
       for (const [providerId, setters] of providers) {
-        // The proxy owns this login (its own isolated window and budget), so a
-        // dashboard teardown must not cancel a flow the user is completing there.
-        if (isServerOwnedLogin(providerId)) continue;
+        const capture = captures.get(providerId);
+        if (isServerOwnedLogin(providerId)) {
+          // Keep the active capture for Cancel if the page returns from the back-forward cache.
+          if (clearUi && capture) {
+            activeProvidersRef.current.set(providerId, setters);
+            activeCapturesRef.current.set(providerId, capture);
+          }
+          continue;
+        }
+        if (capture) endedCapturesRef.current.set(providerId, capture);
         bumpLoginGeneration(providerId);
         if (clearUi) {
           setters.setOauthBusy(false);
           setters.setOauthUrl("", providerId);
           setters.setOauthMsg("");
         }
-        const capture = captures.get(providerId);
         if (capture) void cancelServerLogin(capture, providerId);
       }
     };

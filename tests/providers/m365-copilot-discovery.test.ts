@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { createTempHome } from "../helpers/temp-home";
 import { saveCredential, getCredential, credentialGeneration } from "../../src/oauth/store";
-import { OAUTH_PROVIDERS, getValidAccessTokenSnapshot } from "../../src/oauth";
+import { OAUTH_PROVIDERS, getLoginStatus, getValidAccessTokenSnapshot, oauthLoginSummary } from "../../src/oauth";
 import { clearModelCache, getProviderLiveModelCount } from "../../src/codex/model-cache";
 import { fetchProviderModels } from "../../src/codex/catalog/provider-models";
 import { normalizeM365WebSession, parseM365ModelBootstrap, readM365ModelBootstrap, M365_COPILOT_WEB_URL } from "../../src/providers/m365-copilot-discovery";
@@ -9,6 +9,9 @@ import { getToneForModel } from "../../src/providers/m365-copilot-models";
 import { applyNewModelPolicy } from "../../src/providers/new-model-policy";
 import { readM365BrowserWebSession } from "../../src/oauth/m365-copilot-web-session";
 import { probeM365CopilotProvider } from "../../src/server/management/m365-copilot-provider-probe";
+import { handleOauthAccountRoutes } from "../../src/server/management/oauth-account-routes";
+import { handleProviderRoutes } from "../../src/server/management/provider-routes";
+import type { OcxConfig } from "../../src/types";
 
 const oid = "11111111-1111-1111-1111-111111111111", tid = "22222222-2222-2222-2222-222222222222";
 const accountId = oid + "@" + tid;
@@ -107,4 +110,71 @@ test("dashboard connectivity probe uses live account metadata and never treats a
   globalThis.fetch = (async () => new Response("sign in")) as typeof fetch;
   const failed = await probeM365CopilotProvider("m365-copilot", provider, snapshot, new AbortController().signal);
   expect(await failed.json()).toMatchObject({ ok: false });
+});
+
+test("keeps the M365 web cookie out of account summaries, management responses and discovery logs", async () => {
+  const name = "m365-copilot";
+  const logged: string[] = [];
+  const logs = (["debug", "log", "info", "warn", "error"] as const).map(level =>
+    spyOn(console, level).mockImplementation((...args: unknown[]) => {
+      logged.push(Bun.inspect(args, { depth: 10 }));
+    }));
+  const requests: Array<{ url: string; sentCookie: string | null }> = [];
+  const provider = {
+    ...OAUTH_PROVIDERS[name]!.providerConfig,
+    fetch: (async (url, init) => {
+      requests.push({ url: String(url), sentCookie: new Headers(init?.headers).get("cookie") });
+      throw new Error(`Upstream fixture echoed the request cookie: ${cookie}`);
+    }) as typeof fetch,
+  };
+  const config = { port: 0, hostname: "127.0.0.1", defaultProvider: name, providers: { [name]: provider } } as OcxConfig;
+  async function read(path: string, method = "GET") {
+    const url = new URL(path, "http://127.0.0.1");
+    const context: Parameters<typeof handleOauthAccountRoutes>[0] = {
+      req: new Request(url, { method }), url, config, deps: {},
+      convergeCodexCatalog: async () => ({ status: "failed", reason: "disk" }),
+      syncClaudeAgentDefsBestEffort: async () => {},
+    };
+    const response = await (path.startsWith("/api/oauth/")
+      ? handleOauthAccountRoutes(context)
+      : handleProviderRoutes(context));
+    expect(response?.status, path).toBe(200);
+    return response!.json();
+  }
+  function expectNoCookie(value: unknown) {
+    const serialized = JSON.stringify(value);
+    expect(serialized).not.toContain('"m365":');
+    expect(serialized).not.toContain("OhpAuth");
+    expect(serialized).not.toContain("fixture-web-session");
+  }
+  try {
+    await saveCredential(name, credential());
+    expect(getCredential(name)?.m365?.cookie).toBe(cookie);
+    const summary = oauthLoginSummary().find(row => row.provider === name);
+    expect(summary).toMatchObject({ provider: name, loggedIn: true });
+    expectNoCookie(summary);
+    const status = getLoginStatus(name);
+    expect(status.accounts).toHaveLength(1);
+    expectNoCookie(status);
+
+    const accountStatus = await read(`/api/oauth/status?provider=${name}`);
+    const accounts = await read(`/api/oauth/accounts?provider=${name}`);
+    const providers = await read("/api/providers");
+    expect(accountStatus).toMatchObject({ loggedIn: true });
+    expect(accounts.accounts).toHaveLength(1);
+    expect(providers).toContainEqual(expect.objectContaining({ name }));
+    expectNoCookie([accountStatus, accounts, providers]);
+
+    const probe = await read(`/api/providers/test?name=${name}`, "POST");
+    expect(probe).toMatchObject({ ok: false, error: expect.stringContaining("live discovery failed") });
+    expectNoCookie(probe);
+    expect(await fetchProviderModels(name, provider, 0)).toEqual([]);
+    expect(requests).toEqual([
+      { url: M365_COPILOT_WEB_URL, sentCookie: cookie },
+      { url: M365_COPILOT_WEB_URL, sentCookie: cookie },
+    ]);
+    expectNoCookie(logged);
+  } finally {
+    for (const spy of logs) spy.mockRestore();
+  }
 });
