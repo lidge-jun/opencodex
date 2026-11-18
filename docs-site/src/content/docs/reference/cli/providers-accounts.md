@@ -324,7 +324,8 @@ A Claude account that belongs to several organizations can be added once per org
 organization has its own subscription and limits, so it becomes its own pool account instead of
 replacing the first. Logging in to an organization that already has an account refreshes that
 account. The dashboard shows each account's organization name under its label once Claude has
-reported it (at login or on the next token refresh).
+reported it (at login or on the next token refresh). The account list exposes these names to
+dashboard sessions and full management credentials.
 
 All of this depends on organization evidence, which Claude reports at login and on token refresh;
 it is recorded only when that report succeeds. A login gets its own account only when both
@@ -333,12 +334,11 @@ with no recorded organization (for example, one saved before this release) is ch
 own token, if that token is still current. An account of the login's organization is preferred.
 Otherwise, if the existing account's organization stays unknown (expired token, failed check, or a
 login whose own organization was not reported), the login may replace it, as earlier releases did.
-Reauthenticating an account is refused when its known organization differs from the login's, or
-when another account already holds the login's organization; add the other organization as a new
-login instead. An unknown organization on either side never counts as a conflict, but the
-second rule still applies: another account holding the login's known organization refuses it. Before adding another
-organization, make sure the existing account is signed in and its token is current, for example
-by sending it one request.
+Reauthentication also checks existing accounts through their usable tokens when their organization
+is missing. It refuses a grant for a different confirmed organization or one another account
+already holds. Sign in separately to add the other organization. When Claude Code rotates both
+tokens for a user with multiple pool accounts, automatic adoption requires matching organization
+proof for the existing account and the new grant.
 
 OAuth reauthentication preserves operator settings such as model selections, pricing overrides,
 and account failover preferences. Login-owned transport/authentication fields and registry-owned

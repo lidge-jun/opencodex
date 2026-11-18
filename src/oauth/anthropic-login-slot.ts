@@ -12,7 +12,7 @@
  * organizations were recorded is never duplicated by re-login.
  */
 import { createHash } from "node:crypto";
-import { anthropicOrganization, anthropicOrganizationsConflict, matchesAnthropicImport, normalizeAnthropicIdentity,
+import { anthropicOrganization, matchesAnthropicImport, normalizeAnthropicIdentity,
   resolveAnthropicAccountIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
 import { OAuthReauthIdentityMismatchError } from "./oauth-errors";
 import type { OAuthCredentials, ProviderAccount } from "./types";
@@ -21,14 +21,26 @@ import type { OAuthCredentials, ProviderAccount } from "./types";
 const LOGIN_OBSERVATION_TIMEOUT_MS = 5_000;
 
 /** Organizations observed for stored rows, keyed by the SHA-256 of the bearer that proved them. */
-export type AnthropicSlotOrganizations = ReadonlyMap<string, string>;
+type AnthropicSlotOrganizations = ReadonlyMap<string, { accountUuid: string; organizationUuid: string }>;
 
 function bearerSha256(access: string): string {
   return createHash("sha256").update(access).digest("hex");
 }
 
+function slotAccountUuid(credential: OAuthCredentials): string | undefined {
+  return normalizeAnthropicIdentity(credential.anthropicIdentity, credential.access)?.accountUuid
+    ?? credential.accountId;
+}
+
 function loginIdentity(credential: OAuthCredentials): string | undefined {
-  return credential.accountId ?? credential.email;
+  return slotAccountUuid(credential) ?? credential.email;
+}
+
+function slotOrganization(credential: OAuthCredentials, observed?: AnthropicSlotOrganizations): string | undefined {
+  const stored = anthropicOrganization(credential);
+  if (stored || !observed?.size) return stored;
+  const proof = observed.get(bearerSha256(credential.access));
+  return proof && proof.accountUuid === slotAccountUuid(credential) ? proof.organizationUuid : undefined;
 }
 
 /**
@@ -51,11 +63,11 @@ export async function observeAnthropicSlotOrganizations(
   if (pending.length === 0) return new Map();
   const signal = AbortSignal.timeout(LOGIN_OBSERVATION_TIMEOUT_MS);
   const proofs = await Promise.all(pending.map(row => resolve(row.credential.access, signal)));
-  const observed = new Map<string, string>();
+  const observed = new Map<string, { accountUuid: string; organizationUuid: string }>();
   pending.forEach((row, index) => {
     const proof = normalizeAnthropicIdentity(proofs[index], row.credential.access);
-    if (proof?.organizationUuid && proof.accountUuid === row.credential.accountId) {
-      observed.set(proof.bearerSha256, proof.organizationUuid);
+    if (proof?.organizationUuid && proof.accountUuid === slotAccountUuid(row.credential)) {
+      observed.set(proof.bearerSha256, { accountUuid: proof.accountUuid, organizationUuid: proof.organizationUuid });
     }
   });
   return observed;
@@ -71,8 +83,7 @@ function pickSlot(
   candidates: readonly ProviderAccount[], incoming: OAuthCredentials,
   observed: AnthropicSlotOrganizations, activeAccountId?: string,
 ): ProviderAccount | undefined {
-  const organizationOf = (row: ProviderAccount) => anthropicOrganization(row.credential)
-    ?? observed.get(bearerSha256(row.credential.access));
+  const organizationOf = (row: ProviderAccount) => slotOrganization(row.credential, observed);
   const organization = anthropicOrganization(incoming);
   if (organization) {
     return candidates.find(row => organizationOf(row) === organization)
@@ -99,41 +110,29 @@ export function findAnthropicImportSlot(
   return pickSlot(accounts.filter(row => matchesAnthropicImport(row.credential, incoming)), incoming, observed, activeAccountId);
 }
 
+export function anthropicSiblingSlots(accounts: readonly ProviderAccount[], accountId: string, accountUuid: string): ProviderAccount[] {
+  return accounts.filter(row => row.id !== accountId && slotAccountUuid(row.credential) === accountUuid);
+}
+
 /**
- * A reauth must not turn a row into a second copy of an organization another row of the same
- * account already proves; that would leave two rows on one quota and drop the first grant.
+ * Recheck the target and siblings under the writer lock. A persisted proof takes precedence, and
+ * a pre-lock observation applies only to the same bearer and account that were observed.
  */
-export function anthropicOrganizationHeldElsewhere(
-  accounts: readonly ProviderAccount[], accountId: string, incoming: OAuthCredentials,
-): boolean {
+export function anthropicReauthSlotGuard(
+  accountId: string, incoming: OAuthCredentials, observed: AnthropicSlotOrganizations,
+): (accounts: readonly ProviderAccount[]) => void {
   const organization = anthropicOrganization(incoming);
-  const identity = loginIdentity(incoming);
-  return organization !== undefined && accounts.some(row => row.id !== accountId
-    && loginIdentity(row.credential) === identity && anthropicOrganization(row.credential) === organization);
-}
-
-/**
- * Whether a reauth of `accountId` with `incoming` must be refused: the row now belongs to another
- * account, is proven to serve another organization, or another row of the account already proves
- * the incoming organization. The login checks it once for a fast answer and the serialized writer
- * checks it again against the rows it loaded, so a login or reauth committed in between cannot
- * leave two rows on one organization or overwrite a grant the earlier check no longer describes.
- */
-export function anthropicReauthSlotRefused(
-  accounts: readonly ProviderAccount[], accountId: string, incoming: OAuthCredentials,
-): boolean {
-  const target = accounts.find(row => row.id === accountId)?.credential;
-  if (target?.accountId && incoming.accountId && target.accountId !== incoming.accountId) return true;
-  return (target !== undefined && anthropicOrganizationsConflict(target, incoming))
-    || anthropicOrganizationHeldElsewhere(accounts, accountId, incoming);
-}
-
-/**
- * The writer-side half of that check for `saveAccountCredential`'s `assertAccounts`: the login's
- * own check read a snapshot, so the writer repeats it on the rows it loaded under the lock.
- */
-export function anthropicReauthSlotGuard(accountId: string, incoming: OAuthCredentials): (accounts: readonly ProviderAccount[]) => void {
+  const accountUuid = slotAccountUuid(incoming);
   return accounts => {
-    if (anthropicReauthSlotRefused(accounts, accountId, incoming)) throw new OAuthReauthIdentityMismatchError();
+    const target = accounts.find(row => row.id === accountId)?.credential;
+    if (!target) return;
+    const targetAccountUuid = slotAccountUuid(target);
+    if (targetAccountUuid && accountUuid && targetAccountUuid !== accountUuid) throw new OAuthReauthIdentityMismatchError();
+    if (!organization || !accountUuid) return;
+    const targetOrganization = slotOrganization(target, observed);
+    if ((targetOrganization && targetOrganization !== organization)
+      || anthropicSiblingSlots(accounts, accountId, accountUuid).some(row => slotOrganization(row.credential, observed) === organization)) {
+      throw new OAuthReauthIdentityMismatchError();
+    }
   };
 }

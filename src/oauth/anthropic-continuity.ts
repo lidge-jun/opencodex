@@ -1,15 +1,24 @@
 import { detectClaudeCodeTokenAsync, hasClaudeCredentialContinuity } from "./local-token-detect";
-import { normalizeAnthropicIdentity, resolveAnthropicAccountIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
+import { anthropicOrganization, normalizeAnthropicIdentity, resolveAnthropicAccountIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
+import { anthropicSiblingSlots } from "./anthropic-login-slot";
 import { credentialGeneration, type AuthStore } from "./store";
 import { mergeOAuthOrganizationName, mergeOAuthPlan } from "./plan";
 import { REFRESH_SKEW_MS } from "./refresh-policy";
-import type { OAuthCredentials, ProviderAccountSet } from "./types";
+import type { OAuthCredentials, ProviderAccount, ProviderAccountSet } from "./types";
 import type { AnthropicInstanceId } from "../providers/anthropic-instance-id";
 
 export type ClaudeCredentialObservation =
   | { kind: "absent" }
   | { kind: "unresolved" | "different"; diskGeneration: string }
-  | { kind: "adopt"; credential: OAuthCredentials; diskGeneration: string };
+  | ClaudeCredentialAdoption;
+
+type ClaudeCredentialAdoption = {
+  kind: "adopt";
+  credential: OAuthCredentials;
+  diskGeneration: string;
+  /** Shared-token continuity leaves this absent. A fully rotated grant may have an unknown old org. */
+  previousOrganization?: string | null;
+};
 
 export async function newerClaudeCredential(
   stored: OAuthCredentials, now: number, signal?: AbortSignal,
@@ -21,6 +30,7 @@ export async function newerClaudeCredential(
 export async function newerClaudeCredentialForInstance(
   instance: AnthropicInstanceId, stored: OAuthCredentials, now: number, signal?: AbortSignal,
   resolveIdentity: AnthropicIdentityResolver = resolveAnthropicAccountIdentity,
+  slot?: { accountId: string; accounts: readonly ProviderAccount[] },
 ): Promise<ClaudeCredentialObservation> {
   if (instance === "anthropic2") return { kind: "absent" };
   if (stored.source !== "local-cli") return { kind: "absent" };
@@ -47,15 +57,37 @@ export async function newerClaudeCredentialForInstance(
   if (oldIdentity.accountUuid !== newIdentity.accountUuid) return { kind: "different", diskGeneration };
   // The same person signed in to another organization holds a different grant and quota. A stored
   // proof saved before organizations were recorded asks its own still-usable bearer once.
-  const oldOrganization = oldIdentity.organizationUuid ?? (newIdentity.organizationUuid && stored.expires > now
-    ? normalizeAnthropicIdentity(await resolveIdentity(stored.access, signal), stored.access)?.organizationUuid : undefined);
-  if (oldOrganization && newIdentity.organizationUuid && oldOrganization !== newIdentity.organizationUuid) {
+  let oldOrganization = oldIdentity.organizationUuid;
+  const newOrganization = newIdentity.organizationUuid;
+  if (!oldOrganization && before && newOrganization && stored.expires > now) {
+    const legacy = normalizeAnthropicIdentity(await resolveIdentity(stored.access, signal), stored.access);
+    if (legacy?.accountUuid === oldIdentity.accountUuid) oldOrganization = legacy.organizationUuid;
+  }
+  if (oldOrganization && newOrganization && oldOrganization !== newOrganization) {
     return { kind: "different", diskGeneration };
   }
-  return { kind: "adopt", diskGeneration: credentialGeneration(disk), credential: {
+  if ((!oldOrganization || !newOrganization) && slot
+    && anthropicSiblingSlots(slot.accounts, slot.accountId, newIdentity.accountUuid).length > 0) {
+    return { kind: "unresolved", diskGeneration };
+  }
+  return { kind: "adopt", diskGeneration, previousOrganization: oldOrganization ?? null, credential: {
     ...stored, ...disk, accountId: newIdentity.accountUuid, anthropicIdentity: newIdentity, plan: newProof?.plan ?? null,
     organizationName: newProof?.organizationName ?? null,
   } };
+}
+
+/** Check the latest roster while adoption owns the auth-store writer lock. */
+export function claudeAdoptionSlotCurrent(
+  accounts: readonly ProviderAccount[], accountId: string, adoption: ClaudeCredentialAdoption,
+): boolean {
+  const credential = adoption.credential;
+  const identity = normalizeAnthropicIdentity(credential.anthropicIdentity, credential.access);
+  if (!identity) return true;
+  const siblings = anthropicSiblingSlots(accounts, accountId, identity.accountUuid);
+  if (siblings.length === 0) return true;
+  const organization = identity.organizationUuid;
+  if (adoption.previousOrganization !== undefined && (!organization || organization !== adoption.previousOrganization)) return false;
+  return !organization || !siblings.some(row => anthropicOrganization(row.credential) === organization);
 }
 
 /**

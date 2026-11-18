@@ -165,18 +165,13 @@ function credsFrom(data: AnthropicTokenResponse, refreshFallback?: string): OAut
 async function withAccountProfile(credential: OAuthCredentials, signal?: AbortSignal): Promise<OAuthCredentials> {
   const profile = await resolveAnthropicAccountIdentity(credential.access, signal);
   if (!profile) return credential;
-  // Token-response identity remains authoritative here; enrichment changes display metadata only.
+  const { plan, organizationName, ...profileIdentity } = profile;
   const identity = normalizeAnthropicIdentity(credential.anthropicIdentity, credential.access);
-  if (identity && identity.accountUuid !== profile.accountUuid) return credential;
-  // The same bearer's profile names the grant's organization when the token response did not.
-  const organization = identity && !identity.organizationUuid && profile.organizationUuid
-    ? { anthropicIdentity: { ...identity, organizationUuid: profile.organizationUuid } } : {};
-  // A profile that names another organization than the token response did observed a different
-  // grant: neither its tier nor its name describes this one, so both stay unobserved.
-  if (identity?.organizationUuid && identity.organizationUuid !== profile.organizationUuid) {
-    return { ...credential, ...organization };
-  }
-  return { ...credential, ...organization, plan: profile.plan ?? null, organizationName: profile.organizationName ?? null };
+  // A proven token response owns the account and any organization it reported.
+  if (identity && (identity.accountUuid !== profileIdentity.accountUuid
+    || (identity.organizationUuid && identity.organizationUuid !== profileIdentity.organizationUuid))) return credential;
+  return { ...credential, accountId: profileIdentity.accountUuid, anthropicIdentity: profileIdentity,
+    plan: plan ?? null, organizationName: organizationName ?? null };
 }
 
 export class AnthropicOAuthFlow extends OAuthCallbackFlow {

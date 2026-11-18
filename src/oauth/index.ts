@@ -97,11 +97,11 @@ export { OAUTH_REFRESH_LOCK_WAIT_MS, peekAuthStore, peekOAuthRefreshIntent } fro
 import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
 
 import { REFRESH_SKEW_MS } from "./refresh-policy";
-import { newerClaudeCredentialForInstance, captureAnthropicCredentialOwnerForInstance, claudeCredentialGenerationCurrent } from "./anthropic-continuity";
+import { newerClaudeCredentialForInstance, captureAnthropicCredentialOwnerForInstance, claudeAdoptionSlotCurrent, claudeCredentialGenerationCurrent } from "./anthropic-continuity";
 import { anthropicSubscriptionLabel } from "../providers/anthropic-subscription";
 import { mergeOAuthOrganizationName, normalizeOAuthPlan, mergeOAuthPlan, oauthOrganizationNameSummary, withMergedOAuthLabels } from "./plan";
 import { mergeAnthropicIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
-import { anthropicReauthSlotGuard, anthropicReauthSlotRefused } from "./anthropic-login-slot";
+import { anthropicReauthSlotGuard, observeAnthropicSlotOrganizations } from "./anthropic-login-slot";
 import { AnthropicCrossInstanceDuplicateError, AnthropicLocalCliImportError, assertAnthropicCredentialSource } from "./store-anthropic-instance";
 export interface OAuthAccessSnapshot {
   workbuddy?: import("./types").WorkBuddyOAuthMetadata;
@@ -885,11 +885,9 @@ export async function refreshAnthropicAccountWithLock(
     const owns = captureAnthropicCredentialOwnerForInstance(provider, accountSet, accountId);
     const generation = credentialGeneration(stored);
     let pendingIntent = readOAuthRefreshIntent(provider, accountId);
-    const observed = await newerClaudeCredentialForInstance(provider, stored, now(), deps.signal, deps.resolveIdentity);
-    // A write that depends on the CLI credential re-reads it: the non-adopting checks below run
-    // now, and adoption re-reads again inside the serialized writer (afterPrePersistRead), so a CLI
-    // rotation while the writer was queued is still caught. The read is async and never kills the
-    // Keychain child (#8161); the writer's predicate only consumes its result.
+    const observed = await newerClaudeCredentialForInstance(provider, stored, now(), deps.signal, deps.resolveIdentity,
+      { accountId, accounts: accountSet.accounts });
+    // Adoption defers its CLI re-read until it holds the writer lock, catching queued rotations.
     let diskVerified = observed.kind === "absent" || observed.kind === "adopt"
       ? undefined : await claudeCredentialGenerationCurrent(observed.diskGeneration, now);
     const assertOwner = (store: AuthStore, checkDisk = true) => {
@@ -908,7 +906,10 @@ export async function refreshAnthropicAccountWithLock(
           await deps.afterPrePersistRead?.();
           diskVerified = await claudeCredentialGenerationCurrent(diskGeneration, now);
         },
-        assertOwnership: assertOwner,
+        assertOwnership: store => {
+          assertOwner(store);
+          if (!claudeAdoptionSlotCurrent(store[provider]?.accounts ?? [], accountId, observed)) throw new OAuthTokenRefreshStaleError();
+        },
       });
       // A superseding write did not adopt our candidate. Its pending intent remains owned by it.
       if (outcome.superseded) throw new OAuthTokenRefreshStaleError();
@@ -1692,18 +1693,16 @@ export async function runLogin(
           .filter(account => account.id !== opts.reauthAccountId).map(account => account.credential))
         : existing.accountId && cred.accountId
           ? existing.accountId === cred.accountId
-            && !anthropicReauthSlotRefused(getAccountSet(provider)?.accounts ?? [], opts.reauthAccountId, cred)
           : existing.email && cred.email
             ? existing.email.trim().toLowerCase() === cred.email.trim().toLowerCase()
             : false;
-      if (!identityMatches) {
-        throw new OAuthReauthIdentityMismatchError();
-      }
-      // Proven same account: a reauth whose tier read failed keeps the stored label.
+      if (!identityMatches) throw new OAuthReauthIdentityMismatchError();
+      const assertAccounts = isAnthropicOAuthInstance(provider) ? anthropicReauthSlotGuard(opts.reauthAccountId, cred,
+        await observeAnthropicSlotOrganizations(getAccountSet(provider)?.accounts ?? [], cred)) : undefined;
       const reauthCred = withMergedOAuthLabels(cred, existing);
       const written = await (deps.saveAccountCredential ?? saveAccountCredential)(provider, opts.reauthAccountId, reauthCred, {
         assertBeforePersist: deps.assertCurrentOwner,
-        ...(isAnthropicOAuthInstance(provider) ? { assertAccounts: anthropicReauthSlotGuard(opts.reauthAccountId, reauthCred) } : {}),
+        assertAccounts,
         rotateLoginId: true,
         clearAutomaticPause: true,
       });

@@ -322,19 +322,18 @@ Regression coverage: `tests/adapters/anthropic/anthropic-account-pause.test.ts`,
 
 ## Claude credential identity
 
-`src/oauth/anthropic-identity.ts` observes only authenticated `account.uuid` from the exact
-bearer's fixed-origin profile response or the token exchange in `src/oauth/anthropic.ts`.
-Its private versioned proof binds the UUID to SHA-256 of the access bearer. Store normalization
-in `src/oauth/store.ts` drops malformed or stale proofs; account summaries omit the entire field.
-Profile observations reject redirects and use a ten-second deadline and 64 KiB body limit.
-Organization, email, generic account ID, disk location and active selection do not establish proof. An account can join several organizations; each grant serves one. The proof may carry the bearer-observed `organizationUuid` (UUID, lowercased), a slot scope, never identity. `src/oauth/anthropic-login-slot.ts` lets login and CLI import write the same-organization row, else an unknown one; a proven other organization gets a new row. Unknown rows are asked through their own unexpired bearer before the lock, never rewritten. Reauth refuses an organization another row proves; continuity, cross-pool checks and plan labels treat proven organizations as different accounts. Own-grant refresh keeps the stored organization unless fresh evidence names one; it never throws over it.
+`src/oauth/anthropic-identity.ts` binds authenticated `account.uuid` to the access bearer's SHA-256. The fixed-origin profile rejects redirects
+and applies a ten-second deadline and 64 KiB body limit. `src/oauth/store.ts` drops invalid or stale proofs, and summaries omit the proof.
+Each grant serves one organization. Its proof may carry `organizationUuid` (a lowercase UUID) as slot scope. Browser login and refresh in
+`src/oauth/anthropic.ts` fill missing token-response proof from the same bearer's profile. A conflicting account or organization leaves token evidence and labels untouched.
+`src/oauth/anthropic-login-slot.ts` chooses the same organization or an unknown row for login and CLI import. A proven other organization gets a new row.
+Login and reauth probe unknown same-account rows with their own unexpired bearers before the store lock. The reauth guard checks each observation against
+the current bearer and account, then refuses a different proven organization or one a sibling proves. Own-grant refresh retains scope until fresh proof names one.
 
-`src/oauth/anthropic-continuity.ts` permits usable changed local-CLI generations with a shared
-nonempty token. A fully rotated pair instead requires matching authenticated account UUIDs.
-The old bearer may use its stored bound proof or a fresh observation; independent old/new
-observations run in parallel. Shared-refresh adoption cannot copy proof to a new access bearer.
-A provider refresh also drops proof unless its new bearer carries fresh authenticated evidence;
-conflicting authenticated UUIDs refuse persistence. Generic display metadata is not promoted to proof.
+`src/oauth/anthropic-continuity.ts` accepts usable changed CLI generations with a shared nonempty token. Full rotation requires matching authenticated account UUIDs.
+The old bearer uses stored or fresh proof. Independent old/new reads run in parallel, and stored proof missing its organization may prompt one profile read.
+Full rotation in a multi-slot account requires matching organizations. The writer checks the current roster for this requirement and sibling ownership of the incoming organization.
+Shared-refresh adoption cannot copy proof to a new bearer. Provider refresh needs new bearer proof and refuses a conflicting authenticated account UUID.
 
 The refresh owner captures login ID, token generation and identity metadata before observation.
 It rechecks them, pause/removal and selection revision after observation and inside serialized persistence.

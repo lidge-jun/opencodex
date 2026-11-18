@@ -142,10 +142,10 @@ proves the request to the server, and only the proof tells the caller that the a
 and not from a process that took the port. `ocx status` requires the proof before it prefers the
 live proxy's `/api/startup-health` verdict over its own shell-local probe (#5977). Local `ocx usage compare` also requires proof for each exact query and pins the runtime record across both windows with 60-second direct reads. Connected-stop preflight pins the runtime record across a credential-free health challenge and an exact `GET /api/stop` read with response proof; the read grant authorizes no stop POST or other route (see the [runtime contract](runtime.md#lifecycle)).
 
-The desktop tray uses the same read-v1 contract for its fixed GET allowlist in
-`src/lib/local-management-capability.ts`, including `/api/oauth/accounts` and
-`/api/providers/keys`. Provider selectors and `quota=1` remain signed into the
-exact query; these grants authorize no account or API-key mutations.
+The tray uses the read-v1 GET allowlist in `src/lib/local-management-capability.ts`, including `/api/oauth/accounts` and `/api/providers/keys`.
+The signature covers the provider selector and `quota=1`. The grants authorize only reads.
+`GET /api/oauth/accounts` includes the stored Anthropic `organizationName` only for `gui-session` and `admin-token` principals.
+Local-read capabilities and Remote Link account lists omit the field.
 
 The native desktop account switch uses a separate single-use capability for exactly
 `PUT /api/codex-auth/active`, `PUT /api/oauth/accounts/active`, and
