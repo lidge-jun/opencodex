@@ -290,14 +290,16 @@ function messageStartWithModel(frame: string, model: string): { text: string; ca
   const replacement = `data: ${JSON.stringify(parsed)}`;
   // Keep the original canonical framing for error-tagged starts. The final filter
   // separately determines whether the upstream error tag qualifies for normalization.
-  if (lines.some(line => sseFieldValue(line, "event") === "error")) {
+  const event = lines.map(line => sseFieldValue(line, "event")).findLast(value => value !== null);
+  if (event === "error") {
     return { text: `event: message_start\n${replacement}\n\n`, canonicalError: true };
   }
   let replaced = false;
   const text = frame.replace(/[^\r\n]*(?:\r\n|\r|\n)/g, line => {
     const ending = line.match(/(?:\r\n|\r|\n)$/)![0];
     if (sseFieldValue(line.slice(0, -ending.length), "data") === null) return line;
-    if (replaced) return "";
+    // Retain a field on this line so adjacent CR and LF terminators cannot fuse.
+    if (replaced) return "data:" + ending;
     replaced = true;
     return replacement + ending;
   });

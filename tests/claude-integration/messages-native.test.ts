@@ -81,6 +81,17 @@ const SSE_FRAMES = [
 ];
 const sseText = (frames: readonly { event: string; data: unknown }[]) => frames.map(frame => `event: ${frame.event}\ndata: ${JSON.stringify(frame.data)}\n\n`).join("");
 const SSE_TEXT = sseText(SSE_FRAMES);
+async function echoChunks(chunks: string[]): Promise<string> {
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      for (const chunk of chunks) controller.enqueue(encoder.encode(chunk));
+      controller.close();
+    },
+  });
+  return new Response(echoRequestedModel(body, "anth/claude-x", new MessagesSseFrameContext())).text();
+}
+
 /** What the client receives: the upstream stream with its selector echoed in message_start. */
 const ECHOED_SSE_TEXT = sseText(SSE_FRAMES.map((frame, index) => index === 0
   ? { ...frame, data: { ...frame.data, message: { ...(frame.data as { message: Record<string, unknown> }).message, model: "anth/claude-x" } } }
@@ -258,16 +269,40 @@ describe("managed native Messages", () => {
     }
   });
 
-  test.each(["\n", "\r\n", "\r"])("preserves message_start control fields with line ending %j", async newline => {
-    const source = ["id: stream-42", "event: message_start",
-      'data: {"type":"message_start",', ": keep this comment", "retry: 1500",
-      'data: "message":{"model":"provider"}}', "", ""].join(newline);
-    const expected = ["id: stream-42", "event: message_start",
-      'data: {"type":"message_start","message":{"model":"anth/claude-x"}}',
-      ": keep this comment", "retry: 1500", "", ""].join(newline);
-    expect(await new Response(echoRequestedModel(new Response(source).body!, "anth/claude-x",
-      new MessagesSseFrameContext())).text()).toBe(expected);
+  test.each([
+    ["LF", "\n", "\n", "\n"],
+    ["CRLF", "\r\n", "\r\n", "\r\n"],
+    ["CR", "\r", "\r", "\r"],
+    ["mixed", "\r\n", "\r", "\n"],
+  ])("preserves multiline start and following ping with %s endings", async (_name, newline, commentEnd, dataEnd) => {
+    const prefix = ["id: stream-42", "event: message_start",
+      'data: {"type":"message_start",', "retry: 1500", ""].join(newline);
+    const comment = ": keep this comment" + commentEnd;
+    const ping = 'event: ping\ndata: {"type":"ping"}\n\n';
+    const source = prefix + comment + 'data: "message":{"model":"provider"}}' + dataEnd + dataEnd + ping;
+    const expected = prefix.replace('data: {"type":"message_start",',
+      'data: {"type":"message_start","message":{"model":"anth/claude-x"}}') +
+      comment + "data:" + dataEnd + dataEnd + ping;
+    for (const chunks of [[source], [...source]]) {
+      const actual = await echoChunks(chunks);
+      expect(actual.replace(/\r\n|\r/g, "\n").split("\n\n").map(frame =>
+        frame.split("\n").filter(line => line.startsWith("event: ")))).toEqual([
+        ["event: message_start"], ["event: ping"], [],
+      ]);
+      expect(actual).toBe(expected);
+    }
   });
+
+  test.each([["error", "message_start"], ["message_start", "error"]])(
+    "uses the final event field for echo framing (%s then %s)", async (first, last) => {
+      const controls = 'id: stream-42\n: keep this comment\n';
+      const events = 'event: ' + first + '\nevent: ' + last + '\n';
+      const source = controls + events + 'data: {"type":"message_start","message":{"model":"provider"}}\n\n';
+      const data = 'data: {"type":"message_start","message":{"model":"anth/claude-x"}}\n\n';
+      const expected = last === "error" ? "event: message_start\n" + data : controls + events + data;
+      expect(await echoChunks([source])).toBe(expected);
+    },
+  );
 
   test("relays a post-cutoff frame and split LF continuation unchanged", async () => {
     const prefix = ":" + "a".repeat(65_536 - 3) + "\n\r";
