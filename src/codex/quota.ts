@@ -41,7 +41,7 @@ type QuotaDiskFile = {
 type MainPolicyQuota = { identityKey: string; quota: StoredAccountQuota };
 /** Fresh WHAM topology proof is consumed by the merge, never retained in a cache or DTO. */
 type MainPolicyQuotaObservation = Omit<StoredAccountQuota, "updatedAt"> & { shortWindowAbsent?: true; monthlyWindowAbsent?: true };
-// Служебная топология не меняет публичную форму policy observation.
+// Keep topology metadata out of the public policy-observation shape.
 const shortOnlyTopology = new WeakMap<object, boolean>();
 let mainPolicyQuota: MainPolicyQuota | null = null;
 /**
@@ -96,7 +96,7 @@ const WEEKLY_WINDOW_MIN_MINUTES = WEEKLY_WINDOW_MIN_SECONDS / 60;
 export { resetAtToMs };
 
 const accountQuota = new Map<string, StoredAccountQuota>();
-// Доказательство принадлежит incarnation credential, не одному лишь ID слота; не пишется на диск.
+// Bind proof to the credential incarnation, not just the slot ID; never persist it.
 type ShortOnlyProof = { observedAt: number; mainWriter?: MainQuotaWriter; poolIdentity?: string };
 const shortOnlyProofs = new Map<string, ShortOnlyProof>();
 function shortOnlyProofIsLive(accountId: string, proof: ShortOnlyProof): boolean {
@@ -454,7 +454,7 @@ export function setAccountQuotaFromParsed(
     ...(mayRetireShort && policyQuota?.monthlyWindowAbsent === true ? { monthlyWindowAbsent: true as const } : {}),
   };
   const next = mergeAccountQuota(displayQuota, legacyExisting, updatedAt);
-  // Противоречащая топология отменяет proof, даже если usage длинного окна не распарсился.
+  // Contradictory topology revokes proof even when long-window usage could not be parsed.
   const proof = shortOnlyProofs.get(accountId);
   if (snapshotHasWeekly(next) || snapshotHasMonthly(next) || snapshotHasCustom(next)
     || shortOnlyObservation === false) {
@@ -998,7 +998,7 @@ export function getAccountQuota(accountId: string): StoredAccountQuota | null {
   if (!quota) return null;
   const proof = shortOnlyProofs.get(accountId);
   if (proof && shortOnlyProofIsLive(accountId, proof)) return { ...quota, shortOnlyObservedAt: proof.observedAt };
-  // Сохранённый snapshot сам по себе не доказывает текущую credential identity.
+  // A persisted snapshot alone cannot establish the current credential identity.
   return quota.shortOnlyObservedAt === undefined ? quota : { ...quota, shortOnlyObservedAt: undefined };
 }
 

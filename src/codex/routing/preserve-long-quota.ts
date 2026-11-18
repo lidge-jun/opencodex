@@ -1,6 +1,6 @@
 import { resetAtToMs, type StoredAccountQuota } from "../quota-types";
 
-// Частичные ответы не должны бесконечно продлевать доказательство short-only.
+// Partial responses must not extend short-only evidence indefinitely.
 const SHORT_ONLY_EVIDENCE_TTL_MS = 6 * 60 * 60_000;
 
 function futureReset(reset: number | undefined, now: number): number {
@@ -26,7 +26,7 @@ function longestWindow(quota: StoredAccountQuota | null, now: number): { tier: n
   return { tier: 3, reset: Infinity };
 }
 
-/** Возвращает стабильный shortlist; окончательный usage tie-break остаётся общим. */
+/** Return a stable shortlist; leave the final usage tie-break to the shared picker. */
 export function preserveLongQuotaCandidates(
   ids: readonly string[], quotaFor: (id: string) => StoredAccountQuota | null, now: number,
 ): string[] {
@@ -35,7 +35,7 @@ export function preserveLongQuotaCandidates(
   const sameTier = ranked.filter(row => row.tier === tier);
   const reset = Math.min(...sameTier.map(row => row.reset));
   let candidates = sameTier.filter(row => row.reset === reset).map(row => row.id);
-  // Попарное «сравнивать только при наличии обоих» нетранзитивно при трёх аккаунтах.
+  // Comparing short resets only when both exist is nontransitive across three accounts.
   const shorts = candidates.map(id => futureReset(quotaFor(id)?.shortResetAt, now));
   if (shorts.every(Number.isFinite)) {
     const shortReset = Math.min(...shorts);
