@@ -1,0 +1,53 @@
+---
+title: StepCode CLI (suscripción)
+description: Envíe solicitudes de Codex a través de StepCode CLI con una suscripción Step Plan.
+---
+
+OpenCodex puede usar una suscripción Step Plan mediante StepCode. El preajuste `step-cli`
+ejecuta la CLI oficial de StepCode (`step --sdk-stdio`) y le declara las herramientas de cada
+solicitud para que el cliente pueda aprobarlas y ejecutarlas:
+
+```json
+{
+  "providers": {
+    "step-cli": {
+      "adapter": "step-cli",
+      "baseUrl": "https://api.stepfun.com/step_plan"
+    }
+  }
+}
+```
+
+- **Requisitos.** Instale StepCode CLI en `~/.stepcode/bin/step` e inicie sesión con `step login`.
+  La CLI obtiene su credencial de `auth.json` y se conecta a `api.stepfun.com/step_plan`.
+- **Credenciales.** OpenCodex no lee, copia ni reenvía el token de Step. Al igual que `claude-cli`,
+  este preajuste tiene el campo `keyOptional`. Para facturación directa por API, use `stepfun`.
+- **Una cuenta para el proxy.** Todas las solicitudes enviadas por esta ruta consumen la cuota de
+  la cuenta Step Plan del usuario que ejecuta OpenCodex. El plan mide el consumo por solicitud y
+  aplica límites de cinco horas y semanales. Codex comparte la cuota con las sesiones de `step`.
+- **Herramientas.** Las herramientas se declaran a través del SDK de StepCode. El adaptador recibe
+  sus llamadas por stdio y el cliente se encarga de aprobarlas y ejecutarlas. OpenCodex no monta un
+  servidor MCP para esta ruta ni guarda los resultados de herramientas por su cuenta.
+- **Un proceso por conversación.** StepCode conserva el contexto dentro de su proceso. OpenCodex
+  asocia ese proceso a la identidad autenticada, el proveedor y el hilo. Si la solicitud carece de
+  credenciales, se abre un proceso por solicitud y las llamadas a herramientas no se pueden
+  continuar entre solicitudes. Mantenga el catálogo de herramientas al devolver un resultado
+  pendiente. Si el proceso termina, OpenCodex informa del error. Los resultados ya entregados no
+  se pueden reproducir por esta ruta.
+- **Límites de sesión.** Si una herramienta tarda más de dos minutos en devolver un resultado,
+  el turno informa del error `step_cli_tool_result_too_late`. El protocolo no permite reemplazar
+  el mensaje de sistema de la sesión. OpenCodex antepone las instrucciones del cliente al turno.
+- **Catálogo de herramientas.** El límite es de **128 herramientas / 2 MiB**, igual que en
+  `qoder`, `codebuddy` y `claude-cli`. Codex incorpora todas las herramientas MCP a su catálogo.
+  En Codex 0.162.0 se midieron 1749 herramientas y 2,5 MB. Si supera el límite, el error indica
+  ambos valores. Desactive o restrinja los servidores MCP de este proveedor.
+- **Imágenes.** Los modelos se anuncian como compatibles con texto. Aunque `step-5-preview` y
+  `step-3.7-flash` pueden aceptar imágenes en el servicio, esta ruta las rechaza con
+  `unsupported_input_modality`. Si hay un servicio de visión auxiliar, convierte las imágenes en
+  descripciones de texto antes de reenviarlas.
+- **Verificación.** Ejecute `ocx provider test step-cli`.
+
+> **Condiciones.** Este preajuste usa su suscripción Step Plan mediante la CLI oficial. La
+> documentación del plan describe los endpoints para herramientas de programación de terceros.
+> StepCode publica `--sdk-stdio` para clientes externos con licencia MIT. Consulte con 阶跃星辰
+> si las condiciones de su plan permiten usar esa interfaz a través de un proxy.
