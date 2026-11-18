@@ -101,7 +101,8 @@ If the listener cannot prove its role, a standalone runtime record can still aut
 when its recorded process creation identity matches the live PID and there is no Link evidence.
 An older record without a creation identity requires a same-user OpenCodex start process that owns
 the recorded listener. A wildcard record requires a wildcard listener, and an IPv4 loopback record
-requires an exact loopback listener. Linux and macOS also check the process home. Windows uses the
+requires an exact loopback listener. On Linux and macOS, the process home and the caller's home
+must resolve to the same directory, including through symlinks. Windows uses the
 owner SID, start arguments, and exact listener ownership because CIM does not expose the process environment.
 The CLI leaves the process running if it cannot establish that match or verify a supervisor.
 If a live tracked PID could still be a Link Child, `ocx stop` leaves it running until it can verify

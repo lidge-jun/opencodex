@@ -1,4 +1,4 @@
-import { lstatSync } from "node:fs";
+import { lstatSync, statSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { restoreNativeCodexAsync } from "../codex/inject";
 import type { RetainedCodexProviderTable } from "../codex/inject/restore";
@@ -15,6 +15,7 @@ import type { OutstandingTeardown } from "../config/pending-teardown";
 import type { LinkInheritedTeardown } from "../client/stop-native-handoff";
 import { loadConfig } from "../config";
 import { readBoundedResponseBody } from "../lib/bounded-body";
+import { sameFileIdentity, type FileIdentity } from "../lib/file-identity";
 import { createLocalAttestationChallenge, LOCAL_ATTESTATION_CHALLENGE_HEADER, LOCAL_ATTESTATION_PROOF_HEADER, verifyLocalAttestationProof } from "../lib/local-management-attestation";
 import { LOCAL_MANAGEMENT_READ_PATHS } from "../lib/local-management-capability";
 import { gracefulStopHost, isProcessAlive, ProxyOwnershipRefusedError, stopRequestFetch as directStopRequestFetch } from "../lib/process-control";
@@ -116,6 +117,14 @@ export async function classifyStopRole(
   return live?.role === "client" && live.port !== sibling ? "connected" : "unknown";
 }
 
+function readStopDirectoryIdentity(path: string | undefined): FileIdentity | undefined {
+  if (!path) return;
+  try {
+    const stat = statSync(path, { bigint: true });
+    if (stat.isDirectory()) return stat;
+  } catch { /* An unreadable directory cannot establish identity. */ }
+}
+
 /** Called after role discovery yields no affirmative result. Never adopts an orphan PID. */
 export async function proveStandaloneStopRecord(
   runtime: RuntimePortState | null, pid: number, receipts: readonly OutstandingTeardown[],
@@ -130,6 +139,7 @@ export async function proveStandaloneStopRecord(
   const { isLegacyWindowsStartCommandLine, readClientStopProcessStart, readLegacyStopProcessHome } = await import("../client/stop-teardown-owner");
   const start = readClientStopProcessStart(pid);
   if (!start) return;
+  let legacyHomeIsCurrent: (() => boolean) | undefined;
   if (runtime.startTime !== undefined) {
     if (runtime.startTime !== start) return;
   } else {
@@ -138,8 +148,19 @@ export async function proveStandaloneStopRecord(
     const windows = process.platform === "win32";
     // CIM does not expose the environment. Windows uses the SID-checked creation
     // identity above, exact start argv and ownership of the recorded bind instead.
-    if (windows ? !isLegacyWindowsStartCommandLine(command)
-      : !isOcxStartCommandLine(command) || readLegacyStopProcessHome(pid) !== getConfigDir()) return;
+    if (windows) {
+      if (!isLegacyWindowsStartCommandLine(command)) return;
+    } else {
+      if (!isOcxStartCommandLine(command)) return;
+      const home = readStopDirectoryIdentity(getConfigDir());
+      if (!home) return;
+      const matchesHome = (path: string | undefined) => {
+        const identity = readStopDirectoryIdentity(path);
+        return identity !== undefined && sameFileIdentity(identity, home);
+      };
+      legacyHomeIsCurrent = () => matchesHome(readLegacyStopProcessHome(pid)) && matchesHome(getConfigDir());
+      if (!legacyHomeIsCurrent()) return;
+    }
     const { inspectIpv4LoopbackListener, ownsLegacyStopBind, scanListenPidsForAddress } = await import("../server/port-reclaim");
     const bind = runtime.hostname?.trim().replace(/^\[(.*)\]$/, "$1");
     const wildcard = bind === "0.0.0.0" || bind === "::";
@@ -154,12 +175,12 @@ export async function proveStandaloneStopRecord(
       const listeners = scanListenPidsForAddress(runtime.port, address);
       if (!listeners.ok || listeners.pids.length !== 1 || listeners.pids[0] !== pid) return;
     }
-    if (readClientStopProcessStart(pid) !== start) return;
+    if (readClientStopProcessStart(pid) !== start || legacyHomeIsCurrent?.() === false) return;
   }
   return () => {
     if (readClientConnectionState().kind !== "disconnected" || !hasNoLinkReceipt()) throw unsupportedConnectedStop();
     if (isProcessAlive(pid) && (readClientStopProcessStart(pid) !== start
-      || !Bun.deepEquals(readRuntimePort(pid), runtime, true))) throw unclassifiedStopTarget(pid);
+      || !Bun.deepEquals(readRuntimePort(pid), runtime, true) || legacyHomeIsCurrent?.() === false)) throw unclassifiedStopTarget(pid);
   };
 }
 

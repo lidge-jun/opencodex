@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { stopProxyGracefully } from "../../src/lib/process-control";
+import { killProxy, stopProxyGracefully } from "../../src/lib/process-control";
 import { performStopTeardown } from "../../src/server/stop-teardown";
 import { markSiblingStart, resetSiblingStartForTests } from "../../src/codex/sibling-start";
 import type { CodexNativeRestoreResult } from "../../src/codex/inject";
@@ -167,7 +167,7 @@ describe("parent CLI shared teardown completion", () => {
     expect(JSON.parse(child.stdout)).toEqual({ proved });
   });
 
-  for (const homeEvidence of ["absolute", "relative-match", "relative-mismatch"] as const) test.skipIf(
+  for (const homeEvidence of ["absolute", "relative-match", "relative-mismatch", "relative-alias", "retargeted-alias"] as const) test.skipIf(
     !["linux", "darwin", "win32"].includes(process.platform) || (process.platform === "win32" && homeEvidence !== "absolute"),
   )(
     `legacy standalone proof checks a live foreground process and its recorded listener scope (${homeEvidence})`,
@@ -175,8 +175,12 @@ describe("parent CLI shared teardown completion", () => {
       const { proveStandaloneStopRecord } = await import("../../src/cli/stop-restore");
       const hostname = process.platform === "win32" ? "127.0.0.1" : "0.0.0.0";
       const configHome = realpathSync(home);
-      process.env.OPENCODEX_HOME = configHome;
-      const cwd = homeEvidence === "relative-mismatch" ? join(configHome, "other") : configHome;
+      const usesAlias = homeEvidence === "relative-alias" || homeEvidence === "retargeted-alias";
+      const alias = join(configHome, "alias");
+      const otherHome = join(configHome, "other");
+      if (usesAlias) symlinkSync(configHome, alias);
+      process.env.OPENCODEX_HOME = usesAlias ? alias : configHome;
+      const cwd = homeEvidence === "relative-mismatch" ? otherHome : process.env.OPENCODEX_HOME;
       mkdirSync(cwd, { recursive: true });
       const scriptDir = join(home, "src", "cli");
       mkdirSync(scriptDir, { recursive: true });
@@ -185,9 +189,10 @@ describe("parent CLI shared teardown completion", () => {
         const listener = Bun.listen({ hostname: ${JSON.stringify(hostname)}, port: 0, socket: { data() {} } });
         console.log(listener.port);
       `);
+      const targetHome = homeEvidence === "absolute" ? configHome : homeEvidence === "retargeted-alias" ? alias : ".";
       const proxy = Bun.spawn([process.execPath, script, "start"], {
         cwd,
-        env: { ...process.env, OPENCODEX_HOME: homeEvidence === "absolute" ? configHome : "." },
+        env: { ...process.env, OPENCODEX_HOME: targetHome },
         stdout: "pipe", stderr: "inherit", signal: AbortSignal.timeout(15_000),
       });
       try {
@@ -195,12 +200,30 @@ describe("parent CLI shared teardown completion", () => {
         const port = Number(new TextDecoder().decode(value).trim());
         expect(port).toBeGreaterThan(0);
         const record = { pid: proxy.pid, port, hostname };
+        writeFileSync(join(configHome, "runtime-port.json"), JSON.stringify(record));
         const proof = await proveStandaloneStopRecord(record, proxy.pid, []);
         if (homeEvidence === "relative-mismatch") {
           expect(proof).toBeUndefined();
           return;
         }
-        expect(proof).toBeFunction();
+        if (!proof) throw new Error("Expected a standalone stop proof for the same home directory");
+        expect(proof).not.toThrow();
+        if (homeEvidence === "retargeted-alias") {
+          mkdirSync(otherHome);
+          writeFileSync(join(otherHome, "runtime-port.json"), JSON.stringify(record));
+          const replacement = join(configHome, "replacement-alias");
+          symlinkSync(otherHome, replacement);
+          renameSync(replacement, alias);
+          let signalAuthorized = false;
+          expect(() => killProxy(proxy.pid, () => {
+            proof();
+            signalAuthorized = true;
+            return true;
+          })).toThrow("could not verify");
+          expect(signalAuthorized).toBe(false);
+          expect(proxy.exitCode).toBeNull();
+          return;
+        }
         const wrongBind = hostname === "0.0.0.0" ? "127.0.0.1" : "0.0.0.0";
         expect(await proveStandaloneStopRecord({ ...record, hostname: wrongBind }, proxy.pid, [])).toBeUndefined();
       } finally {
