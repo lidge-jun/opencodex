@@ -348,6 +348,9 @@ OAuth, üç yerel ve bir varsayılan ChatGPT iletme önayarı. Kontrol panelinin
 anahtarı doğrular ve saklar; doğrulama sağlayıcıya özgüdür. Dikkate değer
 girdiler:
 
+[**Antigravity CLI (ACP, yerel)**](/guides/api-key-catalog/#antigravity-cli-acp-local) resmi Antigravity CLI'nin
+proxy sunucusundaki oturumunu kullanır. Katalogda kurulum adımları ve yerel, etkileşimli kullanım sınırları açıklanır.
+
 **ClinePass**, [Cline'ın şartları](https://cline.bot/tos) altında Cline Bot Inc.
 tarafından işletilen [resmi abonelik
 kataloğu](https://docs.cline.bot/getting-started/clinepass) ve [Chat Completions

@@ -30,6 +30,8 @@ describe("request peer scope", () => {
     const proxied = { origin: "https://dash.example.test", proxyAddresses: ["127.0.0.1"] };
     expect(classifyRequestPeer("public", "127.0.0.1", proxied).local).toBe(false);
     expect(classifyRequestPeer("public", "::ffff:127.0.0.1", proxied).local).toBe(false);
+    expect(classifyRequestPeer("unauthenticated-loopback", "127.0.0.1", proxied).local).toBe(true);
+    expect(classifyRequestPeer("claude-intercept", "127.0.0.1", proxied).local).toBe(true);
     // Another loopback peer that is not the declared proxy stays local; a malformed setting declares nothing.
     expect(classifyRequestPeer("public", "::1", proxied).local).toBe(true);
     expect(classifyRequestPeer("public", "127.0.0.1", { proxyAddresses: "127.0.0.1" }).local).toBe(true);

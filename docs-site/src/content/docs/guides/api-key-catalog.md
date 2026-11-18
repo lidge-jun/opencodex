@@ -857,10 +857,11 @@ once per turn and talks to it over the Agent Client Protocol on stdin and stdout
 ```
 
 - **Prerequisites:** Antigravity CLI 1.5.0 or newer on `PATH` (or `OPENCODEX_AGY_BIN` set to its absolute path),
-  signed in once with `agy acp --login` or an interactive `agy` session. A CLI that is not signed in fails the turn
+  signed in once on the proxy host with `agy acp --login` or an interactive `agy` session. A CLI that is not signed in fails the turn
   with HTTP 401 `agy_login_required`.
 - **No credential stored:** the CLI owns its Google sign-in. OpenCodex never reads, stores or forwards it, and the row
   refuses an API key, a key pool, account failover or an OAuth setting. There is one account, the CLI's, and no rotation.
+  Selecting this preset in `ocx init` skips the API key prompt.
 - **Interactive use only:** Google's staff answers on the developer forum permit a personal app to launch the official
   `agy acp` binary for the user's own account when use is interactive and user-directed, not an unattended worker pool
   or automated agent loop, and point programmatic workloads to a Gemini API key or Vertex AI ([forum answer](https://discuss.ai.google.dev/t/tos-clarification-is-t3-code-official-antigravity-acp-agent-permitted-under-the-antigravity-terms-of-service/192027/2),
@@ -869,13 +870,14 @@ once per turn and talks to it over the Agent Client Protocol on stdin and stdout
   combo's internal decision call and a route chosen by subagent fallback with HTTP 403 `agy_acp_interactive_only`, and
   configuration refuses this provider as a combo target, a combo's `decisionModel`, a subagent fallback, a
   `memoryModels` phase or the `shadowCallIntercept` target.
-- **This machine only:** a request that does not come from a loopback client on this machine (a LAN client, a hub link
-  or the hub's management listener) is refused with HTTP 403 `agy_acp_local_only`. The provider is never shared.
-  A same-machine reverse proxy or tunnel (nginx, Caddy, cloudflared, `tailscale serve`) relays remote clients over
-  loopback, so a request carrying a forwarding header (`Forwarded`, `X-Forwarded-*`, `X-Real-IP`, `Via`,
-  `CF-Connecting-IP`, `Tailscale-User-Login` and similar) is treated as remote and refused, and so is any request
-  from a loopback address you list in `dashboardTrustedProxy.proxyAddresses`. A proxy that strips every forwarding
-  header still looks local, so do not put one in front of a proxy that serves this provider.
+- **Local connections on the proxy host:** OpenCodex uses the observed peer and listener to determine locality.
+  LAN connections, hub links and the hub management listener are refused with HTTP 403 `agy_acp_local_only`.
+  Recognized forwarding headers such as `Forwarded`, `X-Forwarded-For`, `X-Real-IP`, `Via`,
+  `CF-Connecting-IP` and `Tailscale-User-Login` also cause refusal. On the public listener only,
+  OpenCodex also refuses connections from addresses listed in `dashboardTrustedProxy.proxyAddresses`.
+  An undeclared loopback relay or SSH port forward can appear local when it passes no recognized forwarding headers.
+  Declare the reverse proxy for the public listener or keep this port out of the relay. Keep the other local listeners
+  out of relays, since the declared-proxy setting applies only to the public listener.
 - **Gemini models only:** the static roster is `gemini-3.8-flash`, `gemini-4-argon` and `gemini-3.7-flash`. At each
   turn the model must also be a Gemini model the CLI offers, confirmed before the prompt is sent; anything else is
   refused. Codex reasoning effort selects the CLI's thinking level (`xhigh` selects Extra).

@@ -146,9 +146,9 @@ describe("workspace and reaping", () => {
       if (order === "tree-first") treeComplete();
       else timers[0]!();
       expect(calls).toEqual(["taskkill 99", "SIGKILL"]);
-      close();
+      if (order === "tree-first") close();
       await done;
-      if (order === "timeout") treeComplete();
+      if (order === "timeout") { close(); treeComplete(); }
       expect(calls).toEqual(["taskkill 99", "SIGKILL", "settled"]);
     }
   });

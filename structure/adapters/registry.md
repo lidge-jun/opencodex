@@ -70,9 +70,11 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   when the body metadata is malformed. A WebSocket handshake's turn-metadata header does not label later frames.
   The policy also refuses combo members, a combo's internal
   decision call (`IncomingMeta.internalDecisionCall`, set only by the JEV decision invoke), routes chosen by subagent
-  fallback (`IncomingMeta.subagentFallback`, set only where request-prepare's fallback moves the route), requests from a
-  loopback address declared in `dashboardTrustedProxy`, requests carrying reverse-proxy forwarding headers and requests
-  that are not local (`src/lib/request-peer-scope.ts`, recorded per HTTP request and per WebSocket at the listener);
+  fallback (`IncomingMeta.subagentFallback`, set only where request-prepare's fallback moves the route), and requests
+  classified as remote. Locality uses the observed connection at the listener and recognized forwarding headers
+  (`src/lib/request-peer-scope.ts`, recorded per HTTP request and per WebSocket). Declared `dashboardTrustedProxy`
+  peers are treated as remote on the public listener only. A loopback relay that carries no recognized forwarding
+  headers can appear local. For refused turns,
   `src/server/responses/agy-acp-preflight.ts` answers those with a 403 before sidecars run, and `runTurn` repeats the
   check before any probe or spawn. Each `session/prompt` reserves and reports one physical inference send from
   the shared request budget, including a retried turn. Model selection is phase-aware and fails closed when the Gemini model is not

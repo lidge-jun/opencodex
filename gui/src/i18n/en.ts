@@ -1865,7 +1865,7 @@ export const en = {
   "modal.freeTierTitle": "Free tier",
   "modal.subscriptionCliTitle": "Subscription CLI, not an API key",
   "modal.subscriptionCliWarning": "This provider does not use an API key. It drives the official Claude Code CLI signed in on this machine ({cmd}) and bills that Claude subscription account. OpenCodex stores no key for it, and a key entered here is never used. For API-key billing, add {apiProvider} instead.",
-  "modal.subscriptionCliWarningAgy": "This provider does not use an API key. It drives the official Antigravity CLI signed in on this machine ({cmd}) and bills that Google Antigravity account. Google permits it only for interactive, user-directed use, so OpenCodex serves it only to requests from this machine and refuses subagent turns, combos and subagent fallback routing. OpenCodex stores no key for it, and a key entered here is never used. For programmatic or shared workloads, add {apiProvider} instead.",
+  "modal.subscriptionCliWarningAgy": "This provider uses the official Antigravity CLI signed in on the proxy host ({cmd}). Usage bills that Google Antigravity account. Google permits interactive, user-directed use only. OpenCodex refuses subagent turns, combos and subagent fallback routing, and checks locality from the connection it sees. An undeclared loopback relay can make remote requests appear local if it passes no forwarding headers. For the public listener, declare the reverse proxy in dashboardTrustedProxy or keep this port out of the relay. No API key is needed or stored. For programmatic or shared workloads, add {apiProvider} instead.",
   "modal.freeTierDefault": "No API key required. Works out of the box.",
   "modal.tab.accounts": "Accounts",
   "modal.tab.free": "Free",

@@ -1017,13 +1017,18 @@ Protocol v1 (newline-delimited JSON-RPC on stdio).
   The model and thinking level are selected through the options the CLI advertises; the selected Gemini model must be
   confirmed before the prompt and stay selected during it, or the turn fails closed.
 - The conversation is flattened into one text prompt; system text travels on `session/new` when the CLI advertises
-  system prompt support.
+  system prompt support. The flattened prompt keeps the newest 200,000 characters and adds a `[truncated]` marker
+  when it cuts older text. When the CLI lacks separate system prompt support, the system block is prepended to the
+  flattened prompt and can be partly or wholly truncated.
 - Permission requests are answered `cancelled`, file system and terminal requests from the CLI are not executed, and
   errors carry fixed text: the CLI's stderr and its error messages are never returned.
 - `end_turn` completes; `max_tokens` and `refusal` complete as truncated and content-filtered; `max_turn_requests`, an
   unrequested `cancelled` and an unknown stop reason fail the turn.
-- Refuses subagent, spawned-thread and Codex memory turns, combo members and combo decision calls, subagent-fallback routing and requests from other machines or relayed by a reverse proxy; see the
-  [API-key catalog](/guides/api-key-catalog/#antigravity-cli-acp-local).
+- Refuses subagent, spawned-thread and Codex memory turns, combo members and combo decision calls, and
+  subagent-fallback routing. OpenCodex determines locality from the observed connection and refuses requests carrying
+  recognized forwarding headers. A loopback relay or SSH port forward that adds none can still appear local.
+  On the public listener, declare the reverse proxy in `dashboardTrustedProxy` or keep this port out of the relay.
+  See the [API-key catalog](/guides/api-key-catalog/#antigravity-cli-acp-local).
 
 ## `azure-openai` (alias: `azure`)
 

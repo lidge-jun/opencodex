@@ -7,7 +7,7 @@
  * enforces only signals it can know for certain: a subagent turn (`x-codex-parent-thread-id`), an
  * unattended Codex turn that Codex itself labels (a memory-pipeline turn or a spawned thread), a
  * combo member or a combo's internal decision call, a route chosen by subagent fallback, and a
- * request that did not come from this machine. No heuristic beyond those is applied.
+ * request the listener classified as remote. No heuristic beyond those is applied.
  */
 import { detectMemoryModelPhase } from "../../server/responses/memory-models";
 import { isThreadSpawnRequest, isThreadSpawnTurnMetadata } from "../../server/effort-policy";
@@ -37,7 +37,7 @@ export interface AgyAcpPolicyRefusal {
 }
 
 const INTERACTIVE_MESSAGE = "The Antigravity CLI (ACP) provider is for interactive, user-directed turns only: it refuses subagent and spawned-thread turns, Codex memory turns, combo members and combo decision calls, and subagent-fallback routing, per Google's terms for the agy acp binary. Use a Gemini API key or Vertex AI for programmatic workloads.";
-const LOCAL_MESSAGE = "The Antigravity CLI (ACP) provider serves only requests from this machine: it is never shared over a hub, link or remote listener. Use a Gemini API key or Vertex AI for shared or programmatic workloads.";
+const LOCAL_MESSAGE = "The Antigravity CLI (ACP) provider requires a local connection to the proxy host. Hub links and connections classified as remote are refused. Use a Gemini API key or Vertex AI for shared or programmatic workloads.";
 
 /**
  * A turn Codex itself labels as unattended, without a parent-thread header: Codex's memory

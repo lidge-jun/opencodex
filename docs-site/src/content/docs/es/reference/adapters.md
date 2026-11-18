@@ -331,10 +331,10 @@ El identificador de modelo que elige es una familia de modelos, y el esfuerzo de
 **Autenticación:** ninguna en OpenCodex; la CLI es dueña de su inicio de sesión de Google.
 
 - Solo `runTurn`: una sesión ACP por turno (`initialize`, `session/new`, `session/set_config_option`, `session/prompt`). El modelo y el nivel de pensamiento se seleccionan mediante las opciones que anuncia la CLI; el modelo Gemini seleccionado debe confirmarse antes del prompt y seguir seleccionado durante él, o el turno falla de forma cerrada.
-- La conversación se aplana en un único prompt de texto; el texto de sistema viaja en `session/new` cuando la CLI anuncia soporte de prompt de sistema.
+- La conversación se convierte en un único prompt de texto. Si la CLI admite un prompt de sistema separado, el texto de sistema se envía en `session/new`. El prompt de texto conserva los 200.000 caracteres más recientes y añade el marcador `[truncated]` al recortar el texto anterior. Si la CLI no admite un prompt de sistema separado, el bloque de sistema se antepone al prompt de texto y puede quedar recortado en parte o por completo.
 - Las solicitudes de permiso se responden con `cancelled`, las solicitudes de sistema de archivos y de terminal de la CLI no se ejecutan, y los errores llevan texto fijo: nunca se devuelven el stderr de la CLI ni sus mensajes de error.
 - `end_turn` completa; `max_tokens` y `refusal` completan como truncado y filtrado de contenido; `max_turn_requests`, un `cancelled` no solicitado y un motivo de parada desconocido hacen fallar el turno.
-- Rechaza turnos de subagente, de hilos generados y de memoria de Codex, miembros de combo y llamadas de decisión de combos, rutas de reserva de subagentes y solicitudes de otras máquinas o reenviadas por un proxy inverso; consulta el [catálogo de claves API](/es/guides/api-key-catalog/#antigravity-cli-acp-local).
+- Rechaza turnos de subagente, de hilos generados y de memoria de Codex, miembros de combo y llamadas de decisión de combos, y rutas de reserva de subagentes. OpenCodex determina si la solicitud es local a partir de la conexión observada y rechaza las solicitudes con cabeceras de reenvío reconocidas. Un intermediario en loopback o un reenvío de puerto por SSH que no añada ninguna de esas cabeceras puede parecer local. En el listener público, declara el proxy inverso en `dashboardTrustedProxy` o evita reenviar este puerto. Consulta el [catálogo de claves API](/es/guides/api-key-catalog/#antigravity-cli-acp-local).
 
 ## `azure-openai` (alias: `azure`)
 

@@ -83,7 +83,7 @@ describe.skipIf(process.platform === "win32")("antigravity-acp through the serve
     }
   });
 
-  test("a WebSocket turn runs inside the socket's local peer snapshot", async () => {
+  test.each([false, true])("a local WebSocket turn is classified by its frame body (spawned=%s)", async spawned => {
     saveConfig({ ...config(), websockets: true } as OcxConfig);
     const server = startServer(0);
     try {
@@ -98,12 +98,20 @@ describe.skipIf(process.platform === "win32")("antigravity-acp through the serve
         };
       });
       await new Promise<void>((resolve, reject) => { socket.onopen = () => resolve(); socket.onerror = () => reject(new Error("websocket error")); });
-      socket.send(JSON.stringify({ type: "response.create", model: "antigravity-acp/gemini-4-argon", input: [{ role: "user", content: [{ type: "input_text", text: "hello" }] }] }));
+      const clientMetadata = spawned
+        ? { "x-codex-turn-metadata": JSON.stringify({ subagent_kind: "thread_spawn" }) }
+        : undefined;
+      socket.send(JSON.stringify({ ...JSON.parse(body), type: "response.create", client_metadata: clientMetadata }));
       await completed;
       socket.close();
-      expect(received).toContain("fake acp answer");
-      expect(received).toContain("response.completed");
-      expect(received).not.toContain("agy_acp_local_only");
+      if (spawned) {
+        expect(received).toContain("agy_acp_interactive_only");
+        expect(existsSync(argsFile)).toBe(false);
+      } else {
+        expect(received).toContain("fake acp answer");
+        expect(received).toContain("response.completed");
+        expect(received).not.toContain("agy_acp_local_only");
+      }
     } finally {
       await server.stop(true);
     }
