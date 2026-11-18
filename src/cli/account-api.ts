@@ -90,7 +90,11 @@ export interface StageLeaseClock {
   clearTimeout(timer: ReturnType<typeof setTimeout>): void;
 }
 
+import type { AntigravityRiskSeams } from "../oauth/antigravity-risk";
+
 export interface AccountDeps {
+  /** Test seams for the Google Antigravity acknowledgement (agent detection, prompt visibility). */
+  antigravityRisk?: AntigravityRiskSeams;
   /** Test injection: skip findLiveProxy and call the API at this base URL. */
   baseUrl?: string;
   fetchImpl?: typeof fetch;

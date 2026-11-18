@@ -110,6 +110,8 @@ Home이 결정한 클라이언트를 Home에 적용하지 못하면 그 쓰기�
 
 disconnect는 소유한 키만 복구하므로 이후 편집한 모델·훅·신뢰 프로젝트·Computer Use 설정이 남습니다. 중단된 작업은 `ocx disconnect`로 재개하며 최초 사용한 `--keep-catalog`를 유지하세요. 소유 키 충돌이나 소유권 근거가 남은 이전 저널은 `ocx disconnect --recover-config --yes`로 현재 상태를 비공개 백업한 뒤 키 단위로 복구합니다. 소유권을 확인할 수 없거나 프로필이 편집되어 검증할 수 없으면 계속 거부합니다. 백업 경로를 보존하고, disconnect 후 `ocx service restart`로 독립형 런타임을 시작한 다음 다시 연결하세요.
 
+`ocx disconnect`가 Claude Desktop 복원을 시작하기 전에 거부되면(예: Codex 설정을 복원할 수 없을 때) 스스로 되돌립니다. Child는 연결된 상태로 남고 런타임도 그대로 시작되며, 메시지에 disconnect가 되돌려졌다고 나옵니다. 링크된 Child에서는 링크가 라우팅하던 파일 통합이 이미 꺼져 있을 수 있으며, 런타임이 다음에 라우트 의도를 적용할 때 다시 켜집니다. 이전 릴리스가 disconnect를 중간에 멈춘 채 남긴 Child는 `client startup refused: an ocx disconnect on this machine stopped part way`로 클라이언트 런타임 시작을 거부합니다. `ocx disconnect`를 다시 실행하면(처음에 `--keep-catalog`를 썼다면 그대로) 마무리하거나 되돌립니다. 이전 실행이 이미 Claude Desktop 복원을 시작했다면 영수증을 남기고, 재시도가 disconnect를 마무리합니다. 한 컴퓨터에서는 `ocx disconnect`가 한 번에 하나만 실행되며, 두 번째 실행은 `client_disconnect_busy`로 거부됩니다. Claude Desktop 원격 프로필 저장소에 대한 거부(`desktop_lifecycle_unsafe`)는 관련 파일이나 폴더와 해결 단계를 알려 줍니다.
+
 ## 보안
 
 Child는 링크를 통해 Home 컴퓨터의 프로바이더와 프로바이더 인증 정보를 사용합니다. Home은 Child마다 별도의 링크 키를 만들며, 링크를 제거하면 그 키를 폐기합니다. 확인 전에 호스트 지문을 비교하여 잘못된 컴퓨터나 변경된 호스트 키를 실수로 허용하지 않도록 하세요. Tailscale identity로 발급된 대시보드 세션은 머신 링크를 관리할 수 없습니다. Child에서 키는 OpenCodex 안에만 머뭅니다. Codex나 Claude Code가 Child에서 보내는 인증 정보는 Home으로 전달되지 않으며, Child에서 `127.0.0.1:<port>`에 접근하는 프로그램은 키 없이 Home을 사용합니다. 이는 독립형 설치가 로컬 프로그램에 주는 것과 같은 신뢰 수준입니다. 다른 사이트의 웹 페이지는 거부됩니다.

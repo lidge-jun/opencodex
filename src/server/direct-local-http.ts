@@ -18,6 +18,25 @@ function abortReason(signal: AbortSignal): Error {
   return error;
 }
 
+const connectPhaseTimeouts = new WeakSet<object>();
+
+/**
+ * Whether a direct request timed out before its TCP connect completed (#8318). Only such a timeout
+ * says nothing accepted the connection; one after the connect is a slow or silent listener. The
+ * caller's own abort reason is never marked, because one signal can cover several requests.
+ */
+export function isConnectPhaseTimeout(error: unknown): boolean {
+  return typeof error === "object" && error !== null && connectPhaseTimeouts.has(error);
+}
+
+function connectPhaseTimeout(error: Error): Error {
+  if (error.name !== "TimeoutError") return error;
+  const marked = new Error(error.message, { cause: error });
+  marked.name = "TimeoutError";
+  connectPhaseTimeouts.add(marked);
+  return marked;
+}
+
 function headerBoundary(bytes: Buffer): number {
   return bytes.indexOf("\r\n\r\n");
 }
@@ -274,6 +293,7 @@ export async function directLocalHttpFetch(
   return await new Promise<Response>((resolve, reject) => {
     let socket: Socket | undefined;
     let settled = false;
+    let connected = false;
     let closed = false;
     let completed = false;
     let outcomeError: Error | undefined;
@@ -312,14 +332,16 @@ export async function directLocalHttpFetch(
       settleAfterClose();
     };
     const onAbort = () => {
-      const error = signal ? abortReason(signal) : new Error("direct local HTTP request aborted");
+      const reason = signal ? abortReason(signal) : new Error("direct local HTTP request aborted");
+      const error = connected ? reason : connectPhaseTimeout(reason);
       if (settled) outcomeError ??= error;
       else finish(error);
       if (error.name === "TimeoutError") settleAfterClose(error);
     };
     const onDeadline = () => {
-      const error = new Error("direct local HTTP request timed out");
-      error.name = "TimeoutError";
+      const timeout = new Error("direct local HTTP request timed out");
+      timeout.name = "TimeoutError";
+      const error = connected ? timeout : connectPhaseTimeout(timeout);
       finish(error);
       settleAfterClose(error);
     };
@@ -332,6 +354,7 @@ export async function directLocalHttpFetch(
     socket.setTimeout(timeoutMs, onDeadline);
     socket.on("connect", () => {
       if (settled) return;
+      connected = true;
       try { socket?.write(requestBytes); } catch (error) {
         finish(error instanceof Error ? error : new Error(String(error)));
       }

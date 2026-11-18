@@ -762,20 +762,20 @@ export async function fetchProviderModelsWithAuth(
     // name matches any baseUrl by design. Retargeted or renamed custom rows
     // fetch a different URL and keep the rejection.
     if (!maySendAnthropicDiscovery()) return observed(withConfiguredRetention(failedDiscoveryConfigured), "degraded");
-    const outboundDependencies = { isCanonicalUrl: isRegistryModelDiscoveryUrl,
+    const outboundDependencies = (requestUrl: string) => ({ isCanonicalUrl: isRegistryModelDiscoveryUrl,
       beforeSend: () => maySendAnthropicDiscovery()
-        && (!vertexSendGuard || (vertexAuth !== undefined && vertexDiscoveryAuthIsCurrent(prov, vertexAuth, headers))) };
+        && (!vertexSendGuard || (vertexAuth !== undefined && vertexDiscoveryAuthIsCurrent(prov, vertexAuth, headers, requestUrl))) });
     const antigravityObservation = cloudCodeAssist ? captureAntigravityModelObservation() : undefined;
     const res = request.method === "POST"
       ? await providerOutboundPost(name, prov, url, {
         headers,
         body: JSON.stringify({ project }),
         signal: AbortSignal.timeout(8000),
-      }, outboundDependencies)
+      }, outboundDependencies(url))
       : await providerOutboundGet(name, prov, url, {
         headers,
         signal: vertexDeadline ?? AbortSignal.timeout(8000),
-      }, outboundDependencies);
+      }, outboundDependencies(url));
     const redirectError = await providerRedirectError(res, url);
     if (redirectError) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "http", httpStatus: res.status });
@@ -876,7 +876,7 @@ export async function fetchProviderModelsWithAuth(
     const listing = effectiveGoogleMode(name, prov) === "vertex"
       ? await collectVertexPublisherModelPages(url, bounded.value,
         { ...discovery, firstPageBytes: vertexFirstPage?.bytes(), signal: vertexDeadline },
-        (pageUrl, signal) => providerOutboundGet(name, prov, pageUrl, { headers, signal }, outboundDependencies))
+        (pageUrl, signal) => providerOutboundGet(name, prov, pageUrl, { headers, signal }, outboundDependencies(pageUrl)))
       : { ok: true as const, value: bounded.value };
     if (!listing.ok) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "invalid_response" });
