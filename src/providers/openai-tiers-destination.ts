@@ -19,9 +19,10 @@ function normalizedBaseUrl(value: string): string | undefined {
   }
 }
 
-export function isCanonicalOpenAiForwardProvider(provider: OcxProviderConfig): boolean {
+export function isCanonicalOpenAiForwardProvider(provider: { adapter?: string; authMode?: string; baseUrl?: string }): boolean {
   return provider.adapter === "openai-responses"
     && provider.authMode === "forward"
+    && provider.baseUrl !== undefined
     && normalizedBaseUrl(provider.baseUrl) === CODEX_FORWARD_BASE_URL;
 }
 

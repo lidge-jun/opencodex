@@ -111,13 +111,32 @@ async function saveSuggestion(live: OcxConfig, body: unknown) {
   return dispatch(live, "/api/combo-suggestions/save", "POST", body);
 }
 
+function setCanonicalForward(config: OcxConfig) {
+  Object.assign(config.providers.mock!, {
+    adapter: "openai-responses",
+    authMode: "forward",
+    baseUrl: "https://chatgpt.com/backend-api/codex",
+  });
+}
+
 function seedPaidSuggestion() {
   const live = loadConfig();
-  live.providers.paid = { ...live.providers.mock!, authMode: "forward", baseUrl: "https://aiplatform.googleapis.com/v1", models: ["gemini"] };
+  live.providers.paid = { ...live.providers.mock!, authMode: "api-key", baseUrl: "https://aiplatform.googleapis.com/v1", models: ["gemini"] };
   live.combos = { mix: { strategy: "failover", allowMeteredTargets: true, targets: [{ provider: "mock", model: "m" }] } };
   saveConfig(live);
   return live;
 }
+
+test("config DTO computes forward eligibility before redacting provider URLs", async () => {
+  const { safeConfigDTO } = await import("../../src/server/auth-cors");
+  const live = loadConfig();
+  setCanonicalForward(live);
+  live.providers.gateway = { ...live.providers.mock!, baseUrl: "https://chatgpt.com/backend-api/codex?route=custom" };
+  expect(safeConfigDTO(live)).toMatchObject({ providers: {
+    mock: { canonicalOpenAiForward: true },
+    gateway: { baseUrl: live.providers.mock!.baseUrl, canonicalOpenAiForward: false },
+  } });
+});
 
 test.each([
   ["GET", "/api/combo-suggestions", undefined],
@@ -174,25 +193,25 @@ test("create rejects paid Vertex and never accepts consent from the request", as
   expect(loadConfig().combos?.draft).toBeUndefined();
 
   const current = loadConfig();
-  live.providers.mock!.authMode = "forward";
-  current.providers.mock!.authMode = "forward";
+  setCanonicalForward(live);
+  setCanonicalForward(current);
   saveConfig(current);
   expect((await saveSuggestion(live, { ...draft, targets: [{ provider: "mock", model: "m" }] })).status).toBe(200);
   expect(loadConfig().combos?.draft?.allowMeteredTargets).toBeUndefined();
 });
 
-for (const paidSide of ["live", "persisted"] as const) {
-  test(`suggestion requires consent and marks the target metered when only ${paidSide} is paid`, async () => {
+for (const paidSide of ["live", "persisted", "both"] as const) {
+  test(`suggestion requires consent and marks the target metered when ${paidSide} config is paid`, async () => {
     const live = seedPaidSuggestion();
     const persisted = loadConfig();
-    const freeProvider = { ...live.providers.paid!, baseUrl: "https://generativelanguage.googleapis.com/v1", authMode: "forward" as const };
-    const paidProvider = { ...freeProvider, authMode: "api-key" as const };
-    live.providers.paid = paidSide === "live" ? paidProvider : freeProvider;
-    persisted.providers.paid = paidSide === "persisted" ? paidProvider : freeProvider;
+    const freeProvider = { ...live.providers.paid!, adapter: "openai-responses" as const, baseUrl: "https://chatgpt.com/backend-api/codex", authMode: "forward" as const };
+    const paidProvider = { ...freeProvider, baseUrl: "https://gateway.example/v1" };
+    live.providers.paid = paidSide !== "persisted" ? paidProvider : freeProvider;
+    persisted.providers.paid = paidSide !== "live" ? paidProvider : freeProvider;
     const subscription = { provider: "mock", model: "m" };
     const explicitlyMetered = { provider: "paid", model: "previous", metered: true };
-    live.providers.mock!.authMode = "forward";
-    persisted.providers.mock!.authMode = "forward";
+    setCanonicalForward(live);
+    setCanonicalForward(persisted);
     live.combos!.mix!.targets = [subscription, explicitlyMetered];
     persisted.combos!.mix!.targets = [subscription, explicitlyMetered];
     delete live.combos!.mix!.allowMeteredTargets;
@@ -223,7 +242,7 @@ for (const paidSide of ["live", "persisted"] as const) {
 
 test("append inserts a subscription before explicitly metered targets without reordering them", async () => {
   const live = seedPaidSuggestion();
-  live.providers.mock!.authMode = "forward";
+  setCanonicalForward(live);
   const existing = [
     { provider: "mock", model: "first", metered: true },
     { provider: "mock", model: "second", metered: true },

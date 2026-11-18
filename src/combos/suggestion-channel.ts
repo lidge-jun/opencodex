@@ -1,8 +1,11 @@
+import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers-destination";
+
 export interface SuggestionProvider {
   name: string;
   disabled?: boolean;
   hiddenFromPicker?: boolean;
   authMode?: string;
+  canonicalOpenAiForward?: boolean;
   googleMode?: string;
   vertexCredentialKind?: string;
   adapter?: string;
@@ -60,6 +63,8 @@ function hostOf(baseUrl: string | undefined): string {
 
 export function channelTier(provider: SuggestionProvider, model: string): ChannelTier {
   const host = hostOf(provider.baseUrl);
+  if (provider.authMode === "forward"
+    && (provider.canonicalOpenAiForward === false || !isCanonicalOpenAiForwardProvider(provider))) return "metered";
   if (provider.googleMode === "vertex" || provider.vertexCredentialKind || /(?:^|[.-])aiplatform\.googleapis\.com$/.test(host) || /vertex/i.test(provider.name)) return "vertex";
   if (provider.authMode !== "oauth" && provider.authMode !== "forward") return "metered";
   const modelMaker = MODEL_MAKERS.find(([re]) => re.test(normalizeModelName(model)))?.[1];

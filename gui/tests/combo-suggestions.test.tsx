@@ -41,7 +41,7 @@ const PROVIDERS: SuggestionProvider[] = [
   { name: "anthropic", authMode: "oauth", baseUrl: "https://api.anthropic.com" },
   { name: "google-vertex", baseUrl: "https://aiplatform.googleapis.com" },
   { name: "google-antigravity", authMode: "oauth", baseUrl: "https://daily-cloudcode-pa.googleapis.com" },
-  { name: "openai", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" },
+  { name: "openai", adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" },
   { name: "zayu-claude", authMode: "key", baseUrl: "https://relay.example" },
   { name: "qoder", authMode: "key", disabled: true },
   { name: "jev", authMode: "key", hiddenFromPicker: true },
@@ -85,6 +85,27 @@ describe("buildComboSuggestions", () => {
         ["openai", "gpt-6-luna"],
       ]),
     })).toEqual(["create gemini-3.8-flash: google-antigravity > cursor"]);
+  });
+
+  test("custom forward gateways stay out of drafts and require consent on append", () => {
+    const model = "gpt-6-luna";
+    const input = {
+      providers: [...PROVIDERS, { name: "gateway", adapter: "openai-responses", authMode: "forward", baseUrl: "https://gateway.example/v1" }],
+      models: models([["openai", model], ["cursor", model], ["gateway", model]]),
+    };
+    expect(summary(input)).toEqual(["create gpt-6-luna: openai > cursor"]);
+    expect(summary({ ...input, combos: [combo(model, [["openai", model], ["cursor", model]])] })).toEqual([]);
+    expect(summary({ ...input, combos: [combo(model, [["openai", model], ["cursor", model]], { allowMeteredTargets: true })] }))
+      .toEqual(["extend gpt-6-luna: gateway"]);
+  });
+
+  test("a sanitized forward URL cannot override the server's destination classification", () => {
+    const model = "gpt-6-luna";
+    const gateway = { ...PROVIDERS.find((provider) => provider.name === "openai")!, name: "gateway", canonicalOpenAiForward: false };
+    expect(summary({
+      providers: [...PROVIDERS, gateway],
+      models: models([["openai", model], ["cursor", model], ["gateway", model]]),
+    })).toEqual(["create gpt-6-luna: openai > cursor"]);
   });
 
   test("a model only one provider serves is no suggestion", () => {
@@ -215,7 +236,7 @@ describe("drafts", () => {
 
   test("tiers read the provider, not its name", () => {
     expect(channelTier({ name: "my-vertex-2", baseUrl: "https://x.example" }, "gemini-4-argon")).toBe("vertex");
-    expect(channelTier({ name: "anything", authMode: "forward", baseUrl: "https://chatgpt.com" }, "gpt-6-luna")).toBe("own-subscription");
+    expect(channelTier({ name: "anything", adapter: "openai-responses", authMode: "forward", baseUrl: "https://chatgpt.com/backend-api/codex" }, "gpt-6-luna")).toBe("own-subscription");
     expect(channelTier({ name: "xai", authMode: "oauth", baseUrl: "https://api.x.ai/v1" }, "grok-4.7")).toBe("own-subscription");
     expect(channelTier({ name: "zed", authMode: "oauth", baseUrl: "https://cloud.zed.dev" }, "grok-4.7")).toBe("subscription");
     expect(channelTier({ name: "ollama", baseUrl: "http://localhost:11434" }, "llama")).toBe("metered");
