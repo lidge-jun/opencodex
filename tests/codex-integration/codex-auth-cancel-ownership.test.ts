@@ -6,7 +6,10 @@ import { getCodexAccountCredential, saveCodexAccountCredential } from "../../src
 import { isAccountNeedsReauth, markAccountNeedsReauth } from "../../src/codex/account-runtime-state";
 import { handleCodexAuthLoginCancel, handleCodexAuthLoginStart } from "../../src/codex/auth-api/login-flow";
 import { CODEX_LOGIN_TERMINAL_TTL_MS, codexAuthLoginState } from "../../src/codex/auth-api/login-state";
+import { handleCodexAuthAPI } from "../../src/codex/auth-api/routes";
 import { saveConfig } from "../../src/config";
+import { reconcileLiveStateStores, STATE_STORE_REGISTRATIONS, setLiveStateStoreConfig } from "../../src/lib/state-store-registrations";
+import { registerStateStore } from "../../src/lib/state-store-sweeper";
 import { cancelLoginFlow, clearLoginState, getLoginStatus, OAUTH_PROVIDERS, startLoginFlow, waitForLoginSettled } from "../../src/oauth";
 import { saveCredential } from "../../src/oauth/store";
 import type { OcxConfig } from "../../src/types";
@@ -85,7 +88,13 @@ describe("Codex OAuth cancel ownership", () => {
   });
 });
 
-test.each(["cancel before OAuth settles", "cancel during the pool usage probe", "newer OAuth flow succeeds"] as const)(
+test.each([
+  "cancel before OAuth settles",
+  "cancel during the pool usage probe",
+  "newer OAuth flow succeeds",
+  "delete an unrelated account before polling",
+  "delete an unrelated account during the probe, then cancel",
+] as const)(
   "pool reauth remains bound to its own flow when %s",
   async phase => {
     const home = mkdtempSync(join(tmpdir(), "ocx-pool-cancel-"));
@@ -94,6 +103,7 @@ test.each(["cancel before OAuth settles", "cancel during the pool usage probe", 
     process.env.OPENCODEX_HOME = home;
     process.env.CODEX_HOME = join(home, "codex");
     const id = "pool-cancel";
+    const unrelatedId = "pool-unrelated";
     const identity = "fixture-chatgpt-account";
     const expires = Date.now() + 60_000;
     const oauthCredential = { access: "fixture-oauth-access", refresh: "fixture-oauth-refresh", expires, accountId: identity };
@@ -101,7 +111,7 @@ test.each(["cancel before OAuth settles", "cancel during the pool usage probe", 
     const config: OcxConfig = {
       port: 10100, defaultProvider: "openai",
       providers: { openai: { adapter: "openai-responses", baseUrl: "https://api.openai.com/v1" } },
-      codexAccounts: [{ id }],
+      codexAccounts: [{ id }, { id: unrelatedId }],
     };
     const grant = Promise.withResolvers<typeof oauthCredential>();
     const probeStarted = Promise.withResolvers<void>();
@@ -109,6 +119,16 @@ test.each(["cancel before OAuth settles", "cancel during the pool usage probe", 
     const pollStopped = Promise.withResolvers<void>();
     let poll: (() => void) | undefined;
     const originalSetTimeout = globalThis.setTimeout;
+    async function waitForBarrier(barrier: Promise<void>, phase: string): Promise<void> {
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([barrier, new Promise<never>((_, reject) => {
+          deadline = originalSetTimeout(() => reject(new Error(`Timed out waiting for ${phase}`)), 1_000);
+        })]);
+      } finally {
+        clearTimeout(deadline);
+      }
+    }
     const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback, delay, ...args) => {
       if (delay === 2_000) poll = () => callback(...args);
       else if (delay === CODEX_LOGIN_TERMINAL_TTL_MS) pollStopped.resolve();
@@ -128,6 +148,16 @@ test.each(["cancel before OAuth settles", "cancel during the pool usage probe", 
       return grant.promise;
     };
     let flowId: string | undefined;
+    let unregisterOAuthFlowStore: (() => void) | undefined;
+    async function deleteUnrelatedAccount() {
+      unregisterOAuthFlowStore = registerStateStore(STATE_STORE_REGISTRATIONS.find(row => row.name === "oauth-flow-state")!);
+      setLiveStateStoreConfig(config);
+      const url = new URL(`http://127.0.0.1/api/codex-auth/accounts?id=${unrelatedId}`);
+      const deleted = await handleCodexAuthAPI(new Request(url, { method: "DELETE" }), url, config);
+      expect(deleted?.status).toBe(200);
+      expect(config.codexAccounts?.map(account => account.id)).toEqual([id]);
+      expect(config.providers.chatgpt).toBeUndefined();
+    }
     const exhausted = () => Response.json({ plan_type: "pro", rate_limit: {
       primary_window: { used_percent: 100, limit_window_seconds: 604800 },
     } });
@@ -158,29 +188,43 @@ test.each(["cancel before OAuth settles", "cancel during the pool usage probe", 
         expect(getLoginStatus("chatgpt").flowId).toBe(newerId);
         poll?.();
         probe.resolve(exhausted());
-        await pollStopped.promise;
+        await waitForBarrier(pollStopped.promise, "pool poller settlement");
         expect(codexAuthLoginState.get(flowId)).toMatchObject({ status: "done", accountId: id });
         expect(getCodexAccountCredential(id)?.accessToken).toBe(oauthCredential.access);
         expect(isAccountNeedsReauth(id)).toBe(false);
         return;
       }
-      if (phase === "cancel during the pool usage probe") {
+      if (phase === "delete an unrelated account before polling") {
+        await deleteUnrelatedAccount();
+        expect(getLoginStatus("chatgpt", true, flowId)).toMatchObject({ status: "complete", flowId });
         poll?.();
-        await probeStarted.promise;
+        probe.resolve(exhausted());
+        await waitForBarrier(pollStopped.promise, "pool poller settlement");
+        expect(codexAuthLoginState.get(flowId)).toMatchObject({ status: "done", accountId: id });
+        expect(getCodexAccountCredential(id)?.accessToken).toBe(oauthCredential.access);
+        reconcileLiveStateStores();
+        expect(getLoginStatus("chatgpt", true, flowId).status).toBe("idle");
+        return;
       }
+      if (phase === "cancel during the pool usage probe" || phase === "delete an unrelated account during the probe, then cancel") {
+        poll?.();
+        await waitForBarrier(probeStarted.promise, "pool usage probe");
+      }
+      if (phase === "delete an unrelated account during the probe, then cancel") await deleteUnrelatedAccount();
       const cancelled = await cancel({ flowId });
       if (phase === "cancel before OAuth settles") {
         grant.resolve(oauthCredential);
         poll?.();
       }
       probe.resolve(exhausted());
-      await pollStopped.promise;
+      await waitForBarrier(pollStopped.promise, "pool poller settlement");
       expect(cancelled.status).toBe(200);
       expect(codexAuthLoginState.get(flowId)).toMatchObject({ status: "error", error: "Login cancelled" });
       expect(getCodexAccountCredential(id)).toEqual(poolCredential);
       expect(isAccountNeedsReauth(id)).toBe(true);
       if (phase === "cancel before OAuth settles") expect(fetchSpy).not.toHaveBeenCalled();
     } finally {
+      unregisterOAuthFlowStore?.();
       grant.resolve(oauthCredential);
       probe.resolve(exhausted());
       clearLoginState("chatgpt");

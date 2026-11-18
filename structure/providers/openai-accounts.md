@@ -300,7 +300,7 @@ Same-identity device reauth obtains a new login grant and keeps its pre-publicat
 ## Pool login policy and cancellation
 
 For ChatGPT/Codex pool logins, `codexAuthMethod` applies at proxy startup. With `"device-only"`, `src/codex/auth-api/login-flow.ts` forces a device grant and returns `authMethod: "device-only"`. `src/cli/account-auth.ts` cancels that flow when the caller supplies `--code` or requests a JSON wait without `--no-wait`. The policy covers only pool login.
-The pool poller requires success for its exact flow id and receives that flow's persisted credential through the OAuth lifecycle callback. It rechecks ownership immediately before writing. Pool cancellation remains available through identity and eligibility checks, including after OAuth settles. After publication starts, cancellation is refused while the catalog result settles.
+The pool poller requires success for its exact flow id and receives that flow's persisted credential through the OAuth lifecycle callback. Automatic OAuth cleanup retains that exact outcome while the pool login is starting or pending. It rechecks ownership immediately before writing. Pool cancellation remains available through identity and eligibility checks, including after OAuth settles. After publication starts, cancellation is refused while the catalog result settles.
 
 ## Native-main refresh ownership
 

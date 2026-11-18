@@ -215,6 +215,8 @@ export interface LoginOpts {
 
 export interface LoginFlowLifecycle {
   flowId?: string;
+  /** Protect this flow's outcome from automatic cleanup while its outer login owns it. */
+  retainOutcome?: () => boolean;
   /** Internal handoff of this flow's credential after its store write is confirmed. */
   onCredentialPersisted?: (credential: OAuthCredentials) => void;
   /** Runs after background credential/config persistence settles, before status becomes done. */
@@ -1901,7 +1903,7 @@ export async function startLoginFlow(
   // The flow id is the key of every map below. Callers that own one (the management route, the
   // codex auth API) supply it so a later paste can be pinned to this exact attempt.
   const flowId = lifecycle?.flowId ?? randomUUID();
-  const expiresAt = recordStartedLoginFlow(provider, flowId, opts?.codeMode === true);
+  const expiresAt = recordStartedLoginFlow(provider, flowId, opts?.codeMode === true, lifecycle?.retainOutcome);
   const abort = new AbortController();
   loginAbort.set(flowId, { controller: abort, provider });
   if (provider === "kiro") kiroLoginSettling.add(provider);

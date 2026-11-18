@@ -220,7 +220,8 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
   const flowId = `flow-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const loginOwner: CodexLoginStateRow = { status: "starting", startedAt: Date.now() };
   codexAuthLoginState.set(flowId, loginOwner);
-  const ownsPendingFlow = () => codexAuthLoginState.get(flowId) === loginOwner && loginOwner.status === "pending";
+  const ownsFlow = () => codexAuthLoginState.get(flowId) === loginOwner;
+  const ownsPendingFlow = () => ownsFlow() && loginOwner.status === "pending";
   const settlePoolLogin = (patch: Partial<CodexLoginStateRow>) => {
     if (ownsPendingFlow()) setCodexLoginState(flowId, patch);
   };
@@ -232,6 +233,7 @@ export async function handleCodexAuthLoginStart(req: Request, config: OcxConfig,
       ...(useDeviceFlow ? { flow: "device" as const } : {}),
     }, {
       flowId,
+      retainOutcome: () => ownsFlow() && (loginOwner.status === "starting" || loginOwner.status === "pending"),
       // ChatGPT's scratch slot can be replaced by another login before this poller wakes up.
       onCredentialPersisted: credential => { persistedCredential = credential; },
     });
