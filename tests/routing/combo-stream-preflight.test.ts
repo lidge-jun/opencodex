@@ -8,6 +8,7 @@ import {
   replayBufferedResponse,
 } from "../../src/server/responses/combo-stream-preflight";
 import { stageCommitment, type RequestFailureStage } from "../../src/lib/request-failure-model";
+import { rememberPausedTurn } from "../../src/lib/client-error-body";
 import type { RequestLogContext } from "../../src/server/request-log";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../../src/server/sse-frame-buffer";
 import type { AdapterEvent } from "../../src/types";
@@ -1903,6 +1904,45 @@ describe("degenerate completion prelude", () => {
       ), logCtx, undefined, { degeneratePrelude: true });
       expect(result.kind).toBe("accepted");
     }
+  });
+
+  test.each([
+    { incomplete_details: { retryable: false } },
+    { end_turn: false },
+  ])("a missing incomplete reason preserves explicit replay guards (%j)", async terminal => {
+    const result = await preflightComboStreamResponse(sse(
+      { type: "response.incomplete", response: { status: "incomplete", output: [], ...terminal } },
+    ), logCtx, undefined, { degeneratePrelude: true });
+    expect(result.kind).toBe("accepted");
+  });
+
+  test("a paused turn with no incomplete reason stays accepted", async () => {
+    const paused = { ...logCtx };
+    rememberPausedTurn(paused);
+    const result = await preflightComboStreamResponse(sse(
+      { type: "response.incomplete", response: { status: "incomplete", output: [] } },
+    ), paused, undefined, { degeneratePrelude: true });
+    expect(result.kind).toBe("accepted");
+  });
+
+  test("an event-level non-retryable verdict keeps a nested incomplete on its target", async () => {
+    const result = await preflightComboStreamResponse(sse({
+      type: "response.incomplete",
+      incomplete_details: { reason: "upstream_stall_timeout", retryable: false },
+      response: { status: "incomplete", output: [] },
+    }), logCtx, undefined, { degeneratePrelude: true });
+    expect(result.kind).toBe("accepted");
+  });
+
+  test.each([false, true])("unrecognized event types commit before a retryable terminal (required tool: %j)", async requiredToolPrelude => {
+    const response = sse(
+      { type: ["response.reasoning_text.delta"], delta: "opaque progress" },
+      { type: "response.incomplete", response: { status: "incomplete", output: [] } },
+    );
+    const expected = await response.clone().text();
+    const result = await preflightComboStreamResponse(response, logCtx, undefined, { degeneratePrelude: true, requiredToolPrelude });
+    expect(result.kind).toBe("accepted");
+    expect(await result.response.text()).toBe(expected);
   });
 
   test("without degeneratePrelude a commentary completion stays accepted", async () => {

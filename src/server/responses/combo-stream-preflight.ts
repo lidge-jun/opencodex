@@ -480,24 +480,12 @@ function retryableZeroOutputTerminal(payload: unknown, context?: object): boolea
   const isIncomplete = event.type === "response.incomplete" || event.status === "incomplete";
   if (!isIncomplete) return false;
   if (!emptyOutput) return false;
-  const details = (target.incomplete_details && typeof target.incomplete_details === "object" && !Array.isArray(target.incomplete_details))
-    ? target.incomplete_details as { reason?: unknown; retryable?: unknown }
-    : undefined;
-  const reason = details?.reason;
-  if (reason === undefined) return true;
-  // An explicit unfinished or non-retryable verdict outranks every defined reason, not
-  // just max_output_tokens: honoring it keeps a paused or refused turn from hopping.
+  const details = recordValue(target.incomplete_details ?? event.incomplete_details);
+  // A pause or explicit replay restriction takes precedence even when the reason is absent.
   const endTurn = target.end_turn ?? event.end_turn;
-  if (endTurn === false) return false;
-  if (details?.retryable === false) return false;
-  if (reason === "max_output_tokens") {
-    // Same evidence the run-turn classifier requires before it treats an output limit as a
-    // replayable zero-output terminal. A normalized Anthropic `pause_turn` also reads as
-    // max_output_tokens on the wire, so the request-scoped marker keeps a paused turn the
-    // client must continue from hopping to another provider.
-    if (isPausedTurn(context)) return false;
-    return true;
-  }
+  if (isPausedTurn(context) || endTurn === false || details?.retryable === false) return false;
+  const reason = details?.reason;
+  if (reason === undefined || reason === "max_output_tokens") return true;
   return typeof reason === "string" && RETRYABLE_ZERO_OUTPUT_INCOMPLETE_REASONS.has(reason);
 }
 

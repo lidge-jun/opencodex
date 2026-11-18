@@ -21,7 +21,7 @@ const controlEvents = new Set(["response.created", "response.in_progress", "resp
 /** Only known reasoning frames may extend a mandatory-tool prelude; other traffic commits. */
 export function requiredToolReasoningPrelude(payload: unknown): boolean {
   const event = record(payload);
-  return !!event && (reasoningEvents.has(String(event.type))
+  return typeof event?.type === "string" && (reasoningEvents.has(event.type)
     || ((event.type === "response.output_item.added" || event.type === "response.output_item.done")
       && record(event.item)?.type === "reasoning"));
 }
