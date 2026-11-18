@@ -21,6 +21,7 @@ import { clearComboSelectionState } from "../../src/combos/resolve";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { captureCallerDirectAuth } from "../../src/providers/caller-authorization";
+import * as requestPacing from "../../src/providers/request-pacing";
 import { fakeChatGptJwt } from "../helpers/agent-task-recovery";
 import { setNativeMainRefreshResolutionForTests } from "../../src/codex/native-main-refresh-mode";
 import { clearAccountQuota, getAccountQuota, getMainPolicyQuota } from "../../src/codex/quota";
@@ -160,6 +161,28 @@ function install401ThenRefreshHarness(): { sends: string[]; refreshes: string[] 
 }
 
 describe("native main 401 refresh and replay", () => {
+  test("pacing refusal after native main refresh leaves exactly one upstream 401", async () => {
+    const { sends, refreshes } = install401ThenRefreshHarness();
+    const wait = requestPacing.waitForProviderRequestSlot;
+    let refused = 0;
+    const pacing = spyOn(requestPacing, "waitForProviderRequestSlot").mockImplementation((name, provider, ...rest) => {
+      if (name === "openai" && refreshes.length > 0) {
+        refused++;
+        return Promise.reject(new requestPacing.RequestPacingQueueOverloadError(name, "queue_full", 1));
+      }
+      return wait(name, provider, ...rest);
+    });
+    try {
+      const log: RequestLogContext = {};
+      const response = await handleResponses(request("/v1/responses"), config(), log);
+      expect(response.status).toBe(429);
+      await response.text();
+      expect(refused).toBe(1);
+      expect(sends).toEqual(["Bearer rejected-access"]);
+      expect(log.attempts?.map(attempt => [attempt.status, attempt.sendCount])).toEqual([[401, 1]]);
+    } finally { pacing.mockRestore(); }
+  });
+
   test.each(["/v1/responses", "/v1/responses/compact"] as const)(
     "%s publishes retry quota for a keyring account replacement after 401", async path => {
       clearAccountQuota(MAIN_CODEX_ACCOUNT_ID);

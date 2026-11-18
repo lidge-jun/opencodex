@@ -1,4 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { ADAPTER_REGISTRY } from "../../../src/adapters/registry";
+import { createAdapterTierMetadata } from "../../../src/providers/fastwire";
+import { registerLabPassiveRouteLinker } from "../../../src/lib/lab-passive-linker-registration";
+import { readInstallationSalt } from "../../../src/lab/subject/installation-salt";
+import * as productionSubjects from "../../../src/routing/compatibility/subject";
+import { resetCompatibilityVersionCacheForTests, setCompatibilityVersionOverrideForTests } from "../../../src/routing/compatibility/version";
+import * as requestPacing from "../../../src/providers/request-pacing";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -86,7 +93,7 @@ async function accounts() {
   return { a, b };
 }
 /** Return an Auto provider config and send ledger; options drive refusal, expiry, rotation, and tool events through both inference wires. */
-function fixture(options: { pauseRefusal?: boolean; chatOnly?: boolean; nativeExpiry?: boolean; nativeFirst?: boolean; native429?: boolean; onNativeCancel?: () => void; chatRefresh?: boolean; closedNativeBody?: boolean; renewedChatRefusal?: boolean; rotate?: boolean; rotateAt?: number; tool?: boolean; key?: boolean; refusal?: number; negotiationRefusal?: number; negotiationRefusalAt?: number; alwaysRefuse?: boolean; advanceAfterIntent?: () => void | Promise<void>; onSession?: (count: number) => void | Promise<void>; malformedSessionAt?: number; negotiationRetryAfter?: string; replyText?: string; reasoningText?: string; onInference?: (count: number) => void | Promise<void> } = {}) {
+function fixture(options: { pauseRefusal?: boolean; chatOnly?: boolean; nativeExpiry?: boolean; nativeFirst?: boolean; renewedOrigin?: boolean; native429?: boolean; onNativeCancel?: () => void; chatRefresh?: boolean; closedNativeBody?: boolean; renewedChatRefusal?: boolean; rotate?: boolean; rotateAt?: number; tool?: boolean; key?: boolean; refusal?: number; negotiationRefusal?: number; negotiationRefusalAt?: number; alwaysRefuse?: boolean; advanceAfterIntent?: () => void | Promise<void>; onSession?: (count: number) => void | Promise<void>; malformedSessionAt?: number; negotiationRetryAfter?: string; replyText?: string; reasoningText?: string; onInference?: (count: number) => void | Promise<void> } = {}) {
   const sent: Array<{ host: string; path: string; token: string | null; body: any; signal?: AbortSignal | null }> = [];
   let inferenceCount = 0;
   let sessionCount = 0;
@@ -101,7 +108,7 @@ function fixture(options: { pauseRefusal?: boolean; chatOnly?: boolean; nativeEx
       if (destination.pathname === "/user") return Response.json({ login: refreshedAccount });
       refreshCount++;
       return Response.json({ token: `synthetic-access-${refreshedAccount}-renewed`, refresh_in: 1500,
-        endpoints: { api: `https://${refreshedAccount}.githubcopilot.com` } });
+        endpoints: { api: `https://${options.renewedOrigin ? "renewed-" : ""}${refreshedAccount}.githubcopilot.com` } });
     }
     const account = new Headers(init?.headers).get("authorization")?.includes("-b") ? "b" : "a";
     const renewed = new Headers(init?.headers).get("authorization")!.includes("-renewed");
@@ -583,6 +590,81 @@ describe("Copilot Auto through the Responses pipeline", () => {
     expect(f.refreshCount).toBe(1);
     expect(f.cancelledNativeBodies).toBe(1);
     expect(f.sent.find(call => call.path === "/responses")!.signal!.aborted).toBe(true);
+  });
+  test.each(["refused metadata", "production route subject"] as const)("OAuth Responses-to-Chat handoff preserves %s", async evidence => {
+    await accounts();
+    const f = fixture({ nativeFirst: true, renewedOrigin: true });
+    const log: RequestLogContext = {};
+    readInstallationSalt(home);
+    setCompatibilityVersionOverrideForTests("b".repeat(64));
+    const detach = registerLabPassiveRouteLinker(home);
+    const resolveSubject = productionSubjects.resolveProductionRouteSubject;
+    const subjects: Array<{ baseUrl?: string; adapter?: string; id?: string }> = [];
+    const linker = spyOn(productionSubjects, "resolveProductionRouteSubject").mockImplementation((...args) => {
+      const resolved = resolveSubject(...args);
+      if (args[1] === "github-copilot") subjects.push({
+        baseUrl: resolved?.routeContext.baseUrl, adapter: resolved?.routeContext.effectiveAdapter, id: resolved?.subjectId,
+      });
+      return resolved;
+    });
+    const create = ADAPTER_REGISTRY["openai-responses"].create;
+    const factory = spyOn(ADAPTER_REGISTRY["openai-responses"], "create").mockImplementation((provider, context) => {
+      const adapter = create(provider, context);
+      const build = adapter.buildRequest.bind(adapter);
+      adapter.buildRequest = async (...args) => ({
+        ...await build(...args),
+        tierLog: createAdapterTierMetadata({ capability: true, eligibility: "eligible",
+          fastWire: { kind: "service-tier", canonicalToWire: { priority: "priority" }, foreignCallerTiers: "verbatim" },
+          demandDecision: "force-fast" }, { kind: "set", value: "priority" }, "service-tier", "priority"),
+        reasoningLog: { effectiveEffort: "high", wireField: "reasoning.effort", wireValue: "high" },
+      });
+      return adapter;
+    });
+    try {
+      const response = await handleResponses(request("hello", false), f.config, log);
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(f.sent.filter(call => ["/responses", "/chat/completions"].includes(call.path)).map(call => [call.host, call.path]))
+        .toEqual([["a.githubcopilot.com", "/responses"], ["renewed-a.githubcopilot.com", "/chat/completions"]]);
+      expect(log.attempts?.[0]?.status).toBe(401);
+      if (evidence === "refused metadata") {
+        expect(log.attempts?.map(a => [a.adapter, a.sendCount, a.tierOutcome?.wireValue, a.reasoningWireValue]))
+          .toEqual([["openai-responses", 1, "priority", "high"], ["openai-chat", 1, null, undefined]]);
+      } else {
+        expect(subjects.map(({ baseUrl, adapter }) => [baseUrl, adapter])).toEqual([
+          ["https://a.githubcopilot.com", "openai-responses"], ["https://renewed-a.githubcopilot.com", "openai-chat"],
+        ]);
+        const ids = subjects.map(subject => subject.id);
+        for (const id of ids) expect(id).toMatch(/^[a-f0-9]{64}$/);
+        expect(ids[0]).not.toBe(ids[1]);
+        expect(log.attempts?.map(a => a.labRouteSubjectId)).toEqual(ids);
+      }
+    } finally {
+      factory.mockRestore();
+      linker.mockRestore();
+      detach();
+      resetCompatibilityVersionCacheForTests();
+    }
+  });
+  test("pacing refuses a deferred Chat OAuth replay without a replacement attempt", async () => {
+    await accounts();
+    const f = fixture({ chatRefresh: true, chatOnly: true });
+    const log: RequestLogContext = {};
+    const wait = requestPacing.waitForProviderRequestSlot;
+    const pacing = spyOn(requestPacing, "waitForProviderRequestSlot").mockImplementation((name, provider, ...rest) => {
+      if (name === "github-copilot" && provider.apiKey?.endsWith("-renewed")) {
+        return Promise.reject(new requestPacing.RequestPacingQueueOverloadError(name, "queue_full", 1));
+      }
+      return wait(name, provider, ...rest);
+    });
+    try {
+      const response = await handleResponses(request("hello", false), f.config, log);
+      expect(response.status).toBe(429);
+      await response.text();
+      expect(f.refreshCount).toBe(1);
+      expect(f.sent.filter(call => call.path === "/chat/completions").map(call => call.body.model)).toEqual(["gpt-4o"]);
+      expect(log.attempts?.map(attempt => [attempt.model, attempt.status, attempt.sendCount])).toEqual([["gpt-4o", 401, 1]]);
+    } finally { pacing.mockRestore(); }
   });
   test.each([false, true])("same-account model refresh preserves each physical model (stream=%s)", async stream => {
     await accounts();

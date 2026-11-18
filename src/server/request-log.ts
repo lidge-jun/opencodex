@@ -9,7 +9,7 @@ export { aggregateAttemptUsage } from "./request-log-attempt-usage";
 import { KEY_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { attemptAccountChanged, sealRequestAttemptIdentity } from "./request-log-account-rotation";
 export { sealRequestAttemptIdentity };
-import { credentialRecoveryStatus } from "./request-log-attempt-recovery";
+import { credentialRecoveryStatus, retainRefusedAccount, sealedCredentialRefusals } from "./request-log-attempt-recovery";
 export { noteAttemptRecoveryWithheld } from "./request-log-attempt-recovery";
 import { bareVerdictRowErrorCode, captureUpstreamTerminalDiagnostics, guardedRowCopy, linkLogField, notifyLinkTurnFinal, upstreamDiagnosticLogFields, type LinkRequestLogCarrier, type UpstreamErrorDiagnostics, type UpstreamErrorPayload } from "./request-log-terminal-status";
 export { noteUpstreamRequestId } from "./request-log-terminal-status";
@@ -1509,7 +1509,8 @@ function writeFinalRequestLog(
   const closeReason = effectiveStatus === 499
     ? "client_cancel"
     : meta?.closeReason;
-  if (logCtx.activeAttempt) {
+  const sealedRefusal = retainRefusedAccount(logCtx);
+  if (logCtx.activeAttempt && !sealedRefusal) {
     finishRequestAttempt(
       logCtx.activeAttempt,
       attemptStatus ?? effectiveStatus,
@@ -1537,9 +1538,9 @@ function writeFinalRequestLog(
     ...(logCtx.causeHint ? { causeHint: logCtx.causeHint } : {}),
     locallyAnswered: logCtx.localTerminalReason !== undefined,
     // A coordinated write derives the request pair from a copy and re-derives the attempt's own.
-    ...(logCtx.activeAttempt ? { attempt: attemptStatus === undefined ? logCtx.activeAttempt : { ...logCtx.activeAttempt } } : {}),
+    ...(logCtx.activeAttempt ? { attempt: attemptStatus === undefined && !sealedRefusal ? logCtx.activeAttempt : { ...logCtx.activeAttempt } } : {}),
   });
-  if (attemptStatus !== undefined && logCtx.activeAttempt) attributePhysicalAttempt(logCtx.activeAttempt);
+  if (attemptStatus !== undefined && logCtx.activeAttempt && !sealedRefusal) attributePhysicalAttempt(logCtx.activeAttempt);
   // The one seam every request passes exactly once, whatever transport served it and however
   // it ended. The ledger gives per-send usage precedence over terminal usage and keeps unknown
   // physical spend unresolved.
@@ -1866,14 +1867,15 @@ export function noteProviderAttemptSend(
   const next = logCtx.accountLogLabel;
   if (attempt && usesApiKeyAccount(provider)) keyUsageOwners.add(attempt);
   const recoveryStatus = credentialRecoveryStatus(recovery);
-  if (attempt && attempt.sendCount > 0 && (recoveryStatus !== undefined || attemptAccountChanged(previous, next, attempt.provider, logCtx.provider)
+  if (attempt && attempt.sendCount > 0 && (sealedCredentialRefusals.has(attempt) || recoveryStatus !== undefined
+    || attemptAccountChanged(previous, next, attempt.provider, logCtx.provider)
     || resolved && (attempt.model !== resolved.model || attempt.adapter !== resolved.adapter))) {
-    // An input estimate is not evidence that a failed send used that many tokens.
-    delete attempt.inputTokenEstimate;
-    // An account-scoped recovery kind names the status the sealed account answered.
-    finishRequestAttempt(attempt, attempt.status >= 100 ? attempt.status
-      : recoveryStatus ?? (recovery === "rate-limit-429" ? 429 : 502),
-    Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()), attempt.usage);
+    if (!sealedCredentialRefusals.delete(attempt)) {
+      delete attempt.inputTokenEstimate;
+      finishRequestAttempt(attempt, attempt.status >= 100 ? attempt.status
+        : recoveryStatus ?? (recovery === "rate-limit-429" ? 429 : 502),
+      Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()), attempt.usage);
+    }
     // This attempt is being sealed because a NAMED recovery rejected it, so the recovery kind
     // is direct evidence here rather than an inference from history. Without this the sealed
     // attempt would reach the ledger with no attribution at all: the finalization seam below

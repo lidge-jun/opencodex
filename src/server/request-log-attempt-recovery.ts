@@ -1,4 +1,17 @@
 import type { AttemptRecoveryKind, AttemptRecoveryWithheld, PersistedUsageAttempt } from "../usage/log";
+import type { RequestLogContext } from "./request-log";
+
+/** An observed refusal stays terminal even when a planned replacement never reaches the wire. */
+export const sealedCredentialRefusals = new WeakSet<PersistedUsageAttempt>();
+
+/** Selection can stage a different account for spend admission before an executor uses it. */
+export function retainRefusedAccount(logCtx: RequestLogContext): boolean {
+  const attempt = logCtx.activeAttempt;
+  if (!attempt || !sealedCredentialRefusals.has(attempt)) return false;
+  logCtx.provider = attempt.provider;
+  logCtx.accountLogLabel = attempt.accountLogLabel;
+  return true;
+}
 
 /** Credential recovery starts a new attempt even when the account's opaque identity is unchanged. */
 export function credentialRecoveryStatus(recovery?: AttemptRecoveryKind): 401 | 402 | 403 | 429 | undefined {

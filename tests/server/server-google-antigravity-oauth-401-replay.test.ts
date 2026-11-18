@@ -859,6 +859,7 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
       await response.text();
       expect(observed.chatAuth).toHaveLength(6);
       expect(new Set(observed.chatAuth)).toEqual(new Set(["Bearer rejected-access", "Bearer access-b"]));
+      expect(readUsageEntries().at(-1)?.attempts?.map(attempt => attempt.status)).toEqual([503, 503]);
     } finally { await server.stop(true); }
   });
 
@@ -976,6 +977,33 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
       expect(attempts?.[1]?.accountLogLabel).toBe(attempts?.[0]?.accountLogLabel);
       expect(attempts?.[1].recoveryKinds).toContain("oauth-401");
     } finally { await server.stop(true); }
+  });
+
+  test("adapter-owned OAuth replay rejected by pacing leaves one physical 401", async () => {
+    await seedOAuth();
+    saveConfig(antigravityConfig());
+    const observed = installOAuthFetch([401, 200]);
+    const server = startServer(0);
+    const withSlot = requestPacing.withProviderRequestSlot;
+    const pacing = spyOn(requestPacing, "withProviderRequestSlot").mockImplementation(async (name, provider, ...rest) => {
+      if (name === "google-antigravity" && provider.apiKey === "fresh-access") {
+        throw new requestPacing.RequestPacingQueueOverloadError(name, "queue_full", 1);
+      }
+      return withSlot(name, provider, ...rest);
+    });
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(429);
+      await response.text();
+      expect(observed.counts.refresh).toBe(1);
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access"]);
+      const entry = readUsageEntries().at(-1);
+      expect(entry?.status).toBe(429);
+      expect(entry?.attempts?.map(attempt => [attempt.status, attempt.sendCount])).toEqual([[401, 1]]);
+    } finally {
+      pacing.mockRestore();
+      await server.stop(true);
+    }
   });
 
   test("replayed 401 sends once on the sibling with its paired project", async () => {

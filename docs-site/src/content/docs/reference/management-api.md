@@ -434,10 +434,12 @@ request, has no tag. Older rows and malformed values omit the field.
 
 Key selection is recorded after queued requests have been rebuilt for the current selection.
 When a retry changes keys, `attempts` retains a separate record for the preceding key. A retry
-after credential recovery also records the refusal and replacement separately, even if both use
-the same account label. Each record retains usage that the proxy captures for that attempt. The
-xAI Responses OAuth replay discards the refused 401 body, so usage in that body remains
-unreported. A replacement can carry estimated usage when provider totals are unavailable.
+after credential recovery records a separate replacement attempt once it reaches upstream, even
+if both attempts use the same account label. If local pacing rejects the replacement, the
+request can have status 429 while its sole upstream attempt retains status 401. Each record
+retains usage that the proxy captures for that attempt. The xAI Responses OAuth replay discards
+the refused 401 body, so usage in that body remains unreported. A replacement can carry estimated
+usage from its rebuilt request when provider totals are unavailable.
 `usageStatus` distinguishes reported, estimated, and unreported usage. Routed adapter terminals
 are observed before image/search loops or continuation guards combine their usage. Consumers
 sum the flat attempts by provider/account and do not add the parent combo total again. These

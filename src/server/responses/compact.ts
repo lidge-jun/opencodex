@@ -239,7 +239,7 @@ import {
   upstreamHostCircuitOpenResponse,
   usesCodexForwardPoolAuth,
 } from "./core";
-import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel, sendWithConnectionPolicy } from "./fetch-helpers";
+import { fetchWithHeaderTimeout, physicalSendObserverInit, providerFetch, safeHostLabel, safeOriginLabel, sendWithConnectionPolicy } from "./fetch-helpers";
 import { requestPacingOverloadResponse } from "./pacing-overload";
 import { shouldRetryCodexPoolAccountQuota, shouldRetryCodexPoolAccountTransient } from "./core-codex-account";
 import { mapCodexAuthContextErrorToResponse, nativeMainRefreshFailureResponse } from "./codex-auth-error";
@@ -1286,12 +1286,14 @@ export async function handleResponsesCompact(
               stampApiKeyAccountLabel(logCtx, route.providerName, sendProvider);
               if (!rebindPhysicalSend(sendBudget, { poolId: logCtx.spendPoolId ?? route.providerName,
                 identityId: logCtx.accountLogLabel })) throw new SendBudgetExhaustedError(errorDestinationLabel(compactUrl));
-              noteProviderAttemptSend(logCtx, route.providerName, sendProvider, logCtx.usageLogInputTokens, upstreamRecovery);
               const physicalFetch = ((input, physicalInit) => sendWithConnectionPolicy(
                 passiveKeyPhysicalFetch(distributedKeyPhysicalFetch((sendProvider as { fetch?: typeof fetch }).fetch ?? execute, route.providerName, sendProvider, compactUrl), config, route.providerName, sendProvider), String(input),
                 physicalInit, { providerName: route.providerName, provider: sendProvider })) as typeof fetch;
               return fetchWithHeaderTimeout(compactUrl,
-                { ...init, headers: sendHeaders, body: JSON.stringify({ ...buildCompactSendBody() as typeof compactBody, model: route.modelId }) },
+                { ...init, headers: sendHeaders, body: JSON.stringify({ ...buildCompactSendBody() as typeof compactBody, model: route.modelId }),
+                  ...physicalSendObserverInit(undefined, compactUrl, () =>
+                    noteProviderAttemptSend(logCtx, route.providerName, sendProvider, logCtx.usageLogInputTokens, upstreamRecovery)),
+                },
                 init.signal ?? req.signal, connectMs(), false, physicalFetch);
             } : undefined,
           ...(onPhysicalDispatch ? { onPhysicalDispatch } : {}),

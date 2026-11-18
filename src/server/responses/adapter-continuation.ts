@@ -1,3 +1,4 @@
+import { credentialRecoveryStatus } from "../request-log-attempt-recovery";
 import { carryProxyError, proxyErrorPresentation, isProxyError, rememberProxyErrorMessage } from "../../lib/client-error-body";
 import { providerAffinityGenerationIsCurrent } from "../../providers/api-key-selection";
 import { bindAnthropicRejectionResponse } from "../../adapters/anthropic-rejection-memo";
@@ -18,8 +19,6 @@ import type { AdapterRequest } from "../../adapters/base";
 import {
   recordAdapterReasoning,
   recordAdapterTier,
-  sealRequestAttemptIdentity,
-  recordAttemptCredentialSource,
 } from "../request-log";
 import { noteAttemptRecoveryWithheld } from "../request-log";
 import { withProviderRequestSlot } from "../../providers/request-pacing";
@@ -107,7 +106,7 @@ export function createAdapterContinuations(
     | "genericFailoverLimit" | "anthropicFailoverLimit"
     | "applyFailoverSnapshot"
     | "replayOAuthCredentialSnapshot"
-    | "noteRoutedAttemptSend"
+    | "noteRoutedAttemptSend" | "createCredentialReplayAttempt"
   >,
   sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction">,
   sendBudgetState: Pick<
@@ -223,7 +222,10 @@ export function createAdapterContinuations(
      * adapter rebuild is deterministic for the same parsed request (tests assert byte-identical
      * replays).
      */
+    let lastSentRequest = transportState.sameTargetRequest;
     const fetchContinuation = async (recoveryKind?: AttemptRecoveryKind): Promise<Response> => {
+      const replay = recoveryKind && credentialRecoveryStatus(recoveryKind) !== undefined && response && lastSentRequest
+        ? transportState.createCredentialReplayAttempt(lastSentRequest, response.status, recoveryKind) : undefined;
       let continuationRequest: AdapterRequest | undefined;
       if (transportState.sameTargetRequest !== undefined && transportState.sameTargetParsed === nextParsed && transportState.sameTargetToken === transportState.transportToken) {
         // Same target (key/adapter/parsed/tier unchanged): replay the exact cached request.
@@ -237,8 +239,10 @@ export function createAdapterContinuations(
             abortSignal: upstream.signal,
             ...(transportState.imageTierBias > 0 ? { imageTierBias: transportState.imageTierBias } : {}),
           });
-          recordAdapterReasoning(logCtx, continuationRequest);
-          recordAdapterTier(logCtx, continuationRequest);
+          if (!replay) {
+            recordAdapterReasoning(logCtx, continuationRequest);
+            recordAdapterTier(logCtx, continuationRequest);
+          }
         } catch (err) {
           // The main body is already streaming, so there is no HTTP error surface: release
           // any partial body observation and surface the failure as an in-stream error via
@@ -257,12 +261,13 @@ export function createAdapterContinuations(
       const continuationEstimate = typeof builtContinuationRequest.usageLog?.inputTokens === "number"
         ? builtContinuationRequest.usageLog.inputTokens
         : undefined;
-      if (continuationEstimate !== undefined) logCtx.usageLogInputTokens = continuationEstimate;
+      if (!replay && continuationEstimate !== undefined) logCtx.usageLogInputTokens = continuationEstimate;
       // Optional recovery label for same-target / failover continuation sends.
       const replayKind: AttemptRecoveryKind | undefined = recoveryKind;
       try {
         if (transportState.activeAdapter.fetchResponse) {
-          transportState.noteRoutedAttemptSend(continuationEstimate, replayKind);
+          if (!replay) transportState.noteRoutedAttemptSend(continuationEstimate, replayKind);
+          let published = false;
           const producer = adapterDispatchBudget?.beginSpendProducer?.();
           try {
           return await withProviderRequestSlot(route.providerName, route.provider, nextParsed.modelId, upstream.signal, pacingSlot =>
@@ -277,7 +282,12 @@ export function createAdapterContinuations(
               executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
                 pacingSlotAcquired: true,
                 pacingSlot,
-                dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed),
+                dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed, "adapter", Boolean(replay)),
+                onPhysicalDispatch: () => {
+                  if (!published) replay?.(builtContinuationRequest, transportState.activeAdapter.name);
+                  published = true;
+                  lastSentRequest = builtContinuationRequest;
+                },
                 providerName: route.providerName,
                 modelId: nextParsed.modelId,
               }),
@@ -299,7 +309,7 @@ export function createAdapterContinuations(
         const continuationResponse = await fetchContinuationWithRetryPolicy(
           recovery => {
             sendBudgetState.adapterSendBudget?.startRequest?.(responsesSpendTarget(logCtx, route.providerName));
-            transportState.noteRoutedAttemptSend(continuationEstimate, recovery ?? replayKind);
+            if (!replay) transportState.noteRoutedAttemptSend(continuationEstimate, recovery ?? replayKind);
             return fetchWithHeaderTimeout(
               builtContinuationRequest.url,
               applyUpstreamRecoveryInit({
@@ -311,10 +321,12 @@ export function createAdapterContinuations(
               route.provider.authMode === "forward" ? connectMs : 0,
               nextParsed.stream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-              dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed),
-                onPhysicalDispatch: deferredContinuation ? () => {
-                  if (!deferredContinuation.beforeDispatch()) throw new SendBudgetExhaustedError(errorDestinationLabel(builtContinuationRequest.url));
-                } : undefined,
+                dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed, "adapter", Boolean(replay)),
+                onPhysicalDispatch: () => {
+                  if (deferredContinuation && !deferredContinuation.beforeDispatch()) throw new SendBudgetExhaustedError(errorDestinationLabel(builtContinuationRequest.url));
+                  replay?.(builtContinuationRequest, transportState.activeAdapter.name, recovery);
+                  lastSentRequest = builtContinuationRequest;
+                },
                 providerName: route.providerName,
                 modelId: nextParsed.modelId,
               }),
@@ -519,8 +531,7 @@ export function createAdapterContinuations(
                 oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot,
               });
             }
-            sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
-            recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
+
             nextContinuationRecoveryKind = response.status === 401 ? "oauth-401"
               : response.status === 403 ? "oauth-account-403" : "anthropic-oauth-429";
             sendBudgetState.pendingHopPermit = hop.permit;
@@ -619,8 +630,7 @@ export function createAdapterContinuations(
                 adapterName: transportState.activeAdapter.name,
                 oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot,
               });
-              sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
-              recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
+
               // The replay goes out on the next iteration. An adapter that owns its ladder
               // reserves for that send itself, so hand this reservation down rather than let it
               // take a second one for the same replay. A helper-routed replay carries the
@@ -710,8 +720,7 @@ export function createAdapterContinuations(
                 adapterName: transportState.activeAdapter.name,
                 oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot,
               });
-              sealRequestAttemptIdentity(logCtx.activeAttempt, logCtx.provider, transportState.activeAdapter.name, logCtx.accountLogLabel);
-              recordAttemptCredentialSource(logCtx.activeAttempt, route.providerName, route.provider, transportState.activeAdapter.name);
+
               // The replay goes out on the next iteration. An adapter that owns its ladder
               // reserves for that send itself, so hand this reservation down rather than let it
               // take a second one for the same replay. A helper-routed replay carries the

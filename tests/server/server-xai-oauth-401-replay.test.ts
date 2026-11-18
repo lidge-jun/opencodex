@@ -12,10 +12,15 @@ import { XAI_OAUTH_DISCOVERY_URL } from "../../src/oauth/xai";
 import { getAccountSet, saveCredential } from "../../src/oauth/store";
 import { clearModelCache, getProviderDiscoveryStatus, isModelsFetchCoolingDown, markModelsFetchFailure, MODELS_FETCH_FAILURE_COOLDOWN_MS } from "../../src/codex/model-cache";
 import { XAI_GROK_CLI_BASE_URL } from "../../src/providers/xai-transport";
+import * as xaiTransport from "../../src/providers/xai-transport";
 import { ADAPTER_REGISTRY } from "../../src/adapters/registry";
 import { createAdapterTierMetadata } from "../../src/providers/fastwire";
 import * as requestPacing from "../../src/providers/request-pacing";
 import { setPassiveRouteLinker } from "../../src/server/passive-route-linker";
+import { registerLabPassiveRouteLinker } from "../../src/lib/lab-passive-linker-registration";
+import * as productionSubjects from "../../src/routing/compatibility/subject";
+import { resetCompatibilityVersionCacheForTests, setCompatibilityVersionOverrideForTests } from "../../src/routing/compatibility/version";
+import { readInstallationSalt } from "../../src/lab/subject/installation-salt";
 import { readUsageEntries, usageLogPath } from "../../src/usage/log";
 import { startServer } from "../../src/server";
 import type { RequestLogContext } from "../../src/server/request-log";
@@ -30,7 +35,9 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const TOKEN_ENDPOINT = "https://auth.x.ai/oauth/token";
 const OAUTH_RESPONSES_ENDPOINT = `${XAI_GROK_CLI_BASE_URL}/responses`;
-const REPLACEMENT_RESPONSES_ENDPOINT = `${XAI_GROK_CLI_BASE_URL}/responses-replacement-fixture`;
+const REPLACEMENT_BASE_URL = "https://replacement.example/v1";
+const REPLACEMENT_RESPONSES_ENDPOINT = `${REPLACEMENT_BASE_URL}/responses`;
+const OAUTH_CHAT_ENDPOINT = `${XAI_GROK_CLI_BASE_URL}/chat/completions`;
 const PUBLIC_OAUTH_AUTHENTICATION_ERROR = "OAuth authentication failed. Check the OpenCodex account status and retry.";
 const WINDOWS_PATH_CANARY = "C:\\Users\\Alice\\.opencodex\\auth.json.ocx-tmp";
 const UNC_PATH_CANARY = "\\\\server\\share\\opencodex\\auth.json.ocx-tmp";
@@ -103,11 +110,11 @@ function successBody(text: string): string {
   });
 }
 
-async function post(server: ReturnType<typeof startServer>): Promise<Response> {
+async function post(server: ReturnType<typeof startServer>, model = "grok-4.5"): Promise<Response> {
   return originalFetch(new URL("/v1/responses", server.url), {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ model: "xai/grok-4.5", input: "hello", stream: false }),
+    body: JSON.stringify({ model: `xai/${model}`, input: "hello", stream: false }),
   });
 }
 
@@ -142,11 +149,17 @@ function installOAuthFetch(
         expires_in: 3600,
       }), { headers: { "content-type": "application/json" } });
     }
-    if (url === OAUTH_RESPONSES_ENDPOINT || url === REPLACEMENT_RESPONSES_ENDPOINT) {
+    if (url === OAUTH_RESPONSES_ENDPOINT || url === REPLACEMENT_RESPONSES_ENDPOINT || url === OAUTH_CHAT_ENDPOINT) {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      expect(body.model).toBe("grok-4.5");
-      expect(body.input).toBe("hello");
-      expect(body.messages).toBeUndefined();
+      if (url === OAUTH_CHAT_ENDPOINT) {
+        expect(body.model).toBe("grok-3");
+        expect(JSON.stringify(body.messages)).toContain("hello");
+      }
+      else {
+        expect(body.model).toBe("grok-4.5");
+        expect(body.input).toBe("hello");
+        expect(body.messages).toBeUndefined();
+      }
       chatAuth.push(new Headers(init?.headers).get("authorization") ?? "");
       const status = chatStatuses.shift() ?? 200;
       if (status === 401) {
@@ -246,9 +259,13 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
     }
   });
 
-  test("a refreshed OAuth request refused by pacing has no replacement send", async () => {
+  test.each(["openai-responses", "openai-chat"] as const)("a refreshed OAuth %s request refused by pacing keeps only the upstream refusal", async adapter => {
     await seedOAuth();
-    saveConfig(xaiConfig());
+    const config = xaiConfig();
+    const model = adapter === "openai-chat" ? "grok-3" : "grok-4.5";
+    config.providers.xai!.models = [model];
+    config.providers.xai!.modelAdapters = { [model]: adapter };
+    saveConfig(config);
     const observed = installOAuthFetch([401, 200]);
     const server = startServer(0);
     const wait = requestPacing.waitForProviderRequestSlot;
@@ -261,15 +278,57 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
       return wait(name, provider, ...rest);
     });
     try {
-      const response = await post(server);
+      const response = await post(server, model);
       expect(response.status).toBe(429);
       await response.text();
       expect(refusals).toBe(1);
       expect(observed.counts.refresh).toBe(1);
       expect(observed.chatAuth).toEqual(["Bearer rejected-access"]);
-      expect(readUsageEntries().at(-1)?.attempts?.map(attempt => attempt.sendCount)).toEqual([1]);
+      const entry = readUsageEntries().at(-1);
+      expect(entry?.status).toBe(429);
+      expect(entry?.attempts?.map(attempt => [attempt.adapter, attempt.status, attempt.sendCount])).toEqual([[adapter, 401, 1]]);
     } finally {
       pacing.mockRestore();
+      await server.stop(true);
+    }
+  });
+
+  test("the production passive linker uses the refreshed routed base URL", async () => {
+    await seedOAuth();
+    const config = xaiConfig();
+    saveConfig(config);
+    const observed = installOAuthFetch([401, 200]);
+    const server = startServer(0);
+    readInstallationSalt(testDir);
+    setCompatibilityVersionOverrideForTests("a".repeat(64));
+    const detach = registerLabPassiveRouteLinker(testDir);
+    const resolve = xaiTransport.resolveProviderTransport;
+    const transport = spyOn(xaiTransport, "resolveProviderTransport").mockImplementation((...args) => {
+      const provider = resolve(...args);
+      return args[0] === "xai" && provider.apiKey === "fresh-access" ? { ...provider, baseUrl: REPLACEMENT_BASE_URL } : provider;
+    });
+    const resolveSubject = productionSubjects.resolveProductionRouteSubject;
+    const subjects: Array<{ baseUrl?: string; id?: string }> = [];
+    const linker = spyOn(productionSubjects, "resolveProductionRouteSubject").mockImplementation((...args) => {
+      const resolved = resolveSubject(...args);
+      if (args[1] === "xai") subjects.push({ baseUrl: resolved?.routeContext.baseUrl, id: resolved?.subjectId });
+      return resolved;
+    });
+    try {
+      const response = await post(server);
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer fresh-access"]);
+      expect(subjects.map(subject => subject.baseUrl)).toEqual([XAI_GROK_CLI_BASE_URL, REPLACEMENT_BASE_URL]);
+      const ids = subjects.map(subject => subject.id);
+      for (const id of ids) expect(id).toMatch(/^[a-f0-9]{64}$/);
+      expect(ids[0]).not.toBe(ids[1]);
+      expect(readUsageEntries().at(-1)?.attempts?.map(attempt => attempt.labRouteSubjectId)).toEqual(ids);
+    } finally {
+      transport.mockRestore();
+      linker.mockRestore();
+      detach();
+      resetCompatibilityVersionCacheForTests();
       await server.stop(true);
     }
   });
@@ -310,7 +369,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
     }
   });
 
-  test("usage in the discarded OAuth refusal is unreported and replacement usage can be estimated", async () => {
+  test.each([13, undefined])("the discarded OAuth refusal is unreported and replacement input estimate is %s", async replacementEstimate => {
     await seedOAuth();
     saveConfig(xaiConfig());
     installOAuthFetch([401, 200], { includeRefusedUsage: true, omitSuccessUsage: true });
@@ -319,17 +378,23 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
     const factory = spyOn(ADAPTER_REGISTRY["openai-responses"], "create").mockImplementation((provider, context) => {
       const adapter = create(provider, context);
       const build = adapter.buildRequest.bind(adapter);
-      adapter.buildRequest = async (...args) => ({ ...await build(...args), usageLog: { inputTokens: 7 } });
+      adapter.buildRequest = async (...args) => {
+        const estimate = provider.apiKey === "fresh-access" ? replacementEstimate : 7;
+        return { ...await build(...args), usageLog: estimate === undefined ? undefined : { inputTokens: estimate } };
+      };
       return adapter;
     });
     try {
       const response = await post(server);
       expect(response.status).toBe(200);
       await response.text();
-      const attempts = readUsageEntries().at(-1)?.attempts;
+      const entry = readUsageEntries().at(-1);
+      const attempts = entry?.attempts;
       expect(attempts?.[0]).toMatchObject({ status: 401, usageStatus: "unreported" });
       expect(attempts?.[0]?.usage).toBeUndefined();
-      expect(attempts?.[1]).toMatchObject({ status: 200, usageStatus: "estimated", usage: { inputTokens: 7, estimated: true } });
+      expect(attempts?.[1]).toMatchObject({ status: 200, usageStatus: replacementEstimate === undefined ? "unreported" : "estimated" });
+      expect(attempts?.[1]?.usage?.inputTokens).toBe(replacementEstimate);
+      expect(entry?.usage?.inputTokens).toBe(replacementEstimate);
     } finally {
       factory.mockRestore();
       await server.stop(true);

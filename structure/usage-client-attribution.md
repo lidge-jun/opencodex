@@ -207,10 +207,13 @@ same-account OAuth refresh after 401. `credentialRecoveryStatus` in
 The existing in-place split preserves the active object, keeps the refused send's usage on its
 sealed row and records the replacement send on a fresh row. The sealed tier outcome is a snapshot;
 the replacement retains the live adapter observer's outcome so response-tier confirmation updates
-only the replacement. Native Responses OAuth 401 recovery commits the split at physical dispatch,
-after pacing and admission. It attaches the rebuilt request's tier only after sealing the
-refusal. The active segment retains its passive Lab subject on the same route. A changed
-Responses route resolves a new subject through `src/server/passive-route-linker.ts`.
+only the replacement. `src/server/credential-recovery-attempt.ts` seals the observed refusal
+before a credential replay. If pacing or final admission refuses the replacement, finalization
+keeps the physical status and separately records the logical request outcome. Responses
+recovery publishes the rebuilt tier, reasoning, account and input estimate at physical dispatch.
+A Responses-to-Chat handoff carries this pending replay into the translated dispatch. The
+active segment keeps its passive Lab subject on the same route. A changed route resolves a new
+subject through `src/server/passive-route-linker.ts` using the effective destination and wire.
 A recovery before the first send creates no extra row. Same-account waits and transport resends remain on the existing attempt.
 `tests/usage/key-attribution.test.ts` covers the split and non-split kinds; the loopback server
 case in `tests/server/server-google-antigravity-oauth-401-replay.test.ts` records separate 401
