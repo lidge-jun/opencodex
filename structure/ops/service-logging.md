@@ -66,3 +66,5 @@ formatting, startup and periodic checks, bounded generations, failure handling,
 continued writes through an append descriptor opened before rotation, unsafe
 leaves, controlled identity replacements, exclusive archive creation, parent
 aliases, and partial-copy/flush failures.
+
+Union routing checks whether a destination can forward a named hosted Advisor before it counts that target toward the request’s media capability.

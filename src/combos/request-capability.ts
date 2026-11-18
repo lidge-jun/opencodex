@@ -132,7 +132,7 @@ export async function comboCapabilityGate(
   combo: Pick<NormalizedComboConfig, "capabilityPolicy" | "targets">,
   body: unknown,
   route: ComboTargetRouter,
-  isAdmitted: (target: NormalizedComboConfig["targets"][number], route: ComboTargetRoute | undefined) => boolean = () => true,
+  isAdmitted: (target: NormalizedComboConfig["targets"][number], route: ComboTargetRoute | undefined, parsed: OcxParsedRequest | undefined) => boolean = () => true,
   canDescribe?: ComboVisionProbe,
 ): Promise<ComboCapabilityGate> {
   if (combo.capabilityPolicy !== "union") return OPEN_GATE;
@@ -147,7 +147,7 @@ export async function comboCapabilityGate(
     if (config.providers[target.provider]?.disabled === true) continue;
     const key = targetKey(target);
     const resolved = route(target);
-    if (!isAdmitted(target, resolved)) continue;
+    if (!isAdmitted(target, resolved, parsed)) continue;
     hasAdmittedTarget = true;
     if (judged.has(key)) continue;
     if (hasAudio && !comboTargetAcceptsAudio(config, resolved)) continue;

@@ -81,6 +81,8 @@ test("admission helper metadata reads are represented in the snapshot", async ()
   const provider = providers.sol!;
   const sources = [
     ["src/combos/request-capability.ts", "provider", provider],
+    ["src/adapters/anthropic/advisor-tool.ts", "provider", provider, "advisorServerToolDestination"],
+    ["src/protocols/opaque-state.ts", "provider", provider, "credentialDomainFor"],
     ["src/server/responses/combo-required-tool-contract.ts", "provider", provider],
     ["src/server/chat-native-eligibility.ts", "provider", provider],
     ["src/adapters/openai-responses/passthrough.ts", "provider", provider, "requiresPlaintextReasoningReplay"],

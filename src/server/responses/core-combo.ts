@@ -1,3 +1,4 @@
+import { admitsHostedAdvisor, scopedAnthropicServerTools } from "../messages-native-scope";
 import { responseReplayOwnerKey } from "../../responses/state/replay-owner";
 import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import { comboLogLabel, comboTargetLogLabel } from "../../combos/resolve";
@@ -638,7 +639,11 @@ export async function executeComboResponses(
           provider: snapshotComboAdmissionProvider(route.provider),
         };
       },
-      (target, route) => capabilityCandidate(target) && (!admissionScope || !!route && routeAllowedByScope(admissionScope, route)),
+      (target, route, parsed) => capabilityCandidate(target)
+        && (!admissionScope || !!route && routeAllowedByScope(admissionScope, route))
+        && (options.anthropicHostedAdvisorSelection !== "selected" || !!route && admitsHostedAdvisor(
+          route.provider, scopedAnthropicServerTools(admissionScope, route, options.anthropicServerTools), parsed?.context.tools,
+        )),
       (route, parsed) => canDescribeComboImages({ config, req, options: { ...options, admissionScope } }, route, parsed));
     if (capability.unservable === "audio") {
       return formatErrorResponse(400, "invalid_request_error", "No target of this combo can accept audio input");

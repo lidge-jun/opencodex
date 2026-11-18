@@ -15,7 +15,7 @@ const providerFields = [
   "noReasoningModels", "modelSuppressSyntheticMax", "supportsResponsesCustomTools",
   "dropResponsesReasoningItems", "preserveReasoningContentModels", "allowEncryptedV2AgentTasks", "keyOptional",
   "allowPrivateNetwork", "googleMode", "fastWire", "apiKeySelectionRevision",
-  "autoToolChoiceOnlyModels", "preserveResponsesReasoningContent", "requiresAdjacentResponsesToolResults",
+  "forwardAdvisorTool", "autoToolChoiceOnlyModels", "preserveResponsesReasoningContent", "requiresAdjacentResponsesToolResults",
 ] as const satisfies readonly (keyof OcxProviderConfig)[];
 
 /** The capability gate consumes this detached provider view. Credential resolution uses live routing. */

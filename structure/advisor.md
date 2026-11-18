@@ -458,3 +458,5 @@ loopback response only for the process-capability-authenticated Advisor caller. 
 paths use adapter-owned `effectiveEffort`; native Chat observes the finalized request body.
 No requested value is substituted for missing wire evidence. The activity UI displays unknown
 when unreported and does not claim verification of a provider's internal reasoning.
+
+Translated union combos check the selected hosted Advisor against each candidate’s destination and caller model scope before evaluating image or context capability. Child preparation checks the selected tool again on the settled route.

@@ -327,3 +327,5 @@ detection, and folds identities beyond 255 concrete rows into one explicit overf
 preserving global totals. Up to four JEV projections participate in the same app-owned memory budget
 and eviction path as ordinary usage aggregates. Read failure returns HTTP 500 rather than a partial
 projection.
+
+Ingress and post-decision union admission share the hosted Advisor eligibility check with child preparation. The detached admission snapshot includes the destination’s `forwardAdvisorTool` policy, so changing it during admission triggers a local retry.

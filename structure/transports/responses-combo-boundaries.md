@@ -352,3 +352,5 @@ ordinary failover by supplying the same header. The wire body remains `rate_limi
 The message says no additional provider request was sent when the current request already has
 physical sends; an admission refusal before its first send retains the no-provider wording.
 Coverage: `tests/responses/chat-native-spend.test.ts` and `tests/responses/responses-spend-contract-c.test.ts`.
+
+For a named hosted Advisor, union capability admission counts only destinations that can forward the scoped declaration. An otherwise eligible text-only destination can still receive an image-omission fallback under `degrade`.
