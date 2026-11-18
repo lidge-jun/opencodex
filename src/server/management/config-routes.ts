@@ -342,7 +342,7 @@ export async function syncEnabledClientIntegrations(
   }
 
   if (stale()) return out;
-  const { refreshOwnedCatalogIntegrations } = await import("../../integrations/catalog-refresh");
+  const { catalogRefreshClientIds, refreshOwnedCatalogIntegrations } = await import("../../integrations/catalog-refresh");
   const refreshOwned = deps.refreshOwnedCatalogIntegrations ?? refreshOwnedCatalogIntegrations;
   out.push(...await refreshOwned({
     models: async () => {
@@ -351,9 +351,7 @@ export async function syncEnabledClientIntegrations(
     },
     config,
     port,
-  }, unattended
-    ? ["mcode", "pi", "aside", "raycast", "omo", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"]
-    : ["mcode", "pi", "aside", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"],
+  }, catalogRefreshClientIds(unattended ? "unattended" : "serverSync"),
   ...unattended ? [{ refreshOnly: true, admit }] as const : []));
 
   return out;

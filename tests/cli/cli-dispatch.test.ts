@@ -176,7 +176,7 @@ describe("dispatchCommand exit codes", () => {
     }
   });
 
-  test("sync refreshes already-owned OpenCode and Kilo after publishing the Codex catalog", async () => {
+  test("sync refreshes already-owned OpenCode, Kilo and DSH after publishing the Codex catalog", async () => {
     const syncModule = await import("../../src/codex/sync");
     const catalogModule = await import("../../src/integrations/catalog-refresh");
     const asideModule = await import("../../src/cli/aside-profiles");
@@ -203,7 +203,7 @@ describe("dispatchCommand exit codes", () => {
       expect(code).toBe(0);
       expect(order).toEqual(["catalog", "refresh"]);
       expect(refresh).toHaveBeenCalledTimes(1);
-      expect(refresh.mock.calls[0]![1]).toEqual(["mcode", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"]);
+      expect(refresh.mock.calls[0]![1]).toEqual(["mcode", "raycast", "omo", "cline", "commandcode", "dsh", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"]);
       // #8287: Pi refreshes through the serving proxy instead of the local fan-out.
       expect(pi).toHaveBeenCalledTimes(1);
     } finally {
