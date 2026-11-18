@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveConfig } from "../../src/config";
 import {
+  noteSubagentModelFailure,
   resetSubagentModelFallbackStateForTests,
   setSubagentQuotaPrimeForTests,
 } from "../../src/codex/subagent-model-fallback";
@@ -21,6 +22,7 @@ import { PLAINTEXT_V2_COLLABORATION_NAMESPACE } from "../../src/responses/plaint
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { readRecentUsageEntries } from "../../src/usage/log";
+import { codexHeaders, encryptedInput } from "../helpers/agent-task-recovery";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { INTERNAL_DEADLINE_MS, SERVER_BUDGET_MS } from "../helpers/test-budget";
@@ -853,6 +855,72 @@ describe("Issue #702 expired forward replay state", () => {
       expect(refusalRow.attempts ?? []).toEqual([]);
       expect(refusalRow.usage).toBeUndefined();
       expect(rows[2]!.attempts).toMatchObject([{ sendCount: 1, recoveryKinds: [] }]);
+    } finally {
+      socket?.close();
+      await server.stop(true);
+    }
+  }, SERVER_BUDGET_MS);
+
+  test("native fallback continuation refusal records the earlier encrypted-task recovery send", async () => {
+    const primary = "routed/test-model";
+    const native = "gpt-6.1-sol";
+    const recoveryModel = "gpt-5.6-sol";
+    const upstreamRequests: { url: string; model: string; tool_choice?: { name: string } }[] = [];
+    const config = forwardConfig();
+    config.apiKeys = [];
+    config.websockets = true;
+    config.agentTaskRecovery = { enabled: true, model: recoveryModel };
+    config.subagentModelFallback = [native];
+    config.providers.routed = {
+      adapter: "openai-chat", baseUrl: "https://example.invalid/v1", authMode: "key",
+      apiKey: "synthetic-key", models: ["test-model"],
+    };
+    saveConfig(config);
+    setSubagentQuotaPrimeForTests(async () => {});
+    noteSubagentModelFailure(native, "429", config);
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.hostname === "127.0.0.1") return originalFetch(input, init);
+      const { model, tool_choice } = JSON.parse(String(init?.body));
+      upstreamRequests.push({ url: url.href, model, tool_choice });
+      // The native fallback is unavailable on the ciphertext-only pass. Swap availability
+      // while recovery is in flight so route selection runs again and picks the native model.
+      resetSubagentModelFallbackStateForTests();
+      noteSubagentModelFailure(primary, "429", config);
+      return new Response(`data: ${JSON.stringify({
+        type: "response.completed",
+        response: {
+          status: "completed",
+          output: [{ type: "function_call", name: "capture_assignment", arguments: '{"assignment":"Recovered task"}' }],
+          usage: { input_tokens: 30, output_tokens: 5, total_tokens: 35 },
+        },
+      })}\n\n`, { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+
+    const server = startServer(0);
+    let socket: WebSocket | undefined;
+    try {
+      const headers = codexHeaders("acct-recovery-refusal", { "thread-id": "recovery-refusal-fixture" });
+      socket = await openResponseSocket(server.url, Object.fromEntries(headers));
+      const refused = await sendSocketTurn(socket, {
+        model: primary, previous_response_id: FIRST_RESPONSE_ID, input: encryptedInput(), store: false,
+      });
+      expect(refused).toMatchObject({ type: "error", status: 400, error: LOCAL_REPLAY_UNAVAILABLE });
+      expect(upstreamRequests).toEqual([{
+        url: "https://chatgpt.com/backend-api/codex/responses",
+        model: recoveryModel, tool_choice: expect.objectContaining({ name: "capture_assignment" }),
+      }]);
+
+      const [row] = readRecentUsageEntries(1, testHome);
+      expect(row).toMatchObject({
+        status: 400, provider: "openai", model: native, errorCode: "previous_response_not_found",
+        terminalSource: "synthetic", spend: { sends: 1 },
+      });
+      expect(row?.attempts).toMatchObject([{
+        provider: "openai", model: recoveryModel, status: 200, sendCount: 1,
+        usage: { inputTokens: 30, outputTokens: 5, totalTokens: 35 },
+      }]);
+      expect(row?.failureCause).not.toBe("local-refusal");
     } finally {
       socket?.close();
       await server.stop(true);

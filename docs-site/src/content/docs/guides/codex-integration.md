@@ -503,7 +503,7 @@ later requests using the existing continuation handling. This happens only under
 pressure, needs no setting, and does not change voice connections or upstream connection reuse.
 
 If a canonical ChatGPT forward continuation references expired or missing local replay state,
-opencodex returns `previous_response_not_found` before sending anything upstream. Codex's
+opencodex returns `previous_response_not_found` before forwarding the continuation. Codex's
 WebSocket client recognizes this error and can reconnect with its full retained context,
 including completed tool calls and their results, within its normal stream retry budget. An
 idle task therefore does not need a new task solely because the proxy's replay cache expired.
@@ -512,10 +512,12 @@ disk, and entry ceilings; this does not recover history the client no longer has
 must handle the error explicitly and resend their full context without `previous_response_id`.
 Retrying only the same ID cannot recover missing state.
 
-When the proxy has already selected the ChatGPT forward route, `usage.jsonl` records the
-selected provider and model with `errorCode: "previous_response_not_found"` and
-`failureCause: "local-refusal"`. The refused request uses no model quota. A client resend with
-the full context is logged separately and can use quota.
+`usage.jsonl` records the selected ChatGPT provider and model with
+`errorCode: "previous_response_not_found"`. If preparation made no inference send, the row has
+`failureCause: "local-refusal"` and the request uses no model quota. Opt-in encrypted-task
+recovery can send an inference request before native fallback is selected. The row records that
+attempt, which may use quota. A client resend with the full context is logged separately and can
+use quota.
 
 The same refusal applies when the referenced state belongs to a different client task scope,
 including when the new request appears to carry complete input. The proxy cannot prove that input

@@ -241,7 +241,7 @@ WebSocket으로 연결하면 상류 응답 전에 연결 승인이 끝나므로,
 나중에 추가할 수는 없습니다.
 
 네이티브 ChatGPT forward 요청의 로컬 재생 상태가 만료되었거나 없으면 opencodex는
-upstream 요청 전에 `previous_response_not_found`를 반환합니다. Codex WebSocket 클라이언트는
+후속 요청을 ChatGPT에 전달하기 전에 `previous_response_not_found`를 반환합니다. Codex WebSocket 클라이언트는
 일반 스트림 재시도 한도 안에서 다시 연결하고, 완료된 도구 호출과 결과를 포함한 현재 보유
 컨텍스트 전체를 다시 보낼 수 있습니다. 따라서 프록시의 재생 캐시가 만료되었다는 이유만으로
 새 작업을 만들 필요는 없습니다. 재생 상태는 24시간 보존하며 기존 메모리·디스크·항목 수
@@ -249,10 +249,12 @@ upstream 요청 전에 `previous_response_not_found`를 반환합니다. Codex W
 HTTP 클라이언트는 이 오류를 직접 처리하고 `previous_response_id` 없이 전체 컨텍스트를 다시
 보내야 합니다. 같은 ID만 재시도해서는 누락된 상태를 복구할 수 없습니다.
 
-프록시가 이미 ChatGPT 전달 경로를 선택했다면 `usage.jsonl`에 선택된 공급자와 모델, 그리고
-`errorCode: "previous_response_not_found"`, `failureCause: "local-refusal"`이 기록됩니다.
-거부된 요청은 모델 사용량 한도를 소모하지 않습니다. 클라이언트가 전체 컨텍스트를 다시
-보내면 별도 요청으로 기록되며 모델 사용량 한도를 소모할 수 있습니다.
+`usage.jsonl`에는 선택된 ChatGPT 공급자와 모델 및 `errorCode: "previous_response_not_found"`가
+기록됩니다. 요청 준비 중 추론 요청을 보내지 않았다면 `failureCause: "local-refusal"`이 기록되며
+모델 사용량 한도를 소모하지 않습니다. 암호화된 작업 복구를 활성화한 경우 네이티브 대체 모델을
+선택하기 전에 복구용 추론 요청을 보낼 수 있습니다. 이 시도는 같은 항목에 기록되며 모델 사용량
+한도를 소모할 수 있습니다. 클라이언트가 전체 컨텍스트를 다시 보내면 별도 요청으로 기록되며
+모델 사용량 한도를 소모할 수 있습니다.
 
 참조한 상태의 client task scope가 현재 요청과 다를 때도 같은 거부 응답을 반환합니다. 새 요청이
 전체 입력처럼 보여도 프록시는 그것이 완전한 대화인지 증명할 수 없으므로
