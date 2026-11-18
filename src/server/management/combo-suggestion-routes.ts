@@ -41,14 +41,18 @@ function view(ctx: ManagementContext): Response {
 
 export async function handleComboSuggestionRoutes(ctx: ManagementContext): Promise<Response | null> {
   const { req, url } = ctx;
-  const exclusions = url.pathname === "/api/combo-suggestions" && (req.method === "GET" || req.method === "PUT");
-  const save = url.pathname === "/api/combo-suggestions/save" && req.method === "POST";
-  if (!exclusions && !save) return null;
-  if (!hasHumanDashboardSession(ctx)) {
-    return jsonResponse({ error: "dashboard session required" }, 403, req, ctx.config);
+  const allowed = hasHumanDashboardSession(ctx);
+  const denied = () => jsonResponse({ error: "dashboard session required" }, 403, req, ctx.config);
+  if (url.pathname === "/api/combo-suggestions/save" && req.method === "POST") {
+    return allowed ? await saveSuggestion(ctx) : denied();
   }
-  if (save) return await saveSuggestion(ctx);
-  return req.method === "GET" ? view(ctx) : await writeExcluded(ctx);
+  if (url.pathname === "/api/combo-suggestions" && req.method === "GET") {
+    return allowed ? view(ctx) : denied();
+  }
+  if (url.pathname === "/api/combo-suggestions" && req.method === "PUT") {
+    return allowed ? await writeExcluded(ctx) : denied();
+  }
+  return null;
 }
 
 async function writeExcluded(ctx: ManagementContext): Promise<Response> {
