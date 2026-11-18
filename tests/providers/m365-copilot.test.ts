@@ -294,6 +294,35 @@ describe("Microsoft 365 Copilot adapter", () => {
       expect(events.find(event => event.type === "error")).toMatchObject({ type: "error", message: "Microsoft 365 Copilot returned invalid tool arguments" });
     } finally { budget.dispose(); }
   });
+  test("isolates a shared conversation prefix by authenticated caller and resolved conversation", async () => {
+    const ids: string[] = [];
+    const adapter = createM365CopilotAdapter(provider(), { turn: async options => {
+      ids.push(options.conversation.conversationId);
+      return "fixture";
+    } });
+    const budget = createTranslatorBudget();
+    const headers = new Headers({ session_id: "shared" });
+    const run = (principal: string | undefined, thread: string | undefined, count: number) => {
+      const parsed = request();
+      if (thread) parsed._reasoningReplayScope = { clientThreadId: thread, clientPrincipalId: principal };
+      for (let i = 1; i < count; i++) parsed.context.messages.push({ role: "user", content: "Follow up " + i, timestamp: i });
+      return adapter.runTurn!(parsed, { headers, translatorBudget: budget }, () => {});
+    };
+    try {
+      await run("caller-a", "thread-a", 1);
+      await run("caller-b", "thread-a", 2);
+      await run("caller-a", "thread-a", 3);
+      await run("caller-a", "thread-b", 4);
+      await run(undefined, "thread-a", 5);
+      await run(undefined, "thread-a", 6);
+      await run("caller-a", undefined, 7);
+      await run("caller-a", undefined, 8);
+      expect(ids[1]).not.toBe(ids[0]);
+      expect(ids[2]).toBe(ids[0]);
+      expect(new Set(ids).size).toBe(7);
+    } finally { budget.dispose(); }
+  });
+
   test("preserves client tool calls and uses the returned tool result on the same conversation", async () => {
     const turns: any[] = [];
     const adapter = createM365CopilotAdapter(provider(), { turn: async options => {
@@ -302,6 +331,7 @@ describe("Microsoft 365 Copilot adapter", () => {
       return turns.length === 1 ? [fence + "read_file", "/trial.txt", fence].join(String.fromCharCode(10)) : "The tool returned fixture-result";
     } });
     const parsed = request(); const first: AdapterEvent[] = [];
+    parsed._reasoningReplayScope = { clientThreadId: "thread", clientPrincipalId: "caller" };
     const budget = createTranslatorBudget(); const meta = { headers: new Headers(), translatorBudget: budget };
     try {
       await adapter.runTurn!(parsed, meta, event => first.push(event));

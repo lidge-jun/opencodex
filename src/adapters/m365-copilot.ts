@@ -38,14 +38,19 @@ export function createM365CopilotAdapter(provider: OcxProviderConfig, deps: { tu
       request.body = "";
       if (!Array.isArray(messages)) throw new Error("Microsoft 365 Copilot request has no messages");
       const first = messages.find(message => message.role === "user");
-      const key = digest(JSON.stringify([claims.oid, claims.tid, parsed.modelId, incoming.headers.get("session_id") ?? incoming.headers.get("x-codex-session-id"), first?.content, tools?.map(tool => tool.function.name).sort()]));
+      const { clientPrincipalId, clientThreadId } = parsed._reasoningReplayScope ?? {};
+      const key = clientPrincipalId && clientThreadId
+        ? digest(JSON.stringify([claims.oid, claims.tid, parsed.modelId, clientPrincipalId, clientThreadId, first?.content, tools?.map(tool => tool.function.name).sort()]))
+        : undefined;
       for (const [id, state] of conversations) if (Date.now() - state.accessed > 30 * 60_000) conversations.delete(id);
-      let state = conversations.get(key);
+      let state = key === undefined ? undefined : conversations.get(key);
       let rebuilt = false;
       if (!state) {
-        if (conversations.size >= 64) conversations.delete(conversations.keys().next().value!);
         state = { conversation: createM365Conversation(), sent: 0, prefix: "", sentImages: 0, imagePrefix: "", accessed: Date.now(), tail: Promise.resolve() };
-        conversations.set(key, state);
+        if (key !== undefined) {
+          if (conversations.size >= 64) conversations.delete(conversations.keys().next().value!);
+          conversations.set(key, state);
+        }
       }
       const previous = state.tail;
       let release!: () => void;
@@ -119,7 +124,7 @@ export function createM365CopilotAdapter(provider: OcxProviderConfig, deps: { tu
         const outputTokens = estimateTokens(answer + thinkingText, parsed.modelId);
         emit({ type: "done", stopReason: emittedToolCalls ? "tool_use" : "stop", endTurn: emittedToolCalls === 0, usage: { inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, estimated: true } });
       } catch (error) {
-        conversations.delete(key);
+        if (key !== undefined && conversations.get(key) === state) conversations.delete(key);
         if (error instanceof M365CopilotTurnError) emit({ type: "error", message: error.message, status: error.status, retryable: false });
         else throw error;
       } finally { if (heartbeat) clearInterval(heartbeat); release(); }

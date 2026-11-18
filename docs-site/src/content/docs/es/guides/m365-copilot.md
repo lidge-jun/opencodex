@@ -35,7 +35,7 @@ m365-copilot/Claude_Sonnet
 m365-copilot/Gpt_61_Sol_Reasoning
 ```
 
-Las interfaces de OpenCodex admiten texto en streaming y herramientas ejecutadas por el cliente. El modelo emite la llamada a la herramienta en un bloque delimitado, OpenCodex la convierte al formato del cliente y el cliente la ejecuta con sus propios permisos. Las conversaciones quedan asociadas a la cuenta de Microsoft, el modelo, la sesión del cliente y el conjunto de herramientas. Los chats temporales conservan el contexto de la conversación activa sin añadir una entrada persistente al historial de Copilot.
+Las interfaces de OpenCodex admiten texto en streaming y herramientas ejecutadas por el cliente. El modelo emite la llamada a la herramienta en un bloque delimitado, OpenCodex la convierte al formato del cliente y el cliente la ejecuta con sus propios permisos. OpenCodex reutiliza una conversación solo si coinciden la cuenta de Microsoft, el modelo, la identidad autenticada del solicitante en OpenCodex, la conversación del cliente y el conjunto de herramientas. Si falta la identidad autenticada o la de la conversación, inicia una conversación de ChatHub con el historial de la solicitud. Los chats temporales conservan el contexto de la conversación activa sin añadir una entrada persistente al historial de Copilot.
 
 Cada turno de ChatHub incluye la herramienta integrada de Microsoft `BingWebSearch` en la solicitud, incluso con las herramientas del cliente desactivadas. El modelo puede hacer búsquedas web según las reglas del servicio de Microsoft.
 

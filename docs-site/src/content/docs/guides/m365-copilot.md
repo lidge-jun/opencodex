@@ -35,7 +35,7 @@ m365-copilot/Claude_Sonnet
 m365-copilot/Gpt_61_Sol_Reasoning
 ```
 
-Text streams and client-executed tools travel through OpenCodex's existing request interfaces. Tool calls are prompt-emulated: the model emits a fenced call, OpenCodex translates it into the client's tool format, and the client executes it under its own permissions. Conversations are scoped to the Microsoft account, model, client session and tool set. Temporary chats keep their live conversation context without adding a persistent Copilot history entry.
+Text streams and client-executed tools travel through OpenCodex's existing request interfaces. Tool calls are prompt-emulated: the model emits a fenced call, OpenCodex translates it into the client's tool format, and the client executes it under its own permissions. OpenCodex reuses a conversation only for the same Microsoft account, model, authenticated OpenCodex caller, resolved client conversation and tool set. A request without an authenticated caller or resolved conversation starts a fresh ChatHub conversation using the supplied history. Temporary chats keep their live conversation context without adding a persistent Copilot history entry.
 
 Every ChatHub turn also includes Microsoft's built-in `BingWebSearch` tool in the upstream request. It is sent regardless of whether client tools are enabled, and the model may use web search on its own; OpenCodex does not control that server-side capability.
 

@@ -61,7 +61,7 @@ test("adapter forwards fresh user and tool-result images and reuses earlier conv
   const p = provider((async () => Response.json({ docId: "fixture-image-" + ++uploads })) as typeof fetch);
   const turns: any[] = [];
   const adapter = createM365CopilotAdapter(p, { turn: async o => { turns.push({ id: o.conversation.conversationId, images: o.images, text: o.text }); o.conversation.turns++; return "fixture reply"; } });
-  const parsed: OcxParsedRequest = { modelId: "Claude_Sonnet", stream: false, options: {}, context: { messages: [
+  const parsed: OcxParsedRequest = { _reasoningReplayScope: { clientThreadId: "thread", clientPrincipalId: "caller" }, modelId: "Claude_Sonnet", stream: false, options: {}, context: { messages: [
     { role: "user", content: [{ type: "text", text: "Describe this" }, { type: "image", imageUrl: png }], timestamp: 0 },
   ] } };
   const budget = createTranslatorBudget(); const events: AdapterEvent[] = [];
