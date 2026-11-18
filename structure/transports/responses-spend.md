@@ -108,7 +108,8 @@ Hosted credential hops stay open in this owner and the live pending-hop view unt
 generic receipts consume that exact permit, adapters claim it through the view, and fetch-iteration
 cleanup releases an unsent hop once, except while an asynchronous runTurn producer still owns it.
 Producer settlement performs that release instead, clearing only the matching pending-hop reference.
-Direct callers retain their prior hop reporting contract.
+Direct fetch sidecars also hold the credential hop until guarded dispatch. The executor
+records the first send, and the adapter observer adds subsequent physical sends to the same attempt.
 
 The optional Anthropic-hosted Advisor on translated Messages turns is withheld from the first
 send whose selected target has an applicable captured root, identity or pool token ceiling or has

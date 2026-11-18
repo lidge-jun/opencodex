@@ -324,6 +324,9 @@ La proyección JEV informa de recuentos y puertas de decisión, aplicados frente
 
 Las estadísticas JEV utilizan el mismo libro mayor de solo apéndice `usage.jsonl` y escáner cooperativo como uso ordinario. Las lecturas en frío escanean el libro mayor actual, las encuestas sin cambios no leen ningún archivo y el crecimiento verificado dobla solo el sufijo adjunto. Las solicitudes idénticas simultáneas comparten una exploración. El registro JEV persistente está cerrado y libre de contenido: ID combinado, proveedor/modelo/esfuerzo seleccionado, puerta de decisión, latencia, confianza/probabilidad opcional y uso de decisión numérica opcional. Nunca almacena mensajes, encabezados, credenciales, argumentos de herramientas o respuestas TypeSafe sin procesar. Las filas sobredimensionadas conservan el mismo diagnóstico positivo `usageIncomplete` que el punto final de uso ordinario.
 
+En los turnos enrutados de imagen y búsqueda web, `sendCount` incluye los reintentos del adaptador ante el proveedor.
+Si el reemplazo se detiene antes de enviarse al proveedor, no suma ningún envío.
+
 Los nuevos intentos xAI en `usage.jsonl` incluyen un tiempo de solicitud `credentialSource`: `grok-oauth` para el transporte de llaves resuelto Grok CLI OAuth, o `xai-api-key` para el transporte público xAI API. Esta etiqueta fija no contiene credenciales ni identificador de cuenta. Pertenece a cada elemento en `attempts`, por lo que el total de tokens agregados de un combo no debe atribuirse a su proveedor final. Los destinos personalizados y las filas históricas omiten el campo; los consumidores no deben inferir el uso de la suscripción desde la configuración actual, el nombre del modelo o la clave entrante API. El registro informa el uso, no los montos de la factura de suscripción.
 
 Los intentos de clave API también registran `accountLogLabel` como `k` seguido de 32 dígitos hexadecimales en minúsculas. La etiqueta es los primeros 128 bits de SHA-256 sobre

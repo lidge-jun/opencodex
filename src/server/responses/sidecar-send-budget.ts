@@ -21,20 +21,18 @@ export function createSidecarSendBudget(
     permit?.release();
   };
   return {
-    /** Retain a Combo hop until dispatch; direct requests keep eager settlement. */
-    ownCredentialHop(permit?: SingleUseDispatchPermit, retainUntilDispatch = false): void {
-      if (!initial && !retainUntilDispatch) { permit?.use(); return; } // Preserve direct callers' reporting contract.
+    /** Retain the hop until guarded dispatch or iteration cleanup. */
+    ownCredentialHop(permit?: SingleUseDispatchPermit): void {
       releaseHop();
       hopPermit = permit;
       budget.pendingHopPermit = permit;
     },
     // Adapter-owned transports settle through the live dispatch view, not an HTTP receipt too.
-    incomingMeta: initial ? {
-      comboAttempt: options.comboAttempt === true,
-      sendBudget: budget.adapterDispatchBudget,
+    incomingMeta: {
+      ...(initial ? { comboAttempt: options.comboAttempt === true, sendBudget: budget.adapterDispatchBudget } : {}),
       onPhysicalSend: send => budget.noteAdapterPhysicalSend(inputTokens(), send),
       onRecoveryWithheld: budget.noteAdapterRecoveryWithheld,
-    } satisfies Partial<IncomingMeta> : {},
+    } satisfies Partial<IncomingMeta>,
     /** Attach HTTP receipts only when the adapter does not own physical dispatch. */
     fetchOptions(adapter: ProviderAdapter): Pick<ProviderFetchOptions, "onPhysicalDispatch"> {
       return initial && !adapter.fetchResponse && !adapter.runTurn

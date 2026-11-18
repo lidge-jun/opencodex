@@ -62,6 +62,7 @@ function completedAnswer(): Response {
 describe("sidecar prompt usage accounting", () => {
   for (const sidecar of ["none", "web-search", "images"] as const) {
     test(`${sidecar}: persists the full Kiro prompt estimate into daily activity`, async () => {
+      const retry = sidecar !== "none";
       let sends = 0;
       globalThis.fetch = (async input => {
         const url = input instanceof Request ? input.url : String(input);
@@ -69,6 +70,7 @@ describe("sidecar prompt usage accounting", () => {
           throw new Error("Unexpected network target blocked by sidecar usage fixture");
         }
         sends++;
+        if (retry && sends === 1) throw Object.assign(new Error("synthetic reset"), { code: "ECONNRESET" });
         return completedAnswer();
       }) as typeof fetch;
       const config = {
@@ -102,10 +104,11 @@ describe("sidecar prompt usage accounting", () => {
       const logged = responseWithDeferredRequestLog(response, `sidecar-usage-${sidecar}`, started, log);
       expect(response.status).toBe(200);
       expect(await logged.text()).toContain("Completed fixture answer.");
-      expect(sends).toBe(1);
+      expect(sends).toBe(retry ? 2 : 1);
 
       const entries = readUsageEntries();
       expect(entries).toHaveLength(1);
+      expect(entries[0]!.attempts?.map(attempt => attempt.sendCount)).toEqual([sends]);
       expect(entries[0]!.usageStatus).toBe("estimated");
       // The newest user message is tiny; the persisted request and physical attempt must
       // still include the replayed prompt, just as the ordinary dispatch path does.

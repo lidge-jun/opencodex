@@ -410,8 +410,7 @@ export async function executeResponsesSidecars(
         return null;
       }
       recoveryKind = "oauth-account-403";
-      if (!options.comboInitialSend) sendBudgetState.pendingHopPermit = hop.permit;
-      else sidecarBudget.ownCredentialHop(hop.permit);
+      sidecarBudget.ownCredentialHop(hop.permit);
     }
     const rotated = !originalResponse || originalResponse.status === 429
       ? rotateProviderTransportOn429(config, route.providerName, route.provider, {
@@ -440,9 +439,8 @@ export async function executeResponsesSidecars(
       && isGenericOAuthFailoverEnabled(config, route.providerName)
     ) {
       // Intersection with the request's shared budget. The sidecar replay is dispatched by the
-      // web-search/image loop and never reaches `onSendsConsumed`, so this reservation is the
-      // charge for other sidecars. Antigravity web search hands its reservation to the adapter
-      // physical-send owner instead; a refusal preserves the real 429.
+      // web-search/image loop. Its guarded executor or adapter settles this reservation
+      // when the replacement is admitted to the wire.
       const hop = reserveCredentialHop(
         "auth-recovery",
         `${route.providerName}|${route.modelId}|sidecar-oauth-429`,
@@ -479,9 +477,7 @@ export async function executeResponsesSidecars(
         return null;
       }
       recoveryKind = "oauth-account-429";
-      if (!options.comboInitialSend && canRunWebSearch && route.providerName === "google-antigravity")
-        sendBudgetState.pendingHopPermit = hop.permit;
-      else sidecarBudget.ownCredentialHop(hop.permit, (canRunWebSearch || !!imgPlan || !!vidPlan) && transportState.adapter.name === "anthropic");
+      sidecarBudget.ownCredentialHop(hop.permit);
     } else if (
       // Anthropic's pool is excluded from generic failover, so without this arm a 429 inside a
       // web-search or image-bridge turn was terminal even with the pool fully enabled -- while
@@ -524,7 +520,7 @@ export async function executeResponsesSidecars(
         hop.permit?.release();
         return null;
       }
-      sidecarBudget.ownCredentialHop(hop.permit, (canRunWebSearch || !!imgPlan || !!vidPlan) && transportState.adapter.name === "anthropic");
+      sidecarBudget.ownCredentialHop(hop.permit);
     } else {
       // No key pool, no generic OAuth roster, no Anthropic pool could produce a replacement
       // credential. The 429 is terminal for this sidecar turn.
@@ -609,7 +605,7 @@ export async function executeResponsesSidecars(
       providerName: route.providerName, modelId: route.modelId, ...physicalOptions,
       onPhysicalDispatch: () => {
         if (physicalOptions.onPhysicalDispatch) physicalOptions.onPhysicalDispatch();
-        else if (handoff) {
+        else if (handoff || sendBudgetState.pendingHopPermit) {
           const prepaid = sendBudgetState.pendingHopPermit;
           if (!prepaid && sendBudgetState.sendBudgetExhausted()) throw new SendBudgetExhaustedError(errorDestinationLabel(request.url));
           sendBudgetState.noteInitialDispatch(prepaid);
@@ -849,11 +845,9 @@ export async function executeResponsesSidecars(
         abortSignal: options.abortSignal,
         translatorBudget,
         providerFetch: routedProviderFetch,
-        ...(!options.comboInitialSend && route.providerName === "google-antigravity" ? {
-          sendBudget: sendBudgetState.refundableAdapterDispatchBudget,
-          onPhysicalSend: (send: { ordinal: number; recovery?: AttemptRecoveryKind }) =>
-            sendBudgetState.noteAdapterPhysicalSend(logCtx.usageLogInputTokens, send),
-        } : sidecarBudget.incomingMeta),
+        ...sidecarBudget.incomingMeta,
+        ...(!options.comboInitialSend && route.providerName === "google-antigravity"
+          ? { sendBudget: sendBudgetState.refundableAdapterDispatchBudget } : {}),
         comboAttempt: options.comboAttempt === true,
         ...(requestState.subagentFallbackSelected ? { subagentFallback: true } : {}),
         ...(options.internalDecisionCall ? { internalDecisionCall: true } : {}),

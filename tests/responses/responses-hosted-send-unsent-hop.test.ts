@@ -11,6 +11,7 @@ import { createRequestExecutionBudget } from "../../src/lib/request-execution-bu
 import { createResponsesSendBudget } from "../../src/server/responses/request-send-budget";
 import { createSidecarSendBudget } from "../../src/server/responses/sidecar-send-budget";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
+import { handleResponses } from "../../src/server/responses/core";
 
 let forbiddenNetwork: ReturnType<typeof spyOn>;
 beforeEach(() => {
@@ -217,3 +218,34 @@ for (const settled of ["used", "released"] as const) test(`a hop already ${settl
     expect(f.budget.used).toBe(settled === "used" ? 2 : 1);
   } finally { f.dispose(); }
 });
+
+test("direct hosted search preserves one refusal and refunds a locally denied replacement", async () => hostedSendFixture("search", "failover", async f => {
+  let physical = 0;
+  f.config.providers.a!.fetch = (async () => {
+    physical++;
+    return Response.json({ error: { message: "synthetic quota refusal" } }, { status: 429 });
+  }) as unknown as typeof fetch;
+  delete f.config.providers.a!.transientRetryOn5xx;
+  await withSyntheticRotation(async rotated => {
+    const create = ADAPTER_REGISTRY["openai-chat"].create;
+    const adapter = spyOn(ADAPTER_REGISTRY["openai-chat"], "create").mockImplementation((...args) => {
+      const original = create(...args);
+      return { ...original, buildRequest(...buildArgs) {
+        if (rotated()) throw new Error("synthetic replacement build denial");
+        return original.buildRequest(...buildArgs);
+      } };
+    });
+    try {
+      const req = f.request();
+      const body = await req.json() as Record<string, unknown>;
+      const response = await handleResponses(new Request(req.url, {
+        method: "POST", headers: req.headers, body: JSON.stringify({ ...body, model: "a/m" }),
+      }), f.config, f.log, { sendBudget: f.budget });
+      await response.text();
+      expect(rotated()).toBe(true);
+      expect(physical).toBe(1);
+      expect(f.log.attempts?.map(attempt => [attempt.status, attempt.sendCount])).toEqual([[429, 1]]);
+      expect(f.refunds).toBe(1);
+    } finally { adapter.mockRestore(); }
+  });
+}));

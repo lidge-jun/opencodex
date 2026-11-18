@@ -408,6 +408,9 @@ confidence/probability, and optional numeric decision usage. It never stores pro
 credentials, tool arguments, or raw TypeSafe responses. Oversized rows retain the same positive
 `usageIncomplete` diagnostic as the ordinary usage endpoint.
 
+For routed image and web-search turns, `sendCount` includes upstream adapter retries.
+A replacement stopped before upstream dispatch adds no send.
+
 New xAI attempts in `usage.jsonl` include a request-time `credentialSource`: `grok-oauth`
 for the resolved Grok CLI OAuth transport, or `xai-api-key` for the public xAI API key
 transport. This fixed label contains no credential or account identifier. It belongs to
