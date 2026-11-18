@@ -7,6 +7,9 @@ import { PassThrough } from "node:stream";
 import { createAgyAcpAdapter, AGY_ACP_ARGS, type AgyAcpDeps } from "../../src/adapters/agy-acp/adapter";
 import type { AgyAcpChild } from "../../src/adapters/agy-acp/process";
 import { runWithRequestPeer } from "../../src/lib/request-peer-scope";
+import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
+import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
+import type { IncomingMeta } from "../../src/adapters/base";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 
 type Frame = Record<string, any>;
@@ -91,6 +94,7 @@ function script(onFrame?: (frame: Frame, api: AgentApi, state: { config: Frame[]
 async function run(agent: ReturnType<typeof script>, opts: {
   parsed?: OcxParsedRequest; headers?: Headers; comboAttempt?: boolean; subagentFallback?: boolean; internalDecisionCall?: boolean; local?: boolean;
   deps?: Partial<AgyAcpDeps>; abort?: AbortController; beforeRun?: (child: FakeChild) => void;
+  sendAccounting?: Pick<IncomingMeta, "sendBudget" | "beforePhysicalSend" | "onPhysicalSend">;
 } = {}): Promise<Harness> {
   const h: Harness = { events: [], sent: [], spawned: 0, probed: 0, args: [], env: {}, cwd: "", removed: false };
   const adapter = createAgyAcpAdapter(provider, {
@@ -114,6 +118,7 @@ async function run(agent: ReturnType<typeof script>, opts: {
     ...(opts.subagentFallback ? { subagentFallback: true } : {}),
     ...(opts.internalDecisionCall ? { internalDecisionCall: true } : {}),
     ...(opts.abort ? { abortSignal: opts.abort.signal } : {}),
+    ...opts.sendAccounting,
   }, event => h.events.push(event));
   await runWithRequestPeer(opts.local === false ? undefined : { local: true }, go);
   return h;
@@ -126,6 +131,29 @@ const errorCode = (h: Harness) => (terminal(h)[0] as { code?: string } | undefin
 afterEach(() => { delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN; });
 
 describe("agy acp turn", () => {
+  test("one shared send allowance admits exactly one prompt across attempts", async () => {
+    const budget = createRequestExecutionBudget({
+      maxTotalModelSends: 1, baseSendAllowance: 1, finalRecoveryAllowance: 0,
+      maxAlternateTargetSends: 0, maxTargetTransitions: 0,
+    });
+    const steps: string[] = [];
+    const agent = script(frame => {
+      if (frame.method === "session/prompt") steps.push("prompt");
+    });
+    const sendAccounting: Pick<IncomingMeta, "sendBudget" | "beforePhysicalSend" | "onPhysicalSend"> = {
+      sendBudget: budget,
+      beforePhysicalSend: () => { steps.push("fence"); },
+      onPhysicalSend: ({ ordinal }) => { steps.push(`reported ${ordinal}`); },
+    };
+
+    const first = await run(agent, { sendAccounting });
+    expect(terminal(first)[0]?.type).toBe("done");
+    expect(steps).toEqual(["fence", "reported 1", "prompt"]);
+    await expect(run(agent, { sendAccounting })).rejects.toBeInstanceOf(SendBudgetExhaustedError);
+    expect(steps).toEqual(["fence", "reported 1", "prompt"]);
+    expect(budget.used).toBe(1);
+    expect(createAgyAcpAdapter(provider).reportsPhysicalSends).toBe(true);
+  });
   test("a local interactive turn: initialize, session/new in the private workspace, prompt, one done", async () => {
     process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "admin-secret-should-not-leak";
     const h = await run(script());

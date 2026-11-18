@@ -19,6 +19,7 @@ import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxUsage } from
 import type { IncomingMeta, ProviderAdapter } from "../base";
 import { baseScopedEnv } from "../coding-agent/turn";
 import { getConfigDir } from "../../config/paths";
+import { SendBudgetExhaustedError } from "../../lib/upstream-retry";
 import {
   ACP_AUTH_REQUIRED, MAX_ACP_LINE_BYTES, MAX_ACP_TOTAL_BYTES, acpSystemText, acpTerminal, acpUpdateToEvents,
   buildAcpPrompt, classifyFrame, initializeFrame, mapAcpUsage, methodNotFoundFrame, permissionCancelledFrame,
@@ -121,6 +122,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
 
   return {
     name: "agy-acp",
+    reportsPhysicalSends: true,
 
     buildRequest() {
       return { url: provider.baseUrl || AGY_ACP_IDENTITY_URL, method: "POST", headers: {}, body: "" };
@@ -204,7 +206,8 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
     let buffer = "";
     let totalBytes = 0;
     let resolveTurn!: () => void;
-    const finished = new Promise<void>(resolve => { resolveTurn = resolve; });
+    let rejectTurn!: (error: unknown) => void;
+    const finished = new Promise<void>((resolve, reject) => { resolveTurn = resolve; rejectTurn = reject; });
 
     const send = (frame: Record<string, unknown>): void => {
       if (!child.stdin.destroyed) child.stdin.write(`${JSON.stringify(frame)}\n`);
@@ -222,14 +225,14 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
     };
 
     /** Settle once: emit the terminal (unless the caller aborted), then reap the group. */
-    function finish(terminal: AdapterEvent | undefined, aborted = false): void {
+    function finish(terminal: AdapterEvent | undefined, aborted = false, onReaped = resolveTurn): void {
       if (settled) return;
       settled = true;
       clearTimeout(turnTimer);
       incoming.abortSignal?.removeEventListener("abort", onAbort);
       if (!aborted && terminal) emit(terminal);
       try { child.stdout.destroy(); } catch { /* already closed */ }
-      void reap(child).finally(resolveTurn);
+      void reap(child).then(onReaped, rejectTurn);
     }
     const fail = (code: AcpFailureCode, detail?: string): void => finish(failure(code, detail));
 
@@ -273,13 +276,36 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
           return;
         }
       }
-      sendPrompt();
+      beginPrompt();
     }
 
-    function sendPrompt(): void {
+    function beginPrompt(): void {
+      void sendPrompt().catch(error => finish(undefined, false, () => rejectTurn(error)));
+    }
+
+    async function sendPrompt(): Promise<void> {
       if (!checkSelectedModel()) return;
-      prompting = true;
-      request("prompt", id => sessionPromptFrame(id, sessionId!, buildAcpPrompt(parsed, !systemOnSession)));
+      const prompt = buildAcpPrompt(parsed, !systemOnSession);
+      const decision = incoming.sendBudget?.reserveDispatch({ sendClass: "transient", targetKey: AGY_ACP_IDENTITY_URL });
+      if (decision && !decision.allowed) throw new SendBudgetExhaustedError();
+      const permit = decision?.permit;
+      const dispatch = async (): Promise<void> => {
+        if (settled) return;
+        if (incoming.abortSignal?.aborted) return onAbort();
+        if (!checkSelectedModel()) return;
+        if (child.stdin.destroyed || child.stdin.writableEnded) return fail("agy_acp_protocol", "prompt pipe closed");
+        incoming.beforePhysicalSend?.();
+        if (permit && !permit.use()) throw new SendBudgetExhaustedError();
+        prompting = true;
+        incoming.onPhysicalSend?.({ ordinal: 1 });
+        request("prompt", id => sessionPromptFrame(id, sessionId!, prompt));
+      };
+      try {
+        if (permit?.execute) await permit.execute(dispatch);
+        else await dispatch();
+      } finally {
+        permit?.release();
+      }
     }
 
     function onReply(kind: Pending, result: unknown, error: { code?: unknown } | undefined): void {
@@ -331,7 +357,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
         if (!adoptState(r.configOptions)) return;
         const thought = findSelector(state, "thought_level");
         if (!thought.ok || currentSelection(thought.selector)?.value !== thoughtTarget?.value) return fail("agy_acp_protocol", "thinking level not acknowledged");
-        return sendPrompt();
+        return beginPrompt();
       }
       // prompt
       usage = mapAcpUsage(r.usage) ?? usage;

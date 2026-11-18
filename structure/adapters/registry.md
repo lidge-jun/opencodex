@@ -74,7 +74,8 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   loopback address declared in `dashboardTrustedProxy`, requests carrying reverse-proxy forwarding headers and requests
   that are not local (`src/lib/request-peer-scope.ts`, recorded per HTTP request and per WebSocket at the listener);
   `src/server/responses/agy-acp-preflight.ts` answers those with a 403 before sidecars run, and `runTurn` repeats the
-  check before any probe or spawn. Model selection is phase-aware and fails closed when the Gemini model is not
+  check before any probe or spawn. Each `session/prompt` reserves and reports one physical inference send from
+  the shared request budget, including a retried turn. Model selection is phase-aware and fails closed when the Gemini model is not
   confirmed; permission requests are answered `cancelled`; errors carry fixed text only. Coverage:
   `tests/adapters/agy-acp-{adapter,protocol,policy}.test.ts`, `tests/config/agy-acp-config.test.ts`,
   `tests/server/server-agy-acp.test.ts`.
