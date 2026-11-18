@@ -327,6 +327,7 @@ export const providerConfigSchema = z.object({
   accountAutoPause: accountAutoPausePolicySchema.optional(),
   apiKeyPool: z.array(z.object({ id: z.string(), key: z.string(), label: z.string().optional(), addedAt: z.number().optional(), disabled: z.boolean().optional(), pauseRevision: z.string().optional(), pauseDetails: accountPauseDetailsSchema.optional() }).passthrough()).optional(),
   anthropicAccountPool: anthropicAccountPoolSchema,
+  anthropicImageContextRecovery: z.boolean().optional(),
   // Raw diagnostics/writes reject malformed provenance; tolerant loads preserve the custom row.
   anthropicOAuthInstance: z.literal("anthropic2").optional().catch(undefined),
   modelCapabilities: modelCapabilitiesSchema.optional(),

@@ -1,3 +1,4 @@
+import type { AnthropicImageRecovery } from "../server/responses/image-context-recovery";
 import { bindAnthropicRejectionResponse } from "../adapters/anthropic-rejection-memo";
 import { anthropicDeclaredTools } from "../adapters/anthropic-tool-catalog";
 import { enableAnthropicReplayCapture, takeAnthropicReplay, bindAnthropicReplay, type AnthropicReplaySnapshot } from "../adapters/anthropic-replay";
@@ -436,6 +437,7 @@ export interface WebSearchLoopDeps {
   onRequestBuilt?: (request: AdapterRequest) => void;
   /** Request-scoped executor retains the core's selection binding across loop retries. */
   thinkingRecovery?: ReturnType<typeof createAnthropicThinkingRecovery>;
+  imageRecovery?: AnthropicImageRecovery;
   fetchForRequest?: (request: AdapterRequest, parsed: OcxParsedRequest, adapter: ProviderAdapter, recovery?: AttemptRecoveryKind) => typeof globalThis.fetch;
   /** Called before each routed-model dispatch in the loop, for attempt telemetry. Same-target 429 replays pass the `rate-limit-429` recovery kind. */
   onAttemptSend?: (recovery?: AttemptRecoveryKind) => void;
@@ -829,7 +831,19 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         prepared = replacement;
       }
 
-      if (await deps.thinkingRecovery?.prepareHttp(prepared.response, prepared.responseAdapter.name, iterParsed)) {
+      let imageReplacement: AdapterRequest | undefined;
+      if (deps.imageRecovery && prepared.response.status === 413) {
+        headerDeadline.clear();
+        const recovered = yield* withHeartbeats(deps.imageRecovery(prepared.response, iterParsed, prepared.responseAdapter, signal));
+        prepared.response = recovered.response;
+        imageReplacement = recovered.request;
+        if (recovered.response.ok && imageReplacement) {
+          messages.splice(0, messages.length, ...iterParsed.context.messages);
+          parsed._anthropicImageOwner = iterParsed._anthropicImageOwner;
+          cachedRequest = imageReplacement;
+        }
+      }
+      if (!imageReplacement && await deps.thinkingRecovery?.prepareHttp(prepared.response, prepared.responseAdapter.name, iterParsed)) {
         try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* closed */ }
         cachedRequest = undefined;
         cachedAdapter = undefined;

@@ -1214,6 +1214,8 @@ export interface OcxProviderConfig {
    * other EOFs remain truncation errors. Absent = strict default behavior.
    */
   anthropicEofTolerance?: boolean;
+  /** Opt in to one owner-bound image-context recovery after an upstream 413. */
+  anthropicImageContextRecovery?: boolean;
   /**
    * Claude Code's typed Advisor server tool (`advisor_20260301`) on the translated Messages lane.
    * Absent: forwarded only to an `anthropic`-adapter provider on first-party `api.anthropic.com`.

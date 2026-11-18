@@ -279,7 +279,7 @@ changing tool choice invalidates message cache only. Client-only summaries keep 
 empty summaries and abnormal completions before delivery;
 only successful prose reaches the single synthetic compaction item. Truncated completions retain the existing incomplete outcome.
 Signed progress is not summary prose.
-`tests/responses/responses-anthropic-compaction-prefix.test.ts` covers the prefix and both delivery modes; image normalization and 413 recovery retain their existing policy.
+`tests/responses/responses-anthropic-compaction-prefix.test.ts` covers the prefix and both delivery modes; image handling follows the [image-context recovery contract](../providers/anthropic-cache-lifecycle.md).
 
 `src/server/responses/compaction-routing.ts` applies `compactionRouting` before model routing in
 both `request-prepare.ts` and `compact.ts`. It requires explicit `request_kind: "compaction"` in

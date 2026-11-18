@@ -383,6 +383,9 @@ export function createResponsesSendBudget(
     /401|429|oauth|rate-limit|key/.test(recovery) ? "auth-recovery" : "repair";
 
   return {
+    imageRecoverySendReporter: (body: string, maxOutputTokens: number | undefined) =>
+      physicalSendReporter(undefined, false, { inputTokens: estimateTokens(body, logCtx.model),
+        outputCeilingTokens: maxOutputTokens ?? logCtx.spendOutputCeilingTokens ?? 0 }),
     workflowRootId,
     noteTransientSends,
     transientSendReporter,

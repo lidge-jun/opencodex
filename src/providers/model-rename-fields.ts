@@ -154,6 +154,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   thinkingBudgetModels: "list",
   escapeBuiltinToolNames: "none",
   anthropicEofTolerance: "none",
+  anthropicImageContextRecovery: "none",
   forwardAdvisorTool: "none",
   perMessageEffort: "none",
   noVisionModels: "list",

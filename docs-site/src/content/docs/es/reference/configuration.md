@@ -78,6 +78,11 @@ Los valores válidos en `config.json` anulan los valores predeterminados incorpo
 
 El enrutamiento tiene sus propias reglas de resolución ordenadas; ver [Enrutamiento](/es/reference/configuration/routing/).
 
+### Recuperación del contexto con imágenes de Anthropic
+
+Activa `anthropicImageContextRecovery: true` en el proveedor Anthropic. La opción está desactivada por
+defecto. Consulta [el adaptador Anthropic](/es/reference/adapters/#anthropic) para conocer los límites y el posible coste.
+
 <a id="configuration-domains"></a>
 
 ## Dominios de configuración

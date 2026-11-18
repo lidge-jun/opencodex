@@ -1,4 +1,6 @@
 {
+  "responses-anthropic-image-context-default.test.ts": "responses",
+  "responses-anthropic-image-context-recovery.test.ts": "responses",
   "search-empty-completion.test.ts": "responses",
   "responses-estimated-usage.test.ts": "responses",
   "responses-combo-unavailable-cause.test.ts": "responses",

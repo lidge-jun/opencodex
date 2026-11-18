@@ -1,3 +1,4 @@
+import type { AnthropicImageRecovery } from "../server/responses/image-context-recovery";
 import type { createAnthropicThinkingRecovery } from "../server/responses/anthropic-thinking-recovery";
 import { markSidecarContextOverflow, sidecarLoopTerminalEvent, upstreamErrorCode, type SidecarLoopFailure } from "../server/responses/context-overflow";
 import { markVerifiedModelNotInPlanResponse, MODEL_NOT_IN_PLAN_CODE, verifiedPlanRefusalMessage } from "../lib/errors";
@@ -313,6 +314,7 @@ function loopFailure(e: LoopError): SidecarLoopFailure {
  */
 export interface ImageBridgeDeps {
   thinkingRecovery?: ReturnType<typeof createAnthropicThinkingRecovery>;
+  imageRecovery?: AnthropicImageRecovery;
   parsed: OcxParsedRequest;
   /** Chat delivery only; never copied into parsed generation options. */
   chatRawReasoningVisible?: boolean;
@@ -773,7 +775,19 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         prepared = await fetchOnce(adapter, rotated.recoveryKind);
       }
 
-      if (await deps.thinkingRecovery?.prepareHttp(prepared.response, prepared.responseAdapter.name, iterParsed)) {
+      let imageReplacement: AdapterRequest | undefined;
+      if (deps.imageRecovery && prepared.response.status === 413) {
+        headerDeadline.clear();
+        const recovered = await deps.imageRecovery(prepared.response, iterParsed, prepared.responseAdapter, signal);
+        prepared.response = recovered.response;
+        imageReplacement = recovered.request;
+        if (recovered.response.ok && imageReplacement) {
+          messages.splice(0, messages.length, ...iterParsed.context.messages);
+          parsed._anthropicImageOwner = iterParsed._anthropicImageOwner;
+          cachedRequest = imageReplacement;
+        }
+      }
+      if (!imageReplacement && await deps.thinkingRecovery?.prepareHttp(prepared.response, prepared.responseAdapter.name, iterParsed)) {
         try { void prepared.response.body?.cancel().catch(() => {}); } catch { /* closed */ }
         cachedRequest = undefined;
         prepared = await fetchOnce(adapter, "opaque-blob-rejection");
