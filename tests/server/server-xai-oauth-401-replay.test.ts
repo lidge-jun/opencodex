@@ -552,6 +552,42 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
     }
   });
 
+  test.each([
+    [400, "context_length_exceeded", "Please reduce the length of the messages or completion.", null],
+    [429, "rate_limit_exceeded", "weekly usage limit reached", "137"],
+  ] as const)("combo preserves primary HTTP %i recovery after an xAI privacy refusal", async (status, code, message, retryAfter) => {
+    await seedOAuth();
+    const config = xaiConfig();
+    config.providers.fixture = {
+      adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key", models: ["primary"],
+    };
+    const comboId = `privacy-after-${status}`;
+    config.combos = { [comboId]: { strategy: "failover", targets: [
+      { provider: "fixture", model: "primary" }, { provider: "xai", model: "grok-4.5" },
+    ] } };
+    saveConfig(config);
+    const sends = refuseAt("/v1/responses", privacyError, () => Response.json(
+      { error: { message, code, type: status === 400 ? "invalid_request_error" : "rate_limit_error" } },
+      { status, ...(retryAfter ? { headers: { "Retry-After": retryAfter } } : {}) },
+    ));
+    const release = acquireOwnedSpendHome();
+    try {
+      const result = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: `combo/${comboId}`, input: "hello", stream: false }),
+      }), config, { model: "", provider: "" });
+      expect(sends).toEqual(["https://fixture.invalid/v1/chat/completions", "/v1/responses"]);
+      expect(result.status).toBe(status);
+      expect(result.headers.get("Retry-After")).toBe(retryAfter);
+      const error = (await result.json()).error;
+      expect(error.code).toBe(code);
+      expect(error.message).toContain(message);
+    } finally {
+      release();
+    }
+  });
+
   test.each(["healthy", "disabled", "denied"])("Grok privacy refusal uses combo eligibility with a %s fallback", async fallback => {
     await seedOAuth();
     const config = xaiConfig();

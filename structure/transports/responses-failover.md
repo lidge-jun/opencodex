@@ -138,8 +138,9 @@ combo whose remaining eligible targets use other providers.
 > Decision record: [ADR-0070](../decisions/ADR-0070-same-provider-combo-quota-fallback.md)
 
 The [xAI Legacy privacy refusal](../providers/xai-grok.md#legacy-privacy-mode-403) uses normal
-403 failover eligibility with no cooldown. If the ladder exhausts its members, it returns the
-fixed privacy 403 and adopts that child's failure attribution.
+403 failover eligibility with no cooldown. On exhaustion, the existing context-window and quota
+verdicts take precedence. When the ladder returns the fixed privacy 403, it adopts that child's
+failure attribution.
 
 ## Single-target cooldown retry ownership
 

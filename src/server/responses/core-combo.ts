@@ -978,13 +978,12 @@ export async function executeComboResponses(
   // fresh cooldown is not a reason the request found no target.
   const quotaCooldownSnapshot = snapshotComboQuotaCooldowns(config, comboId);
   const exhaustedFailure = (targetsExhausted = false): Response => {
-    if (xaiPrivacyFailure) {
-      adoptFailedChildLog(xaiPrivacyFailure.childLog);
-      return xaiPrivacyFailure.response;
-    }
+    const finalize = (response: Response, childLog = lastFailedChildLog): Response => {
+      if (childLog) adoptFailedChildLog(childLog);
+      return response;
+    };
     if (contextFailure) {
-      adoptFailedChildLog(contextFailure.childLog);
-      return contextFailure.response;
+      return finalize(contextFailure.response, contextFailure.childLog);
     }
     if (lastFailure && lastFailureUpstreamCode === "zero_output_token_limit" && zeroOutputLimitFailure) {
       adoptFailedChildLog(zeroOutputLimitFailure.childLog);
@@ -992,12 +991,13 @@ export async function executeComboResponses(
         ? streamingIncompleteResponse(responseModel, zeroOutputLimitFailure.usage, "max_output_tokens", options.translatorBudget)
         : jsonIncompleteResponse(responseModel, zeroOutputLimitFailure.usage, "max_output_tokens");
     }
-    const returnsQuota = lastFailure && [400, 401, 403].includes(lastFailure.status) && quotaFailure;
-    const failedChildLog = returnsQuota ? quotaFailedChildLog : lastFailedChildLog;
-    if (failedChildLog) adoptFailedChildLog(failedChildLog);
-    if (targetsExhausted && toolChoiceRefusalsOnly === true) return comboUnavailableResponse("No available targets for combo; attempted targets cannot preserve mandatory tool_choice", { diagnostics: unsupportedToolChoice(comboTargetsDispatched) });
-    if (!lastFailure || ![400, 401, 403].includes(lastFailure.status)) return lastFailure!;
-    if (quotaFailure) return quotaFailure;
+    if (targetsExhausted && toolChoiceRefusalsOnly === true) return finalize(comboUnavailableResponse("No available targets for combo; attempted targets cannot preserve mandatory tool_choice", { diagnostics: unsupportedToolChoice(comboTargetsDispatched) }));
+    if (lastFailure?.status === 429 || lastFailure?.status === 402) return finalize(lastFailure);
+    const privacyOrLastFailure = () => xaiPrivacyFailure
+      ? finalize(xaiPrivacyFailure.response, xaiPrivacyFailure.childLog)
+      : finalize(lastFailure!);
+    if (!lastFailure || ![400, 401, 403].includes(lastFailure.status)) return privacyOrLastFailure();
+    if (quotaFailure) return finalize(quotaFailure, quotaFailedChildLog);
     // The quota-refused target was cooled before this request picked, so the ladder never saw
     // its refusal. The cooldown, with its Retry-After, is still the honest answer.
     let quotaCooldownUntil: number | undefined;
@@ -1016,12 +1016,12 @@ export async function executeComboResponses(
     }
     const remainingQuotaCooldownMs = quotaCooldownUntil === undefined ? 0 : quotaCooldownUntil - Date.now();
     return remainingQuotaCooldownMs > 0
-      ? comboUnavailableResponse("No available targets for combo", {
+      ? finalize(comboUnavailableResponse("No available targets for combo", {
         retryAfter: String(Math.max(1, Math.ceil(remainingQuotaCooldownMs / 1000))),
         // Only quota-cooled eligible targets can produce this answer, so its class is quota.
         diagnostics: comboUnavailableDiagnostics(combo.targets.length, comboTargetsDispatched,
           Array.from({ length: quotaCooledTargets }, () => "quota" as const)),
-      }) : lastFailure;
+      })) : privacyOrLastFailure();
   };
   // The caller's output ceiling, captured once so a floor applied to one target never
   // leaks into the next. An established parent estimate wins; otherwise (combo dispatch

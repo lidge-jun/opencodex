@@ -17,8 +17,8 @@ through the disk reader. A row keeps:
   `permission_denied`: a 403 whose whole `error.message` is that sentence names a plan restriction on
   a valid key, so the row must not read as an expired credential that needs a re-login.
   For the [xAI OAuth Legacy privacy mode refusal](../providers/xai-grok.md#legacy-privacy-mode-403),
-  the proved account policy supplies the `policy-refusal` failure cause. Direct turns and exhausted
-  combos return a fixed HTTP 403 `permission_denied` envelope.
+  the proved account policy supplies the `policy-refusal` failure cause. The client-facing
+  privacy refusal uses a fixed HTTP 403 `permission_denied` envelope.
 - `upstreamCondition`, a member of the closed set in `src/lib/upstream-condition.ts`, derived only for a
   failed row with upstream evidence; a client close (499, `client_closed_request`, `client_cancelled`) gets
   none, and a stored condition is kept only under the same rules. Text set through

@@ -81,7 +81,8 @@ ejecutar `ocx provider test xai`. Este ajuste también bloquea la detección de 
 consultas de cuota. El registro del servicio OpenCodex muestra las mismas indicaciones. Puedes
 seguir usando la sesión OAuth actual.
 Si el modelo Grok forma parte de un combo de Responses, el combo puede probar otro modelo
-elegible. Si se agotan los modelos elegibles, el combo devuelve la indicación sobre Privacy Mode.
+elegible. Si se agotan los modelos elegibles, un error confirmado de ventana de contexto o
+una respuesta de cuota aplicable tiene prioridad sobre la indicación de Privacy Mode.
 
 <a id="manual-recipe-without-auto-registration"></a>
 
