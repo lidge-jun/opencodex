@@ -5,8 +5,9 @@
 import { existsSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import {
-  adminGatewayOverride, dropStash, envGatewayOverride, mkdirTracked, readBytes, readStash, removeFile, rmdirsIfEmpty,
-  sha256, writeBytes, writeStash,
+  adminGatewayOverride, assertClientSize, clientDestination, clientRefusal, dropStash, envGatewayOverride,
+  inspectClientFile, inspectStashPresence, isRestoreFile, mkdirTracked, mutateClient, readClientFile, readStash,
+  removeCreatedClientFile, rmdirsIfEmpty, sha256, writeClientFile, writeStash, type ClientFile,
 } from "./io";
 import { gatewayNote, type GatewayClientConnector, type GatewayClientContext, type GatewayClientResult, type GatewayClientStatus, type GatewayTarget } from "./types";
 
@@ -15,7 +16,16 @@ const START = "# >>> opencodex agy >>>";
 const END = "# <<< opencodex agy <<<";
 type Kind = "posix" | "powershell";
 /** `pathWiseOnly`: the user edited the profile while connected, so disconnect removes only the block. */
-interface Entry { path: string; kind: Kind; originalBytes: string | null; createdDirs: string[]; writtenSha256: string; pathWiseOnly?: true }
+interface Entry {
+  path: string;
+  kind: Kind;
+  resolvedPath?: string;
+  originalBytes: string | null;
+  createdDirs: string[];
+  writtenSha256: string;
+  pendingSha256?: string;
+  pathWiseOnly?: true;
+}
 interface Stash { version: 1; files: Entry[] }
 
 const posixQuote = (v: string) => `'${v.replace(/'/g, "'\\''")}'`;
@@ -42,25 +52,54 @@ export function agyBlock(kind: Kind, target: GatewayTarget): string {
   ].join("\n");
 }
 
-/** Profile files this connector writes, per platform. Existing files first; the $SHELL profile is created when missing. */
-function targets(ctx: GatewayClientContext): { path: string; kind: Kind }[] {
+type Profile = Pick<Entry, "path" | "kind">;
+
+function candidates(ctx: GatewayClientContext): Profile[] {
   const win = ctx.platform === "win32";
-  const out: { path: string; kind: Kind }[] = [];
-  const posix = [join(ctx.home, ".bashrc"), ...(win ? [] : [join(ctx.home, ".zshrc")])];
-  for (const path of posix) if (existsSync(path)) out.push({ path, kind: "posix" });
-  if (!win) {
-    // The shell the user runs reads only its own profile, so an existing .bashrc does not stand in for a missing .zshrc.
-    const shell = basename(ctx.env.SHELL ?? "");
-    const selected = join(ctx.home, shell === "zsh" ? ".zshrc" : ".bashrc");
-    if ((out.length === 0 || shell === "zsh" || shell === "bash") && !out.some(t => t.path === selected)) out.push({ path: selected, kind: "posix" });
-  }
-  const ps7 = win ? join(ctx.home, "Documents", "PowerShell", "Microsoft.PowerShell_profile.ps1") : join(ctx.home, ".config", "powershell", "Microsoft.PowerShell_profile.ps1");
-  const ps5 = join(ctx.home, "Documents", "WindowsPowerShell", "Microsoft.PowerShell_profile.ps1");
-  const psExisting = (win ? [ps7, ps5] : [ps7]).filter(p => existsSync(p));
-  for (const path of psExisting) out.push({ path, kind: "powershell" });
-  if (win && psExisting.length === 0) out.push({ path: ps7, kind: "powershell" });
-  return out;
+  const bash: Profile = { path: join(ctx.home, ".bashrc"), kind: "posix" };
+  const posix: Profile[] = win ? [bash] : [bash, { path: join(ctx.home, ".zshrc"), kind: "posix" }];
+  const powershell = "Microsoft.PowerShell_profile.ps1";
+  const ps7 = win ? join(ctx.home, "Documents", "PowerShell", powershell) : join(ctx.home, ".config", "powershell", powershell);
+  const ps: Profile[] = [{ path: ps7, kind: "powershell" }];
+  if (win) ps.push({ path: join(ctx.home, "Documents", "WindowsPowerShell", powershell), kind: "powershell" });
+  return [...posix, ...ps];
 }
+
+/** Existing profiles, plus the active shell's profile when it needs to be created. */
+function targets(ctx: GatewayClientContext): Profile[] {
+  const available = candidates(ctx);
+  const posix = available.filter(({ kind, path }) => kind === "posix" && existsSync(path));
+  const ps = available.filter(({ kind, path }) => kind === "powershell" && existsSync(path));
+  if (ctx.platform === "win32") {
+    if (ps.length === 0) ps.push(available[1]!);
+  } else {
+    const shell = basename(ctx.env.SHELL ?? "");
+    const selected = available[shell === "zsh" ? 1 : 0]!;
+    if ((posix.length === 0 || shell === "zsh" || shell === "bash") && !posix.includes(selected)) posix.push(selected);
+  }
+  return [...posix, ...ps];
+}
+
+function checkedStash(ctx: GatewayClientContext): Stash | null {
+  const stash = readStash<Stash>(ctx, ID);
+  if (!stash) return null;
+  const allowed = new Map(candidates(ctx).map(({ path, kind }) => [path, kind]));
+  if (!Array.isArray(stash.files) || stash.files.some(entry =>
+    !entry || allowed.get(entry.path) !== entry.kind || !allowed.delete(entry.path)
+    || !isRestoreFile(ctx.home, entry.path, entry))) {
+    throw new Error("agy restore record names an invalid shell profile");
+  }
+  return stash;
+}
+
+function assertSameTarget(entry: Entry | undefined, target: string | undefined): void {
+  if (target && entry?.resolvedPath && entry.resolvedPath !== target) {
+    throw new Error(`agy profile now resolves to a different file: ${entry.path}`);
+  }
+}
+
+const recordedHash = (entry: Entry, current: string): boolean =>
+  entry.writtenSha256 === current || entry.pendingSha256 === current;
 
 function blockSpan(text: string): { start: number; end: number } | null {
   const start = text.indexOf(START);
@@ -83,6 +122,7 @@ function decode(bytes: Buffer): { text: string; encoding: Encoding } | null {
     if (bytes.length >= 4 && bytes[2] === 0 && bytes[3] === 0) return null;
     return bytes.length % 2 === 0 ? { text: bytes.subarray(2).toString("utf16le"), encoding: "utf16le" } : null;
   }
+  if (bytes.includes(0)) return null;
   try { return { text: strictUtf8.decode(bytes), encoding: "utf8" }; } catch { return null; }
 }
 const encode = (text: string, encoding: Encoding): Buffer =>
@@ -104,21 +144,21 @@ const withoutBlock = (text: string): string => { const s = blockSpan(text); retu
 const blockIn = (text: string): string | null => { const s = blockSpan(text); return s ? text.slice(s.start, s.end).replace(/\r\n/g, "\n").replace(/\n$/, "") : null; };
 
 function status(ctx: GatewayClientContext, target?: GatewayTarget): GatewayClientStatus {
-  const stash = readStash<Stash>(ctx, ID);
+  const hasRecord = inspectStashPresence(ctx, ID);
   const files = targets(ctx);
-  const known = new Map(files.map(f => [f.path, f.kind]));
-  for (const e of stash?.files ?? []) if (!known.has(e.path)) known.set(e.path, e.kind);
   let withBlocks = 0;
   let current = 0;
+  let unreadable = false;
   const rows: GatewayClientStatus["files"] = [];
-  for (const [path, kind] of known) {
-    const bytes = readBytes(path);
-    const decoded = bytes ? decode(bytes) : null;
+  for (const { path, kind } of files) {
+    const file = inspectClientFile(path);
+    const decoded = file ? decode(file.bytes) : null;
+    unreadable ||= file === undefined || (file !== null && decoded === null);
     const block = decoded ? blockIn(decoded.text) : null;
     if (block !== null) { withBlocks++; if (!target || block === agyBlock(kind, target)) current++; }
-    rows.push({ path, role: kind === "posix" ? "shell profile" : "PowerShell profile", exists: bytes !== null });
+    rows.push({ path, role: kind === "posix" ? "shell profile" : "PowerShell profile", exists: file !== null });
   }
-  const state = withBlocks > 0 && current === known.size ? "connected" : withBlocks > 0 || stash ? "drifted" : "disconnected";
+  const state = withBlocks > 0 && current === files.length ? "connected" : withBlocks > 0 || hasRecord || unreadable ? "drifted" : "disconnected";
   const overrides: GatewayClientStatus["overrides"] = [];
   const admin = adminGatewayOverride(ctx);
   if (admin) overrides.push(admin);
@@ -131,70 +171,111 @@ function status(ctx: GatewayClientContext, target?: GatewayTarget): GatewayClien
 }
 
 function connect(ctx: GatewayClientContext, target: GatewayTarget): GatewayClientResult {
-  const old = readStash<Stash>(ctx, ID);
-  const entries: Entry[] = [];
+  const old = checkedStash(ctx);
+  const entries = new Map(old?.files.map(entry => [entry.path, entry]));
   const changedFiles: string[] = [];
-  const staged: { entry: Entry; out: Buffer; changed: boolean }[] = [];
-  for (const t of targets(ctx)) {
-    const bytes = readBytes(t.path);
-    const prev = old?.files.find(e => e.path === t.path);
-    const decoded = bytes ? decode(bytes) : { text: "", encoding: "utf8" as const };
-    if (!decoded) return { ok: false, code: "unsupported-file", message: `${t.path} is not UTF-8 or UTF-16LE text, so OpenCodex will not edit it. Nothing was changed.`, changed: false, changedFiles: [], notes: [] };
-    const hasBlock = blockIn(decoded.text) !== null;
-    const out = encode(withBlock(decoded.text, agyBlock(t.kind, target)), decoded.encoding);
-    const keep = prev !== undefined && hasBlock;
-    // An edit made while connected must survive disconnect, so it rules out byte-for-byte restoration for good.
-    const drifted = keep && (prev.pathWiseOnly === true || sha256(bytes!) !== prev.writtenSha256);
+  const staged: { entry: Entry; file: ClientFile | null; out: Buffer }[] = [];
+  for (const profile of targets(ctx)) {
+    const { path, kind } = profile;
+    const file = readClientFile(path);
+    const prev = entries.get(path);
+    assertSameTarget(prev, file?.target);
+    const decoded = file ? decode(file.bytes) : { text: "", encoding: "utf8" as const };
+    if (!decoded) return clientRefusal(`${path} is not UTF-8 or BOM-prefixed UTF-16LE text.`, "unsupported-file");
+    const out = encode(withBlock(decoded.text, agyBlock(kind, target)), decoded.encoding);
+    assertClientSize(out);
+    const keep = prev !== undefined && file !== null && blockIn(decoded.text) !== null;
+    const drifted = keep && (prev.pathWiseOnly === true || !recordedHash(prev, file.hash));
     staged.push({
       entry: {
-        path: t.path, kind: t.kind, originalBytes: keep ? prev.originalBytes : bytes ? bytes.toString("base64") : null, createdDirs: prev?.createdDirs ?? [], writtenSha256: sha256(out),
-        ...(drifted ? { pathWiseOnly: true as const } : {}),
+        path, kind, originalBytes: keep ? prev.originalBytes : file?.bytes.toString("base64") ?? null,
+        createdDirs: prev?.createdDirs ?? [], writtenSha256: file?.hash ?? "",
+        pendingSha256: sha256(out),
+        ...(drifted ? { pathWiseOnly: true } : {}),
       },
-      out, changed: bytes === null || sha256(bytes) !== sha256(out),
+      file, out,
     });
   }
   try {
-    for (const s of staged) {
-      if (!existsSync(dirname(s.entry.path))) s.entry.createdDirs = [...s.entry.createdDirs, ...mkdirTracked(dirname(s.entry.path))];
-      entries.push(s.entry);
+    for (const { entry, file } of staged) {
+      entry.createdDirs = [...entry.createdDirs, ...mkdirTracked(dirname(entry.path))];
+      entry.resolvedPath = clientDestination(entry.path, file);
+      assertSameTarget(entries.get(entry.path), entry.resolvedPath);
+      entries.set(entry.path, entry);
     }
-    writeStash(ctx, ID, { version: 1, files: entries } satisfies Stash);
-    for (const s of staged) { if (s.changed) { writeBytes(s.entry.path, s.out); changedFiles.push(s.entry.path); } }
+    writeStash(ctx, ID, { version: 1, files: [...entries.values()] } satisfies Stash);
+    for (const { entry, file, out } of staged) {
+      if (file?.hash === entry.pendingSha256) continue;
+      writeClientFile(entry.path, file, out);
+      changedFiles.push(entry.path);
+    }
   } catch (error) {
-    return { ok: false, code: "io-error", message: `Could not update the shell profiles: ${(error as Error).message}`, changed: changedFiles.length > 0, changedFiles, notes: [] };
+    return clientRefusal(`Could not update the shell profiles: ${(error as Error).message}`, "io-error", changedFiles);
   }
+  // The journal already recognises both the previous and written bytes. Promotion is optional.
+  for (const { entry } of staged) {
+    entry.writtenSha256 = entry.pendingSha256!;
+    delete entry.pendingSha256;
+  }
+  try { writeStash(ctx, ID, { version: 1, files: [...entries.values()] } satisfies Stash); }
+  catch { /* pending stays recognisable */ }
   return { ok: true, changed: changedFiles.length > 0, changedFiles, message: "The agy command now starts on the OpenCodex gateway. Open a new terminal to use it.", notes: status(ctx, target).notes };
 }
 
 function disconnect(ctx: GatewayClientContext): GatewayClientResult {
-  const stash = readStash<Stash>(ctx, ID);
+  const stash = checkedStash(ctx);
   const paths = new Map<string, Entry | undefined>();
   for (const t of targets(ctx)) paths.set(t.path, undefined);
   for (const e of stash?.files ?? []) paths.set(e.path, e);
-  const changedFiles: string[] = [];
+  const changes: { path: string; apply: () => void }[] = [];
+  const createdDirs: string[] = [];
   let pathWise = false;
   for (const [path, entry] of paths) {
-    const bytes = readBytes(path);
-    if (bytes && entry && !entry.pathWiseOnly && sha256(bytes) === entry.writtenSha256) {
-      if (entry.originalBytes === null) { removeFile(path); rmdirsIfEmpty(entry.createdDirs); }
-      else writeBytes(path, Buffer.from(entry.originalBytes, "base64"));
-      changedFiles.push(path);
+    const file = entry ? readClientFile(path) : inspectClientFile(path);
+    assertSameTarget(entry, file?.target);
+    if (!file) {
+      if (entry) createdDirs.push(...entry.createdDirs);
       continue;
     }
-    if (!bytes) { if (entry) rmdirsIfEmpty(entry.createdDirs); continue; }
-    const decoded = decode(bytes);
+    if (entry && !entry.pathWiseOnly && recordedHash(entry, file.hash)) {
+      if (entry.originalBytes === null) {
+        changes.push({ path, apply: () => removeCreatedClientFile(path, file) });
+        createdDirs.push(...entry.createdDirs);
+      } else {
+        const bytes = Buffer.from(entry.originalBytes, "base64");
+        assertClientSize(bytes);
+        if (!bytes.equals(file.bytes)) changes.push({ path, apply: () => writeClientFile(path, file, bytes) });
+      }
+      continue;
+    }
+    const decoded = decode(file.bytes);
+    if (!decoded && entry) return clientRefusal(`${path} uses an unsupported encoding. The restore record was kept.`, "unsupported-file");
     if (!decoded || blockIn(decoded.text) === null) continue;
-    writeBytes(path, encode(withoutBlock(decoded.text), decoded.encoding));
-    changedFiles.push(path);
+    changes.push({ path, apply: () => writeClientFile(path, file, encode(withoutBlock(decoded.text), decoded.encoding)) });
     pathWise = true;
   }
-  if (!stash && changedFiles.length === 0) return { ok: true, changed: false, changedFiles: [], restore: "none", message: "Not connected by OpenCodex; nothing was changed.", notes: [] };
-  dropStash(ctx, ID);
+
+  const changedFiles: string[] = [];
+  try {
+    for (const { path, apply } of changes) {
+      apply();
+      changedFiles.push(path);
+    }
+    rmdirsIfEmpty(createdDirs);
+    if (stash) dropStash(ctx, ID);
+  } catch (error) {
+    return clientRefusal(`Could not restore the shell profiles: ${(error as Error).message}`, "io-error", changedFiles);
+  }
+  if (!changedFiles.length) return { ok: true, changed: false, changedFiles, restore: "none", message: "No shell profile changes were needed.", notes: [] };
   return {
-    ok: true, changed: changedFiles.length > 0, changedFiles, restore: changedFiles.length === 0 ? "none" : pathWise ? "path-wise" : "exact",
+    ok: true, changed: true, changedFiles, restore: pathWise ? "path-wise" : "exact",
     message: pathWise ? "Removed the OpenCodex agy block; the rest of each edited profile was kept as it is." : "Shell profiles restored byte for byte.",
     notes: [gatewayNote("new-terminal")],
   };
 }
 
-export const AGY_CONNECTOR: GatewayClientConnector = { id: ID, label: "agy CLI", status, connect, disconnect };
+export const AGY_CONNECTOR: GatewayClientConnector = {
+  id: ID, label: "agy CLI", status,
+  connect: (ctx, target) => mutateClient(ctx, () => connect(ctx, target)),
+  disconnect: ctx => mutateClient(ctx, () => disconnect(ctx)),
+};

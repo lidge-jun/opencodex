@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../../src/server/management-api";
@@ -13,7 +13,7 @@ const settings = () => join(gateway.home, ".antigravity", "settings.json");
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "ocx-gw-routes-"));
   mkdirSync(join(root, "home"));
-  gateway = { home: join(root, "home"), platform: "linux", env: { SHELL: "/bin/bash" }, stateDir: join(root, "state"), adminSettingsPath: join(root, "admin_settings.json") };
+  gateway = { home: join(root, "home"), platform: "linux", env: { SHELL: "/bin/bash" }, stateDir: join(root, "state"), lifecycleLockPath: join(root, "runtime", "lifecycle.sqlite"), adminSettingsPath: join(root, "admin_settings.json") };
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 
@@ -64,6 +64,26 @@ describe("gateway client management routes", () => {
     const unsupported = await call("POST", "/api/gateway-clients/antigravity/connect", {});
     expect(unsupported).toMatchObject({ status: 409, json: { ok: false, code: "unsupported-file" } });
     expect(readFileSync(settings(), "utf8")).toBe('{\n  // note\n}\n');
+  });
+
+  test("status stays available without parsing oversized client files", async () => {
+    mkdirSync(join(gateway.home, ".antigravity"));
+    const text = '{"models":{"defaultModelId":"too-large"}}';
+    const path = settings();
+    // Keep the oversized file valid JSON: padding is whitespace rather than sparse NULs.
+    writeFileSync(path, text + " ".repeat(4 * 1024 * 1024));
+    const profile = join(gateway.home, ".bashrc");
+    writeFileSync(profile, "# fixture");
+    truncateSync(profile, 4 * 1024 * 1024 + 1);
+    const status = await call("GET", "/api/gateway-clients");
+    expect(status).toMatchObject({ status: 200, json: { clients: [
+      { id: "antigravity", state: "drifted", files: [{ path, exists: true }] },
+      { id: "agy", state: "drifted", files: [{ path: profile, exists: true }] },
+    ] } });
+    expect(status.json.clients[0]).not.toHaveProperty("defaultModel");
+    expect(await call("POST", "/api/gateway-clients/agy/connect")).toMatchObject({
+      status: 409, json: { ok: false, code: "io-error" },
+    });
   });
 
   test("unknown ids are 404 and malformed bodies 400", async () => {

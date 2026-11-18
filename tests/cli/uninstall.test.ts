@@ -15,6 +15,7 @@ import { assertClientLifecycleHeld, withClientLifecycle, withClientLifecycleSync
 import { captureUninstallEndpointProof, type UninstallObservation } from "../../src/cli/uninstall-plan";
 import type { DesktopDisconnectReceipt } from "../../src/claude/desktop-remote-store";
 import type { ExportModel } from "../../src/clients/config-export";
+import { GATEWAY_CLIENTS, connectGatewayClient } from "../../src/integrations/gateway-clients";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
 import { createIntegrationStateStore } from "../../src/integrations/store";
 import { applyIntegration, disableIntegrationCoordinated } from "../../src/integrations/writer";
@@ -565,6 +566,7 @@ function uninstallFixture() {
       await fixture.duringIntegrationCleanup?.();
       return { attempted: 0, changed: 0 };
     },
+    gatewayContext: () => ({ home: fixtureRoot, platform: "linux", env: {}, stateDir: configDir }),
     remove: () => {
       // Real destructive work is confined to this fixture, never getConfigDir().
       assertClientLifecycleHeld(fixture.lease!);
@@ -839,6 +841,8 @@ describe("uninstall restores recorded third-party integrations before deleting r
         env,
         home,
       }),
+      gatewayContext: () => ({ home, platform: "linux", env: { SHELL: "/bin/bash" },
+        stateDir: configDir, adminSettingsPath: join(root, "admin.json"), lifecycleLockPath: lockPath }),
       remove: () => {
         rmSync(configDir, { recursive: true });
         return { status: "removed", residualPaths: [] };
@@ -848,6 +852,50 @@ describe("uninstall restores recorded third-party integrations before deleting r
     };
     return { root, home, env, configDir, clientConfig, store, deps };
   }
+
+  function connectGateways(f: Awaited<ReturnType<typeof fixture>>) {
+    const context = f.deps.gatewayContext();
+    const settings = join(f.home, ".antigravity", "settings.json");
+    const profile = join(f.home, ".bashrc");
+    const oldSettings = '{"models":{"list":[{"modelId":"prior"}]}}';
+    const oldProfile = "# existing shell profile\n";
+    mkdirSync(dirname(settings), { recursive: true });
+    writeFileSync(settings, oldSettings);
+    writeFileSync(profile, oldProfile);
+    const gateway = { url: "http://127.0.0.1:10100", apiKey: "opencodex-local" };
+    for (const client of Object.values(GATEWAY_CLIENTS)) expect(client.connect(context, gateway).ok).toBe(true);
+    return { settings, profile, oldSettings, oldProfile };
+  }
+
+  test("uninstall disconnects every recorded gateway client before deleting config", async () => {
+    const f = await fixture();
+    try {
+      const { settings, profile, oldSettings, oldProfile } = connectGateways(f);
+      const remove = f.deps.remove;
+      f.deps.remove = () => {
+        expect(readFileSync(settings, "utf8")).toBe(oldSettings);
+        expect(readFileSync(profile, "utf8")).toBe(oldProfile);
+        const reconnect = connectGatewayClient("agy", f.deps.gatewayContext(), config, config.port);
+        expect(reconnect).toMatchObject({ ok: false, code: "io-error" });
+        return remove();
+      };
+      expect(await removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .toEqual({ status: "removed", residualPaths: [] });
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
+
+  test("uninstall aborts when a recorded gateway client refuses restoration", async () => {
+    const f = await fixture();
+    try {
+      const { settings } = connectGateways(f);
+      const edited = "{ invalid json";
+      writeFileSync(settings, edited);
+      await expect(removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps)).rejects.toThrow("antigravity");
+      expect(existsSync(join(f.configDir, "gateway-clients", "antigravity.json"))).toBe(true);
+      expect(existsSync(join(f.configDir, "gateway-clients", "agy.json"))).toBe(true);
+      expect(readFileSync(settings, "utf8")).toBe(edited);
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
 
   function addAsideProfiles(f: Awaited<ReturnType<typeof fixture>>) {
     const asideRoot = join(f.home, ".aside");

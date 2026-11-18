@@ -12,10 +12,11 @@ these clients are configured through Google's gateway settings, not through a pr
 | `antigravity` | The desktop app (2.15 and newer) | the `gateway` block and `models.defaultModelId` in `~/.antigravity/settings.json` |
 | `agy` | The command-line client (1.2.15 and newer) | a marked shell function in the bash, zsh and PowerShell profiles, exporting `AGY_LLM_GATEWAY_*` for `agy` only |
 
-The `agy` connector never edits an `agy` settings file. On Windows it writes the PowerShell 7 profile and
-only an existing `.bashrc`; elsewhere it writes the existing bash and zsh profiles, or creates the one the
-login shell names when neither exists. Google lists `agy` for macOS and Linux only, so the Windows path is
-reported as untested.
+The `agy` connector edits shell profiles. On Windows it uses existing PowerShell 7 and Windows
+PowerShell profiles, or creates the PowerShell 7 profile if neither exists. It also uses an existing
+`.bashrc`. On macOS and Linux it uses existing bash, zsh and PowerShell profiles and creates the
+active bash or zsh profile if needed. Google lists `agy` for macOS and Linux only, so the Windows
+path is reported as untested.
 
 ## Target and the secret rule
 
@@ -27,9 +28,18 @@ most 200 characters, otherwise `invalid-model`.
 
 ## Stash and restore
 
-Every connect records what it replaced in `<config dir>/gateway-clients/<id>.json` (mode 0600): the original
-bytes of each file (or that the file was absent), the directories it created, and the SHA-256 of what it
-wrote. Disconnect then restores in one of three ways.
+Connect keeps the original bytes (or records that the file was absent), directories it created,
+and the applied or pending SHA-256 in `<config dir>/gateway-clients/<id>.json`. That record uses
+owner-only permissions, including a protected ACL on Windows. Client files use ordinary atomic
+replacement with inherited ACLs on Windows and retain their existing mode on POSIX.
+
+The named restore destination must match the Antigravity settings path or a fixed agy profile
+candidate under the user's home. Connectors explicitly resolve client symlinks and read regular files
+up to 4 MiB. New restore records also pin the resolved destination. If the file or its resolved
+destination changes before replacement, the write is refused. Connect and disconnect use the
+config-mutation lock, with the client lifecycle lock outside it on the CLI and management paths.
+
+Disconnect reports one of three outcomes.
 
 - **exact.** The file still equals what OpenCodex wrote, so the original bytes are written back, or the file
   and the directories OpenCodex created are removed when it did not exist.
@@ -39,20 +49,28 @@ wrote. Disconnect then restores in one of three ways.
   A profile block is removed whole, so an edit made inside its markers is not kept.
 - **none.** There is no record, or the file is already gone; nothing is changed.
 
-Connecting again while connected keeps the first record, so disconnect still returns to the user's own
-state; when the file was edited in between, the record is marked so disconnect restores path-wise and keeps
-that edit. The app settings write is journaled: the record names the new write as pending before the file
-changes and promotes it afterwards, so disconnect recognises the file whether or not that write landed. A
-profile is read as UTF-8 or BOM-prefixed UTF-16LE (what Windows PowerShell 5.1 redirection writes) and
-written back in the same encoding; any other encoding is refused with `unsupported-file`. A settings file with comments, trailing commas or a non-object root is refused with
-`unsupported-file` and left untouched, because it cannot be round-tripped.
+Reconnect keeps the first record while the client is connected. If the file was edited in between,
+disconnect restores path-wise. Edits to fields that reconnect leaves alone survive. For example, if
+only the gateway URL changed and the placeholder key stayed in place, reconnect sets the OpenCodex
+URL again and disconnect restores the original gateway block.
+
+Connect journals the replacement hash before editing the client file, so disconnect can recognise
+the original and pending states after an interrupted write. A profile is read as UTF-8 without NUL
+bytes or as BOM-prefixed UTF-16LE (used by Windows PowerShell 5.1 redirection). It is written back
+in the same encoding. If a recorded profile cannot be decoded, disconnect refuses with
+`unsupported-file` and keeps the recovery record. A settings file with comments, trailing commas
+or a non-object root is refused with `unsupported-file` and left untouched.
+
+`src/cli/uninstall-client-state.ts` disconnects every gateway client with a restore record before
+removing config. It holds the lifecycle lock through both steps and aborts removal on any refusal,
+leaving the failed client's record available for a retry.
 
 ## Which setting wins
 
 Antigravity resolves the gateway as `admin_settings.json` over `AGY_LLM_GATEWAY_*` variables over the user
 settings file. Status reports an organisation `admin_settings.json` that sets `gateway` and an
-`AGY_LLM_GATEWAY_URL` in the environment OpenCodex itself sees, as `overrides`, without echoing values. A
-connected client under an override is therefore reported with a warning rather than as working.
+`AGY_LLM_GATEWAY_URL` in the OpenCodex process environment as `overrides` without echoing a
+credential. An override set only in the Antigravity process is invisible to OpenCodex.
 
 ## Surfaces
 

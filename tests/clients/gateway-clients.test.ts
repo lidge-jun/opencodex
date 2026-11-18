@@ -16,7 +16,7 @@ const read = (p: string) => readFileSync(p, "utf8");
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "ocx-gw-"));
   mkdirSync(join(root, "home"));
-  ctx = { home: join(root, "home"), platform: "linux", env: { SHELL: "/bin/zsh" }, stateDir: join(root, "state"), adminSettingsPath: join(root, "admin_settings.json") };
+  ctx = { home: join(root, "home"), platform: "linux", env: { SHELL: "/bin/zsh" }, stateDir: join(root, "state"), lifecycleLockPath: join(root, "runtime", "lifecycle.sqlite"), adminSettingsPath: join(root, "admin_settings.json") };
 });
 afterEach(() => rmSync(root, { recursive: true, force: true }));
 

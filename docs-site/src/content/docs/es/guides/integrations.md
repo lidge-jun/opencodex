@@ -756,10 +756,13 @@ Conectar registra lo que reemplazó. Desconectar restaura los bytes originales c
 cambiado y, en caso contrario, revierte solo las entradas propias de OpenCodex y conserva tus otras
 ediciones. El bloque marcado de `agy` en un perfil de shell se elimina entero, incluida cualquier edición
 hecha dentro de él. Reinicia Antigravity, o abre una terminal nueva para `agy`, para aplicar un cambio.
+`ocx uninstall` desconecta los clientes con registros de restauración guardados antes de eliminar la
+configuración. Si no puede restaurar un cliente, la desinstalación se detiene y conserva su registro.
 
 OpenCodex escribe una clave de marcador de posición, nunca una credencial real, así que se niega a
 conectar cuando el bind del proxy exige una. Un archivo con comentarios o comas finales también se rechaza
 y se deja intacto. Antigravity lee primero un `admin_settings.json` de la organización, luego las
-variables `AGY_LLM_GATEWAY_*` y después la configuración del usuario; el estado muestra una advertencia
-cuando una de las dos primeras anula la conexión. En Windows `agy` no está probado, porque Google lo
-publica solo para macOS y Linux.
+variables `AGY_LLM_GATEWAY_*` y después la configuración del usuario. El estado advierte sobre la
+configuración de la organización y las variables de entorno que puede ver. Solo consulta el entorno
+del proceso de OpenCodex. Si la variable se fija únicamente en el proceso de Antigravity, el estado
+no la detecta. En Windows `agy` no está probado, porque Google lo publica solo para macOS y Linux.

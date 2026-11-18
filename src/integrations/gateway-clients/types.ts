@@ -9,6 +9,8 @@ export interface GatewayClientContext {
   stateDir: string;
   /** Override for tests; defaults to the platform's admin_settings.json location. */
   adminSettingsPath?: string;
+  /** Isolated lifecycle lock for tests. Production uses the effective user lock. */
+  lifecycleLockPath?: string;
 }
 
 export interface GatewayTarget {

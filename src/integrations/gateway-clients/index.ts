@@ -1,10 +1,11 @@
 import { homedir } from "node:os";
 import type { OcxConfig } from "../../types";
+import { assertClientLifecycleHeld, withClientLifecycleSync, type ClientLifecycleHeld } from "../../client/lifecycle-lock";
 import { getConfigDir } from "../../config/paths";
 import { localInferenceDestination } from "../../lib/local-destinations";
 import { AGY_CONNECTOR } from "./agy";
 import { ANTIGRAVITY_CONNECTOR } from "./antigravity";
-import { GATEWAY_PLACEHOLDER_KEY } from "./io";
+import { GATEWAY_PLACEHOLDER_KEY, clientRefusal, hasStash } from "./io";
 import type { GatewayClientConnector, GatewayClientContext, GatewayClientId, GatewayClientResult, GatewayClientStatus, GatewayTarget } from "./types";
 
 export type * from "./types";
@@ -47,15 +48,30 @@ export type GatewayActionOutcome =
   | (GatewayClientResult & { id: GatewayClientId; action: "connect" | "disconnect"; status: GatewayClientStatus })
   | { ok: false; id: GatewayClientId; action: "connect"; code: "requires-admission-token" | "invalid-model"; message: string };
 
+function withGatewayLifecycle(ctx: GatewayClientContext, work: () => GatewayClientResult): GatewayClientResult {
+  try { return withClientLifecycleSync(work, { lockPath: ctx.lifecycleLockPath }); }
+  catch (error) { return clientRefusal((error as Error).message); }
+}
+
+/** Uninstall keeps the lifecycle lease through both restoration and config removal. */
+export function disconnectRecordedGatewayClients(ctx: GatewayClientContext, held: ClientLifecycleHeld): void {
+  assertClientLifecycleHeld(held);
+  for (const id of GATEWAY_CLIENT_IDS) {
+    if (!hasStash(ctx, id)) continue;
+    const result = GATEWAY_CLIENTS[id].disconnect(ctx);
+    if (!result.ok) throw new Error(`Gateway client cleanup refused for ${id}: ${result.message}`);
+  }
+}
+
 export function connectGatewayClient(id: GatewayClientId, ctx: GatewayClientContext, config: Pick<OcxConfig, "hostname" | "unauthenticatedLoopbackListener">, port: number, model?: string): GatewayActionOutcome {
   const resolved = resolveGatewayTarget(config, port, model);
   if (!resolved.ok) return { ok: false, id, action: "connect", code: resolved.code, message: resolved.message };
-  const result = GATEWAY_CLIENTS[id].connect(ctx, resolved.target);
+  const result = withGatewayLifecycle(ctx, () => GATEWAY_CLIENTS[id].connect(ctx, resolved.target));
   return { ...result, id, action: "connect", status: GATEWAY_CLIENTS[id].status(ctx, resolved.target) };
 }
 
 export function disconnectGatewayClient(id: GatewayClientId, ctx: GatewayClientContext, target?: GatewayTarget): GatewayActionOutcome {
-  const result = GATEWAY_CLIENTS[id].disconnect(ctx);
+  const result = withGatewayLifecycle(ctx, () => GATEWAY_CLIENTS[id].disconnect(ctx));
   return { ...result, id, action: "disconnect", status: GATEWAY_CLIENTS[id].status(ctx, target) };
 }
 
