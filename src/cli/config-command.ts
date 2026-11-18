@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { clearCodexAccountPin } from "../codex/account-priority";
 import { getConfigPath, mutatePersistedConfig, readConfigDiagnostics, sanitizeModelCostsForDisplay, saveConfig, validateConfigCandidate, withConfigMutationLockSync } from "../config";
+import { MALFORMED_CODEX_AUTH_METHOD_WARNING } from "../config/load-degrade";
 import { readClientConnectionState } from "../client/state";
 import { getConfigDir, withConfigDirHardeningSettled } from "../config/paths";
 import { readCliConfigForMutation } from "./config-mutation";
@@ -344,7 +345,9 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
       const result = diagnostics?.error
         ? { ok: false as const, error: diagnostics.error }
         : validateCandidate(path ? loadInput(path) : diagnostics?.config);
-      const warnings = diagnostics?.warnings ?? [];
+      // General diagnostics can include file contents. Validate emits only the fixed policy warning.
+      const warnings = diagnostics?.warnings?.includes(MALFORMED_CODEX_AUTH_METHOD_WARNING)
+        ? [MALFORMED_CODEX_AUTH_METHOD_WARNING] : [];
       printData({
         ...(result.ok ? { ok: true, source: path ?? getConfigPath() } : result),
         ...(warnings.length ? { warnings } : {}),

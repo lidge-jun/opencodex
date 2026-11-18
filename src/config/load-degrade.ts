@@ -941,9 +941,11 @@ export function malformedNativeSubagentFieldWarning(field: NativeSubagentPersist
   return `${field} ignored: expected ${expected}`;
 }
 
+export const MALFORMED_CODEX_AUTH_METHOD_WARNING = 'codexAuthMethod ignored: using "auto" for Codex pool logins. Expected "auto", "device-only", or omission.';
+
 export function malformedCodexAuthMethodWarning(rawParsed: unknown): string | null {
   if (codexAuthMethodSchema.safeParse(rawConfigRecord(rawParsed)?.codexAuthMethod).success) return null;
-  return 'codexAuthMethod ignored: using "auto" for Codex pool logins. Expected "auto", "device-only", or omission.';
+  return MALFORMED_CODEX_AUTH_METHOD_WARNING;
 }
 
 export function malformedCodexAccountPickerWarning(rawParsed: unknown): string | null {

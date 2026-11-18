@@ -235,6 +235,30 @@ test("config validate warns when the installed Codex login policy falls back to 
   }
 });
 
+test.each(["auto", "DEVICE-ONLY"])("config validate only reports the fixed policy warning for %s", codexAuthMethod => {
+  const dir = freshConfig();
+  try {
+    const path = join(dir, "config.json");
+    const config = JSON.parse(readFileSync(path, "utf8"));
+    const fakeSecret = "fixture-secret-url-fragment";
+    config.providers.nocreds.baseUrl = `https://nocreds.example/{${fakeSecret}}`;
+    writeFileSync(path, JSON.stringify({ ...config, codexAuthMethod }));
+
+    const result = runCli(["config", "validate", "--json"], { OPENCODEX_HOME: dir });
+    expect(result.status).toBe(0);
+    expect(result.stdout + result.stderr).not.toContain(fakeSecret);
+    expect(JSON.parse(result.stdout)).toEqual({
+      ok: true,
+      source: path,
+      ...(codexAuthMethod === "auto" ? {} : {
+        warnings: ['codexAuthMethod ignored: using "auto" for Codex pool logins. Expected "auto", "device-only", or omission.'],
+      }),
+    });
+  } finally {
+    removeTreeWithRetry(dir);
+  }
+});
+
 test.each(["set", "normalized set", "import"])("config %s cannot enter plaintext mode without the dedicated transition", action => {
   const dir = freshConfig();
   const configPath = join(dir, "config.json");
