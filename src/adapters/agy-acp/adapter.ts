@@ -316,9 +316,9 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
 
     function sendPrompt(): void {
       if (!checkSelectedModel()) return;
-      const prompt = buildAcpPrompt(parsed, !systemOnSession);
       const refuse = (error: unknown): void => finish(undefined, false, () => rejectTurn(error));
       try {
+        const prompt = buildAcpPrompt(parsed, !systemOnSession);
         const decision = incoming.sendBudget?.reserveDispatch({ sendClass: "transient", targetKey: AGY_ACP_IDENTITY_URL });
         if (decision && !decision.allowed) return refuse(new SendBudgetExhaustedError());
         const permit = decision?.permit;

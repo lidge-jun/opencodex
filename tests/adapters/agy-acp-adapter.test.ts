@@ -458,6 +458,34 @@ describe("agy acp turn", () => {
     expect(released).toBe(true);
     expect(sent).toEqual([]);
   });
+  test("prompt serialization errors reap the child from the stdout callback", async () => {
+    let nested: Record<string, unknown> = {};
+    for (let depth = 0; depth < 50_000; depth++) nested = { nested };
+    let escaped = false;
+    let reaped = false;
+    let sentPrompt = false;
+    const agent = script((frame, api, state) => {
+      if (frame.method === "session/prompt") sentPrompt = true;
+      if (frame.method !== "session/new") return;
+      queueMicrotask(() => {
+        try {
+          api.reply(frame.id, { sessionId: "s1", configOptions: state.config });
+        } catch {
+          escaped = true;
+          api.exit(1);
+        }
+      });
+      return true;
+    });
+    await expect(run(agent, {
+      parsed: parsed({ context: { messages: [{
+        role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "fixture", arguments: nested }],
+      }] } }),
+      deps: { reap: async () => { reaped = true; } },
+    })).rejects.toBeInstanceOf(RangeError);
+    expect({ escaped, reaped, sentPrompt }).toEqual({ escaped: false, reaped: true, sentPrompt: false });
+  });
+
   test("a local interactive turn: initialize, session/new in the private workspace, prompt, one done", async () => {
     process.env.OPENCODEX_ADMIN_AUTH_TOKEN = "admin-secret-should-not-leak";
     const h = await run(script());
