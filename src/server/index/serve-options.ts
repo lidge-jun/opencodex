@@ -133,8 +133,10 @@ import {
   buildDesktop3pRegistry,
   desktop3pModelOptions,
   generateDesktop3pModels,
+  resolvableDesktop3pAlias,
 } from "../../claude/desktop-3p";
 import { buildDesktopDiscoveryInputs } from "../../claude/desktop-discovery-inputs";
+import { observeModelCacheRevision } from "../../codex/model-cache";
 import { handleImages } from "../images";
 import {
   handleLive,
@@ -950,11 +952,12 @@ export function createServeOptions(ctx: ServeOptionsContext) {
         // The Integrations page reports whether a Cursor client has reached this proxy; the
         // recorder keeps only a bounded User-Agent value and a timestamp, in memory.
         recordCursorSeen(req.headers);
+        const providerContentRevisions = new Map<string, string>();
         let goModels;
         let modelEntitlements;
         try {
           [goModels, modelEntitlements] = await Promise.all([
-            fetchAllModels(config, { allowSuperseded: true, publishProjection: projection => { config = projection; } }),
+            fetchAllModels(config, { providerContentRevisions, allowSuperseded: true, publishProjection: projection => { config = projection; } }),
             // Codex sends its own client_version on this request, and upstream filters the
             // entitlement roster by it. Passing it through is what stops an entitled account
             // being told it cannot use models a newer client can (#2886).
@@ -1073,27 +1076,25 @@ export function createServeOptions(ctx: ServeOptionsContext) {
           catalogFastRowEligible(config, m);
 
         if (wantsAnthropicList && !url.searchParams.has("client_version")) {
+          // Entitlement resolution and imports can outlive the gather that chose these rows.
+          const canInstallAliases = () => config === ctx.config
+            && [...providerContentRevisions].every(([provider, revision]) => observeModelCacheRevision(provider) === revision);
           if (wantsDesktopConfig) {
             const models = config.claudeCode?.enabled === false ? [] : generateDesktop3pModels(
               desktopInputs.nativeSlugs, desktopInputs.routedModels,
               config.claudeCode?.desktopProfile, desktopInputs.nativeContextCap,
-              desktop3pModelOptions(config.claudeCode),
+              { ...desktop3pModelOptions(config.claudeCode), useInstalledRegistry: !canInstallAliases() },
             );
             const response = jsonResponse({ version: 1, models }, 200, req, policy);
             response.headers.set("Cache-Control", "no-store");
             return response;
           }
           if (config.claudeCode?.enabled === false) return jsonResponse({ data: [] }, 200, req, policy);
-          // Build Desktop 3P registry so inbound alias resolution works for subsequent requests.
-          buildDesktop3pRegistry(
-            desktopNativeSlugs,
-            desktopInputs.routedModels,
-            config.claudeCode?.desktopProfile,
-            desktopInputs.nativeContextCap,
-          );
           const { buildAnthropicModelInfos, configuredRoutedDisplayName } = await import("../../claude/model-info");
           const { resolveAutoContext } = await import("../../claude/context-windows");
-          const { resolvableDesktop3pAlias } = await import("../../claude/desktop-3p");
+          if (canInstallAliases()) {
+            buildDesktop3pRegistry(desktopNativeSlugs, goOrdered, config.claudeCode?.desktopProfile, desktopInputs.nativeContextCap);
+          }
           // Per-surface id family (devlog 050): explicit ?ids= wins; otherwise the
           // Claude Code CLI discovery UA (`claude-code/<version>`, binary n_()) gets
           // readable claude-ocx ids and every other client (Desktop 3P) keeps the

@@ -102,6 +102,8 @@ Routing and catalog visibility are separate controls:
   using a temporary projection; they leave the running configuration and saved choices untouched.
   If a newer discovery supersedes a successful response, the dashboard and `/v1/models` can
   still show the older request's models under the visibility policy for that response.
+  Claude Desktop config snapshots and Anthropic listings using Desktop IDs show only aliases
+  that already route to the same models when discovery is superseded or uses a temporary projection.
   Use `ocx models new-policy off` globally, add `--provider <name>` for an override, and inspect
   `ocx models new-arrivals [--json]`. Failed/degraded fetches never change the baseline. Providers
   with a non-empty `selectedModels` (including preset mode) are already curated, so `on` and `off`

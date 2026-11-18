@@ -171,8 +171,9 @@ function collectDesktop3pModels(
   routedModels: Array<Desktop3pRoutedModel>,
   profile?: OcxClaudeDesktopProfile,
   nativeContextCap?: NativeContextLimitsInput,
-): { models: Desktop3pModelEntry[]; routes: string[]; registry: Map<string, string>; realAnthropicIds: Set<string> } {
+) {
   const registry = new Map<string, string>();
+  const aliasesByRoute = new Map<string, string>();
   const models: Desktop3pModelEntry[] = [];
   // routes[i] is the route models[i] serves; visibility filters by route, never by alias.
   const routes: string[] = [];
@@ -198,7 +199,6 @@ function collectDesktop3pModels(
     } satisfies DesktopProfileModel));
     const reconciled = reconcileDesktopProfile(profile, profileModels);
     const rendered = renderDesktopProfile(reconciled, profileModels);
-    const aliasesByRoute = new Map<string, string>();
     for (const model of rendered) {
       const realAnthropic = model.route.startsWith("anthropic/claude-");
       if (!realAnthropic && realAnthropicIds.has(model.name)) {
@@ -251,11 +251,9 @@ function collectDesktop3pModels(
         registry.set(legacy, model.route);
       }
     }
-    desktop3pAliasesByRoute = aliasesByRoute;
-    return { models, routes, registry, realAnthropicIds };
+    return { models, routes, registry, aliasesByRoute, realAnthropicIds };
   }
 
-  const aliasesByRoute = new Map<string, string>();
   const emittedNames = new Set<string>();
   for (const { provider, id, contextWindow } of candidates) {
     const route = `${provider}/${id}`;
@@ -310,8 +308,13 @@ function collectDesktop3pModels(
   }
 
   if (models[0]) models[0].isFamilyDefault = true;
+  return { models, routes, registry, aliasesByRoute, realAnthropicIds };
+}
+
+function installDesktop3pRegistry({ registry, aliasesByRoute, realAnthropicIds }: ReturnType<typeof collectDesktop3pModels>): void {
+  desktop3pRegistry = registry;
   desktop3pAliasesByRoute = aliasesByRoute;
-  return { models, routes, registry, realAnthropicIds };
+  desktop3pRealAnthropicIds = realAnthropicIds;
 }
 
 /** Build and install the registry used to decode Desktop aliases. */
@@ -321,10 +324,9 @@ export function buildDesktop3pRegistry(
   profile?: OcxClaudeDesktopProfile,
   nativeContextCap?: NativeContextLimitsInput,
 ): Map<string, string> {
-  const { registry, realAnthropicIds } = collectDesktop3pModels(nativeSlugs, routedModels, profile, nativeContextCap);
-  desktop3pRegistry = registry;
-  desktop3pRealAnthropicIds = realAnthropicIds;
-  return registry;
+  const collected = collectDesktop3pModels(nativeSlugs, routedModels, profile, nativeContextCap);
+  installDesktop3pRegistry(collected);
+  return collected.registry;
 }
 
 /** Generate Claude Desktop 3P model entries from the proxy's available models. */
@@ -339,6 +341,8 @@ export interface Desktop3pModelOptions {
    * route so a running session holding a just-hidden alias still routes.
    */
   visibility?: DesktopModelVisibility;
+  /** A detached listing may publish only names already served by the installed registry. */
+  useInstalledRegistry?: boolean;
 }
 
 export function generateDesktop3pModels(
@@ -348,9 +352,19 @@ export function generateDesktop3pModels(
   nativeContextCap?: NativeContextLimitsInput,
   options: Desktop3pModelOptions = {},
 ): Desktop3pModelEntry[] {
-  const { models: all, routes, registry, realAnthropicIds } = collectDesktop3pModels(nativeSlugs, routedModels, profile, nativeContextCap);
-  desktop3pRegistry = registry;
-  desktop3pRealAnthropicIds = realAnthropicIds;
+  const collected = collectDesktop3pModels(nativeSlugs, routedModels, profile, nativeContextCap);
+  let { models: all, routes } = collected;
+  if (options.useInstalledRegistry) {
+    const kept = routes.map((route, index) => {
+      const { name } = all[index]!;
+      return desktop3pRegistry.get(name) === route
+        || (route === `anthropic/${name}` && desktop3pRealAnthropicIds.has(name));
+    });
+    all = all.filter((_, index) => kept[index]);
+    routes = routes.filter((_, index) => kept[index]);
+  } else {
+    installDesktop3pRegistry(collected);
+  }
   let models = filterDesktopModelsByVisibility(all, routes, options.visibility);
   if (models.length === 0 && all.length > 0) {
     // An empty static list leaves Desktop with no usable picker. The dashboard refuses to save
@@ -408,7 +422,9 @@ export function activeDesktop3pAlias(provider: string, modelId: string): string 
 
 /** Discovery cannot offer a skipped alias or one owned by a different route. */
 export function resolvableDesktop3pAlias(provider: string, modelId: string): string | undefined {
-  if (provider === "anthropic" && modelId.startsWith("claude-")) return modelId;
+  if (provider === "anthropic" && modelId.startsWith("claude-")) {
+    return desktop3pRealAnthropicIds.has(modelId) ? modelId : undefined;
+  }
   const alias = activeDesktop3pAlias(provider, modelId);
   return resolveDesktop3pAlias(alias) === `${provider}/${modelId}` ? alias : undefined;
 }

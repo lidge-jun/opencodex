@@ -6,6 +6,7 @@ import { flushNativeMainStartupReleases } from "../../src/codex/native-profile-s
 import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
 import { setPersistedConfigMutationBeforeCommitForTests } from "../../src/config/persisted-mutation";
 import { gatherRoutedModels, getLastComboCatalogOmissions } from "../../src/codex/catalog";
+import { buildDesktop3pRegistry, desktop3pAlias, desktop3pRegistrySize, resolveDesktop3pAlias } from "../../src/claude/desktop-3p";
 import {
   clearModelCache, expireModelCache, getProviderDiscoveryStatus, getStaleCached,
   isModelsFetchCoolingDown, observeModelCacheRevision, setCached,
@@ -36,6 +37,7 @@ afterEach(async () => {
     await lifecycle.close();
   } finally {
     clearModelCache(provider);
+    buildDesktop3pRegistry([], []);
     await flushNativeMainStartupReleases();
     await flushConfigDirHardeningForTests();
     await flushWindowsSecretAclReapsBeforeRemoval(home.root);
@@ -220,6 +222,90 @@ test.each(supersededReads)("$path projects a superseded success under policy $po
     expect(await discovery.json()).toMatchObject({
       baselineCounts: { [provider]: existing.length }, recentArrivals: {},
     });
+  } finally {
+    releaseOlder.resolve();
+    await pending;
+  }
+}), SERVER_BUDGET_MS);
+
+test.each(["format=desktop-config", "flavor=anthropic"])("superseded Claude listing preserves shared aliases (%s)", query => lifecycle.run(async () => {
+  const fetchingOlder = Promise.withResolvers<void>();
+  const releaseOlder = Promise.withResolvers<void>();
+  const knownGood = "last-good";
+  const common = "model-a";
+  const obsolete = arrival;
+  const forwarded: string[] = [];
+  let discoveries = 0;
+  const upstream = Bun.serve({ port: 0, hostname: "127.0.0.1", async fetch(request) {
+    switch (new URL(request.url).pathname) {
+      case "/v1/models":
+        if (++discoveries === 2) return new Response(null, { status: 429 });
+        fetchingOlder.resolve();
+        await releaseOlder.promise;
+        return Response.json({ data: [common, obsolete].map(id => ({ id })) });
+      case "/v1/chat/completions": {
+        const { model } = await request.json() as { model: string };
+        forwarded.push(model);
+        const chunk = { id: "chat_fixture", object: "chat.completion.chunk", model,
+          choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
+          usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 } };
+        return new Response(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`, {
+          headers: { "content-type": "text/event-stream" },
+        });
+      }
+      default: return new Response(null, { status: 404 });
+    }
+  } });
+  lifecycle.ownStop(() => upstream.stop(true));
+  saveConfig({
+    port: 0, hostname: "127.0.0.1", defaultProvider: provider,
+    providers: { [provider]: {
+      adapter: "openai-chat", baseUrl: new URL("/v1", upstream.url).href,
+      apiKey: "fixture-key", allowPrivateNetwork: true, liveModels: true, newModelPolicy: "on",
+    } },
+    claudeCode: { enabled: true, desktopNativeModels: false },
+  });
+  const { startServer } = await import("../../src/server");
+  const server = startServer(0);
+  lifecycle.ownStop(() => server.stop(true));
+  setCached(provider, [common, knownGood].map(id => ({ provider, id })));
+  const listUrl = new URL(`/v1/models?${query}`, server.url);
+  const signal = lifecycle.abort.signal;
+  const goodAlias = desktop3pAlias(provider, knownGood);
+  const commonAlias = desktop3pAlias(provider, common);
+  const obsoleteAlias = desktop3pAlias(provider, obsolete);
+  const ids = async (response: Response) => {
+    expect(response.status).toBe(200);
+    const body = await response.json() as { models?: Array<{ name: string }>; data?: Array<{ id: string }> };
+    return body.models?.map(row => row.name) ?? body.data!.map(row => row.id);
+  };
+  expect(await ids(await fetch(listUrl, { signal }))).toEqual(expect.arrayContaining([goodAlias, commonAlias]));
+  expect(resolveDesktop3pAlias(goodAlias)).toBe(`${provider}/${knownGood}`);
+  expect(resolveDesktop3pAlias(obsoleteAlias)).toBeNull();
+  const registrySize = desktop3pRegistrySize();
+  expect(discoveries).toBe(0);
+  expect(expireModelCache(provider)).toBe(true);
+
+  const pending = fetch(listUrl, { signal });
+  try {
+    await fetchingOlder.promise;
+    await gatherRoutedModels(loadConfig(), { onlyProvider: provider });
+    expect(getProviderDiscoveryStatus(provider)).toEqual({ status: "failed", reason: "http", httpStatus: 429 });
+    releaseOlder.resolve();
+    const projectedIds = await ids(await pending);
+    expect(resolveDesktop3pAlias(goodAlias)).toBe(`${provider}/${knownGood}`);
+    expect(resolveDesktop3pAlias(commonAlias)).toBe(`${provider}/${common}`);
+    expect(resolveDesktop3pAlias(obsoleteAlias)).toBeNull();
+    expect(desktop3pRegistrySize()).toBe(registrySize);
+    expect(projectedIds).toEqual([commonAlias]);
+
+    const messages = await fetch(new URL("/v1/messages", server.url), {
+      method: "POST", headers: { "content-type": "application/json" }, signal,
+      body: JSON.stringify({ model: goodAlias, max_tokens: 32, messages: [{ role: "user", content: "fixture request" }] }),
+    });
+    expect(messages.status, await messages.text()).toBe(200);
+    expect(forwarded).toEqual([knownGood]);
+    expect(discoveries).toBe(2);
   } finally {
     releaseOlder.resolve();
     await pending;

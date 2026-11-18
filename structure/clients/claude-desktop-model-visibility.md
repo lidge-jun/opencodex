@@ -29,6 +29,13 @@ catalog-driven refreshes, and the hub's `wantsDesktopConfig` export, which conne
 write verbatim. The decode registry keeps hidden routes, so a running Desktop session that still
 sends a just-hidden alias keeps routing.
 
+`src/server/index/serve-options.ts` installs Desktop aliases from current shared discovery inputs.
+Superseded listings and listings with detached discovery policy use their own visible rows. In
+the Desktop snapshot and Anthropic discovery with Desktop IDs, those rows must have names that
+already resolve to the same routes through the installed registry. The installed aliases continue
+to decode for `/v1/messages`. `tests/server/server-new-model-policy-arrival.test.ts` covers both
+formats when a newer upstream 429 supersedes a successful listing.
+
 When a hidden row was a family default, the first remaining member of that family takes the role.
 Defaults are moved back to the front, which keeps the order `renderDesktopProfile` writes. A
 selection that would leave the list empty writes the full list and logs a warning, because Desktop
