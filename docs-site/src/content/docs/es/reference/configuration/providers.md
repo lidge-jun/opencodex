@@ -745,7 +745,7 @@ La rotación no protege contra la aplicación del proveedor; el uso de múltiple
 
 Esta estrategia opcional está disponible para los grupos OAuth de Codex y Anthropic. Para las sesiones nuevas, tras aplicar las reglas habituales de elegibilidad y prioridad, busca cuentas cuyo límite semanal se renueva dentro de 24 horas, con menos del 60 % de uso en cinco horas y más del 2 % de cuota semanal restante. Ambas mediciones deben tener como máximo 15 minutos. La cuenta apta que se renueva primero recibe peso N−1 y el resto recibe peso 1, por lo que la primera obtiene aproximadamente la mitad de las asignaciones. Si ninguna cumple las condiciones, la rotación es uniforme. Las sesiones vinculadas a una cuenta operativa conservan esa cuenta.
 
-Codex aplica el filtro habitual de margen de `round-robin` y rota de forma uniforme en los ámbitos con cuota independiente. Anthropic conserva la cuenta activa en los turnos sin clave de sesión mientras pueda atenderlos. Sus ajustes `quotaWindow` y `autoSwitchThreshold` no cambian los límites fijos de esta estrategia. Ambos grupos respetan el límite de asignaciones consecutivas.
+Codex exige que la medición de cuota corta declare una ventana de cinco horas. Aplica el filtro habitual de margen de `round-robin` y rota de forma uniforme en los ámbitos con cuota independiente. Anthropic conserva la cuenta activa en los turnos sin clave de sesión mientras pueda atenderlos. Sus ajustes `quotaWindow` y `autoSwitchThreshold` no cambian los límites fijos de esta estrategia. Ambos grupos respetan el límite de asignaciones consecutivas y descartan las puntuaciones ponderadas acumuladas cuando la rotación vuelve a ser uniforme.
 
 ### `anthropicAccountPool` (experimental)
 

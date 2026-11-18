@@ -278,7 +278,8 @@ export function accountPoolStrategyForScope(config: OcxConfig, quotaScope?: Code
 function codexResetNearWeightOf(eligible: readonly string[], now: number) {
   return resetNearWeightOf(eligible, id => {
     const quota = getAccountQuota(id);
-    return quota && {
+    if (quota?.shortWindowSeconds !== 5 * 60 * 60) return null;
+    return {
       weeklyPercent: quota.weeklyPercent,
       weeklyResetAt: quota.weeklyResetAt,
       weeklyObservedAt: codexQuotaUsageObservedAt(quota, "weeklyPercent"),

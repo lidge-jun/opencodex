@@ -38,6 +38,7 @@ import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/account-id";
 import { clearAccountQuota, updateAccountQuota } from "../../src/codex/auth-api";
 import { setAccountQuotaFromParsed } from "../../src/codex/quota";
+import { resetNearWeightOf } from "../../src/routing/machine-weighted-routing";
 import { getConfigPath } from "../../src/config";
 import type { OcxConfig } from "../../src/types";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
@@ -294,6 +295,40 @@ describe("clearCodexAccountPin", () => {
 });
 
 describe("pickRoundRobinAccount", () => {
+  test("expired reset-near weights restart equal rotation without a partial cycle", () => {
+    const pool = "reset-near-expiry";
+    const ids = ["a", "b", "c", "d"];
+    const now = Date.UTC(2026, 9, 2);
+    const weightAt = (at: number) => resetNearWeightOf(ids, id => id === "d" ? {
+      weeklyPercent: 30,
+      weeklyResetAt: now + 60 * 60_000,
+      weeklyObservedAt: now,
+      fiveHourPercent: 30,
+      fiveHourObservedAt: now,
+    } : null, at);
+    try {
+      expect(pickRoundRobinAccount(pool, ids, 1, weightAt(now))).toBe("d");
+      const expiredWeights = weightAt(now + 15 * 60_000 + 1);
+      expect(expiredWeights).toBeUndefined();
+      expect(peekRoundRobinAccount(pool, ids, 1, expiredWeights)).toBe("a");
+      expect(Array.from({ length: ids.length }, () => pickRoundRobinAccount(pool, ids, 1, expiredWeights))).toEqual(ids);
+    } finally {
+      clearPoolRotationState(pool);
+    }
+  });
+
+  test("equal weights preserve the plain round-robin cursor", () => {
+    const pool = "plain-cursor";
+    const ids = ["a", "b", "c", "d"];
+    try {
+      expect(pickRoundRobinAccount(pool, ids, 1)).toBe("a");
+      expect(pickRoundRobinAccount(pool, ids, 1, () => 1)).toBe("b");
+      expect(pickRoundRobinAccount(pool, ids, 1)).toBe("c");
+    } finally {
+      clearPoolRotationState(pool);
+    }
+  });
+
   beforeEach(() => clearPoolRotationState());
 
   test("spreads successive picks across eligible accounts", () => {
@@ -386,7 +421,7 @@ describe("accountPoolStrategy new-session routing", () => {
     for (const id of ids) {
       setAccountQuotaFromParsed(id, {
         weeklyPercent: 30, weeklyResetAt: seconds + (id === target ? 1 : 72) * 3600,
-        shortPercent: 30, shortResetAt: seconds + 3600,
+        shortPercent: 30, shortResetAt: seconds + 3600, shortWindowSeconds: 5 * 3600,
       });
     }
     const now = Date.now();
@@ -397,10 +432,23 @@ describe("accountPoolStrategy new-session routing", () => {
 
   test("reset-near-weighted does not use shared quota to weight independent scope assignments", () => {
     const config = makeThreeAccountConfig({ accountPoolStrategy: "reset-near-weighted" });
-    setAccountQuotaFromParsed("b", { weeklyPercent: 30, weeklyResetAt: Date.now() / 1000 + 3600, shortPercent: 30 });
+    setAccountQuotaFromParsed("b", {
+      weeklyPercent: 30, weeklyResetAt: Date.now() / 1000 + 3600, shortPercent: 30, shortWindowSeconds: 5 * 3600,
+    });
     const now = Date.now();
     expect(resolveCodexAccountForThread(null, config, now, "reserve")).toBe("a");
     expect(resolveCodexAccountForThread(null, config, now, "shared")).toBe("b");
+  });
+
+  test.each([3600, undefined])("reset-near-weighted rejects short usage with window duration %p", shortWindowSeconds => {
+    const config = makeThreeAccountConfig({ accountPoolStrategy: "reset-near-weighted" });
+    const resetAt = Date.now() / 1000 + 3600;
+    setAccountQuotaFromParsed("b", {
+      weeklyPercent: 30, weeklyResetAt: resetAt, shortPercent: 30, shortResetAt: resetAt, shortWindowSeconds,
+    });
+    const now = Date.now();
+    expect(previewCodexAccountForRequest(null, config, now)).toBe("a");
+    expect(resolveCodexAccountForThread(null, config, now)).toBe("a");
   });
 
   test("a fresh short observation cannot promote an account with an old weekly bar", () => {
@@ -408,11 +456,13 @@ describe("accountPoolStrategy new-session routing", () => {
     const now = Date.now();
     const clock = spyOn(Date, "now").mockReturnValue(now - 16 * 60_000);
     try {
-      setAccountQuotaFromParsed("b", { weeklyPercent: 30, weeklyResetAt: now / 1000 + 3600, shortPercent: 30 });
+      setAccountQuotaFromParsed("b", {
+        weeklyPercent: 30, weeklyResetAt: now / 1000 + 3600, shortPercent: 30, shortWindowSeconds: 5 * 3600,
+      });
     } finally {
       clock.mockRestore();
     }
-    setAccountQuotaFromParsed("b", { shortPercent: 30 });
+    setAccountQuotaFromParsed("b", { shortPercent: 30, shortWindowSeconds: 5 * 3600 });
     expect(resolveCodexAccountForThread(null, config)).toBe("a");
   });
 

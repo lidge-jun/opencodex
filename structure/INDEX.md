@@ -427,6 +427,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/oauth/meta-muse-errors.ts` | [`providers/meta-muse.md`](providers/meta-muse.md) |
 | `src/oauth/meta-muse-keychain.ts` | [`providers/meta-muse.md`](providers/meta-muse.md) |
 | `src/oauth/meta-muse.ts` | [`providers/meta-muse.md`](providers/meta-muse.md) |
+| `src/oauth/pool-kernel.ts` | [`providers/reset-near-weighted.md`](providers/reset-near-weighted.md) |
 | `src/oauth/workbuddy.ts` | [`providers/workbuddy.md`](providers/workbuddy.md) |
 | `src/plugins/` | [`ops/plugins.md`](ops/plugins.md) |
 | `src/protocols/` | [`data-planes/protocol-paths.md`](data-planes/protocol-paths.md) |
