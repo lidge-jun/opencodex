@@ -7,13 +7,15 @@
  * `antigravity-acp` row (whatever adapter it was saved with) or any row whose adapter is `agy-acp`.
  */
 import { AGY_ACP_DEFAULT_MODEL, AGY_ACP_SEED_MODELS } from "../../providers/registry/agy-acp-models";
+import { aliasTemplateError, expandAliasTemplate } from "../../providers/alias-template";
 
 export const AGY_ACP_PROVIDER_ID = "antigravity-acp";
 export const AGY_ACP_ADAPTER = "agy-acp";
 
 type ProviderLike = {
   adapter?: unknown; apiKey?: unknown; apiKeyPool?: unknown; authMode?: unknown; models?: unknown; defaultModel?: unknown;
-  modelAliases?: unknown; alias?: unknown; oauthAccountFailover?: unknown; anthropicAccountPool?: unknown; codexAccountMode?: unknown;
+  modelAliases?: unknown; alias?: unknown; aliasTemplate?: unknown; oauthAccountFailover?: unknown;
+  anthropicAccountPool?: unknown; codexAccountMode?: unknown;
 };
 type ComboLike = { alias?: unknown; targets?: unknown; decisionModel?: unknown };
 export interface ConfigLike {
@@ -106,10 +108,19 @@ export function selectorCandidateProviders(config: ConfigLike, selector: string)
   const lowerBases = [...bases].map(base => base.toLowerCase());
   for (const [name, provider] of providers) {
     const known = staticKnownIds(config, name, provider);
-    const aliases = isRecord(provider.modelAliases)
-      ? Object.values(provider.modelAliases).filter((a): a is string => typeof a === "string").map(a => a.toLowerCase())
-      : [];
-    if ([...bases].some(base => known.includes(base)) || lowerBases.some(base => aliases.includes(base))) out.add(name);
+    const manual = isRecord(provider.modelAliases) ? provider.modelAliases : {};
+    const aliases = new Set(Object.values(manual).filter((a): a is string => typeof a === "string").map(a => a.toLowerCase()));
+    const template = provider.aliasTemplate;
+    if (typeof template === "string" && !aliasTemplateError(template)) {
+      const providerAlias = typeof provider.alias === "string" ? provider.alias.trim() || undefined : undefined;
+      for (const modelId of known) {
+        if (Object.hasOwn(manual, modelId)) continue;
+        const expanded = expandAliasTemplate(template, providerAlias, modelId);
+        // The structural check reserves potential matches even if the live roster has a collision.
+        if ("alias" in expanded) aliases.add(expanded.alias.toLowerCase());
+      }
+    }
+    if ([...bases].some(base => known.includes(base)) || lowerBases.some(base => aliases.has(base))) out.add(name);
   }
   for (const base of bases) {
     for (const [, combo] of comboNamed(base)) for (const p of comboTargetProviders(combo)) out.add(p);
@@ -170,22 +181,10 @@ export function agyAcpConfigIssues(config: ConfigLike): AgyAcpConfigIssue[] {
       }
     });
   }
-  const fallbackMessage = "The Antigravity CLI (ACP) provider cannot be a subagent fallback: it serves interactive, user-directed turns only.";
-  const checkList = (list: unknown, path: (string | number)[]): void => {
-    if (!Array.isArray(list)) return;
-    list.forEach((entry, i) => {
-      if (typeof entry !== "string") return;
-      if ([...selectorCandidateProviders(config, entry)].some(name => acp.has(name))) issues.push({ path: [...path, i], message: fallbackMessage });
-    });
-  };
-  checkList(config.subagentModelFallback, ["subagentModelFallback"]);
-  if (isRecord(config.subagentModelFallbackByModel)) {
-    for (const [model, list] of Object.entries(config.subagentModelFallbackByModel)) checkList(list, ["subagentModelFallbackByModel", model]);
-  }
   return issues.concat(agyAcpUnattendedTargetIssues(config));
 }
 
-/** Codex's memory pipeline and the shadow-call redirect run without a person driving them. */
+/** Selectors the adapter refuses for unattended helpers and subagents. */
 export function agyAcpUnattendedTargetIssues(config: ConfigLike): AgyAcpConfigIssue[] {
   const issues: AgyAcpConfigIssue[] = [];
   const selectsAcp = (selector: unknown): boolean =>
@@ -193,6 +192,17 @@ export function agyAcpUnattendedTargetIssues(config: ConfigLike): AgyAcpConfigIs
       const provider = config.providers?.[name];
       return isRecord(provider) && isAgyAcpProvider(name, provider);
     });
+  const fallbackMessage = "The Antigravity CLI (ACP) provider cannot be a subagent fallback: it serves interactive, user-directed turns only.";
+  const checkList = (list: unknown, path: (string | number)[]): void => {
+    if (!Array.isArray(list)) return;
+    list.forEach((entry, i) => {
+      if (selectsAcp(entry)) issues.push({ path: [...path, i], message: fallbackMessage });
+    });
+  };
+  checkList(config.subagentModelFallback, ["subagentModelFallback"]);
+  if (isRecord(config.subagentModelFallbackByModel)) {
+    for (const [model, list] of Object.entries(config.subagentModelFallbackByModel)) checkList(list, ["subagentModelFallbackByModel", model]);
+  }
   if (isRecord(config.memoryModels)) {
     for (const phase of ["extract", "consolidation"] as const) {
       const setting = config.memoryModels[phase];

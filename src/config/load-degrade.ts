@@ -199,19 +199,29 @@ export function warnDegradedMemoryModels(rawParsed: unknown, validated: OcxConfi
 }
 
 /** Ignore ACP selectors for unattended helpers when reading a hand-edited file. */
-export function sanitizeAgyAcpUnattendedTargetsForLoad(parsed: unknown, warn: (message: string) => void = console.warn): void {
+export function sanitizeAgyAcpUnattendedTargetsForLoad(
+  parsed: unknown,
+  warn: (message: string) => void = message => console.warn(`⚠️  config.json ${message}`),
+): void {
   const root = rawConfigRecord(parsed);
   if (!root) return;
-  for (const issue of agyAcpUnattendedTargetIssues(root)) {
-    const [section, field] = issue.path;
+  // Fallback issues are indexed into their original arrays. Remove later entries first.
+  for (const issue of agyAcpUnattendedTargetIssues(root).reverse()) {
+    const [section, field, index] = issue.path;
     if (section === "memoryModels" && typeof field === "string") {
       const memory = rawConfigRecord(root.memoryModels);
       if (memory) delete memory[field];
     } else if (section === "shadowCallIntercept") {
       const shadow = rawConfigRecord(root.shadowCallIntercept);
       if (shadow) shadow.enabled = false;
+    } else if (section === "subagentModelFallback" && Array.isArray(root.subagentModelFallback) && typeof field === "number") {
+      root.subagentModelFallback.splice(field, 1);
+    } else if (section === "subagentModelFallbackByModel" && typeof field === "string" && typeof index === "number") {
+      const fallback = rawConfigRecord(root.subagentModelFallbackByModel)?.[field];
+      if (Array.isArray(fallback)) fallback.splice(index, 1);
     }
-    warn(`⚠️  config.json ${issue.path.join(".")}: ${issue.message} Ignoring this target on load.`);
+    const path = issue.path.map(segment => typeof segment === "string" ? redactSecretString(segment) : segment).join(".");
+    warn(`${path}: ${issue.message} Ignoring this target on load.`);
   }
 }
 
