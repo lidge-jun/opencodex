@@ -205,15 +205,14 @@ import { supportedLadderFor } from "../effort-policy";
 import {
   beginRequestAttempt,
   catalogModelSupportsServiceTier,
-  finishRequestAttempt,
   inspectResponseLogJson,
   noteProviderAttemptSend,
   readConfiguredCodexServiceTier,
   requestLogSpeedLabel,
-  sealRequestAttemptIdentity,
   usageFromResponsesPayload,
   type RequestLogContext,
 } from "../request-log";
+import { sealCredentialRefusal } from "../credential-recovery-attempt";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import {
   consumeForInspection,
@@ -1178,7 +1177,7 @@ export async function handleResponsesCompact(
       sendHeaders: Headers,
       recovery: "normal" | "single",
       sendAuthCtx: CodexAuthContext,
-      onPhysicalDispatch?: () => void,
+      receipt?: { recovery?: AttemptRecoveryKind; onDispatch?: () => void },
     ): Promise<Response> => {
       // Only the captured custom-tool contract: native compact keeps the provider's own wire.
       sendProvider = projectCapturedCustomToolPolicy(sendProvider, route.staticPolicy);
@@ -1230,6 +1229,18 @@ export async function handleResponsesCompact(
         }
         return replayBody;
       };
+      const noteCompactSend = (upstreamRecovery?: UpstreamSendRecovery) => {
+        if (!logCtx.activeAttempt) {
+          logCtx.activeAttempt = beginRequestAttempt((logCtx.attempts?.length ?? 0) + 1,
+            logCtx.provider, route.modelId, sendProvider.adapter);
+          logCtx.activeAttemptStartedAt = Date.now();
+          (logCtx.attempts ??= []).push(logCtx.activeAttempt);
+        }
+        noteProviderAttemptSend(logCtx, route.providerName, sendProvider, logCtx.usageLogInputTokens,
+          receipt?.recovery ?? upstreamRecovery, { model: route.modelId, adapter: sendProvider.adapter });
+        receipt?.onDispatch?.();
+      };
+      const keyedDispatch = sendProvider.authMode !== "forward" && !!sendProvider.apiKey;
       const doFetch = (upstreamRecovery?: UpstreamSendRecovery) => fetchWithHeaderTimeout(
         compactUrl,
         applyUpstreamRecoveryInit({
@@ -1240,7 +1251,7 @@ export async function handleResponsesCompact(
         req.signal,
         // Keyed sends can refresh their destination after pacing. Their physical send below
         // owns the header clock; the outer wrapper owns pacing and client cancellation only.
-        sendProvider.authMode !== "forward" && sendProvider.apiKey ? 0 : connectMs(),
+        keyedDispatch ? 0 : connectMs(),
         false,
         providerFetch(sendProvider, undefined, {
           providerName: route.providerName,
@@ -1248,7 +1259,7 @@ export async function handleResponsesCompact(
           accountAutoPause: (name, provider, headers) => captureAccountAutoPauseAttempt(name, provider, { config, codex: sendAuthCtx }, headers),
           beforeDispatch: isCanonicalOpenAiForwardProvider(sendProvider)
             ? createCodexAuthDispatchGuard(sendAuthCtx, config, selectedModelId, admission) : undefined,
-          dispatchOverride: sendProvider.authMode !== "forward" && sendProvider.apiKey
+          dispatchOverride: keyedDispatch
             ? async (_input, init, execute, reacquirePacing) => {
               for (let attempt = 0; !providerApiKeySelectionIsCurrent(config, route.providerName, sendProvider); attempt++) {
                 if (!providerAffinityGenerationIsCurrent(config, route.providerName, sendProvider)) throw new Error("Provider affinity selection is no longer available");
@@ -1291,12 +1302,11 @@ export async function handleResponsesCompact(
                 physicalInit, { providerName: route.providerName, provider: sendProvider })) as typeof fetch;
               return fetchWithHeaderTimeout(compactUrl,
                 { ...init, headers: sendHeaders, body: JSON.stringify({ ...buildCompactSendBody() as typeof compactBody, model: route.modelId }),
-                  ...physicalSendObserverInit(undefined, compactUrl, () =>
-                    noteProviderAttemptSend(logCtx, route.providerName, sendProvider, logCtx.usageLogInputTokens, upstreamRecovery)),
+                  ...physicalSendObserverInit(undefined, compactUrl, () => noteCompactSend(upstreamRecovery)),
                 },
                 init.signal ?? req.signal, connectMs(), false, physicalFetch);
             } : undefined,
-          ...(onPhysicalDispatch ? { onPhysicalDispatch } : {}),
+          onPhysicalDispatch: keyedDispatch ? undefined : () => noteCompactSend(upstreamRecovery),
         }),
         // Every credential-bearing forward send gets manual redirects, not only
         // pool sends: direct mode carries the caller's credential too (#914).
@@ -1392,6 +1402,8 @@ export async function handleResponsesCompact(
       && !req.signal.aborted
     ) {
       const canReplay = !configuredSendBudgetExhausted();
+      // Seal only a refusal that has a replay plan; an unaffordable replay keeps the 401 final.
+      if (canReplay) sealCredentialRefusal(logCtx, upstream.status, "oauth-401");
       if (canReplay && !preserveConfiguredRefusal) await upstream.body?.cancel().catch(() => undefined);
       if (canReplay && preserveConfiguredRefusal) upstream = await retainCompactRetryResponse(upstream);
       const poolAuthCtx = authCtx.kind === "pool" ? authCtx : undefined;
@@ -1456,7 +1468,7 @@ export async function handleResponsesCompact(
         if (replayBinding) applyAccountChangeConversationStateScrub({ body: compactBody, headers, bindingKey: replayBinding.bindingKey, servingAccountId: replayBinding.accountId, logCtx });
         logCtx.accountLogLabel = codexAuthContextLogLabel(replay.authCtx, config);
         try {
-          upstream = await sendCompactAttempt(compactProvider, headers, "single", authCtx);
+          upstream = await sendCompactAttempt(compactProvider, headers, "single", authCtx, { recovery: "oauth-401" });
           if (preserveConfiguredRefusal) await rejected.body?.cancel().catch(() => undefined);
         } catch (err) {
           if (req.signal.aborted) {
@@ -1548,6 +1560,9 @@ export async function handleResponsesCompact(
       && route.codexAccountMode
       && !req.signal.aborted
     ) {
+      const recovery = upstream.status === 402 ? "oauth-account-402"
+        : upstream.status === 403 ? "oauth-account-403" : "oauth-account-429";
+      sealCredentialRefusal(logCtx, upstream.status, recovery);
       const firstRetryAfter = upstream.headers.get("retry-after");
       const firstResetAt = [
         upstream.headers.get("x-codex-primary-reset-at"),
@@ -1636,7 +1651,7 @@ export async function handleResponsesCompact(
         logCtx.accountLogLabel = codexAuthContextLogLabel(alternate.authCtx, config);
         scrubCompactStateForAlternate(alternate.authCtx, alternate.headers);
         try {
-          upstream = await sendCompactAttempt(alternate.provider, alternate.headers, "single", alternate.authCtx);
+          upstream = await sendCompactAttempt(alternate.provider, alternate.headers, "single", alternate.authCtx, { recovery });
         } catch (err) {
           if (!preserveConfiguredRefusal || !(err instanceof SendBudgetExhaustedError) || req.signal.aborted) {
             if (preserveConfiguredRefusal) await recordMove();
@@ -1666,6 +1681,7 @@ export async function handleResponsesCompact(
       && !await shouldRetryCodexPoolAccountQuota(upstream, req.signal)
     ) {
       const firstStatus = upstream.status;
+      sealCredentialRefusal(logCtx, firstStatus);
       const firstRetryAfter = upstream.headers.get("retry-after");
       const firstResetAt = [
         upstream.headers.get("x-codex-primary-reset-at"),
@@ -1711,7 +1727,7 @@ export async function handleResponsesCompact(
         let alternateDispatched = false;
         try {
           alternateResponse = await sendCompactAttempt(alternate.provider, alternate.headers, "single", alternate.authCtx,
-            () => { alternateDispatched = true; });
+            { onDispatch: () => { alternateDispatched = true; } });
         } catch (err) {
           if (alternateDispatched) {
             recordFirstMove();

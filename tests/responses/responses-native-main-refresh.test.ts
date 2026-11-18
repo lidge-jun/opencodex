@@ -18,7 +18,7 @@ import { handleResponses, handleResponsesCompact } from "../../src/server/respon
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { clearComboTargetCooldowns } from "../../src/combos/failover";
 import { clearComboSelectionState } from "../../src/combos/resolve";
-import type { RequestLogContext } from "../../src/server/request-log";
+import { addFinalRequestLog, type RequestLogContext, type RequestLogEntry } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { captureCallerDirectAuth } from "../../src/providers/caller-authorization";
 import * as requestPacing from "../../src/providers/request-pacing";
@@ -158,6 +158,13 @@ function install401ThenRefreshHarness(): { sends: string[]; refreshes: string[] 
     return Response.json({ id: "resp_refreshed", object: "response", status: "completed", output: [] });
   }) as typeof fetch;
   return { sends, refreshes };
+}
+
+function finalizeCompactLog(start: number, log: RequestLogContext, status: number): RequestLogEntry {
+  let recorded: RequestLogEntry | undefined;
+  addFinalRequestLog("compact-refresh", start, log, status, undefined, entry => { recorded = entry; });
+  if (!recorded) throw new Error("Compact request did not finalize its usage log");
+  return recorded;
 }
 
 describe("native main 401 refresh and replay", () => {
@@ -433,15 +440,44 @@ describe("native main 401 refresh and replay", () => {
 
   test("compact refreshes and performs exactly one physical replay", async () => {
     const harness = install401ThenRefreshHarness();
+    const start = Date.now();
+    const log: RequestLogContext = {};
     const response = await handleResponsesCompact(
       request("/v1/responses/compact"),
       config(),
-      { model: "", provider: "" } as RequestLogContext,
+      log,
     );
 
     expect(response.status).toBe(200);
     expect(harness.sends).toEqual(["Bearer rejected-access", "Bearer refreshed-access"]);
     expect(harness.refreshes).toEqual(["refresh-grant"]);
+    const recorded = finalizeCompactLog(start, log, response.status);
+    expect(recorded.attempts?.map(attempt => [attempt.status, attempt.sendCount, attempt.accountLogLabel])).toEqual([
+      [401, 1, "main"], [200, 1, "main"],
+    ]);
+    expect(log.activeAttempt?.recoveryKinds).toContain("oauth-401");
+  });
+
+  test("compact replacement refused by pacing preserves the sent 401", async () => {
+    const { sends, refreshes } = install401ThenRefreshHarness();
+    const wait = requestPacing.waitForProviderRequestSlot;
+    let refusals = 0;
+    const pacing = spyOn(requestPacing, "waitForProviderRequestSlot").mockImplementation((name, provider, ...rest) => {
+      if (name === "openai" && refreshes.length > 0) {
+        refusals++;
+        return Promise.reject(new requestPacing.RequestPacingQueueOverloadError(name, "queue_full", 1));
+      }
+      return wait(name, provider, ...rest);
+    });
+    try {
+      const log: RequestLogContext = {};
+      const start = Date.now();
+      const response = await handleResponsesCompact(request("/v1/responses/compact"), config(), log);
+      expect(response.status).toBe(429);
+      expect(refusals).toBe(1);
+      expect(sends).toEqual(["Bearer rejected-access"]);
+      expect(finalizeCompactLog(start, log, response.status).attempts?.map(attempt => [attempt.status, attempt.sendCount])).toEqual([[401, 1]]);
+    } finally { pacing.mockRestore(); }
   });
 
   for (const path of ["/v1/responses", "/v1/responses/compact"] as const) {
