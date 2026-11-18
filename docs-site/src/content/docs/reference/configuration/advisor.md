@@ -156,11 +156,12 @@ log can be sent. OpenCodex does not run general DLP.
 Manual advice is a tool result for the `advisor` call the worker made. The result is a JSON
 object. Its `advice` field is the Advisor model's text. Its `status` is set by the runtime.
 
-Manual calls also require the current request's `tool_choice` to allow `advisor`. `none`, a
-different named tool, or an allowlist that excludes Advisor prevents consultation and worker
-redispatch. This applies to ordinary translated Responses and Messages requests as well as web
-search. A forbidden call is rejected before its ID or arguments reach the client. Automatic
-preflight and adaptive consultations follow their separate operator-configured policy.
+Manual calls also require the current request's `tool_choice` to allow `advisor`. An explicit
+selector or allowlist must select the root `advisor` function. Forced hosted web search and
+same-named custom or hosted selectors grant no manual Advisor permission. This applies to
+ordinary translated Responses and Messages requests as well as web search. A forbidden call
+is rejected before consultation, worker redispatch, or disclosure of its ID and arguments.
+Automatic preflight and adaptive consultations follow their operator-configured policy.
 
 Automatic preflight keeps the fixed runtime transport instruction in a developer message and
 puts the quoted JSON advice in a separate **user-role advisory message**. Advisor-generated text
@@ -177,8 +178,8 @@ request without another hidden worker call. The bound is shared with empty-compl
 
 Fetch-based web-search turns support the same manual consultation path when the effective
 `tool_choice` permits the synthetic `advisor` tool. The search loop exposes and intercepts
-`advisor` calls only within that scope; an `allowed_tools` choice restricted to `web_search`
-excludes manual Advisor consultations. Permitted `web_search` and `advisor` calls are handled in
+`advisor` calls only within that scope. A forced search or a search-only allowlist excludes
+manual Advisor consultations. Permitted `web_search` and `advisor` calls are handled in
 worker order. Search and Advisor iterations have separate allowances,
 and a real client tool call still returns control to the client. Run-turn and image/video sidecar turns remain subject to their existing limitations.
 If the worker emits an excluded `advisor` call, the turn fails with `undeclared_tool_call`

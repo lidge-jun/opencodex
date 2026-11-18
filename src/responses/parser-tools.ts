@@ -4,6 +4,19 @@ import { WEB_SEARCH_TOOL_NAME } from "../web-search/synthetic-tool";
 import { buildImageTool, IMAGE_GEN_TOOL_NAME } from "../images/synthetic-tool";
 import { toolSearchDescription, toolSearchParameters } from "./tool-search-compat";
 
+/** Keep the function identities an explicit selector can authorize before wire lowering. */
+export function explicitRootFunctionChoices(value: unknown): string[] | undefined {
+  if (!isObj(value)) return undefined;
+  const selectors = value.type === "allowed_tools" && Array.isArray(value.tools) ? value.tools : [value];
+  const names = new Set<string>();
+  for (const selector of selectors) {
+    if (!isObj(selector) || selector.type !== "function" || typeof selector.name !== "string" || !selector.name) continue;
+    const namespace = selector.namespace;
+    if (namespace === undefined || namespace === "" || namespace === "functions") names.add(selector.name);
+  }
+  return [...names];
+}
+
 export function mapToolChoice(value: unknown): OcxRequestOptions["toolChoice"] {
   if (value === undefined || value === null) return undefined;
   if (value === "auto" || value === "none" || value === "required") return value;

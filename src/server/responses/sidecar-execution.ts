@@ -10,7 +10,7 @@ import type { ResponsesSendBudget } from "./request-send-budget";
 import { formatErrorResponse } from "../../bridge";
 import { planWebSearch, buildWebSearchTool, runWithWebSearch } from "../../web-search";
 import { createRegisteredAdvisorPlan } from "./advisor-plan-slot";
-import { ADVISOR_TOOL_NAME, createAdvisorSidecarStep } from "./advisor-slot";
+import { ADVISOR_TOOL_NAME, advisorToolAllowed, createAdvisorSidecarStep } from "./advisor-slot";
 import { advisorServerToolDestination, withholdAdvisorServerTools } from "../../adapters/anthropic/advisor-tool";
 import { addProtocolEntryReason } from "../../protocols/trace";
 import { buildToolBridgeMaps } from "./collaboration";
@@ -51,7 +51,7 @@ import {
 } from "../../oauth/anthropic-routing";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { bindRouteReasoningReplayScope, adapterNeedsForcedContinuation, adapterNeedsToolCallContinuation } from "./core-replay";
-import { namespacedToolName, toolChoiceToolPredicate } from "../../types";
+import { namespacedToolName } from "../../types";
 import { providerFetch } from "./fetch-helpers";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { recordAdapterReasoning, recordAdapterTier } from "../request-log";
@@ -675,8 +675,7 @@ export async function executeResponsesSidecars(
   // through web-search instead of being swallowed. runTurn adapters never enter this branch.
   if (canRunWebSearch && wsPlan) {
     const requestedTools = parsed.context.tools ?? [];
-    const advisorAllowed = advisorPlan
-      && toolChoiceToolPredicate(parsed.options.toolChoice, [...requestedTools, advisorPlan.tool])(advisorPlan.tool);
+    const advisorAllowed = advisorPlan && advisorToolAllowed(parsed, advisorPlan.tool);
     const webSearchAdvisor = advisorPlan && advisorAllowed && !routedCompaction
       && typeof advisorPlan.consult === "function" && typeof advisorPlan.formatUnavailable === "function"
       ? advisorPlan
@@ -818,7 +817,7 @@ export async function executeResponsesSidecars(
   // run-turn adapter, not compaction). Web-search handles advisor in its own loop above; the
   // image/video and run-turn loops cannot intercept it. Preflight still applies to those paths.
   if (advisorPlan && !routedCompaction && !transportState.adapter.runTurn && !wsPlan && !imgPlan && !vidPlan) {
-    if (!toolChoiceToolPredicate(parsed.options.toolChoice, [...(parsed.context.tools ?? []), advisorPlan.tool])(advisorPlan.tool)) {
+    if (!advisorToolAllowed(parsed, advisorPlan.tool)) {
       // Keep the refusal guard without injecting or shadowing tools. Direct Messages delivery
       // must not expose a forbidden synthetic call merely because it was never advertised.
       advisorPlan.attachGuard(parsed);

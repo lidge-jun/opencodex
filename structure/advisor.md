@@ -62,10 +62,13 @@ multi-call pairing, overlap and lifecycle release.
   `tests/advisor/advisor-responses-wiring.test.ts` exercises real streaming and buffered delivery.
   Client catalog checks wrap the Advisor guard, so synthetic calls are consumed internally before
   final worker output is checked against current client declarations, including direct encoders.
-  Synthetic injection requires the request's effective `tool_choice` to permit Advisor. The guard
-  rechecks that choice on each worker leg and refuses a forbidden call before consultation,
-  continuation, or disclosure of its ID and arguments. This also applies to linked Messages replay
-  configurations; automatic policy preflight retains its separate operator-configured behavior.
+  Synthetic injection requires the request's effective `tool_choice` to permit Advisor. For an
+  explicit selector or allowlist, `src/responses/parser-tools.ts` retains the selected root function
+  names before provider translation. Only a matching function selector permits synthetic Advisor.
+  A forced hosted search or a same-named custom or hosted selector grants no Advisor permission.
+  The guard rechecks the caller's selection and effective tool choice on each worker leg and
+  refuses a forbidden call before consultation, continuation, or disclosure of its ID and arguments.
+  Linked Messages replay uses the same check. Automatic consultations follow operator policy.
   A buffered refusal preserves the already-parsed rejected worker leg's terminal usage, merged
   with earlier intercepted legs once; streaming refusal closes its iterator immediately.
 - Run-turn adapters: preflight support only — the automatic pre-dispatch consultation attempt
@@ -76,8 +79,8 @@ multi-call pairing, overlap and lifecycle release.
   consultation and continuation bounds with the normal guard. The search scanner consumes advisor
   calls alongside `web_search`, fulfills them in worker order, and replays paired results without
   exposing the synthetic call to the client. The synthetic tool and scanner are enabled only when
-  the request's effective `tool_choice` permits Advisor; an `allowed_tools` scope that permits only
-  web search cannot be widened into an expert consultation. Without an active Advisor sidecar,
+  the caller's selection and effective `tool_choice` permit Advisor. The same check runs on each
+  search iteration and leaves the search tool's outbound translation intact. Without an active Advisor sidecar,
   an emitted `advisor` call is refused before its ID or arguments reach the client unless that
   iteration declares and permits it as an ordinary client tool. Partial calls are refused at
   their start, and the terminal refusal retains worker usage. Synthetic permission is also

@@ -39,6 +39,7 @@ import { WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
 import { newSidecarSearchCellId, rememberSidecarSearch, restoreSidecarSearchResults } from "./sidecar-search-replay";
 import {
   ADVISOR_TOOL_NAME,
+  advisorToolAllowed,
   MAX_ADVISOR_CONTINUATIONS_PER_REQUEST,
   parseAdvisorQuestionArgs,
   type AdvisorSidecarStep,
@@ -723,11 +724,9 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         const declaredAdvisor = iterTools.find(tool => tool.advisor && tool.name === ADVISOR_TOOL_NAME);
         // Exhaustion removes the declaration, but its paired limit result still belongs
         // to the sidecar. A tools-disabled recovery revokes that permission too.
-        const advisorCandidate = declaredAdvisor ?? { name: ADVISOR_TOOL_NAME };
         const syntheticAdvisorAllowed = !!deps.advisor && !recoveringEmptyAnswer
           && (!!declaredAdvisor || deps.advisor.exhausted())
-          && toolChoiceToolPredicate(iterParsed.options.toolChoice,
-            declaredAdvisor ? iterTools : [...iterTools, advisorCandidate])(advisorCandidate);
+          && advisorToolAllowed(iterParsed, declaredAdvisor);
         return { response, responseAdapter: requestAdapter, clientAdvisorAllowed, syntheticAdvisorAllowed };
       };
 

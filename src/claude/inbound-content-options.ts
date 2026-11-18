@@ -215,7 +215,7 @@ export function toolChoiceToResponses(choice: unknown, body: Rec): void {
       }
       // Anthropic represents hosted WebSearch as a named tool choice, while
       // Responses requires the choice type to match the hosted declaration.
-      // Preserve forced-tool intent rather than weakening it to `auto`.
+      // Keep the hosted selector for request authorization even when an adapter lowers it to auto.
       if (isClaudeWebSearchToolName(choice.name)
         && (!Array.isArray(body.tools) || !body.tools.some(tool => isRec(tool) && tool.type === "web_search"))) {
         throw markProxyError(new AnthropicRequestError("Restricted web search cannot be forced on a translated route without an available search declaration"));

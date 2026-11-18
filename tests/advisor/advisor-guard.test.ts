@@ -57,6 +57,31 @@ const baseParsed = (): OcxParsedRequest => parseRequest({
 });
 
 describe("createAdvisorGuard — manual advisor() interception", () => {
+  test.each([
+    { type: "web_search" },
+    { type: "custom", name: "advisor" },
+    { type: "allowed_tools", mode: "auto", tools: [{ type: "web_search", name: "advisor" }] },
+  ])("translated choice %j cannot authorize Advisor on a later worker leg", async tool_choice => {
+    const recorder = { consults: [] as { reason: string; question: string | undefined }[] };
+    const denied = parseRequest({ model: "worker", input: "task", stream: true, tool_choice });
+    const calls = async function* (): AsyncGenerator<AdapterEvent> {
+      yield* advisorCallEvents("worker-call");
+      yield { type: "done" };
+    };
+    let continuations = 0;
+    const events = await collect(createAdvisorGuard(planFrom(recorder))({ parsed: baseParsed(), firstEvents: calls(),
+      continuation: parsed => {
+        continuations++;
+        parsed.options = denied.options;
+        return calls();
+      },
+    }));
+    expect(recorder.consults).toHaveLength(1);
+    expect(continuations).toBe(1);
+    expect(events.some(event => event.type.startsWith("tool_call"))).toBe(false);
+    expect(events.at(-1)).toMatchObject({ type: "error", code: "undeclared_tool_call" });
+  });
+
   for (const choice of ["none", { name: "shell" }, { allowedTools: ["shell"], mode: "auto" },
     { allowedTools: [], mode: "required" }, { name: "other.advisor" }] satisfies OcxToolChoice[]) {
     test(`a guard cannot consult outside the effective tool choice: ${JSON.stringify(choice)}`, async () => {

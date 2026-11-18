@@ -26,6 +26,7 @@ import type {
   OcxAssistantMessage,
   OcxMessage,
   OcxParsedRequest,
+  OcxTool,
   OcxToolResultMessage,
   OcxUsage,
 } from "../../types";
@@ -37,6 +38,15 @@ import { AdvisorRetention } from "./advisor-retention";
 import { clipAdvisorQuestion } from "./advisor-question";
 
 export const ADVISOR_TOOL_NAME = "advisor";
+
+export function advisorToolAllowed(
+  parsed: OcxParsedRequest,
+  advisorTool: Pick<OcxTool, "name" | "namespace"> = { name: ADVISOR_TOOL_NAME },
+): boolean {
+  const { explicitRootFunctionChoices, toolChoice } = parsed.options;
+  if (explicitRootFunctionChoices && !explicitRootFunctionChoices.includes(advisorTool.name)) return false;
+  return toolChoiceToolPredicate(toolChoice, [...(parsed.context.tools ?? []), advisorTool])(advisorTool);
+}
 
 /** Hard bound on advisor consultations per worker request (recursion guard). */
 export const MAX_ADVISOR_CONSULTATIONS_PER_REQUEST = 3;
@@ -236,7 +246,6 @@ export function createAdvisorStreamGuard(options: AdvisorGuardOptions): AsyncGen
 export function createAdvisorGuard(plan: AdvisorPlan): NonNullable<OcxParsedRequest["_advisorGuard"]> {
   // Shared across invocations of this request's guard, including an empty-completion retry.
   const sidecar = createAdvisorSidecarStep(plan);
-  const advisorTool = { name: ADVISOR_TOOL_NAME };
   return async function* guardAdvisorStream(options: Omit<AdvisorGuardOptions, "plan">): AsyncGenerator<AdapterEvent> {
     let parsed = options.parsed;
     let accumulatedUsage: OcxUsage | undefined;
@@ -246,7 +255,7 @@ export function createAdvisorGuard(plan: AdvisorPlan): NonNullable<OcxParsedRequ
     while (true) {
       // A continuation or reused guard may have a narrower choice than the original turn.
       const catalog = parsed.context.tools ?? [];
-      const advisorAllowed = toolChoiceToolPredicate(parsed.options.toolChoice, [...catalog, advisorTool])(advisorTool);
+      const advisorAllowed = advisorToolAllowed(parsed);
       const callerToolAllowed = toolChoiceToolPredicate(parsed.options.toolChoice, catalog);
       // The bridge restores a unique authorized namespaced tool's bare echo. When no
       // synthetic Advisor was permitted, that alias still belongs to the caller's tool.

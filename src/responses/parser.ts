@@ -27,7 +27,7 @@ import { buildImageTool, extractHostedImageGeneration, IMAGE_GEN_TOOL_NAME } fro
 import { toolSearchDescription, toolSearchParameters } from "./tool-search-compat";
 
 import { isObj, inputContentParts, outputTextOf, outputToToolResultContent, toolOutputContainsEncryptedContent } from "./parser-content";
-import { mapToolChoice, buildTools, customToolNamespaces } from "./parser-tools";
+import { mapToolChoice, buildTools, customToolNamespaces, explicitRootFunctionChoices } from "./parser-tools";
 import { parseTextFormat } from "./parser-text-format";
 import { externalTaskInputContent } from "./task-input";
 import { normalizeVisualizationContext } from "./visualization-directives";
@@ -717,6 +717,9 @@ export function parseRequest(
     }
   }
   if (tc !== undefined) options.toolChoice = tc;
+  // Read the caller selector before schema normalization drops fields such as namespace.
+  const functionChoices = explicitRootFunctionChoices(isObj(body) ? body.tool_choice : undefined);
+  if (functionChoices !== undefined) options.explicitRootFunctionChoices = functionChoices;
   if (data.parallel_tool_calls !== undefined) options.parallelToolCalls = data.parallel_tool_calls;
   // Upstream codex-rs converts "ultra" to "max" at the inference boundary (core/src/client.rs
   // `reasoning_effort_for_request`), so current clients never send it — but a catalog that
