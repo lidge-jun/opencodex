@@ -1,16 +1,33 @@
+import { lstatSync } from "node:fs";
+import { markSiblingStart } from "../codex/sibling-start";
+import { isMissingPathError } from "../config/atomic-write";
+import { getPidPath, getRuntimePortPath } from "../config/process-state";
 import type { ServiceChildOwnershipDecision } from "../service/service-child-ownership";
 import { serviceStayOutExitCode } from "../service/windows-wrapper-exit";
 import { observeProxyLiveness, START_OWNERSHIP_LIVENESS } from "../server/proxy-liveness";
-import { markCrossHomeSibling } from "./cross-home-owner";
+import { findCrossHomeOwner, markCrossHomeSibling } from "./cross-home-owner";
+
+function ownershipRecordIsAbsent(path: string): boolean {
+  try { lstatSync(path); return false; }
+  catch (error) { return isMissingPathError(error); }
+}
 
 /** Called under the publication lease, before the client can bind or write ownership records. */
-export async function recheckClientStartOwnership(sibling: boolean): Promise<number | null> {
+export async function recheckClientStartOwnership(sibling: boolean, requestedPort?: number): Promise<number | null> {
   const fenced = await observeProxyLiveness(START_OWNERSHIP_LIVENESS);
   if (fenced.kind === "live") {
     const { pid, port } = fenced.live;
     if (process.env.OCX_SERVICE === "1") {
       console.log(`Proxy already running (PID ${pid ?? "unknown"}, port ${port}); service wrapper staying out of the way.`);
       return serviceStayOutExitCode();
+    }
+    // A config-port hit can be foreign even when this home has no owner. Only the
+    // explicit sibling path may disregard it, and only with fresh cross-home proof.
+    if (sibling && requestedPort !== undefined && requestedPort !== port && fenced.live.source === "config"
+      && await findCrossHomeOwner({ listener: fenced.live }) === port
+      && ownershipRecordIsAbsent(getPidPath()) && ownershipRecordIsAbsent(getRuntimePortPath())) {
+      markSiblingStart(port);
+      return null;
     }
     console.error(`⚠️  Proxy appeared before bind (PID ${pid ?? "unknown"}, port ${port}). Use 'ocx stop' first.`);
     return 1;

@@ -17,6 +17,10 @@ solo continúa si las comprobaciones de titularidad lo permiten. Un puerto
 ocupado, una comprobación inconclusa o indicios de que otro proceso controla el
 puerto aún pueden impedir el inicio.
 
+Un cliente conectado puede iniciarse con otro `--port` explícito si su propio
+`OPENCODEX_HOME` no tiene registros de PID ni de ejecución y OpenCodex verifica
+que el proceso que escucha en el puerto configurado pertenece a otro directorio.
+
 Usa `ocx service status` y `ocx status` para comprobar el servicio registrado y
 el proxy. Si persiste el conflicto, comprueba qué proceso controla el puerto
 indicado y vuelve a intentarlo cuando se haya detenido o recuperado. Conserva

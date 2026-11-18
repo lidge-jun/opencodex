@@ -25,6 +25,7 @@ import {
   observeStartupEndpoint,
   proveLiveProxyOwnedByHome,
   START_OWNERSHIP_LIVENESS,
+  type LiveProxy,
   type LivenessIo,
 } from "../server/proxy-liveness";
 import { directLocalHttpFetch } from "../server/direct-local-http";
@@ -149,6 +150,8 @@ type CrossHomeOwnerOptions = {
   homeDir?: string;
   io?: LivenessIo;
   loopbackAvailabilityFn?: typeof loopbackFamilyAvailability;
+  /** When a listener is already observed, attest only that exact endpoint. */
+  listener?: LiveProxy;
 };
 
 /** Returns only a different process with an identity-checked /healthz response. */
@@ -203,6 +206,16 @@ export async function findCrossHomeOwnerDetailed(options: CrossHomeOwnerOptions 
   const registry = readOwnerRegistry();
   for (const home of registry.homes) recordHome(home);
   const registryTruncated = registry.truncated;
+
+  if (options.listener) {
+    const listener = options.listener;
+    for (const rec of records.get(listener.port) ?? []) {
+      if (!rec.attestable || rec.pid === process.pid || (listener.pid !== null && rec.pid !== listener.pid)) continue;
+      const proof = await proveLiveProxyOwnedByHome({ ...listener, pid: rec.pid }, { ...probeIo, readRuntimeFn: () => rec.record });
+      if (proof === "proven" && !budgetSpent()) return { kind: "owner", port: listener.port };
+    }
+    return { kind: "indeterminate", port: listener.port, reason: "the observed listener could not be attested to another home" };
+  }
 
   // Grok's writer reads its config in full; cap discovery separately so startup stays bounded.
   const grok = readBoundedRegularFile(join(resolveGrokHome(), "config.toml"), MAX_GROK_CONFIG_BYTES);

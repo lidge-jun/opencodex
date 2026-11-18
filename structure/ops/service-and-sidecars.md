@@ -221,7 +221,7 @@ the lease directory exists. That read never reclaims.
 The connected-client branch, which returns into `startClientRuntime` before the server path,
 takes the same lease through `startClientRuntimeUnderOwnershipLease`
 (`src/cli/client-start-fence.ts`) and rechecks service registration, proxy liveness, and unsettled shared-client ownership before binding.
-A live or unverified local runtime blocks publication. The lease releases after PID and runtime publication (`afterPublish`) or on refusal or failure. A child carrying
+A live or unverified local runtime blocks publication. An explicit different-port connected-client sibling can proceed when both local ownership records are absent and the exact configured-port listener attests to another home's runtime record. Link mode remains pinned to its configured port. The lease releases after PID and runtime publication (`afterPublish`) or on refusal or failure. A child carrying
 `OCX_SERVICE_MANAGED` or `OCX_WINDOWS_WRAPPER_PROTOCOL` resolves the recorded owner and
 exits the supervisor's stand-down code on a foreign or unknown answer: `42` inside the
 marker-protocol Windows wrapper, `0` elsewhere — the legacy `ERRORLEVEL NEQ 0` loop reads

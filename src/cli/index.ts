@@ -50,7 +50,7 @@ import {
   runCodexHistoryJob,
 } from "../codex/history-job";
 import { findCrossHomeOwner, markCrossHomeSibling, markLiveHomeSibling } from "./cross-home-owner";
-import { clientStartupRefusalMessage, inspectClientRotationRecoveryGate, readClientConnectionState } from "../client/state";
+import { clientStartupRefusalMessage, inspectClientRotationRecoveryGate, isLinkConnection, readClientConnectionState } from "../client/state";
 import {
   codexAutoStartEnabled,
   getConfigDir,
@@ -498,7 +498,7 @@ async function handleStart(options: { block?: boolean } = {}) {
       decide: () => serviceChildOwnershipDecisionForClassifiedChild(supervisedServiceChild),
       stayOut: refusal => { console.error("❌ " + refusal); process.exit(serviceStayOutExitCode()); },
       start: async afterPublish => {
-        const refusal = await recheckClientStartOwnership(siblingStart);
+        const refusal = await recheckClientStartOwnership(siblingStart, isLinkConnection(clientState.value) ? undefined : requestedPort);
         if (refusal !== null) { process.exitCode = refusal; return; }
         await startClientRuntime({ port: requestedPort, block: options.block, afterPublish });
       },

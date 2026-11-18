@@ -8,6 +8,72 @@ import { serviceStatePathsForHomes } from "../../src/service/state-record.mjs";
 import { watchdogMs } from "../helpers/ci-watchdog";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
+import { captureStartupChildOutput } from "../helpers/startup-child-output";
+
+const startWatchdogMs = watchdogMs(10_000);
+
+test("a connected client with its own home starts beside an attested owner on an explicit port", async () => {
+  const root = mkdtempSync(join(tmpdir(), "ocx-client-sibling-start-"));
+  const children: Array<ReturnType<typeof Bun.spawn>> = [];
+  const outputs: Array<ReturnType<typeof captureStartupChildOutput>> = [];
+  const ownerHome = join(root, "owner");
+  const siblingHome = join(root, "sibling");
+  const start = async (ocxHome: string, configuredPort: number, requestedPort?: number) => {
+    mkdirSync(ocxHome);
+    writeFileSync(join(ocxHome, "config.json"), JSON.stringify({
+      port: configuredPort, hostname: "127.0.0.1", runtimeRole: "client",
+      client: {
+        serverUrl: "https://hub.example.test", managementUrl: "https://hub.example.test",
+        managementTransport: "direct", selectedClients: ["codex"], tokenEnv: "OPENCODEX_API_AUTH_TOKEN",
+        apiKeyId: "client-key-1", tokenFingerprint: "a".repeat(64), protocolVersion: 1,
+        connectedAt: "2026-08-28T00:00:00.000Z",
+      },
+    }));
+    const child = Bun.spawn([process.execPath, repoPath("src/cli/index.ts"), "start",
+      ...(requestedPort === undefined ? [] : ["--port", String(requestedPort)])], {
+      cwd: root,
+      env: { HOME: root, USERPROFILE: root, CODEX_HOME: join(root, "codex"), OPENCODEX_HOME: ocxHome,
+        OCX_OWNER_REGISTRY_DIR: join(root, "registry"), NO_PROXY: "127.0.0.1,localhost" },
+      stdout: "pipe", stderr: "pipe",
+    });
+    children.push(child);
+    const output = captureStartupChildOutput(child.stdout, child.stderr);
+    outputs.push(output);
+    const runtimePath = join(ocxHome, "runtime-port.json");
+    const deadline = Date.now() + startWatchdogMs;
+    while (!existsSync(runtimePath) && child.exitCode === null && Date.now() < deadline) await Bun.sleep(20);
+    if (!existsSync(runtimePath)) {
+      const diagnostics = child.exitCode === null ? output.snapshot() : await output.finish();
+      throw new Error(`client did not publish (exit ${child.exitCode}): ${diagnostics.stderr.tail}`);
+    }
+    const { pid, port, siblingOfPort } = JSON.parse(readFileSync(runtimePath, "utf8"));
+    expect(pid).toBe(child.pid);
+    expect(readFileSync(join(ocxHome, "ocx.pid"), "utf8")).toBe(String(child.pid));
+    return { pid: child.pid, port: Number(port), siblingOfPort };
+  };
+  const expectHealthy = async ({ pid, port }: { pid: number; port: number }) => {
+    const response = await fetch(`http://127.0.0.1:${port}/healthz`, { signal: AbortSignal.timeout(startWatchdogMs) });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ service: "opencodex", pid, role: "client" });
+  };
+  try {
+    const owner = await start(ownerHome, 0);
+    await expectHealthy(owner);
+    const reservation = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null) });
+    const siblingPort = reservation.port!;
+    await reservation.stop(true);
+    const sibling = await start(siblingHome, owner.port, siblingPort);
+    expect(sibling.port).toBe(siblingPort);
+    expect(sibling.siblingOfPort).toBe(owner.port);
+    await expectHealthy(sibling);
+    await expectHealthy(owner);
+  } finally {
+    for (const child of children) if (child.exitCode === null) child.kill();
+    await Promise.all(children.map(child => child.exited));
+    for (const output of outputs) output.stop();
+    removeTreeWithRetry(root);
+  }
+}, startWatchdogMs * 3);
 
 test("a late same-home owner keeps its PID and generation when a connected client starts", async () => {
   const root = mkdtempSync(join(tmpdir(), "ocx-late-client-start-owner-"));
