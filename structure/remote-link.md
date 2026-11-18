@@ -357,11 +357,15 @@ Coverage: `tests/clients/route-intent.test.ts`, `tests/clients/route-intent-stat
 
 The Child writes the sibling catalog filename into `config.toml`. Attach and sync resolve the
 existing root binding against the canonical Codex home and check it against the default catalog
-on first attach or the validated journal target on later syncs. Windows comparisons normalize
-case, separators, and extended-length drive and UNC spellings. A foreign binding, non-string
-binding, or invalid TOML aborts before config, catalog, cache, and journal publication.
+on first attach or the validated journal target on later syncs. POSIX expands `~` and `~/` against
+the user home using Codex's rule. Ownership compares canonical parent directories and filenames.
+Windows comparisons normalize case, separators, and extended-length drive and UNC spellings.
+A foreign binding, non-string binding, or invalid TOML aborts before config, catalog, cache, and
+journal publication.
 `native/ocx-child/src/toml_surgeon.rs` validates each edited config before publication and uses the
-same path comparison during surgical detach, where a foreign binding survives.
+same ownership comparison during surgical detach, where a foreign binding survives.
+`native/ocx-child/src/journal.rs` checks the remaining root binding before removing a generated
+catalog. That check follows file symlinks too, so a preserved binding keeps its target readable.
 
 `native/ocx-child/Cargo.toml` and `native/ocx-child/src/lib.rs` build a standalone lightweight Rust binary (`ocx-child`) for disposable SSH devboxes, containers and VMs that do not run a persistent Bun OpenCodex install. Remote candidate discovery in `src/link/ssh-argv.ts` and `src/link/remote-windows.ts` tries `ocx-child` first when `$OPENCODEX_HOME/child/state.json` is present (preserving an active `ocx-child` enrollment even if full `ocx` is installed later), and otherwise tries every full `ocx` path before falling back to `ocx-child` in `~/.local/bin`, `~/.cache/opencodex/bin` (plus `%LOCALAPPDATA%\opencodex\bin` on Windows) and `PATH`, keeping Windows encoded PowerShell below `POWERSHELL_ENCODED_MAX` (`8000`).
 

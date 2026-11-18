@@ -1036,6 +1036,139 @@ fn surgical_detach_preserves_a_foreign_catalog_with_the_managed_basename() {
 }
 
 #[test]
+fn exact_detach_keeps_catalog_referenced_by_the_original_config() {
+    let (_guard, paths, _, settings) = homes_fixture();
+    let config_path = paths.codex_config_path();
+    let original = "model_catalog_json = './opencodex-catalog.json'\n";
+    let catalog = br#"{"models":[{"slug":"home"}]}"#;
+    fs::write(&config_path, original).unwrap();
+    assert!(!paths.codex_catalog_path().exists());
+    apply_attach_or_sync(
+        &owned(&paths),
+        "lnk_0123456789abcdef",
+        "link:t",
+        10100,
+        catalog,
+        &settings,
+    )
+    .unwrap();
+
+    assert_eq!(
+        offline_detach(&detach_guard(&paths), false).unwrap(),
+        DetachOutcome::ExactRestore
+    );
+    assert_eq!(fs::read_to_string(config_path).unwrap(), original);
+    assert_eq!(fs::read(paths.codex_catalog_path()).unwrap(), catalog);
+}
+
+#[cfg(unix)]
+fn sync_and_detach_catalog_alias(make_binding: impl FnOnce(&ChildPaths) -> String) {
+    let (_guard, paths, _, settings) = homes_fixture();
+    let apply = |catalog: &[u8]| {
+        apply_attach_or_sync(
+            &owned(&paths),
+            "lnk_0123456789abcdef",
+            "link:t",
+            10100,
+            catalog,
+            &settings,
+        )
+    };
+    apply(br#"{"models":[{"slug":"old"}]}"#).unwrap();
+
+    let config_path = paths.codex_config_path();
+    let original = fs::read_to_string(&config_path).unwrap();
+    let binding = make_binding(&paths);
+    let edited = original.replacen(
+        r#"model_catalog_json = "opencodex-catalog.json""#,
+        &format!(
+            "model_catalog_json = {}",
+            toml_escape_basic_string(&binding)
+        ),
+        1,
+    );
+    fs::write(&config_path, format!("model = 'user'\n{edited}")).unwrap();
+    let new_catalog = br#"{"models":[{"slug":"new"}]}"#;
+    let synced = apply(new_catalog);
+    let synced_config = fs::read_to_string(&config_path).unwrap();
+    let synced_catalog = fs::read(paths.codex_catalog_path()).unwrap();
+
+    // Reapply the spelling after sync so detach must identify it independently.
+    fs::write(&config_path, format!("model = 'user'\n{edited}")).unwrap();
+    assert_eq!(
+        offline_detach(&detach_guard(&paths), false).unwrap(),
+        DetachOutcome::SurgicalRestore
+    );
+    let restored = fs::read_to_string(config_path).unwrap();
+    let catalog_exists = paths.codex_catalog_path().exists();
+    assert!(
+        synced.is_ok() && restored == "model = 'user'\n" && !catalog_exists,
+        "sync={synced:?}; detached config={restored:?}; catalog exists={catalog_exists}"
+    );
+    assert!(synced_config.contains(r#"model_catalog_json = "opencodex-catalog.json""#));
+    assert_eq!(synced_catalog, new_catalog);
+}
+
+#[test]
+#[cfg(unix)]
+fn sync_and_detach_accept_a_symlinked_catalog_directory() {
+    sync_and_detach_catalog_alias(|paths| {
+        let alias = paths.codex_home.parent().unwrap().join("alias");
+        std::os::unix::fs::symlink(&paths.codex_home, &alias).unwrap();
+        alias
+            .join("opencodex-catalog.json")
+            .to_str()
+            .unwrap()
+            .to_owned()
+    });
+}
+
+#[test]
+#[cfg(unix)]
+fn sync_and_detach_accept_a_posix_home_relative_catalog() {
+    sync_and_detach_catalog_alias(|paths| {
+        let home = std::env::home_dir().unwrap();
+        assert!(home.is_absolute());
+        let to_root = "../".repeat(home.components().skip(1).count());
+        let target = paths.codex_catalog_path();
+        let from_root = target.strip_prefix("/").unwrap().to_str().unwrap();
+        format!("~//{to_root}{from_root}")
+    });
+}
+
+#[test]
+#[cfg(unix)]
+fn surgical_detach_keeps_catalog_referenced_by_a_user_file_symlink() {
+    let (_guard, paths, _, settings) = homes_fixture();
+    let apply = |catalog: &[u8]| {
+        apply_attach_or_sync(
+            &owned(&paths),
+            "lnk_0123456789abcdef",
+            "link:t",
+            10100,
+            catalog,
+            &settings,
+        )
+    };
+    let catalog = br#"{"models":[{"slug":"home"}]}"#;
+    apply(catalog).unwrap();
+    let user_catalog = paths.codex_home.join("user-catalog.json");
+    std::os::unix::fs::symlink(paths.codex_catalog_path(), &user_catalog).unwrap();
+    let config_path = paths.codex_config_path();
+    let binding = "model_catalog_json = 'user-catalog.json'\n";
+    fs::write(&config_path, binding).unwrap();
+
+    let error = apply(br#"{"models":[{"slug":"replacement"}]}"#).unwrap_err();
+    assert!(error.contains("user-owned model_catalog_json"), "{error}");
+    assert_eq!(
+        offline_detach(&detach_guard(&paths), false).unwrap(),
+        DetachOutcome::SurgicalRestore
+    );
+    assert_eq!(fs::read_to_string(config_path).unwrap(), binding);
+    assert_eq!(fs::read(user_catalog).unwrap(), catalog);
+}
+
+#[test]
 fn legacy_absolute_catalog_binding_migrates_on_sync_and_detaches_surgically() {
     for sync in [true, false] {
         let (_guard, paths, _, settings) = homes_fixture();

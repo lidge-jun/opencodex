@@ -14,8 +14,8 @@ use crate::platform::{
 };
 use crate::state::{CATALOG_FILENAME, ChildPaths};
 use crate::toml_surgeon::{
-    ChildInjectedLedger, apply_design_b_config, detect_unowned_root_routing_conflict,
-    surgical_detach_config,
+    ChildInjectedLedger, apply_design_b_config, config_references_catalog,
+    detect_unowned_root_routing_conflict, surgical_detach_config,
 };
 
 pub const CHILD_JOURNAL_SCHEMA: &str = "ocx.child.journal/1";
@@ -836,7 +836,18 @@ fn offline_detach_inner(
             }
         } else {
             guard
-                .restore_step(|| remove_optional_file(catalog_path))
+                .restore_step(|| {
+                    reject_symlink(&config_path)?;
+                    match fs::read_to_string(&config_path) {
+                        Ok(config) if config_references_catalog(&config, catalog_path)? => {
+                            return Ok(());
+                        }
+                        Ok(_) => {}
+                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                        Err(e) => return Err(format!("failed reading remaining config.toml: {e}")),
+                    }
+                    remove_optional_file(catalog_path)
+                })
                 .map_err(step_err)?;
         }
     }

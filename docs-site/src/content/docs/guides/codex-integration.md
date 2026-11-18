@@ -471,8 +471,10 @@ the same config and auth files. Set `CODEX_HOME` explicitly to override this det
 When the catalog is beside `config.toml`, OpenCodex writes its filename as `model_catalog_json` so
 Windows Codex and the WSL app-server can both open it from the shared home. Run `ocx sync` on
 Windows to update an older OpenCodex binding that contains a Windows absolute path. This also
-applies to sync on a lightweight Link Child. A lightweight Child refuses attach or sync while
-`config.toml` selects a different catalog or contains invalid TOML. The full OpenCodex install
+applies to sync on a lightweight Link Child. The Child recognizes symlinked directories and, on
+macOS and Linux, `~/` paths that select its catalog. It refuses attach or sync while
+`config.toml` selects a different catalog or contains invalid TOML. Detach keeps the generated
+catalog if the restored config still points to it. The full OpenCodex install
 preserves custom catalog assignments. Its generated profile uses an absolute path for a catalog
 in another directory and resolves `~/` against your user home on macOS and Linux.
 

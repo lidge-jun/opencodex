@@ -1,3 +1,4 @@
+use std::fs;
 use std::ops::Range;
 use std::path::{Component, Path, PathBuf};
 
@@ -614,10 +615,13 @@ fn ensure_root_web_search(
 }
 
 #[cfg(windows)]
-fn catalog_path_spelling(path: &str) -> PathBuf {
-    let path = path.replace('/', "\\").to_lowercase();
-    // canonicalize() returns extended-length paths. Compare ordinary drive and UNC forms too.
-    if let Some(unc) = path.strip_prefix(r"\\?\unc\") {
+fn catalog_lookup_path(path: &str) -> PathBuf {
+    let path = path.replace('/', "\\");
+    const VERBATIM_UNC: &str = r"\\?\UNC\";
+    // Resolve ordinary and extended-length drive and UNC forms alike.
+    if let Some((prefix, unc)) = path.split_at_checked(VERBATIM_UNC.len())
+        && prefix.eq_ignore_ascii_case(VERBATIM_UNC)
+    {
         return PathBuf::from(format!(r"\\{unc}"));
     }
     if let Some(disk) = path.strip_prefix(r"\\?\")
@@ -629,8 +633,30 @@ fn catalog_path_spelling(path: &str) -> PathBuf {
 }
 
 #[cfg(not(windows))]
-fn catalog_path_spelling(path: &str) -> PathBuf {
+fn catalog_lookup_path(path: &str) -> PathBuf {
+    // Match Codex's AbsolutePathBuf POSIX expansion, including "~//".
+    if let Some(rest) = path
+        .strip_prefix("~/")
+        .or_else(|| (path == "~").then_some(""))
+        && let Some(home) = std::env::home_dir()
+    {
+        return home.join(rest.trim_start_matches('/'));
+    }
     PathBuf::from(path)
+}
+
+#[cfg(windows)]
+fn same_catalog_path_spelling(left: &Path, right: &Path) -> bool {
+    let comparable = |path: &Path| {
+        path.to_str()
+            .map(|path| catalog_lookup_path(&path.to_lowercase()))
+    };
+    comparable(left).is_some_and(|left| Some(left) == comparable(right))
+}
+
+#[cfg(not(windows))]
+fn same_catalog_path_spelling(left: &Path, right: &Path) -> bool {
+    left == right
 }
 
 fn normalize_absolute_path(path: &Path) -> PathBuf {
@@ -647,20 +673,50 @@ fn normalize_absolute_path(path: &Path) -> PathBuf {
     normalized
 }
 
+fn resolve_catalog_binding(binding: &str, target: &Path) -> Option<PathBuf> {
+    let target = catalog_lookup_path(target.to_str()?);
+    let binding = target.parent()?.join(catalog_lookup_path(binding));
+    binding
+        .is_absolute()
+        .then(|| normalize_absolute_path(&binding))
+}
+
+fn canonical_paths_match(left: &Path, right: &Path) -> bool {
+    fs::canonicalize(left).is_ok_and(|left| {
+        fs::canonicalize(right).is_ok_and(|right| same_catalog_path_spelling(&left, &right))
+    })
+}
+
 fn owns_catalog_binding(binding: &str, target: &Path) -> bool {
-    let Some(target) = target.to_str().map(catalog_path_spelling) else {
+    let Some(binding) = resolve_catalog_binding(binding, target) else {
         return false;
     };
-    let Some(home) = target.parent() else {
+    let (Some(binding_name), Some(target_name)) = (binding.file_name(), target.file_name()) else {
         return false;
     };
-    let binding = home.join(catalog_path_spelling(binding));
-    binding.is_absolute() && normalize_absolute_path(&binding) == normalize_absolute_path(&target)
+    // Only follow directory aliases for ownership. A user-controlled file symlink
+    // to the managed catalog still belongs to the user.
+    same_catalog_path_spelling(Path::new(binding_name), Path::new(target_name))
+        && binding
+            .parent()
+            .zip(target.parent())
+            .is_some_and(|(left, right)| canonical_paths_match(left, right))
 }
 
 fn parse_config(content: &str) -> Result<Document<&str>, String> {
     // The parser's detailed error can include source lines from a private config.
     Document::parse(content).map_err(|_| "config.toml contains invalid TOML".to_owned())
+}
+
+pub(crate) fn config_references_catalog(content: &str, target: &Path) -> Result<bool, String> {
+    let document = parse_config(content.strip_prefix('\u{feff}').unwrap_or(content))?;
+    let binding = document
+        .get("model_catalog_json")
+        .and_then(|item| item.as_str())
+        .and_then(|value| resolve_catalog_binding(value, target));
+    // Follow the file as well as its directory here. A preserved user symlink
+    // must remain readable after detach even though it was never ours to strip.
+    Ok(binding.is_some_and(|binding| canonical_paths_match(&binding, target)))
 }
 
 fn catalog_assignment(
