@@ -74,17 +74,21 @@ config.client = {
 saveConfig(config);
 const expected = structuredClone(config.client);
 const codexProbe = join(home, "unexpected-codex-discovery");
-if (options.mode === "parent" && process.platform !== "win32") {
+if (process.platform !== "win32") {
   const executable = join(home, "fixture-codex");
   writeFileSync(executable, '#!/bin/sh\n: > "$OPENCODEX_HOME/unexpected-codex-discovery"\nprintf "codex-cli 0.135.0\\n"\n', { mode: 0o700 });
   process.env.CODEX_CLI_PATH = executable;
 }
-if (options.mode === "file-cycle" || options.mode === "parent") {
-  // This fixture supplies a routed model roster. Reading native metadata must not
-  // start the host's Codex discovery process and keep the fixture alive after it reports.
-  const codexRuntime = await import("../../src/codex/runtime");
-  mock.module("../../src/codex/runtime", () => ({ ...codexRuntime, resolveAndPersistCodexRuntimeAsync: async () => null }));
-}
+// The fixture supplies its catalogs. Neither driver needs to launch an installed Codex
+// CLI, whose Node wrapper can leave subprocesses and caches behind after the fixture exits.
+const codexRuntime = await import("../../src/codex/runtime");
+mock.module("../../src/codex/runtime", () => ({
+  ...codexRuntime,
+  resolveAndPersistCodexRuntime: (): import("../../src/codex/runtime").ResolveCodexRuntimeResult => ({
+    runtime: { command: join(home, "unavailable-fixture-codex"), source: "environment", version: null }, failures: [],
+  }),
+  resolveAndPersistCodexRuntimeAsync: async () => null,
+}));
 const original = 'model = "native"\n';
 const injected = `# Auto-injected by opencodex (undo: ocx restore)\nopenai_base_url = "http://127.0.0.1:${config.port}/v1"\n${original}`;
 writeFileSync(CODEX_CONFIG_PATH, original);

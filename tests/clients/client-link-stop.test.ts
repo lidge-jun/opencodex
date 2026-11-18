@@ -50,6 +50,7 @@ async function runStop(options: Record<string, unknown>) {
     } else expect({ exit, stderr }, stdout).toEqual({ exit: 0, stderr: "" });
     const report = JSON.parse(readFileSync(join(home, "result.json"), "utf8"));
     const atExit = JSON.parse(readFileSync(join(home, "exit.json"), "utf8"));
+    expect(atExit.codexDiscovery).toBe(false);
     for (const field of ["after", "profileAfter", "journalRetained", "journalHomeBound", "catalogAfter", "grokAfter", "protectedUnchanged", "fileAfter", "codexDiscovery"]) {
       expect(atExit[field], `no late restoration after listener release: ${field}`).toEqual(report[field]);
     }
@@ -452,7 +453,6 @@ test("parent Link teardown retains the merged full restoration contract", async 
   expect(report.catalogAfter.models).toEqual([{ slug: "fixture-native", visibility: "list" }]);
   expect(report.grokAfter).toBe('theme = "fixture"\n');
   expect(report.fileAfter.pi).not.toContain("127.0.0.1");
-  expect(report.codexDiscovery).toBe(false);
 });
 
 test("post-stop restore reports unowned Link file receipts despite disconnected saved state", async () => {
