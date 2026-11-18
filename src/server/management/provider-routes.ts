@@ -82,6 +82,7 @@ import {
   type VertexDiscoveryAuth,
 } from "../../providers/google-vertex-model-discovery";
 import { routedSlug, slugEquals } from "../../providers/slug-codec";
+import { isXaiGrokOAuth, readXaiLegacyPrivacyError, XAI_LEGACY_PRIVACY_MESSAGE } from "../../providers/xai-privacy-mode";
 import { clearAccountQuotaCache, clearProviderQuotaCache, fetchProviderQuotaReports } from "../../providers/quota";
 import { clearPassiveKeyLimits, listPassiveKeyLimits, passiveProviderOwnership } from "../../providers/passive-key-observation";
 import { providerRoutingQuota } from "./provider-routing-quota";
@@ -1757,6 +1758,9 @@ export async function handleProviderRoutes(ctx: ManagementContext): Promise<Resp
         });
       }
       if (!res.ok) {
+        if (isXaiGrokOAuth(name, prov) && await readXaiLegacyPrivacyError(res)) {
+          return jsonResponse({ ok: false, latencyMs, error: XAI_LEGACY_PRIVACY_MESSAGE });
+        }
         try {
           void res.body?.cancel().catch(() => undefined);
         } catch {
