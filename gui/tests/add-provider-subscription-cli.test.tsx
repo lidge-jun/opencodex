@@ -155,7 +155,8 @@ test("selecting claude-cli shows the subscription warning above Add, and Add sti
   expect(note).not.toBeNull();
   expect(note?.getAttribute("role")).toBe("note");
   expect(note?.textContent).toContain("Subscription CLI, not an API key");
-  expect(note?.textContent).toContain("claude -p");
+  expect(note?.textContent).toContain("Claude Code CLI");
+  expect(note?.querySelector("code.chip")?.textContent).toBe("claude -p");
   expect(note?.textContent).toContain("anthropic-apikey");
   // The green free-tier box and the key field are replaced, not shown beside the warning.
   expect(win.document.body.textContent).not.toContain("Free tier");
