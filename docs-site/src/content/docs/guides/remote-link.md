@@ -65,9 +65,15 @@ The **Child** role also requires a standalone OpenCodex runtime running on its c
 
 ## Link status
 
-- **Connected** means the SSH tunnel is ready and the Child can use the Home link.
+- **Connected** is the tunnel supervisor's transport state. For a Home-initiated link, it can reflect SSH liveness or a successful relay check. Inference readiness is reported separately.
 - **Reconnecting** means the tunnel is being retried. Requests can temporarily return `503` with `Retry-After` while the retry is in progress. On a Child that connected from its own dashboard, a request first waits up to 15 seconds for the tunnel to come back.
 - **Failed** means the link needs attention. Check SSH authentication, the confirmed host key, forwarding, or the timeout reason shown in the dashboard. The side that runs the SSH tunnel keeps retrying by itself, after sleep, an outage or a restart: Home for a Child it added, and the Child for a link it joined from its own dashboard. After a timeout or forwarding error the Home retries a Child it added every minute, so a laptop that slept reconnects within about a minute of waking; a Child that joined from its own dashboard retries after one minute and doubles the wait after each retry that fails again, up to five minutes. After an authentication error either side retries every five minutes. A changed host key is never retried. To try again at once, select **Retry** in the Home's dashboard or run `ocx link reconnect --link-id <id>` on the Home. It restarts that link's tunnel without restarting OpenCodex.
+
+After a manual reconnect stops its own SSH process, the Home allows up to two short retries if the Child's sshd still refuses the same remote forward (`remote_forward_conflict`). The waits are about one and two seconds, with an eight-second window after the old SSH process exits. If the conflict persists, normal retry timing applies.
+
+On the Home, `ocx link status --json` shows `relayHealth` for Home-initiated links. The same block is available from `GET /api/link/status?relayHealth=1`. `relayAuthentication: "observed"` means an authenticated HTTP model request reached the Home on the current tunnel generation. `delivery: "degraded"` means at least three of the last five settled HTTP model requests ended early within two minutes. This can include a caller cancelling a request. Failures that only the Child sees and latency are outside this signal. The Home reports inference readiness as `unknown` and takes no recovery action based on delivery status.
+
+If requests keep dropping, run `ocx link check --link-id <id>` on the Home to inspect the Child. Use the Child's `ocx ready` for its relay readiness verdict. When the link is idle, `ocx link reconnect --link-id <id>` starts a fresh tunnel.
 
 A failed link does not silently switch to a local provider.
 If the tunnel is failed, stopped, or not supervised before forwarding starts, the Child returns a retryable `503` without forwarding the link key or request. A failure after forwarding starts is different: the Home may already have received or processed the request, so inspect that uncertain result before retrying.

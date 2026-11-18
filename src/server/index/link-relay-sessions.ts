@@ -23,6 +23,7 @@ interface Session {
   expiresAt: number;
   timer: ReturnType<typeof setTimeout>;
   release: () => void;
+  generation: string | undefined;
 }
 
 export interface LinkRelaySessionOptions {
@@ -147,18 +148,20 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         if (req.headers.get(LINK_RELAY_PROBE_HEADER) === "1") return answer();
         const release = acquire();
         const timer = setTimeout(() => { consume(nonce)?.release(); }, reservationMs);
-        sessions.set(nonce, { peer, keyId, linkId, fingerprint, release, timer, expiresAt: Date.now() + reservationMs });
+        sessions.set(nonce, { peer, keyId, linkId, fingerprint, release, timer, expiresAt: Date.now() + reservationMs, generation });
         return answer();
       }
       const nonce = req.headers.get(LINK_RELAY_SESSION_HEADER);
       let release: () => void;
       let sessionLink: string | null = null;
+      let sessionGeneration: string | undefined;
       if (nonce !== null) {
         // A proof received on one HTTP socket never authorizes another socket, even on the same port.
         const session = consume(nonce);
         if (!session) return refuse();
         release = session.release;
         sessionLink = session.linkId;
+        sessionGeneration = session.generation;
         if (session.peer !== peerOf(req, server as Server<unknown>) || Date.now() >= session.expiresAt
           || !options.fingerprints(session.keyId, session.linkId).includes(session.fingerprint)) {
           release(); return refuse();
@@ -186,13 +189,26 @@ export function createLinkRelaySessions(options: LinkRelaySessionOptions) {
         release = () => { end(); lease(); };
       };
       if (countsActivity && sessionLink !== null) beginActivity();
+      let endDelivery: ((complete: boolean) => void) | undefined;
+      if (countsActivity && sessionLink !== null && sessionGeneration !== undefined) {
+        // Attribution is display-only. A session reserved just before a reconnect cannot move
+        // the activity book back to a previous generation when its data request arrives later.
+        try {
+          if (sessionGeneration === options.connectionGeneration?.(sessionLink)) {
+            endDelivery = options.activity!.beginHttpDelivery(sessionLink, sessionGeneration);
+          }
+        } catch { /* the relay proceeds even if the observation is unavailable */ }
+      }
       let decideObservation: ((accepted: boolean) => void) | undefined;
       if (sessionLink !== null && req.method === "POST" && url.pathname === "/v1/responses") {
         try { decideObservation = options.observeResponsesRequest?.(sessionLink, req) ?? undefined; } catch { /* observation never blocks the request */ }
       }
       let flow: ReturnType<LinkTrafficBook["begin"]> | undefined;
-      // Accounting never keeps a lease: every path ends its flow through here and goes on to release.
-      const endFlow = (complete: boolean): void => { try { flow?.end(complete); } catch { /* the request's own outcome is the one reported */ } };
+      // Observations never keep a lease: every path ends its flow here and goes on to release.
+      const endFlow = (complete: boolean): void => {
+        try { endDelivery?.(complete); } catch { /* the request's own outcome is the one reported */ }
+        try { flow?.end(complete); } catch { /* the request's own outcome is the one reported */ }
+      };
       try {
         flow = sessionLink !== null ? options.traffic?.begin(sessionLink) : undefined;
         if (flow) {

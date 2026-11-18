@@ -132,6 +132,16 @@ export interface LinkSupervisorDeps {
 
 const TIMER_MS = 1_000;
 const SPAWN_GRACE_MS = 5_000;
+const FORWARD_RELEASE_DELAYS_MS = [1_000, 2_000] as const;
+const FORWARD_RELEASE_WINDOW_MS = 8_000;
+
+interface ForwardRelease {
+  generation: number;
+  deadline: number;
+  attempts: number;
+  pending?: { at: number; resume: (allowed: boolean) => void };
+}
+
 /**
  * A retry runs while the network may still be down, and ssh can wait out its whole ConnectTimeout
  * (10 s for the TCP connect, the SSH handshake and key exchange, see ssh-argv.ts) before it exits.
@@ -268,6 +278,8 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   const linkRevisions = new Map<string, number>();
   /** Reconnects in flight, so overlapping requests for one link restart it once. */
   const reconnects = new Map<string, Promise<boolean | "suspended">>();
+  /** Only a manual reconnect that drained an owned child can open this short retry window. */
+  const forwardReleases = new Map<string, ForwardRelease>();
   const holds = new Map<string, number>();
   const orphanUnverified = new Set<string>();
   /** The generation of the child whose exit is still being classified, per link. */
@@ -496,15 +508,39 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   const put = (linkId: string, next: TunnelState, cause: TunnelCause | null = null): TunnelState => {
     const before = states.get(linkId) ?? IDLE;
     states.set(linkId, next);
-    history.observe(linkId, before, next, cause, now());
+    // Keep ordinary backoff in the reducer for when the short window expires or is cancelled.
+    const shortRetryAt = forwardReleases.get(linkId)?.pending?.at;
+    history.observe(linkId, before, next.kind === "failed" && shortRetryAt !== undefined ? { ...next, retryAt: shortRetryAt } : next, cause, now());
     return next;
   };
 
   const setEvent = (linkId: string, event: Parameters<typeof reduceTunnel>[1], cause: TunnelCause | null = null): TunnelState =>
     put(linkId, reduceTunnel(states.get(linkId) ?? IDLE, event, deps.random, HOME_TUNNEL_RETRY_POLICY), cause);
 
+  const registerGeneration = (linkId: string): number => {
+    const previous = generations.get(linkId) ?? 0;
+    const generation = previous + 1;
+    generations.set(linkId, generation);
+    const release = forwardReleases.get(linkId);
+    if (release?.generation === previous) release.generation = generation;
+    return generation;
+  };
+
+  const scheduleForwardRelease = (linkId: string, generation: number, resume: (allowed: boolean) => void): boolean => {
+    const release = forwardReleases.get(linkId);
+    if (!release || release.generation !== generation || stopping || holds.has(linkId)) return false;
+    const delay = FORWARD_RELEASE_DELAYS_MS[release.attempts];
+    if (delay === undefined) return false;
+    const at = now() + delay;
+    if (at >= release.deadline) return false;
+    release.attempts++;
+    release.pending = { at, resume };
+    return true;
+  };
+
   /** Fail a link whose attempt could not start; a due retry that fails this way counts as one. */
   const failAttempt = (linkId: string, prior: TunnelState | undefined, reason: TunnelFailure, cause: TunnelCause): void => {
+    forwardReleases.delete(linkId);
     put(linkId, failedSpawnTunnel(prior, reason, now(), HOME_TUNNEL_RETRY_POLICY), cause);
   };
 
@@ -522,8 +558,16 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         try { stderr = child.stderr ? await child.stderr : ""; } catch { /* classified as unknown */ }
         // A reconnect may have started a fresh child meanwhile; its own lifecycle owns the state.
         if (generations.get(linkId) !== generation) return;
-        if (rounds.exited(linkId, child, stderr)) return;
+        if (rounds.exited(linkId, child, stderr, resume => scheduleForwardRelease(linkId, generation, resume))) {
+          if (!forwardReleases.get(linkId)?.pending) forwardReleases.delete(linkId);
+          return;
+        }
         const stderrClass = classifySshStderr(stderr);
+        const shortRetry = stderrClass === "remote_forward" && scheduleForwardRelease(linkId, generation, allowed => {
+          const record = store.links.find(record => record.id === linkId);
+          if (allowed && record) spawnFor(record, true);
+        });
+        if (!shortRetry) forwardReleases.delete(linkId);
         setEvent(linkId, { type: "exit", now: now(), stderrClass }, exitCause(stderrClass));
       } finally {
         if (exiting.get(linkId) === generation) exiting.delete(linkId);
@@ -533,6 +577,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       children.delete(linkId);
       conditionalRemovePidfile(linkId, child.pid);
       if (stopping) return;
+      forwardReleases.delete(linkId);
       if (rounds.exited(linkId, child, "")) return;
       setEvent(linkId, { type: "exit", now: now(), stderrClass: "network" }, "network");
     });
@@ -564,8 +609,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         route: record.explicitRoute ?? null,
       });
       const child = runner.spawnTunnel(argv, { stderrLine });
-      const generation = (generations.get(record.id) ?? 0) + 1;
-      generations.set(record.id, generation);
+      const generation = registerGeneration(record.id);
       const connection = nextLinkConnectionGeneration();
       connectionNames.set(record.id, connection);
       exiting.delete(record.id);
@@ -576,6 +620,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         const startTime = readProcessStartTime(child.pid);
         writePidfile(pidfilePath(record.id), { version: 1, linkId: record.id, pid: child.pid, argv, ...(startTime === null ? {} : { startTime }) });
       } catch {
+        forwardReleases.delete(record.id);
         return { child, generation: connection, setupFailed: true };
       }
       return { child, generation: connection };
@@ -584,7 +629,10 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       const capture = openSshCapture(sshCapture, "home", linkId);
       return capture ? line => capture.stderrLine(line) : undefined;
     },
-    setEvent: (linkId, event, cause) => setEvent(linkId, event, cause ?? null),
+    setEvent(linkId, event, cause) {
+      if (event.type === "ready") forwardReleases.delete(linkId);
+      return setEvent(linkId, event, cause ?? null);
+    },
     deferRetry(linkId, at) {
       const state = states.get(linkId);
       if (state && (state.kind === "reconnecting" || state.kind === "failed") && state.retryAt !== undefined && state.retryAt < at) {
@@ -596,14 +644,14 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     warn,
   });
 
-  const spawnFor = (record: LinkRecord): void => {
+  const spawnFor = (record: LinkRecord, forwardRelease = false): void => {
     if (stopping || holds.has(record.id) || record.direction !== "hub-initiated" || children.has(record.id)) return;
     // A revoke that reached the Child's cleanup and stopped unknown may have purged it: no reconnect until resolved.
     if (linkSuspendedByRevoke(journalPath, record.id)) return;
     // Only a fresh link or a due attempt spawns. A reload must neither skip the backoff nor start
     // a second child while an exited one is still reporting its stderr.
     const prior = states.get(record.id);
-    if (prior && prior.kind !== "idle" && !dueForSpawn(prior, now())) return;
+    if (!forwardRelease && prior && prior.kind !== "idle" && !dueForSpawn(prior, now())) return;
     if (store.listenerPort === null) {
       // Retried like any forward failure; a reload that brings the listener back starts it fresh.
       failAttempt(record.id, prior, "forward", "listener_unavailable");
@@ -625,8 +673,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         route: record.explicitRoute ?? null,
       });
       const child = capture ? runner.spawnTunnel(argv, { stderrLine: capture.stderrLine }) : runner.spawnTunnel(argv);
-      const generation = (generations.get(record.id) ?? 0) + 1;
-      generations.set(record.id, generation);
+      const generation = registerGeneration(record.id);
       connectionNames.set(record.id, nextLinkConnectionGeneration());
       // An older child's exit still being classified no longer speaks for this link.
       exiting.delete(record.id);
@@ -670,6 +717,21 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
       // The exit is still being classified. Failing the link on the outage clock now would make
       // a later host-key or auth exit land on a failed state that ignores it.
       if (exiting.has(record.id)) continue;
+      const release = forwardReleases.get(record.id);
+      if (release) {
+        const expired = current >= release.deadline || release.generation !== generations.get(record.id);
+        const pending = release.pending;
+        if (expired) forwardReleases.delete(record.id);
+        if (pending && (expired || current >= pending.at)) {
+          delete release.pending;
+          if (linkSuspendedByRevoke(journalPath, record.id)) {
+            forwardReleases.delete(record.id);
+            rounds.cancel(record.id);
+          } else {
+            pending.resume(!expired);
+          }
+        }
+      }
       const before = states.get(record.id) ?? IDLE;
       const child = children.get(record.id);
       if (rounds.isMultiRoute(record)) {
@@ -749,6 +811,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   };
 
   const stopChild = async (linkId: string): Promise<void> => {
+    forwardReleases.delete(linkId);
     rounds.cancel(linkId);
     const current = children.get(linkId);
     if (!current) {
@@ -768,6 +831,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
   };
 
   const invalidateLink = (linkId: string): void => {
+    forwardReleases.delete(linkId);
     linkRevisions.set(linkId, (linkRevisions.get(linkId) ?? 0) + 1);
     generations.set(linkId, (generations.get(linkId) ?? 0) + 1);
     rounds.cancel(linkId);
@@ -852,6 +916,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         // a replaced instance); one with nothing watched is settled again from its pidfile below.
         const flaggedChanged = [...changed].filter(linkId => orphanUnverified.has(linkId));
         for (const linkId of changed) {
+          forwardReleases.delete(linkId);
           rounds.cancel(linkId);
           const watch = orphanWatches.get(linkId);
           const next = nextStore.links.find(link => link.id === linkId);
@@ -866,6 +931,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         // A removed link takes its block with it; a link added again later is settled from its pidfile below.
         for (const linkId of recordInstances.keys()) {
           if (nextInstances.has(linkId)) continue;
+          forwardReleases.delete(linkId);
           rounds.cancel(linkId);
           orphanWatches.delete(linkId);
           orphanUnverified.delete(linkId);
@@ -882,7 +948,10 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
           recheckPidfile(record);
         }
         if (routesEdited.some(record => rounds.isMultiRoute(record))) rounds.recheckClient();
-        for (const record of routesEdited) if (rounds.isMultiRoute(record)) rounds.routesChanged(record);
+        for (const record of routesEdited) {
+          forwardReleases.delete(record.id);
+          if (rounds.isMultiRoute(record)) rounds.routesChanged(record);
+        }
         for (const [linkId] of [...children]) {
           if (nextInstances.has(linkId) && !changed.has(linkId)) continue;
           await stopChild(linkId);
@@ -949,6 +1018,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         if (rounds.isMultiRoute(record) && orphanUnverified.has(linkId)) return;
         // A preceding reload may have spawned a new generation; it is the current one we drain.
         const generation = generations.get(linkId);
+        const ownedChild = children.has(linkId);
         const revision = lifecycleRevision;
         const instance = recordInstance(record, store.listenerPort);
         await stopChild(linkId);
@@ -959,6 +1029,9 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         if (linkSuspendedByRevoke(journalPath, linkId)) {
           restarted = "suspended";
           return;
+        }
+        if (ownedChild && generation !== undefined) {
+          forwardReleases.set(linkId, { generation, deadline: now() + FORWARD_RELEASE_WINDOW_MS, attempts: 0 });
         }
         spawnFor(fresh);
         restarted = true;
@@ -971,6 +1044,9 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         // A multi-route link is promoted only by its candidate's correlated readiness proof.
         if (rounds.isMultiRoute(record)) continue;
         if (record.direction === "hub-initiated" && record.apiKeyId === apiKeyId && children.has(record.id)) {
+          // An authenticated catalog request proves the forward. The timed SSH liveness
+          // promotion alone cannot close the window while a forward request may still be pending.
+          forwardReleases.delete(record.id);
           const state = states.get(record.id);
           if (state?.kind === "connecting" || state?.kind === "reconnecting" || (state && retryInFlight(state))) {
             setEvent(record.id, { type: "ready", now: now() });
@@ -988,10 +1064,13 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         const recorded = history.get(record.id);
         const routes = rounds.isMultiRoute(record) ? rounds.status(record.id) : undefined;
         const suspension = suspensionOf(record.id);
+        const state = states.get(record.id) ?? IDLE;
+        const release = forwardReleases.get(record.id);
+        const retryAt = !stopping && !suspension && release && now() < release.deadline ? release.pending?.at : undefined;
         return {
           linkId: record.id,
           direction: record.direction,
-          state: states.get(record.id) ?? IDLE,
+          state: state.kind === "failed" && retryAt !== undefined ? { ...state, retryAt } : state,
           pid: child?.child.pid ?? null,
           ...(orphanUnverified.has(record.id) ? { orphan: "orphan-unverified" as const } : {}),
           ...(recorded ? { history: recorded } : {}),
@@ -1002,6 +1081,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
     },
     async stop() {
       stopping = true;
+      forwardReleases.clear();
       rounds.stop();
       try {
         await runLifecycle(async () => {

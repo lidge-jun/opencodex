@@ -209,6 +209,29 @@ test("a two-route link connects on its first route only after the correlated rea
   expect(h.proofs.size()).toBe(0);
 });
 
+test("#8753 retries the refused candidate on its route after a manual reconnect and proves it again", async () => {
+  const h = await started();
+  await h.grant();
+  await h.tick();
+  expect(h.state().state.kind).toBe("connected");
+  expect(await h.supervisor.reconnect(LINK)).toBe(true);
+  await h.tick();
+  const replacement = h.tunnels[1]!;
+  expect(h.tunnels[0]!.signals).toEqual(["SIGTERM"]);
+  replacement.tap(REFUSED);
+  replacement.exit(255, "Error: remote port forwarding failed for listen port 19002");
+  await flush();
+  expect(h.tunnels).toHaveLength(2);
+  await h.advance(1_000);
+  expect(h.tunnels).toHaveLength(3);
+  expect(h.tunnels[2]!.argv).toEqual(replacement.argv);
+  expect(h.kills).toEqual([]);
+  expect(h.state().state.kind).toBe("connecting");
+  await h.grant();
+  await h.tick();
+  expect(h.state().state.kind).toBe("connected");
+});
+
 test("a refused first route falls through to the second without waiting for the clock", async () => {
   const h = await started({ probe: route => route === "alpha-lan" ? refused("ssh: connect to host 10.0.0.5 port 22: Connection refused") : ok("ocx-link-probe\n") });
   expect(h.runs.filter(run => run.kind === "probe").map(run => run.destination)).toEqual(["alpha-lan", "pen-alpha"]);

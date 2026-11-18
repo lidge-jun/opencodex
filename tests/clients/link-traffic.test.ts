@@ -4,6 +4,7 @@ import { relayLinkDataRequest, HOME_INITIATED_LINK_TUNNEL } from "../../src/clie
 import { createLinkRelaySessions } from "../../src/server/index/link-relay-sessions";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import { childLinkTraffic, createLinkTrafficBook, MAX_LINKS } from "../../src/link/traffic";
+import { createLinkActivity } from "../../src/link/child-activity";
 import { linkBoundFetch } from "../../src/client/link-home";
 import { gzipSync } from "node:zlib";
 import { PassThrough } from "node:stream";
@@ -28,10 +29,11 @@ function gate<T = void>() {
 /** A real hub-link session dispatcher counting into its own book, as the Home's listener does. */
 function home(dispatch: (req: Request) => Promise<Response>) {
   const book = createLinkTrafficBook("content-length");
-  const sessions = createLinkRelaySessions({ fingerprints: () => [fp], traffic: book });
+  const activity = createLinkActivity();
+  const sessions = createLinkRelaySessions({ fingerprints: () => [fp], traffic: book, activity, connectionGeneration: () => "runtime:1" });
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (req, s) => sessions.dispatch(req, s, dispatch) });
   servers.push(server);
-  return { book, port: server.port! };
+  return { book, activity, port: server.port! };
 }
 
 /** A caller body delivered in chunks of the given sizes, with a declared length. */
@@ -67,6 +69,7 @@ describe("link traffic counters (#3023)", () => {
     expect(read).toBe(sent);
     expect(child.snapshot(linkId)).toMatchObject({ requests: 1, incomplete: 0, toHomeBytes: received, fromHomeBytes: sent, toHomeSource: "relayed", toHomeUncounted: 0 });
     expect(h.book.snapshot(linkId)).toMatchObject({ requests: 1, incomplete: 0, toHomeBytes: received, fromHomeBytes: sent, toHomeSource: "content-length", toHomeUncounted: 0 });
+    expect(h.activity.snapshot(linkId, Date.now()).httpDelivery).toEqual({ generation: "runtime:1", recentSettled: 1, recentInterruptions: 0 });
   });
 
   test("an aborted response counts only the bytes that crossed and marks the request incomplete", async () => {
@@ -90,6 +93,7 @@ describe("link traffic counters (#3023)", () => {
     await homeCancelled.promise;
     expect(child.snapshot(linkId)).toMatchObject({ requests: 1, incomplete: 1, toHomeBytes: 2048, fromHomeBytes: first.byteLength });
     expect(h.book.snapshot(linkId)).toMatchObject({ requests: 1, incomplete: 1, toHomeBytes: 2048, fromHomeBytes: first.byteLength });
+    expect(h.activity.snapshot(linkId, Date.now()).httpDelivery).toEqual({ generation: "runtime:1", recentSettled: 1, recentInterruptions: 1 });
   });
 
   test("a Home request without Content-Length is counted as uncounted, not guessed", async () => {
@@ -197,6 +201,7 @@ describe("link traffic counters at the transport boundary (#3023 review)", () =>
     await relayed.catch(() => undefined);
     await answered.promise;
     expect(h.book.snapshot(linkId)).toMatchObject({ requests: 1, incomplete: 1 });
+    expect(h.activity.snapshot(linkId, Date.now()).httpDelivery).toEqual({ generation: "runtime:1", recentSettled: 1, recentInterruptions: 1 });
   });
 });
 
