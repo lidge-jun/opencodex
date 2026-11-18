@@ -449,6 +449,8 @@ export interface WebSearchLoopDeps {
   fetchForRequest?: (request: AdapterRequest, parsed: OcxParsedRequest, adapter: ProviderAdapter,
     recovery: AttemptRecoveryKind | undefined, onPhysicalDispatch: () => void) =>
       typeof globalThis.fetch & { reportsPhysicalDispatch?: true };
+  /** Observe finalized worker sends from both generic and adapter-owned transports. */
+  onPhysicalSend?: IncomingMeta["onPhysicalSend"];
   /** Called before each routed-model dispatch in the loop, for attempt telemetry. Same-target 429 replays pass the `rate-limit-429` recovery kind. */
   onAttemptSend?: (recovery?: AttemptRecoveryKind) => void;
   /**
@@ -732,7 +734,9 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           dispatchCandidate = undefined;
           // An adapter-owned stream retry's usage is already combined by its parser.
           if (awaitingHeaders) pendingLegs++;
-          deps.incomingMeta.onPhysicalSend?.({ ...send, ordinal: ++physicalSends });
+          const receipt = { ...send, ordinal: ++physicalSends };
+          if (requestAdapter.fetchResponse) deps.incomingMeta.onPhysicalSend?.(receipt);
+          deps.onPhysicalSend?.(receipt);
         };
         const routedExecutor = deps.fetchForRequest?.(request, iterParsed, requestAdapter, recovery, onPhysicalDispatch);
         const executor = routedExecutor ?? routedProviderFetch;

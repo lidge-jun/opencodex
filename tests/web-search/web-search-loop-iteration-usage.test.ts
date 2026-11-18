@@ -109,8 +109,8 @@ describe.each(["chat", "messages", "cca", "kiro"] as const)("real %s worker disp
           consult: async () => ({ ok: true, isError: false, content: "Advice" }),
           formatUnavailable: () => "Advisor unavailable",
         }),
-        incomingMeta: { headers: new Headers(), translatorBudget: createTestTranslatorBudget(),
-          onPhysicalSend: ({ ordinal }) => receipts.push(ordinal) },
+        incomingMeta: { headers: new Headers(), translatorBudget: createTestTranslatorBudget() },
+        onPhysicalSend: ({ ordinal }) => receipts.push(ordinal),
         fetchForRequest: (_request, _parsed, _adapter, _recovery, onPhysicalDispatch) =>
           Object.assign(providerFetch(provider, undefined, {
             providerName: "worker", modelId,

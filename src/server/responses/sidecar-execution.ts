@@ -860,7 +860,7 @@ export async function executeResponsesSidecars(
         abortSignal: options.abortSignal,
         translatorBudget,
         providerFetch: routedProviderFetch,
-        ...(transportState.adapter.fetchResponse ? sidecarBudget.incomingMeta : {}),
+        ...sidecarBudget.incomingMeta,
         ...(!options.comboInitialSend && route.providerName === "google-antigravity"
           ? { sendBudget: sendBudgetState.refundableAdapterDispatchBudget } : {}),
         comboAttempt: options.comboAttempt === true,
