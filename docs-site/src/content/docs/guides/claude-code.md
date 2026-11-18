@@ -1112,7 +1112,9 @@ request and returns a `server_tool_use` block named `advisor` followed by an
   A forced choice of the withheld `advisor` becomes `auto`, unless an ordinary client tool or
   the OpenCodex Advisor owns that name. Other tool choices remain unchanged.
   This uses the policy captured for that request, including
-  its selected account and pool; later configuration changes do not alter the decision. Requests
+  its selected account and pool; later configuration changes do not alter that policy. A retry on
+  a replacement key or account checks the same policy before building its request. Once withheld,
+  the hosted Advisor stays withheld for the rest of the turn. Requests
   without an applicable ceiling keep the forwarding rules above.
 - The `server_tool_use` and `advisor_tool_result` blocks reach Claude Code unchanged, with their
   `srvtoolu_` ids, for streaming and non-streaming requests. That covers the plaintext

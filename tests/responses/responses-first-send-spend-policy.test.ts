@@ -2,6 +2,9 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { saveConfig } from "../../src/config";
+import { apiKeyAccountLogLabel } from "../../src/codex/account-label";
+import { markEgressTransparentExecutor } from "../../src/lib/provider-egress";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import { clearResponseStateForTests, flushResponseState } from "../../src/responses/state";
@@ -261,6 +264,89 @@ for (const queried of [false, true]) for (const enforced of [false, true]) {
       }
       expect(effects).toEqual([]);
     } finally { configureSharedSpendLedger(previousPolicy); translatorBudget.dispose(); }
+  });
+}
+
+for (const lane of ["main", "search", "named"] as const) for (const limited of ["first", "second", "neither"] as const) {
+  test(`hosted Advisor follows captured target policy after key rotation (lane=${lane}, limited=${limited})`, async () => {
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => { throw new Error("rotation fixture forbids uninjected network calls"); }) as typeof fetch;
+    const firstKey = "fixture-advisor-first", secondKey = "fixture-advisor-second";
+    const labels = [firstKey, secondKey].map((reference, index) => apiKeyAccountLogLabel("anth", { reference, entryId: String(index) })!);
+    const queried: string[] = [];
+    const budget = createRequestExecutionBudget(undefined, undefined, {
+      hasCapturedSpendCeiling(target) {
+        expect(target?.poolId).toBe("anth");
+        expect(target?.identityId).toBeDefined();
+        queried.push(target!.identityId!);
+        return target!.identityId === labels[limited === "first" ? 0 : limited === "second" ? 1 : -1];
+      },
+      charge: () => true, refund: () => {},
+    });
+    const wires: Array<{ body: Record<string, unknown>; headers: Headers }> = [];
+    const model = "claude-sonnet-4-6";
+    const fetch = markEgressTransparentExecutor((async (input, init) => {
+      expect(String(input)).toBe("https://api.anthropic.com/v1/messages");
+      const headers = new Headers(init?.headers), body = JSON.parse(String(init?.body));
+      wires.push({ body, headers });
+      if (wires.length === 1) return Response.json({ type: "error", error: { type: "rate_limit_error", message: "fixture refusal" } }, { status: 429 });
+      const frames = [
+        { type: "message_start", message: { id: "msg_rotation", type: "message", role: "assistant", model,
+          content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 0 } } },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "ok" } },
+        { type: "content_block_stop", index: 0 },
+        ...(lane === "named" && limited !== "neither" ? [
+          { type: "content_block_start", index: 1, content_block: { type: "tool_use", id: "toolu_rotated_read", name: "Read", input: {} } },
+          { type: "content_block_stop", index: 1 },
+        ] : []),
+        { type: "message_delta", delta: { stop_reason: lane === "named" && limited !== "neither" ? "tool_use" : "end_turn" }, usage: { output_tokens: 1 } },
+        { type: "message_stop" },
+      ];
+      return new Response(frames.map(frame => `event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`).join(""),
+        { headers: { "content-type": "text/event-stream" } });
+    }) as typeof globalThis.fetch);
+    const config = { port: 0, defaultProvider: "anth",
+      webSearchSidecar: { enabled: lane === "search", backend: "exa", exaApiKey: "fixture-never-executed" },
+      providers: { anth: { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "key", proxy: "direct",
+        apiKey: firstKey, apiKeyPool: [{ id: "0", key: firstKey }, { id: "1", key: secondKey }], liveModels: false, models: [model], fetch } },
+    } as unknown as OcxConfig;
+    saveConfig(config);
+    const log: RequestLogContext = { provider: "", model: "" };
+    try {
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: `anth/${model}`, stream: true,
+          input: [{ role: "assistant", content: "Earlier answer." }, { role: "user", content: "Continue." }],
+          tools: [{ type: "function", name: "Read", parameters: { type: "object", properties: {} } },
+            ...(lane === "search" ? [{ type: "web_search" }] : [])],
+          ...(lane === "named" ? { tool_choice: { type: "function", name: "advisor" } } : {}) }),
+      }), config, log, { inboundWire: "anthropic", sendBudget: budget,
+        anthropicServerTools: [{ type: "advisor_20260301", name: "advisor", model, max_uses: 2 }],
+        anthropicServerReplay: new Map([["text:Earlier answer.", [
+          { type: "server_tool_use", id: "srvtoolu_rotation", name: "advisor", input: {} },
+          { type: "advisor_tool_result", tool_use_id: "srvtoolu_rotation", content: { type: "advisor_result", text: "prior advice" } },
+        ]]]),
+      });
+      const body = await response.text();
+      expect(response.status, body).toBe(200);
+      expect(body).toContain("ok");
+      expect(wires.map(wire => wire.headers.get("x-api-key"))).toEqual([firstKey, secondKey]);
+      for (const [index, wire] of wires.entries()) {
+        const allowed = limited === "neither" || (limited === "second" && index === 0);
+        expect((wire.body.tools as Record<string, unknown>[]).some(tool => tool.type === "advisor_20260301")).toBe(allowed);
+        expect((wire.headers.get("anthropic-beta") ?? "").includes("advisor-tool-2026-03-01")).toBe(allowed);
+        if (!allowed) expect(JSON.stringify(wire.body)).not.toContain("srvtoolu_rotation");
+        expect(JSON.stringify(wire.body)).toContain("Earlier answer.");
+        if (lane === "named") expect(wire.body.tool_choice).toEqual(allowed ? { type: "tool", name: "advisor" } : { type: "auto" });
+      }
+      if (limited === "second") expect(queried).toContain(labels[1]!);
+      if (lane === "named" && limited !== "neither") expect(body).toContain('"name":"Read"');
+      // Optional hosted work never changes this externally supplied owner's accounting mode.
+      expect(budget.spendEnforced).toBe(false);
+      expect(budget.spendAdmissionPolicy).toBeUndefined();
+      expect(log.spendTracker).toBeUndefined();
+    } finally { globalThis.fetch = originalFetch; }
   });
 }
 

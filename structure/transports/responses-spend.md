@@ -127,7 +127,13 @@ it returns false; without that query, an enforced observer still withholds optio
 legacy/foreign holder. Derived scopes and adapter views retain the same query owner and snapshot.
 Querying does not install a spend observer, promote a holder or change main-model accounting.
 `tests/responses/responses-first-send-spend-policy.test.ts` covers these holder forms, that separation and
-live policy changes in both directions. The hosted-only target binding in `src/server/responses/request-transport.ts`
+live policy changes in both directions. Its key-rotation wire cases also cover target-dependent
+authoritative queries on main, web-search and named-tool turns: replacement ceilings withhold the
+hosted tool, replay and beta; an earlier withholding is never undone by an unlimited replacement.
+The request-owned `hostedAdvisorSpendGuard` runs inside every selected adapter's `buildRequest`
+wrapper after credential admission, including sidecar copies and dispatch-time reselection. It
+reuses the same captured policy, normalizes a newly unmatched named choice and rebuilds the outer
+delivery maps once, without changing main-model accounting. The hosted-only target binding in `src/server/responses/request-transport.ts`
 resolves a selected API key's existing account label before physical log attribution, so policy
 checks do not record an unsent attempt as served. `request-spend-target.ts` keeps that read-only
 binding separate from ordinary main-model accounting and preserves the latter's existing scopes.

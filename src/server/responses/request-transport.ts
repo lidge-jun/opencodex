@@ -229,6 +229,7 @@ export async function prepareResponsesTransport(
     ? captureOAuthAccountSelection(route.providerName) : null;
   const anthropicManualSelectionGeneration = anthropicRouting?.captureAnthropicManualSelectionGeneration();
   let servingOAuthSnapshot: OAuthAccessSnapshot | undefined;
+  let hostedAdvisorSpendGuard: ((request: OcxParsedRequest) => void) | undefined;
   if (deferPhysicalAttribution) bindResponsesSpendTarget(logCtx, () => ({
     poolId: logCtx.spendPoolId ?? route.providerName,
     identityId: copilotCandidate ? copilotCandidate.accountLogLabel : logCtx.accountLogLabel,
@@ -672,6 +673,11 @@ export async function prepareResponsesTransport(
         return buildWithOriginalCatalog({ ...requestParsed, _rawBody: projected }, incoming);
       };
     }
+    const buildWithHostedAdvisorPolicy = resolved.buildRequest.bind(resolved);
+    resolved.buildRequest = (requestParsed, incoming) => {
+      hostedAdvisorSpendGuard?.(requestParsed);
+      return buildWithHostedAdvisorPolicy(requestParsed, incoming);
+    };
     if (route.provider.authMode === "forward") return resolved;
     const binding: DispatchBinding | undefined = route.provider.authMode === "oauth"
       ? oauthSelection && servingOAuthSnapshot
@@ -1545,6 +1551,8 @@ export async function prepareResponsesTransport(
     applyFailoverSnapshot,
     selectionIsCurrent,
     resolveSelectionAdapter,
+    get hostedAdvisorSpendGuard() { return hostedAdvisorSpendGuard; },
+    set hostedAdvisorSpendGuard(guard: typeof hostedAdvisorSpendGuard) { hostedAdvisorSpendGuard = guard; },
     resolveCopilotSelection,
     copilotRefusalResponse,
     refreshRunTurnAdapter,

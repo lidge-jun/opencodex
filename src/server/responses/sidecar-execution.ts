@@ -102,6 +102,7 @@ export async function executeResponsesSidecars(
     | "oauthDispatch"
     | "noteRoutedAttemptSend"
     | "bindKeyUsageFromBridge"
+    | "hostedAdvisorSpendGuard"
   >,
   sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction" | "openAiSidecar">,
   responseEffects: Pick<
@@ -193,23 +194,36 @@ export async function executeResponsesSidecars(
   // Read the actual authenticated target's captured ceilings before an optional plan can await;
   // this query never starts or changes the main-model accounting mode.
   let hostedAdvisorWithheld = false;
-  if (hasAdvisorServerTools(parsed) && advisorServerToolDestination(route.provider)) {
-    const target = responsesHostedAdvisorSpendTarget(logCtx, route.providerName);
-    if (sendBudgetState.hasCapturedSpendCeiling(target)) {
-      withholdAdvisorServerTools(parsed);
+  const withholdHostedAdvisorBySpend = (request = parsed) => {
+    if (!hostedAdvisorWithheld && advisorServerToolDestination(route.provider)
+      && (hasAdvisorServerTools(parsed) || hasAdvisorServerTools(request))
+      && sendBudgetState.hasCapturedSpendCeiling(responsesHostedAdvisorSpendTarget(logCtx, route.providerName))) {
       hostedAdvisorWithheld = true;
       addProtocolEntryReason(logCtx, "advisor-tool-withheld-by-spend-policy");
     }
-  }
-  const normalizeWithheldAdvisorChoice = () => {
-    const choice = parsed.options.toolChoice;
+    if (hostedAdvisorWithheld) {
+      withholdAdvisorServerTools(parsed);
+      if (request !== parsed) withholdAdvisorServerTools(request);
+    }
+  };
+  withholdHostedAdvisorBySpend();
+  const normalizeWithheldAdvisorChoice = (request = parsed) => {
+    const choice = request.options.toolChoice;
     // Wait for the final catalog: a client function or the later proxy Advisor may own this name.
     if (!hostedAdvisorWithheld || typeof choice !== "object" || choice === null || !("name" in choice)
-      || choice.name !== ADVISOR_TOOL_NAME || toolChoiceCandidates(parsed.context.tools, choice.name).length !== 0) return;
-    parsed.options = { ...parsed.options, toolChoice: "auto" };
+      || choice.name !== ADVISOR_TOOL_NAME || toolChoiceCandidates(request.context.tools, choice.name).length !== 0) return;
+    request.options = { ...request.options, toolChoice: "auto" };
     // The unmatched named choice authorized no earlier map entries. Charge the newly usable
     // tools once and rebuild their delivery mappings before an adapter can emit their calls.
-    requestState.toolBridgeMaps = buildToolBridgeMaps(parsed, translatorBudget);
+    if (request === parsed) requestState.toolBridgeMaps = buildToolBridgeMaps(parsed, translatorBudget);
+  };
+  // A replacement key/OAuth identity can have a different answer from an authoritative holder.
+  // Every physical adapter builder, including sidecar copies and dispatch-time reselection,
+  // reuses this captured query. Withholding is monotonic across all later identities/copies.
+  transportState.hostedAdvisorSpendGuard = request => {
+    withholdHostedAdvisorBySpend(request);
+    normalizeWithheldAdvisorChoice();
+    if (request !== parsed) normalizeWithheldAdvisorChoice(request);
   };
 
   // Advisor sidecar plan (optional subsystem; null when disabled, unconfigured, or when this
