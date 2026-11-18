@@ -4,6 +4,7 @@ import { comboLogLabel, comboTargetLogLabel } from "../../combos/resolve";
 import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
 import { carryLocalFailureState, projectLocalModelRefusalLog } from "../request-log-failure-detail";
 import { carryProxyErrorContext, hasProxyErrorMessage, markProxyError } from "../../lib/client-error-body";
+import { isXaiPrivacyModeRefusal } from "../../providers/xai-privacy-mode";
 import { classifyUpstreamCondition } from "../../lib/upstream-condition";
 import { effectiveAzureOutputBudget } from "../../adapters/azure";
 import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
@@ -1008,13 +1009,17 @@ export async function executeComboResponses(
   let quotaFailure: Response | undefined;
   let quotaFailedChildLog: RequestLogContext | undefined;
   let contextFailure: { response: Response; childLog: RequestLogContext } | undefined;
+  let xaiPrivacyFailure: { response: Response; childLog: RequestLogContext } | undefined;
   // Snapshotted before dispatch: a 401/403 inside this ladder cools its own provider, and that
   // fresh cooldown is not a reason the request found no target.
   const quotaCooldownSnapshot = snapshotComboQuotaCooldowns(config, comboId);
   const exhaustedFailure = (targetsExhausted = false): Response => {
+    const finalize = (response: Response, childLog = lastFailedChildLog): Response => {
+      if (childLog) adoptFailedChildLog(childLog);
+      return response;
+    };
     if (contextFailure) {
-      adoptFailedChildLog(contextFailure.childLog);
-      return contextFailure.response;
+      return finalize(contextFailure.response, contextFailure.childLog);
     }
     if (lastFailure && lastFailureUpstreamCode === "zero_output_token_limit" && zeroOutputLimitFailure) {
       adoptFailedChildLog(zeroOutputLimitFailure.childLog);
@@ -1022,12 +1027,13 @@ export async function executeComboResponses(
         ? streamingIncompleteResponse(responseModel, zeroOutputLimitFailure.usage, "max_output_tokens", options.translatorBudget)
         : jsonIncompleteResponse(responseModel, zeroOutputLimitFailure.usage, "max_output_tokens");
     }
-    const returnsQuota = lastFailure && [400, 401, 403].includes(lastFailure.status) && quotaFailure;
-    const failedChildLog = returnsQuota ? quotaFailedChildLog : lastFailedChildLog;
-    if (failedChildLog) adoptFailedChildLog(failedChildLog);
-    if (targetsExhausted && toolChoiceRefusalsOnly === true) return comboUnavailableResponse("No available targets for combo; attempted targets cannot preserve mandatory tool_choice", { diagnostics: unsupportedToolChoice(comboTargetsDispatched) });
-    if (!lastFailure || ![400, 401, 403].includes(lastFailure.status)) return lastFailure!;
-    if (quotaFailure) return quotaFailure;
+    if (targetsExhausted && toolChoiceRefusalsOnly === true) return finalize(comboUnavailableResponse("No available targets for combo; attempted targets cannot preserve mandatory tool_choice", { diagnostics: unsupportedToolChoice(comboTargetsDispatched) }));
+    if (lastFailure?.status === 429 || lastFailure?.status === 402) return finalize(lastFailure);
+    const privacyOrLastFailure = () => xaiPrivacyFailure
+      ? finalize(xaiPrivacyFailure.response, xaiPrivacyFailure.childLog)
+      : finalize(lastFailure!);
+    if (!lastFailure || ![400, 401, 403].includes(lastFailure.status)) return privacyOrLastFailure();
+    if (quotaFailure) return finalize(quotaFailure, quotaFailedChildLog);
     // The quota-refused target was cooled before this request picked, so the ladder never saw
     // its refusal. The cooldown, with its Retry-After, is still the honest answer.
     let quotaCooldownUntil: number | undefined;
@@ -1046,12 +1052,12 @@ export async function executeComboResponses(
     }
     const remainingQuotaCooldownMs = quotaCooldownUntil === undefined ? 0 : quotaCooldownUntil - Date.now();
     return remainingQuotaCooldownMs > 0
-      ? comboUnavailableResponse("No available targets for combo", {
+      ? finalize(comboUnavailableResponse("No available targets for combo", {
         retryAfter: String(Math.max(1, Math.ceil(remainingQuotaCooldownMs / 1000))),
         // Only quota-cooled eligible targets can produce this answer, so its class is quota.
         diagnostics: comboUnavailableDiagnostics(combo.targets.length, comboTargetsDispatched,
           Array.from({ length: quotaCooledTargets }, () => "quota" as const)),
-      }) : lastFailure;
+      })) : privacyOrLastFailure();
   };
   // The caller's output ceiling, captured once so a floor applied to one target never
   // leaks into the next. An established parent estimate wins; otherwise (combo dispatch
@@ -1595,6 +1601,8 @@ export async function executeComboResponses(
       }
       return lastFailure;
     }
+    const xaiPrivacyRefusal = isXaiPrivacyModeRefusal(failure.response);
+    if (xaiPrivacyRefusal) xaiPrivacyFailure = { response: failure.response, childLog };
     // Retain a confirmed target context refusal when later retryable failures exhaust the ladder.
     // Hard stops above still return their own verdict, and every attempt keeps its own usage.
     if (!contextFailure && failure.response.status === 400 && isDefiniteContextOverflow(400, failure.classificationText)) {
@@ -1618,7 +1626,8 @@ export async function executeComboResponses(
     );
     const failureNow = Date.now();
     const attemptedTargets = pick.attempted;
-    const failureCooldownScope = isPolicyCandidateRefusal(failure.response) ? "none" : comboFailureCooldownScope(failure.response.status, failure.classificationText, {
+    // Legacy privacy mode is specific to the serving account.
+    const failureCooldownScope = xaiPrivacyRefusal || isPolicyCandidateRefusal(failure.response) ? "none" : comboFailureCooldownScope(failure.response.status, failure.classificationText, {
       code: failure.upstreamCode,
       malformedResponseFormat: failure.malformedResponseFormat,
       openRouterOpaque400: failure.openRouterOpaque400,
@@ -1708,7 +1717,7 @@ export async function executeComboResponses(
     if (!pick) {
       if (options.abortSignal?.aborted) return clientCancelledResponse();
       if (onlyReplayIncompatibleTargetsRemain(attemptedTargets)) {
-        if (contextFailure) return exhaustedFailure();
+        if (contextFailure || xaiPrivacyFailure) return exhaustedFailure();
         adoptFailedChildLog(childLog);
         return targetIncompatibleResponse();
       }

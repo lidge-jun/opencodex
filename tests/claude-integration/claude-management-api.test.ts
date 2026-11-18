@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFil
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, saveConfig, saveConfigPreservingClaudeCode } from "../../src/config";
+import * as configModule from "../../src/config";
 import { startServer as startServerImpl } from "../../src/server";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { writeDesktop3pConfig, removeDesktop3pStandardPivot } from "../../src/claude/desktop-3p";
@@ -17,6 +18,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { desktopFirstPartyTarget } from "../../src/claude/desktop-first-party";
 import { isolateClientLifecycleLock } from "../helpers/client-lifecycle-lock";
 import { claudeKeychainReader } from "../../src/oauth/claude-keychain-read";
+import { WindowsSecretAclSettleTimeoutError } from "../../src/lib/windows-secret-acl";
 
 let keychainProbe: ReturnType<typeof spyOn>;
 
@@ -985,6 +987,65 @@ test("PUT/GET round-trips contextAccounting; 1m drops the key, anything else is 
   }
 });
 
+test("PUT/GET round-trips nativePassthrough; true drops the key, a non-boolean is a 400", async () => {
+  const applySpy = spyOn(systemEnv, "applySystemEnvToggle").mockResolvedValue({ reverted: false, reason: "test" });
+  const server = startServer(0);
+  const put = (nativePassthrough: unknown) => fetch(new URL("/api/claude-code", server.url), {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ nativePassthrough }),
+  });
+  const get = async () => (await fetch(new URL("/api/claude-code", server.url)).then(r => r.json()) as Record<string, unknown>).nativePassthrough;
+  try {
+    expect(await get()).toBe(true);
+    const off = await put(false);
+    expect(off.status).toBe(200);
+    expect(await off.json()).toMatchObject({ nativePassthrough: false });
+    expect(loadConfig().claudeCode?.nativePassthrough).toBe(false);
+    expect(await get()).toBe(false);
+    const on = await put(true);
+    expect(on.status).toBe(200);
+    expect(await on.json()).toMatchObject({ nativePassthrough: true });
+    expect(loadConfig().claudeCode?.nativePassthrough).toBeUndefined();
+    expect(await get()).toBe(true);
+    const bad = await put("off");
+    expect(bad.status).toBe(400);
+    expect(((await bad.json()) as { error: string }).error).toBe("nativePassthrough must be a boolean");
+    expect(loadConfig().claudeCode?.nativePassthrough).toBeUndefined();
+    // Routing reads the live config per request; the launchd env carries nothing that depends on it.
+    expect(applySpy).not.toHaveBeenCalled();
+  } finally {
+    applySpy.mockRestore();
+    await server.stop(true);
+  }
+});
+
+test("PUT leaves live native passthrough and fast mode unchanged when the save fails before publication", async () => {
+  const initial = loadConfig();
+  initial.fastMode = false;
+  initial.claudeCode = { nativePassthrough: false, authModeMigratedAt: "2026-11-18T00:00:00.000Z" };
+  saveConfig(initial);
+  const server = startServer(0);
+  const save = spyOn(configModule, "saveConfigPreservingClaudeCode").mockImplementation(() => {
+    throw new WindowsSecretAclSettleTimeoutError();
+  });
+  const url = new URL("/api/claude-code", server.url);
+  try {
+    const response = await fetch(url, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nativePassthrough: true, fastMode: true }),
+    });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toMatchObject({ code: "write_failed" });
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(loadConfig()).toMatchObject({ claudeCode: { nativePassthrough: false }, fastMode: false });
+    const live = await fetch(url);
+    expect(live.status).toBe(200);
+    expect(await live.json()).toMatchObject({ nativePassthrough: false, fastMode: false });
+  } finally {
+    save.mockRestore();
+    await server.stop(true);
+  }
+});
+
 test("PUT/GET round-trips auto-context (devlog 260712 020)", async () => {
   const server = startServer(0);
   try {
@@ -1076,6 +1137,7 @@ test("PUT validation rejects bad shapes", async () => {
       [{ alwaysEnableEffort: "on" }, "alwaysEnableEffort must be a boolean"],
       [{ autoContext: "on" }, "autoContext must be a boolean"],
       [{ injectAgents: "on" }, "injectAgents must be a boolean"],
+      [{ nativePassthrough: "on" }, "nativePassthrough must be a boolean"],
       [{ blockedSkills: "claude-api" }, "blockedSkills must be an array of non-empty strings, or null"],
       [{ blockedSkills: [""] }, "blockedSkills must be an array of non-empty strings, or null"],
       [{ blockedSkills: [1] }, "blockedSkills must be an array of non-empty strings, or null"],

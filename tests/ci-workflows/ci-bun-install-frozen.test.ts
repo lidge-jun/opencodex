@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { repoPath } from "../helpers/repo-root";
@@ -297,12 +297,21 @@ describe.skipIf(process.platform === "win32")("bun-install-frozen.sh retry polic
   test("retry completes a trusted postinstall interrupted after package extraction", () => {
     const root = mkdtempSync(join(tmpdir(), "ocx-bun-postinstall-"));
     roots.push(root);
+    const bin = join(root, "bin");
+    mkdirSync(bin);
+    symlinkSync(process.execPath, join(bin, "bun"));
+    for (const name of ["timeout", "gtimeout"]) {
+      const timeout = Bun.which(name);
+      if (timeout) symlinkSync(timeout, join(bin, name));
+    }
+    const env = { HOME: root, TMPDIR: root, PATH: `${bin}:/usr/bin:/bin` };
     mkdirSync(join(root, "dep"));
     writeFileSync(join(root, "package.json"), JSON.stringify({
       name: "install-retry-fixture", dependencies: { fixture: "file:./dep" }, trustedDependencies: ["fixture"],
     }));
     writeFileSync(join(root, "dep", "package.json"), JSON.stringify({
-      name: "fixture", version: "1.0.0", scripts: { postinstall: "node postinstall.cjs" },
+      // Run the fixture with the same Bun binary as install, independent of PATH's Node shims.
+      name: "fixture", version: "1.0.0", scripts: { postinstall: "bun postinstall.cjs" },
     }));
     // The first postinstall records extraction, then stalls before producing its binary.
     // A plain install retry skips this already-extracted package and exits zero.
@@ -316,13 +325,13 @@ describe.skipIf(process.platform === "win32")("bun-install-frozen.sh retry polic
       "fs.writeFileSync('binary-ready', 'ready');",
     ].join("\n"));
     const lock = spawnSync(process.execPath, ["install", "--lockfile-only", "--ignore-scripts"], {
-      cwd: root, encoding: "utf8", timeout: 10_000,
+      cwd: root, encoding: "utf8", timeout: 10_000, env,
     });
     expect(lock.status, lock.stdout + lock.stderr).toBe(0);
     const lockBefore = readFileSync(join(root, "bun.lock"), "utf8");
     const result = spawnSync("bash", [script, root], {
       encoding: "utf8", timeout: 20_000,
-      env: { ...process.env, BUN_INSTALL_BIN: process.execPath, BUN_INSTALL_ATTEMPT_SECONDS: "2",
+      env: { ...env, BUN_INSTALL_BIN: process.execPath, BUN_INSTALL_ATTEMPT_SECONDS: "2",
         BUN_INSTALL_KILL_GRACE_SECONDS: "1", BUN_INSTALL_MIN_ATTEMPT_SECONDS: "1" },
     });
     const out = result.stdout + result.stderr;

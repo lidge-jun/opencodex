@@ -9,7 +9,8 @@
  *
  * Opt-in — the suite skips unless the binaries are provided:
  *
- *   export OCX_TEST_OPENCODE_BIN=/path/to/opencode   # verified against 2.0.21
+ *   export OCX_TEST_OPENCODE_BIN=/path/to/opencode   # V2
+ *   export OCX_TEST_OPENCODE_V1_BIN=/path/to/opencode # V1, mixed route test
  *   export OCX_TEST_KILO_BIN=/path/to/kilo           # verified against 7.8.3
  *   # optional, defaults to <tmp>/ocx-live-wire:
  *   export OCX_TEST_LIVE_SCRATCH=/path/to/scratch
@@ -32,7 +33,8 @@ import { join } from "node:path";
 import { buildClientConfig } from "../../src/clients/config-export";
 import { saveConfig } from "../../src/config";
 import { startServer } from "../../src/server";
-import { drainAndShutdown } from "../../src/server/lifecycle";
+import { drainAndShutdown, resetLifecycleDrainStateForTests } from "../../src/server/lifecycle";
+import { observeRequestLogsForTests } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome } from "../helpers/isolated-codex-home";
 import {
@@ -63,12 +65,18 @@ import {
 } from "../helpers/client-export-live-wire";
 
 const OC_BIN = resolveOptInBin(process.env.OCX_TEST_OPENCODE_BIN);
+const OC_V1_BIN = resolveOptInBin(process.env.OCX_TEST_OPENCODE_V1_BIN);
 const KILO_BIN = resolveOptInBin(process.env.OCX_TEST_KILO_BIN);
 const UPSTREAM_TIMEOUT = 240_000;
 
 /** Requests captured since a mark. */
 function since(upstream: LiveWireUpstream, mark: number): CapturedChatRequest[] {
   return upstream.requests.slice(mark);
+}
+
+function chatFixtureConfig(baseUrl: string): OcxConfig {
+  return { port: 0, defaultProvider: "ocxmock",
+    providers: { ocxmock: { adapter: "openai-chat", baseUrl, allowPrivateNetwork: true } } };
 }
 
 describe("live-wire harness subprocess outcomes", () => {
@@ -145,7 +153,9 @@ describe.skipIf(!OC_BIN)("opencode export live wire (opt-in: OCX_TEST_OPENCODE_B
   beforeAll(() => {
     upstream = startLiveWireUpstream();
     client = openCodeHarness(OC_BIN!, "main");
-    client.writeGlobalConfig(buildClientConfig("opencode", { baseUrl: upstream.url, models: liveWireExportModels() }));
+    client.writeGlobalConfig(buildClientConfig("opencode", {
+      baseUrl: upstream.url, models: liveWireExportModels(), config: chatFixtureConfig(upstream.url),
+    }));
   });
 
   afterAll(() => {
@@ -154,7 +164,9 @@ describe.skipIf(!OC_BIN)("opencode export live wire (opt-in: OCX_TEST_OPENCODE_B
   });
 
   test("generated document matches the intended live-wire shape", () => {
-    const generated = buildClientConfig("opencode", { baseUrl: upstream.url, models: liveWireExportModels() });
+    const generated = buildClientConfig("opencode", {
+      baseUrl: upstream.url, models: liveWireExportModels(), config: chatFixtureConfig(upstream.url),
+    });
     expect(generated).toEqual(buildIntendedOpenCodeDocument(upstream.url));
   }, 30_000);
 
@@ -236,7 +248,7 @@ describe.skipIf(!OC_BIN)("opencode export live wire (opt-in: OCX_TEST_OPENCODE_B
     const project = client.freshProject("oc-image");
     upstream.reset();
     const run = await client.run(
-      ["run", "--standalone", "-m", `opencodex/${ALPHA}`, "-f", "pixel.png", "describe the image"],
+      ["run", "--standalone", "-m", `opencodex/${ALPHA}`, "describe the image", "-f", join(project, "pixel.png")],
       { project },
     );
     expect(run.code).toBe(0);
@@ -249,10 +261,13 @@ describe.skipIf(!OC_BIN)("opencode export live wire (opt-in: OCX_TEST_OPENCODE_B
     try {
       const models = liveWireExportModels().map(model => model.namespaced === ALPHA
         ? { ...model, supportsTools: undefined } : model);
-      imageClient.writeGlobalConfig(buildClientConfig("opencode", { baseUrl: upstream.url, models }));
+      imageClient.writeGlobalConfig(buildClientConfig("opencode", {
+        baseUrl: upstream.url, models, config: chatFixtureConfig(upstream.url),
+      }));
       const project = imageClient.freshProject("image");
       upstream.reset();
-      const run = await imageClient.run(["run", "--standalone", "-m", `opencodex/${ALPHA}#max`, "-f", "pixel.png", "describe"], { project });
+      const run = await imageClient.run(["run", "--standalone", "-m", `opencodex/${ALPHA}#max`, "describe",
+        "-f", join(project, "pixel.png")], { project });
       expect(run.code).toBe(0);
       const turn = lastRealTurn(upstream.requests);
       expect(reasoningEffortOf(turn?.body)).toBe("max");
@@ -378,6 +393,85 @@ describe.skipIf(!KILO_BIN)("kilo export live wire (opt-in: OCX_TEST_KILO_BIN)", 
 // Full chain: client -> real ocx proxy -> scripted upstream
 // ===========================================================================
 
+describe("mixed OpenCode export through the real proxy (opt-in)", () => {
+  for (const [generation, bin] of [["V1", OC_V1_BIN], ["V2", OC_BIN]] as const) {
+    test.skipIf(!bin)(`${generation} uses the native upstream protocol for both models from one config`, async () => {
+      const chat = startLiveWireUpstream();
+      const captured: Array<{ path: string; model: unknown; key: string | null }> = [];
+      const responses = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
+        const body = await req.json() as { model?: string };
+        captured.push({ path: new URL(req.url).pathname, model: body.model, key: req.headers.get("authorization") });
+        const content = { type: "output_text", text: "responses-ok", annotations: [] };
+        const item = { type: "message", id: "msg_probe", role: "assistant", status: "completed", content: [content] };
+        const response = { id: "resp_probe", object: "response", created_at: 1, model: body.model,
+          status: "completed", output: [item], usage: { input_tokens: 2, output_tokens: 1, total_tokens: 3 } };
+        const events = [
+          { type: "response.created", response: { ...response, status: "in_progress", output: [] } },
+          { type: "response.output_item.added", output_index: 0, item: { ...item, content: [] } },
+          { type: "response.content_part.added", item_id: item.id, output_index: 0, content_index: 0, part: { ...content, text: "" } },
+          { type: "response.output_text.delta", item_id: item.id, output_index: 0, content_index: 0, delta: content.text },
+          { type: "response.output_text.done", item_id: item.id, output_index: 0, content_index: 0, text: content.text },
+          { type: "response.content_part.done", item_id: item.id, output_index: 0, content_index: 0, part: content },
+          { type: "response.output_item.done", output_index: 0, item },
+          { type: "response.completed", response },
+        ];
+        return new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""),
+          { headers: { "content-type": "text/event-stream" } });
+      } });
+      const client = openCodeHarness(bin!, "mixed", generation === "V1" ? "ERROR" : "error");
+      const oldHome = process.env.OPENCODEX_HOME;
+      const home = mkdtempSync(join(tmpdir(), "ocx-live-mixed-"));
+      const codexHome = installIsolatedCodexHome("ocx-live-mixed-codex-");
+      process.env.OPENCODEX_HOME = home;
+      let proxy: ReturnType<typeof startServer> | undefined;
+      const ingress = new Map<string, string>();
+      const dispose = observeRequestLogsForTests(entry => {
+        if (entry.inboundProtocol && entry.status === 200) ingress.set(entry.model, entry.inboundProtocol);
+      });
+      try {
+        const config: OcxConfig = {
+          ...chatFixtureConfig(chat.url), hostname: "0.0.0.0",
+          apiKeys: [{ id: "wire-test", name: "wire-test", key: LIVE_WIRE_KEY_VALUE, createdAt: "2026-07-31T00:00:00.000Z" }],
+          providers: {
+            ocxmock: { adapter: "openai-chat", baseUrl: chat.url, allowPrivateNetwork: true, apiKey: "upstream-chat" },
+            responses: { adapter: "openai-responses", baseUrl: new URL("/v1", responses.url).href,
+              allowPrivateNetwork: true, apiKey: "upstream-responses" },
+          },
+        };
+        saveConfig(config);
+        proxy = startServer(0);
+        const base = new URL("/v1", proxy.url);
+        base.hostname = "127.0.0.1";
+        const responseModel = "responses/second";
+        const models = [liveWireExportModels()[0]!, { namespaced: responseModel, provider: "responses", id: "second" }];
+        client.writeGlobalConfig(buildClientConfig("opencode", { baseUrl: base.href, models, config }));
+        for (const id of [ALPHA, responseModel]) {
+          const run = await client.run(["run", generation === "V1" ? "--pure" : "--standalone", "-m", `opencodex/${id}`, "hi"],
+            { timeoutMs: 20_000 });
+          if (run.code !== 0) throw new Error(`${id} (timeout: ${run.timedOut}, Chat requests: ${chat.requests.length}, Responses requests: ${captured.length}): ${sanitizeEvidence(run.stderr || run.stdout)}`);
+        }
+        expect(chat.requests.find(req => req.body?.model === "alpha-ladder")).toMatchObject({
+          path: "/v1/chat/completions", headers: { authorization: "Bearer upstream-chat" },
+        });
+        expect(captured).toContainEqual({ path: "/v1/responses", model: "second", key: "Bearer upstream-responses" });
+        expect(ingress.get("alpha-ladder")).toBe("chat");
+        expect(ingress.get("second")).toBe("responses");
+      } finally {
+        if (proxy) await drainAndShutdown(proxy, 5_000);
+        resetLifecycleDrainStateForTests();
+        dispose();
+        if (oldHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = oldHome;
+        codexHome.restore();
+        client.cleanup();
+        chat.stop();
+        responses.stop(true);
+        rmSync(home, { recursive: true, force: true });
+      }
+    }, UPSTREAM_TIMEOUT);
+  }
+});
+
 describe.skipIf(!OC_BIN || !KILO_BIN)("export live wire through the real proxy (opt-in)", () => {
   let upstream: LiveWireUpstream;
   let proxy: ReturnType<typeof startServer>;
@@ -416,7 +510,7 @@ describe.skipIf(!OC_BIN || !KILO_BIN)("export live wire through the real proxy (
     proxy = startServer(0);
     const proxyBase = new URL(proxy.url).origin;
     const models = [...liveWireExportModels(), { ...liveWireExportModels()[0]!, namespaced: "ocxmock/alpha-pinned", id: "alpha-pinned" }];
-    ocClient.writeGlobalConfig(buildClientConfig("opencode", { baseUrl: `${proxyBase}/v1`, models }));
+    ocClient.writeGlobalConfig(buildClientConfig("opencode", { baseUrl: `${proxyBase}/v1`, models, config }));
     kiloClient.writeGlobalConfig(buildClientConfig("kilo", { baseUrl: `${proxyBase}/v1`, models }));
   });
 
@@ -425,6 +519,7 @@ describe.skipIf(!OC_BIN || !KILO_BIN)("export live wire through the real proxy (
     kiloClient?.cleanup();
     upstream?.stop();
     if (proxy) await drainAndShutdown(proxy, 5_000);
+    resetLifecycleDrainStateForTests();
     if (previousOpencodexHome === undefined) delete process.env.OPENCODEX_HOME;
     else process.env.OPENCODEX_HOME = previousOpencodexHome;
     codexHome?.restore();
