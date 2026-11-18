@@ -177,6 +177,8 @@ function printAgentDeferral(): void {
  */
 export async function maybeShowStarPrompt(): Promise<void> {
   try {
+    const { maybeShowTelemetryPrompt } = await import("./telemetry");
+    await maybeShowTelemetryPrompt();
     let isTty = false;
     try {
       isTty = depsForTests?.isTty ? depsForTests.isTty() : isatty(0) && isatty(1);

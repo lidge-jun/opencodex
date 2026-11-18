@@ -101,17 +101,56 @@ test("push and pull_request still supersede an older head on their own ref", () 
 test("every trigger this workflow declares is one the cases above cover", () => {
   // A new trigger would arrive with no decision recorded about whether it
   // supersedes anything, and would inherit the push answer by accident.
-  expect(Object.keys(workflow.on ?? {}).sort()).toEqual(["pull_request", "push", "schedule", "workflow_dispatch"]);
+  expect(Object.keys(workflow.on ?? {}).sort()).toEqual(["pull_request", "workflow_dispatch"]);
+});
+
+test("cross-platform workflows have only PR and manual triggers and reject non-dev dispatches", () => {
+  for (const file of ["ci.yml", "service-lifecycle.yml", "catalog-async-contracts.yml"]) {
+    const parsed = Bun.YAML.parse(readFileSync(repoPath(".github", "workflows", file), "utf8")) as {
+      on: Record<string, unknown>; jobs: Record<string, { if?: string; needs?: string | string[]; strategy?: {matrix?: {os?: string}}; steps?: Array<{name?: string; run?: string; env?: Record<string, string>}> }>;
+    };
+    expect(Object.keys(parsed.on).sort(), file).toEqual(["pull_request", "workflow_dispatch"]);
+    const guard = parsed.jobs[file === "ci.yml" ? "changes" : "validate-source"];
+    const step = guard?.steps?.find(s => s.name === "Validate dispatch source");
+    expect(step?.env?.EVENT_NAME, file).toBe("${{ github.event_name }}");
+    expect(step?.env?.REF, file).toBe("${{ github.ref }}");
+    const run = step?.run;
+    expect(run, file).toBeDefined();
+    for (const [event, ref, ok] of [["workflow_dispatch", "refs/heads/dev", true], ["workflow_dispatch", "refs/heads/main", false], ["pull_request", "refs/pull/1/merge", true]] as const) {
+      // Service has an additional SHA/ancestry validation covered by its own tests.
+      if (file === "service-lifecycle.yml" && event === "workflow_dispatch" && ref === "refs/heads/dev") continue;
+      const result = Bun.spawnSync(["bash", "-c", run!], {env: {PATH: process.env.PATH ?? "/usr/bin:/bin", EVENT_NAME: event, REF: ref, SOURCE_SHA: "a".repeat(40)}});
+      expect(result.exitCode === 0, `${file} ${event} ${ref}`).toBe(ok);
+    }
+    if (file === "catalog-async-contracts.yml") {
+      expect(parsed.jobs.contracts?.needs).toBe("validate-source");
+      const matrix = parsed.jobs.contracts?.strategy?.matrix?.os ?? "";
+      expect(matrix).toContain("github.event_name == 'pull_request' && '[\"ubuntu-latest\"]'");
+      expect(matrix).toContain("'[\"ubuntu-latest\",\"macos-latest\",\"windows-latest\"]'");
+    }
+    if (file === "ci.yml") {
+      for (const id of ["platform-macos", "macos-control", "platform-windows", "widget"]) {
+        const needs = parsed.jobs[id]?.needs;
+        expect(Array.isArray(needs) ? needs : [needs], id).toContain("changes");
+      }
+    }
+    if (file === "service-lifecycle.yml") {
+      for (const id of ["macos-launchd", "windows-schtasks"]) {
+        expect(parsed.jobs[id]?.needs).toBe("validate-source");
+        expect(parsed.jobs[id]?.if).toBe("github.event_name != 'pull_request'");
+      }
+    }
+  }
 });
 
 test("the evaluator refuses an expression it does not model", () => {
   expect(() => render("${{ startsWith(github.ref, 'refs/tags/') }}", push("1"))).toThrow(/unsupported expression term/);
 });
 
-test("scheduled runs on main never share the push group or cancel earlier runs", () => {
-  const scheduled = (run_id: string): GithubContext => ({ event_name: "schedule", ref: "refs/heads/main", run_id });
-  const mainPush: GithubContext = { event_name: "push", ref: "refs/heads/main", run_id: "3" };
-  expect(concurrency(scheduled("1")).group).not.toBe(concurrency(mainPush).group);
+test("scheduled runs never share the push group or cancel earlier runs", () => {
+  const scheduled = (run_id: string): GithubContext => ({ event_name: "schedule", ref: "refs/heads/dev", run_id });
+  const devPush: GithubContext = { event_name: "push", ref: "refs/heads/dev", run_id: "3" };
+  expect(concurrency(scheduled("1")).group).not.toBe(concurrency(devPush).group);
   expect(concurrency(scheduled("1")).group).not.toBe(concurrency(scheduled("2")).group);
   expect(concurrency(scheduled("1")).cancels).toBe("false");
 });

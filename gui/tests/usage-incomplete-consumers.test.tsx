@@ -101,9 +101,7 @@ test("usage response admission classifies both current HTTP 500 and legacy HTTP 
 test("Dashboard warns even when no readable requests remain", async () => {
   await mount(<DashboardOverviewHead locale="en" health={null} providers={[]}
     usage30d={{ ...partial, summary: { requests: 0, totalTokens: 0, coverageRatio: 0 } } as never}
-    usageLoading={false} healthLoading={false} startupHealth={null} projectConfigWarnings={[]}
-    maMode="default" maBusy={false} maHelpTriggerRef={{ current: null }} maHelpOpen={false}
-    setMaHelpOpen={() => {}} switchMaMode={async () => {}} maError={null} />);
+    usageLoading={false} healthLoading={false} startupHealth={null} projectConfigWarnings={[]} />);
   expect(host.textContent).toContain(warning);
 });
 

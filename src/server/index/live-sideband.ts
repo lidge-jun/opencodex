@@ -306,6 +306,18 @@ export function closeLiveSideband(ws: ServerWebSocket<WsData>, code = 1000, reas
   }
 }
 
+/** Only dictation opts in: a validated close gets a separate bounded drain window. */
+export function beginAudioFinalization(ws: ServerWebSocket<WsData>, raw: string | Buffer): void {
+  if (ws.data.liveFinalizationMs === undefined || ws.data.liveFinalizing || ws.data.liveClosing) return;
+  // The frame validator has already accepted this JSON text frame.
+  if (typeof raw !== "string" || JSON.parse(raw).type !== "session.close") return;
+  ws.data.liveFinalizing = true;
+  if (ws.data.liveSessionTimer !== undefined) clearTimeout(ws.data.liveSessionTimer);
+  ws.data.liveSessionTimer = setTimeout(() => {
+    closeLiveSideband(ws, 1000, "audio finalization expired");
+  }, ws.data.liveFinalizationMs);
+}
+
 /**
  * Dial the upstream sideband and report whether its handshake reached 101.
  *
@@ -505,7 +517,9 @@ export function attachLiveSidebandUpstream(
       ws.data.liveOutcome = "timeout";
       closeLiveSideband(ws, 1011, "audio connection timed out");
     }, 10_000);
-    ws.data.liveSessionTimer = setTimeout(() => closeLiveSideband(ws, 1000, "audio session expired"), ws.data.liveMaxSessionMs);
+    ws.data.liveSessionTimer = setTimeout(() => {
+      closeLiveSideband(ws, 1000, "audio session expired");
+    }, ws.data.liveMaxSessionMs);
   }
 
   upstream.addEventListener("close", (event) => {

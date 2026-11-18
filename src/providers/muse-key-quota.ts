@@ -20,6 +20,7 @@
  * 3. DISCARDS THE KEY. The response contains `api_key`. It is never read here, never
  *    logged, and never returned.
  */
+import { createHash } from "node:crypto";
 import { mintMuseApiKey } from "../oauth/meta-muse-device";
 import { museUsageWindowsToQuota } from "./muse-subscription-usage";
 import type { ProviderQuota } from "./quota-types";
@@ -50,13 +51,15 @@ export interface MuseKeyQuotaDeps {
 const backoffUntil = new Map<string, number>();
 const lastSuccessAt = new Map<string, number>();
 /**
- * One in-flight probe per account.
+ * One in-flight probe per account, tagged with the credential that started it.
  *
  * The TTL check alone is not atomic: `?refresh=1` and the reset poller can both pass it
  * before either writes `lastSuccessAt`, which would spend two mints inside one window.
- * Concurrent callers share the first request instead of racing it.
+ * Concurrent callers for the same credential share the first request instead of racing it.
+ * A replacement credential neither receives the older result nor starts a parallel mint;
+ * a later poll retries subject to the account-scoped success spacing or failure backoff.
  */
-const inFlight = new Map<string, Promise<ProviderQuota | null>>();
+const inFlight = new Map<string, { identity: string; promise: Promise<ProviderQuota | null> }>();
 
 /** Test seam only. */
 export function resetMuseKeyQuotaBackoff(): void {
@@ -74,6 +77,7 @@ export async function fetchMuseKeyQuotaSnapshot(
   oauthAccessToken: string,
   deps: MuseKeyQuotaDeps = {},
   signal?: AbortSignal,
+  identity?: string,
 ): Promise<ProviderQuota | null> {
   const now = deps.now ?? Date.now;
   const at = now();
@@ -81,14 +85,18 @@ export async function fetchMuseKeyQuotaSnapshot(
   // Success spacing, enforced even for a forced refresh. See SUCCESS_TTL_MS.
   const last = lastSuccessAt.get(accountId);
   if (last !== undefined && at - last < SUCCESS_TTL_MS) return null;
+  // The token is part of the tag, so a replacement is fenced even when the caller
+  // supplies no explicit owner.
+  const flightIdentity = createHash("sha256").update(JSON.stringify([identity, oauthAccessToken])).digest("hex");
   const running = inFlight.get(accountId);
-  if (running) return await running;
+  if (running) return running.identity === flightIdentity ? await running.promise : null;
   const attempt = probe(accountId, oauthAccessToken, deps, signal);
-  inFlight.set(accountId, attempt);
+  const entry = { identity: flightIdentity, promise: attempt };
+  inFlight.set(accountId, entry);
   try {
     return await attempt;
   } finally {
-    inFlight.delete(accountId);
+    if (inFlight.get(accountId) === entry) inFlight.delete(accountId);
   }
 }
 

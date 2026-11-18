@@ -103,9 +103,11 @@ describe("a spent send budget is reported as this proxy's refusal", () => {
 
   test("reservation denials preserve unbound-history detail on HTTP and SSE response paths", () => {
     const adapter = source("src/server/responses/adapter-dispatch.ts");
+    const refusal = source("src/server/workflow-refusal.ts");
     const passthrough = source("src/server/responses/passthrough-dispatch.ts");
     const runTurn = source("src/server/responses/run-turn-execution.ts");
-    expect(adapter.match(/unboundPoolSpendRefusalResponse\(logCtx\)/g)).toHaveLength(2);
+    expect(adapter.match(/adapterSendBudgetRefusal\(logCtx, sendBudgetState\.workflowRootId, err\.message\)/g)).toHaveLength(2);
+    expect(refusal).toContain("unboundPoolSpendRefusalResponse(logCtx) ?? workflowSendCeilingRefusalResponse(logCtx, rootId)");
     expect(passthrough).toContain("unboundPoolSpendRefusalResponse(logCtx)");
     expect(runTurn).toContain("unboundPoolSpendRefusalMessage(logCtx) ?? err.message");
   });
@@ -136,7 +138,7 @@ describe("a spent send budget is reported as this proxy's refusal", () => {
 const code = "spend_ledger_storage_unavailable";
 const refusal = () => new SpendLedgerFileRefusedError("journal", "extra-hard-link");
 
-async function dispatch(adapter: string, error: Error, recovery = false, runTurn = false, stream = false, combo = false, preDispatch = false) {
+async function dispatch(adapter: string, error: Error, recovery = false, runTurn = false, stream = false, combo = false, preDispatch = false, unbound = false) {
   const oldHome = process.env.OPENCODEX_HOME;
   const oldFetch = globalThis.fetch;
   const home = mkdtempSync(join(tmpdir(), "responses-spend-storage-"));
@@ -146,18 +148,21 @@ async function dispatch(adapter: string, error: Error, recovery = false, runTurn
   clearUpstreamHostHealth(); resetWorkflowBudgetsForTest();
   let sends = 0;
   let refunds = 0;
+  const logCtx: RequestLogContext = { model: "", provider: "" };
+  const recordUnbound = () => {
+    if (unbound) logCtx.spendRefusalDetail = { scope: "pool", limit: 100, projected: 101, includesUnboundPoolHistory: true };
+  };
   const budget = preDispatch ? createRequestExecutionBudget(undefined, undefined, {
-    charge: () => true, refund: () => { refunds++; }, startRequest: () => { if (!recovery || sends > 0) throw error; },
+    charge: () => true, refund: () => { refunds++; }, startRequest: () => { if (!recovery || sends > 0) { recordUnbound(); throw error; } },
   }) : undefined;
   const probeRelease = spyOn(authContext, "releaseCodexAuthContextProbeLease");
   const hostRelease = spyOn(hostHealth, "releaseUpstreamHostAdmission");
-  const logCtx: RequestLogContext = { model: "", provider: "" };
   const originalResolve = resolver.resolveAdapter;
   const adapterSpy = runTurn ? spyOn(resolver, "resolveAdapter").mockImplementation((provider, cache) => {
     if (provider.adapter !== "cursor") return originalResolve(provider, cache);
     return { name: "cursor", buildRequest: () => ({ url: provider.baseUrl, method: "POST", headers: {}, body: "{}" }),
       async *parseStream() { yield { type: "done" }; },
-      async runTurn() { sends++; throw error; },
+      async runTurn() { sends++; recordUnbound(); throw error; },
     } satisfies ProviderAdapter;
   }) : undefined;
   try {
@@ -212,6 +217,39 @@ function assertStorage(result: Awaited<ReturnType<typeof dispatch>>) {
   expect(result.logCtx.localTerminalReason).toBe(code);
   expect(result.logCtx.terminalSource).toBe("synthetic");
 }
+
+describe("unbound pool history at dispatch refusal", () => {
+  for (const adapter of ["openai-responses", "openai-chat"]) {
+    for (const recovery of [false, true]) {
+      test(`${adapter}: ${recovery ? "recovery" : "initial"} reservation returns the local HTTP explanation`, async () => {
+        const result = await dispatch(adapter, new SendBudgetExhaustedError(), recovery, false, false, false, true, true);
+        expect(result.status, result.text).toBe(429);
+        expect(result.payload.error.type).toBe("rate_limit_error");
+        expect(result.text).toContain("unassigned historical provider-pool balances");
+        expect(result.text).not.toContain("Provider unreachable");
+        expect(result.logCtx.localTerminalReason).toBe("workflow_spend_exhausted");
+        expect(result.logCtx.terminalSource).toBe("synthetic");
+        expect(result.sends).toBe(recovery ? 1 : 0);
+      });
+    }
+  }
+
+  test("runTurn: a committed SSE terminal keeps the unbound explanation and send-budget code", async () => {
+    const result = await dispatch("cursor", new SendBudgetExhaustedError(), false, true, true, false, false, true);
+    expect(result.status).toBe(200);
+    expect(result.text).toContain('"code":"request_send_budget_exhausted"');
+    expect(result.text).toContain('"type":"rate_limit_error"');
+    expect(result.text).toContain("unassigned historical provider-pool balances");
+    expect(result.text).not.toContain("Provider unreachable");
+  });
+
+  test("without unbound history the adapter retains the ordinary send-budget refusal", async () => {
+    const result = await dispatch("openai-chat", new SendBudgetExhaustedError(), false, false, false, false, true);
+    expect(result.status).toBe(429);
+    expect(result.payload.error.code).toBe(SEND_BUDGET_EXHAUSTED_CODE);
+    expect(result.text).not.toContain("unassigned historical provider-pool balances");
+  });
+});
 
 describe("Responses spend-ledger storage refusals", () => {
   for (const adapter of ["openai-responses", "openai-chat"]) {

@@ -76,11 +76,14 @@ describe("systemd unit escaping", () => {
     expect(word).toBeDefined();
     const command = decodeSystemdExecWord(word!);
     const pins = command.slice(0, command.indexOf(PIN_END) + PIN_END.length);
-    const output = execFileSync("/bin/sh", ["-c", pins + ' printf "%s\\n%s\\n" "$CODEX_HOME" "$OPENCODEX_HOME"'], {
-      env: { PATH: "/usr/bin:/bin", HOME: "/should-not-appear", USER: "nobody" },
-      encoding: "utf8",
-    });
-    expect(output.split("\n").slice(0, 2)).toEqual([codexHome, opencodexHome]);
+    expect(pins).toBe(`CODEX_HOME='${codexHome}' OPENCODEX_HOME='${opencodexHome}' ${PIN_END}`);
+    if (process.platform !== "win32") {
+      const output = execFileSync("/bin/sh", ["-c", pins + ' printf "%s\\n%s\\n" "$CODEX_HOME" "$OPENCODEX_HOME"'], {
+        env: { PATH: "/usr/bin:/bin", HOME: "/should-not-appear", USER: "nobody" },
+        encoding: "utf8",
+      });
+      expect(output.split("\n").slice(0, 2)).toEqual([codexHome, opencodexHome]);
+    }
   });
 
   test("Environment= keeps $ literal and escapes only specifiers", () => {
@@ -113,7 +116,7 @@ describe("launchd live-job comparison", () => {
   test("the expected command carries the pinned home assignments and that home's token file", () => {
     const command = expectedLaunchdCommand(14001, { state: null, entry: { bun: "/b/bun", cli: "/c/cli.ts" }, homes });
     expect(command).toBe("CODEX_HOME='/pinned/codex' OPENCODEX_HOME='/pinned/opencodex' " + PIN_END + " "
-      + buildServiceShellCommand("/b/bun", "/c/cli.ts", 14001, "/pinned/opencodex/service-api-token"));
+      + buildServiceShellCommand("/b/bun", "/c/cli.ts", 14001, join(homes.opencodexHome, "service-api-token")));
   });
 
   test("an upgraded plist with a live job from the older plist is reloaded, not a no-op", () => {
@@ -185,8 +188,12 @@ describe("launchd plist string encoding", () => {
         .toEqual({ parser, env: [codexHome, opencodexHome, proxyValue] });
       // The exec line keeps the same homes once launchd hands it to /bin/sh.
       const pins = args[2]!.slice(0, args[2]!.indexOf(PIN_END) + PIN_END.length);
-      const output = execFileSync("/bin/sh", ["-c", pins + ' printf "%s\\0%s" "$CODEX_HOME" "$OPENCODEX_HOME"'], { encoding: "utf8" });
-      expect({ parser, homes: output.split("\0") }).toEqual({ parser, homes: [codexHome, opencodexHome] });
+      const quotedOpenCodexHome = opencodexHome.replace(/'/g, "'\\''");
+      expect(pins).toBe(`CODEX_HOME='${codexHome}' OPENCODEX_HOME='${quotedOpenCodexHome}' ${PIN_END}`);
+      if (process.platform !== "win32") {
+        const output = execFileSync("/bin/sh", ["-c", pins + ' printf "%s\\0%s" "$CODEX_HOME" "$OPENCODEX_HOME"'], { encoding: "utf8" });
+        expect({ parser, homes: output.split("\0") }).toEqual({ parser, homes: [codexHome, opencodexHome] });
+      }
     }
   });
 
@@ -226,7 +233,7 @@ describe("launchd status from a shell with other homes", () => {
     const installedOpencodex = "/installed/opencodex";
     const plist = withShellHomes(installedCodex, installedOpencodex, () => buildPlist([]));
     const liveCommand = parsePlistStrings(plist).args[2]!;
-    expect(liveCommand).toContain("'/installed/opencodex/service-api-token'");
+    expect(liveCommand).toContain(`'${join(installedOpencodex, "service-api-token")}'`);
     const launchdPath = serviceState.plistPath();
     const original = fs.readFileSync;
     const read = spyOn(fs, "readFileSync").mockImplementation(((path: any, ...args: any[]) =>

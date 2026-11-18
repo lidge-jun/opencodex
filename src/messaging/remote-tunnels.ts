@@ -37,7 +37,7 @@ export async function startRemoteForwardPair(options: RemoteForwardOptions, budg
   for (let attempt = 0; attempt < FORWARD_SETUP_ATTEMPTS; attempt++) {
     budget.throwIfEnded();
     if (ownerSignal.aborted) throw remoteError("cancelled", "Messaging tunnel setup was cancelled.");
-    const result = exactRecord(JSON.parse(await (deps.run ?? runRemoteHelper)(buildExecArgv({ alias: options.ssh,
+    const result = exactRecord(JSON.parse(await (deps.run ?? runRemoteHelper)(buildExecArgv({ alias: options.ssh, route: null,
       knownHostsFile: options.knownHosts, argv: remoteOcxArgv(["message", "_port"]) }), budget, capacity)), ["port"]);
     budget.throwIfEnded();
     if (!validPort(result.port)) throw remoteError("remote_incompatible", "Remote node did not offer an unprivileged return port.");
@@ -83,7 +83,7 @@ async function startAttempt(options: RemoteForwardOptions, reservation: RemotePo
     budget.throwIfEnded(); if (ownerSignal.aborted) throw remoteError("cancelled", "Messaging tunnel setup was cancelled.");
     for (const [direction, bindPort, targetPort] of [["L", localPort, options.peerPort], ["R", returnPort, options.ownerPort]] as const) {
       budget.throwIfEnded();
-      const argv = buildTunnelArgv({ alias: options.ssh, knownHostsFile: options.knownHosts, direction, bindPort, targetPort });
+      const argv = buildTunnelArgv({ alias: options.ssh, knownHostsFile: options.knownHosts, direction, bindPort, targetPort, route: null });
       if (direction === "L") reservation.handoff();
       const helper = (deps.spawn ?? spawnRemoteHelper)(argv, capacity, ownerSignal);
       helpers.push(helper);

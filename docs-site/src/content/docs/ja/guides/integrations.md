@@ -25,7 +25,7 @@ Windows で絶対パスが必要なオーバーライドには、ドライブ文
 | omo | `~/.omo/agent/models.json` | JSON | 新しいセッション | ループバック用プレースホルダー |
 | Cline CLI | `~/.cline/data/settings/providers.json` と同階層の `models.json` | JSON のペア | Cline の停止と再起動後 | ループバック用プレースホルダー |
 | Kilo | `~/.config/kilo` 内で最初に存在する `kilo.jsonc`、`kilo.json`、`opencode.jsonc`、`opencode.json`、`config.json`（`XDG_CONFIG_HOME` でディレクトリを変更可能。どれもなければ `kilo.jsonc` を作成） | JSONC | 新しいセッション | `OPENCODEX_KILO_API_KEY` |
-| Command Code | `~/.commandcode/providers.json` (Windows の既定ホームを使用する場合: `HOME ?? USERPROFILE` が空文字列や空白のみではなく Windows の絶対パスの場合に限り使用し、それ以外は `homedir()`。別途指定されたホームは保持。その配下の `.commandcode\providers.json`) | JSON | Command Code の次回起動時 | なし — キー不要のループバック (`apiKey: false`) |
+| Command Code | `~/.commandcode/providers.json` (Windows の既定ホームを使用する場合: `HOME ?? USERPROFILE` が空文字列や空白のみではなく Windows の絶対パスの場合に限り使用し、それ以外は `homedir()`。別途指定されたホームは保持。その配下の `.commandcode\providers.json`) | JSON | Command Code の次回起動時 | なし — キー不要のループバック (`apiKey: false`)。デスクトップアプリは独自のサインインが必要で、opencodex は `auth.json` を書き込みません |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` Windows の場合) | JSON | ファイル変更を即時反映 | キー不要のループバック |
 
 生成されるカタログには、各プロバイダーの選択で有効なモデルのみが含まれます。これはダウンロードと管理対象の統合の両方に適用され、Pi と Aside も対象です。管理画面のモデル一覧にはすべてのモデルが表示されるため、追加のモデルを有効にできます。
@@ -100,9 +100,9 @@ Apply、Replace、Disable、Restore はプレビューから始まります。�
 
 計画に変更がない場合、管理対象のクライアント文書は要求した状態にすでになっています。選択された Aside プロファイルでは、文書に変更がなくても、確定によって同期の設定が保存される場合があります。
 
-確認後にファイルが変更されると、古い計画として書き込みが拒否されます。ダイアログは更新された計画に置き換えて再確認を求め、自動再試行はしません。プレビューが一時的に使えない場合は、通常どおりページを再読み込みして操作をやり直してください。
+確認後にファイルが変更されると、古い計画として書き込みが拒否されます。ダイアログは更新された計画に置き換えて再確認を求め、自動再試行はしません。プレビューがモデルカタログ未読み込みを報告した場合、ダイアログは開いたままで **カタログを読み込んで再試行** を表示します。統合一覧を読み直してから計画を再度取得します。
 
-Aside も選択したプロファイル 1 件ずつ同じプレビューと確認の手順を使います。**Sync all profiles** は別の一括操作であり、1 つの統合プレビューには結び付きません。
+Aside も選択したプロファイル 1 件ずつ同じプレビューと確認の手順を使います。**Sync all profiles** は別の一括操作であり、1 つの統合プレビューには結び付きません。1 つの計画は 1 プロファイルのファイルだけを表すため、競合している Aside の概要カードには **プロファイルを選択** が表示され、ブロックの置き換えはそのプロファイルのページで行います。
 
 ## 実際に起こること
 

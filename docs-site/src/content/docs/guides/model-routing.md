@@ -15,6 +15,10 @@ through to one another.
 
 ## Precedence
 
+Before these model rules, an explicit `policy/<id>` or configured routing-profile alias
+evaluates the policy and routes its selected concrete candidate. An unknown reserved
+policy selector fails instead of falling through to provider or default routing.
+
 1. **Exact Codex account selector** — if the id is
    `<selector>/<native-openai-model>` and the selector is configured in `codexAccountNamespaces`,
    the request uses only the mapped stored account and sends the bare native model upstream.
@@ -57,8 +61,8 @@ through to one another.
    | `claude-`, `claude-sonnet-`, `claude-opus-`, `claude-haiku-` | `anthropic` |
    | `llama-`, `mixtral-`, `gemma-` | `groq` |
 
-   This matcher is name-based and, unlike the `defaultModel` / `models[]` scans, currently does not
-   filter a matching provider whose `disabled` flag is true.
+   This matcher is name-based; like the `defaultModel` / `models[]` scans, it skips a matching
+   provider whose `disabled` flag is true.
 
 7. **A provider's `models[]`** — if no prefix rule won and an active provider lists the id in its
    `models[]`, that provider is used. Rule 4 already sends a bare `gpt-*` id to the canonical enabled
@@ -66,6 +70,12 @@ through to one another.
 
 8. **Default provider** — if nothing matched, the id is sent to `config.defaultProvider` unchanged.
    (If no default provider is configured, or it is disabled, routing throws.)
+
+## Model alias templates
+
+`aliasTemplate` (opt-in, per provider) names every model of that provider that has no manual or built-in alias, for example `"aliasTemplate": "{providerAlias}-{modelBasename}"` on a provider whose alias is `CC` turns `reflection/beam:free` into `CC-beam-free`. Only two literal placeholders exist: `{providerAlias}` (the provider's alias; a template that uses it does nothing for a provider without one) and `{modelBasename}` (the last `/` segment of the model id with `:` written as `-`), and `{modelBasename}` is required. The aliases are derived whenever models are resolved and are never written to the config, so a new model gets its alias as soon as it is discovered and removing the template removes them at once.
+
+Manual aliases win, then built-in ones, then the template. A generated name is skipped, never renamed, when it is not a valid alias, starts with a reserved prefix (`gpt-`, `o1-`, `o3-`, `o4-`, `codex-`), or matches anything already claimed: a native model id or alias of the provider, a built-in alias name, a provider name or alias, another provider's manual alias, or a combo id or alias. When two models produce the same name, both are skipped, so the result does not depend on the order models are listed. A bare template alias that another provider's template also produced is ambiguous like any other alias; the `<provider-alias>/<alias>` form still works. Set it with `ocx alias template set <provider> <template>` (or `PUT /api/providers/<name>/alias-template` with `{ "template": … }`, `null` to remove), which reports how many aliases it generates and lists skipped ones with their reason; `ocx alias list` shows generated rows with source `template`. An invalid template in a hand-edited `config.json` is ignored with a warning.
 
 ## API keys and environment variables
 
@@ -92,8 +102,18 @@ Routing and catalog visibility are separate controls:
   using a temporary projection; they leave the running configuration and saved choices untouched.
   Use `ocx models new-policy off` globally, add `--provider <name>` for an override, and inspect
   `ocx models new-arrivals [--json]`. Failed/degraded fetches never change the baseline. Providers
-  with a non-empty `selectedModels` (including preset mode) are already curated, so this policy is
-  deliberately inert for them.
+  with a non-empty `selectedModels` (including preset mode) are already curated, so `on` and `off`
+  are deliberately inert for them. To keep a hand-picked selection and still get new releases, set
+  the policy to `admit` (`ocx models new-policy admit --provider <name>`, or **Admit** in the
+  provider's new-model policy control): each genuine arrival is appended to that provider's custom
+  `selectedModels` once, saved and applied to the running proxy without a restart. A model you
+  later deselect stays deselected, and `admit` never widens a preset-derived selection or changes
+  a provider without a selection.
+- `ocx models new-arrivals` and `GET /api/model-discovery` report each recent arrival as
+  `enabled` (visible in the picker), `not-selected` (the provider's selection leaves it out),
+  `auto-disabled` (the `off` policy disabled it) or `disabled` (disabled by you). The status uses
+  the picker's own rules, so an Antigravity model selected through one of its effort tiers reads
+  `enabled`, and one whose known tiers you all disabled reads `disabled`.
 - `provider.disabled: true` removes that provider from catalog discovery. Explicit
   `provider/model` requests fail, and `defaultModel` / `models[]` scans skip it.
 - Routed catalog rows are cloned from the Codex-native template, so native-only delivery flags are

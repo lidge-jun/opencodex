@@ -4,9 +4,11 @@ import { act } from "react";
 import type { Root } from "react-dom/client";
 import ProviderOverview from "../src/components/provider-workspace/ProviderOverview";
 import ProviderSettings from "../src/components/provider-workspace/ProviderSettings";
+import type { ProviderUpdatePatch } from "../src/components/provider-workspace/types";
 import { LanguageProvider } from "../src/i18n/provider";
 import type { WorkspaceItem } from "../src/provider-workspace/catalog";
 import { acceptActionDialog } from "./helpers/action-dialog";
+import { selectOptionValues, selectTrigger, selectValue } from "./helpers/custom-select";
 
 // The packaged dashboard is served by the proxy itself and, unless it discovers another
 // target, talks to it same-origin with apiBase "" (App.tsx: VITE_API_BASE || ""). An empty
@@ -100,14 +102,35 @@ test("same-origin settings loads and renders endpoint choices and request pacing
   expect(urls).toContain("/api/provider-presets");
   expect(urls).toContain("/api/provider-request-pacing?name=local%20vendor");
   // The endpoint picker is built from the preset response and preselects the saved base URL.
-  const endpoint = Array.from(host.querySelectorAll<HTMLSelectElement>("select"))
-    .find(select => Array.from(select.options).some(option => option.value === "region-b"));
-  expect(endpoint).toBeTruthy();
-  expect(Array.from(endpoint!.options).map(option => option.value)).toEqual(["region-a", "region-b"]);
-  expect(endpoint!.value).toBe("region-a");
+  const endpoint = selectTrigger(host, '[role="combobox"][aria-label="Endpoint"]');
+  expect(await selectOptionValues(endpoint)).toEqual(["region-a", "region-b"]);
+  expect(selectValue(endpoint)).toBe("region-a");
   // The live pacing status comes from the pacing response.
   const pacing = host.querySelector(".pwi-pacing-status")!.textContent ?? "";
   expect(pacing).toContain("3");
   expect(pacing).toContain("250 ms");
   expect(pacing).toContain("configured");
+});
+
+test("a clean saved base URL refresh moves the endpoint choice and is not saved again", async () => {
+  const patches: ProviderUpdatePatch[] = [];
+  const update = async (_name: string, patch: ProviderUpdatePatch) => { patches.push(patch); return { ok: true }; };
+  await mount(<ProviderSettings item={item} apiBase="" onUpdateProvider={update} />);
+  await act(async () => { await new Promise(resolve => win.setTimeout(resolve, 0)); });
+  const endpoint = () => selectTrigger(host, '[role="combobox"][aria-label="Endpoint"]');
+  expect(selectValue(endpoint())).toBe("region-a");
+
+  const moved = { ...item, baseUrl: "http://127.0.0.2:9/v1" };
+  await act(async () => {
+    root!.render(<LanguageProvider><ProviderSettings item={moved} apiBase="" onUpdateProvider={update} /></LanguageProvider>);
+  });
+  expect(selectValue(endpoint())).toBe("region-b");
+
+  const note = host.querySelector<HTMLTextAreaElement>(".pwi-settings-textarea")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(win.HTMLTextAreaElement.prototype, "value")!.set!.call(note, "note only");
+    note.dispatchEvent(new win.Event("input", { bubbles: true }));
+  });
+  await act(async () => { host.querySelector<HTMLButtonElement>(".pwi-settings-sticky-bar .btn-primary")!.click(); await Promise.resolve(); });
+  expect(patches).toEqual([{ note: "note only" }]);
 });

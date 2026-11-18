@@ -41,15 +41,15 @@ describe("release outcome wiring", () => {
     });
   });
 
-  test("a read-only job reports after publish and attach whatever their result", () => {
-    expect(outcomes?.needs).toEqual(["publish", "attach-release"]);
-    expect(outcomes?.if).toBe("${{ always() && inputs.dry-run != true }}");
+  test("a read-only job reports after publish and attach when dispatch validation succeeded", () => {
+    expect(outcomes?.needs).toEqual(["validate-dispatch", "publish", "attach-release"]);
+    expect(outcomes?.if).toBe("${{ always() && needs.validate-dispatch.result == 'success' && inputs.dry-run != true }}");
     expect(outcomes?.permissions).toEqual({ contents: "read" });
     expect(report?.run?.trim()).toBe("bash scripts/ci/release-outcome-report.sh");
     expect(report?.env).toMatchObject({
       NPM_VERSION_STATE: "${{ needs.publish.outputs.npm_version }}",
       NPM_DIST_TAG_STATE: "${{ needs.publish.outputs.npm_dist_tag }}",
-      RELEASE_VERSION: "${{ inputs.version }}",
+      RELEASE_VERSION: "${{ needs.validate-dispatch.outputs.version }}",
       NPM_DIST_TAG: "${{ inputs.tag }}",
       PUBLISH_RESULT: "${{ needs.publish.result }}",
       ATTACH_RESULT: "${{ needs.attach-release.result }}",

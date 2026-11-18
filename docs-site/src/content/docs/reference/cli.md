@@ -87,7 +87,8 @@ fallback, capability JSON, and provider-specific error handling retain their exi
 `ocx message send (--thread <uuid> | --name <exact-name>) --stdin [--json]`
 submits one correlated peer message, without starting a daemon or resuming a thread.
 See [Local Codex Messaging](/reference/cli/messaging/) for sender context, kinds,
-the tested runtime and `not_sent`/`queued`/`unknown` receipts. No remote transport is included.
+the tested runtime and `not_sent`/`queued`/`unknown` receipts. Without `--host`, these operations are local.
+[Remote peer messaging over SSH](/reference/cli/messaging/#explicit-remote-peers) requires an enrolled host and `--host`; it does not autostart the receiver or automatically resend messages.
 
 ### `ocx provider`
 
@@ -100,7 +101,7 @@ to standard error, leaves standard output empty, and exits 1.
 
 ### `ocx alias`
 
-`ocx alias list [--json]` shows effective user and built-in aliases. Use `ocx alias set <provider>[/<native-model-id>] <alias>` and `ocx alias rm <provider>[/<native-model-id>]` to edit them. Native model ids may contain additional slashes because the selector splits only at the first slash. Enable shipped defaults with `ocx alias defaults on|off [--provider <name>]`.
+`ocx alias list [--json]` shows effective user and built-in aliases. Use `ocx alias set <provider>[/<native-model-id>] <alias>` and `ocx alias rm <provider>[/<native-model-id>]` to edit them. Native model ids may contain additional slashes because the selector splits only at the first slash. Enable shipped defaults with `ocx alias defaults on|off [--provider <name>]`. `ocx alias template set <provider> <template>`, `ocx alias template rm <provider>` and `ocx alias template show [<provider>]` manage a provider's opt-in alias template; see [Model alias templates](/guides/model-routing/#model-alias-templates).
 
 ### `ocx remote-workspace`
 
@@ -179,7 +180,8 @@ See [planning details](/reference/cli/agents/#read-only-codex-cli-update-plan).
 For a reviewed applicable npm-global plan, `ocx system codex-cli-update apply --plan-id <id> --yes`
 performs the exact update and returns a durable job. `ocx system codex-cli-update status <job-id> --json`
 reads its result; use a stable `--request-id` for a lost-response retry. See
-[confirmation and job states](/reference/cli/agents/#confirmed-codex-cli-apply-and-job-status).
+[confirmation and job states](/reference/cli/agents/#confirmed-codex-cli-apply-and-job-status). The dashboard's **Codex → Codex CLI** tab uses the
+same plan, apply and job routes; see [the dashboard guide](/guides/web-dashboard/#applying-a-codex-cli-update-from-the-dashboard).
 
 For Windows x64 installation observation, see [the `attest` command](/reference/cli/agents/#explicit-installation-observation-on-windows-x64). Without explicit paths it observes the selected candidate identified from the proof-bound launcher snapshot; it does not grant update authority or attest runtime selection.
 
@@ -335,6 +337,8 @@ Integer options such as `--limit` require decimal whole numbers within JavaScrip
 ## Windows JSON configuration files
 
 `ocx config validate <file>` and `ocx config import <file> --yes` accept UTF-8 JSON with or without a leading BOM, including stdin (`-`). This supports UTF-8 exports from Windows PowerShell and editors. UTF-16 input is not accepted.
+
+To enter the experimental plaintext subagent mode, use `ocx v2 mode v2-plaintext --acknowledge-plaintext-agent-messages`. Generic `config set` and `config import` refuse a new entry into this mode because the dedicated command also coordinates the native mode transition. Before restoring an exported config that contains `multiAgentMode: "v2-plaintext"`, complete that acknowledged transition first, then import the file. Restoring an already-active mode, changing other settings, and leaving plaintext mode remain allowed. The independent `plaintextV2AgentMessages` preference is unchanged.
 
 ## Default alias listing
 

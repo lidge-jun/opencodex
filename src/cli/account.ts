@@ -1,5 +1,5 @@
 /** `ocx account` — list and switch provider credentials (issue #180). */
-import { apiKeyQuotaText } from "./account-key-quota";
+import { apiKeyQuotaText, quotaUnknownReasonText } from "./account-key-quota";
 import { redactSecretArgs } from "./secret-args";
 import { emptyAccountNextAction, recoveryAccountLabel } from "./account-next-actions";
 import { loadConfig } from "../config";
@@ -57,7 +57,8 @@ const ACCOUNT_USAGE = `Usage:
   ocx account preserve-signed-in openai [on|off|status] [--apply-to-bound] [--json]
   ocx account priority <provider> <account-id|alias|main> [<-100..100|first|earlier|normal|later|last|reset>] [--json]
   ocx account pause <provider> <account-id|alias|main> [--json]
-  ocx account resume <provider> <account-id|alias|main> [--json]
+  ocx account resume <provider> <account-id|alias|main> [--if-healthy] [--json]
+  ocx account reset-affinity <anthropic|anthropic2> [--json]
   ocx account pause-exhausted <provider> [--json]
   ocx account strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>] [--json]
   ocx account sticky <provider> [<1-100>] [--json]
@@ -150,7 +151,7 @@ function quotaText(row: AccountRow): string {
   if (row.type === "api-key") return apiKeyQuotaText(row);
   if (row.quotaUnavailable) return row.quotaFailure ? `unavailable (${row.quotaFailure})` : "unavailable";
   const quota = row.quota;
-  if (!quota) return "-";
+  if (!quota) return row.quotaUnknownReason ? `UNKNOWN (${quotaUnknownReasonText(row.quotaUnknownReason)})` : "-";
   const parts: string[] = [];
   // Two spellings reach this DTO: the per-account provider probe reports `fiveHourPercent`,
   // while the Codex pool reports the same idea as `shortPercent`.
@@ -160,6 +161,8 @@ function quotaText(row: AccountRow): string {
   // Kiro bills a monthly allowance and reports no shorter window, so without this arm a
   // perfectly healthy Kiro account prints "-" and reads as broken.
   if (typeof quota.monthlyPercent === "number") parts.push(`mo ${Math.round(quota.monthlyPercent)}%`);
+  // #8574: the stored weekly reading follows whichever of two live windows came last; say so.
+  if (row.weeklyQuotaConflicts?.length) parts.push("(weekly windows conflict)");
   return parts.length > 0 ? parts.join(" ") : "-";
 }
 
@@ -487,6 +490,10 @@ export async function cmdAccount(args: string[], deps: AccountDeps = {}): Promis
     // dashboard-only capabilities.
     if (sub === "pause") return await cmdPause(rest, deps, true);
     if (sub === "resume") return await cmdPause(rest, deps, false);
+    if (sub === "reset-affinity") {
+      const { cmdResetAffinity } = await import("./account-affinity-reset");
+      return await cmdResetAffinity(rest, deps);
+    }
     if (sub === "pause-exhausted") return await cmdPauseExhausted(rest, deps);
     if (sub === "strategy") return await cmdStrategy(rest, deps);
     if (sub === "sticky") return await cmdSticky(rest, deps);

@@ -40,6 +40,26 @@ function cliDeps(
 }
 
 describe("Codex shim CLI auto-restore policy", () => {
+  test("local model listings do not restore a repairable shim before dispatch", () => {
+    if (process.platform === "win32") return;
+    withInstalledShim(({ home, wrappers, statePath }) => {
+      const stateBefore = readFileSync(statePath);
+      rmSync(wrappers[0]);
+      for (const args of [["models"], ["models", "list", "--json"], ["models", "list-custom", "--json"], ["model", "--json"]]) {
+        const result = spawnSync(process.execPath, [repoPath("src/cli/index.ts"), ...args], {
+          encoding: "utf8", env: { ...process.env, OPENCODEX_HOME: home, OPENCODEX_CODEX_SHIM_AUTO_RESTORE: "1" },
+        });
+        expect(result.status).toBe(0);
+        expect(existsSync(wrappers[0])).toBe(false);
+        expect(readFileSync(statePath)).toEqual(stateBefore);
+      }
+      expect(skipsCodexShimAutoRestore("models", ["models", "add", "p", "m"])).toBe(false);
+      expect(skipsCodexShimAutoRestore("models", ["models", "live"])).toBe(false);
+      expect(autoRestoreCodexShim({ enabled: () => true, stabilitySleep: () => {} }).status).toBe("restored");
+      expect(existsSync(wrappers[0])).toBe(true);
+    });
+  }, 60_000);
+
   test("skips inspection, destructive, and explicit repair commands but keeps start and ensure eligible", () => {
     expect(skipsCodexShimAutoRestore("uninstall", ["uninstall"])).toBe(true);
     expect(skipsCodexShimAutoRestore("remove", ["remove"])).toBe(true);

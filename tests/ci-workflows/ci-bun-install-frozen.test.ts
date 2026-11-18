@@ -7,6 +7,10 @@ import { repoPath } from "../helpers/repo-root";
 
 const script = repoPath("scripts", "ci", "bun-install-frozen.sh");
 const UBUNTU_INSTALL_JOBS = ["test", "test-changed", "storage-policy", "api-usage", "gates"];
+// Trusted runs of the heavy jobs take the lidge self-hosted Ubuntu pool; everything else stays hosted.
+const LIDGE_JOBS = new Set(["test", "test-changed", "gates"]);
+const LIDGE_RUNS_ON = "${{ vars.LIDGE_RUNNERS == 'on' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository || contains(fromJSON('[\"OWNER\",\"MEMBER\",\"COLLABORATOR\"]'), github.event.pull_request.author_association)) && fromJSON('[\"self-hosted\",\"linux\",\"x64\",\"lidge\"]') || 'ubuntu-latest' }}";
+const isUbuntu = (runsOn: string | null) => runsOn === "ubuntu-latest" || runsOn === LIDGE_RUNS_ON;
 
 /** Map each job id in ci.yml to its runs-on value and the run lines it contains. */
 function ciJobs(): Map<string, { runsOn: string | null; text: string }> {
@@ -28,11 +32,11 @@ describe("CI frozen installs are bounded", () => {
     const jobs = ciJobs();
     for (const name of UBUNTU_INSTALL_JOBS) {
       const job = jobs.get(name);
-      expect(job?.runsOn, name).toBe("ubuntu-latest");
+      expect(job?.runsOn, name).toBe(LIDGE_JOBS.has(name) ? LIDGE_RUNS_ON : "ubuntu-latest");
       expect(job!.text, name).toContain("bash scripts/ci/bun-install-frozen.sh . gui");
     }
     for (const [name, job] of jobs) {
-      if (job.runsOn !== "ubuntu-latest") continue;
+      if (!isUbuntu(job.runsOn)) continue;
       // A bare two-step root+gui install, in block or one-line form, is unbounded again.
       expect(/bun install --frozen-lockfile(?:\s*&&\s*|\s*\n\s*)cd gui(?:\s*&&\s*|\s*\n\s*)bun install/.test(job.text), name).toBe(false);
     }

@@ -82,18 +82,22 @@ describe("systemd service unit", () => {
       expect(systemdCommand).toBeDefined();
       expect(systemdCommand).toContain("exec ");
       expect(systemdCommand!.indexOf(pinned.replace(/\\/g, "\\\\"))).toBeLessThan(systemdCommand!.indexOf("exec "));
-      expect(unit).toContain('Environment="CODEX_SQLITE_HOME=' + join(TEST_DIR, "pinned-sqlite-home") + '"');
+      const systemdEscapes: Record<string, string> = { "\\": "\\\\", '"': '\\"', "%": "%%", "\n": "\\n", "\r": "\\r", "\t": "\\t" };
+      const sqliteHome = join(TEST_DIR, "pinned-sqlite-home").replace(/[\\"%\n\r\t]/g, ch => systemdEscapes[ch]!);
+      expect(unit).toContain('Environment="CODEX_SQLITE_HOME=' + sqliteHome + '"');
       expect(unit).not.toContain("local-secret");
       expect(unit).not.toContain('Environment="OPENCODEX_API_AUTH_TOKEN=');
 
       // This is the actual `-lc` behavior used by both service definitions: the profile
       // runs first, then the baked assignment must survive to the child environment.
-      const command = `${pinned} printf '%s\\n%s\\n' "$CODEX_HOME" "$OPENCODEX_HOME"`;
-      const output = execFileSync("/bin/sh", ["-lc", command], {
-        env: { ...process.env, CODEX_HOME: "/manager/codex", OPENCODEX_HOME: "/manager/opencodex" },
-        encoding: "utf8",
-      });
-      expect(output.trim().split("\n")).toEqual([codexHome, opencodexHome]);
+      if (process.platform !== "win32") {
+        const command = `${pinned} printf '%s\\n%s\\n' "$CODEX_HOME" "$OPENCODEX_HOME"`;
+        const output = execFileSync("/bin/sh", ["-lc", command], {
+          env: { ...process.env, CODEX_HOME: "/manager/codex", OPENCODEX_HOME: "/manager/opencodex" },
+          encoding: "utf8",
+        });
+        expect(output.trim().split("\n")).toEqual([codexHome, opencodexHome]);
+      }
 
       expectTextToContainPath(unit, serviceApiTokenFilePath());
     } finally {

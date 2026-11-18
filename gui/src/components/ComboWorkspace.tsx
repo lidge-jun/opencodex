@@ -130,14 +130,14 @@ export default function ComboWorkspace({
   };
 
   return (
-    <div className="combos-workspace-root">
+    <div className={`combos-workspace-root${creatingFirstCombo ? " combos-workspace-root--empty" : ""}`}>
       <aside className="combos-workspace-rail" aria-label={t("cws.railAria")}>
         <div className="combos-workspace-rail-header">
-          <div>
+          <div className="combos-workspace-rail-heading">
             <div className="combos-workspace-rail-title">{t("nav.combos")}</div>
             <div className="combos-workspace-rail-count">{combos.length}</div>
           </div>
-          <button type="button" className="btn btn-primary btn-sm" onClick={handleAdd} aria-label={t("cws.add")}>
+          <button type="button" className={`btn ${creatingFirstCombo ? "btn-ghost" : "btn-primary"} btn-sm`} onClick={handleAdd} aria-label={t("cws.add")}>
             <IconPlus width={14} height={14} /> {t("cws.add")}
           </button>
         </div>
@@ -169,7 +169,9 @@ export default function ComboWorkspace({
         </div>
         )}
         <div className="combos-workspace-rail-list">
-          {filtered.length === 0 && combos.length > 0 ? (
+          {creatingFirstCombo ? (
+            <div className="combos-workspace-rail-empty"><strong>{t("cws.emptyTitle")}</strong><p>{t("cws.empty.createDesc")}</p></div>
+          ) : filtered.length === 0 && combos.length > 0 ? (
             <p className="muted" style={{ padding: "16px" }}>{t("cws.noSearchResults")}</p>
           ) : (
             <>

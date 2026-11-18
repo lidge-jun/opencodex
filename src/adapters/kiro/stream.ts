@@ -385,7 +385,7 @@ async function* parseKiroAttemptEvents(
     };
   }
 
-  let open: { id: string; name: string; chunks: string[]; completion: boolean } | null = null;
+  let open: { id: string; name: string; chunks: string[]; inputBytes: number; completion: boolean } | null = null;
   let openCallId: string | undefined;
   const closeOpenCall = () => {
     if (!openCallId) return;
@@ -571,8 +571,8 @@ async function* parseKiroAttemptEvents(
   const beginTool = (
     id: string,
     name: string,
-  ): { tool?: { id: string; name: string; chunks: string[]; completion: boolean }; terminal?: AdapterEvent } => {
-    const next = { id, name, chunks: [], completion: false };
+  ): { tool?: { id: string; name: string; chunks: string[]; inputBytes: number; completion: boolean }; terminal?: AdapterEvent } => {
+    const next = { id, name, chunks: [], inputBytes: 0, completion: false };
     const terminal = classifyTool(next);
     return terminal ? { terminal } : { tool: next };
   };
@@ -831,12 +831,13 @@ async function* parseKiroAttemptEvents(
             }
           }
           if (open && ev.input !== undefined) {
-            const previousCallBytes = open.chunks.reduce((total, chunk) => total + Buffer.byteLength(chunk), 0);
+            const previousCallBytes = open.inputBytes;
             const nextCallBytes = previousCallBytes + Buffer.byteLength(ev.input);
             const callReservation = budget.reserveTransient(nextCallBytes, { kind: "tool_args", callId: open.id });
             open.chunks.push(ev.input);
             callReservation.commitRetained();
             budget.releaseRetained(previousCallBytes, { kind: "tool_args", callId: open.id });
+            open.inputBytes = nextCallBytes;
             const nextOutputCharsBytes = appendedUtf8Bytes(outputChars, outputCharsBytes, ev.input);
             const toolOutputReservation = budget.reserveTransient(nextOutputCharsBytes, { kind: "retained_collectors" });
             outputChars += ev.input;

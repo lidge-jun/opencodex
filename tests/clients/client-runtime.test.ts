@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -82,6 +82,21 @@ describe("standalone recycle environment", () => {
 });
 
 describe("standalone recycle", () => {
+  // recycleStandalone removes this process's pid and runtime records and flushes link diagnostics
+  // in the OpenCodex home; every case runs against a temp home this process created.
+  let recycleHome = "";
+  let previousRecycleHome: string | undefined;
+  beforeEach(() => {
+    previousRecycleHome = process.env.OPENCODEX_HOME;
+    recycleHome = mkdtempSync(join(tmpdir(), "ocx-recycle-home-"));
+    process.env.OPENCODEX_HOME = recycleHome;
+  });
+  afterEach(() => {
+    if (previousRecycleHome === undefined) delete process.env.OPENCODEX_HOME;
+    else process.env.OPENCODEX_HOME = previousRecycleHome;
+    removeTreeWithRetry(recycleHome);
+  });
+
   async function withServiceMarker<T>(value: string | undefined, run: () => Promise<T>): Promise<T> {
     const previous = process.env.OCX_SERVICE;
     if (value === undefined) delete process.env.OCX_SERVICE;
@@ -159,6 +174,46 @@ describe("standalone recycle", () => {
       else process.env.OPENCODEX_HOME = previousHome;
       removeTreeWithRetry(dir);
     }
+  });
+
+  // Final review: a process launched with OCX_SERVICE=1 can outlive its service registration. A
+  // restart-driven recycle told the service is not viable must start a verified replacement (without
+  // the stale service marker) instead of exiting 1 into nothing.
+  test("a recycle told the service is not viable starts a replacement despite OCX_SERVICE=1", async () => {
+    await withServiceMarker("1", async () => {
+      const calls: string[] = [];
+      await recycleStandalone(serviceApiTokenFingerprint("disconnected-hub-token"), {
+        configuredPort: () => 10456,
+        isDesktopSupervised: () => false,
+        serviceSupervised: () => false,
+        spawnReplacement: async request => { calls.push(`spawn:${request.env?.OCX_SERVICE ?? "unset"}`); },
+        exitProcess: code => { calls.push(`exit:${code}`); },
+      });
+      expect(calls).toEqual(["spawn:unset", "exit:0"]);
+    });
+  });
+
+  // Final review: an authorized detached replacement carries no supervisor marker at all.
+  test("a detached replacement's environment carries no supervisor marker", async () => {
+    await withServiceMarker("1", async () => {
+      const markers = ["OCX_SERVICE", "OCX_SERVICE_MANAGED", "OCX_DESKTOP_SUPERVISED", "OCX_WINDOWS_WRAPPER_PROTOCOL"];
+      const previous = Object.fromEntries(markers.map(name => [name, process.env[name]]));
+      for (const name of markers) process.env[name] = "1";
+      let env: NodeJS.ProcessEnv | undefined;
+      try {
+        await recycleStandalone(serviceApiTokenFingerprint("disconnected-hub-token"), {
+          configuredPort: () => 10456,
+          isDesktopSupervised: () => false,
+          serviceSupervised: () => false,
+          spawnReplacement: async request => { env = request.env; },
+          exitProcess: () => {},
+        });
+      } finally {
+        for (const name of markers) { if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name]; }
+      }
+      expect(env).toBeDefined();
+      for (const name of markers) expect(env?.[name]).toBeUndefined();
+    });
   });
 
   test("a supervised client still exits 1 without spawning", async () => {

@@ -55,6 +55,8 @@ Windows x64 설치 관측은 [`attest` 명령](/ko/reference/cli/agents/)을 참
 
 `ocx config validate <file>`과 `ocx config import <file> --yes`는 선행 BOM이 있는 UTF-8 JSON도 읽습니다. 표준 입력(`-`)에도 적용되므로 Windows PowerShell이나 편집기의 UTF-8 내보내기를 사용할 수 있습니다. UTF-16은 지원하지 않습니다.
 
+실험적인 평문 서브에이전트 모드에 진입하려면 `ocx v2 mode v2-plaintext --acknowledge-plaintext-agent-messages`를 사용하세요. 일반 `config set`과 `config import`는 새로 이 모드에 진입하는 요청을 거부합니다. 전용 명령이 네이티브 모드 전환도 함께 처리하기 때문입니다. `multiAgentMode: "v2-plaintext"`가 포함된 내보내기 파일을 복원하려면 먼저 확인을 거쳐 해당 모드로 전환한 다음 파일을 가져오세요. 이미 활성화된 모드를 복원하거나 다른 설정을 변경하거나 평문 모드에서 나가는 것은 허용됩니다. 독립적인 `plaintextV2AgentMessages` 설정은 변경되지 않습니다.
+
 ## Default alias listing
 
 `ocx alias --json`은 `ocx alias list --json`과 같습니다. `--json`은 명시한 alias 작업의 앞이나 뒤에 둘 수 있습니다.

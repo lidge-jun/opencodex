@@ -37,6 +37,8 @@ export async function startEphemeralHubServer(
   const listeners: Array<ReturnType<typeof Bun.serve>> = [];
   const hostnames: unknown[] = [];
   const serveSpy = spyOn(Bun, "serve").mockImplementation((options) => {
+    // The private local-control socket (#8184) is no TCP ingress: bind it as configured, uncounted.
+    if ("unix" in options && options.unix) return nativeServe(options);
     const listener = nativeServe({ ...options, port: 0 } as Parameters<typeof Bun.serve>[0]);
     listeners.push(listener);
     hostnames.push("hostname" in options ? options.hostname : undefined);

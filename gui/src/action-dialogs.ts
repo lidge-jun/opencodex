@@ -37,6 +37,8 @@ export interface ConfirmActionOptions {
    * the thing the user would be approving. Aborting resolves it as a refusal.
    */
   signal?: AbortSignal;
+  /** Replacement focus target if the original trigger was removed while the dialog was open. */
+  restoreFocusFallback?: (previouslyFocused: HTMLElement | null) => HTMLElement | null;
   /** Overrides the active locale; these dialogs open outside the React provider. */
   locale?: Locale;
 }
@@ -85,6 +87,7 @@ function openModal<T>(
   cancelValue: T,
   resolve: (value: T) => void,
   signal?: AbortSignal,
+  restoreFocusFallback?: (previouslyFocused: HTMLElement | null) => HTMLElement | null,
 ): ModalShell<T> {
   const messages = DICTS[locale];
   const id = `opencodex-action-dialog-${++dialogSequence}`;
@@ -121,12 +124,17 @@ function openModal<T>(
     signal?.removeEventListener("abort", dismissOnNavigation);
     // The caller is answered whatever the teardown does. A dialog left connected is a
     // cosmetic fault; a promise that never settles hangs the handler that awaited it.
+    const focusWasInDialog = dialog.contains(document.activeElement);
     try {
       if (dialog.open && typeof dialog.close === "function") dialog.close();
       dialog.remove();
       // Only when the trigger is still in the document: a dismissal that removed the row
       // the button lived on would otherwise throw on the way out.
       if (previouslyFocused?.isConnected) previouslyFocused.focus();
+      else if (focusWasInDialog) {
+        const fallback = restoreFocusFallback?.(previouslyFocused);
+        if (fallback?.isConnected) fallback.focus();
+      }
     } finally {
       resolve(value);
     }
@@ -209,7 +217,7 @@ export function confirmAction(options: ConfirmActionOptions): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     // Already withdrawn: answer without ever drawing the question.
     if (options.signal?.aborted) { resolve(false); return; }
-    const { form, bodyId, finish } = openModal<boolean>(locale, false, resolve, options.signal);
+    const { form, bodyId, finish } = openModal<boolean>(locale, false, resolve, options.signal, options.restoreFocusFallback);
     appendMessage(form, bodyId, options.message);
 
     const actions = document.createElement("div");

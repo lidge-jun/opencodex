@@ -19,7 +19,7 @@ export const orchestratedChildReview: UpdateReviewTable = {
       'import { waitForOrchestratedChild } from "./orchestrated-child.mjs";',
       'import { classifyOrchestratedOutcome } from "./orchestrated-outcome.mjs";',
       'import { verifyOrchestratedInstall } from "./orchestrated-tree.mjs";',
-      'import { verifyOrchestratedPnpmInstall } from "./orchestrated-pnpm.mjs";',
+      'import { canonicalOrchestratedPnpmOwner, verifyOrchestratedPnpmInstall } from "./orchestrated-pnpm.mjs";',
       'import { resolvePnpmGlobalOwner } from "./pnpm-global-install.mjs";',
       'import { parseOrchestratedUpdateArgs } from "./orchestrated-arguments.mjs";',
     ],
@@ -29,7 +29,7 @@ export const orchestratedChildReview: UpdateReviewTable = {
     ],
     "src/update/orchestrated-pnpm.mjs": [
       // Read-only installed tree and pnpm owner verification.
-      'import { join } from "node:path";',
+      'import { join, resolve } from "node:path";',
       'import { readPnpmGlobalPackage, resolvePnpmGlobalOwner } from "./pnpm-global-install.mjs";',
       'import { verifyPnpmInstallTree } from "./transactional-install.mjs";',
     ],
@@ -103,7 +103,7 @@ export const orchestratedChildReview: UpdateReviewTable = {
     ["src/update/orchestrated-session.mjs", "atomicJson", "renameSync(temp, path)", 1, "home marker only (marker() is atomicJson's sole caller), written only while the session holds the sync/update mutex; same stated home-ancestor precondition as the temp write"],
     ["src/update/orchestrated-session.mjs", "atomicJson", "unlinkSync(temp)", 1, "remove the writer's unrenamed temp path after a failed write; path-based, under the same stated home-ancestor precondition"],
     ["src/update/orchestrated-child.mjs", "waitForOrchestratedChild", "child.kill(signal)", 1, "forward a signal this parent received to its own update child only; the child decides how to stop"],
-    ['src/update/orchestrated-pnpm.mjs', 'verifyOrchestratedPnpmInstall', 'runPnpm(owner.commandPath, args, capture)', 1, "read-only pnpm owner verification probe"],
+    ['src/update/orchestrated-pnpm.mjs', 'verifyOrchestratedPnpmInstall', 'runPnpm(owner.commandPath, args, capture, owner)', 1, "read-only pnpm owner verification probe"],
     ['src/update/orchestrated-child.mjs', 'protectOrchestratedWorkerSignals', 'process.on(signal, () => {})', 1, "pre-mutation signal protection keeps the worker alive"],
   ],
 };

@@ -150,6 +150,20 @@ describe("Aside profile desired state, ownership and history", () => {
     expect((await listAsideProfileStates(input())).enabledCount).toBe(1);
   });
 
+  test("unselected profiles without a block leave the aggregate current (#8355)", async () => {
+    expect((await mutateAsideProfiles(input(), { profileId: 0, enabled: true })).ok).toBe(true);
+    reload();
+    const list = await listAsideProfileStates(input());
+    expect(list.profiles.map(row => [row.profileId, row.enabled, row.state]))
+      .toEqual([[0, true, "current"], [1, false, "absent"], [2, false, "absent"]]);
+    expect(list).toMatchObject({ state: "current", enabledCount: 1, appliedCount: 1, total: 3 });
+    // A selected profile still missing its block keeps the aggregate pending.
+    expect((await mutateAsideProfiles(input(), { profileId: 1, enabled: true })).ok).toBe(true);
+    reload();
+    writeFileSync(path(1), original);
+    expect((await listAsideProfileStates(input())).state).toBe("stale");
+  });
+
   test("a disconnected implicit refresh loads no catalog and creates no ownership store", async () => {
     let loads = 0;
     expect(await refreshAsideProfiles(input({ models: async () => { loads += 1; return models; } }))).toEqual([]);

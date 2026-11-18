@@ -38,6 +38,7 @@ import { LOCAL_MANAGEMENT_READ_PATHS } from "../lib/local-management-capability"
 import { fetchBoundLocalManagementRead } from "../server/local-management-read-client";
 import { collectAppliedCodexSettingsStatus, type CliAppliedCodexSettingsStatus } from "./status-codex-settings";
 import { installDetectionStatus, type InstallDetectionStatus } from "./status-install";
+import { windowsDesktopInstall, withDesktopSkewAdvice } from "../desktop-update/install";
 import { collectLocalCredentials, type LocalCredentialSnapshot } from "../local-credentials/inventory";
 import { collectLinkConnectionGeneration } from "./status-link";
 
@@ -753,9 +754,11 @@ export function unusedProxyWarningLines(input: {
     ];
   }
   if (!input.proxyUp) return [];
+  // `ocx start` refuses beside a live proxy (and under the desktop app); `ocx sync` writes the
+  // routing to the running one under every owner.
   return [
     "⚠️  Codex routing is native — the running proxy is unused.",
-    "   Codex requests go to OpenAI, not this proxy. Re-point with: ocx start",
+    "   Codex requests go to OpenAI, not this proxy. Re-point with: ocx sync",
   ];
 }
 
@@ -912,7 +915,7 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
     }
   })();
   const clientConnection = collectClientConnectionStatus(Date.now(), undefined, {
-    selectedCodexCommand: resolvedRuntime.runtime.command,
+    selectedCodexRuntime: resolvedRuntime.runtime,
   });
   // Asked before the local probes below so a connected client's report is hub-sourced from its
   // first line. Bounded and failure-tolerant: an offline hub degrades the remoteHub block, it
@@ -942,7 +945,9 @@ export async function collectStatus(options: { mainAccountPolicy?: boolean } = {
   const pid = resolveStatusPid(live, pidFile);
   // No extra request: findLiveProxy's identity probe already parsed and validated the
   // healthz body, so the version came back with the liveness result.
-  const versionSkew = computeVersionSkew(packageVersion(), live?.version);
+  // #8246: on a Windows Desktop installation a newer CLI means the MSI installed an update that the
+  // running runtime has not picked up; the warning says so with the command that finishes it.
+  const versionSkew = withDesktopSkewAdvice(computeVersionSkew(packageVersion(), live?.version), windowsDesktopInstall(), live?.source);
   // OCX-6: what this machine applied and, on a Child, when its runtime started. Additive and
   // always present (null when unknown), so `schemaVersion` stays 1.
   const appliedCodexSettings = await collectAppliedCodexSettingsStatus(config, live);

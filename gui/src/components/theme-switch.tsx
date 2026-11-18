@@ -15,20 +15,27 @@ interface ThemeSwitchProps {
 }
 
 /**
- * Icon-only theme switch for the sidebar foot. All three modes stay visible and the current one
- * is filled, so the user picks a mode in one click instead of cycling through a single button
- * whose next state is hidden. Each button carries its mode name as tooltip and accessible name.
+ * One-button theme switch for the sidebar foot, sized like the GitHub row's orbs it sits with.
+ * A click steps light → dark → system. The icon shows the current mode, and because a single
+ * button hides what comes next, its accessible name and tooltip spell out both the current mode
+ * and the one a click switches to.
  */
 export function ThemeSwitch({ theme, onChange }: ThemeSwitchProps) {
   const t = useT();
+  const index = Math.max(0, MODES.findIndex(entry => entry.mode === theme));
+  const current = MODES[index]!;
+  const next = MODES[(index + 1) % MODES.length]!;
+  const label = t("shellV2.themeCycle", { mode: t(current.tkey), next: t(next.tkey) });
   return (
-    <div className="theme-switch" role="group" aria-label={t("theme.label")}>
-      {MODES.map(({ mode, tkey, Icon }) => (
-        <button key={mode} type="button" className="theme-switch__btn" aria-pressed={theme === mode}
-          aria-label={t(tkey)} title={t(tkey)} onClick={() => onChange(mode)}>
-          <Icon aria-hidden />
-        </button>
-      ))}
-    </div>
+    <button
+      type="button"
+      className="sidebar-orb sidebar-theme-toggle"
+      data-mode={theme}
+      onClick={() => onChange(next.mode)}
+      aria-label={label}
+      title={label}
+    >
+      <current.Icon aria-hidden="true" />
+    </button>
   );
 }

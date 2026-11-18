@@ -1,6 +1,6 @@
-import type { ComboExclusionReasons } from "../../combos/resolve";
+import type { ComboExclusion, ComboUnavailableDiagnostics } from "../../combos/resolve";
 import { markProxyError } from "../../lib/client-error-body";
-import { formatClientRetryAfter } from "../../lib/client-retry-after";
+import { appendClientRetryIn, formatClientRetryAfter } from "../../lib/client-retry-after";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { redactSecretString } from "../../lib/redact";
 import { isCyberPolicyMessage, isCyberPolicyCode } from "../../lib/errors";
@@ -70,7 +70,9 @@ export function normalizeUpstreamErrorText(text: string, fallback: string): Norm
       message = redactSecretString(source.message.trim()).slice(0, 500);
     }
     if (typeof source.type === "string" && source.type.trim()) type = source.type.trim();
-    if (typeof source.code === "string" && source.code.trim()) code = source.code.trim();
+    if (typeof source.code === "string" && source.code.trim()) {
+      code = source.code.trim();
+    }
   } catch {
     /* non-JSON upstream body — retain the bounded display-safe text */
   }
@@ -102,25 +104,31 @@ export function decodeRequestErrorResponse(err: unknown, label: string): Respons
 
 export function comboUnavailableResponse(
   message: string,
-  options?: { retryAfter?: string | null; presentation?: "combo" },
+  options?: { retryAfter?: string | null; presentation?: "combo"; diagnostics?: ComboUnavailableDiagnostics },
 ): Response {
   const headers = new Headers({ "Content-Type": "application/json" });
   // Advice leaves in this proxy's format, whatever form the earliest cooldown was recorded in.
   const advice = formatClientRetryAfter(options?.retryAfter);
   if (advice !== undefined) headers.set("Retry-After", advice);
+  // Name the earliest recovery in the body too: a client that drops the header still
+  // shows the user how long the combo stays cooled.
   return markProxyError(new Response(
     JSON.stringify({
-      error: { message, type: "server_error", code: "combo_unavailable" },
+      // Built from the header value itself, so an HTTP-date cannot make the body and header disagree.
+      // `combo` carries the machine-readable cause class and target counts (#7965).
+      error: { message: appendClientRetryIn(message, advice), type: "server_error", code: "combo_unavailable",
+        ...(options?.diagnostics ? { combo: options.diagnostics } : {}) },
     }),
     { status: 503, headers },
   ), options?.presentation);
 }
 
 
-export function comboUnavailable(comboId: string, now = Date.now(), reasons?: ComboExclusionReasons): Response {
-  return comboUnavailableResponse(new NoAvailableComboTargetsError(comboId, reasons).message, {
+export function comboUnavailable(comboId: string, now = Date.now(), exclusion?: ComboExclusion): Response {
+  return comboUnavailableResponse(new NoAvailableComboTargetsError(comboId, exclusion).message, {
     retryAfter: comboCooldownRetryAfterSeconds(comboId, now),
-    presentation: reasons === undefined ? undefined : "combo",
+    presentation: exclusion === undefined ? undefined : "combo",
+    ...(exclusion ? { diagnostics: exclusion.diagnostics } : {}),
   });
 }
 

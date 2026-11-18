@@ -36,10 +36,12 @@ export function registerSseLane(lane: string) {
         expect(facts.sends, key).toBe(before.sends);
         const status = input.kind === "FOLD-502" ? 502 : before.status;
         expect(after.status, key).toBe(status);
+        // A cancel now keeps the usage it already received (#7374 review); the base dropped it.
+        const internal = (row: any) => input.fault === "cancel" ? { ...row, usage: "cancel" } : row;
         if (lane === "fold") {
           expect(after.internal.settlements, key).toEqual(before.internal.settlements.map((row: any) => ({ ...row, status: row.status === 200 ? 502 : row.status })));
-          expect({ ...after.internal, settlements: [] }, key).toEqual({ ...before.internal, settlements: [] });
-        } else expect(after.internal, key).toEqual(before.internal);
+          expect(internal({ ...after.internal, settlements: [] }), key).toEqual(internal({ ...before.internal, settlements: [] }));
+        } else expect(internal(after.internal), key).toEqual(internal(before.internal));
         const ordinary = input.kind === "non-error" || input.kind === "rename" || lane === "tap";
         if (ordinary) {
           expect(after.bodySha256, key).toBe(before.bodySha256);

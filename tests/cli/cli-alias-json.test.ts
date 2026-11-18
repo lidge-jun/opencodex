@@ -56,3 +56,36 @@ describe("alias failure boundaries", () => {
     },
   );
 });
+
+describe("#7705 alias template commands", () => {
+  test("set, rm and show reach the template route and the list", async () => {
+    const out = spyOn(console, "log").mockImplementation(() => {});
+    const calls: Array<{ path: string; method: string; body: unknown }> = [];
+    const deps = { baseUrl: "http://cli.test", fetchImpl: async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ path: String(input), method: init?.method ?? "GET", body: init?.body ? JSON.parse(String(init.body)) : null });
+      return Response.json({ ok: true, templates: { cc: "{providerAlias}-{modelBasename}" }, preview: { generated: 3, skipped: [] } });
+    } };
+    try {
+      expect(await handleAliasCommand(["template", "set", "cc", "{providerAlias}-{modelBasename}"], deps)).toBe(0);
+      expect(await handleAliasCommand(["template", "rm", "cc"], deps)).toBe(0);
+      expect(await handleAliasCommand(["template", "show", "cc"], deps)).toBe(0);
+      expect(calls).toEqual([
+        { path: "http://cli.test/api/providers/cc/alias-template", method: "PUT", body: { template: "{providerAlias}-{modelBasename}" } },
+        { path: "http://cli.test/api/providers/cc/alias-template", method: "PUT", body: { template: null } },
+        { path: "http://cli.test/api/aliases", method: "GET", body: null },
+      ]);
+      expect(out.mock.calls.map(call => call.join(" ")).join("\n")).toContain("cc: {providerAlias}-{modelBasename}");
+    } finally { out.mockRestore(); }
+  });
+
+  test("a template action without its operands is a usage error before any request", async () => {
+    const err = spyOn(console, "error").mockImplementation(() => {});
+    let requests = 0;
+    try {
+      for (const args of [["template"], ["template", "set", "cc"], ["template", "rm"], ["template", "wat", "cc"]]) {
+        expect(await handleAliasCommand(args, { baseUrl: "http://cli.test", fetchImpl: async () => { requests++; return Response.json({}); } })).toBe(2);
+      }
+      expect(requests).toBe(0);
+    } finally { err.mockRestore(); }
+  });
+});

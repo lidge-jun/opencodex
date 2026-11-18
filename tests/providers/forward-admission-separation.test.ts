@@ -6,7 +6,7 @@ import { saveConfig } from "../../src/config";
 import { resolveFirstUsableOpenAiSidecar } from "../../src/providers/openai-sidecar";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
-import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS, removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
 
 const originalFetch = globalThis.fetch;
 const previousHome = process.env.OPENCODEX_HOME;
@@ -19,6 +19,7 @@ function forwardConfig(): OcxConfig {
   return {
     port: 0,
     hostname: "127.0.0.1",
+    clientIntegrations: { codex: false },
     defaultProvider: "openai",
     openaiProviderTierVersion: 2,
     providers: {
@@ -49,7 +50,7 @@ beforeEach(() => {
   }) as typeof fetch;
 });
 
-afterEach(() => {
+afterEach(async () => {
   globalThis.fetch = originalFetch;
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
@@ -57,9 +58,9 @@ afterEach(() => {
   else process.env.OPENCODEX_API_AUTH_TOKEN = previousDataToken;
   if (previousAdminToken === undefined) delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN;
   else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = previousAdminToken;
-  if (testHome) removeTreeWithRetry(testHome);
+  if (testHome) await removeTreeAfterBackgroundWork(testHome);
   testHome = "";
-});
+}, BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS);
 
 describe("management credentials never leave data-plane forwarding paths", () => {
   test("the shared OpenAI sidecar refuses a management bearer", async () => {

@@ -1,4 +1,7 @@
+import { responseReplayOwnerKey } from "../../responses/state/replay-owner";
+import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
+import { failLinkTurnExpansion, markLinkTurnMissing, observeLinkTurnExpansion } from "../link-turn";
 import { inputAdmissionRefusalMessage } from "./input-admission";
 import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
 import { markProxyError } from "../../lib/client-error-body";
@@ -6,15 +9,17 @@ import { completeClaudeBridgePoolIdentity } from "../claude-bridge-pool-session"
 import type { HandleResponsesOptions, ResponsesRequestContext, ResponsesAdmissionState, ResponsesDispatchers } from "./core-options";
 import type { PolicyRequestEvidence } from "../../routing/evaluator";
 import type { RequestLogContext } from "../request-log";
-import { markProtocolEntry, protocolMarkFeatures } from "../../protocols/trace";
+import { addProtocolEntryReason, markProtocolEntry, protocolMarkFeatures } from "../../protocols/trace";
+import { nativeMessagesToolScopeDenial } from "../messages-native-scope";
+import { advisorServerToolDestination } from "../../adapters/anthropic/advisor-tool";
 import { isAntigravityRoute } from "../antigravity-direct-eligibility";
-import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse } from "./policy-request-scope";
+import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse, MandatoryToolChoiceUnavailableError, mandatoryToolChoiceUnavailableResponse } from "./policy-request-scope";
 import {
   agentTaskRecoveryConfig,
   restoreCachedEncryptedAgentTasks,
   recoverEncryptedAgentTaskWithResult,
 } from "./agent-task-recovery";
-import { readJsonRequestBody, resolveInboundBodyLimitBytes } from "../request-decompress";
+import { admitParsedJsonRequestBody, readJsonRequestBody, resolveInboundBodyLimitBytes, takeParsedRequestBody } from "../request-decompress";
 import {
   clientCancelledResponse,
   decodeRequestErrorResponse,
@@ -22,7 +27,7 @@ import {
   unreadableEncryptedAgentTaskResponse,
 } from "./core-errors";
 import { parseSyntheticRowId } from "../fast-row";
-import { resolveComboId, comboIdFromRawBody, comboExclusionReasons, NoAvailableComboTargetsError, pickComboTarget } from "../../combos";
+import { resolveComboId, comboIdFromRawBody, comboExclusion, NoAvailableComboTargetsError, pickComboTarget } from "../../combos";
 import { INTERCEPT_TARGET_UNAVAILABLE_CODE, interceptTargetUnavailableResponse, resolveChosenTarget, resolveShadowCallTarget } from "./shadow-target-availability";
 import {
   MEMORY_MODEL_TARGET_UNAVAILABLE_CODE,
@@ -41,7 +46,7 @@ import {
   sessionIdHeaderFromRequest,
   reasoningReplayConversationIdFromResponsesRequest,
 } from "../request-log-conversation";
-import { resolveContextPrincipal } from "../auth-cors";
+import { contextPrincipalIdOf, resolveContextPrincipal } from "../auth-cors";
 import { responseTurnMembership } from "./turn-membership";
 import { resolveSkillsSnapshotScopeKey, snapshotSkillsCatalogInBody } from "./skills-snapshot";
 import {
@@ -69,15 +74,18 @@ import {
 import {
   copyPreviousResponseReplayProvenance,
   expandPreviousResponseInput,
+  previousResponseRestoredPrefixLength,
   previousResponseReplayFailure,
   markBodyNonPersistable,
   previousResponseProviderState,
 } from "../../responses/state";
 import { formatErrorResponse } from "../../bridge";
+import { chatCanPreserveMandatoryToolChoice } from "./combo-required-tool-contract";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
 import type { OcxParsedRequest } from "../../types";
 import { buildToolBridgeMaps } from "./collaboration";
 import { parseRequest } from "../../responses/parser";
+import { responsesHasFileImage, responsesHasInstructionImage } from "../../adapters/claude-cli/instruction-images";
 import { anthropicSessionKeyFromParts } from "../../oauth/anthropic-routing";
 import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
@@ -181,6 +189,8 @@ import {
 } from "./account-change-state";
 
 import { redactHostedImageDisplayPaths } from "../responses-hosted-image-display";
+import { eagerCodexToolCatalogSurface, warnEagerCodexToolCatalog } from "./codex-tool-catalog";
+import { codexTurnStartsNewHistory } from "../../adapters/anthropic/per-message-effort";
 
 /** Policy-routing evidence. The direct lane's settings-only body has no conversation to scan. */
 function routeEvidence(options: Pick<HandleResponsesOptions, "directRequest">, parsed: OcxParsedRequest): PolicyRequestEvidence {
@@ -241,13 +251,17 @@ export async function prepareResponsesRequest(
   const agentTaskRecovery = agentTaskRecoveryConfig(config);
   let body: unknown;
   try {
-    body = await readJsonRequestBody(req, translatorBudget, resolveInboundBodyLimitBytes(config.maxInboundBodyBytes));
+    const limit = resolveInboundBodyLimitBytes(config.maxInboundBodyBytes);
+    const attached = takeParsedRequestBody(req);
+    body = attached ? admitParsedJsonRequestBody(attached.body, limit, translatorBudget) : await readJsonRequestBody(req, translatorBudget, limit);
   } catch (err) {
     if (options.abortSignal?.aborted || req.signal.aborted) {
       return clientCancelledResponse();
     }
     return decodeRequestErrorResponse(err, "responses");
   }
+  options.responsesInstructionImage ||= responsesHasInstructionImage(body);
+  options.responsesFileImage ||= responsesHasFileImage(body);
   // Remove display-only artifact paths before helpers, combo dispatch and upstream replay.
   const originalSelector = options.mainHardLockFallbackOverride?.sourceModel ?? options.compactionRoutingOverride?.sourceModel
     ?? (options.comboAttempt || options.policyFallbackCandidate || options.internalDecisionCall || options.memoryModelPhase
@@ -262,6 +276,7 @@ export async function prepareResponsesRequest(
     options.promptCacheKeyIsSharedCohort === true
       ? "system-derived"
       : options.promptCacheKeyIsSharedCohort === false ? "metadata-derived" : "caller",
+    contextPrincipalIdOf(options.admission),
   );
   if (!concreteSelection && !options.compactionRoutingOverride && inboundWire === "responses") {
     options.compactionRoutingOverride = applyCompactionRoutingOverride(body, req.headers, config, {
@@ -426,12 +441,17 @@ export async function prepareResponsesRequest(
   // parent all present the same parent id. `codexConversationIdentity` already reads this header
   // for the same reason, and a surface that must tell siblings apart needs it too (#5033).
   const inboundOwnThreadId = req.headers.get("thread-id")?.trim() || undefined;
+  const replayPrincipal = options.replayPrincipal
+    ? options.replayPrincipal.clientPrincipalId : resolveContextPrincipal(req, config, options.admission);
+  const strictReplay = options.plaintextV2Decision ?? isPlaintextV2AgentMessagesEnabled(config);
+  const replayOwnerKey = strictReplay ? responseReplayOwnerKey(replayPrincipal, inboundOwnThreadId) : undefined;
+  const replayThreadId = strictReplay ? inboundOwnThreadId : inboundClientThreadId;
   const cursorClientThreadId = codexPoolAffinityKey(req.headers);
   const originalBody = body;
   if (options.comboReplaySnapshot) {
     copyPreviousResponseReplayProvenance(options.comboReplaySnapshot.sourceBody, body);
   } else {
-    body = expandPreviousResponseInput(body, inboundClientThreadId);
+    body = expandPreviousResponseInput(body, replayThreadId, replayOwnerKey);
     const replayFailure = previousResponseReplayFailure(body);
     if (replayFailure?.reason === "scope_mismatch") {
       // Bounded and content-free: no task scope and nothing about the retained entry.
@@ -439,6 +459,7 @@ export async function prepareResponsesRequest(
     }
     // Local replay failures require full client replay.
     if (replayFailure) {
+      failLinkTurnExpansion(options.linkTurn, req, logCtx, body, replayFailure.reason);
       return markProxyError(formatErrorResponse(
         400,
         "previous_response_not_found",
@@ -449,6 +470,20 @@ export async function prepareResponsesRequest(
   const previousResponseInputExpanded = options.comboReplaySnapshot?.previousResponseInputExpanded
     ?? (body !== originalBody
       && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string");
+  // Remote Link holds and request-log fields (design T4 sections 5, 9.1): the expanded input, before any upstream I/O.
+  if (!options.comboReplaySnapshot) observeLinkTurnExpansion(options.linkTurn, req, logCtx, body, previousResponseInputExpanded ? "chained"
+    : body && typeof body === "object" && typeof (body as { previous_response_id?: unknown }).previous_response_id === "string" ? "unexpanded" : "none");
+  options.responsesInstructionImage ||= responsesHasInstructionImage(body);
+  options.responsesFileImage ||= responsesHasFileImage(body);
+  // Counted after replay expansion so the catalog this request pays for is the one measured:
+  // input restored from stored continuation state is history, and the prefix removes it.
+  if (inboundWire === "responses" && !concreteSelection) {
+    warnEagerCodexToolCatalog(body, req.headers, {
+      surface: eagerCodexToolCatalogSurface(body, options.compactionRecoveryKind),
+      replayPrefixLength: previousResponseRestoredPrefixLength(body),
+      logicalRequest: logCtx,
+    });
+  }
 
   // Spawn-message compatibility (both directions): agent_message task payloads ride in
   // encrypted_content slots as plaintext. Rewrite them to input_text on the RAW body BEFORE
@@ -515,8 +550,12 @@ export async function prepareResponsesRequest(
       parsed._nativeReasoningMint = options.nativeReasoningMint;
       parsed._anthropicServerTools = options.anthropicServerTools;
       parsed._anthropicServerReplay = options.anthropicServerReplay;
+      parsed._anthropicSystemCachePrefix = options.anthropicSystemCachePrefix;
+      parsed._anthropicInbound = true;
       if (parsed.options.textFormat?.type === "json_schema") parsed._structuredOutputConformance = true;
     }
+    // Codex's own "new" turn metadata, for the experimental Anthropic perMessageEffort option (#6895).
+    parsed._codexNewHistory = codexTurnStartsNewHistory(body, req.headers, options.inboundTransport);
     parsed._promptCacheKeyIsSharedCohort = options.promptCacheKeyIsSharedCohort;
     // The body may have been rebuilt since the inbound observation (previous-response
     // expansion); alias the parsed raw body to the same draft so the outbound
@@ -592,10 +631,13 @@ export async function prepareResponsesRequest(
     }
     return formatErrorResponse(400, "invalid_request_error", err instanceof Error ? err.message : String(err));
   }
+  parsed._plaintextV2Decision = strictReplay;
   options.onRequestBodyRead?.();
-  const responseStateOptions = (force = false): { force?: boolean; clientThreadId?: string } => ({
+  const responseStateOptions = (force = false) => ({
+    replayOwnerKey,
+    compiledPlaintext: parsed._plaintextV2EverPrepared === true,
     ...(force ? { force: true } : {}),
-    ...(parsed._clientThreadId ? { clientThreadId: parsed._clientThreadId } : {}),
+    ...((strictReplay ? inboundOwnThreadId : parsed._clientThreadId) ? { clientThreadId: strictReplay ? inboundOwnThreadId : parsed._clientThreadId } : {}),
   });
   const resolvedConversationId = conversationIdFromResponsesRequest({
     clientThreadId: parsed._clientThreadId,
@@ -697,7 +739,7 @@ export async function prepareResponsesRequest(
       });
       if (!pick) {
         throw new NoAvailableComboTargetsError(candidate.combo.comboId,
-          comboExclusionReasons(config, candidate.combo.comboId, target => !target.metered));
+          comboExclusion(config, candidate.combo.comboId, target => !target.metered));
       }
       const routed = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
       candidate = { ...routed, combo: pick, routeKind: "combo", routeReason: routed.routeReason === "blocked-model-redirect" ? "blocked-model-redirect" : "combo-pick" };
@@ -864,7 +906,7 @@ export async function prepareResponsesRequest(
     if (policyRefusal) return policyRefusal;
     if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(err, logCtx));
     if (err instanceof NoAvailableComboTargetsError) {
-      return comboUnavailable(err.comboId, undefined, err.reasons);
+      return comboUnavailable(err.comboId, undefined, err.exclusion);
     }
     if (err instanceof NoEligiblePolicyCandidateError) {
       // Persist the evaluation trace (per-candidate exclusions + the
@@ -1084,7 +1126,7 @@ export async function prepareResponsesRequest(
         if (policyRefusal) return policyRefusal;
         if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(err, logCtx));
         if (err instanceof NoAvailableComboTargetsError) {
-          return comboUnavailable(err.comboId, undefined, err.reasons);
+          return comboUnavailable(err.comboId, undefined, err.exclusion);
         }
         if (err instanceof NoEligiblePolicyCandidateError) {
           logCtx.routeDecision = err.trace;
@@ -1146,6 +1188,8 @@ export async function prepareResponsesRequest(
         try {
           const reparsed = parseRequest(body);
           const kept: Array<keyof OcxParsedRequest> = [
+            "_plaintextV2Decision",
+            "_plaintextV2EverPrepared",
             "_previousResponseInputExpanded",
             "_providerContinuation",
             "_providerContinuationCandidate",
@@ -1158,6 +1202,7 @@ export async function prepareResponsesRequest(
             "_reasoningReplayScope",
             "_nativeReasoningRetention",
             "_cursorIsolateConversation",
+            "_codexNewHistory",
           ];
           for (const key of kept) {
             if (parsed[key] !== undefined) {
@@ -1306,7 +1351,7 @@ export async function prepareResponsesRequest(
               if (policyRefusal) return policyRefusal;
               if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(err, logCtx));
               if (err instanceof NoAvailableComboTargetsError) {
-                return comboUnavailable(err.comboId, undefined, err.reasons);
+                return comboUnavailable(err.comboId, undefined, err.exclusion);
               }
               if (err instanceof NoEligiblePolicyCandidateError) {
                 logCtx.routeDecision = err.trace;
@@ -1404,6 +1449,7 @@ export async function prepareResponsesRequest(
     hasUnexpandedPreviousResponse
     && isCanonicalOpenAiForwardProvider(route.provider)
   ) {
+    markLinkTurnMissing(logCtx);
     return markProxyError(formatErrorResponse(
       400,
       "previous_response_not_found",
@@ -1430,6 +1476,7 @@ export async function prepareResponsesRequest(
       // An unknown adapter is left to the resolution error it already raises below.
       : continuationWire === undefined || PROVIDER_OWNED_CONTINUATION_WIRES.has(continuationWire);
     if (!upstreamOwnsOmittedHistory) {
+      markLinkTurnMissing(logCtx);
       return markProxyError(formatErrorResponse(
         400,
         "previous_response_not_found",
@@ -1459,12 +1506,20 @@ export async function prepareResponsesRequest(
   });
   try {
     assertPolicyNormalizedRoute(policyScope, admittedPolicyRoute, route);
+    const copilotNegotiationPending = route.providerName === "github-copilot" && route.provider.authMode !== "forward";
+    if (!copilotNegotiationPending && route.provider.adapter === "openai-chat"
+      && !chatCanPreserveMandatoryToolChoice(parsed._rawBody, route.provider, route.modelId, parsed.context.tools ?? [])) {
+      // Combo children carry the refusal's local identity too, so a compatible sibling target
+      // can still be tried; a direct request keeps the client-facing 400 below.
+      if (policyScope.eligibility || options.comboAttempt) throw new MandatoryToolChoiceUnavailableError();
+      return mandatoryToolChoiceUnavailableResponse();
+    }
   } catch (error) {
     const policyRefusal = policyCandidateRefusalResponse(error);
     if (policyRefusal) return policyRefusal;
     throw error;
   }
-  // Normalization is the last thing that can move the destination: resolving an
+  // Static normalization can move the destination: resolving an
   // OpenAI virtual model rewrites route.modelId to the wire id that will
   // actually be billed. A scope checked only before this would authorize the
   // public selector and send the wire model, so the settled route is checked
@@ -1480,6 +1535,15 @@ export async function prepareResponsesRequest(
   }
   if (!routeAllowedByScope(admissionScope, scopedDestination)) {
     return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(new AdmissionModelDeniedError(inboundSelector, scopedDestination), logCtx));
+  }
+  // A typed Advisor runs its own model server-side on this provider (#8448). The native lane refuses
+  // a declaration outside the caller's scope; the Advisor is optional here, so it is not forwarded.
+  const serverTools = parsed._anthropicServerTools;
+  const scopedServerTools = serverTools?.filter(tool =>
+    !nativeMessagesToolScopeDenial(admissionScope, route.providerName, route.modelId, { tools: [tool] }));
+  if (serverTools && scopedServerTools && scopedServerTools.length !== serverTools.length) {
+    parsed._anthropicServerTools = scopedServerTools;
+    if (advisorServerToolDestination(route.provider)) addProtocolEntryReason(logCtx, "advisor-tool-outside-model-scope");
   }
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
   // the normal post-resolution provider label is assigned.

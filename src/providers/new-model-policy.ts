@@ -10,7 +10,13 @@ export const MAX_KNOWN_MODELS_PER_PROVIDER = 2_000;
 export const MAX_RECENT_ARRIVALS_PER_PROVIDER = 50;
 
 export type KnownModelBaseline = NonNullable<NonNullable<OcxConfig["modelDiscovery"]>["knownModels"]>[string];
-export type NewModelPolicy = "on" | "off";
+/**
+ * `on` keeps arrivals visible, `off` disables them, and `admit` (#8236) appends them to a
+ * provider's custom `selectedModels` so a curated picker gains new releases. `admit` touches
+ * only custom selections: a preset owns which flagships arrive, and a provider without a
+ * selection already shows every arrival.
+ */
+export type NewModelPolicy = "on" | "off" | "admit";
 
 /**
  * Which side of the reconciliation is running.
@@ -27,6 +33,8 @@ export interface NewModelPolicyResult {
   newIds: string[];
   nextBaseline: KnownModelBaseline;
   slugsToDisable: string[];
+  /** New ids to append to a custom selection; only under `admit`. */
+  idsToAdmit: string[];
   arrivals: Array<{ id: string; at: string }>;
   overflow: boolean;
 }
@@ -58,6 +66,8 @@ export function applyNewModelPolicy(options: {
   baseline?: KnownModelBaseline;
   policy: NewModelPolicy;
   hasSelectedModels?: boolean;
+  /** A non-empty selection that is not preset-derived; the only kind `admit` widens. */
+  customSelection?: boolean;
   now: string;
   /** See {@link NewModelPolicyMode}; defaults to `converge`. */
   mode?: NewModelPolicyMode;
@@ -68,7 +78,7 @@ export function applyNewModelPolicy(options: {
     return {
       newIds: [],
       nextBaseline: { ids: discovered, removed: [], updatedAt: options.now },
-      slugsToDisable: [], arrivals: [],
+      slugsToDisable: [], idsToAdmit: [], arrivals: [],
       overflow: discovered.length > MAX_KNOWN_MODELS_PER_PROVIDER,
     };
   }
@@ -108,6 +118,7 @@ export function applyNewModelPolicy(options: {
     // deliberate: preset mode owns which matching flagships arrive on.
     slugsToDisable: !overflow && options.policy === "off" && !options.hasSelectedModels
       ? newIds.map(id => routedSlug(options.provider, id)) : [],
+    idsToAdmit: !overflow && options.policy === "admit" && options.customSelection === true ? newIds : [],
     arrivals,
     overflow,
   };
@@ -115,7 +126,7 @@ export function applyNewModelPolicy(options: {
 
 export function effectiveNewModelPolicy(config: OcxConfig, provider: string): NewModelPolicy {
   const local = config.providers[provider]?.newModelPolicy;
-  if (local === "on" || local === "off") return local;
+  if (local === "on" || local === "off" || local === "admit") return local;
   return config.modelDiscovery?.newModelPolicy ?? "on";
 }
 
@@ -178,6 +189,7 @@ export function reconcileSuccessfulModelDiscoveries(options: {
       provider, discoveredIds, baseline,
       policy: effectiveNewModelPolicy(options.config, provider),
       hasSelectedModels: (configured.selectedModels?.length ?? 0) > 0,
+      customSelection: (configured.selectedModels?.length ?? 0) > 0 && configured.modelPreset?.mode !== "preset",
       now: options.now,
       mode: options.mode,
     });
@@ -197,9 +209,23 @@ export function reconcileSuccessfulModelDiscoveries(options: {
         changed = true;
       }
     }
+    if (result.idsToAdmit.length) {
+      const selected = configured.selectedModels ??= [];
+      for (const id of result.idsToAdmit) if (!selected.includes(id)) selected.push(id);
+      changed = true;
+    }
     if (result.arrivals.length) {
       const recent = discovery.recentArrivals ??= {};
-      recent[provider] = [...(recent[provider] ?? []), ...result.arrivals]
+      // Recorded so the status can tell a policy disable from the user's own (#8236); rows from
+      // before these fields keep reading as auto-disabled.
+      const policyDisabled = new Set(result.slugsToDisable);
+      const admitted = new Set(result.idsToAdmit);
+      const rows = result.arrivals.map(row => ({
+        ...row,
+        ...(admitted.has(row.id) ? { admitted: true } : {}),
+        disabledByPolicy: policyDisabled.has(routedSlug(provider, row.id)),
+      }));
+      recent[provider] = [...(recent[provider] ?? []), ...rows]
         .slice(-MAX_RECENT_ARRIVALS_PER_PROVIDER);
       changed = true;
     }

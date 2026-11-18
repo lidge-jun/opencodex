@@ -153,7 +153,7 @@ export interface CodingAgentToolBridgeInput {
   tools: ReadonlyArray<{ name: string; description: string; inputSchema: Record<string, unknown> }>;
   /** CLI-emitted tool name (`mcp__<server>__<tool>`) to the request's wire tool name. */
   emittedNameMap: Map<string, string>;
-  /** Claude replay may emit an exact selected wire name instead of its MCP transport name.
+  /** A CLI may emit an exact selected wire name instead of its MCP transport name.
    * These aliases are output-only: they never enter the CLI's --allowedTools list. */
   acceptWireToolNames?: boolean;
   /** Tool_use blocks accepted in one assistant message. */
@@ -481,7 +481,11 @@ export async function runCodingAgentTurn(input: CodingAgentTurnInput): Promise<v
     strictToolBlockCapture: Boolean(toolBridge),
     partialToolCallIds: toolBridge ? new Set<string>() : undefined,
     completeAssistantToolUse: toolBridge?.completeAssistantToolUse,
-    toolBridgeNames: toolBridge?.completeAssistantToolUse ? toolBridge.emittedNameMap : undefined,
+    toolBridgeNames: toolBridge?.completeAssistantToolUse
+      ? profile.family === "qoder" && wireToolNames
+        ? new Map([...toolBridge.emittedNameMap, ...Array.from(wireToolNames, name => [name, name] as const)])
+        : toolBridge.emittedNameMap
+      : undefined,
   };
   const toolTurnCompletionSignal = toolBridge?.toolTurnCompletionSignal ?? "message_stop";
   const sawSelectedToolTurnStop = (): boolean => toolTurnCompletionSignal === "assistant_tool_use_stop"

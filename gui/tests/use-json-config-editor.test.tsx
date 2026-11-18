@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useEffect } from "react";
 import type { Root } from "react-dom/client";
 import { useJsonConfigEditor, type Config } from "../src/hooks/useJsonConfigEditor";
+import { configureApiTargets } from "../src/api";
+import { standaloneApiTargets } from "../src/api-targets";
 
 const originalFetch = globalThis.fetch;
 const originalDocument = globalThis.document;
@@ -23,6 +25,7 @@ const config: Config = {
       allowPrivateNetwork: true,
       hasApiKey: true,
       hasHeaders: true,
+      vertexCredentialKind: "marker",
       initialModelSelection: { version: 1, registrationId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", status: "pending" },
       note: "derived registry note",
     },
@@ -50,7 +53,7 @@ let addedProviderNames: string[];
 let notifications: Array<{ message: string; ok?: boolean }>;
 
 function Harness() {
-  editor = useJsonConfigEditor({
+  const currentEditor = useJsonConfigEditor({
     apiBase: "/editor",
     config,
     notify: (message, ok) => { notifications.push({ message, ok }); },
@@ -59,6 +62,7 @@ function Harness() {
     onSaved: added => { savedCallbacks += 1; addedProviderNames = added; },
     t: key => key,
   });
+  useEffect(() => { editor = currentEditor; }, [currentEditor]);
   return null;
 }
 
@@ -78,6 +82,7 @@ beforeEach(() => {
     navigator: { configurable: true, value: testWindow.navigator },
     IS_REACT_ACT_ENVIRONMENT: { configurable: true, value: true },
   });
+  configureApiTargets(standaloneApiTargets("/editor"));
   host = testWindow.document.createElement("div") as unknown as HTMLElement;
   testWindow.document.body.appendChild(host as never);
   root = null;
@@ -177,6 +182,9 @@ test("parse failures stay distinct from server failures and failed saves do not 
   expect(notifications.at(-1)).toEqual({ message: "prov.invalidJson", ok: false });
 
   await act(async () => { editor!.restoreJsonEditor(); });
+  const changed = JSON.parse(editor!.draft);
+  changed.providers.alpha.note = "changed before the stale-baseline save";
+  await act(async () => { editor!.setDraft(JSON.stringify(changed)); });
   responseFactory = async () => Response.json({ error: "stale baseline" }, { status: 409 });
   await act(async () => { expect(await editor!.saveConfig()).toBe(false); });
 

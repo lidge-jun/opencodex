@@ -34,7 +34,7 @@ const MIGRATED = [
   { name: "Grok", file: "../src/pages/Grok.tsx" },
   { name: "Subagents", file: "../src/pages/Subagents.tsx" },
   { name: "Combos", file: "../src/pages/Combos.tsx" },
-  { name: "Usage", file: "../src/pages/Usage.tsx" },
+  { name: "Usage", file: "../src/pages/Usage.tsx", resourceFile: "../src/components/v2-usage/use-usage-report.ts" },
   { name: "Startup", file: "../src/pages/Startup.tsx" },
   { name: "Logs", file: "../src/pages/Logs.tsx" },
   { name: "Debug", file: "../src/pages/Debug.tsx" },
@@ -49,7 +49,8 @@ const MIGRATED = [
 test("every migrated surface subscribes through the shared resource layer", async () => {
   for (const surface of MIGRATED) {
     const source = await read(surface.file);
-    expect(source, surface.name).toContain("useDataSurface");
+    if ("resourceFile" in surface) expect(source, surface.name).toContain("useUsageReport(");
+    expect("resourceFile" in surface ? await read(surface.resourceFile) : source, surface.name).toContain("useDataSurface");
   }
 });
 
@@ -79,7 +80,7 @@ test("every migrated surface reports a revalidation over existing content", asyn
   for (const surface of MIGRATED) {
     const source = await read(surface.file);
     if (silentRevalidation.has(surface.name)) {
-      expect(usesField(source, "refreshing") || usesField(source, "loading"), surface.name).toBe(true);
+      expect(usesField(source, "refreshing") || usesField(source, "loading") || ("resourceFile" in surface && usesField(await read(surface.resourceFile), "refreshing")), surface.name).toBe(true);
       continue;
     }
     expect(source, surface.name).toContain("DataSurfaceStatus");

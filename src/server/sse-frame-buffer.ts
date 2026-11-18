@@ -288,6 +288,11 @@ export class BoundedSseFrameBuffer {
     }
   }
 
+  /** Bytes retained for an unfinished frame, including a possible delimiter prefix. */
+  get pendingBytes(): number {
+    return this.candidateBytes + this.delimiterTail.byteLength;
+  }
+
   /** Return the final unterminated block bytes and release all retained state. */
   finish(): Uint8Array {
     if (this.disposed) return EMPTY_BYTES;

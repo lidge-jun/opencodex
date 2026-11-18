@@ -63,6 +63,7 @@ const systemMessageItemSchema = z.object({
 });
 const assistantMessageItemSchema = z.object({
   type: z.literal("message").optional(),
+  id: z.string().optional(),
   role: z.literal("assistant"),
   content: z.union([z.string(), z.array(outputContentBlockSchema)]).optional(),
   phase: z.enum(["commentary", "final_answer"]).optional(),

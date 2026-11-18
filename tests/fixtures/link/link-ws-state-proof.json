@@ -1,0 +1,22 @@
+{
+  "schema": "ocx.link.ws-state-proof/1",
+  "description": "Vectors for the Home's link WebSocket state proof (linkWebsocketStateProof in src/link/relay-auth.ts): HMAC-SHA256 under the 32 bytes decoded from the hex fingerprint over \"opencodex-link-ws-v1\" NUL keyId NUL linkId NUL nonce NUL value. Checked by tests/clients/link-ocx-child-ws-gate.test.ts (TypeScript) and native/ocx-child/src/link_ws_advert.rs (Rust).",
+  "cases": [
+    {
+      "fingerprint": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "keyId": "key-1",
+      "linkId": "lnk_0123456789abcdef",
+      "nonce": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "value": "on",
+      "proof": "1a770bf50e23218071ca4f04df9b05b550f9f31b5ea65e75aef9eee805ed7218"
+    },
+    {
+      "fingerprint": "b1c4f61f6bce9cd85448b6b27f12373ac933ba2f3a652872f88e7657dac72c7e",
+      "keyId": "link:ws-test",
+      "linkId": "lnk_00000000000000ab",
+      "nonce": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "value": "on",
+      "proof": "0e148e7adb42c1bc6d19be58dd724a1d66d265c4575a14d6e74c66e5c38592f2"
+    }
+  ]
+}

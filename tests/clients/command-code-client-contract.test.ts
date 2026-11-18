@@ -21,17 +21,19 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import {
   buildClientContribution,
   buildCommandCodeClientConfig,
+  commandCodeAuthPath,
   commandCodeConfigPath,
   commandCodeHomeDir,
   commandCodeProviderRoot,
   type ExportContext,
 } from "../../src/clients/config-export";
+import { defaultIntegrationIO, type IntegrationIO } from "../../src/integrations/config-io";
 import { setPath } from "../../src/integrations/merge";
 import { refreshOwnedCatalogIntegrations } from "../../src/integrations/catalog-refresh";
 import { OPENCODE_PROVIDER_ID } from "../../src/clients/config-export/constants";
@@ -42,6 +44,8 @@ import { readIntegrationState } from "../../src/integrations/state";
 import {
   applyIntegration,
   disableIntegration,
+  overwriteIntegration,
+  refreshIntegration,
   restoreIntegration,
   type IntegrationWriteInput,
 } from "../../src/integrations/writer";
@@ -396,5 +400,217 @@ describe("Command Code real integration writer root-precedence and lifecycle", (
     expect(undoRes).toMatchObject({ ok: true, state: "conflict" });
     expect(readFileSync(configPath, "utf8")).toBe(editedText);
     expect(readIntegrationState(input()).state).toBe("unsafe");
+  });
+});
+
+/**
+ * Command Code's credential store (`~/.commandcode/auth.json`) is NOT this
+ * integration's file. The desktop app gates its workspace on a credential there,
+ * but that store is shared with real Command Code logins and every other
+ * provider's tokens; Command Code owns that file and its lifecycle.
+ *
+ * The product contract is therefore strict non-mutation: enabling Command Code
+ * writes only `providers.json`. The desktop user signs in themselves. Every case
+ * below is a behavior boundary on that promise, not an implementation detail —
+ * they assert the file's exact bytes and, where it matters, that the writer never
+ * even opens the path.
+ */
+describe("Command Code desktop credential store is never written", () => {
+  let base: string;
+  let home: string;
+  let store: IntegrationStateStore;
+
+  function input(overrides: Partial<IntegrationWriteInput> = {}): IntegrationWriteInput {
+    return {
+      clientId: "commandcode",
+      models: [
+        { namespaced: "openai/gpt-5.6-sol", provider: "openai", id: "gpt-5.6-sol", contextWindow: 922_000 },
+      ],
+      config: { port: 10100, hostname: "127.0.0.1" } as unknown as IntegrationWriteInput["config"],
+      port: 10100,
+      env: {},
+      home,
+      store,
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), "cc-auth-no-mutation-"));
+    home = join(base, "home");
+    mkdirSync(join(home, ".commandcode"), { recursive: true });
+    store = createIntegrationStateStore(join(base, "store", "integrations"));
+  });
+
+  afterEach(() => removeTreeWithRetry(base));
+
+  function authPath(): string {
+    return commandCodeAuthPath({}, home);
+  }
+
+  function configPath(): string {
+    return commandCodeConfigPath({}, home);
+  }
+
+  /** Records every IO call that names the vendor credential store. */
+  function spyingIO(): { io: IntegrationIO; touched: string[] } {
+    const touched: string[] = [];
+    const real = defaultIntegrationIO(store);
+    const note = (path: string) => {
+      if (path === authPath()) touched.push(path);
+    };
+    return {
+      touched,
+      io: {
+        ...real,
+        readText: path => {
+          note(path);
+          return real.readText(path);
+        },
+        statKind: path => {
+          note(path);
+          return real.statKind(path);
+        },
+        writeText: (path, text) => {
+          note(path);
+          real.writeText(path, text);
+        },
+        removeFile: path => {
+          note(path);
+          real.removeFile(path);
+        },
+        mkdirp: path => {
+          note(path);
+          real.mkdirp(path);
+        },
+      },
+    };
+  }
+
+  test("enabling an absent store creates no credential file", () => {
+    expect(existsSync(authPath())).toBe(false);
+
+    expect(applyIntegration(input()).ok).toBe(true);
+    expect(existsSync(authPath())).toBe(false);
+
+    expect(overwriteIntegration(input()).ok).toBe(true);
+    expect(existsSync(authPath())).toBe(false);
+  });
+
+  test("an existing real login is left byte-for-byte alone", () => {
+    const real = `${JSON.stringify({ apiKey: "fixture-vendor-key", userName: "fixture-user" }, null, 2)}\n`;
+    writeFileSync(authPath(), real, "utf8");
+
+    expect(applyIntegration(input()).ok).toBe(true);
+    expect(readFileSync(authPath(), "utf8")).toBe(real);
+
+    expect(overwriteIntegration(input()).ok).toBe(true);
+    expect(readFileSync(authPath(), "utf8")).toBe(real);
+  });
+
+  test("a signed-out store is not resurrected by apply, overwrite or refresh", async () => {
+    // A deliberate sign-out empties `apiKey` while leaving the file behind.
+    const signedOut = `${JSON.stringify({ apiKey: "" }, null, 2)}\n`;
+    writeFileSync(authPath(), signedOut, "utf8");
+
+    expect(applyIntegration(input()).ok).toBe(true);
+    expect(readFileSync(authPath(), "utf8")).toBe(signedOut);
+
+    expect(overwriteIntegration(input()).ok).toBe(true);
+    expect(readFileSync(authPath(), "utf8")).toBe(signedOut);
+
+    await refreshIntegration(input());
+    expect(readFileSync(authPath(), "utf8")).toBe(signedOut);
+  });
+
+  test("apply and overwrite never read or write the credential path", () => {
+    // Strongest form of the promise: not a preserved write, no touch at all. A
+    // read is outside this integration's credential-store contract.
+    const spy = spyingIO();
+    expect(applyIntegration(input({ io: spy.io })).ok).toBe(true);
+    expect(spy.touched).toEqual([]);
+
+    const spy2 = spyingIO();
+    expect(overwriteIntegration(input({ io: spy2.io })).ok).toBe(true);
+    expect(spy2.touched).toEqual([]);
+
+    expect(existsSync(authPath())).toBe(false);
+  });
+
+  test("a concurrent vendor login or token refresh is not lost", () => {
+    // The store already holds a fresh vendor credential on disk, but the writer's
+    // view of it is stale/keyless.
+    const vendor = `${JSON.stringify({ apiKey: "fixture-fresh-vendor-key", userName: "fixture-user" }, null, 2)}\n`;
+    writeFileSync(authPath(), vendor, "utf8");
+
+    let authReads = 0;
+    const real = defaultIntegrationIO(store);
+    const staleIO: IntegrationIO = {
+      ...real,
+      readText: path => {
+        if (path === authPath()) {
+          authReads += 1;
+          // Simulate the read racing ahead of the vendor's write: report the
+          // keyless state that existed a moment ago, never the fresh token.
+          return { kind: "text", text: "{}" };
+        }
+        return real.readText(path);
+      },
+    };
+
+    expect(applyIntegration(input({ io: staleIO })).ok).toBe(true);
+
+    // The new contract never consults the file, so the vendor's token survives.
+    expect(authReads).toBe(0);
+    expect(readFileSync(authPath(), "utf8")).toBe(vendor);
+  });
+
+  test("an unparseable store is preserved", () => {
+    writeFileSync(authPath(), "{ not json", "utf8");
+    expect(applyIntegration(input()).ok).toBe(true);
+    expect(readFileSync(authPath(), "utf8")).toBe("{ not json");
+  });
+
+  test("another client's credentials in the shared store are untouched", () => {
+    // auth.json is shared with the ChatGPT/Copilot sign-ins the app also writes.
+    const shared = `${JSON.stringify({ codex: { accessToken: "keep-me" } }, null, 2)}\n`;
+    writeFileSync(authPath(), shared, "utf8");
+
+    expect(applyIntegration(input()).ok).toBe(true);
+    expect(readFileSync(authPath(), "utf8")).toBe(shared);
+  });
+
+  test("enabling a different client never touches the Command Code store", () => {
+    mkdirSync(join(home, ".pi"), { recursive: true });
+    const outcome = applyIntegration(input({ clientId: "pi" }));
+    expect(outcome.ok).toBe(true);
+    expect(existsSync(authPath())).toBe(false);
+  });
+
+  test("the provider config and lifecycle still work without touching the store", async () => {
+    const applied = applyIntegration(input());
+    expect(applied.ok).toBe(true);
+    expect(applied.state).toBe("current");
+
+    const providers = JSON.parse(readFileSync(configPath(), "utf8"));
+    expect(publishedCommandCodeRoot(providers)![OPENCODE_PROVIDER_ID]).toBeDefined();
+    expect(publishedCommandCodeRoot(providers)![OPENCODE_PROVIDER_ID]!.apiKey).toBe(false);
+    expect(existsSync(authPath())).toBe(false);
+
+    expect((await disableIntegration(input())).ok).toBe(true);
+    const disabled = JSON.parse(readFileSync(configPath(), "utf8"));
+    expect(publishedCommandCodeRoot(disabled)?.[OPENCODE_PROVIDER_ID]).toBeUndefined();
+    expect(existsSync(authPath())).toBe(false);
+  });
+
+  test("the credential path resolves beside providers.json, including on Windows", () => {
+    expect(commandCodeAuthPath({}, "/home/u")).toBe(join("/home/u", ".commandcode", "auth.json"));
+    // The same `HOME ?? USERPROFILE` resolution the client and the provider path use.
+    const envHome = "C:\\Users\\vendor";
+    expect(commandCodeAuthPath({ HOME: envHome }, undefined, "win32")).toBe(join(envHome, ".commandcode", "auth.json"));
+    const userProfile = "C:\\Users\\default";
+    expect(commandCodeAuthPath({ USERPROFILE: userProfile }, homedir(), "win32")).toBe(join(userProfile, ".commandcode", "auth.json"));
+    // No relocation override, matching `commandCodeHomeDir`.
+    expect(commandCodeAuthPath({ COMMANDCODE_HOME: "C:\\relocated" }, "/home/u")).toBe(join("/home/u", ".commandcode", "auth.json"));
   });
 });

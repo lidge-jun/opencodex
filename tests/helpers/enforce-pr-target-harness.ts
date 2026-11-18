@@ -788,10 +788,6 @@ export async function runEnforcePrTarget(
   function compareResult(basehead: string): { ahead_by: number; behind_by: number } {
     const override = options.compareByBasehead?.[basehead];
     if (override) return override;
-    if (basehead.startsWith("main...")) {
-      // Default: not the #644 shape (several commits ahead of main).
-      return { ahead_by: 8, behind_by: 0 };
-    }
     return { ahead_by: 0, behind_by: 0 };
   }
 
@@ -1087,7 +1083,7 @@ export async function runEnforcePrTarget(
         id: 987654321,
         name: "opencodex",
         full_name: "lidge-jun/opencodex",
-        default_branch: "main",
+        default_branch: "dev",
         private: false,
         owner: { login: "lidge-jun", id: 12345, type: "User" },
         html_url: "https://github.com/lidge-jun/opencodex",

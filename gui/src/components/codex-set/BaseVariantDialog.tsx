@@ -32,6 +32,9 @@ const SWIPE_THRESHOLD = 48;
 /** The parked draft for a slot that has no saved value: an empty one is not dirty. */
 const NEW_SLOT_KEY = "new";
 
+/** A stacked form field (caption over a full-width `.input`), like the custom-layer dialog's. */
+const FIELD = "field mt-3 grid gap-1";
+
 /**
  * The base-prompt variant picker.
  *
@@ -458,9 +461,10 @@ export default function BaseVariantDialog({
                   serializedBytes: importPreview.serializedBytes,
                 })}
               </p>
-              <label className="field">
+              <label className={FIELD}>
                 <span>{t("codexSet.base.importTitle")}</span>
                 <input
+                  className="input"
                   type="text"
                   value={importTitle}
                   disabled={busy}
@@ -526,18 +530,20 @@ export default function BaseVariantDialog({
           </div>
         ) : (
           <>
-            <label className="field">
+            <label className={FIELD}>
               <span>{t("codexSet.base.variantTitle")}</span>
               <input
+                className="input"
                 type="text"
                 value={title}
                 disabled={busy || external}
                 onChange={event => setTitle(event.target.value)}
               />
             </label>
-            <label className="field">
+            <label className={FIELD}>
               <span>{t("codexSet.base.variantBody")}</span>
               <textarea
+                className="input"
                 rows={12}
                 value={body}
                 disabled={busy || external}

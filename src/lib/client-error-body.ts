@@ -1,5 +1,6 @@
 import { CYBER_POLICY_FALLBACK_MESSAGE, classifyError } from "./errors";
 import { classifyUpstreamCondition, upstreamConditionMessage, type UpstreamConditionEvidence } from "./upstream-condition";
+import { isDeveloperRoleRejection } from "./developer-role-rejection";
 
 const openaiTypes = ["invalid_request_error", "authentication_error", "permission_error", "not_found_error", "rate_limit_error", "server_error", "upstream_error", "insufficient_quota", "client_cancelled", "cyber_policy", "model_not_allowed_for_key", "api_error", "overloaded_error"] as const;
 const openaiCodes = [
@@ -42,6 +43,8 @@ export const CLIENT_ERROR_CONTRACTS = {
   stream_incomplete: "The provider stream ended before the request completed.",
 } as const;
 export type ClientErrorContract = keyof typeof CLIENT_ERROR_CONTRACTS;
+/** A provider rejected the `developer` role (#8864); the proxy's own wording, never the provider's. */
+export const DEVELOPER_ROLE_REFUSAL_MESSAGE = "The provider does not accept the developer message role. Send these instructions as a system message, or set foldDeveloperRoleToSystem: true on this provider; retrying this request unchanged will not succeed.";
 export const UNDECLARED_TOOL_CALL_MESSAGE = "routed provider emitted undeclared client tool; only request-declared tools may be called";
 /** Only producers of synthetic incomplete events register these process-local origins. */
 type ProxyIncompleteReason = "adapter_eof" | "upstream_stall_timeout" | "missing_terminal_event";
@@ -59,6 +62,20 @@ export function carryProxyIncompleteContext<T extends object>(source: object, ta
   if (!reasons) { reasons = new Set(); proxyIncompletes.set(source, reasons); }
   proxyIncompletes.set(target, reasons);
   return target;
+}
+/**
+ * A translated `done` whose adapter stop reason was Anthropic's `pause_turn`.
+ *
+ * The bridge still reports that turn to the client as `incomplete/max_output_tokens`, the reason the
+ * wire has always carried there, so the wire cannot distinguish a paused long-running turn the client
+ * is expected to continue from an exhausted output budget. This request-scoped fact carries the
+ * difference without adding or changing a client-visible field: combo stream preflight reads it so a
+ * paused turn is neither replayed on another target nor read as a zero-output token limit.
+ */
+const pausedTurns = new WeakSet<object>();
+export function rememberPausedTurn(context: object): void { pausedTurns.add(context); }
+export function isPausedTurn(context: object | undefined): boolean {
+  return context !== undefined && pausedTurns.has(context);
 }
 const CODE_MESSAGES: ReadonlyMap<string, string> = new Map([
   ["context_length_exceeded", CLIENT_ERROR_CONTRACTS.context_overflow],
@@ -124,6 +141,9 @@ export function actionableRefusalMessage(
   const structured = typeof evidence.code === "string" && evidence.code.length <= 64
     ? evidence.code.trim().toUpperCase().replaceAll("-", "_") : undefined;
   if (structured !== undefined && ACTIONABLE_REFUSALS.has(structured)) return ACTIONABLE_REFUSALS.get(structured);
+  // A role rejection travels as a plain invalid request, so it is read before the carrier gate.
+  if (contract === undefined && (code === null || code === "invalid_request_error")
+    && isDeveloperRoleRejection(evidence.status, evidence.message)) return DEVELOPER_ROLE_REFUSAL_MESSAGE;
   if (code === null || !REFUSAL_CARRIER_CODES.has(code) || typeof evidence.message !== "string") return undefined;
   const scanned = evidence.message.slice(0, REFUSAL_TOKEN_SCAN);
   for (const [token, message] of ACTIONABLE_REFUSALS) {
@@ -182,6 +202,7 @@ export function rememberProxyErrorMessage(context: object, message: string, fiel
 }
 export function carryProxyErrorContext(source: object, target: object): void {
   carryProxyIncompleteContext(source, target);
+  if (pausedTurns.has(source)) pausedTurns.add(target);
   let messages = proxyMessages.get(source);
   if (!messages) { messages = new Map(); proxyMessages.set(source, messages); }
   proxyMessages.set(target, messages);

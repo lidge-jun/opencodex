@@ -28,8 +28,8 @@ import {
   type PublicEvidenceRecordV1,
 } from "../../src/lab/public";
 import {
-  publicEvidenceMutationLockIsReclaimableForTests,
-  publicEvidenceTryReclaimMutationLockForTests,
+  publicEvidenceLegacyMutationLockBlocksForTests,
+  withPublicEvidenceMutationLock,
 } from "../../src/lab/public/mutation-lock";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -102,7 +102,7 @@ async function captureCli(argv: string[], home: string): Promise<{ code: number;
   }
 }
 
-test("ancient live-PID mutation owner becomes reclaimable after the absolute ceiling", () => {
+test("an older build's ancient live-PID mutation owner stops blocking after the absolute ceiling", () => {
   const home = configDir("ocx-cl10-lock-owner-ceiling-");
   ensureLabDirs(home);
   const lockPath = join(labCommunityDir(home), ".mutation-lock");
@@ -118,10 +118,10 @@ test("ancient live-PID mutation owner becomes reclaimable after the absolute cei
     { mode: 0o600 },
   );
 
-  expect(publicEvidenceMutationLockIsReclaimableForTests(home, now)).toBe(true);
+  expect(publicEvidenceLegacyMutationLockBlocksForTests(home, now)).toBe(false);
 });
 
-test("ancient live-PID reclaim claim cannot block stale lock recovery forever", () => {
+test("an older build's ancient lock with a live-PID reclaim claim does not block mutation", () => {
   const home = configDir("ocx-cl10-lock-claim-ceiling-");
   ensureLabDirs(home);
   const lockPath = join(labCommunityDir(home), ".mutation-lock");
@@ -147,8 +147,10 @@ test("ancient live-PID reclaim claim cannot block stale lock recovery forever", 
     { mode: 0o600 },
   );
 
-  expect(publicEvidenceTryReclaimMutationLockForTests(home, now)).toBe(true);
-  expect(existsSync(lockPath)).toBe(false);
+  let ran = false;
+  withPublicEvidenceMutationLock(home, () => { ran = true; });
+  expect(ran).toBe(true);
+  expect(existsSync(lockPath)).toBe(true);
 });
 
 test("foreign origin-directory entries do not consume marker quota", () => {

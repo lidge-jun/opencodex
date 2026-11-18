@@ -23,7 +23,9 @@ function refusal(run: () => void, reason: RuntimePreflightReason): void {
     expect(error).toBeInstanceOf(RuntimePreflightError);
     expect(error).toMatchObject({ code: "OCX_RUNTIME_PREFLIGHT_FAILED", reason });
     expect((error as Error).message).toContain("OPENCODEX_BUN_PATH");
-    expect((error as Error).message).toContain("npm install -g @bitkyc08/opencodex");
+    // #8361: the repair command must permit bun's postinstall, or npm 12 leaves the
+    // bundled runtime as its placeholder and the retry fails the same way.
+    expect((error as Error).message).toContain("npm install -g --allow-scripts=bun @bitkyc08/opencodex");
   }
 }
 function child(result: Partial<ReturnType<typeof spawnSync>>): typeof spawnSync {

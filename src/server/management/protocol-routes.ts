@@ -22,6 +22,7 @@ import { protocolPolicyRevision, resolveApiSurfaceSettings, resolveProtocolSetti
 import type { OcxConfig } from "../../types";
 import type { ManagementContext } from "./context";
 import { readManagementJsonBodyOr } from "./body";
+import { captureHomeRouteDefaultsBeforeHomeSwitch } from "../../routing/home-route-capture";
 import {
   applyProtocolSettingsPatch,
   parseProtocolSettingsPatch,
@@ -115,6 +116,12 @@ async function patchProtocolSettings(ctx: ManagementContext): Promise<Response> 
   // `deps.` first: route tests with an in-memory fixture must never write the real config.
   const persist = ctx.deps.saveConfigPreservingClaudeCode
     ?? (await import("../../config")).saveConfigPreservingClaudeCode;
+  // Closing Messages turns Claude Code off on this Home alone: freeze what Children inherit first.
+  const captureRefused = applied.claudeCodeChanged ? captureHomeRouteDefaultsBeforeHomeSwitch() : null;
+  if (captureRefused) {
+    restoreProtocolSettings(config, snapshot);
+    return jsonResponse({ error: { code: "route_intent_unavailable", message: captureRefused.message } }, captureRefused.retryable ? 409 : 500, req, config);
+  }
   try {
     persist(config);
   } catch (error) {

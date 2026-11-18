@@ -1,3 +1,5 @@
+import { recordUpstreamProviderErrorDetail } from "./request-log-failure-detail";
+import { normalizeNativeChatContent } from "../adapters/openai-chat/native-content";
 import { attachComboFailureEvidence, ownedChatErrorPayload, type ClientErrorContract } from "../lib/client-error-body";
 import type { FailureVerdictSink } from "../chat/failure-verdict";
 import { normalizeChatChoiceErrors } from "./chat-native-sse";
@@ -6,6 +8,7 @@ import { createPhysicalSendReporter } from "../lib/request-execution-budget";
 import { createInferenceSendBudget } from "./inference/context";
 import { observeAdvisorNativeReasoning } from "./inference/advisor-diagnostics";
 import { buildOpenAIChatPassthroughRequest, createOpenAIChatAdapter } from "../adapters/openai-chat";
+import { affinityLaneFromRequest } from "./request-log-conversation";
 import type { AdapterRequest, ProviderAdapter } from "../adapters/base";
 import { isNativeChatRouteEligible } from "./chat-native-eligibility";
 import {
@@ -66,7 +69,9 @@ import { fastPolicyForModel } from "../providers/service-tier";
 import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import { stampApiKeyAccountLabel } from "../providers/label";
 import { distributedKeyPhysicalFetch, distributedKeyResponseOwner } from "../providers/api-key-response-ownership";
-import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
+import { passiveKeyPhysicalFetch } from "../providers/passive-key-observation";
+import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../providers/api-key-pause";
+import { providerAffinityGenerationIsCurrent, providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
 import type { OcxProviderTransport } from "../providers/xai-transport";
 import type { RouteResult } from "../router";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -87,7 +92,7 @@ import { beginInferenceAttempt, type InferenceAttempt } from "./inference/attemp
 import { createFinalRequestLog } from "./inference/final-log";
 import { registerTurn, unregisterTurn } from "./lifecycle";
 import { attachRequestSpendTracker } from "./responses/request-spend";
-import { workflowRefusalResponse } from "./workflow-refusal";
+import { workflowRefusalResponse, workflowSendCeilingRefusalResponse } from "./workflow-refusal";
 import type { ComboProtocolSource } from "./responses/core-combo-native";
 import type { ProtocolEnvelope } from "../protocols/envelope";
 import { protocolTraceSuppressed } from "../protocols/trace";
@@ -212,6 +217,8 @@ export interface NativeChatExecution extends HandleNativeChatOptions {
    */
   sendBudget?: RequestExecutionBudget;
   comboDispatchPermit?: SingleUseDispatchPermit;
+  /** The shared observer records a Combo child's refusal on its parent's context. */
+  workflowRefusalContext?: Pick<RequestLogContext, "localTerminalReason">;
   /** Replaces the request-relative first-output mark; a combo child records its own. */
   onFirstOutput?: () => void;
   /** The lease a streamed body holds; defaults to `logIds.turnAdmissionLease`. */
@@ -259,6 +266,7 @@ export function createNativeChatComboSource(input: {
   requestedModel: string;
   requestedStream: boolean;
   translatorBudget: TranslatorBudget;
+  workflowRefusalContext?: Pick<RequestLogContext, "localTerminalReason">;
   /** The request's data-plane admission; native children inherit it for replay scope. */
   admission?: DataPlaneAdmission;
 }): ComboProtocolSource {
@@ -277,6 +285,7 @@ export function createNativeChatComboSource(input: {
       finishLog: child.finishLog,
       sendBudget: child.sendBudget,
       comboDispatchPermit: child.comboDispatchPermit,
+      workflowRefusalContext: input.workflowRefusalContext,
       onFirstOutput: child.onFirstOutput,
       ...(child.turnAdmissionLease ? { turnAdmissionLease: child.turnAdmissionLease } : {}),
       ...(input.admission ? { admission: input.admission } : {}),
@@ -351,11 +360,19 @@ export async function runNativeChatAttempt(
   // Transport variant: the bare picker answers with the persisted row, which for a built-in
   // provider carries no adapter id or base URL until routedProviderConfig backfills it.
   try {
-    const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);
+    const affinityLane = affinityLaneFromRequest(req, logCtx, config, execution.admission ?? logIds?.admission);
+    if (affinityLane) logCtx.affinityLane = affinityLane;
+    const chatMessages = Array.isArray(execution.chatBody.messages) ? execution.chatBody.messages : [];
+    const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider, undefined, Date.now(), { lane: affinityLane, model: route.modelId, log: logCtx, continuation: (chatMessages.at(-1) as { role?: unknown } | undefined)?.role === "tool" });
     if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
+    if (isProviderApiKeyPaused(route.provider)) throw new ProviderApiKeyPausedError();
   } catch (error) {
     cleanupAbort(); upstream.abort();
+    if (error instanceof ProviderApiKeyPausedError) {
+      return failLocal(403, error.message, "permission_error");
+    }
     if (!(error instanceof RequestPacingQueueOverloadError)) throw error;
+    logCtx.terminalSource = "synthetic";
     const refusal = failLocal(429, error.message, "rate_limit_error");
     const advice = formatClientRetryAfter(error.retryAfterSeconds);
     if (advice !== undefined) refusal.headers.set("Retry-After", advice);
@@ -471,9 +488,9 @@ export async function runNativeChatAttempt(
         throw new SendBudgetExhaustedError(errorDestinationLabel(url));
       }
       physicalSends += 1;
-      reportDispatchSends(sendBudget, 1, execution.comboDispatchPermit);
+      reportDispatchSends(sendBudget, 1, execution.comboDispatchPermit, true);
       initialSendStarted = true;
-    } else if (!spendTracker?.charge()) throw new NativeChatSpendRefusal();
+    } else if (!spendTracker?.charge({ workflowAlreadyCounted: true })) throw new NativeChatSpendRefusal();
   };
 
   let responseOwnsDistributedKey = true;
@@ -512,6 +529,7 @@ export async function runNativeChatAttempt(
             dispatchOverride: async (_input, init, execute, reacquirePacing) => {
               for (let attempt = 0; !providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider); attempt++) {
                 if (outputDelivered) throw new Error("Provider key selection is unavailable during the native Chat turn");
+                if (!providerAffinityGenerationIsCurrent(config, route.providerName, activeProvider)) throw new Error("Provider affinity selection is no longer available");
                 if (attempt >= 3) throw new Error("Provider key selection changed repeatedly before native Chat dispatch");
                 let current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
                 if (!current && activeProvider.requestPacing?.enabled
@@ -520,6 +538,7 @@ export async function runNativeChatAttempt(
                   if (fresh) current = selectProactiveApiKeyTransport(config, route.providerName, fresh) ?? fresh;
                 }
                 if (!current || !isNativeChatRouteEligible({ ...route, provider: current }, execution.chatBody, config)) {
+                  if (!current && isProviderApiKeyPaused(config.providers[route.providerName])) throw new ProviderApiKeyPausedError();
                   throw new Error("Provider key selection is no longer available for native Chat");
                 }
                 activeProvider = current;
@@ -564,8 +583,8 @@ export async function runNativeChatAttempt(
                 // A reselected provider transport is still a physical send: the connection policy
                 // and manual-redirect ownership wrap the selected implementation (#4992).
                 const physicalFetch = ((input, physicalInit) => sendWithConnectionPolicy(
-                  distributedKeyPhysicalFetch((activeProvider as OcxProviderTransport).fetch ?? execute,
-                    route.providerName, activeProvider, request.url),
+                  passiveKeyPhysicalFetch(distributedKeyPhysicalFetch((activeProvider as OcxProviderTransport).fetch ?? execute,
+                    route.providerName, activeProvider, request.url), config, route.providerName, activeProvider),
                   String(input), physicalInit, { providerName: route.providerName, provider: activeProvider },
                 )) as typeof fetch;
                 localUpstream = isLocalUpstream(request.url);
@@ -643,7 +662,7 @@ export async function runNativeChatAttempt(
       // exists to stop. It kept the same shape under the old 502 only because 502 never
       // matched this branch.
       && !isNonReplayableResponse(response) && !isSameTargetRetryHold(response)
-      && retryPolicy
+      && retryPolicy && providerAffinityGenerationIsCurrent(config, route.providerName, activeProvider)
       && retries < retryPolicy.attempts
       && transientSendAvailable()
     ) {
@@ -693,18 +712,27 @@ export async function runNativeChatAttempt(
     upstream.abort();
     if (req.signal.aborted) return failLocal(499, "Client cancelled request", "client_cancelled");
     const sendError = error instanceof UpstreamRetryEvidenceError ? error.cause : error;
+    if (sendError instanceof ProviderApiKeyPausedError) {
+      return failLocal(403, sendError.message, "permission_error");
+    }
     if (sendError instanceof RequestPacingQueueOverloadError) {
+      logCtx.terminalSource = "synthetic";
       const refusal = failLocal(429, sendError.message, "rate_limit_error");
       const advice = formatClientRetryAfter(sendError.retryAfterSeconds);
       if (advice !== undefined) refusal.headers.set("Retry-After", advice);
       return refusal;
     }
     if (sendError instanceof SendBudgetExhaustedError) {
+      logCtx.terminalSource = "synthetic";
+      const refusal = workflowSendCeilingRefusalResponse(logCtx, req.headers.get("x-codex-parent-thread-id")?.trim() || undefined,
+        execution.workflowRefusalContext);
+      if (refusal) { finishLog(429); return refusal; }
       // A decision this process made, answered as the Responses path answers it: 429, not 502.
       return failLocal(429, sendError.message, SEND_BUDGET_EXHAUSTED_CODE, SEND_BUDGET_EXHAUSTED_CODE);
     }
     if (sendError instanceof NativeChatSpendRefusal) {
-      const refusal = workflowRefusalResponse("workflow-spend-exhausted", logCtx);
+      const refusal = workflowRefusalResponse(logCtx.errorCode === "workflow_sends_exhausted"
+        ? "workflow-sends-exhausted" : "workflow-spend-exhausted", logCtx);
       finishLog(429);
       return refusal;
     }
@@ -735,6 +763,7 @@ export async function runNativeChatAttempt(
     let upstreamMessage: string | undefined;
     try {
       const parsedError = JSON.parse(bodyText) as Rec;
+      recordUpstreamProviderErrorDetail(logCtx, response.status, parsedError);
       const nested = isRec(parsedError.error) ? parsedError.error : undefined;
       const details = nested ?? parsedError;
       if (typeof details.type === "string") upstreamType = details.type;
@@ -838,6 +867,7 @@ export async function runNativeChatAttempt(
     const failureVerdictSink: FailureVerdictSink = {};
     const collectorSource = requestedStream ? undefined : new ChatCompletionsCollectorSource(translatorBudget);
     const stream = nativeChatSse(resilientBody, {
+      provider: activeProvider,
       failureVerdictSink,
       collectorSource,
       requestedModel,
@@ -940,19 +970,20 @@ export async function runNativeChatAttempt(
   } catch {
     return failUpstream(502, "upstream returned malformed Chat Completions JSON", "upstream_error");
   }
-  const error = structuredError(parsedJson);
-  if (error) return failUpstream(error.status ?? 502, error.message, error.type, error.code);
-  const originalCompletion = chatCompletionJson(parsedJson);
-  const completion = originalCompletion ? normalizeChatChoiceErrors(originalCompletion) : null;
-  if (!completion) return failUpstream(502, "upstream response contained no choices", "upstream_error");
-  reasoningCapture.json(completion);
-  const usage = usageFromChat(completion.usage);
+  const usage = isRec(parsedJson) ? usageFromChat(parsedJson.usage) : undefined;
   if (usage) {
     if (!recordKeyWireAttemptUsage(logCtx, usage)) {
       logCtx.usage = usage;
       attempt.usage = usage;
     }
   }
+  if (isRec(parsedJson)) parsedJson = normalizeNativeChatContent(parsedJson, activeProvider);
+  const error = structuredError(parsedJson);
+  if (error) return failUpstream(error.status ?? 502, error.message, error.type, error.code);
+  const originalCompletion = chatCompletionJson(parsedJson);
+  const completion = originalCompletion ? normalizeChatChoiceErrors(originalCompletion) : null;
+  if (!completion) return failUpstream(502, "upstream response contained no choices", "upstream_error");
+  reasoningCapture.json(completion);
   if (clientDeclaredEmptyToolCatalog && chatResponseHasUndeclaredToolCalls(completion, declaredLegacyFunctionNames)) {
     return failUpstream(502, UNDECLARED_CHAT_TOOL_MESSAGE, "upstream_error", UNDECLARED_TOOL_CALL_ERROR_CODE);
   }

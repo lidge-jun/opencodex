@@ -18,7 +18,7 @@ import { INCOMPLETE_RETRY_MS, configuredCredentials } from "../../src/server/con
 import { setProviderKeychainEntryFactoryForTests } from "../../src/providers/api-key-resolve";
 import { classifyCodexUpstreamOutcome } from "../../src/codex/routing/cooldown-math";
 import { httpStatusFromTerminalError } from "../../src/lib/errors";
-import { addFinalRequestLog, httpStatusForRequestLogTerminal, inspectResponseLogJson, noteUpstreamRequestId, type RequestLogContext, type RequestLogEntry } from "../../src/server/request-log";
+import { addFinalRequestLog, httpStatusForRequestLogTerminal, inspectResponseLogJson, inspectResponseLogSsePayload, noteUpstreamRequestId, type RequestLogContext, type RequestLogEntry } from "../../src/server/request-log";
 
 function context(): RequestLogContext {
   return { model: "fixture-model", provider: "openai" };
@@ -795,6 +795,30 @@ describe("configured credential source", () => {
       if (previous === undefined) delete process.env[name];
       else process.env[name] = previous;
     }
+  });
+
+  test("typed bare verdict copy never keeps an unsent configured credential", () => {
+    const unsent = "cfg-unsent-" + randomBytes(12).toString("hex");
+    writeConfig({ providers: { p: { apiKey: unsent } } });
+    const typed = context();
+    inspectResponseLogSsePayload(typed, JSON.stringify({ error: { code: "mystery_code", message: "safe fixture copy" } }));
+    inspectResponseLogSsePayload(typed, JSON.stringify({ type: "error", code: "mystery_code", message: `echo ${unsent}` }));
+    expect(typed.upstreamError ?? "").not.toContain(unsent);
+  });
+
+  test("a configured credential longer than the copy bound is checked before the bound", () => {
+    const long = "cfg-long-" + "L".repeat(600) + randomBytes(8).toString("hex");
+    writeConfig({ providers: { q: { apiKey: long } } });
+    const bounded = context();
+    inspectResponseLogSsePayload(bounded, JSON.stringify({ error: { code: "mystery_code", message: long } }));
+    expect(bounded.upstreamError ?? "").not.toContain(long.slice(0, 64));
+  });
+
+  test("a request row never keeps an excerpt of an unsent configured credential", () => {
+    writeConfig({ providers: { p: { apiKey: "alphaSECRET987654321omega" } } });
+    const log = context();
+    inspectResponseLogSsePayload(log, JSON.stringify({ error: { code: "SECRET987654321", message: "echo SECRET987654321" } }));
+    expect(`${log.upstreamError ?? ""} ${log.upstreamErrorCode ?? ""}`).not.toContain("SECRET987654321");
   });
 
   test("an existing store with an unexpected shape is incomplete; a missing one is not", () => {

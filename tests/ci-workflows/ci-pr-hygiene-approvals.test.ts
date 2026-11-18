@@ -327,7 +327,7 @@ describe("pr-hygiene head-bound approvals", () => {
     // 2. The gate runs with the approval applied: it creates its own comment,
     // leaves the standalone one alone, and keeps the suppression failure.
     const gateRun = await runEnforcePrTarget(
-      workflowScript("enforce-pr-target.yml", "enforce-target", "Enforce PR target, ancestry, and description"),
+      workflowScript("enforce-pr-target.yml", "enforce-target", "Enforce PR target and description"),
       {
         pr: { base: { ref: "dev" }, draft: true },
         labels: ["suppression-approved"],
@@ -462,7 +462,7 @@ describe("pr-hygiene head-bound approvals", () => {
 });
 
 describe("enforce gate reads the hygiene head binding", () => {
-  const gateScript = () => workflowScript("enforce-pr-target.yml", "enforce-target", "Enforce PR target, ancestry, and description");
+  const gateScript = () => workflowScript("enforce-pr-target.yml", "enforce-target", "Enforce PR target and description");
   async function gate(options: { labels: string[]; record?: string; failOn?: string[]; issueEvents?: Array<{ event: string }> }) {
     return runEnforcePrTarget(gateScript(), {
       pr: { base: { ref: "dev" }, draft: true },
@@ -518,7 +518,7 @@ describe("enforce gate reads the hygiene head binding", () => {
 });
 
 describe("approval record survives comment rewrites", () => {
-  const gateScript = () => workflowScript("enforce-pr-target.yml", "enforce-target", "Enforce PR target, ancestry, and description");
+  const gateScript = () => workflowScript("enforce-pr-target.yml", "enforce-target", "Enforce PR target and description");
 
   test("a gate rebuild keeps the record, so the next hygiene run keeps a current approval", async () => {
     const existing = gateComment(["✅ **Deterministic PR hygiene checks passed.**", recordLine(HARNESS_HEAD, 0)]);
@@ -572,7 +572,7 @@ describe("gate preservation ignores marker text in echoed paths", () => {
   test("a changed path containing the block marker text does not drop the record", async () => {
     const existing = gateComment(["⚠️ **Deterministic hygiene checks failed.**", recordLine(HARNESS_HEAD, 0)]);
     const gateRun = await runEnforcePrTarget(
-      workflowScript("enforce-pr-target.yml", "enforce-target", "Enforce PR target, ancestry, and description"),
+      workflowScript("enforce-pr-target.yml", "enforce-target", "Enforce PR target and description"),
       {
         pr: { base: { ref: "dev" }, draft: true },
         // new_suppression echoes this path into the rebuilt gate body.

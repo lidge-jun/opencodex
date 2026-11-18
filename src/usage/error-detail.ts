@@ -150,7 +150,7 @@ export function errorDetailFor(entry: ErrorDetailSource): ErrorDetail {
     });
   }
   const rateLimitResetAt = boundedRateLimitResetAt(entry.rateLimitResetAt, entry.timestamp)
-    ?? deriveRateLimitResetAt({ ...entry, errorCode });
+    ?? deriveRateLimitResetAt({ provider: entry.provider, status: entry.status, timestamp: entry.timestamp, upstreamError: entry.upstreamError, errorCode });
   // A closed code with bounded parameters; free text (a legacy or edited row) is dropped.
   const failureDetail = boundedFailureDetail(entry.failureDetail) ?? proxySentenceDetail(str(entry.upstreamError));
   return {

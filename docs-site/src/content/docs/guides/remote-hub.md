@@ -60,7 +60,13 @@ Connect with exactly one transient authority source. The authority is read from 
 written to config or the token file:
 
 ```bash
-ocx connect https://hub-name.tailnet-name.ts.net --pairing-code-stdin
+# Bash only: if using zsh, run bash first in this terminal.
+# Bash: enter the one-time code without echoing it or putting it in shell history.
+read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
+printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
+  --management-url https://hub-name.tailnet-name.ts.net \
+  --pairing-code-stdin
+unset pairing_code
 ocx connect status
 ocx sync
 ```
@@ -89,9 +95,16 @@ to the Hub with `https://` (or use loopback HTTP when both sides are on the same
 Rotate a connected client with a fresh transient authority:
 
 ```bash
-ocx connect rotate --pairing-code-stdin
-# or, only over HTTPS:
-ocx connect rotate --admin-token-stdin
+# Bash only: if using zsh, run bash first in this terminal.
+# Bash: choose one authority source.
+read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
+printf '%s\n' "$pairing_code" | ocx connect rotate --pairing-code-stdin
+unset pairing_code
+
+# Alternatively, only over HTTPS, use the management admin token:
+read -r -s -p 'Admin token: ' admin_token; printf '\n'
+printf '%s\n' "$admin_token" | ocx connect rotate --admin-token-stdin
+unset admin_token
 ```
 
 Rotation keeps the old and new data keys valid for at most ten minutes under the same `apiKeyId`.
@@ -148,6 +161,17 @@ a page you visit can make your browser connect to `127.0.0.1`. The listener ther
 same `Host` and `Origin` checks as an ordinary loopback bind.
 :::
 
+:::caution[Create the `hub` and `remoteGui` objects only when they are absent]
+`ocx config set hub '{…}'` and `ocx config set remoteGui '{…}'` replace the whole object, so on an
+existing installation they silently drop the settings already there. Check first: `ocx config get hub`
+and `ocx config get remoteGui` answer `config path not found` when the object is absent, and print it
+when it exists. Only then is the `'{}'` seed line below safe to run; when the object exists, skip it
+and use the nested `hub.<field>` form, which itself fails with `config parent path not found: hub`
+when a parent is genuinely missing. Setting a nested array or object field such as
+`hub.managementIngress` or `remoteGui.allowedTailscaleUsers` also replaces that field rather than
+merging into it, so read the current value before you overwrite one.
+:::
+
 ```bash
 ocx config set runtimeRole hub
 ocx config set hostname 100.64.0.10
@@ -180,11 +204,11 @@ ocx config set hub '{"managementPublicOrigin":"https://hub-name.tailnet-name.ts.
 ocx config set remoteGui '{"allowedTailscaleUsers":["operator@example.com"]}'
 ```
 
-Use that form only when the object does not exist yet. A whole-object set **replaces** the object
-rather than merging into it, so running the line above against a config that already had
-`hub.managementIngress` silently drops the ingress. When you are adapting an existing
-configuration, set one field at a time — the parent is already there, so the nested form works and
-touches nothing else.
+Use that form only when the object does not exist yet, as the `ocx config get` check above decides.
+A whole-object set **replaces** the object rather than merging into it, so running it against a
+config that already had `hub.managementIngress` silently drops the ingress. When you are adapting an
+existing configuration, set one field at a time — the parent is already there, so the nested form
+works and touches nothing else. Setting a nested array or object field replaces that field too.
 
 Two details that decide whether a line is accepted. The value is parsed as JSON first and falls
 back to the raw string, which is why a URL is written as `'"https://…"'`: objects, arrays, booleans
@@ -332,13 +356,20 @@ a session. Verify both directions:
 # Negative: the loopback-only port must not be reachable through the node's tailnet address.
 curl --fail --connect-timeout 3 http://100.64.0.10:10101/ && echo "unexpected exposure"
 
-# Positive: the HTTPS dashboard loads through Serve from an allowed tailnet user.
+# Transport only: an identity-required dashboard may reject curl; verify it in an allowed user's browser.
 curl --fail --silent --show-error https://hub-name.tailnet-name.ts.net/ >/dev/null
 ```
 
 The positive browser test must use a real signed-in Tailscale session; a bare `curl` may not carry the
 identity headers needed for automatic session issuance. Pairing remains the fallback when the HTTPS
 frontend cannot provide trustworthy Tailscale identity.
+
+**Remember this device** works on this management origin: the hub's management listener is the
+trusted ingress, so a dashboard opened at `hub.managementPublicOrigin` can remember a device. A
+standalone instance behind its own TLS-terminating proxy has no such listener; it can remember devices
+only after you set `dashboardTrustedProxy` (see
+[Remember behind a reverse proxy](/guides/web-dashboard/#remember-behind-a-reverse-proxy)). A hub
+ignores that setting.
 
 ### Giving the data listener TLS
 
@@ -380,10 +411,13 @@ it is where `/readyz` and `/v1/catalog` are fetched — and `--management-url` i
 origin used for pairing and key issuance. They do not have to share a port:
 
 ```bash
-# This is exactly the line `ocx hub invite` prints, with the code filled in.
-echo '<pairing-code>' | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
+# Bash only: if using zsh, run bash first in this terminal.
+# Bash: enter the one-time code without echoing it or putting it in shell history.
+read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
+printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 \
   --management-url https://hub-name.tailnet-name.ts.net \
   --pairing-code-stdin
+unset pairing_code
 ```
 
 Record those two origins on the hub as `hub.dataPublicOrigin` and `hub.managementPublicOrigin`, and
@@ -436,11 +470,15 @@ Run this on the hub rather than writing an `ocx connect` line by hand:
 ocx hub invite
 ```
 
-It mints a single-use, short-lived pairing code and prints the command to run on the other machine:
+It mints a single-use, short-lived pairing code and prints the command to run on the other machine.
+To keep the code out of shell history, read it silently and pass it through stdin:
 
-```text
-# Run on the other machine:
-echo '<code>' | ocx connect https://hub-name.tailnet-name.ts.net:8443 --management-url https://hub-name.tailnet-name.ts.net --pairing-code-stdin
+```bash
+# Bash only: if using zsh, run bash first in this terminal.
+# Bash, on the other machine:
+read -r -s -p 'Pairing code: ' pairing_code; printf '\n'
+printf '%s\n' "$pairing_code" | ocx connect https://hub-name.tailnet-name.ts.net:8443 --management-url https://hub-name.tailnet-name.ts.net --pairing-code-stdin
+unset pairing_code
 ```
 
 The data origin comes from `--data-url`, then `hub.dataPublicOrigin`, then the bind address. That
@@ -481,6 +519,11 @@ Use the port the **joining** machine's proxy listens on; `10100` is the default.
 above already sets it. A whole-array set replaces the array, so when the hub already has entries
 run the line `invite` prints — it carries the existing ones plus the new origin. `ocx config get
 corsAllowOrigins` shows what is there now.
+
+`invite` picks the origin from the config file, but a running hub checks it against the config it
+is running with: `hub.managementPublicOrigin` is applied only at start, and a `corsAllowOrigins` edit
+may not reach the running hub until it restarts. After changing either, restart the hub before
+inviting; `ocx config set` prints a reminder for both keys and for `hub.managementIngress`.
 
 `ocx hub invite --json` emits `{ code, expiresAt, dataUrl, managementUrl, command }` with `expiresAt`
 as ISO 8601. The code is a secret: single-use, five-minute lifetime, rate-limited at the hub, and not
@@ -523,6 +566,14 @@ healthy one.
 `ocx service start`, both still work and the error path names the first one as a fallback. Neither is
 the recommended route any more.
 
+Either verb also recovers a job you booted out by hand. `launchctl bootout` returns before the
+process exits, and while the old process drains `launchctl print` already reports the job absent —
+so an immediate re-bootstrap can still fail with `Bootstrap failed: 5`. The recovery round waits
+between a bounded number of attempts instead of retrying once, so
+`launchctl bootout gui/$(id -u)/com.opencodex.proxy` followed by a single `ocx service restart` or
+`ocx service repair` serves on the first call. A teardown that never finishes still reaches the
+diagnostic error rather than hanging.
+
 Linux and Windows never had this gap: `ocx service restart` there ends in `systemctl --user restart`
 and a stop-then-start of the scheduled task respectively, whichever verb asked.
 
@@ -560,8 +611,8 @@ input checks.
 ## Docker Compose
 
 opencodex does not publish an official container image. The repository does maintain a source-build
-[`Dockerfile`](https://github.com/lidge-jun/opencodex/blob/main/Dockerfile),
-[`compose.yaml`](https://github.com/lidge-jun/opencodex/blob/main/compose.yaml), and a narrow
+[`Dockerfile`](https://github.com/lidge-jun/opencodex/blob/dev/Dockerfile),
+[`compose.yaml`](https://github.com/lidge-jun/opencodex/blob/dev/compose.yaml), and a narrow
 `.dockerignore`. The build pins the multi-platform Bun 1.4.4 image index by digest, runs the proxy as
 the non-root `bun` user, keeps the root filesystem read-only, drops Linux capabilities, and publishes
 only the data listener on the host's `127.0.0.1:10100` by default. The foreground process uses
@@ -651,7 +702,7 @@ services:
   hub:
     pull_policy: build
     build:
-      context: https://github.com/lidge-jun/opencodex.git#main
+      context: https://github.com/lidge-jun/opencodex.git#dev
       dockerfile: Dockerfile
       target: runtime
       args:
@@ -668,18 +719,31 @@ Remote access is an explicit opt-in. Set `OPENCODEX_BIND_ADDRESS` to the host's 
 IP, or use `0.0.0.0` to publish on **all** host interfaces:
 
 ```bash
-OPENCODEX_BIND_ADDRESS=0.0.0.0 docker compose up -d
+OPENCODEX_PORT=10190 OPENCODEX_BIND_ADDRESS=0.0.0.0 docker compose up -d
 ```
 
 Use a firewall and an authenticated TLS/tailnet frontend before exposing the port. The bind
 override changes only the host publication; the container listener remains `0.0.0.0:10100`.
-Keep the same bind override on subsequent Compose invocations that recreate the hub. To update
+Each of these variables applies only to the command that carries it, so keep both overrides on
+every later Compose invocation that recreates the hub — or persist them in the Compose
+environment — or the recreated service returns to the default port. To update
 an existing deployment, run `docker compose build` and recreate the hub with `docker compose up -d`;
 do not repeat the one-time token initialization.
 
 Configure providers with the dashboard through an operator-owned management frontend, or with
-one-shot CLI commands that share the state volume. The commands below show the existing Remote Hub
-settings; replace the example origin and identity before enabling them:
+one-shot CLI commands that share the state volume. The commands below distinguish first-run initialization from later field updates.
+Replace the example origins and identity before enabling them:
+
+**Fresh volume only:** the seed declares runtimeRole=hub, but has no `hub` or `remoteGui` object. The token bootstrap does not create them. The initial whole-object writes below **replace** those objects: do not run them on a configured volume, where they could erase `hub.managementIngress` or other saved settings. Replace both example origins and the allowed identity first; the CORS origin is the joining machine's local proxy port.
+
+```bash
+docker compose run --rm hub bun run src/cli/index.ts config set hub '{"managementPublicOrigin":"https://hub-name.tailnet-name.ts.net","dataPublicOrigin":"https://hub-name.tailnet-name.ts.net:8443","managementIngress":{"enabled":true,"port":10101}}'
+docker compose run --rm hub bun run src/cli/index.ts config set remoteGui '{"allowedTailscaleUsers":["operator@example.com"]}'
+docker compose run --rm hub bun run src/cli/index.ts config set corsAllowOrigins '["http://localhost:10100"]'
+docker compose restart hub
+```
+
+On an already configured volume, inspect the saved objects first and update only the intended fields instead. The nested writes preserve sibling fields; the allowed-user array replaces that array, so include every identity you intend to keep. If an object is absent, use the fresh-volume initializer for that absent object only. For an existing CORS list, retain its current entries and add the joining origin as described under [Inviting another machine](#inviting-another-machine).
 
 ```bash
 docker compose run --rm hub bun run src/cli/index.ts config set hub.managementPublicOrigin '"https://hub-name.tailnet-name.ts.net"'
@@ -688,13 +752,9 @@ docker compose run --rm hub bun run src/cli/index.ts config set remoteGui.allowe
 docker compose restart hub
 ```
 
-These nested sets work because the image seeds a first-run `hub` configuration, so the object
-already exists. On a fresh standalone install it does not, and the same lines fail until you create
-it — see [Linux systemd or macOS launchd](#linux-systemd-or-macos-launchd) above.
-
 The container listener binds `0.0.0.0`, so it is already reachable on the container's own loopback
 address and the companion form of `unauthenticatedLoopbackListener` does not apply there — it is
-refused on a wildcard bind. The token bootstrap below is the container equivalent of the service's
+refused on a wildcard bind. The token bootstrap above is the container equivalent of the service's
 own provisioning step, and it likewise runs once.
 
 Do not put a token in `ARG`, `ENV`, `COPY`, Compose YAML, image history, or command arguments. Do not
@@ -725,6 +785,27 @@ both named volumes and a synthetic catalog survive replacement. This check does 
 real provider account, OAuth callback, custom mount migration, or every CPU architecture; perform
 the authenticated routed-response check above for your deployment.
 
+### Restarts after an unclean exit
+
+A container runs the proxy as PID 1 on every start. After an unclean exit (an OOM kill, a crash, a
+node failure) the state volume can still hold `ocx.pid` and `runtime-port.json` naming PID 1, and
+the next start has to decide whether that owner is gone. It recovers on its own when the record was
+written by the same container in an earlier run, by an OpenCodex version that records where its
+owner runs: a Kubernetes container restarted inside its pod while the node stays up, or the same
+Docker or Podman container started again (`docker restart`, a restart policy, including after a
+host reboot) when its writable layer has a random id, as with Docker's `overlay2` storage driver
+and Podman. Docker's containerd image store numbers its layers instead, so a restart there refuses.
+
+Every other case refuses with `Proxy ownership is unverified; startup refused`, because the old
+owner could still be serving the same volume from another container: a replacement Kubernetes pod,
+a recreated Compose container, a pod that comes back after a node reboot, another node, or a record
+written by an older version (the first restart after an upgrade). Confirm that nothing else serves this state directory, then move
+`runtime-port.json` and `ocx.pid` aside once and start again. Run a single writer per state
+volume: a Kubernetes `Deployment` that shares a volume should use `strategy: Recreate` (or
+`maxSurge: 0`) so the old pod stops before the new one starts. Do not share one state volume between
+processes in one network namespace (host networking, sidecars, several WSL distros), between
+sandboxes restored from one VM snapshot, or between machines with the same host name.
+
 ## Rollback
 
 Inspect existing Serve mappings before changing them. `tailscale serve reset` removes every mapping
@@ -734,7 +815,7 @@ on the node; use a narrower supported removal command when unrelated mappings ex
 tailscale serve status
 tailscale serve reset
 ocx config set hub.managementIngress '{"enabled":false}'
-ocx service repair
+ocx service restart
 ```
 
 For a container rollback, retain both named state volumes and their mappings. An older image
@@ -760,6 +841,12 @@ For a service rollback, stop the branch service and repair the prior release aga
   loopback browser origin, so an origin-bound grant could never match. Nothing was minted. Run the
   `ocx config set corsAllowOrigins` line the error prints, with the joining machine's proxy port.
   See [Inviting another machine](#inviting-another-machine).
+- **`ocx hub invite` says `Minting a pairing code failed (origin-refused)`:** the running hub refused
+  the browser origin the invite names. It admits only the `hub.managementPublicOrigin` and
+  `corsAllowOrigins` it is running with, which can predate a recent `ocx config set`. Restart the hub
+  (the error prints the restart command for this install) and invite again. `(rate-limited)` means
+  the hub is limiting new codes (eight a minute, and a cap on unused ones); wait for earlier codes to
+  be used or expire (five minutes), then invite again. `(rejected)` is any other refusal.
 - **`ocx hub invite` says the advertised data origin would be this machine's own loopback:** the
   bind is loopback-only or a wildcard and `hub.dataPublicOrigin` is unset, so there is no address
   to advertise and nothing guesses a tailnet or LAN one. Nothing was minted. Set

@@ -1,0 +1,13 @@
+# Link WebSocket memory: investigation and recorded runs
+
+Moved from `structure/remote-link.md`, which states only the contract that holds now. The acceptance itself (`tests/e2e-style/link-websocket-rss.test.ts`, opt-in with `OCX_LINK_WS_RSS_ACCEPTANCE=1`) and its settle rule are described there.
+
+## Where a near-8 MiB create was held (#8600)
+
+Where a near-8 MiB create was held (#8600, from heap snapshots at the stall and the code path): both transports keep the pipeline's parsed body, which the continuation store needs, and the serialized outbound body, which a retry needs; before #8601 both also kept a re-parse of the outbound body and read 32 MiB ahead of the stalled reader. The WebSocket path added its own copies: the shared handler parsed the frame, serialized it again into a synthetic request (a transient copy), whose body Bun kept for the whole turn (about 8 MiB per socket), and the pipeline read that body back into a second parsed body (about 8 MiB per socket, plus the decoded string while parsing).
+
+#8601 removed the re-parse and the WebSocket path's own copies: a link socket hands the pipeline the create it parsed, and a link turn reads its upstream only as its client drains. A combo-routed link turn still read 32 MiB ahead until each combo child was bound to the parent's link-turn observer for pacing (review threads PRRT_kwDOS-0Gi863w6KX and PRRT_kwDOS-0Gi863w6Ke on #8785).
+
+## Recorded runs
+
+Measurements on a 4-core Linux VM, peak-over-idle RSS per socket. Before the #8601 changes: the canonical acceptance at 24 sockets measured 117.0 MiB for the WebSocket and 70.2 MiB for HTTP, a difference of 1,123 MiB against 768 MiB (a second run: 1,235 MiB), and four-socket pairs at the canonical settings differed by 31.0 to 47.1 MiB per socket. Only the settled runs below count as evidence. Four earlier canonical runs, each a single run on a successive commit of #8625 and cut at the first moment every reader waited (WebSocket minus HTTP 356, 154, 33 and 179 MiB), are not release evidence: their WebSocket peaks varied by about 235 MiB, the same order as their headroom, and an early WebSocket cut biases them toward passing. Settled runs, three single runs on commit 2e8b3f383 (the quiet-window fixture), 24 sockets, peak over idle per socket: run 1, WebSocket 54.4 MiB and HTTP 46.4 MiB, difference 193 MiB, settled after 6.6 s and 7.9 s; run 2, 58.6 and 46.7 MiB, 287 MiB, 5.9 s and 8.1 s; run 3, 52.1 and 46.7 MiB, 129 MiB, 5.9 s and 8.1 s. All three passed against 768 MiB, with each Home reporting its own settled stall. The reservation, the 768 MiB budget and the 24-socket cap are unchanged.

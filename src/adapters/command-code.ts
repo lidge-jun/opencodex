@@ -14,6 +14,7 @@ import { configuredReasoningEfforts, modelRecordValue } from "../reasoning-effor
 import { commandCodeReasoningEfforts, refreshCommandCodeReasoningEfforts } from "../providers/command-code-efforts";
 import { identifyRoutedModel } from "./identity";
 import { buildNonOpenAIToolCatalogNudgeForTools } from "./tool-catalog-nudge";
+import { normalizeAnthropicInputSchema } from "./anthropic-input-schema";
 import { parseDataUrl } from "./image";
 import { createAdapterPhysicalSend } from "./physical-send";
 import { SendBudgetExhaustedError } from "../lib/upstream-retry";
@@ -26,10 +27,25 @@ import {
 import { CommandCodeToolTextFilter, type CommandCodeDeclaredTools } from "./command-code-tool-text";
 import { EMPTY_COMMAND_CODE_PROJECT_CONTEXT, loadCommandCodeProjectContext } from "./command-code-project-context";
 
+/**
+ * Text-call recovery matches markup against the schema the model was shown (`wireTools`), so a
+ * root-composed tool keeps the top-level `properties` its markup names. Definitions are dropped
+ * because the restored-value validator accepts no `$ref`: a reference left in the normalized
+ * schema still fails closed there. The original schema is validated too (`declaredSchema`),
+ * because the wire view flattens root alternatives and would otherwise admit calls the tool
+ * itself rejects.
+ */
+function recoverySchema(tool: OcxTool): Record<string, unknown> {
+  const { $defs: _defs, definitions: _definitions, ...schema } = normalizeAnthropicInputSchema(tool.parameters);
+  return schema;
+}
+
 function declaredTools(tools: OcxTool[]): CommandCodeDeclaredTools {
   return new Map(tools.map(tool => [
     namespacedToolName(tool.namespace, tool.name),
-    { freeform: tool.freeform === true, schema: tool.parameters },
+    tool.freeform === true
+      ? { freeform: true, schema: tool.parameters }
+      : { freeform: false, schema: recoverySchema(tool), declaredSchema: tool.parameters },
   ]));
 }
 
@@ -207,7 +223,7 @@ function wireTools(tools: OcxTool[]): Array<Record<string, unknown>> {
   return tools.map(tool => ({
     name: namespacedToolName(tool.namespace, tool.name),
     description: tool.description,
-    input_schema: tool.parameters,
+    input_schema: normalizeAnthropicInputSchema(tool.parameters),
   }));
 }
 
@@ -437,17 +453,20 @@ async function*ndjson(response: Response, budget: TranslatorBudget): AsyncGenera
   try {
     for (;;) {
       const { value, done } = await reader.read();
-      const next = buffer + decoder.decode(value, { stream: !done });
-      const nextBytes = encoder.encode(next).byteLength;
+      const decoded = decoder.decode(value, { stream: !done });
+      // TextDecoder emits complete code points, so fragment UTF-8 sizes are additive.
+      const nextBytes = bufferBytes + encoder.encode(decoded).byteLength;
       resizeBuffer(nextBytes);
-      buffer = next;
-      let newline = buffer.indexOf("\n");
+      buffer += decoded;
+      // The retained suffix has no newline; only new text can complete a record.
+      const hasNewline = decoded.includes("\n");
+      let newline = hasNewline ? buffer.indexOf("\n") : -1;
       while (newline >= 0) {
         const line = buffer.slice(0, newline).trim(); buffer = buffer.slice(newline + 1);
         if (line) yield* decodeEventLine(line);
         newline = buffer.indexOf("\n");
       }
-      resizeBuffer(encoder.encode(buffer).byteLength);
+      if (hasNewline) resizeBuffer(encoder.encode(buffer).byteLength);
       if (done) break;
     }
     const final = buffer.trim();

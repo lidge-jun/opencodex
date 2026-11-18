@@ -8,6 +8,12 @@ This display choice also applies when effort is absent or `none`; it does not ad
 Omitted summary, `auto` (the Codex default) and `none` keep the updates default. Local `hideThinkingSummary` controls summary
 presentation independently; it does not select the upstream display. The selected display controls
 both the generated beta header and response classification on every request, including adapter reuse.
+An operator override sits above that default without changing it when unset (#8363): the provider
+`thinkingDisplay` value, or the exact-model `modelThinkingDisplay` entry that wins over it, can force
+`summarized`, keep `updates`, or select `omitted` (adaptive thinking with no display field). `updates`
+is treated as `auto` on any model this adapter never sent it to, an explicit request summary still
+forces `summarized` on every adaptive model, and `hideThinkingSummary` keeps its meaning only under
+the `auto` policy. Every branch derives `progressUpdates` from the final body's `display`.
 `src/types/request.ts` carries the complete signed update on its text-delta event.
 `src/adapters/anthropic-progress.ts` uses this documented display contract to classify nonempty
 thinking text as commentary, buffering one block under the translator budget until its final signature.
@@ -27,13 +33,17 @@ envelope stores the exact signed text and signature plus `upd`, the following me
 Compaction ignores signed progress events: only ordinary summary text enters the checkpoint,
 and neither bridge emits the commentary pair during compaction.
 `src/responses/parser.ts` removes only the adjacent commentary copy with matching ID (or no ID),
-phase and exact text, leaving the original thinking block in source order. Edited copies remain.
+phase and text, leaving the original thinking block in source order. The text matches when it equals the
+signed text exactly or its memory-citation-escaped form (the visible copy on a Responses delivery escapes a
+quoted `<oai-mem-citation>` tag; the envelope keeps the raw text). Other edited copies remain.
 `src/claude/outbound.ts` restores the signed thinking block and consumes the presentation copy on
 both JSON and SSE conversions; ordinary locally hidden envelope text remains undisclosed.
 
 `src/responses/assistant-replay.ts` preserves text, empty signed blocks, signature updates and
 redacted blocks in order for the internal continuation builders in
 `src/server/responses/terminal-guard.ts` and `src/server/responses/advisor-slot.ts`.
+Search sidecar Responses text follows the shared [identity snapshot reconciliation contract](../data-planes/search.md).
+
 The hosted tool loops in `src/web-search/loop.ts`, `src/web-search/run-turn-loop.ts` and
 `src/images/loop.ts` reconstruct progress events as signed thinking parts. Search's early
 commentary path retains these events for the next iteration.

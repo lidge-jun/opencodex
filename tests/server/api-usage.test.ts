@@ -286,10 +286,21 @@ describe("GET /api/usage", () => {
       expect(empty).toMatchObject({ customWindow: true, since: 0, until: 0, summary: { requests: 0 } });
       expect(empty.days).toHaveLength(1);
       expect(empty.error).toBeUndefined();
-      const scanSpy = spyOn(usageLedgerScannerModule, "scanUsageLedgerCooperatively")
+      // The filtered read is the failure surface now: the candidate index answers the query
+      // and only the selected rows are read from the ledger.
+      const scanSpy = spyOn(usageLedgerScannerModule, "readUsageLedgerRowsAtOffsets")
         .mockRejectedValue(new Error("fixture scan failure"));
       try {
-        // A distinct key forces a fresh custom scan.
+        // A distinct key forces a fresh custom read, and an in-window row makes the read real.
+        writeFileSync(join(testDir, "usage.jsonl"), `${JSON.stringify({
+          requestId: "ocx-window",
+          timestamp: 0,
+          provider: "openai",
+          model: "gpt-5.5",
+          status: 200,
+          durationMs: 1,
+          usageStatus: "reported",
+        })}\n`, { mode: 0o600 });
         url.searchParams.set("until", "1");
         const response = await fetch(url);
         expect(response.status).toBe(500);

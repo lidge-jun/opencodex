@@ -18,7 +18,7 @@ vision 和網路搜尋 sidecar 也可以使用你的 ChatGPT 登入憑證。
 ## 安裝
 
 ```bash
-npm install -g @bitkyc08/opencodex
+npm install -g --allow-scripts=bun @bitkyc08/opencodex
 ```
 
 :::note[npm 攔截了 bun postinstall？]
@@ -50,7 +50,7 @@ GPT-5.6 Sol/Terra/Luna 目錄資訊，但這些條目本身不會授予上游模
 opencodex 建置時，才需要使用 preview 渠道：
 
 ```bash
-npm install -g @bitkyc08/opencodex@preview
+npm install -g --allow-scripts=bun @bitkyc08/opencodex@preview
 ocx update --tag preview
 ```
 

@@ -3,6 +3,7 @@ import { useT, type TKey } from "../../i18n/shared";
 import { Notice } from "../../ui";
 import IntegrationPlanDetails, { type LabeledIntegrationPlan } from "./IntegrationPlanDetails";
 import { IntegrationApiError, type IntegrationMutationPlan } from "./integration-api";
+import type { PreviewRecovery } from "./preview-recovery";
 
 export interface ConsequenceCopy {
   titleKey: TKey;
@@ -35,6 +36,8 @@ export default function ConsequenceDialog({
   planStale = false,
   planLoading = false,
   planFailure = null,
+  previewRecovery = null,
+  onPreviewRecovery,
   missingStorePath,
   onConfirm,
   onClose,
@@ -46,6 +49,13 @@ export default function ConsequenceDialog({
   planStale?: boolean;
   planLoading?: boolean;
   planFailure?: string | null;
+  /**
+   * A preview that could not be made for a reason the user can clear by reading
+   * the page's data again (no retained model roster). The dialog then shows the
+   * reason and one explicit button instead of a failure the user can only stare at.
+   */
+  previewRecovery?: PreviewRecovery | null;
+  onPreviewRecovery?: () => Promise<void> | void;
   /** Passed through to the plan details; see IntegrationPlanDetails. */
   missingStorePath?: string;
   onConfirm: (plan?: IntegrationMutationPlan) => Promise<void> | void;
@@ -57,6 +67,7 @@ export default function ConsequenceDialog({
   const closeRef = useRef<HTMLButtonElement>(null);
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
+  const [recovering, setRecovering] = useState(false);
   const [staleOverride, setStaleOverride] = useState<{
     sourceFingerprint: string | null;
     plan: IntegrationMutationPlan;
@@ -115,6 +126,19 @@ export default function ConsequenceDialog({
     }
   }, [activePlan, onConfirm, pending, plan?.fingerprint, t]);
 
+  // Recovery is its own press, and its own busy state: it must not look like a
+  // confirmation, and it must not leave the confirm button enabled while the
+  // plan it would confirm is still missing.
+  const recoverPreview = useCallback(async () => {
+    if (!onPreviewRecovery || recovering) return;
+    setRecovering(true);
+    try {
+      await onPreviewRecovery();
+    } finally {
+      setRecovering(false);
+    }
+  }, [onPreviewRecovery, recovering]);
+
   const slots: ReactNode[] = [
     <CopySlot key="changes" copyKey={copy.changesKey} vars={copy.vars} />,
     <CopySlot key="breakage" copyKey={copy.breakageKey} vars={copy.vars} />,
@@ -151,12 +175,23 @@ export default function ConsequenceDialog({
           {planLoading && <p>{t("integrations.preview.loading")}</p>}
           {pending && <p>{t("integrations.mutation.pending")}</p>}
           {(stale || planStale) && <Notice tone="err">{t("integrations.preview.stale")}</Notice>}
+          {previewRecovery === "catalog-unavailable" && <Notice tone="err">{t("integrations.preview.catalogUnavailable")}</Notice>}
           {planFailure && <Notice tone="err">{planFailure}</Notice>}
         </div>
         <IntegrationPlanDetails plan={activePlan} plans={plans} missingStorePath={missingStorePath} />
         {failure && <Notice tone="err">{failure}</Notice>}
         <div className="modal-actions">
-          <button type="button" className="btn btn-primary" onClick={() => void applyConsequence()} disabled={pending || planLoading || Boolean(planFailure) || (planRequired && !activePlan && plans === undefined) || noActionableBulkTarget || activePlan?.canApply === false}>
+          {previewRecovery !== null && onPreviewRecovery && (
+            <button type="button" className="btn btn-ghost" onClick={() => void recoverPreview()} disabled={pending || recovering || planLoading}>
+              {recovering ? t("integrations.preview.recovering") : t("integrations.preview.loadCatalogRetry")}
+            </button>
+          )}
+          {/*
+            A refused preview leaves no plan to confirm. Without `previewRecovery`
+            here the button looked live and did nothing, which reads as a broken
+            dialog rather than the one retry the user can actually take.
+          */}
+          <button type="button" className="btn btn-primary" onClick={() => void applyConsequence()} disabled={pending || planLoading || previewRecovery !== null || Boolean(planFailure) || (planRequired && !activePlan && plans === undefined) || noActionableBulkTarget || activePlan?.canApply === false}>
             {t(copy.confirmKey)}
           </button>
         </div>

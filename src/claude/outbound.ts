@@ -3,6 +3,7 @@ import { ownedAnthropicErrorPayload, messagesOverflowPresentation } from "../lib
 import { proxyMessagePresentation, markProxyError, hasProxyErrorMessage, hasProxyIncomplete } from "../lib/client-error-body";
 import { admitMessagesFailure, collectMessagesFailure, type MessagesFailureVerdictSink } from "./failure-verdict";
 import { anthropicProgressEnvelope, isAnthropicProgressMirror } from "../responses/anthropic-progress";
+import { ADVISOR_SERVER_TOOL_NAME, isAdvisorCallInput, isAdvisorResultContent } from "../adapters/anthropic/advisor-tool";
 /**
  * Claude Code outbound: internal /v1/responses output -> Anthropic Messages API shapes.
  *
@@ -137,7 +138,8 @@ export function isThroughputLimitText(message: string): boolean {
 }
 
 /** Codes that say nothing about the cause, so the message decides (#8127). */
-const GENERIC_FAILURE_CODES: ReadonlySet<string> = new Set(["server_error", "upstream_error", "api_error", "internal_error"]);
+/** Generic 5xx responses use `upstream_server_error`; 503 uses `server_is_overloaded`. */
+const GENERIC_FAILURE_CODES: ReadonlySet<string> = new Set(["server_error", "upstream_error", "upstream_server_error", "api_error", "internal_error"]);
 const NON_OVERFLOW_ERROR_TYPES: ReadonlySet<string> = new Set(["rate_limit_error", "authentication_error", "permission_error"]);
 const NON_OVERFLOW_STATUSES: ReadonlySet<number> = new Set([401, 403, 429]);
 /**
@@ -161,8 +163,10 @@ function assertsOverflow(message: string): boolean {
   if (tooLong && !NEGATION_RE.test(tooLong[1] ?? "") && !CONDITIONAL_LEAD_RE.test(text.slice(0, tooLong.index))) return true;
   const counts = STATED_COUNTS_RE.exec(text);
   if (counts && Number(counts[2]) > Number(counts[1])) return true;
-  const exceeds = EXCEEDS_TEXT_RE.exec(text);
-  return exceeds !== null && !NEGATION_RE.test(exceeds[0]);
+  for (const exceeds of text.matchAll(new RegExp(EXCEEDS_TEXT_RE, "gi"))) {
+    if (!NEGATION_RE.test(exceeds[0]) && !CONDITIONAL_LEAD_RE.test(text.slice(0, exceeds.index))) return true;
+  }
+  return false;
 }
 
 /**
@@ -281,17 +285,24 @@ export function sanitizeWebSearchInput(input: unknown): Rec {
  * input (query/queries) and the web_search_tool_result content (hits, or the error
  * object when the search failed). An item carrying `anthropic_blocks` came from Anthropic's
  * own server-side call and maps back to those blocks verbatim (`srvtoolu_` id,
- * `encrypted_content`, web_fetch), so the client can replay them on its next turn.
+ * `encrypted_content`, web_fetch, the Advisor's `advisor_tool_result`), so the client can replay
+ * them on its next turn.
  * Shared by the SSE, JSON and direct translation paths.
  */
 export function webSearchPairFromItem(item: Rec): {
   id: string; name: string; resultType: string; input: Rec; resultContent: unknown; completed: boolean;
-} {
+} | undefined {
   const action = isRec(item.action) ? item.action : {};
   const completed = item.status !== "failed";
   const { use, result } = isRec(item.anthropic_blocks) ? item.anthropic_blocks : {};
+  // An Advisor exchange is only ever emitted verbatim; one that fails validation is dropped rather
+  // than falling through to an empty web_search below.
+  if (isRec(use) && use.name === ADVISOR_SERVER_TOOL_NAME && !(isRec(result) && typeof use.id === "string"
+    && isAdvisorCallInput(use.input) && isAdvisorResultContent(result.content)
+    && result.tool_use_id === use.id && result.type === "advisor_tool_result")) return undefined;
   if (isRec(use) && isRec(result) && typeof use.id === "string" && isRec(use.input)
-    && (use.name === "web_search" || use.name === "web_fetch")
+    && (use.name === "web_search" || use.name === "web_fetch"
+      || (use.name === ADVISOR_SERVER_TOOL_NAME && isAdvisorCallInput(use.input) && isAdvisorResultContent(result.content)))
     && result.tool_use_id === use.id && result.type === `${use.name}_tool_result`) {
     return { id: use.id, name: use.name, resultType: result.type, input: use.input, resultContent: result.content, completed };
   }
@@ -790,6 +801,7 @@ export function responsesSseToAnthropicSse(
               ensureStarted();
               closeOpenBlock();
               const pair = webSearchPairFromItem(item);
+              if (!pair) break;
               const toolIndex = blockIndex++;
               emit("content_block_start", {
                 type: "content_block_start", index: toolIndex,
@@ -1137,6 +1149,7 @@ export function responsesJsonToAnthropicMessage(json: unknown, model: string, tr
       case "web_search_call": {
         // Server-side search: emit the Anthropic pair. Does NOT set sawToolUse.
         const pair = webSearchPairFromItem(raw);
+        if (!pair) break;
         content.push({ type: "server_tool_use", id: pair.id, name: pair.name, input: pair.input });
         content.push({ type: pair.resultType, tool_use_id: pair.id, content: pair.resultContent });
         if (pair.completed && pair.name === "web_search") webSearchRequests++;

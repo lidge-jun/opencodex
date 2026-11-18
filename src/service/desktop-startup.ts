@@ -10,9 +10,13 @@ export interface DesktopStartupDiagnostic {
   /** Durable desktop claim; failed supervision does not release ownership. */
   owned: boolean;
   loginEnabled: boolean;
+  /** Whether login registration was verified for the supervising app. */
+  loginState?: "enabled" | "disabled" | "unknown";
   /** Verified enabled macOS registration; absence means registration is not credited. */
   loginRegistration?: "loaded" | "registered-not-loaded";
   running: boolean;
+  /** The supervision check did not complete; false running alone is not evidence of failure. */
+  supervisionUnknown?: boolean;
   viable: boolean;
   /**
    * Proven live parentage; never converts supervision into ownership. macOS and Linux report it
@@ -24,7 +28,8 @@ export interface DesktopStartupDiagnostic {
 
 /** A login item alone is insufficient: the same app must supervise this proxy. */
 export function deriveDesktopStartup(facts: Omit<DesktopStartupDiagnostic, "viable">): DesktopStartupDiagnostic {
-  return { ...facts, viable: (facts.owned || facts.supervisor !== undefined) && facts.loginEnabled && facts.running };
+  return { ...facts, loginState: facts.loginEnabled ? "enabled" : facts.loginState ?? "unknown",
+    viable: (facts.owned || facts.supervisor !== undefined) && facts.loginEnabled && facts.running };
 }
 
 export function desktopLoginStatusSummary(desktop: DesktopStartupDiagnostic): string {
@@ -96,12 +101,18 @@ function macLoginRegistration(deps: DesktopStartupDeps) {
     if (registrationPath !== realpathSync(path) || plistIdentity !== identity(path) || targetIdentity !== identity(registrationPath)
       || app !== realpathSync(args[0]) || proxy !== realpathSync(join(dirname(app), "ocx"))
       || appIdentity !== identity(app) || proxyIdentity !== identity(proxy)) return null;
-    return { app, proxy, loginEnabled, registrationPath, plistIdentity, targetIdentity, definition, appIdentity, proxyIdentity, disabled };
+    const verifiedDisabled = /^\s*disabled services = \{[\s\S]*\}\s*$/.test(disabled)
+      && mentions === 1 && (override === "disabled" || override === "true");
+    return { app, proxy, loginEnabled, verifiedDisabled, registrationPath, plistIdentity, targetIdentity, definition, appIdentity, proxyIdentity, disabled };
   };
   const first = capture();
   if (!first) return null;
   const { app, proxy } = first;
-  if (!first.loginEnabled) return { app, proxy, loginEnabled: false };
+  if (!first.loginEnabled) {
+    const final = first.verifiedDisabled ? capture() : null;
+    return { app, proxy, loginEnabled: false, loginState: final && JSON.stringify(first) === JSON.stringify(final)
+      ? "disabled" as const : "unknown" as const };
+  }
   let loaded: string;
   try { loaded = execute("/bin/launchctl", ["print", `${domain}/OpenCodex`]); }
   catch (error) {
@@ -141,7 +152,7 @@ function macLoginRegistration(deps: DesktopStartupDeps) {
 const SMD_SUBMITTED = /^\(submitted by smd\.\d+\)$/;
 const SERVICE_MANAGEMENT = "com.apple.xpc.ServiceManagement";
 
-type DesktopLoginFacts = Pick<DesktopStartupDiagnostic, "loginEnabled" | "loginRegistration">;
+type DesktopLoginFacts = Pick<DesktopStartupDiagnostic, "loginEnabled" | "loginRegistration" | "loginState">;
 
 /**
  * Start at Login credit for one Desktop app copy. The tray's Start at Login item ports this
@@ -151,7 +162,7 @@ type DesktopLoginFacts = Pick<DesktopStartupDiagnostic, "loginEnabled" | "loginR
 export function macLoginFactsFor(app: string, deps: DesktopStartupDeps): DesktopLoginFacts {
   const login = macLoginRegistration(deps);
   return login !== null && login.app === app
-    ? { loginEnabled: login.loginEnabled, ...(login.loginRegistration ? { loginRegistration: login.loginRegistration } : {}) }
+    ? { loginEnabled: login.loginEnabled, ...(login.loginState ? { loginState: login.loginState } : {}), ...(login.loginRegistration ? { loginRegistration: login.loginRegistration } : {}) }
     : { loginEnabled: false };
 }
 
@@ -173,11 +184,54 @@ function diagnoseSupervisedStartup(deps: DesktopStartupDeps, ownerRevision: numb
   return deriveDesktopStartup({ owned: false, ...login, running: true, supervisor: { supervisorPid, runtimePid, app } });
 }
 
+/** An absent plist is a verified off state only for a stable, independently observed Desktop. */
+function macRegistrationAbsent(deps: DesktopStartupDeps): boolean {
+  try {
+    lstatSync(join(deps.home ?? homedir(), "Library", "LaunchAgents", "OpenCodex.plist"));
+    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+    throw error;
+  }
+}
+
+function diagnoseAbsentMacRegistration(deps: DesktopStartupDeps, owner: ServiceOwnershipResolution): DesktopStartupDiagnostic | undefined {
+  if (owner.kind === "unknown") return undefined;
+  const owned = owner.kind === "owned" && owner.ownership.owner === "desktop";
+  const fallback = owned ? deriveDesktopStartup({ owned: true, loginEnabled: false, running: false, supervisionUnknown: true }) : undefined;
+  const ownership = deps.ownership ?? resolveServiceOwnership;
+  try {
+    const installIdPath = join(deps.home ?? homedir(), "Library", "Application Support", "com.opencodex.desktop", "install-id");
+    const installId = owned ? readFileSync(installIdPath, "utf8").trim() : null;
+    if (owned && (owner.kind !== "owned" || installId !== owner.ownership.installId)) return fallback;
+    const first = inspectDesktopSupervision(deps);
+    if (owned && first.kind === "none") {
+      const currentOwner = ownership();
+      return currentOwner.kind !== "unknown" && sameServiceOwnershipSubject(owner, currentOwner)
+        && macRegistrationAbsent(deps) && readFileSync(installIdPath, "utf8").trim() === installId
+        ? deriveDesktopStartup({ owned: true, loginEnabled: false, running: false }) : fallback;
+    }
+    if (first.kind !== "desktop" || !macRegistrationAbsent(deps)) return fallback;
+    const final = inspectDesktopSupervision({ ...deps, targetPid: first.runtimePid });
+    const currentOwner = ownership();
+    if (final.kind !== "desktop" || final.runtimePid !== first.runtimePid || final.supervisorPid !== first.supervisorPid
+      || final.app !== first.app || final.proxy !== first.proxy || currentOwner.kind === "unknown"
+      || !sameServiceOwnershipSubject(owner, currentOwner) || !macRegistrationAbsent(deps)
+      || (owned && readFileSync(installIdPath, "utf8").trim() !== installId)) return fallback;
+    return deriveDesktopStartup({ owned, loginEnabled: false, loginState: "disabled", running: true,
+      ...(!owned ? { supervisor: { supervisorPid: first.supervisorPid, runtimePid: first.runtimePid, app: first.app } } : {}) });
+  } catch { return fallback; }
+}
+
 /** Read-only macOS desktop ownership, login registration and live parent/child checks. */
 export function diagnoseMacDesktopStartup(deps: DesktopStartupDeps = {}): DesktopStartupDiagnostic | undefined {
   if ((deps.platform ?? process.platform) !== "darwin") return undefined;
   const ownership = deps.ownership ?? resolveServiceOwnership;
   const owner = ownership();
+  if (owner.kind === "none" || (owner.kind === "owned" && owner.ownership.owner === "desktop")) {
+    try { if (macRegistrationAbsent(deps)) return diagnoseAbsentMacRegistration(deps, owner); }
+    catch { /* Unreadable registration is handled by the existing conservative path. */ }
+  }
   if (owner.kind === "none") return diagnoseSupervisedStartup(deps, owner.revision, app => macLoginFactsFor(app, deps));
   if (owner.kind !== "owned" || owner.ownership.owner !== "desktop") return undefined;
   const facts: Omit<DesktopStartupDiagnostic, "viable"> = { owned: true, loginEnabled: false, running: false };
@@ -186,24 +240,33 @@ export function diagnoseMacDesktopStartup(deps: DesktopStartupDeps = {}): Deskto
   try {
     const home = deps.home ?? homedir();
     const id = readFileSync(join(home, "Library", "Application Support", "com.opencodex.desktop", "install-id"), "utf8").trim();
-    if (id !== owner.ownership.installId) return deriveDesktopStartup(facts);
+    if (id !== owner.ownership.installId) return deriveDesktopStartup({ ...facts, supervisionUnknown: true });
+    const pid = pidReader();
+    const child = pid !== null ? processIdentity(pid, execute) : null;
+    const parent = child && child.parent > 1 ? processIdentity(child.parent, execute) : null;
     const login = macLoginRegistration(deps);
-    if (!login) return deriveDesktopStartup(facts);
+    if (!login) return deriveDesktopStartup({ ...facts, supervisionUnknown: true });
     const { app, proxy } = login;
     facts.loginEnabled = login.loginEnabled;
+    facts.loginState = login.loginState;
     if (login.loginRegistration) facts.loginRegistration = login.loginRegistration;
-    const pid = pidReader();
     if (pid !== null) {
-      const child = processIdentity(pid, execute);
-      const parent = child && child.parent > 1 ? processIdentity(child.parent, execute) : null;
-      facts.running = child?.executable === proxy && parent?.executable === app && pidReader() === pid;
+      const finalChild = processIdentity(pid, execute);
+      const finalParent = finalChild && finalChild.parent > 1 ? processIdentity(finalChild.parent, execute) : null;
+      facts.running = child?.executable === proxy && parent?.executable === app && pidReader() === pid
+        && JSON.stringify(child) === JSON.stringify(finalChild) && JSON.stringify(parent) === JSON.stringify(finalParent);
     }
     const currentOwner = ownership();
-    if (currentOwner.kind === "unknown" || !sameServiceOwnershipSubject(owner, currentOwner)) facts.running = false;
+    if (currentOwner.kind === "unknown" || !sameServiceOwnershipSubject(owner, currentOwner) || (pid !== null && !facts.running)) {
+      facts.running = false;
+      facts.loginEnabled = false;
+      facts.loginState = "unknown";
+    }
+    if (!facts.running && !facts.loginEnabled) facts.loginState = "unknown";
     return deriveDesktopStartup(facts);
   } catch {
     // Unreadable launchd/process evidence never grants protection or releases the claim.
-    return deriveDesktopStartup({ ...facts, running: false });
+    return deriveDesktopStartup({ ...facts, loginEnabled: false, loginState: "unknown", running: false, supervisionUnknown: true });
   }
 }
 

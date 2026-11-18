@@ -232,4 +232,49 @@ describe("openai-chat dangling tool_calls hardening", () => {
     expect(text).toContain("user-provided input");
     expect(text).not.toContain("interrupted");
   });
+
+  test("T11 repeated results for one call fold into the answer the call already got", () => {
+    const messages = wire([
+      user("continue"),
+      assistantWithCalls([{ id: "toolu_exec", name: "exec" }]),
+      toolResult("toolu_exec", "exec", "Script running with cell ID 108\n"),
+      toolResult("toolu_exec", "exec", "row 1"),
+      toolResult("toolu_exec", "exec", "row 2"),
+    ]);
+    assertWireInvariants(messages);
+    const answers = messages.filter(m => m.role === "tool");
+    expect(answers).toHaveLength(1);
+    expect(answers[0]!.tool_call_id).toBe("toolu_exec");
+    expect(answers[0]!.content).toBe("Script running with cell ID 108\n\n\nrow 1\n\nrow 2");
+  });
+
+  test("T12 a repeated result for call A after call B was answered does not split B's round", () => {
+    const messages = wire([
+      user("continue"),
+      assistantWithCalls([{ id: "call_a", name: "exec" }, { id: "call_b", name: "wait" }]),
+      toolResult("call_a", "exec", "first"),
+      toolResult("call_b", "wait", "waited"),
+      toolResult("call_a", "exec", "late"),
+    ]);
+    assertWireInvariants(messages);
+    const answers = messages.filter(m => m.role === "tool");
+    expect(answers.map(m => m.tool_call_id)).toEqual(["call_a", "call_b"]);
+    expect(answers[0]!.content).toBe("first");
+    expect(messages.at(-1)?.content).toEqual([{ type: "text", text: "[ocx] additional output for tool call call_a:\nlate" }]);
+  });
+
+  test("repeated orphan results share one synthetic call and preserve both outputs", () => {
+    const messages = wire([
+      user("continue"),
+      toolResult("call_ghost", "exec", "first"),
+      toolResult("call_other", "wait", "other"),
+      toolResult("call_ghost", "exec", "late"),
+    ]);
+    assertWireInvariants(messages);
+    const answers = messages.filter(m => m.role === "tool");
+    expect(answers.map(m => m.tool_call_id)).toEqual(["call_ghost", "call_other"]);
+    expect(answers[0]!.content).toBe("first");
+    expect(answers[1]!.content).toBe("other");
+    expect(messages.at(-1)?.content).toEqual([{ type: "text", text: "[ocx] additional output for tool call call_ghost:\nlate" }]);
+  });
 });

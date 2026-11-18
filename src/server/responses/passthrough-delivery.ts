@@ -1,5 +1,8 @@
 import { clientFacingModelText } from "../../lib/error-destination";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
+import { noteRelaySyntheticTail, noteRequestSentValueGuard } from "../request-log-terminal-status";
+import { createSentValueGuard } from "../../lib/outbound-credential-registry";
+import { carryPolicyCandidateRefusal } from "./policy-request-scope";
 import { markProxyError, rememberProxyErrorMessage, carryProxyError } from "../../lib/client-error-body";
 import { releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
@@ -10,13 +13,14 @@ import { isNativeControlResponse } from "./native-response-control";
 import { guardBufferedComboRequiredTool } from "./combo-required-tool-contract";
 import { createComboRequiredToolStreamGuard } from "./combo-required-tool-stream";
 import { attachResponseToolOwnership } from "./response-tool-ownership";
-import { createOutboundCredentialMask, createTerminalErrorRedactionBlockRewrite } from "./terminal-error-redaction";
+import { createForwardedEvidenceRedaction, createOutboundCredentialMask, createSynthesizedCopyMask, createTerminalErrorRedactionBlockRewrite } from "./terminal-error-redaction";
 import type { ResponsesRequestContext, ResponsesAdmissionState } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
 import type { ResponsesSidecarAuth } from "./request-sidecar-auth";
 import type { ResponsesEffects } from "./response-effects";
 import type { PassthroughExchange } from "./passthrough-dispatch";
+import type { AuxiliaryModelSend } from "../../lib/request-execution-budget";
 import {
   sanitizePassthroughHeaders,
   createSseInspector,
@@ -31,7 +35,9 @@ import {
 import { isUsageDebugEnabled } from "../../usage/debug";
 import { isNonReplayableResponse, isReplayRefusalResponse } from "../../lib/upstream-retry";
 import { sanitizeNonReplayableUpstreamError } from "./non-replayable-error";
-import { teeWithBoundedInspection } from "../inspection-tee";
+import { sliceChunks, teeWithBoundedInspection } from "../inspection-tee";
+import { markPacedStream } from "../../lib/paced-stream";
+import { LINK_PACED_SLICE_BYTES, linkTurnPacesReads } from "../link-turn";
 import {
   codexForwardTerminalOutcomeRecorder,
   usesCodexForwardPoolAuth,
@@ -55,6 +61,7 @@ import { clientCancelledResponse, readDisplaySafeErrorText } from "./core-errors
 import { streamingContextOverflowResponse, jsonContextOverflowResponse } from "./context-overflow";
 import { formatPassthroughUpstreamError } from "./passthrough-error";
 import { rewriteUpstreamPolicyRefusal } from "./policy-refusal";
+import { stampMetaMusePlanRefusal } from "../../providers/meta-muse-plan-refusal";
 import {
   resolvePassthroughWebSearchBridgeAuth,
   planPassthroughWebSearchBridge,
@@ -156,7 +163,12 @@ import { registerTurn, unregisterTurn, trackStreamLifetime } from "../lifecycle"
 import { relaySseEagerBounded } from "../relay-eager";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { idleDeadline } from "../../lib/abort";
-import { resolveStallTimeoutMs } from "../../stall-timeout";
+import { explicitStallTimeoutMs, resolveStallTimeoutMs } from "../../stall-timeout";
+import { guardResponseBodyInactivity, isResponseBodyInactivityGuarded } from "../../lib/response-body-inactivity";
+import {
+  createEstimatedUsagePayloadRewrite, ESTIMATED_USAGE_HEADER, estimatedUsageJson, estimatesMissingUsage,
+} from "./estimated-usage";
+import { estimateInputTokens } from "./input-admission";
 import { formatErrorResponse } from "../../bridge";
 import {
   httpStatusFromTerminalError,
@@ -171,11 +183,13 @@ import { restoreRoutedToolSearchCallsInJson } from "../../responses/tool-search-
 import { responsesJsonToSseStream } from "../responses-json-events";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import {
+  BUFFERED_RESPONSES_TOTAL_TIMEOUT_MS,
   bufferedResponsesReadOptions,
   collectBufferedResponsesSse,
   type BufferedResponsesSseFailure,
   type BufferedResponsesSseResult,
 } from "./buffered-sse-json";
+import { bufferedResetSelectionStartedAt } from "./passthrough-completion";
 
 const PLAINTEXT_V2_SSE_PREFIX_LIMIT = 4096;
 
@@ -432,10 +446,11 @@ export async function deliverPassthroughResponse(
     | "localUpstream"
     | "terminalOutcomeRecorded"
   >,
+  dispatchSidecarSend?: AuxiliaryModelSend,
 ): Promise<Response> {
   const { route } = requestState;
   // The proof must belong to the response whose headers are published.
-  const arrivalMainDispatch = liveMainQuotaDispatch(admissionState.authCtx, route.provider);
+  const arrivalMainDispatch = liveMainQuotaDispatch(admissionState.authCtx, route.provider, nativeExchange.upstreamResponse);
   const { logCtx, config, options, req } = requestContext;
   const {
     codexSafetyBufferingOptions,
@@ -460,6 +475,11 @@ export async function deliverPassthroughResponse(
   } = nativeExchange;
   const { commitReasoningReplayServingRoute, recordTerminalOutcomes } = responseEffects;
   const { parsed, subagentQuotaFailureModel, clientRequestedStream, translatorBudget } = requestState;
+  // #7427: opt-in estimated usage for a provider that omits it. Client-facing only; the request log,
+  // spend and quota read the provider's original body.
+  const estimateUsage = estimatesMissingUsage(route.provider, options);
+  let usageInputEstimate: number | undefined;
+  const inputEstimate = (): number => usageInputEstimate ??= estimateInputTokens(parsed, route.modelId, route.provider);
   const { openAiSidecar } = sidecarState;
   const { requestBindings } = transportState;
 
@@ -639,7 +659,11 @@ export async function deliverPassthroughResponse(
         // "captures passthrough failed usage from its original bounded body exactly once").
         // Attaching a guard would be a second `.body` access and break that contract for no
         // gain, since the bounded reader owns settlement on this path.
-        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal);
+        // Only the plan-refusal cause is carried to this leg's row (#8352); a throwaway holder
+        // keeps the other diagnostics this path has never recorded off it.
+        const comboCause: Pick<typeof logCtx, "causeHint"> = {};
+        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal, undefined, comboCause);
+        if (comboCause.causeHint) logCtx.causeHint = comboCause.causeHint;
         options.onConsumedComboFailure?.(failure);
         return failure.response;
       }
@@ -662,13 +686,15 @@ export async function deliverPassthroughResponse(
         turnAdmissionLease: options.turnAdmissionLease,
       });
       if (policyRefusal) return policyRefusal;
-      return carryProxyError(upstreamResponse, formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
+      // Meta's Muse Code refusal is a plan restriction, not a rejected credential (#8352).
+      stampMetaMusePlanRefusal(logCtx, upstreamResponse.status, errorText);
+      return carryPolicyCandidateRefusal(upstreamResponse, carryProxyError(upstreamResponse, formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
         statusText: upstreamResponse.statusText,
         headers,
         // Provenance, not inference: `errorText` is empty when the bounded read finds nothing
         // display-safe, and an empty body is exactly what the retryable-429 default fires on.
         replayRefusal: isReplayRefusalResponse(upstreamResponse),
-      }));
+      })));
     }
 
     if (options.nativeControl && isNativeControlResponse(upstreamResponse) && upstreamResponse.body) {
@@ -725,18 +751,26 @@ export async function deliverPassthroughResponse(
       });
       // Capture the binding that actually served the first leg, after its permitted reselection.
       const webSearchBridgeBinding = requestBindings.get(nativeExchange.request);
+      // #8206: an explicit stallTimeoutSec bounds silence on the native upstream body for every
+      // streaming relay. Unset keeps this relay without a clock; the canonical JSON fold keeps
+      // its own deadlines, and reset selection already guarded the bodies it published.
+      const nativeSseStallMs = canonicalBufferedJson || isResponseBodyInactivityGuarded(upstreamResponse)
+        ? 0 : explicitStallTimeoutMs(config.stallTimeoutSec);
+      const nativeSseBody = nativeSseStallMs > 0
+        ? guardResponseBodyInactivity(upstreamResponse, upstream.signal, nativeSseStallMs, { explicitBudget: true }).response.body!
+        : upstreamResponse.body;
       // Repair must observe the raw first leg before the bridge suppresses an intercepted search
       // lifecycle. Otherwise a provider that leaves that complete call open never arms repair's
       // grace timer, so the bridge cannot execute the search or begin its continuation.
       let passthroughSseBody = terminalRepairPolicy
         ? relayResponsesSseWithTerminalRepair(
-          upstreamResponse.body,
+          nativeSseBody,
           upstream,
           terminalRepairPolicy,
           translatorBudget,
           options.responsesTerminalRepairScheduler, logCtx,
         )
-        : upstreamResponse.body;
+        : nativeSseBody;
       passthroughSseBody = webSearchBridgePlan
         ? createPassthroughWebSearchBridgeStream({
           plan: webSearchBridgePlan,
@@ -768,20 +802,28 @@ export async function deliverPassthroughResponse(
             );
             // The same provider can leave a complete continuation open without a terminal, which
             // stalls the bridge's decide loop exactly like the first leg — so every leg gets the
-            // same repair, not only the intercepted first one.
-            if (!terminalRepairPolicy || !continuation.ok || !continuation.body) return continuation;
+            // same repair and the same explicit silence clock, not only the intercepted first one.
+            if (!continuation.ok || !continuation.body) return continuation;
+            // A continuation is a fresh upstream body: guard it from the explicit budget even when
+            // reset selection already guarded the first leg (and so left nativeSseStallMs at 0).
+            const continuationStallMs = explicitStallTimeoutMs(config.stallTimeoutSec);
+            const guardedContinuation = continuationStallMs > 0
+              ? guardResponseBodyInactivity(continuation, upstream.signal, continuationStallMs, { explicitBudget: true }).response
+              : continuation;
+            if (!terminalRepairPolicy) return guardedContinuation;
             return new Response(
               relayResponsesSseWithTerminalRepair(
-                continuation.body,
+                guardedContinuation.body!,
                 upstream,
                 terminalRepairPolicy,
                 translatorBudget,
                 options.responsesTerminalRepairScheduler, logCtx,
               ),
-              continuation,
+              guardedContinuation,
             );
           },
           execute: createPassthroughWebSearchBridgeExecutor(webSearchBridgePlan, {
+            dispatchSidecarSend,
             providerApiKey: route.provider.apiKey ?? "",
             auth: webSearchBridgeAuth,
             hostedTool: parsed._webSearch,
@@ -856,6 +898,12 @@ export async function deliverPassthroughResponse(
         }, { dispose: () => plaintextInspector.dispose() })
         : undefined;
       const maskCredential = createOutboundCredentialMask(nativeExchange.request.headers);
+      // Copy a boundary synthesizes from upstream evidence, and the row's copy, also refuse any value
+      // this request sent, decided from its own headers.
+      const repeatsSentValue = createSentValueGuard(nativeExchange.request.headers);
+      noteRequestSentValueGuard(logCtx, repeatsSentValue);
+      const synthesizedCopyMask = createSynthesizedCopyMask(nativeExchange.request.headers, repeatsSentValue);
+      const forwardedEvidenceRedaction = createForwardedEvidenceRedaction(nativeExchange.request.headers, maskCredential);
       const requiredStreamEvidence = { replayUnsafe: !!webSearchBridgePlan };
       const normalizeRequiredToolItem = (item: unknown) => {
         item = restoreImageGenCalls(item, imageGenCallAliases).value;
@@ -958,7 +1006,12 @@ export async function deliverPassthroughResponse(
         (!canonicalBufferedJson || !options.comboAttempt) && isLocalCodexImageClient(req.headers, options.admission?.kind, options.inboundWire)
           ? createHostedImageDisplayRewrite()
           : undefined,
+        // Last, so it sees the response the client receives; never on the canonical JSON fold.
+        estimateUsage && !canonicalBufferedJson
+          ? payloadRewriteAsBlockRewrite(createEstimatedUsagePayloadRewrite(inputEstimate, route.modelId))
+          : undefined,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
+      if (estimateUsage && !canonicalBufferedJson) headers.set(ESTIMATED_USAGE_HEADER, "when-missing");
       const clientBlockRewrite = blockRewrites.length > 0
         ? composeSseBlockRewrites(...blockRewrites)
         : undefined;
@@ -966,10 +1019,11 @@ export async function deliverPassthroughResponse(
 
       if (canonicalBufferedJson) {
         const signal = options.abortSignal ?? req.signal;
+        // A turn whose head waited on reset selection keeps the deadline that wait already spent.
         const bufferedRead = bufferedResponsesReadOptions(resolveStallTimeoutMs(
           config.stallTimeoutSec,
           { localUpstream: nativeExchange.localUpstream },
-        ));
+        ), BUFFERED_RESPONSES_TOTAL_TIMEOUT_MS, bufferedResetSelectionStartedAt(nativeExchange.upstreamResponse) ?? Date.now());
         const failBufferedTurn = (
           message: string,
           failure?: BufferedResponsesSseFailure,
@@ -983,9 +1037,9 @@ export async function deliverPassthroughResponse(
           const presentation = rawPresentation === undefined ? undefined : {
             status: rawPresentation.status,
             error: {
-              type: maskCredential(rawPresentation.error.type),
-              code: maskCredential(rawPresentation.error.code),
-              message: maskCredential(rawPresentation.error.message),
+              type: synthesizedCopyMask(rawPresentation.error.type),
+              code: synthesizedCopyMask(rawPresentation.error.code),
+              message: synthesizedCopyMask(rawPresentation.error.message),
             },
           };
           if (upstreamError !== undefined) {
@@ -1037,7 +1091,7 @@ export async function deliverPassthroughResponse(
         let raw: BufferedResponsesSseResult | undefined = await collectBufferedResponsesSse(
           passthroughSseBody,
           upstream,
-          { signal, terminalBoundary: codexSafetyBufferingOptions, read: bufferedRead, retainTranscript: true },
+          { signal, terminalBoundary: codexSafetyBufferingOptions, read: bufferedRead, retainTranscript: true, maskCredential: synthesizedCopyMask },
         );
         if (!raw.ok) {
           if (raw.kind === "aborted" || signal.aborted) {
@@ -1069,7 +1123,7 @@ export async function deliverPassthroughResponse(
           )
           : replayBufferedSse(rawBytes);
         const client = await collectBufferedResponsesSse(bufferedClientBody, upstream, {
-          signal,
+          signal, maskCredential: synthesizedCopyMask,
           read: bufferedRead,
           retainTranscript: false,
         });
@@ -1185,6 +1239,10 @@ export async function deliverPassthroughResponse(
       }
 
       const relayPlatform = relayPlatformForTests ?? process.platform;
+      // Every relayed Remote Link turn reads its upstream only as its client drains (#8601), feature switch or not;
+      // every other request keeps the relays' read-ahead below. Its chunks travel in slices, and the paced mark makes the
+      // tee, the eager relay and every stage after them read one slice at a time as the client asks (src/lib/paced-stream.ts).
+      if (linkTurnPacesReads(logCtx)) passthroughSseBody = markPacedStream(sliceChunks(passthroughSseBody, LINK_PACED_SLICE_BYTES));
       // #864: win32 rewrite traffic must never enter the tee()+JS-pull chain
       // (Bun#32111 JS-sink segfault — text frames pass, the terminal block is
       // lost). The eager single reader applies the same rewrites inline.
@@ -1265,7 +1323,9 @@ export async function deliverPassthroughResponse(
         }, {
           clientGoneSignal: options.abortSignal,
           terminalBoundary: codexSafetyBufferingOptions,
-          maskCredential,
+          maskCredential: synthesizedCopyMask,
+          redactForwardedEvidence: forwardedEvidenceRedaction,
+          onSyntheticTail: (payload, verdict) => noteRelaySyntheticTail(logCtx, payload, verdict),
           ...(inlineEagerRewrite ? { rewriteBudget: translatorBudget } : {}),
           ...(logCtx.upstreamError === undefined ? {} : { upstreamError: logCtx.upstreamError }),
         });
@@ -1360,7 +1420,8 @@ export async function deliverPassthroughResponse(
           responseEffects.responseCompletionCancelled = true;
           clientGone.abort(reason);
         },
-        { upstreamError: logCtx.upstreamError, terminalBoundary: codexSafetyBufferingOptions, maskCredential },
+        { upstreamError: logCtx.upstreamError, terminalBoundary: codexSafetyBufferingOptions, maskCredential: synthesizedCopyMask, redactForwardedEvidence: forwardedEvidenceRedaction,
+          onSyntheticTail: (payload, verdict) => noteRelaySyntheticTail(logCtx, payload, verdict) },
       );
       return markNativePassthroughSseResponse(new Response(clientBody, {
         status: upstreamResponse.status,
@@ -1475,6 +1536,15 @@ export async function deliverPassthroughResponse(
           }
           throw error;
         } finally { imageDisplay.dispose?.(); }
+      }
+      if (estimateUsage && upstreamResponse.ok) {
+        const estimated = estimatedUsageJson(clientJson, inputEstimate(), route.modelId);
+        if (estimated !== undefined) {
+          clientJson = estimated;
+          headers.set(ESTIMATED_USAGE_HEADER, "true");
+          // The request-log finalizer parses the delivered body again; keep the estimate out of it.
+          logCtx.usageEstimatedForClient = true;
+        }
       }
       // #875: the transport-neutral reliability policy forced a bounded JSON
       // upstream for a client that asked for SSE. Reframe the completed JSON

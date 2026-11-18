@@ -31,7 +31,11 @@ for (const lane of ["tap", "native-fixture", "native-anthropic"]) for (const sce
     expect(base).toBeDefined();
     const { bytes: baseBytes, ...baseFacts } = base;
     const { bytes: headBytes, ...headFacts } = head;
-    expect(headFacts).toEqual(baseFacts);
+    // A cancel now keeps the usage it already received (#7374 review); the base dropped it.
+    if (scenario === "cancel" && lane !== "tap") {
+      expect(head).toHaveProperty("usage", { inputTokens: 5, outputTokens: 0 });
+      expect({ ...headFacts, usage: undefined }).toEqual({ ...baseFacts, usage: undefined });
+    } else expect(headFacts).toEqual(baseFacts);
     // Changed client rows only: owned overflow data; fixed throughput/stall/cap/read wording.
     const changed = lane !== "tap" && ["overflow", "throughput", "cap", "stall", "read-error"].includes(scenario);
     if (changed) {

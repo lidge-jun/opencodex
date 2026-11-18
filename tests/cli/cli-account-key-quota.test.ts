@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cmdAccount, formatAccountTable, type AccountDeps } from "../../src/cli/account";
 import { fetchRows } from "../../src/cli/account-api";
-import { projectApiKeyQuotaRows } from "../../src/cli/account-key-quota";
+import { apiKeyQuotaText, projectApiKeyQuotaRows } from "../../src/cli/account-key-quota";
+import { providerQuotaLine } from "../../src/cli/account-extended";
 import { handleOauthAccountRoutes } from "../../src/server/management/oauth-account-routes";
 import { getProviderQuotaReportCache } from "../../src/providers/quota/report-cache";
 import * as quotaApi from "../../src/providers/quota";
@@ -51,6 +52,63 @@ function depsFor(reply: unknown): AccountDeps {
       : path === "/api/codex-auth/active" ? { activeCodexAccountId: null } : reply);
   }) as typeof fetch };
 }
+
+test("unknown budget windows survive CLI projection and have no fabricated percentage", () => {
+  const quota = { updatedAt: 1, unknownBudgetWindows: [{ label: "API budget (EDU)", resetAt: 1796083200000 }] };
+  const result = projectApiKeyQuotaRows(body([row({ quota })]), "mistral");
+  expect(apiKeyQuotaText(result.rows[0]!)).toContain("API budget (EDU) unknown");
+  expect(providerQuotaLine("mistral", { provider: "mistral", quota })).toContain("API budget (EDU) unknown");
+});
+
+test("measured budget display details survive both CLI quota views", () => {
+  const quota = { updatedAt: 1, customWindows: [
+    { label: "API budget", displayLabel: "API budget (EUR 2.50 of EUR 20.00 used; EDU)", percent: 12.5 },
+    { label: "Vibe budget", displayLabel: "Vibe budget (EUR 0.20 of EUR 10.00 used; EDU)", percent: 2 },
+  ] };
+  const result = projectApiKeyQuotaRows(body([row({ quota })]), "mistral");
+  for (const text of [apiKeyQuotaText(result.rows[0]!), providerQuotaLine("mistral", { provider: "mistral", quota })]) {
+    expect(text).toContain("API budget (EUR 2.50 of EUR 20.00 used; EDU)");
+    expect(text).toContain("Vibe budget (EUR 0.20 of EUR 10.00 used; EDU)");
+  }
+});
+
+test("display labels cannot inject terminal lines into CLI quota output", () => {
+  const quota = { updatedAt: 1, customWindows: [{ label: "API budget", displayLabel: "budget\nunsafe", percent: 10 }] };
+  const result = projectApiKeyQuotaRows(body([row({ quota })]), "mistral");
+  for (const text of [apiKeyQuotaText(result.rows[0]!), providerQuotaLine("mistral", { provider: "mistral", quota })]) {
+    expect(text).not.toContain("\n");
+  }
+  expect(() => projectApiKeyQuotaRows(body([row({ quota: { updatedAt: 1, customWindows: [{ label: "x", percent: 1, displayLabel: 4 }] } })]), "mistral")).toThrow("Malformed");
+});
+
+test("stable labels without a display label are safe in account refresh", () => {
+  const quota = { updatedAt: 1, customWindows: [{ label: "budget\u001b[31m\nunsafe", percent: 10 }] };
+  const text = providerQuotaLine("mistral", { provider: "mistral", quota });
+  expect(text).not.toContain("\u001b");
+  expect(text).not.toContain("\n");
+});
+
+test("account refresh strips terminal controls from unknown budget labels", async () => {
+  const escape = String.fromCharCode(27);
+  const bell = String.fromCharCode(7);
+  const report = { provider: "openrouter", quota: { unknownBudgetWindows: [{ label: `API budget${escape}]0;spoof${bell}` }] } };
+  expect(await cmdAccount(["refresh", "openrouter"], depsFor({ reports: [report] }))).toBe(0);
+  const output = logs.join("\n");
+  expect(output).toContain("API budget");
+  expect(output).toContain("unknown");
+  expect(output).not.toContain(escape);
+  expect(output).not.toContain(bell);
+});
+
+test("account refresh strips terminal controls from custom window labels", async () => {
+  const escape = String.fromCharCode(27);
+  const report = { provider: "openrouter", quota: { customWindows: [{ label: `window${escape}[2J`, percent: 12 }] } };
+  expect(await cmdAccount(["refresh", "openrouter"], depsFor({ reports: [report] }))).toBe(0);
+  const output = logs.join("\n");
+  expect(output).toContain("window");
+  expect(output).toContain("12%");
+  expect(output).not.toContain(escape);
+});
 
 test("quota intent uses encoded fixed query and redirect:error only on opt-in", async () => {
   const calls: { url: string; init?: RequestInit }[] = [];
@@ -233,5 +291,72 @@ test("quota key rows keep the pause flag and only known pause details", () => {
   expect(rows[1]!.paused).toBe(true);
   expect(rows[1]!.pauseDetails).toBeUndefined();
   expect(rows[2]!.paused).toBe(false);
+});
+
+test("#8397 unsupported keys say why the balance is unknown and carry no value", async () => {
+  const fixture = config(); fixture.providers.openrouter.baseUrl = "https://example.invalid";
+  const deps = handlerDeps(fixture);
+  const cheap = await (await deps.fetchImpl!("http://localhost:10100/api/providers/keys?name=openrouter")).json();
+  expect(cheap.keys.map((key: { quotaUnknownReason?: string }) => key.quotaUnknownReason)).toEqual(["no_balance_source", "no_balance_source"]);
+  expect(await cmdAccount(["list", "openrouter", "--quota", "--json"], deps)).toBe(0);
+  for (const account of JSON.parse(logs.pop()!).accounts) {
+    expect(account).toMatchObject({ quotaMode: "unsupported", quotaUnknownReason: "no_balance_source" });
+    expect(Object.hasOwn(account, "quota")).toBe(false);
+    expect(Object.hasOwn(account, "quotaReadAt")).toBe(false);
+  }
+  expect(await cmdAccount(["list", "openrouter", "--quota"], deps)).toBe(0);
+  const text = logs.join("\n");
+  expect(text).toContain("balance UNKNOWN (no balance source)");
+  expect(text).not.toMatch(/\b0%/);
+});
+
+test("#8397 probe rows report when the balance was read, and read_failed when the read failed", async () => {
+  const fixture = config();
+  const before = Date.now();
+  const quotaSpy = spyOn(quotaApi, "fetchProviderApiKeyQuotas").mockImplementation((c, name, force) =>
+    readProviderApiKeyQuotas(c, name, force ?? false, async provider => provider.apiKey === "fixture-first"
+      ? { kind: "quota", quota: { updatedAt: Date.now(), monthlyPercent: 0 } }
+      : { kind: "unavailable" }));
+  try {
+    const deps = handlerDeps(fixture);
+    expect(await cmdAccount(["list", "openrouter", "--quota", "--json"], deps)).toBe(0);
+    const [ok, failed] = JSON.parse(logs.pop()!).accounts;
+    expect(ok.quota.monthlyPercent).toBe(0);
+    expect(ok.quotaReadAt).toBeGreaterThanOrEqual(before);
+    expect(Object.hasOwn(ok, "quotaUnknownReason")).toBe(false);
+    expect(failed).toMatchObject({ quota: null, quotaUnavailable: true, quotaUnknownReason: "read_failed" });
+    expect(failed.quotaReadAt).toBeGreaterThanOrEqual(before);
+    expect(await cmdAccount(["list", "openrouter", "--quota"], deps)).toBe(0);
+    const text = logs.join("\n");
+    expect(text).toContain("probe: mo 0%; read just now");
+    expect(text).toContain("probe: unavailable; balance UNKNOWN (read failed); read just now");
+  } finally { quotaSpy.mockRestore(); }
+});
+
+test("#8397 human text gives the reason and the age of the last read; unknown reasons are dropped", () => {
+  const now = Date.now();
+  const rows = projectApiKeyQuotaRows(body([
+    row({ quotaMode: "unsupported", quotaUnknownReason: "no_balance_source" }),
+    row({ quota: { updatedAt: now - 180_000, monthlyPercent: 12 }, quotaReadAt: now - 180_000 }),
+    row({ quota: null, quotaUnavailable: true, quotaFailure: "timeout", quotaUnknownReason: "read_failed", quotaReadAt: now - 2 * 3_600_000 }),
+    row({ quotaMode: "passive", quotaUnknownReason: "passive_not_observed" }),
+    row({ quotaMode: "unsupported", quotaUnknownReason: "reason_from_a_newer_proxy" }),
+    row({ quota: null, quotaUnavailable: true, quotaUnknownReason: "not_read" }),
+    row({ quota: null, quotaUnknownReason: "not_reported", quotaReadAt: now - 60_000 }),
+  ]), "openrouter").rows;
+  expect(rows[0]).toMatchObject({ quotaUnknownReason: "no_balance_source" });
+  expect(rows[1]).toMatchObject({ quotaReadAt: now - 180_000 });
+  expect(rows[4]!.quotaUnknownReason).toBeUndefined();
+  const lines = formatAccountTable(rows, true).split("\n");
+  expect(lines[1]).toContain("unsupported: balance UNKNOWN (no balance source)");
+  expect(lines[2]).toContain("probe: mo 12%; read 3 min ago");
+  expect(lines[3]).toContain("probe: unavailable (timeout); balance UNKNOWN (read failed); read 2 h ago");
+  expect(lines[4]).toContain("passive: balance UNKNOWN (not observed yet)");
+  expect(lines[5]).toContain("unsupported: balance UNKNOWN (no balance source)");
+  expect(lines[6]).toContain("probe: unavailable; balance UNKNOWN (not read)");
+  expect(lines[7]).toContain("probe: balance UNKNOWN (provider reported none); read 1 min ago");
+  for (const line of [lines[1], lines[3], lines[4], lines[5], lines[6], lines[7]]) expect(line).not.toMatch(/\b0%|USD 0/);
+  // Display-only: a malformed read time is dropped, not fatal to the listing.
+  expect(Object.hasOwn(projectApiKeyQuotaRows(body([row({ quotaReadAt: "yesterday" })]), "openrouter").rows[0]!, "quotaReadAt")).toBe(false);
 });
 

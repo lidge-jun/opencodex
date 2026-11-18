@@ -15,6 +15,19 @@ OpenCodex 데스크톱 앱은 네이티브 트레이와 웹 대시보드를 함�
 
 릴리스 버전의 `OpenCodex.app`은 Developer ID로 서명되고 Apple 공증을 받으므로, 첫 실행 시에는 대개 다운로드한 앱에 대한 일반 확인만 요청합니다. macOS가 계속 차단하면 **System Settings → Privacy & Security → Open Anyway**를 선택하세요.
 
+#### Homebrew (데스크톱 앱)
+
+Homebrew Cask를 통해 데스크톱 앱을 설치할 수도 있습니다:
+
+```bash
+brew install --cask opencodex
+```
+
+- **인앱 업데이트 (`auto_updates`)**: 데스크톱 앱에는 자체 업데이트 기능이 있으며 Cask는 `auto_updates true`를 선언합니다. 특정 Cask를 지정한 `brew upgrade --cask opencodex` 또는 greedy 업그레이드는 인앱 업데이트로 더 최신 버전이 된 앱을 교체할 수 있습니다. Homebrew로 업그레이드하기 전에 설치된 앱과 Cask의 버전을 확인하세요.
+- **CLI와 백그라운드 서비스**: Cask는 CLI와 프록시 런타임을 포함한 `OpenCodex.app`만 설치합니다. 독립 CLI나 헤드리스 서비스를 위해 npm 또는 릴리스 아카이브로 `ocx`를 별도 설치할 수 있으며, 두 설치는 `~/.opencodex` 설정을 공유합니다. 해당 CLI에 서비스를 넘기려면 OpenCodex를 종료하고 별도 CLI를 명시적으로 선택한 다음([Desktop 패키지 런처 핸드오프](/getting-started/installation/)가 활성화되어 있으면 우회) `ocx service install`을 실행하세요. [터미널 명령 선택](/ko/guides/desktop-app/#데스크톱-앱과-ocx-cli-함께-사용하기)과 [런타임 소유권](/reference/cli/lifecycle/#runtime-ownership)을 참조하세요.
+- **Cask 업그레이드 후 서비스**: Cask의 제거 단계는 별도 CLI의 `com.opencodex.proxy` launchd 작업과 plist도 제거하여 백그라운드 서비스를 중단할 수 있습니다. 업그레이드 후 OpenCodex를 종료하고 macOS GUI 로그인 세션에서 위처럼 명시적으로 선택한 별도 CLI로 `ocx service status`를 실행하세요. 서비스가 없으면 `ocx service install`, 설치되어 있지만 로드되지 않았다면 `ocx service repair`를 실행한 뒤 `ocx service status`로 다시 확인하세요. `ocx service install`은 제거된 작업이 아니라 `OCX_BAKE_PORT` 또는 `config.port`에서 포트를 가져옵니다. 서비스 등록 후 둘 중 하나가 바뀌었다면 이전 포트를 가리키는 클라이언트를 갱신하세요. 같은 제거 단계는 Desktop 자체의 Start at Login 항목(`OpenCodex` launchd 작업)도 제거하므로, 사용 중이었다면 OpenCodex에서 **Start at Login**을 다시 켜세요.
+- **`--zap`을 사용한 데이터 삭제**: `brew uninstall --zap --cask opencodex`는 `~/.opencodex`와 `~/.opencodex-desktop`을 삭제합니다. 이 디렉터리에 있는 CLI와 Desktop의 공유 설정과 상태 데이터도 삭제됩니다. `--zap`을 사용하기 전에 보관할 데이터를 백업하세요. 2.97.0 이전의 Cask 정의에는 이 두 디렉터리가 없었고, Homebrew는 설치할 때 기록된 정의로 제거할 수 있습니다. `--zap` 후 두 디렉터리가 남아 있는지 확인하고, 지우려면 직접 삭제하세요.
+
 ### Windows
 
 `OpenCodex-<version>-windows-x64.msi`를 다운로드해 설치 프로그램을 실행하세요. 설치 프로그램은 아직 코드 서명이 없어 Windows SmartScreen이 경고할 수 있습니다. 릴리스 페이지에서 다운로드한 파일인지 확인한 뒤 **More info → Run anyway**를 선택하세요.
@@ -81,7 +94,8 @@ macOS, Linux, Windows에서 데스크톱 앱이 번들 프록시를 실행하는
 설치하는 대신 OpenCodex 메뉴에서 **Start at Login**을 켜세요. 앱의 로그인
 등록이 확인되어야 재시작 후 보호가 적용됩니다. 등록을 확인할 수 없으면
 status에 표시되는 데스크톱 안내를 따르세요. 실행 관계 확인은 소유권을 생성하지 않습니다.
-이때 시작 안전 페이지의 데스크톱 앱 행에는 **실행 중 · 로그인 시 시작 미확인**이 표시됩니다.
+등록을 확인할 수 없으면 시작 안전 페이지에 **로그인 시 시작 미확인** 안내가 표시됩니다.
+꺼진 상태가 확인되고 다른 보호가 없으면 조치가 필요하다고 표시합니다.
 macOS에서 메뉴의 **Start at Login** 항목은 시작 안전 페이지도 같은 등록을 확인할 때만
 체크됩니다. 그렇지 않으면 체크가 해제된 채 이유가 라벨에 붙습니다. **disabled by macOS**는
 시스템 설정 → 일반 → 로그인 항목 및 확장 프로그램을 열며, 거기서 OpenCodex가 로그인 시
@@ -159,6 +173,8 @@ Tauri 업데이터가 새 앱 버전을 찾으면 macOS 메뉴 막대 아이콘�
 데스크톱 앱에서는 대시보드의 업데이트 버튼으로 앱 업데이트 페이지를 엽니다. 여기서 다시 확인하고, 대기 중인 서명된 업데이트를 설치하거나 대시보드로 돌아갈 수 있습니다. 같은 설치 동작은 트레이 메뉴에서도 사용할 수 있습니다. 설치에 실패해도 업데이트가 재시도할 수 있는 상태로 남습니다. 트레이 아이콘이 없는 Linux 데스크톱에서도 이 페이지를 사용할 수 있습니다. 일반 브라우저 대시보드는 해당 프록시의 패키지 설치를 관리합니다.
 
 업데이트는 설치 전에 프로젝트의 서명된 업데이터 공개 키로 검증됩니다. macOS의 앱 내 업데이트는 `OpenCodex-<version>-macos.app.tar.gz`를 다운로드하며, DMG는 최초 설치용입니다. 업데이터 키 시크릿이 설정된 경우에만 릴리스 매니페스트를 만들고, 이때는 네 플랫폼 모두 서명되어야 합니다.
+
+Windows에서는 앱 창 없이도 업데이트할 수 있습니다(예: SSH). OpenCodex를 실행하는 Windows 계정으로 연 관리자 권한 터미널에서 설치 폴더의 `ocx.exe`로 `"C:\Program Files\OpenCodex\ocx.exe" update --desktop`를 실행하세요(다른 위치에 설치했다면 폴더를 바꾸세요). 서비스, SYSTEM 예약 작업, 다른 계정은 자체 OpenCodex 홈을 사용하므로 이 프록시를 찾지 못하고 이전 버전으로 남겨 둡니다. 트레이와 같은 게시 릴리스를 확인하고, 같은 업데이터 키로 MSI를 검증해 하나라도 맞지 않으면 거부한 뒤, UI 없이 설치하고 이전 버전으로 실행 중인 프록시를 다시 시작해 새 버전이 응답하게 합니다. `--check`는 확인만 하고, `--json`은 기계가 읽을 수 있는 결과를 출력합니다. 종료 코드 0은 완료 또는 이미 최신, 1은 아무것도 설치되지 않음, 2는 설치됐지만 이전 프록시가 아직 실행 중이거나 Windows를 먼저 다시 시작해야 함, 3은 설치 프로그램이 제시간에 끝나지 않았음을 뜻합니다. 다른 설치에서 시작된 프록시는 중지하지 않습니다. MSI를 직접 설치했다면 `ocx status`가 설치된 버전이 실행 중인 프록시보다 새롭다고 알리고 이 명령을 안내합니다.
 
 ## 위젯
 

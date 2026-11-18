@@ -2,17 +2,30 @@ import { describe, expect, test } from "bun:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { parseQueueMcpArgs } from "../../src/cli/message-mcp-command";
-import { QUEUE_MCP_TARGET, queueMcpFixture } from "../helpers/messaging-mcp-queue";
+import { appendFileSync } from "node:fs";
+import { join } from "node:path";
+import { QUEUE_MCP_TARGET, REPLY_MCP_CLIENT, queueMcpFixture } from "../helpers/messaging-mcp-queue";
 import { repoPath } from "../helpers/repo-root";
 
 test("message mcp requires exactly one explicit absolute CLI and home", () => {
   expect(parseQueueMcpArgs(["--codex", "/fixture/codex", "--codex-home", "/fixture/home"]))
     .toEqual({ codex: "/fixture/codex", codexHome: "/fixture/home" });
+  expect(parseQueueMcpArgs(["--codex", "/fixture/codex", "--allow-reply-read", "--codex-home", "/fixture/home"]))
+    .toEqual({ codex: "/fixture/codex", codexHome: "/fixture/home", allowReplyRead: true });
+  expect(parseQueueMcpArgs(["--allow-reply-read", "--allow-reply-read", "--codex", "/a", "--codex-home", "/b"])).toBeNull();
   for (const args of [[], ["--codex", "relative", "--codex-home", "/home"], ["--codex", "/bin/codex"],
     ["--codex", "/a", "--codex", "/b"], ["--codex", "/a", "--codex-home", "/b", "--json"],
     ["--remote", "/a", "--codex-home", "/b"], ["--codex", "/a\0b", "--codex-home", "/b"]]) {
     expect(parseQueueMcpArgs(args)).toBeNull();
   }
+});
+
+test("fixture capture reads skip a line another process is still appending", () => {
+  const f = queueMcpFixture();
+  try {
+    appendFileSync(join(f.root, "capture.jsonl"), JSON.stringify({ frame: { method: "initialize" }, argv: [], home: "/h", pid: 1 }) + "\n" + '{"frame":{"method":"thr');
+    expect(f.calls().map(call => call.frame.method)).toEqual(["initialize"]);
+  } finally { f.close(); }
 });
 
 describe.skipIf(process.platform === "win32")("message MCP CLI", () => {
@@ -41,6 +54,53 @@ describe.skipIf(process.platform === "win32")("message MCP CLI", () => {
       expect(JSON.stringify(sent)).not.toContain("PRIVATE_MCP_BODY");
     } finally { await client.close(); await f.close(); }
   }, 15000);
+
+  test("explicit opt-in exposes the read tool, remains inert until invoked and projects only final text", async () => {
+    const f = queueMcpFixture("reply-success");
+    const client = new Client({ name: "fixture", version: "1" });
+    const transport = new StdioClientTransport({ command: process.execPath,
+      args: [repoPath("src/cli/index.ts"), "message", "mcp", "--codex", f.options.codex, "--codex-home", f.options.codexHome, "--allow-reply-read"], stderr: "pipe" });
+    try {
+      await client.connect(transport);
+      expect((await client.listTools()).tools.map(t=>t.name).sort()).toEqual(["codex_queue_message","codex_read_reply","codex_threads","codex_wait_reply"]);
+      expect(f.calls()).toHaveLength(0);
+      const read = await client.callTool({name:"codex_read_reply",arguments:{threadId:QUEUE_MCP_TARGET,clientMessageId:REPLY_MCP_CLIENT}});
+      const result = JSON.parse((read.content as {text:string}[])[0]!.text);
+      expect(result).toMatchObject({available:true,status:"observed",association:"same_turn_not_exclusive",replies:[{text:"fixture answer"}]});
+      expect(JSON.stringify(read)).not.toContain("PRIVATE_");
+      const waited=await client.callTool({name:"codex_wait_reply",arguments:{threadId:QUEUE_MCP_TARGET,clientMessageId:REPLY_MCP_CLIENT}});
+      expect(JSON.parse((waited.content as {text:string}[])[0]!.text)).toMatchObject({available:true,waitOutcome:"reply_observed",attempts:1});
+    } finally {await client.close();await f.close();}
+  }, 15000);
+
+  test("wait requests share the four-operation bound and disconnect cancels blocked waits",async()=>{
+    const f=queueMcpFixture("reply-wait-bound-barrier");
+    const client=new Client({name:"fixture",version:"1"});
+    const transport=new StdioClientTransport({command:process.execPath,
+      args:[repoPath("src/cli/index.ts"),"message","mcp","--codex",f.options.codex,"--codex-home",f.options.codexHome,"--allow-reply-read"],stderr:"pipe"});
+    const pending:Promise<unknown>[]=[];
+    let settled=0;
+    const blocked=()=>f.calls().filter(c=>c.frame.method === "thread/items/list" && c.frame.params?.turnId);
+    try {
+      await client.connect(transport);
+      for(let i=0;i<4;i++) pending.push(client.callTool({name:"codex_wait_reply",arguments:{threadId:QUEUE_MCP_TARGET,clientMessageId:REPLY_MCP_CLIENT}}).catch(e=>e).finally(()=>{settled++;}));
+      const until=performance.now()+5_000;
+      // Repeated snapshots are not four live operations. Each distinct helper is held on its first reply RPC.
+      while(blocked().length<4 && performance.now()<until) await Bun.sleep(10);
+      expect(blocked()).toHaveLength(4);
+      const blockedPids=new Set(blocked().map(c=>c.pid));
+      expect(blockedPids.size).toBe(4);
+      expect(settled).toBe(0);
+      for(const pid of blockedPids) expect(()=>process.kill(pid,0)).not.toThrow();
+      expect((await client.callTool({name:"codex_wait_reply",arguments:{threadId:QUEUE_MCP_TARGET,clientMessageId:REPLY_MCP_CLIENT}})).isError).toBe(true);
+      expect(blocked()).toHaveLength(4);
+      expect(settled).toBe(0);
+      await client.close();await Promise.allSettled(pending);
+      expect(settled).toBe(4);
+      const count=f.calls().length;await Bun.sleep(100);expect(f.calls()).toHaveLength(count);
+      for(const pid of new Set(f.calls().map(c=>c.pid))) expect(()=>process.kill(pid,0)).toThrow();
+    } finally {await client.close();await Promise.allSettled(pending);await f.close();}
+  },15_000);
 
   test("four-helper bound and MCP disconnect cancel and reap pending work", async () => {
     const f = queueMcpFixture("hang");

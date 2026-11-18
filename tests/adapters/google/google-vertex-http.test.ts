@@ -4,8 +4,8 @@ import { createRequestExecutionBudget } from "../../../src/lib/request-execution
 import { budgetOwner } from "../../helpers/send-budget-owner";
 import type { AdapterRequest } from "../../../src/adapters/base";
 import { fetchAntigravityWithRetry, fetchDirectGeminiWithRetry, fetchVertexWithRetry } from "../../../src/adapters/google-http";
-import { ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX, safeVertexHttpErrorMessage, retryableGoogleStatus } from "../../../src/adapters/google-errors";
-import { isAntigravityValidationRefusal } from "../../../src/server/responses/antigravity-validation-refusal";
+import { ANTIGRAVITY_ACCESS_DENIED_PREFIX, ANTIGRAVITY_AUTH_FAILED_PREFIX, ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX, safeAntigravityHttpErrorMessage, safeVertexHttpErrorMessage, retryableGoogleStatus } from "../../../src/adapters/google-errors";
+import { isAntigravityAccessDeniedRefusal, isAntigravityRawValidationRefusal, isAntigravityValidationRefusal } from "../../../src/server/responses/antigravity-validation-refusal";
 
 describe("Antigravity 403 body boundary", () => {
   test("a complete structured reason inside 4096 bytes survives normalization", async () => {
@@ -32,6 +32,35 @@ describe("Antigravity 403 body boundary", () => {
     const aborted = new Response(`${ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX}: validation needed`, { status: 403 });
     expect(await isAntigravityValidationRefusal(aborted, controller.signal)).toBe(false);
     expect(await aborted.text()).toContain("validation needed");
+  });
+
+  test("a plain access-denied 403 is rotatable but a verify-account or validation demand is not", async () => {
+    const denied = (message: string) => safeAntigravityHttpErrorMessage(403, JSON.stringify({ error: { code: 403, status: "PERMISSION_DENIED", message } }));
+    // The marker prefix must stay what the normalizer actually writes for a 403.
+    expect(denied("The caller does not have permission").startsWith(ANTIGRAVITY_ACCESS_DENIED_PREFIX)).toBe(true);
+    expect(await isAntigravityAccessDeniedRefusal(new Response(denied("The caller does not have permission"), { status: 403 }))).toBe(true);
+    // verify-account has its own durable quarantine path; this one must not pre-empt it.
+    expect(await isAntigravityAccessDeniedRefusal(new Response(denied("Please verify your account to continue."), { status: 403 }))).toBe(false);
+    expect(await isAntigravityAccessDeniedRefusal(new Response(`${ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX}: x`, { status: 403 }))).toBe(false);
+    expect(await isAntigravityAccessDeniedRefusal(new Response(denied("The caller does not have permission"), { status: 401 }))).toBe(false);
+    // A 403 PERMISSION_DENIED worded as invalid credentials normalizes to "authentication failed"; it
+    // refuses this account just the same.
+    expect(await isAntigravityAccessDeniedRefusal(new Response(denied("Request had invalid authentication credentials."), { status: 403 }))).toBe(true);
+    // The same wording without Google's enum (a proxy page, an enum-less envelope) names no account.
+    for (const raw of ["<html>Session expired</html>", JSON.stringify({ error: { code: 403, message: "Token expired" } })]) {
+      const normalized = safeAntigravityHttpErrorMessage(403, raw);
+      expect(normalized.startsWith(ANTIGRAVITY_AUTH_FAILED_PREFIX)).toBe(true);
+      expect(await isAntigravityAccessDeniedRefusal(new Response(normalized, { status: 403 }))).toBe(false);
+      expect(await isAntigravityRawValidationRefusal(new Response(raw, { status: 403 }))).toBe(false);
+    }
+    const aborted = new AbortController();
+    aborted.abort();
+    expect(await isAntigravityAccessDeniedRefusal(new Response(denied("nope"), { status: 403 }), aborted.signal)).toBe(false);
+    // Sidecar dispatch sees the raw Google envelope and normalizes it itself.
+    expect(await isAntigravityRawValidationRefusal(new Response(JSON.stringify({ error: { code: 403, status: "PERMISSION_DENIED", message: "nope" } }), { status: 403 }))).toBe(true);
+    // The sidecar leaves a verify-account demand to the quarantine path too.
+    expect(await isAntigravityRawValidationRefusal(new Response(JSON.stringify({ error: { code: 403, status: "PERMISSION_DENIED", message: "Please verify your account to continue." } }), { status: 403 }))).toBe(false);
+    expect(await isAntigravityRawValidationRefusal(new Response(JSON.stringify({ error: { code: 500, status: "INTERNAL", message: "nope" } }), { status: 500 }))).toBe(false);
   });
 
   test("an oversized validation body is discarded before formatting", async () => {
@@ -331,6 +360,31 @@ describe("vertex retry fetch", () => {
       type: "object",
       properties: {},
     });
+  });
+
+  test("a repaired Vertex replay follows a later credential rebuild on transient retry", async () => {
+    const original: AdapterRequest = { ...request, headers: { authorization: "Bearer old" }, body: JSON.stringify({
+      contents: [{ role: "user", parts: [{ text: "hi" }] }],
+      tools: [{ functionDeclarations: [{ name: "fixture", parameters: { type: "object", properties: { ids: { type: "array", items: { type: "string" } } } } }] }],
+    }) };
+    const calls: Array<{ url: string; authorization: string | null; body: string }> = [];
+    const sleep = spyOn(retry, "sleepWithAbort").mockImplementation(async () => {});
+    const executor = (async (input, init) => {
+      calls.push({ url: String(input), authorization: new Headers(init?.headers).get("authorization"), body: String(init?.body) });
+      if (calls.length === 1) return new Response(vertexError(400, "INVALID_ARGUMENT", "tools.0.custom.input_schema: JSON schema is invalid"), { status: 400 });
+      if (calls.length === 2) {
+        original.url = "https://aiplatform.googleapis.com/v1/new";
+        original.headers = { authorization: "Bearer new" };
+        return new Response("retry", { status: 503 });
+      }
+      return new Response("ok");
+    }) as typeof fetch;
+    try {
+      expect((await fetchVertexWithRetry(original, { executor, timeoutMs: 5_000 })).status).toBe(200);
+      expect(calls).toHaveLength(3);
+      expect(calls[2]).toMatchObject({ url: "https://aiplatform.googleapis.com/v1/new", authorization: "Bearer new" });
+      expect(calls[2]!.body).toBe(calls[1]!.body);
+    } finally { sleep.mockRestore(); }
   });
 
   test("raw mode preserves final error body and headers without normalization", async () => {

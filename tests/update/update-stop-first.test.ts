@@ -255,7 +255,7 @@ function instrumentRecoveryLauncher(source: string, directory: string): string {
   fixtureStatus("runtime-exit", { exitCode: code, signal });`);
   replaceOnce('child.on("error", err => {', `child.on("error", err => {
   fixtureStatus("runtime-spawn-error", recoveryErrorFields(err));`);
-  replaceOnce('const clearHandlers = () => {', 'child.on("spawn", () => fixtureStatus("runtime-spawned", { pid: child.pid }));\nconst clearHandlers = () => {');
+  replaceOnce('forwarding.attach(child);', 'forwarding.attach(child);\nchild.on("spawn", () => fixtureStatus("runtime-spawned", { pid: child.pid }));');
   return source;
 }
 const updateSource = readFileSync(join(repoRoot, "src", "update", "index.ts"), "utf8");
@@ -348,7 +348,7 @@ describe("bounded recovery diagnostics", () => {
       'const bunRuntime = resolveBun({ allowInstall: !passiveSync && !orchestratedUpdate && !passiveCapabilities && !codexCliUpdateInspection, allowMissing: orchestratedUpdate || passiveSync });',
       'const r = probeSpawnSync(process.execPath, [installJs], { stdio: "inherit" });',
       'const child = probeSpawn(bun,', 'child.on("exit", (code, signal) => {',
-      'child.on("error", err => {', 'const clearHandlers = () => {',
+      'child.on("error", err => {', 'forwarding.attach(child);',
     ];
     for (const seam of seams) {
       expect(() => instrumentRecoveryLauncher(launcherSource.replace(seam, ""), "/fixture"))
@@ -435,11 +435,12 @@ function resolveBun() {
 const passiveSync = false;
 const bunRuntime = resolveBun({ allowInstall: !passiveSync && !orchestratedUpdate && !passiveCapabilities && !codexCliUpdateInspection, allowMissing: orchestratedUpdate || passiveSync });
 const bun = bunRuntime.path;
+const forwarding = { attach() {}, clear() { events.push("clear"); } };
 const child = probeSpawn(bun, ["fixture-cli", "start"], childOptions);
-const clearHandlers = () => { events.push("clear"); };
-child.on("error", err => { clearHandlers(); events.push(err); process.exit(1); });
+forwarding.attach(child);
+child.on("error", err => { forwarding.clear(); events.push(err); process.exit(1); });
 child.on("exit", (code, signal) => {
-  clearHandlers();
+  forwarding.clear();
   if (signal) { process.kill(process.pid, signal); return; }
   process.exit(code ?? 1);
 });
@@ -551,6 +552,16 @@ describe("update stops the running proxy before replacing files", () => {
     expect(gateAt).toBeGreaterThan(-1);
     expect(abortAt).toBeGreaterThan(-1);
     expect(gateAt).toBeLessThan(stopAt);
+    expect(abortAt).toBeLessThan(stopAt);
+  });
+
+  test("config pre-flight runs BEFORE the stop so fallback configuration aborts before stopping services", () => {
+    const preflightAt = updateSource.indexOf("configPreflight = runConfigPreflight(configPath);");
+    const abortAt = updateSource.indexOf("aborting update before stopping services");
+    const stopAt = updateSource.indexOf('selfLaunchArgv(["stop"])');
+    expect(preflightAt).toBeGreaterThan(-1);
+    expect(abortAt).toBeGreaterThan(-1);
+    expect(preflightAt).toBeLessThan(stopAt);
     expect(abortAt).toBeLessThan(stopAt);
   });
 

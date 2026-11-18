@@ -15,6 +15,19 @@ OpenCodex 桌面應用程式結合原生系統匣與網頁儀表板。內附的 
 
 正式版 `OpenCodex.app` 使用 Developer ID 簽署並經 Apple 公證，因此第一次啟動時，macOS 通常只會要求確認開啟從網路下載的應用程式。如果 macOS 仍封鎖它，請使用 **System Settings → Privacy & Security → Open Anyway**。
 
+#### Homebrew（桌面應用程式）
+
+也可以透過 Homebrew Cask 安裝桌面應用程式：
+
+```bash
+brew install --cask opencodex
+```
+
+- **內建更新（`auto_updates`）**：桌面應用程式有內建更新機制，Cask 宣告了 `auto_updates true`。但指定 Cask 的 `brew upgrade --cask opencodex` 或 greedy 升級仍可能取代已透過應用程式內更新升至較新版本的應用程式。使用 Homebrew 升級前，請檢查已安裝應用程式和 Cask 的版本。
+- **CLI 與背景服務**：此 Cask 只安裝包含 CLI 和 proxy 執行環境的 `OpenCodex.app`。若需要獨立 CLI 或無介面服務，可透過 npm 或版本發布封包另行安裝 `ocx`；兩者共用 `~/.opencodex` 設定。要將服務交給另行安裝的 CLI，請退出 OpenCodex，明確選擇該 CLI（若已啟用 [Desktop 的套件啟動器交接](/getting-started/installation/)，也須繞過該交接），然後執行 `ocx service install`。請參閱[終端機命令選擇](/guides/desktop-app/#using-the-ocx-cli-with-the-desktop-app)及[執行環境擁有權](/reference/cli/lifecycle/#runtime-ownership)。
+- **Cask 升級後的服務**：Cask 的解除安裝步驟可能移除屬於獨立 CLI 的 `com.opencodex.proxy` launchd 工作及 plist，導致背景服務停止。升級後請退出 OpenCodex，在 macOS GUI 登入工作階段中使用上述明確選定的獨立 CLI 執行 `ocx service status`。若服務不存在，執行 `ocx service install`；若已安裝但未載入，執行 `ocx service repair`。然後再次執行 `ocx service status` 檢查。 `ocx service install` 會從 `OCX_BAKE_PORT` 或 `config.port` 讀取連接埠，而不是從已移除的工作讀取；如果服務註冊後其中任一值有所變更，請更新仍指向舊連接埠的用戶端。同一解除安裝步驟也會移除 Desktop 本身的 Start at Login 項目（launchd 工作 `OpenCodex`）；如果你有使用，請在 OpenCodex 中重新開啟 **Start at Login**。
+- **使用 `--zap` 刪除資料**：`brew uninstall --zap --cask opencodex` 會刪除 `~/.opencodex` 和 `~/.opencodex-desktop`，包括這些目錄中 CLI 和 Desktop 共用的設定及狀態資料。使用 `--zap` 前，請備份要保留的資料。 2.97.0 之前的 Cask 定義沒有列出這兩個目錄，而 Homebrew 可能以安裝時記錄的定義執行解除安裝；請在 `--zap` 後檢查它們是否仍然存在，若要刪除請自行手動刪除。
+
 ### Windows
 
 下載 `OpenCodex-<version>-windows-x64.msi` 並執行安裝程式。由於安裝程式尚未經過程式碼簽署，Windows SmartScreen 可能顯示警告；確認檔案來自版本發布頁面後，選擇 **More info → Run anyway**。
@@ -67,6 +80,8 @@ sudo apt install ./OpenCodex-<version>-linux-amd64.deb
 在桌面應用程式中，選擇儀表板的更新按鈕即可開啟應用程式更新頁面。你可以在其中重新檢查、安裝待處理的已簽署更新，或返回儀表板。系統匣選單也提供相同的安裝操作。如果安裝失敗，更新仍可重試。即使 Linux 桌面沒有系統匣圖示，也可以使用此頁面。一般瀏覽器儀表板則管理該代理的套件安裝。
 
 安裝前，更新會使用專案簽署的 updater 公鑰驗證。在 macOS 上，應用程式內更新會下載 `OpenCodex-<version>-macos.app.tar.gz`；DMG 用於首次安裝。只有設定 updater 金鑰祕密時才會產生版本 manifest，屆時四個平台都必須完成簽署。
+
+在 Windows 上也可以不開啟應用程式視窗進行更新，例如透過 SSH。以執行 OpenCodex 的 Windows 帳戶開啟具有系統管理員權限的終端機，執行安裝資料夾中的 `ocx.exe`：`"C:\Program Files\OpenCodex\ocx.exe" update --desktop`（若安裝在其他位置，請調整資料夾）。服務、以 SYSTEM 執行的排程工作或其他帳戶使用各自的 OpenCodex 主目錄，找不到這個代理，會讓它繼續執行舊版本。它會檢查與系統匣相同的已發布版本，使用相同的更新器金鑰驗證 MSI，任何不一致都會拒絕，接著以無介面方式安裝，並重新啟動仍執行舊版本的代理，讓新版本開始回應。`--check` 只回報狀態，`--json` 輸出機器可讀的結果。結束代碼 0 表示完成或已是最新；1 表示沒有安裝任何內容；2 表示更新已安裝但舊代理仍在執行（或需要先重新啟動 Windows）；3 表示安裝程式未在時限內結束。從其他安裝啟動的代理絕不會被停止。如果你手動安裝了 MSI，`ocx status` 會提示已安裝版本比執行中的代理更新，並顯示此命令。
 
 ## Widget
 

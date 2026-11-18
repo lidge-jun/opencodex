@@ -3,6 +3,7 @@ import { handleClaudeCountTokens, handleClaudeMessages } from "../../src/server/
 import { collectAnthropicMessage, responsesSseToAnthropicSse } from "../../src/claude/outbound";
 import { foldAnthropicMessage, encodeAnthropicMessageSse } from "../../src/protocols/encoders/messages";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import type { AdapterEvent, OcxConfig } from "../../src/types";
 
 const sentinel = "zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e";
@@ -51,6 +52,7 @@ const failures = [
   { message: `Your input exceeds the context window of this model ${sentinel}`, code: "server_error" },
   { message: `too many tokens per minute ${sentinel}`, type: "rate_limit_error", code: "rate_limit_exceeded", status: 429 },
   { message: sentinel, type: "rate_limit_error" },
+  { message: `Your input exceeds the context window of this model ${sentinel}`, code: "upstream_server_error" },
 ];
 for (const [index, error] of failures.entries()) {
   for (const direct of [false, true]) test(`${direct ? "direct" : "converter"} failed ${index} owns message and preserves decided type`, async () => {
@@ -63,13 +65,13 @@ for (const [index, error] of failures.entries()) {
     contained(text);
     expect(text).toContain("event: error\n");
     const payload = JSON.parse(text.split("data: ").at(-1)!);
-    if (index === 2 || index === 3) expect(payload.error).toMatchObject({ type: "invalid_request_error", ...(direct && index === 3 ? {} : { code: "context_length_exceeded" }), message: direct && index === 3 ? "The request exceeds the model's context window." : "prompt is too long: The request exceeds the model's context window." });
+    if (index === 2 || index === 3 || index === 6) expect(payload.error).toMatchObject({ type: "invalid_request_error", code: "context_length_exceeded", message: "prompt is too long: The request exceeds the model's context window." });
     if (index === 4 || index === 5) expect(payload.error.type).toBe("rate_limit_error");
     const foldBudget = createTestTranslatorBudget();
     const fold = direct ? await foldAnthropicMessage((async function* () { yield { ...error, type: "error", errorType: error.type } as AdapterEvent; })(), { model: "fixture", translatorBudget: foldBudget }) : null;
     if (fold) {
       const body = await fold.text(); contained(body);
-      expect(fold.status).toBe(index === 2 ? 400 : 502);
+      expect(fold.status).toBe(index === 2 || index === 3 || index === 6 ? 400 : 502);
       expect(JSON.parse(body).error.type).toBe(payload.error.type);
     }
   });
@@ -103,6 +105,47 @@ test("direct reader exception uses the transport contract", async () => {
   expect(text.length).toBeGreaterThan(0); expect(text).not.toContain(sentinel);
   expect(text).toContain("The proxy could not reach or read the provider.");
 });
+test("a direct reader exception quoting overflow wording does not gain an overflow code", async () => {
+  const events = (async function* (): AsyncGenerator<AdapterEvent> { throw new Error("prompt is too long"); })();
+  const text = await new Response(encodeAnthropicMessageSse(events, { model: "fixture", translatorBudget: createTestTranslatorBudget() })).text();
+  expect(JSON.parse(text.split("data: ").at(-1)!).error.type).toBe("overloaded_error");
+  expect(text).not.toContain("context_length_exceeded");
+});
+
+for (const [status, message, expectedStatus, expectedCode] of [
+  [500, "Your input exceeds the context window of this model", 400, "context_length_exceeded"],
+  [500, "x".repeat(450) + " Your input exceeds the context window of this model", 400, "context_length_exceeded"],
+  [500, "If input exceeds the context window, shorten it; the server is unavailable", 529, undefined],
+  [500, "If input exceeds the context window, shorten it. This input exceeds the context window.", 400, "context_length_exceeded"],
+  [402, "Your input exceeds the context window of this model", 402, undefined],
+  [429, "Your input exceeds the context window of this model", 429, undefined],
+] as const) {
+  test(`translated plain-text HTTP ${status} keeps the correct overflow or billing class`, async () => {
+    const releaseSpend = acquireOwnedSpendHome();
+    let sends = 0;
+    const config = { defaultProvider: "a", providers: { a: {
+      adapter: "openai-responses", authMode: "key", baseUrl: "https://responses.example/v1", apiKey: "key-a",
+      models: ["m"], transientRetryOn5xx: { attempts: 3 },
+    } } } as unknown as OcxConfig;
+    const req = new Request("http://localhost/v1/messages", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...input, model: "m" }) });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async () => { sends += 1; return new Response(message, { status }); }) as typeof fetch;
+    try {
+      const response = await handleClaudeMessages(req, config, { model: "", provider: "" });
+      const error = (await response.json() as { error: { code?: string; message: string } }).error;
+      expect(response.status, JSON.stringify({ sends, error })).toBe(expectedStatus);
+      if (expectedCode) {
+        expect(sends).toBe(1);
+        expect(error.code).toBe(expectedCode);
+        expect(error.message).toBe("prompt is too long: The request exceeds the model's context window.");
+      } else {
+        expect(error.code).not.toBe("context_length_exceeded");
+        if (status === 500) expect(sends).toBe(3);
+      }
+    } finally { globalThis.fetch = originalFetch; releaseSpend(); }
+  });
+}
 
 for (const count of [false, true]) test(`success ${count ? "count_tokens" : "Messages"} has a literal JSON media type`, async () => {
   const raw = count ? '{"input_tokens":42}' : '{"type":"message","content":[]}';

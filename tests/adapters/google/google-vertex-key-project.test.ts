@@ -69,6 +69,11 @@ const vertex = (apiKey: string, extra: Partial<OcxProviderConfig> = {}) => ({
 }) as OcxProviderConfig;
 
 describe("vertex project auto", () => {
+  test("a refused selection prevents the auxiliary project probe", async () => {
+    await expect(createGoogleAdapter(vertex("key-a")).buildRequest(parsed(), incoming({ beforePhysicalSend: () => { throw new Error("selection changed"); } })))
+      .rejects.toThrow("selection changed");
+    expect(probes).toEqual([]);
+  });
   test("parses the project number from Google's projectless NOT_FOUND body", () => {
     expect(parseVertexProbeProjectNumber(notFound("22932377871"))).toBe("22932377871");
     expect(parseVertexProbeProjectNumber("projects/my-project/locations/global")).toBeUndefined();

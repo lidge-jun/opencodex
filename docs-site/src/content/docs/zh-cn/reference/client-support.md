@@ -18,34 +18,34 @@ opencodex 是一个本地网关，连接你的 AI 编程工具与模型。部分
 
 | 客户端 | 原生 | 配置导出 | 托管文件集成 | 入站协议 | 支持级别 | 运行验证 | 说明 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Codex (CLI, app, SDK) | 是 | — | — | Responses (已审阅) | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/main/tests/codex-integration/codex-inject-missing-config.test.ts)) | — | 由 opencodex 直接配置，没有导出的配置文件。 [指南](/zh-cn/guides/codex-integration/) |
-| Claude Code | 是 | — | — | Anthropic Messages (已审阅) | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/main/tests/claude-integration/claude-cli.test.ts)) | — | 由 opencodex 直接配置，没有导出的配置文件。 [指南](/zh-cn/guides/claude-code/) |
+| Codex (CLI, app, SDK) | 是 | — | — | Responses (已审阅) | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/dev/tests/codex-integration/codex-inject-missing-config.test.ts)) | — | 由 opencodex 直接配置，没有导出的配置文件。 [指南](/zh-cn/guides/codex-integration/) |
+| Claude Code | 是 | — | — | Anthropic Messages (已审阅) | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/dev/tests/claude-integration/claude-cli.test.ts)) | — | 由 opencodex 直接配置，没有导出的配置文件。 [指南](/zh-cn/guides/claude-code/) |
 | Claude Desktop | 是 | — | — | Anthropic Messages (已审阅) | implemented | — | 由 opencodex 直接配置，没有导出的配置文件。 |
-| Grok Build | 是 | — | — | Responses (已审阅) | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/main/tests/providers/xai/grok-config-inject.test.ts)) | — | 由 opencodex 直接配置，没有导出的配置文件。 [指南](/zh-cn/guides/grok-build/) |
-| Qoder | — | JSON | 是 | OpenAI 兼容（端点由客户端选择） | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/qoder-client.test.ts)) | — | 仅限本地监听。 |
+| Grok Build | 是 | — | — | Responses (已审阅) | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/dev/tests/providers/xai/grok-config-inject.test.ts)) | — | 由 opencodex 直接配置，没有导出的配置文件。 [指南](/zh-cn/guides/grok-build/) |
+| Qoder | — | JSON | 是 | OpenAI 兼容（端点由客户端选择） | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/qoder-client.test.ts)) | — | 仅限本地监听。 |
 | Qoder CN | — | JSON | 是 | OpenAI 兼容（端点由客户端选择） | implemented | — | 仅限本地监听。 |
-| WorkBuddy | — | JSON | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/agent-clients.test.ts)) | — | 仅限本地监听。应用前先运行针对该客户端的检查，可能拒绝。 |
+| WorkBuddy | — | JSON | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/agent-clients.test.ts)) | — | 仅限本地监听。应用前先运行针对该客户端的检查，可能拒绝。 |
 | WorkBuddy AI | — | JSON | 是 | Chat Completions | implemented | — | 仅限本地监听。应用前先运行针对该客户端的检查，可能拒绝。 |
-| OpenCode | — | JSON | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/main/tests/config/client-config-export.test.ts)) | — | 导出的配置也支持远程监听（会添加 API 密钥请求头）。 [指南](/zh-cn/guides/opencode/) |
-| Pi | — | JSON | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/main/tests/config/client-config-export.test.ts)) | — | 仅限本地监听。 [指南](/zh-cn/guides/pi/) |
-| Oh My Pi (omp) | — | YAML | 是 | Chat Completions; Responses (仅原生 OpenAI 模型) | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/main/tests/config/client-config-export.test.ts)) | — | 仅限本地监听。只修改自己的 YAML 区块。 |
-| Hermes | — | YAML | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/hermes-catalog-refresh.test.ts)) | — | 导出的配置也支持远程监听（会添加 API 密钥请求头）。只修改自己的 YAML 区块。 |
-| OpenClaw | — | JSON5 | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/main/tests/gui/integrations-invariants.test.ts)) | — | 导出的配置也支持远程监听（会添加 API 密钥请求头）。 |
-| Kimi CLI | — | TOML | 是 | OpenAI 兼容（端点由客户端选择） | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/main/tests/config/client-config-export-new-clients.test.ts)) | — | 仅限本地监听。 |
-| Gajae | — | YAML | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/client-export-modality-enum.test.ts)) | — | 仅限本地监听。 |
-| DSH | — | YAML | 是 | Responses | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/main/tests/config/client-config-export.test.ts)) | — | 仅限本地监听。写入客户端当前的提供商存储。只修改自己的 YAML 区块。通过配置文件旁的锁文件协调写入。 |
+| OpenCode | — | JSON | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/dev/tests/config/client-config-export.test.ts)) | — | 导出的配置也支持远程监听（会添加 API 密钥请求头）。 [指南](/zh-cn/guides/opencode/) |
+| Pi | — | JSON | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/dev/tests/config/client-config-export.test.ts)) | — | 仅限本地监听。 [指南](/zh-cn/guides/pi/) |
+| Oh My Pi (omp) | — | YAML | 是 | Chat Completions; Responses (仅原生 OpenAI 模型) | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/dev/tests/config/client-config-export.test.ts)) | — | 仅限本地监听。只修改自己的 YAML 区块。 |
+| Hermes | — | YAML | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/hermes-catalog-refresh.test.ts)) | — | 导出的配置也支持远程监听（会添加 API 密钥请求头）。只修改自己的 YAML 区块。 |
+| OpenClaw | — | JSON5 | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/dev/tests/gui/integrations-invariants.test.ts)) | — | 导出的配置也支持远程监听（会添加 API 密钥请求头）。 |
+| Kimi CLI | — | TOML | 是 | OpenAI 兼容（端点由客户端选择） | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/dev/tests/config/client-config-export-new-clients.test.ts)) | — | 仅限本地监听。 |
+| Gajae | — | YAML | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/client-export-modality-enum.test.ts)) | — | 仅限本地监听。 |
+| DSH | — | YAML | 是 | Responses | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/dev/tests/config/client-config-export.test.ts)) | — | 仅限本地监听。写入客户端当前的提供商存储。只修改自己的 YAML 区块。通过配置文件旁的锁文件协调写入。 |
 | MCode | — | YAML | 是 | Anthropic Messages | implemented | — | 仅限本地监听。通过配置文件旁的锁文件协调写入。 |
-| ZCode | — | JSON | 是 | Responses (已审阅) | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/integrations-current-store.test.ts)) | — | 仅限本地监听。写入客户端当前的提供商存储。客户端根据此设置选择端点（已依据客户端的文档行为评审）。 |
-| Command Code | — | JSON | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/command-code-client.test.ts)) | — | 仅限本地监听。通过配置文件旁的锁文件协调写入。 |
-| Prime | — | JSON | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/prime-client.test.ts)) | — | 仅限本地监听。 |
-| Aside | — | JSON | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/aside-profiles-catalog-refresh.test.ts)) | — | 仅限本地监听。 |
-| Raycast | — | YAML | 是 | Chat Completions (已审阅) | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/raycast-client.test.ts)) | — | 仅限本地监听。客户端根据此设置选择端点（已依据客户端的文档行为评审）。 |
-| omo | — | JSON | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/omo-client.test.ts)) | — | 仅限本地监听。 |
-| Cline | — | JSON | 是 | Responses | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/cline-client.test.ts)) | — | 仅限本地监听。通过配置文件旁的锁文件协调写入。 |
-| Kilo Code | — | JSON | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/client-export-reasoning-controls.test.ts)) | — | 导出的配置也支持远程监听（会添加 API 密钥请求头）。 |
-| Factory Droid | — | JSON | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/droid-client.test.ts)) | — | 仅限本地监听。 [指南](/zh-cn/guides/factory-droid/) |
-| Gentle Shell | — | JSON | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/gentle-shell-client.test.ts)) | — | 仅限本地监听。 |
-| T3 Code | — | JSON | 是 | Anthropic Messages | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/main/tests/clients/t3code-client.test.ts)) | — | 仅限本地监听。应用前先运行针对该客户端的检查，可能拒绝。 |
+| ZCode | — | JSON | 是 | Responses (已审阅) | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/integrations-current-store.test.ts)) | — | 仅限本地监听。写入客户端当前的提供商存储。客户端根据此设置选择端点（已依据客户端的文档行为评审）。 |
+| Command Code | — | JSON | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/command-code-client.test.ts)) | — | 仅限本地监听。通过配置文件旁的锁文件协调写入。 |
+| Prime | — | JSON | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/prime-client.test.ts)) | — | 仅限本地监听。 |
+| Aside | — | JSON | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/aside-profiles-catalog-refresh.test.ts)) | — | 仅限本地监听。 |
+| Raycast | — | YAML | 是 | Chat Completions (已审阅) | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/raycast-client.test.ts)) | — | 仅限本地监听。客户端根据此设置选择端点（已依据客户端的文档行为评审）。 |
+| omo | — | JSON | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/omo-client.test.ts)) | — | 仅限本地监听。 |
+| Cline | — | JSON | 是 | Responses | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/cline-client.test.ts)) | — | 仅限本地监听。通过配置文件旁的锁文件协调写入。 |
+| Kilo Code | — | JSON | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/client-export-reasoning-controls.test.ts)) | — | 导出的配置也支持远程监听（会添加 API 密钥请求头）。 |
+| Factory Droid | — | JSON | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/droid-client.test.ts)) | — | 仅限本地监听。 [指南](/zh-cn/guides/factory-droid/) |
+| Gentle Shell | — | JSON | 是 | Chat Completions | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/gentle-shell-client.test.ts)) | — | 仅限本地监听。 |
+| T3 Code | — | JSON | 是 | Anthropic Messages | test-covered ([测试](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/t3code-client.test.ts)) | — | 仅限本地监听。应用前先运行针对该客户端的检查，可能拒绝。 |
 
 ## 入站端点
 

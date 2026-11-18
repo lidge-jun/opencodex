@@ -1,9 +1,10 @@
 import { publishCredentialSync } from "../local-credentials/generation";
 import { captureMainAccountIdentityGeneration, getMainQuotaCredentialGeneration, isMainAccountIdentityGenerationLive, isMainQuotaWriterLive, matchesMainQuotaCredential, observeMainDecisionCredentialUsable, type MainQuotaWriter } from "./main-account-cache";
+import { observeMainCodexAccountIdentity } from "./account-lifecycle";
 import { classifyChatgptRefreshFailure, noteChatgptRefreshFailure } from "./chatgpt-refresh-failure";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, statSync } from "node:fs";
+import { lstatSync, statSync } from "node:fs";
 import { sameFileIdentity, type FileIdentity } from "../lib/file-identity";
 import { dirname, join, resolve } from "node:path";
 import { readCodexTokens } from "./auth-collision";
@@ -21,8 +22,18 @@ import {
   refreshGrantFingerprintForToken,
   withCodexRefreshFileLock,
 } from "./account-store";
-import { atomicWriteFile, resolveWriteTarget } from "../config/atomic-write";
+import { resolveWriteTarget } from "../config/atomic-write";
 import { resolveCodexHomeDir } from "./home";
+import { writeNativeMainAuthFile } from "./native-main-auth-file";
+import {
+  beginNativeMainObservation,
+  invalidateRetainedNativeMainLogin,
+  invalidationForObservation,
+  observeNativeMainAuthFile,
+  retainedNativeMainLogin,
+  retainNativeMainLogin,
+  type NativeMainObservationTicket,
+} from "./native-main-credentials";
 import { assertNotRealCodexHomeUnderTest } from "../lib/test-home-guard";
 import {
   clearAccountNeedsReauth,
@@ -38,6 +49,7 @@ import { isNativeMainTrafficBlocked } from "./native-profile-startup";
 import { loadConfig } from "../config";
 import {
   requestCodexAuthStatus,
+  configuredNativeMainRefreshMode,
   resolveNativeMainRefreshMode,
   type CodexAuthStatus,
 } from "./native-main-refresh-mode";
@@ -93,6 +105,8 @@ type MainAuthJsonCredential = {
   accessToken?: string;
   refreshToken?: string;
   chatgptAccountId: string;
+  /** Served from retention while the file is mid-rewrite (#7345); never a write-guard snapshot. */
+  retained?: true;
 };
 
 export interface NativeMainRefreshDependencies {
@@ -211,41 +225,78 @@ function statIdentity(path: string): FileIdentity | null {
   }
 }
 
-function readMainAuthJsonCredential(): MainAuthJsonCredential | null {
-  const path = resolveWriteTarget(join(resolveCodexHomeDir(), "auth.json"));
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf8");
-  } catch {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
-    const root = parsed as Record<string, unknown>;
-    const tokenValue = root.tokens;
-    if (!tokenValue || typeof tokenValue !== "object" || Array.isArray(tokenValue)) return null;
-    const tokens = tokenValue as Record<string, unknown>;
+interface MainAuthJsonReadOptions {
+  /** Answer an empty or partially written file from the last complete same-owner login. */
+  serveRetained?: boolean;
+  /**
+   * Ticket a complete observation retains under; `false` for write guards, which observe
+   * without retaining. A ticket captured before an async exchange refuses a stale completion.
+   */
+  retainWith?: NativeMainObservationTicket | false;
+}
+
+/**
+ * The native-main login, through {@link observeNativeMainAuthFile} (#7345). Missing, no-login and
+ * unreadable observations end retention; only an incomplete one may be answered from it, and only
+ * when the caller asks and the owner, file identity and credential epoch are unchanged.
+ */
+function readMainAuthJsonCredential(options: MainAuthJsonReadOptions = {}): MainAuthJsonCredential | null {
+  const codexHome = resolveCodexHomeDir();
+  const path = resolveWriteTarget(join(codexHome, "auth.json"));
+  const owner = { codexHome, path };
+  const observation = observeNativeMainAuthFile(path);
+  if (observation.kind === "complete") {
+    const { raw, root, tokens } = observation;
     const accessToken = nonEmptyString(tokens.access_token);
     const refreshToken = nonEmptyString(tokens.refresh_token);
-    if (!accessToken && !refreshToken) return null;
     const idToken = nonEmptyString(tokens.id_token);
-    const chatgptAccountId = extractAccountId(idToken, accessToken)
-      ?? nonEmptyString(tokens.account_id)
-      ?? "";
-    return {
+    const credential: MainAuthJsonCredential = {
       path,
       rawSha256: sha256(raw),
-      identity: statIdentity(path),
+      // The identity the bytes were read from; null (fail closed) when it changed mid-read.
+      identity: observation.identity,
       root,
       tokens,
       ...(accessToken ? { accessToken } : {}),
       ...(refreshToken ? { refreshToken } : {}),
-      chatgptAccountId,
+      chatgptAccountId: extractAccountId(idToken, accessToken) ?? nonEmptyString(tokens.account_id) ?? "",
     };
-  } catch {
+    // Finish the owned identity transition, including prior-account cleanup, before capturing
+    // retention. Write guards and explicit pre-exchange tickets keep their existing authority.
+    if (options.serveRetained && credential.identity && !isNativeMainTrafficBlocked()) {
+      observeMainCodexAccountIdentity(credential.chatgptAccountId);
+    }
+    const ticket = options.retainWith === undefined ? beginNativeMainObservation() : options.retainWith;
+    if (ticket) {
+      retainNativeMainLogin(ticket, owner, credential.identity, credential, {
+        fingerprint: credential.rawSha256,
+        configuredRefreshMode: configuredRefreshOwner,
+      });
+    }
+    return credential;
+  }
+  const invalidation = invalidationForObservation(observation);
+  if (invalidation) {
+    invalidateRetainedNativeMainLogin(invalidation);
     return null;
   }
+  if (observation.kind !== "incomplete" || !options.serveRetained) return null;
+  if (isNativeMainTrafficBlocked()) {
+    invalidateRetainedNativeMainLogin("ownership-loss");
+    return null;
+  }
+  const retained = retainedNativeMainLogin<MainAuthJsonCredential>(owner, observation.identity, configuredRefreshOwner);
+  if (!retained) return null;
+  if (credentialRefreshGrantRejected(retained)) {
+    invalidateRetainedNativeMainLogin("revocation");
+    return null;
+  }
+  return { ...retained, retained: true };
+}
+
+/** Read only when a new login is retained or a retained one is about to be served. */
+function configuredRefreshOwner(): string {
+  return configuredNativeMainRefreshMode(loadConfig());
 }
 
 function mainAccessTokenFresh(accessToken: string | undefined, now: number, skewMs: number): boolean {
@@ -274,7 +325,10 @@ export interface MainAccountCredentialStatus {
 
 /** One owned physical observation; no credential material escapes this view. */
 export function getMainAccountCredentialStatus(now = Date.now()): MainAccountCredentialStatus {
-  const current = readMainAuthJsonCredential();
+  let current = readMainAuthJsonCredential({ serveRetained: true });
+  // A retained login is usable only while its bearer is fresh: an expired one goes to the refresh
+  // owner, which cannot refresh a file mid-rewrite, so it must not be selected (#7345).
+  if (current?.retained && !mainAccessTokenFresh(current.accessToken, now, MAIN_TOKEN_REFRESH_SKEW_MS)) current = null;
   const owned = !current && codexOwnedMainCredential?.home === resolveCodexHomeDir() ? codexOwnedMainCredential : null;
   const refreshGrantRejected = credentialRefreshGrantRejected(current);
   const hasRefreshGrant = !!current?.refreshToken && !refreshGrantRejected;
@@ -303,7 +357,7 @@ export function hasMainAccountRefreshGrant(): boolean {
 }
 
 function assertMainAuthJsonSnapshotUnchanged(expected: MainAuthJsonCredential): void {
-  const current = readMainAuthJsonCredential();
+  const current = readMainAuthJsonCredential({ retainWith: false });
   if (!current || current.path !== expected.path || current.rawSha256 !== expected.rawSha256) {
     throw new MainAuthJsonChangedDuringRefreshError();
   }
@@ -322,6 +376,21 @@ function assertMainAuthJsonIdentityUnchanged(expected: MainAuthJsonCredential): 
   }
 }
 
+function publishMainAuthJson(expected: MainAuthJsonCredential, content: string): void {
+  writeNativeMainAuthFile(expected.path, content, {
+    beforeRename: () => {
+      assertMainAuthJsonSnapshotUnchanged(expected);
+      const hook = beforeMainAuthJsonRenameForTests;
+      beforeMainAuthJsonRenameForTests = null;
+      hook?.();
+    },
+    // Runs immediately before rename(2), after the test hook has had its chance to
+    // simulate an external writer. Full snapshot check (content AND identity): this is
+    // the last look we get, so it asks everything it can rather than the cheap question.
+    validateBeforeRename: () => assertMainAuthJsonSnapshotUnchanged(expected),
+  });
+}
+
 function persistRefreshedMainAuthJson(
   expected: MainAuthJsonCredential,
   refreshed: OAuthCredentials,
@@ -336,22 +405,9 @@ function persistRefreshedMainAuthJson(
     refresh_token: refreshToken,
     account_id: chatgptAccountId,
   };
-  publishCredentialSync(() => atomicWriteFile(
-    expected.path,
+  publishCredentialSync(() => publishMainAuthJson(
+    expected,
     JSON.stringify({ ...expected.root, tokens }, null, 2) + "\n",
-    undefined,
-    {
-      beforeRename: () => {
-        assertMainAuthJsonSnapshotUnchanged(expected);
-        const hook = beforeMainAuthJsonRenameForTests;
-        beforeMainAuthJsonRenameForTests = null;
-        hook?.();
-      },
-      // Runs immediately before rename(2), after the test hook has had its chance to
-      // simulate an external writer. Full snapshot check (content AND identity): this is
-      // the last look we get, so it asks everything it can rather than the cheap question.
-      validateBeforeRename: () => assertMainAuthJsonSnapshotUnchanged(expected),
-    },
   ));
   advanceCodexCredentialMutationEpoch();
   return { accessToken, chatgptAccountId };
@@ -403,19 +459,9 @@ function persistNativeMainReauthTokens(
     id_token: tokens.idToken,
     account_id: tokens.chatgptAccountId,
   };
-  atomicWriteFile(
-    expected.path,
+  publishMainAuthJson(
+    expected,
     JSON.stringify({ ...expected.root, tokens: nextTokens }, null, 2) + "\n",
-    undefined,
-    {
-      beforeRename: () => {
-        assertMainAuthJsonSnapshotUnchanged(expected);
-        const hook = beforeMainAuthJsonRenameForTests;
-        beforeMainAuthJsonRenameForTests = null;
-        hook?.();
-      },
-      validateBeforeRename: () => assertMainAuthJsonSnapshotUnchanged(expected),
-    },
   );
   advanceCodexCredentialMutationEpoch();
 }
@@ -443,7 +489,7 @@ export function beginNativeMainReauth(): {
     options?: { signal?: AbortSignal },
   ) => Promise<{ chatgptAccountId: string }>;
 } {
-  const expected = readMainAuthJsonCredential();
+  const expected = readMainAuthJsonCredential({ retainWith: false });
   if (!expected || !expected.chatgptAccountId) {
     throw new NativeMainReauthUnavailableError(
       "No native main credential exists to reauthenticate; enrollment is the native profile workflow",
@@ -518,7 +564,16 @@ async function resolveMainAccountToken(
 ): Promise<{ accessToken: string; chatgptAccountId: string } | null> {
   if (dependencies.signal?.aborted) throw dependencies.signal.reason;
   const codexHome = resolveCodexHomeDir();
-  const initial = readMainAuthJsonCredential();
+  let initial = readMainAuthJsonCredential({ serveRetained: true });
+  // Retention covers a rewrite, not a refresh: an expired or rejected retained bearer goes to the
+  // selected refresh owner exactly as an unavailable file would (#7345). Upstream rejecting the
+  // retained bearer is revocation evidence, so that copy is dropped for good.
+  if (initial?.retained && initial.accessToken === rejectedAccessToken) {
+    invalidateRetainedNativeMainLogin("revocation");
+    initial = null;
+  } else if (initial?.retained && !mainAccessTokenFresh(initial.accessToken, Date.now(), MAIN_TOKEN_REFRESH_SKEW_MS)) {
+    initial = null;
+  }
   // Every skip below ends a forced refresh WITHOUT asking the token endpoint anything, which from
   // the outside is indistinguishable from a refusal: same failed request, no write, no verdict.
   // A forced refresh is the only caller that passes `rejectedAccessToken`, so only it reports.
@@ -606,7 +661,9 @@ async function resolveMainAccountToken(
       resolveNativeProfileContext({ codexHome }),
       () => withCodexRefreshFileLock(lockKey, signal, async () => {
         if (resolveCodexHomeDir() !== codexHome) throw new MainAuthJsonChangedDuringRefreshError();
-        const locked = readMainAuthJsonCredential();
+        // Captured before the exchange: an invalidation while it runs makes its completion stale.
+        const ticket = beginNativeMainObservation();
+        const locked = readMainAuthJsonCredential({ retainWith: ticket });
         if (!locked) throw new MainAuthJsonChangedDuringRefreshError();
         if (credentialRefreshGrantRejected(locked)) throw new MainAccountTokenRefreshError("reauth");
         if (!locked.refreshToken
@@ -673,6 +730,7 @@ async function resolveMainAccountToken(
         // A permitted in-flight success speaks only for its own profile and grant.
         clearMainRefreshGrantRejection(mainRefreshGrantKey(locked)!);
         if (dependencies.preserveReauth !== true) clearAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID);
+        readMainAuthJsonCredential({ retainWith: ticket });
         if (dependencies.signal?.aborted) throw dependencies.signal.reason;
         return result;
       }),
@@ -719,7 +777,6 @@ async function refreshThroughCodex(
   codexHome: string,
   refresh = true,
 ): Promise<{ accessToken: string; chatgptAccountId: string } | null> {
-  // Deferred to keep lifecycle's cache/plan cleanup off this module's load-time import cycle.
   const { observeCodexOwnedMainAccountCredential } = await import("./account-lifecycle");
   if (resolveCodexHomeDir() !== codexHome) throw new MainAuthJsonChangedDuringRefreshError();
   const identityGeneration = captureMainAccountIdentityGeneration();

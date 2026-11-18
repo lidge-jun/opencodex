@@ -85,7 +85,7 @@ export default function ProviderOverviewDashboard({
   };
 
   const allItems = useMemo(
-    () => [...sections.ready, ...sections.needsSetup, ...sections.disabled],
+    () => [...sections.ready, ...sections.needsSetup, ...sections.unverified, ...sections.disabled],
     [sections],
   );
   const knownNames = useMemo(() => new Set(allItems.map(p => p.name)), [allItems]);
@@ -161,23 +161,26 @@ export default function ProviderOverviewDashboard({
         </div>
       </div>
 
-      <div className="pws-dashboard-summary">
+      {/* A calm stat strip (one surface, hairline dividers): the numbers stay neutral, a
+          small dot carries the tone so colour never has to shout. */}
+      <dl className={`pws-dashboard-summary${sections.unverified.length ? " pws-dashboard-summary--unverified" : ""}`}>
         <SummaryCard count={readyCount} label={t("pws.status.ready")} tone="ok" />
         <SummaryCard
           count={needsAttentionCount}
           label={readyReauthCount > 0 ? t("pws.status.needsAttention") : t("pws.status.needsSetup")}
           tone="warn"
         />
+        {sections.unverified.length > 0 && <SummaryCard count={sections.unverified.length} label={t("pws.vertexUnverified")} tone="warn" />}
         <SummaryCard count={sections.disabled.length} label={t("prov.disabledBadge")} tone="muted" />
-      </div>
+      </dl>
 
       {attentionCount > 0 && (
         <section className="pws-dashboard-section pws-dashboard-attention" aria-label={t("pws.attentionTitle")}>
           <h3 className="pws-dashboard-section-title">
-            <IconAlert style={{ width: 14, height: 14 }} aria-hidden="true" />
             {t("pws.attentionTitle")}
           </h3>
-          <div className="pws-dashboard-rows">
+          {/* Inline banners (React Bits `notifications-5`): icon, provider, what to do, open. */}
+          <div className="pws-dashboard-rows pws-dashboard-banners">
             {attention.map(item => (
               <button
                 key={`${item.name}:${item.reason}`}
@@ -185,6 +188,7 @@ export default function ProviderOverviewDashboard({
                 className="pws-dashboard-row pws-dashboard-row--attention"
                 onClick={() => onSelectProvider(item.name)}
               >
+                <span className="pws-dashboard-banner-icon" aria-hidden="true"><IconAlert width={16} height={16} /></span>
                 <ProviderIcon name={item.name} adapter="" baseUrl="" cls="pws-dashboard-row-icon" />
                 <div className="pws-dashboard-row-info">
                   <span className="pws-dashboard-row-name">{formatProviderDisplayName(item.name, t)}</span>
@@ -294,9 +298,9 @@ export default function ProviderOverviewDashboard({
 
 function SummaryCard({ count, label, tone }: { count: number; label: string; tone: "ok" | "warn" | "muted" }) {
   return (
-    <div className={`pws-dashboard-card pws-dashboard-card--${tone}`}>
-      <span className="pws-dashboard-card-count">{count}</span>
-      <span className="pws-dashboard-card-label">{label}</span>
+    <div className={`pws-dashboard-card pws-dashboard-card--${tone}${count > 0 ? " has-count" : ""}`}>
+      <dt className="pws-dashboard-card-label"><span className="pws-dashboard-card-dot" aria-hidden="true" />{label}</dt>
+      <dd className="pws-dashboard-card-count">{count}</dd>
     </div>
   );
 }

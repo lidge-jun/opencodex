@@ -13,6 +13,11 @@ export interface ProvidersConfig {
     reasoningWireFormat?: "gateway-object";
     preserveResponsesReasoningContent?: boolean;
     authMode?: string;
+    googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
+    project?: string;
+    location?: string;
+    vertexCredentialKind?: "ambient" | "marker" | "reference" | "api-key";
+    vertexCredentialVerified?: boolean;
     anthropicOAuthInstance?: "anthropic2";
     keyOptional?: boolean;
     disabled?: boolean;

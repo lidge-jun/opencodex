@@ -29,7 +29,12 @@ export const DEVIN_STATIC_MODELS = [
   "gpt-6-1-sol",
   // 261027 preemptive: GPT-6.1 Terra (mirrors Devin's GPT-6.1 Sol seed; uid unverified).
   "gpt-6-1-terra",
+  // 261118 preemptive: GPT-6.2 Sol and Astra (mirror Devin's GPT-6.1 Sol seed; uids unverified).
+  "gpt-6-2-sol",
+  "gpt-6-2-astra",
   "claude-opus-4-8",
+  // 261110: Claude Fable 5.2 (docs.devin.ai/desktop/models; uid claude-fable-5-2-<effort>).
+  "claude-fable-5-2",
   "claude-fable-5-1",
   "claude-sonnet-5",
   "glm-5-2",
@@ -56,7 +61,11 @@ export const DEVIN_STATIC_MODELS = [
  * number over from the model's original vendor.
  */
 export const DEVIN_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
-  "swe-2": 262_000,
+  // 261112: live catalog context_window 850_000; a real turn completed at 754,971 total.
+  "swe-2": 850_000,
+  // 261112: live catalog also advertises 850_000, but observed turns terminate at
+  // totalTokens 262,140 -- the serving bound is ~256KiB, not the catalog figure.
+  "swe-2-flash": 262_000,
   "swe-1-7": 262_000,
   "swe-1-7-lightning": 202_752,
   "swe-1-6": 200_000,
@@ -70,10 +79,14 @@ export const DEVIN_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gpt-6-1-sol": 1_000_000,
   // 261027 preemptive: GPT-6.1 Terra (unmeasured; mirrors Devin's GPT-6.1 Sol window).
   "gpt-6-1-terra": 1_000_000,
+  // 261118 preemptive: GPT-6.2 Sol and Astra (unmeasured; mirror Devin's GPT-6.1 Sol window).
+  "gpt-6-2-sol": 1_000_000,
+  "gpt-6-2-astra": 1_000_000,
   "claude-opus-4-8": 1_000_000,
   // 260923: read from the live catalog (devin/claude-opus-5-5 context_length 1_000_000).
   "claude-opus-5-5": 1_000_000,
   "claude-opus-5": 1_000_000,
+  "claude-fable-5-2": 1_000_000,
   "claude-fable-5-1": 1_000_000,
   // 260929 preemptive: Claude Sonnet 5.5 (1M per Anthropic) seeded before Devin's live catalog lists it.
   "claude-sonnet-5-5": 1_000_000,

@@ -3,6 +3,10 @@ import { pendingBackgroundWork, settleBackgroundWork } from "../../src/lib/backg
 import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
 import { REMOVE_RETRY_BUDGET_MS, removeTestTempTree, removeTestTempTreeAsync } from "../../scripts/test-temp";
 
+// Background settlement and removal retries each own one budget. Leave scheduling headroom;
+// an unreaped ACL child still blocks removal and may fail this caller-facing deadline.
+export const BACKGROUND_WORK_TEARDOWN_TIMEOUT_MS = 2 * REMOVE_RETRY_BUDGET_MS + 5_000;
+
 type RemoveTreeWithRetryOptions = Readonly<{
   remove?: (path: string) => void;
   sleep?: (milliseconds: number) => void;

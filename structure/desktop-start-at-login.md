@@ -16,6 +16,13 @@ On macOS 13+ Background Task Management can resubmit the LaunchAgent through smd
 `managed_by = com.apple.xpc.ServiceManagement` instead of the plist path. That loaded job is
 credited only when its `program` is this copy and the whole registration re-reads unchanged,
 the same rule as the service-not-found answer (#7019).
+The management diagnostic also reports login evidence as enabled, disabled, or unknown.
+A disabled override or consistently absent plist is reported only after stable, independently
+matching process and ownership evidence; ambiguous or unreadable evidence stays unknown and never earns protection credit. The
+dashboard presents unknown Desktop evidence informationally except for a fresh supervision failure;
+that failure and a verified disabled login require action when no other verified protection applies.
+Unreadable macOS registration or process evidence marks supervision unknown and does not prove failure.
+With an absent plist and matching Desktop install ownership, a stable `none` process probe is a verified supervision failure, provided ownership, install id, and plist absence still match afterward.
 The cases in `tests/fixtures/desktop-login-registration-cases.json` run against both
 implementations (`login_registration::tests` and
 `tests/service/service-desktop-login-registration.test.ts`); a change to either judgment

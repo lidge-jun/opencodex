@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { isIP } from "node:net";
 import { getRuntimePortPath, readRuntimePort } from "../config/process-state";
 import { packageVersion } from "../lib/package-version";
 import { parseStrictSemver } from "../lib/strict-semver";
@@ -10,12 +11,21 @@ export const UPDATE_RESTART_CHILD_ENV = "OCX_UPDATE_RESTART_CHILD";
 export interface UpdateRestartChildMarker { home: UpdateRestartHome; version: string; port: number; hostname: string; deadlineAt: number }
 export interface UpdateRestartChildGuard { check(port?: number, hostname?: string): void; complete(): void }
 
-function parseMarker(raw: string): UpdateRestartChildMarker {
+function safeBindHost(host: string): boolean {
+  if (!host || host.length > 255 || host !== host.trim()) return false;
+  if (host.startsWith("[") || host.endsWith("]")) {
+    return host.startsWith("[") && host.endsWith("]") && isIP(host.slice(1, -1)) === 6;
+  }
+  return isIP(host) !== 0 || /^(?:\*|0|(0+\.){3}0+)\.?$/.test(host);
+}
+
+export function parseUpdateRestartMarker(raw: string): UpdateRestartChildMarker {
   if (raw.length > 8192) throw new Error("update_restart_child_marker_invalid");
   const value = JSON.parse(raw) as UpdateRestartChildMarker;
   if (!value || !Number.isSafeInteger(value.deadlineAt) || !Number.isInteger(value.port)
-    || typeof value.hostname !== "string" || value.port < 1 || value.port > 65535 || typeof value.version !== "string"
+    || typeof value.hostname !== "string" || !safeBindHost(value.hostname) || value.port < 1 || value.port > 65535 || typeof value.version !== "string"
     || value.version === "0.0.0" || !parseStrictSemver(value.version) || !value.home
+    || !(value.home.diagnosedHostname === null || (typeof value.home.diagnosedHostname === "string" && safeBindHost(value.home.diagnosedHostname)))
     || !Number.isSafeInteger(value.home.revision) || value.home.serviceRecord?.schema !== 1
     || typeof value.home.serviceRecord.digest !== "string" || !/^[a-f0-9]{64}$/.test(value.home.serviceRecord.digest)) throw new Error("update_restart_child_marker_invalid");
   for (const directory of [value.home.config, value.home.codex]) {
@@ -49,7 +59,7 @@ export function admitUpdateRestartChild(argv: string[], io: UpdateRestartChildIo
   if (raw === undefined) return undefined;
   delete env[UPDATE_RESTART_CHILD_ENV];
   delete env[OWNERSHIP_MUTATION_LEASE_TOKEN_ENV];
-  const marker = parseMarker(raw);
+  const marker = parseUpdateRestartMarker(raw);
   if (argv.length !== 3 || argv[0] !== "start" || argv[1] !== "--port" || argv[2] !== String(marker.port)) {
     throw new Error("update_restart_child_command_changed");
   }

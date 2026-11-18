@@ -1,4 +1,5 @@
 import { formatRetryAfterAdvice, parseRetryAfterFromMessage } from "./retry-delay";
+import { isMetaMusePlanFailure, META_MUSE_PLAN_REFUSAL_MESSAGE } from "../providers/meta-muse-plan-refusal";
 
 export interface OcxErrorPayload {
   message: string;
@@ -213,7 +214,7 @@ export function safetyRefusalCodeFromMessage(text: string): string | undefined {
   return undefined;
 }
 
-function isSubscriptionGateMessage(text: string): boolean {
+export function isSubscriptionGateMessage(text: string): boolean {
   return (
     text.includes("requires a subscription") ||
     text.includes("requires subscription") ||
@@ -545,6 +546,16 @@ export function classifyError(status: number, type: string, message: string): Oc
   ) {
     return { message, type: "authentication_error", code: "invalid_api_key" };
   }
+  // Meta scopes a Muse Code subscription key to its own client and refuses every other caller with
+  // one fixed 403 (#8352). The key is valid and no login lifts the restriction, so the verdict is a
+  // plan/entitlement class rather than a rejected credential. This sits above the generic
+  // `permission_denied` branch because the envelope carries that code as its own detail.
+  if (isMetaMusePlanFailure(status, message)) {
+    // One proxy sentence says what Meta's refusal means and what path does work; the upstream
+    // body names the restriction but not the alternative, and relaying it verbatim reads as a
+    // rejected credential.
+    return { message: META_MUSE_PLAN_REFUSAL_MESSAGE, type: "permission_error", code: "subscription_required" };
+  }
   // An explicit permission enum must not acquire a more specific inferred reason.
   if (type === "PERMISSION_DENIED" || text.includes("permission_denied")) {
     return { message, type: "permission_error", code: "permission_denied" };
@@ -777,6 +788,7 @@ export function httpStatusFromTerminalError(error: {
   if (message && isClientClosedMessage(message)) return 499;
   if (error.type === "invalid_request_error") return 400;
   if (error.type === "proxy_error") return 500;
+  if (error.code === "upstream_stall_timeout") return 504;
   // A structured server class must not be downgraded to a CLIENT error by message wording.
   // classifyError assigns `server_error` + `upstream_server_error` to every 5xx it sees, so
   // the class is authoritative about blame: the upstream failed, the caller did not send a

@@ -10,6 +10,27 @@ export function maskEmail(value: string | null | undefined): string | null {
   return `${local[0]}***${local[local.length - 1]}@${domain}`;
 }
 
+/** A display label that never falls back to an unmasked or malformed identity. */
+export function maskedAccountLabel(value: string | null | undefined): string | undefined {
+  if (!value || value.length > 254 || !/^[A-Za-z0-9_%+\-]+(?:\.[A-Za-z0-9_%+\-]+)*@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*$/.test(value)) return undefined;
+  return maskEmail(value) ?? undefined;
+}
+
+/**
+ * Dashboard account label that follows `privacy.maskEmails` (#8286).
+ *
+ * Masked mode is exactly {@link maskedAccountLabel}. Unmasked mode is the operator's explicit
+ * disclosure choice, so it returns the stored address as-is (trimmed) — the same value the
+ * unmasked `email` field already carries — and omits only empty, oversized, or control- or
+ * format-character values (bidi overrides, zero-width marks) that could not render as one honest label.
+ */
+export function accountDisplayLabel(value: string | null | undefined, mask: boolean): string | undefined {
+  if (mask) return maskedAccountLabel(value);
+  const label = value?.trim();
+  if (!label || label.length > 254 || /[\p{Cc}\p{Cf}]/u.test(label)) return undefined;
+  return label;
+}
+
 /**
  * Whether stored account emails are masked in management and CLI projections (#3859).
  *

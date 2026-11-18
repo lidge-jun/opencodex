@@ -48,13 +48,15 @@ test.skipIf(process.platform === "win32")("Bun pnpm supervises a mutation's rema
 }, 10000);
 
 test.each([
-  { pid: 2147483647, phase: "mutating", startedAt: 1, installerPid: process.pid },
-  { pid: 2147483647, phase: "failed", startedAt: 1, terminationUnconfirmed: true },
-])("prior installer marker refuses and remains untouched: %j", marker => {
+  // A live recorded installer refuses as in flight.
+  [{ pid: 2147483647, phase: "mutating", startedAt: 1, installerPid: process.pid }, {}],
+  // An unconfirmed installer with no witness refuses too, flagged so the launcher can name the marker (#8524).
+  [{ pid: 2147483647, phase: "failed", startedAt: 1, terminationUnconfirmed: true }, { staleMarker: true }],
+] as const)("prior installer marker refuses and remains untouched: %j", (marker, flag) => {
   const f = fixture(), path = join(f.home, "update-orchestrated.json");
   const original = JSON.stringify(marker); writeFileSync(path, original);
   const session = createOrchestratedChildSession({ ...f, verifyIdentity: () => true });
-  expect(session.start()).toEqual({ ok: false, error: "update-in-flight" });
+  expect(session.start()).toEqual({ ok: false, error: "update-in-flight", ...flag });
   expect(readFileSync(path, "utf8")).toBe(original);
 });
 
@@ -322,6 +324,17 @@ test("unreadable marker fails closed and a stale dead holder is recovered", () =
 
 test("expect round trips and malformed payloads are rejected", () => {
   const f = fixture(); expect(decodeOrchestratedExpect(encodeOrchestratedExpect(f.expect))).toEqual(f.expect);
+  const pnpmOwner = { commandPath: f.home, packagePath: f.home, globalDir: f.home, globalRoot: f.home, globalBinDir: f.home, store: f.home, storePath: f.home, virtualStoreDirs: [] };
+  expect(decodeOrchestratedExpect(encodeOrchestratedExpect({ ...f.expect, pnpmOwner }))).toEqual({ ...f.expect, pnpmOwner });
+  // A legacy global group pins no store fields.
+  const { store: _store, storePath: _storePath, virtualStoreDirs: _virtual, ...legacyOwner } = pnpmOwner;
+  expect(decodeOrchestratedExpect(encodeOrchestratedExpect({ ...f.expect, pnpmOwner: legacyOwner }))).toEqual({ ...f.expect, pnpmOwner: legacyOwner });
+  for (const partial of [{ ...legacyOwner, store: f.home }, { ...legacyOwner, store: f.home, storePath: f.home }]) {
+    expect(() => decodeOrchestratedExpect(Buffer.from(JSON.stringify({ ...f.expect, pnpmOwner: partial })).toString("base64url"))).toThrow();
+  }
+  for (const owner of [null, {}, { ...pnpmOwner, store: "relative" }, { ...pnpmOwner, storePath: "relative" }, { ...pnpmOwner, storePath: undefined }, { ...pnpmOwner, virtualStoreDirs: ["relative"] }, { ...pnpmOwner, virtualStoreDirs: [f.home, f.home, f.home] }, { ...pnpmOwner, extra: f.home }]) {
+    expect(() => decodeOrchestratedExpect(Buffer.from(JSON.stringify({ ...f.expect, pnpmOwner: owner })).toString("base64url"))).toThrow();
+  }
   for (const bad of ["", "!", "e30", "eyJob21lIjoxfQ", Buffer.from(JSON.stringify({ ...f.expect, runtimePid: -1 })).toString("base64url"), Buffer.from(JSON.stringify({ ...f.expect, planToken: "short" })).toString("base64url")]) {
     expect(() => decodeOrchestratedExpect(bad)).toThrow();
   }

@@ -38,8 +38,13 @@ export async function readUsageResponseJson<T>(response: Response, fallbackMessa
   return value as T;
 }
 
-export function usageSummary30dResourceKey(apiBase: string, surface: "all" | "codex" = "all"): string {
+export function usageSummary30dResourceKey(
+  apiBase: string,
+  surface: "all" | "codex" = "all",
+  targetKey?: string,
+): string {
+  const scope = targetKey && targetKey !== apiBase ? targetKey : apiBase;
   return surface === "codex"
-    ? ["usage-summary-30d", apiBase, "codex"].join(":")
-    : ["usage-summary-30d", apiBase, "all"].join(":");
+    ? ["usage-summary-30d", scope, "codex"].join(":")
+    : ["usage-summary-30d", scope, "all"].join(":");
 }

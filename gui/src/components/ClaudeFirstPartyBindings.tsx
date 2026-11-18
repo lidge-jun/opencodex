@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { IconChevron, IconX } from "../icons";
-import { Notice } from "../ui";
+import { Notice, Select } from "../ui";
 import { useI18n } from "../i18n/shared";
 import { readJsonOrThrow } from "../fetch-json";
 
@@ -102,18 +102,18 @@ export default function ClaudeFirstPartyBindings({
               <li key={id} className="claude-bindings-row">
                 <code className="claude-bindings-id" title={id}>{id}</code>
                 <IconChevron className="claude-bindings-arrow" width={12} height={12} aria-hidden="true" />
-                <select
-                  className="input claude-bindings-select"
-                  aria-label={t("claudeDesktop.firstParty.bindings.routeLabel")}
+                <Select
+                  fullWidth
+                  className="claude-bindings-select"
+                  label={t("claudeDesktop.firstParty.bindings.routeLabel")}
                   value={bound}
                   disabled={pending !== null}
-                  onChange={event => void save({ set: { [id]: event.target.value } }, id)}
-                >
-                  {!known && <option value={bound}>{bound}</option>}
-                  {routes.map(model => (
-                    <option key={model.route} value={model.route}>{routeOptionLabel(model)}</option>
-                  ))}
-                </select>
+                  onChange={next => { if (next !== bound) void save({ set: { [id]: next } }, id); }}
+                  options={[
+                    ...(known ? [] : [{ value: bound, label: bound }]),
+                    ...routes.map(model => ({ value: model.route, label: routeOptionLabel(model) })),
+                  ]}
+                />
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm claude-bindings-remove"
@@ -143,18 +143,18 @@ export default function ClaudeFirstPartyBindings({
         <datalist id="claude-bindings-suggestions">
           {unboundSuggestions.map(id => <option key={id} value={id} />)}
         </datalist>
-        <select
-          className="input claude-bindings-select"
-          aria-label={t("claudeDesktop.firstParty.bindings.routeLabel")}
+        <Select
+          fullWidth
+          className="claude-bindings-select"
+          label={t("claudeDesktop.firstParty.bindings.routeLabel")}
           value={route}
           disabled={pending !== null}
-          onChange={event => setRoute(event.target.value)}
-        >
-          <option value="">{t("claudeDesktop.firstParty.bindings.routePlaceholder")}</option>
-          {routes.map(model => (
-            <option key={model.route} value={model.route}>{routeOptionLabel(model)}</option>
-          ))}
-        </select>
+          onChange={setRoute}
+          options={[
+            { value: "", label: t("claudeDesktop.firstParty.bindings.routePlaceholder") },
+            ...routes.map(model => ({ value: model.route, label: routeOptionLabel(model) })),
+          ]}
+        />
         <button
           type="button"
           className="btn btn-primary btn-sm"

@@ -1,3 +1,5 @@
+import { aliasTemplateError } from "../providers/alias-template";
+import { parseDashboardTrustedProxy } from "./dashboard-trusted-proxy";
 import { readExistingSpendSalt, spendPoolAliasesError, validatePoolAliasOwners } from "../lib/spend-pool-alias-validation";
 import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
 import { validRemainingQuotaAccountIds } from "../codex/account-use-remaining";
@@ -9,6 +11,7 @@ import * as z from "zod/v4";
 import { compactionRecoveryConfigError } from "./schema/compaction-recovery";
 import { nativeReasoningRetentionConfigError } from "./schema/native-reasoning-retention";
 import { WORKFLOW_BUDGET_SHAPE_HINT, workflowBudgetConfigError } from "./schema/workflow-budget";
+import { ROUTED_CATALOG_DEFAULTS_SHAPE_HINT, routedCatalogDefaultsConfigError } from "./schema/routed-catalog-defaults";
 import { desktopCompatibilityConfigError } from "./schema/desktop-compatibility";
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
 import { mainAccountHardLockFallbackError } from "./schema/main-account-hard-lock-fallback";
@@ -49,6 +52,7 @@ import {
   malformedQuotaResetNotifyWarning,
   malformedCatalogAutoRefreshWarning,
   malformedCodexPoolWarning,
+  malformedTelemetryWarning,
   malformedSpendWarning,
   rawConfigRecord,
   malformedNativeSubagentFields,
@@ -81,6 +85,7 @@ import {
   compactionRoutingSchema,
   reasoningRetentionSchema,
   skillsConfigSchema,
+  telemetryConfigSchema,
   memoryModelsSchema,
 } from "./schema/leaf-validators";
 
@@ -147,6 +152,7 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   if (blockedModelRedirectsError(rawParsed)) warnings.push("blockedModelRedirects ignored: expected a map of nonempty model keys to nonempty string targets");
   if (nativeReasoningRetentionConfigError(rawParsed)) warnings.push("nativeReasoningRetention ignored: expected only optional boolean modelSwitch and accountSwitch fields; both remain off");
   if (workflowBudgetConfigError(rawParsed)) warnings.push("workflowBudget ignored: " + WORKFLOW_BUDGET_SHAPE_HINT + "; the built-in ceilings remain");
+  if (routedCatalogDefaultsConfigError(rawParsed)) warnings.push("routedCatalogDefaults ignored: " + ROUTED_CATALOG_DEFAULTS_SHAPE_HINT + "; routed catalog rows keep their derived values");
   if (mainAccountHardLockFallbackError(rawParsed)) warnings.push("codexMainAccountHardLockFallback ignored: expected a nonblank model selector and an optional declared reasoningEffort");
   if (fallbackPolicyError(rawParsed)) warnings.push("fallback partly ignored: expected boolean model/provider switches, providers/routes/devices maps of them, and devices.<id>.localFallback; ignored leaves keep today's fallback behavior");
   const quotaAutoRefreshWarning = degradedCodexQuotaAutoRefreshWarning(rawParsed, normalized);
@@ -175,6 +181,8 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   if (catalogRefreshWarning) warnings.push(catalogRefreshWarning);
   const codexPoolWarning = malformedCodexPoolWarning(rawParsed);
   if (codexPoolWarning) warnings.push(codexPoolWarning);
+  const telemetryWarning = malformedTelemetryWarning(rawParsed);
+  if (telemetryWarning) warnings.push(telemetryWarning);
   const spendWarning = malformedSpendWarning(rawParsed);
   if (spendWarning) warnings.push(spendWarning);
   const retentionWarning = degradedReasoningRetentionWarning(rawParsed, normalized);
@@ -622,6 +630,30 @@ export function loopbackCompanionBindError(
     + "loopback bind already admits local callers without a credential.";
 }
 
+/** #8338: the persisted schema drops a malformed trusted-proxy block; a live write gets the reason. */
+function dashboardTrustedProxyConfigError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "dashboardTrustedProxy") || raw.dashboardTrustedProxy === undefined) return null;
+  const parsed = parseDashboardTrustedProxy(raw.dashboardTrustedProxy);
+  return typeof parsed === "string" ? `schema_invalid: dashboardTrustedProxy: ${parsed}` : null;
+}
+
+/**
+ * #7705: load drops a hand-edited template that does not validate; a live write that carries one
+ * (a provider-wide save, `ocx config set`) gets the same reason the alias-template route gives.
+ */
+function providerAliasTemplateConfigError(value: unknown): string | null {
+  const providers = rawConfigRecord(rawConfigRecord(value)?.providers);
+  if (!providers) return null;
+  for (const [name, provider] of Object.entries(providers)) {
+    const template = rawConfigRecord(provider)?.aliasTemplate;
+    if (template === undefined) continue;
+    const problem = typeof template === "string" ? aliasTemplateError(template) : "template must be a string";
+    if (problem) return `schema_invalid: providers.${name}.aliasTemplate: ${problem}`;
+  }
+  return null;
+}
+
 /**
  * Validate the hub management ingress at the live-write boundary.
  *
@@ -709,6 +741,16 @@ function skillsConfigError(value: unknown): string | null {
   return "schema_invalid: skills" + (field ? "." + field : "") + ": " + (issue?.message ?? "invalid configuration");
 }
 
+export function telemetryConfigError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "telemetry") || raw.telemetry === undefined) return null;
+  const result = telemetryConfigSchema.safeParse(raw.telemetry);
+  if (result.success) return null;
+  const issue = result.error.issues[0];
+  const field = issue?.path.join(".");
+  return "schema_invalid: telemetry" + (field ? "." + field : "") + ": " + (issue?.message ?? "invalid configuration");
+}
+
 export function validateConfigCandidate(value: unknown): { ok: true; config: OcxConfig } | { ok: false; error: string } {
   const chatgptDesktop = rawConfigRecord(value)?.chatgptDesktop;
   if (chatgptDesktop !== undefined && !chatgptDesktopSchema.safeParse(chatgptDesktop).success) {
@@ -738,6 +780,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? fallbackPolicyError(value)
     ?? nativeReasoningRetentionConfigError(value)
     ?? workflowBudgetConfigError(value)
+    ?? routedCatalogDefaultsConfigError(value)
     ?? mainAccountHardLockFallbackError(value)
     ?? compactionRecoveryConfigError(value) ?? desktopCompatibilityConfigError(value) ?? configReasoningPinsConfigError(value)
     ?? blankHostnameError(value)
@@ -771,8 +814,11 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? clientRolePairError(value)
     ?? loopbackListenerPortError(value)
     ?? managementIngressConfigError(value)
+    ?? providerAliasTemplateConfigError(value)
+    ?? dashboardTrustedProxyConfigError(value)
     ?? metricsExportConfigError(value)
     ?? serviceHealthRecoveryConfigError(value)
+    ?? telemetryConfigError(value)
     ?? skillsConfigError(value);
   if (boundaryError) return { ok: false, error: boundaryError };
   const result = configSchema.safeParse(value);
@@ -783,24 +829,24 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
   return { ok: false, error: schemaDiagnosticsError(result.error) };
 }
 
-export function configDiagnosticsFromRaw(raw: string): ConfigDiagnostics {
-  return configDiagnosticsFromText(raw);
+export function configDiagnosticsFromRaw(raw: string, options: { warn?: (message: string) => void } = {}): ConfigDiagnostics {
+  return configDiagnosticsFromText(raw, undefined, options.warn);
 }
 
-function configDiagnosticsFromText(raw: string, file?: { path: string; bytes: Uint8Array }): ConfigDiagnostics {
+function configDiagnosticsFromText(raw: string, file?: { path: string; bytes: Uint8Array }, warn?: (message: string) => void): ConfigDiagnostics {
   try {
     const parsed = JSON.parse(raw.replace(/^\uFEFF/, ""));
     projectRemovedOpenCodeFreeSnapshot(parsed, file);
     sanitizeOpenCodeOverridesForLoad(parsed);
-    sanitizeReasoningPinsForLoad(parsed);
+    sanitizeReasoningPinsForLoad(parsed, warn);
     // Same degradation as loadConfig: a hand-edited invalid retryOn429 must not trip the
     // schema and send the caller a default-config fallback (the config command could then
     // persist that fallback over the user's providers/keys).
-    sanitizeModelDisplayNamesForLoad(parsed);
-    sanitizeAutoReviewForLoad(parsed);
-    sanitizeRetryOn429ForLoad(parsed);
-    sanitizeModelCostsForLoad(parsed);
-    sanitizeCapabilityDeclarationsForLoad(parsed);
+    sanitizeModelDisplayNamesForLoad(parsed, warn);
+    sanitizeAutoReviewForLoad(parsed, warn);
+    sanitizeRetryOn429ForLoad(parsed, warn);
+    sanitizeModelCostsForLoad(parsed, warn);
+    sanitizeCapabilityDeclarationsForLoad(parsed, warn);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
       return validFileConfigDiagnostics(normalizeApiKeyIds(result.data as OcxConfig), parsed);

@@ -1634,12 +1634,17 @@ describe("combo validation and normalization", () => {
       defaultEffort: "high",
       defaultEffortMode: "fallback",
       reasoningEffortMode: "strict",
+      jevEffortMode: "decide",
       imageInput: "auto",
       alias: null,
       nativeAlias: false,
       displayName: null,
       targets: [{ provider: "a", model: "m1", weight: 2, lastResort: false, metered: false }],
     });
+    // Only the exact "client" literal hands a JEV combo's wire effort to the caller (#8041).
+    const jevTargets = [{ provider: "a", model: "m1" }];
+    expect(normalizeComboConfig({ strategy: "jev", jevEffortMode: "client", targets: jevTargets }).jevEffortMode).toBe("client");
+    expect(normalizeComboConfig({ strategy: "jev", jevEffortMode: "Client" as never, targets: jevTargets }).jevEffortMode).toBe("decide");
     expect(normalizeComboConfig({ targets: [{ provider: "a", model: "m1" }] }).defaultEffort).toBeNull();
     const targetReasoningEfforts: OcxComboDefaultEffort[] = ["low", "high"];
     const normalizedTargetEfforts = normalizeComboConfig({

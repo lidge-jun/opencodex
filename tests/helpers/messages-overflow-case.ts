@@ -49,7 +49,12 @@ export async function observeMessagesOverflowBody(response: Response, lane: Mess
   return { text, bodySha256, bodyLength };
 }
 
-export async function runMessagesOverflowCase(lane: MessagesOverflowLane, fixture: MessagesOverflowFixture) {
+/** A slice may lend its real spend owner; single-case callers retain their own lease. */
+export async function runMessagesOverflowCase(
+  lane: MessagesOverflowLane,
+  fixture: MessagesOverflowFixture,
+  acquireSpendHome: () => () => void = acquireOwnedSpendHome,
+) {
   const tail = (fixture.messageStop || fixture.id.startsWith("frame-complete-")) ? 'event: message_stop\ndata: {"type":"message_stop"}\n\n' : "";
   const prefix = fixture.prefix ? `event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "text", text: fixture.prefix } })}\n\nevent: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n` : "";
   const error = { ...(fixture.type ? { type: fixture.type } : {}), ...(fixture.status !== undefined ? { status: fixture.status } : {}), message: `${fixture.message} ${overflowSentinel}`, ...(fixture.code !== undefined ? { code: fixture.code } : {}) };
@@ -112,7 +117,7 @@ export async function runMessagesOverflowCase(lane: MessagesOverflowLane, fixtur
     } else {
       const passthrough = lane === "passthrough" || lane === "count_tokens";
       const native = lane.startsWith("native");
-      release = acquireOwnedSpendHome(); clearKeyCooldowns();
+      release = acquireSpendHome(); clearKeyCooldowns();
       const builtin = lane === "native-fold-builtin";
       const nativeFold = lane === "native-fold" || builtin;
       const reply = () => {

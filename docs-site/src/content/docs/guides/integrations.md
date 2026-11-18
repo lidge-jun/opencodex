@@ -29,9 +29,11 @@ file, and removes it again. Each client below has its own switch:
 | WorkBuddy AI | `~/.workbuddy-ai/models.json` | JSON | auto reload / new sessions | loopback placeholder |
 | Cline CLI | `~/.cline/data/settings/providers.json` and sibling `models.json` | JSON pair | after stopping and restarting Cline | loopback placeholder |
 | Kilo | first existing `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, or `config.json` under `~/.config/kilo` | JSONC | new sessions | `OPENCODEX_KILO_API_KEY` |
-| Command Code | `~/.commandcode/providers.json` (on Windows with the default home: use `HOME ?? USERPROFILE` only if nonblank and Windows-absolute, otherwise `homedir()`; a separately supplied home is preserved; append `.commandcode\providers.json`) | JSON | next launch of Command Code | none — keyless loopback (`apiKey: false`) |
+| Command Code | `~/.commandcode/providers.json` (on Windows with the default home: use `HOME ?? USERPROFILE` only if nonblank and Windows-absolute, otherwise `homedir()`; a separately supplied home is preserved; append `.commandcode\providers.json`) | JSON | next launch of Command Code | none — keyless loopback (`apiKey: false`); the desktop app needs its own sign-in and opencodex never writes `auth.json` |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | JSON | immediately via file watching | none — keyless loopback |
 | T3 Code | `$T3CODE_HOME/userdata/settings.json` (default `~/.t3/userdata/settings.json`) | JSON | immediately — T3 Code watches the file | non-secret loopback marker |
+
+From the CLI, `ocx integration client enable|disable --client <id>` changes this machine only, like the dashboard toggle. On a Remote Link Home that uses route intent, the change is recorded as the Home's own decision, so `ocx sync` keeps it, and linked Children keep their defaults. To change what Children inherit, use `ocx route to <client> on|off`. On a Remote Link Child a plain toggle is refused and prints the Home command for that device; use `ocx route to <client> off --local` there to opt that Child out. See [Remote Link](/guides/remote-link/#route-clients-per-device).
 
 ## Gentle Shell
 
@@ -173,7 +175,7 @@ runs your own `claude` binary with `ANTHROPIC_BASE_URL` set to the proxy, the no
 `opencodex-proxy` marker as `ANTHROPIC_AUTH_TOKEN`, an explicitly empty `ANTHROPIC_API_KEY`, and
 `CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST=1` so a `settings.json` env block in your Claude config cannot
 re-point it. Each routed model is a custom model keyed by its opencodex selector
-(`provider/model`), which T3 Code sends verbatim. It appears in T3 Code's model picker under
+(`provider/model`), which T3 Code sends verbatim. A model with an effort ladder declares it, so T3 Code offers its effort control and can start a subagent on it at a chosen effort. It appears in T3 Code's model picker under
 **opencodex**. T3 Code reloads the file on its own, so no restart is needed; catalog changes and
 `ocx sync` refresh the instance.
 
@@ -264,7 +266,7 @@ Prime Agent follows `PRIME_AGENT_CODING_AGENT_DIR` before falling back to
 disagree about which file is meant. Its managed block owns only
 `providers.opencodex`, so other providers and any `modelOverrides` you have set
 stay untouched. Prime Agent reads `models.json` when a session starts, so start
-a new session after connecting it.
+a new session after connecting it. The generated block sets `compat.supportsDeveloperRole` to `false`, so the agent sends its system prompt as `system`; several OpenAI-compatible upstreams reject `developer` with a 400.
 
 Aside keeps a separate model catalog for each registered profile, including local profiles. OpenCodex lists
 all registered profiles, including local profiles, and can synchronize them together or control
@@ -273,7 +275,7 @@ Aside connection enables all profiles by default; individual exclusions survive 
 
 One caveat specific to Aside: the running app rewrites `models.json` itself, so
 fully quit and reopen Aside after applying, the same way Claude Desktop needs a
-restart. Aside's block is loopback-only and never carries a real credential.
+restart. Aside's block is loopback-only and never carries a real credential. The generated block sets `compat.supportsDeveloperRole` to `false`, so the agent sends its system prompt as `system`; several OpenAI-compatible upstreams reject `developer` with a 400.
 
 The managed Raycast integration supports **macOS and Windows**. Custom Providers
 is a **Raycast Pro** feature: on a free plan the file is still written, but
@@ -479,11 +481,15 @@ though the managed document does not change.
 
 If the file changes after you review it, the write is refused as stale. The dialog replaces the
 old plan with the updated one and asks you to confirm again; it never retries the write
-automatically. If a preview is temporarily unavailable, reload the page normally and start the
-action again.
+automatically. When a preview reports that no model catalog is loaded yet, the dialog stays open and
+offers **Load catalog and retry**: it reads the integration list again — the ordinary load that
+retains the catalog, never a preview that gathers models — and then asks for the plan once more.
 
-Aside uses the same preview and confirmation flow for one selected profile at a time. **Sync all
-profiles** remains a separate bulk action and is not bound to one combined preview.
+Aside uses the same preview and confirmation flow for one selected profile at a time, and a plan
+describes exactly that profile's file. Because one plan cannot describe several independently
+changing files, the Overview card for a conflicted Aside integration opens **Connect → Aside** with
+**Choose profile** rather than a Replace action; replace the block on the profile's own page. **Sync
+all profiles** remains a separate bulk action and is not bound to one combined preview.
 
 ## What to expect, honestly
 
@@ -1101,6 +1107,16 @@ whichever one it was written into.
 **The credential form.** The provider is written with `apiKey: false`, the documented
 form for an endpoint that needs no key. A raw string is refused by Command Code, and
 no service-token file is read, referenced, or exported by this integration.
+
+**The desktop app needs its own sign-in.** Command Code Desktop never reads the
+keyless provider form: before it shows a workspace it checks `~/.commandcode/auth.json`
+(or `COMMAND_CODE_API_KEY`) and, finding neither, stops on its sign-in screen. Sign in
+there once — or with `cmd login` — and the app stores its own credential.
+
+opencodex does not write that file. It belongs to Command Code and is shared with real
+logins and every other provider's tokens, so enabling this integration only writes
+`providers.json`; the placeholder is never written to `auth.json`, and Apply, overwrite,
+catalog refresh, and Disable all leave the store byte-for-byte alone.
 
 **Home resolution.** There is no `COMMANDCODE_HOME` override here. The published
 client resolves `HOME ?? USERPROFILE` and then appends `/.commandcode/providers.json`;

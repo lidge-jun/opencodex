@@ -139,8 +139,17 @@ function publishResult(fd, value) {
 }
 
 function validateExpect(value) {
+  const keys = Object.keys(value ?? {}).sort().join(",");
+  const owner = value?.pnpmOwner;
   if (!value || typeof value !== "object" || Array.isArray(value)
-    || Object.keys(value).sort().join(",") !== "cliRoot,home,planToken,runtimePid,servingRoot"
+    || !["cliRoot,home,planToken,runtimePid,servingRoot", "cliRoot,home,planToken,pnpmOwner,runtimePid,servingRoot"].includes(keys)
+    || (keys.includes(",pnpmOwner,") && (!owner || typeof owner !== "object" || Array.isArray(owner)
+      || !["commandPath,globalBinDir,globalDir,globalRoot,packagePath", "commandPath,globalBinDir,globalDir,globalRoot,packagePath,store,storePath,virtualStoreDirs"]
+        .includes(Object.keys(owner).sort().join(","))
+      || [owner.commandPath, owner.globalBinDir, owner.globalDir, owner.globalRoot, owner.packagePath].some(path => typeof path !== "string" || !isAbsolute(path))
+      || ("store" in owner && ([owner.store, owner.storePath].some(path => typeof path !== "string" || !isAbsolute(path))
+        || !Array.isArray(owner.virtualStoreDirs) || owner.virtualStoreDirs.length > 2
+        || owner.virtualStoreDirs.some(path => typeof path !== "string" || !isAbsolute(path))))))
     || typeof value.home !== "string" || !isAbsolute(value.home)
     || typeof value.cliRoot !== "string" || !isAbsolute(value.cliRoot)
     || (value.servingRoot !== null && (typeof value.servingRoot !== "string" || !isAbsolute(value.servingRoot)))
@@ -176,12 +185,16 @@ export function createOrchestratedChildSession({ home, resultPath, resultCapabil
   const result = value => { if (resultFd !== undefined) publishResult(resultFd, value); };
   const closeResult = () => { if (resultFd !== undefined) { const fd = resultFd; resultFd = undefined; closeSync(fd); } };
   let state = "new", mutex, startedAt, untrackedPending = false, retainFence = false;
-  const marker = (phase, preserveInstaller = false, terminationUnconfirmed = false, retainFence = false) => {
+  const marker = (phase, preserveInstaller = false, terminationUnconfirmed = false, retainFence = false, dropWindowsWitness = false) => {
     let installer = {};
     if (preserveInstaller) {
       const current = JSON.parse(readFileSync(markerPath, "utf8"));
       if (current.pid !== pid || current.startedAt !== startedAt) throw new Error("orchestrated marker changed");
-      if (current.installerPid !== undefined) installer.installerPid = current.installerPid;
+      // A Windows supervisor pid (no POSIX group beside it) only witnesses an unconfirmed installer;
+      // once its exit is confirmed it is dropped so a later run in this session can record its own.
+      if (current.installerPid !== undefined && !(dropWindowsWitness && current.installerPgid === undefined)) {
+        installer.installerPid = current.installerPid;
+      }
       if (current.installerPgid !== undefined) installer.installerPgid = current.installerPgid;
     }
     atomicJson(markerPath, { pid, phase, startedAt, ...installer,
@@ -199,10 +212,12 @@ export function createOrchestratedChildSession({ home, resultPath, resultCapabil
         return { ok: false, error };
       }
       mutex = acquired;
-      if (inspectUpdateMarker(home) !== "free") {
+      const detail = {};
+      if (inspectUpdateMarker(home, { detail }) !== "free") {
         mutex.release(); mutex = undefined;
         result({ phase: "refused", error: "update-in-flight" }); state = "refused"; closeResult();
-        return { ok: false, error: "update-in-flight" };
+        // staleMarker never enters the result record; it lets the launcher print recovery guidance.
+        return { ok: false, error: "update-in-flight", ...(detail.witnessless ? { staleMarker: true } : {}) };
       }
       try { startedAt = now(); marker("preflight"); }
       catch (error) { mutex.release(); mutex = undefined; throw error; }
@@ -241,7 +256,7 @@ export function createOrchestratedChildSession({ home, resultPath, resultCapabil
     },
     confirmInstallerExit() {
       if (state !== "mutating" || !untrackedPending) throw new Error("no untracked installer");
-      marker("mutating", true); untrackedPending = false;
+      marker("mutating", true, false, false, true); untrackedPending = false;
     },
     retainInstallerFence() {
       if (state !== "mutating") throw new Error("orchestrated session is not mutating");

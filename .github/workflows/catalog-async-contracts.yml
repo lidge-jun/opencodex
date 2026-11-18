@@ -1,15 +1,6 @@
 name: Catalog async contracts
 
 on:
-  push:
-    branches: [main, preview]
-    paths:
-      - src/**
-      - scripts/diagnostics/windows-version-control/**
-      - .github/actions/setup-project-bun/**
-      - .github/workflows/catalog-async-contracts.yml
-      - package.json
-      - bun.lock
   pull_request:
     paths:
       - src/**
@@ -28,15 +19,30 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  validate-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate dispatch source
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$EVENT_NAME" = workflow_dispatch ] && [ "$REF" != refs/heads/dev ]; then
+            echo '::error::manual catalog contracts must run from dev'
+            exit 1
+          fi
+
   contracts:
+    needs: validate-source
     name: Catalog async contracts (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        # Pull requests run the ubuntu leg only; macos and windows run on push
-        # to main/preview and on manual dispatch.
+        # Pull requests run the ubuntu leg only; macos and windows run on manual dispatch.
         os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7

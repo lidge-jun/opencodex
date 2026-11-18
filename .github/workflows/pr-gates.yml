@@ -1,0 +1,58 @@
+name: PR gates
+
+# One run per PR event for the three pull-request gates (#7654). Each gate keeps
+# its logic in its own file and runs here as a local reusable workflow:
+#   label   -> pr-labeler.yml        (type label and title sync)
+#   hygiene -> pr-hygiene.yml        (deterministic hygiene checks)
+#   enforce -> enforce-pr-target.yml (target, description and readiness gate)
+# Before this, every description edit or label change started three separate
+# workflow runs.
+#
+# Trust boundary. pull_request_target and status always load this workflow from
+# the repository default branch (`dev`), and a `./` reusable workflow loads from
+# the same commit as its caller, so no PR can change which gate code runs. The
+# gates still check out their scripts from a fixed ref and never run PR head
+# code. Only GITHUB_TOKEN is used; nothing is passed as a secret.
+on:
+  pull_request_target:
+    # The union of what the three gates subscribed to. Each caller job below keeps
+    # its own gate to the actions it handled before.
+    types: [opened, reopened, edited, labeled, unlabeled, ready_for_review, synchronize]
+  # CodeRabbit's legacy commit status wakes the target gate; resolve-pr inside
+  # enforce-pr-target.yml accepts only the trusted CodeRabbit success status.
+  status:
+
+# No default token. Each caller job grants exactly what its gate's jobs request;
+# a callee can only lower that ceiling.
+permissions: {}
+
+# No workflow-level concurrency: each gate owns its group on its own job, so a
+# job this run skips never enters a group.
+jobs:
+  label:
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      contains(fromJSON('["opened", "edited", "synchronize", "labeled", "unlabeled"]'), github.event.action)
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+    uses: ./.github/workflows/pr-labeler.yml
+
+  hygiene:
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      contains(fromJSON('["opened", "reopened", "synchronize", "edited", "labeled", "unlabeled"]'), github.event.action)
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    uses: ./.github/workflows/pr-hygiene.yml
+
+  enforce:
+    # No caller filter: resolve-pr decides which pull_request_target labels and
+    # which status events reach the write-capable gate.
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: ./.github/workflows/enforce-pr-target.yml

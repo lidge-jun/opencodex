@@ -183,10 +183,10 @@ function writes(): RequestRecord[] {
 test("three profiles show desired switches, actual badges, current marker and a mixed global switch", async () => {
   await ready();
   expect(button("Sync all profiles").getAttribute("aria-pressed")).toBe("mixed");
-  expect(button("Sync Work").getAttribute("aria-pressed")).toBe("true");
-  expect(button("Sync Personal").getAttribute("aria-pressed")).toBe("false");
-  expect(button("Sync Profile 7").getAttribute("aria-pressed")).toBe("true");
-  expect(container.querySelectorAll("button[aria-pressed]").length).toBe(4);
+  expect(button("Sync Work").getAttribute("aria-checked")).toBe("true");
+  expect(button("Sync Personal").getAttribute("aria-checked")).toBe("false");
+  expect(button("Sync Profile 7").getAttribute("aria-checked")).toBe("true");
+  expect(container.querySelectorAll('button[role="switch"], button[aria-pressed]').length).toBe(4);
   for (const text of ["2 of 3 profiles applied", "Current profile", "Not applied", "Applied"]) {
     expect(container.textContent).toContain(text);
   }
@@ -215,12 +215,12 @@ test("an individual toggle uses its exact profile path and body and keeps siblin
   await click("Sync Work");
   await waitFor(() => Boolean(findButton("Disable")));
   await click("Disable", container.querySelector("dialog[open]")!);
-  await waitFor(() => button("Sync Work").getAttribute("aria-pressed") === "false");
+  await waitFor(() => button("Sync Work").getAttribute("aria-checked") === "false");
   expect(writes()).toEqual([{ path: `${profilesPath}/0`, method: "PUT", body: {
     enabled: false, operation: "disable", planFingerprint: `p1:${"0".repeat(32)}`,
   } }]);
-  expect(button("Sync Personal").getAttribute("aria-pressed")).toBe("false");
-  expect(button("Sync Profile 7").getAttribute("aria-pressed")).toBe("true");
+  expect(button("Sync Personal").getAttribute("aria-checked")).toBe("false");
+  expect(button("Sync Profile 7").getAttribute("aria-checked")).toBe("true");
 });
 
 test("a partial bulk response refetches saved choices without claiming failed profiles applied", async () => {
@@ -238,7 +238,7 @@ test("a partial bulk response refetches saved choices without claiming failed pr
   const before = listReads();
   await click("Sync all profiles");
   await waitFor(() => listReads() > before && container.textContent?.includes("Conflict") === true);
-  expect(button("Sync Personal").getAttribute("aria-pressed")).toBe("true");
+  expect(button("Sync Personal").getAttribute("aria-checked")).toBe("true");
   expect(container.textContent).toContain("2 of 3 profiles applied");
   expect(container.textContent).toContain("Some profiles need attention");
 });
@@ -254,7 +254,7 @@ test("a refused individual update refetches saved off intent while showing the a
   await click("Sync Work");
   await waitFor(() => Boolean(findButton("Disable")));
   await click("Disable", container.querySelector("dialog[open]")!);
-  await waitFor(() => listReads() > before && button("Sync Work").getAttribute("aria-pressed") === "false");
+  await waitFor(() => listReads() > before && button("Sync Work").getAttribute("aria-checked") === "false");
   expect(container.textContent).toContain("2 of 3 profiles applied");
   expect(container.textContent).toContain("Sync choice saved; file update pending.");
   expect(writes()).toEqual([{ path: `${profilesPath}/0`, method: "PUT", body: {
@@ -269,7 +269,7 @@ test("Sync now uses server-selected synchronization and preserves a profile that
   await click("Sync now");
   await waitFor(() => listReads() > before && !button("Sync now").disabled);
   expect(writes()).toEqual([{ path: syncPath, method: "POST", body: {} }]);
-  expect(button("Sync Personal").getAttribute("aria-pressed")).toBe("false");
+  expect(button("Sync Personal").getAttribute("aria-checked")).toBe("false");
   expect(button("Sync all profiles").getAttribute("aria-pressed")).toBe("mixed");
 });
 
@@ -326,7 +326,7 @@ test("details keep state, journal and restore scoped to the selected profile, th
       planFingerprint: `p1:${"2".padStart(32, "0")}` } }]);
   await click("All Aside profiles");
   await waitFor(() => Boolean(findButton("Sync Work")));
-  expect(button("Sync Personal").getAttribute("aria-pressed")).toBe("false");
+  expect(button("Sync Personal").getAttribute("aria-checked")).toBe("false");
   expect(requests.some(request => request.path === "/api/client-integrations/aside"
     || request.path.startsWith("/api/client-integrations/journal")
     || request.path === "/api/client-integrations/restore")).toBe(false);
@@ -359,7 +359,7 @@ for (const withSnapshot of [true, false]) {
       expect(failedRow.textContent).not.toContain("Restore it from");
     }
     expect(button("Manage Work").closest(".aside-profile-row")!.textContent).not.toContain("Personal file could not be replaced");
-    expect(button("Sync Personal").getAttribute("aria-pressed")).toBe("true");
+    expect(button("Sync Personal").getAttribute("aria-checked")).toBe("true");
     expect(container.textContent).toContain("2 of 3 profiles applied");
     expect(writes()).toEqual([{ path: profilesPath, method: "PUT", body: { enabled: true } }]);
   });
@@ -383,7 +383,7 @@ test("Sync now preserves distinct refusal reasons on the affected profiles after
   expect(unnamed.textContent).not.toContain("Work file changed outside opencodex");
   expect(personal.textContent).not.toContain("Work file changed outside opencodex");
   expect(personal.textContent).not.toContain("Profile 7 file cannot be read");
-  expect(button("Sync Personal").getAttribute("aria-pressed")).toBe("false");
+  expect(button("Sync Personal").getAttribute("aria-checked")).toBe("false");
   expect(writes()).toEqual([{ path: syncPath, method: "POST", body: {} }]);
 });
 
@@ -394,7 +394,7 @@ test("a failed Aside restore keeps the error dialog open but refetches persisted
   await ready();
   await click("Manage Personal");
   await waitFor(() => Boolean(findButton("Undo")));
-  expect(button("Apply").getAttribute("aria-pressed")).toBe("false");
+  expect(button("Apply").getAttribute("aria-checked")).toBe("false");
   const stateReads = () => requests.filter(request => request.method === "GET" && request.path === `${profilesPath}/2`).length;
   const before = stateReads();
   mutationResponse = () => {
@@ -417,7 +417,7 @@ test("a failed Aside restore keeps the error dialog open but refetches persisted
     body: { opId: "aside-profile-2-failed-restore", confirmDrift: false, operation: "restore",
       planFingerprint: `p1:${"2".padStart(32, "0")}` } }]);
   await waitFor(() => container.querySelector("dialog[open]")?.textContent?.includes("Personal restore could not finish") === true);
-  await waitFor(() => stateReads() > before && findButton("Disable")?.getAttribute("aria-pressed") === "true");
+  await waitFor(() => stateReads() > before && findButton("Disable")?.getAttribute("aria-checked") === "true");
   const dialog = container.querySelector("dialog[open]")!;
   expect(dialog.textContent).toContain("Automatic recovery did not finish. Check the client configuration before retrying.");
   expect(button("Restore", dialog).disabled).toBe(false);
@@ -426,8 +426,8 @@ test("a failed Aside restore keeps the error dialog open but refetches persisted
       planFingerprint: `p1:${"2".padStart(32, "0")}` } }]);
   await click("Cancel", dialog);
   await waitFor(() => !container.querySelector("dialog[open]"));
-  expect(button("Disable").getAttribute("aria-pressed")).toBe("true");
+  expect(button("Disable").getAttribute("aria-checked")).toBe("true");
   expect(container.textContent).toContain("Not applied");
   await click("All Aside profiles");
-  await waitFor(() => findButton("Sync Personal")?.getAttribute("aria-pressed") === "true");
+  await waitFor(() => findButton("Sync Personal")?.getAttribute("aria-checked") === "true");
 });

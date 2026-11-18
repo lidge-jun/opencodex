@@ -241,6 +241,8 @@ Connections > API keys に音声入力とリアルタイム音声の項目があ
 
 ## `POST /v1/responses/compact`
 
+compact リクエストに不正な OpenCodex 管理の retained-compaction 入力（`ocx2:`）が含まれる場合、HTTP 400（`error.type: "invalid_request_error"`）を返します。検証のタイミングとアカウントへの影響は[英語の正規リファレンス](/reference/proxy-formats/#post-v1responsescompact)を参照してください。
+
 圧縮により、長い応答会話を短縮する必要があるクライアントの置換履歴が返されます。
 
 |ルートの種類 |行動 |

@@ -125,7 +125,7 @@ describe("explicit live provider lifecycle", () => {
     expect(force.calls.filter(call => call.method === "POST")).toHaveLength(1);
   });
 
-  for (const presets of [null, {}, { providers: {} }, { providers: [null] }, { providers: [preset, preset] }, { providers: [{ ...preset, auth: 1 }] }, { providers: [{ ...preset, responsesPath: 3 }] }, { providers: [] }]) {
+  for (const presets of [null, {}, { providers: {} }, { providers: [null] }, { providers: [preset, preset] }, { providers: [{ ...preset, auth: 1 }] }, { providers: [{ ...preset, responsesPath: 3 }] }]) {
     test("missing/malformed target preset never falls back or posts", async () => {
       const f = fixture({ presets: presets ?? { providers: null } });
       expect(await lifecycle("add", ["fixture", "--json"], f.deps)).toBe(1);
@@ -133,6 +133,24 @@ describe("explicit live provider lifecycle", () => {
       expect(output).not.toHaveBeenCalled();
     });
   }
+  for (const args of [["kimi-responses"], ["kimi-responses", "--adapter", "openai-responses"], ["kimi-responses", "--base-url", "https://custom.example.test"]]) {
+    test(`preset the target does not offer is a usage error naming it (#8087): ${args.slice(1).join(" ") || "no custom fields"}`, async () => {
+      const f = fixture({ presets: { providers: [preset] } });
+      expect(await lifecycle("add", [...args, "--json"], f.deps)).toBe(2);
+      expect(f.calls.map(call => call.method)).toEqual(["GET", "GET"]);
+      expect(output).not.toHaveBeenCalled();
+      expect(errors.mock.calls[0]?.[0]).toBe('Error: The selected target does not offer a "kimi-responses" preset. Custom providers require --adapter and --base-url.');
+      expect(errors.mock.calls.map(call => call[0])).toEqual(expect.arrayContaining(["Usage:", expect.stringContaining("ocx provider add <name> --live")]));
+    });
+  }
+  test("canonical OpenAI missing from the target is a usage error (#8087)", async () => {
+    const f = fixture({ presets: { providers: [] } });
+    expect(await lifecycle("add", ["openai", "--json"], f.deps)).toBe(2);
+    expect(f.calls.map(call => call.method)).toEqual(["GET", "GET"]);
+    expect(output).not.toHaveBeenCalled();
+    expect(errors.mock.calls[0]?.[0]).toBe("Error: The selected target does not offer the canonical openai preset.");
+    expect(errors.mock.calls.map(call => call[0])).toEqual(expect.arrayContaining(["Usage:", expect.stringContaining("ocx provider add <name> --live")]));
+  });
   for (const seed of [undefined, {}, { ...canonicalSeed, apiKey: SENTINEL }, { ...canonicalSeed, baseUrl: "https://wrong.test" }, { ...canonicalSeed, codexAccountMode: "wrong" }]) {
     test("missing/malformed canonical seed cannot fall back to custom flags", async () => {
       const f = fixture({ presets: { providers: [{ id: "openai", provider: seed }] } });

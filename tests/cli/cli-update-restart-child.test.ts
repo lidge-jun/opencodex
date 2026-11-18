@@ -1,12 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { admitUpdateRestartChild, UPDATE_RESTART_CHILD_ENV, type UpdateRestartChildIo } from "../../src/cli/update-restart-child";
+import { admitUpdateRestartChild, parseUpdateRestartMarker, UPDATE_RESTART_CHILD_ENV, type UpdateRestartChildIo } from "../../src/cli/update-restart-child";
 import { OWNERSHIP_MUTATION_LEASE_TOKEN_ENV } from "../../src/service/ownership-mutation-lease.mjs";
 
 function setup() {
   const calls: string[] = [];
   let now = 1000;
   let exit: (() => void) | undefined;
-  const marker = { home: { config: { path: "/test/ocx", dev: 1, ino: 2, fileId: "1:2" }, codex: { path: "/test/codex", dev: 1, ino: 3, fileId: "1:3" }, revision: 0, serviceRecord: { schema: 1 as const, digest: "a".repeat(64) } }, version: "2.77.0", port: 10100, hostname: "127.0.0.1", deadlineAt: 5000 };
+  const marker = { home: { config: { path: "/test/ocx", dev: 1, ino: 2, fileId: "1:2" }, codex: { path: "/test/codex", dev: 1, ino: 3, fileId: "1:3" }, revision: 0, serviceRecord: { schema: 1 as const, digest: "a".repeat(64) }, diagnosedHostname: "127.0.0.1" }, version: "2.77.0", port: 10100, hostname: "127.0.0.1", deadlineAt: 5000 };
   const env = { [UPDATE_RESTART_CHILD_ENV]: JSON.stringify(marker), [OWNERSHIP_MUTATION_LEASE_TOKEN_ENV]: "parent-token" };
   const io: UpdateRestartChildIo = {
     checkState: () => {},
@@ -18,6 +18,13 @@ function setup() {
 }
 const argv = ["start", "--port", "10100"];
 describe("update restart child admission", () => {
+  test("marker accepts supported IP and wildcard spellings without changing their scope", () => {
+    const { marker } = setup();
+    for (const hostname of ["127.0.0.1", "0.0.0.0", "::1", "::", "[::]", "*", "0", "00.0.0.000"]) {
+      const value = { ...marker, hostname, home: { ...marker.home, diagnosedHostname: hostname } };
+      expect(parseUpdateRestartMarker(JSON.stringify(value)).hostname).toBe(hostname);
+    }
+  });
   test("normal invocations do not acquire a lease", () => {
     expect(admitUpdateRestartChild(argv, { env: {}, acquire: () => { throw new Error("unexpected"); } })).toBeUndefined();
   });

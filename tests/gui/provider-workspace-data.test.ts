@@ -6,6 +6,7 @@ import {
   hideRedundantChatGptForwardProviders,
   isAccountProvider,
   isFreeProvider,
+  providerSupportsLiveModelDiscovery,
   providerTier,
   sortWorkspaceItems,
   type WorkspaceItem,
@@ -66,6 +67,33 @@ function forwardProv(overrides: Partial<WorkspaceProvider> = {}): WorkspaceProvi
 }
 
 describe("applyActiveAccountReauth", () => {
+  test("Vertex discovery remains configurable independently of its saved setting", () => {
+    const provider = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", googleMode: "vertex" } as const;
+    expect(providerSupportsLiveModelDiscovery("renamed-vertex", provider)).toBe(true);
+    expect(providerSupportsLiveModelDiscovery("renamed-vertex", { ...provider, liveModels: false })).toBe(true);
+    expect(providerSupportsLiveModelDiscovery("renamed-vertex", { ...provider, liveModels: true })).toBe(true);
+  });
+  test("Vertex host and marker credentials have an unverified group", () => {
+    const vertex = { adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authMode: "key", googleMode: "vertex" } as const;
+    const sections = buildProviderWorkspace({
+      ambient: { ...vertex, hasApiKey: false, vertexCredentialKind: "ambient" },
+      marker: { ...vertex, hasApiKey: true, vertexCredentialKind: "marker" },
+      key: { ...vertex, hasApiKey: true, vertexCredentialKind: "api-key" },
+    } as never);
+    expect(sections.unverified.map(p => p.name)).toEqual(["ambient", "marker"]);
+    expect(sections.needsSetup).toEqual([]);
+    expect(sections.ready.map(p => p.name)).toEqual(["key"]);
+  });
+  test("canonical legacy Vertex with a pinned old URL is still unverified", () => {
+    const sections = buildProviderWorkspace({ "google-vertex": {
+      adapter: "google", baseUrl: "https://legacy.example/v1", authMode: "key", hasApiKey: false,
+    } } as never);
+    expect(sections.unverified.map(p => p.name)).toEqual(["google-vertex"]);
+    const mismatchedAdapter = buildProviderWorkspace({ "google-vertex": {
+      adapter: "openai-chat", baseUrl: "https://legacy.example/v1", authMode: "key", hasApiKey: true, vertexCredentialKind: "marker",
+    } } as never);
+    expect(mismatchedAdapter.unverified.map(p => p.name)).toEqual(["google-vertex"]);
+  });
   test("tags ready provider when active account needs reauth without moving sections", () => {
     const sections = buildProviderWorkspace({
       anthropic: prov({ authMode: "oauth" }),

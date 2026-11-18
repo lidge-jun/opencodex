@@ -213,7 +213,7 @@ $CODEX_HOME/opencodex-catalog.json
 $CODEX_HOME/models_cache.json
 ```
 
-macOS에서는 명시적 선택, shim, PATH, 기존 설치 경로와 실행 가능한 기본 `codex` 후보 뒤에 `/Applications/ChatGPT.app`, `~/Applications/ChatGPT.app` 순서로 Codex 앱의 번들 CLI를 확인하며, 번들의 XML `Info.plist` 식별자가 `com.openai.codex`여야 하고 실행 가능한 저장된 선택을 앱 후보로 자동 교체하지 않습니다.
+macOS에서는 명시적 선택, shim, PATH, 기존 설치 경로와 실행 가능한 기본 `codex` 후보 뒤에 `/Applications/ChatGPT.app`, `~/Applications/ChatGPT.app` 순서로 Codex 앱의 번들 CLI를 확인하며, 번들의 XML `Info.plist` 식별자가 `com.openai.codex`여야 하고 실행 가능한 저장된 선택을 앱 후보로 자동 교체하지 않습니다. Codex CLI가 전혀 발견되지 않으면 `ocx connect status` 준비 상태 뒤의 카탈로그 프로브도 해당 번들 위치를 시도하므로, 앱 번들 CLI만 있는 Child는 `unverified` 대신 지원 추론 수준을 보고합니다. 실행 시에는 아래 검사가 그대로 적용됩니다.
 
 실행 시에는 위치와 관계없이 `Codex.app`과 `ChatGPT.app`을 인식하며, 이동한 번들, 명시적
 `CODEX_CLI_PATH`·설정 런타임 명령, 심볼릭 링크 별칭에도 같은 검증을 적용합니다. 앱 이름은 검증
@@ -252,8 +252,12 @@ HTTP 클라이언트는 이 오류를 직접 처리하고 `previous_response_id`
 참조한 상태의 client task scope가 현재 요청과 다를 때도 같은 거부 응답을 반환합니다. 새 요청이
 전체 입력처럼 보여도 프록시는 그것이 완전한 대화인지 증명할 수 없으므로
 `previous_response_id`를 조용히 제거하거나 일치하는 상태의 존재 여부를 노출하지 않습니다.
-전체 대화를 담고 `previous_response_id`를 뺀 요청으로 명시적으로 다시 시도하세요. 정규화된
-scope가 같거나 양쪽 scope가 모두 없거나 비어 있는 기존 unscoped continuation은 계속 replay합니다.
+`v2-plaintext` 모드 또는 `plaintextV2AgentMessages` 플래그가 활성화된 경우 로컬 재생에는 같은 수락된 OpenCodex 호출자와 요청 자체의 비어 있지 않은 `thread-id`가 필요합니다.
+부모 스레드, 루프백 주소, 상류 인증 정보나 임시 키만으로는 이 소유권을 증명할 수 없습니다.
+수락된 호출자 주체가 없거나 요청 자체의 스레드가 없는 클라이언트는 `previous_response_id` 없이 전체 대화를 다시 보내야 합니다.
+기본 루프백 Codex·DSH 설정은 이 호출자 인증을 제공하지 않습니다. 어느 한 설정이 활성화된 동안 보존된 상태는 비활성화 후에도 해당 신원에 결속된 채로 남습니다.
+기본 `v1`에서는 결속되지 않은 상태에 대해 기본 루프백 호출자를 포함하여 기존의 부모 스레드 범위 이어가기 동작이 유지됩니다. 네이티브 상류 서버가 소유한
+Responses ID의 처리 경로는 이 로컬 재생 규칙과 별개입니다.
 
 routed 목적지에는 모두 같은 복구 신호가 적용됩니다. 프록시가 잃어버린 기록을 대신 볼 수 있는
 것은 네이티브 Responses 패스스루뿐입니다. 체인을 저장해 둔 백엔드로 `previous_response_id`를

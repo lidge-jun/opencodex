@@ -71,6 +71,14 @@ describe("actual API quota persistence", () => {
     expect(loadConfig().combos?.renamed).not.toHaveProperty("decisionQuotaSignals");
     expect(JSON.parse(readFileSync(getConfigPath(), "utf8")).combos.renamed).not.toHaveProperty("decisionQuotaTiers");
   });
+  test("a PUT that omits jevEffortMode preserves a saved client mode", async () => {
+    expect((await put({ strategy: "jev", targets, jevEffortMode: "client" })).status).toBe(200);
+    expect(loadConfig().combos?.saved?.jevEffortMode).toBe("client");
+    expect((await put({ strategy: "jev", targets, cooldownMs: 1000 })).status).toBe(200);
+    const listed = await (await api("GET")).json();
+    expect(listed.combos[0]).toMatchObject({ jevEffortMode: "client", cooldownMs: 1000 });
+    expect(loadConfig().combos?.saved?.jevEffortMode).toBe("client");
+  });
   test("invalid overrides do not mutate persisted policy", async () => {
     const before = readFileSync(getConfigPath(), "utf8");
     expect((await put({ strategy: "jev", targets, decisionQuotaTiers: { limited: 91 } })).status).toBe(400);

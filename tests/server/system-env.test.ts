@@ -14,6 +14,7 @@ import {
   getShellEnvFilePath as shellEnvFilePath,
   installShellHook as shellInstallHook,
 } from "../../src/server/system-env-shell";
+import { claudeKeychainReader } from "../../src/oauth/claude-keychain-read";
 
 const originalFetch = globalThis.fetch;
 const originalPlatform = process.platform;
@@ -26,6 +27,9 @@ const baseConfig = {
 } satisfies OcxConfig;
 
 let execSpy: ReturnType<typeof spyOn>;
+// The darwin-simulating cases must never reach the real Keychain: on a Mac they would spawn
+// `security` and could raise an unlock prompt. "unknown" is what a host without the item reports.
+let probeSpy: ReturnType<typeof spyOn>;
 let execFileSpy: ReturnType<typeof spyOn>;
 let readSpy: ReturnType<typeof spyOn>;
 let writeSpy: ReturnType<typeof spyOn>;
@@ -51,6 +55,7 @@ function launchctlCommands(): string[] {
 
 beforeEach(() => {
   setPlatform("darwin");
+  probeSpy = spyOn(claudeKeychainReader, "probe").mockResolvedValue("unknown");
   trackingFile = undefined;
   launchctlBaseUrl = undefined;
   launchctlEnvValues = {};
@@ -79,6 +84,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  probeSpy.mockRestore();
   execSpy.mockRestore();
   execFileSpy.mockRestore();
   readSpy.mockRestore();

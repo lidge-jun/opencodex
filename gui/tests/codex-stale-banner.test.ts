@@ -8,7 +8,6 @@
 import { describe, expect, test } from "bun:test";
 import { fetchCodexAppServerState } from "../src/codex-app-server-state";
 
-const BANNER_SRC = await Bun.file(new URL("../src/components/codex-stale-banner.tsx", import.meta.url)).text();
 const MODELS_SRC = await Bun.file(new URL("../src/pages/Models.tsx", import.meta.url)).text();
 const APP_TSX_SRC = await Bun.file(new URL("../src/App.tsx", import.meta.url)).text();
 

@@ -35,6 +35,7 @@ beforeAll(async () => {
   realProgressStream = { ...(await import("../../src/web-search/progress-stream")) };
   realFulfill = { ...(await import("../../src/images/fulfill")) };
   mock.module("../../src/web-search/progress-stream", () => ({
+    ...realProgressStream,
     parseStreamWithProgress: async function* (_resp: Response, parse: (r: Response) => AsyncGenerator<AdapterEvent>, _opts: unknown) {
       for await (const e of parse(_resp)) yield e;
     },

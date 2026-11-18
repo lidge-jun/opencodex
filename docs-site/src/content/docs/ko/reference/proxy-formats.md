@@ -320,6 +320,8 @@ API 키 프로바이더는 자체 bearer를 씁니다. Codex가 join을 프록�
 
 ## `POST /v1/responses/compact`
 
+compact 요청에 잘못된 OpenCodex 소유 retained-compaction 입력(`ocx2:`)이 있으면 HTTP 400(`error.type: "invalid_request_error"`)을 반환합니다. 검증 시점과 계정에 미치는 영향은 [영문 기준 문서](/reference/proxy-formats/#post-v1responsescompact)를 참조하세요.
+
 Compaction은 긴 Responses 대화를 줄여야 하는 클라이언트를 위해 대체 히스토리를 반환합니다.
 
 | 경로 유형 | 동작 |

@@ -1,0 +1,32 @@
+import CompactionRoutingPanel from "../components/CompactionRoutingPanel";
+import ReasoningRetentionPanel from "../components/ReasoningRetentionPanel";
+import MemoryObservabilityCard from "../components/MemoryObservabilityCard";
+import MemoryModelsPanel from "../components/MemoryModelsPanel";
+import NativeReasoningRetentionPanel from "../components/NativeReasoningRetentionPanel";
+import type { useDashboardData } from "./use-dashboard-data";
+import {
+  DashboardEffortCapPanel,
+  DashboardInjectionPanel,
+  DashboardMaintenancePanel,
+  DashboardSidecarPanels,
+} from "./dashboard-overview-sections";
+
+type Dash = ReturnType<typeof useDashboardData>;
+
+export function DashboardOverviewPanels(props: Dash) {
+  return (
+    <>
+      <DashboardEffortCapPanel apiBase={props.apiBase} d={props} />
+      <div className="dash-overview-tools">
+        <DashboardInjectionPanel apiBase={props.apiBase} d={props} />
+        <DashboardMaintenancePanel d={props} />
+      </div>
+      <DashboardSidecarPanels d={props} />
+      <CompactionRoutingPanel apiBase={props.apiBase} models={props.models} providers={props.providers} />
+      <NativeReasoningRetentionPanel apiBase={props.apiBase} />
+      <MemoryModelsPanel apiBase={props.apiBase} models={props.models} />
+      <MemoryObservabilityCard apiBase={props.apiBase} />
+      <ReasoningRetentionPanel apiBase={props.apiBase} />
+    </>
+  );
+}

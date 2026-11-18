@@ -258,6 +258,17 @@ function renderedNestedTools(description: string): RenderedTool[] {
   return rendered;
 }
 
+/**
+ * Nested tools a codex-rs code-mode exec renders, read from its wire form: a top-level custom
+ * `exec` whose description opens with the template header. Each name needs a heading followed by
+ * its own declaration, so an example or quoted text in the description renders nothing.
+ */
+export function codeModeRenderedToolNames(name: unknown, description: unknown): string[] {
+  if (name !== CODE_MODE_EXEC_TOOL_NAME || typeof description !== "string"
+    || !description.startsWith(CODE_MODE_EXEC_TEMPLATE_HEADER)) return [];
+  return renderedNestedTools(description).map(tool => tool.name);
+}
+
 /** A nested name that claims a collaboration surface other than V1's. */
 function isForeignCollabName(name: string): boolean {
   if (name.startsWith("mcp__")) return false; // MCP server tools are never native collaboration

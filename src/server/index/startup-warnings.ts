@@ -1,4 +1,6 @@
 import { currentServiceHomes, serviceStatePathsForOpenCodexHome } from "../../service";
+import type { OcxConfig } from "../../types";
+import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import {
   createWindowsTaskListingCache,
   inspectNativeCodexOwnership,
@@ -142,6 +144,8 @@ export function withRequestLogId(response: Response, requestId: string): Respons
 }
 
 export interface StartServerDeps {
+  /** Test-only observer of what the hub-link admission reports to the link listener (route proofs). */
+  observeAuthenticatedCatalog?: (apiKeyId: string, routeProofId?: string) => void;
   /** Test-only CONNECT binder; permits kernel-assigned ports without probe-and-release races. */
   startClaudeInterceptProxy?: typeof import("../../claude/intercept/connect-proxy").startConnectProxy;
   /** Test-only seam; production always initializes its own management credential state. */
@@ -266,8 +270,10 @@ export function resolveInboundBodyLimitWithWarning(config: { maxInboundBodyBytes
   return limit;
 }
 
-export function warnPlaintextV2AgentMessagesStartup(config: { plaintextV2AgentMessages?: boolean }): void {
-  if (config.plaintextV2AgentMessages !== true) return;
+export function warnPlaintextV2AgentMessagesStartup(
+  config: Pick<OcxConfig, "multiAgentMode" | "plaintextV2AgentMessages">,
+): void {
+  if (!isPlaintextV2AgentMessagesEnabled(config)) return;
   console.warn("⚠️  Experimental plaintext V2 agent messages are enabled.");
   console.warn("   Eligible ChatGPT collaboration calls may carry plaintext message arguments. HTTPS remains encrypted, but task text may be retained in Codex history, selected providers, and local response/debug state.");
   console.warn("   This depends on undocumented ChatGPT and Codex behavior; it does not decrypt existing tasks.");

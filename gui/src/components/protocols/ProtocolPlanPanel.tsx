@@ -13,6 +13,7 @@ import type { ProtocolPlanV1 } from "../../../../src/protocols/dto";
 import { FEATURE_SOURCES, PROTOCOL_FEATURES, type ProtocolFeature } from "../../../../src/protocols/features";
 import type { ExternalModelRow, GatewayInboundProtocol } from "../../api-access-models";
 import { useT, type TKey } from "../../i18n/shared";
+import { Select } from "../../ui";
 import { fetchProtocolPlan } from "../../protocol-api";
 import { openCompatibilityPair, openProviderSettings, protocolPairUpstream } from "../../protocol-deep-links";
 import { FeatureDispositionList } from "./FeatureDispositionList";
@@ -236,15 +237,13 @@ export function ProtocolPlanPanel({
           <div className="protocol-plan-form">
             <label className="protocol-plan-field">
               <span className="muted small">{t("api.plan.model")}</span>
-              <select className="input" value={selectedModel} onChange={event => setModel(event.target.value)}>
-                {models.map(row => <option key={row.id} value={row.id}>{row.id}</option>)}
-              </select>
+              <Select fullWidth label={t("api.plan.model")} value={selectedModel} onChange={setModel}
+                options={models.map(row => ({ value: row.id, label: row.id }))} />
             </label>
             <label className="protocol-plan-field">
               <span className="muted small">{t("api.plan.inbound")}</span>
-              <select className="input" value={inbound} onChange={event => changeInbound(event.target.value as Protocol)}>
-                {INBOUNDS.map(protocol => <option key={protocol} value={protocol}>{protocolLabel(protocol)}</option>)}
-              </select>
+              <Select fullWidth label={t("api.plan.inbound")} value={inbound} onChange={next => changeInbound(next as Protocol)}
+                options={INBOUNDS.map(protocol => ({ value: protocol, label: protocolLabel(protocol) }))} />
             </label>
           </div>
           <fieldset className="protocol-plan-features">

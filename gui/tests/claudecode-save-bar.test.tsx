@@ -200,7 +200,7 @@ test("a late connection acknowledgement from an unmounted page reaches the page 
     await settle(page.testWindow);
     expect(enabled).toBe(false);
     expect(readSessionListCacheEntry<{ state: { enabled: boolean } }>("ocx.claude-code.v1:http://localhost")?.data?.state.enabled).toBe(false);
-    expect(page.button("Toggle Claude connection").getAttribute("aria-pressed")).toBe("false");
+    expect(page.button("Toggle Claude connection").getAttribute("aria-checked")).toBe("false");
   } finally {
     release();
     await act(async () => page.root.unmount());
@@ -357,11 +357,11 @@ for (const control of ["first-party", "connection"] as const) {
       const cached = readSessionListCacheEntry<{ state: typeof server }>("ocx.claude-code.v1:http://localhost");
       if (control === "first-party") {
         expect(server.cliFirstParty).toBe(true);
-        expect(page.button(label).getAttribute("aria-pressed")).toBe("true");
+        expect(page.button(label).getAttribute("aria-checked")).toBe("true");
         expect(cached?.data?.state.cliFirstParty).toBe(true);
       } else {
         expect(server.enabled).toBe(false);
-        expect(page.button(label).getAttribute("aria-pressed")).toBe("false");
+        expect(page.button(label).getAttribute("aria-checked")).toBe("false");
         expect(cached?.data?.state.enabled).toBe(false);
       }
     } finally {

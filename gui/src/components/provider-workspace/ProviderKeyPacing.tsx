@@ -1,4 +1,5 @@
 import { useT } from "../../i18n/shared";
+import { Select } from "../../ui";
 import type { WorkspaceItem } from "./types";
 
 export type KeyPacingDraft = Pick<NonNullable<WorkspaceItem["requestPacing"]>, "keySelection" | "keys">;
@@ -16,9 +17,9 @@ export function ProviderKeyPacing({ value, onChange, status = [] }: {
   };
   return <>
     <label className="pwi-settings-field"><span className="pwi-settings-label">{t("pws.keySelection")}</span>
-      <select className="input" value={value.keySelection ?? "active"} onChange={event => onChange({ ...value, keySelection: event.target.value as "active" | "round-robin" })}>
-        <option value="active">{t("pws.keyActive")}</option><option value="round-robin">{t("pws.keyRoundRobin")}</option>
-      </select>
+      <Select fullWidth label={t("pws.keySelection")} value={value.keySelection ?? "active"}
+        options={[{ value: "active", label: t("pws.keyActive") }, { value: "round-robin", label: t("pws.keyRoundRobin") }]}
+        onChange={keySelection => onChange({ ...value, keySelection: keySelection as "active" | "round-robin" })} />
     </label>
     <h4>{t("pws.keyLimits")}</h4>
     <div className="pwi-key-limits" style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>

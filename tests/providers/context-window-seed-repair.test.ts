@@ -34,6 +34,20 @@ describe("stale context window migration", () => {
     expect(projection.config.providers!.devin!.modelContextWindows!["grok-4-5"]).toBe(300_000);
   });
 
+  test("repairs the swe-2 window seeded while the table read 262_000", () => {
+    const config = devinConfig({ "swe-2": 262_000 });
+    const projection = projectStaleContextWindows(config);
+    expect(projection.changed).toBe(true);
+    expect(projection.config.providers!.devin!.modelContextWindows!["swe-2"]).toBe(850_000);
+  });
+
+  test("leaves a deliberate swe-2 override alone", () => {
+    const config = devinConfig({ "swe-2": 300_000 });
+    const projection = projectStaleContextWindows(config);
+    expect(projection.changed).toBe(false);
+    expect(projection.config.providers!.devin!.modelContextWindows!["swe-2"]).toBe(300_000);
+  });
+
   test("skips a row that no longer carries the registry adapter", () => {
     // A `devin` row retargeted at another transport is not the provider these
     // numbers describe, so rewriting its windows would be a guess.

@@ -169,6 +169,9 @@ Independent failures, cancellation and incomplete cleanup remain terminal.
 Authenticated peer/native readiness remains required in the owner.
 Linux inspection requires the IPv4 listener table; only an absent IPv6 table is treated as
 empty. Permission, read and other inspection failures remain fail-closed.
+Both tables are streamed row by row with no size limit. They list every socket on the host,
+including TIME_WAIT, so a busy host can pass any fixed size. Refusing it on size would deny
+every lease with `remote_control_unknown`. A public listener anywhere in either table still refuses.
 
 Authenticated connections alone consume the shared connection budget. A separate
 four-socket pre-authentication set retires its oldest unverified socket on overflow,
@@ -250,3 +253,12 @@ These are distinct receipts, not claims about production hosts or model complian
 Linux evidence does not attest macOS interoperability; Windows remote transport
 is unsupported. Mesh, dashboard, cached discovery, isolation, cross-harness
 messaging, managed skills, prompt policy and idle watches remain outside this slice.
+
+
+The optional local MCP reply-read surface belongs to
+[stored reply reads](local-messaging.md#explicit-stored-reply-reads). Its explicit
+CLI-home content-read permission does not widen remote-peer admission, expose a
+remote read endpoint or change this foreground ownership/return-route contract.
+
+The separate [existing-server resume](local-messaging.md#explicit-existing-server-resume)
+MCP opt-in does not grant lifecycle methods to remote-peer RPC connections.

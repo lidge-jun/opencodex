@@ -10,6 +10,8 @@ export const HUB_RELAY_REQUEST_BODY_MAX_BYTES = 4 * 1024 * 1024;
 export const HUB_RELAY_RESPONSE_BODY_MAX_BYTES = 16 * 1024 * 1024;
 export const HUB_RELAY_DEFAULT_TIMEOUT_MS = 15_000;
 export const HUB_RELAY_HEADER_MAX_BYTES = 64 * 1024;
+export const HUB_RELAY_EXPECTED_TARGET_HEADER = "x-opencodex-expected-target";
+export const HUB_RELAY_EXPECTED_TARGET_MAX_BYTES = 512;
 
 const ALLOWED_METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]);
 const REQUEST_HEADERS = new Set([
@@ -88,6 +90,12 @@ function canonicalOrigin(value: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** A canonical HTTP(S) origin, no userinfo/path/query/fragment/trailing slash. */
+function canonicalExpectedOrigin(value: string): string | null {
+  const origin = canonicalOrigin(value);
+  return origin && value === origin ? origin : null;
 }
 
 function relayDestination(suffix: string, target: HubRelayTarget, method: string): URL | null {
@@ -233,6 +241,24 @@ export async function relayHubManagementRequest(
   if (!destination) return relayError(404, "hub relay path refused");
   const requestHeaderValidation = validateHubRelayRequestHeaders([...req.headers]);
   if (!requestHeaderValidation.ok) return relayError(400, "hub relay request headers refused");
+
+  // The expected-target claim is checked against the same immutable target snapshot used
+  // for forwarding, before the body is read. Absence keeps the legacy caller contract.
+  const expectedTarget = req.headers.get(HUB_RELAY_EXPECTED_TARGET_HEADER);
+  if (expectedTarget !== null) {
+    if (expectedTarget.includes(",") || new TextEncoder().encode(expectedTarget).byteLength > HUB_RELAY_EXPECTED_TARGET_MAX_BYTES) {
+      return relayError(400, "invalid_expected_target");
+    }
+    const claimed = canonicalExpectedOrigin(expectedTarget);
+    const current = canonicalOrigin(target.managementUrl);
+    if (!claimed || !current) return relayError(400, "invalid_expected_target");
+    if (claimed !== current) {
+      return new Response(JSON.stringify({ error: "target_changed" }), {
+        status: 409,
+        headers: { "Content-Type": "application/json", "Cache-Control": "no-store" },
+      });
+    }
+  }
 
   let body: Uint8Array<ArrayBuffer> | null;
   try {

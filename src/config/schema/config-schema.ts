@@ -1,12 +1,14 @@
+import { dashboardTrustedProxySchema } from "../dashboard-trusted-proxy";
 import { MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "../../codex/quota-types";
 import { validRemainingQuotaAccountIds } from "../../codex/account-use-remaining";
 import * as z from "zod/v4";
-import { isAppendOnlyToolLoadingModels } from "../../claude/inbound-tool-loading";
+import { isToolLoadingModelSelectors } from "../../claude/inbound-tool-loading";
 import { accountPauseStateSchema } from "./account-auto-pause";
 import { anthropicAccountPoolSchema } from "./anthropic-account-pool";
 import { compactionRecoverySchema } from "./compaction-recovery";
 import { nativeReasoningRetentionSchema } from "./native-reasoning-retention";
 import { workflowBudgetSchema } from "./workflow-budget";
+import { routedCatalogDefaultsSchema } from "./routed-catalog-defaults";
 import { desktopCompatibilitySchema } from "./desktop-compatibility";
 import { blockedModelRedirectsSchema } from "./blocked-model-redirects";
 import { mainAccountHardLockFallbackSchema } from "./main-account-hard-lock-fallback";
@@ -29,6 +31,7 @@ import {
   spendSchema,
   chatgptDesktopSchema,
   skillsConfigSchema,
+  telemetryConfigSchema,
   configuredCodexPoolAccountIds,
   apiKeyEntrySchema,
   asideProfileSyncSchema,
@@ -60,6 +63,8 @@ import {
   providerHeadersConfigError,
   providerForwardClientHeadersConfigError,
   reasoningSummaryDeliveryRecordConfigError,
+  thinkingDisplayConfigError,
+  modelThinkingDisplayConfigError,
   credentialPinnedProviderConfigError,
 } from "../provider-validation";
 import {
@@ -113,6 +118,9 @@ export const configSchema = z.object({
   // Malformed optional remote blocks disable only remote GUI behavior. Live
   // candidates are rejected explicitly by remoteGuiConfigError below.
   hub: hubConfigSchema.optional().catch(undefined),
+  // #8338: a malformed hand edit disables only the trusted-proxy opt-in (Remember then stays direct
+  // HTTPS or loopback only); live writes get the exact reason from diagnostics.ts.
+  dashboardTrustedProxy: dashboardTrustedProxySchema.optional().catch(undefined),
   remoteGui: remoteGuiConfigSchema.optional().catch(undefined),
   // A malformed privacy block must never be read as "unmask": .catch(undefined) drops it and
   // emailMaskingEnabled then falls back to masked, which is also what an absent block means.
@@ -120,6 +128,7 @@ export const configSchema = z.object({
   skills: skillsConfigSchema.optional().catch(undefined),
   // Malformed hand edits disable this opt-in exporter. Live writes reject them in diagnostics.ts.
   metricsExport: z.object({ enabled: z.boolean().optional() }).strict().optional().catch(undefined),
+  telemetry: telemetryConfigSchema.optional().catch(undefined),
   // Same contract as metricsExport: a malformed hand edit leaves recovery off; live writes reject it.
   serviceHealthRecovery: z.object({ enabled: z.boolean().optional() }).strict().optional().catch(undefined),
   // Kept raw on purpose: `.catch(undefined)` would turn a mistyped `enabled` into "inherit",
@@ -185,6 +194,8 @@ export const configSchema = z.object({
   // Match the per-body load/degrade contract: malformed hand edits retain providers.
   // The shared resolver clamps runtime admission to 512 MiB..2 GiB even when the
   // caller bypasses this schema; omission and zero retain the 512 MiB default.
+  // Home-side per-body zstd advertisement on Remote Links (#3023); anything but a boolean reads as unset, which is on.
+  linkRequestCompression: z.boolean().optional().catch(undefined),
   maxConcurrentInboundBodyBytes: z.number().int()
     .min(0)
     .optional()
@@ -224,6 +235,8 @@ export const configSchema = z.object({
   nativeReasoningRetention: nativeReasoningRetentionSchema.optional().catch(undefined),
   // A bad hand edit falls back to the built-in ceilings; it never turns the guard off.
   workflowBudget: workflowBudgetSchema.optional().catch(undefined),
+  // A bad hand edit drops the whole block, so routed rows keep today's derivation (#6872).
+  routedCatalogDefaults: routedCatalogDefaultsSchema.optional().catch(undefined),
   desktopCompatibility: desktopCompatibilitySchema.optional().catch(undefined),
   // A hand-edited malformed phase disables only that phase instead of rejecting
   // providers/apiKeys, matching the load-time degradation notice; the management write
@@ -334,6 +347,9 @@ export const configSchema = z.object({
   }).strict().optional().catch(undefined)),
   codexShimAutoRestore: z.boolean().optional(),
   codexDesktopAuthless: z.boolean().optional().catch(undefined),
+  codexReserveEnabled: z.boolean().optional().catch(undefined),
+  // A malformed marker degrades to unmigrated, which reseeds from the persisted authless flag.
+  codexReserveMigration: z.number().int().positive().optional().catch(undefined),
   codexClientCompaction: z.boolean().optional().catch(undefined),
   // Presentation-only label for the injected provider. A malformed value degrades to undefined
   // and the default label is emitted, rather than failing the parse or writing a config Codex
@@ -437,9 +453,12 @@ export const configSchema = z.object({
   if (claudeCode !== undefined && (!claudeCode || typeof claudeCode !== "object" || Array.isArray(claudeCode))) {
     ctx.addIssue({ code: "custom", path: ["claudeCode"], message: "claudeCode must be an object" });
   } else if (claudeCode) {
-    const claude = claudeCode as { desktopProfile?: unknown; desktopModelVisibility?: unknown; desktopMode?: unknown; intercept?: unknown; appendOnlyToolLoadingModels?: unknown };
-    if (claude.appendOnlyToolLoadingModels !== undefined && !isAppendOnlyToolLoadingModels(claude.appendOnlyToolLoadingModels)) {
+    const claude = claudeCode as { desktopProfile?: unknown; desktopModelVisibility?: unknown; desktopMode?: unknown; intercept?: unknown; appendOnlyToolLoadingModels?: unknown; chatToolDispatchModels?: unknown };
+    if (claude.appendOnlyToolLoadingModels !== undefined && !isToolLoadingModelSelectors(claude.appendOnlyToolLoadingModels)) {
       ctx.addIssue({ code: "custom", path: ["claudeCode", "appendOnlyToolLoadingModels"], message: "appendOnlyToolLoadingModels must be up to 128 provider/model selectors (max 512 characters each), optionally ending in a single wildcard" });
+    }
+    if (claude.chatToolDispatchModels !== undefined && !isToolLoadingModelSelectors(claude.chatToolDispatchModels)) {
+      ctx.addIssue({ code: "custom", path: ["claudeCode", "chatToolDispatchModels"], message: "chatToolDispatchModels must be up to 128 provider/model selectors (max 512 characters each), optionally ending in a single wildcard" });
     }
     if (claude.desktopMode !== undefined && claude.desktopMode !== "first-party" && claude.desktopMode !== "gateway") {
       ctx.addIssue({ code: "custom", path: ["claudeCode", "desktopMode"], message: "desktopMode must be \"first-party\" or \"gateway\"" });
@@ -765,6 +784,26 @@ export const configSchema = z.object({
         code: "custom",
         path: ["providers", redactSecretString(name), "modelReasoningSummaryDelivery"],
         message: reasoningSummaryDeliveryError,
+      });
+    }
+    const thinkingDisplayError = thinkingDisplayConfigError(
+      (provider as { thinkingDisplay?: unknown }).thinkingDisplay,
+    );
+    if (thinkingDisplayError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "thinkingDisplay"],
+        message: thinkingDisplayError,
+      });
+    }
+    const modelThinkingDisplayError = modelThinkingDisplayConfigError(
+      (provider as { modelThinkingDisplay?: unknown }).modelThinkingDisplay,
+    );
+    if (modelThinkingDisplayError) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["providers", redactSecretString(name), "modelThinkingDisplay"],
+        message: modelThinkingDisplayError,
       });
     }
     const minMaxOutputError = positiveIntegerConfigError(

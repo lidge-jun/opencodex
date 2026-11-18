@@ -40,6 +40,7 @@ import {
 } from "../../clients/config-export/contracts";
 import { customRowExportMetadata } from "./model-row-export-metadata";
 import { attachExportAliasSelectors } from "../../clients/config-export/alias-selectors";
+import { attachNestedSelectors } from "../../clients/config-export/nested-selectors";
 import { resolveExportReasoningAxes } from "../../clients/config-export/reasoning-metadata";
 import { providerContextCap } from "../../providers/context-cap";
 import { isVisionReasoningEffort, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
@@ -348,12 +349,16 @@ export async function listManagementModelRows(
   const native: ManagementModelRow[] = [...nativeRows, ...accountNativeRows].map(row => {
     const reasoningEfforts = nativeReasoningEfforts(row.metadataSlug).filter(isVisionReasoningEffort);
     const defaultReasoningEffort = nativeDefaultReasoningEffort(row.metadataSlug);
+    const labels = config.providers.openai?.modelDisplayNames;
+    const displayName = row.slug === row.metadataSlug && labels && Object.hasOwn(labels, row.slug)
+      ? labels[row.slug]?.trim() : undefined;
     return {
       provider: "openai",
       id: row.slug,
       namespaced: row.slug,
       disabled: row.disabled,
       native: true,
+      ...(displayName ? { displayName, displayNameOverride: displayName, displayNameSource: "operator" as const } : {}),
       reasoningEfforts,
       ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
       inputModalities: nativeInputModalities(row.slug),
@@ -672,7 +677,7 @@ export async function loadExportModels(
   // Management deliberately lists the full roster so hidden models can be enabled.
   // A client picker must also honor the provider selection, not just its blocklist.
   const visibleRouted = new Set(filterCatalogVisibleModels(rows.filter(row => !row.native), admitted));
-  const projected = attachExportAliasSelectors(admitted, rows.map(toExportModel));
+  const projected = attachNestedSelectors(admitted, attachExportAliasSelectors(admitted, rows.map(toExportModel)));
   const exported = projected.filter((_, index) => !rows[index]!.disabled && (rows[index]!.native || visibleRouted.has(rows[index]!)));
   // Retain the FINAL projection, not an input to it. A preview that rebuilt from raw provider
   // caches would miss static and forward providers, which never populate one, and would skip the

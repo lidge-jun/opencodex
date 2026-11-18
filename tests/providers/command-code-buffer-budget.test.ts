@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { createCommandCodeAdapter } from "../../src/adapters/command-code";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
 import type { AdapterEvent } from "../../src/types";
@@ -7,6 +7,41 @@ const adapter = () => createCommandCodeAdapter({ adapter: "command-code", baseUr
 const content = "é한😀".repeat(32);
 const line = JSON.stringify({ type: "text-delta", text: content });
 const encoder = new TextEncoder();
+
+for (const ending of ["\n", ""] as const) {
+  test(`Command Code bounds fragmented NDJSON measurement and scan work with ${JSON.stringify(ending)} termination`, async () => {
+    const text = "a".repeat(256 * 256);
+    const bytes = encoder.encode(JSON.stringify({ type: "text-delta", text }) + ending);
+    const budget = createTestTranslatorBudget({ maxTurnBytes: bytes.length });
+    const source = input(bytes, 256);
+    const encode = TextEncoder.prototype.encode;
+    const indexOf = String.prototype.indexOf;
+    let measuredChars = 0;
+    let scannedChars = 0;
+    const measuring = spyOn(TextEncoder.prototype, "encode").mockImplementation(function (value = "") {
+      measuredChars += value.length;
+      return Reflect.apply(encode, this, [value]);
+    });
+    const scanning = spyOn(String.prototype, "indexOf").mockImplementation(function (search, position = 0) {
+      if (search === "\n") scannedChars += Math.max(0, this.length - position);
+      return Reflect.apply(indexOf, this, [search, position]);
+    });
+    const events: AdapterEvent[] = [];
+    try {
+      for await (const event of adapter().parseStream(source.response, budget)) events.push(event);
+    } finally {
+      measuring.mockRestore();
+      scanning.mockRestore();
+    }
+    expect(events).toEqual([
+      { type: "text_delta", text },
+      { type: "done", usage: undefined, stopReason: undefined },
+    ]);
+    expect(budget.snapshot()).toMatchObject({ currentBytes: 0, highWaterBytes: bytes.length, overflows: 0 });
+    expect(measuredChars).toBeLessThanOrEqual(4 * bytes.length);
+    expect(scannedChars).toBeLessThanOrEqual(2 * bytes.length);
+  });
+}
 
 function input(bytes: Uint8Array, chunkSize: number, beforeRead?: (offset: number) => void) {
   let offset = 0;
@@ -22,6 +57,26 @@ function input(bytes: Uint8Array, chunkSize: number, beforeRead?: (offset: numbe
     cancel() { cancelled = true; },
   }, { highWaterMark: 0 });
   return { response: new Response(body), cancelled: () => cancelled };
+}
+
+for (const maxTurnBytes of [2, 3]) {
+  test(`Command Code accounts for EOF decoder replacement bytes with a ${maxTurnBytes}-byte budget`, async () => {
+    const budget = createTestTranslatorBudget({ maxTurnBytes });
+    const source = input(Uint8Array.of(0xe2), 1); // Incomplete UTF-8 becomes a 3-byte U+FFFD at EOF.
+    const events: AdapterEvent[] = [];
+    const consume = async () => {
+      for await (const event of adapter().parseStream(source.response, budget)) events.push(event);
+    };
+    if (maxTurnBytes === 2) {
+      await expect(consume()).rejects.toMatchObject({ code: "translation_buffer_limit", kind: "live_transient" });
+      expect(events).toEqual([]);
+    } else {
+      await consume();
+      // Malformed NDJSON retains the existing skip-and-complete behavior.
+      expect(events).toEqual([{ type: "done", usage: undefined, stopReason: undefined }]);
+    }
+    expect(budget.snapshot()).toMatchObject({ currentBytes: 0, overflows: maxTurnBytes === 2 ? 1 : 0 });
+  });
 }
 
 for (const ending of ["\n", ""] as const) {

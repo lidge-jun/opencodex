@@ -64,7 +64,7 @@ test("invalid settings are preserved and a competing preference blocks replay", 
 function request(method: string, body?: unknown): ManagementContext {
   const url = new URL("http://127.0.0.1:10100/api/codex/desktop-compatibility/settings");
   return { url, req: new Request(url, { method, headers: { host: url.host, "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }),
-    config: initial, principal: "gui-session", sessionControl: pairedSession, trustedLoopbackIngress: true, deps: { desktopStartupSettings: createDesktopStartupSettings() } } as unknown as ManagementContext;
+    config: initial, principal: "gui-session", trustedLoopbackIngress: true, sessionControl: { canMutateLocalDesktop: () => true }, deps: { desktopStartupSettings: createDesktopStartupSettings() } } as unknown as ManagementContext;
 }
 test("management dispatcher enforces local confirmation and reads back the saved preference", async () => {
   const service = createDesktopStartupSettings(), before = service.status();
@@ -76,6 +76,6 @@ test("management dispatcher enforces local confirmation and reads back the saved
   expect((await handleDesktopCompatibilitySettingsRoutes(invalid))?.status).toBe(400);
   expect(service.status()).toEqual(before);
   const ctx = request("POST", { confirmed: true, startOnProxyStart: true, revision: before.revision });
-  const response = await handleManagementAPI(ctx.req, ctx.url, ctx.config as OcxConfig, ctx.deps, "gui-session", pairedSession, { trustedLoopback: true });
+  const response = await handleManagementAPI(ctx.req, ctx.url, ctx.config as OcxConfig, ctx.deps, "gui-session", ctx.sessionControl, { trustedLoopback: true });
   expect(response?.status).toBe(200); expect((await response!.json()).settings).toEqual(service.status()); expect(service.status().startOnProxyStart).toBe(true);
 });
