@@ -90,7 +90,7 @@ import { anthropicSessionKeyFromParts } from "../../oauth/anthropic-routing";
 import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { bindTurnTerminationScope, rememberDeliveredFinalAnswer } from "../../responses/turn-termination";
-import { noteCodexSelectionAffinity, observeCacheDiagnosticInbound, rebindCacheDiagnosticBody, requestLogSpeedLabel, readConfiguredCodexServiceTier } from "../request-log";
+import { markLocalRequestLogRefusal, noteCodexSelectionAffinity, observeCacheDiagnosticInbound, rebindCacheDiagnosticBody, requestLogSpeedLabel, readConfiguredCodexServiceTier } from "../request-log";
 import type { RouteResult } from "../../router";
 import {
   captureRouteStaticPolicy,
@@ -1455,9 +1455,14 @@ export async function prepareResponsesRequest(
     && isCanonicalOpenAiForwardProvider(route.provider)
   ) {
     markLinkTurnMissing(logCtx);
+    const code = "previous_response_not_found";
+    logCtx.provider = route.providerName;
+    logCtx.model = route.modelId;
+    logCtx.errorCode = code;
+    markLocalRequestLogRefusal(logCtx, code);
     return markProxyError(formatErrorResponse(
       400,
-      "previous_response_not_found",
+      code,
       "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
     ));
   }

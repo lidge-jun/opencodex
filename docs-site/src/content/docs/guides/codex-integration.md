@@ -512,6 +512,11 @@ disk, and entry ceilings; this does not recover history the client no longer has
 must handle the error explicitly and resend their full context without `previous_response_id`.
 Retrying only the same ID cannot recover missing state.
 
+When the proxy has already selected the ChatGPT forward route, `usage.jsonl` records the
+selected provider and model with `errorCode: "previous_response_not_found"` and
+`failureCause: "local-refusal"`. The refused request uses no model quota. A client resend with
+the full context is logged separately and can use quota.
+
 The same refusal applies when the referenced state belongs to a different client task scope,
 including when the new request appears to carry complete input. The proxy cannot prove that input
 is complete, so it does not silently remove `previous_response_id` or reveal whether matching state
