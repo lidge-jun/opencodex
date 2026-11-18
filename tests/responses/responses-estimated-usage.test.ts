@@ -119,6 +119,17 @@ test("JSON: provider usage is not marked as estimated", async () => {
   expect(log.usage).toMatchObject({ inputTokens: 5, outputTokens: 6 });
 });
 
+test("native delivery strips upstream estimate headers and retains reported usage", async () => {
+  const usage = { input_tokens: 5, output_tokens: 6, total_tokens: 11 };
+  for (const stream of [false, true]) {
+    const upstream = stream ? sse(completed(usage)) : Response.json(completed(usage));
+    upstream.headers.set(ESTIMATED_USAGE_HEADER, "true");
+    const { response, log } = await send(config(false), stream, upstream);
+    expect(response.headers.get(ESTIMATED_USAGE_HEADER)).toBeNull();
+    expect(log.usage).toMatchObject({ inputTokens: 5, outputTokens: 6 });
+  }
+});
+
 // A 200 body is not a finished turn: a failed or still-running response keeps its missing usage.
 for (const [label, body] of [
   ["failed", { ...completed(), status: "failed", error: { code: "server_error", message: "failed" }, output: [] }],

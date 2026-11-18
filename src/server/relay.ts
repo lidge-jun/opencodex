@@ -15,6 +15,7 @@ import { ExplicitBodyStallError } from "../lib/response-body-inactivity";
 import { carryPacedStream, pacedQueuingStrategy } from "../lib/paced-stream";
 import { carryReplayRefusal, isReplayRefusalResponse } from "../lib/upstream-retry";
 import { isUsageDebugEnabled } from "../usage/debug";
+import { ESTIMATED_USAGE_HEADER } from "./responses/estimated-usage";
 import {
   addRequestLog,
   addFinalRequestLog,
@@ -1884,6 +1885,7 @@ const PASSTHROUGH_DROP_HEADERS: ReadonlySet<string> = new Set([
   "te",
   "trailer",
   "upgrade",
+  ESTIMATED_USAGE_HEADER,
 ]);
 
 export interface CodexSafetyBufferingFilterOptions {

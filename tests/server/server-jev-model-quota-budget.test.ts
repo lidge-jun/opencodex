@@ -140,14 +140,16 @@ test("arbitrary malformed output is never retried without quota", async () => {
 
 // #7427: a response marked as carrying estimated usage is display data. The decision call settles
 // spend from what the invoker reports, so an estimate must never reach settlement or the result.
-for (const [label, headers, expected] of [
-  ["estimated", { [ESTIMATED_USAGE_HEADER]: "true" }, undefined],
-  ["provider-reported", {}, { inputTokens: 7, outputTokens: 2 }],
+for (const [label, headers, locallyEstimated, expected] of [
+  ["estimated", { [ESTIMATED_USAGE_HEADER]: "true" }, true, undefined],
+  ["provider-reported", {}, false, { inputTokens: 7, outputTokens: 2 }],
+  ["provider-reported with an upstream header", { [ESTIMATED_USAGE_HEADER]: "true" }, false, { inputTokens: 7, outputTokens: 2 }],
 ] as const) {
-  test(`decision call spend settlement ignores body usage when the response is ${label}`, async () => {
+  test(`decision call attributes usage using local provenance: ${label}`, async () => {
     const settled: unknown[] = [];
     const invoker = createJevModelInvoker({ req: new Request("http://localhost/v1/responses"), config: config(), options: {},
       handleResponses: async (_request, _config, log) => {
+        if (locallyEstimated) log.clientResponseUsage = "estimated";
         log.spendTracker = { settle: (usage?: unknown) => { settled.push(usage); } } as unknown as NonNullable<typeof log.spendTracker>;
         return Response.json({ status: "completed", output: [{ type: "message", content: [{ type: "output_text", text: '{"choice":"p/0:low"}' }] }],
           usage: { input_tokens: 7, output_tokens: 2 } }, { headers });

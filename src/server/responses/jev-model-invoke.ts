@@ -12,7 +12,6 @@ import { tryAdmitTurn } from "../lifecycle";
 import type { RequestLogContext } from "../request-log";
 import { createSseInspector } from "../relay";
 import type { HandleResponsesOptions } from "./core-options";
-import { ESTIMATED_USAGE_HEADER } from "./estimated-usage";
 
 type HandleResponses = (
   req: Request,
@@ -184,11 +183,10 @@ export function createJevModelInvoker(context: JevModelInvokerContext): JevModel
           if (!isRecord(parsed)) throw new JevModelInvokeError("malformed", "decision response is not an object");
           return terminalResult(parsed, "");
         })();
-      // A marked response carries an estimate for a client's display, never spend evidence.
-      const estimated = response.headers.has(ESTIMATED_USAGE_HEADER);
+      // Use local provenance. Providers do not decide whether to attribute usage.
       const { usage: bodyUsage, ...withoutUsage } = result;
-      const settled = estimated ? withoutUsage : result;
-      usage = estimated ? undefined : bodyUsage;
+      const settled = childLog.clientResponseUsage ? withoutUsage : result;
+      usage = childLog.clientResponseUsage ? undefined : bodyUsage;
       return quotaOmitted ? { ...settled, quotaOmitted: true } : settled;
     } finally {
       // No final log row is written for this detached context, so settle its spend here.
