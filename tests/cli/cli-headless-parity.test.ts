@@ -601,6 +601,7 @@ describe("headless GUI parity CLI", () => {
       // inventory and writes one config key. There is no headless equivalent
       // today, and claiming one would be worse than saying so here.
       ["/api/codex-prompt", "(none — GUI prompt-layer surface; keys live in config.toml)"],
+      ["/api/combo-suggestions", "(none — Combos suggestions require a dashboard session)"],
       // Claude reset grants: reading is an owed CLI verb (deferred-verb in the route
       // registry) and spending is dashboard-session-only by design.
       ["/api/anthropic/reset-grants", "(none — GUI reset-grant dialog; spend requires a dashboard session)"],
