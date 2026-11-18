@@ -91,7 +91,8 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   The version probe and the turn remove their workspaces after confirmed tree exit. POSIX requires a successful
   group SIGKILL or ESRCH, leader exit and a group existence check returning ESRCH. Windows requires successful
   tree taskkill and leader closure. An inconclusive cleanup retains the workspace and logs a fixed warning.
-  This fails an ACP turn. A version probe that exited zero can still supply its version.
+  An inconclusive cleanup fails the turn, except that an existing dispatch refusal keeps its original error.
+  A version probe that exited zero can still supply its version.
   The terminal event is published after reaping. Coverage:
   `tests/adapters/agy-acp-{adapter,protocol,policy}.test.ts`, `tests/config/agy-acp-config.test.ts`,
   `tests/server/server-agy-acp.test.ts`.

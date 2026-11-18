@@ -442,6 +442,36 @@ describe("agy acp turn", () => {
     expect(sent).toEqual([]);
   });
 
+  test("failed Windows cleanup preserves send-budget refusal and retains the workspace", async () => {
+    const budget = createRequestExecutionBudget({
+      maxTotalModelSends: 1, baseSendAllowance: 1, finalRecoveryAllowance: 0,
+      maxAlternateTargetSends: 0, maxTargetTransitions: 0,
+    });
+    const spent = budget.reserveDispatch({ sendClass: "initial", targetKey: "agy" });
+    if (!spent.allowed || !spent.permit.use()) throw new Error("test must spend the allowance");
+    const removed = { value: false };
+    const sent: string[] = [];
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await expect(run(script(frame => { if (frame.method === "session/prompt") sent.push("prompt"); }), {
+        sendAccounting: { sendBudget: budget, onPhysicalSend: () => { sent.push("reported"); } },
+        deps: {
+          createWorkspace: async () => ({
+            dir: "/fixture/workspace", tmp: "/fixture/workspace/.tmp", remove: async () => { removed.value = true; },
+          }),
+          reap: child => reapProcessTree(child, {
+            graceMs: 0, reapTimeoutMs: 1000, platform: "win32", killWindowsTree: (_pid, done) => done(false),
+          }),
+        },
+      })).rejects.toBeInstanceOf(SendBudgetExhaustedError);
+      expect(removed.value).toBe(false);
+      expect(sent).toEqual([]);
+      expect(warn.mock.calls).toEqual([["Antigravity ACP could not confirm Windows process tree cleanup."]]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   test("a permit that refuses dispatch is released without a prompt or a send report", async () => {
     const budget = createRequestExecutionBudget();
     let released = false;

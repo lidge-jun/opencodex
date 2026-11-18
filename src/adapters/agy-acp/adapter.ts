@@ -249,12 +249,15 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
     };
 
     /** Settle once: reap the child before publishing the terminal event. */
-    function finish(terminal: AdapterEvent | undefined, aborted = false, onReaped = resolveTurn): void {
+    function finish(terminal: AdapterEvent | undefined, aborted = false, refusal?: { error: unknown }): void {
       if (settled) return;
       settled = true;
       clearTimeout(turnTimer);
       incoming.abortSignal?.removeEventListener("abort", onAbort);
-      const reaped = cleanup(workspace, child);
+      const reaped = cleanup(workspace, child).catch(error => {
+        // The reaper warns and retains the workspace. Keep an existing dispatch refusal.
+        if (!refusal || !(error instanceof AgyAcpTreeCleanupError)) throw error;
+      });
       try { child.stdout.destroy(); } catch { /* already closed */ }
       void reaped.finally(() => {
         if (!aborted && !incoming.abortSignal?.aborted && terminal) {
@@ -262,7 +265,8 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
         }
       }).then(() => {
         if (!aborted && !incoming.abortSignal?.aborted && terminal) emit(terminal);
-        onReaped();
+        if (refusal) rejectTurn(refusal.error);
+        else resolveTurn();
       }).catch(rejectTurn);
     }
     const fail = (code: AcpFailureCode, detail?: string): void => finish(failure(code, detail));
@@ -316,7 +320,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
 
     function sendPrompt(): void {
       if (!checkSelectedModel()) return;
-      const refuse = (error: unknown): void => finish(undefined, false, () => rejectTurn(error));
+      const refuse = (error: unknown): void => finish(undefined, false, { error });
       try {
         const prompt = buildAcpPrompt(parsed, !systemOnSession);
         const decision = incoming.sendBudget?.reserveDispatch({ sendClass: "transient", targetKey: AGY_ACP_IDENTITY_URL });
