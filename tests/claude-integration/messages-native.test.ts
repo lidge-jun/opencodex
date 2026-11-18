@@ -5,7 +5,7 @@
  * key) instead of the Responses replay. Everything here is a local fixture: no real credential
  * or service is reached.
  */
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, jest, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -568,6 +568,61 @@ describe("managed native Messages", () => {
     expect(row.closeReason).toBe("body_stall");
     expect(row.failureDetail).toMatchObject({ code: "body_stall" });
   });
+
+  for (const keepSending of [true, false]) {
+    test(keepSending ? "raw fragments keep an incomplete Messages frame alive" : "a partial Messages frame stalls without more raw bytes", async () => {
+      const config = fixtureConfig(1, { claudeCode: { bodyStallSec: 1 } as OcxConfig["claudeCode"] });
+      const reads = Array.from({ length: 3 }, () => Promise.withResolvers<void>());
+      let read = 0;
+      let controller!: ReadableStreamDefaultController<Uint8Array>;
+      let cancelled: unknown;
+      let finished = false;
+      const upstreamBody = new ReadableStream<Uint8Array>({
+        start(value) { controller = value; },
+        pull() { reads[read++]?.resolve(); },
+        cancel(reason) { cancelled = reason; },
+      }, { highWaterMark: 0 });
+      Object.assign(config.providers.anth!, {
+        fetch: async () => new Response(upstreamBody, { headers: { "content-type": "text/event-stream" } }),
+      });
+      const bytes = new TextEncoder().encode(SSE_TEXT);
+      jest.useFakeTimers();
+      const pending = send(config, { ...SOURCE_BODY, stream: true });
+      try {
+        await reads[0]!.promise;
+        controller.enqueue(bytes.subarray(0, 16));
+        await reads[1]!.promise;
+        if (keepSending) {
+          jest.advanceTimersByTime(600);
+          controller.enqueue(bytes.subarray(16, 32));
+          await reads[2]!.promise;
+          jest.advanceTimersByTime(600);
+          if (!cancelled) {
+            controller.enqueue(bytes.subarray(32));
+            controller.close();
+            finished = true;
+          }
+        } else {
+          jest.advanceTimersByTime(1_000);
+        }
+        const { requestId, response, text } = await pending;
+        expect(response.status).toBe(200);
+        if (keepSending) {
+          expect(text).toBe(ECHOED_SSE_TEXT);
+          expect(rowFor(requestId)).toMatchObject({ status: 200, closeReason: "terminal" });
+          expect(cancelled).toBeUndefined();
+        } else {
+          expect(text).toContain('"type":"timeout_error"');
+          expect(rowFor(requestId)).toMatchObject({ status: 502, closeReason: "body_stall", failureDetail: { code: "body_stall" } });
+          expect(cancelled).toMatchObject({ name: "TimeoutError" });
+        }
+      } finally {
+        if (!finished && !cancelled) controller.close();
+        jest.useRealTimers();
+        await pending;
+      }
+    });
+  }
 
   test("a client that disconnects mid-stream is logged as a cancel, not an upstream failure", async () => {
     const config = fixtureConfig(startUpstream(hangingAfterPartialTurn));

@@ -43,8 +43,7 @@ test("native Messages model echo copies fragmented frame bytes only linearly", a
       controller.close();
     },
   });
-  const decoder = new TextDecoder();
-  const actual: string[] = [];
+  const actual: Uint8Array[] = [];
   const set = Uint8Array.prototype.set;
   let copied = 0;
   const spy = spyOn(Uint8Array.prototype, "set").mockImplementation(function (this: Uint8Array, source, offset) {
@@ -56,12 +55,13 @@ test("native Messages model echo copies fragmented frame bytes only linearly", a
     for (;;) {
       const next = await reader.read();
       if (next.done) break;
-      actual.push(decoder.decode(next.value));
+      actual.push(next.value);
     }
   } finally {
     spy.mockRestore();
   }
-  expect(actual.join("")).toBe(decoder.decode(frame).replace('"model":"claude-x"', '"model":"anth/claude-x"') + decoder.decode(tail));
+  const rewritten = encoder.encode(new TextDecoder().decode(frame).replace('"model":"claude-x"', '"model":"anth/claude-x"'));
+  expect(Buffer.concat(actual)).toEqual(Buffer.concat([rewritten, tail]));
   expect(copied).toBeLessThanOrEqual(frame.length * 4);
 });
 const success = (stream = false) => stream

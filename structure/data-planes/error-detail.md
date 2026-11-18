@@ -501,7 +501,11 @@ with the pinned SDK's parsed-or-raw SSE fallback. Empty named errors retain gene
 `src/lib/messages-sse-error-presentation.ts` renders closed type/code/message literals and carries
 complete-frame construction identity. While looking for `message_start`, the native model echo
 scans each incoming chunk once for LF pairs and grows incomplete frame storage geometrically.
-It reads through fragments until a frame is ready, the scan window ends, or EOF arrives.
+It reads through fragments until a frame is ready, the scan window ends, or EOF arrives. The
+64 KiB cutoff is checked after scanning each chunk, so a complete `message_start` in the
+chunk that crosses the cutoff can still be rewritten. If the frame is incomplete at the end
+of that chunk, the echo relays the pending bytes and stops scanning. The native Messages tap
+refreshes its pending-read stall deadline on each nonempty raw chunk before frame buffering.
 The single pre-echo flag authorizes owned data under the
 existing message_start name; guard replacements retire that flag. Local guard and tap products
 keep their original observer bytes and separate fixed client products. Stall/cap text omits numbers;

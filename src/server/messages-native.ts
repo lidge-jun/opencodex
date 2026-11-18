@@ -244,8 +244,10 @@ export function createNativeMessagesComboSource(input: Omit<HandleNativeMessages
   };
 }
 
-/** Relay an upstream body unchanged, recording first output on its first non-empty chunk once `ready`. */
-function observeFirstChunk(body: ReadableStream<Uint8Array>, onFirst: () => void, ready = () => true): ReadableStream<Uint8Array> {
+/** Relay bytes unchanged, observing raw progress and recording first output once `ready`. */
+function observeNativeMessagesChunks(
+  body: ReadableStream<Uint8Array>, onFirst?: () => void, ready = () => true, onChunk?: () => void,
+): ReadableStream<Uint8Array> {
   const reader = body.getReader();
   let seen = false;
   return new ReadableStream<Uint8Array>({
@@ -255,9 +257,12 @@ function observeFirstChunk(body: ReadableStream<Uint8Array>, onFirst: () => void
         controller.close();
         return;
       }
-      if (!seen && value.byteLength > 0 && ready()) {
-        seen = true;
-        onFirst();
+      if (value.byteLength > 0) {
+        onChunk?.();
+        if (!seen && onFirst && ready()) {
+          seen = true;
+          onFirst();
+        }
       }
       controller.enqueue(value);
     },
@@ -487,7 +492,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
   };
   // After preflight, first output waits for a content frame the log tap has seen.
   const watchFirstOutput = (body: ReadableStream<Uint8Array>) => onFirstOutput
-    ? observeFirstChunk(body, onFirstOutput, () => logCtx.generationStartedAt !== undefined) : body;
+    ? observeNativeMessagesChunks(body, onFirstOutput, () => logCtx.generationStartedAt !== undefined) : body;
   const localOAuthFailure = (error: unknown): Response | null => {
     if (error instanceof AnthropicAccountCooldownError) {
       const scope = error.routePosition === undefined ? "All Anthropic OAuth accounts" : "Anthropic OAuth accounts for this model route";
@@ -1062,13 +1067,17 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
   if (contentType.includes("text/event-stream") && response.body) {
     // `upstream` follows req.signal and is also what shutdown and turn release abort, so both
     // the client leaving and this lane's own abort read as a cancel, not as a failed stream.
+    const rawActivity: { refresh?: () => void } = {};
     const bodyGuard = {
       ...resolvePassthroughBodyGuard(config, upstream.signal),
       ...(activeProvider.anthropicEofTolerance === true ? { eofTolerant: true } : {}),
+      rawActivity,
     };
     const replay = { committed: false, pending: false };
     const raw = options.sendBudget ? observeNativeMessagesReplayBoundary(response.body, logCtx, replay) : response.body;
-    const observed = logIds && onFirstOutput ? observeFirstChunk(raw, onFirstOutput) : raw;
+    const firstOutput = logIds ? onFirstOutput : undefined;
+    const observed = firstOutput || bodyGuard.stallMs > 0
+      ? observeNativeMessagesChunks(raw, firstOutput, undefined, () => rawActivity.refresh?.()) : raw;
     const renamed = activeRequest.oauthToolNames
       ? restoreOAuthToolNamesInSse(observed, activeRequest.oauthToolNames, translatorBudget)
       : observed;
@@ -1098,8 +1107,8 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
       }, bodyGuard, frames, nativeInstance ? clientFilter : undefined);
       // A configured Messages provider words an oversized-input refusal its own way; Claude Code
       // compacts only on Anthropic's wording (devlog/_plan/261009_claude_1m_default/010). The
-      // rewrite buffers whole frames, so it sits after the tap: stall detection keeps timing raw
-      // upstream bytes. Real Anthropic pools refuse pre-stream in that wording and keep one relay.
+      // rewrite buffers whole frames, so it sits after the tap. The raw observer feeds the tap's
+      // stall deadline before any frame buffering. Real Anthropic pools keep one client relay.
       const clientStream = nativeInstance ? relayed : relaySseWithPayloadRewrite(relayed, claudeOverflowSsePayload, translatorBudget, messagesSseFrameHooks(frames), clientFilter);
       let delivered = retainUpstreamMessagesRequestId(new Response(clientStream, {
         status: 200,
