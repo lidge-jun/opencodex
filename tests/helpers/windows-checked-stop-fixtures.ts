@@ -19,7 +19,7 @@ export const entry = (
   name: string | null,
   commandLine: string | null,
   startTime: number | null,
-): WindowsStopProcessEntry => ({ pid, parentPid, name, commandLine, startTime });
+): WindowsStopProcessEntry => ({ pid, parentPid, name, commandLine, startTime, foreignOwner: false });
 
 export const scheduleHost = entry(SCHEDULE_PID, 600, "svchost.exe", "C:\\Windows\\system32\\svchost.exe -k netsvcs -s Schedule", 1_000);
 export const launcher = (pid = 20, parent = SCHEDULE_PID, start: number | null = 5_000) =>
