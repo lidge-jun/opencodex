@@ -46,7 +46,7 @@ import {
 // has been edited. Exit before a test file can run, including in a parallel worker.
 const liveInstallNames = liveInstallEnvNames(process.env);
 if (liveInstallNames.length > 0) {
-  console.error(`[test] refusing to run with live-install environment keys (${liveInstallNames.join(", ")}). Run through \`bun run test\` or unset those keys.`);
+  console.error(`[test] refusing to run with live-install environment keys (${liveInstallNames.join(", ")}). Remove the listed keys from any dotenv files Bun loads (such as .env.test). For inherited keys, run through \`bun run test\` or unset them.`);
   process.exit(1);
 }
 

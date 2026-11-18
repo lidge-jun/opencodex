@@ -58,11 +58,13 @@ paths, delayed generation transitions, member/release ordering and gate-holder d
 
 ## Sandbox lifecycle
 
-`scripts/test.ts` removes live credential keys, `OCX_SERVICE`, and the markers from
+`scripts/test.ts` removes inherited live credential keys, `OCX_SERVICE`, and the markers from
 `src/lib/supervisor-markers.ts` before spawning test processes. Bun 1.4.4 can pass its startup
 environment to children spawned without an explicit environment. When Bun loads `tests/preload.ts`,
-the preload refuses to run tests if any of those keys are present and directs callers to
-`bun run test`. Both paths match names case-insensitively on Windows and case-sensitively on POSIX.
+the preload refuses to run tests if any of those keys are present. Use `bun run test` or unset
+inherited keys. Remove the listed keys from any dotenv files Bun loads, including `.env.test`,
+because Bun can load those files again in the test process. Both paths match names
+case-insensitively on Windows and case-sensitively on POSIX.
 `tests/ci-workflows/test-runner.test.ts` covers the scrub, bare-run refusal, and child inheritance.
 
 The batch runner's per-process home isolation and live-home/service-manager guards remain active
