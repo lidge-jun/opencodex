@@ -28,6 +28,8 @@ through the disk reader. A row keeps:
   A context reused across attempts drops the previous attempt's local verdict at the attempt
   boundary (`takeLocalFailureState` in policy fallback, compaction recovery and the opaque-blob reset) and
   puts it back only when that attempt is rolled back without dispatching (`restoreLocalFailureState`).
+  A Responses combo carries that local verdict when it adopts a child. A deadline recorded after
+  the child commits is forwarded before the terminal frame reaches the request logger.
   The Messages passthrough classifies the condition where it parses the
   upstream error and stores only the member on the context (`upstreamCondition`), so a native Anthropic
   overflow is recorded as `context_overflow`. `classifyUpstreamCondition` reads status, bounded structured

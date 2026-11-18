@@ -2,7 +2,7 @@ import { responseReplayOwnerKey } from "../../responses/state/replay-owner";
 import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import { comboLogLabel, comboTargetLogLabel } from "../../combos/resolve";
 import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
-import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
+import { carryLocalFailureState, projectLocalModelRefusalLog } from "../request-log-failure-detail";
 import { carryProxyErrorContext, hasProxyErrorMessage, markProxyError } from "../../lib/client-error-body";
 import { classifyUpstreamCondition } from "../../lib/upstream-condition";
 import { effectiveAzureOutputBudget } from "../../adapters/azure";
@@ -561,6 +561,7 @@ export async function executeComboResponses(
       activeAttempt: undefined,
       activeAttemptStartedAt: undefined,
     });
+    carryLocalFailureState(childLog, logCtx);
     if (requestedModel !== responseModel) {
       projectLocalModelRefusalLog(logCtx, clientModelLabel);
       logCtx.model = responseModel; logCtx.requestedModel = responseModel;
@@ -1305,6 +1306,9 @@ export async function executeComboResponses(
           childUsageBound = true;
           forwardChildUsage();
         },
+        onWebSearchLocalFailure: () => {
+          if (childCommitted) carryLocalFailureState(childLog, logCtx);
+        },
         // Attempt-relative TTFT is recorded HERE (not via childLog.firstOutputMs — a later
         // Object.assign(logCtx, childLog) would overwrite the request-relative value).
         onFirstOutput: () => {
@@ -1403,6 +1407,7 @@ export async function executeComboResponses(
         activeAttemptStartedAt: segmentStartedAt(),
         resolvedModel: childLog.resolvedModel ?? childLog.model,
       });
+      carryLocalFailureState(childLog, logCtx);
       options.onCodexAuthContextResolved?.(resolvedAuth);
       options.setTerminalOutcomeRecorder?.(terminalRecorder);
       callbackGate.commit();

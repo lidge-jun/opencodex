@@ -21,7 +21,8 @@ When ladder exhaustion returns a child response, the combo's logical row takes d
 child. A synthetic exhaustion response can retain child diagnostics. For example, the quota-cooldown
 snapshot exit can adopt the last failed child's diagnostics before returning a synthetic 503 with
 quota cooldown advice. A proxy-marked replay refusal is excluded from the retained quota response and
-its child diagnostics. Each physical attempt remains in the row's attempt history.
+its child diagnostics, including [local web-search deadlines](../data-planes/error-detail.md).
+Each physical attempt remains in the row's attempt history.
 
 ## Retention
 

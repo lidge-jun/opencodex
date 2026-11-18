@@ -66,6 +66,16 @@ export function restoreLocalFailureState(logCtx: { failureDetail?: FailureDetail
   if (state.detail) logCtx.failureDetail = state.detail;
 }
 
+/** Carry a selected attempt's local verdict across request-log contexts. */
+export function carryLocalFailureState(
+  source: { upstreamError?: string; failureDetail?: FailureDetail },
+  target: { upstreamError?: string; failureDetail?: FailureDetail },
+): void {
+  const local = upstreamErrorIsLocal(source);
+  restoreLocalFailureState(target, { local, detail: source.failureDetail });
+  if (local) target.upstreamError = source.upstreamError;
+}
+
 const INCOMPLETE_REASONS: Readonly<Record<string, readonly [string, FailureDetailCode]>> = {
   max_output_tokens: ["Output reached the requested token limit (max_output_tokens)", "output_limit"],
   upstream_stall_timeout: ["Upstream stalled: no data for the stall-timeout window (upstream_stall_timeout)", "stall_timeout"],

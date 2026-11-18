@@ -12,6 +12,10 @@ import { handleResponsesWithPolicyFallback } from "../../src/server/responses/po
 import { PolicyCandidateUnavailableError, policyCandidateRefusalResponse } from "../../src/server/responses/policy-request-scope";
 import { resetStreamedOpaqueBlobLogContext } from "../../src/server/responses/core-opaque-recovery";
 import { recordLocalFailureDetail, upstreamErrorIsLocal } from "../../src/server/request-log-failure-detail";
+import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
+import { handleResponses } from "../../src/server/responses";
+import { createTempHome } from "../helpers/temp-home";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 
 /**
  * T04-b: a web-search deadline this proxy enforces must reach the request row as local failure
@@ -226,6 +230,76 @@ describe("T04-b local deadline provenance in the request row", () => {
   }, 2_000);
 });
 
+describe("combo web-search deadline provenance", () => {
+  const comboId = "deadline-fixture";
+  const output = "visible answer prefix";
+  const comboStallMs = 120;
+
+  async function comboRun(stallOnBody: boolean): Promise<Outcome> {
+    const home = createTempHome("ocx-combo-web-search-deadline-");
+    const releaseSpendHome = acquireOwnedSpendHome();
+    let sends = 0;
+    globalThis.fetch = (async (input, init) => {
+      expect(String(input)).toBe("https://routed.test/v1/chat/completions");
+      sends++;
+      if (!stallOnBody) return hanging({ abortSignal: init?.signal ?? undefined } as AdapterFetchContext);
+      const chunk = { id: "chunk", choices: [{ index: 0, delta: { content: output }, finish_reason: null }] };
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(new TextEncoder().encode(`data: ${JSON.stringify(chunk)}\n\n`)); },
+      }), { headers: { "content-type": "text/event-stream" } });
+    }) as typeof fetch;
+
+    const config: OcxConfig = {
+      port: 0, defaultProvider: "fixture-routed", connectTimeoutMs: HEADER_MS,
+      providers: { "fixture-routed": { adapter: "openai-chat", baseUrl: "https://routed.test/v1", authMode: "key", apiKey: "fixture" } },
+      combos: { [comboId]: { strategy: "failover", targets: [{ provider: "fixture-routed", model: "fixture-model" }] } },
+      webSearchSidecar: {
+        backend: "exa", exaApiKey: "fixture", routedModelStallTimeoutMs: comboStallMs, streamRoutedModelOutput: true,
+      },
+    };
+    const req = new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: `combo/${comboId}`, input: "Search current docs", stream: true, store: false, tools: [{ type: "web_search" }] }),
+    });
+    const logCtx: RequestLogContext = { model: "", provider: "" };
+    const rows: RequestLogEntry[] = [];
+    try {
+      const start = Date.now();
+      const response = await handleResponses(req, config, logCtx);
+      const wire = await responseWithDeferredRequestLog(response, "ocx-combo-deadline", start, logCtx, row => rows.push(row)).text();
+      expect(sends).toBe(1);
+      expect(rows).toHaveLength(1);
+      return { wireStatus: response.status, wire, row: rows[0] as Outcome["row"] };
+    } finally {
+      clearComboSelectionState(comboId);
+      clearComboTargetCooldowns(comboId);
+      releaseSpendHome();
+      home.remove();
+    }
+  }
+
+  test("exhausted combo adopts a header deadline as local", async () => {
+    const out = await comboRun(false);
+    expect(out.wireStatus).toBe(504);
+    expect(out.row).toMatchObject({
+      provider: "combo", status: 504, failureCause: "upstream-fault",
+      failureDetail: { code: "header_timeout", value: HEADER_MS },
+    });
+    expect(out.row.upstreamCondition).toBeUndefined();
+  });
+
+  test("committed combo forwards a late body deadline before the request row finalizes", async () => {
+    const out = await comboRun(true);
+    expect(out.wireStatus).toBe(200);
+    expect(out.wire).toContain(`"delta":${JSON.stringify(output)}`);
+    expect(failedError(out.wire)).toMatchObject({ message: stallSentence(comboStallMs) });
+    expect(out.row).toMatchObject({
+      provider: "combo", status: 504, terminalStatus: "failed", terminalSource: "upstream",
+      failureCause: "upstream-fault", failureDetail: { code: "generation_timeout", value: comboStallMs },
+    });
+    expect(out.row.upstreamCondition).toBeUndefined();
+  });
+});
 
 // ---------------------------------------------------------------------------------------------
 // Amendment 1: a reused log context must not carry one attempt's local verdict into the next.

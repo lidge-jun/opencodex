@@ -410,6 +410,8 @@ export interface WebSearchLoopDeps {
   connectTimeoutMs?: number;
   /** Continuous routed-model response-body raw-byte inactivity deadline. Default 200000ms. */
   routedModelStallTimeoutMs?: number;
+  /** Notify the request owner once a local deadline is recorded, before publishing it. */
+  onLocalFailure?: () => void;
   /**
    * Effective bridge stall deadline for this turn (seconds). Computed by planWebSearch
    * (webSearchStallTimeoutSec) to cover response-header wait, routed-model body inactivity, and one
@@ -508,6 +510,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   const recordLocalLoopFailure = (e: unknown): void => {
     if (!(e instanceof LoopError) || !e.localFailure || !deps.proxyErrorContext) return;
     recordLocalFailureDetail(deps.proxyErrorContext as { upstreamError?: string; failureDetail?: FailureDetail }, e.message, e.localFailure);
+    deps.onLocalFailure?.();
   };
   let allTools = adapter.name === "anthropic" ? anthropicDeclaredTools(parsed) : parsed.context.tools ?? [];
   let activeToolChoice = parsed.options.toolChoice;

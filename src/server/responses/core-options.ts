@@ -261,6 +261,8 @@ export interface HandleResponsesOptions {
    * can carry the binding to the context that writes the row.
    */
   onBridgeUsageBound?: () => void;
+  /** A web-search deadline has been recorded on the child before its failure is emitted. */
+  onWebSearchLocalFailure?: () => void;
   /** Child-owned prepaid initial send; capacity remains charged until dispatch or unsent release. */
   comboInitialSend?: { permit: SingleUseDispatchPermit; producerOwned?: boolean };
   /** Exact externally booked combo hop, used for its child's spend preflight and send reports. */

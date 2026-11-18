@@ -759,6 +759,7 @@ export async function executeResponsesSidecars(
       connectTimeoutMs: config.connectTimeoutMs ?? 200_000,
       routedModelStallTimeoutMs: wsPlan.routedModelStallTimeoutMs,
       stallTimeoutSec: wsPlan.stallTimeoutSec, proxyErrorContext: logCtx,
+      onLocalFailure: options.onWebSearchLocalFailure,
       streamRoutedModelOutput: wsPlan.streamRoutedModelOutput,
       on429: rotateSidecarProviderOn429,
       onRotatedUsage: billRotatedUsage,
