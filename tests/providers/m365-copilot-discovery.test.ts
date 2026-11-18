@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { createTempHome } from "../helpers/temp-home";
 import { saveCredential, getCredential, credentialGeneration } from "../../src/oauth/store";
-import { OAUTH_PROVIDERS, getLoginStatus, getValidAccessTokenSnapshot, oauthLoginSummary } from "../../src/oauth";
+import { OAUTH_PROVIDERS, clearLoginState, getLoginStatus, getValidAccessTokenSnapshot, oauthLoginSummary } from "../../src/oauth";
 import { clearModelCache, getProviderLiveModelCount } from "../../src/codex/model-cache";
 import { fetchProviderModels } from "../../src/codex/catalog/provider-models";
 import { normalizeM365WebSession, parseM365ModelBootstrap, readM365ModelBootstrap, M365_COPILOT_WEB_URL } from "../../src/providers/m365-copilot-discovery";
@@ -12,6 +12,9 @@ import { probeM365CopilotProvider } from "../../src/server/management/m365-copil
 import { handleOauthAccountRoutes } from "../../src/server/management/oauth-account-routes";
 import { handleProviderRoutes } from "../../src/server/management/provider-routes";
 import type { OcxConfig } from "../../src/types";
+import { captureApiTarget, configureApiTargets, targetFetch } from "../../gui/src/api";
+import { standaloneApiTargets } from "../../gui/src/api-targets";
+import { afterOAuthCancellation, bindOAuthLoginFlow, cancelOAuthLogin, type OAuthLoginAttempt } from "../../gui/src/oauth-cancellation-barrier";
 
 const oid = "11111111-1111-1111-1111-111111111111", tid = "22222222-2222-2222-2222-222222222222";
 const accountId = oid + "@" + tid;
@@ -128,7 +131,7 @@ test("connectivity probe refuses a superseded web session before fetch", async (
   expect(await response.json()).toMatchObject({ ok: false });
 });
 
-test("management status and cancel bind a tab to its own M365 login attempt", async () => {
+function stubM365BrowserLogin() {
   const name = "m365-copilot";
   const def = OAUTH_PROVIDERS[name]!;
   const config = { port: 0, hostname: "127.0.0.1", defaultProvider: name, providers: { [name]: def.providerConfig } } as OcxConfig;
@@ -138,15 +141,24 @@ test("management status and cancel bind a tab to its own M365 login attempt", as
     ctrl.onAuth?.({ url: "", instructions: "Fixture login " + started.length });
     return new Promise((_, reject) => ctrl.signal!.addEventListener("abort", () => reject(new Error("fixture cancelled")), { once: true }));
   });
-  const request = async (path: string, body?: object) => {
-    const url = new URL(path, "http://127.0.0.1");
+  const handle = async (req: Request) => {
     return (await handleOauthAccountRoutes({
-      req: new Request(url, body ? { method: "POST", body: JSON.stringify({ provider: name, ...body }) } : {}),
-      url, config, deps: {},
+      req, url: new URL(req.url), config, deps: {},
       convergeCodexCatalog: async () => ({ status: "failed", reason: "disk" }),
       syncClaudeAgentDefsBestEffort: async () => {},
     }))!;
   };
+  const restore = () => {
+    clearLoginState(name);
+    login.mockRestore();
+  };
+  return { name, handle, started, restore };
+}
+
+test("management status and cancel bind a tab to its own M365 login attempt", async () => {
+  const { name, handle, started, restore } = stubM365BrowserLogin();
+  const request = (path: string, body?: object) => handle(new Request(new URL(path, "http://127.0.0.1"),
+    body ? { method: "POST", body: JSON.stringify({ provider: name, ...body }) } : {}));
   const start = async () => {
     const response = await request("/api/oauth/login", { openBrowser: true });
     expect(response.status).toBe(200);
@@ -174,9 +186,76 @@ test("management status and cancel bind a tab to its own M365 login attempt", as
     expect(await (await cancel(replacement.flowId)).json()).toMatchObject({ cancelled: true });
     expect(started[1]?.aborted).toBe(true);
   } finally {
-    const { clearLoginState } = await import("../../src/oauth");
-    clearLoginState(name);
-    login.mockRestore();
+    restore();
+  }
+});
+
+test("dashboard retry after cancelling a starting M365 login succeeds with its own flow", async () => {
+  const { name, handle, started, restore } = stubM365BrowserLogin();
+  const apiBase = "http://127.0.0.1";
+  const windowDescriptor = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { location: { href: apiBase } } });
+  configureApiTargets(standaloneApiTargets(apiBase));
+  const originalResponse = Promise.withResolvers<Response>();
+  const releaseStart = Promise.withResolvers<void>();
+  const cancelArrived = Promise.withResolvers<void>();
+  const releaseCancel = Promise.withResolvers<void>();
+  const starts: Promise<Response>[] = [];
+  const cancels: unknown[] = [];
+  globalThis.fetch = (async (input, init) => {
+    const req = new Request(input, init);
+    if (new URL(req.url).pathname === "/api/oauth/login/cancel") {
+      cancels.push(await req.clone().json());
+      cancelArrived.resolve();
+      await releaseCancel.promise;
+      return handle(req);
+    }
+    const response = handle(req);
+    starts.push(response);
+    if (starts.length === 1) {
+      originalResponse.resolve(await response);
+      await releaseStart.promise;
+    }
+    return response;
+  }) as typeof fetch;
+
+  const start = (attempt: OAuthLoginAttempt) => afterOAuthCancellation(attempt, name, async () => {
+    const response = await targetFetch(attempt, `${apiBase}/api/oauth/login`, {
+      method: "POST",
+      body: JSON.stringify({ provider: name, openBrowser: true }),
+    });
+    if (response.ok) bindOAuthLoginFlow(attempt, name, (await response.json()).flowId);
+    return response.status;
+  });
+
+  try {
+    const original: OAuthLoginAttempt = captureApiTarget();
+    const replacement: OAuthLoginAttempt = captureApiTarget();
+    const originalStart = start(original);
+    expect((await originalResponse.promise).status).toBe(200);
+    const cancel = cancelOAuthLogin(original, name);
+    const retry = start(replacement);
+    releaseStart.resolve();
+    expect(await originalStart).toBe(200);
+    await cancelArrived.promise;
+    const prematureRetry = starts[1];
+    // If a retry escaped, let it reach the still-pending flow before releasing Cancel.
+    if (prematureRetry) await prematureRetry;
+    releaseCancel.resolve();
+    expect(await retry).toBe(200);
+    await cancel;
+    expect(prematureRetry).toBeUndefined();
+    expect(original.flowId).toBeString();
+    expect(cancels).toEqual([{ provider: name, flowId: original.flowId }]);
+    expect(replacement.flowId).toBeString();
+    expect(replacement.flowId).not.toBe(original.flowId);
+    expect(started.map(signal => signal.aborted)).toEqual([true, false]);
+  } finally {
+    releaseStart.resolve();
+    releaseCancel.resolve();
+    restore();
+    if (windowDescriptor) Object.defineProperty(globalThis, "window", windowDescriptor);
+    else Reflect.deleteProperty(globalThis, "window");
   }
 });
 

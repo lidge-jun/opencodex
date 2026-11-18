@@ -17,6 +17,8 @@ ocx login m365-copilot
 
 OpenCodex abre una ventana aislada en Chrome, Chromium o Edge en el equipo donde se ejecuta el proxy. La ventana usa un canal privado con el navegador. Si solo tienes Firefox, instala Chrome, Chromium o Edge para iniciar sesión. Completa el inicio de sesión y la autenticación multifactor de Microsoft en esa ventana y mantenla abierta mientras se carga el selector de modelos. Si abres la URL en otro navegador, OpenCodex pierde acceso a la redirección. OpenCodex captura localmente el código y la sesión web de Copilot asociada a la cuenta, cierra la ventana temporal y guarda las credenciales en el almacén protegido de OAuth. El proxy gestiona la ventana. Puedes cerrar o recargar el panel y continuar el inicio de sesión. Para detener el intento desde la pestaña que lo inició, pulsa **Cancelar**. Si lo iniciaste con `ocx account login m365-copilot`, usa el identificador devuelto con `ocx account cancel m365-copilot --flow <flow-id>`.
 
+Si pulsas **Cancelar** mientras se inicia la sesión, puedes volver a intentarlo de inmediato. El panel envía el nuevo intento cuando termina la cancelación del anterior o falla su inicio.
+
 La ventana usa un perfil temporal. El registro M365 Chat Client de Microsoft rechaza con `AADSTS50011` la redirección habitual de OpenCodex a localhost, por lo que el proxy captura la redirección del cliente nativo. Los tokens de acceso y renovación guardados permiten renovar el acceso en segundo plano. El inicio de sesión interactivo requiere un escritorio local y un navegador compatible instalado. El proveedor carece de un modo sin interfaz que muestre un código.
 
 ## Modelos y solicitudes

@@ -3,7 +3,7 @@ import type { TFn } from "../i18n/shared";
 import { readJsonIfOk } from "../fetch-json";
 import { openBrowserRequestField } from "../oauth-open-browser-pref";
 import { oauthRiskAcknowledgementBody } from "../oauth-tos-risk";
-import { afterOAuthCancellation, bindOAuthLoginFlow, cancelOAuthLogin, oauthLoginStatusUrl, type OAuthLoginAttempt } from "../oauth-cancellation-barrier";
+import { afterOAuthCancellation, cancelOAuthLogin, oauthLoginStatusUrl, readOAuthLoginStart, type OAuthLoginAttempt } from "../oauth-cancellation-barrier";
 import { parseBrowserLaunch, type BrowserLaunch } from "../oauth-browser-launch";
 import { BROWSER_LOGIN_POLL_ATTEMPTS, loginPollAttempts } from "../oauth-login-budget";
 import { isServerOwnedLogin, serverOwnedLoginAttempts } from "../oauth-server-owned-login";
@@ -195,7 +195,7 @@ export function useProvidersOAuth({
     setStatus("");
     setLoginInfo(null);
     try {
-      const res = await afterOAuthCancellation(capture, provider, () => {
+      const result = await afterOAuthCancellation(capture, provider, () => {
         if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
         return targetFetch(capture, `${apiBase}/api/oauth/login`, {
           method: "POST",
@@ -211,12 +211,13 @@ export function useProvidersOAuth({
             ...(row ? { row } : {}),
             ...oauthRiskAcknowledgementBody(provider, riskAcknowledged),
           }),
-        });
+        }).then(res => readOAuthLoginStart(capture, provider, res));
       });
-      if (!res) return;
-      if (!res.ok) {
+      if (!result) return;
+      const { data, errorResponse } = result;
+      if (errorResponse) {
         if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
-        const data = await res.json().catch(() => ({})) as { error?: string };
+        const data = await errorResponse.json().catch(() => ({})) as { error?: string };
         if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
         notify(errorMessageFrom(
           data,
@@ -225,8 +226,6 @@ export function useProvidersOAuth({
         ), false);
         return;
       }
-      const data = await res.json() as { url?: string; instructions?: string; deviceCode?: string; browserLaunch?: unknown; flowId?: unknown };
-      bindOAuthLoginFlow(capture, provider, data.flowId);
       if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
       const browserLaunch = parseBrowserLaunch(data.browserLaunch);
       if (data.url || data.instructions || data.deviceCode) {

@@ -17,6 +17,8 @@ ocx login m365-copilot
 
 OpenCodex opens an isolated sign-in window in Chrome, Chromium or Edge on the proxy machine. The window uses a private browser pipe. If Firefox is your only browser, install Chrome, Chromium or Edge to sign in. Complete Microsoft's sign-in and MFA there, and keep it open while the Copilot model picker loads. Moving its URL to another browser prevents local callback capture. OpenCodex captures the code and account-matched Copilot web session locally, closes the temporary window and stores them through its normal protected OAuth account store. No callback URL or password needs to be pasted into OpenCodex or a chat. The proxy owns the sign-in window, so you can close or reload the dashboard while sign-in is in progress. To stop the attempt from the tab that started it, select **Cancel**. If you started it with `ocx account login m365-copilot`, use the returned flow ID with `ocx account cancel m365-copilot --flow <flow-id>`.
 
+If you select **Cancel** while sign-in is starting, you can retry immediately. The dashboard sends the retry after the original attempt's cancellation finishes or its startup fails.
+
 This window does not reuse your regular browser profile. Microsoft's existing M365 Chat Client registration rejects OpenCodex's ordinary localhost redirect with `AADSTS50011`; the captured native-client callback is used instead. The account retains cached access and refresh tokens, so later requests normally refresh silently. A local desktop and a supported installed browser are required for interactive sign-in. Headless code-display login is not supported.
 
 ## Models and requests

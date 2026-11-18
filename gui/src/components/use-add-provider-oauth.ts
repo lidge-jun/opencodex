@@ -3,7 +3,7 @@ import type { TFn } from "../i18n/shared";
 import { readJsonIfOk } from "../fetch-json";
 import { openBrowserRequestField } from "../oauth-open-browser-pref";
 import { oauthRiskAcknowledgementBody } from "../oauth-tos-risk";
-import { afterOAuthCancellation, bindOAuthLoginFlow, cancelOAuthLogin, oauthLoginStatusUrl, type OAuthLoginAttempt } from "../oauth-cancellation-barrier";
+import { afterOAuthCancellation, cancelOAuthLogin, oauthLoginStatusUrl, readOAuthLoginStart, type OAuthLoginAttempt } from "../oauth-cancellation-barrier";
 import type { LoginHintData } from "./login-url-block";
 import { parseBrowserLaunch, type BrowserLaunch } from "../oauth-browser-launch";
 import { BROWSER_LOGIN_POLL_ATTEMPTS, loginPollAttempts } from "../oauth-login-budget";
@@ -138,10 +138,12 @@ export function useAddProviderOAuth({
     activeProvidersRef.current.delete(providerId);
     activeCapturesRef.current.delete(providerId);
     if (capture) endedCapturesRef.current.set(providerId, capture);
+    if (aliveRef.current) {
+      setters.setOauthBusy(false);
+      setters.setOauthUrl("", providerId);
+    }
     if (capture) await cancelServerLogin(capture, providerId);
     if (!aliveRef.current || loginGenerationRef.current.get(providerId) !== generation) return;
-    setters.setOauthBusy(false);
-    setters.setOauthUrl("", providerId);
     setters.setOauthMsgTone("warn");
     setters.setOauthMsg(t("prov.loginCancelled", { provider: providerLabel }));
   }, [aliveRef, bumpLoginGeneration, cancelServerLogin, t]);
@@ -178,19 +180,20 @@ export function useAddProviderOAuth({
     setManualCodeMsg("");
     setManualCodeOk(true);
     try {
-      const res = await afterOAuthCancellation(capture, providerId, () => {
+      const result = await afterOAuthCancellation(capture, providerId, () => {
         if (!aliveRef.current || !isCurrent()) return;
         return targetFetch(capture, `${apiBase}/api/oauth/login`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ provider: providerId, ...(row ? { row } : {}), ...openBrowserRequestField(), ...oauthRiskAcknowledgementBody(providerId, riskAcknowledged) }),
-        });
+        }).then(res => readOAuthLoginStart(capture, providerId, res));
       });
-      if (!res) return;
-      if (!res.ok) {
+      if (!result) return;
+      const { data, errorResponse } = result;
+      if (errorResponse) {
         if (!aliveRef.current || !isCurrent()) return;
         releaseSetters();
-        const data = await res.json().catch(() => ({})) as { error?: string };
+        const data = await errorResponse.json().catch(() => ({})) as { error?: string };
         if (!aliveRef.current || !isCurrent()) return;
         setOauthMsgTone("warn");
         setOauthMsg(data.error === "target_changed"
@@ -203,8 +206,6 @@ export function useAddProviderOAuth({
       // A device flow may return a user code with no URL, and `instructions` may
       // carry the only human-readable step. Keep all three: the hint renderer
       // decides what to show, rather than this hook deciding what to discard.
-      const data = await res.json() as { url?: string; instructions?: string; deviceCode?: string; error?: string; browserLaunch?: unknown; flowId?: unknown };
-      bindOAuthLoginFlow(capture, providerId, data.flowId);
       if (!aliveRef.current || !isCurrent()) return;
       setOauthUrl(data.url ?? "", providerId, data.deviceCode, data.instructions, parseBrowserLaunch(data.browserLaunch));
       if (data.url || data.deviceCode) setOauthMsg(t("modal.waitingLogin"));

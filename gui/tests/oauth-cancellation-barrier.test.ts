@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { captureApiTarget, configureApiTargets } from "../src/api";
 import { standaloneApiTargets } from "../src/api-targets";
-import { afterOAuthCancellation, bindOAuthLoginFlow, cancelOAuthLogin, type OAuthLoginAttempt } from "../src/oauth-cancellation-barrier";
+import { afterOAuthCancellation, bindOAuthLoginFlow, cancelOAuthLogin, readOAuthLoginStart, type OAuthLoginAttempt } from "../src/oauth-cancellation-barrier";
 
 const originalFetch = globalThis.fetch;
 let win: Window;
@@ -66,22 +66,29 @@ test("same-target cancellation orders the next login dispatch", async () => {
   expect(calls).toEqual(["http://a.example/api/oauth/login/cancel"]);
 });
 
-
 test("M365 cancellation waits for its own flow ID and does not coalesce two attempts", async () => {
   const requests: unknown[] = [];
   const releases: Array<() => void> = [];
+  const cancelSent = Promise.withResolvers<void>();
   globalThis.fetch = (async (_input, init) => {
     requests.push(JSON.parse(String(init?.body)));
+    cancelSent.resolve();
     await new Promise<void>(resolve => { releases.push(resolve); });
     return Response.json({ ok: true });
   }) as typeof fetch;
   target("http://a.example");
   const old: OAuthLoginAttempt = { ...captureApiTarget("shared") };
   const replacement: OAuthLoginAttempt = { ...captureApiTarget("shared") };
-  await cancelOAuthLogin(old, "m365-copilot");
+  const response = Promise.withResolvers<Response>();
+  const start = afterOAuthCancellation(old, "m365-copilot", () =>
+    response.promise.then(res => readOAuthLoginStart(old, "m365-copilot", res)));
+  const oldCancel = cancelOAuthLogin(old, "m365-copilot");
+  expect(cancelOAuthLogin(old, "m365-copilot")).toBe(oldCancel);
   expect(requests).toEqual([]);
   bindOAuthLoginFlow(replacement, "m365-copilot", "replacement-flow");
-  bindOAuthLoginFlow(old, "m365-copilot", "old-flow");
+  response.resolve(Response.json({ flowId: "old-flow" }));
+  await start;
+  await cancelSent.promise;
   expect(requests).toEqual([{ provider: "m365-copilot", flowId: "old-flow" }]);
   const cancelled = cancelOAuthLogin(replacement, "m365-copilot");
   expect(requests).toEqual([
@@ -89,5 +96,27 @@ test("M365 cancellation waits for its own flow ID and does not coalesce two atte
     { provider: "m365-copilot", flowId: "replacement-flow" },
   ]);
   for (const release of releases) release();
-  await cancelled;
+  await Promise.all([oldCancel, cancelled]);
+});
+
+test("failed M365 startup releases a same-target retry without sending an unscoped cancel", async () => {
+  const calls: string[] = [];
+  globalThis.fetch = (async (input) => {
+    calls.push(String(input));
+    return Response.json({ ok: true });
+  }) as typeof fetch;
+  const provider = "m365-copilot";
+  target("http://a.example");
+  const original = captureApiTarget();
+  const response = Promise.withResolvers<Response>();
+  const start = afterOAuthCancellation(original, provider, () =>
+    response.promise.then(res => readOAuthLoginStart(original, provider, res)));
+  const cancel = cancelOAuthLogin(original, provider);
+  const retry = afterOAuthCancellation(captureApiTarget(), provider, () => { calls.push("retry"); });
+  expect(calls).toEqual([]);
+
+  response.resolve(Response.json({ error: "Browser could not start" }, { status: 409 }));
+  expect((await start).errorResponse?.status).toBe(409);
+  await Promise.all([cancel, retry]);
+  expect(calls).toEqual(["retry"]);
 });
