@@ -5,7 +5,12 @@ import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { flushNativeMainStartupReleases } from "../../src/codex/native-profile-startup";
 import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
 import { setPersistedConfigMutationBeforeCommitForTests } from "../../src/config/persisted-mutation";
-import { clearModelCache } from "../../src/codex/model-cache";
+import { gatherRoutedModels } from "../../src/codex/catalog";
+import {
+  clearModelCache, expireModelCache, getProviderDiscoveryStatus, getStaleCached,
+  isModelsFetchCoolingDown, observeModelCacheRevision, setCached,
+} from "../../src/codex/model-cache";
+import type { ManagementModelRow } from "../../src/server/management/model-rows";
 import type { OcxConfig } from "../../src/types";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
 import { SERVER_BUDGET_MS } from "../helpers/test-budget";
@@ -128,6 +133,89 @@ test.each(cases)("new arrival before catalog convergence: $name", policy => life
 
   clearModelCache(provider);
   expect(await read()).toEqual([`${provider}/model-a`, `${provider}/model-c`]);
+}), SERVER_BUDGET_MS);
+
+const supersededReads = [
+  { path: "/api/models", policy: "off" },
+  { path: "/v1/models", policy: "off" },
+  { path: "/api/models", policy: "admit" },
+  { path: "/v1/models", policy: "admit" },
+] as const;
+
+test.each(supersededReads)("$path projects a superseded success under policy $policy", ({ path, policy }) => lifecycle.run(async () => {
+  const fetchingOlder = Promise.withResolvers<void>();
+  const releaseOlder = Promise.withResolvers<void>();
+  let sends = 0;
+  const upstream = Bun.serve({
+    port: 0, hostname: "127.0.0.1",
+    async fetch() {
+      if (++sends === 2) return new Response(null, { status: 429 });
+      fetchingOlder.resolve();
+      await releaseOlder.promise;
+      return Response.json({ data: [...existing, arrival].map(id => ({ id })) });
+    },
+  });
+  lifecycle.ownStop(() => upstream.stop(true));
+  saveConfig({
+    port: 0, hostname: "127.0.0.1", defaultProvider: provider,
+    providers: { [provider]: {
+      adapter: "openai-chat", baseUrl: new URL("/v1", upstream.url).href,
+      apiKey: "fixture-key", allowPrivateNetwork: true, liveModels: true,
+      ...(policy === "admit" ? { selectedModels: [...existing] } : {}),
+      newModelPolicy: policy,
+    } },
+    disabledModels: [`${provider}/model-b`],
+    modelDiscovery: { knownModels: { [provider]: { ids: [...existing], removed: [], updatedAt: now } } },
+  });
+  const { startServer } = await import("../../src/server");
+  lifecycle.abort.signal.throwIfAborted();
+  const server = startServer(0);
+  lifecycle.ownStop(() => server.stop(true));
+  const configPath = home.path("config.json");
+  const catalogPath = home.path(".codex", "opencodex-catalog.json");
+  writeFileSync(catalogPath, '{"models":[]}');
+  const configBefore = readFileSync(configPath, "utf8");
+  const catalogBefore = readFileSync(catalogPath, "utf8");
+  const lastGood = [{ provider, id: "last-good" }];
+  setCached(provider, lastGood);
+  expect(expireModelCache(provider)).toBe(true);
+  const pending = fetch(new URL(path, server.url), {
+    headers: { "x-opencodex-api-key": readFileSync(home.path("admin-api-token"), "utf8").trim() },
+    signal: lifecycle.abort.signal,
+  });
+  try {
+    await fetchingOlder.promise;
+    await gatherRoutedModels(loadConfig(), { onlyProvider: provider });
+    const failure = { status: "failed", reason: "http", httpStatus: 429 };
+    expect(getProviderDiscoveryStatus(provider)).toEqual(failure);
+    const revision = observeModelCacheRevision(provider);
+    releaseOlder.resolve();
+    const response = await pending;
+    expect(response.status).toBe(200);
+    if (path === "/api/models") {
+      const rows = (await response.json() as ManagementModelRow[]).filter(row => row.provider === provider);
+      expect(rows.map(({ id, disabled }) => ({ id, disabled }))).toEqual([
+        { id: "model-a", disabled: false },
+        { id: "model-b", disabled: true },
+        { id: arrival, disabled: policy === "off" },
+      ]);
+    } else {
+      const { data } = await response.json() as { data: Array<{ id: string }> };
+      expect(data.map(row => row.id).filter(id => id.startsWith(`${provider}/`)).sort()).toEqual(
+        policy === "off" ? [`${provider}/model-a`] : [`${provider}/model-a`, `${provider}/${arrival}`],
+      );
+    }
+    expect(sends).toBe(2);
+    expect(getProviderDiscoveryStatus(provider)).toEqual(failure);
+    expect(isModelsFetchCoolingDown(provider)).toBe(true);
+    expect(getStaleCached(provider)).toEqual(lastGood);
+    expect(observeModelCacheRevision(provider)).toBe(revision);
+    expect(readFileSync(configPath, "utf8")).toBe(configBefore);
+    expect(readFileSync(catalogPath, "utf8")).toBe(catalogBefore);
+  } finally {
+    releaseOlder.resolve();
+    await pending;
+  }
 }), SERVER_BUDGET_MS);
 
 test("failed arrival persistence returns retryable HTTP 503 without publishing models", () => lifecycle.run(async () => {
