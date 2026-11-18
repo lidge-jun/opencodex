@@ -11,13 +11,13 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { chmod, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, relative, sep } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 
 export interface TurnWorkspace { dir: string; tmp: string; remove(): Promise<void> }
 
 function isInside(child: string, parent: string): boolean {
   const rel = relative(parent, child);
-  return rel === "" || (!rel.startsWith("..") && !rel.startsWith(sep) && !/^[A-Za-z]:/.test(rel));
+  return rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
 
 /** A fresh private workspace outside `home`; throws when the temp root resolves inside it. */
@@ -53,14 +53,14 @@ export interface ReapOptions {
   reapTimeoutMs: number;
   platform?: NodeJS.Platform;
   signalGroup?: (pid: number, signal: NodeJS.Signals) => void;
-  killWindowsTree?: (pid: number) => void;
+  killWindowsTree?: (pid: number, completed: () => void) => void;
   setTimeout?: typeof setTimeout;
   clearTimeout?: typeof clearTimeout;
 }
 
-function defaultKillWindowsTree(pid: number): void {
+function defaultKillWindowsTree(pid: number, completed: () => void): void {
   const taskkill = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\taskkill.exe`;
-  execFile(taskkill, ["/PID", String(pid), "/T", "/F"], { windowsHide: true, timeout: 5_000 }, () => undefined);
+  execFile(taskkill, ["/PID", String(pid), "/T", "/F"], { windowsHide: true, timeout: 5_000 }, completed);
 }
 
 /**
@@ -79,27 +79,51 @@ export function reapProcessTree(child: AgyAcpChild, options: ReapOptions): Promi
     }
     try { child.kill(sig); } catch { /* already gone */ }
   };
-  return new Promise<void>(resolve => {
-    const leaderGone = child.exitCode !== null || child.signalCode !== null;
-    if (platform === "win32") {
-      if (!leaderGone && pid !== undefined) {
-        try { (options.killWindowsTree ?? defaultKillWindowsTree)(pid); } catch { /* fall back below */ }
+  const leaderGone = child.exitCode !== null || child.signalCode !== null;
+  if (platform === "win32") {
+    if (leaderGone) return Promise.resolve();
+    return new Promise<void>(resolve => {
+      let treeDone = false;
+      let leaderClosed = false;
+      const finish = (): void => {
+        clear(deadline);
+        resolve();
+      };
+      const afterTree = (): void => {
+        if (treeDone) return;
+        treeDone = true;
+        if (leaderClosed) finish();
+        else signal("SIGKILL");
+      };
+      const deadline = set(() => {
+        afterTree();
+        finish();
+      }, options.reapTimeoutMs);
+      child.once("close", () => {
+        leaderClosed = true;
+        if (treeDone) finish();
+      });
+      if (pid === undefined) afterTree();
+      else {
+        try { (options.killWindowsTree ?? defaultKillWindowsTree)(pid, afterTree); }
+        catch { afterTree(); }
       }
-      try { child.kill("SIGKILL"); } catch { /* already gone */ }
-    } else {
-      signal("SIGTERM");
-    }
+    });
+  }
+
+  return new Promise<void>(resolve => {
+    signal("SIGTERM");
     let settled = false;
     const finish = (): void => {
       if (settled) return;
       settled = true;
-      if (killTimer) clear(killTimer);
+      clear(killTimer);
       clear(reapTimer);
       // Whatever is left of the group (a descendant that ignored TERM or closed its stdio) goes now.
-      if (platform !== "win32") signal("SIGKILL");
+      signal("SIGKILL");
       resolve();
     };
-    const killTimer = platform === "win32" ? undefined : set(() => signal("SIGKILL"), options.graceMs);
+    const killTimer = set(() => signal("SIGKILL"), options.graceMs);
     const reapTimer = set(finish, options.reapTimeoutMs);
     if (leaderGone) finish();
     else child.once("close", finish);

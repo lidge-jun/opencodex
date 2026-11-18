@@ -1,6 +1,6 @@
 /** Pure ACP framing, option matching, the Gemini proof and process/workspace lifetime (plan 080). */
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, realpathSync, statSync, writeFileSync, chmodSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, statSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acpTerminal, buildAcpPrompt, classifyFrame, permissionCancelledFrame } from "../../src/adapters/agy-acp/acp";
@@ -101,10 +101,56 @@ describe("workspace and reaping", () => {
     roots.push(home);
     const workspace = await createTurnWorkspace(home);
     expect(workspace.dir.startsWith(realpathSync(home))).toBe(false);
-    expect(statSync(workspace.dir).mode & 0o777).toBe(0o700);
+    if (process.platform !== "win32") expect(statSync(workspace.dir).mode & 0o777).toBe(0o700);
     expect(workspace.tmp.startsWith(workspace.dir)).toBe(true);
     await workspace.remove();
     await expect(createTurnWorkspace(home, home)).rejects.toThrow(/inside the OpenCodex home/);
+  });
+
+  test("a temp root named ..scratch inside the home is refused", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-agy-home-"));
+    roots.push(home);
+    const nested = join(home, "..scratch");
+    mkdirSync(nested);
+    await expect(createTurnWorkspace(home, nested)).rejects.toThrow(/inside the OpenCodex home/);
+  });
+
+  test.each(["close-first", "tree-first", "timeout"])("Windows waits for tree cleanup before settling (%s)", async order => {
+    const calls: string[] = [];
+    const timers: Array<() => void> = [];
+    const set = ((fn: () => void) => { timers.push(fn); return timers.length; }) as unknown as typeof setTimeout;
+    const clear = (() => {}) as unknown as typeof clearTimeout;
+    let close!: () => void;
+    let treeComplete!: () => void;
+    const child = {
+      pid: 99, exitCode: null, signalCode: null,
+      kill: (signal: string) => { calls.push(signal); return true; },
+      once: (_: string, fn: () => void) => { close = fn; },
+    } as unknown as AgyAcpChild;
+    const done = reapProcessTree(child, {
+      graceMs: 2_000, reapTimeoutMs: 5_000, platform: "win32", setTimeout: set, clearTimeout: clear,
+      killWindowsTree: (pid: number, completed: () => void) => {
+        calls.push(`taskkill ${pid}`);
+        treeComplete = completed;
+      },
+    }).then(() => { calls.push("settled"); });
+    expect(calls).toEqual(["taskkill 99"]);
+    if (order === "close-first") {
+      close();
+      await Promise.resolve();
+      expect(calls).toEqual(["taskkill 99"]);
+      treeComplete();
+      await done;
+      expect(calls).toEqual(["taskkill 99", "settled"]);
+    } else {
+      if (order === "tree-first") treeComplete();
+      else timers[0]!();
+      expect(calls).toEqual(["taskkill 99", "SIGKILL"]);
+      close();
+      await done;
+      if (order === "timeout") treeComplete();
+      expect(calls).toEqual(["taskkill 99", "SIGKILL", "settled"]);
+    }
   });
 
   test("the group gets TERM, then KILL even when the leader ignores TERM; KILL also follows a normal close", async () => {

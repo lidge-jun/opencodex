@@ -76,7 +76,9 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   `src/server/responses/agy-acp-preflight.ts` answers those with a 403 before sidecars run, and `runTurn` repeats the
   check before any probe or spawn. Each `session/prompt` reserves and reports one physical inference send from
   the shared request budget, including a retried turn. Model selection is phase-aware and fails closed when the Gemini model is not
-  confirmed; permission requests are answered `cancelled`; errors carry fixed text only. Coverage:
+  confirmed; permission requests are answered `cancelled`; errors carry fixed text only. The workspace stays outside the
+  OpenCodex home and is removed after reaping. On Windows, cleanup waits within the reap deadline for the tree
+  terminator before falling back to killing the leader. Coverage:
   `tests/adapters/agy-acp-{adapter,protocol,policy}.test.ts`, `tests/config/agy-acp-config.test.ts`,
   `tests/server/server-agy-acp.test.ts`.
 - `devin` is direct for a related reason. It streams Cognition's
