@@ -81,6 +81,10 @@ OpenCodex 不会把 provider API key、Authorization 头、OAuth token、仅后�
 
 手动建议是 Worker 自己发出的 `advisor` 调用所对应的工具结果。结果是一个 JSON 对象。`advice` 是顾问模型的文本。`status` 由运行时写入。
 
+在常规的 Responses、Messages 转换请求和 Web 搜索中，只有当前 `tool_choice` 允许 `advisor` 时才能手动咨询。显式指定工具或使用允许列表时，必须选中根级的 `advisor` 函数。保留的 `functions` 命名空间也会按根级处理。如果客户端未声明根级 `advisor`，符合条件的 sidecar 可以提供该工具。如果存在匹配的函数声明，通过 `functions` 选择时会使用客户端工具。强制使用托管 Web 搜索，或选中同名的自定义工具或托管工具，都不会授权手动咨询。未经允许的调用会以 `undeclared_tool_call` 拒绝，且不会触发咨询、向 Worker 重新发送请求或返回调用 ID 和参数。
+
+翻译后的 Messages 请求如果按名称显式选择 Anthropic 托管的 `advisor`，OpenCodex 会在兼容路由上原样转发工具声明和选择。选择有歧义或尝试过的候选路由均不兼容时，OpenCodex 会在本地返回 HTTP 400。两种情况下都不会发起代理咨询。
+
 基于 fetch 的 Web 搜索轮次中，只有实际生效的 `tool_choice` 允许合成 `advisor` 工具时，搜索循环才会提供该工具并拦截手动咨询调用。将 `allowed_tools` 限制为 `web_search` 不允许手动咨询顾问。启用托管搜索不会扩大此工具权限范围。
 
 自动建议的 JSON 内容放在独立的 user-role 建议消息中。developer 消息只保留固定的运行时传输说明，顾问生成的文本不会进入 developer/system 内容；OpenAI Chat 和 Anthropic 均可传递它，无需伪造工具调用。JSON 转义能防止结构突破和字段伪造，但不能保证模型忽略自然语言中的恶意指令。专门的咨询结果协议可进一步区分建议与用户请求。每个请求最多进行 3 次咨询和 4 次 Advisor worker 续写。咨询额度耗尽后移除 advisor 工具，重复调用只允许一次携带上限结果的最终续写；再次调用会以 502 advisor_continuation_limit 结束，不再发送隐藏的 worker 请求。空完成重试共享此上限。
@@ -98,7 +102,7 @@ Advisor 失败是 fail-open 的：已经发出的咨询若失败（模型不可�
 ## PR1 限制
 
 - 原生 OpenAI passthrough 回合（ChatGPT 池 Worker）不会获得合成工具；advisor 支持覆盖路由（translated）provider。preflight 咨询适用于 run-turn 适配器；工具不适用。
-- 翻译后的 `/v1/messages` 请求（例如将 Claude Code 路由到翻译 provider）与 `/v1/responses`、`/v1/chat/completions` 一样获得合成工具和 preflight 咨询。`policy` 与上下文共享同意遵循相同规则，设置从当前配置读取，因此撤销同意会阻止进行中的请求发起尚未发出的咨询；它不会取消已经发出的咨询，也无法收回已经离开代理的上下文。
+- 翻译后的 `/v1/messages` 请求（例如将 Claude Code 路由到翻译 provider）在 `tool_choice` 允许时可使用合成工具，并按配置的策略运行 preflight 咨询。按名称显式选择托管 Advisor 时，按「权威」一节的规则跳过这两项。`policy` 与上下文共享同意遵循相同规则，设置从当前配置读取，因此撤销同意会阻止进行中的请求发起尚未发出的咨询；它不会取消已经发出的咨询，也无法收回已经离开代理的上下文。
 - 不提供语义卡住检测、任务完成复核、升级分层、多专家或投票；自适应触发只使用已观察到的工具证据。
 - preflight 去重账本是进程内的；代理重启后，进行中的任务可能再收到一次 preflight 咨询。
 

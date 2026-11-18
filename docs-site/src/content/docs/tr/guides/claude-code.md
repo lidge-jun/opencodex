@@ -367,8 +367,21 @@ veya `tool_result.tool_use_id` (`a-zA-Z0-9_-` dışında karakter içeren ya da 
 bir kimlikle yeniden yazılır. Uygun kimlikler değiştirilmeden gönderilir, boş bir kimliğe yerel olarak
 400 döner.
 
-`claudeCode.nativePassthrough: false` ile devre dışı bırakın;
-`claudeCode.anthropicBaseUrl` ile başka bir yeri işaret edin.
+`claudeCode.nativePassthrough: false`, `ocx claude config set --native-passthrough off` veya
+panodaki Providers → Anthropic Claude → Accounts bölümünde Claude hesap havuzunun altında bulunan
+**Yerel Claude geçişi** anahtarıyla devre dışı bırakın;
+`claudeCode.anthropicBaseUrl` ile başka bir yeri işaret edin. Claude model seçicisinden ve Claude Desktop'tan gelen takma adlar `modelMap` öncesinde
+çözümlenir. Anahtarı ham model kimliği olan bir `modelMap` girdisi, geçiş açıkken de kapalıyken de
+isteği diğer sağlayıcıdaki hedef modele gönderir. Geçiş kapalıyken eşlemesi olmayan ham bir Claude
+model kimliği yönlendiriciye gider. Yönlendirici önce yönlendirme politikası takma adlarına,
+sonra kombo takma adlarına bakar. Eşleşme yoksa sırasıyla `defaultModel` değeri bu kimlik olan
+etkin bir sağlayıcıya, etkin bir `anthropic` veya `anthropic-*` sağlayıcısına, model listesinde bu
+kimliği içeren bir sağlayıcıya, sağlayıcı tarafındaki model takma adına ve son olarak varsayılan
+sağlayıcıya bakar. Rota bir Anthropic OAuth sağlayıcısıysa isteği OpenCodex'te kayıtlı Anthropic
+hesapları karşılar; kayıtlı ikinci bir hesap 429 durumunda yedeğe geçiş ekler ve proaktif
+[Claude OAuth hesap havuzu](#claude-oauth-hesap-havuzu-deneysel) `anthropicAccountPool.enabled` açık olduğunda uygulanır. Yönlendirme
+bir sonraki istekten itibaren ayarı izler; model yuvalarının ve bağlam pencerelerinin eşleşmesi için
+zaten çalışan Claude Code oturumlarını yeniden başlatın.
 
 ## Uzak hub'a bağlı Claude Desktop
 
