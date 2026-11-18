@@ -15,7 +15,7 @@ function fixture() {
   return createCodexCliApplyFixture(root, process.platform, process.arch);
 }
 function cli(f: ReturnType<typeof fixture>, args: string[], exitCode = 0) {
-  const result = spawnSync(Bun.which("node")!, [repoPath("bin", "ocx.mjs"), "system", "codex-cli-update", ...args, "--json"], {
+  const result = spawnSync(f.node, [repoPath("bin", "ocx.mjs"), "system", "codex-cli-update", ...args, "--json"], {
     cwd: f.root, encoding: "utf8", env: f.env, timeout: 60_000,
   });
   expect(result.error).toBeUndefined(); expect(result.status).toBe(exitCode);
@@ -53,11 +53,9 @@ describe.skipIf(process.platform === "win32")("Codex CLI private-prefix POSIX ap
 
   test("published launcher remains isolated from a real owned Codex-shaped process", async () => {
     const f = fixture();
-    const node = Bun.which("node");
-    if (!node) throw new Error("fixture node executable unavailable");
     const entry = join(f.root, "codex");
     writeFileSync(entry, 'process.stdout.write("READY\\n"); process.stdin.resume();\n');
-    const child = spawn(node, [entry], { cwd: f.root, env: f.env, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(f.node, [entry], { cwd: f.root, env: f.env, stdio: ["pipe", "pipe", "pipe"] });
     const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(resolve => {
       child.once("close", (code, signal) => resolve({ code, signal }));
     });
