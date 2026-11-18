@@ -148,6 +148,8 @@ export function writePid(pid: number): void {
   atomicWriteFile(getPidPath(), String(pid));
 }
 
+export type ClientStopOwner = { nonce: string; pid: number; startTime: string };
+
 export type RuntimePortState = {
   pid: number;
   port: number;
@@ -160,6 +162,10 @@ export type RuntimePortState = {
   clientStopping?: true;
   /** Parent stop: true while active, false after it finishes with this runtime still fenced. */
   clientStopRequested?: boolean;
+  /** This stop's exact deferred-teardown nonce and OS process incarnation. */
+  clientStopOwner?: ClientStopOwner;
+  /** Stable fingerprint of the Link connection this process started serving. */
+  clientLinkOwner?: string;
   /**
    * Fresh for every publication of a client runtime, including the rollback of a failed restart.
    * A sync compares the whole record before each commit, so one captured before a restart cannot

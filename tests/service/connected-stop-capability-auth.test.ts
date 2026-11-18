@@ -67,19 +67,22 @@ afterEach(async () => {
 
 test("finishing an exact parent stop keeps sync fenced and never changes a different runtime", () => {
   const identity = { pid: process.pid, port: 17001, attestationSecret: SECRET };
-  writeRuntimePort({ ...identity, clientStopping: true, clientStopRequested: true });
+  const owner = { pid: process.pid + 1, nonce: "a".repeat(32), startTime: "darwin:1:0" };
+  writeRuntimePort({ ...identity, clientStopping: true, clientStopRequested: true, clientStopOwner: owner });
   const active = readRuntimePort(process.pid);
   for (const foreign of [{ ...identity, pid: process.pid + 1 }, { ...identity, port: 17002 }, { ...identity, attestationSecret: "B".repeat(43) }]) {
-    finishClientRuntimeStop(foreign);
+    finishClientRuntimeStop(foreign, owner);
     expect(readRuntimePort(process.pid)).toEqual(active);
   }
-  finishClientRuntimeStop(identity);
+  finishClientRuntimeStop(identity, { ...owner, nonce: "b".repeat(32) });
+  expect(readRuntimePort(process.pid)).toEqual(active);
+  finishClientRuntimeStop(identity, owner);
   expect(readRuntimePort(process.pid)).toMatchObject({ ...identity, clientStopping: true, clientStopRequested: false });
   expect(() => clientSyncRuntimeGuard()).toThrow("client_runtime_stopping");
   const finished = readRuntimePort(process.pid);
-  finishClientRuntimeStop(identity);
+  finishClientRuntimeStop(identity, owner);
   expect(readRuntimePort(process.pid)).toEqual(finished);
-  markClientRuntimeStopping(identity, { explicitStop: true });
+  markClientRuntimeStopping(identity, owner);
   expect(readRuntimePort(process.pid)?.clientStopRequested).toBe(true);
 });
 

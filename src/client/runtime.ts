@@ -6,7 +6,7 @@ import type { Server } from "bun";
 import { siblingRuntimeField, withSiblingMarker } from "../codex/sibling-start";
 import { issueSiblingHandoff } from "../codex/sibling-handoff";
 import { loadConfig, withConfigMutationLockSync } from "../config";
-import { readRuntimePort, removePid, removeRuntimePort, writePid, writeRuntimePort, type RuntimePortState } from "../config/process-state";
+import { readRuntimePort, removePid, removeRuntimePort, writePid, writeRuntimePort, type ClientStopOwner, type RuntimePortState } from "../config/process-state";
 import { currentServingCommand } from "../config/serving-runtimes";
 import { installCrashGuards } from "../lib/crash-guard";
 import { observeLocalCredentials } from "../local-credentials/runtime-observation";
@@ -30,11 +30,12 @@ import { clientInitiatedLinkReadiness, createHomeInitiatedLinkReadiness } from "
 import { createClientLinkSupervisor, type ClientLinkSupervisor } from "./link-tunnel";
 import { clientLinkStatePath, isChildInitiatedLink, recordChildInitiatedLink } from "./link-state";
 import { startMachineListener, type MachineListenerDeps } from "./machine-listener";
-import { isLinkConnection, pendingClientConnectMayOwnToken, readClientConnectionState, readClientConnectionStateWithEvidence, sameClientConnectionOwner } from "./state";
+import { isLinkConnection, linkStopConnectionOwner, pendingClientConnectMayOwnToken, readClientConnectionState, readClientConnectionStateWithEvidence, sameClientConnectionOwner } from "./state";
 import { withClientLifecycleSync } from "./lifecycle-lock";
 import { clientConnectionEnded, clientRestartRollbackAction, clientRestartSupervisor, createClientRestartController, LEGACY_FLAG_RESTART_OWNER, restartOwnerEvidence, type ClientRestartController, type RecordedRestartOwner, type RestartOwner } from "./runtime-restart";
 import { createLinkParityReporter, type LinkParityReporter } from "./link-parity-reporter";
 import { restoreLinkClientRoutingBeforeExit } from "./stop-routing";
+import { activeClientStopOwner } from "./stop-native-handoff";
 import { SUPERVISOR_MARKER_ENVS } from "../lib/supervisor-markers";
 import { markClientRuntimeStopping, markClientRuntimeStoppingWithRetry } from "./sync-runtime";
 import { startRouteIntentTick, type RouteIntentTick } from "../integrations/route-intent-tick";
@@ -54,6 +55,7 @@ let recycleTimer: ReturnType<typeof setTimeout> | undefined;
 let recycleFlight: Promise<void> | null = null;
 let clientStopping = false;
 let explicitClientStopRequested: boolean | undefined;
+let explicitClientStopOwner: ClientStopOwner | undefined;
 let standaloneRecycleAllowed = () => !clientStopping;
 
 /**
@@ -117,7 +119,10 @@ export function clientRuntimeRecord(
 ): RuntimePortState {
   let command: string[] | undefined;
   try { command = currentServingCommand(); } catch { /* no reliable relaunch identity; update admission fails closed */ }
-  return { pid, port, hostname: "127.0.0.1", attestationSecret, ...(command ? { command } : {}), ...siblingRuntimeField(), ...(clientStopping ? { clientStopping: true as const } : {}), ...(explicitClientStopRequested !== undefined ? { clientStopRequested: explicitClientStopRequested } : {}), ...(owner ? { restartOwner: owner } : {}) };
+  return { pid, port, hostname: "127.0.0.1", attestationSecret, ...(command ? { command } : {}), ...siblingRuntimeField(),
+    ...(clientStopping ? { clientStopping: true as const } : {}),
+    ...(explicitClientStopRequested !== undefined ? { clientStopRequested: explicitClientStopRequested } : {}),
+    ...(explicitClientStopOwner ? { clientStopOwner: explicitClientStopOwner } : {}), ...(owner ? { restartOwner: owner } : {}) };
 }
 
 /** Evaluated once: the launch environment and parent of this process do not change. */
@@ -340,6 +345,7 @@ export async function startClientRuntime(
   if (state.kind !== "connected") throw new Error(`client runtime refused: client state is ${state.kind}`);
   const config = loadConfig();
   const linkMode = isLinkConnection(state.value);
+  const clientLinkOwner = linkStopConnectionOwner(state.value);
   if (linkMode && (!Number.isInteger(config.port) || config.port < 1 || config.port > 65535)) {
     throw new Error("link mode requires a valid local config port");
   }
@@ -367,9 +373,11 @@ export async function startClientRuntime(
     const current = readRuntimePort(process.pid);
     if (current?.port === servedPort && current.attestationSecret === attestationSecret && current.clientStopRequested !== undefined) {
       explicitClientStopRequested = current.clientStopRequested;
+      explicitClientStopOwner = current.clientStopOwner;
       clientStopping = true;
+      return activeClientStopOwner(current) !== undefined;
     }
-    return explicitClientStopRequested === true;
+    return false;
   };
   // Returns false only for a rollback whose connection changed while it was binding: the new
   // listener is then closed unpublished and the caller recycles.
@@ -417,7 +425,8 @@ export async function startClientRuntime(
         writePid(process.pid);
         // A new generation per publication: syncs admitted before a failed restart refuse to commit
         // into the runtime that serves again, while syncs admitted from here on proceed.
-        writeRuntimePort({ ...clientRuntimeRecord(process.pid, boundPort, attestationSecret), servingGeneration: randomUUID() });
+        writeRuntimePort({ ...clientRuntimeRecord(process.pid, boundPort, attestationSecret), servingGeneration: randomUUID(),
+          ...(clientLinkOwner ? { clientLinkOwner } : {}) });
       };
       if (rollback) withConfigMutationLockSync(publishRecord);
       else publishRecord();

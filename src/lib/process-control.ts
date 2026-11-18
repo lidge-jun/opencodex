@@ -421,6 +421,7 @@ async function waitForStoppedPort(
       // Only the process we just stopped — never kill a newly started twin proxy.
       killOcxHolders: mayKill && !!(stoppedPid && stoppedPid > 0),
       onlyKillPids: mayKill && stoppedPid && stoppedPid > 0 ? [stoppedPid] : [],
+      ...(io.mayTerminate ? { killFn: (pid: number) => killProxy(pid, io.mayTerminate) } : {}),
     });
   } catch {
     /* best-effort — callers that need a hard guarantee reclaim again before bind */

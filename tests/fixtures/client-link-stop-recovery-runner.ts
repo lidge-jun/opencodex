@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { serviceApiTokenFingerprint, writeServiceApiTokenFile, readServiceApiTokenState } from "../../src/lib/service-secrets";
-import { readRuntimePort } from "../../src/config/process-state";
+import { readRuntimePort, type ClientStopOwner } from "../../src/config/process-state";
 import { readClientConnectionStateWithEvidence, markClientConnectPending } from "../../src/client/state";
 import { readDesktopDisconnectReceipt } from "../../src/claude/desktop-remote-store";
 import { storePaths } from "../../src/claude/desktop-remote-store-io";
@@ -78,6 +78,12 @@ async function main() {
     const health = await (await fetch(new URL("/healthz", server.url))).json() as { role: string };
     await report(health.role); await server.stop(true);
   } }));
+  // This fixture runs CLI preflight and the Child together. Model the CLI incarnation
+  // with the real process's creation identity, preserving stale-proof detection.
+  const owner = await import("../../src/client/stop-teardown-owner");
+  mock.module("../../src/client/stop-teardown-owner", () => ({ ...owner,
+    isLiveClientStopOwner: (proof: ClientStopOwner) => owner.readClientStopProcessStart(proof.pid) === proof.startTime,
+  }));
   const { startClientRuntime, scheduleStandaloneRecycle } = await import("../../src/client/runtime");
   await startClientRuntime({ block: false }, { restartSupervisor: async () => null });
   const pendingRecycle = options.mode === "signal-pending-recycle";
@@ -108,7 +114,12 @@ async function main() {
     const outcome = await preflightConnectedClientStop({ pid: process.pid, port: config.port }, finish => { finishStop = finish; });
     observations.stopRefused = outcome !== null && outcome !== "already-stopped" && !outcome.ok;
     observations.activeAdmission = await restart(); // Latch the active marker before finalization.
-    if (options.mode !== "parent-active") await finishStop();
+    if (options.mode === "parent-stale-owner") {
+      const runtimePath = join(home, "runtime-port.json");
+      const disk = JSON.parse(readFileSync(runtimePath, "utf8"));
+      disk.clientStopOwner = { pid: process.pid, nonce: "b".repeat(32), startTime: "darwin:0:0" };
+      writeFileSync(runtimePath, JSON.stringify(disk));
+    } else if (options.mode !== "parent-active") await finishStop();
   }
   observations.beforeRecoveryAdmission = await restart();
   observations.finishedMarker = readRuntimePort(process.pid)?.clientStopRequested;
@@ -136,14 +147,19 @@ async function main() {
   } else if (options.mode === "timer-parent-active") {
     scheduleStandaloneRecycle(expected.tokenFingerprint);
     const runtime = readRuntimePort(process.pid)!;
-    (await import("../../src/client/sync-runtime")).markClientRuntimeStopping({ pid: process.pid, port: config.port, attestationSecret: runtime.attestationSecret! }, { explicitStop: true });
+    const startTime = owner.readClientStopProcessStart(process.pid);
+    if (!startTime) throw new Error("fixture stop creation identity unavailable");
+    (await import("../../src/client/sync-runtime")).markClientRuntimeStopping(
+      { pid: process.pid, port: config.port, attestationSecret: runtime.attestationSecret! },
+      { pid: process.pid, startTime, nonce: "b".repeat(32) },
+    );
   } else if (options.scheduled) scheduleStandaloneRecycle(expected.tokenFingerprint);
   else observations.recoveryAdmission = await restart();
   if (["parent", "signal"].includes(options.mode) && !options.scheduled && observations.recoveryAdmission !== 202) {
     const health = await (await fetch(`http://127.0.0.1:${config.port}/healthz`)).json() as { role: string };
     await report(health.role); process.exit(0);
   }
-  if (!["parent", "signal"].includes(options.mode)) {
+  if (!["parent", "signal", "parent-stale-owner"].includes(options.mode) || options.mode === "parent-stale-owner" && observations.recoveryAdmission !== 202) {
     // Also exercise the scheduled callback; neither path may replace an active or unproven owner.
     scheduleStandaloneRecycle(expected.tokenFingerprint);
     await Bun.sleep(350);

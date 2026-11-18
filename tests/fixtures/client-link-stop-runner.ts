@@ -9,6 +9,8 @@ import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import { ensureCatalogBackup } from "../../src/codex/catalog/parsing";
 import { takeDesktopSupervisedMarker } from "../../src/lib/system-restart-contract";
 import { claimPendingTeardown, pendingTeardownOutstanding, pendingTeardownPathFor, quarantinePendingTeardown } from "../../src/config/pending-teardown";
+import type { ClientStopOwner } from "../../src/config/process-state";
+import { randomBytes } from "node:crypto";
 
 const options = JSON.parse(readFileSync(0, "utf8")) as {
   mode: "runtime" | "helper" | "api" | "parent" | "guard" | "retry" | "file-preflight" | "file-stop" | "file-cycle" | "file-restart-overlap" | "file-restart-control";
@@ -29,13 +31,15 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   lateFileSync?: boolean;
   deferFileApply?: boolean;
   oldStopCapability?: boolean;
+  stopConnectionDrift?: "invalid" | "mismatched" | "disconnected" | "other-link" | "hub";
+  driftDuringFallback?: boolean;
   finishStopBeforeRollback?: boolean;
   removeToken?: boolean;
   finalizeFailure?: boolean;
   repairFileRefusal?: boolean;
   observeFileRefusal?: boolean;
   observeNativeRefusal?: boolean;
-  receiptState?: "live" | "abandoned" | "abandoned-guessed" | "abandoned-other" | "abandoned-unknown" | "abandoned-dead-other" | "quarantined" | "invalid" | "parent" | "parent-stale" | "parent-invalid" | "parent-start" | "parent-status" | "parent-unfenced" | "parent-finished" | "parent-port" | "parent-host" | "parent-guessed" | "parent-oversized" | "parent-nonregular" | "parent-symlink";
+  receiptState?: "live" | "abandoned" | "abandoned-guessed" | "abandoned-other" | "abandoned-unknown" | "abandoned-dead-other" | "quarantined" | "invalid" | "parent" | "parent-stale" | "parent-invalid" | "parent-start" | "parent-status" | "parent-unfenced" | "parent-finished" | "parent-port" | "parent-host" | "parent-guessed" | "parent-oversized" | "parent-nonregular" | "parent-symlink" | "parent-reused" | "parent-wrong-nonce" | "parent-spaced";
   preserve?: "service" | "desktop" | "receipt" | "sibling" | "restart" | "restart-rollback" | "recycle-pending" | "restart-rollback-recycle";
   mutation?: "connection" | "journal" | "process-journal" | "config" | "profile" | "unverified" | "selection" | "oversized" | "nonregular" | "rotation" | "hub" | "catalog" | "prior-catalog" | "api-key" | "token" | "management" | "link-id";
 };
@@ -190,6 +194,7 @@ const snapshot = (result: unknown) => ({
 });
 const report = (result: unknown) => writeFileSync(join(home, "result.json"), JSON.stringify(snapshot(result)));
 process.on("exit", () => writeFileSync(join(home, "exit.json"), JSON.stringify(snapshot(null))));
+let receiptOwner: ClientStopOwner | undefined;
 if (options.preserve === "service") process.env.OCX_SERVICE = "1";
 if (options.preserve === "desktop") takeDesktopSupervisedMarker({ OCX_DESKTOP_SUPERVISED: "1" });
 if (options.preserve === "receipt") {
@@ -201,7 +206,7 @@ if (options.preserve === "receipt") {
   if (options.receiptState?.startsWith("parent")) {
     // An owned, inert process supplies real argv/UID/liveness observations. It never
     // runs the CLI; the fixture sets the real exact-runtime stop marker below.
-    const path = join(home, process.platform === "linux" ? "fixture owner" : "fixture-owner", "src", "cli", "index.ts");
+    const path = join(home, process.platform === "linux" || options.receiptState === "parent-spaced" ? "fixture owner" : "fixture-owner", "src", "cli", "index.ts");
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, 'console.log("ready"); setInterval(() => {}, 1000);');
     const verb = options.receiptState === "parent-start" ? "start" : options.receiptState === "parent-status" ? "status" : "stop";
@@ -211,15 +216,20 @@ if (options.preserve === "receipt") {
     const ready = await reader.read(); reader.releaseLock();
     if (!ready.value || !new TextDecoder().decode(ready.value).includes("ready")) throw new Error("fixture owner did not start");
     ownerPid = owner.pid;
+    const { readClientStopProcessStart } = await import("../../src/client/stop-teardown-owner");
+    const startTime = options.receiptState === "parent-reused" ? "darwin:0:0" : readClientStopProcessStart(ownerPid);
+    if (!startTime) throw new Error("fixture stop process creation identity unavailable");
+    receiptOwner = { pid: ownerPid, nonce: randomBytes(16).toString("hex"), startTime };
   }
   const other = ["abandoned-other", "abandoned-unknown", "abandoned-dead-other"].includes(options.receiptState ?? "")
     ? Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => options.receiptState === "abandoned-unknown"
       ? new Response(null, { status: 503 }) : Response.json({ service: "opencodex", version: "1.0.0", pid: process.pid }) }) : null;
   const otherPort = other?.port;
   if (options.receiptState === "abandoned-dead-other") await other?.stop(true);
+  const guessed = options.receiptState === "parent-guessed" || options.receiptState === "abandoned-guessed";
   const receipt = claimPendingTeardown({ hostname: options.receiptState === "parent-host" ? "192.0.2.10" : "127.0.0.1",
     port: otherPort ?? (options.receiptState === "parent-port" ? (config.port === 65535 ? config.port - 1 : config.port + 1) : config.port) },
-  options.receiptState === "parent-guessed" || options.receiptState === "abandoned-guessed" ? "guessed" : "exact", ownerPid);
+  guessed ? "guessed" : "exact", ownerPid, undefined, undefined, guessed ? undefined : receiptOwner);
   const path = pendingTeardownPathFor(receipt.nonce);
   if (options.receiptState === "quarantined" && !quarantinePendingTeardown(receipt.nonce)) throw new Error("fixture quarantine failed");
   if (options.receiptState === "invalid") writeFileSync(pendingTeardownPathFor(receipt.nonce), "{");
@@ -270,6 +280,13 @@ if (options.mode === "retry") {
   protectedBefore = protectedPaths.map(path => readFileSync(path, "utf8"));
   report({ writes, refused, boundary: guard.boundary() });
 } else if (["runtime", "file-preflight", "file-stop", "file-restart-overlap", "file-restart-control"].includes(options.mode)) {
+  if (options.mode === "file-restart-overlap") {
+    // Exercise parent preflight and Child restart in one synthetic process.
+    const owner = await import("../../src/client/stop-teardown-owner");
+    mock.module("../../src/client/stop-teardown-owner", () => ({ ...owner,
+      isLiveClientStopOwner: (proof: ClientStopOwner) => owner.readClientStopProcessStart(proof.pid) === proof.startTime,
+    }));
+  }
   if (options.fileOnly) {
     // File-route tests isolate the existing native restore owner. Its own real-disk tests
     // above remain independent; this stub performs no Codex/catalog/history writes.
@@ -359,6 +376,21 @@ if (options.mode === "retry") {
     await ready;
   }
   if (options.mode === "file-stop") {
+    if (options.stopConnectionDrift) {
+      const path = join(home, "config.json");
+      const saved = JSON.parse(readFileSync(path, "utf8"));
+      switch (options.stopConnectionDrift) {
+        case "invalid": saved.client = {}; break;
+        case "mismatched": delete saved.runtimeRole; break;
+        case "disconnected": delete saved.runtimeRole; delete saved.client; break;
+        case "other-link": saved.client.connectedAt = "2026-11-17T00:00:00Z"; break;
+        case "hub":
+          saved.client.transport = "hub"; delete saved.client.link;
+          saved.client.serverUrl = saved.client.managementUrl = "https://hub.example.test";
+          break;
+      }
+      writeFileSync(path, JSON.stringify(saved));
+    }
     if (options.finalizeFailure) {
       const sync = await import("../../src/client/sync-runtime");
       mock.module("../../src/client/sync-runtime", () => ({ ...sync, finishClientRuntimeStop: () => { throw new Error("fixture storage refusal"); } }));
@@ -370,12 +402,21 @@ if (options.mode === "retry") {
       calls.killed++; throw new Error("unexpected stop signal after file refusal");
     }) as typeof process.kill;
     const control = await import("../../src/lib/process-control");
-    mock.module("../../src/lib/process-control", () => ({ ...control, stopProxy: async () => {
+    const realStopProxy = control.stopProxy;
+    mock.module("../../src/lib/process-control", () => ({ ...control, stopProxy: async (pid: number, io: Parameters<typeof control.stopProxy>[1]) => {
+      if (options.driftDuringFallback) {
+        return realStopProxy(pid, { ...io, fetchFn: async () => {
+          writeFileSync(join(home, "config.json"), "{");
+          return new Response(null, { status: 404 });
+        } });
+      }
       calls.killed++; throw new Error("unexpected process stop after file refusal");
     } }));
     const service = await import("../../src/service");
     mock.module("../../src/service", () => ({ ...service, stopServiceIfInstalledDetailed: () => {
-      calls.service++; throw new Error("unexpected service stop after file refusal");
+      calls.service++;
+      if (options.driftDuringFallback) return "absent";
+      throw new Error("unexpected service stop after file refusal");
     } }));
     const dispatch = await import("../../src/cli/dispatch");
     const command = dispatch.dispatchCommand;
@@ -463,8 +504,10 @@ if (options.mode === "retry") {
     const { markClientRuntimeStopping, finishClientRuntimeStop } = await import("../../src/client/sync-runtime");
     const runtime = readRuntimePort(process.pid)!;
     const identity = { pid: process.pid, port: config.port, attestationSecret: runtime.attestationSecret! };
-    markClientRuntimeStopping(identity, { explicitStop: true });
-    if (options.receiptState === "parent-finished") finishClientRuntimeStop(identity);
+    if (!receiptOwner) throw new Error("fixture stop owner missing");
+    const proof = options.receiptState === "parent-wrong-nonce" ? { ...receiptOwner, nonce: "b".repeat(32) } : receiptOwner;
+    markClientRuntimeStopping(identity, proof);
+    if (options.receiptState === "parent-finished") finishClientRuntimeStop(identity, proof);
   }
   mutate();
   if (options.removeToken) unlinkSync(join(home, "service-api-token"));

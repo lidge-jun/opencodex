@@ -186,8 +186,15 @@ mock.module("../../src/service/desktop-supervision.mjs", () => ({
 }));
 const readRuntime = state.readRuntimePort;
 if ((!options.alreadyStopped || options.staleRuntimeRecord) && !options.noRuntimeRecord) {
-  writeFileSync(join(home, "runtime-port.json"), JSON.stringify({ ...endpoint, pid: fakePid, attestationSecret: ATTESTATION_SECRET }));
+  const { linkStopConnectionOwner, readClientConnectionState } = await import("../../src/client/state");
+  const connection = readClientConnectionState();
+  const clientLinkOwner = connection.kind === "connected" ? linkStopConnectionOwner(connection.value) : undefined;
+  writeFileSync(join(home, "runtime-port.json"), JSON.stringify({ ...endpoint, pid: fakePid, attestationSecret: ATTESTATION_SECRET, clientLinkOwner }));
 }
+const stopOwner = await import("../../src/client/stop-teardown-owner");
+mock.module("../../src/client/stop-teardown-owner", () => ({ ...stopOwner,
+  readClientStopProcessStart: (pid: number) => pid === process.pid ? "fixture:stop-owner" : unexpected(`readClientStopProcessStart(${pid})`),
+}));
 mock.module("../../src/config/process-state", () => ({
   ...state,
   readPid: () => options.orphan || options.alreadyStopped || (options.deadPidReadsNull && !alive) ? null : fakePid,

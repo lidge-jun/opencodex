@@ -1,13 +1,14 @@
+import { randomBytes } from "node:crypto";
 import { restoreNativeCodexAsync } from "../codex/inject";
 import type { RetainedCodexProviderTable } from "../codex/inject/restore";
 import { stripGrokConfig } from "../grok/inject";
-import { readClientConnectionState, type ClientConnectionState } from "../client/state";
+import { linkStopConnectionOwner, readClientConnectionState, type ClientConnectionState } from "../client/state";
 import { withClientLifecycleSync } from "../client/lifecycle-lock";
 import type { RestoreBoundaryOwnership } from "../client/restore-ownership";
 export type { RestoreBoundaryOwnership } from "../client/restore-ownership";
 import { inspectStopRestoreOwnership, stopRestoreWriteGuard } from "./stop-restore-guard";
 export { clearRestoredStopReceipts, settleUnrestoredStopBoundary } from "./stop-restore-guard";
-import { readPid, readRuntimePort } from "../config/process-state";
+import { readPid, readRuntimePort, type ClientStopOwner, type RuntimePortState } from "../config/process-state";
 import type { OutstandingTeardown } from "../config/pending-teardown";
 import { loadConfig } from "../config";
 import { readBoundedResponseBody } from "../lib/bounded-body";
@@ -34,18 +35,23 @@ export function preserveConnectedClientRoutingOnExit(teardown: StartExitTeardown
 }
 
 type ConnectedStopTarget = { pid: number; port: number; hostname?: string };
+export type LinkStopPreflight = { target: ConnectedStopTarget; owner: ClientStopOwner; verify: () => void };
+export function needsConnectedStopPreflight(connection: ClientConnectionState, runtime: RuntimePortState | null): boolean {
+  return connection.kind !== "disconnected" || runtime?.clientLinkOwner !== undefined || runtime?.servingGeneration !== undefined;
+}
+
 const CONNECTED_STOP_PROBE_MS = 2000;
-const unsupportedConnectedStop = () => new ProxyOwnershipRefusedError(
-  "Connected-client stop refused: runtime identity, shutdown preservation or safe runtime absence could not be verified. Inspect 'ocx service status' and update/restart an incompatible runtime through its supervisor, then retry; use 'ocx disconnect' only if you intend to release those integrations.",
+export const unsupportedConnectedStop = () => new ProxyOwnershipRefusedError(
+  "Connected-client stop refused: runtime identity, saved connection ownership, shutdown preservation or safe runtime absence could not be verified. No process was stopped by this check. Inspect 'ocx service status', repair saved connection ownership or update/restart an incompatible runtime through its supervisor, then retry. Use 'ocx disconnect' only if you intend to release those integrations.",
   "connected_client_stop_unsupported",
 );
 
 /** Require the pinned runtime's proof before accepting its shutdown contract. */
 export async function assertConnectedClientStopSupported(
   target: ConnectedStopTarget | null, options: { requireLinkStopFence?: boolean } = {},
-): Promise<void> {
+): Promise<{ linkStopFence: boolean; nativeClient: boolean } | null> {
   if (!target) throw unsupportedConnectedStop();
-  if (!isProcessAlive(target.pid)) return; // A manager may already have ended this exact target.
+  if (!isProcessAlive(target.pid)) return null; // A manager may already have ended this exact target.
   const runtime = readRuntimePort(target.pid);
   if (!runtime?.attestationSecret || runtime.pid !== target.pid || runtime.port !== target.port
     || gracefulStopHost(runtime.hostname) !== gracefulStopHost(target.hostname)) throw unsupportedConnectedStop();
@@ -77,9 +83,10 @@ export async function assertConnectedClientStopSupported(
     }
     const health = await readDocument(response);
     if (!readPinnedRuntime() || health?.service !== "opencodex" || health.pid !== target.pid) throw unsupportedConnectedStop();
-    if (options.requireLinkStopFence && health.linkStopFence !== true) throw unsupportedConnectedStop();
+    const linkStopFence = health.linkStopFence === true;
+    if (options.requireLinkStopFence && !linkStopFence) throw unsupportedConnectedStop();
     // A native listener proves its contract on health and has no /api/stop route.
-    if (health.role === "client") return;
+    if (health.role === "client") return { linkStopFence, nativeClient: true };
     const remaining = deadline - Date.now();
     if (remaining <= 0) throw unsupportedConnectedStop();
     const read = await fetchBoundLocalManagementRead({ ...endpoint, source: "runtime" }, LOCAL_MANAGEMENT_READ_PATHS.stop, {
@@ -88,7 +95,7 @@ export async function assertConnectedClientStopSupported(
     if (read.kind !== "response") throw unsupportedConnectedStop();
     const capability = await readDocument(read.response);
     if (readPinnedRuntime() && capability?.schema === "ocx-stop-capabilities/1"
-      && capability.pid === target.pid && capability.connectedClientOwnership === true) return;
+      && capability.pid === target.pid && capability.connectedClientOwnership === true) return { linkStopFence, nativeClient: false };
   } catch { /* A missing or replaced runtime never grants shutdown authority. */ }
   throw unsupportedConnectedStop();
 }
@@ -97,13 +104,18 @@ export async function assertConnectedClientStopSupported(
 export async function preflightConnectedClientStop(
   approved: ConnectedStopTarget | undefined, onFence: (finish: () => Promise<void>) => void,
   inheritedTeardowns?: readonly OutstandingTeardown[],
+  onLinkStop?: (preflight: LinkStopPreflight) => void,
 ): Promise<StopOutcome | "already-stopped" | null> {
   try {
     const connection = readClientConnectionState();
+    if (connection.kind === "invalid" || connection.kind === "mismatched") throw unsupportedConnectedStop();
     let target = approved;
     if (!target) {
-      const pid = readPid();
-      const runtime = readRuntimePort(pid ?? undefined);
+      const trackedPid = readPid();
+      const runtime = readRuntimePort(trackedPid ?? undefined);
+      // A native Child's attested record can identify it even if generic start-argv
+      // inspection cannot reconstruct its installation path.
+      const pid = trackedPid ?? (runtime?.servingGeneration ? runtime.pid : undefined);
       if (pid && isProcessAlive(pid)) {
         if (!runtime) throw unsupportedConnectedStop();
         target = { ...runtime, pid };
@@ -128,8 +140,12 @@ export async function preflightConnectedClientStop(
     }
     if (!isProcessAlive(target.pid)) throw unsupportedConnectedStop();
     const pinned = readRuntimePort(target.pid);
-    await assertConnectedClientStopSupported(target, { requireLinkStopFence: connection.kind === "connected" && connection.value.transport === "link" });
-    if (connection.kind === "connected" && connection.value.transport === "link") {
+    const savedLink = connection.kind === "connected" && connection.value.transport === "link";
+    const capability = await assertConnectedClientStopSupported(target, { requireLinkStopFence: savedLink || pinned?.clientLinkOwner !== undefined });
+    if (!capability || (capability.nativeClient && connection.kind === "disconnected" && !capability.linkStopFence)) throw unsupportedConnectedStop();
+    if (savedLink || pinned?.clientLinkOwner !== undefined || capability.linkStopFence) {
+      const link = connection.kind === "connected" && linkStopConnectionOwner(connection.value);
+      if (!link || pinned?.clientLinkOwner !== link || loadConfig().port !== target.port) throw unsupportedConnectedStop();
       // A native Child has no /api/stop refusal: SIGTERM can escalate to SIGKILL.
       // Refuse known inherited restore blockers before any manager or kill step.
       const { readLinkInheritedTeardowns } = await import("../client/stop-native-handoff");
@@ -148,28 +164,40 @@ export async function preflightConnectedClientStop(
       if (!pinned?.attestationSecret || !Bun.deepEquals(readRuntimePort(target.pid), pinned, true)) throw unsupportedConnectedStop();
       const { finishClientRuntimeStop, markClientRuntimeStopping, markClientRuntimeStoppingWithRetry } = await import("../client/sync-runtime");
       const { restoreLinkFileRouting } = await import("../client/stop-file-routing");
+      const { readClientStopProcessStart } = await import("../client/stop-teardown-owner");
+      const startTime = readClientStopProcessStart(process.pid);
+      if (!startTime) throw unsupportedConnectedStop();
+      const owner = { pid: process.pid, startTime, nonce: randomBytes(16).toString("hex") };
       const identity = { pid: target.pid, port: target.port, attestationSecret: pinned.attestationSecret };
       // The CLI holds its ownership mutation lease through this finalizer. A retained listener
       // can distinguish a finished stop from one still about to call a manager or kill fallback.
       onFence(async () => {
-        const finished = await markClientRuntimeStoppingWithRetry(identity, { mark: () => finishClientRuntimeStop(identity) });
+        const finished = await markClientRuntimeStoppingWithRetry(identity, { mark: () => finishClientRuntimeStop(identity, owner) });
         if (!finished) console.warn("The retained Child's stop state could not be finalized; repair its runtime record before retrying recovery.");
       });
-      const stopping = { ...pinned, clientStopping: true, clientStopRequested: true };
+      const stopping = { ...pinned, clientStopping: true, clientStopRequested: true, clientStopOwner: owner };
       const checkRuntime = () => {
-        if (!Bun.deepEquals(readRuntimePort(target!.pid), stopping, true)) throw new Error("client_runtime_changed");
+        if (!Bun.deepEquals(readRuntimePort(identity.pid), stopping, true)) throw new Error("client_runtime_changed");
       };
+      const guard = stopRestoreWriteGuard(connection.value);
       const fenced = await markClientRuntimeStoppingWithRetry(identity, {
-        mark: () => stopRestoreWriteGuard(connection.value).run(() => {
-          const current = readRuntimePort(target!.pid);
+        mark: () => guard.run(() => {
+          const current = readRuntimePort(identity.pid);
           if (!Bun.deepEquals(current, pinned, true) && !Bun.deepEquals(current, stopping, true)) throw new Error("client_runtime_changed");
           // The marker is checked by every sync commit, including already admitted work.
-          markClientRuntimeStopping({ pid: target!.pid, port: target!.port, attestationSecret: pinned.attestationSecret! }, { explicitStop: true });
+          markClientRuntimeStopping(identity, owner);
         }),
       });
       try {
         if (!fenced) throw new Error("the runtime sync fence could not be verified");
         await restoreLinkFileRouting(connection.value, { beforeWrite: checkRuntime });
+        onLinkStop?.({ target, owner, verify: () => {
+          try { guard.run(() => {
+            checkRuntime();
+            if (loadConfig().port !== identity.port) throw new Error("client_route_port_changed");
+          }); }
+          catch { throw unsupportedConnectedStop(); }
+        } });
       } catch (error) {
         throw new ProxyOwnershipRefusedError(`Link Child file routing restore refused: ${error instanceof Error ? error.message : "restoration failed"}. No process was stopped. ${fenced ? "Sync remains fenced; " : ""}repair the client configuration or ownership evidence, then retry ocx stop.`, "link_file_restore_refused");
       }

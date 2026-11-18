@@ -100,6 +100,11 @@ test("a parent stop admitted before a recovery timer fires prevents the schedule
   expect(result).toMatchObject({ role: "client", spawned: 0, state: "disconnected", phase: "complete", marker: true, runtimePresent: true });
 }, 20_000);
 
+test("a stale stop owner cannot block completed disconnect recovery", async () => {
+  const result = await runRecovery("parent-stale-owner");
+  expect(result).toMatchObject({ recoveryAdmission: 202, role: "standalone", spawned: 1, phase: "complete" });
+}, 20_000);
+
 test("a refused signal stop can reschedule a canceled recycle after disconnect recovery", async () => {
   const result = await runRecovery("signal-pending-recycle");
   expect(result).toMatchObject({ firstRecycleTimers: 1, beforeRecoveryAdmission: 409, recoveryRecycleTimers: 1,
@@ -325,6 +330,20 @@ test("owned Link full restore is idempotent and retains connection credentials",
   expect(report.grokAfter).toBe('theme = "fixture"\n');
 });
 
+for (const stopConnectionDrift of ["invalid", "mismatched", "disconnected", "other-link", "hub"]) {
+  test(`ocx stop refuses a live Link Child with ${stopConnectionDrift} saved ownership`, async () => {
+    const report = await runStop({ mode: "file-stop", fileClients: ["pi"], stopConnectionDrift, expectedUnsupportedStop: true });
+    expect(report.result).toEqual({ exitCode: 1, calls: { service: 0, killed: 0 }, bound: true, stopping: false });
+    expect(report.fileAfter).toEqual(report.fileOwnedBytes);
+  }, 20_000);
+}
+
+test("ocx stop rechecks Link ownership before forced fallback after an unanswered stop", async () => {
+  const report = await runStop({ mode: "file-stop", fileClients: ["pi"], driftDuringFallback: true, expectedUnsupportedStop: true });
+  expect(report.result).toEqual({ exitCode: 1, calls: { service: 1, killed: 0 }, bound: true, stopping: true });
+  expect(report.fileAfter.pi).not.toContain("127.0.0.1");
+}, 20_000);
+
 for (const mutation of ["connection", "selection", "journal", "process-journal", "unverified", "rotation", "hub"]) {
   test(`Link restore refuses ${mutation} evidence without touching its files`, async () => {
     const report = await runStop({ mode: "helper", mutation });
@@ -394,7 +413,7 @@ for (const preserve of ["service", "desktop", "sibling"]) {
   }, 20_000);
 }
 
-for (const receiptState of ["live", "abandoned", "quarantined", "invalid", "parent-invalid", "parent-start", "parent-status", "parent-unfenced", "parent-finished", "parent-port", "parent-host", "parent-guessed", "parent-oversized", "parent-nonregular", ...(process.platform === "win32" ? [] : ["parent-symlink"])]) {
+for (const receiptState of ["live", "abandoned", "quarantined", "invalid", "parent-invalid", "parent-start", "parent-status", "parent-unfenced", "parent-finished", "parent-port", "parent-host", "parent-guessed", "parent-oversized", "parent-nonregular", "parent-reused", "parent-wrong-nonce", ...(process.platform === "win32" ? [] : ["parent-symlink"])]) {
   test(`an unverified native teardown (${receiptState}) cleans files but retains its listener`, async () => {
     const report = await runStop({ mode: "runtime", preserve: "receipt", receiptState, fileClients: ["pi"],
       observeNativeRefusal: true, expectedRefusal: true });
@@ -436,7 +455,7 @@ for (const receiptState of ["abandoned", "abandoned-dead-other", "quarantined"])
   }, 20_000);
 }
 
-for (const receiptState of ["parent", "parent-stale"]) {
+for (const receiptState of ["parent", "parent-stale", "parent-spaced"]) {
   test(`an active native stop (${receiptState}) defers only native restoration after file cleanup`, async () => {
     const report = await runStop({ mode: "runtime", preserve: "receipt", receiptState, fileClients: ["pi"] });
     expect(report.result).toEqual({ atListenerStop: true });

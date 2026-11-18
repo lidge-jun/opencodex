@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { assertNotRealHomeUnderTest } from "../lib/test-home-guard";
 import { atomicWriteFile } from "./atomic-write";
 import { getConfigDir } from "./paths";
+import type { ClientStopOwner } from "./process-state";
 
 /**
  * Ownership receipt for a deferred shared teardown (#3008).
@@ -30,6 +31,8 @@ import { getConfigDir } from "./paths";
 export type PendingTeardownReceipt = {
   /** Process that accepted the obligation, so a live owner is distinguishable from a dead one. */
   ownerPid: number;
+  /** Optional process incarnation on claims bound to an active Link stop fence. */
+  ownerStartTime?: string;
   /** Identity of this claim; also its filename, which is what makes a clear a single-syscall delete. */
   nonce: string;
   /** ISO timestamp, for diagnostics only; recovery is decided by liveness, not by age. */
@@ -132,6 +135,8 @@ export function isValidPendingTeardownReceipt(value: unknown, nonce: string): va
     // The body must agree with the name: a receipt whose nonce was edited to name a
     // different claim would let a request authorize a deferral it does not own.
     && receipt.nonce === nonce
+    && (receipt.ownerStartTime === undefined || (typeof receipt.ownerStartTime === "string"
+      && receipt.ownerStartTime.length > 0 && receipt.ownerStartTime.length <= 80))
     && typeof receipt.createdAt === "string"
     && (receipt.endpointSource === "exact" || receipt.endpointSource === "guessed")
     && (receipt.handover === undefined || receipt.handover === "update-restart")
@@ -145,12 +150,17 @@ export function claimPendingTeardown(
   ownerPid: number = process.pid,
   handover?: "update-restart",
   partA?: PendingTeardownPartA | null,
+  stopOwner?: ClientStopOwner,
 ): PendingTeardownReceipt {
   const dir = getConfigDir();
   assertNotRealHomeUnderTest(dir);
-  const nonce = randomBytes(16).toString("hex");
+  if (stopOwner && (stopOwner.pid !== ownerPid || endpointSource !== "exact" || !/^[a-f0-9]{32}$/.test(stopOwner.nonce))) {
+    throw new Error("invalid Link stop receipt owner");
+  }
+  const nonce = stopOwner?.nonce ?? randomBytes(16).toString("hex");
   const receipt: PendingTeardownReceipt = {
     ownerPid, nonce, createdAt: new Date().toISOString(), endpoint, endpointSource,
+    ...(stopOwner ? { ownerStartTime: stopOwner.startTime } : {}),
     ...(handover ? { handover } : {}),
     ...(partA ? { partA } : {}),
   };

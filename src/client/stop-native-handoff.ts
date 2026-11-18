@@ -3,11 +3,11 @@ import { join } from "node:path";
 import { isPendingTeardownAbandoned, isValidPendingTeardownReceipt, type OutstandingTeardown, type PendingTeardownReceipt } from "../config/pending-teardown";
 import { isAnyTeardownObligationFileName, pendingTeardownNonceFromFileName } from "../config/pending-teardown-names.mjs";
 import { getConfigDir } from "../config/paths";
-import { isLikelyOcxProcess, type RuntimePortState } from "../config/process-state";
+import { isLikelyOcxProcess, type ClientStopOwner, type RuntimePortState } from "../config/process-state";
 import { readBoundedRegularFileSync } from "../lib/bounded-file-read";
 import { isProcessAlive } from "../lib/process-control";
 import { readSyncRuntime } from "./sync-runtime";
-import { isLiveClientStopOwner } from "./stop-teardown-owner";
+import { isLiveClientStopOwner, readClientStopProcessStart } from "./stop-teardown-owner";
 
 export type LinkStopRuntime = Required<Pick<RuntimePortState, "pid" | "port" | "attestationSecret">>;
 export type NativeTeardownDecision = "restore" | "defer" | "refuse";
@@ -40,8 +40,21 @@ export function readLinkNativeTeardownEvidence(): NativeTeardownEvidence[] {
 export function readLinkInheritedTeardowns(): OutstandingTeardown[] {
   return readLinkNativeTeardownEvidence().flatMap<OutstandingTeardown>(read => {
     if (read.state === "quarantined") return [];
+    if (read.state === "valid" && read.receipt.ownerStartTime) {
+      const { ownerPid: pid, ownerStartTime: startTime, nonce } = read.receipt;
+      const ours = pid === process.pid && readClientStopProcessStart(pid) === startTime;
+      return ours || isLiveClientStopOwner({ pid, startTime, nonce }) ? [] : [read];
+    }
     return isPendingTeardownAbandoned(read, pid => isProcessAlive(pid) && isLikelyOcxProcess(pid)) ? [read] : [];
   });
+}
+
+/** Before a receipt is issued, the bound owner already excludes concurrent recycle. */
+export function activeClientStopOwner(runtime: RuntimePortState): ClientStopOwner | undefined {
+  const owner = runtime.clientStopOwner;
+  if (runtime.clientStopping && runtime.clientStopRequested && owner && /^[a-f0-9]{32}$/.test(owner.nonce)
+    && typeof owner.startTime === "string" && owner.startTime.length > 0
+    && owner.startTime.length <= 80 && isLiveClientStopOwner(owner)) return owner;
 }
 
 /** Receipts alone never release a socket still named by native loopback routing. */
@@ -59,17 +72,12 @@ export function linkNativeTeardownDecision(expected?: LinkStopRuntime): NativeTe
     if (evidence.some(read => read.state === "invalid" || read.state === "unscannable"
       || read.state === "valid" && (read.receipt.endpointSource !== "exact"
         || read.receipt.endpoint.port !== expected.port || host(read.receipt.endpoint.hostname) !== "127.0.0.1"))) return "refuse";
-    for (const read of evidence) {
-      if (read.state !== "valid") continue;
-      try {
-        const { path, bytes, receipt } = read;
-        if (!isLiveClientStopOwner(receipt.ownerPid)) continue;
-        // Same-endpoint stale claims and quarantined evidence remain for the
-        // parent's recovery; recognized restoration blockers never earn a deferral.
-        if (readBoundedRegularFileSync(path, 4 * 1024).equals(bytes)
-          && Bun.deepEquals(readSyncRuntime(), runtime, true)) return "defer";
-      } catch { /* another receipt may still identify the current live parent */ }
-    }
+    const owner = activeClientStopOwner(runtime);
+    const claim = owner && evidence.find(read => read.state === "valid"
+      && read.receipt.nonce === owner.nonce && read.receipt.ownerPid === owner.pid
+      && read.receipt.ownerStartTime === owner.startTime);
+    if (claim?.state === "valid" && readBoundedRegularFileSync(claim.path, 4 * 1024).equals(claim.bytes)
+      && Bun.deepEquals(readSyncRuntime(), runtime, true)) return "defer";
   } catch { /* unreadable or replaced runtime evidence is not an active parent */ }
   return "refuse";
 }
