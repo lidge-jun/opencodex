@@ -58,7 +58,7 @@ describe("config options and the Gemini proof", () => {
     expect(proveModel(s, "initial", "gemini-b")).toMatchObject({ ok: true, target: { value: "gemini-b" } });
     expect(proveModel(s, "initial", "claude-x")).toEqual({ ok: false, reason: "requested_not_offered" });
     // selected: the current value must be the requested target.
-    expect(proveModel(s, "selected", "gemini-b", { value: "gemini-b", name: "gemini-b" })).toEqual({ ok: false, reason: "not_requested" });
+    expect(proveModel(s, "selected", "gemini-b")).toEqual({ ok: false, reason: "not_requested" });
     expect(proveModel(state("claude-x", ["gemini-a", "claude-x"]), "selected", undefined)).toEqual({ ok: false, reason: "not_gemini" });
     expect(proveModel(state("??", ["gemini-a"]), "pending", "gemini-a")).toEqual({ ok: false, reason: "unknown_current" });
     expect(proveModel([], "selected", "gemini-a")).toEqual({ ok: false, reason: "no_selector" });

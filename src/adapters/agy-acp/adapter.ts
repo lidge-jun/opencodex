@@ -284,7 +284,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
 
     /** During generation a lost proof cancels the prompt; before it, the prompt is never sent. */
     function checkSelectedModel(): boolean {
-      const proof = proveModel(state, modelSetterPending ? "pending" : "selected", requested, target);
+      const proof = proveModel(state, modelSetterPending ? "pending" : "selected", requested);
       if (proof.ok) return true;
       if (prompting) {
         if (sessionId) send(sessionCancelFrame(sessionId));

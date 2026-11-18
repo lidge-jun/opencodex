@@ -588,6 +588,19 @@ describe("agy acp turn", () => {
     expect(errorCode(h)).toBe("agy_acp_model_unproven");
   });
 
+  test("a thinking-level reply cannot reuse the opaque model ID for another Gemini model", async () => {
+    const initial = [{ ...modelOption("g1", []), options: [{ value: "g1", name: "Gemini 3.8 Flash" }] }, thoughtOption("high")];
+    const h = await run(script((frame, api) => {
+      if (frame.method !== "session/set_config_option") return;
+      api.reply(frame.id, { configOptions: [
+        { ...initial[0], options: [{ value: "g1", name: "Gemini 4 Argon" }] }, thoughtOption("low"),
+      ] });
+      return true;
+    }, { initial }), { parsed: parsed({}, "low") });
+    expect(methods(h)).not.toContain("session/prompt");
+    expect(errorCode(h)).toBe("agy_acp_model_unproven");
+  });
+
   test("grouped values and a category-less model selector are matched by value", async () => {
     const grouped = { id: "model", name: "Model", type: "select", currentValue: "g-flash", options: [
       { group: "fast", name: "Fast", options: [{ value: "g-flash", name: "Gemini 3.8 Flash" }] },

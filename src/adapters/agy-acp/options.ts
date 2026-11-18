@@ -134,7 +134,7 @@ export type ModelProof =
  * - selected (after the setter, before and during the prompt): the current value is the requested
  *   option (or, without a request, a Gemini option).
  */
-export function proveModel(state: readonly AcpConfigOption[], phase: ModelPhase, requested: string | undefined, target?: AcpSelectValue): ModelProof {
+export function proveModel(state: readonly AcpConfigOption[], phase: ModelPhase, requested: string | undefined): ModelProof {
   const found = findSelector(state, "model");
   if (!found.ok) return { ok: false, reason: found.reason === "missing" ? "no_selector" : "ambiguous_selector" };
   const selector = found.selector;
@@ -148,6 +148,9 @@ export function proveModel(state: readonly AcpConfigOption[], phase: ModelPhase,
     return { ok: true, selector, target: match.value };
   }
   if (!isGeminiValue(current)) return { ok: false, reason: "not_gemini" };
-  if (target && current.value !== target.value) return { ok: false, reason: "not_requested" };
+  if (requested !== undefined) {
+    const match = matchValue(selector.values.filter(isGeminiValue), [requested]);
+    if (!match.ok || current.value !== match.value.value) return { ok: false, reason: "not_requested" };
+  }
   return { ok: true, selector, target: current };
 }

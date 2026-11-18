@@ -84,7 +84,9 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   `src/server/responses/agy-acp-preflight.ts` answers those with a 403 before sidecars run, and `runTurn` repeats the
   check before any probe or spawn. Each `session/prompt` reserves and reports one physical inference send from
   the shared request budget, including a retried turn. Model selection is phase-aware and fails closed when the Gemini model is not
-  confirmed. Permission requests are answered `cancelled`. Selection errors use fixed text. Answer and reasoning
+  confirmed against the current complete selector, including after a reply that reuses an opaque model ID.
+  Selection rejects oversized snapshots and nested groups. Permission requests are answered `cancelled`.
+  Selection errors use fixed text. Answer and reasoning
   deltas each pass through a bounded streaming redactor for minted OpenCodex credentials, Bearer values, and
   token-shaped JWT and API-key strings. Long values stay masked across frames, and buffered chunks still report
   activity to the streaming watchdog. Header names and their surrounding
