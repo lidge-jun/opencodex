@@ -13,8 +13,8 @@ export function aggregateAttemptUsage(
 ): FinalizedUsageResult {
   // A usage-less attempt that never reached upstream spent nothing (summary.ts `spentNothing`),
   // so it cannot leave the row's usage unknown.
-  const measured = attempts.filter(attempt => attempt.usage
-    || (attempt.sendCount !== 0 && attempt.locallyAnswered !== true));
+  const dispatched = (attempt: PersistedUsageAttempt) => attempt.sendCount !== 0 && attempt.locallyAnswered !== true;
+  const measured = attempts.filter(attempt => attempt.usage || dispatched(attempt));
   const status: UsageStatus = measured.length > 0
     && measured.every(attempt => attempt.usageStatus === "unsupported")
     ? "unsupported"
@@ -48,7 +48,7 @@ export function aggregateAttemptUsage(
   const cacheCreationInputTokens = sumOptional("cacheCreationInputTokens");
   const cacheCreation1hInputTokens = sumOptional("cacheCreation1hInputTokens");
   const reasoningOutputTokens = sumOptional("reasoningOutputTokens");
-  const providerCredits = sumCreditReadings(measured.map(attempt => attempt.usage?.providerCredits));
+  const providerCredits = sumCreditReadings(attempts.filter(dispatched).map(attempt => attempt.usage?.providerCredits));
   const totalTokens = usages.reduce(
     (sum, usage) => sum + (usageTotalTokens(usage) ?? 0),
     0,

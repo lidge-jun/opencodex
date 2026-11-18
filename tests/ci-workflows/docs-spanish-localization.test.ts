@@ -211,9 +211,9 @@ describe("Spanish documentation localization", () => {
   });
 
   test.each([
-    ["guides/kiro-request-credits.md", "The Combo attempt table shows only the USD amount for each attempt."],
-    ["es/guides/kiro-request-credits.md", "La tabla de intentos del Combo solo muestra el importe en USD de cada intento."],
-  ])("%s describes the USD amount shown for each Combo attempt", (path, description) => {
+    ["guides/kiro-request-credits.md", "The Combo attempt table shows the USD estimate for each attempt and the calculation for each credit-priced attempt."],
+    ["es/guides/kiro-request-credits.md", "La tabla del Combo muestra el costo estimado en USD de cada intento y el cálculo de los intentos con precio por crédito."],
+  ])("%s describes the USD estimate and credit calculation shown per Combo attempt", (path, description) => {
     expect(source(join(root, path))).toContain(description);
   });
 

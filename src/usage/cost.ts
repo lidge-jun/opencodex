@@ -17,6 +17,7 @@ import {
 import type { AttemptTierOutcome, OcxUsage } from "../types";
 import type { PromptLengthPricing } from "../types/provider";
 import { canonicalFastTierMarker } from "../providers/fastwire";
+import { CODEX_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { baseProviderLabel } from "../providers/label";
 import type { PersistedUsageAttempt, UsageStatus } from "./log";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
@@ -94,7 +95,7 @@ export interface AttemptCostEstimate {
   ordinal: number;
   provider: string;
   model: string;
-  tokens: CostTokens;
+  tokens: CostTokens | null;
   price: MatchedPrice;
   cost: CostBreakdown;
   estimated: boolean;
@@ -114,7 +115,7 @@ export interface AttemptCostEstimate {
 }
 
 export interface CostEstimate {
-  tokens: CostTokens;
+  tokens: CostTokens | null;
   cost: CostBreakdown;
   estimated: boolean;
   attempts?: AttemptCostEstimate[];
@@ -630,6 +631,13 @@ function isOpenRouterPriorityLowerBound(
 function creditPriceFor(provider: string, creditPrices: ReadonlyMap<string, number>): number | undefined {
   if (creditPrices.size === 0) return undefined;
   if (activeConfiguredProviders().has(provider)) return creditPrices.get(provider);
+  // Keep a configured alias's own namespace before baseProviderLabel canonicalizes it.
+  const cut = provider.lastIndexOf("-");
+  const ownNamespace = provider.slice(0, cut);
+  const suffix = provider.slice(cut + 1);
+  if (cut > 0 && (suffix === "main" || CODEX_ACCOUNT_LOG_LABEL_RE.test(suffix))
+    && activeConfiguredProviders().has(ownNamespace)
+    && baseProviderLabel(provider) !== provider) return creditPrices.get(ownNamespace);
   const namespace = activeAccountPricingProviders().get(provider) ?? baseProviderLabel(provider);
   return creditPrices.get(provider) ?? creditPrices.get(namespace);
 }
@@ -678,17 +686,21 @@ function creditCost(provider: string, usage: OcxUsage, creditPrices: ReadonlyMap
   };
 }
 
+type CostInput = Pick<AttemptCostInput, "provider" | "model" | "usage" | "usageStatus" | "allowModelLevelFallback">;
+
+function hasMeasuredUsage<T extends CostInput>(input: T): input is T & { usage: OcxUsage } {
+  return isMeasuredStatus(input.usageStatus) && !!input.usage;
+}
+
 /**
  * True when this row WOULD have a credit price but its credits or price cannot produce a
  * representable charge. Exported so the management DTO can name that failure instead of reporting
  * the generic unmatched-price reason, which would imply a token estimate exists.
  */
-export function creditChargeUnrepresentable(
-  provider: string,
-  usage: OcxUsage,
-  creditPrices: ReadonlyMap<string, number> = activeCreditPrices(),
-): boolean {
-  return creditCost(provider, usage, creditPrices).kind === "unrepresentable";
+export function creditChargeUnrepresentable(input: CostInput): boolean {
+  return hasMeasuredUsage(input)
+    && creditCost(input.provider, input.usage, activeCreditPrices()).kind === "unrepresentable"
+    && !!resolveMatchedPrice(input.provider, input.model, undefined, undefined, input);
 }
 
 /**
@@ -699,7 +711,7 @@ function resolveAttemptCost(
   provider: string,
   usage: OcxUsage,
   creditPrices: ReadonlyMap<string, number>,
-  tokens: CostTokens,
+  tokens: CostTokens | null,
   cost4: Cost4,
 ): { cost: CostBreakdown; billing?: CreditBilling } | null {
   // The token bound is applied only on the token path. A credit charge is `credits x price`, so a
@@ -711,7 +723,7 @@ function resolveAttemptCost(
   // A token estimate is `rate x tokens / 1e6`, and the rate bound alone leaves a corrupt token
   // count free to produce `Infinity`, which JSON serializes as `null`. Fail closed instead of
   // returning an invented number.
-  if (!costTokensWithinBound(tokens)) return null;
+  if (!tokens || !costTokensWithinBound(tokens)) return null;
   return { cost: calculateCost(tokens, cost4) };
 }
 
@@ -722,9 +734,8 @@ export function estimateAttemptCost(
   userOverlays: readonly ExpectedPriceOverlay[] = activeUserCostOverlays(),
   creditPrices: ReadonlyMap<string, number> = activeCreditPrices(),
 ): AttemptCostEstimate | null {
-  if (!isMeasuredStatus(attempt.usageStatus) || !attempt.usage) return null;
+  if (!hasMeasuredUsage(attempt)) return null;
   const tokens = normalizeCostTokens(attempt.usage);
-  if (!tokens) return null;
   const price = resolveMatchedPrice(attempt.provider, attempt.model, overlays, userOverlays, attempt);
   if (!price) return null;
   const attemptServiceTier = attempt.tierOutcome
@@ -751,7 +762,7 @@ export function estimateAttemptCost(
     tokens,
     price,
     cost: billed.cost,
-    estimated: isEstimated(attempt.usage, attempt.usageStatus, price.status),
+    estimated: isEstimated(attempt.usage, attempt.usageStatus, billed.billing ? "verified" : price.status),
     ...(multiplier !== 1 ? { priorityMultiplier: multiplier } : {}),
     ...(contextTier ? { contextTier } : {}),
     ...(customThresholdApplied ? { customThresholdApplied } : {}),
@@ -821,7 +832,7 @@ function comboIsLowerBound(
 
 /**
  * Combo: price every attempt with its own rate and sum. Fail closed — if ANY
- * attempt is unpriced or unnormalizable, return null rather than a partial sum.
+ * attempt is unpriced, return null rather than a partial sum.
  */
 export function estimateComboCost(
   attempts: readonly AttemptCostInput[],
@@ -836,14 +847,17 @@ export function estimateComboCost(
     if (!estimate) return null;
     estimates.push(estimate);
   }
-  const tokens: CostTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  let tokens: CostTokens | null = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   const cost: CostBreakdown = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
   for (const est of estimates) {
-    tokens.input += est.tokens.input;
-    tokens.output += est.tokens.output;
-    tokens.cacheRead += est.tokens.cacheRead;
-    tokens.cacheWrite += est.tokens.cacheWrite;
-    if (est.tokens.cacheWrite1h) tokens.cacheWrite1h = (tokens.cacheWrite1h ?? 0) + est.tokens.cacheWrite1h;
+    if (!est.tokens) tokens = null;
+    if (tokens && est.tokens) {
+      tokens.input += est.tokens.input;
+      tokens.output += est.tokens.output;
+      tokens.cacheRead += est.tokens.cacheRead;
+      tokens.cacheWrite += est.tokens.cacheWrite;
+      if (est.tokens.cacheWrite1h) tokens.cacheWrite1h = (tokens.cacheWrite1h ?? 0) + est.tokens.cacheWrite1h;
+    }
     cost.input += est.cost.input;
     cost.output += est.cost.output;
     cost.cacheRead += est.cost.cacheRead;
@@ -852,7 +866,7 @@ export function estimateComboCost(
   }
   // A sum of individually representable charges can still leave the representable range. Fail
   // closed rather than serve a total that serializes as null.
-  if (!Number.isFinite(cost.total) || Object.values(tokens).some(value => !Number.isFinite(value))) return null;
+  if (!Number.isFinite(cost.total) || (tokens && Object.values(tokens).some(value => !Number.isFinite(value)))) return null;
   const billing = comboBilling(estimates, cost.total);
   return {
     tokens,
@@ -883,9 +897,8 @@ export function estimateRequestCost(
   userOverlays: readonly ExpectedPriceOverlay[] = activeUserCostOverlays(),
   creditPrices: ReadonlyMap<string, number> = activeCreditPrices(),
 ): CostEstimate | null {
-  if (!isMeasuredStatus(input.usageStatus) || !input.usage) return null;
+  if (!hasMeasuredUsage(input)) return null;
   const tokens = normalizeCostTokens(input.usage);
-  if (!tokens) return null;
   const price = resolveMatchedPrice(input.provider, input.model, overlays, userOverlays, input);
   if (!price) return null;
   const [tieredCost4, contextTier, contextPriorityLowerBound, customThresholdApplied] = applyPromptLengthPricing(
@@ -906,7 +919,7 @@ export function estimateRequestCost(
     tokens,
     price,
     cost: billed.cost,
-    estimated: isEstimated(input.usage, input.usageStatus, price.status),
+    estimated: isEstimated(input.usage, input.usageStatus, billed.billing ? "verified" : price.status),
     ...(multiplier !== 1 ? { priorityMultiplier: multiplier } : {}),
     ...(contextTier ? { contextTier } : {}),
     ...(customThresholdApplied ? { customThresholdApplied } : {}),

@@ -257,13 +257,15 @@ test("rendered small mixed floor does not overstate its bound", async () => {
   finally { await act(async () => root.unmount()); }
 });
 
-test("rendered tiny credit is nonzero", async () => {
-  const row = creditRow("tiny-credit") as unknown as { displayMetrics: { cost: { estimate: { cost: { total: number }; billing: { providerCredits: number } } } } };
-  row.displayMetrics.cost.estimate.billing.providerCredits = 1e-7;
-  mockLogs([row]);
-  const { root } = await mountAndOpen("tiny-credit");
-  try { expect(costSection().textContent).toContain("0.0000001"); }
-  finally { await act(async () => root.unmount()); }
+test("a tiny credit estimate stays positive in the table and detail", async () => {
+  mockLogs([creditRow("tiny-credit", 1e-7)]);
+  const { root, container } = await mountAndOpen("tiny-credit");
+  try {
+    expect(container.querySelector("tbody")?.textContent).toContain("<$0.0001");
+    expect(costSection().textContent).toContain("<$0.0001");
+    expect(costSection().querySelector(".log-detail-credit-billing")?.textContent)
+      .toContain("0.0000001 credits × $0.04 per credit");
+  } finally { await act(async () => root.unmount()); }
 });
 
 

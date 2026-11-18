@@ -141,3 +141,5 @@ generated V1 provider `options` and V2 provider `settings`: `headerTimeoutMs` ma
 milliseconds or `false` pass through; unset fields retain the client's native defaults. These
 are provider-wide settings, including public and local models multiplexed through that provider.
 The builder remains pure; managed writes retain the existing ownership and snapshot rules.
+
+Web-search fallback fetches record dispatch after local pacing admits the send and checks cancellation. A rejected admission neither spends a send nor creates missing credit evidence.

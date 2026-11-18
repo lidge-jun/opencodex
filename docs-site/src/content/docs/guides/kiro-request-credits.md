@@ -4,11 +4,12 @@ description: Kiro completion guardrails and refusals, the credit metering openco
 ---
 
 On tool-enabled turns, opencodex holds Kiro's ordinary text until completion is validated.
-If Kiro ends with plain text instead of its private final-answer tool, one bounded retry
-still runs, and only the resulting final answer is displayed. Progress accompanying a real
-tool call remains visible. A normal private final answer needs no completion retry.
+If Kiro reports `END_TURN` with plain text and no real tool call or private final-answer
+call, opencodex can make one bounded retry and display the resulting final answer. A
+`MAX_TOKENS` stop ends the turn as incomplete without another send. Progress accompanying
+a real tool call remains visible. A normal private final answer needs no completion retry.
 
-When Kiro's safety filter stops a turn (`CONTENT_FILTERED`, for example the Claude `BIO` classifier), the request ends as a refusal that clients do not retry: Claude clients see `stop_reason: "refusal"` and Codex sees a failed response carrying Kiro's category and explanation. If the filter stops the bounded retry, no final answer is displayed; the progress held from the first attempt and any partial text from the retry are shown as commentary before the refusal.
+When Kiro's safety filter stops a turn (`CONTENT_FILTERED`, for example the Claude `BIO` classifier), the request ends as a refusal that clients do not retry: Claude clients see `stop_reason: "refusal"` and Codex sees a failed response carrying Kiro's category and explanation. If the filter stops the bounded retry, no final answer is displayed. On ordinary text turns, held progress and partial text from the retry appear as commentary before the refusal. Structured-output requests receive the refusal without that commentary.
 
 When Kiro emits credit metering, request logs preserve the reported spend as
 `usage.providerCredits`, including in the persisted usage ledger. These are Kiro credits;
@@ -32,8 +33,8 @@ credits are $0.04. Check your own plan rather than copying these two figures.
 With a price set, the estimate for a metered row follows these rules:
 
 - A row that reports credits costs `providerCredits x creditPriceUsd`. Its estimated token counts
-  are still recorded, but they no longer set the price, so a long conversation that Kiro cached
-  reads the way Kiro billed it.
+  are still recorded. The estimate follows the credit reading even if the token breakdown
+  cannot be normalized.
 - A row with no credits and no output has an unavailable cost: no output does not prove the request was free. An explicit zero credit reading remains zero.
 - A row with output but no reported credits keeps the token estimate, because Kiro reported no
   credit spend to price.
@@ -52,7 +53,7 @@ list-price equivalent, prints **Credit-priced total** with the charge as
 otherwise read as `$0.0000` each beside a nonzero total. A Combo whose attempts were not all
 billed the same way — one credit attempt beside a token-priced one, or two credit prices — reports
 **Combined total (per-attempt basis)** and marks the split as mixed, because summing the credits
-would produce a number that matches no price. The Combo attempt table shows only the USD amount for each attempt.
+would produce a number that matches no price. The Combo attempt table shows the USD estimate for each attempt and the calculation for each credit-priced attempt.
 The management API exposes the billing basis in the optional `billing` field on cost estimates.
 
 A credit charge is exact for the configured price, so it never makes a total a lower bound — and it
@@ -64,12 +65,12 @@ its standard rate prints no `≥`.
 ### Bounds and unrepresentable values
 
 `creditPriceUsd` must be **between 0 and 1,000,000**. The management boundary rejects anything else,
-and a hand edit that fails that rule is dropped on load with a warning naming the provider, so the
+and an invalid hand-edited price is dropped on load with a warning about the ignored field. The
 rest of the provider entry still loads. As with model prices, the price is applied when an estimate
 is computed, so editing it re-estimates already-logged rows on the next refresh.
 
 Credits are bounded too — a single attempt may report at most 1,000,000,000 of them — and one
-token bucket of a priced row at most 1,000,000,000,000 tokens. Both bounds are far outside any real
+token bucket used for token pricing at most 1,000,000,000,000 tokens. Both bounds are far outside any real
 plan: the priciest published credit plans are cents per credit, and a single response reports a few
 thousand credits. They exist because bounding the price alone does not keep the product
 representable: `1e308 x 1e308` is `Infinity`, and `JSON.stringify` writes that as `null`.

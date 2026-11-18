@@ -568,11 +568,14 @@ describe("GET /api/logs credit-billed cost", () => {
 
   test("an oversized configured price is rejected before it can price anything", async () => {
     const { configSchema } = await import("../../src/config/schema/config-schema");
-    const parsed = configSchema.safeParse({
-      port: 0,
-      providers: { kiro: { adapter: "kiro", baseUrl: "https://runtime.us-east-1.kiro.dev", authMode: "oauth", creditPriceUsd: 1e308 } },
+    const provider = { adapter: "kiro", baseUrl: "https://runtime.us-east-1.kiro.dev", authMode: "oauth" };
+    const withPrice = (creditPriceUsd: number) => ({
+      port: 0, defaultProvider: "kiro",
+      providers: { kiro: { ...provider, creditPriceUsd } },
     });
-    expect(parsed.success).toBe(false);
+    expect(configSchema.safeParse(withPrice(0.04)).success).toBe(true);
+    const parsed = configSchema.safeParse(withPrice(1e308));
+    expect(parsed.error?.issues.map(issue => issue.path)).toEqual([["providers", "kiro", "creditPriceUsd"]]);
   });
 });
 

@@ -513,12 +513,12 @@ export function sanitizeCreditPriceForLoad(parsed: unknown, warn: (message: stri
   if (!parsed || typeof parsed !== "object") return;
   const providers = (parsed as Record<string, unknown>).providers;
   if (!providers || typeof providers !== "object" || Array.isArray(providers)) return;
-  for (const [name, provider] of Object.entries(providers as Record<string, unknown>)) {
+  for (const provider of Object.values(providers as Record<string, unknown>)) {
     if (!provider || typeof provider !== "object" || Array.isArray(provider)) continue;
     const p = provider as Record<string, unknown>;
     if (p.creditPriceUsd === undefined || isValidCreditPriceUsd(p.creditPriceUsd)) continue;
     delete p.creditPriceUsd;
-    warn(`⚠️  config.json providers.${JSON.stringify(redactSecretString(name))}.creditPriceUsd is invalid — ignoring the credit price`);
+    warn("⚠️  config.json provider has an invalid creditPriceUsd — ignoring the credit price");
   }
 }
 

@@ -331,13 +331,17 @@ proxy does not have:
   token-priced one, or two credit prices), so only the per-attempt estimates have a split; the
   parent total is still their sum.
 
-Absent `billing` means the row was priced from tokens, which is what every older row and every
-non-credit provider reports; clients must keep rendering the token component breakdown in that
-case. A credit-priced row whose credit count or price cannot produce a representable amount is
-`{ "kind": "unavailable", "reason": "credit_cost_unrepresentable" }`, not a token estimate; a Combo
-with one such attempt reports the same reason on the parent rather than the generic
-`combo_attempt_unavailable`. A token-priced row whose token count overflows the estimate is
-`invalid_usage`. See
+Absent `billing` on an available estimate indicates token pricing. A previously recorded row
+with a retained valid reading can get credit pricing at the current configured rate, regardless
+of when it was logged. Positive-output rows without a reading can fall back to tokens. Clients
+can show the token component breakdown when `billing` is absent. For a credit-priced estimate,
+`tokens` is `null` if the token breakdown could not be normalized.
+
+A missing credit reading with zero output, or a count or price that cannot yield a representable
+credit estimate, gives `{ "kind": "unavailable", "reason": "credit_cost_unrepresentable" }`.
+A Combo with an eligible attempt in that state reports the same reason on the parent. Otherwise,
+a Combo with an unpriced attempt reports `combo_attempt_unavailable` on the parent. A token-priced
+row or attempt whose token count exceeds the pricing bound reports `invalid_usage`. See
 [Kiro request credits](/guides/kiro-request-credits/#bounds-and-unrepresentable-values).
 
 Successful `/api/logs` `displayMetrics.decodeTokPerSecond` values carry

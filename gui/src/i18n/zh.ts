@@ -1404,7 +1404,7 @@ export const zh: Record<TKey, string> = {
   "logs.detail.reason.invalid_cache_breakdown": "缓存 token 明细与输入 token 总数冲突。",
   "logs.detail.reason.invalid_usage": "Usage 包含无效的 token 值。",
   "logs.detail.reason.combo_attempt_unavailable": "至少一次 Combo 尝试无法计价。",
-  "logs.detail.reason.credit_cost_unrepresentable": "该行按积分计费，但积分数量与价格相乘无法得到可表示的金额。",
+  "logs.detail.reason.credit_cost_unrepresentable": "缺少可用的积分读数，或无法根据积分和单价计算此费用。",
   "logs.detail.estimate.usage_estimated": "提供方 usage 为估算值。",
   "logs.detail.estimate.cache_detail_missing": "缺少缓存明细；输入费用按上限估算。",
   "logs.detail.estimate.expected_price_overlay": "使用了已验证的 Expected 标价。",

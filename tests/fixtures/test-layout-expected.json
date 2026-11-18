@@ -1589,6 +1589,7 @@
   "web-search-retry-heartbeat.test.ts": "web-search", "web-search-sidecar-429.test.ts": "web-search",
   "web-search-sources.test.ts": "web-search", "web-search-timeout-contract.test.ts": "web-search", "web-search-pacing-deadline.test.ts": "web-search",
   "web-search-timeout-plan.test.ts": "web-search", "web-search.test.ts": "web-search",
+  "web-search-reset-recovery.test.ts": "web-search",
   "win-exec.test.ts": "windows", "win-paths.test.ts": "windows",
   "windows-acl-start-cost.test.ts": "windows",
   "windows-atomic-replace.test.ts": "windows",

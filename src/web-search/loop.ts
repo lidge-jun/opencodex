@@ -210,6 +210,15 @@ function countersOnly(usage: OcxUsage | undefined): OcxUsage | undefined {
   return counters;
 }
 
+function withTerminalUsageMetadata(cumulative: OcxUsage, terminal: OcxUsage | undefined): OcxUsage {
+  const { contextTotalTokens: _context, rawUsage: _raw, ...counters } = cumulative;
+  return {
+    ...counters,
+    ...(terminal?.contextTotalTokens !== undefined ? { contextTotalTokens: terminal.contextTotalTokens } : {}),
+    ...(terminal?.rawUsage !== undefined ? { rawUsage: terminal.rawUsage } : {}),
+  };
+}
+
 /**
  * Collect the thinking block that preceded a web_search call in this iteration's events, so the
  * replayed assistant turn can carry it. Anthropic extended thinking REQUIRES the assistant
@@ -426,10 +435,11 @@ export interface WebSearchLoopDeps {
   configureModelSendAllowance?: (baseSends: number) => void;
   /**
    * After an `on429` rotation, offered the usage of the hidden iterations the left credential
-   * served. Returning true means it was billed to that credential's attempt, so `onUsage` will not
+   * served, including undefined when no usage arrived. Returning true hands off the old attempt,
+   * so `onUsage` will not
    * report it again.
    */
-  onRotatedUsage?: (usage: OcxUsage) => boolean;
+  onRotatedUsage?: (usage: OcxUsage | undefined) => boolean;
   /** Observe the exact adapter request selected for each routed-model iteration. */
   onRequestBuilt?: (request: AdapterRequest) => void;
   /** Request-scoped executor retains the core's selection binding across loop retries. */
@@ -547,13 +557,15 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   let hiddenUsage: OcxUsage | undefined;
   let hiddenLegs = 0;
   let pendingLegs = 0;
+  let errorUsage: OcxUsage | undefined;
   const mergePendingUsage = (previous: OcxUsage | undefined, usage: OcxUsage | undefined): OcxUsage | undefined => {
     if (pendingLegs === 0) return previous;
     const reading = pendingLegs > 1 ? withMissingCreditReading(usage) : usage;
     return mergeUsage(previous, reading, hiddenLegs > 0);
   };
   const takeUsage = (usage: OcxUsage | undefined): void => {
-    hiddenUsage = mergePendingUsage(hiddenUsage, usage);
+    if (pendingLegs === 0) return;
+    hiddenUsage = mergePendingUsage(countersOnly(hiddenUsage), usage);
     hiddenLegs += pendingLegs;
     pendingLegs = 0;
   };
@@ -688,6 +700,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
        * header deadline. The caller owns same-target 429 replays and key rotation around it.
        */
       const fetchOnce = async (requestAdapter: ProviderAdapter, recovery?: AttemptRecoveryKind): Promise<IterationResponse> => {
+        errorUsage = undefined;
         let request: AdapterRequest;
         if (cachedRequest !== undefined && cachedAdapter === requestAdapter) {
           request = cachedRequest;
@@ -706,20 +719,26 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           cachedRequest = request;
           cachedAdapter = requestAdapter;
         }
-        const requestFetch = headerDeadline.pacedFetch(deps.fetchForRequest?.(request, iterParsed, requestAdapter, recovery) ?? routedProviderFetch);
+        const executor = deps.fetchForRequest?.(request, iterParsed, requestAdapter, recovery) ?? routedProviderFetch;
         let response: Response;
+        let awaitingHeaders = true;
         try {
           if (requestAdapter.fetchResponse) {
-            deps.onAttemptSend?.(recovery);
-            pendingLegs++;
             response = await requestAdapter.fetchResponse(request, {
               abortSignal: headerDeadline.signal,
               timeoutMs: connectTimeoutMs,
               returnRawErrors: true,
               stream: true,
               sendBudget: deps.incomingMeta.sendBudget,
-              onPhysicalSend: deps.incomingMeta.onPhysicalSend,
-              executor: requestFetch,
+              onPhysicalSend: send => {
+                // An adapter-owned stream retry's usage is already combined by its parser.
+                if (awaitingHeaders) {
+                  if (send.ordinal === 1) deps.onAttemptSend?.(recovery);
+                  pendingLegs++;
+                }
+                deps.incomingMeta.onPhysicalSend?.(send);
+              },
+              executor: headerDeadline.pacedFetch(executor),
               onRecoveryWithheld: deps.incomingMeta.onRecoveryWithheld,
             });
           } else {
@@ -728,8 +747,10 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
                 // Record every helper-driven send (the callback runs for the first attempt and
                 // each connection-reset replay); preserve the caller's recovery kind
                 // (rate-limit-429 / key-429) when the retry layer supplies none.
-                deps.onAttemptSend?.(retryRecovery ?? recovery);
-                pendingLegs++;
+                const requestFetch = headerDeadline.pacedFetch(executor, () => {
+                  deps.onAttemptSend?.(retryRecovery ?? recovery);
+                  pendingLegs++;
+                });
                 const h = new Headers(request.headers);
                 if (!h.has("accept-encoding")) h.set("accept-encoding", "identity");
                 // A connection-reset replay must leave the half-closed pooled socket, not just
@@ -749,6 +770,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
             );
           }
         } finally {
+          awaitingHeaders = false;
           request.releaseBodyObservation?.();
         }
         bindAnthropicRejectionResponse(request, response);
@@ -834,7 +856,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           iterParsed, prepared.response, hiddenUsage);
         if (!rotated) break;
         takeUsage(undefined);
-        if (hiddenUsage && deps.onRotatedUsage?.(hiddenUsage)) {
+        if (hiddenLegs > 0 && deps.onRotatedUsage?.(hiddenUsage)) {
           hiddenUsage = undefined;
           hiddenLegs = 0;
         }
@@ -936,7 +958,10 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         translatorBudget,
         preserveAdapterError: deps.thinkingRecovery !== undefined,
         // A pass that fails was still billed; the error path reports it with the hidden passes.
-        onErrorUsage: takeUsage,
+        onErrorUsage: usage => {
+          errorUsage = usage;
+          takeUsage(usage);
+        },
       })) {
         if (event.type === "done") {
           anthropicReplay = takeAnthropicReplay(event);
@@ -1382,7 +1407,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
                 ? { type: "error", status: e.status, errorType: "upstream_error", message: e.message }
                 : { type: "error", message: e instanceof Error ? e.message : String(e) });
           // The bridge reports an error only if it carries usage. Settle exactly once.
-          if (!event.usage && hiddenUsage) deps.onUsage?.(hiddenUsage);
+          if (!event.usage && hiddenUsage) deps.onUsage?.(withTerminalUsageMetadata(hiddenUsage, errorUsage));
           yield event;
           return;
         }
@@ -1417,7 +1442,16 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       rawReasoningAsSummary: parsed.options.rawReasoningAsSummary,
       ...(deps.stallTimeoutSec !== undefined ? { stallTimeoutSec: deps.stallTimeoutSec } : {}),
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
-      ...(deps.onUsage ? { onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(mergePendingUsage(countersOnly(hiddenUsage), usage)) } : {}),
+      ...(deps.onUsage ? {
+        onUsage: (usage: OcxUsage | undefined) => {
+          if (pendingLegs > 0) {
+            deps.onUsage?.(mergePendingUsage(countersOnly(hiddenUsage), usage));
+            return;
+          }
+          // The error path already settled this leg's counters; retain only its terminal metadata.
+          deps.onUsage?.(hiddenUsage ? withTerminalUsageMetadata(hiddenUsage, usage) : usage);
+        },
+      } : {}),
       ...(deps.onCompletedResponse ? { onCompletedResponse: deps.onCompletedResponse } : {}),
     },
   );

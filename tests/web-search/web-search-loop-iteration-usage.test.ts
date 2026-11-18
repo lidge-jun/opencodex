@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import type { ProviderAdapter } from "../../src/adapters/base";
+import type { AdapterFetchContext, ProviderAdapter } from "../../src/adapters/base";
 import type { AdapterEvent, OcxParsedRequest, OcxUsage } from "../../src/types";
+import { RequestPacingQueueOverloadError } from "../../src/providers/request-pacing";
+import { createAnthropicThinkingRecovery } from "../../src/server/responses/anthropic-thinking-recovery";
+import type { ProviderFetch } from "../../src/server/responses/fetch-helpers";
 import { runWithWebSearch } from "../../src/web-search/loop";
 import { buildWebSearchTool } from "../../src/web-search/synthetic-tool";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
@@ -20,33 +23,63 @@ const answer = (u?: OcxUsage): AdapterEvent[] => [{ type: "text_delta", text: "a
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
 
-async function drive(passes: AdapterEvent[][], refuseFrom = Infinity) {
+async function drive(passes: AdapterEvent[][], refuseFrom = Infinity, mode?: "replay" | "paced" | "preserve-error" | "stream-retry") {
   spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ results: [] }));
   const reported: (OcxUsage | undefined)[] = [];
   let events: AdapterEvent[] = [];
   let iteration = 0;
+  let physicalSends = 0;
+  let onPhysicalSend: AdapterFetchContext["onPhysicalSend"];
   const adapter: ProviderAdapter = {
     name: "fixture",
     buildRequest() {
       events = passes[iteration++]!;
       return { url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" };
     },
-    fetchResponse: async () => iteration > refuseFrom ? new Response("refused", { status: 500 }) : new Response("wire"),
-    async *parseStream() { yield* events; },
+    ...(mode === "paced" ? {} : {
+      fetchResponse: async (_request, ctx) => {
+        onPhysicalSend = ctx?.onPhysicalSend;
+        const count = mode === "replay" && iteration === 2 ? 2 : 1;
+        for (let ordinal = 1; ordinal <= count; ordinal++) {
+          physicalSends++;
+          ctx?.onPhysicalSend?.({ ordinal, ...(ordinal === 2 ? { recovery: "connection-reset" as const } : {}) });
+        }
+        return iteration > refuseFrom ? new Response("refused", { status: 500 }) : new Response("wire");
+      },
+    }),
+    async *parseStream() {
+      if (mode === "stream-retry" && iteration === 2) {
+        physicalSends++;
+        onPhysicalSend?.({ ordinal: 2, recovery: "empty-completion" });
+      }
+      yield* events;
+    },
   };
   const parsed: OcxParsedRequest = {
     modelId: "fixture", stream: true, options: {}, context: { messages: [], tools: [buildWebSearchTool()] },
   };
+  const pacedFetch = Object.assign(async () => {
+    physicalSends++;
+    return new Response("wire");
+  }, {
+    waitForPacing: async () => {
+      if (iteration > 1) throw new RequestPacingQueueOverloadError("fixture", "queue_full", 1);
+    },
+  }) as ProviderFetch;
   const response = await runWithWebSearch({
     parsed, adapter, backend: "exa", exaApiKey: "fixture", hostedTool: { type: "web_search" },
     settings: { model: "fixture", reasoning: "low", timeoutMs: 1000 }, maxSearches: 1,
     incomingMeta: { headers: new Headers(), translatorBudget: createTestTranslatorBudget() },
     onUsage: u => reported.push(u),
+    ...(mode === "paced" ? { fetchForRequest: () => pacedFetch } : {}),
+    ...(mode === "preserve-error" ? {
+      thinkingRecovery: createAnthropicThinkingRecovery(parsed, new AbortController().signal, { attempted: false }, () => false),
+    } : {}),
   });
   const text = await response.text();
   const terminal = text.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)))
     .find(frame => frame.type === "response.completed" || frame.type === "response.failed");
-  return { reported, text, clientUsage: terminal?.response?.usage };
+  return { reported, text, physicalSends, clientUsage: terminal?.response?.usage };
 }
 
 describe("web-search loop iteration usage", () => {
@@ -119,4 +152,43 @@ describe("web-search loop iteration usage", () => {
     expect(reported[0]?.contextTotalTokens).toBeUndefined();
     expect(reported[0]?.rawUsage).toBeUndefined();
   });
+});
+
+test("an adapter reset replay without a reading makes later credit evidence incomplete", async () => {
+  const { reported, text, physicalSends } = await drive([
+    search("first", usage(10, 2, { providerCredits: 2 })), answer(usage(12, 1, { providerCredits: 3 })),
+  ], Infinity, "replay");
+  expect(text).toContain("response.completed");
+  expect(physicalSends).toBe(3);
+  expect(reported).toEqual([expect.objectContaining({ providerCredits: -1 })]);
+});
+
+test("a pacing refusal leaves the earlier metered search intact", async () => {
+  const { reported, physicalSends } = await drive([
+    search("first", usage(10, 2, { providerCredits: 1.95 })), answer(),
+  ], Infinity, "paced");
+  expect(physicalSends).toBe(1);
+  expect(reported).toEqual([expect.objectContaining({ providerCredits: 1.95 })]);
+});
+
+test("a terminal error keeps its checkpoint and raw usage with counters summed once", async () => {
+  const { reported } = await drive([
+    search("first", usage(100, 2, { contextTotalTokens: 9000, rawUsage: { iteration: 1 } })),
+    [{
+      type: "error", status: 502, code: "fixture_failure", message: "terminal failure",
+      usage: usage(200, 3, { contextTotalTokens: 4096, rawUsage: { iteration: 2 } }),
+    }],
+  ], Infinity, "preserve-error");
+  expect(reported).toEqual([expect.objectContaining({
+    inputTokens: 300, outputTokens: 5, contextTotalTokens: 4096, rawUsage: { iteration: 2 },
+  })]);
+});
+
+test("a stream-owned retry whose reading is already combined contributes only once", async () => {
+  const { reported, text, physicalSends } = await drive([
+    search("first", usage(10, 2, { providerCredits: 2 })), answer(usage(24, 1, { providerCredits: 7 })),
+  ], Infinity, "stream-retry");
+  expect(text).toContain("response.completed");
+  expect(physicalSends).toBe(3);
+  expect(reported).toEqual([expect.objectContaining({ providerCredits: 9 })]);
 });

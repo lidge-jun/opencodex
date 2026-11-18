@@ -773,9 +773,8 @@ export interface OcxProviderConfig {
    */
   modelCosts?: Record<string, ProviderCostOverlay>;
   /**
-   * USD per provider credit (for example Kiro credits). When set, a request whose usage carries
-   * `providerCredits` is costed as credits x this price instead of from its estimated tokens, so
-   * the estimate follows what the provider billed, provider-side caching included.
+   * USD per provider credit (for example Kiro credits). For a model with a matched token price
+   * and a valid `providerCredits` reading, the estimate uses credits × this price.
    */
   creditPriceUsd?: number;
   /**

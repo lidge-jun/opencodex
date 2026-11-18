@@ -1450,7 +1450,7 @@ export const en = {
   "logs.detail.reason.invalid_cache_breakdown": "Cache token details conflict with total input tokens.",
   "logs.detail.reason.invalid_usage": "Usage contains an invalid token value.",
   "logs.detail.reason.combo_attempt_unavailable": "At least one combo attempt could not be priced.",
-  "logs.detail.reason.credit_cost_unrepresentable": "This row is credit-priced, but its credit count and price cannot produce a representable amount.",
+  "logs.detail.reason.credit_cost_unrepresentable": "There is no usable credit reading, or the amount cannot be calculated from the credit count and unit price.",
   "logs.detail.estimate.usage_estimated": "Provider usage is estimated.",
   "logs.detail.estimate.cache_detail_missing": "Cache details were unavailable; input is an upper-bound estimate.",
   "logs.detail.estimate.expected_price_overlay": "A verified expected list price was used.",

@@ -1333,7 +1333,7 @@ export const ja: Record<TKey, string> = {
   "logs.detail.reason.invalid_cache_breakdown": "キャッシュトークンの詳細が合計入力トークンと矛盾しています。",
   "logs.detail.reason.invalid_usage": "使用量に無効なトークン値が含まれています。",
   "logs.detail.reason.combo_attempt_unavailable": "少なくとも 1 つのコンボ試行に価格を設定できませんでした。",
-  "logs.detail.reason.credit_cost_unrepresentable": "この行はクレジット課金ですが、クレジット数と価格を掛けても表現可能な金額になりません。",
+  "logs.detail.reason.credit_cost_unrepresentable": "利用可能なクレジット計測値がないか、クレジット数と単価から金額を計算できません。",
   "logs.detail.estimate.usage_estimated": "プロバイダーの使用量は推定です。",
   "logs.detail.estimate.cache_detail_missing": "キャッシュの詳細が利用できませんでした; 入力は上限の推定です。",
   "logs.detail.estimate.expected_price_overlay": "検証済みの予想定価が使用されました。",

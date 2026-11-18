@@ -231,7 +231,7 @@ test("an unrepresentable credit charge renders the localized reason, never an in
   mockLogs([{
     requestId: "unrepresentable-row", timestamp: 1_700_000_000_000, provider: "kiro", model: "claude-opus-5.5",
     status: 200, durationMs: 2000, usageStatus: "estimated",
-    usage: { inputTokens: 1000, outputTokens: 10, providerCredits: 1e12, estimated: true },
+    usage: { inputTokens: 1000, outputTokens: 10, estimated: true },
     displayMetrics: {
       tokPerSecond: { kind: "value", value: 200, estimated: true },
       cost: { kind: "unavailable", reason: "credit_cost_unrepresentable" },
@@ -243,7 +243,10 @@ test("an unrepresentable credit charge renders the localized reason, never an in
     const section = costSection();
     const text = section.textContent ?? "";
     // The reason key must resolve, not fall through as a raw wire token or a blank.
-    expect(text).toContain("cannot produce a representable amount");
+    expect(section.querySelector("h4")?.textContent).toBe("Estimated cost");
+    expect(section.querySelector(".log-detail-grid > .muted")?.textContent).toBe("Estimated cost");
+    expect(section.querySelector(".log-detail-grid > .mono")?.textContent).toBe("—");
+    expect(text).toContain("There is no usable credit reading");
     expect(text).not.toContain("credit_cost_unrepresentable");
   } finally { await act(async () => { root.unmount(); }); }
 });
@@ -258,10 +261,10 @@ test("a mixed combo names the basis, keeps the total, and hides no zero split", 
     expect(text).toContain("$0.0782");
     expect(text).toContain("Mixed");
     expect(text).not.toContain("$0.0000");
-    // The attempt table shows each USD charge. The credit formula belongs to the total detail.
+    // Each attempt explains the basis of its own USD charge.
     const attempts = document.querySelector(".log-detail-attempts")!;
     expect(attempts.textContent).toContain("$0.0780");
-    expect(attempts.textContent).not.toContain("per credit");
+    expect(attempts.textContent).toContain("1.95 credits × $0.04 per credit");
     expect(attempts.textContent).not.toContain("$0.0000");
   } finally { await act(async () => { root.unmount(); }); }
 });

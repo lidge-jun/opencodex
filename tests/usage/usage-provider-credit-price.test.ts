@@ -50,7 +50,7 @@ describe("provider credit price", () => {
     const estimate = estimateRequestCost({ provider: "kiro", model: "claude-opus-5.5", usage: longTurn, usageStatus: "estimated" });
 
     expect(estimate?.cost.total).toBeCloseTo(1.95 * 0.04, 9);
-    expect(estimate?.tokens.input).toBe(600_000);
+    expect(estimate?.tokens?.input).toBe(600_000);
   });
 
   test("a combo attempt follows the same rule", () => {
@@ -153,7 +153,7 @@ describe("providers.<name>.creditPriceUsd at load time", () => {
 
       expect(parsed.providers.kiro).toEqual({ adapter: "kiro" });
       expect(parsed.providers.other.creditPriceUsd).toBe(0.02);
-      expect(warnings).toEqual(['⚠️  config.json providers."kiro".creditPriceUsd is invalid — ignoring the credit price']);
+      expect(warnings).toEqual(['⚠️  config.json provider has an invalid creditPriceUsd — ignoring the credit price']);
     }
   });
 });
@@ -172,6 +172,7 @@ describe("credit billing provenance", () => {
     refreshUserCostOverlays(kiroConfig());
     const estimate = estimateRequestCost({ provider: "kiro", model: "claude-opus-5.5", usage: longTurn, usageStatus: "estimated" });
 
+    expect(estimate).not.toBeNull();
     expect(estimate?.billing).toBeUndefined();
   });
 
@@ -455,4 +456,67 @@ describe("credit billing does not inherit token-rate lower bounds", () => {
     expect(combo?.attempts?.[1]?.priorityLowerBound).toBeUndefined();
     expect(combo?.priorityLowerBound).toBeUndefined();
   });
+});
+
+test("account-suffixed aliases use the explicitly configured credit namespace", () => {
+  refreshUserCostOverlays({ port: 0, providers: {
+    openai: { adapter: "openai", creditPriceUsd: 0.04 },
+    chatgpt: { adapter: "openai" },
+  } } as unknown as OcxConfig);
+  const estimate = estimateRequestCost({
+    provider: "chatgpt-pabcdef", model: "gpt-5.5", usage: longTurn, usageStatus: "reported",
+  });
+  expect(estimate).not.toBeNull();
+  expect(estimate?.billing).toBeUndefined();
+});
+
+test("matched credit pricing survives an invalid token breakdown on requests and attempts", () => {
+  refreshUserCostOverlays(kiroConfig(0.04));
+  const row = {
+    ordinal: 1, provider: "kiro", model: "claude-opus-5.5", usageStatus: "reported" as const,
+    usage: { inputTokens: 100, outputTokens: 1, cacheReadInputTokens: 101, providerCredits: 2 },
+  };
+  const priced = { cost: { total: 0.08 }, tokens: null };
+  expect(estimateRequestCost(row)).toMatchObject(priced);
+  expect(estimateAttemptCost(row)).toMatchObject(priced);
+  expect(estimateComboCost([row])).toMatchObject(priced);
+  expect(estimateRequestCost({ ...row, model: "kiro-auto" })).toBeNull();
+  refreshUserCostOverlays(kiroConfig());
+  expect(estimateRequestCost(row)).toBeNull();
+  expect(estimateAttemptCost(row)).toBeNull();
+});
+
+test("credit confidence does not inherit a derived token price", () => {
+  refreshUserCostOverlays(kiroConfig(0.04));
+  const row = {
+    ordinal: 1, provider: "kiro", model: "fixture", usageStatus: "reported" as const,
+    usage: { inputTokens: 20, outputTokens: 2, providerCredits: 2 },
+  };
+  const overlays = [{
+    provider: "kiro", modelId: "fixture", source: "fixture", verifiedAt: "2026-11-19",
+    status: "verified-derived" as const, cost4: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+  }];
+  expect(estimateRequestCost(row, overlays)).toMatchObject({ estimated: false, cost: { total: 0.08 } });
+  expect(estimateAttemptCost(row, overlays)).toMatchObject({ estimated: false, cost: { total: 0.08 } });
+  expect(estimateRequestCost({ ...row, usageStatus: "estimated" }, overlays)?.estimated).toBe(true);
+});
+
+test("credit-price diagnostics report the ignored field without printing provider names", async () => {
+  const { configDiagnosticsFromRaw } = await import("../../src/config/diagnostics");
+  const opaqueName = "opaqueFixtureValue";
+  const config = {
+    port: 0, defaultProvider: opaqueName,
+    providers: { [opaqueName]: { adapter: "kiro", baseUrl: "https://runtime.us-east-1.kiro.dev", authMode: "oauth" } },
+  };
+  const diagnosis = (creditPriceUsd: unknown, warn: (message: string) => void) =>
+    configDiagnosticsFromRaw(JSON.stringify({
+      ...config, providers: { [opaqueName]: { ...config.providers[opaqueName], creditPriceUsd } },
+    }), { warn });
+  const warnings: string[] = [];
+  const invalid = diagnosis("0.04", message => warnings.push(message));
+  expect(invalid.source).toBe("file");
+  expect(warnings).toEqual(["⚠️  config.json provider has an invalid creditPriceUsd — ignoring the credit price"]);
+  expect(invalid.warnings).toEqual(warnings);
+  expect(invalid.config.providers[opaqueName]?.creditPriceUsd).toBeUndefined();
+  expect(diagnosis(0, () => { throw new Error("valid zero warned"); }).warnings).toBeUndefined();
 });

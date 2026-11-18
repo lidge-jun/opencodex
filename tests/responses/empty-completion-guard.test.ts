@@ -514,11 +514,13 @@ test.each([[undefined, 3], [2, undefined]])("missing whole attempt usage marks c
 });
 
 test("single attempt retains its credit reading", async () => {
+  let retries = 0;
   const events = await collect(guardEmptyCompletionEventStream({
     firstEvents: eventsOf({ type: "text_delta", text: "answer" }, { type: "done", usage: { inputTokens: 1, outputTokens: 1, providerCredits: 3 } }),
-    continuation: () => { throw new Error("unexpected retry"); },
+    continuation: () => { retries++; throw new Error("unexpected retry"); },
   }));
-  expect((events.at(-1) as Extract<AdapterEvent, { type: "done" }>).usage?.providerCredits).toBe(3);
+  expect(events.at(-1)).toMatchObject({ type: "done", usage: { providerCredits: 3 } });
+  expect(retries).toBe(0);
 });
 
 test("a dispatched retry ending at EOF makes the first credit reading incomplete", async () => {
@@ -553,4 +555,15 @@ test("a continuation rejected before dispatch leaves the first credit reading in
 
 test("an empty accumulator retains the first attempt credit reading", () => {
   expect(mergeUsage(undefined, { inputTokens: 1, outputTokens: 1, providerCredits: 3 })?.providerCredits).toBe(3);
+});
+
+test("post-output EOF on a dispatched retry delivers incomplete credit usage", async () => {
+  const events = await collect(guardEmptyCompletionEventStream({
+    firstEvents: eventsOf({ type: "done", usage: { inputTokens: 1, outputTokens: 0, providerCredits: 2 } }),
+    continuation: async () => eventsOf({ type: "text_delta", text: "partial" }),
+  }));
+  expect(events.filter(event => event.type === "text_delta")).toEqual([{ type: "text_delta", text: "partial" }]);
+  expect(events.at(-1)).toMatchObject({
+    type: "incomplete", reason: "adapter_eof", usage: { providerCredits: -1 },
+  });
 });

@@ -5,7 +5,7 @@ import {
   type TranslatorBudget,
 } from "../../lib/translator-budget";
 import type { AdapterEvent, OcxUsage } from "../../types";
-import { sumCreditReadings } from "../../usage/credit-billing";
+import { sumCreditReadings, withMissingCreditReading } from "../../usage/credit-billing";
 import { recordKiroCalibration, rekeyKiroCalibration } from "../kiro-calibration";
 import {
   KIRO_COMPLETION_TOOL_NAME,
@@ -159,6 +159,7 @@ export type KiroFallbackFactory = (
   assistantText: string,
   sawReasoning: boolean,
   budget: TranslatorBudget,
+  /** Invoked once for each physical send, including transport replays. */
   onDispatch?: () => void,
 ) => Promise<KiroFallbackAttempt>;
 
@@ -1311,14 +1312,14 @@ export async function* parseKiroStream(
     let firstAssistantText = firstResult.assistantText;
     const firstHadAssistantText = firstAssistantText.length > 0;
     let fallback: KiroFallbackAttempt;
-    let fallbackDispatched = false;
+    let fallbackSends = 0;
     try {
       fallback = await fallbackFactory(
         firstResult.providerState?.kiro.conversationId ?? conversationId,
         firstAssistantText,
         firstResult.sawReasoning,
         budget,
-        () => { fallbackDispatched = true; },
+        () => { fallbackSends++; },
       );
     } catch (err) {
       yield* firstResult.drainDeferred(dropHeldProse);
@@ -1332,7 +1333,7 @@ export async function* parseKiroStream(
           status: 502,
           errorType: "upstream_error",
           code: "translation_buffer_limit",
-          usage: fallbackDispatched ? mergeKiroUsage(firstResult.usage, undefined) : firstResult.usage,
+          usage: fallbackSends > 0 ? mergeKiroUsage(firstResult.usage, undefined) : firstResult.usage,
         };
         return;
       }
@@ -1342,7 +1343,7 @@ export async function* parseKiroStream(
         status: err instanceof Error && err.name === "TimeoutError" ? 504 : 502,
         errorType: "upstream_error",
         retryable: !priorEmittedOutput,
-        usage: fallbackDispatched ? mergeKiroUsage(firstResult.usage, undefined) : firstResult.usage,
+        usage: fallbackSends > 0 ? mergeKiroUsage(firstResult.usage, undefined) : firstResult.usage,
       };
       return;
     }
@@ -1368,6 +1369,11 @@ export async function* parseKiroStream(
       return;
     }
 
+    // Only the final response can expose a metering snapshot. A reset/replay (or another
+    // send discarded inside the retry transport) leaves at least one reading unknown.
+    const mergeFallbackUsage = (usage: OcxUsage | undefined) => mergeKiroUsage(
+      firstResult.usage, fallbackSends > 1 ? withMissingCreditReading(usage) : usage, firstHadAssistantText,
+    );
     const secondResult = yield* parseKiroAttempt(
       fallback.response,
       budget,
@@ -1388,7 +1394,7 @@ export async function* parseKiroStream(
         yield retryableKiroIncomplete(
           "empty_kiro_fallback",
           "Kiro's bounded completion retry ended without a terminal result",
-          mergeKiroUsage(firstResult.usage, secondResult.usage, firstHadAssistantText)
+          mergeFallbackUsage(secondResult.usage)
             ?? { inputTokens, outputTokens: 0, estimated: true },
           secondResult.providerState ?? firstResult.providerState,
           !priorEmittedOutput,
@@ -1402,7 +1408,7 @@ export async function* parseKiroStream(
           ...(secondResult.terminal.type === "incomplete" && priorEmittedOutput
             ? { retryable: false as const }
             : {}),
-          usage: mergeKiroUsage(firstResult.usage, secondResult.terminal.usage, firstHadAssistantText),
+          usage: mergeFallbackUsage(secondResult.terminal.usage),
           providerState: secondResult.terminal.providerState ?? firstResult.providerState,
         };
         return;
@@ -1410,7 +1416,7 @@ export async function* parseKiroStream(
       yield {
         ...secondResult.terminal,
         ...(secondResult.terminal.type === "error"
-          ? { usage: mergeKiroUsage(firstResult.usage, secondResult.terminal.usage, firstHadAssistantText) }
+          ? { usage: mergeFallbackUsage(secondResult.terminal.usage) }
           : {}),
       };
     } finally {

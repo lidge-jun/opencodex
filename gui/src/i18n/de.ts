@@ -1392,7 +1392,7 @@ export const de: Record<TKey, string> = {
   "logs.detail.reason.invalid_cache_breakdown": "Cache-Token-Details widersprechen den Eingabe-Tokens.",
   "logs.detail.reason.invalid_usage": "Die Nutzung enthält einen ungültigen Token-Wert.",
   "logs.detail.reason.combo_attempt_unavailable": "Mindestens ein Combo-Versuch konnte nicht bepreist werden.",
-  "logs.detail.reason.credit_cost_unrepresentable": "Diese Zeile wird über Credits abgerechnet, aber Credit-Anzahl und Preis ergeben keinen darstellbaren Betrag.",
+  "logs.detail.reason.credit_cost_unrepresentable": "Es fehlt ein verwendbarer Credit-Messwert oder der Betrag lässt sich aus Credit-Anzahl und Einzelpreis nicht berechnen.",
   "logs.detail.estimate.usage_estimated": "Die Anbieternutzung ist geschätzt.",
   "logs.detail.estimate.cache_detail_missing": "Cache-Details fehlen; Eingabe ist als Obergrenze geschätzt.",
   "logs.detail.estimate.expected_price_overlay": "Ein verifizierter Expected-Listenpreis wurde verwendet.",

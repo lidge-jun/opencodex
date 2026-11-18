@@ -75,6 +75,11 @@ test("retry factory failure before dispatch preserves first credit reading", asy
       controller.close();
     },
   }));
-  const events = await Array.fromAsync(parseKiroStream(response, createTestTranslatorBudget(), undefined, 0, undefined, undefined, undefined, "required", async () => { throw new Error("before dispatch"); }));
+  let retryCalls = 0;
+  const events = await Array.fromAsync(parseKiroStream(
+    response, createTestTranslatorBudget(), undefined, 0, undefined, undefined, undefined, "required",
+    async () => { retryCalls++; throw new Error("before dispatch"); },
+  ));
+  expect(retryCalls).toBe(1);
   expect(events.at(-1)).toMatchObject({ type: "error", usage: { providerCredits: 2 } });
 });

@@ -1,3 +1,4 @@
+import { markProxyError } from "../../lib/client-error-body";
 import type { AdapterEvent, OcxConfig, OcxUsage } from "../../types";
 import { sanitizeLogMetadataString } from "../../lib/redact";
 import { sumCreditReadings } from "../../usage/credit-billing";
@@ -388,6 +389,9 @@ export async function* guardEmptyCompletionEventStream(
       // Post-output EOF remains incomplete; replaying could duplicate text or
       // executable tool calls.
       yield* releaseHeld();
+      if (retries > 0 && usage) {
+        yield markProxyError({ type: "incomplete" as const, reason: "adapter_eof", usage });
+      }
       return;
     }
   }

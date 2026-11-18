@@ -1091,6 +1091,7 @@ function LogDetailDialog({
   const [copied, setCopied] = useState(false);
   const tokenSplit = cacheSplit(detail);
   const cost = detail.displayMetrics?.cost;
+  const unavailableCredit = cost?.kind === "unavailable" && cost.reason === "credit_cost_unrepresentable";
   const decodeRate = detail.displayMetrics?.decodeTokPerSecond;
   const decodeRateLabels = decodeRateLabelKeys(decodeRate?.kind === "value" ? decodeRate : {});
   const reasoningWire = reasoningWireLabel(detail);
@@ -1270,7 +1271,7 @@ function LogDetailDialog({
           <h4 id="log-detail-cost" className="log-detail-section-title">{
             // A credit-priced or mixed total is not a list-price equivalent, and a heading that
             // says it is would contradict the basis printed under it.
-            cost?.kind === "value" && cost.estimate.billing
+            (cost?.kind === "value" && cost.estimate.billing) || unavailableCredit
               ? t("logs.detail.section.costBilled")
               : t("logs.detail.section.cost")
           }</h4>
@@ -1331,7 +1332,8 @@ function LogDetailDialog({
             </>
           ) : (
             <div className="log-detail-grid">
-              <span className="muted">{t("logs.detail.costTotal")}</span><span className="mono">{t("logs.cost.unavailable")}</span>
+              <span className="muted">{t(unavailableCredit ? "logs.detail.section.costBilled" : "logs.detail.costTotal")}</span>
+              <span className="mono">{t("logs.cost.unavailable")}</span>
               <span className="muted">{t("logs.detail.unavailableReason")}</span>
               <span>{cost?.kind === "unavailable" ? t(metricReasonKey(cost.reason)) : t("logs.detail.reason.usage_missing")}</span>
             </div>
@@ -1354,6 +1356,7 @@ function LogDetailDialog({
                 </tr></thead>
                 <tbody>{detail.attempts.toSorted((a, b) => a.ordinal - b.ordinal).map(attempt => {
                   const attemptCost = attempt.displayMetrics?.cost;
+                  const attemptBilling = attemptCost?.kind === "value" ? attemptCost.estimate.billing : undefined;
                   const decodeRate = attempt.displayMetrics?.decodeTokPerSecond;
                   const decodeRateLabels = decodeRateLabelKeys(decodeRate?.kind === "value" ? decodeRate : {});
                   const attemptReasoningWire = reasoningWireLabel(attempt);
@@ -1409,7 +1412,17 @@ function LogDetailDialog({
                           </span>
                         )}
                       </td>
-                      <td className="num mono">{formatEstimatedUsd(attemptCost, t, localeTag)}</td>
+                      <td className="num mono">
+                        {formatEstimatedUsd(attemptCost, t, localeTag)}
+                        {attemptBilling?.source === "provider-credits" && (
+                          <span className="logs-stack-end muted text-caption">
+                            {t("logs.detail.creditCharge", {
+                              credits: formatCredits(attemptBilling.providerCredits, localeCode),
+                              price: formatUsdPrecise(attemptBilling.creditPriceUsd),
+                            })}
+                          </span>
+                        )}
+                      </td>
                       <td className="log-detail-break">{reason}</td>
                     </tr>
                   );

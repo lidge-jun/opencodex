@@ -57,7 +57,7 @@ import type { OcxClaudeCodeConfig, OcxClaudeDesktopProfile, OcxConfig, OcxCustom
 import type { DesktopProfileModel } from "../../claude/desktop-profile";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
-import { creditChargeUnrepresentable, estimateComboCost, estimateRequestCost, resolveMatchedPrice, serviceTierContext, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
+import { creditChargeUnrepresentable, estimateComboCost, estimateRequestCost, serviceTierContext, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
 import { costTokensWithinBound, isRepresentableCreditCount } from "../../usage/credit-billing";
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { usageModelPriceOptions } from "../../usage/model-identity";
@@ -196,13 +196,11 @@ export function decodeTokPerSecondResult(
  */
 function isCreditCostUnrepresentable(entry: MetricSource): boolean {
   if (entry.attempts?.length) {
-    return entry.attempts.some(attempt => !!attempt.usage
-      && creditChargeUnrepresentable(attempt.provider, attempt.usage)
-      && !!resolveMatchedPrice(attempt.provider, attempt.model, undefined, undefined, usageModelPriceOptions(entry, attempt)));
+    return entry.attempts.some(attempt => creditChargeUnrepresentable({
+      ...attempt, ...usageModelPriceOptions(entry, attempt),
+    }));
   }
-  return !!entry.usage
-    && creditChargeUnrepresentable(entry.provider, entry.usage)
-    && !!resolveMatchedPrice(entry.provider, entry.model, undefined, undefined, usageModelPriceOptions(entry, entry));
+  return creditChargeUnrepresentable({ ...entry, ...usageModelPriceOptions(entry, entry) });
 }
 
 export function unavailableCostReason(entry: MetricSource): MetricUnavailableReason {

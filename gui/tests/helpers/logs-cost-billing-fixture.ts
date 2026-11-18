@@ -56,12 +56,12 @@ export function tokenPriorityRow(requestId: string) {
 }
 
 /** The same row billed from provider credits: exact for the configured price. */
-export function creditRow(requestId: string) {
+export function creditRow(requestId: string, providerCredits = 2) {
   return requestLogDto({
     ...baseRow,
     requestId, provider: "xai", model: "grok-4.7",
     usageStatus: "estimated",
-    usage: { ...longUsage, providerCredits: 2, estimated: true },
+    usage: { ...longUsage, providerCredits, estimated: true },
     tierOutcome: priorityTierOutcome,
   } as never);
 }

@@ -49,7 +49,8 @@ describe("conversation cost lower-bound aggregation", () => {
     displayMetrics: {
       cost: {
         kind: "value" as const,
-        estimate: { cost: { total }, priorityLowerBound: lowerBound },
+        estimate: { cost: { total }, priorityLowerBound: lowerBound, estimated: false },
+        estimateReasons: [],
       },
     },
   });

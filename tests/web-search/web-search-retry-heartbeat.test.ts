@@ -77,7 +77,8 @@ describe("web-search same-target 429 retry", () => {
     const retryingAdapter: ProviderAdapter = {
       name: "mock-retry429",
       buildRequest: () => ({ url: "https://routed.test/v1", method: "POST", headers: {}, body: "{}" }),
-      fetchResponse: async () => {
+      fetchResponse: async (_req, ctx) => {
+        ctx?.onPhysicalSend?.({ ordinal: 1 });
         sends += 1;
         if (sends === 1) {
           return new Response("rate limited", { status: 429, headers: { "retry-after": "30" } });

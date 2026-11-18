@@ -1431,7 +1431,7 @@ export const ko: Record<TKey, string> = {
   "logs.detail.reason.invalid_cache_breakdown": "캐시 토큰 상세가 전체 입력 토큰과 모순됩니다.",
   "logs.detail.reason.invalid_usage": "usage에 유효하지 않은 토큰 값이 있습니다.",
   "logs.detail.reason.combo_attempt_unavailable": "하나 이상의 combo 시도 비용을 계산할 수 없습니다.",
-  "logs.detail.reason.credit_cost_unrepresentable": "이 행은 크레딧으로 청구되지만 크레딧 수와 가격을 곱해 표시할 수 있는 금액을 만들지 못해요.",
+  "logs.detail.reason.credit_cost_unrepresentable": "사용할 수 있는 크레딧 측정값이 없거나 크레딧 수와 단가로 금액을 계산할 수 없어요.",
   "logs.detail.estimate.usage_estimated": "프로바이더 usage가 추정치입니다.",
   "logs.detail.estimate.cache_detail_missing": "캐시 상세가 없어 입력 전액을 상한으로 추정했습니다.",
   "logs.detail.estimate.expected_price_overlay": "검증된 expected 정가를 사용했습니다.",

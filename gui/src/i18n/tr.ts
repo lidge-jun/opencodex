@@ -1436,7 +1436,7 @@ export const tr: Record<TKey, string> = {
   "logs.detail.reason.invalid_cache_breakdown": "Önbellek detayları çakışıyor.",
   "logs.detail.reason.invalid_usage": "Kullanım geçersiz bir jeton değeri içeriyor.",
   "logs.detail.reason.combo_attempt_unavailable": "Kombo denemesi fiyatlandırılamadı.",
-  "logs.detail.reason.credit_cost_unrepresentable": "Bu satır krediyle faturalandırılıyor ancak kredi sayısı ile fiyat gösterilebilir bir tutar vermiyor.",
+  "logs.detail.reason.credit_cost_unrepresentable": "Kullanılabilir bir kredi ölçümü yok veya tutar kredi sayısı ile birim fiyattan hesaplanamıyor.",
   "logs.detail.estimate.usage_estimated": "Sağlayıcı kullanımı tahminidir.",
   "logs.detail.estimate.cache_detail_missing": "Önbellek detayları eksik.",
   "logs.detail.estimate.expected_price_overlay": "Doğrulanmış liste fiyatı kullanıldı.",

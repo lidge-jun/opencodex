@@ -154,7 +154,7 @@ describe("Kiro completion through public server endpoints", () => {
           tools: [{ type: "function", name: "bash", parameters: { type: "object" } }] }),
       });
       expect(response.status).toBe(200);
-      await response.text();
+      expect(responseEvents(await response.text()).map(event => event.name)).toContain("response.completed");
       expect(upstream.requests).toHaveLength(2);
       const log = getRequestLogEntries().find(entry => entry.provider === "kiro-test");
       const api = await managementFetch(new URL("/api/logs?tail=20", proxy.url));
@@ -170,6 +170,37 @@ describe("Kiro completion through public server endpoints", () => {
       upstream.server.stop(true);
     }
   });
+  test("a reset replay of the completion fallback leaves credit evidence incomplete", async () => {
+    const upstream = scriptedKiroUpstream([
+      [textFrame("Checking."), eventFrame("meteringEvent", { unit: "credit", usage: 2 })],
+      [...completionFrames("Ready."), eventFrame("meteringEvent", { unit: "credit", usage: 3 })],
+    ]);
+    saveConfig(kiroConfig(upstream.server.url.toString()));
+    let sends = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).startsWith(upstream.server.url.toString()) && ++sends === 2) {
+        throw Object.assign(new Error("synthetic connection reset"), { code: "ECONNRESET" });
+      }
+      return originalFetch(input, init);
+    }) as typeof fetch;
+    const proxy = startServer(0);
+    try {
+      const response = await originalFetch(new URL("/v1/responses", proxy.url), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "kiro-test/gpt-5.6-sol", input: "Inspect", stream: true,
+          tools: [{ type: "function", name: "bash", parameters: { type: "object" } }] }),
+      });
+      expect(responseEvents(await response.text()).map(event => event.name)).toContain("response.completed");
+      expect(sends).toBe(3);
+      expect(upstream.requests).toHaveLength(2);
+      const log = getRequestLogEntries().find(entry => entry.provider === "kiro-test");
+      expect(log?.usage?.providerCredits).toBe(-1);
+    } finally {
+      await proxy.stop(true);
+      upstream.server.stop(true);
+    }
+  });
+
   test("a dispatched retry network failure leaves credit cost unavailable", async () => {
     const upstream = scriptedKiroUpstream([[textFrame("Checking."), eventFrame("meteringEvent", { unit: "credit", usage: 2 })]]);
     const config = kiroConfig(upstream.server.url.toString());

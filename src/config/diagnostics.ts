@@ -868,7 +868,10 @@ function configDiagnosticsFromText(raw: string, file?: { path: string; bytes: Ui
     sanitizeRetryOn429ForLoad(parsed, warn);
     sanitizeAgyAcpForLoad(parsed, reportAgyRepair);
     sanitizeModelCostsForLoad(parsed, warn);
-    sanitizeCreditPriceForLoad(parsed, warn);
+    sanitizeCreditPriceForLoad(parsed, message => {
+      repairs.push(message);
+      (warn ?? console.warn)(message);
+    });
     sanitizeCapabilityDeclarationsForLoad(parsed, warn);
     const result = configSchema.safeParse(parsed);
     if (result.success) {
@@ -906,7 +909,10 @@ function configDiagnosticsFromText(raw: string, file?: { path: string; bytes: Ui
       };
     }
 
-    return { config: getDefaultConfig(), source: "fallback", error: schemaDiagnosticsError(result.error) };
+    return {
+      config: getDefaultConfig(), source: "fallback", error: schemaDiagnosticsError(result.error),
+      ...(repairs.length > 0 ? { warnings: repairs } : {}),
+    };
   } catch {
     return { config: getDefaultConfig(), source: "fallback", error: "invalid_json" };
   }

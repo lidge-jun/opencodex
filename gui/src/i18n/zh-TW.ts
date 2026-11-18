@@ -1147,7 +1147,7 @@ export const zhTW: Record<TKey, string> = {
   "logs.detail.reason.invalid_cache_breakdown": "快取 token 明細與輸入 token 總數衝突。",
   "logs.detail.reason.invalid_usage": "Usage 包含無效的 token 值。",
   "logs.detail.reason.combo_attempt_unavailable": "至少一次 Combo 嘗試無法計價。",
-  "logs.detail.reason.credit_cost_unrepresentable": "此列以點數計費，但點數數量與價格相乘無法得出可表示的金額。",
+  "logs.detail.reason.credit_cost_unrepresentable": "缺少可用的點數讀數，或無法根據點數和單價計算此費用。",
   "logs.detail.estimate.usage_estimated": "供應商 usage 為估算值。",
   "logs.detail.estimate.cache_detail_missing": "缺少快取明細；輸入費用按上限估算。",
   "logs.detail.estimate.expected_price_overlay": "使用了已驗證的 Expected 標價。",

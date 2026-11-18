@@ -644,10 +644,10 @@ export async function executeResponsesSidecars(
   // A loop's hidden rounds before a rotation were spent by the account it left. Bill them to that
   // attempt while it is still open. A staged credential replay also starts a new row even
   // when the account label stays the same. In-place retries keep the loop’s accumulated usage.
-  const billRotatedUsage = (usage: OcxUsage): boolean => {
+  const billRotatedUsage = (usage: OcxUsage | undefined): boolean => {
     const attempt = logCtx.activeAttempt;
     if (!attempt || (!pendingSidecarReplay && !attemptAccountChanged(attempt.accountLogLabel, logCtx.accountLogLabel, attempt.provider, logCtx.provider))) return false;
-    transportState.bindKeyUsageFromBridge(usage);
+    if (usage) transportState.bindKeyUsageFromBridge(usage);
     return true;
   };
   const configureModelSendAllowance = !options.comboAttempt && !options.comboInitialSend && !routedCompaction

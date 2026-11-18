@@ -357,10 +357,11 @@ export interface ImageBridgeDeps {
   proxyErrorContext?: object;
   /**
    * After an `on429` rotation, offered the usage of the hidden iterations the left credential
-   * served. Returning true means it was billed to that credential's attempt, so `onUsage` will not
+   * served, including undefined when no usage arrived. Returning true hands off the old attempt,
+   * so `onUsage` will not
    * report it again; the client terminal still includes it.
    */
-  onRotatedUsage?: (usage: OcxUsage) => boolean;
+  onRotatedUsage?: (usage: OcxUsage | undefined) => boolean;
   /**
    * Optional 429 failover for the routed (non-xAI) model. Return a rebuilt adapter for the
    * rotated credential, or null when the pool is exhausted. Async hooks support OAuth refresh;
@@ -682,12 +683,11 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
         }
         const requestFetch = deps.fetchForRequest?.(request, iterParsed, requestAdapter, recovery) ?? fetchImpl;
         let response: Response;
+        let awaitingHeaders = true;
         try {
           if (requestAdapter.fetchResponse) {
             const slot = await paceThenResetHeaderDeadline();
             try {
-              deps.onAttemptSend?.(recovery);
-              pendingLegs++;
               response = await sendTrackingRequestSlot(slot, () => requestAdapter.fetchResponse!(request, {
                 abortSignal: headerDeadline.signal,
                 timeoutMs: connectTimeoutMs,
@@ -695,7 +695,15 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                 stream: true,
                 executor: requestFetch,
                 sendBudget: deps.incomingMeta.sendBudget,
-                onPhysicalSend: deps.incomingMeta.onPhysicalSend,
+                onPhysicalSend: send => {
+                  // Adapter-owned stream retries meter themselves. Only header-time sends
+                  // can leave a missing reading for this iteration's terminal.
+                  if (awaitingHeaders) {
+                    if (send.ordinal === 1) deps.onAttemptSend?.(recovery);
+                    pendingLegs++;
+                  }
+                  deps.incomingMeta.onPhysicalSend?.(send);
+                },
                 onRecoveryWithheld: deps.incomingMeta.onRecoveryWithheld,
               }));
             } finally {
@@ -731,6 +739,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
             );
           }
         } finally {
+          awaitingHeaders = false;
           request.releaseBodyObservation?.();
         }
         bindAnthropicRejectionResponse(request, response);
@@ -779,7 +788,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
           iterParsed, prepared.response);
         if (!rotated) break;
         takeUsage(undefined);
-        if (hiddenUsage && deps.onRotatedUsage?.(hiddenUsage)) {
+        if (hiddenLegs > 0 && deps.onRotatedUsage?.(hiddenUsage)) {
           rotatedUsage = addUsage(rotatedUsage, hiddenUsage, rotatedLegs > 0);
           rotatedLegs += hiddenLegs;
           hiddenUsage = undefined;
@@ -1267,7 +1276,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       ...(deps.onUsage ? {
         // Terminal done/incomplete already includes hiddenUsage (merged above). Do not
         // add it again here or request logs double-count multi-iteration image turns.
-        onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(rotatedUsage ? ledgerUsage : usage),
+        onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(rotatedLegs > 0 ? ledgerUsage : usage),
       } : {}),
       ...(deps.onCompletedResponse ? { onCompletedResponse: deps.onCompletedResponse } : {}),
     },

@@ -1409,7 +1409,7 @@ export const ru: Record<TKey, string> = {
   "logs.detail.reason.invalid_cache_breakdown": "Детализация кэш-токенов противоречит общему числу входных токенов.",
   "logs.detail.reason.invalid_usage": "В данных использования есть некорректное значение токенов.",
   "logs.detail.reason.combo_attempt_unavailable": "Не удалось рассчитать стоимость как минимум одной попытки комбо.",
-  "logs.detail.reason.credit_cost_unrepresentable": "Строка тарифицируется в кредитах, но количество кредитов и цена не дают представимой суммы.",
+  "logs.detail.reason.credit_cost_unrepresentable": "Нет пригодного значения расхода кредитов или сумму нельзя рассчитать по количеству кредитов и цене за кредит.",
   "logs.detail.estimate.usage_estimated": "Данные об использовании от провайдера — оценочные.",
   "logs.detail.estimate.cache_detail_missing": "Детализация кэша недоступна; входные токены оценены по верхней границе.",
   "logs.detail.estimate.expected_price_overlay": "Использована подтверждённая ожидаемая цена из прайс-листа.",

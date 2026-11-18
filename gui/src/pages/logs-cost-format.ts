@@ -54,7 +54,8 @@ export function estimateReasonsForBilling(
 
 type EstimatedCostResult = {
   kind: "value";
-  estimate: { cost: { total: number }; priorityLowerBound?: boolean; billing?: CostBilling };
+  estimate: { cost: { total: number }; priorityLowerBound?: boolean; billing?: CostBilling; estimated?: boolean };
+  estimateReasons?: readonly CostEstimateReason[];
 } | { kind: "unavailable" };
 
 /**
@@ -88,7 +89,7 @@ export function formatCredits(value: number, localeCode?: string): string {
   const key = localeCode ?? "";
   let formatter = CREDIT_FORMATS.get(key);
   if (!formatter) {
-    formatter = new Intl.NumberFormat(key || undefined, { maximumSignificantDigits: 15 });
+    formatter = new Intl.NumberFormat(key || undefined, { maximumSignificantDigits: 17 });
     CREDIT_FORMATS.set(key, formatter);
   }
   return formatter.format(value);
@@ -104,7 +105,7 @@ const USD_PRECISE = new Intl.NumberFormat("en-US", {
   style: "currency",
   currency: "USD",
   currencyDisplay: "narrowSymbol",
-  maximumSignificantDigits: 6,
+  maximumSignificantDigits: 17,
 });
 
 export function formatUsdPrecise(value: number): string {
@@ -127,6 +128,9 @@ export function formatEstimatedUsdValue(
     amount = USD_FORMAT.format(rounded > value ? (units - 1) / 10_000 : rounded);
   } else {
     amount = (priorityLowerBound ? USD_FLOOR_FORMAT : USD_FORMAT).format(value);
+    if (!priorityLowerBound && value > 0 && amount === USD_FORMAT.format(0)) {
+      amount = `<${USD_FORMAT.format(0.0001)}`;
+    }
   }
   return t(priorityLowerBound ? "logs.cost.lowerBound" : "logs.cost.approximate", { amount });
 }
@@ -159,6 +163,7 @@ export function summarizeEstimatedCosts(entries: readonly CostSummaryEntry[]): {
   let estimatedCostUsd = 0;
   let pricedRequests = 0;
   let lowerBounds = 0;
+  let exactAmounts = 0;
   let usesCreditBilling = false;
   let unpricedRequests = 0;
   let unmeteredRequests = 0;
@@ -173,7 +178,13 @@ export function summarizeEstimatedCosts(entries: readonly CostSummaryEntry[]): {
       if (Number.isFinite(total) && total >= 0) {
         estimatedCostUsd += total;
         pricedRequests += 1;
-        if (effectivePriorityLowerBound(cost.estimate)) lowerBounds += 1;
+        if (effectivePriorityLowerBound(cost.estimate)) {
+          lowerBounds += 1;
+        } else if (cost.estimate.billing?.source === "provider-credits"
+          || (cost.estimate.estimated === false && cost.estimateReasons
+            && !cost.estimateReasons.some(reason => reason === "cache_detail_missing" || reason === "usage_estimated"))) {
+          exactAmounts += 1;
+        }
         usesCreditBilling ||= cost.estimate.billing !== undefined;
         continue;
       }
@@ -182,7 +193,7 @@ export function summarizeEstimatedCosts(entries: readonly CostSummaryEntry[]): {
   }
   return {
     estimatedCostUsd,
-    priorityLowerBound: lowerBounds > 0 && (usesCreditBilling || lowerBounds === pricedRequests),
+    priorityLowerBound: lowerBounds > 0 && lowerBounds + (usesCreditBilling ? exactAmounts : 0) === pricedRequests,
     unpricedRequests,
     unmeteredRequests,
   };
