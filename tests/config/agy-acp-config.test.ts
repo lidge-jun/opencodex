@@ -7,7 +7,7 @@ import { getConfigPath, getDefaultConfig, loadConfig, readConfigDiagnostics, val
 import { configSchema } from "../../src/config/schema/config-schema";
 import { warnAndBackupInvalidConfig } from "../../src/config/salvage";
 import { installIsolatedCodexHome } from "../helpers/isolated-codex-home";
-import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
+import { removeTreeAfterBackgroundWork, removeTreeWithRetry } from "../helpers/remove-tree";
 import { AGY_ACP_PROVIDER_ID, agyAcpConfigIssues, selectorCandidateProviders } from "../../src/config/schema/agy-acp-references";
 import { AGY_ACP_DEFAULT_MODEL, AGY_ACP_SEED_MODELS } from "../../src/providers/registry/agy-acp-models";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
@@ -23,7 +23,7 @@ function config(extra: Record<string, unknown> = {}, providers: Record<string, u
   return {
     ...getDefaultConfig(),
     defaultProvider: "google",
-    providers: { google, "antigravity-acp": { ...acp }, ...providers },
+    providers: { google: { ...google }, "antigravity-acp": { ...acp }, ...providers },
     ...extra,
   } as unknown as OcxConfig;
 }
@@ -172,11 +172,13 @@ describe("antigravity-acp configuration", () => {
       const raw = config({ subagentModelFallback: ["g3f", "google/gemini-4-argon"] }, {
         "custom-agy": { ...acp, defaultAliases: true },
       });
+      expect(previewRouteModel(raw, "g3f").providerName).toBe("custom-agy");
       expect(messages(validateConfigCandidate(raw))).toContain("subagentModelFallback.0");
       writeFileSync(getConfigPath(), JSON.stringify(raw));
       expect(readConfigDiagnostics().config.subagentModelFallback).toEqual(["google/gemini-4-argon"]);
       raw.providers["custom-agy"]!.defaultAliases = false;
       raw.providers.google!.defaultAliases = true;
+      expect(previewRouteModel(raw, "g3f").providerName).toBe("google");
       expect(validateConfigCandidate(raw).ok).toBe(true);
       writeFileSync(getConfigPath(), JSON.stringify(raw));
       expect(readConfigDiagnostics().config.subagentModelFallback).toEqual(raw.subagentModelFallback);
@@ -261,6 +263,71 @@ describe("antigravity-acp configuration", () => {
     expect([...selectorCandidateProviders(config({ defaultProvider: "antigravity-acp" }) as never, "mystery-model")]).toEqual(["antigravity-acp"]);
   });
 
+  test("refuses active ACP subagent defaults and auto compaction while allowing manual use", () => {
+    const model = "antigravity-acp/gemini-3.8-flash";
+    expect(messages(validateConfigCandidate(config({ injectionModel: model, syncCodexSubagentDefaults: true })))).toContain("injectionModel");
+    expect(validateConfigCandidate(config({ injectionModel: model, syncCodexSubagentDefaults: false })).ok).toBe(true);
+    expect(validateConfigCandidate(config({ injectionModel: "google/gemini-4-argon", syncCodexSubagentDefaults: true })).ok).toBe(true);
+    expect(messages(validateConfigCandidate(config({ compactionRouting: { model, triggers: ["manual", "auto"] } })))).toContain("compactionRouting.model");
+    expect(validateConfigCandidate(config({ compactionRouting: { model, triggers: ["manual"] } })).ok).toBe(true);
+    expect(validateConfigCandidate(config({ compactionRouting: { model: "google/gemini-4-argon", triggers: ["auto"] } })).ok).toBe(true);
+  });
+
+  test("load repairs only active ACP subagent defaults and auto compaction triggers", () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-agy-acp-unattended-targets-"));
+    const previousHome = process.env.OPENCODEX_HOME;
+    const codexHome = installIsolatedCodexHome("ocx-agy-acp-unattended-codex-");
+    process.env.OPENCODEX_HOME = home;
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const model = "antigravity-acp/gemini-3.8-flash";
+      const raw = config({
+        injectionModel: model, injectionEffort: "high", syncCodexSubagentDefaults: true,
+        compactionRouting: { model, triggers: ["auto", "manual"], reasoningEffort: "medium" },
+      });
+      const original = JSON.stringify(raw);
+      writeFileSync(getConfigPath(), original);
+      const loaded = loadConfig();
+      expect(loaded.syncCodexSubagentDefaults).toBe(false);
+      expect(loaded.injectionModel).toBe(model);
+      expect(loaded.injectionEffort).toBe("high");
+      expect(loaded.compactionRouting).toEqual({ model, triggers: ["manual"], reasoningEffort: "medium" });
+      expect(JSON.stringify(warn.mock.calls)).toContain("compactionRouting.model");
+      expect(JSON.stringify(warn.mock.calls)).toContain("injectionModel");
+      expect(readFileSync(getConfigPath(), "utf8")).toBe(original);
+      raw.compactionRouting!.triggers = ["auto"];
+      writeFileSync(getConfigPath(), JSON.stringify(raw));
+      expect(readConfigDiagnostics().config.compactionRouting).toBeUndefined();
+    } finally {
+      warn.mockRestore();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      codexHome.restore();
+      removeTreeWithRetry(home);
+    }
+  });
+
+  test("checks a physical combo provider when combo dispatch is inactive", () => {
+    const selector = "combo/gemini-3.8-flash";
+    const raw = config({ memoryModels: { extract: { model: selector } } }, { combo: { ...acp } });
+    expect(previewRouteModel(raw, selector).providerName).toBe("combo");
+    expect(messages(validateConfigCandidate(raw))).toContain("memoryModels.extract.model");
+  });
+
+  test("a catalog-only native ID does not hide the ACP default route", () => {
+    const model = "gemini-9-extra";
+    const raw = config({
+      defaultProvider: "antigravity-acp",
+      customModels: [{ provider: "google", modelId: model }],
+      memoryModels: { extract: { model } },
+    });
+    expect(previewRouteModel(raw, model).providerName).toBe("antigravity-acp");
+    expect(messages(validateConfigCandidate(raw))).toContain("memoryModels.extract.model");
+    raw.providers.google!.models = [...google.models, model];
+    expect(previewRouteModel(raw, model).providerName).toBe("google");
+    expect(validateConfigCandidate(raw).ok).toBe(true);
+  });
+
   test("structural validation shares static metadata with the registry without loading runtime state", () => {
     const source = readFileSync(repoPath("src/config/schema/agy-acp-references.ts"), "utf8");
     expect(source.match(/^\s*import\b[^\n]*/gm)?.map(line => line.trim())).toEqual([
@@ -269,6 +336,7 @@ describe("antigravity-acp configuration", () => {
       'import { isBareOpenAiFamilyModel } from "../../codex/control-plane-models";',
       'import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers-destination";',
       'import { effectiveModelAliases } from "../../providers/default-aliases";',
+      'import { COMBO_NAMESPACE, preservesPhysicalComboProvider } from "../../combos/identifiers";',
     ]);
     const metadata = readFileSync(repoPath("src/providers/registry/agy-acp-models.ts"), "utf8");
     expect(metadata).not.toMatch(/^\s*import\s/m);

@@ -211,6 +211,15 @@ export function sanitizeAgyAcpUnattendedTargetsForLoad(
     if (section === "memoryModels" && typeof field === "string") {
       const memory = rawConfigRecord(root.memoryModels);
       if (memory) delete memory[field];
+    } else if (section === "injectionModel") {
+      root.syncCodexSubagentDefaults = false;
+    } else if (section === "compactionRouting") {
+      const compaction = rawConfigRecord(root.compactionRouting);
+      if (compaction && Array.isArray(compaction.triggers)) {
+        const remaining = compaction.triggers.filter(trigger => trigger !== "auto");
+        if (remaining.length) compaction.triggers = remaining;
+        else delete root.compactionRouting;
+      }
     } else if (section === "shadowCallIntercept") {
       const shadow = rawConfigRecord(root.shadowCallIntercept);
       if (shadow) shadow.enabled = false;
@@ -228,7 +237,10 @@ export function sanitizeAgyAcpUnattendedTargetsForLoad(
       ? redactSecretString(segment).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g,
         ch => "\\u" + ch.charCodeAt(0).toString(16).padStart(4, "0"))
       : segment).join(".");
-    warn(`${path}: ${issue.message} Ignoring this target on load.`);
+    const repair = section === "injectionModel" ? "Disabling managed subagent default sync on load."
+      : section === "compactionRouting" ? "Ignoring the automatic compaction trigger on load."
+      : "Ignoring this target on load.";
+    warn(`${path}: ${issue.message} ${repair}`);
   }
 }
 

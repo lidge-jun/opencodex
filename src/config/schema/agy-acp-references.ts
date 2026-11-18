@@ -11,6 +11,7 @@ import { aliasTemplateError, expandAliasTemplate } from "../../providers/alias-t
 import { isBareOpenAiFamilyModel } from "../../codex/control-plane-models";
 import { OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers-destination";
 import { effectiveModelAliases } from "../../providers/default-aliases";
+import { COMBO_NAMESPACE, preservesPhysicalComboProvider } from "../../combos/identifiers";
 
 export const AGY_ACP_PROVIDER_ID = "antigravity-acp";
 export const AGY_ACP_ADAPTER = "agy-acp";
@@ -32,6 +33,9 @@ export interface ConfigLike {
   subagentModelFallback?: unknown;
   subagentModelFallbackByModel?: unknown;
   memoryModels?: unknown;
+  injectionModel?: unknown;
+  syncCodexSubagentDefaults?: unknown;
+  compactionRouting?: unknown;
   shadowCallIntercept?: unknown;
 }
 export interface AgyAcpConfigIssue { path: (string | number)[]; message: string }
@@ -70,8 +74,8 @@ function customModelEntries(config: ConfigLike): Array<{ provider: string; model
     isRecord(row) && typeof row.provider === "string" ? [{ provider: row.provider, modelId: row.modelId, index }] : []);
 }
 
-/** Native ids the router would know for a provider without live discovery (router.ts knownModelIdsForProvider). */
-function staticKnownIds(config: ConfigLike, name: string, provider: ProviderLike): string[] {
+/** Configured routing claims plus the canonical ACP seed, reserved conservatively. */
+function staticRoutingIds(name: string, provider: ProviderLike): Set<string> {
   const ids = new Set<string>();
   if (Array.isArray(provider.models)) for (const m of provider.models) if (typeof m === "string") ids.add(m);
   if (typeof provider.defaultModel === "string") ids.add(provider.defaultModel);
@@ -79,8 +83,7 @@ function staticKnownIds(config: ConfigLike, name: string, provider: ProviderLike
     ids.add(AGY_ACP_DEFAULT_MODEL);
     for (const m of AGY_ACP_SEED_MODELS) ids.add(m);
   }
-  for (const row of customModelEntries(config)) if (row.provider === name && typeof row.modelId === "string") ids.add(row.modelId);
-  return [...ids];
+  return ids;
 }
 
 /**
@@ -96,9 +99,12 @@ export function selectorCandidateProviders(config: ConfigLike, selector: string)
   if (!raw) return out;
   const providers = providerEntries(config);
   const combos = comboEntries(config);
+  const physicalCombo = preservesPhysicalComboProvider({
+    providers: config.providers ?? {}, combos: isRecord(config.combos) ? config.combos : undefined,
+  });
   const comboNamed = (name: string) => combos.filter(([id, combo]) => id === name || combo.alias === name);
-  if (raw.startsWith("combo/")) {
-    for (const [, combo] of comboNamed(raw.slice("combo/".length))) for (const p of comboTargetProviders(combo)) out.add(p);
+  if (!physicalCombo && raw.startsWith(`${COMBO_NAMESPACE}/`)) {
+    for (const [, combo] of comboNamed(raw.slice(COMBO_NAMESPACE.length + 1))) for (const p of comboTargetProviders(combo)) out.add(p);
     return out;
   }
   const slash = raw.indexOf("/");
@@ -114,8 +120,15 @@ export function selectorCandidateProviders(config: ConfigLike, selector: string)
   if (openai && openai.disabled !== true && isBareOpenAiFamilyModel(raw)) return new Set([OPENAI_CODEX_PROVIDER_ID]);
   const bases = new Set([raw, raw.replace(EFFORT_SUFFIX, "")]);
   const lowerBases = [...bases].map(base => base.toLowerCase());
+  const customModels = customModelEntries(config);
   for (const [name, provider] of providers) {
-    const known = staticKnownIds(config, name, provider);
+    if (provider.disabled === true) continue;
+    const routingIds = staticRoutingIds(name, provider);
+    const catalogIds = customModels.flatMap(row =>
+      row.provider === name && typeof row.modelId === "string" ? [row.modelId] : []);
+    // Reserve catalog-only ACP IDs conservatively without letting other catalogs hide the default.
+    if (isAgyAcpProvider(name, provider)) for (const id of catalogIds) routingIds.add(id);
+    const known = [...new Set([...routingIds, ...catalogIds])];
     const manual = isRecord(provider.modelAliases) ? provider.modelAliases : {};
     const modelAliases = Object.fromEntries(Object.entries(manual)
       .filter((entry): entry is [string, string] => typeof entry[1] === "string"));
@@ -133,7 +146,7 @@ export function selectorCandidateProviders(config: ConfigLike, selector: string)
         if ("alias" in expanded) aliases.add(expanded.alias.toLowerCase());
       }
     }
-    if ([...bases].some(base => known.includes(base)) || lowerBases.some(base => aliases.has(base))) out.add(name);
+    if ([...bases].some(base => routingIds.has(base)) || lowerBases.some(base => aliases.has(base))) out.add(name);
   }
   for (const base of bases) {
     for (const [, combo] of comboNamed(base)) for (const p of comboTargetProviders(combo)) out.add(p);
@@ -215,6 +228,13 @@ export function agyAcpUnattendedTargetIssues(config: ConfigLike): AgyAcpConfigIs
   checkList(config.subagentModelFallback, ["subagentModelFallback"]);
   if (isRecord(config.subagentModelFallbackByModel)) {
     for (const [model, list] of Object.entries(config.subagentModelFallbackByModel)) checkList(list, ["subagentModelFallbackByModel", model]);
+  }
+  if (config.syncCodexSubagentDefaults === true && selectsAcp(config.injectionModel)) {
+    issues.push({ path: ["injectionModel"], message: "The Antigravity CLI (ACP) provider cannot be the managed subagent default: it serves interactive, user-directed turns only." });
+  }
+  const compaction = config.compactionRouting;
+  if (isRecord(compaction) && Array.isArray(compaction.triggers) && compaction.triggers.includes("auto") && selectsAcp(compaction.model)) {
+    issues.push({ path: ["compactionRouting", "model"], message: "The Antigravity CLI (ACP) provider cannot run automatic compaction: it serves interactive, user-directed turns only." });
   }
   if (isRecord(config.memoryModels)) {
     for (const phase of ["extract", "consolidation"] as const) {

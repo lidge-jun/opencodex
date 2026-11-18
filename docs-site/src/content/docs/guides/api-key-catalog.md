@@ -869,7 +869,8 @@ once per turn and talks to it over the Agent Client Protocol on stdin and stdout
   (`x-codex-parent-thread-id`), a turn Codex labels as a spawned thread or as its memory pipeline, a combo member, a
   combo's internal decision call and a route chosen by subagent fallback with HTTP 403 `agy_acp_interactive_only`, and
   configuration refuses this provider as a combo target, a combo's `decisionModel`, a subagent fallback, a
-  `memoryModels` phase or the `shadowCallIntercept` target.
+  managed subagent default, an automatic compaction target, a `memoryModels` phase or the `shadowCallIntercept` target.
+  Manual compaction can still use ACP.
 - **Local connections on the proxy host:** OpenCodex uses the observed peer and listener to determine locality.
   LAN connections, hub links and the hub management listener are refused with HTTP 403 `agy_acp_local_only`.
   Recognized forwarding headers such as `Forwarded`, `X-Forwarded-For`, `X-Real-IP`, `Via`,

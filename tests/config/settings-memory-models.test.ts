@@ -128,3 +128,17 @@ describe("/api/settings memoryModels", () => {
     } finally { warn.mockRestore(); }
   });
 });
+
+
+test("settings refuses an ACP auto-compaction override before publishing any setting", async () => {
+  const config = baseConfig();
+  config.providers["antigravity-acp"] = { adapter: "agy-acp", baseUrl: "https://antigravity.google/docs/cli/acp" };
+  saveConfig(config);
+  const model = "antigravity-acp/gemini-3.8-flash";
+  const response = await settings(config, { compactionRouting: { model, triggers: ["manual", "auto"] }, fastRows: false });
+  expect(response!.status).toBe(400);
+  expect(await response!.json()).toMatchObject({ error: expect.stringContaining("compactionRouting.model") });
+  expect(config.compactionRouting).toBeUndefined();
+  expect(config.fastRows).toBeUndefined();
+  expect(loadConfig().compactionRouting).toBeUndefined();
+});

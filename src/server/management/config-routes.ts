@@ -706,9 +706,13 @@ async function handleConfigRoutesImpl(ctx: ManagementContext): Promise<Response 
     let authlessIsEnabled = false, clientCompactionIsEnabled = false, fastRowsIsEnabled = false;
     let desktopSwitchesChanged = false, fastRowsChanged = false, reserveIsEnabled = false, reserveChanged = false;
     const refusal = await settleConfigRoot(configRoot(), () => {
-      if (memoryModels?.success) {
-        const issue = agyAcpUnattendedTargetIssues({ ...config, memoryModels: memoryModels.data })
-          .find(({ path }) => path[0] === "memoryModels");
+      if (memoryModels?.success || compactionRouting?.success) {
+        const issue = agyAcpUnattendedTargetIssues({
+          ...config,
+          ...(memoryModels?.success ? { memoryModels: memoryModels.data } : {}),
+          ...(compactionRouting?.success ? { compactionRouting: compactionRouting.data } : {}),
+        }).find(({ path }) => (path[0] === "memoryModels" && memoryModels?.success)
+          || (path[0] === "compactionRouting" && compactionRouting?.success));
         if (issue) return jsonResponse({ error: `${issue.path.join(".")}: ${issue.message}` }, 400);
       }
       if (hardLockThresholds) {

@@ -64,10 +64,10 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   refuses ACP before any request. Key-optional LiteLLM still accepts a key or an environment reference. Structural config validation
   (`src/config/schema/agy-acp-references.ts`) shares the static model roster in `src/providers/registry/agy-acp-models.ts`
   with the registry and refuses keys, pools, account settings,
-  non-Gemini models and any use as a combo target, a combo's `decisionModel`, a subagent fallback, a `memoryModels` phase or the
+  non-Gemini models and any use as a combo target, a combo's `decisionModel`, a subagent fallback, a managed subagent default, automatic compaction, a `memoryModels` phase or the
   `shadowCallIntercept` target. Validation masks credential-shaped diagnostic path segments. A disk
-  read drops an ACP memory phase and ACP subagent fallback entries or disables an ACP shadow-call target while
-  retaining other settings. Per-model fallback chains emptied by the repair are removed individually. File diagnostics
+  read drops an ACP memory phase and ACP subagent fallback entries, disables an ACP shadow-call target or
+  managed subagent default sync, and removes the automatic trigger from an ACP compaction override. Per-model fallback chains emptied by the repair are removed individually. File diagnostics
   report the repairs. Candidate writes reject those selectors, including
   matches from an ACP provider's built-in aliases or model alias template. Canonical OpenAI model routing retains
   precedence for bare native OpenAI IDs when the OpenAI row is enabled. The use policy
