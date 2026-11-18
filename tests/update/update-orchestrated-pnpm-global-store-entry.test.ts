@@ -95,7 +95,10 @@ test.skipIf(process.platform === "win32")("orchestrated pnpm update of a global 
       "else process.exit(90);",
     ].join("\n") + "\n");
     chmodSync(join(bin, "pnpm"), 0o755);
-    const env = { ...process.env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: home, CODEX_HOME: join(root, "codex"), PNPM_HOME: pnpmHome,
+    const storeEnvKeys = new Set(["npm_config_store_dir", "pnpm_config_store_dir"]);
+    const inheritedEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !storeEnvKeys.has(key.toLowerCase())));
+    const env = { ...inheritedEnv, HOME: root, USERPROFILE: root, OPENCODEX_HOME: home, CODEX_HOME: join(root, "codex"), PNPM_HOME: pnpmHome,
+      npm_config_store_dir: dirname(store), pnpm_config_store_dir: dirname(store),
       OCX_TEST_HOME_GUARD: "1", OCX_REAL_HOME: process.env.OCX_REAL_HOME ?? homedir(), OCX_UPDATE_ORCHESTRATED_CHILD: "0", OPENCODEX_BUN_PATH: process.execPath,
       PATH: bin, OCX_FIXTURE_LOG: log, OCX_FIXTURE_REAL: real, OCX_FIXTURE_EXPOSED: exposed, OCX_FIXTURE_GROUP: group, OCX_FIXTURE_BIN: bin, OCX_FIXTURE_STORE: store };
     const parent = (extraEnv: Record<string, string> = {}) => spawnSync(node, [join(exposed, "bin/ocx.mjs"), "update", "--yes", "--json"],
