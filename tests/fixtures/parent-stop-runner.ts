@@ -22,6 +22,7 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   managerCascades?: boolean;
   managerBound?: boolean;
   discoveryMiss?: boolean;
+  standaloneRecord?: "legacy" | "current" | "stale" | "wrong-home" | "wrong-port" | "client-role";
   guarded?: boolean;
   /** #7771: the guarded path on a simulated win32, with a bound scheduler manager (separate child stop). */
   windowsGuarded?: boolean;
@@ -144,7 +145,7 @@ process.kill = ((pid: number, signal?: number | NodeJS.Signals) => {
   if (options.discoveryMiss && pid === fakePid && (signal === "SIGTERM" || signal === "SIGKILL")) {
     signals.push(signal);
     calls.killed++;
-    if (signal === "SIGKILL") alive = false;
+    if (signal === "SIGKILL" || options.standaloneRecord) alive = false;
     return true;
   }
   if (options.nativeSignal && pid === fakePid && signal === "SIGTERM") { calls.killed++; alive = false; return true; }
@@ -199,16 +200,24 @@ if ((!options.alreadyStopped || options.staleRuntimeRecord) && !options.noRuntim
   const { linkStopConnectionOwner, readClientConnectionState } = await import("../../src/client/state");
   const connection = readClientConnectionState();
   const clientLinkOwner = connection.kind === "connected" ? linkStopConnectionOwner(connection.value) ?? null : undefined;
-  writeFileSync(join(home, "runtime-port.json"), JSON.stringify({ ...endpoint, pid: fakePid, attestationSecret: ATTESTATION_SECRET, clientLinkOwner }));
+  const record = { ...endpoint, pid: fakePid };
+  writeFileSync(join(home, "runtime-port.json"), JSON.stringify(options.standaloneRecord === "legacy"
+    || options.standaloneRecord === "wrong-home" || options.standaloneRecord === "wrong-port" ? record : {
+      ...record, attestationSecret: ATTESTATION_SECRET, clientLinkOwner,
+      startTime: options.standaloneRecord ? options.standaloneRecord === "stale" ? "fixture:previous-runtime" : "fixture:serving-runtime" : undefined,
+      role: options.standaloneRecord === "client-role" ? "client" : undefined,
+    }));
 }
 const stopOwner = await import("../../src/client/stop-teardown-owner");
 mock.module("../../src/client/stop-teardown-owner", () => ({ ...stopOwner,
   readClientStopProcessStart: (pid: number) => pid === process.pid ? "fixture:stop-owner"
     : pid === fakePid && alive ? "fixture:serving-runtime" : undefined,
+  readLegacyStopProcessHome: () => options.standaloneRecord === "wrong-home" ? join(home, "other") : home,
 }));
 mock.module("../../src/config/process-state", () => ({
   ...state,
   readPid: () => options.orphan || options.alreadyStopped || (options.deadPidReadsNull && !alive) ? null : fakePid,
+  readProcessCommandLine: (pid: number) => pid === fakePid && alive ? "ocx start" : undefined,
   readRuntimePort: (pid?: number) => (options.alreadyStopped && !options.staleRuntimeRecord) || options.noRuntimeRecord ? null : readRuntime(pid),
   removePid() {},
   removeRuntimePort() {},
@@ -288,6 +297,7 @@ const systemEnv = await import("../../src/server/system-env");
 mock.module("../../src/server/system-env", () => ({ ...systemEnv, revertSystemEnv() {} }));
 const portReclaim = await import("../../src/server/port-reclaim");
 mock.module("../../src/server/port-reclaim", () => ({ ...portReclaim,
+  inspectIpv4LoopbackListener: async () => ({ kind: options.standaloneRecord === "wrong-port" ? "mismatch" : "match", elapsedMs: 0 }),
   reclaimListenPort: async (_port: number, _host: string, options?: { timeoutMs?: number }) => {
     calls.reclaim += 1;
     reclaimTimeouts.push(options?.timeoutMs ?? 0);
@@ -307,6 +317,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
     const proof = nonce ? createLocalAttestationProof(ATTESTATION_SECRET, nonce, fakePid, endpoint.port) : null;
     const headers = proof ? { [LOCAL_ATTESTATION_PROOF_HEADER]: proof } : undefined;
     if (url.endsWith("/healthz")) {
+      if (options.standaloneRecord) throw new Error("fixture listener cannot answer health");
       return Response.json({ service: "opencodex", version: "2.93.0", pid: fakePid,
         ...(options.clientTransport === "link" ? { linkStopFence: true } : {}),
         ...(options.clientTransport && !options.serverTeardown && !options.clientServer ? { role: "client" } : {}) }, { headers });
@@ -331,6 +342,7 @@ globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) =>
   urls.push(url);
   postPartA.push(receipts.pendingTeardownPartA(new URL(url).searchParams.get("teardownNonce")));
   transports.push(viaDirect ? "direct" : "global");
+  if (options.standaloneRecord === "current") throw new Error("fixture listener cannot answer stop");
   if (options.connectDuringPost) writeHubConnection();
   const body = options.serverTeardown && !options.apiFailure
     ? await (await import("../../src/server/stop-teardown")).performStopTeardown(new URL(url))

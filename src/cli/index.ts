@@ -166,7 +166,7 @@ import { uninstallPrivilegeRefusal } from "../lib/config-ownership";
 import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { startArgv } from "../lib/self-launch-argv";
 import { initializeNodeLauncherContext } from "./launcher-context";
-import { abandonedTeardownIsSafeToFinish, assertConnectedClientStopSupported, classifyStopRole, clearRestoredStopReceipts, configuredStopEndpoint, connectedClientStopSkipLine, isRegisteredServiceStopTarget, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, restoreBoundaryOwnership, restoreSharedClientStateAfterStop, settleUnrestoredStopBoundary, stopOwnershipRefused, unclassifiedStopTarget, unsupportedConnectedStop, verifyConnectedStopTarget, type LinkStopPreflight, type StopTargetProof } from "./stop-restore";
+import { abandonedTeardownIsSafeToFinish, assertConnectedClientStopSupported, classifyStopRole, clearRestoredStopReceipts, configuredStopEndpoint, connectedClientStopSkipLine, isRegisteredServiceStopTarget, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, proveStandaloneStopRecord, restoreBoundaryOwnership, restoreSharedClientStateAfterStop, settleUnrestoredStopBoundary, stopOwnershipRefused, unclassifiedStopTarget, unsupportedConnectedStop, verifyConnectedStopTarget, type LinkStopPreflight, type StopTargetProof } from "./stop-restore";
 import { stopRestoreWriteGuard } from "./stop-restore-guard";
 import { startClientRuntimeUnderOwnershipLease } from "./client-start-fence";
 import { recoverStartJournalAfterOwnerRecheck, recoverStartStateUnderOwnershipLease } from "./start-owner-fence";
@@ -511,6 +511,7 @@ async function handleStart(options: { block?: boolean } = {}) {
   // live daemon holding resources while it overwrites its own binary. Never from a
   // sibling: replacing the global package makes the live proxy drain and restart.
   if (!siblingStart) await maybeShowUpdatePrompt();
+  const { readClientStopProcessStart } = await import("../client/stop-teardown-owner");
 
   type StartServerModule = typeof import("../server");
   type BoundStart = {
@@ -610,6 +611,7 @@ async function handleStart(options: { block?: boolean } = {}) {
         port: bound.port,
         hostname: bound.server.hostname,
         attestationSecret: bound.localAttestationSecret,
+        startTime: readClientStopProcessStart(process.pid),
         command: currentServingCommand(),
         ...siblingRuntimeField(),
       }); updateRestartChild?.complete(); },
@@ -1102,8 +1104,10 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
   const stopRole = await classifyStopRole(connectedClientState, initialRuntime, pendingTeardowns);
   const connectedStop = stopRole === "connected";
   const trackedStopPid = connectedStop ? null : snapshot?.approval.pid ?? readPid();
+  const verifyStandaloneRecord = stopRole === "unknown" && connectedClientState.kind === "disconnected" && trackedStopPid !== null
+    ? await proveStandaloneStopRecord(initialRuntime, trackedStopPid, pendingTeardowns) : undefined;
   if (trackedStopPid !== null) {
-    const standaloneRuntime = (stopRole === "standalone" || stoppingSibling) && initialRuntime?.pid === trackedStopPid
+    const standaloneRuntime = (stopRole === "standalone" || stoppingSibling || verifyStandaloneRecord) && initialRuntime?.pid === trackedStopPid
       && Bun.deepEquals(readRuntimePort(trackedStopPid), initialRuntime, true);
     if (!standaloneRuntime && !(connectedClientState.kind === "disconnected" && isRegisteredServiceStopTarget(trackedStopPid))) {
       return stopOwnershipRefused(unclassifiedStopTarget(trackedStopPid));
@@ -1135,6 +1139,7 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
     if (!stoppingSibling && current.kind === "connected" && current.value.transport === "link") throw unsupportedConnectedStop();
     const trackedPid = readPid();
     if (trackedPid !== null && trackedPid !== trackedStopPid) throw unclassifiedStopTarget(trackedPid);
+    verifyStandaloneRecord?.();
   };
   const claimTeardown = (endpoint: { hostname: string; port: number }, endpointSource: "exact" | "guessed") => {
     if (teardownNonce || (!linkStop && (stoppingSibling || connectedClientSkip))) return;

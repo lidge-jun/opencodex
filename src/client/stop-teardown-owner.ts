@@ -1,12 +1,13 @@
 import { execFileSync } from "node:child_process";
 import { statSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 import { NODE_LAUNCH_PROOF_PREFIX } from "../cli/launcher-context";
 import { parseStopApproval } from "../cli/stop-approval";
 import { tokenizeCommandLine } from "../codex/app-server-processes";
 import { readProcessCommandLine, type ClientStopOwner } from "../config/process-state";
 import { readBoundedRegularFileSync } from "../lib/bounded-file-read";
 import { resolveTrustedWindowsPowerShellExe } from "../lib/windows-elevation";
-import { readDarwinStopArgv, readDarwinStopStart } from "./stop-darwin-process";
+import { readDarwinStopArgv, readDarwinStopEnvironment, readDarwinStopStart } from "./stop-darwin-process";
 
 const basename = (value: string) => value.toLowerCase().replace(/\\/g, "/").split("/").pop() ?? "";
 
@@ -54,6 +55,33 @@ export function readClientStopProcessStart(pid: number): string | undefined {
       if (/^\d{1,20}$/.test(ticks)) return `win32:${ticks}`;
     }
   } catch { /* unreadable ownership cannot authorize a native restoration handoff */ }
+}
+
+/** Read only the home settings needed to bind a legacy record to its invoking process. */
+export function readLegacyStopProcessHome(pid: number): string | undefined {
+  try {
+    const environment = process.platform === "linux" ? readBoundedRegularFileSync(`/proc/${pid}/environ`, 1024 * 1024)
+      : process.platform === "darwin" ? readDarwinStopEnvironment(pid) : undefined;
+    if (!environment?.length || environment[environment.length - 1] !== 0) return;
+    const setting = (name: string) => {
+      const prefix = Buffer.from(`${name}=`);
+      for (let offset = 0; offset < environment.length;) {
+        const end = environment.indexOf(0, offset);
+        if (end < 0) break;
+        if (offset + prefix.length <= end && environment.subarray(offset, offset + prefix.length).equals(prefix)) {
+          return new TextDecoder("utf-8", { fatal: true }).decode(environment.subarray(offset + prefix.length, end)).trim();
+        }
+        offset = end + 1;
+      }
+    };
+    const override = setting("OPENCODEX_HOME");
+    if (override && isAbsolute(override)) return resolve(override);
+    const home = setting("HOME");
+    if (!home || !isAbsolute(home)) return;
+    if (!override) return join(home, ".opencodex");
+    if (override === "~") return resolve(home);
+    if (override.startsWith("~/") || override.startsWith("~\\")) return join(home, override.slice(2));
+  } catch { /* An unreadable home cannot bind a legacy record. */ }
 }
 
 export type ClientStopOwnerStatus = "active" | "confirmed-stale" | "unverified";

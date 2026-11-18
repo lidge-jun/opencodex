@@ -9,7 +9,8 @@ import { StopRestoreOwnershipError, type RestoreBoundaryOwnership } from "../cli
 export type { RestoreBoundaryOwnership } from "../client/restore-ownership";
 import { inspectStopRestoreOwnership, stopRestoreWriteGuard } from "./stop-restore-guard";
 export { clearRestoredStopReceipts, settleUnrestoredStopBoundary } from "./stop-restore-guard";
-import { readAlivePid, readPid, readRuntimePort, type ClientStopOwner, type RuntimePortState } from "../config/process-state";
+import { isOcxStartCommandLine, readAlivePid, readPid, readProcessCommandLine, readRuntimePort, type ClientStopOwner, type RuntimePortState } from "../config/process-state";
+import { getConfigDir } from "../config/paths";
 import type { OutstandingTeardown } from "../config/pending-teardown";
 import type { LinkInheritedTeardown } from "../client/stop-native-handoff";
 import { loadConfig } from "../config";
@@ -89,6 +90,11 @@ export function verifyConnectedStopTarget(
   if (currentPid !== null && currentPid !== proof?.target.pid) throw unsupportedConnectedStop();
 }
 
+function hasClientRuntimeEvidence(runtime: RuntimePortState): boolean {
+  return runtime.role === "client" || runtime.clientLinkOwner !== undefined || runtime.servingGeneration !== undefined
+    || runtime.clientStopping === true || runtime.clientStopOwner !== undefined;
+}
+
 /** A discovery miss cannot establish the role of a live tracked process. */
 export async function classifyStopRole(
   connection: ClientConnectionState, runtime: RuntimePortState | null, receipts: readonly OutstandingTeardown[],
@@ -99,7 +105,7 @@ export async function classifyStopRole(
   const { readRouteIntentReceipt } = await import("../integrations/route-intent-state");
   if (readRouteIntentReceipt()?.linkId !== undefined) return "connected";
   if (runtime && isProcessAlive(runtime.pid)) {
-    if (runtime.clientLinkOwner !== undefined || runtime.servingGeneration !== undefined) return "connected";
+    if (hasClientRuntimeEvidence(runtime)) return "connected";
     if (runtime.attestationSecret) {
       const capability = await assertConnectedClientStopSupported(runtime, { healthOnly: true }).catch(() => null);
       if (capability) return capability.linkStopFence || capability.nativeClient ? "connected" : "standalone";
@@ -108,6 +114,42 @@ export async function classifyStopRole(
   // Classification needs only the reported role. The preflight must verify identity itself.
   const live = await findLiveProxy({ attempts: 1, verifyPidFn: () => null }).catch(() => null);
   return live?.role === "client" && live.port !== sibling ? "connected" : "unknown";
+}
+
+/** Called after role discovery yields no affirmative result. Never adopts an orphan PID. */
+export async function proveStandaloneStopRecord(
+  runtime: RuntimePortState | null, pid: number, receipts: readonly OutstandingTeardown[],
+): Promise<(() => void) | undefined> {
+  if (runtime?.pid !== pid || hasClientRuntimeEvidence(runtime)
+    || receipts.some(read => read.state !== "valid" || read.receipt.ownerStartTime !== undefined)) return;
+  const { readRouteIntentReceiptStrict } = await import("../integrations/route-intent-state");
+  const hasNoLinkReceipt = () => {
+    try { return readRouteIntentReceiptStrict()?.linkId === undefined; } catch { return false; }
+  };
+  if (!hasNoLinkReceipt()) return;
+  const { readClientStopProcessStart, readLegacyStopProcessHome } = await import("../client/stop-teardown-owner");
+  const start = readClientStopProcessStart(pid);
+  if (!start) return;
+  if (runtime.startTime !== undefined) {
+    if (runtime.startTime !== start) return;
+  } else {
+    const command = readProcessCommandLine(pid);
+    if (!command || !isOcxStartCommandLine(command) || readLegacyStopProcessHome(pid) !== getConfigDir()) return;
+    const { inspectIpv4LoopbackListener, scanListenPidsForAddress } = await import("../server/port-reclaim");
+    const address = gracefulStopHost(runtime.hostname).replace(/^\[(.*)\]$/, "$1");
+    if (address === "127.0.0.1") {
+      if ((await inspectIpv4LoopbackListener(runtime.port, pid)).kind !== "match") return;
+    } else {
+      const listeners = scanListenPidsForAddress(runtime.port, address);
+      if (!listeners.ok || listeners.pids.length !== 1 || listeners.pids[0] !== pid) return;
+    }
+    if (readClientStopProcessStart(pid) !== start) return;
+  }
+  return () => {
+    if (readClientConnectionState().kind !== "disconnected" || !hasNoLinkReceipt()) throw unsupportedConnectedStop();
+    if (isProcessAlive(pid) && (readClientStopProcessStart(pid) !== start
+      || !Bun.deepEquals(readRuntimePort(pid), runtime, true))) throw unclassifiedStopTarget(pid);
+  };
 }
 
 // A guessed endpoint can name a standalone teardown obligation but cannot direct POST.

@@ -70,6 +70,7 @@ async function runParentStop(options: {
   serverTeardown?: boolean; json?: boolean;
   clientServer?: "legacy" | "unknown" | "wrong-pid" | "malformed" | "oversized" | "unauthorized" | "redirect" | "body-timeout";
   managerCascades?: boolean; managerBound?: boolean; discoveryMiss?: boolean; guarded?: boolean; orphan?: boolean; exitCleanup?: boolean;
+  standaloneRecord?: "legacy" | "current" | "stale" | "wrong-home" | "wrong-port" | "client-role";
   nativeSignal?: boolean; apiFailure?: boolean; stopBodyFailure?: boolean;
   alreadyStopped?: boolean; absence?: "dead" | "unknown" | "live"; managerState?: "inactive" | "active" | "unknown";
   configuredPort?: number; staleRuntimeRecord?: boolean; noRuntimeRecord?: boolean; deadPidReadsNull?: boolean;
@@ -100,7 +101,7 @@ async function runParentStop(options: {
   const refusedWithoutReceipt = !options.receipt && (options.windowsStopWiring === true || options.clientTransport === "link");
   const changedBeforeLinkFence = options.clientTransport === "link" && options.connectDuringDiscovery;
   const stoppedByManager = options.managerCascades && options.deadPidReadsNull;
-  expect(report.urls, child.stderr).toHaveLength(options.clientServer || options.exitCleanup || options.alreadyStopped || options.noRuntimeRecord || stoppedByManager || refusedWithoutReceipt || changedBeforeLinkFence ? 0 : 1);
+  if (!options.standaloneRecord) expect(report.urls, child.stderr).toHaveLength(options.clientServer || options.exitCleanup || options.alreadyStopped || options.noRuntimeRecord || stoppedByManager || refusedWithoutReceipt || changedBeforeLinkFence ? 0 : 1);
   return { ...report, exitCode: child.status, stderr: child.stderr, stdout: child.stdout };
 }
 
@@ -166,6 +167,27 @@ describe("parent CLI shared teardown completion", () => {
     expect(outcome.exitCode, outcome.stderr).toBe(0);
     expect(outcome.calls).toMatchObject({ service: 1, killed: 0, native: 1, grok: 1 });
     expect(JSON.parse(outcome.stdout)).toMatchObject({ runtimeDown: true, service: "stopped", sharedTeardown: "restored" });
+  });
+
+  test.each([
+    ["legacy", ["wrong-home", "wrong-port"]],
+    ["current", ["stale", "client-role"]],
+  ] as const)("only a matching %s standalone record permits the ordinary stop after a discovery miss", async (standaloneRecord, mismatches) => {
+    const outcome = await runParentStop({ receipt: true, standaloneRecord, discoveryMiss: true, deadPidReadsNull: true,
+      json: true, response: { success: true }, restore: restoreResult(true) });
+    expect(outcome.exitCode, outcome.stderr).toBe(0);
+    expect(outcome.calls).toMatchObject({ service: 1, native: 1, grok: 1 });
+    expect(outcome.urls).toHaveLength(1);
+    expect(outcome.signals).toEqual(standaloneRecord === "legacy" ? [] : [process.platform === "win32" ? "taskkill /F" : "SIGTERM"]);
+    expect(JSON.parse(outcome.stdout)).toMatchObject({ runtimeDown: true, proxy: "stopped", sharedTeardown: "restored" });
+    for (const mismatch of mismatches) {
+      const refusal = await runParentStop({ receipt: true, standaloneRecord: mismatch, discoveryMiss: true, managerCascades: true,
+        json: true, response: null, restore: restoreResult(true) });
+      expect(refusal.exitCode, `${mismatch}: ${refusal.stderr}`).toBe(1);
+      expect(refusal.calls).toMatchObject({ service: 0, killed: 0, native: 0, grok: 0 });
+      expect(refusal.urls).toEqual([]);
+      expect(JSON.parse(refusal.stdout)).toMatchObject({ runtimeDown: false, proxy: "ownership-refused", sharedTeardown: "skipped" });
+    }
   });
 
   test.each([false, true])("a discovery miss refuses to stop an unclassified live ocx start PID (cascading manager=%s)", async managerCascades => {

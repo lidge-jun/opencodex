@@ -154,6 +154,9 @@ export type RuntimePortState = {
   pid: number;
   port: number;
   hostname?: string;
+  role?: string;
+  /** OS creation identity of a standalone owner, when available. */
+  startTime?: string;
   /** Absolute relaunch prefix written by runtimes that identify their serving install. */
   command?: string[];
   /** Per-process proof key; protected by the config directory and never served. */
