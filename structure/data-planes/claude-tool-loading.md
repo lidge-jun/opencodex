@@ -8,6 +8,10 @@ All duplicate hosted-search declarations are omitted together; shared sidecar ba
 uniformly enforce these constraints. A forced hosted-search choice without a surviving declaration
 refuses locally. Typed originals still reach first-party Anthropic through the existing out-of-body
 server-tool lane; native passthrough retains its own declaration. Unrestricted search is unchanged.
+
+An explicitly named hosted Advisor selection keeps its original [declaration and choice](../advisor.md#execution-paths)
+across translated combo and policy candidates. Preparation admits them against the candidate's final route and model scope.
+
 Valid function definitions marked `defer_loading` lower to ordinary callable functions on combo
 Responses/Chat destinations; the flag never drops the function or alone triggers compatibility
 rejection. `src/claude/compatibility.ts` still rejects unsupported top-level deferral, schema-less
