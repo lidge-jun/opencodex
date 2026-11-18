@@ -94,9 +94,9 @@ describe("binary and version", () => {
     expect(runs).toBe(1);
     clearAgyVersionCacheForTests();
     expect(await probeAgyVersion(bin, async () => undefined)).toEqual({ ok: false, reason: "unreadable" });
-    expect(await probeAgyVersion(bin, async () => "1.5.0")).toEqual({ ok: false, reason: "too_old", version: "1.5.0" });
+    expect(await probeAgyVersion(bin, async () => "1.5.2")).toEqual({ ok: false, reason: "too_old", version: "1.5.2" });
     clearAgyVersionCacheForTests();
-    expect(await probeAgyVersion(bin, async () => "1.5.1")).toEqual({ ok: true, version: "1.5.1" });
+    expect(await probeAgyVersion(bin, async () => "1.5.3")).toEqual({ ok: true, version: "1.5.3" });
   });
 });
 

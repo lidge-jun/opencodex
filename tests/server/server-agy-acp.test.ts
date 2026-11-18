@@ -64,7 +64,7 @@ const body = JSON.stringify({ model: "antigravity-acp/gemini-4-argon", stream: t
 
 describe.skipIf(process.platform === "win32")("antigravity-acp through the server", () => {
   test.each([
-    ["old version", "1.5.0\n", 0, "found 1.5.0"],
+    ["old version", "1.5.2\n", 0, "found 1.5.2"],
     ["unparseable version", "unknown\n", 0, "version could not be read"],
     ["version embedded in other text", "dependency 9.9.9\n", 0, "version could not be read"],
     ["nonzero exit", "1.5.10\n", 1, "version could not be read"],

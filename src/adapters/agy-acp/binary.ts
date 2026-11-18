@@ -9,8 +9,8 @@
 import { realpathSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 
-/** 1.5.1 ensures session/update notifications precede the session/prompt reply. */
-export const AGY_ACP_MIN_VERSION: readonly [number, number, number] = [1, 5, 1];
+/** Includes the terminal sandbox security fix documented in the CLI 1.5.3 changelog. */
+export const AGY_ACP_MIN_VERSION: readonly [number, number, number] = [1, 5, 3];
 export const MAX_AGY_VERSION_OUTPUT_LENGTH = 4096;
 export const AGY_BIN_ENV = "OPENCODEX_AGY_BIN";
 export const AGY_INSTALL_HINT = `Install the Antigravity CLI (agy) ${AGY_ACP_MIN_VERSION.join(".")} or newer and sign in with \`agy acp --login\`, or set OPENCODEX_AGY_BIN to its absolute path.`;

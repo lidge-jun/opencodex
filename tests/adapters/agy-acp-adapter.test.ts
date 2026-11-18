@@ -104,7 +104,7 @@ async function run(agent: ReturnType<typeof script>, opts: {
   const h: Harness = { events: [], sent: [], spawned: 0, probed: 0, args: [], env: {}, cwd: "", removed: false };
   const adapter = createAgyAcpAdapter(provider, {
     resolveBinary: () => "/fake/agy",
-    probeVersion: async () => { h.probed++; return { ok: true, version: "1.5.2" }; },
+    probeVersion: async () => { h.probed++; return { ok: true, version: "1.5.3" }; },
     createWorkspace: async () => ({ dir: "/tmp/ocx-agy-acp-test", tmp: "/tmp/ocx-agy-acp-test/.tmp", remove: async () => { h.removed = true; } }),
     reap: async () => {},
     spawn: (_binary, args, options) => {
@@ -185,7 +185,7 @@ describe("agy acp turn", () => {
           expect(args).toEqual(["--version"]);
           const child = new FakeChild();
           queueMicrotask(() => {
-            child.stdout.end("1.5.2\n");
+            child.stdout.end("1.5.3\n");
             child.exitCode = 7;
             child.emit("close", 7);
           });
@@ -214,7 +214,7 @@ describe("agy acp turn", () => {
           const child = new FakeChild();
           if (args[0] === "--version") {
             queueMicrotask(() => {
-              child.stdout.end("1.5.2\n");
+              child.stdout.end("1.5.3\n");
               child.exitCode = 0;
               child.emit("close", 0);
             });

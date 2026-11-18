@@ -1009,7 +1009,7 @@ appended to the id instead.
 
 ## `agy-acp`
 
-**Targets:** the official Antigravity CLI (`agy acp`, 1.5.1 or newer) as a local child process over the Agent Client
+**Targets:** the official Antigravity CLI (`agy acp`, 1.5.3 or newer) as a local child process over the Agent Client
 Protocol v1 (newline-delimited JSON-RPC on stdio).
 **Auth:** none in OpenCodex; the CLI owns its Google sign-in.
 
