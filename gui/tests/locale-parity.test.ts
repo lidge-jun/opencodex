@@ -13,8 +13,11 @@ async function readDict(locale: string): Promise<Map<string, string>> {
   for (const m of src.matchAll(/"([^"]+)":\s*"((?:[^"\\]|\\.)*)"/g)) {
     out.set(m[1]!, m[2]!);
   }
-  // A namespace spread in from a copy module has no literal entries to scan, so merge it resolved.
-  for (const [key, value] of Object.entries(gatewayClientsCopy(locale as Parameters<typeof gatewayClientsCopy>[0]))) {
+  // Resolve the copy the catalog actually spreads and assert that it selects its own locale.
+  const spread = src.match(/\.\.\.gatewayClientsCopy\("([^"]+)"\)/);
+  expect(spread?.[1]).toBe(locale);
+  const copy = gatewayClientsCopy(spread![1] as Parameters<typeof gatewayClientsCopy>[0]);
+  for (const [key, value] of Object.entries(copy)) {
     out.set(key, value);
   }
   return out;

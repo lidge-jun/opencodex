@@ -148,6 +148,48 @@ describe("Gemini-compatible inbound routes", () => {
     });
   });
 
+  test("loopback refuses cross-origin and rebinding requests before Gemini dispatch", async () => {
+    await withServer(async base => {
+      const cases: Record<string, string>[] = [
+        { ...googKey, origin: "https://foreign.example" },
+        { ...googKey, host: "rebind.example" },
+        { ...googKey, host: "rebind.example", origin: "http://rebind.example" },
+      ];
+      for (const headers of cases) {
+        const list = await fetch(new URL("/v1beta/models", base), { headers });
+        expect(list.status).toBe(403);
+        if (headers.origin) expect(list.headers.get("access-control-allow-origin")).not.toBe(headers.origin);
+        const generate = await post(base, "/v1beta/models/fx/m1:generateContent", request(), headers);
+        expect(generate.status).toBe(403);
+        if (headers.origin) expect(generate.headers.get("access-control-allow-origin")).not.toBe(headers.origin);
+      }
+      expect(seen).toHaveLength(0);
+    });
+  });
+
+  test("scoped Gemini keys cannot discover or generate with a disallowed model", async () => {
+    const fixture = config(true);
+    fixture.providers.fx!.models = ["m1", "m2"];
+    const key = "ocx_data_" + "a".repeat(40);
+    fixture.apiKeys = [{ id: "gemini-scope", name: "Gemini scope", key, createdAt: "2026-01-01T00:00:00.000Z",
+      allowedModels: ["fx/m2"] }];
+    saveConfig(fixture);
+    await withServer(async base => {
+      const headers = { "x-goog-api-key": key };
+      const list = await fetch(new URL("/v1beta/models", base), { headers });
+      expect(list.status).toBe(200);
+      expect((await list.json() as { models: { name: string }[] }).models.map(model => model.name)).toEqual(["models/fx/m2"]);
+      const generate = await post(base, "/v1beta/models/fx/m1:generateContent", request(), headers);
+      expect(generate.status).toBe(403);
+      expect(await generate.json()).toMatchObject({ error: { code: 403, status: "PERMISSION_DENIED" } });
+      expect(seen).toHaveLength(0);
+      const allowed = await post(base, "/v1beta/models/fx/m2:generateContent", request(), headers);
+      expect(allowed.status).toBe(200);
+      await allowed.text();
+      expect(seen.map(call => call.body.model)).toEqual(["m2"]);
+    });
+  });
+
   test("streaming without alt=sse is one streamed JSON array", async () => {
     await withServer(async base => {
       const res = await post(base, "/v1beta/models/fx/m1:streamGenerateContent", request());
