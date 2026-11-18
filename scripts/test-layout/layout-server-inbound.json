@@ -14,6 +14,7 @@
   "server-ollama-inbound-lifecycle.test.ts": "server",
   "server-ollama-inbound-errors.test.ts": "server",
   "server-gemini-inbound.test.ts": "server",
+  "gateway-client-routes.test.ts": "server",
   "protocol-trace-suppression.test.ts": "server",
   "responses-ollama-codec.test.ts": "responses",
   "responses-gemini-codec.test.ts": "responses",
