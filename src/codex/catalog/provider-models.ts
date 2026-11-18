@@ -406,12 +406,14 @@ async function fetchProviderModelsUncached(
         id: model.id, provider: name,
         ...catalogHintsFromModelsApiItem(name, model as ProviderModelsApiItem),
       }, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, undefined, false));
-      if (!claimPublication()) return observed(configured, "degraded");
-      markProviderDiscoveryOk(name, picker.length);
+      if (!isCurrentCacheGeneration()) return observed(configured, "degraded");
       // Retain callable manual/combo selectors, but do not advertise named selection
       // for an Auto-only account even when its saved configuration still contains it.
-      return observed(copilotRequiresAuto(prov, models)
-        ? picker : withConfiguredRetention(picker, { warnDrops: true }), "authoritative");
+      const returned = copilotRequiresAuto(prov, models)
+        ? picker : withConfiguredRetention(picker, { warnDrops: true });
+      if (!claimPublication()) return superseded(returned);
+      markProviderDiscoveryOk(name, picker.length);
+      return observed(returned, "authoritative");
     } catch {
       if (claimPublication()) markProviderDiscoveryFailed(name, { reason: "provider" });
       return observed(configured, "degraded");
