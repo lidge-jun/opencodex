@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import {
   setUninstallServiceHooksForTests,
   uninstallServiceDetailed,
@@ -7,6 +7,7 @@ import {
 import { pathToFileURL } from "node:url";
 import { repoRoot } from "../helpers/repo-root";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import * as os from "node:os";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { removeOwnedConfigAfterDesktopCleanup, type UninstallClientStateDeps } from "../../src/cli/uninstall-client-state";
@@ -596,6 +597,28 @@ async function withUninstallFixture(work: (f: ReturnType<typeof uninstallFixture
 }
 
 describe("uninstall client cleanup before owner-state deletion", () => {
+  test("injected uninstall dependencies require a gateway context before resolving the OS home", async () => {
+    await withUninstallFixture(async f => {
+      const { gatewayContext: _omitted, ...incompleteDeps } = f.deps;
+      const configHome = process.env.OPENCODEX_HOME;
+      process.env.OPENCODEX_HOME = f.configDir;
+      const homedir = spyOn(os, "homedir").mockImplementation(() => {
+        throw new Error("uninstall attempted to resolve the OS home");
+      });
+      try {
+        await expect(removeOwnedConfigAfterDesktopCleanup(safeTeardown, incompleteDeps as UninstallClientStateDeps))
+          .rejects.toThrow("injected dependencies require a gateway context");
+        expect(homedir).not.toHaveBeenCalled();
+        expect(f.fixture.calls).toEqual({ read: 0, cleanup: 0, integrations: 0, remove: 0, finalLock: 0 });
+        expect(existsSync(f.lockPath)).toBe(false);
+      } finally {
+        homedir.mockRestore();
+        if (configHome === undefined) delete process.env.OPENCODEX_HOME;
+        else process.env.OPENCODEX_HOME = configHome;
+      }
+    });
+  });
+
   test("teardown refusal occurs before even reading or cleaning client state", async () => {
     await withUninstallFixture(async f => {
       f.fixture.connection = connectedFixture;

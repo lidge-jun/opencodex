@@ -20,7 +20,7 @@ export interface UninstallClientStateDeps {
   disconnect: (options?: Parameters<typeof disconnectClient>[0]) => Promise<unknown>;
   withLifecycle: typeof withClientLifecycle;
   cleanupIntegrations: typeof cleanupOwnedIntegrationsBeforeUninstall;
-  gatewayContext?: typeof productionGatewayClientContext;
+  gatewayContext: typeof productionGatewayClientContext;
   remove: () => ConfigRemovalResult;
   /** True while a timed-out icacls child still owns a path at or below the config directory. */
   aclReapPending: (rootPath: string) => boolean;
@@ -52,6 +52,7 @@ const defaults: UninstallClientStateDeps = {
   disconnect: options => disconnectClient(options),
   withLifecycle: withClientLifecycle,
   cleanupIntegrations: cleanupOwnedIntegrationsBeforeUninstall,
+  gatewayContext: productionGatewayClientContext,
   remove: () => removeOwnedConfigState(getConfigDir()),
   aclReapPending: rootPath => windowsSecretAclReapPendingAtOrBelow(rootPath),
   removePickerArtifacts: removePickerArtifactsBeforeUninstall,
@@ -64,6 +65,9 @@ export async function removeOwnedConfigAfterDesktopCleanup(
 ): Promise<ConfigRemovalResult> {
   if (!sharedTeardownAuthorized(observed)) {
     throw new Error("Client cleanup refused: service or proxy teardown is not proven.");
+  }
+  if (typeof deps?.gatewayContext !== "function") {
+    throw new Error("Client cleanup refused: injected dependencies require a gateway context.");
   }
   // A rerun after an interrupted uninstall finds the tombstone; this process's own cleanup steps
   // (picker, disconnect, integrations) still register state, which the remover below then removes.
@@ -136,8 +140,7 @@ async function removeOwnedConfigInTeardown(deps: UninstallClientStateDeps): Prom
     // Integration records are the authority that permits removing only OpenCodex-owned fragments
     // from third-party files. Delete them only after every recorded contribution is retired.
     await deps.cleanupIntegrations();
-    const gatewayContext = deps.gatewayContext ?? productionGatewayClientContext;
-    disconnectRecordedGatewayClients(gatewayContext(), held);
+    disconnectRecordedGatewayClients(deps.gatewayContext(), held);
     return deps.remove();
   });
 }
