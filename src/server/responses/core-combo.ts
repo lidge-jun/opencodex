@@ -120,7 +120,7 @@ import {
 import type { CodexAuthContext } from "../../codex/auth-context";
 import type { ResponsesTerminalStatus } from "../../bridge";
 import { beginRequestAttempt, sealRequestAttemptIdentity, finishRequestAttempt } from "../request-log";
-import { rememberComboForLane } from "./combo-session-recall";
+import { recallComboTurnEffortForLane, rememberComboForLane, type ComboTurnEffort } from "./combo-session-recall";
 import { COMBO_TOOL_LOOP_PIN_REASON, toolLoopPinnedPick } from "./combo-tool-loop-pin";
 import { JEV_SESSION_PIN_ROUTE_REASON, jevSessionPinScope } from "./jev-session-pin";
 import { runTurnAdapterSseResponses } from "./core-lifetime";
@@ -716,6 +716,17 @@ export async function executeComboResponses(
   const jevPin = options.compactionRoutingOverride || options.mainHardLockFallbackOverride
     ? undefined
     : jevSessionPinScope({ combo, comboId, admission: options.admission, lane: sessionLaneIdFromRequest(req.headers) });
+  // A tool-loop continuation never asks JEV again, so under `decide` it keeps the effort the
+  // decision set for its turn while the target still offers it. Without this the rest of the
+  // turn ran at the caller's effort and only the first request at the decided one.
+  let toolLoopTurnEffort: ComboTurnEffort | undefined;
+  if (toolLoopPin && combo.strategy === "jev" && combo.jevEffortMode !== "client") {
+    const carried = recallComboTurnEffortForLane(sessionLaneIdFromRequest(req.headers), comboId, toolLoopPin.target);
+    const offered = carried ? jevChoiceEfforts(config, toolLoopPin.target, false)?.reasoningEfforts : undefined;
+    if (carried && offered && (carried.effort === null ? offered.length === 0 : offered.includes(carried.effort))) {
+      toolLoopTurnEffort = carried;
+    }
+  }
 
   if (unreadableEncryptedAgentTask && !pick) {
     pick = await pickWithWait({
@@ -1113,10 +1124,14 @@ export async function executeComboResponses(
       modelId: targetRoute.modelId,
     });
     const initialJevDecision = firstComboTarget ? jevDecision : undefined;
+    // The effort a decision owns on this dispatch: its own first request, or the turn a
+    // tool-loop continuation resumes. Failover targets keep ordinary Combo policy either way.
+    const turnEffort: ComboTurnEffort | undefined = initialJevDecision
+      ?? (firstComboTarget ? toolLoopTurnEffort : undefined);
     // `client` keeps the decision's target but not its tier: the caller and the target ladder
     // own the wire effort, so a provider whose effort swaps the upstream model id is never
     // re-tiered mid-session and its prompt cache survives the turn.
-    const jevEffortApplies = initialJevDecision !== undefined && combo.jevEffortMode !== "client";
+    const jevEffortApplies = turnEffort !== undefined && combo.jevEffortMode !== "client";
     const childInput = options.droidDefaultEffort && isPlainObject(body) ? { ...body } : body;
     applyDroidResponsesReasoningDefault(childInput, options.droidDefaultEffort, {
       provider: targetRoute.provider,
@@ -1125,21 +1140,21 @@ export async function executeComboResponses(
     const childBody = concreteComboRequestBody(
       childInput,
       pick.target,
-      jevEffortApplies ? initialJevDecision.effort : comboDefaultEffort(config, comboId),
-      jevEffortApplies && initialJevDecision.effort === null ? [] : targetReasoningEfforts,
+      jevEffortApplies ? turnEffort.effort : comboDefaultEffort(config, comboId),
+      jevEffortApplies && turnEffort.effort === null ? [] : targetReasoningEfforts,
       combo.reasoningEffortMode,
       jevEffortApplies
-        ? (initialJevDecision.effort === null ? "fallback" : "force")
+        ? (turnEffort.effort === null ? "fallback" : "force")
         : combo.defaultEffortMode,
     );
-    if (initialJevDecision) {
+    if (turnEffort) {
       if (jevEffortApplies) delete childBody.service_tier;
-      if (jevEffortApplies && initialJevDecision.effort !== null) {
+      if (jevEffortApplies && turnEffort.effort !== null) {
         const childReasoning = childBody.reasoning;
         const preservedReasoning = childReasoning && typeof childReasoning === "object" && !Array.isArray(childReasoning)
           ? childReasoning as Record<string, unknown>
           : {};
-        childBody.reasoning = { ...preservedReasoning, effort: initialJevDecision.effort };
+        childBody.reasoning = { ...preservedReasoning, effort: turnEffort.effort };
         delete childBody.reasoning_effort;
         delete childBody.thinking_budget;
         delete childBody.thinking;
@@ -1216,7 +1231,10 @@ export async function executeComboResponses(
           && Object.hasOwn(config.providers, completedTarget.provider)
           && provider && provider.disabled !== true
           && currentCombo?.targets.some(target => targetKey(target) === targetKey(completedTarget))) {
-          rememberComboForLane(sessionLaneIdFromRequest(req.headers), comboId, completedTarget, model, writerGeneration);
+          rememberComboForLane(
+            sessionLaneIdFromRequest(req.headers), comboId, completedTarget, model, writerGeneration,
+            jevEffortApplies ? turnEffort : undefined,
+          );
           jevPin?.complete(targetKey(completedTarget), initialJevDecision, writerGeneration);
         }
         options.onResponseComplete?.(model);
@@ -1247,7 +1265,7 @@ export async function executeComboResponses(
           && targetEligible(target)
           && !isComboTargetInCooldown(comboId, target),
         );
-      const nativeChild = protocolLanes?.nativeChild(pick.target, targetRoute, targetSendBudget, initialJevDecision, jevEffortApplies);
+      const nativeChild = protocolLanes?.nativeChild(pick.target, targetRoute, targetSendBudget, turnEffort, jevEffortApplies);
       response = nativeChild ? await dispatchNativeComboChild({
         source: options.protocolSource!,
         plan: nativeChild,
@@ -1304,7 +1322,7 @@ export async function executeComboResponses(
         onResponseComplete: callbackGate.onResponseComplete,
       });
       // Both lanes applied the initial choice before provider pins/caps; retain those transitions.
-      restoreOriginalRequestedEffort(childLog, jevEffortApplies ? initialJevDecision?.effort : undefined);
+      restoreOriginalRequestedEffort(childLog, jevEffortApplies ? turnEffort?.effort : undefined);
     } catch (error) {
       callbackGate.discard();
       if (options.abortSignal?.aborted) {

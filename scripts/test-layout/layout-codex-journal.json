@@ -1,0 +1,4 @@
+{
+  "codex-app-rewrite-routing.test.ts": "codex-integration",
+  "codex-restore-later-edits.test.ts": "codex-integration"
+}

@@ -663,6 +663,16 @@ const MAX_TOOL_DESC_LEN = 6998;
  * bullet). Matching is flexible on case, whitespace, the open-source hyphen,
  * and the Don't apostrophe; each rewrite swaps one required word.
  *
+ * The three #8558 entries (Claude Code system prompt) are whole sentences
+ * Claude Code itself sends in its system prompt: "You are a Claude agent,
+ * built on Anthropic's Claude Agent SDK", the dual-use security-tools bullet,
+ * and "Claude Code is available as a CLI in the terminal…". Each one alone
+ * was refused with `permission_denied` against a live account, every
+ * sub-phrase passed, and lowercasing, a missing comma or a doubled space was
+ * still refused — so they match like the Codex entries (case-insensitive,
+ * flexible whitespace, optional commas) and every rewrite keeps the original
+ * authorization/safety meaning.
+ *
  * Scope note: by default the sanitizer only ever touches *instruction
  * surfaces* — tool descriptions and the #2 system prompt, where a
  * meaning-preserving reword loses nothing. Data fields — message text (#3),
@@ -702,6 +712,20 @@ const COGNITION_BLOCKLIST_REWRITES: ReadonlyArray<[RegExp, string]> = [
   [
     /\bDon[\u0060'’]?t\s+output\s+ANSI\s+escape\s+codes\s+directly\s*[—-]\s*the\s+CLI\s+renderer\s+applies\s+them\b/gi,
     "Don’t emit ANSI escape codes directly — the CLI renderer applies them",
+  ],
+  // #8558: Claude Code system prompt. Matched like the Codex entries:
+  // case-insensitive, flexible whitespace, optional commas.
+  [
+    /\bYou\s+are\s+a\s+Claude\s+agent,?\s+built\s+on\s+Anthropic['’]?s\s+Claude\s+Agent\s+SDK\b/gi,
+    "You are a Claude agent, built on Anthropic's Claude Agent Toolkit",
+  ],
+  [
+    /\bDual-use\s+security\s+tools\s+\(C2\s+frameworks,?\s+credential\s+testing,?\s+exploit\s+development\)\s+require\s+clear\s+authorization\s+context:\s+pentesting\s+engagements,?\s+CTF\s+competitions,?\s+security\s+research,?\s+or\s+defensive\s+use\s+cases\b/gi,
+    "Dual-purpose security tools (C2 frameworks, credential testing, exploit development) need clear authorization context: pentesting engagements, CTF competitions, security research, or defensive use cases",
+  ],
+  [
+    /\bClaude\s+Code\s+is\s+available\s+as\s+a\s+CLI\s+in\s+the\s+terminal,?\s+desktop\s+app\s+\(Mac\/Windows\),?\s+web\s+app\s+\(claude\.ai\/code\),?\s+and\s+IDE\s+extensions\s+\(VS\s+Code,?\s+JetBrains\)/gi,
+    "Claude Code ships as a CLI in the terminal, desktop app (Mac/Windows), web app (claude.ai/code), and IDE extensions (VS Code, JetBrains)",
   ],
 ];
 

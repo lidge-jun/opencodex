@@ -134,6 +134,14 @@ Las solicitudes con `authMode` distinto de `"forward"` convierten los elementos 
 Meta Responses también recibe las declaraciones actuales `additional_tools` de Codex en el array público `tools`. El catálogo se captura antes de normalizar el historial: las declaraciones reproducidas y los descubrimientos históricos de herramientas no pueden activar herramientas para el nuevo turno. Los alias actuales de namespaces, herramientas personalizadas y nombres largos conservan la normalización y restauración de respuestas existentes. Si un resultado de búsqueda repite una herramienta, se conserva el esquema de parámetros de su declaración actual. Las llamadas personalizadas históricas mantienen su representación como llamadas de función sin conceder autoridad actual a esas herramientas antiguas. Las definiciones de función anidadas se convierten en declaraciones públicas. Los catálogos de namespaces mal formados o que no se puedan representar devuelven HTTP 400 antes de la inferencia, también si la entrada es una cadena o se omite; no se promueven parcialmente.
 
 Para Meta Responses en el host exacto `api.meta.ai`, OpenCodex omite la entrada include no admitida `output.encrypted_content` que solicita Codex Desktop; de lo contrario, Meta rechaza la solicitud antes de la inferencia. Conserva `reasoning.encrypted_content` y las demás entradas para mantener la reproducción de razonamiento sin estado. La misma normalización de esa entrada exacta se aplica a xAI y a Kimi Code en su endpoint HTTPS Responses exacto (`https://api.kimi.com/coding/v1/responses`); los demás destinos Responses conservan su lista include original.
+El [endpoint Responses exacto de OpenCode Go](https://opencode.ai/zen/go/v1/responses) aplica la misma
+limpieza de include a sus modelos porque algunos rechazan ese campo. Conserva
+`reasoning.encrypted_content` y las demás entradas, y esa limpieza no elimina el historial de razonamiento
+cifrado. Cuando `authMode` no es `forward`, un proveedor que incluya el modelo en
+`arkKimiResponsesModels` sigue aplicando antes la limpieza separada de Ark Kimi. Solo quita
+`encrypted_content` de un elemento de razonamiento sin referencias, con resumen vacío y sin otros campos,
+cuando sigue a un mensaje de usuario o a una llamada de función emparejada con su salida, y precede a un
+mensaje de usuario o, tras ese par de herramienta, a un mensaje de desarrollador.
 
 Estas correcciones del formato no cambian los permisos de la cuenta. Meta limita las credenciales de suscripción Muse Code al cliente Muse Code; otros clientes requieren una clave API de Meta con facturación separada. Una clave de suscripción puede devolver HTTP 403 a través de OpenCodex aunque el formato sea válido. Consulta las [reglas de suscripción de Meta](https://dev.meta.ai/docs/muse-code/subscriptions).
 

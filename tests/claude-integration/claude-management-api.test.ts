@@ -893,6 +893,7 @@ test("Claude sidecar overrides round-trip, partially update, clear, and reject u
 test("PUT immediately restores generated agents after re-enable and roster changes", async () => {
   const server = startServer(0);
   const agentsDir = join(process.env.CLAUDE_CONFIG_DIR!, "agents");
+  const defaultAgents = ["ocx-gpt-6-2-astra.md", "ocx-gpt-6-2-sol.md", "ocx-gpt-6-luna.md"];
   try {
     const enable = await fetch(new URL("/api/claude-code", server.url), {
       method: "PUT",
@@ -900,7 +901,7 @@ test("PUT immediately restores generated agents after re-enable and roster chang
       body: JSON.stringify({ injectAgents: true }),
     });
     expect(enable.status).toBe(200);
-    expect(readdirSync(agentsDir).some(name => name === "ocx-gpt-6-1-sol.md")).toBe(true);
+    expect(readdirSync(agentsDir).sort()).toEqual(defaultAgents);
 
     const disable = await fetch(new URL("/api/claude-code", server.url), {
       method: "PUT",
@@ -916,7 +917,7 @@ test("PUT immediately restores generated agents after re-enable and roster chang
       body: JSON.stringify({ injectAgents: true }),
     });
     expect(reenable.status).toBe(200);
-    expect(readdirSync(agentsDir).some(name => name === "ocx-gpt-6-1-sol.md")).toBe(true);
+    expect(readdirSync(agentsDir).sort()).toEqual(defaultAgents);
 
     const roster = await fetch(new URL("/api/subagent-models", server.url), {
       method: "PUT",
