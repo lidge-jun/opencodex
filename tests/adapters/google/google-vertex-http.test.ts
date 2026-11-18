@@ -429,22 +429,51 @@ describe("vertex retry fetch", () => {
       expect(mock.calls).toHaveLength(1);
     });
 
-    test(`${name} does NOT read a reason whose @type is not ErrorInfo`, async () => {
+    test(`${name} does NOT read a foreign detail named like ErrorInfo`, async () => {
+      // Full-segment comparison: a foreign type whose LAST SEGMENT is also "ErrorInfo" must not
+      // pass the type check, or any relay could mint a replayable verdict.
+      for (const type of [
+        "type.example.com/relay.PolicyDenial",
+        "type.example.com/relay.notgoogle.rpc.ErrorInfo",
+      ]) {
+        const foreign = JSON.stringify({
+          error: {
+            code: 429,
+            status: "RESOURCE_EXHAUSTED",
+            message: "Request rejected.",
+            details: [{ "@type": type, reason: "RATE_LIMIT_EXCEEDED" }],
+          },
+        });
+        const mock = mockFetch([new Response(foreign, { status: 429 }), new Response("unexpected replay", { status: 200 })]);
+        const res = await fetchResponse(request, { timeoutMs: 5_000 });
+        expect(res.status).toBe(429);
+        expect(mock.calls).toHaveLength(1);
+      }
+    });
+
+    test(`${name} does NOT read a retry delay from a detail that is not RetryInfo`, async () => {
       const foreign = JSON.stringify({
         error: {
           code: 429,
           status: "RESOURCE_EXHAUSTED",
           message: "Request rejected.",
-          details: [{
-            "@type": "type.example.com/relay.PolicyDenial",
-            reason: "RATE_LIMIT_EXCEEDED",
-          }],
+          details: [{ "@type": "type.example.com/relay.PolicyDenial", retryDelay: "0s" }],
         },
       });
       const mock = mockFetch([new Response(foreign, { status: 429 }), new Response("unexpected replay", { status: 200 })]);
       const res = await fetchResponse(request, { timeoutMs: 5_000 });
       expect(res.status).toBe(429);
       expect(mock.calls).toHaveLength(1);
+    });
+
+    test(`${name} replays plain-text wording with no JSON envelope`, async () => {
+      const mock = mockFetch([new Response("Too many requests, slow down", { status: 429 }), new Response("ok", { status: 200 })]);
+      const waits = spyOn(retry, "sleepWithAbort").mockImplementation(async () => {});
+      try {
+        const res = await fetchResponse(request, { timeoutMs: 5_000 });
+        expect(res.status).toBe(200);
+        expect(mock.calls).toHaveLength(2);
+      } finally { waits.mockRestore(); }
     });
   }
 

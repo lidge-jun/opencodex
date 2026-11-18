@@ -106,6 +106,23 @@ function jsonRecord(value: unknown): Record<string, unknown> | undefined {
 
 /** ProtoJSON type of a detail whose `reason` field carries an `ErrorInfo` verdict. */
 const GOOGLE_ERROR_INFO_TYPE = "google.rpc.ErrorInfo";
+/** ProtoJSON type of a detail whose `retryDelay` field states when to retry. */
+const GOOGLE_RETRY_INFO_TYPE = "google.rpc.RetryInfo";
+
+/**
+ * Whether a detail's declared `@type` admits `expected`.
+ *
+ * ProtoJSON spells a type either fully qualified (`type.googleapis.com/google.rpc.ErrorInfo`) or as
+ * the bare message name; both name the same message, and only the last path segment carries the
+ * identity. Suffix matching alone would accept a foreign `type.example.com/relay.google.rpc.ErrorInfo`,
+ * so the segment is compared whole. A detail with no `@type` asserts nothing and admits both.
+ */
+function detailTypeMatches(record: Record<string, unknown>, expected: string): boolean {
+  const declared = record["@type"];
+  if (typeof declared !== "string") return true;
+  const segment = declared.slice(declared.lastIndexOf("/") + 1);
+  return segment === expected;
+}
 
 /**
  * The `error` envelope of a Google error payload, or `undefined` when the text is not JSON.
@@ -135,8 +152,7 @@ function googleErrorReasons(payloadText: string): string[] {
     // `@type` names which protobuf message owns this object. A detail that declares a different
     // message may carry an unrelated field spelled `reason`, so only an `ErrorInfo` detail (or one
     // with no `@type` to contradict it) speaks for the rate-limit verdict.
-    const declaredType = record["@type"];
-    if (typeof declaredType === "string" && !declaredType.endsWith(GOOGLE_ERROR_INFO_TYPE)) continue;
+    if (!detailTypeMatches(record, GOOGLE_ERROR_INFO_TYPE)) continue;
     const reason = safeUpstreamErrorString(record.reason);
     if (reason) reasons.push(reason);
   }
@@ -161,6 +177,10 @@ function hasGoogleRetryDelayDetail(payloadText: string): boolean {
     const raw = typeof record.retryDelay === "string"
       ? record.retryDelay
       : typeof metadata?.quotaResetDelay === "string" ? metadata.quotaResetDelay : undefined;
+    // A wait belongs to `RetryInfo`; a `quotaResetDelay` rides inside `ErrorInfo.metadata`. A
+    // foreign detail that happens to spell either field states no wait the provider will honor.
+    const expectedType = typeof record.retryDelay === "string" ? GOOGLE_RETRY_INFO_TYPE : GOOGLE_ERROR_INFO_TYPE;
+    if (!detailTypeMatches(record, expectedType)) continue;
     if (raw && /^\s*\d+(?:\.\d+)?\s*s\s*$/i.test(raw)) return true;
   }
   return false;
