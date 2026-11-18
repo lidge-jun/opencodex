@@ -252,10 +252,9 @@ export interface RequestLogContext extends UpstreamErrorDiagnostics, LinkRequest
    *  responsesUsage in src/bridge.ts), so SSE/JSON re-parsing must not overwrite the raw
    *  provenance — a synthetic cached_tokens:0 is NOT a measured cache read. */
   usageFromBridge?: boolean;
-  /** Set once the client-facing body carries an estimated usage the provider never sent (#7427).
-   *  The provider's own body was inspected before the estimate was added, so a later parse of
-   *  the client body must not record the estimate as provider-reported usage. */
-  usageEstimatedForClient?: boolean;
+  /** Process-owned provenance when a later parse of the client body must skip its usage.
+   *  The original provider usage, when present, is already recorded on this context. */
+  clientResponseUsage?: "estimated" | "synthetic";
   /** Secret-redacted upstream error reason (e.g. the granular Cursor "rate limit exceeded…"
    * message) extracted from a `response.failed` SSE payload or non-streaming error body, so the
    * request log / GUI shows the actual upstream failure rather than only the HTTP-mapped code. */
@@ -1052,8 +1051,9 @@ export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unk
   } else if (Object.prototype.hasOwnProperty.call(source, "service_tier")) {
     logCtx.activeTierMetadata?.observeResponseServiceTier(serviceTier);
   }
-  const usage = collectUsage ? usageFromResponsesPayload((source as { usage?: unknown }).usage) : undefined;
-  if (usage && !logCtx.usageFromBridge && !logCtx.usageEstimatedForClient) {
+  const usage = collectUsage && !logCtx.usageFromBridge && !logCtx.clientResponseUsage
+    ? usageFromResponsesPayload((source as { usage?: unknown }).usage) : undefined;
+  if (usage) {
     if (!recordKeyWireAttemptUsage(logCtx, usage)) {
       logCtx.usage = usage;
       if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;

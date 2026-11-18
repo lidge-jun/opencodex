@@ -47,6 +47,7 @@ type Scenario = {
   earlyOutput?: boolean;
   reportedUsage?: boolean;
   earlyUsage?: boolean;
+  zeroOutput?: boolean;
 };
 const providerUsage = { input_tokens: 900, output_tokens: 100, total_tokens: 1000 };
 const key = "ocx_data_estimated_usage_fixture";
@@ -62,14 +63,15 @@ async function until(done: () => boolean): Promise<void> {
 async function exercise(scenario: Scenario = {}) {
   const { mode = "legacy-tee", combo = true, stream = true, estimate = true,
     terminal = "completed", nullUsage = false, fragmented = false,
-    earlyOutput = false, reportedUsage = false, earlyUsage = false } = scenario;
+    earlyOutput = false, reportedUsage = false, earlyUsage = false, zeroOutput = false } = scenario;
   setRelayPlatformForTests(mode === "eager-relay" ? "darwin" : "linux");
   let sends = 0;
   const terminalReady = new Promise<void>(resolve => { releaseTerminal = resolve; });
   const output = [{ id: "msg_estimate", type: "message", role: "assistant", status: "completed",
     content: [{ type: "output_text", text: "OK", annotations: [] }] }];
   const responseBody = { id: "resp_estimate", object: "response", model: "probe", status: terminal,
-    output, ...(terminal === "incomplete" ? { incomplete_details: { reason: "max_output_tokens" } } : {}),
+    output: zeroOutput ? [] : output,
+    ...(terminal === "incomplete" ? { incomplete_details: { reason: "max_output_tokens" } } : {}),
     ...(reportedUsage ? { usage: providerUsage } : nullUsage ? { usage: null } : {}) };
   upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
     expect(new URL(req.url).pathname).toBe("/v1/responses");
@@ -78,7 +80,7 @@ async function exercise(scenario: Scenario = {}) {
     if (!stream) return Response.json(responseBody);
     const events = [
       ...(earlyUsage ? [{ type: "response.in_progress",
-        response: { ...responseBody, status: "in_progress", output: [], usage: providerUsage } }] : []),
+        response: { id: responseBody.id, status: "in_progress", output: [], usage: providerUsage } }] : []),
       ...(earlyOutput ? [{ type: "response.output_text.delta", item_id: "msg_estimate",
         output_index: 0, content_index: 0, delta: "OK" }] : []),
       { type: `response.${terminal}`, response: responseBody },
@@ -124,23 +126,21 @@ async function exercise(scenario: Scenario = {}) {
     ? JSON.parse(text.split(/\r?\n/).find(line => line.startsWith("data:")
       && line.includes(`"type":"response.${terminal}"`))!.slice(5)).response
     : JSON.parse(text);
-  if (reportedUsage) expect(delivered.usage).toEqual(providerUsage);
+  if (zeroOutput) {
+    expect(delivered.output).toEqual([]);
+    expect(delivered.incomplete_details.reason).toBe("max_output_tokens");
+    if (reportedUsage || earlyUsage) expect(delivered.usage.total_tokens).toBe(1000);
+  } else if (reportedUsage) expect(delivered.usage).toEqual(providerUsage);
   else if (estimate) {
     expect(delivered.usage.input_tokens).toBeGreaterThan(0);
     expect(delivered.usage.output_tokens).toBeGreaterThan(0);
     expect(delivered.usage.total_tokens).toBeLessThan(1000);
   } else expect(delivered.usage).toBeUndefined();
-  expect(first.headers.get(ESTIMATED_USAGE_HEADER)).toBe(estimate ? stream ? "when-missing" : "true" : null);
+  if (!zeroOutput) expect(first.headers.get(ESTIMATED_USAGE_HEADER)).toBe(estimate ? stream ? "when-missing" : "true" : null);
 
   const snapshot = sharedSpendLedger().snapshot("pool", "fixture")!;
   const records = readFileSync(home.path("spend-ledger.jsonl"), "utf8").trim().split("\n")
     .map(line => JSON.parse(line) as { kind: string; tokens?: number });
-  const second = await send();
-  const secondBody = await second.text();
-  // This is the security outcome: the ceiling still blocks a second upstream dispatch.
-  expect(second.status).toBe(429);
-  expect(JSON.parse(secondBody).error.code).toBe("request_send_budget_exhausted");
-  expect(sends).toBe(1);
   expect(snapshot.reserved).toBe(0);
   if (reportedUsage || earlyUsage) {
     expect(row.usage).toMatchObject({ inputTokens: 900, outputTokens: 100 });
@@ -149,12 +149,17 @@ async function exercise(scenario: Scenario = {}) {
     expect(records.filter(record => record.kind === "settle")).toHaveLength(1);
     expect(records.find(record => record.kind === "settle")?.tokens).toBe(1000);
   } else {
-    expect(row.usage).toBeUndefined();
     expect(snapshot.settled).toBe(0);
     expect(snapshot.unresolved).toBeGreaterThanOrEqual(1000);
+    expect(row.usage).toBeUndefined();
     expect(records.some(record => record.kind === "settle")).toBe(false);
     expect(records.filter(record => record.kind === "lost")).toHaveLength(1);
   }
+  const second = await send();
+  const secondBody = await second.text();
+  expect(second.status).toBe(429);
+  expect(JSON.parse(secondBody).error.code).toBe("request_send_budget_exhausted");
+  expect(sends).toBe(1);
 }
 
 for (const mode of ["legacy-tee", "eager-relay"] as const) {
@@ -169,7 +174,15 @@ for (const mode of ["legacy-tee", "eager-relay"] as const) {
     exercise({ mode, reportedUsage: true, earlyOutput: true }), 15_000);
   test(`${mode}: an estimated terminal preserves earlier provider usage`, () =>
     exercise({ mode, earlyUsage: true }), 15_000);
+  for (const reportedUsage of [false, true]) {
+    test(`${mode}: zero-output Combo exhaustion accounts for ${reportedUsage ? "reported" : "missing"} provider usage`, () =>
+      exercise({ mode, terminal: "incomplete", zeroOutput: true, reportedUsage }), 15_000);
+  }
+  test(`${mode}: zero-output Combo exhaustion preserves earlier reported usage`, () =>
+    exercise({ mode, terminal: "incomplete", zeroOutput: true, earlyUsage: true }), 15_000);
 }
 test("direct SSE keeps missing usage unresolved", () => exercise({ combo: false }), 15_000);
 test("Combo JSON keeps estimated usage out of settlement", () => exercise({ stream: false }), 15_000);
 test("Combo SSE with estimation disabled keeps missing usage unresolved", () => exercise({ estimate: false }), 15_000);
+test("zero-output Combo exhaustion with estimation off keeps usage unresolved", () =>
+  exercise({ terminal: "incomplete", zeroOutput: true, estimate: false }), 15_000);

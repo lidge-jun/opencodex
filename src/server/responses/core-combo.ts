@@ -982,6 +982,8 @@ export async function executeComboResponses(
     }
     if (lastFailure && lastFailureUpstreamCode === "zero_output_token_limit" && zeroOutputLimitFailure) {
       adoptFailedChildLog(zeroOutputLimitFailure.childLog);
+      // The terminal builder normalizes wire usage even when the child supplied none.
+      logCtx.clientResponseUsage = "synthetic";
       return wantsStream
         ? streamingIncompleteResponse(responseModel, zeroOutputLimitFailure.usage, "max_output_tokens", options.translatorBudget)
         : jsonIncompleteResponse(responseModel, zeroOutputLimitFailure.usage, "max_output_tokens");
