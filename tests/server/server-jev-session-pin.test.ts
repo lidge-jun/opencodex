@@ -377,4 +377,73 @@ describe("JEV session pin per-turn effort", () => {
     expect(payloads).toHaveLength(1);
     expect(log.jevDecision).toMatchObject({ pinned: true, pinReason: "session" });
   });
+
+  test("rechecks the pinned target after the effort decision and keeps its usage on fallback", async () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    const config = perTurnConfig(["sol/gpt-5.6-sol:high", "sol/gpt-5.6-sol:low"], payloads);
+    expect((await turn(config)).status).toBe(200);
+
+    const decisionStarted = Promise.withResolvers<void>();
+    const resumeDecision = Promise.withResolvers<void>();
+    const fetchDecision = config.providers.jev!.fetch!;
+    config.providers.jev!.fetch = (async (input, init) => {
+      decisionStarted.resolve();
+      await resumeDecision.promise;
+      return fetchDecision(input, init);
+    }) as typeof fetch;
+    const bodies: Record<string, unknown>[] = [];
+    const child: Child = (body, complete) => { bodies.push(body); return served(body, complete); };
+    const log: RequestLogContext = { model: "", provider: "" };
+    const pending = turn(config, { child, log });
+    await decisionStarted.promise;
+    coolComboTarget("auto", SOL, { cooldownMs: 60_000 });
+    resumeDecision.resolve();
+
+    expect((await pending).status).toBe(200);
+    expect(offered(payloads[1])).toEqual(["sol/gpt-5.6-sol"]);
+    expect(bodies.map(body => [body.model, effortOf(body)])).toEqual([["luna/gpt-5.6-luna", "medium"]]);
+    expect(log.jevDecision).toMatchObject({
+      selected: { provider: "luna", model: LUNA.model, effort: "medium" },
+      gate: "invalid",
+      usage: { inputTokens: 8, outputTokens: 2, totalTokens: 10 },
+    });
+    expect(log.jevDecision?.pinned).toBeUndefined();
+  });
+
+  test("a late completion after a failed effort decision preserves a newer pinned effort", async () => {
+    const answers = ["sol/gpt-5.6-sol:high", "luna/gpt-5.6-luna:low", "sol/gpt-5.6-sol:low"];
+    const config = perTurnConfig(answers, []);
+    expect((await turn(config)).status).toBe(200);
+
+    const lateDispatched = Promise.withResolvers<void>();
+    const completeLate = Promise.withResolvers<void>();
+    const dispatchedEfforts: Array<string | undefined> = [];
+    const record: Child = (body, complete) => {
+      dispatchedEfforts.push(effortOf(body));
+      return served(body, complete);
+    };
+    const lateLog: RequestLogContext = { model: "", provider: "" };
+    const late = turn(config, {
+      log: lateLog,
+      child: async (body, complete) => {
+        dispatchedEfforts.push(effortOf(body));
+        lateDispatched.resolve();
+        await completeLate.promise;
+        return served(body, complete);
+      },
+    });
+    await lateDispatched.promise;
+    try {
+      expect((await turn(config, { child: record })).status).toBe(200);
+    } finally {
+      completeLate.resolve();
+      await late;
+    }
+    expect((await late).status).toBe(200);
+    expect(lateLog.jevDecision?.gate).toBe("invalid");
+
+    // Exhausted answers make this turn reuse the effort retained in the live pin.
+    expect((await turn(config, { child: record })).status).toBe(200);
+    expect(dispatchedEfforts).toEqual(["high", "low", "low"]);
+  });
 });

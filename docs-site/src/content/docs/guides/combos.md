@@ -353,8 +353,10 @@ ocx combo set jev-auto --session-pin 20m --session-pin-effort per-turn --json
 
 When the pinned target offers multiple efforts, a reused turn sends one decision request with
 only that target and its efforts. If JEV picks one of those efforts, the turn uses it and the pin
-keeps it. A failed or unusable decision leaves the pinned effort in place. A single-effort target
-skips the decision. With `jevEffortMode: "client"`, reused turns follow the client effort policy
+keeps it. A failed or unusable decision uses the effort the turn read from the pin. A concurrent
+turn can still update the stored effort. If the pinned target becomes unavailable during the decision,
+the Combo falls back to an eligible target. A single-effort target skips the decision.
+With `jevEffortMode: "client"`, reused turns follow the client effort policy
 and skip the decision. `--session-pin-effort pinned` restores the default. Changing the idle window
 with `--session-pin` keeps the mode.
 

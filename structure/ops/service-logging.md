@@ -12,7 +12,8 @@ diagnostic fields. Windows service-wrapper messages retain their wrapper format.
 `src/combos/resolve.ts` and `src/server/responses/core-combo.ts` name combos by their
 position in configuration and targets by position plus the validated provider-id label from
 `src/lib/error-destination.ts`. Failure, cooldown-wait, reprobe and JEV debug lines omit raw
-combo aliases, model ids and URLs. JEV effort decision lines include failed gates on pinned turns.
+combo aliases, model ids and URLs. JEV effort decision lines include failed gates on pinned turns
+and retain decision usage if the selected target becomes unavailable before dispatch.
 `src/combos/request.ts` effort diagnostics retain the
 validated provider and closed effort/capability fields, with no model field. Operational
 selection and cooldown keys remain internal. `tests/responses/chat-error-body-normalization.test.ts`

@@ -795,6 +795,7 @@ export async function executeComboResponses(
     pendingHopCommit = proactive.commit;
   }
   let jevDecision: JevDecision | undefined;
+  let failedPinEffortDecision: JevDecision | undefined;
   if (combo.strategy === "jev" && !toolLoopPin) {
     const choices = eligibleJevComboChoices(config, comboId, targetEligible, Date.now(), pick.cooldownReprobeTargets);
     const first = choices[0];
@@ -841,7 +842,7 @@ export async function executeComboResponses(
         signal: options.abortSignal,
       });
     let decision: JevDecision;
-    let failedPinEffortDecision: JevDecision | undefined;
+    let awaitedPinEffort = false;
     if (pinReuse?.decision) {
       decision = pinReuse.decision;
       // `effort: "per-turn"` keeps the pinned target and asks only for its effort, offering the
@@ -851,6 +852,7 @@ export async function executeComboResponses(
         ? choices.find(choice => choice.candidate.key === pinned.targetKey)
         : undefined;
       if (pinnedChoice && pinnedChoice.candidate.reasoningEfforts.length > 1) {
+        awaitedPinEffort = true;
         const fallback = { targetKey: pinned.targetKey, effort: pinned.effort };
         try {
           const effortDecision = await decide([pinnedChoice.candidate], fallback);
@@ -883,9 +885,9 @@ export async function executeComboResponses(
     }
     let selected = choices.find(choice => choice.candidate.key === decision.targetKey) ?? first;
     let selectionUnavailable = false;
-    if (pick.cooldownReprobeTargets && !options.abortSignal?.aborted) {
-      // Another request can replace a cooldown while the decision is awaited. Recheck the
-      // original reservation, current availability and request eligibility without reserving again.
+    if ((pick.cooldownReprobeTargets || awaitedPinEffort) && !options.abortSignal?.aborted) {
+      // Another request can cool the target while the decision is awaited. Recheck current
+      // availability, request eligibility and any original reprobe reservation.
       const currentChoices = eligibleJevComboChoices(config, comboId, targetEligible, Date.now(), pick.cooldownReprobeTargets);
       const current = currentChoices.find(choice => choice.candidate.key === decision.targetKey
         && (decision.effort === null ? choice.candidate.reasoningEfforts.length === 0
@@ -908,7 +910,7 @@ export async function executeComboResponses(
     if (pinReuse?.released) decision = { ...decision, pinReason: pinReuse.released };
     jevDecision = decision;
     pick = { ...selected.pick, attempted: [targetKey(selected.pick.target)] };
-    // Failed effort decisions are counted while dispatch and pin completion keep the reused decision.
+    // Failed effort decisions are counted while dispatch uses the reused effort.
     const observedDecision = failedPinEffortDecision ?? decision;
     logCtx.jevDecision = !options.clientModelLabel || requestedModel === responseModel ? normalizePersistedJevDecision({
       version: 1,
@@ -1267,7 +1269,8 @@ export async function executeComboResponses(
             sessionLaneIdFromRequest(req.headers), comboId, completedTarget, model, writerGeneration,
             jevEffortApplies ? turnEffort : undefined,
           );
-          jevPin?.complete(targetKey(completedTarget), initialJevDecision, writerGeneration);
+          // A failed effort decision only refreshes the live pin, which another turn may have updated.
+          jevPin?.complete(targetKey(completedTarget), failedPinEffortDecision ? undefined : initialJevDecision, writerGeneration);
         }
         options.onResponseComplete?.(model);
       },
