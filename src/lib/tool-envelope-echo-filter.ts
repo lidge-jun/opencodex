@@ -80,7 +80,7 @@ export function closedFenceLines(lines: readonly string[]): boolean[] {
 // drops it as an echo. The hold is bounded, so a long block cannot stall the stream.
 const MAX_HELD_CHARS = 64 * 1024;
 // A whole marker followed only by whitespace is still ambiguous until newline/EOF or prose.
-// Bound that unresolved line independently of the fenced hold; never release it on overflow.
+// Bound the unresolved line content independently of the fenced hold; LF and CRLF settle it.
 const MAX_PENDING_CHARS = 64 * 1024;
 
 interface Fence {
@@ -113,18 +113,16 @@ export class ToolEnvelopeEchoFilter {
         if (char === "\n") this.safeLine = false;
         continue;
       }
-      if (this.pending.length + char.length > MAX_PENDING_CHARS) {
-        this.takePending();
-        this.held = null;
-        this.fence = null;
-        this.failure = new TranslatorBudgetExceededError("live_transient", MAX_PENDING_CHARS * 2);
-        throw this.failure;
-      }
-      this.pending += char;
       if (char === "\n") {
-        output += this.completeLine();
+        output += this.completeLine(char);
         continue;
       }
+      // Allow one CR of lookahead at the limit, including across deltas. It is content unless LF follows.
+      const possibleCRLF = char === "\r" && this.pending.length === MAX_PENDING_CHARS;
+      if (this.pending.length + char.length > MAX_PENDING_CHARS && !possibleCRLF) {
+        this.failPendingOverflow();
+      }
+      this.pending += char;
       // Check only the new scalar, not the growing whitespace suffix. A non-whitespace scalar
       // either completes an unterminated marker (']') or makes the line prose below.
       if (this.pendingWholeMarker && char.trimEnd() === "") continue;
@@ -167,6 +165,7 @@ export class ToolEnvelopeEchoFilter {
   finish(): string {
     if (this.failure) throw this.failure;
     if (this.matched) return "";
+    if (this.pending.length > MAX_PENDING_CHARS) this.failPendingOverflow();
     // A closing fence may end the stream without a trailing newline; settle it before the hold.
     const settled = this.pending !== "" && parseFenceLine(this.pending) ? this.completeLine() : "";
     const pending = this.takePending();
@@ -183,8 +182,8 @@ export class ToolEnvelopeEchoFilter {
     return settled + pending;
   }
 
-  private completeLine(): string {
-    const raw = this.takePending();
+  private completeLine(ending = ""): string {
+    const raw = this.takePending() + ending;
     const probe = raw.replace(/^[ \t]*/, "");
     const indent = raw.length - probe.length;
     const line = probe.replace(/\r?\n$/, "");
@@ -233,6 +232,14 @@ export class ToolEnvelopeEchoFilter {
     this.pending = "";
     this.pendingWholeMarker = false;
     return pending;
+  }
+
+  private failPendingOverflow(): never {
+    this.takePending();
+    this.held = null;
+    this.fence = null;
+    this.failure = new TranslatorBudgetExceededError("live_transient", MAX_PENDING_CHARS * 2);
+    throw this.failure;
   }
 
   /** Route text to the client, or into the fence hold while one is open. */

@@ -145,8 +145,10 @@ envelopes, and real HTTP streams; `tests/server/inbound-body-budget.test.ts` cov
 
 ## Stream-buffer accounting
 
-`src/lib/tool-envelope-echo-filter.ts` retains at most 65,536 UTF-16 code units in an
-unresolved marker line, independently of its existing bounded fenced-code hold. Whitespace
+`src/lib/tool-envelope-echo-filter.ts` retains at most 65,536 UTF-16 code units of
+unresolved marker-line content, independently of its existing bounded fenced-code hold.
+LF and CRLF settle the line without counting toward the limit. A CR at the limit is
+held for one unit of lookahead and counts as content if LF does not follow. Whitespace
 following a whole marker is classified one arriving scalar at a time; only line settlement or
 prose divergence rescans the retained suffix. Exceeding the pending limit clears retained text
 and permanently fails that filter with `TranslatorBudgetExceededError` (`live_transient`,

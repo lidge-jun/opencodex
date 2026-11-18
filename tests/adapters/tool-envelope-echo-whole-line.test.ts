@@ -113,11 +113,21 @@ describe("whole-line echo markers", () => {
     },
   );
 
-  test("the exact pending limit still permits EOF or a line-ending decision", () => {
-    const marker = "[Tool Result]";
-    const atLimit = marker + " ".repeat(64 * 1024 - marker.length);
-    expect(bothWays(atLimit)).toBe("");
-    expect(bothWays(atLimit.slice(0, -2) + "\r\nprivate-fixture")).toBe("");
+  const marker = "[Tool Result]";
+  const atLimit = marker.padEnd(64 * 1024);
+  test.each([["EOF", ""], ["LF", "\n"], ["CRLF", "\r\n"]])(
+    "allows exactly the pending limit at %s and rejects one more content unit", (_name, ending) => {
+      const tail = ending ? `${ending}private-fixture` : "";
+      expect(bothWays(atLimit + tail)).toBe("");
+      expect(() => stripToolEnvelopeEcho(atLimit + " " + tail)).toThrow(TranslatorBudgetExceededError);
+      expect(() => streamed(atLimit + " " + tail)).toThrow(TranslatorBudgetExceededError);
+    },
+  );
+
+  test("a CR beyond the pending limit counts as content without a following LF", () => {
+    expect(() => streamed(atLimit + "\r")).toThrow(TranslatorBudgetExceededError);
+    expect(() => streamed(atLimit + "\r\r\n")).toThrow(TranslatorBudgetExceededError);
+    expect(() => streamed(atLimit + "\rprose")).toThrow(TranslatorBudgetExceededError);
   });
 
   test("an oversized candidate fails within one delta, including inside a fence", () => {
