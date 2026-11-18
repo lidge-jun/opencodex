@@ -163,6 +163,12 @@ async function send(config: OcxConfig, body: Record<string, unknown>, headers?: 
   return { requestId, response, text };
 }
 
+async function waitForUpstreamPull(pull: Promise<void>, pending: ReturnType<typeof send>): Promise<void> {
+  await Promise.race([pull, pending.then(({ response }) => {
+    throw new Error(`Messages request settled with HTTP ${response.status} before the expected upstream pull`);
+  })]);
+}
+
 /** Streams the first frames of a turn, then stays open until the request is aborted. */
 function hangingAfterPartialTurn(): Response {
   return new Response(new ReadableStream<Uint8Array>({
@@ -608,6 +614,25 @@ describe("managed native Messages", () => {
     expect(row.failureDetail).toMatchObject({ code: "body_stall" });
   });
 
+  test("reports early request settlement while waiting for an upstream pull", async () => {
+    const config = fixtureConfig(1);
+    Object.assign(config.providers.anth!, {
+      fetch: async () => Response.json({ type: "error", error: { type: "invalid_request_error" } }, { status: 400 }),
+    });
+    const pending = send(config, { ...SOURCE_BODY, stream: true });
+    const missingPull = Promise.withResolvers<void>();
+    try {
+      await pending;
+      const outcome = await Promise.race([
+        waitForUpstreamPull(missingPull.promise, pending).catch(error => error.message),
+        Bun.sleep(0).then(() => "still waiting"),
+      ]);
+      expect(outcome).toBe("Messages request settled with HTTP 400 before the expected upstream pull");
+    } finally {
+      missingPull.resolve();
+    }
+  });
+
   for (const keepSending of [true, false]) {
     test(keepSending ? "raw fragments keep an incomplete Messages frame alive" : "a partial Messages frame stalls without more raw bytes", async () => {
       const config = fixtureConfig(1, { claudeCode: { bodyStallSec: 1 } as OcxConfig["claudeCode"] });
@@ -628,13 +653,13 @@ describe("managed native Messages", () => {
       jest.useFakeTimers();
       const pending = send(config, { ...SOURCE_BODY, stream: true });
       try {
-        await reads[0]!.promise;
+        await waitForUpstreamPull(reads[0]!.promise, pending);
         controller.enqueue(bytes.subarray(0, 16));
-        await reads[1]!.promise;
+        await waitForUpstreamPull(reads[1]!.promise, pending);
         if (keepSending) {
           jest.advanceTimersByTime(600);
           controller.enqueue(bytes.subarray(16, 32));
-          await reads[2]!.promise;
+          await waitForUpstreamPull(reads[2]!.promise, pending);
           jest.advanceTimersByTime(600);
           if (!cancelled) {
             controller.enqueue(bytes.subarray(32));
@@ -656,8 +681,8 @@ describe("managed native Messages", () => {
           expect(cancelled).toMatchObject({ name: "TimeoutError" });
         }
       } finally {
-        if (!finished && !cancelled) controller.close();
         jest.useRealTimers();
+        if (!finished && !cancelled) controller.close();
         await pending;
       }
     });
