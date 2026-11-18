@@ -23,8 +23,9 @@ through the disk reader. A row keeps:
   (the Messages passthrough restating an upstream status and closed type); `upstreamErrorIsLocal` keeps
   it out of the final row's evidence, including the upstream code/type diagnostics of the failed frame the
   proxy wrote itself. The web-search loop records its own header and body deadlines this way
-  (`header_timeout`, `generation_timeout`), so a deadline the proxy enforced never reads as a provider
-  failure. A context reused across attempts drops the previous attempt's local verdict at the attempt
+  (`header_timeout`, `generation_timeout`), recording the local deadline in `failureDetail` and omitting
+  `upstreamCondition`. A body stall retains `failureCause: upstream-fault` and `terminalSource: upstream`.
+  A context reused across attempts drops the previous attempt's local verdict at the attempt
   boundary (`takeLocalFailureState` in policy fallback, compaction recovery and the opaque-blob reset) and
   puts it back only when that attempt is rolled back without dispatching (`restoreLocalFailureState`).
   The Messages passthrough classifies the condition where it parses the
