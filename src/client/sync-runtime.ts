@@ -73,18 +73,27 @@ export function finishClientRuntimeStop(
   });
 }
 
-/** Yield only for proved SQLite contention; storage/identity failures remain immediate refusals. */
 export async function markClientRuntimeStoppingWithRetry(
   expected: Required<Pick<RuntimePortState, "pid" | "port" | "attestationSecret">>,
   deps: { mark?: () => void; sleep?: (ms: number) => Promise<unknown> } = {},
 ): Promise<boolean> {
+  return retryClientConfigMutation(() => {
+    (deps.mark ?? (() => markClientRuntimeStopping(expected)))();
+    return true;
+  }, deps.sleep);
+}
+
+/** Yield only for proved SQLite contention; storage/identity failures remain immediate refusals. */
+export async function retryClientConfigMutation(
+  work: () => boolean, sleep: (ms: number) => Promise<unknown> = Bun.sleep,
+): Promise<boolean> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
-    try { (deps.mark ?? (() => markClientRuntimeStopping(expected)))(); return true; }
+    try { return work(); }
     catch (error) {
       const cause = error instanceof ConfigMutationLockError ? error.cause : undefined;
       const code = cause && typeof cause === "object" && "code" in cause ? cause.code : undefined;
       if ((code !== "SQLITE_BUSY" && code !== "SQLITE_LOCKED") || attempt === 19) return false;
-      await (deps.sleep ?? Bun.sleep)(50);
+      await sleep(50);
     }
   }
   return false;

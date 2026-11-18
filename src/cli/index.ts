@@ -1122,7 +1122,7 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
   const claimTeardown = (endpoint: { hostname: string; port: number }, endpointSource: "exact" | "guessed") => {
     if (teardownNonce || (!linkStop && (stoppingSibling || connectedClientSkip))) return;
     try {
-      teardownNonce = claimPendingTeardown(endpoint, endpointSource, process.pid, handoverRequested ? "update-restart" : undefined, windowsPartAReceiptRecord(), linkStop?.owner).nonce;
+      teardownNonce = claimPendingTeardown(endpoint, endpointSource, process.pid, handoverRequested ? "update-restart" : undefined, windowsPartAReceiptRecord(), linkStop?.owner, linkStop?.inheritedTeardownDigest).nonce;
     } catch (err) {
       // A Link Child can exit before native restoration. Record that obligation first.
       if (linkStop) throw new ProxyOwnershipRefusedError(`Link Child stop refused: could not record the deferred-teardown receipt (${err instanceof Error ? err.message : String(err)}). Repair the OpenCodex home's storage and retry ocx stop.`, "link_teardown_receipt_failed");

@@ -1,4 +1,5 @@
 import { readdirSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { isPendingTeardownAbandoned, isValidPendingTeardownReceipt, type OutstandingTeardown, type PendingTeardownReceipt } from "../config/pending-teardown";
 import { isAnyTeardownObligationFileName, pendingTeardownNonceFromFileName } from "../config/pending-teardown-names.mjs";
@@ -13,8 +14,11 @@ export type LinkStopRuntime = Required<Pick<RuntimePortState, "pid" | "port" | "
 export type NativeTeardownDecision = "restore" | "defer" | "refuse";
 const host = (value: string) => value.trim().toLowerCase().replace(/^\[(.*)\]$/, "$1");
 
+type TeardownSnapshot = { state: "valid"; path: string; bytes: Buffer; receipt: PendingTeardownReceipt };
+export type LinkInheritedTeardown = OutstandingTeardown & { bytes?: Buffer };
+
 type NativeTeardownEvidence =
-  | { state: "valid"; path: string; bytes: Buffer; receipt: PendingTeardownReceipt }
+  | TeardownSnapshot
   | { state: "invalid"; nonce: string; detail: string }
   | { state: "quarantined" }
   | { state: "unscannable"; detail: string };
@@ -36,9 +40,19 @@ export function readLinkNativeTeardownEvidence(): NativeTeardownEvidence[] {
   });
 }
 
+/** Bind the original JSON bytes, which include each receipt's filename nonce. */
+export function inheritedTeardownDigest(snapshots: readonly Buffer[]): string | undefined {
+  if (snapshots.length === 0) return;
+  const hash = createHash("sha256");
+  for (const bytes of [...snapshots].sort(Buffer.compare)) {
+    hash.update(bytes).update("\0");
+  }
+  return hash.digest("hex");
+}
+
 /** Preserve the parent's recovery ownership rules and use one snapshot before/after stop. */
-export function readLinkInheritedTeardowns(): OutstandingTeardown[] {
-  return readLinkNativeTeardownEvidence().flatMap<OutstandingTeardown>(read => {
+export function readLinkInheritedTeardowns(): LinkInheritedTeardown[] {
+  return readLinkNativeTeardownEvidence().flatMap<LinkInheritedTeardown>(read => {
     if (read.state === "quarantined") return [];
     if (read.state === "valid" && read.receipt.ownerStartTime) {
       const { ownerPid: pid, ownerStartTime: startTime, nonce } = read.receipt;
@@ -70,15 +84,17 @@ export function linkNativeTeardownDecision(expected?: LinkStopRuntime): NativeTe
       || host(runtime.hostname ?? "127.0.0.1") !== "127.0.0.1"
       || runtime.clientStopping !== true || runtime.clientStopRequested !== true) return "refuse";
     // A malformed/guessed inherited obligation blocks the parent's restore too.
-    // Other endpoints cannot be proved down synchronously by this Child.
     if (evidence.some(read => read.state === "invalid" || read.state === "unscannable"
-      || read.state === "valid" && (read.receipt.endpointSource !== "exact"
-        || read.receipt.endpoint.port !== expected.port || host(read.receipt.endpoint.hostname) !== "127.0.0.1"))) return "refuse";
+      || read.state === "valid" && read.receipt.endpointSource !== "exact")) return "refuse";
+    const sameEndpoint = (read: TeardownSnapshot) =>
+      read.receipt.endpoint.port === expected.port && host(read.receipt.endpoint.hostname) === "127.0.0.1";
     const owner = activeClientStopOwner(runtime);
-    const claim = owner && evidence.find(read => read.state === "valid"
+    const claim = owner && evidence.find(read => read.state === "valid" && sameEndpoint(read)
       && read.receipt.nonce === owner.nonce && read.receipt.ownerPid === owner.pid
       && read.receipt.ownerStartTime === owner.startTime);
-    if (claim?.state === "valid" && readBoundedRegularFileSync(claim.path, 4 * 1024).equals(claim.bytes)
+    const foreign = evidence.flatMap(read => read.state === "valid" && !sameEndpoint(read) ? [read.bytes] : []);
+    if (claim?.state === "valid" && inheritedTeardownDigest(foreign) === claim.receipt.inheritedTeardownDigest
+      && readBoundedRegularFileSync(claim.path, 4 * 1024).equals(claim.bytes)
       && Bun.deepEquals(readSyncRuntime(), runtime, true)) return "defer";
   } catch { /* unreadable or replaced runtime evidence is not an active parent */ }
   return "refuse";

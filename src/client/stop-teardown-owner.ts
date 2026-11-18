@@ -58,10 +58,22 @@ export function readClientStopProcessStart(pid: number): string | undefined {
 
 export type ClientStopOwnerStatus = "active" | "confirmed-stale" | "unverified";
 
+const creationIdentity: Partial<Record<NodeJS.Platform, RegExp>> = {
+  darwin: /^darwin:([1-9]\d{0,19}):(?:0|[1-9]\d{0,5})$/,
+  linux: /^linux:[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}:(0|[1-9]\d{0,19})$/,
+  win32: /^win32:([1-9]\d{0,18})$/,
+};
+
+function validCreationIdentity(value: unknown): boolean {
+  if (typeof value !== "string" || value.length > 80) return false;
+  const ticks = creationIdentity[process.platform]?.exec(value)?.[1];
+  return ticks !== undefined && BigInt(ticks) <= (process.platform === "win32" ? 3155378975999999999n : 0xffffffffffffffffn);
+}
+
 /** Bracket argv with creation/UID reads so a recycled PID cannot inherit the fence. */
 export function observeClientStopOwner({ pid, startTime, nonce }: ClientStopOwner): ClientStopOwnerStatus {
   if (!Number.isInteger(pid) || pid <= 0 || pid > 0x7fffffff
-    || typeof startTime !== "string" || startTime.length === 0 || startTime.length > 80
+    || !validCreationIdentity(startTime)
     || typeof nonce !== "string" || !/^[a-f0-9]{32}$/.test(nonce)) return "unverified";
   try { process.kill(pid, 0); }
   catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH" ? "confirmed-stale" : "unverified"; }
@@ -88,6 +100,7 @@ export function observeClientStopOwner({ pid, startTime, nonce }: ClientStopOwne
     }
     const after = readClientStopProcessStart(pid);
     if (after === undefined) return "unverified";
-    return after === startTime && stop ? "active" : "confirmed-stale";
+    if (after !== startTime) return "confirmed-stale";
+    return stop ? "active" : "unverified";
   } catch { return "unverified"; }
 }

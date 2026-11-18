@@ -1,8 +1,9 @@
 /** Isolated disk and native-runtime coverage for a connected Link Child's stop. */
 import { mock } from "bun:test";
+import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { getDefaultConfig, saveConfig } from "../../src/config";
+import { getDefaultConfig, prepareConfigMutationDatabasePathForWrite, saveConfig } from "../../src/config";
 import { CODEX_CONFIG_PATH, CODEX_HOME, CODEX_PROFILE_PATH, DEFAULT_CATALOG_PATH } from "../../src/codex/paths";
 import { JOURNAL_PATH, markJournalInjectedState, writeJournal } from "../../src/codex/journal";
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
@@ -41,6 +42,9 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   unverifiedStopOwner?: boolean;
   receiptWriteFails?: boolean;
   installedUnit?: boolean;
+  danglingServiceRecord?: boolean;
+  busyStopFence?: boolean;
+  busyRollbackPublication?: boolean;
   terminationPlatform?: "linux" | "darwin";
   removeToken?: boolean;
   finalizeFailure?: boolean;
@@ -218,6 +222,11 @@ const snapshot = (result: unknown) => ({
 });
 const report = (result: unknown) => writeFileSync(join(home, "result.json"), JSON.stringify(snapshot(result)));
 process.on("exit", () => writeFileSync(join(home, "exit.json"), JSON.stringify(snapshot(null))));
+function holdConfigLock(released?: () => void) {
+  const db = new Database(prepareConfigMutationDatabasePathForWrite());
+  db.exec("BEGIN IMMEDIATE");
+  setTimeout(() => { db.close(); released?.(); }, 120);
+}
 let receiptOwner: ClientStopOwner | undefined;
 if (options.preserve === "service") process.env.OCX_SERVICE = "1";
 if (options.preserve === "desktop") takeDesktopSupervisedMarker({ OCX_DESKTOP_SUPERVISED: "1" });
@@ -241,8 +250,11 @@ if (options.preserve === "receipt") {
     if (!ready.value || !new TextDecoder().decode(ready.value).includes("ready")) throw new Error("fixture owner did not start");
     ownerPid = owner.pid;
     const { readClientStopProcessStart } = await import("../../src/client/stop-teardown-owner");
-    const startTime = options.receiptState === "parent-reused" ? "darwin:0:0" : readClientStopProcessStart(ownerPid);
-    if (!startTime) throw new Error("fixture stop process creation identity unavailable");
+    const observedStart = readClientStopProcessStart(ownerPid);
+    if (!observedStart) throw new Error("fixture stop process creation identity unavailable");
+    const startTime = options.receiptState === "parent-reused"
+      ? observedStart.replace(/:\d+$/, value => value === ":0" ? ":1" : `:${BigInt(value.slice(1)) - 1n}`)
+      : observedStart;
     receiptOwner = { pid: ownerPid, nonce: randomBytes(16).toString("hex"), startTime };
   }
   const other = ["abandoned-other", "abandoned-unknown", "abandoned-dead-other"].includes(options.receiptState ?? "")
@@ -331,6 +343,15 @@ if (options.mode === "retry") {
     } }));
   }
   let replacementAttempts = 0;
+  let rollbackLockHeld = false;
+  const observerStarts: boolean[] = [];
+  if (options.busyRollbackPublication) {
+    const observation = await import("../../src/local-credentials/runtime-observation");
+    mock.module("../../src/local-credentials/runtime-observation", () => ({ ...observation, observeLocalCredentials: () => {
+      observerStarts.push(rollbackLockHeld);
+      return { stop() {} };
+    } }));
+  }
   let restartSettled: (() => Promise<void>) | undefined;
   const replaceSavedConnection = () => {
     config.client!.connectedAt = "2026-11-17T00:00:00.000Z";
@@ -367,6 +388,10 @@ if (options.mode === "retry") {
     if (options.failedRollback === "during-rebind" && replacementAttempts === 1) replaceSavedConnection();
     const server = startMachineListener(port, options.oldStopCapability && deps?.restart
       ? { ...deps, restart: { ...deps.restart, linkStopFence: undefined } } : deps);
+    if (options.busyRollbackPublication && replacementAttempts === 1) {
+      rollbackLockHeld = true;
+      holdConfigLock(() => { rollbackLockHeld = false; });
+    }
     const stop = server.stop.bind(server);
     server.stop = ((close: boolean) => {
       if (options.mode === "file-restart-overlap" && !close) {
@@ -403,9 +428,13 @@ if (options.mode === "retry") {
     let sync = "accepted";
     try { clientSyncRuntimeGuard()(); } catch (error) { sync = (error as { code: string }).code; }
     const admission = options.mode === "file-restart-overlap" ? await requestRestart() : undefined;
-    const health = await fetch(`http://127.0.0.1:${config.port}/healthz`);
-    report({ preflight, rolledBack: after.servingGeneration !== before.servingGeneration, bound: health.ok,
+    const health = await fetch(`http://127.0.0.1:${config.port}/healthz`).catch(error => {
+      if (!options.busyRollbackPublication) throw error;
+      return null;
+    });
+    report({ preflight, rolledBack: after.servingGeneration !== before.servingGeneration, bound: health?.ok ?? false,
       stopping: after.clientStopping === true, explicitStop: after.clientStopRequested === true,
+      ...(options.busyRollbackPublication ? { observerStarts, replacementAttempts } : {}),
       ...(options.finishStopBeforeRollback ? { retainedStop: after.clientStopRequested === false } : {}), sync, admission });
     process.exit(0);
   }
@@ -534,7 +563,9 @@ if (options.mode === "retry") {
     const { withConfigMutationLockSync } = await import("../../src/config");
     const admitted = options.deferFileApply ? clientSyncRuntimeGuard() : undefined;
     const { preflightConnectedClientStop } = await import("../../src/cli/stop-restore");
-    const outcome = await preflightConnectedClientStop({ pid: process.pid, port: config.port, hostname: "127.0.0.1" }, () => {});
+    const outcome = await preflightConnectedClientStop({ pid: process.pid, port: config.port, hostname: "127.0.0.1" }, () => {
+      if (options.busyStopFence) holdConfigLock();
+    });
     if (admitted) {
       try {
         await (await import("../../src/integrations/route-intent-connected")).applyConnectedRouteIntent(expected, token, preparedFileIntent, {
@@ -654,6 +685,7 @@ if (options.mode === "retry") {
   report({ signals, message });
 } else if (options.mode === "offline-stop") {
   const { unitPath } = await import("../../src/service/systemd");
+  if (options.danglingServiceRecord) symlinkSync(join(home, "missing-service-state"), join(home, "service-state.json"));
   if (options.installedUnit) {
     mkdirSync(dirname(unitPath()), { recursive: true });
     writeFileSync(unitPath(), "[Service]\n");

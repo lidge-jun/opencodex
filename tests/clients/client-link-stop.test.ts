@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fixturePath, repoPath } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { hostedWindowsQuarantine } from "../helpers/windows-ci-quarantine";
-import { isClientStopArgv, isClientStopCommandLine } from "../../src/client/stop-teardown-owner";
+import { isClientStopArgv, isClientStopCommandLine, observeClientStopOwner, readClientStopProcessStart } from "../../src/client/stop-teardown-owner";
 
 async function runStop(options: Record<string, unknown>) {
   const root = mkdtempSync(join(tmpdir(), "ocx-link-stop-"));
@@ -99,7 +99,7 @@ for (const mode of ["parent", "signal"]) for (const scheduled of [false, true]) 
   }, 20_000);
 }
 
-for (const mode of ["parent-active", "parent-unverified", "parent-malformed", "signal-active", "pending", "foreign-owner", "wrong-token", "corrupt-receipt", "missing-config", "new-connection", "pending-connect"]) {
+for (const mode of ["parent-active", "parent-unverified", "parent-malformed", "parent-malformed-start", "signal-active", "pending", "foreign-owner", "wrong-token", "corrupt-receipt", "missing-config", "new-connection", "pending-connect"]) {
   test(`retained stop refuses disconnect recycle while ${mode}`, async () => {
     const result = await runRecovery(mode);
     expect(result).toMatchObject({ beforeRecoveryAdmission: 409, recoveryAdmission: 409, role: "client", spawned: 0,
@@ -238,6 +238,25 @@ test("offline Link cleanup preserves the connection on Linux without a user mana
 test("offline Link cleanup refuses an installed Linux unit when its manager is unreadable", async () => {
   const report = await runStop({ mode: "offline-stop", fileClients: ["pi"], installedUnit: true, expectedUnsupportedStop: true });
   expect(report.result).toEqual({ exitCode: 1 });
+  expect(report.fileAfter).toEqual(report.fileOwnedBytes);
+}, 20_000);
+
+test.skipIf(process.platform === "win32")("offline Link cleanup refuses a dangling service record with an unreadable manager", async () => {
+  const report = await runStop({ mode: "offline-stop", fileClients: ["pi"], danglingServiceRecord: true, expectedUnsupportedStop: true });
+  expect(report.result).toEqual({ exitCode: 1 });
+  expect(report.fileAfter).toEqual(report.fileOwnedBytes);
+}, 20_000);
+
+test("parent preflight retries a busy config lock before fencing the exact runtime", async () => {
+  const report = await runStop({ mode: "file-preflight", fileClients: ["pi"], busyStopFence: true });
+  expect(report.result).toEqual({ outcome: null, bound: true, stopping: true });
+  expect(report.fileAfter.pi).not.toContain("127.0.0.1");
+}, 20_000);
+
+test("restart rollback keeps its rebound listener while the config lock is busy", async () => {
+  const report = await runStop({ mode: "file-restart-control", preserve: "restart-rollback", fileClients: ["pi"], busyRollbackPublication: true });
+  expect(report.result).toEqual({ rolledBack: true, bound: true, stopping: false, explicitStop: false, sync: "accepted",
+    observerStarts: [false, false], replacementAttempts: 1 });
   expect(report.fileAfter).toEqual(report.fileOwnedBytes);
 }, 20_000);
 
@@ -553,6 +572,70 @@ for (const receiptState of ["abandoned", "abandoned-dead-other", "quarantined"])
   }, 20_000);
 }
 
+for (const changedReceipt of [false, true]) test.skipIf(process.platform !== "darwin")(
+  changedReceipt ? "foreground CLI stop retains the listener if the older endpoint receipt changes after preflight"
+    : "foreground CLI stop completes native handoff with a verified older endpoint receipt", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ocx-link-stop-handoff-")));
+  const home = join(root, "ocx"), codex = join(root, "codex");
+  const env = { ...process.env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: home, CODEX_HOME: codex,
+    OCX_SERVICE: "", OCX_SERVICE_MANAGED: "0", PI_CODING_AGENT_DIR: join(root, ".pi", "agent") };
+  const cli = join(root, "src", "cli", "index.ts");
+  mkdirSync(dirname(cli), { recursive: true });
+  const child = Bun.spawn([process.execPath, fixturePath("client-link-stop-runner.ts")], {
+    cwd: repoPath(), env, stdout: "ignore", stderr: "pipe",
+    stdin: new Blob([JSON.stringify({ mode: "runtime", osSignal: true, preserve: "receipt", receiptState: "abandoned-dead-other", fileClients: ["pi"] })]),
+  });
+  const childError = new Response(child.stderr).text();
+  try {
+    const deadline = Date.now() + 5000;
+    while (!existsSync(join(home, "ready")) && child.exitCode === null && Date.now() < deadline) await Bun.sleep(10);
+    expect(existsSync(join(home, "ready"))).toBe(true);
+    const receipts = () => readdirSync(home).filter(name => name.includes("pending-teardown"));
+    expect(receipts()).toHaveLength(1);
+    const inheritedPath = join(home, receipts()[0]!);
+    writeFileSync(cli, `
+      import { mock } from "bun:test";
+      import { appendFileSync } from "node:fs";
+      const lifecyclePath = ${JSON.stringify(repoPath("src/client/lifecycle-lock.ts"))};
+      const lifecycle = await import(lifecyclePath);
+      const { withClientLifecycle, withClientLifecycleSync } = lifecycle;
+      const deps = { lockPath: ${JSON.stringify(join(home, "lifecycle.sqlite"))} };
+      mock.module(lifecyclePath, () => ({ ...lifecycle,
+        withClientLifecycle: work => withClientLifecycle(work, deps),
+        withClientLifecycleSync: work => withClientLifecycleSync(work, deps) }));
+      const servicePath = ${JSON.stringify(repoPath("src/service.ts"))};
+      const service = await import(servicePath);
+      mock.module(servicePath, () => ({ ...service, stopServiceIfInstalledDetailed: () => {
+        ${changedReceipt ? `appendFileSync(${JSON.stringify(inheritedPath)}, " ");` : ""}
+        return "absent";
+      } }));
+      mock.module(${JSON.stringify(repoPath("src/cli/codex-shim-autorestore.ts"))}, () => ({ maybeAutoRestoreCodexShimAsync: async () => {} }));
+      await import(${JSON.stringify(repoPath("src/cli/index.ts"))});
+    `);
+    const stop = await Bun.$`${process.execPath} ${cli} stop --json`.env(env).quiet().nothrow();
+    if (changedReceipt) {
+      expect(stop.exitCode, stop.stderr.toString()).toBe(1);
+      expect(stop.stderr.toString()).toContain("Link Child did not exit after SIGTERM");
+      const { port } = JSON.parse(readFileSync(join(home, "runtime-port.json"), "utf8"));
+      expect((await fetch(`http://127.0.0.1:${port}/healthz`)).ok).toBe(true);
+      expect(receipts()).toHaveLength(2);
+      return;
+    }
+    expect(stop.exitCode, stop.stderr.toString()).toBe(0);
+    expect(JSON.parse(stop.stdout.toString())).toMatchObject({ runtimeDown: true, sharedTeardown: "restored" });
+    expect(await child.exited, await childError).toBe(0);
+    const atExit = JSON.parse(readFileSync(join(home, "exit.json"), "utf8"));
+    expect(atExit.after).toBe(atExit.before);
+    expect(atExit.fileAfter.pi).not.toContain("127.0.0.1");
+    expect(readFileSync(join(codex, "config.toml"), "utf8")).toBe('model = "native"\n');
+    expect(receipts()).toEqual([]);
+  } finally {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+    removeTreeWithRetry(root);
+  }
+}, 20_000);
+
 for (const receiptState of ["parent", "parent-stale", "parent-spaced"]) {
   test(`an active native stop (${receiptState}) defers only native restoration after file cleanup`, async () => {
     const report = await runStop({ mode: "runtime", preserve: "receipt", receiptState, fileClients: ["pi"] });
@@ -584,6 +667,26 @@ test("native teardown recognizes only supported stop invocations, including an u
     expect(isClientStopCommandLine(command), command).toBe(false);
   }
 });
+
+test("stop owner with malformed creation identity or unrecognized invocation remains unverified", async () => {
+  const child = Bun.spawn([process.execPath, "-e", 'console.log("ready"); setInterval(() => {}, 1000)'], { stdout: "pipe" });
+  try {
+    const reader = child.stdout.getReader();
+    const ready = await reader.read();
+    reader.releaseLock();
+    expect(new TextDecoder().decode(ready.value)).toContain("ready");
+    const startTime = readClientStopProcessStart(child.pid);
+    expect(startTime).toBeDefined();
+    const owner = { pid: child.pid, nonce: "a".repeat(32) };
+    expect([
+      observeClientStopOwner({ ...owner, startTime: "malformed" }),
+      observeClientStopOwner({ ...owner, startTime: startTime! }),
+    ]).toEqual(["unverified", "unverified"]);
+  } finally {
+    child.kill();
+    await child.exited;
+  }
+}, 20_000);
 
 test("an abandoned native teardown receipt cannot release a conflicting Link file route", async () => {
   const report = await runStop({ mode: "runtime", preserve: "receipt", receiptState: "abandoned",

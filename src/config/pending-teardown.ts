@@ -33,6 +33,8 @@ export type PendingTeardownReceipt = {
   ownerPid: number;
   /** Optional process incarnation on claims bound to an active Link stop fence. */
   ownerStartTime?: string;
+  /** Exact foreign-endpoint receipt snapshot verified by this Link stop before signaling. */
+  inheritedTeardownDigest?: string;
   /** Identity of this claim; also its filename, which is what makes a clear a single-syscall delete. */
   nonce: string;
   /** ISO timestamp, for diagnostics only; recovery is decided by liveness, not by age. */
@@ -137,6 +139,8 @@ export function isValidPendingTeardownReceipt(value: unknown, nonce: string): va
     && receipt.nonce === nonce
     && (receipt.ownerStartTime === undefined || (typeof receipt.ownerStartTime === "string"
       && receipt.ownerStartTime.length > 0 && receipt.ownerStartTime.length <= 80))
+    && (receipt.inheritedTeardownDigest === undefined || (typeof receipt.inheritedTeardownDigest === "string"
+      && /^[a-f0-9]{64}$/.test(receipt.inheritedTeardownDigest)))
     && typeof receipt.createdAt === "string"
     && (receipt.endpointSource === "exact" || receipt.endpointSource === "guessed")
     && (receipt.handover === undefined || receipt.handover === "update-restart")
@@ -151,6 +155,7 @@ export function claimPendingTeardown(
   handover?: "update-restart",
   partA?: PendingTeardownPartA | null,
   stopOwner?: ClientStopOwner,
+  inheritedTeardownDigest?: string,
 ): PendingTeardownReceipt {
   const dir = getConfigDir();
   assertNotRealHomeUnderTest(dir);
@@ -161,6 +166,7 @@ export function claimPendingTeardown(
   const receipt: PendingTeardownReceipt = {
     ownerPid, nonce, createdAt: new Date().toISOString(), endpoint, endpointSource,
     ...(stopOwner ? { ownerStartTime: stopOwner.startTime } : {}),
+    ...(inheritedTeardownDigest ? { inheritedTeardownDigest } : {}),
     ...(handover ? { handover } : {}),
     ...(partA ? { partA } : {}),
   };

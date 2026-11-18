@@ -10,7 +10,7 @@ export type { RestoreBoundaryOwnership } from "../client/restore-ownership";
 import { inspectStopRestoreOwnership, stopRestoreWriteGuard } from "./stop-restore-guard";
 export { clearRestoredStopReceipts, settleUnrestoredStopBoundary } from "./stop-restore-guard";
 import { readAlivePid, readPid, readRuntimePort, type ClientStopOwner } from "../config/process-state";
-import type { OutstandingTeardown } from "../config/pending-teardown";
+import type { LinkInheritedTeardown } from "../client/stop-native-handoff";
 import { loadConfig } from "../config";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { createLocalAttestationChallenge, LOCAL_ATTESTATION_CHALLENGE_HEADER, LOCAL_ATTESTATION_PROOF_HEADER, verifyLocalAttestationProof } from "../lib/local-management-attestation";
@@ -37,7 +37,7 @@ export function preserveConnectedClientRoutingOnExit(teardown: StartExitTeardown
 
 type ConnectedStopTarget = { pid: number; port: number; hostname?: string };
 export type StopTargetProof = { target: ConnectedStopTarget; verify: () => void; standaloneSibling?: true };
-export type LinkStopPreflight = StopTargetProof & { owner: ClientStopOwner; forceKill: (pid: number) => void };
+export type LinkStopPreflight = StopTargetProof & { owner: ClientStopOwner; inheritedTeardownDigest?: string; forceKill: (pid: number) => void };
 
 const CONNECTED_STOP_PROBE_MS = 2000;
 export const unsupportedConnectedStop = () => new ProxyOwnershipRefusedError(
@@ -144,7 +144,7 @@ export async function assertConnectedClientStopSupported(
 /** Fail before either service-manager path, including a manager that cascades process exit. */
 export async function preflightConnectedClientStop(
   approved: ConnectedStopTarget | undefined, onFence: (finish: () => Promise<void>) => void,
-  inheritedTeardowns?: readonly OutstandingTeardown[],
+  inheritedTeardowns?: readonly LinkInheritedTeardown[],
   onLinkStop?: (preflight: LinkStopPreflight) => void,
   onTarget?: (proof: StopTargetProof) => void,
   siblingOfPort?: number,
@@ -216,16 +216,19 @@ export async function preflightConnectedClientStop(
       if (!link || pinned?.clientLinkOwner !== link || loadConfig().port !== target.port) throw unsupportedConnectedStop();
       // A native Child has no /api/stop refusal: SIGTERM can escalate to SIGKILL.
       // Refuse known inherited restore blockers before any manager or kill step.
-      const { readLinkInheritedTeardowns } = await import("../client/stop-native-handoff");
+      const { inheritedTeardownDigest, readLinkInheritedTeardowns } = await import("../client/stop-native-handoff");
       const normalizeHost = (value: string | undefined) => (value ?? "127.0.0.1").trim().toLowerCase().replace(/^\[(.*)\]$/, "$1");
+      const verifiedForeign: Buffer[] = [];
       for (const read of inheritedTeardowns ?? readLinkInheritedTeardowns()) {
-        const exact = read.state === "valid" && read.receipt.endpointSource === "exact";
-        const endpoint = read.state === "valid" ? read.receipt.endpoint : null;
-        const sameTarget = endpoint && endpoint.port === target.port
-          && normalizeHost(endpoint.hostname) === normalizeHost(target.hostname);
-        if (!exact || !endpoint || (!sameTarget && await probeEndpointLiveness(endpoint) !== "dead")) {
-          throw new ProxyOwnershipRefusedError("Link Child native teardown preflight refused: pending recovery evidence would prevent native restoration. No process was stopped; repair that evidence, then retry ocx stop.", "link_native_teardown_refused");
+        if (read.state === "valid" && read.receipt.endpointSource === "exact") {
+          const endpoint = read.receipt.endpoint;
+          if (endpoint.port === target.port && normalizeHost(endpoint.hostname) === normalizeHost(target.hostname)) continue;
+          if (read.bytes && await probeEndpointLiveness(endpoint) === "dead") {
+            verifiedForeign.push(read.bytes);
+            continue;
+          }
         }
+        throw new ProxyOwnershipRefusedError("Link Child native teardown preflight refused: pending recovery evidence would prevent native restoration. No process was stopped; repair that evidence, then retry ocx stop.", "link_native_teardown_refused");
       }
       // A manager can kill the Child before its signal handler runs. Drain these file routes
       // first, under an exact runtime fence; refusal must return before any manager/kill step.
@@ -248,9 +251,8 @@ export async function preflightConnectedClientStop(
       const checkRuntime = () => {
         if (!sameStart() || !Bun.deepEquals(readRuntimePort(identity.pid), stopping, true)) throw new Error("client_runtime_changed");
       };
-      const guard = stopRestoreWriteGuard(connection.value);
       const fenced = await markClientRuntimeStoppingWithRetry(identity, {
-        mark: () => guard.run(() => {
+        mark: () => stopRestoreWriteGuard(connection.value).run(() => {
           const current = readRuntimePort(identity.pid);
           if (!sameStart() || (!Bun.deepEquals(current, pinned, true) && !Bun.deepEquals(current, stopping, true))) throw new Error("client_runtime_changed");
           // The marker is checked by every sync commit, including already admitted work.
@@ -261,6 +263,7 @@ export async function preflightConnectedClientStop(
         if (!fenced) throw new Error("the runtime sync fence could not be verified");
         await restoreLinkFileRouting(connection.value, { beforeWrite: checkRuntime });
         const { terminateAttestedClient } = await import("./stop-client-process");
+        const guard = stopRestoreWriteGuard(connection.value);
         const verify = () => {
           try { guard.run(() => {
             checkRuntime();
@@ -269,7 +272,7 @@ export async function preflightConnectedClientStop(
           catch { throw unsupportedConnectedStop(); }
         };
         onTarget?.({ target, verify });
-        onLinkStop?.({ target, owner, verify, forceKill: pid => {
+        onLinkStop?.({ target, owner, inheritedTeardownDigest: inheritedTeardownDigest(verifiedForeign), verify, forceKill: pid => {
           if (pid !== stopTarget.pid) throw unsupportedConnectedStop();
           terminateAttestedClient(pid, targetStart, verify);
         } });

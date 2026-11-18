@@ -85,7 +85,7 @@ async function main() {
   mock.module("../../src/client/stop-teardown-owner", () => ({ ...owner,
     observeClientStopOwner: (proof: ClientStopOwner) => {
       if (options.mode === "parent-unverified") return "unverified";
-      if (options.mode === "parent-malformed" && proof.nonce === "malformed") return observeOwner(proof);
+      if (proof.nonce === "malformed" || proof.startTime === "malformed") return observeOwner(proof);
       return owner.readClientStopProcessStart(proof.pid) === proof.startTime ? "active" : "confirmed-stale";
     },
   }));
@@ -119,10 +119,13 @@ async function main() {
     const outcome = await preflightConnectedClientStop({ pid: process.pid, port: config.port }, finish => { finishStop = finish; });
     observations.stopRefused = outcome !== null && outcome !== "already-stopped" && !outcome.ok;
     observations.activeAdmission = await restart(); // Latch the active marker before finalization.
-    if (["parent-stale-owner", "parent-malformed"].includes(options.mode)) {
+    if (["parent-stale-owner", "parent-malformed", "parent-malformed-start"].includes(options.mode)) {
       const runtimePath = join(home, "runtime-port.json");
       const disk = JSON.parse(readFileSync(runtimePath, "utf8"));
-      disk.clientStopOwner = { pid: process.pid, nonce: options.mode === "parent-malformed" ? "malformed" : "b".repeat(32), startTime: "darwin:0:0" };
+      const currentStart: string = disk.clientStopOwner.startTime;
+      const otherStart = currentStart.replace(/:\d+$/, value => value === ":0" ? ":1" : `:${BigInt(value.slice(1)) - 1n}`);
+      if (options.mode === "parent-malformed") disk.clientStopOwner.nonce = "malformed";
+      else disk.clientStopOwner.startTime = options.mode === "parent-malformed-start" ? "malformed" : otherStart;
       writeFileSync(runtimePath, JSON.stringify(disk));
     } else if (!["parent-active", "parent-unverified"].includes(options.mode)) await finishStop();
   }

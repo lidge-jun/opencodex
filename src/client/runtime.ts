@@ -37,7 +37,7 @@ import { createLinkParityReporter, type LinkParityReporter } from "./link-parity
 import { restoreLinkClientRoutingBeforeExit } from "./stop-routing";
 import { observeClientStopOwner } from "./stop-teardown-owner";
 import { SUPERVISOR_MARKER_ENVS } from "../lib/supervisor-markers";
-import { markClientRuntimeStopping, markClientRuntimeStoppingWithRetry } from "./sync-runtime";
+import { markClientRuntimeStopping, markClientRuntimeStoppingWithRetry, retryClientConfigMutation } from "./sync-runtime";
 import { startRouteIntentTick, type RouteIntentTick } from "../integrations/route-intent-tick";
 import { startRouteIntentWatch, type RouteIntentRuntimeWatch } from "./route-intent-watch";
 
@@ -379,8 +379,7 @@ export async function startClientRuntime(
     return explicitClientStopRequested === true
       && (!explicitClientStopOwner || observeClientStopOwner(explicitClientStopOwner) !== "confirmed-stale");
   };
-  // Returns false only for a rollback whose connection changed while it was binding: the new
-  // listener is then closed unpublished and the caller recycles.
+  // An unpublishable rollback closes the new listener before the caller considers a recycle.
   const serve = async (rollback?: { port: number; portWaitMs: number }): Promise<boolean> => {
     const supervisor = supervised
       ? createClientLinkSupervisor({
@@ -411,25 +410,22 @@ export async function startClientRuntime(
       ...(supervisor ? { linkConnectionGeneration: () => supervisor.connectionGeneration() }
         : homeInitiated && link ? { linkConnectionGeneration: () => verifiedHomeConnection(link.linkId) } : {}),
     }, rollback === undefined ? io : { ...io, portWaitMs: rollback.portWaitMs });
-    const publish = (): void => {
+    const publishRecord = (): void => {
+      // A parent stop can arrive after restart admission. Never clear its fence on rollback;
+      // a fresh process has another attestation identity and cannot inherit this request.
+      if (rollback) observeExplicitStop();
+      writePid(process.pid);
+      // A new generation refuses commits from syncs admitted before the failed restart.
+      writeRuntimePort({ ...clientRuntimeRecord(process.pid, boundPort, attestationSecret), servingGeneration: randomUUID(),
+        clientLinkOwner });
+    };
+    const activate = (): void => {
       activeServer = server;
       activePort = boundPort;
       servedPort = boundPort;
       activeSupervisor = supervisor;
       supervisor?.start();
       activeCredentialObservation ??= observeLocalCredentials();
-      const publishRecord = () => {
-        // A parent stop can arrive after restart admission. Never clear its fence on rollback;
-        // a fresh process has another attestation identity and cannot inherit this request.
-        if (rollback) observeExplicitStop();
-        writePid(process.pid);
-        // A new generation per publication: syncs admitted before a failed restart refuse to commit
-        // into the runtime that serves again, while syncs admitted from here on proceed.
-        writeRuntimePort({ ...clientRuntimeRecord(process.pid, boundPort, attestationSecret), servingGeneration: randomUUID(),
-          clientLinkOwner });
-      };
-      if (rollback) withConfigMutationLockSync(publishRecord);
-      else publishRecord();
       if (linkMode && state.value.link && linkKey) {
         activeReporter = createLinkParityReporter({ connection: state.value, linkKey, runtimeStartedAt: CLIENT_RUNTIME_STARTED_AT });
         activeReporter.start();
@@ -439,23 +435,19 @@ export async function startClientRuntime(
       }
     };
     if (!rollback) {
-      publish();
+      publishRecord();
+      activate();
       return true;
     }
-    // A rollback publishes under the client lifecycle lock, after rechecking the connection there,
-    // so a disconnect or connect that committed during the bind can never be served over. A lock
-    // held by such an operation counts as a change.
-    let published = false;
-    try {
-      published = withClientLifecycleSync(() => {
-        if (clientRestartRollbackAction(state.value, readClientConnectionState()) === "recycle") return false;
-        publish();
-        return true;
-      });
-    } catch {
-      published = false;
-    }
-    if (!published) {
+    // Recheck ownership under L then C on every attempt. Yield for C contention without
+    // releasing the rebound listener or starting any of its observers.
+    const published = await retryClientConfigMutation(() => withClientLifecycleSync(() => withConfigMutationLockSync(() => {
+      if (clientRestartRollbackAction(state.value, readClientConnectionState()) === "recycle") return false;
+      publishRecord();
+      return true;
+    })));
+    if (published) activate();
+    else {
       try { await server.stop(true); } catch { /* never published */ }
     }
     return published;
