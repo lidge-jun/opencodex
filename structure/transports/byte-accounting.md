@@ -146,9 +146,9 @@ envelopes, and real HTTP streams; `tests/server/inbound-body-budget.test.ts` cov
 ## Stream-buffer accounting
 
 Responses terminal repair in `src/server/responses-terminal-repair.ts` uses the shared incremental
-SSE block buffer. Fragmented input measures only new decoded text, and draining coalesced events
-subtracts consumed bytes without re-encoding the remaining suffix. Delimiter searches resume at
-the scan cursor, and consumed prefixes are compacted before yielding. Replacement overlap admission,
+SSE block buffer. Each append measures its new decoded fragment. Draining measures each consumed
+block to subtract its bytes and keeps the existing byte count for the residual suffix. Delimiter
+searches resume at the scan cursor, and consumed prefixes are compacted before yielding. Replacement overlap admission,
 Unicode decoding, delayed LF handling, terminal decisions and teardown retain their contracts.
 `tests/responses/responses-terminal-repair.test.ts` bounds byte-measurement work by input size
 for fragmented and coalesced frames and checks exact overlap admission with another retained owner.

@@ -726,7 +726,7 @@ describe("credential prefix rejection", () => {
     const index = new SecretIndex(["aaaaaaaa", "aaaaaaaa"]);
     const get = spyOn(index.byPrefix, "get");
     try {
-      expect(maskSecretSpans("a".repeat(4_096), "[REDACTED]", index)).toBe("[REDACTED]");
+      expect(maskSecretSpans(`keep ${"a".repeat(4_096)} tail`, "[REDACTED]", index)).toBe("keep [REDACTED] tail");
       expect(get).toHaveBeenCalledTimes(1);
     } finally {
       get.mockRestore();
@@ -739,7 +739,7 @@ describe("credential prefix rejection", () => {
   test.each(["exact", "containment", "sent guard", "sent mask"] as const)("%s allocates no prefix slices at impossible starts", mode => {
     // 'z' can start an excerpt, but 'zz' cannot. Reject before making an 8-character slice.
     const headers = { "x-api-key": "azbcdefgh" };
-    const index = new SecretIndex([headers["x-api-key"]]);
+    const index = new SecretIndex(["zbcdefgh"]);
     const guard = createSentValueGuard(headers);
     const mask = createSentValueMask(headers, "[REDACTED]", { wholeText: true });
     const text = "z".repeat(4_096);
@@ -775,7 +775,7 @@ describe("credential prefix rejection", () => {
     expect(maskSecretSpans(text, "[REDACTED]", index)).toBe(expected);
     expect(mask(text)).toBe(expected);
     expect([containsIndexedSecret(collision, index), guard(collision)]).toEqual([false, false]);
-    expect([containsIndexedSecret(secret, index), guard(secret)]).toEqual([true, true]);
+    expect([containsIndexedSecret(secret, index), guard(`keep ${secret} tail`)]).toEqual([true, true]);
   });
 
   test("keeps short matches, overlapping excerpts and independent request indexes", () => {
