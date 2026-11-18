@@ -167,7 +167,13 @@ for (const code of ["suggestion_consent_required", "suggestion_provider_excluded
     setPersistedConfigMutationBeforeCommitForTests(changePolicy);
     const response = await saveSuggestion(live, { id: "mix", mode: "append", targets: [paidTarget] });
     expect(response.status).toBe(409);
-    expect(await response.json()).toMatchObject({ code });
+    expect(await response.json()).toMatchObject({
+      code,
+      policy: {
+        allowMeteredTargets: code !== "suggestion_consent_required",
+        excludedProviders: code === "suggestion_provider_excluded" ? ["paid"] : [],
+      },
+    });
     expect(loadConfig().combos?.mix?.targets).toHaveLength(1);
   });
 }

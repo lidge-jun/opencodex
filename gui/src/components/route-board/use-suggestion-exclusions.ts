@@ -11,6 +11,7 @@ export interface SuggestionExclusions {
   ready: boolean;
   failed: boolean;
   retry: () => void;
+  applyPolicy: (policy: unknown) => boolean;
   /** Saves the whole list; resolves false when the proxy did not take it (the list stays as it was). */
   save: (next: readonly string[]) => Promise<boolean>;
 }
@@ -70,6 +71,13 @@ export function useSuggestionExclusions(apiBase: string, active = true): Suggest
     ready: current?.excluded != null,
     failed: current?.excluded === null,
     retry: () => setAttempt((value) => value + 1),
+    applyPolicy: (policy) => {
+      const list = parse(policy);
+      if (!list) return false;
+      generation.current += 1;
+      setLoaded({ base: apiBase, attempt, excluded: list });
+      return true;
+    },
     save,
   };
 }

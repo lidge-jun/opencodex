@@ -102,6 +102,10 @@ function parseTargets(value: unknown): Target[] | null {
   return targets;
 }
 
+type SuggestionSaveResult =
+  | { code: string; status: number; policy?: { allowMeteredTargets: boolean; excludedProviders: string[] } }
+  | { combos: NonNullable<OcxConfig["combos"]> };
+
 async function saveSuggestion(ctx: ManagementContext): Promise<Response> {
   const { req, config } = ctx;
   let body: unknown;
@@ -121,9 +125,15 @@ async function saveSuggestion(ctx: ManagementContext): Promise<Response> {
   const consent = body.allowMeteredTargets;
   if (!create && Object.hasOwn(body, "allowMeteredTargets")) return invalid();
 
-  const rejected = (code: string, status = 409) => ({ changed: false, value: { code, status } });
-  const outcome = mutatePersistedConfig<{ code: string; status: number } | { combos: NonNullable<OcxConfig["combos"]> }>(persisted => {
+  const outcome = mutatePersistedConfig<SuggestionSaveResult>(persisted => {
     const previous = Object.hasOwn(persisted.combos ?? {}, id) ? persisted.combos![id] : undefined;
+    const policy = {
+      allowMeteredTargets: previous?.allowMeteredTargets === true,
+      excludedProviders: persisted.comboSuggestionExcludedProviders ?? [],
+    };
+    const rejected = (code: string, status = 409) => ({
+      changed: false, value: { code, status, policy: status === 409 ? policy : undefined },
+    });
     if (create ? previous : !previous) return rejected("suggestion_combo_changed");
 
     if (create && consent !== undefined && typeof consent !== "boolean") return rejected("invalid_request", 400);
@@ -177,7 +187,7 @@ async function saveSuggestion(ctx: ManagementContext): Promise<Response> {
     return jsonResponse({ error: "suggestion could not be saved", code: "config_unavailable" }, 409, req, config);
   }
   if ("code" in outcome.value) {
-    return jsonResponse({ error: "suggestion could not be saved", code: outcome.value.code }, outcome.value.status, req, config);
+    return jsonResponse({ error: "suggestion could not be saved", code: outcome.value.code, policy: outcome.value.policy }, outcome.value.status, req, config);
   }
   config.combos = outcome.value.combos;
   reconcileLiveStateStores();

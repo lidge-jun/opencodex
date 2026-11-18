@@ -23,6 +23,13 @@ export function WorkspaceSuggestions(props: Props) {
   const exclusions = useSuggestionExclusions(props.apiBase, props.active);
 
   const [conflict, setConflict] = useState(false);
+  const [consentOverrides, setConsentOverrides] = useState<Record<string, boolean>>({});
+  const combos = props.combos.map((combo) => {
+    const key = JSON.stringify([props.apiBase, combo.id]);
+    return Object.hasOwn(consentOverrides, key)
+      ? { ...combo, allowMeteredTargets: consentOverrides[key] }
+      : combo;
+  });
 
   const saveSuggestion = async (item: ComboItem, isCreate: boolean) => {
     setConflict(false);
@@ -39,7 +46,13 @@ export function WorkspaceSuggestions(props: Props) {
       });
       if (response.status === 409) {
         setConflict(true);
-        exclusions.retry();
+        const body = await response.json().catch(() => null);
+        if (typeof body?.policy?.allowMeteredTargets === "boolean" && exclusions.applyPolicy(body.policy)) {
+          const key = JSON.stringify([props.apiBase, item.id]);
+          setConsentOverrides((current) => ({ ...current, [key]: body.policy.allowMeteredTargets }));
+        } else {
+          exclusions.retry();
+        }
         props.onRefresh();
         return { ok: false, error: "" };
       }
@@ -71,7 +84,7 @@ export function WorkspaceSuggestions(props: Props) {
     <>
       {conflictAlert}
       <ComboSuggestions
-        combos={props.combos}
+        combos={combos}
         models={props.models}
         providers={props.providers}
         hiddenModels={new Set(props.hiddenModels)}

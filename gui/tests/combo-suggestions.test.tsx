@@ -543,36 +543,44 @@ describe("ComboSuggestions card", () => {
     expect(suggestion.querySelectorAll(".rb-suggest-members li")).toHaveLength(4);
   });
 
-  test("revoked metered consent blocks Add to combo and shows an error", async () => {
-    const originalFetch = globalThis.fetch;
-    const name = "kimi-k3-1-pro";
-    const existing = combo("opus", [["kimi", name]], { allowMeteredTargets: true });
-    let refreshCount = 0;
-    let exclusionReads = 0;
-    globalThis.fetch = (async (url: string) => {
-      if (url.endsWith("/api/combo-suggestions/save")) {
-        return Response.json({ code: "suggestion_consent_required" }, { status: 409 });
+  for (const excluded of [false, true]) {
+    test(`applies persisted suggestion policy after a conflict (excluded: ${excluded})`, async () => {
+      const originalFetch = globalThis.fetch;
+      const name = "kimi-k3-1-pro";
+      const existing = combo("opus", [["kimi", name]], { allowMeteredTargets: true });
+      let refreshCount = 0;
+      globalThis.fetch = (async (url: string) => {
+        if (url.endsWith("/api/combo-suggestions/save")) {
+          return Response.json({
+            code: excluded ? "suggestion_provider_excluded" : "suggestion_consent_required",
+            policy: { allowMeteredTargets: excluded, excludedProviders: excluded ? ["google-vertex"] : [] },
+          }, { status: 409 });
+        }
+        return Response.json({ excludedProviders: [] });
+      }) as typeof fetch;
+      try {
+        await mount(<LanguageProvider><WorkspaceSuggestions
+          active apiBase="/test" combos={[existing]} providers={PROVIDERS}
+          models={models([["kimi", name], ["google-vertex", name]])}
+          quotaReports={null} quotaNow={0} lockedComboId={null}
+          onRefresh={() => { refreshCount += 1; }}
+        /></LanguageProvider>);
+        const extension = card("opus");
+        expect(extension.textContent).toContain("Vertex");
+        await act(async () => { button(extension, "Add to combo").click(); });
+        expect(host.querySelector('[role="alert"]')?.textContent).toContain("Suggestion settings changed");
+        if (excluded) {
+          expect(host.textContent).not.toContain("Add to combo");
+        } else {
+          expect(button(card("opus"), "Add to combo").disabled).toBe(true);
+          expect(card("opus").textContent).toContain("Enable paid targets on this combo first.");
+        }
+        expect(refreshCount).toBe(1);
+      } finally {
+        globalThis.fetch = originalFetch;
       }
-      exclusionReads += 1;
-      return Response.json({ excludedProviders: exclusionReads > 1 ? ["google-vertex"] : [] });
-    }) as typeof fetch;
-    try {
-      await mount(<LanguageProvider><WorkspaceSuggestions
-        active apiBase="/test" combos={[existing]} providers={PROVIDERS}
-        models={models([["kimi", name], ["google-vertex", name]])}
-        quotaReports={null} quotaNow={0} lockedComboId={null}
-        onRefresh={() => { refreshCount += 1; }}
-      /></LanguageProvider>);
-      const extension = card("opus");
-      expect(extension.textContent).toContain("Vertex");
-      await act(async () => { button(extension, "Add to combo").click(); });
-      expect(host.querySelector('[role="alert"]')?.textContent).toContain("Suggestion settings changed");
-      expect(host.textContent).not.toContain("Add to combo");
-      expect(refreshCount).toBe(1);
-    } finally {
-      globalThis.fetch = originalFetch;
-    }
-  });
+    });
+  }
 
   test("failed exclusions hide actions until a successful retry", async () => {
     const originalFetch = globalThis.fetch;
