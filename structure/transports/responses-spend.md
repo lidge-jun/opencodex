@@ -134,6 +134,8 @@ A credential rotation inside one provider's roster reserves a hop from the reque
 budget before it knows whether a rotation is even possible, because the reservation is the charge:
 `reserveDispatch` spends, `permit.use()` only confirms which leg sent, and `permit.release()` is
 idempotent and a no-op once used. Every ladder therefore owes the budget an answer on every exit.
+Anthropic sidecar rotation releases its still-unused hop before rethrowing a rotation failure,
+including cancellation, without dispatching a replacement.
 
 Generic OAuth and Anthropic OAuth snapshot the eligible roster before dispatch. Their rotation ceiling
 is `max(3, min(eligibleCount, 6) - 1)`; live selection still removes accounts in cooldown, so the snapshot

@@ -417,13 +417,16 @@ export async function executeResponsesSidecars(
         "auth-recovery",
         `${route.providerName}|${route.modelId}|sidecar-anthropic-429`,
       );
-      const nextAccountId = await rotateAnthropicAccountOnResponseForInstance(anthropicInstance,
-        originalResponse ?? new Response(null, { status: 429, headers: responseHeaders ?? (retryAfter ? { "retry-after": retryAfter } : undefined) }), {
-          config, accountId: transportState.anthropicPoolAccountId, sessionKey: anthropicSessionKey,
-          model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, currentDecision: currentAnthropicRouteDecision, signal: options.abortSignal,
-          allow429Recovery: !sidecarHasCommittedOutput(), allowAccountRefusal: !sidecarHasCommittedOutput(),
-          canRetry: hop.allowed && transportState.anthropicPoolFailovers < transportState.anthropicFailoverLimit,
-        });
+      let nextAccountId: string | null;
+      try {
+        nextAccountId = await rotateAnthropicAccountOnResponseForInstance(anthropicInstance,
+          originalResponse ?? new Response(null, { status: 429, headers: responseHeaders ?? (retryAfter ? { "retry-after": retryAfter } : undefined) }), {
+            config, accountId: transportState.anthropicPoolAccountId, sessionKey: anthropicSessionKey,
+            model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, currentDecision: currentAnthropicRouteDecision, signal: options.abortSignal,
+            allow429Recovery: !sidecarHasCommittedOutput(), allowAccountRefusal: !sidecarHasCommittedOutput(),
+            canRetry: hop.allowed && transportState.anthropicPoolFailovers < transportState.anthropicFailoverLimit,
+          });
+      } catch (error) { hop.permit?.release(); throw error; }
       if (!nextAccountId) {
         hop.permit?.release();
         return null;

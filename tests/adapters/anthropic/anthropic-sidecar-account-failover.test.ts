@@ -4,7 +4,7 @@
  * recover there: `anthropicAccountPool.enabled: false` declines PROACTIVE routing, not the
  * reactive retry that runs only after upstream has already refused the request.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -134,6 +134,49 @@ afterAll(() => {
   mock.restore();
   restoreModuleMocks?.();
 });
+
+test.each([new Error("Synthetic rotation failure"), new DOMException("Synthetic cancellation", "AbortError")])(
+  "Anthropic sidecar refunds unused hop and rethrows %s", async error => {
+    sidecarMode = true;
+    for (let index = 0; index < 2; index++) await saveCredential("anthropic", {
+      access: `anthropic-access-${index}`, refresh: `anthropic-refresh-${index}`,
+      expires: Date.now() + 3_600_000, accountId: `anthropic-account-${index}`,
+    });
+    await setActiveAccount("anthropic", getAccountSet("anthropic")!.accounts[0]!.id);
+    const { createRequestExecutionBudget } = await import("../../../src/lib/request-execution-budget");
+    const sendBudget = createRequestExecutionBudget({ maxTotalModelSends: 2, baseSendAllowance: 1,
+      finalRecoveryAllowance: 1, maxAlternateTargetSends: 0, maxTargetTransitions: 0 });
+    const refusal = await import("../../../src/oauth/anthropic-account-refusal");
+    const rotation = spyOn(refusal, "rotateAnthropicAccountOnResponseForInstance").mockImplementation(async () => {
+      expect(sendBudget.used).toBe(2);
+      expect(sendBudget.reserveSpent).toBe(true);
+      throw error;
+    });
+    const config = {
+      port: 0, defaultProvider: "anthropic",
+      anthropicAccountPool: { enabled: false, strategy: "round-robin" },
+      providers: { anthropic: {
+        adapter: "test-anthropic-sidecar", baseUrl: "https://anthropic-sidecar.test/v1",
+        authMode: "oauth", models: ["model"],
+        fetch: (async (_input, init) => {
+          observedKeys.push(new Headers(init?.headers).get("authorization") ?? "");
+          return new Response("rate limited", { status: 429 });
+        }) as typeof fetch,
+      } },
+    } as unknown as OcxConfig;
+    try {
+      await expect(handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "anthropic/model", input: "search", stream: true,
+          tools: [{ type: "web_search" }] }),
+      }), config, { model: "", provider: "" }, { sendBudget })).rejects.toBe(error);
+      expect(rotation).toHaveBeenCalledTimes(1);
+      expect(observedKeys).toEqual(["Bearer anthropic-access-0"]);
+      expect(sendBudget.used).toBe(1);
+      expect(sendBudget.reserveSpent).toBe(false);
+    } finally { rotation.mockRestore(); }
+  },
+);
 
 test.each([[2, false], [6, false], [8, false], [6, true]] as const)("Anthropic sidecar snapshots %i accounts, spent budget=%s", async (count, spent) => {
   sidecarMode = true;
