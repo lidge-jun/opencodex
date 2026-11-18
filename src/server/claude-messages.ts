@@ -22,6 +22,7 @@ import {
   AdmissionModelDeniedError,
   assertRouteAllowedByScope,
   resolveAdmissionModelScope,
+  routeAllowedByScope,
 } from "./admission-model-scope";
 import { jsonUtf8Bytes } from "../lib/json-byte-size";
 import { redactSecretString } from "../lib/redact";
@@ -738,9 +739,20 @@ async function handleClaudeMessagesWithBudget(
     let reserveDowngraded = false;
     if (config.subscriptionReserve?.enabled === true && !effortRow && !fastRow && isRec(anthropicBody)
       && typeof anthropicBody.model === "string" && !anthropicBody.model.includes("/")
+      && !carriesMessageThread(anthropicBody)
       && isSubscriptionBackground(req.headers) && wantsNativePassthrough(req, config, requestPolicy, anthropicBody.model, cc)) {
       const key = callerSubscriptionObservationKey(config, req.headers);
-      const reserve = key && decideReserve(config, key, target => resolveInboundModel(target, cc) === target);
+      const scope = resolveAdmissionModelScope(config, logIds?.admission);
+      const reserve = key && decideReserve(config, key, (target, route) => {
+        if (resolveInboundModel(target, cc) !== target) return false;
+        if (!scope) return true;
+        route.staticPolicy = captureRouteStaticPolicy(
+          route.providerName, route.modelId, route.provider, route.staticPolicy.effectiveAlias, "anthropic",
+        );
+        // Reserve candidates have no Fast-row service-tier override.
+        const modelId = previewXaiOauthWireModel({ options: {} }, route, config, "anthropic");
+        return routeAllowedByScope(scope, { providerName: route.providerName, modelId });
+      });
       if (reserve) {
         const requested = redactSecretString(clientFacingModelText(clientModelLabel));
         console.warn(`[route] requested=${requested} served=${redactSecretString(reserve.target)} fallback=yes reason="${reserve.reason}"`);

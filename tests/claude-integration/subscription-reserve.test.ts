@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { loadConfig, readConfigDiagnostics, validateConfigCandidate } from "../../src/config";
-import { safeConfigDTO } from "../../src/server/auth-cors";
+import { resolveApiAuth, safeConfigDTO } from "../../src/server/auth-cors";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import type { RequestLogContext } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
@@ -29,7 +29,10 @@ const SSE = [
   { type: "message_stop" },
 ].map(frame => `event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`).join("");
 
-type Seen = { model: string; auth: string | null; apiKey: string | null; priority: string | null; stream: boolean };
+type Seen = {
+  model: string; auth: string | null; apiKey: string | null; priority: string | null; stream: boolean;
+  thread?: unknown;
+};
 let home: TempHome;
 let servers: ReturnType<typeof Bun.serve>[];
 let releaseSpendHome: (() => void) | undefined;
@@ -53,8 +56,8 @@ function upstream(quota?: HeadersInit) {
   const server = Bun.serve({
     hostname: "127.0.0.1", port: 0,
     async fetch(req) {
-      const { model, stream } = await req.json() as { model: string; stream: boolean };
-      seen.push({ model, stream, auth: req.headers.get("authorization"), apiKey: req.headers.get("x-api-key"), priority: req.headers.get("x-ocx-priority") });
+      const { model, stream, thread } = await req.json() as { model: string; stream: boolean; thread?: unknown };
+      seen.push({ model, stream, thread, auth: req.headers.get("authorization"), apiKey: req.headers.get("x-api-key"), priority: req.headers.get("x-ocx-priority") });
       return stream
         ? new Response(SSE, { headers: { "content-type": "text/event-stream" } })
         : Response.json(MESSAGE, { headers: quota });
@@ -91,16 +94,25 @@ function setup(managedMessagesNative = true, policy: Record<string, unknown> = P
   return { config, native, managed, target };
 }
 
-async function send(config: OcxConfig, opts: { authorization?: string; priority?: string; model?: string } = {}) {
+async function send(config: OcxConfig, opts: {
+  authorization?: string; priority?: string; model?: string; admissionKey?: string; thread?: Record<string, string>;
+} = {}) {
   const headers = new Headers({ "content-type": "application/json" });
   if (opts.authorization) headers.set("authorization", opts.authorization);
   if (opts.priority) headers.set("x-ocx-priority", opts.priority);
+  if (opts.admissionKey) headers.set("x-opencodex-api-key", opts.admissionKey);
+  if (opts.thread) headers.set("anthropic-beta", "message-threads-2026-08-12");
   const log: RequestLogContext = { model: "", provider: "" };
-  const res = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
+  const req = new Request("http://localhost/v1/messages", {
     method: "POST", headers, body: JSON.stringify({
       model: opts.model ?? SOURCE, max_tokens: 16, messages: [{ role: "user", content: "fixture" }], stream: false,
+      ...(opts.thread ? { thread: opts.thread } : {}),
     }),
-  }), config, log);
+  });
+  const admission = opts.admissionKey ? resolveApiAuth(req, config) : undefined;
+  if (opts.admissionKey) expect(admission?.kind).toBe("configured");
+  const res = await handleClaudeMessages(req, config, log, admission
+    ? { requestId: crypto.randomUUID(), start: Date.now(), admission } : undefined);
   const body = await res.json();
   expect({ status: res.status, error: body.error }).toEqual({ status: 200, error: undefined });
   return { body, log };
@@ -190,6 +202,34 @@ test("the default soft tier selects the first available concrete route", async (
   expect(native.seen).toHaveLength(1);
   expect(managed.seen).toHaveLength(0);
   expect(target.seen.map(received => received.model)).toEqual(["reduced"]);
+});
+
+test.each([
+  { label: "the second target", allowedModel: TARGET, steered: true },
+  { label: "neither target", allowedModel: "unrelated", steered: false },
+])("a background request honors a key scoped to $label", async ({ allowedModel, steered }) => {
+  const { config, native, managed, target } = setup(true, { ...POLICY, targets: [`source/${SOURCE}`, TARGET] });
+  const admissionKey = "fixture-reserve-admission";
+  config.hostname = "0.0.0.0";
+  config.apiKeys = [{ id: "reserve-fixture", name: "reserve", key: admissionKey, createdAt: new Date(NOW).toISOString(),
+    allowedProviders: ["source", "anthropic-alternate"], allowedModels: [allowedModel] }];
+
+  await send(config, { authorization: SUBSCRIPTION, admissionKey });
+  await send(config, { authorization: SUBSCRIPTION, admissionKey, priority: "background" });
+  expect(managed.seen).toHaveLength(0);
+  expect(target.seen.map(received => received.model)).toEqual(steered ? ["reduced"] : []);
+  expect(native.seen.map(received => received.model)).toEqual(steered ? [SOURCE] : [SOURCE, SOURCE]);
+  expect(native.seen.at(-1)?.auth).toBe(SUBSCRIPTION);
+});
+
+test("a background message-thread continuation stays on its upstream subscription at hard reserve", async () => {
+  const { config, native, target } = setup();
+  const thread = { type: "continue", previous_message_id: "msg_fixture" };
+  await send(config, { authorization: SUBSCRIPTION });
+  await send(config, { authorization: SUBSCRIPTION, priority: "background", thread });
+  expect(native.seen).toHaveLength(2);
+  expect(native.seen[1]).toMatchObject({ model: SOURCE, auth: SUBSCRIPTION, thread });
+  expect(target.seen).toHaveLength(0);
 });
 
 test.each([

@@ -84,7 +84,8 @@ routed destination. Set `x-ocx-priority: background` in your client or wrapper o
 including Haiku turns, subagents, and short requests without tools.
 
 The proxy learns weekly utilization from passthrough replies for the same subscription credential
-and upstream. It only steers requests that would otherwise use that passthrough. Observations expire
+and upstream. It only steers requests that would otherwise use that passthrough. Requests carrying
+a message thread keep their original upstream. Observations expire
 after 30 minutes or when the weekly window resets, whichever comes first, and are cleared on restart.
 Requests already routed through proxy-managed credentials use their normal routing. The alternate
 provider receives marked requests selected for diversion under its own normal routing and billing

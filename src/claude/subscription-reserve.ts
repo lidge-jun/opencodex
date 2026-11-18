@@ -7,7 +7,7 @@
  * use and record the request, destination and reason for a downgrade.
  */
 import { SUBSCRIPTION_RESERVE_HARD, SUBSCRIPTION_RESERVE_SOFT } from "../config/schema/subscription-reserve";
-import { previewRouteModel } from "../router";
+import { previewRouteModel, type RouteResult } from "../router";
 import type { OcxConfig } from "../types";
 
 export const SUBSCRIPTION_PRIORITY_HEADER = "x-ocx-priority";
@@ -59,7 +59,7 @@ export function isSubscriptionBackground(headers: Headers): boolean {
 export function decideReserve(
   config: OcxConfig,
   key: string,
-  preservesSelector: (target: string) => boolean,
+  isEligible: (target: string, route: RouteResult) => boolean,
   now = Date.now(),
 ): { target: string; reason: string } | undefined {
   const policy = config.subscriptionReserve;
@@ -77,7 +77,7 @@ export function decideReserve(
       // An unknown prefix can otherwise fall through to the default provider as a literal model.
       const route = previewRouteModel(config, target);
       if (route.routeKind !== "explicit-provider" || route.routeReason !== "explicit-provider-namespace"
-        || route.providerName !== target.slice(0, target.indexOf("/")) || !preservesSelector(target)) continue;
+        || route.providerName !== target.slice(0, target.indexOf("/")) || !isEligible(target, route)) continue;
     } catch {
       continue;
     }
