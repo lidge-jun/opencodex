@@ -23,6 +23,23 @@ function collect(): { events: AdapterEvent[]; emit: (event: AdapterEvent) => voi
   return { events, emit: event => { events.push(event); } };
 }
 
+test.each([
+  { type: "done", stopReason: "stop" },
+  { type: "thinking_delta", thinking: "Reasoning." },
+] satisfies AdapterEvent[])("refuses a trailing lone CR at the replay budget on $type", boundary => {
+  const { events, emit } = collect();
+  const guard = guardQoderScaffolding(emit);
+  const marker = "[Tool Result]";
+  guard({ type: "text_delta", text: marker.padEnd(64 * 1024) });
+  guard({ type: "text_delta", text: "\r" });
+  expect(events).toEqual([]);
+  guard(boundary);
+  guard({ type: "done", stopReason: "stop" });
+  expect(events).toEqual([expect.objectContaining({
+    type: "error", status: 502, code: QODER_SCAFFOLD_ERROR_CODE, retryable: false,
+  })]);
+});
+
 function textOf(events: AdapterEvent[]): string {
   return events.map(event => (event.type === "text_delta" ? event.text : "")).join("");
 }

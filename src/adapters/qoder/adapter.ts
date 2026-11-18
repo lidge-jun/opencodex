@@ -132,14 +132,18 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
     });
   };
 
-  const forwardText = (text: string, refuseOnMatch = true): void => {
-    let safe: string;
-    try { safe = replayFilter.feed(text); }
-    catch (error) {
+  const filterReplay = (filter: () => string): string | undefined => {
+    try {
+      return filter();
+    } catch (error) {
       if (!isTranslatorBudgetExceededError(error)) throw error;
       refuse("an unresolved tool envelope exceeding its buffer limit");
-      return;
     }
+  };
+
+  const forwardText = (text: string, refuseOnMatch = true): void => {
+    const safe = filterReplay(() => replayFilter.feed(text));
+    if (safe === undefined) return;
     // An overflowing fenced hold can release an unverified marker. Refuse it
     // before publication rather than leaking the envelope under a memory cap.
     if (replayFilter.unverifiedMarker) {
@@ -158,7 +162,8 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
    * envelope opening it is recognized even when the previous block ended mid-line.
    */
   const settleText = (refuseOnMatch = true): boolean => {
-    const tail = replayFilter.finish();
+    const tail = filterReplay(() => replayFilter.finish());
+    if (tail === undefined) return false;
     if (replayFilter.matched || replayFilter.unverifiedMarker) {
       if (refuseOnMatch) refuse("replayed tool envelope");
       return false;
@@ -259,7 +264,8 @@ export function guardQoderScaffolding(emit: (event: AdapterEvent) => void): (eve
       const reasoning = thinkingFilter.flush();
       drainBoundaries(tail.text, false);
       if (closed) return;
-      const replayTail = replayFilter.finish();
+      const replayTail = filterReplay(() => replayFilter.finish());
+      if (replayTail === undefined) return;
       if (replayTail && !replayFilter.unverifiedMarker) emit({ type: "text_delta", text: replayTail });
       if (reasoning.text && !replayFilter.matched && !replayFilter.unverifiedMarker) {
         emit({ type: "thinking_delta", thinking: reasoning.text });
