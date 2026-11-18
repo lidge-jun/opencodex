@@ -38,21 +38,43 @@ const REQUIRED_CAPABILITIES = ["streaming-input", "sdk-tools"] as const;
 const CLEANUP_ATTEMPTS = 2;
 const MAX_PARALLEL_CLEANUPS = 4;
 const KILL_CONFIRMATION_MS = 2_000;
+const SHUTDOWN_KILL_MARGIN_MS = 250;
 const PROCESS_GROUP_POLL_MS = 20;
 
 // Share slots across pools and all close paths, including idle and late-opening sessions.
 let activeCleanups = 0;
-const cleanupWaiters: Array<() => void> = [];
+const cleanupWaiters = new Set<() => void>();
 
-async function withCleanupSlot(cleanup: () => Promise<void>): Promise<void> {
-  if (activeCleanups < MAX_PARALLEL_CLEANUPS) activeCleanups++;
-  else await new Promise<void>(resolve => cleanupWaiters.push(resolve));
+function withCleanupSlot(cleanup: () => Promise<void>, urgent: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const start = (): void => {
+      cleanupWaiters.delete(start);
+      urgent.removeEventListener("abort", start);
+      if (urgent.aborted) {
+        // At the shutdown margin a queued tree kill must start even if every slot is busy.
+        void cleanup().then(resolve, reject);
+        return;
+      }
+      activeCleanups++;
+      const release = (): void => {
+        activeCleanups--;
+        cleanupWaiters.values().next().value?.();
+      };
+      void cleanup().finally(release).then(resolve, reject);
+    };
+    if (urgent.aborted || activeCleanups < MAX_PARALLEL_CLEANUPS) start();
+    else {
+      cleanupWaiters.add(start);
+      urgent.addEventListener("abort", start, { once: true });
+    }
+  });
+}
+
+function signalGroup(group: number, kind: NodeJS.Signals): void {
   try {
-    await cleanup();
-  } finally {
-    const next = cleanupWaiters.shift();
-    if (next) next();
-    else activeCleanups--;
+    process.kill(group, kind);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
   }
 }
 
@@ -166,7 +188,9 @@ export class StepCliSession {
   #closed = false;
   #closePromise: Promise<void> | undefined;
   #cleanupComplete = false;
-  readonly #cleanupListeners = new Set<(cleanup: Promise<void>) => void>();
+  #shutdownDeadlineMs = Infinity;
+  #shutdownTimer: ReturnType<typeof setTimeout> | undefined;
+  readonly #urgentCleanup = new AbortController();
   #handshake: Promise<StepFrame> | undefined;
   #sessionId: string | undefined;
   #lastActivityAt: number;
@@ -189,12 +213,6 @@ export class StepCliSession {
     }
     this.#exitListeners.add(listener);
     return () => this.#exitListeners.delete(listener);
-  }
-
-  /** Observe cleanup even when it is initiated by an adapter or a session timer. */
-  onCleanup(listener: (cleanup: Promise<void>) => void): void {
-    if (this.#closePromise) listener(this.#closePromise);
-    else this.#cleanupListeners.add(listener);
   }
 
   #announceExit(): void {
@@ -226,9 +244,16 @@ export class StepCliSession {
     options: StepSessionOptions,
     handlers: StepSessionHandlers,
     deps: StepSessionDeps = {},
+    own?: (session: StepCliSession) => void,
   ): Promise<StepCliSession> {
     const session = new StepCliSession(options, deps, handlers);
-    await session.#start();
+    own?.(session);
+    try {
+      await session.#start();
+    } catch (error) {
+      void session.close();
+      throw error;
+    }
     return session;
   }
 
@@ -266,6 +291,8 @@ export class StepCliSession {
     } catch {
       throw new StepSessionError("StepCode could not create its workspace.", "step_cli_workspace_unavailable");
     }
+    // A deadline-aware close can take ownership while workspace creation is pending.
+    if (this.#closed) return;
     const spawn = this.#deps.spawn ?? nodeSpawn;
     const child = spawn(invocation.file, invocation.args, {
       ...invocation.options,
@@ -599,6 +626,26 @@ export class StepCliSession {
     this.#idleTimer = undefined;
   }
 
+  closeBy(deadlineMs: number): void {
+    if (deadlineMs < this.#shutdownDeadlineMs && !this.#cleanupComplete) {
+      this.#shutdownDeadlineMs = deadlineMs;
+      clearTimeout(this.#shutdownTimer);
+      const delayMs = deadlineMs - SHUTDOWN_KILL_MARGIN_MS - Date.now();
+      if (delayMs <= 0) this.#urgentCleanup.abort();
+      else this.#shutdownTimer = setTimeout(() => this.#urgentCleanup.abort(), delayMs);
+    }
+    void this.close();
+  }
+
+  /** Start queued tree kills and signal any still-owned POSIX group before returning. */
+  forceShutdown(): void {
+    this.#urgentCleanup.abort();
+    const pid = this.#child?.pid;
+    if (pid !== undefined && this.#platform !== "win32") {
+      signalGroup(-pid, "SIGKILL");
+    }
+  }
+
   /**
    * Reap the owned process tree before releasing this session. Concurrent callers share cleanup.
    */
@@ -613,17 +660,15 @@ export class StepCliSession {
     // Publish the receipt before termination can emit close or notify pool bookkeeping.
     const receipt = Promise.withResolvers<void>();
     this.#closePromise = receipt.promise;
-    for (const listener of this.#cleanupListeners) listener(this.#closePromise);
-    this.#cleanupListeners.clear();
     // Timer/protocol-initiated closes have no awaiting caller. Keep the rejection in the cached
     // receipt for close()/pool shutdown, while observing it here to avoid an unhandled rejection.
     void this.#closePromise.catch(() => {});
     const terminate = async (): Promise<void> => {
-      if (child) await withCleanupSlot(() => this.#terminateWithRetry(child));
+      if (child) await withCleanupSlot(() => this.#terminateWithRetry(child), this.#urgentCleanup.signal);
       this.#cleanupComplete = true;
       this.#announceExit();
     };
-    void terminate().then(receipt.resolve, receipt.reject);
+    void terminate().finally(() => clearTimeout(this.#shutdownTimer)).then(receipt.resolve, receipt.reject);
     return this.#closePromise;
   }
 
@@ -653,29 +698,27 @@ export class StepCliSession {
 
   /** A wrapper's exit says nothing about the detached group it originally led. */
   async #terminatePosixGroup(group: number): Promise<void> {
-    const signal = (kind: NodeJS.Signals): void => {
-      try {
-        process.kill(group, kind);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-      }
-    };
     if (processIsGone(group)) return;
-    signal("SIGTERM");
     const escalateAt = performance.now() + this.#killGraceMs;
     const deadline = escalateAt + KILL_CONFIRMATION_MS;
+    if (!this.#urgentCleanup.signal.aborted && this.#shutdownDeadlineMs - Date.now() > SHUTDOWN_KILL_MARGIN_MS) {
+      signalGroup(group, "SIGTERM");
+    }
     let escalated = false;
     while (!processIsGone(group)) {
       const now = performance.now();
-      if (!escalated && now >= escalateAt) {
-        signal("SIGKILL");
+      const remaining = this.#shutdownDeadlineMs - Date.now();
+      const untilKill = Math.min(escalateAt - now, remaining - SHUTDOWN_KILL_MARGIN_MS);
+      if (!escalated && (this.#urgentCleanup.signal.aborted || untilKill <= 0)) {
+        signalGroup(group, "SIGKILL");
         escalated = true;
         continue;
       }
-      if (now >= deadline) {
+      const untilConfirm = Math.min(deadline - now, remaining);
+      if (untilConfirm <= 0) {
         throw new StepSessionError("StepCode process group cleanup could not be confirmed.", "step_cli_cleanup_failed");
       }
-      await Bun.sleep(Math.min(PROCESS_GROUP_POLL_MS, (escalated ? deadline : escalateAt) - now));
+      await Bun.sleep(Math.min(PROCESS_GROUP_POLL_MS, escalated ? untilConfirm : untilKill));
     }
   }
 

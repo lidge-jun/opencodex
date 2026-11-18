@@ -37,24 +37,28 @@ Child response errors are classified at the transport boundary. The adapter emit
 error codes and messages for login failures, subscription limits, busy queries, timeouts and
 permission denials.
 
-`session-pool.ts` latches shutdown before awaiting sessions and in-flight opens. Late opens close
-their process before shutdown settles, and new opens and pool creation during proxy drain are
-refused. The pool retains entries and tracks cleanup receipts from adapter, idle-timer and sweep
-closes until termination is confirmed; shutdown drains those receipts and propagates failures.
+`session-pool.ts` latches shutdown before awaiting sessions and in-flight opens. The pool owns
+each session before workspace setup, so shutdown can close an opening session before it spawns.
+The pool retains ownership of adapter, idle-timer and sweep closes until termination is
+confirmed. Shutdown drains those receipts and propagates failures.
 Closing handles refuse replacement. Session close is idempotent and clears held-request timers.
 Termination gets at most two attempts; a second failure permanently quarantines that handle in the
 pool and preserves both errors as the cleanup failure's cause. Repeated closes return that failure
 without restarting the retry budget. Windows teardown awaits the asynchronous helper in
 `src/adapters/coding-agent/process-tree.ts` (`taskkill /T /F`, up to five seconds per attempt)
-before releasing the wrapper. Up to four session cleanups run concurrently across pools, including
-idle and late-opening sessions. POSIX cleanup sends TERM to the detached process group, escalates
+before releasing the wrapper. The normal cleanup queue runs up to four sessions concurrently
+across pools, including idle and late-opening sessions. POSIX cleanup sends TERM to the detached process group, escalates
 to KILL if the group survives the grace period, and retains ownership until a bounded group probe
 returns ESRCH, including when the wrapper has already exited. On Windows the OS PID check also
 handles Bun retaining null child exit fields after an external tree kill.
 Explicit registry clears await every pool and retain failed pools, so clearing state cannot bypass
-quarantine. Graceful proxy shutdown awaits the same clear through the bounded asynchronous
-optional-shutdown hook and reports incomplete cleanup as a shutdown failure. Its receipt deadline
-uses the [proxy stop budget](../runtime.md#lifecycle), including time already spent draining.
+quarantine. Graceful proxy shutdown passes the absolute [proxy stop deadline](../runtime.md#lifecycle)
+through the registry and pool, including to sessions already closing. POSIX TERM grace is capped
+at two seconds and ends at least 250 ms before the deadline when that time is available. At that
+margin, queued sessions bypass the four slots and proceed directly to group KILL or Windows
+tree kill. The hook reports incomplete confirmation as a shutdown failure. Before returning
+an incomplete receipt, it runs a final synchronous KILL sweep of still-owned POSIX groups
+and starts any Windows tree kills still in the queue.
 
 ## Tools arrive as inline SDK tools, not an MCP catalog
 

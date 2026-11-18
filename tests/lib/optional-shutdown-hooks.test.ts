@@ -32,9 +32,18 @@ describe("optional shutdown hooks", () => {
 
   test("reports timeout for an asynchronous hook with no cleanup receipt", async () => {
     const receipt = Promise.withResolvers<void>();
-    registerAsyncOptionalShutdownHook("pending", () => receipt.promise);
+    const deadlineMs = Date.now() + 20;
+    const fallbacks: string[] = [];
+    let receivedDeadline: number | undefined;
+    registerAsyncOptionalShutdownHook("pending", deadline => {
+      receivedDeadline = deadline;
+      return receipt.promise;
+    }, () => { fallbacks.push("pending"); });
+    registerAsyncOptionalShutdownHook("complete", async () => {}, () => { fallbacks.push("complete"); });
     try {
-      expect(await runOptionalShutdownHooks({ deadlineMs: Date.now() + 5 })).toBe(false);
+      expect(await runOptionalShutdownHooks({ deadlineMs })).toBe(false);
+      expect(receivedDeadline).toBe(deadlineMs);
+      expect(fallbacks).toEqual(["pending"]);
     } finally {
       receipt.resolve();
     }

@@ -8,8 +8,9 @@ import { join } from "node:path";
 import { StepCliSession, type StepSessionOptions } from "../../src/adapters/step-cli/session";
 import { StepSessionPool } from "../../src/adapters/step-cli/session-pool";
 import { clearStepCliSessions, poolFor } from "../../src/adapters/step-cli/registry";
-import { resetOptionalShutdownHooksForTests } from "../../src/lib/optional-shutdown-hooks";
-import { drainAndShutdown, resetLifecycleDrainStateForTests } from "../../src/server/lifecycle";
+import { registerDrainStartHook, resetOptionalShutdownHooksForTests, runOptionalShutdownHooks } from "../../src/lib/optional-shutdown-hooks";
+import { OPTIONAL_SHUTDOWN_GRACE_MS } from "../../src/lib/shutdown-budget";
+import { drainAndShutdown, registerTurn, resetLifecycleDrainStateForTests, tryAdmitTurn } from "../../src/server/lifecycle";
 
 function options(cwd: string): StepSessionOptions {
   return { binary: process.execPath, args: [], env: {}, cwd, handshakeTimeoutMs: 500,
@@ -83,6 +84,134 @@ test("production drain waits for the StepCode cleanup receipt before listener st
     resetLifecycleDrainStateForTests();
   }
   expect(cleanedAtListenerStop).toBe(true);
+});
+
+test.skipIf(process.platform === "win32").each([450, 180, 0])("an exhausted turn drain kills all StepCode groups before listener stop with %ims left", async remainingMs => {
+  const cwd = await mkdtemp(join(tmpdir(), "ocx-step-deadline-"));
+  const groups = new Map(Array.from({ length: 7 }, (_, i) => [
+    -(1_900_001_000 + i), { signals: [] as NodeJS.Signals[], gone: false, confirmed: false },
+  ]));
+  const pids = [...groups.keys()].map(group => -group);
+  const realKill = process.kill.bind(process);
+  const kill = spyOn(process, "kill").mockImplementation((target, signal) => {
+    const group = groups.get(target);
+    if (!group) return realKill(target, signal);
+    if (group.gone) {
+      if (signal === 0) group.confirmed = true;
+      throw Object.assign(new Error("fixture group is gone"), { code: "ESRCH" });
+    }
+    if (signal === "SIGTERM" || signal === "SIGKILL") group.signals.push(signal);
+    if (signal === "SIGKILL") group.gone = true;
+    return true;
+  });
+  const realNow = Date.now.bind(Date);
+  let offset = 0;
+  const clock = spyOn(Date, "now").mockImplementation(() => realNow() + offset);
+  const timeoutMs = 5_000;
+  const detach = registerDrainStartHook("step-cli-exhaust-drain", () => {
+    offset = timeoutMs + OPTIONAL_SHUTDOWN_GRACE_MS - remainingMs;
+  });
+  const pool = poolFor(cwd, {
+    which: () => process.execPath,
+    spawn: () => Object.assign(new EventEmitter(), {
+      pid: pids.shift()!, stdin: new PassThrough(), stdout: new PassThrough(),
+      stderr: new PassThrough(), exitCode: 0, signalCode: null,
+    }) as unknown as ChildProcess,
+  }, { onEvent: () => {} });
+  const lease = tryAdmitTurn();
+  try {
+    for (let i = 0; i < groups.size; i++) {
+      const session = await pool.open({ handle: String(i), sessionId: "" });
+      if (i < 5) void session.close(); // Four active, one already queued.
+    }
+    expect([...groups.values()].map(group => group.signals)).toEqual([
+      ["SIGTERM"], ["SIGTERM"], ["SIGTERM"], ["SIGTERM"], [], [], [],
+    ]);
+    let atListenerStop: Array<{ signals: NodeJS.Signals[]; confirmed: boolean }> = [];
+    const server = { stop() {
+      atListenerStop = [...groups.values()].map(group => ({ signals: [...group.signals], confirmed: group.confirmed }));
+    } } as unknown as ReturnType<typeof Bun.serve>;
+    const turn = new AbortController();
+    expect(lease).not.toBeNull();
+    registerTurn(turn, lease!);
+    const started = realNow();
+    const stopped = await drainAndShutdown(server, timeoutMs);
+    expect(turn.signal.aborted).toBe(true);
+    expect(realNow() - started).toBeLessThan(1_000);
+    expect(atListenerStop.map(group => group.signals)).toEqual(
+      [...groups.values()].map((_, i) => i < 4 ? ["SIGTERM", "SIGKILL"] : ["SIGKILL"]),
+    );
+    expect(stopped).toBe(remainingMs > 0);
+    if (remainingMs > 0) {
+      expect(atListenerStop.every(group => group.confirmed)).toBe(true);
+      expect(pool.size).toBe(0);
+    }
+  } finally {
+    lease?.release();
+    try {
+      for (const group of groups.values()) group.gone = true;
+      await clearStepCliSessions();
+    } finally {
+      detach();
+      clock.mockRestore();
+      kill.mockRestore();
+      resetOptionalShutdownHooksForTests();
+      resetLifecycleDrainStateForTests();
+    }
+  }
+});
+
+test("an expired shutdown starts every queued Windows tree kill without waiting for a cleanup slot", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "ocx-step-window-deadline-"));
+  const receipt = Promise.withResolvers<void>();
+  const killed: number[] = [];
+  const children = new Map<number, EventEmitter>();
+  const pids = Array.from({ length: 7 }, (_, i) => 1_900_002_000 + i);
+  const pool = poolFor(cwd, {
+    platform: "win32", which: () => process.execPath,
+    spawn: () => {
+      const pid = pids[children.size]!;
+      const child = Object.assign(new EventEmitter(), {
+        pid, stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+        exitCode: null, signalCode: null,
+      });
+      children.set(pid, child);
+      return child as unknown as ChildProcess;
+    },
+    killWindowsProcessTree: async pid => {
+      killed.push(pid);
+      children.get(pid)!.emit("close", 0, null);
+      await receipt.promise;
+    },
+  }, { onEvent: () => {} });
+  try {
+    for (const pid of pids) await pool.open({ handle: String(pid), sessionId: "" });
+    expect(await runOptionalShutdownHooks({ deadlineMs: Date.now() - 1 })).toBe(false);
+    expect(killed).toEqual(pids);
+    expect(pool.size).toBe(pids.length);
+  } finally {
+    receipt.resolve();
+    await clearStepCliSessions();
+    resetOptionalShutdownHooksForTests();
+  }
+  expect(pool.size).toBe(0);
+});
+
+test("a deadline-aware close prevents an in-flight workspace setup from spawning a child", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "ocx-step-open-deadline-"));
+  let spawns = 0;
+  const pool = new StepSessionPool(
+    { openCodexHome: cwd, idleTimeoutMs: 60_000, buildOptions: () => options(cwd) },
+    { onEvent: () => {} },
+    { spawn: () => {
+      spawns++;
+      return Object.assign(new EventEmitter(), { exitCode: 0, signalCode: null }) as unknown as ChildProcess;
+    } },
+  );
+  const opening = pool.open({ handle: "opening", sessionId: "" });
+  await pool.closeAll(Date.now() - 1);
+  expect((await opening).closed).toBe(true);
+  expect(spawns).toBe(0);
 });
 
 test.skipIf(process.platform === "win32")("an exited wrapper retains ownership until its POSIX group returns ESRCH", async () => {

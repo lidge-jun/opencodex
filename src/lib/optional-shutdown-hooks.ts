@@ -21,9 +21,10 @@
 import { OPTIONAL_SHUTDOWN_GRACE_MS } from "./shutdown-budget";
 
 type ShutdownHook = () => void;
+type AsyncShutdownHook = { run: (deadlineMs: number) => Promise<void>; onIncomplete?: ShutdownHook };
 
 const hooks = new Map<string, ShutdownHook>();
-const asyncHooks = new Map<string, () => Promise<void>>();
+const asyncHooks = new Map<string, AsyncShutdownHook>();
 let hooksRan = false;
 
 /**
@@ -49,9 +50,13 @@ export function registerOptionalShutdownHook(key: string, hook: ShutdownHook): (
   };
 }
 
-/** Register a teardown whose completion must be awaited before graceful shutdown returns. */
-export function registerAsyncOptionalShutdownHook(key: string, hook: () => Promise<void>): void {
-  asyncHooks.set(key, hook);
+/** The async hook shares the absolute stop deadline. Its fallback must finish synchronously. */
+export function registerAsyncOptionalShutdownHook(
+  key: string,
+  run: AsyncShutdownHook["run"],
+  onIncomplete?: ShutdownHook,
+): void {
+  asyncHooks.set(key, { run, onIncomplete });
 }
 
 /** Whether `runOptionalShutdownHooks` has run at least once since the last test reset. */
@@ -75,6 +80,7 @@ export async function runOptionalShutdownHooks(
     }
   }
   if (asyncHooks.size === 0) return true;
+  const incomplete = new Map(asyncHooks);
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const deadline = new Promise<null>(resolve => {
@@ -82,9 +88,10 @@ export async function runOptionalShutdownHooks(
       if (remainingMs <= 0) resolve(null);
       else timer = setTimeout(() => resolve(null), remainingMs);
     });
-    const cleanup = Promise.all([...asyncHooks].map(async ([key, hook]) => {
+    const cleanup = Promise.all([...incomplete].map(async ([key, hook]) => {
       try {
-        await hook();
+        await hook.run(deadlineMs);
+        incomplete.delete(key);
         return true;
       } catch {
         console.warn(`[shutdown] optional subsystem "${key}" teardown failed`);
@@ -99,6 +106,13 @@ export async function runOptionalShutdownHooks(
     return results.every(Boolean);
   } finally {
     clearTimeout(timer);
+    for (const [key, hook] of incomplete) {
+      try {
+        hook.onIncomplete?.();
+      } catch {
+        console.warn(`[shutdown] optional subsystem "${key}" emergency teardown failed`);
+      }
+    }
   }
 }
 

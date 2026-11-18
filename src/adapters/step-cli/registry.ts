@@ -114,13 +114,22 @@ export const pools = new Map<string, StepSessionPool>();
 
 const STEP_CLI_SHUTDOWN_KEY = "step-cli-sessions";
 /** Close every owned process during proxy shutdown or an explicit registry clear. */
-export async function clearStepCliSessions(): Promise<void> {
+export async function clearStepCliSessions(deadlineMs?: number): Promise<void> {
   const closed = await Promise.allSettled([...pools].map(async ([home, pool]) => {
-    await pool.closeAll();
+    await pool.closeAll(deadlineMs);
     if (pools.get(home) === pool) pools.delete(home);
   }));
   const failure = closed.find(result => result.status === "rejected");
   if (failure?.status === "rejected") throw failure.reason;
+}
+
+function forceStepCliShutdown(): void {
+  let failed = false;
+  for (const pool of pools.values()) {
+    try { pool.forceShutdown(); }
+    catch { failed = true; }
+  }
+  if (failed) throw new StepSessionError("StepCode emergency process cleanup failed.", "step_cli_cleanup_failed");
 }
 
 export function poolFor(
@@ -131,7 +140,7 @@ export function poolFor(
   if (didRunDrainStartHooks() || didRunOptionalShutdownHooks()) throw new StepSessionError("StepCode cannot open sessions while the proxy is shutting down.");
   const existing = pools.get(home);
   if (existing) return existing;
-  registerAsyncOptionalShutdownHook(STEP_CLI_SHUTDOWN_KEY, clearStepCliSessions);
+  registerAsyncOptionalShutdownHook(STEP_CLI_SHUTDOWN_KEY, clearStepCliSessions, forceStepCliShutdown);
   const { env, cwd } = stepCliProcessEnvironment(home);
   const pool = new StepSessionPool(
     {
