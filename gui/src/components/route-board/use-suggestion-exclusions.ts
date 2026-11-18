@@ -23,6 +23,7 @@ function parse(body: unknown): SuggestionPolicy | null {
 
 export function useSuggestionExclusions(apiBase: string, combos?: readonly ComboItem[]) {
   const retry = () => setAttempt((value) => value + 1);
+  const [saving, setSaving] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [loaded, setLoaded] = useState<{ base: string; attempt: number; combos?: readonly ComboItem[]; policy: SuggestionPolicy | null }>();
   const cached = loaded?.base === apiBase ? loaded : undefined;
@@ -49,17 +50,20 @@ export function useSuggestionExclusions(apiBase: string, combos?: readonly Combo
   }, [apiBase, attempt, combos]);
 
   const save = async (provider: string, excluded: boolean) => {
-    if (!current?.policy) return false;
+    if (saving || !current?.policy) return false;
+    setSaving(true);
     try {
       const response = await fetch(`${apiBase}/api/combo-suggestions`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider, excluded }),
       });
-      if (response.ok || response.status === 409) retry();
       return response.ok;
     } catch {
       return false;
+    } finally {
+      retry();
+      setSaving(false);
     }
   };
 
@@ -67,8 +71,8 @@ export function useSuggestionExclusions(apiBase: string, combos?: readonly Combo
     excluded: cached?.policy?.excludedProviders ?? [],
     meteredComboIds: cached?.policy?.meteredComboIds ?? [],
     available: cached?.policy != null,
-    ready: current?.policy != null,
-    failed: current?.policy === null,
+    ready: !saving && current?.policy != null,
+    failed: !saving && current?.policy === null,
     retry,
     save,
   };

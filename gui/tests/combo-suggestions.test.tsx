@@ -531,18 +531,28 @@ describe("ComboSuggestions card", () => {
     }
   });
 
-  test("a delayed exclusion acknowledgment cannot restore revoked consent or old exclusions", async () => {
+  test.each(["delayed", "lost", "lost with read failure"])("%s exclusion acknowledgment requires a fresh policy before saving", async (ack) => {
     const originalFetch = globalThis.fetch;
     const name = "kimi-k3-1-pro";
     const existing = combo("opus", [["kimi", name]], { allowMeteredTargets: true });
-    const catalog = models([["kimi", name], ["google-vertex", name], ["xai", name]]);
+    const draftModel = "gemini-3.8-flash";
+    const catalog = models([["kimi", name], ["google-vertex", name], ["xai", name], ["kimi", draftModel], ["xai", draftModel]]);
     let acknowledge!: (response: Response) => void;
+    let loseAcknowledgment!: (error: Error) => void;
+    let finishRead!: (response: Response) => void;
+    let suggestionsSaved = 0;
     let revoke = false;
+    let persistedExclusions: string[] = [];
     let reads = 0;
-    globalThis.fetch = (async (_url: string, init?: RequestInit) => {
-      if (init?.method === "PUT") return new Promise<Response>((resolve) => { acknowledge = resolve; });
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/save")) suggestionsSaved += 1;
+      if (init?.method === "PUT") return new Promise<Response>((resolve, reject) => {
+        acknowledge = resolve;
+        loseAcknowledgment = reject;
+      });
       reads += 1;
-      return Response.json({ excludedProviders: [], meteredComboIds: revoke ? [] : ["opus"] });
+      if (reads === 3) return new Promise<Response>((resolve) => { finishRead = resolve; });
+      return Response.json({ excludedProviders: persistedExclusions, meteredComboIds: revoke ? [] : ["opus"] });
     }) as typeof fetch;
     try {
       const view = (combos: ComboItem[]) => <LanguageProvider><WorkspaceSuggestions
@@ -551,22 +561,65 @@ describe("ComboSuggestions card", () => {
       /></LanguageProvider>;
       await mount(view([existing]));
       expect(button(card("opus"), "Add to combo").disabled).toBe(false);
+      await act(async () => { button(card(draftModel), "Generate").click(); });
+      const draft = card(draftModel).querySelector<HTMLElement>(".rb-suggest-draft")!;
+      await act(async () => { draft.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click(); });
+      const add = button(card("opus"), "Add to combo");
+      const save = button(draft, "Save combo");
+      // Happy DOM does not include inherited fieldset state in :disabled.
+      const isDisabled = (control: HTMLButtonElement) => control.disabled || !!control.closest("fieldset[disabled]");
+      expect(isDisabled(add)).toBe(false);
+      expect(isDisabled(save)).toBe(false);
       await act(async () => { host.querySelector<HTMLButtonElement>(".rb-suggest-exclude-toggle")!.click(); });
       const vertex = [...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
         .find((input) => input.closest("label")?.textContent?.includes("Vertex"))!;
       await act(async () => { vertex.click(); });
 
-      revoke = true;
+      const expectActionsDisabled = async () => {
+        expect(isDisabled(add)).toBe(true);
+        expect(isDisabled(save)).toBe(true);
+        await act(async () => { add.click(); save.click(); });
+        expect(suggestionsSaved).toBe(0);
+        expect(existing.targets.map(({ provider }) => provider)).toEqual(["kimi"]);
+      };
+      await expectActionsDisabled();
+      expect(card("opus").textContent).toContain("Vertex");
+
+      revoke = ack === "delayed";
       await act(async () => { root!.render(view([{ ...existing }])); });
-      expect(button(card("opus"), "Add to combo").disabled).toBe(true);
+      await expectActionsDisabled();
+      persistedExclusions = revoke ? [] : ["google-vertex"];
       await act(async () => {
-        acknowledge(Response.json({ excludedProviders: ["google-vertex"], meteredComboIds: ["opus"] }));
+        if (ack === "delayed") {
+          acknowledge(Response.json({ excludedProviders: ["google-vertex"], meteredComboIds: ["opus"] }));
+        } else {
+          loseAcknowledgment(new Error("lost acknowledgment"));
+        }
       });
 
-      expect(button(card("opus"), "Add to combo").disabled).toBe(true);
-      expect(card("opus").textContent).toContain("ocx combo update opus --allow-metered-targets on");
-      expect(card("opus").textContent).toContain("Vertex");
       expect(reads).toBe(3);
+      await expectActionsDisabled();
+      await act(async () => {
+        finishRead(ack === "lost with read failure"
+          ? new Response(null, { status: 500 })
+          : Response.json({ excludedProviders: persistedExclusions, meteredComboIds: revoke ? [] : ["opus"] }));
+      });
+
+      if (ack === "lost with read failure") {
+        expect(host.querySelector('[role="alert"]')?.textContent).toContain("Could not load");
+        expect(host.textContent).not.toContain("Add to combo");
+        await act(async () => { button(host, "Retry").click(); });
+        expect(isDisabled(button(card("opus"), "Add to combo"))).toBe(false);
+        expect(card("opus").textContent).not.toContain("Vertex");
+      } else if (revoke) {
+        expect(button(card("opus"), "Add to combo").disabled).toBe(true);
+        expect(card("opus").textContent).toContain("ocx combo update opus --allow-metered-targets on");
+        expect(card("opus").textContent).toContain("Vertex");
+      } else {
+        expect(isDisabled(button(card("opus"), "Add to combo"))).toBe(false);
+        expect(isDisabled(save)).toBe(false);
+        expect(card("opus").textContent).not.toContain("Vertex");
+      }
     } finally {
       globalThis.fetch = originalFetch;
     }
