@@ -524,6 +524,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   let emptyAnswerRetries = 0;
   let completionRetries = 0;
   let terminalContinuations = 0;
+  let pendingContinuationMessages: OcxMessage[] | undefined;
   // Every iteration re-sends the full context, but only the last one's terminal reaches the bridge.
   // Search-calling passes and the discarded empty forced answer are summed here and added to what
   // onUsage reports, so the request log meters what was actually sent. The client-facing terminal
@@ -631,6 +632,11 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
     } else {
       if (forceAnswer && executedSearchCount > 0) iterMessages = [...messages, forcedAnswerNudge()];
       if (recoveringEmptyAnswer) iterMessages = [...iterMessages, forcedAnswerRetryNudge()];
+    }
+    if (pendingContinuationMessages) {
+      iterMessages = [...iterMessages, ...pendingContinuationMessages];
+      messages.push(...pendingContinuationMessages);
+      pendingContinuationMessages = undefined;
     }
     const iterParsed: OcxParsedRequest = {
       ...parsed, stream: true,
@@ -1225,8 +1231,11 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
                   message: "Provider announced work again without calling a tool", errorType: "server_error" });
               }
               terminalContinuations++;
-              const continuation = buildContinuationRequest(currentParsed, split.passthrough);
-              messages.splice(0, messages.length, ...continuation.context.messages);
+              // Save only the continuation's additions. Iteration-only nudges are rebuilt for the re-ask.
+              const continuation = buildContinuationRequest({
+                ...currentParsed, context: { ...currentParsed.context, messages },
+              }, split.passthrough);
+              pendingContinuationMessages = continuation.context.messages.slice(messages.length);
               yield { type: "assistant_boundary" };
               continue;
             }

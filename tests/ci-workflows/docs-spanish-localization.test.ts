@@ -103,6 +103,15 @@ function missingInlineIdentifiers(english: string, spanish: string): string[] {
 }
 
 describe("Spanish documentation localization", () => {
+  test.each([
+    ["reference/configuration/providers.md", /only when tools are available on that iteration/, /without another send/],
+    ["es/reference/configuration/providers.md", /solo si hay herramientas disponibles en esa iteración/, /sin otro envío/],
+  ] as const)("qualifies hosted-search re-asks in %s", (page, toolsAvailable, noResend) => {
+    const row = source(join(root, page)).split("\n").find(line => line.startsWith("| `terminalContinuationGuard?` |"));
+    expect(row).toMatch(toolsAvailable);
+    expect(row).toMatch(noResend);
+  });
+
   test("code spans keep a trailing backslash literal without swallowing later identifiers", () => {
     const english = "Paths `~\\` and `~/` keep `models` unchanged.";
     const spanish = "Las rutas `~\\` y `~/` conservan `models`.";

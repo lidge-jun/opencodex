@@ -7,6 +7,8 @@ export interface CompletionCase {
   frames: string[];
   sends: number;
   searches?: number;
+  maxSearchesPerTurn?: number;
+  checkBodies?: (bodies: readonly string[]) => void;
   search?: boolean;
   empty?: boolean;
   guard?: boolean;
@@ -74,7 +76,7 @@ export async function checkHostedChatCompletion(row: CompletionCase, stream: boo
     const config = {
       port: 0, defaultProvider: "fixture", emptyCompletionRetry: row.empty === true,
       providers: { fixture: provider },
-      webSearchSidecar: { enabled: true, backend: "exa", exaApiKey: "synthetic-not-a-key" },
+      webSearchSidecar: { enabled: true, backend: "exa", exaApiKey: "synthetic-not-a-key", maxSearchesPerTurn: row.maxSearchesPerTurn },
     };
     const tools: any[] = row.noTools ? [] : [
       { type: "function", name: "read_fixture", parameters: { type: "object", properties: {} } },
@@ -107,6 +109,7 @@ export async function checkHostedChatCompletion(row: CompletionCase, stream: boo
       assert.equal(logContext.usage?.totalTokens, sends * 29, row.name + " accumulated usage ledger");
     }
     if (row.identicalRetry) assert.equal(bodies[0], bodies[1], "empty retry must preserve request bytes");
+    row.checkBodies?.(bodies);
     if (row.searches) {
       for (const body of bodies.slice(1)) {
         assert.ok(JSON.parse(body).messages.some((message: any) => message.role === "tool"), "search results retained");

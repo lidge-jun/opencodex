@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { TERMINAL_GUARD_NUDGE } from "../../src/server/responses/terminal-guard";
 import { checkHostedChatCompletion, checkHostedRecoveryIteration, type CompletionCase } from "../helpers/hosted-chat-completion";
 
 const cases: CompletionCase[] = [
@@ -26,6 +27,26 @@ for (const row of cases) {
   for (const stream of [true, false]) {
     test(`${row.name} (stream=${stream})`, () => checkHostedChatCompletion({ guard: true, ...row }, stream));
   }
+}
+
+for (const stream of [true, false]) {
+  test(`forced-answer re-ask keeps one search instruction before the correction (stream=${stream})`, () =>
+    checkHostedChatCompletion({
+      name: "forced-answer-reask", guard: true, maxSearchesPerTurn: 1,
+      frames: ["search", "plan", "tool"], sends: 3, searches: 1,
+      checkBodies(bodies) {
+        const wire = JSON.parse(bodies[2]!) as { messages: Array<{ content?: unknown }> };
+        const text = wire.messages.map(message => message.content).filter(content => typeof content === "string").join("\n");
+        const forced = "Answer the user's question now using the web search results";
+        expect({
+          forcedCount: text.split(forced).length - 1,
+          correctionCount: text.split(TERMINAL_GUARD_NUDGE).length - 1,
+          forcedBeforeCorrection: text.indexOf(forced) < text.indexOf(TERMINAL_GUARD_NUDGE),
+        }).toEqual({
+          forcedCount: 1, correctionCount: 1, forcedBeforeCorrection: true,
+        });
+      },
+    }, stream));
 }
 
 test("Chat recovery opt-in does not expand another adapter's search iteration cap", async () => {
