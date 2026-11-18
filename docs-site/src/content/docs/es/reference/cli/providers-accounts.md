@@ -207,9 +207,13 @@ Al iniciar sesión, importar credenciales de Claude Code o reautenticar, OpenCod
 tokens vigentes la organización de las cuentas anteriores que aún carecen de ese dato. Si Claude
 comunica la organización de la nueva autorización al iniciar sesión y el perfil de la cuenta no
 está disponible, OpenCodex conserva la cuenta activa si su organización confirmada es distinta.
-Si Claude proporciona un correo electrónico sin el UUID de la cuenta, el inicio de sesión puede
-actualizar la única cuenta con ese correo en la organización confirmada. Si coinciden varias
-cuentas, el inicio de sesión se detiene y te pide que lo intentes de nuevo.
+Si Claude confirma la organización y proporciona un correo electrónico sin el UUID de la cuenta,
+el inicio de sesión puede actualizar la única cuenta con un correo coincidente en esa organización.
+Tras quitar los espacios al principio y al final, la parte anterior a `@` y los dominios
+internacionalizados deben coincidir exactamente. En los demás dominios se ignoran las diferencias
+entre mayúsculas y minúsculas ASCII. Si la única cuenta con ese correo tiene una organización
+desconocida, se conserva y se puede añadir una cuenta nueva. Si coinciden varias cuentas en la
+organización confirmada, el inicio de sesión se detiene y te pide que lo intentes de nuevo.
 Si una cuenta cambia durante la comprobación y ya no se puede confirmar su organización, repite la operación.
 La reautenticación rechaza una autorización para otra organización confirmada o para una que ya
 corresponde a otra cuenta.

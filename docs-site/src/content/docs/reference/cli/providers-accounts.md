@@ -328,17 +328,20 @@ reported it (at login or on the next token refresh). The account list exposes th
 dashboard sessions and full management credentials.
 
 All of this depends on organization evidence, which Claude reports at login and on token refresh;
-it is recorded only when that report succeeds. A login gets its own account only when both
-organizations are known and differ. When the login's organization is known, an existing account
+it is recorded only when that report succeeds. A confirmed different organization gets its own
+account. When the login's organization is known, an existing account
 with no recorded organization (for example, one saved before this release) is checked through its
 own token, if that token is still current. An account of the login's organization is preferred.
 Otherwise, if the existing account's organization stays unknown (expired token, failed check, or a
 login whose own organization was not reported), the login may replace it, as earlier releases did.
 If Claude reports the new grant's organization during sign-in and the account profile is unavailable,
 the login still preserves an active account whose confirmed organization differs.
-If Claude supplies an email address but no account UUID, sign-in can update the single account
-with that email in the confirmed organization. If several accounts match, sign-in stops and
-asks you to try again.
+If Claude confirms the organization and supplies an email address without an account UUID, sign-in
+can update the single account with a matching email in that organization. The part before `@` and
+internationalized domains match exactly after trimming surrounding whitespace. Other domains are
+compared without regard to ASCII case. If the only account with that email has an unknown
+organization, sign-in preserves it and can add a separate account. If several accounts match in
+the confirmed organization, sign-in stops and asks you to try again.
 If an account changes during organization verification and the writer cannot confirm its current
 organization, retry the login or Claude Code credential import.
 Reauthentication also checks existing accounts through their usable tokens when their organization

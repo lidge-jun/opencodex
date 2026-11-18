@@ -1035,22 +1035,44 @@ test.each([
   expect(saved.anthropicIdentity).toBeUndefined();
 });
 
-test.each([
-  { scenario: "reuses the unique same-organization slot", organization: ORG_A, ambiguous: false },
-  { scenario: "adds a different-organization slot", organization: ORG_B, ambiguous: false },
-  { scenario: "refuses ambiguous same-organization slots", organization: ORG_A, ambiguous: true },
-])("email-only browser login $scenario when the profile is unavailable", async ({ organization, ambiguous }) => {
-  await saveCredential("anthropic", orgCredential("synthetic-org-a", ORG_A));
-  if (ambiguous) await saveCredential("anthropic", orgCredential("synthetic-other-account", ORG_A, "synthetic-account-b"));
+test.each<{
+  scenario: string;
+  outcome: "reuse" | "add" | "refuse";
+  organization?: string;
+  email?: string;
+  storedEmail?: string;
+  legacy?: boolean;
+}>([
+  { scenario: "reuses an exact same-organization email", outcome: "reuse" },
+  { scenario: "reuses a trimmed email with an ASCII domain case variant", email: " shared@Example.Test ", outcome: "reuse" },
+  { scenario: "preserves a slot with an ASCII local-part case variant", email: "Shared@example.test", outcome: "add" },
+  { scenario: "preserves a slot with a Unicode local-part case collision", storedEmail: "k@example.test", email: "K@example.test", outcome: "add" },
+  { scenario: "preserves a slot with a different Unicode local-part encoding", storedEmail: "é@example.test", email: "e\u0301@example.test", outcome: "add" },
+  { scenario: "preserves a slot with a differently spelled IDN", storedEmail: "shared@bücher.example.test", email: "shared@Bücher.example.test", outcome: "add" },
+  { scenario: "preserves a slot with a differently spelled IDN A-label", storedEmail: "shared@xn--bcher-kva.example.test", email: "shared@XN--BCHER-KVA.example.test", outcome: "add" },
+  { scenario: "adds a different-organization slot", organization: ORG_B, outcome: "add" },
+  { scenario: "preserves a legacy slot with the same email and unknown organization", legacy: true, outcome: "add" },
+  { scenario: "refuses ambiguous same-organization slots", outcome: "refuse" },
+])("email-only browser login $scenario when the profile is unavailable", async ({
+  organization = ORG_A, email = "shared@example.test", storedEmail = "shared@example.test", legacy, outcome,
+}) => {
+  const credential = { ...orgCredential("synthetic-org-a", ORG_A), email: storedEmail };
+  if (legacy) {
+    credential.accountId = undefined;
+    credential.anthropicIdentity = undefined;
+  }
+  await saveCredential("anthropic", credential);
+  if (outcome === "refuse") await saveCredential("anthropic", orgCredential("synthetic-other-account", ORG_A, "synthetic-account-b"));
   const before = getAccountSet("anthropic")!;
   const original = before.accounts[0]!;
-  if (ambiguous) expect(before.accounts).toHaveLength(2);
+  if (outcome === "refuse") expect(before.accounts).toHaveLength(2);
+  if (legacy) expect(anthropicOrganization(original.credential)).toBeUndefined();
 
   let profileReads = 0;
   globalThis.fetch = (async (_url, init) => {
     if (init?.method === "POST") return Response.json({
       access_token: "synthetic-fresh", refresh_token: "synthetic-fresh-refresh", expires_in: 3600,
-      account: { email_address: " Shared@Example.Test " }, organization: { uuid: organization },
+      account: { email_address: email }, organization: { uuid: organization },
     });
     profileReads++;
     return new Response(null, { status: 503 });
@@ -1062,13 +1084,13 @@ test.each([
     onManualCodeInput: async () => `synthetic-code#${state}`,
   }, { codeMode: true, forceLogin: true }, { loadConfig: config, saveConfig: () => {} });
 
-  if (ambiguous) {
+  if (outcome === "refuse") {
     await expect(login).rejects.toThrow("Multiple Anthropic login slots match");
     expect(getAccountSet("anthropic")).toEqual(before);
   } else {
     await login;
     const after = getAccountSet("anthropic")!;
-    if (organization === ORG_A) {
+    if (outcome === "reuse") {
       expect(after.accounts).toHaveLength(1);
       expect(after.activeAccountId).toBe(original.id);
     } else {
@@ -1082,7 +1104,7 @@ test.each([
     expect(saved.accountId).toBeUndefined();
     expect(saved.anthropicIdentity).toBeUndefined();
   }
-  expect(profileReads).toBe(1);
+  expect(profileReads).toBe(legacy ? 2 : 1);
 });
 
 test("browser login refuses a conflicting profile organization when the exchange omits the account", async () => {

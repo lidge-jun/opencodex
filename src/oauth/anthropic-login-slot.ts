@@ -6,10 +6,9 @@
  * therefore replaces the row of the same account AND organization; a proven different
  * organization gets its own row instead of overwriting the first one.
  *
- * The organization scopes a slot. An email-only login with proven scope can match one row with
- * the same email and proven scope without establishing account UUID continuity. When the incoming organization is unknown,
- * the login keeps the historical same-account replacement, so a row stored before
- * organizations were recorded is never duplicated by re-login.
+ * An email-only login with proven scope reuses a row only on a unique email match in the
+ * same proven organization. When the incoming organization is unknown, the login keeps the
+ * historical same-account replacement.
  */
 import { createHash } from "node:crypto";
 import { anthropicOrganization, matchesAnthropicImport, normalizeAnthropicIdentity,
@@ -35,6 +34,17 @@ function slotAccountUuid(credential: OAuthCredentials): string | undefined {
 
 function loginIdentity(credential: OAuthCredentials): string | undefined {
   return slotAccountUuid(credential) ?? credential.email;
+}
+
+function slotEmail(email: string | undefined): string | undefined {
+  const trimmed = email?.trim();
+  if (!trimmed) return undefined;
+  const separator = trimmed.lastIndexOf("@");
+  if (separator < 0) return trimmed;
+  const domain = trimmed.slice(separator + 1);
+  // Preserve the local part and both Unicode and A-label spellings of internationalized domains.
+  if (/[^\x00-\x7F]/.test(domain) || /(?:^|\.)xn--/i.test(domain)) return trimmed;
+  return trimmed.slice(0, separator + 1) + domain.toLowerCase();
 }
 
 function slotOrganization({ id, credential }: ProviderAccount, observed: AnthropicSlotOrganizations): string | undefined {
@@ -113,14 +123,14 @@ export function findAnthropicLoginSlot(
   observed: AnthropicSlotOrganizations = new Map(), activeAccountId?: string,
 ): ProviderAccount | undefined {
   const accountUuid = slotAccountUuid(incoming);
-  const email = incoming.email?.trim().toLowerCase();
+  const email = slotEmail(incoming.email);
   if (!accountUuid && email) {
     const organization = anthropicOrganization(incoming);
     if (organization) {
-      const [match, ambiguous] = accounts.filter(row => row.credential.email?.trim().toLowerCase() === email
+      const [match, ambiguous] = accounts.filter(row => slotEmail(row.credential.email) === email
         && slotOrganization(row, observed) === organization);
       if (ambiguous) throw new Error("Multiple Anthropic login slots match this organization and email. Try signing in again.");
-      if (match) return match;
+      return match;
     }
   }
   const identity = accountUuid ?? incoming.email;
