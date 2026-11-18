@@ -8,6 +8,7 @@ import { repoPath } from "./repo-root";
 export const RESPONSES_CORE_MODULES = [
   "core.ts",
   "core-pipeline.ts",
+  "hosted-advisor-spend.ts",
   "compaction-retention.ts",
   "core-options.ts",
   "native-response-control.ts",

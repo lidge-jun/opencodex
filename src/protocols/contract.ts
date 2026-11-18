@@ -84,6 +84,8 @@ export const PROTOCOL_REASON_CODES = [
   "advisor-tool-shadowed-by-proxy-advisor",
   /** A typed Advisor declaration named a model outside the caller's admission scope and was not forwarded. */
   "advisor-tool-outside-model-scope",
+  /** The request enforces token spend ceilings, so the separately unaccounted hosted Advisor was withheld. */
+  "advisor-tool-withheld-by-spend-policy",
 ] as const;
 export type ProtocolReasonCode = (typeof PROTOCOL_REASON_CODES)[number];
 
