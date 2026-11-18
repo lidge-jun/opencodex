@@ -30,21 +30,39 @@ function pages(directory: string, canonical = false): string[] {
 }
 type MarkdownRange = { start: number; end: number };
 
-/** Locate fenced examples and HTML comments without interpreting markers inside either region. */
+function matchingInlineCodeEnd(markdown: string, at: number, length: number): number | undefined {
+  let slash = at;
+  while (slash > 0 && markdown[slash - 1] === "\\") slash--;
+  if ((at - slash) % 2 === 1) return undefined;
+  const closing = new RegExp("(?<!`)`{" + length + "}(?!`)", "g");
+  closing.lastIndex = at + length;
+  const match = closing.exec(markdown);
+  if (!match) return undefined;
+  // Code spans can wrap within a paragraph. They cannot cross a blank line or a fenced block.
+  const crossedBlock = /\n[ \t]*(?:\n|(?:`{3,}|~{3,})[^\n]*\n)/;
+  if (crossedBlock.test(markdown.slice(at + length, match.index + length + 1))) return undefined;
+  return match.index + length;
+}
+
+/** Locate fenced examples and HTML comments without treating code spans as comments. */
 function markdownRanges(markdown: string) {
   const lines = [...markdown.matchAll(/[^\n]*(?:\n|$)/g)].filter(line => line[0].length);
   const fences: (MarkdownRange & { content: string })[] = [];
   const comments: MarkdownRange[] = [];
   let commentStart: number | undefined;
+  let inlineEnd = 0;
   const unquote = (line: string): string => line.replace(/^(?:[ \t]*>[ \t]?)+/, "");
   const quoteDepth = (line: string): number => (line.match(/^(?:[ \t]*>[ \t]?)+/)?.[0].match(/>/g) ?? []).length;
   for (let i = 0; i < lines.length; i++) {
     const { 0: line, index: start = 0 } = lines[i]!;
     const opening = commentStart === undefined ? /^[ \t]*(`{3,}|~{3,})([^\n]*)\n?$/.exec(unquote(line)) : null;
     if (!opening || (opening[1]![0] === "`" && opening[2]!.includes("`"))) {
-      for (const marker of line.matchAll(/<!--|-->/g)) {
+      for (const marker of line.matchAll(/`+|<!--|-->/g)) {
         const at = start + marker.index;
-        if (marker[0] === "<!--") commentStart ??= at;
+        if (at < inlineEnd) continue;
+        if (marker[0][0] === "`") {
+          if (commentStart === undefined) inlineEnd = matchingInlineCodeEnd(markdown, at, marker[0].length) ?? at;
+        } else if (marker[0] === "<!--") commentStart ??= at;
         else if (commentStart !== undefined) {
           comments.push({ start: commentStart, end: at + marker[0].length });
           commentStart = undefined;
@@ -90,23 +108,16 @@ function withoutFencedCode(markdown: string, hideComments = false): string {
 function inlineCode(markdown: string): Set<string> {
   const prose = withoutFencedCode(markdown);
   const values = new Set<string>();
-  const escaped = (at: number): boolean => {
-    let slashes = 0;
-    for (let i = at - 1; i >= 0 && prose[i] === "\\"; i--) slashes++;
-    return slashes % 2 === 1;
-  };
-  for (let at = 0; at < prose.length; at++) {
-    if (prose[at] !== "`" || escaped(at)) continue;
-    let length = 1;
-    while (prose[at + length] === "`") length++;
-    const closing = new RegExp("(?<!`)`{" + length + "}(?!`)", "g");
-    closing.lastIndex = at + length;
-    // Backslashes are literal inside code spans, including immediately before the closing run.
-    const match = closing.exec(prose);
-    if (!match || /\n[ \t]*\n/.test(prose.slice(at + length, match.index))) { at += length - 1; continue; }
-    // Markdown code spans can cross lines; their rendered whitespace is normalized.
-    values.add(prose.slice(at + length, match.index).replace(/\s*\n\s*/g, " ").trim());
-    at = match.index + length - 1;
+  let end = 0;
+  for (const run of prose.matchAll(/`+/g)) {
+    const at = run.index;
+    if (at < end) continue;
+    const length = run[0].length;
+    const closingEnd = matchingInlineCodeEnd(prose, at, length);
+    if (closingEnd === undefined) continue;
+    // Backslashes are literal inside code spans; wrapped whitespace is normalized.
+    values.add(prose.slice(at + length, closingEnd - length).replace(/\s*\n\s*/g, " ").trim());
+    end = closingEnd;
   }
   return values;
 }
@@ -164,6 +175,12 @@ describe("Spanish documentation localization", () => {
     expect(hasA6apiQuotaTargets("~~~html\n<!--\n~~~\n" + a6apiHeading, spanish)).toBe(true);
     expect(codeBlocks("<!--\n~~~\n-->\n")).toEqual([]);
     expect(codeBlocks("~~~html\n<!--\n~~~\n")).toEqual(["<!--\n"]);
+  });
+
+  test.each(["Write `<!--` literally.", "Write ``literal\n<!-- marker`` here."])("code spans leave headings and fences visible (%j)", prefix => {
+    const spanish = a6apiAnchor + "\n\n" + spanishA6apiHeading;
+    expect(hasA6apiQuotaTargets(prefix + "\n\n" + a6apiHeading, spanish)).toBe(true);
+    expect(codeBlocks(prefix + "\n\n~~~sh\nocx status\n~~~\n")).toEqual(["ocx status\n"]);
   });
 
   test.each([
