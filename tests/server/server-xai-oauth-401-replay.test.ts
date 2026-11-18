@@ -7,17 +7,21 @@ import { fetchProviderModels } from "../../src/codex/catalog/provider-models";
 import { isComboTargetInCooldown } from "../../src/combos/failover";
 import { fetchProviderQuotaReports } from "../../src/providers/quota";
 import { saveConfig } from "../../src/config";
+import { isNonReplayableResponse } from "../../src/lib/upstream-retry";
 import { XAI_OAUTH_DISCOVERY_URL } from "../../src/oauth/xai";
 import { getAccountSet, saveCredential } from "../../src/oauth/store";
 import { clearModelCache, getProviderDiscoveryStatus, markModelsFetchFailure, MODELS_FETCH_FAILURE_COOLDOWN_MS } from "../../src/codex/model-cache";
 import { XAI_GROK_CLI_BASE_URL } from "../../src/providers/xai-transport";
 import { readUsageEntries, usageLogPath } from "../../src/usage/log";
 import { startServer } from "../../src/server";
+import type { RequestLogContext } from "../../src/server/request-log";
+import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { handleManagementAPI } from "../../src/server/management-api";
 import { ManagementRequest } from "../helpers/management-auth";
 import { withStubbedProviderFetch } from "../helpers/catalog-provider-fetch";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const TOKEN_ENDPOINT = "https://auth.x.ai/oauth/token";
@@ -441,7 +445,8 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
 
   const privacyError = `${privateDetail} ${marker}`;
 
-  function refuseAt(upstreamPath: string, error = privacyError, fallback?: (init?: RequestInit) => Response): string[] {
+  function refuseAt(upstreamPath: string, error = privacyError, fallback?: (init?: RequestInit) => Response,
+    resetBeforeHeaders = false): string[] {
     const sends: string[] = [];
     globalThis.fetch = (async (input, init) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
@@ -450,6 +455,9 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
         if (path === upstreamPath || path === "/v1/billing") {
           sends.push(path);
           expect(new Headers(init?.headers).get("authorization")).toBe("Bearer rejected-access");
+          if (resetBeforeHeaders && sends.length === 1) {
+            throw Object.assign(new Error("synthetic pre-header reset"), { code: "ECONNRESET" });
+          }
           return Response.json({ error }, { status: 403 });
         }
         if (path === "/v1/models") return Response.json({ data: [{ id: "grok-4.5" }] });
@@ -507,6 +515,40 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
       expect(readUsageEntries().at(-1)?.failureCause).toBe("policy-refusal");
     } finally {
       await server.stop(true);
+    }
+  });
+
+  test.each([
+    ["translated Responses", "/v1/chat/completions", false],
+    ["native Responses", "/v1/responses", true],
+  ] as const)("%s keeps privacy guidance on a non-replayable reset replacement", async (_, upstream, nativeResponses) => {
+    await seedOAuth();
+    const config = xaiConfig();
+    const provider = config.providers.xai!;
+    if (!nativeResponses) {
+      provider.modelAdapters = { "grok-4.5": "openai-chat" };
+      provider.xaiResponsesDefaultVersion = 1;
+    }
+    provider.retryOnReset = { enabled: true };
+    saveConfig(config);
+    const sends = refuseAt(upstream, privacyError, undefined, true);
+    const release = acquireOwnedSpendHome();
+    try {
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+      const result = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "xai/grok-4.5", input: "hello", store: false, stream: false }),
+      }), config, logCtx);
+      expect(sends).toEqual([upstream, upstream]);
+      expect(result.status).toBe(403);
+      expect(isNonReplayableResponse(result)).toBe(true);
+      expect(await result.json()).toEqual({
+        error: { message: guidance, type: "permission_error", param: null, code: "permission_denied" },
+      });
+      expect(logCtx.causeHint).toBe("policy-refusal");
+    } finally {
+      release();
     }
   });
 

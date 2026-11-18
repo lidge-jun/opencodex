@@ -353,6 +353,7 @@ the pre-header row in `fetchWithResetRetry` and the WebSocket row alike:
 | --- | --- |
 | 2xx | Returned unchanged. |
 | 307, 308, 401, 402, 408, 409, 413, 429, or any 5xx | Body released; settles as the refusal. |
+| Responses HTTP 403 with the exact [xAI OAuth Legacy privacy marker](../providers/xai-grok.md#legacy-privacy-mode-403) | Fixed privacy guidance and policy-refusal attribution with the non-replayable marker retained. |
 | Any other status | Real status and non-replayability kept; bounded client projection retains allowlisted error type and code and `x-should-retry: false` when present, withholds upstream body text and all other upstream headers, and emits a fixed generic message. |
 
 The refusal set is everything that would send again: the client retry table (408, 409, 429,

@@ -943,7 +943,8 @@ export async function prepareAdapterExchange(
       await rejectAnthropicPerMessageEffort(parsed, upstreamResponse, upstream.signal);
       if (isNonReplayableResponse(upstreamResponse)) {
         try {
-          return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal);
+          return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal,
+            isXaiGrokOAuth(route.providerName, route.provider) ? logCtx : undefined);
         } finally { cleanupUpstreamAbort(); }
       }
       bindAnthropicRejectionResponse(transportState.sameTargetRequest, upstreamResponse);
