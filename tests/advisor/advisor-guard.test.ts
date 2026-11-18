@@ -143,6 +143,18 @@ describe("caller-owned Advisor delivery policy", () => {
     expect(resolve("work.advisor")).toBeUndefined();
     expect(resolve("work__advisor")).toBe("refused");
   });
+
+  test.each([false, true])("keeps original namespace authority when effective choice becomes auto (allowlist=%s)", allowlist => {
+    const selector = { type: "function", namespace: "work", name: "advisor" };
+    const parsed = parseRequest({ model: "worker", input: "task",
+      tool_choice: allowlist ? { type: "allowed_tools", mode: "required", tools: [selector] } : selector,
+      tools: ["work", "other"].map(name => ({ type: "namespace", name, tools: [advisor] })),
+    });
+    parsed.options.toolChoice = "auto";
+    const resolve = createAdvisorCallResolver(parsed, false);
+    expect(resolve("work__advisor")).toEqual({ clientWireName: "work__advisor" });
+    expect(resolve("other__advisor")).toBe("refused");
+  });
 });
 
 describe("createAdvisorGuard — manual advisor() interception", () => {

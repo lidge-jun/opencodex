@@ -178,6 +178,55 @@ function workerRequest(input: unknown, threadId?: string, stream = true, tools?:
 }
 
 describe("advisor responses wiring (end-to-end)", () => {
+  for (const form of ["named", "allowed_tools"] as const) {
+    test.each([
+      { namespaces: ["other"], namespace: "work", refused: true },
+      { namespaces: ["other", "work"], namespace: "work", refused: false },
+      { namespaces: ["work"], namespace: "work", refused: false },
+      { namespaces: ["other", "functions"], namespace: "functions", refused: false },
+      { namespaces: ["other", "work"], namespace: undefined, refused: true },
+    ])(`advisor namespace selection (${form}) $namespaces, selector namespace=$namespace`, async ({ namespaces, namespace, refused }) => {
+      releaseSpendHome = acquireOwnedSpendHome();
+      const workerBodies: string[] = [], chatRequests: string[] = [];
+      const owner = namespace && namespaces.includes(namespace) ? namespace : "other";
+      const wireName = owner === "functions" ? "advisor" : `${owner}__advisor`;
+      const workerFetch = (async (_url, init) => {
+        workerBodies.push(String(init?.body));
+        return Response.json({ choices: [{ message: { role: "assistant", content: null,
+          tool_calls: [{ id: "namespace-fixture-call", type: "function", function: { name: wireName, arguments: "{}" } }],
+        }, finish_reason: "tool_calls" }] });
+      }) as typeof fetch;
+      const config = advisorConfig({ enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1", policy: "manual" }, workerFetch);
+      // The native Chat wire emits a forced name for a required singleton allowlist.
+      config.providers!.worker.baseUrl = "https://api.openai.com/v1";
+      loopbackInterceptor(config, { chatRequests });
+      const tools = namespaces.map(name => ({ type: "namespace", name,
+        tools: [{ type: "function", name: "advisor", parameters: { type: "object" } }] }));
+      const selector = { type: "function", name: "advisor", ...(namespace ? { namespace } : {}) };
+      const choice = form === "named" ? selector : { type: "allowed_tools", mode: "required", tools: [selector] };
+      const response = await handleResponses(workerRequest("Use the client tool", undefined, false, tools, choice), config, logCtx);
+      const body = await response.json();
+      expect(chatRequests).toHaveLength(0);
+      if (refused) {
+        expect(workerBodies).toEqual([]);
+        expect(response.status).toBe(400);
+        expect(body).toMatchObject({ error: { type: "invalid_request_error",
+          message: expect.stringContaining(namespace ? "work.advisor" : "ambiguous tool_choice name: advisor") } });
+        expect(JSON.stringify(body)).not.toContain("namespace-fixture-call");
+        return;
+      }
+      expect(response.status).toBe(200);
+      expect(workerBodies).toHaveLength(1);
+      expect(JSON.parse(workerBodies[0]!)).toMatchObject({
+        tools: [{ function: { name: wireName } }],
+        tool_choice: { type: "function", function: { name: wireName } },
+      });
+      const calls = body.output.filter((item: { type: string }) => item.type === "function_call");
+      expect(calls).toEqual([expect.objectContaining({ name: "advisor", call_id: "namespace-fixture-call" })]);
+      expect(calls[0].namespace).toBe(owner === "functions" ? undefined : owner);
+    });
+  }
+
   for (const stream of [true, false]) for (const wireName of ["work__advisor", "work.advisor", "advisor"]) {
   test(`a selected namespaced client advisor stays client-owned (stream=${stream}, echo=${wireName})`, async () => {
     releaseSpendHome = acquireOwnedSpendHome();
@@ -210,7 +259,6 @@ describe("advisor responses wiring (end-to-end)", () => {
   for (const stream of [true, false]) {
     for (const choice of ["none", { type: "function", name: "shell" },
       { type: "custom", name: "advisor" },
-      { type: "function", namespace: "work", name: "advisor" },
       { type: "allowed_tools", mode: "auto", tools: [{ type: "custom", name: "advisor" }] },
       { type: "allowed_tools", mode: "required", tools: [{ type: "web_search", name: "advisor" }] },
       { type: "allowed_tools", mode: "auto", tools: [{ type: "function", name: "shell" }] }]) {

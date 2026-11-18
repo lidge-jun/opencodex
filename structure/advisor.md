@@ -64,13 +64,13 @@ multi-call pairing, overlap and lifecycle release.
   final worker output is checked against current client declarations, including direct encoders.
   Synthetic injection requires the request's effective `tool_choice` to permit Advisor. For an
   explicit selector or allowlist, `src/responses/parser-tools.ts` retains typed client selectors
-  and the selected root function names before provider translation. Only a matching function
-  selector permits synthetic Advisor. A caller-owned `advisor` can pass through when its declared
-  kind and name match the original selector and the effective choice permits it. With `auto`
+  and the selected root function names before provider translation. An unqualified function
+  selector can permit synthetic Advisor. A caller-owned `advisor` can pass through when its
+  declared kind, name and any explicit namespace match the original selector and the effective choice permits it. With `auto`
   or `required`, caller-owned tools follow the effective choice alone. A forced hosted search
   excludes a caller-owned `advisor` even when the worker receives `auto`.
   The guard resolves worker call names against the caller catalog, including flattened, dotted,
-  and compatible bare or reserved `functions` echoes. It checks the declared tool's kind against
+  and compatible bare or reserved `functions` echoes. It checks the declaration against
   the original typed selector and checks the effective choice on each worker leg. A forbidden call
   is refused before consultation, continuation, or disclosure of its ID and arguments.
   Linked Messages replay uses the same check. `src/claude/inbound-content-options.ts` identifies

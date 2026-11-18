@@ -1,4 +1,4 @@
-import type { OcxRequestOptions, OcxTool } from "../types";
+import { createToolChoiceResolver, dottedToolName, namespacedToolName, type OcxRequestOptions, type OcxTool } from "../types";
 import { isObj } from "./parser-content";
 import { WEB_SEARCH_TOOL_NAME } from "../web-search/synthetic-tool";
 import { buildImageTool, IMAGE_GEN_TOOL_NAME } from "../images/synthetic-tool";
@@ -12,33 +12,73 @@ export function explicitToolChoices(value: unknown): Pick<OcxRequestOptions, "ex
   const clientTools: NonNullable<OcxRequestOptions["explicitClientToolChoices"]>[number][] = [];
   for (const selector of selectors) {
     if (!isObj(selector) || typeof selector.name !== "string" || !selector.name) continue;
-    const { type, name, namespace } = selector;
+    const { type, name } = selector;
     if (type !== "function" && type !== "custom") continue;
-    clientTools.push({ type, name });
-    if (type === "function" && (namespace === undefined || namespace === "" || namespace === "functions")) rootFunctions.add(name);
+    const namespace = selectorNamespace(selector);
+    clientTools.push({ type, name, namespace });
+    // A qualified selection names an existing client tool, even under `functions`.
+    if (type === "function" && namespace === undefined) rootFunctions.add(name);
   }
   return { explicitRootFunctionChoices: [...rootFunctions], explicitClientToolChoices: clientTools };
 }
 
-export function mapToolChoice(value: unknown): OcxRequestOptions["toolChoice"] {
+function selectorNamespace(selector: Record<string, unknown>): string | undefined {
+  // Codex's reserved functions group and the empty namespace both denote root tools.
+  return typeof selector.namespace === "string" ? (selector.namespace === "functions" ? "" : selector.namespace) : undefined;
+}
+
+export function mapToolChoice(value: unknown, tools?: readonly OcxTool[]): OcxRequestOptions["toolChoice"] {
   if (value === undefined || value === null) return undefined;
   if (value === "auto" || value === "none" || value === "required") return value;
   if (isObj(value) && "type" in value) {
-    const t = (value as { type: string }).type;
-    if ((t === "function" || t === "custom") && "name" in value) {
-      return { name: (value as { name: string }).name };
+    const qualifiedToolNames = new Set<string>();
+    let resolver: ReturnType<typeof createToolChoiceResolver> | undefined;
+    let wireTools: Map<string, OcxTool> | undefined;
+    const lower = (selector: Record<string, unknown>, name: string): string => {
+      const { type } = selector;
+      const namespace = type === "function" || type === "custom" ? selectorNamespace(selector) : undefined;
+      if (namespace === undefined) {
+        if (tools && (resolver ??= createToolChoiceResolver(tools)).candidateCount(name) > 1) {
+          throw new Error(`ambiguous tool_choice name: ${name}`);
+        }
+        return name;
+      }
+      const wireName = namespacedToolName(namespace, name);
+      if (tools) {
+        wireTools ??= new Map(tools.map(tool => [namespacedToolName(tool.namespace, tool.name), tool]));
+        const match = wireTools.get(wireName);
+        if (!match || (match.namespace ?? "") !== namespace || match.name !== name
+          || (match.freeform ? "custom" : "function") !== type || match.imageGeneration || match.toolSearch) {
+          throw new Error(`invalid tool_choice: no declared ${type} tool ${dottedToolName(namespace, name)}`);
+        }
+      }
+      qualifiedToolNames.add(wireName);
+      return wireName;
+    };
+    const qualified = () => qualifiedToolNames.size > 0 ? { qualifiedToolNames: [...qualifiedToolNames] } : {};
+    const t = value.type;
+    if ((t === "function" || t === "custom") && typeof value.name === "string") {
+      return { name: lower(value, value.name), ...qualified() };
     }
     // Hosted image tool types (with or without a name) map to the synthetic image_gen wire name.
     if (t === "image_generation" || t === "image_gen") {
-      return { name: IMAGE_GEN_TOOL_NAME };
+      return { name: lower(value, IMAGE_GEN_TOOL_NAME) };
     }
-    if (t === "tool_search") return { name: "tool_search" };
+    if (t === "tool_search") return { name: lower(value, "tool_search") };
     if (t === "allowed_tools" && Array.isArray(value.tools)) {
       const names = value.tools
-        .map(allowedToolName)
+        .map(entry => {
+          if (!isObj(entry)) return undefined;
+          const name = allowedToolName(entry);
+          if (name) return lower(entry, name);
+          if ((entry.type === "function" || entry.type === "custom") && selectorNamespace(entry) !== undefined) {
+            throw new Error("invalid tool_choice: a namespace-qualified selector requires a tool name");
+          }
+          return undefined;
+        })
         .filter((name): name is string => Boolean(name));
       return names.length > 0
-        ? { allowedTools: [...new Set(names)], mode: value.mode === "required" ? "required" : "auto" }
+        ? { allowedTools: [...new Set(names)], mode: value.mode === "required" ? "required" : "auto", ...qualified() }
         : "none";
     }
     return "auto";
@@ -46,8 +86,7 @@ export function mapToolChoice(value: unknown): OcxRequestOptions["toolChoice"] {
   return undefined;
 }
 
-function allowedToolName(tool: unknown): string | undefined {
-  if (!isObj(tool)) return undefined;
+function allowedToolName(tool: Record<string, unknown>): string | undefined {
   if (typeof tool.name === "string" && tool.name.length > 0) return tool.name;
   if (tool.type === "web_search" || tool.type === "web_search_preview") return WEB_SEARCH_TOOL_NAME;
   if (tool.type === "image_generation" || tool.type === "image_gen") return IMAGE_GEN_TOOL_NAME;

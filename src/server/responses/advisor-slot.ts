@@ -94,7 +94,9 @@ export function createAdvisorCallResolver(
     if (!tool) return "refused";
     if (tool.name !== ADVISOR_TOOL_NAME) return undefined;
     const selected = explicitClientToolChoices === undefined || explicitClientToolChoices.some(choice =>
-      choice.type === (tool.freeform ? "custom" : "function") && selectedNames?.selects(tool, choice.name));
+      choice.type === (tool.freeform ? "custom" : "function") && (choice.namespace === undefined
+        ? selectedNames?.selects(tool, choice.name)
+        : choice.namespace === (tool.namespace ?? "") && choice.name === tool.name));
     return selected ? { clientWireName: namespacedToolName(tool.namespace, tool.name) } : "refused";
   };
 }
