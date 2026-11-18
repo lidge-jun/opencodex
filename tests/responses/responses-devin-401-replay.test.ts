@@ -1,7 +1,8 @@
-import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import type { ProviderAdapter } from "../../src/adapters/base";
 import { createAdapterPhysicalSend } from "../../src/adapters/physical-send";
+import * as providerEgress from "../../src/lib/provider-egress";
 import { addFinalRequestLog, type RequestLogContext, type RequestLogEntry } from "../../src/server/request-log";
 import type { AdapterEvent, OcxConfig, OcxProviderConfig } from "../../src/types";
 import { getAccountSet, replaceProviderAccountSet, saveCredential, setAccountPaused, setActiveAccount } from "../../src/oauth/store";
@@ -18,7 +19,6 @@ const DEAD_OTHER = "devin-session-token$synthetic-dead-other";
 const originalFetch = globalThis.fetch;
 const inferenceUrl = "https://server.codeium.com/synthetic-run-turn";
 let receiptMode: "adapter" | "executor" | undefined;
-let refuseReplacementBeforeSend = false;
 
 // GetUserJwt stand-in: the identity a key mints, keyed by the key inside the protobuf body.
 let mintedIdentity: Record<string, { auth_uid?: string; sub?: string; email?: string } | undefined> = {};
@@ -65,7 +65,6 @@ mock.module("../../src/server/adapter-resolve", () => ({ ...resolver,
       async runTurn(_parsed, incoming, emit) {
         const key = String(provider.apiKey);
         if (receiptMode) {
-          if (key === ROTATED && refuseReplacementBeforeSend) throw new Error("fixture pre-dispatch refusal");
           const dispatch = (executor: typeof fetch) => executor(inferenceUrl, {
             method: "POST", headers: { authorization: key }, signal: incoming.abortSignal,
           });
@@ -113,7 +112,6 @@ beforeEach(() => {
   mintFailure = undefined;
   holdMint = undefined;
   receiptMode = undefined;
-  refuseReplacementBeforeSend = false;
   globalThis.fetch = mintFetch;
   previousCliPath = process.env[DEVIN_CLI_CREDENTIALS_ENV];
   // Never let a test read the developer's real CLI credential.
@@ -195,15 +193,28 @@ test.each(["adapter", "executor"] as const)("same-account refresh splits at the 
 
 test.each(["adapter", "executor"] as const)("%s-owned refresh keeps the 401 when the replacement stops before dispatch", async mode => {
   receiptMode = mode;
-  refuseReplacementBeforeSend = true;
   await saveCliImport(DEAD, { accountId: "uid-rotated" });
   writeCliFile(ROTATED);
-  const log: RequestLogContext = { surface: "codex" };
-  const start = Date.now();
-  const response = await run(false, log);
-  expect(await response.text()).toContain("fixture pre-dispatch refusal");
-  expect(sentKeys).toEqual([DEAD]);
-  expect(finalizeRunTurnLog(start, log, response.status).attempts?.map(attempt => [attempt.status, attempt.sendCount])).toEqual([[401, 1]]);
+  const validateEgress = providerEgress.providerEgressSendInit;
+  let refusedDispatches = 0;
+  const guard = spyOn(providerEgress, "providerEgressSendInit").mockImplementation((binding, ...args) => {
+    if (binding.provider.apiKey === ROTATED) {
+      refusedDispatches++;
+      throw new Error("fixture pre-dispatch refusal");
+    }
+    return validateEgress(binding, ...args);
+  });
+  try {
+    const log: RequestLogContext = { surface: "codex" };
+    const start = Date.now();
+    const response = await run(false, log);
+    expect(await response.text()).toContain("fixture pre-dispatch refusal");
+    expect(refusedDispatches).toBe(1);
+    expect(sentKeys).toEqual([DEAD]);
+    expect(finalizeRunTurnLog(start, log, response.status).attempts?.map(attempt => [attempt.status, attempt.sendCount])).toEqual([[401, 1]]);
+  } finally {
+    guard.mockRestore();
+  }
 });
 
 function account(id: string) {

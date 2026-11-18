@@ -712,7 +712,6 @@ export async function prepareAdapterExchange(
               replacementAdmitted = true;
               lastSentRequest = retryRequest;
             };
-            let adapterReportedSend = false;
             const producer = adapterDispatchBudget?.beginSpendProducer?.();
             try {
             return await withProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal, pacingSlot => {
@@ -723,9 +722,11 @@ export async function prepareAdapterExchange(
                 timeoutMs: sendConnectMs(),
                 sendBudget: adapterDispatchBudget,
                 onPhysicalSend: send => {
-                  if (replay) adapterReportedSend = true;
                   if (!replay && preserveFailureResponse) replacementAdmitted = true;
-                  antigravityDenial.beforeSend(); noteAdapterPhysicalSend(retryEstimate, send);
+                  antigravityDenial.beforeSend();
+                  // An adapter that supplies its own guarded receipt can bypass providerFetch.
+                  if (send.ordinal === 1 && transportState.activeAdapter.reportsPhysicalSends) commitReplayDispatch();
+                  noteAdapterPhysicalSend(retryEstimate, send);
                   chargeFastDowngradeWorkflowSend();
                 },
                 onRecoveryWithheld: noteAdapterRecoveryWithheld,
@@ -743,11 +744,6 @@ export async function prepareAdapterExchange(
                   beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
                     ? createCodexAuthDispatchGuard(admissionState.authCtx, options.codexAuthPolicy ?? config, route.modelId, options.admission, options.visionDescribeTerminal === true) : undefined,
                 }),
-              }).then(response => {
-                // An adapter dispatching through its own executor can supply its own receipt.
-                // Its returned response confirms the send survived any later adapter guard.
-                if (adapterReportedSend) commitReplayDispatch();
-                return response;
               });
             });
             } finally { producer?.close(); }

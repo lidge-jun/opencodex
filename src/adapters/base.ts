@@ -85,8 +85,9 @@ export interface ProviderAdapter {
   name: string;
 
   /**
-   * This adapter reports every physical inference send through `IncomingMeta.onPhysicalSend`,
-   * including its first.
+   * This adapter reports every physical inference send, including its first, through
+   * `IncomingMeta.onPhysicalSend`. A `fetchResponse` adapter using its own executor can also
+   * opt in by calling `AdapterFetchContext.onPhysicalSend` after its final dispatch guards.
    *
    * The caller normally logs the first send before handing control over, which is correct for a
    * transport whose sends it can see. An adapter that admits its own sends through the shared

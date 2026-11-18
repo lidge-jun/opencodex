@@ -1461,7 +1461,9 @@ export async function preparePassthroughExchange(
             route.modelId,
           );
           let snapshot: OAuthAccessSnapshot | undefined;
+          let commit: CredentialReplay | undefined;
           if (nextAccountId) {
+            commit = transportState.createCredentialReplayAttempt(request, upstreamResponse.status, "oauth-account-429");
             try { snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId); }
             catch { /* Keep the original 429 body readable when the next credential is unavailable. */ }
           }
@@ -1474,7 +1476,6 @@ export async function preparePassthroughExchange(
               resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
               config.cacheRetention,
             );
-            const commit = transportState.createCredentialReplayAttempt(request, upstreamResponse.status, "oauth-account-429");
             bindRefreshedAdapter(rotatedAdapter, false);
             try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already closed */ }
             sendBudgetState.pendingHopPermit = hop.permit;

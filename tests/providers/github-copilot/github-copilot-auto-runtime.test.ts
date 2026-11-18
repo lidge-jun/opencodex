@@ -814,7 +814,8 @@ describe("Copilot Auto through the Responses pipeline", () => {
     const f = fixture({ nativeFirst: true, native429: true, negotiationRefusal: status, negotiationRefusalAt: 2, alwaysRefuse: true });
     await saveConfig(f.config);
     const budget = createRequestExecutionBudget();
-    const response = await handleResponses(request("hello", false), f.config, { model: "", provider: "" }, { sendBudget: budget });
+    const log: RequestLogContext = {};
+    const response = await handleResponses(request("hello", false), f.config, log, { sendBudget: budget });
     expect(response.status).toBe(status);
     expect(response.headers.get("retry-after")).toBe("12");
     expect(await response.text()).not.toContain("must-not-echo");
@@ -822,6 +823,7 @@ describe("Copilot Auto through the Responses pipeline", () => {
     expect(f.sent.filter(call => ["/responses", "/chat/completions"].includes(call.path))).toHaveLength(1);
     expect(f.sent.find(call => call.path === "/responses")!.signal!.aborted).toBe(true);
     expect(f.cancelledNativeBodies).toBe(1);
+    expect(log.attempts?.map(attempt => [attempt.status, attempt.sendCount])).toEqual([[429, 1]]);
   });
   test.each([false, true])("native 429 replacement malformed/cancel=%s refunds the reservation", async cancel => {
     await accounts();
@@ -1051,11 +1053,13 @@ describe("Copilot Auto through the Responses pipeline", () => {
     saveConfig(config);
     const req = new Request("http://localhost/v1/responses", { method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ model: "github-copilot/auto", input: "hello", stream: false, tools: [{ type: "web_search" }] }) });
-    const response = await handleResponses(req, config, { model: "", provider: "" });
+    const log: RequestLogContext = {};
+    const response = await handleResponses(req, config, log);
     expect(response.status).toBe(429);
     expect(await response.text()).toContain("limited");
     expect(sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(1);
     expect(sent.filter(call => call.path === "/models/session")).toHaveLength(2);
+    expect(log.attempts?.map(attempt => [attempt.status, attempt.sendCount])).toEqual([[429, 1]]);
   });
   test("web-search key rotation into a model outside the key scope ends with the scope refusal", async () => {
     const { config, sent } = fixture({ key: true, rotate: true });
@@ -1240,7 +1244,8 @@ describe("Copilot Auto through the Responses pipeline", () => {
     globalThis.fetch = config.providers["github-copilot"]!.fetch as typeof fetch;
     config.providers["github-copilot"]!.terminalContinuationGuard = true;
     const admission = scopedAdmission(config, ["github-copilot/auto", "gpt-4o"]);
-    const response = await handleResponses(request("Modify the file now."), config, { model: "", provider: "" }, { admission });
+    const log: RequestLogContext = {};
+    const response = await handleResponses(request("Modify the file now."), config, log, { admission });
     const text = await response.text();
     const inference = sent.filter(call => ["/chat/completions", "/responses"].includes(call.path));
     expect(inference.map(call => [call.host, call.body.model])).toEqual([
@@ -1251,6 +1256,7 @@ describe("Copilot Auto through the Responses pipeline", () => {
     expect(sessions.at(-1)).toBe("b.githubcopilot.com");
     expect(text).toContain("model_not_allowed_for_key");
     expect(text).not.toContain("gpt-5.4");
+    expect(log.attempts?.map(attempt => [attempt.status, attempt.sendCount])).toEqual([[429, 2]]);
   });
 });
 

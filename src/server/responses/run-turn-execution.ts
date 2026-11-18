@@ -340,6 +340,7 @@ export async function executeResponsesRunTurn(
         const reportsOwnSends = transportState.runTurnAdapter.reportsPhysicalSends === true;
         const credentialReplay = credentialRecoveryStatus(recovery) !== undefined;
         let replacementPending = credentialReplay;
+        let adapterReportedSend = false;
         if (!reportsOwnSends && !credentialReplay) transportState.noteRoutedAttemptSend(logCtx.usageLogInputTokens, recovery);
         const onGuardedDispatch = credentialReplay ? () => {
           if (!replacementPending) return;
@@ -390,9 +391,11 @@ export async function executeResponsesRunTurn(
               // Capture once at this attempt's send, before later selection or recovery changes it.
               const binding = adapterBindings.get(transportState.runTurnAdapter);
               if (!sentKeyBinding && binding?.kind === "api-key") sentKeyBinding = binding;
+              const countOnly = credentialReplay && (replacementPending || !adapterReportedSend);
+              adapterReportedSend = true;
               noteAdapterPhysicalSend(logCtx.usageLogInputTokens,
                 { ...send, ...(send.recovery ?? recovery ? { recovery: send.recovery ?? recovery } : {}) },
-                { includeFirst: reportsOwnSends, countOnly: replacementPending });
+                { includeFirst: reportsOwnSends, countOnly });
             },
             onRecoveryWithheld: noteAdapterRecoveryWithheld,
           },
