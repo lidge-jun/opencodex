@@ -14,6 +14,7 @@ import { activateAdvisor } from "../../src/lib/advisor-activation";
 import { setAdvisorPlanFactory } from "../../src/server/responses/advisor-plan-slot";
 import type { TranslatorBudget } from "../../src/lib/translator-budget";
 import { handleResponses } from "../../src/server/responses/core";
+import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { handleChatCompletions } from "../../src/server/chat-completions";
 import { collectSse } from "../helpers/responses-conformance";
 import { fakeChatGptJwt } from "../helpers/fake-chatgpt-jwt";
@@ -95,7 +96,7 @@ function advisorConfig(advisor: OcxConfig["advisor"], workerFetch: typeof fetch)
   return config;
 }
 
-const advisorCallFramesFor = (question?: string) => [
+const advisorCallFramesWith = (args: object) => [
   { choices: [{ delta: { content: "Let me consult the expert." }, finish_reason: null }] },
   {
     choices: [{
@@ -104,7 +105,7 @@ const advisorCallFramesFor = (question?: string) => [
           index: 0,
           id: "call_adv_1",
           type: "function",
-          function: { name: "advisor", arguments: JSON.stringify({ question }) },
+          function: { name: "advisor", arguments: JSON.stringify(args) },
         }],
       },
       finish_reason: null,
@@ -112,7 +113,19 @@ const advisorCallFramesFor = (question?: string) => [
   },
   { choices: [{ delta: {}, finish_reason: "tool_calls" }] },
 ];
+const advisorCallFramesFor = (question?: string) => advisorCallFramesWith({ question });
 const advisorCallFrames = advisorCallFramesFor("Where do I start?");
+
+function anthropicAdvisorCall(): Response {
+  return sse([
+    { type: "message_start", message: { id: "msg_worker", model: "claude-fixture", usage: { input_tokens: 10 } } },
+    { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "call_adv_1", name: "advisor", input: {} } },
+    { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: '{"question":"Where do I start?"}' } },
+    { type: "content_block_stop", index: 0 },
+    { type: "message_delta", delta: { stop_reason: "tool_use" }, usage: { output_tokens: 10 } },
+    { type: "message_stop" },
+  ]);
+}
 
 const plainFrames = (text: string) => [
   { choices: [{ delta: { content: text }, finish_reason: null }] },
@@ -165,6 +178,223 @@ function workerRequest(input: unknown, threadId?: string, stream = true, tools?:
 }
 
 describe("advisor responses wiring (end-to-end)", () => {
+  for (const form of ["named", "allowed_tools"] as const) {
+    test.each([{ stream: true }, { stream: false }])(`functions.advisor selects the synthetic Advisor (${form}, stream=$stream)`, async ({ stream }) => {
+      releaseSpendHome = acquireOwnedSpendHome();
+      const workerBodies: string[] = [], chatRequests: string[] = [];
+      const answer = "Worker resumed with the advice.";
+      const workerFetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+        workerBodies.push(String(init?.body));
+        if (workerBodies.length > 1) return stream ? sse(plainFrames(answer)) : chatCompletion(answer);
+        if (stream) return sse(advisorCallFrames);
+        return Response.json({ choices: [{ message: { role: "assistant", content: null,
+          tool_calls: [{ id: "call_adv_1", type: "function",
+            function: { name: "advisor", arguments: '{"question":"Where do I start?"}' } }],
+        }, finish_reason: "tool_calls" }] });
+      }) as typeof fetch;
+      const config = advisorConfig({ enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1", policy: "manual" }, workerFetch);
+      config.providers!.worker.baseUrl = "https://api.openai.com/v1";
+      loopbackInterceptor(config, { chatRequests });
+      const selector = { type: "function", namespace: "functions", name: "advisor" };
+      const choice = form === "named" ? selector : { type: "allowed_tools", mode: "required", tools: [selector] };
+
+      const response = await handleResponses(workerRequest("Consult the expert", undefined, stream, undefined, choice), config, logCtx);
+      const body = await response.text();
+      expect(response.status).toBe(200);
+      expect(chatRequests).toHaveLength(1);
+      expect(workerBodies).toHaveLength(2);
+      expect(JSON.parse(workerBodies[0]!)).toMatchObject({
+        tools: [{ function: { name: "advisor" } }],
+        tool_choice: { type: "function", function: { name: "advisor" } },
+      });
+      expect(workerBodies[1]).toContain(ADVISOR_ADVICE);
+      expect(body).toContain(answer);
+      expect(body).not.toContain("call_adv_1");
+    });
+
+    test.each([
+      { namespaces: [], namespace: "work", refused: true },
+      { namespaces: ["other"], namespace: "work", refused: true },
+      { namespaces: ["other", "work"], namespace: "work", refused: false },
+      { namespaces: ["work"], namespace: "work", refused: false },
+      { namespaces: ["other", "functions"], namespace: "functions", refused: false },
+      { namespaces: ["root"], namespace: "functions", refused: false },
+      { namespaces: ["other", "work"], namespace: undefined, refused: true },
+    ])(`advisor namespace selection (${form}) $namespaces, selector namespace=$namespace`, async ({ namespaces, namespace, refused }) => {
+      releaseSpendHome = acquireOwnedSpendHome();
+      const workerBodies: string[] = [], chatRequests: string[] = [];
+      const owner = namespace === "functions" ? undefined : namespace;
+      const wireName = owner ? `${owner}__advisor` : "advisor";
+      const workerFetch = (async (_url, init) => {
+        workerBodies.push(String(init?.body));
+        return Response.json({ choices: [{ message: { role: "assistant", content: null,
+          tool_calls: [{ id: "namespace-fixture-call", type: "function", function: { name: wireName, arguments: "{}" } }],
+        }, finish_reason: "tool_calls" }] });
+      }) as typeof fetch;
+      const config = advisorConfig({ enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1", policy: "manual" }, workerFetch);
+      // The native Chat wire emits a forced name for a required singleton allowlist.
+      config.providers!.worker.baseUrl = "https://api.openai.com/v1";
+      loopbackInterceptor(config, { chatRequests });
+      const advisor = { type: "function", name: "advisor", parameters: { type: "object" } };
+      const tools = namespaces.map(name => name === "root" ? advisor : { type: "namespace", name, tools: [advisor] });
+      const selector = { type: "function", name: "advisor", ...(namespace ? { namespace } : {}) };
+      const choice = form === "named" ? selector : { type: "allowed_tools", mode: "required", tools: [selector] };
+      const response = await handleResponses(workerRequest("Use the client tool", undefined, false, tools, choice), config, logCtx);
+      const body = await response.json();
+      expect(chatRequests).toHaveLength(0);
+      if (refused) {
+        expect(workerBodies).toEqual([]);
+        expect(response.status).toBe(400);
+        expect(body).toMatchObject({ error: { type: "invalid_request_error",
+          message: expect.stringContaining(namespace ? "work.advisor" : "ambiguous tool_choice name: advisor") } });
+        expect(JSON.stringify(body)).not.toContain("namespace-fixture-call");
+        return;
+      }
+      expect(response.status).toBe(200);
+      expect(workerBodies).toHaveLength(1);
+      expect(JSON.parse(workerBodies[0]!)).toMatchObject({
+        tools: [{ function: { name: wireName } }],
+        tool_choice: { type: "function", function: { name: wireName } },
+      });
+      const calls = body.output.filter((item: { type: string }) => item.type === "function_call");
+      expect(calls).toEqual([expect.objectContaining({ name: "advisor", call_id: "namespace-fixture-call" })]);
+      expect(calls[0].namespace).toBe(owner);
+    });
+  }
+
+  for (const stream of [true, false]) for (const wireName of ["work__advisor", "work.advisor", "advisor"]) {
+  test(`a selected namespaced client advisor stays client-owned (stream=${stream}, echo=${wireName})`, async () => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const workerBodies: string[] = [], chatRequests: string[] = [];
+    const frames = JSON.parse(JSON.stringify(advisorCallFrames).replaceAll('"advisor"', JSON.stringify(wireName))) as unknown[];
+    const workerFetch: typeof fetch = stream ? workerProviderFetch([frames], workerBodies) : (async (_url, init) => {
+      workerBodies.push(String(init?.body));
+      return Response.json({ choices: [{ message: { role: "assistant", content: null,
+        tool_calls: [{ id: "call_adv_1", type: "function", function: { name: wireName, arguments: '{"question":"client task"}' } }] }, finish_reason: "tool_calls" }] });
+    }) as typeof fetch;
+    const config = advisorConfig({ enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1", policy: "manual" },
+      workerFetch);
+    loopbackInterceptor(config, { chatRequests });
+    const response = await handleResponses(workerRequest("Use the client tool", undefined, stream,
+      [{ type: "namespace", name: "work", tools: [{ type: "function", name: "advisor", parameters: { type: "object" } }] }],
+      { type: "function", namespace: "work", name: "advisor" }), config, logCtx);
+    const body = await response.text();
+    expect(chatRequests).toHaveLength(0);
+    expect(workerBodies).toHaveLength(1);
+    expect(JSON.parse(workerBodies[0]!)).toMatchObject({
+      tools: [{ function: { name: "work__advisor" } }],
+      tool_choice: { type: "function", function: { name: "work__advisor" } },
+    });
+    expect(body).toContain("call_adv_1");
+    expect(body).toContain('"namespace":"work"');
+    expect(body).not.toContain("undeclared_tool_call");
+  });
+  }
+
+  for (const stream of [true, false]) {
+    for (const choice of ["none", { type: "function", name: "shell" },
+      { type: "custom", name: "advisor" },
+      { type: "allowed_tools", mode: "auto", tools: [{ type: "custom", name: "advisor" }] },
+      { type: "allowed_tools", mode: "required", tools: [{ type: "web_search", name: "advisor" }] },
+      { type: "allowed_tools", mode: "auto", tools: [{ type: "function", name: "shell" }] }]) {
+      test(`ordinary Advisor calls obey effective tool choice (stream=${stream}, choice=${JSON.stringify(choice)})`, async () => {
+        releaseSpendHome = acquireOwnedSpendHome();
+        const workerBodies: string[] = [], chatRequests: string[] = [];
+        const workerFetch: typeof fetch = stream
+          ? workerProviderFetch([advisorCallFrames, plainFrames("continued")], workerBodies)
+          : (async (_url, init) => {
+            workerBodies.push(String(init?.body));
+            const called = workerBodies.length === 1;
+            return Response.json({ choices: [{ message: called
+              ? { role: "assistant", content: null, tool_calls: [{ id: "call_adv_1", type: "function", function: { name: "advisor", arguments: '{"question":"Where do I start?"}' } }] }
+              : { role: "assistant", content: "continued" }, finish_reason: called ? "tool_calls" : "stop" }],
+              usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } });
+          }) as typeof fetch;
+        const config = advisorConfig({ enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1", policy: "manual" },
+          workerFetch);
+        loopbackInterceptor(config, { chatRequests });
+        const response = await handleResponses(workerRequest("Use the permitted tools", undefined, stream,
+          [{ type: "function", name: "shell", parameters: { type: "object" } }], choice), config, logCtx);
+        const body = await response.text();
+        expect(chatRequests).toHaveLength(0);
+        expect(workerBodies).toHaveLength(1);
+        expect(workerBodies[0]).not.toContain('"advisor"');
+        expect(body).toContain("undeclared_tool_call");
+        expect(body).not.toContain("call_adv_1");
+        expect(body).not.toContain("Where do I start?");
+        expect(body).not.toContain(ADVISOR_ADVICE);
+        if (!stream) expect(JSON.parse(body).usage).toMatchObject({ input_tokens: 100, output_tokens: 20, total_tokens: 120 });
+      });
+    }
+  }
+
+  test.each<{ type: string; lane: string; clientAdvisor?: boolean; emptyFirst?: boolean }>([
+    { type: "web_search", lane: "ordinary" },
+    { type: "web_search", lane: "search loop" },
+    { type: "web_search_preview", lane: "search loop" },
+    { type: "web_search", lane: "Messages translation" },
+    { type: "web_search", lane: "ordinary", clientAdvisor: true },
+    { type: "web_search", lane: "search loop", clientAdvisor: true },
+    { type: "web_search", lane: "ordinary", clientAdvisor: true, emptyFirst: true },
+  ])("a forced hosted choice cannot authorize Advisor with %j", async ({ type, lane, clientAdvisor, emptyFirst }) => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const workerBodies: string[] = [], chatRequests: string[] = [];
+    const config = advisorConfig(
+      { enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1", policy: "manual" },
+      (async (_url, init) => {
+        workerBodies.push(String(init?.body));
+        if (emptyFirst && workerBodies.length === 1) return sse([
+          { type: "message_start", message: { id: "msg_empty", model: "claude-fixture", usage: { input_tokens: 10 } } },
+          { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 0 } },
+          { type: "message_stop" },
+        ]);
+        return anthropicAdvisorCall();
+      }) as typeof fetch,
+    );
+    // The generic Chat compatibility gate refuses hosted choices before dispatch.
+    config.providers.worker!.adapter = "anthropic";
+    config.providers.worker!.models = ["claude-fixture"];
+    config.claudeCode = { nativePassthrough: false };
+    config.emptyCompletionRetry = emptyFirst;
+    config.webSearchSidecar = lane === "ordinary"
+      ? { enabled: false } : { backend: "exa", exaApiKey: "fixture-search-key" };
+    loopbackInterceptor(config, { chatRequests });
+
+    const request = new Request(lane === "Messages translation" ? "http://localhost/v1/messages" : "http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify(lane === "Messages translation"
+        ? { model: "worker/claude-fixture", max_tokens: 100, stream: true, thinking: { type: "disabled" },
+          tools: [{ type: "web_search_20250305", name: "web_search" }], tool_choice: { type: "tool", name: "web_search" },
+          messages: [{ role: "user", content: "Search for a source" }] }
+        : { model: "worker/claude-fixture", input: "Search for a source", stream: true,
+          tools: [{ type: "web_search" }, ...(clientAdvisor ? [{ type: "function", name: "advisor",
+            description: "Caller-owned Advisor", parameters: { type: "object" } }] : [])], tool_choice: { type } }),
+    });
+    const response = lane === "Messages translation"
+      ? await handleClaudeMessages(request, config, logCtx)
+      : await handleResponses(request, config, logCtx);
+    const body = await response.text();
+    expect(chatRequests).toHaveLength(0);
+    expect(workerBodies).toHaveLength(emptyFirst ? 2 : 1);
+    if (emptyFirst) expect(workerBodies[1]).toBe(workerBodies[0]);
+    if (clientAdvisor) expect(workerBodies[0]).toContain("Caller-owned Advisor");
+    else expect(workerBodies[0]).not.toContain('"advisor"');
+    if (lane !== "ordinary") expect(JSON.parse(workerBodies[0]!)).toMatchObject({
+      tools: expect.arrayContaining([expect.objectContaining({ name: "web_search" })]), tool_choice: { type: "auto" },
+    });
+    if (lane === "Messages translation") {
+      expect(body).toContain("event: error\n");
+      expect(body).not.toContain("event: message_stop\n");
+      const frames = body.split("\n").filter(line => line.startsWith("data: ")).map(line => JSON.parse(line.slice(6)));
+      expect(frames.at(-1)).toMatchObject({ type: "error", error: { type: "api_error", code: "undeclared_tool_call" } });
+    } else {
+      expect(body).toContain("undeclared_tool_call");
+      expect(body).not.toContain("response.completed");
+    }
+    expect(body).not.toContain("call_adv_1");
+    expect(body).not.toContain("Where do I start?");
+  });
+
   test.each([true, false])("question-only invalid calls preserve consultation allowance and bound continuations (corrected=%s)", async corrected => {
     releaseSpendHome = acquireOwnedSpendHome();
     const workerBodies: string[] = []; const chatRequests: string[] = [];
@@ -222,6 +452,37 @@ describe("advisor responses wiring (end-to-end)", () => {
     expect(workerBodies[0]).toContain('"required":["question"]');
     expect(workerBodies[1]).toContain(ADVISOR_ADVICE);
     expect(JSON.stringify(frames)).toContain("Done with advice.");
+  });
+
+  test.each([true, false])("empty-completion retry preserves a forbidden Advisor refusal and worker usage (stream=%s)", async stream => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const chatRequests: string[] = [];
+    let sends = 0;
+    const workerFetch = (async () => {
+      if (++sends === 1) {
+        return stream ? sse([...plainFrames(""), { choices: [], usage: { prompt_tokens: 21, completion_tokens: 7, total_tokens: 28 } }])
+          : chatCompletion("");
+      }
+      if (stream) return sse(advisorCallFrames.slice(1));
+      return Response.json({ choices: [{ message: { role: "assistant", content: null,
+        tool_calls: [{ id: "call_adv_1", type: "function", function: { name: "advisor", arguments: '{"question":"Where do I start?"}' } }] },
+        finish_reason: "tool_calls" }], usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } });
+    }) as typeof fetch;
+    const config = advisorConfig({ enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1", policy: "manual" }, workerFetch);
+    config.emptyCompletionRetry = true;
+    loopbackInterceptor(config, { chatRequests });
+    const response = await handleResponses(workerRequest("Do not use tools", undefined, stream,
+      [{ type: "function", name: "shell", parameters: { type: "object" } }], "none"), config, logCtx);
+    const body = await response.text();
+    const terminal = stream ? body.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)))
+      .find(frame => frame.type === "response.failed")?.response : JSON.parse(body);
+    expect(sends).toBe(2);
+    expect(chatRequests).toHaveLength(0);
+    expect(body).not.toContain("call_adv_1");
+    expect(body).not.toContain("Where do I start?");
+    expect(terminal).toMatchObject({ status: "failed", error: { code: "undeclared_tool_call" }, usage: stream
+      ? { input_tokens: 21, output_tokens: 7, total_tokens: 28 }
+      : { input_tokens: 121, output_tokens: 27, total_tokens: 148 } });
   });
 
   test.each([true, false])("delivery and empty-completion retry pass the same request budget (stream=%s)", async stream => {
@@ -437,7 +698,10 @@ describe("advisor responses wiring (end-to-end)", () => {
     expect(body).not.toContain("call_adv_1");
   });
 
-  test("web-search tool choice cannot be widened to Advisor", async () => {
+  test.each([
+    { type: "allowed_tools", mode: "required", tools: [{ type: "web_search" }] },
+    { type: "allowed_tools", mode: "auto", tools: [{ type: "web_search", name: "advisor" }, { type: "web_search" }] },
+  ])("web-search tool choice cannot be widened to Advisor: %j", async choice => {
     releaseSpendHome = acquireOwnedSpendHome();
     const workerBodies: string[] = [];
     const chatRequests: string[] = [];
@@ -450,7 +714,7 @@ describe("advisor responses wiring (end-to-end)", () => {
 
     const response = await handleResponses(workerRequest(
       "Search without consulting the expert", undefined, true, [{ type: "web_search" }],
-      { type: "allowed_tools", mode: "required", tools: [{ type: "web_search" }] },
+      choice,
     ), config, logCtx);
     const body = await response.text();
 
@@ -463,14 +727,38 @@ describe("advisor responses wiring (end-to-end)", () => {
     expect(body).not.toContain("response.completed");
   });
 
-  test.each([true, false])("client advisor passthrough respects the effective choice: allowed=%s", async allowed => {
+  test("an explicitly selected custom advisor keeps its client-owned schema and result", async () => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const workerBodies: string[] = [], chatRequests: string[] = [];
+    const config = advisorConfig({ enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1", policy: "manual" },
+      workerProviderFetch([advisorCallFramesWith({ input: "client payload" }), plainFrames("continued")], workerBodies));
+    loopbackInterceptor(config, { chatRequests });
+    const response = await handleResponses(workerRequest("Use the custom tool", undefined, true,
+      [{ type: "custom", name: "advisor", description: "Client-owned custom tool" }],
+      { type: "custom", name: "advisor" }), config, logCtx);
+    const body = await response.text();
+    expect(chatRequests).toHaveLength(0);
+    expect(workerBodies).toHaveLength(1);
+    expect(workerBodies[0]).toContain("Client-owned custom tool");
+    expect(body).toContain("custom_tool_call");
+    expect(body).toContain("client payload");
+  });
+
+  test.each([
+    ["auto", "auto", true],
+    ["required", "required", true],
+    ["search-only allowlist", { type: "allowed_tools", mode: "required", tools: [{ type: "web_search" }] }, false],
+    ["hosted alias in allowlist", { type: "allowed_tools", mode: "auto", tools: [
+      { type: "web_search" }, { type: "web_search", name: "advisor" },
+    ] }, false],
+  ] as const)("client advisor passthrough respects %s", async (_label, choice, allowed) => {
     releaseSpendHome = acquireOwnedSpendHome();
     const workerBodies: string[] = [];
     const config = advisorConfig(undefined, workerProviderFetch([advisorCallFrames], workerBodies));
     config.webSearchSidecar = { backend: "exa", exaApiKey: "fixture-search-key" };
     const response = await handleResponses(workerRequest("Use available tools", undefined, true, [
       { type: "web_search" }, { type: "function", name: "advisor", parameters: { type: "object" } },
-    ], allowed ? "auto" : { type: "allowed_tools", mode: "required", tools: [{ type: "web_search" }] }), config, logCtx);
+    ], choice), config, logCtx);
     const body = await response.text();
     expect(workerBodies).toHaveLength(1);
     if (allowed) {
@@ -601,7 +889,7 @@ describe("advisor responses wiring (end-to-end)", () => {
       { type: "tool_call_delta", arguments: '{"question":' },
       { type: "tool_call_end", incomplete: true },
       { type: "done", stopReason: "max_tokens" },
-    ] as AdapterEvent[], { advisor: true });
+    ] as AdapterEvent[], () => "synthetic");
     expect(incomplete.calls).toHaveLength(0);
     expect(incomplete.hasMalformedToolCall).toBe(true);
     expect(JSON.stringify(incomplete.passthrough)).not.toContain("advisor");
@@ -610,7 +898,7 @@ describe("advisor responses wiring (end-to-end)", () => {
       { type: "tool_call_start", id: "adv-unterminated", name: "advisor" },
       { type: "tool_call_delta", arguments: '{"question":' },
       { type: "done", stopReason: "max_tokens" },
-    ] as AdapterEvent[], { advisor: true });
+    ] as AdapterEvent[], () => "synthetic");
     expect(unterminated.calls).toHaveLength(0);
     expect(unterminated.hasMalformedToolCall).toBe(true);
     expect(JSON.stringify(unterminated.passthrough)).not.toContain("advisor");

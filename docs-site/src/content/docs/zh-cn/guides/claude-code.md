@@ -117,8 +117,17 @@ Anthropic。若任一提供方请求头包含代理准入密钥，该密钥会�
 
 使用代理已保存 OAuth 凭据的受管理原生请求还会统一已声明自定义工具在延迟引用和内联添加或删除中的名称。参数、模式和缓存标记保持不变。系统消息中的内联工具变更需要发送 `inline-tools-2026-09-15`；存在相应类型的块时，面向 Anthropic 官方 API 的构建器会保留该请求头。
 
-可以设置 `claudeCode.nativePassthrough: false` 来禁用；也可以通过
-`claudeCode.anthropicBaseUrl` 指向其他位置。
+可以设置 `claudeCode.nativePassthrough: false`、运行 `ocx claude config set --native-passthrough off`，
+或关闭仪表盘 Providers → Anthropic Claude → Accounts 中 Claude 账户池下方的 **Claude 原生透传** 开关来禁用；也可以通过
+`claudeCode.anthropicBaseUrl` 指向其他位置。Claude 模型选择器和 Claude Desktop 传入的别名先于 `modelMap` 解析。以原始模型 ID 为键的
+`modelMap` 条目，无论透传开启还是关闭，都会将请求发送到其他提供商的目标模型。关闭透传后，没有映射的原始
+Claude 模型 ID 会交给路由器。路由器先检查路由策略别名，再检查组合别名。
+两者均不匹配时，依次检查：`defaultModel` 为该 ID 的已启用提供商、已启用的
+`anthropic` 或 `anthropic-*` 提供商、模型列表包含该 ID 的提供商、提供商侧的模型别名，最后是默认提供商。
+当路由是 Anthropic OAuth 提供商时，由 OpenCodex 中保存的 Anthropic 账户处理请求；再保存一个账户即可在
+429 时故障转移，而主动的 Claude OAuth 账户池 需要开启 `anthropicAccountPool.enabled` 才会生效。
+路由从下一个请求开始按新设置执行；已在运行的 Claude Code 会话需要重新启动，以便模型槽位和上下文窗口
+保持一致。
 
 ## Claude Desktop 模式：网关（默认）与第一方
 

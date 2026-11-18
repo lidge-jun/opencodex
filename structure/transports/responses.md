@@ -94,13 +94,13 @@ Two coordinates that lower to the same wire name are treated as one tool when th
 a `functions` child of the same name are the duplicate the parser already tolerates — and the one
 `promoteClientLoadedTools` produces. The declaration is emitted once instead of failing the request.
 
-Replayed call items are lowered whether or not this turn declares the group they name. A catalog can
-be absent or change mid-session, but the client is still replaying items this layer's own response
-restoration stamped with a private `namespace`. Routed compaction runs this boundary before applying
-the summary tool policy so request-local aliases remain available for response restoration. Only
-`tool_choice` resolves a bare name through the catalog: a history
-item records which tool actually ran, so re-pointing it at a same-named namespace child would
-rewrite that record on a coincidence rather than translate it.
+Replayed calls keep their recorded identity when the current catalog omits their group. Routed
+compaction lowers that identity before applying the summary tool policy to retain request-local
+aliases. Only `tool_choice` resolves a bare name through the catalog, and only when unambiguous.
+A qualified function or custom selector, including an `allowed_tools` entry, requires the declared
+kind, namespace and name. The parser lowers it to the canonical wire name. The reserved `functions`
+group selects the root. An undeclared root `advisor` function selector defers to
+[Advisor sidecar admission](../advisor.md#execution-paths).
 
 A namespaced tool is registered under every coordinate a provider might echo — `ns__name`, the
 dotted `ns.name`, and the bare `name` — but six spellings never reach a DECLARED-NAME set under
