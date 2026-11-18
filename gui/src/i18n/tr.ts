@@ -4577,7 +4577,7 @@ export const tr: Record<TKey, string> = {
   "comboSuggest.draft.left": "%{percent} kaldı",
   "comboSuggest.draft.strategy": "Strateji: failover. Kaydettikten sonra satırda değiştirin.",
   "comboSuggest.allowPaid": "Ücretli hedeflere izin ver (kaydetmek için gerekli). Bu hedefler ücretli kredi veya kullanım bedeli yansıtabilir.",
-  "comboSuggest.enablePaid": "Önce bu komboda ücretli hedeflere izin verin.",
+  "comboSuggest.enablePaid": "Ücretli hedeflere izin vermek için {command} komutunu çalıştırın. Değişiklik, kombolar bir sonraki yenilendiğinde önerilere yansır.",
   "comboSuggest.draft.save": "Komboyu kaydet",
   "comboSuggest.draft.saving": "Kaydediliyor…",
 };

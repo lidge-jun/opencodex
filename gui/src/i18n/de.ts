@@ -4554,7 +4554,7 @@ export const de: Record<TKey, string> = {
   "comboSuggest.draft.left": "{percent}% übrig",
   "comboSuggest.draft.strategy": "Strategie: Failover. Nach dem Speichern in der Zeile ändern.",
   "comboSuggest.allowPaid": "Kostenpflichtige Ziele erlauben (zum Speichern erforderlich). Diese Ziele können kostenpflichtiges Guthaben oder Nutzung abrechnen.",
-  "comboSuggest.enablePaid": "Aktiviere zuerst kostenpflichtige Ziele für diese Kombination.",
+  "comboSuggest.enablePaid": "Führe {command} aus, um kostenpflichtige Ziele zu erlauben. Die Vorschläge übernehmen die Änderung beim nächsten Aktualisieren der Kombinationen.",
   "comboSuggest.draft.save": "Combo speichern",
   "comboSuggest.draft.saving": "Wird gespeichert…",
 };

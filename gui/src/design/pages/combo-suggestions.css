@@ -18,6 +18,8 @@
 .rb-order-item { display: inline-flex; align-items: baseline; gap: 4px; }
 .rb-order-sep { color: var(--ocx-fg-subtle); }
 .rb-row-message { margin: 0; padding: 0 16px 10px 68px; color: var(--ocx-danger); font-size: 12.5px; }
+.rb-suggest-policy { display: contents; }
+
 .rb-suggest {
   margin-bottom: 16px;
   padding: 12px 0 4px;

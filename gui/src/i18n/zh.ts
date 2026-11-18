@@ -4575,7 +4575,7 @@ export const zh: Record<TKey, string> = {
   "comboSuggest.draft.left": "剩 {percent}%",
   "comboSuggest.draft.strategy": "策略：故障转移。保存后可以在行里改。",
   "comboSuggest.allowPaid": "允许付费目标（保存时必选）。这些目标可能消耗付费额度或产生用量费用。",
-  "comboSuggest.enablePaid": "请先为此组合启用付费目标。",
+  "comboSuggest.enablePaid": "运行 {command} 以允许付费目标。下次刷新组合时，建议将反映此更改。",
   "comboSuggest.draft.save": "保存组合",
   "comboSuggest.draft.saving": "正在保存…",
 };

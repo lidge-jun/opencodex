@@ -4577,7 +4577,7 @@ export const ru: Record<TKey, string> = {
   "comboSuggest.draft.left": "осталось {percent}%",
   "comboSuggest.draft.strategy": "Стратегия: Failover. Изменить можно в строке после сохранения.",
   "comboSuggest.allowPaid": "Разрешить платные цели (необходимо для сохранения). Возможны списания платных кредитов или оплата за использование.",
-  "comboSuggest.enablePaid": "Сначала разрешите платные цели для этой комбинации.",
+  "comboSuggest.enablePaid": "Выполните {command}, чтобы разрешить платные цели. Изменение отразится в предложениях при следующем обновлении комбинаций.",
   "comboSuggest.draft.save": "Сохранить комбо",
   "comboSuggest.draft.saving": "Сохранение…",
 };

@@ -19,8 +19,12 @@ type Props = Pick<ComboWorkspaceProps, "combos" | "models" | "providers"> & {
 };
 
 export function WorkspaceSuggestions(props: Props) {
+  return props.active ? <ActiveWorkspaceSuggestions {...props} /> : null;
+}
+
+function ActiveWorkspaceSuggestions(props: Props) {
   const t = useT();
-  const exclusions = useSuggestionExclusions(props.apiBase, props.active, props.combos);
+  const exclusions = useSuggestionExclusions(props.apiBase, props.combos);
 
   const [conflict, setConflict] = useState(false);
   const meteredComboIds = new Set(exclusions.meteredComboIds);
@@ -30,8 +34,9 @@ export function WorkspaceSuggestions(props: Props) {
   }));
 
   const saveSuggestion = async (item: ComboItem, isCreate: boolean) => {
-    setConflict(false);
     const failure = { ok: false, error: t("cws.saveFailed") };
+    if (!exclusions.ready) return failure;
+    setConflict(false);
     const previous = props.combos.find((combo) => combo.id === item.id);
     const targets = item.targets.filter(({ provider, model }) => isCreate
       || !previous?.targets.some((target) => target.provider === provider && target.model === model))
@@ -56,7 +61,7 @@ export function WorkspaceSuggestions(props: Props) {
     }
   };
   const conflictAlert = conflict && <p className="rb-row-message" role="alert">{t("comboSuggest.saveChanged")}</p>;
-  if (!exclusions.ready) {
+  if (!exclusions.available) {
     return <>
       {conflictAlert}
       {exclusions.failed && (
@@ -75,38 +80,40 @@ export function WorkspaceSuggestions(props: Props) {
   return (
     <>
       {conflictAlert}
-      <ComboSuggestions
-        combos={combos}
-        models={props.models}
-        providers={props.providers}
-        hiddenModels={new Set(props.hiddenModels)}
-        lockedComboId={props.lockedComboId}
-        remainingPercent={(provider, model) => {
-          const used = (quota.get(provider) ?? []).flatMap((window) => {
-            const family = (window.label ?? "").toLowerCase().split(/[\s(]/)[0];
-            const matches = window.modelId
-              ? window.modelId.toLowerCase() === model.toLowerCase()
-              : !family || window.labelKey !== undefined || model.toLowerCase().startsWith(family);
-            return matches && window.percent !== undefined ? [window.percent] : [];
-          });
-          return used.length ? Math.max(0, Math.min(100, 100 - Math.max(...used))) : undefined;
-        }}
-        validate={(item, isCreate) => {
-          const others = props.combos.filter((combo) => isCreate || combo.id !== item.id);
-          return validateComboDraft(item, {
-            existingIds: others.map((combo) => combo.id),
-            existingAliases: others.flatMap((combo) => combo.alias ? [combo.alias] : []),
-            combos: others,
-            isCreate,
-            providers: providerMap,
-          });
-        }}
-        errorText={(code, item) => comboDraftErrorText(t, code, item, providerMap)}
-        onCreate={(item) => saveSuggestion(item, true)}
-        onExtend={(item) => saveSuggestion(item, false)}
-        excludedProviders={exclusions.excluded}
-        onExcludedChange={exclusions.save}
-      />
+      <fieldset className="rb-suggest-policy" disabled={!exclusions.ready}>
+        <ComboSuggestions
+          combos={combos}
+          models={props.models}
+          providers={props.providers}
+          hiddenModels={new Set(props.hiddenModels)}
+          lockedComboId={props.lockedComboId}
+          remainingPercent={(provider, model) => {
+            const used = (quota.get(provider) ?? []).flatMap((window) => {
+              const family = (window.label ?? "").toLowerCase().split(/[\s(]/)[0];
+              const matches = window.modelId
+                ? window.modelId.toLowerCase() === model.toLowerCase()
+                : !family || window.labelKey !== undefined || model.toLowerCase().startsWith(family);
+              return matches && window.percent !== undefined ? [window.percent] : [];
+            });
+            return used.length ? Math.max(0, Math.min(100, 100 - Math.max(...used))) : undefined;
+          }}
+          validate={(item, isCreate) => {
+            const others = props.combos.filter((combo) => isCreate || combo.id !== item.id);
+            return validateComboDraft(item, {
+              existingIds: others.map((combo) => combo.id),
+              existingAliases: others.flatMap((combo) => combo.alias ? [combo.alias] : []),
+              combos: others,
+              isCreate,
+              providers: providerMap,
+            });
+          }}
+          errorText={(code, item) => comboDraftErrorText(t, code, item, providerMap)}
+          onCreate={(item) => saveSuggestion(item, true)}
+          onExtend={(item) => saveSuggestion(item, false)}
+          excludedProviders={exclusions.excluded}
+          onExcludedChange={exclusions.save}
+        />
+      </fieldset>
     </>
   );
 }

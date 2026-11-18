@@ -4546,7 +4546,7 @@ export const vi: Record<TKey, string> = {
   "comboSuggest.draft.left": "còn {percent}%",
   "comboSuggest.draft.strategy": "Chiến lược: failover. Đổi trong hàng sau khi lưu.",
   "comboSuggest.allowPaid": "Cho phép đích trả phí (bắt buộc để lưu). Các đích này có thể tính phí tín dụng hoặc phí sử dụng.",
-  "comboSuggest.enablePaid": "Trước tiên, hãy bật đích trả phí cho tổ hợp này.",
+  "comboSuggest.enablePaid": "Chạy {command} để cho phép đích trả phí. Đề xuất sẽ áp dụng thay đổi khi làm mới danh sách tổ hợp lần tiếp theo.",
   "comboSuggest.draft.save": "Lưu combo",
   "comboSuggest.draft.saving": "Đang lưu…",
 };

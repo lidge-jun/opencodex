@@ -4543,7 +4543,7 @@ export const fr: Record<TKey, string> = {
   "comboSuggest.draft.left": "{percent} % restants",
   "comboSuggest.draft.strategy": "Stratégie : basculement. Modifiez-la dans la ligne après l’enregistrement.",
   "comboSuggest.allowPaid": "Autoriser les cibles payantes (requis pour enregistrer). Ces cibles peuvent facturer des crédits ou des frais d’utilisation.",
-  "comboSuggest.enablePaid": "Activez d’abord les cibles payantes pour cette combinaison.",
+  "comboSuggest.enablePaid": "Exécutez {command} pour autoriser les cibles payantes. Les suggestions appliquent ce changement à la prochaine actualisation des combinaisons.",
   "comboSuggest.draft.save": "Enregistrer la combinaison",
   "comboSuggest.draft.saving": "Enregistrement…",
 };

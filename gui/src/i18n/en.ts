@@ -4588,7 +4588,7 @@ export const en = {
   "comboSuggest.draft.left": "{percent}% left",
   "comboSuggest.draft.strategy": "Strategy: failover. Change it in the row after saving.",
   "comboSuggest.allowPaid": "Allow paid targets (required to save). These targets may bill paid credits or usage.",
-  "comboSuggest.enablePaid": "Enable paid targets on this combo first.",
+  "comboSuggest.enablePaid": "Run {command} to allow paid targets. Suggestions pick up the change on the next combo refresh.",
   "comboSuggest.draft.save": "Save combo",
   "comboSuggest.draft.saving": "Saving…",
 } as const;

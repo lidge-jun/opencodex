@@ -4576,7 +4576,7 @@ export const ko: Record<TKey, string> = {
   "comboSuggest.draft.left": "{percent}% 남음",
   "comboSuggest.draft.strategy": "전략: 장애 조치(failover). 저장 후 행에서 바꿀 수 있습니다.",
   "comboSuggest.allowPaid": "유료 대상 허용(저장에 필요). 유료 크레딧이 차감되거나 사용 요금이 청구될 수 있습니다.",
-  "comboSuggest.enablePaid": "먼저 이 콤보에서 유료 대상을 허용하세요.",
+  "comboSuggest.enablePaid": "유료 대상을 허용하려면 {command} 명령을 실행하세요. 다음에 콤보를 새로고침하면 제안에 반영됩니다.",
   "comboSuggest.draft.save": "콤보 저장",
   "comboSuggest.draft.saving": "저장 중…",
 };

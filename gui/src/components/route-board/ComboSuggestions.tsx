@@ -215,7 +215,7 @@ function SuggestionCard({
         </span>
       </div>
       {suggestion.kind === "extend" && target?.allowMeteredTargets !== true && (
-        <p className="rb-suggest-hint">{t("comboSuggest.enablePaid")}</p>
+        <p className="rb-suggest-hint">{t("comboSuggest.enablePaid", { command: `ocx combo update ${suggestion.comboId} --allow-metered-targets on` })}</p>
       )}
       {message && <p className="rb-row-message" role="alert">{message}</p>}
       {drafting && suggestion.kind === "create" && (

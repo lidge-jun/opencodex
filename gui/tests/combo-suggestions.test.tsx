@@ -374,7 +374,7 @@ describe("ComboSuggestions card", () => {
   test("an existing combo missing a provider offers to add it", async () => {
     const existing = combo("gemini", [["kimi-responses", "gemini-3.8-flash"]]);
     await render([existing]);
-    expect(card("gemini").textContent).toContain("Enable paid targets on this combo first.");
+    expect(card("gemini").textContent).toContain("ocx combo update gemini --allow-metered-targets on");
     expect(button(card("gemini"), "Add to combo").disabled).toBe(true);
     await act(async () => { button(card("gemini"), "Add to combo").click(); });
     expect(saved).toEqual([]);
@@ -500,7 +500,7 @@ describe("ComboSuggestions card", () => {
       if (init?.method === "PUT") {
         const body = JSON.parse(String(init.body));
         puts.push(body);
-        return Response.json({ excludedProviders: ["relay", body.provider], meteredComboIds: [] });
+        return new Response(null, { status: 204 });
       }
       return new Promise<Response>((resolve) => pending.push((body) => resolve(new Response(JSON.stringify(body)))));
     }) as typeof fetch;
@@ -523,6 +523,8 @@ describe("ComboSuggestions card", () => {
       await act(async () => { pending.shift()!({ excludedProviders: ["relay"], meteredComboIds: [] }); });
       await act(async () => { await state!.save("xai", true); });
       expect(puts).toEqual([{ provider: "xai", excluded: true }]);
+      expect(state!.ready).toBe(false);
+      await act(async () => { pending.shift()!({ excludedProviders: ["relay", "xai"], meteredComboIds: [] }); });
       expect(state!.excluded).toEqual(["relay", "xai"]);
     } finally {
       globalThis.fetch = realFetch;
@@ -562,7 +564,7 @@ describe("ComboSuggestions card", () => {
       });
 
       expect(button(card("opus"), "Add to combo").disabled).toBe(true);
-      expect(card("opus").textContent).toContain("Enable paid targets on this combo first.");
+      expect(card("opus").textContent).toContain("ocx combo update opus --allow-metered-targets on");
       expect(card("opus").textContent).toContain("Vertex");
       expect(reads).toBe(3);
     } finally {
@@ -631,10 +633,10 @@ describe("ComboSuggestions card", () => {
           persistedConsent = false;
           await act(async () => { root!.render(view(false)); });
           expect(button(card("opus"), "Add to combo").disabled).toBe(true);
-          expect(card("opus").textContent).toContain("Enable paid targets on this combo first.");
+          expect(card("opus").textContent).toContain("ocx combo update opus --allow-metered-targets on");
         } else {
           expect(button(card("opus"), "Add to combo").disabled).toBe(true);
-          expect(card("opus").textContent).toContain("Enable paid targets on this combo first.");
+          expect(card("opus").textContent).toContain("ocx combo update opus --allow-metered-targets on");
         }
         persistedConsent = true;
         await act(async () => { root!.render(view(true)); });

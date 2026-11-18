@@ -4549,7 +4549,7 @@ export const pt: Record<TKey, string> = {
   "comboSuggest.draft.left": "{percent}% restante",
   "comboSuggest.draft.strategy": "Estratégia: failover. Altere-a na linha depois de salvar.",
   "comboSuggest.allowPaid": "Permitir destinos pagos (obrigatório para salvar). Esses destinos podem cobrar créditos ou taxas de uso.",
-  "comboSuggest.enablePaid": "Primeiro, habilite destinos pagos neste combo.",
+  "comboSuggest.enablePaid": "Execute {command} para permitir destinos pagos. As sugestões refletem a mudança na próxima atualização dos combos.",
   "comboSuggest.draft.save": "Salvar combo",
   "comboSuggest.draft.saving": "Salvando…",
 };

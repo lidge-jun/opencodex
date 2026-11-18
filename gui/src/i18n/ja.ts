@@ -4576,7 +4576,7 @@ export const ja: Record<TKey, string> = {
   "comboSuggest.draft.left": "残り {percent}%",
   "comboSuggest.draft.strategy": "戦略：フェイルオーバー。保存後に行内で変更できます。",
   "comboSuggest.allowPaid": "有料ターゲットを許可する（保存に必須）。有料クレジットや従量料金が発生する場合があります。",
-  "comboSuggest.enablePaid": "先にこのコンボの有料ターゲットを有効にしてください。",
+  "comboSuggest.enablePaid": "有料ターゲットを許可するには {command} を実行してください。次回コンボを更新すると候補に反映されます。",
   "comboSuggest.draft.save": "コンボを保存",
   "comboSuggest.draft.saving": "保存中…",
 };
