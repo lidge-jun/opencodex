@@ -22,6 +22,7 @@ import { MULTI_AGENT_SURFACE_ADVISORY_VERSION, multiAgentSurfaceAdvisory, resolv
 import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import { captureConfigTopLevelRollback, parsedConfigRebaseDeletionKeys, projectConfigRebaseProvenance } from "../../config/rebase-provenance";
 import { anthropicSidecarPatchError } from "../../config/schema/anthropic-account-pool";
+import { agyAcpUnattendedTargetIssues } from "../../config/schema/agy-acp-references";
 import { isAnthropicInstanceId } from "../../providers/anthropic-instance-id";
 import {
   adoptPersistedClaudeCode,
@@ -755,6 +756,11 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       }
       if (nextSyncCodexSubagentDefaults && nextEffort !== undefined && !isCodexReasoningEffort(nextEffort)) {
         return jsonResponse({ error: "syncCodexSubagentDefaults requires a supported Codex reasoning effort" }, 400);
+      }
+      if (nextSyncCodexSubagentDefaults) {
+        const issue = agyAcpUnattendedTargetIssues({ ...config, injectionModel: nextModel, syncCodexSubagentDefaults: true })
+          .find(({ path }) => path[0] === "injectionModel");
+        if (issue) return jsonResponse({ error: `injectionModel: ${issue.message}` }, 400);
       }
 
       config.multiAgentGuidanceEnabled = nextEnabled;
