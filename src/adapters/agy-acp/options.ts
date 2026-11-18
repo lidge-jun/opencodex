@@ -23,8 +23,9 @@ const MAX_OPTIONS = 64;
 const MAX_VALUES = 256;
 
 function flatSelectValues(raw: unknown[]): AcpSelectValue[] | undefined {
+  if (raw.length > MAX_VALUES) return undefined;
   const out: AcpSelectValue[] = [];
-  for (const entry of raw.slice(0, MAX_VALUES)) {
+  for (const entry of raw) {
     if (!isRecord(entry) || Array.isArray(entry.options) || typeof entry.value !== "string" || !entry.value) return undefined;
     out.push({ value: entry.value, name: typeof entry.name === "string" ? entry.name : entry.value });
   }
@@ -32,23 +33,23 @@ function flatSelectValues(raw: unknown[]): AcpSelectValue[] | undefined {
 }
 
 function selectValues(raw: unknown): AcpSelectValue[] | undefined {
-  if (!Array.isArray(raw)) return undefined;
+  if (!Array.isArray(raw) || raw.length > MAX_VALUES) return undefined;
   if (!isRecord(raw[0]) || !Array.isArray(raw[0].options)) return flatSelectValues(raw);
   const out: AcpSelectValue[] = [];
-  for (const group of raw.slice(0, MAX_VALUES)) {
+  for (const group of raw) {
     if (!isRecord(group) || !Array.isArray(group.options)) return undefined;
     const values = flatSelectValues(group.options);
-    if (!values) return undefined;
+    if (!values || out.length + values.length > MAX_VALUES) return undefined;
     out.push(...values);
   }
-  return out.slice(0, MAX_VALUES);
+  return out;
 }
 
 /** Parse a configOptions array; undefined when it is absent or malformed. Unknown types are kept for proof. */
 export function parseConfigOptions(raw: unknown): AcpConfigOption[] | undefined {
-  if (!Array.isArray(raw)) return undefined;
+  if (!Array.isArray(raw) || raw.length > MAX_OPTIONS) return undefined;
   const out: AcpConfigOption[] = [];
-  for (const entry of raw.slice(0, MAX_OPTIONS)) {
+  for (const entry of raw) {
     if (!isRecord(entry) || typeof entry.id !== "string" || typeof entry.type !== "string") return undefined;
     const values = entry.type === "select" ? selectValues(entry.options) : [];
     if (!values) return undefined;

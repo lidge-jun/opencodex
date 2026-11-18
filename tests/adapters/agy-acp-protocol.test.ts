@@ -74,6 +74,16 @@ describe("config options and the Gemini proof", () => {
     expect(parseConfigOptions([{ ...option, options: [group] }])?.[0]?.values).toEqual(group.options);
     expect(parseConfigOptions([{ ...option, options: [{ ...group, options: [group] }] }])).toBeUndefined();
   });
+
+  test("oversized snapshots are rejected rather than truncated into proof", () => {
+    const values = Array.from({ length: 256 }, (_, i) => ({ value: `gemini-${i}` }));
+    const selector = { id: "model", type: "select", currentValue: "gemini-0", options: values };
+    const others = Array.from({ length: 63 }, (_, i) => ({ id: `other-${i}`, type: "boolean" }));
+    expect(parseConfigOptions([selector, ...others])).toHaveLength(64);
+    expect(parseConfigOptions([selector, ...others, selector])).toBeUndefined();
+    expect(parseConfigOptions([{ ...selector, options: [...values, values[0]] }])).toBeUndefined();
+    expect(parseConfigOptions([{ ...selector, options: [{ options: values }, { options: [values[0]] }] }])).toBeUndefined();
+  });
 });
 
 describe("binary and version", () => {
