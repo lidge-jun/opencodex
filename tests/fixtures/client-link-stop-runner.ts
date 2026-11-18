@@ -70,6 +70,12 @@ config.client = {
 };
 saveConfig(config);
 const expected = structuredClone(config.client);
+if (options.mode === "file-cycle") {
+  // This fixture supplies a routed model roster. Reading native metadata must not
+  // start the host's Codex discovery process and keep the fixture alive after it reports.
+  const codexRuntime = await import("../../src/codex/runtime");
+  mock.module("../../src/codex/runtime", () => ({ ...codexRuntime, resolveAndPersistCodexRuntimeAsync: async () => null }));
+}
 const original = 'model = "native"\n';
 const injected = `# Auto-injected by opencodex (undo: ocx restore)\nopenai_base_url = "http://127.0.0.1:${config.port}/v1"\n${original}`;
 writeFileSync(CODEX_CONFIG_PATH, original);
