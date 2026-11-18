@@ -571,6 +571,74 @@ for (const receiptState of ["abandoned", "abandoned-dead-other", "quarantined"])
   }, 20_000);
 }
 
+test("ocx stop refuses a native Link sibling whose published owner differs from the saved Link", async () => {
+  const report = await runStop({ mode: "file-stop", preserve: "sibling", fileClients: ["pi"],
+    stopConnectionDrift: "other-link", expectedUnsupportedStop: true });
+  expect(report.result).toEqual({ exitCode: 1, calls: { service: 0, killed: 0 }, bound: true, stopping: false });
+  expect(report.fileAfter).toEqual(report.fileOwnedBytes);
+}, 20_000);
+
+test.skipIf(process.platform === "win32")("ocx stop stops an attested native Link sibling without touching shared routing", async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), "ocx-link-sibling-stop-")));
+  const home = join(root, "ocx");
+  const env = { ...process.env, HOME: root, USERPROFILE: root, OPENCODEX_HOME: home, CODEX_HOME: join(root, "codex"),
+    OCX_SERVICE: "", OCX_SERVICE_MANAGED: "0", PI_CODING_AGENT_DIR: join(root, ".pi", "agent") };
+  const child = Bun.spawn([process.execPath, fixturePath("client-link-stop-runner.ts")], {
+    cwd: repoPath(), env, stdout: "ignore", stderr: "pipe",
+    stdin: new Blob([JSON.stringify({ mode: "runtime", osSignal: true, preserve: "sibling", fileClients: ["pi"] })]),
+  });
+  const childError = new Response(child.stderr).text();
+  try {
+    const deadline = Date.now() + 5000;
+    while (!existsSync(join(home, "ready")) && child.exitCode === null && Date.now() < deadline) await Bun.sleep(10);
+    expect(existsSync(join(home, "ready"))).toBe(true);
+    const runtime = JSON.parse(readFileSync(join(home, "runtime-port.json"), "utf8"));
+    expect(runtime).toMatchObject({ pid: child.pid, siblingOfPort: 10100, clientLinkOwner: expect.any(String) });
+    expect((await fetch(`http://127.0.0.1:${runtime.port}/healthz`)).ok).toBe(true);
+    const cli = join(root, "stop.ts");
+    const unexpected = join(root, "unexpected-stop-side-effects");
+    const inheritedReceipt = join(home, `pending-teardown-${"a".repeat(32)}.json`);
+    writeFileSync(inheritedReceipt, "{");
+    writeFileSync(cli, `
+      import { mock } from "bun:test";
+      import { appendFileSync } from "node:fs";
+      const lifecyclePath = ${JSON.stringify(repoPath("src/client/lifecycle-lock.ts"))};
+      const lifecycle = await import(lifecyclePath);
+      const deps = { lockPath: ${JSON.stringify(join(home, "lifecycle.sqlite"))} };
+      mock.module(lifecyclePath, () => ({ ...lifecycle,
+        withClientLifecycle: work => lifecycle.withClientLifecycle(work, deps),
+        withClientLifecycleSync: work => lifecycle.withClientLifecycleSync(work, deps) }));
+      for (const [path, name] of ${JSON.stringify([
+        [repoPath("src/config/pending-teardown.ts"), "claimPendingTeardown"],
+        [repoPath("src/service.ts"), "stopServiceIfInstalledDetailed"],
+        [repoPath("src/server/system-env.ts"), "revertSystemEnv"],
+      ])}) {
+        const original = await import(path);
+        mock.module(path, () => ({ ...original, [name]: () => {
+          appendFileSync(${JSON.stringify(unexpected)}, name + "\\n");
+          throw new Error(name);
+        } }));
+      }
+      mock.module(${JSON.stringify(repoPath("src/cli/codex-shim-autorestore.ts"))}, () => ({ maybeAutoRestoreCodexShimAsync: async () => {} }));
+      await import(${JSON.stringify(repoPath("src/cli/index.ts"))});
+    `);
+    const stop = await Bun.$`${process.execPath} ${cli} stop --json`.env(env).quiet().nothrow();
+    expect(stop.exitCode, stop.stderr.toString()).toBe(0);
+    expect(JSON.parse(stop.stdout.toString())).toMatchObject({ runtimeDown: true, service: "absent", sharedTeardown: "skipped" });
+    expect(await child.exited, await childError).toBe(0);
+    const atExit = JSON.parse(readFileSync(join(home, "exit.json"), "utf8"));
+    expect(atExit).toMatchObject({ after: atExit.before, profileAfter: atExit.profileBefore, journalRetained: true,
+      catalogAfter: JSON.parse(atExit.catalogBefore), grokAfter: atExit.grokBefore, fileAfter: atExit.fileOwnedBytes,
+      protectedUnchanged: true, teardownOutstanding: true });
+    expect(readFileSync(inheritedReceipt, "utf8")).toBe("{");
+    expect(existsSync(unexpected)).toBe(false);
+  } finally {
+    if (child.exitCode === null) child.kill("SIGKILL");
+    await child.exited;
+    removeTreeWithRetry(root);
+  }
+}, 20_000);
+
 for (const changedReceipt of [false, true]) test.skipIf(process.platform !== "darwin")(
   changedReceipt ? "foreground CLI stop retains the listener if the older endpoint receipt changes after preflight"
     : "foreground CLI stop completes native handoff with a verified older endpoint receipt", async () => {

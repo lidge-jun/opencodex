@@ -1099,7 +1099,7 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
     isProcessAlive(ownerPid) && isLikelyOcxProcess(ownerPid);
   const savedLink = connectedClientState.kind === "connected" && connectedClientState.value.transport === "link";
   const pendingTeardowns = savedLink ? [] : listPendingTeardowns();
-  const inheritedTeardowns = savedLink
+  const inheritedTeardownSnapshot = savedLink
     ? (await import("../client/stop-native-handoff")).readLinkInheritedTeardowns()
     : pendingTeardowns.filter(read => isPendingTeardownAbandoned(read, teardownOwnerStillRunning));
   let linkStop: LinkStopPreflight | undefined;
@@ -1116,10 +1116,11 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
       return stopOwnershipRefused(unclassifiedStopTarget(trackedStopPid));
     }
   }
-  const preflight = connectedStop ? await preflightConnectedClientStop(snapshot?.approval, onFence, inheritedTeardowns,
+  const preflight = connectedStop ? await preflightConnectedClientStop(snapshot?.approval, onFence, inheritedTeardownSnapshot,
     proof => { linkStop = proof; connectedClientSkip = null; }, proof => { stopTarget = proof; }, siblingOfPort) : null;
   const connectedClientAlreadyStopped = preflight === "already-stopped";
   if (preflight && preflight !== "already-stopped") return preflight;
+  const inheritedTeardowns = stopTarget?.terminateSibling ? [] : inheritedTeardownSnapshot;
   // Structured twin of the human lines below, for `ocx stop --json`: one document the
   // desktop shell can read across the process boundary (D4). Every field is assigned
   // where the corresponding boolean already flips — the summarizer never re-decides.
@@ -1155,10 +1156,13 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
       console.warn(`⚠️  Could not record the deferred-teardown receipt: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
-  // Resolve the endpoint once for both the receipt and POST. A standalone stop may fall
-  // back to its tracked PID when no endpoint can be found; a connected stop needs its proof.
+  // Use one endpoint for the receipt and POST. A connected stop needs its own proved target.
   const stopWithDeferral = async (pid: number, discovered?: { hostname: string; port: number } | null): Promise<boolean> => {
     verifyStopTarget(pid);
+    if (stopTarget?.terminateSibling) {
+      stopTarget.terminateSibling();
+      return false;
+    }
     const verifiedLink = linkStop;
     const exact = connectedStop ? endpointOf(stopTarget?.target ?? null) : discovered ?? endpointOf(readRuntimePort(pid));
     if (connectedStop && !exact) throw unsupportedConnectedStop();
@@ -1272,14 +1276,12 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
       console.error("The approved runtime could not be verified after the guarded stop step.");
     }
   } else if (windowsChildStopHeld() || (connectedStop && ownershipBlocked)) { /* No process stop after the connected manager gate refused. */ } else {
-  const pid = readPid() ?? (linkStop && isProcessAlive(linkStop.target.pid) ? linkStop.target.pid : null);
+  const attestedPid = linkStop?.target.pid ?? (stopTarget?.terminateSibling ? stopTarget.target.pid : undefined);
+  const pid = readPid() ?? (attestedPid !== undefined && isProcessAlive(attestedPid) ? attestedPid : null);
   if (pid) {
     try {
-      // Graceful-first (management-API drain) — on Windows this is the only path where
-      // the proxy's shutdown handlers actually run; taskkill /F is the fallback inside.
-      // Shared teardown is deferred to this process: it happens after the respawn
-      // verification below, so a survivor does not get its client config pulled first.
-      // Link Child stops and checked Windows stops both require the receipt.
+      // The management API can drain before exit. A deferral receipt leaves shared teardown
+      // with this process until after respawn verification.
       nativeRestoreHandledByProxy = await stopWithDeferral(pid);
       console.log(`✅ Proxy (PID ${pid}) stopped.`);
       removePid(pid);

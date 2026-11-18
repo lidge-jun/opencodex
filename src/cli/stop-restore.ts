@@ -41,7 +41,7 @@ export function preserveConnectedClientRoutingOnExit(teardown: StartExitTeardown
 }
 
 type ConnectedStopTarget = { pid: number; port: number; hostname?: string };
-export type StopTargetProof = { target: ConnectedStopTarget; verify: () => void; standaloneSibling?: true };
+export type StopTargetProof = { target: ConnectedStopTarget; verify: () => void; siblingOnly?: true; terminateSibling?: () => void };
 export type LinkStopPreflight = StopTargetProof & { owner: ClientStopOwner; inheritedTeardownDigest?: string; forceKill: (pid: number) => void };
 
 const CONNECTED_STOP_PROBE_MS = 2000;
@@ -85,7 +85,7 @@ export function verifyConnectedStopTarget(
   const state = readClientConnectionState();
   if (state.kind === "invalid" || state.kind === "mismatched") throw unsupportedConnectedStop();
   if (pid !== undefined && pid !== proof?.target.pid) throw unsupportedConnectedStop();
-  if (state.kind === "connected" && state.value.transport === "link" && !linkStop && !proof?.standaloneSibling) throw unsupportedConnectedStop();
+  if (state.kind === "connected" && state.value.transport === "link" && !linkStop && !proof?.siblingOnly) throw unsupportedConnectedStop();
   if (proof && isProcessAlive(proof.target.pid)) proof.verify();
   const currentPid = readAlivePid();
   if (currentPid !== null && currentPid !== proof?.target.pid) throw unsupportedConnectedStop();
@@ -337,18 +337,30 @@ export async function preflightConnectedClientStop(
     checkPinnedTarget();
     if (!capability) throw unsupportedConnectedStop();
     if (standaloneSibling && !capability.nativeClient && !capability.linkStopFence) {
-      onTarget?.({ target, verify: checkPinnedTarget, standaloneSibling: true });
+      onTarget?.({ target, verify: checkPinnedTarget, siblingOnly: true });
       return null;
     }
     if (savedLink && capability.nativeClient && !capability.linkStopFence && pinned?.clientLinkOwner === undefined) {
       throw legacyLinkStopRefusal();
     }
     if (savedLink || publishedLink || capability.linkStopFence) {
-      // A sibling cannot authorize Link file cleanup or its native teardown handoff.
-      if (siblingOfPort !== undefined || pinned?.siblingOfPort !== undefined) throw unsupportedConnectedStop();
       if (!capability.linkStopFence || !targetStart) throw unsupportedConnectedStop();
       const link = connection.kind === "connected" && linkStopConnectionOwner(connection.value);
-      if (!link || pinned?.clientLinkOwner !== link || loadConfig().port !== target.port) throw unsupportedConnectedStop();
+      if (!link || pinned?.clientLinkOwner !== link) throw unsupportedConnectedStop();
+      if (siblingOfPort !== undefined || pinned.siblingOfPort !== undefined) {
+        if (siblingOfPort === undefined || pinned.siblingOfPort !== siblingOfPort || !capability.nativeClient
+          || !pinned.servingGeneration) throw unsupportedConnectedStop();
+        const { terminateAttestedClient } = await import("./stop-client-process");
+        const verify = () => {
+          checkPinnedTarget();
+          const current = readClientConnectionState();
+          if (current.kind !== "connected" || linkStopConnectionOwner(current.value) !== link) throw unsupportedConnectedStop();
+        };
+        // The sibling owns its listener only. Keep shared routing and teardown with the owner.
+        onTarget?.({ target, verify, siblingOnly: true, terminateSibling: () => terminateAttestedClient(stopTarget.pid, targetStart, verify) });
+        return null;
+      }
+      if (loadConfig().port !== target.port) throw unsupportedConnectedStop();
       // A native Child has no /api/stop refusal: SIGTERM can escalate to SIGKILL.
       // Refuse known inherited restore blockers before any manager or kill step.
       const { inheritedTeardownDigest, readLinkInheritedTeardowns } = await import("../client/stop-native-handoff");
