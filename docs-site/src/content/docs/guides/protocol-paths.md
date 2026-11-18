@@ -163,6 +163,9 @@ These paths still use the internal Responses bridge or are not covered:
   their current behavior. Headers alone do not authorize requests or establish official support.
   The TypeScript Agent SDK's `sdk-ts` user-agent entrypoint is recognized with the same required
   identity headers, preserving its allowlisted native feature betas on first-party Anthropic requests.
+  Claude cloud project children that send the exact `local_projects` user-agent entrypoint with the
+  same required headers retain their observed identity and allowlisted native feature betas.
+  These requests follow the existing ingress routing rules.
 - Native Chat over OAuth is not planned. Native Messages over Anthropic OAuth includes pooled
   accounts under the same native eligibility and credential-binding rules.
 - The managed native Messages path forwards a caller's `anthropic-beta` values only from a short
