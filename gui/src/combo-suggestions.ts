@@ -15,6 +15,8 @@ export interface SuggestionProvider {
   disabled?: boolean;
   hiddenFromPicker?: boolean;
   authMode?: string;
+  googleMode?: string;
+  vertexCredentialKind?: string;
   adapter?: string;
   baseUrl?: string;
 }
@@ -111,11 +113,15 @@ function hostOf(baseUrl: string | undefined): string {
 
 export function channelTier(provider: SuggestionProvider, model: string): ChannelTier {
   const host = hostOf(provider.baseUrl);
-  if (host.startsWith("aiplatform.") || /vertex/i.test(provider.name)) return "vertex";
+  if (provider.googleMode === "vertex" || provider.vertexCredentialKind || /(?:^|[.-])aiplatform\.googleapis\.com$/.test(host) || /vertex/i.test(provider.name)) return "vertex";
   if (provider.authMode !== "oauth" && provider.authMode !== "forward") return "metered";
   const modelMaker = MODEL_MAKERS.find(([re]) => re.test(normalizeModelName(model)))?.[1];
   const providerMaker = PROVIDER_MAKERS.find(([re]) => re.test(host))?.[1];
   return modelMaker !== undefined && modelMaker === providerMaker ? "own-subscription" : "subscription";
+}
+
+export function isMeteredTier(tier: ChannelTier): boolean {
+  return tier === "metered" || tier === "vertex";
 }
 
 /** Tier first; within a tier more quota left first, unknown quota after; then catalog order. */
@@ -205,20 +211,22 @@ export function buildComboSuggestions(input: SuggestionInput): ComboSuggestion[]
   const extends_: Array<ComboSuggestion & { kind: "extend" }> = [];
   for (const [name, served] of byModel) {
     const combo = covering.get(name);
+    const eligible = [...served].map(([p, m]) => member(p, m))
+      .filter((entry) => combo?.allowMeteredTargets === true || !isMeteredTier(entry.tier));
     // An existing combo takes any eligible provider it is missing, even the only one left once
     // its own members are excluded; a new combo needs two providers to fail over between.
     if (combo) {
       const routed = new Set(combo.targets.filter((target) => normalizeModelName(target.model) === name).map((target) => target.provider));
-      const missing = [...served].filter(([provider]) => !routed.has(provider));
+      const missing = eligible.filter(({ provider }) => !routed.has(provider));
       const key = suggestionKey("extend", name, combo.id);
       if (missing.length === 0 || input.dismissed?.has(key)) continue;
-      extends_.push({ kind: "extend", key, model: name, comboId: combo.id, members: orderMembers(missing.map(([p, m]) => member(p, m))) });
+      extends_.push({ kind: "extend", key, model: name, comboId: combo.id, members: orderMembers(missing) });
       continue;
     }
-    if (served.size < 2) continue;
+    if (eligible.length < 2) continue;
     const key = suggestionKey("create", name);
     if (input.dismissed?.has(key)) continue;
-    const spellings = [...served.values()].map(spelling);
+    const spellings = eligible.map(({ model }) => spelling(model));
     const counts = new Map<string, number>();
     for (const value of spellings) counts.set(value, (counts.get(value) ?? 0) + 1);
     const preferred = spellings.reduce((best, value) => (counts.get(value)! > counts.get(best)! ? value : best));
@@ -227,8 +235,8 @@ export function buildComboSuggestions(input: SuggestionInput): ComboSuggestion[]
       key,
       model: name,
       comboId: freeComboId(COMBO_ID_RE.test(preferred) ? preferred : name, input.combos),
-      members: orderMembers([...served].map(([p, m]) => member(p, m))),
-      listed: [...served].some(([provider, model]) => !input.hiddenModels?.has(`${provider}/${model}`)),
+      members: orderMembers(eligible),
+      listed: eligible.some(({ provider, model }) => !input.hiddenModels?.has(`${provider}/${model}`)),
     });
   }
   creates.sort((a, b) => Number(b.listed) - Number(a.listed) || b.members.length - a.members.length || a.model.localeCompare(b.model));
@@ -241,7 +249,7 @@ export function buildComboSuggestions(input: SuggestionInput): ComboSuggestion[]
 export function suggestionDraft(comboId: string, members: readonly SuggestedMember[]): ComboItem {
   return {
     ...emptyDraft(comboId),
-    targets: members.map((entry) => newComboTarget({ provider: entry.provider, model: entry.model, ...(entry.tier === "metered" ? { metered: true } : {}) })),
+    targets: members.filter((entry) => !isMeteredTier(entry.tier)).map(({ provider, model }) => newComboTarget({ provider, model })),
   };
 }
 
@@ -256,8 +264,9 @@ export function extendedCombo(
 ): ComboItem {
   const targets = [...combo.targets];
   for (const entry of members) {
+    if (isMeteredTier(entry.tier) && combo.allowMeteredTargets !== true) continue;
     const at = targets.findIndex((target) => TIER_RANK[tierOf(target.provider, target.model)] > TIER_RANK[entry.tier]);
-    targets.splice(at < 0 ? targets.length : at, 0, newComboTarget({ provider: entry.provider, model: entry.model, ...(entry.tier === "metered" ? { metered: true } : {}) }));
+    targets.splice(at < 0 ? targets.length : at, 0, newComboTarget({ provider: entry.provider, model: entry.model, ...(isMeteredTier(entry.tier) ? { metered: true } : {}) }));
   }
   return { ...combo, targets };
 }

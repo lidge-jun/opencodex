@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act } from "react";
+import { act, useEffect } from "react";
 import type { Root } from "react-dom/client";
 import {
   buildComboSuggestions,
@@ -17,6 +17,7 @@ import {
 import { isValidComboId, toPutBody, type ComboItem } from "../src/combo-workspace-data";
 import { ComboSuggestions, type ComboSuggestionsProps } from "../src/components/route-board/ComboSuggestions";
 import { useSuggestionExclusions, type SuggestionExclusions } from "../src/components/route-board/use-suggestion-exclusions";
+import { WorkspaceSuggestions } from "../src/components/route-board/WorkspaceSuggestions";
 import { LanguageProvider } from "../src/i18n/provider";
 
 const combo = (id: string, targets: Array<[string, string]>, extra: Partial<ComboItem> = {}): ComboItem => ({
@@ -103,8 +104,9 @@ describe("buildComboSuggestions", () => {
     expect(result.map((s) => [s.comboId, s.kind === "create" && s.listed])).toEqual([["gpt-5.6-luna", true], ["gpt-5.5", false]]);
   });
 
-  test("orders members: maker's subscription, other subscriptions, Vertex, then keys and relays", () => {
+  test("consented extensions order subscriptions before Vertex, keys and relays", () => {
     expect(summary({
+      combos: [combo("opus", [["openai", "claude-opus-5-5"]], { allowMeteredTargets: true })],
       models: models([
         ["zayu-claude", "claude-opus-5-5"],
         ["anthropic-apikey", "claude-opus-5-5"],
@@ -112,7 +114,7 @@ describe("buildComboSuggestions", () => {
         ["cursor", "claude-opus-5.5"],
         ["anthropic", "claude-opus-5-5"],
       ]),
-    })).toEqual(["create claude-opus-5-5: anthropic > cursor > google-vertex > zayu-claude > anthropic-apikey"]);
+    })).toEqual(["extend opus: anthropic > cursor > google-vertex > zayu-claude > anthropic-apikey"]);
   });
 
   test("within a tier, more quota left goes first and unknown quota last", () => {
@@ -170,17 +172,17 @@ describe("buildComboSuggestions", () => {
   });
 
   test("an excluded provider joins no suggested combo, new or existing", () => {
-    const rows = models([["openai", "gpt-5.5"], ["cursor", "gpt-5.5"], ["anthropic", "claude-x"], ["cursor", "claude-x"], ["zayu-claude", "claude-x"]]);
+    const rows = models([["openai", "gpt-5.5"], ["cursor", "gpt-5.5"], ["anthropic", "claude-x"], ["cursor", "claude-x"], ["google-antigravity", "claude-x"]]);
     const excludedProviders = new Set(["cursor"]);
-    expect(summary({ models: rows, excludedProviders })).toEqual(["create claude-x: anthropic > zayu-claude"]);
+    expect(summary({ models: rows, excludedProviders })).toEqual(["create claude-x: anthropic > google-antigravity"]);
     const combos = [combo("claude-x", [["anthropic", "claude-x"]])];
-    expect(summary({ combos, models: rows, excludedProviders })).toEqual(["extend claude-x: zayu-claude"]);
+    expect(summary({ combos, models: rows, excludedProviders })).toEqual(["extend claude-x: google-antigravity"]);
   });
 
   test("an existing combo whose own provider is excluded still offers the one eligible provider left", () => {
     const combos = [combo("claude-x", [["anthropic", "claude-x"]])];
-    const rows = models([["anthropic", "claude-x"], ["zayu-claude", "claude-x"]]);
-    expect(summary({ combos, models: rows, excludedProviders: new Set(["anthropic"]) })).toEqual(["extend claude-x: zayu-claude"]);
+    const rows = models([["anthropic", "claude-x"], ["google-antigravity", "claude-x"]]);
+    expect(summary({ combos, models: rows, excludedProviders: new Set(["anthropic"]) })).toEqual(["extend claude-x: google-antigravity"]);
     expect(summary({ combos, models: rows.slice(0, 1) })).toEqual([]);
     expect(summary({ models: rows, excludedProviders: new Set(["anthropic"]) })).toEqual([]);
   });
@@ -200,7 +202,7 @@ describe("drafts", () => {
   test("extending puts a member ahead of the first lower-tier one and keeps the combo's own order", () => {
     const tiers: Record<string, ChannelTier> = { anthropic: "own-subscription", "anthropic-apikey": "metered", "zayu-claude": "metered" };
     const tierOf = (provider: string) => tiers[provider]!;
-    const base = combo("opus", [["anthropic", "claude-opus-5-5"], ["zayu-claude", "claude-opus-5-5"], ["anthropic-apikey", "claude-opus-5-5"]]);
+    const base = combo("opus", [["anthropic", "claude-opus-5-5"], ["zayu-claude", "claude-opus-5-5"], ["anthropic-apikey", "claude-opus-5-5"]], { allowMeteredTargets: true });
     const next = extendedCombo(base, [
       { provider: "cursor", model: "claude-opus-5.5", tier: "subscription" },
       { provider: "relay-2", model: "claude-opus-5-5", tier: "metered" },
@@ -345,7 +347,7 @@ describe("ComboSuggestions card", () => {
       <LanguageProvider>
         <ComboSuggestions
           combos={[]}
-          models={models([["google-antigravity", "gemini-3.8-flash"], ["cursor", "gemini-3.8-flash"], ["google-vertex", "gemini-3.8-flash"]])}
+          models={models([["google-antigravity", "gemini-3.8-flash"], ["cursor", "gemini-3.8-flash"], ["anthropic", "gemini-3.8-flash"]])}
           hiddenModels={new Set()}
           providers={PROVIDERS}
           remainingPercent={() => undefined}
@@ -442,7 +444,11 @@ describe("ComboSuggestions card", () => {
     }) as typeof fetch;
     try {
       let state: SuggestionExclusions | null = null;
-      const Probe = ({ base }: { base: string }) => { state = useSuggestionExclusions(base); return null; };
+      const Probe = ({ base }: { base: string }) => {
+        const exclusions = useSuggestionExclusions(base);
+        useEffect(() => { state = exclusions; }, [exclusions]);
+        return null;
+      };
       await mount(<Probe base="" />);
       expect(state!.ready).toBe(false);
       await act(async () => { pending.shift()!({ excludedProviders: ["anthropic"] }); });
@@ -459,6 +465,83 @@ describe("ComboSuggestions card", () => {
     } finally {
       globalThis.fetch = realFetch;
     }
+  });
+
+  test("new cards and drafts omit paid Vertex and API-key members", async () => {
+    const name = "claude-opus-5-5";
+    await mount(<LanguageProvider><ComboSuggestions
+      combos={[]} models={models(["anthropic", "cursor", "google-vertex", "anthropic-apikey"].map((provider) => [provider, name]))}
+      providers={PROVIDERS} hiddenModels={new Set()} remainingPercent={() => undefined}
+      validate={() => null} errorText={() => "bad"}
+      onCreate={async () => ({ ok: true })} onExtend={async () => ({ ok: true })}
+    /></LanguageProvider>);
+    const suggestion = card(name);
+    expect(suggestion.querySelectorAll(".rb-order-item")).toHaveLength(2);
+    await act(async () => { button(suggestion, "Generate").click(); });
+    expect(suggestion.querySelectorAll(".rb-suggest-members li")).toHaveLength(2);
+  });
+
+  test("revoked metered consent blocks Add to combo and shows an error", async () => {
+    const originalFetch = globalThis.fetch;
+    const name = "claude-opus-5-5";
+    const existing = combo("opus", [["anthropic", name]], { allowMeteredTargets: true });
+    let saveCount = 0;
+    globalThis.fetch = (async (url: string) => {
+      if (url.endsWith("/api/combos")) return Response.json({ combos: [{ ...existing, allowMeteredTargets: false }] });
+      if (url.endsWith("/api/config")) return Response.json({
+        providers: Object.fromEntries(PROVIDERS.map((provider) => [provider.name, provider])),
+      });
+      return Response.json({ excludedProviders: [] });
+    }) as typeof fetch;
+    try {
+      await mount(<LanguageProvider><WorkspaceSuggestions
+        active apiBase="/test" combos={[existing]} providers={PROVIDERS}
+        models={models([["anthropic", name], ["google-vertex", name]])}
+        quotaReports={null} quotaNow={0} lockedComboId={null}
+        onSave={async () => { saveCount += 1; return { ok: true }; }}
+      /></LanguageProvider>);
+      const extension = card("opus");
+      expect(extension.textContent).toContain("Vertex");
+      await act(async () => { button(extension, "Add to combo").click(); });
+      expect(extension.querySelector('[role="alert"]')?.textContent).toContain("Suggestion settings changed");
+      expect(saveCount).toBe(0);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("failed exclusions hide actions until a successful retry", async () => {
+    const originalFetch = globalThis.fetch;
+    const pending: Array<(response: Response) => void> = [];
+    globalThis.fetch = (() => new Promise<Response>((resolve) => pending.push(resolve))) as typeof fetch;
+    try {
+      await mount(<LanguageProvider><WorkspaceSuggestions
+        active apiBase="/test" combos={[]} providers={PROVIDERS}
+        models={models([["anthropic", "claude-x"], ["cursor", "claude-x"]])}
+        quotaReports={null} quotaNow={0} lockedComboId={null} onSave={async () => ({ ok: true })}
+      /></LanguageProvider>);
+      const visibleButtons = () => [...host.querySelectorAll("button")].map((item) => item.textContent?.trim());
+      expect(visibleButtons()).not.toContain("Generate");
+      await act(async () => { pending.shift()!(new Response(null, { status: 500 })); });
+      expect(visibleButtons()).not.toContain("Generate");
+      expect(host.querySelector('[role="alert"]')?.textContent).toContain("Could not load");
+      await act(async () => { button(host, "Retry").click(); });
+      await act(async () => { pending.shift()!(Response.json({ excludedProviders: [] })); });
+      expect(visibleButtons()).toContain("Generate");
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  test("after dismissing the last card the exclusion control still works", async () => {
+    exclusionWrites.length = 0;
+    await render([], []);
+    await act(async () => { button(card("claude-opus-5-5"), "Dismiss").click(); });
+    await act(async () => { button(card("gemini-3.8-flash"), "Dismiss").click(); });
+    expect(host.querySelectorAll(".rb-suggest-card")).toHaveLength(0);
+    await act(async () => { button(host, "Exclude providers…").click(); });
+    await act(async () => { host.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click(); });
+    expect(exclusionWrites[0]).toHaveLength(1);
   });
 
   test("without an exclusion handler there is no exclude control", async () => {
@@ -484,11 +567,12 @@ test("another model on the same provider does not hide a missing channel", () =>
   expect(suggestion?.members.map(({ provider, model }) => [provider, model])).toEqual([["cursor", name]]);
 });
 
-test("the create and extension requests mark pay-per-use targets as metered", () => {
-  const member = { provider: "anthropic-apikey", model: "claude-opus-5-5", tier: "metered" } as const;
-  expect(toPutBody(suggestionDraft("opus", [member])).combo.targets[0]?.metered).toBe(true);
+test("only consented extensions serialize paid targets, without writing consent", () => {
+  const member = { provider: "google-vertex", model: "claude-opus-5-5", tier: "vertex" } as const;
+  expect(suggestionDraft("opus", [member]).targets).toEqual([]);
   const current = combo("opus", [["anthropic", member.model]]);
-  const body = toPutBody(extendedCombo(current, [member], () => "own-subscription")).combo;
+  expect(extendedCombo(current, [member], () => "own-subscription").targets).toEqual(current.targets);
+  const body = toPutBody(extendedCombo({ ...current, allowMeteredTargets: true }, [member], () => "own-subscription")).combo;
   expect(body.targets.map(({ metered }) => metered)).toEqual([undefined, true]);
   expect(body).not.toHaveProperty("allowMeteredTargets");
 });

@@ -176,6 +176,7 @@ export interface ComboItem {
   decisionTimeoutMs?: number | null;
   /** `jev` only: undefined preserves an omitted setting; null explicitly turns the pin off. */
   sessionPin?: JevSessionPinConfig | null;
+  allowMeteredTargets?: boolean;
   targets: ComboTarget[];
 }
 
@@ -297,6 +298,7 @@ export function parseComboList(payload: unknown): ComboItem[] {
       targets.push(newComboTarget({
         provider,
         model,
+        metered: tr.metered === true,
         ...(weight !== undefined ? { weight } : {}),
         ...(reasoningEfforts !== undefined ? { reasoningEfforts } : {}),
         ...(typeof tr.modelProfile === "string" ? { modelProfile: tr.modelProfile } : {}),
@@ -313,6 +315,7 @@ export function parseComboList(payload: unknown): ComboItem[] {
         : comboPublicModelId(id, normalizeAlias(r.alias)),
       alias: normalizeAlias(r.alias),
       nativeAlias: r.nativeAlias === true,
+      ...(r.allowMeteredTargets === true ? { allowMeteredTargets: true } : {}),
       displayName: normalizeAlias(r.displayName),
       strategy: normalizeStrategy(r.strategy),
       stickyLimit: normalizeStickyLimit(r.stickyLimit),

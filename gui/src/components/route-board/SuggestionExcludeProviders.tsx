@@ -23,7 +23,9 @@ export function SuggestionExcludeProviders({
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
   // An excluded provider that was since removed still lists, so it can be restored.
-  const names = [...providers, ...excluded.filter((name) => !providers.includes(name))];
+  const known = new Set(providers);
+  const excludedNames = new Set(excluded);
+  const names = [...providers, ...excluded.filter((name) => !known.has(name))];
   const label = (name: string) => formatProviderDisplayName(name, t);
 
   const toggle = async (name: string, exclude: boolean) => {
@@ -53,7 +55,7 @@ export function SuggestionExcludeProviders({
           <p className="rb-suggest-hint">{t("comboSuggest.exclude.hint")}</p>
           <ul>
             {names.map((name) => {
-              const on = excluded.includes(name);
+              const on = excludedNames.has(name);
               return (
                 <li key={name}>
                   <label>

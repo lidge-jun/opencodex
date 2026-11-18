@@ -60,7 +60,7 @@ export function ComboSuggestions(props: ComboSuggestionsProps) {
   const [draftKey, setDraftKey] = useState<string | null>(null);
   const excluded = props.excludedProviders ?? [];
   const suggestions = buildComboSuggestions({ ...props, dismissed, excludedProviders: new Set(excluded) });
-  if (suggestions.length === 0 && excluded.length === 0) return null;
+  if (suggestions.length === 0 && !props.onExcludedChange) return null;
 
   const dismiss = (key: string) => {
     const next = new Set(dismissed).add(key);

@@ -26,6 +26,8 @@ type ProviderOption = {
   disabled?: boolean;
   hiddenFromPicker?: boolean;
   authMode?: string;
+  googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
+  vertexCredentialKind?: "marker" | "ambient" | "reference" | "api-key";
   adapter?: string;
   baseUrl?: string;
   defaultModel?: string;
@@ -47,6 +49,8 @@ type ProviderDto = {
   defaultModel?: string;
   models?: string[];
   authMode?: string;
+  googleMode?: "ai-studio" | "vertex" | "cloud-code-assist";
+  vertexCredentialKind?: "marker" | "ambient" | "reference" | "api-key";
 };
 type ConfigDto = { providers?: Record<string, ProviderDto> };
 type CachedCombosPage = {
@@ -174,6 +178,8 @@ export default function Combos({
       disabled: !!p.disabled,
       hiddenFromPicker: p.adapter === "jev-decision" || !Object.hasOwn(visibleProviders, name),
       authMode: p.authMode,
+      googleMode: p.googleMode,
+      vertexCredentialKind: p.vertexCredentialKind,
       adapter: p.adapter,
       baseUrl: p.baseUrl,
       ...(typeof p.defaultModel === "string" ? { defaultModel: p.defaultModel } : {}),

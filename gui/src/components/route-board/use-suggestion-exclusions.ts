@@ -9,6 +9,8 @@ export interface SuggestionExclusions {
   excluded: readonly string[];
   /** True once the stored list is known; a save before that would replace it with a partial one. */
   ready: boolean;
+  failed: boolean;
+  retry: () => void;
   /** Saves the whole list; resolves false when the proxy did not take it (the list stays as it was). */
   save: (next: readonly string[]) => Promise<boolean>;
 }
@@ -16,12 +18,13 @@ export interface SuggestionExclusions {
 function parse(body: unknown): string[] | null {
   if (!body || typeof body !== "object" || !("excludedProviders" in body)) return null;
   const list = (body as { excludedProviders: unknown }).excludedProviders;
-  return Array.isArray(list) ? list.filter((name): name is string => typeof name === "string") : null;
+  return Array.isArray(list) && list.every((name) => typeof name === "string") ? list : null;
 }
 
 export function useSuggestionExclusions(apiBase: string, active = true): SuggestionExclusions {
-  const [loaded, setLoaded] = useState<{ base: string; excluded: string[] }>();
-  const current = loaded?.base === apiBase ? loaded : undefined;
+  const [attempt, setAttempt] = useState(0);
+  const [loaded, setLoaded] = useState<{ base: string; attempt: number; excluded: string[] | null }>();
+  const current = active && loaded?.base === apiBase && loaded.attempt === attempt ? loaded : undefined;
   // Bumped by every save, so a read that started earlier cannot overwrite what was saved.
   const generation = useRef(0);
 
@@ -33,16 +36,19 @@ export function useSuggestionExclusions(apiBase: string, active = true): Suggest
       .then((response) => (response.ok ? response.json() : null))
       .then((body) => {
         const list = parse(body);
-        if (!list || controller.signal.aborted || generation.current !== started) return;
-        setLoaded({ base: apiBase, excluded: list });
+        if (controller.signal.aborted || generation.current !== started) return;
+        setLoaded({ base: apiBase, attempt, excluded: list });
       })
-      // An older proxy without the route: nothing is excluded and the control stays hidden.
-      .catch(() => {});
+      .catch(() => {
+        if (!controller.signal.aborted && generation.current === started) {
+          setLoaded({ base: apiBase, attempt, excluded: null });
+        }
+      });
     return () => controller.abort();
-  }, [apiBase, active]);
+  }, [apiBase, active, attempt]);
 
   const save = useCallback(async (next: readonly string[]) => {
-    if (!current) return false;
+    if (!current?.excluded) return false;
     const started = ++generation.current;
     try {
       const response = await fetch(`${apiBase}/api/combo-suggestions`, {
@@ -52,12 +58,18 @@ export function useSuggestionExclusions(apiBase: string, active = true): Suggest
       });
       const list = response.ok ? parse(await response.json()) : null;
       if (!list || generation.current !== started) return false;
-      setLoaded({ base: apiBase, excluded: list });
+      setLoaded({ base: apiBase, attempt, excluded: list });
       return true;
     } catch {
       return false;
     }
-  }, [apiBase, current]);
+  }, [apiBase, attempt, current]);
 
-  return { excluded: current?.excluded ?? [], ready: current !== undefined, save };
+  return {
+    excluded: current?.excluded ?? [],
+    ready: current?.excluded != null,
+    failed: current?.excluded === null,
+    retry: () => setAttempt((value) => value + 1),
+    save,
+  };
 }
