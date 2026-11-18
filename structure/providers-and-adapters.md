@@ -69,7 +69,7 @@ shared Kiro/Chat splitting and raw display follow [Chat compatibility](providers
 Meta Muse import, device login, explicit paste recovery, consent and safe diagnostics follow
 the [Muse login contract](providers/meta-muse.md). Other providers retain their existing login policies.
 
-The capture-only bridge in `src/adapters/coding-agent/turn.ts` shares bounded Windows tree termination via `src/adapters/coding-agent/process-tree.ts` with StepCode and reports staging failures with
+Claude CLI, Qoder, CodeBuddy, and StepCode share `src/adapters/coding-agent/process-tree.ts`, which bounds Windows `taskkill /T /F` to five seconds. The capture-only bridge in `src/adapters/coding-agent/turn.ts` reports staging failures with
 the fixed `tool_bridge_setup_failed` error, never an OS error carrying private file paths.
 Failure prevents CLI spawn and settles the bridge's private directory; the CodeBuddy adapter
 also settles its prompt-file directory. Catalog and MCP-config write failures cover both owners.
