@@ -205,7 +205,8 @@ export async function executeResponsesSidecars(
     });
   // Preflight only on real worker turns: a routed-compaction turn is a summarization request,
   // and injecting advice into it would pollute the summary Codex replaces its history with.
-  if (advisorPlan && !routedCompaction) {
+  // An explicit hosted Advisor choice reserves this turn's consultation for Anthropic.
+  if (advisorPlan && !routedCompaction && !options.anthropicHostedAdvisorSelected) {
     await advisorPlan.preflightInject(parsed);
   }
   // The synthetic `advisor` owns the name for the whole turn it joins, so a typed Advisor declaration

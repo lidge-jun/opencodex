@@ -549,6 +549,8 @@ export async function prepareResponsesRequest(
       parsed._nativeReasoningReplay = options.nativeReasoningReplay;
       parsed._nativeReasoningMint = options.nativeReasoningMint;
       parsed._anthropicServerTools = options.anthropicServerTools;
+      // The lowered named choice serves the wire builder but grants no root function permission.
+      if (options.anthropicHostedAdvisorSelected) parsed.options.explicitRootFunctionChoices = [];
       parsed._anthropicServerReplay = options.anthropicServerReplay;
       parsed._anthropicSystemCachePrefix = options.anthropicSystemCachePrefix;
       parsed._anthropicInbound = true;

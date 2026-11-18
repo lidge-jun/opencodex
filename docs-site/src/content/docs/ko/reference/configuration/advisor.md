@@ -81,7 +81,9 @@ OpenCodex는 프로바이더 API 키, Authorization 헤더, OAuth 토큰, 백엔
 
 수동 조언은 워커가 직접 호출한 `advisor`에 대한 도구 결과입니다. 결과는 JSON 객체입니다. `advice`는 어드바이저 모델의 텍스트입니다. `status`는 런타임이 씁니다.
 
-수동 호출은 현재 요청의 `tool_choice`에서도 `advisor`를 허용해야 합니다. 도구를 직접 지정하거나 허용 목록을 쓰는 경우 네임스페이스가 없는 `advisor` 함수를 선택해야 합니다. 호스팅 웹 검색을 강제하거나 이름이 같은 커스텀·호스팅 도구를 선택하면 수동 Advisor 상담이 허용되지 않습니다. 이 규칙은 일반 변환 Responses·Messages 요청과 웹 검색에 모두 적용됩니다. 금지된 호출은 상담, 워커 재호출, 호출 ID와 인자 전달 전에 거부됩니다. 자동 preflight·adaptive 상담은 운영자가 설정한 정책을 따릅니다.
+수동 호출은 현재 요청의 `tool_choice`에서도 `advisor`를 허용해야 합니다. 도구를 직접 지정하거나 허용 목록을 쓰는 경우 네임스페이스가 없는 `advisor` 함수를 선택해야 합니다. 호스팅 웹 검색을 강제하거나 이름이 같은 커스텀·호스팅 도구를 선택하면 수동 Advisor 상담이 허용되지 않습니다. 이 규칙은 일반 변환 Responses·Messages 요청과 웹 검색에 모두 적용됩니다. 금지된 호출은 상담, 워커 재호출, 호출 ID와 인자 전달 전에 거부됩니다.
+
+변환된 Messages 요청이 Anthropic의 호스팅 `advisor`를 명시적으로 선택하면, OpenCodex는 전달 가능한 경로에서 도구 선언과 선택을 Anthropic에 넘기고 해당 턴의 프록시 상담을 건너뜁니다. 그 밖의 턴에서는 자동 preflight·adaptive 상담이 운영자 정책을 따릅니다.
 
 fetch 기반 웹 검색 턴에서는 실제 적용되는 `tool_choice`가 합성 `advisor` 도구를 허용할 때만 해당 도구를 노출하고 수동 상담 호출을 가로챕니다. 웹 검색을 강제하거나 `allowed_tools`를 `web_search`로 제한하면 수동 Advisor 상담은 허용되지 않습니다.
 

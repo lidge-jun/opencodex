@@ -216,6 +216,8 @@ export interface HandleResponsesOptions {
   nativeReasoningMint?: { owner?: NativeReasoningOwner };
   /** The Claude client's typed `web_search_*` / `web_fetch_*` declarations; kept only for `inboundWire: "anthropic"`. */
   anthropicServerTools?: readonly Record<string, unknown>[];
+  /** The original Messages choice names the typed hosted Advisor declaration. */
+  anthropicHostedAdvisorSelected?: boolean;
   /** The Claude client's replayable server-tool exchanges (`replayedAnthropicServerBlocks`); same scope. */
   anthropicServerReplay?: ReadonlyMap<string, readonly Record<string, unknown>[]>;
   /** The caller's cached system prefix (`systemCachePrefix`); same scope. */

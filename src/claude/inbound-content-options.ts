@@ -112,6 +112,13 @@ export function declaredAnthropicServerTools(raw: unknown): Rec[] | undefined {
   return tools.length > 0 ? tools : undefined;
 }
 
+/** Read the named choice against the original catalog before Messages lowers it to a function. */
+export function selectsHostedAdvisor(raw: unknown): boolean {
+  if (!isRec(raw) || !isRec(raw.tool_choice) || !Array.isArray(raw.tools)) return false;
+  return raw.tool_choice.type === "tool" && raw.tool_choice.name === ADVISOR_SERVER_TOOL_NAME
+    && raw.tools.some(tool => isRec(tool) && tool.name === ADVISOR_SERVER_TOOL_NAME && isAdvisorServerToolType(tool.type));
+}
+
 /**
  * A declared tool the translated body drops and no out-of-body lane carries (bash_*, text_editor_*, ...).
  * The Advisor rides the out-of-body lane and is optional: a destination without it simply runs the

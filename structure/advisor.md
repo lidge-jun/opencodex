@@ -68,7 +68,12 @@ multi-call pairing, overlap and lifecycle release.
   A forced hosted search or a same-named custom or hosted selector grants no Advisor permission.
   The guard rechecks the caller's selection and effective tool choice on each worker leg and
   refuses a forbidden call before consultation, continuation, or disclosure of its ID and arguments.
-  Linked Messages replay uses the same check. Automatic consultations follow operator policy.
+  Linked Messages replay uses the same check. `src/claude/inbound-content-options.ts` identifies
+  an explicitly selected hosted Advisor from the original declaration before choice lowering.
+  The named choice still drives Anthropic wire encoding, while the Responses core records no
+  root function permission and skips proxy preflight for that turn. Other automatic consultations
+  follow operator policy. The translated Messages wire and guard are covered by
+  `tests/claude-integration/claude-translated-hosted-advisor-choice.test.ts`.
   A buffered refusal preserves the already-parsed rejected worker leg's terminal usage, merged
   with earlier intercepted legs once; streaming refusal closes its iterator immediately.
 - Run-turn adapters: preflight support only — the automatic pre-dispatch consultation attempt

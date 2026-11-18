@@ -161,7 +161,9 @@ selector or allowlist must select the root `advisor` function. Forced hosted web
 same-named custom or hosted selectors grant no manual Advisor permission. This applies to
 ordinary translated Responses and Messages requests as well as web search. A forbidden call
 is rejected before consultation, worker redispatch, or disclosure of its ID and arguments.
-Automatic preflight and adaptive consultations follow their operator-configured policy.
+When translated Messages explicitly selects Anthropic's hosted `advisor`, OpenCodex leaves the
+declaration and named choice to Anthropic on eligible routes and skips proxy consultations for
+that turn. On other turns, automatic preflight and adaptive consultations follow operator policy.
 
 Automatic preflight keeps the fixed runtime transport instruction in a developer message and
 puts the quoted JSON advice in a separate **user-role advisory message**. Advisor-generated text
