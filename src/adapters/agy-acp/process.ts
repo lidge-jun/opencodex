@@ -1,9 +1,9 @@
 /**
  * Process and workspace lifetime for one `agy acp` turn.
  *
- * Each turn gets a fresh private directory outside the OpenCodex home (mode 0700, resolved through
- * symlinks), with its own temp directory, used as both the spawn cwd and the session cwd. This is the
- * workspace the CLI's request-review permission engine scopes file access to; it is not an OS sandbox.
+ * Each turn gets a fresh directory outside the OpenCodex home. It has mode 0700 on POSIX and a
+ * private NTFS ACL on Windows, with its own temp directory. The CLI's request-review permission
+ * engine scopes file access to this workspace, which serves as both the spawn and session cwd.
  * POSIX signals the child's group and waits for leader exit and group disappearance. Windows
  * requires a successful System32 taskkill /T /F while the leader is alive and leader closure.
  */
@@ -11,6 +11,7 @@ import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child
 import { chmod, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
+import { forgetEphemeralSecretDir, hardenSecretDirAsync, windowsSecretAclApplies } from "../../lib/windows-secret-acl";
 
 export interface TurnWorkspace { dir: string; tmp: string; remove(): Promise<void> }
 
@@ -25,15 +26,29 @@ export async function createTurnWorkspace(home: string, tempRoot = tmpdir()): Pr
   let homeReal = home;
   try { homeReal = await realpath(home); } catch { /* a missing home cannot contain the workspace */ }
   if (isInside(root, homeReal)) throw new Error("agy acp workspace would be inside the OpenCodex home");
-  const dir = await realpath(await mkdtemp(join(root, "ocx-agy-acp-")));
-  if (isInside(dir, homeReal)) {
-    await rm(dir, { recursive: true, force: true });
-    throw new Error("agy acp workspace would be inside the OpenCodex home");
+  const created = await mkdtemp(join(root, "ocx-agy-acp-"));
+  let aclDir: string | undefined;
+  const remove = async (): Promise<void> => {
+    try { await rm(created, { recursive: true, force: true, maxRetries: 2 }); } catch { return; }
+    if (aclDir) forgetEphemeralSecretDir(aclDir);
+  };
+  try {
+    const dir = await realpath(created);
+    if (isInside(dir, homeReal)) throw new Error("agy acp workspace would be inside the OpenCodex home");
+    if (windowsSecretAclApplies()) {
+      aclDir = dir;
+      const acl = await hardenSecretDirAsync(dir, { required: true });
+      if (!acl.ok) throw new Error("agy acp could not harden the workspace ACL");
+    } else {
+      await chmod(dir, 0o700);
+    }
+    const tmp = join(dir, ".tmp");
+    await mkdir(tmp, { mode: 0o700 });
+    return { dir, tmp, remove };
+  } catch (error) {
+    await remove();
+    throw error;
   }
-  await chmod(dir, 0o700);
-  const tmp = join(dir, ".tmp");
-  await mkdir(tmp, { mode: 0o700 });
-  return { dir, tmp, remove: () => rm(dir, { recursive: true, force: true, maxRetries: 2 }).catch(() => undefined) };
 }
 
 export type AgyAcpChild = Pick<ChildProcessWithoutNullStreams, "stdin" | "stdout" | "stderr" | "pid" | "exitCode" | "signalCode" | "kill" | "on" | "once">;

@@ -887,8 +887,10 @@ once per turn and talks to it over the Agent Client Protocol on stdin and stdout
   every such request. `--sandbox` asks the CLI to run its terminal commands in its OS sandbox; Google documents that it
   has no effect where that sandbox is unavailable (for example Windows 10 or some Linux containers), so it is extra
   hardening, not a guarantee. Allow rules you set in your own agy settings still apply without asking.
-  On Windows, if OpenCodex cannot confirm that the process tree has stopped, the turn fails and the
-  workspace is retained.
+  On Windows, OpenCodex requires a private directory ACL before launching the CLI. The version probe and each
+  turn use separate workspaces under the system temporary directory. OpenCodex removes a workspace only after
+  confirming the CLI process tree has exited. If cleanup cannot be confirmed, OpenCodex logs a warning, retains
+  the workspace and fails any affected turn. Retained workspaces can accumulate after repeated failures.
 - **Text only:** ACP prompts carry text, so client function tools and images are not offered to the model, and the
   CLI's own tool use stays inside the CLI.
 

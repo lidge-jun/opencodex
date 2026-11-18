@@ -1,16 +1,21 @@
 /**
  * Antigravity ACP adapter driven against a scripted fake ACP child (plan 080). No real agy runs.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
+import { existsSync, mkdtempSync, readdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { createAgyAcpAdapter, AGY_ACP_ARGS, type AgyAcpDeps } from "../../src/adapters/agy-acp/adapter";
-import { AgyAcpTreeCleanupError, reapProcessTree, type AgyAcpChild } from "../../src/adapters/agy-acp/process";
+import { AgyAcpTreeCleanupError, createTurnWorkspace, reapProcessTree, type AgyAcpChild } from "../../src/adapters/agy-acp/process";
+import * as windowsAcl from "../../src/lib/windows-secret-acl";
 import { runWithRequestPeer } from "../../src/lib/request-peer-scope";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
 import type { IncomingMeta } from "../../src/adapters/base";
 import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 type Frame = Record<string, any>;
 interface AgentApi {
@@ -134,6 +139,43 @@ const dataKeyShape = "ocx_data_" + "c".repeat(40);
 afterEach(() => { delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN; });
 
 describe("agy acp turn", () => {
+  test.each(["success", "failure"])("Windows requires a private workspace ACL before spawning (%s)", async outcome => {
+    const root = mkdtempSync(join(tmpdir(), "ocx-agy-acl-test-"));
+    const calls: string[] = [];
+    const platform = spyOn(windowsAcl, "windowsSecretAclApplies").mockReturnValue(true);
+    const harden = spyOn(windowsAcl, "hardenSecretDirAsync").mockImplementation(async (dir, options) => {
+      calls.push("acl");
+      expect(options.required).toBe(true);
+      expect(existsSync(dir)).toBe(true);
+      expect(existsSync(join(dir, ".tmp"))).toBe(false);
+      if (outcome === "failure") throw new Error("mock icacls failure");
+      return { ok: true };
+    });
+    const forget = spyOn(windowsAcl, "forgetEphemeralSecretDir").mockImplementation(dir => {
+      expect(existsSync(dir)).toBe(false);
+      calls.push("forget");
+    });
+    try {
+      const h = await run(script(), {
+        deps: { createWorkspace: () => createTurnWorkspace(join(root, "home"), root) },
+        beforeRun: () => { calls.push("spawn"); },
+      });
+      expect(calls).toEqual(outcome === "success" ? ["acl", "spawn", "forget"] : ["acl", "forget"]);
+      if (outcome === "success") {
+        expect(terminal(h)).toEqual([{ type: "done" }]);
+      } else {
+        expect(h.spawned).toBe(0);
+        expect(errorCode(h)).toBe("agy_acp_unavailable");
+      }
+      expect(readdirSync(root)).toEqual([]);
+    } finally {
+      harden.mockRestore();
+      forget.mockRestore();
+      platform.mockRestore();
+      removeTreeWithRetry(root);
+    }
+  });
+
   test.each([true, false])("nonzero version probe exit uses tree confirmation before workspace removal (%s)", async confirmed => {
     const calls: string[] = [];
     const h = await run(script(), {

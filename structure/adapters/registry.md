@@ -84,7 +84,9 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   the shared request budget, including a retried turn. Model selection is phase-aware and fails closed when the Gemini model is not
   confirmed. Permission requests are answered `cancelled`. Selection errors use fixed text. Answer and reasoning
   deltas each pass through a bounded streaming redactor for minted OpenCodex credentials and the shared string
-  redaction rules. Protocol errors may include a numeric code. The workspace stays outside the OpenCodex home.
+  redaction rules. Protocol errors may include a numeric code. Probe and turn workspaces are created under the
+  system temporary directory outside the OpenCodex home. Windows requires a private NTFS ACL before either
+  child can start. Retained workspaces can accumulate when cleanup repeatedly cannot be confirmed.
   The version probe and the turn remove their workspaces after confirmed tree exit. POSIX requires a successful
   group SIGKILL or ESRCH, leader exit and a group existence check returning ESRCH. Windows requires successful
   tree taskkill and leader closure. An inconclusive cleanup retains the workspace and logs a fixed warning.
