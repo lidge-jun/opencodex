@@ -16,6 +16,7 @@ import { selectValue } from "./helpers/custom-select";
 const PRESETS = [
   { id: "claude-cli", label: "Claude Code CLI (subscription)", adapter: "claude-cli", baseUrl: "https://api.anthropic.com", auth: "key", keyOptional: true, defaultModel: "claude-sonnet-5", note: "Runs Claude subscription traffic through the official CLI." },
   { id: "antigravity-acp", label: "Antigravity CLI (ACP, local)", adapter: "agy-acp", baseUrl: "https://antigravity.google/docs/cli/acp", auth: "key", keyOptional: true, defaultModel: "gemini-3.8-flash", note: "Drives the official Antigravity CLI." },
+  { id: "step-cli", label: "StepCode CLI (subscription)", adapter: "step-cli", baseUrl: "https://api.stepfun.com/step_plan", auth: "key", keyOptional: true, defaultModel: "step-5-preview" },
   { id: "keyless", label: "Keyless Free", adapter: "openai-chat", baseUrl: "https://api.example.com/v1", auth: "key", keyOptional: true },
   { id: "google-vertex", label: "Google Vertex AI", adapter: "google", baseUrl: "https://aiplatform.googleapis.com", auth: "key", defaultModel: "gemini-3-pro" },
 ];
@@ -109,6 +110,38 @@ test("claude-cli is listed under Paid, not Free", async () => {
   expect(rowsText()).toContain("Claude Code CLI (subscription)");
   expect(rowsText()).toContain("Subscription CLI");
   expect(rowsText()).not.toContain("Keyless Free");
+});
+
+test("step-cli has a subscription badge under Paid and is absent from Free", async () => {
+  await mount("free");
+  expect(rowsText()).not.toContain("StepCode CLI");
+
+  await mount("paid");
+  const row = [...win.document.querySelectorAll(".provider-catalog-row-wrap > button")]
+    .find(el => el.textContent?.includes("StepCode CLI"));
+  expect(row?.textContent).toContain("Subscription CLI");
+});
+
+test("StepCode setup names its own CLI and API-key alternative and saves without a key", async () => {
+  await mount("paid");
+  const row = [...win.document.querySelectorAll(".provider-catalog-row-wrap > button")]
+    .find(el => el.textContent?.includes("StepCode CLI"));
+  expect(row).toBeDefined();
+  await act(async () => { (row as unknown as HTMLButtonElement).click(); });
+  expect(warning()?.textContent).toContain("StepCode");
+  expect(warning()?.textContent).toContain("Step Plan");
+  expect(warning()?.textContent).toContain("step --sdk-stdio");
+  expect(warning()?.textContent).toContain("stepfun");
+  expect(warning()?.textContent).not.toContain("anthropic-apikey");
+  expect(win.document.querySelector('input[type="password"]')).toBeNull();
+
+  const addButton = [...win.document.querySelectorAll("button.btn-primary")]
+    .find(el => el.textContent === "Add provider") as unknown as HTMLButtonElement;
+  await act(async () => { addButton.click(); await new Promise(r => setTimeout(r, 20)); });
+  expect(posted).toHaveLength(1);
+  expect(posted[0]).toMatchObject({ name: "step-cli", provider: { adapter: "step-cli" } });
+  expect(posted[0]?.provider).not.toHaveProperty("apiKey");
+  expect(added).toEqual(["step-cli"]);
 });
 
 test("selecting claude-cli shows the subscription warning above Add, and Add still saves", async () => {
