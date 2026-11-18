@@ -76,6 +76,7 @@ import { classifyAntigravityRefusal } from "../../adapters/antigravity-refusal";
 import { normalizeFinalKiroHttpError } from "../../adapters/kiro-retry";
 import { noteKiroMonthlyRefusal } from "../../providers/kiro-usage";
 import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
+import { isXaiGrokOAuth, isXaiLegacyPrivacyError, xaiPrivacyModeRefusal } from "../../providers/xai-privacy-mode";
 import { isXaiResponsesDestination, resolveProviderTransport } from "../../providers/xai-transport";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
@@ -1868,12 +1869,13 @@ export async function prepareAdapterExchange(
     if (!upstreamResponse.ok) {
       if (route.providerName === "kiro")
         upstreamResponse = await normalizeFinalKiroHttpError(upstreamResponse, upstream.signal);
+      const grokOAuth = isXaiGrokOAuth(route.providerName, route.provider);
       if (options.comboAttempt) {
         // No pre-read guard: `consumeComboFailure` -> `readBoundedResponseBody` reads
         // `response.body` itself with the abort signal threaded through, and the combo
         // contract is that this body's getter is touched exactly once. A guard here would be
         // a second `.body` access for no gain, since the bounded reader owns settlement.
-        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal, Date.now(), logCtx, !isProxyError(upstreamResponse))
+        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal, Date.now(), logCtx, !isProxyError(upstreamResponse), grokOAuth)
           .finally(cleanupUpstreamAbort);
         options.onConsumedComboFailure?.(failure);
         return failure.response;
@@ -1888,6 +1890,7 @@ export async function prepareAdapterExchange(
       } finally {
         cleanupUpstreamAbort();
       }
+      if (grokOAuth && isXaiLegacyPrivacyError(upstreamResponse.status, errorText)) return xaiPrivacyModeRefusal(logCtx);
       // The provider's own body (not a proxy-normalized one) may name its closed error class (#8446).
       if (!isProxyError(upstreamResponse)) recordUpstreamProviderErrorDetail(logCtx, upstreamResponse.status, errorText, upstreamResponse);
       if (upstreamResponse.status === 413) {

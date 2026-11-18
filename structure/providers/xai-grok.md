@@ -71,6 +71,19 @@ API) and the 2026-09-30 probe confirmed identical capabilities
 `modelSupportsServiceTier`, and it is not published as a row of its own; see "Grok 4.7 Fast lane" below.
 Regression coverage: `tests/providers/xai/grok-47-build-fast-metadata.test.ts`.
 
+### Legacy privacy mode 403
+
+`src/providers/xai-privacy-mode.ts` recognizes HTTP 403 with the exact
+`[WKE=privacy-mode:legacy]` marker in a bounded JSON error from the built-in xAI OAuth lane.
+The fixed guidance tells the user to switch from Legacy (no storage) to Privacy Mode.
+Chat and Responses preserve the 403 permission envelope and record an upstream account-policy
+refusal. The refusal keeps the same account, leaves pause and reauthentication state intact, and
+ends the combo turn before another member is sent. Wrapped, bare-string and provider-test error
+bodies all use proxy-owned copy when the marker matches. Catalog discovery logs the guidance
+alongside its normal fallback. The billing probe logs the same guidance, drops the stale quota
+row and stops before the monthly fallback when the weekly endpoint proves the account setting.
+Coverage: `tests/server/server-xai-oauth-401-replay.test.ts`.
+
 ### Policy-refusal 403
 
 xAI sometimes refuses a turn with HTTP 403 and a bare refusal sentence (`I can't help with that

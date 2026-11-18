@@ -75,6 +75,14 @@ El `api_key` insertado en la entrada del proveedor ocupa el primer lugar en la c
 
 <a id="manual-recipe-without-auto-registration"></a>
 
+## Error 403 de OAuth de xAI con el modo de privacidad Legacy
+
+Si `ocx provider test xai` o una solicitud a Grok indica que la cuenta usa **Legacy (no storage)**,
+abre los ajustes de privacidad de xAI/Grok y selecciona **Privacy Mode**. Después, vuelve a
+ejecutar `ocx provider test xai`. Este ajuste también bloquea la detección de modelos y las
+consultas de cuota. El registro del servicio OpenCodex muestra las mismas indicaciones. Puedes
+seguir usando la sesión OAuth actual.
+
 ## Receta manual (sin registro automático)
 
 Si gestionas `~/.grok/config.toml` por tu cuenta, o si opencodex escucha en una dirección que no es de loopback con el listener de loopback desactivado, añade un bloque `[model_providers.opencodex]` y tablas para cada modelo que hagan referencia a él, fuera de los marcadores `# >>> opencodex managed block`:

@@ -1,15 +1,21 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { handleProviderCommand } from "../../src/cli/provider";
+import { fetchProviderModels } from "../../src/codex/catalog/provider-models";
+import { fetchProviderQuotaReports } from "../../src/providers/quota";
 import { saveConfig } from "../../src/config";
 import { XAI_OAUTH_DISCOVERY_URL } from "../../src/oauth/xai";
-import { saveCredential } from "../../src/oauth/store";
+import { getAccountSet, saveCredential } from "../../src/oauth/store";
 import { XAI_GROK_CLI_BASE_URL } from "../../src/providers/xai-transport";
 import { readUsageEntries, usageLogPath } from "../../src/usage/log";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
+import { handleManagementAPI } from "../../src/server/management-api";
+import { ManagementRequest } from "../helpers/management-auth";
+import { withStubbedProviderFetch } from "../helpers/catalog-provider-fetch";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const TOKEN_ENDPOINT = "https://auth.x.ai/oauth/token";
@@ -422,6 +428,174 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
       expect(attemptsByBearer.get("Bearer fresh-access")).toBe(2);
     } finally {
       await server.stop(true);
+    }
+  });
+});
+
+describe("xAI OAuth Legacy privacy settings refusal", () => {
+  const guidance = "The xAI account uses Legacy (no storage), which blocks Grok Build. Switch the xAI account to Privacy Mode in the xAI/Grok privacy settings, then retry.";
+  const marker = "[WKE=privacy-mode:legacy]";
+  const privateDetail = "upstream-only fixture detail";
+
+  function refuseAt(upstreamPath: string, error = `${privateDetail} ${marker}`): string[] {
+    const sends: string[] = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.origin === new URL(XAI_GROK_CLI_BASE_URL).origin) {
+        const path = url.pathname + url.search;
+        if (path === upstreamPath || path === "/v1/billing") {
+          sends.push(path);
+          expect(new Headers(init?.headers).get("authorization")).toBe("Bearer rejected-access");
+          return Response.json({ error }, { status: 403 });
+        }
+        if (path === "/v1/models") return Response.json({ data: [{ id: "grok-4.5" }] });
+      }
+      if (url.protocol === "http:" && url.hostname === "127.0.0.1") return originalFetch(input, init);
+      throw new Error("unexpected outbound request in xAI privacy settings fixture");
+    }) as typeof fetch;
+    return sends;
+  }
+
+  test.each([
+    ["native Chat Completions", "/v1/chat/completions", "/v1/chat/completions", false],
+    ["translated Responses", "/v1/responses", "/v1/chat/completions", false],
+    ["native Responses", "/v1/responses", "/v1/responses", true],
+    ["translated Chat Completions", "/v1/chat/completions", "/v1/responses", true],
+  ] as const)("%s reports fixed privacy guidance without changing account health", async (_, downstream, upstream, nativeResponses) => {
+    await saveCredential("xai", {
+      access: "spare-access",
+      refresh: "spare-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "spare-account",
+      source: "oauth",
+    });
+    await seedOAuth();
+    const config = xaiConfig();
+    const provider = config.providers.xai!;
+    if (!nativeResponses) {
+      provider.modelAdapters = { "grok-4.5": "openai-chat" };
+      provider.xaiResponsesDefaultVersion = 1;
+    }
+    provider.accountAutoPause = { enabled: true, consecutiveFailures: 1 };
+    provider.oauthAccountFailover = { enabled: true };
+    saveConfig(config);
+    const accountBefore = getAccountSet("xai");
+    expect(accountBefore?.accounts).toHaveLength(2);
+    const sends = refuseAt(upstream);
+    const server = startServer(0);
+    try {
+      const result = downstream === "/v1/responses" ? await post(server) : await originalFetch(new URL(downstream, server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "xai/grok-4.5", messages: [{ role: "user", content: "hello" }], stream: false }),
+      });
+      expect(result.status).toBe(403);
+      const body = await result.text();
+      expect(JSON.parse(body).error).toMatchObject({ message: guidance, type: "permission_error", code: "permission_denied" });
+      expect(body).not.toContain(privateDetail);
+      expect(body).not.toContain(marker);
+      expect(sends).toEqual([upstream]);
+      expect(getAccountSet("xai")).toEqual(accountBefore);
+      expect(readUsageEntries().at(-1)?.failureCause).toBe("policy-refusal");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("a Grok privacy refusal ends a combo before dispatching another target", async () => {
+    await seedOAuth();
+    const config = xaiConfig();
+    config.providers.fixture = { adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key", models: ["fallback"] };
+    config.combos = { gated: { strategy: "failover", targets: [
+      { provider: "xai", model: "grok-4.5" }, { provider: "fixture", model: "fallback" },
+    ] } };
+    saveConfig(config);
+    const sends = refuseAt("/v1/responses");
+    const server = startServer(0);
+    try {
+      const result = await originalFetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "combo/gated", input: "hello", stream: false }),
+      });
+      expect(result.status).toBe(403);
+      expect((await result.json()).error?.message).toBe(guidance);
+      expect(sends).toEqual(["/v1/responses"]);
+      expect(readUsageEntries().at(-1)?.attempts).toHaveLength(1);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("ocx provider test xai prints privacy guidance for the exact marker", async () => {
+    await seedOAuth();
+    const config = withStubbedProviderFetch(xaiConfig());
+    saveConfig(config);
+    const previousExit = process.exitCode ?? 0;
+    const stderr = spyOn(console, "error").mockImplementation(() => {});
+    const stdout = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      refuseAt("/v1/models");
+      const run = () => handleProviderCommand(["test", "xai"], {
+        baseUrl: "http://127.0.0.1",
+        fetchImpl: (async (input, init) => {
+          const url = new URL(String(input));
+          const response = await handleManagementAPI(new ManagementRequest(url, init), url, config);
+          if (!response) throw new Error("fixture management route not found");
+          return response;
+        }) as typeof fetch,
+      });
+      const printed = () => [...stdout.mock.calls, ...stderr.mock.calls].flat().join("\n");
+      await run();
+      expect(process.exitCode).toBe(1);
+      expect(printed()).toContain(guidance);
+      expect(printed()).not.toContain(privateDetail);
+      stdout.mockClear();
+      stderr.mockClear();
+      refuseAt("/v1/models", "Legacy (no storage). Switch to Privacy Mode. [WKE=privacy-mode:legacy-other]");
+      await run();
+      expect(printed()).toContain("upstream model discovery returned 403");
+      expect(printed()).not.toContain(guidance);
+    } finally {
+      process.exitCode = previousExit;
+      stdout.mockRestore();
+      stderr.mockRestore();
+    }
+  });
+
+  test("catalog discovery logs fixed guidance and retains its configured fallback", async () => {
+    await seedOAuth();
+    const config = withStubbedProviderFetch(xaiConfig());
+    saveConfig(config);
+    const sends = refuseAt("/v1/models");
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const models = await fetchProviderModels("xai", config.providers.xai!, 0);
+      expect(sends).toEqual(["/v1/models"]);
+      expect(models.map(model => model.id)).toContain("grok-4.5");
+      const printed = warn.mock.calls.flat().join("\n");
+      expect(printed).toContain(guidance);
+      expect(printed).not.toContain(privateDetail);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("the xAI quota probe reports the settings refusal and skips the monthly fallback", async () => {
+    await seedOAuth();
+    const config = xaiConfig();
+    saveConfig(config);
+    const sends = refuseAt("/v1/billing?format=credits");
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const snapshot = await fetchProviderQuotaReports(config, true);
+      expect(snapshot.reports).toEqual([]);
+      const printed = warn.mock.calls.flat().join("\n");
+      expect(printed).toContain(guidance);
+      expect(printed).not.toContain(privateDetail);
+      expect(sends).toEqual(["/v1/billing?format=credits"]);
+    } finally {
+      warn.mockRestore();
     }
   });
 });

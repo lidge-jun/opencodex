@@ -124,6 +124,13 @@ these models, so turns against opencodex need no additional Grok login. Keep you
 `grok login` / `XAI_API_KEY` setup for native grok models and any harness features that
 contact xAI directly.
 
+## xAI OAuth returns 403 in Legacy privacy mode
+
+If `ocx provider test xai` or a Grok turn tells you the account uses **Legacy (no storage)**, open
+the xAI/Grok privacy settings and switch the account to **Privacy Mode**. Then run
+`ocx provider test xai` again. This setting also blocks model discovery and quota checks, which
+report the same guidance in the OpenCodex service log. You can keep your existing OAuth login.
+
 ## Manual recipe (without auto-registration)
 
 If you manage `~/.grok/config.toml` yourself — or opencodex is on a non-loopback bind with the

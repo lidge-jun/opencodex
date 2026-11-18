@@ -4,6 +4,7 @@ import { comboLogLabel, comboTargetLogLabel } from "../../combos/resolve";
 import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
 import { carryProxyErrorContext, hasProxyErrorMessage, markProxyError } from "../../lib/client-error-body";
+import { isXaiPrivacyModeRefusal } from "../../providers/xai-privacy-mode";
 import { classifyUpstreamCondition } from "../../lib/upstream-condition";
 import { effectiveAzureOutputBudget } from "../../adapters/azure";
 import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
@@ -1490,7 +1491,7 @@ export async function executeComboResponses(
     }
     // A non-replayable failure (the answer to a spent ambiguous-reset replacement) may follow a
     // send that already ran the turn, so no later target may receive it, whatever its status says.
-    const failureDecision = failure.nonReplayable || spentReplacement
+    const failureDecision = failure.nonReplayable || spentReplacement || isXaiPrivacyModeRefusal(failure.response)
       ? "stop"
       : isPolicyCandidateRefusal(failure.response) ? "hop"
       : comboFailureDecision(failure.response.status, failure.classificationText, {

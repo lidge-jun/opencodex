@@ -1,3 +1,4 @@
+import { isXaiGrokOAuth, readXaiLegacyPrivacyError, XAI_LEGACY_PRIVACY_MESSAGE } from "../../providers/xai-privacy-mode";
 import { fetchCopilotAutoModels, copilotPickerModels, copilotRequiresAuto } from "../../providers/github-copilot-auto";
 import { resolveGithubCopilotTransport } from "../../providers/github-copilot-transport";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
@@ -788,9 +789,11 @@ export async function fetchProviderModelsWithAuth(
     }
     if (!res.ok) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "http", httpStatus: res.status });
+      const privacyRefusal = isXaiGrokOAuth(name, prov) && await readXaiLegacyPrivacyError(res);
       if (shouldLog) {
+        const guidance = privacyRefusal ? ` ${XAI_LEGACY_PRIVACY_MESSAGE}` : "";
         console.warn(
-          `[opencodex] Provider model discovery for "${name}" failed with HTTP ${res.status} [urlClass=${urlClass}, fallback=${fallback}].`,
+          `[opencodex] Provider model discovery for "${name}" failed with HTTP ${res.status} [urlClass=${urlClass}, fallback=${fallback}].${guidance}`,
         );
       }
       return observed(models, "degraded");
