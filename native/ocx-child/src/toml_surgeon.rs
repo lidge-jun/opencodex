@@ -1,6 +1,11 @@
+use std::ops::Range;
+use std::path::{Component, Path, PathBuf};
+
 use serde::{Deserialize, Serialize};
+use toml_edit::Document;
 
 use crate::codex_settings::HomeCodexSettings;
+use crate::state::CATALOG_FILENAME;
 
 pub const OCX_SECTION_MARKER: &str = "# Auto-injected by opencodex";
 pub const OCX_ROUTING_MARKER_LINE: &str = "# Auto-injected by opencodex (undo: ocx restore)";
@@ -330,11 +335,6 @@ fn root_end_index<S: AsRef<str>>(lines: &[S], structural: &[bool]) -> usize {
         .unwrap_or(lines.len())
 }
 
-fn is_opencodex_catalog_path(path: &str) -> bool {
-    let norm = path.replace('\\', "/");
-    norm.rsplit('/').next() == Some("opencodex-catalog.json")
-}
-
 /// Mirrors `externalCodexModelProvider` (`src/codex/inject/config-toml.ts:30-45`).
 pub fn external_codex_model_provider(content: &str) -> Option<String> {
     let lf = apply_eol(content, "\n");
@@ -395,6 +395,7 @@ pub fn external_codex_model_provider(content: &str) -> Option<String> {
 
 /// Checks for user-owned unmarked root routing keys before first attach so `ocx-child` fails closed.
 pub fn detect_unowned_root_routing_conflict(content: &str) -> Result<(), String> {
+    let content = content.strip_prefix('\u{feff}').unwrap_or(content);
     if let Some(ext) = external_codex_model_provider(content) {
         return Err(format!(
             "ocx-child-conflict:child_external_provider_conflict: attach refused: an external Codex model_provider ({ext}) owns config.toml"
@@ -426,18 +427,6 @@ pub fn detect_unowned_root_routing_conflict(content: &str) -> Result<(), String>
                 Ok(None) => {}
                 Err(e) => return Err(format!("attach refused: {e}")),
             }
-        }
-        match parse_single_line_string_assignment(line, "model_catalog_json") {
-            Ok(Some(existing_path)) => {
-                if !is_opencodex_catalog_path(&existing_path) {
-                    return Err(
-                        "ocx-child-conflict:child_external_provider_conflict: attach refused: user-owned model_catalog_json already exists in config.toml"
-                            .to_owned(),
-                    );
-                }
-            }
-            Ok(None) => {}
-            Err(e) => return Err(format!("attach refused: {e}")),
         }
     }
     Ok(())
@@ -624,57 +613,95 @@ fn ensure_root_web_search(
     Ok((next, Some("disabled".to_owned()), replaced))
 }
 
-fn set_root_catalog_path(content_lf: &str, catalog_path: &str) -> String {
-    let key_line = format!(
-        "model_catalog_json = {}",
-        toml_escape_basic_string(catalog_path)
-    );
-    let mut lines: Vec<String> = content_lf.split('\n').map(str::to_owned).collect();
-    let (structural, _) = mark_structural_lines(&lines);
-    let root_end = root_end_index(&lines, &structural);
-    let mut owned_indices = Vec::new();
-    for (i, line) in lines[..root_end].iter().enumerate() {
-        if !structural[i] {
-            continue;
-        }
-        if let Ok(Some(existing)) = parse_single_line_string_assignment(line, "model_catalog_json")
-            && is_opencodex_catalog_path(&existing)
-        {
-            owned_indices.push(i);
-        }
+#[cfg(windows)]
+fn catalog_path_spelling(path: &str) -> PathBuf {
+    let path = path.replace('/', "\\").to_lowercase();
+    // canonicalize() returns extended-length paths. Compare ordinary drive and UNC forms too.
+    if let Some(unc) = path.strip_prefix(r"\\?\unc\") {
+        return PathBuf::from(format!(r"\\{unc}"));
     }
-    if let Some(&first) = owned_indices.first() {
-        lines[first] = key_line;
-        let dup: std::collections::HashSet<usize> = owned_indices.into_iter().skip(1).collect();
-        return lines
-            .into_iter()
-            .enumerate()
-            .filter_map(|(i, l)| (!dup.contains(&i)).then_some(l))
-            .collect::<Vec<_>>()
-            .join("\n");
+    if let Some(disk) = path.strip_prefix(r"\\?\")
+        && disk.as_bytes().get(1..3) == Some(b":\\")
+    {
+        return PathBuf::from(disk);
     }
-    insert_root_lines(content_lf, &[key_line])
+    PathBuf::from(path)
 }
 
-fn strip_opencodex_catalog_path(content_lf: &str) -> String {
-    let lines: Vec<&str> = content_lf.split('\n').collect();
-    let (structural, _) = mark_structural_lines(&lines);
-    let root_end = root_end_index(&lines, &structural);
-    lines
-        .into_iter()
-        .enumerate()
-        .filter_map(|(i, l)| {
-            if i < root_end
-                && structural[i]
-                && let Ok(Some(p)) = parse_single_line_string_assignment(l, "model_catalog_json")
-                && is_opencodex_catalog_path(&p)
-            {
-                return None;
+#[cfg(not(windows))]
+fn catalog_path_spelling(path: &str) -> PathBuf {
+    PathBuf::from(path)
+}
+
+fn normalize_absolute_path(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
             }
-            Some(l)
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+            part => normalized.push(part.as_os_str()),
+        }
+    }
+    normalized
+}
+
+fn owns_catalog_binding(binding: &str, target: &Path) -> bool {
+    let Some(target) = target.to_str().map(catalog_path_spelling) else {
+        return false;
+    };
+    let Some(home) = target.parent() else {
+        return false;
+    };
+    let binding = home.join(catalog_path_spelling(binding));
+    binding.is_absolute() && normalize_absolute_path(&binding) == normalize_absolute_path(&target)
+}
+
+fn parse_config(content: &str) -> Result<Document<&str>, String> {
+    // The parser's detailed error can include source lines from a private config.
+    Document::parse(content).map_err(|_| "config.toml contains invalid TOML".to_owned())
+}
+
+fn catalog_assignment(
+    content: &str,
+    target: &Path,
+) -> Result<Option<(bool, Range<usize>)>, String> {
+    let document = parse_config(content)?;
+    let Some(item) = document.get("model_catalog_json") else {
+        return Ok(None);
+    };
+    let value = item
+        .as_str()
+        .ok_or("model_catalog_json must be a string in config.toml")?;
+    let span = item
+        .span()
+        .ok_or("missing model_catalog_json source span")?;
+    Ok(Some((owns_catalog_binding(value, target), span)))
+}
+
+fn set_root_catalog_path(mut content: String, target: &Path) -> Result<String, String> {
+    let value = toml_escape_basic_string(CATALOG_FILENAME);
+    match catalog_assignment(&content, target)? {
+        Some((true, span)) => content.replace_range(span, &value),
+        Some((false, _)) => return Err(
+            "ocx-child-conflict:child_external_provider_conflict: user-owned model_catalog_json already exists in config.toml"
+                .to_owned(),
+        ),
+        None => content = insert_root_lines(&content, &[format!("model_catalog_json = {value}")]),
+    }
+    Ok(content)
+}
+
+fn strip_owned_catalog_path(mut content: String, target: &Path) -> Result<String, String> {
+    if let Some((true, span)) = catalog_assignment(&content, target)? {
+        let start = content[..span.start].rfind('\n').map_or(0, |i| i + 1);
+        let end = content[span.end..]
+            .find('\n')
+            .map_or(content.len(), |i| span.end + i + 1);
+        content.replace_range(start..end, "");
+    }
+    Ok(content)
 }
 
 fn upsert_table_bool(
@@ -957,10 +984,14 @@ fn strip_features_ledger(
 pub fn apply_design_b_config(
     raw_input: &str,
     listen_port: u16,
-    catalog_path: &str,
+    catalog_target: &Path,
     settings: &HomeCodexSettings,
     prior_ledger: Option<&ChildInjectedLedger>,
 ) -> Result<(String, ChildInjectedLedger), String> {
+    let (bom, raw_input) = match raw_input.strip_prefix('\u{feff}') {
+        Some(body) => ("\u{feff}", body),
+        None => ("", raw_input),
+    };
     if let Some(ext) = external_codex_model_provider(raw_input) {
         return Err(format!("external model_provider ({ext}) owns config.toml"));
     }
@@ -986,8 +1017,7 @@ pub fn apply_design_b_config(
         prior_ledger.and_then(|l| l.injected_web_search.as_deref()),
         prior_ledger.and_then(|l| l.replaced_user_web_search_line.as_deref()),
     )?;
-    lf = ws_lf;
-    lf = set_root_catalog_path(&lf, catalog_path);
+    lf = set_root_catalog_path(ws_lf, catalog_target)?;
     lf = insert_root_lines(
         &lf,
         &[
@@ -1030,7 +1060,7 @@ pub fn apply_design_b_config(
     let ledger = ChildInjectedLedger {
         openai_base_url: Some(base_url.clone()),
         experimental_realtime_ws_base_url: Some(base_url),
-        model_catalog_json: Some(catalog_path.to_owned()),
+        model_catalog_json: Some(CATALOG_FILENAME.to_owned()),
         injected_web_search: wrote_ws,
         replaced_user_web_search_line: replaced_ws,
         wrote_fast_mode: wrote_fast,
@@ -1039,16 +1069,22 @@ pub fn apply_design_b_config(
         prior_user_multi_agent_v2_line: prior_v2_line,
         wrote_subagent_defaults: wrote_sub,
     };
-    Ok((apply_eol(&lf, eol), ledger))
+    parse_config(&lf)?;
+    Ok((format!("{bom}{}", apply_eol(&lf, eol)), ledger))
 }
 
 /// Tier-2 surgical value-matched strip surviving `#1798` comment-stripping rewrites.
 pub fn surgical_detach_config(
     raw_current: &str,
     ledger: &ChildInjectedLedger,
+    catalog_target: &Path,
 ) -> Result<Option<String>, String> {
+    let (bom, raw_current) = match raw_current.strip_prefix('\u{feff}') {
+        Some(body) => ("\u{feff}", body),
+        None => ("", raw_current),
+    };
     let eol = dominant_eol(raw_current);
-    let lf = apply_eol(raw_current, "\n");
+    let lf = strip_owned_catalog_path(apply_eol(raw_current, "\n"), catalog_target)?;
     // Validate every root managed key line parses cleanly; fail closed on corrupt spans.
     let lines: Vec<&str> = lf.split('\n').collect();
     let (structural, unclosed) = mark_structural_lines(&lines);
@@ -1064,7 +1100,6 @@ pub fn surgical_detach_config(
         for managed_key in [
             "openai_base_url",
             "experimental_realtime_ws_base_url",
-            "model_catalog_json",
             "web_search",
         ] {
             if let Some((k, _)) = parse_key_value_line(line)
@@ -1097,7 +1132,6 @@ pub fn surgical_detach_config(
         ledger.openai_base_url.as_deref(),
         ledger.experimental_realtime_ws_base_url.as_deref(),
     );
-    work = strip_opencodex_catalog_path(&work);
     let (ws_restored, _, _) = ensure_root_web_search(
         &work,
         false,
@@ -1120,7 +1154,8 @@ pub fn surgical_detach_config(
         if !work.ends_with('\n') {
             work.push('\n');
         }
-        Ok(Some(apply_eol(&work, eol)))
+        parse_config(&work)?;
+        Ok(Some(format!("{bom}{}", apply_eol(&work, eol))))
     }
 }
 

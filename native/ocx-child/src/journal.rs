@@ -345,15 +345,17 @@ pub fn apply_attach_or_sync_with_fault(
         .map_err(|e| format!("cannot resolve OpenCodex home: {e}"))?;
     let canonical_codex = fs::canonicalize(&paths.codex_home)
         .map_err(|e| format!("cannot resolve Codex home: {e}"))?;
-    let catalog_path_str = canonical_codex
-        .join(CATALOG_FILENAME)
+    let default_catalog = canonical_codex.join(CATALOG_FILENAME);
+    let catalog_path_str = default_catalog
         .to_str()
         .ok_or("canonical catalog path is not UTF-8")?
         .to_owned();
     let (next_cfg_text, next_ledger) = apply_design_b_config(
         &current_cfg_text,
         listen_port,
-        CATALOG_FILENAME,
+        existing_journal
+            .as_ref()
+            .map_or(default_catalog.as_path(), |j| Path::new(&j.catalog_path)),
         settings,
         existing_journal.as_ref().map(|j| &j.ledger),
     )?;
@@ -806,8 +808,8 @@ fn offline_detach_inner(
             } else {
                 let text = std::str::from_utf8(&bytes)
                     .map_err(|_| DetachError::Conflict("config.toml is not UTF-8".to_owned()))?;
-                let stripped =
-                    surgical_detach_config(text, &journal.ledger).map_err(DetachError::Conflict)?;
+                let stripped = surgical_detach_config(text, &journal.ledger, catalog_path)
+                    .map_err(DetachError::Conflict)?;
                 match stripped {
                     Some(updated) => {
                         guard

@@ -8,9 +8,9 @@ import { assertCodexHomeOwner, codexHomeIsAbsent, CODEX_HOME_JOURNAL_FILE, Codex
 import { hasInjectedCodexRouting } from "./injected-marker";
 import { ConfigWriteContentChanged, configWriteLockFailureMessage, withConfigWriteLockHeld } from "./config-write-lock";
 import type { LockHandle } from "./config-write-lock";
-import { CODEX_HOME, CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, readRootTomlString, resolveCodexCatalogPath, sameCodexCatalogPath } from "./paths";
+import { CODEX_HOME, CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, resolveCodexCatalogPath } from "./paths";
 import { transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "./subagent-defaults";
-import { appendInjectedRootHistory, captureJournalConfigFields, parseInjectedRootHistory, restoreJournalConfigFields, snapshotDisconnectRecovery, type InjectedRootHistory, type InjectedRootKey, type JournalConfigFields } from "./journal-config-restore";
+import { appendInjectedRootHistory, captureJournalConfigFields, ownedJournalCatalogBinding, parseInjectedRootHistory, restoreJournalConfigFields, snapshotDisconnectRecovery, type InjectedRootHistory, type InjectedRootKey, type JournalConfigFields } from "./journal-config-restore";
 
 /**
  * Exported so that anything reasoning ABOUT the journal points at the journal.
@@ -339,15 +339,7 @@ export function journaledInjectedCatalogPath(): string | null {
 /** Config ownership is distinct from the catalog file selected for an injection. */
 export function journaledOwnedCatalogBinding(options: { readOnly?: boolean } = {}): string | null {
   const journal = readJournal(options.readOnly !== true);
-  if (!journal) return null;
-  if (journal.injectedCatalogBinding !== undefined) {
-    return typeof journal.injectedCatalogBinding === "string" ? journal.injectedCatalogBinding : null;
-  }
-  // Older journals recorded the artifact path even when the original config selected it.
-  const path = journal.injectedCatalogPath;
-  if (typeof path !== "string" || !path) return null;
-  const original = readRootTomlString(Buffer.from(journal.originalConfig, "base64").toString("utf8"), "model_catalog_json");
-  return original && sameCodexCatalogPath(CODEX_CONFIG_PATH, original, path) ? null : path;
+  return journal ? ownedJournalCatalogBinding(journal) : null;
 }
 
 /**

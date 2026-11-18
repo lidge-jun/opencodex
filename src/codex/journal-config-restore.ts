@@ -3,7 +3,7 @@ import { chmodSync, closeSync, fsyncSync, mkdtempSync, openSync, writeFileSync }
 import { join } from "node:path";
 import { hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import { isOcxRoutingMarkerLine } from "./injected-marker";
-import { CODEX_CONFIG_PATH, sameCodexCatalogPath } from "./paths";
+import { CODEX_CONFIG_PATH, defaultCodexCatalogPathForConfig, sameCodexCatalogPath } from "./paths";
 import { transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "./subagent-defaults";
 import { rootAssignmentKey, rootSourceLines, sourceAssignment, sourceText } from "./toml-source-lines";
 
@@ -143,12 +143,24 @@ interface Ownership {
   injectedRootHistory?: unknown;
 }
 
+/** Older records selected a catalog artifact even when the operator owned the binding. */
+export function ownedJournalCatalogBinding(journal: Ownership): string | null {
+  if (journal.injectedCatalogBinding !== undefined) {
+    return typeof journal.injectedCatalogBinding === "string" && journal.injectedCatalogBinding
+      ? journal.injectedCatalogBinding : null;
+  }
+  const path = journal.injectedCatalogPath;
+  return typeof path === "string" && path
+    && sameCodexCatalogPath(CODEX_CONFIG_PATH, path, defaultCodexCatalogPathForConfig(CODEX_CONFIG_PATH))
+    ? path : null;
+}
+
 function recordedValues(journal: Ownership): Map<string, unknown> {
   const values = new Map<string, unknown>();
   for (const [key, value] of [
     ["openai_base_url", journal.injectedOpenaiBaseUrl],
     ["experimental_realtime_ws_base_url", journal.injectedRealtimeWsBaseUrl],
-    ["model_catalog_json", journal.injectedCatalogBinding === undefined ? journal.injectedCatalogPath : journal.injectedCatalogBinding],
+    ["model_catalog_json", ownedJournalCatalogBinding(journal)],
     ["web_search", journal.injectedRootWebSearch],
   ] as const) if (typeof value === "string") values.set(key, value);
   return values;
@@ -168,6 +180,10 @@ export function restoreJournalConfigFields(current: string, original: string, jo
     if (!defaults.ok) return null;
     current = defaults.content;
     const now = fields(current), before = fields(original);
+    const catalog = now.get("model_catalog_json");
+    const ownedCatalog = ownedJournalCatalogBinding(journal);
+    const canRestoreCatalog = ownedCatalog !== null && (journal.injectedCatalogBinding !== undefined
+      || !catalog || matchesInjectedField("model_catalog_json", catalog.value, ownedCatalog));
     if (journal.replacedRootWebSearch) {
       const replaced = fields(journal.replacedRootWebSearch).get("web_search");
       if (!replaced) return null;
@@ -176,6 +192,7 @@ export function restoreJournalConfigFields(current: string, original: string, jo
     const expected = new Map<string, unknown>();
     if (journal.injectedConfigFields) {
       for (const [key, text] of Object.entries(journal.injectedConfigFields)) {
+        if (key === "model_catalog_json" && !canRestoreCatalog) continue;
         if (text === null) { expected.set(key, undefined); continue; }
         const parsed = fields(text);
         const field = parsed.get(key);
@@ -210,11 +227,11 @@ export function restoreJournalConfigFields(current: string, original: string, jo
     const append: string[] = [];
     const eol = lines.find(line => line.eol)?.eol || "\n";
     for (const key of new Set([...now.keys(), ...expected.keys()])) {
+      if (key === "model_catalog_json" && !canRestoreCatalog) continue;
       const present = now.get(key), prior = before.get(key);
       if (isDeepStrictEqual(present?.value, prior?.value)) continue;
       if (!expected.has(key)) {
-        if (key === "model" || key.startsWith("agents.") || key === "web_search"
-          || key === "model_catalog_json" && journal.injectedCatalogBinding === null) continue;
+        if (key === "model" || key.startsWith("agents.") || key === "web_search") continue;
         return null;
       }
       const injected = expected.get(key);

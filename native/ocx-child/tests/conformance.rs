@@ -31,6 +31,8 @@ use ocx_child::toml_surgeon::{
 
 #[test]
 fn detach_preserves_user_edited_web_search_with_managed_marker() {
+    let (_guard, paths, _, _) = homes_fixture();
+    let catalog_target = paths.codex_catalog_path();
     let settings = HomeCodexSettings {
         fast_mode: None,
         multi_agent_mode: None,
@@ -40,13 +42,15 @@ fn detach_preserves_user_edited_web_search_with_managed_marker() {
     let (injected, ledger) = apply_design_b_config(
         "web_search = \"cached\"\n",
         10100,
-        "/tmp/catalog.json",
+        &catalog_target,
         &settings,
         None,
     )
     .unwrap();
     // Unchanged: the journaled injected value is removed and the user's line comes back.
-    let untouched = surgical_detach_config(&injected, &ledger).unwrap().unwrap();
+    let untouched = surgical_detach_config(&injected, &ledger, &catalog_target)
+        .unwrap()
+        .unwrap();
     assert!(untouched.contains("web_search = \"cached\""), "{untouched}");
     assert!(
         !untouched.contains("web_search = \"disabled\""),
@@ -54,7 +58,9 @@ fn detach_preserves_user_edited_web_search_with_managed_marker() {
     );
     let edited = injected.replace("web_search = \"disabled\"", "web_search = \"live\"");
     assert_ne!(edited, injected);
-    let restored = surgical_detach_config(&edited, &ledger).unwrap().unwrap();
+    let restored = surgical_detach_config(&edited, &ledger, &catalog_target)
+        .unwrap()
+        .unwrap();
     assert!(restored.contains("web_search = \"live\""), "{restored}");
     assert!(!restored.contains("web_search = \"cached\""), "{restored}");
 }
@@ -871,6 +877,162 @@ fn attach_writes_relative_catalog_binding_and_journals_the_absolute_file() {
         journal.ledger.model_catalog_json.as_deref(),
         Some("opencodex-catalog.json")
     );
+}
+
+#[test]
+#[cfg(windows)]
+fn sync_accepts_case_and_separator_variants_of_the_windows_catalog_target() {
+    let (_guard, paths, _, settings) = homes_fixture();
+    let sync = || {
+        apply_attach_or_sync(
+            &owned(&paths),
+            "lnk_0123456789abcdef",
+            "link:t",
+            10100,
+            br#"{"models":[{"slug":"home"}]}"#,
+            &settings,
+        )
+    };
+    sync().unwrap();
+    let config_path = paths.codex_config_path();
+    let journal = read_journal(&paths.journal_file).unwrap().unwrap();
+    let target = journal.catalog_path.replace('\\', "/").to_ascii_uppercase();
+    let ordinary = if let Some(unc) = target.strip_prefix("//?/UNC/") {
+        format!("//{unc}")
+    } else {
+        target.strip_prefix("//?/").unwrap_or(&target).to_owned()
+    };
+    for alternate in [r".\OPENCODEX-CATALOG.JSON", &target, &ordinary] {
+        fs::write(
+            &config_path,
+            format!(
+                "model_catalog_json = {}\n",
+                toml_escape_basic_string(alternate)
+            ),
+        )
+        .unwrap();
+        sync().unwrap();
+        let config = fs::read_to_string(&config_path).unwrap();
+        let bindings: Vec<_> = config
+            .lines()
+            .filter(|line| line.starts_with("model_catalog_json"))
+            .collect();
+        assert_eq!(
+            bindings,
+            [r#"model_catalog_json = "opencodex-catalog.json""#]
+        );
+    }
+    fs::write(
+        &config_path,
+        format!(
+            "model_catalog_json = {}\nmodel = 'user'\n",
+            toml_escape_basic_string(&ordinary)
+        ),
+    )
+    .unwrap();
+    assert_eq!(
+        offline_detach(&detach_guard(&paths), false).unwrap(),
+        DetachOutcome::SurgicalRestore
+    );
+    assert_eq!(fs::read_to_string(config_path).unwrap(), "model = 'user'\n");
+}
+
+#[test]
+fn sync_refuses_conflicting_or_malformed_catalog_bindings_before_publication() {
+    let mut unexpected = Vec::new();
+    for binding in [
+        "model_catalog_json = 'user.json'\n",
+        "model_catalog_json = '../opencodex-catalog.json'\n",
+        "model_catalog_json = 'unterminated\n",
+        "model_catalog_json = 42\n",
+        "model_catalog_json\n",
+        "model_catalog_json.path = 'user.json'\n",
+        "[model_catalog_json]\npath = 'user.json'\n",
+        "model_catalog_json = 'opencodex-catalog.json'\nmodel_catalog_json = 'opencodex-catalog.json'\n",
+    ] {
+        let (_guard, paths, _, settings) = homes_fixture();
+        let sync = |catalog: &[u8]| {
+            apply_attach_or_sync(
+                &owned(&paths),
+                "lnk_0123456789abcdef",
+                "link:t",
+                10100,
+                catalog,
+                &settings,
+            )
+        };
+        sync(br#"{"models":[{"slug":"old"}]}"#).unwrap();
+        fs::write(paths.codex_config_path(), binding).unwrap();
+        let artifacts = [
+            paths.codex_config_path(),
+            paths.codex_catalog_path(),
+            paths.codex_models_cache_path(),
+            paths.catalog_backup_file.clone(),
+            paths.journal_file.clone(),
+        ];
+        let read = || artifacts.each_ref().map(|path| fs::read(path).unwrap());
+        let before = read();
+        let result = sync(br#"{"models":[{"slug":"new"}]}"#);
+        if result.is_ok() || read() != before {
+            unexpected.push(binding);
+        }
+    }
+    assert!(unexpected.is_empty(), "sync published for {unexpected:?}");
+}
+
+#[test]
+fn first_attach_refuses_a_foreign_catalog_with_the_managed_basename() {
+    let (_guard, paths, _, settings) = homes_fixture();
+    let binding = "model_catalog_json = '../opencodex-catalog.json'\n";
+    fs::write(paths.codex_config_path(), binding).unwrap();
+    let result = apply_attach_or_sync(
+        &owned(&paths),
+        "lnk_0123456789abcdef",
+        "link:t",
+        10100,
+        br#"{"models":[{"slug":"home"}]}"#,
+        &settings,
+    );
+    assert!(
+        result
+            .unwrap_err()
+            .contains("ocx-child-conflict:child_external_provider_conflict:")
+    );
+    assert_eq!(
+        fs::read_to_string(paths.codex_config_path()).unwrap(),
+        binding
+    );
+    assert!(!paths.journal_file.exists());
+    assert!(!paths.codex_catalog_path().exists());
+}
+
+#[test]
+fn surgical_detach_preserves_a_foreign_catalog_with_the_managed_basename() {
+    let (_guard, paths, _, settings) = homes_fixture();
+    apply_attach_or_sync(
+        &owned(&paths),
+        "lnk_0123456789abcdef",
+        "link:t",
+        10100,
+        br#"{"models":[{"slug":"home"}]}"#,
+        &settings,
+    )
+    .unwrap();
+    let binding = "model_catalog_json = '../opencodex-catalog.json' # user catalog\n";
+    let config_path = paths.codex_config_path();
+    let edited = fs::read_to_string(&config_path)
+        .unwrap()
+        .replace("model_catalog_json = \"opencodex-catalog.json\"\n", binding);
+    fs::write(&config_path, edited).unwrap();
+    let foreign = paths.codex_home.join("../opencodex-catalog.json");
+    fs::write(&foreign, b"user catalog").unwrap();
+    assert_eq!(
+        offline_detach(&detach_guard(&paths), false).unwrap(),
+        DetachOutcome::SurgicalRestore
+    );
+    assert_eq!(fs::read_to_string(config_path).unwrap(), binding);
+    assert_eq!(fs::read(foreign).unwrap(), b"user catalog");
+    assert!(!paths.codex_catalog_path().exists());
 }
 
 #[test]

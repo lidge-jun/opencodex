@@ -73,21 +73,48 @@ test("preserves a user's same-named catalog binding and writes its absolute path
   expect(Bun.TOML.parse(readFileSync(configPath, "utf8")).model_catalog_json).toBe("../opencodex-catalog.json");
 });
 
-test.skipIf(process.platform === "win32")("expands a POSIX catalog tilde in the generated profile", () => {
+test.each([false, true])("preserves a user catalog selected by a legacy journal (sync first: %s)", (syncFirst) => {
   const codexHome = join(root, "codex");
-  const home = join(root, "home");
-  mkdirSync(codexHome);
-  mkdirSync(home);
-  const catalogPath = join(home, "models.json");
-  writeFileSync(catalogPath, '{"models":[]}\n');
+  const opencodexHome = join(root, "ocx");
   const configPath = join(codexHome, "config.toml");
-  writeFileSync(configPath, 'model_catalog_json = "~//models.json"\n');
-
-  const { result, stderr } = runInject({ HOME: home, CODEX_HOME: codexHome, OPENCODEX_HOME: join(root, "ocx") });
-  expect(result.success, stderr).toBe(true);
-  const profile = join(codexHome, "opencodex.config.toml");
-  expect(Bun.TOML.parse(readFileSync(profile, "utf8")).model_catalog_json).toBe(catalogPath);
-  expect(Bun.TOML.parse(readFileSync(configPath, "utf8")).model_catalog_json).toBe("~//models.json");
+  const catalogPath = join(codexHome, "custom.json");
+  const original = 'model = "gpt-5.5"\n';
+  const userBinding = '"model_catalog_json" = "./custom.json" # user selection';
+  mkdirSync(codexHome);
+  writeFileSync(configPath, `${original}${userBinding}\n`);
+  writeFileSync(catalogPath, '{"models":[]}\n');
+  const script = `
+    const { JOURNAL_PATH, journaledInjectedCatalogPath } = require("./src/codex/journal");
+    const { readFileSync, writeFileSync } = require("node:fs");
+    const { sameCodexCatalogPath } = require("./src/codex/paths");
+    const { injectCodexConfig, removeCodexConfig } = require("./src/codex/inject");
+    const configPath = ${JSON.stringify(configPath)};
+    const catalogPath = ${JSON.stringify(catalogPath)};
+    writeFileSync(JOURNAL_PATH, JSON.stringify({
+      version: 1,
+      originalConfig: Buffer.from(${JSON.stringify(original)}).toString("base64"),
+      originalProfile: null,
+      injectedCatalogPath: "custom.json",
+    }));
+    const canRecoverFile = sameCodexCatalogPath(configPath, journaledInjectedCatalogPath(), catalogPath);
+    const result = ${syncFirst} ? await injectCodexConfig(10100, {}) : null;
+    const afterSync = readFileSync(configPath, "utf8");
+    const removal = removeCodexConfig();
+    console.log(JSON.stringify({ canRecoverFile, result, afterSync, removal }));
+  `;
+  const spawned = spawnSync(process.execPath, ["--eval", script], {
+    cwd: repoRoot,
+    env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: opencodexHome, CODEX_SQLITE_HOME: "" },
+    encoding: "utf8",
+    timeout: SPAWN_BUDGET_MS - 5_000,
+  });
+  expect(spawned.status, spawned.stderr).toBe(0);
+  const { canRecoverFile, result, afterSync, removal } = JSON.parse(spawned.stdout.trim().split("\n").at(-1)!);
+  expect(canRecoverFile).toBe(true);
+  expect(result?.success ?? !syncFirst, result?.message).toBe(true);
+  expect(afterSync).toContain(userBinding);
+  expect(removal.success, removal.message).toBe(true);
+  expect(readFileSync(configPath, "utf8")).toContain(userBinding);
 });
 
 test("catalog readers honor a quoted root key after multiline TOML data", () => {

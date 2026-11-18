@@ -215,13 +215,23 @@ export function defaultCodexCatalogPathForConfig(configPath: string): string {
   return resolveCodexCatalogPath(configPath, basename(DEFAULT_CATALOG_PATH));
 }
 
-/** Compare resolved catalog paths, including legacy Windows canonical path spelling. */
+/** Compare resolved catalog paths, including legacy Windows spellings and aliases of the config directory. */
 export function sameCodexCatalogPath(configPath: string, left: string, right: string): boolean {
+  const path = catalogPathApi(configPath);
   const a = resolveCodexCatalogPath(configPath, left);
   const b = resolveCodexCatalogPath(configPath, right);
-  return catalogPathApi(configPath) === win32
-    ? win32.toNamespacedPath(a).toLowerCase() === win32.toNamespacedPath(b).toLowerCase()
-    : a === b;
+  const windows = path === win32;
+  const comparable = (value: string) => windows ? win32.toNamespacedPath(value).toLowerCase() : value;
+  if (comparable(a) === comparable(b)) return true;
+  // Canonicalize the parent only. A catalog-file symlink cannot identify a managed binding.
+  const aName = path.basename(a), bName = path.basename(b);
+  if (windows !== (process.platform === "win32")
+    || (windows ? aName.toLowerCase() !== bName.toLowerCase() : aName !== bName)) return false;
+  try {
+    return comparable(realpathSync.native(path.dirname(a))) === comparable(realpathSync.native(path.dirname(b)));
+  } catch {
+    return false;
+  }
 }
 
 /** The sibling form works in both Windows and WSL when they share a Codex home. */
