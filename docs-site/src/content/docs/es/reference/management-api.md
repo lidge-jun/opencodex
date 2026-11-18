@@ -276,6 +276,22 @@ Las filas de solicitudes fallidas pueden incluir diagnósticos `upstreamErrorTyp
 
 Las respuestas de los registros y del historial omiten `usage.providerCredits` en las solicitudes y los intentos con una lectura de créditos inválida o incompleta. Una lectura de cero se devuelve como `0`.
 
+Cuando está disponible, `displayMetrics.cost.estimate` puede incluir un objeto opcional `billing`
+que describe la base del cálculo.
+
+- `{ "source": "provider-credits", "providerCredits": <number>, "creditPriceUsd": <number> }` indica
+  que el total es `providerCredits x creditPriceUsd`. Los campos de costo por tokens son valores
+  de relleno y se omiten al mostrar el desglose.
+- `{ "source": "mixed" }` indica que un Combo combina formas de cobro o precios por crédito
+  diferentes. El total suma los intentos y cada intento conserva su propio desglose.
+
+La ausencia de `billing` indica que el cálculo se hizo por tokens. Si los créditos o su precio
+impiden calcular un importe representable, se devuelve
+`{ "kind": "unavailable", "reason": "credit_cost_unrepresentable" }`, también en el total de un
+Combo afectado. `combo_attempt_unavailable` sigue siendo el motivo genérico para un intento sin
+costo calculable. Un recuento de tokens fuera de rango se marca como `invalid_usage`. Consulta
+[Créditos por solicitud de Kiro](/es/guides/kiro-request-credits/#límites-y-valores-no-representables).
+
 Los valores `/api/logs` `displayMetrics.decodeTokPerSecond` exitosos llevan `timingBasis: "generation-window" | "legacy-post-visible-output"` junto con `kind`, `value` y `estimated: true`; los valores de intento identifican su propia ventana. Los resultados no disponibles mantienen su `reason` existente y sin base de tiempo. El campo se deriva solo en el tiempo de lectura: el JSONL almacenado, el `tokPerSecond` de extremo a extremo, los DTO de historial de solicitudes y el rendimiento agregado no cambian. Los DTO más antiguos pueden omitir el campo; los clientes deben tratar la base de tiempo como desconocida en ese caso. El panel de control nombra estos métodos **Ventana de generación** y **Después de la salida visible**, con **Tiempo desconocido** para una base faltante o desconocida. Los detalles de la solicitud muestran **Velocidad de salida durante la generación (est.)**, **Velocidad de salida después de la primera salida visible (est.)** o **Tasa de salida (est.; método de temporización desconocido)** y una explicación visible del método de temporización cuando hay una tasa disponible.
 
 | Método y ruta | Finalidad | Errores notables |

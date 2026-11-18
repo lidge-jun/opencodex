@@ -12,8 +12,9 @@ When Kiro's safety filter stops a turn (`CONTENT_FILTERED`, for example the Clau
 
 When Kiro emits credit metering, request logs preserve the reported spend as
 `usage.providerCredits`, including in the persisted usage ledger. These are Kiro credits;
-token counts may still be estimated. Completion fallback requests add their reported credits.
-An absent value means Kiro did not report credit usage; an explicit zero means it reported no spend.
+token counts may still be estimated. Completion fallback requests add credits when all attempts
+report a reading. The Logs and request-history APIs omit the credit count when it is missing,
+incomplete, or invalid. An explicit zero means Kiro reported no spend.
 
 ## Pricing credits in USD
 
@@ -75,7 +76,7 @@ thousand credits. They exist because bounding the price alone does not keep the 
 representable: `1e308 x 1e308` is `Infinity`, and `JSON.stringify` writes that as `null`.
 
 When a row **is** credit-priced but its credit count or price cannot produce a representable
-amount — an out-of-bound or non-finite reading, or an overflowing product — its cost is reported as
+amount — an incomplete, out-of-bound or non-finite reading, or an overflowing product — its cost is reported as
 unavailable with the reason `credit_cost_unrepresentable`, rather than falling back to the token
 estimate. A fallback would report a different amount than the credit basis you configured, which is
 exactly what the price is meant to replace. A finite but absurd token count on a token-priced row
