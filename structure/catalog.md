@@ -53,7 +53,7 @@ provider-wide fallback. Exact model output limits precede the provider default o
   (`src/codex/catalog/pinned-models.ts`): the codex-rs snapshot first, then rows from
   `src/codex/data/roster-pinned-models.json` whose slug the snapshot lacks. The roster file holds
   verbatim rows the codex-rs snapshot lacks (`gpt-6-sol`/`gpt-6-luna` from the 2026-09-23 roster,
-  `gpt-6.1-sol` from openai/codex `models.json` after #49318 and `gpt-6.1-terra` from that file on 2026-10-27), so a wholesale snapshot re-pin
+  `gpt-6.1-sol` from openai/codex `models.json` after #49318 and `gpt-6.1-terra` from that file on 2026-10-27, plus both GPT-6.2 rows from #62106), so a wholesale snapshot re-pin
   never erases them and a snapshot row for the same slug always wins;
 - excludes retired `gpt-5.3-codex-spark` from native fallback, observed/cache rows, and
   account-selector projections, including retained sync and native restore;
@@ -145,7 +145,7 @@ are emitted only as selector-qualified rows whose account provenance matches. Th
 the bare native or API-key model list. This keeps account-scoped upstream ids such as
 `gpt-daybreak-blue-latest` callable without treating them as a static release allowlist.
 
-Configured natives widen the bare list without a release: eligible bare `gpt-*` ids under `providers.openai.models` on the canonical Codex forward provider join the shared registry in place (`src/codex/catalog/native-models.ts`). Each borrows the pinned `gpt-6.1-sol` row under its generated name, takes `NATIVE_GPT6_CONTEXT` (272,000 / 872,000), and is ungated. Built-in, retired and reserve ids never register. `src/config/derived-registries.ts` filters the config and refreshes registration on load, persist and reconcile; removing a configured id unregisters it unless it is also discovered. Configured natives have no entitlement routing preference or main-drain sentinel and cannot be combo `nativeAlias` targets because schema validation precedes registration. Covered by `tests/codex-integration/configured-native-models.test.ts`.
+Configured natives widen the bare list without a release: eligible bare `gpt-*` ids under `providers.openai.models` on the canonical Codex forward provider join the shared registry in place (`src/codex/catalog/native-models.ts`). Each borrows the pinned `gpt-6.2-sol` row under its generated name, takes `NATIVE_GPT6_CONTEXT` (272,000 / 872,000), and is ungated. Built-in, retired and reserve ids never register. `src/config/derived-registries.ts` filters the config and refreshes registration on load, persist and reconcile; removing a configured id unregisters it unless it is also discovered. Configured natives have no entitlement routing preference or main-drain sentinel and cannot be combo `nativeAlias` targets because schema validation precedes registration. Covered by `tests/codex-integration/configured-native-models.test.ts`.
 
 Authenticated discovery also widens the set: after a successful nonempty roster fetch, `src/codex/model-entitlements.ts` passes full eligible rows to `src/codex/catalog/discovered-natives.ts`. Rows require a visible, API-supported bare `gpt-*` slug, display name and sane reasoning-level array; built-in, retired, reserve, malformed, oversized and non-scalar Unicode rows are rejected. Existing discoveries and configured natives remain eligible for refresh, so an already-supported slug does not freeze its metadata or keep borrowing a template.
 
@@ -329,7 +329,7 @@ ships it. Both are ungated flagships. `gpt-6-astra-minor` is an account-gated ca
 Astra with its own presentation (`GPT-6-Astra-Minor`); it has no pinned row of its own and stays
 hidden and request-refused until an authenticated roster lists it.
 
-GPT-6.1 Terra (2026-10-26) is self-described and ungated alongside GPT-5.6 Terra. Its verbatim pin names it `GPT-6.1 Terra`, with `low` default effort, low-through-ultra, multi-agent `v2`, 500,000 default context / 450,000 compaction and an 872,000 native ceiling/input limit (`NATIVE_GPT61_TERRA_CONTEXT`); explicit long-window opt-in compacts at 784,800. It offers Fast only, including with `ultraFastTier` enabled; default models and subagent rosters stay unchanged.
+GPT-6.2 Sol and Astra are self-described, with 500,000 and 272,000 default context respectively and an 872,000 ceiling each. Both default to `low`, list `low` through `ultra` and carry Fast. GPT-6.1 Terra (2026-10-26) is self-described and ungated alongside GPT-5.6 Terra. Its verbatim pin names it `GPT-6.1 Terra`, with `low` default effort, low-through-ultra, multi-agent `v2`, 500,000 default context / 450,000 compaction and an 872,000 native ceiling/input limit (`NATIVE_GPT61_TERRA_CONTEXT`); explicit long-window opt-in compacts at 784,800. It offers Fast only, including with `ultraFastTier` enabled; default models and subagent rosters stay unchanged.
 
 The API registry separately owns Astra's 1,050,000 context / 922,000 input / 128,000 output and
 five API effort levels. Trusted discovery snapshots carry the output ceiling as well as input
