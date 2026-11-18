@@ -90,7 +90,12 @@ export function mixedComboRow(requestId: string) {
 }
 
 /** A credit leg, a lower-bound token leg, and a token leg at the standard rate. */
-export function mixedThreeLegComboRow(requestId: string, usageStatus: "reported" | "estimated", conversationId: string) {
+export function mixedThreeLegComboRow(
+  requestId: string,
+  usageStatus: "reported" | "estimated",
+  conversationId: string,
+  cacheProvenance: "observed" | "synthesized" | undefined,
+) {
   const attempt = (overrides: Record<string, unknown>) => ({ ...baseRow, ...overrides });
   return requestLogDto({
     ...baseRow, requestId, conversationId, provider: "combo", model: "combo/mixed-three",
@@ -98,7 +103,10 @@ export function mixedThreeLegComboRow(requestId: string, usageStatus: "reported"
     attempts: [
       attempt({ ordinal: 1, provider: "kiro", model: "claude-opus-5.5", adapter: "kiro", usageStatus: "estimated", usage: { inputTokens: 600_000, outputTokens: 400, providerCredits: 1.95, estimated: true } }),
       attempt({ ordinal: 2, provider: "xai", model: "grok-4.7", adapter: "openai", usageStatus: "reported", usage: longUsage, tierOutcome: priorityTierOutcome }),
-      attempt({ ordinal: 3, provider: "xai", model: "grok-4.7", adapter: "openai", usageStatus, usage: { inputTokens: 100, outputTokens: 10 } }),
+      attempt({
+        ordinal: 3, provider: "xai", model: "grok-4.7", adapter: "openai", usageStatus, cacheProvenance,
+        usage: { inputTokens: 100, outputTokens: 10, ...(cacheProvenance ? { cacheReadInputTokens: 0 } : {}) },
+      }),
     ],
   } as never);
 }

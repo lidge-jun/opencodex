@@ -252,10 +252,12 @@ test("an older row without a billing field is still read as token-priced", async
 
 
 test.each([
-  ["reported", true],
-  ["estimated", false],
-] as const)("a mixed Combo renders the correct floor marker when the non-floor token leg is %s", async (usageStatus, lowerBound) => {
-  mockLogs([mixedThreeLegComboRow("mixed-three", usageStatus, "conversation-three")]);
+  ["reported", "observed", true],
+  ["reported", "synthesized", false],
+  ["reported", undefined, false],
+  ["estimated", "observed", false],
+] as const)("a mixed Combo renders the floor marker for %s usage with cache provenance %s", async (usageStatus, cacheProvenance, lowerBound) => {
+  mockLogs([mixedThreeLegComboRow("mixed-three", usageStatus, "conversation-three", cacheProvenance)]);
   const { root, container } = await mountAndOpen("mixed-three");
   try {
     const table = container.querySelector(".logs-table tbody")?.textContent ?? "";
