@@ -89,10 +89,16 @@ function rejectAllExcept(accepted: readonly string[]): ReadonlySet<string> {
 // that total as 28, one fewer than the 29 keys its own list names; the accepted keys, not the
 // stated count, are what the exception below encodes. Its two 5.5 probes explicitly name only
 // pattern and maximum.
+// opus-5.5 also keeps the keys the Claude Desktop and Claude Code catalogs carry: five days of
+// production traffic sent all of them unstripped, 10,565 HTTP 200 and no ValidationException.
 // Other keywords and model ids retain the default strip until supported by evidence.
+const KIRO_OPUS_55_ACCEPTED_SCHEMA_KEYS = [
+  "$schema", "additionalProperties", "pattern", "format", "minLength", "maxLength",
+  "minimum", "maximum", "exclusiveMinimum", "minItems", "maxItems", "propertyNames",
+] as const;
 const KIRO_SCHEMA_KEY_EXCEPTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ["claude-opus-4.5", NO_SCHEMA_KEYS],
-  ["claude-opus-5.5", rejectAllExcept(["pattern", "maximum"])],
+  ["claude-opus-5.5", rejectAllExcept(KIRO_OPUS_55_ACCEPTED_SCHEMA_KEYS)],
   ["claude-sonnet-5.5", rejectAllExcept(["pattern", "maximum"])],
 ]);
 
@@ -282,14 +288,13 @@ export function convertKiroToolContext(
   const filled: unknown[] = [];
   for (const entry of candidates) {
     if (entry === reserved) continue;
-    // Measure the projected FINAL array: the byte budget is computed over the serialized array, so
-    // subtracting a standalone size would misjudge it by the separators JSON adds between entries.
-    const projected = reserved ? [...filled, entry.converted, reserved.converted] : [...filled, entry.converted];
-    if (
-      !unbounded
-      && (projected.length > MAX_KIRO_TOOL_COUNT
-        || serializedToolCatalogBytes(projected) > MAX_KIRO_TOOL_CATALOG_BYTES)
-    ) break;
+    if (!unbounded) {
+      // Measure the projected FINAL array only while enforcing a budget. Repeatedly copying
+      // the admitted prefix would make an unbounded catalog quadratic even without measuring it.
+      const projected = reserved ? [...filled, entry.converted, reserved.converted] : [...filled, entry.converted];
+      if (projected.length > MAX_KIRO_TOOL_COUNT
+        || serializedToolCatalogBytes(projected) > MAX_KIRO_TOOL_CATALOG_BYTES) break;
+    }
     filled.push(entry.converted);
     admitted.add(entry.index);
   }

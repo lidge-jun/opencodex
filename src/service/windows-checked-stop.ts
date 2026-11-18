@@ -12,7 +12,7 @@
  *    With a task registered or a stray sweep running, the Schedule host PID is read (2 s).
  *    Admission runs here, after the probe and before anything changes.
  * 2. Bind (src/service/windows-stop-binding.ts) and open an exit watch per wrapper.
- * 3. Ask the manager: schtasks /end (2 s); WinSW a non-waiting stop (2 s) and an SCM poll
+ * 3. Ask the manager: verified Task Scheduler instances (2 s); WinSW a non-waiting stop (2 s) and an SCM poll
  *    capped at <stoptimeout> + 2 s. Denied is denied; an overrun is unknown; neither goes on.
  * 4. Terminate the bound survivors through the checked primitive, deepest first.
  * 5. Wait on the bind-time watches (steps 4 and 5 share 3 s), then read the manager state
@@ -25,7 +25,7 @@ import type { WinswStatus } from "../lib/winsw";
 import type { WindowsProcessWatch, WindowsTerminateResult } from "./windows-process-native";
 import type { WindowsStopProcessEntry } from "./windows-process-evidence";
 import type { WindowsSchedulerTaskProbe } from "./windows-scheduler";
-import { bindWindowsStopWrappers, type WindowsBoundWrapper, type WindowsStopBinding } from "./windows-stop-binding";
+import { bindWindowsStopWrappers, WRAPPER_OWNER_REFUSAL, type WindowsBoundWrapper, type WindowsStopBinding } from "./windows-stop-binding";
 import {
   DEFAULT_WINSW_STOP_TIMEOUT_MS,
   WINDOWS_STOP_CAPS,
@@ -60,7 +60,7 @@ export const windowsStopClock: WindowsStopClock = {
 
 export type WindowsStopReason = "access-denied" | "evidence-unreadable" | "unbound-wrapper" | "unverified-budget";
 export type WindowsCheckedStopOutcome = "absent" | "stopped" | "survived" | "denied" | "unknown" | "unverified-budget";
-export type WindowsTaskEndResult = "ended" | "not-running" | "denied" | "failed";
+export type WindowsTaskEndResult = "ended" | "not-running" | "denied" | "failed" | "unverified-registration";
 export type WindowsWinswStopResult = "sent" | "denied" | "failed";
 export type WindowsWinswScmState = "stopped" | "running" | "pending" | "nonexistent" | "unknown";
 
@@ -75,7 +75,8 @@ export interface WindowsCheckedStopDeps {
   probeWinsw(timeoutMs: number): MaybePromise<WinswStatus>;
   enumerate(timeoutMs: number): MaybePromise<readonly WindowsStopProcessEntry[] | null>;
   scheduleServicePid(timeoutMs: number): MaybePromise<number | null>;
-  endTask(timeoutMs: number): MaybePromise<WindowsTaskEndResult>;
+  /** Reauthorize after the Scheduler proof and before releasing the instance stop. */
+  endTask(timeoutMs: number, authorize?: () => MaybePromise<void>): MaybePromise<WindowsTaskEndResult>;
   /** Running state of the task (schtasks /query); the final manager-state read. */
   taskState(timeoutMs: number): MaybePromise<"running" | "not-running" | "unknown">;
   winswStop(timeoutMs: number): MaybePromise<WindowsWinswStopResult>;
@@ -98,7 +99,7 @@ export interface WindowsCheckedStopOptions {
   /** A snapshot that already ran (guarded: revalidateManager's), reused for the bind. */
   bindSnapshot?: readonly WindowsStopProcessEntry[];
   admission?: WindowsStopAdmission;
-  /** Throws to refuse. Runs at entry, before each manager stop (/end, the WinSW stop) and before each terminate. */
+  /** Throws to refuse. Also runs after Scheduler proof, before the helper can stop any instance. */
   authorize?: () => MaybePromise<void>;
 }
 
@@ -135,6 +136,7 @@ type Capped<T> = { ok: true; value: T } | { ok: false; timedOut: boolean };
 /**
  * Run one step under a cap. The race ends the wait for an asynchronous dependency; the
  * elapsed check catches one that blocked past the cap anyway. Either is an overrun.
+ * A typed authorizer refusal propagates with the stop's partial result.
  */
 export async function runCapped<T>(
   clock: WindowsStopClock,
@@ -150,7 +152,8 @@ export async function runCapped<T>(
     const value = await Promise.race([work, clock.sleep(capMs, abort.signal).then(() => TIMED_OUT)]);
     if (value === TIMED_OUT || clock.now() - started > capMs) return { ok: false, timedOut: true };
     return { ok: true, value: value as T };
-  } catch {
+  } catch (error) {
+    if (error instanceof WindowsCheckedStopRefusedError) throw error;
     return { ok: false, timedOut: false };
   } finally {
     abort.abort();
@@ -224,6 +227,9 @@ export async function stopWindowsServiceChecked(
         ...bindContext, processes: snapshot.value, taskRegistered: false, managerRegistered: false,
         scheduleServicePid: schedulePid,
       });
+      if (binding.ownershipUnverified.length > 0) {
+        return finish("unknown", "evidence-unreadable", WRAPPER_OWNER_REFUSAL);
+      }
       if (binding.bound.length === 0 && binding.unbound.length === 0 && binding.unreadable.length === 0) {
         return finish("absent", null, "no service is registered and no wrapper of this home is running");
       }
@@ -273,6 +279,9 @@ export async function stopWindowsServiceChecked(
     }
     if (binding) {
       result.unbound = binding.unbound.map(entry => entry.pid);
+      if (binding.ownershipUnverified.length > 0) {
+        return finish("unknown", "evidence-unreadable", WRAPPER_OWNER_REFUSAL);
+      }
       if (binding.unreadable.length > 0) {
         return finish("unknown", "evidence-unreadable", "a possible wrapper of this home has unreadable evidence");
       }
@@ -298,10 +307,15 @@ export async function stopWindowsServiceChecked(
 
     // Step 3: ask the manager.
     if (taskRegistered) {
-      // The updater re-checks its authority right before the manager stop, as before each terminate.
+      // Check before launching the helper, then again at its mutation boundary.
       await authorize();
-      result.changed = true;
-      const ended = await runCapped(clock, C.taskEnd, deps.endTask);
+      const ended = await runCapped(clock, C.taskEnd,
+        timeoutMs => deps.endTask(timeoutMs, options.authorize ? authorize : undefined));
+      if (ended.ok && ended.value === "unverified-registration") {
+        return finish("unknown", "evidence-unreadable",
+          "the scheduled task's launcher, run-as account, or running instances could not be verified for this installation and Windows account. Confirm them in Task Scheduler and stop the task from its owning Windows session");
+      }
+      result.changed = !ended.ok || ended.value !== "not-running";
       if (!ended.ok) return finish("unknown", "evidence-unreadable", "the task end command did not answer within its cap");
       if (ended.value === "denied") return finish("denied", "access-denied", "ending the task was denied");
       if (ended.value === "failed") return finish("unknown", "evidence-unreadable", "the task end command failed");
@@ -340,7 +354,11 @@ export async function stopWindowsServiceChecked(
       if (!outcome.ok) return finish("unknown", "evidence-unreadable", "terminating a bound wrapper did not answer within its cap");
       const status = outcome.value.status;
       if (status === "denied") return finish("denied", "access-denied", "terminating a bound wrapper was denied");
-      if (status === "unavailable") return finish("unknown", "evidence-unreadable", "a bound wrapper could not be terminated");
+      if (status === "owner-unverified") return finish("unknown", "evidence-unreadable", WRAPPER_OWNER_REFUSAL);
+      if (status === "unavailable") {
+        return finish("unknown", "evidence-unreadable",
+          "the wrapper's exit could not be confirmed without a verified process handle. Check it from its owning Windows session using Task Manager, stop it if it is still running, then retry");
+      }
       if (status === "terminated") {
         result.terminated.push(wrapper.pid);
         if (outcome.value.exited === true) exited.set(wrapper.pid, true);
@@ -425,7 +443,7 @@ async function unboundOnlyVerdict(
   return unboundStillAlive(binding, watches);
 }
 
-/** The updater's variant: the authorizer runs at entry, before each manager stop and before every terminate. */
+/** The updater's variant: authorize at entry and at each stop or terminate boundary. */
 export function guardedStopWindowsServiceChecked(
   authorize: () => MaybePromise<void>,
   deps: WindowsCheckedStopDeps,

@@ -1,6 +1,7 @@
 import { closeSync, constants as fsConstants, fstatSync, openSync } from "node:fs";
 import { readNativeMainAuthBytesWithIdentity } from "./native-main-auth-file";
 import { codexCredentialMutationEpoch } from "./credential-mutation-epoch";
+import { captureMainAccountIdentityGeneration, isMainAccountIdentityGenerationLive } from "./main-account-cache";
 import { sameFileIdentity, type FileIdentity } from "../lib/file-identity";
 
 /**
@@ -62,9 +63,10 @@ export interface NativeMainLoginOwner {
   readonly path: string;
 }
 
-/** Captured before an observation starts; a completion under an older generation is stale. */
+/** A retention/identity fence; refreshes capture it before the asynchronous exchange. */
 export interface NativeMainObservationTicket {
   readonly generation: number;
+  readonly identityGeneration: number;
 }
 
 export interface RetainNativeMainLoginOptions {
@@ -79,6 +81,7 @@ interface RetainedLogin {
   readonly identity: FileIdentity;
   readonly fingerprint: string;
   readonly configuredRefreshMode: string;
+  readonly identityGeneration: number;
   readonly fd: number | undefined;
   mutationEpoch: number;
   credential: unknown;
@@ -145,7 +148,7 @@ export function observeNativeMainAuthFile(path: string): NativeMainAuthObservati
 }
 
 export function beginNativeMainObservation(): NativeMainObservationTicket {
-  return { generation };
+  return { generation, identityGeneration: captureMainAccountIdentityGeneration() };
 }
 
 /** End retention now. Pending observations captured before this call can no longer retain. */
@@ -170,7 +173,7 @@ function holdFile(path: string, identity: FileIdentity): number | undefined | nu
 
 /**
  * Record a complete login. Refused for a stale ticket (an invalidation happened while the
- * observation or refresh was in flight) or an unknown or moved file identity.
+ * observation or refresh was in flight), an account identity change, or an unknown or moved file identity.
  */
 export function retainNativeMainLogin(
   ticket: NativeMainObservationTicket,
@@ -179,13 +182,14 @@ export function retainNativeMainLogin(
   credential: unknown,
   options: RetainNativeMainLoginOptions,
 ): boolean {
-  if (ticket.generation !== generation) return false;
+  if (ticket.generation !== generation || !isMainAccountIdentityGenerationLive(ticket.identityGeneration)) return false;
   if (!identity) {
     drop();
     return false;
   }
   const current = retained;
   if (current && current.owner.codexHome === owner.codexHome && current.owner.path === owner.path
+    && current.identityGeneration === ticket.identityGeneration
     && sameFileIdentity(current.identity, identity) && current.fingerprint === options.fingerprint) {
     current.mutationEpoch = codexCredentialMutationEpoch();
     current.credential = credential;
@@ -199,6 +203,7 @@ export function retainNativeMainLogin(
     identity,
     fingerprint: options.fingerprint,
     configuredRefreshMode: options.configuredRefreshMode(),
+    identityGeneration: ticket.identityGeneration,
     fd,
     mutationEpoch: codexCredentialMutationEpoch(),
     credential,
@@ -231,7 +236,8 @@ export function retainedNativeMainLogin<T>(
     invalidateRetainedNativeMainLogin("ownership-loss");
     return undefined;
   }
-  if (entry.mutationEpoch !== codexCredentialMutationEpoch() || !identity
+  if (!isMainAccountIdentityGenerationLive(entry.identityGeneration)
+    || entry.mutationEpoch !== codexCredentialMutationEpoch() || !identity
     || !sameFileIdentity(identity, entry.identity) || !heldFileStillLinked(entry.fd)) {
     invalidateRetainedNativeMainLogin("account-replacement");
     return undefined;

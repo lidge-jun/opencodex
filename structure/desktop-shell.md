@@ -193,6 +193,10 @@ sequence brings one back in recovery mode. A runtime already stopped from the tr
 explicitly requests startup while that update drain is in flight; that newer request wins over the
 captured stopped intent. A quit's drain is never aborted.
 
+Without the window, `ocx update --desktop` installs the same signed Windows MSI from the bundled
+`ocx.exe` and restarts the runtime still serving the old version; the app's own updater path is
+unchanged ([headless Windows Desktop update](ops/desktop-supervision.md#headless-windows-desktop-update)).
+
 > Decision record: [ADR-6033](decisions/ADR-6033-desktop-update-intent.md)
 
 The Tauri updater also publishes a bounded desktop snapshot over its identity-bound ProxyClient. A random process-session id travels in the embedded dashboard URL, and the dashboard requests GET /api/update/badge?surface=desktop&session=<id>. A normal browser keeps the package badge. The shell posts each updater-state change and a 60-second heartbeat; if the proxy loses the snapshot or the shell stops, the desktop badge becomes unknown after 180 seconds. This display path never installs an update or replaces the signed Tauri result. The tray shows the same pending state: macOS draws a blue child NSView dot over the template status-item image; Windows/Linux swap a generated dotted PNG when a tray host exists. The Windows base glyph is unchanged.

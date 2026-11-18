@@ -31,7 +31,12 @@ async function makeFixture() {
   const wait = async (role: string, suffix: string) => {
     const end = Date.now() + 20_000;
     while (!has(role, suffix)) {
-      if (Date.now() >= end) throw new Error(`Private barrier timed out: ${role}.${suffix}`);
+      if (Date.now() >= end) {
+        // Name the barriers that did arrive: "B.acquired" here means the other
+        // child won the generation, which an empty timeout cannot distinguish.
+        const present = fs.readdirSync(root).filter(name => /^(A|B|member|gate)\./.test(name)).sort();
+        throw new Error(`Private barrier timed out: ${role}.${suffix} (present: ${present.join(", ") || "none"})`);
+      }
       await Bun.sleep(10);
     }
   };
@@ -67,14 +72,22 @@ async function makeFixture() {
   } };
 }
 
-for (const initializing of [false, true]) {
-  test(`generation gate prevents duplicate acquisition during ${initializing ? "initial probe" : "stale verdict"}`, async () => {
+for (const { name, initializing, refuseRenameMs } of [
+  { name: "stale verdict", initializing: false, refuseRenameMs: 0 },
+  { name: "initial probe", initializing: true, refuseRenameMs: 0 },
+  // A Windows handle inside the stale directory refuses the holder's quarantine
+  // rename; the holder must still finish the retirement it decided, not hand it
+  // to the waiter polling next.
+  { name: "stale verdict through a transient rename refusal", initializing: false, refuseRenameMs: 300 },
+]) {
+  test(`generation gate prevents duplicate acquisition during ${name}`, async () => {
     await fixture(async f => {
       if (!initializing) {
         fs.mkdirSync(f.path);
         fs.writeFileSync(join(f.path, "owner.json"), JSON.stringify({ version: 1, runId: "seed", token: "seed",
           pid: process.pid, acquiredAt: new Date().toISOString(), processStart: startA }));
       }
+      if (refuseRenameMs) fs.writeFileSync(join(f.root, "A.refuse-rename-ms"), String(refuseRenameMs));
       f.spawn("A");
       await f.wait("A", "blocked");
       const first = fs.existsSync(f.path) ? fs.lstatSync(f.path, { bigint: true }).ino : null;
@@ -88,6 +101,8 @@ for (const initializing of [false, true]) {
       await f.wait("A", "acquired");
       expect(f.owner().runId).toBe("A");
       expect(f.has("B", "acquired")).toBe(false);
+      // The seam must have refused at least once and then let A's rename through.
+      if (refuseRenameMs) expect(f.has("A", "renamed-after-refusal")).toBe(true);
       f.put("A", "release");
       await f.wait("A", "terminal");
       await f.wait("B", "acquired");

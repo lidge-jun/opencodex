@@ -752,6 +752,9 @@ Se aplican los selectores, límites, metadatos y requisito de ToolSearch inmedia
 
 Los esquemas como texto carecen de validación estricta del proveedor y un argumento inválido consume un turno. Algunos modelos no siguen instrucciones en resultados de herramientas: verifica cada uno. Forzar una herramienta oculta, restringir las permitidas o un historial ambiguo conserva la solicitud original. Llamar a una herramienta diferida sin cargarla la devuelve al catálogo y pierde el prefijo una vez. Ausente, vacía o sin coincidencia conserva los mismos bytes, sin garantizar aciertos de caché. Los argumentos llegan cuando se completa la llamada, como en cualquier herramienta Chat traducida.
 
+Si alguna herramienta tiene una lista `allowed_callers` distinta de `["direct"]`, se conserva el
+catálogo original y la ruta Chat rechaza la solicitud antes de enviarla al proveedor porque no
+puede representar esa restricción. Sin esa lista, o con solo `["direct"]`, la opción sigue siendo aplicable.
 
 <a id="claude-models-behind-a-gateway-that-also-serves-gpt"></a>
 
