@@ -388,7 +388,7 @@
     "ci-scope-gaps.test.ts": "ci-workflows",
     "ci-shard-balance.test.ts": "ci-workflows",
     "ci-structure-gate.test.ts": "ci-workflows",
-    "ci-workflows.test.ts": "ci-workflows",
+    "ci-workflows.test.ts": "ci-workflows", "audit-exceptions.test.ts": "ci-workflows",
     "citation-markers.test.ts": "responses",
     "visualization-directives.test.ts": "responses",
     "cl01-claude-outbound-review-regressions.test.ts": "routing",
