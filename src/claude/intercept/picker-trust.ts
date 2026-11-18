@@ -1,7 +1,7 @@
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { PICKER_CA_COMMON_NAME, PICKER_HOST } from "./picker-ca";
+import { PICKER_CA_COMMON_NAME, PICKER_HOST, withPublishedPickerCaLinuxTrust, type LinuxPickerTrustStore } from "./picker-ca";
 import {
   inspectPickerTrustWindows,
   trustPickerCaWindows,
@@ -99,14 +99,21 @@ export async function trustPickerCa(
   caPath: string,
   run: SecurityRunner = defaultSecurityRunner,
   platform: NodeJS.Platform = process.platform,
-  cert?: { pem?: string },
+  cert?: { pem?: string; configDir?: string },
   linuxHome?: string,
 ): Promise<{ ok: boolean; reason?: "unsupported" | "declined_or_failed" }> {
   if (platform === "win32") {
     return trustPickerCaWindows(caPath, run === defaultSecurityRunner ? undefined : run, cert);
   }
   if (platform === "linux") {
-    return trustPickerCaLinux(caPath, run === defaultSecurityRunner ? undefined : run, cert, linuxHome);
+    const runner = run === defaultSecurityRunner ? undefined : run;
+    if (!cert?.configDir || !cert.pem) return trustPickerCaLinux(caPath, runner, cert, linuxHome);
+    try {
+      return await withPublishedPickerCaLinuxTrust(cert.configDir, cert.pem, (store, save) =>
+        trustPickerCaLinux(caPath, runner, cert, linuxHome, undefined, save, store));
+    } catch {
+      return { ok: false, reason: "declined_or_failed" };
+    }
   }
   if (platform !== "darwin") return { ok: false, reason: "unsupported" };
   // `cert.pem` is the caller-verified certificate bytes: the shared on-disk ca.pem is writable by
@@ -139,6 +146,7 @@ export async function untrustPickerCa(
   run: SecurityRunner = defaultSecurityRunner,
   platform: NodeJS.Platform = process.platform,
   linuxHome?: string,
+  linux?: { store?: LinuxPickerTrustStore; configDir?: string },
 ): Promise<{ ok: boolean }> {
   if (platform === "win32") {
     try {
@@ -148,8 +156,15 @@ export async function untrustPickerCa(
   }
   if (platform === "linux") {
     try {
-      return await untrustPickerCaLinux(fingerprintSha1, run === defaultSecurityRunner ? undefined : run,
-        linuxHome, { pem: readFileSync(caPath, "utf8") });
+      const pem = readFileSync(caPath, "utf8");
+      const remove = (linuxStore?: LinuxPickerTrustStore) => untrustPickerCaLinux(
+        fingerprintSha1, run === defaultSecurityRunner ? undefined : run, linuxHome, { pem, linuxStore });
+      if (!linux?.configDir) return await remove(linux?.store);
+      return await withPublishedPickerCaLinuxTrust(linux.configDir, pem, async (store, _save, clear) => {
+        const result = await remove(store);
+        if (result.ok) clear();
+        return result;
+      });
     } catch { return { ok: false }; }
   }
   if (platform !== "darwin") return { ok: false };

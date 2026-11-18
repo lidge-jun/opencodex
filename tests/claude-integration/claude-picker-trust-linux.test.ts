@@ -1,9 +1,15 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import { X509Certificate } from "node:crypto";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createCertificateAuthority } from "../../src/claude/intercept/local-ca";
-import { PICKER_CA_COMMON_NAME, PICKER_HOST, pickerCaFingerprints } from "../../src/claude/intercept/picker-ca";
+import {
+  ensurePickerCa, PICKER_CA_COMMON_NAME, PICKER_HOST, pickerCaCertPath, pickerCaFingerprints,
+  pickerCaPendingUntrustPath,
+} from "../../src/claude/intercept/picker-ca";
+import { drainPendingPickerCaUntrust } from "../../src/claude/intercept/picker-ca-cleanup";
 import {
   createLinuxCertutilRunner,
   inspectPickerTrustLinux,
@@ -15,7 +21,7 @@ import {
   type LinuxTrustRunner,
 } from "../../src/claude/intercept/picker-trust-linux";
 import { repoPath } from "../helpers/repo-root";
-import type { SecurityResult } from "../../src/claude/intercept/picker-trust";
+import { trustPickerCa, type SecurityResult } from "../../src/claude/intercept/picker-trust";
 
 const homes: string[] = [];
 afterEach(() => { for (const home of homes.splice(0)) rmSync(home, { recursive: true, force: true }); });
@@ -52,11 +58,25 @@ function nss(initial: Entry[] = [], options: { broken?: boolean } = {}) {
   const run: LinuxTrustRunner = async args => {
     calls.push([...args]);
     const op = args[0];
+    const db = args.includes("-d") ? args[args.indexOf("-d") + 1]!.slice("sql:".length) : "";
     const nickname = args.includes("-n") ? args[args.indexOf("-n") + 1]! : undefined;
     if (options.broken && op === "-L") return exit255;
     if (op === "-L" && nickname !== undefined) {
       const found = certs.find(c => c.nickname === nickname);
-      return found ? ok(found.pem) : exit255;
+      if (!found) return exit255;
+      const parse = (candidate: Entry): X509Certificate | null => {
+        try { return new X509Certificate(candidate.pem); } catch { return null; }
+      };
+      const subject = parse(found)?.subject;
+      if (!subject) return ok(found.pem);
+      const siblings = certs.filter(c => parse(c)?.subject === subject);
+      if (siblings.length > 1) {
+        using sql = new Database(join(db, "cert9.db"));
+        sql.exec("CREATE TABLE IF NOT EXISTS nssPublic (a0 BLOB, a3 BLOB, a11 BLOB); DELETE FROM nssPublic");
+        const insert = sql.query("INSERT INTO nssPublic VALUES (X'00000001', ?, ?)");
+        for (const sibling of siblings) insert.run(Buffer.from(sibling.nickname), parse(sibling)!.raw);
+      }
+      return ok(siblings.map(c => c.pem).join("\n"));
     }
     if (op === "-L") {
       return ok(header + certs.map(c => `${c.nickname}                           ${c.flags},,\n`).join(""));
@@ -72,7 +92,11 @@ function nss(initial: Entry[] = [], options: { broken?: boolean } = {}) {
       certs.splice(at, 1);
       return ok();
     }
-    if (op === "-N" || op === "--build-flags") return ok();
+    if (op === "-N") {
+      writeFileSync(join(db, "cert9.db"), "");
+      return ok();
+    }
+    if (op === "--build-flags") return ok();
     return { code: 1, stdout: "", stderr: "unexpected" };
   };
   return { run, calls, certs };
@@ -167,9 +191,24 @@ test("untrust removes only the predecessor, even when the current root was insta
   const current = pickerRoot();
   const h = home();
   const db = nss([entry(predecessor), entry(current)]);
+  expect(await inspectPickerTrustLinux(predecessor.sha1, db.run, h)).toBe("trusted");
+  expect(await inspectPickerTrustLinux(current.sha1, db.run, h)).toBe("trusted");
   expect(await untrustPickerCaLinux(predecessor.sha1, db.run, h, predecessor)).toEqual({ ok: true });
   expect(db.certs.map(c => c.nickname)).toEqual([linuxPickerNickname(current.sha1)]);
   expect(await inspectPickerTrustLinux(current.sha1, db.run, h)).toBe("trusted");
+});
+
+test("a same-subject export cannot lend a sibling's DER to a mismatched nickname", async () => {
+  const root = pickerRoot();
+  const sibling = pickerRoot();
+  const h = home();
+  const db = nss([
+    { ...entry(sibling), nickname: linuxPickerNickname(root.sha1) },
+    { ...entry(root), nickname: "renamed certificate" },
+  ]);
+  expect(await inspectPickerTrustLinux(root.sha1, db.run, h)).toBe("untrusted");
+  expect(await untrustPickerCaLinux(root.sha1, db.run, h, root)).toEqual({ ok: false });
+  expect(db.calls.some(call => call[0] === "-D")).toBe(false);
 });
 
 test("untrust succeeds only on a readable database proving absence", async () => {
@@ -383,4 +422,149 @@ test("the production runner kills an overflowing child on either pipe before it 
 test("the runtime contract includes on-demand Linux picker startup", () => {
   const runtime = readFileSync(repoPath("structure/runtime.md"), "utf8");
   expect(runtime.includes("Windows and Linux defer picker startup until picker intent or an applied profile requires recovery.")).toBe(true);
+});
+
+const certutil = Bun.which("certutil");
+const realCertutil = certutil && Bun.spawnSync([certutil, "--build-flags"], { stderr: "ignore" }).exitCode === 0
+  ? certutil : null;
+const realNssTest = test.skipIf(realCertutil === null);
+const nssSkipReason = realCertutil === null ? " (NSS certutil is unavailable on PATH)" : "";
+
+async function initializeNss(run: LinuxTrustRunner, dir: string): Promise<void> {
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  expect(await run(["-N", "-d", `sql:${dir}`, "--empty-password"])).toMatchObject({ code: 0 });
+}
+
+function realNssRunner(h: string): LinuxTrustRunner {
+  return createLinuxCertutilRunner(realCertutil, { ...process.env, HOME: h, USERPROFILE: h });
+}
+
+realNssTest("real NSS round trips a single picker root in XDG and legacy stores" + nssSkipReason, async () => {
+  for (const legacy of [false, true]) {
+    const h = home(false);
+    const run = realNssRunner(h);
+    const xdg = join(h, "data");
+    const dir = legacy ? join(h, ".pki", "nssdb") : join(xdg, "pki", "nssdb");
+    if (legacy) await initializeNss(run, dir);
+    const root = pickerRoot();
+    expect(await trustPickerCaLinux("/ca.pem", run, root, h, xdg)).toMatchObject({ ok: true });
+    expect(linuxNssDbDir(h, xdg)).toBe(dir);
+    expect(await inspectPickerTrustLinux(root.sha1, run, h, xdg)).toBe("trusted");
+    expect(await untrustPickerCaLinux(root.sha1, run, h, root, xdg)).toEqual({ ok: true });
+    expect(await inspectPickerTrustLinux(root.sha1, run, h, xdg)).toBe("untrusted");
+  }
+});
+
+realNssTest("real NSS identifies both same-subject roots and removes only the selected one" + nssSkipReason, async () => {
+  const h = home(false);
+  const run = realNssRunner(h);
+  const roots = [pickerRoot(), pickerRoot()] as const;
+  for (const root of roots) expect(await trustPickerCaLinux("/ca.pem", run, root, h)).toMatchObject({ ok: true });
+  const db = `sql:${linuxNssDbDir(h)}`;
+  for (const root of roots) {
+    const exported = await run(["-L", "-d", db, "-n", linuxPickerNickname(root.sha1), "-a"]);
+    expect(exported.stdout.match(/-----BEGIN CERTIFICATE-----/g)).toHaveLength(2);
+    expect(await inspectPickerTrustLinux(root.sha1, run, h)).toBe("trusted");
+  }
+  const [retired, survivor] = roots;
+  expect(await untrustPickerCaLinux(retired.sha1, run, h, retired)).toEqual({ ok: true });
+  expect(await inspectPickerTrustLinux(retired.sha1, run, h)).toBe("untrusted");
+  expect(await inspectPickerTrustLinux(survivor.sha1, run, h)).toBe("trusted");
+  expect((await run(["-L", "-d", db])).stdout).toMatch(new RegExp(linuxPickerNickname(survivor.sha1) + "\\s+C,,"));
+});
+
+async function retireRoot(run: LinuxTrustRunner, h: string) {
+  const root = pickerRoot();
+  const configDir = join(h, "config");
+  const caPath = pickerCaCertPath(configDir);
+  mkdirSync(join(configDir, "claude-picker"), { recursive: true });
+  writeFileSync(caPath, root.pem);
+  const cert = { pem: root.pem, configDir };
+  expect(await trustPickerCa(caPath, run, "linux", cert, h)).toMatchObject({ ok: true });
+  ensurePickerCa(configDir, { rotation: "startup" });
+  return { configDir, root, journal: pickerCaPendingUntrustPath(configDir) };
+}
+
+test("a fake XDG install binds the journal even when an empty legacy database becomes preferred", async () => {
+  const h = home(false);
+  const xdg = linuxNssDbDir(h);
+  const legacy = join(h, ".pki", "nssdb");
+  const original = nss();
+  const shadow = nss();
+  const run: LinuxTrustRunner = args => args.includes(`sql:${legacy}`) ? shadow.run(args) : original.run(args);
+  const { configDir, root, journal } = await retireRoot(run, h);
+  const recorded = readFileSync(journal, "utf8");
+  expect(JSON.parse(recorded).linuxStore.dir).toBe(realpathSync(xdg));
+  renameSync(xdg, xdg + "-saved");
+  await initializeNss(run, legacy);
+  const accesses = original.calls.length + shadow.calls.length;
+  expect(await drainPendingPickerCaUntrust(configDir, run, "linux", h)).toBe(false);
+  expect(readFileSync(journal, "utf8")).toBe(recorded);
+  expect(original.calls.length + shadow.calls.length).toBe(accesses);
+  expect(original.certs).toEqual([entry(root)]);
+  renameSync(xdg + "-saved", xdg);
+  expect(await drainPendingPickerCaUntrust(configDir, run, "linux", h)).toBe(true);
+  expect(original.certs).toEqual([]);
+  expect(existsSync(journal)).toBe(false);
+});
+
+test("a legacy journal checks XDG even when the empty legacy directory is preferred", async () => {
+  const h = home(false);
+  const xdg = linuxNssDbDir(h);
+  const legacy = join(h, ".pki", "nssdb");
+  const root = pickerRoot();
+  const original = nss();
+  const shadow = nss();
+  const run: LinuxTrustRunner = args => args.includes(`sql:${legacy}`) ? shadow.run(args) : original.run(args);
+  await initializeNss(run, xdg);
+  await initializeNss(run, legacy);
+  const configDir = join(h, "config");
+  const journal = pickerCaPendingUntrustPath(configDir);
+  ensurePickerCa(configDir);
+  writeFileSync(journal, JSON.stringify({ certPem: root.pem, ...pickerCaFingerprints(root.pem) }));
+  const alias = { ...entry(root), nickname: PICKER_CA_COMMON_NAME };
+  original.certs.push(alias);
+  expect(await drainPendingPickerCaUntrust(configDir, run, "linux", h)).toBe(false);
+  expect(existsSync(journal)).toBe(true);
+  expect(original.certs).toEqual([alias]);
+  original.certs[0] = entry(root);
+  expect(await drainPendingPickerCaUntrust(configDir, run, "linux", h)).toBe(true);
+  expect(original.certs).toEqual([]);
+  expect(shadow.calls.some(call => call[0] === "-L")).toBe(true);
+  expect(existsSync(journal)).toBe(false);
+});
+
+realNssTest("real NSS cleanup retains the journal when store preference changes and the recorded store is replaced" + nssSkipReason, async () => {
+  const h = home(false);
+  const run = realNssRunner(h);
+  const { configDir, root, journal } = await retireRoot(run, h);
+  const original = linuxNssDbDir(h);
+  const saved = original + "-saved";
+  const legacy = join(h, ".pki", "nssdb");
+  const recorded = readFileSync(journal, "utf8");
+  renameSync(original, saved);
+  await initializeNss(run, legacy);
+  expect(await drainPendingPickerCaUntrust(configDir, run, "linux", h)).toBe(false);
+  expect(readFileSync(journal, "utf8")).toBe(recorded);
+  expect((await run(["-L", "-d", `sql:${saved}`])).stdout).toContain(linuxPickerNickname(root.sha1));
+  await initializeNss(run, original);
+  expect(await drainPendingPickerCaUntrust(configDir, run, "linux", h)).toBe(false);
+  expect(readFileSync(journal, "utf8")).toBe(recorded);
+  renameSync(original, original + "-replacement");
+  renameSync(saved, original);
+  if (process.platform !== "win32") {
+    chmodSync(original, 0o777);
+    expect(await drainPendingPickerCaUntrust(configDir, run, "linux", h)).toBe(false);
+    expect(readFileSync(journal, "utf8")).toBe(recorded);
+    chmodSync(original, 0o700);
+  }
+  const certDb = join(original, "cert9.db");
+  renameSync(certDb, certDb + "-saved");
+  writeFileSync(certDb, "");
+  expect(await drainPendingPickerCaUntrust(configDir, run, "linux", h)).toBe(false);
+  expect(readFileSync(journal, "utf8")).toBe(recorded);
+  renameSync(certDb + "-saved", certDb);
+  expect(await drainPendingPickerCaUntrust(configDir, run, "linux", h)).toBe(true);
+  expect(existsSync(journal)).toBe(false);
+  expect((await run(["-L", "-d", `sql:${original}`])).stdout).not.toContain(linuxPickerNickname(root.sha1));
 });

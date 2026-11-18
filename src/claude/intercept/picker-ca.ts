@@ -1,9 +1,9 @@
 import { createHash, randomUUID, X509Certificate } from "node:crypto";
 import { chmodSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join, posix } from "node:path";
 import { canonicalPickerConfigDir, ensurePersistentPickerCa } from "./picker-ca-persistence";
 import type { PickerCaStore } from "./picker-ca-store";
-import { withClientLifecycleSync } from "../../client/lifecycle-lock";
+import { withClientLifecycle, withClientLifecycleSync } from "../../client/lifecycle-lock";
 import {
   ALL_IP_ADDRESS_BASES,
   createCertificateAuthority,
@@ -18,7 +18,8 @@ export const PICKER_CA_COMMON_NAME = "opencodex Claude Desktop Picker CA";
 export const PICKER_STATE_DIR = "claude-picker";
 
 export interface PickerCa extends LocalInterceptCa { fingerprint: string }
-export interface PendingPickerCaUntrust { certPem: string; sha1: string; sha256: string }
+export interface LinuxPickerTrustStore { dir: string; directoryId: string; certDbId: string }
+export interface PendingPickerCaUntrust { certPem: string; sha1: string; sha256: string; linuxStore?: LinuxPickerTrustStore }
 
 const processAuthorities = new Map<string, PickerCa>();
 const MAX_PENDING_CA_BYTES = 64 * 1024;
@@ -30,6 +31,20 @@ export function pickerLeafCertPath(configDir: string): string { return join(pick
 export function pickerCaOwnerPath(configDir: string): string { return join(pickerStateDir(configDir), "ca-owner.json"); }
 export function pickerCaPendingUntrustPath(configDir: string): string { return join(pickerStateDir(configDir), "pending-untrust.json"); }
 function pickerCaLockPath(configDir: string): string { return join(pickerStateDir(configDir), "ca.lock.sqlite"); }
+function linuxTrustStorePath(configDir: string): string { return join(pickerStateDir(configDir), "linux-trust-store.json"); }
+
+function isLinuxPickerTrustStore(value: unknown): value is LinuxPickerTrustStore {
+  if (!value || typeof value !== "object" || Object.keys(value).sort().join(",") !== "certDbId,dir,directoryId") return false;
+  const store = value as Partial<LinuxPickerTrustStore>;
+  const validIdentity = (id: unknown) => typeof id === "string" && /^\d+:[1-9]\d*$/.test(id);
+  return typeof store.dir === "string" && (isAbsolute(store.dir) || posix.isAbsolute(store.dir))
+    && !store.dir.includes("\0") && !store.dir.split(/[/\\]/).includes("..")
+    && validIdentity(store.directoryId) && validIdentity(store.certDbId);
+}
+
+export function sameLinuxPickerTrustStore(a?: LinuxPickerTrustStore, b?: LinuxPickerTrustStore): boolean {
+  return a?.dir === b?.dir && a?.directoryId === b?.directoryId && a?.certDbId === b?.certDbId;
+}
 
 export function pickerCaFingerprints(certPem: string): { sha1: string; sha256: string } {
   const der = new X509Certificate(certPem).raw;
@@ -292,9 +307,7 @@ function publicCertificate(pem: string): PendingPickerCaUntrust | null {
   }
 }
 
-/** The pending record is public-only, but malformed or unsafe state must never be discarded. */
-export function readPendingPickerCaUntrust(configDir: string): PendingPickerCaUntrust | null {
-  const path = pickerCaPendingUntrustPath(configDir);
+function readPublicTrustState(path: string): object | null {
   let stat;
   try { stat = lstatSync(path); }
   catch (error) {
@@ -312,8 +325,17 @@ export function readPendingPickerCaUntrust(configDir: string): PendingPickerCaUn
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("picker_ca_pending_untrust_invalid");
   }
+  return value;
+}
+
+/** The pending record is public-only, but malformed or unsafe state must never be discarded. */
+export function readPendingPickerCaUntrust(configDir: string): PendingPickerCaUntrust | null {
+  const value = readPublicTrustState(pickerCaPendingUntrustPath(configDir));
+  if (value === null) return null;
   const pending = value as Partial<PendingPickerCaUntrust>;
-  if (Object.keys(pending).sort().join(",") !== "certPem,sha1,sha256"
+  const keys = pending.linuxStore === undefined ? "certPem,sha1,sha256" : "certPem,linuxStore,sha1,sha256";
+  if (Object.keys(pending).sort().join(",") !== keys
+    || (pending.linuxStore !== undefined && !isLinuxPickerTrustStore(pending.linuxStore))
     || typeof pending.certPem !== "string" || typeof pending.sha1 !== "string" || typeof pending.sha256 !== "string") {
     throw new Error("picker_ca_pending_untrust_invalid");
   }
@@ -322,19 +344,33 @@ export function readPendingPickerCaUntrust(configDir: string): PendingPickerCaUn
     || pending.sha1 !== publicOnly.sha1 || pending.sha256 !== publicOnly.sha256) {
     throw new Error("picker_ca_pending_untrust_invalid");
   }
-  return publicOnly;
+  return pending.linuxStore ? { ...publicOnly, linuxStore: pending.linuxStore } : publicOnly;
 }
 
-function writePendingPickerCaUntrust(configDir: string, pending: PendingPickerCaUntrust): void {
-  const path = pickerCaPendingUntrustPath(configDir);
+function writePrivateTrustState(path: string, value: object): void {
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    writeFileSync(temporary, JSON.stringify(pending) + "\n", { flag: "wx", mode: 0o600 });
+    writeFileSync(temporary, JSON.stringify(value) + "\n", { flag: "wx", mode: 0o600 });
     try { chmodSync(temporary, 0o600); } catch { /* best-effort on platforms without POSIX modes */ }
     renameSync(temporary, path);
   } finally {
     rmSync(temporary, { force: true });
   }
+}
+
+function readLinuxTrustStore(configDir: string, sha256: string): LinuxPickerTrustStore | undefined {
+  const value = readPublicTrustState(linuxTrustStorePath(configDir));
+  if (value === null) return undefined;
+  const record = value as { sha256?: string; store?: LinuxPickerTrustStore };
+  if (Object.keys(record).sort().join(",") !== "sha256,store"
+    || typeof record.sha256 !== "string" || !/^[0-9A-F]{64}$/.test(record.sha256)
+    || !isLinuxPickerTrustStore(record.store)) throw new Error("picker_ca_linux_store_invalid");
+  return record.sha256 === sha256 ? record.store : undefined;
+}
+
+function writePendingPickerCaUntrust(configDir: string, pending: PendingPickerCaUntrust): void {
+  const linuxStore = readLinuxTrustStore(configDir, pending.sha256);
+  writePrivateTrustState(pickerCaPendingUntrustPath(configDir), { ...pending, linuxStore });
 }
 
 /**
@@ -371,12 +407,37 @@ function publishedPickerCa(configDir: string): string | null {
   }
 }
 
+/** Serialize Linux trust changes with rotation. Record the exact store before certutil can mutate it. */
+export async function withPublishedPickerCaLinuxTrust<T>(
+  configDir: string,
+  certPem: string,
+  work: (store: LinuxPickerTrustStore | undefined, save: (store: LinuxPickerTrustStore) => void, clear: () => void) => Promise<T>,
+): Promise<T> {
+  configDir = canonicalPickerConfigDir(configDir);
+  const sha256 = pickerCaFingerprints(certPem).sha256;
+  const path = linuxTrustStorePath(configDir);
+  return withClientLifecycle(async () => {
+    if (publishedPickerCa(configDir) !== certPem) throw new Error("picker_ca_trust_state_changed");
+    const current = readLinuxTrustStore(configDir, sha256);
+    return work(current, store => {
+      if (readPendingPickerCaUntrust(configDir)) throw new Error("picker_ca_pending_untrust");
+      if (current && !sameLinuxPickerTrustStore(current, store)) throw new Error("picker_ca_linux_store_changed");
+      if (!current) writePrivateTrustState(path, { sha256, store });
+    }, () => {
+      if (current) rmSync(path);
+    });
+  }, { lockPath: pickerCaLockPath(configDir) });
+}
+
+function samePendingUntrust(current: PendingPickerCaUntrust | null, pending: PendingPickerCaUntrust): boolean {
+  return current?.certPem === pending.certPem && current.sha1 === pending.sha1
+    && current.sha256 === pending.sha256 && sameLinuxPickerTrustStore(current.linuxStore, pending.linuxStore);
+}
+
 /** A pending CA may still be serving when journal publication preceded a failed PEM replacement. */
 export function pendingPickerCaHasLivePublishedOwner(configDir: string, pending: PendingPickerCaUntrust): boolean {
   return lockedPickerCa(configDir, () => {
-    const current = readPendingPickerCaUntrust(configDir);
-    if (!current || current.sha1 !== pending.sha1
-      || current.sha256 !== pending.sha256 || current.certPem !== pending.certPem) {
+    if (!samePendingUntrust(readPendingPickerCaUntrust(configDir), pending)) {
       throw new Error("picker_ca_pending_untrust_changed");
     }
     const published = publishedPickerCa(configDir);
@@ -393,9 +454,7 @@ export function acknowledgePendingPickerCaUntrust(
 ): boolean {
   if (confirmedUntrust?.ok !== true) return false;
   return lockedPickerCa(configDir, () => {
-    const current = readPendingPickerCaUntrust(configDir);
-    if (!current || current.certPem !== pending.certPem
-      || current.sha1 !== pending.sha1 || current.sha256 !== pending.sha256) return false;
+    if (!samePendingUntrust(readPendingPickerCaUntrust(configDir), pending)) return false;
     rmSync(pickerCaPendingUntrustPath(configDir));
     return true;
   });

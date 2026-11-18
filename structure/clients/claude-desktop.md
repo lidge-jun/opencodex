@@ -292,8 +292,9 @@ SHA-1/SHA-256 go to `pending-untrust.json` (mode 0600, no key material); only on
 exist, and a default `ensurePickerCa` call (the controller's enable/trust path) refuses while it
 does. Activation (`runtime.ts` and the controller via `picker-ca-startup.ts` and `picker-ca-cleanup.ts`) drains that record before and after
 migration. When a live owner still publishes the recorded certificate, the drain defers. Otherwise it
-untrusts a private copy of the public PEM and acknowledges the exact record after confirmed removal or
-absence. On Linux cleanup first checks the pending PEM for the constrained picker root profile and matching fingerprint. A missing selected NSS directory proves absence only when the path checks succeed. With an existing database, unreadable or ambiguous exports and roots present under alternate nicknames keep the pending record. Cleanup re-verifies the exact DER immediately before nickname-based deletion, then reads the database again to confirm removal and verify the other certificates survived. While the drain is
+untrusts a private copy of the public PEM and acknowledges the exact record after confirmed removal or absence.
+On Linux, trust installation holds the authority lock and records the CA fingerprint, canonical NSS path and device/inode identities of the directory and `cert9.db` in `linux-trust-store.json` before adding trust. Rotation copies the store identity to the pending record. Cleanup retains the record if that store is missing, unsafe or replaced. Older records without an identity are checked against each existing legacy and XDG database, including the default XDG path.
+Linux cleanup verifies the pending root's constraints and fingerprint. For same-subject certutil exports, a read-only lookup of the NSS SQL token binds the nickname to its DER. Ambiguous reads and alternate nicknames keep the pending record. Cleanup verifies the exact DER before deletion and checks absence and surviving trust attributes afterward. While the drain is
 incomplete and a profile is applied, the lifecycle binds a blind-only CONNECT relay on the
 profile's recorded `egressProxyUrl` port instead of the picker: Desktop keeps its network path, no
 TLS is terminated, no trust is added, and the profile row, its previous selection and the retry

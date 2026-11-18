@@ -446,8 +446,9 @@ access prompts can still occur on restart or upgrade. On Windows, explicit `on` 
 
 On Linux, explicit picker activation uses `certutil` to trust the constrained picker CA
 in Chromium’s user NSS database. Chromium uses an existing `~/.pki/nssdb` first, then
-`${XDG_DATA_HOME:-$HOME/.local/share}/pki/nssdb`. If OpenCodex cannot confirm removal of a previous CA,
-it keeps the removal pending and retries at the next start.
+`${XDG_DATA_HOME:-$HOME/.local/share}/pki/nssdb`. OpenCodex remembers the database used to install
+the CA. If that database is unavailable or removal cannot be confirmed, OpenCodex keeps the
+removal pending and retries at the next start.
 
 Picker mode allows up to 64 KiB of headers on incoming requests and ordinary HTTP
 responses, preserving browser session cookies. Larger upstream response headers return
