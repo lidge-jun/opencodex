@@ -5,7 +5,7 @@ import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { injectCodexConfig } from "../codex/inject";
 import { classifyOpenAiTierBackup, ConfigMutationLockError, getConfigPath, getDefaultConfig, initializePersistedConfigIfMissing, isValidProviderName, observeInitialConfigState, preserveOpenAiTierRollbackSnapshot } from "../config";
 import { InitialConfigPublicationError } from "../config/initialize";
-import { isAgyAcpProvider } from "../config/schema/agy-acp-references";
+import { agyAcpConfigIssues, isAgyAcpProvider } from "../config/schema/agy-acp-references";
 import { redactUserPath } from "../lib/redact";
 import { enrichProviderFromCatalog } from "../oauth/key-providers";
 import { deriveInitProviders } from "../providers/derive";
@@ -192,6 +192,15 @@ export async function runInit(): Promise<void> {
         };
         // Apply the catalog's models / vision classification (same enrichment as the GUI).
         enrichProviderFromCatalog(p.id, providerConfig);
+        if (isAgyAcp) {
+          const issue = agyAcpConfigIssues({ providers: { [p.id]: providerConfig } })
+            .find(({ path }) => path[2] === "defaultModel");
+          if (issue) {
+            console.error(`\n❌ ${issue.path.join(".")}: ${issue.message}`);
+            process.exitCode = 1;
+            return;
+          }
+        }
       }
     } else {
       providerName = (await prompt.ask("Provider name: ")).trim();

@@ -38,7 +38,7 @@ Google providers may persist `googleToolSchemaPolicy` as `compatible` or `reject
 ### OpenCodex home and live process state
 
 `initializePersistedConfigIfMissing` in `src/config.ts` is the create-only path consumed by
-`src/cli/init.ts`. The wizard omits `apiKey` for Antigravity ACP and accepts a key or an environment reference for LiteLLM.
+`src/cli/init.ts`. The wizard omits `apiKey` for Antigravity ACP, reports an invalid default model by field before publication, and accepts a key or an environment reference for LiteLLM.
 The initializer rechecks absence under the config-mutation lock and uses `src/config/initialize.ts` to harden a private
 descriptor before writing secret bytes, then links without replacing an occupied destination. Invalid or unsafe entries are preserved.
 The initializer never truncates a staged inode or rolls back by unlinking the destination; cleanup
