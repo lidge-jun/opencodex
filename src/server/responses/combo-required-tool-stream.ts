@@ -11,6 +11,13 @@ type RecordValue = Record<string, unknown>;
 function record(value: unknown): RecordValue | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as RecordValue : undefined;
 }
+function hasRefusalContent(output: unknown): boolean {
+  return Array.isArray(output) && output.some(value => {
+    const item = record(value);
+    return item?.type === "message" && Array.isArray(item.content)
+      && item.content.some(part => record(part)?.type === "refusal");
+  });
+}
 const reasoningEvents = new Set([
   "response.reasoning_summary_part.added", "response.reasoning_summary_part.done",
   "response.reasoning_summary_text.delta", "response.reasoning_summary_text.done",
@@ -57,6 +64,9 @@ function terminalGuard(fulfills: (item: RecordValue, clientCall: boolean) => boo
       }
       if (response?.output !== undefined && !Array.isArray(response.output)) evidence.replayUnsafe = true;
       if (event.type !== "response.completed" || !response || !Array.isArray(response.output) || fulfilled) return false;
+      // An upstream verdict owns the terminal even when the requested call is missing.
+      if (event.error != null || event.last_error != null || response.error != null || response.last_error != null
+        || hasRefusalContent(event.output) || hasRefusalContent(response.output)) return false;
       event.type = "response.failed";
       response.status = "failed";
       response.error = {

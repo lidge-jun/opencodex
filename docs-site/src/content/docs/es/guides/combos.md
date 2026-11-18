@@ -519,6 +519,8 @@ elegible si recibe un evento terminal que permite reintentar, contiene únicamen
 razonamiento o comentarios y llega en el primer segundo a partir del primer evento
 almacenado en el búfer, incluido `response.created`. El contenido de rechazo o un error en el
 evento terminal o en su instantánea fija el destino del stream y conserva el veredicto del proveedor.
+Esto también se aplica si una respuesta nativa de Responses termina sin la llamada exigida por
+`tool_choice`.
 Un motivo de rechazo como `content_filter` en `incomplete_details.reason` también lo fija,
 tanto si aparece en el evento terminal como en su instantánea `response`. Cualquiera de los dos
 puede impedir el reintento con `end_turn: false` o `incomplete_details.retryable: false`. Estos vetos

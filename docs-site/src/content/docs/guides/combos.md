@@ -798,7 +798,8 @@ in the provider configuration. An existing longer cooldown keeps its expiry.
 During Responses preflight, the combo can try the next eligible target if a replayable terminal
 contains only reasoning or commentary text and arrives within 1 second of the first buffered
 event, including `response.created`. Refusal content or an error on either terminal carrier commits
-the stream to the selected target and preserves the upstream verdict.
+the stream to the selected target and preserves the upstream verdict. This also applies when a
+native Responses completion lacks the call required by `tool_choice`.
 A refusal reason such as `content_filter` in `incomplete_details.reason` also commits it, whether
 the reason appears on the terminal event or in its `response` snapshot. Either carrier can also
 veto replay with `end_turn: false` or `incomplete_details.retryable: false`. These replay vetoes also

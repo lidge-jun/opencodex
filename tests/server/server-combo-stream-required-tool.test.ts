@@ -199,6 +199,21 @@ describe("native streaming combo mandatory tools (#7456)", () => {
       },
     }]);
   });
+  const terminalError = { code: "content_policy_violation", message: "Fixture refusal" };
+  const terminalRefusal = { type: "message", id: "msg_refusal", role: "assistant", status: "completed",
+    content: [{ type: "refusal", refusal: "Fixture refusal" }] };
+  test.each([
+    { carrier: "event error", verdict: { error: terminalError }, snapshot: {} },
+    { carrier: "nested error", verdict: {}, snapshot: { error: terminalError } },
+    { carrier: "terminal refusal content", verdict: {}, snapshot: { output: [terminalRefusal] } },
+  ])("required-tool rewrite preserves $carrier without a second send", async ({ verdict, snapshot }) => {
+    const sent: Array<Record<string, unknown>> = [];
+    const event = { type: "response.completed", ...verdict, response: { ...completed("m1"), ...snapshot } };
+    const config = configFor(() => sse(event), sent);
+    const text = await (await request(config, "required")).text();
+    expect(sent.map(body => [body.model, body.tool_choice])).toEqual([["m1", "required"]]);
+    expect(terminal(text)).toMatchObject([event]);
+  });
   for (const prefix of [
     { type: "response.output_text.delta", delta: "visible text" },
     { type: "response.output_item.added", output_index: 0, item: { type: "web_search_call", id: "hosted", status: "in_progress" } },

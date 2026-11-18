@@ -445,8 +445,11 @@ function bareErrorIsRetryable(payload: unknown): boolean {
 function heldOnlyOutput(...outputs: unknown[]): boolean {
   const items = outputs.flatMap(output => Array.isArray(output) ? output : []);
   if (outputs.some(output => output !== undefined && !Array.isArray(output))) return false;
-  return items.length > 0 && items.every(item => item !== null && typeof item === "object"
-    && !Array.isArray(item) && ["message", "reasoning"].includes((item as { type?: unknown }).type as string));
+  return items.length > 0 && items.every(value => {
+    const item = recordValue(value);
+    return item?.type === "reasoning" || (item?.type === "message" && Array.isArray(item.content)
+      && item.content.every(part => recordValue(part)?.type === "output_text"));
+  });
 }
 
 function retryableZeroOutputTerminal(payload: unknown, context?: object): boolean {
@@ -465,6 +468,8 @@ function retryableZeroOutputTerminal(payload: unknown, context?: object): boolea
     // so held text and reasoning are not evidence of anything sent; it keeps the retryability it
     // carries. Any other output item (a tool call, an action) still commits it.
     if (code === REQUIRED_TOOL_CONTRACT_CODE) {
+      if (response?.error != null && event.error != null) return false;
+      if (event.last_error != null || response?.last_error != null) return false;
       return error?.retryable !== false && !incompleteCarriersVetoReplay(event, response)
         && classifyIncompleteReplayReason(event, response) !== "veto"
         && (emptyOutput || heldOnlyOutput(target.output, event.output));

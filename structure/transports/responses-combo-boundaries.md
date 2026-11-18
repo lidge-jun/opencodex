@@ -112,8 +112,9 @@ or post-commit typed failure. Caller hosted non-function selectors retain their 
 The outbound request parser shared with passthrough lives in `src/server/responses/outbound-request-body.ts`,
 so required-tool checks do not import the stream recovery owner.
 Completed item events and terminal snapshots can satisfy it; a call start alone cannot.
-Missing calls turn `response.completed` into `response.failed` with
-`required_tool_contract_unsatisfied`, retaining response identity, output and usage.
+A missing call in a clean `response.completed` becomes `response.failed` with
+`required_tool_contract_unsatisfied`, retaining response identity, output and usage. An error or
+refusal content on either terminal carrier preserves the upstream verdict and commits the stream.
 The client rewrite judges restored calls before continuation observers and hosted-image display.
 The raw inspector and client guard resolve selectors and observed calls through the same authorized
 Muse/namespace alias maps, authorized self-named scrub and catalog-aware default-namespace normalization.
@@ -227,7 +228,7 @@ in-flight replacement, and never awaits upstream cleanup.
   `upstream_stall_timeout`, or an empty-output `max_output_tokens` limit follows the same failure path.
   A paused turn, `end_turn: false`, or `incomplete_details.retryable: false` keeps the terminal
   on its target, including when the reason is absent. Preflight reads incomplete details from the
-  nested response with an event-level fallback. `src/bridge/sse.ts` records translated Anthropic
+  terminal event and nested response independently. Either carrier can veto replay. `src/bridge/sse.ts` records translated Anthropic
   `pause_turn` on the request context (`src/lib/client-error-body.ts`) and preserves the wire reason
   `max_output_tokens` and usage. Other explicit semantic or unknown reasons stay terminal;
 - a top-level `error` arrives before output, in which case unknown, rate-limit, and server failures
