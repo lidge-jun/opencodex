@@ -3,6 +3,7 @@ import { chmodSync, closeSync, fsyncSync, mkdtempSync, openSync, writeFileSync }
 import { join } from "node:path";
 import { hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import { isOcxRoutingMarkerLine } from "./injected-marker";
+import { CODEX_CONFIG_PATH, resolveCodexCatalogPath, samePath } from "./paths";
 import { transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "./subagent-defaults";
 import { rootAssignmentKey, rootSourceLines, sourceAssignment, sourceText } from "./toml-source-lines";
 
@@ -87,9 +88,9 @@ function fields(content: string): Map<string, Field> {
 
 export function captureJournalConfigFields(content: string, ownership: Ownership): JournalConfigFields {
   const captured: JournalConfigFields = {};
+  const recorded = recordedValues(ownership);
   for (const [key, span] of fields(content)) {
-    const recorded = recordedValues(ownership).get(key);
-    if (isDeepStrictEqual(span.value, recorded) || key === "model_provider" && span.value === "opencodex"
+    if (matchesInjectedField(key, span.value, recorded.get(key)) || key === "model_provider" && span.value === "opencodex"
       || key === "model_providers.opencodex" || key === "profiles.opencodex") captured[key] = span.text;
   }
   // Injection removes the root selection and old inline OCX profiles in URL-only mode.
@@ -152,6 +153,13 @@ function recordedValues(journal: Ownership): Map<string, unknown> {
   return values;
 }
 
+function matchesInjectedField(key: string, value: unknown, injected: unknown): boolean {
+  if (key === "model_catalog_json" && typeof value === "string" && value && typeof injected === "string" && injected) {
+    return samePath(resolveCodexCatalogPath(CODEX_CONFIG_PATH, value), resolveCodexCatalogPath(CODEX_CONFIG_PATH, injected));
+  }
+  return isDeepStrictEqual(value, injected);
+}
+
 /** Three-way restore: an edited preference stays; an edited routing field blocks hand-back. */
 export function restoreJournalConfigFields(current: string, original: string, journal: Ownership, recoverOwnedEdits = false): string | null {
   try {
@@ -209,7 +217,7 @@ export function restoreJournalConfigFields(current: string, original: string, jo
       }
       const injected = expected.get(key);
       if (isDeepStrictEqual(injected, prior?.value)) continue; // never owned
-      if (!isDeepStrictEqual(present?.value, injected)) {
+      if (!matchesInjectedField(key, present?.value, injected)) {
         if (key === "model" || key.startsWith("agents.") || key === "web_search") continue;
         if (!recoverOwnedEdits) return null;
       }

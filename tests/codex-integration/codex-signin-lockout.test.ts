@@ -155,6 +155,20 @@ describe("a Codex catalog pointer whose file is gone (#5261)", () => {
     }
   });
 
+  test("a relative owned catalog is diagnosed against the inspected config", () => {
+    const dir = mkdtempSync(join(tmpdir(), "ocx-catalog-pointer-"));
+    try {
+      const content = configNaming("opencodex-catalog.json");
+      const configPath = join(dir, "config.toml");
+      const catalogPath = join(dir, "opencodex-catalog.json");
+      expect(missingOwnedCatalogPath(content, configPath)).toBe(catalogPath);
+      writeFileSync(catalogPath, "{}");
+      expect(missingOwnedCatalogPath(content, configPath)).toBeNull();
+    } finally {
+      removeTreeWithRetry(dir);
+    }
+  });
+
   test("a catalog the user named is theirs, present or not", () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-catalog-user-"));
     try {

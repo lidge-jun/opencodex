@@ -1,11 +1,34 @@
 import { expect, test } from "bun:test";
+import { join } from "node:path";
 import { captureJournalConfigFields, restoreJournalConfigFields } from "../../src/codex/journal-config-restore";
+import { CODEX_HOME, DEFAULT_CATALOG_PATH, tomlString } from "../../src/codex/paths";
 
 const url = "http://127.0.0.1:10100/v1";
 const ownership = { injectedOpenaiBaseUrl: url, injectedRealtimeWsBaseUrl: url, injectedCatalogPath: "/fixture/catalog.json" };
 const original = 'model = "before"\nopenai_base_url = "https://native.example/v1"\n';
 const injected = `openai_base_url = "${url}"\nexperimental_realtime_ws_base_url = "${url}"\nmodel_catalog_json = "/fixture/catalog.json"\nmodel = "before"\n[model_providers.opencodex]\nname = "OCX"\nbase_url = "${url}"\n`;
 const journal = { ...ownership, injectedConfigFields: captureJournalConfigFields(injected, ownership) };
+
+test.each([true, false])("restore recognizes either catalog spelling with a field snapshot: %s", (snapshot) => {
+  const binding = (path: string) => `model_catalog_json = ${tomlString(path)}\n`;
+  const absolute = binding(DEFAULT_CATALOG_PATH);
+  const relative = binding("opencodex-catalog.json");
+  const retained = 'model = "user"\n';
+  const legacy = { injectedCatalogPath: DEFAULT_CATALOG_PATH };
+  const captured = captureJournalConfigFields(relative, legacy);
+  expect(captured.model_catalog_json).toBe(relative.trimEnd());
+
+  if (snapshot) {
+    const record = { ...legacy, injectedConfigFields: captured };
+    expect(restoreJournalConfigFields(absolute + retained, "", record)).toBe(retained);
+    expect(restoreJournalConfigFields(relative + retained, "", record)).toBe(retained);
+    expect(restoreJournalConfigFields(binding(join(CODEX_HOME, "other.json")) + retained, "", record)).toBeNull();
+    expect(restoreJournalConfigFields(relative + retained, absolute, record)).toBe(absolute + retained);
+  } else {
+    expect(restoreJournalConfigFields(relative + retained, "", legacy)).toBe(retained);
+    expect(restoreJournalConfigFields(absolute + retained, "", legacy)).toBe(retained);
+  }
+});
 
 test("explicit recovery restores only recorded routing fields and blocks, preserving unrelated bytes", () => {
   const edits = 'model = "user/model"\nweb_search = "live"\n';

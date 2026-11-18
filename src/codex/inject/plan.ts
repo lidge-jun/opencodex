@@ -24,7 +24,7 @@ import {
   journaledReplacedRootWebSearch,
 } from "../journal";
 import { REALTIME_WS_BASE_URL_KEY, stripJournaledOpenaiBaseUrl } from "../injected-marker";
-import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, resolveCodexStateDbPath } from "../paths";
+import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, codexCatalogBindingForPath, resolveCodexStateDbPath } from "../paths";
 import { transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "../subagent-defaults";
 import type { OcxConfig } from "../../types";
 import type { CodexWriteCandidate } from "../write-coordination";
@@ -232,7 +232,7 @@ export function deriveCodexInjectionPlan(
     ctx.catalogPathOption,
   );
   content = catalogPath
-    ? setRootModelCatalogPath(content, catalogPath)
+    ? setRootModelCatalogPath(content, codexCatalogBindingForPath(CODEX_CONFIG_PATH, catalogPath))
     : stripOpencodexCatalogPath(content);
 
   // Provider-table form: non-loopback admission or an explicit Desktop policy.
@@ -345,7 +345,7 @@ export function deriveCodexInjectionPlan(
     profileSource,
     buildProfileFileForTarget(
       routingTarget,
-      catalogPath,
+      catalogPath && codexCatalogBindingForPath(CODEX_PROFILE_PATH, catalogPath),
       websocketsForRoutingTarget(config, routingTarget),
       config?.fastMode,
       config?.codexProviderDisplayName,

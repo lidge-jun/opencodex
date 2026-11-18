@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -53,6 +53,47 @@ test("a Codex home without config.toml is bootstrapped and routed", () => {
   expect(result.configChanged).toBe(true);
   const config = readFileSync(join(codexHome, "config.toml"), "utf8");
   expect(config).toContain("opencodex");
+});
+
+test("keeps an injected catalog outside the config directory absolute", () => {
+  const codexHome = join(root, "codex");
+  const configPath = join(codexHome, "config.toml");
+  const catalogPath = join(root, "opencodex-catalog.json");
+  mkdirSync(codexHome);
+  writeFileSync(configPath, 'model = "gpt-5.5"\nmodel_catalog_json = "../opencodex-catalog.json"\n');
+  writeFileSync(catalogPath, '{"models":[]}\n');
+
+  const { result, stderr } = runInject({ CODEX_HOME: codexHome, OPENCODEX_HOME: join(root, "ocx") });
+  expect(result.success, stderr).toBe(true);
+  for (const file of [configPath, join(codexHome, "opencodex.config.toml")]) {
+    expect(Bun.TOML.parse(readFileSync(file, "utf8")).model_catalog_json).toBe(catalogPath);
+  }
+});
+
+test("catalog and Desktop picker readers resolve from the config home with a different cwd", () => {
+  const codexHome = join(root, "codex");
+  const catalogPath = join(codexHome, "opencodex-catalog.json");
+  mkdirSync(codexHome);
+  writeFileSync(join(codexHome, "config.toml"), 'model_catalog_json = "opencodex-catalog.json"\n');
+  const script = `
+    const paths = require("./src/codex/paths");
+    const picker = require("./src/codex/desktop-app/picker-freshness");
+    const status = require("./src/cli/status");
+    console.log(JSON.stringify([
+      paths.readCodexCatalogPath(),
+      paths.readCodexCatalogPathForHome(process.env.CODEX_HOME),
+      picker.readCodexCatalogBinding(),
+      status.detectMissingCodexCatalogPath(),
+    ]));
+  `;
+  const spawned = spawnSync(process.execPath, ["--eval", script], {
+    cwd: repoRoot,
+    env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: join(root, "ocx") },
+    encoding: "utf8",
+    timeout: SPAWN_BUDGET_MS - 5_000,
+  });
+  expect(spawned.status, spawned.stderr).toBe(0);
+  expect(JSON.parse(spawned.stdout)).toEqual(Array(4).fill(catalogPath));
 });
 
 test("a validate-only preflight passes without creating config.toml", () => {

@@ -33,7 +33,7 @@ OpenCodex serializa su configuración Codex. En Windows, un archivo mantenido te
 
 ```toml
 # root keys, before the first table
-model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
+model_catalog_json = "opencodex-catalog.json"
 # Auto-injected by opencodex (undo: ocx restore)
 openai_base_url = "http://127.0.0.1:10100/v1"
 # Auto-injected by opencodex (undo: ocx restore)
@@ -174,7 +174,7 @@ Para un `hostname` sin bucle, Codex debe enviar la cabecera de autenticación AP
 ```toml
 # root keys
 model_provider = "opencodex"
-model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
+model_catalog_json = "opencodex-catalog.json"
 
 # appended at the end of the file
 # Auto-injected by opencodex (undo: ocx restore)
@@ -215,6 +215,13 @@ En macOS, opencodex comprueba el CLI incluido en la app de Codex en `/Applicatio
 Las comprobaciones de ejecución también reconocen `Codex.app` y `ChatGPT.app` en cualquier ubicación, incluidos los paquetes trasladados, las selecciones explícitas de `CODEX_CLI_PATH` o los comandos de ejecución configurados y los alias mediante enlaces simbólicos. Un nombre reconocido activa la verificación; no concede confianza. Antes de cada ejecución, el paquete canónico y el binario exacto deben superar la verificación estricta de firmas con el Team ID de OpenAI y la política de propiedad, permisos y directorios antecesores. El binario debe resolverse dentro de `Contents/` del paquete (incluido `Codex.app/Contents/Resources/codex-aarch64-apple-darwin`); los paquetes o binarios que no puedan resolverse se rechazan. Las CLI ajenas a paquetes de aplicaciones y los paquetes de terceros conservan su política de ejecución existente.
 
 En WSL, si `CODEX_HOME` está desactivado y el directorio Linux `~/.codex` está ausente o no mantiene el estado Codex (`config.toml`, `auth.json`, `sessions`, `history.jsonl`), opencodex también comprueba un único inicio de escritorio Windows Codex en `/mnt/c/Users/*/.codex/config.toml`. Cuando existe exactamente un candidato, utiliza ese directorio para que el modo de servidor de aplicaciones WSL y el escritorio Windows Codex compartan los mismos archivos de configuración y autenticación. Establecer `CODEX_HOME` explícitamente para anular esta detección. Cuando Windows Codex Desktop ejecuta su aplicación-servidor dentro de WSL, envía el binario Linux Codex bajo esa casa como `bin/wsl/<hash>/codex`; opencodex lo encuentra allí cuando el PATH de servicio no tiene `codex`, después de cualquier entorno de ejecución y PATH configurados explícitamente.
+
+Cuando el catálogo está junto a `config.toml`, OpenCodex escribe su nombre de archivo en
+`model_catalog_json` para que tanto Codex en Windows como el servidor de aplicaciones de WSL puedan
+abrirlo desde el directorio compartido. Ejecuta `ocx sync` en Windows para actualizar una
+configuración anterior de OpenCodex que contenga una ruta absoluta de Windows. OpenCodex escribe
+una ruta absoluta si el catálogo está en otro directorio y conserva las asignaciones de catálogo
+personalizadas en `config.toml`.
 
 Si el home de Codex existe pero Codex no ha escrito `config.toml` (por ejemplo, una nueva instalación de escritorio que nunca se ha iniciado sesión en OpenAI), opencodex crea allí un `config.toml` vacío y continúa. Si el directorio principal en sí no existe, inicie Codex una vez para que lo cree o establezca `CODEX_HOME`.
 

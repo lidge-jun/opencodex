@@ -143,13 +143,13 @@ place. A user-owned root line is therefore replaced only while the switch is off
 the same name are invalid TOML — and is not lost while it is gone. `ocx restore` replays the journal
 snapshot on top of that.
 
-`src/codex/inject.ts` writes one of two forms. The choice is not cosmetic: it decides whether Codex
-keeps its native provider id, which decides whether existing thread history still resolves.
+`src/codex/inject.ts` writes one of two forms. The provider id determines whether existing thread history still resolves.
+Both forms write `model_catalog_json` as a basename for a sibling catalog so Windows and WSL can share it. Catalogs outside the config directory use absolute paths. Injection preserves user-owned bindings and recognizes both spellings on re-injection and removal. `src/codex/paths.ts` resolves relative paths against the config that supplied them. The journal records the resolved path, compares equivalent spellings during restore, and retains the original assignment's text.
 
 **Loopback (default).** A single marker-owned root override, no provider table:
 
 ```toml
-model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
+model_catalog_json = "opencodex-catalog.json"
 openai_base_url = "http://127.0.0.1:10100/v1"
 ```
 
@@ -172,7 +172,7 @@ This diagnostic distinction does not change URL ownership, journal entries, or s
 
 ```toml
 model_provider = "opencodex"
-model_catalog_json = "/absolute/path/to/opencodex-catalog.json"
+model_catalog_json = "opencodex-catalog.json"
 
 [model_providers.opencodex]
 name = "OpenCodex Proxy"

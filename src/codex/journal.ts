@@ -8,7 +8,7 @@ import { assertCodexHomeOwner, codexHomeIsAbsent, CODEX_HOME_JOURNAL_FILE, Codex
 import { hasInjectedCodexRouting } from "./injected-marker";
 import { ConfigWriteContentChanged, configWriteLockFailureMessage, withConfigWriteLockHeld } from "./config-write-lock";
 import type { LockHandle } from "./config-write-lock";
-import { CODEX_HOME, CODEX_CONFIG_PATH, CODEX_PROFILE_PATH } from "./paths";
+import { CODEX_HOME, CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, resolveCodexCatalogPath } from "./paths";
 import { transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "./subagent-defaults";
 import { appendInjectedRootHistory, captureJournalConfigFields, parseInjectedRootHistory, restoreJournalConfigFields, snapshotDisconnectRecovery, type InjectedRootHistory, type InjectedRootKey, type JournalConfigFields } from "./journal-config-restore";
 
@@ -71,7 +71,8 @@ interface Journal {
    */
   replacedRootWebSearch?: string | null;
   /**
-   * The catalog path this injection actually wrote to.
+   * The resolved catalog path this injection actually wrote to. Older journals may store a
+   * config-relative binding.
    *
    * #1798: restore re-resolves the catalog from the CURRENT config, so a Codex app rewrite
    * that dropped `model_catalog_json` sends restore to the default catalog while the
@@ -327,7 +328,8 @@ export function journaledReplacedRootWebSearch(options: { readOnly?: boolean } =
 
 /** The catalog path the last injection wrote to, or null when none was recorded. */
 export function journaledInjectedCatalogPath(): string | null {
-  return readJournal()?.injectedCatalogPath ?? null;
+  const path = readJournal()?.injectedCatalogPath;
+  return typeof path === "string" && path ? resolveCodexCatalogPath(CODEX_CONFIG_PATH, path) : null;
 }
 
 /**

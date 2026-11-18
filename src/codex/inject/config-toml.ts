@@ -15,7 +15,7 @@ import {
 import {
   CODEX_CONFIG_PATH,
   DEFAULT_CATALOG_PATH,
-  resolveCodexConfigPath,
+  resolveCodexCatalogPath,
   tomlString,
 } from "../paths";
 import { normalizeStructuralWhitespace, rootAssignmentKey, rootSourceLines, sourceAssignment, sourceAssignmentSpan, sourceText, type SourceLine } from "../toml-source-lines";
@@ -600,6 +600,7 @@ export function ensureFastModeFeature(content: string, fastMode?: boolean): stri
 }
 
 function isOpencodexCatalogPath(path: string): boolean {
+  // Recognize the generated basename as well as either host's legacy absolute spelling.
   return path.replace(/\\/g, "/").split("/").pop() === "opencodex-catalog.json";
 }
 
@@ -764,13 +765,13 @@ export function chooseCatalogPathForInjection(
   content: string,
   requested?: string | null,
 ): string | null {
-  if (requested !== undefined) return requested;
+  if (requested !== undefined) return requested ? resolveCodexCatalogPath(CODEX_CONFIG_PATH, requested) : null;
 
   const existing = readRootModelCatalogPath(content);
   if (existing) {
-    const resolved = resolveCodexConfigPath(existing);
+    const resolved = resolveCodexCatalogPath(CODEX_CONFIG_PATH, existing);
     if (!isOpencodexCatalogPath(resolved) || existsSync(resolved))
-      return existing;
+      return resolved;
   }
 
   return existsSync(DEFAULT_CATALOG_PATH) ? DEFAULT_CATALOG_PATH : null;
@@ -797,10 +798,10 @@ export function chooseCatalogPathForInjection(
  * somewhere else would report a state injection would then treat differently. Tightening it is a
  * change to injection, not to this.
  */
-export function missingOwnedCatalogPath(content: string): string | null {
+export function missingOwnedCatalogPath(content: string, configPath = CODEX_CONFIG_PATH): string | null {
   const existing = readRootModelCatalogPath(content);
   if (!existing) return null;
-  const resolved = resolveCodexConfigPath(existing);
+  const resolved = resolveCodexCatalogPath(configPath, existing);
   if (!isOpencodexCatalogPath(resolved)) return null;
-  return existsSync(resolved) ? null : existing;
+  return existsSync(resolved) ? null : resolved;
 }

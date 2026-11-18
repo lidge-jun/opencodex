@@ -131,11 +131,11 @@ test("captures the given config reference, generation, and catalog target identi
   }
 });
 
-test("captures PRESENT catalog target-selection evidence from the exact config bytes", () => {
+test.each(["relative", "absolute"])("captures PRESENT catalog target-selection evidence for a %s binding", (binding) => {
   saveConfig(config());
   const selectedCatalog = join(codexHome, "selected-catalog.json");
   const configBytes = Buffer.from(
-    `model_catalog_json = ${JSON.stringify(selectedCatalog)}\n`,
+    `model_catalog_json = ${JSON.stringify(binding === "relative" ? "selected-catalog.json" : selectedCatalog)}\n`,
     "utf8",
   );
   writeFileSync(join(codexHome, "config.toml"), configBytes);
