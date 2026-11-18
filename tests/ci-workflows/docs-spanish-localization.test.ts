@@ -316,6 +316,16 @@ describe("Spanish documentation localization", () => {
     }
   });
 
+  test("the Spanish Grok Build manual recipe link lands at the recipe heading", () => {
+    const anchor = "manual-recipe-without-auto-registration";
+    const english = source(join(root, "guides/grok-build.md"));
+    const spanish = source(join(root, "es/guides/grok-build.md"));
+    expect(english).toContain(`](#${anchor})`);
+    expect(english).toContain("## Manual recipe (without auto-registration)");
+    expect(spanish).toContain(`](#${anchor})`);
+    expect(spanish).toContain(`<a id="${anchor}"></a>\n\n## Receta manual (sin registro automático)`);
+  });
+
   test("remote credential examples require a protected transport in every locale", () => {
     for (const locale of ["", ...localeFolders]) {
       const opencode = codeBlocks(source(join(root, locale, "guides/opencode.md")))
