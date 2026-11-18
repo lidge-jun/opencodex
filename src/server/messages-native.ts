@@ -50,7 +50,7 @@ import type { AdmissionLease } from "../lib/admission";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { classifyError } from "../lib/errors";
 import { relaySseWithPayloadRewrite } from "./sse-payload-rewrite";
-import { EMPTY_BYTES, joinSseFrameBytes } from "./sse-frame-buffer";
+import { EMPTY_BYTES, joinSseFrameBytes, sseDelimiterLengthAt } from "./sse-frame-buffer";
 import { redactSecretString } from "../lib/redact";
 import { formatClientRetryAfter, resolveClientRetryAfter } from "../lib/retry-after";
 import { enrichOpenCodeZenUpstreamMessage } from "../providers/opencode-zen-rate-limit";
@@ -278,7 +278,7 @@ const MODEL_ECHO_SCAN_BYTES = 64 * 1024;
 /** The `message_start` frame with `message.model` set to `model`, or undefined for any other frame. */
 function messageStartWithModel(frame: string, model: string): string | undefined {
   const data = frame
-    .split("\n")
+    .split(/\r\n|\r|\n/)
     .map(line => sseFieldValue(line, "data"))
     .filter((value): value is string => value !== null)
     .join("");
@@ -301,6 +301,7 @@ export function echoRequestedModel(body: ReadableStream<Uint8Array>, model: stri
   const decoder = new TextDecoder();
   let carry = EMPTY_BYTES;
   let carryLength = 0;
+  let scanFrom = 0;
   let scanning = true;
   let scanned = 0;
   const take = (suffix: Uint8Array): Uint8Array => {
@@ -336,13 +337,24 @@ export function echoRequestedModel(body: ReadableStream<Uint8Array>, model: stri
           return;
         }
         scanned += value.byteLength;
+        const carried = carryLength;
+        const length = carried + value.byteLength;
+        const byteAt = (index: number): number => index < carried ? carry[index]! : value[index - carried]!;
         let start = 0;
-        for (let lf = value.indexOf(10); lf !== -1; lf = value.indexOf(10, lf + 1)) {
-          // Only the last retained byte can complete a delimiter across chunks.
-          const previous = lf === start ? carry[carryLength - 1] : value[lf - 1];
-          if (previous !== 10) continue;
-          const frame = take(value.subarray(start, lf + 1));
-          start = lf + 1;
+        let index = scanFrom;
+        while (index < length) {
+          const delimiter = sseDelimiterLengthAt(index, length, byteAt);
+          if (delimiter === undefined) break;
+          if (delimiter === 0) {
+            index += 1;
+            continue;
+          }
+          const end = index + delimiter;
+          // A final CR may be the first byte of a split CRLF. Keep that pair together.
+          if (end === length && byteAt(end - 1) === 13) break;
+          const frame = take(value.subarray(Math.max(0, start - carried), end - carried));
+          start = end;
+          index = end;
           const decoded = decoder.decode(frame);
           const rewritten = messageStartWithModel(decoded, model);
           if (rewritten === undefined) {
@@ -355,7 +367,7 @@ export function echoRequestedModel(body: ReadableStream<Uint8Array>, model: stri
           scanning = false;
           break;
         }
-        const suffix = value.subarray(start);
+        const suffix = value.subarray(Math.max(0, start - carried));
         if (!scanning || scanned > MODEL_ECHO_SCAN_BYTES) {
           scanning = false;
           const remaining = take(suffix);
@@ -363,6 +375,7 @@ export function echoRequestedModel(body: ReadableStream<Uint8Array>, model: stri
           if (start > 0 || remaining.byteLength > 0) return;
           continue;
         }
+        scanFrom = index - start;
         retain(suffix);
         if (start > 0) return;
       }

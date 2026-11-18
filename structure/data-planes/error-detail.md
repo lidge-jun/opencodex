@@ -500,7 +500,8 @@ delay. A final error uses one full JSON parse and the shared private diagnostic 
 with the pinned SDK's parsed-or-raw SSE fallback. Empty named errors retain generic SDK dispatch.
 `src/lib/messages-sse-error-presentation.ts` renders closed type/code/message literals and carries
 complete-frame construction identity. While looking for `message_start`, the native model echo
-scans each incoming chunk once for LF pairs and grows incomplete frame storage geometrically.
+uses the shared byte delimiter scanner for LF, CRLF and mixed blank lines, including delimiters
+split across chunks. It scans each incoming chunk once and grows incomplete frame storage geometrically.
 It reads through fragments until a frame is ready, the scan window ends, or EOF arrives. The
 64 KiB cutoff is checked after scanning each chunk, so a complete `message_start` in the
 chunk that crosses the cutoff can still be rewritten. If the frame is incomplete at the end

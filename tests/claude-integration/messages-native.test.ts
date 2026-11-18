@@ -13,6 +13,8 @@ import { saveConfig } from "../../src/config";
 import { clearKeyCooldowns, forgetApiKeyRotationCursor } from "../../src/providers/key-failover";
 import { estimateClaudeRequestTokens, handleClaudeCountTokens, handleClaudeMessages } from "../../src/server/claude-messages";
 import { getRequestLogEntries } from "../../src/server/request-log";
+import { echoRequestedModel } from "../../src/server/messages-native";
+import { MessagesSseFrameContext } from "../../src/lib/messages-sse-error-presentation";
 import type { OcxConfig } from "../../src/types";
 import type { AdmissionLease } from "../../src/lib/admission";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -192,6 +194,43 @@ async function settledRowFor(requestId: string) {
 }
 
 describe("managed native Messages", () => {
+  test.each([
+    ["CRLF", "\r\n", ["\r\n\r\n"]],
+    ["first CRLF split", "\r\n", ["\r", "\n\r\n"]],
+    ["second CRLF split", "\r\n", ["\r\n\r", "\n"]],
+    ["mixed LF and CRLF", "\r\n", ["\n", "\r\n"]],
+    ["mixed CRLF and LF", "\n", ["\r\n", "\n"]],
+  ] as const)("rewrites a live %s message_start and preserves neighboring bytes", async (_label, newline, ending) => {
+    const prefix = ": keep this comment\n\n";
+    const suffix = "event: ping\r\ndata: {}\r\n\r\n";
+    const start = sseText(SSE_FRAMES.slice(0, 1)).trimEnd().replaceAll("\n", newline);
+    const chunks = [prefix, start + ending[0], ...ending.slice(1)];
+    const encoder = new TextEncoder();
+    const decoder = new TextDecoder();
+    const pulledPastFrame = Promise.withResolvers<"pending">();
+    let upstream!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) { upstream = controller; },
+      pull(controller) {
+        const chunk = chunks.shift();
+        if (chunk === undefined) pulledPastFrame.resolve("pending");
+        else controller.enqueue(encoder.encode(chunk));
+      },
+    }, { highWaterMark: 0 });
+    const reader = echoRequestedModel(body, "anth/claude-x", new MessagesSseFrameContext()).getReader();
+    try {
+      expect(decoder.decode((await reader.read()).value)).toBe(prefix);
+      const first = await Promise.race([reader.read(), pulledPastFrame.promise]);
+      expect(first).not.toBe("pending");
+      if (first === "pending") return;
+      expect(decoder.decode(first.value)).toBe(ECHOED_SSE_TEXT.split("\n\n")[0] + "\n\n");
+      upstream.enqueue(encoder.encode(suffix));
+      expect(decoder.decode((await reader.read()).value)).toBe(suffix);
+    } finally {
+      await reader.cancel();
+    }
+  });
+
   for (const stream of [false, true]) {
     const cases: { name: string; controls: Record<string, unknown>; expected?: string }[] = [
       ...["minimal", "low", "medium", "high", "xhigh", "max", "ultra"].map(effort => ({
