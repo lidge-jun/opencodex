@@ -157,13 +157,15 @@ Manual advice is a tool result for the `advisor` call the worker made. The resul
 object. Its `advice` field is the Advisor model's text. Its `status` is set by the runtime.
 
 Manual calls also require the current request's `tool_choice` to allow `advisor`. An explicit
-selector or allowlist must select the root `advisor` function. Forced hosted web search and
+selector or allowlist must select the root `advisor` function. The reserved `functions` namespace
+also maps to the root. Forced hosted web search and
 same-named custom or hosted selectors grant no manual Advisor permission. This applies to
 ordinary translated Responses and Messages requests as well as web search. A forbidden call
 is rejected before consultation, worker redispatch, or disclosure of its ID and arguments.
-When translated Messages explicitly selects Anthropic's hosted `advisor`, OpenCodex leaves the
-declaration and named choice to Anthropic on eligible routes and skips proxy consultations for
-that turn. On other turns, automatic preflight and adaptive consultations follow operator policy.
+When translated Messages explicitly selects Anthropic's hosted `advisor`, OpenCodex forwards the
+declaration and named choice on eligible routes. An ambiguous or unavailable choice returns HTTP
+400 locally. OpenCodex skips proxy consultations for either outcome. On other turns, automatic
+preflight and adaptive consultations follow operator policy.
 
 Automatic preflight keeps the fixed runtime transport instruction in a developer message and
 puts the quoted JSON advice in a separate **user-role advisory message**. Advisor-generated text

@@ -81,6 +81,8 @@ OpenCodex 不会把 provider API key、Authorization 头、OAuth token、仅后�
 
 手动建议是 Worker 自己发出的 `advisor` 调用所对应的工具结果。结果是一个 JSON 对象。`advice` 是顾问模型的文本。`status` 由运行时写入。
 
+在常规的 Responses、Messages 转换请求和 Web 搜索中，只有当前 `tool_choice` 允许 `advisor` 时才能手动咨询。显式指定工具或使用允许列表时，必须选中根级的 `advisor` 函数。保留的 `functions` 命名空间也会按根级处理。强制使用托管 Web 搜索，或选中同名的自定义工具或托管工具，都不会授权手动咨询。未经允许的调用会以 `undeclared_tool_call` 拒绝，且不会触发咨询、向 Worker 重新发送请求或返回调用 ID 和参数。
+
 基于 fetch 的 Web 搜索轮次中，只有实际生效的 `tool_choice` 允许合成 `advisor` 工具时，搜索循环才会提供该工具并拦截手动咨询调用。将 `allowed_tools` 限制为 `web_search` 不允许手动咨询顾问。启用托管搜索不会扩大此工具权限范围。
 
 自动建议的 JSON 内容放在独立的 user-role 建议消息中。developer 消息只保留固定的运行时传输说明，顾问生成的文本不会进入 developer/system 内容；OpenAI Chat 和 Anthropic 均可传递它，无需伪造工具调用。JSON 转义能防止结构突破和字段伪造，但不能保证模型忽略自然语言中的恶意指令。专门的咨询结果协议可进一步区分建议与用户请求。每个请求最多进行 3 次咨询和 4 次 Advisor worker 续写。咨询额度耗尽后移除 advisor 工具，重复调用只允许一次携带上限结果的最终续写；再次调用会以 502 advisor_continuation_limit 结束，不再发送隐藏的 worker 请求。空完成重试共享此上限。

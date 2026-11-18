@@ -235,6 +235,7 @@ describe("advisor responses wiring (end-to-end)", () => {
         expect(workerBodies[0]).not.toContain('"advisor"');
         expect(body).toContain("undeclared_tool_call");
         expect(body).not.toContain("call_adv_1");
+        expect(body).not.toContain("Where do I start?");
         expect(body).not.toContain(ADVISOR_ADVICE);
         if (!stream) expect(JSON.parse(body).usage).toMatchObject({ input_tokens: 100, output_tokens: 20, total_tokens: 120 });
       });
@@ -283,7 +284,12 @@ describe("advisor responses wiring (end-to-end)", () => {
     if (lane !== "ordinary") expect(JSON.parse(workerBodies[0]!)).toMatchObject({
       tools: [{ name: "web_search" }], tool_choice: { type: "auto" },
     });
-    if (lane !== "Messages translation") expect(body).toContain("undeclared_tool_call");
+    if (lane === "Messages translation") {
+      expect(body).toContain("event: error\n");
+      expect(body).not.toContain("event: message_stop\n");
+      const frames = body.split("\n").filter(line => line.startsWith("data: ")).map(line => JSON.parse(line.slice(6)));
+      expect(frames.at(-1)).toMatchObject({ type: "error", error: { type: "api_error", code: "undeclared_tool_call" } });
+    } else expect(body).toContain("undeclared_tool_call");
     expect(body).not.toContain("call_adv_1");
     expect(body).not.toContain("Where do I start?");
   });
@@ -345,6 +351,37 @@ describe("advisor responses wiring (end-to-end)", () => {
     expect(workerBodies[0]).toContain('"required":["question"]');
     expect(workerBodies[1]).toContain(ADVISOR_ADVICE);
     expect(JSON.stringify(frames)).toContain("Done with advice.");
+  });
+
+  test.each([true, false])("empty-completion retry preserves a forbidden Advisor refusal and worker usage (stream=%s)", async stream => {
+    releaseSpendHome = acquireOwnedSpendHome();
+    const chatRequests: string[] = [];
+    let sends = 0;
+    const workerFetch = (async () => {
+      if (++sends === 1) {
+        return stream ? sse([...plainFrames(""), { choices: [], usage: { prompt_tokens: 21, completion_tokens: 7, total_tokens: 28 } }])
+          : chatCompletion("");
+      }
+      if (stream) return sse(advisorCallFrames.slice(1));
+      return Response.json({ choices: [{ message: { role: "assistant", content: null,
+        tool_calls: [{ id: "call_adv_1", type: "function", function: { name: "advisor", arguments: '{"question":"Where do I start?"}' } }] },
+        finish_reason: "tool_calls" }], usage: { prompt_tokens: 100, completion_tokens: 20, total_tokens: 120 } });
+    }) as typeof fetch;
+    const config = advisorConfig({ enabled: true, model: "expert/gpt-6-astra", contextSharingConsent: "v1", policy: "manual" }, workerFetch);
+    config.emptyCompletionRetry = true;
+    loopbackInterceptor(config, { chatRequests });
+    const response = await handleResponses(workerRequest("Do not use tools", undefined, stream,
+      [{ type: "function", name: "shell", parameters: { type: "object" } }], "none"), config, logCtx);
+    const body = await response.text();
+    const terminal = stream ? body.split("\n").filter(line => line.startsWith("data: {")).map(line => JSON.parse(line.slice(6)))
+      .find(frame => frame.type === "response.failed")?.response : JSON.parse(body);
+    expect(sends).toBe(2);
+    expect(chatRequests).toHaveLength(0);
+    expect(body).not.toContain("call_adv_1");
+    expect(body).not.toContain("Where do I start?");
+    expect(terminal).toMatchObject({ status: "failed", error: { code: "undeclared_tool_call" }, usage: stream
+      ? { input_tokens: 21, output_tokens: 7, total_tokens: 28 }
+      : { input_tokens: 121, output_tokens: 27, total_tokens: 148 } });
   });
 
   test.each([true, false])("delivery and empty-completion retry pass the same request budget (stream=%s)", async stream => {

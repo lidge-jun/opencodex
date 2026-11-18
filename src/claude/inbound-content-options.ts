@@ -112,11 +112,14 @@ export function declaredAnthropicServerTools(raw: unknown): Rec[] | undefined {
   return tools.length > 0 ? tools : undefined;
 }
 
+export type HostedAdvisorSelection = "selected" | "ambiguous";
+
 /** Read the named choice against the original catalog before Messages lowers it to a function. */
-export function selectsHostedAdvisor(raw: unknown): boolean {
-  if (!isRec(raw) || !isRec(raw.tool_choice) || !Array.isArray(raw.tools)) return false;
-  return raw.tool_choice.type === "tool" && raw.tool_choice.name === ADVISOR_SERVER_TOOL_NAME
-    && raw.tools.some(tool => isRec(tool) && tool.name === ADVISOR_SERVER_TOOL_NAME && isAdvisorServerToolType(tool.type));
+export function hostedAdvisorSelection(raw: unknown): HostedAdvisorSelection | undefined {
+  if (!isRec(raw) || !isRec(raw.tool_choice) || !Array.isArray(raw.tools)
+    || raw.tool_choice.type !== "tool" || raw.tool_choice.name !== ADVISOR_SERVER_TOOL_NAME) return undefined;
+  const matching = raw.tools.filter((tool): tool is Rec => isRec(tool) && tool.name === ADVISOR_SERVER_TOOL_NAME);
+  if (matching.some(tool => isAdvisorServerToolType(tool.type))) return matching.length === 1 ? "selected" : "ambiguous";
 }
 
 /**
