@@ -125,14 +125,15 @@ export async function resolveJevModelDecision(
     if (result.quotaOmitted) candidates = candidates.map(({ quota: _quota, ...row }) => row);
     if (options.signal?.aborted) throw options.signal.reason;
     if (timeoutSignal.aborted) return failed("timeout");
+    const usage = jevUsage({ usage: result.usage });
     let choice: string;
     try {
       choice = parseJevModelChoice(result.text, new Set(routeOptions.map(option => option.key)));
     } catch (error) {
-      return failed(error instanceof JevModelInvokeError ? error.gate : "invalid");
+      const decision = failed(error instanceof JevModelInvokeError ? error.gate : "invalid");
+      return usage ? { ...decision, usage } : decision;
     }
     const selected = routeOptions.find(option => option.key === choice)!;
-    const usage = jevUsage({ usage: result.usage });
     if (options.signal?.aborted) throw options.signal.reason;
     return withJevQuotaSummary({
       backend: "model",

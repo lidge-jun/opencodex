@@ -841,22 +841,33 @@ export async function executeComboResponses(
         signal: options.abortSignal,
       });
     let decision: JevDecision;
+    let failedPinEffortDecision: JevDecision | undefined;
     if (pinReuse?.decision) {
       decision = pinReuse.decision;
       // `effort: "per-turn"` keeps the pinned target and asks only for its effort, offering the
       // pinned target alone. Anything but an applied answer for that target keeps the pinned effort.
       const pinned = decision;
-      const pinnedChoice = combo.sessionPin?.effort === "per-turn"
+      const pinnedChoice = combo.sessionPin?.effort === "per-turn" && combo.jevEffortMode !== "client"
         ? choices.find(choice => choice.candidate.key === pinned.targetKey)
         : undefined;
       if (pinnedChoice && pinnedChoice.candidate.reasoningEfforts.length > 1) {
+        const fallback = { targetKey: pinned.targetKey, effort: pinned.effort };
         try {
-          const effortDecision = await decide([pinnedChoice.candidate], { targetKey: pinned.targetKey, effort: pinned.effort });
+          const effortDecision = await decide([pinnedChoice.candidate], fallback);
           if (effortDecision.gate === "apply" && effortDecision.targetKey === pinned.targetKey) {
             decision = { ...effortDecision, pinned: true, pinReason: "session_effort" };
+          } else {
+            failedPinEffortDecision = {
+              ...effortDecision, ...fallback, pinned: true, pinReason: "session_effort",
+              gate: effortDecision.gate === "apply" ? "invalid" : effortDecision.gate,
+            };
           }
         } catch {
           if (options.abortSignal?.aborted) return clientCancelledResponse();
+          failedPinEffortDecision = {
+            ...fallback, backend: jevDecisionBackendFor(combo), gate: "network",
+            latencyMs: Math.max(0, Date.now() - decisionStartedAt), pinned: true, pinReason: "session_effort",
+          };
         }
       }
     } else try {
@@ -897,6 +908,8 @@ export async function executeComboResponses(
     if (pinReuse?.released) decision = { ...decision, pinReason: pinReuse.released };
     jevDecision = decision;
     pick = { ...selected.pick, attempted: [targetKey(selected.pick.target)] };
+    // Failed effort decisions are counted while dispatch and pin completion keep the reused decision.
+    const observedDecision = failedPinEffortDecision ?? decision;
     logCtx.jevDecision = !options.clientModelLabel || requestedModel === responseModel ? normalizePersistedJevDecision({
       version: 1,
       comboId,
@@ -905,30 +918,30 @@ export async function executeComboResponses(
         model: selected.pick.target.model,
         effort: decision.effort,
       },
-      gate: decision.gate,
-      latencyMs: decision.latencyMs,
-      backend: decision.backend,
-      ...(decision.confidence !== undefined ? { confidence: decision.confidence } : {}),
-      ...(decision.chosenProbability !== undefined
-        ? { chosenProbability: decision.chosenProbability }
+      gate: observedDecision.gate,
+      latencyMs: observedDecision.latencyMs,
+      backend: observedDecision.backend,
+      ...(observedDecision.confidence !== undefined ? { confidence: observedDecision.confidence } : {}),
+      ...(observedDecision.chosenProbability !== undefined
+        ? { chosenProbability: observedDecision.chosenProbability }
         : {}),
-      ...(decision.usage ? { usage: decision.usage } : {}),
-      ...(decision.quota ? { quota: decision.quota } : {}),
-      ...(decision.pinned ? { pinned: true } : {}),
-      ...(decision.pinReason ? { pinReason: decision.pinReason } : {}),
+      ...(observedDecision.usage ? { usage: observedDecision.usage } : {}),
+      ...(observedDecision.quota ? { quota: observedDecision.quota } : {}),
+      ...(observedDecision.pinned ? { pinned: true } : {}),
+      ...(observedDecision.pinReason ? { pinReason: observedDecision.pinReason } : {}),
     }) : undefined;
     console.debug("[combo] JEV decision", {
-      backend: decision.backend,
+      backend: observedDecision.backend,
       target: comboTargetLogLabel(config, comboId, pick.target),
       effort: decision.effort,
-      gate: decision.gate,
-      latencyMs: decision.latencyMs,
-      ...(decision.pinReason ? { pinReason: decision.pinReason } : {}),
-      ...(decision.confidence !== undefined ? { confidence: decision.confidence } : {}),
-      ...(decision.chosenProbability !== undefined
-        ? { chosenProbability: decision.chosenProbability }
+      gate: observedDecision.gate,
+      latencyMs: observedDecision.latencyMs,
+      ...(observedDecision.pinReason ? { pinReason: observedDecision.pinReason } : {}),
+      ...(observedDecision.confidence !== undefined ? { confidence: observedDecision.confidence } : {}),
+      ...(observedDecision.chosenProbability !== undefined
+        ? { chosenProbability: observedDecision.chosenProbability }
         : {}),
-      ...(decision.usage ? { usage: decision.usage } : {}),
+      ...(observedDecision.usage ? { usage: observedDecision.usage } : {}),
     });
     // A completed decision belongs to the parent log even if no model can be dispatched.
     if (selectionUnavailable) {

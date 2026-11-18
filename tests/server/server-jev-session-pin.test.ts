@@ -95,8 +95,10 @@ async function turn(config: OcxConfig, options: {
   signal?: AbortSignal;
   log?: RequestLogContext;
   models?: string[];
+  effort?: string;
 } = {}): Promise<Response> {
-  const body = { model: "jev-auto", input: "Implement the next step.", stream: false };
+  const body = { model: "jev-auto", input: "Implement the next step.", stream: false,
+    ...(options.effort ? { reasoning: { effort: options.effort } } : {}) };
   const headers: Record<string, string> = { "content-type": "application/json" };
   if (options.session !== null) headers.session_id = options.session ?? "session-a";
   const request = new Request("http://127.0.0.1/v1/responses", { method: "POST", headers, body: JSON.stringify(body) });
@@ -297,7 +299,8 @@ describe("JEV session pin per-turn effort", () => {
       payloads.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
       const choice = answers.shift();
       if (choice === undefined) throw new Error("decision service down");
-      return Response.json({ answers: { route: { choice, confidence: 0.7 } } });
+      return Response.json({ answers: { route: { choice, confidence: 0.7 } },
+        usage: { input_tokens: 8, output_tokens: 2 } });
     }) as typeof fetch;
     return config;
   }
@@ -328,7 +331,23 @@ describe("JEV session pin per-turn effort", () => {
     expect(log.routeDecision?.selected.reason).toBe(JEV_SESSION_PIN_ROUTE_REASON);
   });
 
-  test("an unusable effort answer or a failed decision call keeps the pinned effort and the pin", async () => {
+  test("client effort mode skips per-turn decisions and keeps the caller's effort", async () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    const config = perTurnConfig(["sol/gpt-5.6-sol:high", "sol/gpt-5.6-sol:low"], payloads);
+    config.combos!.auto!.jevEffortMode = "client";
+    expect((await turn(config)).status).toBe(200);
+    const log: RequestLogContext = { model: "", provider: "" };
+    const child: Child = (body, complete) => {
+      expect(body.model).toBe("sol/gpt-5.6-sol");
+      expect(effortOf(body)).toBe("medium");
+      return served(body, complete);
+    };
+    expect((await turn(config, { child, log, effort: "medium" })).status).toBe(200);
+    expect(payloads).toHaveLength(1);
+    expect(log.jevDecision).toMatchObject({ pinned: true, pinReason: "session" });
+  });
+
+  test("an unusable effort answer or a failed decision call retains the pin and records the failed gate", async () => {
     const payloads: Array<Record<string, unknown>> = [];
     // Turn 2 answers a target that was not offered; turn 3 finds the service down.
     const config = perTurnConfig(["sol/gpt-5.6-sol:high", "luna/gpt-5.6-luna:low"], payloads);
@@ -339,10 +358,13 @@ describe("JEV session pin per-turn effort", () => {
     expect((await turn(config, { child, log: logs[0] })).status).toBe(200);
     expect((await turn(config, { child, log: logs[1] })).status).toBe(200);
     expect(payloads).toHaveLength(3);
+    expect(payloads.slice(1).map(offered)).toEqual([["sol/gpt-5.6-sol"], ["sol/gpt-5.6-sol"]]);
     expect(bodies.map(body => [body.model, effortOf(body)])).toEqual([
       ["sol/gpt-5.6-sol", "high"], ["sol/gpt-5.6-sol", "high"], ["sol/gpt-5.6-sol", "high"],
     ]);
-    for (const log of logs) expect(log.jevDecision).toMatchObject({ pinned: true, pinReason: "session", gate: "apply" });
+    expect(logs[0]?.jevDecision).toMatchObject({ pinned: true, pinReason: "session_effort", gate: "invalid",
+      usage: { inputTokens: 8, outputTokens: 2, totalTokens: 10 } });
+    expect(logs[1]?.jevDecision).toMatchObject({ pinned: true, pinReason: "session_effort", gate: "network" });
   });
 
   test("a target with a single effort is reused without a decision call", async () => {

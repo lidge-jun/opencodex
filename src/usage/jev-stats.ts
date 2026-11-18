@@ -96,7 +96,7 @@ export interface JevStatsResponse {
     decisions: number;
     appliedDecisions: number;
     failOpenDecisions: number;
-    /** Requests that reused a session pin; they are not decisions and add only physical attempts. */
+    /** Requests that reused a session pin, including turns that also made an effort decision. */
     pinnedRequests: number;
     successfulRequests: number;
     requestsWithModelFallback: number;
@@ -408,8 +408,7 @@ class StreamingJevStatsAccumulator implements JevStatsAccumulator {
     }
     this.addAttempts(attempts);
     if (decision.pinned) {
-      // A session-pinned turn sent no decision request, so it stays out of every decision total.
-      // A per-turn effort decision on a pinned turn did send one and is counted below as well.
+      // Pure pin reuse contributes only to the pinned count. Effort decisions also contribute below.
       this.pinnedRequests = saturatingAdd(this.pinnedRequests, 1);
       if (decision.pinReason !== "session_effort") return;
     }

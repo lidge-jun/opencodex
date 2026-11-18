@@ -222,7 +222,9 @@ ocx combo set jev-auto --session-pin 20m --json
 { "strategy": "jev", "sessionPin": { "ttlMs": 1200000 } }
 ```
 
-La primera solicitud se decide normalmente. Cuando el destino aplicado por JEV completa una respuesta, las solicitudes siguientes de la sesión reutilizan ese destino y esfuerzo sin otra llamada de decisión. `ttlMs`, entre un minuto y 24 horas, es un plazo de inactividad: cada turno completado en el destino fijado, incluidas las continuaciones de herramientas, lo reinicia. Si la sesión permanece inactiva más tiempo, se decide de nuevo.
+La primera solicitud se decide normalmente. Cuando el destino aplicado por JEV completa una respuesta, las solicitudes siguientes reutilizan ese destino y, por defecto, el mismo esfuerzo sin otra llamada de decisión. `ttlMs`, entre un minuto y 24 horas, es un plazo de inactividad: cada turno completado en el destino fijado, incluidas las continuaciones de herramientas, lo reinicia. Si la sesión permanece inactiva más tiempo, se decide de nuevo.
+
+`sessionPin.effort: "per-turn"` (`--session-pin-effort per-turn`) pide a JEV que vuelva a elegir el esfuerzo en cada turno fijado si el destino admite varios niveles. Si la decisión falla, se conserva el esfuerzo fijado. Con `jevEffortMode: "client"`, se omite la decisión y se aplica la política de esfuerzo del cliente.
 
 La identidad combina el encabezado de sesión del cliente (`thread-id`, `session_id` o `session-id`, `x-codex-parent-thread-id`, o un `x-session-id` promovido), la clave API que admitió la solicitud y el combo. No se fijan solicitudes sin encabezado de sesión, `prompt_cache_key` nunca sirve como identidad de sesión y dos claves API nunca comparten una fijación.
 
@@ -236,7 +238,7 @@ JEV decide de nuevo y sustituye la fijación cuando:
 
 Cancelar una solicitud conserva la fijación. Una decisión que usa la alternativa fail-open por tiempo agotado, clave ausente o respuesta inválida no crea una. Las fijaciones viven en memoria, con un máximo de 512 sesiones, y se pierden al reiniciar.
 
-Los registros de uso marcan los turnos reutilizados con `jevDecision.pinned: true` y `pinReason: "session"`. Una decisión que sustituye una fijación liberada registra el motivo en `pinReason`: `expired`, `config_changed`, `target_unavailable`, `effort_unavailable` o `quota_nearly_exhausted`. `ocx combo stats` cuenta las solicitudes fijadas aparte de las decisiones; siguen contando para solicitudes correctas, cambios de modelo por fallo y tokens por modelo.
+Los registros de uso marcan los turnos reutilizados con `jevDecision.pinned: true` y `pinReason: "session"`, o `pinReason: "session_effort"` si JEV intentó elegir el esfuerzo. Una decisión que sustituye una fijación liberada registra el motivo en `pinReason`: `expired`, `config_changed`, `target_unavailable`, `effort_unavailable` o `quota_nearly_exhausted`. `ocx combo stats` cuenta todos los turnos reutilizados como solicitudes fijadas y también los turnos `session_effort` como decisiones, incluidas las que fallan. Todos siguen contando para solicitudes correctas, cambios de modelo por fallo y tokens por modelo.
 
 La fijación permite reutilizar la caché, pero el acierto real depende del proveedor, la cuenta y un prefijo de instrucciones estable. `--session-pin -`, o `null` en la API, la desactiva. Cambiar a otra estrategia la elimina; guardar desde el editor del dashboard la conserva.
 
