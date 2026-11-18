@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { dispatchCommand, type CliDispatchDeps } from "../../src/cli/dispatch";
 import { runGatewayClientCommand, runGatewayClientFromArgs, type GatewayClientCommandDeps } from "../../src/cli/gateway-client-command";
+import { resolveHelpPath } from "../../src/cli/help-catalog";
 import type { GatewayClientContext } from "../../src/integrations/gateway-clients";
 import type { OcxConfig } from "../../src/types";
 
@@ -83,19 +84,39 @@ describe("ocx connect|disconnect antigravity|agy", () => {
     };
     try {
       const ok = { ok: true, id: "agy", action: "connect", changed: true, changedFiles: ["/h/.bashrc"], message: "The agy command now starts on the OpenCodex gateway.", notes: [], status: { id: "agy", label: "agy CLI", state: "connected", files: [], overrides: [], notes: [] } };
-      expect(await runGatewayClientCommand("connect", "agy", ["--model", "m1"], { baseUrl: "http://127.0.0.1:10100", fetchImpl: reply(200, ok) as typeof fetch })).toBe(0);
-      expect(calls[0]).toMatchObject({ url: "http://127.0.0.1:10100/api/gateway-clients/agy/connect", method: "POST", body: { model: "m1" } });
+      expect(await runGatewayClientCommand("connect", "agy", [], { baseUrl: "http://127.0.0.1:10100", fetchImpl: reply(200, ok) as typeof fetch })).toBe(0);
+      expect(calls[0]).toMatchObject({ url: "http://127.0.0.1:10100/api/gateway-clients/agy/connect", method: "POST", body: {} });
       const refused = { ok: false, code: "requires-admission-token", message: "needs a credential" };
       expect(await runGatewayClientCommand("connect", "agy", [], { baseUrl: "http://127.0.0.1:10100", fetchImpl: reply(409, refused) as typeof fetch })).toBe(5);
       expect(io.err.join("\n")).toContain("needs a credential");
     } finally { io.restore(); }
   });
 
+  test("agy rejects --model before contacting the runtime or writing a profile", async () => {
+    const io = capture();
+    const findLiveProxy = spyOn(offline(), "findLiveProxy");
+    try {
+      expect(await runGatewayClientFromArgs("connect", ["agy", "--model", "m1"], { ...offline(), findLiveProxy })).toBe(2);
+      expect(findLiveProxy).not.toHaveBeenCalled();
+      expect(io.err.join("\n")).toContain("--model is only supported by ocx connect antigravity");
+      expect(existsSync(join(ctx.home, ".bashrc"))).toBe(false);
+    } finally { io.restore(); findLiveProxy.mockRestore(); }
+  });
+
+  test("connect help advertises --model only for Antigravity", () => {
+    expect(resolveHelpPath(["connect", "antigravity"])).toMatchObject({
+      kind: "capability", capability: { usage: "ocx connect antigravity [--model <id>] [--json]" },
+    });
+    expect(resolveHelpPath(["connect", "agy"])).toMatchObject({
+      kind: "capability", capability: { usage: "ocx connect agy [--json]", flags: [{ name: "--json" }] },
+    });
+  });
+
   test("bad arguments are a usage error", async () => {
     const io = capture();
     try {
       expect(await runGatewayClientCommand("disconnect", "agy", ["--model", "x"], offline())).toBe(2);
-      expect(await runGatewayClientCommand("connect", "agy", ["--model", "  "], offline())).toBe(2);
+      expect(await runGatewayClientCommand("connect", "antigravity", ["--model", "  "], offline())).toBe(2);
     } finally { io.restore(); }
   });
 });

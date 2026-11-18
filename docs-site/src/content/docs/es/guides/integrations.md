@@ -752,6 +752,8 @@ ocx connect antigravity status         # or: ocx connect agy status
 ocx disconnect antigravity             # or: ocx disconnect agy
 ```
 
+Usa `--model` solo con `ocx connect antigravity` para fijar el modelo predeterminado de la app de escritorio.
+
 Conectar registra lo que reemplazó. Desconectar restaura los bytes originales cuando el archivo no ha
 cambiado y, en caso contrario, revierte solo las entradas propias de OpenCodex y conserva tus otras
 ediciones. El bloque marcado de `agy` en un perfil de shell se elimina entero, incluida cualquier edición

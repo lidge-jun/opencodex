@@ -23,8 +23,10 @@ path is reported as untested.
 `resolveGatewayTarget` in `src/integrations/gateway-clients/index.ts` asks `localInferenceDestination` for
 the URL a local client dials and writes the fixed placeholder key `opencodex-local`. When that destination
 requires a data-plane credential, the connect is refused with `requires-admission-token` before any file is
-touched: OpenCodex never writes a real secret into a client file. A model selector must be one line of at
-most 200 characters, otherwise `invalid-model`.
+touched: OpenCodex never writes a real secret into a client file. `ocx connect antigravity --model` and
+the Antigravity connect route accept a model selector of one line and at most 200 characters. The agy
+connect command refuses `--model` with exit 2, and the agy connect route refuses a `model` field with
+HTTP 400 `invalid-body`.
 
 ## Stash and restore
 

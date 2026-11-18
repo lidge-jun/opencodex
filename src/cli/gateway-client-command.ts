@@ -21,7 +21,7 @@ export interface GatewayClientCommandDeps extends RuntimeApiDeps {
 }
 
 const USAGE: Record<GatewayClientVerb, string> = {
-  connect: "ocx connect antigravity|agy [--model <id>] [--json]",
+  connect: "ocx connect antigravity [--model <id>] [--json]",
   disconnect: "ocx disconnect antigravity|agy [--json]",
   status: "ocx connect antigravity|agy status [--json]",
 };
@@ -88,12 +88,16 @@ async function runLocally(verb: GatewayClientVerb, id: GatewayClientId, model: s
 
 export async function runGatewayClientCommand(verb: GatewayClientVerb, id: GatewayClientId, argv: string[], deps: GatewayClientCommandDeps = {}): Promise<number> {
   const args = [...argv];
+  const usage = verb === "connect" && id === "agy" ? "ocx connect agy [--json]" : USAGE[verb];
   let exit = 0;
   const code = await runCliAction(async () => {
     const wantsJson = takeJsonFlag(args);
-    const model = verb === "connect" ? takeOption(args, "--model") : undefined;
-    rejectArgs(args, USAGE[verb], { redactValues: true });
-    if (model !== undefined && model.trim() === "") throw new CliUsageError("--model requires a non-empty value", USAGE[verb]);
+    if (verb === "connect" && id === "agy" && args.some(arg => arg === "--model" || arg.startsWith("--model="))) {
+      throw new CliUsageError("--model is only supported by ocx connect antigravity", usage);
+    }
+    const model = verb === "connect" && id === "antigravity" ? takeOption(args, "--model") : undefined;
+    rejectArgs(args, usage, { redactValues: true });
+    if (model !== undefined && model.trim() === "") throw new CliUsageError("--model requires a non-empty value", usage);
     try {
       if (verb === "status") {
         const { clients } = await runtimeRequest<{ clients: GatewayClientStatus[] }>("/api/gateway-clients", {}, deps);

@@ -1241,6 +1241,8 @@ ocx connect antigravity status         # or: ocx connect agy status
 ocx disconnect antigravity             # or: ocx disconnect agy
 ```
 
+Use `--model` only with `ocx connect antigravity` to set the desktop app's default model.
+
 Connect records what it replaced. Disconnect puts the original bytes back when the file is unchanged, and
 otherwise reverts only OpenCodex's own entries and keeps your other edits. The marked `agy` block in a
 shell profile is removed whole, including any edit made inside it. Symlinks are supported when they

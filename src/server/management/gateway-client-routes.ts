@@ -4,7 +4,7 @@
  * `src/integrations/gateway-clients`. Auth and origin checks run before dispatch, so a
  * mutation here is gated like every other management POST.
  */
-import { GATEWAY_CLIENT_IDS, connectGatewayClient, gatewayActionBody, disconnectGatewayClient, gatewayClientsStatus, isGatewayClientId, productionGatewayClientContext, resolveGatewayTarget, type GatewayClientContext } from "../../integrations/gateway-clients";
+import { GATEWAY_CLIENT_IDS, connectGatewayClient, gatewayActionBody, disconnectGatewayClient, gatewayClientsStatus, isGatewayClientId, productionGatewayClientContext, resolveGatewayTarget, type GatewayClientContext, type GatewayClientId } from "../../integrations/gateway-clients";
 import { jsonResponse } from "../auth-cors";
 import { readOptionalManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import { managementInferencePort, type ManagementContext } from "./context";
@@ -16,13 +16,16 @@ function refusal(ctx: ManagementContext, status: number, code: string, message: 
   return jsonResponse({ ok: false, code, message }, status, ctx.req, ctx.config);
 }
 
-async function connectModel(ctx: ManagementContext): Promise<{ model?: string } | Response> {
+async function connectModel(ctx: ManagementContext, id: GatewayClientId): Promise<{ model?: string } | Response> {
   let body: unknown;
   try { body = await readOptionalManagementJsonBody(ctx.req); } catch (error) {
     rethrowManagementBodyTooLarge(error);
     return refusal(ctx, 400, "invalid-body", "The request body must be a JSON object.");
   }
   if (body === null || typeof body !== "object" || Array.isArray(body)) return refusal(ctx, 400, "invalid-body", "The request body must be a JSON object.");
+  if (id === "agy" && Object.hasOwn(body, "model")) {
+    return refusal(ctx, 400, "invalid-body", "model is only supported by Antigravity connect.");
+  }
   const model = (body as { model?: unknown }).model;
   if (model === undefined || model === null) return {};
   if (typeof model !== "string") return refusal(ctx, 400, "invalid-body", "model must be a string.");
@@ -48,7 +51,7 @@ export async function handleGatewayClientRoutes(ctx: ManagementContext): Promise
       const outcome = disconnectGatewayClient(id, clientCtx, resolved.ok ? resolved.target : undefined);
       return jsonResponse(gatewayActionBody(outcome), outcome.ok ? 200 : 409, req, config);
     }
-    const parsed = await connectModel(ctx);
+    const parsed = await connectModel(ctx, id);
     if (parsed instanceof Response) return parsed;
     const outcome = connectGatewayClient(id, clientCtx, config, managementInferencePort(ctx), parsed.model);
     return jsonResponse(gatewayActionBody(outcome), outcome.ok ? 200 : 409, req, config);

@@ -92,6 +92,14 @@ describe("gateway client management routes", () => {
     expect(await call("POST", "/api/gateway-clients/antigravity/connect", [1])).toMatchObject({ status: 400 });
   });
 
+  test("agy rejects a model in the connect body before writing a profile", async () => {
+    expect(await call("POST", "/api/gateway-clients/agy/connect", { model: "gemini-3" })).toMatchObject({
+      status: 400, json: { ok: false, code: "invalid-body", message: expect.stringContaining("Antigravity") },
+    });
+    expect(existsSync(join(gateway.home, ".bashrc"))).toBe(false);
+    expect(existsSync(join(gateway.stateDir, "gateway-clients"))).toBe(false);
+  });
+
   test("a cross-origin mutation is blocked before the handler runs", async () => {
     const blocked = await call("POST", "/api/gateway-clients/antigravity/connect", {}, config(), { origin: "https://evil.example" });
     expect(blocked.status).toBe(403);
