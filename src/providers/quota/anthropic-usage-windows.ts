@@ -1,5 +1,5 @@
 /** One source selection for display and advisory usage; neither projection invents absent limits. */
-import { asRecord, toFiniteNumber } from "../quota-wire";
+import { asRecord, normalizePercent, toFiniteNumber } from "../quota-wire";
 
 type UsageWindow = "5h" | "weekly" | "fable" | "opus" | "sonnet";
 export interface AnthropicUsageBucket {
@@ -61,6 +61,33 @@ function applyWeeklyShares(body: Record<string, unknown>, scopedRows: Map<number
   }
 }
 
+/** Read the usage payload's extra-usage switch and monthly cap. Enabled leaves wallet availability unknown. */
+export function parseAnthropicExtraUsage(value: unknown): {
+  state: "disabled" | "enabled" | "exhausted";
+  monthlyPercent?: number;
+} | undefined {
+  const extra = asRecord(value);
+  if (typeof extra?.is_enabled !== "boolean") return undefined;
+  if (!extra.is_enabled) return { state: "disabled" };
+  const reported = normalizePercent(extra.utilization);
+  const used = toFiniteNumber(extra.used_credits);
+  const limit = toFiniteNumber(extra.monthly_limit);
+  const monthlyPercent = used !== undefined && limit !== undefined && limit > 0
+    ? Math.min(100, Math.max(reported ?? 0, (used / limit) * 100))
+    : reported;
+  const state = limit === 0 || monthlyPercent === 100 ? "exhausted" : "enabled";
+  return { state, ...(monthlyPercent !== undefined ? { monthlyPercent } : {}) };
+}
+
+/** Undated fallback for seats without any reported plan windows, such as usage-based Enterprise. */
+export function anthropicExtraUsageMonthlyPercent(
+  body: Record<string, unknown>,
+  windows: { hasPlanWindow: boolean },
+): number | undefined {
+  if (windows.hasPlanWindow) return undefined;
+  return parseAnthropicExtraUsage(body.extra_usage)?.monthlyPercent;
+}
+
 /**
  * Recognized rows supersede legacy duplicates even when skipped or malformed; duplicates
  * and malformed shared measurements make family enumeration incomplete. Shared finite
@@ -70,7 +97,7 @@ function applyWeeklyShares(body: Record<string, unknown>, scopedRows: Map<number
  * separately as display-only evidence. Unknown kinds/families cannot clear refusals.
  */
 export function anthropicUsageBuckets(body: Record<string, unknown>): {
-  buckets: AnthropicUsageBucket[]; displayBuckets: AnthropicUsageBucket[]; familyEnumeration: boolean;
+  buckets: AnthropicUsageBucket[]; displayBuckets: AnthropicUsageBucket[]; familyEnumeration: boolean; hasPlanWindow: boolean;
 } {
   const selected = new Map<UsageWindow, AnthropicUsageBucket>();
   const displayOnly = new Map<UsageWindow, AnthropicUsageBucket>();
@@ -110,7 +137,10 @@ export function anthropicUsageBuckets(body: Record<string, unknown>): {
   for (const window of Object.keys(legacyFields) as UsageWindow[]) {
     if (represented.has(window)) continue;
     const row = asRecord(body[legacyFields[window]]);
-    if (row) selected.set(window, { window, row, percentField: "utilization" });
+    if (row) {
+      represented.add(window);
+      selected.set(window, { window, row, percentField: "utilization" });
+    }
   }
   // Stable canonical order, independent of how upstream orders limits.
   const ordered = (source: Map<UsageWindow, AnthropicUsageBucket>) => (Object.keys(legacyFields) as UsageWindow[])
@@ -118,5 +148,5 @@ export function anthropicUsageBuckets(body: Record<string, unknown>): {
       const bucket = source.get(window);
       return bucket ? [bucket] : [];
     });
-  return { buckets: ordered(selected), displayBuckets: ordered(displayOnly), familyEnumeration };
+  return { buckets: ordered(selected), displayBuckets: ordered(displayOnly), familyEnumeration, hasPlanWindow: represented.size > 0 };
 }

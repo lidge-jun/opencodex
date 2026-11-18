@@ -117,7 +117,9 @@ const FAKE_TIMEOUT = [
   "    *) break ;;",
   "  esac",
   "done",
+  'seconds="$1"',
   "shift",
+  'if [ "$1" != true ]; then printf "fixture deadline %s: %s\\n" "$seconds" "$*"; fi',
   "files=0",
   'for arg in "$@"; do',
   '  case "$arg" in *.test.ts) files=$((files + 1)) ;; esac',
@@ -358,6 +360,24 @@ describe.skipIf(process.platform === "win32")("the hosted batch runner, executed
     }
   }, SPAWN_BUDGET_MS);
 
+  test.each([["120", "300"], ["480", "480"]] as const)("a serial override with a %ss batch deadline uses %ss", (defaultSeconds, serialSeconds) => {
+    const run = runBatches("green", "general", {
+      ...(defaultSeconds === "480" ? { batchTimeoutSeconds: defaultSeconds } : {}),
+      isolated: ["bravo.test.ts\t300", "foxtrot.test.ts"],
+    });
+    expect(run.status, run.output).toBe(0);
+    const deadlines = run.output.split("\n").flatMap(line => {
+      const match = /^fixture deadline (\d+)s: .+\/bun test --isolate --timeout 60000 (.+)$/.exec(line);
+      return match ? [[match[1], match[2]]] : [];
+    });
+    expect(deadlines, run.output).toEqual([
+      [defaultSeconds, "tests/alpha.test.ts"],
+      [serialSeconds, "tests/bravo.test.ts"],
+      [defaultSeconds, "tests/charlie.test.ts tests/delta.test.ts tests/echo.test.ts"],
+      [defaultSeconds, "tests/foxtrot.test.ts"],
+    ]);
+  }, SPAWN_BUDGET_MS);
+
   test("a failing isolated primary process stays red and stops later files", () => {
     const run = runBatches("isolated-assert", "general", { isolated: ["bravo.test.ts"] });
     expect(run.status, run.output).toBe(23);
@@ -370,6 +390,7 @@ describe.skipIf(process.platform === "win32")("the hosted batch runner, executed
     for (const options of [
       { manifestStatus: 23 }, { isolated: [] }, { isolated: ["../outside.test.ts"] },
       { isolated: ["missing.test.ts"] }, { isolated: ["bravo.test.ts", "bravo.test.ts"] },
+      { isolated: ["bravo.test.ts\t0"] }, { isolated: ["bravo.test.ts\t300\t120"] },
     ]) {
       const run = runBatches("green", "general", options);
       expect(run.status, run.output).not.toBe(0);
