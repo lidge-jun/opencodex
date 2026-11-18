@@ -252,6 +252,45 @@ describe.skipIf(process.platform === "win32")("antigravity-acp through the serve
     }
   }, 10_000);
 
+  test("an unattended ACP Compact refusal never opens its reasoning archive", async () => {
+    saveConfig({ ...config(), reasoningRetention: { enabled: true, maxTokens: 1 } });
+    const archive = join(testDir, "home", "reasoning-archive");
+    writeFileSync(archive, "fixture blocks archive creation");
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/responses/compact", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json", [turnMetadata]: compactionMetadata("auto") },
+        body: JSON.stringify({ ...responsesBody, input: [
+          { type: "reasoning", summary: [{ type: "summary_text", text: "fixture history ".repeat(100) }] },
+          ...responsesBody.input,
+        ] }),
+      });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject(interactiveOnlyError);
+      expect(readFileSync(archive, "utf8")).toBe("fixture blocks archive creation");
+      expect(recordedLaunches()).toEqual([]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("Chat preserves the ACP locality refusal code for a relayed request", async () => {
+    saveConfig(config());
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/chat/completions", server.url), {
+        method: "POST", headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.9" },
+        body: JSON.stringify({ model, messages: [{ role: "user", content: "hello" }] }),
+      });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({ error: { type: "permission_error", code: "agy_acp_local_only" } });
+      expect(recordedLaunches()).toEqual([]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("routed manual compaction runs and returns the ACP summary", async () => {
     saveConfig(config());
     const server = startServer(0);

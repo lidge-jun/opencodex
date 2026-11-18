@@ -34,6 +34,7 @@ import { buildCompactV1Output, COMPACT_PROMPT, decodeCompactionSummary, extractC
 import { applyReasoningRetention, appendRetentionNotice, type ReasoningRetentionResult } from "../../responses/reasoning-retention";
 import { FORWARD_HEADERS, sanitizeReasoningInputContent } from "../../adapters/openai-responses";
 import { isUnattendedAgyAcpHttpTurn } from "../../adapters/agy-acp/policy";
+import { agyAcpPreflightResponse } from "./agy-acp-preflight";
 import { repairUrlCitationAnnotations, stripProviderInputItemMetadata } from "../../adapters/openai-responses/request-strips";
 import { expandPreviousResponseInput, previousResponseProviderState, rememberResponseState } from "../../responses/state";
 import { repairLegacyDottedToolCallNames } from "../../responses/legacy-dotted-tool-name-repair";
@@ -1801,6 +1802,15 @@ export async function handleResponsesCompact(
 
   // ROUTED model: run the v2 synthetic-compaction turn internally (appends COMPACT_PROMPT, no
   // tools) and decode the resulting ocx1 envelope into plain v1 replacement-history items.
+  const agyAcpUnattendedHttpTurn = isUnattendedAgyAcpHttpTurn(req.headers, raw);
+  // A direct refusal has no summarizer, so it must not create a reasoning archive.
+  if (agyAcpUnattendedHttpTurn && !route.combo && route.routeKind !== "policy" && route.provider.adapter === "agy-acp") {
+    const refusal = agyAcpPreflightResponse({
+      adapterName: route.provider.adapter, requestHeaders: req.headers, forwardHeaders: req.headers,
+      body: raw, unattendedHttpTurn: true, comboAttempt: false, internalDecisionCall: false, subagentFallback: false, logCtx,
+    });
+    if (refusal) return refusal;
+  }
   const rawInputItems = Array.isArray(raw.input) ? (raw.input as unknown[]) : [];
   // Keep readable reasoning local until success, outside the summarizer request.
   // Opaque compaction responses below keep their original protocol and ciphertext.
@@ -1824,7 +1834,6 @@ export async function handleResponsesCompact(
       stream: isCanonicalOpenAiForwardProvider(route.provider) || accountGatedCompactWireModel || route.combo ? true : false,
       input: [...inputItems, { type: "compaction_trigger" }],
     };
-    const agyAcpUnattendedHttpTurn = isUnattendedAgyAcpHttpTurn(req.headers, raw);
     const internalHeaders = new Headers({ "content-type": "application/json" });
     for (const name of FORWARD_HEADERS) {
       const value = req.headers.get(name);

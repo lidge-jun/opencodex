@@ -23,7 +23,7 @@ import { chatConversationToIr, chatIrRouteEvidence, withDirectChatConversation, 
 import { antigravityDirectDeclineReason } from "./antigravity-direct-eligibility";
 import { normalizeChatImageParts } from "../chat/image-parts";
 import { chatHasInstructionImage } from "../adapters/claude-cli/instruction-images";
-import { AGY_ACP_INTERACTIVE_ONLY, isUnattendedAgyAcpHttpTurn } from "../adapters/agy-acp/policy";
+import { AGY_ACP_INTERACTIVE_ONLY, AGY_ACP_LOCAL_ONLY, isUnattendedAgyAcpHttpTurn } from "../adapters/agy-acp/policy";
 import {
   chatCompletionsErrorResponse,
   collectChatCompletion,
@@ -704,8 +704,8 @@ async function handleChatCompletionsWithBudget(
       // Structured model_not_found must win over classifyError's generic remaps.
       classified.code = "model_not_found";
       classified.type = "invalid_request_error";
-    } else if (upstream.status === 403 && isProxyError(upstream) && upstreamCode === AGY_ACP_INTERACTIVE_ONLY) {
-      classified.code = AGY_ACP_INTERACTIVE_ONLY;
+    } else if (upstream.status === 403 && isProxyError(upstream) && (upstreamCode === AGY_ACP_INTERACTIVE_ONLY || upstreamCode === AGY_ACP_LOCAL_ONLY)) {
+      classified.code = upstreamCode;
       classified.type = "permission_error";
     } else if (upstreamCode === UNDECLARED_TOOL_CALL_ERROR_CODE) {
       // The guard's deterministic refusal keeps its wire identity — same code the

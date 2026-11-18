@@ -3,6 +3,8 @@ import { describe, expect, test } from "bun:test";
 import { agyAcpPolicyRefusal } from "../../src/adapters/agy-acp/policy";
 import { classifyRequestPeer, currentRequestIsLocal, runWithRequestPeer } from "../../src/lib/request-peer-scope";
 import { agyAcpPreflightResponse } from "../../src/server/responses/agy-acp-preflight";
+import { isPolicyCandidateRefusal } from "../../src/server/responses/policy-request-scope";
+import { isNonReplayableResponse } from "../../src/lib/upstream-retry";
 import type { RequestLogContext } from "../../src/server/request-log";
 
 describe("request peer scope", () => {
@@ -39,13 +41,12 @@ describe("request peer scope", () => {
 
   test("the snapshot is fixed per run, survives awaits and timers, and absence is not local", async () => {
     expect(currentRequestIsLocal()).toBe(false);
-    const seen: boolean[] = [];
-    await Promise.all([
-      runWithRequestPeer({ local: true }, async () => { await Promise.resolve(); await new Promise(r => setTimeout(r, 0)); seen.push(currentRequestIsLocal()); }),
-      runWithRequestPeer({ local: false }, async () => { await Promise.resolve(); seen.push(currentRequestIsLocal()); }),
-      runWithRequestPeer({ local: true }, () => runWithRequestPeer(undefined, async () => { seen.push(currentRequestIsLocal()); })),
+    const seen = await Promise.all([
+      runWithRequestPeer({ local: true }, async () => { await Promise.resolve(); await new Promise(r => setTimeout(r, 0)); return currentRequestIsLocal(); }),
+      runWithRequestPeer({ local: false }, async () => { await Promise.resolve(); return currentRequestIsLocal(); }),
+      runWithRequestPeer({ local: true }, () => runWithRequestPeer(undefined, async () => currentRequestIsLocal())),
     ]);
-    expect(seen.sort()).toEqual([false, false, true]);
+    expect(seen).toEqual([true, false, false]);
   });
 });
 
@@ -98,6 +99,16 @@ describe("use policy", () => {
     expect(frame(meta("auto"))).toBe("agy_acp_interactive_only");
     expect(http(meta("manual"))).toBeUndefined();
     expect(frame(meta("manual"))).toBeUndefined();
+  });
+
+  test("a refused combo candidate can hop before any ACP send", () => {
+    const response = runWithRequestPeer({ local: true }, () => agyAcpPreflightResponse({
+      adapterName: "agy-acp", requestHeaders: new Headers(), forwardHeaders: new Headers(), body: {},
+      comboAttempt: true, internalDecisionCall: false, subagentFallback: false, logCtx: {} as RequestLogContext,
+    }))!;
+    expect(response.status).toBe(403);
+    expect(isPolicyCandidateRefusal(response)).toBe(true);
+    expect(isNonReplayableResponse(response)).toBe(false);
   });
 
   test("a WebSocket frame's own spawned-thread label is refused without a header copy", () => {

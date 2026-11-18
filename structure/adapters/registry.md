@@ -89,7 +89,10 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   peers are treated as remote on the public listener only. A loopback relay that carries no recognized forwarding
   headers can appear local. For refused turns,
   `src/server/responses/agy-acp-preflight.ts` answers those with a 403 before sidecars run, and `runTurn` repeats the
-  check before any probe or spawn. Each `session/prompt` reserves and reports one physical inference send from
+  check before any probe or spawn. Chat preserves both ACP refusal codes. Direct unattended
+  Compact turns are refused before reasoning retention can write an archive. In a combo, the
+  preflight refusal excludes the candidate without treating it as an attempted send.
+  Each `session/prompt` reserves and reports one physical inference send from
   the shared request budget, including a retried turn. Model selection is phase-aware and fails closed when the Gemini model is not
   confirmed against the current complete selector, including after a reply that reuses an opaque model ID.
   The adapter also proves the requested thinking level against the latest snapshot before dispatch.

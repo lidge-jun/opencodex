@@ -46,9 +46,13 @@ const mandatoryToolRefusals = new WeakSet<Response>();
 export function policyCandidateRefusalResponse(error: unknown): Response | undefined {
   if (!(error instanceof PolicyCandidateUnavailableError)) return undefined;
   const response = formatErrorResponse(409, "policy_candidate_unavailable", error.message);
-  localRefusals.add(response);
+  markPolicyCandidateRefusal(response);
   if (error instanceof MandatoryToolChoiceUnavailableError) mandatoryToolRefusals.add(response);
   return response;
+}
+
+export function markPolicyCandidateRefusal(response: Response): void {
+  localRefusals.add(response);
 }
 
 /** Upstream text or a matching error code cannot authorize another policy attempt. */

@@ -5,7 +5,7 @@
  */
 import { agyAcpPolicyRefusal } from "../../adapters/agy-acp/policy";
 import { markProxyError, rememberProxyErrorMessage } from "../../lib/client-error-body";
-import { markResponseNonReplayable } from "../../lib/upstream-retry";
+import { markPolicyCandidateRefusal } from "./policy-request-scope";
 import type { RequestLogContext } from "../request-log";
 
 export function agyAcpPreflightResponse(input: {
@@ -36,6 +36,6 @@ export function agyAcpPreflightResponse(input: {
   } }), { status: refusal.status, headers: { "Content-Type": "application/json" } });
   rememberProxyErrorMessage(input.logCtx, refusal.message, { status: refusal.status, type: refusal.errorType, code: refusal.code });
   markProxyError(response);
-  markResponseNonReplayable(response);
+  if (input.comboAttempt) markPolicyCandidateRefusal(response);
   return response;
 }
