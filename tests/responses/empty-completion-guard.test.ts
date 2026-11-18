@@ -521,6 +521,35 @@ test("single attempt retains its credit reading", async () => {
   expect((events.at(-1) as Extract<AdapterEvent, { type: "done" }>).usage?.providerCredits).toBe(3);
 });
 
+test("a dispatched retry ending at EOF makes the first credit reading incomplete", async () => {
+  const events = await collect(guardEmptyCompletionEventStream({
+    firstEvents: eventsOf({ type: "done", usage: { inputTokens: 1, outputTokens: 0, providerCredits: 2 } }),
+    continuation: () => eventsOf(),
+  }));
+  expect(events.at(-1)).toMatchObject({
+    type: "error", code: "empty_completion_retry_failed",
+    usage: { inputTokens: 1, outputTokens: 0, providerCredits: -1 },
+  });
+});
+
+test("an initial EOF makes a successful retry's credit reading incomplete", async () => {
+  const events = await collect(guardEmptyCompletionEventStream({
+    firstEvents: eventsOf(),
+    continuation: () => eventsOf({ type: "text_delta", text: "answer" },
+      { type: "done", usage: { inputTokens: 1, outputTokens: 1, providerCredits: 3 } }),
+  }));
+  expect(events.at(-1)).toMatchObject({ type: "done", usage: { providerCredits: -1 } });
+});
+
+test("a continuation rejected before dispatch leaves the first credit reading intact", async () => {
+  const events = await collect(guardEmptyCompletionEventStream({
+    firstEvents: eventsOf({ type: "done", usage: { inputTokens: 1, outputTokens: 0, providerCredits: 2 } }),
+    continuation: () => { throw new Error("pacing refused"); },
+  }));
+  expect(events.at(-1)).toMatchObject({
+    type: "error", code: "empty_completion_retry_failed", usage: { providerCredits: 2 },
+  });
+});
 
 test("an empty accumulator retains the first attempt credit reading", () => {
   expect(mergeUsage(undefined, { inputTokens: 1, outputTokens: 1, providerCredits: 3 })?.providerCredits).toBe(3);
