@@ -529,9 +529,6 @@ export async function prepareResponsesRequest(
     // produced them with an empty conversation; the conversation itself comes straight from the
     // client body. Inside this try so a decode error answers exactly like a parse error.
     if (options.directRequest) parsed = options.directRequest.decode(parsed);
-    if (options.advisorInternal || options.internalSidecarCall || options.internalDecisionCall) {
-      parsed._proxyOwnedSystemPrompt = true;
-    }
     parsed._nativeReasoningRetention = resolveNativeReasoningRetention(config);
     // Capture before route rewrites or hosted sidecars can add tools; replayed catalogs are history.
     // Direct decoders already own current function names (including legacy Chat functions).
@@ -563,6 +560,9 @@ export async function prepareResponsesRequest(
       parsed._anthropicSystemCachePrefix = options.anthropicSystemCachePrefix;
       parsed._anthropicInbound = true;
       if (parsed.options.textFormat?.type === "json_schema") parsed._structuredOutputConformance = true;
+    }
+    if (options.advisorInternal || options.internalSidecarCall || options.internalDecisionCall) {
+      parsed._proxyOwnedSystemPrompt = true;
     }
     // Codex's own "new" turn metadata, for the experimental Anthropic perMessageEffort option (#6895).
     parsed._codexNewHistory = codexTurnStartsNewHistory(body, req.headers, options.inboundTransport);
