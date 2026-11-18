@@ -71,6 +71,7 @@ export const PROVIDER_COMPAT_CARRY_FIELDS = [
 
 export const PROVIDER_DISPLAY_CARRY_FIELDS = [
   "hideRawReasoning",
+  "rawReasoningAsSummary",
   // The Anthropic thinking display policy (#8363) is operator configuration the dashboard form
   // cannot send either, so an unrelated save must not silently return the model to the default.
   "thinkingDisplay",
@@ -79,6 +80,9 @@ export const PROVIDER_DISPLAY_CARRY_FIELDS = [
   // cannot send; an unrelated save must not silently turn it off.
   "perMessageEffort",
 ] as const satisfies readonly (keyof OcxProviderConfig)[];
+
+/** Display policies that are plain booleans and can share one validation/patch branch. */
+const PROVIDER_BOOLEAN_DISPLAY_FIELDS = ["hideRawReasoning", "rawReasoningAsSummary"] as const satisfies readonly (keyof OcxProviderConfig)[];
 
 export type ProviderCompatCarryField = typeof PROVIDER_COMPAT_CARRY_FIELDS[number];
 type ProviderDisplayCarryField = typeof PROVIDER_DISPLAY_CARRY_FIELDS[number];
@@ -193,8 +197,10 @@ export function providerCompatFieldConfigError(provider: Record<string, unknown>
   if (provider.singleLeadingSystemMessage !== undefined && typeof provider.singleLeadingSystemMessage !== "boolean") {
     return "singleLeadingSystemMessage must be a boolean";
   }
-  const hideRawReasoning = provider.hideRawReasoning;
-  if (hideRawReasoning !== undefined && typeof hideRawReasoning !== "boolean") return "hideRawReasoning must be a boolean";
+  for (const field of PROVIDER_BOOLEAN_DISPLAY_FIELDS) {
+    const value = provider[field];
+    if (value !== undefined && typeof value !== "boolean") return `${field} must be a boolean`;
+  }
   const preserveResponses = provider.preserveResponsesReasoningContent;
   if (preserveResponses !== undefined && typeof preserveResponses !== "boolean") return "preserveResponsesReasoningContent must be a boolean";
   const promoteAdditionalTools = provider.promoteAdditionalTools;
@@ -244,11 +250,12 @@ export function applyProviderCompatPatchFields(
     else return { error: "singleLeadingSystemMessage must be a boolean" };
     touched = true;
   }
-  if (Object.hasOwn(rawBody, "hideRawReasoning")) {
-    const value = rawBody.hideRawReasoning;
-    if (value === null) delete next.hideRawReasoning;
-    else if (typeof value === "boolean") next.hideRawReasoning = value;
-    else return { error: "hideRawReasoning must be a boolean" };
+  for (const field of PROVIDER_BOOLEAN_DISPLAY_FIELDS) {
+    if (!Object.hasOwn(rawBody, field)) continue;
+    const value = rawBody[field];
+    if (value === null) delete next[field];
+    else if (typeof value === "boolean") next[field] = value;
+    else return { error: `${field} must be a boolean` };
     touched = true;
   }
   if (Object.hasOwn(rawBody, "preserveResponsesReasoningContent")) {

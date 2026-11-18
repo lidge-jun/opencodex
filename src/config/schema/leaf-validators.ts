@@ -460,6 +460,7 @@ export const providerConfigSchema = z.object({
   messagePhaseInference: z.boolean().optional(),
   estimateMissingUsage: z.boolean().optional(),
   hideRawReasoning: z.boolean().optional(),
+  rawReasoningAsSummary: z.boolean().optional(),
   forwardAdvisorTool: z.boolean().optional(),
   perMessageEffort: z.boolean().optional(),
   // Invalid blocks degrade to "absent" rather than failing the whole config load: an unusable
