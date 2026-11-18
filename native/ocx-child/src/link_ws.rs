@@ -754,9 +754,30 @@ fn pump<R: Read>(shared: &Arc<SocketShared>, from: Leg, mut source: R) {
             }
             Ok(n) => n,
         };
-        let mut events = Vec::new();
-        let fault = reader.push(&buf[..n], &mut events).err();
-        for event in events {
+        let mut remaining = &buf[..n];
+        loop {
+            // Finish each event's write and release its allocation before parsing the next one.
+            // Fragmented text retains the reassembly capacity even when its payload is empty.
+            let event = match reader.next_event(&mut remaining) {
+                Ok(Some(event)) => event,
+                Ok(None) => break,
+                Err(fault) => {
+                    let code = fault.close_code();
+                    match from {
+                        Leg::Codex => terminate(
+                            shared,
+                            CloseAction::Frame(code, String::new()),
+                            CloseAction::Frame(1011, String::new()),
+                        ),
+                        Leg::Home => terminate(
+                            shared,
+                            CloseAction::Frame(1011, "home message refused".into()),
+                            CloseAction::Frame(code, String::new()),
+                        ),
+                    }
+                    return;
+                }
+            };
             match event {
                 FrameEvent::Text(text) => {
                     #[cfg(test)]
@@ -812,22 +833,6 @@ fn pump<R: Read>(shared: &Arc<SocketShared>, from: Leg, mut source: R) {
                     return;
                 }
             }
-        }
-        if let Some(fault) = fault {
-            let code = fault.close_code();
-            match from {
-                Leg::Codex => terminate(
-                    shared,
-                    CloseAction::Frame(code, String::new()),
-                    CloseAction::Frame(1011, String::new()),
-                ),
-                Leg::Home => terminate(
-                    shared,
-                    CloseAction::Frame(1011, "home message refused".into()),
-                    CloseAction::Frame(code, String::new()),
-                ),
-            }
-            return;
         }
     }
 }

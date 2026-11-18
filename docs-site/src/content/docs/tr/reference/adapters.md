@@ -230,8 +230,9 @@ model listesi kanıtı bulunmayabilir.
 - Kiro doğrulayıcısının reddettiği JSON Schema anahtar sözcüklerini (`pattern`, `minLength`,
   `maximum`, `additionalProperties` ve 25 diğeri) araç ve yapılandırılmış çıktı şemalarından
   çıkarır, ancak bir testin o modelde ölçtüğü anahtar sözcükleri bırakır. `claude-opus-4.5`
-  hepsini korur. `claude-opus-5.5` ve `claude-sonnet-5.5` yalnızca `pattern` ve `maximum` anahtar sözcüklerini korur;
-  diğerleri çıkarılmış kalır, çünkü hiçbir test bunları bu modellere göndermedi. Diğer Claude
+  hepsini korur. `claude-opus-5.5`, Claude Desktop ve Claude Code kataloglarının taşıdığı on iki anahtar sözcüğü korur (`$schema`, `additionalProperties`, `pattern`, `format`, `minLength`, `maxLength`, `minimum`, `maximum`, `exclusiveMinimum`, `minItems`, `maxItems`, `propertyNames`),
+  bunlar üretim trafiğinde ölçüldü; `claude-sonnet-5.5` yalnızca `pattern` ve `maximum` anahtar sözcüklerini korur.
+  Diğerleri çıkarılmış kalır, çünkü hiçbir istek bunları bu modellere göndermedi. Diğer Claude
   kimlikleri dahil öteki Kiro modelleri tam çıkarmayı korur. İstisna model ve anahtar sözcük
   bazındadır, çünkü bu hat akıl yürütme çabasında Claude modellerini zaten ayırıyor ve Kiro'nun
   reddettiği bir anahtar sözcük yalnızca bir ipucunu kaybettirmekle kalmayıp tüm isteği

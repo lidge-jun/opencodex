@@ -36,6 +36,8 @@ export interface AnthropicUsageProbe {
 
 export async function probeAnthropicUsageQuota(accessToken: string): Promise<AnthropicUsageProbe> {
   const response = await fetch("https://api.anthropic.com/api/oauth/usage", {
+    // Like the profile probe: a redirect must never carry the bearer to another host.
+    redirect: "error",
     headers: {
       Accept: "application/json, text/plain, */*",
       "Content-Type": "application/json",

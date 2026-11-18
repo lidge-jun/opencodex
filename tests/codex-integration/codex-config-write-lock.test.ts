@@ -463,6 +463,8 @@ describe("canonical destination hardening", () => {
       const profile=path.join(process.env.CODEX_HOME,'opencodex.config.toml'),journal=path.join(process.env.CODEX_HOME,'opencodex-journal.json');
       fs.renameSync(config,target);fs.symlinkSync(target,config);fs.writeFileSync(replacement,'post');fs.writeFileSync(profile,'profile');fs.writeFileSync(journal,'retained-evidence');
       locks.withConfigWriteLock(config,held=>{section.beginCodexWriteSection(held);
+        // This section published the 'post' bytes, so compensation owns reverting them.
+        locks.recordPublishedConfigDigest(held,locks.configDigest('post'));
         const original=section.publishCodexArtifact;let swapped=false;
         const spy=spyOn(section,'publishCodexArtifact').mockImplementation((...args)=>{if(!swapped){swapped=true;fs.unlinkSync(config);fs.symlinkSync(replacement,config);}return original(...args)});
         const result=coordination.restoreCodexPreImages({config:'pre',profile:null,journal:null},held);spy.mockRestore();

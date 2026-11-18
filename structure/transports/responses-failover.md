@@ -480,39 +480,19 @@ the formatter in `tests/server/retry-after-429.test.ts`, and the native Chat cla
 
 ## Combo output headroom
 
-A combo child is admitted against two budgets, not one. `resolveInputCeiling` in
-`src/server/responses/input-admission.ts` answers "how much input may this target take", which
-`modelMaxInputTokens` can tighten below the window. The context window itself is what input and
-output actually share. When the caller declared `max_output_tokens`,
-`checkComboTargetInputAdmission` requires both `estimated input <= ceiling` and
-`estimated input + min(declared output, target output ceiling) <= window`, so the output reserve
-is counted once rather than charged twice against an already-tightened input budget.
-Both direct and combo estimates use the Chat adapter's effective thinking replay policy (explicit
-preserve lists, or DeepSeek Flash/Pro detection when unset), omitting thinking only when that wire omits it.
+A combo child is admitted against two budgets, not one. `resolveInputCeiling` in `src/server/responses/input-admission.ts` answers "how much input may this target take", which `modelMaxInputTokens` can tighten below the window. The context window itself is what input and output actually share. When the target's context window and input ceiling both resolve and the caller declared `max_output_tokens`, `checkComboTargetInputAdmission` requires both `estimated input <= ceiling` and `estimated input + min(declared output, target output ceiling) <= window`, so the output reserve is counted once rather than charged twice against an already-tightened input budget. Both direct and combo estimates use the Chat adapter's effective thinking replay policy (explicit preserve lists, or DeepSeek Flash/Pro detection when unset), omitting thinking only when that wire omits it.
 
-The refusal is local: HTTP 413 `input_admission_refused` before any upstream bytes are sent, which
-existing combo policy already treats as a safe hop. That ordering is the whole point. A target whose
-total window cannot hold the turn plus the caller's allowance answers 200, emits a few hundred
-tokens and stops on `finish_reason: length`, which the Anthropic surface renders as an output-token
-error naming a limit the model never approached — and by then output has committed and no later
-target may be tried. When every failed target of an exhausted combo was refused this way with a send count of 0, `src/server/responses/core-combo.ts` keeps the `context_length_exceeded` overflow envelope that clients compact on, but replaces the provider wording from `context-overflow.ts` with a proxy-owned message saying the turn was refused locally, carrying each tried target's estimate and window (a target skipped for cooldown is not claimed to be too small). Those attempts, and the final row, keep the code `input_admission_refused` instead of `http_413`. One target that reached a provider keeps the provider wording for the whole combo.
+The refusal is local: HTTP 413 `input_admission_refused` before any upstream bytes are sent, which existing combo policy already treats as a safe hop. That ordering is the whole point. A target whose total window cannot hold the turn plus the caller's allowance answers 200, emits a few hundred tokens and stops on `finish_reason: length`, which the Anthropic surface renders as an output-token error naming a limit the model never approached — and by then output has committed and no later target may be tried. When every failed target of an exhausted combo was refused this way with a send count of 0, `src/server/responses/core-combo.ts` keeps the `context_length_exceeded` overflow envelope that clients compact on, but replaces the provider wording from `context-overflow.ts` with a proxy-owned message saying the turn was refused locally, carrying each tried target's estimate and window (a target skipped for cooldown is not claimed to be too small). Those attempts, and the final row, keep the code `input_admission_refused` instead of `http_413`. One target that reached a provider keeps the provider wording for the whole combo.
 
-Scope is deliberately narrow. Direct and single-target requests keep the loose 2.5x
-pathological-input gate, because they have nowhere to hop. Compaction turns stay exempt. Unknown
-context and a caller that declared no output allowance both remain fail-open, so this invents no
-limits for custom providers. Canonical native slugs that the narrower pinned table does not carry
-resolve their window from the generated in-tree bundle, which is what made the gate inert on the
-route where this was first observed; explicit provider and operator caps may only narrow it.
+Scope is deliberately narrow. Direct and single-target requests keep the loose 2.5x pathological-input gate, because they have nowhere to hop. Compaction turns stay exempt. A combo request that declared no output allowance cannot price headroom, so it falls back to the same loose 2.5x pathological-input gate direct requests use rather than the strict input-plus-headroom check; only a request whose ceiling never resolves stays fail-open, so this invents no limits for custom providers. When the routed provider config declares no window at all, the devin adapter falls back to its own static table (`DEVIN_MODEL_CONTEXT_WINDOWS` in `src/adapters/devin/live-models.ts`, effort suffixes collapsed), because live catalog windows reach the model list but never `provider.modelContextWindows` — without it every devin combo target resolved `window: null` and the strict gate admitted turns that could only end in a committed-output `max_output_tokens` stop. Devin per-model overrides in `modelContextWindows` and `modelMaxInputTokens` match the exact id, its effort-collapsed base and both hyphenated spellings, then dotted record keys folded to hyphens, before the provider-wide `contextWindow`. Canonical native slugs that the narrower pinned table does not carry resolve their window from the generated in-tree bundle, which is what made the gate inert on the route where this was first observed; explicit provider and operator caps may only narrow it.
 
-Regression coverage: `tests/server/input-admission.test.ts`,
-`tests/helpers/combo-context-headroom-cases.ts` and `tests/responses/responses-context-overflow.test.ts`.
+Regression coverage: `tests/server/input-admission.test.ts`, `tests/helpers/combo-context-headroom-cases.ts` and `tests/responses/responses-context-overflow.test.ts`.
 
 Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](../transports/streaming-health.md#steering-deadlines-and-replay-completeness).
 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).
-
 
 ## Account refusal and rotation boundaries
 
@@ -547,7 +527,7 @@ Send-budget refusal is attributed as a withheld rotation only when a model-famil
 check confirms from the live roster that at least two accounts exist and an alternate is not currently
 cooled. That check applies no cooldown and advances no rotation.
 
-Generic OAuth snapshots its eligible roster before dispatch. Its request rotation ceiling is
+Generic OAuth and Anthropic OAuth snapshot their eligible rosters before dispatch. Their request rotation ceiling is
 `max(3, min(eligibleCount, GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST) - 1)` (the cap is six); the live picker still filters cooldowns, so the snapshot supplies the
 stable ceiling without making a cooled account eligible. Same-provider auth recovery keeps the last
 physical target, rather than a diagnostic key, and a real send is charged once even when recovery
