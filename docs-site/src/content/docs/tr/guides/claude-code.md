@@ -536,7 +536,9 @@ Claude Code, tanımadığı herhangi bir model için 200k token hesabı yapar.
    rotasındaki Claude modelleri için gerçek 1M).
 2. Görüşmenin bu noktada otomatik olarak özetlenmesi için
    `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (varsayılan `829800`, aralık
-   `100000`–`1000000`) enjekte edilir.
+   `100000`–`1000000`) enjekte edilir. Proxy üzerinden başlatılan `ocx claude`,
+   katalogda daha küçük pencereler olduğunda `--settings` ile her model için ayrı
+   eşik ayarlayabilir. Bağımsız değişkenler uzunluk sınırını aşarsa ortam değişkeni kullanılır.
 
 Üç yapılandırma durumu:
 

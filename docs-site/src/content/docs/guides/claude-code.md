@@ -821,8 +821,9 @@ default) fixes that:
    compact window. No Claude Code settings file is written. With no eligible smaller window,
    the launcher retains the existing `CLAUDE_CODE_AUTO_COMPACT_WINDOW` injection.
    Generated keys are limited to gateway-discovered model IDs and the launcher's model slots.
-   Serialized settings above 4,000 characters on Windows or 32,000 elsewhere also fall back
-   to the existing environment-variable injection; per-model windows are not applied then.
+   The launcher uses the existing environment variable if the generated JSON exceeds 4,000
+   characters on Windows or 32,000 elsewhere. On Windows it also falls back if the escaped
+   arguments together exceed 7,000 characters, leaving room for the command shim and shell wrapper.
 
 An explicitly exported `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, `--autocompact`, or `--settings`
 keeps precedence and disables generated per-model settings. Existing `--settings` JSON/file

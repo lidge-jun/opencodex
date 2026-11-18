@@ -83,7 +83,7 @@ ocx claude
 | `ANTHROPIC_BASE_URL` | `http://127.0.0.1:<port>` |
 | `ANTHROPIC_AUTH_TOKEN` | Solo cuando el proxy requiere una clave API; de lo contrario NO está configurado, por lo que su inicio de sesión claude.ai (suscripción + conectores) se mantiene activo |
 | `CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY` | `1` (descubrimiento de selector nativo `/model`) |
-| `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Umbral de compactación de contexto automático (predeterminado `829800`); solo se inyecta cuando el contexto automático está habilitado |
+| `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | Umbral de compactación de contexto automático (predeterminado `829800`). En lanzamientos enrutados, `ocx claude` usa `--settings` para configurar ventanas de compactación por modelo cuando el catálogo contiene ventanas más pequeñas. |
 | `ANTHROPIC_MODEL` | `claudeCode.model` (opcional) |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (opcional; legado) `ANTHROPIC_SMALL_FAST_MODEL` también) |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`; en un lanzamiento de suscripción, una ranura no establecida obtiene el `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]` nativo, por lo que `--model opus`, `sonnet` y `fable` mantienen su contexto de 1M |
@@ -394,7 +394,11 @@ Los modelos con una ventana de contexto de catálogo efectiva de 1M, o al menos 
 Claude Code cuentas 200k tokens para cualquier modelo que no reconozca. **Contexto automático** (activado por defecto) corrige que:
 
 1. Las ranuras env de lanzamiento obtienen el marcador `[1m]` cuando la ventana de catálogo efectiva del modelo está por encima de 200k **y** al menos el umbral autocompacto configurado. Las filas del selector Discovery y Desktop no siguen ese umbral: usan el piso fijo de 829.800 tokens (un 1M genuino para los modelos Claude en una ruta Anthropic).
-2. `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (valor predeterminado `829800`, rango `100000` - `1000000`) se inyecta para que la conversación se resume automáticamente en ese punto.
+2. La ventana de compactación predeterminada es `829800` (rango de `100000` a `1000000`). Si el catálogo incluye ventanas más pequeñas, `ocx claude` añade `--settings` para esa sesión. Conserva el valor predeterminado y ajusta la compactación al 95 % de la ventana conocida de cada modelo más pequeño, siempre que el resultado esté dentro del rango admitido. Al cambiar de modelo con `/model`, Claude Code selecciona la ventana correspondiente. Las claves se limitan a los identificadores detectados en la puerta de enlace y a las ranuras de modelo del lanzador. Si ningún modelo cumple los requisitos, se conserva `CLAUDE_CODE_AUTO_COMPACT_WINDOW`. También se conserva esta variable si el JSON generado supera 4.000 caracteres en Windows o 32.000 en otros sistemas. En Windows, se vuelve a usar la variable si los argumentos escapados superan en total los 7.000 caracteres, para dejar margen para el shim y el intérprete de comandos.
+
+Una exportación explícita de `CLAUDE_CODE_AUTO_COMPACT_WINDOW` o un argumento `--autocompact` o `--settings` tienen prioridad y desactivan la generación de ventanas por modelo. Claude Code recibe los argumentos `--settings` tal como se proporcionaron, incluidas las opciones repetidas y las entradas no válidas. El lanzador no lee ni escribe archivos de configuración de Claude Code. Esta función se aplica a los lanzamientos enrutados mediante `ocx claude`. El campo `modelUsage.contextWindow` puede diferir de la ventana de compactación que muestra `/context`.
+
+Los ajustes de sesión generados mediante `--settings` tienen prioridad sobre `autoCompactWindow` y `modelSettings` en los archivos de configuración del usuario o del proyecto. Pasa el archivo con `--settings <file>` para conservar su política de compactación.
 
 Tres estados de configuración:
 

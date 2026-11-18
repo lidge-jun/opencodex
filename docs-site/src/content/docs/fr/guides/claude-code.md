@@ -480,7 +480,9 @@ par défaut, corrige ce comportement :
    atteint au moins le seuil de compactage automatique configuré. Les lignes de découverte et du sélecteur Desktop ne suivent pas
    ce seuil : elles utilisent le plancher fixe de 829 800 jetons (1M réel pour un modèle Claude sur une route Anthropic).
 2. `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (`829800` par défaut, plage `100000`–`1000000`) est injecté afin
-   que la conversation soit automatiquement résumée à ce seuil.
+   que la conversation soit automatiquement résumée à ce seuil. Pour les sessions routées, `ocx claude`
+   peut utiliser `--settings` pour appliquer des seuils par modèle lorsque le catalogue contient des
+   fenêtres plus petites. Si les arguments dépassent la limite du lanceur, la variable reste utilisée.
 
 Trois états de configuration :
 

@@ -1,6 +1,10 @@
 import { resolveAutoContext, AUTO_COMPACT_WINDOW_MIN } from "../claude/context-windows";
+import { escapeCmdArg } from "../lib/win-exec";
 import type { OcxConfig } from "../types";
 import type { ClaudeLaunchEnv } from "./claude";
+
+// cmd.exe allows 8,191 characters. Reserve room for the shim path and shell wrapper.
+const WINDOWS_CLAUDE_ARGV_BUDGET = 7_000;
 
 /** Session-only compact windows: the current model selects its setting after /model switches. */
 export function withClaudeContextSettings(
@@ -39,10 +43,14 @@ export function withClaudeContextSettings(
   if (Object.keys(modelSettings).length === 0) return unchanged;
 
   const serialized = JSON.stringify({ autoCompactWindow: auto.compactWindow, modelSettings });
-  // Leave headroom for cmd.exe shim escaping and the rest of the command line.
-  const budget = (options.platform ?? process.platform) === "win32" ? 4000 : 32000;
-  if (serialized.length > budget) return unchanged;
+  const isWindows = (options.platform ?? process.platform) === "win32";
+  if (serialized.length > (isWindows ? 4_000 : 32_000)) return unchanged;
+  const launchArgs = ["--settings", serialized, ...args];
+  // Use the worst-case escaping from win-exec: npm's local .cmd shims escape twice.
+  if (isWindows && launchArgs.map(arg => escapeCmdArg(arg, true)).join(" ").length > WINDOWS_CLAUDE_ARGV_BUDGET) {
+    return unchanged;
+  }
   const childEnv = { ...env };
   delete childEnv.CLAUDE_CODE_AUTO_COMPACT_WINDOW;
-  return { args: ["--settings", serialized, ...args], env: childEnv };
+  return { args: launchArgs, env: childEnv };
 }

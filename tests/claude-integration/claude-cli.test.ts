@@ -81,11 +81,16 @@ describe("ocx claude per-model compact settings", () => {
   });
 
   test("only discovery selectors and launcher model slots are emitted", () => {
-    const childEnv = { ...env, ANTHROPIC_DEFAULT_SONNET_MODEL: "mock/mid" };
-    const result = withClaudeContextSettings([], childEnv, cfg(), {
-      ...windows, "legacy-unused": 524_000, "never-listed": 400_000,
-    }, {}, { selectors: ["ocx-claude-mock--mid", "unknown"], platform: "win32" });
-    expect(Object.keys(settings(result.args).modelSettings).sort()).toEqual(["mock/mid", "ocx-claude-mock--mid"]);
+    const map = { ...windows, "claude-ocx-mock--mid": 524_000, mid: 524_000, "mock/other": 400_000 };
+    const config = cfg({ claudeCode: { authMode: "proxy", tierModels: { sonnet: "mock/mid" } } });
+    const childEnv = buildClaudeEnv(config, 10100, {}, map);
+    const result = withClaudeContextSettings([], childEnv, config, map, {}, {
+      selectors: ["ocx-claude-mock--mid", "unknown"], platform: "win32",
+    });
+    expect(settings(result.args).modelSettings).toEqual({
+      "mock/mid": { autoCompactWindow: 497_800 },
+      "ocx-claude-mock--mid": { autoCompactWindow: 497_800 },
+    });
   });
 
   test("large Windows settings fall back to the original argv and compact env", () => {
@@ -94,6 +99,35 @@ describe("ocx claude per-model compact settings", () => {
     const result = withClaudeContextSettings(args, env, cfg(), map, {}, { selectors: Object.keys(map), platform: "win32" });
     expect(result).toEqual({ args, env });
     expect(result.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("829800");
+  });
+
+  test("escaped Windows shim command falls back when the JSON fits but the full command is too long", () => {
+    const map = Object.fromEntries(Array.from({ length: 55 }, (_, i) => [`ocx-claude-fixture--model-${i}`, 524_000]));
+    const args = ["--print", "hello world ".repeat(210)];
+    const config = cfg({ claudeCode: { authMode: "proxy" } });
+    const childEnv = buildClaudeEnv(config, 10100, {}, map);
+    const selectors = Object.keys(map);
+    const cmdLength = (argv: string[]) => {
+      const shim = "C:\\tools\\node_modules\\.bin\\claude.cmd";
+      const inv = commandInvocation(shim, argv, "win32", { env: {} });
+      return [inv.file, ...inv.args].join(" ").length;
+    };
+
+    for (const platform of ["darwin", "linux"] as const) {
+      const result = withClaudeContextSettings(args, childEnv, config, map, {}, { selectors, platform });
+      expect(result.args[0]).toBe("--settings");
+      expect(result.args[1]!.length).toBeLessThan(4_000);
+      expect(Object.keys(settings(result.args).modelSettings)).toEqual(selectors);
+      expect(result.args.slice(2)).toEqual(args);
+      expect(result.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBeUndefined();
+      expect(cmdLength(result.args)).toBeGreaterThan(8_191);
+    }
+
+    const result = withClaudeContextSettings(args, childEnv, config, map, {}, { selectors, platform: "win32" });
+    expect(result.args).toEqual(args);
+    expect(result.env).toEqual(childEnv);
+    expect(result.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("829800");
+    expect(cmdLength(result.args)).toBeLessThan(7_000);
   });
 
   test("a large registry with one pickable model stays small", () => {
