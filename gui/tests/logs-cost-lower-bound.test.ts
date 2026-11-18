@@ -54,15 +54,26 @@ describe("conversation cost lower-bound aggregation", () => {
     },
   });
 
-  test("marks a total when any included priced estimate is a lower bound", () => {
+  test("marks a total only when every included priced estimate is a lower bound", () => {
     expect(summarizeEstimatedCosts([priced(0.77, true), priced(1.23, true)])).toMatchObject({
       estimatedCostUsd: 2,
       priorityLowerBound: true,
     });
     expect(summarizeEstimatedCosts([priced(0.77, true), priced(1.23, false)])).toMatchObject({
       estimatedCostUsd: 2,
-      priorityLowerBound: true,
+      priorityLowerBound: false,
     });
+  });
+
+  test.each(["provider-credits", "mixed"] as const)("preserves a token floor alongside %s billing", source => {
+    const creditRow = priced(0.4, false);
+    const billing = source === "mixed" ? { source } : { source, providerCredits: 10, creditPriceUsd: 0.04 };
+    const summary = summarizeEstimatedCosts([
+      priced(1.6, true),
+      { displayMetrics: { cost: { ...creditRow.displayMetrics.cost, estimate: { ...creditRow.displayMetrics.cost.estimate, billing } } } },
+      priced(1, false),
+    ]);
+    expect(formatEstimatedUsdValue(summary.estimatedCostUsd, translator("en"), "en-US", summary.priorityLowerBound)).toBe("≥$3.0000");
   });
 
   test("preserves unpriced and unsupported exclusions without minting a lower bound", () => {

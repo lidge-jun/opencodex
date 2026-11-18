@@ -81,8 +81,10 @@ sets the marker and never vetoes one: `credits x price + >=token` is still `>=` 
 a mixed Combo keeps the floor any token leg earned. A credit leg's own catalog rate contributes
 nothing, because that rate priced neither the leg nor the total. A credits-only Combo is exact and
 reports no floor. `gui/src/pages/logs-cost-format.ts` applies the same rule to a row seeded by an
-older build or served by an older proxy, where the marker and reasons were already persisted. A
-credit-priced row whose count or price cannot produce a representable amount is unavailable with
+older build or served by an older proxy, where the marker and reasons were already persisted.
+Conversation totals require every priced row to be a floor for token-only billing, and keep any
+priced row's floor when credit billing participates. A credit-priced row whose count or price
+cannot produce a representable amount is unavailable with
 `credit_cost_unrepresentable` rather than falling back to a token estimate. A missing credit reading
 with no output is also unavailable because the charge is unknown. Combined attempts retain incomplete
 credit evidence when any attempt lacks a reading and another has one, including a retry HTTP failure. The empty-completion and terminal guards count sent attempts even when the whole usage object is absent; their initial accumulator is not an attempt.

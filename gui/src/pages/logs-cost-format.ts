@@ -157,7 +157,9 @@ export function summarizeEstimatedCosts(entries: readonly CostSummaryEntry[]): {
   unmeteredRequests: number;
 } {
   let estimatedCostUsd = 0;
-  let anyPricedEstimateIsLowerBound = false;
+  let pricedRequests = 0;
+  let lowerBounds = 0;
+  let usesCreditBilling = false;
   let unpricedRequests = 0;
   let unmeteredRequests = 0;
   for (const entry of entries) {
@@ -170,7 +172,9 @@ export function summarizeEstimatedCosts(entries: readonly CostSummaryEntry[]): {
       const total = cost.estimate.cost.total;
       if (Number.isFinite(total) && total >= 0) {
         estimatedCostUsd += total;
-        anyPricedEstimateIsLowerBound ||= effectivePriorityLowerBound(cost.estimate);
+        pricedRequests += 1;
+        if (effectivePriorityLowerBound(cost.estimate)) lowerBounds += 1;
+        usesCreditBilling ||= cost.estimate.billing !== undefined;
         continue;
       }
     }
@@ -178,7 +182,7 @@ export function summarizeEstimatedCosts(entries: readonly CostSummaryEntry[]): {
   }
   return {
     estimatedCostUsd,
-    priorityLowerBound: anyPricedEstimateIsLowerBound,
+    priorityLowerBound: lowerBounds > 0 && (usesCreditBilling || lowerBounds === pricedRequests),
     unpricedRequests,
     unmeteredRequests,
   };
