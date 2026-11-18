@@ -456,7 +456,7 @@ export function createResponsesSendBudget(
     initialSendAllowance: (cap: number): number => Math.min(cap,
       remainingTransientSendBudget(cap) + (initialPermit ? 1 : 0)),
     /** At final executor admission, settle only the owning booking or reserve this send. */
-    noteInitialDispatch: (prepaid = initialPermit): void => {
+    noteInitialDispatch: (prepaid = initialPermit, reserveUnbookedSend = false): void => {
       const policy = currentWorkflowBudgetPolicy();
       if (!physicalWorkflowAccounting && workflowSendCeilingReached(workflowRootId, policy)) {
         prepaid?.release();
@@ -465,13 +465,14 @@ export function createResponsesSendBudget(
       if (prepaid) {
         if (!prepaid.assumeCharge()) { prepaid.release(); throw new SendBudgetExhaustedError(); }
         if (prepaid === initialPermit) initialPermit = undefined;
-      } else if (adapterSendBudget && (options.comboInitialSend || options.compactionRecoveryPermit)) {
+      } else if (adapterSendBudget && (reserveUnbookedSend || options.comboInitialSend || options.compactionRecoveryPermit)) {
         const decision = adapterSendBudget.reserveDispatch({ sendClass: "transient",
           targetKey: adapterSendBudget.lastTargetKey ?? `${logCtx.provider}/${logCtx.model}` });
         if (!decision.allowed) throw new SendBudgetExhaustedError();
         if (!decision.permit.use()) { decision.permit.release(); throw new SendBudgetExhaustedError(); }
       } else {
         // Legacy direct callers can prebook without handing over a permit; keep their reporter.
+        if (reserveUnbookedSend && sendBudgetExhausted()) throw new SendBudgetExhaustedError();
         if (adapterSendBudget?.claimWorkflowSend && !adapterSendBudget.claimWorkflowSend()) throw new SendBudgetExhaustedError();
         if (!physicalWorkflowAccounting && !reserveWorkflowSend(workflowRootId, policy)) throw new SendBudgetExhaustedError();
         recordTransientSends(1, pendingHopPermit ?? inheritedPermit, true);

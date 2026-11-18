@@ -409,6 +409,7 @@ credentials, tool arguments, or raw TypeSafe responses. Oversized rows retain th
 `usageIncomplete` diagnostic as the ordinary usage endpoint.
 
 For routed image and web-search turns, `sendCount` includes upstream adapter retries.
+Each model send for these turns uses the shared request send budget, including retries and later tool rounds. A send refused at the cap does not increment `sendCount`.
 A replacement stopped before upstream dispatch adds no send.
 
 New xAI attempts in `usage.jsonl` include a request-time `credentialSource`: `grok-oauth`

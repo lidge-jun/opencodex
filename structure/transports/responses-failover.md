@@ -50,7 +50,8 @@ with the same item id. The batch/non-streaming bridge follows the same rule.
 (Cloudflare closes idle connections; Bun's fetch reuses the dead socket and rejects with
 `ECONNRESET` before any response bytes). `fetchWithResetRetry` never retries on its own
 account. A caller passing `replaySafe: true` permits up to 3 total attempts with jittered
-backoff, warn-logged. A separate `retryOnReset` operator grant can authorize an ambiguous
+backoff, warn-logged. A request-cap refusal at the guarded executor retains its 429 classification
+even if the previous connection attempt reset. A separate `retryOnReset` operator grant can authorize an ambiguous
 replacement within the existing send budget. Without either permission, the rejection becomes the terminal refusal described in
 [ambiguous connection-reset replay boundary](#ambiguous-connection-reset-replay-boundary).
 Reusable request bytes were never the test: a string body makes a send mechanically

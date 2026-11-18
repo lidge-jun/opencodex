@@ -98,12 +98,17 @@ another owner's pending booking. Cleanup cannot refund real work. Detached judge
 `tests/responses/responses-dispatch-receipt.test.ts` pin these boundaries.
 
 `src/server/responses/sidecar-send-budget.ts` binds hosted search/image/video inference to this same
-child-owned booking. Generic HTTP/WS uses the final physical-dispatch receipt; adapter-owned
+child-owned booking. Each generic HTTP/WS send settles at the final physical-dispatch receipt,
+including direct sends, connection-reset retries and later tool rounds. The receipt consumes its
+prepaid permit when present or reserves a fresh send against the shared ledger, refusing dispatch
+when the allowance is exhausted. Adapter-owned
 `fetchResponse`/`runTurn` receives the live budget and observers instead, never both charge paths.
 Receipt selection follows the actual iteration adapter after rotation. Hosted tool execution does
 not itself settle the model's booking. Direct adapter-owned sidecars receive the same live request
 ledger even without a prepaid Combo send. The hosted reservation, producer and WS regression siblings in `tests/responses/`
 assert real synthetic inference, explicit durable settlement and unsent release without widening caps.
+`tests/responses/responses-sidecar-usage.test.ts` covers direct generic HTTP search and image reset
+retries with one- and two-send caps.
 Hosted credential hops stay open in this owner and the live pending-hop view until physical dispatch;
 generic receipts consume that exact permit, adapters claim it through the view, and fetch-iteration
 cleanup releases an unsent hop once, except while an asynchronous runTurn producer still owns it.

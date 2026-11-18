@@ -36,11 +36,11 @@ export function createSidecarSendBudget(
     } satisfies Partial<IncomingMeta>,
     /** Attach HTTP receipts only when the adapter does not own physical dispatch. */
     fetchOptions(adapter: ProviderAdapter): Pick<ProviderFetchOptions, "onPhysicalDispatch"> {
-      return initial && !adapter.fetchResponse && !adapter.runTurn
+      return !adapter.fetchResponse && !adapter.runTurn
         ? { onPhysicalDispatch: () => {
           const prepaid = budget.pendingHopPermit;
           budget.pendingHopPermit = undefined;
-          budget.noteInitialDispatch(prepaid);
+          budget.noteInitialDispatch(prepaid, true);
         } } : {};
     },
     /** Transfer cleanup to the asynchronous producer before it can outlive the response. */
