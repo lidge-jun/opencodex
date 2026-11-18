@@ -606,10 +606,13 @@ export async function prepareResponsesTransport(
   // until the guarded dispatch binds it to the selection that reaches the upstream.
   const attemptSendDeferred = (): boolean => usesApiKeyAccount(route.provider)
     || (route.providerName === "github-copilot" && route.provider.authMode !== "forward");
-  let pendingKeySend: { estimate: number | undefined; recovery?: AttemptRecoveryKind } | undefined;
-  const noteRoutedAttemptSend = (estimate: number | undefined, recovery?: AttemptRecoveryKind): void => {
-    if (attemptSendDeferred()) pendingKeySend = { estimate, recovery };
-    else noteProviderAttemptSend(logCtx, route.providerName, route.provider, estimate, recovery);
+  let pendingKeySend: { estimate: number | undefined; recovery?: AttemptRecoveryKind; onCommit?: () => void } | undefined;
+  const noteRoutedAttemptSend = (estimate: number | undefined, recovery?: AttemptRecoveryKind, onCommit?: () => void): void => {
+    if (attemptSendDeferred()) pendingKeySend = { estimate, recovery, onCommit };
+    else {
+      noteProviderAttemptSend(logCtx, route.providerName, route.provider, estimate, recovery);
+      onCommit?.();
+    }
   };
   const commitKeyAttemptSend = (): void => {
     if (!attemptSendDeferred()) return;
@@ -623,9 +626,36 @@ export async function prepareResponsesTransport(
         sentOAuthSnapshot = servingOAuthSnapshot;
       }
     }
-    noteProviderAttemptSend(logCtx, route.providerName, route.provider,
-      pendingKeySend?.estimate ?? logCtx.usageLogInputTokens, pendingKeySend?.recovery, copilotCandidate);
+    const pending = pendingKeySend;
     pendingKeySend = undefined;
+    noteProviderAttemptSend(logCtx, route.providerName, route.provider,
+      pending?.estimate ?? logCtx.usageLogInputTokens, pending?.recovery, copilotCandidate);
+    pending?.onCommit?.();
+  };
+  const createOAuthReplayAttempt = () => {
+    const deferred = attemptSendDeferred();
+    let dispatched = false;
+    return (adapter: string, estimate: number | undefined, recovery?: AttemptRecoveryKind) => {
+      const publishReplacement = (): void => {
+        const attempt = logCtx.activeAttempt;
+        if (!deferred) {
+          logCtx.providerAdapter = adapter;
+          if (attempt) attempt.model = route.modelId;
+          sealRequestAttemptIdentity(attempt, logCtx.provider, adapter, logCtx.accountLogLabel);
+          recordAttemptCredentialSource(attempt, route.providerName, route.provider, adapter);
+        }
+        dispatched = true;
+      };
+      const kind = dispatched ? recovery : "oauth-401";
+      const onCommit = dispatched ? undefined : publishReplacement;
+      // Copilot consumes its staged attempt in its guarded executor. Other providers
+      // commit when the caller reports a physical dispatch after pacing and admission.
+      if (deferred) {
+        noteRoutedAttemptSend(estimate, kind, onCommit);
+        return undefined;
+      }
+      return () => noteRoutedAttemptSend(estimate, kind, onCommit);
+    };
   };
   const bindKeyUsageFromBridge = (usage: OcxUsage | undefined): void => {
     logCtx.usageFromBridge = true;
@@ -1712,6 +1742,7 @@ export async function prepareResponsesTransport(
       return pin && capturedImagePins.has(pin) && pin.isCurrent() ? pin : undefined;
     },
     noteRoutedAttemptSend,
+    createOAuthReplayAttempt,
     attemptSendDeferred,
     deferPhysicalAttribution,
     commitKeyAttemptSend,

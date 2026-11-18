@@ -207,7 +207,9 @@ same-account OAuth refresh after 401. `credentialRecoveryStatus` in
 The existing in-place split preserves the active object, keeps the refused send's usage on its
 sealed row and records the replacement send on a fresh row. The sealed tier outcome is a snapshot;
 the replacement retains the live adapter observer's outcome so response-tier confirmation updates
-only the replacement. A recovery before the first send creates no extra row. Same-account waits and transport resends remain on the existing attempt.
+only the replacement. Native Responses OAuth 401 recovery commits the split at physical dispatch,
+after pacing and admission.
+A recovery before the first send creates no extra row. Same-account waits and transport resends remain on the existing attempt.
 `tests/usage/key-attribution.test.ts` covers the split and non-split kinds; the loopback server
 case in `tests/server/server-google-antigravity-oauth-401-replay.test.ts` records separate 401
 and 200 rows for a same-account refresh.
