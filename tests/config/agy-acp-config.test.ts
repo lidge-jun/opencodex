@@ -38,7 +38,7 @@ describe("antigravity-acp configuration", () => {
     expect(error).not.toContain(aliasKey);
   });
 
-  test("schema issue messages redact a credential-shaped model key in diagnostics and backup logs", () => {
+  test.each([1, 2])("schema issue messages redact a credential-shaped model key in diagnostics and backup logs (run %d)", async () => {
     const modelKey = "sk-proj-" + "y".repeat(44);
     const raw = config({}, { google: { ...google, modelMaxInputTokens: { [modelKey]: 0 } } });
     const result = configSchema.safeParse(raw);
@@ -46,14 +46,16 @@ describe("antigravity-acp configuration", () => {
     const error = messages(validateConfigCandidate(raw));
     expect(error.includes(modelKey)).toBe(false);
     expect(error).toContain("modelMaxInputTokens.[REDACTED]");
+    const home = mkdtempSync(join(tmpdir(), "ocx-agy-acp-missing-config-"));
     const print = spyOn(console, "error").mockImplementation(() => {});
     try {
-      warnAndBackupInvalidConfig(join(tmpdir(), "ocx-agy-acp-missing-config.json"), result.error);
+      warnAndBackupInvalidConfig(join(home, "config.json"), result.error);
       const logged = print.mock.calls.flat().join("\n");
       expect(logged.includes(modelKey)).toBe(false);
       expect(logged).toContain("modelMaxInputTokens.[REDACTED]");
     } finally {
       print.mockRestore();
+      await removeTreeAfterBackgroundWork(home);
     }
   });
 
