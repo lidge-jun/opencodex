@@ -183,7 +183,7 @@ The operating guide's eight-domain workflow table is navigation rather than pari
 
 ## ocx command selection
 
-`src/cli/claude-context-settings.ts` skips generated per-model compact settings when the first positional after Claude global options and their values is `remote-control`, `rc`, `bridge`, `remote`, or `sync`. These commands keep their original arguments and launch environment. The `--remote-control` session option still supports generated settings.
+`src/cli/claude-context-settings.ts` preserves the original arguments and launch environment and skips generated per-model compact settings if any argument exactly matches `remote-control`, `rc`, `bridge`, `remote`, or `sync`, including option values and arguments after `--`. The `--remote-control` session option still supports generated settings.
 
 `capabilities --contracts` and `update` remain on the invoked package path even when a Desktop command record is present.
 All `capabilities` calls, sync calls and update calls carrying orchestration flags skip root automatic Codex shim repair, including malformed calls. Sync holds a separate home-scoped sync/update mutex for its work and performs eligible shim repair only after acquiring it.

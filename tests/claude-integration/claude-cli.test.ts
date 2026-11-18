@@ -178,30 +178,40 @@ describe("ocx claude per-model compact settings", () => {
     [["sync", "--help"]],
     [["--verbose", "remote-control", "--help"]],
     [["--model", "mock/mid", "remote-control", "--help"]],
+    [["--", "remote-control", "--help"]],
+    [["-nfixture", "remote-control", "--help"]],
+    [["--name", "-x", "remote-control", "--help"]],
+    [["--debug-to-stderr", "remote-control", "--help"]],
     [["--model=mock/mid", "rc", "--help"]],
+    [["--verbose", "bridge"]],
     [["--debug", "hooks", "--verbose", "bridge", "--help"]],
     [["--append-system-prompt", "rc", "remote", "--help"]],
     [["--settings", "{}", "remote-control", "--help"]],
-  ])("preserves Remote Control argv and env for %j", args => {
-    const result = build(args);
-    expect(result.args).toBe(args);
-    expect(result.env).toBe(env);
-  });
-
-  test.each([
-    [["--remote-control"]],
     [["--remote-control", "rc"]],
-    [["--remote-control=rc"]],
     [["--print", "remote-control"]],
     [["--verbose", "-p", "rc"]],
-    [["--", "remote-control"]],
     [["--model", "remote-control"]],
     [["--model", "rc"]],
     [["--append-system-prompt", "rc"]],
     [["--debug", "rc"]],
     [["--tools", "Read", "rc"]],
-    [["--verbose", "explain remote-control"]],
     [["--verbose", "explain", "remote-control"]],
+  ])("preserves argv and env when a Remote Control token appears in %j", args => {
+    const original = { args: [...args], env: { ...env } };
+    const result = build(args);
+    expect(result).toEqual(original);
+    expect(result.args).toBe(args);
+    expect(result.env).toBe(env);
+  });
+
+  test.each([
+    [[]],
+    [["--print", "hello"]],
+    [["--verbose", "-p", "hello"]],
+    [["--remote-control"]],
+    [["--remote-control", "fixture"]],
+    [["--remote-control=rc"]],
+    [["--verbose", "explain remote-control"]],
   ])("still injects session settings for %j", args => {
     const result = build(args);
     expect(settings(result.args).modelSettings["mock/mid"].autoCompactWindow).toBe(497_800);

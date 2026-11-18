@@ -372,7 +372,7 @@ Claude Code は未知モデルのコンテキストを 200k トークンとし�
 
 いずれかのオプションで JSON の生成をスキップしても、自動コンテキストが設定した `CLAUDE_CODE_AUTO_COMPACT_WINDOW` はそのまま引き継がれます。この変数を明示的にエクスポートした場合も、JSON は生成されず、その値が引き継がれます。Claude Code では、この変数の有効な値が `--autocompact` や保存済みの圧縮設定より優先されます。ファイルの圧縮設定を使うには、`claudeCode.autoContext` を `false` にして自動注入を止め、エクスポート済みの `CLAUDE_CODE_AUTO_COMPACT_WINDOW` を解除し、`--settings <file>` を指定します。[Claude Code の自動圧縮設定の優先順位](https://code.claude.com/docs/en/model-config#set-the-auto-compact-window)を参照してください。
 
-Remote Control の `remote-control` コマンドとその別名 `rc`、`bridge`、`remote`、`sync` には、元の引数と起動環境がそのまま渡されます。
+オプションの値や `--` より後の引数も含め、いずれかの引数が Remote Control のコマンドまたは別名（`remote-control`、`rc`、`bridge`、`remote`、`sync`）と完全に一致する場合、ランチャーは生成した設定を適用せず、元の引数と起動環境をそのまま渡します。
 
 設定状態は 3 つです。
 

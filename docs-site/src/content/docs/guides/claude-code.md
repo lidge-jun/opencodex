@@ -850,8 +850,9 @@ To use the compact policy from a file, set `claudeCode.autoContext` to `false` t
 injection, unset any exported `CLAUDE_CODE_AUTO_COMPACT_WINDOW`, and pass `--settings <file>`.
 See [Claude Code's auto-compact precedence](https://code.claude.com/docs/en/model-config#set-the-auto-compact-window).
 
-Generated per-model settings apply to routed `ocx claude` sessions. The launcher skips them when
-the command after any leading global options is `remote-control`, `rc`, `bridge`, `remote`, or `sync`.
+Generated per-model settings apply to routed `ocx claude` sessions. The launcher skips them and keeps the original arguments and launch environment if any argument
+exactly matches a Remote Control command or alias (`remote-control`, `rc`, `bridge`, `remote`, or `sync`),
+including option values and arguments after `--`.
 The `--remote-control` session option still supports generated settings. The `modelUsage.contextWindow`
 accounting field can differ from the working compact window shown by `/context`.
 
