@@ -11,6 +11,7 @@ import type {
 import type { TranslatorBudget } from "../../lib/translator-budget";
 import { prepareResponsesRequest } from "./request-prepare";
 import { prepareResponsesTransport } from "./request-transport";
+import { initialHostedAdvisorSpendRefusal } from "./hosted-advisor-spend";
 import { prepareResponsesSidecarAuth } from "./request-sidecar-auth";
 import { createResponsesEffects } from "./response-effects";
 import { createResponsesSendBudget } from "./request-send-budget";
@@ -48,6 +49,8 @@ export async function handleResponsesInner(
     if (requestState instanceof Response) return requestState;
     const transportState = await prepareResponsesTransport(requestContext, admissionState, requestState);
     if (transportState instanceof Response) return markProxyError(transportState);
+    const hostedAdvisorRefusal = initialHostedAdvisorSpendRefusal(requestContext, requestState, transportState);
+    if (hostedAdvisorRefusal) return hostedAdvisorRefusal;
     if (transportState.runTurnAdapter.name === "claude-cli") {
       const instructionImage = options.chatInstructionImage || options.responsesInstructionImage
         || responsesHasInstructionImage(requestState.parsed._rawBody)
