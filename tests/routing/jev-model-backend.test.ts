@@ -161,6 +161,8 @@ describe("JEV pure model backend", () => {
 
   test("keeps only safe nonnegative token usage in either supported naming convention", async () => {
     const usage = { input_tokens: 5, output_tokens: 0, inputTokens: 7, outputTokens: 2, other: 99 };
+    expect(await resolveJevModelDecision({ ...base, invokeModel: async () => ({ text: "{}", usage }) }))
+      .toMatchObject({ ...fallback, gate: "invalid", usage: { input_tokens: 5, output_tokens: 0, inputTokens: 7, outputTokens: 2 } });
     expect((await resolveJevModelDecision({ ...base, invokeModel: async () => ({ text: '"p/small:low"', usage }) })).usage)
       .toEqual({ input_tokens: 5, output_tokens: 0, inputTokens: 7, outputTokens: 2 });
     const invalidUsage = { input_tokens: -1, output_tokens: 1.5, inputTokens: Number.MAX_SAFE_INTEGER + 1, outputTokens: NaN };
