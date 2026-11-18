@@ -108,3 +108,17 @@ test("admission helper metadata reads are represented in the snapshot", async ()
     unrepresentable: "reject", rollout: { nativeChatCombos: true },
   });
 });
+
+test("admission metadata snapshots skip top-level and nested getters", () => {
+  const config = perTurnConfig([], []);
+  let calls = 0;
+  const getter = { enumerable: true, get() { calls++; return 128_000; } };
+  const provider = config.providers.sol!;
+  Object.defineProperty(provider, "contextWindow", getter);
+  provider.modelContextWindows = { other: 42_000 };
+  Object.defineProperty(provider.modelContextWindows, SOL.model, getter);
+  const snapshot = snapshotComboAdmission(config, "auto").providers.sol!;
+  expect(calls).toBe(0);
+  expect(snapshot.contextWindow).toBeUndefined();
+  expect(snapshot.modelContextWindows).toEqual({ other: 42_000 });
+});

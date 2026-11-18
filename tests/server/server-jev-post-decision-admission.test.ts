@@ -1,4 +1,5 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import * as sidecarAuth from "../../src/server/responses/request-sidecar-auth";
 import type { RequestLogContext } from "../../src/server/request-log";
 import { LUNA, SOL, perTurnConfig, resetState, turn } from "../helpers/jev-session-pin";
 
@@ -86,4 +87,35 @@ test("accounts for the completed decision when admission refresh is cancelled", 
   expect(models).toEqual([]);
   expect(payloads).toHaveLength(1);
   expect(log.jevDecision?.usage).toMatchObject({ totalTokens: 10 });
+});
+
+test.each(["snapshot", "vision"] as const)("retains decision usage when %s readmission throws", async failure => {
+  const payloads: Record<string, unknown>[] = [];
+  const config = perTurnConfig(["sol/gpt-5.6-sol:high"], payloads);
+  config.combos!.auto!.capabilityPolicy = "union";
+  const error = new Error("readmission failed");
+  for (const provider of [config.providers.sol!, config.providers.luna!]) provider.inputModalities = ["text"];
+  const decide = config.providers.jev!.fetch!;
+  config.providers.jev!.fetch = (async (input, init) => {
+    if (failure === "snapshot") {
+      config.providers.sol!.modelContextWindows = new Proxy({}, { ownKeys() { throw error; } });
+    }
+    return decide(input, init);
+  }) as typeof fetch;
+  const probe = spyOn(sidecarAuth, "canDescribeComboImages").mockImplementation(async () => {
+    if (failure === "vision" && payloads.length) throw error;
+    return false;
+  });
+  const log: RequestLogContext = { model: "", provider: "" };
+  const models: string[] = [];
+  try {
+    await expect(turn(config, { log, models, ...(failure === "vision" ? {
+      input: [{ role: "user", content: [{ type: "input_image", image_url: "https://example.test/image.png" }] }],
+    } : {}) })).rejects.toThrow();
+    expect(payloads).toHaveLength(1);
+    expect(models).toEqual([]);
+    expect(log.jevDecision?.usage).toMatchObject({ inputTokens: 8, outputTokens: 2, totalTokens: 10 });
+  } finally {
+    probe.mockRestore();
+  }
 });
