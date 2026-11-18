@@ -1,4 +1,5 @@
 import { windowsChildHttpArgv } from "./remote-windows";
+import { isRouteProofId, LINK_ROUTE_PROOF_HEADER } from "./route-proof";
 import { MEMORY_DRAIN_RESTART_MS, REPLACEMENT_READY_TIMEOUT_MS } from "../lib/system-restart-contract";
 
 export const LINK_COMMAND_WORK_MS = 15_000;
@@ -16,11 +17,18 @@ export function linkRestartBudget(latencyMs = 0): number {
   return MEMORY_DRAIN_RESTART_MS + REPLACEMENT_READY_TIMEOUT_MS + linkCommandBudget(latencyMs);
 }
 
-/** Credential-free Child HTTP probe. Ignore curlrc/proxies; never follow a redirect. */
-export function remoteChildHttpArgv(port: number, path: "healthz" | "v1/catalog", timeoutMs = LINK_RELAY_VERIFY_MS, platform: "posix" | "windows" = "posix"): string[] {
-  if (platform === "windows") return windowsChildHttpArgv(port, path, timeoutMs);
+/**
+ * Credential-free Child HTTP probe. Ignore curlrc/proxies; never follow a redirect. A route
+ * readiness proof (src/link/route-proof.ts) sends its id in one fixed header, catalog only.
+ */
+export function remoteChildHttpArgv(port: number, path: "healthz" | "v1/catalog", timeoutMs = LINK_RELAY_VERIFY_MS, platform: "posix" | "windows" = "posix", routeProofId?: string): string[] {
+  if (routeProofId !== undefined && (path !== "v1/catalog" || !isRouteProofId(routeProofId))) throw new Error("invalid route proof");
+  if (platform === "windows") return windowsChildHttpArgv(port, path, timeoutMs, routeProofId);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("invalid Child port");
   const seconds = Math.max(1, Math.ceil(Math.min(LINK_RELAY_VERIFY_MS, timeoutMs) / 1000));
+  if (routeProofId !== undefined) {
+    return ["sh", "-c", 'curl -q --noproxy "*" --silent --show-error --fail --connect-timeout 3 --max-time "$3" -H "' + LINK_ROUTE_PROOF_HEADER + ': $4" --write-out "\\n%{http_code}" "http://127.0.0.1:$1/$2"', "ocx-child-http", String(port), path, String(seconds), routeProofId];
+  }
   return ["sh", "-c", 'curl -q --noproxy "*" --silent --show-error --fail --connect-timeout 3 --max-time "$3" --write-out "\\n%{http_code}" "http://127.0.0.1:$1/$2"', "ocx-child-http", String(port), path, String(seconds)];
 }
 

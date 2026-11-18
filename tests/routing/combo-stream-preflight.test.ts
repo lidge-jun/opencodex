@@ -5,12 +5,14 @@ import {
   comboStreamPayloadCommitsOutput,
   deferProtocolSafeResetRecovery,
   preflightComboStreamResponse,
+  replayBufferedResponse,
 } from "../../src/server/responses/combo-stream-preflight";
 import { stageCommitment, type RequestFailureStage } from "../../src/lib/request-failure-model";
 import type { RequestLogContext } from "../../src/server/request-log";
 import { MAX_CLIENT_SSE_FRAME_BYTES } from "../../src/server/sse-frame-buffer";
 import type { AdapterEvent } from "../../src/types";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import { markPacedStream } from "../../src/lib/paced-stream";
 
 const sse = (...payloads: unknown[]): Response => new Response(
   payloads.map(payload => `data: ${JSON.stringify(payload)}\n\n`).join(""),
@@ -493,6 +495,18 @@ describe("combo stream preflight", () => {
       expect(result.kind).toBe("accepted");
       expect(await result.response.text()).toBe(expected);
     }
+  });
+
+  test("commits an untyped error envelope instead of advancing the combo (#8216)", async () => {
+    // Not a control event, so it is never resent to another target; the relay reports it as failed.
+    const source = sse(
+      { type: "response.created", response: { id: "r1", status: "in_progress" } },
+      { error: { message: "openai_error", code: "bad_response_status_code" } },
+    );
+    const expected = await source.clone().text();
+    const result = await preflightComboStreamResponse(source, { model: "m1", provider: "a" });
+    expect(result.kind).toBe("accepted");
+    expect(await result.response.text()).toBe(expected);
   });
 
   test("retries a zero-output opaque OpenRouter numeric 400 without a structured code", async () => {
@@ -1263,6 +1277,88 @@ describe("combo stream preflight", () => {
     })).toBe(true);
   });
 
+  for (const field of ["tool_choice", "text.format"] as const) {
+    for (const separateChunks of [false, true]) {
+      test(`malformed ${field} cannot discard hosted output before failure (separate chunks: ${separateChunks})`, async () => {
+        const malformed = { type: { toString: null } };
+        const response = {
+          id: "completed-hosted-work", status: "in_progress",
+          output: [{ type: "mcp_call", id: "completed-call", status: "completed", name: "act", arguments: "{}", output: "done" }],
+          ...(field === "tool_choice" ? { tool_choice: malformed } : { text: { format: malformed } }),
+        };
+        const payloads = [
+          { type: "response.created", response },
+          { type: "response.failed", response: { id: response.id, status: "failed", output: [], error: { code: "server_error", message: "busy" } } },
+        ];
+        const frames = payloads.map(payload => `data: ${JSON.stringify(payload)}\n\n`);
+        const original = new Response(new ReadableStream<Uint8Array>({ start(controller) {
+          for (const frame of separateChunks ? frames : [frames.join("")]) controller.enqueue(new TextEncoder().encode(frame));
+          controller.close();
+        } }), { headers: { "content-type": "text/event-stream" } });
+        const result = await preflightComboStreamResponse(original, { model: "m1", provider: "a" });
+        expect(result.kind).toBe("accepted");
+        expect(result.response.status).toBe(200);
+        expect(await result.response.text()).toBe(frames.join(""));
+        expect(comboStreamPayloadCommitsOutput(payloads[0])).toBe(true);
+      });
+    }
+  }
+
+  for (const field of ["tool_choice", "text.format"] as const) {
+    for (const separateChunks of [false, true]) {
+      test(`coercible non-string ${field} commits empty output before failure (separate chunks: ${separateChunks})`, async () => {
+        const selector = { type: [field === "tool_choice" ? "function" : "text"] };
+        const payload = {
+          type: "response.created",
+          response: {
+            id: "empty", status: "in_progress", output: [],
+            ...(field === "tool_choice" ? { tool_choice: selector } : { text: { format: selector } }),
+          },
+        };
+        expect(comboStreamPayloadCommitsOutput(payload)).toBe(true);
+        const frames = [payload, {
+          type: "response.failed",
+          response: { status: "failed", output: [], error: { code: "server_error", message: "busy" } },
+        }].map(value => `data: ${JSON.stringify(value)}\n\n`);
+        const expected = new TextEncoder().encode(frames.join(""));
+        const original = new Response(new ReadableStream<Uint8Array>({ start(controller) {
+          for (const frame of separateChunks ? frames : [frames.join("")]) controller.enqueue(new TextEncoder().encode(frame));
+          controller.close();
+        } }), { headers: { "content-type": "text/event-stream" } });
+        const result = await preflightComboStreamResponse(original, { model: "m1", provider: "a" });
+        expect(result.kind).toBe("accepted");
+        expect(result.response.status).toBe(200);
+        expect(new Uint8Array(await result.response.arrayBuffer())).toEqual(expected);
+      });
+    }
+  }
+
+  test("a replay classifier exception commits the original stream", async () => {
+    const payloads = [
+      { type: "response.created", response: { id: "original", status: "in_progress", output: [] } },
+      { type: "response.failed", response: { status: "failed", output: [], error: { code: "server_error", message: "busy" } } },
+    ];
+    const original = sse(...payloads);
+    const expected = await original.clone().text();
+    const result = await preflightComboStreamResponse(original, { model: "m1", provider: "a" }, payload => {
+      if ((payload as { type: string }).type === "response.created") throw new Error("classification unavailable");
+      return true;
+    });
+    expect(result.kind).toBe("accepted");
+    expect(result.response.status).toBe(200);
+    expect(await result.response.text()).toBe(expected);
+  });
+
+  test("valid selector metadata with no output still permits terminal failover", async () => {
+    const result = await preflightComboStreamResponse(sse(
+      { type: "response.created", response: { id: "empty", status: "in_progress", output: [], tool_choice: { type: "function", name: "read" }, text: { format: { type: "text" } } } },
+      { type: "response.failed", response: { status: "failed", output: [], error: { code: "server_error", message: "busy" } } },
+    ), { model: "m1", provider: "a" });
+    expect(result.kind).toBe("failed");
+    expect(result.response.status).toBe(502);
+    await result.response.body?.cancel();
+  });
+
   for (const type of ["response.created", "response.in_progress", "response.queued", "response.heartbeat"]) {
     for (const extra of [
       { output_text: "already produced" },
@@ -1623,3 +1719,48 @@ describe("combo stream preflight", () => {
 });
 
 
+
+describe("combo preflight replay under a stalled reader (#8601)", () => {
+  const encoder = new TextEncoder();
+  const replay = (buffered: Uint8Array[], paced: boolean) => {
+    const source = new ReadableStream<Uint8Array>({ pull() { return new Promise<void>(() => {}); } }, { highWaterMark: 0 });
+    // A paced link turn's body is marked (src/lib/paced-stream.ts): the replay then queues nothing ahead of its client.
+    const response = new Response(paced ? markPacedStream(source) : source, { headers: { "content-type": "text/event-stream" } });
+    return replayBufferedResponse(response, response.body!.getReader(), buffered).body!.getReader();
+  };
+  // One event-loop turn after each read lets the replay run any pull it scheduled for its own queue.
+  const turn = () => new Promise<void>(resolve => setImmediate(resolve));
+
+  test("on a paced turn each replayed chunk leaves the buffer as the client reads it, and no sooner", async () => {
+    const chunks = ["a", "bb", "ccc"].map(text => encoder.encode(text));
+    const buffered = [...chunks];
+    const reader = replay(buffered, true);
+    for (let read = 0; read < chunks.length; read++) {
+      expect((await reader.read()).value).toBe(chunks[read]!);
+      await turn();
+      expect(buffered.map(chunk => chunk.byteLength)).toEqual(chunks.map((chunk, index) => index <= read ? 0 : chunk.byteLength));
+    }
+    await reader.cancel();
+  });
+
+  test("on any turn every chunk the client read has left the buffer", async () => {
+    const chunks = ["a", "bb", "ccc"].map(text => encoder.encode(text));
+    const buffered = [...chunks];
+    const reader = replay(buffered, false);
+    for (let read = 0; read < chunks.length; read++) {
+      expect((await reader.read()).value).toBe(chunks[read]!);
+      await turn();
+      // An unpaced replay keeps its default queue of one, so a slot past this read may already be taken.
+      expect(buffered.slice(0, read + 1).map(chunk => chunk.byteLength)).toEqual(Array(read + 1).fill(0));
+    }
+    await reader.cancel();
+  });
+
+  test("a cancel empties every slot the client never read", async () => {
+    const buffered = ["a", "bb", "ccc"].map(text => encoder.encode(text));
+    const reader = replay(buffered, true);
+    await reader.read();
+    await reader.cancel();
+    expect(buffered.map(chunk => chunk.byteLength)).toEqual([0, 0, 0]);
+  });
+});

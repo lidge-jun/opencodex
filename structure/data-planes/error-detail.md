@@ -63,6 +63,15 @@ partial bodies produce status-only diagnostics.
 `boundedFailureDetail` revalidates those pairs on live projection, usage append/read, hydration and
 GUI rendering. The dashboard appends the machine field/type pairs to its localized provider-error
 label. No upstream-authored free text is retained, and client-facing messages retain their existing policy.
+On the same provider bodies (the `providerBody` callers of `recordUpstreamValidationDetail`: native Chat,
+translated adapter dispatch and a combo child's raw upstream response), a 4xx with no structured
+`detail[]` whose error message names a developer-role rejection through the fixed lowercase phrases in
+`src/lib/developer-role-rejection.ts` (DashScope `developer is not one of`, Moonshot
+`role 'developer' is not allowed`, serde `` unknown variant `developer` ``) records the closed pair
+`messages.role`/`enum` (#8864). The message is read once within the 4096-character scan and dropped; a
+body this proxy formatted keeps validation-only capture. `tests/lib/developer-role-rejection.test.ts`
+and `tests/server/developer-role-rejection-boundary.test.ts` cover the match, a non-match and the
+absence of upstream text in the client body, live row, `usage.jsonl`, hydration and console output.
 
 A provider failure also keeps its closed class without validation pairs (#8446).
 `recordUpstreamProviderErrorDetail` reads `error.type`, Google's `error.status` (an object or the first
@@ -160,7 +169,7 @@ binding a token is dropped. Handles, tokens and bindings are never logged; a val
 passes unchanged.
 
 `codex-ws-metadata.ts` checks the raw byte budget first, then keeps only normalized values. It rebuilds
-the native `codex.rate_limits` frame field by field: known limit ids (`codex`, `codex_bengalfox`), a
+native Messages API-key responses also supply the display-only passive observation owner; the native `codex.rate_limits` frame is normalized field by field: known limit ids (`codex`, `codex_bengalfox`), a
 closed set of plan labels, the `allowed`/`limit_reached` flags, quota windows with the percent clamped to
 100 at two decimals and integer window and reset values, and the credit flags. Every other field is
 discarded, including the credit balance, which clients receive only as the proxy-formatted
@@ -290,7 +299,10 @@ A closed exact-message map covers malformed/empty completion diagnostics, missin
 explicit-empty-tool-catalog refusal. Its values are complete proxy literals: arbitrary suffixes,
 reason strings and tool-name slots never match. The actionable plan-refusal map recognizes only
 `MODEL_NOT_IN_PLAN` and emits its own complete remediation message, preserving the proxy's token
-without copying surrounding text. Every failure with unknown provenance receives owned wording.
+without copying surrounding text. The same function selects the fixed `DEVELOPER_ROLE_REFUSAL_MESSAGE` for a
+4xx whose evidence the developer-role verdict above recognizes, only with no contract and a null or
+`invalid_request_error` code, so Chat and Messages clients learn to send `system` or record
+`foldDeveloperRoleToSystem` without any provider text. Every failure with unknown provenance receives owned wording.
 
 `src/server/chat-native-sse.ts` builds nested terminal errors as canonical owned error envelopes.
 Flat `type: "error"` payloads and `event: error` frames that the ordinary relay accepts retain that relay's
@@ -456,6 +468,8 @@ removes selector fields from scope refusals and never renders request/configurat
 or upstream reset times. Shared producers retain their existing bytes for Chat and other surfaces.
 HTTP workflow refusals enter the same Messages projection at
 `src/server/admitted-http-turn.ts`. A replacement refusal keeps its own construction identity.
+The workflow refusal writer carries workflow-specific headers and local provenance; the adapter's
+independent send-budget writer instead keeps its distinct request-budget code and synthetic attribution.
 
 Only buffered/folded Messages consumers receive a legacy-record sink; streaming delivery does
 not retain those records. Adapter iterator-read failures alone carry transport provenance;

@@ -18,6 +18,11 @@ ocx gui
 
 ```bash
 ocx start
+```
+
+そのターミナルでプロキシを実行したまま、別のターミナルで GUI の開発サーバーを起動します。
+
+```bash
 bun run dev:gui
 ```
 

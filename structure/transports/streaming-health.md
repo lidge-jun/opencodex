@@ -111,8 +111,8 @@ reader without awaiting a potentially broken cancellation promise.
 
 `src/server/responses/passthrough-execution.ts` applies the guard after native
 response classification, outside the direct relay and lifetime wrappers. Native
-SSE, including the missing-Content-Type fallback, retains its original Response
-identity and existing watchdog/terminal ownership. Bounded JSON and error readers
+SSE, including the missing-Content-Type fallback, retains its Response identity and
+is guarded only by an explicit budget ([native SSE stall](timeouts.md#native-responses-sse-stall)). Bounded JSON and error readers
 are not wrapped again. Direct bodies and returned redirect bodies are guarded;
 bytes, response headers and status are preserved.
 
@@ -256,8 +256,8 @@ egress. HTTP/SSE fallback retains Bun fetch's own proxy rules, which do not cons
 The endpoint handles `response.create`, ignores `response.processed`, supports warmup
 `generate: false`, and feeds the same request pipeline as HTTP/SSE.
 
-Incoming Responses connections share a 128-socket admission limit. Only when a new upgrade
-finds that limit full, the handler reclaims the least recently used eligible idle connection.
+Incoming Responses connections share a 128-socket admission limit. Only when a new local upgrade
+finds that limit full, the handler reclaims the least recently used eligible idle connection; a [Remote Link upgrade](../remote-link.md#responses-websocket-over-the-link) may reclaim only an idle Remote Link socket.
 Message handling and turn completion refresh a monotonic use order; connection age alone
 does not choose the victim. Eligibility requires an open socket, no active turn, no pending
 client tool or approval result, no retained native steering/injection owner, and no buffered

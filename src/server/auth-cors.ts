@@ -35,6 +35,8 @@ import {
   credentialPinnedProviderConfigError,
 } from "../config/provider-validation";
 import { providerDestinationConfigError } from "../lib/destination-policy";
+import { gcpCredentialMarkerAccount, vertexAdcCredentialVerified, vertexConfiguredCredentialKind } from "../lib/gcp-adc";
+import { selectVertexDiscoveryCredential } from "../providers/google-vertex-model-discovery";
 import { providerEgressConfigError } from "../lib/provider-egress";
 import { providerTlsProfileConfigError } from "../lib/provider-tls-profile";
 import { redactSecretString } from "../lib/redact";
@@ -551,6 +553,28 @@ export function contextPrincipalIdOf(admission: DataPlaneAdmission | undefined):
 }
 
 /**
+ * Recheck a content-free loopback identity after its local-only header was discarded.
+ * This only revokes retained replay identity; it never grants data-plane admission.
+ */
+export function isContextPrincipalCurrent(principal: string | undefined, config: Pick<OcxConfig, "apiKeys">): boolean {
+  if (!principal) return false;
+  const environment = configuredApiAuthToken(config);
+  if (environment && mintContextPrincipal("environment", "", environment) === principal) return true;
+  const matches = (keyId: string, secret: string): boolean => {
+    if (!secret || mintContextPrincipal("configured", keyId, secret) !== principal) return false;
+    // Preserve the resolver's precedence if an environment token or another key
+    // now shadows this entry. The same key id with a replacement secret is not this owner.
+    return contextPrincipalIdOf(resolveDataPlaneAdmissionSecret(secret, config) ?? undefined) === principal;
+  };
+  for (const key of config.apiKeys ?? []) {
+    if (matches(key.id, key.key)) return true;
+    const pending = key.pendingRotation;
+    if (pending && Date.parse(pending.expiresAt) > Date.now() && matches(key.id, pending.key)) return true;
+  }
+  return false;
+}
+
+/**
  * The caller principal for a context-relay request, which is a stricter question than admission.
  *
  * The default bind is loopback, where admission deliberately never reads a token, so an admitted
@@ -573,6 +597,22 @@ export function resolveContextPrincipal(req: Request, config: OcxConfig, admissi
     const principal = contextPrincipalIdOf(resolved ?? undefined);
     if (principal) return principal;
   }
+  return undefined;
+}
+
+/** Preserve only loopback replay identity removed by the forwarding-header filter. */
+export function resolveFilteredReplayPrincipal(
+  req: Request,
+  config: OcxConfig,
+  admission: DataPlaneAdmission,
+  forwardHeaders: Headers,
+): Readonly<{ clientPrincipalId: string }> | undefined {
+  if (admission.kind !== "loopback"
+    || !(req.headers.has("x-opencodex-api-key") || req.headers.has("x-api-key"))) return undefined;
+  const principal = resolveContextPrincipal(req, config, admission);
+  const forwardedPrincipal = resolveContextPrincipal(new Request(req.url, { headers: forwardHeaders }), config, admission);
+  // A surviving bearer keeps its existing per-frame resolution and key-rotation semantics.
+  if (principal && principal !== forwardedPrincipal) return Object.freeze({ clientPrincipalId: principal });
   return undefined;
 }
 
@@ -1272,6 +1312,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   foldDeveloperRoleToSystem: "editor",
   singleLeadingSystemMessage: "editor",
   promptCacheKey: "editor",
+  cacheAffinity: "editor",
   chatServiceTier: "editor",
   responsesItemIdRepair: "editor",
   autoToolChoiceOnlyModels: "editor",
@@ -1290,6 +1331,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   escapeBuiltinToolNames: "editor",
   anthropicEofTolerance: "editor",
   forwardAdvisorTool: "editor",
+  perMessageEffort: "editor",
   noVisionModels: "editor",
   googleMode: "editor",
   project: "editor",
@@ -1299,6 +1341,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   unsafeAllowNativeLocalExec: "editor",
   nativeLocalExec: "editor",
   messagePhaseInference: "editor",
+  estimateMissingUsage: "editor",
   tlsProfile: "editor",
 } as const satisfies Record<keyof OcxProviderConfig, ProviderConfigFieldPolicy>;
 
@@ -1437,9 +1480,15 @@ export function safeConfigDTO(config: OcxConfig): unknown {
         && providerMatchesRegistryTransport(name, provider));
     if (vertex) {
       const key = provider.apiKey;
-      dto.vertexCredentialKind = key?.startsWith("gcp-sa:") ? "marker"
-        : !key?.trim() || key === "N/A" || key.startsWith("<") ? "ambient"
-          : key.startsWith("keychain:") || /^\$\{?\w+\}?$/.test(key) ? "reference" : "api-key";
+      dto.vertexCredentialKind = vertexConfiguredCredentialKind(key);
+      if (dto.vertexCredentialKind === "ambient" || dto.vertexCredentialKind === "marker") {
+        // Proof is reported only for the credential inference selects: an ambient row with
+        // GOOGLE_CLOUD_API_KEY set sends that key, so an ADC token says nothing about it.
+        try {
+          const selection = selectVertexDiscoveryCredential(provider);
+          if (selection.kind === "adc") dto.vertexCredentialVerified = vertexAdcCredentialVerified(gcpCredentialMarkerAccount(selection.marker));
+        } catch { dto.vertexCredentialVerified = false; }
+      }
     }
     if (name === "xai") {
       dto.xaiResponsesOptInState = xaiResponsesOptInState(provider);

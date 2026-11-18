@@ -18,7 +18,7 @@
 import type { WindowsStopProcessEntry } from "./windows-process-evidence";
 import { windowsHomeWrapperPids } from "./windows-stop-binding";
 import { runCapped, windowsStopClock, type WindowsStopClock } from "./windows-checked-stop";
-import { commandLineHasPathToken } from "./windows-guarded-manager";
+import { commandLineHasPathToken } from "./windows-command-line-token";
 import { WINDOWS_STOP_CAPS, windowsPartBWindowMs } from "./windows-stop-budget";
 
 type MaybePromise<T> = T | Promise<T>;

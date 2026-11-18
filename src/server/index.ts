@@ -30,6 +30,7 @@ import {
 import { flushConfigDirHardeningAndReaps } from "../config/paths";
 import { trackBackgroundWork } from "../lib/background-work";
 import { migrateStartupSubagentModels } from "./subagent-models-startup";
+import { migrateStartupReserveCapability } from "./reserve-capability-startup";
 import { migrateStartupXaiResponses } from "./xai-responses-startup";
 import { migrateStartupZaiResponses } from "./zai-responses-startup";
 import { reconcileOAuthProviders } from "../oauth";
@@ -217,13 +218,13 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   // Captured before loadConfig() starts the optional ACL flight so stop() drains the same dir
   // even if OPENCODEX_HOME changes underneath a long-lived process.
   const startupConfigDir = getConfigDir();
-  const startupConfig = migrateStartupSubagentModels(
+  const startupConfig = migrateStartupReserveCapability(migrateStartupSubagentModels(
     runModelRenameStartupMigration(
       runDevinProviderMergeStartupMigration(
         runAlibabaRegionStartupMigration(runOpenAiTierStartupMigration(loadConfig())),
       ),
     ),
-  );
+  ));
   // Reconcile disk-backed presets first: it replaces provider rows and must not undo
   // an in-memory wire upgrade when that upgrade's persistence is temporarily unavailable.
   reconcileOAuthProviders(startupConfig);
@@ -646,7 +647,8 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
       ingressForServer,
       loopbackRouteAllowed,
       managementIngressRouteAllowed,
-      linkRouteAllowed: optionalListeners.linkRouteAllowed, linkPolicy, onAuthenticatedCatalog: optionalListeners.notifyAuthenticatedCatalog,
+      linkRouteAllowed: optionalListeners.linkRouteAllowed, linkPolicy,
+      onAuthenticatedCatalog: (apiKeyId, routeProofId) => { optionalListeners.notifyAuthenticatedCatalog(apiKeyId, routeProofId); deps.observeAuthenticatedCatalog?.(apiKeyId, routeProofId); },
       packageTreeChangedResponse,
       serverBusyResponse,
       runAdmittedHttpTurn,
@@ -713,7 +715,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
     }
     configureInboundBodyBudget(config.maxConcurrentInboundBodyBytes);
     optionalListeners.start({ config, publicPort: server.port ?? listenPort, requestedPort: listenPort, startProxy: deps.startClaudeInterceptProxy,
-      maxRequestBodySize: inboundBodyLimitBytes, dispatch: (req, requestServer) => serveOptions.fetch(req, requestServer) });
+      maxRequestBodySize: inboundBodyLimitBytes, dispatch: (req, requestServer) => serveOptions.fetch(req, requestServer), websocket: serveOptions.websocket, linkPolicy });
   } catch (error) {
     unregisterQuotaAutoRefresh?.();
     unregisterAnthropicCooldownRecovery?.();
@@ -835,6 +837,10 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
       .then(({ primeCodexPoolQuotas }) => primeCodexPoolQuotas(config, "startup"))
       .catch(() => {}));
   }
+
+  // Remote Link (lane O2): after an upgrade of a packaged install, cache the ocx-child builds its package's digests
+  // vouch for. Background work that never delays listen; until a release ships digests it fetches nothing and only creates ocx-child-builds/ with its baseline marker.
+  if ((config.runtimeRole ?? "standalone") !== "client") void trackBackgroundWork("ocx-child-cache-fill", import("../link/child-binary-cache-start").then(fill => fill.startChildBinaryCacheFill(config.runtimeRole)).catch(() => {}));
 
   // Opt-in storage policy (default OFF). Never blocks listen; cancellable on shutdown.
   backgroundLifecycle.scheduleStartupRun();

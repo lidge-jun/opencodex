@@ -49,6 +49,10 @@ credential recovery — is a dispatched candidate instead: the hop it was sent o
 that sent destination becomes the next hop's source for the fallback guard.
 Completed physical attempt rows remain intact, and final logging settles the last actual send's usage.
 The initial decision remains the selection evidence while physical attempts record execution.
+Candidate hops clear the previous candidate's cache-affinity outcome, kept entry, serving
+credential, model, and applicability before dispatch. A single-key or opted-out destination
+cannot inherit a prior candidate's `kept` outcome. Local skips restore the failed owner's
+context under the same rollback rule.
 When every observed refusal is specifically a mandatory-tool incompatibility, exhausted policy traversal returns the direct 400 diagnostic. Generic local skips and upstream failures permanently exclude that projection; cancellation and replay boundaries retain precedence. Discarded local bodies and replaced upstream failure bodies are cancelled to settle their lifetime owners; a refused fallback guard also cancels the retained failure.
 
 Cancellation, non-replayable responses and committed output keep the

@@ -914,7 +914,10 @@ test("the direct ocx sync command refreshes owned clients including OpenCode and
   expect(command).toContain("refreshOwnedCatalogIntegrations");
   // Command Code joined this fan-out with its integration: a sync must refresh its
   // provider block too, or the client keeps a stale catalog until the next apply.
-  expect(command).toContain('["mcode", "pi", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"]');
+  expect(command).toContain('["mcode", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"]');
+  // #8287: Pi's nested selectors are proven by the serving proxy, so its refresh is server-owned
+  // like Aside's and never runs through the local fan-out.
+  expect(command).toContain("refreshPiThroughServer");
   expect(command).toContain("refreshAsideProfilesThroughServer");
   expect(command.indexOf("syncModelsToCodex")).toBeLessThan(command.indexOf("refreshOwnedCatalogIntegrations"));
   expect(command).toContain('synced.status !== "refused"');

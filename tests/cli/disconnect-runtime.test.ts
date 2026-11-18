@@ -3,7 +3,7 @@ import { bindRestartToRuntime, restartRuntimeAfterDisconnect, type DisconnectRun
 import { claudeProxyStartEnv } from "../../src/cli/claude";
 import { codexProxyStartEnv } from "../../src/cli/codex-launcher";
 import { opencodeProxyStartEnv } from "../../src/cli/opencode";
-import { restartOwnerEvidence } from "../../src/client/runtime-restart";
+import { recordedRestartOwner, restartOwnerEvidence } from "../../src/client/runtime-restart";
 import { clientRuntimeRecord } from "../../src/client/runtime";
 import { runtimeOwnerScope } from "../../src/config/process-state";
 import { observeProxyLiveness } from "../../src/server/proxy-liveness";
@@ -188,22 +188,26 @@ describe("ocx disconnect restarts the client runtime it left behind", () => {
     expect(text).not.toContain("Run on this machine: ocx restart");
   });
 
-  // Final review rounds 4 and 5: origin/dev's `ocx disconnect` restarted nothing (b1148220574917c8
-  // src/cli/dispatch.ts disconnect: handleDisconnectCommand's code only). The restart step acts only
-  // on a record that states a proven owner (restartOwner, written by a runtime with this change).
-  // A bare OCX_SERVICE=1 runtime states none; built here by the production record builder and
-  // ownership check, it gets the disconnect's own 0 with nothing restarted or read further.
+  // #8545 owner decision (lidge-jun, 2026-11-16): a runtime whose only owner evidence is a bare OCX_SERVICE=1 records
+  // restartOwner "legacy-flag". ocx disconnect keeps it (no restart request, nothing stopped) and says how to re-register
+  // the service once. The disconnect itself completed, so the exit stays 0 and a Home's revoke still finishes.
   test.each([
     ["a legacy service child", () => ({ OCX_SERVICE: "1", PATH: "/usr/bin" }) as NodeJS.ProcessEnv],
     ["ocx claude's proxy", () => claudeProxyStartEnv({ PATH: "/usr/bin" })],
     ["ocx codex's proxy", () => codexProxyStartEnv({ PATH: "/usr/bin" }) as NodeJS.ProcessEnv],
     ["ocx opencode's proxy", () => opencodeProxyStartEnv({ PATH: "/usr/bin" })],
-  ] as const)("%s is left as origin/dev's disconnect left it: exit 0, nothing restarted", async (_name, env) => {
-    const record = clientRuntimeRecord(4321, 10100, generation.attestationSecret, restartOwnerEvidence({ desktop: false, env: env() }));
-    expect(record.restartOwner).toBeUndefined();
+  ] as const)("%s is kept with the re-register advice: exit 0, nothing restarted", async (_name, env) => {
+    const record = clientRuntimeRecord(4321, 10100, generation.attestationSecret, recordedRestartOwner({ desktop: false, env: env() }));
+    expect(record.restartOwner).toBe("legacy-flag");
     for (const state of [{ kind: "disconnected" }, { kind: "connected" }, { kind: "invalid", reason: "x" }] as State[]) {
-      const result = await run(live("client"), true, false, { capture: { ...record, attestationSecret: generation.attestationSecret }, state });
-      expect(result).toMatchObject({ code: 0, restarts: 0, out: [], err: [] });
+      for (const json of [false, true]) {
+        const result = await run(live("client"), true, json, { capture: { ...record, attestationSecret: generation.attestationSecret }, state });
+        expect(result).toMatchObject({ code: 0, restarts: 0, out: [] });
+        const text = result.err.join("\n");
+        expect(text).toContain("pid 4321");
+        expect(text).toContain("nothing was stopped");
+        expect(text).toContain("ocx service repair");
+      }
     }
   });
 

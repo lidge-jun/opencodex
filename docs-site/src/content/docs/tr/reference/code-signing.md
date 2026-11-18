@@ -13,7 +13,7 @@ dosyalardan kaynaklanan yanlış alarmları önlemeye yardımcı olur.
 Geçiş sürüyor. Yayın iş akışı hazır; SignPath bunu test sertifikasıyla doğruluyor.
 Üretim sertifikası verilene kadar Windows yayın dosyaları imzasız kalır ve
 SmartScreen bir kez **Ek bilgi → Yine de çalıştır** seçimini isteyebilir.
-Geçişten sonra yayımlanan sürümler **SignPath Foundation** imzası taşır.
+Geçişten sonra iş akışı **SignPath Foundation** ile üretim imzalamayı dener. İmzalama veya doğrulama başarısız olursa, aşağıda açıklandığı gibi özgün imzasız dosya yine de yayımlanabilir.
 
 ## Kod imzalama ilkesi
 
@@ -57,6 +57,16 @@ da bulunur; bunu `Get-FileHash <file> -Algorithm SHA256` çıktısıyla karşıl
 Masaüstü güncelleyici imzası (`.msi.sig`) ve `latest.json`, imzalı yükleyiciden
 üretilir; uygulama içi güncellemeler yayın sayfasındaki aynı baytları kurar.
 
+Her yayın sayfası **Code signing** başlığı altında o yayının Windows dosyalarının
+gerçekten imzalanıp imzalanmadığını belirtir. Bu bilgi, yayın çalıştırmasının her dosya
+için kaydettiği sonuçtan gelir: bir dosya yalnızca çalıştırma `release-signing` ilkesini
+kullandıysa, doğrulanmış imzalı dosya imzasız dosyanın yerine geçtiyse ve kaydedilen
+SHA-256 değeri yayında yayımlanan dosyanınkiyle eşleşiyorsa imzalı sayılır. Böyle bir
+kaydı olmayan dosya, örneğin kaydı yayın işine ulaşmayan bir yeniden çalıştırmada yeniden
+derlenmiş bir dosya, kaydedilmemiş olarak listelenir ve kod imzalı değil sayılır.
+Çalıştırma hiçbir sonuç kaydetmediyse yayın, Windows dosyalarının kod imzalı olmadığını
+belirtir. SignPath atfı ve ilke bağlantısı her yayında yer alır.
+
 ## Proje bakımını yapanlar için
 
 `.github/workflows/release.yml`, resmi
@@ -82,7 +92,8 @@ SignPath çıktı yapılandırmaları: `windows-standalone-zip` (ZIP kökünde t
 | `release-signing` | İmzalanır ve güvenilirliği doğrulanır | İmzalanır ve güvenilirliği doğrulanır |
 
 İstek başarısız olur, zaman aşımına uğrar veya reddedilirse ya da doğrulama
-başarısız olursa iş uyarı kaydeder; imzasız dosyayı özgün güncelleyici imzasıyla yayımlar.
+başarısız olursa iş uyarı kaydeder ve özgün imzasız dosyayı yayımlar. MSI, varsa özgün
+güncelleyici imzasını korur; bağımsız `ocx.exe` dosyasının güncelleyici imzası yoktur.
 
 **Üretim sertifikasına geçiş:** SignPath sertifikayı verince depo değişkeni
 `SIGNPATH_SIGNING_POLICY_SLUG` değerini `release-signing` yapın

@@ -16,6 +16,15 @@ import { resetWindowsPrincipalForTests, setWindowsPrincipalRunnerForTests, setAs
 import { resolveTrustedWindowsIcaclsExe } from "../../src/lib/windows-elevation";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { repoPath } from "../helpers/repo-root";
+import { runGuiCommand } from "../../src/cli/gui";
+import { requestBoundGuiPairingGrant } from "../../src/cli/gui-pair-client";
+import { createManagementSessionControl, requireManagementAuth, managementPrincipal, type ManagementAuthState } from "../../src/server/management-auth";
+import { issueGuiSession, consumeGuiPairingGrant } from "../../src/server/gui-session";
+import { handleManagementAPI } from "../../src/server/management-api";
+import { DESKTOP_GUI_PAIR_PATH, GUI_PAIR_CAPABILITY_VERSION } from "../../src/lib/gui-pair-capability";
+import { DESKTOP_AUTHORIZATION_PATH } from "../../src/server/gui-desktop-authorization";
+import { desktopGuiOrigin } from "../../src/lib/desktop-gui-origin";
+import { LOCAL_ATTESTATION_CHALLENGE_HEADER, LOCAL_ATTESTATION_PROOF_HEADER, createLocalAttestationProof } from "../../src/lib/local-management-attestation";
 
 const ORIGIN = "http://127.0.0.1:10100";
 const CAP = "A".repeat(43);
@@ -71,6 +80,170 @@ afterEach(() => {
   setIcaclsRunnerForTests(null); setAsyncIcaclsRunnerForTests(null);
   if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous;
   removeTreeWithRetry(root);
+});
+
+test("Desktop CLI refuses a configured localhost bind before discovering or issuing a grant", async () => {
+  let discoveries = 0, issues = 0;
+  const warn = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const result = await runGuiCommand(["pair", "--desktop", "--origin", "http://localhost:10100"], {
+      loadConfig: () => ({ ...config(), hostname: "localhost" }), openDefaultGui: async () => 99,
+      findLiveProxy: async () => { discoveries++; return null; },
+      requestPairingGrant: async () => { issues++; throw new Error("unexpected issuance"); },
+    });
+    expect(result).toBe(1);
+    expect(discoveries).toBe(0);
+    expect(issues).toBe(0);
+  } finally { warn.mockRestore(); }
+});
+
+test("Desktop CLI intent crosses real capability admission, grant delivery and dispatcher exchange once", async () => {
+  const cfg = config(), s: Extract<ManagementAuthState, { available: true }> = {
+    available: true, token: "fixture-admin-only", source: "environment", sessions: new Map(), pairingGrants: new Map(),
+  };
+  const origin = "http://localhost:10100", secret = "D".repeat(43), pid = 4242;
+  const session = issueGuiSession(new Request(origin, { headers: { host: "localhost:10100", Origin: origin } }), cfg, s)!;
+  const control = createManagementSessionControl(s);
+  let printed = "", grantRequests = 0, lastHeaders: Headers | undefined;
+  const print = spyOn(console, "log").mockImplementation(value => { printed = String(value); });
+  const warn = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const result = await runGuiCommand(["pair", "--desktop", "--origin", origin, "--json"], {
+      loadConfig: () => cfg, openDefaultGui: async () => 99,
+      findLiveProxy: async () => ({ source: "runtime", pid, port: cfg.port, hostname: cfg.hostname! }),
+      requestPairingGrant: (target, browser, options) => requestBoundGuiPairingGrant(target, browser, {
+        ...options, readRuntime: () => ({ pid, port: cfg.port, hostname: cfg.hostname!, attestationSecret: secret }),
+        fetchImpl: async (input, init) => {
+          if (String(input).endsWith("/healthz")) {
+            const nonce = new Headers(init?.headers).get(LOCAL_ATTESTATION_CHALLENGE_HEADER)!;
+            return Response.json({ service: "opencodex", status: "ok", version: "fixture", uptime: 1, pid, port: cfg.port,
+              guiPairCapability: GUI_PAIR_CAPABILITY_VERSION }, { headers: { [LOCAL_ATTESTATION_PROOF_HEADER]: createLocalAttestationProof(secret, nonce, pid, cfg.port)! } });
+          }
+          grantRequests++; expect(new URL(String(input)).pathname).toBe(DESKTOP_GUI_PAIR_PATH);
+          const req = new Request(String(input), init); lastHeaders = new Headers(req.headers);
+          expect(requireManagementAuth(req, s, cfg, { attestationSecret: secret, pid, port: cfg.port })).toBeNull();
+          expect(managementPrincipal(req, s, cfg, { attestationSecret: secret, pid, port: cfg.port })).toBe("gui-pair-capability");
+          return Response.json(deliverGuiPairingGrant(req, cfg, s), { status: 201 });
+        },
+      }),
+    });
+    expect(result).toBe(0); expect(grantRequests).toBe(1); expect(s.sessions.size).toBe(1);
+    const grant = JSON.parse(printed).grant as string;
+    const request = (path: string, body?: unknown) => new Request(origin + path, { method: body ? "POST" : "GET", headers: {
+      host: "localhost:10100", Origin: origin, "x-opencodex-api-key": session.token,
+      "x-opencodex-gui-origin": origin, "x-opencodex-csrf-token": session.csrfToken, "content-type": "application/json",
+    }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    const exchange = request("/api/codex/desktop-compatibility/authorization", { grant });
+    const response = await handleManagementAPI(exchange, new URL(exchange.url), cfg, {}, "gui-session", control, { trustedLoopback: true });
+    expect(response?.status).toBe(200);
+    const status = request("/api/codex/desktop-compatibility/authorization");
+    const view = await handleManagementAPI(status, new URL(status.url), cfg, {}, "gui-session", control, { trustedLoopback: true });
+    expect(await view!.json()).toEqual({ ok: true, supported: true, authorized: true, rememberedSession: false });
+    expect(control.isPaired(status, cfg)).toBe(false); expect(control.canRevealDataKeys!(status, cfg)).toBe(false);
+    const replay = new Request("http://127.0.0.1:10100" + DESKTOP_GUI_PAIR_PATH, { method: "POST", headers: lastHeaders });
+    expect(requireManagementAuth(replay, s, cfg, { attestationSecret: secret, pid, port: cfg.port })?.status).toBe(401);
+    const exchangeAgain = request("/api/codex/desktop-compatibility/authorization", { grant });
+    expect((await handleManagementAPI(exchangeAgain, new URL(exchangeAgain.url), cfg, {}, "gui-session", control, { trustedLoopback: true }))?.status).toBe(403);
+  } finally { print.mockRestore(); warn.mockRestore(); }
+});
+
+test("Desktop purpose cannot be forged onto ordinary pairing, remote roles, wrong ports or forwarded ingress", () => {
+  const cfg = config();
+  expect(desktopGuiOrigin(cfg, "http://localhost:10100")).toBe("http://localhost:10100");
+  for (const origin of ["http://localhost:10101", "https://localhost:10100", "http://127.1:10100", "http://[::1]:10100", "http://localhost:10100/path", "http://user@localhost:10100"])
+    expect(desktopGuiOrigin(cfg, origin)).toBeNull();
+  for (const runtimeRole of ["hub", "client"] as const) expect(desktopGuiOrigin({ ...cfg, runtimeRole }, ORIGIN)).toBeNull();
+  const intent = createGuiPairIntent(CAP), s = state();
+  try {
+    const forwarded = new Request(ORIGIN + DESKTOP_GUI_PAIR_PATH, { method: "POST", headers: {
+      [GUI_PAIR_BROWSER_ORIGIN_HEADER]: ORIGIN, [GUI_PAIR_CAPABILITY_HEADER]: CAP, [GUI_PAIR_INTENT_HEADER]: intent.proof,
+      "X-Forwarded-For": "127.0.0.1",
+    } });
+    expect(() => deliverGuiPairingGrant(forwarded, cfg, s)).toThrow(GuiPairingIntentRequiredError);
+    const valid = new Request(ORIGIN + DESKTOP_GUI_PAIR_PATH, { method: "POST", headers: {
+      [GUI_PAIR_BROWSER_ORIGIN_HEADER]: ORIGIN, [GUI_PAIR_CAPABILITY_HEADER]: CAP, [GUI_PAIR_INTENT_HEADER]: intent.proof,
+    } });
+    const grant = deliverGuiPairingGrant(valid, cfg, s);
+    expect(consumeGuiPairingGrant(new Request(ORIGIN + "/opencodex-session", { method: "POST", headers: { host: "127.0.0.1:10100", Origin: ORIGIN } }),
+      { grant: grant.grant }, cfg, s, Date.now(), { ingress: "public", peerAddress: "127.0.0.1", tailscaleUser: null, browserOrigin: ORIGIN })).toBeNull();
+    expect(s.sessions.size).toBe(0);
+  } finally { intent.dispose(); }
+});
+
+test("a configured localhost bind is unsupported and never advertises an unreachable Desktop command", async () => {
+  const cfg = { ...config(), hostname: "localhost" }, origin = "http://localhost:10100";
+  // #8427: startServer canonicalizes a localhost BIND to 127.0.0.1 before listening, so the
+  // configured spelling never names the served origin. Consent must not admit it in either form.
+  for (const value of [origin, ORIGIN]) expect(desktopGuiOrigin(cfg, value)).toBeNull();
+  expect(desktopGuiOrigin({ ...cfg, hostname: "localhost." }, origin)).toBeNull();
+  let discovery = 0, grantRequests = 0, printed = "";
+  const print = spyOn(console, "log").mockImplementation(value => { printed = String(value); });
+  const warn = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const result = await runGuiCommand(["pair", "--desktop", "--origin", origin, "--json"], {
+      loadConfig: () => cfg, openDefaultGui: async () => 99,
+      findLiveProxy: async () => { discovery++; return { source: "runtime", pid: 4242, port: cfg.port, hostname: "127.0.0.1" }; },
+      requestPairingGrant: async () => { grantRequests++; throw new Error("must not request a Desktop grant"); },
+    });
+    expect(result).toBe(1);
+    expect(printed).toBe("");
+    expect(discovery).toBe(0);
+    expect(grantRequests).toBe(0);
+  } finally { print.mockRestore(); warn.mockRestore(); }
+});
+
+test("literal loopback binds accept their exact origin and the localhost page alias only", () => {
+  const ipv4 = config(), ipv6 = { ...config(), hostname: "::1" };
+  expect(desktopGuiOrigin(ipv4, ORIGIN)).toBe(ORIGIN);
+  expect(desktopGuiOrigin(ipv4, "http://localhost:10100")).toBe("http://localhost:10100");
+  expect(desktopGuiOrigin(ipv6, "http://[::1]:10100")).toBe("http://[::1]:10100");
+  expect(desktopGuiOrigin(ipv6, "http://localhost:10100")).toBe("http://localhost:10100");
+  // Cross-host spellings stay distinct; no alias is normalized into another origin.
+  expect(desktopGuiOrigin(ipv4, "http://[::1]:10100")).toBeNull();
+  expect(desktopGuiOrigin(ipv6, ORIGIN)).toBeNull();
+  for (const value of [ORIGIN, "http://localhost:10100"])
+    expect(desktopGuiOrigin({ ...ipv4, hostname: "0.0.0.0" }, value)).toBeNull();
+  expect(desktopGuiOrigin(ipv4, "http://LOCALHOST:10100")).toBeNull();
+});
+
+test("a refused Desktop exchange leaves the issued grant unspent", async () => {
+  const cfg = config(), s: Extract<ManagementAuthState, { available: true }> = {
+    available: true, token: "fixture-admin-only", source: "environment", sessions: new Map(), pairingGrants: new Map(),
+  };
+  const origin = "http://localhost:10100", secret = "D".repeat(43), pid = 4242;
+  const session = issueGuiSession(new Request(origin, { headers: { host: "localhost:10100", Origin: origin } }), cfg, s)!;
+  const control = createManagementSessionControl(s);
+  const print = spyOn(console, "log").mockImplementation(() => {}), warn = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const result = await runGuiCommand(["pair", "--desktop", "--origin", origin], {
+      loadConfig: () => cfg, openDefaultGui: async () => 99,
+      findLiveProxy: async () => ({ source: "runtime", pid, port: cfg.port, hostname: cfg.hostname! }),
+      requestPairingGrant: (target, browser, options) => requestBoundGuiPairingGrant(target, browser, {
+        ...options, readRuntime: () => ({ pid, port: cfg.port, hostname: cfg.hostname!, attestationSecret: secret }),
+        fetchImpl: async (input, init) => {
+          if (String(input).endsWith("/healthz")) {
+            const nonce = new Headers(init?.headers).get(LOCAL_ATTESTATION_CHALLENGE_HEADER)!;
+            return Response.json({ service: "opencodex", status: "ok", version: "fixture", uptime: 1, pid, port: cfg.port,
+              guiPairCapability: GUI_PAIR_CAPABILITY_VERSION }, { headers: { [LOCAL_ATTESTATION_PROOF_HEADER]: createLocalAttestationProof(secret, nonce, pid, cfg.port)! } });
+          }
+          const req = new Request(String(input), init);
+          expect(requireManagementAuth(req, s, cfg, { attestationSecret: secret, pid, port: cfg.port })).toBeNull();
+          return Response.json(deliverGuiPairingGrant(req, cfg, s), { status: 201 });
+        },
+      }),
+    });
+    expect(result).toBe(0);
+  } finally { print.mockRestore(); warn.mockRestore(); }
+  expect(s.pairingGrants.size).toBe(1);
+  const [digest, record] = [...s.pairingGrants.entries()][0]!;
+  expect(record.desktopPurpose && record.serverOrigin === origin && record.browserOrigin === origin).toBe(true);
+  // A wrong code is refused without spending the issued Desktop grant.
+  const wrongCode = new Request(origin + DESKTOP_AUTHORIZATION_PATH, { method: "POST", headers: {
+    host: "localhost:10100", Origin: origin, "x-opencodex-api-key": session.token,
+    "x-opencodex-gui-origin": origin, "x-opencodex-csrf-token": session.csrfToken,
+  }, body: JSON.stringify({ grant: "ocx_pair_" + "B".repeat(43) }) });
+  expect(control.authorizeLocalDesktop!(wrongCode, cfg, "ocx_pair_" + "B".repeat(43))).toBe(false);
+  expect(s.pairingGrants.has(digest)).toBe(true);
 });
 
 describe("one-use local CLI pairing intent", () => {

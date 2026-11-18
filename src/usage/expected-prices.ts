@@ -267,6 +267,11 @@ const KIMI_K31_PRICING = KIMI_K3_PRICING;
 // (subscription quota / CNY tiers), so every GLM row below is verified-derived:
 // the numbers are the verified z.ai list prices shown as estimates.
 const ZAI_PRICING = "https://docs.z.ai/guides/overview/pricing (official USD table, 2026-09-13; cacheWrite=0 — cache storage is limited-time free on both z.ai and bigmodel.cn)";
+// Morph Ultra is subscription-billed ($200/month, no token meter), so these are the vendor's
+// published per-token list prices shown as estimates, never the amount Ultra actually charges.
+const MORPH_ULTRA_PRICING = "https://www.morphllm.com/pricing (list price; Morph Ultra is subscription-billed with no token meter)";
+const MORPH_KIMI_K31: Cost4 = { input: 2.5, output: 14, cacheRead: 0.29, cacheWrite: 0 };
+const MORPH_DSV41_FLASH: Cost4 = { input: 0.12, output: 0.8, cacheRead: 0.008, cacheWrite: 0 };
 const ZAI_CODING_PLAN_NOTE = "z.ai list price shown as estimate; GLM Coding Plan is subscription-billed";
 const BIGMODEL_NOTE = "z.ai international list price shown as estimate; domestic bigmodel.cn billing is CNY tiered (docs.bigmodel.cn/cn/guide/start/pricing)";
 // 260804: Qwen3.8-Max shipped as a stable model and Qwen published a per-token rate, which
@@ -312,7 +317,26 @@ const DEVIN_PRICING = "https://docs.devin.ai/desktop/models (official modelCostD
 const DEVIN_FABLE_52_SOURCE = "https://docs.devin.ai/desktop/models (Claude Fable 5.2 listed at 8 / 40, cache read 0.20, cache write 10, 2026-11-10; uid claude-fable-5-2-<effort>, seed collapses to the base)";
 const DEVIN_SWE2_NOTE = "list rate; $0 self-serve through 2026-10-08 and 75%-off enterprise through 2026-12-31 are time-boxed promos, not baked in";
 
+const GPT62_PRICING = [
+  { modelId: "gpt-6.2-sol", cost4: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 } },
+  { modelId: "gpt-6.2-astra", cost4: { input: 8, output: 40, cacheRead: 0.4, cacheWrite: 10 } },
+];
+const GPT62_VERIFIED_AT = "2026-11-18";
+
 export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
+  ...GPT62_PRICING.flatMap(({ modelId, cost4 }): ExpectedPriceOverlay[] => {
+    const source = `https://developers.openai.com/api/docs/models/${modelId}`;
+    return [
+      { provider: "openai-apikey", modelId, cost4, source, verifiedAt: GPT62_VERIFIED_AT, status: "verified" },
+      { provider: "openai", modelId, cost4, source: `API-reference comparison estimate: ${source}`, verifiedAt: GPT62_VERIFIED_AT, status: "verified-derived" },
+      { provider: "openrouter", modelId: `openai/${modelId}`, cost4, source: "https://openrouter.ai/api/v1/models", verifiedAt: GPT62_VERIFIED_AT, status: "verified" },
+      // 261118 preemptive: Devin uid follows gpt-6-1-sol; API-reference estimate, not billing.
+      ...(["devin-cli", "devin"] as const).map((provider): ExpectedPriceOverlay => ({
+        provider, modelId: modelId.replaceAll(".", "-"), cost4,
+        source: `derived: OpenAI API list price ${source}; Devin uid mirrors gpt-6-1-sol`, verifiedAt: GPT62_VERIFIED_AT, status: "verified-derived",
+      })),
+    ];
+  }),
   { provider: "openai-apikey", modelId: "gpt-6-astra", cost4: GPT6_ASTRA, source: ASTRA_API_PRICING, verifiedAt: "2026-09-05", status: "verified" },
   // Display estimates use API prices for both login and API-key routes, including cache writes.
   { provider: "openai", modelId: "gpt-6-astra", cost4: GPT6_ASTRA, source: `API-reference comparison estimate: ${ASTRA_API_PRICING}`, verifiedAt: "2026-09-05", status: "verified-derived" },
@@ -520,6 +544,9 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
   { provider: "opencode-go", modelId: "deepseek-v4.1-flash", cost4: DEEPSEEK_V41_FLASH, source: `peak-window list rate applied to the OpenCode Go surface (off-peak 0.15/0.60 + cache-hit 0.003 not baked in); ${DEEPSEEK_PRICING}`, verifiedAt: "2026-09-17", status: "verified-derived" },
   { provider: "opencode-go", modelId: "glm-5.3-flash", cost4: GLM_53_FLASH, source: `z.ai list price applied to the OpenCode Go surface as an estimate; ${ZAI_PRICING}`, verifiedAt: "2026-09-17", status: "verified-derived" },
   { provider: "opencode-go", modelId: "muse-spark-1.3-contributor", cost4: META_MUSE_SPARK_13_CONTRIBUTOR, source: `Meta Model API Contributor-tier price applied to the OpenCode Go surface as an estimate; ${META_SPARK_CONTRIBUTOR_SOURCE}`, verifiedAt: "2026-09-17", status: "verified-derived" },
+  // Morph Ultra — subscription-billed, so the vendor list price is an estimate only.
+  { provider: "morph", modelId: "morph-kimik31", cost4: MORPH_KIMI_K31, source: MORPH_ULTRA_PRICING, verifiedAt: "2026-11-13", status: "verified-derived" },
+  { provider: "morph", modelId: "morph-dsv41flash-1017", cost4: MORPH_DSV41_FLASH, source: MORPH_ULTRA_PRICING, verifiedAt: "2026-11-13", status: "verified-derived" },
   // Cursor Auto router — Cursor's published fixed token price (verified).
   { provider: "cursor", modelId: "auto", cost4: { input: 1.25, output: 6, cacheRead: 0.25, cacheWrite: 1.25 }, source: "https://docs.cursor.com/account/pricing + https://cursor.com/blog/aug-2025-pricing", verifiedAt: "2026-07-20", status: "verified" },
   // Z.AI GLM family — the zai bundle's rows are all-zero upstream, and the four
@@ -711,6 +738,10 @@ const ANTHROPIC_FAST_PRICING = "https://platform.claude.com/docs/en/about-claude
  * because they reuse its model slug. Multipliers apply uniformly after cache discounts.
  */
 export const PRIORITY_PRICING_RULES: readonly PriorityPricingRule[] = [
+  ...GPT62_PRICING.flatMap(({ modelId }) => ["openai", "openai-apikey"].map((provider): PriorityPricingRule => ({
+    provider, modelId, multiplier: 2,
+    source: "https://developers.openai.com/api/docs/pricing", verifiedAt: GPT62_VERIFIED_AT,
+  }))),
   ...["openai", "openai-apikey"].flatMap(provider =>
     Object.entries(PRIORITY_MULTIPLIERS)
       // Daybreak's `gpt-` selector belongs to ChatGPT/Codex accounts; its bare selector belongs
@@ -833,6 +864,18 @@ const OPENAI_CONTEXT_MODELS = [
 ];
 
 export const CONTEXT_TIERS: readonly ContextTier[] = [
+  ...GPT62_PRICING.flatMap(({ modelId }): ContextTier[] => [
+    ...["openai", "openai-apikey"].map((provider): ContextTier => ({
+      provider, modelId, thresholdInputTokens: 272_000, inclusive: false,
+      multiplier: OPENAI_LONG_CONTEXT, confirmedPriorityRelation: "stack",
+      source: `https://developers.openai.com/api/docs/models/${modelId}`, verifiedAt: GPT62_VERIFIED_AT,
+    })),
+    {
+      provider: "openrouter", modelId: `openai/${modelId}`, thresholdInputTokens: 272_000, inclusive: true,
+      multiplier: OPENAI_LONG_CONTEXT,
+      source: "https://openrouter.ai/api/v1/models", verifiedAt: GPT62_VERIFIED_AT,
+    },
+  ]),
   // Reference bands on preemptive/subscription surfaces follow their reference price, not billing.
   ...[
     ...["anthropic", "anthropic-apikey", "opencode-go", "opencode-zen", "venice", "github-copilot", "devin", "devin-cli", "claude-cli"].map(provider => [provider, "claude-haiku-5-5"]),

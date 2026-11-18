@@ -10,7 +10,9 @@ import { isLinkIdle, type LinkActivitySnapshot } from "./child-activity";
 import { catalogVerdict, type CatalogPull, type CatalogRevision, type CatalogState } from "./child-catalog-freshness";
 import type { ChildObservation, ChildOp, ChildOperationSummary } from "./child-observations";
 import type { InstallKind, UpdateRoute } from "./child-update-contract";
+import type { LinkHoldsSummary } from "./ws-activity-holds";
 import { compareStrictSemver, parseStrictSemver } from "../lib/strict-semver";
+import type { LinkTrafficCounters } from "./traffic";
 
 export type LinkWireState = "connecting" | "connected" | "reconnecting" | "failed" | "idle";
 
@@ -26,12 +28,25 @@ export interface LinkStatusDto {
     reason: string | null;
     tunnelPort: number;
     childKind?: "full" | "ephemeral";
+    /** Exclusive links only (structure/remote-link.md, "Explicit route"); absent on every other row. */
+    exclusive?: true;
+    explicitRoute?: import("./explicit-route").ExplicitRoute;
     /** Home only: what the link carried from this Child, and the compatibility verdict. */
     peer?: LinkPeerStatus;
     /** Home-initiated links on request (`?diagnostics=1`): retry progress and the last failure. */
     tunnel?: LinkTunnelDiagnostics;
     /** Home rows on request (`?children=1`): versions, update route, catalog freshness, activity and operations. */
     child?: LinkChildOpsStatus;
+    /** Links with several routes, on request (`?routes=1`): each route's rest and last outcome. */
+    routes?: LinkRouteWire[];
+    /** The route the proven tunnel uses and when it was proven; null while none is proven. */
+    route?: { name: string; index: number; since: string } | null;
+    /** Why the link cannot run its routes right now, or null. */
+    routeBlocked?: "ssh_client_unsupported" | "stop_unconfirmed" | null;
+    /** Rows on request (`?transport=1`): the live link WebSocket counters (design T4 section 9.3). */
+    ws?: LinkWsStatus;
+    /** On request (`?traffic=1`): body bytes this machine relayed or served for the link since `since`. */
+    traffic?: LinkTrafficCounters;
   }>;
   child: null | {
     alias: string;
@@ -59,6 +74,58 @@ function iso(at: number): string {
   return new Date(at).toISOString();
 }
 
+/** One route of a multi-route link on the wire. The class is a fixed word, never ssh output. */
+export interface LinkRouteWire {
+  name: string;
+  eligibleAt: string | null;
+  lastOutcome: { class: "transient" | "readiness" | "grant_unobserved" | "forward" | "auth" | "hostkey"; at: string } | null;
+}
+
+/**
+ * Add route fields to each link the supervisor runs with several routes. Opt-in like `tunnel`:
+ * an older `ocx link status` validates rows key by key. Route names are SSH host aliases; this
+ * document is served only to the Home's admin token or dashboard session, never over the relay.
+ */
+export function attachLinkRoutes(dto: LinkStatusDto, supervisorStates: readonly LinkTunnelStatus[]): LinkStatusDto {
+  const byId = new Map(supervisorStates.map(status => [status.linkId, status]));
+  for (const link of dto.links) {
+    const status = byId.get(link.id);
+    if (!status || status.direction !== "hub-initiated" || !status.routes) continue;
+    const { routes, route, blocked } = status.routes;
+    link.routes = routes.map(entry => ({
+      name: entry.name,
+      eligibleAt: entry.eligibleAt === null ? null : iso(entry.eligibleAt),
+      lastOutcome: entry.lastOutcome ? { class: entry.lastOutcome.class, at: iso(entry.lastOutcome.at) } : null,
+    }));
+    link.route = route ? { name: route.name, index: route.index, since: iso(route.since) } : null;
+    link.routeBlocked = blocked;
+  }
+  return dto;
+}
+
+/** Why the Home refused a link WebSocket upgrade, as counted (design T4 section 9.3). */
+export type LinkWsRefusal = "aborted" | "draining" | "unauthorized" | "unavailable" | "memory" | "cap" | "failed";
+/** Why a link WebSocket closed: the Home's own fence, or the peer's close code. */
+export type LinkWsCloseReason = "revoked" | "disabled" | "idle" | "age" | "client" | "dropped" | "other";
+/** In memory, display only, reset at restart. */
+export interface LinkWsCounters {
+  open: number;
+  upgrades: number;
+  refused: Partial<Record<LinkWsRefusal, number>>;
+  closes: Partial<Record<LinkWsCloseReason, number>>;
+}
+export interface LinkWsStatus extends LinkWsCounters { holds: number }
+
+/** `?transport=1`: every row gets `ws`; a Home without counters reports zeros. Rows are the current links only. */
+export function attachLinkTransport(dto: LinkStatusDto, counters: (linkId: string) => LinkWsCounters | null,
+  holds: (linkId: string) => number): LinkStatusDto {
+  for (const link of dto.links) {
+    const current = counters(link.id) ?? { open: 0, upgrades: 0, refused: {}, closes: {} };
+    link.ws = { open: current.open, upgrades: current.upgrades, refused: { ...current.refused }, closes: { ...current.closes }, holds: holds(link.id) };
+  }
+  return dto;
+}
+
 /** Add `tunnel` to each Home-initiated link the supervisor reports. */
 export function attachLinkTunnelDiagnostics(dto: LinkStatusDto, supervisorStates: readonly LinkTunnelStatus[]): LinkStatusDto {
   const byId = new Map(supervisorStates.map(status => [status.linkId, status]));
@@ -77,6 +144,12 @@ export function attachLinkTunnelDiagnostics(dto: LinkStatusDto, supervisorStates
       lastFailure: history?.lastFailure ? { cause: history.lastFailure.cause, at: iso(history.lastFailure.at) } : null,
     };
   }
+  return dto;
+}
+
+/** Add `traffic` to every row (#3023). A Home counts in its hub-link listener, a Child in its link transport. */
+export function attachLinkTraffic(dto: LinkStatusDto, traffic: (linkId: string) => LinkTrafficCounters): LinkStatusDto {
+  for (const link of dto.links) link.traffic = traffic(link.id);
   return dto;
 }
 
@@ -99,6 +172,8 @@ export interface LinkChildOpsStatus {
   activity: { idle: boolean; inFlight: number; lastDataEndAt: number | null };
   activeJob: { jobId: string; op: ChildOp; state: "queued" | "running" } | null;
   lastOperation: ChildOperationSummary | null;
+  /** Link WebSocket activity holds and their reasons (D8); present only while something holds the link. */
+  holds?: LinkHoldsSummary;
 }
 
 export interface LinkChildOpsSources {
@@ -106,6 +181,8 @@ export interface LinkChildOpsSources {
   peerVersion(linkId: string): string | null; observation(linkId: string): ChildObservation | null;
   activity(linkId: string): LinkActivitySnapshot | null; catalogPull(linkId: string): CatalogPull | null;
   revision: CatalogRevision | null; activeJob(linkId: string): LinkChildOpsStatus["activeJob"];
+  /** Optional: a Home without link WebSocket holds omits the key on every row. */
+  holds?(linkId: string): LinkHoldsSummary | null;
 }
 
 function versionSkew(version: string | null, homeVersion: string): LinkChildOpsStatus["versionSkew"] {
@@ -139,6 +216,7 @@ export function attachLinkChildOps(dto: LinkStatusDto, sources: LinkChildOpsSour
     const ocxChild = installKind === "ocx-child" || link.childKind === "ephemeral";
     const pull = latestPull(sources.catalogPull(link.id), cached);
     const snapshot = sources.activity(link.id);
+    const held = sources.holds?.(link.id) ?? null;
     link.child = {
       homeVersion: sources.homeVersion, runningVersion, installedVersion, installKind,
       versionSkew: ocxChild ? "unknown" : versionSkew(installedVersion ?? runningVersion, sources.homeVersion),
@@ -150,6 +228,7 @@ export function attachLinkChildOps(dto: LinkStatusDto, sources: LinkChildOpsSour
         : { idle: false, inFlight: 0, lastDataEndAt: null },
       activeJob: sources.activeJob(link.id),
       lastOperation: cached?.lastOperation ?? null,
+      ...(held ? { holds: held } : {}),
     };
   }
   return dto;
@@ -182,10 +261,16 @@ function stateDetails(
   if (!status || status.state === "client-owned") {
     return { state: "idle", since: record.createdAt, reason: null };
   }
+  // An unsettled revoke keeps the tunnel down until it is resolved (src/link/operations-journal.ts, revokeSuspendsLink).
+  // It comes first: resolving it is the step to take, and an orphan of that link is reaped like any other meanwhile.
+  if (status.suspended) return { state: "failed", since: status.suspended.since, reason: "revoke_unsettled" };
   if (status.orphan === "orphan-unverified") {
     return { state: "failed", since: record.createdAt, reason: "stale tunnel may hold the port" };
   }
   const tunnel = status.state;
+  if (status.routes?.blocked === "ssh_client_unsupported" && !status.routes.route) {
+    return { state: "failed", since: new Date(tunnel.kind === "idle" ? Date.parse(record.createdAt) : tunnel.since).toISOString(), reason: "ssh_client_unsupported" };
+  }
   const reason = tunnel.kind === "failed" ? tunnel.reason : null;
   const since = tunnel.kind === "idle" ? record.createdAt : new Date(tunnel.since).toISOString();
   return { state: asWireState(tunnel), since, reason };
@@ -215,6 +300,8 @@ export function projectLinkStatus(
     ...stateDetails(record, byId.get(record.id), compensation),
     tunnelPort: record.tunnelPort,
     ...(record.childKind ? { childKind: record.childKind } : {}),
+    ...(record.exclusive ? { exclusive: true as const } : {}),
+    ...(record.explicitRoute ? { explicitRoute: { ...record.explicitRoute } } : {}),
     ...parity(record.id),
   }));
   const childRecord = config.runtimeRole === "client"

@@ -230,6 +230,55 @@ test("ordinary force invariant is not relaxed", () => {
     .toThrow("force combo default effort requires a valid defaultEffort");
 });
 
+/** The same task resumed with a tool result, which the tool-loop pin (#7298) answers without a decision call. */
+function toolLoopContinuation(lane: Lane): Rec {
+  return lane === "native"
+    ? { messages: [
+      { role: "user", content: "Solve the fixture task." },
+      { role: "assistant", content: null, tool_calls: [{ id: "call_fixture", type: "function", function: { name: "lookup", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "call_fixture", content: "fixture tool result" },
+    ] }
+    : { input: [
+      { type: "message", role: "user", content: [{ type: "input_text", text: "Solve the fixture task." }] },
+      { type: "function_call", call_id: "call_fixture", name: "lookup", arguments: "{}" },
+      { type: "function_call_output", call_id: "call_fixture", output: "fixture tool result" },
+    ] };
+}
+
+// A continuation is never decided again, so before this it ran at the caller's effort while only
+// the first request of the turn ran at the decided one. `decide` owns the whole turn; `client`
+// never applied the decision's effort and still does not.
+for (const lane of ["native", "responses"] as const) {
+  for (const mode of ["decide", "client"] as const) {
+    test(`${lane}: a tool-loop continuation under jevEffortMode ${mode} keeps the turn's effort owner`, async () => {
+      const f = fixture(lane, "typesafe", "low");
+      if (mode === "client") Object.assign(f.config.combos!.auto!, { jevEffortMode: "client" });
+      const session = { "x-codex-parent-thread-id": `fixture-tool-loop-${lane}-${mode}` };
+      const first = await send(lane, f.config, {}, undefined, session);
+      expect(first.response.status).toBe(200);
+      const second = await send(lane, f.config, toolLoopContinuation(lane), undefined, session);
+      expect(second.response.status).toBe(200);
+      // The continuation reused the turn's target without asking the decision service again.
+      expect(f.decisionBodies).toHaveLength(1);
+      expect(f.inference.bodies).toHaveLength(2);
+      expect(f.inference.bodies[0]!.reasoning_effort).toBe(mode === "decide" ? "low" : "high");
+      expect(f.inference.bodies[1]!.reasoning_effort).toBe(mode === "decide" ? "low" : "high");
+      expect(second.row.requestedEffort).toBe(mode === "decide" ? "high->low" : "high");
+    }, 30_000);
+  }
+}
+
+test("responses: a continuation drops a carried effort its target no longer offers", async () => {
+  const f = fixture("responses", "typesafe", "low");
+  const session = { "x-codex-parent-thread-id": "fixture-tool-loop-allowlist" };
+  expect((await send("responses", f.config, {}, undefined, session)).response.status).toBe(200);
+  // The allowlist is the operator's restriction, so the continuation falls back to ordinary policy.
+  f.config.combos!.auto!.targets[0]!.reasoningEfforts = ["high"];
+  expect((await send("responses", f.config, toolLoopContinuation("responses"), undefined, session)).response.status).toBe(200);
+  expect(f.inference.bodies).toHaveLength(2);
+  expect(f.inference.bodies[1]!.reasoning_effort).toBe("high");
+}, 30_000);
+
 // jevEffortMode: "client" keeps the decision's target but leaves the tier to the caller and the
 // target ladder. A provider whose effort swaps the upstream model id pays a cache miss on every
 // re-tier, so this mode is what lets such a target stay on one tier through a session.

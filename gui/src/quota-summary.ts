@@ -7,8 +7,10 @@
  */
 import type { AccountQuota } from "./codex-quota-utils";
 import type { TKey } from "./i18n/en";
+import type { PassiveQuotaRow } from "./passive-quota-summary";
 import { quotaWindows, resetTimestamp } from "./pages/tray-data";
 import { accountQuotaFromReport, type ProviderQuotaReportView } from "./provider-workspace/report";
+import { workBuddyExactRatio, type WorkBuddyCreditBalance } from "../../src/providers/workbuddy-credit-balance";
 
 export const QUOTA_SUMMARY_WARN_PERCENT = 70;
 export const QUOTA_SUMMARY_CRITICAL_PERCENT = 90;
@@ -32,6 +34,8 @@ export interface QuotaSummaryWindow {
 }
 
 export interface QuotaSummaryRow {
+  /** A passively observed key rate limit, rendered instead of probe windows. */
+  passive?: PassiveQuotaRow;
   provider: string;
   label: string;
   headline: QuotaSummaryWindow;
@@ -39,6 +43,8 @@ export interface QuotaSummaryRow {
   updatedAt?: number;
   observed: boolean;
   severity: QuotaSummarySeverity;
+  /** A budget probe that must show every window rather than only the headline. */
+  showAllWindows?: boolean;
 }
 
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
@@ -64,12 +70,25 @@ function decimalRatio(value: number): [bigint, bigint] {
   return scale >= 0 ? [digits, 10n ** BigInt(scale)] : [digits * 10n ** BigInt(-scale), 1n];
 }
 
-function roundedUnavailablePercent(total: number, remaining: number): number {
-  const [totalNumerator, totalDenominator] = decimalRatio(total);
-  const [remainingNumerator, remainingDenominator] = decimalRatio(Math.min(remaining, total));
+/** Unavailable share as a whole percent, rounding an exact half up, from exact ratios. */
+function roundedUnavailablePercent([totalNumerator, totalDenominator]: [bigint, bigint], [remainingNumerator, remainingDenominator]: [bigint, bigint]): number {
   const denominator = totalNumerator * remainingDenominator;
   const numerator = (denominator - remainingNumerator * totalDenominator) * 100n;
   return Number((2n * numerator + denominator) / (2n * denominator));
+}
+
+/** Unavailable share of a WorkBuddy balance, or undefined when it cannot be shown. */
+function workBuddyUnavailablePercent(credits: WorkBuddyCreditBalance): number | undefined {
+  const total = credits.exact && workBuddyExactRatio(credits.exact.total);
+  const remaining = credits.exact && workBuddyExactRatio(credits.exact.remaining);
+  if (total && remaining) {
+    // Exact sums carry no roundoff, so a remaining balance above the total is contradictory.
+    if (total[0] <= 0n || remaining[0] * total[1] > total[0] * remaining[1]) return undefined;
+    return roundedUnavailablePercent(total, remaining);
+  }
+  // The provider can sum up to 512 packages; tolerate only their accumulated roundoff.
+  if (!(credits.total > 0 && credits.remaining / credits.total <= 1 + Number.EPSILON * 1024)) return undefined;
+  return roundedUnavailablePercent(decimalRatio(credits.total), decimalRatio(Math.min(credits.remaining, credits.total)));
 }
 
 /** Long windows first: weekly is the default headline, then monthly, then 5h, then custom. */
@@ -107,10 +126,9 @@ function summaryWindows(quota: AccountQuota): QuotaSummaryWindow[] {
     });
   }
   const workbuddy = quota.workbuddyCredits;
-  // The provider can sum up to 512 packages; tolerate only their accumulated roundoff.
-  if (workbuddy && workbuddy.total > 0 && workbuddy.remaining / workbuddy.total <= 1 + Number.EPSILON * 1024) {
-    // Remaining is authoritative and includes frozen credits; the meter is informational.
-    const percent = roundedUnavailablePercent(workbuddy.total, workbuddy.remaining);
+  // Remaining is authoritative and includes frozen credits; the meter is informational.
+  const percent = workbuddy && workBuddyUnavailablePercent(workbuddy);
+  if (percent !== undefined) {
     windows.push({
       id: "quotaSummary.creditsUnavailable",
       labelKey: "quotaSummary.creditsUnavailable",
@@ -166,6 +184,11 @@ export function buildQuotaSummary(
     const windows = summaryWindows(quota);
     const headline = pickHeadline(windows);
     if (!headline) continue;
+    // A budget probe reports more than one meaningful window; its headline alone would hide
+    // the window that actually ran out, so the row carries every window and the worst severity.
+    const showAllWindows = report.source === "mistral:budget";
+    const severity = showAllWindows && windows.some(window => window.severity === "critical") ? "critical"
+      : showAllWindows && windows.some(window => window.severity === "warn") ? "warn" : headline.severity;
     rows.push({
       provider,
       label: report.label?.trim() || displayName(provider),
@@ -173,7 +196,8 @@ export function buildQuotaSummary(
       windows,
       ...(finite(report.updatedAt) ? { updatedAt: report.updatedAt } : {}),
       observed: report.observed === true,
-      severity: headline.severity,
+      severity,
+      ...(showAllWindows ? { showAllWindows: true } : {}),
     });
   }
   return rows;

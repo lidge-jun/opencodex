@@ -46,7 +46,7 @@ ocx advisor set --context-mode question-only
 
 ダッシュボードの **Advisor** ページまたは `ocx advisor status|on|off|set --model <model> --effort <effort> --policy <manual|preflight|adaptive>` で管理します。
 
-現在の同意がないとき、`ocx advisor on` はプロバイダー間送信を有効にしません。開示を表示して停止します。`ocx advisor on --ack-context-sharing` と `ocx advisor consent` が `v1` を記録します。`ocx advisor consent --revoke` は同意を消し、送信を直ちに止めます。`ocx advisor set` は同意を与えません。ダッシュボードの同意チェックは初期状態でオフです。
+現在の同意がないとき、`ocx advisor on` はプロバイダー間送信を有効にしません。開示を表示して停止します。`ocx advisor on --ack-context-sharing` と `ocx advisor consent` が `v1` を記録します。`ocx advisor consent --revoke` は同意を消します。まだディスパッチされていない相談はブロックされますが、すでにディスパッチされた相談は取り消せず、すでにプロキシを離れた文脈も取り戻せません。`ocx advisor set` は同意を与えません。ダッシュボードの同意チェックは初期状態でオフです。
 
 ## ポリシー
 
@@ -98,6 +98,7 @@ fetch ベースの Web 検索ターンでは、実際に適用される `tool_ch
 ## PR1 の制限
 
 - ネイティブ OpenAI パススルーのターン（ChatGPT プールのワーカー）には合成ツールが注入されません。アドバイザーはルーティング（翻訳）プロバイダーを対象とします。preflight 相談は run-turn アダプターに適用されますが、ツールは適用されません。
+- 翻訳された `/v1/messages` リクエスト（例: 翻訳プロバイダーへルーティングした Claude Code）も、`/v1/responses` や `/v1/chat/completions` と同じく合成ツールと preflight 相談を受け取ります。`policy` と文脈共有の同意は同じ規則に従い、設定は現在の構成から読み取ります。そのため同意を取り消すと、進行中のリクエストがまだ送信されていない相談を開始することはブロックされますが、送信済みの相談は取り消されず、すでにプロキシを離れた文脈も取り戻せません。
 - 意味的な停滞検出、完了前レビュー、段階的エスカレーション、複数専門家、投票は行いません。
 - preflight の重複排除台帳はプロセス内です。プロキシ再起動後、進行中のタスクはもう一度 preflight 相談を受けることがあります。
 

@@ -1,13 +1,12 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { inflateRawSync } from "node:zlib";
 import { describe, expect, test } from "bun:test";
 import { repoPath } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { classifySyncResult, classifyVersionProbe } from "../../src/cli/sync-fanout";
 import { remoteOcxArgv, remotePinnedSyncArgv } from "../../src/link/ssh-argv";
-import { powershellArgv, POWERSHELL_ENCODED_MAX, windowsOcxArgv, windowsPinnedSyncArgv, windowsScriptHelperSource } from "../../src/link/remote-windows";
+import { powershellArgv, POWERSHELL_ENCODED_MAX, windowsOcxArgv, windowsPinnedSyncArgv, windowsScriptHelperSource, windowsInflatedScript } from "../../src/link/remote-windows";
 
 function writeExecScript(path: string, body: string): void {
   mkdirSync(dirname(path), { recursive: true });
@@ -42,7 +41,7 @@ function inflateWindowsScript(encoded: string): string {
   const outer = Buffer.from(encoded, "base64").toString("utf16le");
   const match = /\$ocxPacked='([^']+)'/.exec(outer);
   if (!match) return outer;
-  return inflateRawSync(Buffer.from(Array.from(match[1]!, ch => ch.charCodeAt(0) - 256))).toString("utf8");
+  return windowsInflatedScript(outer);
 }
 
 describe("ephemeral ocx-child SSH discovery and sync fan-out argv", () => {

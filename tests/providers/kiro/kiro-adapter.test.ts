@@ -784,7 +784,7 @@ describe("kiro adapter — buildRequest", () => {
       },
     };
     const { body } = await createKiroAdapter(provider).buildRequest(
-      parsedWith([{ role: "user", content: "hi" }], [{ name: "bash", description: "Run command", parameters }]),
+      parsedWith([{ role: "user", content: "hi" }], [{ name: "bash", description: "Run command", parameters }], "gpt-5.6-sol"),
     );
     const schema = JSON.parse(body).conversationState.currentMessage.userInputMessage.userInputMessageContext.tools[0].toolSpecification.inputSchema.json;
 
@@ -811,7 +811,7 @@ describe("kiro adapter — buildRequest", () => {
       required: ["filename", "note"],
     };
     const { body } = await createKiroAdapter(provider).buildRequest(
-      parsedWith([{ role: "user", content: "hi" }], [{ name: "memories__add_ad_hoc_note", description: "Remember", parameters }]),
+      parsedWith([{ role: "user", content: "hi" }], [{ name: "memories__add_ad_hoc_note", description: "Remember", parameters }], "gpt-5.6-sol"),
     );
     const schema = JSON.parse(body).conversationState.currentMessage.userInputMessage.userInputMessageContext.tools[0].toolSpecification.inputSchema.json;
 
@@ -845,7 +845,7 @@ describe("kiro adapter — buildRequest", () => {
       required: ["target", "message"],
     };
     const { body } = await createKiroAdapter(provider).buildRequest(
-      parsedWith([{ role: "user", content: "hi" }], [{ name: "followup_task", namespace: "collaboration", description: "Send follow-up", parameters }]),
+      parsedWith([{ role: "user", content: "hi" }], [{ name: "followup_task", namespace: "collaboration", description: "Send follow-up", parameters }], "gpt-5.6-sol"),
     );
     const schema = JSON.parse(body).conversationState.currentMessage.userInputMessage.userInputMessageContext.tools[0].toolSpecification.inputSchema.json;
 
@@ -867,7 +867,7 @@ describe("kiro adapter — buildRequest", () => {
       $defs: { Inner: { type: "object", properties: { id: { type: "string" } } } },
     };
     const { body } = await createKiroAdapter(provider).buildRequest(
-      parsedWith([{ role: "user", content: "hi" }], [{ name: "memories__read", description: "Read", parameters }]),
+      parsedWith([{ role: "user", content: "hi" }], [{ name: "memories__read", description: "Read", parameters }], "gpt-5.6-sol"),
     );
     const schema = JSON.parse(body).conversationState.currentMessage.userInputMessage.userInputMessageContext.tools[0].toolSpecification.inputSchema.json;
 
@@ -954,7 +954,7 @@ describe("kiro adapter — buildRequest", () => {
   test("root composition preserves root properties/siblings and merges coexisting keywords", async () => {
     const pick = async (schema: unknown) =>
       JSON.parse((await createKiroAdapter(provider).buildRequest(
-        parsedWith([{ role: "user", content: "hi" }], [{ name: "comp2", description: "d", parameters: schema }]),
+        parsedWith([{ role: "user", content: "hi" }], [{ name: "comp2", description: "d", parameters: schema }], "gpt-5.6-sol"),
       )).body).conversationState.currentMessage.userInputMessage.userInputMessageContext.tools[0].toolSpecification.inputSchema.json;
 
     // Root direct properties/required AND a sibling oneOf: keep the root fields, merge the variant.
@@ -1660,7 +1660,7 @@ describe("kiro adapter — native and emulated reasoning effort", () => {
   test("mid-turn steering reaches Kiro identically for opus-5 and opus-4.8", async () => {
     // The #543 reporter observed opus-4.8 honoring mid-turn steers while opus-5 ignored them on
     // the same proxy build. Pin that our request construction does not differ between the two
-    // beyond model identity and opus-5's native effort field, so a future model-conditional
+    // beyond model identity and the native effort field both now carry, so a future model-conditional
     // regression on this path is caught here rather than in a user's session.
     const steer = "Stop and switch approach now.";
     const messages = [
@@ -1686,10 +1686,9 @@ describe("kiro adapter — native and emulated reasoning effort", () => {
         { content: [{ text: "out" }], status: "success", toolUseId: "call-1" },
       ]);
     }
-    // Only the native-effort field may differ; opus-4.8 also gets no emulated thinking tags
-    // here because tool-result turns skip that injection.
+    // Both carry the same native effort field, and neither gets emulated thinking tags.
     expect(opus5.additionalModelRequestFields).toEqual({ output_config: { effort: "high" } });
-    expect(opus48.additionalModelRequestFields).toBeUndefined();
+    expect(opus48.additionalModelRequestFields).toEqual({ output_config: { effort: "high" } });
     expect(opus48.conversationState.currentMessage.userInputMessage.content).not.toContain("<thinking_mode>");
   });
 
@@ -1726,6 +1725,23 @@ describe("kiro adapter — native and emulated reasoning effort", () => {
         ...parsedWith([{ role: "user", content: "solve" }], undefined, modelId),
         options: { reasoning: "minimal" },
       })).rejects.toThrow(`Kiro ${modelId} does not support reasoning effort "minimal"`);
+    }
+  });
+
+  test("Claude models newly given native effort keep the emulated block for minimal", async () => {
+    for (const modelId of ["claude-opus-4.8", "claude-opus-4.7", "claude-opus-4.6", "claude-sonnet-5.5", "claude-sonnet-5", "claude-sonnet-4.6", "claude-haiku-5.5"]) {
+      const body = JSON.parse((await createKiroAdapter(provider).buildRequest({
+        ...parsedWith([{ role: "user", content: "solve" }], undefined, modelId),
+        options: { reasoning: "minimal", maxOutputTokens: 1000 },
+      })).body);
+
+      expect(body.additionalModelRequestFields).toBeUndefined();
+      // Both halves of the emulated block, not just the budget: a fallback that only prepended the
+      // length tag would leave `minimal` below the model's own thinking default without saying so.
+      const content = body.conversationState.currentMessage.userInputMessage.content;
+      expect(content).toContain("<thinking_mode>enabled</thinking_mode>");
+      expect(content).toContain("<max_thinking_length>100</max_thinking_length>");
+      expect(content).toContain("<thinking_instruction>");
     }
   });
 });

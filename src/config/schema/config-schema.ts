@@ -8,6 +8,7 @@ import { anthropicAccountPoolSchema } from "./anthropic-account-pool";
 import { compactionRecoverySchema } from "./compaction-recovery";
 import { nativeReasoningRetentionSchema } from "./native-reasoning-retention";
 import { workflowBudgetSchema } from "./workflow-budget";
+import { routedCatalogDefaultsSchema } from "./routed-catalog-defaults";
 import { desktopCompatibilitySchema } from "./desktop-compatibility";
 import { blockedModelRedirectsSchema } from "./blocked-model-redirects";
 import { mainAccountHardLockFallbackSchema } from "./main-account-hard-lock-fallback";
@@ -193,6 +194,8 @@ export const configSchema = z.object({
   // Match the per-body load/degrade contract: malformed hand edits retain providers.
   // The shared resolver clamps runtime admission to 512 MiB..2 GiB even when the
   // caller bypasses this schema; omission and zero retain the 512 MiB default.
+  // Home-side per-body zstd advertisement on Remote Links (#3023); anything but a boolean reads as unset, which is on.
+  linkRequestCompression: z.boolean().optional().catch(undefined),
   maxConcurrentInboundBodyBytes: z.number().int()
     .min(0)
     .optional()
@@ -232,6 +235,8 @@ export const configSchema = z.object({
   nativeReasoningRetention: nativeReasoningRetentionSchema.optional().catch(undefined),
   // A bad hand edit falls back to the built-in ceilings; it never turns the guard off.
   workflowBudget: workflowBudgetSchema.optional().catch(undefined),
+  // A bad hand edit drops the whole block, so routed rows keep today's derivation (#6872).
+  routedCatalogDefaults: routedCatalogDefaultsSchema.optional().catch(undefined),
   desktopCompatibility: desktopCompatibilitySchema.optional().catch(undefined),
   // A hand-edited malformed phase disables only that phase instead of rejecting
   // providers/apiKeys, matching the load-time degradation notice; the management write
@@ -342,6 +347,9 @@ export const configSchema = z.object({
   }).strict().optional().catch(undefined)),
   codexShimAutoRestore: z.boolean().optional(),
   codexDesktopAuthless: z.boolean().optional().catch(undefined),
+  codexReserveEnabled: z.boolean().optional().catch(undefined),
+  // A malformed marker degrades to unmigrated, which reseeds from the persisted authless flag.
+  codexReserveMigration: z.number().int().positive().optional().catch(undefined),
   codexClientCompaction: z.boolean().optional().catch(undefined),
   // Presentation-only label for the injected provider. A malformed value degrades to undefined
   // and the default label is emitted, rather than failing the parse or writing a config Codex

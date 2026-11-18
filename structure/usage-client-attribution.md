@@ -15,6 +15,8 @@ attempt-loss marker.
 `tests/usage/usage-client-attribution.test.ts` and
 `tests/usage/request-log-normalization.test.ts` cover those boundaries.
 
+Request-log rows and usage.jsonl rows carry `requestBody` (#3023): `wireBytes` as received, the `encoding` (`identity`, `zstd`, `gzip` or `deflate`) and `decodedBytes`. `readBoundedJsonRequestBody` in `src/server/request-decompress.ts` records them in `src/server/request-body-facts.ts` once a body was read and decoded in full, into a holder keyed by the Request; `src/server/admitted-http-turn.ts` binds the holder of the request it hands to the handler to that turn's log context, so every admitted JSON data route records it and a route that reads no JSON body records nothing. `src/usage/request-body.ts` validates the field on every write and read; a row without it, or with a malformed one, keeps every other field, and a reader that predates the field drops it because `src/usage/log.ts` rebuilds rows from known fields. `/api/logs` and `ocx logs --json` show it as part of the row. Coverage: `tests/usage/request-body-log.test.ts`.
+
 `src/usage/source-filter.ts` defines app and device filters. A Codex filter includes recognized
 Codex clients and legacy Codex-surface rows; it reports the latter as a separate unclassified
 count, without assigning a client subtype. A no-key filter means the stored key ID is absent,
@@ -40,12 +42,17 @@ row offset during ingest, and `readUsageLedgerRowsAtOffsets` re-reads only the s
 same identity, row-ceiling and torn-suffix rules. The first filtered query after the index is missing
 or invalid pays one cooperative full ingest; appends ingest only new bytes, and every later filter
 reuses the projection. Candidate offsets are selected and consumed in bounded keyset pages, with a
-timer yield between pages; each page rechecks the published generation before it is read, so broad
-filters neither retain the complete offset set nor monopolize the event loop. A replaced, truncated
+timer yield between pages; each page rechecks the published generation before it is read. Within a
+page, decoding and accumulation share the scanner's 8 ms cooperative slice, with one row atomic and
+cancellation checked after yielding. The accumulator consumes rows directly instead of retaining a
+page of parsed entries. A replaced, truncated
 or same-size rewritten ledger rebuilds it, a write
 observed during a row read re-verifies the selected bytes before publishing them, and a recorded
 offset that no longer frames a complete row drops the projection instead of serving a partial
 answer. `usage.jsonl` stays authoritative and is never truncated or rewritten.
+Row callbacks are provisional until validation completes; failed rebuilds discard their accumulator
+and failed appends discard their clone. A verification pass clears the cached read window, yields
+between rows, and rejects identity, size or revision changes during that pass before publication.
 
 Each candidate page is one keyset statement per branch, and every branch index is ordered
 `(generation, <equality prefix>, byte_offset, ...)` so its own `ORDER BY byte_offset LIMIT` is
@@ -199,3 +206,4 @@ tag; the row's tag comes from the row's provider in `src/server/request-log.ts`.
 and the request-log hydration keep only `p` plus six lowercase hex digits and drop anything else.
 Per-account summaries still key on `accountLogLabel` and ignore the tag
 (`tests/usage/request-log-anthropic-account-tag.test.ts`).
+Remote Link rows may carry an optional `link` object (transport, continuation, hashed thread and turn refs) while the link WebSocket feature is on; it is validated in `src/usage/link-log-fields.ts` and spread into the row, the persisted entry and hydration, and described in `structure/remote-link.md`.

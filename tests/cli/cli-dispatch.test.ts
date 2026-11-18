@@ -180,6 +180,7 @@ describe("dispatchCommand exit codes", () => {
     const syncModule = await import("../../src/codex/sync");
     const catalogModule = await import("../../src/integrations/catalog-refresh");
     const asideModule = await import("../../src/cli/aside-profiles");
+    const piSyncModule = await import("../../src/cli/pi-sync");
     const order: string[] = [];
     const sync = spyOn(syncModule, "syncModelsToCodex").mockImplementation(async () => {
       order.push("catalog");
@@ -191,6 +192,7 @@ describe("dispatchCommand exit codes", () => {
       return [];
     });
     const aside = spyOn(asideModule, "refreshAsideProfilesThroughServer").mockResolvedValue([]);
+    const pi = spyOn(piSyncModule, "refreshPiThroughServer").mockResolvedValue([]);
     const log = spyOn(console, "log").mockImplementation(() => {});
     try {
       const args = ["sync"];
@@ -201,9 +203,11 @@ describe("dispatchCommand exit codes", () => {
       expect(code).toBe(0);
       expect(order).toEqual(["catalog", "refresh"]);
       expect(refresh).toHaveBeenCalledTimes(1);
-      expect(refresh.mock.calls[0]![1]).toEqual(["mcode", "pi", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"]);
+      expect(refresh.mock.calls[0]![1]).toEqual(["mcode", "raycast", "omo", "cline", "commandcode", "droid", "opencode", "kilo", "qoder", "qoder-cn", "workbuddy", "workbuddy-ai", "hermes", "t3code"]);
+      // #8287: Pi refreshes through the serving proxy instead of the local fan-out.
+      expect(pi).toHaveBeenCalledTimes(1);
     } finally {
-      sync.mockRestore(); refresh.mockRestore(); aside.mockRestore(); log.mockRestore();
+      sync.mockRestore(); refresh.mockRestore(); aside.mockRestore(); pi.mockRestore(); log.mockRestore();
     }
   });
 
@@ -639,7 +643,7 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     const readAt = stop.indexOf("const siblingOfPort = readRuntimePort()?.siblingOfPort;");
     expect(readAt).toBeGreaterThan(-1);
     // Read before the first stop can remove the record.
-    expect(readAt).toBeLessThan(stop.indexOf("stopServiceIfInstalledDetailed()"));
+    expect(readAt).toBeLessThan(stop.indexOf("stopServiceForOcxStop("));
     expect(stop).toContain("if (teardownNonce || stoppingSibling) return;");
     // #7563 adds a connected client to the same gate; the sibling term is unchanged.
     expect(stop).toContain("const restoreBlocked = ownershipBlocked || inheritedBlocks || nativeRestoreHandledByProxy || stoppingSibling || connectedClientSkip !== null;");
@@ -652,10 +656,12 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
     // it failed the ownership check from the sibling's home: exit 1, and after a hard kill the
     // stale sibling records were never purged.
     // #7423: the non-sibling branch claims an update-handover receipt first; the sibling term is unchanged.
-    expect(stop).toContain(': stoppingSibling || connectedClientAlreadyStopped ? "absent" : (claimHandoverBeforeManager(), stopServiceIfInstalledDetailed());');
+    expect(stop).toContain(': stoppingSibling || connectedClientAlreadyStopped ? noServiceStop() : (claimHandoverBeforeManager(), await stopServiceForOcxStop({ receiptNonce: () => teardownNonce, inheritedReceipts: inheritedTeardowns.length }));');
     // The only other caller is the guarded desktop step, which reaches the manager only when it
-    // provably owns the approved pid; a sibling's pid never is.
-    expect(stop.split("stopServiceIfInstalledDetailed()").length - 1).toBe(2);
+    // provably owns the approved pid; a sibling's pid never is. Both go through the #7771 wiring.
+    expect(stop).not.toContain("stopServiceIfInstalledDetailed(");
+    expect(stop.split("stopServiceForOcxStop(").length - 1).toBe(1);
+    expect(stop.split("stopGuardedManager(").length - 1).toBe(1);
   });
 
   test("ocx stop of a hard-killed sibling never stops the live owner discovery falls back to", () => {
@@ -672,7 +678,7 @@ describe("a sibling start leaves shared client routing to the live owner", () =>
 
     // Wiring: the orphan path asks before it may stop anything it found, and reports success.
     const stop = slice("async function handleStopUnlocked(", "async function handleUninstall(");
-    const findAt = stop.indexOf("const live = await findLiveProxy({ acceptPackageTreeFenced: true });");
+    const findAt = stop.indexOf("const live = await findLiveProxy({ acceptPackageTreeFenced: true, ...orphanDiscoveryCap() });");
     const askAt = stop.indexOf("if (siblingStopFoundOwner(siblingOfPort, live)) {");
     const attestAt = stop.indexOf('} else if (live?.pid && (await proveLiveProxyOwnedByHome(live)) !== "proven") {');
     expect(findAt).toBeGreaterThan(-1);

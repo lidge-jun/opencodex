@@ -3,6 +3,7 @@ import {
   GUI_PAIR_CAPABILITY_TTL_MS,
   GUI_PAIR_METHOD,
   GUI_PAIR_PATH,
+  DESKTOP_GUI_PAIR_PATH,
   createGuiPairCapability,
   verifyGuiPairCapability,
 } from "../../src/lib/gui-pair-capability";
@@ -31,6 +32,13 @@ function capability(): string {
 }
 
 describe("GUI pairing operation capability", () => {
+  test("Desktop purpose is bound to its exact signed route and cannot reuse ordinary pairing authority", () => {
+    const desktop = createGuiPairCapability(SECRET, NONCE, GUI_PAIR_METHOD, DESKTOP_GUI_PAIR_PATH, "http://localhost:10100", PID, PORT, EXPIRES_AT)!;
+    expect(verifyGuiPairCapability(SECRET, NONCE, GUI_PAIR_METHOD, DESKTOP_GUI_PAIR_PATH, "http://localhost:10100", PID, PORT, EXPIRES_AT, desktop, NOW)).toBe(true);
+    expect(verifyGuiPairCapability(SECRET, NONCE, GUI_PAIR_METHOD, GUI_PAIR_PATH, "http://localhost:10100", PID, PORT, EXPIRES_AT, desktop, NOW)).toBe(false);
+    expect(verifyGuiPairCapability(SECRET, NONCE, GUI_PAIR_METHOD, DESKTOP_GUI_PAIR_PATH, ORIGIN, PID, PORT, EXPIRES_AT, capability(), NOW)).toBe(false);
+    expect(verifyGuiPairCapability(SECRET, NONCE, GUI_PAIR_METHOD, DESKTOP_GUI_PAIR_PATH, "http://localhost:10101", PID, PORT, EXPIRES_AT, desktop, NOW)).toBe(false);
+  });
   test("authenticates the exact method path browser origin process and listener", () => {
     expect(verifyGuiPairCapability(
       SECRET, NONCE, GUI_PAIR_METHOD, GUI_PAIR_PATH, ORIGIN, PID, PORT, EXPIRES_AT, capability(), NOW,

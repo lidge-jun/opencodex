@@ -115,6 +115,7 @@ describe("CCA Claude tool-result image ordering", () => {
     ["cloud-code-assist", "gemini-4-argon"],
     ["cloud-code-assist", "gpt-oss-120b-medium"],
     ["ai-studio", "gemini-4-argon"],
+    ["ai-studio", "gemini-4-hydrogen"],
     ["ai-studio", "claude-sonnet-4-6"],
     ["vertex", "gemini-3.1-pro"],
     ["vertex", "claude-sonnet-4-6"],
@@ -123,8 +124,9 @@ describe("CCA Claude tool-result image ordering", () => {
     expect(contents.at(-1)?.parts).toEqual([responseA, imageA, responseB, imageB, responseC]);
   });
 
-  test("Vertex Argon keeps each image nested in its matching response", async () => {
-    const { contents } = await build(parallelHistory(true), { ...cca, googleMode: "vertex" }, "gemini-4-argon");
+  // #8583 extended the Argon contract to Carbon and Hydrogen on Vertex (ADR-7279 amendment).
+  test.each(["gemini-4-argon", "gemini-4-carbon", "gemini-4-hydrogen"])("Vertex %s keeps each image nested in its matching response", async model => {
+    const { contents } = await build(parallelHistory(true), { ...cca, googleMode: "vertex" }, model);
     expect(contents.at(-1)?.parts).toEqual([
       { functionResponse: { ...responseA.functionResponse, parts: [imageA] } },
       { functionResponse: { ...responseB.functionResponse, parts: [imageB] } }, responseC,

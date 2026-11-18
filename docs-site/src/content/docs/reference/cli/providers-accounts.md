@@ -310,16 +310,37 @@ ocx login anthropic --headless # no browser, no local port
 `--headless` runs the **code-display** login for hosts whose browser cannot reach the proxy's loopback
 callback (containers, remote servers). The command prints an authorization URL; approve it in any
 browser, and the provider shows a `code#state` string to paste back at the prompt. No callback port
-is bound and no browser is launched. Only `anthropic` and `anthropic2` support it today; any other provider exits
+is bound and no browser is launched. `anthropic` and `anthropic2` support it. `xai` has no code page, so
+`--headless` runs its device login instead: the command prints a URL and a short code, you confirm the
+code in any browser, and it finishes on its own with nothing to paste. Any other provider exits
 with the list of providers that do. For Codex accounts use the device-code login instead,
 `ocx account login codex --device` — `ocx login codex --headless` is refused rather than passed on.
-The paste window is 10 minutes, and each login accepts one code: if the exchange fails, start a new login. A successful login becomes the provider's active account, exactly
+A code-display login's paste window is 10 minutes, and each login accepts one code: if the exchange
+fails, start a new login. A successful login becomes the provider's active account, exactly
 like a browser login.
 
 OAuth reauthentication preserves operator settings such as model selections, pricing overrides,
 and account failover preferences. Login-owned transport/authentication fields and registry-owned
 catalog metadata are refreshed. A live-discovery provider keeps its selected default model; a
 static provider can replace a default that no longer exists in its refreshed catalog.
+
+**Google Antigravity can get Gemini and Antigravity access on your Google account disabled.** The
+Antigravity login is issued for Google's own Antigravity app, and users of third-party tools have
+reported that access on their Google accounts being disabled with
+`This service has been disabled in this account for violation of Terms of Service.`
+That ban covers the Google account's Gemini Code Assist and Antigravity access, and getting it back
+depends on Google's appeal process. Use only a separate account you can afford to lose; a Gemini API
+key (the `google` preset) is the supported way to use Gemini from other tools. Every way of adding an
+Antigravity account therefore asks first. `ocx login google-antigravity`,
+`ocx account login google-antigravity` (including `--reauth`) and
+`ocx account import google-antigravity` print the warning and continue only when a terminal answers
+`y`. A non-interactive run must pass `--accept-antigravity-risk`, which skips the question but still
+prints the warning; without it the command exits before contacting the proxy or reading an import
+document. `--stdin` imports always need the flag, because the document occupies stdin. The flag is
+refused for any other provider, and a run driven by a coding agent or CI runner is refused with or
+without it: only the account owner can accept this risk (see `AGENTS_INSTALL.md`). The dashboard asks
+through a checkbox that starts unticked every time, and the management API refuses an Antigravity
+login or import that does not carry the acknowledgement.
 
 For Antigravity, an upstream `401` can refresh the rejected account’s OAuth credential and
 retry the request once. The retry uses that credential’s Cloud Code Assist project. If refresh
@@ -331,8 +352,8 @@ Google's account verification, then run `ocx login google-antigravity`. Silent t
 does not clear this verification requirement. If OpenCodex cannot save the quarantine, this adapter exchange preserves the original `403` without another recovery send; the account has not been durably quarantined. If a sibling request cannot be built or admitted for sending, the exchange delivers the original `403` through normal error formatting. An enclosing combo or policy route can still apply its existing fallback rules.
 
 For fetch-based web-search requests, automatic sibling rotation accepts only a complete, bounded
-Google error envelope containing `error.details[].reason === "VALIDATION_REQUIRED"`. Verification
-wording alone does not rotate. This request-scoped recovery uses the sibling's token and project
+Google error envelope containing `error.details[].reason === "VALIDATION_REQUIRED"` or a `PERMISSION_DENIED`
+access denial. Verification wording alone does not rotate. This request-scoped recovery uses the sibling's token and project
 without persisting a `needs-reauth` mark; cancellation, committed output, budget exhaustion or an
 unavailable sibling preserves the failure.
 
@@ -508,6 +529,7 @@ stay at least five minutes apart, and the next check is pulled in to the latest 
 or reauthentication-required main receives no checks before its predicted reset. A longer `Retry-After` also delays profile and token preparation. Only fresh valid usage or authoritative window-absence evidence
 can lift the block. In Pool mode, a quota `--refresh` bypasses cache freshness but still honors failed-read pacing;
 a deferred read makes no new diagnostic attempt. Other pause, reauthentication, and upstream limits remain independent.
+Before refusing a request, if the usage behind the block was last measured more than 60 seconds ago, OpenCodex may read usage once more. When that fresh reading no longer blocks under the configured thresholds, for example after a reset redeemed outside OpenCodex cleared every blocking window, the request is resolved again; a reading that still blocks, or a failed or deferred read, keeps the refusal. Concurrent refusals share that read, the main account gets at most one such read per minute, and failed-read pacing, a paused or reauthentication-required main, and native-main maintenance skip it. A request that authenticates as the main login itself uses its own credential for that read and never the stored one.
 
 Protection treats one fresh valid WHAM usage response as a replacement for the old 5h reading when
 its primary window explicitly lasts **at least 24 hours** and reports valid usage, or its primary window is
@@ -559,17 +581,23 @@ keeps Desktop's native Reserve-only picker gate inactive. It also disables Deskt
 Reserve handling: Reserve is an explicit model choice, not an automatic fallback.
 
 Keep the built-in OpenAI provider enabled in ChatGPT-forward mode, enable the account model picker,
-and configure a public selector for the stored main account. With effective loopback authless mode
-enabled, `ocx sync` includes `<main-selector>/gpt-reserve` alongside routed provider models. A bare
+and configure a public selector for the stored main account. With the Reserve setting
+(`codexReserveEnabled`) enabled on a loopback bind, `ocx sync` includes `<main-selector>/gpt-reserve` alongside routed provider models. A bare
 `gpt-reserve`, an added-account selector, and API-key model discovery are not added to the catalog.
-The authless setting is ignored for remote-client routing or a listener that needs an admission header.
+The Reserve setting is ignored for remote-client routing or a listener that needs an admission header.
 When public and local listeners run together, Reserve compatibility applies only to requests admitted
 by the local listener. An authenticated public request stays on the normal path even if it originates
 from the same machine; request headers cannot select the local policy.
 
-Enable authless Desktop mode with `ocx system settings --desktop-authless on`, run `ocx sync`,
-then fully quit and reopen Codex Desktop so it reloads the rewritten configuration and catalog.
-Follow the [canonical authless Desktop workflow](/guides/codex-integration/#authless-codex-desktop-opt-in).
+Enable Reserve with `ocx system settings --reserve on` (or `"codexReserveEnabled": true` in
+`config.json`), run `ocx sync`, then fully quit and reopen Codex Desktop so it reloads the rewritten
+catalog. Authless Desktop mode (`--desktop-authless on`) is a separate choice; see the
+[canonical authless Desktop workflow](/guides/codex-integration/#authless-codex-desktop-opt-in).
+
+Earlier versions enabled Reserve through the authless switch. An existing install keeps what it had:
+The first start of this version copies the authless value into `codexReserveEnabled` once and
+records `codexReserveMigration`; until then Reserve follows authless. After that the two settings move independently, and removing `codexReserveEnabled` turns Reserve off rather than following authless
+again. Enabling the setting grants no entitlement; the checks below still decide every request.
 
 Each compatibility request checks a credential-bound server authorization, cached for at most
 60 seconds. OpenCodex sends the Reserve capability header on an owned main-account usage read and
@@ -1081,7 +1109,7 @@ The new login options are flow-specific:
 | Fresh ordinary provider OAuth | Supported for browser-capable providers | Supported; omitted defaults to adding an account |
 | Ordinary provider reauth | Browser-capable flows only | Rejected; omission retains reauth behavior |
 | Codex browser login | Supported | Rejected |
-| Codex device, or native device-only kimi/nous/github-copilot | Rejected | Rejected for Codex; ordinary OAuth rules for other providers |
+| Codex device, xAI device authorization, or native device-only kimi/nous/github-copilot | Rejected | Rejected for Codex; ordinary OAuth rules for other providers |
 | Native Kiro `--method` | Rejected | Rejected; this flow is add-only |
 
 Explicit add-account off permits the existing import preference; it does not
@@ -1102,16 +1130,34 @@ ocx account login openai --device --no-wait --json
 ```
 
 Open that URL on any other machine, enter the short code, and the login completes. Without
-`--no-wait` the command polls until you finish; the device grant lives 15 minutes, and the
-command waits that long rather than the 5 minutes a browser login allows, because the point
-is that you walk away to another device. `kimi`, `nous`, and `github-copilot` accept the flag
-as a no-op because their only login is already a device flow; a provider with no device grant
-rejects it.
+`--no-wait` the command polls until you finish; for the Codex pool that window is the 15-minute
+device grant rather than the 5 minutes a browser login allows, because the point is that you
+walk away to another device.
 
-In the dashboard, the same login is selected by the **"Don't open a browser on the proxy
-machine"** checkbox on the add-account modal. That setting already means the operator is not
-sitting at the proxy host, which is exactly when a callback URL is useless — so ticking it
-switches the Codex login to the device flow and shows a copyable code instead.
+`ocx account login xai --device` starts xAI's device authorization instead of its
+`127.0.0.1:56121` callback. It prints the verification URL and a short code to confirm in any
+browser, polls once per provider interval, and finishes on its own with nothing to paste. The
+deadline comes from xAI's `expires_in` on that authorization response, so treat the window as
+provider-issued rather than fixed, bounded to 30 minutes and to a poll no faster than once a
+second; an expired grant is reported, not retried. If xAI answers a poll with `429` or a `5xx`,
+its `Retry-After` sets that one wait instead of the interval, still inside the grant deadline. A
+redirect on either device request is refused rather than followed, and fails the login at once
+as an authentication failure instead of being retried as a network or code problem. `kimi`,
+`nous`, and `github-copilot` accept the flag as a no-op because their only login is already a
+device flow; a provider with no device grant rejects it. A device login has nothing to paste, so
+`--device` with `--code` is refused. For xAI device login, `--json` requires `--no-wait`:
+`ocx account login xai --device --no-wait --json` returns one JSON handoff with the
+verification URL, short code and flow ID. Complete authorization in a browser; the proxy
+continues the login in the background. Cancel that specific attempt with
+`ocx account cancel xai --flow <flow-id>`; omitting `--flow` cancels the latest attempt.
+
+The dashboard does not expose a provider's device grant this way. On the add-account modal the
+**"Don't open a browser on the proxy machine"** checkbox only stops the proxy from launching a
+browser: it keeps the flow's own protocol, still in `callback` mode, and you complete the
+returned authorization URL yourself. Choosing a device flow is a separate, explicit control where
+one exists — the Codex account modal has a **Device code login** entry, and native Kiro device
+login is started from its own panel — never from that checkbox. There is no dashboard control that
+starts xAI device authorization, so use `ocx account login xai --device` for it.
 
 ### `ocx account remove <provider> <id|alias|main> --yes [--json]`
 

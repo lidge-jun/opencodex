@@ -822,7 +822,8 @@ ocx agent sidecar status --json
 ```
 
 System boolean options are `--show-codex-credits`, `--account-picker`,
-`--main-account-hard-lock`, `--ultra-fast-tier`, `--fast-rows`, each on/off.
+`--main-account-hard-lock`, `--ultra-fast-tier`, `--fast-rows`, `--reserve`, each on/off.
+`--reserve` is Luna Reserve compatibility, independent of `--desktop-authless`.
 Credit display does not authorize paid use, and system Ultra Fast is separate
 from provider Fast. New-option writes report only observed task fields;
 Ultra Fast requires the command's same-target GET read-back. Pending catalog,
@@ -1075,8 +1076,10 @@ ocx link revoke --link-id lnk_0123456789abcdef --force --yes --json
 The link ID is fictional; use the selected actual ID. A successful forced revoke
 reports `remoteCleanup:"skipped"`, derived from force intent. Idempotent not-found
 reports `remoteCleanup:"unverified"`; neither proves a remote disconnect attempt.
-Both can exit 0. Follow the receipt's `ocx disconnect` recovery on the remote
-client when authorized. `--force` requires `--yes`; `--yes` alone is invalid.
+Both can exit 0. Follow the receipt's recovery when authorized: for a full Child,
+`ocx disconnect --expect-link <id>` there (an OpenCodex older than that flag refuses it;
+then `ocx disconnect` only if `ocx connect status --json` shows this link's id or no
+connection); for a lightweight Child, `ocx link recover --link-id <id>` on the Home. `--force` requires `--yes`; `--yes` alone is invalid.
 Ordinary revoke remains unchanged.
 
 ## 25. Follow observed windows without claiming lossless history

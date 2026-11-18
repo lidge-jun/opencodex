@@ -51,6 +51,7 @@ import { pnpmInvocationForPath, resolvePnpmCommands } from "../src/update/pnpm-i
 import { detectInstallOwnershipFromPath } from "../src/update/install-detection.mjs";
 import { isOrchestratedUpdateArgv, parseOrchestratedUpdateArgs, parseOrchestratedChildArgs } from "../src/update/orchestrated-arguments.mjs";
 import { createLegacyUpdateSession, createOrchestratedChildSession, decodeOrchestratedExpect } from "../src/update/orchestrated-session.mjs";
+import { matchesOrchestratedPnpmOwner } from "../src/update/orchestrated-pnpm.mjs";
 import { createUpdatePlanToken } from "../src/update/orchestrated-token.mjs";
 import { applyNodeOrchestratedUpdate } from "../src/update/orchestrated-node-driver.mjs";
 import {
@@ -240,13 +241,18 @@ function runningPnpmShimPath() {
 }
 
 async function runPackageManagerSelfUpdate(manager, child) {
-  let session, enteredMutation = false;
+  let session, enteredMutation = false, owner, resolveOwner;
   let childOutcome = { phase: "failed", rollbackPerformed: false };
   if (child) {
     try {
       const expected = decodeOrchestratedExpect(child.expect);
       session = createOrchestratedChildSession({ home: configDir(), resultPath: child.resultPath, resultCapability: child.resultCapability, expect: expected,
         notAfter: child.notAfter, verifyIdentity: () => {
+          if (manager === "pnpm") {
+            if (!matchesOrchestratedPnpmOwner(expected.pnpmOwner, owner)) return false;
+            const currentOwner = resolveOwner([owner.commandPath]);
+            if (!currentOwner.ok || !matchesOrchestratedPnpmOwner(expected.pnpmOwner, currentOwner.owner)) return false;
+          } else if (expected.pnpmOwner !== undefined) return false;
           const bun = resolveBun({ allowInstall: false, allowMissing: true });
           if (!bun) return false;
           const probe = probeSpawnSync(bun.path, ["--no-env-file", join(here, "../src/update/orchestrated-identity-probe-entry.ts"), "__update-orchestrated-identity"], {
@@ -287,27 +293,27 @@ async function runPackageManagerSelfUpdate(manager, child) {
   }
   const current = currentPackageVersion();
   const tag = updateTag(current);
-  let owner;
   if (manager === "pnpm") {
-    const ownerResult = resolvePnpmGlobalOwner({
+    resolveOwner = commandPaths => resolvePnpmGlobalOwner({
       packageName: PKG,
       packagePath: resolve(here, ".."),
-      commandPaths: resolvePnpmCommands(),
+      commandPaths,
       runningShimPath: runningPnpmShimPath(),
-      runPnpm: (commandPath, args, capture = false) => {
-        const invocation = pnpmInvocationForPath(commandPath, args);
+      runPnpm: (commandPath, args, capture = false, owner) => {
+        const invocation = owner ? pnpmOwnerInvocation(owner, args) : pnpmInvocationForPath(commandPath, args);
         if (!invocation) return { status: 1 };
-        return probeSpawnSync(invocation.file, invocation.args, {
+        return withPnpmCommandCwd(args, cwd => probeSpawnSync(invocation.file, invocation.args, {
           stdio: capture ? "pipe" : "ignore",
           encoding: "utf8",
           timeout: 20_000,
           windowsHide: true,
-          cwd: PNPM_READ_CWD,
-          env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(process.env)),
+          cwd,
+          env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(invocation.env ?? process.env)),
           ...invocation.options,
-        });
+        }));
       },
     });
+    const ownerResult = resolveOwner(resolvePnpmCommands());
     if (!ownerResult.ok) {
       console.error(`opencodex: ${ownerResult.reason}; aborting before stopping the proxy.`);
       process.exit(1);
@@ -1329,8 +1335,15 @@ function resolveBun({ allowInstall = true, launcherPath, allowMissing = false } 
 const updateHelpRequested = process.argv[2] === "update" && !isOrchestratedUpdateArgv(process.argv.slice(3)) &&
   process.argv.slice(3).some(a => a === "--help" || a === "-h" || a === "help");
 if (updateHelpRequested) {
-  console.log("Usage: ocx update [--tag latest|preview]\n       ocx update --plan --json [--tag latest|preview | --version <version>]\n       ocx update --yes --json [--tag latest|preview | --version <version>] [--expect-plan <token>] [--not-after <unix-ms>]\n\nPreview with --plan; apply with --yes. --expect-plan binds apply to the planToken; --not-after sets a Unix millisecond mutation deadline.\nOrchestrated exit codes: 0 verified or up-to-date; 10 refused; 11 failed with previous version verified; 12 unverified or still running; 64 invalid usage.\nPreview installs stay on the preview tag unless overridden.");
+  console.log("Usage: ocx update [--tag latest|preview]\n       ocx update --plan --json [--tag latest|preview | --version <version>]\n       ocx update --yes --json [--tag latest|preview | --version <version>] [--expect-plan <token>] [--not-after <unix-ms>]\n       ocx update --desktop [--check] [--json]   (Windows OpenCodex Desktop installation only)\n\nPreview with --plan; apply with --yes. --expect-plan binds apply to the planToken; --not-after sets a Unix millisecond mutation deadline.\nOrchestrated exit codes: 0 verified or up-to-date; 10 refused; 11 failed with previous version verified; 12 unverified or still running; 64 invalid usage.\nPreview installs stay on the preview tag unless overridden.");
   process.exit(0);
+}
+
+// `ocx update --desktop` updates a Windows Desktop installation through its bundled ocx.exe (#8246).
+// This launcher only ever runs a package installation, so it refuses before any package update.
+if (process.argv[2] === "update" && process.argv.slice(3).includes("--desktop")) {
+  console.error("opencodex: 'ocx update --desktop' updates a Windows OpenCodex Desktop installation and must be run with that installation's ocx.exe. This ocx is a package installation; update it with 'ocx update'.");
+  process.exit(64);
 }
 
 // This intercept precedes Desktop handoff, boot restore and install-capable Bun resolution.
@@ -1385,12 +1398,12 @@ if (orchestratedArgs?.ok && orchestratedArgs.mode === "apply" && process.env.OCX
       return JSON.parse(probe.stdout);
     },
     pnpmCommands: resolvePnpmCommands(), runningShimPath: runningPnpmShimPath(),
-    runPnpm: (commandPath, args, capture = false) => {
-      const invocation = pnpmInvocationForPath(commandPath, args);
+    runPnpm: (commandPath, args, capture = false, owner) => {
+      const invocation = owner ? pnpmOwnerInvocation(owner, args) : pnpmInvocationForPath(commandPath, args);
       if (!invocation) return { status: 1 };
-      return probeSpawnSync(invocation.file, invocation.args, { stdio: capture ? "pipe" : "ignore", encoding: "utf8",
-        timeout: 20000, windowsHide: true, cwd: PNPM_READ_CWD,
-        env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(process.env)), ...invocation.options });
+      return withPnpmCommandCwd(args, cwd => probeSpawnSync(invocation.file, invocation.args, { stdio: capture ? "pipe" : "ignore", encoding: "utf8",
+        timeout: 20000, windowsHide: true, cwd,
+        env: pnpmReadEnvironment(unprivilegedOwnershipMutationEnvironment(invocation.env ?? process.env)), ...invocation.options }));
     },
     spawn: probeSpawn,
   });

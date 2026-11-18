@@ -120,6 +120,28 @@ const ANTHROPIC_FAST_MODELS: Readonly<Record<string, boolean>> = Object.freeze({
   "claude-opus-5": true,
   "claude-opus-4-8": true,
 });
+/**
+ * Gemini thinking ladders shared by the Gemini API (`google`) and Vertex AI (`google-vertex`)
+ * presets, so the two routes cannot advertise different rungs for one model.
+ * 3.7 and 3.8 omit `minimal`: Google documents it as a validation error on both model pages, so
+ * advertising it hands the user a rung the API rejects. 3.5/3.6 keep theirs — their pages still
+ * list it, and this unit has no evidence to change them. Gemini 4 Argon (GA 2026-10-13):
+ * low/medium(default)/high; `minimal` and thinking_budget return HTTP 400 per
+ * ai.google.dev/gemini-api/docs/models/gemini-4-argon. Gemini 4 Hydrogen: low/medium/high/xhigh,
+ * default high, verified live on Vertex AI by the author of #8583 (2026-11-13).
+ */
+const GEMINI_MODEL_REASONING_EFFORTS: Readonly<Record<string, string[]>> = {
+  "gemini-4-hydrogen": ["low", "medium", "high", "xhigh"],
+  "gemini-4-carbon": ["low", "medium", "high"],
+  "gemini-4-argon": ["low", "medium", "high"],
+  "gemini-3.8-flash": ["low", "medium", "high"],
+  "gemini-3.7-flash": ["low", "medium", "high"],
+  "gemini-3.6-flash": ["minimal", "low", "medium", "high"],
+  "gemini-3.5-flash": ["minimal", "low", "medium", "high"],
+  "gemini-3.1-pro-preview": ["low", "medium", "high"],
+};
+const GEMINI_MODEL_DEFAULT_REASONING_EFFORTS: Readonly<Record<string, string>> = { "gemini-4-hydrogen": "high" };
+
 const ANTHROPIC_FAST_TIER_DESCRIPTION =
   "Claude fast mode: faster output at 2x price; needs usage credits (subscription) or fast-mode access (API)";
 
@@ -255,7 +277,7 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // only the old devin entry carried. Degraded-mode seed only either way —
     // `liveModels` discovers the account's real roster.
     // 261027 preemptive: GPT-6.1 Terra (same degraded seed policy as GPT-6.1 Sol).
-    models: ["swe-2", "swe-1-7", "gpt-5-6-sol", "gpt-6-astra", "gpt-6-1-sol", "gpt-6-1-terra", "gpt-6-sol", "gpt-6-luna", "claude-opus-5-5", "claude-opus-5", "claude-fable-5-2", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-sonnet-5", "glm-5-3", "kimi-k3", "gemini-3-8-flash", "grok-4-6", "grok-4-7", "swe-1-7-lightning", "gpt-5-6-luna", "gpt-5-6-terra", "claude-opus-4-8", "glm-5-2", "kimi-k2-7", "grok-4-5"],
+    models: ["swe-2", "swe-1-7", "gpt-5-6-sol", "gpt-6-astra", "gpt-6-2-sol", "gpt-6-2-astra", "gpt-6-1-sol", "gpt-6-1-terra", "gpt-6-sol", "gpt-6-luna", "claude-opus-5-5", "claude-opus-5", "claude-fable-5-2", "claude-fable-5-1", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-sonnet-5", "glm-5-3", "kimi-k3", "gemini-3-8-flash", "grok-4-6", "grok-4-7", "swe-1-7-lightning", "gpt-5-6-luna", "gpt-5-6-terra", "claude-opus-4-8", "glm-5-2", "kimi-k2-7", "grok-4-5"],
     liveModels: true,
     defaultModel: "swe-2",
     modelContextWindows: DEVIN_MODEL_CONTEXT_WINDOWS,
@@ -650,8 +672,11 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
     // its matching result (#4726); the flag is live on this wire.
     requiresAdjacentResponsesToolResults: true,
     featured: false,
-    // Shares the kimi OAuth account: the login flow and credential store are keyed by
-    // oauthId, so adding this preset after logging into kimi needs no second login.
+    // Listed in the add-provider picker (#8087). It is not an OAUTH_PROVIDERS login, so the
+    // Accounts tab still draws Kimi once; the row signs in through src/oauth/credential-siblings.ts.
+    dashboardPreset: true,
+    // Shares the kimi OAuth account: OAUTH_CREDENTIAL_SIBLINGS maps this row to the kimi
+    // auth-store slot, so adding this preset after logging into kimi needs no second login.
     oauthId: "kimi",
     jawcodeBundle: "moonshot",
     note: "Same Kimi account login, routed over the OpenAI Responses wire. Thinking content stays encrypted server-side; tool calls and results stay visible. Chat wire remains the default preset for transparency.",
@@ -1105,6 +1130,9 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
       // Listed 2026-09-29 as an OpenAI-backed route like GPT-6 Sol.
       "openai/gpt-6.1-sol": true,
       "openai/gpt-6.1-terra": true,
+      // Listed 2026-11-18 as OpenAI-backed routes like GPT-6.1 Sol.
+      "openai/gpt-6.2-sol": true,
+      "openai/gpt-6.2-astra": true,
     },
     // Deliberately no OpenRouter route pin: it bills the endpoint actually used and reports the
     // actual service_tier. B0 confirmation therefore owns downgrade safety. Forcing `only` plus
@@ -1214,26 +1242,22 @@ export const PROVIDER_REGISTRY_CORE: readonly ProviderRegistryEntry[] = [
   {
     id: "google", label: "Google Gemini", adapter: "google", baseUrl: "https://generativelanguage.googleapis.com", authKind: "key", featured: true,
     dashboardUrl: "https://aistudio.google.com/apikey", defaultModel: "gemini-3.5-flash", models: ["gemini-4-argon", "gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-pro-preview", "gemini-3.7-flash"],
-    modelContextWindows: { "gemini-4-argon": 1_048_576, "gemini-3.8-flash": 1_048_576, "gemini-3.6-flash": 1_048_576, "gemini-3.5-flash": 1_000_000, "gemini-3.5-flash-lite": 1_048_576, "gemini-3.7-flash": 1_048_576 },
-    modelInputModalities: { "gemini-4-argon": ["text", "image"], "gemini-3.8-flash": ["text", "image"], "gemini-3.6-flash": ["text", "image"], "gemini-3.5-flash-lite": ["text", "image"], "gemini-3.7-flash": ["text", "image"] },
-    modelReasoningEfforts: {
-      // 3.7 and 3.8 omit `minimal`: Google documents it as a validation error on both model
-      // pages, so advertising it hands the user a rung the API rejects. 3.5/3.6 keep theirs —
-      // their pages still list it, and this unit has no evidence to change them.
-      // Gemini 4 Argon (GA 2026-10-13): low/medium(default)/high; `minimal` and thinking_budget
-      // return HTTP 400 per ai.google.dev/gemini-api/docs/models/gemini-4-argon.
-      "gemini-4-argon": ["low", "medium", "high"],
-      "gemini-3.8-flash": ["low", "medium", "high"],
-      "gemini-3.7-flash": ["low", "medium", "high"],
-      "gemini-3.6-flash": ["minimal", "low", "medium", "high"],
-      "gemini-3.5-flash": ["minimal", "low", "medium", "high"],
-      "gemini-3.1-pro-preview": ["low", "medium", "high"],
-    },
+    modelContextWindows: { "gemini-4-hydrogen": 1_048_576, "gemini-4-carbon": 1_048_576, "gemini-4-argon": 1_048_576, "gemini-3.8-flash": 1_048_576, "gemini-3.6-flash": 1_048_576, "gemini-3.5-flash": 1_000_000, "gemini-3.5-flash-lite": 1_048_576, "gemini-3.7-flash": 1_048_576 },
+    modelInputModalities: { "gemini-4-hydrogen": ["text", "image"], "gemini-4-carbon": ["text", "image"], "gemini-4-argon": ["text", "image"], "gemini-3.8-flash": ["text", "image"], "gemini-3.6-flash": ["text", "image"], "gemini-3.5-flash-lite": ["text", "image"], "gemini-3.7-flash": ["text", "image"] },
+    modelReasoningEfforts: { ...GEMINI_MODEL_REASONING_EFFORTS },
+    modelDefaultReasoningEfforts: { ...GEMINI_MODEL_DEFAULT_REASONING_EFFORTS },
     jawcodeBundle: "google", extraMetadataAliases: ["gemini"],
   },
   // 2026-07-10: defaultModel is frozen pending Vertex-specific Tier-2 evidence; Gemini API
   // evidence from ai.google.dev does not establish Vertex publisher availability.
-  { id: "google-vertex", label: "Google Vertex AI", adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authKind: "key", dashboardUrl: "https://console.cloud.google.com/vertex-ai", defaultModel: "gemini-3-pro", googleMode: "vertex", jawcodeBundle: "google", extraMetadataAliases: ["gemini-vertex"] },
+  {
+    id: "google-vertex", label: "Google Vertex AI", adapter: "google", baseUrl: "https://aiplatform.googleapis.com", authKind: "key", dashboardUrl: "https://console.cloud.google.com/vertex-ai", defaultModel: "gemini-3-pro", googleMode: "vertex", jawcodeBundle: "google", extraMetadataAliases: ["gemini-vertex"],
+    modelDiscovery: { path: "/v1beta1/publishers/google/models", query: { pageSize: "300" } },
+    modelContextWindows: { "gemini-4-hydrogen": 1_048_576, "gemini-4-carbon": 1_048_576, "gemini-4-argon": 1_048_576, "gemini-3.8-flash": 1_048_576, "gemini-3.6-flash": 1_048_576, "gemini-3.5-flash": 1_048_576, "gemini-3.5-flash-lite": 1_048_576 },
+    modelInputModalities: { "gemini-4-hydrogen": ["text", "image"], "gemini-4-carbon": ["text", "image"], "gemini-4-argon": ["text", "image"], "gemini-3.8-flash": ["text", "image"], "gemini-3.6-flash": ["text", "image"], "gemini-3.5-flash": ["text", "image"], "gemini-3.5-flash-lite": ["text", "image"] },
+    modelReasoningEfforts: { ...GEMINI_MODEL_REASONING_EFFORTS },
+    modelDefaultReasoningEfforts: { ...GEMINI_MODEL_DEFAULT_REASONING_EFFORTS },
+  },
   // Antigravity discovers models with a POST to the CCA `:fetchAvailableModels` RPC, which
   // `buildModelsRequest` already built by hand. Declaring it here changes no request URL — the
   // relative path resolves to the same destination — but it lets `isRegistryModelDiscoveryUrl`

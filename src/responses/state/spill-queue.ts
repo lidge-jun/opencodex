@@ -193,6 +193,7 @@ function spillPayloadForResident(candidate: ResidentResponseState): Parameters<t
   return {
     createdAt: candidate.createdAt,
     ...(candidate.clientThreadId ? { clientThreadId: candidate.clientThreadId } : {}),
+    ...(candidate.replayOwnerKey ? { replayOwnerKey: candidate.replayOwnerKey } : {}),
     items: candidate.items,
     ...(candidate.providerOutputStart !== undefined ? { providerOutputStart: candidate.providerOutputStart } : {}),
     ...(candidate.providers ? { providers: candidate.providers } : {}),

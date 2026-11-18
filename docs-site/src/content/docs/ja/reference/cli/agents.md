@@ -24,19 +24,23 @@ Codex 側の書き込み（`--json` では `codexWebSearch`、それ以外では
 `Codex config:` 行）を報告し、書き込みできなかった場合は `ocx sync` を案内します。
 このフラグは `vision` でも機能します。
 
-### `ocx v2 <status|on|off|mode <v1|default|v2>|threads <n>>`
+### `ocx v2 <status|on|off|mode <v1|default|v2|v2-plaintext>|keep-native-v1 <on|off>|threads <n>|mode-hint <text|--clear>>`
 
-Codex `multi_agent_v2` 機能フラグとスリーステート マルチエージェント サーフェス モードを管理します。
+Codex `multi_agent_v2` 機能フラグと4 状態のマルチエージェント サーフェス モードを管理します。
 
 |サブコマンド |アクション |
 | --- | --- |
 | `status` (デフォルト) |現在の v2 フラグ、マルチエージェント モード、およびスレッドの同時実行性をレポートします。 |
-| `on` | `multi_agent_v2` 機能を有効にし、カタログを再同期します。 |
+| `on` | グローバル `multi_agent_v2` を有効にし、ローカル変更ではカタログを再同期します。v2 ハイブリッドのピンが有効な間は拒否されます。 |
 | `off` | `multi_agent_v2` 機能を無効にし、カタログを再同期します。 |
 | `mode v1` |すべてのモデルを強制的に v1 にし、ネイティブ v2 を無効にして、アクティブなスレッド制限を保持します。 |
 | `mode default` |上流のモデル サーフェス ピンを尊重します。 |
-| `mode v2` |すべてのモデルを強制的に v2 にし、ネイティブ v2 を有効にして、アクティブなスレッド制限を維持します。 |
-| `threads <n>` |アクティブな v1/v2 スレッド制限を少なくとも 1 の整数に設定します。
+| `mode v2` |モデルを v2 にし、スレッド制限を維持します。`keep-native-v1` がオフならグローバル V2 を有効にし、オンならグローバル強制を無効にしてカタログのピンを使います。 |
+| `mode v2-plaintext --acknowledge-plaintext-agent-messages` | 新しいセッションで V2 を選び、グローバル強制を無効にしたまま対象タスクを平文で送信します。開始には `--acknowledge-plaintext-agent-messages` が必要です。 |
+| `keep-native-v1 on\|off` | `mode v2` で ChatGPT ネイティブを v1、ルーティング済みモデルを v2 に保ち、グローバル V2 強制を無効にします。 |
+| `threads <n>` |アクティブな v1/v2 スレッド制限を少なくとも 1 の整数に設定します。 |
+| `mode-hint <text>` | すべてのモデルと effort のプロアクティブ委任ヒントを設定します。 |
+| `mode-hint --clear` | ヒントを削除し、effort に基づく方針に戻します。 |
 
 ```bash
 ocx v2 status
@@ -46,7 +50,7 @@ ocx v2 on
 ocx v2 threads 16
 ```
 
-`mode` サブコマンドは、`multiAgentMode` を opencodex 設定に書き込み、Codex カタログを再同期します。モードとフラグの遷移により、現在の数値スレッド制限が有効な v1/v2 Codex キー間で移動します。移行が失敗すると、元の `config.toml` が復元されます。変更は新しい Codex セッションに適用されますが、実行中のセッションでは固定されたサーフェスが維持されます。
+`mode` サブコマンドは、`multiAgentMode` を opencodex 設定に書き込み、Codex カタログを再同期します。モードとフラグの遷移により、現在の数値スレッド制限が有効な v1/v2 Codex キー間で移動します。移行が失敗すると、元の `config.toml` が復元されます。カタログの変更は新しい Codex セッションに適用され、実行中のセッションは固定されたサーフェスを維持します。ただし平文コンパイラーは既存 V2 セッションの後続の対象リクエストにも現在の設定を適用します。
 
 ## コンボルーティング
 

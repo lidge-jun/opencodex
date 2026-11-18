@@ -1,7 +1,12 @@
 /** Process-local recall of the last completed combo response on an explicit session lane. */
 import { getCombo, targetKey } from "../../combos/types";
 import { captureConfigGeneration, type GenerationContext } from "../../lib/state-store-sweeper";
-import type { OcxConfig, OcxComboTarget } from "../../types";
+import type { OcxComboDefaultEffort, OcxConfig, OcxComboTarget } from "../../types";
+
+/** The effort a JEV decision set for a lane's turn; `null` is its explicit no-effort choice. */
+export interface ComboTurnEffort {
+  effort: OcxComboDefaultEffort | null;
+}
 
 interface ComboRecallEntry {
   comboId: string;
@@ -10,6 +15,8 @@ interface ComboRecallEntry {
   at: number;
   /** UTF-8 size of `responseModel`, the only client-influenced field of unbounded length. */
   bytes: number;
+  /** Present only when a JEV decision, not ordinary Combo policy, set the completed request's effort. */
+  turnEffort?: ComboTurnEffort;
 }
 
 const RECALL_CAPACITY = 256;
@@ -60,6 +67,7 @@ export function rememberComboForLane(
   target: Pick<OcxComboTarget, "provider" | "model">,
   responseModel: string,
   writerGeneration: number,
+  turnEffort?: ComboTurnEffort,
 ): void {
   if (!lane || !comboId || !responseModel.trim()) return;
   // Reject even a same-named recreated owner: its previous in-flight turn is obsolete.
@@ -75,6 +83,7 @@ export function rememberComboForLane(
     responseModel,
     at: Date.now(),
     bytes,
+    ...(turnEffort ? { turnEffort: { effort: turnEffort.effort } } : {}),
   };
   if (liveOwners && !ownsEntry(liveOwners, entry)) return;
   deleteEntry(lane);
@@ -133,6 +142,22 @@ export function recallComboTargetForLane(
     return undefined;
   }
   return { provider: entry.target.provider, model: entry.target.model };
+}
+
+/**
+ * The effort a JEV decision set for the lane's turn, when `target` is the one that completed it.
+ * Freshness and ownership are `recallComboTargetForLane`'s job: a tool-loop pin reads this only
+ * for the target that call just returned, in the same synchronous turn.
+ */
+export function recallComboTurnEffortForLane(
+  lane: string | undefined,
+  comboId: string,
+  target: Pick<OcxComboTarget, "provider" | "model">,
+): ComboTurnEffort | undefined {
+  if (!lane || !comboId) return undefined;
+  const entry = recall.get(lane);
+  if (!entry || entry.comboId !== comboId || targetKey(entry.target) !== targetKey(target)) return undefined;
+  return entry.turnEffort ? { effort: entry.turnEffort.effort } : undefined;
 }
 
 /**

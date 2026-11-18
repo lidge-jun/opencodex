@@ -73,7 +73,9 @@ function purgeMainCodexAccountRuntimeState(): void {
   invalidateCodexWebSocketsForAccount(MAIN_CODEX_ACCOUNT_ID);
 }
 
-function observeMainCodexAccountIdentity(accountId: string): boolean {
+/** One owned complete identity observation; retire the prior account before publishing the new generation. */
+export function observeMainCodexAccountIdentity(accountId: string): boolean {
+  if (!accountId) return false;
   const previousAccountId = observedMainChatgptAccountId;
   observedMainChatgptAccountId = accountId;
   const changed = previousAccountId !== undefined && previousAccountId !== accountId;

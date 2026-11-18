@@ -19,6 +19,7 @@ import {
 } from "../../providers/request-pacing";
 import { withUpstreamHttpVersion } from "../../lib/upstream-http-version";
 import { providerTlsFetch } from "../../lib/provider-tls-profile";
+import { inheritPassiveKeyProof, markPassiveKeyTransparent } from "../../lib/passive-key-fetch-proof";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
 import { configuredOutboundFetch } from "../../lib/proxy-env";
 import { isLoopbackUrl, rewriteUpstream } from "../../plugins/upstream-hooks";
@@ -59,12 +60,14 @@ export type AccountAutoPauseObserver = ((response: Response) => Promise<Response
   physical?: (sameDestination: boolean, headers: Headers) => void;
 };
 /** Init fragment that reports the final send of the observer's attempt; empty when nothing observes. */
-export function physicalSendObserverInit(observer: AccountAutoPauseObserver | undefined, target: string, onPhysicalSend?: () => void): Record<symbol, unknown> {
+export function physicalSendObserverInit(observer: AccountAutoPauseObserver | undefined, target: string, onPhysicalSend?: () => void,
+  onFinalSend?: (sameDestination: boolean, headers: Headers) => void): Record<symbol, unknown> {
   const physical = observer?.physical;
   let noted = false;
-  return physical || onPhysicalSend ? { [PHYSICAL_SEND_OBSERVER]: (destination: string, headers: Headers) => {
+  return physical || onPhysicalSend || onFinalSend ? { [PHYSICAL_SEND_OBSERVER]: (destination: string, headers: Headers) => {
     if (onPhysicalSend && !noted) { onPhysicalSend(); noted = true; }
     physical?.(destination === target, headers);
+    onFinalSend?.(destination === target, headers);
   } } : {};
 }
 export function physicalSendGuardInit(guard: (destination: string, headers: Headers) => void): Record<symbol, unknown> {
@@ -332,6 +335,7 @@ export function providerFetch(
     (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) => configuredOutboundFetch(input, init),
     { preconnect: globalThis.fetch.preconnect?.bind(globalThis.fetch) },
   ) as typeof globalThis.fetch);
+  markPassiveKeyTransparent(configuredFetch);
   const base = customExecutor ?? configuredFetch;
   const transport = options.providerName ? providerTlsFetch(options.providerName, provider, base) : base;
   const preconnect = (...args: Parameters<typeof globalThis.fetch.preconnect>): void => {
@@ -352,6 +356,7 @@ export function providerFetch(
       sendWithConnectionPolicy(transport, input, init, egressBinding),
     { preconnect },
   ) as typeof globalThis.fetch);
+  inheritPassiveKeyProof(dispatch, transport);
   const httpFetch = Object.assign(
     async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit,
       reacquirePacing?: (provider: OcxProviderConfig, modelId?: string) => Promise<void>,

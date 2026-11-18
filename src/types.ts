@@ -69,6 +69,7 @@ export type {
   AnthropicServerBlocks,
   OcxUrlCitation,
   OcxUsage,
+  PerMessageEffortTurn,
 } from "./types/request";
 
 export type {
@@ -122,6 +123,9 @@ export type {
 
 export type {
   RefreshPolicy,
+  CacheAffinityMode,
+  CacheAffinityOutcome,
+  CacheAffinityLogReason,
   OpenRouterProviderRouting,
   VercelGatewayRouting,
   ResponsesItemIdRepairConfig,

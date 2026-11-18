@@ -65,6 +65,15 @@ Onay bildiren yıkıcı kaldırma, içe aktarma, kredi tüketimi ve güncelleme
 işlemleri etkileşimsiz kullanımda `--yes` gerektirir. Bayrak açık bir
 katılımdır; atlanması eylemi sessizce onaylamamalıdır.
 
+## Düz metin alt ajan moduna geçiş
+
+Deneysel moda girmek için `ocx v2 mode v2-plaintext --acknowledge-plaintext-agent-messages`
+kullanın. Genel `config set` ve `config import`, yerel mod geçişini özel komut
+yönettiğinden bu moda yeni girişi reddeder. `multiAgentMode: "v2-plaintext"` içeren
+dışa aktarılmış bir yapılandırmayı geri yüklemeden önce onaylı geçişi tamamlayın,
+sonra dosyayı içe aktarın. Zaten etkin modu geri yüklemek, diğer ayarları değiştirmek
+ve moddan çıkmak mümkündür. Bağımsız `plaintextV2AgentMessages` tercihi değişmez.
+
 ## Sürüm ve dahili dağıtım hedefleri
 
 `ocx --version`, `ocx -v` ve `ocx version` betik dostu tek bir sürüm satırı

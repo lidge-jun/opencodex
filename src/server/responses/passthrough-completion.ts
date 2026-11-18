@@ -2,8 +2,8 @@ import type { AdapterRequest } from "../../adapters/base";
 import { formatErrorResponse } from "../../bridge";
 import type { MainQuotaDispatch } from "../../codex/main-account-cache";
 import { isLocalUpstream } from "../../lib/local-upstream";
-import { guardResponseBodyInactivity } from "../../lib/response-body-inactivity";
-import { resolveStallTimeoutMs } from "../../stall-timeout";
+import { guardResponseBodyInactivity, markResponseBodyInactivityGuarded } from "../../lib/response-body-inactivity";
+import { explicitStallTimeoutMs, resolveStallTimeoutMs } from "../../stall-timeout";
 import type { OcxConfig } from "../../types";
 import { recordKeyWireAttemptUsage, usageFromResponsesPayload, type RequestLogContext } from "../request-log";
 import { selectProtocolSafeResetResponse, type ProtocolSafeResetRecovery } from "./combo-stream-preflight";
@@ -17,6 +17,16 @@ export { parseOutboundRequestBody } from "./outbound-request-body";
 
 // A guarded published reset response, mapped to when its selection began holding the head.
 const guardedResetResponses = new WeakMap<Response, number>();
+// A canonical JSON turn's published head, mapped to the wall-clock time its selection began (#8343).
+const bufferedSelectionStarts = new WeakMap<Response, number>();
+
+/**
+ * When reset selection began holding this canonical JSON turn's head, if it ran. The collector's
+ * whole-turn deadline starts there, so the time selection held the head counts against it.
+ */
+export function bufferedResetSelectionStartedAt(response: Response): number | undefined {
+  return bufferedSelectionStarts.get(response);
+}
 
 /**
  * How long a direct stream's head may wait on the original's own inspection.
@@ -69,13 +79,16 @@ export function selectPassthroughResetResponse(
   const openGateway = options.request.url === "https://apis.opengateway.ai/v1/responses"
     && response.status === 200 && response.body !== null;
   const stallMs = resolveStallTimeoutMs(options.config.stallTimeoutSec, { localUpstream: isLocalUpstream(options.request.url) });
+  // The same budget, but reported as a stall only when the operator set it explicitly (#8206).
+  const explicitBudget = explicitStallTimeoutMs(options.config.stallTimeoutSec) > 0;
   const protect = (source: Response): Response =>
-    carryResponseToolOwnership(source, guardResponseBodyInactivity(source, options.signal, stallMs).response);
+    carryResponseToolOwnership(source, guardResponseBodyInactivity(source, options.signal, stallMs, { explicitBudget }).response);
   const quotaOwner = (): MainQuotaDispatch | undefined =>
     admission.authCtx.kind === "main" ? admission.authCtx.mainQuotaDispatch : undefined;
   const originalOwner = quotaOwner();
   let replacementOwner: MainQuotaDispatch | undefined;
   const heldSince = performance.now();
+  const selectionStartedAt = Date.now();
   return selectProtocolSafeResetResponse(protect(response), logCtx, async (error, stage, signal, accepts) => {
     // Recover returns only a validated, fresh body; wrapping earlier would hide its lock state.
     const replacement = await recover(error, stage, signal, accepts);
@@ -90,7 +103,9 @@ export function selectPassthroughResetResponse(
     signal: options.signal,
     maxSelectionMs: stallMs > 0 ? stallMs : undefined,
     onCommit: (published, owner) => {
+      if (stallMs > 0) markResponseBodyInactivityGuarded(published);
       if (openGateway) guardedResetResponses.set(published, heldSince);
+      if (options.delivery === "buffered-json") bufferedSelectionStarts.set(published, selectionStartedAt);
       bindPublishedMainQuotaDispatch(published, owner === "replacement" ? replacementOwner : originalOwner);
     },
   });

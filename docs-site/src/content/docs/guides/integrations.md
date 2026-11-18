@@ -33,6 +33,8 @@ file, and removes it again. Each client below has its own switch:
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | JSON | immediately via file watching | none — keyless loopback |
 | T3 Code | `$T3CODE_HOME/userdata/settings.json` (default `~/.t3/userdata/settings.json`) | JSON | immediately — T3 Code watches the file | non-secret loopback marker |
 
+From the CLI, `ocx integration client enable|disable --client <id>` changes this machine only, like the dashboard toggle. On a Remote Link Home that uses route intent, the change is recorded as the Home's own decision, so `ocx sync` keeps it, and linked Children keep their defaults. To change what Children inherit, use `ocx route to <client> on|off`. On a Remote Link Child a plain toggle is refused and prints the Home command for that device; use `ocx route to <client> off --local` there to opt that Child out. See [Remote Link](/guides/remote-link/#route-clients-per-device).
+
 ## Gentle Shell
 
 Choose **Connect → Gentle Shell**, or use the same managed-integration commands:
@@ -264,7 +266,7 @@ Prime Agent follows `PRIME_AGENT_CODING_AGENT_DIR` before falling back to
 disagree about which file is meant. Its managed block owns only
 `providers.opencodex`, so other providers and any `modelOverrides` you have set
 stay untouched. Prime Agent reads `models.json` when a session starts, so start
-a new session after connecting it.
+a new session after connecting it. The generated block sets `compat.supportsDeveloperRole` to `false`, so the agent sends its system prompt as `system`; several OpenAI-compatible upstreams reject `developer` with a 400.
 
 Aside keeps a separate model catalog for each registered profile, including local profiles. OpenCodex lists
 all registered profiles, including local profiles, and can synchronize them together or control
@@ -273,7 +275,7 @@ Aside connection enables all profiles by default; individual exclusions survive 
 
 One caveat specific to Aside: the running app rewrites `models.json` itself, so
 fully quit and reopen Aside after applying, the same way Claude Desktop needs a
-restart. Aside's block is loopback-only and never carries a real credential.
+restart. Aside's block is loopback-only and never carries a real credential. The generated block sets `compat.supportsDeveloperRole` to `false`, so the agent sends its system prompt as `system`; several OpenAI-compatible upstreams reject `developer` with a 400.
 
 The managed Raycast integration supports **macOS and Windows**. Custom Providers
 is a **Raycast Pro** feature: on a free plan the file is still written, but

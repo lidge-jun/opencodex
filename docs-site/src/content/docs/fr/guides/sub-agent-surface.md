@@ -16,18 +16,19 @@ Choisissez le mode pour les **nouvelles sessions**. Les sessions existantes cons
 
 | Mode | Ce que Codex obtient | Qui devrait le choisir |
 | --- | --- | --- |
-| **v1** | Outils classiques avec espace de noms `spawn_agent`, `send_input`, `resume_agent` et `close_agent`. Un spawn peut sélectionner directement un autre modèle. | Les débutants qui ont besoin d'une délégation fiable entre différents fournisseurs, en particulier les enfants natifs vers routés. |
-| **base** (par défaut) | Paramètres de modèle en amont : GPT-5.6 Sol/Terra utilisent la v2, Luna utilise la v1, et les modèles non définis explicitement suivent l’indicateur de fonctionnalité `multi_agent_v2` de Codex. | La plupart des utilisateurs. Ce mode respecte la surface prévue par Codex pour chaque modèle, sans en imposer une globalement. |
+| **v1** (par défaut pour une nouvelle installation) | Outils classiques avec espace de noms `spawn_agent`, `send_input`, `resume_agent` et `close_agent`. Un spawn peut sélectionner directement un autre modèle. | Les débutants qui ont besoin d'une délégation fiable entre différents fournisseurs, en particulier les enfants natifs vers routés. |
+| **base** | Paramètres de modèle en amont : GPT-5.6 Sol/Terra utilisent la v2, Luna utilise la v1, et les modèles non définis explicitement suivent l’indicateur de fonctionnalité `multi_agent_v2` de Codex. | La plupart des utilisateurs. Ce mode respecte la surface prévue par Codex pour chaque modèle, sans en imposer une globalement. |
 | **v2** | Outils plats `spawn_agent`, `send_message`, `followup_task`, `interrupt_agent` et liste d'agents, avec sessions simultanées. | Utilisateurs souhaitant utiliser le flux de travail simultané le plus récent et comprenant l'héritage de modèle et la limitation des tâches chiffrées ci-dessous. |
+| **v2-plaintext** | V2 | Sélectionne V2 pour les nouvelles sessions et transmet les tâches admissibles en clair sans priorité globale. L’entrée exige `--acknowledge-plaintext-agent-messages`. |
 
 En **v2**, l'option facultative **Garder ChatGPT sur v1** (`keepNativeChatGptOnV1`) laisse Sol/Terra
 sur la surface v1 afin qu'ils puissent encore lancer Grok ou Claude. Les parents natifs ChatGPT
 chiffrent les corps `NEW_TASK` v2 ; les modèles routés ne peuvent pas les lire. Les parents routés
 restent sur v2, où les tâches enfants sont en texte clair. C'est un interrupteur *à l'intérieur*
-de v2, pas un quatrième mode de catalogue. CLI : `ocx v2 mode v2` puis `ocx v2 keep-native-v1 on`.
+de v2, distinct du mode `v2-plaintext`. CLI : `ocx v2 mode v2` puis `ocx v2 keep-native-v1 on`.
 
 :::tip[Pas sûr ?]
-Commencez par **base**. Choisissez **v1** lorsque la délégation entre fournisseurs doit fonctionner de manière prévisible. Forcer **v2**
+Commencez par **v1**, le mode par défaut d’une nouvelle installation, pour une délégation prévisible entre fournisseurs. Choisissez **base** pour suivre les paramètres en amont. Forcer **v2**
 uniquement lorsque vous souhaitez spécifiquement son modèle de session le plus récent dans chaque entrée de catalogue.
 :::
 
@@ -207,6 +208,10 @@ canoniques pour les tâches chiffrées.
 - **Tableau de bord** → **Délégation de sous-agent** : définissez les conseils model/effort et l'activation explicite natif par défaut.
 - **Sous-agents** : choisissez et ordonnez la liste, puis configurez la chaîne de repli globale.
 
+Le champ expérimental `plaintextV2AgentMessages` est absent d’une configuration neuve. La valeur explicite `true` ou le mode distinct `v2-plaintext` active le compilateur ; quitter ce mode conserve la préférence indépendante. Le mode fixe V2 au catalogue pour les nouvelles sessions sans priorité globale, mais le compilateur suit le réglage actuel pour les requêtes admissibles ultérieures, y compris dans les sessions V2 existantes. Il ne déchiffre pas les tâches existantes et ne réécrit pas l’historique ; sa désactivation ne supprime pas les copies conservées.
+
+La requête doit utiliser Responses et la destination finale le transport ChatGPT Codex canonique : `adapter: "openai-responses"`, `authMode: "forward"` et `https://chatgpt.com/backend-api/codex`. Les fournisseurs à clé API OpenAI, passerelles compatibles personnalisées, autres destinations et clients non Responses sont exclus. Pour les appels V2 admissibles, le compilateur traite `spawn_agent`, `send_message` et `followup_task` sans requête de récupération supplémentaire. HTTPS reste chiffré, mais le texte peut être conservé dans l’historique Codex, les requêtes des fournisseurs routés et l’état local de réponse ou de débogage. Voir [messages d’agent v2 en clair](/reference/configuration/agents/#plaintext-v2-agent-messages).
+
 ### CLI
 
 Utilisez `ocx v2` pour les paramètres de la surface de collaboration et des fonctionnalités natives :
@@ -216,6 +221,7 @@ ocx v2 status
 ocx v2 mode v1
 ocx v2 mode default
 ocx v2 mode v2
+ocx v2 mode v2-plaintext --acknowledge-plaintext-agent-messages
 ocx v2 keep-native-v1 on
 ocx v2 keep-native-v1 off
 ocx v2 threads 8

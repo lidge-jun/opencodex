@@ -10,6 +10,21 @@ import type { AnthropicAccountPoolConfig } from "./anthropic-account-pool";
  */
 export type RefreshPolicy = "proactive" | "lazy-only" | "disabled";
 
+/**
+ * Per-provider conversation affinity to the credential that served a conversation's
+ * last turn, so that credential's upstream prompt cache is read again instead of
+ * rebuilt on another key. `auto` keeps a binding only while the cache it built is
+ * measured to be worth keeping and still warm; `session` keeps it while the
+ * credential stays eligible; `turn` only across immediate continuations; `off`
+ * disables binding entirely. See src/providers/cache-affinity.ts.
+ */
+export type CacheAffinityMode = "auto" | "session" | "turn" | "off";
+
+/** Provider cache-affinity outcome recorded on a request-log row. */
+export type CacheAffinityOutcome = "kept" | "bound" | "released";
+/** Why that outcome happened; mirrors the store's keep reasons plus lifecycle outcomes. */
+export type CacheAffinityLogReason = "cache" | "session" | "turn" | "continuation" | "new" | "quota" | "auth";
+
 /** Request-owned identity of the configured key, before env/keychain resolution. */
 export interface ProviderApiKeySelection {
   entryId?: string;
@@ -17,6 +32,10 @@ export interface ProviderApiKeySelection {
   revision?: string;
   /** Request-local allocation; does not replace the saved active key. */
   distributed?: boolean;
+  /** Request-local cache-affinity pick; survives selection re-reads while its entry stays live. */
+  cacheAffinity?: boolean;
+  /** Opaque process-local credential and destination generation for an affinity pick. */
+  cacheAffinityGeneration?: string;
 }
 
 export interface OpenRouterProviderRouting {
@@ -946,6 +965,11 @@ export interface OcxProviderConfig {
    */
   messagePhaseInference?: boolean;
   /**
+   * Opt-in (#7427): on a native Responses route, add estimated `usage` to a completed response the
+   * provider sent without one, marked by `x-opencodex-usage-estimated`. Never used for cost, spend or quota.
+   */
+  estimateMissingUsage?: boolean;
+  /**
    * Opt-in hosted-web-search bridge for this KEY-auth Responses passthrough provider (#3761).
    * Absent or disabled leaves the passthrough byte-identical to today.
    */
@@ -1072,6 +1096,14 @@ export interface OcxProviderConfig {
    */
   promptCacheKey?: boolean;
   /**
+   * Conversation affinity to the key-pool credential that served a conversation's
+   * last turn, so its upstream prompt cache is read again on the next turn instead
+   * of rebuilt on another key. Only affects providers with 2+ key-pool entries;
+   * eligibility (cooldowns, pacing, disabled keys) always outranks the preference.
+   * Default `auto`. See src/providers/cache-affinity.ts.
+   */
+  cacheAffinity?: CacheAffinityMode;
+  /**
    * Opt-in: forward caller `service_tier` values to the upstream `/chat/completions` body.
    * On a classified route it governs foreign values (for example `flex`), not proxy-owned
    * canonical Fast after capability validation. On an unclassified route it governs every caller
@@ -1186,6 +1218,14 @@ export interface OcxProviderConfig {
    * the `advisor-tool-2026-03-01` beta too. `false`: never forwarded, even first-party.
    */
   forwardAdvisorTool?: boolean;
+  /**
+   * Experimental, default off (#6895). On an `anthropic`-adapter provider that sends to
+   * `api.anthropic.com` with an API key, a Codex conversation that changes reasoning effort keeps
+   * the top-level `output_config.effort` at its first turn's value and sends each change as an
+   * effort-only system message (beta `mid-conversation-output-config-2026-07-01`), so the prompt
+   * cache survives the change. Any turn the history cannot prove is sent exactly as without it.
+   */
+  perMessageEffort?: boolean;
   /**
    * Model ids that do NOT accept image inputs. The proxy gives them "eyes" via the vision sidecar:
    * attached images are described by a gpt vision model and replaced with text before the call.

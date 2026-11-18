@@ -236,6 +236,9 @@ describe("main quota policy at native admission", () => {
       const belowHardLock = scenario === "owned-97";
       const quota = { weeklyPercent: scenario === "owned-97" ? 97 : scenario === "owned-98" ? 98 : 99,
         updatedAt: Date.now() - 7 * 60 * 60_000 };
+      // The first refusal on the hours-old restored tuple reads usage once (#8113); the fixture
+      // answers with a reading that still blocks, which then replaces the restored tuple.
+      const freshBlock = expect.objectContaining({ shortPercent: 99, weeklyPercent: 99 });
       const identityKey = createHash("sha256").update("opencodex-main-quota-v1\0").update(restoredId).digest("hex");
       if (scenario.startsWith("invalid-") || scenario === "mismatched-identity") {
         writeFileSync(join(home, "auth.json"), JSON.stringify({ tokens: {
@@ -278,6 +281,8 @@ describe("main quota policy at native admission", () => {
       expect(result.before).toMatchObject({ matched: false, policy: null, tokenReads: 0 });
       expect(result.listeners[0].tokenReads).toBe(0);
       expect(result.unexpectedNetwork).toEqual([]);
+      // Only a hard-lock refusal reads usage, once, because the restored reading is hours old.
+      expect(result.usageReads).toBe(result.response.hardLockError ? 1 : 0);
       expect(result.policyReadsPinned).toBe(true);
       expect(result.beforePrimaryUpstreamCalls).toBe(scenario === "retained-unknown-binding" ? 3 : 0);
       const unowned = scenario === "foreign" || scenario === "unknown";
@@ -298,7 +303,9 @@ describe("main quota policy at native admission", () => {
         expect(result.response.status).toBe(200);
         expect(result.primaryUpstreamCalls).toBe(1);
       } else {
-        expect(result.after).toMatchObject({ matched: true, policy: quota });
+        // Only retained-unknown-binding refuses before `after` is observed.
+        expect(result.after).toMatchObject({ matched: true,
+          policy: scenario === "retained-unknown-binding" ? freshBlock : quota });
         expect(result.response.status).toBe(belowHardLock ? 200 : 429);
         expect(result.primaryUpstreamCalls).toBe(belowHardLock ? 1 : 0);
         if (!belowHardLock) expect(result.response.hardLockError).toBe(true);
@@ -341,8 +348,8 @@ describe("main quota policy at native admission", () => {
       if (scenario === "retained-unknown-binding") {
         expect(result.retainedUnknown.map((entry: { kind: string }) => entry.kind))
           .toEqual(["malformed", "conflicting", "conflicting-tokens"]);
-        for (const entry of result.retainedUnknown) {
-          expect(entry.observed).toMatchObject({ matched: true, policy: quota });
+        for (const [index, entry] of result.retainedUnknown.entries()) {
+          expect(entry.observed).toMatchObject({ matched: true, policy: index === 0 ? quota : freshBlock });
           expect(entry.main).toMatchObject({ status: 429, hardLockError: true });
           expect(entry.other.status).toBe(200);
         }

@@ -7,6 +7,8 @@ description: opencodex 控制平面的認證、錯誤與端點參考。
 
 使用[網頁儀表板](/zh-tw/guides/web-dashboard/)作為互動式客戶端，或在建構自動化時使用此參考。持久值最終遵循[設定](/zh-tw/reference/configuration/)。
 
+<a id="authentication-model"></a>
+
 ## 認證模型
 
 管理 API 有自己的管理憑證，獨立於 data-plane API 金鑰。在啟動時，opencodex 依此順序解析它：
@@ -81,7 +83,7 @@ Session 簽發在需要 data-plane 認證時停用，這包含遠端綁定。遠
 
 在 **Providers > xAI Grok > Accounts** 中，每個帳號的票券徽章可查看剩餘優惠券及有效期間。對話框送出客戶端產生的 `operationId`。請求送達或結果不確定時，儀表板會在瀏覽器分頁工作階段期間保留同一次嘗試，關閉並重新開啟對話框、切換頁面或重新載入後也會保留。該記錄在送出請求之前寫入，只有收到同一 `operationId` 的確定回應時才會清除。重新整理只送出 GET，不允許額外的兌換 POST。對應的終端指令是 `ocx account grok-reset-coupons`。
 
-Claude 用量重設也可從 **Providers > Anthropic > Accounts** 以相同方式操作。每個已登入帳號列都有票券徽章，顯示剩餘重設次數；對話框會在第二次確認後使用一次重設機會。重設會補滿 5 小時與每週額度，但不會改變每週重設日。如果使用請求未收到回應，對話框會保留其 `operationId`，並在十分鐘內提供使用相同 ID 重試的選項；Claude Code 用戶端也以此方式復原。在此期間，系統會拒絕對同一重設機會發起新操作。重設機會只能透過儀表板使用：僅持有管理員權杖會收到 `403 session_required`。
+Claude 用量重設也可從 **Providers > Anthropic > Accounts** 以相同方式操作。每個已登入帳號列都有票券徽章，顯示剩餘重設次數；對話框會在第二次確認後使用一次重設機會。每個重設機會的過期時間與可重設的額度各不相同，因此對話框可選擇要使用的重設機會：預設選取目前可用且最先過期的一個，目前無法使用的會顯示為停用並註明原因；確認步驟會顯示所選重設機會的名稱、過期時間與可重設的額度，再送出對應的 `grantId`。伺服器會再次檢查所選重設機會，無法使用時以 `409 grant_not_usable` 拒絕。重設會補滿該重設機會可重設的額度（通常是 5 小時與每週額度），但不會改變每週重設日。如果使用請求未收到回應，對話框會保留其 `operationId`，並在十分鐘內提供使用相同 ID 重試的選項；Claude Code 用戶端也以此方式復原。在此期間，系統會拒絕對該帳號發起任何新操作（無論哪個重設機會）。重設機會只能透過儀表板使用：僅持有管理員權杖會收到 `403 session_required`。
 
 關於模型名冊與加密 worker-task 行為背後的概念，請見[子代理介面](/zh-tw/guides/sub-agent-surface/)。
 

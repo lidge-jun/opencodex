@@ -515,8 +515,13 @@ Retrying only the same ID cannot recover missing state.
 The same refusal applies when the referenced state belongs to a different client task scope,
 including when the new request appears to carry complete input. The proxy cannot prove that input
 is complete, so it does not silently remove `previous_response_id` or reveal whether matching state
-exists. Retry with the complete conversation and omit `previous_response_id`; matching scopes and
-legacy continuations where both scopes are absent or blank continue to replay normally.
+exists. When `v2-plaintext` mode or the `plaintextV2AgentMessages` flag is enabled, local replay requires the same admitted OpenCodex caller and the request's own nonblank
+`thread-id`; a parent thread, loopback address, upstream credential, or placeholder key is not
+that identity. Clients without an admitted caller principal and requests without their own thread must resend the complete
+conversation without `previous_response_id`. The default loopback Codex and DSH configurations
+do not establish that caller identity. State retained while either setting is enabled remains bound after disabling it.
+Default `v1` keeps the existing parent-thread-scoped continuation behavior for unbound state,
+including default loopback callers. This is separate from native upstream-owned Responses IDs.
 
 The same recovery signal applies to every routed destination, because only the native Responses
 passthrough can answer a turn whose history this proxy lost — it forwards `previous_response_id`
@@ -1138,6 +1143,26 @@ script wrappers; uninstall restores the saved launcher. See the
 trial while retaining the native Codex login. This is an experimental relay, not a guarantee
 that every Codex build or exhausted-account state can recover its composer.
 
+On a standalone local dashboard, first run the command shown in the panel, for example
+`ocx gui pair --desktop --origin http://127.0.0.1:10100`, on the proxy computer and paste
+its secret one-use code. Install the CLI first if `ocx` is unavailable. A private-home
+permission refusal must be resolved before a code can be issued. An ordinary pairing code or
+an already paired dashboard alone does not authorize Desktop actions. The panel exchanges the
+Desktop code for scope on the existing session, then reads `/authorization` to verify it;
+it does not create or replace the browser session. This authorizes Desktop actions for at most
+five minutes in that session; it does not change Remote Link or key-disclosure permissions.
+See [Desktop authorization](/reference/management-api/#desktop-authorization) for the API contract.
+Hub and connected-client Desktop writes are unsupported.
+If authorization is unavailable, use the standalone dashboard directly over HTTP on the proxy
+computer at the configured loopback address and port. If the configured `hostname` is
+`localhost` or a non-loopback address such as `0.0.0.0`, set it to `127.0.0.1` or `::1` in [config.json](/reference/configuration/), restart the proxy, and reopen the corresponding
+address and port. Other conditions, including forwarding and mismatched ports or sessions, can
+also make authorization unavailable; changing the hostname alone does not resolve those cases.
+A remembered dashboard session cannot redeem a Desktop grant. On the proxy computer, open the same local address and port in a private browser window, return to this panel, and request a new code there. After expiry or logout, reload the local dashboard and authorize again. The panel refreshes
+status, fingerprint and settings revision; select the desired action and consent again.
+It never replays an earlier POST. Certificate expiry or unknown trust does not prevent this
+local HTTP authorization; cleanup, renewal, stopping and turning off startup still require it.
+
 1. Inspect status, prepare the encrypted certificate and review its fingerprint before
    registering trust. Windows may ask for confirmation. Trust applies to the current Windows
    user and allows the local relay to handle `chatgpt.com` traffic.
@@ -1309,18 +1334,20 @@ snapshot:
 Normal picker behavior returns when the 5-hour window resets.
 
 **What the proxy answers while that state holds.** Once the app has collapsed the picker it sends
-`gpt-reserve`, and without the [authless Desktop opt-in](#authless-codex-desktop-opt-in) opencodex
-holds no Reserve entitlement to send with it. That request used to be forwarded as an ordinary
+`gpt-reserve`, and with the [Reserve setting](/reference/cli/providers-accounts/#luna-reserve-alongside-routed-models)
+off opencodex holds no Reserve entitlement to send with it. That request used to be forwarded as an ordinary
 native model and come back as the upstream's own `The usage limit has been reached`, which names
 neither the real cause nor the setting that would change it. It is now refused locally with an HTTP
-400 that says `codexDesktopAuthless` is off and gives the command that turns it on
-(`ocx system settings --desktop-authless on`). Nothing is sent upstream and no quota is spent.
+400 that says the Reserve setting (`codexReserveEnabled`) is off and gives the command that turns it on
+(`ocx system settings --reserve on`). Nothing is sent upstream and no quota is spent.
 
 The refusal is deliberately narrow. It applies only to `gpt-reserve` on a loopback-admitted request
 that would reach the canonical ChatGPT forward route. A `gpt-reserve` selector an operator has
 aliased or routed onto another provider keeps working, a request admitted on a non-loopback listener
-still forwards, and a proxy running in the `client` runtime role is unchanged. Enabling the opt-in
-restores the normal Reserve path rather than the refusal.
+still forwards, and a proxy running in the `client` runtime role is unchanged. Enabling the setting
+restores the normal Reserve path rather than the refusal. The authless Desktop switch no longer
+affects this; see [Luna Reserve alongside routed models](/reference/cli/providers-accounts/#luna-reserve-alongside-routed-models)
+for how an existing install's value carries over.
 
 ## The subagent picker
 

@@ -28,6 +28,20 @@ Every physical attempt retains its own send count and usage. Coverage: `tests/he
 (registered by `tests/server/server-combo-failover-e2e.test.ts`), `tests/server/server-combo-reasoning-replay-eligibility.test.ts`
 and `tests/responses/responses-combo-exhausted-error.test.ts`.
 
+## Unoffered tool-call refusals
+
+`isUnofferedToolCallRefusal` in `src/combos/failover.ts` recognizes the provider verdicts for
+target-local model failures: that a model called a function the request never offered (`The model
+called a function that was not offered in tools.`) alongside the parser control-marker refusal
+(`The model returned an unexpected parser control marker; no output was published.`). The match is
+anchored to each sentence inside a bounded envelope walk — closed code/type/param sets (applied again inside an object-valued `param`), competing
+diagnostic carriers and a contradicting root message all fail closed — so quoted or reflected
+occurrences cannot impersonate the verdict. `consumeComboFailure` classifies the intact bounded body
+and passes the verdict through `unofferedToolCallRefusal`, because the 500-character display prefix
+would leave a long envelope unparseable. Like the other pre-output 400 hops it advances the combo
+without cooling the target: the model hallucinated the call or control marker on this target, the
+request itself fit, and the refusal arrives before any output commits. Coverage: `tests/routing/combo-unoffered-tool-refusal.test.ts`.
+
 ## Buffered required-tool contract
 
 Before selection, `src/server/responses/core-combo.ts` excludes resolved Meta Responses destinations
@@ -146,6 +160,8 @@ resend gate decides. Control frames (`response.in_progress`, `response.queued`,
 not advance the stage. Once output commits the stream or a terminal ends inspection, a later read
 error belongs to the relay and never reaches the resend gate. A lifecycle event with output, an error, incomplete details, a contradictory
 status, a replay-unsafe mark, unknown event or snapshot fields, or unsafe nested metadata commits the original stream.
+Snapshot selector types are validated without coercion. A replay-classification exception also
+commits the original stream, preserving its bytes and preventing a replacement attempt.
 An SSE event name that conflicts with its JSON type, an opaque frame,
 or an unfinished output/error/terminal frame on a rejected read also keeps the original bytes and
 read error; the last SSE event field is authoritative. A clean EOF before output or a terminal is offered only to the native reset recovery
@@ -195,7 +211,7 @@ comment, cannot extend it, and the reset gate never resends a guard timeout. For
 JSON, the collector reports the guard's failure as a stall timeout. The hold emits a comment only when
 it reads non-empty upstream bytes or a replacement head lands behind a committed head, so the collector's own clock, which starts after
 selection and sees only delivered bytes, never ends a turn before the guard would. The byte and chunk
-caps and the collector's whole-turn ceiling remain in force.
+caps and the collector's whole-turn ceiling remain in force. That ceiling runs from the moment selection began holding the head (`bufferedResetSelectionStartedAt` in `src/server/responses/passthrough-completion.ts`), so the selection wait counts against it while sends before selection do not (#8343).
 Downstream cancellation or the request's abort signal ends the selection or hold at once, aborts an
 in-flight replacement, and never awaits upstream cleanup.
 
@@ -217,7 +233,8 @@ in-flight replacement, and never awaits upstream cleanup.
   may advance while errors explicitly classified as non-retryable 4xx remain committed;
   a bare error with no status field of its own but an integral numeric `code` in 400..599 takes
   that code as its HTTP status (`bareErrorStatus`), so it gets the same decision and cooldown scope
-  as the same HTTP response; non-integral, out-of-range and string codes keep the symbolic mapping;
+  as the same HTTP response; non-integral, out-of-range and string codes keep the symbolic mapping; an untyped
+  error envelope commits the target and the relay reports its eventual failure without replay;
 - another completed/incomplete terminal or the aggregate preflight byte or retained-chunk cap is reached,
   in which case the current target is committed conservatively.
 
@@ -240,6 +257,7 @@ after the ladder returns, until completion or cancellation. Buffered/exhausted e
 ladder binding in `finally`. `tests/server/server-combo-zero-output-failover.test.ts` covers failover,
 accepted stream lifetime, cancellation, and exactly-once attached-lease release.
 Plain admission leases without controller binding do not register or unregister a ladder controller.
+
 Reasonless incomplete snapshots containing output items stay committed; an explicit `reason: null`
 also stays terminal. `tests/routing/combo-stream-preflight.test.ts` pins these conservative boundaries.
 Hop warnings in `src/server/responses/core-combo.ts` name the status and the closed condition from
@@ -267,6 +285,36 @@ deprecated, sunset, decommissioned, or no longer available). An unrelated applic
 not retried.
 
 > Decision record: [ADR-0071](../decisions/ADR-0071-combo-streaming-commit-boundary.md)
+
+## Combo selection keepalive
+
+A streaming combo selection can outlast an intermediary's idle limit while preflight holds every
+child head (#8326). `handleComboResponses` in `src/server/responses/core.ts` therefore runs the ladder
+through `selectComboWithKeepalive` (`src/server/responses/combo-selection-keepalive.ts`) when
+`comboSelectionKeepaliveApplies` holds: `stream: true`, the `comboSelectionKeepalive` option that only
+the HTTP `/v1/responses` route in `src/server/index/serve-options.ts` sets, no WebSocket transport, a
+Responses inbound wire and no internal decision call. Chat and Messages ingresses, WebSocket frames
+and non-streaming turns keep the selected response and its status unconditionally.
+
+If selection settles within `COMBO_SELECTION_KEEPALIVE_THRESHOLD_MS` (15 s), the ladder's own
+response object is returned unchanged, including a rejection, so zero-output failover and the real
+HTTP status of an all-targets failure stay exactly as above. Otherwise a 200 `text/event-stream`
+head is returned whose first read yields `: keepalive`, and another comment is owed every
+`COMBO_SELECTION_KEEPALIVE_INTERVAL_MS` (15 s) until selection settles. Behind that head an accepted
+SSE child is relayed byte for byte; any other outcome becomes one `response.failed` event whose
+`error` and `last_error` carry the failure envelope's `code`, `type` and display-safe message, with
+the original status written to `logCtx.terminalHttpStatus` for the request log. A ladder that throws
+after the head becomes `server_error` with proxy-owned copy and status 502. The chosen child's headers
+and identity markers cannot reach a head that is already committed. The combo ladder lease is
+still released when selection settles, because the keepalive wraps the whole ladder.
+
+The committed head is an unmarked SSE response, so the ingress request-log tap records its terminal;
+`comboSelectionKeepaliveLadderOptions` drops the ingress native-passthrough log callbacks once the
+head is committed so the request is logged once. Cancelling the committed stream aborts the signal
+the ladder runs on, stops the timer and cancels a child body that arrives later. An already aborted
+request never commits a head. The clock is an injected seam; tests advance it manually
+(`tests/routing/combo-selection-keepalive.test.ts`,
+`tests/server/server-combo-selection-keepalive.test.ts`).
 
 ## Upstream account quota exhaustion failover
 

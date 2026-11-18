@@ -11,6 +11,7 @@
  */
 import { findLiveProxy, probeHostname, type LivenessIo, type LiveProxy } from "../server/proxy-liveness";
 import { runningProxyUpdateHeaders } from "../oauth/login-cli";
+import { terminalSafeText } from "../lib/terminal-safe-text";
 import { redactSecretArgs } from "./secret-args";
 import type { LinkHomeDeps } from "../client/link-home";
 export { redactSecretArgs };
@@ -18,6 +19,8 @@ export { redactSecretArgs };
 export type CliStdin = NodeJS.ReadableStream & { isTTY?: boolean; readableEnded?: boolean };
 
 export const MAX_LINK_CREDENTIAL_BYTES = 4 * 1024;
+
+import type { AntigravityRiskSeams } from "../oauth/antigravity-risk";
 
 export interface RuntimeApiDeps {
   baseUrl?: string;
@@ -31,6 +34,8 @@ export interface RuntimeApiDeps {
   findLiveProxy?: (io?: LivenessIo) => Promise<LiveProxy | null>;
   /** Remote Link Child: how allowlisted reads reach the Home (#6957). */
   linkHome?: LinkHomeDeps;
+  /** Test seams for the Google Antigravity acknowledgement (agent detection, prompt visibility). */
+  antigravityRisk?: AntigravityRiskSeams;
 }
 
 export class CliUsageError extends Error {
@@ -503,15 +508,11 @@ export function desktopSwitchApplyReason(reason: unknown): string {
  * connected `ocx sync` refresh both print them -- so the escaping sits beside `printData`, at the
  * one boundary that already separates human output from structured output. Structured output keeps
  * the exact value: escaping is a rendering decision for a tty, not a change to the data.
+ *
+ * Re-exported from `src/lib/terminal-safe-text.ts` because the OAuth device login prints the same
+ * class of untrusted value and importing this module from there would close an import cycle.
  */
-export function terminalSafeText(value: string): string {
-  return value.replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, character => {
-    const code = character.charCodeAt(0);
-    return code <= 0x7f
-      ? `\\x${code.toString(16).padStart(2, "0")}`
-      : `\\u${code.toString(16).padStart(4, "0")}`;
-  });
-}
+export { terminalSafeText };
 
 /**
  * The same rendering for a failure about to be printed or rethrown. The original is kept as

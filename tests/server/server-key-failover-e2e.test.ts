@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,6 +9,7 @@ import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { flushNativeMainStartupReleases } from "../../src/codex/native-profile-startup";
 import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
 import { clearKeyCooldowns, getKeyCooldownUntil, rotateKeyOn429 } from "../../src/providers/key-failover";
+import { clearProviderCacheAffinityForTests } from "../../src/providers/cache-affinity";
 import { deriveXaiConvId } from "../../src/providers/xai-transport";
 import {
   clearReasoningReplayCacheForTests,
@@ -31,6 +32,10 @@ import { providerRequestPacingStatus, resetProviderRequestPacingForTest, setProv
 import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport, commitProviderApiKeySelection } from "../../src/providers/api-key-selection";
 import { routedProviderConfig } from "../../src/router";
 import type { OcxProviderTransport } from "../../src/providers/xai-transport";
+import { SERVER_BUDGET_MS } from "../helpers/test-budget";
+
+// These cases bind real servers and sockets, including their startup and cleanup.
+setDefaultTimeout(SERVER_BUDGET_MS);
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -60,6 +65,7 @@ beforeEach(() => {
   clearKeyCooldowns();
   clearReasoningReplayCacheForTests();
   clearBridgeSearchReplayCacheForTests();
+  clearProviderCacheAffinityForTests();
 });
 
 afterEach(async () => {
@@ -88,6 +94,7 @@ afterEach(async () => {
   clearKeyCooldowns();
   clearReasoningReplayCacheForTests();
   clearBridgeSearchReplayCacheForTests();
+  clearProviderCacheAffinityForTests();
   if (stopFailures.length > 0) throw new AggregateError(stopFailures, "tracked server stop failed in afterEach");
 });
 

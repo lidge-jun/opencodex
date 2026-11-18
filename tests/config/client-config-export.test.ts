@@ -24,6 +24,8 @@ import {
 } from "../../src/clients/config-export";
 import { buildOpencodeProviderBlockFromCatalog, opencodeCatalogFromProxyRows, opencodeGlobalConfigPath } from "../../src/cli/opencode";
 import { exportModelsFromProxyRows } from "../../src/cli/export-command";
+import { attachNestedSelectors } from "../../src/clients/config-export/nested-selectors";
+import { routeModel } from "../../src/router";
 import type { OcxConfig } from "../../src/types";
 import { configSchema } from "../../src/config/schema/config-schema";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -296,6 +298,67 @@ describe("OpenCode V2 block (reasoning-effort variants)", () => {
 });
 
 describe("Pi serializer (accept criterion 2)", () => {
+  test("Pi emits a proven raw nested selector and leaves every unproven row alone", () => {
+    const input = ctx({ models: [
+      { namespaced: "openrouter/openrouter-free", provider: "openrouter", id: "openrouter/free", fastRowAvailable: true,
+        nestedNamespaced: "openrouter/openrouter/free" },
+      { namespaced: "openrouter/org-cold", provider: "openrouter", id: "org/cold" },
+      { namespaced: "provider/chosen-alias", provider: "provider", id: "org/model" },
+      { namespaced: "gpt-5.6-luna", native: true, provider: "openai", id: "gpt-5.6-luna" },
+    ] });
+    const provider = piConfig(input).providers.opencodex!;
+    expect(provider.models.map(model => model.id)).toEqual([
+      "gpt-5.6-luna", "openrouter/openrouter/free", "openrouter/openrouter/free--fast", "openrouter/org-cold",
+      "provider/chosen-alias",
+    ]);
+    expect(buildClientContribution("pi", input).fragments[0]!.value).toEqual(provider);
+    const omo = buildClientConfig("omo", input) as PiGeneratedConfig;
+    expect(omo.providers.opencodex!.models.map(model => model.id)).toEqual([
+      "gpt-5.6-luna", "openrouter/openrouter-free", "openrouter/openrouter-free--fast", "openrouter/org-cold",
+      "provider/chosen-alias",
+    ]);
+  });
+
+  test("a flattened management row exports a Pi selector that routes to the native slug", () => {
+    const config = cfg({ defaultProvider: "openrouter", providers: {
+      openrouter: { adapter: "openai-chat", baseUrl: "https://openrouter.example.test/v1", models: ["openrouter/free"] },
+    } });
+    const models = attachNestedSelectors(config, exportModelsFromProxyRows([
+      { namespaced: "openrouter/openrouter-free", provider: "openrouter", id: "openrouter/free" },
+    ], config));
+    const selector = piConfig(ctx({ models, config })).providers.opencodex!.models[0]!.id;
+    expect(selector).toBe("openrouter/openrouter/free");
+    expect(routeModel(config, selector)).toMatchObject({ providerName: "openrouter", modelId: "openrouter/free" });
+  });
+
+  test("the serving configuration proves a nested selector, or the encoded key stays (#8172)", () => {
+    const nested = (models: string[]) => cfg({ defaultProvider: "acme", providers: {
+      acme: { adapter: "openai-chat", baseUrl: "https://acme.example.test/v1", models },
+    } });
+    const row = { namespaced: "acme/org-model", provider: "acme", id: "org/model" };
+    // Proven: the raw spelling reaches the same concrete model, and so does its Fast row.
+    expect(attachNestedSelectors(nested(["org/model"]), [{ ...row, fastRowAvailable: true }])[0]!.nestedNamespaced)
+      .toBe("acme/org/model");
+    // Cold inventory: the encoded key cannot be decoded, so nothing proves the raw one equivalent.
+    expect(attachNestedSelectors(nested([]), [row])[0]!.nestedNamespaced).toBeUndefined();
+    // A self-namespaced model owns the raw spelling; it must never be handed to the other row.
+    const both = attachNestedSelectors(nested(["org/model", "acme/org/model"]), [
+      row, { namespaced: "acme/acme-org-model", provider: "acme", id: "acme/org/model" },
+    ]);
+    expect(both.map(model => model.nestedNamespaced)).toEqual([undefined, "acme/acme/org/model"]);
+    // Another row already keyed by the raw spelling keeps it; the candidate is withdrawn.
+    const claimed = attachNestedSelectors(nested(["org/model"]), [
+      row, { namespaced: "acme/org/model", provider: "other", id: "model" },
+    ]);
+    expect(claimed[0]!.nestedNamespaced).toBeUndefined();
+    // An explicit alias is not an encoded slug, and a stale candidate never survives a reload.
+    const reloaded = attachNestedSelectors(nested([]), [
+      { namespaced: "acme/chosen", provider: "acme", id: "org/model" },
+      { ...row, nestedNamespaced: "acme/org/model" },
+    ]);
+    expect(reloaded.map(model => model.nestedNamespaced)).toEqual([undefined, undefined]);
+  });
+
   test("models is an array keyed by id, not a keyed object", () => {
     const provider = piConfig().providers.opencodex!;
     expect(Array.isArray(provider.models)).toBe(true);
