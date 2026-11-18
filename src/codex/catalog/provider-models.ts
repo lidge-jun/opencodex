@@ -1,3 +1,4 @@
+import { isXaiGrokOAuth, readXaiLegacyPrivacyError, XAI_LEGACY_PRIVACY_MESSAGE } from "../../providers/xai-privacy-mode";
 import { fetchCopilotAutoModels, copilotPickerModels, copilotRequiresAuto } from "../../providers/github-copilot-auto";
 import { resolveGithubCopilotTransport } from "../../providers/github-copilot-transport";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
@@ -18,18 +19,21 @@ import {
   clearModelCache,
   clearProviderDiscoveryStatus,
   captureModelCacheGeneration,
+  captureProviderDiscoveryObservation,
   observeModelCacheRevision,
   DEFAULT_MODEL_CACHE_TTL_MS,
   getFreshCached,
   getStaleCached,
   isModelsFetchCoolingDown,
   isModelCacheGenerationCurrent,
+  isProviderDiscoveryObservationCurrent,
   markModelsFetchFailure,
   markProviderDiscoveryFailed,
   markProviderDiscoveryOk,
   shouldLogDiscoveryFailure,
   setCached,
   type ProviderModelDiscoveryFailure,
+  type ProviderModelDiscoveryWarningCondition,
 } from "../model-cache";
 import {
   buildModelsRequest,
@@ -726,8 +730,23 @@ export async function fetchProviderModelsWithAuth(
   const urlClass = new URL(url).hostname.endsWith("aiplatform.googleapis.com")
     ? "vertex-aiplatform"
     : "provider-models";
+  const xaiOAuth = isXaiGrokOAuth(name, prov);
+  let discoveryObservation: number | undefined;
+  const canPublishDiscovery = () => isProviderDiscoveryObservationCurrent(name, discoveryObservation);
+  const discoveryFallbackRows = (): { models: CatalogModel[]; fallback: "stale" | "configured" } => {
+    const stale = getStaleCached(name, catalogAuthority);
+    return {
+      models: withConfiguredRetention(
+        stale
+          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir, false))
+          : failedDiscoveryConfigured,
+      ),
+      fallback: stale ? "stale" : "configured",
+    };
+  };
   const failedDiscoveryFallback = (
     failure: ProviderModelDiscoveryFailure,
+    warningCondition?: ProviderModelDiscoveryWarningCondition,
   ): { models: CatalogModel[]; fallback: "stale" | "configured"; shouldLog: boolean } => {
     if (!isCurrentCacheGeneration() || !maySendAnthropicDiscovery()) {
       return {
@@ -739,19 +758,11 @@ export async function fetchProviderModelsWithAuth(
     // Decide logging BEFORE recording the new status, so we can compare against the prior one and
     // suppress an identical repeated failure (#395 log flood). The failure stays observable via the
     // discovery-status API regardless.
-    const shouldLog = shouldLogDiscoveryFailure(name, failure);
+    if (!canPublishDiscovery()) return { ...discoveryFallbackRows(), shouldLog: false };
+    const shouldLog = shouldLogDiscoveryFailure(name, failure, warningCondition);
     markModelsFetchFailure(name, undefined, catalogAuthority);
-    markProviderDiscoveryFailed(name, failure);
-    const stale = getStaleCached(name, catalogAuthority);
-    return {
-      models: withConfiguredRetention(
-        stale
-          ? withVertexDefaultSeed(applyConfigHintsToCachedModels(name, prov, stale, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, metadataConfigDir, false))
-          : failedDiscoveryConfigured,
-      ),
-      fallback: stale ? "stale" : "configured",
-      shouldLog,
-    };
+    markProviderDiscoveryFailed(name, failure, warningCondition, discoveryObservation);
+    return { ...discoveryFallbackRows(), shouldLog };
   };
   try {
     // Canonical-URL TUN transparency for Clash/Surge/Mihomo fake-IP DNS:
@@ -776,6 +787,7 @@ export async function fetchProviderModelsWithAuth(
         headers,
         signal: vertexDeadline ?? AbortSignal.timeout(8000),
       }, outboundDependencies(url));
+    if (xaiOAuth) discoveryObservation = captureProviderDiscoveryObservation();
     const redirectError = await providerRedirectError(res, url);
     if (redirectError) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "http", httpStatus: res.status });
@@ -787,10 +799,15 @@ export async function fetchProviderModelsWithAuth(
       return observed(models, "degraded");
     }
     if (!res.ok) {
-      const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "http", httpStatus: res.status });
+      const privacyRefusal = xaiOAuth && await readXaiLegacyPrivacyError(res);
+      const { models, fallback, shouldLog } = failedDiscoveryFallback(
+        { reason: "http", httpStatus: res.status },
+        privacyRefusal ? "xai-legacy-privacy-mode" : undefined,
+      );
       if (shouldLog) {
+        const guidance = privacyRefusal ? ` ${XAI_LEGACY_PRIVACY_MESSAGE}` : "";
         console.warn(
-          `[opencodex] Provider model discovery for "${name}" failed with HTTP ${res.status} [urlClass=${urlClass}, fallback=${fallback}].`,
+          `[opencodex] Provider model discovery for "${name}" failed with HTTP ${res.status} [urlClass=${urlClass}, fallback=${fallback}].${guidance}`,
         );
       }
       return observed(models, "degraded");
@@ -970,15 +987,20 @@ export async function fetchProviderModelsWithAuth(
         `[opencodex] Provider model discovery for "${name}" returned an authoritative empty catalog; ${droppedConfiguredIds.length > 0 ? `dropping configured model ids: ${droppedConfiguredIds.join(", ")}` : "no models will be exposed"}.`,
       );
     }
-    if (!maySendAnthropicDiscovery() || !setCached(name, forCache, Date.now(), cacheGeneration, catalogAuthority)) {
+    if (!maySendAnthropicDiscovery() || !isCurrentCacheGeneration()) {
       return observed(withConfiguredRetention(configured), "degraded");
     }
-    markProviderDiscoveryOk(name, liveModelCount);
+    if (!canPublishDiscovery()) return observed(discoveryFallbackRows().models, "degraded");
+    if (!setCached(name, forCache, Date.now(), cacheGeneration, catalogAuthority)) {
+      return observed(withConfiguredRetention(configured), "degraded");
+    }
+    markProviderDiscoveryOk(name, liveModelCount, discoveryObservation);
     return observed(returned, "authoritative");
   } catch (error) {
     if (error instanceof ProviderOutboundSendCancelledError) {
       return observed(withConfiguredRetention(failedDiscoveryConfigured), "degraded");
     }
+    if (xaiOAuth) discoveryObservation ??= captureProviderDiscoveryObservation();
     if (error instanceof ProviderOutboundPolicyError) {
       const { models, fallback, shouldLog } = failedDiscoveryFallback({ reason: "blocked" });
       if (shouldLog) {

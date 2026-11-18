@@ -1,15 +1,27 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { handleProviderCommand } from "../../src/cli/provider";
+import { fetchProviderModels } from "../../src/codex/catalog/provider-models";
+import { isComboTargetInCooldown } from "../../src/combos/failover";
+import { fetchProviderQuotaReports } from "../../src/providers/quota";
 import { saveConfig } from "../../src/config";
+import { isNonReplayableResponse } from "../../src/lib/upstream-retry";
 import { XAI_OAUTH_DISCOVERY_URL } from "../../src/oauth/xai";
-import { saveCredential } from "../../src/oauth/store";
+import { getAccountSet, saveCredential } from "../../src/oauth/store";
+import { clearModelCache, getProviderDiscoveryStatus, isModelsFetchCoolingDown, markModelsFetchFailure, MODELS_FETCH_FAILURE_COOLDOWN_MS } from "../../src/codex/model-cache";
 import { XAI_GROK_CLI_BASE_URL } from "../../src/providers/xai-transport";
 import { readUsageEntries, usageLogPath } from "../../src/usage/log";
 import { startServer } from "../../src/server";
+import type { RequestLogContext } from "../../src/server/request-log";
+import { handleResponses } from "../../src/server/responses";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
+import { handleManagementAPI } from "../../src/server/management-api";
+import { ManagementRequest } from "../helpers/management-auth";
+import { withStubbedProviderFetch } from "../helpers/catalog-provider-fetch";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const TOKEN_ENDPOINT = "https://auth.x.ai/oauth/token";
@@ -420,6 +432,401 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
       expect(refreshCalls).toBe(1);
       expect(attemptsByBearer.get("Bearer rejected-access")).toBe(2);
       expect(attemptsByBearer.get("Bearer fresh-access")).toBe(2);
+    } finally {
+      await server.stop(true);
+    }
+  });
+});
+
+describe("xAI OAuth Legacy privacy settings refusal", () => {
+  const guidance = "The xAI account uses Legacy (no storage), which blocks Grok Build. Switch the xAI account to Privacy Mode in the xAI/Grok privacy settings, then retry.";
+  const marker = "[WKE=privacy-mode:legacy]";
+  const privateDetail = "upstream-only fixture detail";
+
+  const privacyError = `${privateDetail} ${marker}`;
+
+  function refuseAt(upstreamPath: string, error = privacyError, fallback?: (init?: RequestInit) => Response,
+    resetReplacement?: () => Response): string[] {
+    const sends: string[] = [];
+    globalThis.fetch = (async (input, init) => {
+      const url = new URL(input instanceof Request ? input.url : String(input));
+      if (url.origin === new URL(XAI_GROK_CLI_BASE_URL).origin) {
+        const path = url.pathname + url.search;
+        if (path === upstreamPath || path === "/v1/billing") {
+          sends.push(path);
+          expect(new Headers(init?.headers).get("authorization")).toBe("Bearer rejected-access");
+          if (resetReplacement) {
+            if (sends.length === 1) {
+              throw Object.assign(new Error("synthetic pre-header reset"), { code: "ECONNRESET" });
+            }
+            return resetReplacement();
+          }
+          return Response.json({ error }, { status: 403 });
+        }
+        if (path === "/v1/models") return Response.json({ data: [{ id: "grok-4.5" }] });
+      }
+      if (url.href === "https://fixture.invalid/v1/chat/completions" && fallback) {
+        sends.push(url.href);
+        return fallback(init);
+      }
+      if (url.protocol === "http:" && url.hostname === "127.0.0.1") return originalFetch(input, init);
+      throw new Error("unexpected outbound request in xAI privacy settings fixture");
+    }) as typeof fetch;
+    return sends;
+  }
+
+  test.each([
+    ["native Chat Completions", "/v1/chat/completions", "/v1/chat/completions", false],
+    ["translated Responses", "/v1/responses", "/v1/chat/completions", false],
+    ["native Responses", "/v1/responses", "/v1/responses", true],
+    ["translated Chat Completions", "/v1/chat/completions", "/v1/responses", true],
+  ] as const)("%s reports fixed privacy guidance without changing account health", async (_, downstream, upstream, nativeResponses) => {
+    await saveCredential("xai", {
+      access: "spare-access",
+      refresh: "spare-refresh",
+      expires: Date.now() + 3_600_000,
+      accountId: "spare-account",
+      source: "oauth",
+    });
+    await seedOAuth();
+    const config = xaiConfig();
+    const provider = config.providers.xai!;
+    if (!nativeResponses) {
+      provider.modelAdapters = { "grok-4.5": "openai-chat" };
+      provider.xaiResponsesDefaultVersion = 1;
+    }
+    provider.accountAutoPause = { enabled: true, consecutiveFailures: 1 };
+    provider.oauthAccountFailover = { enabled: true };
+    saveConfig(config);
+    const accountBefore = getAccountSet("xai");
+    expect(accountBefore?.accounts).toHaveLength(2);
+    const sends = refuseAt(upstream);
+    const server = startServer(0);
+    try {
+      const result = downstream === "/v1/responses" ? await post(server) : await originalFetch(new URL(downstream, server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "xai/grok-4.5", messages: [{ role: "user", content: "hello" }], stream: false }),
+      });
+      expect(result.status).toBe(403);
+      const body = await result.text();
+      expect(JSON.parse(body).error).toMatchObject({ message: guidance, type: "permission_error", code: "permission_denied" });
+      expect(body).not.toContain(privateDetail);
+      expect(body).not.toContain(marker);
+      expect(sends).toEqual([upstream]);
+      expect(getAccountSet("xai")).toEqual(accountBefore);
+      expect(readUsageEntries().at(-1)?.failureCause).toBe("policy-refusal");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test.each([
+    ["translated Responses", "/v1/chat/completions", false, false, "false", "false"],
+    ["native Responses", "/v1/responses", true, false, "false", "false"],
+    ["translated Responses combo", "/v1/chat/completions", false, true, "false", "false"],
+    ["native Responses combo", "/v1/responses", true, true, "false", "false"],
+    ["native Responses combo with an unrecognized retry header", "/v1/responses", true, true, "False", null],
+  ] as const)("%s keeps exact no-retry guidance on a privacy reset replacement", async (_, upstream, nativeResponses, combo, header, expectedHeader) => {
+    await seedOAuth();
+    const config = xaiConfig();
+    const provider = config.providers.xai!;
+    if (!nativeResponses) {
+      provider.modelAdapters = { "grok-4.5": "openai-chat" };
+      provider.xaiResponsesDefaultVersion = 1;
+    }
+    provider.retryOnReset = { enabled: true };
+    if (combo) {
+      config.providers.fixture = {
+        adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key", models: ["fallback"],
+      };
+      config.combos = { "privacy-reset": { strategy: "failover", targets: [
+        { provider: "xai", model: "grok-4.5" }, { provider: "fixture", model: "fallback" },
+      ] } };
+    }
+    saveConfig(config);
+    const sends = refuseAt(upstream, privacyError, () => Response.json({}, { status: 500 }), () =>
+      Response.json({ error: privacyError }, { status: 403, headers: { "x-should-retry": header } }));
+    const release = acquireOwnedSpendHome();
+    try {
+      const logCtx: RequestLogContext = { model: "", provider: "" };
+      const result = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: combo ? "combo/privacy-reset" : "xai/grok-4.5", input: "hello", store: false, stream: false }),
+      }), config, logCtx);
+      expect(sends).toEqual([upstream, upstream]);
+      expect(result.status).toBe(403);
+      expect(isNonReplayableResponse(result)).toBe(true);
+      expect(result.headers.get("x-should-retry")).toBe(expectedHeader);
+      expect(await result.json()).toEqual({
+        error: { message: guidance, type: "permission_error", param: null, code: "permission_denied" },
+      });
+      expect(logCtx.causeHint).toBe("policy-refusal");
+    } finally {
+      release();
+    }
+  });
+
+  test("cancellation during a privacy reset replacement body returns a non-replayable 499", async () => {
+    await seedOAuth();
+    const config = xaiConfig();
+    config.providers.xai!.retryOnReset = { enabled: true };
+    saveConfig(config);
+    const reading = Promise.withResolvers<void>();
+    const releaseBody = Promise.withResolvers<void>();
+    const abort = new AbortController();
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new TextEncoder().encode(JSON.stringify({ error: privacyError })));
+        reading.resolve();
+        // Hold EOF so the classifier is still reading when the caller cancels.
+        return releaseBody.promise;
+      },
+    }, { highWaterMark: 0 });
+    const sends = refuseAt("/v1/responses", privacyError, undefined, () => new Response(body, {
+      status: 403, headers: { "content-type": "application/json", "x-should-retry": "false" },
+    }));
+    const release = acquireOwnedSpendHome();
+    try {
+      const pending = handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "xai/grok-4.5", input: "hello", store: false, stream: false }),
+        signal: abort.signal,
+      }), config, { model: "", provider: "" }, { abortSignal: abort.signal });
+      await reading.promise;
+      abort.abort();
+      const result = await pending;
+      expect(sends).toEqual(["/v1/responses", "/v1/responses"]);
+      expect(result.status).toBe(499);
+      expect(isNonReplayableResponse(result)).toBe(true);
+    } finally {
+      abort.abort();
+      releaseBody.resolve();
+      release();
+    }
+  });
+
+  test.each([
+    [400, "context_length_exceeded", "Please reduce the length of the messages or completion.", null],
+    [429, "rate_limit_exceeded", "weekly usage limit reached", "137"],
+  ] as const)("combo preserves primary HTTP %i recovery after an xAI privacy refusal", async (status, code, message, retryAfter) => {
+    await seedOAuth();
+    const config = xaiConfig();
+    config.providers.fixture = {
+      adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key", models: ["primary"],
+    };
+    const comboId = `privacy-after-${status}`;
+    config.combos = { [comboId]: { strategy: "failover", targets: [
+      { provider: "fixture", model: "primary" }, { provider: "xai", model: "grok-4.5" },
+    ] } };
+    saveConfig(config);
+    const sends = refuseAt("/v1/responses", privacyError, () => Response.json(
+      { error: { message, code, type: status === 400 ? "invalid_request_error" : "rate_limit_error" } },
+      { status, ...(retryAfter ? { headers: { "Retry-After": retryAfter } } : {}) },
+    ));
+    const release = acquireOwnedSpendHome();
+    try {
+      const result = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: `combo/${comboId}`, input: "hello", stream: false }),
+      }), config, { model: "", provider: "" });
+      expect(sends).toEqual(["https://fixture.invalid/v1/chat/completions", "/v1/responses"]);
+      expect(result.status).toBe(status);
+      expect(result.headers.get("Retry-After")).toBe(retryAfter);
+      const error = (await result.json()).error;
+      expect(error.code).toBe(code);
+      expect(error.message).toContain(message);
+    } finally {
+      release();
+    }
+  });
+
+  test.each(["healthy", "disabled", "denied"])("Grok privacy refusal uses combo eligibility with a %s fallback", async fallback => {
+    await seedOAuth();
+    const config = xaiConfig();
+    config.providers.fixture = {
+      adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key",
+      models: ["fallback"], disabled: fallback === "disabled",
+    };
+    const primary = { provider: "xai", model: "grok-4.5" };
+    config.combos = { gated: { strategy: "failover", targets: [
+      primary, { provider: "fixture", model: "fallback" },
+    ] } };
+    saveConfig(config);
+    const sends = refuseAt("/v1/responses", privacyError, init => {
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        model: "fallback",
+        messages: [{ role: "user", content: "hello" }],
+      });
+      if (fallback === "denied") return Response.json({ error: { message: "permission denied" } }, { status: 403 });
+      return Response.json({
+        id: "chat-fallback", object: "chat.completion", model: "fallback",
+        choices: [{ index: 0, message: { role: "assistant", content: "fallback answered" }, finish_reason: "stop" }],
+      });
+    });
+    const server = startServer(0);
+    try {
+      const result = await originalFetch(new URL("/v1/responses", server.url), {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "combo/gated", input: "hello", stream: false }),
+      });
+      if (fallback === "healthy") {
+        expect(result.status).toBe(200);
+        expect(JSON.stringify(await result.json())).toContain("fallback answered");
+      } else {
+        expect(result.status).toBe(403);
+        expect((await result.json()).error?.message).toBe(guidance);
+        expect(readUsageEntries().at(-1)?.failureCause).toBe("policy-refusal");
+      }
+      expect(sends).toEqual(fallback === "disabled" ? ["/v1/responses"] : ["/v1/responses", "https://fixture.invalid/v1/chat/completions"]);
+      expect(isComboTargetInCooldown("gated", primary)).toBe(false);
+      expect(readUsageEntries().at(-1)?.attempts).toHaveLength(fallback === "disabled" ? 1 : 2);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("ocx provider test xai prints privacy guidance for the exact marker", async () => {
+    await seedOAuth();
+    const config = withStubbedProviderFetch(xaiConfig());
+    saveConfig(config);
+    const previousExit = process.exitCode ?? 0;
+    const stderr = spyOn(console, "error").mockImplementation(() => {});
+    const stdout = spyOn(console, "log").mockImplementation(() => {});
+    try {
+      refuseAt("/v1/models");
+      const run = () => handleProviderCommand(["test", "xai"], {
+        baseUrl: "http://127.0.0.1",
+        fetchImpl: (async (input, init) => {
+          const url = new URL(String(input));
+          const response = await handleManagementAPI(new ManagementRequest(url, init), url, config);
+          if (!response) throw new Error("fixture management route not found");
+          return response;
+        }) as typeof fetch,
+      });
+      const printed = () => [...stdout.mock.calls, ...stderr.mock.calls].flat().join("\n");
+      await run();
+      expect(process.exitCode).toBe(1);
+      expect(printed()).toContain(guidance);
+      expect(printed()).not.toContain(privateDetail);
+      stdout.mockClear();
+      stderr.mockClear();
+      refuseAt("/v1/models", "Legacy (no storage). Switch to Privacy Mode. [WKE=privacy-mode:legacy-other]");
+      await run();
+      expect(printed()).toContain("upstream model discovery returned 403");
+      expect(printed()).not.toContain(guidance);
+    } finally {
+      process.exitCode = previousExit;
+      stdout.mockRestore();
+      stderr.mockRestore();
+    }
+  });
+
+  test("catalog discovery logs a new privacy refusal after a generic 403 and deduplicates repeated guidance", async () => {
+    await seedOAuth();
+    const config = withStubbedProviderFetch(xaiConfig());
+    saveConfig(config);
+    clearModelCache("xai");
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      for (const [error, expectedWarnings] of [
+        ["generic permission refusal", 0], [privacyError, 1], [privacyError, 1],
+      ] as const) {
+        markModelsFetchFailure("xai", Date.now() - MODELS_FETCH_FAILURE_COOLDOWN_MS);
+        const sends = refuseAt("/v1/models", error);
+        const models = await fetchProviderModels("xai", config.providers.xai!, 0);
+        expect(sends).toEqual(["/v1/models"]);
+        expect(models.map(model => model.id)).toContain("grok-4.5");
+        expect(getProviderDiscoveryStatus("xai")).toEqual({ status: "failed", reason: "http", httpStatus: 403 });
+        const warnings = warn.mock.calls.flat();
+        expect(warnings.join("\n")).toContain("failed with HTTP 403");
+        expect(warnings.join("\n")).not.toContain(privateDetail);
+        expect(warnings.filter(line => String(line).includes(guidance))).toHaveLength(expectedWarnings);
+      }
+    } finally {
+      warn.mockRestore();
+      clearModelCache("xai");
+    }
+  });
+
+  test("a held xAI discovery 403 body cannot replace a newer discovery success", async () => {
+    await seedOAuth();
+    const config = withStubbedProviderFetch(xaiConfig());
+    saveConfig(config);
+    clearModelCache("xai");
+    const reading = Promise.withResolvers<void>();
+    const releaseBody = Promise.withResolvers<void>();
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    let sends = 0;
+    globalThis.fetch = (async input => {
+      expect(new URL(input instanceof Request ? input.url : String(input)).pathname).toBe("/v1/models");
+      if (++sends !== 1) return Response.json({ data: [{ id: "grok-new-discovery" }] });
+      return new Response(new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          reading.resolve();
+          await releaseBody.promise;
+          controller.enqueue(new TextEncoder().encode(JSON.stringify({ error: privacyError })));
+          controller.close();
+        },
+      }, { highWaterMark: 0 }), { status: 403, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const discover = () => fetchProviderModels("xai", config.providers.xai!, 0);
+    const older = discover();
+    try {
+      await reading.promise;
+      expect((await discover()).map(model => model.id)).toContain("grok-new-discovery");
+      expect(getProviderDiscoveryStatus("xai")).toEqual({ status: "ok" });
+      releaseBody.resolve();
+      expect((await older).map(model => model.id)).toContain("grok-new-discovery");
+      expect({
+        status: getProviderDiscoveryStatus("xai"), cooling: isModelsFetchCoolingDown("xai"),
+      }).toEqual({ status: { status: "ok" }, cooling: false });
+      expect(warn.mock.calls.flat().join("\n")).not.toContain(guidance);
+      await discover();
+      expect(sends).toBe(3);
+    } finally {
+      releaseBody.resolve();
+      await older;
+      warn.mockRestore();
+      clearModelCache("xai");
+    }
+  });
+
+  test("the xAI quota probe reports the settings refusal and skips the monthly fallback", async () => {
+    await seedOAuth();
+    const config = xaiConfig();
+    saveConfig(config);
+    const sends = refuseAt("/v1/billing?format=credits");
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const snapshot = await fetchProviderQuotaReports(config, true);
+      expect(snapshot.reports).toEqual([]);
+      const printed = warn.mock.calls.flat().join("\n");
+      expect(printed).toContain(guidance);
+      expect(printed).not.toContain(privateDetail);
+      expect(sends).toEqual(["/v1/billing?format=credits"]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("native Responses replaces a 17 KiB Legacy privacy error with fixed guidance", async () => {
+    await seedOAuth();
+    saveConfig(xaiConfig());
+    const sends = refuseAt("/v1/responses", `${privateDetail} ${"x".repeat(17 * 1024)} ${marker}`);
+    const server = startServer(0);
+    try {
+      const result = await post(server);
+      expect(result.status).toBe(403);
+      const body = await result.text();
+      expect(body.includes(privateDetail)).toBe(false);
+      expect(body.includes(marker)).toBe(false);
+      expect(JSON.parse(body).error).toMatchObject({ message: guidance, code: "permission_denied" });
+      expect(sends).toEqual(["/v1/responses"]);
     } finally {
       await server.stop(true);
     }
