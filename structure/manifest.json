@@ -1359,7 +1359,8 @@
         "src/service/windows-stop-binding.ts",
         "src/service/windows-stop-budget.ts",
         "src/service/windows-stop-confirm.ts",
-        "src/service/windows-stop-deadline.ts"
+        "src/service/windows-stop-deadline.ts",
+        "src/service/windows-task-instance-stop.ts"
       ]
     },
     {
