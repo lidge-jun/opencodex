@@ -40,7 +40,7 @@ import {
   TRANSLATOR_MAX_TURN_BYTES,
   TranslatorBudgetExceededError,
 } from "../lib/translator-budget";
-import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchConsumerInactivityError, WebSearchStreamProtocolError, WebSearchAdapterEventError } from "../web-search/progress-stream";
+import { parseStreamWithProgress, withHeartbeats, RoutedModelInactivityError, WebSearchConsumerInactivityError, WebSearchStreamProtocolError, WebSearchAdapterEventError } from "../web-search/progress-stream";
 import { fulfillImageCall } from "./fulfill";
 import { parseVideoCallArgs, pollVideoWithHeartbeats, buildVideoResult, createVideoBudget } from "./fulfill-video";
 import { submitVideoJob } from "./xai-video-client";
@@ -778,7 +778,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       let imageReplacement: AdapterRequest | undefined;
       if (deps.imageRecovery && prepared.response.status === 413) {
         headerDeadline.clear();
-        const recovered = await deps.imageRecovery(prepared.response, iterParsed, prepared.responseAdapter, signal);
+        const recovered = yield* withHeartbeats(deps.imageRecovery(prepared.response, iterParsed, prepared.responseAdapter, signal), signal);
         prepared.response = recovered.response;
         imageReplacement = recovered.request;
         if (recovered.response.ok && imageReplacement) {

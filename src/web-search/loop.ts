@@ -37,7 +37,7 @@ import {
   TranslatorBudgetExceededError,
 } from "../lib/translator-budget";
 import { formatWebSearchResults } from "./format-result";
-import { parseStreamWithProgress, RoutedModelInactivityError, WebSearchConsumerInactivityError, WebSearchStreamProtocolError, WebSearchAdapterEventError } from "./progress-stream";
+import { parseStreamWithProgress, withHeartbeats, RoutedModelInactivityError, WebSearchConsumerInactivityError, WebSearchStreamProtocolError, WebSearchAdapterEventError } from "./progress-stream";
 import { WEB_SEARCH_TOOL_NAME } from "./synthetic-tool";
 import { newSidecarSearchCellId, rememberSidecarSearch, restoreSidecarSearchResults } from "./sidecar-search-replay";
 import {
@@ -194,23 +194,6 @@ export function hasVisibleAssistantText(events: AdapterEvent[]): boolean {
 
 async function* replay(events: AdapterEvent[]): AsyncGenerator<AdapterEvent> {
   for (const e of events) yield e;
-}
-
-/**
- * Keeps the Responses bridge alive while an internal sidecar await is pending. Rejections retain
- * their original error, and each timeout is cleared on completion, failure, or generator return.
- */
-async function* withHeartbeats<T>(promise: Promise<T>): AsyncGenerator<AdapterEvent, T> {
-  const tracked = promise.then(value => ({ value }));
-  for (;;) {
-    let timer: number | undefined;
-    const heartbeat = new Promise<undefined>(resolve => { timer = setTimeout(resolve, 1_000); });
-    let result: { value: T } | undefined;
-    try { result = await Promise.race([tracked, heartbeat]); }
-    finally { if (timer) clearTimeout(timer); }
-    if (result) return result.value;
-    yield { type: "heartbeat" };
-  }
 }
 
 function terminalUsage(events: AdapterEvent[]): OcxUsage | undefined {
@@ -834,7 +817,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       let imageReplacement: AdapterRequest | undefined;
       if (deps.imageRecovery && prepared.response.status === 413) {
         headerDeadline.clear();
-        const recovered = yield* withHeartbeats(deps.imageRecovery(prepared.response, iterParsed, prepared.responseAdapter, signal));
+        const recovered = yield* withHeartbeats(deps.imageRecovery(prepared.response, iterParsed, prepared.responseAdapter, signal), signal);
         prepared.response = recovered.response;
         imageReplacement = recovered.request;
         if (recovered.response.ok && imageReplacement) {

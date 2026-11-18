@@ -1,8 +1,8 @@
-import { mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleResponses } from "../../src/server/responses/core";
-import { configureSharedSpendLedger, SPEND_LEDGER_JOURNAL_FILENAME, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
+import { configureSharedSpendLedger, parseSpendJournalRecord, SPEND_LEDGER_JOURNAL_FILENAME, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "./owned-spend-home";
 import { removeTreeWithRetry } from "./remove-tree";
@@ -10,7 +10,6 @@ import { removeTreeWithRetry } from "./remove-tree";
 export const providerName = "anthropic-image-fixture";
 export const target = "https://anthropic-image.example.test/v1/messages";
 export const credential = "synthetic-image-fixture-key";
-const model = "claude-sonnet-4-5";
 const onePixel = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
 export type Lane = "direct" | "search" | "media";
@@ -24,14 +23,17 @@ export interface WireSend {
 export async function fixture(options: {
   enabled?: boolean;
   lane?: Lane;
+  stream?: boolean;
   image?: "large" | "normal" | "none" | "newest-only";
   maxOutputTokens?: number;
+  nativeOpus?: boolean;
+  stallTimeoutSec?: number;
   reasoningDefault?: boolean;
   instructionRole?: "developer" | "system";
   spendCeiling?: number;
   handle: (request: WireSend, index: number, config: OcxConfig) => Response | Promise<Response>;
   requestOptions?: Parameters<typeof handleResponses>[3];
-}): Promise<{ sent: WireSend[]; response: Response; text: string; spendDispatchCount?: number }> {
+}) {
   const home = mkdtempSync(join(tmpdir(), "ocx-image-recovery-"));
   const previousHome = process.env.OPENCODEX_HOME;
   const previousFetch = globalThis.fetch;
@@ -39,12 +41,15 @@ export async function fixture(options: {
   const release = acquireOwnedSpendHome();
   const sent: WireSend[] = [];
   try {
+    const model = options.nativeOpus ? "claude-opus-5-5" : "claude-sonnet-4-5";
+    const urlTarget = options.nativeOpus ? "https://api.anthropic.com/v1/messages" : target;
     const config: OcxConfig = {
       defaultProvider: providerName,
       emptyCompletionRetry: false,
+      stallTimeoutSec: options.stallTimeoutSec,
       providers: {
         [providerName]: {
-          adapter: "anthropic", baseUrl: target, authMode: "key", apiKey: credential, proxy: "direct",
+          adapter: "anthropic", baseUrl: urlTarget, authMode: "key", apiKey: credential, proxy: "direct",
           models: [model],
           ...(options.reasoningDefault ? { modelDefaultReasoningEfforts: { [model]: "high" } } : {}),
           ...(options.enabled === undefined ? {} : { anthropicImageContextRecovery: options.enabled }),
@@ -61,6 +66,7 @@ export async function fixture(options: {
       tools.push({ type: "web_search" });
     }
     if (options.lane === "media") {
+      mkdirSync(join(home, "artifacts"));
       config.images = { bridgeEnabled: true };
       config.providers.xai = { adapter: "openai-responses", baseUrl: "https://api.x.ai/v1",
         authMode: "key", apiKey: "synthetic-unused-media-key", proxy: "direct" };
@@ -70,7 +76,7 @@ export async function fixture(options: {
       const url = input instanceof Request ? input.url : String(input);
       const send = { url, key: new Headers(init?.headers).get("x-api-key"), redirect: init?.redirect, body: String(init?.body) };
       sent.push(send);
-      if (url !== target) throw new Error("Unexpected synthetic image fixture destination");
+      if (url !== urlTarget) throw new Error("Unexpected synthetic image fixture destination");
       return options.handle(send, sent.length, config);
     }) as typeof fetch;
     const imageData = options.image === "large"
@@ -78,7 +84,7 @@ export async function fixture(options: {
       : onePixel;
     const image = { type: "input_image", image_url: `data:image/png;base64,${imageData}` };
     const raw = {
-      model: `${providerName}/${model}`, stream: options.lane !== undefined && options.lane !== "direct",
+      model: `${providerName}/${model}`, stream: options.stream ?? (options.lane !== undefined && options.lane !== "direct"),
       store: false, tools,
       max_output_tokens: options.maxOutputTokens,
       reasoning: options.reasoningDefault ? { effort: "none" } : undefined,
@@ -94,16 +100,19 @@ export async function fixture(options: {
         ] },
       ],
     };
+    const logCtx: Parameters<typeof handleResponses>[2] = { model: "", provider: "" };
     const upstream = await handleResponses(new Request("http://localhost/v1/responses", {
       method: "POST", headers: { "content-type": "application/json", "thread-id": "fixture-image-turn" },
       body: JSON.stringify(raw), signal: options.requestOptions?.abortSignal,
-    }), config, { model: "", provider: "" }, options.requestOptions);
+    }), config, logCtx, options.requestOptions);
     const text = await upstream.text();
+    logCtx.spendTracker?.settle(logCtx.usage);
     const journal = Bun.file(join(home, SPEND_LEDGER_JOURNAL_FILENAME));
-    const spendDispatchCount = options.spendCeiling !== undefined && await journal.exists()
-      ? (await journal.text()).trim().split("\n").filter(line => JSON.parse(line).kind === "dispatch").length
+    const spendRecords = options.spendCeiling !== undefined && await journal.exists()
+      ? (await journal.text()).trim().split("\n").map(parseSpendJournalRecord)
       : undefined;
-    return { sent, response: upstream, text, spendDispatchCount };
+    return { sent, response: upstream, text, spendRecords,
+      spendDispatchCount: spendRecords?.filter(record => record?.kind === "dispatch").length };
   } finally {
     try { release(); } finally {
       globalThis.fetch = previousFetch;
@@ -118,15 +127,28 @@ export function image413(type = "request_too_large"): Response {
   return Response.json({ type: "error", error: { type } }, { status: 413 });
 }
 
-export function completion(text: string, streaming = false): Response {
-  if (!streaming) return Response.json({ content: [{ type: "text", text }], stop_reason: "end_turn",
-    usage: { input_tokens: 10, output_tokens: 2 } });
-  const frame = (type: string, data: Record<string, unknown> = {}) =>
-    `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
+function frame(type: string, data: Record<string, unknown> = {}): string {
+  return `event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`;
+}
+
+export function imageToolCall(): Response {
   return new Response([
-    frame("message_start", { message: { usage: { input_tokens: 10 } } }),
+    frame("message_start", { message: {} }),
+    frame("content_block_start", { index: 0, content_block: { type: "tool_use", id: "toolu_image", name: "image_gen", input: {} } }),
+    frame("content_block_delta", { index: 0, delta: { type: "input_json_delta", partial_json: "{}" } }),
+    frame("content_block_stop", { index: 0 }),
+    frame("message_delta", { delta: { stop_reason: "tool_use" } }),
+    frame("message_stop"),
+  ].join(""), { headers: { "content-type": "text/event-stream" } });
+}
+
+export function completion(text: string, streaming = false, inputTokens = 10, outputTokens = 2): Response {
+  if (!streaming) return Response.json({ content: [{ type: "text", text }], stop_reason: "end_turn",
+    usage: { input_tokens: inputTokens, output_tokens: outputTokens } });
+  return new Response([
+    frame("message_start", { message: { usage: { input_tokens: inputTokens } } }),
     frame("content_block_delta", { index: 0, delta: { type: "text_delta", text } }),
-    frame("message_delta", { delta: { stop_reason: "end_turn" }, usage: { output_tokens: 2 } }),
+    frame("message_delta", { delta: { stop_reason: "end_turn" }, usage: { output_tokens: outputTokens } }),
     frame("message_stop"),
   ].join(""), { headers: { "content-type": "text/event-stream" } });
 }

@@ -15,7 +15,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
  * sends plus one alternate -- by funding the alternate from a reserve that a validated
  * sanitized repair can spend instead, but never both.
  */
-import { sharedSpendPolicy, type SpendSeed, type SpendScopes, type SpendReservationProof, type SpendAdmissionPolicy } from "./spend-reservation-ledger";
+import { sharedSpendPolicy, type SpendSeed, type SpendScopes, type SpendReservationProof, type SpendAdmissionPolicy, type SpendUsage } from "./spend-reservation-ledger";
 import type { TransientSendBudget } from "./upstream-retry";
 
 export type SendClass =
@@ -175,7 +175,13 @@ export interface RequestSendObserver {
   ensureSeed?(target: SpendScopes & { targetKey?: string; auxiliary?: boolean; estimate?: { inputTokens: number; outputCeilingTokens: number }; explicitEstimate?: boolean }, proof?: SpendReservationProof): SpendSeed | undefined;
   /** Release only this tracker's unstarted seed when physical admission refuses it. */
   releaseSeed?(seed: SpendSeed): void;
-  beginReporter?(): { start(seed: SpendSeed, ordinal: number): void; rebindTarget(target: SpendScopes & { targetKey?: string }, ordinal: number): boolean; report(sends: number): void; close(): void };
+  beginReporter?(): {
+    start(seed: SpendSeed, ordinal: number): void;
+    rebindTarget(target: SpendScopes & { targetKey?: string }, ordinal: number): boolean;
+    recordUsage?(ordinal: number, usage: Partial<SpendUsage> | null): void;
+    report(sends: number): void;
+    close(): void;
+  };
   dispatch?(proof: SpendReservationProof): void;
   /** Give back a booking whose send never happened. */
   refund(proof?: SpendReservationProof | null): void;
@@ -377,8 +383,13 @@ export type PhysicalSendReporter = ((sends: number) => void) & {
   close?: () => void;
   execute?: <T>(run: () => Promise<T>) => Promise<T>;
   bind?: (target: SpendScopes & { targetKey?: string }) => boolean;
+  /** Null gives this send exclusive ownership of its usage, even if none arrives. */
+  recordUsage?: (usage: Partial<SpendUsage> | null) => void;
 };
 const activePhysicalReporters = new AsyncLocalStorage<PhysicalSendReporter>();
+export function recordCurrentPhysicalSendUsage(usage: Partial<SpendUsage>): void {
+  activePhysicalReporters.getStore()?.recordUsage?.(usage);
+}
 /** Selection owners rebind this helper's current start before invoking the executor. */
 export function rebindPhysicalSend(budget: TransientSendBudget | undefined, target: SpendScopes & { targetKey?: string }): boolean {
   if (!(budget as RequestExecutionBudget | undefined)?.spendEnforced) return true;
@@ -453,6 +464,9 @@ export function createPhysicalSendReporter(
   report.bind = (selected: SpendScopes & { targetKey?: string }) => {
     if (!producer || currentOrdinal === undefined || observer?.enforced !== true) return true;
     return producer.rebindTarget(selected, currentOrdinal);
+  };
+  report.recordUsage = (usage) => {
+    if (currentOrdinal !== undefined) producer?.recordUsage?.(currentOrdinal, usage);
   };
   report.close = () => {
     if (closed) return;

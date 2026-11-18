@@ -1537,8 +1537,8 @@ function writeFinalRequestLog(
   });
   if (attemptStatus !== undefined && logCtx.activeAttempt) attributePhysicalAttempt(logCtx.activeAttempt);
   // The one seam every request passes exactly once, whatever transport served it and however
-  // it ended. The terminal usage belongs to the last send that left; the ledger resolves every
-  // earlier send of this request as unresolved spend rather than handing its tokens back.
+  // it ended. The ledger gives per-send usage precedence over terminal usage and keeps unknown
+  // physical spend unresolved.
   logCtx.spendTracker?.settle(logCtx.usage);
   const existing = finalizedUsage(
     logCtx.providerAdapter ?? logCtx.provider,
@@ -1815,7 +1815,7 @@ export function beginRequestAttempt(
 }
 
 /** Preserve metered JSON failures before key recovery consumes/cancels their body. */
-export async function recordKeyAttemptFailure(logCtx: RequestLogContext, response: Response, signal?: AbortSignal): Promise<void> {
+export async function recordKeyAttemptFailure(logCtx: RequestLogContext, response: Response, signal?: AbortSignal): Promise<OcxUsage | undefined> {
   const attempt = logCtx.activeAttempt;
   if (!attempt || !KEY_ACCOUNT_LOG_LABEL_RE.test(attempt.accountLogLabel ?? "")) return;
   attempt.status = response.status;
@@ -1828,6 +1828,7 @@ export async function recordKeyAttemptFailure(logCtx: RequestLogContext, respons
     const value = JSON.parse(body.text);
     const usage = usageFromResponsesPayload(value?.usage ?? value?.response?.usage);
     if (usage) recordKeyWireAttemptUsage(logCtx, usage);
+    return usage;
   } catch { /* Absent/malformed usage remains unknown; recovery still owns the response. */ }
   finally { signal?.removeEventListener("abort", cancelOriginal); }
 }

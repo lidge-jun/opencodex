@@ -10,7 +10,7 @@ import { isOpenCodeGoResponsesUrl } from "../../adapters/opencode-go-additional-
 import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
 import { anthropicBillingPhysicalFetch } from "../../providers/anthropic-billing-ownership";
 import { passiveKeyPhysicalFetch } from "../../providers/passive-key-observation";
-import { rebindPhysicalSend } from "../../lib/request-execution-budget";
+import { rebindPhysicalSend, recordCurrentPhysicalSendUsage } from "../../lib/request-execution-budget";
 import { anthropicModelQuotaFor } from "../../oauth/anthropic-model-quota";
 import { anthropicRatePolicyFor } from "../../oauth/anthropic-rate-limit-policy";
 import { configuredAnthropicInstance } from "../../providers/anthropic-instance";
@@ -1120,7 +1120,9 @@ export async function prepareResponsesTransport(
             } catch { /* best-effort observation cannot fail the response */ }
           }
           if (response) {
-            if (!response.ok) await recordKeyAttemptFailure(logCtx, response, dispatchInit.signal ?? options.abortSignal);
+            const failureUsage = response.ok ? undefined
+              : await recordKeyAttemptFailure(logCtx, response, dispatchInit.signal ?? options.abortSignal);
+            if (failureUsage && pinned) recordCurrentPhysicalSendUsage(failureUsage);
             if (observeAutoPause) response = await observeAutoPause(response);
             if (!pinned && response.status === 413 && binding && imageOwnerMatched && recoveryOwner
               && carriesSelectedKey) {
@@ -1139,6 +1141,7 @@ export async function prepareResponsesTransport(
               imageHistoryPins.set(recoveryOwner, bindImageHistory);
               capturedImagePins.add(pin);
               imageRefusals.set(response, imageRefusals.has(response) ? null : pin);
+              if (failureUsage) recordCurrentPhysicalSendUsage(failureUsage);
             }
             return response;
           }

@@ -1,5 +1,6 @@
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../../adapters/base";
-import type { OcxParsedRequest } from "../../types";
+import type { AdapterEvent, OcxParsedRequest } from "../../types";
+import type { PhysicalSendReporter } from "../../lib/request-execution-budget";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { carryProxyError, isProxyError } from "../../lib/client-error-body";
 import { checkOutboundBodySize } from "./outbound-body-guard";
@@ -21,10 +22,20 @@ type RecoveryBudget = Pick<ResponsesSendBudget, "remainingTransientSendBudget" |
 type ImageRecoveryTransport = Pick<ResponsesTransport, "pinAnthropicImageRecovery" | "noteRoutedAttemptSend">;
 type RecoveredExchange = { response: Response; request?: AdapterRequest };
 const SUMMARY_MAX_TOKENS = 1024;
+const resendSpend = new WeakMap<Response, NonNullable<PhysicalSendReporter["recordUsage"]>>();
 
 function wireOutputLimit({ body }: AdapterRequest): number | undefined {
   const { max_tokens } = JSON.parse(body) as { max_tokens: number };
   return Number.isSafeInteger(max_tokens) && max_tokens > 0 ? max_tokens : undefined;
+}
+
+/** Book the resend's raw adapter usage independently of key-attempt totals. */
+export function imageResendSpendObserver(response: Response): ((event: AdapterEvent) => void) | undefined {
+  const record = resendSpend.get(response);
+  if (!record) return;
+  return event => {
+    if ("usage" in event && event.usage && resendSpend.delete(response)) record(event.usage);
+  };
 }
 
 export type AnthropicImageRecovery = (
@@ -88,6 +99,7 @@ export function createAnthropicImageRecovery(
     const remaining = () => budget.remainingTransientSendBudget(transientSendCapFor(total, budget.targetSendsUsed));
     if (remaining() < 2) return { response };
     const { response: retained, text } = await retainAdapterFailureResponse(response, signal);
+    signal.throwIfAborted();
     // Require a provider size refusal and an actual image-bearing, compactable history.
     if (recoveryAttempted.has(translatorBudget)
       || !/request_too_large|payload_too_large|(?:request|payload|image|body)[^\n]{0,60}too large/i.test(text)) {
@@ -97,10 +109,11 @@ export function createAnthropicImageRecovery(
     const originalBytes = Buffer.byteLength(pin.request.body, "utf8");
     const incoming: IncomingMeta = { headers: selectedForwardHeaders, completedToolBlocks,
       providerName: route.providerName, translatorBudget, abortSignal: signal };
-    const send = async (wire: AdapterRequest, input: OcxParsedRequest, minimum: number, outputLimit: number): Promise<Response> => {
+    const send = async (wire: AdapterRequest, input: OcxParsedRequest, minimum: number, outputLimit: number) => {
       signal.throwIfAborted();
       if (!pin.isCurrent() || remaining() < minimum) throw new SendBudgetExhaustedError();
-      const receipt = deferPhysicalSendReporter(budget.imageRecoverySendReporter(wire.body, outputLimit));
+      const physical = budget.imageRecoverySendReporter(wire.body, outputLimit);
+      const receipt = deferPhysicalSendReporter(physical);
       try {
         const run = () => fetchWithHeaderTimeout(wire.url, {
           method: wire.method, headers: wire.headers, body: wire.body,
@@ -109,10 +122,12 @@ export function createAnthropicImageRecovery(
           dispatchOverride: pin.dispatchOverride(wire, input),
           onPhysicalDispatch: () => {
             if (remaining() < minimum || !receipt.beforeDispatch()) throw new SendBudgetExhaustedError();
+            physical.recordUsage?.(null);
             transport.noteRoutedAttemptSend(undefined, "image-413");
           },
         }));
-        return await (receipt.report.execute ? receipt.report.execute(run) : run());
+        const response = await (receipt.report.execute ? receipt.report.execute(run) : run());
+        return { response, recordUsage: physical.recordUsage };
       } finally {
         receipt.report.close?.();
       }
@@ -126,7 +141,7 @@ export function createAnthropicImageRecovery(
       if (originalLimit === undefined) return { response: retained };
       const summaryLimit = Math.min(originalLimit, SUMMARY_MAX_TOKENS);
       const summaryInput: OcxParsedRequest = {
-        ...parsed, stream: false, _anthropicImageOwner: owner,
+        ...parsed, stream: false, _anthropicImageOwner: owner, _anthropicImageSummary: true,
         _anthropicServerTools: undefined, _anthropicServerReplay: undefined,
         options: { toolChoice: "none", reasoning: "none", thinkingEnabled: false, maxOutputTokens: summaryLimit },
         context: { ...parsed.context, tools: undefined, messages: [...split.history, {
@@ -135,13 +150,14 @@ export function createAnthropicImageRecovery(
         }] },
       };
       const summaryRequest = await adapter.buildRequest(summaryInput, incoming);
-      let summaryResponse: Response;
+      let summarySend: Awaited<ReturnType<typeof send>>;
       try {
         if (!fits(summaryRequest) || !summaryRequest.body.includes('"type":"image"')) return { response: retained };
         const outputLimit = wireOutputLimit(summaryRequest);
         if (outputLimit === undefined || outputLimit > summaryLimit) return { response: retained };
-        summaryResponse = await send(summaryRequest, summaryInput, 2, outputLimit);
+        summarySend = await send(summaryRequest, summaryInput, 2, outputLimit);
       } finally { summaryRequest.releaseBodyObservation?.(); }
+      const { response: summaryResponse, recordUsage: recordSummaryUsage } = summarySend;
       if (!summaryResponse.ok) {
         void summaryResponse.body?.cancel().catch(() => {});
         return { response: retained };
@@ -157,6 +173,7 @@ export function createAnthropicImageRecovery(
       let completed = false;
       let invalid = false;
       for (const event of events) {
+        if ("usage" in event && event.usage) recordSummaryUsage?.(event.usage);
         if (event.type === "done") completed = event.stopReason === "end_turn" || event.stopReason === "stop_sequence";
         else if (event.type === "text_delta" && !event.anthropicThinkingSignature) summary += event.text;
         else if (event.type.startsWith("tool_call") || event.type.startsWith("web_search")
@@ -175,8 +192,9 @@ export function createAnthropicImageRecovery(
         if (!fits(request)) return { response: retained };
         const outputLimit = wireOutputLimit(request);
         if (outputLimit === undefined) return { response: retained };
-        const replacement = await send(request, successor, 1, outputLimit);
+        const { response: replacement, recordUsage } = await send(request, successor, 1, outputLimit);
         if (replacement.ok) {
+          if (recordUsage) resendSpend.set(replacement, recordUsage);
           parsed.context.messages = successor.context.messages;
           parsed._anthropicImageOwner = owner;
         }

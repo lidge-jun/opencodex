@@ -23,9 +23,14 @@ different continuation owner.
 the same owner's recovery sends acquire pacing. It allows one billable summary
 with tools and reasoning disabled and one smaller resend. The summary's wire
 output cap is at most 1,024 tokens and at most the refused request's wire cap.
-Both legs share the original send, translation, and cancellation limits.
+First-party Opus 5.5 skips its adaptive-thinking default on the summary only.
+Both legs share the original send, translation, and cancellation limits. Cancellation
+while retaining the refusal takes the client-cancellation path. Live search and media
+iterations feed the SSE stall watchdog while recovery is pending.
 Under an enforced spend ceiling, direct recovery reserves each leg against
-the original spend scopes before physical dispatch. A denied reservation
+the original spend scopes before physical dispatch. The summary and resend each
+settle their own reported usage under the [spend contract](../transports/responses-spend.md).
+A denied reservation
 returns the original 413. Sidecar recovery under enforced spend requires
 authoritative accounting for earlier sends. The proxy accepts only a bounded,
 completed text summary, and a second 413 ends recovery.

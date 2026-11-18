@@ -1168,7 +1168,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         delete body.top_p;
       }
 
-      if (nativeOpus55 && !reasoningControlsUnsupported && thinkingEnabled !== false) {
+      if (nativeOpus55 && !reasoningControlsUnsupported && thinkingEnabled !== false && !parsed._anthropicImageSummary) {
         // An explicit per-request summary (concise/detailed) still forces summarized (#7881).
         body.thinking = summaryRequested || thinkingDisplayPolicy === "summarized"
           ? { type: "adaptive", display: "summarized" }
