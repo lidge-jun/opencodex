@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleLinkRoutes, type LinkRouteState } from "../../src/server/management/link-routes";
@@ -11,6 +11,10 @@ import { quoteRemote, remoteOcxArgv, WINDOWS_OS_PROBE } from "../../src/link/ssh
 import { resetSharedChildOpsEngineForTests, sharedChildOpsEngine } from "../../src/link/child-ops-engine";
 import { operationsJournalPath } from "../../src/link/operations-journal";
 import { identityFileRefusal } from "../../src/server/management/link-route-request";
+import { handleManagementAPI } from "../../src/server/management-api";
+import { createManagementSessionControl, issueGuiSession, managementPrincipal, managementSessionIssuance,
+  requireManagementAuth, type ManagementAuthState } from "../../src/server/management-auth";
+import { consumeGuiPairingGrant, createGuiPairingGrant } from "../../src/server/gui-session";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 /**
@@ -108,6 +112,7 @@ function harness() {
   };
   const deps: ManagementContext["deps"] = {
     now: () => 1_800_000_000_000, sshRunner: runner,
+    linkSupervisor: () => state.supervisor, linkListener: () => state.listener,
     readLinkStore: () => structuredClone(store), writeLinkStore: next => { store = structuredClone(next); },
     linkKnownHostsPath: () => knownHosts, liveListenPort: () => 10100,
     issueApiKey: (cfg, name, id) => { const key = { id: id ?? "fixture-key-1", name, key: "fixture-child-key", createdAt: "2026-11-13T00:00:00Z" }; cfg.apiKeys = [key]; return key; },
@@ -126,11 +131,136 @@ function harness() {
     if (!response) throw new Error("route not handled");
     return { status: response.status, body: await response.json() as Record<string, unknown> };
   }
-  return { call, ssh, state, get store() { return store; } };
+  return { call, ssh, state, config, deps, knownHosts, get store() { return store; } };
 }
 
 const routed = { explicitRoute: ROUTE, exclusive: true };
 const code = (answer: { body: Record<string, unknown> }) => (answer.body.error as { code?: string } | undefined)?.code;
+
+/** Real bootstrap, pairing, admission and HTTP dispatch; only SSH and link lifecycle effects are fake. */
+function authenticatedHarness() {
+  const h = harness(), origin = "http://127.0.0.1:10100", host = "127.0.0.1:10100";
+  const authState: ManagementAuthState = {
+    available: true, token: "fixture-admin", source: "environment", sessions: new Map(), pairingGrants: new Map(),
+  };
+  const bootstrap = new Request(origin + "/opencodex-session", { headers: { host, origin } });
+  const loopback = issueGuiSession(bootstrap, h.config, authState)!;
+  expect(loopback.issuance).toBe("loopback");
+  const grant = createGuiPairingGrant(origin, h.config, authState);
+  const paired = consumeGuiPairingGrant(new Request(bootstrap, { method: "POST" }), { grant: grant.grant }, h.config, authState, Date.now(),
+    { ingress: "public", peerAddress: "127.0.0.1", tailscaleUser: null, browserOrigin: origin });
+  if (!paired || !("token" in paired)) throw new Error("fixture pairing was refused");
+  expect(paired.issuance).toBe("pairing");
+  async function post(as: "loopback" | "paired" | "admin", route: string, body: unknown, trustedLoopback = true) {
+    const session = as === "loopback" ? loopback : paired;
+    const headers: Record<string, string> = { host, "content-type": "application/json",
+      authorization: `Bearer ${as === "admin" ? authState.token : session.token}` };
+    if (as !== "admin") Object.assign(headers, {
+      origin, "x-opencodex-gui-origin": session.browserOrigin, "x-opencodex-csrf-token": session.csrfToken,
+    });
+    const url = new URL(origin + "/api/link/" + route);
+    const req = new Request(url, { method: "POST", headers, body: JSON.stringify(body) });
+    const response = requireManagementAuth(req, authState, h.config) ?? await handleManagementAPI(req, url, h.config, h.deps,
+      managementPrincipal(req, authState, h.config) ?? undefined, createManagementSessionControl(authState), {
+        trustedLoopback, guiSessionIssuance: managementSessionIssuance(req, authState),
+      });
+    if (!response) throw new Error("route not handled");
+    return { status: response.status, body: await response.json() as Record<string, unknown> };
+  }
+  return { ...h, post, get store() { return h.store; } };
+}
+
+test.each(["probe", "confirm-host", "apply"] as const)("a real loopback session cannot supply an explicit route to %s", async stage => {
+  const h = authenticatedHarness();
+  if (stage !== "probe") expect((await h.post("admin", "probe", { alias: ALIAS, ...routed })).status).toBe(200);
+  if (stage === "apply") expect((await h.post("admin", "confirm-host", { alias: ALIAS, fingerprint, ...routed })).status).toBe(200);
+  const before = h.ssh.length;
+  const hosts = existsSync(h.knownHosts) ? readFileSync(h.knownHosts, "utf8") : null;
+  const body = { alias: ALIAS, ...(stage === "probe" ? {} : { fingerprint }),
+    ...(stage === "apply" ? { operationId: "op-unpaired" } : {}), ...routed };
+  const refused = await h.post("loopback", stage, body);
+  expect({ status: refused.status, code: code(refused) }).toEqual({ status: 403, code: "forbidden" });
+  expect(h.ssh.length).toBe(before);
+  expect(existsSync(h.knownHosts) ? readFileSync(h.knownHosts, "utf8") : null).toBe(hosts);
+  expect(h.store.links).toEqual([]);
+  expect(existsSync(operationsJournalPath())).toBe(false);
+  // The refusal neither consumes the owner's pending confirmation nor changes its route.
+  expect((await h.post("admin", stage, body)).status).toBe(stage === "apply" ? 202 : 200);
+});
+
+test.each(["probe", "confirm-host", "apply"] as const)("%s refuses an unpaired explicit route before inspecting its identity file", async stage => {
+  const h = authenticatedHarness();
+  const refused = await h.post("loopback", stage, { alias: ALIAS, fingerprint,
+    explicitRoute: { ...ROUTE, identityFile: "/missing/fixture-identity-key" }, exclusive: true });
+  expect({ status: refused.status, code: code(refused) }).toEqual({ status: 403, code: "forbidden" });
+  expect(h.ssh).toEqual([]);
+  expect(existsSync(h.knownHosts)).toBe(false);
+  expect(existsSync(operationsJournalPath())).toBe(false);
+});
+
+test("an unpaired probe cannot replace an owner's pending explicit route", async () => {
+  const h = authenticatedHarness();
+  expect((await h.post("admin", "probe", { alias: ALIAS, ...routed })).status).toBe(200);
+  const before = h.ssh.length;
+  const refused = await h.post("loopback", "probe", { alias: ALIAS,
+    explicitRoute: { ...ROUTE, proxyCommand: "/bin/echo fixture-route", port: 2222 }, exclusive: true });
+  expect({ status: refused.status, code: code(refused) }).toEqual({ status: 403, code: "forbidden" });
+  expect(h.ssh.length).toBe(before);
+  expect((await h.post("admin", "confirm-host", { alias: ALIAS, fingerprint, ...routed })).status).toBe(200);
+});
+
+test("omitting the explicit route cannot borrow an owner's pending or confirmed route", async () => {
+  const h = authenticatedHarness();
+  expect((await h.post("admin", "probe", { alias: ALIAS, ...routed })).status).toBe(200);
+  for (const stage of ["confirm-host", "apply"] as const) {
+    const before = h.ssh.length;
+    const refused = await h.post("loopback", stage, { alias: ALIAS, fingerprint });
+    expect({ status: refused.status, code: code(refused) }).toEqual({ status: 409, code: "route_mismatch" });
+    expect(h.ssh.length).toBe(before);
+    if (stage === "confirm-host") expect((await h.post("admin", stage, { alias: ALIAS, fingerprint, ...routed })).status).toBe(200);
+  }
+});
+
+test("an explicit-route journal replay still requires owner authority", async () => {
+  const h = authenticatedHarness();
+  expect((await h.post("admin", "probe", { alias: ALIAS, ...routed })).status).toBe(200);
+  expect((await h.post("admin", "confirm-host", { alias: ALIAS, fingerprint, ...routed })).status).toBe(200);
+  const body = { alias: ALIAS, fingerprint, operationId: "op-owner-replay", ...routed };
+  const applied = await h.post("admin", "apply", body);
+  expect(applied.status).toBe(202);
+  const before = h.ssh.length;
+  const refused = await h.post("loopback", "apply", body);
+  expect({ status: refused.status, code: code(refused) }).toEqual({ status: 403, code: "forbidden" });
+  const replay = await h.post("admin", "apply", body);
+  expect({ status: replay.status, linkId: replay.body.linkId, outcome: replay.body.outcome })
+    .toEqual({ status: 202, linkId: applied.body.linkId, outcome: "committed" });
+  expect(h.ssh.length).toBe(before);
+});
+
+test("a real paired session may enroll with an explicit route", async () => {
+  const h = authenticatedHarness();
+  expect((await h.post("paired", "probe", { alias: ALIAS, ...routed })).status).toBe(200);
+  expect((await h.post("paired", "confirm-host", { alias: ALIAS, fingerprint, ...routed })).status).toBe(200);
+  expect((await h.post("paired", "apply", { alias: ALIAS, fingerprint, ...routed })).status).toBe(202);
+  expect(h.ssh.length).toBeGreaterThan(5);
+  for (const call of h.ssh) expect(sshOption(call.argv, "ProxyCommand")).toEqual([ROUTE.proxyCommand]);
+});
+
+test("a real loopback session keeps the plain-alias enrollment flow", async () => {
+  const h = authenticatedHarness();
+  expect((await h.post("loopback", "probe", { alias: ALIAS })).status).toBe(200);
+  expect((await h.post("loopback", "confirm-host", { alias: ALIAS, fingerprint })).status).toBe(200);
+  expect((await h.post("loopback", "apply", { alias: ALIAS, fingerprint })).status).toBe(202);
+  expect(h.ssh.length).toBeGreaterThan(5);
+  for (const call of h.ssh) expect(sshOption(call.argv, "ProxyCommand")).toEqual([]);
+});
+
+test("an admin token without trusted loopback ingress cannot probe an explicit route", async () => {
+  const h = authenticatedHarness();
+  const refused = await h.post("admin", "probe", { alias: ALIAS, ...routed }, false);
+  expect({ status: refused.status, code: code(refused) }).toEqual({ status: 403, code: "forbidden" });
+  expect(h.ssh).toEqual([]);
+});
 
 test("every SSH command of an enrollment with an explicit route carries it, and the link keeps it", async () => {
   const h = harness();
@@ -401,11 +531,11 @@ posixTest("each refusal says what to fix, the key's own directory apart from a d
   rmSync(join(root, "keys"), { recursive: true, force: true });
   const above = await h.call("POST", "probe", { alias: ALIAS, includeVersion: true, explicitRoute: { ...ROUTE, identityFile: keyUnder(0o775) }, exclusive: true });
   const message = (answer: { body: Record<string, unknown> }) => (answer.body.error as { message: string }).message;
-  // A key put straight into /tmp gets the same text: it must not read as "remove write access on /tmp" (with sudo, or for a Home
-  // running as root, which owns /tmp, that breaks the machine), so moving the key comes first and the chmod is only for a private
-  // directory of the user's, never a shared or system one.
-  expect(message(own)).toBe("The directory that holds the identity file must be owned by this user or root and not writable by group or others. Move the key to a path that passes; if a tool chose the path, run chmod go-w on that tool's own private folder or have it use a path that passes. Never change a shared or system directory such as /tmp, even when the Home runs as root.");
-  expect(message(above)).toBe("Every directory above the identity file must be owned by this user or root and not writable by group or others unless sticky, and every symlink on its path must be owned by this user or root; a folder made under umask 002 is group-writable. Run chmod go-w on such a private folder of this user's or of the tool that chose the path, or use a path that passes. Never change a shared or system directory or another user's symlink, even as root.");
+  // The key's own directory (group-writable here, as /tmp is world-writable) and a directory above it get different texts. Neither
+  // may read as "remove write access on /tmp" (with sudo, or for a Home running as root, which owns /tmp, that breaks the machine),
+  // so moving the key comes first and the chmod is only for a private folder the user owns, never a shared or system one.
+  expect(message(own)).toBe("The directory that holds the identity file must be owned by this user or root and not writable by group or others. Move the key to a path that passes, or run chmod go-w on that directory only if it is a private folder this user owns (its own, or one a tool made for it); a tool that chose the path can instead be set to use a path that passes. Never change a shared or system directory such as /tmp, even when the Home runs as root.");
+  expect(message(above)).toBe("Every directory above the identity file must be owned by this user or root and not writable by group or others unless sticky, and every symlink on its path must be owned by this user or root; a folder made under umask 002 is group-writable. Run chmod go-w on such a folder only if it is a private folder this user owns (its own, or one a tool made for it), or use a path that passes. Never change a shared or system directory or another user's symlink, even as root.");
   for (const answer of [own, above]) expect(JSON.stringify(answer.body)).not.toContain(root);
 });
 
@@ -415,7 +545,7 @@ posixTest("a path with a symlink loop is refused as unreadable, and the text say
   symlinkSync(join(root, "a"), join(root, "b"));
   const refused = await h.call("POST", "probe", { alias: ALIAS, includeVersion: true, explicitRoute: { ...ROUTE, identityFile: join(root, "a", "goat_hub_ed25519") }, exclusive: true });
   expect({ hint: (refused.body.error as { hint?: string }).hint, message: (refused.body.error as { message?: string }).message })
-    .toEqual({ hint: "identity_file_unreadable", message: "This user cannot read the identity file or a directory on its path, or the path is too long or has too many symlinks. Use a shorter path without symlink loops; fix read access only on this user's own file or folder." });
+    .toEqual({ hint: "identity_file_unreadable", message: "This user cannot read the identity file or a directory on its path, or the path is too long or has too many symlinks. Use a shorter path without symlink loops; fix read access only on this user's own file or folder, with chmod u+r on the file or u+rx on a folder, and never add group or other access." });
   expect(h.ssh).toEqual([]);
 });
 
@@ -427,17 +557,17 @@ test.if(WINDOWS)("on a Windows Home a probe that names an identity file is refus
   expect(h.ssh).toEqual([]);
 });
 
-posixTest("a key file another user could chown is not the fix: the permissions text says to use a key of this user's own", async () => {
+posixTest("a key file open to its group is refused, and the permissions text limits chmod 600 to a key of this user's own", async () => {
   const h = harness();
   const refused = await h.call("POST", "probe", { alias: ALIAS, includeVersion: true, explicitRoute: { ...ROUTE, identityFile: keyFile(0o640) }, exclusive: true });
   expect({ hint: (refused.body.error as { hint?: string }).hint, message: (refused.body.error as { message?: string }).message })
-    .toEqual({ hint: "identity_file_permissions", message: "The identity file must be owned by this user with no group or other permissions (chmod 600 on it). Use a key file of this user's own; never chown another user's or the system's key." });
+    .toEqual({ hint: "identity_file_permissions", message: "The identity file must be owned by this user with no group or other permissions. Use a key file of this user's own and run chmod 600 on it; never chown or chmod another user's or the system's key." });
 });
 
 posixTest("a path with a component too long for the filesystem is refused as unreadable with the same text, before any SSH", async () => {
   const h = harness();
   const refused = await h.call("POST", "probe", { alias: ALIAS, includeVersion: true, explicitRoute: { ...ROUTE, identityFile: join(root, "k".repeat(256)) }, exclusive: true });
   expect({ hint: (refused.body.error as { hint?: string }).hint, message: (refused.body.error as { message?: string }).message })
-    .toEqual({ hint: "identity_file_unreadable", message: "This user cannot read the identity file or a directory on its path, or the path is too long or has too many symlinks. Use a shorter path without symlink loops; fix read access only on this user's own file or folder." });
+    .toEqual({ hint: "identity_file_unreadable", message: "This user cannot read the identity file or a directory on its path, or the path is too long or has too many symlinks. Use a shorter path without symlink loops; fix read access only on this user's own file or folder, with chmod u+r on the file or u+rx on a folder, and never add group or other access." });
   expect(h.ssh).toEqual([]);
 });

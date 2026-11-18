@@ -266,7 +266,7 @@ Prime Agent follows `PRIME_AGENT_CODING_AGENT_DIR` before falling back to
 disagree about which file is meant. Its managed block owns only
 `providers.opencodex`, so other providers and any `modelOverrides` you have set
 stay untouched. Prime Agent reads `models.json` when a session starts, so start
-a new session after connecting it.
+a new session after connecting it. The generated block sets `compat.supportsDeveloperRole` to `false`, so the agent sends its system prompt as `system`; several OpenAI-compatible upstreams reject `developer` with a 400.
 
 Aside keeps a separate model catalog for each registered profile, including local profiles. OpenCodex lists
 all registered profiles, including local profiles, and can synchronize them together or control
@@ -275,7 +275,7 @@ Aside connection enables all profiles by default; individual exclusions survive 
 
 One caveat specific to Aside: the running app rewrites `models.json` itself, so
 fully quit and reopen Aside after applying, the same way Claude Desktop needs a
-restart. Aside's block is loopback-only and never carries a real credential.
+restart. Aside's block is loopback-only and never carries a real credential. The generated block sets `compat.supportsDeveloperRole` to `false`, so the agent sends its system prompt as `system`; several OpenAI-compatible upstreams reject `developer` with a 400.
 
 The managed Raycast integration supports **macOS and Windows**. Custom Providers
 is a **Raycast Pro** feature: on a free plan the file is still written, but

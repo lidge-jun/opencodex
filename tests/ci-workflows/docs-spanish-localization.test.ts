@@ -7,6 +7,14 @@ import { codeBlockLocale } from "../../docs-site/src/data/code-block-locale";
 
 const root = repoPath("docs-site/src/content/docs");
 const source = (path: string): string => readFileSync(path, "utf8").replace(/\r\n/g, "\n");
+
+test("Google adapter references document 429 retry evidence in English and Spanish", () => {
+  for (const locale of ["", "es/"]) {
+    const google = source(join(root, locale, "reference/adapters.md")).split("## `google`\n")[1]?.split("\n## ")[0];
+    expect(google).toMatch(/`429`[^.]*`Retry-After`/);
+  }
+});
+
 const config = source(repoPath("docs-site/astro.config.mjs"));
 // Use the configured locale directories rather than freezing today's page count.
 const localeFolders = new Set([...config.matchAll(/^\s*["']?([a-z]{2}(?:-[a-z]{2})?)["']?:\s*\{\s*label:/gm)]
@@ -306,6 +314,16 @@ describe("Spanish documentation localization", () => {
       const examples = codeBlocks(source(join(root, locale, "guides/combos.md"))).join("\n");
       expect(examples, `${locale || "en"} JEV CLI reference`).toContain("--api-key '${TYPESAFE_API_KEY}'");
     }
+  });
+
+  test("the Spanish Grok Build manual recipe link lands at the recipe heading", () => {
+    const anchor = "manual-recipe-without-auto-registration";
+    const english = source(join(root, "guides/grok-build.md"));
+    const spanish = source(join(root, "es/guides/grok-build.md"));
+    expect(english).toContain(`](#${anchor})`);
+    expect(english).toContain("## Manual recipe (without auto-registration)");
+    expect(spanish).toContain(`](#${anchor})`);
+    expect(spanish).toContain(`<a id="${anchor}"></a>\n\n## Receta manual (sin registro automático)`);
   });
 
   test("remote credential examples require a protected transport in every locale", () => {

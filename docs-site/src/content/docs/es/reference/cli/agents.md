@@ -824,7 +824,7 @@ Un enlace `model_catalog_json` modificado por esta solicitud también fuerza el 
 ocx system settings --stream-mode eager-relay
 ```
 
-Otros booleanos del sistema aceptan `on`/`off`: `--show-codex-credits`, `--account-picker`, `--main-account-hard-lock`, `--ultra-fast-tier` y `--fast-rows`. Escriben solo campos explícitos y pueden combinarse con las opciones del sistema existentes. Mostrar créditos es una preferencia de visualización, no una opción de crédito pagado; el sistema Ultra Fast está separado del proveedor Fast.
+Otros booleanos del sistema aceptan `on`/`off`: `--show-codex-credits`, `--account-picker`, `--main-account-hard-lock`, `--ultra-fast-tier`, `--fast-rows` y `--reserve`. `--reserve` controla la compatibilidad con Luna Reserve con independencia de `--desktop-authless` y no concede ningún derecho del servidor. Escriben solo campos explícitos y pueden combinarse con las opciones del sistema existentes. Mostrar créditos es una preferencia de visualización, no una opción de crédito pagado; el sistema Ultra Fast está separado del proveedor Fast.
 
 Ultra Fast es una configuración opt-in, por defecto desactivado. Con `--ultra-fast-tier on`, el catálogo generado agrega la opción de velocidad ultrarrápida a `gpt-6-astra` y `gpt-6.1-sol` nativos (incluidas las filas vinculadas a la cuenta), por lo que el selector Codex lo ofrece junto a Fast. Ultrafast requiere un plan ChatGPT elegible; el catálogo no puede verificar eso, así que active la configuración solo si su plan lo incluye. Otros modelos y la velocidad predeterminada no se modifican.
 

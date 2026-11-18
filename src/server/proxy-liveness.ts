@@ -17,6 +17,7 @@ import {
   runtimeOwnerScope, sameRuntimeOwnerScope, verifyPidIdentity, type RuntimeOwnerScope,
 } from "../config/process-state";
 import { createServer, isIP } from "node:net";
+import { networkInterfaces } from "node:os";
 import { loopbackFamilyAvailability } from "../lib/loopback-family";
 import {
   LOCAL_ATTESTATION_CHALLENGE_HEADER,
@@ -24,7 +25,7 @@ import {
   createLocalAttestationChallenge,
   verifyLocalAttestationProof,
 } from "../lib/local-management-attestation";
-import { directLocalHttpFetch } from "./direct-local-http";
+import { directLocalHttpFetch, isConnectPhaseTimeout } from "./direct-local-http";
 
 export interface HealthzIdentity {
   service?: unknown;
@@ -397,14 +398,36 @@ export async function classifyHealthz(
   fetchFn: LivenessFetch,
   timeoutMs: number,
 ): Promise<EndpointLiveness> {
+  return (await classifyHealthzDetailed(url, fetchFn, timeoutMs)).verdict;
+}
+
+/** {@link classifyHealthz} plus whether an unknown verdict was a connect that timed out (#8318). */
+async function classifyHealthzDetailed(
+  url: string,
+  fetchFn: LivenessFetch,
+  timeoutMs: number,
+): Promise<{ verdict: EndpointLiveness; connectTimeout: boolean }> {
+  const answer = (verdict: EndpointLiveness, connectTimeout = false) => ({ verdict, connectTimeout });
   try {
     const response = await fetchFn(url, { signal: AbortSignal.timeout(timeoutMs) });
-    if (response.status !== 200) return "unknown";
+    if (response.status !== 200) return answer("unknown");
     const body = (await response.json().catch(() => undefined)) as HealthzIdentity | null | undefined;
-    if (body === undefined) return "unknown";
-    return isOpencodexHealthz(body) ? "live" : "dead";
+    if (body === undefined) return answer("unknown");
+    return answer(isOpencodexHealthz(body) ? "live" : "dead");
   } catch (error) {
-    return isConnectionRefused(error) ? "dead" : "unknown";
+    return isConnectionRefused(error) ? answer("dead") : answer("unknown", isConnectPhaseTimeout(error));
+  }
+}
+
+/** Whether `address` (unbracketed) is assigned to one of this machine's network interfaces. */
+export function isLocalInterfaceAddress(address: string): boolean {
+  const canonical = (value: string) => isIP(value) === 6 ? new URL(`http://[${value.split("%")[0]}]/`).hostname.slice(1, -1) : value;
+  const wanted = canonical(address);
+  try {
+    return Object.values(networkInterfaces()).some(entries =>
+      (entries ?? []).some(entry => canonical(entry.address) === wanted));
+  } catch {
+    return false;
   }
 }
 
@@ -417,22 +440,44 @@ export async function classifyHealthz(
  */
 export async function probeEndpointLiveness(
   endpoint: { port: number; hostname?: string },
-  io: Pick<LivenessIo, "fetchFn" | "timeoutMs"> = {},
+  io: Pick<LivenessIo, "fetchFn" | "timeoutMs" | "bindProofFn"> & {
+    /** Test seam for {@link isLocalInterfaceAddress}. */
+    localAddressFn?: (address: string) => boolean;
+  } = {},
 ): Promise<EndpointLiveness> {
   if (!Number.isFinite(endpoint.port) || endpoint.port <= 0 || endpoint.port > 65535) return "dead";
   const fetchFn = io.fetchFn ?? directLocalHttpFetch;
   const timeoutMs = io.timeoutMs ?? 1500;
   let sawUnknown = false;
   for (const hostname of loopbackProbeHosts(endpoint.hostname)) {
-    const result = await classifyHealthz(
+    const { verdict, connectTimeout } = await classifyHealthzDetailed(
       `http://${hostname}:${endpoint.port}/healthz`,
       fetchFn,
       timeoutMs,
     );
-    if (result === "live") return "live";
-    if (result === "unknown") sawUnknown = true;
+    if (verdict === "live") return "live";
+    if (verdict === "unknown" && !(connectTimeout && await provenFreeByBind(hostname, endpoint.port, io))) sawUnknown = true;
   }
   return sawUnknown ? "unknown" : "dead";
+}
+
+/**
+ * #8318: a connect to this machine's own non-loopback address (a Tailscale IP) with nothing
+ * listening can time out instead of being refused, which left `ocx resolve` unknown forever. Only
+ * a connect-phase timeout on a specific address of a local interface qualifies, and only an
+ * exclusive bind that succeeds (and is released at once) proves absence; EADDRINUSE or any other
+ * bind error keeps the verdict unknown. Loopback and wildcard binds keep their refusal-only rule,
+ * because a wildcard listener can share the port with a specific bind on some platforms.
+ */
+async function provenFreeByBind(
+  probeHost: string,
+  port: number,
+  io: { bindProofFn?: LivenessIo["bindProofFn"]; localAddressFn?: (address: string) => boolean },
+): Promise<boolean> {
+  const address = probeHost.replace(/^\[(.*)\]$/, "$1");
+  if (isIP(address) === 0 || recoveryLoopbackFamily(address) !== null || isWildcardHostname(address)) return false;
+  if (!(io.localAddressFn ?? isLocalInterfaceAddress)(address)) return false;
+  return await (io.bindProofFn ?? canBindAddress)(address, port, BIND_PROOF_TIMEOUT_MS);
 }
 
 /** Identity-checked /healthz probe; null when unreachable, non-OK, or not our proxy. */

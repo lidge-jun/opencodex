@@ -7,6 +7,7 @@ import { applyNativeVisibility, nativeContextLimits } from "../codex/catalog/met
 import { readCatalog, readCodexCatalogPath, type CatalogModel } from "../codex/catalog/parsing";
 import { readNativeBaseline, retainedNativeSourcePriorities } from "../codex/catalog/native-priority";
 import { resolveMultiAgentMode } from "../config/multi-agent-surface";
+import { resolveRoutedCatalogDefaults } from "../config/schema/routed-catalog-defaults";
 
 interface CodexModelListInput {
   config: OcxConfig;
@@ -42,7 +43,7 @@ export function buildCodexModelList({
     websocketsEnabled(config), maMode, exactComboSlugs, accountSelectors,
     suppressedBareNativeSlugs, new Set(), nativeContextLimits(config), accountNativeSlugs,
     accountNativeSlugsBySelector, config.keepNativeChatGptOnV1 === true, config.modelPickerOrder,
-    nativeSource,
+    nativeSource, resolveRoutedCatalogDefaults(config),
   );
   return { models: omitDisabledNativeCatalogEntries(applyNativeVisibility(entries, disabledModels, accountSelectors.length > 0, new Set(accountNativeSlugs)), config) };
 }

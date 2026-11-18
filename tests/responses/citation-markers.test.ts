@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import {
   CITATION_MARKER_END,
   CITATION_MARKER_SEPARATOR,
@@ -285,6 +285,56 @@ describe("non-citation directive spans pass through (#6039)", () => {
     return pieces.map(piece => escaper.push(piece)).join("") + escapeMemoryCitationMentions(escaper.pending());
   };
 
+  for (const ordinary of ["<", "<<p><oai-mem-citationless></oai-mem-citatioX>"]) {
+    test.each([2048, 8192, 32768])(`ordinary ${ordinary} runs use bounded slices at %i units`, size => {
+      const text = ordinary.repeat(Math.ceil(size / ordinary.length)).slice(0, size);
+      const escaper = createMemoryCitationEscaper();
+      const originalSlice = String.prototype.slice;
+      let calls = 0, units = 0, out = "";
+      const slice = spyOn(String.prototype, "slice").mockImplementation(function (this: string, start?: number, end?: number) {
+        const result = originalSlice.call(this, start, end);
+        calls++;
+        units += result.length;
+        return result;
+      });
+      try { out = escaper.push(text); }
+      finally { slice.mockRestore(); }
+      expect(out + escapeMemoryCitationMentions(escaper.pending())).toBe(text);
+      // Ordinary '<' characters advance a cursor, without a sliced lookahead or output piece
+      // each. Only one unchanged span and the bounded possible-tag suffix need slices.
+      expect(calls).toBeLessThanOrEqual(32);
+      expect(units).toBeLessThanOrEqual(text.length + 512);
+    });
+  }
+
+  test("unchanged spans survive rewrites, real blocks and a held partial tag across chunks", () => {
+    const ordinary = "<<p>😀<oai-mem-citationless>".repeat(20);
+    const text = `${ordinary}<oai-mem-citation> prose ${ordinary}${REAL_BLOCK}${ordinary}</oai-mem-citation>${ordinary}<oai-mem`;
+    const expected = escapeMemoryCitationMentions(text);
+    for (const width of [1, 2, 7, 127, text.length]) {
+      const pieces: string[] = [];
+      for (let at = 0; at < text.length; at += width) pieces.push(text.slice(at, at + width));
+      expect(streamed(pieces)).toBe(expected);
+    }
+  });
+
+  test.each([16383, 16384, 16385])("a complete %i-unit block keeps the existing hold boundary", size => {
+    const open = "<oai-mem-citation><citation_entries>";
+    const close = "</citation_entries></oai-mem-citation>";
+    const block = open + "x".repeat(size - open.length - close.length) + close;
+    const expected = escapeMemoryCitationMentions(block);
+    expect(expected === block).toBe(size <= 16384);
+    for (const pieces of [[block], [block.slice(0, -close.length), close], block.match(/[\s\S]{1,4096}/g)!]) {
+      const escaper = createMemoryCitationEscaper();
+      let out = "";
+      for (const piece of pieces) {
+        out += escaper.push(piece);
+        expect(escaper.pending().length).toBeLessThanOrEqual(16384);
+      }
+      expect(out + escapeMemoryCitationMentions(escaper.pending())).toBe(expected);
+    }
+  });
+
   test("a real block split one character at a time keeps both tags, equal to the final text", () => {
     const text = `see this\n\n${REAL_BLOCK}`;
     expect(streamed([...text])).toBe(text);
@@ -345,6 +395,17 @@ describe("non-citation directive spans pass through (#6039)", () => {
       done: frames.find(f => f.type === "response.output_text.done")?.text ?? "",
     };
   };
+
+  test("literal-angle runs before a split tag keep Responses delta/done and passthrough parity", async () => {
+    const pieces = ["<".repeat(8192), `oai-mem-citation> prose\n${REAL_BLOCK}<ordinary>`];
+    const raw = pieces.join("");
+    for (const escape of [true, false]) {
+      const expected = escape ? escapeMemoryCitationMentions(raw) : raw;
+      expect(await bridgeText(pieces, escape)).toEqual({ deltas: expected, done: expected });
+      expect(messageText(buildResponseJSON(textEvents(pieces), "internal/model", { escapeMemoryCitationTags: escape })))
+        .toBe(expected);
+    }
+  });
 
   test("Chat and Messages deliveries through the Responses bridge keep the raw tag", async () => {
     const raw = await bridgeText(["quoted <oai-mem-", "citation> prose"], false);

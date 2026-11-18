@@ -19,6 +19,7 @@ import {
   sanitizeCommitText,
   stripPrEnforcementPrefix,
 } from "./release-notes";
+import { codeSigningFooter, readPublishedWindowsDigests, readWindowsSigningOutcomes, type WindowsSigningOutcome } from "./release-signing-footer";
 
 // The reviewed one-time main -> dev transition (2.99.0 was tagged on the retired main line). The
 // publication-history collector owns and verifies this mapping; the changelog only reads it.
@@ -215,6 +216,7 @@ function renderReleaseNotes(input: {
   compareFrom: string | null;
   compareTo: string;
   repository: string;
+  windowsSigning: WindowsSigningOutcome | undefined;
 }): string {
   const parts: string[] = [];
   if (input.npmMetadata.trim()) parts.push(input.npmMetadata.trim());
@@ -265,19 +267,9 @@ function renderReleaseNotes(input: {
   }
 
   parts.push(changelog.join("\n").replace(/\n+$/, ""));
-  parts.push(CODE_SIGNING_FOOTER);
+  parts.push(codeSigningFooter(input.windowsSigning));
   return parts.join("\n\n").replace(/\n+$/, "") + "\n";
 }
-
-// SignPath Foundation's terms require the code signing policy and the SignPath attribution on the
-// download page. The GitHub release page is where every Windows download is published, so every
-// release body carries both, whether or not that release's Windows files ended up signed.
-export const CODE_SIGNING_FOOTER = [
-  "## Code signing",
-  "",
-  "Windows binaries follow the [code signing policy](https://opencodex.me/reference/code-signing/).",
-  "Free code signing provided by [SignPath.io](https://about.signpath.io/), certificate by [SignPath Foundation](https://signpath.org/).",
-].join("\n");
 
 export function buildReleaseNotes(input: {
   version: string;
@@ -294,6 +286,11 @@ export function buildReleaseNotes(input: {
    * range start and would otherwise list PRs the release does not contain.
    */
   rangePulls?: ReadonlySet<number>;
+  /**
+   * Whether this release's Windows files were Authenticode-signed, from the Windows legs' records
+   * (scripts/release-signing-footer.ts). Absent means nothing was recorded, and the notes claim no signature.
+   */
+  windowsSigning?: WindowsSigningOutcome;
 }): ReleaseNotesBuildResult {
   const baseline = selectReleaseBaseline(input.version, input.tags);
   const releaseTag = input.version.startsWith("v") ? input.version : `v${input.version}`;
@@ -373,6 +370,7 @@ export function buildReleaseNotes(input: {
     compareFrom: input.compareFrom ?? baseline,
     compareTo: releaseTag,
     repository: input.repository,
+    windowsSigning: input.windowsSigning,
   });
 
   const errors: string[] = [];
@@ -557,7 +555,7 @@ export function parseAssociatedPulls(data: unknown): AssociatedPullRequest[] {
 }
 
 function parseFlags(rest: string[]): Map<string, string> {
-  const known = new Set(["version", "dist-tag", "repository", "target", "out"]);
+  const known = new Set(["version", "dist-tag", "repository", "target", "out", "windows-signing-outcomes", "release-receipt"]);
   const flags = new Map<string, string>();
   for (let index = 0; index < rest.length; index += 1) {
     const arg = rest[index];
@@ -589,11 +587,17 @@ async function main(argv: string[]): Promise<void> {
   const repository = flags.get("repository");
   const target = flags.get("target");
   const out = flags.get("out");
-  if (!version || !distTag || !repository || !target || !out) {
+  // Required, so the workflow cannot drop them by accident. A directory the download never created reads as no records,
+  // and a missing receipt as no published digests, so no record is trusted.
+  const signingOutcomes = flags.get("windows-signing-outcomes");
+  const releaseReceipt = flags.get("release-receipt");
+  if (!version || !distTag || !repository || !target || !out || !signingOutcomes || !releaseReceipt) {
     throw new Error(
-      "Usage: bun scripts/build-release-changelog.ts --version <version> --dist-tag <tag> --repository <owner/name> --target <sha> --out <file>",
+      "Usage: bun scripts/build-release-changelog.ts --version <version> --dist-tag <tag> --repository <owner/name> --target <sha> --out <file> --windows-signing-outcomes <dir> --release-receipt <file>",
     );
   }
+  const windowsSigning = readWindowsSigningOutcomes(signingOutcomes, readPublishedWindowsDigests(releaseReceipt, version));
+  console.log(`Windows signing outcome: ${windowsSigning.status} (standalone ${windowsSigning.files.standalone}, desktop ${windowsSigning.files.desktop})`);
 
   await commandText(["git", "fetch", "--force", "--tags", "origin"]);
   const tags = (await commandText(["git", "tag", "--list", "v[0-9]*"]))
@@ -719,6 +723,7 @@ async function main(argv: string[]): Promise<void> {
     generatedNotes,
     commits,
     repository,
+    windowsSigning,
     ...(legacyStart ? { compareFrom: legacyStart, rangePulls } : {}),
   });
 

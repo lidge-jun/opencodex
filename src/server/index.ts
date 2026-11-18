@@ -31,6 +31,7 @@ import {
 import { flushConfigDirHardeningAndReaps } from "../config/paths";
 import { trackBackgroundWork } from "../lib/background-work";
 import { migrateStartupSubagentModels } from "./subagent-models-startup";
+import { migrateStartupReserveCapability } from "./reserve-capability-startup";
 import { migrateStartupXaiResponses } from "./xai-responses-startup";
 import { migrateStartupZaiResponses } from "./zai-responses-startup";
 import { reconcileOAuthProviders } from "../oauth";
@@ -218,13 +219,13 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
   // Captured before loadConfig() starts the optional ACL flight so stop() drains the same dir
   // even if OPENCODEX_HOME changes underneath a long-lived process.
   const startupConfigDir = getConfigDir();
-  const startupConfig = migrateStartupSubagentModels(
+  const startupConfig = migrateStartupReserveCapability(migrateStartupSubagentModels(
     runModelRenameStartupMigration(
       runDevinProviderMergeStartupMigration(
         runAlibabaRegionStartupMigration(runOpenAiTierStartupMigration(loadConfig())),
       ),
     ),
-  );
+  ));
   // Reconcile disk-backed presets first: it replaces provider rows and must not undo
   // an in-memory wire upgrade when that upgrade's persistence is temporarily unavailable.
   reconcileOAuthProviders(startupConfig);
