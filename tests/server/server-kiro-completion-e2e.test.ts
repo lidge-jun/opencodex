@@ -170,7 +170,7 @@ describe("Kiro completion through public server endpoints", () => {
       upstream.server.stop(true);
     }
   });
-  test("a reset replay of the completion fallback leaves credit evidence incomplete", async () => {
+  test.each([1, 2])("a reset replay before physical send %i settles leaves credit evidence incomplete", async resetSend => {
     const upstream = scriptedKiroUpstream([
       [textFrame("Checking."), eventFrame("meteringEvent", { unit: "credit", usage: 2 })],
       [...completionFrames("Ready."), eventFrame("meteringEvent", { unit: "credit", usage: 3 })],
@@ -178,7 +178,7 @@ describe("Kiro completion through public server endpoints", () => {
     saveConfig(kiroConfig(upstream.server.url.toString()));
     let sends = 0;
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      if (String(input).startsWith(upstream.server.url.toString()) && ++sends === 2) {
+      if (String(input).startsWith(upstream.server.url.toString()) && ++sends === resetSend) {
         throw Object.assign(new Error("synthetic connection reset"), { code: "ECONNRESET" });
       }
       return originalFetch(input, init);

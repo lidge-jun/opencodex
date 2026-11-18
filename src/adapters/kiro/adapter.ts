@@ -6,6 +6,7 @@ import {
   type TranslatorBudget,
 } from "../../lib/translator-budget";
 import { resolveKiroApiRegion, resolveKiroRequestProfile } from "../../oauth/kiro";
+import { withMissingCreditReading } from "../../usage/credit-billing";
 import type {
   AdapterEvent,
   OcxParsedRequest,
@@ -279,6 +280,31 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
     }
   };
 
+  async function* parseResponseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent> {
+    // Only the successful header-time response can provide metering. Capture this before the
+    // parser starts its own fallback, which separately tracks its missing readings.
+    const missingHeaderReading = physicalSendsObserved > 1;
+    for await (const event of parseKiroStream(
+      response,
+      budget,
+      modelId,
+      inputTokens,
+      contextWindow,
+      toolNameMap,
+      conversationId,
+      completionMode,
+      completionMode === "required" ? fallbackFactory : undefined,
+      contextInputEstimate,
+      structuredOutput,
+    )) {
+      if (missingHeaderReading && (event.type === "done" || event.type === "incomplete" || event.type === "error")) {
+        yield { ...event, usage: withMissingCreditReading(event.usage) };
+      } else {
+        yield event;
+      }
+    }
+  }
+
   return {
     name: "kiro",
     hostedIterationSendLimit: 2 * KIRO_FETCH_SEND_LIMIT, // Initial fetch and one bounded completion retry.
@@ -320,21 +346,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
     },
 
     /** Parse a streaming Kiro response, with the bounded retry wired to this request. */
-    parseStream(response: Response, budget: TranslatorBudget): AsyncGenerator<AdapterEvent> {
-      return parseKiroStream(
-        response,
-        budget,
-        modelId,
-        inputTokens,
-        contextWindow,
-        toolNameMap,
-        conversationId,
-        completionMode,
-        completionMode === "required" ? fallbackFactory : undefined,
-        contextInputEstimate,
-        structuredOutput,
-      );
-    },
+    parseStream: parseResponseStream,
 
     fetchResponse(request: AdapterRequest, ctx?: AdapterFetchContext): Promise<Response> {
       // The normal Responses path supplies cancellation at fetch time rather than build time.
@@ -344,16 +356,14 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
       requestExecutor = ctx?.executor;
       requestTimeoutMs = ctx?.timeoutMs;
       if (ctx?.sendBudget) requestSendBudget = ctx.sendBudget;
-      if (ctx?.onPhysicalSend) requestOnPhysicalSend = ctx.onPhysicalSend;
+      requestOnPhysicalSend = ctx?.onPhysicalSend;
       // Reset per fetch call, because `ordinal` is defined within one call and the caller records
       // ordinal 1 of each new attempt itself. The text fallback that follows this attempt then
       // continues THIS attempt's sequence rather than an earlier one's.
       physicalSendsObserved = 0;
-      // Routed through the same forwarder as the fallback so both legs share one ordinal
-      // sequence; a context without an observer is passed through untouched.
-      return fetchKiroWithRetry(request, requestOnPhysicalSend
-        ? { ...ctx, returnRawErrors: true, onPhysicalSend: (send: KiroPhysicalSend) => forwardPhysicalSend(send, 0) }
-        : { ...ctx, returnRawErrors: true });
+      return fetchKiroWithRetry(request, {
+        ...ctx, returnRawErrors: true, onPhysicalSend: send => forwardPhysicalSend(send, 0),
+      });
     },
 
     formatErrorBody(status: number, headers: Headers, payloadText: string): string {
@@ -368,19 +378,7 @@ export function createKiroAdapter(provider: OcxProviderConfig): ProviderAdapter 
     async parseResponse(response: Response, budget: TranslatorBudget): Promise<AdapterEvent[]> {
       const events: AdapterEvent[] = [];
       try {
-        for await (const e of parseKiroStream(
-          response,
-          budget,
-          modelId,
-          inputTokens,
-          contextWindow,
-          toolNameMap,
-          conversationId,
-          completionMode,
-          completionMode === "required" ? fallbackFactory : undefined,
-          contextInputEstimate,
-          structuredOutput,
-        )) {
+        for await (const e of parseResponseStream(response, budget)) {
           retainTranslatedEvent(e, budget, events.at(-1));
           events.push(e);
         }
