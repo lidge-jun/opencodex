@@ -634,7 +634,8 @@ export async function prepareResponsesTransport(
       pending?.estimate ?? logCtx.usageLogInputTokens, pending?.recovery, copilotCandidate);
     pending?.onCommit?.();
   };
-  const createOAuthReplayAttempt = () => {
+  const createOAuthReplayAttempt = (refusedRequest: AdapterRequest) => {
+    const refusedRoute = { model: route.modelId, url: refusedRequest.url, adapter: logCtx.activeAttempt?.adapter };
     const deferred = attemptSendDeferred();
     let dispatched = false;
     return (request: AdapterRequest, adapter: string, estimate: number | undefined, recovery?: AttemptRecoveryKind) => {
@@ -645,6 +646,11 @@ export async function prepareResponsesTransport(
           if (attempt) attempt.model = route.modelId;
           sealRequestAttemptIdentity(attempt, logCtx.provider, adapter, logCtx.accountLogLabel);
           recordAttemptCredentialSource(attempt, route.providerName, route.provider, adapter);
+        }
+        if (attempt && (attempt.model !== refusedRoute.model || attempt.adapter !== refusedRoute.adapter || request.url !== refusedRoute.url)) {
+          const subject = resolvePassiveRouteSubjectId(config, route.providerName, route.modelId, route.provider, inboundWire);
+          if (subject) attempt.labRouteSubjectId = subject;
+          else delete attempt.labRouteSubjectId;
         }
         recordAdapterReasoning(logCtx, request);
         recordAdapterTier(logCtx, request);

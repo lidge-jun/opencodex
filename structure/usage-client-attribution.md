@@ -209,7 +209,8 @@ sealed row and records the replacement send on a fresh row. The sealed tier outc
 the replacement retains the live adapter observer's outcome so response-tier confirmation updates
 only the replacement. Native Responses OAuth 401 recovery commits the split at physical dispatch,
 after pacing and admission. It attaches the rebuilt request's tier only after sealing the
-refusal.
+refusal. The active segment retains its passive Lab subject on the same route. A changed
+Responses route resolves a new subject through `src/server/passive-route-linker.ts`.
 A recovery before the first send creates no extra row. Same-account waits and transport resends remain on the existing attempt.
 `tests/usage/key-attribution.test.ts` covers the split and non-split kinds; the loopback server
 case in `tests/server/server-google-antigravity-oauth-401-replay.test.ts` records separate 401

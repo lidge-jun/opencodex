@@ -15,6 +15,7 @@ import { XAI_GROK_CLI_BASE_URL } from "../../src/providers/xai-transport";
 import { ADAPTER_REGISTRY } from "../../src/adapters/registry";
 import { createAdapterTierMetadata } from "../../src/providers/fastwire";
 import * as requestPacing from "../../src/providers/request-pacing";
+import { setPassiveRouteLinker } from "../../src/server/passive-route-linker";
 import { readUsageEntries, usageLogPath } from "../../src/usage/log";
 import { startServer } from "../../src/server";
 import type { RequestLogContext } from "../../src/server/request-log";
@@ -29,6 +30,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const TOKEN_ENDPOINT = "https://auth.x.ai/oauth/token";
 const OAUTH_RESPONSES_ENDPOINT = `${XAI_GROK_CLI_BASE_URL}/responses`;
+const REPLACEMENT_RESPONSES_ENDPOINT = `${XAI_GROK_CLI_BASE_URL}/responses-replacement-fixture`;
 const PUBLIC_OAUTH_AUTHENTICATION_ERROR = "OAuth authentication failed. Check the OpenCodex account status and retry.";
 const WINDOWS_PATH_CANARY = "C:\\Users\\Alice\\.opencodex\\auth.json.ocx-tmp";
 const UNC_PATH_CANARY = "\\\\server\\share\\opencodex\\auth.json.ocx-tmp";
@@ -140,7 +142,7 @@ function installOAuthFetch(
         expires_in: 3600,
       }), { headers: { "content-type": "application/json" } });
     }
-    if (url === OAUTH_RESPONSES_ENDPOINT) {
+    if (url === OAUTH_RESPONSES_ENDPOINT || url === REPLACEMENT_RESPONSES_ENDPOINT) {
       const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
       expect(body.model).toBe("grok-4.5");
       expect(body.input).toBe("hello");
@@ -264,6 +266,42 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
       expect(readUsageEntries().at(-1)?.attempts?.map(attempt => attempt.sendCount)).toEqual([1]);
     } finally {
       pacing.mockRestore();
+      await server.stop(true);
+    }
+  });
+
+  test.each([false, true])("the successful OAuth replacement links the passive subject (route changed: %s)", async changed => {
+    await seedOAuth();
+    saveConfig(xaiConfig());
+    installOAuthFetch([401, 200]);
+    const server = startServer(0);
+    const subjectId = "a".repeat(64);
+    const replacementSubjectId = "b".repeat(64);
+    let resolutions = 0;
+    const detach = setPassiveRouteLinker((_config, name, model, provider) => {
+      if (name !== "xai" || model !== "grok-4.5") return null;
+      resolutions += 1;
+      return provider.apiKey === "fresh-access" ? replacementSubjectId : subjectId;
+    });
+    const create = ADAPTER_REGISTRY["openai-responses"].create;
+    const factory = spyOn(ADAPTER_REGISTRY["openai-responses"], "create").mockImplementation((provider, context) => {
+      const adapter = create(provider, context);
+      if (changed && provider.apiKey === "fresh-access") {
+        const build = adapter.buildRequest.bind(adapter);
+        adapter.buildRequest = async (...args) => ({ ...await build(...args), url: REPLACEMENT_RESPONSES_ENDPOINT });
+      }
+      return adapter;
+    });
+    try {
+      const response = await post(server);
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(readUsageEntries().at(-1)?.attempts?.map(attempt => attempt.labRouteSubjectId))
+        .toEqual([subjectId, changed ? replacementSubjectId : subjectId]);
+      expect(resolutions).toBe(changed ? 2 : 1);
+    } finally {
+      factory.mockRestore();
+      detach();
       await server.stop(true);
     }
   });

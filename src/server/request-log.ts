@@ -1888,6 +1888,10 @@ export function noteProviderAttemptSend(
     if (index >= 0) attempts.splice(index, 0, completed);
     else attempts.push(completed, attempt);
     const fresh = beginRequestAttempt(completed.ordinal + 1, providerName, completed.model, completed.adapter);
+    if (completed.labRouteSubjectId && completed.provider === logCtx.provider
+      && (!resolved || (completed.model === resolved.model && completed.adapter === resolved.adapter))) {
+      fresh.labRouteSubjectId = completed.labRouteSubjectId;
+    }
     // Effort/tier metadata describes the request and is captured before the physical send.
     for (const key of ["requestedEffort", "effectiveEffort", "reasoningWireField", "reasoningWireValue"] as const) {
       if (completed[key] !== undefined) Object.assign(fresh, { [key]: completed[key] });
