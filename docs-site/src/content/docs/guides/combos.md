@@ -1213,3 +1213,7 @@ waits and JEV selection. A target that becomes usable again during a wait can st
 be retried if its cooldown has not changed. A newer cooldown cancels that target's
 reservation. Success clears only the unchanged cooldown of the target that answered;
 untried targets and newer failures keep their cooldowns.
+
+## Suggested combos
+
+In the Combos workspace, **Generate** opens a failover draft for a model served by multiple providers. **Add to combo** offers missing targets for an existing combo. Dismissed cards stay hidden in this browser. Use **Exclude providers…** to filter both kinds of suggestions. The proxy stores your selection as `comboSuggestionExcludedProviders` in `config.json`. Existing combo members stay in place. Suggested pay-per-use targets are marked as metered and follow the combo consent rules above.

@@ -106,6 +106,7 @@ export function intersectComboEfforts(
 }
 
 export interface ComboTarget {
+  metered?: boolean;
   provider: string;
   model: string;
   weight?: number;
@@ -127,6 +128,7 @@ let comboTargetKeySeq = 0;
 
 export function newComboTarget(partial: Partial<ComboTarget> = {}): ComboTarget {
   return {
+    ...(partial.metered === true ? { metered: true } : {}),
     provider: partial.provider ?? "",
     model: partial.model ?? "",
     ...(partial.weight !== undefined ? { weight: partial.weight } : {}),
@@ -544,6 +546,7 @@ export function toPutBody(
       targets: item.targets.map((target) => ({
         provider: target.provider.trim(),
         model: target.model.trim(),
+        ...(target.metered === true ? { metered: true } : {}),
         ...(weighted ? { weight: target.weight ?? 1 } : {}),
         ...(target.reasoningEfforts !== undefined
           ? { reasoningEfforts: [...target.reasoningEfforts] }
