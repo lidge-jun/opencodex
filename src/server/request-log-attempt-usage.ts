@@ -33,7 +33,7 @@ export function aggregateAttemptUsage(
 
   const sumOptional = (
     key: "cachedInputTokens" | "cacheReadInputTokens" | "cacheCreationInputTokens" | "cacheCreation1hInputTokens"
-      | "reasoningOutputTokens" | "providerCredits",
+      | "reasoningOutputTokens",
   ): number | undefined => {
     const present = usages.flatMap(usage => (
       typeof usage[key] === "number" ? [usage[key] as number] : []
@@ -48,7 +48,7 @@ export function aggregateAttemptUsage(
   const cacheCreationInputTokens = sumOptional("cacheCreationInputTokens");
   const cacheCreation1hInputTokens = sumOptional("cacheCreation1hInputTokens");
   const reasoningOutputTokens = sumOptional("reasoningOutputTokens");
-  const providerCredits = sumCreditReadings(usages.map(usage => usage.providerCredits));
+  const providerCredits = sumCreditReadings(measured.map(attempt => attempt.usage?.providerCredits));
   const totalTokens = usages.reduce(
     (sum, usage) => sum + (usageTotalTokens(usage) ?? 0),
     0,
