@@ -19,6 +19,7 @@ import { getProviderQuotaReportCache, hasQuotaRows, routingEvidence, setProvider
 import { isCanonicalCommandCodeBaseUrl, isCanonicalKimiCodeBaseUrl } from "./vendor-probes-key";
 import { isDisplayOnlyQuota, isWeeklyAllowancePercent, type AccountQuotaMode, type ProviderQuota, type ProviderQuotaWindow, type QuotaFailureCode } from "../quota-types";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
+import type { ResetNearQuota } from "../../routing/machine-weighted-routing";
 
 /** Match oauth/index REFRESH_SKEW_MS — use stored access without refresh when still fresh. */
 const ACCOUNT_TOKEN_SKEW_MS = 60_000;
@@ -46,6 +47,22 @@ export type AccountQuotaCacheEntry = {
   /** Proof for the quota itself, which may have been retained from an earlier read. Memory only. */
   quotaOwnerIsCurrent?: () => boolean;
 };
+
+// Carried display bars keep their original clocks. Disk hydration has no live observation clocks.
+const anthropicUsageClocks = new WeakMap<ProviderQuota, Pick<ResetNearQuota, "fiveHourObservedAt" | "weeklyObservedAt">>();
+
+export function stampAnthropicUsageObservation(
+  quota: ProviderQuota | null, incoming?: ProviderQuota | null, previous?: ProviderQuota | null,
+): ProviderQuota | null {
+  if (!quota || !incoming) return quota;
+  const clocks = previous ? anthropicUsageClocks.get(previous) : undefined;
+  anthropicUsageClocks.set(quota, {
+    fiveHourObservedAt: incoming.fiveHourPercent !== undefined ? incoming.updatedAt : clocks?.fiveHourObservedAt,
+    weeklyObservedAt: incoming.weeklyPercent === undefined && incoming.weeklyResetAt === undefined ? clocks?.weeklyObservedAt
+      : incoming.weeklyPercent !== undefined && incoming.weeklyResetAt !== undefined ? incoming.updatedAt : undefined,
+  });
+  return quota;
+}
 const validReset = (resetAt: unknown): resetAt is number => typeof resetAt === "number"
   && Number.isFinite(resetAt) && resetAt > 0 && Number.isFinite(new Date(resetAt).getTime());
 
@@ -279,17 +296,22 @@ export function accountCacheKey(provider: string, accountId: string): string {
  * Synchronous last-good per-account quota read for routing. Never probes the network.
  * Returns null when nothing is cached (or the cached row has no bars).
  */
-export function getCachedProviderAccountQuota(provider: string, accountId: string): ProviderQuota | null {
+function getCurrentAccountQuotaEntry(provider: string, accountId: string): AccountQuotaCacheEntry | undefined {
   const entry = accountQuotaCache.get(accountCacheKey(provider, accountId));
   if (provider === "kiro") {
     const account = getAccountSet("kiro")?.accounts.find(row => row.id === accountId);
-    if (!account || entry?.identity !== kiroEvidenceIdentity(account)) return null;
+    if (!account || entry?.identity !== kiroEvidenceIdentity(account)) return undefined;
   }
   if (isAnthropicInstanceId(provider) && entry?.anthropicCredentialGeneration) {
     const credential = getAccountCredential(provider, accountId);
-    if (!credential || credentialGeneration(credential) !== entry.anthropicCredentialGeneration) return null;
+    if (!credential || credentialGeneration(credential) !== entry.anthropicCredentialGeneration) return undefined;
   }
-  if (entry?.isCurrent && !entry.isCurrent()) return null;
+  if (entry?.isCurrent && !entry.isCurrent()) return undefined;
+  return entry;
+}
+
+export function getCachedProviderAccountQuota(provider: string, accountId: string): ProviderQuota | null {
+  const entry = getCurrentAccountQuotaEntry(provider, accountId);
   return isAnthropicInstanceId(provider) ? normalizeAnthropicQuota(entry?.quota, Date.now()) : entry?.quota ?? null;
 }
 
@@ -301,6 +323,14 @@ export function getCredentialOwnedAccountQuota(provider: string, accountId: stri
   const quota = getCachedProviderAccountQuota(provider, accountId);
   if (provider === "kiro" && quota && Date.now() - quota.updatedAt >= ACCOUNT_QUOTA_TTL_MS) return null;
   return quota;
+}
+
+export function getAnthropicResetNearQuota(instance: AnthropicInstanceId, accountId: string, now: number): ResetNearQuota | null {
+  const stored = getCurrentAccountQuotaEntry(instance, accountId)?.quota;
+  const clocks = stored && anthropicUsageClocks.get(stored);
+  if (!clocks) return null;
+  const quota = normalizeAnthropicQuota(stored, now);
+  return quota ? { ...quota, ...clocks } : null;
 }
 
 /** Test-only: seed or clear the per-account quota cache without probing upstream. */
@@ -315,6 +345,7 @@ export function setCachedProviderAccountQuotaForTests(
     return;
   }
   const account = provider === "kiro" ? getAccountSet("kiro")?.accounts.find(row => row.id === accountId) : undefined;
+  if (isAnthropicInstanceId(provider)) stampAnthropicUsageObservation(quota, quota);
   accountQuotaCache.set(key, { ts: Date.now(), quota,
     ...(account ? { identity: kiroEvidenceIdentity(account) } : {}) });
 }
@@ -394,7 +425,9 @@ export function recordAnthropicAccountQuotaFromHeadersForInstance(
     quotaOwnerIsCurrent: undefined,
     // Headers do not prove that the last usage probe succeeded.
     ts: previous?.ts ?? 0,
-    quota: normalizeAnthropicQuota(withoutAnthropicMonthlyFallback(quota), observed.updatedAt),
+    quota: stampAnthropicUsageObservation(
+      normalizeAnthropicQuota(withoutAnthropicMonthlyFallback(quota), observed.updatedAt), observed, previous?.quota,
+    ),
   }, true);
   // Advisory evidence is published for the primary pool only; Pool 2 stays unknown to decisions.
   if (instance === "anthropic" && generation && generation === decisionCredentialGeneration && decisionQuotaSinkActive()) {

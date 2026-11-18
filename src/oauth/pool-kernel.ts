@@ -155,7 +155,7 @@ function smoothWeightedIndex(ids: readonly string[], state: SelectionState, weig
   let total = 0;
   for (let i = 0; i < ids.length; i++) {
     const id = ids[i]!;
-    const weight = Math.max(1, Math.min(Math.max(3, ids.length - 1), Math.floor(weightOf?.(id) ?? 1)));
+    const weight = weightOf?.(id) ?? 1;
     const score = (state.currentWeights.get(id) ?? 0) + weight;
     state.currentWeights.set(id, score);
     total += weight;

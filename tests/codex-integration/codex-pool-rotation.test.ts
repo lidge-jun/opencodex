@@ -42,7 +42,7 @@ import { getConfigPath } from "../../src/config";
 import type { OcxConfig } from "../../src/types";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { describe, expect, spyOn, test, beforeEach, afterEach } from "bun:test";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const TEST_DIR = join(import.meta.dir, ".tmp-codex-pool-rotation-test");
@@ -374,14 +374,46 @@ describe("accountPoolStrategy new-session routing", () => {
     expect(parseAccountPoolStrategy("reset-near-weighted")).toBe("reset-near-weighted");
   });
 
-  test("reset-near-weighted prefers the account whose weekly reset is nearest", () => {
+  test.each([2, 4, 8])("reset-near-weighted assigns half to the nearest reset across %i accounts", size => {
+    const ids = Array.from({ length: size }, (_, i) => `account-${i}`);
+    for (const id of ids) saveTestCredential(id);
+    const config = makeConfig({
+      accountPoolStrategy: "reset-near-weighted",
+      codexAccounts: ids.map(id => ({ id, email: `${id}@example.test`, isMain: false })),
+    });
+    const target = ids[1]!;
+    const seconds = Date.now() / 1000;
+    for (const id of ids) {
+      setAccountQuotaFromParsed(id, {
+        weeklyPercent: 30, weeklyResetAt: seconds + (id === target ? 1 : 72) * 3600,
+        shortPercent: 30, shortResetAt: seconds + 3600,
+      });
+    }
+    const now = Date.now();
+    if (size > 2) expect(previewCodexAccountForRequest("new-thread", config, now)).toBe(target);
+    const picks = Array.from({ length: 2 * (size - 1) }, () => resolveCodexAccountForThread(null, config, now));
+    expect(countPicks(picks, ids)).toEqual(Object.fromEntries(ids.map(id => [id, id === target ? size - 1 : 1])));
+  });
+
+  test("reset-near-weighted does not use shared quota to weight independent scope assignments", () => {
+    const config = makeThreeAccountConfig({ accountPoolStrategy: "reset-near-weighted" });
+    setAccountQuotaFromParsed("b", { weeklyPercent: 30, weeklyResetAt: Date.now() / 1000 + 3600, shortPercent: 30 });
+    const now = Date.now();
+    expect(resolveCodexAccountForThread(null, config, now, "reserve")).toBe("a");
+    expect(resolveCodexAccountForThread(null, config, now, "shared")).toBe("b");
+  });
+
+  test("a fresh short observation cannot promote an account with an old weekly bar", () => {
     const config = makeThreeAccountConfig({ accountPoolStrategy: "reset-near-weighted" });
     const now = Date.now();
-    const seconds = now / 1000;
-    setAccountQuotaFromParsed("a", { weeklyPercent: 30, weeklyResetAt: seconds + 3600, shortPercent: 30, shortResetAt: seconds + 3600 });
-    setAccountQuotaFromParsed("b", { weeklyPercent: 30, weeklyResetAt: seconds + 72 * 3600, shortPercent: 30, shortResetAt: seconds + 72 * 3600 });
-    setAccountQuotaFromParsed("c", { weeklyPercent: 30, weeklyResetAt: seconds + 96 * 3600, shortPercent: 30, shortResetAt: seconds + 96 * 3600 });
-    expect(resolveCodexAccountForThread(null, config, now)).toBe("a");
+    const clock = spyOn(Date, "now").mockReturnValue(now - 16 * 60_000);
+    try {
+      setAccountQuotaFromParsed("b", { weeklyPercent: 30, weeklyResetAt: now / 1000 + 3600, shortPercent: 30 });
+    } finally {
+      clock.mockRestore();
+    }
+    setAccountQuotaFromParsed("b", { shortPercent: 30 });
+    expect(resolveCodexAccountForThread(null, config)).toBe("a");
   });
 
   test("reset-first compares both windows, previews without writes, and uses the same failover order", () => {
@@ -751,9 +783,9 @@ describe("accountPoolStrategy new-session routing", () => {
     expect(resolveCodexAccountForThread(null, config)).toBe("c");
   });
 
-  test("bound thread under RR does not re-eval on quota threshold", () => {
+  test.each(["round-robin", "reset-near-weighted"] as const)("bound thread under %s does not re-eval on quota threshold", strategy => {
     const config = makeThreeAccountConfig({
-      accountPoolStrategy: "round-robin",
+      accountPoolStrategy: strategy,
       autoSwitchThreshold: 80,
     });
     updateAccountQuota("a", 10);

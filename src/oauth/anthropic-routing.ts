@@ -1,5 +1,6 @@
 import { clearAllAnthropicFamilyQuota, anthropicModelQuotaFor, anthropicModelPercents, anthropicModelRankPercent, anthropicModelWeeklyPercent } from "./anthropic-model-quota";
-import { machineRoutingWeights } from "../routing/machine-weighted-routing";
+import { resetNearWeightOf } from "../routing/machine-weighted-routing";
+import { getAnthropicResetNearQuota } from "../providers/quota/account-cache";
 /**
  * Opt-in Anthropic OAuth account pool (#294).
  *
@@ -883,16 +884,17 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
     const strategy = isAnthropicAccountPoolEnabled(config) ? anthropicPoolStrategy(config) : "quota";
     const eligible = routeCandidates(getEligibleAnthropicAccounts(now, model), decision).filter(id => id !== excludeId && !excludedAccountIds?.has(id));
     if (strategy === "round-robin" || strategy === "reset-near-weighted") {
-      const routing = strategy === "reset-near-weighted"
-        ? machineRoutingWeights("anthropic", eligible, id => getCachedProviderAccountQuota(PROVIDER, id), undefined, now)
-        : null;
-      return peekRoundRobinAccount(poolKey, routing?.eligible ?? eligible, stickyLimitForPool(config),
-        routing ? (id: string) => routing.weights.get(id) ?? 1 : undefined);
+      const weightOf = strategy === "reset-near-weighted" ? anthropicResetNearWeightOf(eligible, now) : undefined;
+      return peekRoundRobinAccount(poolKey, eligible, stickyLimitForPool(config), weightOf);
     }
     if (strategy === "fill-first") {
       return pickNextFillFirstAnthropicAccount(config, excludeId, eligible, decision, model);
     }
     return pickLowestUsage(config, excludeId, now, decision, model, excludedAccountIds);
+  }
+
+  function anthropicResetNearWeightOf(eligible: readonly string[], now: number) {
+    return resetNearWeightOf(eligible, id => getAnthropicResetNearQuota(PROVIDER, id, now), now);
   }
 
   function stickyLimitForPool(config: OcxConfig): number {
@@ -956,11 +958,8 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
       const limit = stickyLimitForPool(config);
       const headroom = model ? eligible.filter(id => !anthropicModelExhausted(id, model)) : eligible;
       const candidates = headroom.length ? headroom : eligible;
-      const routing = strategy === "reset-near-weighted"
-        ? machineRoutingWeights("anthropic", candidates, id => getCachedProviderAccountQuota(PROVIDER, id), undefined, now)
-        : null;
-      const picked = peekRoundRobinAccount(poolKey, routing?.eligible ?? candidates, limit,
-        routing ? (id: string) => routing.weights.get(id) ?? 1 : undefined);
+      const weightOf = strategy === "reset-near-weighted" ? anthropicResetNearWeightOf(candidates, now) : undefined;
+      const picked = peekRoundRobinAccount(poolKey, candidates, limit, weightOf);
       if (!picked) return null;
       return { accountId: picked, reason: "round-robin" };
     }
@@ -1317,11 +1316,8 @@ function createAnthropicRouting(instance: AnthropicInstanceId): AnthropicRouting
         const eligible = routeCandidates(getEligibleAnthropicAccounts(now, options.model), options.routeDecision ?? null);
         const headroom = weighted && options.model ? eligible.filter(id => !anthropicModelExhausted(id, options.model)) : eligible;
         const candidates = headroom.length ? headroom : eligible;
-        const routing = rotationStrategy === "reset-near-weighted"
-          ? machineRoutingWeights("anthropic", candidates, id => getCachedProviderAccountQuota(PROVIDER, id), undefined, now)
-          : null;
-        const picked = pickRoundRobinAccount(poolKey, routing?.eligible ?? candidates, limit,
-          routing ? (id: string) => routing.weights.get(id) ?? 1 : undefined);
+        const weightOf = weighted ? anthropicResetNearWeightOf(candidates, now) : undefined;
+        const picked = pickRoundRobinAccount(poolKey, candidates, limit, weightOf);
         if (picked !== accountId) seedPoolRotationAccount(poolKey, accountId);
         notePoolRotationSuccess(poolKey, accountId, limit);
       }

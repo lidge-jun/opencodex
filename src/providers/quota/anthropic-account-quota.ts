@@ -12,7 +12,7 @@ import {
   accountCacheKey, accountQuotaCache, accountQuotaInflight, captureProviderAccountQuotaEpoch,
   commitAnthropicAccountQuota, getCachedProviderAccountQuota, getTokenForAccountQuotaProbe,
   hydrateAccountQuotaCache, mayCommitAccountQuotaKey, normalizeAnthropicQuota,
-  persistAccountQuotaCache, withoutAnthropicMonthlyFallback, type AccountQuotaCacheEntry,
+  persistAccountQuotaCache, stampAnthropicUsageObservation, withoutAnthropicMonthlyFallback, type AccountQuotaCacheEntry,
 } from "./account-cache";
 
 /**
@@ -77,7 +77,7 @@ export async function fetchAnthropicAccountQuota(
     const quota = retirementOnly ? withoutAnthropicMonthlyFallback(getCachedProviderAccountQuota(instance, accountId))
       : result?.quota ?? retained?.quota;
     const entry: AccountQuotaCacheEntry = {
-      ts: Date.now(), quota: normalizeAnthropicQuota(quota, Date.now()), isCurrent,
+      ts: Date.now(), quota: stampAnthropicUsageObservation(normalizeAnthropicQuota(quota, Date.now()), result?.quota), isCurrent,
       // A retirement-only response leaves the provenance of retained plan bars unchanged.
       quotaOwnerIsCurrent: result?.quota ? result.isCurrent : retained?.quotaOwnerIsCurrent,
       ...result?.failureFields,

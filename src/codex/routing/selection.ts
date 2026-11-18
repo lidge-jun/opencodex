@@ -33,7 +33,8 @@ import {
   type CodexQuotaScope,
 } from "./health-store";
 import { bindThreadAffinity, type CodexAffinityReason } from "./thread-affinity";
-import { machineRoutingWeights } from "../../routing/machine-weighted-routing";
+import { resetNearWeightOf } from "../../routing/machine-weighted-routing";
+import { codexQuotaUsageObservedAt } from "../quota-observation-freshness";
 import {
   getEffectiveActiveCodexAccountId,
   manualPreferenceBlocks,
@@ -269,7 +270,23 @@ function listEligibleCodexAccountIds(
 /** Shared reset timestamps are not evidence for independent model-quota groups. */
 export function accountPoolStrategyForScope(config: OcxConfig, quotaScope?: CodexQuotaScope) {
   const strategy = normalizeCodexAccountPoolStrategy(config.accountPoolStrategy);
-  return strategy === "reset-first" && isIndependentCodexQuotaScope(quotaScope) ? "quota" : strategy;
+  if (!isIndependentCodexQuotaScope(quotaScope)) return strategy;
+  if (strategy === "reset-first") return "quota";
+  return strategy === "reset-near-weighted" ? "round-robin" : strategy;
+}
+
+function codexResetNearWeightOf(eligible: readonly string[], now: number) {
+  return resetNearWeightOf(eligible, id => {
+    const quota = getAccountQuota(id);
+    return quota && {
+      weeklyPercent: quota.weeklyPercent,
+      weeklyResetAt: quota.weeklyResetAt,
+      weeklyObservedAt: codexQuotaUsageObservedAt(quota, "weeklyPercent"),
+      fiveHourPercent: quota.shortPercent,
+      fiveHourResetAt: quota.shortResetAt,
+      fiveHourObservedAt: codexQuotaUsageObservedAt(quota, "shortPercent"),
+    };
+  }, now);
 }
 
 function stickyLimitForConfig(config: OcxConfig): number {
@@ -517,17 +534,12 @@ export function pickUnboundStrategyAccount(
       quotaScope,
       selectionOptions,
     );
-    const routing = resetNearWeighted
-      ? machineRoutingWeights("openai", eligible, id => getAccountQuota(id),
-        id => getPoolAccountPlanForSelection(config, id, selectionOptions), now)
-      : null;
-    const placement = routing?.eligible ?? eligible;
-    const weightOf = routing ? (id: string) => routing.weights.get(id) ?? 1 : undefined;
+    const weightOf = resetNearWeighted ? codexResetNearWeightOf(eligible, now) : undefined;
     const limit = stickyLimitForConfig(config);
     if (!commit) {
-      return peekRoundRobinAccount(poolKey, placement, limit, weightOf);
+      return peekRoundRobinAccount(poolKey, eligible, limit, weightOf);
     }
-    picked = pickRoundRobinAccount(poolKey, placement, limit, weightOf);
+    picked = pickRoundRobinAccount(poolKey, eligible, limit, weightOf);
     if (!picked) return null;
     if (commitSharedActive && sharesActiveSelection(picked, selectionOptions)) {
       if (!isIndependentCodexQuotaScope(quotaScope)
@@ -708,12 +720,8 @@ export function pickAlternateCodexAccount(
   // and then handing back an empty list.
   if (strategy === "round-robin" || strategy === "reset-near-weighted") {
     const eligible = getEligiblePoolAccounts(config, excludeId, now, quotaScope, selectionOptions);
-    const routing = strategy === "reset-near-weighted"
-      ? machineRoutingWeights("openai", eligible, id => getAccountQuota(id),
-        id => getPoolAccountPlanForSelection(config, id, selectionOptions), now)
-      : null;
-    return pickRoundRobinAccount(codexPoolKeyForScope(quotaScope), routing?.eligible ?? eligible,
-      stickyLimitForConfig(config), routing ? (id: string) => routing.weights.get(id) ?? 1 : undefined);
+    const weightOf = strategy === "reset-near-weighted" ? codexResetNearWeightOf(eligible, now) : undefined;
+    return pickRoundRobinAccount(codexPoolKeyForScope(quotaScope), eligible, stickyLimitForConfig(config), weightOf);
   }
   if (strategy === "fill-first") {
     const eligible = getEligiblePoolAccounts(config, excludeId, now, quotaScope, selectionOptions);
@@ -747,12 +755,8 @@ export function peekAlternateCodexAccount(
   const strategy = accountPoolStrategyForScope(config, quotaScope);
   if (strategy === "round-robin" || strategy === "reset-near-weighted") {
     const eligible = getEligiblePoolAccounts(config, excludeId, now, quotaScope, selectionOptions);
-    const routing = strategy === "reset-near-weighted"
-      ? machineRoutingWeights("openai", eligible, id => getAccountQuota(id),
-        id => getPoolAccountPlanForSelection(config, id, selectionOptions), now)
-      : null;
-    return peekRoundRobinAccount(codexPoolKeyForScope(quotaScope), routing?.eligible ?? eligible,
-      stickyLimitForConfig(config), routing ? (id: string) => routing.weights.get(id) ?? 1 : undefined);
+    const weightOf = strategy === "reset-near-weighted" ? codexResetNearWeightOf(eligible, now) : undefined;
+    return peekRoundRobinAccount(codexPoolKeyForScope(quotaScope), eligible, stickyLimitForConfig(config), weightOf);
   }
   return pickAlternateCodexAccount(config, excludeId, now, quotaScope, selectionOptions);
 }

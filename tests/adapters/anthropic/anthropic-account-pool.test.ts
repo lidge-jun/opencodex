@@ -25,7 +25,8 @@ import {
 } from "../../../src/oauth/anthropic-routing";
 import { captureOAuthAccountSelection, getAccountSet, markAccountNeedsReauth, saveCredential, saveAccountCredential, setActiveAccount } from "../../../src/oauth/store";
 import { subscribeAccountSelections } from "../../../src/lib/account-selection-events";
-import { clearAccountQuotaCache, setCachedProviderAccountQuotaForTests } from "../../../src/providers/quota";
+import { clearAccountQuotaCache, recordAnthropicAccountQuotaFromHeaders, setCachedProviderAccountQuotaForTests } from "../../../src/providers/quota";
+import { captureConfigGeneration } from "../../../src/lib/state-store-sweeper";
 import type { OcxAccountPoolQuotaWindow, OcxAccountPoolRotationStrategy, OcxConfig } from "../../../src/types";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 
@@ -400,6 +401,16 @@ describe("anthropic account pool", () => {
     expect(resolveAnthropicAccountForSession("near", config)).toMatchObject({ accountId: bId, reason: "affinity" });
     expect((await admitAnthropic("", config)).accountId).toBe(aId);
     expect((await admitAnthropic("third", config)).accountId).toBe(cId);
+  });
+
+  test("a fresh Anthropic header cannot promote an account with an old weekly bar", async () => {
+    const { aId, bId } = await seedThreeAccounts();
+    const now = Date.now();
+    setCachedProviderAccountQuotaForTests("anthropic", bId, {
+      fiveHourPercent: 20, weeklyPercent: 30, weeklyResetAt: now + 60_000, updatedAt: now - 16 * 60_000,
+    });
+    recordAnthropicAccountQuotaFromHeaders(bId, new Headers({ "anthropic-ratelimit-unified-5h-utilization": "0.3" }), captureConfigGeneration());
+    expect(resolveAnthropicAccountForSession("fresh", cfg(true, 80, { strategy: "reset-near-weighted" })).accountId).toBe(aId);
   });
 
   test("plain round-robin preserves the commit cursor across a transient headroom filter", async () => {

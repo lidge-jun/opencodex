@@ -430,6 +430,17 @@ score. A known long-window score excludes short usage when its valid reset has e
 future and is at most `TERMINAL_SHORT_WINDOW_FRESHNESS_MS` old; general `updatedAt` changes do not
 extend that observation.
 
+## Reset-near-weighted account ordering
+
+`src/codex/routing/selection.ts` applies `src/routing/machine-weighted-routing.ts` to the existing
+round-robin placement candidates for opt-in `reset-near-weighted`. Among eligible accounts with
+a future weekly reset within 24 hours, five-hour usage below 60%, and more than 2% weekly quota
+remaining, the nearest reset receives weight N−1 and the other ring members each receive weight 1.
+Both observations must be current (at most 15 minutes old). `src/codex/quota-observation-freshness.ts`
+supplies per-window clocks so a partial update cannot refresh a carried bar. Display-only hydrated
+bars, missing evidence, and independent quota scopes receive ordinary round-robin weights. Account
+eligibility, priority, manual preference, sticky limit, and healthy thread bindings still govern.
+
 ## Bound-thread rebind destination
 
 An ordinary quota-strategy re-evaluation may move a LIVE thread only to an account that has genuine
