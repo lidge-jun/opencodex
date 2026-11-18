@@ -73,6 +73,7 @@ export interface DerivedInitProvider {
   adapter: string;
   baseUrl: string;
   kind: "forward" | "oauth" | "key" | "local";
+  keyOptional?: boolean;
   codexAccountMode?: CodexAccountMode;
   dashboardUrl?: string;
   defaultModel?: string;
@@ -385,6 +386,7 @@ export function deriveInitProviders(): DerivedInitProvider[] {
     adapter: entry.adapter,
     baseUrl: entry.baseUrl,
     kind: entry.authKind,
+    ...(entry.keyOptional ? { keyOptional: true } : {}),
     ...(entry.codexAccountMode ? { codexAccountMode: entry.codexAccountMode } : {}),
     ...(entry.dashboardUrl ? { dashboardUrl: entry.dashboardUrl } : {}),
     ...(entry.defaultModel ? { defaultModel: entry.defaultModel } : {}),

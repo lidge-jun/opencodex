@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { getConfigPath, getDefaultConfig, loadConfig, readConfigDiagnostics, validateConfigCandidate } from "../../src/config";
 import { installIsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-import { AGY_ACP_DEFAULT_MODEL, AGY_ACP_PROVIDER_ID, AGY_ACP_SEED_MODELS, agyAcpConfigIssues, selectorCandidateProviders } from "../../src/config/schema/agy-acp-references";
+import { AGY_ACP_PROVIDER_ID, agyAcpConfigIssues, selectorCandidateProviders } from "../../src/config/schema/agy-acp-references";
+import { AGY_ACP_DEFAULT_MODEL, AGY_ACP_SEED_MODELS } from "../../src/providers/registry/agy-acp-models";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
 import type { OcxConfig } from "../../src/types";
 import { repoPath } from "../helpers/repo-root";
@@ -147,10 +148,13 @@ describe("antigravity-acp configuration", () => {
     expect([...selectorCandidateProviders(config({ defaultProvider: "antigravity-acp" }) as never, "mystery-model")]).toEqual(["antigravity-acp"]);
   });
 
-  test("validation is structural: the resolver imports nothing, so it can read no credential or runtime state", () => {
+  test("structural validation shares static metadata with the registry without loading runtime state", () => {
     const source = readFileSync(repoPath("src/config/schema/agy-acp-references.ts"), "utf8");
-    expect(source).not.toMatch(/^\s*import\s/m);
-    // Its restated seed must match the registry row the router reads.
+    expect(source.match(/^import .* from "([^"]+)";$/gm)).toEqual([
+      'import { AGY_ACP_DEFAULT_MODEL, AGY_ACP_SEED_MODELS } from "../../providers/registry/agy-acp-models";',
+    ]);
+    const metadata = readFileSync(repoPath("src/providers/registry/agy-acp-models.ts"), "utf8");
+    expect(metadata).not.toMatch(/^\s*import\s/m);
     const row = PROVIDER_REGISTRY.find(entry => entry.id === AGY_ACP_PROVIDER_ID);
     expect(row?.models).toEqual([...AGY_ACP_SEED_MODELS]);
     expect(row?.defaultModel).toBe(AGY_ACP_DEFAULT_MODEL);

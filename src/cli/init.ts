@@ -75,6 +75,7 @@ export interface InitProvider {
   adapter: string;
   baseUrl: string;
   kind: InitKind;
+  keyOptional?: boolean;
   dashboardUrl?: string;
   defaultModel?: string;
 }
@@ -160,8 +161,7 @@ export async function runInit(): Promise<void> {
         providerConfig = { adapter: p.adapter, baseUrl: p.baseUrl, authMode: "oauth", ...(p.defaultModel ? { defaultModel: p.defaultModel } : {}) };
         oauthHint = true;
       } else {
-        // key + local: collect a key (local usually blank).
-        if (p.dashboardUrl) console.log(`   🔑 Get your key: ${p.dashboardUrl}`);
+        if (!p.keyOptional && p.dashboardUrl) console.log(`   🔑 Get your key: ${p.dashboardUrl}`);
         // Template URL with placeholders (e.g. Cloudflare's {account_id}) needs a resolved value.
         let baseUrl = p.baseUrl;
         if (/\{[^}]*\}/.test(baseUrl)) {
@@ -174,13 +174,13 @@ export async function runInit(): Promise<void> {
         }
         const env = envKeyFor(p.id);
         const hint = p.kind === "local" ? "API key (usually blank — press Enter): " : `API key (paste, or env var $${env}): `;
-        const apiKey = (await prompt.ask(`\n${hint}`)).trim();
+        const apiKey = p.keyOptional ? "" : (await prompt.ask(`\n${hint}`)).trim();
         const modelChoice = (await prompt.ask(`Default model${p.defaultModel ? ` [${p.defaultModel}]` : " (optional)"}: `)).trim();
         const defaultModel = modelChoice || p.defaultModel;
         providerConfig = {
           adapter: p.adapter,
           baseUrl,
-          ...(p.kind === "key" ? { apiKey: apiKey || `\${${env}}` } : apiKey ? { apiKey } : {}),
+          ...(p.kind === "key" && !p.keyOptional ? { apiKey: apiKey || `\${${env}}` } : apiKey ? { apiKey } : {}),
           ...(defaultModel ? { defaultModel } : {}),
         };
         // Apply the catalog's models / vision classification (same enrichment as the GUI).

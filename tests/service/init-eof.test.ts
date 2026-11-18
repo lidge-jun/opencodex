@@ -8,17 +8,18 @@ import { resolveCodexCoordinatorDatabasePath, resolveEffectiveUserIdentity } fro
 
 async function waitForOutput(
   stream: ReadableStream<Uint8Array>,
-  expected: string,
-): Promise<void> {
+  expected: string | RegExp,
+): Promise<string> {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let output = "";
   try {
-    while (!output.includes(expected)) {
+    while (!(typeof expected === "string" ? output.includes(expected) : expected.test(output))) {
       const { value, done } = await reader.read();
       if (done) throw new Error(`init exited before writing ${JSON.stringify(expected)}`);
       output += decoder.decode(value, { stream: true });
     }
+    return output;
   } finally {
     reader.releaseLock();
   }
@@ -84,6 +85,41 @@ describe("ocx init piped stdin (#754)", () => {
     }
     while (dirs.length) removeTreeWithRetry(dirs.pop()!);
   });
+
+  test("the Antigravity ACP preset skips the key question and writes a keyless config", async () => {
+    const home = makeHome();
+    const proc = launch(home);
+    const stderr = new Response(proc.stderr).text();
+    try {
+      const menu = await waitForOutput(proc.stdout, "Select default provider (number):");
+      const index = /^\s*(\d+)\.\s+Antigravity CLI \(ACP, local\)/m.exec(menu)?.[1];
+      expect(index).toBeDefined();
+      proc.stdin.write(index + "\n");
+      await proc.stdin.flush();
+      const prompt = await waitForOutput(proc.stdout, /API key \(|Default model \[/);
+      expect(prompt).toContain("Default model [");
+      expect(prompt).not.toContain("API key (");
+      proc.stdin.write("\n");
+      await proc.stdin.flush();
+      await waitForOutput(proc.stdout, "Proxy port [10100]:");
+      proc.stdin.write("\n");
+      await proc.stdin.flush();
+      await waitForOutput(proc.stdout, "Inject into Codex config.toml? [Y/n]:");
+      const stored = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
+      expect(stored.defaultProvider).toBe("antigravity-acp");
+      expect(stored.providers["antigravity-acp"]).toMatchObject({ adapter: "agy-acp", defaultModel: "gemini-3.8-flash" });
+      expect(stored.providers["antigravity-acp"]).not.toHaveProperty("apiKey");
+      proc.stdin.write("n\n");
+      await proc.stdin.flush();
+      await waitForOutput(proc.stdout, "Install Codex autostart shim? [Y/n]:");
+      proc.stdin.write("n\n");
+      await proc.stdin.flush();
+      expect(await proc.exited).toBe(0);
+    } finally {
+      await stop(proc);
+      await stderr;
+    }
+  }, 30_000);
 
   test("exits cleanly when stdin closes before the first prompt answer", async () => {
     const home = makeHome();

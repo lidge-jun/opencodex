@@ -6,16 +6,10 @@
  * credential and never depends on cooldowns or health. An ACP provider is the canonical
  * `antigravity-acp` row (whatever adapter it was saved with) or any row whose adapter is `agy-acp`.
  */
+import { AGY_ACP_DEFAULT_MODEL, AGY_ACP_SEED_MODELS } from "../../providers/registry/agy-acp-models";
+
 export const AGY_ACP_PROVIDER_ID = "antigravity-acp";
 export const AGY_ACP_ADAPTER = "agy-acp";
-/**
- * Static seed of the canonical registry row (entries-extended.ts), restated because this leaf
- * imports nothing; tests/config/agy-acp-config.test.ts fails if the two drift. The router counts a
- * registry row's seed and default model as known ids even when the configured row lists no models,
- * so a structural check has to count them too.
- */
-export const AGY_ACP_DEFAULT_MODEL = "gemini-3.8-flash";
-export const AGY_ACP_SEED_MODELS: readonly string[] = ["gemini-3.8-flash", "gemini-4-argon", "gemini-3.7-flash"];
 
 type ProviderLike = {
   adapter?: unknown; apiKey?: unknown; apiKeyPool?: unknown; authMode?: unknown; models?: unknown; defaultModel?: unknown;
@@ -195,8 +189,10 @@ export function agyAcpConfigIssues(config: ConfigLike): AgyAcpConfigIssue[] {
 export function agyAcpUnattendedTargetIssues(config: ConfigLike): AgyAcpConfigIssue[] {
   const issues: AgyAcpConfigIssue[] = [];
   const selectsAcp = (selector: unknown): boolean =>
-    typeof selector === "string" && [...selectorCandidateProviders(config, selector)].some(name =>
-      Object.hasOwn(config.providers ?? {}, name) && isAgyAcpProvider(name, config.providers?.[name]));
+    typeof selector === "string" && [...selectorCandidateProviders(config, selector)].some(name => {
+      const provider = config.providers?.[name];
+      return isRecord(provider) && isAgyAcpProvider(name, provider);
+    });
   if (isRecord(config.memoryModels)) {
     for (const phase of ["extract", "consolidation"] as const) {
       const setting = config.memoryModels[phase];

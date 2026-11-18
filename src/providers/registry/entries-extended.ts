@@ -26,6 +26,7 @@ import {
 } from "../codebuddy-models";
 import { QODER_CN_MODELS, QODER_GLOBAL_MODELS, QODER_REASONING_EFFORTS } from "../qoder-models";
 import type { ProviderRegistryEntry } from "./types";
+import { AGY_ACP_DEFAULT_MODEL, AGY_ACP_SEED_MODELS } from "./agy-acp-models";
 import {
   ZAI_GLM_53_MODELS,
   ZAI_GLM_5X_MODELS,
@@ -1766,9 +1767,9 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     authKind: "key",
     keyOptional: true,
     dashboardUrl: "https://antigravity.google/docs/cli/acp",
-    defaultModel: "gemini-3.8-flash",
+    defaultModel: AGY_ACP_DEFAULT_MODEL,
     // Static seed; the ACP model options the CLI advertises at turn time decide what is accepted.
-    models: ["gemini-3.8-flash", "gemini-4-argon", "gemini-3.7-flash"],
+    models: [...AGY_ACP_SEED_MODELS],
     liveModels: false,
     modelContextWindows: { "gemini-3.8-flash": 1_048_576, "gemini-4-argon": 1_048_576, "gemini-3.7-flash": 1_048_576 },
     // ACP prompts carry text only; client function tools are not offered to the model.
