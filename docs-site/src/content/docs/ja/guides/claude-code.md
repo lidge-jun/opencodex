@@ -181,7 +181,7 @@ macOS がログインキーチェーン内、Windows が現在のユーザーの
 削除が完了するまでは Picker は利用できず、適用済みプロファイルは復号しない中継を使います。
 キーチェーンのロック解除やアプリの資格情報へのアクセス許可は macOS 独自の動作で、再起動や更新時にも
 表示される場合があります。Windows では `on` や `trust` の明示的な実行時にルート追加の確認が表示されることがあります。
-Linux で Picker を明示的に有効にすると、`certutil` がユーザーの NSS データベース（`~/.pki/nssdb`）に制約付き Picker CA を信頼済みとして登録します。
+Linux で Picker を明示的に有効にすると、`certutil` がユーザーの NSS データベースに制約付き Picker CA を信頼済みとして登録します。
 
 Picker モードが有効な間、Claude Desktop のネットワークは OpenCodex を経由します。OpenCodex が停止
 すると、Picker モードをオフにするか Desktop を完全に再起動するまで Desktop はオフラインになります。

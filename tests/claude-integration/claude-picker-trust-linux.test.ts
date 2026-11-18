@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createCertificateAuthority } from "../../src/claude/intercept/local-ca";
@@ -14,6 +14,7 @@ import {
   untrustPickerCaLinux,
   type LinuxTrustRunner,
 } from "../../src/claude/intercept/picker-trust-linux";
+import { repoPath } from "../helpers/repo-root";
 import type { SecurityResult } from "../../src/claude/intercept/picker-trust";
 
 const homes: string[] = [];
@@ -23,8 +24,9 @@ function home(withDb = true): string {
   const dir = mkdtempSync(join(tmpdir(), "ocx-nss-home-"));
   homes.push(dir);
   if (withDb) {
-    mkdirSync(linuxNssDbDir(dir), { recursive: true });
-    writeFileSync(join(linuxNssDbDir(dir), "cert9.db"), "");
+    const legacy = join(dir, ".pki", "nssdb");
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(join(legacy, "cert9.db"), "");
   }
   return dir;
 }
@@ -41,6 +43,9 @@ const exit255: SecurityResult = { code: 255, stdout: "", stderr: "SEC_ERROR_BAD_
 interface Entry { nickname: string; pem: string; flags: string }
 
 /** A fake NSS database driven by certutil argv; `broken` makes every read fail like an unreadable database. */
+const header = "\nCertificate Nickname                                         Trust Attributes\n"
+  + "                                                             SSL,S/MIME,JAR/XPI\n\n";
+
 function nss(initial: Entry[] = [], options: { broken?: boolean } = {}) {
   const certs = [...initial];
   const calls: string[][] = [];
@@ -54,9 +59,7 @@ function nss(initial: Entry[] = [], options: { broken?: boolean } = {}) {
       return found ? ok(found.pem) : exit255;
     }
     if (op === "-L") {
-      return ok("\nCertificate Nickname                                         Trust Attributes\n"
-        + "                                                             SSL,S/MIME,JAR/XPI\n\n"
-        + certs.map(c => `${c.nickname}                           ${c.flags},,\n`).join(""));
+      return ok(header + certs.map(c => `${c.nickname}                           ${c.flags},,\n`).join(""));
     }
     if (op === "-A") {
       const input = args[args.indexOf("-i") + 1]!;
@@ -69,7 +72,7 @@ function nss(initial: Entry[] = [], options: { broken?: boolean } = {}) {
       certs.splice(at, 1);
       return ok();
     }
-    if (op === "-N") return ok();
+    if (op === "-N" || op === "--build-flags") return ok();
     return { code: 1, stdout: "", stderr: "unexpected" };
   };
   return { run, calls, certs };
@@ -120,7 +123,7 @@ test("confirmed NSS directory absence skips certutil for inspection and removal"
   writeFileSync(join(blockedByFile, ".pki"), "");
   for (const h of [missing, blockedByFile]) {
     expect(await inspectPickerTrustLinux(root.sha1, db.run, h)).toBe("untrusted");
-    expect(await untrustPickerCaLinux(root.sha1, db.run, h)).toEqual({ ok: true });
+    expect(await untrustPickerCaLinux(root.sha1, db.run, h, root)).toEqual({ ok: true });
   }
   expect(db.calls).toEqual([]);
 });
@@ -153,7 +156,10 @@ test("trust creates the NSS database when the user has none", async () => {
   const h = home(false);
   const db = nss();
   expect(await trustPickerCaLinux("/ca.pem", db.run, { pem: root.pem }, h)).toEqual({ ok: true });
-  expect(db.calls[0]).toEqual(["-N", "-d", `sql:${linuxNssDbDir(h)}`, "--empty-password"]);
+  expect(db.calls.slice(0, 2)).toEqual([
+    ["--build-flags"],
+    ["-N", "-d", `sql:${join(h, ".local", "share", "pki", "nssdb")}`, "--empty-password"],
+  ]);
 });
 
 test("untrust removes only the predecessor, even when the current root was installed meanwhile", async () => {
@@ -161,7 +167,7 @@ test("untrust removes only the predecessor, even when the current root was insta
   const current = pickerRoot();
   const h = home();
   const db = nss([entry(predecessor), entry(current)]);
-  expect(await untrustPickerCaLinux(predecessor.sha1, db.run, h)).toEqual({ ok: true });
+  expect(await untrustPickerCaLinux(predecessor.sha1, db.run, h, predecessor)).toEqual({ ok: true });
   expect(db.certs.map(c => c.nickname)).toEqual([linuxPickerNickname(current.sha1)]);
   expect(await inspectPickerTrustLinux(current.sha1, db.run, h)).toBe("trusted");
 });
@@ -169,18 +175,18 @@ test("untrust removes only the predecessor, even when the current root was insta
 test("untrust succeeds only on a readable database proving absence", async () => {
   const root = pickerRoot();
   const empty = nss();
-  expect(await untrustPickerCaLinux(root.sha1, empty.run, home())).toEqual({ ok: true });
-  expect(empty.calls.map(call => call[0])).toEqual(["-L"]);
-  expect(await untrustPickerCaLinux(root.sha1, nss([entry(root)], { broken: true }).run, home())).toEqual({ ok: false });
+  expect(await untrustPickerCaLinux(root.sha1, empty.run, home(), root)).toEqual({ ok: true });
+  expect(empty.calls.map(call => call[0])).toEqual(["-L", "-L"]);
+  expect(await untrustPickerCaLinux(root.sha1, nss([entry(root)], { broken: true }).run, home(), root)).toEqual({ ok: false });
   const foreign = { nickname: linuxPickerNickname(root.sha1), pem: pickerRoot().pem, flags: "C" };
   const kept = nss([foreign]);
-  expect(await untrustPickerCaLinux(root.sha1, kept.run, home())).toEqual({ ok: false });
+  expect(await untrustPickerCaLinux(root.sha1, kept.run, home(), root)).toEqual({ ok: false });
   expect(kept.certs).toHaveLength(1);
   const refusing: LinuxTrustRunner = async args => args[0] === "-D" ? { code: 1, stdout: "", stderr: "" } : nss([entry(root)]).run(args);
-  expect(await untrustPickerCaLinux(root.sha1, refusing, home())).toEqual({ ok: false });
+  expect(await untrustPickerCaLinux(root.sha1, refusing, home(), root)).toEqual({ ok: false });
 });
 
-test("a root under the legacy shared nickname is still recognised and removed by its own fingerprint", async () => {
+test("legacy trust is recognised but its shared nickname is never used for deletion", async () => {
   const legacy = pickerRoot();
   const other = pickerRoot();
   const h = home();
@@ -188,10 +194,11 @@ test("a root under the legacy shared nickname is still recognised and removed by
   expect(await inspectPickerTrustLinux(legacy.sha1, db.run, h)).toBe("trusted");
   // Another root under the legacy nickname is neither trusted nor deleted for this fingerprint.
   expect(await inspectPickerTrustLinux(other.sha1, db.run, h)).toBe("untrusted");
-  expect(await untrustPickerCaLinux(other.sha1, db.run, h)).toEqual({ ok: true });
+  expect(await untrustPickerCaLinux(other.sha1, db.run, h, other)).toEqual({ ok: true });
   expect(db.certs).toHaveLength(1);
-  expect(await untrustPickerCaLinux(legacy.sha1, db.run, h)).toEqual({ ok: true });
-  expect(db.certs).toHaveLength(0);
+  expect(await untrustPickerCaLinux(legacy.sha1, db.run, h, legacy)).toEqual({ ok: false });
+  expect(db.calls.some(call => call[0] === "-D")).toBe(false);
+  expect(db.certs).toHaveLength(1);
 });
 
 test("a root installed between the predecessor lookup and its deletion stays trusted", async () => {
@@ -208,7 +215,7 @@ test("a root installed between the predecessor lookup and its deletion stays tru
     }
     return db.run(args);
   };
-  expect(await untrustPickerCaLinux(predecessor.sha1, run, h)).toEqual({ ok: true });
+  expect(await untrustPickerCaLinux(predecessor.sha1, run, h, predecessor)).toEqual({ ok: true });
   expect(installed).toBe(true);
   expect(db.certs.map(c => c.nickname)).toEqual([linuxPickerNickname(current.sha1)]);
   expect(await inspectPickerTrustLinux(current.sha1, db.run, h)).toBe("trusted");
@@ -217,25 +224,19 @@ test("a root installed between the predecessor lookup and its deletion stays tru
 test("a truncated listing is a failed read: untrust fails and trust stays unknown", async () => {
   const root = pickerRoot();
   const truncated: LinuxTrustRunner = async () => ({ code: null, stdout: "", stderr: LINUX_TRUST_TRUNCATED });
-  expect(await untrustPickerCaLinux(root.sha1, truncated, home())).toEqual({ ok: false });
+  expect(await untrustPickerCaLinux(root.sha1, truncated, home(), root)).toEqual({ ok: false });
   expect(await inspectPickerTrustLinux(root.sha1, truncated, home())).toBe("unknown");
 });
 
-/** A certutil stand-in: the listing names `nickname` first, then `padding` bytes; `-n` prints the PEM. */
-function fakeCertutil(dir: string, nickname: string, pem: string, padding: number): string {
-  const pemPath = join(dir, "root.pem");
-  writeFileSync(pemPath, pem);
-  const exe = join(dir, "certutil");
-  writeFileSync(exe, [
-    "#!/bin/sh",
-    `case " $* " in *" -n "*) cat '${pemPath}'; exit 0 ;; esac`,
-    "printf '\\nCertificate Nickname    Trust Attributes\\n\\n'",
-    `printf '%s    C,,\\n' '${nickname}'`,
-    `head -c ${padding} /dev/zero | tr '\\0' 'x'`,
-    "",
-  ].join("\n"));
-  chmodSync(exe, 0o755);
-  return exe;
+/** Execute a JS certutil fixture through the current Bun executable, including on Windows. */
+function fakeCertutil(dir: string, nickname: string, pem: string, padding: number): LinuxTrustRunner {
+  const script = join(dir, "certutil.cjs");
+  writeFileSync(script, `
+    if (process.argv.includes("-n")) process.stdout.write(${JSON.stringify(pem)});
+    else process.stdout.write(${JSON.stringify(header + nickname + "    C,,\n")} + " ".repeat(${padding}));
+  `);
+  const run = createLinuxCertutilRunner(process.execPath);
+  return args => run([script, ...args]);
 }
 
 test("the production runner rejects a listing past its output limit instead of reporting absence", async () => {
@@ -243,11 +244,143 @@ test("the production runner rejects a listing past its output limit instead of r
   const h = home();
   const nickname = linuxPickerNickname(predecessor.sha1);
   // Control: the same listing under the limit shows the predecessor through the real runner.
-  const small = createLinuxCertutilRunner(fakeCertutil(mkdtempSync(join(h, "small-")), nickname, predecessor.pem, 1024));
+  const small = fakeCertutil(mkdtempSync(join(h, "small-")), nickname, predecessor.pem, 1024);
   expect(await inspectPickerTrustLinux(predecessor.sha1, small, h)).toBe("trusted");
   // Past 4 MiB the predecessor, listed first, must not be read as absent.
-  const large = createLinuxCertutilRunner(fakeCertutil(mkdtempSync(join(h, "large-")), nickname, predecessor.pem, 5 * 1024 * 1024));
+  const large = fakeCertutil(mkdtempSync(join(h, "large-")), nickname, predecessor.pem, 5 * 1024 * 1024);
   expect(await large(["-L", "-d", `sql:${linuxNssDbDir(h)}`])).toEqual({ code: null, stdout: "", stderr: LINUX_TRUST_TRUNCATED });
-  expect(await untrustPickerCaLinux(predecessor.sha1, large, h)).toEqual({ ok: false });
+  expect(await untrustPickerCaLinux(predecessor.sha1, large, h, predecessor)).toEqual({ ok: false });
   expect(await inspectPickerTrustLinux(predecessor.sha1, large, h)).toBe("unknown");
+});
+
+test("trust, inspect and untrust select the XDG database without creating a legacy shadow", async () => {
+  const root = pickerRoot();
+  for (const custom of [false, true]) {
+    const h = home(false);
+    const xdg = custom ? join(h, "data") : undefined;
+    const dir = join(xdg ?? join(h, ".local", "share"), "pki", "nssdb");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "cert9.db"), "");
+    const db = nss();
+    expect(await trustPickerCaLinux("/ca.pem", db.run, root, h, xdg)).toEqual({ ok: true });
+    expect(await inspectPickerTrustLinux(root.sha1, db.run, h, xdg)).toBe("trusted");
+    expect(await untrustPickerCaLinux(root.sha1, db.run, h, root, xdg)).toEqual({ ok: true });
+    expect(db.calls.filter(call => call.includes("-d")).every(call => call.includes(`sql:${dir}`))).toBe(true);
+    expect(existsSync(join(h, ".pki"))).toBe(false);
+  }
+});
+
+test("missing certutil leaves a fresh home untouched", async () => {
+  const h = home(false);
+  const root = pickerRoot();
+  const missing = createLinuxCertutilRunner(null);
+  expect(await trustPickerCaLinux("/ca.pem", missing, root, h)).toEqual({ ok: false, reason: "unsupported" });
+  expect(existsSync(join(h, ".pki"))).toBe(false);
+  expect(existsSync(join(h, ".local"))).toBe(false);
+});
+
+test.skipIf(process.platform === "win32")("unsafe NSS paths refuse reads and writes", async () => {
+  const root = pickerRoot();
+  const h = home();
+  const dir = linuxNssDbDir(h);
+  chmodSync(dir, 0o777);
+  const linkedHome = home(false);
+  mkdirSync(join(linkedHome, ".pki"));
+  symlinkSync(linuxNssDbDir(home()), join(linkedHome, ".pki", "nssdb"));
+  for (const unsafeHome of [h, linkedHome]) {
+    const db = nss([entry(root)]);
+    expect(await inspectPickerTrustLinux(root.sha1, db.run, unsafeHome)).toBe("unknown");
+    expect(await trustPickerCaLinux("/ca.pem", db.run, root, unsafeHome)).toEqual({ ok: false, reason: "declined_or_failed" });
+    expect(await untrustPickerCaLinux(root.sha1, db.run, unsafeHome, root)).toEqual({ ok: false });
+    expect(db.calls).toEqual([]);
+  }
+});
+
+test("pending PEM must authorize the exact constrained picker root before any certutil call", async () => {
+  const root = pickerRoot();
+  const foreign = createCertificateAuthority({ commonName: "foreign CA" }).certPem;
+  const unconstrained = createCertificateAuthority({ commonName: PICKER_CA_COMMON_NAME }).certPem;
+  const other = pickerRoot();
+  for (const [target, pem] of [
+    [{ pem: foreign, sha1: pickerCaFingerprints(foreign).sha1 }, foreign],
+    [{ pem: unconstrained, sha1: pickerCaFingerprints(unconstrained).sha1 }, unconstrained],
+    [root, other.pem],
+  ] as const) {
+    const db = nss([entry(target)]);
+    expect(await untrustPickerCaLinux(target.sha1, db.run, home(), { pem })).toEqual({ ok: false });
+    expect(db.calls).toEqual([]);
+  }
+});
+
+test("untrust refuses a nickname that lists multiple certificates", async () => {
+  const root = pickerRoot();
+  const foreign = { ...entry(pickerRoot()), nickname: linuxPickerNickname(root.sha1) };
+  const db = nss([entry(root), foreign]);
+  expect(await untrustPickerCaLinux(root.sha1, db.run, home(), root)).toEqual({ ok: false });
+  expect(db.calls.some(call => call[0] === "-D")).toBe(false);
+  expect(db.certs).toEqual([entry(root), foreign]);
+});
+
+test("untrust checks the nickname again immediately before deleting", async () => {
+  const root = pickerRoot();
+  const foreign = { ...entry(pickerRoot()), nickname: linuxPickerNickname(root.sha1) };
+  const db = nss([entry(root)]);
+  let exports = 0;
+  const run: LinuxTrustRunner = async args => {
+    if (args[0] === "-L" && args.includes("-n") && ++exports === 2) db.certs[0] = foreign;
+    return db.run(args);
+  };
+  expect(await untrustPickerCaLinux(root.sha1, run, home(), root)).toEqual({ ok: false });
+  expect(db.calls.some(call => call[0] === "-D")).toBe(false);
+  expect(db.certs).toEqual([foreign]);
+});
+
+test("untrust retains the retry record when the root is renamed or an export is unreadable", async () => {
+  const root = pickerRoot();
+  for (const cert of [
+    { ...entry(root), nickname: "renamed certificate" },
+    { ...entry(root), nickname: PICKER_CA_COMMON_NAME, pem: "unreadable" },
+  ]) {
+    const db = nss([cert]);
+    expect(await untrustPickerCaLinux(root.sha1, db.run, home(), root)).toEqual({ ok: false });
+    expect(db.calls.some(call => call[0] === "-D")).toBe(false);
+  }
+});
+
+test("untrust checks the whole database after deletion and verifies other certificates survived", async () => {
+  const root = pickerRoot();
+  const foreign = { ...entry(pickerRoot()), nickname: PICKER_CA_COMMON_NAME };
+  for (const renamed of [true, false]) {
+    const db = nss([entry(root), foreign]);
+    const run: LinuxTrustRunner = async args => {
+      if (args[0] !== "-D") return db.run(args);
+      const result = await db.run(args);
+      if (renamed) db.certs.push({ ...entry(root), nickname: "renamed during removal" });
+      else db.certs.splice(0, 1);
+      return result;
+    };
+    expect(await untrustPickerCaLinux(root.sha1, run, home(), root)).toEqual({ ok: false });
+  }
+});
+
+test("the production runner kills an overflowing child on either pipe before it can finish", async () => {
+  const h = home(false);
+  const marker = join(h, "child-finished");
+  const script = join(h, "overflow.cjs");
+  writeFileSync(script, `
+    const fs = require("node:fs");
+    process[process.argv[2]].write("é".repeat(3 * 1024 * 1024), () => {
+      setTimeout(() => fs.writeFileSync(process.argv[3], "finished"), 200);
+    });
+  `);
+  const run = createLinuxCertutilRunner(process.execPath);
+  for (const pipe of ["stdout", "stderr"]) {
+    expect(await run([script, pipe, marker])).toEqual({ code: null, stdout: "", stderr: LINUX_TRUST_TRUNCATED });
+    expect(existsSync(marker)).toBe(false);
+  }
+});
+
+test("the runtime contract includes on-demand Linux picker startup", () => {
+  const runtime = readFileSync(repoPath("structure/runtime.md"), "utf8");
+  expect(runtime.includes("Windows and Linux defer picker startup until picker intent or an applied profile requires recovery.")).toBe(true);
 });

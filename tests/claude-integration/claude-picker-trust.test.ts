@@ -155,7 +155,10 @@ test("linux routes an injected runner to the NSS adapter of the given home", asy
   try {
     mkdirSync(join(home, ".pki", "nssdb"), { recursive: true });
     const calls: string[][] = [];
-    const run: SecurityRunner = async args => { calls.push([...args]); return { code: 0, stdout: "", stderr: "" }; };
+    const run: SecurityRunner = async args => {
+      calls.push([...args]);
+      return { code: 0, stdout: "Certificate Nickname    Trust Attributes\n    SSL,S/MIME,JAR/XPI\n", stderr: "" };
+    };
     expect(await inspectPickerTrust("/leaf.pem", sha1, run, "linux", home)).toBe("untrusted");
     expect(calls).toEqual([["-L", "-d", `sql:${join(home, ".pki", "nssdb")}`]]);
   } finally {

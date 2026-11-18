@@ -159,7 +159,7 @@ OpenCodex 設定目錄不會儲存明文 Picker 簽章金鑰。受限 CA 的完�
 
 從舊身分進行一次性移轉時，清除原有信任可能需要同意。清理未完成時，Picker 無法使用，已套用的設定檔
 會使用不解密的中繼。macOS 也可能另外要求解鎖鑰匙圈或核准應用程式存取憑證，重新啟動或升級時也可能出現這些提示。Windows 上明確執行 `on` 或 `trust` 可能顯示新增根的確認。
-在 Linux 上明確啟用 Picker 時，`certutil` 會將受限的 Picker CA 加入使用者的 NSS 資料庫（`~/.pki/nssdb`）並設為受信任。
+在 Linux 上明確啟用 Picker 時，`certutil` 會將受限的 Picker CA 加入使用者的 NSS 資料庫並設為受信任。
 
 Picker 模式開啟期間，Claude Desktop 會透過 OpenCodex 存取網路。如果 OpenCodex 停止，Desktop 會離線，
 直到你完全重新啟動 Desktop 或關閉 Picker 模式。使用 `ocx claude desktop picker status` 查看狀態，

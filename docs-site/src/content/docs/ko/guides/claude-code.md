@@ -223,7 +223,7 @@ Picker는 대기 상태로 남아요. `ocx claude desktop picker on` 또는 `ocx
 이전 인증서에서 한 번 마이그레이션할 때는 기존 신뢰를 제거하기 위한 동의가 필요할 수 있어요. 정리가 끝나지
 않으면 Picker는 사용할 수 없고 적용된 프로필은 복호화하지 않는 중계로 동작해요. 키체인 잠금 해제나 앱의
 자격 증명 접근 허용은 별도의 macOS 동작이며, 재시작이나 업데이트 때도 메시지가 나올 수 있어요. Windows에서는 `on`이나 `trust`를 직접 실행할 때 루트 추가 확인이 나올 수 있어요.
-Linux에서 Picker를 직접 활성화하면 `certutil`로 사용자 NSS 데이터베이스(`~/.pki/nssdb`)에 제한된 Picker CA를 신뢰하도록 등록해요.
+Linux에서 Picker를 직접 활성화하면 `certutil`로 사용자 NSS 데이터베이스에 제한된 Picker CA를 신뢰하도록 등록해요.
 
 Picker 모드가 켜져 있는 동안 Claude Desktop의 네트워크는 OpenCodex를 거쳐요. OpenCodex가 중단되면
 Picker 모드를 끄거나 Desktop을 완전히 다시 시작할 때까지 Desktop은 오프라인이에요.

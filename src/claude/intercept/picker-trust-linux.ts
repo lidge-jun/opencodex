@@ -1,46 +1,88 @@
-import { X509Certificate, createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { X509Certificate } from "node:crypto";
+import { lstatSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync, type Stats } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { join } from "node:path";
-import { PICKER_CA_COMMON_NAME } from "./picker-ca";
+import { dirname, isAbsolute, join, sep } from "node:path";
+import { readBoundedResponseBytes } from "../../lib/bounded-body";
+import { acceptsPickerAuthority, PICKER_CA_COMMON_NAME } from "./picker-ca";
 import type { PickerTrustState, SecurityResult } from "./picker-trust";
 
-/**
- * certutil argv runner. Chromium on Linux (and therefore Claude Desktop) reads the user's NSS
- * database, not the system CA bundle, so trust lives in `~/.pki/nssdb` and needs no root.
- */
 export type LinuxTrustRunner = (args: readonly string[]) => Promise<SecurityResult>;
 
 export const LINUX_TRUST_TIMEOUT_MS = 15_000;
 const OUTPUT_LIMIT = 4 * 1024 * 1024;
-/** Set on a result whose stdout went past OUTPUT_LIMIT; a cut listing proves nothing about absence. */
 export const LINUX_TRUST_TRUNCATED = "certutil_output_truncated";
 const MISSING = "certutil_missing";
+const NSS_FILES = ["cert9.db", "key4.db", "pkcs11.txt", "cert8.db", "key3.db", "secmod.db",
+  ...["cert9.db", "key4.db"].flatMap(db => ["-journal", "-shm", "-wal"].map(suffix => db + suffix))];
 
-export function linuxNssDbDir(home = homedir()): string {
-  return join(home, ".pki", "nssdb");
+function statIfPresent(path: string): Stats | undefined {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return undefined;
+    throw error;
+  }
 }
 
-/**
- * One nickname per root: certutil deletes by nickname, so a shared nickname would let the removal
- * of a rotated-out root delete the current one if it was installed in between.
- */
+export function linuxNssDbDir(home = homedir(), xdgDataHome?: string): string {
+  // Chromium crypto/nss_util.cc:GetDefaultNSSConfigDirectory prefers an existing legacy
+  // directory, then uses ${XDG_DATA_HOME:-$HOME/.local/share}/pki/nssdb.
+  // https://chromium.googlesource.com/chromium/src/+/main/crypto/nss_util.cc
+  if (!isAbsolute(home) || home.split(sep).includes("..")) throw new Error("unsafe NSS home");
+  const legacy = join(home, ".pki", "nssdb");
+  const stat = statIfPresent(legacy);
+  // A legacy symlink may be Chromium's active store. Select it so the safety check refuses it.
+  if (stat?.isDirectory() || stat?.isSymbolicLink()) return legacy;
+  const data = xdgDataHome || join(home, ".local", "share");
+  if (!isAbsolute(data) || data.split(sep).includes("..")) throw new Error("unsafe NSS data home");
+  return join(data, "pki", "nssdb");
+}
+
 export function linuxPickerNickname(sha1: string): string {
   return `${PICKER_CA_COMMON_NAME} ${sha1}`;
 }
 
-function nssDb(home?: string): string {
-  return `sql:${linuxNssDbDir(home)}`;
+/** Check ancestors as well, since a writable parent can replace a safe directory. */
+function safeDirectory(path: string, database: boolean, uid: number | undefined): Stats | undefined {
+  const parent = dirname(path);
+  if (parent !== path) safeDirectory(parent, false, uid);
+  const stat = statIfPresent(path);
+  if (!stat) return undefined;
+  if (!database && uid !== undefined && stat.uid === 0 && stat.isSymbolicLink()) {
+    // Trusted system aliases (for example /var) may lead to an otherwise safe ancestor.
+    return safeDirectory(realpathSync(path), false, uid);
+  }
+  if (!stat.isDirectory() || (uid !== undefined && (
+    (stat.uid !== uid && (database || stat.uid !== 0))
+    || ((stat.mode & 0o022) !== 0 && (database || (stat.mode & 0o1000) === 0))
+  ))) throw new Error("unsafe NSS directory");
+  return stat;
 }
 
-function nssDbPresence(home?: string): "present" | "absent" | "unknown" {
-  try {
-    statSync(linuxNssDbDir(home));
-    return "present";
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    return code === "ENOENT" || code === "ENOTDIR" ? "absent" : "unknown";
+function resolveNssDb(home?: string, xdgDataHome = home === undefined ? process.env.XDG_DATA_HOME : undefined) {
+  const dir = linuxNssDbDir(home, xdgDataHome);
+  const uid = process.platform === "win32" ? undefined : process.getuid!();
+  const directory = safeDirectory(dir, true, uid);
+  const files = new Set<string>();
+  if (directory) {
+    for (const name of NSS_FILES) {
+      const stat = statIfPresent(join(dir, name));
+      if (!stat) continue;
+      if (!stat.isFile() || stat.nlink !== 1 || (uid !== undefined && (stat.uid !== uid || (stat.mode & 0o022)))) {
+        throw new Error("unsafe NSS database file");
+      }
+      files.add(name);
+    }
   }
+  return { dir, db: `sql:${dir}`, directory, files };
+}
+
+type NssDb = ReturnType<typeof resolveNssDb>;
+
+function sameDirectory(before: NssDb, after: NssDb): boolean {
+  return before.dir === after.dir && before.directory !== undefined && after.directory !== undefined
+    && before.directory.dev === after.directory.dev && before.directory.ino === after.directory.ino;
 }
 
 /** certutil runner with a bounded runtime and output, code null when the executable is absent. */
@@ -48,23 +90,34 @@ export function createLinuxCertutilRunner(exe: string | null = Bun.which("certut
   return args => runCertutil(exe, args);
 }
 
-/** Production runner: certutil from PATH (libnss3-tools / nss-tools). */
 export const defaultLinuxCertutilRunner: LinuxTrustRunner = args => runCertutil(Bun.which("certutil"), args);
 
 async function runCertutil(exe: string | null, args: readonly string[]): Promise<SecurityResult> {
   if (!exe) return { code: null, stdout: "", stderr: MISSING };
+  const abort = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
-    const proc = Bun.spawn([exe, ...args], { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-    const pending = Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-    const settled = await new Promise<[string, string, number] | null>((resolve, reject) => {
-      timer = setTimeout(() => { try { proc.kill(); } catch { /* already gone */ } resolve(null); }, LINUX_TRUST_TIMEOUT_MS);
-      pending.then(resolve, reject);
-    });
-    if (settled === null) return { code: null, stdout: "", stderr: "certutil timed out" };
-    const [stdout, stderr, code] = settled;
-    if (stdout.length > OUTPUT_LIMIT) return { code: null, stdout: "", stderr: LINUX_TRUST_TRUNCATED };
-    return { code, stdout, stderr: stderr.slice(-OUTPUT_LIMIT) };
+    const proc = Bun.spawn([exe, ...args], { stdin: "ignore", stdout: "pipe", stderr: "pipe",
+      env: { ...process.env, LC_ALL: "C" } });
+    const capture = async (pipe: ReadableStream<Uint8Array>): Promise<string> => {
+      const result = await readBoundedResponseBytes(new Response(pipe), { maxBytes: OUTPUT_LIMIT, signal: abort.signal });
+      if (result.oversized) throw new Error(LINUX_TRUST_TRUNCATED);
+      return new TextDecoder("utf-8", { fatal: true }).decode(result.bytes);
+    };
+    try {
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("certutil timed out")), LINUX_TRUST_TIMEOUT_MS);
+      });
+      const [stdout, stderr, code] = await Promise.race([
+        Promise.all([capture(proc.stdout), capture(proc.stderr), proc.exited]),
+        deadline,
+      ]);
+      return { code, stdout, stderr };
+    } catch (error) {
+      try { proc.kill("SIGKILL"); } catch { /* The child may already have exited. */ }
+      abort.abort(error);
+      throw error;
+    }
   } catch (error) {
     return { code: null, stdout: "", stderr: error instanceof Error ? error.message : String(error) };
   } finally {
@@ -81,105 +134,125 @@ function missingTool(result: SecurityResult): boolean {
   return result.code === null && result.stderr === MISSING;
 }
 
-/** SSL trust flags of `nickname` in a full `certutil -L` listing, or null when it is not listed. */
-function sslTrustFlags(listing: string, nickname: string): string | null {
-  for (const line of listing.split(/\r?\n/)) {
-    const match = /^(.*\S)\s+([A-Za-z]*),([A-Za-z]*),([A-Za-z]*)\s*$/.exec(line);
-    if (match && match[1] === nickname) return match[2]!;
-  }
-  return null;
-}
-
-function pemSha1(pem: string): string | null {
-  const block = /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/.exec(pem)?.[0];
-  if (!block) return null;
-  try { return createHash("sha1").update(new X509Certificate(block).raw).digest("hex").toUpperCase(); }
+function certificate(pem: string): X509Certificate | null {
+  if (!/^\s*-----BEGIN CERTIFICATE-----[\sA-Za-z0-9+/=]+-----END CERTIFICATE-----\s*$/.test(pem)) return null;
+  try { return new X509Certificate(pem); }
   catch { return null; }
 }
 
-type Lookup =
-  | { kind: "absent" }
-  | { kind: "present"; nickname: string; flags: string }
-  | { kind: "foreign" }
-  | { kind: "missing_tool" }
-  | { kind: "failed" };
+type Listing = { kind: "listed"; entries: Map<string, string> } | { kind: "missing_tool" | "failed" };
 
-/**
- * Absence is concluded only from a successful read of the whole database: certutil also exits
- * 255 when the database cannot be opened, so a failed nickname lookup proves nothing.
- */
-async function lookup(run: LinuxTrustRunner, sha1: string, home?: string): Promise<Lookup> {
-  const all = await run(["-L", "-d", nssDb(home)]);
-  if (missingTool(all)) return { kind: "missing_tool" };
-  if (all.code !== 0) return { kind: "failed" };
-  let foreign = false;
-  // The bare common name is the nickname an earlier build used; it still counts when it holds this root.
-  for (const nickname of [linuxPickerNickname(sha1), PICKER_CA_COMMON_NAME]) {
-    const flags = sslTrustFlags(all.stdout, nickname);
-    if (flags === null) continue;
-    const cert = await run(["-L", "-d", nssDb(home), "-n", nickname, "-a"]);
-    if (cert.code !== 0) return { kind: "failed" };
-    if (pemSha1(cert.stdout) === sha1) return { kind: "present", nickname, flags };
-    foreign ||= nickname !== PICKER_CA_COMMON_NAME;
+async function listCertificates(run: LinuxTrustRunner, db: string): Promise<Listing> {
+  const result = await run(["-L", "-d", db]);
+  if (missingTool(result)) return { kind: "missing_tool" };
+  if (result.code !== 0 || result.stderr.trim()) return { kind: "failed" };
+  const entries = new Map<string, string>();
+  const lines = result.stdout.trim().split(/\r?\n/);
+  if (!/^Certificate Nickname\s+Trust Attributes\s*$/.test(lines.shift() ?? "")
+    || lines.shift()?.trim() !== "SSL,S/MIME,JAR/XPI") return { kind: "failed" };
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const match = /^(\S(?:.*\S)?)\s+([A-Za-z]*),[A-Za-z]*,[A-Za-z]*\s*$/.exec(line);
+    if (!match || entries.has(match[1]!)) return { kind: "failed" };
+    entries.set(match[1]!, match[2]!);
   }
-  return foreign ? { kind: "foreign" } : { kind: "absent" };
+  return { kind: "listed", entries };
 }
 
-/**
- * Trusted means the current root is in the NSS database under its own nickname with the SSL `C`
- * flag. The CA's critical name constraints keep that trust limited to claude.ai.
- */
+async function exportCertificate(run: LinuxTrustRunner, db: string, nickname: string): Promise<X509Certificate | null> {
+  const result = await run(["-L", "-d", db, "-n", nickname, "-a"]);
+  // NSS can emit multiple PEMs for one subject. That export cannot identify what -D would pick.
+  return result.code === 0 && !result.stderr.trim() ? certificate(result.stdout) : null;
+}
+
+async function inventory(run: LinuxTrustRunner, db: string): Promise<Map<string, string> | null> {
+  const start = performance.now();
+  const listing = await listCertificates(run, db);
+  if (listing.kind !== "listed") return null;
+  const certs = new Map<string, string>();
+  for (const nickname of listing.entries.keys()) {
+    if (performance.now() - start >= LINUX_TRUST_TIMEOUT_MS) return null;
+    const cert = await exportCertificate(run, db, nickname);
+    if (!cert) return null;
+    certs.set(nickname, cert.fingerprint256);
+  }
+  if (performance.now() - start >= LINUX_TRUST_TIMEOUT_MS) return null;
+  const after = await listCertificates(run, db);
+  if (after.kind !== "listed" || after.entries.size !== listing.entries.size) return null;
+  for (const [nickname, flags] of listing.entries) {
+    if (after.entries.get(nickname) !== flags) return null;
+  }
+  return certs;
+}
+
 export async function inspectPickerTrustLinux(
   caSha1: string,
   run: LinuxTrustRunner = defaultLinuxCertutilRunner,
   home?: string,
+  xdgDataHome?: string,
 ): Promise<PickerTrustState> {
   const sha1 = normalizeSha1(caSha1);
   if (!sha1) return "untrusted";
-  const presence = nssDbPresence(home);
-  if (presence === "absent") return "untrusted";
-  if (presence === "unknown") return "unknown";
   try {
-    const found = await lookup(run, sha1, home);
-    switch (found.kind) {
-      case "missing_tool": return "unsupported";
-      case "failed": return "unknown";
-      case "present": return found.flags.includes("C") ? "trusted" : "untrusted";
-      default: return "untrusted";
+    const { db, directory } = resolveNssDb(home, xdgDataHome);
+    if (!directory) return "untrusted";
+    const listing = await listCertificates(run, db);
+    if (listing.kind === "missing_tool") return "unsupported";
+    if (listing.kind !== "listed") return "unknown";
+    for (const nickname of [linuxPickerNickname(sha1), PICKER_CA_COMMON_NAME]) {
+      const flags = listing.entries.get(nickname);
+      if (flags === undefined) continue;
+      const cert = await exportCertificate(run, db, nickname);
+      if (!cert) return "unknown";
+      if (normalizeSha1(cert.fingerprint) === sha1) return flags.includes("C") ? "trusted" : "untrusted";
     }
-  } catch { // no-excuse-ok: catch -- certutil unavailable or denied; never claim trust.
+    return "untrusted";
+  } catch { // no-excuse-ok: catch -- OS read unavailable or denied; never claim trust.
     return "unknown";
   }
 }
 
 export async function trustPickerCaLinux(
-  caPath: string,
+  _caPath: string,
   run: LinuxTrustRunner = defaultLinuxCertutilRunner,
   cert?: { pem?: string },
   home?: string,
+  xdgDataHome?: string,
 ): Promise<{ ok: boolean; reason?: "unsupported" | "declined_or_failed" }> {
-  // Same rule as macOS: install the caller-verified bytes from a private copy, never the shared ca.pem.
-  let installPath = caPath;
+  const failed = { ok: false, reason: "declined_or_failed" } as const;
   let privateDir: string | undefined;
   try {
     const pem = cert?.pem;
-    const sha1 = pemSha1(pem ?? "");
-    if (pem === undefined || sha1 === null) return { ok: false, reason: "declined_or_failed" };
-    privateDir = mkdtempSync(join(tmpdir(), "ocx-picker-ca-"));
-    installPath = join(privateDir, "ca.pem");
-    writeFileSync(installPath, pem, { mode: 0o600 });
-    const dir = linuxNssDbDir(home);
-    if (!existsSync(join(dir, "cert9.db"))) {
-      mkdirSync(dir, { recursive: true, mode: 0o700 });
-      const created = await run(["-N", "-d", nssDb(home), "--empty-password"]);
-      if (missingTool(created)) return { ok: false, reason: "unsupported" };
-      if (created.code !== 0) return { ok: false, reason: "declined_or_failed" };
+    const root = pem && certificate(pem);
+    const sha1 = root && normalizeSha1(root.fingerprint);
+    if (!pem || !sha1 || !acceptsPickerAuthority(pem)) return failed;
+    const selected = resolveNssDb(home, xdgDataHome);
+    const tool = await run(["--build-flags"]);
+    if (missingTool(tool)) return { ok: false, reason: "unsupported" };
+    if (tool.code !== 0) return failed;
+
+    let current = resolveNssDb(home, xdgDataHome);
+    if (selected.dir !== current.dir || (selected.directory && !sameDirectory(selected, current))) return failed;
+    if (!current.directory) {
+      mkdirSync(current.dir, { recursive: true, mode: 0o700 });
+      const created = resolveNssDb(home, xdgDataHome);
+      if (created.dir !== current.dir || !created.directory) return failed;
+      current = created;
     }
-    const added = await run(["-A", "-d", nssDb(home), "-n", linuxPickerNickname(sha1), "-t", "C,,", "-a", "-i", installPath]);
-    if (missingTool(added)) return { ok: false, reason: "unsupported" };
-    return added.code === 0 ? { ok: true } : { ok: false, reason: "declined_or_failed" };
-  } catch { // no-excuse-ok: catch -- command failure is reported, never trust.
-    return { ok: false, reason: "declined_or_failed" };
+    if (!current.files.has("cert9.db")) {
+      // Initialize an empty directory only. An incomplete database needs owner intervention.
+      if (current.files.size !== 0) return failed;
+      const initialized = await run(["-N", "-d", current.db, "--empty-password"]);
+      if (initialized.code !== 0) return failed;
+      if (!sameDirectory(current, resolveNssDb(home, xdgDataHome))) return failed;
+    }
+    privateDir = mkdtempSync(join(tmpdir(), "ocx-picker-ca-"));
+    const installPath = join(privateDir, "ca.pem");
+    writeFileSync(installPath, pem, { mode: 0o600 });
+    const added = await run(["-A", "-d", current.db, "-n", linuxPickerNickname(sha1), "-t", "C,,", "-a", "-i", installPath]);
+    return added.code === 0 ? { ok: true } : failed;
+  } catch { // no-excuse-ok: catch -- directory or command failure is reported.
+    return failed;
   } finally {
     if (privateDir) rmSync(privateDir, { recursive: true, force: true });
   }
@@ -189,20 +262,41 @@ export async function untrustPickerCaLinux(
   fingerprintSha1: string,
   run: LinuxTrustRunner = defaultLinuxCertutilRunner,
   home?: string,
+  pending?: { pem: string },
+  xdgDataHome?: string,
 ): Promise<{ ok: boolean }> {
+  const failed = { ok: false };
   const sha1 = normalizeSha1(fingerprintSha1);
-  if (!sha1) return { ok: false };
-  const presence = nssDbPresence(home);
-  if (presence !== "present") return { ok: presence === "absent" };
   try {
-    const before = await lookup(run, sha1, home);
-    if (before.kind === "absent") return { ok: true };
-    // A foreign certificate under this nickname is not ours to delete; failed reads prove nothing.
-    if (before.kind !== "present") return { ok: false };
-    const deleted = await run(["-D", "-d", nssDb(home), "-n", before.nickname]);
-    if (deleted.code !== 0) return { ok: false };
-    return { ok: (await lookup(run, sha1, home)).kind === "absent" };
-  } catch { // no-excuse-ok: catch -- failed removal must be visible to the caller.
-    return { ok: false };
+    const expected = pending && certificate(pending.pem);
+    if (!sha1 || !pending || !expected || normalizeSha1(expected.fingerprint) !== sha1
+      || !acceptsPickerAuthority(pending.pem)) return failed;
+    const selected = resolveNssDb(home, xdgDataHome);
+    if (!selected.directory) return { ok: true };
+    const before = await inventory(run, selected.db);
+    if (!before || !sameDirectory(selected, resolveNssDb(home, xdgDataHome))) return failed;
+
+    const nickname = linuxPickerNickname(sha1);
+    const target = before.get(nickname);
+    if (target === undefined) return { ok: ![...before.values()].includes(expected.fingerprint256) };
+    if (target !== expected.fingerprint256
+      || [...before].some(([name, der]) => name !== nickname && der === target)) return failed;
+
+    const fresh = await listCertificates(run, selected.db);
+    if (fresh.kind !== "listed" || !fresh.entries.has(nickname)) return failed;
+    const verified = await exportCertificate(run, selected.db, nickname);
+    if (!verified?.raw.equals(expected.raw) || !sameDirectory(selected, resolveNssDb(home, xdgDataHome))) return failed;
+
+    // certutil -D resolves a nickname again and has no DER-qualified delete. A same-user writer
+    // can still race this check. Avoid shared aliases and verify identity and survivors afterward.
+    const deleted = await run(["-D", "-d", selected.db, "-n", nickname]);
+    if (deleted.code !== 0 || !sameDirectory(selected, resolveNssDb(home, xdgDataHome))) return failed;
+    const after = await inventory(run, selected.db);
+    if (!after || !sameDirectory(selected, resolveNssDb(home, xdgDataHome))
+      || [...after.values()].includes(expected.fingerprint256)) return failed;
+    before.delete(nickname);
+    return { ok: [...before].every(([name, der]) => after.get(name) === der) };
+  } catch { // no-excuse-ok: catch -- any uncertainty keeps the pending record.
+    return failed;
   }
 }

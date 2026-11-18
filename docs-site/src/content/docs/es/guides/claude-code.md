@@ -213,7 +213,7 @@ El modo Selector es parte del modo first party. En macOS, Windows y Linux está 
 
 La migración de una sola vez desde una identidad de selector anterior puede requerir el consentimiento para eliminar su confianza anterior. Si la limpieza no puede terminar, el selector permanece indisponible y el perfil aplicado utiliza un relé ciego hasta que la limpieza tenga éxito; `ocx claude desktop picker status` informa que el estado. macOS puede pedirle por separado que desbloquee el llavero o apruebe el acceso de una aplicación a las credenciales almacenadas. Estos mensajes de acceso nativos aún pueden ocurrir en el reinicio o la actualización. En Windows, `on` o `trust` explícito puede mostrar una confirmación para agregar la raíz.
 
-En Linux, la activación explícita del selector usa `certutil` para agregar la CA restringida del selector como autoridad de confianza en la base de datos NSS del usuario (`~/.pki/nssdb`).
+En Linux, la activación explícita del selector usa `certutil` para agregar la CA restringida del selector como autoridad de confianza en la base de datos NSS del usuario.
 
 El modo Selector permite hasta 64 KiB de encabezados en las solicitudes entrantes y respuestas ordinarias HTTP, preservando las cookies de sesión del navegador. Los encabezados de respuesta ascendente más grandes devuelven 502 y registran `upstream:headers-too-large`, sin valores de cookies ni rutas de solicitud. Las conexiones actualizadas continúan retransmitiendo bytes directamente después del protocolo de enlace de solicitud.
 

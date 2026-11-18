@@ -187,7 +187,7 @@ Une migration unique depuis une ancienne identité peut demander votre consentem
 confiance. Si ce nettoyage échoue, le picker reste indisponible et le profil appliqué utilise un relais
 sans déchiffrement jusqu'à sa réussite. macOS peut aussi demander de déverrouiller le trousseau ou
 d'autoriser l'accès d'une application aux identifiants, y compris après un redémarrage ou une mise à jour. Sur Windows, `on` ou `trust` explicite peut afficher une confirmation d'ajout de la racine.
-Sous Linux, l'activation explicite du picker utilise `certutil` pour ajouter l'autorité de certification restreinte du picker aux autorités de confiance dans la base NSS de l'utilisateur (`~/.pki/nssdb`).
+Sous Linux, l'activation explicite du picker utilise `certutil` pour ajouter l'autorité de certification restreinte du picker aux autorités de confiance dans la base NSS de l'utilisateur.
 
 Lorsque le mode picker est actif, Claude Desktop accède au réseau par OpenCodex. Si OpenCodex s'arrête,
 Desktop reste hors ligne jusqu'à son redémarrage complet ou jusqu'à la désactivation du mode picker.

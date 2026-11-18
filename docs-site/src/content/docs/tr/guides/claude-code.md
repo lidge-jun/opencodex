@@ -206,7 +206,7 @@ Eski bir kimlikten bir defalık geçişte önceki güveni kaldırmak için onay 
 kadar picker kullanılamaz ve uygulanmış profil şifre çözmeyen bir aktarma kullanır. macOS ayrıca anahtar
 zincirinin kilidini açmanızı veya uygulamanın kimlik bilgilerine erişimini onaylamanızı isteyebilir;
 bu istemler yeniden başlatma veya güncelleme sonrasında da çıkabilir. Windows'ta açık `on` veya `trust` kök ekleme onayını gösterebilir.
-Linux'ta picker açıkça etkinleştirildiğinde, `certutil` kısıtlı picker CA'sını kullanıcının NSS veritabanına (`~/.pki/nssdb`) güvenilen bir CA olarak ekler.
+Linux'ta picker açıkça etkinleştirildiğinde, `certutil` kısıtlı picker CA'sını kullanıcının NSS veritabanına güvenilen bir CA olarak ekler.
 
 Picker modu açıkken Claude Desktop ağa OpenCodex üzerinden çıkar. OpenCodex durursa Desktop, tamamen yeniden
 başlatılana veya picker modu kapatılana kadar çevrimdışı kalır. Durumu `ocx claude desktop picker status`

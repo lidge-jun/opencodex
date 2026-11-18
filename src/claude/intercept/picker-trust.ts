@@ -147,7 +147,10 @@ export async function untrustPickerCa(
     } catch { return { ok: false }; }
   }
   if (platform === "linux") {
-    return untrustPickerCaLinux(fingerprintSha1, run === defaultSecurityRunner ? undefined : run, linuxHome);
+    try {
+      return await untrustPickerCaLinux(fingerprintSha1, run === defaultSecurityRunner ? undefined : run,
+        linuxHome, { pem: readFileSync(caPath, "utf8") });
+    } catch { return { ok: false }; }
   }
   if (platform !== "darwin") return { ok: false };
   const keychain = loginKeychainPath();

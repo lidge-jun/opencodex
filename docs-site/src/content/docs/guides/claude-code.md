@@ -445,7 +445,8 @@ ask you to unlock the keychain or approve an application's access to stored cred
 access prompts can still occur on restart or upgrade. On Windows, explicit `on` or `trust` may show a confirmation to add the root.
 
 On Linux, explicit picker activation uses `certutil` to trust the constrained picker CA
-in your NSS database (`~/.pki/nssdb`). If OpenCodex cannot confirm removal of a previous CA,
+in Chromium’s user NSS database. Chromium uses an existing `~/.pki/nssdb` first, then
+`${XDG_DATA_HOME:-$HOME/.local/share}/pki/nssdb`. If OpenCodex cannot confirm removal of a previous CA,
 it keeps the removal pending and retries at the next start.
 
 Picker mode allows up to 64 KiB of headers on incoming requests and ordinary HTTP
