@@ -135,6 +135,7 @@ const errorCode = (h: Harness) => (terminal(h)[0] as { code?: string } | undefin
 const adminShape = "ocx_admin_" + "a_".repeat(21) + "A";
 const sessionShape = "ocx_session_" + "b".repeat(43);
 const dataKeyShape = "ocx_data_" + "c".repeat(40);
+const workspaceTokenShape = "ocxrw_" + "w".repeat(43);
 
 afterEach(() => { delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN; });
 
@@ -294,13 +295,13 @@ describe("agy acp turn", () => {
   test("redacts whole credentials in answer deltas and flushes the final tail", async () => {
     const h = await run(script((frame, api) => {
       if (frame.method !== "session/prompt") return;
-      for (const text of [adminShape, sessionShape, dataKeyShape, "sk-" + "d".repeat(20)]) {
+      for (const text of [adminShape, sessionShape, dataKeyShape, workspaceTokenShape, "sk-" + "d".repeat(20)]) {
         api.notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: text + " " } });
       }
       api.reply(frame.id, { stopReason: "end_turn" });
       return true;
     }));
-    expect(h.events.flatMap(event => event.type === "text_delta" ? [event.text] : []).join("")).toBe("[REDACTED] ".repeat(4));
+    expect(h.events.flatMap(event => event.type === "text_delta" ? [event.text] : []).join("") === "[REDACTED] ".repeat(5)).toBe(true);
     expect(h.events.at(-1)).toEqual({ type: "done" });
   });
 
@@ -314,12 +315,13 @@ describe("agy acp turn", () => {
       thought(dataKeyShape.slice(0, -3));
       answer(adminShape.slice(5) + " done.");
       thought(dataKeyShape.slice(-3) + " " + "sk-" + "e".repeat(2));
-      thought("e".repeat(20) + " done.");
+      thought("e".repeat(20) + " " + workspaceTokenShape.slice(0, 4));
+      thought(workspaceTokenShape.slice(4) + " done.");
       api.reply(frame.id, { stopReason: "end_turn" });
       return true;
     }));
     expect(h.events.flatMap(event => event.type === "text_delta" ? [event.text] : []).join("")).toBe(answerPrefix + "[REDACTED] done.");
-    expect(h.events.flatMap(event => event.type === "thinking_delta" ? [event.thinking] : []).join("")).toBe("[REDACTED] [REDACTED] done.");
+    expect(h.events.flatMap(event => event.type === "thinking_delta" ? [event.thinking] : []).join("") === "[REDACTED] [REDACTED] [REDACTED] done.").toBe(true);
   });
 
   test("preserves ordinary code and prose across the buffering boundary", async () => {
