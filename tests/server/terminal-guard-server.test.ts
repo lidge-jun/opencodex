@@ -9,10 +9,14 @@ import { handleChatCompletions } from "../../src/server/chat-completions";
 import { httpStatusFromTerminalError } from "../../src/lib/errors";
 import { errorDetailFor } from "../../src/usage/error-detail";
 import { inspectResponseLogJson, type RequestLogContext } from "../../src/server/request-log";
+import { responseWithDeferredRequestLog } from "../../src/server/relay";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { saveCredential, setActiveAccount, getAccountSet } from "../../src/oauth/store";
+import { clearAnthropicAccountPoolState, formatAnthropicProviderForLog } from "../../src/oauth/anthropic-routing";
+import { deriveOAuthProviderConfig } from "../../src/providers/derive";
+import { readUsageEntries } from "../../src/usage/log";
 
 let releaseInheritedSpendHome: (() => void) | undefined;
 // Taken per inherited-home dispatch because one row below installs a different home.
@@ -198,6 +202,70 @@ describe("server terminal guard integration", () => {
       .findLast(chunk => chunk.usage)?.usage;
     expect(usage).toMatchObject({ prompt_tokens: 20, completion_tokens: 3, total_tokens: 23 });
     expect(log.usage).toMatchObject({ inputTokens: 30, outputTokens: 5 });
+  });
+
+  test.each([true, false])("buffered OAuth continuation keeps usage on its issuing account (replacement reports usage: %s)", async reported => {
+    const previousHome = process.env.OPENCODEX_HOME;
+    const home = mkdtempSync(join(tmpdir(), "ocx-terminal-guard-oauth-usage-"));
+    process.env.OPENCODEX_HOME = home;
+    try {
+      takeInheritedSpendHome();
+      clearAnthropicAccountPoolState();
+      for (const name of ["a", "b"]) await saveCredential("anthropic", {
+        access: `fixture-access-${name}`, refresh: `fixture-refresh-${name}`,
+        expires: Date.now() + 3_600_000, accountId: `fixture-account-${name}`, source: "oauth",
+      }, { addAccount: true });
+      const [firstAccount, replacementAccount] = getAccountSet("anthropic")!.accounts.map(account => account.id);
+      await setActiveAccount("anthropic", firstAccount!);
+      const model = "claude-sonnet-4-6";
+      const oauthConfig: OcxConfig = { port: 0, defaultProvider: "anthropic", providers: {
+        anthropic: { ...deriveOAuthProviderConfig("anthropic")!, models: [model] },
+      }, anthropicAccountPool: { enabled: true } };
+      saveConfig(oauthConfig);
+      const auth: string[] = [];
+      globalThis.fetch = (async (input, init) => {
+        expect(String(input)).toBe("https://api.anthropic.com/v1/messages");
+        auth.push(new Headers(init?.headers).get("authorization") ?? "");
+        if (auth.length === 1) return Response.json({ type: "message", role: "assistant",
+          content: [{ type: "text", text: "我接下来会修改相关文件。" }], stop_reason: "end_turn",
+          usage: { input_tokens: 10, output_tokens: 2 } });
+        if (auth.length === 2) return Response.json({ type: "error", error: { type: "rate_limit_error", message: "rate limit exceeded" } },
+          { status: 429, headers: { "retry-after": "120" } });
+        return Response.json({ type: "message", role: "assistant", stop_reason: "tool_use",
+          content: [{ type: "tool_use", id: "toolu_1", name: "exec_command", input: {} }],
+          ...(reported ? { usage: { input_tokens: 20, output_tokens: 3 } } : {}) });
+      }) as typeof fetch;
+
+      const log: RequestLogContext = { model: "", provider: "" };
+      const requestId = crypto.randomUUID();
+      const start = Date.now();
+      const response = await handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: `anthropic/${model}`, input: "请检查这个问题并修复代码", stream: false,
+          tools: [{ type: "function", name: "exec_command", description: "run a command", parameters: { type: "object" } }] }),
+      }), oauthConfig, log);
+      const body = await responseWithDeferredRequestLog(response, requestId, start, log).json();
+      expect(response.status).toBe(200);
+      expect(body).toMatchObject({ status: "completed", usage: reported
+        ? { input_tokens: 20, output_tokens: 3 } : { input_tokens: 10, output_tokens: 2 } });
+      expect(auth).toEqual(["Bearer fixture-access-a", "Bearer fixture-access-a", "Bearer fixture-access-b"]);
+      const row = readUsageEntries().find(entry => entry.requestId === requestId);
+      expect(row?.attempts?.map(attempt => ({
+        provider: attempt.provider, sends: attempt.sendCount, status: attempt.status,
+        input: attempt.usage?.inputTokens, output: attempt.usage?.outputTokens,
+      }))).toEqual([
+        { provider: formatAnthropicProviderForLog("anthropic", firstAccount), sends: 2, status: 429, input: 10, output: 2 },
+        { provider: formatAnthropicProviderForLog("anthropic", replacementAccount), sends: 1, status: 200,
+          input: reported ? 20 : undefined, output: reported ? 3 : undefined },
+      ]);
+    } finally {
+      releaseInheritedSpendHome?.();
+      releaseInheritedSpendHome = undefined;
+      clearAnthropicAccountPoolState();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      removeTreeWithRetry(home);
+    }
   });
 
   // #8877, empty-completion retry path: the retry runs its own terminal guard, and a re-ask

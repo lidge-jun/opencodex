@@ -47,7 +47,7 @@ export async function deliverAdapterResponse(
     | "turnMembership"
     | "completedToolBlocks"
   >,
-  transportState: Pick<ResponsesTransport, "activeAdapter" | "bindKeyUsageFromBridge" | "sentOAuthSnapshot">,
+  transportState: Pick<ResponsesTransport, "activeAdapter" | "bindKeyUsageFromBridge" | "sentOAuthSnapshot" | "trackGuardedOAuthAttemptUsage">,
   sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction">,
   responseEffects: Pick<
     ResponsesEffects,
@@ -128,6 +128,7 @@ export async function deliverAdapterResponse(
   const clientToolCatalog = requestState.clientToolCatalogRestriction && route.provider.authMode !== "forward"
     ? requestState.clientToolCatalogRestriction : undefined;
   const deliveryToolBridgeMaps = currentTurnToolBridgeMaps(toolBridgeMaps, clientToolCatalog);
+  if (terminalGuardEnabled) transportState.trackGuardedOAuthAttemptUsage();
   // Legs the terminal guard re-asked: the client terminal carries only the final leg's usage
   // (clients size their context window from it, #8877), while the request log meters every leg
   // that was sent. Hidden legs add counters only: their context checkpoint and raw wire usage

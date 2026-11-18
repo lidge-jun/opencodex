@@ -530,9 +530,10 @@ reported," not necessarily "the provider performed no such work."
 
 When the terminal continuation guard re-asks within a turn, a completion that reports usage shows
 the final leg's usage for that re-ask. In Chat Completions, this includes `prompt_tokens`, which
-reflects the context sent on the final leg. The request log and spend accounting include usage from
-every leg. An incomplete or failed upstream terminal retains the accumulated usage, as does a
-final leg that reports no usage of its own.
+reflects the context sent on the final leg. The request log includes reported usage from every
+leg. If OAuth recovery switches accounts, each attempt records the usage reported by its own
+account. An incomplete or failed upstream terminal retains the accumulated usage, as does a final
+leg that reports no usage of its own.
 
 For Anthropic upstreams, a reported `usage.output_tokens_details.thinking_tokens` is preserved as
 Responses `output_tokens_details.reasoning_tokens` and Chat `completion_tokens_details.reasoning_tokens`,

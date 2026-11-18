@@ -598,10 +598,17 @@ export async function prepareResponsesTransport(
       pendingKeySend?.estimate ?? logCtx.usageLogInputTokens, pendingKeySend?.recovery, copilotCandidate);
     pendingKeySend = undefined;
   };
+  let guardedOAuthAttemptOrdinal: number | undefined;
+  const trackGuardedOAuthAttemptUsage = (): void => {
+    if (route.provider.authMode === "oauth") guardedOAuthAttemptOrdinal = logCtx.activeAttempt?.ordinal;
+  };
   const bindKeyUsageFromBridge = (usage: OcxUsage | undefined): void => {
     logCtx.usageFromBridge = true;
     if (usesApiKeyAccount(route.provider)) {
       if (!logCtx.activeAttempt?.usage && usage) recordKeyAttemptUsage(logCtx, usage);
+      logCtx.usage = logCtx.activeAttempt?.usage;
+    } else if (guardedOAuthAttemptOrdinal !== undefined && logCtx.activeAttempt?.ordinal !== guardedOAuthAttemptOrdinal) {
+      // The bridge can sum across accounts. The parser already bound each response before rotation.
       logCtx.usage = logCtx.activeAttempt?.usage;
     } else if (usage) {
       logCtx.usage = usage;
@@ -674,7 +681,8 @@ export async function prepareResponsesTransport(
     // Each adapter parser is called once per physical response; bridge totals are client-only.
     const observedResponses = new WeakSet<object>();
     const observeUsage = (event: AdapterEvent, response: object): void => {
-      if (usesApiKeyAccount(provider) && "usage" in event && event.usage && !observedResponses.has(response)) {
+      if ((usesApiKeyAccount(provider) || guardedOAuthAttemptOrdinal !== undefined)
+        && "usage" in event && event.usage && !observedResponses.has(response)) {
         observedResponses.add(response);
         recordKeyAttemptUsage(logCtx, event.usage);
       }
@@ -1546,6 +1554,7 @@ export async function prepareResponsesTransport(
     commitKeyAttemptSend,
     recoverAutoPausedSelection,
     bindKeyUsageFromBridge,
+    trackGuardedOAuthAttemptUsage,
     anthropicSessionKey,
     isPassthrough,
   };
