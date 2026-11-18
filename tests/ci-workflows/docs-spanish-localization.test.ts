@@ -102,15 +102,32 @@ function missingInlineIdentifiers(english: string, spanish: string): string[] {
   return [...inlineCode(english)].filter(value => !translated.has(value));
 }
 
+const a6apiHeading = "## A6API credit quota";
+const spanishA6apiHeading = "## Cuota de crédito A6API";
+const a6apiAnchor = '<a id="a6api-credit-quota"></a>';
+
+function hasA6apiQuotaTargets(english: string, spanish: string): boolean {
+  const visibleLines = (markdown: string) => withoutFencedCode(markdown).replace(/<!--[\s\S]*?(?:-->|$)/g, "\n").split("\n");
+  const lines = visibleLines(spanish);
+  const anchor = lines.indexOf(a6apiAnchor);
+  return visibleLines(english).includes(a6apiHeading)
+    && anchor >= 0 && anchor === lines.lastIndexOf(a6apiAnchor)
+    && lines.slice(anchor + 1).find(line => line.trim()) === spanishA6apiHeading;
+}
+
 describe("Spanish documentation localization", () => {
   test("the A6API credit quota fragment leads to the A6API section in both languages", () => {
     const english = source(join(root, "guides/api-key-catalog.md"));
     const spanish = source(join(root, "es/guides/api-key-catalog.md"));
-    const anchor = '<a id="a6api-credit-quota"></a>';
-    expect(english).toMatch(/^## A6API credit quota$/m);
-    const sections = spanish.split(anchor);
-    expect(sections).toHaveLength(2);
-    expect(sections[1]?.trimStart().split("\n")[0]).toBe("## Cuota de crédito A6API");
+    expect(hasA6apiQuotaTargets(english, spanish)).toBe(true);
+  });
+
+  test.each([["~~~md", "~~~"], ["<!--", "-->"]])("A6API targets inside %s do not satisfy the link check", (open, close) => {
+    const spanishSection = a6apiAnchor + "\n\n" + spanishA6apiHeading;
+    const hidden = (text: string) => [open, text, close].join("\n");
+    expect(hasA6apiQuotaTargets(a6apiHeading, hidden(spanishSection))).toBe(false);
+    expect(hasA6apiQuotaTargets(hidden(a6apiHeading), spanishSection)).toBe(false);
+    expect(hasA6apiQuotaTargets(a6apiHeading, hidden(spanishSection) + "\n\n" + spanishSection)).toBe(true);
   });
 
   test("code spans keep a trailing backslash literal without swallowing later identifiers", () => {
