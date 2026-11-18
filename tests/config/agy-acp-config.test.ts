@@ -150,7 +150,7 @@ describe("antigravity-acp configuration", () => {
 
   test("structural validation shares static metadata with the registry without loading runtime state", () => {
     const source = readFileSync(repoPath("src/config/schema/agy-acp-references.ts"), "utf8");
-    expect(source.match(/^import .* from "([^"]+)";$/gm)).toEqual([
+    expect(source.match(/^\s*import\b[^\n]*/gm)?.map(line => line.trim())).toEqual([
       'import { AGY_ACP_DEFAULT_MODEL, AGY_ACP_SEED_MODELS } from "../../providers/registry/agy-acp-models";',
     ]);
     const metadata = readFileSync(repoPath("src/providers/registry/agy-acp-models.ts"), "utf8");
