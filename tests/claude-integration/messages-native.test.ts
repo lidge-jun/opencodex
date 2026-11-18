@@ -203,10 +203,13 @@ describe("managed native Messages", () => {
   test.each([
     ["CRLF", "\r\n", ["\r\n\r\n"]],
     ["first CRLF split", "\r\n", ["\r", "\n\r\n"]],
-    ["second CRLF split", "\r\n", ["\r\n\r", "\n"]],
+    ["second CRLF split", "\r\n", ["\r\n\r"], "\n"],
     ["mixed LF and CRLF", "\r\n", ["\n", "\r\n"]],
     ["mixed CRLF and LF", "\n", ["\r\n", "\n"]],
-  ] as const)("rewrites a live %s message_start and preserves neighboring bytes", async (_label, newline, ending) => {
+    ["LF and bare CR", "\n", ["\n\r"]],
+    ["two bare CRs", "\r", ["\r\r"]],
+    ["late LF after CR", "\r", ["\r\r"], "\n"],
+  ] as const)("rewrites a live %s message_start and preserves neighboring bytes", async (_label, newline, ending, lateLf = "") => {
     const prefix = ": keep this comment\n\n";
     const suffix = "event: ping\r\ndata: {}\r\n\r\n";
     const start = sseText(SSE_FRAMES.slice(0, 1)).trimEnd().replaceAll("\n", newline);
@@ -230,11 +233,27 @@ describe("managed native Messages", () => {
       expect(first).not.toBe("pending");
       if (first === "pending") return;
       expect(decoder.decode(first.value)).toBe(ECHOED_SSE_TEXT.split("\n\n")[0] + "\n\n");
+      if (lateLf) upstream.enqueue(encoder.encode(lateLf));
       upstream.enqueue(encoder.encode(suffix));
       expect(decoder.decode((await reader.read()).value)).toBe(suffix);
     } finally {
       await reader.cancel();
     }
+  });
+
+  test("preserves the LF continuation of an untouched frame", async () => {
+    const prefix = ": keep this comment\n\r";
+    const start = sseText(SSE_FRAMES.slice(0, 1));
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({ start(controller) {
+      controller.enqueue(encoder.encode(prefix));
+      controller.enqueue(encoder.encode("\n" + start));
+      controller.close();
+    } });
+    const reader = echoRequestedModel(body, "anth/claude-x", new MessagesSseFrameContext()).getReader();
+    const first = await reader.read();
+    expect(new TextDecoder().decode(first.value)).toBe(prefix);
+    expect(await drain(reader)).toBe("\n" + ECHOED_SSE_TEXT.split("\n\n")[0] + "\n\n");
   });
 
   for (const stream of [false, true]) {

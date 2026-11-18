@@ -304,6 +304,7 @@ export function echoRequestedModel(body: ReadableStream<Uint8Array>, model: stri
   let scanFrom = 0;
   let scanning = true;
   let scanned = 0;
+  let pendingLf: "relay" | "drop" | undefined;
   const take = (suffix: Uint8Array): Uint8Array => {
     if (carryLength === 0) return suffix;
     const frame = joinSseFrameBytes([carry.subarray(0, carryLength), suffix]);
@@ -326,17 +327,30 @@ export function echoRequestedModel(body: ReadableStream<Uint8Array>, model: stri
     async pull(controller) {
       // Keep reading until there is something to enqueue or the upstream closes.
       while (true) {
-        const { done, value } = await reader.read();
+        const { done, value: chunk } = await reader.read();
         if (done) {
           if (carryLength > 0) controller.enqueue(take(EMPTY_BYTES));
           controller.close();
           return;
         }
+        if (chunk.byteLength === 0) continue;
+        let value = chunk;
+        let relayedLf = false;
+        if (pendingLf && chunk[0] === 10) {
+          relayedLf = pendingLf === "relay";
+          if (relayedLf) controller.enqueue(chunk.subarray(0, 1));
+          value = chunk.subarray(1);
+        }
+        pendingLf = undefined;
+        if (value.byteLength === 0) {
+          if (relayedLf) return;
+          continue;
+        }
         if (!scanning) {
           controller.enqueue(value);
           return;
         }
-        scanned += value.byteLength;
+        scanned += chunk.byteLength;
         const carried = carryLength;
         const length = carried + value.byteLength;
         const byteAt = (index: number): number => index < carried ? carry[index]! : value[index - carried]!;
@@ -350,13 +364,14 @@ export function echoRequestedModel(body: ReadableStream<Uint8Array>, model: stri
             continue;
           }
           const end = index + delimiter;
-          // A final CR may be the first byte of a split CRLF. Keep that pair together.
-          if (end === length && byteAt(end - 1) === 13) break;
+          const endsOnCr = end === length && byteAt(end - 1) === 13;
           const frame = take(value.subarray(Math.max(0, start - carried), end - carried));
           start = end;
           index = end;
           const decoded = decoder.decode(frame);
           const rewritten = messageStartWithModel(decoded, model);
+          // A bare CR completes the frame now. A later LF belongs to that same delimiter.
+          if (endsOnCr) pendingLf = rewritten === undefined ? "relay" : "drop";
           if (rewritten === undefined) {
             controller.enqueue(frame);
             continue;
@@ -372,12 +387,12 @@ export function echoRequestedModel(body: ReadableStream<Uint8Array>, model: stri
           scanning = false;
           const remaining = take(suffix);
           if (remaining.byteLength > 0) controller.enqueue(remaining);
-          if (start > 0 || remaining.byteLength > 0) return;
+          if (relayedLf || start > 0 || remaining.byteLength > 0) return;
           continue;
         }
         scanFrom = index - start;
         retain(suffix);
-        if (start > 0) return;
+        if (relayedLf || start > 0) return;
       }
     },
     cancel(reason) {
