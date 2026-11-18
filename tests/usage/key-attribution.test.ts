@@ -2,12 +2,13 @@ import { describe, expect, test } from "bun:test";
 import {
   addFinalRequestLog, aggregateAttemptUsage, beginRequestAttempt, finishRequestAttempt, noteProviderAttemptSend,
   recordKeyAttemptFailure, recordKeyAttemptUsage, applyResponseLogMetadata, sealRequestAttemptIdentity,
-  inspectResponseLogSsePayload, type RequestLogContext, type RequestLogEntry,
+  inspectResponseLogSsePayload, recordAdapterTierMetadata, type RequestLogContext, type RequestLogEntry,
 } from "../../src/server/request-log";
 import { readFileSync } from "node:fs";
 import { repoPath } from "../helpers/repo-root";
 import { normalizeUsageEntryForTest } from "../../src/usage/log";
 import { formatAnthropicProviderForLog } from "../../src/oauth/anthropic-routing";
+import { createAdapterTierMetadata } from "../../src/providers/fastwire";
 
 describe("key attempt accounting", () => {
   test("a combo parent copied before streaming rotation cannot overwrite the final key's usage", () => {
@@ -292,6 +293,26 @@ describe("key attempt accounting", () => {
       expect(ctx.attempts).toHaveLength(1);
       expect(active).toMatchObject({ ordinal: 1, sendCount: 2, recoveryKinds: [recovery] });
     });
+  test("same-account OAuth recovery keeps the live tier observer and snapshots the refused tier", () => {
+    const oauth = { adapter: "openai-responses" as const, authMode: "oauth" as const, baseUrl: "https://example.test" };
+    const active = beginRequestAttempt(1, "test", "model", "openai-responses");
+    const ctx: RequestLogContext = { provider: "test", model: "model", activeAttempt: active, attempts: [active] };
+    const metadata = createAdapterTierMetadata({ capability: true, eligibility: "eligible",
+      fastWire: { kind: "service-tier", canonicalToWire: { priority: "priority" }, foreignCallerTiers: "verbatim" },
+      demandDecision: "force-fast" }, { kind: "set", value: "priority" }, "service-tier", "priority")!;
+    recordAdapterTierMetadata(ctx, metadata);
+    noteProviderAttemptSend(ctx, "test", oauth, undefined);
+    noteProviderAttemptSend(ctx, "test", oauth, undefined, "oauth-401");
+    expect(active.tierOutcome).toBe(metadata.outcome);
+    expect(ctx.attempts?.[0].tierOutcome).not.toBe(metadata.outcome);
+    metadata.observeResponseServiceTier("priority");
+    const rows: RequestLogEntry[] = [];
+    addFinalRequestLog("same-account-tier-recovery", Date.now(), ctx, 200, undefined, row => rows.push(row));
+    const persisted = normalizeUsageEntryForTest(JSON.parse(JSON.stringify(rows[0])));
+    expect(persisted.attempts?.[0].tierOutcome).toMatchObject({ confirmation: "assumed", fastOutcome: "applied" });
+    expect(persisted.attempts?.[0].tierOutcome?.responseServiceTier).toBeUndefined();
+    expect(persisted.attempts?.[1].tierOutcome).toMatchObject({ confirmation: "confirmed", responseServiceTier: "priority" });
+  });
   test("a same-key recovery preserves the observed refusal status", () => {
     const key = { adapter: "openai-chat" as const, authMode: "key" as const, baseUrl: "https://example.test",
       _apiKeyAttempt: { reference: "synthetic-same-key" } };

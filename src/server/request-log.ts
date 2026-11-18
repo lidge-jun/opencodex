@@ -1883,9 +1883,11 @@ export function noteProviderAttemptSend(
     else attempts.push(completed, attempt);
     const fresh = beginRequestAttempt(completed.ordinal + 1, providerName, completed.model, completed.adapter);
     // Effort/tier metadata describes the request and is captured before the physical send.
-    for (const key of ["requestedEffort", "effectiveEffort", "reasoningWireField", "reasoningWireValue", "tierOutcome"] as const) {
+    for (const key of ["requestedEffort", "effectiveEffort", "reasoningWireField", "reasoningWireValue"] as const) {
       if (completed[key] !== undefined) Object.assign(fresh, { [key]: completed[key] });
     }
+    // The response observer owns this live object; the sealed row keeps its snapshot.
+    if (attempt.tierOutcome) fresh.tierOutcome = attempt.tierOutcome;
     for (const key of Object.keys(attempt)) delete (attempt as unknown as Record<string, unknown>)[key];
     Object.assign(attempt, fresh);
     delete logCtx.usage;
