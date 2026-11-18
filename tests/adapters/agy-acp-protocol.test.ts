@@ -67,6 +67,13 @@ describe("config options and the Gemini proof", () => {
   test("malformed options are rejected", () => {
     expect(parseConfigOptions([{ id: "model", type: "select", currentValue: "a", options: [{ name: "no value" }] }])).toBeUndefined();
   });
+
+  test("selector groups contain a flat value list", () => {
+    const group = { group: "gemini", name: "Gemini", options: [{ value: "gemini-a", name: "Gemini A" }] };
+    const option = { id: "model", type: "select", currentValue: "gemini-a" };
+    expect(parseConfigOptions([{ ...option, options: [group] }])?.[0]?.values).toEqual(group.options);
+    expect(parseConfigOptions([{ ...option, options: [{ ...group, options: [group] }] }])).toBeUndefined();
+  });
 });
 
 describe("binary and version", () => {

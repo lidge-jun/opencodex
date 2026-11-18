@@ -22,21 +22,24 @@ const isRecord = (value: unknown): value is Record<string, unknown> => !!value &
 const MAX_OPTIONS = 64;
 const MAX_VALUES = 256;
 
-function selectValues(raw: unknown): AcpSelectValue[] | undefined {
-  if (!Array.isArray(raw)) return undefined;
+function flatSelectValues(raw: unknown[]): AcpSelectValue[] | undefined {
   const out: AcpSelectValue[] = [];
   for (const entry of raw.slice(0, MAX_VALUES)) {
-    if (!isRecord(entry)) return undefined;
-    if (Array.isArray(entry.options)) {
-      // A group: { group, name, options: [...] }.
-      const nested = selectValues(entry.options);
-      if (!nested) return undefined;
-      out.push(...nested);
-    } else if (typeof entry.value === "string" && entry.value.length > 0) {
-      out.push({ value: entry.value, name: typeof entry.name === "string" ? entry.name : entry.value });
-    } else {
-      return undefined;
-    }
+    if (!isRecord(entry) || Array.isArray(entry.options) || typeof entry.value !== "string" || !entry.value) return undefined;
+    out.push({ value: entry.value, name: typeof entry.name === "string" ? entry.name : entry.value });
+  }
+  return out;
+}
+
+function selectValues(raw: unknown): AcpSelectValue[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  if (!isRecord(raw[0]) || !Array.isArray(raw[0].options)) return flatSelectValues(raw);
+  const out: AcpSelectValue[] = [];
+  for (const group of raw.slice(0, MAX_VALUES)) {
+    if (!isRecord(group) || !Array.isArray(group.options)) return undefined;
+    const values = flatSelectValues(group.options);
+    if (!values) return undefined;
+    out.push(...values);
   }
   return out.slice(0, MAX_VALUES);
 }
