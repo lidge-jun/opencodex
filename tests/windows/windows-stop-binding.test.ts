@@ -136,6 +136,33 @@ describe("checked Windows stop binding", () => {
     expect(binding.unbound.map(wrapper => wrapper.pid).sort()).toEqual([20, 30]);
   });
 
+  test("foreign wrappers are excluded without removing their parent-chain evidence", () => {
+    const foreign = { ...launcher(60, SCHEDULE_PID, 2_000), foreignOwner: true };
+    const sameUserChild = { ...loop(61, 60, 3_000), foreignOwner: false };
+    const binding = bindWindowsStopWrappers(context({ processes: [scheduleHost, foreign, sameUserChild], childPid: null }));
+    // Removing the foreign row would fabricate an orphan, letting the registered task
+    // authorize terminating the same-user child. Its live parent must remain visible.
+    expect(binding.bound).toEqual([]);
+    expect(binding.unbound).toEqual([{ pid: 61, startTime: 3_000 }]);
+    expect(binding.unreadable).toEqual([]);
+    expect(windowsHomeWrapperPids([foreign, sameUserChild], PATHS)).toEqual([61]);
+    const orphan = bindWindowsStopWrappers(context({ processes: [foreign], childPid: null }));
+    expect(orphan).toMatchObject({ bound: [], unbound: [], unreadable: [] });
+  });
+
+  test("same-user and unreadable ownership retain the existing unbound and unreadable rules", () => {
+    const shell = entry(500, 4, "explorer.exe", "explorer.exe", 2_000);
+    for (const foreignOwner of [false, null, undefined]) {
+      const wrapper = { ...launcher(60, 500, 3_000), foreignOwner };
+      const binding = bindWindowsStopWrappers(context({ processes: [shell, wrapper], childPid: null }));
+      expect(binding.bound).toEqual([]);
+      expect(binding.unbound).toEqual([{ pid: 60, startTime: 3_000 }]);
+      expect(windowsHomeWrapperPids([wrapper], PATHS)).toEqual([60]);
+      expect(bindWindowsStopWrappers(context({ processes: [{ ...wrapper, startTime: null }], childPid: null })).unreadable)
+        .toEqual([60]);
+    }
+  });
+
   test("a matching wrapper without a creation time is unreadable, never bound", () => {
     const binding = bindWindowsStopWrappers(context({
       processes: [scheduleHost, launcher(), loop(30, 20, null), proxy()],
