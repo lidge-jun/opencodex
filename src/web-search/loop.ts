@@ -27,6 +27,8 @@ import { redactSecretString } from "../lib/redact";
 import { recordLocalFailureDetail, type FailureDetail } from "../server/request-log-failure-detail";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { applyUpstreamRecoveryInit, fetchWithResetRetry, prepareSameTarget429Wait, isNonReplayableResponse, isSameTargetRetryHold, SendBudgetExhaustedError } from "../lib/upstream-retry";
+import { unwrapUpstreamRetryEvidenceError } from "../codex/auth-context";
+import { HostedAdvisorSpendRefusal } from "../server/responses/policy-request-scope";
 import { rateLimitRetryDelayMs } from "../providers/key-failover";
 import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import {
@@ -766,6 +768,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         } catch (error) {
           if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
           if (headerDeadline.didExpire()) throw headerDeadlineError(connectTimeoutMs);
+          const refusal = unwrapUpstreamRetryEvidenceError(error);
+          if (refusal instanceof HostedAdvisorSpendRefusal) throw new LoopError(400, refusal.message, refusal.event());
           if (error instanceof LoopError || error instanceof SendBudgetExhaustedError || isTranslatorBudgetExceededError(error)) throw error;
           throw new LoopError(502, `Provider unreachable: ${error instanceof Error ? error.message : String(error)}`);
         } finally {
@@ -859,6 +863,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       if (isTranslatorBudgetExceededError(error) || error instanceof SendBudgetExhaustedError) throw error;
       if (headerDeadline.didExpire()) throw headerDeadlineError(connectTimeoutMs);
       if (signal.aborted) throw new LoopError(499, "client closed request during web-search");
+      const refusal = unwrapUpstreamRetryEvidenceError(error);
+      if (refusal instanceof HostedAdvisorSpendRefusal) throw new LoopError(400, refusal.message, refusal.event());
       if (error instanceof LoopError || error instanceof RequestPacingQueueOverloadError) throw error;
       throw new LoopError(502, `Provider unreachable: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
