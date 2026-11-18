@@ -27,8 +27,10 @@ export async function sanitizeNonReplayableUpstreamError(
     markResponseNonReplayable(cancelled);
     return cancelled;
   }
+  const noRetry = response.headers.get("x-should-retry") === "false";
   if (grokOAuthLogCtx && isXaiLegacyPrivacyError(response.status, text)) {
     const refusal = xaiPrivacyModeRefusal(grokOAuthLogCtx);
+    if (noRetry) refusal.headers.set("x-should-retry", "false");
     markResponseNonReplayable(refusal);
     return refusal;
   }
@@ -48,7 +50,7 @@ export async function sanitizeNonReplayableUpstreamError(
     message: `Provider error ${response.status}: upstream diagnostic withheld for a non-replayable failure`,
   } });
   const headers = new Headers({ "content-type": "application/json" });
-  if (response.headers.get("x-should-retry") === "false") headers.set("x-should-retry", "false");
+  if (noRetry) headers.set("x-should-retry", "false");
   const safe = new Response(response.status === 304 ? null : body, {
     status: response.status, headers,
   });

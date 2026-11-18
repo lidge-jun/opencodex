@@ -446,7 +446,7 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
   const privacyError = `${privateDetail} ${marker}`;
 
   function refuseAt(upstreamPath: string, error = privacyError, fallback?: (init?: RequestInit) => Response,
-    resetBeforeHeaders = false): string[] {
+    resetReplacement?: () => Response): string[] {
     const sends: string[] = [];
     globalThis.fetch = (async (input, init) => {
       const url = new URL(input instanceof Request ? input.url : String(input));
@@ -455,8 +455,11 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
         if (path === upstreamPath || path === "/v1/billing") {
           sends.push(path);
           expect(new Headers(init?.headers).get("authorization")).toBe("Bearer rejected-access");
-          if (resetBeforeHeaders && sends.length === 1) {
-            throw Object.assign(new Error("synthetic pre-header reset"), { code: "ECONNRESET" });
+          if (resetReplacement) {
+            if (sends.length === 1) {
+              throw Object.assign(new Error("synthetic pre-header reset"), { code: "ECONNRESET" });
+            }
+            return resetReplacement();
           }
           return Response.json({ error }, { status: 403 });
         }
@@ -519,9 +522,12 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
   });
 
   test.each([
-    ["translated Responses", "/v1/chat/completions", false],
-    ["native Responses", "/v1/responses", true],
-  ] as const)("%s keeps privacy guidance on a non-replayable reset replacement", async (_, upstream, nativeResponses) => {
+    ["translated Responses", "/v1/chat/completions", false, false, "false", "false"],
+    ["native Responses", "/v1/responses", true, false, "false", "false"],
+    ["translated Responses combo", "/v1/chat/completions", false, true, "false", "false"],
+    ["native Responses combo", "/v1/responses", true, true, "false", "false"],
+    ["native Responses combo with an unrecognized retry header", "/v1/responses", true, true, "False", null],
+  ] as const)("%s keeps exact no-retry guidance on a privacy reset replacement", async (_, upstream, nativeResponses, combo, header, expectedHeader) => {
     await seedOAuth();
     const config = xaiConfig();
     const provider = config.providers.xai!;
@@ -530,24 +536,74 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
       provider.xaiResponsesDefaultVersion = 1;
     }
     provider.retryOnReset = { enabled: true };
+    if (combo) {
+      config.providers.fixture = {
+        adapter: "openai-chat", baseUrl: "https://fixture.invalid/v1", apiKey: "fixture-key", models: ["fallback"],
+      };
+      config.combos = { "privacy-reset": { strategy: "failover", targets: [
+        { provider: "xai", model: "grok-4.5" }, { provider: "fixture", model: "fallback" },
+      ] } };
+    }
     saveConfig(config);
-    const sends = refuseAt(upstream, privacyError, undefined, true);
+    const sends = refuseAt(upstream, privacyError, () => Response.json({}, { status: 500 }), () =>
+      Response.json({ error: privacyError }, { status: 403, headers: { "x-should-retry": header } }));
     const release = acquireOwnedSpendHome();
     try {
       const logCtx: RequestLogContext = { model: "", provider: "" };
       const result = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: "xai/grok-4.5", input: "hello", store: false, stream: false }),
+        body: JSON.stringify({ model: combo ? "combo/privacy-reset" : "xai/grok-4.5", input: "hello", store: false, stream: false }),
       }), config, logCtx);
       expect(sends).toEqual([upstream, upstream]);
       expect(result.status).toBe(403);
       expect(isNonReplayableResponse(result)).toBe(true);
+      expect(result.headers.get("x-should-retry")).toBe(expectedHeader);
       expect(await result.json()).toEqual({
         error: { message: guidance, type: "permission_error", param: null, code: "permission_denied" },
       });
       expect(logCtx.causeHint).toBe("policy-refusal");
     } finally {
+      release();
+    }
+  });
+
+  test("cancellation during a privacy reset replacement body returns a non-replayable 499", async () => {
+    await seedOAuth();
+    const config = xaiConfig();
+    config.providers.xai!.retryOnReset = { enabled: true };
+    saveConfig(config);
+    const reading = Promise.withResolvers<void>();
+    const releaseBody = Promise.withResolvers<void>();
+    const abort = new AbortController();
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(new TextEncoder().encode(JSON.stringify({ error: privacyError })));
+        reading.resolve();
+        // Hold EOF so the classifier is still reading when the caller cancels.
+        return releaseBody.promise;
+      },
+    }, { highWaterMark: 0 });
+    const sends = refuseAt("/v1/responses", privacyError, undefined, () => new Response(body, {
+      status: 403, headers: { "content-type": "application/json", "x-should-retry": "false" },
+    }));
+    const release = acquireOwnedSpendHome();
+    try {
+      const pending = handleResponses(new Request("http://localhost/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "xai/grok-4.5", input: "hello", store: false, stream: false }),
+        signal: abort.signal,
+      }), config, { model: "", provider: "" }, { abortSignal: abort.signal });
+      await reading.promise;
+      abort.abort();
+      const result = await pending;
+      expect(sends).toEqual(["/v1/responses", "/v1/responses"]);
+      expect(result.status).toBe(499);
+      expect(isNonReplayableResponse(result)).toBe(true);
+    } finally {
+      abort.abort();
+      releaseBody.resolve();
       release();
     }
   });

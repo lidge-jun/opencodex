@@ -81,12 +81,14 @@ Privacy Mode.
 Chat and Responses preserve the 403 permission envelope and record an upstream account-policy
 refusal. The refusal leaves pause and reauthentication state intact. A 403 with the exact marker
 on an operator-granted reset replacement also returns the fixed guidance on both Responses paths
-and keeps the response non-replayable. Replayable Responses combo refusals use the existing
-HTTP 403 failover eligibility with no cooldown from the account's privacy setting. On
-exhaustion, confirmed context-window and applicable quota verdicts take precedence over the
-fixed guidance. Wrapped, bare-string and
-provider-test error bodies all use proxy-owned copy when the marker matches. Catalog discovery logs the guidance
-alongside its normal fallback. The billing probe logs the same guidance, drops the stale quota
+and keeps the response non-replayable. An exact upstream `x-should-retry: false` survives the
+fixed response and combo reconstruction. Cancellation during the replacement body read returns
+a non-replayable 499. Replayable Responses combo refusals use the existing HTTP 403 failover
+eligibility with no cooldown from the account's privacy setting. On exhaustion, confirmed
+context-window and applicable quota verdicts take precedence over the fixed guidance. Wrapped,
+bare-string and provider-test error bodies all use proxy-owned copy when the marker matches.
+Catalog discovery logs the guidance alongside its normal fallback. The billing probe logs the
+same guidance, drops the stale quota
 row and stops before the monthly fallback when the weekly endpoint proves the account setting.
 Coverage: `tests/server/server-xai-oauth-401-replay.test.ts`.
 

@@ -105,6 +105,7 @@ export async function consumeComboFailure(
     if (body.displaySafe && !body.truncated) {
       if (isXaiPrivacyModeRefusal(response) || (grokOAuth && isXaiLegacyPrivacyError(response.status, body.text))) {
         const refusal = xaiPrivacyModeRefusal(logCtx);
+        if (response.headers.get("x-should-retry") === "false") refusal.headers.set("x-should-retry", "false");
         if (nonReplayable) markResponseNonReplayable(refusal);
         return {
           response: refusal,
