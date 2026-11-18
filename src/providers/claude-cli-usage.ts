@@ -72,7 +72,7 @@ export async function probeAnthropicUsageQuota(accessToken: string): Promise<Ant
     }
   }
   const displayWindows = displayBuckets.flatMap(bucket => familyWindow(bucket) ?? []);
-  const monthlyPercent = anthropicExtraUsageMonthlyPercent(body, buckets);
+  const monthlyPercent = anthropicExtraUsageMonthlyPercent(body, { buckets, displayBuckets });
   if (monthlyPercent !== undefined) shared.monthlyPercent = monthlyPercent;
   const quota: ProviderQuota = {
     ...shared,

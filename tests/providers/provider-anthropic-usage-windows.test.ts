@@ -406,3 +406,16 @@ test("the advisory projection carries the same monthly window as the display, wi
   ]);
   expect(rawAnthropicUsageWindows({ ...enterpriseUsage, extra_usage: { ...enterpriseUsage.extra_usage, is_enabled: false } }, now)).toEqual([]);
 });
+
+test("an inactive scoped row is a reported plan window, so extra_usage adds no monthly bar beside it", async () => {
+  const inactiveScoped = { five_hour: null, seven_day: null,
+    limits: [{ kind: "weekly_scoped", group: "weekly", percent: 27, is_active: false, resets_at: weeklyReset,
+      scope: { model: { id: null, display_name: "Fable" }, surface: null } }],
+    extra_usage: enterpriseUsage.extra_usage };
+  const quota = await parse(inactiveScoped);
+  expect(quota?.monthlyPercent).toBeUndefined();
+  expect(rawAnthropicUsageWindows(inactiveScoped, now).map(row => row.window)).not.toContain("monthly");
+  // The same body without the scoped row is a monthly-only seat, so the row is what suppresses it.
+  const withoutScoped = await parse({ ...inactiveScoped, limits: [] });
+  expect(withoutScoped?.monthlyPercent).toBeCloseTo(5.58, 2);
+});

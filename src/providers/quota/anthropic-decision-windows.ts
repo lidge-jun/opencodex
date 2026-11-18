@@ -10,14 +10,15 @@ function reset(value: unknown): number | undefined {
 /** Extract raw decision windows (5h, weekly and per-model families) from an Anthropic usage body, keeping invalid resets distinct from display parsing. */
 export function rawAnthropicUsageWindows(body: Record<string, unknown>, observedAt: number): DecisionQuotaWindow[] {
   const rows: DecisionQuotaWindow[] = [];
-  const { buckets } = anthropicUsageBuckets(body);
+  const windows = anthropicUsageBuckets(body);
+  const { buckets } = windows;
   for (const { window, row, percentField } of buckets) {
     const percent = toFiniteNumber(row[percentField]);
     if (percent === undefined) continue;
     const resetAt = reset(row.resets_at);
     rows.push({ window, percent, observedAt, ...(resetAt !== undefined ? { resetAt } : {}) });
   }
-  const monthlyPercent = anthropicExtraUsageMonthlyPercent(body, buckets);
+  const monthlyPercent = anthropicExtraUsageMonthlyPercent(body, windows);
   if (monthlyPercent !== undefined) rows.push({ window: "monthly", percent: monthlyPercent, observedAt });
   return rows;
 }

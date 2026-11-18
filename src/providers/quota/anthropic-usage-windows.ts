@@ -64,16 +64,18 @@ function applyWeeklyShares(body: Record<string, unknown>, scopedRows: Map<number
 
 /**
  * Monthly usage for plans that report no five-hour, weekly or scoped window, such as
- * usage-based Enterprise seats. `extra_usage.is_enabled` says the credit allowance is
+ * usage-based Enterprise seats. A scoped row that is inactive still counts as a reported
+ * window, so it suppresses this reading like an active one. `extra_usage.is_enabled` says the credit allowance is
  * usable now; `has_extra_usage_enabled` on the profile only says it was opted into, so it
  * is not consulted. The payload carries no reset time. The percentage tracks the credit
  * balance and falls when credits reset, so no reset is read or invented. Display and
  * advisory projections share this one reading.
  */
 export function anthropicExtraUsageMonthlyPercent(
-  body: Record<string, unknown>, buckets: readonly AnthropicUsageBucket[],
+  body: Record<string, unknown>,
+  windows: { buckets: readonly AnthropicUsageBucket[]; displayBuckets: readonly AnthropicUsageBucket[] },
 ): number | undefined {
-  if (buckets.length > 0) return undefined;
+  if (windows.buckets.length > 0 || windows.displayBuckets.length > 0) return undefined;
   const extra = asRecord(body.extra_usage);
   if (!extra || extra.is_enabled !== true) return undefined;
   const reported = toFiniteNumber(extra.utilization);
