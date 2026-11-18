@@ -14,6 +14,7 @@ import {
 } from "../../src/server/request-log";
 import type { OcxConfig } from "../../src/types";
 import { buildRouteDecisionTrace } from "../../src/routing/trace";
+import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import { summarizeUsage } from "../../src/usage/summary";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { refreshUserCostOverlays } from "../../src/usage/user-cost-overlays";
@@ -60,6 +61,7 @@ beforeEach(() => {
 
 afterEach(() => {
   clearRequestLogsForTests();
+  closeRequestHistoryIndex();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   if (testDir) removeTreeWithRetry(testDir);
@@ -456,6 +458,36 @@ describe("GET /api/logs credit-billed cost", () => {
     expect(cost.kind).toBe("value");
     expect(cost.estimate.billing).toEqual({ source: "provider-credits", providerCredits: 1.95, creditPriceUsd: 0.04 });
     expect(cost.estimate.cost.total).toBeCloseTo(1.95 * 0.04, 9);
+  });
+
+  test.each(["/api/logs", "/api/request-history", "/api/request-history/incomplete-credits", "/api/request-history/incomplete-credits/route-decision"])("%s omits incomplete credit readings", async path => {
+    refreshUserCostOverlays(creditConfig);
+    const incompleteUsage = { ...kiroUsage, providerCredits: -1 };
+    addRequestLog(baseEntry({
+      requestId: "incomplete-credits", provider: "kiro", model: "claude-opus-5.5",
+      usageStatus: "estimated", usage: incompleteUsage,
+      attempts: [
+        { ordinal: 1, provider: "kiro", model: "claude-opus-5.5", adapter: "kiro", status: 200, durationMs: 900, sendCount: 1, recoveryKinds: [], usageStatus: "estimated", usage: incompleteUsage },
+        { ordinal: 2, provider: "kiro", model: "claude-opus-5.5", adapter: "kiro", status: 200, durationMs: 900, sendCount: 1, recoveryKinds: [], usageStatus: "estimated", usage: { ...kiroUsage, providerCredits: 0 } },
+      ],
+    }));
+    const url = new URL(path, "http://localhost");
+    const response = await handleManagementAPI(new Request(url), url, config);
+    expect(response?.status).toBe(200);
+    const body = await response!.json();
+    if (path.endsWith("/route-decision")) {
+      expect(body.attemptSequence[0].usage).not.toHaveProperty("providerCredits");
+      expect(body.attemptSequence[1].usage.providerCredits).toBe(0);
+      return;
+    }
+    const dto = (body.logs ?? body.entries)?.find((row: Record<string, unknown>) => row.requestId === "incomplete-credits") ?? body;
+    expect(dto.usage.outputTokens).toBe(kiroUsage.outputTokens);
+    expect(dto.usage).not.toHaveProperty("providerCredits");
+    expect(dto.attempts[0].usage).not.toHaveProperty("providerCredits");
+    expect(dto.attempts[1].usage.providerCredits).toBe(0);
+    const unavailable = { kind: "unavailable", reason: "credit_cost_unrepresentable" };
+    expect(dto.displayMetrics.cost).toEqual(unavailable);
+    expect(dto.attempts[0].displayMetrics.cost).toEqual(unavailable);
   });
 
   test("a mixed combo serves its per-attempt basis and a mixed parent marker", async () => {

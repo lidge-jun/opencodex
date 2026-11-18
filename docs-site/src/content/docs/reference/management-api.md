@@ -316,7 +316,8 @@ the full filtered window. A valid unchanged prefix returns only appended rows; `
 the client window after edits, eviction, query changes or restart. Invalid cursors return HTTP 400 with
 `error.code: "invalid_cursor"`. Authentication is unchanged. The dashboard falls back to full snapshots
 for older servers. This reduces response bytes for stable windows; server projection remains bounded
-by the current window size.
+by the current window size. Logs and request-history responses omit `usage.providerCredits` on
+requests and attempts with an invalid or incomplete credit reading. A measured zero is returned as `0`.
 
 A successful `/api/logs` (and request-history) `displayMetrics.cost.estimate` may carry an optional
 `billing` object naming how the row was charged, so a client never has to infer an allocation the

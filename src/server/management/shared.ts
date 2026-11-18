@@ -53,12 +53,12 @@ import {
   setDebugSettings,
   type DebugFlag,
 } from "../../lib/debug-settings";
-import type { OcxClaudeCodeConfig, OcxClaudeDesktopProfile, OcxConfig, OcxCustomModel, OcxProviderConfig } from "../../types";
+import type { OcxClaudeCodeConfig, OcxClaudeDesktopProfile, OcxConfig, OcxCustomModel, OcxProviderConfig, OcxUsage } from "../../types";
 import type { DesktopProfileModel } from "../../claude/desktop-profile";
 import { drainAndShutdown } from "../lifecycle";
 import { filterRequestLogs, getRequestLogEntries, type RequestLogEntry } from "../request-log";
 import { creditChargeUnrepresentable, estimateComboCost, estimateRequestCost, resolveMatchedPrice, serviceTierContext, normalizeCostTokens, tokensPerSecond } from "../../usage/cost";
-import { costTokensWithinBound } from "../../usage/credit-billing";
+import { costTokensWithinBound, isRepresentableCreditCount } from "../../usage/credit-billing";
 import type { PersistedUsageAttempt } from "../../usage/log";
 import { usageModelPriceOptions } from "../../usage/model-identity";
 import { isAllowedRequestOrigin, jsonResponse, providerManagementConfigError, publicProviderBaseUrl, safeConfigDTO } from "../auth-cors";
@@ -304,12 +304,21 @@ function resendVerdict(row: { failureStage?: string; failureCause?: string }): {
   if (!isKnownRequestFailureStage(row.failureStage) || !isKnownRequestFailureCause(row.failureCause)) return {};
   return { resendPermission: resendPermission(row.failureStage, row.failureCause) };
 }
+
+/** Keep invalid credit evidence available to cost estimation and omit it from API usage. */
+export function publicLogUsage(usage: OcxUsage | undefined): { usage?: OcxUsage } {
+  if (usage === undefined) return {};
+  const { providerCredits, ...rest } = usage;
+  return { usage: isRepresentableCreditCount(providerCredits) ? usage : rest };
+}
+
 export function requestLogDto(
   entry: RequestLogEntry,
   { includeDecodeRate = true }: { includeDecodeRate?: boolean } = {},
 ): Record<string, unknown> {
   return {
     ...entry,
+    ...publicLogUsage(entry.usage),
     ...(entry.attemptNormalizationDropped === true ? { attemptNormalizationDropped: true } : {}),
     ...resendVerdict(entry),
     displayMetrics: {
@@ -323,6 +332,7 @@ export function requestLogDto(
       ? {
         attempts: entry.attempts.map(attempt => ({
           ...attempt,
+          ...publicLogUsage(attempt.usage),
           ...resendVerdict(attempt),
           displayMetrics: {
             tokPerSecond: tokPerSecondResult(attempt),
