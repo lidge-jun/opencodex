@@ -1110,9 +1110,8 @@ request and returns a `server_tool_use` block named `advisor` followed by an
   gateway without the Advisor would reject every Claude Code request that declares it.
   `forwardAdvisorTool: false` turns it off for first-party Anthropic too. This uses the model's
   selected wire, including after a key or account replacement.
-- Every other destination, including GPT, Gemini and gateways without the opt-in, drops the
-  declaration and runs the turn without advice. An Advisor declaration never blocks a combo child
-  or a fallback.
+- When the tool is optional, GPT, Gemini and gateways without the opt-in drop the declaration
+  and run the turn without hosted advice. Explicit selections require a compatible destination.
 - When the OpenCodex [Advisor](/reference/configuration/advisor/) is active for a turn, its own
   `advisor` tool owns the name and the declared tool is not forwarded. The request log records
   the protocol reason `advisor-tool-shadowed-by-proxy-advisor`.

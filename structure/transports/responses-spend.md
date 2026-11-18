@@ -147,13 +147,12 @@ For Anthropic OAuth it hashes the admitted serving snapshot's provider and accou
 existing OAuth label function. Same-ID accounts in the two instances stay separate; an ambient
 selection change cannot replace the request's identity until the normal credential admission
 accepts a new snapshot. Provider display tags and generic account log fields remain unchanged.
-Both declaration and Advisor replay are removed, so neither can restore the beta.
-Other completed server-tool exchanges in the same validated run retain their original anchor,
-order and destination restrictions.
-The main turn proceeds when the hosted tool is optional, other tools keep their contracts, and requests without an applicable ceiling
-keep destination-based forwarding. `tests/claude-integration/claude-translated-advisor-tool.test.ts`
-checks the wire, unchanged main accounting, admitted identity and captured-policy changes. The separately budgeted
+Withholding removes both declaration and Advisor replay. Other completed exchanges in the same
+validated run retain their original anchor, order and destination restrictions.
+Optional turns proceed with their other tools. The separately budgeted
 [proxy Advisor](../advisor.md#claude-codes-typed-advisor-server-tool) remains available.
+`tests/claude-integration/claude-translated-advisor-tool.test.ts` checks the wire, accounting,
+admitted identity and captured-policy changes.
 
 ## Auxiliary search inference
 
