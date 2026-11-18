@@ -113,7 +113,7 @@ async function post(server: ReturnType<typeof startServer>): Promise<Response> {
 
 function installOAuthFetch(
   chatStatuses: number[],
-  options: { tokenErrorDescription?: string } = {},
+  options: { tokenErrorDescription?: string; includeRefusedUsage?: boolean; omitSuccessUsage?: boolean } = {},
 ): { chatAuth: string[]; counts: { refresh: number } } {
   const chatAuth: string[] = [];
   const counts = { refresh: 0 };
@@ -150,12 +150,16 @@ function installOAuthFetch(
       chatAuth.push(new Headers(init?.headers).get("authorization") ?? "");
       const status = chatStatuses.shift() ?? 200;
       if (status === 401) {
-        return new Response(JSON.stringify({ error: { message: "rejected" } }), {
+        return Response.json({ error: { message: "rejected" },
+          ...(options.includeRefusedUsage ? { usage: { input_tokens: 13, output_tokens: 2, total_tokens: 15 } } : {}),
+        }, {
           status: 401,
           headers: { "content-type": "application/json" },
         });
       }
-      return new Response(successBody("ok after refresh"), { headers: { "content-type": "application/json" } });
+      const success = JSON.parse(successBody("ok after refresh"));
+      if (options.omitSuccessUsage) delete success.usage;
+      return Response.json(success);
     }
     return originalFetch(input, init);
   }) as typeof fetch;
@@ -302,6 +306,32 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
     } finally {
       factory.mockRestore();
       detach();
+      await server.stop(true);
+    }
+  });
+
+  test("usage in the discarded OAuth refusal is unreported and replacement usage can be estimated", async () => {
+    await seedOAuth();
+    saveConfig(xaiConfig());
+    installOAuthFetch([401, 200], { includeRefusedUsage: true, omitSuccessUsage: true });
+    const server = startServer(0);
+    const create = ADAPTER_REGISTRY["openai-responses"].create;
+    const factory = spyOn(ADAPTER_REGISTRY["openai-responses"], "create").mockImplementation((provider, context) => {
+      const adapter = create(provider, context);
+      const build = adapter.buildRequest.bind(adapter);
+      adapter.buildRequest = async (...args) => ({ ...await build(...args), usageLog: { inputTokens: 7 } });
+      return adapter;
+    });
+    try {
+      const response = await post(server);
+      expect(response.status).toBe(200);
+      await response.text();
+      const attempts = readUsageEntries().at(-1)?.attempts;
+      expect(attempts?.[0]).toMatchObject({ status: 401, usageStatus: "unreported" });
+      expect(attempts?.[0]?.usage).toBeUndefined();
+      expect(attempts?.[1]).toMatchObject({ status: 200, usageStatus: "estimated", usage: { inputTokens: 7, estimated: true } });
+    } finally {
+      factory.mockRestore();
       await server.stop(true);
     }
   });
