@@ -302,7 +302,8 @@ describe("agy acp turn", () => {
   });
 
   test("preserves ordinary code and prose across the buffering boundary", async () => {
-    const example = 'const token = process.env.OPENAI_API_KEY; // ocx_admin_…\n' + "x".repeat(1500) + "😺";
+    const example = 'Authorization: required for write requests.\nconst headers = { "Authorization": "run the setup first" };\n'
+      + 'const token = process.env.OPENAI_API_KEY; // ocx_admin_…\n' + "x".repeat(1500) + "😺";
     const h = await run(script((frame, api) => {
       if (frame.method !== "session/prompt") return;
       for (const text of [example.slice(0, -1), example.slice(-1), "\nordinary prose"]) {
@@ -312,6 +313,22 @@ describe("agy acp turn", () => {
       return true;
     }));
     expect(h.events.flatMap(event => event.type === "text_delta" ? [event.text] : []).join("")).toBe(example + "\nordinary prose");
+  });
+
+  test("masks long JWT and Bearer values across batches without losing surrounding text", async () => {
+    const jwtShape = "eyJ" + "h".repeat(12) + "." + "p".repeat(2500) + "." + "s".repeat(20);
+    const bearerShape = "Authorization: Bearer " + "z".repeat(2500) + "==";
+    const input = jwtShape + "\n" + bearerShape + "\nfinished.";
+    const h = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      for (let offset = 0; offset < input.length; offset += 100) {
+        api.notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: input.slice(offset, offset + 100) } });
+      }
+      api.reply(frame.id, { stopReason: "end_turn" });
+      return true;
+    }));
+    const output = h.events.flatMap(event => event.type === "text_delta" ? [event.text] : []).join("");
+    expect(output === "[REDACTED]\nAuthorization: Bearer [REDACTED]\nfinished.").toBe(true);
   });
 
   test("selection errors never interpolate credential-shaped option identifiers", async () => {

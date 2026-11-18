@@ -4,10 +4,10 @@ export const REDACTED_SECRET = "[REDACTED]";
 
 // Minted management, dashboard, device/pairing and data-plane credential values.
 // Match inside quoted strings and identifiers as well as standalone tokens.
-const OCX_CREDENTIAL = /ocx_(?:(?:admin|session|device|proof|pair)_[A-Za-z0-9_-]{43}|data_[0-9a-f]{40})/g;
+export const OPEN_CODEX_CREDENTIAL_PATTERN = /ocx_(?:(?:admin|session|device|proof|pair)_[A-Za-z0-9_-]{43}|data_[0-9a-f]{40})/g;
 
 export function redactOpenCodexCredentials(value: string): string {
-  return value.replace(OCX_CREDENTIAL, REDACTED_SECRET);
+  return value.replace(OPEN_CODEX_CREDENTIAL_PATTERN, REDACTED_SECRET);
 }
 
 /**
