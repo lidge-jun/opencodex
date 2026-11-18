@@ -485,26 +485,28 @@ describe("ComboSuggestions card", () => {
     const originalFetch = globalThis.fetch;
     const name = "claude-opus-5-5";
     const existing = combo("opus", [["anthropic", name]], { allowMeteredTargets: true });
-    let saveCount = 0;
+    let refreshCount = 0;
+    let exclusionReads = 0;
     globalThis.fetch = (async (url: string) => {
-      if (url.endsWith("/api/combos")) return Response.json({ combos: [{ ...existing, allowMeteredTargets: false }] });
-      if (url.endsWith("/api/config")) return Response.json({
-        providers: Object.fromEntries(PROVIDERS.map((provider) => [provider.name, provider])),
-      });
-      return Response.json({ excludedProviders: [] });
+      if (url.endsWith("/api/combo-suggestions/save")) {
+        return Response.json({ code: "suggestion_consent_required" }, { status: 409 });
+      }
+      exclusionReads += 1;
+      return Response.json({ excludedProviders: exclusionReads > 1 ? ["google-vertex"] : [] });
     }) as typeof fetch;
     try {
       await mount(<LanguageProvider><WorkspaceSuggestions
         active apiBase="/test" combos={[existing]} providers={PROVIDERS}
         models={models([["anthropic", name], ["google-vertex", name]])}
         quotaReports={null} quotaNow={0} lockedComboId={null}
-        onSave={async () => { saveCount += 1; return { ok: true }; }}
+        onRefresh={() => { refreshCount += 1; }}
       /></LanguageProvider>);
       const extension = card("opus");
       expect(extension.textContent).toContain("Vertex");
       await act(async () => { button(extension, "Add to combo").click(); });
-      expect(extension.querySelector('[role="alert"]')?.textContent).toContain("Suggestion settings changed");
-      expect(saveCount).toBe(0);
+      expect(host.querySelector('[role="alert"]')?.textContent).toContain("Suggestion settings changed");
+      expect(host.textContent).not.toContain("Add to combo");
+      expect(refreshCount).toBe(1);
     } finally {
       globalThis.fetch = originalFetch;
     }
@@ -518,7 +520,7 @@ describe("ComboSuggestions card", () => {
       await mount(<LanguageProvider><WorkspaceSuggestions
         active apiBase="/test" combos={[]} providers={PROVIDERS}
         models={models([["anthropic", "claude-x"], ["cursor", "claude-x"]])}
-        quotaReports={null} quotaNow={0} lockedComboId={null} onSave={async () => ({ ok: true })}
+        quotaReports={null} quotaNow={0} lockedComboId={null} onRefresh={() => {}}
       /></LanguageProvider>);
       const visibleButtons = () => [...host.querySelectorAll("button")].map((item) => item.textContent?.trim());
       expect(visibleButtons()).not.toContain("Generate");

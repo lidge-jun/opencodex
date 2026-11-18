@@ -1216,4 +1216,6 @@ untried targets and newer failures keep their cooldowns.
 
 ## Suggested combos
 
+When settings change before a suggestion is saved, Combos refreshes the suggestions and displays a message. Saving checks the current exclusions and spend consent.
+
 In the Combos workspace, **Generate** opens a failover draft for a model served by multiple providers. **Add to combo** offers missing targets for an existing combo. Dismissed cards stay hidden in this browser. Use **Exclude providers…** to filter both kinds of suggestions. The proxy stores your selection as `comboSuggestionExcludedProviders` in `config.json`. Existing combo members stay in place. New drafts use unmetered targets. Extensions offer pay-per-use targets, including Vertex, only when the combo already allows metered targets. The dashboard checks the current configuration before saving. The exclusion control stays available when all cards are dismissed. If the exclusion list fails to load, retry the read to see suggestions.

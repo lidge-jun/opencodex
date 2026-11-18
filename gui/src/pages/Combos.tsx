@@ -473,7 +473,7 @@ export default function Combos({
               quotaReports={quotaReports}
               quotaNow={quotaNow}
               lockedComboId={lockedComboId}
-              onSave={saveCombo}
+              onRefresh={() => resource.refresh()}
             />
           )}
           onSave={saveCombo}

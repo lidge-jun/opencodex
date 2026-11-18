@@ -790,4 +790,6 @@ Un rechazo estructurado de esfuerzo puede bajar una posición publicada cada vez
 
 ## Combos sugeridos
 
+Si los ajustes cambian antes de guardar una sugerencia, Combos actualiza las sugerencias y muestra un mensaje. Al guardar, se comprueban las exclusiones y el consentimiento de gasto vigentes.
+
 En el espacio de trabajo de combos, **Generar** abre un borrador de conmutación por error para un modelo disponible en varios proveedores. **Añadir al combo** ofrece destinos que faltan en un combo existente. Las tarjetas descartadas quedan ocultas en este navegador. Usa **Excluir un proveedor…** para filtrar ambos tipos de sugerencias. El proxy guarda la selección como `comboSuggestionExcludedProviders` en `config.json`. Los miembros existentes se conservan. Los borradores nuevos usan destinos sin medición. Las ampliaciones ofrecen destinos de pago por uso, incluido Vertex, solo si el combo ya permite destinos medidos. El panel comprueba la configuración actual antes de guardar. El control de exclusión sigue disponible tras descartar todas las tarjetas. Si falla la carga de la lista de exclusión, vuelve a intentarlo para ver las sugerencias.

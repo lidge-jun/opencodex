@@ -171,7 +171,7 @@ export async function handleComboRoutes(ctx: ManagementContext): Promise<Respons
   const { req, url, config, deps, convergeCodexCatalog, syncClaudeAgentDefsBestEffort } = ctx;
 
   // Only the Combos page reads the suggested combos' excluded-provider list; load it on demand.
-  if (url.pathname === "/api/combo-suggestions") {
+  if (url.pathname === "/api/combo-suggestions" || url.pathname === "/api/combo-suggestions/save") {
     const { handleComboSuggestionRoutes } = await import("./combo-suggestion-routes");
     return handleComboSuggestionRoutes(ctx);
   }

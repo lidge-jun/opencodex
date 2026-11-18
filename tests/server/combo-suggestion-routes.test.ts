@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../../src/server/management-api";
@@ -7,6 +7,7 @@ import { loadConfig, saveConfig } from "../../src/config";
 import { ManagementRequest, managementHeaders } from "../helpers/management-auth";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { parseExcludedProviders } from "../../src/server/management/combo-suggestion-routes";
+import { setPersistedConfigMutationBeforeCommitForTests } from "../../src/config/persisted-mutation";
 import type { OcxConfig } from "../../src/types";
 
 const previousHome = process.env.OPENCODEX_HOME;
@@ -24,6 +25,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setPersistedConfigMutationBeforeCommitForTests(null);
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   removeTreeWithRetry(home);
@@ -80,4 +82,70 @@ test("the config schema normalizes hand-edited exclusions and discards malformed
     expect(parsed.comboSuggestionExcludedProviders).toBeUndefined();
     expect(parsed.providers.mock).toBeDefined();
   }
+});
+
+const paidTarget = { provider: "paid", model: "gemini" };
+
+async function saveSuggestion(live: OcxConfig, body: unknown) {
+  const headers = { ...managementHeaders(), "content-type": "application/json" };
+  const url = new URL("http://localhost/api/combo-suggestions/save");
+  const response = await handleManagementAPI(new ManagementRequest(url, {
+    method: "POST", headers, body: JSON.stringify(body),
+  }), url, live);
+  return response!;
+}
+
+function seedPaidSuggestion() {
+  const live = loadConfig();
+  live.providers.paid = { ...live.providers.mock!, authMode: "forward", baseUrl: "https://aiplatform.googleapis.com/v1", models: ["gemini"] };
+  live.combos = { mix: { strategy: "failover", allowMeteredTargets: true, targets: [{ provider: "mock", model: "m" }] } };
+  saveConfig(live);
+  return live;
+}
+
+for (const code of ["suggestion_consent_required", "suggestion_provider_excluded"]) {
+  test(`append refuses ${code} when policy changes before commit`, async () => {
+    const live = seedPaidSuggestion();
+    const changePolicy = () => {
+      const current = onDisk() as unknown as OcxConfig;
+      if (code === "suggestion_consent_required") delete current.combos!.mix!.allowMeteredTargets;
+      else current.comboSuggestionExcludedProviders = ["paid"];
+      writeFileSync(join(home, "config.json"), JSON.stringify(current));
+    };
+    setPersistedConfigMutationBeforeCommitForTests(changePolicy);
+    const response = await saveSuggestion(live, { id: "mix", mode: "append", targets: [paidTarget] });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code });
+    expect(loadConfig().combos?.mix?.targets).toHaveLength(1);
+  });
+}
+
+test("append uses the current combo and marks a consented Vertex target metered", async () => {
+  const live = seedPaidSuggestion();
+  const current = loadConfig();
+  current.combos!.mix!.displayName = "Current display name";
+  saveConfig(current);
+  const response = await saveSuggestion(live, { id: "mix", mode: "append", targets: [paidTarget] });
+  expect(response.status).toBe(200);
+  expect(loadConfig().combos?.mix).toMatchObject({
+    displayName: "Current display name", allowMeteredTargets: true,
+    targets: [{ ...paidTarget, metered: true }, { provider: "mock", model: "m" }],
+  });
+  expect(live.combos?.mix?.targets).toHaveLength(2);
+});
+
+test("create rejects paid Vertex and never accepts consent from the request", async () => {
+  const live = seedPaidSuggestion();
+  const draft = { id: "draft", mode: "create", targets: [paidTarget] };
+  expect((await saveSuggestion(live, { ...draft, allowMeteredTargets: true })).status).toBe(400);
+  const response = await saveSuggestion(live, draft);
+  expect(response.status).toBe(409);
+  expect(await response.json()).toMatchObject({ code: "suggestion_consent_required" });
+  expect(loadConfig().combos?.draft).toBeUndefined();
+
+  const current = loadConfig();
+  current.providers.mock!.authMode = "forward";
+  saveConfig(current);
+  expect((await saveSuggestion(live, { ...draft, targets: [{ provider: "mock", model: "m" }] })).status).toBe(200);
+  expect(loadConfig().combos?.draft?.allowMeteredTargets).toBeUndefined();
 });

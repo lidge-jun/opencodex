@@ -218,6 +218,7 @@ Las instantáneas de sesión incluyen `resumable`. Se vuelve cierto sólo despu�
 | --- | --- | --- |
 | `GET /api/combos` | Lista de combos normalizados y sus ID de modelo público | El trabajo del catálogo puede devolver `catalog_busy` |
 | `PUT /api/combos` | Crea, sustituye o renombra un combo. | 400 si el identificador, destino, configuración o cambio de nombre son inválidos, o hay una colisión ordinaria; un 400 de validación también identifica el primer campo superior inválido en `field`, por ejemplo `targets` o `decisionProvider`. 409 si hay colisión con el espacio de nombres de una cuenta Codex. |
+| `POST /api/combo-suggestions/save` | Guarda pares de proveedor y modelo sugeridos con `{ id, mode: "create" o "append", targets }` | 400 solicitud inválida; 409 si el consentimiento, las exclusiones, la disponibilidad o el estado del combo impiden guardar |
 | `DELETE /api/combos?id=...` | Eliminar un combo y borrar su estado de selección/enfriamiento | 400 id ausente; 404 combo desconocido |
 
 Consulte [Combos](/es/guides/combos/) para conocer las estrategias de destino, los tiempos de reutilización, los alias y los fallos de enrutamiento.
