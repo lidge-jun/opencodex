@@ -17,6 +17,7 @@ import { routeConcreteModel } from "../../router";
 import { isPolicyCandidateRefusal, isMandatoryToolChoiceRefusal, mandatoryToolChoiceUnavailableResponse, policyWireDestination, type PolicyRequestScope } from "./policy-request-scope";
 import { fallbackTriggerForStatus, guardFallbackHop } from "../../routing/fallback-policy";
 import { captureAdmissionPolicy } from "../capture-admission-policy";
+import { captureHostedAdvisorSpendScope } from "./hosted-advisor-spend";
 import { upstreamCodeForComboFailure } from "../../bridge/errors";
 
 type CoreHandler = typeof handleResponsesCore;
@@ -198,6 +199,7 @@ export async function handleResponsesWithPolicyFallback(
   const coreOptions: CoreOptions = {
     ...options,
     advisorAdmissionPolicy: options.advisorAdmissionPolicy ?? captureAdmissionPolicy(config, options.admission, options.admissionScope),
+    hostedAdvisorSpendScope: captureHostedAdvisorSpendScope(options),
     policyRequestScope: policyScope,
     openAiSidecarAuth: options.openAiSidecarAuth === undefined
       ? captureExplicitOpenAiCallerAuth(req.headers, config) : options.openAiSidecarAuth,
