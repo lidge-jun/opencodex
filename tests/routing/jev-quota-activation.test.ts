@@ -17,7 +17,9 @@ import { readAnthropicUsageQuota } from "../../src/providers/claude-cli-usage";
 import { publishAnthropicDecisionQuota, publishCodexDecisionQuota } from "../../src/providers/quota-decision-publication";
 import { probeAnthropicQuotaWithRecovery } from "../../src/providers/quota/anthropic-cooldown-recovery";
 import { fetchAnthropicAccountQuota } from "../../src/providers/quota/anthropic-account-quota";
-import { getCachedProviderAccountQuota, recordAnthropicAccountQuotaFromHeaders } from "../../src/providers/quota/account-cache";
+import { fetchAnthropicQuota, fetchAnthropicUsageProbeForInstance } from "../../src/providers/quota/vendor-probes-oauth";
+import { getCachedProviderAccountQuota, recordAnthropicAccountQuotaFromHeaders, sweepExpiredProviderAccountQuotaRows } from "../../src/providers/quota/account-cache";
+import { ACCOUNT_QUOTA_TTL_MS } from "../../src/providers/quota-wire";
 import { captureConfigGeneration } from "../../src/lib/state-store-sweeper";
 import { parseUpstreamQuotaHeaders, parseUsageQuota, setAccountQuotaFromParsed } from "../../src/codex/quota";
 import { jevQuotaSignalForTarget, jevQuotaSignalFromWindows } from "../../src/combos/jev-quota";
@@ -27,6 +29,7 @@ import * as derivedRegistries from "../../src/config/derived-registries";
 import { getConfigPath, saveConfig } from "../../src/config";
 import type { OcxConfig } from "../../src/types";
 import { createTempHome, type TempHome } from "../helpers/temp-home";
+import { anthropicHelperMessagesUrl, fetchAnthropicHelper, resolveAnthropicHelperSnapshot } from "../../src/sidecar/anthropic-binding";
 
 const targets = [{ provider: "fixture", model: "m" }];
 const enabled = { strategy: "jev" as const, targets, decisionQuotaSignals: true };
@@ -227,10 +230,13 @@ describe("opt-in JEV quota activation", () => {
     expect(row!.windows).not.toEqual([]);
   });
 
-  for (const source of ["response headers", "legacy usage probe"] as const) {
+  for (const source of ["response headers", "legacy usage probe", "sidecar response headers"] as const) {
     test(`Anthropic ${source} replace a spent monthly fallback with healthy plan evidence`, async () => {
       const { authId, credential } = await seedStores();
       const live = config();
+      const model = "claude-sonnet-4";
+      const baseUrl = "https://fixture.invalid";
+      live.providers.anthropic = { adapter: "anthropic", authMode: "oauth", baseUrl, models: [model] };
       reconcileJevQuotaActivation(live);
       const fetch = spyOn(globalThis, "fetch").mockImplementation((async () => Response.json({
         limits: [], extra_usage: { is_enabled: true, utilization: 100 },
@@ -246,9 +252,15 @@ describe("opt-in JEV quota activation", () => {
         recordAnthropicAccountQuotaFromHeaders(authId, new Headers({
           "anthropic-ratelimit-unified-7d-utilization": "0.16",
         }), captureConfigGeneration(), 200, "claude-sonnet-4", credentialGeneration(credential));
-      } else {
+      } else if (source === "legacy usage probe") {
         fetch.mockImplementation((async () => Response.json({ seven_day: { utilization: 16 } })) as typeof globalThis.fetch);
         await fetchAnthropicAccountQuota("anthropic", authId, true, live);
+      } else {
+        const snapshot = await resolveAnthropicHelperSnapshot(live, "anthropic", model);
+        fetch.mockResolvedValueOnce(new Response(null, { headers: { "anthropic-ratelimit-unified-7d-utilization": "0.16" } }));
+        await fetchAnthropicHelper(live, snapshot, model, baseUrl, anthropicHelperMessagesUrl(baseUrl), {
+          headers: { authorization: `Bearer ${snapshot.accessToken}` },
+        });
       }
 
       const quota = getCachedProviderAccountQuota("anthropic", authId);
@@ -256,6 +268,80 @@ describe("opt-in JEV quota activation", () => {
       expect({ monthly: quota?.monthlyPercent, tier: signal().tier }).toEqual({ monthly: undefined, tier: "healthy" });
     });
   }
+
+  test("Anthropic inactive plan evidence retires a previously observed monthly fallback", async () => {
+    const { authId } = await seedStores();
+    const live = config();
+    reconcileJevQuotaActivation(live);
+    const monthly = { is_enabled: true, utilization: 100 };
+    const fetch = spyOn(globalThis, "fetch").mockResolvedValueOnce(Response.json({ extra_usage: monthly }));
+    const windows = () => readLoadedDecisionQuotaPool("anthropic")?.find(row => row.id === authId)?.windows;
+    await fetchAnthropicAccountQuota("anthropic", authId, true, live);
+    expect(getCachedProviderAccountQuota("anthropic", authId)?.monthlyPercent).toBe(100);
+    expect(windows()).toMatchObject([{ window: "monthly", percent: 100 }]);
+
+    fetch.mockResolvedValueOnce(Response.json({ five_hour: null, extra_usage: monthly,
+      limits: [{ kind: "session", percent: 20, is_active: false }] }));
+    const retired = await fetchAnthropicAccountQuota("anthropic", authId, true, live);
+    expect(retired.quotaFailure).toBeUndefined();
+    expect(retired.unavailable).toBeUndefined();
+    expect({ quota: getCachedProviderAccountQuota("anthropic", authId), windows: windows() }).toEqual({ quota: null, windows: [] });
+  });
+
+  test("Anthropic inactive plan evidence leaves existing plan measurements and their clocks intact", async () => {
+    const { authId, credential } = await seedStores();
+    const live = config();
+    reconcileJevQuotaActivation(live);
+    const weekly = { seven_day: { utilization: 16 } };
+    const inactive = { five_hour: null, limits: [{ kind: "session", percent: 20, is_active: false }] };
+    spyOn(globalThis, "fetch").mockResolvedValueOnce(Response.json(weekly)).mockResolvedValueOnce(Response.json(inactive));
+    await fetchAnthropicAccountQuota("anthropic", authId, true, live);
+    const previous = getCachedProviderAccountQuota("anthropic", authId)!;
+    const windows = () => readLoadedDecisionQuotaPool("anthropic")?.[0]?.windows;
+    const monthly = { window: "monthly", percent: 100, observedAt: previous.updatedAt } as const;
+    const plan = windows()!;
+    publishDecisionAccountQuota("anthropic", authId, credentialGeneration(credential), [...plan, monthly]);
+    expect(await fetchAnthropicQuota("anthropic", live)).toBeNull();
+    expect(getCachedProviderAccountQuota("anthropic", authId)).toEqual(previous);
+    expect(windows()).toEqual(plan);
+  });
+
+  test("Anthropic monthly-only probe cannot overwrite newer plan headers", async () => {
+    const { authId, credential } = await seedStores();
+    const live = config();
+    reconcileJevQuotaActivation(live);
+    const dispatched = Promise.withResolvers<void>();
+    const response = Promise.withResolvers<Response>();
+    spyOn(globalThis, "fetch").mockImplementationOnce(() => {
+      dispatched.resolve();
+      return response.promise;
+    });
+    const pending = fetchAnthropicAccountQuota("anthropic", authId, true, live);
+    await dispatched.promise;
+    recordAnthropicAccountQuotaFromHeaders(authId, new Headers({ "anthropic-ratelimit-unified-7d-utilization": "0.16" }),
+      captureConfigGeneration(), 200, "claude-sonnet-4", credentialGeneration(credential));
+    response.resolve(Response.json({ extra_usage: { is_enabled: true, utilization: 100 } }));
+    await pending;
+    expect({ quota: getCachedProviderAccountQuota("anthropic", authId), windows: readLoadedDecisionQuotaPool("anthropic")?.[0]?.windows })
+      .toMatchObject({ quota: { weeklyPercent: 16 }, windows: [{ window: "weekly", percent: 16 }] });
+    expect(getCachedProviderAccountQuota("anthropic", authId)?.monthlyPercent).toBeUndefined();
+  });
+
+  test("Anthropic shared usage flight keeps its original plan revision for readers joining after headers", async () => {
+    const { authId, credential } = await seedStores();
+    const response = Promise.withResolvers<Response>();
+    const fetch = spyOn(globalThis, "fetch").mockImplementation(() => response.promise);
+    const first = fetchAnthropicUsageProbeForInstance("anthropic", credential.access);
+    recordAnthropicAccountQuotaFromHeaders(authId, new Headers({ "anthropic-ratelimit-unified-7d-utilization": "0.16" }),
+      captureConfigGeneration(), 200, "claude-sonnet-4", credentialGeneration(credential));
+    const joined = fetchAnthropicUsageProbeForInstance("anthropic", credential.access);
+    sweepExpiredProviderAccountQuotaRows(Date.now() + ACCOUNT_QUOTA_TTL_MS);
+    expect(getCachedProviderAccountQuota("anthropic", authId)).toBeNull();
+    response.resolve(Response.json({ extra_usage: { is_enabled: true, utilization: 100 } }));
+    expect(await joined).toBe(await first);
+    expect((await joined).monthlyFallbackIsCurrent(authId)).toBe(false);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
 
   for (const source of ["wham", "response-header"] as const) for (const parsedWhileActive of [false, true]) {
     test(`Codex ${source} parsed while ${parsedWhileActive ? "active preserves invalid resets" : "inactive stays unknown after activation"}`, async () => {

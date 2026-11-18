@@ -10,8 +10,9 @@ import type { QuotaFailureCode } from "../quota-types";
 import { AnthropicQuotaProbeOwnershipError, anthropicCooldownRecoveryFor, type AnthropicQuotaRecoveryResult } from "./anthropic-cooldown-recovery";
 import {
   accountCacheKey, accountQuotaCache, accountQuotaInflight, captureProviderAccountQuotaEpoch,
-  getTokenForAccountQuotaProbe, hydrateAccountQuotaCache, mayCommitAccountQuotaKey,
-  normalizeAnthropicQuota, type AccountQuotaCacheEntry,
+  commitAnthropicAccountQuota, getCachedProviderAccountQuota, getTokenForAccountQuotaProbe,
+  hydrateAccountQuotaCache, mayCommitAccountQuotaKey, normalizeAnthropicQuota,
+  persistAccountQuotaCache, withoutAnthropicMonthlyFallback, type AccountQuotaCacheEntry,
 } from "./account-cache";
 
 /**
@@ -74,12 +75,20 @@ export async function fetchAnthropicAccountQuota(
     const previous = accountQuotaCache.get(key);
     const retained = previous?.isCurrent?.() === false ? undefined : previous;
     const isCurrent = result?.isCurrent ?? flightCurrent;
+    const retirementOnly = result?.quota === null;
+    const quota = retirementOnly ? withoutAnthropicMonthlyFallback(getCachedProviderAccountQuota(instance, accountId))
+      : result?.quota ?? retained?.quota;
     const entry: AccountQuotaCacheEntry = {
-      ts: Date.now(), quota: normalizeAnthropicQuota(result?.quota ?? retained?.quota, Date.now()),
+      ts: Date.now(), quota: normalizeAnthropicQuota(quota, Date.now()),
       ...(!result ? { unavailable: true as const } : {}), isCurrent,
       ...(!result && failure ? { quotaFailure: failure, quotaFailureIsCurrent: isCurrent } : {}),
     };
-    if (isCurrent() && mayCommitAccountQuotaKey(key, writerGeneration)) { accountQuotaCache.set(key, entry); result?.publishDecisionQuota(); sweepExpiredOnWrite(entry.ts); }
+    if (isCurrent() && mayCommitAccountQuotaKey(key, writerGeneration)) {
+      commitAnthropicAccountQuota(key, entry, !!result && result.quota?.monthlyPercent === undefined);
+      result?.publishDecisionQuota();
+      if (retirementOnly) persistAccountQuotaCache();
+      sweepExpiredOnWrite(entry.ts);
+    }
     return entry;
   };
   const probe = (async (): Promise<AccountQuotaCacheEntry> => {
@@ -91,7 +100,7 @@ export async function fetchAnthropicAccountQuota(
         if (!flightCurrent()) throw new AnthropicQuotaProbeOwnershipError("quota flight changed");
         recovery.assertAnthropicQuotaSendAllowed(accountId, token);
         return fetchAnthropicUsageProbeForInstance(instance, token, fresh || freshDispatch).then(
-          read => { failure = read.failure; return read.quota; },
+          read => { failure = read.failure; return read; },
           error => { failure = thrownQuotaFailure(error); throw error; },
         );
       }, () => ownerCurrent() && mayCommitAccountQuotaKey(key, writerGeneration));

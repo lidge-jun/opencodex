@@ -433,5 +433,6 @@ test("an inactive scoped row is a reported plan window, so extra_usage adds no m
 test("a recognized session skipped because legacy five_hour is null suppresses monthly usage", async () => {
   const body = { ...enterpriseUsage, limits: [{ kind: "session", percent: 20, is_active: false }] };
   expect(await parse(body)).toBeNull();
+  expect(await probeAnthropicUsageQuota("synthetic-usage-bearer")).toMatchObject({ quota: null, retireMonthlyFallback: true });
   expect(rawAnthropicUsageWindows(body, now)).toEqual([]);
 });

@@ -9,7 +9,7 @@ import { captureOAuthAccountSelection, credentialGeneration, getAccountCredentia
 import { hydrateKiroAccountState, persistKiroAccountState } from "../kiro-account-state-disk";
 import { kiroProbeCurrent, kiroProbeIdentity } from "./kiro-account-probe";
 import { fetchMuseKeyQuotaSnapshot } from "../muse-key-quota";
-import { probeAnthropicUsageQuota, type AnthropicUsageProbe } from "../claude-cli-usage";
+import { probeAnthropicUsageQuota } from "../claude-cli-usage";
 import { claudeSignedInIdentity, peekClaudeUsageObservation } from "../claude-cli-usage-state";
 import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "../xai-transport";
 import {
@@ -37,16 +37,22 @@ import {
 } from "./report-cache";
 import {
   accountCacheKey,
+  anthropicPlanObservationRevision,
   captureProviderAccountQuotaEpoch,
   accountQuotaCache,
+  commitAnthropicAccountQuota,
   getCachedProviderAccountQuota,
   hydrateAccountQuotaCache,
   mayCommitAccountQuotaKey,
   persistAccountQuotaCache,
+  withoutAnthropicMonthlyFallback,
 } from "./account-cache";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import type { ProviderQuota, ProviderQuotaWindow } from "../quota-types";
-import { AnthropicQuotaProbeOwnershipError, anthropicCooldownRecoveryFor } from "./anthropic-cooldown-recovery";
+import {
+  AnthropicQuotaProbeOwnershipError, anthropicCooldownRecoveryFor,
+  type AnthropicQuotaRecoveryResult, type DispatchedAnthropicUsageProbe,
+} from "./anthropic-cooldown-recovery";
 
 const XAI_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing";
 const XAI_CREDITS_URL = `${XAI_BILLING_URL}?format=credits`;
@@ -231,7 +237,7 @@ export async function fetchXaiQuota(provider: string, context: { accessToken: st
   }
 }
 
-const anthropicUsageInflight = new Map<string, Promise<AnthropicUsageProbe>>();
+const anthropicUsageInflight = new Map<string, Promise<DispatchedAnthropicUsageProbe>>();
 
 /**
  * Anthropic per-credential usage.
@@ -263,21 +269,28 @@ export async function fetchAnthropicUsageQuotaForInstance(
   return (await fetchAnthropicUsageProbeForInstance(instance, accessToken, requireFreshDispatch)).quota;
 }
 
-/** The same shared flight as `fetchAnthropicUsageQuotaForInstance`, keeping the closed failure reason. */
+/** The shared flight with failure, retirement and physical-dispatch ownership evidence. */
 export async function fetchAnthropicUsageProbeForInstance(
   instance: AnthropicInstanceId,
   accessToken: string,
   requireFreshDispatch = false,
-): Promise<AnthropicUsageProbe> {
+): Promise<DispatchedAnthropicUsageProbe> {
   // Recovery evidence must be requested after the claimed cooldown. Joining an older request
   // can return after the 429 while still describing provider state from before that refusal.
-  const credentialIdentity = getAccountSet(instance)?.accounts.filter(row => row.credential.access === accessToken)
-    .map(row => [row.id, row.loginId, row.addedAt, credentialGeneration(row.credential)]);
+  const accounts = getAccountSet(instance)?.accounts.filter(row => row.credential.access === accessToken) ?? [];
+  const credentialIdentity = accounts.map(row => [row.id, row.loginId, row.addedAt, credentialGeneration(row.credential)]);
   const key = `${instance}\0${captureProviderAccountQuotaEpoch(instance)}\0${JSON.stringify(credentialIdentity)}\0${accessToken}`;
   const joinable = requireFreshDispatch ? undefined : anthropicUsageInflight.get(key);
   if (joinable) return joinable;
 
-  const probe = probeAnthropicUsageQuota(accessToken).finally(() => {
+  // Joiners inherit these revisions from the physical request, even if a plan observation
+  // committed before they joined. A monthly-only payload cannot supersede that observation.
+  const planRevisions = new Map(accounts.map(({ id }) => [id, anthropicPlanObservationRevision(accountCacheKey(instance, id))]));
+  const probe = probeAnthropicUsageQuota(accessToken).then(result => ({
+    ...result,
+    monthlyFallbackIsCurrent: (id: string) =>
+      anthropicPlanObservationRevision(accountCacheKey(instance, id)) <= (planRevisions.get(id) ?? 0),
+  })).finally(() => {
     if (anthropicUsageInflight.get(key) === probe) anthropicUsageInflight.delete(key);
   });
   anthropicUsageInflight.set(key, probe);
@@ -357,32 +370,34 @@ export async function fetchAnthropicQuota(provider: string, config: OcxConfig = 
   const currentRow = getAccountSet(instance)?.accounts.find(row => row.id === probedAccountId);
   if (!initialRow || !currentRow || initialRow.loginId !== currentRow.loginId || initialRow.addedAt !== currentRow.addedAt
     || epoch !== captureProviderAccountQuotaEpoch(instance) || recovery.anthropicAccountIncarnation(probedAccountId) !== incarnation) return null;
-  let quota: ProviderQuota | null;
-  let anthropicCurrent: (() => boolean) | undefined; let anthropicPublish: (() => void) | undefined;
+  let result: AnthropicQuotaRecoveryResult | null;
   try {
-    const result = await recovery.probeAnthropicQuotaWithRecovery(probedAccountId, accessToken,
+    result = await recovery.probeAnthropicQuotaWithRecovery(probedAccountId, accessToken,
       fresh => {
         if (!targetCurrent()) throw new AnthropicQuotaProbeOwnershipError("quota target changed");
         recovery.assertAnthropicQuotaSendAllowed(probedAccountId, accessToken);
-        return fetchAnthropicUsageQuotaForInstance(instance, accessToken, fresh);
+        return fetchAnthropicUsageProbeForInstance(instance, accessToken, fresh);
       },
       () => targetCurrent() && mayCommitAccountQuotaKey(probedAccountKey, writerGeneration));
-    if (result && !result.isCurrent()) return null;
-    quota = result?.quota ?? null;
-    anthropicCurrent = result?.isCurrent; anthropicPublish = result?.publishDecisionQuota;
   } catch (error) {
     if (error instanceof AnthropicQuotaProbeOwnershipError) return null;
     throw error;
   }
-  if (!quota) return null;
+  if (!result?.isCurrent()) return null;
+  const { quota, isCurrent: anthropicCurrent } = result;
   // Share the active-account probe with the per-account cache so Providers-page
   // loads do not double-hit Anthropic's rate-limited usage endpoint.
-  if (probedAccountId && probedAccountKey) {
-    const stillOwnsToken = getAccountCredential(instance, probedAccountId)?.access === accessToken;
-    if (stillOwnsToken && anthropicCurrent?.() && mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) {
-      accountQuotaCache.set(probedAccountKey, { ts: Date.now(), quota, isCurrent: anthropicCurrent }); anthropicPublish?.();
-    }
+  const stillOwnsToken = getAccountCredential(instance, probedAccountId)?.access === accessToken;
+  if (stillOwnsToken && anthropicCurrent() && mayCommitAccountQuotaKey(probedAccountKey, writerGeneration)) {
+    if (!quota) hydrateAccountQuotaCache();
+    const cached = quota ?? withoutAnthropicMonthlyFallback(getCachedProviderAccountQuota(instance, probedAccountId));
+    commitAnthropicAccountQuota(probedAccountKey, {
+      ts: Date.now(), quota: cached, isCurrent: anthropicCurrent,
+    }, quota?.monthlyPercent === undefined);
+    result.publishDecisionQuota();
+    if (!quota) persistAccountQuotaCache();
   }
+  if (!quota) return null;
   const pooledReport = anthropicPoolReport(provider, instance, config, probedAccountId, quota);
   const quotaReport = pooledReport ?? report(provider, "anthropic:oauth-usage", quota);
   // The estimate carries no reset times, so reset detection keeps observing the active seat's reading.
@@ -390,7 +405,7 @@ export async function fetchAnthropicQuota(provider: string, config: OcxConfig = 
   // Current only while the pool switch and membership are unchanged: pausing, resuming or reauthorizing
   // an inactive seat changes the aggregate, and turning the pool on or adding a seat changes the report.
   const poolState = anthropicPoolState(config, instance);
-  if (quotaReport && anthropicCurrent) {
+  if (quotaReport) {
     accountReportCurrent.set(quotaReport, () => anthropicCurrent() && anthropicPoolState(config, instance) === poolState
       && getAccountSet(instance)?.activeAccountId === probedAccountId);
   }

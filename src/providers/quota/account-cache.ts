@@ -118,12 +118,32 @@ export function normalizeAnthropicQuota(quota: ProviderQuota | null | undefined,
   return hasQuotaRows(result) ? result : null;
 }
 
+export function withoutAnthropicMonthlyFallback(quota: ProviderQuota | null): ProviderQuota | null {
+  if (!quota) return null;
+  const { monthlyPercent, monthlyResetAt, ...plan } = quota;
+  return hasQuotaRows(plan) ? plan : null;
+}
+
 function isAnthropicAccountCacheKey(key: string): boolean {
   const separator = key.indexOf("\0");
   return separator > 0 && isAnthropicInstanceId(key.slice(0, separator));
 }
 
 export const accountQuotaCache = new Map<string, AccountQuotaCacheEntry>();
+// Order in-flight responses independently of display-cache expiry and reset-grant eviction.
+const anthropicPlanObservationRevisions = new Map<string, number>();
+let nextAnthropicPlanObservationRevision = 1;
+
+export function anthropicPlanObservationRevision(key: string): number {
+  return anthropicPlanObservationRevisions.get(key) ?? 0;
+}
+
+/** Record plan evidence only at an owned commit, including retirement without usable meters. */
+export function commitAnthropicAccountQuota(key: string, entry: AccountQuotaCacheEntry, observedPlan: boolean): void {
+  accountQuotaCache.set(key, entry);
+  if (observedPlan) anthropicPlanObservationRevisions.set(key, nextAnthropicPlanObservationRevision++);
+}
+
 export let explicitAccountEpoch = 0;
 let allAccountQuotaEpoch = 0;
 const providerAccountQuotaEpochs = new Map<string, number>();
@@ -335,16 +355,13 @@ export function recordAnthropicAccountQuotaFromHeadersForInstance(
     ...normalizeAnthropicQuota(previous?.quota, observed.updatedAt), ...observed,
     ...(observed.customWindows ? { customWindows: mergeAnthropicFamilyWindows(previous?.quota?.customWindows, observed.customWindows) } : {}),
   };
-  // Each accepted header observation carries a plan window, superseding the extra-usage fallback.
-  delete quota.monthlyPercent;
-  delete quota.monthlyResetAt;
-  accountQuotaCache.set(key, {
+  commitAnthropicAccountQuota(key, {
     ...previous,
     ...(generation ? { anthropicCredentialGeneration: generation, isCurrent: undefined } : {}),
     // Headers do not prove that the last usage probe succeeded.
     ts: previous?.ts ?? 0,
-    quota: normalizeAnthropicQuota(quota, observed.updatedAt),
-  });
+    quota: normalizeAnthropicQuota(withoutAnthropicMonthlyFallback(quota), observed.updatedAt),
+  }, true);
   // Advisory evidence is published for the primary pool only; Pool 2 stays unknown to decisions.
   if (instance === "anthropic" && generation && generation === decisionCredentialGeneration && decisionQuotaSinkActive()) {
     bindRawDecisionWindows(observed, rawAnthropicHeaderWindows(headers, observed.updatedAt));
@@ -453,6 +470,9 @@ export function reconcileProviderAccountQuotaRows(context: GenerationContext): n
     accountQuotaCache.delete(key);
     removed += 1;
   }
+  for (const key of anthropicPlanObservationRevisions.keys()) {
+    if (!context.oauthAccountKeys.has(key)) anthropicPlanObservationRevisions.delete(key);
+  }
   // Kiro exhaustion rows are keyed identically, so they retire with their quota row; a
   // verdict outliving its account would hand the replacement a cooldown it never earned.
   removed += reconcileKiroAccountUsageState(context.oauthAccountKeys);
@@ -485,6 +505,7 @@ export function clearAccountQuotaCache(provider?: string): void {
   if (!provider) {
     allAccountQuotaEpoch += 1;
     accountQuotaCache.clear();
+    anthropicPlanObservationRevisions.clear();
     accountQuotaInflight.clear();
     clearKiroAccountUsageState();
     // A cleared cache must not be re-seeded from the file it was just cleared of, and any
@@ -498,6 +519,9 @@ export function clearAccountQuotaCache(provider?: string): void {
   const prefix = `${provider}\u0000`;
   for (const key of [...accountQuotaCache.keys()]) {
     if (key.startsWith(prefix)) accountQuotaCache.delete(key);
+  }
+  for (const key of anthropicPlanObservationRevisions.keys()) {
+    if (key.startsWith(prefix)) anthropicPlanObservationRevisions.delete(key);
   }
   clearKiroAccountUsageState(prefix);
   // Drop in-flight probes too so a late resolve cannot repopulate after logout/remove.

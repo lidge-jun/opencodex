@@ -29,9 +29,10 @@ export async function readAnthropicUsageQuota(accessToken: string): Promise<Prov
   return (await probeAnthropicUsageQuota(accessToken)).quota;
 }
 
-/** A usage read plus, when it yields no quota, the closed reason why. A thrown fetch still throws. */
+/** A usage read, monthly retirement evidence, or a closed failure. A thrown fetch still throws. */
 export interface AnthropicUsageProbe {
   quota: ProviderQuota | null;
+  retireMonthlyFallback?: true;
   failure?: QuotaFailureCode;
 }
 
@@ -81,9 +82,11 @@ export async function probeAnthropicUsageQuota(accessToken: string): Promise<Ant
     ...(displayWindows.length > 0 ? { displayWindows } : {}),
     updatedAt: Date.now(),
   };
+  // A recognized plan row can rule out extra_usage even when it supplies no usable meter.
+  if (!hasQuotaRows(quota)) return windows.hasPlanWindow
+    ? { quota: null, retireMonthlyFallback: true }
+    : { quota: null, failure: "response_unusable" };
   if (decisionQuotaSinkActive()) bindRawDecisionWindows(quota, rawAnthropicUsageWindows(body, quota.updatedAt));
-  // Empty / schema-changed payloads must not cache as "success with no bars".
-  if (!hasQuotaRows(quota)) return { quota: null, failure: "response_unusable" };
   return { quota: markAnthropicFamilyEnumeration(quota, familyEnumeration) };
 }
 
