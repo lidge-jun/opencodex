@@ -10,6 +10,7 @@ import { Readable } from "node:stream";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleCodexAuthAPI } from "../../src/codex/auth-api/routes";
+import { CODEX_LOGIN_TERMINAL_TTL_MS, codexAuthLoginState } from "../../src/codex/auth-api/login-state";
 import { cmdAccount, type AccountDeps } from "../../src/cli/account";
 import type { AccountStdin } from "../../src/cli/account-api";
 import { validateConfigCandidate } from "../../src/config/diagnostics";
@@ -47,6 +48,17 @@ async function startLogin(config: OcxConfig, body: Record<string, unknown>) {
       : { url: "https://auth.openai.com/oauth/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback" }
   ));
   const openSpy = spyOn(openUrlModule, "openUrl").mockImplementation(async () => ({ status: "started" as const }));
+  const statusSpy = spyOn(oauth, "getLoginStatus").mockReturnValue({
+    done: true, loggedIn: false, status: "error", error: "Test login ended",
+  });
+  const pollStopped = Promise.withResolvers<void>();
+  const originalSetTimeout = globalThis.setTimeout;
+  const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback, delay, ...args) => {
+    if (delay === 2_000) queueMicrotask(() => callback(...args));
+    else if (delay === CODEX_LOGIN_TERMINAL_TTL_MS) pollStopped.resolve();
+    else return originalSetTimeout(callback, delay, ...args);
+    return 0 as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout);
   try {
     const req = new Request("http://localhost/api/codex-auth/login", {
       method: "POST",
@@ -55,8 +67,14 @@ async function startLogin(config: OcxConfig, body: Record<string, unknown>) {
     });
     const resp = await handleCodexAuthAPI(req, new URL(req.url), config);
     const data = await resp!.json() as Record<string, unknown>;
+    if (typeof data.flowId === "string") {
+      await pollStopped.promise;
+      codexAuthLoginState.delete(data.flowId);
+    }
     return { status: resp!.status, data, flow: (startSpy.mock.calls[0]?.[1] as { flow?: string } | undefined)?.flow, opened: openSpy.mock.calls.length };
   } finally {
+    timer.mockRestore();
+    statusSpy.mockRestore();
     startSpy.mockRestore();
     openSpy.mockRestore();
   }
@@ -143,9 +161,17 @@ describe("codexAuthMethod configuration", () => {
 
   test("a malformed hand edit loads as the default instead of breaking the config", () => {
     writeFileSync(join(testDir, "config.json"), JSON.stringify({
-      port: 10100, providers: VALID_PROVIDERS, defaultProvider: "openai", codexAuthMethod: "browser",
+      port: 10201, providers: VALID_PROVIDERS, defaultProvider: "openai", codexAuthMethod: "browser",
     }));
-    expect(loadConfig().codexAuthMethod).toBeUndefined();
+    const warning = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const loaded = loadConfig();
+      expect(loaded.codexAuthMethod).toBeUndefined();
+      expect(loaded.port).toBe(10201);
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining('codexAuthMethod ignored: using "auto"'));
+    } finally {
+      warning.mockRestore();
+    }
   });
 });
 
@@ -266,6 +292,33 @@ describe("ocx account login against a device-only proxy", () => {
     const code = await cmdAccount(["login", "openai", "--json"], deps());
     expect(code).toBe(2);
     expect(errors.join("\n")).toContain("Could not cancel the started login flow.");
+  });
+
+  test.each(["already-ended EOF", "empty EOF", "timeout"])("auto login cancels its flow when stdin reaches %s", async (failure) => {
+    deviceOnly = false;
+    const stdin = Object.assign(new Readable({ read() {
+      if (failure !== "timeout") this.push(null);
+    } }), { isTTY: false }) as AccountStdin & Readable;
+    try {
+      if (failure === "already-ended EOF") {
+        const ended = new Promise<void>(resolve => stdin.once("end", resolve));
+        stdin.resume();
+        await ended;
+      }
+      const code = await cmdAccount(["login", "openai", "--code", "-"], {
+        ...deps(), stdinImpl: stdin, stdinTimeoutMs: 5,
+      });
+      expect(code).toBe(2);
+      expect(errors.join("\n")).toContain(failure === "timeout"
+        ? "timed out waiting for authorization code on stdin"
+        : "authorization code input was empty");
+      expect(requests).toEqual([
+        expect.objectContaining({ method: "POST", path: "/api/codex-auth/login" }),
+        { method: "POST", path: "/api/codex-auth/login/cancel", body: { flowId: "flow-browser" } },
+      ]);
+    } finally {
+      stdin.destroy();
+    }
   });
 
   test("--no-wait --json still returns the URL, the device code and the policy", async () => {

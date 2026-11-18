@@ -340,13 +340,18 @@ export async function handleConfigCommand(argv: string[]): Promise<number> {
     if (action === "validate") {
       const path = args.shift();
       rejectArgs(args, USAGE);
-      const result = path ? validateCandidate(loadInput(path)) : (() => {
-        const diagnostics = readConfigDiagnostics();
-        if (diagnostics.error) return { ok: false as const, error: diagnostics.error };
-        return validateCandidate(diagnostics.config);
-      })();
-      printData(result.ok ? { ok: true, source: path ?? getConfigPath() } : result, wantsJson,
-        [result.ok ? "Config is valid." : `Config is invalid: ${result.error}`]);
+      const diagnostics = path ? undefined : readConfigDiagnostics();
+      const result = diagnostics?.error
+        ? { ok: false as const, error: diagnostics.error }
+        : validateCandidate(path ? loadInput(path) : diagnostics?.config);
+      const warnings = diagnostics?.warnings ?? [];
+      printData({
+        ...(result.ok ? { ok: true, source: path ?? getConfigPath() } : result),
+        ...(warnings.length ? { warnings } : {}),
+      }, wantsJson, [
+        result.ok ? (warnings.length ? "Config is usable with warnings." : "Config is valid.") : `Config is invalid: ${result.error}`,
+        ...warnings.map(warning => `Warning: ${warning}`),
+      ]);
       if (!result.ok) outcome = 1;
       return;
     }

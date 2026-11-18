@@ -217,6 +217,24 @@ test("config validate stdin exits 1 with a single JSON failure payload", () => {
   } finally { removeTreeWithRetry(dir); }
 });
 
+test("config validate warns when the installed Codex login policy falls back to auto", () => {
+  const dir = freshConfig();
+  try {
+    const path = join(dir, "config.json");
+    const config = JSON.parse(readFileSync(path, "utf8"));
+    writeFileSync(path, JSON.stringify({ ...config, codexAuthMethod: "DEVICE-ONLY" }));
+    const result = runCli(["config", "validate", "--json"], { OPENCODEX_HOME: dir });
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      ok: true,
+      warnings: [expect.stringContaining('codexAuthMethod ignored: using "auto"')],
+    });
+    expect(result.stdout + result.stderr).not.toContain("DEVICE-ONLY");
+  } finally {
+    removeTreeWithRetry(dir);
+  }
+});
+
 test.each(["set", "normalized set", "import"])("config %s cannot enter plaintext mode without the dedicated transition", action => {
   const dir = freshConfig();
   const configPath = join(dir, "config.json");

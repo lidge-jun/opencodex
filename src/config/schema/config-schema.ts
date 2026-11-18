@@ -20,6 +20,7 @@ import {
   CODEX_ACCOUNT_PIN_PATTERN,
   codexAccountPrioritiesSchema,
   salvageCodexAccountAutoSwitchThresholds,
+  codexAuthMethodSchema,
   codexPoolSchema,
   codexQuotaAutoRefreshSchema,
   credentialGroupsSchema,
@@ -288,7 +289,7 @@ export const configSchema = z.object({
   oauthOpenBrowser: z.boolean().optional().catch(undefined),
   // A malformed hand edit falls back to the historical behavior rather than
   // discarding the config; diagnostics still report it as invalid.
-  codexAuthMethod: z.enum(["auto", "device-only"]).optional().catch(undefined),
+  codexAuthMethod: codexAuthMethodSchema.catch(undefined),
   showCodexCredits: z.boolean().optional().catch(false),
   openaiProviderTierVersion: z.union([z.literal(1), z.literal(2)]).optional(),
   // Invalid hand edits must not discard an otherwise usable config.
