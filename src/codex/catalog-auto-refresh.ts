@@ -280,7 +280,15 @@ async function tick(): Promise<void> {
     // A stop or restart landed while the funnel was loading: the result belongs to a
     // generation that no longer owns the timer, so it must not publish.
     if (entryGeneration !== generation) return;
-    const converge = createManagementConvergeCodex(config);
+    const converge = createManagementConvergeCodex(config, {
+      beforeCommit: hubDiscovery
+        ? () => {
+          const current = loadConfig();
+          return entryGeneration === generation && current.catalogAutoRefresh?.enabled === true
+            && isCatalogAutoRefreshEnabled(current);
+        }
+        : undefined,
+    });
     const outcome = await converge(createCatalogConvergeRequest({ deadlineMs: TICK_DEADLINE_MS }));
     if (entryGeneration !== generation) return;
     // createManagementConvergeCodex always projects catalog-only. Any other kind is a
