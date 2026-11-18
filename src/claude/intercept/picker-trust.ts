@@ -7,7 +7,7 @@ import {
   trustPickerCaWindows,
   untrustPickerCaWindows,
 } from "./picker-trust-windows";
-import { inspectPickerTrustLinux, trustPickerCaLinux, untrustPickerCaLinux } from "./picker-trust-linux";
+import { inspectPickerTrustLinux, trustPickerCaLinux, untrustPickerCaLinux, type LinuxPickerUntrustResult } from "./picker-trust-linux";
 
 /** Trust is scoped to the current root fingerprint and a verified persisted leaf. */
 export type PickerTrustState = "trusted" | "untrusted" | "unsupported" | "unknown";
@@ -146,8 +146,8 @@ export async function untrustPickerCa(
   run: SecurityRunner = defaultSecurityRunner,
   platform: NodeJS.Platform = process.platform,
   linuxHome?: string,
-  linux?: { store?: LinuxPickerTrustStore; configDir?: string },
-): Promise<{ ok: boolean }> {
+  linux?: { store?: LinuxPickerTrustStore; configDir?: string; requireRemoval?: boolean },
+): Promise<LinuxPickerUntrustResult> {
   if (platform === "win32") {
     try {
       return await untrustPickerCaWindows(fingerprintSha1, run === defaultSecurityRunner ? undefined : run,
@@ -158,7 +158,8 @@ export async function untrustPickerCa(
     try {
       const pem = readFileSync(caPath, "utf8");
       const remove = (linuxStore?: LinuxPickerTrustStore) => untrustPickerCaLinux(
-        fingerprintSha1, run === defaultSecurityRunner ? undefined : run, linuxHome, { pem, linuxStore });
+        fingerprintSha1, run === defaultSecurityRunner ? undefined : run, linuxHome,
+        { pem, linuxStore, requireRemoval: linux?.requireRemoval });
       if (!linux?.configDir) return await remove(linux?.store);
       return await withPublishedPickerCaLinuxTrust(linux.configDir, pem, async (store, _save, clear) => {
         const result = await remove(store);

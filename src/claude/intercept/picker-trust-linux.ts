@@ -309,64 +309,75 @@ export async function trustPickerCaLinux(
   }
 }
 
-async function removeFromStore(run: LinuxTrustRunner, selected: NssDb, sha1: string, expected: X509Certificate): Promise<boolean> {
+type NssRemoval = "removed" | "absent" | "failed";
+export type LinuxPickerUntrustResult = { ok: boolean; reason?: "original_store_unknown" };
+
+async function removeFromStore(run: LinuxTrustRunner, selected: NssDb, sha1: string, expected: X509Certificate): Promise<NssRemoval> {
   const store = identifyStore(selected);
   const before = await inventory(run, selected);
-  if (!before || !unchanged(selected, store)) return false;
+  if (!before || !unchanged(selected, store)) return "failed";
 
   const nickname = linuxPickerNickname(sha1);
   const target = before.get(nickname);
-  if (!target) return ![...before.values()].some(cert => cert.fingerprint === expected.fingerprint256);
+  if (!target) return [...before.values()].some(cert => cert.fingerprint === expected.fingerprint256) ? "failed" : "absent";
   if (target.fingerprint !== expected.fingerprint256
-    || [...before].some(([name, cert]) => name !== nickname && cert.fingerprint === target.fingerprint)) return false;
+    || [...before].some(([name, cert]) => name !== nickname && cert.fingerprint === target.fingerprint)) return "failed";
 
   const fresh = await listCertificates(run, selected.db);
-  if (fresh.kind !== "listed" || !fresh.entries.has(nickname)) return false;
+  if (fresh.kind !== "listed" || !fresh.entries.has(nickname)) return "failed";
   const verified = await exportCertificate(run, selected, nickname);
-  if (!verified?.raw.equals(expected.raw) || !unchanged(selected, store)) return false;
+  if (!verified?.raw.equals(expected.raw) || !unchanged(selected, store)) return "failed";
 
   // -D resolves the nickname again. Keep the pre-delete check and verify that the exact
   // predecessor is gone and the surviving entries kept their certificate and trust flags.
   const deleted = await run(["-D", "-d", selected.db, "-n", nickname]);
-  if (deleted.code !== 0 || !unchanged(selected, store)) return false;
+  if (deleted.code !== 0 || !unchanged(selected, store)) return "failed";
   const after = await inventory(run, selected);
   if (!after || !unchanged(selected, store)
-    || [...after.values()].some(cert => cert.fingerprint === expected.fingerprint256)) return false;
+    || [...after.values()].some(cert => cert.fingerprint === expected.fingerprint256)) return "failed";
   before.delete(nickname);
-  return [...before].every(([name, cert]) => {
+  const survivorsUnchanged = [...before].every(([name, cert]) => {
     const survivor = after.get(name);
     return survivor?.fingerprint === cert.fingerprint && survivor.flags === cert.flags;
   });
+  return survivorsUnchanged ? "removed" : "failed";
 }
 
 export async function untrustPickerCaLinux(
   fingerprintSha1: string,
   run: LinuxTrustRunner = defaultLinuxCertutilRunner,
   home?: string,
-  pending?: { pem: string; linuxStore?: LinuxPickerTrustStore },
+  authority?: { pem: string; linuxStore?: LinuxPickerTrustStore; requireRemoval?: boolean },
   xdgDataHome = home === undefined ? process.env.XDG_DATA_HOME : undefined,
-): Promise<{ ok: boolean }> {
+): Promise<LinuxPickerUntrustResult> {
   const failed = { ok: false };
   const sha1 = normalizeSha1(fingerprintSha1);
   try {
-    const expected = pending && certificate(pending.pem);
-    if (!sha1 || !pending || !expected || normalizeSha1(expected.fingerprint) !== sha1
-      || !acceptsPickerAuthority(pending.pem)) return failed;
-    if (pending.linuxStore) {
-      const recorded = openNssDb(pending.linuxStore.dir);
-      if (!sameLinuxPickerTrustStore(pending.linuxStore, identifyStore(recorded))) return failed;
-      return { ok: await removeFromStore(run, recorded, sha1, expected) };
+    const expected = authority && certificate(authority.pem);
+    if (!sha1 || !authority || !expected || normalizeSha1(expected.fingerprint) !== sha1
+      || !acceptsPickerAuthority(authority.pem)) return failed;
+    if (authority.linuxStore) {
+      const recorded = openNssDb(authority.linuxStore.dir);
+      if (!sameLinuxPickerTrustStore(authority.linuxStore, identifyStore(recorded))) return failed;
+      return { ok: await removeFromStore(run, recorded, sha1, expected) !== "failed" };
     }
 
     // Pre-identity records may refer to either Chromium path. Check existing stores
-    // even when Chromium now prefers a different one.
+    // even when Chromium now prefers a different one. Absence alone cannot retire
+    // an unbound pending record because a previous custom XDG store may be off this list.
     const userHome = home ?? homedir();
     const dirs = new Set([legacyDbDir(userHome), xdgDbDir(userHome), xdgDbDir(userHome, xdgDataHome)]);
     const candidates = [...dirs].map(dir => ({ dir, db: statIfPresent(dir) ? openNssDb(dir) : undefined }));
+    let removed = false;
     for (const { db } of candidates) {
-      if (db && !await removeFromStore(run, db, sha1, expected)) return failed;
+      if (!db) continue;
+      const result = await removeFromStore(run, db, sha1, expected);
+      if (result === "failed") return failed;
+      if (result === "removed") removed = true;
     }
-    return { ok: candidates.every(({ dir, db }) => db ? unchanged(db, identifyStore(db)) : !statIfPresent(dir)) };
+    if (!candidates.every(({ dir, db }) => db ? unchanged(db, identifyStore(db)) : !statIfPresent(dir))) return failed;
+    if (authority.requireRemoval && !removed) return { ok: false, reason: "original_store_unknown" };
+    return { ok: true };
   } catch { // no-excuse-ok: catch -- any uncertainty keeps the pending record.
     return failed;
   }

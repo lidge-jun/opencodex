@@ -1,9 +1,10 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { X509Certificate } from "node:crypto";
+import * as fs from "node:fs";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createCertificateAuthority } from "../../src/claude/intercept/local-ca";
 import {
   ensurePickerCa, PICKER_CA_COMMON_NAME, PICKER_HOST, pickerCaCertPath, pickerCaFingerprints,
@@ -567,4 +568,101 @@ realNssTest("real NSS cleanup retains the journal when store preference changes 
   expect(await drainPendingPickerCaUntrust(configDir, run, "linux", h)).toBe(true);
   expect(existsSync(journal)).toBe(false);
   expect((await run(["-L", "-d", `sql:${original}`])).stdout).not.toContain(linuxPickerNickname(root.sha1));
+});
+
+realNssTest("real NSS unbound journal needs removal after a custom XDG change" + nssSkipReason, async () => {
+  const h = home(false);
+  const run = realNssRunner(h);
+  const original = join(h, "data-a");
+  const switched = join(h, "data-b");
+  const root = pickerRoot();
+  const configDir = join(h, "config");
+  const journal = pickerCaPendingUntrustPath(configDir);
+  expect(await trustPickerCaLinux("/ca.pem", run, root, h, original)).toEqual({ ok: true });
+  await initializeNss(run, linuxNssDbDir(h, switched));
+  ensurePickerCa(configDir);
+  const recorded = JSON.stringify({ certPem: root.pem, ...pickerCaFingerprints(root.pem) });
+  writeFileSync(journal, recorded, { mode: 0o600 });
+
+  // Start Bun with a disposable HOME so both Chromium paths resolve inside the fixture.
+  async function drain(xdg: string) {
+    const child = Bun.spawn([process.execPath, "-e", `
+      import { drainPendingPickerCaUntrust } from "./src/claude/intercept/picker-ca-cleanup";
+      console.log(await drainPendingPickerCaUntrust(process.argv[1], undefined, "linux"));
+    `, configDir], {
+      cwd: repoPath("."),
+      env: { ...process.env, HOME: h, USERPROFILE: h, XDG_DATA_HOME: xdg },
+      stdout: "pipe", stderr: "pipe",
+    });
+    const [stdout, stderr, code] = await Promise.all([child.stdout.text(), child.stderr.text(), child.exited]);
+    expect(code).toBe(0);
+    return { drained: stdout.trim(), stderr };
+  }
+
+  const first = await drain(switched);
+  expect(first.drained).toBe("false");
+  expect(first.stderr).toContain("XDG_DATA_HOME");
+  expect(readFileSync(journal, "utf8")).toBe(recorded);
+  expect(await inspectPickerTrustLinux(root.sha1, run, h, original)).toBe("trusted");
+  expect((await drain(original)).drained).toBe("true");
+  expect(existsSync(journal)).toBe(false);
+  expect(await inspectPickerTrustLinux(root.sha1, run, h, original)).toBe("untrusted");
+});
+
+test.skipIf(realCertutil === null || process.platform === "win32")(
+  "real NSS refuses a 0666 journal and a group-writable journal directory" +
+    (process.platform === "win32" ? " (requires POSIX file modes)" : nssSkipReason),
+  async () => {
+    const h = home(false);
+    const run = realNssRunner(h);
+    const { configDir, root, journal } = await retireRoot(run, h);
+    const recorded = readFileSync(journal, "utf8");
+    for (const [path, unsafe, safe] of [[journal, 0o666, 0o600], [dirname(journal), 0o770, 0o700]] as const) {
+      chmodSync(path, unsafe);
+      await expect(drainPendingPickerCaUntrust(configDir, run, "linux", h))
+        .rejects.toThrow("picker_ca_pending_untrust_unsafe");
+      expect(readFileSync(journal, "utf8")).toBe(recorded);
+      expect(await inspectPickerTrustLinux(root.sha1, run, h)).toBe("trusted");
+      chmodSync(path, safe);
+    }
+    expect(await drainPendingPickerCaUntrust(configDir, run, "linux", h)).toBe(true);
+    expect(existsSync(journal)).toBe(false);
+    expect(await inspectPickerTrustLinux(root.sha1, run, h)).toBe("untrusted");
+  },
+);
+
+test.skipIf(process.platform === "win32")("a journal with a foreign uid or mismatched descriptor stays pending", async () => {
+  const h = home(false);
+  const db = nss();
+  const { configDir, root, journal } = await retireRoot(db.run, h);
+  const recorded = readFileSync(journal, "utf8");
+  const lstat = fs.lstatSync;
+  const fstat = fs.fstatSync;
+  const identity = lstat(journal, { bigint: true });
+  const foreign = spyOn(fs, "lstatSync").mockImplementation(((path, options) => {
+    const stat = lstat(path, options);
+    if (path === journal) Object.defineProperty(stat, "uid", { value: identity.uid + 1n });
+    return stat;
+  }) as typeof lstat);
+  try {
+    await expect(drainPendingPickerCaUntrust(configDir, db.run, "linux", h))
+      .rejects.toThrow("picker_ca_pending_untrust_unsafe");
+  } finally {
+    foreign.mockRestore();
+  }
+  const swapped = spyOn(fs, "fstatSync").mockImplementation(((fd, options) => {
+    const stat = fstat(fd, options);
+    if (stat.dev === identity.dev && stat.ino === identity.ino) {
+      Object.defineProperty(stat, "ino", { value: identity.ino + 1n });
+    }
+    return stat;
+  }) as typeof fstat);
+  try {
+    await expect(drainPendingPickerCaUntrust(configDir, db.run, "linux", h))
+      .rejects.toThrow("picker_ca_pending_untrust_unsafe");
+  } finally {
+    swapped.mockRestore();
+  }
+  expect(readFileSync(journal, "utf8")).toBe(recorded);
+  expect(db.certs).toEqual([entry(root)]);
 });
