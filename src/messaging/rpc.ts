@@ -53,9 +53,9 @@ export class LocalMessageRpc implements LocalMetadataClient {
           socket.onopen = socket.onerror = socket.onclose = null;
         };
         const abort = () => { cleanup(); reject(budget.signal.reason); };
-        const timer = setTimeout(() => {
+        const timer = budget.stageTimer(rpcTimeoutMs, () => {
           cleanup(); reject(new LocalMessagingError("daemon_unavailable", "Local Codex connection timed out; no daemon was started."));
-        }, budget.remainingMs(rpcTimeoutMs));
+        });
         budget.signal.addEventListener("abort", abort, { once: true });
         socket.onopen = () => { cleanup(); resolve(); };
         socket.onerror = socket.onclose = () => {
@@ -208,8 +208,8 @@ export class LocalMessageRpc implements LocalMetadataClient {
     if (this.pending.size >= 4) throw new LocalMessagingError("rpc_limit", "Local Codex metadata concurrency limit exceeded.");
     const id = ++this.nextId;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this.close(new LocalMessagingError("rpc_timeout", "Local Codex request timed out.")),
-        this.budget.remainingMs(this.rpcTimeoutMs));
+      const timer = this.budget.stageTimer(this.rpcTimeoutMs,
+        () => this.close(new LocalMessagingError("rpc_timeout", "Local Codex request timed out.")));
       this.pending.set(id, { resolve, reject, timer, method });
       try { this.socket.send(JSON.stringify({ id, method, params })); onWritten?.(); } catch { this.close(); }
     });

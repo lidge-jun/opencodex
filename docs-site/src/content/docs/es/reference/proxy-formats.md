@@ -581,7 +581,7 @@ Los errores usan la envolvente del dialecto del cliente cuando es necesario, per
 | --- | --- | --- |
 | 401 | `authentication_error` | Una credencial de admisión proxy requerida no está disponible o no es válida |
 | 403 | `origin_rejected` | Una solicitud de plano de datos Responses / OpenAI o una actualización WebSocket provienen de un origen no permitido |
-| 503 | `combo_unavailable` | Todos los objetivos del combo seleccionado no están disponibles, en tiempo de reutilización, desactivados o no son elegibles |
+| 503 | `combo_unavailable` | Todos los objetivos del combo seleccionado no están disponibles, en tiempo de reutilización, desactivados o no son elegibles. `error.combo` incluye la clase de causa y los recuentos de destinos; consulte [¿Por qué tengo `combo_unavailable`?](/es/guides/combos/#why-do-i-get-combo_unavailable) |
 | 400 | `unreadable_encrypted_agent_task` | Una tarea de trabajador encriptada v2 no tiene un objetivo canónico ChatGPT elegible o un objetivo de autenticación de clave directa Responses explícitamente confiable con `allowEncryptedV2AgentTasks: true` que puede consumirlo |
 | 426 | `upgrade_required` | El Responses WebSocket transporte está desactivado o la actualización falló; use HTTP |
 

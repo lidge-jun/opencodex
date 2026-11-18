@@ -48,6 +48,8 @@ Una versión firmada muestra `Status : Valid` y un certificado cuyo sujeto ident
 
 La firma del actualizador de escritorio (`.msi.sig`) y `latest.json` se generan a partir del instalador firmado. Así, las actualizaciones dentro de la aplicación instalan los mismos bytes que ofrece la página de versiones.
 
+Cada página de versión indica, en **Code signing**, si los archivos de Windows de esa versión se firmaron realmente. La indicación sale de lo que la ejecución de publicación registró para cada archivo: un archivo cuenta como firmado solo si la ejecución usó la política `release-signing`, el archivo firmado y verificado reemplazó al original sin firmar y el SHA-256 registrado coincide con el del archivo que publica la versión. Un archivo sin ese registro, por ejemplo uno que se volvió a generar en una nueva ejecución cuyo registro no llegó al paso de publicación, aparece como sin registro y se trata como no firmado. Si la ejecución no registró ningún resultado, la versión indica que sus archivos de Windows no están firmados. La atribución a SignPath y el enlace a la política aparecen en todas las versiones.
+
 <a id="for-maintainers"></a>
 
 ## Para mantenedores

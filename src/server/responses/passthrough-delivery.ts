@@ -164,7 +164,12 @@ import { registerTurn, unregisterTurn, trackStreamLifetime } from "../lifecycle"
 import { relaySseEagerBounded } from "../relay-eager";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
 import { idleDeadline } from "../../lib/abort";
-import { resolveStallTimeoutMs } from "../../stall-timeout";
+import { explicitStallTimeoutMs, resolveStallTimeoutMs } from "../../stall-timeout";
+import { guardResponseBodyInactivity, isResponseBodyInactivityGuarded } from "../../lib/response-body-inactivity";
+import {
+  createEstimatedUsagePayloadRewrite, ESTIMATED_USAGE_HEADER, estimatedUsageJson, estimatesMissingUsage,
+} from "./estimated-usage";
+import { estimateInputTokens } from "./input-admission";
 import { formatErrorResponse } from "../../bridge";
 import {
   httpStatusFromTerminalError,
@@ -471,6 +476,11 @@ export async function deliverPassthroughResponse(
   } = nativeExchange;
   const { commitReasoningReplayServingRoute, recordTerminalOutcomes } = responseEffects;
   const { parsed, subagentQuotaFailureModel, clientRequestedStream, translatorBudget } = requestState;
+  // #7427: opt-in estimated usage for a provider that omits it. Client-facing only; the request log,
+  // spend and quota read the provider's original body.
+  const estimateUsage = estimatesMissingUsage(route.provider, options);
+  let usageInputEstimate: number | undefined;
+  const inputEstimate = (): number => usageInputEstimate ??= estimateInputTokens(parsed, route.modelId, route.provider);
   const { openAiSidecar } = sidecarState;
   const { requestBindings } = transportState;
 
@@ -742,18 +752,26 @@ export async function deliverPassthroughResponse(
       });
       // Capture the binding that actually served the first leg, after its permitted reselection.
       const webSearchBridgeBinding = requestBindings.get(nativeExchange.request);
+      // #8206: an explicit stallTimeoutSec bounds silence on the native upstream body for every
+      // streaming relay. Unset keeps this relay without a clock; the canonical JSON fold keeps
+      // its own deadlines, and reset selection already guarded the bodies it published.
+      const nativeSseStallMs = canonicalBufferedJson || isResponseBodyInactivityGuarded(upstreamResponse)
+        ? 0 : explicitStallTimeoutMs(config.stallTimeoutSec);
+      const nativeSseBody = nativeSseStallMs > 0
+        ? guardResponseBodyInactivity(upstreamResponse, upstream.signal, nativeSseStallMs, { explicitBudget: true }).response.body!
+        : upstreamResponse.body;
       // Repair must observe the raw first leg before the bridge suppresses an intercepted search
       // lifecycle. Otherwise a provider that leaves that complete call open never arms repair's
       // grace timer, so the bridge cannot execute the search or begin its continuation.
       let passthroughSseBody = terminalRepairPolicy
         ? relayResponsesSseWithTerminalRepair(
-          upstreamResponse.body,
+          nativeSseBody,
           upstream,
           terminalRepairPolicy,
           translatorBudget,
           options.responsesTerminalRepairScheduler, logCtx,
         )
-        : upstreamResponse.body;
+        : nativeSseBody;
       passthroughSseBody = webSearchBridgePlan
         ? createPassthroughWebSearchBridgeStream({
           plan: webSearchBridgePlan,
@@ -785,17 +803,24 @@ export async function deliverPassthroughResponse(
             );
             // The same provider can leave a complete continuation open without a terminal, which
             // stalls the bridge's decide loop exactly like the first leg — so every leg gets the
-            // same repair, not only the intercepted first one.
-            if (!terminalRepairPolicy || !continuation.ok || !continuation.body) return continuation;
+            // same repair and the same explicit silence clock, not only the intercepted first one.
+            if (!continuation.ok || !continuation.body) return continuation;
+            // A continuation is a fresh upstream body: guard it from the explicit budget even when
+            // reset selection already guarded the first leg (and so left nativeSseStallMs at 0).
+            const continuationStallMs = explicitStallTimeoutMs(config.stallTimeoutSec);
+            const guardedContinuation = continuationStallMs > 0
+              ? guardResponseBodyInactivity(continuation, upstream.signal, continuationStallMs, { explicitBudget: true }).response
+              : continuation;
+            if (!terminalRepairPolicy) return guardedContinuation;
             return new Response(
               relayResponsesSseWithTerminalRepair(
-                continuation.body,
+                guardedContinuation.body!,
                 upstream,
                 terminalRepairPolicy,
                 translatorBudget,
                 options.responsesTerminalRepairScheduler, logCtx,
               ),
-              continuation,
+              guardedContinuation,
             );
           },
           execute: createPassthroughWebSearchBridgeExecutor(webSearchBridgePlan, {
@@ -982,7 +1007,12 @@ export async function deliverPassthroughResponse(
         (!canonicalBufferedJson || !options.comboAttempt) && isLocalCodexImageClient(req.headers, options.admission?.kind, options.inboundWire)
           ? createHostedImageDisplayRewrite()
           : undefined,
+        // Last, so it sees the response the client receives; never on the canonical JSON fold.
+        estimateUsage && !canonicalBufferedJson
+          ? payloadRewriteAsBlockRewrite(createEstimatedUsagePayloadRewrite(inputEstimate, route.modelId))
+          : undefined,
       ].filter((rewrite): rewrite is NonNullable<typeof rewrite> => rewrite !== undefined);
+      if (estimateUsage && !canonicalBufferedJson) headers.set(ESTIMATED_USAGE_HEADER, "when-missing");
       const clientBlockRewrite = blockRewrites.length > 0
         ? composeSseBlockRewrites(...blockRewrites)
         : undefined;
@@ -1210,7 +1240,7 @@ export async function deliverPassthroughResponse(
       }
 
       const relayPlatform = relayPlatformForTests ?? process.platform;
-      // A Remote Link turn while the link WebSocket feature is on reads its upstream only as its client drains (#8601);
+      // Every relayed Remote Link turn reads its upstream only as its client drains (#8601), feature switch or not;
       // every other request keeps the relays' read-ahead below. Its chunks travel in slices, and the paced mark makes the
       // tee, the eager relay and every stage after them read one slice at a time as the client asks (src/lib/paced-stream.ts).
       if (linkTurnPacesReads(logCtx)) passthroughSseBody = markPacedStream(sliceChunks(passthroughSseBody, LINK_PACED_SLICE_BYTES));
@@ -1513,6 +1543,15 @@ export async function deliverPassthroughResponse(
           }
           throw error;
         } finally { imageDisplay.dispose?.(); }
+      }
+      if (estimateUsage && upstreamResponse.ok) {
+        const estimated = estimatedUsageJson(clientJson, inputEstimate(), route.modelId);
+        if (estimated !== undefined) {
+          clientJson = estimated;
+          headers.set(ESTIMATED_USAGE_HEADER, "true");
+          // The request-log finalizer parses the delivered body again; keep the estimate out of it.
+          logCtx.usageEstimatedForClient = true;
+        }
       }
       // #875: the transport-neutral reliability policy forced a bounded JSON
       // upstream for a client that asked for SSE. Reframe the completed JSON

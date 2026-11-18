@@ -243,6 +243,27 @@ describe("Antigravity web-search structured validation rotation (#6666)", () => 
     expect(durableHealth()).toEqual(before);
   });
 
+  // Google's own structured PERMISSION_DENIED (without a validation demand) refuses this account (#8750):
+  // it earns the sidecar's one sibling rotation, and nothing durable is written.
+  test.each([
+    ["PERMISSION_DENIED envelope", JSON.stringify({ error: { code: 403, status: "PERMISSION_DENIED", message: "The caller does not have permission" } })],
+    ["authentication wording under PERMISSION_DENIED", JSON.stringify({ error: { code: 403, status: "PERMISSION_DENIED", message: "Request had invalid authentication credentials." } })],
+  ])("%s is a plain access refusal: one sibling rotation, nothing persisted", async (_name, body) => {
+    const accounts = await seedAntigravityAccounts(3);
+    const cfg = webSearchConfig();
+    const before = durableHealth();
+    const sends: Array<{ auth: string; project: string }> = [];
+    installAntigravityFetchMock(({ auth, project }) => {
+      sends.push({ auth, project });
+      return new Response(body, { status: 403 });
+    });
+    const response = await handleResponses(request(), cfg, route);
+    expect(response.status).toBe(403);
+    await response.text();
+    expect(sends).toEqual(accounts.slice(0, 2).map(({ auth, project }) => ({ auth, project })));
+    expect(durableHealth()).toEqual(before);
+  });
+
   test("a spent physical-send budget preserves the refusal and durable health", async () => {
     await seedAntigravityAccounts(2);
     const cfg = webSearchConfig();
