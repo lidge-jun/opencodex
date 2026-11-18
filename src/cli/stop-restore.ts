@@ -8,6 +8,7 @@ export type { RestoreBoundaryOwnership } from "../client/restore-ownership";
 import { inspectStopRestoreOwnership, stopRestoreWriteGuard } from "./stop-restore-guard";
 export { clearRestoredStopReceipts, settleUnrestoredStopBoundary } from "./stop-restore-guard";
 import { readPid, readRuntimePort } from "../config/process-state";
+import type { OutstandingTeardown } from "../config/pending-teardown";
 import { loadConfig } from "../config";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { createLocalAttestationChallenge, LOCAL_ATTESTATION_CHALLENGE_HEADER, LOCAL_ATTESTATION_PROOF_HEADER, verifyLocalAttestationProof } from "../lib/local-management-attestation";
@@ -95,6 +96,7 @@ export async function assertConnectedClientStopSupported(
 /** Fail before either service-manager path, including a manager that cascades process exit. */
 export async function preflightConnectedClientStop(
   approved: ConnectedStopTarget | undefined, onFence: (finish: () => Promise<void>) => void,
+  inheritedTeardowns?: readonly OutstandingTeardown[],
 ): Promise<StopOutcome | "already-stopped" | null> {
   try {
     const connection = readClientConnectionState();
@@ -128,6 +130,19 @@ export async function preflightConnectedClientStop(
     const pinned = readRuntimePort(target.pid);
     await assertConnectedClientStopSupported(target, { requireLinkStopFence: connection.kind === "connected" && connection.value.transport === "link" });
     if (connection.kind === "connected" && connection.value.transport === "link") {
+      // A native Child has no /api/stop refusal: SIGTERM can escalate to SIGKILL.
+      // Refuse known inherited restore blockers before any manager or kill step.
+      const { readLinkInheritedTeardowns } = await import("../client/stop-native-handoff");
+      const normalizeHost = (value: string | undefined) => (value ?? "127.0.0.1").trim().toLowerCase().replace(/^\[(.*)\]$/, "$1");
+      for (const read of inheritedTeardowns ?? readLinkInheritedTeardowns()) {
+        const exact = read.state === "valid" && read.receipt.endpointSource === "exact";
+        const endpoint = read.state === "valid" ? read.receipt.endpoint : null;
+        const sameTarget = endpoint && endpoint.port === target.port
+          && normalizeHost(endpoint.hostname) === normalizeHost(target.hostname);
+        if (!exact || !endpoint || (!sameTarget && await probeEndpointLiveness(endpoint) !== "dead")) {
+          throw new ProxyOwnershipRefusedError("Link Child native teardown preflight refused: pending recovery evidence would prevent native restoration. No process was stopped; repair that evidence, then retry ocx stop.", "link_native_teardown_refused");
+        }
+      }
       // A manager can kill the Child before its signal handler runs. Drain these file routes
       // first, under an exact runtime fence; refusal must return before any manager/kill step.
       if (!pinned?.attestationSecret || !Bun.deepEquals(readRuntimePort(target.pid), pinned, true)) throw unsupportedConnectedStop();

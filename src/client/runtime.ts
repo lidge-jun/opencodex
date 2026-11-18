@@ -581,7 +581,9 @@ export async function startClientRuntime(
         console.warn(`[client] link supervisor stop failed: ${error instanceof Error ? error.message : String(error)}`);
       }
       activeSupervisor = null;
-      const restored = linkMode ? await restoreLinkClientRoutingBeforeExit(state.value, { syncFenced }) : null;
+      const restored = linkMode ? await restoreLinkClientRoutingBeforeExit(state.value, {
+        syncFenced, runtime: { pid: process.pid, port: servedPort, attestationSecret },
+      }) : null;
       if (restored && !restored.success) console.error(`[client] ${restored.message}`);
       if (restored?.retainListener) {
         // Keep the stopping record and socket. Another signal can retry after the operator

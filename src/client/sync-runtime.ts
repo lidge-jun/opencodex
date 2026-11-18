@@ -10,7 +10,7 @@ export class ClientSyncRuntimeError extends Error {
   }
 }
 
-function readSyncRuntime(): RuntimePortState | null {
+export function readSyncRuntime(): RuntimePortState | null {
   const path = getRuntimePortPath();
   try { lstatSync(path); }
   catch (error) {

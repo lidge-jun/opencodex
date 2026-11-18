@@ -116,7 +116,7 @@ export function pendingTeardownPathFor(nonce: string): string {
   return join(getConfigDir(), `${PREFIX}${nonce}${SUFFIX}`);
 }
 
-function isReceipt(value: unknown, nonce: string): value is PendingTeardownReceipt {
+export function isValidPendingTeardownReceipt(value: unknown, nonce: string): value is PendingTeardownReceipt {
   if (!value || typeof value !== "object") return false;
   const receipt = value as Record<string, unknown>;
   const endpoint = receipt.endpoint as Record<string, unknown> | undefined;
@@ -205,7 +205,7 @@ export function readPendingTeardown(nonce: string): PendingTeardownRead {
   }
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (isReceipt(parsed, nonce)) return { state: "valid", receipt: parsed };
+    if (isValidPendingTeardownReceipt(parsed, nonce)) return { state: "valid", receipt: parsed };
     const digest = createHash("sha256").update(raw).digest("hex").slice(0, 12);
     return { state: "invalid", nonce, detail: `malformed receipt (sha256 ${digest})` };
   } catch {

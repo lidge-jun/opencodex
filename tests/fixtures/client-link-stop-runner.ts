@@ -1,6 +1,6 @@
 /** Isolated disk and native-runtime coverage for a connected Link Child's stop. */
 import { mock } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { getDefaultConfig, saveConfig } from "../../src/config";
 import { CODEX_CONFIG_PATH, CODEX_HOME, CODEX_PROFILE_PATH, DEFAULT_CATALOG_PATH } from "../../src/codex/paths";
@@ -8,7 +8,7 @@ import { JOURNAL_PATH, markJournalInjectedState, writeJournal } from "../../src/
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import { ensureCatalogBackup } from "../../src/codex/catalog/parsing";
 import { takeDesktopSupervisedMarker } from "../../src/lib/system-restart-contract";
-import { claimPendingTeardown } from "../../src/config/pending-teardown";
+import { claimPendingTeardown, pendingTeardownOutstanding, pendingTeardownPathFor, quarantinePendingTeardown } from "../../src/config/pending-teardown";
 
 const options = JSON.parse(readFileSync(0, "utf8")) as {
   mode: "runtime" | "helper" | "api" | "parent" | "guard" | "retry" | "file-preflight" | "file-stop" | "file-cycle" | "file-restart-overlap" | "file-restart-control";
@@ -35,6 +35,7 @@ const options = JSON.parse(readFileSync(0, "utf8")) as {
   repairFileRefusal?: boolean;
   observeFileRefusal?: boolean;
   observeNativeRefusal?: boolean;
+  receiptState?: "live" | "abandoned" | "abandoned-guessed" | "abandoned-other" | "abandoned-unknown" | "abandoned-dead-other" | "quarantined" | "invalid" | "parent" | "parent-stale" | "parent-invalid" | "parent-start" | "parent-status" | "parent-unfenced" | "parent-finished" | "parent-port" | "parent-host" | "parent-guessed" | "parent-oversized" | "parent-nonregular" | "parent-symlink";
   preserve?: "service" | "desktop" | "receipt" | "sibling" | "restart" | "restart-rollback" | "recycle-pending" | "restart-rollback-recycle";
   mutation?: "connection" | "journal" | "process-journal" | "config" | "profile" | "unverified" | "selection" | "oversized" | "nonregular" | "rotation" | "hub" | "catalog" | "prior-catalog" | "api-key" | "token" | "management" | "link-id";
 };
@@ -185,12 +186,59 @@ const snapshot = (result: unknown) => ({
   catalogBefore, catalogAfter: JSON.parse(readFileSync(DEFAULT_CATALOG_PATH, "utf8")),
   grokBefore, grokAfter: readFileSync(grokPath, "utf8"),
   fileOwnedBytes, fileAfter: Object.fromEntries(Object.entries(filePaths).map(([id, path]) => [id, readFileSync(path, "utf8")])), fileRefusal, fileLateResult,
+  teardownOutstanding: pendingTeardownOutstanding(),
 });
 const report = (result: unknown) => writeFileSync(join(home, "result.json"), JSON.stringify(snapshot(result)));
 process.on("exit", () => writeFileSync(join(home, "exit.json"), JSON.stringify(snapshot(null))));
 if (options.preserve === "service") process.env.OCX_SERVICE = "1";
 if (options.preserve === "desktop") takeDesktopSupervisedMarker({ OCX_DESKTOP_SUPERVISED: "1" });
-if (options.preserve === "receipt") claimPendingTeardown({ hostname: "127.0.0.1", port: config.port }, "exact");
+if (options.preserve === "receipt") {
+  let ownerPid = process.pid;
+  if (options.receiptState?.startsWith("abandoned")) {
+    const owner = Bun.spawn([process.execPath, "-e", "process.exit(0)"], { stdout: "ignore", stderr: "ignore" });
+    await owner.exited; ownerPid = owner.pid;
+  }
+  if (options.receiptState?.startsWith("parent")) {
+    // An owned, inert process supplies real argv/UID/liveness observations. It never
+    // runs the CLI; the fixture sets the real exact-runtime stop marker below.
+    const path = join(home, process.platform === "linux" ? "fixture owner" : "fixture-owner", "src", "cli", "index.ts");
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, 'console.log("ready"); setInterval(() => {}, 1000);');
+    const verb = options.receiptState === "parent-start" ? "start" : options.receiptState === "parent-status" ? "status" : "stop";
+    const owner = Bun.spawn([process.execPath, path, `--ocx-internal-launch-proof=${"a".repeat(43)}`, verb, "--json"], { stdout: "pipe", stderr: "ignore" });
+    process.on("exit", () => owner.kill("SIGKILL"));
+    const reader = owner.stdout.getReader();
+    const ready = await reader.read(); reader.releaseLock();
+    if (!ready.value || !new TextDecoder().decode(ready.value).includes("ready")) throw new Error("fixture owner did not start");
+    ownerPid = owner.pid;
+  }
+  const other = ["abandoned-other", "abandoned-unknown", "abandoned-dead-other"].includes(options.receiptState ?? "")
+    ? Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => options.receiptState === "abandoned-unknown"
+      ? new Response(null, { status: 503 }) : Response.json({ service: "opencodex", version: "1.0.0", pid: process.pid }) }) : null;
+  const otherPort = other?.port;
+  if (options.receiptState === "abandoned-dead-other") await other?.stop(true);
+  const receipt = claimPendingTeardown({ hostname: options.receiptState === "parent-host" ? "192.0.2.10" : "127.0.0.1",
+    port: otherPort ?? (options.receiptState === "parent-port" ? (config.port === 65535 ? config.port - 1 : config.port + 1) : config.port) },
+  options.receiptState === "parent-guessed" || options.receiptState === "abandoned-guessed" ? "guessed" : "exact", ownerPid);
+  const path = pendingTeardownPathFor(receipt.nonce);
+  if (options.receiptState === "quarantined" && !quarantinePendingTeardown(receipt.nonce)) throw new Error("fixture quarantine failed");
+  if (options.receiptState === "invalid") writeFileSync(pendingTeardownPathFor(receipt.nonce), "{");
+  if (options.receiptState === "parent-oversized") writeFileSync(path, JSON.stringify(receipt) + " ".repeat(4096));
+  if (options.receiptState === "parent-nonregular") { unlinkSync(path); mkdirSync(path); }
+  if (options.receiptState === "parent-symlink") { const target = `${path}.fixture`; writeFileSync(target, readFileSync(path)); unlinkSync(path); symlinkSync(target, path); }
+  if (options.receiptState === "parent-stale") {
+    const stale = claimPendingTeardown({ hostname: "127.0.0.1", port: config.port }, "exact", process.pid);
+    writeFileSync(pendingTeardownPathFor(stale.nonce), "{");
+    if (!quarantinePendingTeardown(stale.nonce)) throw new Error("fixture stale quarantine failed");
+    const owner = Bun.spawn([process.execPath, "-e", "process.exit(0)"], { stdout: "ignore", stderr: "ignore" });
+    await owner.exited;
+    claimPendingTeardown({ hostname: "127.0.0.1", port: config.port }, "exact", owner.pid);
+  }
+  if (options.receiptState === "parent-invalid") {
+    const invalid = claimPendingTeardown({ hostname: "127.0.0.1", port: config.port }, "exact", process.pid);
+    writeFileSync(pendingTeardownPathFor(invalid.nonce), "{");
+  }
+}
 if (options.preserve === "sibling") (await import("../../src/codex/sibling-start")).markSiblingStart(10100);
 if (options.mode === "retry") {
   const { ConfigMutationLockError } = await import("../../src/config");
@@ -409,6 +457,14 @@ if (options.mode === "retry") {
       writeFileSync(path, JSON.stringify(record));
     }
     else { const record = JSON.parse(readFileSync(path, "utf8")); record.pid += 100_000; writeFileSync(path, JSON.stringify(record)); }
+  }
+  if (options.receiptState?.startsWith("parent") && options.receiptState !== "parent-unfenced") {
+    const { readRuntimePort } = await import("../../src/config/process-state");
+    const { markClientRuntimeStopping, finishClientRuntimeStop } = await import("../../src/client/sync-runtime");
+    const runtime = readRuntimePort(process.pid)!;
+    const identity = { pid: process.pid, port: config.port, attestationSecret: runtime.attestationSecret! };
+    markClientRuntimeStopping(identity, { explicitStop: true });
+    if (options.receiptState === "parent-finished") finishClientRuntimeStop(identity);
   }
   mutate();
   if (options.removeToken) unlinkSync(join(home, "service-api-token"));

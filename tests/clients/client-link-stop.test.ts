@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fixturePath, repoPath } from "../helpers/repo-root";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { hostedWindowsQuarantine } from "../helpers/windows-ci-quarantine";
+import { isClientStopArgv, isClientStopCommandLine } from "../../src/client/stop-teardown-owner";
 
 async function runStop(options: Record<string, unknown>) {
   const root = mkdtempSync(join(tmpdir(), "ocx-link-stop-"));
@@ -26,6 +27,10 @@ async function runStop(options: Record<string, unknown>) {
       expect(exit, stdout).toBe(1);
       expect(stderr).toContain("Connected-client stop refused");
       expect(stderr).toContain("update/restart");
+    } else if (options.expectedNativePreflightRefusal) {
+      expect(exit, stdout).toBe(1);
+      expect(stderr).toContain("Link Child native teardown preflight refused");
+      expect(stderr).toContain("No process was stopped");
     } else if (options.expectedFileRefusal || options.repairFileRefusal) {
       expect(exit, stdout).toBe(options.mode === "file-stop" ? 1 : 0);
       expect(stderr).toContain("Link Child file routing restore refused");
@@ -370,7 +375,7 @@ test("parent Link teardown retains the merged full restoration contract", async 
   expect(report.fileAfter.pi).not.toContain("127.0.0.1");
 });
 
-for (const preserve of ["service", "desktop", "receipt", "sibling"]) {
+for (const preserve of ["service", "desktop", "sibling"]) {
   test(`native Link signal preserves ${preserve} restoration ownership`, async () => {
     const report = await runStop({ mode: "runtime", preserve, fileClients: ["pi"] });
     expect(report.after).toBe(report.before);
@@ -382,6 +387,100 @@ for (const preserve of ["service", "desktop", "receipt", "sibling"]) {
     expect(report.fileAfter).toEqual(report.fileOwnedBytes);
   }, 20_000);
 }
+
+for (const receiptState of ["live", "abandoned", "quarantined", "invalid", "parent-invalid", "parent-start", "parent-status", "parent-unfenced", "parent-finished", "parent-port", "parent-host", "parent-guessed", "parent-oversized", "parent-nonregular", ...(process.platform === "win32" ? [] : ["parent-symlink"])]) {
+  test(`an unverified native teardown (${receiptState}) cleans files but retains its listener`, async () => {
+    const report = await runStop({ mode: "runtime", preserve: "receipt", receiptState, fileClients: ["pi"],
+      observeNativeRefusal: true, expectedRefusal: true });
+    expect(report.result).toEqual({ refused: true, bound: true, stopping: true });
+    expect(report.fileAfter.pi).not.toContain("127.0.0.1");
+    expect(JSON.parse(report.fileAfter.pi)).toMatchObject({ fixtureUserSetting: "keep" });
+    expect(report.teardownOutstanding).toBe(true);
+    expect(report.after).toBe(report.before);
+    expect(report.profileAfter).toBe(report.profileBefore);
+    expect(report.journalRetained).toBe(true);
+    expect(report.catalogAfter).toEqual(JSON.parse(report.catalogBefore));
+    expect(report.grokAfter).toBe(report.grokBefore);
+    expect(report.protectedUnchanged).toBe(true);
+  }, 20_000);
+}
+
+for (const receiptState of ["invalid", "abandoned-guessed", "abandoned-other", "abandoned-unknown"]) {
+  test(`ocx stop refuses inherited native teardown (${receiptState}) before service or process termination`, async () => {
+    const report = await runStop({ mode: "file-stop", preserve: "receipt", receiptState, fileClients: ["pi"], expectedNativePreflightRefusal: true });
+    expect(report.result).toEqual({ exitCode: 1, calls: { service: 0, killed: 0 }, bound: true, stopping: false });
+    expect(report.fileAfter).toEqual(report.fileOwnedBytes);
+    expect(report.after).toBe(report.before);
+    expect(report.profileAfter).toBe(report.profileBefore);
+    expect(report.journalRetained).toBe(true);
+    expect(report.teardownOutstanding).toBe(true);
+    expect(report.grokAfter).toBe(report.grokBefore);
+  }, 20_000);
+}
+
+for (const receiptState of ["abandoned", "abandoned-dead-other", "quarantined"]) {
+  test(`native recovery preflight keeps the supported ${receiptState} parent stop`, async () => {
+    const report = await runStop({ mode: "file-preflight", preserve: "receipt", receiptState, fileClients: ["pi"] });
+    expect(report.result).toEqual({ outcome: null, bound: true, stopping: true });
+    expect(report.fileAfter.pi).not.toContain("127.0.0.1");
+    expect(report.teardownOutstanding).toBe(true);
+    expect(report.after).toBe(report.before);
+    expect(report.profileAfter).toBe(report.profileBefore);
+    expect(report.protectedUnchanged).toBe(true);
+  }, 20_000);
+}
+
+for (const receiptState of ["parent", "parent-stale"]) {
+  test(`an active native stop (${receiptState}) defers only native restoration after file cleanup`, async () => {
+    const report = await runStop({ mode: "runtime", preserve: "receipt", receiptState, fileClients: ["pi"] });
+    expect(report.result).toEqual({ atListenerStop: true });
+    expect(report.fileAfter.pi).not.toContain("127.0.0.1");
+    expect(JSON.parse(report.fileAfter.pi)).toMatchObject({ fixtureUserSetting: "keep" });
+    expect(report.teardownOutstanding).toBe(true);
+    expect(report.after).toBe(report.before);
+    expect(report.profileAfter).toBe(report.profileBefore);
+    expect(report.journalRetained).toBe(true);
+    expect(report.catalogAfter).toEqual(JSON.parse(report.catalogBefore));
+    expect(report.grokAfter).toBe(report.grokBefore);
+    expect(report.protectedUnchanged).toBe(true);
+  }, 20_000);
+}
+
+test("native teardown recognizes only supported stop invocations, including an updater's stop child", () => {
+  expect(isClientStopArgv(["/opt/Program Files/ocx", "stop", "--json", "--expect-pid", "12", "--expect-port", "10100",
+    "--expect-hostname", "127.0.0.1", "--expect-config-home", "/home/person with spaces/.opencodex", "--expect-cli-version", "1.0.0",
+    "--expect-compatibility-token", "a".repeat(64)])).toBe(true);
+  for (const command of ["/usr/local/bin/ocx stop", '"C:\\Program Files\\ocx.exe" stop --json', "bun src/cli.ts stop",
+    "bun run /install/src/cli/index.ts stop --deadline-ms 5000 --json",
+    `bun /npm/node_modules/@bitkyc08/opencodex/src/cli/index.ts --ocx-internal-launch-proof=${"a".repeat(43)} stop --json`]) {
+    expect(isClientStopCommandLine(command), command).toBe(true);
+  }
+  for (const command of ["ocx start", "ocx status", "ocx update", "ocx update --plan", "ocx update --desktop --check", "ocx __gui-update-worker",
+    "ocx stop --help", "ocx status stop", "node -e 'ocx stop'", "bun -e 'src/cli.ts stop'", "bun other.ts stop",
+    "bun src/cli/index.ts --ocx-internal-launch-proof=invalid stop", "ocx stop --expect-pid 5", "ocx stop --deadline-ms 0"]) {
+    expect(isClientStopCommandLine(command), command).toBe(false);
+  }
+});
+
+test("an abandoned native teardown receipt cannot release a conflicting Link file route", async () => {
+  const report = await runStop({ mode: "runtime", preserve: "receipt", receiptState: "abandoned",
+    fileClients: ["pi"], fileConflict: true, observeFileRefusal: true, expectedFileRefusal: true });
+  expect(report.result).toEqual({ refused: true, bound: true, stopping: true });
+  expect(report.fileAfter.pi).toContain("operator-edited-placeholder");
+  expect(report.fileAfter.pi).toContain("127.0.0.1");
+  expect(report.teardownOutstanding).toBe(true);
+  expect(report.after).toBe(report.before);
+  expect(report.journalRetained).toBe(true);
+}, 20_000);
+
+test("a native teardown receipt cannot skip the Link signal sync fence", async () => {
+  const report = await runStop({ mode: "runtime", preserve: "receipt", runtimeRecord: "absent",
+    observeFileRefusal: true, expectedFileRefusal: true });
+  expect(report.result).toEqual({ refused: true, bound: true, stopping: false });
+  expect(report.teardownOutstanding).toBe(true);
+  expect(report.after).toBe(report.before);
+  expect(report.grokAfter).toBe(report.grokBefore);
+}, 20_000);
 
 test("a pending restart admission cannot leave routing behind on signal shutdown", async () => {
   const report = await runStop({ mode: "runtime", preserve: "restart" });
@@ -446,7 +545,7 @@ for (const runtimeRecord of ["absent", "invalid", "foreign", "explicit-stop-unfe
   }, 20_000);
 }
 
-for (const preserve of ["service", "desktop", "receipt", "sibling"]) {
+for (const preserve of ["service", "desktop", "sibling"]) {
   test(`${preserve} signal preservation does not require a restoration sync fence`, async () => {
     const report = await runStop({ mode: "runtime", preserve, runtimeRecord: "absent" });
     expect(report.after).toBe(report.before);

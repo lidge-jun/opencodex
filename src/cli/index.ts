@@ -1100,22 +1100,6 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
   const stoppingSibling = siblingOfPort !== undefined;
   const connectedClientState = readClientConnectionState();
   const connectedClientSkip = stoppingSibling ? null : connectedClientStopSkipLine(connectedClientState);
-  let connectedClientAlreadyStopped = false;
-  if (!stoppingSibling && connectedClientState.kind === "connected") {
-    const preflight = await preflightConnectedClientStop(snapshot?.approval, onFence);
-    if (preflight === "already-stopped") connectedClientAlreadyStopped = true;
-    else if (preflight) return preflight;
-  }
-  // Structured twin of the human lines below, for `ocx stop --json`: one document the
-  // desktop shell can read across the process boundary (D4). Every field is assigned
-  // where the corresponding boolean already flips — the summarizer never re-decides.
-  const record: StopRunRecord = {
-    service: "absent",
-    proxy: "unknown",
-    sharedTeardown: "skipped",
-    inheritedTeardownBlocks: false,
-    receiptClearFailed: false,
-  };
   // Deferring shared teardown to this process is an obligation, so record it on disk
   // before asking for it (#3008). A parent that dies mid-stop would otherwise leave the
   // client config routed at a proxy that is already gone, with nothing to find later.
@@ -1139,8 +1123,25 @@ async function handleStopUnlocked(snapshot: GuardedStopSnapshot | undefined, onF
   // anything is restored.
   const teardownOwnerStillRunning = (ownerPid: number): boolean =>
     isProcessAlive(ownerPid) && isLikelyOcxProcess(ownerPid);
-  const inheritedTeardowns = listPendingTeardowns()
-    .filter(read => isPendingTeardownAbandoned(read, teardownOwnerStillRunning));
+  const inheritedTeardowns = connectedClientState.kind === "connected" && connectedClientState.value.transport === "link"
+    ? (await import("../client/stop-native-handoff")).readLinkInheritedTeardowns()
+    : listPendingTeardowns().filter(read => isPendingTeardownAbandoned(read, teardownOwnerStillRunning));
+  let connectedClientAlreadyStopped = false;
+  if (!stoppingSibling && connectedClientState.kind === "connected") {
+    const preflight = await preflightConnectedClientStop(snapshot?.approval, onFence, inheritedTeardowns);
+    if (preflight === "already-stopped") connectedClientAlreadyStopped = true;
+    else if (preflight) return preflight;
+  }
+  // Structured twin of the human lines below, for `ocx stop --json`: one document the
+  // desktop shell can read across the process boundary (D4). Every field is assigned
+  // where the corresponding boolean already flips — the summarizer never re-decides.
+  const record: StopRunRecord = {
+    service: "absent",
+    proxy: "unknown",
+    sharedTeardown: "skipped",
+    inheritedTeardownBlocks: false,
+    receiptClearFailed: false,
+  };
   let teardownNonce: string | undefined;
   // #7423: an update that restarts the proxy asks this stop to leave Codex routing for the replacement.
   // Client start never discharges a standalone update-handover receipt or reapplies routing.
