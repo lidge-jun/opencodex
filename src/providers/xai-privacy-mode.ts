@@ -1,10 +1,10 @@
-import { readBoundedResponseBody } from "../lib/bounded-body";
+import { BOUNDED_BODY_MAX_BYTES, readBoundedResponseBody } from "../lib/bounded-body";
 import { markProxyError } from "../lib/client-error-body";
 import type { OcxProviderConfig } from "../types";
 import type { RequestFailureCause } from "../usage/telemetry-contract";
 
 const LEGACY_PRIVACY_MARKER = "[WKE=privacy-mode:legacy]";
-const MAX_ERROR_BYTES = 16_384;
+const MAX_PROBE_ERROR_BYTES = 16_384;
 export const XAI_LEGACY_PRIVACY_MESSAGE = "The xAI account uses Legacy (no storage), which blocks Grok Build. Switch the xAI account to Privacy Mode in the xAI/Grok privacy settings, then retry.";
 
 export function isXaiGrokOAuth(providerName: string, provider: Pick<OcxProviderConfig, "authMode">): boolean {
@@ -13,7 +13,7 @@ export function isXaiGrokOAuth(providerName: string, provider: Pick<OcxProviderC
 
 /** Callers must have a bounded error body from the Grok OAuth endpoint. */
 export function isXaiLegacyPrivacyError(status: number, text: string): boolean {
-  if (status !== 403 || text.length > MAX_ERROR_BYTES) return false;
+  if (status !== 403 || text.length > BOUNDED_BODY_MAX_BYTES) return false;
   try {
     const payload = JSON.parse(text) as { error?: string | { message?: unknown } } | null;
     const error = payload?.error;
@@ -28,7 +28,7 @@ export function isXaiLegacyPrivacyError(status: number, text: string): boolean {
 export async function readXaiLegacyPrivacyError(response: Response): Promise<boolean> {
   if (response.status !== 403) return false;
   try {
-    const body = await readBoundedResponseBody(response, { maxBytes: MAX_ERROR_BYTES, fatalUtf8: true });
+    const body = await readBoundedResponseBody(response, { maxBytes: MAX_PROBE_ERROR_BYTES, fatalUtf8: true });
     return body.displaySafe && !body.truncated && isXaiLegacyPrivacyError(response.status, body.text);
   } catch {
     return false;

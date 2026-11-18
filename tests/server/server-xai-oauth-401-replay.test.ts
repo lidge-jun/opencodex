@@ -627,3 +627,21 @@ describe("xAI OAuth Legacy privacy settings refusal", () => {
     }
   });
 });
+
+  test("native Responses replaces a 17 KiB Legacy privacy error with fixed guidance", async () => {
+    await seedOAuth();
+    saveConfig(xaiConfig());
+    const sends = refuseAt("/v1/responses", `${privateDetail} ${"x".repeat(17 * 1024)} ${marker}`);
+    const server = startServer(0);
+    try {
+      const result = await post(server);
+      expect(result.status).toBe(403);
+      const body = await result.text();
+      expect(body.includes(privateDetail)).toBe(false);
+      expect(body.includes(marker)).toBe(false);
+      expect(JSON.parse(body).error).toMatchObject({ message: guidance, code: "permission_denied" });
+      expect(sends).toEqual(["/v1/responses"]);
+    } finally {
+      await server.stop(true);
+    }
+  });
