@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { handleCodexAuthAPI } from "../../src/codex/auth-api/routes";
 import { setPersistedConfigMutationBeforeCommitForTests } from "../../src/config/persisted-mutation";
 import { loadConfig, saveConfig } from "../../src/config";
+import { parseGenericPoolStrategy } from "../../src/oauth/pool-settings-capability";
 import { startServer } from "../../src/server";
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
@@ -776,11 +777,9 @@ describe("unified pool-settings contract (#695 wp5c)", () => {
       const legacy = new Request("http://localhost/api/codex-auth/active");
       const legacyRead = await handleCodexAuthAPI(legacy, new URL(legacy.url), loadConfig());
       expect(await legacyRead!.json()).toMatchObject({ accountPoolStrategy: "reset-first" });
-      // The Anthropic runtime implements quota/round-robin/fill-first only, so that kind
-      // refuses reset-first instead of storing a strategy it would ignore.
       const rejected = await write("anthropic", "reset-first");
       expect(rejected.status).toBe(400);
-      expect((await rejected.json() as { error: string }).error).toBe("strategy must be one of: quota, round-robin, fill-first");
+      expect((await rejected.json() as { error: string }).error).toBe("strategy must be one of: quota, round-robin, fill-first, reset-near-weighted");
       // A generic OAuth pool accepts and round-trips it.
       const antigravityWrite = await write("google-antigravity", "reset-first");
       expect(antigravityWrite.status).toBe(200);
@@ -795,6 +794,44 @@ describe("unified pool-settings contract (#695 wp5c)", () => {
       expect(compatibilityWrite!.status).toBe(200);
       expect(await compatibilityWrite!.json()).toMatchObject({ accountPoolStrategy: "reset-first" });
       expect(loadConfig().accountPoolStrategy).toBe("reset-first");
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("reset-near-weighted round-trips for Anthropic and Codex", async () => {
+    const strategy = "reset-near-weighted";
+    const server = startServer(0);
+    try {
+      for (const [provider, kind] of [["anthropic", "anthropic"], ["openai", "codex"]] as const) {
+        const written = await fetch(new URL("/api/pool/settings", server.url), {
+          method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider, strategy }),
+        });
+        expect(written.status).toBe(200);
+        expect(await written.json()).toMatchObject({ kind, strategy });
+        const read = await fetch(new URL(`/api/pool/settings?provider=${provider}`, server.url));
+        expect(await read.json()).toMatchObject({ kind, strategy });
+      }
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("generic pool settings reject reset-near-weighted without a config write", async () => {
+    const provider = "google-antigravity";
+    const strategy = "reset-near-weighted";
+    expect(parseGenericPoolStrategy(strategy)).toBeNull();
+    expect(parseGenericPoolStrategy(strategy, provider)).toBeNull();
+    const server = startServer(0);
+    try {
+      const previous = loadConfig().providers[provider]?.oauthAccountFailover;
+      for (const endpoint of ["/api/pool/settings", "/api/oauth/accounts/pool"]) {
+        const response = await fetch(new URL(endpoint, server.url), {
+          method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider, strategy }),
+        });
+        expect(response.status).toBe(400);
+      }
+      expect(loadConfig().providers[provider]?.oauthAccountFailover).toEqual(previous);
     } finally {
       await server.stop(true);
     }

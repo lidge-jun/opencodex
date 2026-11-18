@@ -34,7 +34,7 @@ export function poolSettingsCapability(name: string, provider: OcxProviderConfig
 
 export function parseGenericPoolStrategy(value: unknown, providerName?: string): GenericPoolStrategy | null {
   // reset-first is shared with the Codex pool, so it is named here rather than added to the
-  // three-name shared parser that the Anthropic kind also uses. least-loaded is Kiro-specific.
+  // Anthropic parser. least-loaded is Kiro-specific.
   // reset-near-weighted is Codex and Anthropic only; the generic runtime does not run it.
   if (value === "reset-first") return value;
   if (value === "least-loaded") return providerName === "kiro" ? value : null;
@@ -193,7 +193,7 @@ export function unifiedPoolSettingsDto(
       enabled,
       enabledEffective: enabled === true,
       nativeMessages: !Object.hasOwn(pool, "nativeMessages") || pool.nativeMessages === true,
-      strategy: parseGenericPoolStrategy(pool.strategy) ?? "quota",
+      strategy: parseAccountPoolStrategy(pool.strategy) ?? "quota",
       stickyLimit: parseGenericStickyLimit(pool.stickyLimit) ?? 1,
       autoSwitchThreshold: parseGenericAutoSwitchThreshold(pool.autoSwitchThreshold) ?? 80,
       quotaWindow: typeof pool.quotaWindow === "string" ? pool.quotaWindow : "five-hour",
