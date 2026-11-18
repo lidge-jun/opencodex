@@ -12,6 +12,7 @@ import { clientFacingModelText, type ClientFacingModelLabel } from "../../lib/er
  * resolves toward admitting.
  */
 import { collapseDevinModelUid, DEVIN_MODEL_CONTEXT_WINDOWS } from "../../adapters/devin/live-models";
+import { openAIChatSerializesThinking } from "../../adapters/openai-chat/messages";
 import {
   nativeOpenAiContextWindow,
   nativeOpenAiMaxInputTokens,
@@ -22,7 +23,7 @@ import { getModelMetadata } from "../../generated/model-metadata";
 import { estimateTokens } from "../../lib/token-estimate";
 import { isCanonicalOpenAiForwardProvider, OPENAI_CODEX_PROVIDER_ID } from "../../providers/openai-tiers";
 import { modelRecordValue } from "../../reasoning-effort";
-import { modelInList, type OcxContentPart, type OcxParsedRequest, type OcxProviderConfig } from "../../types";
+import type { OcxContentPart, OcxParsedRequest, OcxProviderConfig } from "../../types";
 
 /**
  * Multiplier applied to the ceiling before refusing.
@@ -131,7 +132,7 @@ function contentTokens(content: string | readonly OcxContentPart[], modelId: str
 export function estimateInputTokens(parsed: OcxParsedRequest, modelId: string, provider?: OcxProviderConfig): number {
   const { context } = parsed;
   const countThinking = provider?.adapter !== "openai-chat"
-    || modelInList(provider.preserveReasoningContentModels, parsed.modelId);
+    || openAIChatSerializesThinking(provider, parsed.modelId).text;
   let total = 0;
 
   for (const prompt of context.systemPrompt ?? []) total += estimateTokens(prompt, modelId);
@@ -330,14 +331,6 @@ export function resolveOutputCeiling(
 const COMBO_DEFAULT_OUTPUT_RESERVE = { fraction: 0.1, min: 1_024, max: 32_768 } as const;
 
 /**
- * Heuristic input estimates undercount code- and tool-dense turns by several percent; near
- * the window boundary that error alone decides whether the target can answer at all. Only the
- * strict combo gate prices the estimate with this margin -- the loose direct gate keeps the
- * raw figure because it guards pathological input, not fitness.
- */
-const COMBO_ESTIMATE_MARGIN = 1.1;
-
-/**
  * Combo-only admission. A fallback must be able to satisfy the caller's declared output
  * allowance inside its OWN context window. Otherwise it returns 200, emits a few hundred
  * tokens, and terminates on `finish_reason: length` — which the Anthropic surface renders as
@@ -374,7 +367,8 @@ export function checkComboTargetInputAdmission(
     ? (targetOutput === null ? defaultReserve : Math.min(defaultReserve, targetOutput))
     : (targetOutput === null ? requestedOutput : Math.min(requestedOutput, targetOutput));
   const estimatedTokens = estimateInputTokens(parsed, modelId, provider);
-  const admissionEstimate = Math.ceil(estimatedTokens * COMBO_ESTIMATE_MARGIN);
+  // Apply the 1.1x estimate margin without rounding exact fits up by one token.
+  const admissionEstimate = Math.ceil((estimatedTokens * 11) / 10);
   return {
     admitted: admissionEstimate <= ceiling && admissionEstimate + requiredOutputHeadroom <= window,
     estimatedTokens,

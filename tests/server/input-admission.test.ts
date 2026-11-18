@@ -321,6 +321,17 @@ describe("combo target input admission", () => {
     expect(JSON.stringify(messagesToChatFormat(parsed, preserved))).toContain(asciiTokens(30_000));
   });
 
+  test("counts DeepSeek thinking replay when the preserve list is unset", () => {
+    const model = "deepseek-v4-pro";
+    const parsed = { ...replayedThinking(), modelId: model, options: { maxOutputTokens: 1_000 } };
+    const target = { ...capped, modelContextWindows: { [model]: 10_000 } };
+    expect(target.preserveReasoningContentModels).toBeUndefined();
+    expect(messagesToChatFormat(parsed, target)).toContainEqual(expect.objectContaining({
+      role: "assistant", reasoning_content: asciiTokens(30_000),
+    }));
+    expect(checkComboTargetInputAdmission(parsed, target, "custom", model).admitted).toBe(false);
+  });
+
   const withMaxOutput = (inputTokens: number, maxOutputTokens = 64_000): OcxParsedRequest => ({
     ...request([userText(asciiTokens(inputTokens))]),
     modelId: "m",
@@ -357,6 +368,14 @@ describe("combo target input admission", () => {
     const result = checkComboTargetInputAdmission(withMaxOutput(110_000, 8_000), capped, "custom", "m");
     expect(result.admitted).toBe(false);
     expect(result.requiredOutputHeadroom).toBe(8_000);
+  });
+
+  test("admits an exact fit after applying the estimate margin and output reserve", () => {
+    const result = checkComboTargetInputAdmission(withMaxOutput(100_000, 18_000), capped, "custom", "m");
+    expect(result).toMatchObject({
+      estimatedTokens: 100_000, admissionEstimateTokens: 110_000,
+      requiredOutputHeadroom: 18_000, ceiling: 128_000, admitted: true,
+    });
   });
 
   test("an input-only cap is not charged the output reserve twice", () => {
