@@ -15,6 +15,7 @@ import type { CatalogModel } from "../../src/codex/catalog";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { isolateClientLifecycleLock } from "../helpers/client-lifecycle-lock";
+import { catalogConvergenceFactory } from "../helpers/catalog-convergence";
 
 // Gateway is the default Desktop mode. These guards keep that default from ever writing a
 // gateway profile behind a Desktop that runs first-party, and keep foreign proxy env from being
@@ -32,7 +33,10 @@ function config(extra: Partial<OcxConfig> = {}): OcxConfig {
     port: 10100,
     defaultProvider: "mock",
     clientIntegrations: { grok: false },
-    providers: { mock: { adapter: "openai-chat", baseUrl: "https://example.test/v1", models: ["keep"] } },
+    // The Desktop apply path discovers this provider for real. A local executor answers it, so no
+    // case waits on a CI resolver for example.test (a timed-out request ran into the next case).
+    providers: { mock: { adapter: "openai-chat", baseUrl: "https://example.test/v1", models: ["keep"],
+      fetch: async () => Response.json({ object: "list", data: [{ id: "keep", object: "model" }] }) } },
     ...extra,
   } as OcxConfig;
 }
@@ -46,7 +50,8 @@ async function dispatch(path: string, init: RequestInit, inputConfig: OcxConfig,
   const response = await handleManagementAPI(new Request(url, {
     ...init,
     headers: { Host: url.host, "Content-Type": "application/json", ...(init.headers ?? {}) },
-  }), url, inputConfig, { ensureClaudeIntercept: async () => ({ ok: true, state: { proxyPort: 10200, caCertPath: join(root, "claude-intercept", "ca.pem"), pickerProxyPort: null } }), ...deps }, "admin-token", undefined, { trustedLoopback: true });
+  // Catalog convergence is stubbed for the same reason: the real one rediscovers the saved provider.
+  }), url, inputConfig, { ensureClaudeIntercept: async () => ({ ok: true, state: { proxyPort: 10200, caCertPath: join(root, "claude-intercept", "ca.pem"), pickerProxyPort: null } }), createManagementConvergeCodex: catalogConvergenceFactory(), ...deps }, "admin-token", undefined, { trustedLoopback: true });
   return { status: response!.status, body: await response!.json() as Record<string, any> };
 }
 

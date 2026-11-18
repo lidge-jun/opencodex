@@ -164,8 +164,10 @@ directory-handle-relative unlink, so the guarantee does not extend to a concurre
 same account between a check and the removal that follows it.
 
 `tests/config/config-ownership-concurrent-record.test.ts` covers concurrent registrations, a
-registration racing uninstall, the tombstone refusal for cached paths, a rerun after an interrupted
-uninstall or a leftover lock file, the busy lock, a home without metadata, and log rotation.
+registration racing uninstall (with each outcome it can end in forced in order: removed, refused by
+the tombstone, reported after the run, and kept listed for the rerun behind a refused or partial run),
+the tombstone refusal for cached paths, a rerun after an interrupted uninstall or a leftover lock
+file, the busy lock, a home without metadata, and log rotation.
 `tests/config/config-ownership-removal.test.ts` and `tests/config/config-ownership-uninstall.test.ts`
 cover linked and dangling parents, unreadable entries, a directory replaced after it is listed,
 final-component links, aliased roots, and the elevated refusal.

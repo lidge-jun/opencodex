@@ -227,6 +227,37 @@ for (const kind of ["oauth", "key", "codex"] as const) {
   });
 }
 
+test("a Kimi account selection event also re-reads the Kimi (Responses) accounts that share the login (#8087)", async () => {
+  let stream!: ReadableStreamDefaultController<Uint8Array>;
+  const reads: string[] = [];
+  const encoder = new TextEncoder();
+  const send = (event: string, data: unknown) => { stream.enqueue(encoder.encode(`event: ${event}\r\ndata: ${JSON.stringify(data)}\r\n\r\n`)); };
+  const kimiRow = { adapter: "openai-chat", authMode: "oauth", hasApiKey: false, baseUrl: "https://api.kimi.com/coding/v1" };
+  Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: RequestInfo | URL) => {
+    const url = new URL(String(input), "http://localhost");
+    reads.push(url.pathname + url.search);
+    if (url.pathname === "/api/accounts/events") {
+      return new Response(new ReadableStream<Uint8Array>({ start(controller) { stream = controller; } }), { headers: { "Content-Type": "text/event-stream" } });
+    }
+    if (url.pathname === "/api/config") return Response.json({ port: 10100, defaultProvider: "kimi", providers: {
+      kimi: kimiRow, "kimi-responses": { ...kimiRow, adapter: "openai-responses" } } });
+    if (url.pathname === "/api/oauth/providers") return Response.json({ providers: ["kimi"] });
+    if (url.pathname === "/api/oauth/status") return Response.json({ loggedIn: true });
+    if (url.pathname === "/api/oauth/accounts") return Response.json({ activeAccountId: "a", accounts: [{ id: "a", active: true, quotaMode: "probe" }] });
+    if (url.pathname === "/api/codex-auth/accounts") return Response.json({ accounts: [] });
+    if (url.pathname === "/api/provider-quotas") return Response.json({ reports: [] });
+    if (url.pathname === "/api/selected-models") return Response.json({ models: {} });
+    if (url.pathname === "/api/usage") return Response.json({ providers: [], models: [] });
+    return Response.json({});
+  } });
+  await act(async () => { root = createRoot(container); root.render(<LanguageProvider><Providers apiBase="" /></LanguageProvider>); });
+  await act(async () => { send("ready", { revision: 0 }); });
+  const siblingReads = () => reads.filter(path => path.startsWith("/api/oauth/accounts?") && path.includes("provider=kimi-responses")).length;
+  const before = siblingReads();
+  await act(async () => { send("account-selection", { provider: "kimi", kind: "oauth", revision: 1 }); });
+  expect(siblingReads()).toBeGreaterThan(before);
+});
+
 for (const kind of ["oauth", "api-key"] as const) {
   test(`${kind} selection event updates the rendered active row without a poll tick or quota probe`, async () => {
     const name = kind === "oauth" ? "cursor" : "deepseek";

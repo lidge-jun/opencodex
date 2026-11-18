@@ -242,22 +242,28 @@ export function createLinkListenerLifecycle<T>(deps: LinkListenerDeps = {}): Lin
           const threadId = header || (metadata && typeof metadata.thread_id === "string" ? metadata.thread_id : "");
           try { return threadId ? holds.threadHash(threadId) : null; } catch { return null; }
         };
-        // Running marks, and while the feature is on the request-log fields of design 9.1: the pipeline reports this
-        // request's expanded input and its terminal (src/server/link-turn.ts), through a token header it removes before
-        // anything is forwarded. With the feature off and no marks, no token is set and the request is unchanged.
+        // Every relayed turn reads its upstream only as its client drains (#8601, owner decision 2026-11-16), so a stalled
+        // Child reader holds about one upstream chunk on this Home whether or not the link WebSocket feature is on. Running
+        // marks, and while the feature is on the request-log fields of design 9.1, ride the same observer: the pipeline
+        // reports this request's expanded input and its terminal (src/server/link-turn.ts), through a token header it
+        // removes before anything is forwarded. With the feature off and no marks the observer only asks for paced reads.
         let token: string | null = null;
         const logging = websocketEnabled();
-        if (logging || holds.hasMarks(linkId)) {
-          let resent: StoredMark[] = [];
-          let threadHash: string | null = null;
-          token = registerLinkTurnToken({
-            expanded(body, chain) { threadHash = threadHashOf(body); resent = chain === "unexpanded" ? [] : marksResent(holds, linkId, threadHash, body); },
-            expansionFailed() { resent = []; },
-            terminal(status, source) { if (resent.length && threadHash && upstreamCompleted(status, source)) holds.releaseMarks(linkId, threadHash, resent); },
-            ...(logging ? { pacedReads: true, logFields: (body: unknown) => ({ transport: "http" as const, first: false, ...linkLogRefs(holds, linkId, header?.trim() ?? "", body) }) } : {}),
-          });
-          try { req.headers.set(LINK_TURN_HEADER, token); } catch { releaseLinkTurnToken(token); token = null; }
-        }
+        const tracksMarks = logging || holds.hasMarks(linkId);
+        let resent: StoredMark[] = [];
+        let threadHash: string | null = null;
+        token = registerLinkTurnToken({
+          pacedReads: true,
+          expanded(body, chain) {
+            if (!tracksMarks) return;
+            threadHash = threadHashOf(body);
+            resent = chain === "unexpanded" ? [] : marksResent(holds, linkId, threadHash, body);
+          },
+          expansionFailed() { resent = []; },
+          terminal(status, source) { if (resent.length && threadHash && upstreamCompleted(status, source)) holds.releaseMarks(linkId, threadHash, resent); },
+          ...(logging ? { logFields: (body: unknown) => ({ transport: "http" as const, first: false, ...linkLogRefs(holds, linkId, header?.trim() ?? "", body) }) } : {}),
+        });
+        try { req.headers.set(LINK_TURN_HEADER, token); } catch { releaseLinkTurnToken(token); token = null; }
         // Pending result keys: only a link with a releasable hold pays for reading a copy of the body. The
         // request settles only holds that exist now, as it begins (a later hold may reuse an id).
         let decide: ((accepted: boolean) => void) | undefined;

@@ -447,9 +447,9 @@ describe("Reserve opt-in admission refusal", () => {
     expect(response.headers.has("retry-after")).toBe(false);
     const text = await response.text();
     expect(JSON.parse(text).error.type).toBe("invalid_request_error");
-    expect(text).toContain("codexDesktopAuthless");
-    expect(text).toContain("ocx system settings --desktop-authless on");
-    expect(text).toContain("not forwarded without");
+    expect(text).toContain("codexReserveEnabled");
+    expect(text).toContain("ocx system settings --reserve on");
+    expect(text).toContain("not forwarded while the local Reserve setting is off");
     // No account id, no credential, no request body echoed back into the refusal.
     expect(text).not.toContain(accountId);
     expect(text).not.toContain(accessToken);

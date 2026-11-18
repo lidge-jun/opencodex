@@ -44,6 +44,9 @@ export default function OAuthTosWarningModal({
   if (!level) return null;
 
   const copy = oauthTosCopyKeys(providerId, level);
+  const danger = copy.tone === "danger";
+  // A multi-line conditions string is a checklist; render each line as its own item.
+  const conditionLines = copy.conditions ? t(copy.conditions).split("\n").filter(line => line.trim()) : [];
 
   const handleContinue = () => {
     if (!acknowledged || submittedRef.current) return;
@@ -62,14 +65,21 @@ export default function OAuthTosWarningModal({
     >
       <button type="button" className="modal-backdrop-dismiss" aria-label={t("common.close")} tabIndex={-1} onClick={onCancel} />
       <div
-        className="modal-card"
+        className={danger ? "modal-card oauth-tos-card oauth-tos-card--danger" : "modal-card"}
         onClick={e => e.stopPropagation()}
-        style={{ maxWidth: 460 }}
+        style={{ maxWidth: danger ? 520 : 460 }}
       >
-        <h3 id={titleId}>{t(copy.title, { provider: providerLabel })}</h3>
+        {danger ? (
+          <h3 id={titleId} className="oauth-tos-danger-title">
+            <IconAlert width={22} height={22} aria-hidden="true" />
+            <span>{t(copy.title, { provider: providerLabel })}</span>
+          </h3>
+        ) : (
+          <h3 id={titleId}>{t(copy.title, { provider: providerLabel })}</h3>
+        )}
         <div
           id={bodyId}
-          className="notice-warn"
+          className={danger ? "notice-err oauth-tos-danger-body" : "notice-warn"}
           style={{ marginTop: 12, display: "flex", gap: 8, alignItems: "flex-start" }}
         >
           <IconAlert width={16} height={16} style={{ flexShrink: 0, marginTop: 2 }} aria-hidden="true" />
@@ -77,17 +87,25 @@ export default function OAuthTosWarningModal({
             {t(copy.body, { provider: providerLabel })}
           </p>
         </div>
-        {copy.conditions && (
+        {conditionLines.length > 1 && (
+          <ul id={conditionsId} className="oauth-tos-conditions">
+            {conditionLines.map(line => <li key={line}>{line}</li>)}
+          </ul>
+        )}
+        {conditionLines.length === 1 && (
           <p id={conditionsId} className="modal-desc" style={{ marginTop: 12 }}>
-            {t(copy.conditions)}
+            {conditionLines[0]}
           </p>
         )}
         {copy.saferPath && (
-          <p className="muted text-label" style={{ marginTop: 12 }}>
+          <p className={danger ? "oauth-tos-safer text-label" : "muted text-label"} style={{ marginTop: 12 }}>
             {t(copy.saferPath)}
           </p>
         )}
-        <label className="oauth-tos-ack" style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 14 }}>
+        <label
+          className={danger ? "oauth-tos-ack oauth-tos-ack--danger" : "oauth-tos-ack"}
+          style={{ display: "flex", gap: 8, alignItems: "flex-start", marginTop: 14 }}
+        >
           <input
             type="checkbox"
             checked={acknowledged}
@@ -103,7 +121,7 @@ export default function OAuthTosWarningModal({
           </button>
           <button
             type="button"
-            className="btn btn-primary"
+            className={danger ? "btn btn-primary oauth-tos-continue--danger" : "btn btn-primary"}
             disabled={!acknowledged || submitted}
             onClick={handleContinue}
           >

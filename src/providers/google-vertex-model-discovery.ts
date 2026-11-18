@@ -8,6 +8,7 @@ import {
 } from "../lib/gcp-adc";
 import type { OcxProviderConfig } from "../types";
 import { resolveProviderApiKey } from "./api-key-resolve";
+import { googleVertexLocationConfigError } from "./google-vertex-location";
 import { captureVertexAmbientKey } from "./vertex-environment-authority";
 import { extractGoogleAiStudioModelItems } from "./google-ai-studio-model-discovery";
 import {
@@ -32,6 +33,22 @@ const VERTEX_PUBLISHER_MODEL_PREFIX = "publishers/google/models/";
 const VERTEX_GENERATIVE_MODEL_ID = /^(?:gemini|gemma)-/i;
 const VERTEX_NON_CHAT_SKU = /(?:^|-)embedding(?:-|$)|-tts(?:-|$)|-transcribe(?:-|$)|(?:^|-)live(?:-|$)/i;
 const VERTEX_TRAILING_API_VERSION = /\/v1(?:beta1?)?$/i;
+
+/** The same Google authorities inference constructs; a base URL never grants credential access. */
+function vertexDiscoveryOrigin(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:" || url.username || url.password || url.port || url.hash) return undefined;
+    const host = "aiplatform.googleapis.com";
+    if (url.hostname === host) return url.origin;
+    const suffix = `-${host}`;
+    if (url.hostname.endsWith(suffix)
+      && googleVertexLocationConfigError(url.hostname.slice(0, -suffix.length)) === null) return url.origin;
+  } catch {
+    // An invalid destination is unavailable discovery, without resolving a credential.
+  }
+  return undefined;
+}
 
 /** Time budget for one Vertex discovery: ADC token resolution, then every follow-up page. */
 export const VERTEX_DISCOVERY_TIMEOUT_MS = 8_000;
@@ -150,9 +167,10 @@ export function resolveObservedVertexDiscoveryToken(provider: OcxProviderConfig)
 
 /** The passive gather's credential with its authority bound, for the same send-time checks. */
 export function resolveObservedVertexDiscoveryAuth(provider: OcxProviderConfig): VertexDiscoveryAuth | undefined {
-  if (provider.authMode === "forward" || isVertexApiKeyPoolPaused(provider)) return undefined;
+  const origin = vertexDiscoveryOrigin(provider.baseUrl);
+  if (!origin || provider.authMode === "forward" || isVertexApiKeyPoolPaused(provider)) return undefined;
   const selection = selectVertexDiscoveryCredential(provider);
-  return selection.kind === "api-key" ? apiKeyDiscoveryAuth(selection) : undefined;
+  return selection.kind === "api-key" ? apiKeyDiscoveryAuth(selection, origin) : undefined;
 }
 
 /**
@@ -175,10 +193,10 @@ function sameVertexSelection(left: VertexDiscoveryCredential, right: VertexDisco
  * observed when it was read (`captureVertexAmbientKey`, the record inference binds), so an A→B→A
  * change of the variable invalidates it even though the bytes match again.
  */
-function apiKeyDiscoveryAuth(selection: { key: string | undefined; ambient?: true }): VertexDiscoveryAuth | undefined {
+function apiKeyDiscoveryAuth(selection: { key: string | undefined; ambient?: true }, origin: string): VertexDiscoveryAuth | undefined {
   if (!selection.key) return undefined;
   const auth: VertexDiscoveryAuth = { token: selection.key, kind: "api-key" };
-  if (selection.ambient) bindVertexRequestAuthority(auth, "", selection.key, { ambientKey: captureVertexAmbientKey(selection.key) });
+  if (selection.ambient) bindVertexRequestAuthority(auth, origin, selection.key, { ambientKey: captureVertexAmbientKey(selection.key) });
   return auth;
 }
 
@@ -197,20 +215,27 @@ function apiKeyDiscoveryAuth(selection: { key: string | undefined; ambient?: tru
 export async function resolveVertexDiscoveryAuth(
   provider: OcxProviderConfig,
   signal: AbortSignal = vertexDiscoveryDeadline(),
+  options: { forceExchange?: boolean } = {},
 ): Promise<VertexDiscoveryAuth | undefined> {
-  if (provider.authMode === "forward" || isVertexApiKeyPoolPaused(provider)) return undefined;
+  const origin = vertexDiscoveryOrigin(provider.baseUrl);
+  if (!origin || provider.authMode === "forward" || isVertexApiKeyPoolPaused(provider)) return undefined;
   const selection = selectVertexDiscoveryCredential(provider);
-  if (selection.kind === "api-key") return apiKeyDiscoveryAuth(selection);
+  if (selection.kind === "api-key") return apiKeyDiscoveryAuth(selection, origin);
   let authority: Awaited<ReturnType<typeof getVertexAccessTokenWithAuthority>>;
   try {
     const markerAccount = gcpCredentialMarkerAccount(selection.marker);
-    authority = await getVertexAccessTokenWithAuthority({ signal, ...(markerAccount ? { markerAccount } : {}) });
+    authority = await getVertexAccessTokenWithAuthority({
+      signal,
+      ...(markerAccount ? { markerAccount } : {}),
+      ...(options.forceExchange ? { forceExchange: true } : {}),
+    });
   } catch {
     return undefined;
   }
-  if (!sameVertexSelection(selection, selectVertexDiscoveryCredential(provider))) return undefined;
+  if (origin !== vertexDiscoveryOrigin(provider.baseUrl)
+    || !sameVertexSelection(selection, selectVertexDiscoveryCredential(provider))) return undefined;
   const auth: VertexDiscoveryAuth = { token: authority.token, kind: "adc", ...(selection.marker ? { marker: selection.marker } : {}) };
-  bindVertexRequestAuthority(auth, "", `Bearer ${authority.token}`, {
+  bindVertexRequestAuthority(auth, origin, `Bearer ${authority.token}`, {
     source: authority.source,
     generation: authority.generation,
     ...(authority.markerAccount ? { markerAccount: authority.markerAccount } : {}),
@@ -227,7 +252,8 @@ export async function resolveVertexDiscoveryToken(
 }
 
 /**
- * Send-time check, run before every discovery request (`beforeSend`): the row still selects the
+ * Send-time check, run before every discovery request (`beforeSend`): the actual URL stays on the
+ * approved Google origin, and the row still selects the
  * credential this token came from, an ADC token's source and generation are still current (the
  * check inference runs before dispatch), and the outgoing headers carry it in that scheme's header
  * and not the other one. Any change cancels the send, first page and follow-up pages alike, so a
@@ -237,11 +263,14 @@ export function vertexDiscoveryAuthIsCurrent(
   provider: OcxProviderConfig,
   auth: VertexDiscoveryAuth,
   headers: Record<string, string>,
+  url: string,
 ): boolean {
-  if (provider.authMode === "forward" || isVertexApiKeyPoolPaused(provider)) return false;
-  // ADC source/generation and the ambient-key generation, exactly as inference checks them. Checked
-  // first so every send-time check also observes the current ambient key, as inference does.
-  if (!vertexRequestAuthorityIsCurrent(auth)) return false;
+  const origin = vertexDiscoveryOrigin(provider.baseUrl);
+  if (!origin || vertexDiscoveryOrigin(url) !== origin
+    || provider.authMode === "forward" || isVertexApiKeyPoolPaused(provider)) return false;
+  // Recheck ADC source/generation and the ambient-key generation after destination admission,
+  // before comparing the current selection, exactly as inference checks them.
+  if (!vertexRequestAuthorityIsCurrent(auth, origin)) return false;
   const current = selectVertexDiscoveryCredential(provider);
   const issued: VertexDiscoveryCredential = auth.kind === "api-key"
     ? { kind: "api-key", key: auth.token }
@@ -268,6 +297,11 @@ export function buildVertexModelsDiscoveryRequest(
   resolveUrl: (defaultUrl: string) => string,
 ): { url: string; headers: Record<string, string> } {
   const base = effectiveProvider.baseUrl.replace(/\/+$/, "").replace(VERTEX_TRAILING_API_VERSION, "");
+  // Keep a credential-free request available for catalog capture/fallback, but never attach
+  // a Google credential to a destination outside the origin admitted before resolution.
+  const url = resolveUrl(`${base}/v1beta1/publishers/google/models?pageSize=300`);
+  const origin = vertexDiscoveryOrigin(effectiveProvider.baseUrl);
+  if (!origin || vertexDiscoveryOrigin(url) !== origin) return { url, headers };
   if (usesVertexApiKeyForDiscovery(effectiveProvider)) {
     if (apiKey) headers["x-goog-api-key"] = apiKey;
   } else {
@@ -282,7 +316,7 @@ export function buildVertexModelsDiscoveryRequest(
   // Vertex ModelGardenService.ListPublisherModels enforces a maximum pageSize of 300
   // (values > 300 return HTTP 400 INVALID_ARGUMENT); later pages follow nextPageToken.
   return {
-    url: resolveUrl(`${base}/v1beta1/publishers/google/models?pageSize=300`),
+    url,
     headers,
   };
 }
