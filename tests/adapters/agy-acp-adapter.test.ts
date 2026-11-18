@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { createAgyAcpAdapter, AGY_ACP_ARGS, type AgyAcpDeps } from "../../src/adapters/agy-acp/adapter";
+import { MAX_ACP_LINE_BYTES } from "../../src/adapters/agy-acp/acp";
 import { AgyAcpTreeCleanupError, createTurnWorkspace, reapProcessTree, type AgyAcpChild } from "../../src/adapters/agy-acp/process";
 import * as windowsAcl from "../../src/lib/windows-secret-acl";
 import { runWithRequestPeer } from "../../src/lib/request-peer-scope";
@@ -537,6 +538,21 @@ describe("agy acp turn", () => {
       deps: { reap: async () => { reaped = true; } },
     })).rejects.toBeInstanceOf(RangeError);
     expect({ escaped, reaped, sentPrompt }).toEqual({ escaped: false, reaped: true, sentPrompt: false });
+  });
+
+  test.each([0, 1])("completed lines respect the frame byte limit across reads (+%d)", async extra => {
+    let child!: FakeChild;
+    const h = await run(script((frame, _api) => {
+      if (frame.method !== "session/prompt") return;
+      const reply = JSON.stringify({ jsonrpc: "2.0", id: frame.id, result: { stopReason: "end_turn" } });
+      const line = reply.padStart(MAX_ACP_LINE_BYTES + extra);
+      child.stdout.write(line.slice(0, -1));
+      child.stdout.write(line.slice(-1) + "\n");
+      return true;
+    }), { beforeRun: spawned => { child = spawned; } });
+    expect(terminal(h)).toEqual(extra
+      ? [expect.objectContaining({ type: "error", code: "agy_acp_protocol", message: expect.stringContaining("frame over the line limit") })]
+      : [{ type: "done" }]);
   });
 
   test("a local interactive turn: initialize, session/new in the private workspace, prompt, one done", async () => {

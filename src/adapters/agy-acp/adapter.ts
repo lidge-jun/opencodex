@@ -450,6 +450,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
     }
 
     function flush(rawLine: string): void {
+      if (Buffer.byteLength(rawLine, "utf8") > MAX_ACP_LINE_BYTES) return fail("agy_acp_protocol", "frame over the line limit");
       const line = rawLine.trim();
       if (!line || settled) return;
       let parsedFrame: unknown;
