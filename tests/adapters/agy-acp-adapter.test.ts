@@ -522,7 +522,10 @@ describe("agy acp turn", () => {
     expect(methods(h)).toEqual(["initialize", "session/new", "session/prompt"]);
     expect(h.sent[0]!.params).toMatchObject({ protocolVersion: 1, clientCapabilities: {} });
     expect(h.sent[1]!.params).toEqual({ cwd: "/tmp/ocx-agy-acp-test", mcpServers: [] });
+    // Both buffered deltas report activity before the terminal flush.
     expect(h.events).toEqual([
+      { type: "heartbeat" },
+      { type: "heartbeat" },
       { type: "thinking_delta", thinking: "thinking" },
       { type: "text_delta", text: "hello" },
       { type: "done" },

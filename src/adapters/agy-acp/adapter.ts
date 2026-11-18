@@ -437,7 +437,9 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
           redactor = new AcpOutputRedactor();
           outputRedactors.set(event.type, redactor);
         }
-        emitOutput(event.type, redactor.push(event.type === "text_delta" ? event.text : event.thinking));
+        const output = redactor.push(event.type === "text_delta" ? event.text : event.thinking);
+        if (output) emitOutput(event.type, output);
+        else emit({ type: "heartbeat" });
       }
     }
 
