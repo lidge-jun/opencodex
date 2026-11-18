@@ -144,7 +144,7 @@ resume <provider> <id|alias|main>  Return a paused account to automatic selectio
 pause-exhausted <provider>  Pause every account whose quota is spent.
 clear-cooldown <openai|anthropic> <id|alias|main>  Drop a cooldown the proxy set after an upstream failure.
 reset-affinity <anthropic|anthropic2> [--json]  Confirm all session bindings are cleared, even with no accounts; selection and pause state stay unchanged. Run on the Home; a Remote Link Child names the Home and sends no request.
-strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first>]  Stratégie du pool ; least-loaded est réservé à Kiro.
+strategy <provider> [<quota|round-robin|fill-first|least-loaded|reset-first|preserve-long-quota>]  Stratégie du pool ; least-loaded est réservé à Kiro.
 sticky <provider> [<1-100>]  Requests a bound thread keeps on one account; omit the value to read it.
 priority <provider> <id|alias|main> [first|earlier|normal|later|last|-100..100|reset]  Selection order; omit the value to read it.
 remove <provider> <id|alias|main> --yes  Remove a stored account or key after an existence check.

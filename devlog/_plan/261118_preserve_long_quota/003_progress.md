@@ -1,0 +1,31 @@
+# SDD ledger — plan: devlog/_plan/261118_preserve_long_quota/002_implementation_plan.md
+
+BASE: adf25aae6ff4962bd9e79a86bf8be56a3a8e0b61
+Execution: native, user-approved branch feat/preserve-long-quota; no live launch/credentials/config changes.
+
+Pre-flight: Task 1 produces Codex parser union and routing picker; Task 2 consumes parser and publishes strategy; compatible.
+Pre-flight: Task 2 API publishes preserve-long-quota; Task 3 consumes same string; compatible.
+
+Ruling: Использовать devlog progress вместо shell-generated workspace/briefs — пользователь разрешает менять проектные файлы только Edit/Write; approved plan/spec доступны в контексте — дополнительный tracked progress файл.
+Ruling: Не создавать worktree — пользователь утвердил отдельную ветку в имеющемся checkout, исходное дерево чистое — checkout занят до завершения задачи.
+Task 1: Расширение quota provenance одобрено пользователем: новый признак short-only происходит только из полного WHAM topology; частичные headers не доказывают отсутствие long windows.
+Task 1: complete — routing tests RED 15 failures (/tmp/ocx-preserve-red.log) → GREEN; последние combined tests 336 pass, 0 fail (/tmp/ocx-preserve-focused.log).
+Task 2: complete — API/CLI, справка и generated skill surface обновлены. CLI RED 1 failure (/tmp/ocx-preserve-cli-red.log) → GREEN; legacy/unified API roundtrip и generic/Anthropic отказ проверены; 23 skill tests PASS.
+Task 3: UI реализован, 11 locales; GUI RED 2 failures → GREEN 25 pass (/tmp/ocx-preserve-gui-green.log). Документация EN/RU описывает алгоритм, остальные переводы синхронизируют enum и CLI. GUI build/lint:i18n PASS; docs build PASS 766 pages; structure/privacy/typecheck/guards PASS. Две новые source/test записи staged только для structure gate; остальное unstaged, коммитов нет.
+Final review: fresh opus reviewer нашёл 3 Important (contradictory WHAM, credential-incarnation fence, native-main proof). Все воспроизведены: 4 RED tests /tmp/ocx-preserve-review-red.log → 197 GREEN tests /tmp/ocx-preserve-review-green.log. Реализация перенесла proof в process-local Map, getter проверяет pool publication UUID/live main writer, общая WHAM derivation поддерживает main и pool. Дополнительно проверяется ABA и повторное полное подтверждение новой identity.
+Final: Ruling: proof не восстанавливается с диска — credential identity нельзя доказать одним cached snapshot — после перезапуска short-only теряет приоритет до нового полного WHAM.
+Final: Ruling: Live upstream quota savings и production-client поведение вне проверки по утверждённому scope — нужны отдельный безопасный запуск и реальные наблюдения — fixtures не доказывают реальные ёмкости подписок.
+Final: Ruling: official installation проверена readiness (тот же pid37514/port10100), не изменялась нашими командами — isolated launch/updater ещё не проверены — следующий этап остаётся необходимым.
+Final: Ruling: полностью локализованы UI label/hint в 11 locales; подробное описание docs обновлено EN/RU, enum/CLI в остальных существующих переводах — локальные translated guides не обещают новую семантику — подробные переводы могут отставать.
+Broad verification: первый test:changed фактически запустил 56340 tests/2440 files: 56079 pass,257 skip,4 fail (/tmp/ocx-preserve-changed.log). Failures: docs-spanish-localization guides/claude-code.md missing inline tokens; client-link-tunnel macOS process reader unresolved vs absent; два link-ocx-child-e2e без cargo/prebuilt binary. Первые два повторены отдельно: /tmp/ocx-preserve-unrelated.log,82 pass/2fail. Затронутые этими падениями исходники/guide страницы не менялись.
+Final broad run: bnq4mqwrw завершился exit1, 56069 pass/257 skip/18 fail/56344 tests,554s (/tmp/ocx-preserve-changed-final.log). 14 новых падений main-quota-evidence-validation оказались нарушением публичной формы policy parser из-за enumerable false metadata. RED этого полного прогона → GREEN 377 focused tests: topology verdict перенесён в WeakMap, parser object shape не меняется. Остальные 4 падения совпадают с первым широким прогоном.
+Task b5imz36ab остановлен: прямой all-Codex прогон был начат до последних исправлений и затянулся; итоговой проверки из него не заявлять.
+Final regression run exact-final code: /tmp/ocx-preserve-final-regressions.log — 636 pass/0fail across12files (routing, quotas, parser compatibility, CLI, API, skill, file-size/test-layout guards). GUI:25pass, lint:i18n/build PASS на неизменённом frontend. Final typecheck2534files/privacy/structure PASS; docs766pages build PASS. git diff --check PASS.
+Final: Ruling: не исправлять 4 посторонних падения и не повторять ещё раз всю 56k suite после последнего compatibility fix — два широких прогона занимали по9мин, фактический regression воспроизведён/исправлен с exact-final focused636 tests — вся финальная suite НЕ подтверждена зелёной.
+Final: fixed parser-shape compatibility — 14 RED случаев широкого прогона → 377 focused GREEN → exact-final636 GREEN; служебный verdict в WeakMap, прежний публичный объект policy parser сохранён. Широкий exact-final прогон после этой правки не выполнялся.
+Task 3: complete в утверждённом экспериментальном объёме; не release-ready из-за широких красных gates и отсутствия live-validation. Final review Critical0/Important3 исправлены RED→GREEN; minor deferred: none. Второе ревью не запускалось.
+Не запускать live proxy. Предложить commit через AskUserQuestion с вариантами Commit / Don't commit / More edits и сообщением feat: add long-term quota preservation strategy. Перед коммитом загрузить git-commit-conventions, ждать явного разрешения. No push.
+Verification: typecheck PASS 2534 files (/tmp/ocx-preserve-typecheck.log).
+Ruling: Short-only proof сохраняет собственный observedAt, действует 6 часов (как legacy cache TTL), не продлевается partial headers; новый long/custom snapshot снимает привилегию — защита от устаревшего набора лимитов — возможен консервативный fallback до очередного полного WHAM.
+Ruling: При неполном short tie-break сравнивать usage сразу для всей группы, а не попарно — исключает нетранзитивность comparator — в ничьей с неполными данными короткий reset не влияет.
+Fixture correction: simulated now на 1 секунду позже wall-clock публикации; исходный now до публикации делал реальное observedAt будущим. Production future-proof guard оставлен.

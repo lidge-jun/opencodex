@@ -109,6 +109,8 @@ export type StoredAccountQuota = {
   /** Local short-usage observation time; partial/credit updates do not refresh it. */
   shortObservedAt?: number;
   shortWindowSeconds?: number;
+  /** Runtime-проекция identity-bound WHAM-доказательства отсутствия длинных окон. */
+  shortOnlyObservedAt?: number;
   customWindows?: Array<{ label: string; percent: number; resetAt?: number }>;
   resetCredits?: number;
   /** Spendable usage credits; resetCredits are separate, manually redeemed reset tickets. */

@@ -762,6 +762,30 @@ describe("unified pool-settings contract (#695 wp5c)", () => {
     if (dir) removeTreeWithRetry(dir);
   });
 
+  test("preserve-long-quota round-trips only through Codex settings", async () => {
+    const server = startServer(0);
+    try {
+      for (const provider of ["openai", "anthropic", "google-antigravity"]) {
+        const response = await fetch(new URL("/api/pool/settings", server.url), {
+          method: "PUT", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ provider, strategy: "preserve-long-quota" }),
+        });
+        expect(response.status).toBe(provider === "openai" ? 200 : 400);
+        if (provider === "openai") expect(await response.json()).toMatchObject({ strategy: "preserve-long-quota" });
+        else await response.text();
+      }
+      const read = await fetch(new URL("/api/pool/settings?provider=openai", server.url));
+      expect(await read.json()).toMatchObject({ kind: "codex", strategy: "preserve-long-quota" });
+      const request = new Request("http://localhost/api/codex-auth/pool-strategy", {
+        method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ strategy: "preserve-long-quota" }),
+      });
+      const response = await handleCodexAuthAPI(request, new URL(request.url), loadConfig());
+      expect(response!.status).toBe(200);
+      expect(await response!.json()).toMatchObject({ accountPoolStrategy: "preserve-long-quota" });
+      expect(loadConfig().accountPoolStrategy).toBe("preserve-long-quota");
+    } finally { await server.stop(true); }
+  });
+
   test("reset-first round-trips through Codex settings and generic pools, never Anthropic", async () => {
     const server = startServer(0);
     try {

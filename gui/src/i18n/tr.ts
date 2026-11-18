@@ -2945,6 +2945,9 @@ export const tr: Record<TKey, string> = {
 
   "accountPool.strategy": "Rotasyon stratejisi",
   "accountPool.strategyDesc": "OpenCodex'in yeni bir göreve nasıl hesap atayacağı.",
+  "accountPool.strategyPreserveLongQuota": "Uzun vadeli kotayı koru",
+  "accountPool.strategyHintPreserveLongQuota": "Önce yalnızca kısa kotası olduğu doğrulanan hesapları, ardından haftalık ve aylık kotaları tercih eder. Her grupta en uzun pencerenin en yakın sıfırlamasını seçer. Bilinmeyen pencereler yedek kalır. Bağlı görevlerin bağlılık politikası korunur; bağımsız model kotaları kullanıma göre sıralanır.",
+  "accountPool.preserveBelowThreshold": "{threshold}% altında uzun vadeli kotayı koru",
   "accountPool.strategyResetFirst": "En yakın sıfırlama önce",
   "accountPool.strategyResetNearWeighted": "En yakın sıfırlamaya göre ağırlıklı",
   "accountPool.strategyHintResetFirst": "Eşiğin altındaki hesaplar arasından sonraki 5 saatlik veya haftalık sıfırlaması en yakın olanı seçer. Bağlı görevler yapılandırılmış bağlılık politikasını izler. Bağımsız model kotaları kullanıma göre sıralanır.",

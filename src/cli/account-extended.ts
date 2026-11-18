@@ -58,7 +58,7 @@ const EXTENDED_USAGE = `Usage:
   ocx account pause <provider> <id|alias|main> [--json]
   ocx account resume <provider> <id|alias|main> [--if-healthy] [--json]
   ocx account pause-exhausted <provider> [--json]
-  ocx account strategy <provider> [<quota|round-robin|fill-first|reset-near-weighted|least-loaded|reset-first>] [--json]
+  ocx account strategy <provider> [<quota|round-robin|fill-first|reset-near-weighted|least-loaded|reset-first|preserve-long-quota>] [--json]
   ocx account sticky <provider> [<1-100>] [--json]
   ocx account routes <anthropic|anthropic2> [--file <json-file>|--clear] [--json]
   ocx account remove <provider> <id|alias|main> --yes [--json]
@@ -1114,6 +1114,8 @@ async function poolSetting(
           : autoSwitchThreshold > 0
           ? (strategy === "fill-first"
               ? `drain at ${autoSwitchThreshold}%`
+              : strategy === "preserve-long-quota"
+              ? `preserve long-term quota below ${autoSwitchThreshold}%`
               : strategy === "reset-first"
               ? `nearest reset below ${autoSwitchThreshold}%`
               : `switch at ${autoSwitchThreshold}%`)
