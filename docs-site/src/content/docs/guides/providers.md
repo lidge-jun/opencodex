@@ -908,7 +908,8 @@ or Abliteration custom provider.
 extra-usage bar when Anthropic reports enabled extra usage and no plan windows. The reading
 comes without a reset date. The bar clears when Anthropic reports plan windows or confirms that
 extra usage is disabled. If the response supplies no usable quota window, the account quota check
-still reports that the reading is unavailable.
+still reports that the reading is unavailable, including after a provider quota refresh receives
+the same response.
 
 **Kimi Coding Plan quota.** Account login and API-key providers on the canonical
 `https://api.kimi.com/coding/v1` endpoint read `/usages`. API-key providers on the regional

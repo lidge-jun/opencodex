@@ -74,13 +74,13 @@ export async function fetchAnthropicAccountQuota(
     const retained = previous?.isCurrent?.() === false ? undefined : previous;
     const isCurrent = result?.isCurrent ?? flightCurrent;
     const retirementOnly = result?.quota === null;
-    const quotaUnavailable = !result?.quota;
     const quota = retirementOnly ? withoutAnthropicMonthlyFallback(getCachedProviderAccountQuota(instance, accountId))
       : result?.quota ?? retained?.quota;
     const entry: AccountQuotaCacheEntry = {
-      ts: Date.now(), quota: normalizeAnthropicQuota(quota, Date.now()),
-      ...(quotaUnavailable ? { unavailable: true as const } : {}), isCurrent,
-      ...(quotaUnavailable && failure ? { quotaFailure: failure, quotaFailureIsCurrent: isCurrent } : {}),
+      ts: Date.now(), quota: normalizeAnthropicQuota(quota, Date.now()), isCurrent,
+      ...result?.failureFields,
+      ...(!result ? { unavailable: true as const } : {}),
+      ...(!result && failure ? { quotaFailure: failure, quotaFailureIsCurrent: isCurrent } : {}),
     };
     if (isCurrent() && mayCommitAccountQuotaKey(key, writerGeneration)) {
       commitAnthropicAccountQuota(key, entry, !!result && result.quota?.monthlyPercent === undefined, result?.dispatch);

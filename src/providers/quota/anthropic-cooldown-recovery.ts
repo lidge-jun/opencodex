@@ -1,7 +1,7 @@
 import { boundDecisionWindows, publishAnthropicDecisionQuota } from "../quota-decision-publication";
 import { decisionQuotaSinkActive, publishDecisionAccountQuota } from "../../lib/decision-quota-sink";
 import { mergeAnthropicFamilyWindows, hasAnthropicFamilyEnumeration } from "./anthropic-family-headers";
-import { getCachedProviderAccountQuota, captureProviderAccountQuotaEpoch } from "./account-cache";
+import { getCachedProviderAccountQuota, captureProviderAccountQuotaEpoch, type AccountQuotaCacheEntry } from "./account-cache";
 import { anthropicModelQuotaFor } from "../../oauth/anthropic-model-quota";
 import type { AnthropicInstanceId } from "../anthropic-instance-id";
 import type { GenerationContext } from "../../lib/state-store-sweeper";
@@ -25,6 +25,8 @@ export type AnthropicQuotaRecoveryResult = Readonly<{
   instance: AnthropicInstanceId;
   /** Null only when the response retires the monthly fallback without supplying meters. */
   quota: ProviderQuota | null;
+  /** Account cache diagnostics for a retirement-only response. */
+  failureFields?: Pick<AccountQuotaCacheEntry, "unavailable" | "quotaFailure" | "quotaFailureIsCurrent">;
   dispatch?: number;
   /** Publishes secret-free advisory evidence for the primary pool only; a no-op for Pool 2. */
   publishDecisionQuota(): void;
@@ -182,6 +184,10 @@ function createAnthropicCooldownRecovery(instance: AnthropicInstanceId) {
       const isCurrent = () => probe.isCurrent() && observationCurrent();
       return {
         instance, quota: null, dispatch: observation.dispatch, isCurrent,
+        failureFields: {
+          unavailable: true,
+          ...(observation.failure ? { quotaFailure: observation.failure, quotaFailureIsCurrent: isCurrent } : {}),
+        },
         publishDecisionQuota: () => {
           if (instance === "anthropic" && decisionQuotaSinkActive() && isCurrent()) {
             publishAnthropicDecisionQuota(accountId, probe.generation, null, true);

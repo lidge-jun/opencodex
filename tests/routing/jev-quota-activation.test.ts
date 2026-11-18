@@ -14,6 +14,7 @@ import { handleComboRoutes } from "../../src/server/management/combo-routes";
 import { ConfigWritePublishedError } from "../../src/config/persist-unlocked";
 import * as oauthStoreModule from "../../src/oauth/store";
 import { readAnthropicUsageQuota } from "../../src/providers/claude-cli-usage";
+import { fetchProviderAccountQuotas, fetchProviderQuotaReports } from "../../src/providers/quota";
 import { publishAnthropicDecisionQuota, publishCodexDecisionQuota } from "../../src/providers/quota-decision-publication";
 import { probeAnthropicQuotaWithRecovery } from "../../src/providers/quota/anthropic-cooldown-recovery";
 import { fetchAnthropicAccountQuota } from "../../src/providers/quota/anthropic-account-quota";
@@ -313,6 +314,58 @@ describe("opt-in JEV quota activation", () => {
     expect(getCachedProviderAccountQuota("anthropic", authId)).toBeNull();
     expect(windows()).toEqual([]);
     expect(tier()).toBe("unknown");
+  });
+
+  test.each([
+    ["malformed five-hour usage", { five_hour: { note: "no meter" } }],
+    ["disabled extra usage", { extra_usage: { is_enabled: false } }],
+  ] as const)("Anthropic provider refreshes preserve the account failure for %s", async (_name, body) => {
+    const { authId } = await seedStores();
+    const live = config();
+    live.providers.anthropic = { adapter: "anthropic", authMode: "oauth", baseUrl: "https://fixture.invalid", models: ["claude-sonnet-4"] };
+    reconcileJevQuotaActivation(live);
+    clearAccountQuotaCache();
+    const path = join(homes[0]!.configDir, "provider-account-quota-cache.json");
+    const disk = () => JSON.parse(readFileSync(path, "utf8")).rows[accountCacheKey("anthropic", authId)];
+    const windows = () => readLoadedDecisionQuotaPool("anthropic")?.find(row => row.id === authId)?.windows;
+    const read = (force: boolean) => fetchProviderAccountQuotas("anthropic", force, live.providers.anthropic, live);
+    const fetch = spyOn(globalThis, "fetch")
+      .mockImplementationOnce(async () => Response.json({ extra_usage: { is_enabled: true, utilization: 100 } }))
+      .mockImplementation(async () => Response.json(body));
+    const flushDisk = async () => {
+      jest.advanceTimersByTime(1_000);
+      await settleAccountQuotaPersistForTests();
+    };
+    jest.useFakeTimers();
+    try {
+      await read(true);
+      await flushDisk();
+      expect(getCachedProviderAccountQuota("anthropic", authId)?.monthlyPercent).toBe(100);
+      expect(windows()).toMatchObject([{ window: "monthly", percent: 100 }]);
+      expect(disk()).toMatchObject({ monthlyPercent: 100 });
+
+      const failure = { quota: null, unavailable: true, quotaFailure: "response_unusable" };
+      const expectRetired = async () => {
+        await flushDisk();
+        expect(getCachedProviderAccountQuota("anthropic", authId)).toBeNull();
+        expect(windows()).toEqual([]);
+        expect(disk()).toBeUndefined();
+      };
+      expect(await read(true)).toMatchObject([failure]);
+      await expectRetired();
+
+      const cachedReads = [];
+      for (let i = 0; i < 3; i++) {
+        await fetchProviderQuotaReports(live, true);
+        cachedReads.push(await read(false));
+        await expectRetired();
+      }
+      expect(fetch).toHaveBeenCalledTimes(5);
+      expect(cachedReads).toMatchObject([[failure], [failure], [failure]]);
+    } finally {
+      clearAccountQuotaCache();
+      jest.useRealTimers();
+    }
   });
 
   for (const writer of ["account", "provider"] as const) {

@@ -238,10 +238,10 @@ invalidates the primary pool. With the pool on and two or more accounts, `fetchA
 A failed probe names one closed `quotaFailure` code from
 `src/providers/quota/failure-codes.ts`: `account_unavailable` when no usable credential could
 be obtained (no request is sent), the HTTP status class (`access_denied`, `rate_limited`,
-`upstream_error`, `redirect_blocked`), `response_unusable` for a body with no usable quota, including retirement-only responses,
-and `timeout` or `transport_error` for a thrown dispatch. Ownership and cooldown refusals set
-no code. The code is published only while the flight is current, never carries upstream text,
-and never changes account health or `needsReauth`.
+`upstream_error`, `redirect_blocked`), `response_unusable` for a body with no usable quota,
+and `timeout` or `transport_error` for a thrown dispatch. Both probe writers cache `unavailable: true`
+and `quotaFailure: "response_unusable"` on retirement-only responses. Ownership and cooldown refusals
+set no code. The code requires a current flight, carries no upstream text and never changes account health or `needsReauth`.
 
 `src/providers/anthropic-reset-grant-ledger.ts` names the journal by instance:
 `anthropic-reset-grant-ledger.json` keeps the primary pool's existing bytes and records,
