@@ -46,11 +46,13 @@ Termination gets at most two attempts; a second failure permanently quarantines 
 pool and preserves both errors as the cleanup failure's cause. Repeated closes return that failure
 without restarting the retry budget. Windows teardown uses the
 shared `src/adapters/coding-agent/process-tree.ts` helper (`taskkill /T /F`, bounded to five seconds)
-before releasing the wrapper; POSIX sessions use a separate process group. Cleanup verifies exit
-and reports failure if it cannot confirm termination. On Windows the OS PID check also handles
-Bun retaining null child exit fields after an external tree kill.
+before releasing the wrapper. POSIX cleanup sends TERM to the detached process group, escalates
+to KILL if the group survives the grace period, and retains ownership until a bounded group probe
+returns ESRCH, including when the wrapper has already exited. On Windows the OS PID check also
+handles Bun retaining null child exit fields after an external tree kill.
 Explicit registry clears await every pool and retain failed pools, so clearing state cannot bypass
-quarantine. The synchronous optional shutdown hook starts the same clear and reports failure.
+quarantine. Graceful proxy shutdown awaits the same clear through the bounded asynchronous
+optional-shutdown hook and reports incomplete cleanup as a shutdown failure.
 
 ## Tools arrive as inline SDK tools, not an MCP catalog
 

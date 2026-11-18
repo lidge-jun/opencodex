@@ -12,9 +12,8 @@
  * A subsystem registers its teardown when it activates. A process that never activates it
  * registers nothing, so shutdown does no work and loads no module.
  *
- * Hooks are synchronous and best-effort by contract: `drainAndShutdown` runs under an
- * absolute deadline, so a hook that throws must not prevent its siblings — or
- * `server.stop` — from running.
+ * Synchronous hooks are best-effort. Subsystems that own processes can register an
+ * asynchronous cleanup receipt with its own bounded wait after the active-turn drain.
  *
  * See devlog/_fin/260814_lab_core_decoupling/010_lifecycle_shutdown_registry.md
  */
@@ -22,6 +21,8 @@
 type ShutdownHook = () => void;
 
 const hooks = new Map<string, ShutdownHook>();
+const asyncHooks = new Map<string, () => Promise<void>>();
+const OPTIONAL_SHUTDOWN_JOIN_TIMEOUT_MS = 20_000;
 let hooksRan = false;
 
 /**
@@ -47,13 +48,18 @@ export function registerOptionalShutdownHook(key: string, hook: ShutdownHook): (
   };
 }
 
+/** Register a teardown whose completion must be awaited before graceful shutdown returns. */
+export function registerAsyncOptionalShutdownHook(key: string, hook: () => Promise<void>): void {
+  asyncHooks.set(key, hook);
+}
+
 /** Whether `runOptionalShutdownHooks` has run at least once since the last test reset. */
 export function didRunOptionalShutdownHooks(): boolean {
   return hooksRan;
 }
 
-/** Run every registered teardown. Never throws. */
-export function runOptionalShutdownHooks(): void {
+/** Run every teardown, reporting whether the asynchronous work completed successfully. */
+export async function runOptionalShutdownHooks(timeoutMs = OPTIONAL_SHUTDOWN_JOIN_TIMEOUT_MS): Promise<boolean> {
   hooksRan = true;
   for (const [key, hook] of [...hooks]) {
     try {
@@ -65,11 +71,34 @@ export function runOptionalShutdownHooks(): void {
       );
     }
   }
+  if (asyncHooks.size === 0) return true;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const deadline = new Promise<false>(resolve => {
+      timer = setTimeout(() => {
+        console.warn("[shutdown] optional subsystem teardown timed out");
+        resolve(false);
+      }, timeoutMs);
+    });
+    const cleanup = Promise.all([...asyncHooks].map(async ([key, hook]) => {
+      try {
+        await hook();
+        return true;
+      } catch {
+        console.warn(`[shutdown] optional subsystem "${key}" teardown failed`);
+        return false;
+      }
+    }));
+    return await Promise.race([cleanup.then(results => results.every(Boolean)), deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** Test-only reset so an isolated lifecycle test does not inherit registrations. */
 export function resetOptionalShutdownHooksForTests(): void {
   hooks.clear();
+  asyncHooks.clear();
   drainStartHooks.clear();
   drainStartHooksRan = false;
   hooksRan = false;

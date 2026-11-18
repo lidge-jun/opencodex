@@ -9,6 +9,7 @@ import {
   isLabAutomationSchedulerRunning,
 } from "../../src/lab/automation/orchestrator";
 import {
+  registerAsyncOptionalShutdownHook,
   registerOptionalShutdownHook,
   runOptionalShutdownHooks,
   resetOptionalShutdownHooksForTests,
@@ -16,6 +17,28 @@ import {
 
 describe("optional shutdown hooks", () => {
   beforeEach(() => resetOptionalShutdownHooksForTests());
+
+  test("joins asynchronous siblings even when one reports failure", async () => {
+    const receipt = Promise.withResolvers<void>();
+    let joined = false;
+    registerAsyncOptionalShutdownHook("failure", async () => { throw new Error("synthetic cleanup failure"); });
+    registerAsyncOptionalShutdownHook("cleanup", () => receipt.promise);
+    const shutdown = runOptionalShutdownHooks().then(result => { joined = true; return result; });
+    await Promise.resolve();
+    expect(joined).toBe(false);
+    receipt.resolve();
+    expect(await shutdown).toBe(false);
+  });
+
+  test("reports timeout for an asynchronous hook with no cleanup receipt", async () => {
+    const receipt = Promise.withResolvers<void>();
+    registerAsyncOptionalShutdownHook("pending", () => receipt.promise);
+    try {
+      expect(await runOptionalShutdownHooks(5)).toBe(false);
+    } finally {
+      receipt.resolve();
+    }
+  });
 
   test("running with nothing registered is a no-op", () => {
     expect(() => runOptionalShutdownHooks()).not.toThrow();

@@ -575,7 +575,7 @@ export async function drainAndShutdown(
     // Optional subsystems (Compatibility Lab today, anything added later) tear themselves
     // down through hooks registered at activation. A process that never activated one runs
     // nothing here and never loads its module graph.
-    runOptionalShutdownHooks();
+    if (!(await runOptionalShutdownHooks())) shutdownSucceeded = false;
     stopStateStoreSweeper();
     // The overlay reconciler is owner-scoped: the startServer stop override
     // releases THIS server's lease through runListenerShutdown →

@@ -36,6 +36,18 @@ export type StepSpawnFn = (command: string, args: readonly string[], options: Sp
  */
 const REQUIRED_CAPABILITIES = ["streaming-input", "sdk-tools"] as const;
 const CLEANUP_ATTEMPTS = 2;
+const KILL_CONFIRMATION_MS = 2_000;
+const PROCESS_GROUP_POLL_MS = 20;
+
+function processIsGone(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
+    throw error;
+  }
+}
 
 export interface StepSessionDeps {
   spawn?: StepSpawnFn;
@@ -610,10 +622,51 @@ export class StepCliSession {
   }
 
   async #terminate(child: ChildProcess): Promise<void> {
+    if (this.#platform !== "win32" && child.pid !== undefined) {
+      await this.#terminatePosixGroup(-child.pid);
+    } else {
+      await this.#terminateChild(child);
+    }
+    child.stdin?.destroy();
+    child.stdout?.destroy();
+    child.stderr?.destroy();
+    child.unref?.();
+    this.#child = undefined;
+  }
+
+  /** A wrapper's exit says nothing about the detached group it originally led. */
+  async #terminatePosixGroup(group: number): Promise<void> {
+    const signal = (kind: NodeJS.Signals): void => {
+      try {
+        process.kill(group, kind);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      }
+    };
+    if (processIsGone(group)) return;
+    signal("SIGTERM");
+    const escalateAt = performance.now() + this.#killGraceMs;
+    const deadline = escalateAt + KILL_CONFIRMATION_MS;
+    let escalated = false;
+    while (!processIsGone(group)) {
+      const now = performance.now();
+      if (!escalated && now >= escalateAt) {
+        signal("SIGKILL");
+        escalated = true;
+        continue;
+      }
+      if (now >= deadline) {
+        throw new StepSessionError("StepCode process group cleanup could not be confirmed.", "step_cli_cleanup_failed");
+      }
+      await Bun.sleep(Math.min(PROCESS_GROUP_POLL_MS, (escalated ? deadline : escalateAt) - now));
+    }
+  }
+
+  async #terminateChild(child: ChildProcess): Promise<void> {
     // A root-exit receipt cannot prove that a Windows tree kill succeeded. In particular, a
     // failed first attempt may have killed only the root; the retry must still confirm the tree.
     if ((child.exitCode !== null || child.signalCode !== null)
-      && !(this.#platform === "win32" && child.pid !== undefined)) return;
+      && child.pid === undefined) return;
     let cancelWait = (): void => {};
     const exited = new Promise<void>(resolve => {
       const finish = (): void => { cancelWait(); resolve(); };
@@ -626,25 +679,19 @@ export class StepCliSession {
     const cleanupFailed = new Promise<never>((_, reject) => { failCleanup = reject; });
     const gone = (): boolean => {
       if (child.pid === undefined) return child.exitCode !== null || child.signalCode !== null;
-      try { process.kill(child.pid, 0); return false; }
-      catch (error) { if ((error as NodeJS.ErrnoException).code === "ESRCH") return true; throw error; }
+      return processIsGone(child.pid);
     };
     const signal = (kind: NodeJS.Signals): void => {
       try {
-        if (this.#platform !== "win32" && child.pid !== undefined) process.kill(-child.pid, kind);
-        else child.kill(kind);
+        child.kill(kind);
       } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error; }
     };
     try {
-      if (this.#platform === "win32" && child.pid !== undefined) {
+      if (child.pid !== undefined) {
         (this.#deps.killWindowsProcessTree ?? killWindowsProcessTree)(child.pid);
         // Bun on Windows can retain null exit/signal fields after taskkill has reaped the tree.
         // Verify with the OS before releasing the process and its stdio handles.
-        if (gone()) {
-          child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy(); child.unref();
-          this.#child = undefined;
-          return;
-        }
+        if (gone()) return;
       } else {
         signal("SIGTERM");
         timer = this.#setTimer(() => {
@@ -657,13 +704,8 @@ export class StepCliSession {
             if (gone()) resolve();
             else reject(new StepSessionError("StepCode process cleanup could not be confirmed.", "step_cli_cleanup_failed"));
           } catch (error) { reject(error); }
-        }, this.#killGraceMs + 2_000);
+        }, this.#killGraceMs + KILL_CONFIRMATION_MS);
       })]);
-      // A POSIX parent can exit on SIGTERM while a descendant ignores it. The owned group still
-      // needs SIGKILL before the parent-close receipt releases cleanup.
-      if (this.#platform !== "win32" && child.pid !== undefined) signal("SIGKILL");
-      child.stdin?.destroy(); child.stdout?.destroy(); child.stderr?.destroy(); child.unref?.();
-      this.#child = undefined;
     } finally {
       if (timer !== undefined) this.#clearTimer(timer as never);
       if (deadline !== undefined) this.#clearTimer(deadline as never);

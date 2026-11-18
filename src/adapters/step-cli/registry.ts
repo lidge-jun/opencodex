@@ -1,5 +1,5 @@
 import { getConfigDir } from "../../config/paths";
-import { didRunDrainStartHooks, didRunOptionalShutdownHooks, registerOptionalShutdownHook } from "../../lib/optional-shutdown-hooks";
+import { didRunDrainStartHooks, didRunOptionalShutdownHooks, registerAsyncOptionalShutdownHook } from "../../lib/optional-shutdown-hooks";
 import type { AdapterEvent, OcxUsage } from "../../types";
 import { buildStepCliArgs } from "./profiles";
 
@@ -113,40 +113,7 @@ export function forgetQuery(session: StepConversationSession): void {
 export const pools = new Map<string, StepSessionPool>();
 
 const STEP_CLI_SHUTDOWN_KEY = "step-cli-sessions";
-let shutdownHookInstalled = false;
-
-/**
- * Close every live StepCode process when the proxy stops.
- *
- * The sibling CLI routes spawn a child per request and kill it in a `finally`, so they cannot outlive a
- * turn. This route deliberately keeps a process alive for a whole conversation, which means nothing
- * kills it on shutdown: measured, a stopped proxy left an orphaned `step` behind holding the user's
- * subscription session. Closing them here is the only thing standing between a restart and a leak.
- */
-
-/**
- * Close every live StepCode process when the proxy stops.
- *
- * The sibling CLI routes spawn a child per request and kill it in a `finally`, so they cannot outlive a
- * turn. This route deliberately keeps a process alive for a whole conversation, which means nothing
- * kills it on shutdown: measured, a stopped proxy left an orphaned `step` behind holding the user's
- * subscription session. Closing them here is the only thing standing between a restart and a leak.
- */
-export function ensureShutdownHook(): void {
-  if (shutdownHookInstalled) return;
-  shutdownHookInstalled = true;
-  registerOptionalShutdownHook(STEP_CLI_SHUTDOWN_KEY, () => {
-    // This core hook is synchronous/best-effort. The explicit async clear retains failed
-    // ownership and reports its rejection; the hook must observe that same failure too.
-    void clearStepCliSessions().catch(() => {
-      console.warn("[step-cli] Process cleanup failed; conversation pools remain quarantined.");
-    });
-  });
-}
-
-/** Drop every live session. Used by tests and available to a config reload. */
-
-/** Drop every live session. Used by tests and available to a config reload. */
+/** Close every owned process during proxy shutdown or an explicit registry clear. */
 export async function clearStepCliSessions(): Promise<void> {
   const closed = await Promise.allSettled([...pools].map(async ([home, pool]) => {
     await pool.closeAll();
@@ -162,9 +129,9 @@ export function poolFor(
   handlers: { onEvent(event: StepSessionEvent): void },
 ): StepSessionPool {
   if (didRunDrainStartHooks() || didRunOptionalShutdownHooks()) throw new StepSessionError("StepCode cannot open sessions while the proxy is shutting down.");
-  ensureShutdownHook();
   const existing = pools.get(home);
   if (existing) return existing;
+  registerAsyncOptionalShutdownHook(STEP_CLI_SHUTDOWN_KEY, clearStepCliSessions);
   const { env, cwd } = stepCliProcessEnvironment(home);
   const pool = new StepSessionPool(
     {
