@@ -6,7 +6,8 @@
  * workspace the CLI's request-review permission engine scopes file access to; it is not an OS sandbox.
  * The child runs in its own process group on POSIX and is reaped as a group: SIGTERM, then SIGKILL on
  * a timer that does not depend on the direct child closing, so a descendant that ignores TERM is
- * still killed. Windows uses the absolute System32 taskkill with /T /F while the leader is alive.
+ * still killed. Windows starts the absolute System32 taskkill with /T /F while the leader is alive
+ * and requires both a successful tree kill and leader closure before removing the workspace.
  */
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { chmod, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
@@ -64,13 +65,15 @@ function defaultKillWindowsTree(pid: number, completed: (ok: boolean) => void): 
   execFile(taskkill, ["/PID", String(pid), "/T", "/F"], { windowsHide: true, timeout: 5_000 }, error => completed(!error));
 }
 
-function warnWindowsTreeFailure(): void {
-  console.warn("Antigravity ACP could not confirm Windows process tree cleanup.");
+const WINDOWS_TREE_FAILURE = "Antigravity ACP could not confirm Windows process tree cleanup.";
+
+export class AgyAcpTreeCleanupError extends Error {
+  constructor() { super(WINDOWS_TREE_FAILURE); }
 }
 
 /**
- * Terminate the child's whole tree and resolve once it has closed or the reap timeout passed.
- * The SIGKILL to the group is sent after the grace period even when the leader already closed.
+ * Terminate the child's tree. Windows rejects if cleanup cannot be confirmed by the deadline.
+ * POSIX sends SIGKILL to the group even if the leader has already closed.
  */
 export function reapProcessTree(child: AgyAcpChild, options: ReapOptions): Promise<void> {
   const set = options.setTimeout ?? setTimeout;
@@ -86,33 +89,40 @@ export function reapProcessTree(child: AgyAcpChild, options: ReapOptions): Promi
   };
   const leaderGone = child.exitCode !== null || child.signalCode !== null;
   if (platform === "win32") {
-    if (leaderGone) return Promise.resolve();
-    return new Promise<void>(resolve => {
-      let treeResult: boolean | undefined;
+    const reportFailure = options.warnWindowsTreeFailure ?? (() => console.warn(WINDOWS_TREE_FAILURE));
+    if (leaderGone || pid === undefined) {
+      reportFailure();
+      return Promise.reject(new AgyAcpTreeCleanupError());
+    }
+    return new Promise<void>((resolve, reject) => {
+      let treeKilled = false;
       let leaderClosed = false;
-      const finish = (): void => {
+      let settled = false;
+      const finish = (confirmed: boolean): void => {
+        if (settled) return;
+        settled = true;
         clear(deadline);
-        resolve();
+        if (confirmed) {
+          resolve();
+          return;
+        }
+        reportFailure();
+        if (!leaderClosed && child.exitCode === null && child.signalCode === null) signal("SIGKILL");
+        reject(new AgyAcpTreeCleanupError());
       };
-      const afterTree = (ok: boolean): void => {
-        if (treeResult !== undefined) return;
-        treeResult = ok;
-        if (!ok) (options.warnWindowsTreeFailure ?? warnWindowsTreeFailure)();
-        if (!leaderClosed) signal("SIGKILL");
-        else if (ok) finish();
-      };
-      const deadline = set(() => {
-        afterTree(false);
-        finish();
-      }, options.reapTimeoutMs);
+      const deadline = set(() => finish(false), options.reapTimeoutMs);
       child.once("close", () => {
         leaderClosed = true;
-        if (treeResult === true) finish();
+        if (treeKilled) finish(true);
       });
-      if (pid === undefined) afterTree(false);
-      else {
-        try { (options.killWindowsTree ?? defaultKillWindowsTree)(pid, afterTree); }
-        catch { afterTree(false); }
+      try {
+        (options.killWindowsTree ?? defaultKillWindowsTree)(pid, ok => {
+          if (!ok) return finish(false);
+          treeKilled = true;
+          if (leaderClosed) finish(true);
+        });
+      } catch {
+        finish(false);
       }
     });
   }

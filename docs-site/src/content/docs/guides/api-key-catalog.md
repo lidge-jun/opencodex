@@ -886,6 +886,8 @@ once per turn and talks to it over the Agent Client Protocol on stdin and stdout
   every such request. `--sandbox` asks the CLI to run its terminal commands in its OS sandbox; Google documents that it
   has no effect where that sandbox is unavailable (for example Windows 10 or some Linux containers), so it is extra
   hardening, not a guarantee. Allow rules you set in your own agy settings still apply without asking.
+  On Windows, if OpenCodex cannot confirm that the process tree has stopped, the turn fails and the
+  workspace is retained.
 - **Text only:** ACP prompts carry text, so client function tools and images are not offered to the model, and the
   CLI's own tool use stays inside the CLI.
 

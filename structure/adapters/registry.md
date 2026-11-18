@@ -82,9 +82,9 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   the shared request budget, including a retried turn. Model selection is phase-aware and fails closed when the Gemini model is not
   confirmed. Permission requests are answered `cancelled`. Errors may include validated model IDs, offered
   Gemini model IDs or a numeric protocol code. Raw child error text stays inside the proxy. The workspace stays outside the
-  OpenCodex home and is removed after reaping. On Windows, cleanup waits within the reap deadline for the tree
-  terminator before falling back to killing the leader. A failed tree command produces a fixed warning and
-  leader closure alone cannot finish cleanup before the deadline. Coverage:
+  OpenCodex home. On Windows, a successful tree kill and leader closure are both required within the reap deadline.
+  When either cannot be confirmed, the adapter retains the workspace, emits a fixed warning and fails the turn.
+  The terminal event is published after reaping. Coverage:
   `tests/adapters/agy-acp-{adapter,protocol,policy}.test.ts`, `tests/config/agy-acp-config.test.ts`,
   `tests/server/server-agy-acp.test.ts`.
 - `devin` is direct for a related reason. It streams Cognition's

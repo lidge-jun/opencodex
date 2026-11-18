@@ -117,7 +117,7 @@ describe("workspace and reaping", () => {
     await expect(createTurnWorkspace(home, nested)).rejects.toThrow(/inside the OpenCodex home/);
   });
 
-  test.each(["close-first", "tree-first", "tree-failed", "timeout"])("Windows waits for tree cleanup before settling (%s)", async order => {
+  test.each(["close-first", "tree-first", "tree-failed", "timeout", "close-timeout"])("Windows waits for tree cleanup before settling (%s)", async order => {
     const calls: string[] = [];
     const timers: Array<() => void> = [];
     const set = ((fn: () => void) => { timers.push(fn); return timers.length; }) as unknown as typeof setTimeout;
@@ -136,7 +136,7 @@ describe("workspace and reaping", () => {
         calls.push(`taskkill ${pid}`);
         treeComplete = completed;
       },
-    }).then(() => { calls.push("settled"); });
+    }).then(() => { calls.push("confirmed"); }, () => { calls.push("unconfirmed"); });
     expect(calls).toEqual(["taskkill 99"]);
     if (order === "close-first") {
       close();
@@ -144,26 +144,24 @@ describe("workspace and reaping", () => {
       expect(calls).toEqual(["taskkill 99"]);
       treeComplete(true);
       await done;
-      expect(calls).toEqual(["taskkill 99", "settled"]);
-    } else if (order === "tree-failed") {
-      treeComplete(false);
-      expect(calls).toEqual(["taskkill 99", "tree failure", "SIGKILL"]);
+      expect(calls).toEqual(["taskkill 99", "confirmed"]);
+    } else if (order === "tree-first") {
+      treeComplete(true);
+      await Promise.resolve();
+      expect(calls).toEqual(["taskkill 99"]);
       close();
-      await Promise.resolve();
-      expect(calls).not.toContain("settled");
-      timers[0]!();
       await done;
+      expect(calls).toEqual(["taskkill 99", "confirmed"]);
     } else {
-      if (order === "tree-first") treeComplete(true);
-      else timers[0]!();
-      await Promise.resolve();
-      if (order === "timeout") expect(calls).toContain("settled");
-      else expect(calls).not.toContain("settled");
-      expect(calls).toContain("SIGKILL");
-      if (order === "tree-first") close();
+      if (order === "tree-failed") treeComplete(false);
+      else {
+        if (order === "close-timeout") treeComplete(true);
+        timers[0]!();
+      }
       await done;
-      if (order === "timeout") { close(); treeComplete(true); }
-      expect(calls.at(-1)).toBe("settled");
+      close();
+      treeComplete(true);
+      expect(calls).toEqual(["taskkill 99", "tree failure", "SIGKILL", "unconfirmed"]);
     }
   });
 

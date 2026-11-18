@@ -5,7 +5,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { createAgyAcpAdapter, AGY_ACP_ARGS, type AgyAcpDeps } from "../../src/adapters/agy-acp/adapter";
-import type { AgyAcpChild } from "../../src/adapters/agy-acp/process";
+import { reapProcessTree, type AgyAcpChild } from "../../src/adapters/agy-acp/process";
 import { runWithRequestPeer } from "../../src/lib/request-peer-scope";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
@@ -131,6 +131,52 @@ const errorCode = (h: Harness) => (terminal(h)[0] as { code?: string } | undefin
 afterEach(() => { delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN; });
 
 describe("agy acp turn", () => {
+  test.each(["leader exited", "taskkill failed", "taskkill timed out"])(
+    "Windows retains the workspace and fails the turn when %s",
+    async outcome => {
+      let treeKills = 0;
+      let warnings = 0;
+      const h = await run(script((frame, api) => {
+        if (frame.method !== "session/prompt" || outcome !== "leader exited") return;
+        api.exit(0);
+        return true;
+      }), {
+        deps: {
+          reap: child => reapProcessTree(child, {
+            graceMs: 0, reapTimeoutMs: 10, platform: "win32",
+            killWindowsTree: (_pid, complete) => {
+              treeKills++;
+              if (outcome === "taskkill failed") complete(false);
+            },
+            warnWindowsTreeFailure: () => { warnings++; },
+          }),
+        },
+      });
+      expect(h.removed).toBe(false);
+      expect(terminal(h)).toEqual([expect.objectContaining({
+        type: "error", status: 502, message: expect.stringContaining("could not confirm Windows process tree cleanup"),
+      })]);
+      expect(treeKills).toBe(outcome === "leader exited" ? 0 : 1);
+      expect(warnings).toBe(1);
+    },
+  );
+
+  test("Windows removes the workspace and completes the turn after taskkill and leader closure", async () => {
+    const h = await run(script(), {
+      deps: {
+        reap: child => reapProcessTree(child, {
+          graceMs: 0, reapTimeoutMs: 1_000, platform: "win32",
+          killWindowsTree: (_pid, complete) => {
+            (child as unknown as FakeChild).emit("close", 1);
+            complete(true);
+          },
+        }),
+      },
+    });
+    expect(h.removed).toBe(true);
+    expect(terminal(h)).toEqual([expect.objectContaining({ type: "done" })]);
+  });
+
   test("one shared send allowance admits exactly one prompt across attempts", async () => {
     const budget = createRequestExecutionBudget({
       maxTotalModelSends: 1, baseSendAllowance: 1, finalRecoveryAllowance: 0,

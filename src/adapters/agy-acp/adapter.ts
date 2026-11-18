@@ -30,7 +30,7 @@ import {
   type AcpConfigOption, type AcpSelectValue,
 } from "./options";
 import { AGY_ACP_MIN_VERSION, AGY_INSTALL_HINT, probeAgyVersion, resolveAgyBinary, type AgyVersionProbe } from "./binary";
-import { createTurnWorkspace, defaultAgyAcpSpawn, reapProcessTree, type AgyAcpChild, type AgyAcpSpawn, type TurnWorkspace } from "./process";
+import { AgyAcpTreeCleanupError, createTurnWorkspace, defaultAgyAcpSpawn, reapProcessTree, type AgyAcpChild, type AgyAcpSpawn, type TurnWorkspace } from "./process";
 import { agyAcpPolicyRefusal } from "./policy";
 
 /** Identity only: the transport is stdio. Never fetched. */
@@ -80,6 +80,7 @@ export interface AgyAcpDeps {
 /** Run `agy --version` with no shell, a scoped env, a private cwd, bounded output and a timeout. */
 async function runVersion(binary: string): Promise<string | undefined> {
   let workspace: TurnWorkspace | undefined;
+  let canRemoveWorkspace = true;
   try {
     workspace = await createTurnWorkspace(getConfigDir());
     const child = defaultAgyAcpSpawn(binary, ["--version"], { cwd: workspace.dir, env: childEnv(workspace) });
@@ -96,10 +97,11 @@ async function runVersion(binary: string): Promise<string | undefined> {
     });
     if (!closed) await reapProcessTree(child, { graceMs: KILL_GRACE_MS, reapTimeoutMs: REAP_TIMEOUT_MS });
     return closed ? out : undefined;
-  } catch {
+  } catch (error) {
+    if (error instanceof AgyAcpTreeCleanupError) canRemoveWorkspace = false;
     return undefined;
   } finally {
-    await workspace?.remove();
+    if (canRemoveWorkspace) await workspace?.remove();
   }
 }
 
@@ -169,10 +171,15 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
         return;
       }
 
+      let canRemoveWorkspace = true;
       try {
         await driveTurn({ binary, workspace, parsed, incoming, emit, requested, thoughtWanted });
+      } catch (error) {
+        if (!(error instanceof AgyAcpTreeCleanupError)) throw error;
+        canRemoveWorkspace = false;
+        emit({ type: "error", status: 502, errorType: "upstream_error", code: "agy_acp_protocol", message: error.message });
       } finally {
-        await workspace.remove();
+        if (canRemoveWorkspace) await workspace.remove();
       }
     },
   };
@@ -224,15 +231,18 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       finish(undefined, true);
     };
 
-    /** Settle once: emit the terminal (unless the caller aborted), then reap the group. */
+    /** Settle once: reap the child before publishing the terminal event. */
     function finish(terminal: AdapterEvent | undefined, aborted = false, onReaped = resolveTurn): void {
       if (settled) return;
       settled = true;
       clearTimeout(turnTimer);
       incoming.abortSignal?.removeEventListener("abort", onAbort);
-      if (!aborted && terminal) emit(terminal);
+      const cleanup = reap(child);
       try { child.stdout.destroy(); } catch { /* already closed */ }
-      void reap(child).then(onReaped, rejectTurn);
+      void cleanup.then(() => {
+        if (!aborted && !incoming.abortSignal?.aborted && terminal) emit(terminal);
+        onReaped();
+      }).catch(rejectTurn);
     }
     const fail = (code: AcpFailureCode, detail?: string): void => finish(failure(code, detail));
 
