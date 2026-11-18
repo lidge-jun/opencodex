@@ -123,7 +123,7 @@ live and latest durable rows are captured under the same mutation lock as deleti
 
 ## Account policy and runtime-setting results
 
-`ocx account probe google-antigravity` sends the management probe for the whole roster or resolves one account ID or alias first. `ocx models discover` requests a provider’s live-model refresh and reports the resulting arrival state. Both use the same endpoints as the dashboard.
+`ocx account probe google-antigravity` sends the management probe for the whole roster or resolves one account ID or alias through the passive Antigravity account list. `ocx models discover` requests a provider’s live-model refresh and reports the resulting arrival state or the recorded failure during cooldown. Both use the same endpoints as the dashboard.
 
 `src/cli/account-policy.ts` and `src/cli/account-policy-dto.ts` use the selected runtime's supported pool fields and validated roster. `src/cli/account-target.ts` shares pure selection precedence with the existing async helper; new policy writers never use the legacy transport fallback. Per-account threshold, one/all paid-credit permission, display preference and quota-window activation remain distinct operations. Reset-grant status is a typed GET with possible upstream status work; consumption/session acquisition is not exposed.
 

@@ -172,7 +172,7 @@ import type {
 import { isPlainRecord, parseDebugLogQuery, tokPerSecondResult, unavailableCostReason, costResult, requestLogDto, stripRegistryOnlyStaticHeaders, fetchAllModels } from "./shared";
 import type { MetricUnavailableReason, TokPerSecondResult, CostEstimateReason, CostResult, MetricSource } from "./shared";
 import { managementInferencePort, type ManagementContext } from "./context";
-import { effectiveModelReasoningEfforts, inheritedModelReasoningEfforts, listManagementModelRows, loadExportModels, previewExportSnapshot } from "./model-rows";
+import { effectiveModelReasoningEfforts, inheritedModelReasoningEfforts, listManagementModelRows, loadExportModels, previewExportSnapshot, refreshProviderDiscovery } from "./model-rows";
 import { initialModelSelectionPending } from "../../providers/initial-model-selection";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import {
@@ -302,10 +302,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     return jsonResponse({ ok: true, provider, acknowledged: [...acknowledged], catalogRefresh });
   }
 
-  // Operator-triggered discovery for one provider: expire its model cache, then run the normal
-  // catalog convergence, which re-fetches the live roster and records arrivals through the
-  // existing new-model policy. Reports only the arrivals this call recorded as `newArrivals`,
-  // in the same `state` projection GET /api/model-discovery uses.
+  // Refresh only this provider and record arrivals through the shared new-model policy.
   if (url.pathname === "/api/model-discovery/refresh" && req.method === "POST") {
     let body: { provider?: unknown };
     try { body = await readManagementJsonBody(req); } catch (error) { rethrowManagementBodyTooLarge(error); return jsonResponse({ error: "invalid JSON body" }, 400); }
@@ -316,14 +313,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
     }
     const arrivalKey = (row: { id: string; at: string }) => `${row.id}\0${row.at}`;
     const before = new Set((config.modelDiscovery?.recentArrivals?.[provider] ?? []).map(arrivalKey));
-    const { expireModelCache, getProviderDiscoveryStatus, getProviderLiveModelCount } = await import("../../codex/model-cache");
-    expireModelCache(provider); // Not cleared: a failed fetch must still fall back to the last good list.
-    const catalogRefresh = await convergeCodexCatalog();
-    // Convergence can return before it fetches anything (no Codex catalog to publish, a sibling
-    // proxy owns it, a stale snapshot). Discovery must not depend on catalog publication, so a
-    // provider still without a status runs the discovery read side, which records arrivals itself.
-    if (getProviderDiscoveryStatus(provider) === undefined) await loadExportModels(config);
-    const discovery = getProviderDiscoveryStatus(provider);
+    const discovery = await refreshProviderDiscovery(config, provider);
     if (!discovery) return jsonResponse({ error: "live model discovery did not produce an observation" }, 503);
     const cached = getStaleCached(provider) ?? [];
     const recentArrivals = (config.modelDiscovery?.recentArrivals?.[provider] ?? []).map(row => ({
@@ -335,7 +325,7 @@ export async function handleModelRoutes(ctx: ManagementContext): Promise<Respons
       liveModelCount: getProviderLiveModelCount(provider) ?? null,
       newArrivals: recentArrivals.filter(row => !before.has(arrivalKey(row))),
       recentArrivals,
-      catalogRefresh,
+      catalogRefresh: { status: "skipped", reason: "not-requested", retryable: false },
     });
   }
 

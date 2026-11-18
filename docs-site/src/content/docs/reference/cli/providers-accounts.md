@@ -1074,14 +1074,17 @@ locally and send nothing: `paused` (the account is paused; resume it to test it)
 never changes pause, active, cooldown or health state. The dashboard's **Test** and **Test all**
 buttons on the Antigravity account quota table call the same endpoint, `POST /api/oauth/accounts/probe`.
 The table shows each account’s plan, remaining quota by pool, reset times, and account actions.
+If a quota refresh fails, the table keeps the cached quota and shows the failure and read times.
 A batch runs up to four checks at a time. Wait for the current check to finish before starting another.
 
 ### `ocx models discover <provider> [--json]`
 
 Runs the provider's live model discovery now instead of waiting for the next scheduled refresh, and
 prints how many live models it saw and which ones are new. It is the same action as **Discover now**
-under the provider's settings (`POST /api/model-discovery/refresh`). Providers without live
-discovery report that discovery is off.
+under the provider's settings (`POST /api/model-discovery/refresh`). Concurrent requests for the
+same provider share a refresh. For 30 seconds after a failed fetch, the action reports that failure
+and keeps the last good list without contacting the provider again. The separate Codex catalog
+sync can pick up the refreshed list. Providers without live discovery report that discovery is off.
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 

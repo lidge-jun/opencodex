@@ -1,4 +1,5 @@
 import { hasHumanDashboardSession } from "./consent-session";
+import { runPassiveReadSync } from "../../lib/passive-read";
 import { isAnthropicOAuthInstance, configuredAnthropicInstance, type AnthropicInstanceId } from "../../providers/anthropic-instance";
 import { resolveAnthropicAccountPoolConfig } from "../../oauth/anthropic-pool-config";
 import { persistAnthropicPoolPatch, writeAnthropicPoolSettings } from "./anthropic-pool-settings";
@@ -607,7 +608,11 @@ export async function handleOauthAccountRoutes(ctx: ManagementContext): Promise<
     // path rather than rejected -- the GUI sends it for every provider on a manual
     // refresh, and a 400 would report an error for what is simply a no-op.
     const passiveQuota = url.searchParams.get("quota") === "1" && quotaMode === "passive";
-    if (!wantQuota && !passiveQuota) return jsonResponse(projectAccounts());
+    if (!wantQuota && !passiveQuota) {
+      // The Antigravity CLI probe resolves its target through this GET before posting the probe.
+      const projected = provider === "google-antigravity" ? runPassiveReadSync(projectAccounts) : projectAccounts();
+      return jsonResponse(projected);
+    }
     const forceRefresh = url.searchParams.get("refresh") === "1";
     // Probing may refresh the active credential and mark needsReauth — project health
     // from the post-probe store so the response is not stale.

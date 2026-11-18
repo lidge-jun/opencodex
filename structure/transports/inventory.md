@@ -483,6 +483,9 @@ failure surfaces as a named `PinnedHttpError`. Connection teardown belongs to th
 end early — a decode failure, an exceeded ceiling, a cancelled read; a response that completed
 is left to the HTTP agent, which may pool or destroy it.
 `tests/lib/pinned-http-content-coding.test.ts` covers both routes on the same payload.
+Only the Antigravity per-account probe opts in to 4xx and 5xx bodies on the pinned route.
+Its 8 KiB limit applies to both wire and decoded bytes. Redirects and other callers'
+non-success responses keep their status and headers without a body.
 Pinned identity and decoded response delivery follow the
 [stream-buffer accounting contract](byte-accounting.md#stream-buffer-accounting), including
 socket backpressure and inactivity timing while the local reader is paused.

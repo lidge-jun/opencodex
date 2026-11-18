@@ -10,7 +10,7 @@
  */
 import type { CatalogModel } from "../../codex/catalog";
 import { antigravityFamilyDisabled } from "../../providers/antigravity-effort-families";
-import { observeModelCacheRevision } from "../../codex/model-cache";
+import { expireModelCache, getProviderDiscoveryStatus, observeModelCacheRevision } from "../../codex/model-cache";
 import { isPassiveRead } from "../../lib/passive-read";
 import {
   captureExportConfigAdmission,
@@ -49,13 +49,51 @@ import type { OcxConfig } from "../../types";
 import { enrichProviderFromRegistry } from "../../providers/derive";
 import { ensureCodexEntitlementFreshness } from "../../codex/model-entitlements";
 import { fetchAllModels } from "./shared";
-import { CatalogGatherBusyError } from "../../codex/catalog/routed-gather";
+import { CatalogGatherBusyError, gatherRoutedModels, type GatherRoutedModelsOptions } from "../../codex/catalog/routed-gather";
 import { captureModelDiscoveryBaseline, finalizeModelDiscovery } from "../../providers/new-model-policy-runtime";
 import { reconcileSuccessfulModelDiscoveries } from "../../providers/new-model-policy";
 import { initialModelSelectionPending, pendingModelSelectionProviders } from "../../providers/initial-model-selection";
+import { captureInitialSelectionBaseline, finalizeInitialModelSelection } from "../../providers/initial-model-selection-runtime";
 import { catalogFastRowEligible, fastRowId } from "../fast-row";
 import { knownEffortRowIds } from "../effort-row";
 import { visionSidecarConsumerClassifier } from "../../vision/eligibility";
+
+const providerDiscoveryFlights = new WeakMap<OcxConfig, Map<string, ReturnType<typeof discoverProviderModels>>>();
+
+async function discoverProviderModels(config: OcxConfig, name: string) {
+  const provider = config.providers[name];
+  if (!provider || provider.disabled || provider.adapter === "jev-decision") return undefined;
+  if (!expireModelCache(name)) return getProviderDiscoveryStatus(name);
+  const baseline = captureModelDiscoveryBaseline(config);
+  const initial = initialModelSelectionPending(provider) ? captureInitialSelectionBaseline(config) : null;
+  const outcomes: NonNullable<GatherRoutedModelsOptions["providerModelOutcomes"]> = [];
+  const revisions = new Map<string, string>();
+  const models = await gatherRoutedModels({ ...config, providers: { [name]: provider } }, {
+    providerModelOutcomes: outcomes, providerContentRevisions: revisions,
+  });
+  const discovery = getProviderDiscoveryStatus(name);
+  if (discovery?.status === "ok" && outcomes.some(outcome => outcome.state === "authoritative")) {
+    if (observeModelCacheRevision(name) !== revisions.get(name)) throw new CatalogGatherBusyError();
+    if (initial) finalizeInitialModelSelection(config, { ...initial, providers: [name] },
+      uniqueCatalogModelsForPublicList(models), [name]);
+    if (!finalizeModelDiscovery(config, baseline, models, [name], revisions)) throw new CatalogGatherBusyError();
+  }
+  return discovery;
+}
+
+/** Join the whole refresh, including the arrival-policy commit, before expiring freshness again. */
+export function refreshProviderDiscovery(config: OcxConfig, name: string) {
+  let flights = providerDiscoveryFlights.get(config);
+  if (!flights) {
+    flights = new Map();
+    providerDiscoveryFlights.set(config, flights);
+  }
+  const existing = flights.get(name);
+  if (existing) return existing;
+  const flight = discoverProviderModels(config, name).finally(() => flights.delete(name));
+  flights.set(name, flight);
+  return flight;
+}
 
 /**
  * One row of the `/api/models` list. Routed rows spread a `CatalogModel`, so the shape is

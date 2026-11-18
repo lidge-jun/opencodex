@@ -391,6 +391,7 @@ export async function fetchAntigravityQuotaSummaryOnce(
       signal,
     }, {
       ...antigravityOutboundDependencies,
+      maxPinnedErrorBytes: SUMMARY_ERROR_BODY_MAX_BYTES,
       beforeSend: () => {
         // System DNS can finish after the deadline. Fence the eventual dispatch too.
         signal.throwIfAborted();

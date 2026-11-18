@@ -2,7 +2,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   captureModelCacheGeneration,
   clearModelCache,
+  expireModelCache,
+  getProviderDiscoveryStatus,
   getStaleCached,
+  isModelsFetchCoolingDown,
+  markModelsFetchFailure,
+  markProviderDiscoveryFailed,
   reconcileModelCacheProviders,
   setCached,
 } from "../../src/codex/model-cache";
@@ -12,6 +17,21 @@ const provider = "removed-provider-generation";
 afterEach(() => clearModelCache(provider));
 
 describe("model-cache provider reconciliation", () => {
+  test("expiry preserves a failure's cooldown, status and last good rows", () => {
+    const now = Date.now();
+    const rows = [{ id: "prior-model", provider }];
+    const failure = { reason: "http", httpStatus: 429 } as const;
+    setCached(provider, rows, now);
+    markModelsFetchFailure(provider, now);
+    markProviderDiscoveryFailed(provider, failure);
+    expireModelCache(provider);
+
+    expect(isModelsFetchCoolingDown(provider, undefined, now + 29_999)).toBe(true);
+    expect(isModelsFetchCoolingDown(provider, undefined, now + 30_000)).toBe(false);
+    expect(getProviderDiscoveryStatus(provider)).toEqual({ status: "failed", ...failure });
+    expect(getStaleCached(provider)).toEqual(rows);
+  });
+
   test.each([
     ["provider", () => clearModelCache(provider, "eviction")],
     ["global", () => clearModelCache(undefined, "eviction")],

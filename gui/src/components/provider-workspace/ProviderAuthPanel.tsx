@@ -781,12 +781,11 @@ export default function ProviderAuthPanel({
                         onChange={value => authHandlers.onAccountThreshold!(item.name, account, value)}
                       />
                     ),
-                    !covered && (
+                    (!covered || rest || account.quotaUnavailable) && (
                       <ProviderAccountQuota key="quota" quotaMode={account.quotaMode} quota={account.quota}
                         quotaUnavailable={account.quotaUnavailable} quotaPending={account.quotaPending} quotaFailure={account.quotaFailure}
-                        quotaReadAt={account.quotaReadAt} />
+                        quotaReadAt={account.quotaReadAt} uncoveredQuota={covered ? rest : undefined} />
                     ),
-                    rest && <ProviderAccountQuota key="rest" quotaMode={account.quotaMode} quota={rest} />,
                   ].filter(Boolean);
                   return parts.length > 0 ? parts : null;
                 }}

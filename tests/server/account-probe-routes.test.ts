@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { antigravityCliUserAgent } from "../../src/adapters/client-fingerprint";
 import { handleModelsRuntimeCommand } from "../../src/cli/models-runtime";
 import { clearModelCache, getStaleCached } from "../../src/codex/model-cache";
+import { cmdAccountProbe } from "../../src/cli/account-probe";
+import { pinnedHttpPost } from "../../src/lib/pinned-http";
 import { PROXY_ENV_KEYS } from "../../src/lib/proxy-env";
 import { setAntigravityAccountQuotaTransportForTests } from "../../src/providers/quota/antigravity";
 import {
@@ -94,6 +96,40 @@ describe("classifyAntigravityProbeResponse", () => {
 });
 
 describe("probeAntigravityAccounts", () => {
+  test("the pinned transport reads only bounded error evidence for probe verdicts", async () => {
+    writeStore([
+      account("verify1", "fixture-verify"), account("suspended1", "fixture-suspended"),
+      account("disabled1", "fixture-disabled"), account("large1", "fixture-large"),
+    ]);
+    const bodyByAuth = new Map([
+      ["Bearer fixture-verify", googleError(403, "PERMISSION_DENIED", "Verify your account.", "VALIDATION_REQUIRED")],
+      ["Bearer fixture-suspended", googleError(403, "PERMISSION_DENIED", "This account has been suspended.")],
+      ["Bearer fixture-disabled", googleError(403, "PERMISSION_DENIED", "This service is disabled.", "SERVICE_DISABLED")],
+      ["Bearer fixture-large", " ".repeat(8 * 1024 + 1)],
+    ]);
+    const pinned = { address: "127.0.0.1", family: 4 };
+    const upstream = Bun.serve({ hostname: pinned.address, port: 0, fetch: req =>
+      new Response(bodyByAuth.get(req.headers.get("authorization") ?? ""), { status: 403 }) });
+    try {
+      setAntigravityAccountQuotaTransportForTests({
+        resolveAddresses: async () => ({ hostname: "daily-cloudcode-pa.googleapis.com", addresses: [pinned], privateNetwork: false }),
+        // Keep the probe's options but send only the synthetic requests to the local fixture.
+        pinnedPost: (_url, address, body, signal, options) => pinnedHttpPost(upstream.url.href, address, body, signal, options),
+      });
+      expect(await probeAntigravityAccounts()).toEqual([
+        expect.objectContaining({ status: "verification_required", httpStatus: 403, reason: "VALIDATION_REQUIRED", message: null }),
+        expect.objectContaining({ status: "suspended", httpStatus: 403, message: null }),
+        expect.objectContaining({ status: "permission_denied", httpStatus: 403, reason: "SERVICE_DISABLED", message: null }),
+        expect.objectContaining({ status: "error", httpStatus: null, reason: "response_unusable", message: null }),
+      ]);
+      const plain = await pinnedHttpPost(upstream.url.href, pinned, "{}", undefined, { headers: { authorization: "Bearer fixture-verify" } });
+      expect(plain.status).toBe(403);
+      expect(plain.body).toBeNull();
+    } finally {
+      await upstream.stop(true);
+    }
+  });
+
   test("omits untrusted error strings and projects only known quota windows", async () => {
     writeStore([account("denied1", "fixture-access"), account("okacct1", "fixture-ok")]);
     const seen = installUpstream({
@@ -313,6 +349,25 @@ describe("management routes", () => {
     return { status: response!.status, json: await response!.json() as Record<string, unknown> };
   }
 
+  test("targeted CLI probe resolves the alias without changing the store bytes or file mode", async () => {
+    const path = writeStore([{ ...account("okacct1", "fixture-active"), alias: "Work" }, account("other1", "fixture-other")]);
+    const bytes = readFileSync(path);
+    if (process.platform !== "win32") chmodSync(path, 0o644);
+    const mode = statSync(path).mode;
+    const seen = installUpstream({ "fixture-active": () => new Response(summaryBody) });
+    const live = config();
+    const fetchImpl = (async (input, init) => {
+      const url = new URL(String(input));
+      const req = new Request(url, init);
+      return (await handleManagementAPI(req, url, live, { saveConfigPreservingClaudeCode: () => {} }, "admin-token"))!;
+    }) as typeof fetch;
+
+    expect(await cmdAccountProbe(["google-antigravity", "work"], { baseUrl: "http://127.0.0.1:1", fetchImpl })).toBe(0);
+    expect(seen.map(row => row.auth)).toEqual(["Bearer fixture-active"]);
+    expect(readFileSync(path)).toEqual(bytes);
+    expect(statSync(path).mode).toBe(mode);
+  });
+
   test("account probes require an admin token or dashboard session principal", async () => {
     writeStore([account("okacct1", "tok-ok")]);
     const seen = installUpstream({ "tok-ok": () => Response.json({}) });
@@ -373,14 +428,19 @@ describe("management routes", () => {
     const statik = await call(live, "/api/model-discovery/refresh", { provider: "vendor" });
     expect(statik.json).toMatchObject({ ok: false, applicable: false, reason: "static_catalog" });
 
-    live.modelDiscovery = { recentArrivals: { live: [{ id: "old", at: "2026-11-01T00:00:00Z" }] } };
-    live.disabledModels = ["live/fresh"];
-    const refreshed = await call(live, "/api/model-discovery/refresh", { provider: "live" }, () => {
-      live.modelDiscovery!.recentArrivals!.live!.push({ id: "fresh", at: "2026-11-12T00:00:00Z" });
-    });
+    const at = "2026-11-01T00:00:00Z";
+    live.modelDiscovery = {
+      newModelPolicy: "off",
+      knownModels: { live: { ids: ["known", "old"], removed: [], updatedAt: at } },
+      recentArrivals: { live: [{ id: "old", at }] },
+    };
+    (live.providers.live as { fetch?: typeof fetch }).fetch = (async () =>
+      Response.json({ data: [{ id: "known" }, { id: "fresh" }] })) as typeof fetch;
+    const refreshed = await call(live, "/api/model-discovery/refresh", { provider: "live" });
     expect(refreshed.status).toBe(200);
     expect(refreshed.json.ok).toBe(true);
-    expect(refreshed.json.newArrivals).toEqual([{ id: "fresh", at: "2026-11-12T00:00:00Z", state: "auto-disabled" }]);
+    expect(refreshed.json.newArrivals).toEqual([expect.objectContaining({ id: "fresh", state: "auto-disabled" })]);
+    expect(live.disabledModels).toContain("live/fresh");
     expect((refreshed.json.recentArrivals as unknown[]).length).toBe(2);
   });
 
@@ -400,7 +460,7 @@ describe("management routes", () => {
     expect((listed as Array<{ state: string }>).map(row => row.state)).toEqual(["not-selected", "disabled"]);
   });
 
-  test("refresh still fetches the provider when catalog convergence skips without gathering", async () => {
+  test("refresh fetches the provider without running catalog convergence", async () => {
     clearModelCache();
     const live = config();
     let fetched = 0;
@@ -408,10 +468,67 @@ describe("management routes", () => {
       fetched++;
       return Response.json({ object: "list", data: [{ id: "known", object: "model" }] });
     }) as unknown as typeof fetch;
-    const refreshed = await call(live, "/api/model-discovery/refresh", { provider: "live" });
-    expect(fetched).toBeGreaterThan(0);
+    const refreshed = await call(live, "/api/model-discovery/refresh", { provider: "live" }, () => {
+      throw new Error("discovery must not run a catalog-wide refresh");
+    });
+    expect(fetched).toBe(1);
     expect(refreshed.json.discovery).toMatchObject({ status: "ok" });
     expect(refreshed.json.liveModelCount).toBe(1);
+  });
+
+  test("manual discovery honors a provider's 429 cooldown", async () => {
+    clearModelCache();
+    const live = config();
+    let sends = 0;
+    (live.providers.live as { fetch?: typeof fetch }).fetch = (async () => {
+      sends++;
+      return new Response("rate-limited", { status: 429 });
+    }) as typeof fetch;
+    try {
+      const refresh = () => call(live, "/api/model-discovery/refresh", { provider: "live" });
+      const first = await refresh();
+      expect(first.json.discovery).toEqual({ status: "failed", reason: "http", httpStatus: 429 });
+      const retry = await refresh();
+      expect(retry.status).toBe(200);
+      expect(retry.json.discovery).toEqual(first.json.discovery);
+      expect(retry.json.newArrivals).toEqual([]);
+      expect(sends).toBe(1);
+    } finally {
+      clearModelCache();
+    }
+  });
+
+  test("overlapping refreshes share one fetch for only the requested provider", async () => {
+    clearModelCache();
+    const live = config();
+    const started = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let requested = 0;
+    let unrelated = 0;
+    (live.providers.live as { fetch?: typeof fetch }).fetch = (async () => {
+      requested++;
+      started.resolve();
+      await release.promise;
+      return new Response("rate-limited", { status: 429 });
+    }) as typeof fetch;
+    live.providers.unrelated = {
+      ...live.providers.live!, baseUrl: "https://unrelated.example/v1",
+      fetch: (async () => { unrelated++; return Response.json({ data: [{ id: "other" }] }); }) as typeof fetch,
+    } as OcxConfig["providers"][string];
+    try {
+      const refresh = () => call(live, "/api/model-discovery/refresh", { provider: "live" });
+      const first = refresh();
+      await started.promise;
+      const second = refresh();
+      await new Promise<void>(resolve => setImmediate(resolve));
+      release.resolve();
+      const results = await Promise.all([first, second]);
+      expect(results.map(result => result.json.discovery)).toEqual(Array(2).fill({ status: "failed", reason: "http", httpStatus: 429 }));
+      expect({ requested, unrelated }).toEqual({ requested: 1, unrelated: 0 });
+    } finally {
+      release.resolve();
+      clearModelCache();
+    }
   });
 
   test("a disabled provider cannot report a successful discovery without a live observation", async () => {

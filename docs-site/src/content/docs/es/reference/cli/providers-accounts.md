@@ -558,15 +558,19 @@ o `error`, con el estado HTTP y un código de motivo reconocido. Los estados `pa
 una solicitud. La comprobación conserva los tokens y el estado de la cuenta. Los botones
 **Probar** y **Probar todas** de la tabla de cuotas de Antigravity llaman al mismo endpoint,
 `POST /api/oauth/accounts/probe`. La tabla muestra el plan, las cuotas restantes por grupo,
-los plazos de restablecimiento y las acciones de cada cuenta. Se ejecutan hasta cuatro
+los plazos de restablecimiento y las acciones de cada cuenta. Si falla una actualización,
+la tabla conserva la cuota anterior e indica el error y las horas de lectura. Se ejecutan hasta cuatro
 comprobaciones a la vez. Espera a que termine la comprobación actual antes de iniciar otra.
 
 ### `ocx models discover <provider> [--json]`
 
 Ejecuta ahora la detección de modelos del proveedor e indica cuántos modelos encontró y
 cuáles son nuevos. Es la misma acción que **Detectar ahora** en los ajustes del proveedor
-(`POST /api/model-discovery/refresh`). Los catálogos estáticos indican que la detección
-en directo está desactivada.
+(`POST /api/model-discovery/refresh`). Las solicitudes simultáneas para el mismo proveedor
+comparten una actualización. Durante los 30 segundos posteriores a un fallo, la acción muestra ese
+fallo y conserva la última lista válida sin volver a consultar al proveedor. La sincronización del
+catálogo de Codex puede incorporar después la lista actualizada. Los catálogos estáticos indican
+que la detección en directo está desactivada.
 
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 

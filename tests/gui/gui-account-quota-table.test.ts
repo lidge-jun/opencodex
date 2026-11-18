@@ -60,19 +60,20 @@ describe("account quota table", () => {
     expect(marked()).toEqual([]);
   });
 
-  test("flags: paused, sign-in, cooldown, failed probe, slow probe, unread quota, healthy", () => {
+  test("flags distinguish missing quota from a failed refresh with cached quota", () => {
     const flags = buildQuotaTable([
       antigravity("p", { paused: true, needsReauth: true }),
       antigravity("r", { needsReauth: true }),
       antigravity("q", { health: { status: "cooldown", reason: "quota" } }),
       antigravity("x", { probe: { status: "rate_limited", latencyMs: 300 } }),
       antigravity("s", { probe: { status: "ok", latencyMs: SLOW_PROBE_MS + 1 } }),
-      antigravity("u", { quotaUnavailable: true }),
+      antigravity("u", { quotaUnavailable: true, quota: null }),
+      antigravity("w", { quotaUnavailable: true }, [["Gem", 20, 1]]),
       antigravity("h", { probe: { status: "ok", latencyMs: 900 } }),
     ], NOW).rows.map(row => [row.account.id, row.flag, row.probeStatus]);
     expect(flags).toEqual([
       ["p", "paused", undefined], ["r", "reauth", undefined], ["q", "quotaLimited", undefined],
-      ["x", "probeFailed", "rate_limited"], ["s", "slow", undefined], ["u", "stale", undefined], ["h", "ok", undefined],
+      ["x", "probeFailed", "rate_limited"], ["s", "slow", undefined], ["u", "stale", undefined], ["w", "warning", undefined], ["h", "ok", undefined],
     ]);
   });
 

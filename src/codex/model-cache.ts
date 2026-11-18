@@ -307,16 +307,15 @@ export function setCached(
 }
 
 /**
- * Force the next resolve for one provider to fetch live while keeping its rows as the
- * last-known-good fallback, so a failed fetch still serves them. Also lifts the failure cooldown
- * and forgets the discovery status, which the next attempt records afresh. The generation stays:
- * nothing about the provider's authority changed, so in-flight discoveries may still publish.
+ * Expire freshness and require a new observation, keeping the last-known-good rows for fallback.
+ * During failure backoff, leave both the cache and its failure observation intact.
  */
-export function expireModelCache(provider: string): void {
+export function expireModelCache(provider: string): boolean {
+  if (isModelsFetchCoolingDown(provider)) return false;
   const entry = cache.get(provider);
   if (entry) entry.expired = true;
-  failureAt.delete(provider);
   discoveryStatus.delete(provider);
+  return true;
 }
 
 /** Drop one provider's cache (or all) so the next resolve forces a live re-fetch. */

@@ -80,8 +80,10 @@ const PLAN_NAMES: Readonly<Record<string, string>> = {
 /** `null` means upstream did not say; the caller renders "unknown plan" rather than a guess. */
 export function planDisplayName(plan: string | null | undefined, planLabel?: string): string | null {
   if (planLabel?.trim()) return planLabel.trim();
-  if (!plan?.trim()) return null;
-  return PLAN_NAMES[plan.trim().toLowerCase()] ?? plan.trim();
+  const label = plan?.trim();
+  if (!label) return null;
+  const tier = label.toLowerCase();
+  return Object.hasOwn(PLAN_NAMES, tier) ? PLAN_NAMES[tier]! : label;
 }
 
 export type AccountFlag = "ok" | "banned" | "paused" | "verify" | "reauth" | "rateLimited" | "quotaLimited" | "warning" | "probeFailed" | "slow" | "stale";
@@ -154,7 +156,7 @@ function accountFlag(account: QuotaTableAccount): { flag: AccountFlag; probeStat
   if (probe && probe.status !== "ok" && probe.status !== "paused" && probe.status !== "token_expired") return { flag: "probeFailed", probeStatus: probe.status };
   if (account.health?.status === "warning") return { flag: "warning" };
   if (probe?.status === "ok" && typeof probe.latencyMs === "number" && probe.latencyMs > SLOW_PROBE_MS) return { flag: "slow" };
-  if (account.quotaUnavailable) return { flag: "stale" };
+  if (account.quotaUnavailable) return { flag: account.quota ? "warning" : "stale" };
   return { flag: "ok" };
 }
 
