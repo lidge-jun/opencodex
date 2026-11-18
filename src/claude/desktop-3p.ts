@@ -341,8 +341,6 @@ export interface Desktop3pModelOptions {
    * route so a running session holding a just-hidden alias still routes.
    */
   visibility?: DesktopModelVisibility;
-  /** A detached listing may publish only names already served by the installed registry. */
-  useInstalledRegistry?: boolean;
 }
 
 export function generateDesktop3pModels(
@@ -353,18 +351,8 @@ export function generateDesktop3pModels(
   options: Desktop3pModelOptions = {},
 ): Desktop3pModelEntry[] {
   const collected = collectDesktop3pModels(nativeSlugs, routedModels, profile, nativeContextCap);
-  let { models: all, routes } = collected;
-  if (options.useInstalledRegistry) {
-    const kept = routes.map((route, index) => {
-      const { name } = all[index]!;
-      return desktop3pRegistry.get(name) === route
-        || (route === `anthropic/${name}` && desktop3pRealAnthropicIds.has(name));
-    });
-    all = all.filter((_, index) => kept[index]);
-    routes = routes.filter((_, index) => kept[index]);
-  } else {
-    installDesktop3pRegistry(collected);
-  }
+  installDesktop3pRegistry(collected);
+  const { models: all, routes } = collected;
   let models = filterDesktopModelsByVisibility(all, routes, options.visibility);
   if (models.length === 0 && all.length > 0) {
     // An empty static list leaves Desktop with no usable picker. The dashboard refuses to save

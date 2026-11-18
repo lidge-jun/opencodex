@@ -30,11 +30,12 @@ write verbatim. The decode registry keeps hidden routes, so a running Desktop se
 sends a just-hidden alias keeps routing.
 
 `src/server/index/serve-options.ts` installs Desktop aliases from current shared discovery inputs.
-Superseded listings and listings with detached discovery policy use their own visible rows. In
-the Desktop snapshot and Anthropic discovery with Desktop IDs, those rows must have names that
-already resolve to the same routes through the installed registry. The installed aliases continue
-to decode for `/v1/messages`. `tests/server/server-new-model-policy-arrival.test.ts` covers both
-formats when a newer upstream 429 supersedes a successful listing.
+When discovery is superseded or uses a detached policy projection, the Desktop config endpoint
+serves its last complete snapshot if all its IDs still resolve to their original routes. Without
+a compatible snapshot it returns HTTP 503 with `desktop_snapshot_busy` and `Retry-After: 1`.
+Anthropic discovery with Desktop IDs still returns the visible rows whose IDs resolve to the same
+routes through the installed registry. `tests/server/server-new-model-policy-arrival.test.ts`
+covers these paths when a newer upstream 429 supersedes a successful listing.
 
 When a hidden row was a family default, the first remaining member of that family takes the role.
 Defaults are moved back to the front, which keeps the order `renderDesktopProfile` writes. A

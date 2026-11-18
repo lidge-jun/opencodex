@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { loadConfig, saveConfig } from "../../src/config";
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
@@ -228,7 +229,7 @@ test.each(supersededReads)("$path projects a superseded success under policy $po
   }
 }), SERVER_BUDGET_MS);
 
-test.each(["format=desktop-config", "flavor=anthropic"])("superseded Claude listing preserves shared aliases (%s)", query => lifecycle.run(async () => {
+test.each(["desktop-warm", "desktop-cold", "desktop-registry-changed", "anthropic"] as const)("superseded Claude listing preserves the working profile (%s)", mode => lifecycle.run(async () => {
   const fetchingOlder = Promise.withResolvers<void>();
   const releaseOlder = Promise.withResolvers<void>();
   const knownGood = "last-good";
@@ -269,47 +270,134 @@ test.each(["format=desktop-config", "flavor=anthropic"])("superseded Claude list
   const server = startServer(0);
   lifecycle.ownStop(() => server.stop(true));
   setCached(provider, [common, knownGood].map(id => ({ provider, id })));
-  const listUrl = new URL(`/v1/models?${query}`, server.url);
+  const anthropicUrl = new URL("/v1/models?flavor=anthropic", server.url);
+  const desktopUrl = new URL("/v1/models?format=desktop-config", server.url);
   const signal = lifecycle.abort.signal;
   const goodAlias = desktop3pAlias(provider, knownGood);
   const commonAlias = desktop3pAlias(provider, common);
   const obsoleteAlias = desktop3pAlias(provider, obsolete);
   const ids = async (response: Response) => {
     expect(response.status).toBe(200);
-    const body = await response.json() as { models?: Array<{ name: string }>; data?: Array<{ id: string }> };
-    return body.models?.map(row => row.name) ?? body.data!.map(row => row.id);
+    const { data } = await response.json() as { data: Array<{ id: string }> };
+    return data.map(row => row.id);
   };
-  expect(await ids(await fetch(listUrl, { signal }))).toEqual(expect.arrayContaining([goodAlias, commonAlias]));
+  const apply = async () => {
+    const child = Bun.spawn([process.execPath, "-e", `
+      import { applyProfile } from "./src/cli/claude-desktop.ts";
+      const result = await applyProfile(undefined, "static", {
+        lifecycleLockDeps: { lockPath: process.env.OPENCODEX_HOME + "/desktop-lifecycle.sqlite" },
+        probeClaudeDesktopPolicy: () => "present",
+      });
+      console.log(JSON.stringify(result));
+    `], {
+      env: {
+        ...process.env,
+        OPENCODEX_HOME: home.path("client"),
+        CODEX_HOME: home.path("client", "codex"),
+        CLAUDE_CONFIG_DIR: home.path("client", "claude"),
+        OPENCODEX_CLAUDE_DESKTOP_CONFIG_DIR: home.path("client", "desktop"),
+      },
+      signal, stdout: "pipe", stderr: "pipe",
+    });
+    const [code, stdout, stderr] = await Promise.all([
+      child.exited, new Response(child.stdout).text(), new Response(child.stderr).text(),
+    ]);
+    expect(code, stderr).toBe(0);
+    return JSON.parse(stdout.trim().split("\n").at(-1)!) as { ok: boolean; path: string; reason?: string };
+  };
+  let firstProfile: { path: string; bytes: string } | undefined;
+  if (mode === "desktop-warm" || mode === "desktop-registry-changed") {
+    const baseUrl = `http://127.0.0.1:${server.port}`;
+    const token = "desktop-fixture-key";
+    mkdirSync(home.path("client"));
+    writeFileSync(home.path("client", "service-api-token"), `${token}\n`, { mode: 0o600 });
+    writeFileSync(home.path("client", "config.json"), JSON.stringify({
+      defaultProvider: provider, providers: { [provider]: {
+        adapter: "openai-chat", baseUrl: "http://127.0.0.1:1/v1",
+        apiKey: "fixture-only", allowPrivateNetwork: true, liveModels: false, models: [common],
+      } }, runtimeRole: "client",
+      client: {
+        serverUrl: baseUrl, managementUrl: baseUrl, managementTransport: "direct",
+        selectedClients: ["codex"], tokenEnv: "OPENCODEX_API_AUTH_TOKEN", apiKeyId: "desktop-key",
+        tokenFingerprint: createHash("sha256").update(token).digest("hex"),
+        protocolVersion: 1, connectedAt: now,
+      },
+    } satisfies OcxConfig), { mode: 0o600 });
+    const first = await apply();
+    expect(first).toMatchObject({ ok: true });
+    const bytes = readFileSync(first.path, "utf8");
+    const profile = JSON.parse(bytes) as { inferenceModels: Array<{ name: string }>; modelDiscoveryEnabled: boolean };
+    expect(profile.modelDiscoveryEnabled).toBe(false);
+    expect(profile.inferenceModels.map(row => row.name).sort()).toEqual([goodAlias, commonAlias].sort());
+    firstProfile = { path: first.path, bytes };
+  } else {
+    expect((await ids(await fetch(anthropicUrl, { signal }))).sort()).toEqual([goodAlias, commonAlias].sort());
+  }
   expect(resolveDesktop3pAlias(goodAlias)).toBe(`${provider}/${knownGood}`);
   expect(resolveDesktop3pAlias(obsoleteAlias)).toBeNull();
-  const registrySize = desktop3pRegistrySize();
+  let registrySize = desktop3pRegistrySize();
   expect(discoveries).toBe(0);
   expect(expireModelCache(provider)).toBe(true);
 
-  const pending = fetch(listUrl, { signal });
-  try {
-    await fetchingOlder.promise;
+  const supersede = async (pending: Promise<unknown>) => {
+    await Promise.race([fetchingOlder.promise, pending.then(() => { throw new Error("Listing finished before discovery"); })]);
     await gatherRoutedModels(loadConfig(), { onlyProvider: provider });
     expect(getProviderDiscoveryStatus(provider)).toEqual({ status: "failed", reason: "http", httpStatus: 429 });
+    if (mode === "desktop-registry-changed") {
+      buildDesktop3pRegistry([], [{ provider, id: common }]);
+      registrySize = desktop3pRegistrySize();
+    }
     releaseOlder.resolve();
-    const projectedIds = await ids(await pending);
-    expect(resolveDesktop3pAlias(goodAlias)).toBe(`${provider}/${knownGood}`);
-    expect(resolveDesktop3pAlias(commonAlias)).toBe(`${provider}/${common}`);
-    expect(resolveDesktop3pAlias(obsoleteAlias)).toBeNull();
-    expect(desktop3pRegistrySize()).toBe(registrySize);
-    expect(projectedIds).toEqual([commonAlias]);
-
-    const messages = await fetch(new URL("/v1/messages", server.url), {
-      method: "POST", headers: { "content-type": "application/json" }, signal,
-      body: JSON.stringify({ model: goodAlias, max_tokens: 32, messages: [{ role: "user", content: "fixture request" }] }),
+  };
+  const checkAfterSupersession = async <T>(pending: Promise<T>, check: (result: T) => void | Promise<void>) => {
+    try {
+      await supersede(pending);
+      await check(await pending);
+    } finally {
+      releaseOlder.resolve();
+      await pending;
+    }
+  };
+  if (firstProfile) {
+    const { path, bytes } = firstProfile;
+    await checkAfterSupersession(apply(), second => {
+      if (mode === "desktop-registry-changed") {
+        expect(second).toMatchObject({ ok: false, reason: "desktop_snapshot_http_503", applied: false });
+      } else {
+        expect(second).toMatchObject({ ok: true, path });
+      }
+      const after = readFileSync(path, "utf8");
+      const { inferenceModels } = JSON.parse(after) as { inferenceModels: Array<{ name: string }> };
+      expect(inferenceModels.map(row => row.name).sort()).toEqual([goodAlias, commonAlias].sort());
+      expect(after === bytes).toBe(true);
     });
-    expect(messages.status, await messages.text()).toBe(200);
-    expect(forwarded).toEqual([knownGood]);
-    expect(discoveries).toBe(2);
-  } finally {
-    releaseOlder.resolve();
-    await pending;
+  } else if (mode === "desktop-cold") {
+    await checkAfterSupersession(fetch(desktopUrl, { signal }), async response => {
+      expect(response.status).toBe(503);
+      expect(response.headers.get("retry-after")).toBe("1");
+      expect(await response.json()).toEqual({
+        error: { type: "server_error", code: "desktop_snapshot_busy", message: "Desktop model snapshot is temporarily unavailable" },
+      });
+    });
+  } else {
+    await checkAfterSupersession(fetch(anthropicUrl, { signal }), async response => {
+      expect(await ids(response)).toEqual([commonAlias]);
+    });
   }
+  const changedRegistry = mode === "desktop-registry-changed";
+  expect(resolveDesktop3pAlias(goodAlias)).toBe(changedRegistry ? null : `${provider}/${knownGood}`);
+  expect(resolveDesktop3pAlias(commonAlias)).toBe(`${provider}/${common}`);
+  expect(resolveDesktop3pAlias(obsoleteAlias)).toBeNull();
+  expect(desktop3pRegistrySize()).toBe(registrySize);
+
+  const messageAlias = changedRegistry ? commonAlias : goodAlias;
+  const messages = await fetch(new URL("/v1/messages", server.url), {
+    method: "POST", headers: { "content-type": "application/json" }, signal,
+    body: JSON.stringify({ model: messageAlias, max_tokens: 32, messages: [{ role: "user", content: "fixture request" }] }),
+  });
+  expect(messages.status, await messages.text()).toBe(200);
+  expect(forwarded).toEqual([changedRegistry ? common : knownGood]);
+  expect(discoveries).toBe(2);
 }), SERVER_BUDGET_MS);
 
 test("failed arrival persistence returns retryable HTTP 503 without publishing models", () => lifecycle.run(async () => {
