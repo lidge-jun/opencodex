@@ -185,7 +185,6 @@ export async function prepareAdapterExchange(
     | "noteAdapterPhysicalSend"
     | "noteAdapterRecoveryWithheld"
     | "remainingTransientSendBudget"
-    | "adapterSendBudget"
     | "transientSendReporter"
     | "recoverySendAllowance"
     | "recoveryClassFor"
@@ -404,6 +403,9 @@ export async function prepareAdapterExchange(
   };
   const autoPauseEnabled = effectiveAccountAutoPause(config.providers[route.providerName]) !== undefined;
   const billingPoolRequest = isAnthropicBillingKeyPool(route.provider);
+  // Hosted Advisor revalidates the credential after the upstream rewrite, before the receipt.
+  const shouldDeferGenericSend = () => billingPoolRequest || (route.providerName === "github-copilot" && route.provider.authMode !== "forward")
+    || (options.hostedAdvisorSpendScope?.optionalWithheld === false && transportState.activeAdapter.name === "anthropic");
   let billingRecoveryActive = false;
   const genericRefetchCountsSends = () => !!sendBudgetState.workflowRootId || options.comboAttempt === true || sendBudgetState.adapterSendBudget?.spendEnforced === true
     || transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null
@@ -482,7 +484,7 @@ export async function prepareAdapterExchange(
         ? fetchWithTransientRetry
         : fetchWithResetRetry;
       const initialReporter = transientSendReporter(compactPrepaid ?? options.comboDispatchPermit);
-      const deferredInitial = (billingPoolRequest || route.providerName === "github-copilot" && route.provider.authMode !== "forward") && !receiptMode ? deferPhysicalSendReporter(initialReporter) : undefined;
+      const deferredInitial = !receiptMode && shouldDeferGenericSend() ? deferPhysicalSendReporter(initialReporter) : undefined;
       try { upstreamResponse = await fetchWithRetryPolicy(
         recovery => {
           // Unconfigured generic sends may omit the counting reporter. Capture policy
@@ -771,8 +773,7 @@ export async function prepareAdapterExchange(
             : undefined;
           let refetchPermitUsed = false;
           const refetchReporter = refetchAllowance ? transientSendReporter(refetchAllowance.permit) : undefined;
-          const deferredRefetch = (billingPoolRequest || options.comboAttempt || route.providerName === "github-copilot" && route.provider.authMode !== "forward") && refetchReporter
-            ? deferPhysicalSendReporter(refetchReporter) : undefined;
+          const deferredRefetch = refetchReporter && (shouldDeferGenericSend() || options.comboAttempt) ? deferPhysicalSendReporter(refetchReporter) : undefined;
           const pendingKeyMetadata = deferredRefetch && transportState.attemptSendDeferred();
           try {
             return await refetchWithPolicy(

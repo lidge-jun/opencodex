@@ -33,6 +33,9 @@ delivery owner and diagnostics; the additional guard enforces explicit-empty cat
 Responses replay boundaries. Initial hosted-sidecar deferred delivery retains its existing contract.
 A named [hosted Advisor selection](../advisor.md#execution-paths) uses the original Messages
 declaration, with availability checked separately on each fallback candidate before dispatch.
+For translated Anthropic turns with hosted Advisor, initial and retry sends claim the workflow
+slot at the executor receipt after credential validation. A post-rewrite refusal consumes zero
+slots for that attempt, and an optional rebuild consumes one slot when its executor runs.
 `tests/responses/explicit-empty-tool-catalog-history.test.ts` covers these continuation boundaries
 and normalization across adapter/run-turn JSON/SSE. The real direct Messages planner and delivery
 share one signed-history translation budget in `tests/responses/current-turn-tool-catalog-direct.test.ts`.

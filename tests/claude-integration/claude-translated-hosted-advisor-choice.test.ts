@@ -14,6 +14,8 @@ import { handleResponses as runResponsesCore } from "../../src/server/responses/
 import { handleResponsesWithPolicyFallback } from "../../src/server/responses/policy-fallback";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import { configureSharedSpendLedger, sharedSpendLedger, spendPolicyFromConfig } from "../../src/lib/spend-reservation-ledger";
+import { workflowBudgetSnapshot } from "../../src/lib/workflow-budget";
+import { admitHttpWorkflowTurn } from "../../src/server/workflow-refusal";
 import type { OcxConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { createTempHome } from "../helpers/temp-home";
@@ -279,12 +281,16 @@ test.each([
   ["explicit", "conflicting credential"], ["optional", "conflicting credential"],
   ["explicit", "different credential"], ["optional", "different credential"],
   ["explicit", "same credential"], ["optional", "same credential"],
+  ["explicit", "conflicting credential on retry"],
 ] as const)("translated hosted Advisor binds the %s send after upstream rewrite (%s)", (mode, rewrite) =>
   withHostedAdvisorSpendHome(async () => {
     const apiKey = "fixture-admitted-key";
     const replacement = "fixture-replacement-key";
     const retainedBeta = "fixture-unrelated-beta";
     const advisorResultId = "srvtoolu_rewrite_fixture";
+    const retry = rewrite === "conflicting credential on retry";
+    const workflowRoot = `advisor-rewrite-${crypto.randomUUID()}`;
+    const headers = { "content-type": "application/json", "anthropic-beta": BETA, "x-codex-parent-thread-id": workflowRoot };
     const sends: { body: { tools?: unknown[]; tool_choice?: unknown }; headers: Headers }[] = [];
     const config: OcxConfig = {
       port: 0, defaultProvider: "gateway",
@@ -293,8 +299,10 @@ test.each([
         adapter: "anthropic", authMode: "key", apiKey, baseUrl: "https://advisor-rewrite.invalid",
         forwardAdvisorTool: true, models: [MODEL], liveModels: false,
         headers: { "anthropic-beta": retainedBeta },
+        ...(retry ? { retryOn429: { attempts: 1, intervalMs: 1, maxIntervalMs: 1 } } : {}),
         fetch: (async (_url: unknown, init?: RequestInit) => {
           sends.push({ body: JSON.parse(String(init?.body)), headers: new Headers(init?.headers) });
+          if (retry && sends.length === 1) return new Response(null, { status: 429 });
           return workerStream([{ type: "text", text: "Done." }], "end_turn");
         }) as typeof fetch,
       } },
@@ -302,16 +310,19 @@ test.each([
     configureSharedSpendLedger(spendPolicyFromConfig(config.spend));
     const unregister = registerUpstreamRewriter("fixture-advisor-credential", target => {
       if (target.url !== "https://advisor-rewrite.invalid/v1/messages") return;
-      if (rewrite === "conflicting credential") target.headers.set("api-key", replacement);
+      if (retry && sends.length === 0) return;
+      if (retry || rewrite === "conflicting credential") target.headers.set("api-key", replacement);
       if (rewrite === "different credential") target.headers.set("x-api-key", replacement);
       if (rewrite !== "same credential" && !target.headers.get("anthropic-beta")?.includes(BETA)) {
         target.headers.append("anthropic-beta", BETA);
       }
       target.headers.set("x-fixture-rewritten", "yes");
     });
+    const workflow = admitHttpWorkflowTurn(new Headers(headers));
     try {
+      expect(workflow?.admitted).toBe(true);
       const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
-        method: "POST", headers: { "content-type": "application/json", "anthropic-beta": BETA },
+        method: "POST", headers,
         body: JSON.stringify({
           model: `gateway/${MODEL}`, max_tokens: 64,
           tools: [{ name: "Read", input_schema: { type: "object" } }, HOSTED_ADVISOR],
@@ -335,11 +346,14 @@ test.each([
         expect(JSON.parse(body)).toMatchObject({ type: "error", error: {
           type: "invalid_request_error", message: expect.stringContaining("admitted upstream credential"),
         } });
-        expect(sends).toHaveLength(0);
+        const expectedSends = retry ? 1 : 0;
+        expect(sends).toHaveLength(expectedSends);
+        expect(workflowBudgetSnapshot(workflowRoot)?.sends).toBe(expectedSends);
         return;
       }
       expect(response.status, body).toBe(200);
       expect(sends).toHaveLength(1);
+      expect(workflowBudgetSnapshot(workflowRoot)?.sends).toBe(sends.length);
       const [wire] = sends;
       expect(wire!.headers.get("x-fixture-rewritten")).toBe("yes");
       expect(wire!.headers.get("x-api-key")).toBe(rewrite === "different credential" ? replacement : apiKey);
@@ -351,7 +365,10 @@ test.each([
         .toEqual(withheld ? [retainedBeta] : [retainedBeta, BETA]);
       expect(JSON.stringify(wire!.body).includes(advisorResultId)).toBe(!withheld);
       if (mode === "explicit") expect(wire!.body.tool_choice).toEqual(CHOICE);
-    } finally { unregister(); }
+    } finally {
+      unregister();
+      if (workflow?.admitted) workflow.lease.release();
+    }
   }));
 
 test.each(["default", "inherited"] as const)("translated preflight honors the %s budget's captured pool policy", budget =>
