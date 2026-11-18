@@ -7,6 +7,14 @@ import { codeBlockLocale } from "../../docs-site/src/data/code-block-locale";
 
 const root = repoPath("docs-site/src/content/docs");
 const source = (path: string): string => readFileSync(path, "utf8").replace(/\r\n/g, "\n");
+
+test("Google adapter references document 429 retry evidence in English and Spanish", () => {
+  for (const locale of ["", "es/"]) {
+    const google = source(join(root, locale, "reference/adapters.md")).split("## `google`\n")[1]?.split("\n## ")[0];
+    expect(google).toMatch(/`429`[^.]*`Retry-After`/);
+  }
+});
+
 const config = source(repoPath("docs-site/astro.config.mjs"));
 // Use the configured locale directories rather than freezing today's page count.
 const localeFolders = new Set([...config.matchAll(/^\s*["']?([a-z]{2}(?:-[a-z]{2})?)["']?:\s*\{\s*label:/gm)]

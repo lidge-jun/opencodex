@@ -1,5 +1,6 @@
 import { parseUpstreamJsonPayload, safeUpstreamErrorString, sanitizeUpstreamErrorText } from "./upstream-http-error";
 import { isLocationUnsupportedMessage } from "../lib/errors";
+import { retryAfterDelayMs } from "../lib/upstream-retry";
 
 export const ANTIGRAVITY_VALIDATION_REQUIRED_PREFIX = "Antigravity account validation required (VALIDATION_REQUIRED)";
 /** Leading words of every normalized Antigravity 403 that is not a validation demand (see `classifyGoogle`). */
@@ -118,8 +119,9 @@ const GOOGLE_RETRY_INFO_TYPE = "google.rpc.RetryInfo";
  * so the segment is compared whole. A detail with no `@type` asserts nothing and admits both.
  */
 function detailTypeMatches(record: Record<string, unknown>, expected: string): boolean {
+  if (!Object.hasOwn(record, "@type")) return true;
   const declared = record["@type"];
-  if (typeof declared !== "string") return true;
+  if (typeof declared !== "string") return false;
   const segment = declared.slice(declared.lastIndexOf("/") + 1);
   return segment === expected;
 }
@@ -159,6 +161,10 @@ function googleErrorReasons(payloadText: string): string[] {
   return reasons;
 }
 
+function isGoogleRetryDuration(value: unknown): boolean {
+  return typeof value === "string" && /^\s*\d+(?:\.\d+)?\s*s\s*$/i.test(value);
+}
+
 /**
  * Whether a detail states a wait, including an explicit `0s`.
  *
@@ -173,15 +179,9 @@ function hasGoogleRetryDelayDetail(payloadText: string): boolean {
   for (const detail of details) {
     const record = jsonRecord(detail);
     if (!record) continue;
+    if (detailTypeMatches(record, GOOGLE_RETRY_INFO_TYPE) && isGoogleRetryDuration(record.retryDelay)) return true;
     const metadata = jsonRecord(record.metadata);
-    const raw = typeof record.retryDelay === "string"
-      ? record.retryDelay
-      : typeof metadata?.quotaResetDelay === "string" ? metadata.quotaResetDelay : undefined;
-    // A wait belongs to `RetryInfo`; a `quotaResetDelay` rides inside `ErrorInfo.metadata`. A
-    // foreign detail that happens to spell either field states no wait the provider will honor.
-    const expectedType = typeof record.retryDelay === "string" ? GOOGLE_RETRY_INFO_TYPE : GOOGLE_ERROR_INFO_TYPE;
-    if (!detailTypeMatches(record, expectedType)) continue;
-    if (raw && /^\s*\d+(?:\.\d+)?\s*s\s*$/i.test(raw)) return true;
+    if (detailTypeMatches(record, GOOGLE_ERROR_INFO_TYPE) && isGoogleRetryDuration(metadata?.quotaResetDelay)) return true;
   }
   return false;
 }
@@ -222,7 +222,7 @@ const GOOGLE_RETRYABLE_429_MESSAGE_NEEDLES = [
  * The ladder replays a byte-identical body after 250 ms, doubling to 2 s. That is a sensible
  * probe for a burst limit that clears, and meaningless for a refusal Google already made on the
  * request's shape: the same bytes are refused again. Only evidence in the response separates
- * the two, so this reports whether any exists — a `Retry-After` header, a `RetryInfo.retryDelay`
+ * the two, so this reports whether any exists — a parseable `Retry-After` header, a `RetryInfo.retryDelay`
  * / `quotaResetDelay` detail, a transient-rate-limit phrase, or a structured
  * `ErrorInfo.reason`. A 429 with none of them is reported as-is instead of being replayed.
  *
@@ -235,7 +235,7 @@ const GOOGLE_RETRYABLE_429_MESSAGE_NEEDLES = [
  *   times per turn.
  */
 export function hasGoogle429RetryEvidence(headers: Headers, payloadText: string): boolean {
-  if (headers.get("retry-after")?.trim()) return true;
+  if (retryAfterDelayMs(headers) !== undefined) return true;
   if (hasGoogleRetryDelayDetail(payloadText)) return true;
   const messageText = googleMessageText(payloadText).toLowerCase();
   if (isGoogleTransientRateLimitText(messageText)) return true;
