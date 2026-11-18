@@ -627,7 +627,7 @@ export async function executeComboResponses(
     markProxyError(formatErrorResponse(400, "invalid_request_error", "No target of this combo can accept image input"));
   const warnComboImageOmission = (): void =>
     console.warn("[opencodex] combo has no image-capable target; images will be omitted");
-  const capability = await comboCapabilityGate(config, combo, body, target => {
+  const readCapability = () => comboCapabilityGate(config, combo, body, target => {
     try {
       const route = routeConcreteModel(config, `${target.provider}/${target.model}`);
       const provider = resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, options.inboundWire);
@@ -635,16 +635,24 @@ export async function executeComboResponses(
     } catch { return undefined; }
   }, (target, route) => capabilityCandidate(target) && (!route || routeAllowedByScope(admissionScope, route)),
   (route, parsed) => canDescribeComboImages({ config, req, options }, route, parsed));
-  if (capability.unservable === "audio") {
-    return formatErrorResponse(400, "invalid_request_error", "No target of this combo can accept audio input");
-  }
-  if (capability.unservable && combo.onUnservable === "reject") {
-    return capability.unservable === "context"
-      ? formatErrorResponse(400, "invalid_request_error", "No target of this combo has a context window large enough for this request")
-      : unservableImageResponse();
-  }
-  if (capability.unservable === "image") warnComboImageOmission();
-  if (capability.unservable === "context") console.warn("[opencodex] combo has no target whose context window fits; sending to the largest");
+  const capabilityRefusal = (capability: Awaited<ReturnType<typeof readCapability>>): Response | undefined => {
+    if (capability.unservable === "audio") {
+      return formatErrorResponse(400, "invalid_request_error", "No target of this combo can accept audio input");
+    }
+    if (capability.unservable && combo.onUnservable === "reject") {
+      return capability.unservable === "context"
+        ? formatErrorResponse(400, "invalid_request_error", "No target of this combo has a context window large enough for this request")
+        : unservableImageResponse();
+    }
+  };
+  const warnCapabilityDegradation = (reason: Awaited<ReturnType<typeof readCapability>>["unservable"]): void => {
+    if (reason === "image") warnComboImageOmission();
+    if (reason === "context") console.warn("[opencodex] combo has no target whose context window fits; sending to the largest");
+  };
+  let capability = await readCapability();
+  const initialRefusal = capabilityRefusal(capability);
+  if (initialRefusal) return initialRefusal;
+  warnCapabilityDegradation(capability.unservable);
   const visionRejectedTargets = new Set<string>();
   let omittingImages = capability.unservable === "image";
   const useImageDegradation = (target: (typeof combo.targets)[number]): boolean =>
@@ -922,10 +930,17 @@ export async function executeComboResponses(
     }
     let selected = choices.find(choice => choice.candidate.key === decision.targetKey) ?? first;
     let selectionUnavailable = false;
+    let refreshedRefusal: Response | undefined;
     if ((pick.cooldownReprobeTargets || awaitedPinEffort) && !options.abortSignal?.aborted) {
       // Another request can cool the target while the decision is awaited. Recheck current
       // availability, request eligibility and any original reprobe reservation.
-      const currentChoices = eligibleJevComboChoices(config, comboId, targetEligible, Date.now(), pick.cooldownReprobeTargets);
+      const previousUnservable = capability.unservable;
+      capability = await readCapability();
+      if (options.abortSignal?.aborted) return clientCancelledResponse();
+      refreshedRefusal = capabilityRefusal(capability);
+      omittingImages = capability.unservable === "image";
+      if (!refreshedRefusal && previousUnservable !== capability.unservable) warnCapabilityDegradation(capability.unservable);
+      const currentChoices = refreshedRefusal ? [] : eligibleJevComboChoices(config, comboId, targetEligible, Date.now(), pick.cooldownReprobeTargets);
       const current = currentChoices.find(choice => choice.candidate.key === decision.targetKey
         && (decision.effort === null ? choice.candidate.reasoningEfforts.length === 0
           : choice.candidate.reasoningEfforts.includes(decision.effort)));
@@ -983,6 +998,7 @@ export async function executeComboResponses(
       ...(observedDecision.usage ? { usage: observedDecision.usage } : {}),
     });
     // A completed decision belongs to the parent log even if no model can be dispatched.
+    if (refreshedRefusal) return refreshedRefusal;
     if (selectionUnavailable) {
       return comboUnavailable(comboId, undefined, comboExclusion(config, comboId, target =>
         targetEligible(target) && target.provider !== JEV_PROVIDER_ID && jevChoiceEfforts(config, target, false) !== undefined));
