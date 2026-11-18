@@ -7,7 +7,7 @@ import type {
   OcxToolCall,
   OcxToolResultMessage,
 } from "../../types";
-import { isAllowedToolChoice, namespacedToolName, toolChoiceAliases, type OcxTool, type OcxToolChoice } from "../../types";
+import { isAllowedToolChoice, isQualifiedToolChoiceName, namespacedToolName, toolChoiceAliases, type OcxTool, type OcxToolChoice } from "../../types";
 import type { CursorRequestMessage, CursorRequestedModelParameter, CursorRunRequest } from "./types";
 import { cursorCheckpointModelAffinityId, cursorWireModelSelection, type CursorRoutingLevel } from "./discovery";
 import { cursorUltraBaseModelId } from "./discovery";
@@ -514,9 +514,9 @@ export function createCursorRequest(
   // Resolve accepted bare wire aliases before filtering can remove their shell-bridge context.
   // Keep the original selection so a semantic name cannot widen to a namespaced sibling.
   const selectedTools = catalog.filter(tool => cursorToolAllowedByChoice(tool, originalChoice, catalog));
-  const semanticChoiceName = (name: string): string => selectedTools.find(tool =>
-    !tool.namespace && cursorToolWireName(tool, catalog) === name
-    && cursorToolAllowedByChoice(tool, { name }, catalog))?.name ?? name;
+  const semanticChoiceName = (name: string): string => isQualifiedToolChoiceName(originalChoice, name) ? name
+    : selectedTools.find(tool => !tool.namespace && cursorToolWireName(tool, catalog) === name
+      && cursorToolAllowedByChoice(tool, { name }, catalog))?.name ?? name;
   const toolChoice = originalChoice && typeof originalChoice === "object"
     ? "name" in originalChoice
       ? { ...originalChoice, name: semanticChoiceName(originalChoice.name) }

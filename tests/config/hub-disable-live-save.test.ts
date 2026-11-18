@@ -111,6 +111,18 @@ test("OAuth disk adoption keeps the running hub topology until restart", () => {
   expectDisabled(scenario(live => { live.logLevel = "info"; }, undefined, true));
 });
 
+test.each([false, true])("staged Codex login policy stays inactive until restart (OAuth adoption=%s)", oauth => {
+  const initial: OcxConfig = { ...seed(), codexAuthMethod: "device-only" };
+  const { live, saved } = scenario(
+    config => { config.logLevel = "info"; },
+    config => { config.codexAuthMethod = "auto"; },
+    oauth, false, initial,
+  );
+  expect(saved.codexAuthMethod).toBe("auto");
+  expect(saved.logLevel).toBe("warn");
+  expect(live.codexAuthMethod).toBe("device-only");
+});
+
 test.each([false, true])("desired topology additions/updates survive repeated saves (OAuth adoption=%s)", oauth => {
   const result = scenario(live => { live.logLevel = "info"; }, disk => {
     disk.hub!.managementPublicOrigin = "https://new-hub.example.test";

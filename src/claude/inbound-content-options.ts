@@ -112,6 +112,16 @@ export function declaredAnthropicServerTools(raw: unknown): Rec[] | undefined {
   return tools.length > 0 ? tools : undefined;
 }
 
+export type HostedAdvisorSelection = "selected" | "ambiguous";
+
+/** Read the named choice against the original catalog before Messages lowers it to a function. */
+export function hostedAdvisorSelection(raw: unknown): HostedAdvisorSelection | undefined {
+  if (!isRec(raw) || !isRec(raw.tool_choice) || !Array.isArray(raw.tools)
+    || raw.tool_choice.type !== "tool" || raw.tool_choice.name !== ADVISOR_SERVER_TOOL_NAME) return undefined;
+  const matching = raw.tools.filter((tool): tool is Rec => isRec(tool) && tool.name === ADVISOR_SERVER_TOOL_NAME);
+  if (matching.some(tool => isAdvisorServerToolType(tool.type))) return matching.length === 1 ? "selected" : "ambiguous";
+}
+
 /**
  * A declared tool the translated body drops and no out-of-body lane carries (bash_*, text_editor_*, ...).
  * The Advisor rides the out-of-body lane and is optional: a destination without it simply runs the
@@ -215,7 +225,7 @@ export function toolChoiceToResponses(choice: unknown, body: Rec): void {
       }
       // Anthropic represents hosted WebSearch as a named tool choice, while
       // Responses requires the choice type to match the hosted declaration.
-      // Preserve forced-tool intent rather than weakening it to `auto`.
+      // Keep the hosted selector for request authorization even when an adapter lowers it to auto.
       if (isClaudeWebSearchToolName(choice.name)
         && (!Array.isArray(body.tools) || !body.tools.some(tool => isRec(tool) && tool.type === "web_search"))) {
         throw markProxyError(new AnthropicRequestError("Restricted web search cannot be forced on a translated route without an available search declaration"));

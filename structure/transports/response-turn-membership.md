@@ -31,6 +31,8 @@ Delivery intersects current names with the existing selection-filtered bridge na
 `tool_choice` cannot be widened by the snapshot. Ordinary Responses validation retains its
 delivery owner and diagnostics; the additional guard enforces explicit-empty catalogs and
 Responses replay boundaries. Initial hosted-sidecar deferred delivery retains its existing contract.
+A named [hosted Advisor selection](../advisor.md#execution-paths) uses the original Messages
+declaration, with availability checked separately on each fallback candidate before dispatch.
 `tests/responses/explicit-empty-tool-catalog-history.test.ts` covers these continuation boundaries
 and normalization across adapter/run-turn JSON/SSE. The real direct Messages planner and delivery
 share one signed-history translation budget in `tests/responses/current-turn-tool-catalog-direct.test.ts`.
