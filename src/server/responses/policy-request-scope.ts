@@ -50,10 +50,12 @@ export function markPolicyCandidateRefusal(response: Response): Response {
   return response;
 }
 
-/** A mandatory hosted selection cannot be met by this credential under the captured ceiling. */
+/** A mandatory hosted selection cannot be admitted under the credential's spend policy. */
 export class HostedAdvisorSpendRefusal extends Error {
-  constructor() {
-    super("The selected hosted Advisor tool is unavailable under the applicable token spend ceiling.");
+  constructor(reason: "ceiling" | "ambiguous-credentials") {
+    super(reason === "ceiling"
+      ? "The selected hosted Advisor tool is unavailable under the applicable token spend ceiling."
+      : "The selected hosted Advisor tool is unavailable with ambiguous upstream credentials.");
   }
 
   event(): Extract<AdapterEvent, { type: "error" }> {

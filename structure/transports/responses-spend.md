@@ -111,22 +111,22 @@ Producer settlement performs that release instead, clearing only the matching pe
 Direct callers retain their prior hop reporting contract.
 
 The optional Anthropic-hosted Advisor on translated Messages turns is withheld from the first
-send whose selected target has an applicable captured root, identity or pool token ceiling.
-Earlier sends on an unlimited target are unaffected. Its secondary model usage
-has no independent reservation and settlement contract. Before optional planning,
+send whose selected target has an applicable captured root, identity or pool token ceiling or has
+[ambiguous credential ownership](../advisor.md#claude-codes-typed-advisor-server-tool).
+Its secondary model usage has no independent reservation and settlement contract. Before optional planning,
 `src/server/responses/sidecar-execution.ts` queries the policy with the actual authenticated spend
 target if a destination-eligible Advisor declaration or replay is present. Destination eligibility
-uses the transport's resolved `initialAdapterProvider`, including proactive key selection and
-model wire overrides. The query captures original
-ceilings without starting accounting, reserving a seed or choosing its mode; an already started budget
+uses the transport's resolved `initialAdapterProvider`, including proactive key selection and model wire overrides.
+The query captures original ceilings without starting accounting, reserving a seed or choosing its mode; an already started budget
 keeps its policy. `request-spend.ts` retains the original frozen ceilings even when Combo prepayment
 selected observe-only accounting before its child had an identity. `hasCapturedSpendCeiling` on
 `src/lib/request-execution-budget.ts` and its derived/adapter views checks that snapshot against the
 actual target without changing enforcement mode, effective admission policy, physical limits or
 reservations. The Responses owner exposes that query separately from its adapter budget and supplies
 the actual request root, never a target-supplied root. An observer's query is authoritative even when
-it returns false; without that query, an enforced observer still withholds optional work. Otherwise
-`requestHasCapturedSpendCeiling` lazily freezes numeric ceilings for the shared factory ledger or
+it returns false. Without that query, enforced spend still withholds optional work, and otherwise
+`requestHasCapturedSpendCeiling` checks the holder's published `spendAdmissionPolicy`. If the holder
+has no snapshot, the query lazily freezes shared numeric ceilings for the factory ledger or
 legacy/foreign holder. Derived scopes and adapter views retain the same query owner and snapshot.
 Querying does not install a spend observer, promote a holder or change main-model accounting.
 `tests/responses/responses-first-send-spend-policy.test.ts` covers these holder forms, that separation and

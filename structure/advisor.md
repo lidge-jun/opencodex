@@ -134,8 +134,10 @@ through the Responses core.
 
 Translated turns evaluate the current send's selected identity and effective wire. An applicable
 root, identity or pool token ceiling withholds the optional hosted declaration, completed Advisor
-history and beta from that send onward, while the main model and other tools continue. An explicit
-Messages selection refuses the capped target before vision preprocessing or worker dispatch. An
+history and beta from that send onward, while the main model and other tools continue. The same
+rule applies when the effective Anthropic provider appends an operator credential header recognized
+by `src/providers/api-key-response-ownership.ts`, which makes credential ownership ambiguous.
+An explicit Messages selection refuses either target before vision preprocessing or worker dispatch. An
 eligible fallback candidate can still fulfill the selection. The client receives HTTP 400 if no compatible route serves the request
 before response streaming starts. During streaming, a refused continuation emits a terminal error.
 `hosted-advisor-spend.ts` and `sidecar-execution.ts` use the transport's `initialAdapterProvider`
@@ -143,8 +145,9 @@ to check the actual authenticated target's ceilings without starting main-model 
 original translated turn owns the numeric ceiling snapshot and shares it with the default policy
 candidate and translated Combo trackers. The budget's read-only
 `hasCapturedSpendCeiling` checks the original numeric ceilings against that target, including an
-identity selected after Combo prepayment. It does not change the initial accounting mode or reread
-live config. Its hosted-only identity binding leaves ordinary accounting scopes unchanged.
+identity selected after Combo prepayment. An inherited budget can also supply its published
+snapshot for that check. See [Responses spend](transports/responses-spend.md#prepaid-initial-sends)
+for precedence. The hosted-only identity binding leaves ordinary accounting scopes unchanged.
 The physical adapter builder supplies its own resolved provider when reapplying the same query
 to admitted replacement identities before serialization, including sidecar copies and dispatch-time
 reselection. Credential rebuilding may restore a provider-wide adapter, so eligibility follows this

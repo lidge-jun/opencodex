@@ -267,6 +267,28 @@ for (const queried of [false, true]) for (const enforced of [false, true]) {
   });
 }
 
+for (const kind of ["observer", "foreign"] as const) for (const scope of ["identity", "pool"] as const) {
+  test(`published ${scope} ceiling takes precedence for ${kind} holders and their derived budgets`, () => {
+    const previousPolicy = sharedSpendPolicy();
+    const snapshot = spendPolicyFromConfig({ [scope]: { maxTokens: 1 } });
+    const parent = kind === "observer"
+      ? createRequestExecutionBudget(undefined, undefined, {
+        spendAdmissionPolicy: snapshot, charge: () => true, refund: () => {},
+      })
+      : { ...createRequestExecutionBudget(), spendAdmissionPolicy: snapshot };
+    if (kind === "foreign") delete parent.hasCapturedSpendCeiling;
+    const derived = deriveRequestExecutionBudget(parent, parent.policy);
+    const applicable = { identityId: "fixture-account", poolId: "fixture-pool" };
+    const inapplicable = scope === "identity" ? { poolId: applicable.poolId } : { identityId: applicable.identityId };
+    try {
+      configureSharedSpendLedger(spendPolicyFromConfig({}));
+      expect([parent, derived].map(holder => requestHasCapturedSpendCeiling(holder, applicable))).toEqual([true, true]);
+      configureSharedSpendLedger(spendPolicyFromConfig({ identity: { maxTokens: 1 }, pool: { maxTokens: 1 } }));
+      expect([parent, derived].map(holder => requestHasCapturedSpendCeiling(holder, inapplicable))).toEqual([false, false]);
+    } finally { configureSharedSpendLedger(previousPolicy); }
+  });
+}
+
 for (const pinnedWire of [false, true]) for (const lane of ["main", "search", "named", "forced", "forced-search"] as const) for (const limited of ["first", "second", "neither"] as const) {
   test(`hosted Advisor follows captured target policy after key rotation (pinnedWire=${pinnedWire}, lane=${lane}, limited=${limited})`, async () => {
     const originalFetch = globalThis.fetch;

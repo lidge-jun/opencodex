@@ -296,8 +296,8 @@ const sharedSendLedgers = new WeakMap<RequestExecutionBudget, SharedSendLedger>(
 // Only optional-work queries capture this fallback. Factory scopes key it by their shared
 // ledger; legacy/foreign holders key it by their public owner. No accounting observer is added.
 const fallbackSpendPolicies = new WeakMap<object, SpendAdmissionPolicy>();
-function fallbackHasCapturedSpendCeiling(owner: object, target: SpendScopes = {}): boolean {
-  let policy = fallbackSpendPolicies.get(owner);
+function fallbackHasCapturedSpendCeiling(owner: object, target: SpendScopes = {}, published?: SpendAdmissionPolicy): boolean {
+  let policy = published ?? fallbackSpendPolicies.get(owner);
   if (!policy) {
     const current = sharedSpendPolicy();
     policy = Object.freeze({ root: Object.freeze({ ...current.root }), identity: Object.freeze({ ...current.identity }), pool: Object.freeze({ ...current.pool }) });
@@ -313,7 +313,7 @@ export function requestHasCapturedSpendCeiling(budget: TransientSendBudget, targ
   const execution = budget as Partial<RequestExecutionBudget>;
   if (execution.hasCapturedSpendCeiling) return execution.hasCapturedSpendCeiling(target);
   if (execution.spendEnforced === true) return true;
-  return fallbackHasCapturedSpendCeiling(budget, target);
+  return fallbackHasCapturedSpendCeiling(budget, target, execution.spendAdmissionPolicy);
 }
 
 interface SameTargetRecoveryScope {
@@ -523,7 +523,7 @@ function createRequestExecutionBudgetWithLedger(
       if (observer?.enforced === true) return true;
       return counter.recoveryOwner
         ? requestHasCapturedSpendCeiling(counter.recoveryOwner, target)
-        : fallbackHasCapturedSpendCeiling(counter, target);
+        : fallbackHasCapturedSpendCeiling(counter, target, observer?.spendAdmissionPolicy);
     },
     startRequest(target) {
       observer?.startRequest?.(target);

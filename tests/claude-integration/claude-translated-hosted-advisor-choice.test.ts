@@ -222,15 +222,21 @@ async function withHostedAdvisorSpendHome(run: () => Promise<void>): Promise<voi
   } finally { home.remove(); }
 }
 
-test.each(["explicit", "optional"] as const)("a capped key on a local-mode Anthropic gateway blocks %s hosted Advisor", mode =>
+test.each([
+  ["explicit", "capped key"], ["optional", "capped key"],
+  ["explicit", "extra credential"], ["optional", "extra credential"],
+  ["explicit", "ordinary header"], ["optional", "ordinary header"],
+] as const)("local-mode Anthropic gateway honors %s hosted Advisor admission (%s)", (mode, scenario) =>
   withHostedAdvisorSpendHome(async () => {
     const apiKey = "fixture-local-gateway-key";
+    const headers: Record<string, string> | undefined = scenario === "extra credential" ? { "Api-Key": "fixture-extra-key" }
+      : scenario === "ordinary header" ? { "x-gateway-region": "fixture-region" } : undefined;
     const sends: { body: Record<string, unknown>; headers: Headers }[] = [];
     const config: OcxConfig = {
-      port: 0, defaultProvider: "gateway", spend: { identity: { maxTokens: 1 } },
+      port: 0, defaultProvider: "gateway", spend: scenario === "capped key" ? { identity: { maxTokens: 1 } } : {},
       claudeCode: { nativePassthrough: false }, protocols: { rollout: { managedMessagesNative: false } },
       providers: { gateway: { adapter: "anthropic", authMode: "local", apiKey, baseUrl: "https://gateway.invalid",
-        forwardAdvisorTool: true, models: [MODEL], liveModels: false,
+        forwardAdvisorTool: true, models: [MODEL], liveModels: false, headers,
         fetch: (async (_url: unknown, init?: RequestInit) => {
           sends.push({ body: JSON.parse(String(init?.body)), headers: new Headers(init?.headers) });
           return workerStream([{ type: "text", text: "Done." }], "end_turn");
@@ -246,16 +252,24 @@ test.each(["explicit", "optional"] as const)("a capped key on a local-mode Anthr
         tool_choice: mode === "explicit" ? CHOICE : undefined, messages: [{ role: "user", content: "Fixture." }] }),
     }), config, log, { requestId: crypto.randomUUID(), start: Date.now() });
     const body = await response.text();
-    if (mode === "explicit") {
+    const withheld = scenario !== "ordinary header";
+    if (mode === "explicit" && withheld) {
       expect(response.status, body).toBe(400);
-      expect(body).toContain("token spend ceiling");
+      expect(body).toContain(scenario === "capped key" ? "token spend ceiling" : "ambiguous upstream credentials");
       expect(sends).toHaveLength(0);
     } else {
       expect(response.status, body).toBe(200);
       expect(sends).toHaveLength(1);
       expect(sends[0]!.headers.get("x-api-key")).toBe(apiKey);
-      expect(sends[0]!.body.tools ?? []).not.toContainEqual(expect.objectContaining(HOSTED_ADVISOR));
-      expect(sends[0]!.headers.get("anthropic-beta") ?? "").not.toContain(BETA);
+      if (withheld) {
+        expect(sends[0]!.body.tools ?? []).not.toContainEqual(expect.objectContaining(HOSTED_ADVISOR));
+        expect(sends[0]!.headers.get("anthropic-beta") ?? "").not.toContain(BETA);
+        if (scenario === "extra credential") expect(sends[0]!.headers.get("api-key")).toBe("fixture-extra-key");
+      } else {
+        expect(sends[0]!.body.tools).toContainEqual(expect.objectContaining(HOSTED_ADVISOR));
+        expect(sends[0]!.headers.get("anthropic-beta")).toContain(BETA);
+        expect(sends[0]!.headers.get("x-gateway-region")).toBe("fixture-region");
+      }
       expect(log.accountLogLabel).toBeUndefined();
     }
   }));

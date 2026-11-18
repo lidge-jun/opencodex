@@ -14,7 +14,8 @@ import { ADVISOR_TOOL_NAME, advisorToolAllowed, createAdvisorSidecarStep } from 
 import { advisorServerToolDestination, hasAdvisorServerTools, withholdAdvisorServerTools } from "../../adapters/anthropic/advisor-tool";
 import { addProtocolEntryReason } from "../../protocols/trace";
 import { responsesHostedAdvisorSpendTarget } from "./request-spend-target";
-import { HostedAdvisorSpendRefusal } from "./policy-request-scope";
+import { hostedAdvisorSpendRefusalFor } from "./hosted-advisor-spend";
+import type { HostedAdvisorSpendRefusal } from "./policy-request-scope";
 import { buildToolBridgeMaps } from "./collaboration";
 import {
   planImageBridge,
@@ -196,15 +197,18 @@ export async function executeResponsesSidecars(
   // Read the actual authenticated target's captured ceilings before an optional plan can await;
   // this query never starts or changes the main-model accounting mode.
   const hostedAdvisorSpendScope = options.hostedAdvisorSpendScope ?? { optionalWithheld: false };
-  let hostedAdvisorSpendRefused = false;
+  let hostedAdvisorSpendRefusal: HostedAdvisorSpendRefusal | undefined;
   const explicitlySelectedHostedAdvisor = options.anthropicHostedAdvisorSelection === "selected";
   const withholdHostedAdvisorBySpend = (request: OcxParsedRequest, provider: OcxProviderConfig) => {
-    if (!hostedAdvisorSpendScope.optionalWithheld && !hostedAdvisorSpendRefused && advisorServerToolDestination(provider)
-      && (hasAdvisorServerTools(parsed) || hasAdvisorServerTools(request))
-      && sendBudgetState.hasCapturedSpendCeiling(responsesHostedAdvisorSpendTarget(logCtx, route.providerName, provider))) {
-      if (explicitlySelectedHostedAdvisor) hostedAdvisorSpendRefused = true;
-      else hostedAdvisorSpendScope.optionalWithheld = true;
-      addProtocolEntryReason(logCtx, "advisor-tool-withheld-by-spend-policy");
+    if (!hostedAdvisorSpendScope.optionalWithheld && !hostedAdvisorSpendRefusal
+      && (hasAdvisorServerTools(parsed) || hasAdvisorServerTools(request))) {
+      const refusal = hostedAdvisorSpendRefusalFor(provider, () =>
+        sendBudgetState.hasCapturedSpendCeiling(responsesHostedAdvisorSpendTarget(logCtx, route.providerName, provider)));
+      if (refusal) {
+        if (explicitlySelectedHostedAdvisor) hostedAdvisorSpendRefusal = refusal;
+        else hostedAdvisorSpendScope.optionalWithheld = true;
+        addProtocolEntryReason(logCtx, "advisor-tool-withheld-by-spend-policy");
+      }
     }
     if (hostedAdvisorSpendScope.optionalWithheld) {
       withholdAdvisorServerTools(parsed);
@@ -212,9 +216,9 @@ export async function executeResponsesSidecars(
     }
   };
   withholdHostedAdvisorBySpend(parsed, transportState.initialAdapterProvider);
-  if (hostedAdvisorSpendRefused) {
+  if (hostedAdvisorSpendRefusal) {
     releaseSearchProbeLease();
-    return new HostedAdvisorSpendRefusal().response();
+    return hostedAdvisorSpendRefusal.response();
   }
   const normalizeWithheldAdvisorChoice = (request = parsed) => {
     const choice = request.options.toolChoice;
@@ -232,7 +236,7 @@ export async function executeResponsesSidecars(
   // Withholding is monotonic across all later identities/copies.
   transportState.hostedAdvisorSpendGuard = (request, provider) => {
     withholdHostedAdvisorBySpend(request, provider);
-    if (hostedAdvisorSpendRefused) throw new HostedAdvisorSpendRefusal();
+    if (hostedAdvisorSpendRefusal) throw hostedAdvisorSpendRefusal;
     normalizeWithheldAdvisorChoice();
     if (request !== parsed) normalizeWithheldAdvisorChoice(request);
   };
@@ -310,12 +314,12 @@ export async function executeResponsesSidecars(
   };
   const sidecarScopeRefusal = (response: Response): Response | undefined => {
     if (response.ok) return undefined;
-    const hostedSpendRefusal = response.status === 400 && hostedAdvisorSpendRefused;
+    const hostedSpendRefusal = response.status === 400 ? hostedAdvisorSpendRefusal : undefined;
     if (!sidecarScopeDenial && !hostedSpendRefusal) return undefined;
     void response.body?.cancel().catch(() => {});
     releaseSearchProbeLease();
     return sidecarScopeDenial ? admissionModelDeniedResponse(projectAdmissionModelDeniedLog(sidecarScopeDenial, logCtx))
-      : new HostedAdvisorSpendRefusal().response();
+      : hostedSpendRefusal?.response();
   };
   /** Admit a replacement credential, or leave the loop's original refusal authoritative. */
   const rotateSidecarProviderOn429 = async (
