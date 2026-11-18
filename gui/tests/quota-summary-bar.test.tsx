@@ -86,6 +86,24 @@ async function click(element: Element) {
   });
 }
 
+test("Mistral quota chip shows budget amounts and plan in its actual popover", async () => {
+  const reports = freshQuotaReportsFromResponse([{ provider: "mistral", updatedAt: now, quota: { updatedAt: now, customWindows: [
+    { label: "API budget", displayLabel: "API budget (EUR 2.50 of EUR 20.00 used; EDU)", percent: 12.5 },
+    { label: "Vibe budget", displayLabel: "Vibe budget (EUR 0.20 of EUR 10.00 used; EDU)", percent: 2 },
+  ] } }], now);
+  const container = document.createElement("div");
+  document.body.append(container);
+  const { createRoot } = await import("react-dom/client");
+  const root = createRoot(container);
+  await act(async () => { root.render(<QuotaSummaryChips rows={buildQuotaSummary(reports, name => name)} t={t} locale="en" />); });
+  const chip = container.querySelector("a.quota-summary-chip")!;
+  await act(async () => { chip.dispatchEvent(new testWindow.PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" }) as never); });
+  const popover = container.querySelector(".quota-summary-popover")!;
+  expect(popover.textContent).toContain("API budget (EUR 2.50 of EUR 20.00 used; EDU)");
+  expect(popover.textContent).toContain("Vibe budget (EUR 0.20 of EUR 10.00 used; EDU)");
+  await act(async () => { root.unmount(); });
+});
+
 /** happy-dom does no layout, so the scroll metrics a real browser would report are stubbed. */
 async function scrollMetrics(list: HTMLElement, metrics: { scrollWidth: number; clientWidth: number; scrollLeft: number }) {
   for (const [key, value] of Object.entries(metrics)) Object.defineProperty(list, key, { configurable: true, value });

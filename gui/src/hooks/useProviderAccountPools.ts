@@ -9,6 +9,14 @@ import { confirmAction, requestTextValue } from "../action-dialogs";
 import { credentialAliasRejection, CREDENTIAL_ALIAS_MAX_LENGTH } from "../credential-alias";
 import { accountNeedsReauth } from "../oauth-health-display";
 import { oauthAccountDisplayLabel } from "../provider-workspace/auth";
+import { oauthCredentialSlot } from "../../../src/oauth/credential-siblings";
+import { oauthLabel } from "../pages/providers-shared";
+
+/** The owner whose accounts a shared-login row (Kimi (Responses)) acts on, else undefined. */
+const sharedAccountsOwner = (provider: string): string | undefined => {
+  const slot = oauthCredentialSlot(provider);
+  return slot !== provider ? slot : undefined;
+};
 import { affinityResetRetries, subscribeAffinityResetRetries, rememberAffinityResetRetry, beginAffinityResetOperation } from "../provider-affinity-reset-retries";
 
 export interface Config {
@@ -54,6 +62,9 @@ function mergeRosterRows<T extends QuotaRow>(rows: T[], previous: T[]): T[] {
     ...row,
     quotaPending: prior.get(row.id)?.quotaPending ?? false,
     quotaUnavailable: prior.get(row.id)?.quotaMode === row.quotaMode ? prior.get(row.id)?.quotaUnavailable ?? false : false,
+    // #8397: the roster read carries no read time; keep the last reading's reason and time.
+    quotaReadAt: prior.get(row.id)?.quotaMode === row.quotaMode ? prior.get(row.id)?.quotaReadAt : undefined,
+    quotaUnknownReason: prior.get(row.id)?.quotaMode === row.quotaMode ? prior.get(row.id)?.quotaUnknownReason : undefined,
     quotaFailure: row.quotaMode === "probe" && prior.get(row.id)?.quotaMode === row.quotaMode && prior.get(row.id)?.quotaUnavailable
       ? parseQuotaFailureCode(prior.get(row.id)?.quotaFailure) : undefined,
   } : row);
@@ -66,7 +77,8 @@ function mergeLateQuotaRows<T extends QuotaRow>(rows: T[], enriched: T[]): T[] {
     const incoming = byId.get(row.id);
     if (!incoming || incoming.quotaMode !== row.quotaMode) return row;
     const quota = mergeQuotaRows([incoming], [row], true)[0];
-    return { ...row, quota: quota.quota, quotaPending: quota.quotaPending, quotaUnavailable: quota.quotaUnavailable, quotaFailure: quota.quotaFailure };
+    return { ...row, quota: quota.quota, quotaPending: quota.quotaPending, quotaUnavailable: quota.quotaUnavailable, quotaFailure: quota.quotaFailure,
+      quotaReadAt: quota.quotaReadAt, quotaUnknownReason: quota.quotaUnknownReason };
   });
 }
 
@@ -599,6 +611,16 @@ export function useProviderAccountPools(deps: {
 
   const pauseAccount = async (provider: string, account: OAuthAccount, paused: boolean, retryAffinityReset = false) => {
     const capture = renderCapture;
+    // Pausing a shared account also stops the owner row (the Kimi Chat row) from using it: say so first.
+    const owner = sharedAccountsOwner(provider);
+    if (owner && paused && !retryAffinityReset) {
+      const consented = await confirmAction({
+        message: t("prov.accountPauseConfirmShared", { email: accountLabel(provider, account), provider: oauthLabel(owner) }),
+        confirmLabel: t("codexAuth.pause"),
+        tone: "danger",
+      });
+      if (!consented || !aliveRef.current || !mountedRef.current || serverRef.current !== serverIdentity || !captureIsCurrent(capture)) return;
+    }
     if (switchingAccountRef.current.has(provider) || pausingAccountRef.current.has(provider) || selectionMutationsRef.current.has(`oauth:${provider}`)) return;
     const target = { provider, accountId: account.id };
     pausingAccountRef.current.set(provider, target);
@@ -974,8 +996,11 @@ export function useProviderAccountPools(deps: {
   const removeAccount = async (provider: string, account: OAuthAccount) => {
     const capture = renderCapture;
     const label = accountLabel(provider, account);
+    const owner = sharedAccountsOwner(provider);
     const consented = await confirmAction({
-      message: t("prov.accountRemoveConfirm", { email: label }),
+      message: owner
+        ? t("prov.accountRemoveConfirmShared", { email: label, provider: oauthLabel(owner) })
+        : t("prov.accountRemoveConfirm", { email: label }),
       confirmLabel: t("common.remove"),
       tone: "danger",
     });

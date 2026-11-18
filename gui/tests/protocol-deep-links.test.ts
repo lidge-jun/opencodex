@@ -5,9 +5,12 @@ import { readModelsTab } from "../src/pages/models-tab";
 import {
   compatibilityPairHash,
   protocolPairUpstream,
+  openProviderAccountMode,
+  providerAccountModeHash,
   providerAccountsHash,
   providerSettingsHash,
   readCompatibilityPair,
+  readProviderDeepLinkFocus,
   readProviderDeepLinkTab,
   readProviderSettingsTarget,
 } from "../src/protocol-deep-links";
@@ -75,5 +78,30 @@ describe("routing keeps the query only where a page owns it", () => {
     expect(readPageFromHash("#providers?provider=x")).toBe("providers");
     expect(readPageFromHash("#models/compatibility?inbound=chat")).toBe("models");
     expect(readModelsTab("#models/compatibility?inbound=chat&upstream=messages")).toBe("compatibility");
+  });
+});
+
+describe("provider account-mode hash (#8501)", () => {
+  test("names the provider and the field to focus", () => {
+    expect(providerAccountModeHash("openai")).toBe("providers?provider=openai&focus=account-mode");
+    expect(readProviderDeepLinkFocus("#providers?provider=openai&focus=account-mode")).toBe("account-mode");
+    expect(readProviderSettingsTarget("#providers?provider=openai&focus=account-mode")).toBe("openai");
+  });
+
+  test("any other focus value, or none, focuses nothing", () => {
+    expect(readProviderDeepLinkFocus("#providers?provider=openai")).toBeNull();
+    expect(readProviderDeepLinkFocus("#providers?provider=openai&focus=base-url")).toBeNull();
+    expect(readProviderDeepLinkFocus("#models?focus=account-mode")).toBeNull();
+  });
+
+  test("opening an unchanged link announces it again", () => {
+    const events: string[] = [];
+    const fake = {
+      location: { hash: "#providers?provider=openai&focus=account-mode" },
+      Event: class { constructor(public type: string) {} },
+      dispatchEvent: (event: { type: string }) => { events.push(event.type); return true; },
+    } as unknown as Window & typeof globalThis;
+    openProviderAccountMode("openai", fake);
+    expect(events).toEqual(["hashchange"]);
   });
 });

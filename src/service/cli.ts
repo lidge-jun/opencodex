@@ -15,7 +15,7 @@ import { collectServiceStatusJson } from "./status-json";
 import { assertServiceAuthEnvironment } from "./auth-preflight";
 import { assertServiceEnvironmentMatchesInstall } from "./guards";
 import { resolveServiceListenPort } from "./definition";
-import { reportServiceServing } from "./health";
+import { reportServiceServing, servingRuntimePid } from "./health";
 import { platformOps, proxyStillLiveAfterStop, stopTrackedProxyForServiceCommand, installServiceSafely, installFreshWindowsSchedulerSafely, removeServiceInstallState, isServiceInstalled } from "./orchestration";
 import { repairService } from "./repair";
 import type { ServiceRepairVerb } from "./repair";
@@ -32,6 +32,7 @@ import { runServiceClaim } from "./claim";
 import { createSupervisionLatch, desktopServiceCommandRefusal } from "./desktop-command-guard";
 import { linuxServiceBootHint } from "./linux-linger";
 import { diagnoseDesktopStartup, desktopLoginStatusSummary } from "./desktop-startup";
+import { completeWindowsServiceStopReceipt, windowsServiceRemovalStop, windowsServiceStopBeforeRestore } from "./cli-windows-stop";
 
 /**
  * `restart` is NO LONGER folded into `repair`.
@@ -276,6 +277,11 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
     // repaired and serving on port 10100" — and the checkmark was the false half: the
     // existing registration had been restarted, not repaired (#4914).
     let repairError: unknown;
+    // A restart must end with a different runtime answering. The pid that answers now is what
+    // the serving check compares against; a surviving wrapper's old child still answers healthz
+    // and used to be reported as "restarted and serving" (#7771). Repair may keep a healthy
+    // runtime by design, so only restart asks for a replacement.
+    const replacing = verb === "restart" ? await servingRuntimePid() : null;
     try {
       await repairService({ verb, supervisionLatch });
     } catch (error) {
@@ -286,7 +292,7 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
     // defect class this unit exists to close. Windows bakes its port into the
     // scheduler wrapper or the WinSW XML, both of which installedServiceListenPort()
     // now reads.
-    await reportServiceServing(verb === "restart" ? "restarted" : "repaired", {}, repairError);
+    await reportServiceServing(verb === "restart" ? "restarted" : "repaired", { replacing }, repairError);
     if (repairError !== undefined) process.exitCode = 1;
     return;
   }
@@ -393,17 +399,26 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
     }
     case "stop": {
       assertServiceEnvironmentMatchesInstall();
-      // Only stop what is actually installed. The unguarded call ran a real `launchctl unload`
-      // (and its Windows/Linux twins) even with nothing installed.
-      if (ops.status() !== null || isServiceInstalled()) {
-        ops.stop();
+      // Windows (#7771): Part A, the teardown receipt, the tracked proxy and Part B, with the
+      // restore below only after all of them; the receipt completes once the restore ran.
+      let windowsReceipt: string | undefined;
+      if (process.platform === "win32") {
+        const checked = await windowsServiceStopBeforeRestore();
+        if (!checked.ok) { process.exitCode = 1; break; }
+        windowsReceipt = checked.nonce;
+      } else {
+        // Only stop what is actually installed. The unguarded call ran a real `launchctl unload`
+        // (and its Linux twin) even with nothing installed.
+        if (ops.status() !== null || isServiceInstalled()) {
+          ops.stop();
+        }
+        await stopTrackedProxyForServiceCommand();
       }
-      await stopTrackedProxyForServiceCommand();
       {
         // Verify rather than trust the stop command: a surviving wrapper respawns its child
         // seconds later, and restoring native Codex on top of a live proxy is the failure #764
-        // reports as "stop reports success without stopping the proxy".
-        const survivor = await proxyStillLiveAfterStop();
+        // reports as "stop reports success without stopping the proxy". Windows confirmed it above.
+        const survivor = process.platform === "win32" ? null : await proxyStillLiveAfterStop();
         if (survivor) {
           console.error(
             `❌ service stop did not take effect: a proxy is still listening on port ${survivor.port}.`
@@ -436,6 +451,8 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
           console.error(`⚠️  ${grok.message}`);
           process.exitCode = 1;
         }
+        // The shared teardown ran; only then is the receipt's obligation discharged.
+        if (restore.success && grok.ok) completeWindowsServiceStopReceipt(windowsReceipt);
       }
       break;
     }
@@ -460,10 +477,20 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
     case "uninstall":
     case "remove":
       assertServiceEnvironmentMatchesInstall();
-      try { ops.stop(); } catch (err) {
-        console.warn(`⚠️  Service stop failed: ${err instanceof Error ? err.message : String(err)}`);
+      // #7771: the removal's receipt is claimed before the child stop and discharged only
+      // after the shared restore below, exactly like `ocx service stop`.
+      let windowsRemovalReceipt: string | undefined;
+      if (process.platform === "win32") {
+        // #7771: a task deleted under a live `:loop` wrapper leaves it relaunching the proxy.
+        const removal = await windowsServiceRemovalStop();
+        if (!removal.ok) process.exit(1);
+        windowsRemovalReceipt = removal.nonce;
+      } else {
+        try { ops.stop(); } catch (err) {
+          console.warn(`⚠️  Service stop failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+        await stopTrackedProxyForServiceCommand();
       }
-      await stopTrackedProxyForServiceCommand();
       try {
         ops.uninstall();
       } catch (err) {
@@ -486,6 +513,8 @@ export async function serviceCommand(...args: (string | undefined)[]): Promise<v
           console.error(`⚠️  ${grok.message}`);
           process.exitCode = 1;
         }
+        // The shared teardown ran; only then is the receipt's obligation discharged.
+        if (restore.success && grok.ok) completeWindowsServiceStopReceipt(windowsRemovalReceipt);
       }
       removeServiceInstallState();
       const tokenCleanup = removeServiceTokenAfterUninstall();

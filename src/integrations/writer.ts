@@ -14,8 +14,6 @@ import { createClineIO, ClineTransactionError } from "./cline-io";
 import { serializeClineDocument, preserveClineSelection } from "./cline-document";
 import { dirname } from "node:path";
 import type { ExportModel, ManagedContribution } from "../clients/config-export";
-import { commandCodeAuthPath } from "../clients/config-export";
-import { LOOPBACK_API_KEY_PLACEHOLDER } from "../clients/config-export/constants";
 import { shouldInjectApiAuthHeader } from "../codex/inject";
 import { detachedConfigSnapshot } from "../config/admitted-identity";
 import { copyPlainData } from "../lib/plain-data";
@@ -79,6 +77,8 @@ function yamlRefusalReason(
   return `${configPath} uses YAML source opencodex cannot patch without risking unrelated comments or formatting, so ${outcome}`;
 }
 import { withIntegrationWriterLock, type IntegrationWriterLockSeams } from "./writer-lock";
+import { withConfigDirHardeningSettled } from "../config/paths";
+import { WindowsSecretAclSettleTimeoutError } from "../lib/windows-secret-acl";
 
 /**
  * Owned by the planner so a plan can report a refusal without depending on the writer, and
@@ -525,65 +525,8 @@ function applyOrRefreshIntegration(
   });
 }
 
-/**
- * Give the Command Code DESKTOP app the credential it insists on.
- *
- * `providers.json` alone is enough for the published CLI, which accepts
- * `apiKey: false` for a loopback endpoint. The desktop shell never gets that far:
- * before any workspace exists it calls `checkCommandAuthStatus()` from its bundled
- * harness, which answers `authenticated: true` only when `COMMAND_CODE_API_KEY` is
- * in the environment or `~/.commandcode/auth.json` carries an `apiKey`. A keyless
- * provider block is invisible to that gate, so a fresh machine sits on a sign-in
- * screen that then demands a subscription the BYOK user does not have — the models
- * opencodex just wrote are never reachable.
- *
- * Seeded, not owned: the file belongs to Command Code and is where a real login
- * (and every other provider's token) is stored, so
- *   - a store that already has an `apiKey` is left byte-for-byte alone, and one
- *     that does not parse is skipped rather than rewritten;
- *   - the seed only ADDS `apiKey` to an existing object, keeping its other keys;
- *   - nothing is removed on disable. After a real `cmd login` the file holds a
- *     real credential, and deleting it on toggle-off would sign the user out.
- *
- * Apply/overwrite only, never refresh: a deliberate sign-out empties `apiKey`
- * while the block stays owned, and the next catalog sync must not silently undo it.
- * Best effort by design — the provider block is already committed, so a seed that
- * cannot be written is not worth turning a successful enable into a failure.
- */
-function seedCommandCodeAuth(input: IntegrationWriteInput, outcome: WriteOutcome): WriteOutcome {
-  if (input.clientId !== "commandcode" || !outcome.ok || !outcome.changed) return outcome;
-  const io = input.io ?? defaultIntegrationIO(input.store ?? createIntegrationStateStore());
-  const authPath = commandCodeAuthPath(input.env, input.home);
-  const current = io.readText(authPath);
-  let document: Record<string, unknown> = {};
-  if (current.kind === "text") {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(current.text);
-    } catch {
-      return outcome;
-    }
-    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return outcome;
-    const existing = (parsed as { apiKey?: unknown }).apiKey;
-    if (typeof existing === "string" && existing.trim() !== "") return outcome;
-    document = { ...(parsed as Record<string, unknown>) };
-  } else if (current.kind !== "missing") {
-    return outcome;
-  }
-  // The placeholder the other loopback integrations use: never a real secret, and
-  // the proxy admits it on the loopback listener.
-  document.apiKey = LOOPBACK_API_KEY_PLACEHOLDER;
-  try {
-    io.mkdirp(dirname(authPath));
-    io.writeText(authPath, `${JSON.stringify(document, null, 2)}\n`);
-  } catch {
-    return outcome;
-  }
-  return outcome;
-}
-
 export function applyIntegration(input: IntegrationWriteInput): WriteOutcome {
-  return seedCommandCodeAuth(input, applyOrRefreshIntegration(input, true));
+  return applyOrRefreshIntegration(input, true);
 }
 
 /**
@@ -600,7 +543,7 @@ export function applyIntegration(input: IntegrationWriteInput): WriteOutcome {
  * this on a clean file is not a way to skip any other check.
  */
 export function overwriteIntegration(input: IntegrationWriteInput): WriteOutcome {
-  return seedCommandCodeAuth(input, applyOrRefreshIntegration(input, true, "overwrite"));
+  return applyOrRefreshIntegration(input, true, "overwrite");
 }
 
 /** Refresh an owned stale block, but never create or reconnect an absent one. */
@@ -1012,14 +955,19 @@ function withClientLocks(
   const run = async (heldStoreLock: string | null): Promise<WriteOutcome> => {
     const refused = await options?.revalidate?.(frozen);
     if (refused) return refused;
-    // A profile can appear while revalidation awaits. Acquire its lock and
-    // repeat the validation before observing or mutating its document.
-    const required = storeLockFile(frozen);
-    if (required !== null && required !== heldStoreLock) {
-      return withIntegrationWriterLock(required, () => run(required), options?.lockSeams, ".lock");
-    }
-    // No await between the last store probe and the synchronous transaction.
-    return operation();
+    let required: string | null = null;
+    const outcome = await settledTransaction(frozen, () => {
+      // A profile can appear while revalidation or ACL admission awaits. Acquire its lock and
+      // repeat the validation before observing or mutating its document. The probe sits inside
+      // the admitted callback: no await between the last store probe and the transaction.
+      required = storeLockFile(frozen);
+      if (required !== null && required !== heldStoreLock) return null;
+      return operation();
+    });
+    if (outcome !== null) return outcome;
+    const lock = required as string | null;
+    if (lock === null) throw new Error("integration store lock probe returned no lock to acquire");
+    return withIntegrationWriterLock(lock, () => run(lock), options?.lockSeams, ".lock");
   };
   return withIntegrationWriterLock(frozen.resolvedPaths.configPath, () => {
     // Decide only after the outer lock has actually been acquired.
@@ -1027,6 +975,30 @@ function withClientLocks(
     return storeLock === null ? run(null)
       : withIntegrationWriterLock(storeLock, () => run(storeLock), options?.lockSeams, ".lock");
   }, options?.lockSeams, suffix);
+}
+
+/**
+ * Run one synchronous integration transaction after overlapping config-root ACL work (#7815).
+ *
+ * The transaction writes ownership records, the journal and snapshots under the integrations
+ * store with required ACLs. On Windows a config load can leave the optional config-root harden
+ * in flight, and its inheritance work can drop a grant this transaction just applied. The store
+ * root is the admission directory: settlement covers its ancestors, so the config-root flight is
+ * waited for. An admission that times out never entered the transaction and is refused without a
+ * write; a timeout thrown from inside the transaction keeps the transaction's own handling.
+ */
+async function settledTransaction<T>(frozen: FrozenIntegrationInput, transaction: () => T): Promise<T | WriteRefused> {
+  let entered = false;
+  try {
+    return await withConfigDirHardeningSettled(frozen.store.root, () => {
+      entered = true;
+      return transaction();
+    });
+  } catch (error) {
+    if (entered || !(error instanceof WindowsSecretAclSettleTimeoutError)) throw error;
+    return refuse(frozen.clientId, "write_failed", "unsafe",
+      "The opencodex config directory was still being secured, so nothing was written. Try again in a moment.");
+  }
 }
 
 async function coordinatedWrite(
@@ -1043,14 +1015,16 @@ async function coordinatedWrite(
     ?? staleModelNameRefusal(bound, input.config, operationKind) ?? operation(bound);
   if (!spec.writerLock) {
     const refused = await options?.revalidate?.(frozen);
-    return refused ?? guarded(frozen);
+    return refused ?? settledTransaction(frozen, () => guarded(frozen));
   }
 
   // An absent client home is not created merely to acquire a sibling lock.
   if (frozen.io.statKind(frozen.resolvedPaths.detectDir) !== "dir") {
     const refused = await options?.revalidate?.(frozen);
     if (refused) return refused;
-    if (frozen.io.statKind(frozen.resolvedPaths.detectDir) !== "dir") return guarded(frozen);
+    const absent = await settledTransaction(frozen, () =>
+      frozen.io.statKind(frozen.resolvedPaths.detectDir) !== "dir" ? guarded(frozen) : null);
+    if (absent !== null) return absent;
   }
   return withClientLocks(
     frozen,
@@ -1101,7 +1075,7 @@ export async function restoreIntegrationCoordinated(
     ?? restoreIntegration({ ...frozen, opId: input.opId, confirmDrift: input.confirmDrift });
   if (!spec.writerLock) {
     const refused = await options?.revalidate?.(frozen);
-    return refused ?? run();
+    return refused ?? settledTransaction(frozen, run);
   }
   if (frozen.io.statKind(frozen.resolvedPaths.detectDir) !== "dir") {
     return refuse(

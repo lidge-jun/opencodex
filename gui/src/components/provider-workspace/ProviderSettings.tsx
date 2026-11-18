@@ -77,6 +77,13 @@ type ProviderSettingsProps = {
   onRegisterSave?: (save: (() => Promise<boolean>) | null) => void;
   /** Lets the leave dialog use this form's owner-checked discard. */
   onRegisterDiscard?: (discard: (() => void) | null) => void;
+  /**
+   * A non-zero token asks this form to bring the Codex account mode control into view and focus
+   * it (the Codex Auth mode badge, #8501). A token present at mount counts as a new request.
+   */
+  accountModeFocusToken?: number;
+  /** Called once the account mode focus request has been handled. */
+  onAccountModeFocused?: () => void;
 };
 
 /**
@@ -99,6 +106,7 @@ export default function ProviderSettings(props: ProviderSettingsProps) {
 
 function ProviderSettingsForm({
   item, availableModels = EMPTY_MODELS, apiBase, targetKey, targetLabel, draftStore, onUpdateProvider, onDirtyChange, onRegisterSave, onRegisterDiscard,
+  accountModeFocusToken = 0, onAccountModeFocused,
 }: ProviderSettingsProps & { targetKey: string; draftStore: ProviderDraftStore }) {
   const t = useT();
   // This mount's identity in the draft store. Created once per mount, so a newer
@@ -136,6 +144,22 @@ function ProviderSettingsForm({
   const [accountMode, setAccountMode] = useState<"pool" | "direct">(item.codexAccountMode ?? "pool");
   const [modeSaving, setModeSaving] = useState(false);
   const [modeMsg, setModeMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const accountModeFieldRef = useRef<HTMLLabelElement>(null);
+  // Starts at 0 so a deep link that mounts this form together with the Settings tab still focuses.
+  const handledAccountModeFocusRef = useRef(0);
+  useEffect(() => {
+    if (!accountModeFocusToken || accountModeFocusToken === handledAccountModeFocusRef.current) return;
+    handledAccountModeFocusRef.current = accountModeFocusToken;
+    const field = accountModeFieldRef.current;
+    if (field) {
+      field.scrollIntoView?.({ block: "center" });
+      // The trigger is disabled while a save or mode change runs; the field still takes focus.
+      const trigger = field.querySelector<HTMLButtonElement>("#pws-codex-account-mode");
+      if (trigger && !trigger.disabled) trigger.focus();
+      else field.focus();
+    }
+    onAccountModeFocused?.();
+  }, [accountModeFocusToken, onAccountModeFocused]);
   const [baseUrlChoices, setBaseUrlChoices] = useState<CatalogPreset["baseUrlChoices"]>();
   // "" is the same-origin dashboard and must load like any other server base.
   const [choicesStatus, setChoicesStatus] = useState<ChoicesStatus>(apiBase !== undefined ? "loading" : "idle");
@@ -587,10 +611,11 @@ function ProviderSettingsForm({
         )}
       </label>
       {isCanonicalOpenAi && (
-        <label className="pwi-settings-field">
+        <label className="pwi-settings-field" ref={accountModeFieldRef} tabIndex={-1}>
           <span className="pwi-settings-label">{t("codexAuth.accountModeTitle")}</span>
           <Select
             fullWidth
+            id="pws-codex-account-mode"
             label={t("codexAuth.accountModeTitle")}
             value={accountMode}
             disabled={modeSaving || saving}

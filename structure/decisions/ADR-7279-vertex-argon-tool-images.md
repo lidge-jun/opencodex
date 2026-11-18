@@ -14,3 +14,8 @@
 - Consequences: no new configuration, retry or shared-history mutation. Orphan results still
   degrade to marked text and sibling images; existing adjacency and thought-signature repairs
   remain intact. Revisit the model scope when another route has equivalent upstream evidence.
+- Amendment (#8583, 2026-11-13): the scope now also covers Vertex `gemini-4-carbon` and
+  `gemini-4-hydrogen`. The 400 was not reproduced on those models; the maintainer accepted the
+  extension because `functionResponse.parts` is the documented multimodal function-response form
+  for Gemini 3 and later, so the nested shape is valid input for them, and the PR author ran both
+  models live on Vertex. Other routes are unchanged.

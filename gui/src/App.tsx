@@ -40,7 +40,7 @@ import { requestProxyStop } from "./stop-proxy";
 import { useCodexRestart } from "./use-codex-restart";
 import { confirmAction } from "./action-dialogs";
 import { hostOs, isDesktopShell, isExternalLink, openDesktopCliPage, openDesktopUpdatePage } from "./lib/desktop-shell";
-import { proxyHealthOnline } from "./lib/proxy-health";
+import { machineHealthPath, proxyHealthOnline, readManagementHealth } from "./lib/proxy-health";
 import { zoomManagedOn } from "./lib/desktop-zoom";
 import { useSidebarCollapse } from "./use-sidebar-collapse";
 import { useDesktopZoom } from "./use-desktop-zoom";
@@ -94,18 +94,6 @@ export function RemoteWorkspaceRoute({ available, apiBase, hubOrigin, onOpenRemo
     return <section className="panel"><h2>{t("nav.remoteWorkspace")}</h2><Notice tone="warn">{t("link.workspaceUnavailable")} <button type="button" className="link-btn" onClick={onOpenRemoteLink}>{t("nav.remote")}</button></Notice></section>;
   }
   return <RemoteWorkspace apiBase={apiBase} hubOrigin={hubOrigin} />;
-}
-
-function readRuntimeVersion(data: unknown): string | null {
-  if (!data || typeof data !== "object" || !("version" in data)) return null;
-  const version = (data as { version?: unknown }).version;
-  return typeof version === "string" && version.length > 0 ? version : null;
-}
-
-/** Seconds the proxy has been up, from the same /healthz body; null when it does not say. */
-function readUptime(data: unknown): number | null {
-  const uptime = data && typeof data === "object" ? (data as { uptime?: unknown }).uptime : undefined;
-  return typeof uptime === "number" && Number.isFinite(uptime) && uptime >= 0 ? uptime : null;
 }
 
 function readStoredTheme(): Theme {
@@ -329,21 +317,19 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [actionFeedback, feedbackRevision]);
 
+  // A connected Child's machine plane is its machine listener even before discovery settles
+  // (or when it fails), so the served role counts as well as the discovered targets.
+  const healthPath = machineHealthPath(targets.connected || isConnectedRuntime());
   const healthPoll = useKeyedClientResource(
-    `app-healthz:${machineBase}`,
-    [machineBase, targetsSettled],
-    async (signal) => {
-      const res = await fetch(`${machineBase}/healthz`, { signal });
-      if (!res.ok) return null;
-      const body: unknown = await res.json();
-      return { version: readRuntimeVersion(body), uptime: readUptime(body) };
-    },
+    `app-health:${machineBase}${healthPath}`,
+    [machineBase, healthPath, targetsSettled],
+    signal => readManagementHealth(machineBase, healthPath, signal),
     { pollMs: 30_000, enabled: targetsSettled },
   );
 
   const themeSwitch = <ThemeSwitch theme={theme} onChange={setTheme} />;
   const displayedVersion: string = healthPoll.data?.version ?? __APP_VERSION__;
-  // The sidebar status follows the health check: a failed or refused /healthz is "Offline",
+  // The sidebar status follows the health check: a failed or missing health route is "Offline",
   // never a default "Online". Before the first answer it stays Online, as the page itself
   // loaded from this proxy.
   const proxyOnline = proxyHealthOnline(healthPoll.data, healthPoll.error);
@@ -714,7 +700,7 @@ export default function App() {
                 {page === "logs" && <Logs apiBase={sharedBase} />}
                 {page === "usage" && <Usage apiBase={sharedBase} connected={targets.connected || isConnectedRuntime()} apiKeyId={targets.apiKeyId} topology={targetError || (isConnectedRuntime() && !targets.connected) ? "unknown" : targets.usageTopology} />}
                 {page === "storage" && <Storage apiBase={sharedBase} />}
-                {page === "remote" && !remotePairingFormOpen && <RemoteLink key={`${sharedBase}:${sharedSessionEpoch}`} apiBase={sharedBase} sessionReady={sharedSessionReady} pairingRecoveryAvailable={hubPairingAvailable} onRequestPairing={() => setHubPairingOpen(true)} workspaceAvailable={remoteWorkspaceAvailable} onOpenWorkspace={() => navigateToPage("remote-workspace")} />}
+                {page === "remote" && !remotePairingFormOpen && <RemoteLink key={`${sharedBase}:${sharedSessionEpoch}`} apiBase={sharedBase} diagnosticsApiBase={targets.link ? machineBase : sharedBase} sessionReady={sharedSessionReady} pairingRecoveryAvailable={hubPairingAvailable} onRequestPairing={() => setHubPairingOpen(true)} workspaceAvailable={remoteWorkspaceAvailable} onOpenWorkspace={() => navigateToPage("remote-workspace")} />}
                 {page === "remote-workspace" && <RemoteWorkspaceRoute available={remoteWorkspaceAvailable} apiBase={sharedBase} hubOrigin={targets.shared.serverOrigin} onOpenRemoteLink={() => navigateToPage("remote")} />}
                 {page === "codex-set" && <CodexSet apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} targetKey={sharedTarget.key} />}
                 {shellPage === "integrations" && <Integrations apiBase={sharedBase} machineApiBase={machineBase} connected={targets.connected} />}

@@ -7,8 +7,8 @@ import type { V2ParsedCommand } from "./v2-input";
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
-function mode(value: unknown): value is "v1" | "default" | "v2" {
-  return value === "v1" || value === "default" || value === "v2";
+function mode(value: unknown): value is "v1" | "default" | "v2" | "v2-plaintext" {
+  return value === "v1" || value === "default" || value === "v2" || value === "v2-plaintext";
 }
 function nullableString(value: unknown): value is string | null { return value === null || typeof value === "string"; }
 
@@ -16,6 +16,11 @@ function nullableString(value: unknown): value is string | null { return value =
 function stateDto(value: unknown): Record<string, unknown> {
   if (!record(value) || !mode(value.multiAgentMode)) throw new Error("Invalid v2 state");
   const result: Record<string, unknown> = { multiAgentMode: value.multiAgentMode };
+  for (const key of ["supportsPlaintextV2Mode", "plaintextAgentMessagesEnabled"] as const) {
+    if (value[key] !== undefined && typeof value[key] !== "boolean") throw new Error("Invalid plaintext capability");
+    if (value[key] !== undefined) result[key] = value[key];
+  }
+  if (value.multiAgentMode === "v2-plaintext" && (value.supportsPlaintextV2Mode !== true || value.plaintextAgentMessagesEnabled !== true || value.enabled !== false)) throw new Error("Unverified plaintext V2 state");
   for (const key of ["enabled", "agentsMaxThreadsConflict", "keepNativeChatGptOnV1", "agentsMaxDepthAppliesWhenV2Disabled"] as const) {
     if (typeof value[key] !== "boolean") throw new Error("Invalid v2 boolean");
     result[key] = value[key];
@@ -46,6 +51,7 @@ function bodyFor(parsed: V2ParsedCommand): Record<string, unknown> {
   switch (parsed.verb) {
     case "on": case "off": return { enabled: parsed.verb === "on" };
     case "mode": return { multiAgentMode: parsed.value,
+      ...(parsed.plaintextAcknowledged ? { plaintextAgentMessagesAcknowledged: true } : {}),
       ...(parsed.acknowledge ? { multiAgentSurfaceAdvisoryAcknowledged: true } : {}) };
     case "keep-native-v1": return { keepNativeChatGptOnV1: parsed.value };
     case "threads": return { maxConcurrentThreadsPerSession: parsed.value };
@@ -70,11 +76,12 @@ export async function handleV2RuntimeCommand(parsed: V2ParsedCommand, deps: Runt
       throw error;
     }
     const state = stateDto(response);
+    if (parsed.verb === "mode" && parsed.value === "v2-plaintext" && state.multiAgentMode !== "v2-plaintext") throw new Error("Plaintext V2 mode was not confirmed by the selected runtime");
     const lines = [`multi_agent_v2: ${state.enabled ? "ON" : "OFF"}`, `multi_agent_mode: ${state.multiAgentMode}`,
       `keep_native_chatgpt_on_v1: ${state.keepNativeChatGptOnV1 ? "ON" : "OFF"}`,
       `max_threads: ${state.maxConcurrentThreadsPerSession ?? "unset"}`,
       `agents.enabled: ${state.agentsEnabled ?? "unset (upstream default)"}`,
-      `agents.max_depth: ${state.agentsMaxDepth ?? "unset"}${state.enabled ? " (V1-only — ignored while V2 is enabled)" : ""}`,
+      `agents.max_depth: ${state.agentsMaxDepth ?? "unset"}${state.enabled || state.multiAgentMode === "v2-plaintext" ? " (V1-only — ignored by V2 sessions)" : ""}`,
       `subagent_developer_instructions: ${JSON.stringify(state.subagentDeveloperInstructions)}`,
       `multi_agent_mode_hint_text: ${JSON.stringify(state.multiAgentModeHintText)}`];
     if (state.agentsMaxThreadsConflict) lines.push("Native thread-limit conflict: inspect the selected target's Codex configuration before starting Codex.");

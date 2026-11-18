@@ -11,6 +11,7 @@ import {
   withConfigMutationLockSync,
 } from "../config";
 import { atomicWriteFileNoFollowUnclaimed } from "../config/atomic-write";
+import { readConfigFileSnapshot } from "../config/diagnostics";
 import type { OcxClientConnectionConfig } from "../types";
 import { inspectRemoteDesktopStore, readDesktopDisconnectReceipt } from "../claude/desktop-remote-store";
 import { withClientLifecycleSync, type ClientLifecycleLockDeps } from "./lifecycle-lock";
@@ -82,6 +83,27 @@ function rawTopLevelConfig(): Record<string, unknown> | null {
   }
 }
 
+/**
+ * The client state with evidence required for "disconnected", decided from ONE read of the saved
+ * file (readConfigFileSnapshot): the bytes and their validation belong together, so a connect that
+ * commits meanwhile cannot pair old bytes with a validation of new ones. "disconnected" means a
+ * saved config.json that validates and records no client; a missing, unreadable or invalid file is
+ * invalid with its reason. Used wherever "disconnected" authorizes a restart, a recycle or exit 0.
+ */
+export function readClientConnectionStateWithEvidence(): ClientConnectionState {
+  const snapshot = readConfigFileSnapshot({ passive: true });
+  if (snapshot.raw === undefined) {
+    return { kind: "invalid", reason: snapshot.diagnostics.source === "default" ? "config.json is missing" : "config.json is unreadable" };
+  }
+  if (snapshot.diagnostics.source !== "file") {
+    return { kind: "invalid", reason: `config.json failed validation (${snapshot.diagnostics.error ?? "invalid"})` };
+  }
+  let parsed: unknown;
+  try { parsed = JSON.parse(snapshot.raw.replace(/^\uFEFF/, "")); } catch { return { kind: "invalid", reason: "config.json is unreadable" }; }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { kind: "invalid", reason: "config.json is not an object" };
+  return classifyClientConnection(parsed as Record<string, unknown>, snapshot.diagnostics);
+}
+
 export function readClientConnectionState(): ClientConnectionState {
   const raw = rawTopLevelConfig();
   const diagnostics = readConfigDiagnostics({ passive: true });
@@ -90,6 +112,14 @@ export function readClientConnectionState(): ClientConnectionState {
       ? { kind: "disconnected" }
       : { kind: "invalid", reason: "config.json is missing or unreadable" };
   }
+  return classifyClientConnection(raw, diagnostics);
+}
+
+/** The client verdict for one saved top-level object and the diagnostics of the same bytes. */
+function classifyClientConnection(
+  raw: Record<string, unknown>,
+  diagnostics: Pick<ReturnType<typeof readConfigDiagnostics>, "config" | "warnings">,
+): ClientConnectionState {
   const hasClient = Object.hasOwn(raw, "client") && raw.client !== undefined;
   const role = raw.runtimeRole;
   if (role !== undefined && role !== "standalone" && role !== "hub" && role !== "client") {
@@ -130,6 +160,20 @@ export function assertNoClientDisconnectPending(): void {
   if (receipt.kind === "valid" && receipt.value.phase !== "complete") {
     throw new Error("client_disconnect_pending");
   }
+}
+
+/**
+ * The message client startup refuses with. A pending disconnect names the command that clears it:
+ * under the desktop app or a service the supervisor only logs this line, and on 2.100.2 a person
+ * had to move desktop-remote/ aside by hand because nothing said a retry would finish or roll back.
+ */
+export function clientStartupRefusalMessage(reason: string): string {
+  if (reason !== "client_disconnect_pending") return `client startup refused: ${reason}`;
+  const receipt = readDesktopDisconnectReceipt();
+  const valid = receipt.kind === "valid" ? receipt.value : null;
+  const command = valid?.keepCatalog ? "ocx disconnect --keep-catalog" : "ocx disconnect";
+  return `client startup refused: an ocx disconnect on this machine stopped part way${valid ? ` at phase ${valid.phase}` : ""}. `
+    + `Run ${command} again to finish it or roll it back. (code client_disconnect_pending)`;
 }
 
 /** Full snapshot CAS for work returning from an await, including selection and rotation state. */

@@ -2,7 +2,8 @@ import { observeAccountAutoPauseRevisions, snapshotAutoPauseFingerprints } from 
 import type { OcxConfig, OcxProviderConfig, ProviderCostOverlay } from "../types";
 import { configReasoningPinsConfigError } from "./provider-validation";
 import { carryPersistedTelemetry } from "./telemetry-carry";
-import { adoptCustomModelCatalogMigration, projectCustomModelCatalogMigration } from "../codex/custom-model-catalog-migration";
+import { adoptPersistedConfigMigrations, projectPersistedConfigMigrations } from "./persisted-projections";
+import { RESERVE_CAPABILITY_KEYS } from "./reserve-capability";
 import { refreshPreservedProviderOwner } from "../usage/user-cost-overlays";
 import { refreshConfigDerivedRegistries } from "./derived-registries";
 import {
@@ -99,7 +100,8 @@ function applyModelCostRowReplacement(config: OcxConfig): void {
  */
 export function adoptPersistedModelDiscovery(
   config: OcxConfig,
-  persisted: Pick<OcxConfig, "modelDiscovery" | "disabledModels">,
+  persisted: Pick<OcxConfig, "modelDiscovery" | "disabledModels">
+    & { selectedModels?: Record<string, string[] | undefined> },
 ): void {
   config.modelDiscovery = structuredClone(persisted.modelDiscovery);
   config.disabledModels = structuredClone(persisted.disabledModels);
@@ -107,6 +109,14 @@ export function adoptPersistedModelDiscovery(
   if (baseline) {
     baseline.modelDiscovery = structuredClone(persisted.modelDiscovery);
     baseline.disabledModels = structuredClone(persisted.disabledModels);
+  }
+  // `admit` (#8236) widens a provider's committed selection. Move live and baseline together so
+  // the running catalog shows the arrival and a later save does not read the old list as an edit.
+  for (const [name, selected] of Object.entries(persisted.selectedModels ?? {})) {
+    const live = config.providers[name];
+    if (live) live.selectedModels = structuredClone(selected);
+    const base = baseline?.providers[name];
+    if (base) base.selectedModels = structuredClone(selected);
   }
 }
 
@@ -589,6 +599,8 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
             ...(provenanceExists
               ? Object.keys(persistedDiagnostics.config as unknown as Record<string, unknown>)
               : []),
+            // An absent Reserve value reads as off, so a disk-only value is never left behind.
+            ...RESERVE_CAPABILITY_KEYS,
           ]);
           for (const key of Object.keys(persistedDiagnostics.config as unknown as Record<string, unknown>)) {
             if (!rebaseableKeys.has(key)) skipped.add(key);
@@ -631,7 +643,7 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
     if (diskDeletedKeys.size) durableProjection.configRebaseProvenance = { version: 1,
       deletedTopLevelKeys: [...new Set([...configRebaseDeletionKeys(durableProjection), ...diskDeletedKeys])].sort() };
     const provenanceProjection = projectConfigRebaseProvenance(durableProjection);
-    const projectedConfig = projectCustomModelCatalogMigration(
+    const projectedConfig = projectPersistedConfigMigrations(
       onDisk,
       durableProjection,
     );
@@ -652,7 +664,7 @@ export function saveConfigPreservingClaudeCode(config: OcxConfig): void {
     } else {
       persist(projectedConfig);
     }
-    adoptCustomModelCatalogMigration(config, projectedConfig);
+    adoptPersistedConfigMigrations(config, projectedConfig);
     captureLiveTopologyBaseline(config);
     if (claudeCodeBaseline.has(config)) {
       claudeCodeBaseline.set(config, structuredClone(config.claudeCode));

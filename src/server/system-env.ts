@@ -14,7 +14,7 @@ import { OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
 import { siblingOfLivePort } from "../codex/sibling-start";
 export { getShellEnvFilePath, installShellHook, uninstallShellHook, claudeCodeCliInstalled, reconcileShellHook } from "./system-env-shell";
 export type { SystemEnvDeps } from "./system-env-shell";
-import { systemEnvMarkerMode, writeShellEnvFile, removeShellEnvFile } from "./system-env-shell";
+import { systemEnvMarkerMode, withResolvedKeychainPresence, writeShellEnvFile, removeShellEnvFile } from "./system-env-shell";
 import type { SystemEnvDeps } from "./system-env-shell";
 
 const SYSTEM_ENV_NAMES = [
@@ -218,7 +218,9 @@ export async function injectSystemEnv(
     bindHost: probeHostname(config.hostname),
     clientBaseUrl: destination.origin,
   };
-  const markerMode = systemEnvMarkerMode(config, deps);
+  // One asynchronous Keychain observation serves both the launchd marker and the shell env file.
+  const resolvedDeps = await withResolvedKeychainPresence(deps, config.claudeCode?.authMode);
+  const markerMode = systemEnvMarkerMode(config, resolvedDeps);
   // The data-plane credential this host can present to its own public listener: env token,
   // hardened service token file, then a configured key. Never the admin token.
   const hostAdmissionToken = destination.requiresAdmissionToken ? localAdmissionToken(config) : undefined;
@@ -358,7 +360,7 @@ export async function injectSystemEnv(
     }
 
     // Shell-hook env file: works for new shells in already-running Terminal.app.
-    writeShellEnvFile(port, config, modelEnv, auto, deps);
+    writeShellEnvFile(port, config, modelEnv, auto, resolvedDeps);
 
     // Gateway-model cache pre-write (devlog 030): plain `claude` sessions read the
     // picker list from ~/.claude/cache/gateway-models.json and cannot refresh it

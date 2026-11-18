@@ -10,12 +10,13 @@ Anthropic OAuth provider; web search can additionally use stored Grok OAuth thro
 whole turn.
 
 :::note[Automatic backend selection]
-Explicit `backend` config wins. The two sidecars default differently when `backend` is unset:
-**web search** always defaults to `openai` — `anthropic` runs only when explicitly configured.
-**Vision** defaults to `anthropic` if an enabled Anthropic OAuth provider has an active account not
-marked `needsReauth`, otherwise `openai`. Explicit `anthropic` without that credential fails
-closed. Explicit `xai` requires a usable stored Grok OAuth account and does not fall back. `openai`
-requires both ChatGPT login auth and an enabled `forward` provider.
+Explicit `backend` configuration wins. When it is unset, each sidecar has its own default:
+**Web search** defaults to `openai`; `anthropic` and `xai` run only when explicitly configured.
+The web-search `xai` backend requires a usable stored Grok OAuth account and does not fall back.
+**Vision** defaults to `anthropic` when an enabled Anthropic OAuth provider has an active account
+not marked `needsReauth`, otherwise `openai`. Explicit `anthropic` without that credential fails
+closed. Vision accepts only `openai`, `anthropic` and `routed`; eligible xAI vision models use
+`routed`. For either sidecar, `openai` requires ChatGPT login auth and an enabled `forward` provider.
 :::
 
 On file load, a retired OpenCode Free model target in global or `claudeCode` overrides of
@@ -23,7 +24,7 @@ On file load, a retired OpenCode Free model target in global or `claudeCode` ove
 its other settings. Select a supported target before re-enabling it. Healthy targets and the defaults
 for absent sidecar sections are unchanged.
 
-### Additional web-search backends (explicit-only)
+## Additional web-search backends (explicit-only)
 
 Three more web-search backends exist beyond the ChatGPT and Claude paths. Each is
 **explicit-only** — it never activates from credential presence — and **fails closed**:
@@ -298,6 +299,6 @@ The OpenAI search and vision sidecars accept CR, LF and CRLF line endings, inclu
 
 When a search answer ends with a Sources list, an unmatched list item stays in the answer instead of being removed as a citation. A title followed by its URL is still consumed as one citation. Non-HTTP URI-like text inside inline code, such as `mode:fast`, stays in the answer; code-formatted HTTP(S) URLs are still citations.
 
-Final response citations supply the title for a URL already seen during streaming. If the final title is missing or invalid, a valid streamed title is retained. Streaming-only sources are kept within the existing source-count, URL, title and byte limits.
+Final response citations supply the title for a URL already seen during streaming. When the final response cites the same URL more than once, the first valid title among those citations is used. If no final title is valid, a valid streamed title is retained. Streaming-only sources are kept within the existing source-count, URL, title and byte limits.
 
 Long search queries and answers are shortened without splitting a UTF-16 surrogate pair, so a single character such as 😀 is never cut in half by the result limits. A sequence of several characters, such as emoji joined with a zero-width joiner, can still be cut between its parts.

@@ -156,6 +156,12 @@ describe("Google wire compiler", () => {
     });
     expect(notRequested.body.generationConfig).toEqual({ thinkingConfig: { thinkingLevel: "high" } });
 
+    // Gemini 4 Hydrogen supports xhigh natively on the wire.
+    const withXhigh = compileGoogleWireBody({
+      generationConfig: { thinkingConfig: { thinkingLevel: "xhigh" } },
+    });
+    expect(withXhigh.body.generationConfig).toEqual({ thinkingConfig: { thinkingLevel: "xhigh" } });
+
     // Explicit thinkingBudget (or thinking_budget) is preserved when thinkingLevel is absent.
     const withBudget = compileGoogleWireBody({
       generationConfig: { thinkingConfig: { thinkingBudget: 8192, includeThoughts: true } },

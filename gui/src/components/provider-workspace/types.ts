@@ -1,4 +1,4 @@
-import type { QuotaFailureCode } from "../../../../src/providers/quota-types";
+import type { QuotaFailureCode, QuotaUnknownReason } from "../../../../src/providers/quota-types";
 /**
  * provider-workspace/types.ts — shared view-model types for the Providers
  * workspace shell/rail/detail (WP080a). Data shapes only; no React.
@@ -52,6 +52,10 @@ export interface AccountQuotaReading {
   quota?: AccountQuota | null;
   quotaUnavailable?: boolean;
   quotaFailure?: QuotaFailureCode;
+  /** Why the balance is unknown (#8397). */
+  quotaUnknownReason?: QuotaUnknownReason;
+  /** When the server last read this balance, success or failure (epoch ms). */
+  quotaReadAt?: number;
   /** Client-owned enrichment state, never inferred from missing quota data. */
   quotaPending?: boolean;
 }

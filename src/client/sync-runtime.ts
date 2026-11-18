@@ -35,6 +35,13 @@ export function clientSyncRuntimeGuard(): () => void {
   };
 }
 
+/** Offline enrollment keeps the configured port. A published runtime must agree before apply. */
+export function assertRouteIntentPort(port: number): void {
+  const runtime = readSyncRuntime();
+  if (runtime?.clientStopping) throw new ClientSyncRuntimeError("client_runtime_stopping");
+  if (runtime && runtime.port !== port) throw new ClientSyncRuntimeError("client_runtime_changed");
+}
+
 /** The same C transaction excludes every sync commit; never mark a replacement runtime. */
 export function markClientRuntimeStopping(expected: Required<Pick<RuntimePortState, "pid" | "port" | "attestationSecret">>): void {
   withConfigMutationLockSync(() => {

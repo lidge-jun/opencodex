@@ -18,6 +18,10 @@ export const RESPONSES_CORE_MODULES = [
   "native-response-json.ts",
   "native-injection-protocol.ts",
   "native-injection-replay.ts",
+  // Reached from passthrough dispatch: the physical replay guard for a native reset/EOF replacement (#8292).
+  "native-replay-guard.ts",
+  // Reached from passthrough delivery: opt-in estimated usage for providers that omit it (#7427).
+  "estimated-usage.ts",
   "native-steering.ts",
   "native-steering-settings.ts",
   "native-steering-policy.ts",
@@ -32,6 +36,8 @@ export const RESPONSES_CORE_MODULES = [
   "core-auth.ts",
   "core-normalize.ts",
   "core-combo.ts",
+  // Reached from core.ts: the keepalive head a slow streaming combo selection commits (#8326).
+  "combo-selection-keepalive.ts",
   "deferred-send-reporter.ts",
   "combo-requested-effort.ts",
   "core-combo-native.ts",
@@ -44,6 +50,10 @@ export const RESPONSES_CORE_MODULES = [
   // Reached from core-combo.ts: JEV effort choices and resolved native quota identity.
   "jev-combo-choice.ts",
   "request-prepare.ts",
+  // Reached from request-prepare.ts and compact.ts: the eager Codex MCP catalog diagnostic (#8133).
+  "codex-tool-catalog.ts",
+  // Reached from codex-tool-catalog.ts: the rendered Code Mode exec section parser.
+  "code-mode-collab-surface.ts",
   "turn-membership.ts",
   "policy-request-scope.ts",
   "skills-snapshot.ts",
@@ -69,6 +79,8 @@ export const RESPONSES_CORE_MODULES = [
   // Reached from passthrough-dispatch.ts: exact-URL OpenGateway empty-completion recovery.
   "passthrough-completion.ts",
   "opengateway-completion-guard.ts",
+  "outbound-request-body.ts",
+  "bare-namespace-aliases.ts",
   "passthrough-observations.ts",
   "passthrough-key-rotation.ts",
   // Reached from passthrough/adapter dispatch, compact and runTurn: local spend-ledger refusal mapping.
@@ -94,10 +106,13 @@ export const RESPONSES_CORE_MODULES = [
   "adapter-failure-message.ts",
   "antigravity-validation-refusal.ts",
   "antigravity-model-denial-recovery.ts",
+  "antigravity-fault-rotation.ts",
   "adapter-continuation.ts",
   "adapter-delivery.ts",
   "anthropic-thinking-recovery.ts",
   "advisor-slot.ts",
+  // Reached from advisor-slot.ts: shared question bounds/clip helper for opt-in question-only consultation text (#7526).
+  "advisor-question.ts",
   "advisor-retention.ts",
   "advisor-plan-slot.ts",
   "policy-refusal.ts",

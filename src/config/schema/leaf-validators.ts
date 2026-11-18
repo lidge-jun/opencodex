@@ -1,4 +1,5 @@
 import * as z from "zod/v4";
+import { EXPORT_CLIENT_IDS } from "../../clients/client-ids";
 import { accountAutoPausePolicySchema, accountPauseDetailsSchema } from "./account-auto-pause";
 import { anthropicAccountPoolSchema } from "./anthropic-account-pool";
 import { join } from "node:path";
@@ -302,6 +303,23 @@ const providerNoProxySchema = z.unknown().superRefine((value, ctx) => {
 }).transform(value => value as string | string[] | undefined);
 
 /**
+ * A provider's hosted-tool denial list, validated against a closed vocabulary rather than
+ * accepted as free strings. The provider schema ends in `.passthrough()`, so a misspelled
+ * `web_serch` would otherwise be accepted, persisted, and strip nothing -- leaving the
+ * operator with the upstream 400 the field was set to prevent, and no message saying why
+ * (the `codexToolMode` lesson, #2106).
+ */
+function hostedToolDenialSchema(field: string) {
+  return z.array(z.string().min(1))
+    .transform(normalizeNonBlankStringArray)
+    .refine(
+      tools => tools.every(tool => DECLARABLE_HOSTED_TOOL_TYPES.has(tool)),
+      { message: `${field} accepts only hosted tool types: ${[...DECLARABLE_HOSTED_TOOL_TYPES].join(", ")}` },
+    )
+    .optional();
+}
+
+/**
  * Zod schema for one provider entry: known fields are validated strictly while unknown
  * fields pass through (preserved for runtime extensions).
  */
@@ -326,6 +344,8 @@ export const providerConfigSchema = z.object({
   // load silently and then be ignored at selection time, which reads as a broken feature
   // rather than a rejected setting.
   apiKeyPoolStrategy: z.enum(["round-robin", "fill-first", "quota"]).optional(),
+  // Strict writes reject invalid modes; load degradation removes invalid hand edits.
+  cacheAffinity: z.enum(["auto", "session", "turn", "off"]).optional(),
   autoReviewModel: autoReviewModelSchema.optional(),
   autoReviewModelOverrides: autoReviewModelOverridesSchema.optional(),
   adapter: z.string().min(1),
@@ -333,6 +353,8 @@ export const providerConfigSchema = z.object({
   tlsProfile: z.literal("antigravity-browser").optional(),
   alias: z.string().optional(),
   modelAliases: z.record(z.string(), z.string()).optional(),
+  // Grammar is checked by sanitizeAliasesForLoad and the alias-template route (#7705).
+  aliasTemplate: z.string().optional(),
   modelDisplayNames: modelDisplayNamesSchema.optional(),
   defaultAliases: z.boolean().optional(),
   initialModelSelection: z.object({
@@ -405,21 +427,16 @@ export const providerConfigSchema = z.object({
   retainModels: z.array(z.string().min(1))
     .transform(normalizeNonBlankStringArray)
     .optional(),
+  // Provider-level discovery compatibility (#7910), unrelated to the top-level persisted
+  // `modelDiscovery` state. Degrades to "absent" (strict discovery) like the other default-off
+  // opt-ins; the management write boundary still rejects a malformed block loudly.
+  modelDiscovery: z.object({ skipInvalidRows: z.boolean().optional() }).strict().optional().catch(undefined),
   omitReasoningEffortWithToolsModels: z.array(z.string().min(1))
     .transform(normalizeNonBlankStringArray)
     .optional(),
-  // Validated against a closed vocabulary rather than accepted as free strings. This
-  // schema ends in `.passthrough()`, so a misspelled `web_serch` would otherwise be
-  // accepted, persisted, and strip nothing -- leaving the operator with the upstream 400
-  // the field was set to prevent, and no message saying why (the `codexToolMode` lesson,
-  // #2106).
-  unsupportedHostedTools: z.array(z.string().min(1))
-    .transform(normalizeNonBlankStringArray)
-    .refine(
-      tools => tools.every(tool => DECLARABLE_HOSTED_TOOL_TYPES.has(tool)),
-      { message: `unsupportedHostedTools accepts only hosted tool types: ${[...DECLARABLE_HOSTED_TOOL_TYPES].join(", ")}` },
-    )
-    .optional(),
+  unsupportedHostedTools: hostedToolDenialSchema("unsupportedHostedTools"),
+  // Same closed vocabulary; applied only when the request also declares client tools (#8204).
+  unsupportedHostedToolsWithClientTools: hostedToolDenialSchema("unsupportedHostedToolsWithClientTools"),
   retryOn429: retryOn429PolicySchema.optional(),
   transientRetryOn5xx: transientRetryOn5xxPolicySchema.optional(),
   // Degrades to "absent" like `webSearchBridge`: a malformed hand edit of an opt-in feature
@@ -441,7 +458,10 @@ export const providerConfigSchema = z.object({
   }).strict().optional(),
   responsesSnapshotRepair: z.boolean().optional(),
   messagePhaseInference: z.boolean().optional(),
+  estimateMissingUsage: z.boolean().optional(),
   hideRawReasoning: z.boolean().optional(),
+  forwardAdvisorTool: z.boolean().optional(),
+  perMessageEffort: z.boolean().optional(),
   // Invalid blocks degrade to "absent" rather than failing the whole config load: an unusable
   // bridge block must never send an operator through invalid-config recovery for an opt-in
   // feature that is off by default. The management write boundary still rejects it loudly.
@@ -546,6 +566,7 @@ export function modelPreferHostedToolsConfigError(
     modelAdapters?: unknown;
     baseUrl?: unknown;
     unsupportedHostedTools?: unknown;
+    unsupportedHostedToolsWithClientTools?: unknown;
   },
 ): string | null {
   if (value === undefined) return null;
@@ -559,6 +580,12 @@ export function modelPreferHostedToolsConfigError(
   // request time, so accepting the pair would silently ignore the preference.
   const declaredUnsupported = declaredUnsupportedHostedTools(
     provider as { unsupportedHostedTools?: readonly string[] },
+  );
+  // The conditional list (#8204) denies the same tool whenever client tools travel with it,
+  // which is every Codex turn, so it cancels a preference just as surely.
+  const declaredWithClientTools = declaredUnsupportedHostedTools(
+    provider as { unsupportedHostedTools?: readonly string[]; unsupportedHostedToolsWithClientTools?: readonly string[] },
+    true,
   );
   // Effective transport: a `preserveCustomDestination` registry row reused under a
   // different endpoint keeps its own adapter AND its own auth at runtime, because
@@ -622,6 +649,9 @@ export function modelPreferHostedToolsConfigError(
       }
       if (declaredUnsupported.has(tool)) {
         return `${field}.${key} cannot prefer ${tool}: unsupportedHostedTools declares it unsupported`;
+      }
+      if (declaredWithClientTools.has(tool)) {
+        return `${field}.${key} cannot prefer ${tool}: unsupportedHostedToolsWithClientTools declares it unsupported`;
       }
       if (isHostedToolUnsupportedForModel(key, tool)) {
         return `${field}.${key} cannot prefer ${tool}: the model does not support it`;
@@ -963,7 +993,7 @@ export const remoteGuiConfigSchema = z.object({
   allowInsecureHttp: z.boolean().optional(),
 }).strict();
 
-const connectedClientIdSchema = z.enum(["codex", "claude"]);
+const connectedClientIdSchema = z.enum(["codex", "claude", "claude-desktop", "grok", ...EXPORT_CLIENT_IDS]);
 const clientTimestampSchema = z.string().datetime({ offset: true });
 const clientTransportSchema = z.enum(["hub", "link"]);
 const linkTransportSchema = z.object({
@@ -986,7 +1016,7 @@ export const clientConnectionSchema = z.object({
   managementTransport: z.enum(["direct", "relay"]),
   transport: clientTransportSchema.optional(),
   link: linkTransportSchema.optional(),
-  selectedClients: z.array(connectedClientIdSchema).min(1).max(2).superRefine((clients, ctx) => {
+  selectedClients: z.array(connectedClientIdSchema).superRefine((clients, ctx) => {
     if (new Set(clients).size !== clients.length) {
       ctx.addIssue({ code: "custom", message: "must contain unique client ids" });
     }
@@ -1052,6 +1082,7 @@ export const codexPoolSchema = z.object({
   excludedPlans: z.array(z.string().trim().min(1)).optional(),
   startIdleWindows: z.boolean().optional(),
   requestOwnedAffinity: z.boolean().optional(),
+  poolOnly: z.boolean().optional(),
   lowQuotaProtection: z.object({
     enabled: z.boolean(),
     threshold: z.number().finite().min(1).max(100),

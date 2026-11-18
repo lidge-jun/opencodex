@@ -29,9 +29,11 @@ file, and removes it again. Each client below has its own switch:
 | WorkBuddy AI | `~/.workbuddy-ai/models.json` | JSON | auto reload / new sessions | loopback placeholder |
 | Cline CLI | `~/.cline/data/settings/providers.json` and sibling `models.json` | JSON pair | after stopping and restarting Cline | loopback placeholder |
 | Kilo | first existing `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`, or `config.json` under `~/.config/kilo` | JSONC | new sessions | `OPENCODEX_KILO_API_KEY` |
-| Command Code | `~/.commandcode/providers.json` (on Windows with the default home: use `HOME ?? USERPROFILE` only if nonblank and Windows-absolute, otherwise `homedir()`; a separately supplied home is preserved; append `.commandcode\providers.json`) | JSON | next launch of Command Code | none — keyless loopback (`apiKey: false`), plus a seeded `auth.json` credential the desktop app gates on |
+| Command Code | `~/.commandcode/providers.json` (on Windows with the default home: use `HOME ?? USERPROFILE` only if nonblank and Windows-absolute, otherwise `homedir()`; a separately supplied home is preserved; append `.commandcode\providers.json`) | JSON | next launch of Command Code | none — keyless loopback (`apiKey: false`); the desktop app needs its own sign-in and opencodex never writes `auth.json` |
 | Factory Droid | `~/.factory/settings.json` (`%USERPROFILE%\.factory\settings.json` on Windows) | JSON | immediately via file watching | none — keyless loopback |
 | T3 Code | `$T3CODE_HOME/userdata/settings.json` (default `~/.t3/userdata/settings.json`) | JSON | immediately — T3 Code watches the file | non-secret loopback marker |
+
+From the CLI, `ocx integration client enable|disable --client <id>` changes this machine only, like the dashboard toggle. On a Remote Link Home that uses route intent, the change is recorded as the Home's own decision, so `ocx sync` keeps it, and linked Children keep their defaults. To change what Children inherit, use `ocx route to <client> on|off`. On a Remote Link Child a plain toggle is refused and prints the Home command for that device; use `ocx route to <client> off --local` there to opt that Child out. See [Remote Link](/guides/remote-link/#route-clients-per-device).
 
 ## Gentle Shell
 
@@ -199,7 +201,6 @@ stops that deletion. Cleanup is sequential: earlier successful disables are not 
 one fails. If compensation also fails, a client file may be left in an intermediate state. Inspect
 the reported client files and retained recovery snapshots before retrying; retained state does not
 mean every client was restored or left unchanged.
-A placeholder `apiKey` seeded into Command Code's `~/.commandcode/auth.json` is not removed.
 
 For Gajae built-in presets, keep the routing choice in `~/.gjc/agent/config.yml`:
 
@@ -265,7 +266,7 @@ Prime Agent follows `PRIME_AGENT_CODING_AGENT_DIR` before falling back to
 disagree about which file is meant. Its managed block owns only
 `providers.opencodex`, so other providers and any `modelOverrides` you have set
 stay untouched. Prime Agent reads `models.json` when a session starts, so start
-a new session after connecting it.
+a new session after connecting it. The generated block sets `compat.supportsDeveloperRole` to `false`, so the agent sends its system prompt as `system`; several OpenAI-compatible upstreams reject `developer` with a 400.
 
 Aside keeps a separate model catalog for each registered profile, including local profiles. OpenCodex lists
 all registered profiles, including local profiles, and can synchronize them together or control
@@ -274,7 +275,7 @@ Aside connection enables all profiles by default; individual exclusions survive 
 
 One caveat specific to Aside: the running app rewrites `models.json` itself, so
 fully quit and reopen Aside after applying, the same way Claude Desktop needs a
-restart. Aside's block is loopback-only and never carries a real credential.
+restart. Aside's block is loopback-only and never carries a real credential. The generated block sets `compat.supportsDeveloperRole` to `false`, so the agent sends its system prompt as `system`; several OpenAI-compatible upstreams reject `developer` with a 400.
 
 The managed Raycast integration supports **macOS and Windows**. Custom Providers
 is a **Raycast Pro** feature: on a free plan the file is still written, but
@@ -1107,18 +1108,15 @@ whichever one it was written into.
 form for an endpoint that needs no key. A raw string is refused by Command Code, and
 no service-token file is read, referenced, or exported by this integration.
 
-**The desktop app.** Command Code Desktop never reads that keyless form: before it
-shows a workspace it checks `~/.commandcode/auth.json` (or `COMMAND_CODE_API_KEY`)
-and, finding neither, stops on a sign-in screen that then asks for a subscription.
-Enabling therefore also seeds a placeholder `apiKey` into `auth.json` when the store
-has none — the file is shared with real Command Code logins, so an existing
-`apiKey` is never overwritten, other entries are kept, and Disable leaves the file
-in place. A sign-out inside the app is not undone by a later catalog sync; only a
-fresh enable seeds again.
-The placeholder is not a Command Code account key: Command Code's own cloud models
-still fail against it and the app logs `COMMAND_CODE_API_KEY was rejected by the API`
-until you sign in (`cmd login` or the app's login), which stores a real key. If you
-enabled this integration before the seed existed, disable and enable it once to write it.
+**The desktop app needs its own sign-in.** Command Code Desktop never reads the
+keyless provider form: before it shows a workspace it checks `~/.commandcode/auth.json`
+(or `COMMAND_CODE_API_KEY`) and, finding neither, stops on its sign-in screen. Sign in
+there once — or with `cmd login` — and the app stores its own credential.
+
+opencodex does not write that file. It belongs to Command Code and is shared with real
+logins and every other provider's tokens, so enabling this integration only writes
+`providers.json`; the placeholder is never written to `auth.json`, and Apply, overwrite,
+catalog refresh, and Disable all leave the store byte-for-byte alone.
 
 **Home resolution.** There is no `COMMANDCODE_HOME` override here. The published
 client resolves `HOME ?? USERPROFILE` and then appends `/.commandcode/providers.json`;

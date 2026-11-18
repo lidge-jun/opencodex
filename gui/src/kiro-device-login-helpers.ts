@@ -18,6 +18,15 @@ export interface KiroDeviceView {
 
 const methods = new Set<KiroDeviceMethod>(["builder-id", "google", "github", "iam-identity-center"]);
 const states = new Set<KiroDeviceState>(["pending", "select-profile", "done", "failed", "expired", "cancelled"]);
+/** Commercial AWS regions, offered as suggestions. The field stays free text so a newer region still works. */
+export const KIRO_IAM_REGIONS: readonly string[] = [
+  "us-east-1", "us-east-2", "us-west-1", "us-west-2", "af-south-1", "ap-east-1", "ap-east-2",
+  "ap-northeast-1", "ap-northeast-2", "ap-northeast-3", "ap-south-1", "ap-south-2",
+  "ap-southeast-1", "ap-southeast-2", "ap-southeast-3", "ap-southeast-4", "ap-southeast-5",
+  "ap-southeast-6", "ap-southeast-7", "ca-central-1", "ca-west-1", "eu-central-1", "eu-central-2",
+  "eu-north-1", "eu-south-1", "eu-south-2", "eu-west-1", "eu-west-2", "eu-west-3", "il-central-1",
+  "me-central-1", "me-south-1", "mx-central-1", "sa-east-1",
+];
 const AWS_REGION = /^(?:af|ap|ca|eu|il|me|mx|sa|us)-(?:central|east|north|northeast|northwest|south|southeast|southwest|west)-[1-9][0-9]?$/;
 
 export function validKiroIamOptions({ startUrl, region }: KiroIamOptions): boolean {
@@ -57,7 +66,7 @@ export function parseKiroDeviceView(input: unknown): KiroDeviceView | null {
 }
 
 /** URL parser normalization alone is insufficient: reject controls and explicit ports first. */
-export function kiroVerificationLink(raw: string | undefined): string | null {
+export function kiroVerificationLink(raw: string | undefined, method?: KiroDeviceMethod): string | null {
   if (!raw || [...raw].some(char => char.charCodeAt(0) < 32 || char.charCodeAt(0) === 127)) return null;
   const authority = /^https:\/\/([^/?#]+)/iu.exec(raw)?.[1];
   if (!authority || authority.includes("@") || authority.includes(":")) return null;
@@ -66,7 +75,9 @@ export function kiroVerificationLink(raw: string | undefined): string | null {
     if (url.protocol !== "https:" || url.username || url.password || url.port) return null;
     const host = url.hostname.toLowerCase();
     const awsRegion = /^device\.sso\.([a-z0-9-]+)\.amazonaws\.com$/.exec(host)?.[1];
-    if (!(awsRegion && AWS_REGION.test(awsRegion)) && host !== "kiro.dev" && !host.endsWith(".kiro.dev")) return null;
+    // Identity Center verifies on the organization's own access portal, the same host shape the login form accepts.
+    const iamPortal = method === "iam-identity-center" && /^[a-z0-9][a-z0-9-]{0,62}\.awsapps\.com$/.test(host) && /^\/start\/?$/.test(url.pathname);
+    if (!iamPortal && !(awsRegion && AWS_REGION.test(awsRegion)) && host !== "kiro.dev" && !host.endsWith(".kiro.dev")) return null;
     return url.href;
   } catch { return null; }
 }

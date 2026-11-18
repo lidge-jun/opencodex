@@ -703,3 +703,43 @@ describe("ocx account routes anthropic", () => {
     } finally { out.restore(); rmSync(dir, { recursive: true, force: true }); }
   });
 });
+
+describe("ocx account resume --if-healthy (#8398)", () => {
+  const genericConfig = () => ({ providers: { "google-antigravity": { adapter: "google", baseUrl: "https://cloudcode-pa.googleapis.com", authMode: "oauth" } } }) as never;
+  test("asks the server for a health-gated resume on the Codex pool and an OAuth pool", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      expect(await cmdPause(["openai", "acct_1", "--if-healthy"], deps(() => ({ json: { ok: true } }), calls), false)).toBe(0);
+      expect(await cmdPause(["google-antigravity", "acct_1", "--if-healthy"], { ...deps(() => ({ json: { ok: true } }), calls), loadConfigImpl: genericConfig }, false)).toBe(0);
+    } finally { out.restore(); }
+    expect(calls.find(call => call.path === "/api/codex-auth/accounts/pause")?.body).toEqual({ id: "acct_1", paused: false, ifHealthy: true });
+    expect(calls.find(call => call.path === "/api/oauth/accounts/pause")?.body).toEqual({ provider: "google-antigravity", accountId: "acct_1", paused: false, ifHealthy: true });
+  });
+
+  test("a refused resume names the reason and exits non-zero, also as JSON", async () => {
+    const calls: Captured[] = [];
+    const refused = () => ({ status: 409, json: { error: "account was not resumed: usage_read_failed", code: "resume_refused", reason: "usage_read_failed" } });
+    const out = capture();
+    let text: number; let json: number;
+    try {
+      text = await cmdPause(["openai", "acct_1", "--if-healthy"], deps(refused, calls), false);
+      json = await cmdPause(["openai", "acct_1", "--if-healthy", "--json"], deps(refused, calls), false);
+    } finally { out.restore(); }
+    expect(text).toBe(3);
+    expect(json).toBe(3);
+    expect(out.lines.join("\n")).toContain("acct_1 not resumed: usage_read_failed");
+    expect(JSON.parse(out.lines.at(-1)!)).toEqual({ ok: false, provider: "openai", id: "acct_1", resumed: false, reason: "usage_read_failed" });
+  });
+
+  test("is refused locally for a pause and for an API-key pool", async () => {
+    const calls: Captured[] = [];
+    const out = capture();
+    try {
+      expect(await cmdPause(["openai", "acct_1", "--if-healthy"], deps(() => ({ json: { ok: true } }), calls), true)).not.toBe(0);
+      expect(await cmdPause(["deepseek", "key_1", "--if-healthy"], { ...deps(() => ({ json: { ok: true } }), calls),
+        loadConfigImpl: () => ({ providers: { deepseek: { adapter: "openai-chat", baseUrl: "https://api.deepseek.com", authMode: "key", apiKey: "sk-test" } } }) as never }, false)).not.toBe(0);
+    } finally { out.restore(); }
+    expect(calls.filter(call => call.method === "PUT")).toEqual([]);
+  });
+});

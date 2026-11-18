@@ -30,8 +30,12 @@ so every pull request scans exactly once and the coverage does not depend on an 
 list. The aggregate derives the same expectation from its `scoped` result.
 
 The macOS suite has four duration-weighted shards (`macos N/4`, `TEST_SHARD=N/4`), each capped
-at 20 minutes. With the control and widget/bundle job, `lane=all` requests at least six macOS jobs
-for five runner slots; a `ci.yml` change also selects the setup-action macOS leg.
+at 20 minutes. With the widget/bundle job, `lane=all` requests at least five macOS jobs for five
+runner slots; a `ci.yml` change also selects the setup-action macOS leg. The unsharded `macos
+control` runs only on a `lane=macos-control` dispatch: on `lane=all` it repeated the suite the
+four shards had already passed on the same commit, on one worker, for 50 to 60 minutes, and
+every release waited for it. Release evidence (`.github/scripts/release-evidence.cjs`) therefore
+does not require it.
 Widget/bundle waits for `gates`, so the requests need not overlap and a queue is possible rather
 than guaranteed. The fourth shard adds setup overhead while dividing the same suite.
 

@@ -20,7 +20,6 @@
 import type { OcxConfig } from "../types";
 import { localInferenceDestination, selfFetchAdmissionToken, type LocalInferenceDestination } from "../lib/local-destinations";
 import { signalWithTimeout, cancelBodyOnAbort } from "../lib/abort";
-import { redactSecretString } from "../lib/redact";
 import { sidecarEnter } from "../lib/sidecar-tracker";
 import {
   ADVISOR_INTERNAL_CAPABILITY_HEADER,
@@ -28,7 +27,12 @@ import {
 } from "../lib/local-internal-call-capability";
 import { configuredPort } from "../server/auth-cors";
 import { readAdvisorReasoning } from "../server/inference/advisor-diagnostics";
-import { ADVISOR_SYSTEM_INSTRUCTION, buildAdvisorUserPrompt, type AdvisorContextInput } from "./context";
+import {
+  ADVISOR_SYSTEM_INSTRUCTION,
+  ADVISOR_QUESTION_ONLY_INSTRUCTION,
+  buildAdvisorUserPrompt,
+  type AdvisorContextInput,
+} from "./context";
 import {
   ADVISOR_ADMISSION_SCOPE_HEADER,
   AdvisorAdmissionScopeEncodedBoundExceeded,
@@ -136,6 +140,13 @@ export async function consultAdvisor(
   admissionPolicy?: CapturedAdmissionPolicy,
 ): Promise<AdvisorConsultationResult> {
   const t0 = Date.now();
+  // A low-level guard as well as the plan check: never fall back to task context or pay for an empty question.
+  if (input.contextMode === "question-only" && !input.question?.trim()) {
+    return {
+      ok: false, advice: "", advisorModel: input.advisorModel, durationMs: 0,
+      error: "A non-empty question is required in question-only mode; no consultation sent.",
+    };
+  }
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     [ADVISOR_INTERNAL_CAPABILITY_HEADER]: internalCallCapability(),
@@ -163,7 +174,7 @@ export async function consultAdvisor(
     stream: false,
     reasoning_effort: effort,
     messages: [
-      { role: "system", content: ADVISOR_SYSTEM_INSTRUCTION },
+      { role: "system", content: input.contextMode === "question-only" ? ADVISOR_QUESTION_ONLY_INSTRUCTION : ADVISOR_SYSTEM_INSTRUCTION },
       { role: "user", content: buildAdvisorUserPrompt(input) },
     ],
   };
@@ -246,7 +257,7 @@ export async function consultAdvisor(
     const kind = e instanceof Error && e.name === "TimeoutError" ? "timeout" : "connect_error";
     return {
       ok: false, advice: "", advisorModel: input.advisorModel,
-      error: `advisor ${kind}: ${redactSecretString(e instanceof Error ? e.message : String(e))}`,
+      error: `advisor ${kind}`,
       durationMs,
     };
   } finally {

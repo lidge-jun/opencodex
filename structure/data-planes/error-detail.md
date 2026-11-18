@@ -28,7 +28,7 @@ through the disk reader. A row keeps:
   (account usage-limit codes `usage_limit_exceeded` and `1308` are billing exhaustion), context overflow
   from text needs the definite verdict `isDefiniteContextOverflow` in the dependency-free
   `src/lib/context-overflow-verdict.ts` (the one combo failover uses, re-exported by
-  `src/combos/failover.ts`), so a validation error that quotes "prompt is too long" stays rejected, a 429 that
+  `src/combos/failover.ts`), including bounded provider wording that a conversation/input has reached or passed the model context limit, that a prompt is too long for that window, or that the window is full/exhausted/over its limit, and a string-valued JSON `error` field. A negator governing that wording, and capacity prose about the service, stay outside the verdict, so a validation error that quotes "prompt is too long" stays rejected, a 429 that
   names a rate limit stays `rate_limited` even when it also mentions quota, a 5xx stays a server failure
   whatever its text says, and a bare status maps to a fixed condition. It is presentation-only; routing,
   retry and recovery keep their own classifiers in `src/lib/errors.ts`. `upstreamConditionMessage` holds the
@@ -40,7 +40,9 @@ through the disk reader. A row keeps:
   evidence before discarding its text; `tests/usage/request-log-normalization.test.ts` covers both.
 - `failureDetail`, a closed `{ code, value?, type?, validation? }` from `src/lib/failure-detail.ts`: `code` is a member of
   `FAILURE_DETAIL_CODES`, `value` a safe integer (milliseconds or bytes) kept only for codes that take one,
-  and `type` a closed Anthropic error class kept only on `provider_error`. `recordLocalFailureDetail` in
+  `type` a closed provider error class (the Anthropic envelope types or a canonical Google RPC status
+  name such as `INVALID_ARGUMENT`) and `finishReason` a member of the Gemini/Vertex FinishReason enum,
+  both kept only on `provider_error`. `recordLocalFailureDetail` in
   `src/server/request-log-failure-detail.ts` takes the detail beside the English text it leaves on the
   context; `incompleteReasonDetail` maps the known `incomplete_details.reason` values (`max_output_tokens`,
   `upstream_stall_timeout`, `adapter_eof`), and an unknown reason stays on the context only. A relayed error
@@ -61,6 +63,33 @@ partial bodies produce status-only diagnostics.
 `boundedFailureDetail` revalidates those pairs on live projection, usage append/read, hydration and
 GUI rendering. The dashboard appends the machine field/type pairs to its localized provider-error
 label. No upstream-authored free text is retained, and client-facing messages retain their existing policy.
+On the same provider bodies (the `providerBody` callers of `recordUpstreamValidationDetail`: native Chat,
+translated adapter dispatch and a combo child's raw upstream response), a 4xx with no structured
+`detail[]` whose error message names a developer-role rejection through the fixed lowercase phrases in
+`src/lib/developer-role-rejection.ts` (DashScope `developer is not one of`, Moonshot
+`role 'developer' is not allowed`, serde `` unknown variant `developer` ``) records the closed pair
+`messages.role`/`enum` (#8864). The message is read once within the 4096-character scan and dropped; a
+body this proxy formatted keeps validation-only capture. `tests/lib/developer-role-rejection.test.ts`
+and `tests/server/developer-role-rejection-boundary.test.ts` cover the match, a non-match and the
+absence of upstream text in the client body, live row, `usage.jsonl`, hydration and console output.
+
+A provider failure also keeps its closed class without validation pairs (#8446).
+`recordUpstreamProviderErrorDetail` reads `error.type`, Google's `error.status` (an object or the first
+element of a streamed array) or a top-level `type` from a raw upstream body: native Chat, the
+translated adapter dispatch, and `consumeComboFailure` when adapter dispatch passes it the provider's
+own response. A proxy-marked response and every other `consumeComboFailure` caller keep the
+validation-only capture, because a body this proxy formatted is not provider evidence. An adapter
+transport that rewrites the body for display (`normalizeUpstreamHttpErrorResponse`, used by Vertex and
+Antigravity) reads the class from the original first and attaches it to the new response through
+`withProviderFailureFacts` in `src/lib/failure-detail.ts`, a `WeakMap` keyed by the object, so
+nothing new is serialized. The Google adapter tags a mid-stream `error` frame with its status and a
+fail-closed Vertex truncation with its finish reason the same way, and the parse seam in
+`src/server/responses/request-transport.ts` calls `observeProviderFailureEvent`, which records them.
+A later `done` on the same request (a retry or empty-completion replay that succeeded) retracts the
+detail this path recorded, so a successful row never names a failure it recovered from. The message
+itself stays on the context like every other upstream text. The dashboard appends the finish reason as
+a machine token. `tests/usage/provider-failure-detail.test.ts` drives the Vertex route for an HTTP 400,
+a combo child, a mid-stream error frame, a truncated turn and a recovered replay.
 
 `upstreamError`, `upstreamErrorCode`, `upstreamErrorType` and `upstreamRequestId` stay on the request
 context, where status heuristics and classifiers read them, and never reach a row, `usage.jsonl` or the
@@ -140,7 +169,7 @@ binding a token is dropped. Handles, tokens and bindings are never logged; a val
 passes unchanged.
 
 `codex-ws-metadata.ts` checks the raw byte budget first, then keeps only normalized values. It rebuilds
-the native `codex.rate_limits` frame field by field: known limit ids (`codex`, `codex_bengalfox`), a
+native Messages API-key responses also supply the display-only passive observation owner; the native `codex.rate_limits` frame is normalized field by field: known limit ids (`codex`, `codex_bengalfox`), a
 closed set of plan labels, the `allowed`/`limit_reached` flags, quota windows with the percent clamped to
 100 at two decimals and integer window and reset values, and the credit flags. Every other field is
 discarded, including the credit balance, which clients receive only as the proxy-formatted
@@ -270,7 +299,10 @@ A closed exact-message map covers malformed/empty completion diagnostics, missin
 explicit-empty-tool-catalog refusal. Its values are complete proxy literals: arbitrary suffixes,
 reason strings and tool-name slots never match. The actionable plan-refusal map recognizes only
 `MODEL_NOT_IN_PLAN` and emits its own complete remediation message, preserving the proxy's token
-without copying surrounding text. Every failure with unknown provenance receives owned wording.
+without copying surrounding text. The same function selects the fixed `DEVELOPER_ROLE_REFUSAL_MESSAGE` for a
+4xx whose evidence the developer-role verdict above recognizes, only with no contract and a null or
+`invalid_request_error` code, so Chat and Messages clients learn to send `system` or record
+`foldDeveloperRoleToSystem` without any provider text. Every failure with unknown provenance receives owned wording.
 
 `src/server/chat-native-sse.ts` builds nested terminal errors as canonical owned error envelopes.
 Flat `type: "error"` payloads and `event: error` frames that the ordinary relay accepts retain that relay's
@@ -425,6 +457,10 @@ The legacy envelope stays in the combo-evidence side channel, separate from the 
 
 Messages local-refusal presentation uses construction-registered process metadata in
 `src/lib/client-error-body.ts`, carried through response clones and registered terminal contexts.
+The same module holds the request-scoped `pause_turn` fact the bridge records when an Anthropic
+turn is paused: the client still receives `incomplete/max_output_tokens`, while combo stream
+preflight reads the marker and keeps the turn on its target instead of replaying it. It adds no
+wire field, and `carryProxyErrorContext` carries it with the rest of that context.
 `src/lib/messages-error-body.ts` selects fixed guidance from that closed reason or a closed local
 code; serialized fields and diagnostic text cannot register a reason. The original message still
 feeds status, recovery, logs and private combo evidence. Messages/count_tokens non-2xx delivery
@@ -432,6 +468,8 @@ removes selector fields from scope refusals and never renders request/configurat
 or upstream reset times. Shared producers retain their existing bytes for Chat and other surfaces.
 HTTP workflow refusals enter the same Messages projection at
 `src/server/admitted-http-turn.ts`. A replacement refusal keeps its own construction identity.
+The workflow refusal writer carries workflow-specific headers and local provenance; the adapter's
+independent send-budget writer instead keeps its distinct request-budget code and synthetic attribution.
 
 Only buffered/folded Messages consumers receive a legacy-record sink; streaming delivery does
 not retain those records. Adapter iterator-read failures alone carry transport provenance;

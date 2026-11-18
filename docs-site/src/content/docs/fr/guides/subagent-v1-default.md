@@ -7,10 +7,23 @@ OpenCodex s'installe avec la surface de sous-agent réglée sur **v1**. Les page
 Dashboard, Models et Subagents demandent toutes confirmation avant de passer à
 **base** ou **v2** et renvoient vers cette page. La CLI ne demande rien.
 
-La raison est précise : en v2, une tâche confiée par un modèle ChatGPT natif à
-un modèle routé est illisible pour ce dernier. C'est le cas de délégation le
-plus courant — un parent GPT qui lance un enfant Grok, Claude ou GLM — et en
-v2, il échoue systématiquement.
+La raison est précise : sur le chemin v2 chiffré inchangé, une tâche confiée par un modèle ChatGPT natif à un modèle routé est illisible pour ce dernier. Une telle tâche échoue à cette frontière, par exemple lorsqu’un parent GPT lance un enfant Grok, Claude ou GLM. L’option expérimentale ci-dessous modifie la production des nouveaux messages sans déchiffrer les anciens.
+
+## V2 facultatif avec messages de tâche en clair
+
+**V2 · tâches en clair** (`v2-plaintext`) sélectionne V2 pour les nouvelles conversations sans activer la priorité V2 globale. Il conserve les noms de tâche V2, la hiérarchie, les suivis, l’annulation et la concurrence, et utilise le compilateur expérimental en clair pour les requêtes Responses ChatGPT canoniques admissibles. Les conversations existantes conservent leur sélection ; une mise à jour ne choisit pas ce mode automatiquement.
+
+Les choix du catalogue concernent les nouvelles sessions. Le compilateur suit le réglage actuel pour chaque requête canonique admissible ultérieure, y compris dans les sessions V2 existantes. La sélection V2 conservée ne dispense pas ces requêtes de compilation. Le mode et la valeur explicite `plaintextV2AgentMessages: true` activent chacun indépendamment le compilateur.
+
+Dans ce mode, la continuation locale par identifiant de réponse exige la même identité de clé API opencodex admise et le `thread-id` propre à la requête. Un fil parent ne donne pas accès à la tâche conservée d’un enfant. Sans l’une de ces identités, après un redémarrage du proxy ou pour les anciennes entrées de cache non liées, renvoyez la conversation complète sans `previous_response_id`. L’état conservé dans ce mode reste lié après changement de mode. En `v1` par défaut, l’état non lié conserve le comportement de continuation limité au fil parent, y compris pour les appelants de bouclage.
+
+Le tableau de bord demande de reconnaître que le texte peut rester dans l’historique Codex, les requêtes du fournisseur sélectionné et l’état local de réponse et de débogage, y compris les instantanés ou fichiers de débordement sur disque. HTTPS et l’authentification restent actifs ; aucun appel de récupération supplémentaire n’est ajouté. Les tâches déjà chiffrées ne sont pas déchiffrées, l’historique n’est pas réécrit et la désactivation ne supprime pas les copies conservées. Un comportement non pris en charge du client ou du backend peut toujours échouer. Les modes v1 et natif-v1/routé-v2 restent disponibles.
+
+```bash
+ocx v2 mode v2-plaintext --live --acknowledge-plaintext-agent-messages
+```
+
+Pour la cible active, vérifiez ensuite `ocx v2 status --live --json`. Pour la cible locale, omettez `--live` dans les deux commandes et vérifiez `ocx v2 status --json` : l’état configuré et la convergence du catalogue ne prouvent pas qu’une délégation réelle réussit. Pour quitter ce mode, choisissez-en explicitement un autre ; la préférence indépendante `plaintextV2AgentMessages` est conservée.
 
 ## Ce que vous voyez alors
 
@@ -41,8 +54,9 @@ En v2, le parent émet la tâche sous forme de `encrypted_content`, produit par
 le backend ChatGPT. La clé reste dans ce backend. OpenCodex ne l'a jamais eue :
 le proxy ne peut donc rien déchiffrer ni réécrire. La valeur est réellement du
 texte chiffré, et non du texte clair caché derrière un indicateur. La limite
-est structurelle, pas un défaut de configuration, et aucun réglage du proxy
-ne peut y remédier.
+est structurelle, pas un défaut de configuration : aucun réglage du proxy ne permet le déchiffrement local.
+
+Aucun réglage du proxy ne permet le déchiffrement local. L’option expérimentale `agentTaskRecovery` peut demander au backend ChatGPT de récupérer les tâches éligibles ; elle ne les déchiffre pas localement. Les règles d’autorisation, d’éligibilité et d’échec décrites plus haut restent applicables.
 
 Trois configurations restent possibles, ce qui éclaire la forme de l'échec :
 
@@ -99,7 +113,7 @@ affiche l'avis une fois et attend votre réponse.
 Chaque réponse est enregistrée et l'avis ne revient pas. Si vous fermez
 l'avis sans répondre, il réapparaît à la prochaine ouverture du tableau de bord.
 
-Les changements de mode s'appliquent aux **nouvelles** sessions Codex. Lancez
+Les changements de choix du catalogue s'appliquent aux **nouvelles** sessions Codex ; le compilateur en clair suit le réglage actuel pour les requêtes admissibles, y compris les requêtes ultérieures des sessions V2 existantes. Lancez
 une nouvelle session après votre choix. Si un hôte App durable affiche encore
 l'ancienne surface, exécutez `ocx sync` et redémarrez cette surface Codex.
 
@@ -138,16 +152,14 @@ s'affichera plus et cette page relèvera de l'historique plutôt que du conseil.
 
 ## Changer de mode
 
-Dashboard, Models et Subagents proposent le même sélecteur v1/base/v2 et
-demandent tous confirmation avant base ou v2. Depuis la CLI :
+Dashboard, Models et Subagents proposent le sélecteur v1/base/v2 et l’option `v2-plaintext` ; cette dernière exige un consentement explicite. Depuis la CLI :
 
 ```bash
 ocx v2 status
 ocx v2 mode v1
 ```
 
-La CLI ne demande pas de confirmation. C'est le même paramètre : choisissez-le
-en tenant compte de ce que décrit cette page.
+La CLI ne demande pas de confirmation interactive ; l’entrée en `v2-plaintext` exige le drapeau de consentement indiqué ci-dessus.
 
 ## Limite de sous-agents simultanés
 

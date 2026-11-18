@@ -27,8 +27,11 @@ Drives no management route.
 | `--version` | string | Select an exact version for a plan or apply. |
 | `--expect-plan` | string | Require the apply plan to match this planToken. |
 | `--not-after` | string | Refuse mutation after this Unix millisecond deadline. |
+| `--desktop` | boolean | Update a Windows Desktop installation headlessly (signature-verified MSI). |
+| `--check` | boolean | With --desktop, report the published and serving versions without installing. |
 
 - Orchestrated exit codes: 0 verified or up-to-date; 10 refused; 11 previous version verified; 12 uncertain; 64 usage.
+- --desktop exit codes: 0 done or up to date; 1 nothing installed; 2 old runtime still serving or reboot pending; 3 installer uncertain; 64 usage.
 
 ### `ocx companion`
 
@@ -1394,7 +1397,7 @@ State-changing: no. JSON mode: `envelope`.
 
 ### `ocx system settings`
 
-Usage: `ocx system settings [--auto-start <on|off>] [--stream-mode <auto|legacy-tee|eager-relay>] [--desktop-authless <on|off>] [--client-compaction <on|off>] [--show-codex-credits <on|off>] [--account-picker <on|off>] [--main-account-hard-lock <on|off>] [--ultra-fast-tier <on|off>] [--fast-rows <on|off>] [--json]`
+Usage: `ocx system settings [--auto-start <on|off>] [--stream-mode <auto|legacy-tee|eager-relay>] [--desktop-authless <on|off>] [--client-compaction <on|off>] [--show-codex-credits <on|off>] [--account-picker <on|off>] [--main-account-hard-lock <on|off>] [--ultra-fast-tier <on|off>] [--fast-rows <on|off>] [--reserve <on|off>] [--json]`
 
 Read or update supported runtime settings.
 
@@ -1417,6 +1420,7 @@ State-changing: yes. JSON mode: `envelope`.
 | `--main-account-hard-lock` | string | on/off routing ownership policy; does not rotate native login. |
 | `--ultra-fast-tier` | string | on/off routing tier; confirmed by same-target read-back. |
 | `--fast-rows` | string | on/off Fast model rows, separate from provider Fast. |
+| `--reserve` | string | on/off Luna Reserve compatibility; independent of desktop authless, grants no entitlement. |
 
 - Mixed read/write: no setting flags reads; setting flags write only submitted fields. Stored, effective and config-apply states can differ.
 - New-option writes use narrow fields and actual observed values. ultraFastTier is read back because the PUT response omits it; missing/mismatching evidence stays saved-but-unverified and nonzero.

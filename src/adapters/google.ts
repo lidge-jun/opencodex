@@ -3,6 +3,7 @@ import type { AdapterFetchContext, AdapterRequest, IncomingMeta, ProviderAdapter
 import { debugDroppedFrame, debugProviderDiagnosticLazy } from "../lib/debug";
 import { createToolCallIdAllocator } from "./tool-call-id";
 import { openCodeGoGeminiEndpoint } from "../types/opencode-go";
+import { withProviderFailureFacts } from "../lib/failure-detail";
 import { createImageBudget, materializeInlineImage, MAX_ENCODED_BYTES_PER_IMAGE, artifactHttpUrl } from "../images/artifacts";
 import type {
   AdapterEvent,
@@ -1071,7 +1072,11 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
         identityModelId,
         stripRejectedClaudeSdkParagraph,
         isCloudCodeAssist,
-        provider.googleMode === "vertex" && parsed.modelId === "gemini-4-argon",
+        provider.googleMode === "vertex" && (
+          parsed.modelId === "gemini-4-argon"
+          || parsed.modelId === "gemini-4-carbon"
+          || parsed.modelId === "gemini-4-hydrogen"
+        ),
         isCloudCodeAssist && /^claude-/i.test(routedModelId),
       );
       lastInjectedCallIds = [...replayedCallIds];
@@ -1099,9 +1104,12 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
       // current behavior; Vertex participates only through an explicitly configured ladder (the
       // seed google-vertex entry ships none). Image models are excluded — thinkingConfig would
       // suppress the responseModalities fallback below. CCA maps effort on its envelope path.
-      const thinkingLevel = thinkingEligible
+      const rawThinkingLevel = thinkingEligible
         ? mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning)
         : undefined;
+      const thinkingLevel = rawThinkingLevel === "xhigh" && configuredEfforts === undefined
+        ? "high"
+        : rawThinkingLevel;
       const includeThoughts = thinkingEligible
         && provider.showThinkingSummary === true
         && parsed.options.hideThinkingSummary !== true
@@ -1393,12 +1401,14 @@ export function createGoogleAdapter(provider: OcxProviderConfig): ProviderAdapte
 
         // Inline provider error inside a 200 stream → terminal error (see openai-chat.ts).
         if (chunk.error) {
-          const err = chunk.error as { message?: string } | undefined;
+          const err = chunk.error as { message?: string; status?: unknown } | undefined;
           // Clear-on-invalid: a signature rejection means our replayed thoughtSignatures are stale.
           // Drop the cache entry and durable store entry for rejected calls so the next turn
           // starts clean instead of re-injecting a bad sig.
           handleSignatureRejection(err?.message);
-          yield { type: "error", message: err?.message ?? "upstream error" };
+          // Only the closed RPC status class and finish reason ride along for the request log (#8446).
+          yield withProviderFailureFacts({ type: "error", message: err?.message ?? "upstream error" } as AdapterEvent,
+            { type: err?.status, finishReason: lastFinishReason });
           return "terminate";
         }
 

@@ -60,6 +60,20 @@ describe("provider config validation leaf", () => {
     });
   });
 
+  test("Responses custom-tool support is a strict exact-model boolean capability", () => {
+    const base = { adapter: "openai-responses", baseUrl: "https://gateway.example/v1", authMode: "key" };
+    const valid = { ...base, modelCapabilities: { gpt: { responsesCustomTools: true }, claude: { responsesCustomTools: false } } };
+    expect(providerConfigSchema.safeParse(valid).success).toBe(true);
+    expect(providerManagementConfigError("gateway", valid)).toBeNull();
+    const invalid = { ...base, modelCapabilities: { claude: { responsesCustomTools: "false" } } };
+    expect(providerConfigSchema.safeParse(invalid).success).toBe(false);
+    expect(providerManagementConfigError("gateway", invalid)).toContain("boolean");
+    expect(mergeModelCapabilities(
+      { claude: { inputModalities: ["text"], responsesCustomTools: false } },
+      { claude: { responsesCustomTools: null } },
+    )).toEqual({ claude: { inputModalities: ["text"] } });
+  });
+
   test("Mistral image caps are bounded integers that PATCH can clear", () => {
     const base = { adapter: "openai-chat", baseUrl: "https://api.mistral.ai/v1", authMode: "key" };
     for (const value of [{ "deepseek-v4-1-flash-1017": { mistralMaxImages: 20 } }, { "mistral-medium-latest": { mistralMaxImages: 1 } }]) {

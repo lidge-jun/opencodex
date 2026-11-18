@@ -146,6 +146,12 @@ still cover the rule, which is a judgement only review makes.
   unchanged. The service-stop and uninstall paths of the same promise are covered
   separately in `tests/cli/restore-completes-shared-teardown.test.ts` and are not bound to this id.
   Enforced by `tests/codex-integration/codex-catalog-restore.test.ts`.
+- **INV-RESTORE-02** — Restore never reverts a `config.toml` change made after injection: every
+  stop, recovery and disconnect path removes only OpenCodex's own keys, a whole saved original is
+  replayed only over the byte-identical injected file, and a write that lands before the final
+  pre-rename comparison is refused, never overwritten (one landing between that comparison and the
+  rename is not detectable); see [codex-home.md](codex-home.md#codex-home).
+  Enforced by `tests/codex-integration/codex-restore-later-edits.test.ts`.
 - **INV-TESTS-01** — `tests/` is organised by domain (`tests/<domain>/`, mirroring `src/`); the explicit map
   is `scripts/test-layout/layout.json` plus its `explicitShards` sibling maps, with regex seeds and migration state in
   `scripts/test-layout/seeds.json`, and `tests/test-layout.test.ts` rejects a test outside its
@@ -320,3 +326,5 @@ manual and automatic triggers, while subsequent turns keep their conversation se
 
 - **INV-LINK-CHILD-01** — `native/ocx-child` and the TypeScript Link modules agree byte for byte on data/management route admission, `Host`/`Origin` and smuggling rejection, caller credential stripping, `link-relay-auth` v2 HMAC proofs, OCX-6 `appliedCodexSettingsDigest`, and `#1798`-resilient offline journal attach/detach.
   Enforced by `tests/clients/link-ocx-child-conformance.test.ts`.
+- **INV-LINK-CHILD-OPS-01** — A Home without links starts no Child-ops timer and loads no Child-ops host or scheduler (route modules loaded by status, DELETE or policy reads may import `child-policy` statically); the host starts when the link listener owns its socket and stops when it closes.
+  Enforced by `tests/lab/link-child-ops-no-timer.test.ts`.

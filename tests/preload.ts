@@ -30,6 +30,10 @@
 import { afterAll, afterEach } from "bun:test";
 import { isTestHomeGuardArmed, protectedHomeForTests } from "../src/lib/test-home-guard";
 import { createIsolatedTestEnvironment, LIVE_INSTALL_CREDENTIAL_ENV } from "../scripts/test";
+import { gitRepositoryEnvNames } from "../scripts/git-repository-env";
+import { createGitConfigGuard } from "./helpers/git-config-guard";
+import { installNetworkEgressGuard } from "./helpers/network-egress-guard";
+import { repoRoot } from "./helpers/repo-root";
 import {
   acquireTestRunLock,
   resolveBareTestRunIdentity,
@@ -50,6 +54,14 @@ for (const [key, value] of Object.entries(isolated.env)) {
 }
 // The sandbox drops these from its env, but this process started with them, so remove them here.
 for (const name of LIVE_INSTALL_CREDENTIAL_ENV) delete process.env[name];
+// Same for an inherited GIT_DIR/GIT_WORK_TREE (scripts/git-repository-env.ts). Deleting them reaches
+// node:child_process and spread envs only: Bun.spawn without an `env` option keeps the environment
+// this process started with, which is why tests/helpers/git-fixture.ts always passes one.
+const inheritedGitEnv = gitRepositoryEnvNames(process.env);
+for (const name of inheritedGitEnv) delete process.env[name];
+if (inheritedGitEnv.length > 0) {
+  console.warn(`[test] removed inherited ${inheritedGitEnv.join(", ")}; Bun.spawn calls that pass no env still see them. Run through \`bun run test\` or unset them.`);
+}
 
 // Arm the guard once the sandbox is in place, and BEFORE the run lock.
 //
@@ -82,6 +94,11 @@ process.env.OPENCODEX_KIRO_MODEL_DISCOVERY = "0";
 if (!isTestHomeGuardArmed() || !protectedHomeForTests()) {
   throw new Error("test home guard failed to arm; refusing to run tests unprotected");
 }
+
+// Refuse real network egress before anything below can open a connection (#8848): a full
+// suite once sent fixture credentials to nine provider hosts through requests that slipped
+// past a mock. Loopback fixtures and the reserved .test/.example/.invalid names still work.
+installNetworkEgressGuard();
 
 // `scripts/test.ts` owns the lock for wrapped runs. A bare `bun test` has no wrapper,
 // so a single-process runner uses its own PID while true parallel workers rendezvous
@@ -156,3 +173,14 @@ afterEach(async () => {
   const { settled, pending } = await settleBackgroundWork({ timeoutMs: 2_000 });
   if (!settled) console.warn(`[test] background work outlived its case: ${pending.join(", ")}`);
 });
+
+// Fail the case after which this checkout's shared .git/config changed a guarded key
+// (tests/helpers/git-config-guard.ts). OCX_GIT_CONFIG_GUARD_CHECKOUT exists only so the guard's own
+// test can aim it at a fixture repository.
+const gitConfigGuard = createGitConfigGuard(process.env.OCX_GIT_CONFIG_GUARD_CHECKOUT || repoRoot());
+if (gitConfigGuard) {
+  afterEach(() => {
+    const report = gitConfigGuard.check();
+    if (report) throw new Error(report);
+  });
+}

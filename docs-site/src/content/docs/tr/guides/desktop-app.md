@@ -15,6 +15,19 @@ Kontrol paneli çözümlenen yerel proxy uç noktasından sunulur (varsayılan p
 
 `OpenCodex.app` sürüm derlemeleri Developer ID ile imzalanır ve Apple tarafından noterleştirilir. Dolayısıyla ilk açılışta macOS normalde yalnızca indirilen uygulamalar için standart onayı ister. macOS yine de engellerse **System Settings → Privacy & Security → Open Anyway** yolunu kullanın.
 
+#### Homebrew (masaüstü uygulaması)
+
+Masaüstü uygulamasını alternatif olarak Homebrew Cask ile de yükleyebilirsiniz:
+
+```bash
+brew install --cask opencodex
+```
+
+- **Uygulama içi güncellemeler (`auto_updates`)**: Masaüstü uygulamasının yerleşik bir güncelleyicisi vardır ve Cask `auto_updates true` bildirir. Belirli Cask için `brew upgrade --cask opencodex` veya greedy yükseltme, uygulama içinde daha yeni bir sürüme güncellenmiş uygulamanın yerini alabilir. Homebrew ile yükseltmeden önce yüklü uygulamanın ve Cask’in sürümlerini kontrol edin.
+- **CLI ve arka plan servisi**: Cask yalnızca kendi CLI ve proxy çalışma ortamını içeren `OpenCodex.app` uygulamasını kurar. Bağımsız CLI veya arayüzsüz servis için `ocx` npm ya da sürüm arşivleriyle ayrıca kurulabilir; ikisi de `~/.opencodex` yapılandırmasını paylaşır. Servisi ayrı CLI’ye devretmek için OpenCodex’ten çıkın, ayrı CLI’yi açıkça seçin (etkinse [Desktop paket başlatıcısı devrini](/getting-started/installation/) de atlayın) ve `ocx service install` çalıştırın. [Terminal komutu seçimine](/guides/desktop-app/#using-the-ocx-cli-with-the-desktop-app) ve [çalışma ortamı sahipliğine](/reference/cli/lifecycle/#runtime-ownership) bakın.
+- **Cask yükseltmesinden sonra servis**: Cask’in kaldırma adımı, ayrı CLI’ye ait olsa bile `com.opencodex.proxy` launchd işini ve plist dosyasını kaldırarak arka plan servisini durdurabilir. Yükseltmeden sonra OpenCodex’ten çıkın ve macOS grafik oturumunda yukarıda açıkça seçilen ayrı CLI ile `ocx service status` çalıştırın. Servis yoksa `ocx service install`, kurulu ancak yüklenmemişse `ocx service repair` çalıştırın. Ardından `ocx service status` ile tekrar kontrol edin. `ocx service install` bağlantı noktasını kaldırılan işten değil, `OCX_BAKE_PORT` veya `config.port` değerinden alır; hizmet kaydedildikten sonra bunlardan biri değiştiyse eski bağlantı noktasını gösteren istemcileri güncelleyin. Aynı kaldırma adımı Desktop'ın kendi Start at Login öğesini (`OpenCodex` launchd işi) de kaldırır; kullanıyorsanız OpenCodex'te **Start at Login** seçeneğini yeniden açın.
+- **`--zap` ile veri silme**: `brew uninstall --zap --cask opencodex`, `~/.opencodex` ve `~/.opencodex-desktop` dizinlerini siler. Bu dizinlerdeki CLI ve Desktop tarafından paylaşılan yapılandırma ve durum verileri de silinir. `--zap` kullanmadan önce saklamak istediğiniz verileri yedekleyin. 2.97.0 öncesi Cask tanımları bu iki dizini listelemiyordu ve Homebrew kaldırma işlemini kurulum sırasında kaydedilen tanımla yapabilir; `--zap` sonrasında dizinlerin kalıp kalmadığını kontrol edin ve isterseniz kendiniz silin.
+
 ### Windows
 
 `OpenCodex-<version>-windows-x64.msi` dosyasını indirip yükleyiciyi çalıştırın. Yükleyici henüz kod imzalı olmadığından Windows SmartScreen uyarı verebilir; sürüm sayfasından indirdiğinizi doğruladıktan sonra **More info → Run anyway** seçeneğini seçin.
@@ -67,6 +80,8 @@ Tauri güncelleyici yeni bir uygulama sürümü bulduğunda macOS menü çubuğu
 Masaüstü uygulamasında, kontrol panelindeki güncelleme düğmesi uygulamanın güncelleme sayfasını açar. Buradan yeniden denetleyebilir, bekleyen imzalı güncellemeyi kurabilir veya kontrol paneline dönebilirsiniz. Aynı kurulum işlemi tepsi menüsünde de bulunur. Kurulum başarısız olursa güncelleme yeniden denenmek üzere tutulur. Bu sayfa, masaüstünde tepsi simgesi bulunmayan Linux'ta da çalışır. Normal bir tarayıcı kontrol paneli bunun yerine o proxy'nin paket kurulumunu yönetir.
 
 Güncellemeler kurulmadan önce projenin imzalı güncelleyici açık anahtarıyla doğrulanır. macOS'ta uygulama içi güncellemeler `OpenCodex-<version>-macos.app.tar.gz` dosyasını indirir; DMG ilk kurulum içindir. Sürüm bildirimi yalnızca güncelleyici anahtar sırrı yapılandırıldığında üretilir ve o durumda dört platformun tamamının imzalanmasını gerektirir.
+
+Windows'ta uygulama penceresi olmadan da güncelleyebilirsiniz; örneğin SSH üzerinden. Kurulumun kendi `ocx.exe` dosyasını OpenCodex'i çalıştıran Windows hesabıyla açılmış, yönetici yetkili bir terminalde çalıştırın: `"C:\Program Files\OpenCodex\ocx.exe" update --desktop` (başka bir klasöre kurduysanız yolu değiştirin). Bir hizmet, SYSTEM olarak çalışan zamanlanmış bir görev veya başka bir hesap kendi OpenCodex ana dizinini kullanır, bu proxy'yi bulamaz ve eski sürümde bırakır. Komut tepsi menüsüyle aynı yayımlanmış sürümü denetler, MSI'yı aynı güncelleyici anahtarıyla doğrular ve herhangi bir uyuşmazlıkta reddeder, arayüzsüz kurar, ardından hâlâ eski sürümü çalıştıran proxy'yi yeniden başlatarak yeni sürümün yanıt vermesini sağlar. `--check` yalnızca durumu bildirir, `--json` makine tarafından okunabilir bir sonuç yazar. Çıkış kodu 0 tamamlandı ya da zaten güncel, 1 hiçbir şey kurulmadı, 2 güncelleme kuruldu ama eski proxy hâlâ çalışıyor (veya önce Windows yeniden başlatılmalı), 3 kurucu zamanında bitmedi demektir. Başka bir kurulumdan başlatılmış bir proxy asla durdurulmaz. MSI'yı elle kurduysanız `ocx status`, kurulu sürümün çalışan proxy'den yeni olduğunu söyler ve bu komutu gösterir.
 
 ## Widget
 

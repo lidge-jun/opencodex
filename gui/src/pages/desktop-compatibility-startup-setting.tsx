@@ -39,7 +39,10 @@ export default function DesktopCompatibilityStartupSetting({ apiBase, active, au
       if (!current()) return; op.signal.throwIfAborted();
       owner.refreshRequired = false; setClientResourceData(key, actual); setUncertain(false);
     } catch (cause) {
-      if (current()) { owner.refreshRequired = true; setUncertain(true); setError(cause instanceof CompatibilityApiError ? cause.code : "connection_unconfirmed"); }
+      if (current()) {
+        owner.refreshRequired = true; setUncertain(true); setError(cause instanceof CompatibilityApiError ? cause.code : "connection_unconfirmed");
+        if (cause instanceof CompatibilityApiError && cause.code === "desktop_authorization_required") setClientResourceData(`desktop-authorization:${apiBase}`, { supported: true, authorized: false });
+      }
     } finally {
       op.clear();
       if (owner.operation === op) owner.operation = null;

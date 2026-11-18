@@ -52,6 +52,19 @@ export function appendSafeWebSearchSource(target: SafeWebSearchSource[], source:
   return true;
 }
 
+/** Fill one validated citation's missing title without rebuilding or revalidating its peers. */
+export function fillMissingWebSearchSourceTitle(target: SafeWebSearchSource[], url: string, value: unknown): void {
+  const title = safeTitle(value);
+  if (title === undefined) return;
+  const index = target.findIndex(source => source.url === url);
+  if (index < 0 || target[index]!.title !== undefined) return;
+  const previous = target[index]!;
+  const next = { url: previous.url, title };
+  const delta = serializedSourceBytes(next) - serializedSourceBytes(previous);
+  const usedBytes = target.reduce((sum, source) => sum + serializedSourceBytes(source), 0);
+  if (usedBytes + delta <= MAX_WEB_SEARCH_SOURCE_BYTES) target[index] = next;
+}
+
 export function safeWebSearchSources(sources: unknown): SafeWebSearchSource[] {
   if (!Array.isArray(sources)) return [];
   const safe: SafeWebSearchSource[] = [];

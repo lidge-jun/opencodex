@@ -1,13 +1,13 @@
 import { jsonResponse } from "../auth-cors";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import type { ManagementContext } from "./context";
-import { isAuthorizedDesktopCompatibilityMutation } from "./desktop-compatibility-authorization";
+import { requireDesktopAuthorization } from "./desktop-authorization";
 
 const PATH = "/api/codex/desktop-compatibility/settings";
 export async function handleDesktopCompatibilitySettingsRoutes(ctx: ManagementContext): Promise<Response | null> {
   if (ctx.url.pathname !== PATH) return null;
   if (ctx.req.method !== "GET" && ctx.req.method !== "POST") return jsonResponse({ error: "method_not_allowed" }, 405);
-  if (ctx.req.method === "POST" && !isAuthorizedDesktopCompatibilityMutation(ctx)) return jsonResponse({ error: "local_dashboard_confirmation_required" }, 403);
+  if (ctx.req.method === "POST") { const denied = requireDesktopAuthorization(ctx); if (denied) return denied; }
   let update: { startOnProxyStart: boolean; revision: string } | undefined;
   if (ctx.req.method === "POST") {
     let body: unknown;
@@ -19,7 +19,9 @@ export async function handleDesktopCompatibilitySettingsRoutes(ctx: ManagementCo
       || typeof value.startOnProxyStart !== "boolean" || typeof value.revision !== "string" || !/^[a-f0-9]{64}$/.test(value.revision)) return jsonResponse({ error: "invalid_request" }, 400);
     update = { startOnProxyStart: value.startOnProxyStart, revision: value.revision };
   }
-  const service = ctx.deps.desktopStartupSettings ?? (await import("../../codex/desktop-compatibility/startup-settings")).createDesktopStartupSettings({ liveConfig: ctx.config });
+  const module = ctx.deps.desktopStartupSettings ? null : await import("../../codex/desktop-compatibility/startup-settings");
+  if (ctx.req.method === "POST") { const denied = requireDesktopAuthorization(ctx); if (denied) return denied; }
+  const service = ctx.deps.desktopStartupSettings ?? module!.createDesktopStartupSettings({ liveConfig: ctx.config });
   try { return jsonResponse({ ok: true, settings: update ? service.set(update.startOnProxyStart, update.revision) : service.status() }); }
   catch (error) {
     const code = error instanceof Error ? error.message.replace(/^desktop_compatibility_settings_/, "") : "operation_unconfirmed";

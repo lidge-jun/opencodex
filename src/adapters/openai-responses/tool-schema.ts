@@ -1,5 +1,9 @@
 import { namespacedToolName, type AdapterEvent, type OcxParsedRequest, type OcxProviderConfig, type OcxUsage, type TierDecision } from "../../types";
-import { declaredUnsupportedHostedTools, isHostedToolUnsupportedForModel } from "../../responses/hosted-tool-policy";
+import {
+  declaredUnsupportedHostedTools,
+  isHostedToolUnsupportedForModel,
+  responsesBodyDeclaresClientTools,
+} from "../../responses/hosted-tool-policy";
 import { debugProviderDiagnostic } from "../../lib/debug";
 import { stripUnicodePropertyPatterns } from "../responses-tool-schema";
 import {
@@ -249,18 +253,28 @@ export function promoteClientLoadedTools(body: unknown, replayPrefixLength?: num
  * Responses gateway with a narrower capability set be described in config instead of
  * requiring a hard-coded destination rule per vendor (#5002).
  *
+ * `unsupportedHostedToolsWithClientTools` joins that declaration only when this request also
+ * declares client tools (#8204), for a gateway that serves a hosted tool alone but rejects it
+ * next to function calling. It feeds the same set, so every filter and selector
+ * reconciliation below treats a conditional denial exactly like an unconditional one.
+ *
  * No-op (returns the original reference) when nothing matches, keeping the common path
  * allocation-free.
  */
 export function stripUnsupportedHostedTools(
   body: unknown,
-  provider: Pick<OcxProviderConfig, "baseUrl" | "unsupportedHostedTools">,
+  provider: Pick<OcxProviderConfig, "baseUrl" | "unsupportedHostedTools" | "unsupportedHostedToolsWithClientTools">,
 ): unknown {
   if (!isPlainObject(body)) return body;
   const model = typeof body.model === "string" ? body.model : "";
   // Expanded once per request rather than per tool: the alias walk is the only
-  // non-lookup work in this filter.
-  const declaredUnsupported = declaredUnsupportedHostedTools(provider);
+  // non-lookup work in this filter. The client-tool scan runs only for a provider that
+  // declared a conditional denial, so every other provider skips it.
+  const conditional = provider.unsupportedHostedToolsWithClientTools;
+  const declaredUnsupported = declaredUnsupportedHostedTools(
+    provider,
+    Array.isArray(conditional) && conditional.length > 0 && responsesBodyDeclaresClientTools(body),
+  );
   const filterTools = (tools: unknown[]): unknown[] => {
     const filtered = tools.filter(t => {
       const type = isPlainObject(t) && typeof t.type === "string" ? t.type : undefined;

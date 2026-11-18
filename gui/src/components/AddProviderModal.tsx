@@ -19,8 +19,9 @@ import type { CatalogPreset } from "./provider-catalog/provider-presets";
 import type { CatalogLoginHint } from "./provider-catalog/login-hint-visibility";
 import { baseUrlForChoice, matchChoiceId, resolvedBaseUrlForChoice } from "../base-url-choice";
 import { AddProviderOAuthPane } from "./add-provider-oauth-pane";
+import { sharedLoginRow } from "./shared-login-row";
 import { AddProviderFormPane } from "./add-provider-form-pane";
-import { useAddProviderOAuth } from "./use-add-provider-oauth";
+import { useAddProviderOAuth, type OAuthLoginCaptureOwner } from "./use-add-provider-oauth";
 import type { BrowserLaunch } from "../oauth-browser-launch";
 import {
   addProviderModalReducer,
@@ -35,7 +36,7 @@ type Preset = CatalogPreset;
 export default function AddProviderModal({
   apiBase, targetKey, existingNames, onClose, onAdded, initialTier, initialCustom = false,
   accountRows, accountStatus, accountBusy, accountLoginHint = null,
-  onAccountLogin, onAccountCancelLogin, onAccountLogout, onAccountManage, onOpen,
+  accountLoginCaptures, onAccountLogin, onAccountCancelLogin, onAccountLogout, onAccountManage, onOpen,
 }: {
   apiBase: string;
   targetKey?: string;
@@ -49,6 +50,8 @@ export default function AddProviderModal({
   accountBusy?: string | null;
   /** Login hint for an Accounts-tab login in flight, owned by the providers page. */
   accountLoginHint?: CatalogLoginHint | null;
+  /** The providers page's captures for those logins; a code pasted into an Accounts row uses them (#8618). */
+  accountLoginCaptures?: OAuthLoginCaptureOwner;
   onAccountLogin?: (provider: string, addAccount?: boolean) => void;
   onAccountCancelLogin?: (provider: string) => void;
   onAccountLogout?: (provider: string) => void;
@@ -188,7 +191,8 @@ export default function AddProviderModal({
     });
   };
 
-  const submit = async () => {
+  /** `sharedLogin`: add a Kimi (Responses)-style row on the owner's existing login (authMode oauth). */
+  const submit = async (sharedLogin = false) => {
     if (!form) return;
     if (renderedTargetKey !== renderCapture.targetKey) {
       dispatch({ type: "set-error", error: t("prov.targetChanged") });
@@ -205,6 +209,7 @@ export default function AddProviderModal({
     let postBody: { name: string; provider: ProviderPayload };
     try {
       postBody = buildProviderPostBody(preset ?? { id: "custom" }, submitForm);
+      if (sharedLogin) postBody.provider.authMode = "oauth";
     } catch {
       dispatch({ type: "set-error", error: t("modal.invalidPreset") });
       return;
@@ -260,22 +265,34 @@ export default function AddProviderModal({
   };
 
   const dup = form ? existingNames.includes(form.name.trim()) && form.name.trim() !== "" : false;
+  // Kimi (Responses) logs in through Kimi and publishes only its own row.
+  const loginRow = preset ? sharedLoginRow(preset) : undefined;
   const requestLoginOAuth = (providerId: string) => {
     if (oauthBusy) return;
     if (oauthTosRisk(providerId)) {
       dispatch({ type: "set-oauth-tos-pending", providerId });
       return;
     }
-    void loginOAuth(providerId, oauthSetters);
+    void loginOAuth(providerId, oauthSetters, false, loginRow);
   };
 
-  const submitManualCode = (providerId: string) => {
+  // A code typed for one Accounts login belongs to that login on this target. A new login (its
+  // hint changes) or a target change clears it, so it can never be submitted to the next one.
+  const accountLoginIdentity = accountLoginHint
+    ? [accountLoginHint.provider, accountLoginHint.url ?? "", accountLoginHint.deviceCode ?? ""].join("\u0000")
+    : "";
+  useEffect(() => {
+    dispatch({ type: "set-manual-code", code: "" });
+    dispatch({ type: "set-manual-code-msg", msg: "", ok: true });
+  }, [accountLoginIdentity, apiBase, suppliedTargetKey]);
+
+  const submitManualCode = (providerId: string, owner?: OAuthLoginCaptureOwner) => {
     void submitManualCodeApi(providerId, manualCode, manualCodeBusy, {
       setManualCodeBusy: busy => dispatch({ type: "set-manual-code-busy", busy }),
       setManualCode: code => dispatch({ type: "set-manual-code", code }),
       setManualCodeOk: ok => dispatch({ type: "set-manual-code-msg", msg: manualCodeMsg, ok }),
       setManualCodeMsg: msg => dispatch({ type: "set-manual-code-msg", msg }),
-    });
+    }, owner);
   };
 
   const isCustom = preset?.id === "custom";
@@ -321,7 +338,8 @@ export default function AddProviderModal({
               message: manualCodeMsg,
               ok: manualCodeOk,
               onChange: code => dispatch({ type: "set-manual-code", code }),
-              onSubmit: providerId => { void submitManualCode(providerId); },
+              // Accounts rows log in through the providers page, which owns their capture.
+              onSubmit: providerId => { void submitManualCode(providerId, accountLoginCaptures); },
             }}
           />
         ) : form && (
@@ -340,7 +358,11 @@ export default function AddProviderModal({
               manualCodeBusy={manualCodeBusy}
               manualCodeMsg={manualCodeMsg}
               manualCodeOk={manualCodeOk}
+              ownerLoggedIn={loginRow !== undefined && accountStatus?.[preset.oauthProvider ?? ""]?.loggedIn === true}
+              saving={saving}
+              error={error}
               onRequestLogin={requestLoginOAuth}
+              onUseExistingLogin={() => { void submit(true); }}
               onCancelLogin={providerId => { void cancelLoginOAuth(providerId, oauthSetters, preset.label); }}
               onUseApiKeyInstead={() => {
                 if (oauthBusy && preset.oauthProvider) void cancelLoginOAuth(preset.oauthProvider, oauthSetters, preset.label);
@@ -385,7 +407,7 @@ export default function AddProviderModal({
           const id = oauthTosPending;
           if (!id) return;
           dispatch({ type: "set-oauth-tos-pending", providerId: null });
-          void loginOAuth(id, oauthSetters);
+          void loginOAuth(id, oauthSetters, true, loginRow);
         }}
       />
     )}

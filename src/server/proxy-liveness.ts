@@ -12,8 +12,12 @@
 import { loadConfig } from "../config";
 import { isLoopbackHostname, isWildcardHostname } from "../codex/loopback-target";
 import { normalizeBindHostname } from "./bind-host";
-import { isOcxCommandLine, readAlivePid, readProcessCommandLine, readRuntimePort, verifyPidIdentity } from "../config/process-state";
+import {
+  hasPublishedOwnershipRecords, isOcxCommandLine, readAlivePid, readProcessCommandLine, readRuntimePort,
+  runtimeOwnerScope, sameRuntimeOwnerScope, verifyPidIdentity, type RuntimeOwnerScope,
+} from "../config/process-state";
 import { createServer, isIP } from "node:net";
+import { networkInterfaces } from "node:os";
 import { loopbackFamilyAvailability } from "../lib/loopback-family";
 import {
   LOCAL_ATTESTATION_CHALLENGE_HEADER,
@@ -21,7 +25,7 @@ import {
   createLocalAttestationChallenge,
   verifyLocalAttestationProof,
 } from "../lib/local-management-attestation";
-import { directLocalHttpFetch } from "./direct-local-http";
+import { directLocalHttpFetch, isConnectPhaseTimeout } from "./direct-local-http";
 
 export interface HealthzIdentity {
   service?: unknown;
@@ -93,7 +97,9 @@ export interface LivenessIo {
    * socket address (IPv6 unbracketed) and `timeoutMs` the remaining discovery budget.
    */
   bindProofFn?: (hostname: string, port: number, timeoutMs: number) => Promise<boolean>;
-  readRuntimeFn?: (pid?: number) => { pid?: number; port: number; hostname?: string } | null;
+  readRuntimeFn?: (pid?: number) => { pid?: number; port: number; hostname?: string; ownerScope?: unknown } | null;
+  /** This process, as the self-record proof in {@link observeProxyLiveness} needs it (#8552). */
+  ownProcessFn?: () => OwnProcess;
   configFn?: () => { port?: number; hostname?: string };
   timeoutMs?: number;
   /**
@@ -392,14 +398,36 @@ export async function classifyHealthz(
   fetchFn: LivenessFetch,
   timeoutMs: number,
 ): Promise<EndpointLiveness> {
+  return (await classifyHealthzDetailed(url, fetchFn, timeoutMs)).verdict;
+}
+
+/** {@link classifyHealthz} plus whether an unknown verdict was a connect that timed out (#8318). */
+async function classifyHealthzDetailed(
+  url: string,
+  fetchFn: LivenessFetch,
+  timeoutMs: number,
+): Promise<{ verdict: EndpointLiveness; connectTimeout: boolean }> {
+  const answer = (verdict: EndpointLiveness, connectTimeout = false) => ({ verdict, connectTimeout });
   try {
     const response = await fetchFn(url, { signal: AbortSignal.timeout(timeoutMs) });
-    if (response.status !== 200) return "unknown";
+    if (response.status !== 200) return answer("unknown");
     const body = (await response.json().catch(() => undefined)) as HealthzIdentity | null | undefined;
-    if (body === undefined) return "unknown";
-    return isOpencodexHealthz(body) ? "live" : "dead";
+    if (body === undefined) return answer("unknown");
+    return answer(isOpencodexHealthz(body) ? "live" : "dead");
   } catch (error) {
-    return isConnectionRefused(error) ? "dead" : "unknown";
+    return isConnectionRefused(error) ? answer("dead") : answer("unknown", isConnectPhaseTimeout(error));
+  }
+}
+
+/** Whether `address` (unbracketed) is assigned to one of this machine's network interfaces. */
+export function isLocalInterfaceAddress(address: string): boolean {
+  const canonical = (value: string) => isIP(value) === 6 ? new URL(`http://[${value.split("%")[0]}]/`).hostname.slice(1, -1) : value;
+  const wanted = canonical(address);
+  try {
+    return Object.values(networkInterfaces()).some(entries =>
+      (entries ?? []).some(entry => canonical(entry.address) === wanted));
+  } catch {
+    return false;
   }
 }
 
@@ -412,22 +440,44 @@ export async function classifyHealthz(
  */
 export async function probeEndpointLiveness(
   endpoint: { port: number; hostname?: string },
-  io: Pick<LivenessIo, "fetchFn" | "timeoutMs"> = {},
+  io: Pick<LivenessIo, "fetchFn" | "timeoutMs" | "bindProofFn"> & {
+    /** Test seam for {@link isLocalInterfaceAddress}. */
+    localAddressFn?: (address: string) => boolean;
+  } = {},
 ): Promise<EndpointLiveness> {
   if (!Number.isFinite(endpoint.port) || endpoint.port <= 0 || endpoint.port > 65535) return "dead";
   const fetchFn = io.fetchFn ?? directLocalHttpFetch;
   const timeoutMs = io.timeoutMs ?? 1500;
   let sawUnknown = false;
   for (const hostname of loopbackProbeHosts(endpoint.hostname)) {
-    const result = await classifyHealthz(
+    const { verdict, connectTimeout } = await classifyHealthzDetailed(
       `http://${hostname}:${endpoint.port}/healthz`,
       fetchFn,
       timeoutMs,
     );
-    if (result === "live") return "live";
-    if (result === "unknown") sawUnknown = true;
+    if (verdict === "live") return "live";
+    if (verdict === "unknown" && !(connectTimeout && await provenFreeByBind(hostname, endpoint.port, io))) sawUnknown = true;
   }
   return sawUnknown ? "unknown" : "dead";
+}
+
+/**
+ * #8318: a connect to this machine's own non-loopback address (a Tailscale IP) with nothing
+ * listening can time out instead of being refused, which left `ocx resolve` unknown forever. Only
+ * a connect-phase timeout on a specific address of a local interface qualifies, and only an
+ * exclusive bind that succeeds (and is released at once) proves absence; EADDRINUSE or any other
+ * bind error keeps the verdict unknown. Loopback and wildcard binds keep their refusal-only rule,
+ * because a wildcard listener can share the port with a specific bind on some platforms.
+ */
+async function provenFreeByBind(
+  probeHost: string,
+  port: number,
+  io: { bindProofFn?: LivenessIo["bindProofFn"]; localAddressFn?: (address: string) => boolean },
+): Promise<boolean> {
+  const address = probeHost.replace(/^\[(.*)\]$/, "$1");
+  if (isIP(address) === 0 || recoveryLoopbackFamily(address) !== null || isWildcardHostname(address)) return false;
+  if (!(io.localAddressFn ?? isLocalInterfaceAddress)(address)) return false;
+  return await (io.bindProofFn ?? canBindAddress)(address, port, BIND_PROOF_TIMEOUT_MS);
 }
 
 /** Identity-checked /healthz probe; null when unreachable, non-OK, or not our proxy. */
@@ -513,21 +563,43 @@ export type ProxyLivenessObservation =
   | { kind: "live"; live: LiveProxy }
   | { kind: "absent" | "unknown"; live: null };
 
+export interface OwnProcess {
+  pid: number;
+  /** {@link hasPublishedOwnershipRecords}: this process has written ownership records itself. */
+  publishedOwnership: boolean;
+  scope: RuntimeOwnerScope;
+}
+
+function currentOwnProcess(): OwnProcess {
+  return { pid: process.pid, publishedOwnership: hasPublishedOwnershipRecords(), scope: runtimeOwnerScope() };
+}
+
 /** Recovery additionally covers both available loopback families and fresh PID identity. */
 export async function observeProxyLiveness(io: LivenessIo = {}): Promise<ProxyLivenessObservation> {
-  let alivePid: number | null = null, runtimePid: number | undefined, unknown = false;
+  let alivePid: number | null = null, runtimePid: number | undefined, runtimeScope: unknown, unknown = false;
   const live = await discoverLiveProxy(io, {
     pid: pid => { alivePid = pid; },
-    runtimePid: pid => { runtimePid = pid; },
+    runtimePid: (pid, ownerScope) => { runtimePid = pid; runtimeScope = ownerScope; },
     endpoint: result => { if (result === "unknown") unknown = true; },
   });
   if (live) return { kind: "live", live };
+  // #8552: in a container the proxy is PID 1 on every start, so the record the previous container
+  // left names this very process; signalling it succeeds and its command line is ocx. Such a
+  // record is stale only when this process never published ownership itself (so the writer was an
+  // earlier lifetime of the PID number) AND the runtime record's owner ran where this process runs
+  // (same host and boot, plus the same network namespace or container). That scope check keeps a
+  // RollingUpdate safe: the old pod is also PID 1 and its listener sits in another network
+  // namespace, which the endpoint probe cannot see. A record without a scope (an older version,
+  // which may still be serving during an upgrade) keeps the refusal.
+  const own = (io.ownProcessFn ?? currentOwnProcess)();
+  const ownEarlierLifetime = !own.publishedOwnership && runtimePid === own.pid && sameRuntimeOwnerScope(runtimeScope, own.scope);
   const candidates = new Set<number>();
   if (alivePid !== null) candidates.add(alivePid);
   if (runtimePid !== undefined && Number.isSafeInteger(runtimePid) && runtimePid > 0) candidates.add(runtimePid);
   for (const pid of candidates) {
     if (unknown) break;
     if (io.deadlineAt !== undefined && (io.nowFn ?? Date.now)() >= io.deadlineAt) { unknown = true; break; }
+    if (ownEarlierLifetime && pid === own.pid) continue;
     if (pid !== alivePid) {
       try { process.kill(pid, 0); } catch (error) {
         if ((error as NodeJS.ErrnoException).code === "ESRCH") continue;
@@ -557,7 +629,7 @@ export async function findLiveProxy(io: LivenessIo = {}): Promise<LiveProxy | nu
 
 async function discoverLiveProxy(io: LivenessIo, observer?: {
   pid: (pid: number | null) => void;
-  runtimePid: (pid: number | undefined) => void;
+  runtimePid: (pid: number | undefined, ownerScope: unknown) => void;
   endpoint: (result: EndpointLiveness) => void;
 }): Promise<LiveProxy | null> {
   // Prefer the cheap alive-pid check: the Windows cmdline probe (WMIC/PowerShell) is too
@@ -659,7 +731,7 @@ async function discoverLiveProxy(io: LivenessIo, observer?: {
   // sibling command, manual deletion). The runtime record still says where it listens —
   // identity-probe it so ensure/update/stop see the live proxy instead of shadowing it.
   const record = readRuntimeFn();
-  observer?.runtimePid(record?.pid);
+  observer?.runtimePid(record?.pid, record?.ownerScope);
   if (record?.port && record.port !== probedPort) {
     if (budgetExhausted()) return expired();
     const expectedPid = typeof record.pid === "number" ? record.pid : undefined;

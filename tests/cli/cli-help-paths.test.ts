@@ -50,6 +50,19 @@ function help(args: string[]) {
 }
 
 describe("explicit CLI help paths", () => {
+  test.each([["help", "advisor"], ["advisor", "--help"]])("Advisor help via %s %s keeps registry options and mode semantics consistent", (...args) => {
+    const result = help(args);
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const setDetail = result.stdout.split("\n").find(line => line.includes("ocx advisor set updates"));
+    expect(setDetail).toBeDefined();
+    for (const flag of ["--model", "--effort", "--policy", "--context-mode", "--max-consultations", "--timeout-ms"]) {
+      expect(setDetail).toContain(flag);
+    }
+    expect(result.stdout).toContain("Automatic preflight and adaptive repair calls are paused");
+    expect(result.stdout).toContain("restores the default context-sharing behavior");
+  });
+
   test("full-reference forms agree and preserve detailed variants", () => {
     const full = help(["help", "--all"]);
     expect(full.status).toBe(0);
@@ -120,13 +133,15 @@ describe("explicit CLI help paths", () => {
     expect(output).not.toContain("Parent help:");
   });
 
-  test("route family help names combo and policy and retains policy topic links", () => {
+  test("route family help names combo, policy and to and retains topic links", () => {
     const result = help(["route", "--help"]);
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Usage: ocx route <combo|policy> <subcommand>");
-    expect(result.stdout).toContain("Manage combo routing and routing profiles.");
+    expect(result.stdout).toContain("Usage: ocx route <combo|policy|to> <subcommand>");
+    expect(result.stdout).toContain("Manage combo routing, routing profiles and per-device client intent.");
     expect(result.stdout).toContain("ocx help route policy list");
+    expect(result.stdout).toContain("ocx help route to status");
+    expect(result.stdout).toContain("ocx help route to sync");
     expect(result.stdout).not.toContain("combo is currently the supported routing resource");
   });
 

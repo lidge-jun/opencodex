@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
+  claudeSessionUserId,
   conversationIdFromClaudeCacheKey,
   conversationIdFromClaudeMetadata,
   conversationIdFromResponsesRequest,
@@ -206,11 +207,18 @@ describe("reasoningReplayConversationIdFromResponsesRequest", () => {
     })).not.toBe(digest32("session"));
   });
 
-  test("prefers parent thread, then thread-id, then cursor, then session_id", () => {
+  test("prefers the request's own thread-id, then the parent thread, then cursor, then session_id", () => {
+    // A child agent carries both headers. Its own thread-id must own its replay record, or the
+    // child's route overwrites the parent's serving provenance and the parent loses its
+    // replayed thinking signatures on the next turn (#8632).
     expect(reasoningReplayConversationIdFromResponsesRequest({
       clientThreadId: "parent-thread",
       threadIdHeader: "thread",
       cursorConversationId: "cursor",
+      sessionIdHeader: "session",
+    })).toBe("thread");
+    expect(reasoningReplayConversationIdFromResponsesRequest({
+      clientThreadId: "parent-thread",
       sessionIdHeader: "session",
     })).toBe("parent-thread");
     expect(reasoningReplayConversationIdFromResponsesRequest({
@@ -258,6 +266,15 @@ describe("conversationIdFromClaudeMetadata", () => {
     for (const raw of ['{"tk":"only"}', '{ "session_id": "s" }', '["tk"]', "not json"]) {
       expect(conversationIdFromClaudeMetadata({ user_id: raw })).toBe(digest32(raw));
     }
+    // Logs search with any turn's user_id finds the session; older raw-keyed rows still match.
+    expect(matchesLogConversationId(digest32(session), turn("turn-3"))).toBe(true);
+    expect(matchesLogConversationId(digest32(turn("turn-3")), turn("turn-3"))).toBe(true);
+    // An oversized id is never persisted, but its cache key still drops tk.
+    const huge = JSON.stringify({ session_id: "s", tk: "t", pad: "x".repeat(5000) });
+    expect(conversationIdFromClaudeMetadata({ user_id: huge })).toBeUndefined();
+    expect(JSON.parse(claudeSessionUserId(huge))).not.toHaveProperty("tk");
+    // An oversized tk alone does not cost the session its identity (it also gates routing).
+    expect(conversationIdFromClaudeMetadata({ user_id: turn("t".repeat(5000)) })).toBe(digest32(session));
   });
 });
 

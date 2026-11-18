@@ -163,7 +163,7 @@ export async function codexWsUpstreamFetch(
   beforeDispatch?: (headers: Headers) => void,
   nativeControl?: NativeResponseControl,
   beforeContinuation?: () => Promise<void>,
-  onPhysicalDispatch?: () => void,
+  onPhysicalDispatch?: (body: BodyInit | null | undefined) => void,
   /** Opt-in pre-output refusal hold (#6969); see codexWsExchange. */
   preOutputRefusalHold?: CodexWsPreOutputRefusalHold,
   onContinuationDispatch?: (frame: { body: Record<string, unknown>; text: string }) => void,
@@ -251,7 +251,7 @@ export async function codexWsUpstreamFetch(
   return codexWsExchange({
     session, url, init, prepared, sseFallback, onQuota, beforeDispatch,
     nativeControl: control,
-    beforeContinuation, onPhysicalDispatch, onContinuationDispatch,
+    beforeContinuation, onPhysicalDispatch: () => onPhysicalDispatch?.(frameText), onContinuationDispatch,
     preOutputRefusalHold,
     bunVersion: typeof runtime === "string" ? runtime : runtime.version,
     metadataContext: codexWsMetadataContext(init, prepared.model),

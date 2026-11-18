@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { compareCatalogHealPaths } from "./catalog/heal-observation";
 
 import { getConfigDir, saveConfigPreservingClaudeCode, ultraFastTierEnabled, websocketsEnabled, withExpectedConfigGenerationSync } from "../config";
+import { resolveMultiAgentMode } from "../config/multi-agent-surface";
 import { reconcileSuccessfulModelDiscoveries } from "../providers/new-model-policy";
 import { pendingModelSelectionProviders } from "../providers/initial-model-selection";
 import { COMBO_NAMESPACE } from "../combos";
@@ -98,6 +99,7 @@ import {
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS } from "./catalog/native-models";
 import { providerCodexAccountMode } from "../providers/registry";
 import { OPENAI_CODEX_PROVIDER_ID } from "../providers/openai-tiers";
+import { resolveRoutedCatalogDefaults } from "../config/schema/routed-catalog-defaults";
 import { withCatalogWriteSerialization } from "./catalog-write-serialization";
 import {
   auditRefusedCatalogReplacement,
@@ -276,8 +278,7 @@ function prepareCatalog(
   const featured = config.subagentModels ?? [];
   const ordered = orderForSubagents(enabled, featured);
   const modelPickerOrder = config.modelPickerOrder ?? [];
-  const multiAgentMode = config.multiAgentMode === "v1" || config.multiAgentMode === "v2"
-    ? config.multiAgentMode : "default";
+  const multiAgentMode = resolveMultiAgentMode(config);
   const exactComboSlugs = exactComboCatalogSlugs(config);
   const bareEligibleAccountIds = providerCodexAccountMode(
     OPENAI_CODEX_PROVIDER_ID,
@@ -351,6 +352,7 @@ function prepareCatalog(
     disabledNativeAccountSlugs: new Set(),
     multiAgentV2Enabled,
     openaiContextCap,
+    routedCatalogDefaults: resolveRoutedCatalogDefaults(config),
   });
   const accountBoundEntries = accountSelectors.length === 0
     ? []

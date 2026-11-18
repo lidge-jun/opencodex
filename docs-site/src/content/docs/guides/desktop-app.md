@@ -21,6 +21,19 @@ Release builds of `OpenCodex.app` are signed with a Developer ID and notarized b
 first launch macOS normally asks only for the standard confirmation for a downloaded app. If macOS
 still blocks it, use **System Settings → Privacy & Security → Open Anyway**.
 
+#### Homebrew (desktop app)
+
+Alternatively, install the desktop app using Homebrew Cask:
+
+```bash
+brew install --cask opencodex
+```
+
+- **In-app updates (`auto_updates`)**: The desktop app has a built-in updater, and the Cask declares `auto_updates true`. A named `brew upgrade --cask opencodex` or a greedy upgrade can still replace an app updated to a newer version in-app. Check the installed app and Cask versions before upgrading with Homebrew.
+- **CLI and background service**: The Cask installs only `OpenCodex.app`, which bundles its own CLI and proxy runtime. You can install a separate `ocx` via npm or release archives for a standalone CLI or headless service; both share `~/.opencodex`. To give that CLI the service, quit OpenCodex, select the separate CLI explicitly (including bypassing [Desktop’s package-launcher handoff](/getting-started/installation/) if enabled), and run `ocx service install`. See [terminal command selection](/guides/desktop-app/#using-the-ocx-cli-with-the-desktop-app) and [runtime ownership](/reference/cli/lifecycle/#runtime-ownership).
+- **Service after a Cask upgrade**: The Cask's uninstall step can remove the `com.opencodex.proxy` launchd job and plist, even when they belong to the separate CLI, stopping its background service. After upgrading, quit OpenCodex and, in a macOS GUI login session, use that explicitly selected separate CLI to run `ocx service status`. If the service is absent, run `ocx service install`; if it is installed but not loaded, run `ocx service repair`. Check `ocx service status` again. `ocx service install` takes the port from `OCX_BAKE_PORT` or `config.port`, not from the removed job, so if either changed since the service was registered, update clients that still point at the old port. The same uninstall step removes Desktop's own Start at Login item (the `OpenCodex` launchd job); turn **Start at Login** back on in OpenCodex if you use it.
+- **Data removal with `--zap`**: `brew uninstall --zap --cask opencodex` removes `~/.opencodex` and `~/.opencodex-desktop`. This deletes shared CLI and Desktop configuration and state in those directories. Back up any data you want to keep before using `--zap`. Cask definitions before 2.97.0 did not list these two directories, and Homebrew may uninstall with the definition recorded at install time, so check whether they remain after `--zap` and remove them yourself if you want them gone.
+
 ### Windows
 
 Download `OpenCodex-<version>-windows-x64.msi` and run the installer. Code signing through
@@ -136,6 +149,13 @@ when they verify that the app runs its bundled proxy, even without recorded owne
 CLI service repairs for that runtime. On macOS and Linux, turn on **Start at Login**
 in the OpenCodex menu instead of installing a background service. Startup safety credits the app only when its login registration is verified;
 if it cannot be verified, follow the Desktop guidance in status.
+In the dashboard's Getting started checklist, the last step under the app is
+**Turn on Start at Login** and opens the Desktop card on the Startup page. It is marked
+done only when Startup safety verifies the registration and the app runs the proxy. It
+shows as to do when Start at Login is verified off, or on macOS when the app is confirmed
+not to be running the proxy. Otherwise the step stays unmarked, which is the usual case on
+Windows (the registration is not verified) and on Linux without a verified autostart
+entry; check the item in the OpenCodex menu yourself.
 The Startup page shows a quiet **Start at Login not verified** note when the app's
 registration cannot be checked. A verified disabled registration is shown as action required.
 On macOS the menu's **Start at Login** item is checked only when Startup safety would
@@ -316,6 +336,24 @@ project's signed updater public key before installation. On macOS, in-app update
 `OpenCodex-<version>-macos.app.tar.gz`; the DMG is for the first installation.
 The release manifest is generated only when the updater key secret is configured and then
 requires all four platforms to be signed.
+
+On Windows you can also update without the app window, for example over SSH. Run the installation's own `ocx.exe` from an elevated terminal signed in as
+the Windows account that runs OpenCodex:
+`"C:\Program Files\OpenCodex\ocx.exe" update --desktop` (adjust the folder if you installed
+elsewhere). A service, a SYSTEM scheduled task or another account has its own OpenCodex home, does
+not find this proxy, and would leave it running the old version. It checks the same published release the tray does, verifies the MSI with the same
+updater key and refuses on any mismatch, installs it silently, and then restarts the proxy that
+is still running the old version so that the new version is the one answering. Add `--check` to
+only report what is published and what is running, and `--json` for a machine-readable result.
+Exit code 0 means done or already current; 1 means nothing was installed; 2 means the update is
+installed but the old proxy is still running (or Windows must restart first); 3 means the
+installer did not finish in time. A proxy started from another installation is never stopped;
+the message names it and says how to restart it. The tray app itself keeps running its previous
+version until you quit and reopen it.
+
+If you installed an MSI by hand, the old proxy keeps serving until it restarts. `ocx status`
+then says that the installed version is newer than the running proxy and prints the
+`ocx update --desktop` command that replaces it.
 
 ## Widget
 

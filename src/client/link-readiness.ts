@@ -17,12 +17,22 @@ import { isLinkPort } from "../link/ports";
 import { probeLinkRelayPreflight, type BoundLinkRelayTarget, type LinkRelayPreflightResult } from "./link-relay-transport";
 import type { ClientLinkSupervisorStatus } from "./link-tunnel";
 
-export type LinkReadinessReason =
-  | "tunnel_idle" | "tunnel_connecting" | "tunnel_failed" | "tunnel_unavailable" | "sidecar_invalid"
-  | "home_unreachable" | "home_unauthorized" | "link_auth_failed" | "link_credential_unavailable"
-  | "link_unverified"
-  /** The Child's durable connection no longer matches the one this runtime started with. */
-  | "client_state_changed";
+/**
+ * Every reason word /readyz may report. `client_state_changed`: the Child's durable connection no
+ * longer matches the one this runtime started with. A reader of /readyz (`ocx connect status`)
+ * accepts only these words, so nothing else a listener sends is echoed to a terminal.
+ */
+export const LINK_READINESS_REASONS = [
+  "tunnel_idle", "tunnel_connecting", "tunnel_failed", "tunnel_unavailable", "sidecar_invalid",
+  "home_unreachable", "home_unauthorized", "link_auth_failed", "link_credential_unavailable",
+  "link_unverified", "client_state_changed",
+] as const;
+
+export type LinkReadinessReason = typeof LINK_READINESS_REASONS[number];
+
+export function isLinkReadinessReason(value: unknown): value is LinkReadinessReason {
+  return typeof value === "string" && (LINK_READINESS_REASONS as readonly string[]).includes(value);
+}
 
 export type LinkReadiness = { ready: true } | { ready: false; reason: LinkReadinessReason };
 

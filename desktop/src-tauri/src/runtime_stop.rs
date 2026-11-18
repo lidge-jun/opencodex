@@ -22,13 +22,50 @@ use tokio::time::{timeout_at, Instant};
 pub const SCHEMA: &str = "ocx-stop/1";
 const HISTORY_INCOMPLETE_EXIT_CODE: i32 = 79;
 
-/// How long the stop may take.
+/// How long the exit or restart drain's stop may take.
 ///
 /// The CLI's stop drains in-flight requests, restores client configuration and verifies the Windows
 /// respawn window, so this is generous on purpose: it bounds a hang, it does not pace a healthy
 /// stop. Overrunning it is a failure, not a stop, because the caller's next step is to end the app
 /// or replace the files the runtime is serving out of.
-pub const DEADLINE: Duration = Duration::from_secs(30);
+///
+/// Windows gets longer. There the CLI stops the service manager, ends the wrappers that could
+/// relaunch the proxy, and then holds the port free for one relaunch period; with a registered
+/// service the worst case of that sequence does not fit in 30 seconds, and a stop the CLI cannot
+/// finish in the time it is given is refused before it changes anything.
+pub const DEADLINE: Duration = drain_deadline_for(cfg!(target_os = "windows"));
+
+/// The drain deadline for a platform, split out so both answers stay testable on either.
+pub const fn drain_deadline_for(windows: bool) -> Duration {
+    if windows {
+        Duration::from_secs(75)
+    } else {
+        Duration::from_secs(30)
+    }
+}
+
+/// The environment variable that hands the stop's deadline to the CLI, in decimal milliseconds
+/// measured from the child's start.
+///
+/// An environment variable rather than the CLI's `--deadline-ms` flag, because an older bundled CLI
+/// rejects a flag it does not know and ignores a variable it does not read, so a mixed pair of
+/// versions keeps today's behavior.
+pub const DEADLINE_ENV: &str = "OCX_STOP_DEADLINE_MS";
+
+/// Startup time the consented takeover keeps back from the CLI: after the stop, the silence probe
+/// and `ocx service claim` still run under the same startup deadline.
+pub const TAKEOVER_MARGIN: Duration = Duration::from_secs(5);
+
+/// Drain time kept back from the CLI for spawning it and reading its answer.
+pub const DRAIN_MARGIN: Duration = Duration::from_secs(3);
+
+/// The value for [`DEADLINE_ENV`]: what is left of the caller's deadline after its margin, in whole
+/// milliseconds. `None` when nothing positive is left, so the variable is not set at all rather
+/// than set to a deadline that has already passed.
+pub fn deadline_env_value(remaining: Duration, margin: Duration) -> Option<String> {
+    let millis = remaining.checked_sub(margin)?.as_millis();
+    (millis > 0).then(|| millis.to_string())
+}
 
 /// The outcomes the CLI can report. An outcome this shell does not know fails to parse, which is
 /// the same answer as a stop that did not happen.
@@ -99,6 +136,58 @@ pub struct StopSummary {
     pub runtime_down: bool,
     pub proxy: Proxy,
     pub message: String,
+    /// Why the Windows service stop did not succeed, when the CLI knows: `access-denied`,
+    /// `evidence-unreadable`, `unbound-wrapper` or `unverified-budget`. Additive within
+    /// `ocx-stop/1`, so an older CLI leaves it out; a reason this shell does not know is kept and
+    /// shown as it is, and no reason changes how the outcome is read.
+    #[serde(default)]
+    pub service_stop_reason: Option<String>,
+    /// The CLI's own processes are gone but another program holds the runtime's port. Additive
+    /// within `ocx-stop/1`; absent or `null` means false, so a stray `null` never fails the parse.
+    #[serde(default)]
+    pub port_held_by_foreign: Option<bool>,
+}
+
+impl StopSummary {
+    /// What the additive fields add to the CLI's message, in words a person can act on.
+    pub fn notes(&self) -> Option<String> {
+        let mut notes = Vec::new();
+        match self.service_stop_reason.as_deref() {
+            None => {}
+            Some("access-denied") => notes.push(
+                "Windows denied stopping the service; run `ocx stop` from an elevated terminal"
+                    .to_owned(),
+            ),
+            Some("unverified-budget") => notes.push(
+                "the stop did not have enough time to finish safely, so nothing was changed; \
+                 retry with `ocx stop` from a terminal"
+                    .to_owned(),
+            ),
+            Some("unbound-wrapper") => notes.push(
+                "a service wrapper started outside the service is still running and can restart \
+                 the runtime; end it, then stop again"
+                    .to_owned(),
+            ),
+            Some("evidence-unreadable") => notes.push(
+                "the state of the service's processes could not be read, so the stop could not be \
+                 confirmed"
+                    .to_owned(),
+            ),
+            Some(other) => notes.push(format!("service stop reason: {other}")),
+        }
+        if self.port_held_by_foreign == Some(true) {
+            notes.push("another program is holding the runtime's port".to_owned());
+        }
+        (!notes.is_empty()).then(|| notes.join("; "))
+    }
+
+    /// The CLI's message with [`Self::notes`] appended.
+    pub fn described(&self) -> String {
+        match self.notes() {
+            Some(notes) => format!("{}; {notes}", self.message),
+            None => self.message.clone(),
+        }
+    }
 }
 
 /// What the shell concluded.
@@ -129,7 +218,7 @@ impl StopResult {
 
     pub fn describe(&self) -> String {
         match self {
-            Self::Stopped(summary) => summary.message.clone(),
+            Self::Stopped(summary) => summary.described(),
             Self::ApprovalChanged(reason) => reason.clone(),
             Self::ManagerStillActive(reason) => reason.clone(),
             Self::HistoryIncomplete(reason) => reason.clone(),
@@ -179,10 +268,10 @@ pub fn read(exit_code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> StopResult 
         ));
     }
     if summary.outcome == Outcome::ApprovalChanged {
-        return StopResult::ApprovalChanged(summary.message);
+        return StopResult::ApprovalChanged(summary.described());
     }
     if summary.outcome == Outcome::ManagerStillActive {
-        return StopResult::ManagerStillActive(summary.message);
+        return StopResult::ManagerStillActive(summary.described());
     }
     if summary.outcome == Outcome::HistoryIncomplete
         && exit_code == Some(HISTORY_INCOMPLETE_EXIT_CODE)
@@ -193,7 +282,7 @@ pub fn read(exit_code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> StopResult 
     {
         return StopResult::HistoryIncomplete(format!(
             "{} (outcome {})",
-            summary.message,
+            summary.described(),
             summary.outcome.as_str()
         ));
     }
@@ -211,7 +300,7 @@ pub fn read(exit_code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> StopResult 
     {
         return StopResult::Failed(format!(
             "{} (outcome {}, proxy {}, exit {}, process exit {})",
-            summary.message,
+            summary.described(),
             summary.outcome.as_str(),
             summary.proxy.as_str(),
             summary.exit_code,
@@ -225,7 +314,13 @@ pub fn read(exit_code: Option<i32>, stdout: &[u8], stderr: &[u8]) -> StopResult 
 
 /// Run the ordinary bundled stop used when this app exits its own runtime.
 pub async fn run(app: &AppHandle, deadline: Instant) -> StopResult {
-    run_with_args(app, deadline, vec!["stop".to_owned(), "--json".to_owned()]).await
+    run_with_args(
+        app,
+        deadline,
+        DRAIN_MARGIN,
+        vec!["stop".to_owned(), "--json".to_owned()],
+    )
+    .await
 }
 
 /// Run the bundled stop bound to the approved runtime, under the caller's deadline.
@@ -260,16 +355,26 @@ pub async fn run_approved(
         "--expect-compatibility-token".to_owned(),
         token.clone(),
     ];
-    run_with_args(app, deadline, argv).await
+    run_with_args(app, deadline, TAKEOVER_MARGIN, argv).await
 }
 
-async fn run_with_args(app: &AppHandle, deadline: Instant, argv: Vec<String>) -> StopResult {
-    let command = match app.shell().sidecar("ocx") {
+async fn run_with_args(
+    app: &AppHandle,
+    deadline: Instant,
+    margin: Duration,
+    argv: Vec<String>,
+) -> StopResult {
+    let mut command = match app.shell().sidecar("ocx") {
         Ok(command) => command.args(argv),
         Err(error) => {
             return StopResult::Failed(format!("the bundled CLI could not be started ({error})"))
         }
     };
+    // Measured immediately before the spawn, so the CLI's clock and this one start together.
+    // Always set, so a value inherited from this process's own environment never reaches the
+    // child: an empty value means "no deadline" to the CLI, the same as an absent one.
+    let value = deadline_env_value(deadline.saturating_duration_since(Instant::now()), margin);
+    command = command.env(DEADLINE_ENV, value.unwrap_or_default());
     match timeout_at(
         deadline,
         crate::process_spawn::with_spawn_async(command.output()),
@@ -286,7 +391,11 @@ async fn run_with_args(app: &AppHandle, deadline: Instant, argv: Vec<String>) ->
 
 #[cfg(test)]
 mod tests {
-    use super::{read, Outcome, Proxy, StopResult, SCHEMA};
+    use super::{
+        deadline_env_value, drain_deadline_for, read, Outcome, Proxy, StopResult, DEADLINE,
+        DRAIN_MARGIN, SCHEMA, TAKEOVER_MARGIN,
+    };
+    use std::time::Duration;
 
     fn document(ok: bool, outcome: &str, exit: i32, down: bool, proxy: &str) -> String {
         format!(
@@ -294,6 +403,167 @@ mod tests {
                "runtimeDown":{down},"service":"absent","proxy":"{proxy}",
                "sharedTeardown":"restored","message":"a message"}}"#
         )
+    }
+
+    /// The same document with additive fields spliced in after `message`.
+    fn with_fields(document: &str, fields: &str) -> String {
+        document.replace(
+            r#""message":"a message""#,
+            &format!(r#""message":"a message",{fields}"#),
+        )
+    }
+
+    #[test]
+    fn an_older_document_without_the_additive_fields_reads_as_it_does_today() {
+        let clean = document(true, "stopped", 0, true, "stopped");
+        match read(Some(0), clean.as_bytes(), b"") {
+            StopResult::Stopped(summary) => {
+                assert_eq!(summary.service_stop_reason, None);
+                assert_eq!(summary.port_held_by_foreign, None);
+                assert_eq!(summary.notes(), None);
+            }
+            other => panic!("unexpected result: {other:?}"),
+        }
+        let refused = document(false, "manager-still-active", 1, false, "unknown");
+        assert_eq!(
+            read(Some(1), refused.as_bytes(), b""),
+            StopResult::ManagerStillActive("a message".to_owned())
+        );
+    }
+
+    #[test]
+    fn each_known_service_stop_reason_is_read_and_described() {
+        for (reason, expected) in [
+            ("access-denied", "elevated terminal"),
+            ("unverified-budget", "from a terminal"),
+            ("unbound-wrapper", "started outside the service"),
+            ("evidence-unreadable", "could not be read"),
+        ] {
+            let refused = with_fields(
+                &document(false, "manager-still-active", 1, false, "unknown"),
+                &format!(r#""serviceStopReason":"{reason}""#),
+            );
+            let result = read(Some(1), refused.as_bytes(), b"");
+            assert!(
+                matches!(&result, StopResult::ManagerStillActive(_)),
+                "{reason}: {result:?}"
+            );
+            let text = result.describe();
+            assert!(text.starts_with("a message"), "{reason}: {text}");
+            assert!(text.contains(expected), "{reason}: {text}");
+
+            // The snapshotless path reports the same reason beside `failed`, and it stays a failure.
+            let failed = with_fields(
+                &document(false, "failed", 1, false, "unknown"),
+                &format!(r#""serviceStopReason":"{reason}""#),
+            );
+            let result = read(Some(1), failed.as_bytes(), b"");
+            assert!(matches!(&result, StopResult::Failed(_)), "{reason}");
+            assert!(result.describe().contains(expected), "{reason}");
+        }
+    }
+
+    #[test]
+    fn an_unknown_service_stop_reason_is_tolerated_and_changes_no_verdict() {
+        let clean = with_fields(
+            &document(true, "stopped", 0, true, "stopped"),
+            r#""serviceStopReason":"something-newer""#,
+        );
+        let result = read(Some(0), clean.as_bytes(), b"");
+        assert!(result.is_stopped(), "{result:?}");
+        assert!(result.describe().contains("something-newer"));
+        let refused = with_fields(
+            &document(false, "manager-still-active", 1, false, "unknown"),
+            r#""serviceStopReason":"something-newer""#,
+        );
+        assert!(matches!(
+            read(Some(1), refused.as_bytes(), b""),
+            StopResult::ManagerStillActive(_)
+        ));
+    }
+
+    #[test]
+    fn a_port_held_by_another_program_is_read_and_described() {
+        let failed = with_fields(
+            &document(false, "failed", 1, true, "stopped"),
+            r#""portHeldByForeign":true"#,
+        );
+        let result = read(Some(1), failed.as_bytes(), b"");
+        assert!(matches!(&result, StopResult::Failed(_)));
+        assert!(result.describe().contains("another program"), "{result:?}");
+
+        // Reported beside a clean stop it is a warning, and the stop is still a stop.
+        let clean = with_fields(
+            &document(true, "stopped", 0, true, "stopped"),
+            r#""portHeldByForeign":true,"serviceStopReason":"access-denied""#,
+        );
+        let result = read(Some(0), clean.as_bytes(), b"");
+        assert!(result.is_stopped());
+        let text = result.describe();
+        assert!(text.contains("another program"), "{text}");
+        assert!(text.contains("elevated terminal"), "{text}");
+
+        let explicit_false = with_fields(
+            &document(true, "stopped", 0, true, "stopped"),
+            r#""portHeldByForeign":false"#,
+        );
+        assert_eq!(
+            read(Some(0), explicit_false.as_bytes(), b"").describe(),
+            "a message"
+        );
+
+        let explicit_null = with_fields(
+            &document(true, "stopped", 0, true, "stopped"),
+            r#""portHeldByForeign":null"#,
+        );
+        let result = read(Some(0), explicit_null.as_bytes(), b"");
+        assert!(result.is_stopped());
+        assert_eq!(result.describe(), "a message");
+    }
+
+    #[test]
+    fn the_deadline_hand_off_keeps_each_margin_and_is_omitted_when_not_positive() {
+        assert_eq!(TAKEOVER_MARGIN, Duration::from_secs(5));
+        assert_eq!(DRAIN_MARGIN, Duration::from_secs(3));
+        // Consented takeover: the remaining startup deadline minus five seconds.
+        assert_eq!(
+            deadline_env_value(Duration::from_millis(83_250), TAKEOVER_MARGIN).as_deref(),
+            Some("78250")
+        );
+        // Exit drain: the drain deadline minus three seconds.
+        assert_eq!(
+            deadline_env_value(Duration::from_secs(75), DRAIN_MARGIN).as_deref(),
+            Some("72000")
+        );
+        assert_eq!(
+            deadline_env_value(Duration::from_secs(30), DRAIN_MARGIN).as_deref(),
+            Some("27000")
+        );
+        // Nothing left after the margin, or less than a whole millisecond, is no deadline at all.
+        assert_eq!(
+            deadline_env_value(Duration::from_secs(5), TAKEOVER_MARGIN),
+            None
+        );
+        assert_eq!(
+            deadline_env_value(Duration::from_secs(2), TAKEOVER_MARGIN),
+            None
+        );
+        assert_eq!(deadline_env_value(Duration::ZERO, DRAIN_MARGIN), None);
+        assert_eq!(
+            deadline_env_value(Duration::from_micros(3_000_900), DRAIN_MARGIN),
+            None
+        );
+        assert_eq!(
+            deadline_env_value(Duration::from_micros(3_001_900), DRAIN_MARGIN).as_deref(),
+            Some("1")
+        );
+    }
+
+    #[test]
+    fn only_windows_gets_the_longer_exit_drain() {
+        assert_eq!(drain_deadline_for(true), Duration::from_secs(75));
+        assert_eq!(drain_deadline_for(false), Duration::from_secs(30));
+        assert_eq!(DEADLINE, drain_deadline_for(cfg!(target_os = "windows")));
     }
 
     #[test]

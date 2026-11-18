@@ -72,13 +72,13 @@ function transportExclusion(row: OcxProviderConfig): Extract<ProviderCompletionT
   if (typeof (row as { fetch?: unknown }).fetch === "function" && "proxy" in row) return "custom_executor_egress";
   return undefined;
 }
-function nativeModel(config: OcxConfig, row: OcxProviderConfig, model: string): string {
+function nativeModel(config: OcxConfig, name: string, row: OcxProviderConfig, model: string): string {
   const known = new Set([...(row.models ?? []), ...Object.keys(row.modelAliases ?? {})]);
-  return known.has(model) ? model : resolveModelAlias(config, row, known, model) ?? model;
+  return known.has(model) ? model : resolveModelAlias(config, row, known, model, name) ?? model;
 }
 function derive(config: OcxConfig, name: string, row: OcxProviderConfig, model: string) {
   const resolved = routedProviderConfig(name, row);
-  const native = nativeModel(config, resolved, model);
+  const native = nativeModel(config, name, resolved, model);
   const routed = resolveWireProtocolOverride(name, native, resolved);
   const wire = routed.adapter;
   if (wire !== "openai-chat" && wire !== "openai-responses") throw new Error("unsupported adapter");
@@ -134,7 +134,7 @@ export async function runProviderCompletionTest(
   let snapshot: OcxProviderConfig = metadata;
   let destinationRefused = false;
   try { snapshot = routedProviderConfig(name, metadata); } catch { destinationRefused = true; }
-  const native = nativeModel(config, snapshot, model);
+  const native = nativeModel(config, name, snapshot, model);
   const wire = resolveWireProtocolOverride(name, native, snapshot).adapter;
   if (wire !== "openai-chat" && wire !== "openai-responses") return { applicable: false, reason: "unsupported_adapter", adapter: wire };
   const now = deps.now ?? (() => performance.now());

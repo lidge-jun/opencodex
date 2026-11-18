@@ -38,6 +38,7 @@ import { attestCodexRuntime, codexCredentialDestinationIsTrusted, resolveCodexLa
 import { codexCommandCanBypass, CODEX_UNVERIFIED_SHIM } from "./codex-launch-command";
 import { codexTokenArgsAreSafe, codexTokenEnvironmentIsSafe } from "./codex-launch-policy";
 import { codexTokenWithheldDiagnostic, type CodexTokenRefusal, type CodexTokenRefusalReporter } from "./codex-launch-diagnostics";
+import { withoutSupervisorMarkers } from "../lib/supervisor-markers";
 
 export interface CodexLaunchEnv {
   [key: string]: string | undefined;
@@ -115,7 +116,8 @@ export function codexProxyStartEnv(base: CodexLaunchEnv = process.env): CodexLau
   const withTokenFile = stripped.OPENCODEX_API_AUTH_TOKEN?.trim()
     ? stripped
     : { ...stripped, OCX_API_TOKEN_FILE: serviceApiTokenFilePath() };
-  return { ...withTokenFile, OCX_SERVICE: "1" } as CodexLaunchEnv;
+  // A shell a supervised runtime handed to a tool carries its supervisor's markers; this proxy is not its.
+  return withoutSupervisorMarkers({ ...withTokenFile, OCX_SERVICE: "1" }) as CodexLaunchEnv;
 }
 
 export type CodexProxyEnsureDeps = {

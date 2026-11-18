@@ -7,6 +7,8 @@ Management API는 opencodex의 제어 평면입니다. `http://localhost:10100`�
 
 대화형 클라이언트가 필요하면 [Web Dashboard](/guides/web-dashboard/)를 사용하고, 자동화를 만들 때는 이 참고 문서를 사용하십시오. 영속 값은 결국 [Configuration](/reference/configuration/)을 따릅니다.
 
+<a id="authentication-model"></a>
+
 ## 인증 모델
 
 Management API에는 데이터 평면 API 키와는 독립된 자체 관리자 자격 증명이 있습니다. 시작 시 opencodex는 다음 순서로 이를 확인합니다.
@@ -83,10 +85,10 @@ Authorization: Bearer <admin-token>
 
 Claude 사용량 리셋도 **Providers > Anthropic > Accounts**에서 같은 방식으로 씁니다. 로그인한
 계정 행마다 남은 리셋 수를 보여 주는 티켓 배지가 붙고, 대화상자에서 한 번 더 확인하면 리셋
-하나를 사용합니다. 리셋은 5시간 한도와 주간 한도를 다시 채우며 주간 리셋 요일은 바꾸지
+하나를 사용합니다. grant마다 만료일과 초기화하는 한도가 달라서 대화상자는 쓸 grant를 고를 수 있게 보여 줍니다. 지금 쓸 수 있는 grant 중 만료가 가장 가까운 것이 먼저 선택되고, 지금 쓸 수 없는 grant는 이유와 함께 비활성으로 표시되며, 확인 단계에서 고른 grant의 이름, 만료일, 초기화하는 한도를 보여 준 뒤 그 `grantId`를 보냅니다. 서버는 고른 grant를 다시 확인하고 쓸 수 없으면 `409 grant_not_usable`로 거부합니다. 리셋은 그 grant가 초기화하는 한도(보통 5시간 한도와 주간 한도)를 다시 채우며 주간 리셋 요일은 바꾸지
 않습니다. 요청이 응답하지 않으면 대화상자는 `operationId`를 그대로 들고 있다가 10분 동안 같은
-ID로 다시 보내기를 제안합니다. Claude Code 클라이언트도 이렇게 복구하며, 그동안 같은 grant에
-대한 새 작업은 거부됩니다. 사용은 대시보드에서만 가능하며 관리자 토큰만으로는
+ID로 다시 보내기를 제안합니다. Claude Code 클라이언트도 이렇게 복구하며, 그동안 그 계정의 새 작업은
+어느 grant든 거부됩니다. 사용은 대시보드에서만 가능하며 관리자 토큰만으로는
 `403 session_required`가 돌아옵니다.
 
 모델 목록과 암호화된 worker-task 동작의 개념은 [Sub-agent Surface](/guides/sub-agent-surface/)를 참고하십시오.

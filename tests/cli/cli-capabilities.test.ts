@@ -22,6 +22,17 @@ function captureStdout(): { lines: string[]; restore: () => void } {
 }
 
 describe("capability table is a checked data graph", () => {
+  test("native toggle APIs are the routes ocx integrations native drives, with no exemption", async () => {
+    const { MANAGEMENT_ROUTES } = await import("../../src/server/management/route-registry");
+    for (const client of ["codex", "claude", "claude-desktop", "grok"]) {
+      const route = MANAGEMENT_ROUTES.find(row => row.method === "PUT" && row.path === `/api/native-integrations/${client}`);
+      expect(route).toBeDefined();
+      expect(route?.exempt).toBeUndefined();
+      expect(capabilityRouteKeys().has(`PUT /api/native-integrations/${client}`)).toBe(true);
+    }
+    expect(capabilityRouteKeys().has("PUT /api/route-to")).toBe(true);
+  });
+
   test("capability discovery has only the allowed transitive data/type edges", () => {
     expect(capabilityDataBoundary(join(repoRoot, "src/cli"))).toEqual([]);
   });

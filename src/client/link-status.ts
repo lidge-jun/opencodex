@@ -1,10 +1,12 @@
 import { lstatSync } from "node:fs";
 import { isMissingPathError } from "../config/atomic-write";
-import { readClientLinkState, childLinkMarkerPath } from "./link-state";
+import { readClientLinkState, childLinkMarkerPath, isChildInitiatedLink } from "./link-state";
 import type { ClientLinkIdentity } from "../link/status-projection";
 import type { LinkStatusDto } from "../link/status-projection";
 import type { ClientLinkState } from "./link-state";
 import type { ClientLinkSupervisorStatus } from "./link-tunnel";
+import { EMPTY_LINK_CHILD_PARITY } from "../link/child-parity";
+import type { OcxClientConnectionConfig } from "../types";
 
 /** What the status route read from the client sidecar: the state, none, or an unreadable file. */
 export type ClientLinkSidecarRead = ClientLinkState | null | "invalid";
@@ -40,6 +42,42 @@ function childState(sidecar: ClientLinkSidecarRead, supervisor: ClientLinkSuperv
     // a failed tunnel shows its own reason.
     reason: supervisor.probe ?? (tunnel.kind === "failed" ? tunnel.reason : null),
   };
+}
+
+/**
+ * The connected Child's own link as a status row, for `?traffic=1` (#3023), which attaches its
+ * counters to it. Only a Child-initiated link writes a sidecar, so:
+ * - a sidecar for this link names the SSH alias, the direction and the tunnel state;
+ * - an unreadable sidecar, or one naming another link, leaves the alias unknown and the row failed
+ *   (`sidecar_invalid`, `sidecar_mismatch`);
+ * - no sidecar while the durable Child-initiated marker names this link (or cannot be read) is a
+ *   lost sidecar: failed (`sidecar_missing`), alias unknown;
+ * - otherwise no sidecar is a Home-initiated link, which owns no tunnel here and reads idle since it
+ *   connected, as the management projection reads it.
+ * Parity fields are the Home's view and stay empty.
+ */
+export function projectClientLinkRow(
+  connection: Pick<OcxClientConnectionConfig, "serverUrl" | "connectedAt"> & { link: { linkId: string; tunnelPort: number } },
+  sidecar: ClientLinkSidecarRead,
+  child: LinkStatusDto["child"],
+  now: number,
+  childInitiated: (linkId: string) => boolean = (linkId: string) => isChildInitiatedLink(linkId),
+  /** The Home's recorded name for a Home-initiated row; never the loopback URL this Child connects to. */
+  homeName: string | null = null,
+): LinkStatusDto["links"][number] {
+  const base = { id: connection.link.linkId, tunnelPort: connection.link.tunnelPort, ...EMPTY_LINK_CHILD_PARITY };
+  if (sidecar === null && childInitiated(connection.link.linkId)) {
+    return { ...base, alias: "unknown", direction: "client-initiated", state: "failed", since: new Date(now).toISOString(), reason: "sidecar_missing" };
+  }
+  if (sidecar === null) {
+    return { ...base, alias: homeName ?? "unknown", direction: "hub-initiated", state: "idle", since: connection.connectedAt, reason: null };
+  }
+  if (sidecar === "invalid" || sidecar.linkId !== connection.link.linkId) {
+    const reason = sidecar === "invalid" ? "sidecar_invalid" : "sidecar_mismatch";
+    return { ...base, alias: "unknown", direction: "client-initiated", state: "failed", since: new Date(now).toISOString(), reason };
+  }
+  const state = child ?? { state: "idle" as const, since: new Date(now).toISOString(), reason: null };
+  return { ...base, alias: sidecar.alias, direction: "client-initiated", state: state.state, since: state.since, reason: state.reason };
 }
 
 /** Only client-owned evidence can establish who owns the tunnel. Unreadable evidence stays unknown. */

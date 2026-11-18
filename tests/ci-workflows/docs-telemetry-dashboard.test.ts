@@ -735,17 +735,11 @@ describe("telemetry dashboard formatting and bucketing helpers", () => {
     expect(parseGithubNextLink(null)).toBeNull();
   });
 
-  test("all 8 site locales carry complete dashboard copy and component markup contains no secrets", () => {
-    expect(TELEMETRY_DASHBOARD_LOCALES).toEqual([
-      "en",
-      "fr",
-      "ko",
-      "zh-cn",
-      "zh-tw",
-      "ru",
-      "ja",
-      "tr",
-    ]);
+  test("all configured site locales carry complete dashboard copy and component markup contains no secrets", () => {
+    const configured = ["en", ...readFileSync(repoPath("docs-site/astro.config.mjs"), "utf8")
+      .matchAll(/^\s*["']?([a-z]{2}(?:-[a-z]{2})?)["']?:\s*\{\s*label:/gm)]
+      .map(value => typeof value === "string" ? value : value[1]!);
+    expect([...TELEMETRY_DASHBOARD_LOCALES].sort()).toEqual(configured.sort());
     const enKeys = Object.keys(TELEMETRY_DASHBOARD_STRINGS.en).sort();
     const optInPattern = /\bopt(?:ed)?[-\s]?in\b|オプトイン|참여에\s*동의한/i;
     const hangulPattern = /[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]/;

@@ -1,6 +1,6 @@
 # Google Provider
 
-Created: 2026-10-16 | Updated: 2026-10-18 | Version: 1.2 (Vertex per-key project)
+Created: 2026-10-16 | Updated: 2026-11-16 | Version: 1.4 (Vertex discovery destination authority)
 
 ## Streaming input accounting
 
@@ -50,6 +50,51 @@ express endpoint, so Google's own 401/403/429 for the key reaches the normal key
 The resolved number then takes the ordinary project path, so the replay namespace stays per
 project. ADC rejects `"auto"`.
 `tests/adapters/google/google-vertex-key-project.test.ts` covers these cases.
+
+## Vertex model discovery
+
+`src/providers/google-vertex-model-discovery.ts` lists a non-OAuth Vertex row's models from
+`GET /v1beta1/publishers/google/models?pageSize=300` (300 is the server maximum). Before reading a
+key reference or resolving ADC it admits only HTTPS `aiplatform.googleapis.com` or
+`<location>-aiplatform.googleapis.com`, using inference's location-label validator and refusing
+userinfo, nondefault ports and fragments. Request construction attaches credentials only to that
+origin, and every page's send-time guard checks its actual URL against the admitted origin.
+Ambient keys and ADC retain that origin in their credential-authority record. An unapproved
+destination resolves no credential: catalog discovery degrades and the management probe remains
+unverified. It selects the
+discovery credential the way inference does: a `gcp-sa:` marker uses that service account; an
+explicit `keychain:` or `$ENV` reference uses that key alone, and when it cannot be read
+discovery sends nothing and the catalog degrades, matching the routed-config rejection of the same
+reference, so `GOOGLE_CLOUD_API_KEY` and host ADC never stand in for it; otherwise a literal key,
+then `GOOGLE_CLOUD_API_KEY`, then host ADC. The selector follows inference's steps on the same
+untrimmed bytes, and a parity test compares it with the credential the adapter sends. A resolved
+credential keeps its kind and marker (`VertexDiscoveryAuth`): a selection that changes during the
+ADC exchange discards the token, and `beforeSend` cancels any request whose row no longer selects
+that credential, whose ADC source or generation, or ambient `GOOGLE_CLOUD_API_KEY` generation,
+changed since it was read (the same `bindVertexRequestAuthority` / `vertexRequestAuthorityIsCurrent`
+record inference checks, so a replaced host ADC file or marker credential, or an A→B→A change of the
+variable that inference observed, stops the next page), or whose headers place it in the
+other scheme's header. One deadline (`vertexDiscoveryDeadline`, 8 s, also
+tied to the request for the management probe) covers ADC token resolution, the first request and
+every follow-up page. `nextPageToken` is followed with three ceilings across all pages: five
+requests, the discovery row limit and the discovery byte limit, counted from the bytes actually
+read, page one included. Every page must be a Vertex page: `publisherModels`, or a token-only
+page (an empty `{}` ends a walk), since Google omits empty repeated fields. A walk stopped by a ceiling, a
+failed or foreign page, a malformed or repeated token, or the deadline is reported as an
+incomplete listing; the catalog keeps its stale or configured rows and the probe fails, so a
+partial roster is never cached as authoritative. Rows keep Gemini and Gemma chat models and drop embeddings, speech, Live,
+Imagen/Veo and SKUs without function calling: model cards checked 2026-11-13 list it unsupported
+for every image-output Gemini SKU, so `-image` ids stay out unless a card says otherwise. Each
+row's `reasoning_efforts` comes from the registry entry that `routedProviderConfig` would fill
+for the row (its own entry when the transport matches, else the destination entry), which is the
+ladder the adapter serializes; an unladdered model such as `gemini-3-pro` advertises none, and a
+row's own `modelReasoningEfforts` / `noReasoningModels` still win in the catalog projection.
+`tests/adapters/google/vertex-model-discovery.test.ts` and
+`tests/adapters/google/vertex-catalog.test.ts` cover these boundaries.
+
+## Vertex ADC verification state
+
+`src/lib/gcp-adc.ts` records, per credential scope (host ADC or one `gcp-sa:` marker account), the source key and observed generation of the last token exchange that succeeded in this process. `vertexAdcCredentialVerified` returns true only while the source the next resolve would use still matches that record, so replacing the ADC file or switching `GOOGLE_APPLICATION_CREDENTIALS` lapses the proof without a network call; with no record it returns false before reading any credential source. A failed exchange clears only its own record, never a newer exchange's. `safeConfigDTO` in `src/server/auth-cors.ts` exposes this as the boolean `vertexCredentialVerified` on ambient and marker rows only, and only when `selectVertexDiscoveryCredential` selects ADC for the row, read in that selection's marker scope: an ambient row with `GOOGLE_CLOUD_API_KEY` set sends that key, so it carries no field and an ADC token cannot mark it Ready. No credential material, source path or account reaches the DTO. The static-catalog branch of `POST /api/providers/test` calls `src/server/management/static-catalog-probe.ts`, which mints one Vertex ADC token through the existing discovery auth for keyless or marker Vertex rows and returns only ok/latency. The probe passes `forceExchange` to `getVertexAccessTokenWithAuthority`, which skips the completed-token cache (it still joins an exchange already in flight and refreshes the cache on success), so a revoked refresh credential fails the probe and clears the proof at once instead of passing on a cached token for up to an hour; inference and discovery keep the cache; every other static catalog, including Antigravity, answers `static_catalog` before any credential resolution, and so does an API-key Vertex row, whether the key is literal or a `keychain:`/`${ENV}` reference: `vertexConfiguredCredentialKind` (the rule behind the DTO's `vertexCredentialKind`) classifies the configured text before anything is resolved, so the probe never reads the credential store for a row it cannot test. A token response without a non-empty `access_token` fails the exchange and records no proof. A minted token proves the credential, not Vertex IAM permissions. `tests/adapters/google/vertex-adc-verified.test.ts` covers the lapse on source change, a refused refresh after the cached token expires, the exchange race, the ambient-key selection, the probe's forced exchange, the probe branches and the dashboard labels.
 
 ## Vertex credential markers
 
@@ -189,10 +234,10 @@ For Cloud Code Assist routed `claude-*` models, the complete matched `functionRe
 precedes its sibling images in the same user turn; images keep call order, MIME types and bytes.
 Interleaving an image before the remaining responses makes CCA Claude reject the batch as missing
 later tool results. Single-call and text-only batches keep their existing shape. CCA Gemini,
-non-Claude CCA models, AI Studio and non-Argon Vertex retain interleaved image siblings.
+non-Claude CCA models, AI Studio and Vertex models other than Gemini 4 Argon, Carbon and Hydrogen retain interleaved image siblings.
 `tests/adapters/google/google-tool-result-adjacency.test.ts` checks the final compiled request
 for three parallel calls, reversed results, distinct images and route isolation.
-For Vertex `gemini-4-argon`, matched results carry representable data-URL images inside
+For Vertex `gemini-4-argon`, `gemini-4-carbon` and `gemini-4-hydrogen`, matched results carry representable data-URL images inside
 `functionResponse.parts`, preserving each image's call ownership. Sibling images on that route can
 produce a misleading "Requests ending with a model turn are not supported" error even when the
 last turn is `user`. When an adjacent orphan batch contains representable images on that route,

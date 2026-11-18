@@ -14,7 +14,7 @@ exit contract. Its common mappings and the main exceptions are:
 | 64 | usage validation in `capabilities`, `ready`, `resolve` | fix arguments; no discovery/request for invalid input |
 | 4 | HTTP 404 — the named account, provider, key, or route does not exist | no |
 | 5 | HTTP 409 — conflict; a lock is held or state moved under you | inspect first; stale baselines require review |
-| 6 | `ocx sync` completed the Home step but a Child failed or timed out, or the link store was unreadable | inspect the fan-out result |
+| 6 | `ocx sync` completed the Home step but a Child failed or timed out, or the link store was unreadable; `ocx link check`, `update`, `sync` or `restart-codex` finished with an item `busy`, `offline`, `refused`, `owner-action` or `unsupported`, or with a success that carries a reason (`restart-skipped:link-active`, `post-update-sync-failed`) or a restart that did not go out | inspect the fan-out result or the job's items |
 | 7 | reserved for an update in flight during sync | wait for the update, then retry |
 | 1 | everything else: transport failure, 5xx, unexpected errors | depends on `reason` |
 
@@ -28,6 +28,19 @@ fields and warnings as well; a successful save can leave live convergence pendin
 **A local usage refusal is not a transport failure.** Fix the arguments rather than
 retrying unchanged. Unknown root commands and unavailable explicit help topics use
 exit 1; a capability route miss uses 4 even when an undeclared handler exists.
+
+**`ocx link check|update|sync|restart-codex` report per Child.** Exit 6 is a partial result, not a failed
+command: read each item's `state` and `reason`. A `succeeded` item can still be partial: an update that
+was kept but whose follow-up sync failed (`post-update-sync-failed`; run `ocx link sync` for that link) or a
+restart withheld because a relayed request was in flight (`restart-skipped:link-active`). `failed`,
+`uncertain` or an item state this CLI does not know exits 1; an `uncertain` update must be re-checked with
+`ocx link check`, never re-sent blindly. A job still running past its deadline prints the job and exits 1
+(`job_still_running`); time an item spends queued behind another job does not count. Exit 4 means an
+unknown link id, or a Home too old for Child operations (the message says to update the Home); exit 5
+means a conflict: another operation holds the link, the only link named was started from the Child, the
+Home has no links, or the command ran on a Child (each has its own message). On a Home not bound to
+loopback the verbs exit 1: these operations are not available there, and the dashboard has no controls
+for them. With `--no-wait`, exit 0 only means the job was accepted; read it again for the result.
 
 ## Distinguishing "not running" from "failing"
 
@@ -145,6 +158,13 @@ the `phase`, not the exit code alone. `reason` is `disconnected`, `invalid_state
 `ocx connect status --json` and decide whether this machine should follow that Home at all. A
 malformed, repeated or doubled flag exits 2 before anything is read. Older versions ignore the
 flags, so check `ocx --version` before relying on them.
+
+The Home's own `ocx link sync|restart-codex|update` runs this pinned sync on the Child and reports the
+refusal as an item (`refused`, reason `child-link-mismatch:<reason>`) instead of an exit 5. Their exit 5
+is a conflict the error message names: another job holds the link (`link_operation_in_progress`, which `ocx link revoke` on it
+answers the same 409 until the job ends), the only link named was started from the Child
+(`link_not_home_initiated`), the Home has no links, or the command ran on a Child. Read the message before
+retrying.
 
 ## Destructive verbs fail closed
 

@@ -6,7 +6,8 @@ import { boundedMessagesDisplayCount, ownedAnthropicErrorPayload, ownedAnthropic
 import { attachComboFailureEvidence, isProxyError, markProxyError } from "../lib/client-error-body";
 import { captureAccountAutoPauseAttempt, wasAccountAutoPaused } from "../oauth/account-auto-pause";
 import { createPhysicalSendReporter, reportDispatchSends, type RequestExecutionBudget, type SingleUseDispatchPermit } from "../lib/request-execution-budget";
-import { createInferenceSendBudget } from "./inference/context";
+import { createInferenceSendBudget, expandInferenceOAuthSendBudget } from "./inference/context";
+import { GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST } from "../oauth/generic-account-failover";
 /**
  * Managed native Messages lane (PF-08, behind `protocols.rollout.managedMessagesNative`).
  *
@@ -72,8 +73,9 @@ import {
   UPSTREAM_RESET_REPLAY_REFUSED_CODE,
 } from "../lib/upstream-retry";
 import { distributedKeyPhysicalFetch, distributedKeyResponseOwner, recordDistributedResponseFailure } from "../providers/api-key-response-ownership";
+import { passiveKeyPhysicalFetch } from "../providers/passive-key-observation";
 import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../providers/api-key-pause";
-import { providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
+import { providerAffinityGenerationIsCurrent, providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
 import { RequestPacingQueueOverloadError } from "../providers/request-pacing";
 import {
   hasKeyPoolFailover,
@@ -85,6 +87,7 @@ import {
   transientRetryPolicyFor,
 } from "../providers/key-failover";
 import { stampApiKeyAccountLabel } from "../providers/label";
+import { affinityLaneFromRequest } from "./request-log-conversation";
 import { publicOAuthErrorPresentation, OAuthAccountPausedError, OAuthLoginRequiredError, publicOAuthAuthenticationErrorMessage } from "../oauth";
 import { AnthropicAccountCooldownError, formatAnthropicProviderForLog, anthropicRoutingFor } from "../oauth/anthropic-routing";
 import { configuredAnthropicInstance } from "../providers/anthropic-instance";
@@ -184,6 +187,7 @@ export interface HandleNativeMessagesOptions {
   req: Request;
   config: OcxConfig;
   logCtx: RequestLogContext;
+  admission?: import("./auth-cors").DataPlaneAdmission;
   logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease };
   /** The settled, eligible route (see `isNativeMessagesRouteEligible`). */
   route: RouteResult;
@@ -538,7 +542,12 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
   } else {
     // Same pre-dispatch key preference every direct send path applies (see chat-native.ts).
     try {
-      const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider);
+      const affinityLane = affinityLaneFromRequest(req, logCtx, config, options.admission);
+      if (affinityLane) logCtx.affinityLane = affinityLane;
+      const lastMessage = Array.isArray(body.messages) ? body.messages.at(-1) : undefined;
+      const continuation = Array.isArray(lastMessage?.content)
+        && lastMessage.content.some((block: unknown) => !!block && typeof block === "object" && (block as { type?: unknown }).type === "tool_result");
+      const proactiveKeyProvider = selectProactiveApiKeyTransport(config, route.providerName, route.provider, undefined, Date.now(), { lane: affinityLane, model: route.modelId, log: logCtx, continuation });
       if (proactiveKeyProvider) route.provider = proactiveKeyProvider;
       if (isProviderApiKeyPaused(route.provider)) throw new ProviderApiKeyPausedError();
     } catch (error) {
@@ -546,6 +555,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
       const localRefusal = localOAuthFailure(error);
       if (localRefusal) return localRefusal;
       if (!(error instanceof RequestPacingQueueOverloadError)) throw error;
+      logCtx.terminalSource = "synthetic";
       const refusal = markProxyError(fail(429, error.message, "rate_limit_error"), error.reason === "keys_exhausted" ? undefined : "pacing");
       const advice = formatClientRetryAfter(error.retryAfterSeconds);
       if (advice !== undefined) refusal.headers.set("Retry-After", advice);
@@ -557,7 +567,15 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
   if (oauthBinding) logCtx.provider = formatAnthropicProviderForLog(route.providerName, oauthBinding.snapshot.accountId, config);
   const spendTracker = options.sendBudget ? undefined : attachRequestSpendTracker(req, logCtx);
   const physicalBudget = options.sendBudget ?? createInferenceSendBudget(req, logCtx);
+  // Freeze funding before any refusal cools an account; selection still checks live eligibility.
+  const fundedAccounts = oauthBinding ? Math.min(new Set([
+    oauthBinding.snapshot.accountId,
+    ...anthropicRoutingFor(oauthBinding.instance).getEligibleAnthropicAccounts(Date.now(), route.modelId),
+  ]).size, GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST) : 0;
+  const oauthFailoverLimit = Math.max(ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST, fundedAccounts - 1);
+  if (oauthBinding) expandInferenceOAuthSendBudget(physicalBudget, fundedAccounts);
   // Observe-only spend is already booked by the tracker; count billing sends without booking again.
+  const priorSends = Math.max(0, physicalBudget.used - (options.comboDispatchPermit ? 1 : 0));
   let physicalSendsUsed = 0;
   let activeRequest: AnthropicMessagesPassthroughRequest;
   let retainedRequestBytes = 0;
@@ -629,6 +647,10 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
     options.sendBudget ? Math.min(sharedSendCap, options.sendBudget.remainingBaseSends(sharedSendCap)
       + (!initialSendStarted && options.comboDispatchPermit ? 1 : 0)) : Number.POSITIVE_INFINITY,
   );
+  const oauthPhysicalSendAvailable = (): boolean =>
+    Math.max(priorSends + physicalSendsUsed, physicalBudget.used, physicalBudget.physicalStarted ?? 0)
+      < Math.min(physicalBudget.policy.maxTotalModelSends, physicalBudget.physicalLimit ?? Number.POSITIVE_INFINITY)
+        + (!initialSendStarted && options.comboDispatchPermit ? 1 : 0);
   const transientSendAvailable = (): boolean => remainingTransientSends() > 0;
   const selector: NativeMessagesSelector = options.selector ?? {};
   const nativeOAuthRouteIsCurrent = (binding: NativeOAuthBinding): boolean => {
@@ -653,6 +675,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
   /** Send the native Messages request under the transient retry policy, re-validating the selected OAuth account or API key at the dispatch boundary. */
   const send = async (recovery?: "rate-limit-429" | "oauth-401" | "oauth-account-403" | "key-429" | "key-401"): Promise<Response> => {
     const remaining = remainingTransientSends();
+    if (oauthBinding && !oauthPhysicalSendAvailable()) throw new SendBudgetExhaustedError();
     if (options.sendBudget && remaining <= 0) throw new SendBudgetExhaustedError();
     if (requestTransientPolicy && remaining <= 0) {
       throw markProxyError(new Error("native Messages transient send budget exhausted before recovery dispatch"));
@@ -695,6 +718,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
               }
             } else {
               for (let attempt = 0; !providerApiKeySelectionIsCurrent(config, route.providerName, activeProvider); attempt++) {
+                if (!providerAffinityGenerationIsCurrent(config, route.providerName, activeProvider)) throw markProxyError(new Error("Provider affinity selection is no longer available"));
                 if (attempt >= 3) throw markProxyError(new Error("Provider key selection changed repeatedly before native Messages dispatch"));
                 let current = resolveCurrentProviderApiKeyTransport(config, route.providerName, activeProvider);
                 if (!current && activeProvider.requestPacing?.enabled
@@ -759,9 +783,9 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
               if (snapshot && !sendOwner) throw new NativeOAuthSelectionChangedError();
               physicalSendsUsed++;
               const physicalFetch = ((input, physicalInit) => sendWithConnectionPolicy(
-                distributedKeyPhysicalFetch(
+                passiveKeyPhysicalFetch(distributedKeyPhysicalFetch(
                   anthropicBillingPhysicalFetch((activeProvider as OcxProviderTransport).fetch ?? execute, route.providerName, activeProvider),
-                  route.providerName, activeProvider, wire.url, activeProvider.apiKeyTransport === "bearer" ? "authorization" : "x-api-key"),
+                  route.providerName, activeProvider, wire.url, activeProvider.apiKeyTransport === "bearer" ? "authorization" : "x-api-key"), config, route.providerName, activeProvider),
                 String(input), physicalInit, { providerName: route.providerName, provider: activeProvider },
               )) as typeof fetch;
               localUpstream = isLocalUpstream(wire.url);
@@ -869,7 +893,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
         response.status === 429
         && distributedResponseOwnsKey
         && !isNonReplayableResponse(response)
-        && retryPolicy
+        && retryPolicy && providerAffinityGenerationIsCurrent(config, route.providerName, activeProvider)
         && retries < retryPolicy.attempts
         && keySendAvailable()
       ) {
@@ -927,7 +951,7 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
           return resolved.decision;
         },
         signal: upstream.signal, requestKey: oauthRetryKey,
-        canRetry: transientSendAvailable() && oauthFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
+        canRetry: transientSendAvailable() && oauthFailovers < oauthFailoverLimit && oauthPhysicalSendAvailable(),
       });
       if (!nextAccountId) break;
       const recovery = response.status === 401 ? "oauth-401" : response.status === 403 ? "oauth-account-403" : "rate-limit-429";
@@ -949,12 +973,14 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
     settleDistributedFailure();
     const sendError = error instanceof UpstreamRetryEvidenceError ? error.cause : error;
     if (sendError instanceof RequestPacingQueueOverloadError) {
+      logCtx.terminalSource = "synthetic";
       const refusal = markProxyError(fail(429, sendError.message, "rate_limit_error"), sendError.reason === "keys_exhausted" ? undefined : "pacing");
       const advice = formatClientRetryAfter(sendError.retryAfterSeconds);
       if (advice !== undefined) refusal.headers.set("Retry-After", advice);
       return refusal;
     }
     if (sendError instanceof SendBudgetExhaustedError) {
+      logCtx.terminalSource = "synthetic";
       const refusal = workflowSendCeilingRefusalResponse(logCtx, req.headers.get("x-codex-parent-thread-id")?.trim() || undefined);
       if (refusal) { finishLog(429); return nativeWorkflowRefusalResponse(refusal); }
       return fail(429, sendError.message, "send_budget_exhausted", "send_budget_exhausted");

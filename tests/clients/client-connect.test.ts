@@ -517,10 +517,10 @@ function runTransactionScenario(
         connected = await connectClient({
           serverUrl: "https://hub.example.test",
           credential: { kind: "admin", value: credential },
-          selectedClients: ["claude"],
+          selectedClients: stage === "preflight" ? ["codex"] : ["claude"],
           managementTransport: "direct",
           noSync: true,
-        }, { fetchImpl, now: () => {
+        }, { fetchImpl, catalogCompatibility: { supportedEfforts: () => new Set() }, now: () => {
           if (stage === "commit") setPersistedConfigMutationBeforeCommitForTests(() => {
             commitFaultTriggered = true;
             throw new Error("fixture_final_client_commit_failed");

@@ -84,10 +84,74 @@ ocx link port [--json]
 ocx link issue --alias <alias> --tunnel-port <port> [--json]
 ocx link status [--json]
 ocx link revoke --link-id <id> [--json]
+ocx link recover (--link-id <id> | --operation-id <id>) [--json]
 ocx link reconnect --link-id <id> [--json]
+ocx link check (--link-id <id> | --all) [--no-wait] [--json]
+ocx link update (--link-id <id> | --all) --yes [--no-wait] [--json]
+ocx link sync (--link-id <id> | --all) [--no-wait] [--json]
+ocx link sync --link-id <id> (--restart-app-server-only | --restart-codex --yes) [--no-wait] [--json]
+ocx link restart-codex --link-id <id> [--scope app-server|codex] --yes [--no-wait] [--json]
 ```
 
 TTY olmayan kullanımda `--expect-fingerprint` zorunludur. Etkileşimli bir terminalde sunulan parmak izini açıkça onaylayarak bu seçeneği atlayabilirsiniz.
+
+Home üzerinde `ocx link check (--link-id <id> | --all)`, Home'un eklediği her Child için kurulu sürümü, kurulum türünü ve güncelleme yolunu okur: bağlantının SSH oturumu üzerinden Child'ın `ocx update --plan` komutunu çalıştırır (Child başına 60 saniye, aynı anda üç tane); bu komut yalnızca bir plan hesaplar, hiçbir şeyi değiştirmez. 2.97.0'dan eski bir Child `owner-action` (`legacy-ocx`) olarak görünür; sürümü macOS ve Linux'ta salt okunur bir SSH çağrısıyla daha, Windows'ta ise bağlantı üzerinden bildirdiği sürümden alınır. Child tarafından başlatılan bağlantılar ve `ocx-child` Child'ları SSH olmadan raporlanır. `ocx link status --json` her satıra bir `child` bloğu (sürümler, sürüm farkı, katalog güncelliği, etkinlik, son işlem) ekler. Ayrıntılar ve çıkış kodları: [Child install, catalog and activity](/guides/remote-link/#child-install-catalog-and-activity) (İngilizce).
+
+### Child'ları Home'dan yönetmek
+
+`ocx link sync`, `ocx link restart-codex` ve `ocx link update`, Home'un eklediği Child'larda bağlantının SSH bağlantısı üzerinden çalışır ve işi JSON olarak yazdırır. `sync`, sabitlenmiş `ocx sync --expect-link` komutunu çalıştırır (Child 2.93.0 veya üstü). `restart-codex` önce eşitler, ardından çalışan Codex'in güncel kataloğu yüklemesi için Child'daki Codex app-server süreçlerini yeniden başlatır; `--scope codex` masaüstü uygulamasını da yeniden açar. Yeniden başlatma tek bir bağlantıyı hedefler; `restart-codex` ve `--restart-codex` için `--yes` gerekir, `ocx link sync --link-id <id> --restart-app-server-only` ise app-server süreçlerini onay istemeden yeniden başlatır. Home o Child için bir model isteği aktarırken yeniden başlatma atlanır (`restart-skipped:link-active`). 2.69'dan eski bir Child'da akış olmayan bir istek ancak yanıtı başladığında görülür. `update --yes`, Child'ın kendi güncelleyicisiyle Child'ın OpenCodex sürümünü bu Home'un sürümüne getirir, asla başka bir sürüme değil (Child 2.97.0 veya üstü; npm ve pnpm kurulumları Node başlatıcısı üzerinden güncellenir, bu yüzden `ocx link check` orada salt okunur `node --version` da çalıştırır). Her seferinde bir Child güncellenir; başarılı, başarısız veya geri alınmış bir uygulamadan sonra yeniden eşitlenir. Sonucu bilinmeyen bir uygulama tekrarlanmaz ve eşitlenmez; `ocx link check` ile denetleyin. O Child için aktarılan istekler sona erer. Windows Child'ları yalnızca `sync` destekler; `ocx-child` Child'ları yeniden başlatmayı ve güncellemeyi desteklenmiyor olarak bildirir. CLI, loopback'e bağlı bir Home gerektirir; başka bir Home'da bu işlemler kullanılamaz ve panonun Remote Link sayfası Home'un eklediği Child için aynı işlemleri sunar. Ayrıntılar ve çıkış kodları: [Operating Children from the Home](/guides/remote-link/#operating-children-from-the-home) (İngilizce). Bu koruma en iyi çaba esaslıdır: kontrol ile yeniden başlatma arasında başlayan bir istek yine de sonlandırılabilir; turların korunması gerekiyorsa o Child'da yeni istekleri duraklatın. Home ayrıca Codex'in model isteği yerine bir araç çalıştıran bir turun ortasında olup olmadığını bilemez; bu yüzden o Child'da Codex'i yeniden başlatmadan veya OpenCodex'i güncellemeden önce etkin Codex turlarının bitmesini bekleyin. Elle güncelleme o Child'ın OpenCodex'ini yeniden başlatır ve onun için hâlâ aktarılan her turu sona erdirir; otomatik güncellemeler Child boşta olana kadar bekler. `ocx sync --restart-children` (veya `--restart-children=codex --yes`), bir Home eşitlemesi dağıtılırken aynı kuralı tüm Child'lara ya da `--child <linkId>` ile belirtilenlere uygular: her Child eşitlenir ve aktarılan bir istek sürerken yalnızca yeniden başlatması atlanır (`restart-skipped:link-active`).
+
+### Child sürümleri ve işlemleri
+
+Home üzerinde her Remote Link satırı, Home'un o Child hakkında son öğrendiğini taşır; Home'un başlattığı bir satır ayrıca onun denetimlerini taşır. Rozetler şunları gösterir:
+
+- Child'ın sürümü ve yanında `Behind Home (<home version>)`, `Same version as Home` veya `Newer than Home`, ayrıca güncelleme uygulanabiliyorsa `Update available: <home version>`. Kendi panosundan başlatılan bir Child sürümünü sürüm farkı rozeti olmadan gösterir ve `ocx-child` bir Child her zaman `unknown` okur.
+- kurulum türü (`Desktop app`, `GOAT`, `Source checkout`) veya bu sürüm adlandırmıyorsa ham belirteç eş aralıklı yazıyla.
+- `Catalog current` veya `Catalog out of date`. `Codex restart needed (<n>)` ve `Codex not running` rozetleri ancak Child kendi Codex durumunu bildirdikten sonra görünür; bu bildirimi daha sonraki bir sürüm ekleyecek. Henüz bunu gönderen bir Child sürümü olmadığı için bu iki rozet bugün görünmez.
+- son işlemi `Last <operation>: <state>` olarak, nedeni eş aralıklı yazıyla; bir iş bağlantıyı tutarken de çalışanı.
+
+Home o Child'ı kendisi güncelleyemediğinde satır bunun yerine ne yapılacağını söyler: o Child'daki OpenCodex Desktop'ta Check for Updates kullanın, elle güncelleyin, `mise` üzerinden güncelleyin veya GOAT yapsın. Bilinmeyen bir neden tahmin edilmiş bir cümle yerine belirteç olarak yazılır.
+
+Dört işlem CLI ile aynı işi başlatır, bu yüzden Child'da aynı sürümlere ihtiyaç duyar:
+
+- **Check**, `ocx link check` gibi Child'ın kurulum bilgilerini okur.
+- **Sync now**, `ocx link sync` gibi sabitlenmiş `ocx sync --expect-link` komutunu orada çalıştırır.
+- **Restart Codex** bir kapsam seçimi açar. `Codex app-servers` Child'ın arka plan app-server süreçlerini yeniden başlatır, böylece güncel kataloğu yükler; Codex masaüstü uygulamasının kendi app-server'ını yenilemez, bunun için masaüstü uygulamasını yeniden başlatın. `Codex desktop app` masaüstü uygulamasını da kapatıp yeniden açar; bu, orada açık konuşmaları sona erdirir.
+- **Update**, `ocx link update` gibi Child'ın kendi güncelleyicisiyle Child'ın OpenCodex'ini bu Home'un sürümüne getirir. Onay, Child'ın OpenCodex'inin yeniden başlayacağını ve onun için hâlâ aktarılan her turun sona ereceğini, otomatik güncellemelerin ise Child boşta olana kadar beklediğini söyler.
+
+**Check all** ve **Update all** uygun tüm Home başlatmalı bağlantılara uygulanır; Update all yine de her seferinde bir Child çalıştırır ve asla başka bir sürümü hedeflemez. Çalışan bir iş, Child başına bir satırda durumunu, geçtiği sürümü (öncesi ve sonrası), katalog eşitleme sonucunu ve yeniden başlatma sonucunu gösterir. İş bitince panel kaybolur ve satırlar yenilenir; Home'un artık bilmediği bir iş (Home yeniden başladığı için) bunu söyler ve her satırın kendi durumu yanıt olur. Bir iş bir bağlantıyı tutarken o bağlantının işlemleri ve Disconnect devre dışıdır; sunucu isteği zaten reddeder.
+
+Listenin altındaki **Child automation** paneli, `ocx link policy` ile aynı politika dosyasını gösterir ve düzenler: katalog dağıtımı (varsayılan otomatik), Codex yeniden başlatma (varsayılan asla), güncellemeler (varsayılan boştayken otomatik, bu sürümde henüz etkin değil) ve boşta kalma süresi. Kaydetme yalnızca değiştirdiklerinizi yazar. Politika dosyası bozulmuşsa panel otomatik katalog dağıtımının ve otomatik güncellemelerin kapalı olduğunu söyler ve kaydetme o durumda tüm ayarları yazar, böylece seçtiğiniz modlar kalıcı olur. Bu denetimler sunucuyu asla atlamaz: sunucu her işte politikayı, bağlantı durumunu ve Child'ın etkinliğini yeniden denetler.
+
+Sahibi olmadığınız bir makineyi bağlamayın: Home orada komutları sizin SSH anahtarınızla çalıştırır.
+
+### Otomatik katalog dağıtımı ve Child politikası
+
+Katalog dağıtımı varsayılan olarak açıktır. Home'un kataloğu değiştiğinde (katalog otomatik yenilemesi bir değişiklik bildirdiğinde ya da 5 dakikada bir yapılan kontrol panelde veya yönetim API'sinde yapılan bir düzenlemeyi fark ettiğinde) Home, düzenlemelerin durulması için 60 saniye bekler (ilk değişiklikten en fazla 5 dakika sonra). Ardından sizden hiçbir işlem beklemeden her uygun Child'a arka planda bir SSH oturumu açar ve `ocx link sync` ile aynı sabitlenmiş `ocx sync --expect-link` komutunu çalıştırır; siz etkinleştirmedikçe Codex'i yeniden başlatmaz (aşağıdaki `childCodexRestart`). Uygun Child; bağlantısını Home'un başlattığı, tüneli bağlı olan, üzerinde başka işlem çalışmayan ve bu Home'un orada çalıştırdığı son eşitlemesi değişiklikten önce olan Child'dır. Kataloğu yalnızca indirmiş bir Child hâlâ geride sayılır. Model isteklerini aktaran bir Child, yalnızca Codex ayarları zaten Home ile aynıysa ve OpenCodex istemci çalışma zamanı bu ayarlar uygulandıktan sonra yeniden başlamışsa eşitlenir, çünkü aksi hâlde eşitleme o çalışma zamanını yeniden başlatır; aksi hâlde boşta kaldığında eşitlenir. Başarısız bir eşitleme 5 dakika sonra yeniden denenir, aralık 6 saate kadar ikiye katlanır; 2.93.0'dan eski bir Child başka bir sürüm bildirene kadar yeniden denenmez. Bu işler diğer işler gibi görünür ve `trigger: "auto"` taşır. Bağlantısı olmayan bir Home bunların hiçbirini çalıştırmaz.
+
+Dağıtım, Child'ın katalog dosyasını düzeltir. Child'da zaten çalışan bir Codex app-server, yeniden başlayana kadar yüklediği listeyi kullanır: `ocx link restart-codex --link-id <id> --yes` veya `ocx sync --restart-children` kullanın ya da `ocx link policy --child-codex-restart app-server-when-idle` ile app-server'ları Home'un yeniden başlatmasına izin verin; Home bunu yalnızca eşitleme çalıştığında hâlâ boşta olan bir Child'da yapar. Bu ayar bir sonraki otomatik eşitlemeden itibaren geçerlidir; kataloğu zaten güncel olan bir Child eşitlenmez, dolayısıyla yeniden başlatılmaz; o Child'ı kendiniz yeniden başlatın.
+
+Politika Home'da `<configDir>/link/child-policy.json` içinde tutulur, asla `config.json` içinde değil:
+
+| Ayar | Varsayılan | Değerler |
+|---|---|---|
+| `catalogFanout` | `auto` | `auto`, `manual` |
+| `childCodexRestart` | `never` | `never`, `app-server-when-idle` |
+| `updates` | `auto-when-idle` | `off`, `notify`, `auto-when-idle` |
+| `idleAfterMs` | `600000` (10 dakika) | 1 ile 60 dakika arası |
+
+`updates` varsayılan olarak boştaki Child'ları otomatik olarak Home'un sürümünde tutar. Otomatik güncellemeler bu sürümde henüz etkin değildir; ayar şimdiden kaydedilir, böylece `ocx link policy --updates notify` veya `--updates off` ile yapılan bir vazgeçme, güncellemeler geldiğinde de geçerli kalır. `idleAfterMs`, bir Child'ın boşta sayılması için aktarılan model isteği olmadan geçmesi gereken süredir; `ocx link status` içindeki `activity.idle` değerini de belirler.
+
+```text
+ocx link policy                                    # politikayı oku
+ocx link policy --catalog-fanout manual            # otomatik katalog dağıtımını kapat
+ocx link policy --child-codex-restart app-server-when-idle
+ocx link policy --updates off --idle-after-minutes 20 --json
+```
+
+`GET` ve `PUT /api/link/children/policy` aynı ayarları okur ve değiştirir (loopback üzerinde yönetici belirteci veya bir panel oturumu); bir `PUT` yalnızca değiştirdiği ayarları gönderir. Dosya bozuksa veya bilinmeyen bir değer içeriyorsa, otomatik katalog dağıtımı ve güncellemeler kapalı kalır ve `ocx link policy` bunu bildirir. Kaydetmek uyarıyı temizler ama adını vermediğiniz her ayarı kapalı bırakır; bunları açıkça açın, örneğin `ocx link policy --catalog-fanout auto --updates auto-when-idle`. Home dosyayı kendiliğinden asla yeniden yazmaz.
+
+Size ait olmayan bir makineyi bağlamayın: Home orada sizin SSH anahtarınızla komut çalıştırır.
 
 ## İlgili kılavuzlar
 

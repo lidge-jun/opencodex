@@ -391,6 +391,8 @@ export interface ImageBridgeDeps {
   forceEmptyResponseId?: boolean;
   /** Responses inbound only: deliver a non-retryable upstream refusal as `response.failed`. */
   terminalRefusalAsFailed?: boolean;
+  /** False for Chat/Messages inbound: their clients never parse `<oai-mem-citation>`, so text stays raw. */
+  escapeMemoryCitationTags?: boolean;
 }
 
 /**
@@ -1026,9 +1028,13 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                 continue;
               }
               const vArgs = parseVideoCallArgs(call.args);
+              const videoAuth = videoPlan!.auth;
               let vResult;
               if (!vArgs.ok) {
                 vResult = { ok: false, model: videoPlan!.model, prompt: "", files: [], count: 0, error: vArgs.error };
+              } else if (!videoAuth) {
+                // An unusable images.videoProvider answers the call; it never reaches any upstream.
+                vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt, files: [], count: 0, error: videoPlan!.unavailable };
               } else {
                 paidVideoCalls += 1;
                 const videoTimeout = videoTimeoutMs ?? 300_000;
@@ -1046,13 +1052,13 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
                       ...(vArgs.resolution != null ? { resolution: vArgs.resolution } : {}),
                       ...(vArgs.aspectRatio != null ? { aspectRatio: vArgs.aspectRatio } : {}),
                     },
-                    videoPlan!.auth, linkedDeadline,
+                    videoAuth, linkedDeadline,
                   );
                   const remainingMs = videoDeadline - Date.now();
                   if (remainingMs <= 0) {
                     vResult = { ok: false, model: videoPlan!.model, prompt: vArgs.prompt, files: [], count: 0, error: `video generation timed out after ${Math.floor(videoTimeout / 1000)}s` };
                   } else {
-                  const pollGen = pollVideoWithHeartbeats(requestId, videoPlan!.auth, linkedDeadline, remainingMs);
+                  const pollGen = pollVideoWithHeartbeats(requestId, videoAuth, linkedDeadline, remainingMs);
                   let pollResult: { ok: true; videoUrl: string } | { ok: false; error: string };
                   try {
                     for (;;) {
@@ -1221,6 +1227,7 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
       ...(deps.clientToolCatalogRestriction ? { ...deps.clientToolCatalogRestriction, enforceDeclaredToolNames: false } : {}),
       ...(deps.forceEmptyResponseId ? { responseId: "" } : {}),
       ...(deps.terminalRefusalAsFailed ? { terminalRefusalAsFailed: true } : {}),
+      ...(deps.escapeMemoryCitationTags === false ? { escapeMemoryCitationTags: false } : {}),
       hideThinkingSummary: parsed.options.hideThinkingSummary,
       chatRawReasoningVisible: deps.chatRawReasoningVisible,
       hideRawReasoning: parsed.options.hideRawReasoning,

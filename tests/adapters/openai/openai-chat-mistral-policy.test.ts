@@ -60,12 +60,34 @@ describe("canonical Mistral Chat wire policy", () => {
         .toMatchObject({ max_completion_tokens: 123, user: "synthetic-user", store: false, reasoning_effort: "medium" });
     }
   });
+  test("strips replayed reasoning_content from message history without mutating the caller", () => {
+    const assistant = { role: "assistant", content: "Hi", reasoning_content: "thinking", tool_calls: [] };
+    const result = native({ messages: [{ role: "user", content: "hi" }, assistant] });
+    expect(result.messages[1]).toEqual({ role: "assistant", content: "Hi", tool_calls: [] });
+    expect(assistant).toEqual({ role: "assistant", content: "Hi", reasoning_content: "thinking", tool_calls: [] });
+  });
+  test("keeps message reasoning_content untouched outside canonical Mistral destinations", () => {
+    for (const overrides of [{ baseUrl: "https://gateway.example/v1" }, { baseUrl: "https://api.mistral.ai/custom" }, { authMode: "oauth" as const }]) {
+      const message = { role: "assistant", content: "Hi", reasoning_content: "kept" };
+      expect(native({ messages: [{ role: "user", content: "hi" }, message] }, provider(overrides)).messages[1]).toEqual(message);
+    }
+  });
 });
 
 test("the final policy removes rejected controls even when another serializer generated them", () => {
   const body = { max_completion_tokens: 12, thinking: { type: "enabled" }, include_reasoning: true, reasoning: { effort: "high" }, top_k: 1 };
   applyChatDestinationPolicy(body, provider());
   expect(body).toEqual({ max_tokens: 12 });
+});
+
+test("the final policy strips message reasoning_content without mutating the caller's history", () => {
+  const assistant = { role: "assistant", content: "Hi", reasoning_content: "gone" };
+  const messages = [{ role: "user", content: "hi" }, assistant];
+  const body = { messages };
+  applyChatDestinationPolicy(body, provider());
+  expect(body.messages).toEqual([{ role: "user", content: "hi" }, { role: "assistant", content: "Hi" }]);
+  expect(body.messages).not.toBe(messages);
+  expect(messages[1]).toEqual({ role: "assistant", content: "Hi", reasoning_content: "gone" });
 });
 
 test("typed response normalization preserves choices, tools, usage, and existing reasoning", () => {
@@ -79,4 +101,18 @@ test("typed response normalization preserves choices, tools, usage, and existing
   expect(result.usage).toBe(value.usage);
   expect(Array.isArray(value.choices[0]!.delta.content)).toBe(true);
   expect(normalizeNativeChatContent(value, provider({ authMode: "oauth" }))).toBe(value);
+});
+
+test("operator reasoning replay cannot restore reasoning_content on canonical Mistral Chat", () => {
+  const target = provider({ preserveReasoningContentModels: [model] });
+  const history = [
+    { role: "user", content: "hi" },
+    { role: "assistant", content: "", reasoning_content: "replayed by the client", tool_calls: [{ id: "call_a", type: "function", function: { name: "f", arguments: "{}" } }] },
+    { role: "tool", tool_call_id: "call_a", content: "ok" },
+    { role: "assistant", content: "", tool_calls: [{ id: "call_b", type: "function", function: { name: "f", arguments: "{}" } }] },
+    { role: "tool", tool_call_id: "call_b", content: "ok" },
+  ];
+  const result = native({ messages: history, tools: [{ type: "function", function: { name: "f", parameters: { type: "object" } } }] }, target);
+  for (const message of result.messages) expect(message).not.toHaveProperty("reasoning_content");
+  expect(history[1]).toHaveProperty("reasoning_content", "replayed by the client");
 });

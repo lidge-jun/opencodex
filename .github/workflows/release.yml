@@ -154,6 +154,42 @@ jobs:
             appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\n`);
           '
 
+      # The same evidence gate verify-npm and publish repeat, answered before any runner packages.
+      # Run 42951296881 resolved its CI evidence here, packaged for minutes and only then failed in
+      # verify-npm because no service-lifecycle run existed for the source. Packaging cannot create
+      # that evidence, so a release that lacks it now fails in seconds with the dispatch command.
+      - name: Require source CI and service evidence before packaging
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.source.outputs.source_sha }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          node .github/scripts/release-evidence.cjs check "$SOURCE_SHA"
+          baseline_tag="$(git tag --merged "$SOURCE_SHA" --list 'v[0-9]*' | bun -e '
+            import { parseVersion, compareVersions } from "./scripts/version-line.ts";
+            const tags = (await Bun.stdin.text()).trim().split("\n").filter(Boolean);
+            const versions = tags.map(tag => ({ tag, version: tag.slice(1) }));
+            if (versions.some(item => !parseVersion(item.version))) throw new Error("invalid release tag");
+            const eligible = versions.filter(item => compareVersions(item.version, process.env.RELEASE_VERSION) < 0);
+            eligible.sort((a, b) => compareVersions(a.version, b.version));
+            console.log(eligible.at(-1)?.tag ?? "");
+          ')"
+          baseline=--initial
+          if [ -n "$baseline_tag" ]; then
+            draft="$(gh release view "$baseline_tag" --json isDraft --jq .isDraft)"
+            test "$draft" = false || { echo '::error::Service baseline is not a published release.'; exit 1; }
+            baseline="$(git rev-parse "refs/tags/${baseline_tag}^{commit}")"
+          fi
+          range="$(node .github/scripts/release-evidence.cjs service-range "$SOURCE_SHA" "$baseline")"
+          required="$(RANGE="$range" node -e 'const x = JSON.parse(process.env.RANGE); if (typeof x.required !== "boolean") throw Error("invalid service range"); process.stdout.write(String(x.required));')"
+          if [ "$required" = true ]; then
+            node .github/scripts/release-evidence.cjs service "$SOURCE_SHA" || {
+              echo "::error::Dispatch service-lifecycle.yml from dev for source ${SOURCE_SHA} and wait for all platforms: gh workflow run service-lifecycle.yml --ref dev -f source_sha=${SOURCE_SHA}"; exit 1;
+            }
+          fi
+
+
   # Every publication precondition the dispatch can already decide, checked before any runner
   # starts packaging: channel and dist-tag, every version source, the tag, the GitHub release,
   # npm and the global tag ordering (scripts/ci/release-preflight.sh).
@@ -297,6 +333,14 @@ jobs:
           DRY_RUN: ${{ inputs.dry-run }}
         run: bash scripts/ci/windows-signing-plan.sh
 
+      # Start this leg's signing record as not signed (#7207). The step after the swap rewrites it; if that step never runs
+      # or fails, this record still exists, so the overwrite upload replaces any record an earlier attempt left.
+      - name: Start the Windows signing outcome as not signed
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: bash
+        run: bash scripts/ci/windows-signing-outcome.sh standalone "$RUNNER_TEMP/windows-signing-outcome"
+
       - name: Install dependencies
         run: bun install --frozen-lockfile --os=${{ matrix.dependency_os }} --cpu=${{ matrix.dependency_cpu }}
 
@@ -376,6 +420,7 @@ jobs:
           output-artifact-directory: ${{ runner.temp }}/signpath-signed-ocx
 
       - name: Swap in the verified signed Windows binary
+        id: swap-ocx
         if: steps.windows-signing.outputs.mode == 'sign'
         continue-on-error: true
         shell: pwsh
@@ -389,7 +434,6 @@ jobs:
             -SignedDirectory (Join-Path $env:RUNNER_TEMP "signpath-signed-ocx") `
             -SubmitOutcome "$env:SIGNPATH_OUTCOME" `
             -Trust $env:SIGNING_TRUST
-
 
       - name: Archive standalone release
         shell: bash
@@ -414,6 +458,34 @@ jobs:
           if [[ "$RUNNER_OS" == "Windows" ]]; then sha256sum "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.zip" > "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.zip.sha256"
           else sha256sum "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.tar.gz" > "ocx-${RELEASE_VERSION}-${STANDALONE_TARGET}.tar.gz.sha256"
           fi
+
+      # The release notes state whether this release's Windows files were actually signed (#7207). The record is written
+      # on every Windows run, signed or not, and only a release-trust plan whose verified swap succeeded records signed.
+      # It hashes the zip this leg publishes, and the notes trust it only for an asset with that digest, so a record an
+      # earlier attempt left behind never speaks for this attempt's zip. Its artifact name matches neither standalone-*
+      # nor desktop-*, so it never becomes a release asset.
+      - name: Record the Windows signing outcome
+        if: always() && runner.os == 'Windows'
+        continue-on-error: true
+        shell: bash
+        env:
+          SIGNING_MODE: ${{ steps.windows-signing.outputs.mode }}
+          SIGNING_TRUST: ${{ steps.windows-signing.outputs.trust }}
+          SIGNED: ${{ steps.swap-ocx.outputs.signed }}
+          PACKAGED_FILE: dist/ocx-${{ needs.validate-dispatch.outputs.version }}-${{ matrix.target }}.zip
+        run: bash scripts/ci/windows-signing-outcome.sh standalone "$RUNNER_TEMP/windows-signing-outcome" "$PACKAGED_FILE"
+
+      - name: Upload the Windows signing outcome
+        if: always() && runner.os == 'Windows'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-signing-outcome-standalone
+          path: ${{ runner.temp }}/windows-signing-outcome/standalone.json
+          if-no-files-found: error
+          retention-days: 7
+          # A re-run of this leg replaces its earlier record; if that upload fails, the stale record's digest no longer matches.
+          overwrite: true
 
       - name: Upload standalone release
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -510,6 +582,14 @@ jobs:
           SIGNPATH_SIGNING_POLICY: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG }}
           DRY_RUN: ${{ inputs.dry-run }}
         run: bash scripts/ci/windows-signing-plan.sh
+
+      # Start this leg's signing record as not signed (#7207). The step after the swap rewrites it; if that step never runs
+      # or fails, this record still exists, so the overwrite upload replaces any record an earlier attempt left.
+      - name: Start the Windows signing outcome as not signed
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: bash
+        run: bash scripts/ci/windows-signing-outcome.sh desktop "$RUNNER_TEMP/windows-signing-outcome"
 
       # The desktop build takes its version from tauri.conf.json and Cargo.toml (the widget
       # plist inherits it), not from package.json or this input, while the updater manifest is
@@ -774,6 +854,7 @@ jobs:
       # same key before swapping both in; verify-release then checks that signature against the
       # final MSI and writes latest.json from it.
       - name: Swap in the verified signed Windows installer
+        id: swap-msi
         if: steps.windows-signing.outputs.mode == 'sign' && steps.windows-msi.outcome == 'success'
         continue-on-error: true
         shell: pwsh
@@ -859,6 +940,34 @@ jobs:
             args+=(--bundle-root "$DESKTOP_BUNDLE_ROOT")
           fi
           bun desktop/scripts/collect-release-assets.ts "${args[@]}"
+
+      # The release notes state whether this release's Windows files were actually signed (#7207). The record is written
+      # on every Windows run, signed or not, and only a release-trust plan whose verified swap succeeded records signed.
+      # It hashes the renamed MSI this leg publishes, and the notes trust it only for an asset with that digest, so a
+      # record an earlier attempt left behind never speaks for this attempt's MSI. Its artifact name matches neither
+      # standalone-* nor desktop-*, so it never becomes a release asset.
+      - name: Record the Windows signing outcome
+        if: always() && runner.os == 'Windows'
+        continue-on-error: true
+        shell: bash
+        env:
+          SIGNING_MODE: ${{ steps.windows-signing.outputs.mode }}
+          SIGNING_TRUST: ${{ steps.windows-signing.outputs.trust }}
+          SIGNED: ${{ steps.swap-msi.outputs.signed }}
+          PACKAGED_FILE: dist/release/OpenCodex-${{ needs.validate-dispatch.outputs.version }}-windows-x64.msi
+        run: bash scripts/ci/windows-signing-outcome.sh desktop "$RUNNER_TEMP/windows-signing-outcome" "$PACKAGED_FILE"
+
+      - name: Upload the Windows signing outcome
+        if: always() && runner.os == 'Windows'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows-signing-outcome-desktop
+          path: ${{ runner.temp }}/windows-signing-outcome/desktop.json
+          if-no-files-found: error
+          retention-days: 7
+          # A re-run of this leg replaces its earlier record; if that upload fails, the stale record's digest no longer matches.
+          overwrite: true
 
       # After the bundle exists, not before: a sweep that runs first passes by finding nothing.
       - name: Verify every Mach-O in the bundle carries the release identity
@@ -1069,7 +1178,7 @@ jobs:
           required="$(RANGE="$range" node -e 'const x = JSON.parse(process.env.RANGE); if (typeof x.required !== "boolean") throw Error("invalid service range"); process.stdout.write(String(x.required));')"
           if [ "$required" = true ]; then
             node .github/scripts/release-evidence.cjs service "$SOURCE_SHA" || {
-              echo "::error::Dispatch service-lifecycle.yml from dev for source ${SOURCE_SHA} and wait for all platforms."; exit 1;
+              echo "::error::Dispatch service-lifecycle.yml from dev for source ${SOURCE_SHA} and wait for all platforms: gh workflow run service-lifecycle.yml --ref dev -f source_sha=${SOURCE_SHA}"; exit 1;
             }
           fi
 
@@ -1375,7 +1484,8 @@ jobs:
           # assets and left the desktop updater without anything to download. The
           # release is therefore created as a draft and becomes public here, once the
           # verified bundle is attached. The only edit permitted is this flip — the
-          # notes still come from the validated notes file written at creation.
+          # notes come from the run's validated notes file, written at creation or,
+          # for a draft a resumed run reused, refreshed from that run's file.
           draft_state="$(gh release view "$release_tag" --json isDraft --jq .isDraft)"
           case "$draft_state" in
             true) gh release edit "$release_tag" --draft=false ;;
@@ -1428,7 +1538,8 @@ jobs:
     needs: [validate-dispatch, verify-release, verify-npm]
     if: ${{ inputs.dry-run != true }}
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The two registry waits below can each take about 20 minutes (about 55 minutes worst case with read timeouts).
+    timeout-minutes: 75
     outputs:
       npm_version: ${{ steps.registry-smoke.outputs.npm_version }}
       npm_dist_tag: ${{ steps.registry-smoke.outputs.npm_dist_tag }}
@@ -1569,7 +1680,7 @@ jobs:
           required="$(RANGE="$range" node -e 'const x = JSON.parse(process.env.RANGE); if (typeof x.required !== "boolean") throw Error("invalid service range"); process.stdout.write(String(x.required));')"
           if [ "$required" = true ]; then
             node .github/scripts/release-evidence.cjs service "$SOURCE_SHA" || {
-              echo "::error::Dispatch service-lifecycle.yml from dev for source ${SOURCE_SHA} and wait for all platforms."; exit 1;
+              echo "::error::Dispatch service-lifecycle.yml from dev for source ${SOURCE_SHA} and wait for all platforms: gh workflow run service-lifecycle.yml --ref dev -f source_sha=${SOURCE_SHA}"; exit 1;
             }
           fi
 
@@ -1587,6 +1698,17 @@ jobs:
           if [ "$RESUME" = true ] && [ -n "$existing_tag_sha" ]; then allow="--allow-existing-tag-at-head"; fi
           git tag --list 'v*' | bun scripts/version-line.ts assert-releasable "$RELEASE_VERSION" ${allow:+"$allow"}
 
+      # What the Windows legs recorded about signing (#7207). A failed download leaves no records, and the notes then
+      # claim no signature (scripts/release-signing-footer.ts). A record counts only when its digest is the one the
+      # verified receipt (downloaded above) holds for that Windows asset.
+      - name: Download the Windows signing outcomes
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: windows-signing-outcome-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/windows-signing-outcome
+
       - name: Build and validate release changelog
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1595,7 +1717,8 @@ jobs:
           set -euo pipefail
           notes_file="$GITHUB_WORKSPACE/.release-notes.md"
           bun scripts/build-release-changelog.ts --version "$RELEASE_VERSION" --dist-tag "$NPM_DIST_TAG" \
-            --repository "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --out "$notes_file"
+            --repository "$GITHUB_REPOSITORY" --target "$SOURCE_SHA" --out "$notes_file" \
+            --windows-signing-outcomes "$RUNNER_TEMP/windows-signing-outcome" --release-receipt verification/receipt.json
           test -s "$notes_file"
 
       - name: Require publication hold to be enabled
@@ -1715,7 +1838,10 @@ jobs:
             exit 1
           }
           pkg_name="$(node -p "require('./package.json').name")"
-          for attempt in $(seq 1 6); do
+          # npm can take 15+ minutes to serve a new version (2.100.1: ~15 min after publish), so the
+          # bounded wait is attempts x interval, about 20 minutes. Publication is never retried.
+          attempts="${REGISTRY_WAIT_ATTEMPTS:-40}"; interval="${REGISTRY_WAIT_SECONDS:-30}"
+          for attempt in $(seq 1 "$attempts"); do
             if VERSION=$(timeout --kill-after=2s 10s npm view "${pkg_name}@${RELEASE_VERSION}" version --fetch-retries=0 --fetch-timeout=8000 2>/dev/null); then
               if [ "$VERSION" != "$RELEASE_VERSION" ]; then
                 echo "::error::Registry returned an unexpected version; refusing to create a release"
@@ -1746,8 +1872,8 @@ jobs:
               echo "npm dist-tag ${NPM_DIST_TAG}: ${dist_tag_state}." >> "$GITHUB_STEP_SUMMARY"
               exit 0
             fi
-            echo "::notice::Registry lookup not confirmed (attempt $attempt/6)"
-            if [ "$attempt" -lt 6 ]; then sleep 5; fi
+            echo "::notice::Registry lookup not confirmed (attempt $attempt/$attempts)"
+            if [ "$attempt" -lt "$attempts" ]; then sleep "$interval"; fi
           done
           # Keep each outcome explicit for the recovery report.
           # shellcheck disable=SC2129
@@ -1762,7 +1888,8 @@ jobs:
         run: |
           set -euo pipefail
           pkg_name="$(node -p "require('./package.json').name")"
-          for attempt in $(seq 1 6); do
+          attempts="${REGISTRY_WAIT_ATTEMPTS:-40}"; interval="${REGISTRY_WAIT_SECONDS:-30}"
+          for attempt in $(seq 1 "$attempts"); do
             if head="$(timeout --kill-after=2s 10s npm view "${pkg_name}@${RELEASE_VERSION}" gitHead --json --registry=https://registry.npmjs.org --fetch-retries=0 --fetch-timeout=8000 2>/dev/null)"; then
               if [ -n "$head" ] && [ "$head" != null ]; then
                 REGISTRY_HEAD="$head" node - <<'NODE'
@@ -1774,7 +1901,7 @@ jobs:
                 exit 0
               fi
             fi
-            if [ "$attempt" -lt 6 ]; then sleep 5; fi
+            if [ "$attempt" -lt "$attempts" ]; then sleep "$interval"; fi
           done
           echo '::error::Published npm gitHead could not be verified; do not republish and reconcile manually.'
           exit 1
@@ -1820,6 +1947,15 @@ jobs:
           if gh release view "$release_tag" >/dev/null 2>&1; then
             if [ "$RESUME" = "true" ]; then
               echo "::notice::GitHub Release ${release_tag} already exists; reusing it for attachment"
+              # This run attaches its own verified bundle, and its Windows legs recorded their own signing outcome
+              # (#7207), so a reused draft takes this run's validated notes. A published release is immutable, and
+              # attach-release already requires its assets to match this run's digests.
+              reused_draft="$(gh release view "$release_tag" --json isDraft --jq .isDraft)"
+              case "$reused_draft" in
+                true) gh release edit "$release_tag" --notes-file "$notes_file" ;;
+                false) ;;
+                *) echo "::error::Unexpected draft state for ${release_tag}: ${reused_draft}"; exit 1 ;;
+              esac
             else
               echo "::error::GitHub Release ${release_tag} already exists; refusing to reuse it outside the resume path"
               exit 1

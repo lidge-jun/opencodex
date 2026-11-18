@@ -8,6 +8,7 @@
   "responses-replay-metadata-principal.test.ts": "responses",
   "responses-combo-replay-principal.test.ts": "responses",
   "responses-translated-replay-principal.test.ts": "responses",
+  "responses-reset-selection-http.test.ts": "responses",
   "messages-native-combo.test.ts": "claude-integration",
   "messages-native-combo-framing.test.ts": "claude-integration"
 }

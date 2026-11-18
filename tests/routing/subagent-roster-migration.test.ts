@@ -36,15 +36,15 @@ function writeConfig(content: unknown): void {
 }
 
 describe("subagent roster defaults and one-time upgrades", () => {
-  const defaults = ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"];
+  const defaults = ["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6-luna"];
   const v2Defaults = ["gpt-6-astra", "gpt-6-sol", "gpt-6-luna"];
   const v1Defaults = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"];
 
-  test("fresh defaults are Astra, GPT-6.1 Sol and Luna, already marked", () => {
+  test("fresh defaults are GPT-6.2 Astra, GPT-6.2 Sol and Luna, already marked", () => {
     const config = getDefaultConfig();
     expect(DEFAULT_SUBAGENT_MODELS).toEqual(defaults);
     expect(config.subagentModels).toEqual(defaults);
-    expect(config.subagentModelsVersion).toBe(3);
+    expect(config.subagentModelsVersion).toBe(4);
     expect(migrateSubagentModels(config)).toBe(false);
     config.subagentModels!.pop();
     expect(DEFAULT_SUBAGENT_MODELS).toEqual(defaults);
@@ -53,18 +53,18 @@ describe("subagent roster defaults and one-time upgrades", () => {
   test.each([
     // The Astra step turns this pre-Astra default into the v1 default, which continues to the trio.
     [["gpt-5.5", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.4-mini"], defaults],
-    [["one", "two", "three", "four", "five"], ["gpt-6-astra", "one", "two", "three", "four"]],
-    [["one", "two", "three", "four", "gpt-5.5"], ["gpt-6-astra", "one", "two", "three", "four"]],
-    [["one", "gpt-6-astra", "gpt-6-astra", "gpt-5.5", "two"], ["gpt-6-astra", "one", "two"]],
-    [["pool/gpt-6-astra", "gpt-5.5"], ["gpt-6-astra", "pool/gpt-6-astra"]],
-    [[], ["gpt-6-astra"]],
+    [["one", "two", "three", "four", "five"], ["gpt-6.2-astra", "one", "two", "three", "four"]],
+    [["one", "two", "three", "four", "gpt-5.5"], ["gpt-6.2-astra", "one", "two", "three", "four"]],
+    [["one", "gpt-6-astra", "gpt-6-astra", "gpt-5.5", "two"], ["gpt-6.2-astra", "one", "two"]],
+    [["pool/gpt-6-astra", "gpt-5.5"], ["gpt-6.2-astra", "pool/gpt-6-astra"]],
+    [[], ["gpt-6.2-astra"]],
   ])("upgrades legacy roster %j once", (before, expected) => {
     const config = getDefaultConfig();
     delete config.subagentModelsVersion;
     config.subagentModels = [...before];
     expect(migrateSubagentModels(config)).toBe(true);
     expect(config.subagentModels).toEqual(expected);
-    expect(config.subagentModelsVersion).toBe(3);
+    expect(config.subagentModelsVersion).toBe(4);
     expect(migrateSubagentModels(config)).toBe(false);
     expect(config.subagentModels).toEqual(expected);
   });
@@ -73,7 +73,7 @@ describe("subagent roster defaults and one-time upgrades", () => {
     const config = { ...getDefaultConfig(), subagentModels: [...v1Defaults], subagentModelsVersion: 1 };
     expect(migrateSubagentModels(config)).toBe(true);
     expect(config.subagentModels).toEqual(defaults);
-    expect(config.subagentModelsVersion).toBe(3);
+    expect(config.subagentModelsVersion).toBe(4);
     config.subagentModels = [...v1Defaults];
     expect(migrateSubagentModels(config)).toBe(false);
     expect(config.subagentModels).toEqual(v1Defaults);
@@ -81,15 +81,15 @@ describe("subagent roster defaults and one-time upgrades", () => {
 
   test.each([
     // Sol moves through GPT-6 to GPT-6.1 and Luna to GPT-6, in place; Terra and 5.5 leave.
-    [["gpt-5.6-sol", "gpt-6-astra", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"], ["gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna"]],
+    [["gpt-5.6-sol", "gpt-6-astra", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5"], ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6-luna"]],
     // A successor already on the list is not added twice; every 5.5/5.6 variant leaves.
-    [["gpt-6-astra", "gpt-5.6-sol", "gpt-6-sol", "gpt-5.5-pro"], ["gpt-6-astra", "gpt-6.1-sol"]],
+    [["gpt-6-astra", "gpt-5.6-sol", "gpt-6-sol", "gpt-5.5-pro"], ["gpt-6.2-astra", "gpt-6.2-sol"]],
     // Routed and account-qualified ids keep their exact spelling, 5.x suffix or not.
-    [["gpt-6-astra", "custom/model", "cursor/gpt-5.6-sol", "pool/gpt-5.5"], ["gpt-6-astra", "custom/model", "cursor/gpt-5.6-sol", "pool/gpt-5.5"]],
+    [["gpt-6-astra", "custom/model", "cursor/gpt-5.6-sol", "pool/gpt-5.5"], ["gpt-6.2-astra", "custom/model", "cursor/gpt-5.6-sol", "pool/gpt-5.5"]],
     // A retired-family prefix belongs to the namespace, not the qualified model id.
     [["gpt-5.6-router/model", "gpt-5.5-team/gpt-6-sol"], ["gpt-5.6-router/model", "gpt-5.5-team/gpt-6-sol"]],
     // A list of only retired rows receives the defaults rather than becoming empty.
-    [["gpt-5.5", "gpt-5.6-terra"], ["gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"]],
+    [["gpt-5.5", "gpt-5.6-terra"], ["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6-luna"]],
     // Ids that name Object.prototype members are ordinary strings, not lookup hits.
     [["constructor", "toString", "gpt-5.5"], ["constructor", "toString"]],
     // An explicitly empty roster stays empty.
@@ -98,7 +98,7 @@ describe("subagent roster defaults and one-time upgrades", () => {
     const config = { ...getDefaultConfig(), subagentModels: [...before], subagentModelsVersion: 1 };
     expect(migrateSubagentModels(config)).toBe(true);
     expect(config.subagentModels).toEqual(expected);
-    expect(config.subagentModelsVersion).toBe(3);
+    expect(config.subagentModelsVersion).toBe(4);
     expect(migrateSubagentModels(config)).toBe(false);
   });
 
@@ -106,28 +106,40 @@ describe("subagent roster defaults and one-time upgrades", () => {
     // The untouched GPT-6 default trio takes GPT-6.1 Sol in Sol's slot.
     [v2Defaults, defaults],
     // Only bare gpt-6-sol moves; order and every other choice stay.
-    [["custom/model", "gpt-6-sol", "gpt-5.5"], ["custom/model", "gpt-6.1-sol", "gpt-5.5"]],
+    [["custom/model", "gpt-6-sol", "gpt-5.5"], ["custom/model", "gpt-6.2-sol", "gpt-5.5"]],
     // A roster that already lists GPT-6.1 Sol does not gain it twice.
-    [["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"], ["gpt-6.1-sol", "gpt-6-luna"]],
+    [["gpt-6.1-sol", "gpt-6-sol", "gpt-6-luna"], ["gpt-6.2-sol", "gpt-6-luna"]],
     // Routed and account-qualified Sol ids keep their exact spelling.
     [["openai/gpt-6-sol", "pool/gpt-6-sol"], ["openai/gpt-6-sol", "pool/gpt-6-sol"]],
     // A version-2 roster without Sol is unchanged; version-2 retired rows are not re-shed.
-    [["gpt-6-astra", "gpt-5.5"], ["gpt-6-astra", "gpt-5.5"]],
+    [["gpt-6-astra", "gpt-5.5"], ["gpt-6.2-astra", "gpt-5.5"]],
     [[], []],
-  ])("a version-2 roster %j gives Sol's slot to GPT-6.1 Sol as %j", (before, expected) => {
+  ])("a version-2 roster %j upgrades to GPT-6.2 as %j", (before, expected) => {
     const config = { ...getDefaultConfig(), subagentModels: [...before], subagentModelsVersion: 2 };
     expect(migrateSubagentModels(config)).toBe(true);
     expect(config.subagentModels).toEqual(expected);
-    expect(config.subagentModelsVersion).toBe(3);
+    expect(config.subagentModelsVersion).toBe(4);
     expect(migrateSubagentModels(config)).toBe(false);
   });
 
-  test("GPT-6 Sol re-added after the version-3 upgrade stays", () => {
+  test("GPT-6 Sol re-added after the upgrade stays", () => {
     const config = { ...getDefaultConfig(), subagentModels: [...v2Defaults], subagentModelsVersion: 2 };
     expect(migrateSubagentModels(config)).toBe(true);
     config.subagentModels = [...config.subagentModels!, "gpt-6-sol"];
     expect(migrateSubagentModels(config)).toBe(false);
     expect(config.subagentModels).toEqual([...defaults, "gpt-6-sol"]);
+  });
+
+  test("version 4 replaces bare predecessors once and preserves qualified and re-added choices", () => {
+    const config = { ...getDefaultConfig(), subagentModelsVersion: 3, subagentModels: [
+      "personal/gpt-6.1-sol", "gpt-6-astra", "gpt-6.1-sol", "gpt-6.2-sol", "pool/gpt-6-astra",
+    ] };
+    expect(migrateSubagentModels(config)).toBe(true);
+    expect(config.subagentModels).toEqual(["personal/gpt-6.1-sol", "gpt-6.2-astra", "gpt-6.2-sol", "pool/gpt-6-astra"]);
+    expect(config.subagentModelsVersion).toBe(4);
+    config.subagentModels.push("gpt-6-astra");
+    expect(migrateSubagentModels(config)).toBe(false);
+    expect(config.subagentModels.at(-1)).toBe("gpt-6-astra");
   });
 
   test("unset legacy roster uses the new defaults", () => {
@@ -138,7 +150,7 @@ describe("subagent roster defaults and one-time upgrades", () => {
     expect(config.subagentModels).toEqual(defaults);
   });
 
-  test.each([3, 4])("version %i preserves later user choices across save/load", version => {
+  test.each([4, 5])("version %i preserves later user choices across save/load", version => {
     for (const chosen of [[], ["gpt-5.5", "custom/model", "gpt-6-sol"]]) {
       saveConfig({ ...getDefaultConfig(), subagentModels: chosen, subagentModelsVersion: version });
       const config = loadConfig();
@@ -159,12 +171,12 @@ describe("subagent roster defaults and one-time upgrades", () => {
     expect(backupNames()).toEqual([]);
   });
 
-  test.each([undefined, 1, 2, 3])("repair does not invent migration version %j", version => {
+  test.each([undefined, 1, 2, 3, 4])("repair does not invent migration version %j", version => {
     writeConfig({ subagentModels: ["one", "two"], subagentModelsVersion: version });
     for (const config of [loadConfig(), readConfigDiagnostics().config]) {
       expect(config.subagentModelsVersion).toBe(version);
-      expect(migrateSubagentModels(config)).toBe(version !== 3);
-      expect(config.subagentModels).toEqual(version === undefined ? ["gpt-6-astra", "one", "two"] : ["one", "two"]);
+      expect(migrateSubagentModels(config)).toBe(version !== 4);
+      expect(config.subagentModels).toEqual(version === undefined ? ["gpt-6.2-astra", "one", "two"] : ["one", "two"]);
     }
   });
 
@@ -190,9 +202,9 @@ describe("subagent roster defaults and one-time upgrades", () => {
     const stale = loadConfig();
     saveConfig({ ...legacy, subagentModels: ["new", "gpt-5.5"], port: 23456, modelPickerOrder: undefined });
     const migrated = migrateStartupSubagentModels(stale);
-    expect(migrated.subagentModels).toEqual(["gpt-6-astra", "new"]);
+    expect(migrated.subagentModels).toEqual(["gpt-6.2-astra", "new"]);
     expect(loadConfig().subagentModels).toEqual(migrated.subagentModels);
-    expect(loadConfig().subagentModelsVersion).toBe(3);
+    expect(loadConfig().subagentModelsVersion).toBe(4);
     expect(loadConfig().port).toBe(23456);
     // Another process loaded before the first upgrade; it must not shift again.
     expect(migrateStartupSubagentModels(legacy).subagentModels).toEqual(migrated.subagentModels);
@@ -210,7 +222,7 @@ describe("subagent roster defaults and one-time upgrades", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       const migrated = migrateStartupSubagentModels(legacy);
-      expect(migrated.subagentModels).toEqual(["gpt-6-astra", "one"]);
+      expect(migrated.subagentModels).toEqual(["gpt-6.2-astra", "one"]);
       expect(readFileSync(getConfigPath(), "utf8")).toBe("{ invalid");
       expect(warn).toHaveBeenCalled();
     } finally {
@@ -228,7 +240,7 @@ describe("subagent roster defaults and one-time upgrades", () => {
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
       const migrated = migrateStartupSubagentModels(legacy);
-      expect(migrated.subagentModels).toEqual(["gpt-6-astra", "one"]);
+      expect(migrated.subagentModels).toEqual(["gpt-6.2-astra", "one"]);
       expect(readFileSync(getConfigPath(), "utf8")).toBe(before);
       expect(warn).toHaveBeenCalledWith("[subagent-models-migration] Persistence failed; using the upgraded roster in memory only.");
     } finally {

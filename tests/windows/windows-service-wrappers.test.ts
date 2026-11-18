@@ -129,17 +129,18 @@ describe("the generated script still implements that rule", () => {
   });
 });
 
-describe("both teardown paths use the shared killer", () => {
-  test("neither file keeps a private matcher", () => {
-    for (const rel of ["src/service/windows-ops.ts", "src/update/job-windows-restart.ts"]) {
+describe("every teardown path ends wrappers through the checked stop (#7771)", () => {
+  test("no stop path keeps a private matcher or the best-effort sweep", () => {
+    for (const rel of ["src/service/windows-ops.ts", "src/service/orchestration.ts", "src/update/job-windows-restart.ts", "src/update/guarded-runtime-ops.ts"]) {
       const src = read(rel);
-      if (rel === "src/update/job-windows-restart.ts") {
-        expect(src).toContain("killWindowsServiceWrapperProcesses(authorizeMutation);");
-        expect(src).toMatch(/const paths = \{[\s\S]*?scriptPath: join\(getConfigDir\(\), "opencodex-service.cmd"\),[\s\S]*?launcherPath: join\(getConfigDir\(\), "opencodex-service-launcher.vbs"\),\s*\};\s*if \(!authorizeMutation\("service"\)\) return;\s*guardedKillWindowsWrappers\(authorizeMutation, paths\);/);
-      } else expect(src).toContain("killWindowsSchedulerWrappers({");
+      expect(src).not.toContain("killWindowsSchedulerWrappers");
+      expect(src).not.toContain("killWindowsServiceWrapperProcesses");
       expect(src).not.toContain("-like ('*' + $p + '*')");
       expect(src).not.toContain("$pats = @('opencodex-service.cmd'");
     }
+    // The one matcher is the binding rule; the service stop and the updater reach it through Part A.
+    expect(read("src/service/orchestration.ts")).toContain("runWindowsServiceStopPartA(request)");
+    expect(read("src/update/guarded-runtime-ops.ts")).toContain("runWindowsServiceStopPartA({ authorize: mutationGate(authorize, \"service\"), allowUnderOwnWrapper: true })");
   });
 });
 

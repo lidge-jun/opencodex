@@ -26,7 +26,7 @@ import { parseDataUrl } from "./image";
 import { enforceAnthropicImageLimits } from "./anthropic-image-guard";
 import { normalizeAnthropicImages } from "./anthropic-image-normalize";
 import { normalizeAnthropicOutputSchema } from "./anthropic-output-schema";
-import { stripResponsesOnlyEncryptedMarker } from "./responses-tool-schema";
+import { normalizeAnthropicInputSchema } from "./anthropic-input-schema";
 import { identifyRoutedModel } from "./identity";
 import { redactSecretString } from "../lib/redact";
 import { CLAUDE_CODE_HEADERS, claudeCodeSessionId } from "./client-fingerprint";
@@ -41,6 +41,8 @@ import { resolveReasoningCapabilities } from "../providers/reasoning-capabilitie
 import { declaresThinkingToggleWire, reasoningControlsAreUnsupported } from "./reasoning-controls";
 import { applyAgentRouterLanguageFraming, isAgentRouterEndpoint } from "./agentrouter";
 import { anthropicCacheWrite1hTokens, resolveAnthropicCacheRetention, type AnthropicCacheRetention } from "./anthropic/cache-retention";
+import { advisorServerExchange, advisorServerToolDestination, planAnthropicServerTools } from "./anthropic/advisor-tool";
+import { applyAnthropicPerMessageEffort } from "./anthropic/per-message-effort";
 import { claudeFamilyVersion, rejectsCombinedSampling, rejectsForcedToolChoice, rejectsSamplingParameters, supportsExplicitThinkingDisable, usesAdaptiveThinking, usesBetweenToolsFloor } from "./anthropic-model-contract";
 
 /** Map a user content part to an Anthropic content block (text or image source). */
@@ -958,77 +960,16 @@ function toolsToAnthropicFormat(parsed: OcxParsedRequest, toolNames: { toWire: (
 }
 
 /**
- * Appends the Claude client's typed web tools (`parsed._anthropicServerTools`) so Anthropic runs
- * them server-side. A same-named function tool wins: the web-search sidecar's `web_search` keeps
- * priority, and Anthropic rejects duplicate tool names.
+ * Appends the Claude client's typed server tools this destination receives
+ * (`planAnthropicServerTools`) so Anthropic runs them server-side. A same-named function tool
+ * wins: the web-search sidecar's `web_search` and the proxy Advisor's `advisor` keep priority,
+ * and Anthropic rejects duplicate tool names.
  */
-function withAnthropicServerTools(tools: unknown[] | undefined, parsed: OcxParsedRequest): unknown[] | undefined {
-  const serverTools = parsed._anthropicServerTools?.filter(t => !parsed.context.tools?.some(f => f.name === t.name));
-  if (!serverTools?.length) return tools;
+function withAnthropicServerTools(tools: unknown[] | undefined, parsed: OcxParsedRequest, declared: readonly Record<string, unknown>[]): unknown[] | undefined {
+  const serverTools = declared.filter(t => !parsed.context.tools?.some(f => f.name === t.name));
+  if (!serverTools.length) return tools;
   // The caller's breakpoints are dropped on this lane; applyPromptCaching places its own.
   return [...(tools ?? []), ...serverTools.map(t => ({ ...t, cache_control: undefined }))];
-}
-
-function normalizeAnthropicInputSchema(schema: unknown): Record<string, unknown> {
-  const stripped = stripResponsesOnlyEncryptedMarker(schema);
-  const obj = stripped && typeof stripped === "object" && !Array.isArray(stripped)
-    ? stripped as Record<string, unknown>
-    : {};
-  // Anthropic rejects root-level missing type and oneOf/anyOf/allOf in input_schema.
-  // Normalize the root only: ensure type:"object" + properties, flatten root composition
-  // while preserving nested schemas. Mirrors kiro-tools.ts ensureRootObjectType.
-  // Known limitation: Object.assign on branch properties means later branches overwrite
-  // earlier ones when the same property name appears with different schemas.
-  const compositionKeys = ["oneOf", "anyOf", "allOf"] as const;
-  const hasRootComposition = compositionKeys.some(key => Array.isArray(obj[key]));
-  const type = obj.type;
-  const rootObjectType = type === "object" || (Array.isArray(type) && type.includes("object"));
-
-  if (!hasRootComposition) {
-    const normalized: Record<string, unknown> = rootObjectType && type === "object"
-      ? { ...obj }
-      : { ...obj, type: "object" };
-    if (normalized.properties === undefined || normalized.properties === null) {
-      normalized.properties = {};
-    }
-    return normalized;
-  }
-
-  const properties: Record<string, unknown> = {};
-  const required = new Set<string>();
-  if (obj.properties && typeof obj.properties === "object" && !Array.isArray(obj.properties)) {
-    Object.assign(properties, obj.properties as Record<string, unknown>);
-  }
-  if (Array.isArray(obj.required)) {
-    for (const item of obj.required) if (typeof item === "string") required.add(item);
-  }
-
-  for (const key of compositionKeys) {
-    const variants = obj[key];
-    if (!Array.isArray(variants)) continue;
-    const mergeRequired = key === "allOf";
-    for (const variant of variants) {
-      if (!variant || typeof variant !== "object" || Array.isArray(variant)) continue;
-      const v = variant as Record<string, unknown>;
-      if (v.properties && typeof v.properties === "object" && !Array.isArray(v.properties)) {
-        Object.assign(properties, v.properties as Record<string, unknown>);
-      }
-      if (mergeRequired && Array.isArray(v.required)) {
-        for (const item of v.required) if (typeof item === "string") required.add(item);
-      }
-    }
-  }
-
-  const normalized: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(obj)) {
-    if (key === "oneOf" || key === "anyOf" || key === "allOf") continue;
-    if (key === "type" || key === "properties" || key === "required") continue;
-    normalized[key] = value;
-  }
-  normalized.type = "object";
-  normalized.properties = properties;
-  if (required.size > 0) normalized.required = [...required];
-  return normalized;
 }
 
 export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetention?: "none" | "short" | "long"): ProviderAdapter {
@@ -1048,9 +989,12 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         throw new Error("anthropic provider requires a non-empty apiKey (authMode: key)");
       }
 
-      // Only api.anthropic.com runs Anthropic's server tools, so only it gets their history back.
+      // Only api.anthropic.com runs Anthropic's web tools, so only it gets their history back; the
+      // Advisor also reaches a gateway that opted in with forwardAdvisorTool (advisor-tool.ts).
+      const serverToolPlan = planAnthropicServerTools(provider, parsed._anthropicServerTools, parsed._anthropicServerReplay,
+        new Set(parsed.context.tools?.map(tool => tool.name)), usesNativeAnthropicEndpoint(provider));
       const { system, messages } = messagesToAnthropicFormat(parsed, toolNames,
-        usesNativeAnthropicEndpoint(provider) ? parsed._anthropicServerReplay : undefined);
+        serverToolPlan.replay);
       // Before image normalization, so the framing block is present for every downstream pass.
       if (isAgentRouterEndpoint(provider.baseUrl)) applyAgentRouterLanguageFraming(messages);
       // Primary image layer: resize/re-encode to fit Anthropic limits without dropping
@@ -1065,7 +1009,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       enforceAnthropicImageLimits(messages);
       const converted = toolsToAnthropicFormat(parsed, toolNames);
       // A third-party Anthropic-compatible endpoint may not implement Anthropic's server tools.
-      const tools = usesNativeAnthropicEndpoint(provider) ? withAnthropicServerTools(converted, parsed) : converted;
+      const tools = withAnthropicServerTools(converted, parsed, serverToolPlan.declared);
 
       // Codex never sends `max_output_tokens`, so the omitted-limit default decides how
       // long a Claude answer may run. Honor the provider's configured output budget
@@ -1300,7 +1244,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       if (isOAuth) applyAnthropicOAuthAuth(headers, provider.apiKey, resolveTranslatedAnthropicSessionKey(parsed, incoming));
       else applyAnthropicKeyAuth(headers, provider);
       if (provider.headers) Object.assign(headers, provider.headers);
-      mergeAnthropicBetaHeader(headers, [...(fastSpeed?.betas ?? []), ...(progressUpdates ? ["thinking-display-updates-2026-08-18"] : [])]);
+      mergeAnthropicBetaHeader(headers, [...(fastSpeed?.betas ?? []), ...(progressUpdates ? ["thinking-display-updates-2026-08-18"] : []), ...serverToolPlan.betas]);
 
       // Prompt caching: native Anthropic supports top-level automatic caching, which
       // follows the moving final block across turns. Keep one breakpoint slot free for it.
@@ -1315,6 +1259,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       });
       enforceCacheControlLimit(body, explicitLimit);
       normalizeTtlOrdering(body);
+      // Experimental, default off (#6895): pin the top-level effort and carry changes as effort messages.
+      applyAnthropicPerMessageEffort({ provider, parsed, incoming, body, headers, url, isOAuth, chatLineage: resolveTranslatedAnthropicSessionKey(parsed, incoming) });
 
       const request = {
         url,
@@ -1354,8 +1300,8 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       let pendingStopReason: string | undefined;
       let emittedDone = false;
       let sawVisibleText = false;
-      /** The open server-side web_search / web_fetch call, until its result block. */
-      let serverSearch: { id: string; json: string; streaming: boolean } | undefined;
+      /** The open server-side web_search / web_fetch / advisor call, until its result block. */
+      let serverSearch: { id: string; name: string; json: string; streaming: boolean } | undefined;
 
       const emitDone = function* (): Generator<AdapterEvent> {
         if (emittedDone) return;
@@ -1447,11 +1393,23 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
                   budget.openCall(currentToolCallId);
                   yield { type: "tool_call_start", id: currentToolCallId, name: currentToolCallName };
                 }
-                if (block.type === "server_tool_use" && (block.name === "web_search" || block.name === "web_fetch") && typeof block.id === "string") {
+                if (block.type === "server_tool_use" && (block.name === "web_search" || block.name === "web_fetch" || block.name === "advisor") && typeof block.id === "string") {
                   // Only the input (query / url) is collected here (input_json_delta below). The cell
                   // opens at its result: a call Anthropic defers beside a client tool_use has
                   // no result in this response and must not surface as a completed search.
-                  serverSearch = { id: block.id, json: "", streaming: true };
+                  serverSearch = { id: block.id, name: block.name, json: "", streaming: true };
+                }
+                if (block.type === "advisor_tool_result") {
+                  // The Advisor rides the same lane: both blocks verbatim, keyed by the upstream srvtoolu_ id.
+                  // Only a destination that receives the Advisor may surface one, so a gateway never sent
+                  // it cannot plant an exchange that a later first-party turn would replay.
+                  const exchange = advisorServerToolDestination(provider)
+                    ? advisorServerExchange(serverSearch, block as Record<string, unknown>) : undefined;
+                  if (!exchange) break;
+                  yield { type: "web_search_call_begin", id: exchange.blocks.use.id as string };
+                  yield { type: "web_search_call_end", id: exchange.blocks.use.id as string, queries: [],
+                    status: exchange.completed ? "completed" : "failed", anthropic: exchange.blocks };
+                  serverSearch = undefined;
                 }
                 if ((block.type === "web_search_tool_result" || block.type === "web_fetch_tool_result") && typeof block.tool_use_id === "string") {
                   // The begin/end pair the sidecar emits, plus both blocks verbatim so the Claude client holds a

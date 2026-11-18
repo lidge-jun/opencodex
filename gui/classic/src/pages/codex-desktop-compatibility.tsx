@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useI18n } from "../i18n/shared";
 import { createBoundedFetch, type BoundedFetch } from "../bounded-fetch";
-import { CompatibilityApiError, readCompatibilityCertificate, readCompatibilityRuntime, readCompatibilitySnapshot, runCompatibilityAction, validateCompatibilityPairing,
+import { CompatibilityApiError, readCompatibilityCertificate, readCompatibilityRuntime, readCompatibilitySnapshot, readCompatibilityStartupSettings, readDesktopAuthorization, runCompatibilityAction,
   type CompatibilityAction, type CompatibilitySnapshot } from "../desktop-compatibility-api";
 import { setClientResourceData, useClientResource } from "../client-resource";
 import DesktopCompatibilityStartupSetting from "./desktop-compatibility-startup-setting";
-import { ConnectPairingForm } from "../connect-pairing";
-import { standaloneApiTargets } from "../api-targets";
+// The overlay keeps only this page in its snapshot; the step-up itself is the current dashboard's
+// component, so the grant exchange has one implementation and this UI cannot drift from it.
+import DesktopCompatibilityAuthorization from "./desktop-compatibility-authorization";
 import { SESSION_CHANGED_EVENT } from "../api";
 
 const label = { prepare: "desktopCompat.prepare", trust: "desktopCompat.trust", "remove-trust": "desktopCompat.remove", renew: "desktopCompat.renew",
   start: "desktopCompat.start", stop: "desktopCompat.stop", launch: "desktopCompat.launch", observe: "desktopCompat.observe", apply: "desktopCompat.apply" } as const;
 const errorLabel = { build_unverified: "desktopCompat.blockedByBuild", egress_proxy_invalid: "desktopCompat.blockedByProxy",
+  desktop_authorization_required: "desktopCompat.authorizeHint",
   renewal_required: "desktopCompat.renew",
   native_routing_unverified: "desktopCompat.routingChanged",
   connection_unavailable: "desktopCompat.connectionUnavailable", connection_invalid: "desktopCompat.connectionUnavailable", connection_changed: "desktopCompat.connectionUnavailable",
@@ -22,8 +24,16 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
   const [needsRefresh, setNeedsRefresh] = useState(false), [mutating, setMutating] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null), [done, setDone] = useState(false);
   const [choice, setChoice] = useState<CompatibilityAction | null>(null), [acknowledged, setAcknowledged] = useState(false);
-  const [authorizationCurrent, setAuthorizationCurrent] = useState(true), [pairingStarted, setPairingStarted] = useState(false);
+  const [authorizationCurrent, setAuthorizationCurrent] = useState(true);
   const lifecycle = useRef({ alive: true, pending: false, generation: 0, operations: new Set<BoundedFetch>() });
+  // Desktop mutation authority is the one-use grant scope, never `certificate.mutationAuthorized`
+  // alone: ordinary pairing cannot issue it, so the old pairing form left every action refused.
+  const authorizationKey = `desktop-authorization:${apiBase}`;
+  const authorization = useClientResource(authorizationKey, signal => readDesktopAuthorization(apiBase, signal), { enabled: active, deadlineMs: 10000, staleAfterMs: 0, pollMs: 5000 });
+  const scopeAuthorized = authorization.lastAttemptOk && authorization.data?.authorized === true;
+  // A lost step-up invalidates the open confirmation instead of leaving a stale checkbox armed.
+  const [previousAuthorization, setPreviousAuthorization] = useState(scopeAuthorized);
+  if (previousAuthorization !== scopeAuthorized) { setPreviousAuthorization(scopeAuthorized); setChoice(null); setAcknowledged(false); }
   const certificateKey = `desktop-compatibility-certificate:${apiBase}`, runtimeKey = `desktop-compatibility-runtime:${apiBase}`;
   const certificate = useClientResource(certificateKey, signal => readCompatibilityCertificate(apiBase, signal), { enabled: active, deadlineMs: 15000, staleAfterMs: 0 });
   const runtime = useClientResource(runtimeKey, signal => readCompatibilityRuntime(apiBase, signal), { enabled: active, deadlineMs: 10000, staleAfterMs: 0, pollMs: 5000 });
@@ -32,7 +42,7 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
   const busy = mutating || certificate.loading || runtime.loading;
   const readError = certificate.error ?? runtime.error;
   const error = actionError ?? (readError ? readError instanceof CompatibilityApiError ? readError.code : "connection_unconfirmed" : null);
-  const authorized = certificate.data?.mutationAuthorized === true && authorizationCurrent && error !== "local_dashboard_confirmation_required";
+  const authorized = scopeAuthorized && authorizationCurrent;
   useEffect(() => {
     const current = lifecycle.current; current.alive = true;
     const expire = (event: Event) => {
@@ -47,7 +57,7 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
   }, []);
   const execute = useCallback(async (action?: CompatibilityAction) => {
     const current = lifecycle.current;
-    if (current.pending || (action && (!authorized || pairingStarted))) return;
+    if (current.pending || (action && !authorized)) return;
     current.pending = true; const generation = ++current.generation;
     setMutating(true); setActionError(null); setDone(false); setNeedsRefresh(true);
     const op = createBoundedFetch(action ? 140000 : 15000); current.operations.add(op);
@@ -59,12 +69,32 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
         setNeedsRefresh(false); setAuthorizationCurrent(true); setDone(!!action); setChoice(null); setAcknowledged(false);
       }
     } catch (cause) {
-      if (current.alive && current.generation === generation) { setActionError(cause instanceof CompatibilityApiError ? cause.code : "connection_unconfirmed"); setChoice(null); setAcknowledged(false); }
+      if (current.alive && current.generation === generation) {
+        setActionError(cause instanceof CompatibilityApiError ? cause.code : "connection_unconfirmed"); setChoice(null); setAcknowledged(false);
+        // A refused mutation means the scope is gone; the panel shows that state instead of
+        // keeping authority it merely hoped for.
+        if (cause instanceof CompatibilityApiError && cause.code === "desktop_authorization_required") setClientResourceData(authorizationKey, { supported: true, authorized: false });
+      }
     } finally {
       current.operations.delete(op); op.clear();
       if (current.generation === generation) { current.pending = false; if (current.alive) setMutating(false); }
     }
-  }, [apiBase, certificateKey, runtimeKey, authorized, pairingStarted]);
+  }, [apiBase, certificateKey, runtimeKey, authorizationKey, authorized]);
+
+  // After a consumed grant: re-read the snapshot and the scope the server actually granted. The
+  // POST result alone is not consent for anything.
+  async function authorizedFresh() {
+    setChoice(null); setAcknowledged(false); setDone(false); setNeedsRefresh(true);
+    const op = createBoundedFetch(15000); lifecycle.current.operations.add(op);
+    try {
+      const settings = await readCompatibilityStartupSettings(apiBase, op.signal);
+      if (!lifecycle.current.alive) return;
+      setClientResourceData(`desktop-compatibility-startup:${apiBase}`, settings);
+      await execute();
+      const scope = await readDesktopAuthorization(apiBase, op.signal);
+      if (lifecycle.current.alive) setClientResourceData(authorizationKey, scope);
+    } finally { op.clear(); lifecycle.current.operations.delete(op); }
+  }
 
   const available = !!snapshot?.certificate.supported && !!snapshot.runtime.supported;
   const idle = snapshot?.runtime.phase === "off" && !snapshot.certificate.busy;
@@ -87,11 +117,10 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
     <h2>{t("desktopCompat.title")}</h2>
     <p className="muted text-body">{t("desktopCompat.description")}</p>
     <p className="muted text-control">{t("desktopCompat.localOnly")}</p>
-    <DesktopCompatibilityStartupSetting apiBase={apiBase} active={active} authorized={authorized && !pairingStarted && !needsRefresh} />
-    {certificate.data?.supported && (!authorized || pairingStarted) && <ConnectPairingForm local target={standaloneApiTargets(apiBase).machine}
-      onPairingStart={() => { setPairingStarted(true); setChoice(null); setAcknowledged(false); setDone(false); }}
-      onConnected={signal => validateCompatibilityPairing(apiBase, signal)}
-      onCommitted={() => { setPairingStarted(false); void execute(); }} />}
+    {authorization.data?.supported === false && <p className="notice-warn" role="status">{t("desktopCompat.authorizationUnavailable")}</p>}
+    {authorization.data?.supported && authorization.data.rememberedSession && <p className="notice-warn" role="status">{t("desktopCompat.rememberedSession")}</p>}
+    {authorization.data?.supported && !authorization.data.rememberedSession && <DesktopCompatibilityAuthorization apiBase={apiBase} authorized={authorized} onAuthorized={authorizedFresh} />}
+    <DesktopCompatibilityStartupSetting apiBase={apiBase} active={active} authorized={authorized && !needsRefresh} />
     <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => void execute()}>{busy ? t("common.loading") : t("desktopCompat.refresh")}</button>
     {error && <div className="notice-err" role="alert"><p>{t(error in errorLabel ? errorLabel[error as keyof typeof errorLabel] : "desktopCompat.error")}</p><code>{error}</code></div>}
     {done && <p className="notice-ok" role="status">{t("desktopCompat.done")}</p>}
@@ -119,13 +148,13 @@ function CompatibilityPanel({ apiBase, active }: { apiBase: string; active: bool
       })}</p>}
     </>}
     <div className="row" style={{ flexWrap: "wrap", gap: "var(--space-2)" }}>
-      {actions.map(action => <button key={action.action} type="button" className="btn btn-ghost" disabled={busy || !fresh || !authorized || pairingStarted}
+      {actions.map(action => <button key={action.action} type="button" className="btn btn-ghost" disabled={busy || !fresh || !authorized}
         onClick={() => {
           if (["trust", "remove-trust", "renew", "apply"].includes(action.action)) { setChoice(action); setAcknowledged(false); setDone(false); }
           else void execute(action);
         }}>{t(label[action.action])}</button>)}
     </div>
-    {choice && <fieldset disabled={busy || !authorized || pairingStarted}>
+    {choice && <fieldset disabled={busy || !authorized}>
       <legend>{t(label[choice.action])}</legend>
       <p className="notice-warn">{t(choice.action === "apply" ? "desktopCompat.trialRisk" : "desktopCompat.risk")}</p>
       {choice.action === "apply" && <p className="muted text-control">{t("desktopCompat.cacheRefreshHint")}</p>}

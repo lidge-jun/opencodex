@@ -26,8 +26,8 @@ function replaceOnce(source: string, needle: string, replacement: string): strin
   for (const path of changed) {
     let source = base ? git("show", `72e80d280:${path}`) : readFileSync(repoPath(path), "utf8");
     if (path === "src/server/claude-messages.ts") source = replaceOnce(source,
-      "const upstream = await handleResponses(internalReq, {",
-      "const upstream = globalThis.__messagesReplayResponse ? globalThis.__messagesReplayResponse() : await handleResponses(internalReq, {");
+      "const upstream = await handleResponses(internalReq, ",
+      "const upstream = globalThis.__messagesReplayResponse ? globalThis.__messagesReplayResponse() : await handleResponses(internalReq, ");
     if (path === "src/server/claude-messages.ts") source = replaceOnce(source,
       "message = await collectAnthropicMessage(anthropicSse,",
       "if (globalThis.__messagesCollectorStream) await anthropicSse.cancel();\n      message = await collectAnthropicMessage(globalThis.__messagesCollectorStream ?? anthropicSse,");

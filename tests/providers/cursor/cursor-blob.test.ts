@@ -967,7 +967,7 @@ describe("Cursor blob handshake", () => {
     expect(serialized).not.toContain("[tool_result]");
   });
 
-  test("native Auto Intelligence omits assistant-role [Tool Result] root replay", () => {
+  test("native Auto Intelligence keeps resumeAction and the paired MCP turn, and replays the result as root text (#8538)", () => {
     const bytes = encodeCursorRunRequest({
       modelId: "auto-intelligence",
       conversationId: "c-auto-intel",
@@ -989,9 +989,9 @@ describe("Cursor blob handshake", () => {
     expect(run?.action?.action.case).toBe("resumeAction");
     const roots = decodeRootMessages(bytes) as Array<{ role?: string; content?: unknown }>;
     const serialized = JSON.stringify(roots);
-    expect(roots.some(root => root.role === "assistant")).toBe(false);
-    expect(serialized).not.toContain("[Tool Result]");
-    expect(serialized).not.toContain("[tool_result]");
+    expect(roots.some(root => root.role === "assistant")).toBe(true);
+    expect(serialized).toContain("[Tool Result]");
+    expect(serialized).toContain("contents");
     expect(serialized).toContain("read a file");
     const turnIds = run?.conversationState?.turns ?? [];
     expect(turnIds).toHaveLength(1);

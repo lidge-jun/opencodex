@@ -30,7 +30,24 @@ export type GuardedManagerTarget =
        */
       childNeedsSeparateStop: boolean;
     }
-  | { kind: "unknown"; reason: string };
+  | {
+      /**
+       * Windows only (#7771): the registered OpenCodex task is not running, but wrappers
+       * that the checked stop's binding rule ties to the approved PID survive. Provable,
+       * so it reaches Part A; revalidation compares the bound wrapper set.
+       */
+      kind: "bound-stray";
+      pid: number;
+      backend: "scheduler";
+      wrappers: { pid: number; startTime: number }[];
+      childNeedsSeparateStop: true;
+    }
+  | {
+      kind: "unknown";
+      reason: string;
+      /** The additive ocx-stop/1 serviceStopReason when the binding rule names one. */
+      stopReason?: "unbound-wrapper" | "evidence-unreadable";
+    };
 
 export type GuardedManagerStopped = "inactive" | "active" | "unknown";
 

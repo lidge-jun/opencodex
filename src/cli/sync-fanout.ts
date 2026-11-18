@@ -1,105 +1,30 @@
-import { compareStrictSemver, parseStrictSemver } from "../lib/strict-semver";
 import type { LinkRecord, LinkStore } from "../link/store";
-import type { LinkStatusDto } from "../link/status-projection";
+import type { ChildRestartRequest } from "../link/ssh-argv";
+import type { SyncThenRestart } from "../link/sync-then-restart";
+import type { LinkStatusPayload } from "./link";
 import { LinkStatusError } from "./sync-link-status";
+import { childSkipHint } from "../link/sync-fanout-classify";
 
-export const REMOTE_LINK_SYNC_MESSAGE = "Remote Link Home catalog synchronized.";
-export const STALE_REMOTE_CATALOG_MESSAGE = "Home unavailable; retained and applied the last-known-good remote catalog (stale).";
+export { classifySyncResult, classifyVersionProbe, parseOcxVersion, REMOTE_LINK_SYNC_MESSAGE,
+  STALE_REMOTE_CATALOG_MESSAGE, type ChildVerdict } from "../link/sync-fanout-classify";
 export const SYNC_FANOUT_PARTIAL_EXIT = 6;
-
-export type ChildVerdict = { state: "synced" | "skipped" | "failed"; reason: string | null };
-const failure = (reason: string): ChildVerdict => ({ state: "failed", reason });
-const skipped = (reason: string): ChildVerdict => ({ state: "skipped", reason });
-const minimum = parseStrictSemver("2.93.0")!;
-
-export function parseOcxVersion(output: string): string | null {
-  const version = output.trim().replace(/^opencodex /, "");
-  return parseStrictSemver(version) ? version : null;
-}
-
-export function classifyVersionProbe(output: string): "child-ocx-version-unknown" | "child-ocx-lacks-expect-link" | null {
-  const version = parseOcxVersion(output);
-  if (!version) return "child-ocx-version-unknown";
-  return compareStrictSemver(parseStrictSemver(version)!, minimum) < 0 ? "child-ocx-lacks-expect-link" : null;
-}
-
-const mismatchReasons = new Set(["disconnected", "invalid_state", "disconnect_pending", "pending_operation", "hub_client", "link_client", "other_link", "other_key"]);
-
-function validDocument(value: unknown): "synced" | "stale" | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const v = value as Record<string, unknown>;
-  const keysAre = (object: Record<string, unknown>, keys: readonly string[]): boolean => Object.keys(object).length === keys.length && keys.every(key => Object.hasOwn(object, key));
-  if (!keysAre(v, ["schema", "home", "fanout", "children"])) return null;
-  if (v.schema !== "ocx.sync.fanout/1" || !v.home || typeof v.home !== "object" || Array.isArray(v.home)
-      || !v.fanout || typeof v.fanout !== "object" || Array.isArray(v.fanout) || !Array.isArray(v.children)) return null;
-  const home = v.home as Record<string, unknown>, fanout = v.fanout as Record<string, unknown>;
-  if (!keysAre(home, ["state", "exit"]) || !keysAre(fanout, ["state", "reason"])) return null;
-  if (home.exit !== 0 || (home.state !== "synced" && home.state !== "stale")) return null;
-  if (fanout.state !== "not-applicable" || fanout.reason !== null || v.children.length !== 0) return null;
-  return home.state;
-}
-
-export function classifySyncResult(result: { code: number; stdout: string; stderr: string }): ChildVerdict {
-  const { code, stdout, stderr } = result;
-  if (code === 255) return failure("ssh-failed");
-  if (code === 127) return failure("child-ocx-not-found");
-  if (code === 126) return failure("child-ocx-not-contained");
-  if (code === 125) return skipped("child-platform-unsupported");
-  const lines = stderr.split(/\r?\n/);
-  const last = stderr.trimEnd().split(/\r?\n/).at(-1);
-  if (code === 121) {
-    if (last === "ocx-fanout:child-ocx-lacks-expect-link") return skipped("child-ocx-lacks-expect-link");
-    if (last === "ocx-fanout:child-ocx-version-unknown") return skipped("child-ocx-version-unknown");
-    return failure("child-sync-failed");
-  }
-  const markers = lines.map(line => /^ocx-fanout:selected:(.+)$/.exec(line)).filter(match => match !== null);
-  if (markers.length !== 1 || !parseStrictSemver(markers[0]![1]!)) return failure("child-output-invalid");
-  const outputLines = stdout.split(/\r?\n/);
-  const delimiters = outputLines.flatMap((line, index) => line === "ocx-fanout:stdout-begin" ? [index] : []);
-  if (delimiters.length !== 1) return failure("child-output-invalid");
-  if (code === 5) {
-    try {
-      const detail: unknown = JSON.parse(last ?? "");
-      if (detail && typeof detail === "object" && "phase" in detail && detail.phase === "child_link_mismatch"
-          && "reason" in detail && typeof detail.reason === "string" && mismatchReasons.has(detail.reason)) return skipped(`child-link-mismatch:${detail.reason}`);
-    } catch { /* The generic mismatch is the only safe fallback. */ }
-    return skipped("child-link-mismatch");
-  }
-  if (code === 7) return skipped("child-updating");
-  if (code !== 0) return failure("child-sync-failed");
-  const text = outputLines.slice(delimiters[0]! + 1).join("\n").trim();
-  if (text.startsWith("{")) {
-    try {
-      const state = validDocument(JSON.parse(text));
-      if (state === "synced") return { state: "synced", reason: null };
-      if (state === "stale") return failure("child-catalog-stale");
-    } catch { /* Reject invalid or multiple JSON documents. */ }
-    return failure("child-output-invalid");
-  }
-  if (text.includes(STALE_REMOTE_CATALOG_MESSAGE)) return failure("child-catalog-stale");
-  if (text.includes(REMOTE_LINK_SYNC_MESSAGE)) return { state: "synced", reason: null };
-  return failure("child-output-invalid");
-}
 
 export type HomeResult = { state: "synced" | "stale" | "skipped" | "failed"; exit: number };
 export type ChildResult = { linkId: string; alias: string; state: "synced" | "skipped" | "failed" | "timed-out"; reason: string | null; exit: number | null; hint?: string };
 export type FanoutDocument = { schema: "ocx.sync.fanout/1"; home: HomeResult; fanout: { state: "ran" | "disabled" | "not-applicable" | "failed"; reason: string | null }; children: ChildResult[] };
-
-function childSkipHint(reason: string | null, alias: string): string {
-  if (reason === "child-ocx-lacks-expect-link") return `Update OpenCodex on ${alias} to >= 2.93.0 using the installer that owns its selected ocx. For Desktop on headless Windows, use Check for Updates in the signed-in Desktop tray.`;
-  if (reason === "child-updating") return "Wait for the Child update to finish, then retry sync.";
-  if (reason === "child-link-mismatch:pending_operation" || reason === "child-link-mismatch:disconnect_pending") return "Wait for the Child's link operation to finish, then check its link and retry sync.";
-  if (reason === "child-link-mismatch:disconnected" || reason === "child-link-mismatch:other_link") return "Please re-link this Child to this Home, then retry sync.";
-  if (reason?.startsWith("child-link-mismatch")) return "Check the Child's Remote Link connection and re-link it to this Home if needed, then retry sync.";
-  if (reason === "child-ocx-version-unknown") return "Check the Child's selected OpenCodex installation and version, then retry sync.";
-  if (reason === "child-platform-unsupported") return "Check the Child's platform and Remote Link setup before retrying sync.";
-  return "Check the Child's sync status and retry sync.";
-}
+/** The reason on a synced row whose requested restart did not certainly happen (040 decision 1). Each one exits 6. */
+export type RestartNote = "restart-skipped:link-active" | "restart-skipped:activity-unknown" | "restart-skipped:windows"
+  | "restart-unsupported:ocx-child" | "restart-not-run" | "restart-result-unknown";
+/** readActivity: a fresh status read for this link; null when unknown (D5: unknown is never idle). */
+export type ChildRunOptions = { restart?: ChildRestartRequest; readActivity: () => Promise<{ inFlight: number } | null> };
 
 export async function runHomeFanout(deps: {
   home: HomeResult; catalogCurrent: boolean; localOnly?: boolean; applicable?: boolean;
-  readStore: () => LinkStore; readLinkStatus: () => Promise<LinkStatusDto>;
-  runChild: (link: LinkRecord, deadline: number) => Promise<Omit<ChildResult, "linkId" | "alias">>;
+  /** null or absent: every link. Otherwise only these ids run; the rest read skipped/not-selected. */
+  selected?: ReadonlySet<string> | null;
+  restartChildren?: ChildRestartRequest | null;
+  readStore: () => LinkStore; readLinkStatus: () => Promise<LinkStatusPayload>;
+  runChild: (link: LinkRecord, deadline: number, options: ChildRunOptions) => Promise<Omit<ChildResult, "linkId" | "alias">>;
   now?: () => number; deadlineMs?: number; concurrency?: number; terminationGraceMs?: number;
 }): Promise<FanoutDocument> {
   const result: FanoutDocument = { schema: "ocx.sync.fanout/1", home: deps.home, fanout: { state: deps.localOnly ? "disabled" : "not-applicable", reason: null }, children: [] };
@@ -109,17 +34,21 @@ export async function runHomeFanout(deps: {
   if (!store.links.length) return result;
   result.fanout.state = "ran";
   const classify = (link: LinkRecord, state: ChildResult["state"], reason: string | null, exit: number | null = null): ChildResult => ({ linkId: link.id, alias: link.alias, state, reason, exit });
-  result.children = store.links.map(link => classify(link, "skipped", link.direction === "client-initiated" ? "client-initiated-link" : "home-catalog-not-current"));
+  // Revision 6: selection is applied first in every branch, so an unselected link always reads not-selected.
+  const unselected = (link: LinkRecord): boolean => deps.selected != null && !deps.selected.has(link.id);
+  const rowFor = (link: LinkRecord, state: ChildResult["state"], reason: string | null): ChildResult =>
+    unselected(link) ? classify(link, "skipped", "not-selected") : classify(link, state, reason);
+  result.children = store.links.map(link => rowFor(link, "skipped", link.direction === "client-initiated" ? "client-initiated-link" : "home-catalog-not-current"));
   const skipReason = deps.home.state === "failed" || deps.home.exit !== 0 ? "home-sync-failed" : deps.home.state === "skipped" ? "home-sync-skipped" : !deps.catalogCurrent ? "home-catalog-not-current" : null;
   if (skipReason) {
-    result.children = store.links.map(link => classify(link, "skipped", link.direction === "client-initiated" ? "client-initiated-link" : skipReason));
+    result.children = store.links.map(link => rowFor(link, "skipped", link.direction === "client-initiated" ? "client-initiated-link" : skipReason));
     return result;
   }
-  let status: LinkStatusDto;
+  let status: LinkStatusPayload;
   try { status = await deps.readLinkStatus(); }
   catch (error) {
     const reason = error instanceof LinkStatusError ? error.reason : "home-link-status-unavailable";
-    result.children = store.links.map(link => link.direction === "client-initiated" ? classify(link, "skipped", "client-initiated-link") : classify(link, reason === "home-runtime-not-running" ? "skipped" : "failed", reason));
+    result.children = store.links.map(link => link.direction === "client-initiated" ? rowFor(link, "skipped", "client-initiated-link") : rowFor(link, reason === "home-runtime-not-running" ? "skipped" : "failed", reason));
     return result;
   }
   let cursor = 0;
@@ -128,20 +57,36 @@ export async function runHomeFanout(deps: {
       const index = cursor++;
       const link = store.links[index];
       if (!link) return;
-      if (link.direction === "client-initiated") continue;
+      if (unselected(link) || link.direction === "client-initiated") continue;
       const wire = status.links.find(row => row.id === link.id);
       if (!wire) { result.children[index] = classify(link, "skipped", "link-not-in-runtime"); continue; }
       if (wire.state !== "connected") { result.children[index] = classify(link, "skipped", `tunnel-${wire.state}`); continue; }
+      // A Child operation (wp2/wp3 job) holds this Child: an intentional skip, no hint, no exit 6.
+      if (wire.child?.activeJob) { result.children[index] = classify(link, "skipped", "child-busy"); continue; }
+      // Decision 3 / 4529522035: a fresh read per Child, never the first one; a failed read or a row without child is unknown.
+      let unknownCause: ActivityUnknownCause = "read-failed";
+      const readActivity = async (): Promise<{ inFlight: number } | null> => {
+        let fresh: LinkStatusPayload;
+        try { fresh = await deps.readLinkStatus(); } catch { unknownCause = "read-failed"; return null; }
+        const row = fresh.links.find(candidate => candidate.id === link.id);
+        if (!row) { unknownCause = "read-failed"; return null; }
+        if (!row.child) { unknownCause = "absent"; return null; }
+        return row.child.activity;
+      };
+      const options: ChildRunOptions = deps.restartChildren ? { restart: deps.restartChildren, readActivity } : { readActivity };
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const budget = deps.deadlineMs ?? 180_000;
         const child = await Promise.race([
-          deps.runChild(link, (deps.now ?? Date.now)() + budget),
+          deps.runChild(link, (deps.now ?? Date.now)() + budget, options),
           new Promise<Omit<ChildResult, "linkId" | "alias">>(resolve => {
             timer = setTimeout(() => resolve({ state: "timed-out", reason: "termination-unconfirmed", exit: null }), budget + (deps.terminationGraceMs ?? 3000));
           }),
         ]);
-        result.children[index] = { linkId: link.id, alias: link.alias, ...child, ...(child.state === "skipped" ? { hint: childSkipHint(child.reason, link.alias) } : {}) };
+        // Build the row from the schema's own fields, so an extra key on a runner's result never reaches ocx.sync.fanout/1.
+        const hint = child.state === "skipped" ? childSkipHint(child.reason, link.alias)
+          : child.state === "synced" && child.reason?.startsWith("restart-") ? childRestartHint(child.reason, link, deps.restartChildren ?? "app-server", unknownCause) : child.hint;
+        result.children[index] = { linkId: link.id, alias: link.alias, state: child.state, reason: child.reason, exit: child.exit, ...(hint === undefined ? {} : { hint }) };
       } catch { result.children[index] = classify(link, "failed", "internal-error"); }
       finally { if (timer !== undefined) clearTimeout(timer); }
     }
@@ -150,9 +95,46 @@ export async function runHomeFanout(deps: {
   return result;
 }
 
+/** Maps the shared sequence's result to a synced row's reason; null keeps the row as the sync reported it. */
+export function restartNote(done: SyncThenRestart<{ state: string; reason: string | null }>): RestartNote | null {
+  if (!done.restart) return null;
+  // Reached only after a successful plain sync; done.sync is then the restarting sync's verdict.
+  if (done.restartUnknown) return "restart-result-unknown";
+  // Any failed plain sync keeps its own row, including on Windows or ocx-child (those are checked first).
+  if (done.sync.state !== "synced") return null;
+  switch (done.withheld) {
+    case undefined: case "sync-failed": return null;
+    case "platform": return "restart-skipped:windows";
+    case "ocx-child": return "restart-unsupported:ocx-child";
+    case "activity-unknown": return "restart-skipped:activity-unknown";
+    case "link-active": return "restart-skipped:link-active";
+    case "second-not-run": return "restart-not-run";
+  }
+}
+
+type ActivityUnknownCause = "absent" | "read-failed";
+
+function childRestartHint(reason: string, link: LinkRecord, restart: ChildRestartRequest, cause: ActivityUnknownCause): string | undefined {
+  const retry = `ocx sync --child ${link.id} --restart-children${restart === "codex" ? "=codex --yes" : ""}`;
+  switch (reason as RestartNote) {
+    case "restart-skipped:link-active": return `A model request was running on ${link.alias}; its Codex was not restarted. Retry when it is idle: ${retry}.`;
+    case "restart-skipped:activity-unknown": return cause === "absent"
+      ? `This Home's OpenCodex runtime did not report ${link.alias}'s activity; restart or update it, then retry ${retry}.`
+      : `The Home could not read ${link.alias}'s activity (the status read failed or timed out); retry ${retry}.`;
+    case "restart-skipped:windows": return "Codex restarts over SSH are not supported on Windows Children; restart Codex on that machine.";
+    case "restart-unsupported:ocx-child": return "ocx-child does not restart Codex; restart the Codex app or its app-servers on that machine.";
+    case "restart-not-run": return `The restart was not sent to ${link.alias}; check its sync status and retry ${retry}.`;
+    case "restart-result-unknown": return `The restart was sent to ${link.alias} but its result is unknown; check Codex on that machine.`;
+    default: return undefined;
+  }
+}
+
 export function fanoutExitCode(document: FanoutDocument): number {
   if (document.home.exit !== 0) return document.home.exit;
-  return document.fanout.state === "failed" || document.children.some(child => child.state === "failed" || child.state === "timed-out" || (child.state === "skipped" && child.hint !== undefined)) ? SYNC_FANOUT_PARTIAL_EXIT : 0;
+  return document.fanout.state === "failed" || document.children.some(child => child.state === "failed" || child.state === "timed-out"
+    || (child.state === "skipped" && child.hint !== undefined)
+    // A requested restart that did not certainly happen (040 decision 2).
+    || (child.state === "synced" && child.reason?.startsWith("restart-") === true)) ? SYNC_FANOUT_PARTIAL_EXIT : 0;
 }
 
 export function renderFanoutJson(document: FanoutDocument): string { return JSON.stringify(document); }

@@ -421,6 +421,23 @@ describe("release pipeline contract", () => {
     expect(run(JSON.stringify("b".repeat(40))).exitCode).not.toBe(0);
     expect(run("null").exitCode).not.toBe(0);
     expect(run("").exitCode).not.toBe(0);
+    // A version npm is still processing reads as missing for minutes (2.100.1: ~15 min). The gate keeps
+    // reading for the whole bounded window and accepts the right head once it appears.
+    const dir = mkdtempSync(join(tmpdir(), "ocx-npm-lag-"));
+    try {
+      const lag = String.raw`
+        npm() { n=$(cat "$COUNTER" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$COUNTER"; [ "$n" -ge 35 ] || return 1; printf '%s\n' "$REGISTRY_HEAD"; }
+        timeout() { shift 2; "$@"; }
+        sleep() { echo "$1" >> "$SLEEPS"; }
+      `;
+      const late = Bun.spawnSync(["bash", "-e", "-c", lag + gate!.run!], {
+        cwd: repoPath(), env: { PATH: process.env.PATH ?? "/usr/bin:/bin", SOURCE_SHA: source, RELEASE_VERSION: "9.8.7",
+          REGISTRY_HEAD: JSON.stringify(source), COUNTER: join(dir, "n"), SLEEPS: join(dir, "s") }, stdout: "pipe", stderr: "pipe",
+      });
+      expect(late.exitCode, late.stderr.toString()).toBe(0);
+      expect(readFileSync(join(dir, "s"), "utf8").trim().split("\n")).toEqual(Array(34).fill("30"));
+    } finally { removeTreeWithRetry(dir); }
+    expect(release.jobs?.publish?.["timeout-minutes"]).toBeGreaterThanOrEqual(70);
   });
 
   test("OIDC publication uses only trusted workflow code and the verified tarball", () => {
@@ -500,6 +517,18 @@ describe("release pipeline contract", () => {
     const publish = release.jobs?.publish?.steps?.find(step => step.name === "Recheck source CI and service evidence")?.run;
     expect(verify).toBeDefined();
     expect(publish).toBe(verify);
+    // validate-dispatch answers the same gate before any runner packages (run 42951296881 packaged
+    // and then failed in verify-npm on missing service evidence), with the identical script.
+    const early = release.jobs?.["validate-dispatch"]?.steps?.find(step => step.name === "Require source CI and service evidence before packaging") as
+      { run?: string; env?: Record<string, string> } | undefined;
+    expect(early?.run).toBe(verify);
+    expect(early?.env).toMatchObject({
+      SOURCE_SHA: "${{ steps.source.outputs.source_sha }}",
+      RELEASE_VERSION: "${{ steps.version.outputs.version }}",
+    });
+    const earlySteps = release.jobs?.["validate-dispatch"]?.steps?.map(step => step.name) ?? [];
+    expect(earlySteps.indexOf("Require source CI and service evidence before packaging"))
+      .toBeGreaterThan(earlySteps.indexOf("Resolve release version"));
     const root = mkdtempSync(join(tmpdir(), "ocx-release-evidence-"));
     try {
       const calls = join(root, "calls"), source = "a".repeat(40), baseline = "b".repeat(40);
@@ -520,13 +549,16 @@ describe("release pipeline contract", () => {
           PATH: process.env.PATH ?? "/usr/bin:/bin", SOURCE_SHA: source, BASE_SHA: baseline, RELEASE_VERSION: "2.1.0",
           BASELINE: "yes", DRAFT: "false", REQUIRED: "true", CI_STATUS: "0", SERVICE_STATUS: "0", CALLS: calls, ...extra,
         }, stdout: "pipe", stderr: "pipe" });
-        return { code: result.exitCode, calls: readFileSync(calls, "utf8"), stderr: result.stderr.toString() };
+        return { code: result.exitCode, calls: readFileSync(calls, "utf8"), stderr: result.stderr.toString(), stdout: result.stdout.toString() };
       };
       const required = execute();
       expect(required.code, required.stderr).toBe(0);
       expect(required.calls).toContain(`check ${source}`);
       expect(required.calls).toContain(`service-range ${source} ${baseline}`);
       expect(required.calls).toContain(`service ${source}`);
+      const missing = execute({ SERVICE_STATUS: "1" });
+      expect(missing.code).not.toBe(0);
+      expect(missing.stdout).toContain(`gh workflow run service-lifecycle.yml --ref dev -f source_sha=${source}`);
       const unchanged = execute({ REQUIRED: "false" });
       expect(unchanged.code, unchanged.stderr).toBe(0);
       expect(unchanged.calls).not.toContain(`service ${source}`);

@@ -20,8 +20,10 @@ xAI Grok Imagine, so the model you're actually chatting with can still generate 
   The same `bridgeEnabled` flag does arm the separate Codex `/v1/images` relay so the built-in
   `image_gen` client can call Imagine with the Grok CLI grant — see
   [Built-in image generation](/guides/codex-integration/#built-in-image-generation-image_gen).
-  If that grant (or an xAI API key) is missing, `/v1/images` returns an error instead of
-  falling through to ChatGPT.
+  If an xAI provider exists but has neither that grant nor an API key, `/v1/images`
+  returns an error instead of falling through to ChatGPT. If no xAI provider exists,
+  the relay does not handle the request; normal image-provider selection can still
+  choose a configured ChatGPT image provider.
 
   The relay only owns the route when no image provider is configured: it runs when
   `images.bridgeEnabled` is `true` **and** `images.provider` is omitted. Setting
@@ -95,10 +97,7 @@ perspective, image generation works with any routed provider instead of silently
 ## Limitations
 
 - **Only xAI Grok Imagine is supported.** DALL-E and other image providers may be added later.
-- **Web search takes priority** on adapters that support the web-search sidecar loop. If both web
-  search and image generation are requested in the same turn, web-search runs and image
-  generation is skipped. Cursor/`runTurn` adapters cannot use that sidecar today, so the image
-  bridge may still run for those dual-tool turns.
+- **Web search takes priority** when the request is eligible for the web-search loop. If both web search and image generation are requested in an eligible turn, search runs and image generation is skipped. This includes eligible `runTurn` adapters such as Cursor through `runTurnWebSearchLoop`. The image bridge can handle a dual-tool turn only when web search is not eligible.
 - **xAI costs apply.** Image generation via xAI requires an active xAI subscription or API credits.
 - **Streaming only.** The bridge works by intercepting the SSE response stream; requests with
   `stream: false` are rejected with a 400 error.

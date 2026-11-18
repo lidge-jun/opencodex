@@ -63,7 +63,14 @@ export function buildQoderChildEnv(profile: QoderProfile, apiKey: string, system
     ...(systemPrompt ? { [promptEnv]: systemPrompt } : {}) };
 }
 
-/** Disable Qoder's built-in tools; only a request-scoped MCP catalog can be exposed. */
+/**
+ * Disable Qoder's built-in tools; only a request-scoped MCP catalog can be exposed.
+ *
+ * MCP lazy loading is switched off inline (#8704). Qoder defaults it on when no setting names it,
+ * and then calls its own `mcp_get`/`mcp_call`/`mcp_list` wrappers instead of the catalog tools,
+ * which the undeclared-tool guard rightly refuses. `--settings` is an explicit flag, so it
+ * still applies while `--setting-sources ""` keeps every settings file out.
+ */
 export function buildQoderArgs(parsed: OcxParsedRequest, provider: OcxProviderConfig): string[] {
   const args = [
     "-p",
@@ -74,6 +81,7 @@ export function buildQoderArgs(parsed: OcxParsedRequest, provider: OcxProviderCo
     "--setting-sources", "",
     "--max-turns", "1",
     "--no-session-persistence",
+    "--settings", JSON.stringify({ mcp: { lazyLoad: false } }),
     "--model", parsed.modelId,
   ];
   const effort = mapReasoningEffort(provider, parsed.modelId, parsed.options.reasoning);

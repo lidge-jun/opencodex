@@ -169,8 +169,10 @@ no proxy of this home is left running. A service that failed while the proxy hap
 satisfies the second and not the first, and it is exactly the case that may respawn the runtime a
 moment later. Nothing kills the child.
 
-A drain that does not complete within `DRAIN_DEADLINE` is **not** recorded as a drain. It becomes
-`DrainFailed`, and an unidentifiable runtime becomes `OwnershipUnknown`. A user's quit still
+A drain that does not complete within `runtime_stop::DEADLINE` (30 seconds; 75 on Windows, where the
+CLI's checked service stop needs longer, see [desktop supervision](ops/desktop-supervision.md)) is
+**not** recorded as a drain. It becomes `DrainFailed`, and an unidentifiable runtime becomes
+`OwnershipUnknown`. A user's quit still
 proceeds from either — refusing to close when the user asked is the worse answer, and a standing
 runtime is recoverable with `ocx stop`. A coordinated restart does not: coming back onto a runtime
 that was never stopped puts the user on the old version while they believe they upgraded. A runtime
@@ -190,6 +192,10 @@ runtime and it was wanted before the update **or** requested again while drainin
 sequence brings one back in recovery mode. A runtime already stopped from the tray stays stopped after a failed update unless the person
 explicitly requests startup while that update drain is in flight; that newer request wins over the
 captured stopped intent. A quit's drain is never aborted.
+
+Without the window, `ocx update --desktop` installs the same signed Windows MSI from the bundled
+`ocx.exe` and restarts the runtime still serving the old version; the app's own updater path is
+unchanged ([headless Windows Desktop update](ops/desktop-supervision.md#headless-windows-desktop-update)).
 
 > Decision record: [ADR-6033](decisions/ADR-6033-desktop-update-intent.md)
 

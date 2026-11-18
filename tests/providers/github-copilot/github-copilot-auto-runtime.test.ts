@@ -996,7 +996,7 @@ describe("Copilot Auto through the Responses pipeline", () => {
     reconcileSuccessfulModelDiscoveries({ config, models, authoritativeProviders: ["github-copilot"],
       now: "2026-10-02T00:00:00Z", mode: "discovery" });
     expect(config.disabledModels).toEqual(["github-copilot/auto"]);
-    expect(config.modelDiscovery.recentArrivals?.["github-copilot"]).toEqual([{ id: "auto", at: "2026-10-02T00:00:00Z" }]);
+    expect(config.modelDiscovery.recentArrivals?.["github-copilot"]).toEqual([{ id: "auto", at: "2026-10-02T00:00:00Z", disabledByPolicy: true }]);
     expect(filterCatalogVisibleModels(models, config)).toEqual([]);
     config.disabledModels = [];
     reconcileSuccessfulModelDiscoveries({ config, models, authoritativeProviders: ["github-copilot"],

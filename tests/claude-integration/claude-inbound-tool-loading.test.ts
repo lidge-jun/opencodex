@@ -8,7 +8,7 @@ import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/iso
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { anthropicToResponsesTranslation } from "../../src/claude/inbound";
-import { appendLoadedToolDefinitions, appendOnlyToolLoadingMatches } from "../../src/claude/inbound-tool-loading";
+import { appendLoadedToolDefinitions, toolLoadingModelMatches } from "../../src/claude/inbound-tool-loading";
 import { parseRequest } from "../../src/responses/parser";
 import { configSchema } from "../../src/config/schema/config-schema";
 import { salvageConfigCandidate } from "../../src/config/salvage";
@@ -27,7 +27,7 @@ const request = (names: string[], messages: unknown[] = []) => ({ model, metadat
 // the actual physical-adapter decision, late fallback, and combo refusal.
 const translate = (raw: ReturnType<typeof request>, config: any = enabled) => {
   const { body, cacheKeySource } = anthropicToResponsesTranslation(raw, config);
-  const selected = cacheKeySource === "metadata" && appendOnlyToolLoadingMatches(config?.appendOnlyToolLoadingModels, body.model as string);
+  const selected = cacheKeySource === "metadata" && toolLoadingModelMatches(config?.appendOnlyToolLoadingModels, body.model as string);
   return (selected ? appendLoadedToolDefinitions(body, raw as any) : body) as any;
 };
 

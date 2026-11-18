@@ -653,5 +653,29 @@ describe("client machine listener in link mode", () => {
     const server = startMachineListener(0, { state: connection(), managementAuthState: authState() });
     servers.push(server);
     expect((await fetch(new URL("/api/link/status", server.url), { headers: await guiHeaders(server) })).status).toBe(404);
+    expect((await fetch(new URL("/api/link/diagnostics", server.url), { headers: await guiHeaders(server) })).status).toBe(404);
+  });
+
+  test("a link Child serves its own sanitized diagnostics to a dashboard session, read-only", async () => {
+    mkdirSync(join(root, "link"), { recursive: true });
+    const file = join(root, "link", "diagnostics.jsonl");
+    const content = JSON.stringify({ event: "tunnel_transition", outcome: "network", previousState: "connected", state: "reconnecting", attempt: 1, tunnelPort: 43110, timestamp: 7, alias: "\u001b[2Jhome-mac" }) + "\n";
+    writeFileSync(file, content);
+    const { server, upstream } = linkListener();
+    const url = new URL("/api/link/diagnostics?limit=5", server.url);
+    expect((await fetch(url)).status).toBe(401);
+    const response = await fetch(url, { headers: await guiHeaders(server) });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      schema: "ocx.link.diagnostics/1",
+      files: [{ name: "diagnostics.jsonl.1", state: "absent", truncated: false }, { name: "diagnostics.jsonl", state: "read", truncated: false }],
+      matched: 1,
+      skipped: 0,
+      records: [{ event: "tunnel_transition", outcome: "network", state: "reconnecting", previousState: "connected", attempt: 1, tunnelPort: 43110, timestamp: 7 }],
+    });
+    expect((await fetch(url, { method: "POST", headers: await guiHeaders(server, true), body: "{}" })).status).toBe(404);
+    expect(readFileSync(file, "utf8")).toBe(content);
+    // Served locally: the Child's own evidence, never relayed to the Home.
+    expect(upstream).toHaveLength(0);
   });
 });

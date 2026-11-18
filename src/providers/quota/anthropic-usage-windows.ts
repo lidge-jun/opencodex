@@ -39,8 +39,8 @@ export function familyWeeklyEquivalentPercent(window: { percent?: number; weekly
 
 /**
  * `weekly_scoped_shares[]` names, by raw `limits` index, the share of the weekly limit a scoped
- * row may consume (Fable: "up to 50% of your weekly limit"). Only a selected scoped row
- * receives it; a malformed, out-of-range or conflicting share is ignored.
+ * row may consume (Fable: "up to 50% of your weekly limit"). Only a recognized scoped row,
+ * routed or display-only, receives it; a malformed, out-of-range or conflicting share is ignored.
  */
 function applyWeeklyShares(body: Record<string, unknown>, scopedRows: Map<number, AnthropicUsageBucket>): void {
   if (!Array.isArray(body.weekly_scoped_shares)) return;
@@ -66,12 +66,14 @@ function applyWeeklyShares(body: Record<string, unknown>, scopedRows: Map<number
  * and malformed shared measurements make family enumeration incomplete. Shared finite
  * measurements apply regardless of the binding flag, though an unknown flag also makes
  * enumeration incomplete. A null legacy five_hour requires an explicitly active session.
- * Scoped rows retain active-only behavior; unknown kinds/families cannot clear refusals.
+ * Scoped rows retain active-only behavior for routing; an inactive scoped row is returned
+ * separately as display-only evidence. Unknown kinds/families cannot clear refusals.
  */
 export function anthropicUsageBuckets(body: Record<string, unknown>): {
-  buckets: AnthropicUsageBucket[]; familyEnumeration: boolean;
+  buckets: AnthropicUsageBucket[]; displayBuckets: AnthropicUsageBucket[]; familyEnumeration: boolean;
 } {
   const selected = new Map<UsageWindow, AnthropicUsageBucket>();
+  const displayOnly = new Map<UsageWindow, AnthropicUsageBucket>();
   const represented = new Set<UsageWindow>();
   const scopedRows = new Map<number, AnthropicUsageBucket>();
   const limits = Array.isArray(body.limits) ? body.limits : [];
@@ -91,7 +93,13 @@ export function anthropicUsageBuckets(body: Record<string, unknown>): {
       selected.set(window, { window, row, percentField: "percent" });
       continue;
     }
-    if (row.is_active === false) continue;
+    if (row.is_active === false) {
+      // Display-only rows still carry their share, so a dashboard can say "up to 50% of the week".
+      const bucket: AnthropicUsageBucket = { window, row, percentField: "percent" };
+      displayOnly.set(window, bucket);
+      scopedRows.set(index, bucket);
+      continue;
+    }
     if (row.is_active !== undefined && row.is_active !== true) { familyEnumeration = false; continue; }
     if (toFiniteNumber(row.percent) === undefined) familyEnumeration = false;
     const bucket: AnthropicUsageBucket = { window, row, percentField: "percent" };
@@ -105,8 +113,10 @@ export function anthropicUsageBuckets(body: Record<string, unknown>): {
     if (row) selected.set(window, { window, row, percentField: "utilization" });
   }
   // Stable canonical order, independent of how upstream orders limits.
-  return { buckets: (Object.keys(legacyFields) as UsageWindow[]).flatMap(window => {
-    const bucket = selected.get(window);
-    return bucket ? [bucket] : [];
-  }), familyEnumeration };
+  const ordered = (source: Map<UsageWindow, AnthropicUsageBucket>) => (Object.keys(legacyFields) as UsageWindow[])
+    .flatMap(window => {
+      const bucket = source.get(window);
+      return bucket ? [bucket] : [];
+    });
+  return { buckets: ordered(selected), displayBuckets: ordered(displayOnly), familyEnumeration };
 }

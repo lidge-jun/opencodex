@@ -226,7 +226,8 @@ export const OPENAI_API_GPT56_REASONING_EFFORTS = ["low", "medium", "high", "xhi
  * (https://developers.openai.com/api/docs/models/gpt-6.1-sol, checked 2026-09-30).
  */
 // GPT-6.1 Terra (2026-10-26): same API limits; its none..max ladder is set per model.
-export const OPENAI_GPT6_MODELS = ["gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"];
+// GPT-6.2 Sol and Astra publish the same API limits and disallow none.
+export const OPENAI_GPT6_MODELS = ["gpt-6.2-sol", "gpt-6.2-astra", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-sol", "gpt-6-luna"];
 /*
  * Meta Model API (https://api.meta.ai/v1) — published ladder, deliberately NOT the
  * house set. dev.meta.ai/docs/reasoning lists "none", "minimal", "low", "medium",
@@ -334,6 +335,8 @@ export const OPENROUTER_GPT56_CONTEXT_WINDOWS = {
   "openai/gpt-6-luna": OPENROUTER_GPT56_CONTEXT_WINDOW,
   // Live /api/v1/models on 2026-09-30: context_length 1,050,000, max_completion_tokens 128,000.
   "openai/gpt-6.1-sol": OPENROUTER_GPT56_CONTEXT_WINDOW,
+  "openai/gpt-6.2-sol": 1_050_000,
+  "openai/gpt-6.2-astra": 1_050_000,
   // OpenRouter listing checked 2026-10-27: context_length 1,050,000.
   "openai/gpt-6.1-terra": OPENROUTER_GPT56_CONTEXT_WINDOW,
 };
@@ -1260,3 +1263,38 @@ export const STEPFUN_MODEL_INPUT_MODALITIES: Record<string, string[]> = {
 export const STEPFUN_NO_VISION_MODELS = ["step-3.5-flash"];
 
 export const STEPFUN_REASONING_EFFORTS = ["low", "medium", "high"];
+
+/*
+ * Morph Ultra plan (https://www.morphllm.com/products/ultra, verified 2026-11-13). Ultra is one
+ * subscription with no token meter on Kimi K3.1 and DeepSeek V4.1 Flash; every other Morph model
+ * bills per token, and `morph-dsv41flash-abliterated` is Ultra-covered only for accounts approved
+ * for privileged access (403 otherwise). Only the covered rows are seeded, so the picker cannot
+ * offer a model the subscription does not include. Per docs.morphllm.com/sdk/components/fast-models
+ * all of them are 1,048,576-token, text+image, tool- and reasoning-capable.
+ */
+export const MORPH_ULTRA_MODELS = ["morph-kimik31", "morph-dsv41flash-1017"];
+export const MORPH_ULTRA_CONTEXT_WINDOW = 1_048_576;
+export const MORPH_ULTRA_MODEL_CONTEXT_WINDOWS: Record<string, number> = Object.fromEntries(
+  MORPH_ULTRA_MODELS.map(id => [id, MORPH_ULTRA_CONTEXT_WINDOW]),
+);
+export const MORPH_ULTRA_MODEL_INPUT_MODALITIES: Record<string, string[]> = Object.fromEntries(
+  MORPH_ULTRA_MODELS.map(id => [id, ["text", "image"]]),
+);
+/*
+ * Kimi K3.1 documents none/low/medium/high/xhigh/max. DeepSeek V4.1 Flash documents
+ * none/low/high/xhigh/max and folds medium into high; `minimal` is a Codex-side sentinel that
+ * requestToCodexEffort maps to `low`, so it needs no wire entry there.
+ *
+ * `none` needs an explicit identity entry on both models. Without one, mapReasoningEffort turns
+ * `none` into `undefined` (requestToCodexEffort) and the adapter omits `reasoning_effort`
+ * entirely — which Morph reads as "reasoning on by default", the opposite of what the picker
+ * promised. The identity entry sends `reasoning_effort: "none"` and actually disables it.
+ */
+export const MORPH_ULTRA_REASONING_EFFORTS: Record<string, string[]> = {
+  "morph-kimik31": ["none", "low", "medium", "high", "xhigh", "max"],
+  "morph-dsv41flash-1017": ["none", "low", "high", "xhigh", "max"],
+};
+export const MORPH_ULTRA_REASONING_EFFORT_MAPS: Record<string, Record<string, string>> = {
+  "morph-kimik31": { none: "none" },
+  "morph-dsv41flash-1017": { none: "none", medium: "high" },
+};

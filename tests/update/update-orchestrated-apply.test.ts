@@ -1,11 +1,11 @@
 import { expect, test } from "bun:test";
-import { chmodSync, closeSync, mkdirSync, mkdtempSync, openSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, mkdirSync, mkdtempSync, openSync, realpathSync, rmSync, symlinkSync, truncateSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EventEmitter } from "node:events";
 import { classifyOrchestratedOutcome, type OutcomeInput } from "../../src/update/orchestrated-outcome.mjs";
 import { verifyOrchestratedInstall } from "../../src/update/orchestrated-tree.mjs";
-import { verifyOrchestratedPnpmInstall } from "../../src/update/orchestrated-pnpm.mjs";
+import { canonicalOrchestratedPnpmOwner, matchesOrchestratedPnpmOwner, verifyOrchestratedPnpmInstall } from "../../src/update/orchestrated-pnpm.mjs";
 import { waitForOrchestratedChild } from "../../src/update/orchestrated-child.mjs";
 
 const base: OutcomeInput = {
@@ -13,6 +13,27 @@ const base: OutcomeInput = {
   childExitCode: 1, outcome: { phase: "preflight" }, previousVerified: true,
   targetVerified: false, runtimeHealthy: true, restarted: false,
 };
+
+test.skipIf(process.platform === "win32")("pnpm parent identity binds the lexical store path as well as its canonical target", () => {
+  const root = mkdtempSync(join(tmpdir(), "ocx-pnpm-identity-"));
+  try {
+    const store = join(root, "store", "v11"), alias = join(root, "alias", "v11");
+    mkdirSync(store, { recursive: true }); mkdirSync(join(root, "alias"));
+    symlinkSync(store, alias, "dir");
+    const legacy = { commandPath: root, packagePath: root, globalDir: root, globalRoot: root, globalBinDir: root };
+    const owner = { ...legacy, globalStore: true, store: realpathSync(store), storePath: store, virtualStoreDirs: [] };
+    const expected = canonicalOrchestratedPnpmOwner(owner);
+    expect(matchesOrchestratedPnpmOwner(expected, owner)).toBe(true);
+    expect(matchesOrchestratedPnpmOwner(expected, { ...owner, storePath: alias })).toBe(false);
+    // A legacy group carries no store, and neither shape can stand in for the other.
+    const legacyExpected = canonicalOrchestratedPnpmOwner(legacy);
+    expect(Object.keys(legacyExpected).sort()).toEqual(["commandPath", "globalBinDir", "globalDir", "globalRoot", "packagePath"]);
+    expect(matchesOrchestratedPnpmOwner(legacyExpected, legacy)).toBe(true);
+    expect(matchesOrchestratedPnpmOwner(legacyExpected, owner)).toBe(false);
+    expect(matchesOrchestratedPnpmOwner(expected, legacy)).toBe(false);
+    expect(() => canonicalOrchestratedPnpmOwner({ ...legacy, store: realpathSync(store) })).toThrow();
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test("the parent watchdog reports overrun without signalling a still-running child", async () => {
   const signals = new EventEmitter(), child = new EventEmitter();
@@ -159,7 +180,8 @@ test("pnpm verification re-resolves the pinned owner and checks the active tree 
   const home = mkdtempSync(join(tmpdir(), "ocx-orchestrated-pnpm-"));
   const globalDir = join(home, "global"), globalRoot = join(globalDir, "v11"), globalBinDir = join(home, "bin");
   const root = join(globalRoot, "node_modules", "@bitkyc08", "opencodex"), commandPath = join(home, "pnpm");
-  const owner = { commandPath, packagePath: root, globalDir, globalRoot, globalBinDir };
+  const storePath = join(home, "store", "v11"); mkdirSync(storePath, { recursive: true });
+  const owner = { commandPath, packagePath: root, globalDir, globalRoot, globalBinDir, store: realpathSync(storePath), storePath, virtualStoreDirs: [] };
   try {
     for (const dir of [globalBinDir, join(root, "bin"), join(root, "src/cli"), join(root, "node_modules/bun/bin"), join(root, "node_modules/zod")]) mkdirSync(dir, { recursive: true });
     writeFileSync(join(root, "package.json"), JSON.stringify({ version: "2.1.0", dependencies: { bun: "1", zod: "1" } }));
@@ -173,6 +195,9 @@ test("pnpm verification re-resolves the pinned owner and checks the active tree 
     for (const name of names) { const shim = join(globalBinDir, name); writeFileSync(shim, `#!/bin/sh\nexec node '${join(root, "bin/ocx.mjs")}' "$@"\n`); chmodSync(shim, 0o755); }
     let listedVersion = "2.1.0", listedGroup = globalRoot;
     const runPnpm = (_command: string, args: readonly string[]) => {
+      if (args[0] === "store") return { status: 0, stdout: storePath };
+      if (args[0] === "config" && args[2] === "store-dir") return { status: 0, stdout: storePath };
+      if (args[0] === "config" && ["virtual-store-dir", "global-virtual-store-dir"].includes(args[2] ?? "")) return { status: 0, stdout: "undefined" };
       if (args[0] === "list") return { status: 0, stdout: JSON.stringify([{ path: listedGroup, dependencies: { "@bitkyc08/opencodex": { path: root, version: listedVersion } } }]) };
       if (args[0] === "root") return { status: 0, stdout: `${listedGroup}\n` };
       if (args[0] === "config" && args[2] === "global-dir") return { status: 0, stdout: `${globalDir}\n` };

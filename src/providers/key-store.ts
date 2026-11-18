@@ -115,7 +115,7 @@ export function storeProviderKeyInKeychain(config: OcxConfig, name: string): { o
     return { ok: false, error: `OS keychain write failed: ${error instanceof Error ? error.message : "unknown"}`, status: 503 };
   }
   for (const apply of planned) apply();
-  invalidateResolvedProviderKeyCache();
+  invalidateResolvedProviderKeyCache({ preservePassiveKeychainProofs: true });
   saveConfigPreservingClaudeCode(config);
   return { ok: true, moved: written.length };
 }
@@ -158,11 +158,11 @@ export function restoreProviderKeyFromKeychain(config: OcxConfig, name: string):
     if (isKeychainReference(entry.key)) entry.key = resolved.get(keychainAccount(entry.key))!;
   }
   if (isKeychainReference(provider.apiKey)) provider.apiKey = resolved.get(keychainAccount(provider.apiKey))!;
-  invalidateResolvedProviderKeyCache();
+  invalidateResolvedProviderKeyCache({ preservePassiveKeychainProofs: true });
   saveConfigPreservingClaudeCode(config);
   for (const account of resolved.keys()) {
     try { providerKeychainEntry(account).deletePassword(); } catch { /* best effort */ }
   }
-  invalidateResolvedProviderKeyCache();
+  invalidateResolvedProviderKeyCache({ preservePassiveKeychainProofs: true });
   return { ok: true, restored: resolved.size };
 }

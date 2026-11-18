@@ -5,6 +5,9 @@
  * providers. Every case is in-process and deterministic: config fixtures are written directly, the
  * Home catalog is a stubbed fetch, and both client locks live in the per-test directory.
  */
+// First: CODEX_HOME must be a temp directory before src/codex/paths resolves DEFAULT_CATALOG_PATH,
+// which the shared setup below writes with raw fs calls (tests/helpers/codex-home-sandbox.ts).
+import { assertCodexHomeOwned } from "../helpers/codex-home-sandbox";
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -36,6 +39,8 @@ const TUNNEL = 23461;
 const SENTINEL_CATALOG = JSON.stringify({ models: [{ slug: "sentinel-local-model" }] });
 const HOME_CATALOG = JSON.stringify({ models: [] });
 const realSyncConnectedClient = connectApi.syncConnectedClient;
+// Refuse to load unless the catalog resolves into a Codex home this process owns (proven by path).
+assertCodexHomeOwned(dirname(DEFAULT_CATALOG_PATH));
 
 let root = "";
 let previousHome: string | undefined;
@@ -227,6 +232,60 @@ describe("ocx sync --expect-link / --expect-hub-key", () => {
       restart.mockRestore(); connected.mockRestore(); shim.mockRestore(); log.mockRestore(); error.mockRestore();
     }
   });
+  // Review round 2: a sync whose Codex journal handover failed must not report a clean success,
+  // because a later supervised restart would restore native routing again.
+  test("a sync whose journal handover failed exits 1 and says to sync again", async () => {
+    writeClient({ transport: "hub" });
+    const current = readClientConnectionState();
+    if (current.kind !== "connected") throw new Error("fixture must be connected");
+    const connected = spyOn(connectApi, "syncConnectedClient").mockResolvedValue({ catalogWritten: false, cacheSynced: false, injected: true, stale: false, connection: current.value, journalHandoverFailed: true });
+    const shim = spyOn(shimAutoRestore, "runCodexShimAutoRestoreAsync").mockResolvedValue(undefined);
+    const errors: string[] = [];
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    const error = spyOn(console, "error").mockImplementation((...parts) => { errors.push(parts.map(String).join(" ")); });
+    try {
+      process.exitCode = 0;
+      const args = ["sync"];
+      const code = await dispatchCommand({ kind: "command", command: "sync", args }, { args } as unknown as CliDispatchDeps);
+      expect(code).toBe(1);
+      expect(errors.join("\n")).toContain("Codex journal could not be handed to this connection");
+      expect(errors.join("\n")).toContain("Run 'ocx sync' again");
+    } finally {
+      process.exitCode = 0;
+      connected.mockRestore(); shim.mockRestore(); log.mockRestore(); error.mockRestore();
+    }
+  });
+
+  // Final review: a failed handover must not be followed by the automatic post-apply restart,
+  // which on a Child with an earlier connection's journal would undo the routing just applied.
+  test("a failed journal handover skips the post-apply runtime restart", async () => {
+    writeClient({ transport: "link" });
+    const current = readClientConnectionState();
+    if (current.kind !== "connected") throw new Error("fixture must be connected");
+    const appliedAt = "2026-10-21T01:00:00.000Z";
+    const record = { linkId: LINK_ID, fetchedAt: appliedAt, appliedAt, document: {
+      version: 1 as const, home: { name: "fixture", version: "2.97.0" },
+      settings: { fastMode: true, multiAgentMode: "v1" as const, webSearchSidecarEnabled: false, subagentDefaults: null },
+    } };
+    const restart = spyOn(applyRestart, "restartRuntimeAfterApply").mockResolvedValue({ kind: "restarted" });
+    const connected = spyOn(connectApi, "syncConnectedClient").mockResolvedValue({ catalogWritten: false, cacheSynced: false, injected: true, stale: false, connection: current.value, appliedRecord: record, journalHandoverFailed: true });
+    const shim = spyOn(shimAutoRestore, "runCodexShimAutoRestoreAsync").mockResolvedValue(undefined);
+    const errors: string[] = [];
+    const log = spyOn(console, "log").mockImplementation(() => {});
+    const error = spyOn(console, "error").mockImplementation((...parts) => { errors.push(parts.map(String).join(" ")); });
+    try {
+      process.exitCode = 0;
+      const args = ["sync"];
+      const code = await dispatchCommand({ kind: "command", command: "sync", args }, { args } as unknown as CliDispatchDeps);
+      expect(code).toBe(1);
+      expect(restart).not.toHaveBeenCalled();
+      expect(errors.join("\n")).toContain("the client runtime was not restarted");
+    } finally {
+      process.exitCode = 0;
+      restart.mockRestore(); connected.mockRestore(); shim.mockRestore(); log.mockRestore(); error.mockRestore();
+    }
+  });
+
   async function runSync(args: string[]) {
     let discoveries = 0;
     const errors: string[] = [];
@@ -327,6 +386,14 @@ describe("ocx sync --expect-link / --expect-hub-key", () => {
     expect(run.shimRepairs).toBe(1);
     expect(run.connectedCalls).toEqual([{ restartCodex: false, expect: expectation }]);
     expect(readFileSync(DEFAULT_CATALOG_PATH, "utf8")).toBe(HOME_CATALOG);
+  });
+
+  test("pinned sync forwards conflict permission only for the explicitly named client", async () => {
+    writeClient({ transport: "link" });
+    const run = await runSync(["sync", "--expect-link", LINK_ID, "--overwrite-conflict", "--overwrite-client", "aside"]);
+    expect(run.code).toBe(0);
+    expect(run.connectedCalls).toEqual([{ restartCodex: false, expect: { kind: "link", linkId: LINK_ID },
+      overwriteConflict: true, overwriteClient: "aside" }]);
   });
 
   test("a real link connect paused at its readiness read makes a pinned sync a pending refusal", async () => {
@@ -501,4 +568,222 @@ test("the machine sync route does not return the saved connection", async () => 
     },
   );
   expect(await response?.json()).toEqual({ success: true, catalogWritten: true, cacheSynced: true, injected: false, stale: false });
+});
+
+// Review round 3: the machine API must not call a sync complete when its journal handover failed.
+test("the machine sync route reports a failed journal handover as not complete", async () => {
+  const connection = clientBlock({ transport: "hub" }) as unknown as OcxClientConnectionConfig;
+  const response = await handleMachineApi(
+    new Request("http://127.0.0.1/api/machine/sync", { method: "POST", body: "{}", headers: { "content-type": "application/json" } }),
+    new URL("http://127.0.0.1/api/machine/sync"),
+    connection,
+    {
+      sync: async () => ({ catalogWritten: true, cacheSynced: true, injected: true, stale: false, connection, journalHandoverFailed: true }),
+      disconnect: async () => { throw new Error("unused"); },
+      scheduleStandaloneRecycle: () => {},
+    },
+  );
+  expect(response?.status).toBe(409);
+  expect(await response?.json()).toMatchObject({ success: false, journalHandoverFailed: true });
+});
+
+describe("ocx disconnect --expect-link (a Home's revoke)", () => {
+  test("may resume its own link's unfinished disconnect, or one whose connection is already cleared", async () => {
+    const { classifyDisconnectLinkExpectation } = await import("../../src/client/sync-expectation");
+    const value = clientBlock({ transport: "link" }) as unknown as OcxClientConnectionConfig;
+    const connected = { kind: "connected", value } as const;
+    const owner = { serverUrl: value.serverUrl, apiKeyId: value.apiKeyId, connectedAt: value.connectedAt };
+    expect(classifyDisconnectLinkExpectation(connected, { kind: "absent" }, LINK_ID)).toBeNull();
+    expect(classifyDisconnectLinkExpectation(connected, { kind: "absent" }, OTHER_LINK_ID)).toBe("other_link");
+    // The receipt belongs to this connection, still connected to the expected link: resume it.
+    expect(classifyDisconnectLinkExpectation(connected, { kind: "valid", value: { phase: "prepared", owner } }, LINK_ID)).toBeNull();
+    // Not for another link, another owner, an unreadable receipt, or a machine no longer connected.
+    expect(classifyDisconnectLinkExpectation(connected, { kind: "valid", value: { phase: "prepared", owner } }, OTHER_LINK_ID)).toBe("disconnect_pending");
+    expect(classifyDisconnectLinkExpectation(connected, { kind: "valid", value: { phase: "prepared", owner: { ...owner, apiKeyId: "someone-else" } } }, LINK_ID)).toBe("disconnect_pending");
+    expect(classifyDisconnectLinkExpectation(connected, { kind: "unsafe" }, LINK_ID)).toBe("disconnect_pending");
+    // Once the connection is cleared no link is attached (connect refuses while a disconnect is unfinished), so the
+    // leftover cleanup may finish whichever link it was, as a plain disconnect does; not while a connect is pending.
+    expect(classifyDisconnectLinkExpectation({ kind: "disconnected" }, { kind: "valid", value: { phase: "clearing_connection", owner } }, LINK_ID)).toBeNull();
+    expect(classifyDisconnectLinkExpectation({ kind: "disconnected" }, { kind: "valid", value: { phase: "connection_cleared", owner } }, OTHER_LINK_ID)).toBeNull();
+    expect(classifyDisconnectLinkExpectation({ kind: "disconnected" }, { kind: "valid", value: { phase: "connection_cleared", owner } }, LINK_ID, "present")).toBe("disconnect_pending");
+    expect(classifyDisconnectLinkExpectation({ kind: "disconnected" }, { kind: "valid", value: { phase: "complete", owner } }, LINK_ID)).toBe("disconnected");
+  });
+
+  test("its own link disconnects without running the client-link teardown", async () => {
+    writeClient({ transport: "link" });
+    const { handleDisconnectCommand } = await import("../../src/cli/connect");
+    const teardownModule = await import("../../src/client/link-teardown");
+    const teardown = spyOn(teardownModule, "teardownClientLink");
+    const errors: string[] = [];
+    const errorSpy = spyOn(console, "error").mockImplementation((...args: unknown[]) => { errors.push(String(args[0])); });
+    const logSpy = spyOn(console, "log").mockImplementation(() => {});
+    let exit: number;
+    try {
+      exit = await handleDisconnectCommand(["--expect-link", LINK_ID, "--keep-catalog", "--json"], {
+        linkTeardownDeps: { reapOrphanTunnel: async () => { throw new Error("teardown must not run"); } } as never,
+      });
+    } finally { errorSpy.mockRestore(); logSpy.mockRestore(); }
+    const teardownCalls = teardown.mock.calls.length;
+    teardown.mockRestore();
+    // No refusal line (a config repair notice from the shared config loader may still appear on stderr).
+    expect([exit, errors.filter(line => /refused|child_link_mismatch/.test(line)), teardownCalls]).toEqual([0, [], 0]);
+    expect(readClientConnectionState()).toEqual({ kind: "disconnected" });
+  });
+
+  test("a client-initiated link (its sidecar names the expected link) is refused with exit 5 before any change", async () => {
+    writeClient({ transport: "link" });
+    const { writeClientLinkState } = await import("../../src/client/link-state");
+    writeClientLinkState({ linkId: LINK_ID, alias: "home", hubHostKeyFingerprint: "SHA256:abcdefghijklmnop", peerListenerPort: 18181, tunnelPort: 2200 });
+    const before = readClientConnectionState();
+    const { handleDisconnectCommand } = await import("../../src/cli/connect");
+    const lines: string[] = [];
+    const errors = spyOn(console, "error").mockImplementation((...args: unknown[]) => { lines.push(String(args[0])); });
+    let exit: number;
+    try {
+      exit = await handleDisconnectCommand(["--expect-link", LINK_ID, "--keep-catalog"], {
+        linkTeardownDeps: { reapOrphanTunnel: async () => { throw new Error("teardown must not run"); } } as never,
+      });
+    } finally { errors.mockRestore(); }
+    expect(exit).toBe(5);
+    expect(JSON.parse(lines.at(-1) ?? "null")).toEqual({ phase: "child_link_mismatch", reason: "client_initiated_link" });
+    expect(readClientConnectionState()).toEqual(before);
+  });
+
+  test("a machine connected to another link refuses with exit 5 and changes nothing", async () => {
+    writeClient({ transport: "link" });
+    const before = readClientConnectionState();
+    const { handleDisconnectCommand } = await import("../../src/cli/connect");
+    const lines: string[] = [];
+    const errors = spyOn(console, "error").mockImplementation((...args: unknown[]) => { lines.push(String(args[0])); });
+    let exit: number;
+    try {
+      exit = await handleDisconnectCommand(["--expect-link", OTHER_LINK_ID], {
+        linkTeardownDeps: { reapOrphanTunnel: async () => { throw new Error("teardown must not run"); } } as never,
+      });
+    } finally { errors.mockRestore(); }
+    expect(exit).toBe(5);
+    expect(JSON.parse(lines.at(-1) ?? "null")).toEqual({ phase: "child_link_mismatch", reason: "other_link" });
+    expect(readClientConnectionState()).toEqual(before);
+  });
+
+  async function refusedDisconnect(argv: string[]): Promise<{ exit: number; last: unknown }> {
+    const { handleDisconnectCommand } = await import("../../src/cli/connect");
+    const lines: string[] = [];
+    const errors = spyOn(console, "error").mockImplementation((...args: unknown[]) => { lines.push(String(args[0])); });
+    let exit: number;
+    try {
+      exit = await handleDisconnectCommand(argv, {
+        linkTeardownDeps: { reapOrphanTunnel: async () => { throw new Error("teardown must not run"); } } as never,
+      });
+    } finally { errors.mockRestore(); }
+    let last: unknown = null;
+    try { last = JSON.parse(lines.at(-1) ?? "null"); } catch { last = lines.at(-1); }
+    return { exit, last };
+  }
+
+  test("a lost sidecar whose Child-initiated marker names the link is still refused as client-initiated", async () => {
+    writeClient({ transport: "link" });
+    const { childLinkMarkerPath } = await import("../../src/client/link-state");
+    mkdirSync(dirname(childLinkMarkerPath()), { recursive: true, mode: 0o700 });
+    writeFileSync(childLinkMarkerPath(), JSON.stringify({ linkId: LINK_ID }), { mode: 0o600 });
+    const before = readClientConnectionState();
+    const run = await refusedDisconnect(["--expect-link", LINK_ID, "--keep-catalog"]);
+    expect(run).toEqual({ exit: 5, last: { phase: "child_link_mismatch", reason: "client_initiated_link" } });
+    expect(readClientConnectionState()).toEqual(before);
+  });
+
+  test("an unreadable Child-initiated marker refuses as invalid_state, never as a client-initiated link", async () => {
+    writeClient({ transport: "link" });
+    const { childLinkMarkerPath } = await import("../../src/client/link-state");
+    mkdirSync(dirname(childLinkMarkerPath()), { recursive: true, mode: 0o700 });
+    writeFileSync(childLinkMarkerPath(), "{not json", { mode: 0o600 });
+    const before = readClientConnectionState();
+    const run = await refusedDisconnect(["--expect-link", LINK_ID, "--keep-catalog"]);
+    expect(run).toEqual({ exit: 5, last: { phase: "child_link_mismatch", reason: "invalid_state" } });
+    expect(readClientConnectionState()).toEqual(before);
+  });
+
+  test("an unreadable sidecar beside this link's own unfinished disconnect answers disconnect_pending", async () => {
+    writeClient({ transport: "link" });
+    const value = clientBlock({ transport: "link" }) as unknown as OcxClientConnectionConfig;
+    const { writeDesktopDisconnectReceipt } = await import("../../src/claude/desktop-remote-store");
+    const { withClientLifecycleSync } = await import("../../src/client/lifecycle-lock");
+    withClientLifecycleSync(held => writeDesktopDisconnectReceipt(held, null, {
+      version: 1, owner: { serverUrl: value.serverUrl, apiKeyId: value.apiKeyId, connectedAt: value.connectedAt },
+      tokenFingerprint: value.tokenFingerprint, keepCatalog: true, phase: "prepared",
+    }));
+    const { clientLinkStatePath } = await import("../../src/client/link-state");
+    mkdirSync(dirname(clientLinkStatePath()), { recursive: true, mode: 0o700 });
+    writeFileSync(clientLinkStatePath(), "{not json", { mode: 0o600 });
+    const before = readClientConnectionState();
+    const run = await refusedDisconnect(["--expect-link", LINK_ID, "--keep-catalog"]);
+    expect(run).toEqual({ exit: 5, last: { phase: "child_link_mismatch", reason: "disconnect_pending" } });
+    expect(readClientConnectionState()).toEqual(before);
+  });
+
+  test("a disconnected machine with a pending connect still refuses (pending_operation)", async () => {
+    writeStandalone();
+    markClientConnectPending(serviceApiTokenFingerprint(KEY));
+    const run = await refusedDisconnect(["--expect-link", LINK_ID]);
+    expect(run.exit).toBe(5);
+    expect(run.last).toEqual({ phase: "child_link_mismatch", reason: "pending_operation" });
+  });
+
+  test("a bound disconnect resumes this link's own unfinished disconnect while still connected", async () => {
+    writeClient({ transport: "link" });
+    const value = clientBlock({ transport: "link" }) as unknown as OcxClientConnectionConfig;
+    const { writeDesktopDisconnectReceipt, readDesktopDisconnectReceipt } = await import("../../src/claude/desktop-remote-store");
+    const { withClientLifecycleSync } = await import("../../src/client/lifecycle-lock");
+    withClientLifecycleSync(held => writeDesktopDisconnectReceipt(held, null, {
+      version: 1, owner: { serverUrl: value.serverUrl, apiKeyId: value.apiKeyId, connectedAt: value.connectedAt },
+      tokenFingerprint: value.tokenFingerprint, keepCatalog: true, phase: "prepared",
+    }));
+    const { handleDisconnectCommand } = await import("../../src/cli/connect");
+    const logs = spyOn(console, "log").mockImplementation(() => {});
+    const errs = spyOn(console, "error").mockImplementation(() => {});
+    let exit: number;
+    try { exit = await handleDisconnectCommand(["--expect-link", LINK_ID, "--keep-catalog"], {}); } finally { logs.mockRestore(); errs.mockRestore(); }
+    expect(exit).toBe(0);
+    expect(readClientConnectionState()).toEqual({ kind: "disconnected" });
+    expect(readDesktopDisconnectReceipt()).toMatchObject({ kind: "valid", value: { phase: "complete" } });
+  });
+
+  test("a bound disconnect finishes a disconnect whose connection was already cleared", async () => {
+    writeClient({ transport: "link" });
+    const store = await import("../../src/claude/desktop-remote-store");
+    const { handleDisconnectCommand } = await import("../../src/cli/connect");
+    const logs = spyOn(console, "log").mockImplementation(() => {});
+    const errs = spyOn(console, "error").mockImplementation(() => {});
+    // The first disconnect clears the connection, then its last step fails: the receipt is left unfinished.
+    const fail = spyOn(store, "finishRemoteDesktopCleanup").mockImplementation(() => ({ ok: false, changed: false, reason: "unsafe" }));
+    let first: number, second: number;
+    try {
+      first = await handleDisconnectCommand(["--expect-link", LINK_ID, "--keep-catalog"], {});
+      fail.mockRestore();
+      expect(readClientConnectionState()).toEqual({ kind: "disconnected" });
+      expect(store.readDesktopDisconnectReceipt()).toMatchObject({ kind: "valid", value: { phase: "connection_cleared" } });
+      second = await handleDisconnectCommand(["--expect-link", LINK_ID, "--keep-catalog"], {});
+    } finally { fail.mockRestore(); logs.mockRestore(); errs.mockRestore(); }
+    expect(first).not.toBe(0);
+    expect(second).toBe(0);
+    expect(store.readDesktopDisconnectReceipt()).toMatchObject({ kind: "valid", value: { phase: "complete" } });
+  });
+
+  test("--expect-link with --recover-config is a usage error that changes nothing", async () => {
+    writeClient({ transport: "link" });
+    const before = readClientConnectionState();
+    const run = await refusedDisconnect(["--expect-link", LINK_ID, "--recover-config", "--yes"]);
+    expect(run.exit).toBe(2);
+    expect(readClientConnectionState()).toEqual(before);
+  });
+
+  test("a link-bound disconnect of a machine no longer connected leaves the lone native originals alone", async () => {
+    writeStandalone();
+    const { nativeIntentOriginalsPath } = await import("../../src/client/route-intent-native-originals");
+    mkdirSync(dirname(nativeIntentOriginalsPath()), { recursive: true, mode: 0o700 });
+    const record = JSON.stringify({ version: 1, fields: { codex: { original: true, published: false } } });
+    writeFileSync(nativeIntentOriginalsPath(), record, { mode: 0o600 });
+    await expect(connectApi.disconnectClient({ expectLink: LINK_ID })).rejects.toMatchObject({ phase: "child_link_mismatch", reason: "disconnected" });
+    expect(readFileSync(nativeIntentOriginalsPath(), "utf8")).toBe(record);
+  });
 });

@@ -3,7 +3,6 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  CODE_SIGNING_FOOTER,
   buildReleaseNotes,
   categoryForTitle,
   hasRenderedPullReference,
@@ -16,6 +15,8 @@ import {
   trailingLandingPr,
   type ReleaseCommit,
 } from "../../scripts/build-release-changelog";
+import { CODE_SIGNING_ATTRIBUTION, codeSigningFooter } from "../../scripts/release-signing-footer";
+import { fixtureGitEnv } from "../helpers/git-fixture";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
 const sha = (char: string): string => char.repeat(40);
@@ -245,6 +246,7 @@ describe("release metadata parsers", () => {
     const repo = mkdtempSync(join(tmpdir(), "ocx-release-log-"));
     const gitText = (args: string[]): string => {
       const result = Bun.spawnSync(["git", "-C", repo, ...args], {
+        env: fixtureGitEnv(),
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -505,7 +507,9 @@ describe("buildReleaseNotes", () => {
       ])],
     });
     expect(result.errors).toEqual([]);
-    expect(result.body.trimEnd().endsWith(CODE_SIGNING_FOOTER)).toBe(true);
+    // With no signing records the footer claims no signature (release-windows-signing-outcome.test.ts covers the rest).
+    expect(result.body.trimEnd().endsWith(codeSigningFooter())).toBe(true);
+    expect(result.body).toContain(CODE_SIGNING_ATTRIBUTION);
     expect(result.body).toContain("https://opencodex.me/reference/code-signing/");
     expect(result.body).toContain("certificate by [SignPath Foundation](https://signpath.org/)");
   });

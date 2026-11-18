@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fixtureGitEnv } from "../helpers/git-fixture";
 import { repoPath } from "../helpers/repo-root";
 import { spawnTestChild } from "../helpers/spawn-test-child";
 import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
@@ -213,7 +214,7 @@ describe("CI review lanes", () => {
     }
     const macosControlIf = ci.jobs?.["macos-control"] as { needs?: string; if?: string } | undefined;
     expect(macosControlIf?.needs).toBe("changes");
-    expect(macosControlIf?.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && (github.event.inputs.lane == '' || github.event.inputs.lane == 'all' || github.event.inputs.lane == 'macos-control')");
+    expect(macosControlIf?.if).toBe("github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' && github.event.inputs.lane == 'macos-control'");
   });
 
   test("manual release-gates keeps ordinary jobs and skips only diagnostic suites", async () => {
@@ -235,8 +236,10 @@ describe("CI review lanes", () => {
       ["pull_request", "", false, false],
       ["push", "release-gates", false, false],
       ["pull_request", "release-gates", false, false],
-      ["workflow_dispatch", "", true, true],
-      ["workflow_dispatch", "all", true, true],
+      // lane=all is the release evidence run; the unsharded control would only
+      // repeat the macOS shards on one worker, so it waits for its own lane.
+      ["workflow_dispatch", "", true, false],
+      ["workflow_dispatch", "all", true, false],
       ["workflow_dispatch", "macos-control", false, true],
       ["workflow_dispatch", "release-gates", false, false],
       // Diagnostic-only lanes stay off ordinary release-gates; unknown lanes
@@ -446,7 +449,9 @@ describe("Windows and nightly CI contracts", () => {
       ["pull_request", "", "false", "not-requested", "not-requested"],
       ["pull_request", "", undefined, "not-requested", "not-requested"],
       ["push", "", "true", "not-requested", "not-requested"],
-      ["workflow_dispatch", "all", "false", "requested", "requested"],
+      ["workflow_dispatch", "all", "false", "requested", "not-requested"],
+      ["workflow_dispatch", "", "false", "requested", "not-requested"],
+      ["workflow_dispatch", "macos-control", "false", "not-requested", "requested"],
       ["workflow_dispatch", "release-gates", "true", "not-requested", "not-requested"],
     ] as const) {
       const env: Record<string, string> = {
@@ -489,7 +494,7 @@ describe("Windows and nightly CI contracts", () => {
       try {
         const git = (...args: string[]) => {
           const result = spawnSync("git", args, { cwd: directory, encoding: "utf8", timeout: 5_000,
-            env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null" } });
+            env: fixtureGitEnv() });
           expect(result.error).toBeUndefined();
           expect(result.status, result.stderr).toBe(0);
         };

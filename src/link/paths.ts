@@ -17,3 +17,8 @@ export function linkStorePath(configDir?: string): string {
 export function linkKnownHostsPath(configDir?: string): string {
   return join(linkDir(configDir), "known_hosts");
 }
+
+/** Tolerant per-link observation cache (src/link/child-observations.ts); never a trust boundary. */
+export function childObservationsPath(configDir?: string): string {
+  return join(linkDir(configDir), "child-observations.json");
+}

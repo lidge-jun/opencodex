@@ -1,8 +1,8 @@
 import { jsonResponse } from "../auth-cors";
 import { readManagementJsonBody, rethrowManagementBodyTooLarge } from "./body";
 import type { ManagementContext } from "./context";
-import { isAuthorizedDesktopCompatibilityMutation } from "./desktop-compatibility-authorization";
 import type { DesktopCompatibilityRuntime } from "../../codex/desktop-compatibility/runtime";
+import { requireDesktopAuthorization } from "./desktop-authorization";
 
 const PATH = "/api/codex/desktop-compatibility/runtime";
 const ERROR_CODES = new Set(["busy", "unsupported", "test_environment", "stopping", "build_unverified", "egress_proxy_invalid",
@@ -12,7 +12,7 @@ const ERROR_CODES = new Set(["busy", "unsupported", "test_environment", "stoppin
 export async function handleDesktopCompatibilityRuntimeRoutes(ctx: ManagementContext): Promise<Response | null> {
   if (ctx.url.pathname !== PATH) return null;
   if (ctx.req.method !== "GET" && ctx.req.method !== "POST") return jsonResponse({ error: "method_not_allowed" }, 405);
-  if (ctx.req.method === "POST" && !isAuthorizedDesktopCompatibilityMutation(ctx)) return jsonResponse({ error: "local_dashboard_confirmation_required" }, 403);
+  if (ctx.req.method === "POST") { const denied = requireDesktopAuthorization(ctx); if (denied) return denied; }
   let action: "start" | "stop" | "observe" | "apply" | "launch" | undefined;
   if (ctx.req.method === "POST") {
     let body: unknown;
@@ -26,6 +26,7 @@ export async function handleDesktopCompatibilityRuntimeRoutes(ctx: ManagementCon
     action = value.action as typeof action;
   }
   const module = ctx.deps.desktopCompatibilityRuntime ? null : await import("../../codex/desktop-compatibility/service");
+  if (ctx.req.method === "POST") { const denied = requireDesktopAuthorization(ctx); if (denied) return denied; }
   const service: DesktopCompatibilityRuntime = ctx.deps.desktopCompatibilityRuntime ?? module!.getDesktopCompatibilityRuntime();
   if (module) ctx.deps.onDesktopCompatibilityShutdown?.(module.shutdownDesktopCompatibility);
   try {

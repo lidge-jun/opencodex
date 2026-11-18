@@ -71,11 +71,17 @@ export const CLIENT_TUNNEL_RETRY_POLICY: TunnelRetryPolicy = {
 };
 
 /**
- * The Home's `-R` supervisor dials the Child's sshd on the same cadence and limits. A sleep, an
- * outage longer than FAILED_AFTER_MS, or a forward the Child's sshd still holds for a session that
- * died heals at most five minutes after it clears, instead of waiting for a proxy restart.
+ * The Home's `-R` supervisor retries a timed-out or refused-forward Child every minute, flat: a
+ * laptop Child that slept reconnects within about a minute of waking instead of waiting out a
+ * backoff of up to five minutes (#8470). A sleeping host never reaches sshd, so those retries add
+ * no authentication attempts. Auth keeps its five-minute start (the cap is
+ * `max(base, maxRetryDelayMs)`), so no more than 12 auth attempts reach the Child's sshd in an hour,
+ * and a changed host key is still never retried. The Child's own tunnel keeps the doubling policy.
  */
-export const HOME_TUNNEL_RETRY_POLICY: TunnelRetryPolicy = CLIENT_TUNNEL_RETRY_POLICY;
+export const HOME_TUNNEL_RETRY_POLICY: TunnelRetryPolicy = {
+  retryFailedAfterMs: { timeout: 60_000, forward: 60_000, auth: 5 * 60_000 },
+  maxRetryDelayMs: 60_000,
+};
 
 export const IDLE: TunnelState = { kind: "idle" };
 

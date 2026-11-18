@@ -57,6 +57,7 @@ import { DSH_ACCOUNT_AUTH } from "./dsh";
 import { loginOrcaRouter, orcaRouterInferenceBaseUrl, refreshOrcaRouterKey } from "./orcarouter";
 import { ANTIGRAVITY_DISCOVERY_UA } from "../adapters/google-antigravity-wire";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
+import { isOAuthCredentialSiblingOf, oauthCredentialSlot } from "./credential-siblings";
 import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
 import { preservableApiKeyPool } from "./api-key-pool-preserve";
 import { effectiveGoogleMode, getProviderRegistryEntry, mergeRegistryStaticHeaders, providerMatchesRegistryTransport } from "../providers/registry";
@@ -96,7 +97,7 @@ export { OAUTH_REFRESH_LOCK_WAIT_MS, peekAuthStore, peekOAuthRefreshIntent } fro
 import { codexAccountNamespaceProviderCollisionError } from "../codex/account-namespace-match";
 
 import { REFRESH_SKEW_MS } from "./refresh-policy";
-import { newerClaudeCredentialForInstance, captureAnthropicCredentialOwnerForInstance } from "./anthropic-continuity";
+import { newerClaudeCredentialForInstance, captureAnthropicCredentialOwnerForInstance, claudeCredentialGenerationCurrent } from "./anthropic-continuity";
 import { anthropicSubscriptionLabel } from "../providers/anthropic-subscription";
 import { normalizeOAuthPlan, mergeOAuthPlan } from "./plan";
 import { mergeAnthropicIdentity, type AnthropicIdentityResolver } from "./anthropic-identity";
@@ -201,13 +202,15 @@ export interface LoginOpts {
   /** When set, persist into this account slot and require matching identity. */
   reauthAccountId?: string;
   /**
-   * ChatGPT only: `device` selects the deviceauth grant instead of the
-   * localhost:1455 callback flow, for hosts with no browser or no loopback
+   * ChatGPT and xAI: `device` selects the device grant instead of the
+   * localhost callback flow, for hosts with no browser or no loopback
    * listener (#3366). Ignored by every other provider.
    */
   flow?: ChatGPTLoginFlow;
   /** Code-display login: no callback server; completes from a pasted code (needs `codeRedirectUri`). */
   codeMode?: boolean;
+  /** Publish this sibling row (see credential-siblings.ts) instead of the login's own row. */
+  publishRow?: string;
 }
 
 export interface LoginFlowLifecycle {
@@ -238,6 +241,8 @@ export interface OAuthProviderDef {
   defaultRefreshPolicy?: RefreshPolicy;
   /** Provider-hosted page that DISPLAYS the code; its presence enables `codeMode`. */
   codeRedirectUri?: string;
+  /** Has an RFC 8628 device grant besides its browser login; `flow: "device"` selects it. */
+  deviceLogin?: true;
 }
 
 function oauthConfig(id: string): OcxProviderConfig {
@@ -294,7 +299,8 @@ export const OAUTH_PROVIDERS: Record<string, OAuthProviderDef> = {
   },
   xai: {
     // forceLogin skips the local grok-cli import so a SECOND account can be chosen in the browser.
-    login: (ctrl, opts) => loginXai(ctrl, { importLocal: opts?.forceLogin ? "off" : "fallback" }),
+    login: (ctrl, opts) => loginXai(ctrl, { importLocal: opts?.forceLogin ? "off" : "fallback", device: opts?.flow === "device" }),
+    deviceLogin: true,
     refresh: refreshXaiToken,
     providerConfig: oauthConfig("xai"),
     defaultModel: oauthDefaultModel("xai"),
@@ -414,6 +420,11 @@ export function isPublicOAuthProvider(name: string): boolean {
 /** Providers that can log in from a displayed code, with no inbound port and no browser here. */
 export function supportsCodeLoginMode(name: string): boolean {
   return OAUTH_PROVIDERS[name]?.codeRedirectUri !== undefined;
+}
+
+/** Providers that can log in with a device grant: a URL and a short code, approved in any browser. */
+export function supportsDeviceLoginMode(name: string): boolean {
+  return OAUTH_PROVIDERS[name]?.deviceLogin === true;
 }
 
 function isRefreshPolicy(value: unknown): value is RefreshPolicy {
@@ -551,9 +562,9 @@ export function observeActiveOAuthAccessToken(
   const authStore = normalizeAuthStoreBuffer(authStoreBuffer);
   if (authStore.kind === "absent") return { kind: "missing" };
   if (authStore.kind === "malformed") return { kind: "malformed" };
-  if (!isOAuthProvider(provider)) return { kind: "unsupported" };
+  if (!isOAuthProvider(oauthCredentialSlot(provider))) return { kind: "unsupported" };
 
-  const accountSet = authStore.store[provider];
+  const accountSet = authStore.store[oauthCredentialSlot(provider)];
   const account = accountSet?.accounts.find(candidate => candidate.id === accountSet.activeAccountId);
   if (!account) return { kind: "missing" };
   if (account.paused === true) return { kind: "paused" };
@@ -582,6 +593,9 @@ async function resolveAccessSnapshotForAccount(
   authorityCurrent?: () => boolean,
   retryCancelledDiscovery = true,
 ): Promise<OAuthAccessSnapshot> {
+  // A sibling row resolves, refreshes and single-flights under its owner's login, then keeps its own label.
+  const slot = oauthCredentialSlot(provider);
+  if (slot !== provider) return { ...await resolveAccessSnapshotForAccount(slot, accountId, rejectedGeneration, requireUsableAccount, oauthProvider === provider ? slot : oauthProvider, authorityCurrent, retryCancelledDiscovery), provider };
   const def = OAUTH_PROVIDERS[oauthProvider];
   if (!def) throw new UnsupportedOAuthProviderError(oauthProvider);
   // One store read answers both questions. A caller that opts in gets the account REJECTED
@@ -865,18 +879,28 @@ export async function refreshAnthropicAccountWithLock(
     const generation = credentialGeneration(stored);
     let pendingIntent = readOAuthRefreshIntent(provider, accountId);
     const observed = await newerClaudeCredentialForInstance(provider, stored, now(), deps.signal, deps.resolveIdentity);
+    // A write that depends on the CLI credential re-reads it: the non-adopting checks below run
+    // now, and adoption re-reads again inside the serialized writer (afterPrePersistRead), so a CLI
+    // rotation while the writer was queued is still caught. The read is async and never kills the
+    // Keychain child (#8161); the writer's predicate only consumes its result.
+    let diskVerified = observed.kind === "absent" || observed.kind === "adopt"
+      ? undefined : await claudeCredentialGenerationCurrent(observed.diskGeneration, now);
     const assertOwner = (store: AuthStore, checkDisk = true) => {
       if (observed.kind !== "absent" && deps.signal?.aborted) throw new OAuthTokenRefreshStaleError();
-      if (!owns(store, checkDisk && observed.kind !== "absent" ? observed.diskGeneration : undefined)) {
+      if (!owns(store, checkDisk ? diskVerified : undefined)) {
         if (store[provider]?.accounts.find(a => a.id === accountId)?.paused) throw new OAuthAccountPausedError();
         throw new OAuthTokenRefreshStaleError();
       }
     };
     assertOwner({ [provider]: getAccountSet(provider)! }, observed.kind !== "adopt");
     if (observed.kind === "adopt") {
+      const diskGeneration = observed.diskGeneration;
       const outcome = await mergeAccountCredential(provider, accountId, observed.credential, {
         expectedGeneration: generation,
-        afterPrePersistRead: deps.afterPrePersistRead,
+        afterPrePersistRead: async () => {
+          await deps.afterPrePersistRead?.();
+          diskVerified = await claudeCredentialGenerationCurrent(diskGeneration, now);
+        },
         assertOwnership: assertOwner,
       });
       // A superseding write did not adopt our candidate. Its pending intent remains owned by it.
@@ -1514,16 +1538,16 @@ const OAUTH_LOGIN_OWNED_PROVIDER_FIELDS = [
 ] as const satisfies readonly (keyof OcxProviderConfig)[];
 
 /** Add/refresh only an OAuth provider's login-owned config fields (does not persist). */
-export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
+export function upsertOAuthProvider(config: OcxConfig, provider: string, row = provider): void {
   assertAnthropicInstanceLoginConfig(config, provider);
   if (provider === "chatgpt") return;
   const def = OAUTH_PROVIDERS[provider];
-  if (!def) return;
+  if (!def || (row !== provider && !isOAuthCredentialSiblingOf(row, provider))) { if (def) throw new UnsupportedOAuthProviderError(row); return; }
   if (provider === GOOGLE_ANTIGRAVITY_PROVIDER) migrateLegacyAntigravityStaticCatalog(config);
-  const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, provider);
+  const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, row);
   if (namespaceCollision) throw new OAuthProviderNamespaceCollisionError(namespaceCollision);
-  const existing = config.providers[provider];
-  const providerConfig = def.resolveProviderConfig?.(config) ?? def.providerConfig;
+  const existing = config.providers[row];
+  const providerConfig = row !== provider ? oauthConfig(row) : def.resolveProviderConfig?.(config) ?? def.providerConfig;
   // Clone operator state, including xAI wire choices and their migration version.
   const next: OcxProviderConfig = structuredClone(existing ?? providerConfig);
   for (const field of OAUTH_LOGIN_OWNED_PROVIDER_FIELDS) {
@@ -1550,7 +1574,7 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   delete next.apiKey;
   delete next.apiKeyPool;
   delete (next as unknown as Record<string, unknown>).azureCredential;
-  if (existing && getProviderRegistryEntry(provider)?.allowKeyAuthOverride === true) {
+  if (existing && getProviderRegistryEntry(row)?.allowKeyAuthOverride === true) {
     // Retain stored key billing intent without resolving env references in the login process.
     // An explicit OAuth choice stays OAuth even when usable key material is retained.
     // Shared sanitizeApiKeyValue trim / no-CRLF checks from api-key pool writes.
@@ -1573,8 +1597,8 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
       if (previousModeAllowsKey) next.authMode = "key";
     }
   }
-  initializeProviderModelSelection(provider, next, existing, config);
-  config.providers[provider] = next;
+  initializeProviderModelSelection(row, next, existing, config);
+  config.providers[row] = next;
 }
 
 interface RunLoginDeps {
@@ -1600,6 +1624,8 @@ export async function runLogin(
 ): Promise<OAuthCredentials> {
   const def = OAUTH_PROVIDERS[provider];
   if (!def) throw new UnsupportedOAuthProviderError(provider);
+  const row = opts?.publishRow ?? provider;
+  if (row !== provider && !isOAuthCredentialSiblingOf(row, provider)) throw new UnsupportedOAuthProviderError(row);
   const loadLatestConfig = deps.loadConfig ?? loadConfig;
   const saveLatestConfig = deps.saveConfig ?? saveConfig;
   const initialBConfigState = provider === "anthropic2" ? observeInitialConfigState() : undefined;
@@ -1617,7 +1643,7 @@ export async function runLogin(
     assertAnthropicInstanceLoginConfig(preflightConfig, provider);
     const namespaceCollision = codexAccountNamespaceProviderCollisionError(
       preflightConfig.codexAccountNamespaces,
-      provider,
+      row,
     );
     if (namespaceCollision) throw new OAuthProviderNamespaceCollisionError(namespaceCollision);
   }
@@ -1645,7 +1671,7 @@ export async function runLogin(
     // credential write is handled again below before the latest row is re-upserted.
     if (provider !== "chatgpt") {
       const preCommitConfig = loadLatestConfig();
-      upsertOAuthProvider(preCommitConfig, provider);
+      upsertOAuthProvider(preCommitConfig, provider, row);
     }
     if (opts?.reauthAccountId) {
       const existing = getAccountCredential(provider, opts.reauthAccountId);
@@ -1671,6 +1697,7 @@ export async function runLogin(
       const written = await (deps.saveAccountCredential ?? saveAccountCredential)(provider, opts.reauthAccountId, reauthCred, {
         assertBeforePersist: deps.assertCurrentOwner,
         rotateLoginId: true,
+        clearAutomaticPause: true,
       });
       // A reauth whose account was deleted meanwhile wrote nothing and owns no row to report.
       if (written) deps.onAccountPersisted?.(opts.reauthAccountId);
@@ -1709,12 +1736,12 @@ export async function runLogin(
         const latestConfig = loadLatestConfig();
         const lateCollision = codexAccountNamespaceProviderCollisionError(
           latestConfig.codexAccountNamespaces,
-          provider,
+          row,
         );
         if (lateCollision) {
           throw new OAuthProviderPublicationError();
         }
-        upsertOAuthProvider(latestConfig, provider);
+        upsertOAuthProvider(latestConfig, provider, row);
         saveLatestConfig(latestConfig);
       }
     }

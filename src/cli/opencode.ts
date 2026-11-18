@@ -54,6 +54,7 @@ import { withProcessRuntimeProvenance } from "../lib/bun-runtime";
 import { selfLaunchArgv } from "../lib/self-launch-argv";
 import { withoutSiblingMarker } from "../codex/sibling-start";
 import { parseJsonc } from "../lib/jsonc";
+import { withoutSupervisorMarkers } from "../lib/supervisor-markers";
 export { parseJsonc };
 
 /**
@@ -575,7 +576,8 @@ export function opencodeProxyStartEnv(base: OpencodeLaunchEnv = process.env): Op
   const withTokenFile = base.OPENCODEX_API_AUTH_TOKEN?.trim()
     ? base
     : serviceTokenLookupEnv(base);
-  return { ...withTokenFile, OCX_SERVICE: "1" };
+  // A shell a supervised runtime handed to a tool carries its supervisor's markers; this proxy is not its.
+  return withoutSupervisorMarkers({ ...withTokenFile, OCX_SERVICE: "1" });
 }
 
 /**

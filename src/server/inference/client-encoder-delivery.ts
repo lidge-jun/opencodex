@@ -171,6 +171,8 @@ export async function deliverClientEncodedResponse(input: ClientEncodedDelivery)
         recordBufferedDelivery: false,
         // The client never receives this body, and its Chat/Messages wire has no envelope field.
         omitHiddenReasoningEnvelope: true,
+        // Keep the client's raw text: completion fingerprints compare it with what the client resends.
+        escapeMemoryCitationTags: false,
       });
     } catch {
       return undefined;

@@ -104,7 +104,7 @@ export async function inspectNodeOrchestratedIdentity(cliRoot: string, targetVer
 }
 
 export async function verifyOrchestratedChildIdentity(expected: OrchestratedExpect, targetVersion: string): Promise<boolean> {
-  if (getConfigDir() !== expected.home) return false;
+  if (getConfigDir() !== expected.home || expected.pnpmOwner !== undefined) return false;
   const install = defaultDeps.install();
   const identity = await defaultDeps.identity();
   if (install.installer !== "bun" || install.cliRoot !== expected.cliRoot || (identity.kind !== "live" && identity.kind !== "absent")) return false;

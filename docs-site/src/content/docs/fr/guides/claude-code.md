@@ -65,7 +65,7 @@ ocx claude
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*` ; lors d'un lancement par abonnement, si non défini, `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-1[1m]` natif |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | Libellé `/model` d'un emplacement de niveau qu'OpenCodex règle sur un alias routé (par exemple `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`). La même paire est écrite dans l'environnement système launchd et dans le hook shell. L'identifiant du modèle reste l'alias. Un emplacement ou un libellé que vous définissez vous-même n'est pas modifié |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `1` lorsque `alwaysEnableEffort` est activé (conditionnel) |
-| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` lorsqu'il est défini (conditionnel ; désactivé par défaut) |
+| `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch` lorsqu'il est défini (conditionnel ; non injecté par défaut, la valeur par défaut de Claude Code s’applique) |
 | `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | Remplacement du contexte hérité lorsque `maxContextTokens` est défini (conditionnel) |
 Les variables que vous exportez vous-même gagnent toujours. Les arguments supplémentaires passent par : `ocx claude -p "hello"`.
 

@@ -105,9 +105,11 @@ upstream-заголовка `Authorization`.
 
 Пример для не-loopback:
 
+Это пример ручной настройки удалённого клиента. Сначала настройте TLS-фронтенд и используйте его HTTPS URL: OpenCodex не завершает TLS и не определяет этот URL для `ocx opencode`. Обычный HTTP в локальной сети раскрывает учётные данные при передаче. Либо оставьте прокси на loopback и используйте локальный SSH-туннель. См. [TLS для слушателя данных](/ru/guides/remote-hub/#giving-the-data-listener-tls).
+
 ```json
 "options": {
-  "baseURL": "http://192.168.1.10:10100/v1",
+  "baseURL": "https://proxy.example.com/v1",
   "headers": {
     "x-opencodex-api-key": "{env:OPENCODEX_OPENCODE_API_KEY}"
   }

@@ -12,8 +12,9 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyRestartMessage, restartRuntimeAfterApply, type ApplyRestartDeps } from "../../src/cli/link-apply-restart";
+import { classifyClientRestartSupervisor, createClientRestartController, restartOwnerProven } from "../../src/client/runtime-restart";
 import { requestBoundSystemRestart } from "../../src/cli/system-restart-client";
-import { deferSupervisedRestart, reportRestartFailure, supervisedRestartRefusal } from "../../src/cli/restart-failure";
+import { deferSupervisedRestart, LEGACY_FLAG_OWNER_ADVICE, reportRestartFailure, supervisedRestartRefusal } from "../../src/cli/restart-failure";
 import { collectAppliedCodexSettingsStatus } from "../../src/cli/status-codex-settings";
 import { recordHomeCodexSettings, type HomeCodexSettingsRecord } from "../../src/client/link-home";
 import type { HomeCodexSettingsDocument } from "../../src/link/codex-settings";
@@ -151,7 +152,7 @@ function clientHealthDeps(postResponse: Response) {
 describe("ocx restart against a client runtime", () => {
   test("only explicit request-phase supervision refusals qualify for deferral", () => {
     const notices: string[] = [];
-    for (const supervisor of ["desktop", "service"] as const) {
+    for (const supervisor of ["desktop", "service", "service-unproven", "legacy-flag"] as const) {
       const refused = { ok: false as const, phase: "request" as const, error: new Error(`restart_supervised_${supervisor}`) };
       expect(supervisedRestartRefusal(refused)).toBe(supervisor);
       expect(deferSupervisedRestart(refused, value => notices.push(value))).toBe(true);
@@ -160,7 +161,7 @@ describe("ocx restart against a client runtime", () => {
     const uncertain = { ok: false as const, phase: "request" as const, error: new Error("restart_request_outcome_unknown") };
     expect(supervisedRestartRefusal(uncertain)).toBeNull();
     expect(deferSupervisedRestart(uncertain, value => notices.push(value))).toBe(false);
-    expect(notices).toEqual(["desktop", "service"]);
+    expect(notices).toEqual(["desktop", "service", "service-unproven", "legacy-flag"]);
     expect(supervisedRestartRefusal({ ok: false, phase: "request", error: new Error("restart_supervised_other") })).toBeNull();
     expect(supervisedRestartRefusal({ ok: true, mode: "skipped" })).toBeNull();
   });
@@ -173,7 +174,7 @@ describe("ocx restart against a client runtime", () => {
   });
 
   test("in time, the request is sent; a supervised refusal comes back as its own code", async () => {
-    for (const supervisor of ["desktop", "service"] as const) {
+    for (const supervisor of ["desktop", "service", "service-unproven", "legacy-flag"] as const) {
       const supervised = new Response(JSON.stringify({ success: false, error: { code: "restart_supervised", supervisor } }), { status: 409 });
       const { deps: d, posts } = clientHealthDeps(supervised);
       const outcome = await requestBoundSystemRestart(child, 1_000 + CLIENT_RESTART_REQUEST_MIN_REMAINING_MS, d);
@@ -193,14 +194,51 @@ describe("ocx restart against a client runtime", () => {
     try {
       reportRestartFailure({ ok: false, phase: "request", error: new Error("restart_supervised_service") });
       reportRestartFailure({ ok: false, phase: "request", error: new Error("restart_supervised_desktop") });
+      reportRestartFailure({ ok: false, phase: "request", error: new Error("restart_supervised_service-unproven") });
+      reportRestartFailure({ ok: false, phase: "request", error: new Error("restart_supervised_legacy-flag") });
     } finally {
       console.error = original;
     }
     expect(lines).toEqual([
       "Restart not performed; the running client runtime was kept. Its background service owns it: run `ocx service restart`.",
-      "Restart not performed; the running client runtime was kept. The OpenCodex desktop app owns it: restart it from the app.",
+      "Restart not performed; the running client runtime was kept. The OpenCodex desktop app owns it while its connection is current: use Quit in the OpenCodex tray menu, then reopen it. After `ocx disconnect`, `ocx restart` hands it to the app.",
+      "Restart not performed; the running client runtime was kept. A service manager started it (systemd opencodex-proxy.service, launchd com.opencodex.proxy or the Windows OpenCodex service), but it is not enabled or its relaunch could not be verified: restart it through the manager with 'ocx service restart', or check 'ocx service status'.",
+      "Restart not performed; the running client runtime was kept and nothing was stopped. " + LEGACY_FLAG_OWNER_ADVICE,
     ]);
+    expect(LEGACY_FLAG_OWNER_ADVICE).toContain("ocx service repair");
   });
+});
+
+// #8545 owner decision (lidge-jun, 2026-11-16): `ocx sync` on a Child whose runtime carries only a bare OCX_SERVICE=1
+// defers the restart with the re-register advice, whatever the service diagnostic says; nothing is restarted.
+describe("ocx sync with a bare OCX_SERVICE=1 runtime defers with the re-register advice (#8545)", () => {
+  for (const viable of [true, false]) {
+    test(`service viable ${viable}`, async () => {
+      const env = { OCX_SERVICE: "1", PATH: "/usr/bin" } as NodeJS.ProcessEnv;
+      const supervisor = classifyClientRestartSupervisor({ desktop: false, env, diagnose: () => ({ viable, running: viable }) });
+      const controller = createClientRestartController({
+        supervisor: async () => supervisor,
+        ownerProven: () => restartOwnerProven({ desktop: false, env }),
+        // A connected sync: the served connection is current.
+        connectionChanged: () => false,
+        recycle: async () => { throw new Error("the recycle is not reachable"); },
+        stop: async () => { throw new Error("nothing is stopped"); }, spawnReplacement: async () => {}, resume: async () => {}, exitProcess: () => {}, sleep: async () => {},
+      });
+      const { value } = deps(0, {
+        restart: async (_start, onSupervised) => {
+          const admission = await controller.request();
+          await controller.settled();
+          if (admission.kind === "supervised") { onSupervised(admission.supervisor); return false; }
+          return admission.kind === "accepted";
+        },
+      });
+      const outcome = await restartRuntimeAfterApply(record, value);
+      expect(outcome).toEqual({ kind: "deferred-supervisor", supervisor: "legacy-flag" });
+      const message = applyRestartMessage(outcome);
+      expect(message).toContain("Client runtime restart deferred");
+      expect(message).toContain("ocx service repair");
+    });
+  }
 });
 
 describe("ocx status --json OCX-6 fields (shape snapshot)", () => {
