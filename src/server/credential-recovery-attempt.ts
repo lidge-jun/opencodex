@@ -11,5 +11,6 @@ export function sealCredentialRefusal(logCtx: RequestLogContext, status: number,
   delete attempt.inputTokenEstimate;
   finishRequestAttempt(attempt, status, Date.now() - (logCtx.activeAttemptStartedAt ?? Date.now()), attempt.usage ?? logCtx.usage);
   attributeSealedAttempt(attempt, recovery);
+  if (attempt.tierOutcome) attempt.tierOutcome = { ...attempt.tierOutcome };
   sealedCredentialRefusals.add(attempt);
 }

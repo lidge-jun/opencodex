@@ -1,6 +1,6 @@
 import { clientFacingModelText } from "../../lib/error-destination";
 import { createAnthropicThinkingRecovery } from "./anthropic-thinking-recovery";
-import { rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
+import { anthropicRefusalCredentialChanged, rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
 import type { ResponsesRequestContext } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -58,7 +58,6 @@ import { namespacedToolName, toolChoiceCandidates } from "../../types";
 import { providerFetch } from "./fetch-helpers";
 import { createAnthropicImageRecovery } from "./image-context-recovery";
 import type { AttemptRecoveryKind } from "../../usage/log";
-import { recordAdapterReasoning, recordAdapterTier } from "../request-log";
 import { sealCredentialRefusal } from "../credential-recovery-attempt";
 import { assignNativeLogConversationId, normalizeLogConversationId } from "../request-log-conversation";
 import { attemptAccountChanged } from "../request-log-account-rotation";
@@ -108,7 +107,8 @@ export async function executeResponsesSidecars(
     | "resolveCopilotSelection"
     | "oauthDispatch"
     | "pinAnthropicImageRecovery"
-    | "noteRoutedAttemptSend" | "createCredentialReplayAttempt"
+    | "noteRoutedAttemptSend" | "createCredentialReplayAttempt" | "credentialReplayHandoff"
+    | "commitRunTurnAttemptSend" | "commitAdapterAttemptSend" | "isCurrentInferenceResponse"
     | "bindKeyUsageFromBridge"
     | "hostedAdvisorSpendGuard"
     | "initialAdapterProvider"
@@ -328,19 +328,14 @@ export async function executeResponsesSidecars(
     return sidecarScopeDenial ? admissionModelDeniedResponse(projectAdmissionModelDeniedLog(sidecarScopeDenial, logCtx))
       : hostedSpendRefusal?.response();
   };
-  let lastSidecarRequest: AdapterRequest | undefined;
-  let pendingSidecarReplay: { refused: AdapterRequest; status: number; kind: AttemptRecoveryKind; dispatched?: boolean } | undefined;
+  let sentSidecarInference = false;
+  let pendingSidecarReplay: { status: number; kind: AttemptRecoveryKind; dispatched?: boolean } | undefined;
   let sidecarRetryKind: AttemptRecoveryKind | undefined;
-  const observeSidecarBuild = (request: AdapterRequest): void => {
-    if (pendingSidecarReplay && !pendingSidecarReplay.dispatched) return;
-    pendingSidecarReplay = undefined;
-    if (request.usageLog?.inputTokens !== undefined) logCtx.usageLogInputTokens = request.usageLog.inputTokens;
-    recordAdapterReasoning(logCtx, request);
-    recordAdapterTier(logCtx, request);
-  };
   const noteSidecarAttempt = (recovery?: AttemptRecoveryKind): void => {
     sidecarRetryKind = recovery;
-    if (!pendingSidecarReplay) transportState.noteRoutedAttemptSend(logCtx.usageLogInputTokens, recovery);
+    if (transportState.adapter.runTurn && !transportState.adapter.reportsPhysicalSends) {
+      transportState.noteRoutedAttemptSend(logCtx.usageLogInputTokens, recovery);
+    }
   };
   /** Admit a replacement credential, or leave the loop's original refusal authoritative. */
   const rotateSidecarProviderOn429 = async (
@@ -349,6 +344,7 @@ export async function executeResponsesSidecars(
     retryParsed?: OcxParsedRequest,
     originalResponse?: Response,
   ): Promise<{ adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind } | null> => {
+    if (originalResponse && !transportState.isCurrentInferenceResponse(originalResponse)) return null;
     const antigravityValidationResponse = canRunWebSearch && route.providerName === "google-antigravity"
       && route.provider.authMode === "oauth" && originalResponse?.status === 403;
     if (route.providerName !== "kiro" && !(anthropicInstance && (originalResponse?.status === 403 || originalResponse?.status === 401))
@@ -517,6 +513,9 @@ export async function executeResponsesSidecars(
         // same way.
         const admitted = await commitResolvedOAuthSelection(await anthropicRoutingFor(anthropicInstance).getAnthropicPoolAccessSnapshot(nextAccountId));
         if (!admitted) throw new Error("OAuth selection changed during recovery");
+        recoveryKind = originalResponse && !anthropicRefusalCredentialChanged(originalResponse, admitted) ? "rate-limit-429"
+          : originalResponse?.status === 401 ? "oauth-401"
+          : originalResponse?.status === 403 ? "oauth-account-403" : "anthropic-oauth-429";
         transportState.anthropicPoolAccountId = admitted.accountId;
         transportState.anthropicPoolFailovers += 1;
         route.provider = { ...route.provider, apiKey: admitted.accessToken };
@@ -525,8 +524,6 @@ export async function executeResponsesSidecars(
         hop.permit?.release();
         return null;
       }
-      recoveryKind = originalResponse?.status === 401 ? "oauth-401"
-        : originalResponse?.status === 403 ? "oauth-account-403" : "anthropic-oauth-429";
       sidecarBudget.ownCredentialHop(hop.permit, (canRunWebSearch || !!imgPlan || !!vidPlan) && transportState.adapter.name === "anthropic");
     } else {
       // No key pool, no generic OAuth roster, no Anthropic pool could produce a replacement
@@ -558,8 +555,8 @@ export async function executeResponsesSidecars(
       adapterName: rotatedAdapter.name,
       ...(antigravityVerification ? { oauthCredentialSnapshot: transportState.replayOAuthCredentialSnapshot } : {}),
     });
-    if (lastSidecarRequest && originalResponse) {
-      pendingSidecarReplay = { refused: lastSidecarRequest, status: originalResponse.status, kind: recoveryKind };
+    if (sentSidecarInference && originalResponse && recoveryKind !== "rate-limit-429") {
+      pendingSidecarReplay = { status: originalResponse.status, kind: recoveryKind };
     }
     return { adapter: rotatedAdapter, recoveryKind };
   };
@@ -603,19 +600,32 @@ export async function executeResponsesSidecars(
   const sidecarRequestFetch = (request: AdapterRequest, iterParsed: OcxParsedRequest, adapter: ProviderAdapter, recovery?: AttemptRecoveryKind) => {
     const staged = pendingSidecarReplay?.kind === recovery ? pendingSidecarReplay : undefined;
     if (!staged) pendingSidecarReplay = undefined;
-    const commit = staged && transportState.createCredentialReplayAttempt(staged.refused, staged.status, staged.kind);
+    const handoff = transportState.credentialReplayHandoff;
+    const commit = handoff ?? (staged && transportState.createCredentialReplayAttempt(staged.status, staged.kind));
     const physicalOptions = { ...sidecarBudget.fetchOptions(adapter), ...thinkingReceipt(request, adapter, recovery) };
     let published = false;
     return providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-      dispatchOverride: oauthDispatch(request, iterParsed, "adapter", Boolean(commit)),
+      dispatchOverride: oauthDispatch(request, iterParsed, "adapter", true),
       providerName: route.providerName, modelId: route.modelId, ...physicalOptions,
       onPhysicalDispatch: () => {
-        physicalOptions.onPhysicalDispatch?.();
-        if (commit && (!adapter.fetchResponse || !published)) {
-          commit(request, adapter.name, sidecarRetryKind === recovery ? undefined : sidecarRetryKind);
-          staged.dispatched = published = true;
+        if (physicalOptions.onPhysicalDispatch) physicalOptions.onPhysicalDispatch();
+        else if (handoff) {
+          const prepaid = sendBudgetState.pendingHopPermit;
+          if (!prepaid && sendBudgetState.sendBudgetExhausted()) throw new SendBudgetExhaustedError(errorDestinationLabel(request.url));
+          sendBudgetState.noteInitialDispatch(prepaid);
+          sendBudgetState.pendingHopPermit = undefined;
         }
-        lastSidecarRequest = request;
+        if (!adapter.fetchResponse || !published) {
+          if (commit) {
+            commit(request, adapter.name, sidecarRetryKind === recovery ? undefined : sidecarRetryKind);
+            if (staged) staged.dispatched = true;
+            if (handoff) transportState.credentialReplayHandoff = undefined;
+          } else {
+            transportState.commitAdapterAttemptSend(request, adapter.name, sidecarRetryKind);
+          }
+          published = true;
+        }
+        sentSidecarInference = true;
       },
     });
   };
@@ -697,10 +707,19 @@ export async function executeResponsesSidecars(
       ...(transportState.adapter.name === "anthropic" ? { thinkingRecovery } : {}),
       ...(imageRecovery ? { imageRecovery } : {}),
       clientToolCatalogRestriction: route.provider.authMode === "forward" ? undefined : requestState.clientToolCatalogRestriction,
-      incomingMeta: { headers: requestState.selectedForwardHeaders, providerName: route.providerName, abortSignal: options.abortSignal, translatorBudget, ...(options.comboInitialSend ? { providerFetch: imageProviderFetch } : {}), ...sidecarBudget.incomingMeta,
+      incomingMeta: { headers: requestState.selectedForwardHeaders, providerName: route.providerName, abortSignal: options.abortSignal, translatorBudget,
+        ...(options.comboInitialSend ? { providerFetch: imageProviderFetch } : {}), ...sidecarBudget.incomingMeta,
         // Policy facts ride every runTurn caller, independent of a combo send-budget receipt.
         comboAttempt: options.comboAttempt === true, ...(requestState.subagentFallbackSelected ? { subagentFallback: true } : {}),
-        ...(options.internalDecisionCall ? { internalDecisionCall: true } : {}) },
+        ...(options.internalDecisionCall ? { internalDecisionCall: true } : {}),
+        ...(transportState.adapter.reportsPhysicalSends ? {
+          sendBudget: sendBudgetState.adapterDispatchBudget,
+          onPhysicalSend: (send: { ordinal: number; recovery?: AttemptRecoveryKind }) => {
+            if (send.ordinal === 1) transportState.commitRunTurnAttemptSend(parsed, send.recovery);
+            sendBudgetState.noteAdapterPhysicalSend(logCtx.usageLogInputTokens, send);
+          },
+        } : {}),
+      },
       onProducerStart: sidecarBudget.takeProducerOwnership,
       onProducerEnd: sidecarBudget.release,
       onIterationEnd: releaseSidecarHop,
@@ -722,7 +741,6 @@ export async function executeResponsesSidecars(
         const fetch = sidecarRequestFetch(...args);
         return fetch.unpacedFetch ?? fetch;
       },
-      onRequestBuilt: observeSidecarBuild,
       ...(vidPlan?.timeoutMs ? { videoTimeoutMs: vidPlan.timeoutMs } : {}),
       onUsage: usage => {
         // Cursor may assign _cursorConversationId inside the image loop's first runTurn;
@@ -857,7 +875,6 @@ export async function executeResponsesSidecars(
       escapeMemoryCitationTags: inboundWire !== "chat" && inboundWire !== "anthropic",
       abortSignal: options.abortSignal,
       onFirstOutput: noteSidecarOutput,
-      onRequestBuilt: observeSidecarBuild,
       onAttemptSend: noteSidecarAttempt,
       onUsage: usage => {
         transportState.bindKeyUsageFromBridge(usage);

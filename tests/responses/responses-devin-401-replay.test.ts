@@ -85,7 +85,8 @@ mock.module("../../src/server/adapter-resolve", () => ({ ...resolver,
         if (key === DEAD) {
           await holdDeadSend?.();
           emit({ type: "error", status: 401, errorType: "authentication_error", code: "unauthenticated",
-            retryable: false, message: "Devin cloud error unauthenticated: invalid api key" });
+            retryable: false, message: "Devin cloud error unauthenticated: invalid api key",
+            ...(receiptMode ? { usage: { inputTokens: 17, outputTokens: 0 } } : {}) });
           return;
         }
         emit({ type: "text_delta", text: `served by ${key === ROTATED ? "rotated" : "live"}` });
@@ -189,6 +190,36 @@ test.each(["adapter", "executor"] as const)("same-account refresh splits at the 
     [200, 1, recorded.attempts?.[0]?.accountLogLabel],
   ]);
   expect(log.activeAttempt?.recoveryKinds).toContain("oauth-401");
+});
+
+test("a Devin refusal keeps its reported usage when the replacement sends", async () => {
+  receiptMode = "adapter";
+  await saveCliImport(DEAD, { accountId: "uid-rotated" });
+  writeCliFile(ROTATED);
+  const log: RequestLogContext = { surface: "codex" };
+  const start = Date.now();
+  const response = await run(false, log);
+  expect(await response.text()).toContain("served by rotated");
+  expect(finalizeRunTurnLog(start, log, response.status).attempts?.[0]).toMatchObject({
+    status: 401, sendCount: 1, usageStatus: "reported", usage: { inputTokens: 17, outputTokens: 0 },
+  });
+});
+
+test("Devin egress refusal before the first inference does not report a send", async () => {
+  receiptMode = "adapter";
+  await saveDevin(LIVE, "active");
+  const guard = spyOn(providerEgress, "providerEgressSendInit").mockImplementation(() => {
+    throw new Error("fixture pre-dispatch refusal");
+  });
+  try {
+    const log: RequestLogContext = { surface: "codex" };
+    const response = await run(false, log);
+    expect(await response.text()).toContain("fixture pre-dispatch refusal");
+    expect(sentKeys).toEqual([]);
+    expect(log.activeAttempt?.sendCount ?? 0).toBe(0);
+  } finally {
+    guard.mockRestore();
+  }
 });
 
 test.each(["adapter", "executor"] as const)("%s-owned refresh keeps the 401 when the replacement stops before dispatch", async mode => {

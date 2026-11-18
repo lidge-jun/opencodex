@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
@@ -11,12 +11,20 @@ import type { IncomingMeta } from "../../src/adapters/base";
 import { createRequestExecutionBudget } from "../../src/lib/request-execution-budget";
 import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
+import { ADAPTER_REGISTRY } from "../../src/adapters/registry";
+import { handleResponses } from "../../src/server/responses";
+import type { RequestLogContext } from "../../src/server/request-log";
+import type { OcxConfig } from "../../src/types";
+import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
+import { createTempHome } from "../helpers/temp-home";
+import { saveConfig } from "../../src/config";
 
-function completedChild(): ChildProcess {
+function completedChild(refused = false): ChildProcess {
   const child = new EventEmitter() as ChildProcess;
   child.stdout = Readable.from([
     JSON.stringify({ type: "system", subtype: "init", mcp_servers: [{ name: "opencodex", status: "connected" }] }) + "\n",
-    JSON.stringify({ type: "result", subtype: "success", is_error: false }) + "\n",
+    JSON.stringify({ type: "result", subtype: refused ? "error_during_execution" : "success",
+      is_error: refused, ...(refused ? { error_code: 105 } : {}) }) + "\n",
   ].map(frame => new TextEncoder().encode(frame)));
   child.stderr = Readable.from([]);
   child.stdin = new Writable({ write(_chunk, _encoding, callback) { callback(); } });
@@ -24,6 +32,42 @@ function completedChild(): ChildProcess {
   child.kill = () => true;
   return child;
 }
+
+test("Qoder's replacement spawn has one post-permit attempt receipt with the key recovery", async () => {
+  const home = createTempHome("ocx-qoder-spawn-receipt-");
+  const release = acquireOwnedSpendHome();
+  const log: RequestLogContext = {};
+  let spawns = 0;
+  const receipts: unknown[] = [];
+  using adapter = spyOn(ADAPTER_REGISTRY.qoder, "create").mockImplementation(provider =>
+    createQoderAdapter(provider, {
+      which: () => "/synthetic/qoder",
+      spawn: () => {
+        receipts.push(log.attempts?.map(attempt => [attempt.sendCount, [...attempt.recoveryKinds]]));
+        return completedChild(++spawns === 1);
+      },
+    }));
+  try {
+    const keyA = "synthetic-qoder-first";
+    const keyB = "synthetic-qoder-second";
+    const config = { port: 0, defaultProvider: "qoder", providers: { qoder: {
+      adapter: "qoder", authMode: "key", baseUrl: "https://qoder.com", apiKey: keyA, models: ["Qwen3.8-Max"],
+      apiKeyPool: [{ id: "a", key: keyA }, { id: "b", key: keyB }],
+    } } } as OcxConfig;
+    saveConfig(config);
+    const response = await handleResponses(new Request("http://localhost/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "qoder/Qwen3.8-Max", input: "hello", stream: false }),
+    }), config, log);
+    expect(spawns, await response.text()).toBe(2);
+    expect(receipts).toEqual([[[1, []]], [[1, []], [1, ["key-401"]]]]);
+    expect(log.attempts?.[0]).toMatchObject({ status: 401, failureCause: "credential-rejected" });
+    expect(log.attempts?.[0]?.accountLogLabel).not.toBe(log.attempts?.[1]?.accountLogLabel);
+  } finally {
+    release();
+    home.remove();
+  }
+});
 
 for (const invalidation of ["selection", "abort", "valid"] as const) {
   test(`Qoder fences spawn after asynchronous tool setup (${invalidation})`, async () => {
@@ -61,6 +105,7 @@ for (const invalidation of ["selection", "abort", "valid"] as const) {
     if (invalidation === "selection") await expect(pending).rejects.toThrow("selection invalidated during setup");
     else await pending;
     expect(staged).toBe(2);
+    expect(adapter.reportsPhysicalSends).toBe(true);
     expect(spawns).toBe(invalidation === "valid" ? 1 : 0);
     expect(physicalSends).toBe(invalidation === "valid" ? 1 : 0);
     expect(sendBudget.remainingBaseSends(3)).toBe(invalidation === "valid" ? 2 : 3);

@@ -29,7 +29,7 @@ import { GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST } from "../oauth/generic-account
  * Loaded lazily by `claude-messages.ts` only when the switch is on and a route is eligible.
  */
 import { resolveAnthropicModelRouteForInstance } from "../oauth/anthropic-model-routes";
-import { bindAnthropicRefusalCredentialForSend, rotateAnthropicAccountOnResponseForInstance } from "../oauth/anthropic-account-refusal";
+import { anthropicRefusalCredentialChanged, bindAnthropicRefusalCredentialForSend, rotateAnthropicAccountOnResponseForInstance } from "../oauth/anthropic-account-refusal";
 import { captureAnthropicPhysicalSendOwnership, anthropicPhysicalSendOwnershipIsCurrent,
   type AnthropicPhysicalSendOwnership } from "../oauth/anthropic-send-ownership";
 import { anthropicModelQuotaFor } from "../oauth/anthropic-model-quota";
@@ -1046,16 +1046,17 @@ async function runNativeMessagesAttempt(options: NativeMessagesExecution, attemp
       });
       if (!nextAccountId) break;
       const recovery = response.status === 401 ? "oauth-401" : response.status === 403 ? "oauth-account-403" : "rate-limit-429";
-      sealCredentialRefusal(logCtx, response.status, recovery);
       discard(response);
       oauthBinding = await resolveNativeOAuthBindingForInstance(nativeInstance!, config, { routeTarget,
         sessionKey: options.sessionKey, model: route.modelId, candidateAccountId: nextAccountId,
         expectedRecoverySelection, expectedRecoveryRouteDecision: sendingBinding.routeDecision,
       });
+      const changed = anthropicRefusalCredentialChanged(response, oauthBinding.snapshot);
+      if (changed) sealCredentialRefusal(logCtx, response.status, recovery);
       oauthFailovers++;
       rebuildFor(oauthProvider(oauthBinding));
       logCtx.provider = formatAnthropicProviderForLog(route.providerName, oauthBinding.snapshot.accountId, config);
-      response = await send(recovery);
+      response = await send(changed ? recovery : "rate-limit-429");
     }
   } catch (error) {
     releaseRetainedRequest();

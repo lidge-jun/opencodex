@@ -10,6 +10,8 @@ import { getAccountSet, saveAccountCredential, saveCredential, setActiveAccount 
 import { clearAccountQuotaCache, getCachedProviderAccountQuota, resetProviderQuotaReconcileStateForTests } from "../../../src/providers/quota";
 import { clearResponseStateForTests } from "../../../src/responses/state";
 import { handleResponses } from "../../../src/server/responses";
+import { handleClaudeMessages } from "../../../src/server/claude-messages";
+import type { RequestLogContext } from "../../../src/server/request-log";
 import type { OcxConfig, OcxProviderConfig } from "../../../src/types";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 
@@ -133,11 +135,11 @@ function configFor(reply: (body: Record<string, unknown>) => Response | Promise<
   };
 }
 
-function post(config: OcxConfig, body: Record<string, unknown> = {}) {
+function post(config: OcxConfig, body: Record<string, unknown> = {}, log: RequestLogContext = {}) {
   return handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ model: "anthropic/claude-sonnet-4-5", input: "Answer briefly", stream: false, ...body }),
-  }), config, { model: "", provider: "" });
+  }), config, log);
 }
 
 function expectQuota(id: string, fiveHourPercent: number, weeklyPercent: number) {
@@ -207,14 +209,32 @@ test.each(["main", "continuation", "search"])("%s physical transient refusal tak
   expect(anthropicRatePauseUntil(ids[2]!)).toBeUndefined();
 });
 
-test("same-account throttle backoff preserves healthy affinity", async () => {
+test.each(["main", "continuation", "search", "native Messages"] as const)("%s same-account throttle backoff preserves the attempt", async lane => {
   const [a] = await seed();
-  const config = configFor(body => sent.length === 1 ? refused({ "retry-after": "0.001" }) : answer(body.stream === true));
+  const config = configFor(body => {
+    if (lane === "continuation" && sent.length === 1) return answer(body.stream === true, "0.1", "0.2", "");
+    return sent.length === (lane === "continuation" ? 2 : 1)
+      ? refused({ "retry-after": "0.001" }) : answer(body.stream === true);
+  });
   config.anthropicAccountPool = { enabled: true };
+  if (lane === "continuation") config.emptyCompletionRetry = true;
+  if (lane === "search") config.webSearchSidecar = { backend: "anthropic", enabled: true };
+  if (lane === "native Messages") {
+    config.protocols = { rollout: { managedMessagesNative: true, managedMessagesNativeOAuth: true } };
+    config.providers.anthropic!.baseUrl = "https://api.anthropic.com";
+  }
   bindAnthropicSessionAffinity("synthetic-session", a!);
-  const response = await post(config);
+  const log: RequestLogContext = {};
+  const response = lane === "native Messages"
+    ? await handleClaudeMessages(new Request("http://localhost/v1/messages", {
+      method: "POST", headers: { "content-type": "application/json", "anthropic-version": "2023-06-01" },
+      body: JSON.stringify({ model: "anthropic/claude-sonnet-4-5", max_tokens: 64, messages: [{ role: "user", content: "Answer briefly" }] }),
+    }), config, log)
+    : await post(config, lane === "search" ? { tools: [{ type: "web_search" }] } : {}, log);
   await response.text();
-  expect(sent).toHaveLength(2);
+  expect(sent).toHaveLength(lane === "continuation" ? 3 : 2);
+  expect(log.attempts?.filter(attempt => attempt.sendCount > 0).map(attempt => attempt.sendCount))
+    .toEqual([sent.length]);
   expect(sent[0]!.authorization).toBe(sent[1]!.authorization);
   expect(resolveAnthropicAccountForSession("synthetic-session", config).accountId).toBe(a!);
   expect(getAnthropicAccountHealthSnapshot(a!)).toBeNull();

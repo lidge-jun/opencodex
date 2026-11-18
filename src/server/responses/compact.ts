@@ -238,7 +238,7 @@ import {
   upstreamHostCircuitOpenResponse,
   usesCodexForwardPoolAuth,
 } from "./core";
-import { fetchWithHeaderTimeout, physicalSendObserverInit, providerFetch, safeHostLabel, safeOriginLabel, sendWithConnectionPolicy } from "./fetch-helpers";
+import { fetchWithHeaderTimeout, providerFetch, safeHostLabel, safeOriginLabel, sendWithConnectionPolicy } from "./fetch-helpers";
 import { requestPacingOverloadResponse } from "./pacing-overload";
 import { shouldRetryCodexPoolAccountQuota, shouldRetryCodexPoolAccountTransient } from "./core-codex-account";
 import { mapCodexAuthContextErrorToResponse, nativeMainRefreshFailureResponse } from "./codex-auth-error";
@@ -1302,11 +1302,10 @@ export async function handleResponsesCompact(
                 physicalInit, { providerName: route.providerName, provider: sendProvider })) as typeof fetch;
               return fetchWithHeaderTimeout(compactUrl,
                 { ...init, headers: sendHeaders, body: JSON.stringify({ ...buildCompactSendBody() as typeof compactBody, model: route.modelId }),
-                  ...physicalSendObserverInit(undefined, compactUrl, () => noteCompactSend(upstreamRecovery)),
                 },
                 init.signal ?? req.signal, connectMs(), false, physicalFetch);
             } : undefined,
-          onPhysicalDispatch: keyedDispatch ? undefined : () => noteCompactSend(upstreamRecovery),
+          onPhysicalDispatch: () => noteCompactSend(upstreamRecovery),
         }),
         // Every credential-bearing forward send gets manual redirects, not only
         // pool sends: direct mode carries the caller's credential too (#914).

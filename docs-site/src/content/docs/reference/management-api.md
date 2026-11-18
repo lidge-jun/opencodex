@@ -433,10 +433,10 @@ the per-account usage summaries. A provider without that suffix, such as a pool-
 request, has no tag. Older rows and malformed values omit the field.
 
 Key selection is recorded after queued requests have been rebuilt for the current selection.
-When a retry changes keys, `attempts` retains a separate record for the preceding key. A retry
-after credential recovery records a separate replacement attempt once it reaches upstream, even
-if both attempts use the same account label. If local pacing rejects the replacement, the
-request can have status 429 while its sole upstream attempt retains status 401. The same
+When a retry changes keys, `attempts` retains a separate record for the preceding key. After an
+upstream attempt has been sent, credential recovery records a separate attempt when the proxy
+dispatches the replacement, even if both attempts use the same account label. If local pacing
+rejects the replacement, the request can have status 429 while its sole upstream attempt retains status 401. The same
 dispatch rule applies to combo members, runTurn adapters, and native Responses compaction.
 Each attempt retains the usage the proxy captures for it. The xAI Responses OAuth replay discards
 the refused 401 body, so usage in that body remains unreported. A replacement can carry estimated

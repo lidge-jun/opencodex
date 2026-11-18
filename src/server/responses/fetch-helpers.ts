@@ -36,6 +36,7 @@ import { redactSecretString } from "../../lib/redact";
 import { outboundCredentials } from "../../lib/outbound-credential-registry";
 import { compressUpstreamRequestBody, isCanonicalCodexResponsesUrl } from "./request-compression";
 import { redeemOutboundTurnState, TURN_STATE_BINDING_INIT, turnStateBinding } from "../turn-state-handles";
+import { EXECUTOR_PHYSICAL_SEND_RECEIPT, markPhysicalSendReceiptExecutor } from "../../adapters/physical-send";
 
 export { withUpstreamHttpVersion };
 
@@ -382,11 +383,16 @@ export function providerFetch(
       // No proxy option is attached here: a `dispatchOverride` may rebuild this request against
       // a different destination, so the route is decided at the physical send instead.
       const sharedReceipt = (init as Record<symbol, ((body: BodyInit | null | undefined) => void) | undefined> | undefined)?.[WS_FALLBACK_RECEIPT];
+      const adapterReceipt = (init as Record<symbol, (() => void) | undefined> | undefined)?.[EXECUTOR_PHYSICAL_SEND_RECEIPT];
       let notified = false;
       const dispatchInit = { ...withUpstreamHttpVersion(input, init, provider), timeout: 0,
-        ...(options.onPhysicalDispatch ? { [PHYSICAL_DISPATCH]: (body: BodyInit | null | undefined) => {
+        ...(options.onPhysicalDispatch || adapterReceipt ? { [PHYSICAL_DISPATCH]: (body: BodyInit | null | undefined) => {
           if (sharedReceipt) sharedReceipt(body);
-          else if (!notified) { options.onPhysicalDispatch!(body); notified = true; }
+          else if (!notified) {
+            adapterReceipt?.();
+            options.onPhysicalDispatch?.(body);
+            notified = true;
+          }
         } } : {}),
       };
       return override
@@ -429,6 +435,7 @@ export function providerFetch(
       let notified = false;
       const notifyOnce = (body: BodyInit | null | undefined): void => {
         if (notified) return;
+        (init as Record<symbol, (() => void) | undefined>)[EXECUTOR_PHYSICAL_SEND_RECEIPT]?.();
         options.onPhysicalDispatch?.(body);
         notified = true;
       };
@@ -505,11 +512,11 @@ export function providerFetch(
     preconnect,
     waitForPacing,
     fetchWithPacingSlot,
-    unpacedFetch: Object.assign(unpaced, { preconnect }),
+    unpacedFetch: markPhysicalSendReceiptExecutor(Object.assign(unpaced, { preconnect }) as typeof globalThis.fetch),
   });
   markEgressTransparentExecutor(paceAware as unknown as typeof globalThis.fetch);
   if (customExecutor === undefined && transport === base && !options.dispatchOverride) bindProviderSocketRoute(paceAware, providerName, provider);
-  return paceAware;
+  return markPhysicalSendReceiptExecutor(paceAware as ProviderFetch);
 }
 
 

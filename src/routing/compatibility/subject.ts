@@ -121,6 +121,7 @@ export function resolveCompatibilitySubjectsForInboundWire(
     modelId,
     effective,
     installationSalt,
+    effectiveAdapter === undefined ? undefined : { inbound: inboundWire, adapter },
   );
   if (!behaviorValues) return { subjectIds };
 

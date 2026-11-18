@@ -15,7 +15,7 @@ import { deferPhysicalSendReporter } from "./deferred-send-reporter";
 import { usesApiKeyAccount } from "../../providers/label";
 import { spendLedgerStorageErrorResponse } from "./spend-storage-error";
 import { classifyAnthropic429 } from "../../oauth/anthropic-rate-limit-policy";
-import { rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
+import { anthropicRefusalCredentialChanged, rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
 import { authorizeResendForRecovery } from "../../lib/request-resend-gate";
 import { ambiguousResendAllowanceFor, selfContainedResponsesBody } from "./reset-replay";
 import { transientSendCapFor, type ResponsesSendBudget } from "./request-send-budget";
@@ -176,7 +176,7 @@ export async function prepareAdapterExchange(
     | "genericFailovers"
     | "genericFailoverLimit" | "anthropicFailoverLimit"
     | "applyFailoverSnapshot"
-    | "noteRoutedAttemptSend" | "attemptSendDeferred" | "deferPhysicalAttribution"
+    | "noteRoutedAttemptSend" | "attemptSendDeferred" | "deferPhysicalAttribution" | "commitAdapterAttemptSend"
     | "createCredentialReplayAttempt" | "credentialReplayHandoff"
   >,
   responseEffects: Pick<ResponsesEffects, "cancelResponseCompletion" | "notifyResponseComplete" | "refreshRequestToolAliases">,
@@ -346,7 +346,9 @@ export async function prepareAdapterExchange(
       abortSignal: upstream.signal,
     });
     refreshRequestToolAliases(initialRequest);
-    if (!handoffReplay) { recordAdapterReasoning(logCtx, initialRequest); recordAdapterTier(logCtx, initialRequest); }
+    if (!handoffReplay && !transportState.activeAdapter.fetchResponse) {
+      recordAdapterReasoning(logCtx, initialRequest); recordAdapterTier(logCtx, initialRequest);
+    }
     inputTokenEstimate = typeof initialRequest.usageLog?.inputTokens === "number"
       ? initialRequest.usageLog.inputTokens
       : undefined;
@@ -377,7 +379,6 @@ export async function prepareAdapterExchange(
   // Capture it in a const so the fetch callbacks read a narrowed, immutable value
   // (TypeScript drops narrowing for a `let` captured by a nested function).
   const builtInitialRequest = initialRequest;
-  let lastSentRequest = builtInitialRequest;
   type CredentialReplay = ReturnType<typeof transportState.createCredentialReplayAttempt>;
   transportState.sameTargetRequest = builtInitialRequest;
   transportState.sameTargetParsed = parsed;
@@ -407,7 +408,13 @@ export async function prepareAdapterExchange(
   let handoffPermit: ResponsesSendBudget["pendingHopPermit"];
   try {
     if (transportState.activeAdapter.fetchResponse) {
-      if (!handoffReplay) transportState.noteRoutedAttemptSend(inputTokenEstimate, initialRecovery);
+      let published = false;
+      const publish = (): void => {
+        if (published) return;
+        if (handoffReplay) handoffReplay(builtInitialRequest, transportState.activeAdapter.name);
+        else transportState.commitAdapterAttemptSend(builtInitialRequest, transportState.activeAdapter.name, initialRecovery);
+        published = true;
+      };
       const producer = adapterDispatchBudget?.beginSpendProducer?.();
       try {
       upstreamResponse = await withProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal, pacingSlot =>
@@ -416,14 +423,17 @@ export async function prepareAdapterExchange(
           abortSignal: upstream.signal,
           timeoutMs: sendConnectMs(),
           sendBudget: adapterDispatchBudget,
-          onPhysicalSend: send => { antigravityDenial.beforeSend(); noteAdapterPhysicalSend(inputTokenEstimate, send); },
+          onPhysicalSend: send => {
+            if (transportState.activeAdapter.reportsPhysicalSends) publish();
+            antigravityDenial.beforeSend(); noteAdapterPhysicalSend(inputTokenEstimate, send);
+          },
           onRecoveryWithheld: noteAdapterRecoveryWithheld,
           stream: parsed.stream,
           executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
             pacingSlotAcquired: true,
             pacingSlot,
-            dispatchOverride: oauthDispatch(builtInitialRequest, parsed, "adapter", Boolean(handoffReplay)),
-            onPhysicalDispatch: () => handoffReplay?.(builtInitialRequest, transportState.activeAdapter.name),
+            dispatchOverride: oauthDispatch(builtInitialRequest, parsed, "adapter", true),
+            onPhysicalDispatch: publish,
             providerName: route.providerName,
             modelId: route.modelId,
             beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
@@ -634,7 +644,7 @@ export async function prepareAdapterExchange(
       staged?: CredentialReplay,
     ): Promise<Response | { failed: Response }> => {
       const replay = staged ?? (!logCtx.activeAttempt?.sendCount || credentialRecoveryStatus(recovery) === undefined ? undefined
-        : transportState.createCredentialReplayAttempt(lastSentRequest, upstreamResponse.status, recovery));
+        : transportState.createCredentialReplayAttempt(upstreamResponse.status, recovery));
       let replacementAdmitted = false, dispatchConfirmed = false;
       // Only budgets without a physical observer need this legacy workflow report.
       let fastDowngradeWorkflowCharged = false;
@@ -657,7 +667,9 @@ export async function prepareAdapterExchange(
             abortSignal: upstream.signal,
             ...(transportState.imageTierBias > 0 ? { imageTierBias: transportState.imageTierBias } : {}),
           });
-          if (!replay) { recordAdapterReasoning(logCtx, retryRequest); recordAdapterTier(logCtx, retryRequest); }
+          if (!replay && !transportState.activeAdapter.fetchResponse) {
+            recordAdapterReasoning(logCtx, retryRequest); recordAdapterTier(logCtx, retryRequest);
+          }
         } catch (err) {
           const buildRefusal = options.abortSignal?.aborted ? undefined : adapterBuildRefusal(err, admissionState.authCtx, route.codexAccountNamespace, () => { cleanupUpstreamAbort(); upstream.abort(); });
           if (buildRefusal) return { failed: buildRefusal };
@@ -702,30 +714,27 @@ export async function prepareAdapterExchange(
       try {
         try {
           if (transportState.activeAdapter.fetchResponse) {
-            if (!replay) transportState.noteRoutedAttemptSend(retryEstimate, recovery);
-            const commitReplayDispatch = () => {
-              if (!replay || dispatchConfirmed) return;
+            const publish = () => {
+              if (dispatchConfirmed) return;
               upstream.signal.throwIfAborted();
               onDispatch?.();
               dispatchConfirmed = true;
-              replay(retryRequest, transportState.activeAdapter.name);
+              if (replay) replay(retryRequest, transportState.activeAdapter.name);
+              else transportState.commitAdapterAttemptSend(retryRequest, transportState.activeAdapter.name, recovery);
               replacementAdmitted = true;
-              lastSentRequest = retryRequest;
             };
             const producer = adapterDispatchBudget?.beginSpendProducer?.();
             try {
             return await withProviderRequestSlot(route.providerName, route.provider, route.modelId, upstream.signal, pacingSlot => {
-              if (!replay && !dispatchConfirmed) { onDispatch?.(); dispatchConfirmed = true; }
               return transportState.activeAdapter.fetchResponse!(retryRequest, {
                 kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
                 abortSignal: upstream.signal,
                 timeoutMs: sendConnectMs(),
                 sendBudget: adapterDispatchBudget,
                 onPhysicalSend: send => {
-                  if (!replay && preserveFailureResponse) replacementAdmitted = true;
                   antigravityDenial.beforeSend();
                   // An adapter that supplies its own guarded receipt can bypass providerFetch.
-                  if (send.ordinal === 1 && transportState.activeAdapter.reportsPhysicalSends) commitReplayDispatch();
+                  if (transportState.activeAdapter.reportsPhysicalSends) publish();
                   noteAdapterPhysicalSend(retryEstimate, send);
                   chargeFastDowngradeWorkflowSend();
                 },
@@ -734,11 +743,8 @@ export async function prepareAdapterExchange(
                 executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
                   pacingSlotAcquired: true,
                   pacingSlot,
-                  dispatchOverride: oauthDispatch(retryRequest, parsed, "adapter", Boolean(replay)),
-                  onPhysicalDispatch: () => {
-                    commitReplayDispatch();
-                    lastSentRequest = retryRequest;
-                  },
+                  dispatchOverride: oauthDispatch(retryRequest, parsed, "adapter", true),
+                  onPhysicalDispatch: publish,
                   providerName: route.providerName,
                   modelId: route.modelId,
                   beforeDispatch: isCanonicalOpenAiForwardProvider(route.provider)
@@ -800,7 +806,6 @@ export async function prepareAdapterExchange(
                       if (deferredRefetch && !deferredRefetch.beforeDispatch()) throw new SendBudgetExhaustedError(errorDestinationLabel(retryRequest.url));
                       if (deferredRefetch || replay) confirmDispatch();
                       replay?.(retryRequest, transportState.activeAdapter.name, recoveryKind);
-                      lastSentRequest = retryRequest;
                     },
                     providerName: route.providerName,
                     modelId: route.modelId,
@@ -908,7 +913,7 @@ export async function prepareAdapterExchange(
         applyFailoverSnapshot, setPermit: permit => { sendBudgetState.pendingHopPermit = permit; },
         complete: () => { transportState.genericFailovers += 1; },
         refetch: onDispatch => rebuildAndRefetch(recovery, onDispatch, failedResponse,
-          transportState.createCredentialReplayAttempt(lastSentRequest, failedResponse.status, recovery)),
+          transportState.createCredentialReplayAttempt(failedResponse.status, recovery)),
         prepare: () => {
         invalidateSameTargetRequest();
         transportState.activeAdapter = resolveSelectionAdapter(
@@ -969,7 +974,7 @@ export async function prepareAdapterExchange(
         && !sendBudgetExhausted()
       ) {
         oauth401ReplayAttempted = transportState.oauth401ReplayAttempted = true;
-        const replay = transportState.createCredentialReplayAttempt(lastSentRequest, upstreamResponse.status, "oauth-401");
+        const replay = transportState.createCredentialReplayAttempt(upstreamResponse.status, "oauth-401");
         let refreshed: OAuthAccessSnapshot;
         try {
           refreshed = await refreshResolvedOAuthSelection(transportState.sentOAuthSnapshot);
@@ -1418,7 +1423,8 @@ export async function prepareAdapterExchange(
           sendBudgetState.pendingHopPermit = hop.permit;
           let result: Response | { failed: Response };
           try {
-            result = await rebuildAndRefetch(upstreamResponse.status === 401 ? "oauth-401"
+            result = await rebuildAndRefetch(!anthropicRefusalCredentialChanged(upstreamResponse, admitted) ? "rate-limit-429"
+              : upstreamResponse.status === 401 ? "oauth-401"
               : upstreamResponse.status === 403 ? "oauth-account-403" : "anthropic-oauth-429",
               () => { if (!adapterOwnsDispatch && hop.permit?.use() === false) throw new SendBudgetExhaustedError(); });
           } finally {
@@ -1492,7 +1498,7 @@ export async function prepareAdapterExchange(
           hop.permit?.release();
           break;
         }
-        const replay = transportState.createCredentialReplayAttempt(lastSentRequest, upstreamResponse.status, "oauth-account-429");
+        const replay = transportState.createCredentialReplayAttempt(upstreamResponse.status, "oauth-account-429");
         try {
           // The FULL snapshot, not just the bearer: Antigravity pairs an account-matched
           // projectId with its token and Kiro carries routing metadata, so a token-only swap

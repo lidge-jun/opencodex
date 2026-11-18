@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { ADAPTER_REGISTRY } from "../../../src/adapters/registry";
 import { createAdapterTierMetadata } from "../../../src/providers/fastwire";
-import { registerLabPassiveRouteLinker } from "../../../src/lib/lab-passive-linker-registration";
+import { setPassiveRouteLinker } from "../../../src/server/passive-route-linker";
+import { IMAGE_GEN_TOOL_NAME } from "../../../src/images/synthetic-tool";
 import { readInstallationSalt } from "../../../src/lab/subject/installation-salt";
-import * as productionSubjects from "../../../src/routing/compatibility/subject";
+import { resolveProductionRouteSubject } from "../../../src/routing/compatibility/subject";
 import { resetCompatibilityVersionCacheForTests, setCompatibilityVersionOverrideForTests } from "../../../src/routing/compatibility/version";
 import * as requestPacing from "../../../src/providers/request-pacing";
 import { mkdtempSync } from "node:fs";
@@ -591,21 +592,27 @@ describe("Copilot Auto through the Responses pipeline", () => {
     expect(f.cancelledNativeBodies).toBe(1);
     expect(f.sent.find(call => call.path === "/responses")!.signal!.aborted).toBe(true);
   });
-  test.each(["refused metadata", "production route subject"] as const)("OAuth Responses-to-Chat handoff preserves %s", async evidence => {
+  test.each(["refused metadata", "production route subject", "media bridge"] as const)("OAuth Responses-to-Chat handoff preserves %s", async evidence => {
     await accounts();
     const f = fixture({ nativeFirst: true, renewedOrigin: true });
+    const media = evidence === "media bridge";
+    if (media) {
+      f.config.images = { bridgeEnabled: true };
+      f.config.providers.xai = { adapter: "openai-chat", baseUrl: "https://api.x.ai/v1", authMode: "key", apiKey: "synthetic-image-key" };
+    }
     const log: RequestLogContext = {};
     readInstallationSalt(home);
     setCompatibilityVersionOverrideForTests("b".repeat(64));
-    const detach = registerLabPassiveRouteLinker(home);
-    const resolveSubject = productionSubjects.resolveProductionRouteSubject;
     const subjects: Array<{ baseUrl?: string; adapter?: string; id?: string }> = [];
-    const linker = spyOn(productionSubjects, "resolveProductionRouteSubject").mockImplementation((...args) => {
-      const resolved = resolveSubject(...args);
-      if (args[1] === "github-copilot") subjects.push({
+    const linkerErrors: unknown[] = [];
+    const detach = setPassiveRouteLinker((config, providerName, model, provider, inbound, adapter) => {
+      let resolved: ReturnType<typeof resolveProductionRouteSubject>;
+      try { resolved = resolveProductionRouteSubject(config, providerName, model, provider, inbound, home, adapter); }
+      catch (error) { linkerErrors.push(error); throw error; }
+      if (providerName === "github-copilot") subjects.push({
         baseUrl: resolved?.routeContext.baseUrl, adapter: resolved?.routeContext.effectiveAdapter, id: resolved?.subjectId,
       });
-      return resolved;
+      return resolved?.subjectId ?? null;
     });
     const create = ADAPTER_REGISTRY["openai-responses"].create;
     const factory = spyOn(ADAPTER_REGISTRY["openai-responses"], "create").mockImplementation((provider, context) => {
@@ -621,16 +628,20 @@ describe("Copilot Auto through the Responses pipeline", () => {
       return adapter;
     });
     try {
-      const response = await handleResponses(request("hello", false), f.config, log);
+      const response = await handleResponses(request("hello", media, media ? { tools: [{ type: "image_generation" }] } : {}), f.config, log);
       expect(response.status).toBe(200);
       await response.text();
       expect(f.sent.filter(call => ["/responses", "/chat/completions"].includes(call.path)).map(call => [call.host, call.path]))
         .toEqual([["a.githubcopilot.com", "/responses"], ["renewed-a.githubcopilot.com", "/chat/completions"]]);
       expect(log.attempts?.[0]?.status).toBe(401);
-      if (evidence === "refused metadata") {
+      expect(log.attempts?.[1]?.recoveryKinds).toContain("oauth-401");
+      if (media) expect(f.sent.find(call => call.path === "/chat/completions")?.body.tools)
+        .toContainEqual(expect.objectContaining({ function: expect.objectContaining({ name: IMAGE_GEN_TOOL_NAME }) }));
+      if (evidence !== "production route subject") {
         expect(log.attempts?.map(a => [a.adapter, a.sendCount, a.tierOutcome?.wireValue, a.reasoningWireValue]))
           .toEqual([["openai-responses", 1, "priority", "high"], ["openai-chat", 1, null, undefined]]);
       } else {
+        expect(linkerErrors).toEqual([]);
         expect(subjects.map(({ baseUrl, adapter }) => [baseUrl, adapter])).toEqual([
           ["https://a.githubcopilot.com", "openai-responses"], ["https://renewed-a.githubcopilot.com", "openai-chat"],
         ]);
@@ -641,10 +652,26 @@ describe("Copilot Auto through the Responses pipeline", () => {
       }
     } finally {
       factory.mockRestore();
-      linker.mockRestore();
       detach();
       resetCompatibilityVersionCacheForTests();
     }
+  });
+  test("a local negotiation 429 during continuation cannot rotate a credential", async () => {
+    const { b } = await accounts();
+    const { config, sent } = fixture({ negotiationRefusal: 429, negotiationRefusalAt: 2,
+      replyText: "I will modify the file now.",
+      onInference: async count => { if (count === 1) await setActiveAccount("github-copilot", b); },
+    });
+    config.providers["github-copilot"]!.terminalContinuationGuard = true;
+    const log: RequestLogContext = {};
+    const response = await handleResponses(request("Modify the file now."), config, log);
+    await response.text();
+    expect(sent.filter(call => call.path === "/models/session").map(call => call.host))
+      .toEqual(["a.githubcopilot.com", "b.githubcopilot.com"]);
+    expect(sent.filter(call => ["/chat/completions", "/responses"].includes(call.path))).toHaveLength(1);
+    expect(getAccountSet("github-copilot")!.activeAccountId).toBe(b);
+    expect(log.attempts?.map(attempt => attempt.sendCount)).toEqual([1]);
+    expect(log.attempts?.some(attempt => attempt.status === 429)).toBe(false);
   });
   test("pacing refuses a deferred Chat OAuth replay without a replacement attempt", async () => {
     await accounts();

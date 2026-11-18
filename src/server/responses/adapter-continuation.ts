@@ -7,7 +7,7 @@ import { hostedAdvisorCredentials } from "../../adapters/anthropic/advisor-tool"
 import { deferPhysicalSendReporter } from "./deferred-send-reporter";
 import { responsesSpendTarget } from "./request-spend-target";
 import { adapterResponseSpendObserver, bindAdapterResponseSpend } from "./request-spend";
-import { rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
+import { anthropicRefusalCredentialChanged, rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
 import { responsesTimeoutProvider, type ResponsesRequestContext } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -18,8 +18,6 @@ import type { OcxParsedRequest, AdapterEvent } from "../../types";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import type { AdapterRequest } from "../../adapters/base";
 import {
-  recordAdapterReasoning,
-  recordAdapterTier,
 } from "../request-log";
 import { noteAttemptRecoveryWithheld } from "../request-log";
 import { withProviderRequestSlot } from "../../providers/request-pacing";
@@ -107,7 +105,7 @@ export function createAdapterContinuations(
     | "genericFailoverLimit" | "anthropicFailoverLimit"
     | "applyFailoverSnapshot"
     | "replayOAuthCredentialSnapshot"
-    | "noteRoutedAttemptSend" | "createCredentialReplayAttempt"
+    | "commitAdapterAttemptSend" | "createCredentialReplayAttempt" | "isCurrentInferenceResponse"
   >,
   sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction">,
   sendBudgetState: Pick<
@@ -223,10 +221,9 @@ export function createAdapterContinuations(
      * adapter rebuild is deterministic for the same parsed request (tests assert byte-identical
      * replays).
      */
-    let lastSentRequest = transportState.sameTargetRequest;
     const fetchContinuation = async (recoveryKind?: AttemptRecoveryKind): Promise<Response> => {
-      const replay = recoveryKind && credentialRecoveryStatus(recoveryKind) !== undefined && response && lastSentRequest
-        ? transportState.createCredentialReplayAttempt(lastSentRequest, response.status, recoveryKind) : undefined;
+      const replay = recoveryKind && credentialRecoveryStatus(recoveryKind) !== undefined && response && logCtx.activeAttempt?.sendCount
+        ? transportState.createCredentialReplayAttempt(response.status, recoveryKind) : undefined;
       let continuationRequest: AdapterRequest | undefined;
       if (transportState.sameTargetRequest !== undefined && transportState.sameTargetParsed === nextParsed && transportState.sameTargetToken === transportState.transportToken) {
         // Same target (key/adapter/parsed/tier unchanged): replay the exact cached request.
@@ -240,10 +237,6 @@ export function createAdapterContinuations(
             abortSignal: upstream.signal,
             ...(transportState.imageTierBias > 0 ? { imageTierBias: transportState.imageTierBias } : {}),
           });
-          if (!replay) {
-            recordAdapterReasoning(logCtx, continuationRequest);
-            recordAdapterTier(logCtx, continuationRequest);
-          }
         } catch (err) {
           // The main body is already streaming, so there is no HTTP error surface: release
           // any partial body observation and surface the failure as an in-stream error via
@@ -262,13 +255,19 @@ export function createAdapterContinuations(
       const continuationEstimate = typeof builtContinuationRequest.usageLog?.inputTokens === "number"
         ? builtContinuationRequest.usageLog.inputTokens
         : undefined;
-      if (!replay && continuationEstimate !== undefined) logCtx.usageLogInputTokens = continuationEstimate;
-      // Optional recovery label for same-target / failover continuation sends.
-      const replayKind: AttemptRecoveryKind | undefined = recoveryKind;
+      const commit = (physicalRecovery?: AttemptRecoveryKind): void => {
+        const adapter = transportState.activeAdapter.name;
+        if (replay) replay(builtContinuationRequest, adapter, physicalRecovery);
+        else transportState.commitAdapterAttemptSend(builtContinuationRequest, adapter, physicalRecovery ?? recoveryKind);
+      };
       try {
         if (transportState.activeAdapter.fetchResponse) {
-          if (!replay) transportState.noteRoutedAttemptSend(continuationEstimate, replayKind);
           let published = false;
+          const publish = (): void => {
+            if (published) return;
+            commit();
+            published = true;
+          };
           const producer = adapterDispatchBudget?.beginSpendProducer?.();
           try {
           return await withProviderRequestSlot(route.providerName, route.provider, nextParsed.modelId, upstream.signal, pacingSlot =>
@@ -277,18 +276,17 @@ export function createAdapterContinuations(
               abortSignal: upstream.signal,
               timeoutMs: route.provider.authMode === "forward" ? connectMs : 0,
               sendBudget: adapterDispatchBudget,
-              onPhysicalSend: send => noteAdapterPhysicalSend(continuationEstimate, send),
+              onPhysicalSend: send => {
+                if (transportState.activeAdapter.reportsPhysicalSends) publish();
+                noteAdapterPhysicalSend(continuationEstimate, send);
+              },
               onRecoveryWithheld: noteAdapterRecoveryWithheld,
               stream: nextParsed.stream,
               executor: providerFetch(route.provider, options.codexWsRuntimeIdentity, {
                 pacingSlotAcquired: true,
                 pacingSlot,
-                dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed, "adapter", Boolean(replay)),
-                onPhysicalDispatch: () => {
-                  if (!published) replay?.(builtContinuationRequest, transportState.activeAdapter.name);
-                  published = true;
-                  lastSentRequest = builtContinuationRequest;
-                },
+                dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed, "adapter", true),
+                onPhysicalDispatch: publish,
                 providerName: route.providerName,
                 modelId: nextParsed.modelId,
               }),
@@ -310,7 +308,6 @@ export function createAdapterContinuations(
         const continuationResponse = await fetchContinuationWithRetryPolicy(
           recovery => {
             sendBudgetState.adapterSendBudget?.startRequest?.(responsesSpendTarget(logCtx, route.providerName));
-            if (!replay) transportState.noteRoutedAttemptSend(continuationEstimate, recovery ?? replayKind);
             return fetchWithHeaderTimeout(
               builtContinuationRequest.url,
               applyUpstreamRecoveryInit({
@@ -322,11 +319,10 @@ export function createAdapterContinuations(
               route.provider.authMode === "forward" ? connectMs : 0,
               nextParsed.stream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
-                dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed, "adapter", Boolean(replay)),
+                dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed, "adapter", true),
                 onPhysicalDispatch: () => {
                   if (deferredContinuation && !deferredContinuation.beforeDispatch()) throw new SendBudgetExhaustedError(errorDestinationLabel(builtContinuationRequest.url));
-                  replay?.(builtContinuationRequest, transportState.activeAdapter.name, recovery);
-                  lastSentRequest = builtContinuationRequest;
+                  commit(recovery);
                 },
                 providerName: route.providerName,
                 modelId: nextParsed.modelId,
@@ -406,6 +402,7 @@ export function createAdapterContinuations(
       // loop; only after the attempts are exhausted does the continuation fail over.
      while (
        response.status === 429
+        && transportState.isCurrentInferenceResponse(response)
         && !replaySetupFailed
         // A synthesized replay refusal is not a rate limit; replaying the continuation on
         // it would re-send a turn whose first send may already have been processed.
@@ -452,6 +449,7 @@ export function createAdapterContinuations(
         }
       }
 
+      if (response.status === 429 && !transportState.isCurrentInferenceResponse(response)) break;
       if (response.status === 429 && !isNonReplayableResponse(response) && hasKeyPoolFailover(route.provider)) {
         const rotated = rotateProviderTransportOn429(config, route.providerName, route.provider, {
           retryAfter: response.headers.get("retry-after"),
@@ -513,10 +511,11 @@ export function createAdapterContinuations(
           captureRefusalAttribution();
           const recovery = response.status === 401 ? "oauth-401"
             : response.status === 403 ? "oauth-account-403" : "anthropic-oauth-429";
-          sealCredentialRefusal(logCtx, response.status, recovery);
           try {
             const admitted = await commitResolvedOAuthSelection(await anthropicRoutingFor(anthropicInstance).getAnthropicPoolAccessSnapshot(nextAccountId));
             if (!admitted) throw new Error("OAuth selection changed during recovery");
+            const changed = anthropicRefusalCredentialChanged(response, admitted);
+            if (changed) sealCredentialRefusal(logCtx, response.status, recovery);
             transportState.anthropicPoolAccountId = admitted.accountId;
             transportState.anthropicPoolFailovers += 1;
             route.provider = { ...route.provider, apiKey: admitted.accessToken };
@@ -537,7 +536,7 @@ export function createAdapterContinuations(
               });
             }
 
-            nextContinuationRecoveryKind = recovery;
+            nextContinuationRecoveryKind = changed ? recovery : "rate-limit-429";
             sendBudgetState.pendingHopPermit = hop.permit;
             refusalPendingReplay = response;
             continue;

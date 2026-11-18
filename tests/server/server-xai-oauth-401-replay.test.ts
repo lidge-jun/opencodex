@@ -317,12 +317,13 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify({ model: "chain/retry", input: "hello", stream: false }),
       });
+      expect(response.status).toBe(429);
       await response.text();
       expect(refusals).toBe(1);
       expect(observed.counts.refresh).toBe(1);
       expect(observed.chatAuth).toEqual(["Bearer rejected-access"]);
       const entry = readUsageEntries().at(-1);
-      expect(entry?.status).toBe(response.status);
+      expect(entry?.status).toBe(429);
       expect(entry?.attempts?.map(attempt => [attempt.adapter, attempt.status, attempt.sendCount,
         attempt.failureStage, attempt.failureCause])).toEqual([[adapter, 401, 1, "headers-only", "credential-rejected"]]);
     } finally {
@@ -336,23 +337,24 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
     const config = xaiConfig();
     saveConfig(config);
     const observed = installOAuthFetch([401, 200]);
-    const server = startServer(0);
     readInstallationSalt(testDir);
-    setCompatibilityVersionOverrideForTests("a".repeat(64));
-    const detach = registerLabPassiveRouteLinker(testDir);
-    const resolve = xaiTransport.resolveProviderTransport;
-    const transport = spyOn(xaiTransport, "resolveProviderTransport").mockImplementation((...args) => {
-      const provider = resolve(...args);
-      return args[0] === "xai" && provider.apiKey === "fresh-access" ? { ...provider, baseUrl: REPLACEMENT_BASE_URL } : provider;
-    });
-    const resolveSubject = productionSubjects.resolveProductionRouteSubject;
-    const subjects: Array<{ baseUrl?: string; id?: string }> = [];
-    const linker = spyOn(productionSubjects, "resolveProductionRouteSubject").mockImplementation((...args) => {
-      const resolved = resolveSubject(...args);
-      if (args[1] === "xai") subjects.push({ baseUrl: resolved?.routeContext.baseUrl, id: resolved?.subjectId });
-      return resolved;
-    });
+    const server = startServer(0);
+    let detach: (() => void) | undefined;
     try {
+      setCompatibilityVersionOverrideForTests("a".repeat(64));
+      detach = registerLabPassiveRouteLinker(testDir);
+      const resolve = xaiTransport.resolveProviderTransport;
+      using transport = spyOn(xaiTransport, "resolveProviderTransport").mockImplementation((...args) => {
+        const provider = resolve(...args);
+        return args[0] === "xai" && provider.apiKey === "fresh-access" ? { ...provider, baseUrl: REPLACEMENT_BASE_URL } : provider;
+      });
+      const resolveSubject = productionSubjects.resolveProductionRouteSubject;
+      const subjects: Array<{ baseUrl?: string; id?: string }> = [];
+      using linker = spyOn(productionSubjects, "resolveProductionRouteSubject").mockImplementation((...args) => {
+        const resolved = resolveSubject(...args);
+        if (args[1] === "xai") subjects.push({ baseUrl: resolved?.routeContext.baseUrl, id: resolved?.subjectId });
+        return resolved;
+      });
       const response = await post(server);
       expect(response.status).toBe(200);
       await response.text();
@@ -363,9 +365,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
       expect(ids[0]).not.toBe(ids[1]);
       expect(readUsageEntries().at(-1)?.attempts?.map(attempt => attempt.labRouteSubjectId)).toEqual(ids);
     } finally {
-      transport.mockRestore();
-      linker.mockRestore();
-      detach();
+      detach?.();
       resetCompatibilityVersionCacheForTests();
       await server.stop(true);
     }
@@ -377,12 +377,11 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
     installOAuthFetch([401, 200]);
     const server = startServer(0);
     const subjectId = "a".repeat(64);
-    const replacementSubjectId = "b".repeat(64);
     let resolutions = 0;
     const detach = setPassiveRouteLinker((_config, name, model, provider) => {
       if (name !== "xai" || model !== "grok-4.5") return null;
       resolutions += 1;
-      return provider.apiKey === "fresh-access" ? replacementSubjectId : subjectId;
+      return subjectId;
     });
     const create = ADAPTER_REGISTRY["openai-responses"].create;
     const factory = spyOn(ADAPTER_REGISTRY["openai-responses"], "create").mockImplementation((provider, context) => {
@@ -398,8 +397,8 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
       expect(response.status).toBe(200);
       await response.text();
       expect(readUsageEntries().at(-1)?.attempts?.map(attempt => attempt.labRouteSubjectId))
-        .toEqual([subjectId, changed ? replacementSubjectId : subjectId]);
-      expect(resolutions).toBe(changed ? 2 : 1);
+        .toEqual([subjectId, subjectId]);
+      expect(resolutions).toBe(2);
     } finally {
       factory.mockRestore();
       detach();

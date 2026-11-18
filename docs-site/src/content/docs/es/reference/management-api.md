@@ -331,8 +331,9 @@ Los intentos de clave API también registran `accountLogLabel` como `k` seguido 
 
 La selección de claves se registra después de reconstruir las solicitudes en cola para la selección actual.
 Cuando un reintento cambia de clave, `attempts` conserva un registro separado para la clave anterior.
-Tras recuperar una credencial, el reintento se registra como un intento separado cuando llega al proveedor,
-aunque ambos intentos tengan la misma etiqueta de cuenta. Si el control local del ritmo rechaza el reintento,
+Si ya se envió un intento al proveedor, la recuperación de credenciales registra un intento separado
+cuando el proxy envía el reemplazo, aunque ambos intentos tengan la misma etiqueta de cuenta. Si el
+control local del ritmo rechaza el reintento,
 la solicitud puede terminar con estado 429 mientras que su único intento ante el proveedor conserva el estado
 401. La misma regla de envío se aplica a los miembros de un combo, a los adaptadores runTurn y a la
 compactación nativa de Responses.

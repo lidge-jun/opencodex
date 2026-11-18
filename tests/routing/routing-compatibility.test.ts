@@ -11,6 +11,7 @@ import { findVerdictForSuite, loadCompatibilityEvidenceSnapshot } from "../../sr
 import {
   resolvePolicyCompatibilitySubjects,
   resolvePolicyRouteSubject,
+  resolveProductionRouteSubject,
 } from "../../src/routing/compatibility/subject";
 import { subjectIdForSubject } from "../../src/lab/digest";
 import { buildProtocolSubjectV1 } from "../../src/lab/subject/protocol-subject";
@@ -85,6 +86,21 @@ function evidence(
 }
 
 const policy = getRoutingProfile(baseConfig(), "compat")!.compatibility!;
+
+test("a negotiated Chat subject ignores a static Responses override for Fast", () => {
+  const provider = { ...baseConfig().providers.a!, adapter: "openai-chat" as const };
+  const forWire = (modelAdapters?: Record<string, string>) => {
+    const configured = { ...provider, modelAdapters } as typeof provider;
+    const config = baseConfig({ providers: { a: configured } });
+    return resolveProductionRouteSubject(config, "a", "m1", configured, "responses", home, "openai-chat");
+  };
+  const plain = forWire();
+  const overridden = forWire({ m1: "openai-responses" });
+  expect(plain?.subjectId).toMatch(/^[a-f0-9]{64}$/);
+  expect(overridden?.routeContext.behaviorValues["responses.serviceTier"]).toEqual(
+    plain?.routeContext.behaviorValues["responses.serviceTier"]);
+  expect(overridden?.subjectId).toBe(plain?.subjectId);
+});
 
 beforeEach(() => {
   home = mkdtempSync(join(tmpdir(), "ocx-cl06-"));

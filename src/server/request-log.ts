@@ -836,7 +836,7 @@ export function recordFirstOutput(
   if (!Number.isFinite(requestStartedAt) || !Number.isFinite(now)) return;
   const requestElapsed = Math.max(0, now - requestStartedAt);
   if (logCtx.firstOutputMs === undefined) logCtx.firstOutputMs = requestElapsed;
-  if (logCtx.activeAttempt && logCtx.activeAttempt.firstOutputMs === undefined) {
+  if (logCtx.activeAttempt && !sealedCredentialRefusals.has(logCtx.activeAttempt) && logCtx.activeAttempt.firstOutputMs === undefined) {
     const attemptStartedAt = logCtx.activeAttemptStartedAt ?? requestStartedAt;
     logCtx.activeAttempt.firstOutputMs = Math.max(0, now - attemptStartedAt);
   }
@@ -861,6 +861,7 @@ export function recordAdapterReasoning(
   logCtx: RequestLogContext,
   request: AdapterRequest,
 ): void {
+  if (logCtx.activeAttempt && sealedCredentialRefusals.has(logCtx.activeAttempt)) return;
   delete logCtx.effectiveEffort;
   delete logCtx.reasoningWireField;
   delete logCtx.reasoningWireValue;
@@ -919,6 +920,7 @@ export function recordAdapterTierMetadata(
   logCtx: RequestLogContext,
   metadata: AdapterTierMetadata | undefined,
 ): void {
+  if (logCtx.activeAttempt && sealedCredentialRefusals.has(logCtx.activeAttempt)) return;
   delete logCtx.tierOutcome;
   delete logCtx.activeTierMetadata;
   const attempt = logCtx.activeAttempt;
@@ -1059,7 +1061,7 @@ export function applyResponseLogMetadata(logCtx: RequestLogContext, payload: unk
   if (usage) {
     if (!recordKeyWireAttemptUsage(logCtx, usage)) {
       logCtx.usage = usage;
-      if (logCtx.activeAttempt) logCtx.activeAttempt.usage = usage;
+      if (logCtx.activeAttempt && !sealedCredentialRefusals.has(logCtx.activeAttempt)) logCtx.activeAttempt.usage = usage;
     }
     // Counts taken off a wire, not reported raw. The zero-default token-detail objects strict
     // clients require are indistinguishable here from a measured zero, so the cache detail these
@@ -1440,7 +1442,7 @@ function cloneKeyUsage(usage: OcxUsage | undefined): OcxUsage | undefined {
 export function recordKeyWireAttemptUsage(logCtx: RequestLogContext, usage: OcxUsage | undefined): boolean {
   if (!usage) return false;
   const attempt = logCtx.activeAttempt;
-  if (!attempt || !keyUsageOwners.has(attempt) || !keyWireUsageBaselines.has(attempt)) return false;
+  if (!attempt || sealedCredentialRefusals.has(attempt) || !keyUsageOwners.has(attempt) || !keyWireUsageBaselines.has(attempt)) return false;
   const baseline = keyWireUsageBaselines.get(attempt);
   const current = { ...usage };
   attempt.usage = baseline
@@ -1823,8 +1825,9 @@ export function beginRequestAttempt(
 export async function recordKeyAttemptFailure(logCtx: RequestLogContext, response: Response, signal?: AbortSignal,
   includeUnattributed = false): Promise<OcxUsage | undefined> {
   const attempt = logCtx.activeAttempt;
-  const keyAttempt = attempt && KEY_ACCOUNT_LOG_LABEL_RE.test(attempt.accountLogLabel ?? "") ? attempt : undefined;
+  const keyAttempt = attempt && !sealedCredentialRefusals.has(attempt) && KEY_ACCOUNT_LOG_LABEL_RE.test(attempt.accountLogLabel ?? "") ? attempt : undefined;
   if (!keyAttempt && !includeUnattributed) return;
+  const ordinal = keyAttempt?.ordinal;
   if (keyAttempt) keyAttempt.status = response.status;
   const cancelOriginal = (): void => { try { void response.body?.cancel().catch(() => {}); } catch { /* closed */ } };
   signal?.addEventListener("abort", cancelOriginal, { once: true });
@@ -1834,7 +1837,7 @@ export async function recordKeyAttemptFailure(logCtx: RequestLogContext, respons
     if (body.truncated || body.oversized) return;
     const value = JSON.parse(body.text);
     const usage = usageFromResponsesPayload(value?.usage ?? value?.response?.usage);
-    if (usage && keyAttempt) recordKeyWireAttemptUsage(logCtx, usage);
+    if (usage && keyAttempt && logCtx.activeAttempt === keyAttempt && keyAttempt.ordinal === ordinal) recordKeyWireAttemptUsage(logCtx, usage);
     return usage;
   } catch { /* Absent/malformed usage remains unknown; recovery still owns the response. */ }
   finally { signal?.removeEventListener("abort", cancelOriginal); }
@@ -1843,7 +1846,7 @@ export async function recordKeyAttemptFailure(logCtx: RequestLogContext, respons
 /** Add raw per-response usage before a bridge combines multiple rounds for the client. */
 export function recordKeyAttemptUsage(logCtx: RequestLogContext, usage: OcxUsage | undefined): void {
   const attempt = logCtx.activeAttempt;
-  if (!attempt || !usage) return;
+  if (!attempt || sealedCredentialRefusals.has(attempt) || !usage) return;
   attempt.usage = attempt.usage
     ? aggregateAttemptUsage([{ ...attempt, usageStatus: attempt.usage.estimated ? "estimated" : "reported" },
       { ...attempt, usage, usageStatus: usage.estimated ? "estimated" : "reported" }]).usage
@@ -1945,7 +1948,7 @@ export function noteAttemptSend(
   inputTokenEstimate: number | undefined,
   recovery?: AttemptRecoveryKind,
 ): void {
-  if (!attempt) return;
+  if (!attempt || sealedCredentialRefusals.has(attempt)) return;
   attempt.sendCount += 1;
   if (typeof inputTokenEstimate === "number"
     && Number.isFinite(inputTokenEstimate)

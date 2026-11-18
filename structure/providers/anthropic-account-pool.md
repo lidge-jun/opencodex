@@ -439,10 +439,11 @@ rejection does not assert shared exhaustion. A transient Retry-After pauses acco
 without clearing affinity; a request gets one same-account wait up to one second and at most
 one eligible sibling detour. Timer rounding at the captured retry deadline permits that
 retry, while a concurrent admission-pause extension still blocks it. Headerless/invalid-hint
-refusals get at most one short same-account
-retry and never cool the roster or invent a client Retry-After. Main, pre-output continuation
-and sidecars share the request-local allowance and physical-send budget. Cancellation,
-ambiguous-send markers, replaced credentials and committed streaming output forbid replay.
+refusals get at most one short same-account retry and never cool the roster or invent a
+client Retry-After. Main, pre-output continuation and sidecars share the request-local
+allowance and physical-send budget. Cancellation, ambiguous-send markers, replaced credentials
+and committed streaming output forbid replay. Inline retries add a send to the current attempt.
+Native Messages, translated Responses, continuations and sidecars split the attempt on a credential change.
 Default single-account users acquire no new retry or admission pause.
 
 Regression coverage: `tests/adapters/anthropic/anthropic-429-policy.test.ts`.

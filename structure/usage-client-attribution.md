@@ -212,13 +212,14 @@ before a credential replay. If pacing or final admission refuses the replacement
 keeps the physical status and separately records the logical request outcome. Responses
 recovery publishes the rebuilt tier, reasoning, account and input estimate at physical dispatch.
 A combo preserves a sealed child refusal through success, failure and cancellation finalization.
-`src/server/responses/run-turn-execution.ts` uses the selected provider executor's guarded
-receipt for the first replacement send, including when the adapter owns send accounting.
+`src/server/responses/run-turn-execution.ts` uses a guarded receipt from the provider executor,
+the Cursor transport or the CLI spawn to bind the replacement and count its dispatch.
 `src/server/responses/compact.ts` creates its native attempt on the first dispatch receipt and
 seals a 401 before starting credential refresh.
-A Responses-to-Chat handoff carries this pending replay into the translated dispatch. The
-active segment keeps its passive Lab subject on the same route. A changed route resolves a new
-subject through `src/server/passive-route-linker.ts` using the effective destination and wire.
+A Responses-to-Chat handoff carries this pending replay into translated dispatch and hosted
+sidecars. At replacement dispatch, `src/server/passive-route-linker.ts` resolves the passive Lab
+subject from the routed provider configuration and effective wire. A change to the request URL
+alone can keep the same subject.
 A recovery before the first send creates no extra row. Same-account waits and transport resends remain on the existing attempt.
 `tests/usage/key-attribution.test.ts` covers the split and non-split kinds; the loopback server
 case in `tests/server/server-google-antigravity-oauth-401-replay.test.ts` records separate 401

@@ -15,7 +15,7 @@ import {
   adapterNeedsToolCallContinuation,
   adapterResponseReachedServingTerminal,
 } from "./core-replay";
-import { noteAttemptRecoveryWithheld, sealRequestAttemptIdentity, recordAttemptCredentialSource, noteProviderAttemptSend } from "../request-log";
+import { noteAttemptRecoveryWithheld, sealRequestAttemptIdentity, recordAttemptCredentialSource } from "../request-log";
 import { sealCredentialRefusal } from "../credential-recovery-attempt";
 import { credentialRecoveryStatus } from "../request-log-attempt-recovery";
 import { releaseProviderRequestSlot, waitForProviderRequestSlot, RequestPacingQueueOverloadError, type ProviderRequestSlot } from "../../providers/request-pacing";
@@ -119,6 +119,7 @@ export async function executeResponsesRunTurn(
     | "resolveSelectionAdapter"
     | "adapter"
     | "noteRoutedAttemptSend"
+    | "commitRunTurnAttemptSend"
     | "bindKeyUsageFromBridge"
   >,
   sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction" | "openAiSidecar">,
@@ -339,17 +340,14 @@ export async function executeResponsesRunTurn(
         // refuse, which is exactly what happens once earlier recovery has spent the allowance.
         const reportsOwnSends = transportState.runTurnAdapter.reportsPhysicalSends === true;
         const credentialReplay = credentialRecoveryStatus(recovery) !== undefined;
-        let replacementPending = credentialReplay;
-        let adapterReportedSend = false;
+        let published = false;
         if (!reportsOwnSends && !credentialReplay) transportState.noteRoutedAttemptSend(logCtx.usageLogInputTokens, recovery);
-        const onGuardedDispatch = credentialReplay ? () => {
-          if (!replacementPending) return;
-          const adapter = transportState.runTurnAdapter.name;
-          noteProviderAttemptSend(logCtx, route.providerName, route.provider, logCtx.usageLogInputTokens,
-            recovery, { model: route.modelId, adapter });
-          logCtx.providerAdapter = adapter;
-          replacementPending = false;
-        } : undefined;
+        const publishAttempt = () => {
+          if (published) return;
+          transportState.commitRunTurnAttemptSend(turnParsed, recovery);
+          published = true;
+        };
+        const publishReplacement = !reportsOwnSends && credentialReplay ? publishAttempt : undefined;
         const runTurnProviderFetch = providerFetch(
           route.provider,
           options.codexWsRuntimeIdentity,
@@ -362,7 +360,7 @@ export async function executeResponsesRunTurn(
             pacingSlotAcquired: true,
             pacingSlot,
             turnScopedPacing: true,
-            onPhysicalDispatch: onGuardedDispatch,
+            onPhysicalDispatch: publishReplacement,
           },
         );
         if (inboundWire === "anthropic" && transportState.runTurnAdapter.name === "devin" && !routedCompaction) {
@@ -383,7 +381,7 @@ export async function executeResponsesRunTurn(
             translatorBudget,
             providerFetch: runTurnProviderFetch,
             pacingSlot,
-            onGuardedDispatch,
+            onGuardedDispatch: publishReplacement,
             // The only way the request budget reaches a transport the adapter owns. Without it
             // a Cursor turn's inner ladder was three physical sends the cap read as one.
             ...(adapterDispatchBudget ? { sendBudget: adapterDispatchBudget } : {}),
@@ -391,11 +389,8 @@ export async function executeResponsesRunTurn(
               // Capture once at this attempt's send, before later selection or recovery changes it.
               const binding = adapterBindings.get(transportState.runTurnAdapter);
               if (!sentKeyBinding && binding?.kind === "api-key") sentKeyBinding = binding;
-              const countOnly = credentialReplay && (replacementPending || !adapterReportedSend);
-              adapterReportedSend = true;
-              noteAdapterPhysicalSend(logCtx.usageLogInputTokens,
-                { ...send, ...(send.recovery ?? recovery ? { recovery: send.recovery ?? recovery } : {}) },
-                { includeFirst: reportsOwnSends, countOnly });
+              if (reportsOwnSends) publishAttempt();
+              noteAdapterPhysicalSend(logCtx.usageLogInputTokens, send);
             },
             onRecoveryWithheld: noteAdapterRecoveryWithheld,
           },
@@ -541,6 +536,7 @@ export async function executeResponsesRunTurn(
       const status = error.status ?? adapterFailureFromMessage(error.message).httpStatus;
       if (status !== 401 || !transportState.isOAuth401ReplayProvider || !sent || oauth401ReplayAttempted) return false;
       oauth401ReplayAttempted = true;
+      if (error.usage) transportState.bindKeyUsageFromBridge(error.usage);
       sealCredentialRefusal(logCtx, status, "oauth-401");
       const hop = reserveCredentialHop("auth-recovery", `${route.providerName}|${route.modelId}|runturn-oauth-401`);
       if (!hop.allowed) return false;

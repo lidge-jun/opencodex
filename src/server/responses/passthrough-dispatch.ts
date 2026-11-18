@@ -1123,7 +1123,7 @@ export async function preparePassthroughExchange(
       staged?: CredentialReplay,
     ): Promise<Response | { failed: Response | PassthroughAdapterHandoff }> => {
       const replay = staged ?? (credentialRecoveryStatus(recovery) === undefined ? undefined
-        : transportState.createCredentialReplayAttempt(request, upstreamResponse.status, recovery));
+        : transportState.createCredentialReplayAttempt(upstreamResponse.status, recovery));
       const retryAdapter = resolveSelectionAdapter(
         resolveWireProtocolOverride(route.providerName, route.modelId, route.provider, inboundWire, route.staticPolicy),
         config.cacheRetention,
@@ -1242,7 +1242,7 @@ export async function preparePassthroughExchange(
       const canReplay = (transientSendPolicy() === null && sendBudgetState.adapterSendBudget?.explicitSendCeiling === undefined)
         || remainingTransientSendBudget(transientSendAttempts()) > 0;
       // Seal only a refusal with a replay plan; an unaffordable replay keeps the 401 final.
-      const commit = canReplay ? transportState.createCredentialReplayAttempt(request, upstreamResponse.status, "oauth-401") : undefined;
+      const commit = canReplay ? transportState.createCredentialReplayAttempt(upstreamResponse.status, "oauth-401") : undefined;
       const retryFrom = canReplay && reserveRetrySpend() ? await retainPacedRetryResponse(upstreamResponse, upstream.signal) : undefined;
       if (canReplay && !retryFrom) {
         try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed */ }
@@ -1354,7 +1354,7 @@ export async function preparePassthroughExchange(
       && !sendBudgetExhausted(transientSendAttempts())
     ) {
       oauth401ReplayAttempted = transportState.oauth401ReplayAttempted = true;
-      const commit = transportState.createCredentialReplayAttempt(request, upstreamResponse.status, "oauth-401");
+      const commit = transportState.createCredentialReplayAttempt(upstreamResponse.status, "oauth-401");
       try { void upstreamResponse.body?.cancel().catch(() => {}); } catch { /* already consumed/closed */ }
       let refreshed: OAuthAccessSnapshot;
       try {
@@ -1463,7 +1463,7 @@ export async function preparePassthroughExchange(
           let snapshot: OAuthAccessSnapshot | undefined;
           let commit: CredentialReplay | undefined;
           if (nextAccountId) {
-            commit = transportState.createCredentialReplayAttempt(request, upstreamResponse.status, "oauth-account-429");
+            commit = transportState.createCredentialReplayAttempt(upstreamResponse.status, "oauth-account-429");
             try { snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId); }
             catch { /* Keep the original 429 body readable when the next credential is unavailable. */ }
           }

@@ -1,4 +1,5 @@
 import type { AdapterFetchContext, AdapterRequest } from "./base";
+import { fetchWithPhysicalSendReceipt } from "./physical-send";
 import type { AttemptRecoveryKind } from "../usage/log";
 import { classifyKiroHttpError, safeKiroHttpErrorMessage } from "./kiro-errors";
 import { normalizeUpstreamHttpErrorResponse } from "./upstream-http-error";
@@ -201,11 +202,10 @@ async function fetchWithResetRecovery(
           ...(recovered ? { keepalive: false } : {}),
         }, timeoutMs, ctx.abortSignal, ctx.stream, (async (input, init) => {
           try {
-            const run = async (): Promise<Response> => {
+            const run = () => fetchWithPhysicalSendReceipt(executor.unpacedFetch ?? executor, input, init, () => {
               if (permit && !permit.use()) throw new SendBudgetExhaustedError(errorDestinationLabel(destination));
               notePhysicalSend(attempt > 0);
-              return (executor.unpacedFetch ?? executor)(input, init);
-            };
+            });
             return await (permit?.execute ? permit.execute(run) : run());
           } catch (error) {
             if (ctx.abortSignal?.aborted) throw abortError(ctx.abortSignal);

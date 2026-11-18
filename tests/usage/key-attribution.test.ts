@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import {
   addFinalRequestLog, aggregateAttemptUsage, beginRequestAttempt, finishRequestAttempt, noteProviderAttemptSend,
-  recordKeyAttemptFailure, recordKeyAttemptUsage, applyResponseLogMetadata, sealRequestAttemptIdentity,
+  recordKeyAttemptFailure, recordKeyAttemptUsage, applyResponseLogMetadata, sealRequestAttemptIdentity, noteAttemptSend,
+  recordAdapterReasoning,
   inspectResponseLogSsePayload, recordAdapterTierMetadata, type RequestLogContext, type RequestLogEntry,
 } from "../../src/server/request-log";
 import { readFileSync } from "node:fs";
@@ -17,8 +18,20 @@ describe("key attempt accounting", () => {
     const active = beginRequestAttempt(1, "test", "model", "openai-chat");
     const ctx: RequestLogContext = { provider: "test", model: "model", accountLogLabel: "o111111", activeAttempt: active };
     noteProviderAttemptSend(ctx, "test", { adapter: "openai-chat", authMode: "oauth", baseUrl: "https://example.test" }, 42);
+    const tier = createAdapterTierMetadata({ capability: true, eligibility: "eligible",
+      fastWire: { kind: "service-tier", canonicalToWire: { priority: "priority" }, foreignCallerTiers: "verbatim" },
+      demandDecision: "force-fast" }, { kind: "set", value: "priority" }, "service-tier", "priority")!;
+    recordAdapterTierMetadata(ctx, tier);
     sealCredentialRefusal(ctx, 401, "oauth-401");
+    expect(active).toMatchObject({ status: 401, sendCount: 1,
+      accountLogLabel: "o111111", failureStage: "headers-only", failureCause: "credential-rejected" });
     const refused = structuredClone(active);
+    tier.observeResponseServiceTier("priority");
+    recordAdapterTierMetadata(ctx, undefined);
+    recordAdapterReasoning(ctx, { url: "https://example.test", method: "POST", headers: {}, body: "{}",
+      reasoningLog: { effectiveEffort: "high", wireField: "reasoning_effort", wireValue: "high" } });
+    noteAttemptSend(active, 9, "connection-reset");
+    recordKeyAttemptUsage(ctx, { inputTokens: 9, outputTokens: 1 });
     sealRequestAttemptIdentity(active, "other", "anthropic", "o222222");
     finishRequestAttempt(active, status, 10_000);
     attributeFinalRequest({ status, outputObserved: false, locallyAnswered: false, attempt: active });

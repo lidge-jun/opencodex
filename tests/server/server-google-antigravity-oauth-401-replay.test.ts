@@ -29,6 +29,9 @@ import {
 import type { OcxConfig } from "../../src/types";
 import { installIsolatedCodexHome, type IsolatedCodexHome } from "../helpers/isolated-codex-home";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { registerLabPassiveRouteLinker } from "../../src/lib/lab-passive-linker-registration";
+import { readInstallationSalt } from "../../src/lab/subject/installation-salt";
+import { resetCompatibilityVersionCacheForTests, setCompatibilityVersionOverrideForTests } from "../../src/routing/compatibility/version";
 
 const GOOGLE_TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
 const PROD_API_BASE = "https://cloudcode-pa.googleapis.com";
@@ -977,6 +980,28 @@ describe("Google Antigravity OAuth upstream 401 replay", () => {
       expect(attempts?.[1]?.accountLogLabel).toBe(attempts?.[0]?.accountLogLabel);
       expect(attempts?.[1].recoveryKinds).toContain("oauth-401");
     } finally { await server.stop(true); }
+  });
+
+  test("same-account refresh links the new project on an unchanged wire and URL", async () => {
+    await seedOAuth();
+    saveConfig(antigravityConfig());
+    installOAuthFetch([401, 200]);
+    readInstallationSalt(testDir);
+    const server = startServer(0);
+    setCompatibilityVersionOverrideForTests("b".repeat(64));
+    const detach = registerLabPassiveRouteLinker(testDir);
+    try {
+      const response = await postResponses(server);
+      expect(response.status).toBe(200);
+      await response.text();
+      const ids = readUsageEntries().at(-1)?.attempts?.map(attempt => attempt.labRouteSubjectId);
+      expect(ids).toEqual([expect.stringMatching(/^[a-f0-9]{64}$/), expect.stringMatching(/^[a-f0-9]{64}$/)]);
+      expect(ids?.[0]).not.toBe(ids?.[1]);
+    } finally {
+      detach();
+      resetCompatibilityVersionCacheForTests();
+      await server.stop(true);
+    }
   });
 
   test("adapter-owned OAuth replay rejected by pacing leaves one physical 401", async () => {

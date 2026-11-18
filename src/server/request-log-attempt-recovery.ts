@@ -33,7 +33,7 @@ export function noteAttemptRecoveryWithheld(
   attempt: PersistedUsageAttempt | undefined,
   reason: AttemptRecoveryWithheld,
 ): void {
-  if (!attempt) return;
+  if (!attempt || sealedCredentialRefusals.has(attempt)) return;
   if (!attempt.recoveryWithheld) attempt.recoveryWithheld = [];
   if (!attempt.recoveryWithheld.includes(reason)) attempt.recoveryWithheld.push(reason);
 }
