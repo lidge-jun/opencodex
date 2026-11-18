@@ -22,7 +22,7 @@ import { getProviderRegistryEntry } from "../../../src/providers/registry";
 import { routedProviderConfig } from "../../../src/providers/routed-config";
 import type { OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../../src/types";
 import { gatherRoutedModels } from "../../../src/codex/catalog";
-import { clearModelCache } from "../../../src/codex/model-cache";
+import { clearModelCache, expireModelCache } from "../../../src/codex/model-cache";
 import { withStubbedProviderFetch } from "../../helpers/catalog-provider-fetch";
 import { removeTreeWithRetry } from "../../helpers/remove-tree";
 
@@ -454,6 +454,47 @@ describe("Vertex discovery credential parity with inference", () => {
 });
 
 describe("Vertex discovery credential stays bound to its selection", () => {
+  test("a scoped refresh uses the current ambient authority for both pages after a key rotation", async () => {
+    const name = "rotating-vertex";
+    const config: OcxConfig = { providers: { [name]: vertex({ liveModels: true }) } };
+    const firstStarted = Promise.withResolvers<void>();
+    const releaseFirst = Promise.withResolvers<void>();
+    const pages: string[] = [];
+    process.env.GOOGLE_CLOUD_API_KEY = "ambient-fixture-a";
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const page = new URL(String(input)).searchParams.get("pageToken") ?? "first";
+      pages.push(page);
+      if (pages.length === 1) {
+        firstStarted.resolve();
+        await releaseFirst.promise;
+        return Response.json({ publisherModels: [], nextPageToken: "old-next" });
+      }
+      return Response.json({
+        publisherModels: [{ name: `publishers/google/models/gemini-fixture-${page}` }],
+        ...(page === "first" ? { nextPageToken: "second" } : {}),
+      });
+    }) as typeof fetch;
+
+    const full = gatherRoutedModels(withStubbedProviderFetch(config));
+    try {
+      await firstStarted.promise;
+      process.env.GOOGLE_CLOUD_API_KEY = "ambient-fixture-b";
+      expect(resolveObservedVertexDiscoveryAuth(config.providers[name]!)?.token).toBe("ambient-fixture-b");
+      process.env.GOOGLE_CLOUD_API_KEY = "ambient-fixture-a";
+      expect(expireModelCache(name)).toBe(true);
+      const refresh = gatherRoutedModels(config, { onlyProvider: name });
+      releaseFirst.resolve();
+
+      expect((await refresh).map(model => model.id)).toEqual(["gemini-fixture-first", "gemini-fixture-second"]);
+      await full;
+      expect(pages).toEqual(["first", "first", "second"]);
+    } finally {
+      releaseFirst.resolve();
+      await full;
+      clearModelCache(name);
+    }
+  });
+
   test("a selection that changes during the ADC exchange discards the token, and send-time checks reject a mismatched header", async () => {
     process.env.GOOGLE_APPLICATION_CREDENTIALS = saPath;
     process.env.CLOUDSDK_CONFIG = join(tmp, "no-gcloud");

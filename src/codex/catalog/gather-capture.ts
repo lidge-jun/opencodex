@@ -34,6 +34,7 @@ import {
 import { getAccountSet } from "../../oauth/store";
 import { mayResolveModelsOAuth } from "../../oauth/model-discovery-auth";
 import { buildVertexProviderModelsRequest } from "../../providers/google-vertex-model-discovery";
+import { vertexRequestAuthorityIdentity } from "../../lib/gcp-adc";
 import type { OcxConfig, OcxProviderConfig } from "../../types";
 import { modelInList } from "../../types";
 import { CODEX_REASONING_LEVELS, codexEffortRank, configuredReasoningEfforts, modelRecordValue, sanitizeCodexReasoningEfforts } from "../../reasoning-effort";
@@ -556,6 +557,7 @@ export function providerDiscoveryFlightKey(
     provider: providerFlightPolicy(provider),
     retainConfiguredModelIds: [...(retainConfiguredModelIds ?? [])].sort(),
     credential,
+    vertexAuthority: credential.vertexAuth && vertexRequestAuthorityIdentity(credential.vertexAuth),
   });
 }
 

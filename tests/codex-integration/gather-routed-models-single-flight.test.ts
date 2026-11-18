@@ -6,7 +6,10 @@ import {
   resetCatalogRuntimeStateForTests,
   type ComboCatalogOmission,
 } from "../../src/codex/catalog";
-import { clearModelCache } from "../../src/codex/model-cache";
+import {
+  clearModelCache, expireModelCache, getProviderDiscoveryStatus, getStaleCached,
+  isModelsFetchCoolingDown, setCached,
+} from "../../src/codex/model-cache";
 import { withStubbedProviderFetch } from "../helpers/catalog-provider-fetch";
 import type { OcxConfig } from "../../src/types";
 import { CatalogGatherBusyError } from "../../src/codex/catalog/provider-fetch";
@@ -24,6 +27,46 @@ afterEach(() => {
 });
 
 describe("gatherRoutedModels single-flight", () => {
+  test("a newer 429 fences an older live success and preserves the last good rows", async () => {
+    const name = "ordered-catalog";
+    const config: OcxConfig = { providers: { [name]: {
+      adapter: "openai-chat", baseUrl: "https://api.example.test/v1", apiKey: "fixture-old-key", liveModels: true,
+    } } };
+    const oldStarted = Promise.withResolvers<void>();
+    const releaseOld = Promise.withResolvers<void>();
+    const lastGood = [{ provider: name, id: "last-good" }];
+    setCached(name, lastGood);
+    expect(expireModelCache(name)).toBe(true);
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (new Headers(init?.headers).get("authorization") === "Bearer fixture-old-key") {
+        oldStarted.resolve();
+        await releaseOld.promise;
+        return Response.json({ data: [{ id: "superseded-live-model" }] });
+      }
+      return new Response(null, { status: 429 });
+    }) as typeof fetch;
+
+    const older = gatherRoutedModels(config);
+    const failure = { status: "failed", reason: "http", httpStatus: 429 };
+    try {
+      await oldStarted.promise;
+      const newer = await gatherRoutedModels({ providers: { [name]: {
+        ...config.providers[name]!, apiKey: "fixture-new-key",
+      } } }, { onlyProvider: name });
+      expect(newer.map(model => model.id)).toEqual(["last-good"]);
+      expect(getProviderDiscoveryStatus(name)).toEqual(failure);
+      releaseOld.resolve();
+      await older;
+
+      expect(getProviderDiscoveryStatus(name)).toEqual(failure);
+      expect(isModelsFetchCoolingDown(name)).toBe(true);
+      expect(getStaleCached(name)).toEqual(lastGood);
+    } finally {
+      releaseOld.resolve();
+      await older;
+    }
+  });
+
   test("concurrent callers with the same provider set share one upstream discovery", async () => {
     let fetchCount = 0;
     let release!: () => void;

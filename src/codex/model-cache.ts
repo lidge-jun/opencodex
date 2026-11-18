@@ -132,8 +132,8 @@ export function markModelsFetchFailure(
  * silently recording zero and misclassifying the provider as having no live catalog. */
 export function markProviderDiscoveryOk(provider: string, liveModelCount: number, observationOrder?: number): void {
   discoveryStatus.set(provider, { observation: { status: "ok" }, observationOrder });
-  // Ordered discovery can succeed after an earlier failure started a cooldown in flight.
-  if (observationOrder !== undefined) failureAt.delete(provider);
+  // A newer discovery can succeed after an earlier failure started a cooldown in flight.
+  failureAt.delete(provider);
   liveModelCounts.set(provider, Math.max(0, Math.floor(liveModelCount)));
 }
 
@@ -278,6 +278,13 @@ export function canPublishModelDiscovery(provider: string, generation: number): 
   return generation >= (publishedDiscoveryGenerations.get(provider) ?? 0);
 }
 
+/** Advance the shared watermark for either outcome, independently of cached rows. */
+export function claimModelDiscoveryPublication(provider: string, generation: number): boolean {
+  if (!canPublishModelDiscovery(provider, generation)) return false;
+  publishedDiscoveryGenerations.set(provider, generation);
+  return true;
+}
+
 function bumpProviderCacheRevision(provider: string): void {
   providerCacheRevisions.set(provider, (providerCacheRevisions.get(provider) ?? 0) + 1);
 }
@@ -302,7 +309,7 @@ export function setCached(
   discoveryGeneration?: number,
 ): boolean {
   if (generation !== undefined && !isModelCacheGenerationCurrent(provider, generation)) return false;
-  if (discoveryGeneration !== undefined && !canPublishModelDiscovery(provider, discoveryGeneration)) return false;
+  if (discoveryGeneration !== undefined && !claimModelDiscoveryPublication(provider, discoveryGeneration)) return false;
   deleteCachedProvider(provider);
   const sizeBytes = modelCacheEncoder.encode(provider).byteLength
     + modelCacheEncoder.encode(JSON.stringify(models)).byteLength;
@@ -315,7 +322,6 @@ export function setCached(
   enforceAppOwnedMemoryBudget();
   // Published and accepted, so anything derived from this provider's rows is now out of date.
   bumpProviderCacheRevision(provider);
-  if (discoveryGeneration !== undefined) publishedDiscoveryGenerations.set(provider, discoveryGeneration);
   return true;
 }
 

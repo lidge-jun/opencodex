@@ -74,7 +74,9 @@ that credential, whose ADC source or generation, or ambient `GOOGLE_CLOUD_API_KE
 changed since it was read (the same `bindVertexRequestAuthority` / `vertexRequestAuthorityIsCurrent`
 record inference checks, so a replaced host ADC file or marker credential, or an A→B→A change of the
 variable that inference observed, stops the next page), or whose headers place it in the
-other scheme's header. One deadline (`vertexDiscoveryDeadline`, 8 s, also
+other scheme's header. Shared provider discovery includes an opaque identity of the captured ADC
+source and generation or ambient key generation. An observed rotation starts a separate listing
+even when the token or key bytes match an older flight. One deadline (`vertexDiscoveryDeadline`, 8 s, also
 tied to the request for the management probe) covers ADC token resolution, the first request and
 every follow-up page. `nextPageToken` is followed with three ceilings across all pages: five
 requests, the discovery row limit and the discovery byte limit, counted from the bytes actually

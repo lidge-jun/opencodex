@@ -17,6 +17,7 @@ import { readKiroAccountModels, kiroObservedContextWindow } from "../../provider
 import { CODEX_CONFIG_PATH, CODEX_MODELS_CACHE_PATH, DEFAULT_CATALOG_PATH, readRootTomlString, resolveCodexConfigPath } from "../paths";
 import {
   canPublishModelDiscovery,
+  claimModelDiscoveryPublication,
   captureModelDiscoveryGeneration,
   clearModelCache,
   clearProviderDiscoveryStatus,
@@ -302,6 +303,7 @@ async function fetchProviderModelsUncached(
   };
   const isCurrentCacheGeneration = () => isModelCacheGenerationCurrent(name, cacheGeneration);
   const canPublish = () => isCurrentCacheGeneration() && canPublishModelDiscovery(name, discoveryGeneration);
+  const claimPublication = () => isCurrentCacheGeneration() && claimModelDiscoveryPublication(name, discoveryGeneration);
   const publishCache = (models: CatalogModel[], authority?: string) =>
     setCached(name, models, Date.now(), cacheGeneration, authority, discoveryGeneration);
   const superseded = (models: CatalogModel[]): ProviderModelsResult => ({
@@ -404,14 +406,14 @@ async function fetchProviderModelsUncached(
         id: model.id, provider: name,
         ...catalogHintsFromModelsApiItem(name, model as ProviderModelsApiItem),
       }, contextCap, metadataModelIdCaseFold, captured.effectiveAlias, undefined, false));
-      if (!canPublish()) return observed(configured, "degraded");
+      if (!claimPublication()) return observed(configured, "degraded");
       markProviderDiscoveryOk(name, picker.length);
       // Retain callable manual/combo selectors, but do not advertise named selection
       // for an Auto-only account even when its saved configuration still contains it.
       return observed(copilotRequiresAuto(prov, models)
         ? picker : withConfiguredRetention(picker, { warnDrops: true }), "authoritative");
     } catch {
-      if (canPublish()) markProviderDiscoveryFailed(name, { reason: "provider" });
+      if (claimPublication()) markProviderDiscoveryFailed(name, { reason: "provider" });
       return observed(configured, "degraded");
     }
   }
@@ -478,7 +480,7 @@ async function fetchProviderModelsUncached(
       markProviderDiscoveryOk(name, live.models.length);
       return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
     }
-    if (canPublish()) {
+    if (claimPublication()) {
       markModelsFetchFailure(name, undefined, authorityIdentity);
       markProviderDiscoveryFailed(name, { reason: "provider" });
       console.warn(`[opencodex] CodeBuddy model discovery failed [${live.error}]${live.status === undefined ? "" : ` status=${live.status}`}; using stale/static catalog degradation.`);
@@ -535,7 +537,7 @@ async function fetchProviderModelsUncached(
       markProviderDiscoveryOk(name, live.models.length);
       return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
     } catch {
-      if (canPublish()) {
+      if (claimPublication()) {
         markModelsFetchFailure(name, undefined, authorityIdentity);
         markProviderDiscoveryFailed(name, { reason: "provider" });
       }
@@ -587,7 +589,7 @@ async function fetchProviderModelsUncached(
       markProviderDiscoveryOk(name, live.models.length);
       return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
     }
-    if (canPublish()) {
+    if (claimPublication()) {
       markModelsFetchFailure(name);
       markProviderDiscoveryFailed(name, { reason: "provider" });
       console.warn(`[opencodex] Qoder model discovery for "${name}" failed [${live.error}]${live.detail ? `: ${live.detail}` : ""}; using stale/static catalog degradation.`);
@@ -669,7 +671,7 @@ async function fetchProviderModelsUncached(
       markProviderDiscoveryOk(name, liveResult.models.length);
       return observed(withConfiguredRetention(forCache), "authoritative");
     }
-    if (canPublish()) {
+    if (claimPublication()) {
       markModelsFetchFailure(name, undefined, authorityIdentity);
       markProviderDiscoveryFailed(name, { reason: liveResult.error === "auth" ? "provider" : "invalid_response" });
     }
@@ -736,7 +738,7 @@ async function fetchProviderModelsUncached(
       markProviderDiscoveryOk(name, liveResult.models.length);
       return observed(withConfiguredRetention(forCache, { warnDrops: true }), "authoritative");
     }
-    if (canPublish()) {
+    if (claimPublication()) {
       markModelsFetchFailure(name, undefined, authorityIdentity);
       markProviderDiscoveryFailed(name, { reason: "provider" });
       console.warn(
@@ -824,7 +826,7 @@ async function fetchProviderModelsUncached(
     // Decide logging BEFORE recording the new status, so we can compare against the prior one and
     // suppress an identical repeated failure (#395 log flood). The failure stays observable via the
     // discovery-status API regardless.
-    if (!canPublish() || !canPublishDiscovery()) return { ...discoveryFallbackRows(), shouldLog: false };
+    if (!canPublishDiscovery() || !claimPublication()) return { ...discoveryFallbackRows(), shouldLog: false };
     const shouldLog = shouldLogDiscoveryFailure(name, failure, warningCondition);
     markModelsFetchFailure(name, undefined, catalogAuthority);
     markProviderDiscoveryFailed(name, failure, warningCondition, discoveryObservation);

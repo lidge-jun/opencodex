@@ -199,7 +199,7 @@ reports it (see [Runtime](runtime.md)).
 
 Provider live-model lists use a configured TTL (`src/codex/model-cache.ts`). Adding, deleting, or editing a provider's shape clears the cache. Disabled-only edits exclude that provider from gathering.
 Manual discovery expires freshness and keeps the last good rows for authority-checked fallback. During failure cooldown it returns the recorded failure without retrying.
-Manual and full catalog gathers share in-flight provider discovery when the resolved credentials and provider policy match. A monotonic generation prevents an older result from replacing a newer roster.
+Manual and full catalog gathers share in-flight provider discovery when the resolved credentials, their authority, and provider policy match. A monotonic publication generation orders successes and failures. A newer failure preserves its status and cooldown when an older success finishes, while keeping the last good roster available for fallback.
 Only full gathers derive combos and publish their omissions. Catalog refresh invalidates Codex's separate `models_cache.json`.
 Account-scoped discovery transports remain bound to the credential snapshot that supplied the
 token. Devin discovery uses the allowlisted tenant API base URL from that same snapshot rather
