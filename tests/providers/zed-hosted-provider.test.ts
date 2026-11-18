@@ -1,3 +1,4 @@
+import { pacingHeaderDeadline } from "../../src/web-search/header-deadline";
 import { afterAll, afterEach, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1072,8 +1073,12 @@ describe("Zed OAuth identity", () => {
   });
 });
 
-for (const cancel of [false, true]) {
-  test(`Zed preparation does not publish an inference receipt (cancel=${cancel})`, async () => {
+for (const [transport, outcome] of [
+  ["direct", "denied"], ["direct", "cancelled"],
+  ["search", "denied"], ["search", "cancelled"], ["search", "completed"],
+  ["media", "denied"], ["media", "cancelled"], ["media", "completed"],
+] as const) {
+  test(`Zed preparation receipt isolation (${transport}, ${outcome})`, async () => {
     const preparation = [
       jsonResponse({ default_organization_id: "org-1" }),
       jsonResponse({ token: "llm-token-1" }),
@@ -1092,24 +1097,42 @@ for (const cancel of [false, true]) {
     globalThis.fetch = (async (input) => {
       const path = new URL(input instanceof Request ? input.url : String(input)).pathname;
       paths.push(path);
-      if (path === "/client/users/me" && cancel) {
+      if (path === "/client/users/me" && outcome === "cancelled") {
         abort.abort();
         return jsonResponse({ default_organization_id: "org-1" });
+      }
+      if (outcome === "completed") {
+        if (path === "/client/users/me") return jsonResponse({ default_organization_id: "org-1" });
+        if (path === "/client/llm_tokens") return jsonResponse({ token: "llm-token-2" });
+        if (path === "/completions") return new Response("completed");
       }
       return new Response("denied", { status: 403 });
     }) as typeof globalThis.fetch;
     let published = 0;
     const budget = createRequestExecutionBudget();
     let charged = 0;
-    await expect(adapter.fetchResponse!(request, {
-      executor: providerFetch(provider, undefined, { onPhysicalDispatch: () => { published++; } }),
-      abortSignal: abort.signal,
-      sendBudget: budget,
-      onPhysicalSend: () => { charged++; },
-    })).rejects.toThrow();
-    expect(paths).toEqual(["/client/users/me"]);
-    expect(charged).toBe(0);
-    expect(budget.used).toBe(0);
-    expect(published).toBe(0);
+    const providerExecutor = providerFetch(provider, undefined, { onPhysicalDispatch: () => { published++; } });
+    const deadline = pacingHeaderDeadline(200_000, abort.signal);
+    const executor = transport === "search" ? deadline.pacedFetch(providerExecutor)
+      : transport === "media" ? providerExecutor.unpacedFetch! : providerExecutor;
+    try {
+      const response = adapter.fetchResponse!(request, {
+        executor,
+        abortSignal: transport === "search" ? deadline.signal : abort.signal,
+        sendBudget: budget,
+        onPhysicalSend: () => { charged++; },
+      });
+      if (outcome === "completed") {
+        expect(await (await response).text()).toBe("completed");
+        expect(paths).toEqual(["/client/users/me", "/client/llm_tokens", "/completions"]);
+        expect([charged, budget.used, published]).toEqual([1, 1, 1]);
+      } else {
+        await expect(response).rejects.toThrow();
+        expect(paths).toEqual(["/client/users/me"]);
+        expect([charged, budget.used, published]).toEqual([0, 0, 0]);
+      }
+    } finally {
+      deadline.clear();
+    }
   });
 }

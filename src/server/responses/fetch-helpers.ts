@@ -36,7 +36,7 @@ import { redactSecretString } from "../../lib/redact";
 import { outboundCredentials } from "../../lib/outbound-credential-registry";
 import { compressUpstreamRequestBody, isCanonicalCodexResponsesUrl } from "./request-compression";
 import { redeemOutboundTurnState, TURN_STATE_BINDING_INIT, turnStateBinding } from "../turn-state-handles";
-import { EXECUTOR_PHYSICAL_SEND_RECEIPT, markPhysicalSendReceiptExecutor, registerAdapterSupportExecutor } from "../../lib/executor-physical-send-receipt";
+import { EXECUTOR_PHYSICAL_SEND_RECEIPT, inheritAdapterSupportExecutor, markPhysicalSendReceiptExecutor, registerAdapterSupportExecutor } from "../../lib/executor-physical-send-receipt";
 
 export { withUpstreamHttpVersion };
 
@@ -573,7 +573,8 @@ export function storedPoolReplayDispatchNotifier(
     }
     return sendTrackingRequestSlot(await executor.waitForPacing?.(init?.signal ?? undefined), () => unpaced!(input, init));
   };
-  return Object.assign(wrapped, {
+  if (unpaced) inheritAdapterSupportExecutor(unpaced, unpacedSource);
+  const notifying = Object.assign(wrapped, {
     preconnect: executor.preconnect,
     waitForPacing: executor.waitForPacing,
     unpacedFetch: unpaced,
@@ -582,6 +583,7 @@ export function storedPoolReplayDispatchNotifier(
       return executor.fetchWithPacingSlot!(slot, input, init);
     } } : {}),
   }) as ProviderFetch;
+  return inheritAdapterSupportExecutor(notifying, executor);
 }
 
 /**
