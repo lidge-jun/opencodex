@@ -127,10 +127,67 @@ async function run(agent: ReturnType<typeof script>, opts: {
 const terminal = (h: Harness) => h.events.filter(e => e.type === "done" || e.type === "error");
 const methods = (h: Harness) => h.sent.filter(f => typeof f.method === "string").map(f => f.method as string);
 const errorCode = (h: Harness) => (terminal(h)[0] as { code?: string } | undefined)?.code;
+const adminShape = "ocx_admin_" + "a_".repeat(21) + "A";
+const sessionShape = "ocx_session_" + "b".repeat(43);
+const dataKeyShape = "ocx_data_" + "c".repeat(40);
 
 afterEach(() => { delete process.env.OPENCODEX_ADMIN_AUTH_TOKEN; });
 
 describe("agy acp turn", () => {
+  test("redacts whole credentials in answer deltas and flushes the final tail", async () => {
+    const h = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      for (const text of [adminShape, sessionShape, dataKeyShape, "sk-" + "d".repeat(20)]) {
+        api.notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text: text + " " } });
+      }
+      api.reply(frame.id, { stopReason: "end_turn" });
+      return true;
+    }));
+    expect(h.events.flatMap(event => event.type === "text_delta" ? [event.text] : []).join("")).toBe("[REDACTED] ".repeat(4));
+    expect(h.events.at(-1)).toEqual({ type: "done" });
+  });
+
+  test("redacts split credentials independently in answer and reasoning deltas", async () => {
+    const answerPrefix = "ordinary output ".repeat(100);
+    const h = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      const answer = (text: string) => api.notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
+      const thought = (text: string) => api.notify({ sessionUpdate: "agent_thought_chunk", content: { type: "text", text } });
+      answer(answerPrefix + adminShape.slice(0, 5));
+      thought(dataKeyShape.slice(0, -3));
+      answer(adminShape.slice(5) + " done.");
+      thought(dataKeyShape.slice(-3) + " " + "sk-" + "e".repeat(2));
+      thought("e".repeat(20) + " done.");
+      api.reply(frame.id, { stopReason: "end_turn" });
+      return true;
+    }));
+    expect(h.events.flatMap(event => event.type === "text_delta" ? [event.text] : []).join("")).toBe(answerPrefix + "[REDACTED] done.");
+    expect(h.events.flatMap(event => event.type === "thinking_delta" ? [event.thinking] : []).join("")).toBe("[REDACTED] [REDACTED] done.");
+  });
+
+  test("preserves ordinary code and prose across the buffering boundary", async () => {
+    const example = 'const token = process.env.OPENAI_API_KEY; // ocx_admin_…\n' + "x".repeat(1500) + "😺";
+    const h = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      for (const text of [example.slice(0, -1), example.slice(-1), "\nordinary prose"]) {
+        api.notify({ sessionUpdate: "agent_message_chunk", content: { type: "text", text } });
+      }
+      api.reply(frame.id, { stopReason: "end_turn" });
+      return true;
+    }));
+    expect(h.events.flatMap(event => event.type === "text_delta" ? [event.text] : []).join("")).toBe(example + "\nordinary prose");
+  });
+
+  test("selection errors never interpolate credential-shaped option identifiers", async () => {
+    const model = modelOption("gemini-3.8-flash", ["gemini-3.8-flash", "gemini-" + dataKeyShape]);
+    const thought = thoughtOption("low", ["low", sessionShape]);
+    const agent = script(undefined, { initial: [model, thought] });
+    const modelError = await run(agent, { parsed: parsed({ modelId: "gemini-" + adminShape }) });
+    const thoughtError = await run(agent, { parsed: parsed({}, "max") });
+    expect(terminal(modelError)[0]).toMatchObject({ message: "The requested Gemini model is not offered by this Antigravity CLI." });
+    expect(terminal(thoughtError)[0]).toMatchObject({ message: "The requested reasoning effort is not offered by this Antigravity CLI." });
+  });
+
   test.each(["leader exited", "taskkill failed", "taskkill timed out"])(
     "Windows retains the workspace and fails the turn when %s",
     async outcome => {
@@ -304,15 +361,14 @@ describe("agy acp turn", () => {
     expect(terminal(h)).toEqual([{ type: "done" }]);
   });
 
-  test("Gemini only: a non-Gemini request never spawns; an unoffered model names only Gemini values", async () => {
+  test("Gemini only: a non-Gemini request never spawns and an unoffered model returns a fixed error", async () => {
     const claude = await run(script(), { parsed: parsed({ modelId: "claude-opus-5-5" }) });
     expect(claude.spawned).toBe(0);
     expect(errorCode(claude)).toBe("agy_acp_model_not_gemini");
     const missing = await run(script(), { parsed: parsed({ modelId: "gemini-9-ultra" }) });
     const error = terminal(missing)[0] as { status: number; code: string; message: string };
     expect(error).toMatchObject({ status: 400, code: "agy_acp_model_not_offered" });
-    expect(error.message).toContain("gemini-3.8-flash, gemini-4-argon");
-    expect(error.message).not.toContain("claude");
+    expect(error.message).toBe("The requested Gemini model is not offered by this Antigravity CLI.");
     expect(methods(missing)).not.toContain("session/prompt");
   });
 

@@ -81,8 +81,9 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   `src/server/responses/agy-acp-preflight.ts` answers those with a 403 before sidecars run, and `runTurn` repeats the
   check before any probe or spawn. Each `session/prompt` reserves and reports one physical inference send from
   the shared request budget, including a retried turn. Model selection is phase-aware and fails closed when the Gemini model is not
-  confirmed. Permission requests are answered `cancelled`. Errors may include validated model IDs, offered
-  Gemini model IDs or a numeric protocol code. Raw child error text stays inside the proxy. The workspace stays outside the
+  confirmed. Permission requests are answered `cancelled`. Selection errors use fixed text. Answer and reasoning
+  deltas each pass through a bounded streaming redactor for minted OpenCodex credentials and the shared string
+  redaction rules. Protocol errors may include a numeric code. The workspace stays outside the
   OpenCodex home. On Windows, a successful tree kill and leader closure are both required within the reap deadline.
   When either cannot be confirmed, the adapter retains the workspace, emits a fixed warning and fails the turn.
   The terminal event is published after reaping. Coverage:

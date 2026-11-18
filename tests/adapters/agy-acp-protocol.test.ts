@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, realpathSync, statSync, writeFileSync, chmodSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acpTerminal, buildAcpPrompt, classifyFrame, permissionCancelledFrame } from "../../src/adapters/agy-acp/acp";
-import { matchValue, parseConfigOptions, proveModel, safeOfferedValues } from "../../src/adapters/agy-acp/options";
+import { matchValue, parseConfigOptions, proveModel } from "../../src/adapters/agy-acp/options";
 import { clearAgyVersionCacheForTests, parseAgyVersion, probeAgyVersion, resolveAgyBinary, versionAtLeast } from "../../src/adapters/agy-acp/binary";
 import { createTurnWorkspace, reapProcessTree, type AgyAcpChild } from "../../src/adapters/agy-acp/process";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
@@ -63,9 +63,8 @@ describe("config options and the Gemini proof", () => {
     expect(proveModel([], "selected", "gemini-a")).toEqual({ ok: false, reason: "no_selector" });
   });
 
-  test("malformed options are rejected and offered lists hold only safe identifiers", () => {
+  test("malformed options are rejected", () => {
     expect(parseConfigOptions([{ id: "model", type: "select", currentValue: "a", options: [{ name: "no value" }] }])).toBeUndefined();
-    expect(safeOfferedValues([{ value: "gemini-a", name: "x" }, { value: "gemini <script>", name: "y" }, { value: "claude-z", name: "z" }], true)).toEqual(["gemini-a"]);
   });
 });
 

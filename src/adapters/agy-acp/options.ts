@@ -116,15 +116,6 @@ export function effortLabels(effort: string): readonly string[] | undefined {
   return EFFORT_LABELS[effort.trim().toLowerCase()];
 }
 
-/** Offered values safe to name in an error: only well-formed model or effort identifiers. */
-export function safeOfferedValues(values: readonly AcpSelectValue[], gemini: boolean): string[] {
-  return values
-    .filter(v => (gemini ? isGeminiValue(v) : true))
-    .map(v => v.value)
-    .filter(v => /^[A-Za-z0-9._:-]{1,64}$/.test(v))
-    .slice(0, 32);
-}
-
 export type ModelPhase = "initial" | "pending" | "selected";
 export type ModelProof =
   | { ok: true; selector: AcpConfigOption; target?: AcpSelectValue }

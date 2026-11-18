@@ -26,11 +26,12 @@ import {
   sessionCancelFrame, sessionNewFrame, sessionPromptFrame, setConfigOptionFrame, type AcpFailureCode, type JsonRpcId,
 } from "./acp";
 import {
-  currentSelection, effortLabels, findSelector, matchValue, parseConfigOptions, proveModel, safeOfferedValues,
+  currentSelection, effortLabels, findSelector, matchValue, parseConfigOptions, proveModel,
   type AcpConfigOption, type AcpSelectValue,
 } from "./options";
 import { AGY_ACP_MIN_VERSION, AGY_INSTALL_HINT, MAX_AGY_VERSION_OUTPUT_LENGTH, probeAgyVersion, resolveAgyBinary, type AgyVersionProbe } from "./binary";
 import { AgyAcpTreeCleanupError, createTurnWorkspace, defaultAgyAcpSpawn, reapProcessTree, type AgyAcpChild, type AgyAcpSpawn, type TurnWorkspace } from "./process";
+import { AcpOutputRedactor } from "./output-redaction";
 import { agyAcpPolicyRefusal } from "./policy";
 
 /** Identity only: the transport is stdio. Never fetched. */
@@ -62,7 +63,6 @@ function failure(code: AcpFailureCode, detail?: string): ErrorEvent {
   return { type: "error", status, errorType: status === 503 ? "api_error" : "upstream_error", code, message };
 }
 
-const SAFE_ID = /^[A-Za-z0-9._:-]{1,64}$/;
 function invalidRequest(code: string, message: string): ErrorEvent {
   return { type: "error", status: 400, errorType: "invalid_request_error", code, message };
 }
@@ -214,6 +214,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
     let sawFrame = false;
     let buffer = "";
     let totalBytes = 0;
+    const outputRedactors = new Map<"text_delta" | "thinking_delta", AcpOutputRedactor>();
     let resolveTurn!: () => void;
     let rejectTurn!: (error: unknown) => void;
     const finished = new Promise<void>((resolve, reject) => { resolveTurn = resolve; rejectTurn = reject; });
@@ -242,11 +243,19 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       const cleanup = reap(child);
       try { child.stdout.destroy(); } catch { /* already closed */ }
       void cleanup.then(() => {
-        if (!aborted && !incoming.abortSignal?.aborted && terminal) emit(terminal);
+        if (!aborted && !incoming.abortSignal?.aborted && terminal) {
+          for (const [type, redactor] of outputRedactors) emitOutput(type, redactor.flush());
+          emit(terminal);
+        }
         onReaped();
       }).catch(rejectTurn);
     }
     const fail = (code: AcpFailureCode, detail?: string): void => finish(failure(code, detail));
+
+    function emitOutput(type: "text_delta" | "thinking_delta", text: string): void {
+      if (!text) return;
+      emit(type === "text_delta" ? { type, text } : { type, thinking: text });
+    }
 
     /** During generation a lost proof cancels the prompt; before it, the prompt is never sent. */
     function checkSelectedModel(): boolean {
@@ -278,8 +287,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
         }
         const match = matchValue(found.selector.values, thoughtWanted);
         if (!match.ok) {
-          const offered = safeOfferedValues(found.selector.values, false);
-          finish(invalidRequest("agy_acp_effort_not_offered", `The requested reasoning effort is not offered by this Antigravity CLI.${offered.length ? ` Offered: ${offered.join(", ")}.` : ""}`));
+          finish(invalidRequest("agy_acp_effort_not_offered", "The requested reasoning effort is not offered by this Antigravity CLI."));
           return;
         }
         thoughtTarget = match.value;
@@ -346,10 +354,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
         if (!proof.ok) {
           if (proof.reason === "no_selector" || proof.reason === "ambiguous_selector") return fail("agy_acp_unsupported_selection");
           if (proof.reason === "requested_not_offered" || proof.reason === "requested_ambiguous") {
-            const selector = findSelector(state, "model");
-            const offered = selector.ok ? safeOfferedValues(selector.selector.values, true) : [];
-            const shown = SAFE_ID.test(requested) ? `Model ${requested}` : "The requested model";
-            return finish(invalidRequest("agy_acp_model_not_offered", `${shown} is not offered by this Antigravity CLI.${offered.length ? ` Gemini models offered: ${offered.join(", ")}.` : ""}`));
+            return finish(invalidRequest("agy_acp_model_not_offered", "The requested Gemini model is not offered by this Antigravity CLI."));
           }
           return fail("agy_acp_model_unproven");
         }
@@ -403,7 +408,18 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
         return;
       }
       if (!prompting) return;
-      for (const event of acpUpdateToEvents(update)) emit(event);
+      for (const event of acpUpdateToEvents(update)) {
+        if (event.type !== "text_delta" && event.type !== "thinking_delta") {
+          emit(event);
+          continue;
+        }
+        let redactor = outputRedactors.get(event.type);
+        if (!redactor) {
+          redactor = new AcpOutputRedactor();
+          outputRedactors.set(event.type, redactor);
+        }
+        emitOutput(event.type, redactor.push(event.type === "text_delta" ? event.text : event.thinking));
+      }
     }
 
     function flush(rawLine: string): void {
