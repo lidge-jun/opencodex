@@ -205,8 +205,9 @@ same-account OAuth refresh after 401. `credentialRecoveryStatus` in
 `src/server/request-log-attempt-recovery.ts` maps the closed credential-recovery roster to its
 401, 402, 403 or 429 refusal status; an already recorded upstream status takes precedence.
 The existing in-place split preserves the active object, keeps the refused send's usage on its
-sealed row and records the replacement send on a fresh row. A recovery before the first send
-creates no extra row. Same-account waits and transport resends remain on the existing attempt.
+sealed row and records the replacement send on a fresh row. The sealed tier outcome is a snapshot;
+the replacement retains the live adapter observer's outcome so response-tier confirmation updates
+only the replacement. A recovery before the first send creates no extra row. Same-account waits and transport resends remain on the existing attempt.
 `tests/usage/key-attribution.test.ts` covers the split and non-split kinds; the loopback server
 case in `tests/server/server-google-antigravity-oauth-401-replay.test.ts` records separate 401
 and 200 rows for a same-account refresh.
