@@ -17,6 +17,12 @@ validated provider and closed effort/capability fields, with no model field. Ope
 selection and cooldown keys remain internal. `tests/responses/chat-error-body-normalization.test.ts`
 covers failure, wait, last-resort, reprobe and effort diagnostic output.
 
+When ladder exhaustion returns a child response, the combo's logical row takes diagnostics from that
+child. A synthetic exhaustion response can retain child diagnostics. For example, the quota-cooldown
+snapshot exit can adopt the last failed child's diagnostics before returning a synthetic 503 with
+quota cooldown advice. A proxy-marked replay refusal is excluded from the retained quota response and
+its child diagnostics. Each physical attempt remains in the row's attempt history.
+
 ## Retention
 
 Startup and once-per-minute checks rotate above 20 MiB. The previous archive
