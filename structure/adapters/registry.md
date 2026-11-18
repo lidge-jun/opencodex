@@ -101,6 +101,7 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   Selection errors use fixed text. Answer and reasoning
   deltas each pass through a bounded streaming redactor for minted OpenCodex credentials, Bearer values,
   OAuth token fields, and token-shaped JWT and API-key strings. Long values stay masked across frames.
+  After masking an OAuth value, scanning resumes at the first unconsumed character.
   The redactor publishes safe prefixes on each update and reports buffered activity to the streaming
   watchdog. It preserves ACP arrival order across channels. If an uncertain suffix holds up a full queue,
   it masks that suffix and continues scanning for its continuation in the original channel. Protocol errors may include a numeric

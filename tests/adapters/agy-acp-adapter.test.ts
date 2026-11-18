@@ -454,6 +454,37 @@ describe("agy acp turn", () => {
     expect(h.events.flatMap(event => event.type === "text_delta" ? [event.text] : []).join("")).toBe(example + "\nordinary prose");
   });
 
+  test.each([
+    ["answer", "single frame"],
+    ["answer", "split frames"],
+    ["thought", "single frame"],
+    ["thought", "split frames"],
+  ] as const)("redacts overlapping OAuth and Bearer credentials in %s (%s)", async (channel, framing) => {
+    const sessionUpdate = channel === "answer" ? "agent_message_chunk" : "agent_thought_chunk";
+    const parts = [
+      "Authorization: Bearer ", `${adminShape}; access_token=${sessionShape}; `,
+      ...[adminShape, sessionShape, catalogShape].flatMap(credential => ["access_to", `ken=Bearer ${credential}; `]),
+      "done.",
+    ];
+    const h = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      for (const text of framing === "single frame" ? [parts.join("")] : parts) {
+        api.notify({ sessionUpdate, content: { type: "text", text } });
+      }
+      api.reply(frame.id, { stopReason: "end_turn" });
+      return true;
+    }));
+    const output = h.events.flatMap(event => {
+      if (channel === "answer" && event.type === "text_delta") return [event.text];
+      if (channel === "thought" && event.type === "thinking_delta") return [event.thinking];
+      return [];
+    }).join("");
+    const expected = "Authorization: Bearer [REDACTED]; access_token=[REDACTED]; "
+      + "access_token=[REDACTED] [REDACTED]; ".repeat(3) + "done.";
+    expect(output === expected).toBe(true);
+    expect(h.events.at(-1)).toEqual({ type: "done" });
+  });
+
   test.each([100, 7_000])("masks long JWT and Bearer values across batches with ACP chunks of %d characters", async chunkSize => {
     const jwtShape = "eyJ" + "h".repeat(12) + "." + "p".repeat(2500) + "." + "s".repeat(20);
     const bearerShape = "Authorization: Bearer " + "z".repeat(2500) + "==";

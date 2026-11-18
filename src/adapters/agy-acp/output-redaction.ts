@@ -107,14 +107,15 @@ class AcpOutputRedactor {
     if (!final && /[\uD800-\uDBFF]/.test(raw.charAt(cut - 1))) cut = Math.max(start, cut - 1);
     let cursor = start;
     TOKEN_PATTERN.lastIndex = start;
-    for (const match of raw.matchAll(TOKEN_PATTERN)) {
-      if (match.index >= cut) break;
-      if (match.index < cursor) continue;
+    let match: RegExpExecArray | null;
+    while ((match = TOKEN_PATTERN.exec(raw)) !== null && match.index < cut) {
       const end = match.index + match[0].length;
       const [, bearer, bearerPrefix, key, oauthPrefix, quote] = match;
       if (oauthPrefix) {
         this.consume(raw.slice(cursor, end));
         cursor = this.consumeOAuthValue(raw, end, { quote, escaped: false, masked: false });
+        // An overlapping match can start inside the OAuth value and extend beyond it.
+        TOKEN_PATTERN.lastIndex = cursor;
         continue;
       }
       const valueStart = match.index + (bearerPrefix?.length ?? 0);
