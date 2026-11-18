@@ -1,14 +1,7 @@
-import { REDACTED_SECRET, redactSecretString } from "../../lib/redact";
+import { redactSecretString } from "../../lib/redact";
 
-// These are the minted management, dashboard, device/pairing and data-plane credentials.
-// Match a complete value even when it is embedded in another identifier or quoted in code.
-const OCX_CREDENTIAL = /ocx_(?:(?:admin|session|device|proof|pair)_[A-Za-z0-9_-]{43}|data_[0-9a-f]{40})/g;
 const TAIL_CHARS = 512;
 const BATCH_CHARS = 2 * TAIL_CHARS;
-
-function redact(text: string): string {
-  return redactSecretString(text.replace(OCX_CREDENTIAL, REDACTED_SECRET));
-}
 
 /** Keep lookahead across ACP frames without holding the whole answer or reasoning stream. */
 export class AcpOutputRedactor {
@@ -24,14 +17,14 @@ export class AcpOutputRedactor {
   }
 
   flush(): string {
-    const output = redact(this.pending);
+    const output = redactSecretString(this.pending);
     this.pending = "";
     return output;
   }
 
   private drain(): string {
     const raw = this.pending;
-    const safe = redact(raw);
+    const safe = redactSecretString(raw);
     let cut = raw.length - TAIL_CHARS;
     // If changes fall entirely in the tail, keep the original bytes for the next match.
     if (safe.startsWith(raw.slice(0, cut))) {

@@ -64,6 +64,7 @@ describe("antigravity-acp configuration", () => {
     process.env.OPENCODEX_HOME = home;
     const warn = spyOn(console, "warn").mockImplementation(() => {});
     try {
+      const credentialKey = "ocx_admin_" + "a".repeat(43);
       const raw = config({
         memoryModels: {
           extract: { model: "antigravity-acp/gemini-3.8-flash" },
@@ -75,9 +76,12 @@ describe("antigravity-acp configuration", () => {
           "model-one": ["gemini-3.8-flash", "google/gemini-3.8-flash"],
           "model-two": ["google/gemini-4-argon"],
           "model-three": ["gemini-3.8-flash", "antigravity-acp/gemini-3.8-flash"],
+          [credentialKey]: ["antigravity-acp/gemini-3.8-flash"],
         },
       });
-      expect(validateConfigCandidate(raw).ok).toBe(false);
+      const candidateError = messages(validateConfigCandidate(raw));
+      expect(candidateError.includes(credentialKey)).toBe(false);
+      expect(candidateError).toContain("subagentModelFallbackByModel.[REDACTED].0");
       const path = getConfigPath();
       const bytes = JSON.stringify(raw);
       writeFileSync(path, bytes);
@@ -103,8 +107,12 @@ describe("antigravity-acp configuration", () => {
         expect.stringContaining("subagentModelFallbackByModel.model-one.0"),
         expect.stringContaining("subagentModelFallbackByModel.model-three.0"),
         expect.stringContaining("subagentModelFallbackByModel.model-three.1"),
+        expect.stringContaining("subagentModelFallbackByModel.[REDACTED].0"),
       ]));
-      expect(warn).toHaveBeenCalled();
+      expect(diagnostics.warnings.join("\n").includes(credentialKey)).toBe(false);
+      const logged = warn.mock.calls.flat().join("\n");
+      expect(logged.includes(credentialKey)).toBe(false);
+      expect(logged).toContain("subagentModelFallbackByModel.[REDACTED].0");
       expect(readFileSync(path, "utf8")).toBe(bytes);
     } finally {
       warn.mockRestore();
