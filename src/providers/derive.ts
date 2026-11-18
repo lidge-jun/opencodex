@@ -1,3 +1,4 @@
+import { isAgyAcpProvider } from "../config/schema/agy-acp-references";
 import type { CodexAccountMode, OcxProviderConfig } from "../types";
 import { COST_VENDOR_PRIORITY, getModelMetadata, getModelMetadataCaseInsensitive } from "../generated/model-metadata";
 import { cloneFastWire } from "./fastwire";
@@ -324,7 +325,7 @@ export function deriveKeyLoginMap(): Record<string, DerivedKeyLoginProvider> {
     if (entry.authKind !== "key") continue;
     // A deprecated route cannot complete a login, but its entry must stay resolvable for
     // configs saved while it still worked.
-    if (entry.deprecated) continue;
+    if (entry.deprecated || isAgyAcpProvider(entry.id, entry)) continue;
     if (!entry.dashboardUrl) throw new Error(`Registry key provider missing dashboardUrl: ${entry.id}`);
     const liveModels = registryEntrySupportsLiveModelDiscovery(entry) ? entry.liveModels : false;
     out[entry.id] = {

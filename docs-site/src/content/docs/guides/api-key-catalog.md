@@ -861,7 +861,7 @@ once per turn and talks to it over the Agent Client Protocol on stdin and stdout
   with HTTP 401 `agy_login_required`.
 - **No credential stored:** the CLI owns its Google sign-in. OpenCodex never reads, stores or forwards it, and the row
   refuses an API key, a key pool, account failover or an OAuth setting. There is one account, the CLI's, and no rotation.
-  Selecting this preset in `ocx init` skips the API key prompt.
+  Selecting this preset in `ocx init` skips the API key prompt. Running `ocx login antigravity-acp` prints the host sign-in command.
 - **Interactive use only:** Google's staff answers on the developer forum permit a personal app to launch the official
   `agy acp` binary for the user's own account when use is interactive and user-directed, not an unattended worker pool
   or automated agent loop, and point programmatic workloads to a Gemini API key or Vertex AI ([forum answer](https://discuss.ai.google.dev/t/tos-clarification-is-t3-code-official-antigravity-acp-agent-permitted-under-the-antigravity-terms-of-service/192027/2),

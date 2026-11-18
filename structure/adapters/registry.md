@@ -58,7 +58,8 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   Google protocol parity unit in lidge-jun/opencodex#8771). Before launching ACP, `agy --version` must exit zero
   and print a single numeric version at or above the minimum. The CLI owns its Google sign-in,
   so the `antigravity-acp` row is keyless (`authKind: "key"`, `keyOptional`). The init wizard skips the key question
-  and omits the key field for ACP. Key-optional LiteLLM still accepts a key or an environment reference. Structural config validation
+  and omits the key field for ACP. The login command prints the host sign-in command, and API-key validation
+  refuses ACP before any request. Key-optional LiteLLM still accepts a key or an environment reference. Structural config validation
   (`src/config/schema/agy-acp-references.ts`) shares the static model roster in `src/providers/registry/agy-acp-models.ts`
   with the registry and refuses keys, pools, account settings,
   non-Gemini models and any use as a combo target, a combo's `decisionModel`, a subagent fallback, a `memoryModels` phase or the

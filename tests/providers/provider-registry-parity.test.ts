@@ -42,7 +42,7 @@ function nativeTemplate(): Record<string, unknown> {
 }
 
 const EXPECTED_KEY_PROVIDER_IDS = PROVIDER_REGISTRY
-  .filter(entry => entry.authKind === "key" && !entry.deprecated)
+  .filter(entry => entry.authKind === "key" && !entry.deprecated && entry.id !== "antigravity-acp")
   .map(entry => entry.id);
 
 describe("provider registry parity", () => {
