@@ -1,13 +1,13 @@
 import type { RawEntry } from "./parsing";
 import { trustedAccountBoundNativeCatalogSlug } from "./account-models";
-import { NATIVE_GPT6_ASTRA_MODEL, NATIVE_GPT61_SOL_MODEL } from "./native-models";
+import { NATIVE_GPT6_ASTRA_MODEL, NATIVE_GPT61_SOL_MODEL, NATIVE_GPT62_ASTRA_MODEL, NATIVE_GPT62_SOL_MODEL } from "./native-models";
 
 /**
- * The Ultrafast speed choice OpenAI documents for GPT-6 Astra and GPT-6.1 Sol
+ * The Ultrafast speed choice OpenAI documents for GPT-6 Astra, GPT-6.1 Sol and GPT-6.2 Astra/Sol
  * (https://developers.openai.com/api/docs/guides/ultrafast-mode and
- * https://learn.chatgpt.com/docs/agent-configuration/speed, checked 2026-10-13).
+ * https://learn.chatgpt.com/docs/agent-configuration/speed, checked 2026-11-18).
  *
- * The upstream bundled catalog lists only `priority` for both models; ChatGPT's live model
+ * The upstream bundled catalog lists only `priority` for these models; ChatGPT's live model
  * list adds Ultrafast for eligible plans. Codex stops consulting that live list once
  * `model_catalog_json` points at our generated catalog, so without this row the speed picker
  * never offers Ultrafast. The `ultraFastTier` switch is the operator's statement that their
@@ -19,7 +19,7 @@ export const NATIVE_ULTRAFAST_SERVICE_TIER: Readonly<{ id: string; name: string;
   description: "Lower latency, increased usage; requires an eligible plan",
 });
 
-export const NATIVE_ULTRAFAST_MODELS: ReadonlySet<string> = new Set([NATIVE_GPT6_ASTRA_MODEL, NATIVE_GPT61_SOL_MODEL]);
+export const NATIVE_ULTRAFAST_MODELS: ReadonlySet<string> = new Set([NATIVE_GPT6_ASTRA_MODEL, NATIVE_GPT61_SOL_MODEL, NATIVE_GPT62_ASTRA_MODEL, NATIVE_GPT62_SOL_MODEL]);
 
 function isUltraFastId(value: unknown): boolean {
   return typeof value === "string" && value.trim().toLowerCase() === "ultrafast";
@@ -55,7 +55,7 @@ function isGeneratedDescriptor(value: unknown): boolean {
     && tier.description === NATIVE_ULTRAFAST_SERVICE_TIER.description;
 }
 
-/** Bare native rows and trusted account-bound clones of the two Ultrafast models. */
+/** Bare native rows and trusted account-bound clones of the documented Ultrafast models. */
 export function nativeUltraFastSlug(entry: RawEntry): string | undefined {
   const slug = trustedAccountBoundNativeCatalogSlug(entry)
     ?? (typeof entry.slug === "string" && !entry.slug.includes("/") ? entry.slug : undefined);

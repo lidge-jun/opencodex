@@ -52,9 +52,9 @@ provider-wide fallback. Exact model output limits precede the provider default o
 - reads pinned native rows only through `pinnedNativeModelRows()`
   (`src/codex/catalog/pinned-models.ts`): the codex-rs snapshot first, then rows from
   `src/codex/data/roster-pinned-models.json` whose slug the snapshot lacks. The roster file holds
-  verbatim rows the codex-rs snapshot lacks (`gpt-6-sol`/`gpt-6-luna` from the 2026-09-23 roster,
-  `gpt-6.1-sol` from openai/codex `models.json` after #49318 and `gpt-6.1-terra` from that file on 2026-10-27), so a wholesale snapshot re-pin
-  never erases them and a snapshot row for the same slug always wins;
+  verbatim GPT-6, GPT-6.1 and GPT-6.2 rows the snapshot lacks; `pinned-models.ts` records their
+  official source revisions. A snapshot row always wins. Sync promotes unchanged, generated
+  6.2 configured-native fallbacks by matching their description, instructions, tools and speed tiers; edited payloads remain;
 - excludes retired `gpt-5.3-codex-spark` from native fallback, observed/cache rows, and
   account-selector projections, including retained sync and native restore;
 - upgrades either an observed selector-qualified `*/gpt-daybreak-blue-latest` account row or an

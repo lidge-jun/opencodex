@@ -217,6 +217,24 @@ including OpenAI service-tier metadata.
 
 ## Current stable model coverage
 
+GPT-6.2 Astra and Sol are native Codex-login models: `gpt-6.2-astra` and
+`gpt-6.2-sol`. Their exact rows are pinned from
+[OpenAI's Codex catalogue](https://github.com/openai/codex/blob/2f5c413e19776bc684ac781b57dc069e4ab9fa21/codex-rs/models-manager/models.json),
+so they appear even when the installed Codex bundle predates their release.
+Astra defaults to 272,000 context tokens and Sol to 500,000; both support the
+872,000 native long-window ceiling, text and image input, multi-agent v2, and
+`low` through `ultra` reasoning. Native requests retain `max` and translate
+the client-facing `ultra` choice to `max`.
+
+Fast is included in both model rows. The existing `ultraFastTier` opt-in also
+offers Ultrafast for eligible plans; see [Codex speed options](https://learn.chatgpt.com/docs/agent-configuration/speed#gpt-62-speed-options).
+Adding these models does not change the saved default model or subagent roster.
+Run `ocx sync`, then refresh or restart Codex if the picker still has the old list.
+Upstream account access still determines whether a request is accepted.
+If you added either model through `providers.openai.models` before this release,
+sync replaces the unchanged generated fallback with the model's own instructions
+and tools. Fallbacks with user-edited instructions, tools or speed tiers are preserved.
+
 The native fallback set includes `gpt-5.5` and GPT-5.6 Sol/Terra/Luna.
 For the GPT-5.5 family, opencodex preserves
 the installed Codex catalog's richer live entries and only synthesizes a missing entry. The bundled

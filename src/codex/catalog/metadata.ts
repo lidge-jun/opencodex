@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
@@ -53,6 +54,8 @@ import {
   NATIVE_GPT6_SOL_MODEL,
   NATIVE_GPT61_SOL_MODEL,
   NATIVE_GPT61_TERRA_MODEL,
+  NATIVE_GPT62_ASTRA_MODEL, NATIVE_GPT62_SOL_MODEL,
+  CONFIGURED_NATIVE_OPENAI_DESCRIPTION, CONFIGURED_NATIVE_OPENAI_TEMPLATE_MODEL, configuredNativeOpenAiDisplayName,
   NATIVE_RESERVE_MODEL,
   NATIVE_OPENAI_CAPABILITY_ALIAS_MODELS,
   NATIVE_OPENAI_MODELS,
@@ -80,6 +83,7 @@ export {
   NATIVE_GPT6_SOL_MODEL,
   NATIVE_GPT61_SOL_MODEL,
   NATIVE_GPT61_TERRA_MODEL,
+  NATIVE_GPT62_ASTRA_MODEL, NATIVE_GPT62_SOL_MODEL,
   NATIVE_OPENAI_CAPABILITY_ALIAS_MODELS,
   NATIVE_OPENAI_MODELS,
   SELF_DESCRIBED_NATIVE_OPENAI_MODELS,
@@ -103,6 +107,7 @@ export const DOCUMENTED_NATIVE_OPENAI_ADDITIONS = [
   NATIVE_GPT61_SOL_MODEL,
   // Terra's pinned row has the same client floor and backfills older installed catalogs too.
   NATIVE_GPT61_TERRA_MODEL,
+  NATIVE_GPT62_ASTRA_MODEL, NATIVE_GPT62_SOL_MODEL,
 ];
 
 export function configuredNativeAliasSlugs(
@@ -213,6 +218,9 @@ export const NATIVE_OPENAI_CONTEXT_OVERRIDES: Record<string, { contextWindow?: n
   // raised its Codex & Work default to 500,000 on 2026-10-11; the 872,000 ceiling is unchanged.
   [NATIVE_GPT61_SOL_MODEL]: { ...NATIVE_GPT61_SOL_CONTEXT },
   [NATIVE_GPT61_TERRA_MODEL]: { ...NATIVE_GPT61_TERRA_CONTEXT },
+  // GPT-6.2 keeps Astra's 272k and Sol's 500k defaults, both with an 872k ceiling.
+  [NATIVE_GPT62_ASTRA_MODEL]: { ...NATIVE_GPT6_CONTEXT },
+  [NATIVE_GPT62_SOL_MODEL]: { ...NATIVE_GPT61_SOL_CONTEXT },
   // Astra Minor borrows Astra's row, so it inherits Astra's numbers. No account we hold can reach
   // it, so this is inheritance, not a measurement.
   [NATIVE_GPT6_ASTRA_MINOR_MODEL]: { ...NATIVE_GPT6_CONTEXT },
@@ -723,6 +731,26 @@ export function shouldUpgradeToUpstreamEntry(entry: RawEntry): boolean {
   if (typeof entry.slug !== "string" || !UPSTREAM_NATIVE_ENTRIES.has(entry.slug)) return false;
   if (discoveredNativeOpenAiRow(entry.slug)) return true;
   if (entry.display_name === entry.slug) return true;
+  // Early 6.2 config entries have a real-looking label but borrow the old Sol payload.
+  // Replace only our unchanged fallback instructions/tools; preserve user-edited content.
+  if ((entry.slug === NATIVE_GPT62_ASTRA_MODEL || entry.slug === NATIVE_GPT62_SOL_MODEL)
+    && entry.description === CONFIGURED_NATIVE_OPENAI_DESCRIPTION
+    && entry.display_name === configuredNativeOpenAiDisplayName(entry.slug)) {
+    const template = PINNED_UPSTREAM_MODELS.get(CONFIGURED_NATIVE_OPENAI_TEMPLATE_MODEL);
+    const messages = structuredClone(template?.model_messages);
+    if (template && typeof template.base_instructions === "string"
+      && messages && typeof messages === "object" && !Array.isArray(messages)) {
+      const payload = messages as Record<string, unknown>;
+      if (typeof payload.instructions_template === "string") {
+        payload.instructions_template = neutralizeIdentity(payload.instructions_template);
+      }
+      if (entry.base_instructions === neutralizeIdentity(template.base_instructions)
+        && isDeepStrictEqual(entry.model_messages, messages)
+        && isDeepStrictEqual(entry.experimental_supported_tools, template.experimental_supported_tools)
+        && ["service_tiers", "additional_speed_tiers", "default_service_tier"]
+          .every(key => isDeepStrictEqual(entry[key], template[key]))) return true;
+    }
+  }
   // A row this project authored from a guess is not evidence of upstream truth, however genuine
   // its display name looks. Replace it once, from the pin.
   return SELF_AUTHORED_NATIVE_ROWS.has(entry.slug)

@@ -14,6 +14,8 @@ import rosterPinnedModels from "../data/roster-pinned-models.json";
  * 2026-09-30 from openai/codex `codex-rs/models-manager/models.json` after #49318 (bundled
  * upstream, but newer than this build's `upstream-models.json` pin), and `gpt-6.1-terra`,
  * copied verbatim from the same upstream file on 2026-10-27 after its 2026-10-26 release.
+ * GPT-6.2 Astra/Sol were copied on 2026-11-18 from that file at
+ * openai/codex 2f5c413e19776bc684ac781b57dc069e4ab9fa21 after their 2026-11-17 release.
  *
  * The snapshot always wins: a roster row is appended only when its slug is absent from the
  * snapshot. Once a codex-rs refresh bundles Sol or Luna, that row takes over automatically and

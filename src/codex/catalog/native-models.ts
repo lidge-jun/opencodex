@@ -57,6 +57,10 @@ export const NATIVE_GPT61_SOL_MODEL = "gpt-6.1-sol";
  */
 export const NATIVE_GPT61_TERRA_MODEL = "gpt-6.1-terra";
 
+/** Shipped 2026-11-17; exact openai/codex rows are preserved in the roster pin. */
+export const NATIVE_GPT62_ASTRA_MODEL = "gpt-6.2-astra";
+export const NATIVE_GPT62_SOL_MODEL = "gpt-6.2-sol";
+
 /**
  * Unreleased GPT-6 Astra variant. No public row exists anywhere — neither the codex-rs bundle nor
  * the 2026-09-23 main-account roster probe carries it — so it is ACCOUNT-GATED: hidden and
@@ -162,6 +166,7 @@ const selfDescribedNativeModels = new Set<string>([
   NATIVE_GPT6_LUNA_MODEL,
   NATIVE_GPT61_SOL_MODEL,
   NATIVE_GPT61_TERRA_MODEL,
+  NATIVE_GPT62_ASTRA_MODEL, NATIVE_GPT62_SOL_MODEL,
 ]);
 
 export const SELF_DESCRIBED_NATIVE_OPENAI_MODELS: ReadonlySet<string> = selfDescribedNativeModels;
@@ -235,10 +240,12 @@ export function configuredNativeOpenAiDisplayName(slug: string): string {
   )).join("-");
 }
 
+export const CONFIGURED_NATIVE_OPENAI_DESCRIPTION = "OpenAI native model added through providers.openai.models; uses GPT-6-Sol capabilities.";
+
 function configuredNativePresentation(slug: string): { displayName: string; description: string } {
   return {
     displayName: configuredNativeOpenAiDisplayName(slug),
-    description: "OpenAI native model added through providers.openai.models; uses GPT-6-Sol capabilities.",
+    description: CONFIGURED_NATIVE_OPENAI_DESCRIPTION,
   };
 }
 
@@ -266,6 +273,7 @@ const BUILT_IN_NATIVE_OPENAI_MODELS: readonly string[] = Object.freeze([
   NATIVE_GPT6_SOL_MODEL, NATIVE_GPT6_LUNA_MODEL,
   NATIVE_GPT61_SOL_MODEL,
   NATIVE_GPT61_TERRA_MODEL,
+  NATIVE_GPT62_ASTRA_MODEL, NATIVE_GPT62_SOL_MODEL,
   NATIVE_GPT6_ASTRA_MINOR_MODEL,
 ]);
 
@@ -412,4 +420,5 @@ export const NATIVE_MAIN_DRAIN_SENTINEL_MODELS: ReadonlySet<string> = new Set([
   NATIVE_GPT6_LUNA_MODEL,
   NATIVE_GPT61_SOL_MODEL,
   NATIVE_GPT61_TERRA_MODEL,
+  NATIVE_GPT62_ASTRA_MODEL, NATIVE_GPT62_SOL_MODEL,
 ]);
