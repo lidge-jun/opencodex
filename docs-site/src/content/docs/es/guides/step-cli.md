@@ -35,7 +35,9 @@ solicitud para que el cliente pueda aprobarlas y ejecutarlas:
   pendiente. Si el proceso termina, OpenCodex informa del error. Los resultados ya entregados no
   se pueden reproducir por esta ruta.
 - **Apagado ordenado.** El proxy espera a que terminen los procesos de StepCode dentro de su plazo
-  de apagado. Si no puede confirmarlo a tiempo, informa de un error de apagado.
+  de apagado e informa de un error si no puede confirmarlo. En macOS y Linux, esto puede ocurrir si
+  el líder del grupo de procesos sale antes de que termine el grupo. Algunos procesos descendientes
+  pueden seguir ejecutándose.
 - **Límites de sesión.** Si una herramienta tarda más de dos minutos en devolver un resultado,
   el turno informa del error `step_cli_tool_result_too_late`. El protocolo no permite reemplazar
   el mensaje de sistema de la sesión. OpenCodex antepone las instrucciones del cliente al turno.

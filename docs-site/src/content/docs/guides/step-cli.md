@@ -39,7 +39,8 @@ StepCode:
   not silently restarted, because tool results already delivered cannot be replayed through this
   route.
 - **Graceful stop** waits for StepCode process cleanup within the proxy's shutdown window and
-  reports a shutdown failure if it cannot confirm cleanup in time.
+  reports a shutdown failure if it cannot confirm cleanup. On macOS and Linux, this can happen
+  if the process group leader exits before group termination. Descendants may still be running.
 - **Two documented limits:** a tool that takes longer than two minutes to come back exceeds the
   CLI's own tool-result window and the turn reports `step_cli_tool_result_too_late`; and the CLI's
   session system prompt cannot be replaced through this protocol, so your instructions are prepended

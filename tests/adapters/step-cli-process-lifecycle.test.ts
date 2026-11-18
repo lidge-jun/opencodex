@@ -91,7 +91,11 @@ test("production drain waits for the StepCode cleanup receipt before listener st
 test.skipIf(process.platform === "win32").each([450, 180, 0])("an exhausted turn drain kills all StepCode groups before listener stop with %ims left", async remainingMs => {
   const cwd = await mkdtemp(join(tmpdir(), "ocx-step-deadline-"));
   const groups = new Map(Array.from({ length: 7 }, (_, i) => [
-    -(1_900_001_000 + i), { signals: [] as NodeJS.Signals[], gone: false, confirmed: false },
+    -(1_900_001_000 + i), { signals: [] as NodeJS.Signals[], gone: false, confirmed: false,
+      child: Object.assign(new EventEmitter(), {
+        pid: 1_900_001_000 + i, stdin: new PassThrough(), stdout: new PassThrough(),
+        stderr: new PassThrough(), exitCode: null, signalCode: null,
+      }) },
   ]));
   const pids = [...groups.keys()].map(group => -group);
   const realKill = process.kill.bind(process);
@@ -99,11 +103,13 @@ test.skipIf(process.platform === "win32").each([450, 180, 0])("an exhausted turn
     const group = groups.get(target);
     if (!group) return realKill(target, signal);
     if (group.gone) {
-      if (signal === 0) group.confirmed = true;
       throw Object.assign(new Error("fixture group is gone"), { code: "ESRCH" });
     }
     if (signal === "SIGTERM" || signal === "SIGKILL") group.signals.push(signal);
-    if (signal === "SIGKILL") group.gone = true;
+    if (signal === "SIGKILL") {
+      group.gone = true;
+      queueMicrotask(() => group.child.emit("exit", null, "SIGKILL"));
+    }
     return true;
   });
   const realNow = () => new Date().getTime();
@@ -115,15 +121,13 @@ test.skipIf(process.platform === "win32").each([450, 180, 0])("an exhausted turn
   });
   const pool = poolFor(cwd, {
     which: () => process.execPath,
-    spawn: () => Object.assign(new EventEmitter(), {
-      pid: pids.shift()!, stdin: new PassThrough(), stdout: new PassThrough(),
-      stderr: new PassThrough(), exitCode: null, signalCode: null,
-    }) as unknown as ChildProcess,
+    spawn: () => groups.get(-pids.shift()!)!.child as unknown as ChildProcess,
   }, { onEvent: () => {} });
   const lease = tryAdmitTurn();
   try {
-    for (let i = 0; i < groups.size; i++) {
+    for (const [i, group] of [...groups.values()].entries()) {
       const session = await pool.open({ handle: String(i), sessionId: "" });
+      session.onExit(() => { group.confirmed = true; });
       if (i < 5) void session.close(); // Four active, one already queued.
     }
     expect([...groups.values()].map(group => group.signals)).toEqual([
@@ -216,22 +220,22 @@ test("a deadline-aware close prevents an in-flight workspace setup from spawning
   expect(spawns).toBe(0);
 });
 
-test("emergency cleanup skips a reused PGID and still kills an owned group", async () => {
+test("emergency cleanup skips a replacement group and still kills a live leader's group", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "ocx-step-group-reuse-"));
   const children = [1_900_003_001, 1_900_003_002].map(pid => Object.assign(new EventEmitter(), {
     pid, exitCode: null as number | null, signalCode: null,
     stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
   }));
-  const [stale, owned] = children;
-  const groups = new Set(children.map(child => -child.pid));
-  const signals: number[] = [];
-  let probesFail = false;
+  const stale = children[0]!, owned = children[1]!;
+  const groups = new Map(children.map(child => [-child.pid, "original"]));
+  const signals: Array<[string, number, number | NodeJS.Signals | undefined]> = [];
   const kill = spyOn(process, "kill").mockImplementation((target, signal) => {
-    if (!groups.has(target)) throw new Error("unexpected target outside the process table fixture");
-    if (signal === 0 && probesFail) {
-      throw Object.assign(new Error("fixture cannot verify group"), { code: "EPERM" });
+    const group = groups.get(target);
+    if (!group) throw new Error("unexpected target outside the process table fixture");
+    signals.push([group, target, signal]);
+    if (target === -owned.pid && signal === "SIGKILL") {
+      queueMicrotask(() => owned.emit("exit", null, "SIGKILL"));
     }
-    if (signal === "SIGKILL") signals.push(target);
     return true;
   });
   let next = 0;
@@ -241,23 +245,25 @@ test("emergency cleanup skips a reused PGID and still kills an owned group", asy
     { platform: "linux", spawn: () => children[next++] as unknown as ChildProcess },
   );
   try {
-    const first = await pool.open({ handle: "stale", sessionId: "" });
-    const second = await pool.open({ handle: "owned", sessionId: "" });
-    stale!.exitCode = 0;
-    stale!.emit("exit", 0, null);
-    probesFail = true;
-    await expect(first.close()).rejects.toMatchObject({ code: "step_cli_cleanup_failed" });
-    await expect(second.close()).rejects.toMatchObject({ code: "step_cli_cleanup_failed" });
-    await expect(pool.closeAll()).rejects.toMatchObject({ code: "step_cli_cleanup_failed" });
-    // The old leader is reaped. The table can now resolve that number to an unrelated group.
-    probesFail = false;
+    await pool.open({ handle: "stale", sessionId: "" });
+    await pool.open({ handle: "owned", sessionId: "" });
+    stale.emit("exit", 0, null);
+    groups.set(-stale.pid, "replacement");
+    signals.length = 0;
     let emergencyError: unknown;
     try { pool.forceShutdown(); }
     catch (error) { emergencyError = error; }
-    expect(signals).toEqual([-owned!.pid]);
+    expect(signals.filter(([group]) => group === "replacement")).toEqual([]);
+    expect(signals.filter(([, , signal]) => signal === "SIGKILL")).toEqual([["original", -owned.pid, "SIGKILL"]]);
     expect(emergencyError).toMatchObject({ code: "step_cli_cleanup_failed" });
-    expect(pool.size).toBe(2);
+    await expect(pool.closeAll()).rejects.toMatchObject({ code: "step_cli_cleanup_failed" });
+    expect(signals.filter(([group]) => group === "replacement")).toEqual([]);
+    expect(pool.size).toBe(1);
   } finally {
+    stale.emit("close", 0, null);
+    owned.emit("close", 0, null);
+    groups.delete(-stale.pid);
+    groups.delete(-owned.pid);
     await pool.closeAll().catch(() => {});
     kill.mockRestore();
   }
@@ -279,6 +285,7 @@ test("an ESRCH from a group signal prevents later probes or signals to that PGID
     }
     if (signal === "SIGTERM") {
       disappeared = true;
+      queueMicrotask(() => child.emit("exit", 0, null));
       throw Object.assign(new Error("fixture group is gone"), { code: "ESRCH" });
     }
     return true;
@@ -296,7 +303,54 @@ test("an ESRCH from a group signal prevents later probes or signals to that PGID
   }
 });
 
-test.skipIf(process.platform === "win32")("an exited wrapper retains ownership until its POSIX group returns ESRCH", async () => {
+test.each(["before cleanup", "during TERM grace"])("a leader exiting %s leaves its session quarantined", async exitWhen => {
+  const cwd = await mkdtemp(join(tmpdir(), "ocx-step-group-exit-"));
+  const child = Object.assign(new EventEmitter(), {
+    stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(),
+    pid: 1_900_003_004, exitCode: null, signalCode: null,
+  });
+  const afterExit: Array<number | NodeJS.Signals | undefined> = [];
+  let leaderExited = false;
+  const exit = (): void => {
+    leaderExited = true;
+    child.emit("exit", 0, null);
+  };
+  let killed = false;
+  const kill = spyOn(process, "kill").mockImplementation((target, signal) => {
+    if (target !== -child.pid) throw new Error("unexpected target outside the process table fixture");
+    if (leaderExited) afterExit.push(signal);
+    if (signal === "SIGTERM" && exitWhen === "during TERM grace") queueMicrotask(exit);
+    if (signal === "SIGKILL") killed = true;
+    if (killed && signal === 0) throw Object.assign(new Error("fixture group is gone"), { code: "ESRCH" });
+    return true;
+  });
+  const pool = new StepSessionPool(
+    { openCodexHome: cwd, idleTimeoutMs: 60_000, buildOptions: () => options(cwd) },
+    { onEvent: () => {} }, { platform: "linux", spawn: () => child as unknown as ChildProcess },
+  );
+  const ref = { handle: "exited", sessionId: "" };
+  const warn = spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const session = await pool.open(ref);
+    if (exitWhen === "before cleanup") exit();
+    const [receipt] = await Promise.allSettled([session.close()]);
+    expect(leaderExited).toBe(true);
+    expect(afterExit).toEqual([]);
+    expect(receipt).toMatchObject({ status: "rejected", reason: { code: "step_cli_cleanup_failed" } });
+    expect(pool.get(ref)).toBeUndefined();
+    await expect(pool.open(ref)).rejects.toMatchObject({ code: "step_cli_cleanup_failed" });
+    await expect(pool.closeAll()).rejects.toMatchObject({ code: "step_cli_cleanup_failed" });
+    expect(warn.mock.calls).toEqual([
+      ["StepCode POSIX process cleanup is incomplete because the process group leader exited before group termination."],
+    ]);
+  } finally {
+    await pool.closeAll().catch(() => {});
+    kill.mockRestore();
+    warn.mockRestore();
+  }
+});
+
+test("normal cleanup sends TERM then KILL and waits for the live leader's exit", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "ocx-step-group-"));
   const pid = 1_900_000_000;
   const child = Object.assign(new EventEmitter(), {
@@ -304,34 +358,36 @@ test.skipIf(process.platform === "win32")("an exited wrapper retains ownership u
     pid, exitCode: null as number | null, signalCode: null,
   });
   const signals: Array<number | NodeJS.Signals | undefined> = [];
-  let verifiedGone = false;
-  const realKill = process.kill.bind(process);
+  const killed = Promise.withResolvers<void>();
   const kill = spyOn(process, "kill").mockImplementation((target, signal) => {
-    if (target !== -pid) return realKill(target, signal);
-    if (signal === 0 && signals.includes("SIGKILL")) {
-      verifiedGone = true;
-      throw Object.assign(new Error("fixture group is gone"), { code: "ESRCH" });
-    }
+    if (target !== -pid) throw new Error("unexpected target outside the process table fixture");
     signals.push(signal);
+    if (signal === "SIGKILL") killed.resolve();
+    if (signal === 0 && signals.includes("SIGKILL")) throw Object.assign(new Error("fixture group is gone"), { code: "ESRCH" });
     return true;
   });
   try {
     const session = await StepCliSession.open(options(cwd), { onEvent: () => {} },
-      { spawn: () => child as unknown as ChildProcess });
-    child.exitCode = 0;
-    child.emit("exit", 0, null);
-    let verifiedAtRelease = false;
-    session.onExit(() => { verifiedAtRelease = verifiedGone; });
-    await session.close();
-    expect(signals).toContain("SIGTERM");
-    expect(signals).toContain("SIGKILL");
-    expect(verifiedAtRelease).toBe(true);
+      { platform: "linux", spawn: () => child as unknown as ChildProcess });
+    let released = false;
+    session.onExit(() => { released = true; });
+    const closing = session.close();
+    try {
+      await Promise.race([killed.promise, closing]);
+      expect(signals.filter(signal => signal !== 0)).toEqual(["SIGTERM", "SIGKILL"]);
+      const progress = await Promise.race([closing.then(() => "released"), Bun.sleep(30).then(() => "waiting")]);
+      expect(progress).toBe("waiting");
+    } finally {
+      child.emit("exit", null, "SIGKILL");
+      await closing;
+    }
+    expect(released).toBe(true);
   } finally {
     kill.mockRestore();
   }
 });
 
-test("closing a native session terminates its grandchild through a Windows cmd dispatcher", async () => {
+test("closing a native session terminates its descendants, including through a Windows cmd dispatcher", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "ocx-step-tree-"));
   const pidFile = join(cwd, "worker.pid");
   const worker = join(cwd, "worker.ts"), parent = join(cwd, "parent.ts");
@@ -340,12 +396,9 @@ test("closing a native session terminates its grandchild through a Windows cmd d
     'import { spawn } from "node:child_process";',
     'import { writeFileSync, renameSync } from "node:fs";',
     'const worker = spawn(process.execPath, [process.argv[2]], { stdio: "ignore", windowsHide: true });',
-    'const keepAlive = setInterval(() => {}, 1000);',
-    // Reap the child before exiting, including on hosts without an orphan reaper.
-    'if (process.platform !== "win32") {',
-    '  process.on("SIGTERM", () => {});',
-    '  worker.once("exit", () => clearInterval(keepAlive));',
-    '}',
+    'setInterval(() => {}, 1000);',
+    // Keep the leader alive through escalation, with time to reap the TERM'd worker.
+    'if (process.platform !== "win32") process.on("SIGTERM", () => {});',
     'const pidFile = process.argv[3];',
     'writeFileSync(pidFile + ".tmp", JSON.stringify({ parent: process.pid, worker: worker.pid }));',
     'renameSync(pidFile + ".tmp", pidFile);',
@@ -355,6 +408,7 @@ test("closing a native session terminates its grandchild through a Windows cmd d
   let rootPid = 0, parentPid = 0, workerPid = 0;
   const session = await StepCliSession.open({
     ...options(cwd),
+    killGraceMs: 500,
     binary: process.platform === "win32" ? dispatcher : process.execPath,
     args: process.platform === "win32" ? [] : [parent, worker, pidFile],
     env: { PATH: process.env.PATH ?? "", ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}) },

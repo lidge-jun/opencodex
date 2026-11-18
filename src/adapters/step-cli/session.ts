@@ -39,7 +39,8 @@ const CLEANUP_ATTEMPTS = 2;
 const MAX_PARALLEL_CLEANUPS = 4;
 const KILL_CONFIRMATION_MS = 2_000;
 const SHUTDOWN_KILL_MARGIN_MS = 250;
-const PROCESS_GROUP_POLL_MS = 20;
+const PROCESS_EXIT_POLL_MS = 20;
+const POSIX_LEADER_EXITED = "StepCode POSIX process cleanup is incomplete because the process group leader exited before group termination.";
 
 // Share slots across pools and all close paths, including idle and late-opening sessions.
 let activeCleanups = 0;
@@ -178,7 +179,7 @@ export class StepCliSession {
 
   #child: ChildProcess | undefined;
   #leaderExited = false;
-  #posixGroup: "unverified" | "owned" | "gone" = "unverified";
+  #posixGroupSignalState: "pending" | "finished" | "lost" = "pending";
   #closed = false;
   #closePromise: Promise<void> | undefined;
   #cleanupComplete = false;
@@ -298,11 +299,6 @@ export class StepCliSession {
     });
     this.#child = child;
     child.once("exit", () => { this.#leaderExited = true; });
-    if (this.#platform !== "win32" && child.pid !== undefined && this.#hasLiveLeader(child)) {
-      // Establish ownership while the detached leader still anchors the PGID.
-      try { this.#operateOnPosixGroup(child, child.pid, 0); }
-      catch { /* Teardown can recheck while the leader still anchors the group. */ }
-    }
 
     // stderr must be drained continuously: an unread pipe fills and blocks the child mid-turn. Only a
     // bounded tail is retained, and it is never logged as content.
@@ -644,9 +640,7 @@ export class StepCliSession {
     const child = this.#child;
     if (this.#platform === "win32" || child?.pid === undefined) return;
     try {
-      if (this.#operateOnPosixGroup(child, child.pid, 0)) {
-        this.#operateOnPosixGroup(child, child.pid, "SIGKILL");
-      }
+      this.#signalPosixGroup(child, child.pid, "SIGKILL");
     } catch (error) {
       // If the group operation failed, the child handle can still stop the leader.
       // Preserve the failure receipt because the descendants are unconfirmed.
@@ -686,10 +680,8 @@ export class StepCliSession {
     for (let attempt = 0; attempt < CLEANUP_ATTEMPTS; attempt++) {
       try { await this.#terminate(child); return; }
       catch (error) {
-        // A failed attempt can outlive the group. Any retry or later sweep must
-        // establish ownership again from the unreaped leader.
-        if (this.#posixGroup === "owned") this.#posixGroup = "unverified";
         failures.push(error);
+        if (this.#posixGroupSignalState === "lost") break;
       }
     }
     throw Object.assign(new StepSessionError(
@@ -714,49 +706,44 @@ export class StepCliSession {
     return !this.#leaderExited && child.exitCode === null && child.signalCode === null;
   }
 
-  #operateOnPosixGroup(child: ChildProcess, pid: number, signal: 0 | NodeJS.Signals): boolean {
-    // ESRCH is terminal for this group, including when it comes from a signal.
-    if (this.#posixGroup === "gone") return false;
-    if (this.#posixGroup !== "owned" && !this.#hasLiveLeader(child)) {
-      throw new StepSessionError("StepCode process group ownership could not be verified.", "step_cli_cleanup_failed");
+  #signalPosixGroup(child: ChildProcess, pid: number, signal: "SIGTERM" | "SIGKILL"): void {
+    if (this.#posixGroupSignalState === "finished") return;
+    // The detached leader anchors the PGID only until exit. Check on every signal.
+    if (!this.#hasLiveLeader(child)) {
+      if (this.#posixGroupSignalState === "pending") {
+        this.#posixGroupSignalState = "lost";
+        console.warn(POSIX_LEADER_EXITED);
+      }
+      throw new StepSessionError(POSIX_LEADER_EXITED, "step_cli_cleanup_failed");
     }
     try {
       process.kill(-pid, signal);
-      this.#posixGroup = "owned";
-      return true;
+      if (signal === "SIGKILL") this.#posixGroupSignalState = "finished";
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ESRCH") {
-        this.#posixGroup = "gone";
-        return false;
-      }
-      this.#posixGroup = "unverified";
-      throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+      this.#posixGroupSignalState = "finished";
     }
   }
 
-  /** A wrapper's exit says nothing about the detached group it originally led. */
   async #terminatePosixGroup(child: ChildProcess, pid: number): Promise<void> {
-    if (!this.#operateOnPosixGroup(child, pid, 0)) return;
     const escalateAt = performance.now() + this.#killGraceMs;
     const deadline = escalateAt + KILL_CONFIRMATION_MS;
     if (!this.#urgentCleanup.signal.aborted && this.#shutdownDeadlineMs - Date.now() > SHUTDOWN_KILL_MARGIN_MS) {
-      if (!this.#operateOnPosixGroup(child, pid, "SIGTERM")) return;
-    }
-    let escalated = false;
-    while (this.#operateOnPosixGroup(child, pid, 0)) {
-      const now = performance.now();
-      const remaining = this.#shutdownDeadlineMs - Date.now();
-      const untilKill = Math.min(escalateAt - now, remaining - SHUTDOWN_KILL_MARGIN_MS);
-      if (!escalated && (this.#urgentCleanup.signal.aborted || untilKill <= 0)) {
-        if (!this.#operateOnPosixGroup(child, pid, "SIGKILL")) return;
-        escalated = true;
-        continue;
+      this.#signalPosixGroup(child, pid, "SIGTERM");
+      while (this.#posixGroupSignalState === "pending" && this.#hasLiveLeader(child) && !this.#urgentCleanup.signal.aborted) {
+        const untilKill = Math.min(escalateAt - performance.now(), this.#shutdownDeadlineMs - Date.now() - SHUTDOWN_KILL_MARGIN_MS);
+        if (untilKill <= 0) break;
+        await Bun.sleep(Math.min(PROCESS_EXIT_POLL_MS, untilKill));
       }
-      const untilConfirm = Math.min(deadline - now, remaining);
+    }
+    this.#signalPosixGroup(child, pid, "SIGKILL");
+    // Confirm the leader's exit using its child handle. The numeric PGID can be reused.
+    while (this.#hasLiveLeader(child)) {
+      const untilConfirm = Math.min(deadline - performance.now(), this.#shutdownDeadlineMs - Date.now());
       if (untilConfirm <= 0) {
         throw new StepSessionError("StepCode process group cleanup could not be confirmed.", "step_cli_cleanup_failed");
       }
-      await Bun.sleep(Math.min(PROCESS_GROUP_POLL_MS, escalated ? untilConfirm : untilKill));
+      await Bun.sleep(Math.min(PROCESS_EXIT_POLL_MS, untilConfirm));
     }
   }
 
