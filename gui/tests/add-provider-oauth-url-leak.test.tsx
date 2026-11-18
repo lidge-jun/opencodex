@@ -30,9 +30,11 @@ let win: Window;
 let host: HTMLElement;
 let root: Root | null = null;
 let originalFetch: typeof globalThis.fetch;
-let pendingLogins: Array<(url: string, instructions?: string) => void> = [];
+let pendingLogins: Array<(url: string, instructions?: string, flowId?: string) => void> = [];
 let oauthStatus: { loggedIn: boolean; error?: string } = { loggedIn: false };
 let cancelledProviders: string[] = [];
+let cancelledFlowIds: Array<string | undefined> = [];
+let polledFlowIds: Array<string | null> = [];
 
 const PRESETS = [
   { id: "claude", label: "Claude", adapter: "anthropic", baseUrl: "https://api.anthropic.com", auth: "oauth", oauthProvider: "claude" },
@@ -56,6 +58,8 @@ beforeEach(() => {
   pendingLogins = [];
   oauthStatus = { loggedIn: false };
   cancelledProviders = [];
+  cancelledFlowIds = [];
+  polledFlowIds = [];
   Object.defineProperty(globalThis, "fetch", {
     configurable: true,
     value: async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -66,15 +70,19 @@ beforeEach(() => {
       if (url.pathname === "/api/oauth/login" && (init?.method ?? "GET") === "POST") {
         // Held open so the test controls when the URL lands.
         return await new Promise<Response>((resolve) => {
-          pendingLogins.push((authUrl, instructions) => resolve(Response.json({ url: authUrl, instructions })));
+          pendingLogins.push((authUrl, instructions, flowId) => resolve(Response.json({ url: authUrl, instructions, flowId })));
         });
       }
       if (url.pathname === "/api/oauth/login/cancel" && (init?.method ?? "GET") === "POST") {
-        const body = JSON.parse(String(init?.body ?? "{}")) as { provider?: string };
+        const body = JSON.parse(String(init?.body ?? "{}")) as { provider?: string; flowId?: string };
         if (body.provider) cancelledProviders.push(body.provider);
+        cancelledFlowIds.push(body.flowId);
         return Response.json({ ok: true, cancelled: true });
       }
-      if (url.pathname === "/api/oauth/status") return Response.json(oauthStatus);
+      if (url.pathname === "/api/oauth/status") {
+        if (url.searchParams.get("provider") === "m365-copilot") polledFlowIds.push(url.searchParams.get("flowId"));
+        return Response.json(oauthStatus);
+      }
       return Response.json({});
     },
   });
@@ -386,7 +394,7 @@ test("pagehide clears the add-provider OAuth hint and allows another login", asy
 test("pagehide leaves a proxy-owned login running, and Cancel still ends it", async () => {
   await mountProvidersOAuthHarness({ provider: "m365-copilot" });
   await act(async () => {
-    pendingLogins.shift()?.(A_URL);
+    pendingLogins.shift()?.(A_URL, undefined, "page-flow");
     await new Promise((r) => setTimeout(r, 20));
   });
   expect(host.querySelector('[data-testid="oauth-busy"]')?.textContent).toBe("m365-copilot");
@@ -404,6 +412,7 @@ test("pagehide leaves a proxy-owned login running, and Cancel still ends it", as
   clickByText("Cancel login");
   await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
   expect(cancelledProviders).toEqual(["m365-copilot"]);
+  expect(cancelledFlowIds).toEqual(["page-flow"]);
 });
 
 test("a proxy-owned login is polled past the dashboard's own browser budget", () => {
@@ -419,14 +428,35 @@ test("the add-provider pane keeps a proxy-owned login cancellable after pagehide
   await act(async () => { clickByText("Microsoft 365 Copilot"); });
   await act(async () => { clickByText("Log in with Microsoft 365 Copilot"); });
   expect(pendingLogins).toHaveLength(1);
-  await act(async () => { pendingLogins.shift()!("", instructions); });
+  await act(async () => { pendingLogins.shift()!("", instructions, "modal-flow"); });
   expect(host.textContent?.split(instructions)).toHaveLength(2);
   await act(async () => { win.dispatchEvent(new win.Event("pagehide")); });
   expect(cancelledProviders).toEqual([]);
   expect(host.textContent).toContain("Waiting for browser");
   await act(async () => { clickByText("Cancel"); });
   expect(cancelledProviders).toEqual(["m365-copilot"]);
+  expect(cancelledFlowIds).toEqual(["modal-flow"]);
   expect(host.textContent).toContain("Microsoft 365 Copilot login cancelled");
+});
+
+test.each(["providers", "add-provider"] as const)("M365 %s polls only its returned flow", async surface => {
+  const poll: Array<() => void> = [];
+  const original = globalThis.setTimeout;
+  const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, delay?: number) => {
+    if (delay === OAUTH_LOGIN_POLL_INTERVAL_MS) { poll.push(callback); return 0; }
+    return original(callback, delay);
+  }) as typeof setTimeout);
+  try {
+    if (surface === "providers") await mountProvidersOAuthHarness({ provider: "m365-copilot" });
+    else {
+      await mountModal();
+      await act(async () => { clickByText("Microsoft 365 Copilot"); });
+      await act(async () => { clickByText("Log in with Microsoft 365 Copilot"); });
+    }
+    await act(async () => { pendingLogins.shift()!("", "Fixture browser instructions", "starting-tab-flow"); });
+    await act(async () => { poll.shift()!(); });
+    expect(polledFlowIds).toEqual(["starting-tab-flow"]);
+  } finally { timer.mockRestore(); }
 });
 
 test("the add-provider OAuth pane can cancel an in-flight login", async () => {

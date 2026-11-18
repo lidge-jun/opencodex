@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { captureApiTarget, configureApiTargets } from "../src/api";
 import { standaloneApiTargets } from "../src/api-targets";
-import { afterOAuthCancellation, cancelOAuthLogin } from "../src/oauth-cancellation-barrier";
+import { afterOAuthCancellation, bindOAuthLoginFlow, cancelOAuthLogin, type OAuthLoginAttempt } from "../src/oauth-cancellation-barrier";
 
 const originalFetch = globalThis.fetch;
 let win: Window;
@@ -64,4 +64,30 @@ test("same-target cancellation orders the next login dispatch", async () => {
   await next;
   expect(started).toBe(true);
   expect(calls).toEqual(["http://a.example/api/oauth/login/cancel"]);
+});
+
+
+test("M365 cancellation waits for its own flow ID and does not coalesce two attempts", async () => {
+  const requests: unknown[] = [];
+  const releases: Array<() => void> = [];
+  globalThis.fetch = (async (_input, init) => {
+    requests.push(JSON.parse(String(init?.body)));
+    await new Promise<void>(resolve => { releases.push(resolve); });
+    return Response.json({ ok: true });
+  }) as typeof fetch;
+  target("http://a.example");
+  const old: OAuthLoginAttempt = { ...captureApiTarget("shared") };
+  const replacement: OAuthLoginAttempt = { ...captureApiTarget("shared") };
+  await cancelOAuthLogin(old, "m365-copilot");
+  expect(requests).toEqual([]);
+  bindOAuthLoginFlow(replacement, "m365-copilot", "replacement-flow");
+  bindOAuthLoginFlow(old, "m365-copilot", "old-flow");
+  expect(requests).toEqual([{ provider: "m365-copilot", flowId: "old-flow" }]);
+  const cancelled = cancelOAuthLogin(replacement, "m365-copilot");
+  expect(requests).toEqual([
+    { provider: "m365-copilot", flowId: "old-flow" },
+    { provider: "m365-copilot", flowId: "replacement-flow" },
+  ]);
+  for (const release of releases) release();
+  await cancelled;
 });

@@ -423,6 +423,9 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
     body: JSON.stringify({ provider, addAccount: addAccount ?? !reauth, ...(device && DEVICE_OPT_IN_PROVIDERS.has(provider) ? { device: true } : {}), ...(openBrowser === undefined ? {} : { openBrowser }), ...(reauth && id ? { accountId: id, reauth: true } : {}), ...(antigravityRisk ? { [ANTIGRAVITY_RISK_ACK_FIELD]: true } : {}) }),
   }, pinned));
   const xaiDevice = provider === "xai" && device;
+  const managedM365 = provider === "m365-copilot";
+  if (managedM365 && !start.flowId?.trim()) throw new CliUsageError("Running proxy did not return a Microsoft 365 Copilot login flow ID.");
+  const scopedFlow = xaiDevice || managedM365;
   if (xaiDevice && (!start.flowId?.trim() || !start.url?.trim() || !start.deviceCode?.trim())) {
     let cleanupFailed = false;
     try {
@@ -438,6 +441,7 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
       start.url ? `Open this URL to sign in:\n${terminalSafeText(start.url)}` : "",
       provider === "xai" && device ? terminalSafeText(start.instructions ?? "") : start.instructions ?? "",
       start.deviceCode ? `Device code: ${terminalSafeText(start.deviceCode)}` : "",
+      managedM365 && start.flowId ? `Flow ID: ${terminalSafeText(start.flowId)}` : "",
     ]);
   }
   if (code) {
@@ -451,20 +455,23 @@ async function login(argv: string[], deps: RuntimeApiDeps): Promise<number | voi
     printData({ ...start, modelSelection: modelSelectionNextSteps(provider, true) }, wantsJson, modelSelectionGuidance(provider, true));
     return;
   }
-  // A device grant waits on a person at another machine: outlast xAI's 30-minute code.
-  for (let attempt = 0; attempt < (device ? 930 : 100); attempt++) {
+  // Outlast the xAI device grant and the proxy-owned M365 browser session.
+  for (let attempt = 0; attempt < (device ? 930 : managedM365 ? 375 : 100); attempt++) {
     await Bun.sleep(2_000);
-    const raw = await runtimeRequest<Record<string, unknown>>(`/api/oauth/status?provider=${encodeURIComponent(provider)}${xaiDevice ? `&flowId=${encodeURIComponent(start.flowId!)}` : ""}`, { redirect: "error" }, pinned);
+    const raw = await runtimeRequest<Record<string, unknown>>(`/api/oauth/status?provider=${encodeURIComponent(provider)}${scopedFlow ? `&flowId=${encodeURIComponent(start.flowId!)}` : ""}`, { redirect: "error" }, pinned);
     if (loginObject(raw).error) throw new Error("Provider login failed");
-    if (xaiDevice && (raw.flowId !== start.flowId || raw.status === "idle")) throw new Error("Device login flow is unavailable");
+    if (scopedFlow && (raw.flowId !== start.flowId || raw.status === "idle")) throw new Error(managedM365 ? "Microsoft 365 Copilot login flow is unavailable" : "Device login flow is unavailable");
     const state = publicLoginStatus(raw);
-    if (state.done === true && state.loggedIn !== true && !(xaiDevice && raw.status === "complete")) throw new Error("Provider login ended without authentication");
+    if (state.done === true && state.loggedIn !== true && !(scopedFlow && raw.status === "complete")) throw new Error("Provider login ended without authentication");
     // A device login adds an account, so an already signed-in provider is not done until its flow is.
-    if ((xaiDevice && raw.status === "complete") || (state.loggedIn === true && (!device || (state.done === true && !xaiDevice)))) {
+    if (scopedFlow ? raw.status === "complete" : state.loggedIn === true && (!device || state.done === true)) {
       printData({ ...state, modelSelection: modelSelectionNextSteps(provider) }, wantsJson, [`Logged in to ${provider}.`, ...modelSelectionGuidance(provider)]);
       return;
     }
   }
+  if (managedM365) await runtimeRequest("/api/oauth/login/cancel", {
+    method: "POST", redirect: "error", body: JSON.stringify({ provider, flowId: start.flowId }),
+  }, pinned);
   throw new CliUsageError("login timed out");
 }
 
@@ -509,12 +516,12 @@ async function cancel(argv: string[], deps: RuntimeApiDeps): Promise<void> {
   if (!provider) throw new CliUsageError("provider is required", USAGE);
   rejectArgs(args, USAGE);
   const codex = CODEX_NAMES.has(provider);
-  if (codex && !flowId) {
-    throw new CliUsageError("Codex login cancel requires --flow <flow-id> (printed by 'ocx account login').", USAGE);
+  if (!flowId && (codex || provider === "m365-copilot")) {
+    throw new CliUsageError(`${codex ? "Codex" : "Microsoft 365 Copilot"} login cancel requires --flow <flow-id> (printed by 'ocx account login').`, USAGE);
   }
   const result = await runtimeRequest(codex ? "/api/codex-auth/login/cancel" : "/api/oauth/login/cancel", {
     method: "POST",
-    body: JSON.stringify(codex ? { flowId } : { provider, ...((provider === "kiro" || provider === "xai") && flowId ? { flowId } : {}) }),
+    body: JSON.stringify(codex ? { flowId } : { provider, ...((provider === "kiro" || provider === "xai" || provider === "m365-copilot") && flowId ? { flowId } : {}) }),
   }, deps);
   printData(result, wantsJson, [`Cancelled ${provider} login.`]);
 }

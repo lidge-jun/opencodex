@@ -3,7 +3,7 @@ import type { TFn } from "../i18n/shared";
 import { readJsonIfOk } from "../fetch-json";
 import { openBrowserRequestField } from "../oauth-open-browser-pref";
 import { oauthRiskAcknowledgementBody } from "../oauth-tos-risk";
-import { afterOAuthCancellation, cancelOAuthLogin } from "../oauth-cancellation-barrier";
+import { afterOAuthCancellation, bindOAuthLoginFlow, cancelOAuthLogin, oauthLoginStatusUrl, type OAuthLoginAttempt } from "../oauth-cancellation-barrier";
 import { parseBrowserLaunch, type BrowserLaunch } from "../oauth-browser-launch";
 import { BROWSER_LOGIN_POLL_ATTEMPTS, loginPollAttempts } from "../oauth-login-budget";
 import { isServerOwnedLogin, serverOwnedLoginAttempts } from "../oauth-server-owned-login";
@@ -69,7 +69,7 @@ export function useProvidersOAuth({
   const targetKeyRef = useRef(targetKey ?? apiBase);
   useLayoutEffect(() => { targetKeyRef.current = targetKey ?? apiBase; }, [apiBase, targetKey]);
   const activeLoginGenerationsRef = useRef(new Map<string, number>());
-  const activeLoginCapturesRef = useRef(new Map<string, ApiTargetCapture>());
+  const activeLoginCapturesRef = useRef(new Map<string, OAuthLoginAttempt>());
   // The capture of each provider's last login that ended on this target, so a code pasted into
   // the add-provider modal's Accounts row can say the login ended (#8618).
   const endedLoginCapturesRef = useRef(new Map<string, ApiTargetCapture>());
@@ -100,7 +100,7 @@ export function useProvidersOAuth({
    * Cancel a login on the target it started against. A missing capture fails closed:
    * falling back to the live target would send an old login's cancel to the new server.
    */
-  const cancelServerLogin = useCallback((capture: ApiTargetCapture, provider: string) =>
+  const cancelServerLogin = useCallback((capture: OAuthLoginAttempt, provider: string) =>
     cancelOAuthLogin(capture, provider), []);
 
   const reloadAccountsAfterLogin = useCallback(async (provider: string) => {
@@ -181,7 +181,7 @@ export function useProvidersOAuth({
 
   /** `riskAcknowledged` comes only from the warning dialog's Continue (see oauthRiskAcknowledgementBody). */
   const loginOAuth = async (provider: string, addAccount = false, accountId?: string, riskAcknowledged = false, row?: string) => {
-    const capture = renderCapture;
+    const capture: OAuthLoginAttempt = { ...renderCapture };
     activeLoginCapturesRef.current.set(provider, capture);
     endedLoginCapturesRef.current.delete(provider);
     const generation = bumpLoginGeneration(provider);
@@ -213,8 +213,9 @@ export function useProvidersOAuth({
           }),
         });
       });
-      if (!res || oauthLoginGenerationRef.current!.get(provider) !== generation || !targetCurrent()) return;
+      if (!res) return;
       if (!res.ok) {
+        if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
         const data = await res.json().catch(() => ({})) as { error?: string };
         if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
         notify(errorMessageFrom(
@@ -224,7 +225,8 @@ export function useProvidersOAuth({
         ), false);
         return;
       }
-      const data = await res.json() as { url?: string; instructions?: string; deviceCode?: string; browserLaunch?: unknown };
+      const data = await res.json() as { url?: string; instructions?: string; deviceCode?: string; browserLaunch?: unknown; flowId?: unknown };
+      bindOAuthLoginFlow(capture, provider, data.flowId);
       if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
       const browserLaunch = parseBrowserLaunch(data.browserLaunch);
       if (data.url || data.instructions || data.deviceCode) {
@@ -242,12 +244,18 @@ export function useProvidersOAuth({
         await new Promise(r => setTimeout(r, 2000));
         if (oauthLoginGenerationRef.current!.get(provider) !== generation || !targetCurrent()) return;
         const isCurrentStatusRead = captureOauthStatusRead?.(provider);
-        const sRes = await targetFetch(capture, `${apiBase}/api/oauth/status?provider=${provider}`).catch(() => null);
+        const sRes = await targetFetch(capture, oauthLoginStatusUrl(apiBase, provider, capture.flowId)).catch(() => null);
         const s: (OAuthStatus & { accounts?: OAuthAccount[]; activeAccountId?: string | null }) | null = sRes
           ? ((await readJsonIfOk<OAuthStatus & { accounts?: OAuthAccount[]; activeAccountId?: string | null }>(sRes)) ?? null)
           : null;
         if (!targetCurrent() || oauthLoginGenerationRef.current!.get(provider) !== generation) return;
         if (isCurrentStatusRead && !isCurrentStatusRead()) continue;
+        if (capture.flowId && sRes?.status === 404) {
+          notify(t("prov.loginExpired"), false);
+          setLoginInfo(null);
+          finished = true;
+          break;
+        }
         if (!s) continue;
         if (s.error) {
           if (invalidateOauthStatusReads?.(provider) === false) return;
@@ -264,9 +272,10 @@ export function useProvidersOAuth({
           break;
         }
         const statusCount = s.accounts?.length ?? 0;
-        const completed = addAccount || reauthTargetId
-          ? (statusCount > baselineCount || s.done === true)
-          : (s.loggedIn || s.done === true);
+        const completed = capture.flowId ? s.status === "complete"
+          : addAccount || reauthTargetId
+            ? (statusCount > baselineCount || s.done === true)
+            : (s.loggedIn || s.done === true);
         if (completed) {
           if (invalidateOauthStatusReads?.(provider) === false) return;
           setOauthStatus(prev => ({ ...prev, [provider]: s }));

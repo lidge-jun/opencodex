@@ -128,6 +128,58 @@ test("connectivity probe refuses a superseded web session before fetch", async (
   expect(await response.json()).toMatchObject({ ok: false });
 });
 
+test("management status and cancel bind a tab to its own M365 login attempt", async () => {
+  const name = "m365-copilot";
+  const def = OAUTH_PROVIDERS[name]!;
+  const config = { port: 0, hostname: "127.0.0.1", defaultProvider: name, providers: { [name]: def.providerConfig } } as OcxConfig;
+  const started: AbortSignal[] = [];
+  const login = spyOn(def, "login").mockImplementation(async ctrl => {
+    started.push(ctrl.signal!);
+    ctrl.onAuth?.({ url: "", instructions: "Fixture login " + started.length });
+    return new Promise((_, reject) => ctrl.signal!.addEventListener("abort", () => reject(new Error("fixture cancelled")), { once: true }));
+  });
+  const request = async (path: string, body?: object) => {
+    const url = new URL(path, "http://127.0.0.1");
+    return (await handleOauthAccountRoutes({
+      req: new Request(url, body ? { method: "POST", body: JSON.stringify({ provider: name, ...body }) } : {}),
+      url, config, deps: {},
+      convergeCodexCatalog: async () => ({ status: "failed", reason: "disk" }),
+      syncClaudeAgentDefsBestEffort: async () => {},
+    }))!;
+  };
+  const start = async () => {
+    const response = await request("/api/oauth/login", { openBrowser: true });
+    expect(response.status).toBe(200);
+    return await response.json() as { flowId: string };
+  };
+  const cancel = (flowId?: string) => request("/api/oauth/login/cancel", { flowId });
+  const status = (flowId?: string) => request("/api/oauth/status?provider=" + name + (flowId ? "&flowId=" + flowId : ""));
+  try {
+    const old = await start();
+    expect(typeof old.flowId).toBe("string");
+    expect(await (await cancel(old.flowId)).json()).toMatchObject({ cancelled: true });
+    const replacement = await start();
+    expect(replacement.flowId).not.toBe(old.flowId);
+    expect((await status()).status).toBe(404);
+    expect((await cancel()).status).toBe(404);
+    const oldStatus = await (await status(old.flowId)).json();
+    expect(oldStatus).toMatchObject({ flowId: old.flowId, status: "error" });
+    expect(oldStatus.hint).toBeUndefined();
+    expect((await status("unknown")).status).toBe(404);
+    expect(await (await cancel(old.flowId)).json()).toMatchObject({ cancelled: true });
+    expect(started[1]?.aborted).toBe(false);
+    expect(await (await status(replacement.flowId)).json()).toMatchObject({ flowId: replacement.flowId, status: "pending", hint: { instructions: "Fixture login 2" } });
+    expect(await (await request("/api/oauth/status?provider=" + name + "&summary=1")).json())
+      .toEqual({ loggedIn: false, done: false, status: "idle" });
+    expect(await (await cancel(replacement.flowId)).json()).toMatchObject({ cancelled: true });
+    expect(started[1]?.aborted).toBe(true);
+  } finally {
+    const { clearLoginState } = await import("../../src/oauth");
+    clearLoginState(name);
+    login.mockRestore();
+  }
+});
+
 test("keeps the M365 web cookie out of account summaries, management responses and discovery logs", async () => {
   const name = "m365-copilot";
   const logged: string[] = [];
@@ -173,7 +225,7 @@ test("keeps the M365 web cookie out of account summaries, management responses a
     expect(status.accounts).toHaveLength(1);
     expectNoCookie(status);
 
-    const accountStatus = await read(`/api/oauth/status?provider=${name}`);
+    const accountStatus = await read(`/api/oauth/status?provider=${name}&summary=1`);
     const accounts = await read(`/api/oauth/accounts?provider=${name}`);
     const providers = await read("/api/providers");
     expect(accountStatus).toMatchObject({ loggedIn: true });
