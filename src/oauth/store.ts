@@ -24,7 +24,8 @@ import { notifyAuthStoreLoaded } from "../lib/decision-quota-sink";
 import { isPassiveRead } from "../lib/passive-read";
 import { accountPauseDetailsSchema, accountPauseEvidenceSchema } from "../config/schema/account-auto-pause";
 import { mergeOAuthOrganizationName, normalizeOAuthOrganizationName, normalizeOAuthPlan, mergeOAuthPlan, withMergedOAuthLabels } from "./plan";
-import { normalizeAnthropicIdentity, mergeAnthropicIdentity } from "./anthropic-identity";
+import { anthropicOrganizationsConflict, normalizeAnthropicIdentity, normalizeAnthropicOrganizationScope,
+  mergeAnthropicIdentity } from "./anthropic-identity";
 import { findAnthropicImportSlot, findAnthropicLoginSlot, observeAnthropicSlotOrganizations } from "./anthropic-login-slot";
 import { normalizeWorkBuddyMetadata } from "../providers/workbuddy";
 import { findKiroAccountForLogin, withRetainedKiroUser } from "./kiro-account-identity";
@@ -577,6 +578,8 @@ function normalizeCredential(cred: unknown): OAuthCredentials | null {
   if (workbuddy) normalized.workbuddy = workbuddy;
   const identity = normalizeAnthropicIdentity(candidate.anthropicIdentity, candidate.access);
   if (identity) normalized.anthropicIdentity = identity;
+  const organizationScope = normalizeAnthropicOrganizationScope(candidate.anthropicOrganizationScope, candidate.access);
+  if (organizationScope) normalized.anthropicOrganizationScope = organizationScope;
   if (candidate.plan !== undefined) normalized.plan = normalizeOAuthPlan(candidate.plan) ?? null;
   if (candidate.organizationName !== undefined) {
     normalized.organizationName = normalizeOAuthOrganizationName(candidate.organizationName) ?? null;
@@ -970,6 +973,12 @@ function registrationPersistGuard(provider: string, assertBeforePersist?: () => 
   };
 }
 
+/** Both credentials are store-normalized. A write of the same bearer can keep its exchange proof. */
+function retainAnthropicExchangeScope(fresh: OAuthCredentials, previous?: OAuthCredentials): OAuthCredentials {
+  const retained = previous?.access === fresh.access ? previous.anthropicOrganizationScope : undefined;
+  return retained && !fresh.anthropicOrganizationScope ? { ...fresh, anthropicOrganizationScope: retained } : fresh;
+}
+
 export async function saveCredentialWithReceipt(
   provider: string,
   cred: OAuthCredentials,
@@ -1050,6 +1059,7 @@ export async function saveCredentialWithReceipt(
         // an unmatched Kiro login claims an identity-less slot only as the same CLI session (#6641).
         const legacyUpgrade = active !== undefined && active.credential.accountId === undefined
           && active.credential.email === undefined
+          && (!isAnthropicInstanceId(provider) || !anthropicOrganizationsConflict(active.credential, safe))
           && (provider !== "kiro" || (Boolean(safe.refresh) && active.credential.refresh === safe.refresh)
             || !set.accounts.some(a => safe.accountId !== undefined && a.credential.accountId === safe.accountId));
         if (!opts.preserveIdentityless && active && legacyUpgrade) {
@@ -1090,6 +1100,9 @@ export async function saveCredentialWithReceipt(
     }
     const updatedSet = store[provider];
     const savedAccount = updatedSet?.accounts.find(account => account.id === accountId);
+    if (savedAccount && isAnthropicInstanceId(provider)) {
+      savedAccount.credential = retainAnthropicExchangeScope(savedAccount.credential, previousAccounts.get(accountId)?.credential);
+    }
     const activeAccount = updatedSet?.accounts.find(account => account.id === updatedSet.activeAccountId);
     // A login that cleared this account's automatic pause hands it a selection still parked on a
     // paused row (the local-cli import branch does not select on its own), as reauth does below.
@@ -1384,7 +1397,7 @@ export async function saveAccountCredential(
     const account = set?.accounts.find(a => a.id === accountId);
     if (!set || !account) return;
     opts.assertAccounts?.(set.accounts);
-    account.credential = safe;
+    account.credential = isAnthropicInstanceId(provider) ? retainAnthropicExchangeScope(safe, account.credential) : safe;
     written = true;
     if (opts.rotateLoginId) account.loginId = randomUUID();
     delete account.needsReauth;

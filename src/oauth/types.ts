@@ -83,6 +83,8 @@ export type OAuthCredentials = {
    * organization is the grant's scope, observed from the same bearer; it never proves identity.
    */
   anthropicIdentity?: { v: 1; accountUuid: string; bearerSha256: string; organizationUuid?: string };
+  /** Private exchange-attested scope for a bearer whose account UUID could not be proven. */
+  anthropicOrganizationScope?: { v: 1; organizationUuid: string; bearerSha256: string };
   /** Google Antigravity (Cloud Code Assist) discovered project id; injected into the CCA envelope. */
   projectId?: string;
   /**

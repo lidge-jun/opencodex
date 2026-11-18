@@ -41,10 +41,12 @@ export async function newerClaudeCredentialForInstance(
   const before = normalizeAnthropicIdentity(stored.anthropicIdentity, stored.access);
   if (hasClaudeCredentialContinuity(stored, disk)) {
     // The same bearer keeps its proof, and with it the organization its name labels.
-    const retained = disk.access === stored.access ? before : undefined;
+    const sameBearer = disk.access === stored.access;
+    const proof = { anthropicIdentity: sameBearer ? before : undefined,
+      anthropicOrganizationScope: sameBearer ? stored.anthropicOrganizationScope : undefined };
     return { kind: "adopt", diskGeneration: credentialGeneration(disk), credential: {
-      ...stored, ...disk, plan: mergeOAuthPlan(disk, stored), anthropicIdentity: retained,
-      organizationName: mergeOAuthOrganizationName({ ...disk, anthropicIdentity: retained }, stored),
+      ...stored, ...disk, ...proof, plan: mergeOAuthPlan(disk, stored),
+      organizationName: mergeOAuthOrganizationName({ ...disk, ...proof }, stored),
     } };
   }
   // Independent observations share a deadline through the caller signal; neither extends the other.
@@ -57,7 +59,11 @@ export async function newerClaudeCredentialForInstance(
   if (oldIdentity.accountUuid !== newIdentity.accountUuid) return { kind: "different", diskGeneration };
   // The same person signed in to another organization holds a different grant and quota. A stored
   // proof saved before organizations were recorded asks its own still-usable bearer once.
-  let oldOrganization = oldIdentity.organizationUuid;
+  const storedOrganization = anthropicOrganization(stored);
+  if (!before && storedOrganization && oldIdentity.organizationUuid && storedOrganization !== oldIdentity.organizationUuid) {
+    return { kind: "unresolved", diskGeneration };
+  }
+  let oldOrganization = storedOrganization ?? oldIdentity.organizationUuid;
   const newOrganization = newIdentity.organizationUuid;
   if (!oldOrganization && before && newOrganization && stored.expires > now) {
     const legacy = normalizeAnthropicIdentity(await resolveIdentity(stored.access, signal), stored.access);
@@ -71,7 +77,8 @@ export async function newerClaudeCredentialForInstance(
     return { kind: "unresolved", diskGeneration };
   }
   return { kind: "adopt", diskGeneration, previousOrganization: oldOrganization ?? null, credential: {
-    ...stored, ...disk, accountId: newIdentity.accountUuid, anthropicIdentity: newIdentity, plan: newProof?.plan ?? null,
+    ...stored, ...disk, accountId: newIdentity.accountUuid, anthropicIdentity: newIdentity,
+    anthropicOrganizationScope: undefined, plan: newProof?.plan ?? null,
     organizationName: newProof?.organizationName ?? null,
   } };
 }
@@ -137,5 +144,5 @@ export function captureAnthropicCredentialOwnerForInstance(instance: AnthropicIn
 
 function identityMetadata(credential: OAuthCredentials): string {
   return JSON.stringify([credential.source, credential.accountId, credential.email, credential.anthropicIdentity, credential.plan,
-    credential.organizationName]);
+    credential.organizationName, credential.anthropicOrganizationScope]);
 }

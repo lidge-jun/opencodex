@@ -11,6 +11,7 @@ const PROFILE_URL = "https://api.anthropic.com/api/oauth/profile";
 const PROFILE_TIMEOUT_MS = 10_000;
 const PROFILE_MAX_BYTES = 65_536;
 export type AnthropicIdentity = NonNullable<OAuthCredentials["anthropicIdentity"]>;
+type AnthropicOrganizationScope = NonNullable<OAuthCredentials["anthropicOrganizationScope"]>;
 export type AnthropicIdentityResolver = (access: string, signal?: AbortSignal) => Promise<(AnthropicIdentity & { plan?: string; organizationName?: string }) | undefined>;
 
 const ORGANIZATION_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -35,12 +36,26 @@ export function normalizeAnthropicIdentity(value: unknown, access: string): Anth
   return proof.v === 1 && bound && proof.bearerSha256 === bound.bearerSha256 ? bound : undefined;
 }
 
+export function bindAnthropicOrganizationScope(access: string, value: unknown): AnthropicOrganizationScope | undefined {
+  const organizationUuid = normalizeAnthropicOrganizationUuid(value);
+  if (!access || !organizationUuid) return undefined;
+  return { v: 1, organizationUuid, bearerSha256: createHash("sha256").update(access).digest("hex") };
+}
+
+export function normalizeAnthropicOrganizationScope(value: unknown, access: string): AnthropicOrganizationScope | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const proof = value as Partial<AnthropicOrganizationScope>;
+  const bound = bindAnthropicOrganizationScope(access, proof.organizationUuid);
+  return proof.v === 1 && bound && proof.bearerSha256 === bound.bearerSha256 ? bound : undefined;
+}
+
 /**
  * The organization a credential's grant is scoped to, when its own bearer proved it. One Claude
  * account can belong to several organizations, and each OAuth grant serves exactly one of them.
  */
 export function anthropicOrganization(credential: OAuthCredentials): string | undefined {
-  return normalizeAnthropicIdentity(credential.anthropicIdentity, credential.access)?.organizationUuid;
+  return normalizeAnthropicOrganizationScope(credential.anthropicOrganizationScope, credential.access)?.organizationUuid
+    ?? normalizeAnthropicIdentity(credential.anthropicIdentity, credential.access)?.organizationUuid;
 }
 
 /** True only when both credentials prove different organizations; an unknown side never conflicts. */
@@ -98,22 +113,29 @@ export const resolveAnthropicAccountIdentity: AnthropicIdentityResolver = async 
  */
 export function mergeAnthropicIdentity(
   fresh: OAuthCredentials, previous: OAuthCredentials, opts: { sameGrant?: boolean } = {},
-): Pick<OAuthCredentials, "anthropicIdentity"> {
+): Pick<OAuthCredentials, "anthropicIdentity" | "anthropicOrganizationScope"> {
   const before = normalizeAnthropicIdentity(previous.anthropicIdentity, previous.access);
   const after = normalizeAnthropicIdentity(fresh.anthropicIdentity, fresh.access);
   if (before && after && before.accountUuid !== after.accountUuid) {
     throw new Error("Anthropic credential identity changed; explicit account login required");
   }
-  if (opts.sameGrant && before?.organizationUuid && after && !after.organizationUuid) {
-    return { anthropicIdentity: { ...after, organizationUuid: before.organizationUuid } };
-  }
-  return { anthropicIdentity: after ?? (fresh.access === previous.access ? before : undefined) };
+  const sameBearer = fresh.access === previous.access;
+  const scope = normalizeAnthropicOrganizationScope(fresh.anthropicOrganizationScope, fresh.access)
+    ?? (sameBearer ? normalizeAnthropicOrganizationScope(previous.anthropicOrganizationScope, previous.access) : undefined);
+  const previousOrganization = opts.sameGrant && after && !after.organizationUuid && !scope
+    ? anthropicOrganization(previous) : undefined;
+  return {
+    anthropicIdentity: after && previousOrganization ? { ...after, organizationUuid: previousOrganization }
+      : after ?? (sameBearer ? before : undefined),
+    anthropicOrganizationScope: scope,
+  };
 }
 
 /** Explicit imports enrich only a proven slot; labels and paths never establish ownership. */
 export function matchesAnthropicImport(stored: OAuthCredentials, imported: OAuthCredentials): boolean {
+  if (anthropicOrganizationsConflict(stored, imported)) return false;
   const before = normalizeAnthropicIdentity(stored.anthropicIdentity, stored.access);
   const after = normalizeAnthropicIdentity(imported.anthropicIdentity, imported.access);
-  if (before && after) return before.accountUuid === after.accountUuid && !anthropicOrganizationsConflict(stored, imported);
+  if (before && after) return before.accountUuid === after.accountUuid;
   return hasClaudeCredentialContinuity(stored, imported);
 }

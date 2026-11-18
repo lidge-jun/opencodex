@@ -3,7 +3,7 @@ import * as storeModule from "../../src/oauth/store";
 import { createHash } from "node:crypto";
 import { getLoginStatus, OAUTH_PROVIDERS, refreshAnthropicAccountWithLock } from "../../src/oauth";
 import { AnthropicTokenError, loginAnthropic, refreshAnthropicToken } from "../../src/oauth/anthropic";
-import { resolveAnthropicAccountIdentity } from "../../src/oauth/anthropic-identity";
+import { anthropicOrganization, resolveAnthropicAccountIdentity } from "../../src/oauth/anthropic-identity";
 import { captureOAuthAccountSelection, loadAuthStore, mutateStore, oauthMutationTailSnapshot, removeAccount, saveAccountCredential, setAccountPaused } from "../../src/oauth/store";
 import type { OAuthCredentials } from "../../src/oauth/types";
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
@@ -16,7 +16,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { OAuthReauthIdentityMismatchError, runLogin } from "../../src/oauth";
 import { mergeAnthropicIdentity } from "../../src/oauth/anthropic-identity";
 import { newerClaudeCredential } from "../../src/oauth/anthropic-continuity";
-import { anthropicReauthSlotGuard, findAnthropicLoginSlot, observeAnthropicSlotOrganizations } from "../../src/oauth/anthropic-login-slot";
+import { anthropicReauthSlotGuard, findAnthropicImportSlot, findAnthropicLoginSlot, observeAnthropicSlotOrganizations } from "../../src/oauth/anthropic-login-slot";
 import { mergeOAuthOrganizationName, mergeOAuthPlan } from "../../src/oauth/plan";
 import { AnthropicCrossInstanceDuplicateError, assertNoCrossAnthropicRegistration } from "../../src/oauth/store-anthropic-instance";
 import type { AuthStore } from "../../src/oauth/store";
@@ -704,14 +704,33 @@ test("an expired organization-less row is not asked and keeps the historical rep
   expect(anthropicRows()[0]!.credential.access).toBe("synthetic-org-b");
 });
 
-test("reauth refuses stale organization observations for the target or a same-account sibling", async () => {
+for (const source of ["oauth", "local-cli"] as const) {
+  test(`${source} save refuses stale organization evidence without changing the row`, async () => {
+    await saveCredential("anthropic", orgCredential("synthetic-before-refresh"));
+    const refreshed = orgCredential("synthetic-refreshed");
+    globalThis.fetch = (async () => {
+      await mutateStore(store => { store.anthropic!.accounts[0]!.credential = refreshed; });
+      return Response.json({ account: { uuid: refreshed.accountId }, organization: { uuid: ORG_A } });
+    }) as typeof fetch;
+    await expect(saveCredential("anthropic", { ...orgCredential("synthetic-org-b", ORG_B), source }))
+      .rejects.toThrow("changed during organization verification");
+    expect(anthropicRows()).toHaveLength(1);
+    expect(anthropicRows()[0]!.credential).toEqual(refreshed);
+  });
+}
+
+test("login, import and reauth refuse stale organization observations", async () => {
   const row = { id: "legacy", credential: orgCredential("synthetic-before-refresh"), addedAt: 0 };
   const incoming = orgCredential("synthetic-org-b", ORG_B);
   const observations = await observeAnthropicSlotOrganizations([row], incoming,
     async access => ({ ...proof(access), organizationUuid: ORG_A }));
   const refreshed = { ...row, credential: orgCredential("synthetic-refreshed") };
   expect(findAnthropicLoginSlot([row], incoming, observations)).toBeUndefined();
-  expect(findAnthropicLoginSlot([refreshed], incoming, observations)).toBe(refreshed);
+  expect(() => findAnthropicLoginSlot([refreshed], incoming, observations)).toThrow();
+  expect(() => findAnthropicImportSlot([refreshed], { ...incoming, source: "local-cli" }, observations)).toThrow();
+  const sharedRefresh = { ...refreshed, credential: { ...refreshed.credential, accountId: "synthetic-other",
+    anthropicIdentity: undefined, refresh: incoming.refresh } };
+  expect(() => findAnthropicImportSlot([sharedRefresh], { ...incoming, source: "local-cli" }, observations)).toThrow();
   const reauth = anthropicReauthSlotGuard(row.id, incoming, observations);
   expect(() => reauth([row])).toThrow(OAuthReauthIdentityMismatchError);
   expect(() => reauth([refreshed])).toThrow(OAuthReauthIdentityMismatchError);
@@ -722,6 +741,8 @@ test("reauth refuses stale organization observations for the target or a same-ac
   const identityLost = { ...refreshed, credential: { ...refreshed.credential, anthropicIdentity: undefined, accountId: undefined } };
   expect(() => siblingGuard([target, identityLost])).toThrow(OAuthReauthIdentityMismatchError);
   const resolved = { ...refreshed, credential: orgCredential("synthetic-refreshed", ORG_B) };
+  expect(findAnthropicLoginSlot([resolved], incoming, observations)).toBe(resolved);
+  expect(findAnthropicImportSlot([resolved], { ...incoming, source: "local-cli" }, observations)).toBe(resolved);
   expect(() => reauth([resolved])).not.toThrow();
   expect(() => siblingGuard([target, resolved])).not.toThrow();
   const unrelated = { ...row, credential: orgCredential(row.credential.access, undefined, "synthetic-account-b") };
@@ -999,6 +1020,48 @@ test("refresh keeps the rotated grant without binding a conflicting profile orga
   expect(credential.refresh).toBe("synthetic-fresh-refresh");
   expect(credential.anthropicIdentity).toBeUndefined();
   expect(credential.organizationName).toBeUndefined();
+});
+
+test("partial refresh scope governs later login even when the profile repeats a conflicting organization", async () => {
+  const previous = { ...orgCredential("synthetic-old"), expires: 1 };
+  await saveCredential("anthropic", previous);
+  const id = getAccountSet("anthropic")!.activeAccountId;
+  profileOnlyTokenResponse(undefined, undefined, ORG_A);
+  await expect(refreshAnthropicAccountWithLock("anthropic", id, OAUTH_PROVIDERS.anthropic!, previous))
+    .resolves.toBe("synthetic-fresh");
+  const rotated = getAccountCredential("anthropic", id)!;
+  expect(rotated).toMatchObject({ refresh: "synthetic-fresh-refresh", accountId: previous.accountId });
+  expect(rotated.anthropicIdentity).toBeUndefined();
+  expect(rotated.organizationName).toBeUndefined();
+
+  const asked = orgProfiles({ "synthetic-fresh": ORG_B });
+  await saveCredential("anthropic", orgCredential("synthetic-org-b", ORG_B));
+  expect(anthropicRows()).toHaveLength(2);
+  expect(getAccountCredential("anthropic", id)).toEqual(rotated);
+  expect(asked).toEqual([]);
+  expect(anthropicOrganization(rotated)).toBe(ORG_A);
+  expect(anthropicOrganization({ ...rotated, access: "synthetic-different" })).toBeUndefined();
+  expect(getLoginStatus("anthropic").accounts!.find(row => row.id === id)).not.toHaveProperty("anthropicOrganizationScope");
+  await saveCredential("anthropic", orgCredential("synthetic-org-a", ORG_A));
+  expect(anthropicRows()).toHaveLength(2);
+  expect(getAccountCredential("anthropic", id)?.access).toBe("synthetic-org-a");
+});
+
+test("partial refresh scope survives a same-bearer account write and protects an identity-less legacy slot", async () => {
+  const previous: OAuthCredentials = { access: "synthetic-old", refresh: "synthetic-old-refresh", expires: 1, source: "oauth" };
+  await saveCredential("anthropic", previous);
+  const id = getAccountSet("anthropic")!.activeAccountId;
+  profileOnlyTokenResponse(undefined, undefined, ORG_A);
+  await refreshAnthropicAccountWithLock("anthropic", id, OAUTH_PROVIDERS.anthropic!, previous);
+  const rotated = getAccountCredential("anthropic", id)!;
+  expect(rotated.accountId).toBeUndefined();
+  expect(anthropicOrganization(rotated)).toBe(ORG_A);
+
+  await saveAccountCredential("anthropic", id, { ...rotated, anthropicOrganizationScope: undefined });
+  orgProfiles({ "synthetic-fresh": ORG_B });
+  await saveCredential("anthropic", orgCredential("synthetic-org-b", ORG_B));
+  expect(anthropicRows()).toHaveLength(2);
+  expect(getAccountCredential("anthropic", id)).toEqual(rotated);
 });
 
 test("a profile for a different proven account leaves token identity and labels untouched", async () => {

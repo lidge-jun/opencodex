@@ -203,10 +203,11 @@ su propia cuenta en el pool, con su suscripción y sus límites. El panel muestr
 Claude lo comunica al iniciar sesión o renovar el token. La lista expone ese nombre a las sesiones
 del panel y a las credenciales con permisos completos de administración.
 
-Al iniciar sesión o reautenticar, OpenCodex comprueba con los tokens vigentes la organización de
-las cuentas anteriores que aún carecen de ese dato. La reautenticación rechaza una autorización
-para otra organización confirmada o para una que ya corresponde a otra cuenta. Si una cuenta
-cambia durante la comprobación y ya no se puede confirmar su organización, vuelve a autenticarte.
+Al iniciar sesión, importar credenciales de Claude Code o reautenticar, OpenCodex comprueba con los
+tokens vigentes la organización de las cuentas anteriores que aún carecen de ese dato. Si una
+cuenta cambia durante la comprobación y ya no se puede confirmar su organización, repite la operación.
+La reautenticación rechaza una autorización para otra organización confirmada o para una que ya
+corresponde a otra cuenta.
 Si Claude Code renueva ambos tokens y la misma cuenta de Claude tiene otra entrada en cualquiera
 de los dos pools de Anthropic, la adopción automática exige confirmar que la cuenta existente y
 la nueva autorización corresponden a la misma organización.

@@ -1,6 +1,7 @@
 /** Anthropic OAuth flow (Claude Pro/Max). Ported from jawcode oauth/anthropic.ts. */
 import { OAuthCallbackFlow } from "./callback-server";
-import { bindAnthropicIdentity, normalizeAnthropicIdentity, normalizeAnthropicOrganizationUuid, resolveAnthropicAccountIdentity } from "./anthropic-identity";
+import { bindAnthropicIdentity, bindAnthropicOrganizationScope, normalizeAnthropicIdentity,
+  normalizeAnthropicOrganizationUuid, resolveAnthropicAccountIdentity } from "./anthropic-identity";
 import { generatePKCE } from "./pkce";
 import type { LocalTokenImportMode, OAuthController, OAuthCredentials } from "./types";
 import { outboundProxyConfigured, startupOutboundProxyConfigured } from "../lib/proxy-env";
@@ -165,17 +166,20 @@ function credsFrom(data: AnthropicTokenResponse, refreshFallback?: string): OAut
 async function withAccountProfile(data: AnthropicTokenResponse, signal?: AbortSignal, refreshToken?: string): Promise<OAuthCredentials> {
   const credential = credsFrom(data, refreshToken);
   const exchangeOrganization = normalizeAnthropicOrganizationUuid(data.organization?.uuid);
-  const profile = await resolveAnthropicAccountIdentity(credential.access, signal);
-  if (!profile) return credential;
-  const { plan, organizationName, ...profileIdentity } = profile;
   const identity = normalizeAnthropicIdentity(credential.anthropicIdentity, credential.access);
+  const exchangeScope = refreshToken !== undefined && !identity
+    ? bindAnthropicOrganizationScope(credential.access, exchangeOrganization) : undefined;
+  const exchangeCredential = exchangeScope ? { ...credential, anthropicOrganizationScope: exchangeScope } : credential;
+  const profile = await resolveAnthropicAccountIdentity(credential.access, signal);
+  if (!profile) return exchangeCredential;
+  const { plan, organizationName, ...profileIdentity } = profile;
   if (identity && identity.accountUuid !== profileIdentity.accountUuid) return credential;
   if (exchangeOrganization && exchangeOrganization !== profileIdentity.organizationUuid) {
     if (identity) return credential;
     if (profileIdentity.organizationUuid) {
       if (refreshToken === undefined) throw new Error("Anthropic OAuth returned conflicting organization information. Sign in again.");
-      // The refresh may already have rotated the token. Keep the grant without the conflicting profile.
-      return credential;
+      // Keep the rotated grant and the exchange scope, without making an account claim.
+      return exchangeCredential;
     }
     return { ...credential, accountId: profileIdentity.accountUuid,
       anthropicIdentity: { ...profileIdentity, organizationUuid: exchangeOrganization } };

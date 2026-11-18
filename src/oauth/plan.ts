@@ -30,7 +30,7 @@ function sameAccount(a: OAuthCredentials, b: OAuthCredentials): boolean | undefi
  * the bearer; callers pass store-normalized credentials, whose proofs are already bearer-bound.
  */
 function boundOrganization(credential: OAuthCredentials): string | undefined {
-  return credential.anthropicIdentity?.organizationUuid?.toLowerCase();
+  return (credential.anthropicOrganizationScope?.organizationUuid ?? credential.anthropicIdentity?.organizationUuid)?.toLowerCase();
 }
 
 /** Display-only organization name: trimmed, at most 128 characters, no control or format characters. */

@@ -45,6 +45,10 @@ function slotOrganization({ id, credential }: ProviderAccount, observed: Anthrop
     ? proof.organizationUuid : undefined;
 }
 
+function hasStaleSlotObservation(row: ProviderAccount, observed: AnthropicSlotOrganizations): boolean {
+  return observed.has(row.id) && slotOrganization(row, observed) === undefined;
+}
+
 /**
  * Before the store lock: read the organization of each same-account row that has none recorded
  * (rows saved before organizations were tracked), so the login can tell its org from theirs.
@@ -82,9 +86,17 @@ export async function observeAnthropicSlotOrganizations(
  * displaces a proven slot while a better candidate exists.
  */
 function pickSlot(
-  candidates: readonly ProviderAccount[], incoming: OAuthCredentials,
-  observed: AnthropicSlotOrganizations, activeAccountId?: string,
+  accounts: readonly ProviderAccount[], incoming: OAuthCredentials, observed: AnthropicSlotOrganizations,
+  isCandidate: (row: ProviderAccount) => boolean, activeAccountId?: string,
 ): ProviderAccount | undefined {
+  if (observed.size > 0) {
+    const accountUuid = slotAccountUuid(incoming);
+    if (accounts.some(row => hasStaleSlotObservation(row, observed) && (isCandidate(row)
+      || (slotAccountUuid(row.credential) ?? observed.get(row.id)?.accountUuid) === accountUuid))) {
+      throw new Error("Anthropic account changed during organization verification. Retry login or import.");
+    }
+  }
+  const candidates = accounts.filter(isCandidate);
   const organizationOf = (row: ProviderAccount) => slotOrganization(row, observed);
   const organization = anthropicOrganization(incoming);
   if (organization) {
@@ -101,7 +113,7 @@ export function findAnthropicLoginSlot(
   observed: AnthropicSlotOrganizations = new Map(), activeAccountId?: string,
 ): ProviderAccount | undefined {
   const identity = loginIdentity(incoming);
-  return pickSlot(accounts.filter(row => loginIdentity(row.credential) === identity), incoming, observed, activeAccountId);
+  return pickSlot(accounts, incoming, observed, row => loginIdentity(row.credential) === identity, activeAccountId);
 }
 
 /** Inside the store lock: the row a Claude Code credential import enriches, or undefined for a new row. */
@@ -109,7 +121,7 @@ export function findAnthropicImportSlot(
   accounts: readonly ProviderAccount[], incoming: OAuthCredentials,
   observed: AnthropicSlotOrganizations = new Map(), activeAccountId?: string,
 ): ProviderAccount | undefined {
-  return pickSlot(accounts.filter(row => matchesAnthropicImport(row.credential, incoming)), incoming, observed, activeAccountId);
+  return pickSlot(accounts, incoming, observed, row => matchesAnthropicImport(row.credential, incoming), activeAccountId);
 }
 
 export function anthropicSiblingSlots(accounts: readonly ProviderAccount[], accountId: string | undefined, accountUuid: string): ProviderAccount[] {

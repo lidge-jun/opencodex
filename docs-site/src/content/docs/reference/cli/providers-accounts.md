@@ -334,6 +334,8 @@ with no recorded organization (for example, one saved before this release) is ch
 own token, if that token is still current. An account of the login's organization is preferred.
 Otherwise, if the existing account's organization stays unknown (expired token, failed check, or a
 login whose own organization was not reported), the login may replace it, as earlier releases did.
+If an account changes during organization verification and the writer cannot confirm its current
+organization, retry the login or Claude Code credential import.
 Reauthentication also checks existing accounts through their usable tokens when their organization
 is missing. It refuses a grant for a different confirmed organization or one another account
 already holds. If an account changes during that check and its organization can no longer be
