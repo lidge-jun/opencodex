@@ -57,6 +57,7 @@ import {
   rawConfigRecord,
   malformedNativeSubagentFields,
   malformedNativeSubagentFieldWarning,
+  malformedCodexAuthMethodWarning,
   malformedCodexAccountPickerWarning,
   nativeSubagentSyncDisabledReason,
   normalizeNativeSubagentSync,
@@ -140,6 +141,8 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   const rawEffort = rawClaudeSubagentEffort(rawParsed);
   const normalized = normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, rawParsed), rawParsed);
   const warnings = configPlaceholderWarnings(normalized);
+  const codexAuthWarning = malformedCodexAuthMethodWarning(rawParsed);
+  if (codexAuthWarning) warnings.push(codexAuthWarning);
   if (rawForce !== undefined && !isSubagentModelEntry(rawForce)) warnings.push("claudeCode.subagentModelForce ignored: expected a safe roster-style model id");
   if (normalized.chatgptDesktop?.appServerShim === true && process.platform !== "darwin") {
     warnings.push("chatgptDesktop.appServerShim is experimental and macOS only; ignored on this platform");
@@ -555,6 +558,12 @@ function oauthOpenBrowserError(value: unknown): string | null {
   return "schema_invalid: oauthOpenBrowser: must be a boolean or omitted";
 }
 
+function codexAuthMethodError(value: unknown): string | null {
+  return malformedCodexAuthMethodWarning(value)
+    ? 'schema_invalid: codexAuthMethod: must be "auto", "device-only", or omitted'
+    : null;
+}
+
 /** Validate an in-memory config candidate without touching disk. Used by headless CLI import/set. */
 /**
  * Reject a loopback-listener port that collides with the proxy port (#1102), and a port-less
@@ -805,6 +814,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? emptyCompletionRetryError(value)
     ?? dropCodexSafetyBufferingError(value)
     ?? oauthOpenBrowserError(value)
+    ?? codexAuthMethodError(value)
     ?? showCodexCreditsError(value)
     ?? creditCodexAccountIdsError(value)
     ?? remainingQuotaAccountIdsError(value)
