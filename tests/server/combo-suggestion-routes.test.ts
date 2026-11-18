@@ -3,8 +3,12 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../../src/server/management-api";
+import {
+  initializeManagementAuthState, issueGuiSession, managementPrincipal,
+  managementSessionIssuance, requireManagementAuth,
+} from "../../src/server/management-auth";
 import { loadConfig, saveConfig } from "../../src/config";
-import { ManagementRequest, managementHeaders } from "../helpers/management-auth";
+import { ManagementRequest } from "../helpers/management-auth";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { parseExcludedProviders } from "../../src/server/management/combo-suggestion-routes";
 import { setPersistedConfigMutationBeforeCommitForTests } from "../../src/config/persisted-mutation";
@@ -31,11 +35,28 @@ afterEach(() => {
   removeTreeWithRetry(home);
 });
 
+async function dispatch(config: OcxConfig, path: string, method: string, body?: unknown, adminOnly = false) {
+  const url = new URL(path, "http://localhost:10100");
+  const state = initializeManagementAuthState(config);
+  const headers = new Headers({ Origin: url.origin, "content-type": "application/json" });
+  if (adminOnly) {
+    headers.set("X-OpenCodex-API-Key", state.token!);
+  } else {
+    const session = issueGuiSession(new ManagementRequest(url, { headers }), config, state)!;
+    headers.set("X-OpenCodex-API-Key", session.token);
+    headers.set("X-OpenCodex-GUI-Origin", session.browserOrigin);
+    if (method !== "GET") headers.set("X-OpenCodex-CSRF-Token", session.csrfToken);
+  }
+  const req = new ManagementRequest(url, { method, headers, body: JSON.stringify(body) });
+  expect(requireManagementAuth(req, state, config)).toBeNull();
+  return (await handleManagementAPI(req, url, config, {}, managementPrincipal(req, state, config)!, undefined, {
+    trustedLoopback: true,
+    guiSessionIssuance: managementSessionIssuance(req, state),
+  }))!;
+}
+
 async function call(config: OcxConfig, method: "GET" | "PUT", body?: unknown) {
-  const url = new URL("http://localhost/api/combo-suggestions");
-  const init: RequestInit = { method, headers: { ...managementHeaders(), "content-type": "application/json" } };
-  if (body !== undefined) init.body = JSON.stringify(body);
-  const response = await handleManagementAPI(new ManagementRequest(url, init), url, config);
+  const response = await dispatch(config, "/api/combo-suggestions", method, body);
   return { status: response!.status, body: await response!.json() as Record<string, unknown> };
 }
 
@@ -87,12 +108,7 @@ test("the config schema normalizes hand-edited exclusions and discards malformed
 const paidTarget = { provider: "paid", model: "gemini" };
 
 async function saveSuggestion(live: OcxConfig, body: unknown) {
-  const headers = { ...managementHeaders(), "content-type": "application/json" };
-  const url = new URL("http://localhost/api/combo-suggestions/save");
-  const response = await handleManagementAPI(new ManagementRequest(url, {
-    method: "POST", headers, body: JSON.stringify(body),
-  }), url, live);
-  return response!;
+  return dispatch(live, "/api/combo-suggestions/save", "POST", body);
 }
 
 function seedPaidSuggestion() {
@@ -102,6 +118,20 @@ function seedPaidSuggestion() {
   saveConfig(live);
   return live;
 }
+
+test.each([
+  ["GET", "/api/combo-suggestions", undefined],
+  ["PUT", "/api/combo-suggestions", { excludedProviders: ["other"] }],
+  ["POST", "/api/combo-suggestions/save", { id: "mix", mode: "append", targets: [paidTarget] }],
+] as const)("%s %s requires a dashboard session", async (method, path, body) => {
+  const live = seedPaidSuggestion();
+  const before = onDisk();
+  const denied = await dispatch(live, path, method, body, true);
+  expect(denied.status).toBe(403);
+  expect(await denied.json()).toEqual({ error: "dashboard session required" });
+  expect(onDisk()).toEqual(before);
+  expect((await dispatch(live, path, method, body)).status).toBe(200);
+});
 
 for (const code of ["suggestion_consent_required", "suggestion_provider_excluded"]) {
   test(`append refuses ${code} when policy changes before commit`, async () => {
