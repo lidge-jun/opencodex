@@ -45,7 +45,7 @@ import { stripOneMillionMarker } from "../claude/context-windows";
 import { captureAdmissionPolicy } from "./capture-admission-policy";
 import type { CapturedAdmissionPolicy } from "../types/admission-policy";
 import { captureClaudeInbound } from "../claude/inbound-debug";
-import { declaredAnthropicServerTools, replayedAnthropicServerBlocks, systemCachePrefix } from "../claude/inbound-content-options";
+import { declaredAnthropicServerTools, hostedAdvisorSelection, replayedAnthropicServerBlocks, systemCachePrefix, type HostedAdvisorSelection } from "../claude/inbound-content-options";
 import { linkAdvisorPlanConfig } from "./responses/advisor-plan-slot";
 import { claudeCodeForIngress } from "../claude/intercept/model-bindings";
 import { classifyInterceptClient } from "../claude/intercept/client-class";
@@ -655,6 +655,7 @@ async function handleClaudeMessagesWithBudget(
   let nativeComboSource = false;
 
   let anthropicBody: unknown;
+  let anthropicHostedAdvisorSelection: HostedAdvisorSelection | undefined;
   let internalBody: Rec;
   let cacheKeySource: ClaudeCacheKeySource = null;
   let nativeReasoningReplay: ReadonlyMap<string, string> | undefined;
@@ -827,6 +828,7 @@ async function handleClaudeMessagesWithBudget(
       };
       delete anthropicBody.thinking;
     }
+    anthropicHostedAdvisorSelection = hostedAdvisorSelection(anthropicBody);
     // On the direct lane the core receives only the request settings; the conversation is
     // already decoded into the IR. Without a plan the translation below runs as before.
     directPlan = planMessagesAntigravityDirect(anthropicBody, cc, config, translatorBudget);
@@ -1312,6 +1314,7 @@ async function handleClaudeMessagesWithBudget(
     nativeReasoningMint,
     // Out of body like the replay above: the core hands these to an Anthropic destination only.
     anthropicServerTools: declaredAnthropicServerTools(anthropicBody),
+    anthropicHostedAdvisorSelection,
     anthropicServerReplay: replayedAnthropicServerBlocks(anthropicBody),
     anthropicSystemCachePrefix: isRec(anthropicBody) ? systemCachePrefix(anthropicBody.system) : undefined,
     // Preserve the original catalog through late fallback; only the physical adapter projects it.

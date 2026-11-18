@@ -5,6 +5,7 @@ import {
   printData,
   rejectArgs,
   runCliAction,
+  runtimeBaseUrl,
   runtimeRequest,
   summaryLines,
   takeBooleanOption,
@@ -22,7 +23,7 @@ const CLAUDE_USAGE = `Usage:
   ocx claude config set [--enabled <on|off>] [--auth-mode <auto|proxy|subscription>]
       [--system-env <on|off>] [--fast-mode <on|off>] [--auto-context <on|off>]
       [--compact-window <tokens|default>] [--context-accounting <1m|200k>] [--inject-agents <on|off>]
-      [--small-fast-model <id|->] [--model-map <from=to,from=to|->]
+      [--native-passthrough <on|off>] [--small-fast-model <id|->] [--model-map <from=to,from=to|->]
       [--blocked-skills <name,name|->] [--web-model <id|->] [--web-backend <openai|anthropic|xai|gemini|exa|->]
       [--vision-model <id|->] [--vision-backend <openai|anthropic|->] [--json]
   ocx claude config set --first-party <on|off> [--json]`;
@@ -80,6 +81,7 @@ export async function handleClaudeConfigCommand(argv: string[], deps: RuntimeApi
     const compact = takeOption(args, "--compact-window");
     const accounting = takeOption(args, "--context-accounting");
     const injectAgents = takeBooleanOption(args, "--inject-agents");
+    const nativePassthrough = takeBooleanOption(args, "--native-passthrough");
     const smallFastModel = takeOption(args, "--small-fast-model");
     const modelMap = takeOption(args, "--model-map");
     const blockedSkills = takeOption(args, "--blocked-skills");
@@ -107,6 +109,7 @@ export async function handleClaudeConfigCommand(argv: string[], deps: RuntimeApi
       body.contextAccounting = value;
     }
     if (injectAgents !== undefined) body.injectAgents = injectAgents;
+    if (nativePassthrough !== undefined) body.nativePassthrough = nativePassthrough;
     if (smallFastModel !== undefined) body.smallFastModel = smallFastModel === "-" ? "" : smallFastModel;
     if (modelMap !== undefined) body.modelMap = parseMap(modelMap);
     if (blockedSkills !== undefined) body.blockedSkills = blockedSkills === "-" ? null : csv(blockedSkills);
@@ -128,8 +131,25 @@ export async function handleClaudeConfigCommand(argv: string[], deps: RuntimeApi
       body.cliFirstParty = firstParty;
     }
     if (Object.keys(body).length === 0) throw new CliUsageError("at least one Claude setting is required", CLAUDE_USAGE);
-    const result = await runtimeRequest("/api/claude-code", { method: "PUT", body: JSON.stringify(body) }, deps);
-    const warnings = (result as { warnings?: unknown }).warnings;
+    let writeDeps = deps;
+    if (nativePassthrough !== undefined) {
+      writeDeps = { ...deps, baseUrl: await runtimeBaseUrl(deps) };
+      const current = await runtimeRequest<{ nativePassthrough?: unknown }>(
+        "/api/claude-code", { redirect: "error" }, writeDeps,
+      );
+      if (typeof current?.nativePassthrough !== "boolean") {
+        throw new Error("The running proxy does not report support for --native-passthrough. Upgrade the proxy and retry. No settings were sent.");
+      }
+    }
+    const result = await runtimeRequest<{ nativePassthrough?: unknown; warnings?: unknown }>(
+      "/api/claude-code",
+      { method: "PUT", body: JSON.stringify(body), redirect: nativePassthrough === undefined ? undefined : "error" },
+      writeDeps,
+    );
+    if (nativePassthrough !== undefined && result?.nativePassthrough !== nativePassthrough) {
+      throw new Error("The running proxy did not confirm --native-passthrough. Check the setting with `ocx claude config status`.");
+    }
+    const { warnings } = result;
     const retained = Array.isArray(warnings) && warnings.includes("shared_proxy_retained");
     printData(result, wantsJson, [
       "Claude Code settings updated.",
