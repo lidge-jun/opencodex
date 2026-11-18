@@ -10,8 +10,9 @@ import type { QuotaFailureCode } from "../quota-types";
 import { AnthropicQuotaProbeOwnershipError, anthropicCooldownRecoveryFor, type AnthropicQuotaRecoveryResult } from "./anthropic-cooldown-recovery";
 import {
   accountCacheKey, accountQuotaCache, accountQuotaInflight, captureProviderAccountQuotaEpoch,
-  getTokenForAccountQuotaProbe, hydrateAccountQuotaCache, mayCommitAccountQuotaKey,
-  normalizeAnthropicQuota, type AccountQuotaCacheEntry,
+  commitAnthropicAccountQuota, getCachedProviderAccountQuota, getTokenForAccountQuotaProbe,
+  hydrateAccountQuotaCache, mayCommitAccountQuotaKey, normalizeAnthropicQuota,
+  persistAccountQuotaCache, withoutAnthropicMonthlyFallback, type AccountQuotaCacheEntry,
 } from "./account-cache";
 
 /**
@@ -65,22 +66,30 @@ export async function fetchAnthropicAccountQuota(
     return ownerCurrent() && (joined.isCurrent?.() ?? flightCurrent()) ? joined : unavailable();
   }
   const writerGeneration = captureConfigGeneration();
-  // One publication path for a result and for a failed dispatch. A null result (HTTP refusal)
-  // and a thrown read (network failure) both record the unavailable row over the retained
-  // in-flight observations, as the pre-instance A path did, so joined callers and later cached
-  // reads agree and windows that expired during the shared probe are normalized away.
-  /** Cache the settled probe result for an account and publish its decision evidence only while the flight is still current for its credential and generation. */
+  // An unusable probe reports unavailability over retained observations. A retirement-only
+  // result also removes the monthly fallback while keeping plan observations. Cache and
+  // decision writes both require current credential and generation ownership.
   const publish = (result: AnthropicQuotaRecoveryResult | null, failure?: QuotaFailureCode): AccountQuotaCacheEntry => {
     const previous = accountQuotaCache.get(key);
     const retained = previous?.isCurrent?.() === false ? undefined : previous;
     const isCurrent = result?.isCurrent ?? flightCurrent;
+    const retirementOnly = result?.quota === null;
+    const quota = retirementOnly ? withoutAnthropicMonthlyFallback(getCachedProviderAccountQuota(instance, accountId))
+      : result?.quota ?? retained?.quota;
     const entry: AccountQuotaCacheEntry = {
-      ts: Date.now(), quota: normalizeAnthropicQuota(result?.quota ?? retained?.quota, Date.now()),
-      quotaOwnerIsCurrent: result?.isCurrent ?? retained?.quotaOwnerIsCurrent,
-      ...(!result ? { unavailable: true as const } : {}), isCurrent,
+      ts: Date.now(), quota: normalizeAnthropicQuota(quota, Date.now()), isCurrent,
+      // A retirement-only response leaves the provenance of retained plan bars unchanged.
+      quotaOwnerIsCurrent: result?.quota ? result.isCurrent : retained?.quotaOwnerIsCurrent,
+      ...result?.failureFields,
+      ...(!result ? { unavailable: true as const } : {}),
       ...(!result && failure ? { quotaFailure: failure, quotaFailureIsCurrent: isCurrent } : {}),
     };
-    if (isCurrent() && mayCommitAccountQuotaKey(key, writerGeneration)) { accountQuotaCache.set(key, entry); result?.publishDecisionQuota(); sweepExpiredOnWrite(entry.ts); }
+    if (isCurrent() && mayCommitAccountQuotaKey(key, writerGeneration)) {
+      commitAnthropicAccountQuota(key, entry, !!result && result.quota?.monthlyPercent === undefined, result?.dispatch);
+      result?.publishDecisionQuota();
+      if (result) persistAccountQuotaCache();
+      sweepExpiredOnWrite(entry.ts);
+    }
     return entry;
   };
   const probe = (async (): Promise<AccountQuotaCacheEntry> => {
@@ -92,7 +101,7 @@ export async function fetchAnthropicAccountQuota(
         if (!flightCurrent()) throw new AnthropicQuotaProbeOwnershipError("quota flight changed");
         recovery.assertAnthropicQuotaSendAllowed(accountId, token);
         return fetchAnthropicUsageProbeForInstance(instance, token, fresh || freshDispatch).then(
-          read => { failure = read.failure; return read.quota; },
+          read => { failure = read.failure; return read; },
           error => { failure = thrownQuotaFailure(error); throw error; },
         );
       }, () => ownerCurrent() && mayCommitAccountQuotaKey(key, writerGeneration));

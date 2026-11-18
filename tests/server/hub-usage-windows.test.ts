@@ -7,6 +7,8 @@ import { startServer } from "../../src/server";
 import { accountCacheKey, accountQuotaCache, clearAccountQuotaCache,
   getCachedProviderAccountQuota, persistAccountQuotaCache } from "../../src/providers/quota/account-cache";
 import { settleAccountQuotaPersistForTests, readPersistedAccountQuotas } from "../../src/providers/account-quota-disk";
+import { fetchAnthropicAccountQuota } from "../../src/providers/quota/anthropic-account-quota";
+import { fetchAnthropicQuota } from "../../src/providers/quota/vendor-probes-oauth";
 import { fetchProviderAccountQuotas } from "../../src/providers/quota";
 import { credentialGeneration, getAccountCredential, getAccountSet, saveCredential } from "../../src/oauth/store";
 import { capturePoolQuotaWriter, readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
@@ -204,6 +206,46 @@ test("restarting after same-slot OAuth replacement withholds hydrated quota unti
     probe.mockRestore();
   }
 });
+
+test.each(["account", "provider"] as const)(
+  "an Anthropic %s probe that only retires the monthly fallback cannot authorize retained bars",
+  async probeKind => {
+    const hub = config({ providers: { anthropic: {
+      adapter: "anthropic", authMode: "oauth", baseUrl: "https://api.anthropic.com/v1",
+    } } });
+    hub.apiKeys!.push({
+      id: "client-anthropic", name: "Anthropic", key: "windows-client-anthropic",
+      createdAt: "2026-01-01", allowedProviders: ["anthropic"],
+    });
+    saveConfig(hub);
+    const accountId = await login("anthropic", `${probeKind}@example.test`);
+    server = startServer(0);
+    const now = Date.now();
+    accountQuotaCache.set(accountCacheKey("anthropic", accountId), {
+      ts: 0,
+      quota: { updatedAt: now, weeklyPercent: 37, weeklyResetAt: now + 86_400_000, monthlyPercent: 12 },
+    });
+    const localFetch = globalThis.fetch;
+    const upstream = spyOn(globalThis, "fetch").mockResolvedValueOnce(Response.json({
+      five_hour: null, limits: [{ kind: "session", percent: 20, is_active: false }],
+    }));
+    try {
+      if (probeKind === "account") await fetchAnthropicAccountQuota("anthropic", accountId, true, hub, true);
+      else await fetchAnthropicQuota("anthropic", hub);
+      expect(upstream).toHaveBeenCalledTimes(1);
+      const retained = getCachedProviderAccountQuota("anthropic", accountId);
+      expect(retained?.weeklyPercent).toBe(37);
+      expect(retained?.monthlyPercent).toBeUndefined();
+      const response = await localFetch(new URL("/v1/usage/windows", server.url), {
+        headers: { "x-opencodex-api-key": "windows-client-anthropic" },
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ windows: [] });
+    } finally {
+      upstream.mockRestore();
+    }
+  },
+);
 
 test("Remote Link's route allowlist excludes usage windows", () => {
   const req = new Request("https://hub.example.test/v1/usage/windows");
