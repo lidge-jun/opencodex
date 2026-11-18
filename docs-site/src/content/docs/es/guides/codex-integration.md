@@ -219,9 +219,10 @@ En WSL, si `CODEX_HOME` está desactivado y el directorio Linux `~/.codex` está
 Cuando el catálogo está junto a `config.toml`, OpenCodex escribe su nombre de archivo en
 `model_catalog_json` para que tanto Codex en Windows como el servidor de aplicaciones de WSL puedan
 abrirlo desde el directorio compartido. Ejecuta `ocx sync` en Windows para actualizar una
-configuración anterior de OpenCodex que contenga una ruta absoluta de Windows. OpenCodex escribe
-una ruta absoluta si el catálogo está en otro directorio y conserva las asignaciones de catálogo
-personalizadas en `config.toml`.
+configuración anterior de OpenCodex que contenga una ruta absoluta de Windows. Esto también se
+aplica al sincronizar un Child ligero de Link. OpenCodex conserva las asignaciones personalizadas
+en `config.toml`. El perfil generado usa una ruta absoluta si el catálogo está en otro directorio
+y resuelve `~/` con respecto al directorio personal del usuario en macOS y Linux.
 
 Si el home de Codex existe pero Codex no ha escrito `config.toml` (por ejemplo, una nueva instalación de escritorio que nunca se ha iniciado sesión en OpenAI), opencodex crea allí un `config.toml` vacío y continúa. Si el directorio principal en sí no existe, inicie Codex una vez para que lo cree o establezca `CODEX_HOME`.
 

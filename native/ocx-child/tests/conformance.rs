@@ -17,7 +17,7 @@ use ocx_child::http_wire::{
 };
 use ocx_child::journal::{
     DetachError, DetachOutcome, JournalWriteFault, apply_attach_or_sync,
-    apply_attach_or_sync_with_fault, offline_detach, offline_detach_deferred,
+    apply_attach_or_sync_with_fault, offline_detach, offline_detach_deferred, read_journal,
 };
 use ocx_child::parity::parse_link_child_parity_report;
 use ocx_child::relay_auth::{
@@ -25,7 +25,9 @@ use ocx_child::relay_auth::{
 };
 use ocx_child::routes::{RelayAuthKind, RouteDecision, classify_child_ingress};
 use ocx_child::state::ChildPaths;
-use ocx_child::toml_surgeon::{apply_design_b_config, surgical_detach_config};
+use ocx_child::toml_surgeon::{
+    apply_design_b_config, surgical_detach_config, toml_escape_basic_string,
+};
 
 #[test]
 fn detach_preserves_user_edited_web_search_with_managed_marker() {
@@ -840,6 +842,97 @@ fn homes_fixture() -> (ScratchGuard, ChildPaths, ChildPaths, HomeCodexSettings) 
         subagent_defaults: None,
     };
     (guard, original, other, settings)
+}
+
+#[test]
+fn attach_writes_relative_catalog_binding_and_journals_the_absolute_file() {
+    let (_guard, paths, _, settings) = homes_fixture();
+    apply_attach_or_sync(
+        &owned(&paths),
+        "lnk_0123456789abcdef",
+        "link:t",
+        10100,
+        br#"{"models":[{"slug":"home"}]}"#,
+        &settings,
+    )
+    .unwrap();
+    let config = fs::read_to_string(paths.codex_config_path()).unwrap();
+    let expected = fs::canonicalize(&paths.codex_home)
+        .unwrap()
+        .join("opencodex-catalog.json");
+    let journal = read_journal(&paths.journal_file).unwrap().unwrap();
+    assert_eq!(PathBuf::from(journal.catalog_path), expected);
+    assert!(expected.is_file());
+    assert!(
+        config.contains("model_catalog_json = \"opencodex-catalog.json\"\n"),
+        "{config}"
+    );
+    assert_eq!(
+        journal.ledger.model_catalog_json.as_deref(),
+        Some("opencodex-catalog.json")
+    );
+}
+
+#[test]
+fn legacy_absolute_catalog_binding_migrates_on_sync_and_detaches_surgically() {
+    for sync in [true, false] {
+        let (_guard, paths, _, settings) = homes_fixture();
+        let apply = || {
+            apply_attach_or_sync(
+                &owned(&paths),
+                "lnk_0123456789abcdef",
+                "link:t",
+                10100,
+                br#"{"models":[{"slug":"home"}]}"#,
+                &settings,
+            )
+            .unwrap();
+        };
+        apply();
+        let config_path = paths.codex_config_path();
+        let config = fs::read_to_string(&config_path).unwrap();
+        let mut journal = read_journal(&paths.journal_file).unwrap().unwrap();
+        let legacy_assignment = format!(
+            "model_catalog_json = {}",
+            toml_escape_basic_string(&journal.catalog_path)
+        );
+        let legacy_config = config
+            .lines()
+            .map(|line| {
+                if line.starts_with("model_catalog_json = ") {
+                    legacy_assignment.as_str()
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(
+            &config_path,
+            format!("{legacy_config}\nmodel = \"user-model\"\n"),
+        )
+        .unwrap();
+        journal.ledger.model_catalog_json = Some(journal.catalog_path.clone());
+        fs::write(&paths.journal_file, serde_json::to_vec(&journal).unwrap()).unwrap();
+
+        if sync {
+            apply();
+            let synced = fs::read_to_string(&config_path).unwrap();
+            assert_eq!(synced.matches("model_catalog_json = ").count(), 1);
+            assert!(
+                synced.contains("model_catalog_json = \"opencodex-catalog.json\"\n"),
+                "{synced}"
+            );
+        }
+        assert_eq!(
+            offline_detach(&detach_guard(&paths), false).unwrap(),
+            DetachOutcome::SurgicalRestore
+        );
+        let restored = fs::read_to_string(&config_path).unwrap();
+        assert!(restored.contains("model = \"user-model\""), "{restored}");
+        assert!(!restored.contains("model_catalog_json"), "{restored}");
+        assert!(!paths.codex_catalog_path().exists());
+    }
 }
 
 #[test]

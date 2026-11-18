@@ -55,7 +55,7 @@ test("a Codex home without config.toml is bootstrapped and routed", () => {
   expect(config).toContain("opencodex");
 });
 
-test("keeps an injected catalog outside the config directory absolute", () => {
+test("preserves a user's same-named catalog binding and writes its absolute path in the profile", () => {
   const codexHome = join(root, "codex");
   const configPath = join(codexHome, "config.toml");
   const catalogPath = join(root, "opencodex-catalog.json");
@@ -65,9 +65,55 @@ test("keeps an injected catalog outside the config directory absolute", () => {
 
   const { result, stderr } = runInject({ CODEX_HOME: codexHome, OPENCODEX_HOME: join(root, "ocx") });
   expect(result.success, stderr).toBe(true);
-  for (const file of [configPath, join(codexHome, "opencodex.config.toml")]) {
-    expect(Bun.TOML.parse(readFileSync(file, "utf8")).model_catalog_json).toBe(catalogPath);
-  }
+  expect(Bun.TOML.parse(readFileSync(configPath, "utf8")).model_catalog_json).toBe("../opencodex-catalog.json");
+  const profile = join(codexHome, "opencodex.config.toml");
+  expect(Bun.TOML.parse(readFileSync(profile, "utf8")).model_catalog_json).toBe(catalogPath);
+  const reinjected = runInject({ CODEX_HOME: codexHome, OPENCODEX_HOME: join(root, "ocx") });
+  expect(reinjected.result.success, reinjected.stderr).toBe(true);
+  expect(Bun.TOML.parse(readFileSync(configPath, "utf8")).model_catalog_json).toBe("../opencodex-catalog.json");
+});
+
+test.skipIf(process.platform === "win32")("expands a POSIX catalog tilde in the generated profile", () => {
+  const codexHome = join(root, "codex");
+  const home = join(root, "home");
+  mkdirSync(codexHome);
+  mkdirSync(home);
+  const catalogPath = join(home, "models.json");
+  writeFileSync(catalogPath, '{"models":[]}\n');
+  const configPath = join(codexHome, "config.toml");
+  writeFileSync(configPath, 'model_catalog_json = "~//models.json"\n');
+
+  const { result, stderr } = runInject({ HOME: home, CODEX_HOME: codexHome, OPENCODEX_HOME: join(root, "ocx") });
+  expect(result.success, stderr).toBe(true);
+  const profile = join(codexHome, "opencodex.config.toml");
+  expect(Bun.TOML.parse(readFileSync(profile, "utf8")).model_catalog_json).toBe(catalogPath);
+  expect(Bun.TOML.parse(readFileSync(configPath, "utf8")).model_catalog_json).toBe("~//models.json");
+});
+
+test("catalog readers honor a quoted root key after multiline TOML data", () => {
+  const codexHome = join(root, "codex");
+  mkdirSync(codexHome);
+  writeFileSync(join(codexHome, "config.toml"), [
+    "instructions = '''",
+    "[not_a_table]",
+    'model_catalog_json = "not-the-catalog.json"',
+    "'''",
+    '"model_catalog_json" = "catalogs/custom.json" # selected by the user',
+    "[profile]",
+    'model_catalog_json = "nested.json"',
+  ].join("\n"));
+  const spawned = spawnSync(process.execPath, ["--eval", `
+    const paths = require("./src/codex/paths");
+    const picker = require("./src/codex/desktop-app/picker-freshness");
+    console.log(JSON.stringify([paths.readCodexCatalogPath(), picker.readCodexCatalogBinding()]));
+  `], {
+    cwd: repoRoot,
+    env: { ...process.env, CODEX_HOME: codexHome, OPENCODEX_HOME: join(root, "ocx") },
+    encoding: "utf8",
+    timeout: SPAWN_BUDGET_MS - 5_000,
+  });
+  expect(spawned.status, spawned.stderr).toBe(0);
+  expect(JSON.parse(spawned.stdout)).toEqual(Array(2).fill(join(codexHome, "catalogs", "custom.json")));
 });
 
 test("catalog and Desktop picker readers resolve from the config home with a different cwd", () => {

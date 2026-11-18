@@ -144,7 +144,7 @@ the same name are invalid TOML — and is not lost while it is gone. `ocx restor
 snapshot on top of that.
 
 `src/codex/inject.ts` writes one of two forms. The provider id determines whether existing thread history still resolves.
-Both forms write `model_catalog_json` as a basename for a sibling catalog so Windows and WSL can share it. Catalogs outside the config directory use absolute paths. Injection preserves user-owned bindings and recognizes both spellings on re-injection and removal. `src/codex/paths.ts` resolves relative paths against the config that supplied them. The journal records the resolved path, compares equivalent spellings during restore, and retains the original assignment's text.
+Both forms write `model_catalog_json` as a filename for a sibling catalog so Windows and WSL can share it. Generated bindings for catalogs outside the config directory use absolute paths. `src/codex/paths.ts` reads TOML root string assignments, including quoted keys, and resolves paths against the config directory after expanding `~` and `~/` against the user home on POSIX. Injection and fallback removal match resolved paths against the default sibling and the journaled owned binding. Windows comparisons ignore case and separator differences. The journal tracks ownership of the config binding separately from the catalog file and retains the original assignment's text for restore.
 
 **Loopback (default).** A single marker-owned root override, no provider table:
 

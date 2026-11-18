@@ -8,7 +8,7 @@ import { assertCodexHomeOwner, codexHomeIsAbsent, CODEX_HOME_JOURNAL_FILE, Codex
 import { hasInjectedCodexRouting } from "./injected-marker";
 import { ConfigWriteContentChanged, configWriteLockFailureMessage, withConfigWriteLockHeld } from "./config-write-lock";
 import type { LockHandle } from "./config-write-lock";
-import { CODEX_HOME, CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, resolveCodexCatalogPath } from "./paths";
+import { CODEX_HOME, CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, readRootTomlString, resolveCodexCatalogPath, sameCodexCatalogPath } from "./paths";
 import { transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "./subagent-defaults";
 import { appendInjectedRootHistory, captureJournalConfigFields, parseInjectedRootHistory, restoreJournalConfigFields, snapshotDisconnectRecovery, type InjectedRootHistory, type InjectedRootKey, type JournalConfigFields } from "./journal-config-restore";
 
@@ -80,6 +80,8 @@ interface Journal {
    * file we actually touched.
    */
   injectedCatalogPath?: string | null;
+  /** The root binding we wrote. Null means config.toml retained user ownership or had no binding. */
+  injectedCatalogBinding?: string | null;
   /**
    * The marker-owned `[agents]` default values this injection wrote, keyed by TOML key.
    *
@@ -240,6 +242,7 @@ export interface InjectedJournalOwnership {
   injectedOpenaiBaseUrl: string | null;
   injectedRealtimeWsBaseUrl: string | null;
   injectedCatalogPath: string | null;
+  injectedCatalogBinding?: string | null;
   /** Omitted by callers that inject no `web_search` line, which is the value it then records. */
   injectedRootWebSearch?: string | null;
   /** Omitted by callers that removed no user `web_search` line. */
@@ -282,6 +285,7 @@ export function markJournalInjectedState(
   journal.replacedRootWebSearch = ownership.replacedRootWebSearch ?? null;
   journal.injectedSubagentDefaults = ownership.injectedSubagentDefaults ?? null;
   journal.injectedCatalogPath = ownership.injectedCatalogPath;
+  journal.injectedCatalogBinding = ownership.injectedCatalogBinding;
   journal.injectedRootHistory = appendInjectedRootHistory(journal.injectedRootHistory, {
     openai_base_url: ownership.injectedOpenaiBaseUrl,
     experimental_realtime_ws_base_url: ownership.injectedRealtimeWsBaseUrl,
@@ -330,6 +334,20 @@ export function journaledReplacedRootWebSearch(options: { readOnly?: boolean } =
 export function journaledInjectedCatalogPath(): string | null {
   const path = readJournal()?.injectedCatalogPath;
   return typeof path === "string" && path ? resolveCodexCatalogPath(CODEX_CONFIG_PATH, path) : null;
+}
+
+/** Config ownership is distinct from the catalog file selected for an injection. */
+export function journaledOwnedCatalogBinding(options: { readOnly?: boolean } = {}): string | null {
+  const journal = readJournal(options.readOnly !== true);
+  if (!journal) return null;
+  if (journal.injectedCatalogBinding !== undefined) {
+    return typeof journal.injectedCatalogBinding === "string" ? journal.injectedCatalogBinding : null;
+  }
+  // Older journals recorded the artifact path even when the original config selected it.
+  const path = journal.injectedCatalogPath;
+  if (typeof path !== "string" || !path) return null;
+  const original = readRootTomlString(Buffer.from(journal.originalConfig, "base64").toString("utf8"), "model_catalog_json");
+  return original && sameCodexCatalogPath(CODEX_CONFIG_PATH, original, path) ? null : path;
 }
 
 /**

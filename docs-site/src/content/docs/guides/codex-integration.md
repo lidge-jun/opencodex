@@ -470,9 +470,10 @@ the same config and auth files. Set `CODEX_HOME` explicitly to override this det
 
 When the catalog is beside `config.toml`, OpenCodex writes its filename as `model_catalog_json` so
 Windows Codex and the WSL app-server can both open it from the shared home. Run `ocx sync` on
-Windows to update an older OpenCodex binding that contains a Windows absolute path. OpenCodex
-writes an absolute path for a catalog in another directory and preserves custom catalog
-assignments in `config.toml`.
+Windows to update an older OpenCodex binding that contains a Windows absolute path. This also
+applies to sync on a lightweight Link Child. OpenCodex preserves custom assignments in
+`config.toml`. The generated profile uses an absolute path for a catalog in another directory
+and resolves `~/` against your user home on macOS and Linux.
 
 If the Codex home exists but Codex has not written `config.toml` yet (for example a fresh Desktop install
 that was never signed in to OpenAI), opencodex creates an empty `config.toml` there and continues. If

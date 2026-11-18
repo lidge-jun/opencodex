@@ -39,6 +39,17 @@ test("explicit recovery restores only recorded routing fields and blocks, preser
   expect(restoreJournalConfigFields(current, original, journal, true)).toBe('openai_base_url = "https://native.example/v1"\n' + edits + suffix);
 });
 
+test("restoring a journal keeps an operator binding even when injection selected its catalog file", () => {
+  const current = 'model_catalog_json = "catalogs/opencodex-catalog.json" # operator\n';
+  const ownership = {
+    injectedCatalogPath: join(CODEX_HOME, "catalogs", "opencodex-catalog.json"),
+    injectedCatalogBinding: null,
+  };
+  const injectedConfigFields = captureJournalConfigFields(current, ownership);
+  expect(injectedConfigFields.model_catalog_json).toBeUndefined();
+  expect(restoreJournalConfigFields(current, "", { ...ownership, injectedConfigFields }, true)).toBe(current);
+});
+
 test("one-operation force never claims an unrecorded routing key by URL resemblance", () => {
   const current = 'openai_base_url = "http://127.0.0.1:10100/v1"\nmodel = "user"\n';
   expect(restoreJournalConfigFields(current, original, {}, true)).toBeNull();

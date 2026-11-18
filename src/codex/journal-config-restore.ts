@@ -3,7 +3,7 @@ import { chmodSync, closeSync, fsyncSync, mkdtempSync, openSync, writeFileSync }
 import { join } from "node:path";
 import { hardenSecretDir, hardenSecretPath } from "../lib/windows-secret-acl";
 import { isOcxRoutingMarkerLine } from "./injected-marker";
-import { CODEX_CONFIG_PATH, resolveCodexCatalogPath, samePath } from "./paths";
+import { CODEX_CONFIG_PATH, sameCodexCatalogPath } from "./paths";
 import { transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "./subagent-defaults";
 import { rootAssignmentKey, rootSourceLines, sourceAssignment, sourceText } from "./toml-source-lines";
 
@@ -136,6 +136,7 @@ interface Ownership {
   injectedOpenaiBaseUrl?: string | null;
   injectedRealtimeWsBaseUrl?: string | null;
   injectedCatalogPath?: string | null;
+  injectedCatalogBinding?: string | null;
   injectedRootWebSearch?: string | null;
   replacedRootWebSearch?: string | null;
   injectedSubagentDefaults?: WrittenSubagentDefaults | null;
@@ -147,7 +148,7 @@ function recordedValues(journal: Ownership): Map<string, unknown> {
   for (const [key, value] of [
     ["openai_base_url", journal.injectedOpenaiBaseUrl],
     ["experimental_realtime_ws_base_url", journal.injectedRealtimeWsBaseUrl],
-    ["model_catalog_json", journal.injectedCatalogPath],
+    ["model_catalog_json", journal.injectedCatalogBinding === undefined ? journal.injectedCatalogPath : journal.injectedCatalogBinding],
     ["web_search", journal.injectedRootWebSearch],
   ] as const) if (typeof value === "string") values.set(key, value);
   return values;
@@ -155,7 +156,7 @@ function recordedValues(journal: Ownership): Map<string, unknown> {
 
 function matchesInjectedField(key: string, value: unknown, injected: unknown): boolean {
   if (key === "model_catalog_json" && typeof value === "string" && value && typeof injected === "string" && injected) {
-    return samePath(resolveCodexCatalogPath(CODEX_CONFIG_PATH, value), resolveCodexCatalogPath(CODEX_CONFIG_PATH, injected));
+    return sameCodexCatalogPath(CODEX_CONFIG_PATH, value, injected);
   }
   return isDeepStrictEqual(value, injected);
 }
@@ -212,7 +213,8 @@ export function restoreJournalConfigFields(current: string, original: string, jo
       const present = now.get(key), prior = before.get(key);
       if (isDeepStrictEqual(present?.value, prior?.value)) continue;
       if (!expected.has(key)) {
-        if (key === "model" || key.startsWith("agents.") || key === "web_search") continue;
+        if (key === "model" || key.startsWith("agents.") || key === "web_search"
+          || key === "model_catalog_json" && journal.injectedCatalogBinding === null) continue;
         return null;
       }
       const injected = expected.get(key);

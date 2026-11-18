@@ -21,6 +21,7 @@ import {
   journaledInjectedRootValues,
   journaledInjectedRootWebSearch,
   journaledInjectedSubagentDefaults,
+  journaledOwnedCatalogBinding,
   journaledReplacedRootWebSearch,
 } from "../journal";
 import { REALTIME_WS_BASE_URL_KEY, stripJournaledOpenaiBaseUrl } from "../injected-marker";
@@ -39,13 +40,12 @@ import {
   normalizeServiceTier,
   preserveUnmanagedProfileKeys,
   removeProfileSection,
-  setRootModelCatalogPath,
   setRootModelProvider,
   setRootOpenaiBaseUrlForTarget,
   setRootRealtimeWsBaseUrl,
   stripExistingModelProvider,
   stripInjectedOpenaiBaseUrl,
-  stripOpencodexCatalogPath,
+  updateRootModelCatalogPath,
 } from "./config-toml";
 import { hasOcxProviderTable, removeOcxSection } from "./remove";
 import {
@@ -87,6 +87,7 @@ export interface CodexInjectionPlanOk {
   profileSource: string | null;
   /** The resolved catalog path, never the raw option. */
   catalogPath: string | null;
+  injectedCatalogBinding: string | null;
   providerTableMode: boolean;
   keepRootOverrideAlongsideTable: boolean;
   keptUserBaseUrl: boolean;
@@ -227,13 +228,12 @@ export function deriveCodexInjectionPlan(
   );
   content = webSearch.content;
 
-  const catalogPath = chooseCatalogPathForInjection(
-    content,
-    ctx.catalogPathOption,
+  const catalogOwner = { journaledPath: journaledOwnedCatalogBinding({ readOnly: ctx.journalReadOnly }) };
+  const catalogPath = chooseCatalogPathForInjection(content, ctx.catalogPathOption, catalogOwner);
+  const catalog = updateRootModelCatalogPath(
+    content, catalogPath && codexCatalogBindingForPath(CODEX_CONFIG_PATH, catalogPath), catalogOwner,
   );
-  content = catalogPath
-    ? setRootModelCatalogPath(content, codexCatalogBindingForPath(CODEX_CONFIG_PATH, catalogPath))
-    : stripOpencodexCatalogPath(content);
+  content = catalog.content;
 
   // Provider-table form: non-loopback admission or an explicit Desktop policy.
   const providerTableMode = usesProviderTable(routingTarget);
@@ -428,6 +428,7 @@ export function deriveCodexInjectionPlan(
     profileContent,
     profileSource,
     catalogPath,
+    injectedCatalogBinding: catalog.injectedBinding,
     providerTableMode,
     keepRootOverrideAlongsideTable,
     keptUserBaseUrl,

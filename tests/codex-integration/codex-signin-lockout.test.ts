@@ -22,12 +22,10 @@ import {
 } from "../../src/codex/injected-marker";
 import { missingOwnedCatalogPath, setRootOpenaiBaseUrl, setRootRealtimeWsBaseUrl } from "../../src/codex/inject/config-toml";
 import { stripOpencodexConfig } from "../../src/codex/inject/remove";
+import { DEFAULT_CATALOG_PATH } from "../../src/codex/paths";
 import { deadProxyRoutingAdviceLines, missingCodexCatalogLines } from "../../src/cli/status";
 import { findCommand } from "../../src/cli/registry";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
-
-/** A Windows catalog path as TOML stores it: a basic string doubles the separators (#1798). */
-const WINDOWS_CATALOG = JSON.stringify(String.raw`C:\Users\example\.codex\opencodex-catalog.json`);
 
 /** The loopback target the reported install was on. */
 const TARGET = {
@@ -40,7 +38,7 @@ const TARGET = {
 function lockedOutConfig(marker: string): string {
   return [
     'model = "gpt-5.5"',
-    `model_catalog_json = ${WINDOWS_CATALOG}`,
+    `model_catalog_json = ${JSON.stringify(DEFAULT_CATALOG_PATH)}`,
     marker,
     'openai_base_url = "http://127.0.0.1:10100/v1"',
     marker,
@@ -142,14 +140,11 @@ describe("a Codex catalog pointer whose file is gone (#5261)", () => {
   test("an owned catalog that is missing is reported, and one that exists is not", () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-catalog-pointer-"));
     try {
-      // Ownership is by basename, which is what injection already uses. Pinned here so the
-      // detector cannot start disagreeing with the code that writes and strips the same line.
-      const present = join(dir, "opencodex-catalog.json");
-      writeFileSync(present, "{}");
-      const absent = join(dir, "gone", "opencodex-catalog.json");
-
-      expect(missingOwnedCatalogPath(configNaming(absent))).toBe(absent);
-      expect(missingOwnedCatalogPath(configNaming(present))).toBeNull();
+      const configPath = join(dir, "config.toml");
+      const catalog = join(dir, "opencodex-catalog.json");
+      expect(missingOwnedCatalogPath(configNaming(catalog), configPath)).toBe(catalog);
+      writeFileSync(catalog, "{}");
+      expect(missingOwnedCatalogPath(configNaming(catalog), configPath)).toBeNull();
     } finally {
       removeTreeWithRetry(dir);
     }
@@ -172,10 +167,9 @@ describe("a Codex catalog pointer whose file is gone (#5261)", () => {
   test("a catalog the user named is theirs, present or not", () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-catalog-user-"));
     try {
-      // Same missing file, a name we never write. Claiming it would put opencodex's recovery
-      // advice in front of a problem that is not opencodex's to explain.
-      const userOwned = join(dir, "gone", "my-catalog.json");
-      expect(missingOwnedCatalogPath(configNaming(userOwned))).toBeNull();
+      const configPath = join(dir, "config.toml");
+      const userOwned = join(dir, "gone", "opencodex-catalog.json");
+      expect(missingOwnedCatalogPath(configNaming(userOwned), configPath)).toBeNull();
       expect(missingOwnedCatalogPath('model = "gpt-5.5"\n')).toBeNull();
     } finally {
       removeTreeWithRetry(dir);

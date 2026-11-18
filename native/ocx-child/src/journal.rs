@@ -12,7 +12,7 @@ use crate::platform::{
     DirectoryIdentity, directory_identity, ensure_private_dir, reject_symlink, sha256_hex,
     write_private_atomic, write_regular_atomic,
 };
-use crate::state::ChildPaths;
+use crate::state::{CATALOG_FILENAME, ChildPaths};
 use crate::toml_surgeon::{
     ChildInjectedLedger, apply_design_b_config, detect_unowned_root_routing_conflict,
     surgical_detach_config,
@@ -115,7 +115,7 @@ fn validate_journal_paths(paths: &ChildPaths, journal: &ChildJournalV1) -> Resul
         .ok_or("child journal lacks Codex directory identity")?;
     if current_ocx != Path::new(&journal.opencodex_home)
         || current_codex != Path::new(&journal.codex_home)
-        || catalog != current_codex.join("opencodex-catalog.json")
+        || catalog != current_codex.join(CATALOG_FILENAME)
         || &directory_identity(&current_ocx)? != expected_ocx_identity
         || &directory_identity(&current_codex)? != expected_codex_identity
     {
@@ -346,14 +346,14 @@ pub fn apply_attach_or_sync_with_fault(
     let canonical_codex = fs::canonicalize(&paths.codex_home)
         .map_err(|e| format!("cannot resolve Codex home: {e}"))?;
     let catalog_path_str = canonical_codex
-        .join("opencodex-catalog.json")
+        .join(CATALOG_FILENAME)
         .to_str()
         .ok_or("canonical catalog path is not UTF-8")?
         .to_owned();
     let (next_cfg_text, next_ledger) = apply_design_b_config(
         &current_cfg_text,
         listen_port,
-        &catalog_path_str,
+        CATALOG_FILENAME,
         settings,
         existing_journal.as_ref().map(|j| &j.ledger),
     )?;
