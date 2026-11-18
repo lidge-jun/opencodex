@@ -10,11 +10,27 @@
  */
 import { credentialDomainFor } from "../../protocols/opaque-state";
 import type { OcxProviderConfig } from "../../types";
+import type { AdapterRequest } from "../base";
 
 type Rec = Record<string, unknown>;
 
 export const ADVISOR_TOOL_BETA = "advisor-tool-2026-03-01";
 export const ADVISOR_SERVER_TOOL_NAME = "advisor";
+
+/** The serializer's admitted auth, before operator or plugin header rewrites. */
+export const hostedAdvisorCredentials = new WeakMap<AdapterRequest, {
+  readonly header: "authorization" | "x-api-key";
+  readonly value: string;
+}>();
+
+/** Keep unrelated betas when a rewriter restores the withheld hosted Advisor beta. */
+export function stripHostedAdvisorBeta(headers: Headers): void {
+  const betas = headers.get("anthropic-beta")?.split(",").map(beta => beta.trim());
+  if (!betas?.includes(ADVISOR_TOOL_BETA)) return;
+  const kept = betas.filter(beta => beta && beta !== ADVISOR_TOOL_BETA);
+  if (kept.length) headers.set("anthropic-beta", kept.join(","));
+  else headers.delete("anthropic-beta");
+}
 
 function isPlainRecord(value: unknown): value is Rec {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return false;

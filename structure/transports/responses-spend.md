@@ -140,8 +140,8 @@ override the selected wire's eligibility. It reuses the same captured policy. Ex
 Messages selections refuse capped targets before dispatch. Optional turns can normalize a newly
 unmatched named choice and rebuild the outer delivery maps once. Both paths preserve main-model
 accounting. The hosted-only target binding in `src/server/responses/request-transport.ts`
-uses the effective Anthropic wire's key serializer to identify the admitted key, including on
-local-mode gateways. It resolves the key's account label before physical log attribution.
+uses the effective Anthropic serializer to identify the admitted key, including on local-mode
+gateways, and verifies the binding on final headers [before the send receipt](../advisor.md#claude-codes-typed-advisor-server-tool).
 `request-spend-target.ts` keeps that binding separate from ordinary main-model accounting.
 For Anthropic OAuth it hashes the admitted serving snapshot's provider and account ID with the
 existing OAuth label function. Same-ID accounts in the two instances stay separate; an ambient

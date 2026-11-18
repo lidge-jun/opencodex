@@ -41,7 +41,7 @@ import { resolveReasoningCapabilities } from "../providers/reasoning-capabilitie
 import { declaresThinkingToggleWire, reasoningControlsAreUnsupported } from "./reasoning-controls";
 import { applyAgentRouterLanguageFraming, isAgentRouterEndpoint } from "./agentrouter";
 import { anthropicCacheWrite1hTokens, resolveAnthropicCacheRetention, type AnthropicCacheRetention } from "./anthropic/cache-retention";
-import { advisorServerExchange, advisorServerToolDestination, planAnthropicServerTools } from "./anthropic/advisor-tool";
+import { advisorServerExchange, advisorServerToolDestination, hostedAdvisorCredentials, planAnthropicServerTools } from "./anthropic/advisor-tool";
 import { applyAnthropicPerMessageEffort } from "./anthropic/per-message-effort";
 import { claudeFamilyVersion, rejectsCombinedSampling, rejectsForcedToolChoice, rejectsSamplingParameters, supportsExplicitThinkingDisable, usesAdaptiveThinking, usesBetweenToolsFloor } from "./anthropic-model-contract";
 
@@ -1249,6 +1249,11 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
       const headers = anthropicBaseRequestHeaders(parsed.stream);
       if (isOAuth) applyAnthropicOAuthAuth(headers, provider.apiKey, resolveTranslatedAnthropicSessionKey(parsed, incoming));
       else applyAnthropicKeyAuth(headers, provider);
+      const advisorCredential = serverToolPlan.betas.length > 0
+        ? headers.Authorization !== undefined
+          ? { header: "authorization" as const, value: headers.Authorization }
+          : { header: "x-api-key" as const, value: headers["x-api-key"]! }
+        : undefined;
       if (provider.headers) Object.assign(headers, provider.headers);
       mergeAnthropicBetaHeader(headers, [...(fastSpeed?.betas ?? []), ...(progressUpdates ? ["thinking-display-updates-2026-08-18"] : []), ...serverToolPlan.betas]);
 
@@ -1283,6 +1288,7 @@ export function createAnthropicAdapter(provider: OcxProviderConfig, cacheRetenti
         ),
       };
       captureAnthropicRejectionPayloads(request, body, incoming?.translatorBudget);
+      if (advisorCredential) hostedAdvisorCredentials.set(request, advisorCredential);
       return request;
     },
 

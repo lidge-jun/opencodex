@@ -175,7 +175,11 @@ the selection is ambiguous or all attempted candidates are incompatible. Both ou
 proxy consultations. On other turns, automatic preflight and adaptive consultations follow
 operator policy.
 
-If a spend ceiling or ambiguous credentials withhold optional hosted Advisor, the declaration, replay and beta stay withheld
+Before the worker send, OpenCodex verifies that upstream plugin rewrites preserve the admitted
+credential without adding a conflicting credential header. A failed check makes that target
+ineligible for an explicit hosted Advisor selection.
+
+If a spend ceiling or a failed credential check withholds optional hosted Advisor, the declaration, replay and beta stay withheld
 throughout the translated turn, including when a fallback candidate uses a different credential.
 Identity ceilings cover the API key sent to an Anthropic-compatible gateway, including with `authMode: "local"`.
 

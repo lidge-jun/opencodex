@@ -153,6 +153,11 @@ to admitted replacement identities before serialization, including sidecar copie
 reselection. Credential rebuilding may restore a provider-wide adapter, so eligibility follows this
 builder's effective wire instead. Once withheld, the optional hosted tool and replay stay withheld
 across later credentials, policy candidates and translated Combo children in the same turn.
+The Anthropic builder binds each serialized hosted Advisor request to the credential it applied.
+After upstream plugin rewrites and before the physical-send receipt, the HTTP guard requires an
+exact match and uses the same ownership classifier to reject conflicting credential headers. On
+failure, it refuses the explicit selection or rebuilds the optional request with its original
+serializer inputs and hosted Advisor withheld. The final headers omit the Advisor beta.
 Removing Advisor blocks from a validated mixed replay run preserves the other completed search
 or fetch exchanges at their original unique anchor, subject to the existing destination checks.
 For a choice without an explicit hosted selection, after the final tool catalog is known, an

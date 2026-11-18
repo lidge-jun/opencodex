@@ -3,6 +3,7 @@ import { declaredAnthropicServerTools, hostedAdvisorSelection } from "../../src/
 import { clearComboTargetCooldowns } from "../../src/combos";
 import { apiKeyAccountLogLabel } from "../../src/codex/account-label";
 import { validateConfigCandidate } from "../../src/config/diagnostics";
+import { registerUpstreamRewriter } from "../../src/plugins/upstream-hooks";
 import { messagesToResponsesTranslation } from "../../src/protocols/codecs/messages";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
 import { protocolTraceForRequest } from "../../src/protocols/trace";
@@ -272,6 +273,85 @@ test.each([
       }
       expect(log.accountLogLabel).toBeUndefined();
     }
+  }));
+
+test.each([
+  ["explicit", "conflicting credential"], ["optional", "conflicting credential"],
+  ["explicit", "different credential"], ["optional", "different credential"],
+  ["explicit", "same credential"], ["optional", "same credential"],
+] as const)("translated hosted Advisor binds the %s send after upstream rewrite (%s)", (mode, rewrite) =>
+  withHostedAdvisorSpendHome(async () => {
+    const apiKey = "fixture-admitted-key";
+    const replacement = "fixture-replacement-key";
+    const retainedBeta = "fixture-unrelated-beta";
+    const advisorResultId = "srvtoolu_rewrite_fixture";
+    const sends: { body: { tools?: unknown[]; tool_choice?: unknown }; headers: Headers }[] = [];
+    const config: OcxConfig = {
+      port: 0, defaultProvider: "gateway",
+      claudeCode: { nativePassthrough: false }, protocols: { rollout: { managedMessagesNative: false } },
+      providers: { gateway: {
+        adapter: "anthropic", authMode: "key", apiKey, baseUrl: "https://advisor-rewrite.invalid",
+        forwardAdvisorTool: true, models: [MODEL], liveModels: false,
+        headers: { "anthropic-beta": retainedBeta },
+        fetch: (async (_url: unknown, init?: RequestInit) => {
+          sends.push({ body: JSON.parse(String(init?.body)), headers: new Headers(init?.headers) });
+          return workerStream([{ type: "text", text: "Done." }], "end_turn");
+        }) as typeof fetch,
+      } },
+    };
+    configureSharedSpendLedger(spendPolicyFromConfig(config.spend));
+    const unregister = registerUpstreamRewriter("fixture-advisor-credential", target => {
+      if (target.url !== "https://advisor-rewrite.invalid/v1/messages") return;
+      if (rewrite === "conflicting credential") target.headers.set("api-key", replacement);
+      if (rewrite === "different credential") target.headers.set("x-api-key", replacement);
+      if (rewrite !== "same credential" && !target.headers.get("anthropic-beta")?.includes(BETA)) {
+        target.headers.append("anthropic-beta", BETA);
+      }
+      target.headers.set("x-fixture-rewritten", "yes");
+    });
+    try {
+      const response = await handleClaudeMessages(new Request("http://localhost/v1/messages", {
+        method: "POST", headers: { "content-type": "application/json", "anthropic-beta": BETA },
+        body: JSON.stringify({
+          model: `gateway/${MODEL}`, max_tokens: 64,
+          tools: [{ name: "Read", input_schema: { type: "object" } }, HOSTED_ADVISOR],
+          tool_choice: mode === "explicit" ? CHOICE : undefined,
+          messages: [
+            { role: "user", content: "Fixture." },
+            { role: "assistant", content: [
+              { type: "server_tool_use", id: advisorResultId, name: "advisor", input: {} },
+              { type: "advisor_tool_result", tool_use_id: advisorResultId,
+                content: { type: "advisor_result", text: "Fixture advice." } },
+              { type: "text", text: "Earlier answer." },
+            ] },
+            { role: "user", content: "Continue." },
+          ],
+        }),
+      }), config, { model: "", provider: "" }, { requestId: crypto.randomUUID(), start: Date.now() });
+      const body = await response.text();
+      const withheld = rewrite !== "same credential";
+      if (mode === "explicit" && withheld) {
+        expect(response.status, body).toBe(400);
+        expect(JSON.parse(body)).toMatchObject({ type: "error", error: {
+          type: "invalid_request_error", message: expect.stringContaining("admitted upstream credential"),
+        } });
+        expect(sends).toHaveLength(0);
+        return;
+      }
+      expect(response.status, body).toBe(200);
+      expect(sends).toHaveLength(1);
+      const [wire] = sends;
+      expect(wire!.headers.get("x-fixture-rewritten")).toBe("yes");
+      expect(wire!.headers.get("x-api-key")).toBe(rewrite === "different credential" ? replacement : apiKey);
+      expect(wire!.headers.get("api-key")).toBe(rewrite === "conflicting credential" ? replacement : null);
+      expect(wire!.body.tools).toEqual([
+        expect.objectContaining({ name: "Read" }), ...(withheld ? [] : [expect.objectContaining(HOSTED_ADVISOR)]),
+      ]);
+      expect(wire!.headers.get("anthropic-beta")?.split(",").map(beta => beta.trim()))
+        .toEqual(withheld ? [retainedBeta] : [retainedBeta, BETA]);
+      expect(JSON.stringify(wire!.body).includes(advisorResultId)).toBe(!withheld);
+      if (mode === "explicit") expect(wire!.body.tool_choice).toEqual(CHOICE);
+    } finally { unregister(); }
   }));
 
 test.each(["default", "inherited"] as const)("translated preflight honors the %s budget's captured pool policy", budget =>

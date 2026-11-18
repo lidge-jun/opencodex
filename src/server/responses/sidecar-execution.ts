@@ -199,10 +199,10 @@ export async function executeResponsesSidecars(
   const hostedAdvisorSpendScope = options.hostedAdvisorSpendScope ?? { optionalWithheld: false };
   let hostedAdvisorSpendRefusal: HostedAdvisorSpendRefusal | undefined;
   const explicitlySelectedHostedAdvisor = options.anthropicHostedAdvisorSelection === "selected";
-  const withholdHostedAdvisorBySpend = (request: OcxParsedRequest, provider: OcxProviderConfig) => {
+  const withholdHostedAdvisorBySpend = (request: OcxParsedRequest, provider: OcxProviderConfig, finalRefusal?: HostedAdvisorSpendRefusal) => {
     if (!hostedAdvisorSpendScope.optionalWithheld && !hostedAdvisorSpendRefusal
-      && (hasAdvisorServerTools(parsed) || hasAdvisorServerTools(request))) {
-      const refusal = hostedAdvisorSpendRefusalFor(provider, () =>
+      && (finalRefusal || hasAdvisorServerTools(parsed) || hasAdvisorServerTools(request))) {
+      const refusal = finalRefusal ?? hostedAdvisorSpendRefusalFor(provider, () =>
         sendBudgetState.hasCapturedSpendCeiling(responsesHostedAdvisorSpendTarget(logCtx, route.providerName, provider)));
       if (refusal) {
         if (explicitlySelectedHostedAdvisor) hostedAdvisorSpendRefusal = refusal;
@@ -234,8 +234,8 @@ export async function executeResponsesSidecars(
   // Every physical adapter builder, including sidecar copies and dispatch-time reselection,
   // passes its resolved wire, which can differ from the rebuilt credential route's default.
   // Withholding is monotonic across all later identities/copies.
-  transportState.hostedAdvisorSpendGuard = (request, provider) => {
-    withholdHostedAdvisorBySpend(request, provider);
+  transportState.hostedAdvisorSpendGuard = (request, provider, finalRefusal) => {
+    withholdHostedAdvisorBySpend(request, provider, finalRefusal);
     if (hostedAdvisorSpendRefusal) throw hostedAdvisorSpendRefusal;
     normalizeWithheldAdvisorChoice();
     if (request !== parsed) normalizeWithheldAdvisorChoice(request);
