@@ -54,9 +54,9 @@ Para las filas cobradas por créditos, el panel de detalles del registro muestra
 el total y la fórmula `<credits> credits × <price> per credit` en el idioma del dashboard. Los
 cuatro componentes por tokens se omiten para evitar mostrar `$0.0000` en cada uno junto a un
 total distinto de cero. Cuando un Combo mezcla intentos cobrados por créditos
-y por tokens, o incluye dos precios por crédito, el panel muestra un total combinado y los
-desgloses por intento. La API de administración expone la base del cálculo en el campo opcional
-`billing` de la estimación.
+y por tokens, o incluye dos precios por crédito, el panel muestra un total combinado.
+La tabla de intentos del Combo solo muestra el importe en USD de cada intento.
+La API de administración expone la base del cálculo en el campo opcional `billing` de la estimación.
 
 El cargo por créditos es exacto para el precio configurado. Si un intento cobrado por tokens tiene
 un costo mínimo porque no se pudo resolver la tarifa Priority, el Combo mixto conserva el símbolo

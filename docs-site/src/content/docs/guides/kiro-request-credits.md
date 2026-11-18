@@ -52,9 +52,8 @@ list-price equivalent, prints **Credit-priced total** with the charge as
 otherwise read as `$0.0000` each beside a nonzero total. A Combo whose attempts were not all
 billed the same way — one credit attempt beside a token-priced one, or two credit prices — reports
 **Combined total (per-attempt basis)** and marks the split as mixed, because summing the credits
-would produce a number that matches no price. Each attempt still states the charge and price it
-actually incurred. The management API exposes the same decision as an optional `billing` object on
-the cost estimate; clients that do not read it are unaffected.
+would produce a number that matches no price. The Combo attempt table shows only the USD amount for each attempt.
+The management API exposes the billing basis in the optional `billing` field on cost estimates.
 
 A credit charge is exact for the configured price, so it never makes a total a lower bound — and it
 never hides one either. When a mixed Combo's token-priced attempt is a floor under an unresolved

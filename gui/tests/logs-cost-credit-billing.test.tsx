@@ -258,9 +258,10 @@ test("a mixed combo names the basis, keeps the total, and hides no zero split", 
     expect(text).toContain("$0.0782");
     expect(text).toContain("Mixed");
     expect(text).not.toContain("$0.0000");
-    // Each attempt still reports the basis it actually used.
+    // The attempt table shows each USD charge. The credit formula belongs to the total detail.
     const attempts = document.querySelector(".log-detail-attempts")!;
     expect(attempts.textContent).toContain("$0.0780");
+    expect(attempts.textContent).not.toContain("per credit");
     expect(attempts.textContent).not.toContain("$0.0000");
   } finally { await act(async () => { root.unmount(); }); }
 });
