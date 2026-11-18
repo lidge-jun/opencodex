@@ -3,6 +3,7 @@ import { markProxyError } from "../../lib/client-error-body";
 import type { RouteResult } from "../../router";
 import type { RouteDecisionTraceV1 } from "../../routing/trace";
 import { resolveOpenAiVirtualModel } from "../../providers/openai-virtual-models";
+import type { AdapterEvent } from "../../types";
 
 /** Request-owned authorization, separate from the diagnostic trace and each physical attempt. */
 export interface PolicyRequestScope {
@@ -47,6 +48,25 @@ const mandatoryToolRefusals = new WeakSet<Response>();
 export function markPolicyCandidateRefusal(response: Response): Response {
   localRefusals.add(response);
   return response;
+}
+
+/** A mandatory hosted selection cannot be admitted under the credential's spend policy. */
+export class HostedAdvisorSpendRefusal extends Error {
+  constructor(reason: "ceiling" | "ambiguous-credentials" | "credential-binding") {
+    super(reason === "ceiling"
+      ? "The selected hosted Advisor tool is unavailable under the applicable token spend ceiling."
+      : reason === "ambiguous-credentials"
+        ? "The selected hosted Advisor tool is unavailable with ambiguous upstream credentials."
+        : "The selected hosted Advisor tool requires an unambiguous match to the admitted upstream credential.");
+  }
+
+  event(): Extract<AdapterEvent, { type: "error" }> {
+    return { type: "error", status: 400, errorType: "invalid_request_error", message: this.message, retryable: false };
+  }
+
+  response(): Response {
+    return markPolicyCandidateRefusal(markProxyError(formatErrorResponse(400, "invalid_request_error", this.message)));
+  }
 }
 
 export function policyCandidateRefusalResponse(error: unknown): Response | undefined {

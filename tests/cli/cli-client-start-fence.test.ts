@@ -136,7 +136,7 @@ describe("connected-client start ownership fence", () => {
     // released only once the first serve() returned, i.e. after publication.
     const serve = runtime.slice(runtime.indexOf("const serve = async"), runtime.indexOf("const stopServing"));
     // Each publication also stamps a fresh servingGeneration (restart sync fence, #8416).
-    expect(serve).toMatch(/writePid\(process\.pid\);\s*\n(?:\s*\/\/[^\n]*\n)*\s*writeRuntimePort\(\{ \.\.\.clientRuntimeRecord\(process\.pid, boundPort, attestationSecret\), servingGeneration: randomUUID\(\) \}\);/);
+    expect(serve).toMatch(/writePid\(process\.pid\);\s*\n(?:\s*\/\/[^\n]*\n)*\s*writeRuntimePort\(\{ \.\.\.clientRuntimeRecord\(process\.pid, boundPort, attestationSecret\), servingGeneration: randomUUID\(\),\s+clientLinkOwner \}\);/);
     expect(runtime).toMatch(/await serve\(\);\s*\n\s*options\.afterPublish\?\.\(\);/);
   });
 });
