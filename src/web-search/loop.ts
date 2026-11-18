@@ -421,12 +421,13 @@ export interface WebSearchLoopDeps {
   /** Raw adapter usage at the terminal event, pre wire-normalization (see bridgeToResponsesSSE onUsage). */
   onUsage?: (usage: OcxUsage | undefined) => void;
   proxyErrorContext?: object;
+  /** Adds model-send capacity for a later loop iteration when ingress owns the budget. */
+  allowNextSearchRound?: () => void;
   /**
    * After an `on429` rotation, offered the usage of the hidden iterations the left credential
    * served. Returning true means it was billed to that credential's attempt, so `onUsage` will not
    * report it again.
    */
-  allowNextSearchRound?: () => void;
   onRotatedUsage?: (usage: OcxUsage) => boolean;
   /** Observe the exact adapter request selected for each routed-model iteration. */
   onRequestBuilt?: (request: AdapterRequest) => void;
