@@ -11,7 +11,15 @@ import { withoutGitRepositoryEnv } from "../../scripts/git-repository-env";
 
 export type GitRunner = (...args: string[]) => string;
 
-const NULL_DEVICE = process.platform === "win32" ? "NUL" : "/dev/null";
+/**
+ * GIT_CONFIG_GLOBAL for a git that must read no global config. The same literal on every
+ * platform: Git for Windows maps "/dev/null" to its null device when it opens the file
+ * (compat/mingw.c). "NUL" is not an option: Git for Windows 2.56 rejects it with
+ * `fatal: unable to access 'NUL': Invalid argument`, which failed every fixture repository and
+ * the config guard on Windows. A missing file is not a fallback either (`git config --global
+ * --list` exits 128 on one), so test-git-isolation runs the installed git against this value.
+ */
+export const EMPTY_GLOBAL_GIT_CONFIG = "/dev/null";
 // Assembled from fragments: scripts/privacy-scan.ts rejects email-shaped literals.
 const FIXTURE_EMAIL = ["fixture", "example.test"].join("@");
 export const FIXTURE_GIT_IDENTITY = { name: "OpenCodex Fixture", email: FIXTURE_EMAIL } as const;
@@ -28,7 +36,7 @@ export function fixtureGitEnv(
   return {
     ...withoutGitRepositoryEnv(base),
     GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: NULL_DEVICE,
+    GIT_CONFIG_GLOBAL: EMPTY_GLOBAL_GIT_CONFIG,
     GIT_AUTHOR_NAME: FIXTURE_GIT_IDENTITY.name,
     GIT_AUTHOR_EMAIL: FIXTURE_GIT_IDENTITY.email,
     GIT_COMMITTER_NAME: FIXTURE_GIT_IDENTITY.name,

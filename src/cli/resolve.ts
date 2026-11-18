@@ -21,6 +21,8 @@
  *  - exit 1 when the CLI cannot resolve: an invalid config.json must NOT be answered
  *    with `loadConfig`'s repair-to-defaults behaviour, because that hands the caller
  *    a guessed port; and unknown liveness must not be answered as absence.
+ *    Under `--json` that exit still prints its one document: a `ResolveFailureJson`
+ *    (`ok: false` plus a fixed `reason`) beside the unchanged stderr line (#8318).
  *  - exit 64 for any argument, pre-parsed in src/cli/root.ts before preflight side
  *    effects, mirroring `ocx ready`. The verb is read-only and listed in
  *    skipsCodexShimAutoRestore, so a lookup made to populate a consent surface never
@@ -135,6 +137,18 @@ export interface ResolveJson {
 export type ResolveTakeover =
   | { kind: "supported"; protocolVersion: number; minimumCliVersion: string; token: string }
   | { kind: "blocked"; reason: string; detail: string; minimumCliVersion: string };
+
+/**
+ * The document `--json` prints when resolve exits 1 (#8318). It carries no liveness, port or
+ * ownership field, so nothing in it can be read as absence; `error` repeats the stderr line.
+ * A shell that keys on the exit status, as the desktop does, can ignore it.
+ */
+export interface ResolveFailureJson {
+  schema: typeof RESOLVE_SCHEMA;
+  ok: false;
+  reason: "config_unreadable" | "config_invalid" | "discovery_failed" | "liveness_unknown";
+  error: string;
+}
 
 export interface ResolveArgs {
   json: boolean;
@@ -273,28 +287,30 @@ export async function runResolve(args: ResolveArgs, io: ResolveIo = {}): Promise
   const resolveState = io.resolveState ?? resolveServiceState;
   const observeManagers = io.observeManagers ?? observeManagingClis;
   const configHome = configDir();
+  const fail = (reason: ResolveFailureJson["reason"], error: string): number => {
+    stderr.error(error);
+    if (args.json) stdout.log(JSON.stringify({ schema: RESOLVE_SCHEMA, ok: false, reason, error } satisfies ResolveFailureJson));
+    return 1;
+  };
   let diagnostics: ConfigDiagnostics;
   try {
     diagnostics = readDiagnostics();
   } catch (error) {
     // A resolution that could not run must not read as "no proxy": the caller has to
     // refuse to guess (D5) rather than treat this as a proven-absent verdict.
-    stderr.error(`resolve failed: ${error instanceof Error ? error.message : String(error)}`);
-    return 1;
+    return fail("config_unreadable", `resolve failed: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (diagnostics.source === "fallback") {
     // An invalid config must not resolve to defaults: the effective port would be a
     // guess at 10100 while the operator's config.port is unread. The repair-to-defaults
     // policy in loadConfig is for interactive recovery, not for a shell contract.
-    stderr.error(`resolve failed: the config in ${configHome} is invalid (${diagnostics.error ?? "unknown error"}); refusing to guess.`);
-    return 1;
+    return fail("config_invalid", `resolve failed: the config in ${configHome} is invalid (${diagnostics.error ?? "unknown error"}); refusing to guess.`);
   }
   let live: LiveProxy | null;
   try {
     live = await findLive();
   } catch (error) {
-    stderr.error(`resolve failed: ${error instanceof Error ? error.message : String(error)}`);
-    return 1;
+    return fail("discovery_failed", `resolve failed: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (!live) {
     // findLiveProxy collapses "definitely nothing" and "could not tell" into the same
@@ -310,8 +326,7 @@ export async function runResolve(args: ResolveArgs, io: ResolveIo = {}): Promise
       provenDown = false;
     }
     if (!provenDown) {
-      stderr.error("resolve: liveness is unknown (a probe timed out or a listener withheld /healthz); refusing to treat unknown as absent.");
-      return 1;
+      return fail("liveness_unknown", "resolve: liveness is unknown (a probe timed out or a listener withheld /healthz); refusing to treat unknown as absent.");
     }
   }
   let ownership: ServiceOwnershipResolution;

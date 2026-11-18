@@ -822,7 +822,8 @@ ocx agent sidecar status --json
 ```
 
 System boolean options are `--show-codex-credits`, `--account-picker`,
-`--main-account-hard-lock`, `--ultra-fast-tier`, `--fast-rows`, each on/off.
+`--main-account-hard-lock`, `--ultra-fast-tier`, `--fast-rows`, `--reserve`, each on/off.
+`--reserve` is Luna Reserve compatibility, independent of `--desktop-authless`.
 Credit display does not authorize paid use, and system Ultra Fast is separate
 from provider Fast. New-option writes report only observed task fields;
 Ultra Fast requires the command's same-target GET read-back. Pending catalog,

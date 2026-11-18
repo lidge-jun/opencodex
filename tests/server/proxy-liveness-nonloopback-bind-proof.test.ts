@@ -1,5 +1,7 @@
 import { expect, spyOn, test } from "bun:test";
-import { createServer } from "node:net";
+import { EventEmitter } from "node:events";
+import { createServer, type Socket } from "node:net";
+import { directLocalHttpFetch } from "../../src/server/direct-local-http";
 import { canBindAddress, findLiveProxy, observeProxyLiveness, probeEndpointLiveness, probePortOwner, type LivenessIo } from "../../src/server/proxy-liveness";
 
 // Connecting to this machine's own non-loopback address (a Tailscale IP) with nothing listening can
@@ -268,3 +270,62 @@ test("canBindAddress is true for a free port and false while another listener ho
   expect(await canBindAddress("127.0.0.1", port)).toBe(true);
   expect(await canBindAddress("127.0.0.1", 0)).toBe(false);
 });
+
+// #8318: `ocx resolve` re-asks every endpoint through probeEndpointLiveness. A connect that times out on
+// this machine's own non-loopback address is settled by an exclusive bind; a timeout after the
+// connect, a bind that fails, or another machine's address stays unknown.
+function silentSocket(connects: boolean): Socket {
+  const socket = Object.assign(new EventEmitter(), {
+    setTimeout() { return socket; },
+    destroy() { return socket; },
+    write() { return true; },
+  }) as unknown as Socket;
+  if (connects) queueMicrotask(() => socket.emit("connect"));
+  return socket;
+}
+const directFetch = (connects: boolean) => ((url: string, init?: RequestInit) =>
+  directLocalHttpFetch(url, init, { connect: () => silentSocket(connects) })) as typeof fetch;
+
+function endpointProbe(opts: { hostname: string; connects?: boolean; local?: boolean; bound?: boolean }) {
+  const proofs: Array<[string, number]> = [];
+  const result = probeEndpointLiveness({ port: 10100, hostname: opts.hostname }, {
+    fetchFn: directFetch(opts.connects ?? false),
+    timeoutMs: 20,
+    localAddressFn: () => opts.local ?? true,
+    bindProofFn: async (host, port) => { proofs.push([host, port]); return opts.bound ?? true; },
+  });
+  return { result, proofs };
+}
+
+test("a connect timeout on this machine's own address is dead when the address can be bound (#8318)", async () => {
+  const probe = endpointProbe({ hostname: "100.88.46.13" });
+  expect(await probe.result).toBe("dead");
+  expect(probe.proofs).toEqual([["100.88.46.13", 10100]]);
+});
+
+test("a connect timeout stays unknown when the exclusive bind fails (#8318)", async () => {
+  const probe = endpointProbe({ hostname: "100.88.46.13", bound: false });
+  expect(await probe.result).toBe("unknown");
+  expect(probe.proofs).toHaveLength(1);
+});
+
+test("a timeout after the connect is never settled by a bind (#8318)", async () => {
+  const probe = endpointProbe({ hostname: "100.88.46.13", connects: true });
+  expect(await probe.result).toBe("unknown");
+  expect(probe.proofs).toEqual([]);
+});
+
+test("another machine's address is never bound (#8318)", async () => {
+  const probe = endpointProbe({ hostname: "100.88.46.13", local: false });
+  expect(await probe.result).toBe("unknown");
+  expect(probe.proofs).toEqual([]);
+});
+
+for (const hostname of ["127.0.0.1", "0.0.0.0", "localhost", "my-host.example"]) {
+  test(`a ${hostname} endpoint keeps a connect timeout unknown without a bind (#8318)`, async () => {
+    const probe = endpointProbe({ hostname });
+    expect(await probe.result).toBe("unknown");
+    expect(probe.proofs).toEqual([]);
+  });
+}
+

@@ -643,13 +643,13 @@ test.each([
 });
 
 test("account 403 cools the final sender even when the request's rotation cap is spent", async () => {
-  const ids = await seed(5);
+  const ids = await seed(8);
   const response = await post(configFor(() => accountRefusal()));
   expect(response.status).toBe(403);
   await response.text();
-  expect(sent).toHaveLength(4);
-  for (let index = 0; index < 4; index++) expect(getAnthropicAccountHealthSnapshot(ids[index]!)).not.toBeNull();
-  expect(getEligibleAnthropicAccounts()).toEqual([ids[4]!]);
+  expect(sent).toHaveLength(6);
+  for (let index = 0; index < 6; index++) expect(getAnthropicAccountHealthSnapshot(ids[index]!)).not.toBeNull();
+  expect(getEligibleAnthropicAccounts()).toEqual(ids.slice(6));
 });
 
 test("strict model route does not widen on an account 403", async () => {

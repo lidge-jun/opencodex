@@ -145,6 +145,13 @@ envelopes, and real HTTP streams; `tests/server/inbound-body-budget.test.ts` cov
 
 ## Stream-buffer accounting
 
+`src/responses/citation-markers.ts` keeps unchanged streaming memory-citation text, including
+literal `<` characters and complete real blocks, as input spans. Ordinary `<` characters advance
+a cursor without an output fragment or body-lookahead slice; only a rewrite or held suffix
+flushes the unchanged span. Full opening-tag candidates keep the bounded lookahead and 16,384-unit
+hold limit. Output, held-byte accounting and Chat/Messages passthrough remain unchanged.
+`tests/responses/citation-markers.test.ts` bounds slice counts and covers bridge delta/done parity.
+
 Kiro tool-input collection in `src/adapters/kiro/stream.ts` keeps a per-call UTF-8 byte
 total, measuring only the arriving fragment instead of remeasuring retained chunks.
 Each new call starts at zero; transient replacement admission, per-call limits and
@@ -320,6 +327,13 @@ truncates diagnostic text at UTF-8 code-point boundaries without allocating arra
 byte sizing retains TextEncoder's coercion behavior for legacy non-string runtime callers.
 These optimizations do not add request queues, retry policies, or RSS-based admission gates.
 
+Zed framing in `src/adapters/zed.ts` searches retained text for newlines only when newly decoded
+text contains one. An incomplete line is not rescanned for every transport fragment. The existing
+character ceiling is checked on every read, including reads without a newline; framing, Unicode
+decoding, terminal suppression and EOF failure behavior stay unchanged.
+`tests/providers/zed-hosted-provider.test.ts` bounds newline-search work and checks fragmented
+UTF-8, split CRLF and coalesced frames.
+
 The buffered collector in `src/adapters/zed.ts` charges each delegated event before retaining it
 and releases owned events when collection fails. Its translated stream is cancelled on early exit
 for every provider family. `src/adapters/openai-responses/passthrough.ts` releases partial text and
@@ -379,8 +393,9 @@ inspection branch leads its client by one chunk instead of the allowance, the ea
 queues one chunk instead of 8 MiB, and each stage that reads a paced source (the block
 rewrite, the failed-tail relay, the translator-budget and account-lease wrappers, a combo
 preflight's replay) queues
-nothing ahead and marks its own output, so the chain reads as the client asks. Only a Remote
-Link turn while the link WebSocket feature is on is paced (#8601, `remote-link.md`); its
+nothing ahead and marks its own output, so the chain reads as the client asks. Every relayed
+Remote Link turn is paced, each target a combo dispatches for one included, with the link
+WebSocket feature on or off (#8601, `remote-link.md`); its
 upstream chunks are also cut into 256 KiB views (`sliceChunks`), so each stage holds a slice
 rather than a whole source chunk. Unmarked streams keep every queue described above.
 The slicer sits where delivery picks its relay (`passthrough-delivery.ts`), so the stages

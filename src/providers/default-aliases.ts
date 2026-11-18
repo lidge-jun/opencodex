@@ -98,7 +98,9 @@ export function effectiveModelAliases(
       const rule = builtinRule(id);
       if (!rule) continue;
       const key = rule.alias.toLowerCase();
-      claims.set(key, [...(claims.get(key) ?? []), id]);
+      const ids = claims.get(key);
+      if (ids) ids.push(id);
+      else claims.set(key, [id]);
     }
     for (const [alias, ids] of claims) {
       if (ids.length !== 1) continue;
@@ -161,7 +163,10 @@ export function templateAliasPlan(
     const expanded = expandAliasTemplate(template, providerAlias, id);
     if ("skip" in expanded) { plan.skipped.push({ id, reason: expanded.skip }); continue; }
     const key = expanded.alias.toLowerCase();
-    candidates.set(key, [...(candidates.get(key) ?? []), { id, alias: expanded.alias }]);
+    const rows = candidates.get(key);
+    const row = { id, alias: expanded.alias };
+    if (rows) rows.push(row);
+    else candidates.set(key, [row]);
   }
   for (const [key, rows] of candidates) {
     if (rows.length > 1) {
