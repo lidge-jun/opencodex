@@ -18,7 +18,36 @@ function dto(row: Partial<Parameters<typeof addRequestLog>[0]>) {
   if (!entry) throw new Error("expected test request in usage ledger");
   return JSON.parse(JSON.stringify(requestLogDto(entry)));
 }
-test('mixed credit plus lower bound and exact token leg retains bound',()=>{let d=dto({provider:'combo',usage:{inputTokens:400000,outputTokens:2000},attempts:[attempt(1,{inputTokens:1000,outputTokens:10,providerCredits:2}),attempt(2,{inputTokens:300000,outputTokens:1000},{tierOutcome}),attempt(3,{inputTokens:1000,outputTokens:10})]}); expect(d.displayMetrics.cost.estimate.priorityLowerBound).toBe(true)});
+test.each([
+  { label: "missing cache detail", cache: {}, provenance: undefined, parentProvenance: undefined, estimated: false, floor: undefined, total: 2.504 },
+  { label: "synthesized zero", cache: { cacheReadInputTokens: 0 }, provenance: "synthesized", parentProvenance: "observed", estimated: false, floor: undefined, total: 2.504 },
+  { label: "inherited synthesized zero", cache: { cacheReadInputTokens: 0 }, provenance: undefined, parentProvenance: "synthesized", estimated: false, floor: undefined, total: 2.504 },
+  { label: "observed zero", cache: { cacheReadInputTokens: 0 }, provenance: "observed", parentProvenance: "synthesized", estimated: false, floor: true, total: 2.504 },
+  { label: "observed hit on a legacy row", cache: { cacheReadInputTokens: 300_000 }, provenance: undefined, parentProvenance: undefined, estimated: false, floor: true, total: 1.604 },
+  { label: "estimated usage with observed zero", cache: { cacheReadInputTokens: 0 }, provenance: "observed", parentProvenance: undefined, estimated: true, floor: undefined, total: 2.504 },
+] as const)("mixed Combo prices a non-floor token leg with $label", ({ cache, provenance, parentProvenance, estimated, floor, total }) => {
+  const result = dto({
+    provider: "combo",
+    usage: { inputTokens: 601_000, outputTokens: 2_010 },
+    cacheProvenance: parentProvenance,
+    attempts: [
+      attempt(1, { inputTokens: 1_000, outputTokens: 10, providerCredits: 2 }),
+      attempt(2, { inputTokens: 300_000, outputTokens: 1_000, cacheReadInputTokens: 0 }, { tierOutcome, cacheProvenance: "observed" }),
+      attempt(3, { inputTokens: 300_000, outputTokens: 1_000, ...cache }, {
+        cacheProvenance: provenance, usageStatus: estimated ? "estimated" : "reported",
+      }),
+    ],
+  });
+  const { estimate, estimateReasons } = result.displayMetrics.cost;
+  expect(estimate.billing).toEqual({ source: "mixed" });
+  expect(estimate.attempts[1].priorityLowerBound).toBe(true);
+  expect(estimate.attempts[2].estimated).toBe(estimated);
+  expect(estimate.attempts[2].priorityLowerBound).toBeUndefined();
+  expect(estimate.cost.total).toBeCloseTo(total, 9);
+  expect(estimate.priorityLowerBound).toBe(floor);
+  expect(estimateReasons.includes("priority_lower_bound")).toBe(floor === true);
+  expect(estimateReasons.includes("cache_detail_missing")).toBe(!("cacheReadInputTokens" in cache) || (provenance ?? parentProvenance) === "synthesized");
+});
 test('finite credit charges never serialize aggregate input as null',()=>{let d=dto({provider:'combo',usage:{inputTokens:1,outputTokens:1},attempts:[attempt(1,{inputTokens:1e308,outputTokens:0,providerCredits:1}),attempt(2,{inputTokens:1e308,outputTokens:0,providerCredits:1})]}); expect(d.displayMetrics.cost.kind).toBe('unavailable')});
 test('synthesized zero without credit is not observed free',()=>{let d=dto({usageStatus:'estimated',usage:{inputTokens:50,outputTokens:0,estimated:true}}); expect(d.displayMetrics.cost.kind).toBe('unavailable')});
 test('negative credits survive normalization as unpriceable',()=>{let d=dto({usage:{inputTokens:50,outputTokens:0,providerCredits:-1}}); expect(d.displayMetrics.cost.kind).toBe('unavailable')});

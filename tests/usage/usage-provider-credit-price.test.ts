@@ -449,7 +449,7 @@ describe("credit billing does not inherit token-rate lower bounds", () => {
     const combo = estimateComboCost([
       { ordinal: 1, provider: "xai", model: "grok-4.7", usage: longPriority, usageStatus: "estimated", tierOutcome },
       { ordinal: 2, provider: "xai", model: "grok-4.7", usage: longToken, usageStatus: "reported", tierOutcome },
-      { ordinal: 3, provider: "xai", model: "grok-4.7", usage: { inputTokens: 100, outputTokens: 10 }, usageStatus },
+      { ordinal: 3, provider: "xai", model: "grok-4.7", usage: { inputTokens: 100, outputTokens: 10, cacheReadInputTokens: 0 }, usageStatus },
     ]);
 
     expect(combo?.billing).toEqual({ source: "mixed" });
