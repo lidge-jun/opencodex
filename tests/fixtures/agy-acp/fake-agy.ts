@@ -34,9 +34,14 @@ process.stdin.on("data", (chunk: string) => {
     } else if (frame.method === "session/prompt") {
       const update = (sessionUpdate: string, text: string) =>
         write({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "fake-1", update: { sessionUpdate, content: { type: "text", text } } } });
-      if (frame.params.prompt[0].text.includes("fixture reasoning first")) {
-        update("agent_thought_chunk", "short thought");
-        update("agent_message_chunk", "answer ".repeat(200));
+      const prompt = frame.params.prompt[0].text;
+      if (prompt.includes("fixture refusal")) {
+        write({ jsonrpc: "2.0", id: frame.id, result: { stopReason: "refusal", usage: { inputTokens: 7, outputTokens: 2 } } });
+        continue;
+      }
+      if (prompt.includes("fixture reasoning first")) {
+        update("agent_thought_chunk", "o");
+        update("agent_message_chunk", "short answer.");
       } else {
         update("agent_message_chunk", `fake acp answer for ${config[0]!.currentValue}`);
       }

@@ -181,20 +181,20 @@ export type AcpFailureCode =
   | "agy_acp_model_unproven" | "agy_acp_model_switched" | "agy_acp_unsupported_selection" | "agy_acp_unavailable";
 
 export type AcpTerminal =
-  | { kind: "done"; stopReason?: "max_tokens" | "content_filter" }
+  | { kind: "done"; stopReason?: "max_tokens" }
+  | { kind: "refusal" }
   | { kind: "aborted" }
   | { kind: "error"; code: AcpFailureCode };
 
 /**
- * The complete terminal table (plan 080, B6). Only end_turn, max_tokens and refusal are a finished
- * answer; a turn limit, an unrequested cancellation and anything unrecognised are errors, because the
- * Responses bridge would otherwise read an unknown done reason as a completed turn.
+ * Only end_turn and max_tokens complete an answer. A refusal ends the turn without retry.
+ * A turn limit, an unrequested cancellation and anything unrecognised are errors.
  */
 export function acpTerminal(stopReason: unknown, callerAborted: boolean): AcpTerminal {
   switch (stopReason) {
     case "end_turn": return { kind: "done" };
     case "max_tokens": return { kind: "done", stopReason: "max_tokens" };
-    case "refusal": return { kind: "done", stopReason: "content_filter" };
+    case "refusal": return { kind: "refusal" };
     case "max_turn_requests": return { kind: "error", code: "agy_acp_turn_limit" };
     case "cancelled": return callerAborted ? { kind: "aborted" } : { kind: "error", code: "agy_acp_cancelled" };
     default: return { kind: "error", code: "agy_acp_protocol" };

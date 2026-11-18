@@ -149,7 +149,7 @@ describe.skipIf(process.platform === "win32")("antigravity-acp through the serve
     }
   });
 
-  test("buffered reasoning arrives before a long answer in the final output items", async () => {
+  test("buffered reasoning arrives before an answer in the final output items", async () => {
     saveConfig(config());
     const server = startServer(0);
     try {
@@ -162,6 +162,34 @@ describe.skipIf(process.platform === "win32")("antigravity-acp through the serve
       const completed = (await response.text()).split("\n").filter(line => line.startsWith("data: {"))
         .map(line => JSON.parse(line.slice("data: ".length))).find(event => event.type === "response.completed");
       expect(completed?.response.output.map((item: { type: string }) => item.type)).toEqual(["reasoning", "message"]);
+      expect(completed?.response.output[0]?.summary).toEqual([{ type: "summary_text", text: "o" }]);
+      expect(completed?.response.output[1]?.content).toEqual([expect.objectContaining({ type: "output_text", text: "short answer." })]);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("an ACP refusal ends Responses streaming with a non-retryable error and usage", async () => {
+    saveConfig(config());
+    const server = startServer(0);
+    try {
+      const response = await fetch(new URL("/v1/responses", server.url), {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: body.replace("hello", "fixture refusal"),
+      });
+      expect(response.status).toBe(200);
+      const terminal = (await response.text()).split("\n").filter(line => line.startsWith("data: {"))
+        .map(line => JSON.parse(line.slice("data: ".length)))
+        .filter(event => ["response.failed", "response.incomplete", "response.completed"].includes(event.type));
+      expect(terminal).toEqual([expect.objectContaining({
+        type: "response.failed",
+        response: expect.objectContaining({
+          status: "failed", retryable: false,
+          error: expect.objectContaining({ code: "invalid_prompt" }),
+          usage: expect.objectContaining({ input_tokens: 7, output_tokens: 2 }),
+        }),
+      })]);
+      expect(recordedLaunches()).toEqual([["--version"], ["acp", "--sandbox"]]);
     } finally {
       await server.stop(true);
     }

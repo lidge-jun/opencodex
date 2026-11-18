@@ -1029,8 +1029,8 @@ Protocol v1 (newline-delimited JSON-RPC on stdio).
   On POSIX, cleanup confirms that the CLI's process group is gone before removing the workspace.
   A descendant that deliberately leaves the group is outside that check. Removing the workspace exposes no
   pre-existing user files.
-- `end_turn` completes; `max_tokens` and `refusal` complete as truncated and content-filtered; `max_turn_requests`, an
-  unrequested `cancelled` and an unknown stop reason fail the turn.
+- `end_turn` completes; `max_tokens` truncates the answer. A `refusal` ends a Responses stream with `response.failed` and `invalid_prompt` so Codex stops retrying.
+  `max_turn_requests`, an unrequested `cancelled` and an unknown stop reason fail the turn.
 - Refuses subagent, spawned-thread, Codex memory and automatic compaction turns, combo members and combo decision calls, and
   subagent-fallback routing. Chat Completions, Responses and Responses Compact return `403 agy_acp_interactive_only`
   for labeled unattended turns. Responses WebSocket applies the automatic compaction check to each frame. Manual

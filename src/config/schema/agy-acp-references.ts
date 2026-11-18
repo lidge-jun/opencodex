@@ -157,16 +157,13 @@ export function selectorCandidateProviders(config: ConfigLike, selector: string)
 
 const CREDENTIAL_MESSAGE = "The Antigravity CLI (ACP) provider uses the CLI's own sign-in: it takes no API key, key pool, account or OAuth setting.";
 
-/** Issues for the Antigravity ACP provider rules; empty when there are no ACP providers. */
-export function agyAcpConfigIssues(config: ConfigLike): AgyAcpConfigIssue[] {
+/** Invalid ACP-only settings. The disk loader uses the same checks to repair just these leaves. */
+export function agyAcpProviderFieldIssues(config: ConfigLike): AgyAcpConfigIssue[] {
   const issues: AgyAcpConfigIssue[] = [];
-  const providers = providerEntries(config);
-  const acp = new Set(providers.filter(([name, provider]) => isAgyAcpProvider(name, provider)).map(([name]) => name));
-  if (acp.size === 0) return issues;
-  for (const [name, provider] of providers) {
-    if (!acp.has(name)) continue;
+  for (const [name, provider] of providerEntries(config)) {
+    if (!isAgyAcpProvider(name, provider)) continue;
     const at = (field: string) => ["providers", name, field];
-    if (typeof provider.apiKey === "string" && provider.apiKey.trim()) issues.push({ path: at("apiKey"), message: CREDENTIAL_MESSAGE });
+    if (provider.apiKey !== undefined && (typeof provider.apiKey !== "string" || provider.apiKey.trim())) issues.push({ path: at("apiKey"), message: CREDENTIAL_MESSAGE });
     if (provider.apiKeyPool !== undefined) issues.push({ path: at("apiKeyPool"), message: CREDENTIAL_MESSAGE });
     if (provider.oauthAccountFailover !== undefined) issues.push({ path: at("oauthAccountFailover"), message: CREDENTIAL_MESSAGE });
     // Account binding fields: the CLI's single sign-in is the only account this provider has.
@@ -189,6 +186,14 @@ export function agyAcpConfigIssues(config: ConfigLike): AgyAcpConfigIssue[] {
       issues.push({ path: at("defaultModel"), message: "The Antigravity CLI (ACP) provider serves Gemini models only." });
     }
   }
+  return issues;
+}
+
+/** Issues for the Antigravity ACP provider rules; empty when there are no ACP providers. */
+export function agyAcpConfigIssues(config: ConfigLike): AgyAcpConfigIssue[] {
+  const acp = new Set(providerEntries(config).filter(([name, provider]) => isAgyAcpProvider(name, provider)).map(([name]) => name));
+  if (acp.size === 0) return [];
+  const issues = agyAcpProviderFieldIssues(config);
   for (const row of customModelEntries(config)) {
     if (acp.has(row.provider) && (typeof row.modelId !== "string" || !GEMINI_ID.test(row.modelId))) {
       issues.push({ path: ["customModels", row.index, "modelId"], message: "The Antigravity CLI (ACP) provider serves Gemini models only." });
@@ -213,6 +218,7 @@ export function agyAcpConfigIssues(config: ConfigLike): AgyAcpConfigIssue[] {
 /** Selectors the adapter refuses for unattended helpers and subagents. */
 export function agyAcpUnattendedTargetIssues(config: ConfigLike): AgyAcpConfigIssue[] {
   const issues: AgyAcpConfigIssue[] = [];
+  if (!providerEntries(config).some(([name, provider]) => isAgyAcpProvider(name, provider))) return issues;
   const selectsAcp = (selector: unknown): boolean =>
     typeof selector === "string" && [...selectorCandidateProviders(config, selector)].some(name => {
       const provider = config.providers?.[name];

@@ -58,7 +58,7 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   Google protocol parity unit in lidge-jun/opencodex#8771). Before launching ACP, `agy --version` must exit zero
   and print a single numeric version at or above the minimum. The verdict binds to the executable’s
   real path, device, inode, size, modification time and change time. The adapter checks this identity
-  after workspace setup, re-probes a replacement and launches the verified real path. The CLI owns its Google sign-in,
+  after workspace setup, re-probes a replacement and launches the verified real path. A cancelled request reaps its uncached probe without recording a verdict. The CLI owns its Google sign-in,
   so the `antigravity-acp` row is keyless (`authKind: "key"`, `keyOptional`). The init wizard skips the key question
   and omits the key field for ACP. The login command prints the host sign-in command, and API-key validation
   refuses ACP before any request. Key-optional LiteLLM still accepts a key or an environment reference. Structural config validation
@@ -95,13 +95,13 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   Each `session/prompt` reserves and reports one physical inference send from
   the shared request budget, including a retried turn. Model selection is phase-aware and fails closed when the Gemini model is not
   confirmed against the current complete selector, including after a reply that reuses an opaque model ID.
-  The adapter also proves the requested thinking level against the latest snapshot before dispatch.
+  Explicit non-Gemini evidence in the model ID or label invalidates the selection. The adapter checks the model and thinking level again after processing all complete frames in the current stdout batch and before spending the dispatch permit.
   Selection rejects duplicate setting IDs, oversized snapshots and nested groups. The adapter ignores updates
   until it has a session ID and accepts updates only for that session. Permission requests are answered `cancelled`.
   Selection errors use fixed text. Answer and reasoning
   deltas each pass through a bounded streaming redactor for minted OpenCodex credentials, Bearer values,
   OAuth token fields, and token-shaped JWT and API-key strings. Long values stay masked across frames.
-  After masking an OAuth value, scanning resumes at the first unconsumed character.
+  For quoted JSON OAuth fields, the redactor streams separator whitespace before masking the value. Scanning resumes at the first unconsumed character after the value.
   The redactor publishes safe prefixes on each update and reports buffered activity to the streaming
   watchdog. It preserves ACP arrival order across channels. If an uncertain suffix holds up a full queue,
   it masks that suffix and continues scanning for its continuation in the original channel. Protocol errors may include a numeric
@@ -109,7 +109,7 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   system temporary directory outside the OpenCodex home. Windows requires a private NTFS ACL before either
   child can start. Retained workspaces can accumulate when cleanup repeatedly cannot be confirmed.
   A confirmed spawn failure without an assigned PID leaves no process to reap. Deferred startup errors
-  are handled even if the child has no pipes.
+  are handled even if the child has no pipes. The adapter parses a final stdout reply without a trailing newline and fails an unanswered turn at EOF.
   The version probe and each turn start with a fresh private workspace containing only an empty temp directory.
   On POSIX, workspace removal follows confirmed leader exit and a group check returning ESRCH after SIGKILL or
   ESRCH. Descendants that deliberately leave the process group are outside that check. Removing the workspace
@@ -268,7 +268,7 @@ The bridge keeps an open function, custom, or tool-search call incomplete when a
 
 A provider web search still in flight at that truncated terminal is finalized as `failed`, the same status it already receives from the error and explicit-incomplete terminals. It never returned results, so reporting it as `completed` would leave the client showing a finished search for a turn the provider cut short.
 
-`src/adapters/anthropic.ts` maps a `refusal` or `content_filter` stop reason to an explicit `incomplete` adapter event with `reason: "content_filter"` and `retryable: false` instead of `done` with that stopReason (#4312). A `done` with that stopReason would reach the client as an incomplete with no verdict at all. `src/adapters/kiro/stream.ts` emits the same event for a `CONTENT_FILTERED` or `GUARDRAIL_INTERVENED` stop. The verdict alone does not stop Codex, which retries every `response.incomplete`; the Responses bridge turns the Anthropic and Kiro event into a terminal `response.failed` for a Responses client ([Adapter-to-Responses bridge](../transports/responses.md#adapter-to-responses-bridge)). Partial output, tool-call integrity, and usage are preserved; `max_tokens` remains a `done` so a legitimate truncation can continue.
+`src/adapters/anthropic.ts` maps a `refusal` or `content_filter` stop reason to an explicit `incomplete` adapter event with `reason: "content_filter"` and `retryable: false` instead of `done` with that stopReason (#4312). A `done` with that stopReason would reach the client as an incomplete with no verdict at all. `src/adapters/kiro/stream.ts` emits the same event for a `CONTENT_FILTERED` or `GUARDRAIL_INTERVENED` stop. `src/adapters/agy-acp/adapter.ts` emits it for an ACP `refusal`. The verdict alone does not stop Codex, which retries every `response.incomplete`; the Responses bridge turns the Anthropic, Kiro and ACP event into a terminal `response.failed` for a Responses client ([Adapter-to-Responses bridge](../transports/responses.md#adapter-to-responses-bridge)). Partial output, tool-call integrity, and usage are preserved; `max_tokens` remains a `done` so a legitimate truncation can continue.
 
 The translated Anthropic stream ends at `message_stop` after emitting its existing terminal
 classification and usage. The parser does not inspect later records in that response body;

@@ -23,6 +23,8 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 type Frame = Record<string, any>;
 interface AgentApi {
   reply(id: unknown, result: unknown): void;
+  replyWithUpdate(id: unknown, result: unknown, update: Frame): void;
+  endStdout(id?: unknown, result?: unknown): void;
   error(id: unknown, code: number, message: string): void;
   notify(update: Record<string, unknown>, sessionId?: string): void;
   request(id: unknown, method: string, params?: unknown): void;
@@ -66,11 +68,15 @@ interface Harness { events: AdapterEvent[]; sent: Frame[]; spawned: number; prob
 function script(onFrame?: (frame: Frame, api: AgentApi, state: { config: Frame[] }) => boolean | void, options: { initial?: Frame[]; systemPrompt?: boolean; stopReason?: string } = {}) {
   return (child: FakeChild, sent: Frame[]) => {
     const state = { config: options.initial ?? [modelOption("gemini-3.8-flash", OFFERED), thoughtOption("high")] };
-    const write = (frame: Frame) => child.stdout.write(`${JSON.stringify(frame)}\n`);
+    const encode = (frame: Frame) => `${JSON.stringify(frame)}\n`;
+    const write = (frame: Frame) => child.stdout.write(encode(frame));
+    const updateFrame = (update: Frame, sessionId = "s1") => ({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update } });
     const api: AgentApi = {
       reply: (id, result) => write({ jsonrpc: "2.0", id, result }),
+      replyWithUpdate: (id, result, update) => child.stdout.write(encode({ jsonrpc: "2.0", id, result }) + encode(updateFrame(update))),
+      endStdout: (id, result) => child.stdout.end(id === undefined ? "" : JSON.stringify({ jsonrpc: "2.0", id, result })),
       error: (id, code, message) => write({ jsonrpc: "2.0", id, error: { code, message } }),
-      notify: (update, sessionId = "s1") => write({ jsonrpc: "2.0", method: "session/update", params: { sessionId, update } }),
+      notify: (update, sessionId) => write(updateFrame(update, sessionId)),
       request: (id, method, params) => write({ jsonrpc: "2.0", id, method, params }),
       stderr: text => child.stderr.write(text),
       exit: code => { child.exitCode = code; child.stdout.end(); child.emit("close", code); },
@@ -134,7 +140,7 @@ async function run(agent: ReturnType<typeof script>, opts: {
   return h;
 }
 
-const terminal = (h: Harness) => h.events.filter(e => e.type === "done" || e.type === "error");
+const terminal = (h: Harness) => h.events.filter(e => e.type === "done" || e.type === "incomplete" || e.type === "error");
 const methods = (h: Harness) => h.sent.filter(f => typeof f.method === "string").map(f => f.method as string);
 const errorCode = (h: Harness) => (terminal(h)[0] as { code?: string } | undefined)?.code;
 const adminShape = "ocx_admin_" + "a_".repeat(21) + "A";
@@ -146,6 +152,80 @@ const catalogShape = "ocx_catalog_" + "k".repeat(43);
 afterEach(clearAgyVersionCacheForTests);
 
 describe("agy acp turn", () => {
+  test("aborting an uncached version probe reaps it without caching a verdict or spawning ACP", async () => {
+    const abort = new AbortController();
+    const probe = new FakeChild();
+    const calls: string[] = [];
+    const deps: Partial<AgyAcpDeps> = {
+      probeVersion: undefined,
+      spawn: (_binary, args) => {
+        calls.push(args[0]!);
+        if (args[0] !== "--version") throw new Error("unexpected ACP spawn");
+        if (calls.length === 1) {
+          queueMicrotask(() => abort.abort());
+          // Allow a broken implementation to finish without waiting for the probe timeout.
+          setImmediate(() => {
+            probe.stdout.write("1.5.3\n");
+            probe.emit("close", 0);
+          });
+          return probe as unknown as AgyAcpChild;
+        }
+        const next = new FakeChild();
+        queueMicrotask(() => next.emit("close", 1));
+        return next as unknown as AgyAcpChild;
+      },
+      reap: async () => { calls.push("reap"); },
+    };
+    const stopped = await run(script(), { abort, deps });
+    expect(stopped.events).toEqual([]);
+    expect(stopped.removed).toBe(true);
+    expect(calls).toEqual(["--version", "reap"]);
+    const next = await run(script(), { deps });
+    expect(errorCode(next)).toBe("agy_acp_unavailable");
+    expect(calls).toEqual(["--version", "reap", "--version", "reap"]);
+  });
+
+  test.each([false, true])("validates all decoded stdout frames before writing a prompt (model changed: %s)", async changed => {
+    let sends = 0;
+    const h = await run(script((frame, api, state) => {
+      if (frame.method !== "session/new") return;
+      const model = changed ? "gemini-4-argon" : "gemini-3.8-flash";
+      api.replyWithUpdate(frame.id, { sessionId: "s1", configOptions: state.config }, {
+        sessionUpdate: "config_option_update", configOptions: [modelOption(model, OFFERED)],
+      });
+      return true;
+    }), { sendAccounting: { onPhysicalSend: () => { sends++; } } });
+    expect(methods(h).filter(method => method === "session/prompt")).toHaveLength(changed ? 0 : 1);
+    expect(sends).toBe(changed ? 0 : 1);
+    expect(terminal(h)).toEqual(changed ? [expect.objectContaining({ code: "agy_acp_model_unproven" })] : [{ type: "done" }]);
+  });
+
+  test.each([false, true])("settles when stdout ends with the child still open (valid tail: %s)", async valid => {
+    let reaped = false;
+    const h = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      if (valid) api.endStdout(frame.id, { stopReason: "end_turn" });
+      else api.endStdout();
+      return true;
+    }), { deps: { turnTimeoutMs: 1_000, reap: async () => { reaped = true; } } });
+    expect(reaped).toBe(true);
+    expect(h.removed).toBe(true);
+    expect(terminal(h)).toEqual(valid ? [{ type: "done" }] : [expect.objectContaining({
+      code: "agy_acp_protocol", message: expect.stringContaining("stdout ended before answering"),
+    })]);
+  });
+
+  test.each([
+    ["gemini-3.8-flash", "Claude Opus 5.5", false],
+    ["claude-opus-5-5", "Gemini 3.8 Flash", false],
+    ["gemini-3.8-flash", "Recommended", true],
+    ["opaque", "Gemini 3.8 Flash", true],
+  ] as const)("requires consistent Gemini evidence for %s / %s", async (value, name, allowed) => {
+    const h = await run(script(undefined, { initial: [modelOption(value, [], { options: [{ value, name }] })] }));
+    expect(methods(h).includes("session/prompt")).toBe(allowed);
+    expect(terminal(h)).toEqual(allowed ? [{ type: "done" }] : [expect.objectContaining({ code: "agy_acp_model_not_offered" })]);
+  });
+
   test.each(["success", "failure"])("Windows requires a private workspace ACL before spawning (%s)", async outcome => {
     const root = mkdtempSync(join(tmpdir(), "ocx-agy-acl-test-"));
     const calls: string[] = [];
@@ -442,6 +522,7 @@ describe("agy acp turn", () => {
 
   test("preserves ordinary code and prose across the buffering boundary", async () => {
     const example = 'Authorization: required for write requests.\nconst headers = { "Authorization": "run the setup first" };\n'
+      + 'About refresh_token:\nCreate one in settings.\n'
       + 'const token = process.env.OPENAI_API_KEY; // ocx_admin_…\n' + "x".repeat(1500) + "😺";
     const h = await run(script((frame, api) => {
       if (frame.method !== "session/prompt") return;
@@ -452,6 +533,34 @@ describe("agy acp turn", () => {
       return true;
     }));
     expect(h.events.flatMap(event => event.type === "text_delta" ? [event.text] : []).join("")).toBe(example + "\nordinary prose");
+  });
+
+  test.each([
+    ["answer", "single LF frame", ["\n"]],
+    ["answer", "split CRLF frames", [" \r", "\n\t"]],
+    ["thought", "single LF frame", ["\n"]],
+    ["thought", "split CRLF frames", [" \r", "\n\t"]],
+    ["answer", "long separator", ["\n", " ".repeat(1300)]],
+  ] as const)("redacts multiline JSON credentials in %s (%s)", async (channel, framing, separator) => {
+    const key = '{"refresh_token":';
+    const value = '"fixture.opaque-value"}';
+    const sessionUpdate = channel === "answer" ? "agent_message_chunk" : "agent_thought_chunk";
+    const h = await run(script((frame, api) => {
+      if (frame.method !== "session/prompt") return;
+      const parts = [key, ...separator, value];
+      for (const text of framing === "single LF frame" ? [parts.join("")] : parts) {
+        api.notify({ sessionUpdate, content: { type: "text", text } });
+      }
+      api.reply(frame.id, { stopReason: "end_turn" });
+      return true;
+    }));
+    const output = h.events.flatMap(event => {
+      if (channel === "answer" && event.type === "text_delta") return [event.text];
+      if (channel === "thought" && event.type === "thinking_delta") return [event.thinking];
+      return [];
+    }).join("");
+    expect(output === key + separator.join("") + '"[REDACTED]"}').toBe(true);
+    expect(h.events.at(-1)).toEqual({ type: "done" });
   });
 
   test.each([
@@ -882,7 +991,7 @@ describe("agy acp turn", () => {
     const cases: Array<[string, Record<string, unknown>]> = [
       ["end_turn", { type: "done" }],
       ["max_tokens", { type: "done", stopReason: "max_tokens" }],
-      ["refusal", { type: "done", stopReason: "content_filter" }],
+      ["refusal", { type: "incomplete", reason: "content_filter", retryable: false }],
       ["max_turn_requests", { type: "error", code: "agy_acp_turn_limit", status: 502 }],
       ["cancelled", { type: "error", code: "agy_acp_cancelled", status: 502 }],
       ["something_new", { type: "error", code: "agy_acp_protocol", status: 502 }],

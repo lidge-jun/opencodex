@@ -11,7 +11,7 @@ import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
 import { mainAccountHardLockFallbackError } from "./schema/main-account-hard-lock-fallback";
 import { fallbackPolicyError } from "./schema/fallback-policy";
 import { anthropicSidecarConfigError } from "./schema/anthropic-account-pool";
-import { agyAcpUnattendedTargetIssues } from "./schema/agy-acp-references";
+import { agyAcpProviderFieldIssues, agyAcpUnattendedTargetIssues } from "./schema/agy-acp-references";
 import {
   modelPinnedEffortsConfigError,
   pinnedReasoningEffortConfigError,
@@ -201,13 +201,20 @@ export function warnDegradedMemoryModels(rawParsed: unknown, validated: OcxConfi
   }
 }
 
-/** Ignore ACP selectors for unattended helpers when reading a hand-edited file. */
-export function sanitizeAgyAcpUnattendedTargetsForLoad(
+/** Repair ACP-specific provider fields and unattended selectors on disk reads. */
+export function sanitizeAgyAcpForLoad(
   parsed: unknown,
   warn: (message: string) => void = message => console.warn(`⚠️  config.json ${message}`),
 ): void {
   const root = rawConfigRecord(parsed);
   if (!root) return;
+  const report = (issue: ReturnType<typeof agyAcpProviderFieldIssues>[number], repair: string): void => {
+    const path = issue.path.map(segment => typeof segment === "string"
+      ? redactSecretString(segment).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g,
+        ch => "\\u" + ch.charCodeAt(0).toString(16).padStart(4, "0"))
+      : segment).join(".");
+    warn(path + ": " + issue.message + " " + repair);
+  };
   // Fallback issues are indexed into their original arrays. Remove later entries first.
   for (const issue of agyAcpUnattendedTargetIssues(root).reverse()) {
     const [section, field, index] = issue.path;
@@ -236,14 +243,25 @@ export function sanitizeAgyAcpUnattendedTargetsForLoad(
         if (fallback.length === 0) delete byModel[field];
       }
     }
-    const path = issue.path.map(segment => typeof segment === "string"
-      ? redactSecretString(segment).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g,
-        ch => "\\u" + ch.charCodeAt(0).toString(16).padStart(4, "0"))
-      : segment).join(".");
     const repair = section === "injectionModel" ? "Disabling managed subagent default sync on load."
       : section === "compactionRouting" ? "Ignoring the automatic compaction trigger on load."
       : "Ignoring this target on load.";
-    warn(`${path}: ${issue.message} ${repair}`);
+    report(issue, repair);
+  }
+  const providers = rawConfigRecord(root.providers);
+  // Apply indexed removals from the end so earlier model entries retain their indices.
+  for (const issue of agyAcpProviderFieldIssues(root).reverse()) {
+    const [, name, field, entry] = issue.path;
+    if (typeof name !== "string" || typeof field !== "string") continue;
+    const provider = rawConfigRecord(providers?.[name]);
+    if (!provider) continue;
+    const value = provider[field];
+    if (field === "models" && Array.isArray(value) && typeof entry === "number") value.splice(entry, 1);
+    else if (field === "modelAliases" && typeof entry === "string") {
+      const aliases = rawConfigRecord(value);
+      if (aliases) delete aliases[entry];
+    } else delete provider[field];
+    report(issue, "Ignoring this provider setting on load.");
   }
 }
 

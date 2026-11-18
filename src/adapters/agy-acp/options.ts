@@ -96,9 +96,13 @@ export function matchValue(values: readonly AcpSelectValue[], wanted: readonly s
   return { ok: false, reason: loose.length > 1 ? "ambiguous" : "none" };
 }
 
-/** A Gemini model option: its value or its name names a Gemini model. */
+const GEMINI_MODEL = /^gemini[-\s.]/i;
+const NON_GEMINI_MODEL = /^(?:claude|gpt|o[134]|grok|deepseek|qwen|llama|gemma|mistral|mixtral)(?:[-\s./]|$)/i;
+
+/** Either field can establish the family, unless the other explicitly contradicts it. */
 export function isGeminiValue(value: AcpSelectValue): boolean {
-  return /^gemini[-\s.]/i.test(value.value.trim()) || /^gemini[-\s.]/i.test(value.name.trim());
+  const fields = [value.value.trim(), value.name.trim()];
+  return fields.some(field => GEMINI_MODEL.test(field)) && !fields.some(field => NON_GEMINI_MODEL.test(field));
 }
 
 /** The advertised value the selector currently holds, when it resolves to exactly one. */

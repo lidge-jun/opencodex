@@ -7,7 +7,7 @@ import { getConfigPath, getDefaultConfig, loadConfig, readConfigDiagnostics, val
 import { configSchema } from "../../src/config/schema/config-schema";
 import { warnAndBackupInvalidConfig } from "../../src/config/salvage";
 import { installIsolatedCodexHome } from "../helpers/isolated-codex-home";
-import { removeTreeAfterBackgroundWork, removeTreeWithRetry } from "../helpers/remove-tree";
+import { removeTreeAfterBackgroundWork } from "../helpers/remove-tree";
 import { AGY_ACP_PROVIDER_ID, agyAcpConfigIssues, selectorCandidateProviders } from "../../src/config/schema/agy-acp-references";
 import { AGY_ACP_DEFAULT_MODEL, AGY_ACP_SEED_MODELS } from "../../src/providers/registry/agy-acp-models";
 import { PROVIDER_REGISTRY } from "../../src/providers/registry";
@@ -38,6 +38,51 @@ describe("antigravity-acp configuration", () => {
     })));
     expect(error).toContain("schema_invalid: providers.antigravity-acp.modelAliases.[REDACTED]");
     expect(error).not.toContain(aliasKey);
+  });
+
+  test("load and diagnostics repair only invalid ACP provider fields while candidate writes reject them", async () => {
+    const home = mkdtempSync(join(tmpdir(), "ocx-agy-acp-provider-repair-"));
+    const previousHome = process.env.OPENCODEX_HOME;
+    const codexHome = installIsolatedCodexHome("ocx-agy-acp-provider-repair-codex-");
+    process.env.OPENCODEX_HOME = home;
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const aliasKey = "sk-proj-" + "q".repeat(44);
+      const key = "fixture.opaque-key";
+      const raw = config({}, { "local-agy": {
+        ...acp, apiKey: key, defaultModel: "claude-opus", models: ["claude-opus", ...acp.models, "gpt-example"],
+        modelAliases: { [aliasKey]: "ignored", "gemini-3.8-flash": "local-flash" },
+      } });
+      expect(messages(validateConfigCandidate(raw))).toContain("providers.local-agy.apiKey");
+      const path = getConfigPath();
+      const bytes = JSON.stringify(raw);
+      writeFileSync(path, bytes);
+      const diagnostics = readConfigDiagnostics();
+      for (const loaded of [loadConfig(), diagnostics.config]) {
+        expect(loaded.defaultProvider).toBe("google");
+        expect(loaded.providers.google?.apiKey).toBe(google.apiKey);
+        expect(loaded.providers["local-agy"]).toMatchObject({
+          ...acp, modelAliases: { "gemini-3.8-flash": "local-flash" },
+        });
+        expect(Object.keys(loaded.providers["local-agy"]?.modelAliases ?? {})).toEqual(["gemini-3.8-flash"]);
+        expect(loaded.providers["local-agy"]?.apiKey).toBeUndefined();
+        expect(loaded.providers["local-agy"]?.defaultModel).toBeUndefined();
+      }
+      expect(diagnostics.source).toBe("file");
+      expect(diagnostics.error).toBeNull();
+      const warnings = diagnostics.warnings.join("\n");
+      expect(warnings).toContain("providers.local-agy.apiKey");
+      expect(warnings).toContain("providers.local-agy.modelAliases.[REDACTED]");
+      expect((warnings + JSON.stringify(warn.mock.calls)).includes(aliasKey)).toBe(false);
+      expect((warnings + JSON.stringify(warn.mock.calls)).includes(key)).toBe(false);
+      expect(readFileSync(path, "utf8")).toBe(bytes);
+    } finally {
+      warn.mockRestore();
+      if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
+      else process.env.OPENCODEX_HOME = previousHome;
+      codexHome.restore();
+      await removeTreeAfterBackgroundWork(home);
+    }
   });
 
   test.each([1, 2])("schema issue messages redact a credential-shaped model key in diagnostics and backup logs (run %d)", async () => {
@@ -273,7 +318,7 @@ describe("antigravity-acp configuration", () => {
     expect(validateConfigCandidate(config({ compactionRouting: { model: "google/gemini-4-argon", triggers: ["auto"] } })).ok).toBe(true);
   });
 
-  test("load repairs only active ACP subagent defaults and auto compaction triggers", () => {
+  test("load repairs only active ACP subagent defaults and auto compaction triggers", async () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-agy-acp-unattended-targets-"));
     const previousHome = process.env.OPENCODEX_HOME;
     const codexHome = installIsolatedCodexHome("ocx-agy-acp-unattended-codex-");
@@ -303,7 +348,7 @@ describe("antigravity-acp configuration", () => {
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
       codexHome.restore();
-      removeTreeWithRetry(home);
+      await removeTreeAfterBackgroundWork(home);
     }
   });
 

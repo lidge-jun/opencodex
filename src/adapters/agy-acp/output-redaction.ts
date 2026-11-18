@@ -10,12 +10,12 @@ const API_KEY = /\bsk-[A-Za-z0-9][A-Za-z0-9._-]{6,}/;
 const OAUTH_LABELS = ["access_token", "refresh_token", "id_token", "access-token", "refresh-token", "id-token", "accessToken", "refreshToken", "idToken"];
 const OAUTH_BOUNDARY = /(?<![A-Za-z0-9_-])/;
 const OAUTH_KEY_END = /["']?[ \t]{0,64}/;
-const OAUTH_ASSIGNMENT = /[:=][ \t]{0,64}/;
 const BARE_OAUTH_CHAR = /[^\s"'`,;{}\[\]<>]/;
-const OAUTH_PREFIX = OAUTH_BOUNDARY.source + "(?:" + OAUTH_LABELS.join("|") + ")" + OAUTH_KEY_END.source + OAUTH_ASSIGNMENT.source;
-const OAUTH_VALUE_START = OAUTH_PREFIX + "(?:([\"'])|(?=" + BARE_OAUTH_CHAR.source + "))";
+const OAUTH_ASSIGNMENT = OAUTH_BOUNDARY.source + "(?:" + OAUTH_LABELS.join("|") + ")" + OAUTH_KEY_END.source + "[:=]";
+const JSON_WHITESPACE = /^[ \t\r\n]*/;
+const INLINE_WHITESPACE = /^[ \t]*/;
 const TOKEN_PATTERN = new RegExp(
-  `${OPEN_CODEX_CREDENTIAL_PATTERN.source}|(${BEARER.source})|(${JWT.source}|${API_KEY.source})|(${OAUTH_VALUE_START})`,
+  `${OPEN_CODEX_CREDENTIAL_PATTERN.source}|(${BEARER.source})|(${JWT.source}|${API_KEY.source})|(${OAUTH_ASSIGNMENT})`,
   "gi",
 );
 const BEARER_CONTINUATION = /^[A-Za-z0-9._~+/=-]*/;
@@ -24,7 +24,7 @@ const OAUTH_LABEL_PREFIXES = new Set(OAUTH_LABELS.flatMap(label =>
   Array.from({ length: label.length - 1 }, (_, index) => label.slice(0, index + 1))));
 const INCOMPLETE_OAUTH = new RegExp(OAUTH_BOUNDARY.source
   + "(?:" + [...OAUTH_LABEL_PREFIXES].join("|") + "|(?:" + OAUTH_LABELS.join("|") + ")"
-  + OAUTH_KEY_END.source + "(?:" + OAUTH_ASSIGNMENT.source + ")?)");
+  + OAUTH_KEY_END.source + ")");
 
 // A short suffix that could start or complete a supported credential in a later frame.
 const INCOMPLETE_TOKEN = new RegExp(`(?:${[
@@ -42,6 +42,7 @@ class AcpOutputRedactor {
   private pending = "";
   private previous = "";
   private continuation?: RegExp;
+  private oauthSeparator?: RegExp;
   private oauthValue?: OAuthValue;
 
   constructor(private readonly consume: ConsumeSpan) {}
@@ -56,6 +57,19 @@ class AcpOutputRedactor {
 
   flush(): void {
     this.drain("final");
+  }
+
+  private consumeOAuthAssignment(raw: string, start: number, whitespace: RegExp): number {
+    const separator = whitespace.exec(raw.slice(start))![0];
+    this.consume(separator);
+    const valueStart = start + separator.length;
+    this.oauthSeparator = valueStart === raw.length ? whitespace : undefined;
+    if (this.oauthSeparator) return valueStart;
+    const char = raw.charAt(valueStart);
+    const quote = char === '"' || char === "'" ? char : undefined;
+    if (quote) this.consume(quote);
+    else if (!BARE_OAUTH_CHAR.test(char)) return valueStart;
+    return this.consumeOAuthValue(raw, valueStart + (quote?.length ?? 0), { quote, escaped: false, masked: false });
   }
 
   private consumeOAuthValue(raw: string, start: number, value: OAuthValue): number {
@@ -82,11 +96,13 @@ class AcpOutputRedactor {
 
   private drain(mode: "batch" | "stream" | "final"): void {
     const final = mode === "final";
-    if (this.oauthValue) {
-      const consumed = this.consumeOAuthValue(this.pending, 0, this.oauthValue);
+    if (this.oauthSeparator || this.oauthValue) {
+      const consumed = this.oauthSeparator
+        ? this.consumeOAuthAssignment(this.pending, 0, this.oauthSeparator)
+        : this.consumeOAuthValue(this.pending, 0, this.oauthValue!);
       if (consumed) this.previous = this.pending.charAt(consumed - 1);
       this.pending = this.pending.slice(consumed);
-      if (this.oauthValue) return;
+      if (this.oauthSeparator || this.oauthValue) return;
     }
     if (this.continuation) {
       const tail = this.continuation.exec(this.pending)![0];
@@ -110,10 +126,12 @@ class AcpOutputRedactor {
     let match: RegExpExecArray | null;
     while ((match = TOKEN_PATTERN.exec(raw)) !== null && match.index < cut) {
       const end = match.index + match[0].length;
-      const [, bearer, bearerPrefix, key, oauthPrefix, quote] = match;
-      if (oauthPrefix) {
+      const [, bearer, bearerPrefix, key, assignment] = match;
+      if (assignment) {
         this.consume(raw.slice(cursor, end));
-        cursor = this.consumeOAuthValue(raw, end, { quote, escaped: false, masked: false });
+        // A quoted JSON key can span lines. Keep prose and shell assignments on their own line.
+        const jsonField = raw[match.index - 1] === '"' && /"[ \t]*:$/.test(assignment);
+        cursor = this.consumeOAuthAssignment(raw, end, jsonField ? JSON_WHITESPACE : INLINE_WHITESPACE);
         // An overlapping match can start inside the OAuth value and extend beyond it.
         TOKEN_PATTERN.lastIndex = cursor;
         continue;

@@ -176,7 +176,7 @@ import {
   sanitizeAutoReviewForLoad,
   sanitizeRetryOn429ForLoad,
   sanitizeAnthropicSidecarInstanceForLoad,
-  sanitizeAgyAcpUnattendedTargetsForLoad,
+  sanitizeAgyAcpForLoad,
   sanitizeModelCostsForLoad,
   sanitizeCapabilityDeclarationsForLoad,
   warnInheritedFastWireConflicts,
@@ -234,7 +234,7 @@ function loadConfigUnobserved(): OcxConfig {
     sanitizeAutoReviewForLoad(parsed);
     sanitizeRetryOn429ForLoad(parsed);
     sanitizeAnthropicSidecarInstanceForLoad(parsed);
-    sanitizeAgyAcpUnattendedTargetsForLoad(parsed);
+    sanitizeAgyAcpForLoad(parsed);
     sanitizeModelCostsForLoad(parsed);
     sanitizeCapabilityDeclarationsForLoad(parsed);
     const result = configSchema.safeParse(parsed);
@@ -272,7 +272,7 @@ function loadConfigUnobserved(): OcxConfig {
     // discarding it entirely, so pool accounts and providers survive a missing
     // field like defaultProvider.
     const merged = mergeConfigDefaults(parsed);
-    sanitizeAgyAcpUnattendedTargetsForLoad(merged);
+    sanitizeAgyAcpForLoad(merged);
     const retryResult = configSchema.safeParse(merged);
     if (retryResult.success) {
       warnConfigRepaired(configPath, result.error);

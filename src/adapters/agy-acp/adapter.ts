@@ -76,7 +76,7 @@ function invalidRequest(code: string, message: string): ErrorEvent {
 export interface AgyAcpDeps {
   spawn?: AgyAcpSpawn;
   resolveBinary?: () => string | undefined;
-  probeVersion?: (binary: string) => Promise<AgyVersionProbe>;
+  probeVersion?: (binary: string, signal?: AbortSignal) => Promise<AgyVersionProbe>;
   createWorkspace?: () => Promise<TurnWorkspace>;
   clientVersion?: string;
   turnTimeoutMs?: number;
@@ -89,6 +89,7 @@ async function runVersion(
   makeWorkspace: () => Promise<TurnWorkspace>,
   spawnChild: AgyAcpSpawn,
   cleanup: (workspace: TurnWorkspace, child?: AgyAcpChild) => Promise<void>,
+  signal?: AbortSignal,
 ): Promise<string | undefined> {
   const executable = readAgyExecutable(binary);
   if (!executable) return undefined;
@@ -98,18 +99,25 @@ async function runVersion(
   let version: string | undefined;
   try {
     workspace = await makeWorkspace();
-    if (readAgyExecutable(binary)?.identity !== executable.identity) throw new Error("Executable changed before the version probe");
+    if (signal?.aborted || readAgyExecutable(binary)?.identity !== executable.identity) throw new Error("Version probe cancelled before spawn");
     const probe = spawnChild(executable.path, ["--version"], { cwd: workspace.dir, env: childEnv(workspace) });
     child = probe;
     let out: string | undefined = "";
     const exitCode = await new Promise<number | null | undefined>(resolve => {
-      const timer = setTimeout(() => resolve(undefined), VERSION_TIMEOUT_MS);
+      const finish = (code?: number | null): void => {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+        resolve(code);
+      };
+      const onAbort = (): void => finish();
+      const timer = setTimeout(onAbort, VERSION_TIMEOUT_MS);
       probe.on("error", (error: NodeJS.ErrnoException) => {
         spawnFailed = agySpawnCreatedNoProcess(probe, error);
-        clearTimeout(timer);
-        resolve(undefined);
+        finish();
       });
-      probe.once("close", (code: number | null) => { clearTimeout(timer); resolve(code); });
+      probe.once("close", finish);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      if (signal?.aborted) return onAbort();
       const { stdin, stdout, stderr } = probe;
       if (!stdin || !stdout || !stderr) {
         out = undefined;
@@ -123,7 +131,7 @@ async function runVersion(
       stdin.on("error", () => {});
       stdin.end();
     });
-    if (exitCode === 0) version = out;
+    if (exitCode === 0 && !signal?.aborted) version = out;
   } catch { /* probe failed */ }
   if (workspace) {
     try { await cleanup(workspace, spawnFailed ? undefined : child); } catch (error) {
@@ -136,7 +144,7 @@ async function runVersion(
       child?.stderr?.destroy();
     }
   }
-  return version;
+  return signal?.aborted ? undefined : version;
 }
 
 function childEnv(workspace: TurnWorkspace): Record<string, string> {
@@ -157,7 +165,8 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
     if (child) await reap(child);
     await workspace.remove();
   }
-  const probeVersion = deps.probeVersion ?? (binary => probeAgyVersion(binary, target => runVersion(target, makeWorkspace, spawnChild, cleanup)));
+  const probeVersion = deps.probeVersion ?? ((binary, signal) =>
+    probeAgyVersion(binary, target => runVersion(target, makeWorkspace, spawnChild, cleanup, signal)));
   const turnTimeoutMs = deps.turnTimeoutMs ?? TURN_TIMEOUT_MS;
 
   return {
@@ -198,9 +207,9 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       if (!binary) { emit(failure("agy_acp_unavailable", AGY_INSTALL_HINT)); return; }
       const initial = readAgyExecutable(binary);
       if (!initial) { emit(failure("agy_acp_unavailable", AGY_INSTALL_HINT)); return; }
-      const version = await probeVersion(initial.path);
-      if (!version.ok) { emitVersionFailure(version, emit); return; }
+      const version = await probeVersion(initial.path, incoming.abortSignal);
       if (incoming.abortSignal?.aborted) return;
+      if (!version.ok) { emitVersionFailure(version, emit); return; }
       let workspace: TurnWorkspace;
       try { workspace = await makeWorkspace(); } catch {
         emit(failure("agy_acp_unavailable", "no private workspace could be created outside the OpenCodex home"));
@@ -215,7 +224,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
           return;
         }
         if (executable.identity !== initial.identity) {
-          const refreshed = await probeVersion(executable.path);
+          const refreshed = await probeVersion(executable.path, incoming.abortSignal);
           if (incoming.abortSignal?.aborted || !refreshed.ok || readAgyExecutable(binary)?.identity !== executable.identity) {
             await cleanup(workspace);
             if (!incoming.abortSignal?.aborted) {
@@ -364,6 +373,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
     }
 
     function sendPrompt(): void {
+      if (settled) return;
       if (!checkSelectedModel() || !checkSelectedThinking()) return;
       const refuse = (error: unknown): void => finish(undefined, false, { error });
       try {
@@ -373,6 +383,8 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
         const permit = decision?.permit;
         const dispatch = async (): Promise<void> => {
           try {
+            // Let the current stdout callback apply all decoded config updates before spending the permit.
+            await Promise.resolve();
             if (settled) return;
             if (incoming.abortSignal?.aborted) return onAbort();
             if (!checkSelectedModel() || !checkSelectedThinking()) return;
@@ -444,6 +456,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       const terminal = acpTerminal(r.stopReason, incoming.abortSignal?.aborted === true);
       if (terminal.kind === "aborted") return finish(undefined, true);
       if (terminal.kind === "error") return fail(terminal.code);
+      if (terminal.kind === "refusal") return finish({ type: "incomplete", reason: "content_filter", retryable: false, usage });
       finish({ type: "done", ...(usage ? { usage } : {}), ...(terminal.stopReason ? { stopReason: terminal.stopReason } : {}) });
     }
 
@@ -531,6 +544,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       const tail = buffer;
       buffer = "";
       flush(tail);
+      if (!settled) fail("agy_acp_protocol", "stdout ended before answering");
     });
 
     if (incoming.abortSignal?.aborted) onAbort();

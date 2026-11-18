@@ -34,7 +34,7 @@ describe("frames", () => {
   test("terminal table: only end_turn, max_tokens and refusal finish", () => {
     expect(acpTerminal("end_turn", false)).toEqual({ kind: "done" });
     expect(acpTerminal("max_tokens", false)).toEqual({ kind: "done", stopReason: "max_tokens" });
-    expect(acpTerminal("refusal", false)).toEqual({ kind: "done", stopReason: "content_filter" });
+    expect(acpTerminal("refusal", false)).toEqual({ kind: "refusal" });
     expect(acpTerminal("max_turn_requests", false)).toEqual({ kind: "error", code: "agy_acp_turn_limit" });
     expect(acpTerminal("cancelled", true)).toEqual({ kind: "aborted" });
     expect(acpTerminal("cancelled", false)).toEqual({ kind: "error", code: "agy_acp_cancelled" });
@@ -81,7 +81,7 @@ describe("config options and the Gemini proof", () => {
     const selector = { id: "model", type: "select", currentValue: "gemini-0", options: values };
     const others = Array.from({ length: 63 }, (_, i) => ({ id: `other-${i}`, type: "boolean" }));
     expect(parseConfigOptions([selector, ...others])).toHaveLength(64);
-    expect(parseConfigOptions([selector, ...others, selector])).toBeUndefined();
+    expect(parseConfigOptions([selector, ...others, { id: "extra", type: "boolean" }])).toBeUndefined();
     expect(parseConfigOptions([{ ...selector, options: [...values, values[0]] }])).toBeUndefined();
     expect(parseConfigOptions([{ ...selector, options: [{ options: values }, { options: [values[0]] }] }])).toBeUndefined();
   });

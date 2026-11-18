@@ -31,7 +31,7 @@ import { projectRemovedOpenCodeFreeSnapshot } from "./removed-opencode-free-back
 import { sanitizeOpenCodeOverridesForLoad } from "./opencode-wire-upgrade";
 import {
   sanitizeReasoningPinsForLoad,
-  sanitizeAgyAcpUnattendedTargetsForLoad,
+  sanitizeAgyAcpForLoad,
   sanitizeRetryOn429ForLoad,
   sanitizeCapabilityDeclarationsForLoad,
   sanitizeModelCostsForLoad,
@@ -862,7 +862,7 @@ function configDiagnosticsFromText(raw: string, file?: { path: string; bytes: Ui
     sanitizeModelDisplayNamesForLoad(parsed, warn);
     sanitizeAutoReviewForLoad(parsed, warn);
     sanitizeRetryOn429ForLoad(parsed, warn);
-    sanitizeAgyAcpUnattendedTargetsForLoad(parsed, reportAgyRepair);
+    sanitizeAgyAcpForLoad(parsed, reportAgyRepair);
     sanitizeModelCostsForLoad(parsed, warn);
     sanitizeCapabilityDeclarationsForLoad(parsed, warn);
     const result = configSchema.safeParse(parsed);
@@ -871,7 +871,7 @@ function configDiagnosticsFromText(raw: string, file?: { path: string; bytes: Ui
     }
 
     const merged = mergeConfigDefaults(parsed);
-    sanitizeAgyAcpUnattendedTargetsForLoad(merged, reportAgyRepair);
+    sanitizeAgyAcpForLoad(merged, reportAgyRepair);
     const retryResult = configSchema.safeParse(merged);
     if (retryResult.success) {
       return validFileConfigDiagnostics(normalizeApiKeyIds(retryResult.data as OcxConfig), parsed, repairs);
