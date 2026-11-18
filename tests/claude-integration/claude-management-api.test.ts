@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, setDefaultTimeout, spyOn, test } from "b
 import { managementFetch as fetch } from "../helpers/management-auth";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import { loadConfig, saveConfig, saveConfigPreservingClaudeCode } from "../../src/config";
 import { startServer as startServerImpl } from "../../src/server";
 import { handleManagementAPI } from "../../src/server/management-api";
@@ -100,6 +100,35 @@ test("GET /api/claude-code returns defaults + available + aliases", async () => 
     expect(d.aliases.some((a: { id: string }) => a.id === "ocx-claude-mock--test-model")).toBe(true);
     expect(typeof d.port).toBe("number");
   } finally {
+    await server.stop(true);
+  }
+});
+
+test.each([
+  ["2.1.280", "claude-fable-5-1[1m]"],
+  ["2.1.290", "claude-fable-5-2[1m]"],
+  ["unknown", "claude-fable-5-1[1m]"],
+])("the Claude Code snapshot fills Fable for CLI version %s", async (version, expected) => {
+  const config = loadConfig();
+  config.claudeCode = { authMode: "subscription" };
+  saveConfig(config);
+  const bin = join(testDir, "bin");
+  mkdirSync(bin);
+  const windows = process.platform === "win32";
+  writeFileSync(join(bin, windows ? "claude.cmd" : "claude"), windows
+    ? `@echo off\r\necho ${version}\r\n`
+    : `#!/bin/sh\nprintf '%s (Claude Code)\\n' '${version}'\n`, { mode: 0o755 });
+  const previousPath = process.env.PATH;
+  const server = startServer(0);
+  try {
+    process.env.PATH = [bin, previousPath].filter(Boolean).join(delimiter);
+    const response = await fetch(new URL("/api/claude-code", server.url));
+    expect(response.status).toBe(200);
+    const body = await response.json() as { effectiveModelEnv: Record<string, string> };
+    expect(body.effectiveModelEnv.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe(expected);
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
     await server.stop(true);
   }
 });

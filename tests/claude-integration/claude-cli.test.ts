@@ -526,6 +526,16 @@ describe("ocx claude env assembly", () => {
     expect(env.ANTHROPIC_DEFAULT_SONNET_MODEL_NAME).toBeUndefined();
   });
 
+  test.each([
+    ["2.1.280", "claude-fable-5-1[1m]"],
+    ["2.1.290", "claude-fable-5-2[1m]"],
+    [null, "claude-fable-5-1[1m]"],
+  ])("the launcher fills Fable for Claude Code %s", (claudeCodeVersion, expected) => {
+    const windows = buildClaudeContextWindows([], [], undefined, {});
+    const deps = { ...AUTH_PRESENT, claudeCodeVersion };
+    expect(buildClaudeEnv(cfg(), 10100, {}, windows, deps).ANTHROPIC_DEFAULT_FABLE_MODEL).toBe(expected);
+  });
+
   test("an alias tier slot this launch writes carries its /model label (#6926)", () => {
     const config = cfg({ claudeCode: { tierModels: { opus: "ocx-claude-native--gpt-6.1-sol", haiku: "claude-ocx-cursor--gpt-5.6-luna" } } });
     const env = buildClaudeEnv(config, 10100, {}, {}, AUTH_PRESENT);

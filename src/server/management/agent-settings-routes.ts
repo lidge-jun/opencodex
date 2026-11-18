@@ -1532,7 +1532,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
     const models = await fetchAllModels(config);
     const { listCatalogNativeSlugs } = await import("../../codex/catalog");
     const { claudeCodeAlias, claudeCodeNativeAlias } = await import("../../claude/alias");
-    const { buildClaudeContextWindows, effectiveModelEnv, nativeClaudePassthroughFor } = await import("../../claude/context-windows");
+    const { buildClaudeContextWindows, effectiveModelEnv, nativeClaudePassthroughFor, probeClaudeCodeVersionForTierFill } = await import("../../claude/context-windows");
     const { visibleNativeSlugs } = await import("../../codex/catalog");
     const disabled = new Set(config.disabledModels ?? []);
     const isDisabled = (provider: string, id: string) =>
@@ -1574,6 +1574,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       nativeContextLimits(config),
       nativeClaudePassthroughFor(config.claudeCode, resolvedAuthMode.markerMode),
     );
+    const claudeCodeVersion = await probeClaudeCodeVersionForTierFill(config.claudeCode, contextWindows);
     const webSearchOverride = config.claudeCode?.webSearchSidecar;
     const visionOverride = config.claudeCode?.visionSidecar;
     const helperParent = config.claudeCode?.model?.includes("/") ? config.claudeCode.model.split("/")[0] : undefined;
@@ -1639,7 +1640,7 @@ async function handleAgentSettingsRoutesImpl(ctx: ManagementContext): Promise<Re
       fastMode: config.fastMode,
       forceAvailable: [...visibleNativeSlugs(config), ...filterCatalogVisibleModels(models, config).map(catalogModelSlug)],
       contextWindows,
-      effectiveModelEnv: effectiveModelEnv(config.claudeCode, contextWindows),
+      effectiveModelEnv: effectiveModelEnv(config.claudeCode, contextWindows, undefined, claudeCodeVersion),
       available,
       aliases,
       port: config.port,

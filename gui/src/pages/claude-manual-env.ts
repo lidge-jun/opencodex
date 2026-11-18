@@ -58,10 +58,10 @@ export const MODEL_ENV_NAMES = [
 const ONE_M_MARKER = /\[1m\]$/i;
 
 /** Unset tier slots the server fills only while automatic 1M marking is on. */
-const NATIVE_TIER_FILL: Partial<Record<(typeof MODEL_ENV_NAMES)[number], string>> = {
-  ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5-5",
-  ANTHROPIC_DEFAULT_SONNET_MODEL: "claude-sonnet-5",
-  ANTHROPIC_DEFAULT_FABLE_MODEL: "claude-fable-5-2",
+const NATIVE_TIER_FILL: Partial<Record<(typeof MODEL_ENV_NAMES)[number], readonly string[]>> = {
+  ANTHROPIC_DEFAULT_OPUS_MODEL: ["claude-opus-5-5"],
+  ANTHROPIC_DEFAULT_SONNET_MODEL: ["claude-sonnet-5"],
+  ANTHROPIC_DEFAULT_FABLE_MODEL: ["claude-fable-5-1", "claude-fable-5-2"],
 };
 
 function stripOneMillionMarker(value: string): string {
@@ -96,7 +96,7 @@ export function manualModelEnv(state: ClaudeManualEnvState): Record<string, stri
     const server = state.effectiveModelEnv[name];
     if (!server) continue;
     if (!slotsKnown) {
-      if (NATIVE_TIER_FILL[name] === stripOneMillionMarker(server)) continue;
+      if (NATIVE_TIER_FILL[name]?.includes(stripOneMillionMarker(server))) continue;
       out[name] = stripOneMillionMarker(server);
       continue;
     }

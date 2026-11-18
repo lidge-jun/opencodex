@@ -19,7 +19,7 @@ export function subagentForceSupport(version: string | null): SubagentForceStatu
   return major! > 2 || (major === 2 && (minor! > 1 || (minor === 1 && patch! >= 257))) ? "supported" : "unsupported";
 }
 
-function installedVersion(): Promise<string | null> {
+export function probeInstalledClaudeCodeVersion(): Promise<string | null> {
   const invocation = commandInvocation("claude", ["--version"]);
   return new Promise(resolve => {
     execFile(invocation.file, invocation.args, { ...invocation.options, timeout: 1500, maxBuffer: 4096 }, (error, stdout) => {
@@ -32,7 +32,7 @@ function installedVersion(): Promise<string | null> {
 export async function inspectSubagentForceStatus(
   targetValid: boolean,
   configDir = claudeConfigDir(),
-  versionProbe: () => Promise<string | null> = installedVersion,
+  versionProbe: () => Promise<string | null> = probeInstalledClaudeCodeVersion,
 ): Promise<SubagentForceStatus> {
   const version = await versionProbe().catch(() => null);
   let settingsOverride = false;

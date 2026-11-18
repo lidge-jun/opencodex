@@ -66,7 +66,7 @@ ocx claude
 | `CLAUDE_CODE_AUTO_COMPACT_WINDOW` | 자동 컨텍스트 압축 임곗값(기본값 `829800`). 자동 컨텍스트가 켜져 있을 때만 주입해요 |
 | `ANTHROPIC_MODEL` | `claudeCode.model` (선택 사항) |
 | `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `claudeCode.tierModels.haiku ?? claudeCode.smallFastModel` (선택 사항, 기존 `ANTHROPIC_SMALL_FAST_MODEL`도 지원) |
-| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`. 로컬에서 구독으로 실행할 때 `nativePassthrough`가 켜져 있고 컨텍스트 계산 모드가 기본값인 1M이면, 자동 표기 조건을 충족하는 미설정 슬롯에 네이티브 `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]` / `claude-fable-5-2[1m]`이 들어갑니다. `claudeCode.contextAccounting`을 `200k`로 설정하면 `[1m]`이 자동으로 붙지 않고 미설정 슬롯은 비어 있습니다. |
+| `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE}_MODEL` | `claudeCode.tierModels.*`. 로컬에서 구독으로 실행할 때 `nativePassthrough`가 켜져 있고 컨텍스트 계산 모드가 기본값인 1M이면, 자동 표기 조건을 충족하는 미설정 슬롯에 네이티브 `claude-opus-5-5[1m]` / `claude-sonnet-5-5[1m]`가 들어갑니다. Fable에는 Claude Code 2.1.290 이상이면 `claude-fable-5-2[1m]`, 버전이 더 낮거나 확인되지 않으면 `claude-fable-5-1[1m]`이 들어갑니다. `claudeCode.contextAccounting`을 `200k`로 설정하면 `[1m]`이 자동으로 붙지 않고 미설정 슬롯은 비어 있습니다. |
 | `ANTHROPIC_DEFAULT_{OPUS,SONNET,FABLE,HAIKU}_MODEL_NAME` | OpenCodex가 라우팅 별칭으로 설정한 티어 슬롯의 `/model` 라벨(예: `ocx-claude-native--gpt-6.1-sol` → `gpt-6.1-sol (native)`). launchd 시스템 환경과 셸 훅에도 같은 짝으로 기록합니다. 모델 ID는 별칭 그대로입니다. 직접 설정한 슬롯이나 라벨은 건드리지 않습니다 |
 | `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` | `alwaysEnableEffort`가 켜져 있으면 `1` (조건부) |
 | `ENABLE_TOOL_SEARCH` | `claudeCode.toolSearch`가 설정된 경우 (조건부, 기본으로는 주입하지 않으며 Claude Code 자체 기본값을 따름) |

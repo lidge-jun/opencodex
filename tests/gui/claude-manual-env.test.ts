@@ -69,14 +69,14 @@ test("a 200k draft drops automatic 1M marks and keeps one explicit marker", () =
   expect(env).not.toContain("ANTHROPIC_DEFAULT_FABLE_MODEL");
 });
 
-test("a 200k draft without slot evidence still strips automatic marks", () => {
+test.each(["claude-fable-5-1[1m]", "claude-fable-5-2[1m]"])("a 200k draft without slot evidence drops the automatic %s fill", (fableFill) => {
   const env = buildManualEnv(state({
     contextAccounting: "200k",
     servedContextAccounting: "1m",
     effectiveModelEnv: {
       ANTHROPIC_MODEL: "mock/test-model[1m]",
       ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5-5[1m]",
-      ANTHROPIC_DEFAULT_FABLE_MODEL: "claude-fable-5-2[1m]",
+      ANTHROPIC_DEFAULT_FABLE_MODEL: fableFill,
     },
   }));
   expect(env).toContain("export ANTHROPIC_MODEL=mock/test-model\n");
