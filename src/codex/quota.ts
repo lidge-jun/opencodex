@@ -1228,13 +1228,16 @@ export function parseUsageQuota(data: WhamUsageResponse): Omit<StoredAccountQuot
   if (!data.rate_limit) {
     const individualLimit = extractGroupBasedSpendControlLimit(data.plan_type, data.spend_control);
     if (individualLimit) {
-      const usedPercent = normalizeUsagePercent(individualLimit.used_percent);
+      // An out-of-range or malformed raw reading must not be clamped into a valid-looking bar;
+      // leaving the monthly tuple unset lets the merge carry the stored reading forward.
+      const invalidUsedPercent = isInvalidPolicyUsagePercent(individualLimit.used_percent);
+      const usedPercent = invalidUsedPercent ? undefined : normalizeUsagePercent(individualLimit.used_percent);
       const resetAt = normalizeResetAt(individualLimit.reset_at);
       if (usedPercent !== undefined) {
         quota.monthlyPercent = usedPercent;
         if (resetAt !== undefined) quota.monthlyResetAt = resetAt;
         quota.monthlyIsPrimaryWindow = true;
-      } else if ((data.spend_control as Record<string, unknown>).reached === true) {
+      } else if (!invalidUsedPercent && (data.spend_control as Record<string, unknown>).reached === true) {
         quota.monthlyPercent = CODEX_EXHAUSTED_USAGE_PERCENT;
         if (resetAt !== undefined) quota.monthlyResetAt = resetAt;
         quota.monthlyIsPrimaryWindow = true;

@@ -577,6 +577,39 @@ describe("business/enterprise group-based spend control quota", () => {
     expect(isValidWhamHistoryObservation(invalidPayload)).toBe(false);
   });
 
+  it.each([-1, 101, "NaN", "oops"])("does not publish invalid used_percent %p as a monthly reading or overwrite a stored one", used => {
+    const invalidPayload = baseEnterprisePayload({
+      spend_control: {
+        reached: false,
+        individual_limit: {
+          source: "group_based_spend_controls",
+          remaining: "10",
+          used_percent: used,
+          reset_at: 1_796_083_200,
+        },
+      },
+    });
+    const parsed = parseUsageQuota(invalidPayload);
+    expect(parsed?.monthlyPercent).toBeUndefined();
+    expect(parsed?.monthlyIsPrimaryWindow).toBeUndefined();
+
+    clearAccountQuota();
+    setAccountQuotaFromParsed("enterprise-invalid-monthly", { monthlyPercent: 100, monthlyResetAt: 1_796_083_200, monthlyIsPrimaryWindow: true });
+    setAccountQuotaFromParsed("enterprise-invalid-monthly", parsed);
+    expect(getAccountQuota("enterprise-invalid-monthly")).toMatchObject({ monthlyPercent: 100, monthlyIsPrimaryWindow: true });
+    clearAccountQuota();
+  });
+
+  it("an invalid used_percent does not turn a reached spend control into a fresh exhausted reading", () => {
+    const payload = baseEnterprisePayload({
+      spend_control: {
+        reached: true,
+        individual_limit: { source: "group_based_spend_controls", used_percent: -1, reset_at: 1_796_083_200 },
+      },
+    });
+    expect(parseUsageQuota(payload)?.monthlyPercent).toBeUndefined();
+  });
+
   it("ignores spend_control.individual_limit for non-business plans or unrelated sources", () => {
     const plusPayload = baseEnterprisePayload({ plan_type: "plus" });
     expect(parseUsageQuota(plusPayload)?.monthlyPercent).toBeUndefined();
