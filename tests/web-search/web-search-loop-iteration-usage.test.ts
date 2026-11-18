@@ -10,12 +10,12 @@ import { createTestTranslatorBudget } from "../helpers/translator-budget";
 // Code size the context window from it, and a sum would trigger early auto-compaction.
 const usage = (input: number, output: number, extra: Partial<OcxUsage> = {}): OcxUsage =>
   ({ inputTokens: input, outputTokens: output, totalTokens: input + output, ...extra });
-const search = (id: string, u: OcxUsage): AdapterEvent[] => [
+const search = (id: string, u?: OcxUsage): AdapterEvent[] => [
   { type: "tool_call_start", id, name: "web_search" },
   { type: "tool_call_delta", arguments: JSON.stringify({ query: id }) },
   { type: "tool_call_end" }, { type: "done", usage: u },
 ];
-const answer = (u: OcxUsage): AdapterEvent[] => [{ type: "text_delta", text: "answer" }, { type: "done", usage: u }];
+const answer = (u?: OcxUsage): AdapterEvent[] => [{ type: "text_delta", text: "answer" }, { type: "done", usage: u }];
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -50,6 +50,21 @@ async function drive(passes: AdapterEvent[][], refuseFrom = Infinity) {
 }
 
 describe("web-search loop iteration usage", () => {
+  test.each([[2, 3, 5], [undefined, 3, -1], [2, undefined, -1]])(
+    "search continuation credits account for both dispatched legs (%s, %s)", async (first, second, total) => {
+      const metered = (credits: number | undefined) => credits === undefined ? undefined : usage(10, 2, { providerCredits: credits });
+      const { reported, text } = await drive([search("first", metered(first)), answer(metered(second))]);
+      expect(text).toContain("response.completed");
+      expect(reported).toEqual([expect.objectContaining({ providerCredits: total })]);
+    },
+  );
+
+  test("a refused dispatched continuation leaves credit evidence incomplete", async () => {
+    const { reported, text } = await drive([search("first", usage(10, 2, { providerCredits: 2 })), answer()], 1);
+    expect(text).toContain("response.failed");
+    expect(reported).toEqual([expect.objectContaining({ providerCredits: -1 })]);
+  });
+
   test("search passes are added to the final answer's usage", async () => {
     const { reported, text, clientUsage } = await drive([
       search("first", usage(1000, 50, { cachedInputTokens: 0, cacheCreationInputTokens: 900, contextTotalTokens: 1050 })),

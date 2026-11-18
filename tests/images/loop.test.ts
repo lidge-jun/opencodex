@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { ProviderAdapter, IncomingMeta } from "../../src/adapters/base";
-import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
+import type { AdapterEvent, OcxParsedRequest, OcxUsage } from "../../src/types";
 import type { AttemptRecoveryKind } from "../../src/usage/log";
 import type { ImageBridgePlan, ImageCallResult } from "../../src/images/types";
 import type { ImageBridgeDeps } from "../../src/images/loop";
@@ -1022,6 +1022,27 @@ describe("runWithImageBridge", () => {
     // Hidden iter (10/4) + final (3/2) once — not 2*hidden + final.
     expect(seen).toEqual({ inputTokens: 13, outputTokens: 6 });
   });
+
+  test.each([[2, 3, 5], [undefined, 3, -1], [2, undefined, -1]])(
+    "image continuation credits account for both dispatched legs (%s, %s)", async (first, second, total) => {
+      const reported: (OcxUsage | undefined)[] = [];
+      streamQueue = [
+        [
+          { type: "tool_call_start", id: "call_1", name: "image_gen" },
+          { type: "tool_call_delta", arguments: '{"prompt":"a cat"}' },
+          { type: "tool_call_end" },
+          { type: "done", usage: first === undefined ? undefined : { inputTokens: 10, outputTokens: 4, providerCredits: first } },
+        ],
+        [{ type: "text_delta", text: "ready" },
+          { type: "done", usage: second === undefined ? undefined : { inputTokens: 3, outputTokens: 2, providerCredits: second } }],
+      ];
+      const response = await runWithImageBridge({
+        parsed: makeParsed(), adapter: mockAdapter, plan, maxRounds: 1, onUsage: usage => reported.push(usage),
+      });
+      expect(await response.text()).toContain("response.completed");
+      expect(reported).toEqual([expect.objectContaining({ providerCredits: total })]);
+    },
+  );
 
   test("429 OAuth rotation awaits a refreshed adapter and retries the iteration", async () => {
     let fetchCalls = 0;

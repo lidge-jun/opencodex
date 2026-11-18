@@ -14,6 +14,7 @@ import { isTruncatedStopReason } from "../responses/truncated-stop-reason";
 import { bridgeToResponsesSSE } from "../bridge";
 import { guardEmptyToolCatalogStream, type ClientToolCatalogRestriction } from "../lib/empty-tool-catalog";
 import { emptyCompletionRetryFailedEvent, mergeUsage } from "../server/responses/empty-completion-guard";
+import { withMissingCreditReading } from "../usage/credit-billing";
 import { markSidecarContextOverflow, sidecarLoopTerminalEvent, upstreamErrorCode, type SidecarLoopFailure } from "../server/responses/context-overflow";
 import { markVerifiedModelNotInPlanResponse, MODEL_NOT_IN_PLAN_CODE, UNDECLARED_TOOL_CALL_ERROR_CODE, verifiedPlanRefusalMessage } from "../lib/errors";
 import { runWebSearch, type SidecarOutcome, type SidecarOutcomeRecorder, type SidecarSettings } from "./executor";
@@ -544,6 +545,18 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   // keeps the last iteration's usage: Codex and Claude Code size the context window from it, and
   // a sum would read as a context several times larger and trigger early auto-compaction.
   let hiddenUsage: OcxUsage | undefined;
+  let hiddenLegs = 0;
+  let pendingLegs = 0;
+  const mergePendingUsage = (previous: OcxUsage | undefined, usage: OcxUsage | undefined): OcxUsage | undefined => {
+    if (pendingLegs === 0) return previous;
+    const reading = pendingLegs > 1 ? withMissingCreditReading(usage) : usage;
+    return mergeUsage(previous, reading, hiddenLegs > 0);
+  };
+  const takeUsage = (usage: OcxUsage | undefined): void => {
+    hiddenUsage = mergePendingUsage(hiddenUsage, usage);
+    hiddenLegs += pendingLegs;
+    pendingLegs = 0;
+  };
   let accountRefusalOutputStarted = false;
   const connectTimeoutMs = deps.connectTimeoutMs ?? 200_000;
   const routedModelStallTimeoutMs = deps.routedModelStallTimeoutMs ?? 200_000;
@@ -698,6 +711,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         try {
           if (requestAdapter.fetchResponse) {
             deps.onAttemptSend?.(recovery);
+            pendingLegs++;
             response = await requestAdapter.fetchResponse(request, {
               abortSignal: headerDeadline.signal,
               timeoutMs: connectTimeoutMs,
@@ -715,6 +729,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
                 // each connection-reset replay); preserve the caller's recovery kind
                 // (rate-limit-429 / key-429) when the retry layer supplies none.
                 deps.onAttemptSend?.(retryRecovery ?? recovery);
+                pendingLegs++;
                 const h = new Headers(request.headers);
                 if (!h.has("accept-encoding")) h.set("accept-encoding", "identity");
                 // A connection-reset replay must leave the half-closed pooled socket, not just
@@ -818,7 +833,11 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         const rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers,
           iterParsed, prepared.response, hiddenUsage);
         if (!rotated) break;
-        if (hiddenUsage && deps.onRotatedUsage?.(hiddenUsage)) hiddenUsage = undefined;
+        takeUsage(undefined);
+        if (hiddenUsage && deps.onRotatedUsage?.(hiddenUsage)) {
+          hiddenUsage = undefined;
+          hiddenLegs = 0;
+        }
         const retainRefusal = prepared.response.status === 403
           && deps.incomingMeta?.providerName === "google-antigravity" && rotated.recoveryKind === "oauth-account-403";
         // Keep the bounded refusal readable until the sibling actually returns headers.
@@ -917,7 +936,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
         translatorBudget,
         preserveAdapterError: deps.thinkingRecovery !== undefined,
         // A pass that fails was still billed; the error path reports it with the hidden passes.
-        onErrorUsage: usage => { hiddenUsage = mergeUsage(hiddenUsage, usage); },
+        onErrorUsage: takeUsage,
       })) {
         if (event.type === "done") {
           anthropicReplay = takeAnthropicReplay(event);
@@ -1238,7 +1257,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
               && !split.passthrough.some(event => event.type === "error" || event.type === "incomplete")
               && !signal.aborted && !split.hasMalformedToolCall && !split.hasRealToolCall
               && split.streamedPassthroughCount === 0 && !hasVisibleAssistantText(split.passthrough)) {
-              hiddenUsage = mergeUsage(hiddenUsage, final.usage);
+              takeUsage(final.usage);
               if (completionRetries++ === 0) { yield { type: "heartbeat" }; continue; }
               throw new LoopError(502, "Provider completed without usable output after one retry", emptyCompletionRetryFailedEvent());
             }
@@ -1270,7 +1289,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
                   stopReason: terminalEvent.stopReason,
                   eventTypes: [...new Set(split.passthrough.map(event => event.type))],
                 }));
-                hiddenUsage = mergeUsage(hiddenUsage, terminalEvent.usage);
+                takeUsage(terminalEvent.usage);
                 if (!split.hasMalformedToolCall && !split.hasRealToolCall && emptyAnswerRetries < forcedAnswerRetries) {
                   emptyAnswerRetries++;
                   console.warn("[web-search-loop] empty forced answer — retrying once with tool calls disabled");
@@ -1293,7 +1312,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
             yield* replay(split.passthrough.slice(split.streamedPassthroughCount));
             return;
           }
-          hiddenUsage = mergeUsage(hiddenUsage, terminalUsage(split.passthrough));
+          takeUsage(terminalUsage(split.passthrough));
           if (split.calls.some(call => call.kind === "advisor")) {
             const continuationError = deps.advisor!.beginLeg();
             if (continuationError) {
@@ -1343,28 +1362,28 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           }
           if (split.calls.some(call => call.kind === "advisor")) yield { type: "assistant_boundary" };
         } catch (e) {
-          // The bridge reports no usage for either error; the iterations already sent still count.
-          if (hiddenUsage) deps.onUsage?.(hiddenUsage);
           recordLocalLoopFailure(e);
-          if (isTranslatorBudgetExceededError(e)) {
-            yield {
+          takeUsage(e instanceof LoopError ? e.event?.usage : undefined);
+          const event: AdapterEvent = isTranslatorBudgetExceededError(e)
+            ? {
               type: "error",
               status: 502,
               errorType: "upstream_error",
               code: e.code,
               message: "upstream translation buffer exceeded the safe limit",
-            };
-          } else {
-            if (e instanceof SendBudgetExhaustedError) yield { type: "error", status: 429,
-              errorType: "rate_limit_error", code: e.code, message: e.message, retryable: false };
+            }
+            : e instanceof SendBudgetExhaustedError
+              ? { type: "error", status: 429, errorType: "rate_limit_error", code: e.code, message: e.message, retryable: false }
             // A later iteration's overflow ends the turn as the main path's terminal
             // context_length_exceeded, so Codex compacts instead of resending (#7316).
-            else yield (e instanceof LoopError ? sidecarLoopTerminalEvent(loopFailure(e)) : undefined)
+            : (e instanceof LoopError ? sidecarLoopTerminalEvent(loopFailure(e)) : undefined)
               ?? (e instanceof LoopError && e.event ? e.event
               : e instanceof LoopError && deps.thinkingRecovery
                 ? { type: "error", status: e.status, errorType: "upstream_error", message: e.message }
                 : { type: "error", message: e instanceof Error ? e.message : String(e) });
-          }
+          // The bridge reports an error only if it carries usage. Settle exactly once.
+          if (!event.usage && hiddenUsage) deps.onUsage?.(hiddenUsage);
+          yield event;
           return;
         }
       }
@@ -1398,7 +1417,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
       rawReasoningAsSummary: parsed.options.rawReasoningAsSummary,
       ...(deps.stallTimeoutSec !== undefined ? { stallTimeoutSec: deps.stallTimeoutSec } : {}),
       ...(deps.onFirstOutput ? { onFirstOutput: deps.onFirstOutput } : {}),
-      ...(deps.onUsage ? { onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(mergeUsage(countersOnly(hiddenUsage), usage)) } : {}),
+      ...(deps.onUsage ? { onUsage: (usage: OcxUsage | undefined) => deps.onUsage?.(mergePendingUsage(countersOnly(hiddenUsage), usage)) } : {}),
       ...(deps.onCompletedResponse ? { onCompletedResponse: deps.onCompletedResponse } : {}),
     },
   );

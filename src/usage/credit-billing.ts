@@ -28,6 +28,12 @@ export function sumCreditReadings(values: readonly (number | undefined)[]): numb
   return readings.reduce((sum, value) => sum + value, 0);
 }
 
+/** Keep token usage while accounting for a dispatched leg with no credit reading. */
+export function withMissingCreditReading<T extends { providerCredits?: number }>(usage: T | undefined): T | undefined {
+  if (usage?.providerCredits === undefined || usage.providerCredits === -1) return usage;
+  return { ...usage, providerCredits: sumCreditReadings([usage.providerCredits, undefined]) };
+}
+
 /**
  * A price that can be multiplied by any admissible credit count without overflowing.
  * The product stays well inside the safe-integer range, so a sum over attempts stays exact
