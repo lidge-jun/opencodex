@@ -29,6 +29,10 @@ merely starts with a result or error marker, such as `[Tool Result] shows the bu
 answer and reaches the client whole (`tests/adapters/tool-envelope-echo-whole-line.test.ts`). The same filter preserves leading prose and
 normalizes text-done events, completed snapshots, non-streaming JSON, and the stored
 continuation snapshot. It does not rotate an xAI upstream conversation.
+The shared [pending-line bound](../transports/byte-accounting.md#stream-buffer-accounting) fails
+with `translation_buffer_limit` before a refused turn enters continuation state. Buffered JSON
+returns 502 instead of falling back to the original body; an SSE rewrite propagates the budget
+failure to the relay's failed terminal. First turns that do not arm the filter remain untouched.
 
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
