@@ -85,19 +85,19 @@ test("never sends a web cookie to a retargeted provider or publishes aliases aft
   expect(calls).toBe(0);
   expect(await fetchProviderModels("m365-copilot", provider, 0)).toEqual([]); expect(calls).toBe(1);
 });
-test("captures web discovery sessions using Chrome and Firefox protocol shapes", async () => {
-  for (const firefox of [false, true]) {
-    const methods: string[] = [];
-    const browser = { async command(method: string, params?: Record<string, unknown>) {
-      methods.push(method);
-      if (/evaluate/.test(method)) return { result: { value: accountId } };
-      if (/getCookies/.test(method)) return { cookies: [{ name: "OhpAuth", value: firefox ? { type: "string", value: "fixture" } : "fixture", domain: ".copilot.cloud.microsoft", path: "/", secure: true },
-        { name: "foreign", value: "excluded", domain: ".example.invalid", path: "/", secure: true }] };
-      expect(params?.url).toBe(M365_COPILOT_WEB_URL); return {};
-    } };
-    expect(await readM365BrowserWebSession(browser, "context", new AbortController().signal, firefox)).toEqual({ accountId, cookie: "OhpAuth=fixture" });
-    expect(methods).toContain(firefox ? "storage.getCookies" : "Network.getCookies");
-  }
+test("captures only allowlisted web discovery cookies through Chromium CDP", async () => {
+  const methods: string[] = [];
+  const browser = { async command(method: string, params?: Record<string, unknown>) {
+    methods.push(method);
+    if (method === "Runtime.evaluate") return { result: { value: accountId } };
+    if (method === "Network.getCookies") return { cookies: [
+      { name: "OhpAuth", value: "fixture", domain: ".copilot.cloud.microsoft", path: "/", secure: true },
+      { name: "foreign", value: "excluded", domain: ".example.invalid", path: "/", secure: true },
+    ] };
+    expect(params?.url).toBe(M365_COPILOT_WEB_URL); return {};
+  } };
+  expect(await readM365BrowserWebSession(browser, "context", new AbortController().signal)).toEqual({ accountId, cookie: "OhpAuth=fixture" });
+  expect(methods).toEqual(["Page.navigate", "Runtime.evaluate", "Network.getCookies"]);
 });
 
 test("dashboard connectivity probe uses live account metadata and never treats a stale catalog as connectivity", async () => {

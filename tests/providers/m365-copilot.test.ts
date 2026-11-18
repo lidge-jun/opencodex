@@ -1,9 +1,11 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { PassThrough } from "node:stream";
+import { EventEmitter } from "node:events";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { createM365CopilotAdapter, clearM365CopilotConversations } from "../../src/adapters/m365-copilot";
 import { M365_COPILOT_BASE_URL, M365_COPILOT_MODELS, getToneForModel, m365CopilotScenario } from "../../src/providers/m365-copilot-models";
 import { createM365Conversation, M365TextComposer, m365SocketDialOptions, runM365CopilotTurn } from "../../src/adapters/m365-copilot/transport";
 import { credentialPinnedProviderConfigError, modelAdapterRecordConfigError } from "../../src/config/provider-validation";
-import { m365CallbackCode } from "../../src/oauth/m365-copilot-browser";
+import { captureM365BrowserCode, m365CallbackCode } from "../../src/oauth/m365-copilot-browser";
 import { m365CopilotAuthorizationUrl, M365_COPILOT_CLIENT_ID, m365CopilotClaims, refreshM365CopilotToken } from "../../src/oauth/m365-copilot";
 import { getProviderRegistryEntry } from "../../src/providers/registry";
 import { deriveProviderPresets } from "../../src/providers/derive";
@@ -69,6 +71,64 @@ describe("Microsoft 365 Copilot registration and authentication", () => {
     expect(m365CallbackCode(callback.replace("login.microsoftonline.com", "example.invalid"), "expected")).toBeUndefined();
     expect(() => m365CopilotClaims("bad-token")).toThrow("invalid work-account token");
   });
+  test("uses private inherited pipes with NUL-framed browser commands and replies", async () => {
+    const oldSpawn = spyOn(Bun, "spawn").mockImplementation(args => {
+      expect(args).toContain("--remote-debugging-pipe");
+      throw new Error("Unexpected legacy browser launcher");
+    });
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const child = Object.assign(new EventEmitter(), { stdio: [null, null, null, input, output], exitCode: null as number | null, kill() {
+      child.exitCode = 0;
+      child.emit("exit", 0);
+      return true;
+    } });
+    const methods: string[] = [];
+    let launch: { args: string[]; stdio: unknown } | undefined;
+    const spawn = (_file: string, args: string[], options: { stdio: unknown }) => {
+      launch = { args, stdio: options.stdio };
+      return child;
+    };
+    input.on("data", (chunk: Buffer) => {
+      const frame = chunk.toString();
+      expect(frame.endsWith("\0")).toBe(true);
+      const request = JSON.parse(frame.slice(0, -1));
+      methods.push(request.method);
+      const oid = "11111111-1111-1111-1111-111111111111", tid = "22222222-2222-2222-2222-222222222222";
+      const result = request.method === "Target.createTarget" ? { targetId: "target" }
+        : request.method === "Target.attachToTarget" ? { sessionId: "session" }
+        : request.method === "Runtime.evaluate" ? { result: { value: oid + "@" + tid } }
+        : request.method === "Network.getCookies" ? { cookies: [{ name: "OhpAuth", value: "fixture", domain: ".copilot.cloud.microsoft", path: "/", secure: true }] }
+        : {};
+      const reply = Buffer.from(JSON.stringify({ id: request.id, result }) + "\0");
+      output.write(reply.subarray(0, 4));
+      const callback = request.method === "Page.navigate" && request.params.url === "https://fixture.invalid/auth"
+        ? Buffer.from(JSON.stringify({ method: "Fetch.requestPaused", sessionId: "session", params: { requestId: "fixture", request: { url: "https://login.microsoftonline.com/common/oauth2/nativeclient?state=state&code=fixture" } } }) + "\0")
+        : Buffer.alloc(0);
+      output.write(Buffer.concat([reply.subarray(4), callback]));
+      if (request.method === "Browser.close") child.kill();
+    });
+    try {
+      const deps = { executable: "/fixture/chrome", spawn } as NonNullable<Parameters<typeof captureM365BrowserCode>[3]>;
+      const captured = await captureM365BrowserCode("https://fixture.invalid/auth", "state", {}, deps);
+      expect(launch?.args).toContain("--remote-debugging-pipe");
+      expect(launch?.args.some(arg => /^--remote-debugging-(port|address)/.test(arg))).toBe(false);
+      expect(launch?.stdio).toEqual(["ignore", "ignore", "ignore", "pipe", "pipe"]);
+      expect(captured).toMatchObject({ code: "fixture", m365: { cookie: "OhpAuth=fixture" } });
+      expect(methods).toContain("Fetch.fulfillRequest");
+      expect(methods.at(-1)).toBe("Browser.close");
+    } finally { oldSpawn.mockRestore(); }
+  });
+
+  test("refuses managed Firefox with Chromium guidance before launch", async () => {
+    const launch = spyOn(Bun, "serve").mockImplementation(() => { throw new Error("Unexpected local listener"); });
+    try {
+      await expect(captureM365BrowserCode("https://fixture.invalid/auth", "state", {}, { executable: "/fixture/firefox" }))
+        .rejects.toThrow("Install Chrome, Chromium, or Edge on the proxy machine");
+      expect(launch).not.toHaveBeenCalled();
+    } finally { launch.mockRestore(); }
+  });
+
   test("refreshes through Microsoft and preserves a refresh token when no replacement is returned", async () => {
     const previous = globalThis.fetch;
     let grant: URLSearchParams | undefined;

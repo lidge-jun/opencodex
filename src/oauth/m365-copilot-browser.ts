@@ -1,10 +1,17 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import type { Readable, Writable } from "node:stream";
 import type { OAuthController } from "./types";
 import type { M365CopilotWebSession } from "./types";
 import { readM365BrowserWebSession } from "./m365-copilot-web-session";
+
+export class M365BrowserUnavailableError extends Error {
+  constructor() {
+    super("Microsoft 365 Copilot managed sign-in requires a private browser pipe. Install Chrome, Chromium, or Edge on the proxy machine.");
+  }
+}
 
 export function m365BrowserExecutable(): string {
   let preferred = "";
@@ -21,18 +28,14 @@ export function m365BrowserExecutable(): string {
     join(process.env.PROGRAMFILES ?? "C:/Program Files", "Microsoft/Edge/Application/msedge.exe"),
     join(process.env.LOCALAPPDATA ?? "", "Google/Chrome/Application/chrome.exe"),
     join(process.env.LOCALAPPDATA ?? "", "Microsoft/Edge/Application/msedge.exe"),
-    join(process.env.PROGRAMFILES ?? "C:/Program Files", "Mozilla Firefox/firefox.exe"),
-    join(process.env["PROGRAMFILES(X86)"] ?? "C:/Program Files (x86)", "Mozilla Firefox/firefox.exe"),
-    join(process.env.LOCALAPPDATA ?? "", "Programs/Mozilla Firefox/firefox.exe"),
   ] : process.platform === "darwin" ? [
     "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
     "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-    "/Applications/Firefox.app/Contents/MacOS/firefox",
-  ] : [Bun.which("google-chrome"), Bun.which("chromium"), Bun.which("chromium-browser"), Bun.which("microsoft-edge"), Bun.which("firefox")];
-  const selected = /firefox/i.test(preferred) ? "firefox" : /edge/i.test(preferred) ? "edge" : /chrome|chromium/i.test(preferred) ? "chrome" : "";
+  ] : [Bun.which("google-chrome"), Bun.which("chromium"), Bun.which("chromium-browser"), Bun.which("microsoft-edge")];
+  const selected = /edge/i.test(preferred) ? "edge" : /chrome|chromium/i.test(preferred) ? "chrome" : "";
   if (selected) candidates.sort((a, b) => Number(!!b?.toLowerCase().includes(selected)) - Number(!!a?.toLowerCase().includes(selected)));
   const executable = candidates.find((path): path is string => !!path && existsSync(path));
-  if (!executable) throw new Error("Microsoft 365 Copilot sign-in requires Firefox, Chrome or Edge on the proxy machine");
+  if (!executable) throw new M365BrowserUnavailableError();
   return executable;
 }
 
@@ -48,7 +51,7 @@ export function m365CallbackCode(candidate: string, expectedState: string): stri
 
 async function removeM365BrowserProfile(profile: string): Promise<void> {
   if (!resolve(profile).startsWith(resolve(tmpdir()) + sep) || !profile.includes("ocx-m365-auth-")) throw new Error("Invalid temporary browser profile path");
-  // Windows releases Firefox profile handles shortly after the browser process exits.
+  // Windows can release the browser profile handles shortly after the browser process exits.
   for (let attempt = 0; attempt < 20; attempt++) {
     try { rmSync(profile, { recursive: true, force: true }); return; }
     catch (error) {
@@ -59,65 +62,105 @@ async function removeM365BrowserProfile(profile: string): Promise<void> {
   throw new Error("Microsoft sign-in browser profile is still locked; close its window and retry");
 }
 
+const MAX_CDP_FRAME_BYTES = 2 * 1024 * 1024;
+
 class BrowserProtocol {
   private sequence = 0;
+  private closed = false;
+  private chunks: Buffer[] = [];
+  private bufferedBytes = 0;
   private pending = new Map<number, { method: string; resolve(value: any): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
+  onClose?: () => void;
   onEvent?: (method: string, params: any, sessionId?: string) => void;
-  constructor(private socket: WebSocket) {
-    socket.onmessage = event => {
-      if (typeof event.data !== "string" || event.data.length > 2 * 1024 * 1024) { this.close(); return; }
+
+  constructor(private input: Writable, private output: Readable) {
+    input.on("error", this.close);
+    output.on("error", this.close);
+    output.once("close", this.close);
+    output.on("data", (chunk: Buffer) => this.receive(chunk));
+  }
+
+  private receive(chunk: Buffer) {
+    // CDP JSON frames end in a NUL byte. A pipe read or a UTF-8 character may
+    // span multiple chunks, and one read can carry several complete frames.
+    for (let start = 0; !this.closed && start < chunk.length;) {
+      const end = chunk.indexOf(0, start);
+      const piece = chunk.subarray(start, end < 0 ? chunk.length : end);
+      this.bufferedBytes += piece.length;
+      if (this.bufferedBytes > MAX_CDP_FRAME_BYTES) { this.close(); return; }
+      if (piece.length) this.chunks.push(piece);
+      if (end < 0) return;
+      const text = Buffer.concat(this.chunks, this.bufferedBytes).toString("utf8");
+      this.chunks = [];
+      this.bufferedBytes = 0;
+      start = end + 1;
       let message: any;
-      try { message = JSON.parse(event.data); } catch { this.close(); return; }
+      try { message = JSON.parse(text); } catch { this.close(); return; }
+      if (!message || typeof message !== "object" || Array.isArray(message)) { this.close(); return; }
       const call = this.pending.get(message.id);
       if (call) {
-        this.pending.delete(message.id); clearTimeout(call.timer);
+        this.pending.delete(message.id);
+        clearTimeout(call.timer);
         if (message.error) call.reject(new Error("Microsoft 365 Copilot browser command failed: " + call.method));
         else call.resolve(message.result);
       } else if (typeof message.method === "string") this.onEvent?.(message.method, message.params, message.sessionId);
-    };
-    socket.onclose = () => this.rejectPending();
-    socket.onerror = () => this.rejectPending();
+    }
   }
-  command(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<any> {
+
+  command(method: string, params: Record<string, unknown> = {}, sessionId?: string, timeoutMs = 10_000): Promise<any> {
+    if (this.closed) return Promise.reject(new Error("Microsoft 365 Copilot browser disconnected"));
     return new Promise((resolveCall, reject) => {
       const id = ++this.sequence;
-      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error("Microsoft 365 Copilot browser command timed out")); }, 10_000);
+      const timer = setTimeout(() => { this.pending.delete(id); reject(new Error("Microsoft 365 Copilot browser command timed out")); }, timeoutMs);
       this.pending.set(id, { method, resolve: resolveCall, reject, timer });
-      try { this.socket.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) })); }
-      catch { clearTimeout(timer); this.pending.delete(id); reject(new Error("Microsoft 365 Copilot browser disconnected")); }
+      try { this.input.write(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }) + "\0"); }
+      catch { this.close(); }
     });
   }
-  private rejectPending() { for (const call of this.pending.values()) { clearTimeout(call.timer); call.reject(new Error("Microsoft 365 Copilot browser disconnected")); } this.pending.clear(); }
-  close() { this.socket.close(); this.rejectPending(); }
+
+  close = () => {
+    if (this.closed) return;
+    this.closed = true;
+    this.input.destroy();
+    this.output.destroy();
+    this.chunks = [];
+    for (const call of this.pending.values()) {
+      clearTimeout(call.timer);
+      call.reject(new Error("Microsoft 365 Copilot browser disconnected"));
+    }
+    this.pending.clear();
+    this.onClose?.();
+  };
 }
 
-async function captureInBrowser(authUrl: string, expectedState: string, signal: AbortSignal, onReady: (browser: string) => void, executable = m365BrowserExecutable()): Promise<{ code: string; m365: M365CopilotWebSession }> {
-  if (executable.toLowerCase().includes("firefox")) return captureInFirefox(executable, authUrl, expectedState, signal, onReady);
+type BrowserSpawn = (file: string, args: string[], options: {
+  stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"];
+  windowsHide: boolean;
+}) => ChildProcess;
+
+async function captureInBrowser(authUrl: string, expectedState: string, signal: AbortSignal, onReady: (browser: string) => void, executable = m365BrowserExecutable(), spawnBrowser: BrowserSpawn = spawn): Promise<{ code: string; m365: M365CopilotWebSession }> {
+  if (executable.toLowerCase().includes("firefox")) throw new M365BrowserUnavailableError();
   const profile = mkdtempSync(join(tmpdir(), "ocx-m365-auth-"));
-  chmodSync(profile, 0o700);
-  let child: ReturnType<typeof Bun.spawn> | undefined;
+  let child: ChildProcess | undefined;
+  let exited: Promise<void> | undefined;
   let protocol: BrowserProtocol | undefined;
+  let cancelCapture: (() => void) | undefined;
   try {
-    child = Bun.spawn([executable, "--user-data-dir=" + profile, "--remote-debugging-port=0", "--remote-debugging-address=127.0.0.1",
-      "--no-first-run", "--no-default-browser-check", "about:blank"], { stdout: "ignore", stderr: "ignore" });
-    const activePort = join(profile, "DevToolsActivePort");
-    const deadline = Date.now() + 15_000;
-    while (!existsSync(activePort)) {
-      signal.throwIfAborted();
-      if (Date.now() > deadline || child.exitCode !== null) throw new Error("Microsoft 365 Copilot could not start its sign-in browser");
-      await Bun.sleep(100);
-    }
-    const [port, path] = readFileSync(activePort, "utf8").trim().split(/\r?\n/);
-    if (!/^\d+$/.test(port ?? "") || Number(port) < 1 || Number(port) > 65535 || !/^\/devtools\/browser\/[0-9a-f-]+$/i.test(path ?? "")) {
-      throw new Error("Microsoft 365 Copilot browser returned an invalid local endpoint");
-    }
-    const socket = new WebSocket("ws://127.0.0.1:" + port + path);
-    await new Promise<void>((resolveOpen, reject) => {
-      const timer = setTimeout(() => { socket.close(); reject(new Error("Microsoft 365 Copilot browser connection timed out")); }, 10_000);
-      socket.onopen = () => { clearTimeout(timer); resolveOpen(); };
-      socket.onerror = () => { clearTimeout(timer); reject(new Error("Microsoft 365 Copilot browser connection failed")); };
+    chmodSync(profile, 0o700);
+    child = spawnBrowser(executable, ["--user-data-dir=" + profile, "--remote-debugging-pipe",
+      "--no-first-run", "--no-default-browser-check", "about:blank"], {
+      stdio: ["ignore", "ignore", "ignore", "pipe", "pipe"], windowsHide: true,
     });
-    protocol = new BrowserProtocol(socket);
+    const [,,, input, output] = child.stdio;
+    if (input && output) protocol = new BrowserProtocol(input as Writable, output as Readable);
+    exited = new Promise<void>(resolveExit => {
+      const done = () => { protocol?.close(); resolveExit(); };
+      child!.once("error", done);
+      child!.once("exit", done);
+    });
+    if (!protocol) throw new Error("Microsoft 365 Copilot could not open its private browser pipe");
+    signal.addEventListener("abort", protocol.close, { once: true });
+    signal.throwIfAborted();
     const target = await protocol.command("Target.createTarget", { url: "about:blank" });
     const attached = await protocol.command("Target.attachToTarget", { targetId: target.targetId, flatten: true });
     const sessionId = attached.sessionId as string;
@@ -125,6 +168,8 @@ async function captureInBrowser(authUrl: string, expectedState: string, signal: 
     await protocol.command("Fetch.enable", { patterns: [{ urlPattern: "https://login.microsoftonline.com/common/oauth2/nativeclient*", requestStage: "Request" }] }, sessionId);
     const code = new Promise<string>((resolveCode, reject) => {
       const cancel = () => reject(new Error("Microsoft 365 Copilot sign-in cancelled or expired"));
+      cancelCapture = cancel;
+      protocol!.onClose = cancel;
       signal.addEventListener("abort", cancel, { once: true });
       protocol!.onEvent = (method, params, eventSession) => {
         if (method !== "Fetch.requestPaused" || eventSession !== sessionId) return;
@@ -141,81 +186,29 @@ async function captureInBrowser(authUrl: string, expectedState: string, signal: 
         })();
       };
     });
-    onReady(executable.toLowerCase().includes("msedge") ? "Edge" : "Chrome");
-    await protocol.command("Page.navigate", { url: authUrl }, sessionId);
-    const capturedCode = await code;
+    onReady(executable.toLowerCase().includes("edge") ? "Edge" : "Chromium-based browser");
+    const [capturedCode] = await Promise.all([code, protocol.command("Page.navigate", { url: authUrl }, sessionId)]);
     return { code: capturedCode, m365: await readM365BrowserWebSession(protocol, sessionId, signal) };
   } finally {
-    if (protocol) { await protocol.command("Browser.close").catch(() => {}); protocol.close(); }
-    if (child && child.exitCode === null) {
-      await Promise.race([child.exited, Bun.sleep(2_000)]);
-      if (child.exitCode === null) { child.kill(); await child.exited; }
+    if (cancelCapture) signal.removeEventListener("abort", cancelCapture);
+    if (protocol) {
+      signal.removeEventListener("abort", protocol.close);
+      await protocol.command("Browser.close", {}, undefined, 2_000).catch(() => {});
+      protocol.close();
     }
-    await removeM365BrowserProfile(profile);
-  }
-}
-
-async function captureInFirefox(executable: string, authUrl: string, expectedState: string, signal: AbortSignal, onReady: (browser: string) => void): Promise<{ code: string; m365: M365CopilotWebSession }> {
-  const profile = mkdtempSync(join(tmpdir(), "ocx-m365-auth-"));
-  chmodSync(profile, 0o700);
-  const reservation = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response(null, { status: 404 }) });
-  const port = reservation.port; reservation.stop(true);
-  const child = Bun.spawn([executable, "--no-remote", "--new-instance", "--profile", profile, "--remote-debugging-port=" + port, "about:blank"], { stdout: "ignore", stderr: "ignore" });
-  let protocol: BrowserProtocol | undefined;
-  try {
-    const deadline = Date.now() + 15_000;
-    while (!protocol) {
-      signal.throwIfAborted();
-      // Firefox's Windows launcher may exit successfully after starting its browser process.
-      if (Date.now() > deadline || child.exitCode !== null && child.exitCode !== 0) throw new Error("Microsoft 365 Copilot could not start its Firefox sign-in window");
-      const socket = new WebSocket("ws://127.0.0.1:" + port + "/session");
-      const connected = await new Promise<boolean>(resolveConnected => {
-        const timer = setTimeout(() => { socket.close(); resolveConnected(false); }, 500);
-        socket.onopen = () => { clearTimeout(timer); resolveConnected(true); };
-        socket.onerror = () => { clearTimeout(timer); resolveConnected(false); };
-      });
-      if (connected) protocol = new BrowserProtocol(socket);
-      else { socket.close(); await Bun.sleep(100); }
+    if (child && exited) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([exited, new Promise<void>(resolveWait => { timer = setTimeout(resolveWait, 2_000); })]);
+        if (child.exitCode === null && child.signalCode === null && child.pid !== undefined) { child.kill("SIGKILL"); await exited; }
+      } finally { clearTimeout(timer); }
     }
-    const session = await protocol.command("session.new", { capabilities: { alwaysMatch: { acceptInsecureCerts: false } } });
-    if (session.capabilities?.browserName !== "firefox") throw new Error("Microsoft 365 Copilot browser identity mismatch");
-    const target = await protocol.command("browsingContext.create", { type: "tab" });
-    await protocol.command("session.subscribe", { events: ["network.beforeRequestSent"], contexts: [target.context] });
-    await protocol.command("network.addIntercept", { phases: ["beforeRequestSent"], contexts: [target.context],
-      urlPatterns: [{ type: "pattern", protocol: "https", hostname: "login.microsoftonline.com", pathname: "/common/oauth2/nativeclient" }] });
-    let callbackCaptured = false;
-    let rejectCapture!: (error: Error) => void;
-    const code = new Promise<string>((resolveCode, reject) => {
-      rejectCapture = reject;
-      const cancel = () => reject(new Error("Microsoft 365 Copilot sign-in cancelled or expired"));
-      signal.addEventListener("abort", cancel, { once: true });
-      protocol!.onEvent = (method, params) => {
-        if (method !== "network.beforeRequestSent" || params.context !== target.context || !params.isBlocked) return;
-        void (async () => {
-          try {
-            const captured = m365CallbackCode(params.request.url, expectedState);
-            if (!captured) { await protocol!.command("network.continueRequest", { request: params.request.request }); return; }
-            callbackCaptured = true;
-            void protocol!.command("network.failRequest", { request: params.request.request }).catch(() => {});
-            signal.removeEventListener("abort", cancel); resolveCode(captured);
-          } catch { signal.removeEventListener("abort", cancel); reject(new Error("Microsoft 365 Copilot could not validate the Firefox callback")); }
-        })();
-      };
-    });
-    onReady("Firefox");
-    void protocol.command("browsingContext.navigate", { context: target.context, url: authUrl, wait: "none" }).catch(error => { if (!callbackCaptured) rejectCapture(error); });
-    const capturedCode = await code;
-    return { code: capturedCode, m365: await readM365BrowserWebSession(protocol, target.context, signal, true) };
-  } finally {
-    if (protocol) { await protocol.command("browser.close").catch(() => {}); protocol.close(); }
-    await Promise.race([child.exited, Bun.sleep(2_000)]);
-    if (child.exitCode === null) { child.kill(); await child.exited; }
     await removeM365BrowserProfile(profile);
   }
 }
 
 /** A managed sign-in window needs no second URL or copy/paste channel. */
-export async function captureM365BrowserCode(authUrl: string, expectedState: string, ctrl: OAuthController, deps: { executable?: string } = {}): Promise<{ code: string; m365: M365CopilotWebSession }> {
+export async function captureM365BrowserCode(authUrl: string, expectedState: string, ctrl: OAuthController, deps: { executable?: string; spawn?: BrowserSpawn } = {}): Promise<{ code: string; m365: M365CopilotWebSession }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10 * 60_000);
   const signal = ctrl.signal ? AbortSignal.any([ctrl.signal, controller.signal]) : controller.signal;
@@ -224,6 +217,6 @@ export async function captureM365BrowserCode(authUrl: string, expectedState: str
     ctrl.onProgress?.("Opening the Microsoft sign-in window...");
     return await captureInBrowser(authUrl, expectedState, signal, browser => {
       ctrl.onAuth?.({ url: "", instructions: "Complete Microsoft sign-in in the " + browser + " window OpenCodex opened. Keep it open while Copilot loads its model picker. The callback and web session are captured locally." });
-    }, deps.executable);
+    }, deps.executable, deps.spawn);
   } finally { clearTimeout(timeout); controller.abort(); }
 }

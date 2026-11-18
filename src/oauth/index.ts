@@ -50,6 +50,7 @@ import { assertDevinCliAdoptionOwnership, loginDevin, refreshDevinToken } from "
 import { validateDevinApiBaseUrl } from "./devin/api-base";
 import { loginGithubCopilot, refreshGithubCopilotToken, validateCopilotApiBaseUrl } from "./github-copilot";
 import { loginM365Copilot, refreshM365CopilotToken } from "./m365-copilot";
+import { M365BrowserUnavailableError } from "./m365-copilot-browser";
 import { loginCommandCode, refreshCommandCodeToken } from "./command-code";
 import { loginMetaMuse, refreshMetaMuseToken } from "./meta-muse";
 import { loginWorkBuddy, refreshWorkBuddyToken } from "./workbuddy";
@@ -481,6 +482,7 @@ export function publicOAuthErrorPresentation(error: unknown): import("../lib/cli
 
 export function publicOAuthAuthenticationErrorMessage(error: unknown): string {
   if (error instanceof AntigravityProjectDiscoveryError) return error.publicMessage;
+  if (error instanceof M365BrowserUnavailableError) return error.message;
   if (error instanceof MuseLoginError) return museLoginErrorMessage(error.kind, error.status);
   if (error instanceof OAuthMutationBusyError) {
     return error.message === "OAuth mutation queue wait timed out"
@@ -1859,11 +1861,8 @@ export function getLoginStatus(provider: string, maskEmails = true, flowId?: str
       ? { planLabel: anthropicSubscriptionLabel(a.credential.plan) } : {}),
   }));
 
-  // A stored credential counts as "logged in" when it exists and is not marked for
-  // re-authentication. An expired access token with a valid refresh token is still
-  // logged in unless refresh-attention evidence applies; refresh eligibility stays internal.
-  // Invalid/unknown local-import expiries are handled at parse/adoption time
-  // (local-token-detect.ts), never by over-reporting login state here.
+  // Expired access tokens can still count as logged in with a usable refresh token.
+  // Refresh-attention and local-import expiry checks stay in accountNeedsReauthForStatus.
   const activeAccount = set?.accounts.find(a => a.id === set.activeAccountId);
   const activeNeedsReauth = activeAccount && accountNeedsReauthForStatus(provider, activeAccount);
   return {
