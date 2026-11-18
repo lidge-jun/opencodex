@@ -76,17 +76,17 @@ test("#8753 projects Home relay delivery separately from connected transport and
     state: "connected", relayHealth: { delivery: "unknown", relayAuthentication: "unknown", inferenceReadiness: "unknown" },
   });
   h.time(now - 130_000);
-  h.activity.beginHttpDelivery(HUB, "runtime:1")(false);
+  h.activity.beginHttpDelivery(HUB, "runtime:1")("upstream_failure");
   h.time(now);
-  h.activity.beginHttpDelivery(HUB, "runtime:1")(false);
+  h.activity.beginHttpDelivery(HUB, "runtime:1")("upstream_failure");
   const end = h.activity.beginHttpDelivery(HUB, "runtime:1");
-  end(false);
-  end(false);
-  h.activity.beginHttpDelivery(HUB, "runtime:1")(true);
+  end("upstream_failure");
+  end("upstream_failure");
+  h.activity.beginHttpDelivery(HUB, "runtime:1")("observed");
   expect(await row()).toMatchObject({
     state: "connected", relayHealth: { delivery: "observed", relayAuthentication: "observed", inferenceReadiness: "unknown", recentInterruptions: 2 },
   });
-  h.activity.beginHttpDelivery(HUB, "runtime:1")(false);
+  h.activity.beginHttpDelivery(HUB, "runtime:1")("upstream_failure");
   const dto = await h.call("/api/link/status?relayHealth=1");
   expect(validateStatus(dto).links[0]).toMatchObject({
     state: "connected", relayHealth: { delivery: "degraded", relayAuthentication: "observed", inferenceReadiness: "unknown",
@@ -99,13 +99,15 @@ test("#8753 projects Home relay delivery separately from connected transport and
   const old = h.activity.beginHttpDelivery(HUB, "runtime:1");
   h.generation("runtime:2");
   expect(await row()).toMatchObject({ relayHealth: { relayAuthentication: "unknown", delivery: "unknown", recentInterruptions: 0 } });
-  h.activity.beginHttpDelivery(HUB, "runtime:2")(true);
-  old(false);
+  const fresh = h.activity.beginHttpDelivery(HUB, "runtime:2");
+  expect(await row()).toMatchObject({ relayHealth: { relayAuthentication: "observed", delivery: "unknown", recentInterruptions: 0 } });
+  fresh("observed");
+  old("upstream_failure");
   expect(await row()).toMatchObject({
     relayHealth: { delivery: "observed", recentInterruptions: 0 },
   });
   h.time(now + 120_000);
-  expect(await row()).toMatchObject({ relayHealth: { relayAuthentication: "observed", delivery: "unknown", recentInterruptions: 0 } });
+  expect(await row()).toMatchObject({ relayHealth: { relayAuthentication: "unknown", delivery: "unknown", recentInterruptions: 0 } });
 });
 
 describe("GET /api/link/status?traffic=1 (#3023)", () => {

@@ -5,6 +5,7 @@ import { createLinkRelaySessions } from "../../src/server/index/link-relay-sessi
 import { serviceApiTokenFingerprint } from "../../src/lib/service-secrets";
 import { childLinkTraffic, createLinkTrafficBook, MAX_LINKS } from "../../src/link/traffic";
 import { createLinkActivity } from "../../src/link/child-activity";
+import { attachLinkRelayHealth, projectLinkStatus } from "../../src/link/status-projection";
 import { linkBoundFetch } from "../../src/client/link-home";
 import { gzipSync } from "node:zlib";
 import { PassThrough } from "node:stream";
@@ -33,7 +34,16 @@ function home(dispatch: (req: Request) => Promise<Response>) {
   const sessions = createLinkRelaySessions({ fingerprints: () => [fp], traffic: book, activity, connectionGeneration: () => "runtime:1" });
   const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (req, s) => sessions.dispatch(req, s, dispatch) });
   servers.push(server);
-  return { book, activity, port: server.port! };
+  const relayHealth = () => {
+    const dto = projectLinkStatus({ version: 1, listenerPort: server.port!, links: [{
+      id: linkId, alias: "test-child", direction: "hub-initiated", hostKeyFingerprint: null,
+      tunnelPort: server.port!, apiKeyId: keyId, createdAt: "2026-01-01T00:00:00Z", remotePlatform: "posix",
+    }] }, [{ linkId, direction: "hub-initiated", state: { kind: "connected", since: 0 }, pid: 1 }],
+    { state: "listening", port: server.port! }, {}, { version: 1, entries: {} });
+    attachLinkRelayHealth(dto, () => "runtime:1", id => activity.snapshot(id, Date.now()));
+    return dto.links[0]?.relayHealth;
+  };
+  return { book, activity, port: server.port!, relayHealth };
 }
 
 /** A caller body delivered in chunks of the given sizes, with a declared length. */
@@ -69,7 +79,7 @@ describe("link traffic counters (#3023)", () => {
     expect(read).toBe(sent);
     expect(child.snapshot(linkId)).toMatchObject({ requests: 1, incomplete: 0, toHomeBytes: received, fromHomeBytes: sent, toHomeSource: "relayed", toHomeUncounted: 0 });
     expect(h.book.snapshot(linkId)).toMatchObject({ requests: 1, incomplete: 0, toHomeBytes: received, fromHomeBytes: sent, toHomeSource: "content-length", toHomeUncounted: 0 });
-    expect(h.activity.snapshot(linkId, Date.now()).httpDelivery).toEqual({ generation: "runtime:1", recentSettled: 1, recentInterruptions: 0 });
+    expect(h.activity.snapshot(linkId, Date.now()).httpDelivery).toMatchObject({ generation: "runtime:1", recentSettled: 1, recentInterruptions: 0 });
   });
 
   test("an aborted response counts only the bytes that crossed and marks the request incomplete", async () => {
@@ -93,7 +103,53 @@ describe("link traffic counters (#3023)", () => {
     await homeCancelled.promise;
     expect(child.snapshot(linkId)).toMatchObject({ requests: 1, incomplete: 1, toHomeBytes: 2048, fromHomeBytes: first.byteLength });
     expect(h.book.snapshot(linkId)).toMatchObject({ requests: 1, incomplete: 1, toHomeBytes: 2048, fromHomeBytes: first.byteLength });
-    expect(h.activity.snapshot(linkId, Date.now()).httpDelivery).toEqual({ generation: "runtime:1", recentSettled: 1, recentInterruptions: 1 });
+    expect(h.activity.snapshot(linkId, Date.now()).httpDelivery).toMatchObject({ generation: "runtime:1", recentSettled: 1, recentInterruptions: 0, recentCancellations: 1 });
+  });
+
+  test("three successful responses cancelled after the first chunk keep relay delivery observed", async () => {
+    let cancelled = gate();
+    const h = home(async req => {
+      await req.arrayBuffer();
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) { controller.enqueue(encoder.encode("data: first\n\n")); },
+        cancel() { cancelled.resolve(); },
+      }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } });
+    });
+    for (let i = 0; i < 3; i++) {
+      cancelled = gate();
+      const response = await relayLinkDataRequest(chunkedRequest([10]), target(h.port), { tunnel: HOME_INITIATED_LINK_TUNNEL });
+      expect(response.status).toBe(200);
+      const reader = response.body!.getReader();
+      expect((await reader.read()).value?.byteLength).toBeGreaterThan(0);
+      await reader.cancel();
+      await cancelled.promise;
+    }
+    expect(h.relayHealth()).toMatchObject({ delivery: "observed", relayAuthentication: "observed", recentInterruptions: 0 });
+    expect(h.activity.snapshot(linkId, Date.now()).httpDelivery?.recentCancellations).toBe(3);
+  });
+
+  test("three upstream relay failures degrade delivery, including a transport error before response data", async () => {
+    let attempt = 0;
+    const h = home(async req => {
+      await req.arrayBuffer();
+      switch (attempt++) {
+        case 0: return Response.json({ code: "home_unreachable" }, { status: 503 });
+        case 1: return Response.json({ code: "provider_busy" }, { status: 503 });
+        case 2: return Response.json({ code: "link_relay_auth_failed" }, { status: 503 });
+        default: return new Response(new ReadableStream<Uint8Array>({
+          pull(controller) { controller.error(new Error("upstream transport closed")); },
+        }, { highWaterMark: 0 }));
+      }
+    });
+    for (const code of ["home_unreachable", "provider_busy", "link_relay_auth_failed"]) {
+      const response = await relayLinkDataRequest(chunkedRequest([10]), target(h.port), { tunnel: HOME_INITIATED_LINK_TUNNEL });
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ code });
+    }
+    expect(h.relayHealth()).toMatchObject({ delivery: "observed", recentInterruptions: 2 });
+    const response = await relayLinkDataRequest(chunkedRequest([10]), target(h.port), { tunnel: HOME_INITIATED_LINK_TUNNEL });
+    await response.arrayBuffer().catch(() => undefined);
+    expect(h.relayHealth()).toMatchObject({ delivery: "degraded", recentInterruptions: 3 });
   });
 
   test("a Home request without Content-Length is counted as uncounted, not guessed", async () => {
@@ -201,7 +257,7 @@ describe("link traffic counters at the transport boundary (#3023 review)", () =>
     await relayed.catch(() => undefined);
     await answered.promise;
     expect(h.book.snapshot(linkId)).toMatchObject({ requests: 1, incomplete: 1 });
-    expect(h.activity.snapshot(linkId, Date.now()).httpDelivery).toEqual({ generation: "runtime:1", recentSettled: 1, recentInterruptions: 1 });
+    expect(h.activity.snapshot(linkId, Date.now()).httpDelivery).toMatchObject({ generation: "runtime:1", recentSettled: 1, recentInterruptions: 0, recentCancellations: 1 });
   });
 });
 

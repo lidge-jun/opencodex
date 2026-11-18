@@ -32,6 +32,8 @@ export type LinkTunnelStatus =
     orphan?: "orphan-unverified";
     /** Attempts, last change and last failure cause of this tunnel (`tunnel-history.ts`). */
     history?: TunnelHistory;
+    /** A same-route forward retry due before the current route round advances. */
+    forwardRetryAt?: number;
     /** Links with several routes only (src/link/route-rounds.ts). */
     routes?: LinkRouteStatus;
     /** An unsettled revoke keeps this link down (revokeSuspendsLink); absent otherwise. */
@@ -559,7 +561,8 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         // A reconnect may have started a fresh child meanwhile; its own lifecycle owns the state.
         if (generations.get(linkId) !== generation) return;
         if (rounds.exited(linkId, child, stderr, resume => scheduleForwardRelease(linkId, generation, resume))) {
-          if (!forwardReleases.get(linkId)?.pending) forwardReleases.delete(linkId);
+          if (forwardReleases.get(linkId)?.pending) history.recordFailure(linkId, "remote_forward_conflict", now());
+          else forwardReleases.delete(linkId);
           return;
         }
         const stderrClass = classifySshStderr(stderr);
@@ -1066,7 +1069,8 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
         const suspension = suspensionOf(record.id);
         const state = states.get(record.id) ?? IDLE;
         const release = forwardReleases.get(record.id);
-        const retryAt = !stopping && !suspension && release && now() < release.deadline ? release.pending?.at : undefined;
+        const retryAt = release && !stopping && !suspension && release.generation === generations.get(record.id)
+          && now() < release.deadline ? release.pending?.at : undefined;
         return {
           linkId: record.id,
           direction: record.direction,
@@ -1074,6 +1078,7 @@ export function createLinkSupervisor(deps: LinkSupervisorDeps = {}): LinkSupervi
           pid: child?.child.pid ?? null,
           ...(orphanUnverified.has(record.id) ? { orphan: "orphan-unverified" as const } : {}),
           ...(recorded ? { history: recorded } : {}),
+          ...(routes && retryAt !== undefined ? { forwardRetryAt: retryAt } : {}),
           ...(routes ? { routes } : {}),
           ...(suspension ? { suspended: { operationId: suspension.operationId, since: suspension.since } } : {}),
         };

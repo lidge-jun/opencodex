@@ -98,7 +98,7 @@ export function attachLinkRelayHealth(
     const recentInterruptions = evidence?.recentInterruptions ?? 0;
     const degraded = recentInterruptions >= LINK_DELIVERY_DEGRADED_THRESHOLD;
     link.relayHealth = {
-      relayAuthentication: evidence ? "observed" : "unknown",
+      relayAuthentication: evidence?.recentAuthentication ? "observed" : "unknown",
       delivery: degraded ? "degraded" : evidence?.recentSettled ? "observed" : "unknown",
       inferenceReadiness: "unknown",
       recentInterruptions,
@@ -169,12 +169,12 @@ export function attachLinkTunnelDiagnostics(dto: LinkStatusDto, supervisorStates
   for (const link of dto.links) {
     const status = byId.get(link.id);
     if (!status || status.direction !== "hub-initiated") continue;
-    const { state, history } = status;
-    const due = (state.kind === "failed" || state.kind === "reconnecting") && state.retryAt !== undefined && state.inFlight !== true
-      ? state.retryAt : null;
+    const { state, history, forwardRetryAt } = status;
+    const due = forwardRetryAt ?? ((state.kind === "failed" || state.kind === "reconnecting") && state.inFlight !== true
+      ? state.retryAt : undefined);
     link.tunnel = {
       attempt: history?.attempt ?? 0,
-      nextRetryAt: due === null ? null : iso(due),
+      nextRetryAt: due === undefined ? null : iso(due),
       lastTransition: history?.lastTransition
         ? { from: history.lastTransition.from, to: history.lastTransition.to, at: iso(history.lastTransition.at), cause: history.lastTransition.cause }
         : null,

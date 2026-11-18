@@ -8,6 +8,7 @@ import { SshRunnerError, type SshChild, type SshRunner, type SshRunResult } from
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 import { READY_PROOF_MS, ROUTE_PROBE_MS } from "../../src/link/route-rounds";
 import { HOME_TUNNEL_RETRY_POLICY } from "../../src/link/tunnel-state";
+import { attachLinkTunnelDiagnostics, projectLinkStatus } from "../../src/link/status-projection";
 
 const LINK = "lnk_0123456789abcdef";
 const TUNNEL_PORT = 19002;
@@ -222,11 +223,28 @@ test("#8753 retries the refused candidate on its route after a manual reconnect 
   replacement.exit(255, "Error: remote port forwarding failed for listen port 19002");
   await flush();
   expect(h.tunnels).toHaveLength(2);
+  const status = () => {
+    const tunnels = h.supervisor.status();
+    const dto = projectLinkStatus(
+      { version: 1, listenerPort: LISTENER_PORT, links: [record(["alpha-lan", "pen-alpha"])] },
+      tunnels, { state: "listening", port: LISTENER_PORT }, {}, { version: 1, entries: {} },
+    );
+    return attachLinkTunnelDiagnostics(dto, tunnels).links[0]!;
+  };
+  expect(status()).toMatchObject({
+    state: "connecting",
+    tunnel: {
+      lastFailure: { cause: "remote_forward_conflict", at: new Date(h.now()).toISOString() },
+      nextRetryAt: new Date(h.now() + 1_000).toISOString(),
+    },
+  });
+  expect(h.state().routes?.routes[0]?.eligibleAt).toBeNull();
   await h.advance(1_000);
   expect(h.tunnels).toHaveLength(3);
   expect(h.tunnels[2]!.argv).toEqual(replacement.argv);
   expect(h.kills).toEqual([]);
   expect(h.state().state.kind).toBe("connecting");
+  expect(status().tunnel).toMatchObject({ nextRetryAt: null, lastFailure: { cause: "remote_forward_conflict" } });
   await h.grant();
   await h.tick();
   expect(h.state().state.kind).toBe("connected");
