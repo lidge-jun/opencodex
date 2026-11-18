@@ -323,7 +323,8 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
       expect(observed.chatAuth).toEqual(["Bearer rejected-access"]);
       const entry = readUsageEntries().at(-1);
       expect(entry?.status).toBe(response.status);
-      expect(entry?.attempts?.map(attempt => [attempt.adapter, attempt.status, attempt.sendCount])).toEqual([[adapter, 401, 1]]);
+      expect(entry?.attempts?.map(attempt => [attempt.adapter, attempt.status, attempt.sendCount,
+        attempt.failureStage, attempt.failureCause])).toEqual([[adapter, 401, 1, "headers-only", "credential-rejected"]]);
     } finally {
       pacing.mockRestore();
       await server.stop(true);

@@ -1538,7 +1538,7 @@ function writeFinalRequestLog(
     ...(logCtx.causeHint ? { causeHint: logCtx.causeHint } : {}),
     locallyAnswered: logCtx.localTerminalReason !== undefined,
     // A coordinated write derives the request pair from a copy and re-derives the attempt's own.
-    ...(logCtx.activeAttempt ? { attempt: attemptStatus === undefined && !sealedRefusal ? logCtx.activeAttempt : { ...logCtx.activeAttempt } } : {}),
+    ...(logCtx.activeAttempt ? { attempt: attemptStatus === undefined ? logCtx.activeAttempt : { ...logCtx.activeAttempt } } : {}),
   });
   if (attemptStatus !== undefined && logCtx.activeAttempt && !sealedRefusal) attributePhysicalAttempt(logCtx.activeAttempt);
   // The one seam every request passes exactly once, whatever transport served it and however

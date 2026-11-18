@@ -9,8 +9,22 @@ import { repoPath } from "../helpers/repo-root";
 import { normalizeUsageEntryForTest } from "../../src/usage/log";
 import { formatAnthropicProviderForLog } from "../../src/oauth/anthropic-routing";
 import { createAdapterTierMetadata } from "../../src/providers/fastwire";
+import { sealCredentialRefusal } from "../../src/server/credential-recovery-attempt";
+import { attributeFinalRequest } from "../../src/server/request-log-failure-attribution";
 
 describe("key attempt accounting", () => {
+  test.each([200, 429, 499])("logical finalization at %d preserves a sealed physical refusal", status => {
+    const active = beginRequestAttempt(1, "test", "model", "openai-chat");
+    const ctx: RequestLogContext = { provider: "test", model: "model", accountLogLabel: "o111111", activeAttempt: active };
+    noteProviderAttemptSend(ctx, "test", { adapter: "openai-chat", authMode: "oauth", baseUrl: "https://example.test" }, 42);
+    sealCredentialRefusal(ctx, 401, "oauth-401");
+    const refused = structuredClone(active);
+    sealRequestAttemptIdentity(active, "other", "anthropic", "o222222");
+    finishRequestAttempt(active, status, 10_000);
+    attributeFinalRequest({ status, outputObserved: false, locallyAnswered: false, attempt: active });
+    expect(active).toEqual(refused);
+  });
+
   test("recovery can measure an HTTP failure without attributing it to a key attempt", async () => {
     const active = beginRequestAttempt(1, "test", "model", "anthropic");
     const ctx: RequestLogContext = { provider: "test", model: "model", activeAttempt: active };
