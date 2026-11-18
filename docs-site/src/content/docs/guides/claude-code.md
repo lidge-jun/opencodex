@@ -1092,11 +1092,12 @@ Recent Claude Code builds declare Anthropic's Advisor server tool (`advisor_2026
 request and returns a `server_tool_use` block named `advisor` followed by an
 `advisor_tool_result`. On the translated path OpenCodex handles it this way:
 
-- An `anthropic`-adapter provider on first-party `https://api.anthropic.com` receives the
+- A destination whose selected adapter is `anthropic` on first-party `https://api.anthropic.com` receives the
   declaration as sent and the beta header. An Anthropic-compatible gateway receives them only when
   its provider sets [`forwardAdvisorTool: true`](/reference/configuration/providers/), because a
   gateway without the Advisor would reject every Claude Code request that declares it.
-  `forwardAdvisorTool: false` turns it off for first-party Anthropic too.
+  `forwardAdvisorTool: false` turns it off for first-party Anthropic too. This uses the model's
+  selected wire, including after a key or account replacement.
 - Every other destination, including GPT, Gemini and gateways without the opt-in, drops the
   declaration and runs the turn without advice. An Advisor declaration never blocks a combo child
   or a fallback.
@@ -1107,14 +1108,16 @@ request and returns a `server_tool_use` block named `advisor` followed by an
   request log records `advisor-tool-outside-model-scope`. The managed native Messages lane
   refuses such a request instead.
 - If the request's captured policy has an applicable root, identity or provider-pool token spend
-  ceiling, the hosted Advisor declaration, completed history and beta are withheld. The main turn
+  ceiling for the current send's selected target, the hosted Advisor declaration, completed history
+  and beta are withheld from that send onward. The main turn
   continues. On directly routed requests the log records `advisor-tool-withheld-by-spend-policy`.
   A forced choice of the withheld `advisor` becomes `auto`, unless an ordinary client tool or
   the OpenCodex Advisor owns that name. Other tool choices remain unchanged.
   This uses the policy captured for that request, including
   its selected account and pool; later configuration changes do not alter that policy. A retry on
   a replacement key or account checks the same policy before building its request. Once withheld,
-  the hosted Advisor stays withheld for the rest of the turn. Requests
+  the hosted Advisor stays withheld for the rest of the turn. Earlier sends on an unlimited
+  account are unaffected. Requests
   without an applicable ceiling keep the forwarding rules above.
 - The `server_tool_use` and `advisor_tool_result` blocks reach Claude Code unchanged, with their
   `srvtoolu_` ids, for streaming and non-streaming requests. That covers the plaintext

@@ -229,7 +229,7 @@ export async function prepareResponsesTransport(
     ? captureOAuthAccountSelection(route.providerName) : null;
   const anthropicManualSelectionGeneration = anthropicRouting?.captureAnthropicManualSelectionGeneration();
   let servingOAuthSnapshot: OAuthAccessSnapshot | undefined;
-  let hostedAdvisorSpendGuard: ((request: OcxParsedRequest) => void) | undefined;
+  let hostedAdvisorSpendGuard: ((request: OcxParsedRequest, provider: OcxProviderConfig) => void) | undefined;
   if (deferPhysicalAttribution) bindResponsesSpendTarget(logCtx, () => ({
     poolId: logCtx.spendPoolId ?? route.providerName,
     identityId: copilotCandidate ? copilotCandidate.accountLogLabel : logCtx.accountLogLabel,
@@ -675,7 +675,7 @@ export async function prepareResponsesTransport(
     }
     const buildWithHostedAdvisorPolicy = resolved.buildRequest.bind(resolved);
     resolved.buildRequest = (requestParsed, incoming) => {
-      hostedAdvisorSpendGuard?.(requestParsed);
+      hostedAdvisorSpendGuard?.(requestParsed, provider);
       return buildWithHostedAdvisorPolicy(requestParsed, incoming);
     };
     if (route.provider.authMode === "forward") return resolved;
@@ -1551,6 +1551,8 @@ export async function prepareResponsesTransport(
     applyFailoverSnapshot,
     selectionIsCurrent,
     resolveSelectionAdapter,
+    // Optional preflight sees the same effective wire as the first physical builder.
+    initialAdapterProvider: adapterProvider,
     get hostedAdvisorSpendGuard() { return hostedAdvisorSpendGuard; },
     set hostedAdvisorSpendGuard(guard: typeof hostedAdvisorSpendGuard) { hostedAdvisorSpendGuard = guard; },
     resolveCopilotSelection,

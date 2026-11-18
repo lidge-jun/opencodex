@@ -102,16 +102,20 @@ rules are in [providers and adapters](providers-and-adapters.md);
 `tests/claude-integration/claude-translated-advisor-tool.test.ts` covers both sides of the precedence
 through the Responses core.
 
-Translated turns with an applicable root, identity or pool token ceiling withhold the hosted
-declaration, completed Advisor history and beta, while the main model and other tools continue.
-`sidecar-execution.ts` checks the actual authenticated target's captured ceilings before optional
-planning without starting main-model accounting; an already captured Combo policy stays fixed. The budget's read-only
+Translated turns evaluate the current send's selected identity and effective wire. An applicable
+root, identity or pool token ceiling withholds the hosted declaration, completed Advisor history
+and beta from that send onward, while the main model and other tools continue.
+`sidecar-execution.ts` uses the transport's `initialAdapterProvider` to check the actual authenticated
+target's captured ceilings before optional planning without starting main-model accounting;
+an already captured Combo policy stays fixed. The budget's read-only
 `hasCapturedSpendCeiling` checks the original numeric ceilings against that target, including an
 identity selected after Combo prepayment. It does not change the initial accounting mode or reread
 live config. Its hosted-only identity binding leaves ordinary accounting scopes unchanged.
-The physical adapter builder reapplies the same query to admitted replacement identities before
-serialization, including sidecar copies and dispatch-time reselection. Once withheld, the hosted
-tool and replay stay withheld for the rest of this turn even if a later identity is unlimited.
+The physical adapter builder supplies its own resolved provider when reapplying the same query
+to admitted replacement identities before serialization, including sidecar copies and dispatch-time
+reselection. Credential rebuilding may restore a provider-wide adapter, so eligibility follows this
+builder's effective wire instead. Once withheld, the hosted tool and replay stay withheld for the
+rest of this turn even if a later identity is unlimited; earlier unlimited sends are unaffected.
 After the final tool catalog is known, a named `advisor` choice whose hosted tool was withheld
 becomes `auto` only when no ordinary or proxy function owns that selection. Other choices and
 allow-lists stay unchanged. The delivery maps are rebuilt and charged for newly usable tools;
@@ -122,7 +126,8 @@ the hosted Advisor. The proxy Advisor retains its separately budgeted consultati
 [Responses spend](transports/responses-spend.md). The same integration test covers all three scopes,
 streaming and buffered responses, replay, opted-in gateways, and policy changes after capture.
 `tests/responses/responses-first-send-spend-policy.test.ts` also covers target-dependent authority
-across key rotation, the web-search retry copy and post-rotation named-choice delivery.
+across key rotation, including a rebuilt provider whose default differs from its pinned wire,
+the web-search retry copy and post-rotation named-choice delivery.
 
 ## Recursion fence (server-owned authority)
 

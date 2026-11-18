@@ -19,6 +19,7 @@ import { createTempHome } from "../helpers/temp-home";
 import { createAnthropicInstanceFixture, type AnthropicInstanceFixture } from "../helpers/anthropic-instance-fixture";
 import { planAnthropicServerTools, withholdAdvisorServerTools } from "../../src/adapters/anthropic/advisor-tool";
 import { webSearchPairFromItem } from "../../src/claude/outbound";
+import { responsesSuccess } from "../helpers/combo-failover-upstream";
 
 // Claude Code declares Anthropic's typed Advisor server tool (#8448). On the translated Messages
 // lane it travels out of body to first-party Anthropic, or to a gateway that opts in with
@@ -76,9 +77,9 @@ const advisorTurn = (result: unknown): Rec[] => [
   ...text(3, "Done."), ...end(),
 ];
 
-interface Wire { body: Rec; headers: Headers }
+interface Wire { body: Rec; headers: Headers; url?: string }
 interface TurnOptions {
-  baseUrl?: string; provider?: Rec; model?: string; stream?: boolean; direct?: boolean;
+  baseUrl?: string; providerName?: string; provider?: Rec; model?: string; stream?: boolean; direct?: boolean; proactiveKeySelection?: boolean;
   messages?: unknown[]; tools?: unknown[]; frames?: Rec[]; gptFirst?: boolean; gptOnly?: boolean; nativeRollout?: boolean; requestId?: string;
   spend?: OcxConfig["spend"]; rootId?: string; policyDuringPlan?: OcxConfig["spend"]; proxyAdvisor?: boolean;
   toolChoice?: Rec;
@@ -86,25 +87,34 @@ interface TurnOptions {
 
 async function claudeTurn(options: TurnOptions = {}): Promise<{ wires: Wire[]; status: number; body: string; logCtx: RequestLogContext }> {
   const wires: Wire[] = [];
-  const capture = (target: "anth" | "gpt") => (async (_input: unknown, init?: RequestInit) => {
-    wires.push({ body: JSON.parse(String(init?.body)) as Rec, headers: new Headers(init?.headers) });
-    if (target === "gpt") {
+  const capture = (target: "anth" | "gpt") => (async (input: unknown, init?: RequestInit) => {
+    const url = String(input);
+    wires.push({ body: JSON.parse(String(init?.body)) as Rec, headers: new Headers(init?.headers), url });
+    if (url.endsWith("/responses")) {
+      const response = responsesSuccess("ok", MODEL);
+      return sse([{ type: "response.output_text.delta", item_id: "msg_backup", output_index: 0, content_index: 0, delta: "ok" },
+        { type: "response.completed", response }]);
+    }
+    if (target === "gpt" || url.endsWith("/chat/completions")) {
       return new Response(`data: ${JSON.stringify({ id: "c", object: "chat.completion.chunk", choices: [{ index: 0, delta: { content: "gpt ok" }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
         { headers: { "content-type": "text/event-stream" } });
     }
     return sse(options.frames ?? OK_TURN);
   }) as typeof globalThis.fetch;
-  const anth = { provider: "anth", model: MODEL };
+  const providerName = options.providerName ?? "anth";
+  const anth = { provider: providerName, model: MODEL };
   const gpt = { provider: "gpt", model: "g" };
   const config = {
-    port: 0, defaultProvider: "anth",
+    port: 0, defaultProvider: providerName,
     spend: options.spend,
     claudeCode: { nativePassthrough: false },
     webSearchSidecar: { enabled: false },
     ...(options.direct || options.nativeRollout
       ? { protocols: { rollout: { directEncoders: options.direct === true, managedMessagesNative: options.nativeRollout === true } } } : {}),
     providers: {
-      anth: { adapter: "anthropic", baseUrl: options.baseUrl ?? FIRST_PARTY, authMode: "key", apiKey: "sk-ant-fixture", models: [MODEL], fetch: capture("anth"), ...options.provider },
+      [providerName]: { adapter: "anthropic", baseUrl: options.baseUrl ?? FIRST_PARTY, authMode: "key", apiKey: "sk-ant-fixture", models: [MODEL], fetch: capture("anth"),
+        ...(options.proactiveKeySelection ? { apiKeyPool: [{ id: "0", key: "sk-ant-fixture" }, { id: "1", key: "sk-ant-other-fixture" }],
+          requestPacing: { enabled: true, keySelection: "round-robin" } } : {}), ...options.provider },
       gpt: { adapter: "openai-chat", baseUrl: "https://gpt.invalid/v1", authMode: "key", apiKey: "sk-fixture", models: ["g"], fetch: capture("gpt") },
     },
     combos: { waterfall: { strategy: "failover", targets: options.gptOnly ? [gpt] : options.gptFirst ? [gpt, anth] : [anth, gpt] } },
@@ -127,7 +137,7 @@ async function claudeTurn(options: TurnOptions = {}): Promise<{ wires: Wire[]; s
       headers: { "content-type": "application/json", "anthropic-beta": BETA,
         ...(options.rootId ? { "x-codex-parent-thread-id": options.rootId } : {}) },
       body: JSON.stringify({
-        model: options.model ?? (options.direct ? `anth/${MODEL}` : "combo/waterfall"), max_tokens: 64, stream: options.stream ?? true,
+        model: options.model ?? (options.direct ? `${providerName}/${MODEL}` : "combo/waterfall"), max_tokens: 64, stream: options.stream ?? true,
         tools: options.tools ?? [READ, ADVISOR],
         tool_choice: options.toolChoice,
         messages: options.messages ?? [{ role: "user", content: "Plan the shutdown." }],
@@ -219,6 +229,58 @@ describe("hosted Advisor under the request's token spend policy", () => {
     expect(toolTypes(result.wires[0]!)).toEqual(["function"]);
     expect(betas(result.wires[0]!)).not.toContain(BETA);
     expect(JSON.stringify(result.wires[0]!.body)).not.toContain(CIPHERTEXT);
+  });
+
+  for (const [providerName, baseUrl] of [["commandcode", "https://api.commandcode.ai/provider/v1"], ["tokenlab", "https://api.tokenlab.sh/v1"]] as const)
+    for (const aliased of [false, true]) for (const limited of [false, true]) {
+      test(`effective Anthropic wire applies Advisor policy (${providerName}, alias=${aliased}, limited=${limited})`, async () => {
+        const result = await claudeTurn({ providerName, baseUrl, proactiveKeySelection: true,
+          model: aliased ? "relay/worker" : `${providerName}/${MODEL}`,
+          provider: { adapter: "openai-chat", forwardAdvisorTool: true,
+            ...(aliased ? { alias: "relay", modelAliases: { [MODEL]: "worker" } } : {}) },
+          spend: limited ? { pool: limit } : {}, policyDuringPlan: limited ? {} : { pool: limit }, messages: replay });
+        expect(result.status, result.body).toBe(200);
+        expect(result.body).toContain("ok");
+        expect(result.wires).toHaveLength(1);
+        const wire = result.wires[0]!;
+        expect(wire.url).toBe(`${baseUrl}/messages`);
+        expect(toolTypes(wire).includes("advisor_20260301")).toBe(!limited);
+        expect(betas(wire).includes(BETA)).toBe(!limited);
+        expect(JSON.stringify(wire.body).includes("srvtoolu_adv1")).toBe(!limited);
+        expect(JSON.stringify(wire.body)).toContain("Earlier answer.");
+        expect(protocolTraceForRequest(result.logCtx, result.logCtx.attempts)?.reasonCodes.includes("advisor-tool-withheld-by-spend-policy") ?? false).toBe(limited);
+        expect(responsesHostedAdvisorSpendTarget(result.logCtx, providerName).poolId).toBe(providerName);
+      });
+    }
+
+  for (const adapter of ["openai-chat", "openai-responses"] as const) for (const aliased of [false, true]) {
+    test(`effective ${adapter} wire does not apply the hosted Advisor gate (alias=${aliased})`, async () => {
+      const result = await claudeTurn({ baseUrl: GATEWAY, proactiveKeySelection: true,
+        model: aliased ? "relay/worker" : `anth/${MODEL}`,
+        provider: { forwardAdvisorTool: true, modelAdapters: { [MODEL]: adapter },
+          ...(aliased ? { alias: "relay", modelAliases: { [MODEL]: "worker" } } : {}) },
+        spend: { pool: limit }, messages: replay });
+      expect(result.status, result.body).toBe(200);
+      expect(result.body).toContain("ok");
+      expect(result.wires).toHaveLength(1);
+      const wire = result.wires[0]!;
+      expect(wire.url).toEndWith(adapter === "openai-chat" ? "/chat/completions" : "/responses");
+      expect(JSON.stringify(wire.body)).not.toContain("advisor_20260301");
+      expect(betas(wire)).not.toContain(BETA);
+      expect(protocolTraceForRequest(result.logCtx, result.logCtx.attempts)?.reasonCodes ?? [])
+        .not.toContain("advisor-tool-withheld-by-spend-policy");
+    });
+  }
+
+  test("effective Anthropic wire records proxy Advisor shadowing", async () => {
+    const result = await claudeTurn({ providerName: "commandcode", baseUrl: "https://api.commandcode.ai/provider/v1",
+      model: `commandcode/${MODEL}`, provider: { adapter: "openai-chat", forwardAdvisorTool: true }, proxyAdvisor: true, proactiveKeySelection: true });
+    expect(result.status, result.body).toBe(200);
+    expect(toolTypes(result.wires[0]!)).not.toContain("advisor_20260301");
+    expect(betas(result.wires[0]!)).not.toContain(BETA);
+    expect((result.wires[0]!.body.tools as Rec[]).find(tool => tool.name === "advisor")).toHaveProperty("input_schema");
+    expect(protocolTraceForRequest(result.logCtx, result.logCtx.attempts)?.reasonCodes)
+      .toContain("advisor-tool-shadowed-by-proxy-advisor");
   });
 
   test("history alone cannot restore the Advisor beta under an enforced ceiling", async () => {

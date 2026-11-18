@@ -57,7 +57,7 @@ describe("internal-call capability — server-owned authority", () => {
       // Controlled async boundary on a prepared-state fixture. Full request
       // preparation/transport is intentionally not invoked by this seam test.
       const pending = barrier.promise.then(() => executeResponsesSidecars(
-        requestContext, requestState, { adapter: {} } as Args[2],
+        requestContext, requestState, { adapter: {}, initialAdapterProvider: workerProvider } as Args[2],
         { routedCompaction: false } as Args[3], {} as Args[4], {} as Args[5],
       ));
       try {
@@ -109,7 +109,7 @@ describe("internal-call capability — server-owned authority", () => {
         route: { providerName: "worker", modelId: "cheap", provider: workerProvider }, admissionScope: captured,
       } as Args[1];
       const pending = barrier.promise.then(() => executeResponsesSidecars(
-        requestContext, requestState, { adapter: {} } as Args[2],
+        requestContext, requestState, { adapter: {}, initialAdapterProvider: workerProvider } as Args[2],
         { routedCompaction: false } as Args[3], {} as Args[4], {} as Args[5],
       ));
       try {

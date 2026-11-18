@@ -26,7 +26,7 @@ import {
   clampImageMaxRounds,
 } from "../../images";
 import type { AdapterRequest, ProviderAdapter } from "../../adapters/base";
-import type { OcxParsedRequest, OcxUsage } from "../../types";
+import type { OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../../types";
 import { rotateProviderTransportOn429, rateLimitRetryPolicyFor } from "../../providers/key-failover";
 import {
   isGenericOAuthFailoverEnabled,
@@ -103,6 +103,7 @@ export async function executeResponsesSidecars(
     | "noteRoutedAttemptSend"
     | "bindKeyUsageFromBridge"
     | "hostedAdvisorSpendGuard"
+    | "initialAdapterProvider"
   >,
   sidecarState: Pick<ResponsesSidecarAuth, "routedCompaction" | "openAiSidecar">,
   responseEffects: Pick<
@@ -194,8 +195,8 @@ export async function executeResponsesSidecars(
   // Read the actual authenticated target's captured ceilings before an optional plan can await;
   // this query never starts or changes the main-model accounting mode.
   let hostedAdvisorWithheld = false;
-  const withholdHostedAdvisorBySpend = (request = parsed) => {
-    if (!hostedAdvisorWithheld && advisorServerToolDestination(route.provider)
+  const withholdHostedAdvisorBySpend = (request: OcxParsedRequest, provider: OcxProviderConfig) => {
+    if (!hostedAdvisorWithheld && advisorServerToolDestination(provider)
       && (hasAdvisorServerTools(parsed) || hasAdvisorServerTools(request))
       && sendBudgetState.hasCapturedSpendCeiling(responsesHostedAdvisorSpendTarget(logCtx, route.providerName))) {
       hostedAdvisorWithheld = true;
@@ -206,7 +207,7 @@ export async function executeResponsesSidecars(
       if (request !== parsed) withholdAdvisorServerTools(request);
     }
   };
-  withholdHostedAdvisorBySpend();
+  withholdHostedAdvisorBySpend(parsed, transportState.initialAdapterProvider);
   const normalizeWithheldAdvisorChoice = (request = parsed) => {
     const choice = request.options.toolChoice;
     // Wait for the final catalog: a client function or the later proxy Advisor may own this name.
@@ -219,9 +220,10 @@ export async function executeResponsesSidecars(
   };
   // A replacement key/OAuth identity can have a different answer from an authoritative holder.
   // Every physical adapter builder, including sidecar copies and dispatch-time reselection,
-  // reuses this captured query. Withholding is monotonic across all later identities/copies.
-  transportState.hostedAdvisorSpendGuard = request => {
-    withholdHostedAdvisorBySpend(request);
+  // passes its resolved wire, which can differ from the rebuilt credential route's default.
+  // Withholding is monotonic across all later identities/copies.
+  transportState.hostedAdvisorSpendGuard = (request, provider) => {
+    withholdHostedAdvisorBySpend(request, provider);
     normalizeWithheldAdvisorChoice();
     if (request !== parsed) normalizeWithheldAdvisorChoice(request);
   };
@@ -250,7 +252,7 @@ export async function executeResponsesSidecars(
   // is withheld here, not only while the function is on the catalog: a later loop iteration that
   // drops the synthetic tool must not forward it either (adapters/anthropic/advisor-tool.ts).
   const withholdShadowedAdvisorTool = () => {
-    if (withholdAdvisorServerTools(parsed) && advisorServerToolDestination(route.provider)) {
+    if (withholdAdvisorServerTools(parsed) && advisorServerToolDestination(transportState.initialAdapterProvider)) {
       addProtocolEntryReason(logCtx, "advisor-tool-shadowed-by-proxy-advisor");
     }
   };

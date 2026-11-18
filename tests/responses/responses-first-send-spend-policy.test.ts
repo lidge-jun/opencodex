@@ -267,16 +267,18 @@ for (const queried of [false, true]) for (const enforced of [false, true]) {
   });
 }
 
-for (const lane of ["main", "search", "named"] as const) for (const limited of ["first", "second", "neither"] as const) {
-  test(`hosted Advisor follows captured target policy after key rotation (lane=${lane}, limited=${limited})`, async () => {
+for (const pinnedWire of [false, true]) for (const lane of ["main", "search", "named"] as const) for (const limited of ["first", "second", "neither"] as const) {
+  test(`hosted Advisor follows captured target policy after key rotation (pinnedWire=${pinnedWire}, lane=${lane}, limited=${limited})`, async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () => { throw new Error("rotation fixture forbids uninjected network calls"); }) as typeof fetch;
     const firstKey = "fixture-advisor-first", secondKey = "fixture-advisor-second";
-    const labels = [firstKey, secondKey].map((reference, index) => apiKeyAccountLogLabel("anth", { reference, entryId: String(index) })!);
+    const providerName = pinnedWire ? "commandcode" : "anth";
+    const baseUrl = pinnedWire ? "https://api.commandcode.ai/provider/v1" : "https://api.anthropic.com";
+    const labels = [firstKey, secondKey].map((reference, index) => apiKeyAccountLogLabel(providerName, { reference, entryId: String(index) })!);
     const queried: string[] = [];
     const budget = createRequestExecutionBudget(undefined, undefined, {
       hasCapturedSpendCeiling(target) {
-        expect(target?.poolId).toBe("anth");
+        expect(target?.poolId).toBe(providerName);
         expect(target?.identityId).toBeDefined();
         queried.push(target!.identityId!);
         return target!.identityId === labels[limited === "first" ? 0 : limited === "second" ? 1 : -1];
@@ -286,7 +288,7 @@ for (const lane of ["main", "search", "named"] as const) for (const limited of [
     const wires: Array<{ body: Record<string, unknown>; headers: Headers }> = [];
     const model = "claude-sonnet-4-6";
     const fetch = markEgressTransparentExecutor((async (input, init) => {
-      expect(String(input)).toBe("https://api.anthropic.com/v1/messages");
+      expect(String(input)).toBe(`${baseUrl}${pinnedWire ? "" : "/v1"}/messages`);
       const headers = new Headers(init?.headers), body = JSON.parse(String(init?.body));
       wires.push({ body, headers });
       if (wires.length === 1) return Response.json({ type: "error", error: { type: "rate_limit_error", message: "fixture refusal" } }, { status: 429 });
@@ -306,9 +308,11 @@ for (const lane of ["main", "search", "named"] as const) for (const limited of [
       return new Response(frames.map(frame => `event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`).join(""),
         { headers: { "content-type": "text/event-stream" } });
     }) as typeof globalThis.fetch);
-    const config = { port: 0, defaultProvider: "anth",
+    const config = { port: 0, defaultProvider: providerName,
       webSearchSidecar: { enabled: lane === "search", backend: "exa", exaApiKey: "fixture-never-executed" },
-      providers: { anth: { adapter: "anthropic", baseUrl: "https://api.anthropic.com", authMode: "key", proxy: "direct",
+      providers: { [providerName]: { adapter: pinnedWire ? "openai-chat" : "anthropic", baseUrl, authMode: "key", proxy: "direct",
+        // Command Code defaults to patient same-key retries; exercise its key replacement here.
+        ...(pinnedWire ? { forwardAdvisorTool: true, retryOn429: { enabled: false } } : {}),
         apiKey: firstKey, apiKeyPool: [{ id: "0", key: firstKey }, { id: "1", key: secondKey }], liveModels: false, models: [model], fetch } },
     } as unknown as OcxConfig;
     saveConfig(config);
@@ -316,7 +320,7 @@ for (const lane of ["main", "search", "named"] as const) for (const limited of [
     try {
       const response = await handleResponses(new Request("http://localhost/v1/responses", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ model: `anth/${model}`, stream: true,
+        body: JSON.stringify({ model: `${providerName}/${model}`, stream: true,
           input: [{ role: "assistant", content: "Earlier answer." }, { role: "user", content: "Continue." }],
           tools: [{ type: "function", name: "Read", parameters: { type: "object", properties: {} } },
             ...(lane === "search" ? [{ type: "web_search" }] : [])],

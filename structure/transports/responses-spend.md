@@ -110,11 +110,14 @@ cleanup releases an unsent hop once, except while an asynchronous runTurn produc
 Producer settlement performs that release instead, clearing only the matching pending-hop reference.
 Direct callers retain their prior hop reporting contract.
 
-The optional Anthropic-hosted Advisor on translated Messages turns is withheld whenever this
-request's captured policy has an applicable root, identity or pool token ceiling. Its secondary model usage
+The optional Anthropic-hosted Advisor on translated Messages turns is withheld from the first
+send whose selected target has an applicable captured root, identity or pool token ceiling.
+Earlier sends on an unlimited target are unaffected. Its secondary model usage
 has no independent reservation and settlement contract. Before optional planning,
 `src/server/responses/sidecar-execution.ts` queries the policy with the actual authenticated spend
-target if a destination-eligible Advisor declaration or replay is present. The query captures original
+target if a destination-eligible Advisor declaration or replay is present. Destination eligibility
+uses the transport's resolved `initialAdapterProvider`, including proactive key selection and
+model wire overrides. The query captures original
 ceilings without starting accounting, reserving a seed or choosing its mode; an already started budget
 keeps its policy. `request-spend.ts` retains the original frozen ceilings even when Combo prepayment
 selected observe-only accounting before its child had an identity. `hasCapturedSpendCeiling` on
@@ -131,8 +134,9 @@ live policy changes in both directions. Its key-rotation wire cases also cover t
 authoritative queries on main, web-search and named-tool turns: replacement ceilings withhold the
 hosted tool, replay and beta; an earlier withholding is never undone by an unlimited replacement.
 The request-owned `hostedAdvisorSpendGuard` runs inside every selected adapter's `buildRequest`
-wrapper after credential admission, including sidecar copies and dispatch-time reselection. It
-reuses the same captured policy, normalizes a newly unmatched named choice and rebuilds the outer
+wrapper after credential admission, including sidecar copies and dispatch-time reselection. The
+builder supplies its own effective provider so a rebuilt credential route's default adapter cannot
+override the selected wire's eligibility. It reuses the same captured policy, normalizes a newly unmatched named choice and rebuilds the outer
 delivery maps once, without changing main-model accounting. The hosted-only target binding in `src/server/responses/request-transport.ts`
 resolves a selected API key's existing account label before physical log attribution, so policy
 checks do not record an unsent attempt as served. `request-spend-target.ts` keeps that read-only
