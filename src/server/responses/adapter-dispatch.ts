@@ -7,6 +7,7 @@ import { markProxyError, carryProxyError, isProxyError } from "../../lib/client-
 import { codexAdapterBuildRefusal } from "./passthrough-build-error";
 import { createAutoPauseRefreshErrorMapper, recoverAutoPausedAccount } from "./account-auto-pause-recovery";
 import { wasAccountAutoPaused, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
+import { effectiveAccountAutoPause } from "../../config/account-auto-pause-revisions";
 import { bindAnthropicRejectionResponse } from "../../adapters/anthropic-rejection-memo";
 import { deferPhysicalSendReporter } from "./deferred-send-reporter";
 import { usesApiKeyAccount } from "../../providers/label";
@@ -61,7 +62,7 @@ import {
   SendBudgetExhaustedError, errorDestinationLabel,
   UpstreamRetryEvidenceError,
   prepareSameTarget429Wait,
-  sleepWithAbort,
+  sleepWithAbort, RESET_RETRY_MAX_ATTEMPTS,
 } from "../../lib/upstream-retry";
 import { describeUpstreamConnectFailure } from "./upstream-error";
 import { createProviderOfflineResendWait } from "../../lib/offline-resend";
@@ -76,13 +77,13 @@ import { classifyAntigravityRefusal } from "../../adapters/antigravity-refusal";
 import { normalizeFinalKiroHttpError } from "../../adapters/kiro-retry";
 import { noteKiroMonthlyRefusal } from "../../providers/kiro-usage";
 import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
+import { isXaiGrokOAuth, isXaiLegacyPrivacyError, xaiPrivacyModeRefusal } from "../../providers/xai-privacy-mode";
 import { isXaiResponsesDestination, resolveProviderTransport } from "../../providers/xai-transport";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { bindRouteReasoningReplayScope } from "./core-replay";
 import {
   AnthropicAccountCooldownError,
-  ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
   anthropicRoutingFor,
   formatAnthropicProviderForLog,
 } from "../../oauth/anthropic-routing";
@@ -172,7 +173,7 @@ export async function prepareAdapterExchange(
     | "commitResolvedOAuthSelection"
     | "genericFailoverAccountId"
     | "genericFailovers"
-    | "genericFailoverLimit"
+    | "genericFailoverLimit" | "anthropicFailoverLimit"
     | "applyFailoverSnapshot"
     | "noteRoutedAttemptSend" | "attemptSendDeferred" | "deferPhysicalAttribution"
   >,
@@ -401,12 +402,12 @@ export async function prepareAdapterExchange(
     upstreamResponse = carryProxyError(original, new Response(text, { status: original.status, statusText: original.statusText, headers }));
     return upstreamResponse;
   };
-  const autoPauseEnabled = config.providers[route.providerName]?.accountAutoPause?.enabled === true;
+  const autoPauseEnabled = effectiveAccountAutoPause(config.providers[route.providerName]) !== undefined;
   const billingPoolRequest = isAnthropicBillingKeyPool(route.provider);
   let billingRecoveryActive = false;
   const genericRefetchCountsSends = () => !!sendBudgetState.workflowRootId || options.comboAttempt === true || sendBudgetState.adapterSendBudget?.spendEnforced === true
     || transientRetryPolicyFor(route.provider) !== null || resetReplayPolicyFor(route.provider) !== null
-    || billingPoolRequest || billingRecoveryActive || autoPauseEnabled;
+    || !!anthropicInstance || billingPoolRequest || billingRecoveryActive || autoPauseEnabled;
   let handoffPermit: ResponsesSendBudget["pendingHopPermit"];
   try {
     if (transportState.activeAdapter.fetchResponse) {
@@ -475,7 +476,8 @@ export async function prepareAdapterExchange(
         || (options.comboAttempt && route.provider.adapter === "google")
         ? transientSendCapFor(transientPolicy?.attempts,
           (options.comboAttempt || compactPrepaid) ? 0 : sendBudgetState.sendsUsed)
-        : 1;
+        // Anthropic sends are counted for the funded roster, not narrowed: keep the reset ladder.
+        : anthropicInstance && !options.comboAttempt && !compactPrepaid && !autoPauseEnabled ? RESET_RETRY_MAX_ATTEMPTS : 1;
       const fetchWithRetryPolicy = (route.provider.adapter === "google" || transientPolicy)
         ? fetchWithTransientRetry
         : fetchWithResetRetry;
@@ -527,10 +529,10 @@ export async function prepareAdapterExchange(
           claimAmbiguousResend: claimPreHeaderResend,
           offlineWait: options.comboAttempt ? undefined : createProviderOfflineResendWait(route.providerName, route.provider, builtInitialRequest.url, config.offlineResendWaitSec),
           ...(sendBudgetState.workflowRootId || sendBudgetState.adapterSendBudget?.spendEnforced || options.comboDispatchPermit || transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt
-            || billingPoolRequest || autoPauseEnabled
+            || anthropicInstance || billingPoolRequest || autoPauseEnabled
             ? {
               // A pending compaction permit already booked this leg's first physical send.
-              ...(transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt || autoPauseEnabled
+              ...(transientPolicy || resetPolicy || compactPrepaid || options.comboAttempt || anthropicInstance || autoPauseEnabled
                 ? {
                   attempts: Math.min(initialSendCap,
                     sendBudgetState.initialSendAllowance(initialSendCap) + (compactPrepaid ? 1 : 0)),
@@ -942,7 +944,8 @@ export async function prepareAdapterExchange(
       await rejectAnthropicPerMessageEffort(parsed, upstreamResponse, upstream.signal);
       if (isNonReplayableResponse(upstreamResponse)) {
         try {
-          return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal);
+          return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal,
+            isXaiGrokOAuth(route.providerName, route.provider) ? logCtx : undefined);
         } finally { cleanupUpstreamAbort(); }
       }
       bindAnthropicRejectionResponse(transportState.sameTargetRequest, upstreamResponse);
@@ -1387,7 +1390,7 @@ export async function prepareAdapterExchange(
             model: route.modelId, requestKey: transportState, decision: transportState.anthropicRouteDecision, currentDecision: currentAnthropicRouteDecision, signal: upstream.signal,
             // A denied reservation must not rotate on base headroom its bounds cannot see.
             canRetry: hop.allowed && (hop.permit !== undefined || !sendBudgetExhausted())
-              && transportState.anthropicPoolFailovers < ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
+              && transportState.anthropicPoolFailovers < transportState.anthropicFailoverLimit,
           });
         } catch (rotationError) {
           hop.permit?.release();
@@ -1868,12 +1871,13 @@ export async function prepareAdapterExchange(
     if (!upstreamResponse.ok) {
       if (route.providerName === "kiro")
         upstreamResponse = await normalizeFinalKiroHttpError(upstreamResponse, upstream.signal);
+      const grokOAuth = isXaiGrokOAuth(route.providerName, route.provider);
       if (options.comboAttempt) {
         // No pre-read guard: `consumeComboFailure` -> `readBoundedResponseBody` reads
         // `response.body` itself with the abort signal threaded through, and the combo
         // contract is that this body's getter is touched exactly once. A guard here would be
         // a second `.body` access for no gain, since the bounded reader owns settlement.
-        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal, Date.now(), logCtx, !isProxyError(upstreamResponse))
+        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal, Date.now(), logCtx, !isProxyError(upstreamResponse), grokOAuth)
           .finally(cleanupUpstreamAbort);
         options.onConsumedComboFailure?.(failure);
         return failure.response;
@@ -1888,6 +1892,7 @@ export async function prepareAdapterExchange(
       } finally {
         cleanupUpstreamAbort();
       }
+      if (grokOAuth && isXaiLegacyPrivacyError(upstreamResponse.status, errorText)) return xaiPrivacyModeRefusal(logCtx);
       // The provider's own body (not a proxy-normalized one) may name its closed error class (#8446).
       if (!isProxyError(upstreamResponse)) recordUpstreamProviderErrorDetail(logCtx, upstreamResponse.status, errorText, upstreamResponse);
       if (upstreamResponse.status === 413) {

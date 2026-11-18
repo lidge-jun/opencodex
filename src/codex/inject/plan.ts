@@ -18,13 +18,12 @@ import {
   preflightCodexHistoryInjection,
 } from "../history-provider";
 import {
-  journaledInjectedOpenaiBaseUrl,
-  journaledInjectedRealtimeWsBaseUrl,
+  journaledInjectedRootValues,
   journaledInjectedRootWebSearch,
   journaledInjectedSubagentDefaults,
   journaledReplacedRootWebSearch,
 } from "../journal";
-import { stripJournaledOpenaiBaseUrl } from "../injected-marker";
+import { REALTIME_WS_BASE_URL_KEY, stripJournaledOpenaiBaseUrl } from "../injected-marker";
 import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, resolveCodexStateDbPath } from "../paths";
 import { transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "../subagent-defaults";
 import type { OcxConfig } from "../../types";
@@ -193,11 +192,14 @@ export function deriveCodexInjectionPlan(
   // Design B -> provider-table transition (hostname change, authless opt-in) cannot leave our
   // own root URLs behind as if they were the user's, and so re-inject never journals them as
   // not-ours (which would make them unrestorable).
-  content = stripJournaledOpenaiBaseUrl(
-    content,
-    journaledInjectedOpenaiBaseUrl({ readOnly: ctx.journalReadOnly }),
-    journaledInjectedRealtimeWsBaseUrl({ readOnly: ctx.journalReadOnly }),
-  );
+  // Every URL an injection under this journal wrote counts, not only the latest: the Codex app can
+  // write back an earlier one from its own copy of the file.
+  for (const url of journaledInjectedRootValues("openai_base_url", { readOnly: ctx.journalReadOnly })) {
+    content = stripJournaledOpenaiBaseUrl(content, url, null);
+  }
+  for (const url of journaledInjectedRootValues(REALTIME_WS_BASE_URL_KEY, { readOnly: ctx.journalReadOnly })) {
+    content = stripJournaledOpenaiBaseUrl(content, null, url);
+  }
   // Whether this home already published the provider id that its thread rows may reference.
   // Design B strips the table below; it may only stay stripped if those rows can be relabeled.
   const hadOcxProviderTableOnDisk = hasOcxProviderTable(content);

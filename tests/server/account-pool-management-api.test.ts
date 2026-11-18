@@ -853,7 +853,7 @@ describe("unified pool-settings contract (#695 wp5c)", () => {
         // An unsupported field is a declared null, not an absence,
         // which is the whole difference between a consolidation and a fourth contract.
         expect(Object.keys(dto).sort()).toEqual([
-          "autoSwitchThreshold", "enabled", "enabledEffective", "kind", "maxConcurrentPerAccount", "nativeMessages",
+          "autoSwitchThreshold", "enabled", "enabledEffective", "inert", "kind", "maxConcurrentPerAccount", "nativeMessages",
           "provider", "quotaWindow", "routes", "stickyLimit", "strategy", "supported",
         ]);
         expect(dto.kind).toBe(kind);
@@ -863,6 +863,49 @@ describe("unified pool-settings contract (#695 wp5c)", () => {
       }
       // An API-key provider has no pool at all and is refused rather than answered with nulls.
       expect((await fetch(new URL("/api/pool/settings?provider=deepseek", server.url))).status).toBe(400);
+    } finally {
+      await server.stop(true);
+    }
+  });
+
+  test("inert follows pool.kernel for a generic pool and stays false for Codex and Anthropic", async () => {
+    const read = async (server: ReturnType<typeof startServer>, provider: string) =>
+      (await (await fetch(new URL(`/api/pool/settings?provider=${provider}`, server.url))).json() as Record<string, unknown>).inert;
+    const legacyGeneric = async (server: ReturnType<typeof startServer>) =>
+      (await (await fetch(new URL("/api/oauth/accounts/pool?provider=google-antigravity", server.url))).json() as Record<string, unknown>).inert;
+    let server = startServer(0);
+    try {
+      // Kernel off: a generic strategy is stored but not consumed, and the unified read must say so
+      // exactly as the legacy per-pool read does.
+      expect(await read(server, "google-antigravity")).toBe(true);
+      expect(await legacyGeneric(server)).toBe(true);
+      expect(await read(server, "openai")).toBe(false);
+      expect(await read(server, "anthropic")).toBe(false);
+    } finally {
+      await server.stop(true);
+    }
+    const config = loadConfig();
+    config.pool = { ...config.pool, kernel: true };
+    saveConfig(config);
+    server = startServer(0);
+    try {
+      expect(await read(server, "google-antigravity")).toBe(false);
+      expect(await legacyGeneric(server)).toBe(false);
+      expect(await read(server, "openai")).toBe(false);
+      expect(await read(server, "anthropic")).toBe(false);
+    } finally {
+      await server.stop(true);
+    }
+    config.pool = { ...config.pool, kernel: false };
+    saveConfig(config);
+    server = startServer(0);
+    try {
+      // An explicit false is the same as an unset kernel, and a write answers with the same marker.
+      expect(await read(server, "google-antigravity")).toBe(true);
+      const put = await fetch(new URL("/api/pool/settings", server.url), { method: "PUT", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: "google-antigravity", strategy: "round-robin" }) });
+      expect(put.status).toBe(200);
+      expect(((await put.json()) as Record<string, unknown>).inert).toBe(true);
     } finally {
       await server.stop(true);
     }

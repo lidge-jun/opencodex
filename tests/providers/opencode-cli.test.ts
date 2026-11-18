@@ -52,7 +52,7 @@ describe("ocx opencode provider block", () => {
   test("points at the live proxy port over the OpenAI-compatible surface", () => {
     const block = buildOpencodeProviderBlock(10123, [], []);
     expect(block.options.baseURL).toBe("http://127.0.0.1:10123/v1");
-    expect(block.npm).toBe("@ai-sdk/openai-compatible");
+    expect(block.npm).toBe("@ai-sdk/openai");
   });
 
   test("uses probeHostname for IPv6 and specific-interface binds", () => {
@@ -79,7 +79,7 @@ describe("ocx opencode provider block", () => {
       cfg({ hostname: "0.0.0.0" }),
     );
     expect(block.options.headers).toEqual({ "x-opencodex-api-key": OPENCODE_API_KEY_ENV_REF });
-    expect(block.options.apiKey).toBeUndefined();
+    expect(block.options.apiKey).toBe("opencodex-loopback");
     expect(JSON.stringify(block.options)).not.toContain("sk-");
   });
 
@@ -469,8 +469,10 @@ describe("ocx opencode proxy model catalog", () => {
       cfg({ hostname: "0.0.0.0" }),
     );
     // Built in one pass, so a later tweak to one generation cannot desync the endpoint.
-    expect(blocks.v2.settings).toEqual(blocks.v1.options);
-    expect(blocks.v2.settings.headers).toEqual({
+    const { headers, ...settings } = blocks.v1.options;
+    expect(blocks.v2.settings).toEqual(settings);
+    expect(blocks.v2.headers).toEqual(headers);
+    expect(headers).toEqual({
       "x-opencodex-api-key": OPENCODE_API_KEY_ENV_REF,
     });
   });

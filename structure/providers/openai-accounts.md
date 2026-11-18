@@ -68,7 +68,7 @@ Native Spark membership and its model-specific request/tool exceptions are remov
   a request goes upstream as `gpt-6-astra-minor`.
 
 - The flagship roster that lists unconditionally is `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`,
-  `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol` and `gpt-6.1-terra` (Sol and Luna added 2026-09-23 from a
+  `gpt-6-astra`, `gpt-6-sol`, `gpt-6-luna`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6.2-sol` and `gpt-6.2-astra` (Sol and Luna added 2026-09-23 from a
   live roster probe; https://openai.com/index/introducing-gpt-6-sol-and-luna/; 6.1 Sol added
   2026-09-30 and 6.1 Terra on 2026-10-27 from openai/codex models.json). None is gated, and all are native-main
   drain sentinels. The confirmed-denial ordering below is still scoped to the first four
@@ -390,7 +390,7 @@ materialized headers pass the proxy-credential exclusion check before owner matc
 
 The credits module beside `src/codex/quota-types.ts` retains validated WHAM credits only in process memory. Main publication uses the current credential and physical ChatGPT account identity; pool publication uses the captured writer's `quotaHistoryIdentity` and a live credential generation, including credits-only responses. Omitted credits retain the observation; null or unusable credits clear it. Identity mismatch or removal retires it, without a TTL or disk hydration.
 
-`src/codex/auth-api/account-list.ts` exposes optional `credits` only when `showCodexCredits === true` and the current identity has an observation. Decimal balances remain strings; boolean flags and approximate local/cloud message ranges are allowlisted. Credits never enter persisted quota, routing, reset-credit recovery, or `/api/provider-quotas`, and are never logged. The [config surface](../config.md#config-surface) owns the display switch.
+`src/codex/auth-api/account-list.ts` exposes optional `credits` only when `showCodexCredits === true` and the current identity has an observation. Decimal balances remain strings. Boolean flags and approximate local/cloud message ranges are allowlisted. The main and pool probes share the [WHAM group balance fallback](openai-tiers.md#spendable-codex-credits) with quota parsing. The display cache stays in process memory and serves the account DTO. The [config surface](../config.md#config-surface) owns the display switch.
 
 ## Quota history publication identity
 

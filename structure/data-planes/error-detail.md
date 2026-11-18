@@ -16,6 +16,9 @@ through the disk reader. A row keeps:
   keeps Meta's Muse Code subscription refusal in `subscription_required` rather than
   `permission_denied`: a 403 whose whole `error.message` is that sentence names a plan restriction on
   a valid key, so the row must not read as an expired credential that needs a re-login.
+  For the [xAI OAuth Legacy privacy mode refusal](../providers/xai-grok.md#legacy-privacy-mode-403),
+  the proved account policy supplies the `policy-refusal` failure cause. The client-facing
+  privacy refusal uses a fixed HTTP 403 `permission_denied` envelope.
 - `upstreamCondition`, a member of the closed set in `src/lib/upstream-condition.ts`, derived only for a
   failed row with upstream evidence; a client close (499, `client_closed_request`, `client_cancelled`) gets
   none, and a stored condition is kept only under the same rules. Text set through
@@ -24,8 +27,11 @@ through the disk reader. A row keeps:
   it out of the final row's evidence. The Messages passthrough classifies the condition where it parses the
   upstream error and stores only the member on the context (`upstreamCondition`), so a native Anthropic
   overflow is recorded as `context_overflow`. `classifyUpstreamCondition` reads status, bounded structured
-  tokens and, for 4xx only, fixed lowercase keyword sets: 401 is authoritative, structured tokens come next
-  (account usage-limit codes `usage_limit_exceeded` and `1308` are billing exhaustion), context overflow
+  tokens and, for 4xx only, fixed lowercase keyword sets. HTTP 401 is authoritative. The exact transport
+  codes `upstream_reset_replay_refused`, `upstream_closed_before_response` and `upstream_no_response`
+  then take precedence over other structured evidence, including Chat's generic `rate_limit_error`
+  type, and map to `upstream_failed`. Other structured tokens come next, including the account
+  usage-limit codes `usage_limit_exceeded` and `1308`, which map to billing exhaustion. Context overflow
   from text needs the definite verdict `isDefiniteContextOverflow` in the dependency-free
   `src/lib/context-overflow-verdict.ts` (the one combo failover uses, re-exported by
   `src/combos/failover.ts`), including bounded provider wording that a conversation/input has reached or passed the model context limit, that a prompt is too long for that window, or that the window is full/exhausted/over its limit, and a string-valued JSON `error` field. A negator governing that wording, and capacity prose about the service, stay outside the verdict, so a validation error that quotes "prompt is too long" stays rejected, a 429 that
@@ -63,6 +69,15 @@ partial bodies produce status-only diagnostics.
 `boundedFailureDetail` revalidates those pairs on live projection, usage append/read, hydration and
 GUI rendering. The dashboard appends the machine field/type pairs to its localized provider-error
 label. No upstream-authored free text is retained, and client-facing messages retain their existing policy.
+On the same provider bodies (the `providerBody` callers of `recordUpstreamValidationDetail`: native Chat,
+translated adapter dispatch and a combo child's raw upstream response), a 4xx with no structured
+`detail[]` whose error message names a developer-role rejection through the fixed lowercase phrases in
+`src/lib/developer-role-rejection.ts` (DashScope `developer is not one of`, Moonshot
+`role 'developer' is not allowed`, serde `` unknown variant `developer` ``) records the closed pair
+`messages.role`/`enum` (#8864). The message is read once within the 4096-character scan and dropped; a
+body this proxy formatted keeps validation-only capture. `tests/lib/developer-role-rejection.test.ts`
+and `tests/server/developer-role-rejection-boundary.test.ts` cover the match, a non-match and the
+absence of upstream text in the client body, live row, `usage.jsonl`, hydration and console output.
 
 A provider failure also keeps its closed class without validation pairs (#8446).
 `recordUpstreamProviderErrorDetail` reads `error.type`, Google's `error.status` (an object or the first
@@ -290,7 +305,10 @@ A closed exact-message map covers malformed/empty completion diagnostics, missin
 explicit-empty-tool-catalog refusal. Its values are complete proxy literals: arbitrary suffixes,
 reason strings and tool-name slots never match. The actionable plan-refusal map recognizes only
 `MODEL_NOT_IN_PLAN` and emits its own complete remediation message, preserving the proxy's token
-without copying surrounding text. Every failure with unknown provenance receives owned wording.
+without copying surrounding text. The same function selects the fixed `DEVELOPER_ROLE_REFUSAL_MESSAGE` for a
+4xx whose evidence the developer-role verdict above recognizes, only with no contract and a null or
+`invalid_request_error` code, so Chat and Messages clients learn to send `system` or record
+`foldDeveloperRoleToSystem` without any provider text. Every failure with unknown provenance receives owned wording.
 
 `src/server/chat-native-sse.ts` builds nested terminal errors as canonical owned error envelopes.
 Flat `type: "error"` payloads and `event: error` frames that the ordinary relay accepts retain that relay's

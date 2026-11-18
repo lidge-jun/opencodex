@@ -8,6 +8,7 @@ import {
   codexAccountModelRefusalHardStopCode,
   isMalformedResponseFormatRequest,
   isOpenRouterOpaque400Envelope,
+  isUnofferedToolCallRefusal,
   isProviderModerationRefusal,
   upstreamEnvelopeRootCode,
   type CodexAccountModelRefusal,
@@ -38,6 +39,7 @@ import { carryReplayRefusal, isNonReplayableResponse, isReplayRefusalResponse, m
 import { MODEL_NOT_ALLOWED_FOR_KEY } from "../admission-model-scope";
 import { usageFromResponsesPayload } from "../request-log";
 import type { ResponsesTerminalStatus } from "../../bridge";
+import { isXaiLegacyPrivacyError, isXaiPrivacyModeRefusal, xaiPrivacyModeRefusal, XAI_LEGACY_PRIVACY_MESSAGE } from "../../providers/xai-privacy-mode";
 import { stampMetaMusePlanRefusal } from "../../providers/meta-muse-plan-refusal";
 import type { RequestFailureCause } from "../../usage/telemetry-contract";
 
@@ -57,6 +59,7 @@ export async function consumeComboFailure(
   logCtx?: { failureDetail?: FailureDetail; causeHint?: RequestFailureCause },
   /** True only when `response` is the provider's own HTTP answer, so its closed error class is evidence. */
   rawUpstream = false,
+  grokOAuth = false,
 ): Promise<ConsumedComboFailure> {
   // Read before the body: the marker lives on this Response object, and the failure below is
   // rebuilt as a new one that would otherwise lose it.
@@ -67,6 +70,7 @@ export async function consumeComboFailure(
   let codexModelRefusal: CodexAccountModelRefusal | undefined;
   let malformedResponseFormat: boolean | undefined;
   let openRouterOpaque400: boolean | undefined;
+  let unofferedToolCallRefusal: boolean | undefined;
   let providerModerationRefusal: boolean | undefined;
   let usage: OcxUsage | undefined;
   let upstreamCode: string | undefined;
@@ -99,6 +103,19 @@ export async function consumeComboFailure(
         && isRateLimitOrQuotaFailureMessage(quotaMessage);
     }
     if (body.displaySafe && !body.truncated) {
+      if (isXaiPrivacyModeRefusal(response) || (grokOAuth && isXaiLegacyPrivacyError(response.status, body.text))) {
+        const refusal = xaiPrivacyModeRefusal(logCtx);
+        if (response.headers.get("x-should-retry") === "false") refusal.headers.set("x-should-retry", "false");
+        if (nonReplayable) markResponseNonReplayable(refusal);
+        return {
+          response: refusal,
+          ...(nonReplayable ? { nonReplayable: true } : {}),
+          classificationText: XAI_LEGACY_PRIVACY_MESSAGE,
+          upstreamMessage: XAI_LEGACY_PRIVACY_MESSAGE,
+          upstreamType: "permission_error",
+          upstreamCode: "permission_denied",
+        };
+      }
       if (logCtx && rawUpstream) recordUpstreamProviderErrorDetail(logCtx, response.status, body.text, response);
       else if (logCtx) recordUpstreamValidationDetail(logCtx, response.status, body.text);
       // A combo child's row is attributed from the same evidence the parent uses: Meta's Muse
@@ -108,6 +125,9 @@ export async function consumeComboFailure(
         codexModelRefusal = codexAccountModelRefusal(response.status, body.text);
         malformedResponseFormat = isMalformedResponseFormatRequest(response.status, body.text);
         openRouterOpaque400 = isOpenRouterOpaque400Envelope(body.text);
+        // The intact bounded body, not the 500-char display prefix: a long refusal envelope
+        // would fail the classifier's JSON parse on truncated text and stop the combo.
+        unofferedToolCallRefusal = isUnofferedToolCallRefusal(response.status, body.text);
       }
       // Judged on the whole body: the classification text below is cut at 500 characters, and a
       // hard refusal after the cut must still veto a moderation hop.
@@ -196,6 +216,7 @@ export async function consumeComboFailure(
     ...(codexModelRefusal !== undefined ? { codexModelRefusal } : {}),
     ...(malformedResponseFormat !== undefined ? { malformedResponseFormat } : {}),
     ...(openRouterOpaque400 !== undefined ? { openRouterOpaque400 } : {}),
+    ...(unofferedToolCallRefusal !== undefined ? { unofferedToolCallRefusal } : {}),
     ...(providerModerationRefusal !== undefined ? { providerModerationRefusal } : {}),
     ...(normalizedUpstreamCode !== undefined ? { upstreamCode: normalizedUpstreamCode } : {}),
     // A rewritten identity (policy, replay refusal) is the whole verdict; the root's own code

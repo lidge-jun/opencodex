@@ -248,18 +248,28 @@ when your installed Codex catalog predates them.
 | `gpt-6-sol` | 272,000 | 872,000 | `medium` | `low` through `ultra` |
 | `gpt-6-luna` | 272,000 | 872,000 | `medium` | `low` through `max` (no `ultra`) |
 
+[GPT-6.2 Sol](https://developers.openai.com/api/docs/models/gpt-6.2-sol) and
+[GPT-6.2 Astra](https://developers.openai.com/api/docs/models/gpt-6.2-astra) are available as bare
+Codex native models, on `openai-apikey`, and as `openai/gpt-6.2-sol` and
+`openai/gpt-6.2-astra` through OpenRouter. Codex defaults to 500,000 tokens for Sol and
+272,000 for Astra, with an 872,000 opt-in ceiling on both. The OpenAI API has a 1,050,000-token
+context window with up to 922,000 input and 128,000 output tokens. Codex lists reasoning efforts
+`low` through `ultra` and defaults to `low`. The API supports `low` through `max`.
+Kiro, CodeBuddy, Devin, TokenLab, Modelflare and GitHub Copilot also seed both models ahead of
+their own catalogs, mirroring each provider's GPT-6.1 Sol row; calls fail upstream until the
+provider serves them. No provider default changes.
+
 [GPT-6.1 Sol](https://openai.com/index/introducing-gpt-6-1-sol/) (announced September 29, 2026)
 is the upgrade to GPT-6 Sol; Astra and Luna did not get a 6.1 release. It is listed as
 `gpt-6.1-sol` (**GPT-6.1-Sol**), ungated like Sol, and its row comes from the Codex catalog, where
-it needs `client_version` **0.153.0 or later** and is the Codex default. GPT-6 Sol stays listed.
+it needs `client_version` **0.153.0 or later** and was the Codex default before GPT-6.2 Sol. GPT-6 Sol stays listed.
 
 | Model | Default context | Opt-in ceiling | Default effort | Reasoning ladder |
 | --- | ---: | ---: | --- | --- |
 | `gpt-6.1-sol` | 500,000 | 872,000 | `low` | `low` through `ultra` |
 
 OpenAI raised GPT-6.1 Sol's default context in Codex and Work from 272,000 to 500,000 tokens on
-October 11, 2026, so the native row now defaults to 500,000 and compacts at 450,000. The bundled
-Codex catalog still reads 272,000, so opencodex sets the new default itself. A configured window or
+October 11, 2026, so the native row now defaults to 500,000 and compacts at 450,000. OpenCodex applies 500,000 over the historical 272,000 row it pins. A configured window or
 provider cap still lowers it, and the long-window opt-in still stops at 872,000: OpenAI describes
 the model maximum as 1M without saying how that maps onto Codex's window and input limits, so
 opencodex does not advertise more than the ceiling it can verify.
@@ -394,7 +404,7 @@ Providers can expose a built-in shorthand, such as `agy` for `google-antigravity
 | `modelReasoningSummaryDelivery?` | `Record<string, "sequential" \| "sequential_cutoff" \| "concurrent" \| "concurrent_cutoff">` | Per-model Responses delivery enum; rewrites an existing delivery field. |
 | `thinkingDisplay?` | `"auto" \| "summarized" \| "updates" \| "omitted"` | Anthropic adaptive `thinking.display` policy for this provider. Unset and `auto` keep the built-in selection: native Claude Opus 5.5 on `api.anthropic.com` sends `updates` (progress commentary), and other adaptive models send `summarized`. `summarized` forces reasoning summaries for both. `updates` is honored only where the adapter already sent it — native Opus 5.5 — and is treated as `auto` for every other model. `omitted` sends adaptive thinking without a display field, matching hidden thinking; the stream then carries signature-only thinking blocks, so a Chat client sees only stream heartbeats during a long think. An explicit request `reasoning.summary` of `concise` or `detailed` still forces `summarized`. The dashboard provider editor and `PATCH /api/providers` accept `null` to clear it. `ocx config set providers.<name>.thinkingDisplay summarized` writes it directly. |
 | `modelThinkingDisplay?` | `Record<string, "auto" \| "summarized" \| "updates" \| "omitted">` | Per-model override of `thinkingDisplay`, keyed by the exact upstream model id (for example `claude-opus-5-5`). An entry always wins over the provider-wide value, including an explicit `auto` that returns one model to the built-in behavior; a model with no entry uses the provider value. The same value rules apply, including `updates` degrading to `auto` on models that never received that display. `PATCH /api/providers` merges entries and accepts `null` for one entry or the whole map to clear it. |
-| `modelAdapters?` | `Record<string, string>` | Per-model `openai-chat` or `openai-responses` wire override for mixed-wire gateways. Explicit entries beat registry defaults. The OpenCode Go preset selects Responses for `gpt-5.6-luna` while leaving sibling models on their documented wires; DeepSeek can select native Responses for `deepseek-v4-flash`; Alibaba Token Plan (Beijing) pins `qwen3.8-flash`, `qwen3.7-plus`, and `glm-5.3` to its native Responses API for Responses inbound only (live-verified on that gateway, including plaintext reasoning replay; Chat and Anthropic inbound stay on Chat, and the rest of the family can be opted in here); and GitHub Copilot declares Responses-only defaults for the following models (`gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) because those models reject `/chat/completions` for agent traffic. Models without a built-in default (for example `gpt-5.4-nano`) can be opted in here. Single-wire upstream pins and canonical ChatGPT forward reject overrides. |
+| `modelAdapters?` | `Record<string, string>` | Per-model `openai-chat` or `openai-responses` wire override for mixed-wire gateways. Explicit entries beat registry defaults. The OpenCode Go preset selects Responses for `gpt-5.6-luna` while leaving sibling models on their documented wires; DeepSeek can select native Responses for `deepseek-v4-flash`; Alibaba Token Plan (Beijing) pins `qwen3.8-flash`, `qwen3.7-plus`, and `glm-5.3` to its native Responses API for Responses inbound only (live-verified on that gateway, including plaintext reasoning replay; Chat and Anthropic inbound stay on Chat, and the rest of the family can be opted in here); and GitHub Copilot declares Responses-only defaults for the following models (`gpt-5.3-codex`, `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) because those models reject `/chat/completions` for agent traffic. `gpt-6-sol`, `gpt-6-luna`, `gpt-6.2-sol`, `gpt-6.2-astra` also default to Responses as a preemptive built-in default; no rejection was observed for them and the Copilot listing of the GPT-6.2 models is unverified. Models without a built-in default (for example `gpt-5.4-nano`) can be opted in here. Single-wire upstream pins and canonical ChatGPT forward reject overrides. |
 | xAI Chat Completions (dashboard / CLI) | switch | Grok 4.5/4.6 OAuth Responses requests default to Responses. Existing Chat overrides are migrated once on upgrade; later Chat choices are preserved. Turn on to select Chat for both models, off to select Responses. CLI: `ocx provider edit xai --xai-chat on` or `--xai-chat off` (running proxy required). Mixed means only one model currently uses Chat. Other overrides and tier policy stay unchanged. API-key and translated Chat/Anthropic defaults are unchanged. Grok 4.7 defaults to Responses on OAuth through its registry wire default and can use Chat through an explicit `modelAdapters["grok-4.7"] = "openai-chat"` override. |
 | `xaiResponsesXSearch?` | `boolean` | Disabled by default. On an xAI Responses destination, append the provider-hosted `x_search` declaration only when a live `web_search` tool survives final request normalization. Existing declarations are not duplicated, caller `tool_choice`/`allowed_tools` selectors are never widened, and this is separate from the web-search sidecar's `search.xSearch` options. |
 | `modelPreferHostedTools?` | `Record<string,string[]>` | Exact-model opt-in for non-forward Responses gateways that reserve a hosted-tool namespace. Currently accepts only `["image_generation"]`; a matching model must use the `openai-responses` wire and support that hosted tool. It removes colliding client `image_gen` declarations and rewrites their selectors to preserve caller tool choice. For OpenAI API virtual `-pro` models, the selected public ID is matched first and the resolved base wire-model ID is a fallback. `modelAdapters` resolves the public ID first, then the base ID; the second resolution determines the final wire. Other models retain normal alias behavior. |
@@ -546,11 +556,14 @@ its earlier search cells reach the provider unchanged, as they do for a provider
 
 An explicit `inlineThinkTagModels` list replaces matching registry defaults; `[]` disables recovery.
 
-Translated Responses requests with a validated active reasoning effort preserve raw reasoning
-when `reasoning.summary` is omitted. Explicit `"none"` keeps it hidden for replay; omission
-without an active effort also stays hidden. An injected combo default adds `summary: "auto"`
-only when the caller has not chosen a summary mode. Raw reasoning is never relabeled as a
-provider-authored summary, and Codex still controls its display with `show_raw_agent_reasoning`.
+When `reasoning.summary` is omitted, translated Responses requests with a validated active
+reasoning effort preserve raw reasoning on the content channel by default. Codex controls
+display of that content with `show_raw_agent_reasoning`. On a final `openai-chat` route,
+`rawReasoningAsSummary` exposes the raw text verbatim on the summary channel even without
+an active effort. Otherwise, omission without an active effort keeps the text hidden for
+replay. Explicit `"none"` keeps the text hidden for replay in either case, and
+`hideRawReasoning: true` takes precedence. An injected combo default adds `summary: "auto"`
+only when the caller has not chosen a summary mode.
 
 Custom-model `reasoningEfforts` normally override discovered provider metadata. The bounded
 exception is an explicit custom row whose model id has pinned native Codex capabilities,
@@ -1135,6 +1148,13 @@ mean the account's access token expired; a plan rename does not repair credentia
 Affinity is process-local
 and size-bounded. Token-refresh credential failures retain the existing reauthentication policy. Classified pre-output account-entitlement/billing 403s clear affinity and cool the account for `Retry-After`, or ten minutes by default, before trying an eligible replacement. Generic or request-level 403s remain terminal; see [Claude account recovery](/guides/claude-code/). If all eligible accounts are cooling, clients receive 429 with
 `Retry-After` when known, not an authentication error.
+
+Each request snapshots its eligible roster before sending. Account recovery allows at most
+`max(3, min(eligible accounts, 6) - 1)` hops, still limited by the shared request send budget.
+Only the default ingress budget expands, to at most three transient sends per account across six
+accounts; explicit caller and combo budgets do not expand. Cooldowns still exclude accounts at
+selection time, but cannot shorten this request's snapshot. This bound applies to ordinary Responses,
+continuations, sidecar turns and native Messages, without enabling proactive pooling.
 
 When every account the request can use is held on spent quota (a shared 5-hour or weekly window,
 or the requested model family's weekly window), that 429 is a usage limit rather than a rate limit:

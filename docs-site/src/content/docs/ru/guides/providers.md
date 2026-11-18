@@ -518,7 +518,7 @@ Copilot предоставляет каталог со смешанными пр
 `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`)
 отклоняют `/chat/completions` для агентного трафика, поэтому opencodex по умолчанию
 маршрутизирует эти модели через Responses API, а все остальные модели Copilot остаются на
-chat completions. Приоритет: жёсткий wire-пин → явная запись
+chat completions. `gpt-6-sol`, `gpt-6-luna`, `gpt-6.2-sol`, `gpt-6.2-astra` тоже по умолчанию используют Responses как упреждающий встроенный default; отклонение для них не наблюдалось, а наличие моделей GPT-6.2 в Copilot не подтверждено. Приоритет: жёсткий wire-пин → явная запись
 [`modelAdapters`](/ru/reference/configuration/providers/) → дефолт реестра → adapter всего
 провайдера. Чтобы перевести модель без встроенного дефолта (например, `gpt-5.4-nano`) на
 Responses, задайте `"modelAdapters": { "gpt-5.4-nano": "openai-responses" }`.

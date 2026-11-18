@@ -336,15 +336,42 @@ JEV decides again, and the new decision replaces the pin, when:
 - any send of a pinned session fails (that request still fails over as usual);
 - the configuration has changed since the pin was written.
 
+#### Deciding effort on every pinned turn
+
+A pin keeps the effort of the first decision by default. A session that starts with a planning
+request and continues with small edits then pays for that effort on every turn. Set
+`effort: "per-turn"` to keep the pinned target, and its prompt cache, while JEV chooses the effort
+again on every turn:
+
+```bash
+ocx combo set jev-auto --session-pin 20m --session-pin-effort per-turn --json
+```
+
+```json
+{ "strategy": "jev", "sessionPin": { "ttlMs": 1200000, "effort": "per-turn" } }
+```
+
+When the pinned target offers multiple efforts, a reused turn sends one decision request with
+only that target and its efforts. If JEV picks one of those efforts, the turn uses it and the pin
+keeps it. A failed or unusable decision uses the effort the turn read from the pin. A concurrent
+turn can still update the stored effort. If the pinned target becomes unavailable during the decision,
+the Combo falls back to an eligible target. Usage records retain the effort decision telemetry,
+including tokens the decision model reports when it ends with a failed or incomplete response.
+The turn counts as a regular decision. A single-effort target skips the decision.
+With `jevEffortMode: "client"`, reused turns follow the client effort policy
+and skip the decision. `--session-pin-effort pinned` restores the default. Changing the idle window
+with `--session-pin` keeps the mode.
+
 A cancelled request keeps the pin. A fail-open decision (timeout, missing key, invalid answer)
 never creates one. Pins live in the proxy's memory, at most 512 sessions, and do not survive a
 restart.
 
-Usage records mark a reused turn with `jevDecision.pinned: true` and `pinReason: "session"`. A
+Usage records mark a reused turn with `jevDecision.pinned: true` and `pinReason: "session"`, or
+`pinReason: "session_effort"` when JEV tried to decide its effort. A
 decision that replaced a released pin records why in `pinReason` (`expired`, `config_changed`,
 `target_unavailable`, `effort_unavailable` or `quota_nearly_exhausted`). `ocx combo stats`
-counts pinned requests apart from decisions; they still count toward successful requests, model
-fallbacks and per-model tokens.
+counts every reused turn as pinned. It also counts `session_effort` turns as decisions, including
+failed decisions. Reused turns still count toward successful requests, model fallbacks and per-model tokens.
 
 A pin makes provider cache reuse possible; whether the provider actually serves cached tokens still
 depends on the provider, the account and a stable prompt prefix. `--session-pin -` (API `null`)
@@ -679,6 +706,18 @@ effort pins, caps and wire normalization still apply afterward.
 Request and attempt logs show a differing applied effort as `high->xhigh` or `high->low`, retaining later
 adjustments such as `high->xhigh->medium`. An unchanged effort or a no-effort choice keeps the existing
 label. Later fallback targets use ordinary Combo policy from the original request, without another JEV call.
+
+A turn is usually several requests: the model calls a tool, the client runs it, and the next request
+returns the result. Those tool-call continuations stay on the turn's target without another decision
+call, and in `decide` mode they keep the effort JEV chose for the turn while the target still offers
+it; once it does not, ordinary Combo policy applies. In `client` mode they use
+ordinary Combo effort policy like every other request: the caller's effort, unless
+`defaultEffortMode` is `"force"`.
+
+A fallback target, which JEV did not choose, uses ordinary Combo effort policy. A caller effort takes
+precedence unless `defaultEffortMode` is `"force"`. Without one, the Combo's `defaultEffort` applies
+when set, and the provider default applies otherwise. A continuation of a turn that a fallback target
+answered follows the same policy.
 
 After the Combo has served requests, open **Models → Combos → jev-auto → Stats** to inspect JEV's
 picks without replacing the normal model picker or Usage page. The tab separates backend-reported decision

@@ -90,6 +90,12 @@ export interface PoolSettingsDto {
   routes: AnthropicModelRoute[] | null;
   /** Anthropic preference, default true; null for unsupported pool kinds. */
   nativeMessages: boolean | null;
+  /**
+   * Same marker as {@link GenericPoolSettingsDto.inert}, with the same scope: it never describes
+   * `enabled`. Only the generic kind gates its selector fields on `pool.kernel`; the Codex and
+   * Anthropic selectors are not gated by it, so those kinds answer false.
+   */
+  inert: GenericPoolSettingsDto["inert"];
   /** Present only when stored Anthropic routes fail validation on read. */
   routesError?: string;
   /** Saved state confirmed despite a post-publication failure. */
@@ -174,6 +180,7 @@ export function unifiedPoolSettingsDto(
       maxConcurrentPerAccount: null,
       routes: null,
       nativeMessages: null,
+      inert: false,
     };
   }
   if (kind === "anthropic") {
@@ -190,6 +197,7 @@ export function unifiedPoolSettingsDto(
       quotaWindow: typeof pool.quotaWindow === "string" ? pool.quotaWindow : "five-hour",
       maxConcurrentPerAccount: null,
       ...readAnthropicModelRoutes(pool.routes),
+      inert: false,
     };
   }
   const failover = config.providers?.[provider]?.oauthAccountFailover ?? {};
@@ -209,5 +217,6 @@ export function unifiedPoolSettingsDto(
     maxConcurrentPerAccount: provider === "kiro" ? parseKiroAccountCap(failover.maxConcurrentPerAccount) : null,
     routes: null,
     nativeMessages: null,
+    inert: config.pool?.kernel !== true,
   };
 }

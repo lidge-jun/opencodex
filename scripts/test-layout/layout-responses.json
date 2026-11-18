@@ -1,8 +1,10 @@
 {
+  "search-empty-completion.test.ts": "responses",
   "responses-estimated-usage.test.ts": "responses",
   "responses-combo-unavailable-cause.test.ts": "responses",
   "responses-native-sse-stall.test.ts": "responses",
   "responses-forward-client-headers-live.test.ts": "responses",
+  "responses-chat-raw-summary.test.ts": "responses",
   "pool-retry-client-metadata.test.ts": "responses",
   "chat-inbound-tool-strict-defaults.test.ts": "responses",
   "responses-passive-key-limits.test.ts": "responses",

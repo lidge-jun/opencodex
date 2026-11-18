@@ -465,7 +465,7 @@ Auto sigue el protocolo de sesión e intención de la [implementación pública 
 
 Para las selecciones con nombre, Copilot ofrece un catálogo de cables mixtos: los siguientes modelos (`gpt-5.3-codex`, `gpt-5.4`,
 `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) rechazan
-`/chat/completions` para el tráfico de agentes, por lo que opencodex enruta esos modelos por la API Responses de forma predeterminada e incorporada, mientras que cualquier otro modelo de Copilot permanece en finalizaciones de chat. La precedencia es: fijación de cable obligatoria → su entrada explícita en
+`/chat/completions` para el tráfico de agentes, por lo que opencodex enruta esos modelos por la API Responses de forma predeterminada e incorporada, mientras que cualquier otro modelo de Copilot permanece en finalizaciones de chat. `gpt-6-sol`, `gpt-6-luna`, `gpt-6.2-sol`, `gpt-6.2-astra` también usan Responses como valor predeterminado preventivo incorporado; no se observó ningún rechazo para ellos y la disponibilidad de los modelos GPT-6.2 en Copilot no está verificada. La precedencia es: fijación de cable obligatoria → su entrada explícita en
 [`modelAdapters`](/es/reference/configuration/providers/) → valor predeterminado del registro → adaptador de todo el proveedor. Para incluir en Responses un modelo sin valor predeterminado incorporado (por ejemplo
 `gpt-5.4-nano`), establezca `"modelAdapters": { "gpt-5.4-nano": "openai-responses" }`.
 
