@@ -1,5 +1,7 @@
 import { carryProxyError } from "../../lib/client-error-body";
 import { isNonReplayableResponse, isReplayRefusalResponse, markResponseNonReplayable } from "../../lib/upstream-retry";
+import { isXaiLegacyPrivacyError, xaiPrivacyModeRefusal } from "../../providers/xai-privacy-mode";
+import type { RequestFailureCause } from "../../usage/telemetry-contract";
 import { clientCancelledResponse, readDisplaySafeErrorText } from "./core-errors";
 
 const UPSTREAM_ERROR_TYPES = new Set([
@@ -12,10 +14,11 @@ const UPSTREAM_ERROR_CODES = new Set([
   "unsupported_parameter", "invalid_value", "string_above_max_length",
 ]);
 
-/** Client projection never grants another send or turns a real upstream error into our refusal. */
+/** Project a terminal upstream error while retaining its non-replayability. */
 export async function sanitizeNonReplayableUpstreamError(
   response: Response,
   signal: AbortSignal,
+  grokOAuthLogCtx?: { causeHint?: RequestFailureCause },
 ): Promise<Response> {
   if (response.ok || !isNonReplayableResponse(response) || isReplayRefusalResponse(response)) return response;
   const text = await readDisplaySafeErrorText(response, signal, "");
@@ -23,6 +26,13 @@ export async function sanitizeNonReplayableUpstreamError(
     const cancelled = clientCancelledResponse();
     markResponseNonReplayable(cancelled);
     return cancelled;
+  }
+  const noRetry = response.headers.get("x-should-retry") === "false";
+  if (grokOAuthLogCtx && isXaiLegacyPrivacyError(response.status, text)) {
+    const refusal = xaiPrivacyModeRefusal(grokOAuthLogCtx);
+    if (noRetry) refusal.headers.set("x-should-retry", "false");
+    markResponseNonReplayable(refusal);
+    return refusal;
   }
   let type = "upstream_error";
   let code: string | undefined;
@@ -40,7 +50,7 @@ export async function sanitizeNonReplayableUpstreamError(
     message: `Provider error ${response.status}: upstream diagnostic withheld for a non-replayable failure`,
   } });
   const headers = new Headers({ "content-type": "application/json" });
-  if (response.headers.get("x-should-retry") === "false") headers.set("x-should-retry", "false");
+  if (noRetry) headers.set("x-should-retry", "false");
   const safe = new Response(response.status === 304 ? null : body, {
     status: response.status, headers,
   });

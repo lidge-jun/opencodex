@@ -8,6 +8,7 @@ import { MuseToolChoiceCompatibilityError } from "../../adapters/openai-response
 import { MuseToolCatalogCompatibilityError } from "../../adapters/openai-responses/muse-tool-catalog";
 import { OpenGatewayInputCompatibilityError } from "../../adapters/openai-responses/opengateway-input";
 import { mapCodexAuthContextErrorToResponse } from "./codex-auth-error";
+import { HostedAdvisorSpendRefusal } from "./policy-request-scope";
 
 /** Input-lowering errors are 400; late credential/identity failures retain their own contract. */
 export function passthroughBuildErrorResponse(error: unknown, accountSelector?: string): Response | undefined {
@@ -24,10 +25,11 @@ export function passthroughBuildErrorResponse(error: unknown, accountSelector?: 
   return undefined;
 }
 
-/** Auth failures precede generic adapter-build 400s and preservation of an older rejection. */
-export function codexAdapterBuildRefusal(error: unknown, context: CodexAuthContext | undefined,
+/** Local refusals precede generic adapter-build 400s and preservation of an older rejection. */
+export function adapterBuildRefusal(error: unknown, context: CodexAuthContext | undefined,
   accountSelector?: string, cleanup?: () => void): Response | undefined {
-  const refusal = mapCodexAuthContextErrorToResponse(error, { now: Date.now(), accountSelector });
+  const refusal = error instanceof HostedAdvisorSpendRefusal ? error.response()
+    : mapCodexAuthContextErrorToResponse(error, { now: Date.now(), accountSelector });
   if (refusal) {
     cleanup?.();
     releaseCodexAuthContextProbeLease(context);

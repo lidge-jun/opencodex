@@ -350,9 +350,9 @@ describe("hosted Advisor under the request's token spend policy", () => {
   });
 
   for (const model of ["claude-sonnet-4-6", MODEL]) for (const direct of [false, true]) {
-    test(`a withheld named Advisor keeps ordinary tool calls usable (${model}, direct=${direct})`, async () => {
+    test(`withholding replay-only Advisor keeps ordinary tool calls usable (${model}, direct=${direct})`, async () => {
       const result = await claudeTurn({ model: `anth/${model}`, provider: { models: [model] }, direct,
-        spend: { pool: limit }, toolChoice: { type: "tool", name: "advisor" }, frames: [START,
+        spend: { pool: limit }, tools: [READ], messages: replay, toolChoice: { type: "tool", name: "advisor" }, frames: [START,
           { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_read_after_withholding", name: "Read", input: {} } },
           { type: "content_block_stop", index: 0 }, ...end("tool_use"),
         ] });
@@ -362,6 +362,16 @@ describe("hosted Advisor under the request's token spend policy", () => {
       expect((result.wires[0]!.body.tools as Rec[]).map(tool => tool.name)).toEqual(["Read"]);
       expect(betas(result.wires[0]!)).not.toContain(BETA);
       expect(clientContent(result.body, true)).toContainEqual({ type: "tool_use", id: "toolu_read_after_withholding", name: "Read", input: {} });
+    });
+
+    test(`a capped target refuses an explicit hosted Advisor choice (${model}, direct=${direct})`, async () => {
+      const result = await claudeTurn({ model: `anth/${model}`, provider: { models: [model] }, direct,
+        spend: { pool: limit }, toolChoice: { type: "tool", name: "advisor" }, proxyAdvisor: true });
+      expect(result.status, result.body).toBe(400);
+      expect(JSON.parse(result.body)).toMatchObject({ type: "error", error: {
+        type: "invalid_request_error", message: expect.stringContaining("token spend ceiling"),
+      } });
+      expect(result.wires).toHaveLength(0);
     });
 
     test(`an unlimited named hosted Advisor keeps its model's choice contract (${model}, direct=${direct})`, async () => {
@@ -376,11 +386,11 @@ describe("hosted Advisor under the request's token spend policy", () => {
   }
 
   for (const owner of ["client", "proxy"] as const) {
-    test(`withholding the hosted Advisor preserves the named ${owner} Advisor`, async () => {
+    test(`withholding hosted replay preserves the named ${owner} Advisor`, async () => {
       const model = "claude-sonnet-4-6";
       const result = await claudeTurn({ model: `anth/${model}`, provider: { models: [model] },
         spend: { pool: limit }, toolChoice: { type: "tool", name: "advisor" }, proxyAdvisor: owner === "proxy",
-        tools: owner === "client" ? [READ, { ...READ, name: "advisor" }, ADVISOR] : [READ, ADVISOR] });
+        messages: replay, tools: owner === "client" ? [READ, { ...READ, name: "advisor" }] : [READ] });
       expect(result.status, result.body).toBe(200);
       expect(result.wires).toHaveLength(1);
       expect(result.wires[0]!.body.tool_choice).toEqual({ type: "tool", name: "advisor" });
@@ -388,8 +398,17 @@ describe("hosted Advisor under the request's token spend policy", () => {
       expect(declared.filter(tool => tool.name === "advisor")).toHaveLength(1);
       expect(declared.find(tool => tool.name === "advisor")).toHaveProperty("input_schema");
       expect(betas(result.wires[0]!)).not.toContain(BETA);
+      expect(JSON.stringify(result.wires[0]!.body)).not.toContain("srvtoolu_adv1");
     });
   }
+
+  test("a spend ceiling does not disambiguate a duplicate hosted Advisor choice", async () => {
+    const result = await claudeTurn({ model: `anth/${MODEL}`, spend: { pool: limit },
+      toolChoice: { type: "tool", name: "advisor" }, tools: [READ, { ...READ, name: "advisor" }, ADVISOR] });
+    expect(result.status, result.body).toBe(400);
+    expect(result.body).toContain("ambiguous");
+    expect(result.wires).toHaveLength(0);
+  });
 
   for (const choice of [{ type: "none" }, { type: "auto" }, { type: "any" }, { type: "tool", name: "Read" }]) {
     test(`withholding preserves an unrelated tool choice (${JSON.stringify(choice)})`, async () => {

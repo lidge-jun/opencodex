@@ -156,6 +156,24 @@ log can be sent. OpenCodex does not run general DLP.
 Manual advice is a tool result for the `advisor` call the worker made. The result is a JSON
 object. Its `advice` field is the Advisor model's text. Its `status` is set by the runtime.
 
+Manual calls also require the current request's `tool_choice` to allow `advisor`. An explicit
+selector or allowlist must select the root `advisor` function. The reserved `functions` namespace
+also maps to the root. If the caller has no root declaration named `advisor`, an eligible sidecar
+can supply the tool. A selector in the `functions` namespace uses the caller's root tool when
+the matching declaration exists. Forced hosted web search and
+same-named custom or hosted selectors grant no manual Advisor permission. This applies to
+ordinary translated Responses and Messages requests as well as web search. A forbidden call
+is rejected before consultation, worker redispatch, or disclosure of its ID and arguments.
+The original selection also governs client tools named `advisor` in any namespace. With a forced
+hosted search, both those tools and manual proxy consultations are excluded.
+When translated Messages explicitly selects Anthropic's hosted `advisor`, OpenCodex forwards the
+original declaration and named choice on an eligible route. A captured token spend ceiling makes
+the selected target ineligible for that choice. A combo or routing profile can skip
+incompatible candidates under its fallback policy. OpenCodex returns HTTP 400 locally when
+the selection is ambiguous or all attempted candidates are incompatible. Both outcomes skip
+proxy consultations. On other turns, automatic preflight and adaptive consultations follow
+operator policy.
+
 Automatic preflight keeps the fixed runtime transport instruction in a developer message and
 puts the quoted JSON advice in a separate **user-role advisory message**. Advisor-generated text
 never enters developer/system content, including when translated OpenAI Chat maps developer
@@ -171,8 +189,8 @@ request without another hidden worker call. The bound is shared with empty-compl
 
 Fetch-based web-search turns support the same manual consultation path when the effective
 `tool_choice` permits the synthetic `advisor` tool. The search loop exposes and intercepts
-`advisor` calls only within that scope; an `allowed_tools` choice restricted to `web_search`
-excludes manual Advisor consultations. Permitted `web_search` and `advisor` calls are handled in
+`advisor` calls only within that scope. A forced search or a search-only allowlist excludes
+manual Advisor consultations. Permitted `web_search` and `advisor` calls are handled in
 worker order. Search and Advisor iterations have separate allowances,
 and a real client tool call still returns control to the client. Run-turn and image/video sidecar turns remain subject to their existing limitations.
 If the worker emits an excluded `advisor` call, the turn fails with `undeclared_tool_call`
@@ -218,9 +236,10 @@ consultation never switches the session's main model.
 - Native OpenAI passthrough turns (ChatGPT-pool workers) do not get the synthetic tool; advisor
   support covers routed (translated) providers. Preflight consultation applies to run-turn
   adapters; the tool does not.
-- Translated `/v1/messages` requests (for example Claude Code routed to a translated provider)
-  get the synthetic tool and preflight like `/v1/responses` and `/v1/chat/completions`. The
-  same `policy` and context-sharing consent rules apply, and the settings are read from the live
+- Translated `/v1/messages` requests can receive the synthetic tool when `tool_choice` permits it
+  and run preflight under the configured policy. An explicit hosted Advisor selection follows
+  the rules in [Authority](#authority) and skips both. Context-sharing consent applies to proxy
+  consultations, and the settings are read from the live
   config, so a consent revocation blocks consultations for requests already in flight that have
   not yet been dispatched. It does not cancel a dispatched consultation or retract context that
   already left the proxy.

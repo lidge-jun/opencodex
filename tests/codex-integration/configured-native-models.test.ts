@@ -19,7 +19,7 @@ import {
   CONFIGURED_NATIVE_OPENAI_TEMPLATE_MODEL,
   NATIVE_GPT6_CONTEXT,
   NATIVE_GPT6_SOL_MODEL,
-  NATIVE_GPT61_SOL_MODEL,
+  NATIVE_GPT62_SOL_MODEL,
   NATIVE_OPENAI_MODELS,
   SUPPORTED_NATIVE_OPENAI_SLUGS,
   configuredNativeOpenAiModels,
@@ -92,24 +92,24 @@ describe("configured native GPT models", () => {
     expect(NATIVE_OPENAI_MODELS).toEqual([...BUILT_IN, NOVA]);
   });
 
-  test("a configured id borrows GPT-6.1 Sol capabilities under its own name", () => {
+  test("a configured id borrows GPT-6.2 Sol capabilities under its own name", () => {
     refreshConfigDerivedRegistries(config(forward({ models: [NOVA] })));
-    expect(CONFIGURED_NATIVE_OPENAI_TEMPLATE_MODEL).toBe(NATIVE_GPT61_SOL_MODEL);
+    expect(CONFIGURED_NATIVE_OPENAI_TEMPLATE_MODEL).toBe(NATIVE_GPT62_SOL_MODEL);
     expect(SUPPORTED_NATIVE_OPENAI_SLUGS.has(NOVA)).toBe(true);
     expect(isUnsupportedOpenAiNativeSlug(NOVA)).toBe(false);
     expect(hasNativeOpenAiCapabilityMetadata(NOVA)).toBe(true);
     expect(isGpt56NativeSlug(NOVA)).toBe(true);
     expect(nativeLadderIncludesUltra(NOVA)).toBe(true);
     expect(nativeReasoningEfforts(NOVA)).toEqual(SOL_LADDER);
-    expect(nativeInputModalities(NOVA)).toEqual(nativeInputModalities(NATIVE_GPT61_SOL_MODEL));
-    expect(nativeVisionReasoningEfforts(NOVA)).toEqual(nativeVisionReasoningEfforts(NATIVE_GPT61_SOL_MODEL));
+    expect(nativeInputModalities(NOVA)).toEqual(nativeInputModalities(NATIVE_GPT62_SOL_MODEL));
+    expect(nativeVisionReasoningEfforts(NOVA)).toEqual(nativeVisionReasoningEfforts(NATIVE_GPT62_SOL_MODEL));
     expect(nativeOpenAiCapabilityDisplayName(NOVA)).toBe("GPT-6-Nova");
 
     const row = upstreamNativeEntry(NOVA)!;
     expect(row.slug).toBe(NOVA);
     expect(row.display_name).toBe("GPT-6-Nova");
-    // GPT-6.1 Sol's row is the template, so its default effort (low) comes along; GPT-6 Sol's is medium.
-    expect(row.default_reasoning_level).toBe(upstreamNativeEntry(NATIVE_GPT61_SOL_MODEL)!.default_reasoning_level);
+    // GPT-6.2 Sol's row is the template, so its default effort (low) comes along; GPT-6 Sol's is medium.
+    expect(row.default_reasoning_level).toBe(upstreamNativeEntry(NATIVE_GPT62_SOL_MODEL)!.default_reasoning_level);
     expect(row.default_reasoning_level).not.toBe(upstreamNativeEntry(NATIVE_GPT6_SOL_MODEL)!.default_reasoning_level);
     expect(efforts(row)).toEqual(SOL_LADDER);
     // #5217: the on-disk block is model-neutral; the destination id is written at request time.

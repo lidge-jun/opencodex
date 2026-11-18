@@ -39,6 +39,7 @@ import {
 } from "../../lib/upstream-retry";
 import { unwrapUpstreamRetryEvidenceError } from "../../codex/auth-context";
 import { AdmissionModelDeniedError, MODEL_NOT_ALLOWED_FOR_KEY } from "../admission-model-scope";
+import { HostedAdvisorSpendRefusal } from "./policy-request-scope";
 import { redactSecretString } from "../../lib/redact";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { bindRouteReasoningReplayScope } from "./core-replay";
@@ -161,6 +162,7 @@ export function createAdapterContinuations(
       return { type: "error", message: "client closed request during terminal continuation", status: 499 };
     }
     const refusal = unwrapUpstreamRetryEvidenceError(error);
+    if (refusal instanceof HostedAdvisorSpendRefusal) return refusal.event();
     if (refusal instanceof AdmissionModelDeniedError || refusal instanceof SendBudgetExhaustedError) rememberProxyErrorMessage(logCtx, refusal.message, { status: refusal instanceof AdmissionModelDeniedError ? 403 : 429,
       type: refusal instanceof AdmissionModelDeniedError ? MODEL_NOT_ALLOWED_FOR_KEY : "rate_limit_error", code: refusal instanceof AdmissionModelDeniedError ? MODEL_NOT_ALLOWED_FOR_KEY : refusal.code, presentation: refusal instanceof AdmissionModelDeniedError ? "scope" : "send" });
     if (refusal instanceof AdmissionModelDeniedError) {

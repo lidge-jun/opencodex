@@ -136,8 +136,10 @@ hosted tool, replay and beta; an earlier withholding is never undone by an unlim
 The request-owned `hostedAdvisorSpendGuard` runs inside every selected adapter's `buildRequest`
 wrapper after credential admission, including sidecar copies and dispatch-time reselection. The
 builder supplies its own effective provider so a rebuilt credential route's default adapter cannot
-override the selected wire's eligibility. It reuses the same captured policy, normalizes a newly unmatched named choice and rebuilds the outer
-delivery maps once, without changing main-model accounting. The hosted-only target binding in `src/server/responses/request-transport.ts`
+override the selected wire's eligibility. It reuses the same captured policy. Explicit hosted
+Messages selections refuse capped targets before dispatch. Optional turns can normalize a newly
+unmatched named choice and rebuild the outer delivery maps once. Both paths preserve main-model
+accounting. The hosted-only target binding in `src/server/responses/request-transport.ts`
 resolves a selected API key's existing account label before physical log attribution, so policy
 checks do not record an unsent attempt as served. `request-spend-target.ts` keeps that read-only
 binding separate from ordinary main-model accounting and preserves the latter's existing scopes.
@@ -148,7 +150,7 @@ accepts a new snapshot. Provider display tags and generic account log fields rem
 Both declaration and Advisor replay are removed, so neither can restore the beta.
 Other completed server-tool exchanges in the same validated run retain their original anchor,
 order and destination restrictions.
-The main turn proceeds, other tools keep their contracts, and requests without an applicable ceiling
+The main turn proceeds when the hosted tool is optional, other tools keep their contracts, and requests without an applicable ceiling
 keep destination-based forwarding. `tests/claude-integration/claude-translated-advisor-tool.test.ts`
 checks the wire, unchanged main accounting, admitted identity and captured-policy changes. The separately budgeted
 [proxy Advisor](../advisor.md#claude-codes-typed-advisor-server-tool) remains available.

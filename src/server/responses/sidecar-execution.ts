@@ -10,10 +10,11 @@ import type { ResponsesSendBudget } from "./request-send-budget";
 import { formatErrorResponse } from "../../bridge";
 import { planWebSearch, buildWebSearchTool, runWithWebSearch } from "../../web-search";
 import { createRegisteredAdvisorPlan } from "./advisor-plan-slot";
-import { ADVISOR_TOOL_NAME, createAdvisorSidecarStep } from "./advisor-slot";
+import { ADVISOR_TOOL_NAME, advisorToolAllowed, createAdvisorSidecarStep } from "./advisor-slot";
 import { advisorServerToolDestination, hasAdvisorServerTools, withholdAdvisorServerTools } from "../../adapters/anthropic/advisor-tool";
 import { addProtocolEntryReason } from "../../protocols/trace";
 import { responsesHostedAdvisorSpendTarget } from "./request-spend-target";
+import { HostedAdvisorSpendRefusal } from "./policy-request-scope";
 import { buildToolBridgeMaps } from "./collaboration";
 import {
   planImageBridge,
@@ -52,7 +53,7 @@ import {
 } from "../../oauth/anthropic-routing";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { bindRouteReasoningReplayScope, adapterNeedsForcedContinuation, adapterNeedsToolCallContinuation } from "./core-replay";
-import { namespacedToolName, toolChoiceCandidates, toolChoiceToolPredicate } from "../../types";
+import { namespacedToolName, toolChoiceCandidates } from "../../types";
 import { providerFetch } from "./fetch-helpers";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { recordAdapterReasoning, recordAdapterTier } from "../request-log";
@@ -195,6 +196,7 @@ export async function executeResponsesSidecars(
   // Read the actual authenticated target's captured ceilings before an optional plan can await;
   // this query never starts or changes the main-model accounting mode.
   let hostedAdvisorWithheld = false;
+  const explicitlySelectedHostedAdvisor = options.anthropicHostedAdvisorSelection === "selected";
   const withholdHostedAdvisorBySpend = (request: OcxParsedRequest, provider: OcxProviderConfig) => {
     if (!hostedAdvisorWithheld && advisorServerToolDestination(provider)
       && (hasAdvisorServerTools(parsed) || hasAdvisorServerTools(request))
@@ -208,6 +210,10 @@ export async function executeResponsesSidecars(
     }
   };
   withholdHostedAdvisorBySpend(parsed, transportState.initialAdapterProvider);
+  if (hostedAdvisorWithheld && explicitlySelectedHostedAdvisor) {
+    releaseSearchProbeLease();
+    return new HostedAdvisorSpendRefusal().response();
+  }
   const normalizeWithheldAdvisorChoice = (request = parsed) => {
     const choice = request.options.toolChoice;
     // Wait for the final catalog: a client function or the later proxy Advisor may own this name.
@@ -224,6 +230,7 @@ export async function executeResponsesSidecars(
   // Withholding is monotonic across all later identities/copies.
   transportState.hostedAdvisorSpendGuard = (request, provider) => {
     withholdHostedAdvisorBySpend(request, provider);
+    if (hostedAdvisorWithheld && explicitlySelectedHostedAdvisor) throw new HostedAdvisorSpendRefusal();
     normalizeWithheldAdvisorChoice();
     if (request !== parsed) normalizeWithheldAdvisorChoice(request);
   };
@@ -245,7 +252,8 @@ export async function executeResponsesSidecars(
     });
   // Preflight only on real worker turns: a routed-compaction turn is a summarization request,
   // and injecting advice into it would pollute the summary Codex replaces its history with.
-  if (advisorPlan && !routedCompaction) {
+  // An explicit hosted Advisor choice reserves this turn's consultation for Anthropic.
+  if (advisorPlan && !routedCompaction && !options.anthropicHostedAdvisorSelection) {
     await advisorPlan.preflightInject(parsed);
   }
   // The synthetic `advisor` owns the name for the whole turn it joins, so a typed Advisor declaration
@@ -299,10 +307,13 @@ export async function executeResponsesSidecars(
     if (refusal instanceof AdmissionModelDeniedError) sidecarScopeDenial ??= refusal;
   };
   const sidecarScopeRefusal = (response: Response): Response | undefined => {
-    if (!sidecarScopeDenial || response.ok) return undefined;
+    if (response.ok) return undefined;
+    const hostedSpendRefusal = response.status === 400 && hostedAdvisorWithheld && explicitlySelectedHostedAdvisor;
+    if (!sidecarScopeDenial && !hostedSpendRefusal) return undefined;
     void response.body?.cancel().catch(() => {});
     releaseSearchProbeLease();
-    return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(sidecarScopeDenial, logCtx));
+    return sidecarScopeDenial ? admissionModelDeniedResponse(projectAdmissionModelDeniedLog(sidecarScopeDenial, logCtx))
+      : new HostedAdvisorSpendRefusal().response();
   };
   /** Admit a replacement credential, or leave the loop's original refusal authoritative. */
   const rotateSidecarProviderOn429 = async (
@@ -716,8 +727,7 @@ export async function executeResponsesSidecars(
   // through web-search instead of being swallowed. runTurn adapters never enter this branch.
   if (canRunWebSearch && wsPlan) {
     const requestedTools = parsed.context.tools ?? [];
-    const advisorAllowed = advisorPlan
-      && toolChoiceToolPredicate(parsed.options.toolChoice, [...requestedTools, advisorPlan.tool])(advisorPlan.tool);
+    const advisorAllowed = advisorPlan && advisorToolAllowed(parsed, advisorPlan.tool);
     const webSearchAdvisor = advisorPlan && advisorAllowed && !routedCompaction
       && typeof advisorPlan.consult === "function" && typeof advisorPlan.formatUnavailable === "function"
       ? advisorPlan
@@ -860,6 +870,13 @@ export async function executeResponsesSidecars(
   // run-turn adapter, not compaction). Web-search handles advisor in its own loop above; the
   // image/video and run-turn loops cannot intercept it. Preflight still applies to those paths.
   if (advisorPlan && !routedCompaction && !transportState.adapter.runTurn && !wsPlan && !imgPlan && !vidPlan) {
+    if (!advisorToolAllowed(parsed, advisorPlan.tool)) {
+      // Keep the refusal guard without injecting or shadowing tools. Direct Messages delivery
+      // must not expose a forbidden synthetic call merely because it was never advertised.
+      normalizeWithheldAdvisorChoice();
+      advisorPlan.attachGuard(parsed);
+      return undefined;
+    }
     // A client-declared tool named "advisor" would collide with the synthetic injection (one
     // wire name, two schemas); the synthetic runtime owns the name for this turn.
     parsed.context.tools = [

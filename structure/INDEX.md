@@ -564,6 +564,7 @@ A source area can be described by more than one doc, because these docs are orga
 | `src/service/windows-stop-budget.ts` | [`ops/windows-checked-stop.md`](ops/windows-checked-stop.md) |
 | `src/service/windows-stop-confirm.ts` | [`ops/windows-checked-stop.md`](ops/windows-checked-stop.md) |
 | `src/service/windows-stop-deadline.ts` | [`ops/windows-checked-stop.md`](ops/windows-checked-stop.md) |
+| `src/service/windows-task-instance-stop.ts` | [`ops/windows-checked-stop.md`](ops/windows-checked-stop.md) |
 | `src/sidecar/` | [`ops/service-and-sidecars.md`](ops/service-and-sidecars.md) |
 | `src/sidecar/anthropic-binding.ts` | [`providers/anthropic-account-pool.md`](providers/anthropic-account-pool.md) |
 | `src/stall-timeout.ts` | [`transports/timeouts.md`](transports/timeouts.md)<br>[`runtime.md`](runtime.md) |

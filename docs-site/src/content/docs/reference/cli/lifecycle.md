@@ -151,6 +151,18 @@ exit. Only then does it stop the proxy gracefully. Afterwards it confirms that t
 for about six seconds and that no wrapper started again, so a wrapper's restart loop cannot bring
 the proxy back behind a successful stop.
 
+OpenCodex verifies that the scheduled task launches this installation under your Windows account
+and checks the account for each running instance before stopping it. An owned, disabled task with
+no running instances counts as idle. A queued task prevents OpenCodex from confirming the stop.
+If verification fails, check the launcher and run-as account in Task Scheduler and stop the task
+from its owning session.
+
+OpenCodex terminates a wrapper directly only after verifying that it belongs to your account.
+It ignores wrappers proven to belong to another user. If it cannot verify the owner of a wrapper
+eligible for termination, stop it from its owning Windows session using Task Manager and retry.
+If OpenCodex cannot confirm a wrapper's exit without a process handle, as can happen on ARM64,
+check it in Task Manager from its owning session, stop it if it is still running, and retry.
+
 When the service cannot be proven stopped, `ocx stop` sends no stop request to the proxy, leaves
 your client configuration alone, and fails. With `--json` the summary keeps `outcome: "failed"`
 and `proxy: "unknown"`, and adds `serviceStopReason`:
@@ -159,7 +171,7 @@ and `proxy: "unknown"`, and adds `serviceStopReason`:
 |---|---|---|
 | `access-denied` | Ending the task or a wrapper was denied, usually an elevated task stopped from an unelevated terminal | Run `ocx stop` from an elevated terminal |
 | `unbound-wrapper` | A wrapper running this home's service script could not be tied to the service, for example one started by hand | End that `wscript.exe`/`cmd.exe`, then retry |
-| `evidence-unreadable` | The service or process state could not be read, or the port could not be confirmed free | Check `ocx service status`, then retry |
+| `evidence-unreadable` | The task, wrapper, or service state could not be verified, or the port could not be confirmed free | Follow the stop message or check `ocx service status`, then retry |
 | `unverified-budget` | The time left could not hold a verified stop, so nothing was changed | Retry from a terminal |
 
 If another program is listening on the port after this installation's processes are gone, the

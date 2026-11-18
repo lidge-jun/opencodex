@@ -4,9 +4,10 @@ import { clientFacingModelText } from "../../lib/error-destination";
 import { responsesSpendTarget } from "./request-spend-target";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
 import { markProxyError, carryProxyError, isProxyError } from "../../lib/client-error-body";
-import { codexAdapterBuildRefusal } from "./passthrough-build-error";
+import { adapterBuildRefusal } from "./passthrough-build-error";
 import { createAutoPauseRefreshErrorMapper, recoverAutoPausedAccount } from "./account-auto-pause-recovery";
 import { wasAccountAutoPaused, wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
+import { effectiveAccountAutoPause } from "../../config/account-auto-pause-revisions";
 import { bindAnthropicRejectionResponse } from "../../adapters/anthropic-rejection-memo";
 import { deferPhysicalSendReporter } from "./deferred-send-reporter";
 import { usesApiKeyAccount } from "../../providers/label";
@@ -40,7 +41,7 @@ import { anthropicPoolCooldownResponse, clientCancelledResponse, readDisplaySafe
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { redactSecretString } from "../../lib/redact";
 import { rewriteUpstreamPolicyRefusal } from "./policy-refusal";
-import { carryPolicyCandidateRefusal } from "./policy-request-scope";
+import { carryPolicyCandidateRefusal, HostedAdvisorSpendRefusal } from "./policy-request-scope";
 import { withProviderRequestSlot } from "../../providers/request-pacing";
 import { providerFetch, fetchWithHeaderTimeout, safeHostLabel } from "./fetch-helpers";
 import { isAnthropicBillingKeyPool, rotateAnthropicBillingKeyOnResponse } from "../../providers/anthropic-billing-recovery";
@@ -76,6 +77,7 @@ import { classifyAntigravityRefusal } from "../../adapters/antigravity-refusal";
 import { normalizeFinalKiroHttpError } from "../../adapters/kiro-retry";
 import { noteKiroMonthlyRefusal } from "../../providers/kiro-usage";
 import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
+import { isXaiGrokOAuth, isXaiLegacyPrivacyError, xaiPrivacyModeRefusal } from "../../providers/xai-privacy-mode";
 import { isXaiResponsesDestination, resolveProviderTransport } from "../../providers/xai-transport";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
@@ -365,8 +367,8 @@ export async function prepareAdapterExchange(
         code: "translation_buffer_limit",
       });
     }
-    const authRefusal = codexAdapterBuildRefusal(err, admissionState.authCtx, route.codexAccountNamespace);
-    if (authRefusal) return authRefusal;
+    const buildRefusal = adapterBuildRefusal(err, admissionState.authCtx, route.codexAccountNamespace);
+    if (buildRefusal) return buildRefusal;
     const msg = err instanceof Error ? err.message : String(err);
     return formatErrorResponse(400, "invalid_request_error", redactSecretString(msg));
   }
@@ -400,7 +402,7 @@ export async function prepareAdapterExchange(
     upstreamResponse = carryProxyError(original, new Response(text, { status: original.status, statusText: original.statusText, headers }));
     return upstreamResponse;
   };
-  const autoPauseEnabled = config.providers[route.providerName]?.accountAutoPause?.enabled === true;
+  const autoPauseEnabled = effectiveAccountAutoPause(config.providers[route.providerName]) !== undefined;
   const billingPoolRequest = isAnthropicBillingKeyPool(route.provider);
   let billingRecoveryActive = false;
   const genericRefetchCountsSends = () => !!sendBudgetState.workflowRootId || options.comboAttempt === true || sendBudgetState.adapterSendBudget?.spendEnforced === true
@@ -556,6 +558,7 @@ export async function prepareAdapterExchange(
       return storageRefusal;
     }
     const refusal = err instanceof UpstreamRetryEvidenceError ? err.cause : err;
+    if (refusal instanceof HostedAdvisorSpendRefusal) return refusal.response();
     if (refusal instanceof AdmissionModelDeniedError) {
       releaseCodexAuthContextProbeLease(admissionState.authCtx);
       return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(refusal, logCtx));
@@ -665,8 +668,8 @@ export async function prepareAdapterExchange(
           recordAdapterReasoning(logCtx, retryRequest);
           recordAdapterTier(logCtx, retryRequest);
         } catch (err) {
-          const authRefusal = options.abortSignal?.aborted ? undefined : codexAdapterBuildRefusal(err, admissionState.authCtx, route.codexAccountNamespace, () => { cleanupUpstreamAbort(); upstream.abort(); });
-          if (authRefusal) return { failed: authRefusal };
+          const buildRefusal = options.abortSignal?.aborted ? undefined : adapterBuildRefusal(err, admissionState.authCtx, route.codexAccountNamespace, () => { cleanupUpstreamAbort(); upstream.abort(); });
+          if (buildRefusal) return { failed: buildRefusal };
           // A rotated credential that cannot be shaped keeps the refusal it was meant to
           // replace. The image-tier and reasoning-effort rebuilds are different: the request itself
           // failed to shape, and their established build-error contracts stay authoritative.
@@ -836,11 +839,12 @@ export async function prepareAdapterExchange(
           return { failed: storageRefusal };
         }
         const scopeRefusal = unwrapUpstreamRetryEvidenceError(err);
-        if (!options.abortSignal?.aborted && scopeRefusal instanceof AdmissionModelDeniedError) {
+        if (!options.abortSignal?.aborted && (scopeRefusal instanceof AdmissionModelDeniedError || scopeRefusal instanceof HostedAdvisorSpendRefusal)) {
           cleanupUpstreamAbort();
           upstream.abort();
           releaseCodexAuthContextProbeLease(admissionState.authCtx);
-          return { failed: admissionModelDeniedResponse(projectAdmissionModelDeniedLog(scopeRefusal, logCtx)) };
+          return { failed: scopeRefusal instanceof HostedAdvisorSpendRefusal ? scopeRefusal.response()
+            : admissionModelDeniedResponse(projectAdmissionModelDeniedLog(scopeRefusal, logCtx)) };
         }
         const codexRefusal = !options.abortSignal?.aborted && mapCodexAuthContextErrorToResponse(unwrapUpstreamRetryEvidenceError(err), {
           now: Date.now(), accountSelector: route.codexAccountNamespace,
@@ -942,7 +946,8 @@ export async function prepareAdapterExchange(
       await rejectAnthropicPerMessageEffort(parsed, upstreamResponse, upstream.signal);
       if (isNonReplayableResponse(upstreamResponse)) {
         try {
-          return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal);
+          return await sanitizeNonReplayableUpstreamError(upstreamResponse, upstream.signal,
+            isXaiGrokOAuth(route.providerName, route.provider) ? logCtx : undefined);
         } finally { cleanupUpstreamAbort(); }
       }
       bindAnthropicRejectionResponse(transportState.sameTargetRequest, upstreamResponse);
@@ -1868,12 +1873,13 @@ export async function prepareAdapterExchange(
     if (!upstreamResponse.ok) {
       if (route.providerName === "kiro")
         upstreamResponse = await normalizeFinalKiroHttpError(upstreamResponse, upstream.signal);
+      const grokOAuth = isXaiGrokOAuth(route.providerName, route.provider);
       if (options.comboAttempt) {
         // No pre-read guard: `consumeComboFailure` -> `readBoundedResponseBody` reads
         // `response.body` itself with the abort signal threaded through, and the combo
         // contract is that this body's getter is touched exactly once. A guard here would be
         // a second `.body` access for no gain, since the bounded reader owns settlement.
-        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal, Date.now(), logCtx, !isProxyError(upstreamResponse))
+        const failure = await consumeComboFailure(upstreamResponse, options.abortSignal, Date.now(), logCtx, !isProxyError(upstreamResponse), grokOAuth)
           .finally(cleanupUpstreamAbort);
         options.onConsumedComboFailure?.(failure);
         return failure.response;
@@ -1888,6 +1894,7 @@ export async function prepareAdapterExchange(
       } finally {
         cleanupUpstreamAbort();
       }
+      if (grokOAuth && isXaiLegacyPrivacyError(upstreamResponse.status, errorText)) return xaiPrivacyModeRefusal(logCtx);
       // The provider's own body (not a proxy-normalized one) may name its closed error class (#8446).
       if (!isProxyError(upstreamResponse)) recordUpstreamProviderErrorDetail(logCtx, upstreamResponse.status, errorText, upstreamResponse);
       if (upstreamResponse.status === 413) {

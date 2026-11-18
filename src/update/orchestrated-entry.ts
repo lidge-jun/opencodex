@@ -10,7 +10,7 @@ import { resolveServiceOwnership } from "../service/state";
 import type { ServiceOwnershipResolution } from "../service/state";
 import { inspectDesktopSupervision, type SupervisionEvidence } from "../service/desktop-supervision.mjs";
 import { diagnoseService } from "../service/diagnostics";
-import { detectInstallOwnership, defaultUpdateTag, latestVersion } from "./index";
+import { detectInstallOwnership, defaultUpdateTag, latestVersion, resolveCurrentPnpmGlobalOwner } from "./index";
 import { parseOrchestratedUpdateArgs, type OrchestratedUpdateArgs } from "./orchestrated-arguments.mjs";
 import { buildOrchestratedPlan, type PlanInputs } from "./orchestrated-plan";
 import { inspectLiveOrchestratedIdentity } from "./orchestrated-live-identity";
@@ -77,12 +77,21 @@ const defaultDeps: OrchestratedPlanDeps = {
     const cache = mkdtempSync(join(tmpdir(), "ocx-registry-probe-"));
     const overrides = { npm_config_cache: cache, npm_config_logs_dir: join(cache, "logs"), npm_config_logs_max: "0",
       npm_config_update_notifier: "false", pnpm_config_cache_dir: join(cache, "pnpm-cache"),
-      npm_config_cache_dir: join(cache, "pnpm-cache"), npm_config_store_dir: join(cache, "pnpm-store"),
-      pnpm_config_store_dir: join(cache, "pnpm-store"), pnpm_config_state_dir: join(cache, "pnpm-state"),
+      npm_config_cache_dir: join(cache, "pnpm-cache"), pnpm_config_state_dir: join(cache, "pnpm-state"),
       BUN_INSTALL_CACHE_DIR: join(cache, "bun-cache"), XDG_CACHE_HOME: join(cache, "xdg-cache"), XDG_STATE_HOME: join(cache, "xdg-state") };
     const keys = new Set(Object.keys(overrides).map(key => key.toLowerCase()));
     const env = { ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !keys.has(key.toLowerCase()))), ...overrides };
-    try { return latestVersion(selector, installer as "npm" | "pnpm" | "bun", undefined, probeSpawnSync, env); }
+    try {
+      if (installer === "pnpm") {
+        // Store proof must see the installed package's configured store. Only the version query uses the temporary store.
+        const proof = resolveCurrentPnpmGlobalOwner(undefined, { spawn: probeSpawnSync, env });
+        if (!proof.ok) return null;
+        const storeOverrides = { npm_config_store_dir: join(cache, "pnpm-store"), pnpm_config_store_dir: join(cache, "pnpm-store") };
+        const registryEnv = Object.fromEntries(Object.entries(env).filter(([key]) => !Object.hasOwn(storeOverrides, key.toLowerCase())));
+        return latestVersion(selector, installer, proof.owner, probeSpawnSync, { ...registryEnv, ...storeOverrides });
+      }
+      return latestVersion(selector, installer as "npm" | "bun", undefined, probeSpawnSync, env);
+    }
     finally { rmSync(cache, { recursive: true, force: true }); }
   },
   inFlight: () => isUpdateInFlight(getConfigDir()),

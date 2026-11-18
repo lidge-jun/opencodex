@@ -3,6 +3,7 @@ import { markProxyError } from "../../lib/client-error-body";
 import type { RouteResult } from "../../router";
 import type { RouteDecisionTraceV1 } from "../../routing/trace";
 import { resolveOpenAiVirtualModel } from "../../providers/openai-virtual-models";
+import type { AdapterEvent } from "../../types";
 
 /** Request-owned authorization, separate from the diagnostic trace and each physical attempt. */
 export interface PolicyRequestScope {
@@ -43,12 +44,32 @@ export function mandatoryToolChoiceUnavailableResponse(): Response {
 const localRefusals = new WeakSet<Response>();
 const mandatoryToolRefusals = new WeakSet<Response>();
 
+/** Attach candidate-local provenance without changing the HTTP envelope. */
+export function markPolicyCandidateRefusal(response: Response): Response {
+  localRefusals.add(response);
+  return response;
+}
+
+/** A mandatory hosted selection cannot be met by this credential under the captured ceiling. */
+export class HostedAdvisorSpendRefusal extends Error {
+  constructor() {
+    super("The selected hosted Advisor tool is unavailable under the applicable token spend ceiling.");
+  }
+
+  event(): Extract<AdapterEvent, { type: "error" }> {
+    return { type: "error", status: 400, errorType: "invalid_request_error", message: this.message, retryable: false };
+  }
+
+  response(): Response {
+    return markPolicyCandidateRefusal(markProxyError(formatErrorResponse(400, "invalid_request_error", this.message)));
+  }
+}
+
 export function policyCandidateRefusalResponse(error: unknown): Response | undefined {
   if (!(error instanceof PolicyCandidateUnavailableError)) return undefined;
   const response = formatErrorResponse(409, "policy_candidate_unavailable", error.message);
-  localRefusals.add(response);
   if (error instanceof MandatoryToolChoiceUnavailableError) mandatoryToolRefusals.add(response);
-  return response;
+  return markPolicyCandidateRefusal(response);
 }
 
 /** Upstream text or a matching error code cannot authorize another policy attempt. */

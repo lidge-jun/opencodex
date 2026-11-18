@@ -267,7 +267,7 @@ for (const queried of [false, true]) for (const enforced of [false, true]) {
   });
 }
 
-for (const pinnedWire of [false, true]) for (const lane of ["main", "search", "named"] as const) for (const limited of ["first", "second", "neither"] as const) {
+for (const pinnedWire of [false, true]) for (const lane of ["main", "search", "named", "forced", "forced-search"] as const) for (const limited of ["first", "second", "neither"] as const) {
   test(`hosted Advisor follows captured target policy after key rotation (pinnedWire=${pinnedWire}, lane=${lane}, limited=${limited})`, async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = (async () => { throw new Error("rotation fixture forbids uninjected network calls"); }) as typeof fetch;
@@ -286,6 +286,8 @@ for (const pinnedWire of [false, true]) for (const lane of ["main", "search", "n
       charge: () => true, refund: () => {},
     });
     const wires: Array<{ body: Record<string, unknown>; headers: Headers }> = [];
+    const forced = lane === "forced" || lane === "forced-search";
+    const search = lane === "search" || lane === "forced-search";
     const model = "claude-sonnet-4-6";
     const fetch = markEgressTransparentExecutor((async (input, init) => {
       expect(String(input)).toBe(`${baseUrl}${pinnedWire ? "" : "/v1"}/messages`);
@@ -309,7 +311,7 @@ for (const pinnedWire of [false, true]) for (const lane of ["main", "search", "n
         { headers: { "content-type": "text/event-stream" } });
     }) as typeof globalThis.fetch);
     const config = { port: 0, defaultProvider: providerName,
-      webSearchSidecar: { enabled: lane === "search", backend: "exa", exaApiKey: "fixture-never-executed" },
+      webSearchSidecar: { enabled: search, backend: "exa", exaApiKey: "fixture-never-executed" },
       providers: { [providerName]: { adapter: pinnedWire ? "openai-chat" : "anthropic", baseUrl, authMode: "key", proxy: "direct",
         // Command Code defaults to patient same-key retries; exercise its key replacement here.
         ...(pinnedWire ? { forwardAdvisorTool: true, retryOn429: { enabled: false } } : {}),
@@ -323,9 +325,10 @@ for (const pinnedWire of [false, true]) for (const lane of ["main", "search", "n
         body: JSON.stringify({ model: `${providerName}/${model}`, stream: true,
           input: [{ role: "assistant", content: "Earlier answer." }, { role: "user", content: "Continue." }],
           tools: [{ type: "function", name: "Read", parameters: { type: "object", properties: {} } },
-            ...(lane === "search" ? [{ type: "web_search" }] : [])],
-          ...(lane === "named" ? { tool_choice: { type: "function", name: "advisor" } } : {}) }),
+            ...(search ? [{ type: "web_search" }] : [])],
+          ...(lane === "named" || forced ? { tool_choice: { type: "function", name: "advisor" } } : {}) }),
       }), config, log, { inboundWire: "anthropic", sendBudget: budget,
+        ...(forced ? { anthropicHostedAdvisorSelection: "selected" } : {}),
         anthropicServerTools: [{ type: "advisor_20260301", name: "advisor", model, max_uses: 2 }],
         anthropicServerReplay: new Map([["text:Earlier answer.", [
           { type: "server_tool_use", id: "srvtoolu_rotation", name: "advisor", input: {} },
@@ -333,6 +336,15 @@ for (const pinnedWire of [false, true]) for (const lane of ["main", "search", "n
         ]]]),
       });
       const body = await response.text();
+      if (forced && limited !== "neither") {
+        expect(response.status, body).toBe(400);
+        expect(body).toContain("token spend ceiling");
+        expect(wires.map(wire => wire.headers.get("x-api-key"))).toEqual(limited === "first" ? [] : [firstKey]);
+        if (limited === "second") expect(queried).toContain(labels[1]!);
+        expect(budget.spendEnforced).toBe(false);
+        expect(log.spendTracker).toBeUndefined();
+        return;
+      }
       expect(response.status, body).toBe(200);
       expect(body).toContain("ok");
       expect(wires.map(wire => wire.headers.get("x-api-key"))).toEqual([firstKey, secondKey]);
@@ -342,7 +354,7 @@ for (const pinnedWire of [false, true]) for (const lane of ["main", "search", "n
         expect((wire.headers.get("anthropic-beta") ?? "").includes("advisor-tool-2026-03-01")).toBe(allowed);
         if (!allowed) expect(JSON.stringify(wire.body)).not.toContain("srvtoolu_rotation");
         expect(JSON.stringify(wire.body)).toContain("Earlier answer.");
-        if (lane === "named") expect(wire.body.tool_choice).toEqual(allowed ? { type: "tool", name: "advisor" } : { type: "auto" });
+        if (lane === "named" || forced) expect(wire.body.tool_choice).toEqual(allowed ? { type: "tool", name: "advisor" } : { type: "auto" });
       }
       if (limited === "second") expect(queried).toContain(labels[1]!);
       if (lane === "named" && limited !== "neither") expect(body).toContain('"name":"Read"');
