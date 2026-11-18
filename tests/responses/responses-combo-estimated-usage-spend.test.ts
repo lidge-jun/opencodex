@@ -129,6 +129,7 @@ async function exercise(scenario: Scenario = {}) {
   if (zeroOutput) {
     expect(delivered.output).toEqual([]);
     expect(delivered.incomplete_details.reason).toBe("max_output_tokens");
+    expect(first.headers.get(ESTIMATED_USAGE_HEADER)).toBeNull();
     if (reportedUsage || earlyUsage) expect(delivered.usage.total_tokens).toBe(1000);
   } else if (reportedUsage) expect(delivered.usage).toEqual(providerUsage);
   else if (estimate) {

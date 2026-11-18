@@ -142,6 +142,7 @@ test("arbitrary malformed output is never retried without quota", async () => {
 // spend from what the invoker reports, so an estimate must never reach settlement or the result.
 for (const [label, headers, locallyEstimated, expected] of [
   ["estimated", { [ESTIMATED_USAGE_HEADER]: "true" }, true, undefined],
+  ["estimated without a header", {}, true, undefined],
   ["provider-reported", {}, false, { inputTokens: 7, outputTokens: 2 }],
   ["provider-reported with an upstream header", { [ESTIMATED_USAGE_HEADER]: "true" }, false, { inputTokens: 7, outputTokens: 2 }],
 ] as const) {
