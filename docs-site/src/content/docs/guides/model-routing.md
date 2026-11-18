@@ -103,8 +103,9 @@ Routing and catalog visibility are separate controls:
   If a newer discovery supersedes a successful response, the dashboard and `/v1/models` can
   still show the older request's models under the visibility policy for that response.
   When discovery is superseded or uses a temporary projection, Claude Desktop config apply uses
-  the hub's last complete snapshot if its aliases still resolve to the same models. If the hub
-  returns a retryable HTTP 503, the current profile stays in place. Anthropic listings using
+  the hub's last complete snapshot if the hub's listing policy is unchanged and its aliases
+  still resolve to the same models. If the hub returns a retryable HTTP 503, the current profile
+  stays in place. Anthropic listings using
   Desktop IDs show the visible aliases that already route to the same models.
   Use `ocx models new-policy off` globally, add `--provider <name>` for an override, and inspect
   `ocx models new-arrivals [--json]`. Failed/degraded fetches never change the baseline. Providers

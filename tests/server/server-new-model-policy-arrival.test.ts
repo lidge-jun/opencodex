@@ -229,10 +229,10 @@ test.each(supersededReads)("$path projects a superseded success under policy $po
   }
 }), SERVER_BUDGET_MS);
 
-test.each(["desktop-warm", "desktop-cold", "desktop-registry-changed", "anthropic"] as const)("superseded Claude listing preserves the working profile (%s)", mode => lifecycle.run(async () => {
+test.each(["desktop-warm", "desktop-cold", "desktop-registry-changed", "desktop-model-hidden", "anthropic"] as const)("superseded Claude listing preserves the working profile (%s)", mode => lifecycle.run(async () => {
   const fetchingOlder = Promise.withResolvers<void>();
   const releaseOlder = Promise.withResolvers<void>();
-  const knownGood = "last-good";
+  const knownGood = "known-good";
   const common = "model-a";
   const obsolete = arrival;
   const forwarded: string[] = [];
@@ -306,7 +306,7 @@ test.each(["desktop-warm", "desktop-cold", "desktop-registry-changed", "anthropi
     return JSON.parse(stdout.trim().split("\n").at(-1)!) as { ok: boolean; path: string; reason?: string };
   };
   let firstProfile: { path: string; bytes: string } | undefined;
-  if (mode === "desktop-warm" || mode === "desktop-registry-changed") {
+  if (mode === "desktop-warm" || mode === "desktop-registry-changed" || mode === "desktop-model-hidden") {
     const baseUrl = `http://127.0.0.1:${server.port}`;
     const token = "desktop-fixture-key";
     mkdirSync(home.path("client"));
@@ -333,6 +333,17 @@ test.each(["desktop-warm", "desktop-cold", "desktop-registry-changed", "anthropi
   } else {
     expect((await ids(await fetch(anthropicUrl, { signal }))).sort()).toEqual([goodAlias, commonAlias].sort());
   }
+  if (mode === "desktop-model-hidden") {
+    const adminToken = readFileSync(home.path("admin-api-token"), "utf8").trim();
+    const hidden = await fetch(new URL("/api/model-visibility", server.url), {
+      method: "PUT",
+      headers: { "content-type": "application/json", "x-opencodex-api-key": adminToken },
+      body: JSON.stringify({ scope: "models", provider, enabled: false, targets: [{ id: knownGood }] }),
+      signal,
+    });
+    expect(hidden.status).toBe(200);
+    expect(loadConfig().disabledModels).toContain(`${provider}/${knownGood}`);
+  }
   expect(resolveDesktop3pAlias(goodAlias)).toBe(`${provider}/${knownGood}`);
   expect(resolveDesktop3pAlias(obsoleteAlias)).toBeNull();
   let registrySize = desktop3pRegistrySize();
@@ -358,7 +369,15 @@ test.each(["desktop-warm", "desktop-cold", "desktop-registry-changed", "anthropi
       await pending;
     }
   };
-  if (firstProfile) {
+  if (mode === "desktop-cold" || mode === "desktop-model-hidden") {
+    await checkAfterSupersession(fetch(desktopUrl, { signal }), async response => {
+      expect(response.status, await response.clone().text()).toBe(503);
+      expect(response.headers.get("retry-after")).toBe("1");
+      expect(await response.json()).toEqual({
+        error: { type: "server_error", code: "desktop_snapshot_busy", message: "Desktop model snapshot is temporarily unavailable" },
+      });
+    });
+  } else if (firstProfile) {
     const { path, bytes } = firstProfile;
     await checkAfterSupersession(apply(), second => {
       if (mode === "desktop-registry-changed") {
@@ -370,14 +389,6 @@ test.each(["desktop-warm", "desktop-cold", "desktop-registry-changed", "anthropi
       const { inferenceModels } = JSON.parse(after) as { inferenceModels: Array<{ name: string }> };
       expect(inferenceModels.map(row => row.name).sort()).toEqual([goodAlias, commonAlias].sort());
       expect(after === bytes).toBe(true);
-    });
-  } else if (mode === "desktop-cold") {
-    await checkAfterSupersession(fetch(desktopUrl, { signal }), async response => {
-      expect(response.status).toBe(503);
-      expect(response.headers.get("retry-after")).toBe("1");
-      expect(await response.json()).toEqual({
-        error: { type: "server_error", code: "desktop_snapshot_busy", message: "Desktop model snapshot is temporarily unavailable" },
-      });
     });
   } else {
     await checkAfterSupersession(fetch(anthropicUrl, { signal }), async response => {
@@ -398,6 +409,13 @@ test.each(["desktop-warm", "desktop-cold", "desktop-registry-changed", "anthropi
   expect(messages.status, await messages.text()).toBe(200);
   expect(forwarded).toEqual([changedRegistry ? common : knownGood]);
   expect(discoveries).toBe(2);
+  if (mode === "desktop-model-hidden") {
+    setCached(provider, [common, knownGood].map(id => ({ provider, id })));
+    const fresh = await fetch(desktopUrl, { signal });
+    expect(fresh.status).toBe(200);
+    const { models } = await fresh.json() as { models: Array<{ name: string }> };
+    expect(models.map(model => model.name)).toEqual([commonAlias]);
+  }
 }), SERVER_BUDGET_MS);
 
 test("failed arrival persistence returns retryable HTTP 503 without publishing models", () => lifecycle.run(async () => {

@@ -815,8 +815,8 @@ the snapshot is `{ "version": 1, "models": [] }`; connected Desktop apply treats
 unavailable and does not write a replacement profile. Old hubs returning an ordinary catalog
 instead of version 1 are unsupported; the client does not fall back to locally generated IDs.
 
-If discovery is superseded, the hub serves its last complete snapshot while the IDs still
-resolve to the same models. If the hub has no usable snapshot, it returns HTTP 503 with
+If discovery is superseded, the hub serves its last complete snapshot while the listing policy
+is unchanged and the IDs still resolve to the same models. If the hub has no usable snapshot, it returns HTTP 503 with
 the error code `desktop_snapshot_busy` and `Retry-After: 1`. Connected apply keeps the
 existing Desktop profile.
 

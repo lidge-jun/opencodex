@@ -31,8 +31,10 @@ sends a just-hidden alias keeps routing.
 
 `src/server/index/serve-options.ts` installs Desktop aliases from current shared discovery inputs.
 When discovery is superseded or uses a detached policy projection, the Desktop config endpoint
-serves its last complete snapshot if all its IDs still resolve to their original routes. Without
-a compatible snapshot it returns HTTP 503 with `desktop_snapshot_busy` and `Retry-After: 1`.
+serves its last complete snapshot only while the hub's listing policy matches the policy that
+produced it and all its IDs still resolve to their original routes. A visibility edit invalidates
+the snapshot even if the hidden model's alias still routes. Without a compatible snapshot the
+endpoint returns HTTP 503 with `desktop_snapshot_busy` and `Retry-After: 1`.
 Anthropic discovery with Desktop IDs still returns the visible rows whose IDs resolve to the same
 routes through the installed registry. `tests/server/server-new-model-policy-arrival.test.ts`
 covers these paths when a newer upstream 429 supersedes a successful listing.
