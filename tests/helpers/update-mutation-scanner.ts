@@ -55,6 +55,8 @@ const occurrenceLimits = new Map([
   ["src/update/async-check.ts:latestVersionAsync:child.kill()", 2],
   ["src/update/npm-install.mjs:runNpmInstall:child.kill()", 3],
   ["src/update/job-pinned-start.ts:spawnWorkerPinnedStart:closeSync(logFd)", 2],
+  // #8906: the pnpm branch proves the installed owner, then queries the registry; npm/bun keep one call.
+  ["src/update/orchestrated-entry.ts:<module>:probeSpawnSync", 3],
 ]);
 export function rawMutationViolations(source: ts.SourceFile, file: string): string[] {
   const failures: string[] = [];
