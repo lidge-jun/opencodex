@@ -134,9 +134,9 @@ describe("GPT-6.1 Terra native catalog", () => {
     expect(nativeReasoningEfforts(TERRA)).toEqual(LADDER);
   });
 
-  test("keeps the Sol template and subagent defaults without a roster migration", () => {
-    expect(CONFIGURED_NATIVE_OPENAI_TEMPLATE_MODEL).toBe("gpt-6.1-sol");
-    expect(DEFAULT_SUBAGENT_MODELS).toEqual(["gpt-6-astra", "gpt-6.1-sol", "gpt-6-luna"]);
-    expect(SUBAGENT_MODELS_VERSION).toBe(3);
+  test("Terra remains outside the Sol template and subagent defaults", () => {
+    expect(CONFIGURED_NATIVE_OPENAI_TEMPLATE_MODEL).toBe("gpt-6.2-sol");
+    expect(DEFAULT_SUBAGENT_MODELS).toEqual(["gpt-6.2-astra", "gpt-6.2-sol", "gpt-6-luna"]);
+    expect(SUBAGENT_MODELS_VERSION).toBe(4);
   });
 });

@@ -363,10 +363,12 @@ OpenCodex puede gastar una suscripción de Claude a través del propio arnés de
   detectado de la cuota de 5 horas, semanal o específica del modelo, para detectar una recarga o
   un restablecimiento de cuota antes de la fecha anterior. Si el uso adicional está habilitado
   explícitamente y no se indica que se haya alcanzado el límite de uso adicional, la CLI oficial
-  decide si el saldo y el límite de gasto permiten la solicitud. OpenCodex no presume que haya saldo ni activa el
-  uso de pago. Si el uso adicional está deshabilitado o agotado, no se ofrece esa vía. Si la
-  propia CLI indica que se alcanzó un límite, este se respeta hasta la fecha de restablecimiento
-  registrada. En los demás casos, un plan agotado devuelve HTTP 429
+  decide si el saldo y el límite de gasto permiten la solicitud. OpenCodex no presume que haya saldo
+  ni activa el uso de pago. Si el uso adicional está deshabilitado o agotado, no se ofrece esa vía.
+  OpenCodex considera agotado el límite de uso adicional cuando se informa de un 100 % de uso,
+  cuando los créditos consumidos alcanzan un límite mensual positivo o cuando el límite mensual
+  es explícitamente cero. Si la propia CLI indica que se alcanzó un límite, este se respeta hasta
+  la fecha de restablecimiento registrada. En los demás casos, un plan agotado devuelve HTTP 429
   `claude_subscription_cooldown` con `Retry-After`. La caché privada guarda porcentajes,
   fechas de restablecimiento, el estado del uso adicional y un hash de la clave de cuenta,
   sin credenciales ni importes del saldo. Si la consulta no está disponible, decide la CLI.
@@ -476,7 +478,7 @@ Auto sigue el protocolo de sesión e intención de la [implementación pública 
 
 Para las selecciones con nombre, Copilot ofrece un catálogo de cables mixtos: los siguientes modelos (`gpt-5.3-codex`, `gpt-5.4`,
 `gpt-5.4-mini`, `gpt-5.5`, `gpt-5.6-luna`, `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-6.1-sol`, `gpt-6.1-terra`, `gpt-6-astra`, `grok-4.5`, `grok-4.6`, `mai-code-1.1-flash`, `mai-code-1-flash-picker`) rechazan
-`/chat/completions` para el tráfico de agentes, por lo que opencodex enruta esos modelos por la API Responses de forma predeterminada e incorporada, mientras que cualquier otro modelo de Copilot permanece en finalizaciones de chat. La precedencia es: fijación de cable obligatoria → su entrada explícita en
+`/chat/completions` para el tráfico de agentes, por lo que opencodex enruta esos modelos por la API Responses de forma predeterminada e incorporada, mientras que cualquier otro modelo de Copilot permanece en finalizaciones de chat. `gpt-6-sol`, `gpt-6-luna`, `gpt-6.2-sol`, `gpt-6.2-astra` también usan Responses como valor predeterminado preventivo incorporado; no se observó ningún rechazo para ellos y la disponibilidad de los modelos GPT-6.2 en Copilot no está verificada. La precedencia es: fijación de cable obligatoria → su entrada explícita en
 [`modelAdapters`](/es/reference/configuration/providers/) → valor predeterminado del registro → adaptador de todo el proveedor. Para incluir en Responses un modelo sin valor predeterminado incorporado (por ejemplo
 `gpt-5.4-nano`), establezca `"modelAdapters": { "gpt-5.4-nano": "openai-responses" }`.
 

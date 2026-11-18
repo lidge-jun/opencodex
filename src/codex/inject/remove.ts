@@ -1,7 +1,6 @@
-import { beginCodexWriteSection, publishCodexArtifact, removeCodexProfileEntry } from "./config-write-section";
+import { beginCodexWriteSection, publishCodexConfigIfUnchanged, removeCodexProfileEntry } from "./config-write-section";
 import { existsSync, lstatSync, readFileSync } from "node:fs";
 import { normalizeStructuralWhitespace, rootAssignmentKey, rootSourceLines, sourceAssignment, sourceText } from "../toml-source-lines";
-import { atomicWriteFile } from "../../config";
 import { ConfigWriteLockRefusal, configWriteLockFailureMessage, withConfigWriteLockHeld, withConfigWriteRecovery } from "../config-write-lock";
 import type { LockHandle } from "../config-write-lock";
 import {
@@ -12,8 +11,7 @@ import {
 } from "../injected-marker";
 import { HISTORY_RELABEL_STANDS_DOWN, preflightCodexHistoryInjection } from "../history-provider";
 import {
-  journaledInjectedOpenaiBaseUrl,
-  journaledInjectedRealtimeWsBaseUrl,
+  journaledInjectedRootValues,
   journaledInjectedRootWebSearch,
   journaledInjectedSubagentDefaults,
   journaledReplacedRootWebSearch,
@@ -62,7 +60,7 @@ export function retainOcxProviderTableOnDisk(block: string, heldConfigWriteLock?
     const eol = dominantEol(rawContent);
     const content = applyEol(rawContent, "\n");
     const next = appendOcxProviderTableBlock(content, block);
-    if (next !== content) publishCodexArtifact(CODEX_CONFIG_PATH, held, (path, hooks) => atomicWriteFile(path, applyEol(next, eol), undefined, hooks));
+    if (next !== content) publishCodexConfigIfUnchanged(held, "retain", rawContent, applyEol(next, eol));
     return block.replace(/\n+$/, "").split("\n");
   });
   if (!locked.ok) throw new ConfigWriteLockRefusal(locked);
@@ -90,8 +88,8 @@ function hasRootOcxProvider(content: string): boolean {
  */
 function stripOpencodexConfigResult(
   content: string,
-  journaledBaseUrl: string | null = null,
-  journaledRealtimeWsBaseUrl: string | null = null,
+  journaledBaseUrls: readonly string[] = [],
+  journaledRealtimeWsBaseUrls: readonly string[] = [],
   journaledRootWebSearch: string | null = null,
   journaledReplacedWebSearch: string | null = null,
   journaledSubagentDefaults: WrittenSubagentDefaults | null = null,
@@ -101,9 +99,9 @@ function stripOpencodexConfigResult(
     hasRootOcxProvider(out);
   // #1798: marker adjacency is FORMATTING evidence, and a Codex app rewrite keeps values
   // while dropping comments. Fall back to VALUE evidence -- the exact URL we recorded
-  // writing -- so an app-rewritten config is still recognized as ours.
-  const hadInjectedBaseUrl = hasInjectedOpenaiBaseUrl(out)
-    || (journaledBaseUrl !== null && rootTomlString(out, "openai_base_url") === journaledBaseUrl);
+  // writing, any injection under this journal -- so an app-rewritten config is still recognized as ours.
+  const rootBaseUrl = rootTomlString(out, "openai_base_url");
+  const hadInjectedBaseUrl = hasInjectedOpenaiBaseUrl(out) || (rootBaseUrl !== null && journaledBaseUrls.includes(rootBaseUrl));
   out = stripInjectedOpenaiBaseUrl(out); // before removeOcxSection — it keys on the marker line too
   // The enabled direction of the web-search transform is also the purge: it drops our pair, drops a
   // marker-less `disabled` the journal proves we wrote, and puts back the operator line we had to
@@ -112,7 +110,8 @@ function stripOpencodexConfigResult(
     injectedValue: journaledRootWebSearch,
     replacedUserLine: journaledReplacedWebSearch,
   }).content;
-  out = stripJournaledOpenaiBaseUrl(out, journaledBaseUrl, journaledRealtimeWsBaseUrl);
+  for (const url of journaledBaseUrls) out = stripJournaledOpenaiBaseUrl(out, url, null);
+  for (const url of journaledRealtimeWsBaseUrls) out = stripJournaledOpenaiBaseUrl(out, null, url);
   if (hasOcxProviderTable(out)) {
     out = removeOcxSection(out);
   }
@@ -235,18 +234,21 @@ export function removeCodexConfig(
   const content = applyEol(rawContent, "\n");
   // Read the recorded injection once: the strip below consumes it, and so does the
   // ownership verdict, which must agree with what was actually removed.
-  const journaledBaseUrl = journaledInjectedOpenaiBaseUrl();
-  const journaledRealtimeWsBaseUrl = journaledInjectedRealtimeWsBaseUrl();
+  const journaledBaseUrls = journaledInjectedRootValues("openai_base_url");
+  const journaledRealtimeWsBaseUrls = journaledInjectedRootValues(REALTIME_WS_BASE_URL_KEY);
   const journaledRootWebSearch = journaledInjectedRootWebSearch();
   const journaledReplaced = journaledReplacedRootWebSearch();
+  const ownedRoot = (key: string, owned: readonly string[]) => {
+    const value = rootTomlString(content, key);
+    return value !== null && owned.includes(value);
+  };
   const had = hasOpencodexRouting(content)
-    || (journaledBaseUrl !== null && rootTomlString(content, "openai_base_url") === journaledBaseUrl)
-    || (journaledRealtimeWsBaseUrl !== null
-      && rootTomlString(content, REALTIME_WS_BASE_URL_KEY) === journaledRealtimeWsBaseUrl);
+    || ownedRoot("openai_base_url", journaledBaseUrls)
+    || ownedRoot(REALTIME_WS_BASE_URL_KEY, journaledRealtimeWsBaseUrls);
   const stripped = stripOpencodexConfigResult(
     content,
-    journaledBaseUrl,
-    journaledRealtimeWsBaseUrl,
+    journaledBaseUrls,
+    journaledRealtimeWsBaseUrls,
     journaledRootWebSearch,
     journaledReplaced,
     journaledInjectedSubagentDefaults(),
@@ -260,7 +262,7 @@ export function removeCodexConfig(
     ? stripped.content
     : appendOcxProviderTableBlock(stripped.content, retainedBlock);
   if (had || finalContent !== content) {
-    publishCodexArtifact(CODEX_CONFIG_PATH, held, (path, hooks) => atomicWriteFile(path, applyEol(finalContent, eol), undefined, hooks));
+    publishCodexConfigIfUnchanged(held, "remove", rawContent, applyEol(finalContent, eol));
   }
   if (!options.preserveProfile && existsSync(CODEX_PROFILE_PATH))
     removeCodexProfileEntry(held);

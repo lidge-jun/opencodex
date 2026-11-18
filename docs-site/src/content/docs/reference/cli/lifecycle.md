@@ -151,6 +151,18 @@ exit. Only then does it stop the proxy gracefully. Afterwards it confirms that t
 for about six seconds and that no wrapper started again, so a wrapper's restart loop cannot bring
 the proxy back behind a successful stop.
 
+OpenCodex verifies that the scheduled task launches this installation under your Windows account
+and checks the account for each running instance before stopping it. An owned, disabled task with
+no running instances counts as idle. A queued task prevents OpenCodex from confirming the stop.
+If verification fails, check the launcher and run-as account in Task Scheduler and stop the task
+from its owning session.
+
+OpenCodex terminates a wrapper directly only after verifying that it belongs to your account.
+It ignores wrappers proven to belong to another user. If it cannot verify the owner of a wrapper
+eligible for termination, stop it from its owning Windows session using Task Manager and retry.
+If OpenCodex cannot confirm a wrapper's exit without a process handle, as can happen on ARM64,
+check it in Task Manager from its owning session, stop it if it is still running, and retry.
+
 When the service cannot be proven stopped, `ocx stop` sends no stop request to the proxy, leaves
 your client configuration alone, and fails. With `--json` the summary keeps `outcome: "failed"`
 and `proxy: "unknown"`, and adds `serviceStopReason`:
@@ -159,7 +171,7 @@ and `proxy: "unknown"`, and adds `serviceStopReason`:
 |---|---|---|
 | `access-denied` | Ending the task or a wrapper was denied, usually an elevated task stopped from an unelevated terminal | Run `ocx stop` from an elevated terminal |
 | `unbound-wrapper` | A wrapper running this home's service script could not be tied to the service, for example one started by hand | End that `wscript.exe`/`cmd.exe`, then retry |
-| `evidence-unreadable` | The service or process state could not be read, or the port could not be confirmed free | Check `ocx service status`, then retry |
+| `evidence-unreadable` | The task, wrapper, or service state could not be verified, or the port could not be confirmed free | Follow the stop message or check `ocx service status`, then retry |
 | `unverified-budget` | The time left could not hold a verified stop, so nothing was changed | Retry from a terminal |
 
 If another program is listening on the port after this installation's processes are gone, the
@@ -229,8 +241,11 @@ to start its own replacement on the same port. If the replacement does not answe
 restart budget it is stopped, and the old runtime binds the port again and keeps serving; the
 command then reports the restart as not completed. A client runtime run by a background service or
 the desktop app refuses the request and keeps serving ("Restart not performed; the running client
-runtime was kept"); restart it with `ocx service restart` or from the app. See
-[Remote Link apply parity](#remote-link-apply-parity).
+runtime was kept"); restart it with `ocx service restart` or from the app. A client runtime that
+carries only `OCX_SERVICE=1` (a service installed before 2.49, or a proxy started by `ocx claude`,
+`ocx codex` or `ocx opencode`) cannot show its owner and is always refused, with nothing stopped:
+re-register its service once with `ocx service repair`, or, for a companion's proxy, run `ocx stop`
+and start it again. See [Remote Link apply parity](#remote-link-apply-parity).
 
 If package files or the Bun runtime remain incomplete after the installer exited or failed,
 run `ocx status`, stop any running proxy through its owner (`ocx stop`, or its service or
@@ -558,10 +573,16 @@ warning; the desktop uses `proxy-newer` to keep a takeover from downgrading the 
 Liveness has three answers: `live`, `absent-proven` (every recorded and configured endpoint
 definitively refused or answered non-opencodex), and unknown — a timed-out probe or a listener
 that withholds `/healthz` exits 1 rather than reading as absent, so only `absent-proven` may
-authorise starting a new runtime. The port is the live listener's port when a proxy answers,
+authorise starting a new runtime. One timeout is settled instead: when `hostname` is one of this
+machine's own non-loopback addresses (a Tailscale or LAN IP) and the connect itself times out,
+which Windows does for an unbound local address, resolve tries an exclusive bind on that address
+and port. Only a bind that succeeds counts as absent; a port already in use stays unknown. The port is the live listener's port when a proxy answers,
 otherwise the configured port (default 10100). Exit 0 carries a trustworthy verdict; exit 1 means
 the CLI could not resolve — including an invalid `config.json`, which is never repaired to
-defaults here — and the caller must refuse to guess; any unknown argument exits 64. Discovery uses
+defaults here — and the caller must refuse to guess. With `--json`, exit 1 still prints one
+document, `{"schema":"ocx-resolve/1","ok":false,"reason":…,"error":…}`, where `reason` is
+`config_unreadable`, `config_invalid`, `discovery_failed`, or `liveness_unknown` and `error`
+repeats the stderr message; it has no liveness or port field. Any unknown argument exits 64. Discovery uses
 the same ownership-safe probe budget as `ocx start`, because a false "nothing listening" answer
 is how duplicate proxies happen. The verb is read-only and skips the shim auto-restore preflight.
 
@@ -1341,7 +1362,64 @@ and 64 for invalid usage. `rolledBack` is true only when an actual installer
 rollback and its verification succeeded. A plan command emits its plan with exit 0;
 the `canApply` and `reason` fields describe eligibility.
 
-Compiled standalone installs, including the Windows MSI Desktop bundle, are updated through **Check for Updates…** in OpenCodex Desktop, or by reinstalling the standalone binary from [GitHub Releases](https://github.com/lidge-jun/opencodex/releases). `ocx system update check` reports `installer: "standalone"`, `canUpdate: false`, and `reason: "standalone_install"` with that guidance. `ocx update` exits unsuccessfully with the same hint; it does not run a package-manager update for the compiled executable. A genuine source checkout still reports `installer: "source"` and `reason: "source_checkout"`.
+Compiled standalone installs, including the Windows MSI Desktop bundle, are updated through **Check for Updates…** in OpenCodex Desktop, by `ocx update --desktop` on a Windows Desktop installation (below), or by reinstalling the standalone binary from [GitHub Releases](https://github.com/lidge-jun/opencodex/releases). `ocx system update check` reports `installer: "standalone"`, `canUpdate: false`, and `reason: "standalone_install"` with that guidance. `ocx update` without `--desktop` exits unsuccessfully with the same hint; it does not run a package-manager update for the compiled executable. A genuine source checkout still reports `installer: "source"` and `reason: "source_checkout"`.
+
+#### Headless Windows Desktop update
+
+```bash
+ocx update --desktop [--check] [--json]
+```
+
+Run this with the Windows Desktop installation's own `ocx.exe` (the one beside
+`opencodex-desktop.exe`), from an elevated terminal or SSH session signed in as the account that
+runs the proxy. The command finds the proxy through that account's OpenCodex home: a service, a
+SYSTEM scheduled task or another administrator account has a different home, does not find it,
+and would install the update but leave the old proxy serving. Any other `ocx`
+exits 64 without changing anything. It reads the release feed the app's updater uses and, when
+a newer version is published:
+
+1. downloads the Windows MSI from the exact GitHub release asset over HTTPS (at most three
+   redirects to GitHub's release-asset hosts, a 1 GiB cap, and connect, idle and total
+   deadlines), sending no credentials;
+2. verifies it with the app updater's embedded public key, refusing a bad or missing signature,
+   a signature for another version or platform, or a file that is not an MSI. It saves the MSI
+   and its log in a new folder (from an elevated session, under `%SystemRoot%\Temp` with access
+   for SYSTEM and Administrators only, so no program without those rights can replace the file
+   before the installer opens it) and verifies the saved copy again;
+3. renames its own running `ocx.exe` aside within the installation folder and puts a copy back
+   under the installed name, so the installer does not have to close the command that started it
+   and an interrupted command leaves nothing to put back (Windows Installer finishes or rolls back
+   on its own), runs
+   `msiexec /i <msi> /qn /norestart /l*v <log>` and waits for its exit code (0 and 3010 are
+   success; 3010 means Windows must restart to replace files that were in use). After a failed
+   install the folder keeps the previous `ocx.exe` and the log; an installer still running after
+   15 minutes is left alone with its staging folder;
+4. checks that the installed `ocx.exe` reports the new version, and only then schedules the
+   moved file for deletion at the next restart (each run also removes earlier leftovers);
+5. restarts the proxy that still serves the old version through its own in-place restart, so
+   Desktop, the service, or the detached proxy starts the installed executable, and waits until
+   the new version answers `/healthz`. A connected client proxy keeps itself through that
+   restart: when its background service owns it, the installed `ocx service restart` replaces it;
+   when the check proves this installation's OpenCodex Desktop runs exactly that proxy, the
+   installed `ocx stop --json` stops it, as the app's own updater does, and the app starts the new
+   version after a few seconds.
+
+A proxy whose executable is not this installation's `ocx.exe`, one this home cannot attest,
+or one newer than the installation is never stopped. When no proxy for this home was found, none is
+started (`installed-stopped`). With nothing newer published, the command still restarts an old proxy left behind by an
+earlier MSI install. `--check` reports the published, installed and serving versions without
+downloading or restarting anything.
+
+Exit codes: 0 updated, already current, or installed when no proxy for this home was found; 1 nothing was
+installed (refused signature, download failure, or a Windows Installer failure, whose log path
+is printed); 2 installed, but the old proxy is still serving or Windows must restart first;
+3 the installer did not finish within 15 minutes, or reported success without installing the
+new version; 64 invalid usage or not a Windows Desktop installation. `--json` prints one
+`ocx.desktop.headless-update/1` object with `outcome`, `exitCode`, `installedVersion`,
+`targetVersion`, `runtime`, `installer`, `reason` and `message`.
+
+When `ocx status` on a Windows Desktop installation sees an installed version newer than the
+running proxy, its version warning names both versions and prints this command.
 
 When OpenCodex is installed through mise, this command exits unsuccessfully before stopping the proxy or changing package files and shows `mise upgrade <tool>`, using the verified local mise alias. Update checks remain available and report the installation as externally managed. An unreadable or inconsistent mise ownership record fails closed without guessing a tool name, and `--tag preview` never changes mise's configured selection.
 

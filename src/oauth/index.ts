@@ -57,6 +57,7 @@ import { DSH_ACCOUNT_AUTH } from "./dsh";
 import { loginOrcaRouter, orcaRouterInferenceBaseUrl, refreshOrcaRouterKey } from "./orcarouter";
 import { ANTIGRAVITY_DISCOVERY_UA } from "../adapters/google-antigravity-wire";
 import { deriveOAuthDefaultModel, deriveOAuthProviderConfig } from "../providers/derive";
+import { isOAuthCredentialSiblingOf, oauthCredentialSlot } from "./credential-siblings";
 import { apiKeyPoolEntryId, sanitizeApiKeyValue } from "../providers/api-keys";
 import { preservableApiKeyPool } from "./api-key-pool-preserve";
 import { effectiveGoogleMode, getProviderRegistryEntry, mergeRegistryStaticHeaders, providerMatchesRegistryTransport } from "../providers/registry";
@@ -208,10 +209,16 @@ export interface LoginOpts {
   flow?: ChatGPTLoginFlow;
   /** Code-display login: no callback server; completes from a pasted code (needs `codeRedirectUri`). */
   codeMode?: boolean;
+  /** Publish this sibling row (see credential-siblings.ts) instead of the login's own row. */
+  publishRow?: string;
 }
 
 export interface LoginFlowLifecycle {
   flowId?: string;
+  /** Protect this flow's outcome from automatic cleanup while its outer login owns it. */
+  retainOutcome?: () => boolean;
+  /** Internal handoff of this flow's credential after its store write is confirmed. */
+  onCredentialPersisted?: (credential: OAuthCredentials) => void;
   /** Runs after background credential/config persistence settles, before status becomes done. */
   onSettled?: () => void | Promise<void>;
 }
@@ -559,9 +566,9 @@ export function observeActiveOAuthAccessToken(
   const authStore = normalizeAuthStoreBuffer(authStoreBuffer);
   if (authStore.kind === "absent") return { kind: "missing" };
   if (authStore.kind === "malformed") return { kind: "malformed" };
-  if (!isOAuthProvider(provider)) return { kind: "unsupported" };
+  if (!isOAuthProvider(oauthCredentialSlot(provider))) return { kind: "unsupported" };
 
-  const accountSet = authStore.store[provider];
+  const accountSet = authStore.store[oauthCredentialSlot(provider)];
   const account = accountSet?.accounts.find(candidate => candidate.id === accountSet.activeAccountId);
   if (!account) return { kind: "missing" };
   if (account.paused === true) return { kind: "paused" };
@@ -590,6 +597,9 @@ async function resolveAccessSnapshotForAccount(
   authorityCurrent?: () => boolean,
   retryCancelledDiscovery = true,
 ): Promise<OAuthAccessSnapshot> {
+  // A sibling row resolves, refreshes and single-flights under its owner's login, then keeps its own label.
+  const slot = oauthCredentialSlot(provider);
+  if (slot !== provider) return { ...await resolveAccessSnapshotForAccount(slot, accountId, rejectedGeneration, requireUsableAccount, oauthProvider === provider ? slot : oauthProvider, authorityCurrent, retryCancelledDiscovery), provider };
   const def = OAUTH_PROVIDERS[oauthProvider];
   if (!def) throw new UnsupportedOAuthProviderError(oauthProvider);
   // One store read answers both questions. A caller that opts in gets the account REJECTED
@@ -1532,16 +1542,16 @@ const OAUTH_LOGIN_OWNED_PROVIDER_FIELDS = [
 ] as const satisfies readonly (keyof OcxProviderConfig)[];
 
 /** Add/refresh only an OAuth provider's login-owned config fields (does not persist). */
-export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
+export function upsertOAuthProvider(config: OcxConfig, provider: string, row = provider): void {
   assertAnthropicInstanceLoginConfig(config, provider);
   if (provider === "chatgpt") return;
   const def = OAUTH_PROVIDERS[provider];
-  if (!def) return;
+  if (!def || (row !== provider && !isOAuthCredentialSiblingOf(row, provider))) { if (def) throw new UnsupportedOAuthProviderError(row); return; }
   if (provider === GOOGLE_ANTIGRAVITY_PROVIDER) migrateLegacyAntigravityStaticCatalog(config);
-  const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, provider);
+  const namespaceCollision = codexAccountNamespaceProviderCollisionError(config.codexAccountNamespaces, row);
   if (namespaceCollision) throw new OAuthProviderNamespaceCollisionError(namespaceCollision);
-  const existing = config.providers[provider];
-  const providerConfig = def.resolveProviderConfig?.(config) ?? def.providerConfig;
+  const existing = config.providers[row];
+  const providerConfig = row !== provider ? oauthConfig(row) : def.resolveProviderConfig?.(config) ?? def.providerConfig;
   // Clone operator state, including xAI wire choices and their migration version.
   const next: OcxProviderConfig = structuredClone(existing ?? providerConfig);
   for (const field of OAUTH_LOGIN_OWNED_PROVIDER_FIELDS) {
@@ -1568,7 +1578,7 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
   delete next.apiKey;
   delete next.apiKeyPool;
   delete (next as unknown as Record<string, unknown>).azureCredential;
-  if (existing && getProviderRegistryEntry(provider)?.allowKeyAuthOverride === true) {
+  if (existing && getProviderRegistryEntry(row)?.allowKeyAuthOverride === true) {
     // Retain stored key billing intent without resolving env references in the login process.
     // An explicit OAuth choice stays OAuth even when usable key material is retained.
     // Shared sanitizeApiKeyValue trim / no-CRLF checks from api-key pool writes.
@@ -1591,8 +1601,8 @@ export function upsertOAuthProvider(config: OcxConfig, provider: string): void {
       if (previousModeAllowsKey) next.authMode = "key";
     }
   }
-  initializeProviderModelSelection(provider, next, existing, config);
-  config.providers[provider] = next;
+  initializeProviderModelSelection(row, next, existing, config);
+  config.providers[row] = next;
 }
 
 interface RunLoginDeps {
@@ -1618,6 +1628,8 @@ export async function runLogin(
 ): Promise<OAuthCredentials> {
   const def = OAUTH_PROVIDERS[provider];
   if (!def) throw new UnsupportedOAuthProviderError(provider);
+  const row = opts?.publishRow ?? provider;
+  if (row !== provider && !isOAuthCredentialSiblingOf(row, provider)) throw new UnsupportedOAuthProviderError(row);
   const loadLatestConfig = deps.loadConfig ?? loadConfig;
   const saveLatestConfig = deps.saveConfig ?? saveConfig;
   const initialBConfigState = provider === "anthropic2" ? observeInitialConfigState() : undefined;
@@ -1635,7 +1647,7 @@ export async function runLogin(
     assertAnthropicInstanceLoginConfig(preflightConfig, provider);
     const namespaceCollision = codexAccountNamespaceProviderCollisionError(
       preflightConfig.codexAccountNamespaces,
-      provider,
+      row,
     );
     if (namespaceCollision) throw new OAuthProviderNamespaceCollisionError(namespaceCollision);
   }
@@ -1663,7 +1675,7 @@ export async function runLogin(
     // credential write is handled again below before the latest row is re-upserted.
     if (provider !== "chatgpt") {
       const preCommitConfig = loadLatestConfig();
-      upsertOAuthProvider(preCommitConfig, provider);
+      upsertOAuthProvider(preCommitConfig, provider, row);
     }
     if (opts?.reauthAccountId) {
       const existing = getAccountCredential(provider, opts.reauthAccountId);
@@ -1728,12 +1740,12 @@ export async function runLogin(
         const latestConfig = loadLatestConfig();
         const lateCollision = codexAccountNamespaceProviderCollisionError(
           latestConfig.codexAccountNamespaces,
-          provider,
+          row,
         );
         if (lateCollision) {
           throw new OAuthProviderPublicationError();
         }
-        upsertOAuthProvider(latestConfig, provider);
+        upsertOAuthProvider(latestConfig, provider, row);
         saveLatestConfig(latestConfig);
       }
     }
@@ -1891,7 +1903,7 @@ export async function startLoginFlow(
   // The flow id is the key of every map below. Callers that own one (the management route, the
   // codex auth API) supply it so a later paste can be pinned to this exact attempt.
   const flowId = lifecycle?.flowId ?? randomUUID();
-  const expiresAt = recordStartedLoginFlow(provider, flowId, opts?.codeMode === true);
+  const expiresAt = recordStartedLoginFlow(provider, flowId, opts?.codeMode === true, lifecycle?.retainOutcome);
   const abort = new AbortController();
   loginAbort.set(flowId, { controller: abort, provider });
   if (provider === "kiro") kiroLoginSettling.add(provider);
@@ -1924,13 +1936,14 @@ export async function startLoginFlow(
     // The row this flow's own credential write landed in, from the store's receipt. A token match
     // after the fact would miss it once a concurrent login for the same account rotates the token.
     let persistedAccountId: string | undefined;
-    const settle = async (error?: unknown): Promise<void> => {
+    const settle = async (error?: unknown, credential?: OAuthCredentials): Promise<void> => {
       // Cancellation deletes this controller and records its own terminal result. A late provider
       // rejection (or an older flow settling after a replacement starts) must not overwrite that
       // state or delete the replacement flow's controller/manual-code slot.
       if (abandonIfNotOwner(error)) return;
       let finalError = error;
       try {
+        if (credential && persistedAccountId) lifecycle?.onCredentialPersisted?.(credential);
         await lifecycle?.onSettled?.();
       } catch (settleError) {
         // A successful credential/config commit is not fully live until its owner reconciles the
@@ -1963,7 +1976,7 @@ export async function startLoginFlow(
     };
     const onAccountPersisted = (accountId: string): void => { persistedAccountId = accountId; };
     void runLogin(provider, ctrl, opts, { assertCurrentOwner, onAccountPersisted }).then(
-      () => settle(),
+      credential => settle(undefined, credential),
       (e: unknown) => settle(e),
     ).catch((e: unknown) => {
       // settle catches lifecycle failures, so this is only a defensive promise-boundary guard.

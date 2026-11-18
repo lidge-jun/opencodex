@@ -171,15 +171,26 @@ describe("Claude paid usage", () => {
     expect(probes).toBe(1);
   });
 
-  for (const extra of [undefined, null, { is_enabled: "true" }, { is_enabled: false },
-    { is_enabled: true, utilization: 100 }, { is_enabled: true, monthly_limit: 0 },
-    { is_enabled: true, monthly_limit: 1000, used_credits: 1000 }]) {
-    test(`disabled or exhausted paid usage does not admit an exhausted plan: ${JSON.stringify(extra)}`, async () => {
+  const paidUsageCases = [
+    [undefined, undefined, "exhausted"],
+    [null, undefined, "exhausted"],
+    [{ is_enabled: "true" }, undefined, "exhausted"],
+    [{ is_enabled: false, utilization: 100 }, "disabled", "exhausted"],
+    [{ is_enabled: true, utilization: 100, monthly_limit: 1000, used_credits: 200 }, "exhausted", "exhausted"],
+    [{ is_enabled: true, monthly_limit: "0" }, "exhausted", "exhausted"],
+    [{ is_enabled: true, utilization: 30, monthly_limit: 1000, used_credits: 1000 }, "exhausted", "exhausted"],
+    [{ is_enabled: true, utilization: "30", monthly_limit: "1000", used_credits: "1100" }, "exhausted", "exhausted"],
+    [{ is_enabled: true, monthly_limit: "1000", used_credits: "999" }, "enabled", "unknown"],
+    [{ is_enabled: true, monthly_limit: "invalid", used_credits: 1100 }, "enabled", "unknown"],
+  ] as const;
+  for (const [extra, paidState, admissionState] of paidUsageCases) {
+    test(`classifies ${JSON.stringify(extra)} as ${paidState} with exhausted-plan admission ${admissionState}`, async () => {
       const now = Date.now();
       const quota = await parsedQuota(extra, now);
+      expect(quota?.claudeExtraUsage).toBe(paidState);
       const status = await checkClaudeUsageAdmission("claude-opus-5-5", { now: () => now, identity,
         statePath: tempState(), probe: async () => quota });
-      expect(status.state).toBe("exhausted");
+      expect(status.state).toBe(admissionState);
     });
   }
 

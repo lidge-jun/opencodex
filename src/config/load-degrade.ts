@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { compactionRecoveryConfigError } from "./schema/compaction-recovery";
 import { nativeReasoningRetentionConfigError } from "./schema/native-reasoning-retention";
 import { workflowBudgetConfigError } from "./schema/workflow-budget";
+import { routedCatalogDefaultsConfigError } from "./schema/routed-catalog-defaults";
 import { desktopCompatibilityConfigError } from "./schema/desktop-compatibility";
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
 import { mainAccountHardLockFallbackError } from "./schema/main-account-hard-lock-fallback";
@@ -41,6 +42,7 @@ import {
   clientConnectionSchema,
   isUsableApiKeySecret,
   managementIngressSchema,
+  codexAuthMethodSchema,
   codexPoolSchema,
   codexAccountAutoSwitchThresholdsSchema,
   providerModelCostsConfigError,
@@ -139,8 +141,11 @@ export function warnDegradedCompactionRouting(rawParsed: unknown, validated: Ocx
  * the ratchet only ever moves down: a per-block call there costs a line the file does not have.
  */
 export function warnDegradedTopLevelOptIns(rawParsed: unknown, validated: OcxConfig): void {
+  const codexAuthWarning = malformedCodexAuthMethodWarning(rawParsed);
+  if (codexAuthWarning) console.warn(`⚠️  config.json ${codexAuthWarning}`);
   if (nativeReasoningRetentionConfigError(rawParsed)) console.warn("⚠️  invalid nativeReasoningRetention disabled; model and account switch allowances remain off");
   if (workflowBudgetConfigError(rawParsed)) console.warn("⚠️  invalid workflowBudget ignored; the built-in workflow ceilings stay in force");
+  if (routedCatalogDefaultsConfigError(rawParsed)) console.warn("⚠️  invalid routedCatalogDefaults ignored; routed catalog rows keep their derived values");
   setCodexWsReuseAcrossTurns(validated.codexWsReuseAcrossTurns === true);
   const retentionWarning = degradedReasoningRetentionWarning(rawParsed, validated);
   if (retentionWarning) console.warn(retentionWarning);
@@ -934,6 +939,13 @@ export function malformedNativeSubagentFields(rawParsed: unknown): NativeSubagen
 export function malformedNativeSubagentFieldWarning(field: NativeSubagentPersistedField): string {
   const expected = field === "syncCodexSubagentDefaults" ? "a boolean" : "a string";
   return `${field} ignored: expected ${expected}`;
+}
+
+export const MALFORMED_CODEX_AUTH_METHOD_WARNING = 'codexAuthMethod ignored: using "auto" for Codex pool logins. Expected "auto", "device-only", or omission.';
+
+export function malformedCodexAuthMethodWarning(rawParsed: unknown): string | null {
+  if (codexAuthMethodSchema.safeParse(rawConfigRecord(rawParsed)?.codexAuthMethod).success) return null;
+  return MALFORMED_CODEX_AUTH_METHOD_WARNING;
 }
 
 export function malformedCodexAccountPickerWarning(rawParsed: unknown): string | null {

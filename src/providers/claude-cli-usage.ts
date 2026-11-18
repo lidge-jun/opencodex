@@ -4,7 +4,7 @@ import { anthropicUsageBuckets, type AnthropicUsageBucket } from "./quota/anthro
 import { bindRawDecisionWindows } from "./quota-decision-publication";
 import { decisionQuotaSinkActive } from "../lib/decision-quota-sink";
 import { CLAUDE_CLI_USER_AGENT } from "./claude-cli-identity";
-import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS } from "./quota-wire";
+import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS, toFiniteNumber } from "./quota-wire";
 import type { ProviderQuota, ProviderQuotaWindow, QuotaFailureCode } from "./quota-types";
 import { httpQuotaFailure } from "./quota/failure-codes";
 const hasQuotaRows = (q: ProviderQuota) => q.fiveHourPercent !== undefined || q.weeklyPercent !== undefined || Boolean(q.customWindows?.length);
@@ -27,11 +27,14 @@ function extraUsage(value: unknown): ProviderQuota["claudeExtraUsage"] {
   const row = asRecord(value);
   if (typeof row?.is_enabled !== "boolean") return;
   if (!row.is_enabled) return "disabled";
-  const percent = normalizePercent(row.utilization);
-  const limit = row.monthly_limit, used = row.used_credits;
-  const capped = typeof limit === "number" && Number.isFinite(limit) && limit >= 0;
-  if ((percent !== undefined && percent >= 100) || (capped && (limit === 0
-    || (typeof used === "number" && Number.isFinite(used) && used >= limit)))) return "exhausted";
+  const reported = normalizePercent(row.utilization);
+  const used = toFiniteNumber(row.used_credits);
+  const limit = toFiniteNumber(row.monthly_limit);
+  // Mirror the Anthropic monthly display rule, including numeric strings and an explicit zero cap.
+  const monthlyPercent = used !== undefined && limit !== undefined && limit > 0
+    ? Math.min(100, Math.max(reported ?? 0, (used / limit) * 100))
+    : reported;
+  if (limit === 0 || monthlyPercent === 100) return "exhausted";
   // A null/unreported cap and a remaining allowance say nothing about prepaid funds.
   return "enabled";
 }
@@ -49,6 +52,8 @@ export interface AnthropicUsageProbe {
 
 export async function probeAnthropicUsageQuota(accessToken: string): Promise<AnthropicUsageProbe> {
   const response = await fetch("https://api.anthropic.com/api/oauth/usage", {
+    // Like the profile probe: a redirect must never carry the bearer to another host.
+    redirect: "error",
     headers: {
       Accept: "application/json, text/plain, */*",
       "Content-Type": "application/json",

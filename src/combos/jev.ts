@@ -112,9 +112,9 @@ export interface JevDecision {
   confidence?: number;
   chosenProbability?: number;
   usage?: Record<string, number>;
-  /** Set when an opt-in session pin (#7525) supplied this decision without asking the backend. */
+  /** Set when the turn reused a session pin (#7525). */
   pinned?: true;
-  /** `session` with `pinned`; otherwise why an existing session pin was released first. */
+  /** `session` or `session_effort` with `pinned`; otherwise why the original pin was released. */
   pinReason?: import("./jev-session-pin-config").JevSessionPinReason;
 }
 
@@ -701,6 +701,7 @@ export async function resolveJevDecision(options: ResolveJevDecisionOptions): Pr
   if (!candidatesFitRequestBounds(options.candidates)) return failed("invalid");
 
   let candidates = options.candidates;
+  let rejectedUsage: JevDecision["usage"];
   const exchanged = await exchangeJevDecision(options, (endpoint) => {
     const isDecisions = Boolean(endpoint.url && isDecisionsEndpoint(endpoint.url));
     const optionCount = candidateOptions(options.candidates).size;
@@ -748,8 +749,18 @@ export async function resolveJevDecision(options: ResolveJevDecisionOptions): Pr
     }), REQUEST_LIMIT);
     candidates = payload.candidates;
     return { body: payload.body };
-  }, (payload) => parseJevDecision(payload, options.candidates));
-  if ("gate" in exchanged) return withJevQuotaSummary(failed(exchanged.gate), candidates);
+  }, (payload) => {
+    try {
+      return parseJevDecision(payload, options.candidates);
+    } catch (error) {
+      if (isRecord(payload)) rejectedUsage = jevUsage(payload);
+      throw error;
+    }
+  });
+  if ("gate" in exchanged) {
+    const decision = failed(exchanged.gate);
+    return withJevQuotaSummary(rejectedUsage ? { ...decision, usage: rejectedUsage } : decision, candidates);
+  }
   return withJevQuotaSummary({
     backend,
     ...exchanged.value,

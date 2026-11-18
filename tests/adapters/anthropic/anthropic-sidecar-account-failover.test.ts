@@ -84,23 +84,20 @@ beforeAll(async () => {
       >;
     }) => {
       // This is a dispatch seam test. The real loop is covered in anthropic-quota-dispatch.
-      const first = await args.adapter.buildRequest(args.parsed, args.incomingMeta);
-      const refused = await args.fetchForRequest(first, args.parsed, args.adapter)(first.url, {
-        method: first.method, headers: first.headers, body: first.body,
-      });
-      expect(refused.status).toBe(429);
-      const retryAfter = refused.headers.get("retry-after");
-      await refused.body?.cancel();
-      const rotated = await args.on429?.(retryAfter, refused.headers, args.parsed, refused);
-      if (!rotated) throw new Error("Anthropic sidecar did not rotate after 429");
-      // Unwrapped exactly as the real loop does. This seam drives the PRODUCTION rotator
-      // (`rotateSidecarProviderOn429`), so it is the one place the Anthropic arm's kind is
-      // proven end to end rather than against a hand-written stub.
-      expect(rotated.recoveryKind).toBe("anthropic-oauth-429");
-      const second = await rotated.adapter.buildRequest(args.parsed, args.incomingMeta);
-      return args.fetchForRequest(second, args.parsed, rotated.adapter)(second.url, {
-        method: second.method, headers: second.headers, body: second.body,
-      });
+      let adapter = args.adapter;
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const request = await adapter.buildRequest(args.parsed, args.incomingMeta);
+        const response = await args.fetchForRequest(request, args.parsed, adapter)(request.url, {
+          method: request.method, headers: request.headers, body: request.body,
+        });
+        if (response.ok) return response;
+        const rotated = await args.on429?.(response.headers.get("retry-after"), response.headers, args.parsed, response);
+        if (!rotated) return response;
+        await response.body?.cancel();
+        expect(rotated.recoveryKind).toBe("anthropic-oauth-429");
+        adapter = rotated.adapter;
+      }
+      throw new Error("Anthropic sidecar exceeded bounded fixture roster");
     },
   }));
 
@@ -138,9 +135,9 @@ afterAll(() => {
   restoreModuleMocks?.();
 });
 
-test("Anthropic sidecar dispatch seam records A429 and B200 when proactive pooling is disabled", async () => {
+test.each([[2, false], [6, false], [8, false], [6, true]] as const)("Anthropic sidecar snapshots %i accounts, spent budget=%s", async (count, spent) => {
   sidecarMode = true;
-  for (let index = 0; index < 2; index += 1) {
+  for (let index = 0; index < count; index += 1) {
     await saveCredential("anthropic", {
       access: `anthropic-access-${index}`,
       refresh: `anthropic-refresh-${index}`,
@@ -163,7 +160,7 @@ test("Anthropic sidecar dispatch seam records A429 and B200 when proactive pooli
         models: ["model"],
         fetch: (async (_input, init) => {
           observedKeys.push(new Headers(init?.headers).get("authorization") ?? "");
-          if (observedKeys.length === 1) {
+          if (count === 8 || observedKeys.length < (count === 6 ? 5 : 2)) {
             return new Response("rate limited", {
               status: 429,
               headers: {
@@ -174,7 +171,7 @@ test("Anthropic sidecar dispatch seam records A429 and B200 when proactive pooli
               },
             });
           }
-          expect(observedKeys).toHaveLength(2);
+          expect(observedKeys).toHaveLength(count === 6 ? 5 : 2);
           expect(getCachedProviderAccountQuota("anthropic", ids[0]!)).toMatchObject({ fiveHourPercent: 100, weeklyPercent: 61 });
           return new Response("sidecar-ok", {
             headers: {
@@ -187,6 +184,9 @@ test("Anthropic sidecar dispatch seam records A429 and B200 when proactive pooli
     },
   } as unknown as OcxConfig;
 
+  const { createRequestExecutionBudget } = await import("../../../src/lib/request-execution-budget");
+  const sendBudget = spent ? createRequestExecutionBudget({ maxTotalModelSends: 1, baseSendAllowance: 1,
+    finalRecoveryAllowance: 0, maxAlternateTargetSends: 0, maxTargetTransitions: 0 }) : undefined;
   const response = await handleResponses(new Request("http://localhost/v1/responses", {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -196,14 +196,12 @@ test("Anthropic sidecar dispatch seam records A429 and B200 when proactive pooli
       stream: true,
       tools: [{ type: "web_search" }],
     }),
-  }), config, { model: "", provider: "" });
+  }), config, { model: "", provider: "" }, { sendBudget });
 
-  expect(response.status).toBe(200);
-  expect(await response.text()).toBe("sidecar-ok");
-  expect(observedKeys).toEqual([
-    "Bearer anthropic-access-0",
-    "Bearer anthropic-access-1",
-  ]);
+  expect(response.status).toBe(count === 8 || spent ? 429 : 200);
+  expect(await response.text()).toBe(count === 8 || spent ? "rate limited" : "sidecar-ok");
+  const expectedSends = spent ? 1 : count === 8 ? 6 : count === 6 ? 5 : 2;
+  expect(observedKeys).toEqual(Array.from({ length: expectedSends }, (_, index) => `Bearer anthropic-access-${index}`));
   expect(getCachedProviderAccountQuota("anthropic", ids[0]!)).toMatchObject({ fiveHourPercent: 100, weeklyPercent: 61 });
-  expect(getCachedProviderAccountQuota("anthropic", ids[1]!)).toMatchObject({ fiveHourPercent: 23, weeklyPercent: 47 });
+  if (count !== 8 && !spent) expect(getCachedProviderAccountQuota("anthropic", ids[expectedSends - 1]!)).toMatchObject({ fiveHourPercent: 23, weeklyPercent: 47 });
 });

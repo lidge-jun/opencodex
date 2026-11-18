@@ -11,9 +11,9 @@ import type { PolicyRequestEvidence } from "../../routing/evaluator";
 import type { RequestLogContext } from "../request-log";
 import { addProtocolEntryReason, markProtocolEntry, protocolMarkFeatures } from "../../protocols/trace";
 import { nativeMessagesToolScopeDenial } from "../messages-native-scope";
-import { advisorServerToolDestination } from "../../adapters/anthropic/advisor-tool";
+import { ADVISOR_SERVER_TOOL_NAME, advisorServerToolDestination, planAnthropicServerTools } from "../../adapters/anthropic/advisor-tool";
 import { isAntigravityRoute } from "../antigravity-direct-eligibility";
-import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse, MandatoryToolChoiceUnavailableError, mandatoryToolChoiceUnavailableResponse } from "./policy-request-scope";
+import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse, markPolicyCandidateRefusal, MandatoryToolChoiceUnavailableError, mandatoryToolChoiceUnavailableResponse } from "./policy-request-scope";
 import {
   agentTaskRecoveryConfig,
   restoreCachedEncryptedAgentTasks,
@@ -27,7 +27,7 @@ import {
   unreadableEncryptedAgentTaskResponse,
 } from "./core-errors";
 import { parseSyntheticRowId } from "../fast-row";
-import { resolveComboId, comboIdFromRawBody, comboExclusionReasons, NoAvailableComboTargetsError, pickComboTarget } from "../../combos";
+import { resolveComboId, comboIdFromRawBody, comboExclusion, NoAvailableComboTargetsError, pickComboTarget } from "../../combos";
 import { INTERCEPT_TARGET_UNAVAILABLE_CODE, interceptTargetUnavailableResponse, resolveChosenTarget, resolveShadowCallTarget } from "./shadow-target-availability";
 import {
   MEMORY_MODEL_TARGET_UNAVAILABLE_CODE,
@@ -190,6 +190,7 @@ import {
 
 import { redactHostedImageDisplayPaths } from "../responses-hosted-image-display";
 import { eagerCodexToolCatalogSurface, warnEagerCodexToolCatalog } from "./codex-tool-catalog";
+import { codexTurnStartsNewHistory } from "../../adapters/anthropic/per-message-effort";
 
 /** Policy-routing evidence. The direct lane's settings-only body has no conversation to scan. */
 function routeEvidence(options: Pick<HandleResponsesOptions, "directRequest">, parsed: OcxParsedRequest): PolicyRequestEvidence {
@@ -548,11 +549,18 @@ export async function prepareResponsesRequest(
       parsed._nativeReasoningReplay = options.nativeReasoningReplay;
       parsed._nativeReasoningMint = options.nativeReasoningMint;
       parsed._anthropicServerTools = options.anthropicServerTools;
+      // The lowered named choice serves the wire builder but grants no client or synthetic tool permission.
+      if (options.anthropicHostedAdvisorSelection) {
+        parsed.options.explicitRootFunctionChoices = [];
+        parsed.options.explicitClientToolChoices = [];
+      }
       parsed._anthropicServerReplay = options.anthropicServerReplay;
       parsed._anthropicSystemCachePrefix = options.anthropicSystemCachePrefix;
       parsed._anthropicInbound = true;
       if (parsed.options.textFormat?.type === "json_schema") parsed._structuredOutputConformance = true;
     }
+    // Codex's own "new" turn metadata, for the experimental Anthropic perMessageEffort option (#6895).
+    parsed._codexNewHistory = codexTurnStartsNewHistory(body, req.headers, options.inboundTransport);
     parsed._promptCacheKeyIsSharedCohort = options.promptCacheKeyIsSharedCohort;
     // The body may have been rebuilt since the inbound observation (previous-response
     // expansion); alias the parsed raw body to the same draft so the outbound
@@ -736,7 +744,7 @@ export async function prepareResponsesRequest(
       });
       if (!pick) {
         throw new NoAvailableComboTargetsError(candidate.combo.comboId,
-          comboExclusionReasons(config, candidate.combo.comboId, target => !target.metered));
+          comboExclusion(config, candidate.combo.comboId, target => !target.metered));
       }
       const routed = routeConcreteModel(config, `${pick.target.provider}/${pick.target.model}`);
       candidate = { ...routed, combo: pick, routeKind: "combo", routeReason: routed.routeReason === "blocked-model-redirect" ? "blocked-model-redirect" : "combo-pick" };
@@ -903,7 +911,7 @@ export async function prepareResponsesRequest(
     if (policyRefusal) return policyRefusal;
     if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(err, logCtx));
     if (err instanceof NoAvailableComboTargetsError) {
-      return comboUnavailable(err.comboId, undefined, err.reasons);
+      return comboUnavailable(err.comboId, undefined, err.exclusion);
     }
     if (err instanceof NoEligiblePolicyCandidateError) {
       // Persist the evaluation trace (per-candidate exclusions + the
@@ -1123,7 +1131,7 @@ export async function prepareResponsesRequest(
         if (policyRefusal) return policyRefusal;
         if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(err, logCtx));
         if (err instanceof NoAvailableComboTargetsError) {
-          return comboUnavailable(err.comboId, undefined, err.reasons);
+          return comboUnavailable(err.comboId, undefined, err.exclusion);
         }
         if (err instanceof NoEligiblePolicyCandidateError) {
           logCtx.routeDecision = err.trace;
@@ -1199,6 +1207,7 @@ export async function prepareResponsesRequest(
             "_reasoningReplayScope",
             "_nativeReasoningRetention",
             "_cursorIsolateConversation",
+            "_codexNewHistory",
           ];
           for (const key of kept) {
             if (parsed[key] !== undefined) {
@@ -1347,7 +1356,7 @@ export async function prepareResponsesRequest(
               if (policyRefusal) return policyRefusal;
               if (err instanceof AdmissionModelDeniedError) return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(err, logCtx));
               if (err instanceof NoAvailableComboTargetsError) {
-                return comboUnavailable(err.comboId, undefined, err.reasons);
+                return comboUnavailable(err.comboId, undefined, err.exclusion);
               }
               if (err instanceof NoEligiblePolicyCandidateError) {
                 logCtx.routeDecision = err.trace;
@@ -1503,7 +1512,7 @@ export async function prepareResponsesRequest(
   try {
     assertPolicyNormalizedRoute(policyScope, admittedPolicyRoute, route);
     const copilotNegotiationPending = route.providerName === "github-copilot" && route.provider.authMode !== "forward";
-    if (!copilotNegotiationPending && route.provider.adapter === "openai-chat"
+    if (!options.anthropicHostedAdvisorSelection && !copilotNegotiationPending && route.provider.adapter === "openai-chat"
       && !chatCanPreserveMandatoryToolChoice(parsed._rawBody, route.provider, route.modelId, parsed.context.tools ?? [])) {
       // Combo children carry the refusal's local identity too, so a compatible sibling target
       // can still be tried; a direct request keeps the client-facing 400 below.
@@ -1532,14 +1541,26 @@ export async function prepareResponsesRequest(
   if (!routeAllowedByScope(admissionScope, scopedDestination)) {
     return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(new AdmissionModelDeniedError(inboundSelector, scopedDestination), logCtx));
   }
-  // A typed Advisor runs its own model server-side on this provider (#8448). The native lane refuses
-  // a declaration outside the caller's scope; the Advisor is optional here, so it is not forwarded.
+  // A typed Advisor runs its own model server-side on this provider (#8448). An out-of-scope
+  // declaration is withheld. A named selection also needs that declaration on the final route.
   const serverTools = parsed._anthropicServerTools;
   const scopedServerTools = serverTools?.filter(tool =>
     !nativeMessagesToolScopeDenial(admissionScope, route.providerName, route.modelId, { tools: [tool] }));
   if (serverTools && scopedServerTools && scopedServerTools.length !== serverTools.length) {
     parsed._anthropicServerTools = scopedServerTools;
     if (advisorServerToolDestination(route.provider)) addProtocolEntryReason(logCtx, "advisor-tool-outside-model-scope");
+  }
+  if (options.anthropicHostedAdvisorSelection) {
+    if (options.anthropicHostedAdvisorSelection === "ambiguous") {
+      return markProxyError(formatErrorResponse(400, "invalid_request_error",
+        "The hosted Advisor tool_choice is ambiguous because multiple tools are named advisor."));
+    }
+    const admittedAdvisor = planAnthropicServerTools(route.provider, scopedServerTools, undefined,
+      new Set(parsed.context.tools?.map(tool => tool.name)), false).declared.some(tool => tool.name === ADVISOR_SERVER_TOOL_NAME);
+    if (!admittedAdvisor) {
+      return markPolicyCandidateRefusal(markProxyError(formatErrorResponse(400, "invalid_request_error",
+        "The selected hosted Advisor tool is unavailable for this route or model scope.")));
+    }
   }
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
   // the normal post-resolution provider label is assigned.

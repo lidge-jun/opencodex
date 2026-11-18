@@ -9,6 +9,7 @@ import type { AdapterExchange } from "./adapter-dispatch";
 import type { AdapterContinuations } from "./adapter-continuation";
 import { guardTerminalEventStream } from "./terminal-guard";
 import { guardEmptyCompletionEventStream } from "./empty-completion-guard";
+import { UNDECLARED_TOOL_CALL_ERROR_CODE } from "../../lib/errors";
 import { bridgeToResponsesSSE, buildResponseJSON, formatErrorResponse } from "../../bridge";
 import type { OcxProviderContinuationState, AdapterEvent } from "../../types";
 import { rememberResponseState } from "../../responses/state";
@@ -30,6 +31,7 @@ import { isNonReplayableResponse } from "../../lib/upstream-retry";
 import { isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { currentTurnToolBridgeMaps, guardEmptyToolCatalogEvents, guardEmptyToolCatalogStream } from "../../lib/empty-tool-catalog";
 import { guardCompactionSummary } from "../../responses/compaction-summary";
+import { settleAnthropicPerMessageEffort } from "../../adapters/anthropic/per-message-effort";
 
 /** One responsibility of the Responses request pipeline; state owners are explicit. */
 export async function deliverAdapterResponse(
@@ -75,6 +77,8 @@ export async function deliverAdapterResponse(
     fetchGuardedEmptyCompletionRetry,
     isContinuationBodyStall,
   } = continuationState;
+  const preserveEmptyCompletionRetryError = (event: AdapterEvent) =>
+    (event.type === "error" && event.code === UNDECLARED_TOOL_CALL_ERROR_CODE) || isContinuationBodyStall(event);
   const { emptyCompletionGuardEnabled } = completionPolicy;
   const {
     cancelResponseCompletion,
@@ -197,7 +201,7 @@ export async function deliverAdapterResponse(
       ? guardEmptyCompletionEventStream({
           firstEvents: advisorStream,
           continuation: fetchGuardedEmptyCompletionRetry,
-          preserveRetryError: isContinuationBodyStall,
+          preserveRetryError: preserveEmptyCompletionRetryError,
         })
       : advisorStream;
     const catalogGuardedEventStream = guardEmptyToolCatalogStream(completionGuardedEventStream, clientToolCatalog, translatorBudget);
@@ -208,6 +212,7 @@ export async function deliverAdapterResponse(
     // direct client encoder from the fold of the same events.
     const onCompletedResponse = (response: Record<string, unknown>, providerState?: OcxProviderContinuationState) => {
       if (!options.abortSignal?.aborted) thinkingSignatureRecovery.rememberSuccess(response);
+      settleAnthropicPerMessageEffort(parsed, response, transportState.activeAdapter.name);
       const served = transportState.sentOAuthSnapshot;
       if (transportState.activeAdapter.name === "kiro" && response.status === "completed" && served
         && noteKiroServedSuccess(served.accountId, served.generation)) persistKiroAccountState();
@@ -349,7 +354,7 @@ export async function deliverAdapterResponse(
         for await (const event of guardEmptyCompletionEventStream({
           firstEvents: (async function* () { yield* guardedEvents; })(),
           continuation: fetchGuardedEmptyCompletionRetry,
-          preserveRetryError: isContinuationBodyStall,
+          preserveRetryError: preserveEmptyCompletionRetryError,
         })) events.push(event);
       } else {
         events = guardedEvents;

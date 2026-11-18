@@ -12,6 +12,9 @@ export const KIRO_MODELS = [
   "gpt-6.1-sol",
   // 261027 preemptive: GPT-6.1 Terra (mirrors Kiro's GPT-6.1 Sol seed; provider listing unverified).
   "gpt-6.1-terra",
+  // 261118 preemptive: GPT-6.2 Sol and Astra (mirror Kiro's GPT-6.1 Sol seed; provider listing unverified).
+  "gpt-6.2-sol",
+  "gpt-6.2-astra",
   // Listed on kiro.dev/docs/models (2026-10-24).
   "claude-sonnet-5.5",
   "claude-sonnet-5",
@@ -47,6 +50,8 @@ export const KIRO_MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "gpt-6-luna": 272_000,
   "gpt-6.1-sol": 272_000,
   "gpt-6.1-terra": 272_000,
+  "gpt-6.2-sol": 272_000,
+  "gpt-6.2-astra": 272_000,
   "claude-sonnet-5.5": 1_000_000,
   "claude-sonnet-5": 1_000_000,
   "claude-opus-5.5": 1_000_000,

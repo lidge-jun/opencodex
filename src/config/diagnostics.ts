@@ -11,6 +11,7 @@ import * as z from "zod/v4";
 import { compactionRecoveryConfigError } from "./schema/compaction-recovery";
 import { nativeReasoningRetentionConfigError } from "./schema/native-reasoning-retention";
 import { WORKFLOW_BUDGET_SHAPE_HINT, workflowBudgetConfigError } from "./schema/workflow-budget";
+import { ROUTED_CATALOG_DEFAULTS_SHAPE_HINT, routedCatalogDefaultsConfigError } from "./schema/routed-catalog-defaults";
 import { desktopCompatibilityConfigError } from "./schema/desktop-compatibility";
 import { blockedModelRedirectsError } from "./schema/blocked-model-redirects";
 import { mainAccountHardLockFallbackError } from "./schema/main-account-hard-lock-fallback";
@@ -56,6 +57,7 @@ import {
   rawConfigRecord,
   malformedNativeSubagentFields,
   malformedNativeSubagentFieldWarning,
+  malformedCodexAuthMethodWarning,
   malformedCodexAccountPickerWarning,
   nativeSubagentSyncDisabledReason,
   normalizeNativeSubagentSync,
@@ -139,6 +141,8 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   const rawEffort = rawClaudeSubagentEffort(rawParsed);
   const normalized = normalizeClaudeSubagentEffort(normalizeNativeSubagentSync(config, rawParsed), rawParsed);
   const warnings = configPlaceholderWarnings(normalized);
+  const codexAuthWarning = malformedCodexAuthMethodWarning(rawParsed);
+  if (codexAuthWarning) warnings.push(codexAuthWarning);
   if (rawForce !== undefined && !isSubagentModelEntry(rawForce)) warnings.push("claudeCode.subagentModelForce ignored: expected a safe roster-style model id");
   if (normalized.chatgptDesktop?.appServerShim === true && process.platform !== "darwin") {
     warnings.push("chatgptDesktop.appServerShim is experimental and macOS only; ignored on this platform");
@@ -151,6 +155,7 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   if (blockedModelRedirectsError(rawParsed)) warnings.push("blockedModelRedirects ignored: expected a map of nonempty model keys to nonempty string targets");
   if (nativeReasoningRetentionConfigError(rawParsed)) warnings.push("nativeReasoningRetention ignored: expected only optional boolean modelSwitch and accountSwitch fields; both remain off");
   if (workflowBudgetConfigError(rawParsed)) warnings.push("workflowBudget ignored: " + WORKFLOW_BUDGET_SHAPE_HINT + "; the built-in ceilings remain");
+  if (routedCatalogDefaultsConfigError(rawParsed)) warnings.push("routedCatalogDefaults ignored: " + ROUTED_CATALOG_DEFAULTS_SHAPE_HINT + "; routed catalog rows keep their derived values");
   if (mainAccountHardLockFallbackError(rawParsed)) warnings.push("codexMainAccountHardLockFallback ignored: expected a nonblank model selector and an optional declared reasoningEffort");
   if (fallbackPolicyError(rawParsed)) warnings.push("fallback partly ignored: expected boolean model/provider switches, providers/routes/devices maps of them, and devices.<id>.localFallback; ignored leaves keep today's fallback behavior");
   const quotaAutoRefreshWarning = degradedCodexQuotaAutoRefreshWarning(rawParsed, normalized);
@@ -553,6 +558,12 @@ function oauthOpenBrowserError(value: unknown): string | null {
   return "schema_invalid: oauthOpenBrowser: must be a boolean or omitted";
 }
 
+function codexAuthMethodError(value: unknown): string | null {
+  return malformedCodexAuthMethodWarning(value)
+    ? 'schema_invalid: codexAuthMethod: must be "auto", "device-only", or omitted'
+    : null;
+}
+
 /** Validate an in-memory config candidate without touching disk. Used by headless CLI import/set. */
 /**
  * Reject a loopback-listener port that collides with the proxy port (#1102), and a port-less
@@ -778,6 +789,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? fallbackPolicyError(value)
     ?? nativeReasoningRetentionConfigError(value)
     ?? workflowBudgetConfigError(value)
+    ?? routedCatalogDefaultsConfigError(value)
     ?? mainAccountHardLockFallbackError(value)
     ?? compactionRecoveryConfigError(value) ?? desktopCompatibilityConfigError(value) ?? configReasoningPinsConfigError(value)
     ?? blankHostnameError(value)
@@ -802,6 +814,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? emptyCompletionRetryError(value)
     ?? dropCodexSafetyBufferingError(value)
     ?? oauthOpenBrowserError(value)
+    ?? codexAuthMethodError(value)
     ?? showCodexCreditsError(value)
     ?? creditCodexAccountIdsError(value)
     ?? remainingQuotaAccountIdsError(value)

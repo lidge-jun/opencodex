@@ -4,8 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { remotePinnedSyncArgv } from "../../src/link/ssh-argv";
 import { recordServingRuntime } from "../../src/config/serving-runtimes";
-import { inflateRawSync } from "node:zlib";
-import { POWERSHELL_ENCODED_MAX, powershellArgv, windowsScriptData, windowsScriptHelperSource } from "../../src/link/remote-windows";
+import { POWERSHELL_ENCODED_MAX, powershellArgv, windowsScriptData, windowsScriptHelperSource, windowsInflatedScript } from "../../src/link/remote-windows";
 
 const dirs: string[] = [];
 afterEach(() => { for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true }); });
@@ -91,8 +90,8 @@ test("Windows wrapper emits the stdout delimiter before Invoke-Native", () => {
   const outer = Buffer.from(argv[5]!, "base64").toString("utf16le");
   const packed = /\$ocxPacked='([^']+)'/.exec(outer)?.[1];
   expect(packed).toBeDefined();
-  const script = inflateRawSync(Buffer.from(Array.from(packed!, ch => ch.charCodeAt(0) - 256))).toString("utf8");
-  expect(script).toContain("[Console]::Out.WriteLine('ocx-fanout:stdout-begin');Invoke-Native $x @($d.args)");
+  const script = windowsInflatedScript(outer);
+  expect(script).toContain("[Console]::Out.WriteLine('ocx-fanout:stdout-begin');Invoke-Native $x (@(A $x)+@($d.args))");
 });
 
 test.skipIf(process.platform === "win32")("an overflowing version writer that exits zero falls through", async () => {

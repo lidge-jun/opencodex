@@ -18,6 +18,10 @@ original evaluation, including eligible destinations omitted from the bounded di
 The outer retry owner captures caller admission policy before its first attempt when ingress has not
 already supplied it. Every candidate receives that same immutable Advisor policy snapshot.
 
+An explicitly selected [hosted Advisor](../advisor.md#execution-paths) that is unavailable on the
+candidate's route or under its model scope uses the same in-process refusal identity, with the
+public HTTP 400 already attached. An ambiguous declaration remains a terminal request error.
+
 When a main-account hard-lock fallback selects a profile, `src/server/responses/request-prepare.ts`
 checks its first ranked destination against the original model under the
 [fallback policy](../fallback-policy.md#sites), before authentication or upstream dispatch.

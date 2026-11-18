@@ -645,8 +645,20 @@ dedicated proxy admission header is valid. This also means the
 
 The one change to the body is tool-call ids. A `tool_use.id` or `tool_result.tool_use_id` that Anthropic would reject (characters outside `a-zA-Z0-9_-`, or longer than 64), such as one a routed model minted earlier in the session, is rewritten to a conforming id with its call/result pairing kept. Conforming ids are sent unchanged, and an empty id is answered with a local 400.
 
-Disable with `claudeCode.nativePassthrough: false`; point elsewhere with
-`claudeCode.anthropicBaseUrl`.
+Disable with `claudeCode.nativePassthrough: false`, `ocx claude config set --native-passthrough off`,
+or the **Native Claude passthrough** switch under the Claude account pool in Providers → Anthropic
+Claude → Accounts; point elsewhere
+with `claudeCode.anthropicBaseUrl`. Claude picker and Desktop ingress aliases resolve before
+`modelMap`. A `modelMap` entry keyed by a raw model ID routes to its cross-provider target in either
+state. With passthrough off, an unmapped raw Claude model ID proceeds to the router. The router first
+checks for routing policy aliases, then combo aliases. If neither matches, it checks, in order,
+an enabled provider whose `defaultModel` is that ID, an enabled `anthropic` or `anthropic-*`
+provider, a provider whose model list includes the ID, a provider-model alias, and finally the
+default provider. When the route is an Anthropic OAuth provider, the Anthropic accounts stored in OpenCodex serve the request; a second
+stored account adds 429 failover, and the proactive
+[Claude OAuth account pool](#claude-oauth-account-pool-experimental) applies once `anthropicAccountPool.enabled` is on. Routing follows
+the setting from the next request; relaunch Claude Code sessions that are already running so their
+model slots and context windows match.
 
 **Rate limits on passthrough.** A passthrough request uses the credential the caller sent, so it is
 subject to that login's limits. When the login answers 429, OpenCodex returns the 429 with its
@@ -1437,6 +1449,10 @@ returns to the catalog and the cached prefix is lost once. Absent, empty or unli
 sends exactly the same request bytes as before. This does not guarantee cache hits either. Claude
 Code receives a wrapper call's arguments when the call completes; that is how every tool call on a
 translated Chat route arrives, so the option changes nothing there.
+
+An `allowed_callers` list other than exactly `["direct"]` on any tool preserves the original
+catalog, and the Chat route rejects the request before sending it upstream because it cannot
+carry that restriction. Tools with no caller list or only `["direct"]` remain eligible.
 
 #### Claude models behind a gateway that also serves GPT
 

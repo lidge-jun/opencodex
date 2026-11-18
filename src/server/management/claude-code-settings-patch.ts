@@ -114,6 +114,12 @@ export function prepareClaudeCodePatch(config: OcxConfig, body: Record<string, u
     if (body.injectAgents) delete next.injectAgents;
     else next.injectAgents = false;
   }
+  if (body.nativePassthrough !== undefined) {
+    // Default-on boolean: true = drop the key, false = store. Off routes bare Claude ids.
+    if (typeof body.nativePassthrough !== "boolean") return jsonResponse({ error: "nativePassthrough must be a boolean" }, 400);
+    if (body.nativePassthrough) delete next.nativePassthrough;
+    else next.nativePassthrough = false;
+  }
   if (body.autoCompactWindow !== undefined) {
     // null resets to the 350k default; otherwise the binary-accepted range
     // 100_000..1_000_000 (2.1.207 pSo/yDs — audit 021 #1).

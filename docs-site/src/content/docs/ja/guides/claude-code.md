@@ -124,8 +124,21 @@ hook を削除します。Claude Desktop は独立した profile を使用し、
 
 プロキシが保存済み OAuth 認証情報を使う管理対象のネイティブリクエストでは、宣言されたカスタムツール名も遅延参照とインライン追加・削除で揃えます。引数、スキーマ、キャッシュマーカーは保持します。システムメッセージ内のインライン変更には `inline-tools-2026-09-15` を指定してください。対応する型付きブロックがある場合、ファーストパーティ宛てのビルダーはこのヘッダーを保持します。
 
-`claudeCode.nativePassthrough: false` でオフにでき、`claudeCode.anthropicBaseUrl` で別のアドレスを
-指定できます。
+`claudeCode.nativePassthrough: false`、`ocx claude config set --native-passthrough off`、または
+ダッシュボードの Providers → Anthropic Claude → Accounts にある Claude アカウントプールの下の
+**Claude ネイティブパススルー** トグルでオフにでき、
+`claudeCode.anthropicBaseUrl` で別のアドレスを指定できます。Claude のモデル選択画面と Claude Desktop の受信時エイリアスは、`modelMap` より先に解決されます。
+エイリアスではないモデル ID をキーにした `modelMap` エントリは、パススルーのオン・オフにかかわらず、
+指定された別のプロバイダーのモデルへリクエストを送ります。パススルーをオフにすると、マッピングのない
+Claude のモデル ID はルーターに渡されます。ルーターはまずルーティングポリシーのエイリアスを確認し、次にコンボのエイリアスを確認します。
+どちらにも一致しない場合は、その ID を `defaultModel` にした有効なプロバイダー、
+有効な `anthropic` または `anthropic-*` プロバイダー、その ID をモデル一覧に含むプロバイダー、
+プロバイダー側のモデルエイリアス、最後に既定のプロバイダーの順に確認します。
+ルートが Anthropic OAuth プロバイダーの場合は OpenCodex に保存した Anthropic アカウントが処理し、2 つ目の
+アカウントを保存していれば 429 時のフェイルオーバーが加わります。能動的な
+Claude OAuth アカウントプールは `anthropicAccountPool.enabled` を有効にすると適用されます。
+ルーティングは次のリクエストから切り替わります。実行中の Claude Code セッションは、モデルスロットと
+コンテキストウィンドウを合わせるために再起動してください。
 
 ## Claude Desktop のモード: ゲートウェイ（デフォルト）と 1P
 
