@@ -68,8 +68,8 @@ async function discoverProviderModels(config: OcxConfig, name: string) {
   const initial = initialModelSelectionPending(provider) ? captureInitialSelectionBaseline(config) : null;
   const outcomes: NonNullable<GatherRoutedModelsOptions["providerModelOutcomes"]> = [];
   const revisions = new Map<string, string>();
-  const models = await gatherRoutedModels({ ...config, providers: { [name]: provider } }, {
-    providerModelOutcomes: outcomes, providerContentRevisions: revisions,
+  const models = await gatherRoutedModels(config, {
+    onlyProvider: name, providerModelOutcomes: outcomes, providerContentRevisions: revisions,
   });
   const discovery = getProviderDiscoveryStatus(name);
   if (discovery?.status === "ok" && outcomes.some(outcome => outcome.state === "authoritative")) {

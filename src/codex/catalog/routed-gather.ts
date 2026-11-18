@@ -192,13 +192,14 @@ export function clearGatherRoutedModelsInflight(): void {
 }
 export async function gatherRoutedModels(
   config: OcxConfig,
-  options?: GatherRoutedModelsOptions,
+  options?: GatherRoutedModelsOptions & { onlyProvider?: string },
 ): Promise<CatalogModel[]> {
   return gatherRoutedModelsWithAuth(
     config,
     `refreshing:${gatherFlightKey(config)}`,
     () => refreshingModelsAuthResolver,
     options,
+    options?.onlyProvider,
   );
 }
 
@@ -230,8 +231,9 @@ async function gatherRoutedModelsWithAuth(
   key: string,
   createAuthResolver: ModelsAuthResolverFactory,
   options?: GatherRoutedModelsOptions,
+  onlyProvider?: string,
 ): Promise<CatalogModel[]> {
-  const capture = captureGatherFlight(config, createAuthResolver);
+  const capture = captureGatherFlight(config, createAuthResolver, onlyProvider);
   const bucket = gatherInflight.get(key) ?? [];
   let entry = bucket.find(candidate => (
     candidate.discoveryPolicyIdentity === capture.discoveryPolicyIdentity

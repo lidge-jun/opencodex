@@ -498,6 +498,20 @@ describe("management routes", () => {
     }
   });
 
+  test("scoped discovery retains the catalog's provider alias ownership", async () => {
+    clearModelCache();
+    const live = config();
+    live.providers["google-antigravity"] = live.providers.live!;
+    live.providers.vendor!.alias = "agy";
+    try {
+      const refreshed = await call(live, "/api/model-discovery/refresh", { provider: "google-antigravity" });
+      expect(refreshed.json.discovery).toEqual({ status: "ok" });
+      expect(getStaleCached("google-antigravity")?.[0]?.providerAlias).toBeNull();
+    } finally {
+      clearModelCache();
+    }
+  });
+
   test("overlapping refreshes share one fetch for only the requested provider", async () => {
     clearModelCache();
     const live = config();

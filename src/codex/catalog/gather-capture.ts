@@ -463,6 +463,7 @@ export function captureProviderGather(
 export function captureGatherFlight(
   config: OcxConfig,
   createAuthResolver: ModelsAuthResolverFactory,
+  onlyProvider?: string,
 ): GatherFlightCapture {
   const providerAuthOutcomes: CatalogGatherProviderAuthOutcome[] = [];
   const authResolver = createAuthResolver(providerAuthOutcomes);
@@ -470,7 +471,8 @@ export function captureGatherFlight(
   const providers = Object.entries(config.providers)
     // A decision service (canonical TypeSafe or a self-hosted `jev-decision` row) owns no model
     // transport: never probe its endpoint for /models and never publish its model id as routable.
-    .filter(([, provider]) => provider.disabled !== true && provider.adapter !== "jev-decision")
+    .filter(([name, provider]) => (onlyProvider === undefined || name === onlyProvider)
+      && provider.disabled !== true && provider.adapter !== "jev-decision")
     .map(([name, provider]) => captureProviderGather(
       name,
       provider,
