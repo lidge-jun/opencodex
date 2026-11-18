@@ -14,6 +14,7 @@ export function agyAcpPreflightResponse(input: {
   forwardHeaders: Headers;
   /** The parsed request body: the frame's own copy of Codex's turn metadata (memory turns). */
   body: unknown;
+  inboundTransport?: "websocket";
   comboAttempt: boolean;
   internalDecisionCall: boolean;
   subagentFallback: boolean;
@@ -26,7 +27,7 @@ export function agyAcpPreflightResponse(input: {
   input.forwardHeaders.forEach((value, name) => headers.set(name, value));
   const refusal = agyAcpPolicyRefusal({
     headers, body: input.body, comboAttempt: input.comboAttempt, internalDecisionCall: input.internalDecisionCall,
-    subagentFallback: input.subagentFallback,
+    subagentFallback: input.subagentFallback, inboundTransport: input.inboundTransport,
   });
   if (!refusal) return undefined;
   const response = new Response(JSON.stringify({ error: {

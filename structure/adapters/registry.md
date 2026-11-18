@@ -61,7 +61,10 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   non-Gemini models and any use as a combo target, a combo's `decisionModel`, a subagent fallback, a `memoryModels` phase or the
   `shadowCallIntercept` target. The use policy
   (`src/adapters/agy-acp/policy.ts`) refuses subagent turns (`x-codex-parent-thread-id`), turns Codex labels as spawned threads (`isThreadSpawnRequest`) or as
-  its memory pipeline (`detectMemoryModelPhase`, `x-openai-subagent: memory_consolidation`, `x-openai-memgen-request`), combo members, a combo's internal
+  its memory pipeline (`detectMemoryModelPhase`, `x-openai-subagent: memory_consolidation`, `x-openai-memgen-request`).
+  A spawn label in the WebSocket frame body is sufficient. An HTTP memory label in the header is sufficient even
+  when the body metadata is malformed. A WebSocket handshake's turn-metadata header does not label later frames.
+  The policy also refuses combo members, a combo's internal
   decision call (`IncomingMeta.internalDecisionCall`, set only by the JEV decision invoke), routes chosen by subagent
   fallback (`IncomingMeta.subagentFallback`, set only where request-prepare's fallback moves the route), requests from a
   loopback address declared in `dashboardTrustedProxy`, requests carrying reverse-proxy forwarding headers and requests

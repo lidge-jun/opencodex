@@ -10,7 +10,7 @@
  * request that did not come from this machine. No heuristic beyond those is applied.
  */
 import { detectMemoryModelPhase } from "../../server/responses/memory-models";
-import { isThreadSpawnRequest } from "../../server/effort-policy";
+import { isThreadSpawnRequest, isThreadSpawnTurnMetadata } from "../../server/effort-policy";
 import { currentRequestIsLocal } from "../../lib/request-peer-scope";
 
 export const AGY_ACP_INTERACTIVE_ONLY = "agy_acp_interactive_only";
@@ -20,6 +20,7 @@ export interface AgyAcpPolicySignals {
   headers: Headers;
   /** The request body, for the frame's own copy of Codex's turn metadata (WebSocket turns carry it there). */
   body?: unknown;
+  inboundTransport?: "websocket";
   comboAttempt?: boolean;
   subagentFallback?: boolean;
   /** A combo's internal decision call (JEV): combo machinery, refused like a combo member. */
@@ -43,16 +44,21 @@ const LOCAL_MESSAGE = "The Antigravity CLI (ACP) provider serves only requests f
  * pipeline (`x-openai-subagent: memory_consolidation`, `x-openai-memgen-request`, or memory turn
  * metadata in the header or the body copy) and a spawned thread (`isThreadSpawnRequest`).
  */
-function isUnattendedCodexTurn(headers: Headers, body: unknown): boolean {
+function isUnattendedCodexTurn({ headers, body, inboundTransport }: AgyAcpPolicySignals): boolean {
   if (headers.get("x-openai-subagent") === "memory_consolidation" || headers.has("x-openai-memgen-request")) return true;
   if (isThreadSpawnRequest(headers)) return true;
-  return detectMemoryModelPhase(body, headers) !== null;
+  const client = body && typeof body === "object" && "client_metadata" in body ? body.client_metadata : undefined;
+  if (client && typeof client === "object" && "x-codex-turn-metadata" in client
+    && isThreadSpawnTurnMetadata(client["x-codex-turn-metadata"])) return true;
+  // For a refusal, either turn-local copy can establish an unattended label on its own.
+  if (inboundTransport !== "websocket" && detectMemoryModelPhase(undefined, headers) !== null) return true;
+  return detectMemoryModelPhase(body, headers, { transport: "websocket" }) !== null;
 }
 
 /** The refusal for a turn this provider must not serve, or undefined when it may run. */
 export function agyAcpPolicyRefusal(signals: AgyAcpPolicySignals): AgyAcpPolicyRefusal | undefined {
   if (signals.headers.has("x-codex-parent-thread-id") || signals.comboAttempt === true || signals.internalDecisionCall === true
-    || signals.subagentFallback === true || isUnattendedCodexTurn(signals.headers, signals.body)) {
+    || signals.subagentFallback === true || isUnattendedCodexTurn(signals)) {
     return { status: 403, errorType: "permission_error", code: AGY_ACP_INTERACTIVE_ONLY, message: INTERACTIVE_MESSAGE };
   }
   const local = signals.local ?? currentRequestIsLocal();

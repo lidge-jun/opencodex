@@ -135,6 +135,7 @@ export function createAgyAcpAdapter(provider: OcxProviderConfig, deps: AgyAcpDep
       const refusal = agyAcpPolicyRefusal({
         headers: incoming.headers, body: parsed._rawBody, comboAttempt: incoming.comboAttempt,
         internalDecisionCall: incoming.internalDecisionCall, subagentFallback: incoming.subagentFallback,
+        inboundTransport: incoming.inboundTransport,
       });
       if (refusal) { emit({ type: "error", ...refusal }); return; }
       if (incoming.abortSignal?.aborted) return;

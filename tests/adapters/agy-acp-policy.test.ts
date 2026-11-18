@@ -86,4 +86,37 @@ describe("use policy", () => {
     expect(runWithRequestPeer({ local: true }, () => agyAcpPreflightResponse({ ...base, adapterName: "agy-acp", subagentFallback: true }))?.status).toBe(403);
     expect(runWithRequestPeer({ local: true }, () => agyAcpPreflightResponse({ ...base, adapterName: "agy-acp", internalDecisionCall: true }))?.status).toBe(403);
   });
+
+  test("a WebSocket frame's own spawned-thread label is refused without a header copy", () => {
+    expect(agyAcpPolicyRefusal({
+      headers: new Headers(), inboundTransport: "websocket", local: true,
+      body: { client_metadata: { "x-codex-turn-metadata": JSON.stringify({ subagent_kind: "thread_spawn" }) } },
+    })?.code).toBe("agy_acp_interactive_only");
+  });
+
+  test("an HTTP memory header is authoritative for refusal even when the body copy is malformed", () => {
+    const headers = new Headers({ "x-codex-turn-metadata": JSON.stringify({ request_kind: "memory" }) });
+    const body = { client_metadata: null };
+    expect(agyAcpPolicyRefusal({ headers, body, local: true })?.code).toBe("agy_acp_interactive_only");
+  });
+
+  test("a WebSocket handshake memory label does not classify an ordinary frame", () => {
+    const headers = new Headers({ "x-codex-turn-metadata": JSON.stringify({ request_kind: "memory" }) });
+    expect(agyAcpPolicyRefusal({ headers, body: {}, inboundTransport: "websocket", local: true })).toBeUndefined();
+  });
+
+  test("HTTP preflight refuses a memory header with malformed body metadata", async () => {
+    const refused = runWithRequestPeer({ local: true }, () => agyAcpPreflightResponse({
+      adapterName: "agy-acp",
+      requestHeaders: new Headers({ "x-codex-turn-metadata": JSON.stringify({ thread_source: "memory_consolidation" }) }),
+      forwardHeaders: new Headers(),
+      body: { client_metadata: null },
+      comboAttempt: false,
+      internalDecisionCall: false,
+      subagentFallback: false,
+      logCtx: {} as RequestLogContext,
+    }));
+    expect(refused?.status).toBe(403);
+    expect(await refused?.json()).toMatchObject({ error: { code: "agy_acp_interactive_only" } });
+  });
 });

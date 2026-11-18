@@ -359,6 +359,7 @@ export async function executeResponsesRunTurn(
           turnParsed,
           {
             headers: requestState.selectedForwardHeaders,
+            inboundTransport: options.inboundTransport,
             abortSignal: producerAbort.signal,
             comboAttempt: options.comboAttempt === true,
             ...(requestState.subagentFallbackSelected ? { subagentFallback: true } : {}),
