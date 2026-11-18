@@ -257,9 +257,12 @@ capability flags, and account namespace and sidecar admission settings. A stable
 every enabled target is protocol-ineligible returns the ingress protocol refusal (HTTP 400).
 A change to mandatory-tool support recomputes image eligibility before applying the combo's
 omission or refusal policy. Credential selection revisions and pool entry identities are
-metadata. Credential resolution stays in the routing and sidecar paths. A changed snapshot
+metadata. The snapshot copies own data descriptors at every level and skips accessors without
+invoking them. Credential resolution stays in the routing and sidecar paths. A changed snapshot
 restarts local admission up to twice. Persistent churn returns `503 combo_unavailable`.
-A refusal or cancellation during admission retains completed decision usage on the parent request. Neither dispatches a child or repeats the decision request. A pin reused without a paid decision still passes the [dispatch-time consent check](../runtime.md#request-local-target-compatibility).
+The parent records completed decision usage before taking the snapshot or awaiting readmission.
+A stable refresh updates selection attribution on that same record. Refusal, cancellation, and
+readmission exceptions retain the usage without dispatching a child or repeating the decision. A pin reused without a paid decision still passes the [dispatch-time consent check](../runtime.md#request-local-target-compatibility).
 Dispatch uses the admitted combo policy, including the refusal or omission rule if a required
 image description fails. The turn captures JEV effort ownership at ingress so the
 wire effort and its request log label follow the same mode.

@@ -1,29 +1,26 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { resolveProtocolSettings } from "../../src/protocols/settings";
 import { snapshotComboAdmission } from "../../src/server/responses/combo-admission-snapshot";
 import { repoPath } from "../helpers/repo-root";
 
 import type { OcxConfig } from "../../src/types";
-import { LUNA, SOL, perTurnConfig, resetState, served, turn } from "../helpers/jev-session-pin";
+import { afterCapabilityGate, LUNA, SOL, perTurnConfig, resetState, served, turn } from "../helpers/jev-session-pin";
 
 beforeEach(resetState);
-afterEach(resetState);
+afterEach(() => { mock.restore(); resetState(); });
 
 function changeDuringReadmission(config: OcxConfig, change: () => void): void {
+  let pending = false;
   const decide = config.providers.jev!.fetch!;
-  const provider = config.providers.sol!;
   config.providers.jev!.fetch = (async (input, init) => {
-    Object.defineProperty(provider, "contextWindow", {
-      configurable: true,
-      enumerable: true,
-      get() {
-        Object.defineProperty(provider, "contextWindow", { value: 128_000, writable: true });
-        queueMicrotask(change);
-        return 128_000;
-      },
-    });
+    pending = true;
     return decide(input, init);
   }) as typeof fetch;
+  afterCapabilityGate(() => {
+    if (!pending) return;
+    pending = false;
+    change();
+  });
 }
 
 test("a protocol policy change returns the same refusal as ingress", async () => {

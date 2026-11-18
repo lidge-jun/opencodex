@@ -1,3 +1,5 @@
+import { spyOn } from "bun:test";
+import * as capability from "../../src/combos/request-capability";
 import { createProtocolEnvelope } from "../../src/protocols/envelope";
 import { clearComboSelectionState, clearComboTargetCooldowns } from "../../src/combos";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
@@ -139,3 +141,14 @@ export const offered = (payload: Record<string, unknown> | undefined) => {
   return [...new Set(Object.values(criteria).map(option => option.target))];
 };
 export const effortOf = (body: Record<string, unknown>) => (body.reasoning as { effort?: string } | undefined)?.effort;
+
+
+// Run the fixture edit after the real gate evaluates its inputs and before admission resumes.
+export function afterCapabilityGate(edit: () => void): void {
+  const gate = capability.comboCapabilityGate;
+  spyOn(capability, "comboCapabilityGate").mockImplementation(async (...args) => {
+    const result = await gate(...args);
+    edit();
+    return result;
+  });
+}

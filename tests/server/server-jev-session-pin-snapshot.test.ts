@@ -1,9 +1,9 @@
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, mock, test } from "bun:test";
 import type { RequestLogContext } from "../../src/server/request-log";
-import { LUNA, SOL, modelProvider, perTurnConfig, resetState, turn } from "../helpers/jev-session-pin";
+import { afterCapabilityGate, LUNA, SOL, modelProvider, perTurnConfig, resetState, turn } from "../helpers/jev-session-pin";
 
 beforeEach(resetState);
-afterEach(resetState);
+afterEach(() => { mock.restore(); resetState(); });
 
 test.each(["metered consent", "roster during capability refresh"] as const)(
   "revalidates %s before dispatching a paid pinned decision",
@@ -23,22 +23,15 @@ test.each(["metered consent", "roster during capability refresh"] as const)(
           ...combo, allowMeteredTargets: false,
           targets: [{ ...SOL, provider: "replacement", metered: true }, LUNA],
         };
-      } else {
-        // The text capability gate reads the provider and returns a promise.
-        // Queue the edit before its awaiting caller resumes.
-        Object.defineProperty(config.providers.sol!, "contextWindow", {
-          configurable: true,
-          enumerable: true,
-          get() {
-            Object.defineProperty(config.providers.sol!, "contextWindow", { value: 100_000 });
-            queueMicrotask(() => { config.combos!.auto = { ...combo, targets: [LUNA] }; });
-            return 100_000;
-          },
-        });
       }
       return fetchDecision(input, init);
     }) as typeof fetch;
 
+    if (change === "roster during capability refresh") {
+      afterCapabilityGate(() => {
+        if (payloads.length === 2) config.combos!.auto = { ...combo, targets: [LUNA] };
+      });
+    }
     const models: string[] = [];
     const log: RequestLogContext = { model: "", provider: "" };
     expect((await turn(config, { models, log })).status).toBe(200);
@@ -75,14 +68,7 @@ test.each([true, false])("first dispatch rechecks metered consent with unmetered
   combo.capabilityPolicy = "union";
   combo.allowMeteredTargets = true;
   combo.targets = [{ ...SOL, metered: true }, ...(sibling ? [LUNA] : [])];
-  Object.defineProperty(config.providers.sol!, "contextWindow", {
-    configurable: true,
-    enumerable: true,
-    get() {
-      queueMicrotask(() => { combo.allowMeteredTargets = false; });
-      return 100_000;
-    },
-  });
+  afterCapabilityGate(() => { combo.allowMeteredTargets = false; });
   const models: string[] = [];
   const response = await turn(config, { models });
   expect(models).toEqual(sibling ? [`${LUNA.provider}/${LUNA.model}`] : []);

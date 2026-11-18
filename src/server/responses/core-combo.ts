@@ -948,9 +948,30 @@ export async function executeComboResponses(
       };
     }
     let selected = choices.find(choice => choice.candidate.key === decision.targetKey) ?? first;
+    const recordDecision = (observedDecision: JevDecision) => logCtx.jevDecision = !options.clientModelLabel || requestedModel === responseModel ? normalizePersistedJevDecision({
+      version: 1,
+      comboId,
+      selected: {
+        provider: selected.pick.target.provider,
+        model: selected.pick.target.model,
+        effort: decision.effort,
+      },
+      gate: observedDecision.gate,
+      latencyMs: observedDecision.latencyMs,
+      backend: observedDecision.backend,
+      ...(observedDecision.confidence !== undefined ? { confidence: observedDecision.confidence } : {}),
+      ...(observedDecision.chosenProbability !== undefined
+        ? { chosenProbability: observedDecision.chosenProbability }
+        : {}),
+      ...(observedDecision.usage ? { usage: observedDecision.usage } : {}),
+      ...(observedDecision.quota ? { quota: observedDecision.quota } : {}),
+      ...(decision.pinned ? { pinned: true } : {}),
+      ...(decision.pinReason ? { pinReason: decision.pinReason } : {}),
+    }) : undefined;
     let selectionUnavailable = false;
     let refreshedRefusal: Response | undefined;
     if ((!pinReuse?.decision || pick.cooldownReprobeTargets || awaitedPinEffort) && !options.abortSignal?.aborted) {
+      recordDecision(failedPinEffortDecision ?? decision);
       const previousUnservable = capability.unservable;
       const previousCombo = combo;
       const previousProtocolLanes = protocolLanes;
@@ -1006,26 +1027,7 @@ export async function executeComboResponses(
     pick = { ...selected.pick, attempted: [targetKey(selected.pick.target)] };
     // Keep effort-call telemetry and take pin attribution from the final selection.
     const observedDecision = failedPinEffortDecision ?? decision;
-    logCtx.jevDecision = !options.clientModelLabel || requestedModel === responseModel ? normalizePersistedJevDecision({
-      version: 1,
-      comboId,
-      selected: {
-        provider: selected.pick.target.provider,
-        model: selected.pick.target.model,
-        effort: decision.effort,
-      },
-      gate: observedDecision.gate,
-      latencyMs: observedDecision.latencyMs,
-      backend: observedDecision.backend,
-      ...(observedDecision.confidence !== undefined ? { confidence: observedDecision.confidence } : {}),
-      ...(observedDecision.chosenProbability !== undefined
-        ? { chosenProbability: observedDecision.chosenProbability }
-        : {}),
-      ...(observedDecision.usage ? { usage: observedDecision.usage } : {}),
-      ...(observedDecision.quota ? { quota: observedDecision.quota } : {}),
-      ...(decision.pinned ? { pinned: true } : {}),
-      ...(decision.pinReason ? { pinReason: decision.pinReason } : {}),
-    }) : undefined;
+    recordDecision(observedDecision);
     console.debug("[combo] JEV decision", {
       backend: observedDecision.backend,
       target: comboTargetLogLabel(config, comboId, pick.target),

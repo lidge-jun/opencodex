@@ -1,10 +1,10 @@
-import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, expect, mock, spyOn, test } from "bun:test";
 import * as sidecarAuth from "../../src/server/responses/request-sidecar-auth";
 import type { RequestLogContext } from "../../src/server/request-log";
-import { LUNA, SOL, perTurnConfig, resetState, turn } from "../helpers/jev-session-pin";
+import { afterCapabilityGate, LUNA, SOL, perTurnConfig, resetState, turn } from "../helpers/jev-session-pin";
 
 beforeEach(resetState);
-afterEach(resetState);
+afterEach(() => { mock.restore(); resetState(); });
 
 test.each([
   ["provider read 1", 1], ["provider read 2", 2], ["provider read 3", 3],
@@ -22,30 +22,16 @@ test.each([
     const request = { input, previousResponseId: change === "continuation" ? "resp_unavailable" : undefined };
     expect((await turn(config, request)).status).toBe(200);
 
-    const fetchDecision = config.providers.jev!.fetch!;
-    const provider = config.providers.sol!;
-    function mutateOnRead(window: number, read = 1): void {
-      Object.defineProperty(provider, "contextWindow", {
-        configurable: true,
-        enumerable: true,
-        get() {
-          Object.defineProperty(provider, "contextWindow", { value: window, writable: true });
-          queueMicrotask(() => {
-            if (change === "churn") mutateOnRead(window - 100, read + 1);
-            else if (providerRead && read < providerRead) {
-              config.combos!.auto = { ...combo, allowMeteredTargets: read % 2 === 1 };
-              mutateOnRead(window - 100, read + 1);
-            } else if (providerRead) provider.contextWindow = 1000;
-            else config.combos!.auto = { ...combo, imageInput: "disabled" };
-          });
-          return window;
-        },
-      });
-    }
-    config.providers.jev!.fetch = (async (input, init) => {
-      mutateOnRead(100_000);
-      return fetchDecision(input, init);
-    }) as typeof fetch;
+    let read = 0;
+    afterCapabilityGate(() => {
+      if (payloads.length !== 2) return;
+      read++;
+      if (change === "churn") config.providers.sol!.contextWindow = 100_000 - read * 100;
+      else if (providerRead && read < providerRead) {
+        config.combos!.auto = { ...combo, allowMeteredTargets: read % 2 === 1 };
+      } else if (providerRead) config.providers.sol!.contextWindow = 1000;
+      else config.combos!.auto = { ...combo, imageInput: "disabled" };
+    });
 
     const models: string[] = [];
     const log: RequestLogContext = { model: "", provider: "" };
@@ -69,18 +55,9 @@ test("accounts for the completed decision when admission refresh is cancelled", 
   const config = perTurnConfig(["sol/gpt-5.6-sol:high"], payloads);
   config.combos!.auto!.capabilityPolicy = "union";
   const controller = new AbortController();
-  const decide = config.providers.jev!.fetch!;
-  config.providers.jev!.fetch = (async (input, init) => {
-    Object.defineProperty(config.providers.sol!, "contextWindow", {
-      configurable: true,
-      enumerable: true,
-      get() {
-        queueMicrotask(() => controller.abort());
-        return 100_000;
-      },
-    });
-    return decide(input, init);
-  }) as typeof fetch;
+  afterCapabilityGate(() => {
+    if (payloads.length) controller.abort();
+  });
   const models: string[] = [];
   const log: RequestLogContext = { model: "", provider: "" };
   expect((await turn(config, { models, log, signal: controller.signal })).status).toBe(499);
