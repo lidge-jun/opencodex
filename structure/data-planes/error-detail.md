@@ -540,6 +540,8 @@ success/internal row and explicitly lists the ten changed error-response normali
 `tests/server/messages-sse-error-filter.test.ts`,
 `tests/server/messages-sse-error-lifecycle.test.ts` and the Messages SSE integration siblings cover
 first-field eligibility, formatting, bounds, identity handoffs, teardown and both exceptions.
+The native and builtin differential lanes expect the overwritten error field and final ping
+field to survive the model echo while every other byte matches the recorded baseline.
 `tests/claude-integration/messages-sse-control-fields.test.ts` covers final-error fields and rename replay.
 `tests/claude-integration/messages-sse-continuation.test.ts` checks later-event and EOF delivery after
 a suppressed split-CRLF continuation; pull completion depends on actual client output.
