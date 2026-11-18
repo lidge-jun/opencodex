@@ -167,7 +167,19 @@ export async function findCrossHomeOwnerDetailed(options: CrossHomeOwnerOptions 
   // start path the way per-candidate budgets did (CodeRabbit on #6198).
   const deadlineAt = io.deadlineAt ?? nowFn() + timeoutMs * attempts * 4;
   const probeIo: LivenessIo = { ...START_OWNERSHIP_LIVENESS, ...io, timeoutMs, attempts, deadlineAt };
-  const budgetSpent = () => io.signal?.aborted || nowFn() >= deadlineAt;
+  const remainingMs = () => io.signal?.aborted ? 0 : deadlineAt - nowFn();
+  const budgetSpent = () => remainingMs() <= 0;
+  const readCommandLine = io.readCommandLineFn ?? readProcessCommandLine;
+  // Registry pointers and address families can nominate the same process more than once.
+  const recordedPids = new Map<number, boolean>();
+  const recordedPidMayBeLive = ({ pid }: CandidateRecord): boolean => {
+    if (budgetSpent()) return true;
+    const checked = recordedPids.get(pid);
+    if (checked !== undefined) return checked;
+    const mayBeLive = recordedOwnerMayBeLive(pid, candidate => readCommandLine(candidate, remainingMs));
+    recordedPids.set(pid, mayBeLive);
+    return mayBeLive;
+  };
 
   const candidates = new Set<number>();
   const records = new Map<number, CandidateRecord[]>();
@@ -260,8 +272,8 @@ export async function findCrossHomeOwnerDetailed(options: CrossHomeOwnerOptions 
       if (identity === null) {
         // The bind only settles this endpoint. A different home's live process may
         // still own the shared clients while its listener is between binds.
-        const recordedOwner = bindProof && (hasLiveStartupJournalOwner() || portRecords.some(rec =>
-          recordedOwnerMayBeLive(rec.pid, io.readCommandLineFn ?? readProcessCommandLine)));
+        const recordedOwner = bindProof && !budgetSpent()
+          && (hasLiveStartupJournalOwner() || portRecords.some(recordedPidMayBeLive));
         if (budgetSpent()) {
           noteIndeterminate(port, "ownership discovery ran out of its shared time budget");
           break;

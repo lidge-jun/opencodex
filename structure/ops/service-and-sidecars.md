@@ -220,8 +220,8 @@ uses, plus the 30-second reclaim rule. `ocx service status` prints the same hold
 the lease directory exists. That read never reclaims.
 The connected-client branch, which returns into `startClientRuntime` before the server path,
 takes the same lease through `startClientRuntimeUnderOwnershipLease`
-(`src/cli/client-start-fence.ts`), rechecks there, and releases once the client runtime has
-published its PID and runtime records (`afterPublish`). A child carrying
+(`src/cli/client-start-fence.ts`) and rechecks service registration, proxy liveness, and unsettled shared-client ownership before binding.
+A live or unverified local runtime blocks publication. The lease releases after PID and runtime publication (`afterPublish`) or on refusal or failure. A child carrying
 `OCX_SERVICE_MANAGED` or `OCX_WINDOWS_WRAPPER_PROTOCOL` resolves the recorded owner and
 exits the supervisor's stand-down code on a foreign or unknown answer: `42` inside the
 marker-protocol Windows wrapper, `0` elsewhere — the legacy `ERRORLEVEL NEQ 0` loop reads

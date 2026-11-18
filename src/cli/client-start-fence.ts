@@ -1,4 +1,24 @@
 import type { ServiceChildOwnershipDecision } from "../service/service-child-ownership";
+import { serviceStayOutExitCode } from "../service/windows-wrapper-exit";
+import { observeProxyLiveness, START_OWNERSHIP_LIVENESS } from "../server/proxy-liveness";
+import { markCrossHomeSibling } from "./cross-home-owner";
+
+/** Called under the publication lease, before the client can bind or write ownership records. */
+export async function recheckClientStartOwnership(sibling: boolean): Promise<number | null> {
+  const fenced = await observeProxyLiveness(START_OWNERSHIP_LIVENESS);
+  if (fenced.kind === "live") {
+    const { pid, port } = fenced.live;
+    if (process.env.OCX_SERVICE === "1") {
+      console.log(`Proxy already running (PID ${pid ?? "unknown"}, port ${port}); service wrapper staying out of the way.`);
+      return serviceStayOutExitCode();
+    }
+    console.error(`⚠️  Proxy appeared before bind (PID ${pid ?? "unknown"}, port ${port}). Use 'ocx stop' first.`);
+    return 1;
+  }
+  if (fenced.kind === "unknown") throw new Error("Proxy ownership is unverified; client startup refused before bind.");
+  if (!sibling) await markCrossHomeSibling();
+  return null;
+}
 
 /**
  * Connected-client starts publish PID and runtime records too, so a supervised service child

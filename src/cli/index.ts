@@ -168,7 +168,7 @@ import { startArgv } from "../lib/self-launch-argv";
 import { initializeNodeLauncherContext } from "./launcher-context";
 import { assertConnectedClientStopSupported, clearRestoredStopReceipts, connectedClientStopSkipLine, notOwnedTeardownIsAcceptable, preflightConnectedClientStop, preserveConnectedClientRoutingOnExit, restoreBoundaryOwnership, restoreSharedClientStateAfterStop, settleUnrestoredStopBoundary } from "./stop-restore";
 import { stopRestoreWriteGuard } from "./stop-restore-guard";
-import { startClientRuntimeUnderOwnershipLease } from "./client-start-fence";
+import { recheckClientStartOwnership, startClientRuntimeUnderOwnershipLease } from "./client-start-fence";
 import { recoverStartJournalAfterOwnerRecheck, recoverStartStateUnderOwnershipLease } from "./start-owner-fence";
 import { handledSignalExitCode } from "../lib/handled-signal-exit";
 import { createLocalAttestationSecret } from "../lib/local-management-attestation";
@@ -497,7 +497,11 @@ async function handleStart(options: { block?: boolean } = {}) {
       acquireLease: () => acquireOwnershipMutationLease(serviceStatePaths()),
       decide: () => serviceChildOwnershipDecisionForClassifiedChild(supervisedServiceChild),
       stayOut: refusal => { console.error("❌ " + refusal); process.exit(serviceStayOutExitCode()); },
-      start: afterPublish => startClientRuntime({ port: requestedPort, block: options.block, afterPublish }),
+      start: async afterPublish => {
+        const refusal = await recheckClientStartOwnership(siblingStart);
+        if (refusal !== null) { process.exitCode = refusal; return; }
+        await startClientRuntime({ port: requestedPort, block: options.block, afterPublish });
+      },
     });
     return;
   }

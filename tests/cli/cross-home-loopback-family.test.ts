@@ -188,6 +188,34 @@ test("a live recorded sibling-home process prevents absence even when its endpoi
   expect(binds).toEqual([["127.0.0.1", port], ["0.0.0.0", port]]);
 });
 
+test.each(["deadline", "duplicate", "unreadable"] as const)(
+  "Windows vacant-port discovery handles a %s during recorded PID lookup", async outcome => {
+    const { home } = fixture();
+    const defaultHome = join(home, ".opencodex");
+    const otherHome = join(home, "registered");
+    mkdirSync(otherHome);
+    writeFileSync(join(defaultHome, "runtime-port.json"), JSON.stringify({ pid: process.pid, port }));
+    writeFileSync(join(otherHome, "runtime-port.json"), JSON.stringify({
+      pid: outcome === "duplicate" ? process.pid : process.ppid, port,
+    }));
+    writeFileSync(join(process.env.OCX_OWNER_REGISTRY_DIR!, "fixture.json"), JSON.stringify({ home: otherHome }));
+    let clock = 10;
+    const calls: number[] = [];
+    const { options } = windowsDiscovery(home, "127.0.0.1", {
+      deadlineAt: 60, nowFn: () => clock,
+      readCommandLineFn(pid) {
+        calls.push(pid);
+        if (outcome === "deadline") clock = 60;
+        return outcome === "unreadable" ? undefined : "unrelated-process";
+      },
+    });
+    const verdict = await findCrossHomeOwnerDetailed(options);
+    expect(calls).toEqual([process.pid]);
+    if (outcome === "duplicate") expect(verdict).toEqual({ kind: "none" });
+    else expect(verdict).toEqual({ kind: "indeterminate", port, reason: expect.any(String) });
+  },
+);
+
 test.each(["deadline", "cancel"])("shared-client discovery discards a bind proof after %s", async stop => {
   const controller = new AbortController();
   let clock = 10;

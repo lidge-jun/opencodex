@@ -495,10 +495,19 @@ function readNativeWindowsCommandLine(pid: number): string | undefined {
   }
 }
 
-export function readProcessCommandLine(pid: number): string | undefined {
+/** A caller with a deadline can share its remaining time across all subprocess fallbacks. */
+export function readProcessCommandLine(pid: number, remainingMs: () => number = () => Infinity): string | undefined {
   if (!Number.isSafeInteger(pid) || pid <= 0) return undefined;
+  const run = (executable: string, args: string[], capMs: number): string | undefined => {
+    const timeout = Math.floor(Math.min(capMs, remainingMs()));
+    if (timeout <= 0) return undefined;
+    return processCommandLineExec(executable, args, {
+      encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout, windowsHide: true,
+    });
+  };
   const platform = processCommandLinePlatformForTests ?? process.platform;
   try {
+    if (remainingMs() <= 0) return undefined;
     if (platform === "linux") {
       try {
         const output = readFileSync(`/proc/${pid}/cmdline`, "utf-8");
@@ -518,9 +527,10 @@ export function readProcessCommandLine(pid: number): string | undefined {
       // the trusted fixed PowerShell binary without consulting PATH or env roots.
       const wmic = join(resolveTrustedWindowsSystemDirectory(), "wbem", "WMIC.exe");
       try {
-        const output = processCommandLineExec(wmic, [
+        const output = run(wmic, [
           "process", "where", `ProcessId=${pid}`, "get", "CommandLine", "/VALUE",
-        ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000, windowsHide: true });
+        ], 3000);
+        if (output === undefined) return undefined;
         const match = /^CommandLine=(.*)$/m.exec(output.replace(/\r/g, ""));
         const value = match?.[1]?.trim();
         if (value) return value;
@@ -531,14 +541,14 @@ export function readProcessCommandLine(pid: number): string | undefined {
       // unchanged process and turns a guarded stop into a false approval-changed.
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-          const output = processCommandLineExec(resolveTrustedWindowsPowerShellExe(), [
+          const output = run(resolveTrustedWindowsPowerShellExe(), [
             "-NoProfile",
             "-NoLogo",
             "-NonInteractive",
             "-Command",
             `(Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}").CommandLine`,
-          ], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 3000, windowsHide: true });
-          return output.trim() || undefined;
+          ], 3000);
+          return output?.trim() || undefined;
         } catch {
           /* timed out or CIM unavailable — try once more, then unreadable */
         }
@@ -547,12 +557,8 @@ export function readProcessCommandLine(pid: number): string | undefined {
     }
     for (const ps of ["/bin/ps", "/usr/bin/ps"]) {
       try {
-        const output = processCommandLineExec(ps, ["-p", String(pid), "-o", "command="], {
-          encoding: "utf-8",
-          stdio: ["ignore", "pipe", "ignore"],
-          timeout: 1000,
-          windowsHide: true,
-        });
+        const output = run(ps, ["-p", String(pid), "-o", "command="], 1000);
+        if (output === undefined) return undefined;
         const value = output.trim();
         if (value) return value;
       } catch {
