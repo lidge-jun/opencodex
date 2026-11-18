@@ -684,7 +684,7 @@ export function toolChoiceToChatFormat(
     if (tc.mode === "required" && tc.allowedTools.length === 1 && isNativeOpenAIChatTarget(provider)) {
       return {
         type: "function",
-        function: { name: registry.aliasWireName(resolveToolChoiceWireName(tools, tc.allowedTools[0])) },
+        function: { name: registry.aliasWireName(resolveToolChoiceWireName(tools, tc.allowedTools[0], tc)) },
       };
     }
     return tc.mode === "required" ? "required" : "auto";
@@ -693,7 +693,7 @@ export function toolChoiceToChatFormat(
   if ("name" in tc) {
     return {
       type: "function",
-      function: { name: registry.aliasWireName(resolveToolChoiceWireName(tools, tc.name)) },
+      function: { name: registry.aliasWireName(resolveToolChoiceWireName(tools, tc.name, tc)) },
     };
   }
   return undefined;

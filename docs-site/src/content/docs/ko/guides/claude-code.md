@@ -165,8 +165,18 @@ hook을 제거해요. Claude Desktop은 별도 profile을 사용하며 shell hoo
 
 프록시에 저장된 OAuth 자격 증명을 쓰는 관리형 네이티브 요청은 선언된 커스텀 도구 이름도 지연 참조와 인라인 추가·제거에 맞춰 바꿔요. 인수, 스키마, 캐시 표시는 유지해요. 시스템 메시지의 인라인 변경에는 `inline-tools-2026-09-15`를 지정하세요. 해당 타입의 블록이 있으면 Anthropic 원본 API로 보내는 빌더가 이 헤더를 유지해요.
 
-`claudeCode.nativePassthrough: false`로 끌 수 있고, `claudeCode.anthropicBaseUrl`로 다른 주소를
-지정할 수 있어요.
+`claudeCode.nativePassthrough: false`, `ocx claude config set --native-passthrough off`, 또는
+대시보드 Providers → Anthropic Claude → Accounts의 Claude 계정 풀 아래에 있는
+**Claude 네이티브 패스스루** 토글로 끌 수 있고,
+`claudeCode.anthropicBaseUrl`로 다른 주소를 지정할 수 있어요. Claude 모델 선택기와 Claude Desktop의 요청에 들어온 별칭은 `modelMap`보다 먼저 해석해요.
+별칭이 아닌 모델 ID를 키로 쓰는 `modelMap` 항목은 패스스루가 켜져 있든 꺼져 있든 요청을 지정된 다른 공급자의 모델로 보내요.
+패스스루를 끄면 매핑이 없는 Claude 모델 ID는 라우터로 넘어가요. 라우터는 먼저 라우팅 정책 별칭을, 그다음 콤보 별칭을 확인해요.
+둘 다 일치하지 않으면 그 ID를 `defaultModel`로 둔 활성 공급자,
+활성화된 `anthropic` 또는 `anthropic-*` 공급자, 모델 목록에 해당 ID를 포함한 공급자, 공급자 쪽 모델 별칭,
+마지막으로 기본 공급자 순서로 확인해요. 경로가 Anthropic OAuth 공급자이면 OpenCodex에
+저장한 Anthropic 계정이 요청을 처리하고, 계정을 하나 더 저장해 두면 429 장애 조치가 더해져요. 능동적인
+Claude OAuth 계정 풀은 `anthropicAccountPool.enabled`를 켜야 적용돼요. 라우팅은 다음 요청부터
+바뀌어요. 이미 실행 중인 Claude Code 세션은 모델 슬롯과 컨텍스트 창이 맞도록 다시 실행하세요.
 
 **패스스루의 레이트 리밋.** 패스스루 요청은 호출자가 보낸 자격 증명을 그대로 쓰므로 그 로그인의 한도를 따라요. 그 로그인이 429를 돌려주면 OpenCodex는 레이트 리밋 헤더와 `Retry-After`를 유지한 429를 돌려주고, 사용자 자격 증명으로 인증된 요청을 다른 프로바이더나 계정으로 다시 보내지 않아요. Claude Code는 `claude-haiku-5-5`에서 실행하는 WebSearch처럼 일부 요청을 small-fast 모델로 보내기 때문에, 라우팅된 메인 턴은 잘 되는데 이런 요청만 레이트 리밋에 걸린 로그인에서 실패할 수 있어요. 이 트래픽을 관리형 프로바이더로 옮기려면 모델 ID를 매핑하세요. 1P Desktop·CLI 트래픽은 `claudeCode.intercept.modelMap`(또는 `ocx claude desktop bind`), 모든 진입점은 `claudeCode.modelMap`을 쓰면 돼요. 매핑된 ID는 자기 자신으로 해석되지 않으므로 위 패스스루 조건을 만족하지 않고 다른 요청처럼 라우팅돼요. `ocx claude` 세션에서는 `claudeCode.tierModels.haiku`로 그 슬롯이 라우팅된 모델 ID를 요청하게 할 수도 있어요. 다만 여기에 일반 `claude-*` ID를 넣으면 여전히 패스스루되고, 직접 export한 `ANTHROPIC_DEFAULT_HAIKU_MODEL`이 우선해요([#7912](https://github.com/lidge-jun/opencodex/issues/7912)).
 

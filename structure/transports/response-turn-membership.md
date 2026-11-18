@@ -31,6 +31,13 @@ Delivery intersects current names with the existing selection-filtered bridge na
 `tool_choice` cannot be widened by the snapshot. Ordinary Responses validation retains its
 delivery owner and diagnostics; the additional guard enforces explicit-empty catalogs and
 Responses replay boundaries. Initial hosted-sidecar deferred delivery retains its existing contract.
+A named [hosted Advisor selection](../advisor.md#execution-paths) uses the original Messages
+declaration, with availability checked separately on each fallback candidate before dispatch.
+When the serialized Anthropic request carries a hosted Advisor credential binding, initial,
+recovery, and continuation send reporters claim the workflow slot at the executor receipt after
+credential validation. A post-rewrite refusal consumes zero slots for that attempt, and an optional
+rebuild consumes one slot when its executor runs. A destination with Advisor forwarding disabled
+uses its ordinary reporter even when the inbound catalog declares Advisor.
 `tests/responses/explicit-empty-tool-catalog-history.test.ts` covers these continuation boundaries
 and normalization across adapter/run-turn JSON/SSE. The real direct Messages planner and delivery
 share one signed-history translation budget in `tests/responses/current-turn-tool-catalog-direct.test.ts`.
