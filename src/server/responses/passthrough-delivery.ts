@@ -188,6 +188,7 @@ import {
   BUFFERED_RESPONSES_TOTAL_TIMEOUT_MS,
   bufferedResponsesReadOptions,
   collectBufferedResponsesSse,
+  type BufferedFailedCompletion,
   type BufferedResponsesSseFailure,
   type BufferedResponsesSseResult,
 } from "./buffered-sse-json";
@@ -1030,6 +1031,54 @@ export async function deliverPassthroughResponse(
           config.stallTimeoutSec,
           { localUpstream: nativeExchange.localUpstream },
         ), BUFFERED_RESPONSES_TOTAL_TIMEOUT_MS, bufferedResetSelectionStartedAt(nativeExchange.upstreamResponse) ?? Date.now());
+        const cancelAfterValidation = (): Response => {
+          responseEffects.responseCompletionCancelled = true;
+          options.onNativePassthroughCancel?.();
+          return clientCancelledResponse();
+        };
+        const reportNativeTerminal = recordTerminalOutcomes
+          ? (status: ResponsesTerminalStatus, httpStatusOverride?: number) => {
+            if (signal.aborted) return;
+            terminalRecorder?.(status, httpStatusOverride);
+            if (status === "failed" || status === "incomplete") {
+              const quotaFailureMessage = [httpStatusOverride, logCtx.terminalHttpStatus]
+                .find(value => value === 429 || value === 402);
+              if (!isFixedCodexAccount(admissionState.authCtx) && quotaFailureMessage !== undefined) {
+                recordSubagentQuotaFailureForThreadSpawn(
+                  req.headers,
+                  subagentQuotaFailureModel,
+                  quotaFailureMessage,
+                  config,
+                  requestState.subagentFallbackAccountId,
+                );
+              }
+            }
+            options.onNativePassthroughTerminal?.(status);
+          }
+          : undefined;
+        const deliverFailedCompletion = ({ payload, error }: BufferedFailedCompletion): Response => {
+          if (signal.aborted) return cancelAfterValidation();
+          if (Date.now() >= bufferedRead.deadlineAt) {
+            return failBufferedTurn("buffered Responses turn exceeded the safe total deadline");
+          }
+          noteInspectedPayload(payload);
+          inspectResponseLogSsePayloadParsed(logCtx, JSON.stringify(payload), payload);
+          const status = logCtx.terminalHttpStatus ?? httpStatusFromTerminalError(error);
+          logCtx.transportPhase = "terminal_sse";
+          logCtx.terminalSource = "upstream";
+          reportNativeTerminal?.("failed", status);
+          const defaults = bufferedErrorDefaults(status);
+          const clientError = {
+            type: synthesizedCopyMask(error.type ?? defaults.type),
+            code: synthesizedCopyMask(logCtx.terminalErrorCode ?? error.code ?? defaults.code),
+            message: synthesizedCopyMask(error.message ?? "upstream reported a failed completion"),
+          };
+          const failureHeaders = sanitizePassthroughHeaders(headers, passthroughHeaderOptions);
+          failureHeaders.set("content-type", "application/json");
+          return markPreinspectedJsonResponse(formatPassthroughUpstreamError(
+            status, JSON.stringify({ error: clientError }), { headers: failureHeaders },
+          ));
+        };
         const failBufferedTurn = (
           message: string,
           failure?: BufferedResponsesSseFailure,
@@ -1114,6 +1163,7 @@ export async function deliverPassthroughResponse(
                 : "upstream SSE response failed before a valid terminal response";
           return failBufferedTurn(message, raw);
         }
+        if (raw.terminal.failedCompletion) return deliverFailedCompletion(raw.terminal.failedCompletion);
         if (!raw.bytes) return failBufferedTurn("upstream SSE transcript was not retained for rewriting");
         let rawBytes: Uint8Array | undefined = raw.bytes;
         raw = undefined; // Release the raw reconstruction graph before building the client copy.
@@ -1147,15 +1197,11 @@ export async function deliverPassthroughResponse(
               : "rewritten SSE response did not contain one valid terminal response";
           return failBufferedTurn(message, client);
         }
+        if (client.terminal.failedCompletion) return deliverFailedCompletion(client.terminal.failedCompletion);
         if (Date.now() >= bufferedRead.deadlineAt) {
           return failBufferedTurn("buffered Responses turn exceeded the safe total deadline");
         }
 
-        const cancelAfterValidation = (): Response => {
-          responseEffects.responseCompletionCancelled = true;
-          options.onNativePassthroughCancel?.();
-          return clientCancelledResponse();
-        };
         if (signal.aborted) return cancelAfterValidation();
 
         const requiredFailure = await requiredToolFailure(JSON.stringify(client.terminal.response));
@@ -1184,26 +1230,6 @@ export async function deliverPassthroughResponse(
         // Effects intentionally run only after both bounded validations. They inspect the same
         // upstream-facing transcript as the streaming relay and fire once; continuation storage
         // receives the final client-visible response once after all restorations succeeded.
-        const reportNativeTerminal = recordTerminalOutcomes
-          ? (status: ResponsesTerminalStatus, httpStatusOverride?: number) => {
-            if (signal.aborted) return;
-            terminalRecorder?.(status, httpStatusOverride);
-            if (status === "failed" || status === "incomplete") {
-              const quotaFailureMessage = [httpStatusOverride, logCtx.terminalHttpStatus]
-                .find(value => value === 429 || value === 402);
-              if (!isFixedCodexAccount(admissionState.authCtx) && quotaFailureMessage !== undefined) {
-                recordSubagentQuotaFailureForThreadSpawn(
-                  req.headers,
-                  subagentQuotaFailureModel,
-                  quotaFailureMessage,
-                  config,
-                  requestState.subagentFallbackAccountId,
-                );
-              }
-            }
-            options.onNativePassthroughTerminal?.(status);
-          }
-          : undefined;
         const effectInspector = createSseInspector({
           onTerminal: reportNativeTerminal,
           logCtx,

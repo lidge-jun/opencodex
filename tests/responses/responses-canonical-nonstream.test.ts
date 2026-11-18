@@ -4,6 +4,7 @@ import { createResponsesPassthroughAdapter } from "../../src/adapters/openai-res
 import { getDefaultConfig } from "../../src/config";
 import { CODEX_FORWARD_BASE_URL } from "../../src/providers/openai-tiers";
 import { handleResponses } from "../../src/server/responses";
+import { addFinalRequestLog, httpStatusForRequestLogTerminal, type RequestLogContext } from "../../src/server/request-log";
 import { expandPreviousResponseInput } from "../../src/responses/state";
 import { setRelayPlatformForTests } from "../../src/server/responses/passthrough-delivery";
 import {
@@ -86,6 +87,7 @@ function call(
   body: Record<string, unknown>,
   options: HandleResponsesOptions = {},
   requestConfig: OcxConfig = config,
+  log: RequestLogContext = { model: "", provider: "" },
 ): Promise<Response> {
   releaseSpendHome = acquireOwnedSpendHome();
   return handleResponses(new Request("http://localhost/v1/responses", {
@@ -95,7 +97,7 @@ function call(
       authorization: "Bearer fixture-forward-token",
     },
     body: JSON.stringify(body),
-  }), requestConfig, { model: "", provider: "" }, options);
+  }), requestConfig, log, options);
 }
 
 function sseEvent(type: string, payload: Record<string, unknown>): string {
@@ -214,6 +216,54 @@ describe("physical hosted image replay safety", () => {
 });
 
 describe("canonical ChatGPT transport for non-streaming Responses callers (#6162)", () => {
+  for (const stream of [true, false]) {
+    test.each([
+      ["empty error object", { error: {} }],
+      ["empty last_error string", { last_error: "" }],
+      ["null error fields", { error: { type: null, code: null, message: null } }],
+    ] as const)(`placeholder completion still delivers the answer (stream=${stream}, %s)`, async (name, placeholder) => {
+      const log: RequestLogContext = { model: "", provider: "" };
+      const completed = { id: `resp_placeholder_${name.replaceAll(" ", "_")}_${stream}`, status: "completed", ...placeholder,
+        output: [{ type: "message", id: "msg_answer", role: "assistant", status: "completed",
+          content: [{ type: "output_text", text: "fixture answer", annotations: [] }] }] };
+      globalThis.fetch = (async () => new Response(sseEvent("response.completed", { response: completed }), {
+        headers: { "content-type": "text/event-stream" },
+      })) as typeof fetch;
+      const resp = await call(requestBody(stream, true), {}, config, log);
+      const text = await resp.text();
+      const outcome = log.observedTerminalStatus;
+      expect({ http: resp.status, outcome, logged: outcome && httpStatusForRequestLogTerminal(outcome, log), text }).toEqual({
+        http: 200, outcome: "completed", logged: 200, text: expect.stringContaining("fixture answer"),
+      });
+    });
+  }
+
+  test("buffered quota verdict on a completed frame settles usage and skips continuation writes", async () => {
+    const log: RequestLogContext = { model: "", provider: "" };
+    const id = "resp_buffered_quota_completion";
+    const error = { type: "rate_limit_error", code: "rate_limit_exceeded", message: "Fixture quota failure" };
+    const completed = { id, status: "completed", error, output: [],
+      usage: { input_tokens: 13, output_tokens: 7, total_tokens: 20 } };
+    globalThis.fetch = (async () => new Response(sseEvent("response.completed", { response: completed }), {
+      headers: { "content-type": "text/event-stream" },
+    })) as typeof fetch;
+    const resp = await call(requestBody(false, true), {}, config, log);
+    const body = await resp.json();
+    const settle = spyOn(log.spendTracker!, "settle");
+    try {
+      addFinalRequestLog("fixture-buffered-quota", Date.now(), log, resp.status, undefined, () => {});
+      const next = { previous_response_id: id, input: "retry" };
+      expect({ status: resp.status, body, terminal: log.observedTerminalStatus, settled: settle.mock.calls,
+        replay: expandPreviousResponseInput(next) }).toMatchObject({
+        status: 429, body: { error: { code: "rate_limit_exceeded" } }, terminal: "failed",
+        settled: [[{ inputTokens: 13, outputTokens: 7 }]], replay: next,
+      });
+      expect(expandPreviousResponseInput(next)).toEqual(next);
+    } finally {
+      settle.mockRestore();
+    }
+  });
+
   test.each([false, true])("forces upstream SSE without changing explicit store:%s", store => {
     const adapter = withTestTranslatorBudget(createResponsesPassthroughAdapter(provider));
     const parsed = {

@@ -250,7 +250,13 @@ describe("native streaming combo mandatory tools (#7456)", () => {
       }
     }
   }
-  test.each([false, true])("settles a cooldown reprobe only after a clean native terminal (error: %s)", async hasError => {
+  test.each([
+    ["no error", {}, false],
+    ["quota error", { error: { code: "rate_limit_exceeded" } }, true],
+    ["empty error object", { error: {} }, false],
+    ["empty last_error string", { last_error: "" }, false],
+    ["null error fields", { error: { type: null, code: null, message: null } }, false],
+  ] as const)("settles a cooldown reprobe only after a clean native terminal (%s)", async (_name, placeholder, hasError) => {
     const sent: Array<Record<string, unknown>> = [];
     const encoder = new TextEncoder();
     let stream!: ReadableStreamDefaultController<Uint8Array>;
@@ -267,7 +273,7 @@ describe("native streaming combo mandatory tools (#7456)", () => {
     const payload = completed("m1", true);
     const event = {
       type: "response.completed",
-      response: { ...payload, error: hasError ? { code: "rate_limit_exceeded" } : null },
+      response: { ...payload, ...placeholder },
     };
     stream.enqueue(encoder.encode(frame(event)));
     stream.close();

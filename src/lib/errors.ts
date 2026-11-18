@@ -91,8 +91,10 @@ export function namesModelNotInPlanCode(code: string | null | undefined): boolea
   return typeof code === "string" && code.trim().toLowerCase().replaceAll("-", "_") === MODEL_NOT_IN_PLAN_CODE;
 }
 
-/** An error on either carrier overrides an SSE completion for internal outcome accounting. */
-export function responsesCompletionError(payload: unknown): unknown {
+type CompletionError = { type?: string; code?: string; message?: string };
+
+/** Meaningful error evidence on either carrier overrides an SSE completion. */
+export function responsesCompletionError(payload: unknown): CompletionError | undefined {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
   const event = payload as {
     type?: unknown;
@@ -101,7 +103,20 @@ export function responsesCompletionError(payload: unknown): unknown {
     response?: { error?: unknown; last_error?: unknown };
   };
   if (event.type !== "response.completed") return undefined;
-  return event.error ?? event.last_error ?? event.response?.error ?? event.response?.last_error;
+  const nonblank = (value: unknown): string | undefined =>
+    typeof value === "string" && value.trim() ? value : undefined;
+  for (const candidate of [event.error, event.last_error, event.response?.error, event.response?.last_error]) {
+    if (typeof candidate === "string") {
+      if (nonblank(candidate)) return { message: candidate };
+    } else if (candidate && typeof candidate === "object" && !Array.isArray(candidate)) {
+      const record = candidate as Record<string, unknown>;
+      const type = nonblank(record.type);
+      const code = nonblank(record.code);
+      const message = nonblank(record.message);
+      if (type || code || message) return { type, code, message };
+    }
+  }
+  return undefined;
 }
 
 /** First nonblank string across the canonical upstream error paths, in priority order. */

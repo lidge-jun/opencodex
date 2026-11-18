@@ -372,7 +372,7 @@ function captureTerminalHttpStatus(
     if (type === "error") provisionalStatuses.set(logCtx, status);
   };
   // Clean completions only retire provisional bare-error evidence.
-  const completionError = responsesCompletionError(json) as UpstreamErrorPayload["error"];
+  const completionError = responsesCompletionError(json);
   if (type === "response.completed" && completionError == null) return;
   const responseDetails = json.response?.incomplete_details;
   const candidates: Array<{ type?: unknown; code?: unknown; message?: unknown } | undefined> = [
