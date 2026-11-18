@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { isTestHomeGuardArmed } from "../../lib/test-home-guard";
 import { detectClaudeCodeTokenAsync } from "../../oauth/local-token-detect";
-import { readAnthropicUsageQuota } from "../../providers/claude-cli-usage";
+import { readClaudeCliUsageQuota } from "../../providers/claude-cli-usage";
 import {
   claudeUsageStatePath,
   loadClaudeUsageSnapshot,
@@ -162,7 +162,7 @@ async function checkAdmission(model: string, deps: AdmissionDeps, now: number): 
   if (!probe) {
     probe = (async () => {
       let quota: ProviderQuota | null = null;
-      try { quota = await (deps.probe ?? readAnthropicUsageQuota)(identity.access); } catch { /* Unavailable is unknown. */ }
+      try { quota = await (deps.probe ?? readClaudeCliUsageQuota)(identity.access); } catch { /* Unavailable is unknown. */ }
       // A login change during the probe makes this answer belong to no current account: neither
       // persist it nor admit or refuse with it.
       if ((await resolveIdentity(deps, true))?.key !== identity.key) return null;

@@ -167,11 +167,22 @@ is rejected before consultation, worker redispatch, or disclosure of its ID and 
 The original selection also governs client tools named `advisor` in any namespace. With a forced
 hosted search, both those tools and manual proxy consultations are excluded.
 When translated Messages explicitly selects Anthropic's hosted `advisor`, OpenCodex forwards the
-original declaration and named choice on an eligible route. A combo or routing profile can skip
+original declaration and named choice on an eligible route. An applicable token spend ceiling or an
+operator-configured credential header such as `api-key` makes the selected target ineligible before
+image preprocessing or model dispatch. A combo or routing profile can skip
 incompatible candidates under its fallback policy. OpenCodex returns HTTP 400 locally when
 the selection is ambiguous or all attempted candidates are incompatible. Both outcomes skip
 proxy consultations. On other turns, automatic preflight and adaptive consultations follow
 operator policy.
+
+Before the worker send, OpenCodex verifies that upstream plugin rewrites preserve the admitted
+credential without adding a conflicting credential header. A failed check makes that target
+ineligible for an explicit hosted Advisor selection. A worker send refused by this check uses no
+slot from the workflow's send budget, including on an empty-completion retry.
+
+If a spend ceiling or a failed credential check withholds optional hosted Advisor, the declaration, replay and beta stay withheld
+throughout the translated turn, including when a fallback candidate uses a different credential.
+Identity ceilings cover the API key sent to an Anthropic-compatible gateway, including with `authMode: "local"`.
 
 Automatic preflight keeps the fixed runtime transport instruction in a developer message and
 puts the quoted JSON advice in a separate **user-role advisory message**. Advisor-generated text

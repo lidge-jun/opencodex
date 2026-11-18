@@ -49,6 +49,11 @@ export interface RequestSpendTracker extends RequestSendObserver, RequestSpendSe
   requestFinalSettlement(usage: TerminalSpendUsage | undefined): void;
 }
 
+/** Freeze only the numeric ceilings. Accounting mode is chosen at physical spend admission. */
+export function captureRequestSpendPolicy(policy: SpendAdmissionPolicy = sharedSpendPolicy()): SpendAdmissionPolicy {
+  return Object.freeze({ root: Object.freeze({ ...policy.root }), identity: Object.freeze({ ...policy.identity }), pool: Object.freeze({ ...policy.pool }) });
+}
+
 /**
  * One request's entries in the durable spend ledger (#4707).
  *
@@ -75,6 +80,7 @@ export function createRequestSpendTracker(
   > & Partial<Pick<RequestLogContext, "localTerminalReason" | "terminalSource" | "errorCode" | "spendRefusalDetail">>,
   rootId: string | undefined,
   injected?: SpendReservationLedger,
+  capturedPolicy?: SpendAdmissionPolicy,
 ): RequestSpendTracker {
   // Resolved on the first CHARGE, not when the request is built. The shared ledger opens a
   // journal under the OpenCodex home, and a request that never dispatches -- refused at
@@ -83,6 +89,7 @@ export function createRequestSpendTracker(
   let ledgerRef: SpendReservationLedger | undefined = injected;
   const ledger = (): SpendReservationLedger => (ledgerRef ??= sharedSpendLedger());
   let admissionPolicy: SpendAdmissionPolicy | undefined;
+  const capturePolicy = (): SpendAdmissionPolicy => capturedPolicy ??= captureRequestSpendPolicy(ledgerRef?.policy);
   let initialEnforced: boolean | undefined;
   // Outstanding entries; exact dispatch reports move their reservation to the end.
   const live: string[] = [];
@@ -107,13 +114,12 @@ export function createRequestSpendTracker(
     ...(target.identityId ?? logCtx.accountLogLabel ? { identityId: target.identityId ?? logCtx.accountLogLabel } : {}),
     ...(target.poolId ?? logCtx.spendPoolId ?? logCtx.provider ? { poolId: target.poolId ?? logCtx.spendPoolId ?? logCtx.provider } : {}),
   });
-  const applicable = (scopes: SpendScopes): boolean => {
-    if (initialEnforced !== undefined) return initialEnforced;
-    const policy = admissionPolicy ?? ledgerRef?.policy ?? sharedSpendPolicy();
-    return (scopes.rootId !== undefined && policy.root.maxTokens !== undefined)
-      || (scopes.identityId !== undefined && policy.identity.maxTokens !== undefined)
-      || (scopes.poolId !== undefined && policy.pool.maxTokens !== undefined);
-  };
+  const policyApplies = (policy: SpendAdmissionPolicy, scopes: SpendScopes): boolean =>
+    (scopes.rootId !== undefined && policy.root.maxTokens !== undefined)
+    || (scopes.identityId !== undefined && policy.identity.maxTokens !== undefined)
+    || (scopes.poolId !== undefined && policy.pool.maxTokens !== undefined);
+  const applicable = (scopes: SpendScopes): boolean => initialEnforced
+    ?? policyApplies(admissionPolicy ?? capturedPolicy ?? ledgerRef?.policy ?? sharedSpendPolicy(), scopes);
   const estimates = () => ({ inputTokens: logCtx.spendInputEstimateTokens ?? logCtx.usageLogInputTokens ?? 0,
     outputCeilingTokens: logCtx.spendOutputCeilingTokens ?? 0 });
   const seedState = (seed: SpendSeed) => [...seeds.values()].find(state => state.seed === seed);
@@ -249,14 +255,16 @@ export function createRequestSpendTracker(
     },
     startRequest(target) {
       if (admissionPolicy) return;
-      const policy = ledgerRef?.policy ?? sharedSpendPolicy();
-      admissionPolicy = Object.freeze({ root: Object.freeze({ ...policy.root }), identity: Object.freeze({ ...policy.identity }), pool: Object.freeze({ ...policy.pool }) });
+      admissionPolicy = capturePolicy();
       initialEnforced = applicable(selectedScopes(target));
       if (!initialEnforced) admissionPolicy = Object.freeze({ root: Object.freeze({}), identity: Object.freeze({}), pool: Object.freeze({}) });
     },
+    // Combo prepayment can fix observe-only accounting before its child has an identity.
+    // Optional hosted work still consults the original ceilings, never the live ledger policy.
+    hasCapturedSpendCeiling(target) { return policyApplies(capturePolicy(), selectedScopes(target)); },
     get enforced(): boolean { return applicable(selectedScopes()); },
     get policyStarted(): boolean { return admissionPolicy !== undefined; },
-    get spendAdmissionPolicy(): SpendAdmissionPolicy | undefined { return admissionPolicy; },
+    get spendAdmissionPolicy(): SpendAdmissionPolicy | undefined { return admissionPolicy ?? capturedPolicy; },
     ensureSeed(target, prepaidProof) {
       tracker.startRequest?.(target);
       if (resolved || finalRequested && reporters === 0) return undefined;
@@ -523,13 +531,12 @@ export function attachRequestSpendTracker(
   req: Pick<Request, "headers">,
   logCtx: RequestLogContext,
   ledger?: SpendReservationLedger,
+  capturedPolicy?: SpendAdmissionPolicy,
 ): RequestSpendTracker {
   const existing = logCtx.spendTracker as RequestSpendTracker | undefined;
   if (existing && trackerRequests.get(existing) === req) return existing;
   const rootId = req.headers.get("x-codex-parent-thread-id")?.trim() || undefined;
-  const tracker = ledger === undefined
-    ? createRequestSpendTracker(logCtx, rootId)
-    : createRequestSpendTracker(logCtx, rootId, ledger);
+  const tracker = createRequestSpendTracker(logCtx, rootId, ledger, capturedPolicy);
   logCtx.spendTracker = tracker;
   trackerRequests.set(tracker, req);
   return tracker;

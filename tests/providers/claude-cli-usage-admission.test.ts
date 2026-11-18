@@ -16,7 +16,7 @@ import {
 } from "../../src/adapters/claude-cli/usage-admission";
 import { getAdapterDefinition } from "../../src/adapters/registry";
 import { getConfigDir } from "../../src/config/paths";
-import { probeAnthropicUsageQuota } from "../../src/providers/claude-cli-usage";
+import { readClaudeCliUsageQuota } from "../../src/providers/claude-cli-usage";
 import { handleResponses } from "../../src/server/responses";
 import type { AdapterEvent, OcxConfig, OcxParsedRequest, OcxProviderConfig } from "../../src/types";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
@@ -171,14 +171,18 @@ describe("Claude usage admission cache", () => {
 });
 
 describe("Claude paid usage", () => {
-  async function parsedQuota(extra: unknown, now: number) {
+  async function withPaidUsageResponse<T>(extra: unknown, now: number, read: () => Promise<T>): Promise<T> {
     const previous = globalThis.fetch;
     globalThis.fetch = (async () => Response.json({
       seven_day: { utilization: 100, resets_at: new Date(now + 86_400_000).toISOString() },
       extra_usage: extra,
     })) as typeof fetch;
-    try { return (await probeAnthropicUsageQuota("synthetic-paid-usage-bearer")).quota; }
+    try { return await read(); }
     finally { globalThis.fetch = previous; }
+  }
+
+  function parsedQuota(extra: unknown, now: number) {
+    return withPaidUsageResponse(extra, now, () => readClaudeCliUsageQuota("synthetic-paid-usage-bearer"));
   }
 
   test("stale subscription exhaustion is rechecked before its future reset", async () => {
@@ -216,10 +220,10 @@ describe("Claude paid usage", () => {
   for (const [extra, paidState, admissionState] of paidUsageCases) {
     test(`classifies ${JSON.stringify(extra)} as ${paidState} with exhausted-plan admission ${admissionState}`, async () => {
       const now = Date.now();
-      const quota = await parsedQuota(extra, now);
-      expect(quota?.claudeExtraUsage).toBe(paidState);
-      const status = await checkClaudeUsageAdmission("claude-opus-5-5", { now: () => now, identity,
-        statePath: tempState(), probe: async () => quota });
+      const statePath = tempState();
+      const status = await withPaidUsageResponse(extra, now, () =>
+        checkClaudeUsageAdmission("claude-opus-5-5", { now: () => now, identity, statePath }));
+      expect(JSON.parse(readFileSync(statePath, "utf8")).quota.claudeExtraUsage).toBe(paidState);
       expect(status.state).toBe(admissionState);
     });
   }
