@@ -330,6 +330,11 @@ export const EXPECTED_PRICE_OVERLAYS: readonly ExpectedPriceOverlay[] = [
       { provider: "openai-apikey", modelId, cost4, source, verifiedAt: GPT62_VERIFIED_AT, status: "verified" },
       { provider: "openai", modelId, cost4, source: `API-reference comparison estimate: ${source}`, verifiedAt: GPT62_VERIFIED_AT, status: "verified-derived" },
       { provider: "openrouter", modelId: `openai/${modelId}`, cost4, source: "https://openrouter.ai/api/v1/models", verifiedAt: GPT62_VERIFIED_AT, status: "verified" },
+      // 261118 preemptive: Devin uid follows gpt-6-1-sol; API-reference estimate, not billing.
+      ...(["devin-cli", "devin"] as const).map((provider): ExpectedPriceOverlay => ({
+        provider, modelId: modelId.replaceAll(".", "-"), cost4,
+        source: `derived: OpenAI API list price ${source}; Devin uid mirrors gpt-6-1-sol`, verifiedAt: GPT62_VERIFIED_AT, status: "verified-derived",
+      })),
     ];
   }),
   { provider: "openai-apikey", modelId: "gpt-6-astra", cost4: GPT6_ASTRA, source: ASTRA_API_PRICING, verifiedAt: "2026-09-05", status: "verified" },
