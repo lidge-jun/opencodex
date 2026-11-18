@@ -69,7 +69,7 @@ The shared `src/adapters/coding-agent/turn.ts` calls the synchronous `IncomingMe
   matches from an ACP provider's built-in aliases or model alias template. Canonical OpenAI model routing retains
   precedence for bare native OpenAI IDs when the OpenAI row is enabled. The use policy
   (`src/adapters/agy-acp/policy.ts`) refuses subagent turns (`x-codex-parent-thread-id`), turns Codex labels as spawned threads (`isThreadSpawnRequest`) or as
-  its memory pipeline (`detectMemoryModelPhase`, `x-openai-subagent: memory_consolidation`, `x-openai-memgen-request`).
+  its memory pipeline (`detectMemoryModelPhase`, `x-openai-subagent: memory_consolidation`, `x-openai-memgen-request`), or as automatic compaction (`request_kind: "compaction"` with `trigger: "auto"`; manual compaction runs).
   A spawn label in the WebSocket frame body is sufficient. Explicit user-turn metadata there supersedes a stale spawn
   label from the upgrade's turn metadata. A connection labeled `collab_spawn` still refuses every frame. A spawn
   label in the upgrade's turn metadata still refuses frames without explicit user provenance. An HTTP memory label in the header is sufficient even

@@ -5,7 +5,7 @@
  * when use is interactive and user-directed, not an unattended worker pool or automated agent loop,
  * and points programmatic workloads to a Gemini API key or Vertex AI. OpenCodex documents that and
  * enforces only signals it can know for certain: a subagent turn (`x-codex-parent-thread-id`), an
- * unattended Codex turn that Codex itself labels (a memory-pipeline turn or a spawned thread), a
+ * unattended Codex turn that Codex itself labels (a memory-pipeline turn, an automatic compaction or a spawned thread), a
  * combo member or a combo's internal decision call, a route chosen by subagent fallback, and a
  * request the listener classified as remote. No heuristic beyond those is applied.
  */
@@ -36,8 +36,19 @@ export interface AgyAcpPolicyRefusal {
   message: string;
 }
 
-const INTERACTIVE_MESSAGE = "The Antigravity CLI (ACP) provider is for interactive, user-directed turns only: it refuses subagent and spawned-thread turns, Codex memory turns, combo members and combo decision calls, and subagent-fallback routing, per Google's terms for the agy acp binary. Use a Gemini API key or Vertex AI for programmatic workloads.";
+const INTERACTIVE_MESSAGE = "The Antigravity CLI (ACP) provider is for interactive, user-directed turns only: it refuses subagent and spawned-thread turns, Codex memory and automatic compaction turns, combo members and combo decision calls, and subagent-fallback routing, per Google's terms for the agy acp binary. Use a Gemini API key or Vertex AI for programmatic workloads.";
 const LOCAL_MESSAGE = "The Antigravity CLI (ACP) provider requires a local connection to the proxy host. Hub links and connections classified as remote are refused. Use a Gemini API key or Vertex AI for shared or programmatic workloads.";
+
+/** Codex labels its own automatic compaction (`request_kind: "compaction"`, `trigger: "auto"`); a manual /compact is user-directed. */
+function isAutoCompactionMetadata(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  try {
+    const metadata = JSON.parse(value) as { request_kind?: unknown; compaction?: { trigger?: unknown } | null } | null;
+    return metadata?.request_kind === "compaction" && metadata.compaction?.trigger === "auto";
+  } catch {
+    return false;
+  }
+}
 
 function isExplicitUserTurn(value: unknown): boolean {
   if (typeof value !== "string") return false;
@@ -61,6 +72,8 @@ function isUnattendedCodexTurn({ headers, body, inboundTransport }: AgyAcpPolicy
   const turn = client && typeof client === "object" && "x-codex-turn-metadata" in client
     ? client["x-codex-turn-metadata"] : undefined;
   if (isThreadSpawnTurnMetadata(turn)) return true;
+  if (isAutoCompactionMetadata(turn)) return true;
+  if (inboundTransport !== "websocket" && isAutoCompactionMetadata(headers.get("x-codex-turn-metadata"))) return true;
   if (inboundTransport !== "websocket" && isThreadSpawnRequest(headers)) return true;
   if (inboundTransport === "websocket") {
     // collab_spawn describes the connection. Only explicit user provenance supersedes a

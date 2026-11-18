@@ -89,6 +89,17 @@ describe("use policy", () => {
     expect(runWithRequestPeer({ local: true }, () => agyAcpPreflightResponse({ ...base, adapterName: "agy-acp", internalDecisionCall: true }))?.status).toBe(403);
   });
 
+  test("Codex automatic compaction is refused on HTTP and WebSocket; a manual compaction runs", () => {
+    const meta = (trigger: string) => JSON.stringify({ request_kind: "compaction", compaction: { trigger, implementation: "responses" } });
+    const http = (value: string) => agyAcpPolicyRefusal({ headers: new Headers({ "x-codex-turn-metadata": value }), body: {}, local: true })?.code;
+    const frame = (value: string) => agyAcpPolicyRefusal({ headers: new Headers(), inboundTransport: "websocket", local: true,
+      body: { client_metadata: { "x-codex-turn-metadata": value } } })?.code;
+    expect(http(meta("auto"))).toBe("agy_acp_interactive_only");
+    expect(frame(meta("auto"))).toBe("agy_acp_interactive_only");
+    expect(http(meta("manual"))).toBeUndefined();
+    expect(frame(meta("manual"))).toBeUndefined();
+  });
+
   test("a WebSocket frame's own spawned-thread label is refused without a header copy", () => {
     expect(agyAcpPolicyRefusal({
       headers: new Headers(), inboundTransport: "websocket", local: true,
