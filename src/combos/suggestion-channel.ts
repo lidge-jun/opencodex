@@ -1,4 +1,4 @@
-import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers-destination";
+import { isCanonicalOpenAiForwardProvider } from "../providers/openai-forward-destination";
 
 export interface SuggestionProvider {
   name: string;

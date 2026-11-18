@@ -1,4 +1,4 @@
-import { isCanonicalOpenAiForwardProvider } from "../providers/openai-tiers-destination";
+import { isCanonicalOpenAiForwardProvider } from "../providers/openai-forward-destination";
 import { providerRelativeSendPathConfigError } from "../config/provider-relative-send-path";
 import { contextTierRecordConfigError, modelCapabilitiesConfigError, providerInputModalitiesConfigError } from "../config/provider-validation";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
