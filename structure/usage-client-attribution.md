@@ -208,7 +208,8 @@ The existing in-place split preserves the active object, keeps the refused send'
 sealed row and records the replacement send on a fresh row. The sealed tier outcome is a snapshot;
 the replacement retains the live adapter observer's outcome so response-tier confirmation updates
 only the replacement. Native Responses OAuth 401 recovery commits the split at physical dispatch,
-after pacing and admission.
+after pacing and admission. It attaches the rebuilt request's tier only after sealing the
+refusal.
 A recovery before the first send creates no extra row. Same-account waits and transport resends remain on the existing attempt.
 `tests/usage/key-attribution.test.ts` covers the split and non-split kinds; the loopback server
 case in `tests/server/server-google-antigravity-oauth-401-replay.test.ts` records separate 401

@@ -12,6 +12,8 @@ import { XAI_OAUTH_DISCOVERY_URL } from "../../src/oauth/xai";
 import { getAccountSet, saveCredential } from "../../src/oauth/store";
 import { clearModelCache, getProviderDiscoveryStatus, isModelsFetchCoolingDown, markModelsFetchFailure, MODELS_FETCH_FAILURE_COOLDOWN_MS } from "../../src/codex/model-cache";
 import { XAI_GROK_CLI_BASE_URL } from "../../src/providers/xai-transport";
+import { ADAPTER_REGISTRY } from "../../src/adapters/registry";
+import { createAdapterTierMetadata } from "../../src/providers/fastwire";
 import * as requestPacing from "../../src/providers/request-pacing";
 import { readUsageEntries, usageLogPath } from "../../src/usage/log";
 import { startServer } from "../../src/server";
@@ -262,6 +264,39 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
       expect(readUsageEntries().at(-1)?.attempts?.map(attempt => attempt.sendCount)).toEqual([1]);
     } finally {
       pacing.mockRestore();
+      await server.stop(true);
+    }
+  });
+
+  test("the refreshed request tier does not overwrite the first OAuth send's tier", async () => {
+    await seedOAuth();
+    saveConfig(xaiConfig());
+    const observed = installOAuthFetch([401, 200]);
+    const server = startServer(0);
+    const create = ADAPTER_REGISTRY["openai-responses"].create;
+    const factory = spyOn(ADAPTER_REGISTRY["openai-responses"], "create").mockImplementation((provider, context) => {
+      const adapter = create(provider, context);
+      const build = adapter.buildRequest.bind(adapter);
+      adapter.buildRequest = async (...args) => {
+        const request = await build(...args);
+        const tier = provider.apiKey === "fresh-access" ? "priority" : "default";
+        const tierLog = createAdapterTierMetadata({ capability: true, eligibility: "eligible",
+          fastWire: { kind: "service-tier", canonicalToWire: { priority: "priority" }, foreignCallerTiers: "verbatim" },
+          demandDecision: "force-fast" }, { kind: "set", value: tier }, "service-tier", tier);
+        request.body = JSON.stringify({ ...JSON.parse(String(request.body)), service_tier: tier });
+        return { ...request, tierLog };
+      };
+      return adapter;
+    });
+    try {
+      const response = await post(server);
+      expect(response.status).toBe(200);
+      await response.text();
+      expect(observed.chatAuth).toEqual(["Bearer rejected-access", "Bearer fresh-access"]);
+      expect(readUsageEntries().at(-1)?.attempts?.map(attempt => [attempt.status, attempt.tierOutcome?.wireValue]))
+        .toEqual([[401, "default"], [200, "priority"]]);
+    } finally {
+      factory.mockRestore();
       await server.stop(true);
     }
   });

@@ -116,6 +116,8 @@ import {
   beginRequestAttempt,
   sealRequestAttemptIdentity,
   recordAttemptCredentialSource,
+  recordAdapterReasoning,
+  recordAdapterTier,
   recordAdapterTierMetadata,
   noteProviderAttemptSend,
   recordKeyAttemptFailure,
@@ -635,7 +637,7 @@ export async function prepareResponsesTransport(
   const createOAuthReplayAttempt = () => {
     const deferred = attemptSendDeferred();
     let dispatched = false;
-    return (adapter: string, estimate: number | undefined, recovery?: AttemptRecoveryKind) => {
+    return (request: AdapterRequest, adapter: string, estimate: number | undefined, recovery?: AttemptRecoveryKind) => {
       const publishReplacement = (): void => {
         const attempt = logCtx.activeAttempt;
         if (!deferred) {
@@ -644,6 +646,8 @@ export async function prepareResponsesTransport(
           sealRequestAttemptIdentity(attempt, logCtx.provider, adapter, logCtx.accountLogLabel);
           recordAttemptCredentialSource(attempt, route.providerName, route.provider, adapter);
         }
+        recordAdapterReasoning(logCtx, request);
+        recordAdapterTier(logCtx, request);
         dispatched = true;
       };
       const kind = dispatched ? recovery : "oauth-401";
