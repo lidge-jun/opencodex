@@ -97,6 +97,9 @@ export interface ProviderAdapter {
    */
   reportsPhysicalSends?: boolean;
 
+  /** Upper bound on physical sends for one hosted-tool model iteration. */
+  hostedIterationSendLimit?: number;
+
   /**
    * Convert an already-read provider HTTP error into client-safe text. This hook must be pure and
    * return fully redacted output: callers may pass untrusted provider headers and payload text.

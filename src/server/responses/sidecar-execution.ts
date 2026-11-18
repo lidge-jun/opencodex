@@ -344,12 +344,18 @@ export async function executeResponsesSidecars(
     responseHeaders?: Headers,
     retryParsed?: OcxParsedRequest,
     originalResponse?: Response,
+    hiddenUsage?: OcxUsage,
   ): Promise<{ adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind } | null> => {
     if (originalResponse && !transportState.isCurrentInferenceResponse(originalResponse)) return null;
     const antigravityValidationResponse = canRunWebSearch && route.providerName === "google-antigravity"
       && route.provider.authMode === "oauth" && originalResponse?.status === 403;
     if (route.providerName !== "kiro" && !(anthropicInstance && (originalResponse?.status === 403 || originalResponse?.status === 401))
       && !antigravityValidationResponse && originalResponse && originalResponse.status !== 429) return null;
+    const sealSidecarRefusal = (recovery: AttemptRecoveryKind | undefined): void => {
+      if (!originalResponse) return;
+      if (hiddenUsage) transportState.bindKeyUsageFromBridge(hiddenUsage);
+      sealCredentialRefusal(logCtx, originalResponse.status, recovery);
+    };
     let antigravityVerification = false;
     if (antigravityValidationResponse) {
       if (transportState.adapter.name !== "google" || !antigravityPoolActivated
@@ -426,7 +432,7 @@ export async function executeResponsesSidecars(
       route.provider = rotated;
       try { await resolveCopilotSelection(retryParsed ?? parsed); }
       catch (error) { // Keep the sidecar's original refusal when replacement negotiation fails.
-        if (originalResponse) sealCredentialRefusal(logCtx, originalResponse.status, recoveryKind);
+        sealSidecarRefusal(recoveryKind);
         noteSidecarScopeDenial(error);
         return null;
       }
@@ -466,13 +472,13 @@ export async function executeResponsesSidecars(
         const snapshot = await failoverAccountSnapshot(route.providerName, nextAccountId);
         if (route.providerName !== "kiro") transportState.genericFailovers += 1;
         if (!await applyFailoverSnapshot(snapshot, retryParsed)) {
-          if (originalResponse) sealCredentialRefusal(logCtx, originalResponse.status, "oauth-account-429");
+          sealSidecarRefusal("oauth-account-429");
           hop.permit?.release();
           return null;
         }
         if (route.providerName === "kiro") transportState.genericFailovers += 1;
       } catch (error) {
-        if (originalResponse) sealCredentialRefusal(logCtx, originalResponse.status, "oauth-account-429");
+        sealSidecarRefusal("oauth-account-429");
         noteSidecarScopeDenial(error);
         hop.permit?.release();
         return null;
@@ -644,6 +650,9 @@ export async function executeResponsesSidecars(
     transportState.bindKeyUsageFromBridge(usage);
     return true;
   };
+  const configureModelSendAllowance = !options.comboAttempt && !options.comboInitialSend && !routedCompaction
+    ? (baseSends: number) => expandInferenceSearchSendBudget(options.sendBudget, baseSends)
+    : undefined;
   if ((imgPlan || vidPlan) && wsPlan) {
     // Web search takes priority when both are active — the media bridge cannot run
     // alongside runWithWebSearch. Surface a runtime signal so the user knows their
@@ -701,6 +710,7 @@ export async function executeResponsesSidecars(
       { providerName: route.providerName, modelId: route.modelId, ...sidecarBudget.fetchOptions(transportState.adapter) },
     );
     const imgLoopResponse = await runWithImageBridge({
+      configureModelSendAllowance,
       parsed, adapter: transportState.adapter,
       chatRawReasoningVisible: options.chatRawReasoningVisible,
       ...(transportState.adapter.name === "anthropic" ? { thinkingRecovery } : {}),
@@ -831,9 +841,7 @@ export async function executeResponsesSidecars(
         ...sidecarBudget.fetchOptions(transportState.adapter),
       })(input, init)) as typeof globalThis.fetch;
     const loopResponse = await runWithWebSearch({
-      ...(!options.comboAttempt && !options.comboInitialSend && !routedCompaction
-        && !transportState.adapter.fetchResponse && !transportState.adapter.runTurn
-        ? { configureModelSendAllowance: baseSends => expandInferenceSearchSendBudget(options.sendBudget, baseSends) } : {}),
+      configureModelSendAllowance,
       emptyCompletionRetry: emptyCompletionRetryEnabled(config) && !options.comboAttempt && !routedCompaction,
       dispatchSidecarSend: sendBudgetState.dispatchSidecarSend,
       parsed, adapter: transportState.adapter,

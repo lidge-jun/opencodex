@@ -1,3 +1,4 @@
+import { expandInferenceSearchSendBudget } from "../inference/context";
 import { formatClientRetryAfter } from "../../lib/client-retry-after";
 import { mapSpendLedgerStorageError } from "./spend-storage-error";
 import { responsesTimeoutProvider, type ResponsesRequestContext, type ResponsesAdmissionState } from "./core-options";
@@ -55,7 +56,7 @@ import { undeclaredToolCallMessage } from "../responses-undeclared-tool-guard";
 import { currentTurnToolBridgeMaps, emptyToolCatalogRefusal, guardEmptyToolCatalogEvents, guardEmptyToolCatalogStream } from "../../lib/empty-tool-catalog";
 // LOCAL PATCH (runturn-websearch)
 import { planWebSearch } from "../../web-search";
-import { runTurnWebSearchInitialParsed, runTurnWebSearchLoop } from "../../web-search/run-turn-loop";
+import { runTurnWebSearchInitialParsed, runTurnWebSearchIterationLimit, runTurnWebSearchLoop } from "../../web-search/run-turn-loop";
 import { stripReplayedSearchPairs } from "../../web-search/sidecar-search-replay";
 import { WEB_SEARCH_TOOL_NAME } from "../../web-search/synthetic-tool";
 import { orderDevinMessagesOutput } from "../../claude/devin-output-order";
@@ -239,6 +240,11 @@ export async function executeResponsesRunTurn(
     throw error;
   }
   if (!wsPlan) stripReplayedSearchPairs(parsed);
+  const iterationSendLimit = transportState.runTurnAdapter.hostedIterationSendLimit;
+  if (wsPlan && iterationSendLimit && !options.comboAttempt && !options.comboInitialSend) {
+    expandInferenceSearchSendBudget(options.sendBudget,
+      runTurnWebSearchIterationLimit(wsPlan.maxSearches) * iterationSendLimit);
+  }
 
     const runTurnAbort = new AbortController();
     const cleanupRequestAbort = linkAbortSignal(runTurnAbort, req.signal);

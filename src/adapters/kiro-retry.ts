@@ -21,6 +21,8 @@ const RESET_ATTEMPTS = 3;
 const RESET_RETRY_BASE_MS = 150;
 const RESET_RETRY_MAX_MS = 1_000;
 const THROTTLE_ATTEMPTS = 3;
+// A throttle round can try both the runtime and legacy endpoint.
+export const KIRO_FETCH_SEND_LIMIT = THROTTLE_ATTEMPTS * 2 * RESET_ATTEMPTS;
 const CANONICAL_RUNTIME_HOST = /^runtime\.([a-z]{2}(?:-[a-z]+)+-\d)\.kiro\.dev$/i;
 const ENDPOINT_ERROR_MARKERS = [
   "unknownoperation",

@@ -325,7 +325,6 @@ La proyección JEV informa de recuentos y puertas de decisión, aplicados frente
 Las estadísticas JEV utilizan el mismo libro mayor de solo apéndice `usage.jsonl` y escáner cooperativo como uso ordinario. Las lecturas en frío escanean el libro mayor actual, las encuestas sin cambios no leen ningún archivo y el crecimiento verificado dobla solo el sufijo adjunto. Las solicitudes idénticas simultáneas comparten una exploración. El registro JEV persistente está cerrado y libre de contenido: ID combinado, proveedor/modelo/esfuerzo seleccionado, puerta de decisión, latencia, confianza/probabilidad opcional y uso de decisión numérica opcional. Nunca almacena mensajes, encabezados, credenciales, argumentos de herramientas o respuestas TypeSafe sin procesar. Las filas sobredimensionadas conservan el mismo diagnóstico positivo `usageIncomplete` que el punto final de uso ordinario.
 
 En los turnos enrutados de imagen y búsqueda web, `sendCount` incluye los reintentos del adaptador ante el proveedor.
-Cada envío al modelo en estos turnos consume el presupuesto compartido de la solicitud, incluidos los reintentos y las rondas posteriores de herramientas. Los envíos rechazados al alcanzar el límite no incrementan `sendCount`. En la búsqueda web alojada directa mediante HTTP genérico, el presupuesto predeterminado añade un envío por cada ronda posterior que autoriza el bucle de búsqueda. Los límites de envío explícitos siguen aplicándose.
 Si el reemplazo se detiene antes de enviarse al proveedor, no suma ningún envío.
 
 Los nuevos intentos xAI en `usage.jsonl` incluyen un tiempo de solicitud `credentialSource`: `grok-oauth` para el transporte de llaves resuelto Grok CLI OAuth, o `xai-api-key` para el transporte público xAI API. Esta etiqueta fija no contiene credenciales ni identificador de cuenta. Pertenece a cada elemento en `attempts`, por lo que el total de tokens agregados de un combo no debe atribuirse a su proveedor final. Los destinos personalizados y las filas históricas omiten el campo; los consumidores no deben inferir el uso de la suscripción desde la configuración actual, el nombre del modelo o la clave entrante API. El registro informa el uso, no los montos de la factura de suscripción.
@@ -343,7 +342,7 @@ la solicitud puede terminar con estado 429 mientras que su único intento ante e
 compactación nativa de Responses.
 Cada envío al modelo en estos turnos usa el presupuesto compartido de la solicitud, incluidos los
 reintentos y las rondas posteriores de herramientas. Si se rechaza un envío al alcanzar el límite,
-`sendCount` no aumenta. En la búsqueda web alojada que usa HTTP genérico directo, el presupuesto
+`sendCount` no aumenta. En la búsqueda web alojada directa, el presupuesto
 predeterminado cubre las rondas acotadas del modelo, incluido el reintento de respuesta forzada y los
 reintentos habilitados de recuperación, por límite de frecuencia o por reinicio de la conexión.
 Los límites explícitos de envíos siguen vigentes.

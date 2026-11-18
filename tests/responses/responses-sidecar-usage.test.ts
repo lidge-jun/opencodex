@@ -47,15 +47,17 @@ afterEach(() => {
 });
 
 /** Build the synthetic Kiro completion frames consumed by all three dispatch fixtures. */
-function completedAnswer(): Response {
+function completedAnswer(searchRound?: number): Response {
   const frame = (type: string, value: Record<string, unknown>) => encodeMessage(
     { ":message-type": "event", ":event-type": type },
     new TextEncoder().encode(JSON.stringify(value)),
   );
-  const tool = { name: KIRO_COMPLETION_TOOL_NAME, toolUseId: "synthetic-completion" };
+  const tool = searchRound === undefined
+    ? { name: KIRO_COMPLETION_TOOL_NAME, toolUseId: "synthetic-completion" }
+    : { name: "web_search", toolUseId: `synthetic-search-${searchRound}` };
   return new Response(Buffer.concat([
     frame("toolUseEvent", tool),
-    frame("toolUseEvent", { ...tool, input: JSON.stringify({ answer: "Completed fixture answer." }) }),
+    frame("toolUseEvent", { ...tool, input: JSON.stringify(searchRound === undefined ? { answer: "Completed fixture answer." } : { query: `fixture ${searchRound}` }) }),
     frame("toolUseEvent", { ...tool, stop: true }),
   ]), { headers: { "content-type": "application/vnd.amazon.eventstream" } });
 }
@@ -136,6 +138,41 @@ describe("sidecar prompt usage accounting", () => {
       expect(summary.models[0]!.inputTokens).toBeGreaterThan(20_000);
     });
   }
+});
+
+test("direct Kiro hosted search funds the answer after three searches", async () => {
+  let sends = 0;
+  let searches = 0;
+  globalThis.fetch = (async input => {
+    const url = input instanceof Request ? input.url : String(input);
+    if (url === "https://api.exa.ai/search") {
+      searches++;
+      return Response.json({ results: [{ title: "Fixture", url: "https://example.invalid/", text: "Result" }] });
+    }
+    if (url !== "https://runtime.us-east-1.kiro.dev/") throw new Error("Unexpected network target");
+    return completedAnswer(++sends <= 3 ? sends : undefined);
+  }) as typeof fetch;
+  const config = {
+    defaultProvider: "kiro", emptyCompletionRetry: false,
+    webSearchSidecar: { backend: "exa", exaApiKey: "synthetic-search-key" },
+    providers: {
+      kiro: { adapter: "kiro", baseUrl: "https://runtime.us-east-1.kiro.dev",
+        authMode: "oauth", models: ["claude-opus-5.5"] },
+    },
+  } as OcxConfig;
+  const request = new Request("http://localhost/v1/responses", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ model: "kiro/claude-opus-5.5", stream: true, store: false,
+      input: "Search three times.", tools: [{ type: "web_search" },
+        { type: "function", name: "fixture_lookup", parameters: { type: "object", properties: {} } }] }),
+  });
+  const log: RequestLogContext = { model: "", provider: "" };
+  const response = await handleResponses(request, config, log);
+  const body = await response.text();
+  expect(searches).toBe(3);
+  expect(sends).toBe(4);
+  expect(body).toContain("Completed fixture answer.");
+  expect(log.activeAttempt?.sendCount).toBe(4);
 });
 
 describe("direct generic HTTP sidecar send accounting", () => {

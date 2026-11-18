@@ -409,7 +409,7 @@ credentials, tool arguments, or raw TypeSafe responses. Oversized rows retain th
 `usageIncomplete` diagnostic as the ordinary usage endpoint.
 
 For routed image and web-search turns, `sendCount` includes upstream adapter retries.
-Each model send for these turns uses the shared request send budget, including retries and later tool rounds. A send refused at the cap does not increment `sendCount`. For direct generic HTTP hosted web search, the default request budget covers the loop’s bounded model rounds, including the forced-answer retry and any enabled recovery, rate-limit, and connection-reset retries. Explicit send caps still apply.
+Each model send for these turns uses the shared request send budget, including retries and later tool rounds. A send refused at the cap does not increment `sendCount`. For direct hosted web search, the default request budget covers the loop’s bounded model rounds, including the forced-answer retry and any enabled recovery, rate-limit, and connection-reset retries. Explicit send caps still apply.
 A replacement stopped before upstream dispatch adds no send.
 
 New xAI attempts in `usage.jsonl` include a request-time `credentialSource`: `grok-oauth`

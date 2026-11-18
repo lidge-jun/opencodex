@@ -42,13 +42,14 @@ import {
   markCursorOverflowSurfaced,
   recordCursorIncompleteToolRemint,
   recordCursorEnvelopeEchoRemint,
+  CURSOR_OVERFLOW_REMINT_MAX,
   recordCursorOverflowRemint,
   rememberCursorConversationRewrite,
   rememberCursorThreadConversation,
   shouldSkipCursorOverflowRemint,
   shouldSurfaceCursorOverflowFirst,
 } from "./cursor/thread-continuity";
-import { runCursorTurnWithRetry } from "./cursor/transport-retry";
+import { CURSOR_RETRY_ATTEMPTS, runCursorTurnWithRetry } from "./cursor/transport-retry";
 import { cursorRequestHasShellAlias, cursorRequestUsesCodeMode } from "./cursor/tool-definitions";
 import {
   CURSOR_OUTPUT_GUARD_MAX_HOLD_BYTES,
@@ -131,6 +132,8 @@ function cursorRequestSizeContext(request: {
 export function createCursorAdapter(provider: OcxProviderConfig, deps: CursorAdapterDeps = {}): ProviderAdapter {
   return {
     name: "cursor",
+    // Initial turn, bounded overflow remints, and one terminal corrective retry.
+    hostedIterationSendLimit: (2 + CURSOR_OVERFLOW_REMINT_MAX) * CURSOR_RETRY_ATTEMPTS,
     reportsPhysicalSends: true,
 
     // Cursor emits Fast as a model variant, so the generic "no field emitted" fallback in

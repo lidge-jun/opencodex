@@ -61,7 +61,7 @@ function expandIngressSendBudget(budget: TransientSendBudget | undefined, sends:
 }
 
 
-/** Fund the loop's bounded generic HTTP sends before its first dispatch. */
+/** Fund the hosted loop's bounded model sends before its first dispatch. */
 export function expandInferenceSearchSendBudget(budget: TransientSendBudget | undefined, baseSends: number): void {
   const policy = budget && ingressPolicies.get(budget);
   if (!policy || baseSends <= policy.baseSendAllowance) return;

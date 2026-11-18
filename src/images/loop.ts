@@ -313,6 +313,7 @@ function loopFailure(e: LoopError): SidecarLoopFailure {
  * metadata, and the optional image/video bridge plans.
  */
 export interface ImageBridgeDeps {
+  configureModelSendAllowance?: (baseSends: number) => void;
   thinkingRecovery?: ReturnType<typeof createAnthropicThinkingRecovery>;
   imageRecovery?: AnthropicImageRecovery;
   parsed: OcxParsedRequest;
@@ -507,6 +508,9 @@ export async function runWithImageBridge(deps: ImageBridgeDeps): Promise<Respons
   // what earlier rounds left of `attempts`, so a bounded multi-round turn can never exceed the
   // configured replay count in total (a per-round reset would multiply it by maxRounds).
   const rateLimitRetryPolicy = deps.retryOn429Policy ?? null;
+  if (adapter.hostedIterationSendLimit) {
+    deps.configureModelSendAllowance?.(adapter.hostedIterationSendLimit * (HARD_CAP + (rateLimitRetryPolicy?.attempts ?? 0)));
+  }
   let rateLimitRetries = 0;
 
   // Acquire one iteration's final response headers. The first call is drained eagerly so an initial

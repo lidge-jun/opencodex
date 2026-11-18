@@ -461,6 +461,7 @@ export interface WebSearchLoopDeps {
     retryParsed?: OcxParsedRequest,
     // A 403 requires this complete response; status-only callbacks retain 429 semantics.
     originalResponse?: Response,
+    hiddenUsage?: OcxUsage,
   ) =>
     | { adapter: ProviderAdapter; recoveryKind: AttemptRecoveryKind }
     | null
@@ -570,8 +571,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
   const rateLimitRetryPolicy = deps.retryOn429Policy ?? null;
   let rateLimitRetries = 0;
   // The 429 ladder and thinking-signature recovery are request-scoped. Each
-  // generic HTTP dispatch can use the transport's full reset ladder.
-  deps.configureModelSendAllowance?.(RESET_RETRY_MAX_ATTEMPTS * (
+  // model dispatch can use its transport's full retry ladder.
+  deps.configureModelSendAllowance?.((deps.adapter.hostedIterationSendLimit ?? RESET_RETRY_MAX_ATTEMPTS) * (
     HARD_CAP + Number(Boolean(deps.emptyCompletionRetry))
     + (rateLimitRetryPolicy?.attempts ?? 0) + Number(Boolean(deps.thinkingRecovery))
   ));
@@ -815,7 +816,7 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           && !accountRefusalOutputStarted)
         || (iterParsed._kiroAuthContext && (prepared.response.status === 400 || prepared.response.status === 403))) && deps.on429) {
         const rotated = await deps.on429(prepared.response.headers.get("retry-after"), prepared.response.headers,
-          iterParsed, prepared.response);
+          iterParsed, prepared.response, hiddenUsage);
         if (!rotated) break;
         if (hiddenUsage && deps.onRotatedUsage?.(hiddenUsage)) hiddenUsage = undefined;
         const retainRefusal = prepared.response.status === 403

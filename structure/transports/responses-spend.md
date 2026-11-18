@@ -103,10 +103,11 @@ including direct sends, connection-reset retries and later tool rounds. The rece
 prepaid permit when present or reserves a fresh send against the shared ledger, refusing dispatch
 when the allowance is exhausted. Cancellation at the final HTTP boundary leaves an unused booking
 refundable. The default guarded policy starts with three base sends and one recovery-only send.
-Before the first direct generic HTTP hosted-search send, ingress sizes the base allowance from
+Before the first direct hosted-search send, ingress sizes the base allowance from
 the loop's iteration limit (including the forced answer and its retry), the optional empty-completion
-retry, request-wide 429 retries and applicable thinking-signature recovery. The reset-retry limit applies
-to each of those dispatches. The separate credential recovery reserve still applies.
+retry, request-wide 429 retries and applicable thinking-signature recovery. Each dispatch gets its
+transport’s bounded send count, including adapter-owned retries where applicable. Direct adapter-owned
+media loops size their allowance from their round and retry bounds as well. The separate credential recovery reserve still applies.
 Explicit and Combo budgets retain their supplied limits. Adapter-owned
 `fetchResponse`/`runTurn` receives the live budget and observers instead, never both charge paths.
 Receipt selection follows the actual iteration adapter after rotation. Hosted tool execution does
