@@ -11,6 +11,7 @@ import { kiroProbeCurrent, kiroProbeIdentity } from "./kiro-account-probe";
 import { fetchMuseKeyQuotaSnapshot } from "../muse-key-quota";
 import { probeAnthropicUsageQuota } from "../claude-cli-usage";
 import { claudeSignedInIdentity, peekClaudeUsageObservation } from "../claude-cli-usage-state";
+import { readXaiLegacyPrivacyError, XAI_LEGACY_PRIVACY_MESSAGE } from "../xai-privacy-mode";
 import { XAI_GROK_CLIENT_VERSION, XAI_GROK_COMPATIBILITY } from "../xai-transport";
 import {
   commitKiroAccountUsageState,
@@ -175,7 +176,12 @@ export function parseXaiCreditsResponse(value: unknown): { percent: number; rese
   };
 }
 
-async function fetchXaiWeeklyCredits(accessToken: string, userId: string): Promise<ProviderQuota | null> {
+function xaiQuotaPrivacyRefusal(): typeof TERMINAL_QUOTA_FAILURE {
+  console.warn(`[opencodex] xAI quota probe failed with HTTP 403. ${XAI_LEGACY_PRIVACY_MESSAGE}`);
+  return TERMINAL_QUOTA_FAILURE;
+}
+
+async function fetchXaiWeeklyCredits(accessToken: string, userId: string): Promise<ProviderQuota | typeof TERMINAL_QUOTA_FAILURE | null> {
   try {
     const response = await fetch(XAI_CREDITS_URL, {
       redirect: "error",
@@ -189,7 +195,7 @@ async function fetchXaiWeeklyCredits(accessToken: string, userId: string): Promi
       },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
-    if (!response.ok) return null;
+    if (!response.ok) return await readXaiLegacyPrivacyError(response) ? xaiQuotaPrivacyRefusal() : null;
     const parsed = parseXaiCreditsResponse(await readQuotaJson(response));
     if (!parsed) return null;
     return {
@@ -202,13 +208,14 @@ async function fetchXaiWeeklyCredits(accessToken: string, userId: string): Promi
   }
 }
 
-export async function fetchXaiQuota(provider: string, context: { accessToken: string; upstreamAccountId?: string }): Promise<ProviderQuotaReport | null> {
+export async function fetchXaiQuota(provider: string, context: { accessToken: string; upstreamAccountId?: string }): Promise<ProviderQuotaProbeResult> {
   const { accessToken } = context;
 
   // Prefer the SuperGrok weekly credits window that actually gates prompting (#1283).
   const userId = context.upstreamAccountId?.trim() || xaiUserIdFromAccessToken(accessToken);
   if (userId) {
     const weekly = await fetchXaiWeeklyCredits(accessToken, userId);
+    if (weekly === TERMINAL_QUOTA_FAILURE) return weekly;
     if (weekly) return report(provider, "xai:grok-billing-credits", weekly);
   }
 
@@ -219,7 +226,7 @@ export async function fetchXaiQuota(provider: string, context: { accessToken: st
       headers: { Accept: "application/json", Authorization: `Bearer ${accessToken}` },
       signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     });
-    if (!response.ok) return null;
+    if (!response.ok) return await readXaiLegacyPrivacyError(response) ? xaiQuotaPrivacyRefusal() : null;
     const body = asRecord(await readQuotaJson(response));
     const config = asRecord(body?.config);
     if (!config) return null;

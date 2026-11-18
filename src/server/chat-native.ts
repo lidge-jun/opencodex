@@ -72,6 +72,7 @@ import { distributedKeyPhysicalFetch, distributedKeyResponseOwner } from "../pro
 import { passiveKeyPhysicalFetch } from "../providers/passive-key-observation";
 import { isProviderApiKeyPaused, ProviderApiKeyPausedError } from "../providers/api-key-pause";
 import { providerAffinityGenerationIsCurrent, providerApiKeySelectionIsCurrent, resolveCurrentProviderApiKeyTransport } from "../providers/api-key-selection";
+import { isXaiGrokOAuth, isXaiLegacyPrivacyError, xaiPrivacyModeRefusal } from "../providers/xai-privacy-mode";
 import type { OcxProviderTransport } from "../providers/xai-transport";
 import type { RouteResult } from "../router";
 import type { OcxConfig, OcxProviderConfig } from "../types";
@@ -756,6 +757,11 @@ export async function runNativeChatAttempt(
     if (req.signal.aborted) {
       upstream.abort();
       return failLocal(499, "Client cancelled request", "client_cancelled");
+    }
+    if (isXaiGrokOAuth(route.providerName, route.provider) && isXaiLegacyPrivacyError(response.status, bodyText)) {
+      const refusal = xaiPrivacyModeRefusal(logCtx);
+      finishLog(refusal.status);
+      return refusal;
     }
     const detail = activeAdapter.formatErrorBody?.(response.status, response.headers, bodyText) ?? "";
     let upstreamType: string | undefined;
