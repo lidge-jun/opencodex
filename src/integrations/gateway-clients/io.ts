@@ -155,8 +155,12 @@ export function rmdirsIfEmpty(ctx: GatewayClientContext, dirs: readonly string[]
   }
 }
 
+function stashDirectory(ctx: GatewayClientContext): string {
+  return join(ctx.stateDir, "gateway-clients");
+}
+
 export function stashPath(ctx: GatewayClientContext, id: string): string {
-  return join(ctx.stateDir, "gateway-clients", `${id}.json`);
+  return join(stashDirectory(ctx), `${id}.json`);
 }
 
 function assertStashDirectory(path: string): void {
@@ -206,6 +210,17 @@ export function dropStash(ctx: GatewayClientContext, id: string): void {
   const path = stashPath(ctx, id);
   assertStashDirectory(path);
   rmSync(path, { force: true });
+  removeEmptyStashDirectory(ctx);
+}
+
+export function removeEmptyStashDirectory(ctx: GatewayClientContext): void {
+  const dir = stashDirectory(ctx);
+  try {
+    if (lstatSync(dir).isDirectory()) rmdirSync(dir);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTEMPTY" && code !== "EEXIST") throw error;
+  }
 }
 
 export function isRestoreFile(home: string, path: string, record: {

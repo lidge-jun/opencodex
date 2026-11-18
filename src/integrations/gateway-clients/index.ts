@@ -5,7 +5,7 @@ import { getConfigDir } from "../../config/paths";
 import { localInferenceDestination } from "../../lib/local-destinations";
 import { AGY_CONNECTOR } from "./agy";
 import { ANTIGRAVITY_CONNECTOR } from "./antigravity";
-import { GATEWAY_PLACEHOLDER_KEY, clientRefusal, hasStash } from "./io";
+import { GATEWAY_PLACEHOLDER_KEY, clientRefusal, hasStash, removeEmptyStashDirectory } from "./io";
 import type { GatewayClientConnector, GatewayClientContext, GatewayClientId, GatewayClientResult, GatewayClientStatus, GatewayTarget } from "./types";
 
 export type * from "./types";
@@ -61,6 +61,8 @@ export function disconnectRecordedGatewayClients(ctx: GatewayClientContext, held
     const result = GATEWAY_CLIENTS[id].disconnect(ctx);
     if (!result.ok) throw new Error(`Gateway client cleanup refused for ${id}: ${result.message}`);
   }
+  // Also finish cleanup if a prior version or interrupted restore left an empty directory.
+  removeEmptyStashDirectory(ctx);
 }
 
 export function connectGatewayClient(id: GatewayClientId, ctx: GatewayClientContext, config: Pick<OcxConfig, "hostname" | "unauthenticatedLoopbackListener">, port: number, model?: string): GatewayActionOutcome {

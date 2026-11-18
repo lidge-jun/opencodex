@@ -51,6 +51,7 @@ describe("antigravity connector", () => {
     expect(existsSync(settings())).toBe(true);
     a.disconnect(ctx);
     expect(existsSync(join(ctx.home, ".antigravity"))).toBe(false);
+    expect(existsSync(join(ctx.stateDir, "gateway-clients"))).toBe(false);
   });
 
   test("a user edit after connect is kept and only the three stashed paths are restored", () => {

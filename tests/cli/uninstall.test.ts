@@ -17,6 +17,7 @@ import type { DesktopDisconnectReceipt } from "../../src/claude/desktop-remote-s
 import type { ExportModel } from "../../src/clients/config-export";
 import { GATEWAY_CLIENTS, connectGatewayClient } from "../../src/integrations/gateway-clients";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
+import { initializeConfigOwnership, removeOwnedConfigState } from "../../src/lib/config-ownership";
 import { createIntegrationStateStore } from "../../src/integrations/store";
 import { applyIntegration, disableIntegrationCoordinated } from "../../src/integrations/writer";
 import type { OcxConfig } from "../../src/types";
@@ -813,20 +814,22 @@ describe("uninstall restores recorded third-party integrations before deleting r
     providers: { fixture: { adapter: "openai-chat", baseUrl: "http://127.0.0.1/v1" } },
   } as unknown as OcxConfig;
 
-  async function fixture() {
+  async function fixture({ gatewayOnly = false } = {}) {
     const root = mkdtempSync(join(tmpdir(), "ocx-uninstall-integrations-"));
     const home = join(root, "home");
     const configDir = join(root, "opencodex");
     const lockPath = join(root, "runtime", "lifecycle.sqlite");
     const env = {} as NodeJS.ProcessEnv;
-    mkdirSync(INTEGRATION_CLIENTS.pi.detectDir(env, home), { recursive: true });
+    mkdirSync(home);
     mkdirSync(configDir, { recursive: true });
     const clientConfig = INTEGRATION_CLIENTS.pi.configPath(env, home);
-    mkdirSync(dirname(clientConfig), { recursive: true });
-    writeFileSync(clientConfig, '{"userSetting":"keep"}\n');
     const store = createIntegrationStateStore(join(configDir, "integrations"));
-    const input = { clientId: "pi" as const, models, config, port: config.port, env, home, store };
-    expect(applyIntegration(input).ok).toBe(true);
+    if (!gatewayOnly) {
+      mkdirSync(INTEGRATION_CLIENTS.pi.detectDir(env, home), { recursive: true });
+      mkdirSync(dirname(clientConfig), { recursive: true });
+      writeFileSync(clientConfig, '{"userSetting":"keep"}\n');
+      expect(applyIntegration({ clientId: "pi", models, config, port: config.port, env, home, store }).ok).toBe(true);
+    }
     const deps: UninstallClientStateDeps = {
       readConnection: () => ({ kind: "disconnected" }),
       inspectDesktop: () => ({ kind: "absent" }),
@@ -868,19 +871,46 @@ describe("uninstall restores recorded third-party integrations before deleting r
   }
 
   test("uninstall disconnects every recorded gateway client before deleting config", async () => {
-    const f = await fixture();
+    const f = await fixture({ gatewayOnly: true });
     try {
       const { settings, profile, oldSettings, oldProfile } = connectGateways(f);
-      const remove = f.deps.remove;
       f.deps.remove = () => {
         expect(readFileSync(settings, "utf8")).toBe(oldSettings);
         expect(readFileSync(profile, "utf8")).toBe(oldProfile);
         const reconnect = connectGatewayClient("agy", f.deps.gatewayContext(), config, config.port);
         expect(reconnect).toMatchObject({ ok: false, code: "io-error" });
-        return remove();
+        return removeOwnedConfigState(f.configDir);
       };
       expect(await removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
         .toEqual({ status: "removed", residualPaths: [] });
+      expect(existsSync(f.configDir)).toBe(false);
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
+
+  test("uninstall removes an empty gateway directory left by an earlier restore", async () => {
+    const f = await fixture({ gatewayOnly: true });
+    try {
+      expect(initializeConfigOwnership(f.configDir)).toBe(true);
+      mkdirSync(join(f.configDir, "gateway-clients"));
+      f.deps.remove = () => removeOwnedConfigState(f.configDir);
+      expect(await removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .toEqual({ status: "removed", residualPaths: [] });
+    } finally { rmSync(f.root, { recursive: true, force: true }); }
+  });
+
+  test("uninstall preserves unknown entries beside the retired gateway records", async () => {
+    const f = await fixture({ gatewayOnly: true });
+    try {
+      connectGateways(f);
+      const dir = join(f.configDir, "gateway-clients");
+      const unknown = join(dir, "user-file");
+      writeFileSync(unknown, "keep\n");
+      f.deps.remove = () => removeOwnedConfigState(f.configDir);
+      expect(await removeOwnedConfigAfterDesktopCleanup(safeTeardown, f.deps))
+        .toMatchObject({ status: "partial", residualPaths: [dir] });
+      expect(readFileSync(unknown, "utf8")).toBe("keep\n");
+      expect(existsSync(join(dir, "antigravity.json"))).toBe(false);
+      expect(existsSync(join(dir, "agy.json"))).toBe(false);
     } finally { rmSync(f.root, { recursive: true, force: true }); }
   });
 

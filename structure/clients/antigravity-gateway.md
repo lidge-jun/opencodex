@@ -65,7 +65,9 @@ or a non-object root is refused with `unsupported-file` and left untouched.
 
 `src/cli/uninstall-client-state.ts` disconnects every gateway client with a restore record before
 removing config. It holds the lifecycle lock through both steps and aborts removal on any refusal,
-leaving the failed client's record available for a retry.
+leaving the failed client's record available for a retry. Retiring the last record removes the
+restore directory when empty. Uninstall also clears an empty directory left by an earlier restore
+and preserves unknown entries inside it.
 
 ## Which setting wins
 
