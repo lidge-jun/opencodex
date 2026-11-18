@@ -152,10 +152,10 @@ async function checkAdmission(model: string, deps: AdmissionDeps, now: number): 
   if (cached) {
     const status = admission(cached, model, now);
     if (finite(cached.refusalUntil) && cached.refusalUntil > now) return status;
-    // Same windows and threshold as admission(): only a full window in scope for this model forces a re-read.
-    const expiredReset = [cached.refusalUntil, ...applicableWindows(cached.quota, model).filter(full).map(w => w.resetAt)]
-      .some(reset => finite(reset) && reset <= now);
-    if (!expiredReset && now >= cached.checkedAt && now - cached.checkedAt < CACHE_MS) return status;
+    // Refresh early when a recorded refusal or full in-scope window resets after this reading.
+    const crossedReset = [cached.refusalUntil, ...applicableWindows(cached.quota, model).filter(full).map(w => w.resetAt)]
+      .some(reset => finite(reset) && cached.checkedAt < reset && reset <= now);
+    if (!crossedReset && now >= cached.checkedAt && now - cached.checkedAt < CACHE_MS) return status;
   }
   const requestKey = `${path}:${identity.key}`;
   let probe = inflight.get(requestKey);

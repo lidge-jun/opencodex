@@ -58,6 +58,36 @@ describe("Claude usage admission cache", () => {
     expect(probes).toBe(1);
   });
 
+  test("three checks share a fresh reading that still reports a past reset", async () => {
+    const now = Date.UTC(2026, 9, 8, 12, 0);
+    const weeklyResetAt = now + 86_400_000;
+    const quota = { updatedAt: now, fiveHourPercent: 100, fiveHourResetAt: now - 1000, weeklyPercent: 100, weeklyResetAt };
+    const statePath = tempState();
+    let probes = 0;
+    const probe = async () => { probes++; return quota; };
+    for (const elapsed of [0, 1000, 2000]) {
+      const status = await checkClaudeUsageAdmission("claude-sonnet-5-5", { now: () => now + elapsed, identity, probe, statePath });
+      expect(status).toMatchObject({ state: "exhausted", resetAt: weeklyResetAt });
+    }
+    expect(probes).toBe(1);
+  });
+
+  test("a reset after the cached check triggers exactly one early refresh", async () => {
+    const resetAt = Date.UTC(2026, 9, 8, 12, 0);
+    const weeklyResetAt = resetAt + 86_400_000;
+    const quota = { updatedAt: resetAt - 11_000, fiveHourPercent: 100, fiveHourResetAt: resetAt, weeklyPercent: 100, weeklyResetAt };
+    const statePath = seed(quota, resetAt - 1000);
+    let probes = 0;
+    const probe = async () => { probes++; return { ...quota, updatedAt: resetAt }; };
+    const checkAt = (now: number) => checkClaudeUsageAdmission("claude-sonnet-5-5", { now: () => now, identity, probe, statePath });
+    expect(await checkAt(resetAt - 1)).toMatchObject({ state: "exhausted", checkedAt: quota.updatedAt, resetAt: weeklyResetAt });
+    expect(probes).toBe(0);
+    expect(await checkAt(resetAt)).toMatchObject({ state: "exhausted", checkedAt: resetAt, resetAt: weeklyResetAt });
+    expect(probes).toBe(1);
+    expect((await checkAt(resetAt + 1000)).checkedAt).toBe(resetAt);
+    expect(probes).toBe(1);
+  });
+
   test("the exhausted message names the reset in the host time zone, not a fixed one", async () => {
     const now = Date.now();
     const resetAt = now + 2 * 3_600_000;
