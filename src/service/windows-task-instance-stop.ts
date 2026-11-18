@@ -8,6 +8,7 @@ import { windowsTaskRegistrationMatchesForStop } from "./windows-taskxml";
  */
 export const WINDOWS_TASK_INSTANCE_STOP_SCRIPT = String.raw`
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 $PSModuleAutoLoadingPreference = 'None'
 $attempted = $false
 try {

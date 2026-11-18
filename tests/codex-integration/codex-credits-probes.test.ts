@@ -22,6 +22,13 @@ let previousCodexHome: string | undefined;
 let originalFetch: typeof fetch;
 const account: CodexAccount = { id: "credits-pool", email: "credits@example.test", isMain: false };
 const config = (): OcxConfig => ({ port: 10100, defaultProvider: "openai", providers: {}, codexAccounts: [] });
+const groupCreditUsage = {
+  credits: { has_credits: true, balance: null },
+  spend_control: {
+    reached: false,
+    individual_limit: { source: "group_based_spend_controls", used_percent: 2.5, remaining: "4875.5" },
+  },
+};
 
 function writeMain(bearer = "fixture-main-bearer", identity = "fixture-main-identity") {
   writeFileSync(join(process.env.CODEX_HOME!, "auth.json"), JSON.stringify({
@@ -75,6 +82,14 @@ afterEach(() => {
 });
 
 describe("main credits publication", () => {
+  test("main account DTO reports the Business group's remaining credits", async () => {
+    writeMain();
+    globalThis.fetch = (async () => Response.json({ ...groupCreditUsage, plan_type: "business" })) as typeof fetch;
+    const [main] = await listCodexAuthAccounts({ ...config(), showCodexCredits: true }, true);
+    expect(main.credits).toEqual({ hasCredits: true, balance: "4875.5" });
+    expect(getAccountQuota(main.id)?.credits?.balance).toBe(4875.5);
+  });
+
   test("current credential publishes credits-only usage, omission keeps, null clears", async () => {
     writeMain();
     for (const payload of [{ credits: { balance: "125.725" } }, {}, { credits: null }]) {
@@ -111,6 +126,15 @@ describe("main credits publication", () => {
 });
 
 describe("pool credits publication", () => {
+  test("pool account DTO reports the Business group's remaining credits using the configured plan fallback", async () => {
+    savePool();
+    const ctx = { ...poolContext(), configuredPlan: "business" };
+    const result = await commitPoolQuotaResponse(Response.json(groupCreditUsage), ctx);
+    expect(result.quota?.credits?.balance).toBe(4875.5);
+    const dto = poolAccountDto({ ...config(), showCodexCredits: true }, account, result, true, false, 0, false);
+    expect(dto.credits).toEqual({ hasCredits: true, balance: "4875.5" });
+  });
+
   test("credits-only response publishes without usage windows and DTO follows the switch", async () => {
     savePool();
     const ctx = poolContext();

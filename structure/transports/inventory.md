@@ -311,6 +311,10 @@ Pool quota producers and account commands follow the [bounded raw-observation co
 
 ## Account quota failure diagnostics
 
+For xAI OAuth, both billing endpoints can return the [Legacy privacy mode 403](../providers/xai-grok.md#legacy-privacy-mode-403).
+The probe emits fixed service-log guidance and invalidates its last-good quota evidence when the
+marker matches. Its diagnostic carries no credential-health or routing authority.
+
 `src/providers/quota/antigravity.ts` requests the quota summary with the Antigravity CLI User-Agent, because Cloud Code Assist includes the Gemini 4 Argon group only for the CLI client family; under the IDE fingerprint the same account reports only the Gemini and Claude groups. It retries a quota-summary 403 once with `User-Agent: antigravity/1.0`, releasing the first response body and preserving the bearer, project and pinned accounting endpoint. A 401 is not retried; redirects remain blocked, and a repeated 403 remains unavailable with `access_denied`. Other retry failures retain the models fallback, whose User-Agent remains the IDE fingerprint, as does non-Argon inference.
 
 Antigravity account quota probes expose only a closed `quotaFailure` category when the read is unavailable. Typed transport failures, rejected destinations, redirects, denied access, rate limits and unusable bodies are distinguished; successful fallback clears the earlier failure. The last attempted endpoint determines the diagnosis. When the credential side throws before the probe (missing account, failed refresh, no project) the category is `account_unavailable`, or `timeout` when that failure was a request deadline. A 401/403 category does not change account health, entitlement or routing eligibility.
