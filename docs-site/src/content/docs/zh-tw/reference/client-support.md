@@ -26,7 +26,7 @@ opencodex 是一個本機閘道，連接你的 AI 程式開發工具與模型。
 | Qoder CN | — | JSON | 是 | OpenAI 相容（端點由用戶端選擇） | implemented | — | 僅限本機監聽。 |
 | WorkBuddy | — | JSON | 是 | Chat Completions | test-covered ([測試](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/agent-clients.test.ts)) | — | 僅限本機監聽。套用前先執行該用戶端專屬的檢查，可能拒絕。 |
 | WorkBuddy AI | — | JSON | 是 | Chat Completions | implemented | — | 僅限本機監聽。套用前先執行該用戶端專屬的檢查，可能拒絕。 |
-| OpenCode | — | JSON | 是 | Chat Completions | test-covered ([測試](https://github.com/lidge-jun/opencodex/blob/dev/tests/config/client-config-export.test.ts)) | — | 匯出的設定也支援遠端監聽（會加入 API 金鑰標頭）。 [指南](/zh-tw/guides/opencode/) |
+| OpenCode | — | JSON | 是 | Responses; Chat Completions | test-covered ([測試](https://github.com/lidge-jun/opencodex/blob/dev/tests/config/client-config-export.test.ts)) | — | 匯出的設定也支援遠端監聽（會加入 API 金鑰標頭）。 [指南](/zh-tw/guides/opencode/) |
 | Pi | — | JSON | 是 | Chat Completions | test-covered ([測試](https://github.com/lidge-jun/opencodex/blob/dev/tests/config/client-config-export.test.ts)) | — | 僅限本機監聽。 [指南](/zh-tw/guides/pi/) |
 | Oh My Pi (omp) | — | YAML | 是 | Chat Completions; Responses (僅原生 OpenAI 模型) | test-covered ([測試](https://github.com/lidge-jun/opencodex/blob/dev/tests/config/client-config-export.test.ts)) | — | 僅限本機監聽。只修改自己的 YAML 區塊。 |
 | Hermes | — | YAML | 是 | Chat Completions | test-covered ([測試](https://github.com/lidge-jun/opencodex/blob/dev/tests/clients/hermes-catalog-refresh.test.ts)) | — | 匯出的設定也支援遠端監聽（會加入 API 金鑰標頭）。只修改自己的 YAML 區塊。 |

@@ -16,6 +16,9 @@ through the disk reader. A row keeps:
   keeps Meta's Muse Code subscription refusal in `subscription_required` rather than
   `permission_denied`: a 403 whose whole `error.message` is that sentence names a plan restriction on
   a valid key, so the row must not read as an expired credential that needs a re-login.
+  For the [xAI OAuth Legacy privacy mode refusal](../providers/xai-grok.md#legacy-privacy-mode-403),
+  the proved account policy supplies the `policy-refusal` failure cause. The client-facing
+  privacy refusal uses a fixed HTTP 403 `permission_denied` envelope.
 - `upstreamCondition`, a member of the closed set in `src/lib/upstream-condition.ts`, derived only for a
   failed row with upstream evidence; a client close (499, `client_closed_request`, `client_cancelled`) gets
   none, and a stored condition is kept only under the same rules. Text set through
@@ -24,8 +27,11 @@ through the disk reader. A row keeps:
   it out of the final row's evidence. The Messages passthrough classifies the condition where it parses the
   upstream error and stores only the member on the context (`upstreamCondition`), so a native Anthropic
   overflow is recorded as `context_overflow`. `classifyUpstreamCondition` reads status, bounded structured
-  tokens and, for 4xx only, fixed lowercase keyword sets: 401 is authoritative, structured tokens come next
-  (account usage-limit codes `usage_limit_exceeded` and `1308` are billing exhaustion), context overflow
+  tokens and, for 4xx only, fixed lowercase keyword sets. HTTP 401 is authoritative. The exact transport
+  codes `upstream_reset_replay_refused`, `upstream_closed_before_response` and `upstream_no_response`
+  then take precedence over other structured evidence, including Chat's generic `rate_limit_error`
+  type, and map to `upstream_failed`. Other structured tokens come next, including the account
+  usage-limit codes `usage_limit_exceeded` and `1308`, which map to billing exhaustion. Context overflow
   from text needs the definite verdict `isDefiniteContextOverflow` in the dependency-free
   `src/lib/context-overflow-verdict.ts` (the one combo failover uses, re-exported by
   `src/combos/failover.ts`), including bounded provider wording that a conversation/input has reached or passed the model context limit, that a prompt is too long for that window, or that the window is full/exhausted/over its limit, and a string-valued JSON `error` field. A negator governing that wording, and capacity prose about the service, stay outside the verdict, so a validation error that quotes "prompt is too long" stays rejected, a 429 that

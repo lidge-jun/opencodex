@@ -1,4 +1,4 @@
-import { captureAccountAutoPauseFence, accountAutoPauseFenceIsLocal, accountAutoPauseFenceMatchesDisk } from "../config/account-auto-pause-revisions";
+import { captureAccountAutoPauseFence, accountAutoPauseFenceIsLocal, accountAutoPauseFenceMatchesDisk, effectiveAccountAutoPause } from "../config/account-auto-pause-revisions";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import type { OAuthAccessSnapshot } from "./index";
 import type { CodexAuthContext } from "../codex/auth-context";
@@ -12,10 +12,11 @@ import { apiKeyPoolEntryId } from "../providers/api-keys";
 import { resolveProviderApiKey } from "../providers/api-key-resolve";
 import { createHash } from "node:crypto";
 import { setProviderApiKeyPaused } from "../providers/api-key-pause";
-import { AccountRefusalStreaks, autoPauseThreshold, permanentAccountRefusal } from "./account-auto-pause-policy";
+import { AccountRefusalStreaks, permanentAccountRefusal } from "./account-auto-pause-policy";
 import { clearThreadAccountMapForAccount, reconcileCodexActiveAfterExclusion } from "../codex/routing";
 import { isNonReplayableResponse } from "../lib/upstream-retry";
 import { hasUpstreamRewriters, upstreamRewriterEpoch } from "../plugins/upstream-hooks";
+import { isCanonicalAntigravityUrl } from "../lib/provider-tls-profile";
 
 const streaks = new WeakMap<OcxConfig, AccountRefusalStreaks>();
 export { wasAccountAutoPaused, wasPermanentAccountRefusal } from "../lib/account-auto-pause-response";
@@ -29,7 +30,7 @@ export interface AccountAutoPauseBinding {
 /** Capture before transport. A later response cannot acquire authority over a newer login/resume. */
 export type AccountAutoPauseObserver = ((response: Response) => Promise<Response>) & {
   /** Final-send report: only a response whose wire credential and destination match is counted. */
-  physical: (sameDestination: boolean, headers: Headers) => void;
+  physical: (sameDestination: boolean, headers: Headers, destination: string) => void;
 };
 const CREDENTIAL_HEADERS = ["authorization", "x-api-key", "x-goog-api-key", "api-key"] as const;
 const CODEX_SELECTOR_HEADERS = ["openai-organization", "openai-project"] as const;
@@ -42,15 +43,23 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
   AccountAutoPauseObserver | undefined {
   if (!binding) return;
   const { config, oauth, codex } = binding;
-  const threshold = autoPauseThreshold(config.providers[name]?.accountAutoPause);
-  if (!threshold) return;
+  const effective = effectiveAccountAutoPause(config.providers[name]);
+  if (!effective) return;
+  const { threshold, conclusiveOnly } = effective;
+  // The implicit default trusts only Google's own answer: an OAuth send to a first-party Cloud Code
+  // Assist host, checked on the sending provider here and on the final destination in `physical`.
+  if (conclusiveOnly && (provider.authMode !== "oauth" || !isCanonicalAntigravityUrl(provider.baseUrl))) return;
+  const samePolicy = (row: unknown) => {
+    const live = effectiveAccountAutoPause(row);
+    return live?.threshold === threshold && live.conclusiveOnly === conclusiveOnly;
+  };
   const configured = config.providers[name];
   if (!configured || configured.disabled) return;
   const fence = captureAccountAutoPauseFence(config, name);
   if (!fence) return;
   const route = JSON.stringify([configured.baseUrl, configured.adapter, configured.authMode]);
   const policyCurrent = () => accountAutoPauseFenceIsLocal(name, fence) && !config.providers[name]?.disabled
-    && autoPauseThreshold(config.providers[name]?.accountAutoPause) === threshold
+    && samePolicy(config.providers[name])
     && JSON.stringify([config.providers[name]?.baseUrl, config.providers[name]?.adapter, config.providers[name]?.authMode]) === route;
   let key: string, incarnation: string, current: () => boolean, owns: (wire: Headers) => boolean;
   let pause: (reason: AccountPauseReason) => Promise<boolean>;
@@ -95,7 +104,7 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
       const outcome = mutatePersistedConfig(fresh => {
         if (!policyCurrent() || !accountAutoPauseFenceMatchesDisk(name, fence, fresh) || !credentialCurrent() || isCodexAccountPaused(fresh, accountId)
           || fresh.codexAccountPauseState?.[accountId]?.revision !== revision
-          || autoPauseThreshold(fresh.providers[name]?.accountAutoPause) !== threshold) return { changed: false, value: false };
+          || !samePolicy(fresh.providers[name])) return { changed: false, value: false };
         setCodexAccountPaused(fresh, accountId, true, { reason, pausedAt: Date.now() });
         pauseState = structuredClone(fresh.codexAccountPauseState);
         return { changed: true, value: true };
@@ -149,7 +158,7 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
     if (counted.has(key)) return response;
     countedResponses.set(response, counted.add(key));
     try {
-      const verdict = permanentAccountRefusal(response).then(reason => {
+      const verdict = permanentAccountRefusal(response, undefined, conclusiveOnly).then(reason => {
         if (reason) markPermanentAccountRefusal(response);
         return reason;
       });
@@ -166,6 +175,8 @@ export function captureAccountAutoPauseAttempt(name: string, provider: OcxProvid
     }
     return response;
   }) as AccountAutoPauseObserver;
-  observer.physical = (sameDestination, wire) => { wireOwned = sameDestination && owns(wire); };
+  observer.physical = (sameDestination, wire, destination) => {
+    wireOwned = sameDestination && owns(wire) && (!conclusiveOnly || isCanonicalAntigravityUrl(destination));
+  };
   return observer;
 }

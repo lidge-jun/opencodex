@@ -29,6 +29,10 @@ merely starts with a result or error marker, such as `[Tool Result] shows the bu
 answer and reaches the client whole (`tests/adapters/tool-envelope-echo-whole-line.test.ts`). The same filter preserves leading prose and
 normalizes text-done events, completed snapshots, non-streaming JSON, and the stored
 continuation snapshot. It does not rotate an xAI upstream conversation.
+The shared [pending-line bound](../transports/byte-accounting.md#stream-buffer-accounting) fails
+with `translation_buffer_limit` before a refused turn enters continuation state. Buffered JSON
+returns 502 instead of falling back to the original body; an SSE rewrite propagates the budget
+failure to the relay's failed terminal. First turns that do not arm the filter remain untouched.
 
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages)
 is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged.
@@ -70,6 +74,27 @@ API) and the 2026-09-30 probe confirmed identical capabilities
 (`devlog/_fin/260930_grok47_build_unify/010_probe-evidence.md`). It stays out of the lineup seed and
 `modelSupportsServiceTier`, and it is not published as a row of its own; see "Grok 4.7 Fast lane" below.
 Regression coverage: `tests/providers/xai/grok-47-build-fast-metadata.test.ts`.
+
+### Legacy privacy mode 403
+
+`src/providers/xai-privacy-mode.ts` recognizes HTTP 403 with the exact
+`[WKE=privacy-mode:legacy]` marker in a bounded JSON error from the built-in xAI OAuth lane.
+Inference classifies the full error body up to its 64 KiB read limit. Model and quota probes use
+a 16 KiB read limit. The fixed guidance tells the user to switch from Legacy (no storage) to
+Privacy Mode.
+Chat and Responses preserve the 403 permission envelope and record an upstream account-policy
+refusal. The refusal leaves pause and reauthentication state intact. A 403 with the exact marker
+on an operator-granted reset replacement also returns the fixed guidance on both Responses paths
+and keeps the response non-replayable. An exact upstream `x-should-retry: false` survives the
+fixed response and combo reconstruction. Cancellation during the replacement body read returns
+a non-replayable 499. Replayable Responses combo refusals use the existing HTTP 403 failover
+eligibility with no cooldown from the account's privacy setting. On exhaustion, confirmed
+context-window and applicable quota verdicts take precedence over the fixed guidance. Wrapped,
+bare-string and provider-test error bodies all use proxy-owned copy when the marker matches.
+Catalog discovery logs the guidance alongside its normal fallback. The billing probe logs the
+same guidance, drops the stale quota
+row and stops before the monthly fallback when the weekly endpoint proves the account setting.
+Coverage: `tests/server/server-xai-oauth-401-replay.test.ts`.
 
 ### Policy-refusal 403
 

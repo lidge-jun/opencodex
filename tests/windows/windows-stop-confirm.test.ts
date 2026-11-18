@@ -51,6 +51,16 @@ describe("checked Windows stop, part B", () => {
     expect(result).toMatchObject({ outcome: "survived", lateWrappers: [90] });
   });
 
+  test("a foreign path match cannot veto final confirmation, but unknown ownership still can", async () => {
+    for (const name of ["cmd.exe", null]) {
+      const foreign = { ...entry(90, 4, name, `cmd.exe /d /k rem "${CMD}"`, 12_000), foreignOwner: true };
+      expect(await confirmWindowsStopFreed(confirmDeps({ processes: [...quiet(), foreign] }).deps))
+        .toMatchObject({ outcome: "freed", lateWrappers: [] });
+      expect(await confirmWindowsStopFreed(confirmDeps({ processes: [...quiet(), { ...foreign, foreignOwner: null }] }).deps))
+        .toMatchObject({ outcome: name === null ? "unknown" : "survived" });
+    }
+  });
+
   test("this installation answering on the port again is survived", async () => {
     const { deps, calls } = confirmDeps({
       sample: elapsed => (elapsed < 3_000 ? { state: "free" } : { state: "listening", ownerPid: 4_242 }),

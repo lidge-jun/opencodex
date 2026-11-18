@@ -24,13 +24,14 @@ afterEach(() => {
   else process.env.OPENCODEX_ADMIN_AUTH_TOKEN = token;
   home.remove();
 });
-function statistics(id = "stored", range = "30d", observed = true) {
+function statistics(id = "stored", range = "30d", observed = true, pinned = false) {
   const accumulator = createJevStatsAccumulator({ comboId: id, since: range === "all" ? null : 100 });
   if (observed) accumulator.add({
     requestId: "fixture-request", timestamp: 200, provider: "combo", model: `combo/${id}`, status: 200,
     durationMs: 80, usageStatus: "reported",
     jevDecision: { version: 1, comboId: id, backend: "model", selected: { provider: "fixture", model: "org/model", effort: "high" }, gate: "apply", latencyMs: 12,
-      confidence: 0.75, chosenProbability: 0.5, usage: { inputTokens: 3, outputTokens: 1, totalTokens: 4 } },
+      confidence: 0.75, chosenProbability: 0.5, usage: { inputTokens: 3, outputTokens: 1, totalTokens: 4 },
+      ...(pinned ? { pinned: true, pinReason: "session_effort" } as const : {}) },
     attempts: [{ ordinal: 1, provider: "fixture", model: "org/model", adapter: "test", status: 200, durationMs: 20, sendCount: 1, recoveryKinds: [],
       usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 }, totalTokens: 15 }],
   });
@@ -89,6 +90,13 @@ describe("combo stats read-only observations", () => {
     expect(text).toContain("No recorded JEV decisions");
     expect(text).toContain("unavailable");
     expect(text).toContain("measured attempts: 0/0");
+  });
+  test("human output counts a per-turn effort decision as both pinned and decided", async () => {
+    const f = fixture(statistics("stored", "30d", true, true));
+    expect(await handleComboStatsCommand(["stored"], f.deps)).toBe(0);
+    const lines = output.mock.calls.flat().join("\n").split("\n");
+    expect(lines).toContain("Decisions: 1; applied: 1; fail-open: 0");
+    expect(lines).toContain("Session-pinned requests: 1");
   });
   test("incomplete observations remain visible and return a successful read", async () => {
     const reply = { ...statistics(), usageIncomplete: true, usageIncompleteReason: "oversized_rows", entriesTruncated: true, entriesDropped: 3 };

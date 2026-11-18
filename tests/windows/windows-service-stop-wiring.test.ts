@@ -10,9 +10,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { approvalChanged, managerStillActive, parseStopApproval } from "../../src/cli/stop-approval";
 import { summarizeStopRun, type StopRunRecord } from "../../src/cli/stop-report";
 import { claimPendingTeardown, clearPendingTeardown, pendingTeardownPartA, recordPendingTeardownPartA } from "../../src/config/pending-teardown";
-import type { WindowsCheckedStopDeps } from "../../src/service/windows-checked-stop";
-import { windowsStopTerminate } from "../../src/service/windows-checked-stop-live";
+import { WindowsCheckedStopRefusedError, type WindowsCheckedStopDeps } from "../../src/service/windows-checked-stop";
+import { windowsCheckedStopLiveDeps, windowsStopTerminate } from "../../src/service/windows-checked-stop-live";
 import type { WindowsProcessWatch } from "../../src/service/windows-process-native";
+import { windowsLauncherVbsPath } from "../../src/service/state";
 import {
   runWindowsServiceStopPartA,
   setStopDeadlineMs,
@@ -27,6 +28,9 @@ import {
   windowsStopDeadlineAt,
 } from "../../src/service/windows-service-stop";
 import { DEFAULT_WINDOWS_STOP_DEADLINE_MS } from "../../src/service/windows-stop-budget";
+import { buildWindowsTaskXml } from "../../src/service/windows-taskxml";
+import { guardedStopWindowsChecked } from "../../src/update/guarded-runtime-ops";
+import { UpdateMutationRefusedError } from "../../src/update/mutation-guard.mjs";
 import { PATHS, SCHEDULE_PID, entry, launcher, loop, supervisedTree } from "../helpers/windows-checked-stop-fixtures";
 import { partAResult } from "../helpers/windows-stop-caller-fixtures";
 
@@ -67,6 +71,40 @@ function machine(overrides: Partial<WindowsCheckedStopDeps> & { gate?: () => boo
 }
 
 describe("Part A through the caller wiring", () => {
+  test("the updater reauthorizes after Scheduler proof and preserves a refusal before dispatch", async () => {
+    const sid = "S-1-5-21-100-200-300-1001";
+    const xml = buildWindowsTaskXml(undefined, windowsLauncherVbsPath(), undefined, sid)
+      .replace('<Principal id="Author">', '<Principal id="Author"><UserId>' + sid + '</UserId>');
+    const proof = Buffer.from(JSON.stringify({ xml, sid })).toString("base64");
+    const events: string[] = [];
+    let authorized = true;
+    let dispatched: boolean | undefined;
+    const fake = machine();
+    setWindowsServiceStopHooksForTests({ liveDeps: options => {
+      const { endTask } = windowsCheckedStopLiveDeps({ ...options, run: async (program, _args, _timeout, authorizeProof) => {
+        expect(program).toBe("powershell");
+        events.push("proof");
+        authorized = false;
+        dispatched = await authorizeProof?.(proof);
+        const verdict = dispatched ? "ended" : "unverified-registration";
+        return { status: 0, stdout: proof + "\n" + verdict, stderr: "", timedOut: false };
+      } });
+      return { ...fake.deps, endTask };
+    } });
+    const error: unknown = await guardedStopWindowsChecked(kind => {
+      events.push(kind);
+      return authorized;
+    }).catch((caught: unknown) => caught);
+
+    expect(dispatched).toBe(false);
+    expect(events).toEqual(["service", "service", "proof", "service"]);
+    expect(error).toBeInstanceOf(WindowsCheckedStopRefusedError);
+    if (!(error instanceof WindowsCheckedStopRefusedError)) throw error;
+    expect(error.cause).toBeInstanceOf(UpdateMutationRefusedError);
+    expect(error.partial).toMatchObject({ changed: false, terminated: [] });
+    expect(fake.terminated).toEqual([]);
+  });
+
   test("WinSW registered and stopped still checks the caller's wrapper ancestry", async () => {
     const under = entry(70, 30, "ocx.exe", "ocx stop", 6_000);
     const fake = machine({ selfPid: 70, probeScheduler: () => ({ status: "absent" }),
