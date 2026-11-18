@@ -1001,6 +1001,40 @@ test("browser login with a profile-only organization leaves the active grant int
   expect(anthropicRows().find(row => row.id !== first.id)?.credential.anthropicIdentity?.organizationUuid).toBe(ORG_B);
 });
 
+test.each([
+  { organization: ORG_B, sameSlot: false },
+  { organization: ORG_A, sameSlot: true },
+])("browser login honors exchange organization $organization when the profile is unavailable", async ({ organization, sameSlot }) => {
+  await saveCredential("anthropic", orgCredential("synthetic-org-a", ORG_A));
+  const before = getAccountSet("anthropic")!;
+  const active = before.accounts[0]!;
+  globalThis.fetch = (async (_url, init) => init?.method === "POST"
+    ? Response.json({ access_token: "synthetic-fresh", refresh_token: "synthetic-fresh-refresh", expires_in: 3600,
+      organization: { uuid: organization.toUpperCase() } })
+    : new Response(null, { status: 503 })) as typeof fetch;
+  const config = (): OcxConfig => ({ port: 10100, defaultProvider: "openai", openaiProviderTierVersion: 2, providers: {} });
+  let state: string | null = null;
+  await runLogin("anthropic", {
+    onAuth: ({ url }) => { state = new URL(url).searchParams.get("state"); },
+    onManualCodeInput: async () => `synthetic-code#${state}`,
+  }, {}, { loadConfig: config, saveConfig: () => {} });
+
+  const after = getAccountSet("anthropic")!;
+  if (sameSlot) {
+    expect(after.activeAccountId).toBe(active.id);
+    expect(after.accounts).toHaveLength(1);
+  } else {
+    expect(getAccountCredential("anthropic", active.id)).toEqual(active.credential);
+    expect(after.activeAccountId).not.toBe(active.id);
+    expect(after.accounts).toHaveLength(2);
+  }
+  const saved = getAccountCredential("anthropic", after.activeAccountId)!;
+  expect(saved.access).toBe("synthetic-fresh");
+  expect(anthropicOrganization(saved)).toBe(organization);
+  expect(saved.accountId).toBeUndefined();
+  expect(saved.anthropicIdentity).toBeUndefined();
+});
+
 test("browser login refuses a conflicting profile organization when the exchange omits the account", async () => {
   await saveCredential("anthropic", orgCredential("synthetic-org-b", ORG_B));
   const before = getAccountSet("anthropic")!;

@@ -167,7 +167,7 @@ async function withAccountProfile(data: AnthropicTokenResponse, signal?: AbortSi
   const credential = credsFrom(data, refreshToken);
   const exchangeOrganization = normalizeAnthropicOrganizationUuid(data.organization?.uuid);
   const identity = normalizeAnthropicIdentity(credential.anthropicIdentity, credential.access);
-  const exchangeScope = refreshToken !== undefined && !identity
+  const exchangeScope = !identity
     ? bindAnthropicOrganizationScope(credential.access, exchangeOrganization) : undefined;
   const exchangeCredential = exchangeScope ? { ...credential, anthropicOrganizationScope: exchangeScope } : credential;
   const profile = await resolveAnthropicAccountIdentity(credential.access, signal);

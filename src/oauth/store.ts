@@ -1082,9 +1082,9 @@ export async function saveCredentialWithReceipt(
       set.activeAccountId = id;
       accountId = id;
     } else {
-      // No identity during a normal login: replace the active slot in place.
+      // Without account identity, reuse the active slot unless both grants prove different organizations.
       const active = set.accounts.find(a => a.id === set.activeAccountId);
-      if (active) {
+      if (active && (!isAnthropicInstanceId(provider) || !anthropicOrganizationsConflict(active.credential, safe))) {
         active.credential = safe;
         delete active.needsReauth;
         delete active.needsReauthReason;
