@@ -66,22 +66,21 @@ export async function fetchAnthropicAccountQuota(
     return ownerCurrent() && (joined.isCurrent?.() ?? flightCurrent()) ? joined : unavailable();
   }
   const writerGeneration = captureConfigGeneration();
-  // One publication path for a result and for a failed dispatch. A null result (HTTP refusal)
-  // and a thrown read (network failure) both record the unavailable row over the retained
-  // in-flight observations, as the pre-instance A path did, so joined callers and later cached
-  // reads agree and windows that expired during the shared probe are normalized away.
-  /** Cache the settled probe result for an account and publish its decision evidence only while the flight is still current for its credential and generation. */
+  // An unusable probe reports unavailability over retained observations. A retirement-only
+  // result also removes the monthly fallback while keeping plan observations. Cache and
+  // decision writes both require current credential and generation ownership.
   const publish = (result: AnthropicQuotaRecoveryResult | null, failure?: QuotaFailureCode): AccountQuotaCacheEntry => {
     const previous = accountQuotaCache.get(key);
     const retained = previous?.isCurrent?.() === false ? undefined : previous;
     const isCurrent = result?.isCurrent ?? flightCurrent;
     const retirementOnly = result?.quota === null;
+    const quotaUnavailable = !result?.quota;
     const quota = retirementOnly ? withoutAnthropicMonthlyFallback(getCachedProviderAccountQuota(instance, accountId))
       : result?.quota ?? retained?.quota;
     const entry: AccountQuotaCacheEntry = {
       ts: Date.now(), quota: normalizeAnthropicQuota(quota, Date.now()),
-      ...(!result ? { unavailable: true as const } : {}), isCurrent,
-      ...(!result && failure ? { quotaFailure: failure, quotaFailureIsCurrent: isCurrent } : {}),
+      ...(quotaUnavailable ? { unavailable: true as const } : {}), isCurrent,
+      ...(quotaUnavailable && failure ? { quotaFailure: failure, quotaFailureIsCurrent: isCurrent } : {}),
     };
     if (isCurrent() && mayCommitAccountQuotaKey(key, writerGeneration)) {
       commitAnthropicAccountQuota(key, entry, !!result && result.quota?.monthlyPercent === undefined, result?.dispatch);

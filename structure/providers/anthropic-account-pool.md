@@ -205,10 +205,10 @@ With explicit legacy `five_hour: null`, a five-hour meter requires a finite sess
 Usage-based seats such as Enterprise can report an undated monthly fallback from enabled `extra_usage`.
 Any recognized plan row, including an inactive or skipped row, suppresses the fallback. The bar shows the
 higher of reported utilization and the share of a positive monthly credit cap consumed, clamped to 0–100.
-Plan evidence from either persisted usage-probe path or from serving headers retires the fallback. A recognized row
-without a meter or explicit `extra_usage.is_enabled: false` retires only monthly. Missing or malformed extra usage
-with no plan evidence keeps the last good reading. A monthly-only response replaces older plan bars, yields to later
-plan commits, and supersedes older probes. It informs display and advisory ranking. Plan admission and wallet availability are independent.
+Plan evidence from usage probes or serving headers retires the fallback. A recognized row without a meter or
+explicit `extra_usage.is_enabled: false` retires only monthly. Without either signal, an unusable response keeps
+the last good reading. A monthly-only response replaces older plan bars, yields to later plan commits, and
+supersedes older probes. It informs display and advisory ranking. Plan admission and wallet availability are independent.
 
 Only active scoped rows inform routing. Inactive rows go into `AccountQuota.displayWindows` for display
 alone, with routed labels taking precedence. `gui/src/components/QuotaBars.tsx` marks them as not in
@@ -238,7 +238,7 @@ invalidates the primary pool. With the pool on and two or more accounts, `fetchA
 A failed probe names one closed `quotaFailure` code from
 `src/providers/quota/failure-codes.ts`: `account_unavailable` when no usable credential could
 be obtained (no request is sent), the HTTP status class (`access_denied`, `rate_limited`,
-`upstream_error`, `redirect_blocked`), `response_unusable` for an unparsable or empty body,
+`upstream_error`, `redirect_blocked`), `response_unusable` for a body with no usable quota, including retirement-only responses,
 and `timeout` or `transport_error` for a thrown dispatch. Ownership and cooldown refusals set
 no code. The code is published only while the flight is current, never carries upstream text,
 and never changes account health or `needsReauth`.

@@ -270,7 +270,7 @@ describe("opt-in JEV quota activation", () => {
     });
   }
 
-  test("Anthropic inactive plan evidence retires a previously observed monthly fallback", async () => {
+  test.each(["inactive", "malformed"] as const)("Anthropic %s plan evidence retires a previously observed monthly fallback", async kind => {
     const { authId } = await seedStores();
     const live = config();
     reconcileJevQuotaActivation(live);
@@ -281,11 +281,12 @@ describe("opt-in JEV quota activation", () => {
     expect(getCachedProviderAccountQuota("anthropic", authId)?.monthlyPercent).toBe(100);
     expect(windows()).toMatchObject([{ window: "monthly", percent: 100 }]);
 
-    fetch.mockResolvedValueOnce(Response.json({ five_hour: null, extra_usage: monthly,
-      limits: [{ kind: "session", percent: 20, is_active: false }] }));
+    const plan = kind === "inactive"
+      ? { five_hour: null, limits: [{ kind: "session", percent: 20, is_active: false }] }
+      : { five_hour: { note: "no meter" } };
+    fetch.mockResolvedValueOnce(Response.json({ ...plan, extra_usage: monthly }));
     const retired = await fetchAnthropicAccountQuota("anthropic", authId, true, live);
-    expect(retired.quotaFailure).toBeUndefined();
-    expect(retired.unavailable).toBeUndefined();
+    expect(retired).toMatchObject({ unavailable: true, quotaFailure: "response_unusable", quota: null });
     expect({ quota: getCachedProviderAccountQuota("anthropic", authId), windows: windows() }).toEqual({ quota: null, windows: [] });
   });
 
@@ -308,8 +309,7 @@ describe("opt-in JEV quota activation", () => {
 
     fetch.mockResolvedValueOnce(Response.json({ extra_usage: { is_enabled: false } }));
     const retired = await read();
-    expect(retired.quotaFailure).toBeUndefined();
-    expect(retired.unavailable).toBeUndefined();
+    expect(retired).toMatchObject({ unavailable: true, quotaFailure: "response_unusable", quota: null });
     expect(getCachedProviderAccountQuota("anthropic", authId)).toBeNull();
     expect(windows()).toEqual([]);
     expect(tier()).toBe("unknown");

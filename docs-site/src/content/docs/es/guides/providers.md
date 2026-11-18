@@ -523,6 +523,8 @@ Proveedores con una consulta activa: OpenAI/Codex, Anthropic, xAI, Cursor, Kimi,
 pueden mostrar una barra mensual cuando Anthropic indica que el uso adicional está activado
 y no informa de ventanas del plan. La barra se muestra sin fecha de restablecimiento y desaparece
 cuando Anthropic informa de ventanas del plan o confirma que el uso adicional está desactivado.
+Si la respuesta no contiene ninguna ventana de cuota utilizable, la consulta de la cuenta sigue
+indicando que la lectura no está disponible.
 
 **Cuota de Kimi Coding Plan.** Los proveedores con inicio de sesión de cuenta o clave API que usan el endpoint canónico `https://api.kimi.com/coding/v1` consultan `/usages`. Los planes que informan `usages.limit_month_total` (o `monthTotal`) muestran una barra de uso mensual; si el total no está disponible, se utiliza `limit_month_code` (o `monthCode`). La fracción `used_ratio` / `usedRatio` debe estar en `[0, 1]` antes de convertirse en porcentaje consumido; los valores inválidos se ignoran. Un contenedor `usages` vacío o inutilizable no oculta datos mensuales válidos de otro sobre compatible. Se conserva cualquier hora de restablecimiento informada. Las ventanas existentes de cinco horas, semanales y de créditos totales de suscripción siguen siendo independientes; una ventana mensual ausente no se muestra como 0%.
 

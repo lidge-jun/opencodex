@@ -29,7 +29,7 @@ export async function readAnthropicUsageQuota(accessToken: string): Promise<Prov
   return (await probeAnthropicUsageQuota(accessToken)).quota;
 }
 
-/** A usage read, monthly retirement evidence, or a closed failure. A thrown fetch still throws. */
+/** A usage read with a closed failure when no quota was usable, and optional monthly retirement evidence. A thrown fetch still throws. */
 export interface AnthropicUsageProbe {
   quota: ProviderQuota | null;
   retireMonthlyFallback?: true;
@@ -82,10 +82,10 @@ export async function probeAnthropicUsageQuota(accessToken: string): Promise<Ant
     ...(displayWindows.length > 0 ? { displayWindows } : {}),
     updatedAt: Date.now(),
   };
-  // Plan presence or an explicit disable can retire the fallback without supplying a meter.
-  if (!hasQuotaRows(quota)) return windows.hasPlanWindow || parseAnthropicExtraUsage(body.extra_usage)?.state === "disabled"
-    ? { quota: null, retireMonthlyFallback: true }
-    : { quota: null, failure: "response_unusable" };
+  if (!hasQuotaRows(quota)) {
+    const retireMonthlyFallback = windows.hasPlanWindow || parseAnthropicExtraUsage(body.extra_usage)?.state === "disabled";
+    return { quota: null, failure: "response_unusable", ...(retireMonthlyFallback ? { retireMonthlyFallback: true } : {}) };
+  }
   if (decisionQuotaSinkActive()) bindRawDecisionWindows(quota, rawAnthropicUsageWindows(body, quota.updatedAt));
   return { quota: markAnthropicFamilyEnumeration(quota, familyEnumeration) };
 }
