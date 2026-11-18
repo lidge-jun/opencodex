@@ -268,6 +268,21 @@ describe("JEV session pin (#7525)", () => {
     expect(log.jevDecision).not.toHaveProperty("pinned");
   });
 
+  test("a context change between turns releases the pin", async () => {
+    const decisions: string[] = [];
+    const config = makeConfig("sol/gpt-5.6-sol:high", decisions, true);
+    config.combos!.auto!.capabilityPolicy = "union";
+    config.providers.sol!.contextWindow = 100_000;
+    expect((await turn(config)).status).toBe(200);
+
+    config.providers.sol!.contextWindow = 1;
+    const log: RequestLogContext = { model: "", provider: "" };
+    const models: string[] = [];
+    expect((await turn(config, { log, models })).status).toBe(200);
+    expect(models).toEqual(["luna/gpt-5.6-luna"]);
+    expect(log.jevDecision?.pinned).toBeUndefined();
+  });
+
   test("opted-in quota evidence reading nearly exhausted releases the pin", async () => {
     const home = createTempHome("ocx-jev-session-pin-quota-");
     try {
@@ -331,18 +346,20 @@ describe("JEV session pin per-turn effort", () => {
     expect(log.routeDecision?.selected.reason).toBe(JEV_SESSION_PIN_ROUTE_REASON);
   });
 
-  test("client effort mode skips per-turn decisions and keeps the caller's effort", async () => {
+  test.each([["medium", "medium"], ["xhigh", "high"]])("client effort mode skips per-turn decisions and sends %s as %s", async (requested, sent) => {
     const payloads: Array<Record<string, unknown>> = [];
     const config = perTurnConfig(["sol/gpt-5.6-sol:high", "sol/gpt-5.6-sol:low"], payloads);
     config.combos!.auto!.jevEffortMode = "client";
+    config.combos!.auto!.capabilityPolicy = "union";
+    config.combos!.auto!.reasoningEffortMode = "adaptive";
     expect((await turn(config)).status).toBe(200);
     const log: RequestLogContext = { model: "", provider: "" };
     const child: Child = (body, complete) => {
       expect(body.model).toBe("sol/gpt-5.6-sol");
-      expect(effortOf(body)).toBe("medium");
+      expect(effortOf(body)).toBe(sent);
       return served(body, complete);
     };
-    expect((await turn(config, { child, log, effort: "medium" })).status).toBe(200);
+    expect((await turn(config, { child, log, effort: requested })).status).toBe(200);
     expect(payloads).toHaveLength(1);
     expect(log.jevDecision).toMatchObject({ pinned: true, pinReason: "session" });
   });
@@ -453,7 +470,7 @@ describe("JEV session pin per-turn effort", () => {
     expect(log.jevDecision?.pinReason).toBeUndefined();
   });
 
-  test("rechecks the pinned context window after the paid effort call", async () => {
+  test.each(["context", "effort"] as const)("rechecks pinned %s after the paid effort call", async (changed) => {
     const payloads: Array<Record<string, unknown>> = [];
     const config = perTurnConfig(["sol/gpt-5.6-sol:high", "sol/gpt-5.6-sol:low"], payloads);
     config.combos!.auto!.capabilityPolicy = "union";
@@ -473,7 +490,8 @@ describe("JEV session pin per-turn effort", () => {
     const log: RequestLogContext = { model: "", provider: "" };
     const pending = turn(config, { child, log });
     await decisionStarted.promise;
-    config.providers.sol!.contextWindow = 1;
+    if (changed === "context") config.providers.sol!.contextWindow = 1;
+    else config.providers.sol!.modelReasoningEfforts![SOL.model] = [];
     resumeDecision.resolve();
 
     expect((await pending).status).toBe(200);
