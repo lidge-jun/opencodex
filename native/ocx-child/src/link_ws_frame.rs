@@ -12,12 +12,14 @@
 //! - UTF-8 validation of complete text messages and close reasons (a leading U+FEFF is kept);
 //! - close codes 1000-1003, 1007-1014 and 3000-4999 only;
 //! - a message limit checked before a payload is held, and at most a bounded number of fragments;
-//! - at most the limit plus a 14-byte header held: an unfragmented message gets a buffer of its exact
-//!   size, a fragmented one is written into one buffer reserved once at the limit (no growth), and a
+//! - at most the limit plus a 125-byte control payload and a 14-byte header held: an unfragmented
+//!   message gets a buffer of its exact size, a fragmented one is written into one buffer reserved
+//!   once at the limit (no growth), and a
 //!   control frame between fragments uses its own buffer of at most 125 bytes.
 //!
-//! A violation returns the fault whose close code to send; events completed earlier in the same input
-//! are already in the caller's vector. The reader never interprets a message.
+//! `next_event` stops at one completed event so the relay can release it before another message is
+//! allocated. A violation returns the fault whose close code to send. The reader never interprets a
+//! message.
 
 /// Largest control-frame payload.
 pub const MAX_CONTROL_PAYLOAD: usize = 125;
@@ -119,10 +121,20 @@ impl FrameReader {
         self.assembly.as_ref().map_or(0, |a| a.capacity()) + own + self.header_len
     }
 
-    /// Feed bytes off the socket. Completed events are appended to `events` in wire order, also when a
-    /// later frame in the same input is refused.
+    /// Collect completed events in wire order, also when a later frame in the same input is refused.
+    /// Callers own the collected capacity; the relay uses `next_event` instead of buffering a batch.
     pub fn push(&mut self, data: &[u8], events: &mut Vec<FrameEvent>) -> Result<(), ProtocolFault> {
-        let result = self.push_inner(data, events);
+        let mut remaining = data;
+        while let Some(event) = self.next_event(&mut remaining)? {
+            events.push(event);
+        }
+        Ok(())
+    }
+
+    /// Consume through one event, leaving later frames in `data` untouched. Handle and drop the
+    /// returned event before calling again, so completed messages share the reader's payload bound.
+    pub fn next_event(&mut self, data: &mut &[u8]) -> Result<Option<FrameEvent>, ProtocolFault> {
+        let result = self.next_event_inner(data);
         if result.is_err() {
             self.done = true;
             self.frame = None;
@@ -131,19 +143,13 @@ impl FrameReader {
         result
     }
 
-    fn push_inner(
-        &mut self,
-        data: &[u8],
-        events: &mut Vec<FrameEvent>,
-    ) -> Result<(), ProtocolFault> {
-        let mut offset = 0;
-        while offset < data.len() && !self.done {
+    fn next_event_inner(&mut self, data: &mut &[u8]) -> Result<Option<FrameEvent>, ProtocolFault> {
+        while !data.is_empty() && !self.done {
             if self.frame.is_none() {
-                let take = (self.header_needed - self.header_len).min(data.len() - offset);
-                self.header[self.header_len..self.header_len + take]
-                    .copy_from_slice(&data[offset..offset + take]);
+                let take = (self.header_needed - self.header_len).min(data.len());
+                self.header[self.header_len..self.header_len + take].copy_from_slice(&data[..take]);
                 self.header_len += take;
-                offset += take;
+                *data = &data[take..];
                 if self.header_len < self.header_needed {
                     continue;
                 }
@@ -153,12 +159,14 @@ impl FrameReader {
                         continue;
                     }
                 }
-                self.start_frame(events)?;
+                if let Some(event) = self.start_frame()? {
+                    return Ok(Some(event));
+                }
                 continue;
             }
             let frame = self.frame.as_mut().expect("frame in progress");
-            let take = (frame.len - frame.filled).min(data.len() - offset);
-            let chunk = &data[offset..offset + take];
+            let take = (frame.len - frame.filled).min(data.len());
+            let chunk = &data[..take];
             let target: &mut Vec<u8> = if frame.fragment {
                 self.assembly.as_mut().expect("reassembly buffer")
             } else {
@@ -177,13 +185,15 @@ impl FrameReader {
                 None => target.extend_from_slice(chunk),
             }
             frame.filled += take;
-            offset += take;
+            *data = &data[take..];
             if frame.filled == frame.len {
                 let done = self.frame.take().expect("frame in progress");
-                self.end_frame(done, events)?;
+                if let Some(event) = self.end_frame(done)? {
+                    return Ok(Some(event));
+                }
             }
         }
-        Ok(())
+        Ok(None)
     }
 
     /// Validate the first two header bytes; returns the full header length.
@@ -216,7 +226,7 @@ impl FrameReader {
         Ok(2 + extended + if masked { 4 } else { 0 })
     }
 
-    fn start_frame(&mut self, events: &mut Vec<FrameEvent>) -> Result<(), ProtocolFault> {
+    fn start_frame(&mut self) -> Result<Option<FrameEvent>, ProtocolFault> {
         let (b0, b1) = (self.header[0], self.header[1]);
         let fin = b0 & 0x80 != 0;
         let opcode = b0 & 0x0f;
@@ -263,7 +273,7 @@ impl FrameReader {
         }
         let len = len as usize;
         if fragment && self.assembly.is_none() {
-            self.assembly = Some(Vec::with_capacity(self.max_message));
+            self.assembly = Some(payload_buffer(self.max_message)?);
         }
         self.header_len = 0;
         self.header_needed = 2;
@@ -277,37 +287,26 @@ impl FrameReader {
             own: if fragment {
                 Vec::new()
             } else {
-                Vec::with_capacity(len)
+                payload_buffer(len)?
             },
         };
         if len == 0 {
-            self.end_frame(frame, events)
+            self.end_frame(frame)
         } else {
             self.frame = Some(frame);
-            Ok(())
+            Ok(None)
         }
     }
 
-    fn end_frame(
-        &mut self,
-        frame: Frame,
-        events: &mut Vec<FrameEvent>,
-    ) -> Result<(), ProtocolFault> {
+    fn end_frame(&mut self, frame: Frame) -> Result<Option<FrameEvent>, ProtocolFault> {
         match frame.opcode {
-            9 => {
-                events.push(FrameEvent::Ping(frame.own));
-                return Ok(());
-            }
-            10 => {
-                events.push(FrameEvent::Pong(frame.own));
-                return Ok(());
-            }
+            9 => return Ok(Some(FrameEvent::Ping(frame.own))),
+            10 => return Ok(Some(FrameEvent::Pong(frame.own))),
             8 => {
                 self.done = true;
                 let payload = frame.own;
                 if payload.is_empty() {
-                    events.push(FrameEvent::Close(None, String::new()));
-                    return Ok(());
+                    return Ok(Some(FrameEvent::Close(None, String::new())));
                 }
                 if payload.len() == 1 {
                     return Err(ProtocolFault::Protocol);
@@ -318,8 +317,7 @@ impl FrameReader {
                 }
                 let reason =
                     String::from_utf8(payload[2..].to_vec()).map_err(|_| ProtocolFault::Utf8)?;
-                events.push(FrameEvent::Close(Some(code), reason));
-                return Ok(());
+                return Ok(Some(FrameEvent::Close(Some(code), reason)));
             }
             _ => {}
         }
@@ -328,7 +326,7 @@ impl FrameReader {
         }
         self.fragment_count += 1;
         if !frame.fin {
-            return Ok(());
+            return Ok(None);
         }
         let message = if frame.fragment {
             self.assembly.take().unwrap_or_default()
@@ -340,12 +338,20 @@ impl FrameReader {
         self.message_opcode = 0;
         if opcode == 1 {
             let text = String::from_utf8(message).map_err(|_| ProtocolFault::Utf8)?;
-            events.push(FrameEvent::Text(text));
+            Ok(Some(FrameEvent::Text(text)))
         } else {
-            events.push(FrameEvent::Binary(message.len()));
+            Ok(Some(FrameEvent::Binary(message.len())))
         }
-        Ok(())
     }
+}
+
+/// A refused payload allocation closes this connection instead of aborting the daemon.
+fn payload_buffer(capacity: usize) -> Result<Vec<u8>, ProtocolFault> {
+    let mut buffer = Vec::new();
+    buffer
+        .try_reserve_exact(capacity)
+        .map_err(|_| ProtocolFault::TooLarge)?;
+    Ok(buffer)
 }
 
 /// The header of one final frame of `len` payload bytes; with a mask, the caller masks the payload
@@ -697,6 +703,86 @@ mod tests {
             .push(&frame(1, &[b'd'; 500], false, false), &mut events)
             .unwrap();
         assert_eq!(reader.held_bytes(), 1024);
+    }
+
+    #[test]
+    fn a_coalesced_fragment_burst_retains_only_one_completed_message() {
+        // Scale the message limit down: a batched reader would retain tens of MiB from this
+        // one socket read, but the relay's one-event path must keep only one payload allocation.
+        const LIMIT: usize = 64 * 1024;
+        for (role, masked) in [(Role::FromClient, true), (Role::FromServer, false)] {
+            for payload in [b"".as_slice(), b"x".as_slice()] {
+                let message = [
+                    frame(1, payload, false, masked),
+                    frame(0, b"", true, masked),
+                ]
+                .concat();
+                let tail = frame(1, b"unfinished", false, masked);
+                let count = (8 * 1024 - tail.len()) / message.len();
+                let mut wire = message.repeat(count);
+                wire.extend_from_slice(&tail);
+                let mut remaining = wire.as_slice();
+                let mut reader = FrameReader::new(role, LIMIT, 4);
+                let mut seen = 0;
+                while let Some(event) = reader.next_event(&mut remaining).unwrap() {
+                    let FrameEvent::Text(text) = event else {
+                        panic!("expected text");
+                    };
+                    assert_eq!(text.as_bytes(), payload);
+                    assert!(reader.held_bytes() + text.capacity() <= LIMIT);
+                    seen += 1;
+                    // The next message is still unparsed, even though it is already in the read.
+                    assert_eq!(remaining.len(), (count - seen) * message.len() + tail.len());
+                    drop(text);
+                }
+                assert_eq!(seen, count);
+                assert!(seen >= 500);
+                assert!(remaining.is_empty());
+                assert_eq!(reader.held_bytes(), LIMIT);
+            }
+        }
+    }
+
+    #[test]
+    fn next_event_preserves_later_fault_and_close_boundaries() {
+        let mut reader = FrameReader::new(Role::FromServer, 1024, 4);
+        let invalid = [0xc1, 1, b'x'];
+        let wire = [server(1, b"first"), invalid.to_vec()].concat();
+        let mut remaining = wire.as_slice();
+        assert_eq!(
+            reader.next_event(&mut remaining),
+            Ok(Some(FrameEvent::Text("first".into())))
+        );
+        assert_eq!(remaining, invalid);
+        assert_eq!(
+            reader.next_event(&mut remaining),
+            Err(ProtocolFault::Protocol)
+        );
+        assert!(reader.closed());
+
+        let mut reader = FrameReader::new(Role::FromServer, 1024, 4);
+        let later = frame(1, b"unread", false, false);
+        let wire = [server(8, &[]), later.clone()].concat();
+        let mut remaining = wire.as_slice();
+        assert_eq!(
+            reader.next_event(&mut remaining),
+            Ok(Some(FrameEvent::Close(None, String::new())))
+        );
+        assert_eq!(reader.next_event(&mut remaining), Ok(None));
+        assert_eq!(remaining, later);
+        assert_eq!(reader.held_bytes(), 0);
+    }
+
+    #[test]
+    fn an_unrepresentable_payload_reservation_is_a_connection_fault() {
+        // usize::MAX fails the capacity check without asking the allocator for real memory.
+        let mut reader = FrameReader::new(Role::FromServer, usize::MAX, 4);
+        let wire = frame(1, b"", false, false);
+        let mut remaining = wire.as_slice();
+        let fault = reader.next_event(&mut remaining).unwrap_err();
+        assert_eq!(fault.close_code(), 1009);
+        assert!(reader.closed());
+        assert!(reader.held_bytes() <= 14);
     }
 
     #[test]

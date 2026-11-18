@@ -19,7 +19,7 @@ type Case =
   | "token-backup-unsafe" | "profile-foreign" | "profile-old-key" | "desktop-restore-started";
 type Outcome = {
   error: string | null; retryError: string | null; receipt: string;
-  root: string; library: string; profile: string; backup: string;
+  root: string; state: string; library: string; profile: string; backup: string;
 };
 
 function run(kind: Case, retry = false): Outcome {
@@ -132,10 +132,13 @@ function run(kind: Case, retry = false): Outcome {
         let retryError = null;
         if (retry) { if (!fix) throw new Error("no fix for " + kind); fix(); retryError = await attempt(); }
         const receipt = store.readDesktopDisconnectReceipt();
-        const real = p => fs.realpathSync.native(p);
+        // The refusal names the paths the store itself resolved (canonicalDirectory: realpathSync plus
+        // path.join), so read them from storePaths. realpathSync.native expands a Windows 8.3 short
+        // name (RUNNER~1) that the store keeps, and a literal "/" is not the Windows separator.
+        const paths = require("./src/claude/desktop-remote-store-io").storePaths();
         console.log(JSON.stringify({
           error, retryError, receipt: receipt.kind === "valid" ? receipt.value.phase : receipt.kind,
-          root: real(home) + "/desktop-remote", library: real(desktop), profile: real(desktop) + "/fixture.json",
+          root: paths.root, state: paths.state, library: paths.library, profile: path.join(paths.library, "fixture.json"),
           backup: path.join(home, "service-api-token.prev"),
         }));
       })();
@@ -169,7 +172,7 @@ describe("desktop_lifecycle_unsafe names its cause and fix (O7)", () => {
 
   test("a store written for another connection; removing that profile and moving the folder aside clears it", () => {
     const out = run("owner-mismatch", true);
-    expectNamedRefusal(out, out.root + "/state.json", "a different connection", "remove that connection's OpenCodex profile");
+    expectNamedRefusal(out, out.state, "a different connection", "remove that connection's OpenCodex profile");
     expect(out.retryError).toBeNull();
   }, SPAWN_BUDGET_MS);
 

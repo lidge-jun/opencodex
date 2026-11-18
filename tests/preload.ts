@@ -32,6 +32,7 @@ import { isTestHomeGuardArmed, protectedHomeForTests } from "../src/lib/test-hom
 import { createIsolatedTestEnvironment, LIVE_INSTALL_CREDENTIAL_ENV } from "../scripts/test";
 import { gitRepositoryEnvNames } from "../scripts/git-repository-env";
 import { createGitConfigGuard } from "./helpers/git-config-guard";
+import { installNetworkEgressGuard } from "./helpers/network-egress-guard";
 import { repoRoot } from "./helpers/repo-root";
 import {
   acquireTestRunLock,
@@ -93,6 +94,11 @@ process.env.OPENCODEX_KIRO_MODEL_DISCOVERY = "0";
 if (!isTestHomeGuardArmed() || !protectedHomeForTests()) {
   throw new Error("test home guard failed to arm; refusing to run tests unprotected");
 }
+
+// Refuse real network egress before anything below can open a connection (#8848): a full
+// suite once sent fixture credentials to nine provider hosts through requests that slipped
+// past a mock. Loopback fixtures and the reserved .test/.example/.invalid names still work.
+installNetworkEgressGuard();
 
 // `scripts/test.ts` owns the lock for wrapped runs. A bare `bun test` has no wrapper,
 // so a single-process runner uses its own PID while true parallel workers rendezvous

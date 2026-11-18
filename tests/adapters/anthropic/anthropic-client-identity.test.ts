@@ -107,7 +107,8 @@ describe("observed Claude Code identity", () => {
   });
   test("UA alone, unknown clients, malformed, oversized and duplicate required values fall back", () => {
     expect(captureAnthropicClientIdentity(new Headers({ "User-Agent": UA }))).toBeUndefined();
-    for (const [name, value] of [["User-Agent", "third-party/1.0"], ["User-Agent", "claude-cli/2.1.288 (external, arbitrary-token)"], ["User-Agent", "claude-cli/2.1.282 (external, claude desktop)"],
+    for (const [name, value] of [["User-Agent", "third-party/1.0"], ["User-Agent", "claude-cli/2.1.288 (external, arbitrary-token)"], ["User-Agent", "claude-cli/2.1.327 (external, t3-code)"],
+      ["User-Agent", "claude-cli/2.1.327 (external, local_projects-other)"], ["User-Agent", "claude-cli/2.1.282 (external, claude desktop)"],
       ["User-Agent", "x".repeat(513)], ["X-App", "web"], ["X-Claude-Code-Session-Id", "fixture-not-uuid"], ["X-Stainless-Runtime", "python"]]) {
       expect(captureAnthropicClientIdentity(new Headers({ ...observed, [name!]: value! }))).toBeUndefined();
     }

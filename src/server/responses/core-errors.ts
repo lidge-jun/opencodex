@@ -1,4 +1,4 @@
-import type { ComboExclusionReasons } from "../../combos/resolve";
+import type { ComboExclusion, ComboUnavailableDiagnostics } from "../../combos/resolve";
 import { markProxyError } from "../../lib/client-error-body";
 import { appendClientRetryIn, formatClientRetryAfter } from "../../lib/client-retry-after";
 import { readBoundedResponseBody } from "../../lib/bounded-body";
@@ -104,7 +104,7 @@ export function decodeRequestErrorResponse(err: unknown, label: string): Respons
 
 export function comboUnavailableResponse(
   message: string,
-  options?: { retryAfter?: string | null; presentation?: "combo" },
+  options?: { retryAfter?: string | null; presentation?: "combo"; diagnostics?: ComboUnavailableDiagnostics },
 ): Response {
   const headers = new Headers({ "Content-Type": "application/json" });
   // Advice leaves in this proxy's format, whatever form the earliest cooldown was recorded in.
@@ -115,17 +115,20 @@ export function comboUnavailableResponse(
   return markProxyError(new Response(
     JSON.stringify({
       // Built from the header value itself, so an HTTP-date cannot make the body and header disagree.
-      error: { message: appendClientRetryIn(message, advice), type: "server_error", code: "combo_unavailable" },
+      // `combo` carries the machine-readable cause class and target counts (#7965).
+      error: { message: appendClientRetryIn(message, advice), type: "server_error", code: "combo_unavailable",
+        ...(options?.diagnostics ? { combo: options.diagnostics } : {}) },
     }),
     { status: 503, headers },
   ), options?.presentation);
 }
 
 
-export function comboUnavailable(comboId: string, now = Date.now(), reasons?: ComboExclusionReasons): Response {
-  return comboUnavailableResponse(new NoAvailableComboTargetsError(comboId, reasons).message, {
+export function comboUnavailable(comboId: string, now = Date.now(), exclusion?: ComboExclusion): Response {
+  return comboUnavailableResponse(new NoAvailableComboTargetsError(comboId, exclusion).message, {
     retryAfter: comboCooldownRetryAfterSeconds(comboId, now),
-    presentation: reasons === undefined ? undefined : "combo",
+    presentation: exclusion === undefined ? undefined : "combo",
+    ...(exclusion ? { diagnostics: exclusion.diagnostics } : {}),
   });
 }
 

@@ -10,6 +10,7 @@ import { ConfigMutationLockError } from "../../src/config/mutation-lock";
 import type { LinkPeerEntry } from "../../src/link/peer-report";
 import type { ParsedRemoteRuntimeInspection } from "../../src/link/remote-plant";
 import { SshRunnerError, type SshRunResult } from "../../src/link/ssh-runner";
+import { LinkSshArgumentError } from "../../src/link/ssh-argv";
 import type { LinkRecord, LinkStore } from "../../src/link/store";
 
 const NOW = new Date("2026-11-11T00:00:00.000Z");
@@ -116,9 +117,16 @@ describe("observeChild", () => {
   });
 
   test("a Windows argv over the budget is failed windows-command-too-long with no SSH", async () => {
-    const version = "1.0.0-a" + createHash("sha512").update("x").digest("hex").slice(0, 120);
-    const windows = deps(ran(plan()), { homeVersion: version });
-    expect(await observeChild(record({ remotePlatform: "windows" }), windows.value)).toEqual({ state: "failed", reason: "windows-command-too-long", observation: null, probe: null });
+    // The longest valid Home version fits since the payload is packed 14 bits per character (#8359), so the
+    // builder's own overflow error is injected to keep the mapping covered.
+    const longest = "1.0.0-a" + createHash("sha512").update("x").digest("hex").slice(0, 120);
+    expect(gated.remoteUpdatePlanArgv(longest, "windows")[5]!.length).toBeGreaterThan(0);
+    const spy = spyOn(gated, "remoteUpdatePlanArgv").mockImplementation(() => { throw new LinkSshArgumentError("windows-command-too-long"); });
+    let windows: ReturnType<typeof deps>;
+    try {
+      windows = deps(ran(plan()), { homeVersion: longest });
+      expect(await observeChild(record({ remotePlatform: "windows" }), windows.value)).toEqual({ state: "failed", reason: "windows-command-too-long", observation: null, probe: null });
+    } finally { spy.mockRestore(); }
     const invalid = deps(ran(plan()), { homeVersion: "not-a-version" });
     expect(await observeChild(record(), invalid.value)).toEqual({ state: "failed", reason: "home-version-invalid", observation: null, probe: null });
     expect([...windows.calls, ...invalid.calls]).toEqual([]);

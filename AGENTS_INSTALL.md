@@ -70,6 +70,25 @@ its prompt. `POST /api/telemetry/profile` requires a human dashboard session, an
 and non-interactive terminals with `tty_required`. Disconnecting
 (`ocx telemetry profile disconnect`), which deletes the profile, is always permitted.
 
+### Google Antigravity sign-in
+
+Signing in to Google Antigravity puts the user's Google account at risk: Google
+has disabled Gemini and Antigravity access on accounts used through third-party
+tools ("This service has been disabled in this account for violation of Terms of
+Service."). Only the account owner can accept that risk. An agent must never:
+
+- pass `--accept-antigravity-risk` to `ocx login`, `ocx account login`, or
+  `ocx account import`, or answer their y/N prompt. Agent-driven runs are
+  refused with `antigravity_risk_not_acknowledged` whatever the flag says;
+  treat that as the final answer.
+- send `acknowledgeAntigravityRisk: true` to `POST /api/oauth/login` or
+  `POST /api/oauth/accounts/import`, or tick the dashboard dialog's checkbox
+  for the user.
+
+Relay the warning and let the user run the command themselves or use the
+dashboard. The management API cannot tell an agent holding the admin token from
+the CLI, so for that route this rule is the boundary.
+
 ## Where things are installed
 
 An agent asked to install, inspect, repair, or remove opencodex needs to know what is written
@@ -151,9 +170,12 @@ agent-driven callers regardless:
   the one-time marker.
 - [`src/server/management/sidebar-routes.ts`](./src/server/management/sidebar-routes.ts)
   — the `403 agent_consent_required` refusal.
+- [`src/oauth/antigravity-risk.ts`](./src/oauth/antigravity-risk.ts) — the
+  Antigravity acknowledgement, refused for agent-driven CLI runs.
 
 Regression coverage: `tests/server/startup-prompt.test.ts`,
-`tests/cli/agent-driven.test.ts`, `tests/server/sidebar-routes.test.ts`.
+`tests/cli/agent-driven.test.ts`, `tests/server/sidebar-routes.test.ts`,
+`tests/oauth/oauth-antigravity-risk.test.ts`.
 
 ### Pending Codex account validation
 

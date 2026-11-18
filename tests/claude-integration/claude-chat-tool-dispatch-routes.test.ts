@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { handleClaudeMessages } from "../../src/server/claude-messages";
-import { applyChatToolDispatch, CHAT_TOOL_DISPATCH_NAME } from "../../src/claude/chat-tool-dispatch";
+import { applyChatToolDispatch, CHAT_TOOL_DISPATCH_NAME, projectChatToolDispatch } from "../../src/claude/chat-tool-dispatch";
 import { anthropicToResponsesTranslation } from "../../src/claude/inbound";
 import { parseRequest } from "../../src/responses/parser";
+import { resolveAdapter } from "../../src/server/adapter-resolve";
 import type { ProviderAdapter } from "../../src/adapters/base";
 import { configSchema } from "../../src/config/schema/config-schema";
 import { salvageConfigCandidate } from "../../src/config/salvage";
@@ -229,6 +230,89 @@ describe("chatToolDispatchModels routing boundaries", () => {
           expect(toolUse).toMatchObject({ id: "call_json", name, input: { q: "x" } });
         }
       }
+    });
+  }
+});
+
+describe("chatToolDispatchModels caller restrictions", () => {
+  const config = { defaultProvider: "chatgw", providers: { chatgw: chatProvider },
+    claudeCode: { chatToolDispatchModels: ["chatgw/test-model"] } };
+  const restrictions = [
+    ["programmatic-only", ["code_execution_20260120"]],
+    ["empty", []],
+    ["mixed", ["direct", "code_execution_20260120"]],
+    ["repeated direct", ["direct", "direct"]],
+  ] as const;
+
+  test("caller restrictions leave the original parsed catalog and history intact for the adapter guard", async () => {
+    for (const [, allowed_callers] of restrictions) {
+      const raw = loadedRequest("chatgw/test-model", {
+        tools: [tool("ToolSearch"), tool("Bash"), { ...tool("WebFetch", true), allowed_callers }],
+      });
+      const parsed = parseRequest(anthropicToResponsesTranslation(raw, {}).body as any);
+      const before = JSON.stringify(parsed);
+      expect(parsed.context.tools![2].allowedCallers).toEqual([...allowed_callers]);
+      expect(projectChatToolDispatch(parsed, raw)).toBeNull();
+      const adapter = resolveAdapter(chatProvider as any, undefined, "chatgw");
+      applyChatToolDispatch(adapter, raw);
+      await expect(Promise.resolve().then(() => adapter.buildRequest(parsed, { headers: new Headers() } as any)))
+        .rejects.toThrow("cannot express tools[].allowed_callers");
+      expect(JSON.stringify(parsed)).toBe(before);
+    }
+  });
+
+  for (const stream of [true, false]) {
+    for (const loaded of [true, false]) {
+      for (const [label, allowed_callers] of restrictions) {
+        test(`${label} callers on a ${loaded ? "loaded" : "unloaded"} deferred tool reject before ${stream ? "streaming" : "JSON"} dispatch`, async () => {
+          let sends = 0;
+          globalThis.fetch = (async () => {
+            sends++;
+            return new Response(chatSse(), { headers: { "content-type": "text/event-stream" } });
+          }) as typeof fetch;
+          const raw = loadedRequest("chatgw/test-model", {
+            stream, tools: [tool("ToolSearch"), tool("Bash"), { ...tool("WebFetch", true), allowed_callers }],
+            ...(!loaded ? { messages: [{ role: "user", content: "Use the available tools." }] } : {}),
+          });
+          const result = await send(config, raw);
+          expect(sends).toBe(0);
+          expect(result.status).toBe(400);
+          expect(JSON.parse(result.text)).toEqual({ type: "error", error: {
+            type: "invalid_request_error", message: "The provider rejected the request.",
+          } });
+          expect(result.text).not.toContain("WebFetch");
+          expect(result.text).not.toContain(CHAT_TOOL_DISPATCH_NAME);
+        });
+      }
+    }
+
+    test(`direct-only callers retain projection and tool-call rewriting for ${stream ? "streaming" : "JSON"} clients`, async () => {
+      const captured: any[] = [];
+      globalThis.fetch = (async (_url: RequestInfo | URL, init?: RequestInit) => {
+        captured.push(JSON.parse(String(init?.body)));
+        return new Response(toolCallSse(CHAT_TOOL_DISPATCH_NAME, JSON.stringify({ name: "WebFetch", arguments: { q: "x" } })),
+          { headers: { "content-type": "text/event-stream" } });
+      }) as typeof fetch;
+      for (const allowed_callers of [undefined, ["direct"]]) {
+        const raw = loadedRequest("chatgw/test-model", {
+          stream, tools: [tool("ToolSearch"), tool("Bash"), {
+            ...tool("WebFetch", true), ...(allowed_callers ? { allowed_callers } : {}),
+          }],
+        });
+        const result = await send(config, raw);
+        expect(result.status).toBe(200);
+        expect(result.text).not.toContain(CHAT_TOOL_DISPATCH_NAME);
+        if (stream) {
+          expect(result.text).toContain('"name":"WebFetch"');
+          expect(result.text).toContain('\\"q\\":\\"x\\"');
+        } else {
+          expect(JSON.parse(result.text).content.find((block: any) => block.type === "tool_use"))
+            .toMatchObject({ id: "call_json", name: "WebFetch", input: { q: "x" } });
+        }
+      }
+      expect(captured).toHaveLength(2);
+      expect(toolNames(captured[0])).toEqual(["ToolSearch", "Bash", CHAT_TOOL_DISPATCH_NAME]);
+      expect(captured[1]).toEqual(captured[0]);
     });
   }
 });

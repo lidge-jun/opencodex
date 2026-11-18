@@ -107,4 +107,34 @@ describe("logout explicit local/live target", () => {
     expect(await handleLogoutCommand(["anthropic", "--json"], f.deps)).toBe(1);
     expect(f.calls).toHaveLength(0); expect(f.probes()).toBe(0); expect(log).not.toHaveBeenCalled();
   });
+  // #8087: kimi-responses has no login of its own; logging out of it removes the active
+  // account of the shared kimi login, so the output must say both rows are affected.
+  test("local kimi-responses logout removes the shared kimi login and names both rows", async () => {
+    const f = fixture();
+    f.store.add("kimi");
+    expect(await handleLogoutCommand(["kimi-responses", "--json"], f.deps)).toBe(0);
+    expect(output()).toEqual({ schemaVersion: 1, ok: true, provider: "kimi-responses", removed: true,
+      credentialSlot: "kimi", affectedRows: ["kimi", "kimi-responses"] });
+    expect(f.store.has("kimi")).toBe(false); expect(f.mutations()).toBe(1);
+    expect(f.calls).toHaveLength(0); expect(f.probes()).toBe(0);
+    log.mockClear();
+    f.store.add("kimi");
+    expect(await handleLogoutCommand(["kimi-responses"], f.deps)).toBe(0);
+    const text = log.mock.calls.map(call => String(call[0])).join("\n");
+    expect(text).toContain("active account of the shared kimi login");
+    expect(text).toContain("kimi and kimi-responses rows");
+  });
+  test("live kimi-responses logout posts once and names both rows", async () => {
+    const f = fixture();
+    expect(await handleLogoutCommand(["kimi-responses", "--live", "--json"], f.deps)).toBe(0);
+    expect(f.calls).toEqual([{ url: "http://127.0.0.1:32001/api/oauth/logout?provider=kimi-responses", method: "POST", redirect: "error" }]);
+    expect(output()).toEqual({ schemaVersion: 1, success: true, provider: "kimi-responses", live: true,
+      credentialSlot: "kimi", affectedRows: ["kimi", "kimi-responses"] });
+    expect(f.mutations()).toBe(0);
+    log.mockClear();
+    expect(await handleLogoutCommand(["kimi-responses", "--live"], f.deps)).toBe(0);
+    const text = log.mock.calls.map(call => String(call[0])).join("\n");
+    expect(text).toContain("on the selected proxy");
+    expect(text).toContain("kimi and kimi-responses rows");
+  });
 });

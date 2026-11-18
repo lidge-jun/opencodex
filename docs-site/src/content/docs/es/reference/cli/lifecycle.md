@@ -89,13 +89,28 @@ Una salida proxy sola no confirma que la restauración compartida Codex / Grok t
 
 En Windows, `ocx stop` detiene una tarea registrada del Programador de tareas o un servicio nativo WinSW mediante una parada verificada. Primero finaliza la tarea y después solo los procesos envoltorios `wscript.exe` y `cmd.exe` que puede vincular a esta instalación (el lanzador o script de servicio de este directorio, una cadena de procesos padres que conduce al proxy o al servicio del Programador de tareas, y una hora de inicio registrada), y espera a que terminen. Solo entonces detiene el proxy de forma controlada. Después confirma que el puerto permanezca libre unos seis segundos y que ningún envoltorio se haya reiniciado, para impedir que un bucle de reinicio vuelva a iniciar el proxy tras una parada exitosa.
 
+OpenCodex verifica que la tarea programada inicie esta instalación con tu cuenta de Windows
+y comprueba la cuenta de cada instancia en ejecución antes de detenerla. Una tarea deshabilitada
+de tu cuenta se considera inactiva si no tiene instancias en ejecución. Si hay una tarea en cola,
+OpenCodex no confirma la parada. Si la comprobación falla,
+revisa el lanzador y la cuenta de ejecución en el Programador de tareas y detén la tarea desde
+la sesión de esa cuenta.
+
+OpenCodex solo finaliza directamente un envoltorio si comprueba que pertenece a tu cuenta.
+Ignora los envoltorios que pertenecen a otro usuario. Si no puede verificar el propietario
+de un envoltorio que debe finalizar, detenlo desde la sesión de su propietario con el
+Administrador de tareas y vuelve a intentarlo.
+Si OpenCodex no puede confirmar que un envoltorio terminó porque no dispone de un identificador
+de objeto de proceso (handle), como puede ocurrir en ARM64, compruébalo en el Administrador de tareas desde la sesión
+de su propietario, detenlo si sigue en ejecución y vuelve a intentarlo.
+
 Si no puede demostrarse que el servicio se detuvo, `ocx stop` no envía una solicitud de parada al proxy, deja intacta la configuración del cliente y falla. Con `--json`, el resumen conserva `outcome: "failed"` y `proxy: "unknown"`, y añade `serviceStopReason`:
 
 | `serviceStopReason` | Significado | Qué hacer |
 |---|---|---|
 | `access-denied` | Se denegó la finalización de la tarea o de un envoltorio, normalmente por detener una tarea elevada desde una terminal sin elevar | Ejecuta `ocx stop` desde una terminal elevada |
 | `unbound-wrapper` | No se pudo vincular al servicio un envoltorio que ejecuta el script de servicio de este directorio, por ejemplo uno iniciado manualmente | Finaliza ese `wscript.exe`/`cmd.exe` y vuelve a intentarlo |
-| `evidence-unreadable` | No se pudo leer el estado del servicio o proceso, o confirmar que el puerto está libre | Comprueba `ocx service status` y vuelve a intentarlo |
+| `evidence-unreadable` | No se pudo verificar la tarea, el envoltorio o el estado del servicio, o confirmar que el puerto está libre | Sigue las indicaciones del mensaje de parada o consulta `ocx service status` y vuelve a intentarlo |
 | `unverified-budget` | El tiempo restante no permitía verificar la parada, por lo que no se cambió nada | Vuelve a intentarlo desde una terminal |
 
 Si otro programa escucha en el puerto después de que terminen los procesos de esta instalación, la parada sigue siendo exitosa y `--json` informa `portHeldByForeign: true`. Ambos campos son adicionales y no existe ningún valor nuevo de `outcome`. `serviceStopReason` se omite cuando no hay nada que informar; `portHeldByForeign` aparece (`true` o `false`) siempre que se haya comprobado el puerto y se omite en caso contrario.
@@ -110,7 +125,7 @@ Para una adquisición aprobada por el escritorio, `ocx stop --json` también ace
 
 Cuando este CLI es más nuevo que un proxy POSIX independiente certificado, el reinicio puede detener la instalación anterior y ejecutar esta. Esta actualización vigilada requiere un hogar físico no reclamado, un proxy separado cuyo padre es PID 1, supervisión de servicio positivamente inactiva y una versión conocida CLI. Un registro de servicio launchd instalado pero descargado o systemd inactivo solo es elegible cuando no conlleva ningún reclamo de propiedad. Ambos dominios launchd deben estar ausentes; systemd debe informar inactivo con MainPID cero. La evidencia de un gerente ilegible o incierto se niega. El comando congela todos los registros de servicio y la definición de la plataforma y los verifica a través de stop, lanzamiento y publicación secundaria. Cualquier reescritura, reemplazo, cambio de permiso o creación / eliminación de registros se niega; reintente después de inspeccionar `ocx status`. El stop usa la misma conexión que probó la identidad del viejo proxy. El comando se inicia una sola vez después del apagado confirmado, luego requiere el PID hijo exacto, el punto final, la prueba de identidad nueva y la versión coincidente. La versión que falta, la parada incierta, el tiempo de espera o un reemplazo inesperado informa de un fallo sin otra parada o inicio. Si el entorno de ejecución este CLI se lanzaría sigue siendo el pequeño marcador de posición, una instalación npm en el lugar deja antes de su postinstalación, el reinicio se niega antes de detener cualquier cosa; después de una parada confirmada, espera el entorno de ejecución dentro de la misma fecha límite y no lanza nada si no llega. Windows, en primer plano, supervisado por el escritorio, servicio activo, cliente conectado y tiempos de ejecución hermanos no utilizan esta ruta de actualización; utilizar sus controles de ciclo de vida de posesión. Un proxy más nuevo o una versión incomparable aún rechaza una degradación in situ. Utilice el `ocx` de la instalación más reciente para reiniciar; inspeccione `which -a ocx` y `ocx status` para identificarlo. Los rechazos de elegibilidad nombran la razón y la siguiente acción: use el `ocx service restart` de la instalación propietaria para un servicio, el terminal propietario para un proxy en primer plano o la aplicación de servicio / escritorio propietario en Windows. La ascendencia desconocida o un objetivo cambiado requiere `ocx status` antes de cualquier reinicio.
 
-En un entorno cliente conectado (Remote Link Child o cliente Hub), `ocx restart` pide al propio entorno iniciar su reemplazo en el mismo puerto. Si el reemplazo no responde dentro del plazo, se detiene y el entorno anterior vuelve a ocupar el puerto y sigue atendiendo; el comando informa que el reinicio no se completó. Un entorno cliente administrado por un servicio o la aplicación Desktop rechaza la solicitud y sigue funcionando ("Restart not performed; the running client runtime was kept"); reinícialo con `ocx service restart` o desde la aplicación. Consulta [Paridad de aplicación de Remote Link](#remote-link-apply-parity).
+En un entorno cliente conectado (Remote Link Child o cliente Hub), `ocx restart` pide al propio entorno iniciar su reemplazo en el mismo puerto. Si el reemplazo no responde dentro del plazo, se detiene y el entorno anterior vuelve a ocupar el puerto y sigue atendiendo; el comando informa que el reinicio no se completó. Un entorno cliente administrado por un servicio o la aplicación Desktop rechaza la solicitud y sigue funcionando ("Restart not performed; the running client runtime was kept"); reinícialo con `ocx service restart` o desde la aplicación. Un entorno cliente con solo `OCX_SERVICE=1` (un servicio instalado antes de 2.49, o un proxy iniciado por `ocx claude`, `ocx codex` u `ocx opencode`) no puede demostrar quién lo controla y siempre se rechaza sin detener nada: vuelve a registrar su servicio una vez con `ocx service repair` o, si es el proxy de un acompañante, ejecuta `ocx stop` y vuelve a iniciarlo. Consulta [Paridad de aplicación de Remote Link](#remote-link-apply-parity).
 
 Si los archivos de paquete o el entorno de ejecución del Bun permanecen incompletos después de que el instalador haya salido o haya fallado, ejecute `ocx status`, detenga cualquier proxy que se ejecute a través de su propietario (`ocx stop`, o su servicio o aplicación de escritorio), luego vuelva a instalar con el mismo administrador de paquetes y vuelva a iniciarlo. Véase [Fallo de actualización](/es/troubleshooting/update-failed).
 
@@ -694,7 +709,46 @@ Apply emite un objeto `ocx.update.result/1` con `applied`, `fromVersion`, `toVer
 
 La aplicación orquestada sale con 0 cuando el resultado está verificado o ya estaba actualizado; con 10 ante un rechazo; con 11 cuando la actualización falló pero se verificó que la versión anterior sigue activa (incluido el runtime cuando corresponde); con 12 cuando el resultado no está verificado o sigue en curso; y con 64 por uso no válido. `rolledBack` solo es verdadero si una reversión real del instalador se realizó y se verificó. Un comando de plan emite su plan con código de salida 0; los campos `canApply` y `reason` describen la elegibilidad.
 
-Las instalaciones independientes compiladas, incluido el paquete de escritorio MSI Windows, se actualizan a través de **Buscar actualizaciones...** en OpenCodex Desktop, o reinstalando el binario independiente desde [GitHub Lanzamientos](https://github.com/lidge-jun/opencodex/releases). `ocx system update check` reporta `installer: "standalone"`, `canUpdate: false` y `reason: "standalone_install"` con esa guía. `ocx update` sale sin éxito con la misma pista; no ejecuta una actualización de gestor de paquetes para el ejecutable compilado. Una comprobación de fuente genuina todavía reporta `installer: "source"` y `reason: "source_checkout"`.
+Las instalaciones independientes compiladas, incluido el paquete de escritorio MSI Windows, se actualizan a través de **Buscar actualizaciones...** en OpenCodex Desktop, con `ocx update --desktop` en una instalación de Desktop para Windows (que verifica el MSI publicado con la clave del actualizador de la aplicación, lo instala sin interfaz y reinicia el proxy que sigue sirviendo la versión anterior; consulta la guía de la aplicación de escritorio), o reinstalando el binario independiente desde [GitHub Lanzamientos](https://github.com/lidge-jun/opencodex/releases). `ocx system update check` reporta `installer: "standalone"`, `canUpdate: false` y `reason: "standalone_install"` con esa guía. `ocx update` sin `--desktop` sale sin éxito con la misma pista; no ejecuta una actualización de gestor de paquetes para el ejecutable compilado. Una comprobación de fuente genuina todavía reporta `installer: "source"` y `reason: "source_checkout"`.
+
+#### Actualización de Desktop para Windows sin interfaz
+
+```bash
+ocx update --desktop [--check] [--json]
+```
+
+Ejecútalo con el propio `ocx.exe` de la instalación de Desktop para Windows (el que está junto a
+`opencodex-desktop.exe`), desde una terminal con privilegios elevados o una sesión SSH abierta con la cuenta que ejecuta el proxy. El comando encuentra el proxy a través del directorio de OpenCodex de esa cuenta: un servicio, una tarea programada como SYSTEM u otra cuenta de administrador tienen otro directorio, no lo encuentran e instalarían la actualización dejando el proxy anterior en servicio. Cualquier otro `ocx`
+sale con 64 sin cambiar nada. Lee el mismo canal de versiones que usa el actualizador de la aplicación y, cuando hay una versión más reciente publicada:
+
+1. descarga el MSI de Windows desde el recurso exacto de la versión en GitHub por HTTPS (como máximo tres
+   redirecciones a los hosts de recursos de GitHub, un límite de 1 GiB y plazos de conexión, inactividad y total), sin enviar credenciales;
+2. lo verifica con la clave pública integrada del actualizador de la aplicación, rechaza una firma incorrecta o ausente,
+   una firma de otra versión o plataforma, o un archivo que no sea un MSI. Guarda el MSI y su registro en una carpeta nueva (desde una sesión elevada, bajo `%SystemRoot%\Temp` con acceso solo para SYSTEM y Administradores, para que ningún programa sin esos permisos pueda reemplazar el archivo antes de que el instalador lo abra) y vuelve a verificar la copia guardada;
+3. aparta su propio `ocx.exe` en ejecución dentro de la carpeta de instalación y vuelve a poner una copia con el nombre instalado, para que el instalador no tenga que cerrar
+   el comando que lo inició y un comando interrumpido no deje nada que restaurar (Windows Installer termina o revierte por sí mismo), ejecuta `msiexec /i <msi> /qn /norestart /l*v <log>` y espera su código de salida (0 y 3010 son
+   éxito; 3010 indica que Windows debe reiniciarse para reemplazar archivos en uso). Tras una instalación fallida la carpeta conserva el `ocx.exe` anterior y el registro;
+   un instalador que sigue en ejecución tras 15 minutos se deja en paz junto con su carpeta de preparación;
+4. comprueba que el `ocx.exe` instalado informa la nueva versión y solo entonces programa la eliminación del archivo apartado en el siguiente reinicio (cada ejecución elimina además los restos anteriores);
+5. reinicia el proxy que aún sirve la versión anterior mediante su propio reinicio en el lugar, de modo que Desktop, el servicio
+   o el proxy independiente inician el ejecutable instalado, y espera a que la nueva versión responda en `/healthz`. Un proxy de cliente
+   conectado se conserva a sí mismo en ese reinicio: si lo gestiona su servicio en segundo plano, lo reemplaza el `ocx service restart`
+   instalado; si la comprobación demuestra que el OpenCodex Desktop de esta instalación ejecuta exactamente ese proxy, el
+   `ocx stop --json` instalado lo detiene, igual que el actualizador de la propia aplicación, y la aplicación inicia la nueva versión al cabo de unos segundos.
+
+Nunca se detiene un proxy cuyo ejecutable no sea el `ocx.exe` de esta instalación, uno que este directorio de inicio no pueda acreditar
+ni uno más reciente que la instalación. Si no se encontró ningún proxy de este directorio de inicio, no se inicia ninguno (`installed-stopped`). Sin una versión más reciente publicada,
+el comando reinicia igualmente un proxy antiguo que haya dejado una instalación MSI anterior. `--check` informa las versiones publicada,
+instalada y en servicio sin descargar ni reiniciar nada.
+
+Códigos de salida: 0 actualizado, ya al día o instalado sin encontrar un proxy de este directorio de inicio; 1 no se instaló nada (firma rechazada, fallo de descarga
+o fallo de Windows Installer, cuya ruta de registro se muestra); 2 instalado, pero el proxy anterior sigue sirviendo o Windows debe reiniciarse antes;
+3 el instalador no terminó en 15 minutos o informó éxito sin instalar la nueva versión; 64 uso no válido o no es una instalación de Desktop para Windows.
+`--json` imprime un objeto `ocx.desktop.headless-update/1` con `outcome`, `exitCode`, `installedVersion`,
+`targetVersion`, `runtime`, `installer`, `reason` y `message`.
+
+Cuando `ocx status` en una instalación de Desktop para Windows detecta una versión instalada más reciente que el proxy en ejecución,
+su aviso de versión nombra ambas versiones y muestra el comando `ocx update --desktop`.
 
 Cuando OpenCodex se instala a través de mise, este comando sale sin éxito antes de detener el proxy o cambiar los archivos del paquete y muestra `mise upgrade <tool>`, utilizando el alias local mise verificado. Las comprobaciones de actualización permanecen disponibles e informan la instalación como administrada externamente. Un registro de propiedad de mise ilegible o inconsistente provoca el rechazo de la operación sin intentar adivinar el nombre de la herramienta, y `--tag preview` nunca cambia la selección configurada de mise.
 

@@ -74,6 +74,7 @@
   "link-ssh-argv.test.ts": "clients",
   "link-ssh-runner.test.ts": "clients",
   "link-ssh-argv-discovery.test.ts": "clients",
+  "link-windows-gated-served.test.ts": "clients",
   "link-ssh-config.test.ts": "clients",
   "link-store.test.ts": "clients",
   "link-retirement.test.ts": "clients",
@@ -258,5 +259,6 @@
   "link-ocx-child-ws-gate.test.ts": "clients",
   "link-ocx-child-ws-feature.test.ts": "clients",
   "link-relay-wait-observer.test.ts": "clients",
-  "link-ws-autobahn.test.ts": "clients"
+  "link-ws-autobahn.test.ts": "clients",
+  "pi-family-developer-role.test.ts": "clients"
 }
