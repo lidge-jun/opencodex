@@ -905,6 +905,13 @@ Google Antigravity, OpenCode Go, OpenRouter, DeepSeek, ClinePass, Z.AI, MiniMax,
 Moonshot, Venice, Synthetic, DeepInfra, Neuralwatt, Command Code, and any a6api-backed
 or Abliteration custom provider.
 
+**Anthropic monthly usage.** Usage-based seats such as Enterprise can show a monthly
+extra-usage bar when Anthropic reports enabled extra usage and no plan windows. The reading
+comes without a reset date. The bar clears when Anthropic reports plan windows or confirms that
+extra usage is disabled. If the response supplies no usable quota window, the account quota check
+still reports that the reading is unavailable, including after a provider quota refresh receives
+the same response.
+
 **Kimi Coding Plan quota.** Account login and API-key providers on the canonical
 `https://api.kimi.com/coding/v1` endpoint read `/usages`. API-key providers on the regional
 `https://api.kimi.ai/coding/v1` endpoint read `/usages` from that same origin; account login
