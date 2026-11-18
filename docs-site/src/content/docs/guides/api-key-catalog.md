@@ -242,8 +242,8 @@ then select **AbliteratedLLM** in `ocx init` or the dashboard's **Add provider**
 `ocx provider add abliteratedllm`, and give it the key directly or as the reference
 `${ABLITERATEDLLM_API_KEY}`. The preset sends every client through [Chat Completions](https://abliteratedllm.dev/docs/chat-completions)
 at `https://api.abliteratedllm.dev/v1`, not the service's stateless Responses or Anthropic Messages
-endpoints, and discovers models from the public [`GET /v1/models`](https://abliteratedllm.dev/docs/models),
-which answers without a key and so cannot validate one. `glm-5.3-flash-abliterated` is the default.
+endpoints, and uses a seeded model list: the public [`GET /v1/models`](https://abliteratedllm.dev/docs/models)
+answers without a key and cannot validate one, so live discovery is off. `glm-5.3-flash-abliterated` is the default.
 On 2026-11-15 `GET /v1/models` listed 15 models: `glm-5.3-flash-abliterated`, the only abliterated
 model (marked `variant: "abliterated"`), and 14 with `provider_label: "Stock model"`, the vendors'
 original weights. None was labelled "Official DeepSeek API", the privacy policy's label for requests

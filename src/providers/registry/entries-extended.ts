@@ -1448,7 +1448,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     baseUrl: "https://api.abliteratedllm.dev/v1",
     authKind: "key",
     dashboardUrl: "https://abliteratedllm.dev/dashboard/keys",
-    liveModels: true,
+    liveModels: false,
     apiKeyValidation: "unknown",
     preserveCustomDestination: true,
     defaultModel: "glm-5.3-flash-abliterated",
@@ -1457,7 +1457,7 @@ export const PROVIDER_REGISTRY_EXTENDED: readonly ProviderRegistryEntry[] = [
     modelMaxOutputTokens: { "glm-5.3-flash-abliterated": 131_072 },
     modelInputModalities: ABLITERATEDLLM_MODEL_INPUT_MODALITIES,
     reasoningEfforts: ["low", "medium", "high"],
-    note: "Pay-per-token API for abliterated (refusal-removed) and stock open-weight models, prepaid in USD by card or crypto. Create an API key at abliteratedllm.dev/dashboard/keys. glm-5.3-flash-abliterated is the default. On 2026-11-15 the public model list showed 15 models: glm-5.3-flash-abliterated, the only abliterated one, and 14 labelled Stock model, the vendors' original weights. None was labelled Official DeepSeek API, the privacy policy's label for requests forwarded to DeepSeek's own API; the listed models, the DeepSeek ones included, run on Fireworks AI with zero data retention. Live discovery reads the public model list, which cannot validate a key. The preset sends every client through Chat Completions.",
+    note: "Pay-per-token API for abliterated (refusal-removed) and stock open-weight models, prepaid in USD by card or crypto. Create an API key at abliteratedllm.dev/dashboard/keys. glm-5.3-flash-abliterated is the default. On 2026-11-15 the public model list showed 15 models: glm-5.3-flash-abliterated, the only abliterated one, and 14 labelled Stock model, the vendors' original weights. None was labelled Official DeepSeek API, the privacy policy's label for requests forwarded to DeepSeek's own API; the listed models, the DeepSeek ones included, run on Fireworks AI with zero data retention. The preset uses this seeded model list: the public model list answers without a key and cannot validate one, so live discovery is off. The preset sends every client through Chat Completions.",
   },
   // Xiaomi retires mimo-v2.5 and mimo-v2.5-pro on 2026-10-21 with no redirect
   // (https://mimo.mi.com/docs/en-US/updates/deprecate), so the first-party presets default to V2.6.

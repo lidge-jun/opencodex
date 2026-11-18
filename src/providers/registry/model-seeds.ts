@@ -1306,8 +1306,8 @@ export const MORPH_ULTRA_REASONING_EFFORT_MAPS: Record<string, Record<string, st
  * weights). Windows are each row's `context_length`. Modalities are each row's `input_modalities`:
  * glm-5.3 and glm-5.3-fast are text only, and the gateway answers an image part sent to a model
  * that does not list images with 400 `unsupported_content`. glm-5.3-flash also lists video, which
- * the Codex catalog cannot carry, so it is seeded as text and image. Live discovery owns which
- * models exist.
+ * the Codex catalog cannot carry, so it is seeded as text and image. The preset uses this seeded
+ * list (liveModels: false): the public model list answers without a key and cannot validate one.
  */
 export const ABLITERATEDLLM_MODELS = [
   "glm-5.3-flash-abliterated",

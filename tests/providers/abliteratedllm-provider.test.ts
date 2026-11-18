@@ -63,7 +63,7 @@ describe("AbliteratedLLM provider", () => {
 
   test("seeds the catalog models with their windows, and only glm-5.3 and glm-5.3-fast as text-only", () => {
     const seeded = config().providers.abliteratedllm!;
-    expect(seeded).toMatchObject({ adapter: "openai-chat", baseUrl, defaultModel: "glm-5.3-flash-abliterated", liveModels: true });
+    expect(seeded).toMatchObject({ adapter: "openai-chat", baseUrl, defaultModel: "glm-5.3-flash-abliterated", liveModels: false });
     expect(entry().models).toEqual([...MODELS]);
     expect(seeded.modelContextWindows).toEqual({
       ...Object.fromEntries(MODELS.map(model => [model, 1_048_576])),
@@ -112,30 +112,13 @@ describe("AbliteratedLLM provider", () => {
     expect(routeModel(custom, "abliteratedllm/custom-model").provider.baseUrl).toBe("https://relay.example.test/v1");
   });
 
-  test("lists models from the public live catalog", async () => {
+  test("lists the seeded models without fetching the public catalog", async () => {
+    // Owner decision 2026-11-18: the public GET /v1/models answers without a key, so live discovery is off.
     let requests = 0;
-    globalThis.fetch = (async (input, init) => {
-      requests++;
-      expect(String(input)).toBe("https://api.abliteratedllm.dev/v1/models");
-      expect(init?.body ?? undefined).toBeUndefined();
-      return Response.json({ object: "list", data: [
-        {
-          id: "glm-5.3-flash-abliterated", object: "model", created: 1793664000, owned_by: "AbliteratedLLM",
-          name: "GLM-5.3 Flash Abliterated", context_length: 1048576, max_output_tokens: 131072,
-          pricing: { input: "0.0977", output: "0.3421", cached_input: "0.0098", priority: null },
-          input_modalities: ["text", "image"],
-        },
-        {
-          id: "glm-5.3", object: "model", created: 1793664000, owned_by: "AbliteratedLLM",
-          name: "GLM-5.3", context_length: 1048576, max_output_tokens: 1048576,
-          pricing: { input: "1.26", output: "3.96", cached_input: "0.234", priority: null },
-          input_modalities: ["text"],
-        },
-      ] });
-    }) as typeof fetch;
+    globalThis.fetch = (async () => { requests++; return Response.json({ object: "list", data: [] }); }) as typeof fetch;
     const models = (await gatherRoutedModels(config())).filter(row => row.provider === "abliteratedllm");
-    expect(requests).toBe(1);
-    expect(models.map(row => row.id).sort()).toEqual(["glm-5.3", "glm-5.3-flash-abliterated"]);
+    expect(requests).toBe(0);
+    expect(models.map(row => row.id).sort()).toEqual([...MODELS].sort());
   });
 
   test("reports a key as unverified instead of probing the public catalog", async () => {
