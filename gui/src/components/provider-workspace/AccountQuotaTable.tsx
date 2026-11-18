@@ -57,15 +57,8 @@ export interface AccountQuotaTableProps {
   accounts: readonly QuotaTableAccount[];
   /** The pool's effective strategy; the `next` marker shows only under reset-first. */
   strategy?: string;
-  /** Replaces the plain dot + label in the account cell (e.g. a click-to-switch button). */
-  renderAccount?: (row: QuotaTableRow) => ReactNode;
-  /** Per-row controls (pause, test, alias, remove); adds an actions column that stays in view. */
-  renderActions?: (row: QuotaTableRow) => ReactNode;
-  /**
-   * A full-width line under the row for what does not fit a column: hints, probe results,
-   * per-account settings, and quota windows no pool column shows. Return null for none.
-   */
-  renderDetails?: (row: QuotaTableRow) => ReactNode;
+  /** Supplies the account control, actions column, and full-width detail content for each row. */
+  renderRowContent?: (row: QuotaTableRow) => { account: ReactNode; actions: ReactNode; details: ReactNode };
 }
 
 function hasContent(node: ReactNode): boolean {
@@ -79,7 +72,7 @@ function hasContent(node: ReactNode): boolean {
  * controls and a detail line. Below a container width the rows stack instead of scrolling, so
  * the controls never leave the screen.
  */
-export function AccountQuotaTable({ accounts, strategy, renderAccount, renderActions, renderDetails }: AccountQuotaTableProps) {
+export function AccountQuotaTable({ accounts, strategy, renderRowContent }: AccountQuotaTableProps) {
   const t = useT();
   const now = useMinuteClock();
   const table = buildQuotaTable(accounts, now, strategy);
@@ -88,7 +81,7 @@ export function AccountQuotaTable({ accounts, strategy, renderAccount, renderAct
     ? t(`acctProbe.status.${row.probeStatus}` as TKey)
     : t(`acctTable.flag.${row.flag}` as TKey);
   const poolLabel = (key: PoolKey) => t(`acctTable.pool.${key}` as TKey);
-  const columns = 3 + table.pools.length + (renderActions ? 1 : 0);
+  const columns = 3 + table.pools.length + (renderRowContent ? 1 : 0);
   return (
     <div className="aqt" data-testid="account-quota-table">
       <div className="aqt-scroll">
@@ -104,20 +97,20 @@ export function AccountQuotaTable({ accounts, strategy, renderAccount, renderAct
                 </th>
               ))}
               <th scope="col">{t("acctTable.status")}</th>
-              {renderActions && <th scope="col" className="aqt-actions-cell"><span className="sr-only">{t("acctTable.actions")}</span></th>}
+              {renderRowContent && <th scope="col" className="aqt-actions-cell"><span className="sr-only">{t("acctTable.actions")}</span></th>}
             </tr>
           </thead>
           {table.rows.map(row => {
-            const details = renderDetails?.(row);
+            const content = renderRowContent?.(row);
             // No pool column to carry the notice (a refused account rarely has a quota reading),
             // so it goes on the detail line instead of being lost behind the status flag.
             const bannedLine = table.pools.length === 0 && row.account.banned ? <BannedNotice banned={row.account.banned} /> : null;
-            const withDetails = bannedLine !== null || hasContent(details);
+            const withDetails = bannedLine !== null || hasContent(content?.details);
             return (
               <tbody key={row.account.id} className={`aqt-group${row.account.active ? " aqt-group--active" : ""}${withDetails ? " aqt-group--details" : ""}`} data-flag={row.flag}>
                 <tr className="aqt-row">
                   <th scope="row" className="aqt-account">
-                    {renderAccount ? renderAccount(row) : <>
+                    {content ? content.account : <>
                       <span className={`pwi-auth-dot ${row.account.active && !row.account.paused ? "pwi-auth-dot--ok" : "pwi-auth-dot--off"}`} aria-hidden="true" />
                       {row.account.label}
                     </>}
@@ -144,11 +137,11 @@ export function AccountQuotaTable({ accounts, strategy, renderAccount, renderAct
                       );
                     }))}
                   <td className="aqt-status"><span className={`aqt-flag aqt-flag--${FLAG_TONE[row.flag]}`}>{flagText(row)}</span></td>
-                  {renderActions && <td className="aqt-actions-cell"><div className="aqt-actions">{renderActions(row)}</div></td>}
+                  {content && <td className="aqt-actions-cell"><div className="aqt-actions">{content.actions}</div></td>}
                 </tr>
                 {withDetails && (
                   <tr className="aqt-detail-row">
-                    <td colSpan={columns} className="aqt-detail">{bannedLine}{details}</td>
+                    <td colSpan={columns} className="aqt-detail">{bannedLine}{content?.details}</td>
                   </tr>
                 )}
               </tbody>

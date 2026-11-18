@@ -67,8 +67,9 @@ export default function ProviderModelDiscovery({ apiBase, provider }: { apiBase:
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider }),
       });
-      const json = await response.json().catch(() => null) as RefreshResponse | null;
-      if (!response.ok || !json) { setRun({ kind: "failed" }); return; }
+      if (!response.ok) { setRun({ kind: "failed" }); return; }
+      const json = await response.json() as RefreshResponse | null;
+      if (!json) { setRun({ kind: "failed" }); return; }
       if (json.applicable === false) { setRun({ kind: "static" }); return; }
       setRecent(arrivalRows(json.recentArrivals));
       if (json.discovery?.status === "failed") {

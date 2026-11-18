@@ -677,13 +677,13 @@ export default function ProviderAuthPanel({
                     ...(probe && "result" in probe ? { probe: { status: probe.result.status, latencyMs: probe.result.latencyMs } } : {}),
                   };
                 })}
-                renderAccount={row => {
+                renderRowContent={row => {
                   const account = byId.get(row.account.id)!;
                   const organizationName = isAnthropicPool ? account.organizationName : undefined;
                   const showReauth = accountShowsReauth(account);
                   const inCooldown = oauthHealthIsCooldown(account.health?.status);
                   const kiroReason = kiroSkipReasonKey(account, item.name);
-                  return (
+                  const accountCell = (
                     <button type="button" className="aqt-account-main"
                       onClick={() => { if (!account.active && !account.paused && !showReauth && !inCooldown && !controlsLocked) void authHandlers.onSwitchAccount(item.name, account); }}
                       aria-current={account.active ? "true" : undefined}
@@ -702,11 +702,7 @@ export default function ProviderAuthPanel({
                       {switchingAccountId === account.id && <span className="badge badge-muted">{t("pws.accountSwitching")}</span>}
                     </button>
                   );
-                }}
-                renderActions={row => {
-                  const account = byId.get(row.account.id)!;
-                  const showReauth = accountShowsReauth(account);
-                  return <>
+                  const actions = <>
                     {claudeGrantsEnabled && !showReauth && (
                       <AnthropicGrantBadge entry={claudeGrants.entries[account.id]} t={t} onClick={() => setGrantAccount(account)} />
                     )}
@@ -745,11 +741,7 @@ export default function ProviderAuthPanel({
                       <IconTrash style={{ width: 13, height: 13 }} aria-hidden="true" />
                     </button>
                   </>;
-                }}
-                renderDetails={row => {
-                  const account = byId.get(row.account.id)!;
                   const healthSummary = isAnthropicPool ? null : formatOAuthHealthSummary(t, item.name, account.id, account.health);
-                  const inCooldown = oauthHealthIsCooldown(account.health?.status);
                   const covered = Object.keys(row.cells).length > 0;
                   // Windows the pool columns already show are not repeated; anything else (per-model
                   // rows, monthly, credits) still renders here so the list drops no reading.
@@ -787,7 +779,7 @@ export default function ProviderAuthPanel({
                         quotaReadAt={account.quotaReadAt} uncoveredQuota={covered ? rest : undefined} />
                     ),
                   ].filter(Boolean);
-                  return parts.length > 0 ? parts : null;
+                  return { account: accountCell, actions, details: parts };
                 }}
               />
               );

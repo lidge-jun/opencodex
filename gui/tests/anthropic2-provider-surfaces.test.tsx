@@ -7,7 +7,7 @@
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { act, createRef, useImperativeHandle, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { Root } from "react-dom/client";
 import { en } from "../src/i18n/en";
 import { LanguageProvider } from "../src/i18n/provider";
@@ -496,7 +496,7 @@ test("unverified OAuth status never reports a stale roster as logged in or logge
 });
 
 test.each(["delete", "logout"] as const)("%s with failed reads retains explicit logout without claiming authentication", async operation => {
-  let pools!: ReturnType<typeof useProviderAccountPools>;
+  const controls = createRef<Pick<ReturnType<typeof useProviderAccountPools>, "fetchAccountSets">>();
   let failReads = false;
   const notices: string[] = [];
   respond = async request => {
@@ -512,18 +512,19 @@ test.each(["delete", "logout"] as const)("%s with failed reads retains explicit 
     const aliveRef = useRef(true);
     const [status, setOauthStatus] = useState<Record<string, OAuthStatus>>({ anthropic2: { loggedIn: true }, anthropic: { loggedIn: true } });
     const loader = useProvidersFetch({ apiBase: "", t: key => key, setConfig: () => {}, setOauthProviders: () => {}, setOauthStatus, notify: () => {}, invalidateProviderQuotas: () => {} });
-    pools = useProviderAccountPools({ apiBase: "", config: null, aliveRef, t: key => key, oauthStatus: status, notify: message => notices.push(message),
+    const pools = useProviderAccountPools({ apiBase: "", config: null, aliveRef, t: key => key, oauthStatus: status, notify: message => notices.push(message),
       fetchConfig: async () => {}, fetchOauth: loader.fetchOauth, fetchProviderQuotas: async () => {}, codexActiveNeedsReauth: false,
       invalidateOauthStatusReads: loader.invalidateOauthStatusReads, setOauthStatus });
     const oauth = useProvidersOAuth({ apiBase: "", t: key => key, aliveRef, accountSets: pools.accountSets, setAccountSets: pools.setAccountSets,
       setBusy: () => {}, setStatus: () => {}, setLoginInfo: () => {}, setOauthStatus, invalidateOauthStatusReads: loader.invalidateOauthStatusReads,
       beginAccountLogout: pools.beginAccountLogout, notify: message => notices.push(message), fetchConfig: async () => {}, fetchOauth: loader.fetchOauth,
       fetchAccountSets: pools.fetchAccountSets, fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => {} });
+    useImperativeHandle(controls, () => ({ fetchAccountSets: pools.fetchAccountSets }));
     return <><output data-other>{String(status.anthropic?.loggedIn)}</output><ProviderAuthPanel item={POOL_B} apiBase="" oauth={status.anthropic2} accounts={pools.accountSets.anthropic2?.accounts ?? []}
       accountLoadState={pools.accountLoadStates.anthropic2} authHandlers={{ ...recordingHandlers([]), onLogout: oauth.logoutOAuth, onRemoveAccount: pools.removeAccount }} /></>;
   }
   await render(<Harness />);
-  await act(async () => { await pools.fetchAccountSets(["anthropic2"]); });
+  await act(async () => { await controls.current!.fetchAccountSets(["anthropic2"]); });
   if (operation === "delete") {
     await click(host.querySelector(".pwi-auth-row-remove"));
     await click([...win.document.querySelectorAll("dialog button")].find(button => button.textContent === "common.remove"));
@@ -555,8 +556,12 @@ test("pending login cancellation does not prevent logout or account removal", as
   const consent = spyOn(dialogs, "confirmAction").mockResolvedValue(true);
   const login = Promise.withResolvers<Response>();
   const cancel = Promise.withResolvers<Response>();
-  let oauth!: ReturnType<typeof useProvidersOAuth>;
-  let pools!: ReturnType<typeof useProviderAccountPools>;
+  const controls = createRef<{
+    login: ReturnType<typeof useProvidersOAuth>["loginOAuth"];
+    cancel: ReturnType<typeof useProvidersOAuth>["cancelLoginOAuth"];
+    logout: ReturnType<typeof useProvidersOAuth>["logoutOAuth"];
+    remove: ReturnType<typeof useProviderAccountPools>["removeAccount"];
+  }>();
   respond = async request => {
     if (request.path === "/api/oauth/login") return login.promise;
     if (request.path === "/api/oauth/login/cancel") return cancel.promise;
@@ -565,23 +570,26 @@ test("pending login cancellation does not prevent logout or account removal", as
   function Harness() {
     const aliveRef = useRef(true);
     const [statuses, setOauthStatus] = useState<Record<string, OAuthStatus>>({});
-    pools = useProviderAccountPools({ apiBase: "", config: null, aliveRef, t: key => key, oauthStatus: statuses,
+    const pools = useProviderAccountPools({ apiBase: "", config: null, aliveRef, t: key => key, oauthStatus: statuses,
       notify: () => {}, fetchConfig: async () => {}, fetchOauth: async () => {},
       fetchProviderQuotas: async () => {}, codexActiveNeedsReauth: false });
-    oauth = useProvidersOAuth({ apiBase: "", t: key => key, aliveRef, accountSets: pools.accountSets,
+    const oauth = useProvidersOAuth({ apiBase: "", t: key => key, aliveRef, accountSets: pools.accountSets,
       setAccountSets: pools.setAccountSets, setBusy: () => {}, setStatus: () => {}, setLoginInfo: () => {}, setOauthStatus,
       beginAccountLogout: pools.beginAccountLogout,
       notify: () => {}, fetchConfig: async () => {}, fetchOauth: async () => {}, fetchAccountSets: pools.fetchAccountSets,
       fetchProviderQuotas: async () => {}, bumpModelsRefresh: () => {} });
+    useImperativeHandle(controls, () => ({
+      login: oauth.loginOAuth, cancel: oauth.cancelLoginOAuth, logout: oauth.logoutOAuth, remove: pools.removeAccount,
+    }));
     return null;
   }
   try {
     await render(<Harness />);
-    await act(async () => { void oauth.loginOAuth("anthropic2"); void oauth.cancelLoginOAuth("anthropic2"); });
+    await act(async () => { void controls.current!.login("anthropic2"); void controls.current!.cancel("anthropic2"); });
     expect(requests.filter(request => request.path === "/api/oauth/login")).toHaveLength(1);
     expect(requests.filter(request => request.path === "/api/oauth/login/cancel")).toHaveLength(1);
-    await act(async () => { await oauth.logoutOAuth("anthropic2"); });
-    await act(async () => { await pools.removeAccount("anthropic2", accounts("anthropic2")[0]!); });
+    await act(async () => { await controls.current!.logout("anthropic2"); });
+    await act(async () => { await controls.current!.remove("anthropic2", accounts("anthropic2")[0]!); });
     expect(requests.filter(request => request.path === "/api/oauth/logout")).toHaveLength(1);
     expect(requests.filter(request => request.method === "DELETE")).toHaveLength(1);
   } finally {
