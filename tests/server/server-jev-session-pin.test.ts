@@ -453,6 +453,42 @@ describe("JEV session pin per-turn effort", () => {
     expect(log.jevDecision?.pinReason).toBeUndefined();
   });
 
+  test("rechecks the pinned context window after the paid effort call", async () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    const config = perTurnConfig(["sol/gpt-5.6-sol:high", "sol/gpt-5.6-sol:low"], payloads);
+    config.combos!.auto!.capabilityPolicy = "union";
+    config.providers.sol!.contextWindow = 100_000;
+    expect((await turn(config)).status).toBe(200);
+
+    const decisionStarted = Promise.withResolvers<void>();
+    const resumeDecision = Promise.withResolvers<void>();
+    const fetchDecision = config.providers.jev!.fetch!;
+    config.providers.jev!.fetch = (async (input, init) => {
+      decisionStarted.resolve();
+      await resumeDecision.promise;
+      return fetchDecision(input, init);
+    }) as typeof fetch;
+    const bodies: Record<string, unknown>[] = [];
+    const child: Child = (body, complete) => { bodies.push(body); return served(body, complete); };
+    const log: RequestLogContext = { model: "", provider: "" };
+    const pending = turn(config, { child, log });
+    await decisionStarted.promise;
+    config.providers.sol!.contextWindow = 1;
+    resumeDecision.resolve();
+
+    expect((await pending).status).toBe(200);
+    expect(payloads).toHaveLength(2);
+    expect(offered(payloads[1])).toEqual(["sol/gpt-5.6-sol"]);
+    expect(bodies.map(body => [body.model, effortOf(body)])).toEqual([["luna/gpt-5.6-luna", "medium"]]);
+    expect(log.jevDecision).toMatchObject({
+      selected: { provider: "luna", model: LUNA.model, effort: "medium" },
+      gate: "invalid",
+      usage: { inputTokens: 8, outputTokens: 2, totalTokens: 10 },
+    });
+    expect(log.jevDecision?.pinned).toBeUndefined();
+    expect(log.jevDecision?.pinReason).toBeUndefined();
+  });
+
   test("a late completion after a failed effort decision preserves a newer pinned effort", async () => {
     const answers = ["sol/gpt-5.6-sol:high", "luna/gpt-5.6-luna:low", "sol/gpt-5.6-sol:low"];
     const config = perTurnConfig(answers, []);
