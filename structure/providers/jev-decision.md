@@ -265,10 +265,25 @@ without a lane never pins and no body field is an identity. A pin is written onl
 key must be among this request's JEV choices with its effort still offered, and opted-in quota evidence must
 not read `nearly_exhausted`; otherwise the pin is released and JEV decides. Any recorded target failure in the
 request forgets the pin, cancellation does not, and a config generation change invalidates both stored pins and
-in-flight writers. A reused turn sends no decision request and persists `pinned: true` with `pinReason: "session"`;
-a decision that replaced a released pin persists the reason. `src/usage/jev-stats.ts` counts pinned turns as
-`pinnedRequests`, never as decisions, gates or backend latency; request success, model fallback and physical
-attempts count every JEV-routed request, pinned or decided. The CLI projection reads an absent `pinnedRequests` as 0.
+in-flight writers. A reused turn without an effort decision persists `pinned: true` with `pinReason: "session"`.
+A decision that replaced a released pin persists the release reason. `src/usage/jev-stats.ts` counts every
+reused turn in `pinnedRequests`. Request success, model fallback and physical attempts count every JEV-routed
+request. The CLI projection reads an absent `pinnedRequests` as 0.
+
+`sessionPin.effort: "per-turn"` (absent means `pinned`, which normalization drops) asks the decision backend
+for effort on reused turns when the pinned target offers multiple efforts and JEV owns the effort policy.
+The pinned target is the only candidate. An applied answer sets the effort and updates the pin on completion.
+A failed or unusable decision uses the effort read at the start of the turn and refreshes only the live pin's
+idle window on completion. Both outcomes record the gate, latency and available decision usage.
+The model backend retains bounded, reported token counts from failed and incomplete decision
+terminals in both buffered JSON and SSE. Display estimates are excluded from decision usage.
+After the effort decision, the Combo rechecks eligibility before dispatch. If the pinned target becomes
+ineligible, the Combo uses the first currently eligible JEV target, records the decision telemetry, and leaves
+the turn out of `pinnedRequests`.
+When the turn uses the pinned target, these decisions persist `pinned: true` with `pinReason: "session_effort"`.
+Cancellation during the decision returns the client-cancelled response. A single-effort target or
+`jevEffortMode: "client"` skips the decision. The CLI sets the mode with `--session-pin-effort <pinned|per-turn>`.
+Updating the idle window through `--session-pin` or either dashboard keeps the stored mode.
 Besides a classified failure response, a non-cancellation dispatch, preflight or failure-read exception and a
 committed stream that ends `failed` also forget the pin; `incomplete` is an answer and keeps it. Each forget stamps a
 per-session failure fence, so a request already in flight on that session cannot write the pin back.
