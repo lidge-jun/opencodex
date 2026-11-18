@@ -529,6 +529,47 @@ describe("ComboSuggestions card", () => {
     }
   });
 
+  test("a delayed exclusion acknowledgment cannot restore revoked consent or old exclusions", async () => {
+    const originalFetch = globalThis.fetch;
+    const name = "kimi-k3-1-pro";
+    const existing = combo("opus", [["kimi", name]], { allowMeteredTargets: true });
+    const catalog = models([["kimi", name], ["google-vertex", name], ["xai", name]]);
+    let acknowledge!: (response: Response) => void;
+    let revoke = false;
+    let reads = 0;
+    globalThis.fetch = (async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") return new Promise<Response>((resolve) => { acknowledge = resolve; });
+      reads += 1;
+      return Response.json({ excludedProviders: [], meteredComboIds: revoke ? [] : ["opus"] });
+    }) as typeof fetch;
+    try {
+      const view = (combos: ComboItem[]) => <LanguageProvider><WorkspaceSuggestions
+        active apiBase="/test" combos={combos} providers={PROVIDERS} models={catalog}
+        quotaReports={null} quotaNow={0} lockedComboId={null} onRefresh={() => {}}
+      /></LanguageProvider>;
+      await mount(view([existing]));
+      expect(button(card("opus"), "Add to combo").disabled).toBe(false);
+      await act(async () => { host.querySelector<HTMLButtonElement>(".rb-suggest-exclude-toggle")!.click(); });
+      const vertex = [...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
+        .find((input) => input.closest("label")?.textContent?.includes("Vertex"))!;
+      await act(async () => { vertex.click(); });
+
+      revoke = true;
+      await act(async () => { root!.render(view([{ ...existing }])); });
+      expect(button(card("opus"), "Add to combo").disabled).toBe(true);
+      await act(async () => {
+        acknowledge(Response.json({ excludedProviders: ["google-vertex"], meteredComboIds: ["opus"] }));
+      });
+
+      expect(button(card("opus"), "Add to combo").disabled).toBe(true);
+      expect(card("opus").textContent).toContain("Enable paid targets on this combo first.");
+      expect(card("opus").textContent).toContain("Vertex");
+      expect(reads).toBe(3);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("new cards and drafts include paid Vertex and API-key members", async () => {
     const name = "kimi-k3-1-pro";
     await mount(<LanguageProvider><ComboSuggestions
