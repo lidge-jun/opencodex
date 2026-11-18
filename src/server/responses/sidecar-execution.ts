@@ -601,7 +601,7 @@ export async function executeResponsesSidecars(
         }
       }
     } };
-  const sidecarRequestFetch = (request: AdapterRequest, iterParsed: OcxParsedRequest, adapter: ProviderAdapter, recovery?: AttemptRecoveryKind) => {
+  const sidecarRequestFetch = (request: AdapterRequest, iterParsed: OcxParsedRequest, adapter: ProviderAdapter, recovery?: AttemptRecoveryKind, onPhysicalDispatch?: () => void) => {
     const staged = pendingSidecarReplay?.kind === recovery ? pendingSidecarReplay : undefined;
     if (!staged) pendingSidecarReplay = undefined;
     const handoff = transportState.credentialReplayHandoff;
@@ -631,6 +631,7 @@ export async function executeResponsesSidecars(
           published = true;
         }
         sentSidecarInference = true;
+        onPhysicalDispatch?.();
       },
     });
   };
@@ -851,14 +852,15 @@ export async function executeResponsesSidecars(
       ...(imageRecovery ? { imageRecovery } : {}),
       clientToolCatalogRestriction: route.provider.authMode === "forward" ? undefined : requestState.clientToolCatalogRestriction,
       onIterationEnd: releaseSidecarHop,
-      fetchForRequest: sidecarRequestFetch,
+      fetchForRequest: (...args) =>
+        Object.assign(sidecarRequestFetch(...args), { reportsPhysicalDispatch: true as const }),
       incomingMeta: {
         headers: requestState.selectedForwardHeaders,
         providerName: route.providerName,
         abortSignal: options.abortSignal,
         translatorBudget,
         providerFetch: routedProviderFetch,
-        ...sidecarBudget.incomingMeta,
+        ...(transportState.adapter.fetchResponse ? sidecarBudget.incomingMeta : {}),
         ...(!options.comboInitialSend && route.providerName === "google-antigravity"
           ? { sendBudget: sendBudgetState.refundableAdapterDispatchBudget } : {}),
         comboAttempt: options.comboAttempt === true,

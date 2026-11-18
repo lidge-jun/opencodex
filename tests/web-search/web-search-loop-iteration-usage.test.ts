@@ -1,9 +1,14 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import type { AdapterFetchContext, ProviderAdapter } from "../../src/adapters/base";
-import type { AdapterEvent, OcxParsedRequest, OcxUsage } from "../../src/types";
+import { KIRO_COMPLETION_TOOL_NAME } from "../../src/adapters/kiro-constants";
+import { createRegisteredAdapter } from "../../src/adapters/registry";
+import { encodeMessage } from "../../src/lib/eventstream-decoder";
+import { SendBudgetExhaustedError } from "../../src/lib/upstream-retry";
+import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig, OcxUsage } from "../../src/types";
 import { RequestPacingQueueOverloadError } from "../../src/providers/request-pacing";
 import { createAnthropicThinkingRecovery } from "../../src/server/responses/anthropic-thinking-recovery";
-import type { ProviderFetch } from "../../src/server/responses/fetch-helpers";
+import { createAdvisorSidecarStep } from "../../src/server/responses/advisor-slot";
+import { providerFetch, type ProviderFetch } from "../../src/server/responses/fetch-helpers";
 import { runWithWebSearch } from "../../src/web-search/loop";
 import { buildWebSearchTool } from "../../src/web-search/synthetic-tool";
 import { createTestTranslatorBudget } from "../helpers/translator-budget";
@@ -22,6 +27,115 @@ const answer = (u?: OcxUsage): AdapterEvent[] => [{ type: "text_delta", text: "a
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
+
+const workers = {
+  chat: { adapter: "openai-chat", modelId: "worker" },
+  messages: { adapter: "anthropic", modelId: "claude-sonnet-4-6" },
+  cca: { adapter: "google", googleMode: "cloud-code-assist", project: "fixture", modelId: "gemini-3-pro" },
+  kiro: { adapter: "kiro", modelId: "gpt-5.6-sol" },
+} as const;
+
+function workerResponse(wire: keyof typeof workers, first: boolean): Response {
+  const args = { question: "Review the answer" };
+  if (wire === "kiro") {
+    const tool = { name: first ? "advisor" : KIRO_COMPLETION_TOOL_NAME, toolUseId: first ? "call_advisor" : "call_final" };
+    const encoder = new TextEncoder();
+    const frame = (type: string, event: Record<string, unknown>) => encodeMessage(
+      { ":message-type": "event", ":event-type": type }, encoder.encode(JSON.stringify(event)),
+    );
+    return new Response(new Blob([
+      frame("toolUseEvent", tool),
+      frame("toolUseEvent", { ...tool, input: JSON.stringify(first ? args : { answer: "Final answer" }) }),
+      frame("toolUseEvent", { ...tool, stop: true }),
+      frame("meteringEvent", { unit: "credit", usage: first ? 2 : 3 }),
+    ].map(frame => Uint8Array.from(frame))), { headers: { "content-type": "application/vnd.amazon.eventstream" } });
+  }
+  const input = first ? 20 : 30;
+  const output = first ? 2 : 3;
+  if (wire === "messages") {
+    const frames = [
+      { type: "message_start", message: { id: "msg_worker", usage: { input_tokens: input } } },
+      { type: "content_block_start", index: 0, content_block: first
+        ? { type: "tool_use", id: "toolu_advisor", name: "advisor", input: {} } : { type: "text", text: "" } },
+      { type: "content_block_delta", index: 0, delta: first
+        ? { type: "input_json_delta", partial_json: JSON.stringify(args) } : { type: "text_delta", text: "Final answer" } },
+      { type: "content_block_stop", index: 0 },
+      { type: "message_delta", delta: { stop_reason: first ? "tool_use" : "end_turn" }, usage: { output_tokens: output } },
+      { type: "message_stop" },
+    ];
+    return new Response(frames.map(frame => `event: ${frame.type}\ndata: ${JSON.stringify(frame)}\n\n`).join(""),
+      { headers: { "content-type": "text/event-stream" } });
+  }
+  const chatDelta = first
+    ? { tool_calls: [{ index: 0, id: "call_advisor", type: "function", function: { name: "advisor", arguments: JSON.stringify(args) } }] }
+    : { content: "Final answer" };
+  const frames = wire === "chat" ? [
+    { choices: [{ index: 0, delta: chatDelta, finish_reason: null }] },
+    { choices: [{ index: 0, delta: {}, finish_reason: first ? "tool_calls" : "stop" }],
+      usage: { prompt_tokens: input, completion_tokens: output, total_tokens: input + output } },
+  ] : [{ response: {
+    candidates: [{ index: 0, content: { role: "model", parts: [first
+      ? { functionCall: { name: "advisor", args } } : { text: "Final answer" }] }, finishReason: "STOP" }],
+    usageMetadata: { promptTokenCount: input, candidatesTokenCount: output, totalTokenCount: input + output },
+  } }];
+  const events = frames.map(frame => `data: ${JSON.stringify(frame)}\n\n`).join("");
+  return new Response(events + (wire === "chat" ? "data: [DONE]\n\n" : ""), {
+    headers: { "content-type": "text/event-stream" },
+  });
+}
+
+describe.each(["chat", "messages", "cca", "kiro"] as const)("real %s worker dispatch", wire => {
+  test.each([false, true])("settles worker usage once (final dispatch refused=%s)", async refuse => {
+    const requests: unknown[] = [];
+    const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
+      requests.push(await req.json());
+      return workerResponse(wire, requests.length === 1);
+    } });
+    try {
+      const { modelId, ...transport } = workers[wire];
+      const provider: OcxProviderConfig = { ...transport,
+        baseUrl: server.url.origin, authMode: "key", apiKey: "fixture", allowPrivateNetwork: true };
+      let dispatchCandidates = 0;
+      const receipts: number[] = [];
+      const reported: (OcxUsage | undefined)[] = [];
+      const response = await runWithWebSearch({
+        parsed: { modelId, stream: true, options: {}, context: {
+          messages: [{ role: "user", content: "Answer the question", timestamp: 0 }],
+          tools: [buildWebSearchTool(), { name: "advisor", advisor: true, description: "Consult Advisor",
+            parameters: { type: "object", properties: { question: { type: "string" } }, required: ["question"] } }],
+        } },
+        adapter: createRegisteredAdapter(provider),
+        advisor: createAdvisorSidecarStep({
+          consult: async () => ({ ok: true, isError: false, content: "Advice" }),
+          formatUnavailable: () => "Advisor unavailable",
+        }),
+        incomingMeta: { headers: new Headers(), translatorBudget: createTestTranslatorBudget(),
+          onPhysicalSend: ({ ordinal }) => receipts.push(ordinal) },
+        fetchForRequest: (_request, _parsed, _adapter, _recovery, onPhysicalDispatch) =>
+          Object.assign(providerFetch(provider, undefined, {
+            providerName: "worker", modelId,
+            onPhysicalDispatch: () => {
+              if (++dispatchCandidates === 2 && refuse) throw new SendBudgetExhaustedError();
+              onPhysicalDispatch?.();
+            },
+          }), { reportsPhysicalDispatch: true as const }),
+        backend: "exa", hostedTool: { type: "web_search" }, selectedForwardHeaders: new Headers(),
+        settings: { model: "search", reasoning: "low", timeoutMs: 1000 }, maxSearches: 1,
+        onUsage: value => reported.push(value),
+      });
+      const body = await response.text();
+      expect(body).toContain(refuse ? "response.failed" : "Final answer");
+      expect(dispatchCandidates).toBe(2);
+      expect(requests).toHaveLength(refuse ? 1 : 2);
+      expect(receipts).toEqual(refuse ? [1] : [1, 1]);
+      const expected = wire === "kiro" ? { providerCredits: refuse ? 2 : 5 }
+        : refuse ? { inputTokens: 20, outputTokens: 2 } : { inputTokens: 50, outputTokens: 5, totalTokens: 55 };
+      expect(reported).toEqual([expect.objectContaining(expected)]);
+    } finally {
+      server.stop(true);
+    }
+  });
+});
 
 async function drive(passes: AdapterEvent[][], refuseFrom = Infinity, mode?: "replay" | "paced" | "preserve-error" | "stream-retry") {
   spyOn(globalThis, "fetch").mockResolvedValue(Response.json({ results: [] }));

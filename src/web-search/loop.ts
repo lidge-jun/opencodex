@@ -445,7 +445,10 @@ export interface WebSearchLoopDeps {
   /** Request-scoped executor retains the core's selection binding across loop retries. */
   thinkingRecovery?: ReturnType<typeof createAnthropicThinkingRecovery>;
   imageRecovery?: AnthropicImageRecovery;
-  fetchForRequest?: (request: AdapterRequest, parsed: OcxParsedRequest, adapter: ProviderAdapter, recovery?: AttemptRecoveryKind) => typeof globalThis.fetch;
+  /** A receipt-aware executor calls onPhysicalDispatch after final local admission, once per send. */
+  fetchForRequest?: (request: AdapterRequest, parsed: OcxParsedRequest, adapter: ProviderAdapter,
+    recovery: AttemptRecoveryKind | undefined, onPhysicalDispatch: () => void) =>
+      typeof globalThis.fetch & { reportsPhysicalDispatch?: true };
   /** Called before each routed-model dispatch in the loop, for attempt telemetry. Same-target 429 replays pass the `rate-limit-429` recovery kind. */
   onAttemptSend?: (recovery?: AttemptRecoveryKind) => void;
   /**
@@ -719,9 +722,24 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
           cachedRequest = request;
           cachedAdapter = requestAdapter;
         }
-        const executor = deps.fetchForRequest?.(request, iterParsed, requestAdapter, recovery) ?? routedProviderFetch;
         let response: Response;
         let awaitingHeaders = true;
+        let physicalSends = 0;
+        let dispatchCandidate: { recovery?: AttemptRecoveryKind } | undefined;
+        const onPhysicalDispatch = () => {
+          if (!dispatchCandidate) return;
+          const send = dispatchCandidate;
+          dispatchCandidate = undefined;
+          // An adapter-owned stream retry's usage is already combined by its parser.
+          if (awaitingHeaders) pendingLegs++;
+          deps.incomingMeta.onPhysicalSend?.({ ...send, ordinal: ++physicalSends });
+        };
+        const routedExecutor = deps.fetchForRequest?.(request, iterParsed, requestAdapter, recovery, onPhysicalDispatch);
+        const executor = routedExecutor ?? routedProviderFetch;
+        const noteDispatchCandidate = (recovery?: AttemptRecoveryKind) => {
+          dispatchCandidate = recovery ? { recovery } : {};
+          if (!routedExecutor?.reportsPhysicalDispatch) onPhysicalDispatch();
+        };
         try {
           if (requestAdapter.fetchResponse) {
             response = await requestAdapter.fetchResponse(request, {
@@ -731,12 +749,8 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
               stream: true,
               sendBudget: deps.incomingMeta.sendBudget,
               onPhysicalSend: send => {
-                // An adapter-owned stream retry's usage is already combined by its parser.
-                if (awaitingHeaders) {
-                  if (send.ordinal === 1) deps.onAttemptSend?.(recovery);
-                  pendingLegs++;
-                }
-                deps.incomingMeta.onPhysicalSend?.(send);
+                if (awaitingHeaders && send.ordinal === 1) deps.onAttemptSend?.(recovery);
+                noteDispatchCandidate(send.recovery ?? recovery);
               },
               executor: headerDeadline.pacedFetch(executor),
               onRecoveryWithheld: deps.incomingMeta.onRecoveryWithheld,
@@ -748,8 +762,9 @@ export async function runWithWebSearch(deps: WebSearchLoopDeps): Promise<Respons
                 // each connection-reset replay); preserve the caller's recovery kind
                 // (rate-limit-429 / key-429) when the retry layer supplies none.
                 const requestFetch = headerDeadline.pacedFetch(executor, () => {
-                  deps.onAttemptSend?.(retryRecovery ?? recovery);
-                  pendingLegs++;
+                  const attemptRecovery = retryRecovery ?? recovery;
+                  deps.onAttemptSend?.(attemptRecovery);
+                  noteDispatchCandidate(attemptRecovery);
                 });
                 const h = new Headers(request.headers);
                 if (!h.has("accept-encoding")) h.set("accept-encoding", "identity");
