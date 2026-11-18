@@ -82,12 +82,14 @@ manager state once (1 s). Denied stops every further step. A cap overrun is `unk
 manager still running is `survived` (`unbound-wrapper` when the survivor was never bound). WinSW
 is `survived` while the proxy is still alive after the service reports stopped. The authorizer
 variant `guardedStopWindowsServiceChecked` runs its authorizer at entry, before each manager stop and before each terminate and
-reports a refusal as `WindowsCheckedStopRefusedError` with what had already happened.
+reports a refusal as `WindowsCheckedStopRefusedError` with what had already happened. For Task
+Scheduler it reauthorizes after validating the helper proof, before sending `stop` on stdin. The
+helper and outer deadlines must still be open after authorization.
 
 Each step that asks the machine runs under a cap that races a timer and rechecks the elapsed time
-on the injected clock. Opening the bind-time watches and the authorizer are not capped. The
-authorizer runs inside the shared 3 s terminate-and-wait window, so its time comes out of that
-window, and an authorizer that never returns hangs Part A; its caller bounds it. Part A has no
+on the injected clock. The Scheduler proof-time authorization shares the 2 s task-end cap.
+Opening bind-time watches and the other authorization calls have no individual cap. Authorization
+before terminating a wrapper spends time from the shared 3 s terminate-and-wait window. Part A has no
 overall cap either, so a caller with a tighter bound than the sum of the caps (the `/api/stop`
 route's 4 s sweep and 6 s Part A in 030) needs an outer race or smaller caps.
 
@@ -118,7 +120,9 @@ terminate, the exit watch, the Part B port sampler and the listener identity.
 `src/service/windows-task-instance-stop.ts` keeps the root registration and its running instances
 in one Task Scheduler COM session. It passes the registered XML and the helper's current account as
 base64 UTF-8 to preserve Unicode through the console. The live adapter checks the recognized task
-shape, the exact launcher, and the single run-as principal. Trigger user IDs are checked separately.
+shape, the exact launcher, and the single run-as principal through `src/service/windows-taskxml.ts`.
+Trigger user IDs are checked separately. The stop proof accepts a disabled task with the same
+ownership evidence. Installation health still requires an enabled task.
 The helper requires a successful same-account SID check for every `EnginePID`, with the process
 creation time re-read after the owner lookup. After approval it re-reads the registration XML and
 refreshes every captured instance to verify that its GUID, engine PID and running state still agree.
@@ -131,7 +135,7 @@ already running under the same account from an earlier definition can still be v
 path. Changing the registered definition requires task write access, normally held by the task
 owner, Administrators and SYSTEM. Those principals can already stop tasks they own or administer.
 A replacement launched after capture has a separate GUID and cannot be stopped by the captured
-objects. The final manager-state probe checks whether the task is still running.
+objects. The final manager-state probe treats both running and queued tasks as active.
 [Task Scheduler permissions](https://learn.microsoft.com/en-us/windows/win32/taskschd/security-contexts-for-running-tasks)
 [Instance stop protocol](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-tsch/b3572584-8727-441f-83e6-9b02101ea7f4)
 

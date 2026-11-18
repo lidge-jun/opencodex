@@ -54,7 +54,7 @@ export type WindowsStopCommandRunner = (
   program: "schtasks" | "sc" | "powershell",
   args: string[],
   timeoutMs: number,
-  authorizeProof?: (line: string) => boolean,
+  authorizeProof?: (line: string) => boolean | Promise<boolean>,
 ) => Promise<WindowsStopCommandResult>;
 
 function programPath(program: "schtasks" | "sc" | "powershell"): string {
@@ -103,14 +103,14 @@ export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, 
     });
   if (authorizeProof) {
     let pending = "";
-    const onProof = (chunk: Buffer): void => {
+    const onProof = async (chunk: Buffer): Promise<void> => {
       pending += chunk.toString("latin1");
       const end = pending.indexOf("\n");
       if (end < 0) return;
       helper.stdout?.off("data", onProof);
       let approved = false;
       try {
-        approved = authorizeProof(pending.slice(0, end).replace(/\r$/, ""));
+        approved = await authorizeProof(pending.slice(0, end).replace(/\r$/, ""));
       } catch { /* An authorizer failure leaves stdin unapproved. */ }
       helper.stdin?.end(approved ? "stop\n" : "\n");
     };
@@ -126,15 +126,16 @@ export const liveWindowsStopCommandRunner: WindowsStopCommandRunner = (program, 
  * System32\zh-CN\schtasks.exe.mui, ko-KR from two machines. Any other word stays unknown and
  * falls back to Get-ScheduledTask's locale-independent State enum.
  */
-const TASK_CSV_RUNNING = new Set(["running", "正在运行", "실행 중"]);
-const TASK_CSV_NOT_RUNNING = new Set(["ready", "disabled", "queued", "就绪", "已禁用", "已排队", "준비"]);
+// A queued instance can launch after Part A. Only ready and disabled prove inactivity.
+const TASK_CSV_ACTIVE = new Set(["running", "queued", "正在运行", "已排队", "실행 중"]);
+const TASK_CSV_NOT_RUNNING = new Set(["ready", "disabled", "就绪", "已禁用", "준비"]);
 
 export function parseTaskCsvState(csv: string): "running" | "not-running" | "unknown" {
   for (const line of csv.split(/\r?\n/)) {
     if (!windowsSchedulerCsvIncludesTask(line, TASK)) continue;
     const fields = [...line.matchAll(/"([^"]*)"/g)].map(match => match[1]!.trim());
     const status = (fields[fields.length - 1] ?? "").normalize("NFC").toLowerCase();
-    if (TASK_CSV_RUNNING.has(status)) return "running";
+    if (TASK_CSV_ACTIVE.has(status)) return "running";
     if (TASK_CSV_NOT_RUNNING.has(status)) return "not-running";
     return "unknown";
   }
@@ -222,7 +223,7 @@ export interface WindowsCheckedStopLiveOptions {
    * executable. Defaults to the capped runner; tests inject it.
    */
   scQcRun?: (timeoutMs: number) => Promise<WindowsStopCommandResult>;
-  /** Checked before every manager command (the route's cap, the updater's authorizer). */
+  /** The outer cap, checked before a manager stop and again after Scheduler proof. */
   gate?: () => boolean;
   snapshot?: (timeoutMs: number) => Promise<readonly WindowsStopProcessEntry[] | null>;
 }
@@ -293,17 +294,27 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
       const whole = wholeTimeoutMs(timeoutMs);
       return whole === null ? null : readScheduleServicePid({ timeoutMs: whole });
     },
-    async endTask(timeoutMs) {
+    async endTask(timeoutMs, authorize) {
       if (!gate()) return "failed";
-      const deadline = performance.now() + timeoutMs;
+      const deadline = performance.now() + Math.floor(timeoutMs);
+      const withinDeadline = () => performance.now() < deadline && gate();
       const launcher = windowsLauncherVbsPath();
       const script = Buffer.from(WINDOWS_TASK_INSTANCE_STOP_SCRIPT, "utf16le").toString("base64");
       let approved = false;
+      let refusal: { cause: unknown } | undefined;
       const ended = await run("powershell", ["-NoProfile", "-NoLogo", "-NonInteractive", "-EncodedCommand", script], timeoutMs,
-        line => {
-          approved = verifyWindowsTaskStopProof(line, launcher) && performance.now() < deadline && gate();
+        async line => {
+          if (!verifyWindowsTaskStopProof(line, launcher) || !withinDeadline()) return false;
+          try {
+            await authorize?.();
+          } catch (cause) {
+            refusal = { cause };
+            return false;
+          }
+          approved = withinDeadline();
           return approved;
         });
+      if (refusal) throw refusal.cause;
       if (ended.timedOut || ended.status !== 0) return "failed";
       const verdict = ended.stdout.trim().split(/\r?\n/).at(-1);
       if (verdict === "unverified-registration" || verdict === "denied") return verdict;
@@ -321,8 +332,8 @@ export function windowsCheckedStopLiveDeps(options: WindowsCheckedStopLiveOption
       const ps = await run("powershell", ["-NoProfile", "-NoLogo", "-NonInteractive", "-Command",
         "(Get-ScheduledTask -TaskName '" + TASK + "' -TaskPath '\\' -ErrorAction Stop).State"], left);
       const state = ps.stdout.trim();
-      if (/^running$/i.test(state)) return "running";
-      if (/^(ready|disabled|queued)$/i.test(state)) return "not-running";
+      if (/^(running|queued)$/i.test(state)) return "running";
+      if (/^(ready|disabled)$/i.test(state)) return "not-running";
       return "unknown";
     },
     async winswStop(timeoutMs) {

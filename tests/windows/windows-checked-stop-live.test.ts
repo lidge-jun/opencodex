@@ -4,7 +4,7 @@
  * Part B port sampler and listener identity, and the stopper-ancestry check. Hermetic: no
  * command is spawned and no FFI is loaded.
  */
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -25,7 +25,7 @@ import {
 import type { WindowsProcessNativeApi } from "../../src/service/windows-process-native";
 import { windowsLauncherVbsPath } from "../../src/service/state";
 import { WINDOWS_TASK_INSTANCE_STOP_SCRIPT } from "../../src/service/windows-task-instance-stop";
-import { buildWindowsTaskXml } from "../../src/service/windows-taskxml";
+import { buildWindowsTaskXml, windowsTaskRegistrationHealthy } from "../../src/service/windows-taskxml";
 import { resolveTrustedWindowsPowerShellExe } from "../../src/lib/windows-elevation";
 import { winswExePath } from "../../src/lib/winsw";
 import { PATHS, entry, launcher, loop, proxy, supervisedTree } from "../helpers/windows-checked-stop-fixtures";
@@ -75,6 +75,40 @@ describe("whole-millisecond timeouts (execFile reads 0 as unlimited)", () => {
 });
 
 describe("capped command answers", () => {
+  test("an owned disabled task can prove it is idle without qualifying as a healthy installation", async () => {
+    const sid = "S-1-5-21-100-200-300-1001";
+    const launcher = windowsLauncherVbsPath();
+    const xml = buildWindowsTaskXml(undefined, launcher, undefined, sid)
+      .replace('<Principal id="Author">', '<Principal id="Author"><UserId>' + sid + '</UserId>');
+    const disabled = xml.replace("    <Enabled>true</Enabled>\n    <Hidden>", "    <Enabled>false</Enabled>\n    <Hidden>");
+    expect(windowsTaskRegistrationHealthy(xml, undefined, launcher, sid)).toBe(true);
+    expect(windowsTaskRegistrationHealthy(disabled, undefined, launcher, sid)).toBe(false);
+
+    const endTaskFor = (taskXml: string) => windowsCheckedStopLiveDeps({ run: async (_program, _args, _timeout, authorizeProof) => {
+      const proof = Buffer.from(JSON.stringify({ xml: taskXml, sid })).toString("base64");
+      const approved = await authorizeProof?.(proof);
+      return result(0, proof + "\n" + (approved ? "not-running" : "unverified-registration"));
+    } }).endTask(2_000);
+
+    expect(await endTaskFor(disabled)).toBe("not-running");
+    expect(await endTaskFor(disabled.replace(`<Principal id="Author"><UserId>${sid}</UserId>`,
+      '<Principal id="Author"><UserId>S-1-5-21-100-200-300-1002</UserId>'))).toBe("unverified-registration");
+    expect(await endTaskFor(disabled.replace(/(<Arguments>.*?)<\/Arguments>/, "$1 extra</Arguments>")))
+      .toBe("unverified-registration");
+  });
+
+  test.each(["Queued", "已排队", "PowerShell"])("final task state is active when a replacement is queued (%s)", async status => {
+    const programs: string[] = [];
+    const deps = windowsCheckedStopLiveDeps({ run: async program => {
+      programs.push(program);
+      if (program === "powershell") return result(0, "Queued\r\n");
+      const word = status === "PowerShell" ? "Wird ausgeführt" : status;
+      return result(0, `"\\opencodex-proxy","N/A","${word}"\r\n`);
+    } });
+    expect(await deps.taskState(1_000)).toBe("running");
+    expect(programs).toEqual(status === "PowerShell" ? ["schtasks", "powershell"] : ["schtasks"]);
+  });
+
   test("the #3064 launcher survives the task stop proof round trip", async () => {
     const previousHome = process.env.OPENCODEX_HOME;
     const sid = "S-1-5-21-100-200-300-1001";
@@ -88,11 +122,11 @@ describe("capped command answers", () => {
       let reportedXml = xml;
       const programs: string[] = [];
       const deps = windowsCheckedStopLiveDeps({
-        run: async (program, args, _timeout, authorizeProof?: (line: string) => boolean) => {
+        run: async (program, args, _timeout, authorizeProof) => {
           programs.push(program);
           if (args.includes("/xml")) return result(0, lossyXml);
           const proof = Buffer.from(JSON.stringify({ xml: reportedXml, sid }), "utf8").toString("base64");
-          return authorizeProof?.(proof) ? result(0, proof + "\nended") : result(0, "unverified-registration");
+          return await authorizeProof?.(proof) ? result(0, proof + "\nended") : result(0, "unverified-registration");
         },
       });
       expect(await deps.endTask(2_000)).toBe("ended");
@@ -134,7 +168,6 @@ describe("capped command answers", () => {
     expect(parseTaskCsvState('"\\opencodex-proxy","N/A","正在运行"')).toBe("running");
     expect(parseTaskCsvState('"\\opencodex-proxy","2026/11/17 9:00:00","就绪"')).toBe("not-running");
     expect(parseTaskCsvState('"\\opencodex-proxy","N/A","已禁用"')).toBe("not-running");
-    expect(parseTaskCsvState('"\\opencodex-proxy","N/A","已排队"')).toBe("not-running");
     // ko-KR, observed on two machines: Running, Ready.
     expect(parseTaskCsvState('"\\opencodex-proxy","N/A","실행 중"')).toBe("running");
     expect(parseTaskCsvState('"\\opencodex-proxy","N/A","준비"')).toBe("not-running");
@@ -166,7 +199,7 @@ describe("capped command answers", () => {
       gate: () => open,
       run: async (_program, _args, _timeout, authorizeProof) => {
         if (closeGate) open = false;
-        approved = authorizeProof?.(line) ?? false;
+        approved = (await authorizeProof?.(line)) ?? false;
         return answer;
       },
     });
@@ -178,6 +211,29 @@ describe("capped command answers", () => {
     expect(await deps(result(0, "denied")).endTask(2_000)).toBe("denied");
     expect(await deps(result(0, "unverified-registration"), proof, true).endTask(2_000)).toBe("unverified-registration");
     expect(approved).toBe(false);
+  });
+
+  test("an authorizer that spends the helper deadline cannot approve dispatch", async () => {
+    const sid = "S-1-5-21-100-200-300-1001";
+    const xml = buildWindowsTaskXml(undefined, windowsLauncherVbsPath(), undefined, sid)
+      .replace('<Principal id="Author">', '<Principal id="Author"><UserId>' + sid + '</UserId>');
+    const proof = Buffer.from(JSON.stringify({ xml, sid })).toString("base64");
+    let elapsed = 0;
+    const now = spyOn(performance, "now").mockImplementation(() => elapsed);
+    try {
+      const deps = windowsCheckedStopLiveDeps({ run: async (_program, _args, _timeout, authorizeProof) => {
+        const approved = await authorizeProof?.(proof);
+        return result(0, proof + "\n" + (approved ? "ended" : "unverified-registration"));
+      } });
+      const verdict = await deps.endTask(2_000, async () => {
+        await Promise.resolve();
+        elapsed = 2_000;
+      });
+      expect(verdict).toBe("unverified-registration");
+      expect(elapsed).toBe(2_000);
+    } finally {
+      now.mockRestore();
+    }
   });
 
   test("sc.exe query and stop", () => {

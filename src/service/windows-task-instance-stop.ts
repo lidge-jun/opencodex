@@ -1,6 +1,5 @@
 import { TASK } from "./state";
-import { windowsTaskRegistrationIsOurs } from "./windows-guarded-manager";
-import { windowsTaskActionMatches, windowsTaskPrincipalMatches } from "./windows-taskxml";
+import { windowsTaskRegistrationMatchesForStop } from "./windows-taskxml";
 
 /**
  * Keep the registered task and captured IRunningTask objects in one COM session.
@@ -91,9 +90,7 @@ export function verifyWindowsTaskStopProof(line: string, launcher: string): bool
     if (typeof proof.xml !== "string" || typeof proof.sid !== "string"
       || !/^S-1-(?:5-21|12-1)(?:-\d{1,10}){4}$/i.test(proof.sid)) return false;
     const userIds = typeof proof.name === "string" && proof.name.trim() ? [proof.sid, proof.name] : [proof.sid];
-    return windowsTaskRegistrationIsOurs(proof.xml, userIds, launcher)
-      && windowsTaskActionMatches(proof.xml, launcher)
-      && windowsTaskPrincipalMatches(proof.xml, userIds);
+    return windowsTaskRegistrationMatchesForStop(proof.xml, launcher, userIds);
   } catch {
     return false;
   }

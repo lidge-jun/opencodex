@@ -97,7 +97,7 @@ describe("checked Windows stop, part A", () => {
     const commands: string[] = [];
     const run: WindowsStopCommandRunner = async (program, args, _timeout, authorizeProof) => {
       commands.push(program + " " + args[0]);
-      expect(authorizeProof?.(proof)).toBe(false);
+      expect(await authorizeProof?.(proof)).toBe(false);
       return { status: 0, stdout: "unverified-registration", stderr: "", timedOut: false };
     };
     const { endTask } = windowsCheckedStopLiveDeps({ run });

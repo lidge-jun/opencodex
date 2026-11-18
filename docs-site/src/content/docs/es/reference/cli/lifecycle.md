@@ -90,7 +90,9 @@ Una salida proxy sola no confirma que la restauración compartida Codex / Grok t
 En Windows, `ocx stop` detiene una tarea registrada del Programador de tareas o un servicio nativo WinSW mediante una parada verificada. Primero finaliza la tarea y después solo los procesos envoltorios `wscript.exe` y `cmd.exe` que puede vincular a esta instalación (el lanzador o script de servicio de este directorio, una cadena de procesos padres que conduce al proxy o al servicio del Programador de tareas, y una hora de inicio registrada), y espera a que terminen. Solo entonces detiene el proxy de forma controlada. Después confirma que el puerto permanezca libre unos seis segundos y que ningún envoltorio se haya reiniciado, para impedir que un bucle de reinicio vuelva a iniciar el proxy tras una parada exitosa.
 
 OpenCodex verifica que la tarea programada inicie esta instalación con tu cuenta de Windows
-y comprueba la cuenta de cada instancia en ejecución antes de detenerla. Si la comprobación falla,
+y comprueba la cuenta de cada instancia en ejecución antes de detenerla. Una tarea deshabilitada
+de tu cuenta se considera inactiva si no tiene instancias en ejecución. Si hay una tarea en cola,
+OpenCodex no confirma la parada. Si la comprobación falla,
 revisa el lanzador y la cuenta de ejecución en el Programador de tareas y detén la tarea desde
 la sesión de esa cuenta.
 

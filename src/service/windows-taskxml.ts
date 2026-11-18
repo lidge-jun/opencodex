@@ -567,7 +567,7 @@ function windowsTaskRegistrationBaseHealthy(
   xml: string,
   wscript = windowsWscript(),
   launcher = windowsLauncherVbsPath(),
-  allowLossyPaths = true,
+  { allowLossyPaths = true, allowDisabled = false }: { allowLossyPaths?: boolean; allowDisabled?: boolean } = {},
 ): boolean {
   const scrubbed = taskXmlWithoutCommentsAndCdata(xml);
   // taskXmlSection() takes the FIRST match and the schema allows arbitrary XML under
@@ -585,7 +585,8 @@ function windowsTaskRegistrationBaseHealthy(
     && taskXmlOptionalValueEquals(trigger, "Enabled", "true")
     && /<LogonType>\s*InteractiveToken\s*<\/LogonType>/i.test(principal)
     && taskXmlRunLevelAcceptable(principal)
-    && taskXmlOptionalValueEquals(settings, "Enabled", "true")
+    && (taskXmlOptionalValueEquals(settings, "Enabled", "true")
+      || (allowDisabled && taskXmlDecodedValueEquals(settings, "Enabled", "false")))
     && /<MultipleInstancesPolicy>\s*IgnoreNew\s*<\/MultipleInstancesPolicy>/i.test(settings)
     && /<ExecutionTimeLimit>\s*PT0S\s*<\/ExecutionTimeLimit>/i.test(settings)
     // Compare decoded VALUES, not encodings: Task Scheduler canonicalizes the
@@ -627,9 +628,21 @@ export function windowsTaskRegistrationRefreshableLegacy(
 ): boolean {
   const scrubbed = taskXmlWithoutCommentsAndCdata(xml);
   const triggers = taskXmlSection(scrubbed, "Triggers");
-  return windowsTaskRegistrationBaseHealthy(xml, wscript, launcher, false)
-    && taskXmlElementCount(triggers, "SessionStateChangeTrigger") === 0
+  return windowsTaskRegistrationBaseHealthy(xml, wscript, launcher, { allowLossyPaths: false })
+    && windowsTaskHasNoSessionRecoveryTriggers(triggers);
+}
+
+function windowsTaskHasNoSessionRecoveryTriggers(triggers: string): boolean {
+  return taskXmlElementCount(triggers, "SessionStateChangeTrigger") === 0
     && !taskXmlHasPrefixedTag(triggers, "SessionStateChangeTrigger");
+}
+
+/** Stop accepts either recognized shape, including a disabled task, with exact ownership. */
+export function windowsTaskRegistrationMatchesForStop(xml: string, launcher: string, userIds: readonly string[]): boolean {
+  if (!windowsTaskRegistrationBaseHealthy(xml, windowsWscript(), launcher, { allowLossyPaths: false, allowDisabled: true })
+    || !windowsTaskPrincipalMatches(xml, userIds)) return false;
+  const triggers = taskXmlSection(taskXmlWithoutCommentsAndCdata(xml), "Triggers");
+  return windowsTaskHasSessionRecoveryTriggers(triggers, userIds) || windowsTaskHasNoSessionRecoveryTriggers(triggers);
 }
 
 export interface WindowsSchedulerXmlState {
