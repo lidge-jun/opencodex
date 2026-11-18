@@ -20,7 +20,7 @@ export interface UninstallClientStateDeps {
   disconnect: (options?: Parameters<typeof disconnectClient>[0]) => Promise<unknown>;
   withLifecycle: typeof withClientLifecycle;
   cleanupIntegrations: typeof cleanupOwnedIntegrationsBeforeUninstall;
-  gatewayContext: typeof productionGatewayClientContext;
+  gatewayContext?: typeof productionGatewayClientContext;
   remove: () => ConfigRemovalResult;
   /** True while a timed-out icacls child still owns a path at or below the config directory. */
   aclReapPending: (rootPath: string) => boolean;
@@ -52,7 +52,6 @@ const defaults: UninstallClientStateDeps = {
   disconnect: options => disconnectClient(options),
   withLifecycle: withClientLifecycle,
   cleanupIntegrations: cleanupOwnedIntegrationsBeforeUninstall,
-  gatewayContext: productionGatewayClientContext,
   remove: () => removeOwnedConfigState(getConfigDir()),
   aclReapPending: rootPath => windowsSecretAclReapPendingAtOrBelow(rootPath),
   removePickerArtifacts: removePickerArtifactsBeforeUninstall,
@@ -137,7 +136,8 @@ async function removeOwnedConfigInTeardown(deps: UninstallClientStateDeps): Prom
     // Integration records are the authority that permits removing only OpenCodex-owned fragments
     // from third-party files. Delete them only after every recorded contribution is retired.
     await deps.cleanupIntegrations();
-    disconnectRecordedGatewayClients(deps.gatewayContext(), held);
+    const gatewayContext = deps.gatewayContext ?? productionGatewayClientContext;
+    disconnectRecordedGatewayClients(gatewayContext(), held);
     return deps.remove();
   });
 }

@@ -17,7 +17,7 @@ import type { DesktopDisconnectReceipt } from "../../src/claude/desktop-remote-s
 import type { ExportModel } from "../../src/clients/config-export";
 import { GATEWAY_CLIENTS, connectGatewayClient } from "../../src/integrations/gateway-clients";
 import { INTEGRATION_CLIENTS } from "../../src/integrations/registry";
-import { initializeConfigOwnership, removeOwnedConfigState } from "../../src/lib/config-ownership";
+import { initializeConfigOwnership, removeOwnedConfigState, type ConfigRemovalResult } from "../../src/lib/config-ownership";
 import { setUninstallElevationProbeForTests } from "../../src/lib/config-ownership-removal";
 import { createIntegrationStateStore } from "../../src/integrations/store";
 import { applyIntegration, disableIntegrationCoordinated } from "../../src/integrations/writer";
@@ -831,7 +831,7 @@ describe("uninstall restores recorded third-party integrations before deleting r
       writeFileSync(clientConfig, '{"userSetting":"keep"}\n');
       expect(applyIntegration({ clientId: "pi", models, config, port: config.port, env, home, store }).ok).toBe(true);
     }
-    const deps: UninstallClientStateDeps = {
+    const deps = {
       readConnection: () => ({ kind: "disconnected" }),
       inspectDesktop: () => ({ kind: "absent" }),
       readReceipt: () => ({ kind: "absent" }),
@@ -847,13 +847,13 @@ describe("uninstall restores recorded third-party integrations before deleting r
       }),
       gatewayContext: () => ({ home, platform: "linux", env: { SHELL: "/bin/bash" },
         stateDir: configDir, adminSettingsPath: join(root, "admin.json"), lifecycleLockPath: lockPath }),
-      remove: () => {
+      remove: (): ConfigRemovalResult => {
         rmSync(configDir, { recursive: true });
         return { status: "removed", residualPaths: [] };
       },
       aclReapPending: () => false,
       removePickerArtifacts: async () => ({ ok: true }),
-    };
+    } satisfies UninstallClientStateDeps;
     return { root, home, env, configDir, clientConfig, store, deps };
   }
 
