@@ -97,18 +97,15 @@ async function runParentStop(options: {
     urls: string[]; transports: string[]; nonce?: string; receiptExists: boolean; unexpectedIo: string[];
   };
   expect(report.unexpectedIo, child.stderr).toEqual([]);
-  // The Windows checked stop needs its receipt before it sends anything.
-  const refusedWithoutReceipt = options.windowsStopWiring === true && !options.receipt;
+  const refusedWithoutReceipt = !options.receipt && (options.windowsStopWiring === true || options.clientTransport === "link");
   const changedBeforeLinkFence = options.clientTransport === "link" && options.connectDuringDiscovery;
   expect(report.urls, child.stderr).toHaveLength(options.clientServer || options.exitCleanup || options.alreadyStopped || refusedWithoutReceipt || changedBeforeLinkFence ? 0 : 1);
   return { ...report, exitCode: child.status, stderr: child.stderr, stdout: child.stdout };
 }
 
 /**
- * Off Windows a stop whose teardown receipt cannot be claimed still runs, and the cases using this assert that
- * contract. On Windows the checked stop (#8573) needs the receipt first (windowsStopRequiresReceipt in
- * src/cli/index.ts) and refuses before any POST, so those cases run off Windows; "the Windows checked stop
- * refuses ..." below asserts that refusal for the same scenarios on every host.
+ * An ordinary POSIX stop can proceed without a receipt. Live Link stops and checked Windows
+ * stops require it. The checked Windows refusal is also exercised on other hosts.
  */
 const posixReceiptTest = test.skipIf(process.platform === "win32");
 
@@ -340,16 +337,22 @@ describe("parent CLI shared teardown completion", () => {
     expect(outcome.exitCode, outcome.stderr).toBe(0);
   });
 
-  posixReceiptTest("a Link Child not-owned answer without a receipt still gets the parent's restoration", async () => {
-    // An old build answers not-owned for ANY connected client before it ever checks the
-    // deferral query, and this stop has no receipt to send. That answer preserves the
-    // link route instead of tearing it down, so it cannot confirm the parent's teardown:
-    // the parent owns the restoration itself, exactly as for an unconfirmed stop.
+  test("a Link Child stop with an unwritable receipt never reaches the manager or POST", async () => {
     const outcome = await runParentStop({ receipt: false, clientTransport: "link", json: true,
       response: { success: true, sharedTeardown: "not-owned" }, restore: restoreResult(true) });
-    expect(outcome.urls).toEqual(["http://127.0.0.1:10100/api/stop"]);
+    expect(outcome.urls).toEqual([]);
     expect(outcome.nonce).toBeUndefined();
-    expect(outcome.calls).toMatchObject({ killed: 0, exited: 1, native: 1, grok: 1, cleared: 0 });
+    expect(outcome.calls).toMatchObject({ service: 0, killed: 0, exited: 0, native: 0, grok: 0, cleared: 0 });
+    expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: false, runtimeDown: false, sharedTeardown: "skipped" });
+    expect(outcome.stderr).toContain("receipt storage unavailable");
+    expect(outcome.exitCode).toBe(1);
+  });
+
+  test("a receipt-backed Link stop still restores after an unconfirmed not-owned response", async () => {
+    const outcome = await runParentStop({ receipt: true, clientTransport: "link", json: true,
+      response: { success: true, sharedTeardown: "not-owned" }, restore: restoreResult(true) });
+    expect(outcome.urls).toEqual([`http://127.0.0.1:10100/api/stop?deferSharedTeardown=1&teardownNonce=${outcome.nonce}`]);
+    expect(outcome.calls).toMatchObject({ killed: 0, exited: 1, native: 1, grok: 1, cleared: 1 });
     expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, runtimeDown: true, sharedTeardown: "restored" });
     expect(outcome.exitCode, outcome.stderr).toBe(0);
   });
@@ -368,26 +371,22 @@ describe("parent CLI shared teardown completion", () => {
   for (const [label, transition] of [["during orphan discovery", { orphan: true, connectDuringDiscovery: true }],
     ["while the POST is in flight", { connectDuringPost: true }]] as const) {
     for (const receipt of [true, false]) {
-      (receipt ? test : posixReceiptTest)(`a Link stop never restores over a hub connected ${label} (receipt ${receipt ? "claimed" : "unavailable"})`, async () => {
+      test(`a Link stop never restores over a hub connected ${label} (receipt ${receipt ? "claimed" : "unavailable"})`, async () => {
         // #7736 r5: the late not-owned refusal must not let the parent restore over the hub that
         // now owns routing. Only the ownership read at the restore boundary decides.
         const outcome = await runParentStop({ receipt, clientTransport: "link", serverTeardown: true, json: true,
           response: null, restore: restoreResult(true), ...transition });
-        if ("connectDuringDiscovery" in transition) {
-          // Discovery now precedes the Link sync fence and every process/service stop.
+        if ("connectDuringDiscovery" in transition || !receipt) {
           expect(outcome.calls).toMatchObject({ service: 0, killed: 0, native: 0, grok: 0, cleared: 0 });
           expect(outcome.nonce).toBeUndefined();
           expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: false, runtimeDown: false, sharedTeardown: "skipped" });
           expect(outcome.exitCode).toBe(1);
           return;
         }
-        expect(outcome.calls, outcome.stderr).toMatchObject({ killed: 0, native: 0, grok: 0, cleared: receipt ? 1 : 0 });
+        expect(outcome.calls, outcome.stderr).toMatchObject({ killed: 0, native: 0, grok: 0, cleared: 1 });
         expect(outcome.receiptExists).toBe(false);
-        // Seen before the POST without a nonce, the hub's not-owned answer already confirms the stop.
-        const settledAtPost = "connectDuringDiscovery" in transition && !receipt;
-        expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, runtimeDown: true,
-          sharedTeardown: settledAtPost ? "performed-by-proxy" : "skipped" });
-        if (!settledAtPost) expect(outcome.stdout + outcome.stderr).toContain("A hub connection was committed while this stop ran");
+        expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, runtimeDown: true, sharedTeardown: "skipped" });
+        expect(outcome.stdout + outcome.stderr).toContain("A hub connection was committed while this stop ran");
         expect(outcome.exitCode, outcome.stderr).toBe(0);
       });
     }
@@ -395,8 +394,8 @@ describe("parent CLI shared teardown completion", () => {
   for (const transition of ["connectAfterBoundary", "connectDuringRestore"] as const) {
     for (const receipt of [true, false]) {
       (receipt ? test : posixReceiptTest)(`R6 ${transition} preserves hub writes (receipt ${receipt})`, async () => {
-        const outcome = await runParentStop({ receipt, clientTransport: "link", json: true,
-          [transition]: true, response: { success: true, sharedTeardown: "not-owned" }, restore: restoreResult(true) });
+        const outcome = await runParentStop({ receipt, ...(receipt ? { clientTransport: "link" } as const : {}), json: true,
+          [transition]: true, response: { success: false, sharedTeardown: "performed" }, restore: restoreResult(true) });
         expect(outcome.calls, outcome.stderr).toMatchObject({ native: 0, grok: 0, cleared: receipt ? 1 : 0 });
         expect(outcome.receiptExists).toBe(false);
         expect(JSON.parse(outcome.stdout)).toMatchObject({ ok: true, sharedTeardown: "skipped" });
@@ -527,8 +526,8 @@ describe("parent CLI shared teardown completion", () => {
     expect(outcome.exitCode).toBe(0);
   });
 
-  // The scenarios the posixReceiptTest cases run without a receipt. Through the Windows checked stop each one is
-  // refused before the POST: nothing is signalled, restored or cleared, and the stop fails.
+  // Checked Windows stop refuses all of these receipt failures before POST, including
+  // cases an ordinary POSIX stop can still complete.
   const notOwned = { success: true, sharedTeardown: "not-owned" } as const;
   for (const [name, scenario] of [
     ["a Link Child not-owned answer", { clientTransport: "link", json: true, response: notOwned }],
