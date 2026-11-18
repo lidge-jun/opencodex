@@ -261,13 +261,15 @@ export function createResponsesSendBudget(
   const noteAdapterPhysicalSend = (
     inputTokens: number | undefined,
     send: { ordinal: number; recovery?: AttemptRecoveryKind },
-    options: { readonly includeFirst?: boolean } = {},
+    options: { readonly includeFirst?: boolean; readonly countOnly?: boolean } = {},
   ): void => {
     // Ordinal 1 is skipped because the caller normally records it before dispatch. An adapter
     // that reports every send asks for it to be counted here instead, so that the first send is
     // logged where it actually happens rather than before admission could still refuse it.
     targetSendsUsed += 1;
-    if (send.ordinal <= 1 && options.includeFirst !== true) return;
+    // Credential replays log their first send on the guarded executor's receipt. An adapter
+    // may report budget consumption before that receipt, so count it without touching the row.
+    if (options.countOnly || (send.ordinal <= 1 && options.includeFirst !== true)) return;
     noteAttemptSend(logCtx.activeAttempt, inputTokens, send.recovery);
   };
   /**

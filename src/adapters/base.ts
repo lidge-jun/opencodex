@@ -45,6 +45,8 @@ export interface IncomingMeta {
   beforePhysicalSend?: () => void;
   /** Recheck credential authority without recording a physical dispatch. */
   beforeCredentialSend?: () => void;
+  /** Router-owned receipt at the guarded provider executor's physical dispatch boundary. */
+  onGuardedDispatch?: () => void;
   /**
    * Image-normalization ladder bias for upstream-413 tightened retries: every image
    * starts one tier lower (devlog/260714_image_normalization_pipeline/030). Consumed by
