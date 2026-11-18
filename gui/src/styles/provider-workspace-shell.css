@@ -5,6 +5,10 @@
   max-width: 1440px;
 }
 
+.main-inner:has(.pws-detail--oauth-accounts) {
+  max-width: 1600px;
+}
+
 .pws-shell-container {
   container-name: provider-workspace;
   container-type: inline-size;
