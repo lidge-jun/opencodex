@@ -1068,11 +1068,13 @@ instead (exit 0), matching the dashboard's quota bars.
 Read-only per-account check for Google Antigravity. Each account gets one
 `retrieveUserQuotaSummary` request with its own stored access token, under the CLI fingerprint, and
 the result is classified as `ok`, `rate_limited`, `verification_required`, `suspended`,
-`permission_denied` or `error` (with the HTTP status and Google's reason). Two outcomes are decided
+`permission_denied` or `error` (with the HTTP status and a recognized reason code). Two outcomes are decided
 locally and send nothing: `paused` (the account is paused; resume it to test it) and `token_expired`
 (the stored token has expired). The probe never refreshes a token, never writes the auth store and
 never changes pause, active, cooldown or health state. The dashboard's **Test** and **Test all**
-buttons on Antigravity account rows call the same endpoint, `POST /api/oauth/accounts/probe`.
+buttons on the Antigravity account quota table call the same endpoint, `POST /api/oauth/accounts/probe`.
+The table shows each account’s plan, remaining quota by pool, reset times, and account actions.
+A batch runs up to four checks at a time. Wait for the current check to finish before starting another.
 
 ### `ocx models discover <provider> [--json]`
 

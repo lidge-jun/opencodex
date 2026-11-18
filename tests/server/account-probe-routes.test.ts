@@ -85,11 +85,11 @@ describe("classifyAntigravityProbeResponse", () => {
     expect(classifyAntigravityProbeResponse(403, googleError(403, "PERMISSION_DENIED", "Cloud Code Private API has not been used in project 1 before or it is disabled.", "SERVICE_DISABLED")).status)
       .toBe("permission_denied");
     expect(classifyAntigravityProbeResponse(403, googleError(403, "PERMISSION_DENIED", "The caller does not have permission")))
-      .toMatchObject({ status: "permission_denied", reason: "PERMISSION_DENIED", message: "The caller does not have permission" });
+      .toMatchObject({ status: "permission_denied", reason: "PERMISSION_DENIED", message: null });
     expect(classifyAntigravityProbeResponse(429, googleError(429, "RESOURCE_EXHAUSTED", "Quota exceeded")).status).toBe("rate_limited");
     expect(classifyAntigravityProbeResponse(401, googleError(401, "UNAUTHENTICATED", "Request had invalid authentication credentials.")))
       .toMatchObject({ status: "error", reason: "UNAUTHENTICATED" });
-    expect(classifyAntigravityProbeResponse(503, "upstream down")).toMatchObject({ status: "error", message: "upstream down" });
+    expect(classifyAntigravityProbeResponse(503, "upstream down")).toMatchObject({ status: "error", message: null });
   });
 });
 
@@ -142,6 +142,44 @@ describe("probeAntigravityAccounts", () => {
     expect(seen).toHaveLength(1);
     expect(rows?.[0]).toMatchObject({ status: "error", reason: "timeout" });
     expect(canceled).toBe(true);
+  });
+
+  test("redirects are discarded without following the location or waiting for cancellation", async () => {
+    writeStore([account("okacct1", "tok-ok")]);
+    let canceled = false;
+    const release = Promise.withResolvers<void>();
+    const seen = installUpstream({
+      "tok-ok": () => new Response(new ReadableStream({
+        cancel() { canceled = true; return release.promise; },
+      }), { status: 307, headers: { location: "https://example.test/other" } }),
+    });
+    let cancellationReleased = false;
+    const timer = setTimeout(() => { cancellationReleased = true; release.resolve(); }, 100);
+    try {
+      expect((await probeAntigravityAccounts())?.[0]).toMatchObject({ status: "error", reason: "redirect_blocked", message: null });
+      expect(canceled).toBe(true);
+      expect(cancellationReleased).toBe(false);
+      expect(seen.map(row => row.url)).toEqual([SUMMARY_URL]);
+    } finally {
+      clearTimeout(timer);
+      release.resolve();
+    }
+  });
+
+  test("a pause during DNS resolution suppresses dispatch of the stored credential", async () => {
+    const row = account("okacct1", "tok-ok");
+    writeStore([row]);
+    let sends = 0;
+    setAntigravityAccountQuotaTransportForTests({
+      async resolveAddresses() {
+        writeStore([{ ...row, paused: true }]);
+        return { hostname: new URL(SUMMARY_URL).hostname, addresses: [{ address: "142.250.0.1", family: 4 }], privateNetwork: false };
+      },
+      async pinnedPost() { sends++; return Response.json({}); },
+    });
+    const rows = await probeAntigravityAccounts();
+    expect(sends).toBe(0);
+    expect(rows?.[0]?.status).toBe("error");
   });
 
   test("a passive probe leaves the store bytes and filesystem metadata untouched", async () => {
@@ -315,15 +353,17 @@ describe("management routes", () => {
 
   test("POST /api/oauth/accounts/probe validates input and returns per-account results", async () => {
     writeStore([account("okacct1", "tok-ok")]);
-    installUpstream({ "tok-ok": () => new Response(summaryBody, { status: 200 }) });
+    const seen = installUpstream({ "tok-ok": () => new Response(summaryBody, { status: 200 }) });
     const live = config();
     expect((await call(live, "/api/oauth/accounts/probe", { provider: "anthropic" })).status).toBe(400);
     expect((await call(live, "/api/oauth/accounts/probe", { provider: "google-antigravity", accountId: 7 })).status).toBe(400);
     expect((await call(live, "/api/oauth/accounts/probe", { provider: "google-antigravity", accountId: "nope" })).status).toBe(404);
+    expect(seen).toHaveLength(0);
     const ok = await call(live, "/api/oauth/accounts/probe", { provider: "google-antigravity", accountId: "okacct1" });
     expect(ok.status).toBe(200);
     expect(ok.json.provider).toBe("google-antigravity");
     expect(ok.json.results).toEqual([expect.objectContaining({ accountId: "okacct1", status: "ok", httpStatus: 200 })]);
+    expect(seen).toHaveLength(1);
     expect(JSON.stringify(ok.json)).not.toContain("tok-ok");
   });
 

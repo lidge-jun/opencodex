@@ -18,6 +18,7 @@ let win: Window;
 let host: HTMLElement;
 let root: Root | null = null;
 let probeBodies: unknown[];
+let holdProbe: Promise<void> | undefined;
 
 const item = { name: "google-antigravity", adapter: "openai-responses", authMode: "oauth", hasApiKey: false } as unknown as WorkspaceItem;
 const handlers: ProviderAuthHandlers = {
@@ -32,6 +33,7 @@ beforeEach(() => {
   win = new Window({ url: "http://localhost/" });
   Object.defineProperty(win.navigator, "language", { configurable: true, value: "en-US" });
   probeBodies = [];
+  holdProbe = undefined;
   Object.defineProperties(globalThis, {
     document: { configurable: true, value: win.document },
     window: { configurable: true, value: win },
@@ -42,6 +44,7 @@ beforeEach(() => {
       if (String(input).endsWith("/api/oauth/accounts/probe")) {
         const body = JSON.parse(String(init?.body)) as { accountId?: string };
         probeBodies.push(body);
+        await holdProbe;
         const ids = body.accountId ? [body.accountId] : ["a", "b"];
         return Response.json({ results: ids.map(accountId => ({ accountId, status: "ok", httpStatus: 200, reason: null, message: null, latencyMs: 120 })) });
       }
@@ -76,6 +79,18 @@ function button(label: string): HTMLButtonElement | undefined {
 
 const banned = (extra: Partial<OAuthAccount> = {}): OAuthAccount =>
   ({ id: "a", active: false, paused: true, pauseDetails: bannedDetails, ...extra });
+
+test("Test all stays disabled while an individual account check is running", async () => {
+  const gate = Promise.withResolvers<void>();
+  holdProbe = gate.promise;
+  await render([{ id: "a", active: true }, { id: "b", active: false }]);
+  await act(async () => { button("Test —")!.click(); });
+  expect(button("Test all")?.disabled).toBe(true);
+  expect(host.querySelectorAll('button[aria-label^="Test —"]:disabled')).toHaveLength(2);
+  await act(async () => { gate.resolve(); });
+  expect(button("Test all")?.disabled).toBe(false);
+  expect(probeBodies).toEqual([{ provider: "google-antigravity", accountId: "a" }]);
+});
 
 test("a banned account with no quota reading shows the ban notice and its reason once", async () => {
   await render([banned()]);

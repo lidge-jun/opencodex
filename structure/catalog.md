@@ -197,6 +197,8 @@ Nothing in the catalog validates Codex's own root `model` pin against this expos
 `readConfiguredDefaultModel` in `src/codex/catalog/parsing.ts` reads the pin, and `ocx doctor`
 reports it (see [Runtime](runtime.md)).
 
+Manual model discovery expires the chosen provider’s cached freshness and failure cooldown while retaining its last known rows. A failed live read can still serve those rows through the existing authority checks.
+
 Provider live-model lists are cached with a configured TTL (`src/codex/model-cache.ts`). Adding,
 deleting, or editing a provider's shape clears that per-provider cache; a disabled-only change
 deliberately does not, because a disabled provider is already excluded from the catalog gather

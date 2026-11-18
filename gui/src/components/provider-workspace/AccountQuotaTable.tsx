@@ -91,7 +91,6 @@ export function AccountQuotaTable({ accounts, strategy, renderAccount, renderAct
   const columns = 3 + table.pools.length + (renderActions ? 1 : 0);
   return (
     <div className="aqt" data-testid="account-quota-table">
-      {table.pools.some(pool => pool.scarce) && <p className="aqt-policy faint">{t("acctTable.policy")}</p>}
       <div className="aqt-scroll">
         <table className="aqt-table" aria-label={t("acctTable.title")}>
           <thead>

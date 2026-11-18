@@ -37,7 +37,7 @@ export async function cmdAccountProbe(args: string[], deps: AccountDeps): Promis
   const positional = args.filter(arg => arg !== "--json");
   const provider = positional[0]?.trim().toLowerCase() ?? "";
   const requested = positional[1];
-  if (!provider || positional.length > 2) {
+  if (provider !== "google-antigravity" || positional.length > 2 || requested?.startsWith("-")) {
     console.error(PROBE_USAGE);
     return 1;
   }

@@ -324,7 +324,7 @@ export default function ProviderDetails({
   const displayName = formatProviderDisplayName(item.name, t);
 
   return (
-    <div className="pws-detail">
+    <div className={`pws-detail${tab === "accounts" && authSurface === "oauth-accounts" ? " pws-detail--oauth-accounts" : ""}`}>
       <div className="pws-detail-head">
         <button type="button" className="pws-detail-back-link" onClick={requestDeselect}>
           <IconChevron className="pws-detail-back-chevron" aria-hidden="true" />
@@ -480,6 +480,7 @@ export default function ProviderDetails({
         )}
         {tab === "accounts" && (
           <ProviderAuthPanel
+            key={JSON.stringify([targetKey, apiBase, item.name])}
             item={item}
             apiBase={apiBase}
             targetKey={targetKey}

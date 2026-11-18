@@ -2,9 +2,10 @@ import { antigravityCliUserAgent, antigravityUserAgent } from "../../adapters/cl
 import { DestinationDnsResolutionError } from "../../lib/destination-policy";
 import { PinnedHttpError, type PinnedHttpErrorCode } from "../../lib/pinned-http";
 import { ProviderOutboundPolicyError, providerOutboundPost, providerRedirectError, type ProviderOutboundDependencies } from "../../lib/provider-outbound";
+import { readBoundedResponseBytes } from "../../lib/bounded-body";
 import { getValidAccessToken } from "../../oauth";
 import { getAccountCredential, getAccountSet, getCredential } from "../../oauth/store";
-import { asRecord, normalizePercent, normalizeResetAt, readQuotaJson, REQUEST_TIMEOUT_MS, toFiniteNumber } from "../quota-wire";
+import { asRecord, normalizePercent, normalizeResetAt, QUOTA_RESPONSE_MAX_BYTES, readQuotaJson, REQUEST_TIMEOUT_MS, toFiniteNumber } from "../quota-wire";
 import { antigravityEvidence, report, type ProviderQuotaReport } from "./report-cache";
 import { captureAntigravityQuotaReceipt, decisionQuotaSinkActive } from "../../lib/decision-quota-sink";
 import { antigravityDecisionWindows } from "../quota-decision-publication";
@@ -142,7 +143,7 @@ function antigravityWindowsFromModels(body: Record<string, unknown> | null): Pro
  * Parse Google Antigravity quota from `v1internal:retrieveUserQuotaSummary`.
  * Groups contain Gemini models and Claude/3P models, each with 5h and weekly limit buckets.
  */
-function parseAntigravityQuotaSummary(body: Record<string, unknown> | null): ProviderQuota | null {
+function parseAntigravityQuotaSummary(body: Record<string, unknown> | null, knownFamiliesOnly = false): ProviderQuota | null {
   const groups = Array.isArray(body?.groups) ? (body.groups as unknown[]) : [];
   if (groups.length === 0) return null;
 
@@ -187,7 +188,7 @@ function parseAntigravityQuotaSummary(body: Record<string, unknown> | null): Pro
         if (label && !customWindowsMap.has(label)) {
           customWindowsMap.set(label, { label, percent, ...(resetAt !== undefined ? { resetAt } : {}) });
         }
-      } else {
+      } else if (!knownFamiliesOnly) {
         const baseLabel = typeof group.displayName === "string" ? group.displayName : "Other";
         const label = isWeekly ? `${baseLabel} (Weekly)` : baseLabel;
         if (!customWindowsMap.has(label)) {
@@ -360,7 +361,7 @@ export type AntigravitySummaryOnceResult =
   | { kind: "redirect" }
   | { kind: "transport"; failure: QuotaFailureCode };
 
-const SUMMARY_ERROR_BODY_MAX_CHARS = 8192;
+const SUMMARY_ERROR_BODY_MAX_BYTES = 8 * 1024;
 
 /**
  * Exactly one read-only `retrieveUserQuotaSummary` request under the CLI fingerprint, for the
@@ -368,24 +369,55 @@ const SUMMARY_ERROR_BODY_MAX_CHARS = 8192;
  * UA and no models fallback: the operator asked what Google answers this account, and the first
  * answer is that evidence. The caller owns the token; nothing here refreshes or stores it.
  */
-export async function fetchAntigravityQuotaSummaryOnce(accessToken: string, projectId: string, signal?: AbortSignal): Promise<AntigravitySummaryOnceResult> {
+export async function fetchAntigravityQuotaSummaryOnce(
+  accessToken: string,
+  projectId: string,
+  parentSignal: AbortSignal | undefined,
+  beforeSend: () => boolean,
+): Promise<AntigravitySummaryOnceResult> {
+  const deadline = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
+  const signal = parentSignal ? AbortSignal.any([parentSignal, deadline]) : deadline;
+  const interrupted = Promise.withResolvers<never>();
+  const onAbort = () => interrupted.reject(signal.reason);
+  signal.addEventListener("abort", onAbort, { once: true });
   try {
-    const response = await providerOutboundPost("google-antigravity", { baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE }, ANTIGRAVITY_QUOTA_SUMMARY_URL, {
+    signal.throwIfAborted();
+    const request = providerOutboundPost("google-antigravity", { baseUrl: ANTIGRAVITY_ACCOUNT_QUOTA_BASE }, ANTIGRAVITY_QUOTA_SUMMARY_URL, {
       headers: {
         Accept: "application/json", "Content-Type": "application/json",
         "User-Agent": antigravityCliUserAgent(), Authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({ project: projectId }),
-      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]) : AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    }, antigravityOutboundDependencies);
-    if (await providerRedirectError(response, ANTIGRAVITY_QUOTA_SUMMARY_URL)) return { kind: "redirect" };
-    if (response.ok) {
-      return { kind: "response", status: response.status, bodyText: "", quota: parseAntigravityQuotaSummary(asRecord(await readQuotaJson(response))) };
+      signal,
+    }, {
+      ...antigravityOutboundDependencies,
+      beforeSend: () => {
+        // System DNS can finish after the deadline. Fence the eventual dispatch too.
+        signal.throwIfAborted();
+        return beforeSend();
+      },
+    });
+    const response = await Promise.race([request, interrupted.promise]);
+    if (response.status >= 300 && response.status < 400) {
+      void response.body?.cancel().catch(() => undefined);
+      return { kind: "redirect" };
     }
-    const bodyText = await response.text().catch(() => "");
-    return { kind: "response", status: response.status, bodyText: bodyText.slice(0, SUMMARY_ERROR_BODY_MAX_CHARS), quota: null };
+    const maxBytes = response.ok ? QUOTA_RESPONSE_MAX_BYTES : SUMMARY_ERROR_BODY_MAX_BYTES;
+    const body = await readBoundedResponseBytes(response, { maxBytes, signal });
+    if (body.oversized) return { kind: "transport", failure: "response_unusable" };
+    const bodyText = new TextDecoder().decode(body.bytes);
+    if (response.ok) {
+      let decoded: unknown;
+      try { decoded = JSON.parse(bodyText); }
+      catch { return { kind: "transport", failure: "response_unusable" }; }
+      const quota = parseAntigravityQuotaSummary(asRecord(decoded), true);
+      return { kind: "response", status: response.status, bodyText: "", quota };
+    }
+    return { kind: "response", status: response.status, bodyText, quota: null };
   } catch (error) {
     return { kind: "transport", failure: quotaTransportFailure(error) };
+  } finally {
+    signal.removeEventListener("abort", onAbort);
   }
 }
 

@@ -1,6 +1,6 @@
-import { parseUpstreamJsonPayload, sanitizeUpstreamErrorText } from "../../adapters/upstream-http-error";
+import { parseUpstreamJsonPayload } from "../../adapters/upstream-http-error";
 import { maskedAccountLabel } from "../../lib/privacy";
-import { getAccountSet } from "../../oauth/store";
+import { peekAuthStore } from "../../oauth/store";
 import type { ProviderAccount } from "../../oauth/types";
 import type { ProviderQuota } from "../quota-types";
 import { fetchAntigravityQuotaSummaryOnce, type AntigravitySummaryOnceResult } from "./antigravity";
@@ -30,9 +30,9 @@ export interface AccountProbeResult {
   status: AccountProbeStatus;
   /** Upstream HTTP status; null when no request was sent or no response arrived. */
   httpStatus: number | null;
-  /** Machine reason: Google's ErrorInfo reason / enum status, or a local code such as `missing_project`. */
+  /** Closed upstream or local reason code. Unknown upstream strings are omitted. */
   reason: string | null;
-  /** Google's error message, secret-redacted and truncated. Never contains the bearer. */
+  /** Optional local diagnostic. */
   message: string | null;
   /** Stored access-token expiry (epoch ms); null when the credential has none. */
   expiresAt: number | null;
@@ -40,10 +40,9 @@ export interface AccountProbeResult {
   quota: ProviderQuota | null;
 }
 
-export const ACCOUNT_PROBE_PROVIDERS: ReadonlySet<string> = new Set(["google-antigravity"]);
-
-const MESSAGE_MAX_CHARS = 300;
+const PROVIDER = "google-antigravity";
 const PROBE_CONCURRENCY = 4;
+const SAFE_REASONS = new Set(["VALIDATION_REQUIRED", "SERVICE_DISABLED", "PERMISSION_DENIED", "RESOURCE_EXHAUSTED", "UNAUTHENTICATED"]);
 const SUSPENDED_PATTERN = /suspend|account (?:has been |is |was )?disabled|user_disabled|account_disabled|terms of service|tos_violation|banned/;
 const VERIFICATION_PATTERN = /validation_required|validation required|verify your account|account verification/;
 
@@ -59,8 +58,8 @@ function readGoogleError(bodyText: string): GoogleErrorEnvelope {
   }
   const record = error as { status?: unknown; message?: unknown; details?: unknown };
   const reasons = Array.isArray(record.details)
-    ? record.details.flatMap(detail => detail && typeof detail === "object" && typeof (detail as { reason?: unknown }).reason === "string"
-      ? [(detail as { reason: string }).reason] : [])
+    ? record.details.flatMap(detail => detail?.["@type"] === "type.googleapis.com/google.rpc.ErrorInfo" && typeof detail.reason === "string"
+      ? [detail.reason] : [])
     : [];
   return {
     reasons,
@@ -69,21 +68,15 @@ function readGoogleError(bodyText: string): GoogleErrorEnvelope {
   };
 }
 
-function safeMessage(message: string | undefined): string | null {
-  if (!message) return null;
-  const clean = sanitizeUpstreamErrorText(message).replace(/\s+/g, " ").trim();
-  return clean ? clean.slice(0, MESSAGE_MAX_CHARS) : null;
-}
-
 /** Map one upstream answer to a verdict. Pure; exported for tests. */
 export function classifyAntigravityProbeResponse(httpStatus: number, bodyText: string): Pick<AccountProbeResult, "status" | "reason" | "message"> {
   if (httpStatus >= 200 && httpStatus < 300) return { status: "ok", reason: null, message: null };
   const envelope = readGoogleError(bodyText);
-  const reason = envelope.reasons[0] ?? envelope.enumStatus ?? null;
-  const message = safeMessage(envelope.message);
+  const reason = [...envelope.reasons, envelope.enumStatus].find(code => code !== undefined && SAFE_REASONS.has(code)) ?? null;
+  const message = null;
   const haystack = `${envelope.reasons.join(" ")} ${envelope.enumStatus ?? ""} ${envelope.message ?? ""}`.toLowerCase();
   if (envelope.reasons.includes("VALIDATION_REQUIRED") || (httpStatus === 403 && VERIFICATION_PATTERN.test(haystack))) {
-    return { status: "verification_required", reason: reason ?? "VALIDATION_REQUIRED", message };
+    return { status: "verification_required", reason: "VALIDATION_REQUIRED", message };
   }
   if (httpStatus === 429 || envelope.enumStatus === "RESOURCE_EXHAUSTED") return { status: "rate_limited", reason, message };
   if (httpStatus === 403) {
@@ -133,38 +126,40 @@ async function probeOneAntigravityAccount(
   if (expiresAt !== null && expiresAt <= now) return local("token_expired", null);
   if (!credential.projectId) return local("error", "missing_project");
   const started = Date.now();
-  const raw = await fetchAntigravityQuotaSummaryOnce(credential.access, credential.projectId, signal);
+  const raw = await fetchAntigravityQuotaSummaryOnce(credential.access, credential.projectId, signal, () => {
+    const current = peekAuthStore()[PROVIDER]?.accounts.find(row => row.id === account.id);
+    return current !== undefined && current.paused !== true && current.credential.access === credential.access
+      && current.credential.projectId === credential.projectId && current.credential.expires === credential.expires
+      && (expiresAt === null || expiresAt > Date.now());
+  });
   return { ...base, ...verdictFromRaw(raw), latencyMs: Date.now() - started };
 }
 
 /**
  * Probe stored Google Antigravity accounts with their own stored access tokens.
  *
- * Reads the auth store once and never writes it: no refresh, no re-login, no pause/active/health
- * change. Returns null when `accountId` names no stored account.
+ * Uses passive store reads and never changes the credential, active account or health.
+ * Returns null when `accountId` names no stored account.
  */
 export async function probeAntigravityAccounts(options: {
   accountId?: string;
   now?: number;
   signal?: AbortSignal;
 } = {}): Promise<AccountProbeResult[] | null> {
-  const set = getAccountSet("google-antigravity");
-  const accounts = set?.accounts ?? [];
-  const targets = options.accountId === undefined ? accounts : accounts.filter(account => account.id === options.accountId);
-  if (options.accountId !== undefined && targets.length === 0) return null;
-  const now = options.now ?? Date.now();
-  const results = new Array<AccountProbeResult>(targets.length);
+  const accountIds = [...new Set(peekAuthStore()[PROVIDER]?.accounts.map(account => account.id))];
+  const targets = options.accountId === undefined ? accountIds : [options.accountId];
+  if (options.accountId !== undefined && !accountIds.includes(options.accountId)) return null;
+  const results = new Array<AccountProbeResult | undefined>(targets.length);
   let next = 0;
   const worker = async () => {
-    while (next < targets.length) {
+    while (next < targets.length && !options.signal?.aborted) {
       const index = next++;
-      const target = targets[index]!;
       // Re-read the roster as each probe starts: a pause made after the snapshot must suppress the request.
-      const latest = getAccountSet("google-antigravity");
-      const current = latest?.accounts.find(account => account.id === target.id) ?? target;
-      results[index] = await probeOneAntigravityAccount(current, latest?.activeAccountId ?? set?.activeAccountId, now, options.signal);
+      const latest = peekAuthStore()[PROVIDER];
+      const current = latest?.accounts.find(account => account.id === targets[index]);
+      if (current) results[index] = await probeOneAntigravityAccount(current, latest?.activeAccountId, options.now ?? Date.now(), options.signal);
     }
   };
   await Promise.all(Array.from({ length: Math.min(PROBE_CONCURRENCY, targets.length) }, worker));
-  return results;
+  return results.filter(result => result !== undefined);
 }

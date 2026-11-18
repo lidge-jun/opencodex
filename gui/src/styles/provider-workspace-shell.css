@@ -812,6 +812,10 @@
   max-width: 960px;
 }
 
+.pws-detail--oauth-accounts {
+  max-width: 1280px;
+}
+
 .pws-detail-icon {
   width: 32px;
   height: 32px;

@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 /** Mirrors `AccountProbeStatus` in src/providers/quota/antigravity-account-probe.ts. */
 export const ACCOUNT_PROBE_STATUSES = [
@@ -33,9 +33,12 @@ export function useAccountProbe(apiBase: string, provider: string) {
   const [entries, setEntries] = useState<Record<string, AccountProbeEntry>>({});
   const [pending, setPending] = useState<ReadonlySet<string>>(new Set());
   const [allPending, setAllPending] = useState(false);
+  const running = useRef(false);
 
   const probe = useCallback(async (accountIds: readonly string[], all: boolean) => {
-    setPending(previous => new Set([...previous, ...accountIds]));
+    if (running.current || accountIds.length === 0) return;
+    running.current = true;
+    setPending(new Set(accountIds));
     if (all) setAllPending(true);
     const at = Date.now();
     try {
@@ -59,17 +62,15 @@ export function useAccountProbe(apiBase: string, provider: string) {
         return next;
       });
     } finally {
-      setPending(previous => {
-        const next = new Set(previous);
-        for (const id of accountIds) next.delete(id);
-        return next;
-      });
+      running.current = false;
+      setPending(new Set());
       if (all) setAllPending(false);
     }
   }, [apiBase, provider]);
 
   return {
     entries,
+    busy: pending.size > 0,
     isPending: (accountId: string) => pending.has(accountId),
     allPending,
     probeOne: (accountId: string) => probe([accountId], false),
@@ -78,4 +79,3 @@ export function useAccountProbe(apiBase: string, provider: string) {
 }
 
 export type AccountProbeController = ReturnType<typeof useAccountProbe>;
-

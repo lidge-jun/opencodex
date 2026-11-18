@@ -6,10 +6,6 @@
   gap: var(--space-2);
   container-type: inline-size;
 }
-.aqt-policy {
-  margin: 0;
-  font-size: var(--text-caption);
-}
 .aqt-scroll {
   overflow-x: auto;
   border: 1px solid var(--border);
@@ -69,9 +65,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.aqt-account-id {
+.aqt-account-secondary {
   font-weight: 400;
   font-size: var(--text-caption);
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .aqt-group--details > .aqt-row > * {
   padding-bottom: var(--space-1);

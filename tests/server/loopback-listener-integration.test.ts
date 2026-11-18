@@ -408,6 +408,27 @@ describe("unauthenticated loopback listener", () => {
     }
   });
 
+  test("account probe requires management credentials and stays off the inference-only listener", async () => {
+    const loopbackPort = await freePort();
+    saveConfig(baseConfig(loopbackPort));
+    const server = await startLoopbackTestServer(loopbackPort);
+    const probe = (port: number, token?: string) => fetch(`http://127.0.0.1:${port}/api/oauth/accounts/probe`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(token ? { "x-opencodex-api-key": token } : {}) },
+      body: JSON.stringify({ provider: "google-antigravity" }),
+    });
+    try {
+      expect((await probe(server.port!)).status).toBe(401);
+      expect((await probe(server.port!, "public-secret")).status).toBe(401);
+      expect((await probe(loopbackPort, "admin-secret")).status).toBe(404);
+      const authorized = await probe(server.port!, "admin-secret");
+      expect(authorized.status).toBe(200);
+      expect(await authorized.json()).toMatchObject({ provider: "google-antigravity", results: [] });
+    } finally {
+      await server.stop(true);
+    }
+  });
+
   test("a hub's /v1/hub-state stays off this listener (#4236)", async () => {
     // The route is reachable with a data key on the PUBLIC listener, by design. It must not be
     // reachable with no credential at all: it names the hub's providers and which of them are

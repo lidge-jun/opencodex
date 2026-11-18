@@ -548,6 +548,26 @@ Para el grupo Codex, use `ocx account refresh openai [--json]`. Se actualiza a l
 
 Para proveedores OAuth y de clave API, esto fuerza la actualización del punto final de informes de cuota del proveedor; no es un nuevo inicio de sesión de token ni una simple relectura de la lista de cuentas. `--json` devuelve `{ provider, report: ProviderQuotaReport | null }`. Un proveedor sin un informe de cuota compatible imprime `no quota report available for <provider>` y sale con 0. Los proveedores desconocidos y los fallos de la API de gestión salen con 1; una sonda de cuota ascendente que falla o expira se degrada a un informe nulo o desactualizado (código de salida 0), lo que coincide con las barras de cuota del panel.
 
+### `ocx account probe google-antigravity [id|alias] [--json]`
+
+Comprueba cada cuenta de Google Antigravity en modo de solo lectura. Cada cuenta recibe una
+solicitud `retrieveUserQuotaSummary` con su propio token de acceso y la identidad de la CLI.
+El resultado es `ok`, `rate_limited`, `verification_required`, `suspended`, `permission_denied`
+o `error`, con el estado HTTP y un código de motivo reconocido. Los estados `paused`
+(cuenta en pausa) y `token_expired` (token caducado) se determinan localmente, sin enviar
+una solicitud. La comprobación conserva los tokens y el estado de la cuenta. Los botones
+**Probar** y **Probar todas** de la tabla de cuotas de Antigravity llaman al mismo endpoint,
+`POST /api/oauth/accounts/probe`. La tabla muestra el plan, las cuotas restantes por grupo,
+los plazos de restablecimiento y las acciones de cada cuenta. Se ejecutan hasta cuatro
+comprobaciones a la vez. Espera a que termine la comprobación actual antes de iniciar otra.
+
+### `ocx models discover <provider> [--json]`
+
+Ejecuta ahora la detección de modelos del proveedor e indica cuántos modelos encontró y
+cuáles son nuevos. Es la misma acción que **Detectar ahora** en los ajustes del proveedor
+(`POST /api/model-discovery/refresh`). Los catálogos estáticos indican que la detección
+en directo está desactivada.
+
 ### `ocx account auto-switch <provider> <on|off|status|threshold <0-100>> [--json]`
 
 Controla el umbral del grupo Codex `openai`, o almacena un umbral para un grupo OAuth genérico. `on` almacena el 80%, `off` almacena el 0% y `threshold <n>` acepta 0–100. Un umbral de grupo genérico dirige la selección solo mientras `pool.kernel` está activado con `strategy: "fill-first"`; con el indicador desactivado, guardar uno no habilita la conmutación basada en umbral. Nunca cambia la anulación de habilitación del proveedor ni desactiva la rotación reactiva 429. `status` y la salida de las mutaciones de grupos genéricos usan la respuesta confirmada del servidor. Para grupos genéricos, `poolEnabled` es la anulación almacenada del proveedor (`null` significa no especificado), no el estado efectivo heredado; `inert: true` significa que el umbral se almacena pero no se aplica, `inert: false` significa que el grupo lo está aplicando, y un `inert` ausente es una capacidad desconocida, que nunca informa `enabled: true`. Se rechazan los proveedores de clave API y los valores no válidos.

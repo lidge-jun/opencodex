@@ -1,6 +1,6 @@
 # Per-account probe and manual model discovery
 
-Status: implemented on `feat/antigravity-account-probe`.
+Status: contributor design for PR #8740.
 
 ## Problem
 
@@ -47,8 +47,8 @@ Read-only by construction:
   poller there is no 403 retry under the IDE UA and no `fetchAvailableModels` fallback: the
   first answer is the evidence, and the CLI fingerprint is the one that reports the Gemini group.
 - Goes through the pinned provider-outbound transport used by the quota poller.
-- The response carries no token. `message` is Google's error message passed through
-  `sanitizeUpstreamErrorText` and truncated to 300 characters.
+- The response uses closed reason codes and recognized quota-window labels.
+  The management API serializes probe runs and allows up to four requests per batch.
 
 Only `google-antigravity` is supported for now; other providers get HTTP 400
 `account probe is not supported for this provider`. The request/response shape is provider-neutral
@@ -58,7 +58,7 @@ CLI: `ocx account probe <provider> [<account-id|alias>] [--json]` (capability re
 `src/cli/capabilities-accounts.ts`).
 
 GUI: Providers → Google Antigravity → Available accounts. Each account row gets a **Test** button;
-the result renders under the row as a coloured badge plus `HTTP <code> · <reason> · <message>`.
+the result renders under the row as a coloured badge plus `HTTP <code> · <reason>`.
 The section head gets **Test all**.
 
 ## 2. Manual model discovery
@@ -67,7 +67,7 @@ The section head gets **Test all**.
 
 1. 404 for an unknown provider; `{ ok: false, applicable: false, reason: "static_catalog" }` when the
    provider has `liveModels: false` (no live endpoint to ask).
-2. Snapshot the provider's `recentArrivals` ids, `clearModelCache(provider)`, then run the normal
+2. Snapshot the provider's `recentArrivals` ids, `expireModelCache(provider)`, then run the normal
    catalog convergence (`convergeCodexCatalog`), which re-fetches the provider and records new
    arrivals through the existing new-model policy.
 3. Respond with `{ ok, provider, discovery, liveModelCount, newArrivals, recentArrivals, catalogRefresh }`,

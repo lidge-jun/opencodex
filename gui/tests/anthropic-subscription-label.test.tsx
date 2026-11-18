@@ -60,11 +60,11 @@ test("same-account rows show distinct organization names as literal text and omi
     );
     const rows = [...win.document.querySelectorAll(".aqt-row")];
     expect(rows.map(row => row.querySelector(".aqt-account-label")?.textContent)).toEqual(accounts.map(() => shared.accountLabel));
-    expect(rows.map(row => row.querySelector(".aqt-account-id")?.textContent)).toEqual([
+    expect(rows.map(row => row.querySelector(".aqt-account-organization")?.textContent)).toEqual([
       "Synthetic Team", "<strong>Research & Design</strong>", undefined,
     ]);
     expect(rows[1]?.querySelector("strong")).toBeNull();
-    expect(rows[2]?.querySelector(".aqt-account-id")).toBeNull();
+    expect(rows[2]?.querySelector(".aqt-account-organization")).toBeNull();
   } finally { await win.happyDOM.close(); }
 });
 

@@ -92,8 +92,7 @@ export type OAuthAccountRow = AccountQuotaReading & {
 
 export type ApiKeyRow = AccountQuotaReading & {
   disabled?: boolean;
-  /** `message` (redacted upstream text) and `statusCode` are set only by auto-pause on an account refusal. */
-  pauseDetails?: { reason: string; pausedAt: number; message?: string; statusCode?: number };
+  pauseDetails?: { reason: string; pausedAt: number };
   id: string;
   label?: string;
   masked: string;
